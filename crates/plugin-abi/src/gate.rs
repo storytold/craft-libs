@@ -1,5 +1,6 @@
 //! The install-time policy gate from `ABI.md` section 2. It reads the package bytes with
-//! `wasmparser` only. No guest code runs. Every violation is listed, not just the first.
+//! `wasmparser` only. No guest code runs. Every violation is listed, not just the first. The one
+//! exception is a package over `MAX_PACKAGE_BYTES`, which gets `PackageTooLarge` alone.
 
 use std::fmt;
 
@@ -502,8 +503,16 @@ fn check_features(bytes: &[u8], allowed: WasmFeatures, out: &mut Vec<Violation>)
 }
 
 /// Run the gate on a package. Always returns a report. Never panics on hostile input.
+///
+/// The report lists every violation, with one exception. A package over `MAX_PACKAGE_BYTES` is
+/// refused with `PackageTooLarge` alone, before any parsing, so an oversized package costs no
+/// allocation or validation work.
 pub fn check_package(bytes: &[u8], host: &HostPolicy) -> PolicyReport {
     let mut report = PolicyReport { violations: Vec::new(), legacy: None, manifest: None };
+    if bytes.len() > MAX_PACKAGE_BYTES {
+        report.violations.push(Violation::PackageTooLarge { bytes: bytes.len() });
+        return report;
+    }
     let facts = match gather(bytes) {
         Ok(f) => f,
         Err(m) => {
@@ -518,9 +527,6 @@ pub fn check_package(bytes: &[u8], host: &HostPolicy) -> PolicyReport {
             // Imports are refused by the shim itself. A start function runs under the shim's fuel and
             // wall clock.
             report.legacy = Some(abi);
-            if bytes.len() > MAX_PACKAGE_BYTES {
-                report.violations.push(Violation::PackageTooLarge { bytes: bytes.len() });
-            }
             check_resource_caps(&facts, true, &mut report.violations);
             // The feature allow list keeps the answer the same on every engine. A legacy module has no
             // manifest to ask for `simd128`, so it gets the base set.
@@ -532,9 +538,6 @@ pub fn check_package(bytes: &[u8], host: &HostPolicy) -> PolicyReport {
             report.violations.push(Violation::MixedLegacyPrefixes);
             return report;
         }
-    }
-    if bytes.len() > MAX_PACKAGE_BYTES {
-        report.violations.push(Violation::PackageTooLarge { bytes: bytes.len() });
     }
     report.manifest = check_manifest(&facts, host, &mut report.violations);
     check_structure(&facts, report.manifest.as_ref(), host, &mut report.violations);
