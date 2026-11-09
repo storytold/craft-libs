@@ -221,7 +221,7 @@ pub(crate) fn verify_ticket(xml: &str, paper: Option<(u32, u32)>, landscape: boo
 /// field is `None` when the capabilities couldn't be read; that option is then checked strictly.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Offered {
-    /// The two-sided feature (`JobDuplexAllDocumentsContiguously`) has any option.
+    /// Either standard duplex feature (`JobDuplexAllDocumentsContiguously` or `DocumentDuplex`) has an option.
     pub duplex: Option<bool>,
     /// The colour feature (`PageOutputColor`) has an option other than Monochrome and Grayscale.
     pub color: Option<bool>,
