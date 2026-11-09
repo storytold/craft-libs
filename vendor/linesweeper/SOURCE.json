@@ -14,6 +14,7 @@
     "In `docs/sweep.typ`, the intersection scan to the left compares each segment with `alpha^(i+1)`, the segment the lemma after it is stated for, instead of `alpha^i`.",
     "In `src/curve/line.rs`, `line_at_ys` divides each y offset by the line's height instead of multiplying it by the height's reciprocal, so a line less than about 5.6e-309 tall no longer gives NaN positions in `intersect_lines`."
     "`F64Perturbation::Ulp` on a subnormal value gives the value on the other side of zero when a step toward zero is larger than the value, instead of keeping the value's sign. The module is compiled only for tests."
+    "src/curve/mod.rs: the `QuadraticApprox` doc says the quadratic gives `x` as a function of `y`, as `from_cubic`, `dmin` and `dmax` use it, and the test `curve::test::quad_approximation_gives_x_of_y` checks it on the curve `x = y^2`."
   ],
   "files": [
     { "path": ".cargo_vcs_info.json", "source_sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc", "source_git_blob": null, "sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc" },
@@ -40,6 +41,8 @@
     { "path": "src/arbitrary.rs", "source_sha256": "9c3753a40cfea2528a546295d39e0513537db5a3411a931fccea063873d95750", "source_git_blob": null, "sha256": "9c3753a40cfea2528a546295d39e0513537db5a3411a931fccea063873d95750" },
     { "path": "src/curve/line.rs", "source_sha256": "07aebead4b0050410a3f9f28b66062b6016c115df58e2b2669470263cd352f3e", "source_git_blob": null, "sha256": "8cc91b25daebcf311b3fd11650a5996057017ea66eba2836ffc3c7742e7b5f0d" },
     { "path": "src/curve/mod.rs", "source_sha256": "36a8dbe96ac1d3bec307dc63b504206ec7fdfc11d10799fbb1a8990c29b8c5f2", "source_git_blob": null, "sha256": "815aafe3b4bfb518fb05298374ced58a7c86349f47bc65506c5d64c25997c81d" },
+    { "path": "src/curve/line.rs", "source_sha256": "07aebead4b0050410a3f9f28b66062b6016c115df58e2b2669470263cd352f3e", "source_git_blob": null, "sha256": "07aebead4b0050410a3f9f28b66062b6016c115df58e2b2669470263cd352f3e" },
+    { "path": "src/curve/mod.rs", "source_sha256": "36a8dbe96ac1d3bec307dc63b504206ec7fdfc11d10799fbb1a8990c29b8c5f2", "source_git_blob": null, "sha256": "0b1be70901b2bbf0244fccb0a599f0e9615eb30c21758a4d0efda97254bfb059" },
     { "path": "src/curve/split_quad.rs", "source_sha256": "b8aae4ce7c16fa623724f667e1058130a9c7eed693b5b01e8b9e16632b8ec45f", "source_git_blob": null, "sha256": "b8aae4ce7c16fa623724f667e1058130a9c7eed693b5b01e8b9e16632b8ec45f" },
     { "path": "src/curve/transverse.rs", "source_sha256": "be9c695531f4cb0fe73af13e78040b51b9476c193d84562e701aadd07b3fd06e", "source_git_blob": null, "sha256": "be9c695531f4cb0fe73af13e78040b51b9476c193d84562e701aadd07b3fd06e" },
     { "path": "src/generators.rs", "source_sha256": "cc9f2441546db9204219294c354449809dda77dffad06fec8a30f45df01e6fef", "source_git_blob": null, "sha256": "cc9f2441546db9204219294c354449809dda77dffad06fec8a30f45df01e6fef" },

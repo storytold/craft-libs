@@ -31,6 +31,20 @@ holds `upstream_revision`. `local_patches` describes each local change.
 Every change here updates this table and `SOURCE.json` in the same commit. To take a new linesweeper
 release, unpack the crates.io package, carry these changes over, regenerate `SOURCE.json`, and run the
 tests below.
+This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and one
+file changed. `.cargo_vcs_info.json` names the commit it was packaged from,
+`824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
+names, which is archived; its README says development moved off GitHub.
+
+Every file here except this one, `SOURCE.json` and `src/curve/mod.rs` is byte for byte the file in the
+`.crate` archive. `SOURCE.json` records the hash of the `.crate` download (`source_archive_sha256`)
+and, for every file kept, the hash in the package (`source_sha256`) and the hash here (`sha256`).
+`upstream_repository` is null because no public repository this copy can name holds
+`upstream_revision`. `local_patches` lists the local changes:
+
+- `src/curve/mod.rs`: the `QuadraticApprox` doc says the quadratic gives `x` as a function of `y`, as
+  `from_cubic`, `dmin` and `dmax` use it; the package's doc says `y` as a function of `x`. The test
+  `curve::test::quad_approximation_gives_x_of_y` checks it on the curve `x = y^2`.
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
