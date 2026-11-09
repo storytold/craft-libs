@@ -11,6 +11,7 @@
 //! and WinRT calls, so there is no `unsafe` here.
 
 use std::io::Write as _;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use winprint::printer::{PrinterDevice, WinPdfPrinter};
 use winprint::ticket::document::{NS_PSK, OwnedName, PrintFeature, PrintTicketDocument, reader::ParsableXmlDocument as _};
@@ -18,7 +19,7 @@ use winprint::ticket::{FeatureOptionPack as _, PageMediaSize, PrintCapabilities,
 
 use crate::sheets::{self, Fit, SAME};
 use crate::ticket::{self, Paper};
-use crate::{Error, Job, Printer, Scaling};
+use crate::{Cancel, Error, Job, Printer, Scaling};
 
 fn spool_error(e: impl std::fmt::Display) -> Error {
     Error::Spool(e.to_string())
@@ -29,18 +30,57 @@ fn default_printer() -> Option<String> {
     winsafe::GetDefaultPrinter().ok().filter(|n| !n.is_empty())
 }
 
+/// Keeps two threads of this process out of the Windows PrintTicket provider (`PTOpenProvider`
+/// and the calls on its handle) at the same time. When two threads make the process's first calls
+/// together, winspool can keep a pointer to a device capabilities cache it has freed, and a later
+/// call crashes the process.
+static PRINT_TICKET_PROVIDER: Mutex<()> = Mutex::new(());
+
+/// Holds [`PRINT_TICKET_PROVIDER`] until the guard is dropped. A lock that a panicking thread
+/// held is taken like any other.
+fn print_ticket_provider() -> MutexGuard<'static, ()> {
+    PRINT_TICKET_PROVIDER.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 pub(crate) fn printers() -> Vec<Printer> {
+    spooler_list(two_sided)
+}
+
+/// The queues and the default without asking any driver: a networked printer asleep in power
+/// save can hold its driver's PrintCapabilities query for a long time, and the Print dialog
+/// must not wait on it to show the queue (or any other).
+pub(crate) fn printer_queues() -> Vec<Printer> {
+    spooler_list(|_| None)
+}
+
+/// The spooler's queues (`EnumPrinters`, local queues and connections) with the default marked,
+/// each given the two-sided support `two_sided` reports for it; empty when the spooler can't list
+/// them.
+fn spooler_list(two_sided: impl Fn(&PrinterDevice) -> Option<bool>) -> Vec<Printer> {
     match PrinterDevice::all() {
         Ok(devices) => crate::printer_list(devices.iter().map(|d| (d.name().to_string(), two_sided(d))), default_printer().as_deref()),
         Err(_) => Vec::new(),
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The driver capability queries printer discovery made on this thread, so a test can show
+    /// that [`printer_queues`] makes none.
+    pub(crate) static CAPABILITY_QUERIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Whether the printer's driver takes two-sided settings: its PrintCapabilities offer a two-sided
 /// option for the feature the job's ticket sets. `None` when the capabilities can't be read. A
 /// driver without one cannot confirm an explicit two-sided request, which is refused before submission.
 fn two_sided(device: &PrinterDevice) -> Option<bool> {
-    let capabilities = PrintCapabilities::fetch(device).ok()?;
+    #[cfg(test)]
+    CAPABILITY_QUERIES.with(|n| n.set(n.get().saturating_add(1)));
+    let capabilities = {
+        let _provider = print_ticket_provider();
+        PrintCapabilities::fetch(device)
+    }
+    .ok()?;
     let duplex = OwnedName::qualified("JobDuplexAllDocumentsContiguously", NS_PSK, Some("psk"));
     Some(capabilities.options_for_feature(duplex).any(|o| o.name.as_ref().is_some_and(|n| n.local_name.starts_with("TwoSided"))))
 }
@@ -48,10 +88,11 @@ fn two_sided(device: &PrinterDevice) -> Option<bool> {
 /// What the driver's PrintCapabilities offer for the job options [`ticket::verify_job_options`]
 /// checks; all unknown when they can't be read.
 fn driver_offers(device: &PrinterDevice) -> ticket::Offered {
-    PrintCapabilities::fetch_xml_for_ticket(device, None)
-        .ok()
-        .and_then(|xml| String::from_utf8(xml).ok())
-        .map_or_else(ticket::Offered::default, |xml| ticket::offered(&xml))
+    let xml = {
+        let _provider = print_ticket_provider();
+        PrintCapabilities::fetch_xml_for_ticket(device, None)
+    };
+    xml.ok().and_then(|xml| String::from_utf8(xml).ok()).map_or_else(ticket::Offered::default, |xml| ticket::offered(&xml))
 }
 
 /// The queue the job goes to: the one asked for, else the default. Never another one: a job
@@ -71,8 +112,40 @@ fn select_device(devices: Vec<PrinterDevice>, requested: Option<&str>, default: 
 /// its default paper is used. Returns the ticket and its paper in micrometres. Refused when the
 /// driver changed the paper, the orientation or the scaling: then nothing is sent, rather than a
 /// job at the wrong size.
+/// The title of a test job that [`HELD_DRIVER`] holds in its capability query.
+#[cfg(test)]
+pub(crate) const HELD_TITLE: &str = "held by its driver";
+/// The title of a test job that [`HELD_DRIVER`] holds in its DEVMODE conversion, the last driver
+/// call before it is sent.
+#[cfg(test)]
+pub(crate) const HELD_CONVERSION_TITLE: &str = "held in its conversion";
+
+/// A test stands in for a driver that doesn't answer (a sleeping printer): the job titled
+/// [`HELD_TITLE`] or [`HELD_CONVERSION_TITLE`] says it has reached that driver call, then waits
+/// there, holding the provider like a real call, until released.
+#[cfg(test)]
+#[allow(clippy::type_complexity)]
+pub(crate) static HELD_DRIVER: std::sync::Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>> = std::sync::Mutex::new(None);
+
+/// Holds the job titled `title` in [`HELD_DRIVER`], once, if a test set it.
+#[cfg(test)]
+fn hold(job: &Job, title: &str) {
+    if job.title == title
+        && let Some((entered, release)) = HELD_DRIVER.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+    {
+        let _ = entered.send(());
+        let _ = release.recv();
+    }
+}
+
 fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape: bool) -> Result<(PrintTicket, (u32, u32)), Error> {
-    let capabilities = PrintCapabilities::fetch(device).map_err(spool_error)?;
+    let capabilities = {
+        let _provider = print_ticket_provider();
+        #[cfg(test)]
+        hold(job, HELD_TITLE);
+        PrintCapabilities::fetch(device)
+    }
+    .map_err(spool_error)?;
     let medias: Vec<PageMediaSize> = capabilities.page_media_sizes().collect();
     let papers: Vec<Paper<'_>> = medias
         .iter()
@@ -110,9 +183,14 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
         document.features.retain(|f| !(f.name.local_name == "PageScaling" && f.name.namespace_ref() == Some(NS_PSK)));
         document.features.push(PrintFeature { name: scaling_name, properties: Vec::new(), options: vec![no_scaling.clone()], features: Vec::new() });
     }
-    let mut builder = PrintTicketBuilder::new(device).map_err(spool_error)?;
-    builder.merge(PrintTicket::from(document)).map_err(spool_error)?;
-    let validated = in_drivers_spelling(device, builder.build().map_err(spool_error)?);
+    let built = {
+        let _provider = print_ticket_provider();
+        // The builder closes its provider when it is dropped, before the guard.
+        let mut builder = PrintTicketBuilder::new(device).map_err(spool_error)?;
+        builder.merge(PrintTicket::from(document)).map_err(spool_error)?;
+        builder.build().map_err(spool_error)?
+    };
+    let validated = in_drivers_spelling(device, built);
     let xml = std::str::from_utf8(validated.get_xml()).map_err(spool_error)?;
     let paper = ticket::verify_ticket(xml, wanted, landscape)?;
     Ok((validated, paper))
@@ -125,6 +203,7 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
 /// (an empty one, validated). The ticket as it is when they can't be read.
 fn in_drivers_spelling(device: &PrinterDevice, ticket: PrintTicket) -> PrintTicket {
     let spelled = (|| {
+        let _provider = print_ticket_provider();
         let mut builder = PrintTicketBuilder::new(device).ok()?;
         builder.merge(PrintTicket::from_xml(ticket::empty_ticket())).ok()?;
         let own = builder.build().ok()?;
@@ -135,11 +214,11 @@ fn in_drivers_spelling(device: &PrinterDevice, ticket: PrintTicket) -> PrintTick
 
 /// The widest unprintable margin of the ticket's paper, in points; 0 when the driver doesn't say.
 fn imageable_margin(device: &PrinterDevice, ticket: &PrintTicket) -> f64 {
-    PrintCapabilities::fetch_xml_for_ticket(device, Some(ticket))
-        .ok()
-        .and_then(|xml| String::from_utf8(xml).ok())
-        .and_then(|xml| ticket::imageable_margin(&xml))
-        .map_or(0.0, ticket::points)
+    let xml = {
+        let _provider = print_ticket_provider();
+        PrintCapabilities::fetch_xml_for_ticket(device, Some(ticket))
+    };
+    xml.ok().and_then(|xml| String::from_utf8(xml).ok()).and_then(|xml| ticket::imageable_margin(&xml)).map_or(0.0, ticket::points)
 }
 
 /// Spool a print-ready PDF. The sheets are read first ([`sheets::read`]); everything that talks
@@ -148,7 +227,7 @@ fn imageable_margin(device: &PrinterDevice, ticket: &PrintTicket) -> f64 {
 /// temporary folder (an unpredictable name, only this user's) for as long as the spooler takes
 /// it, and the folder is removed however the job ended. Windows answers once the job is in the
 /// queue: a paused queue or an offline printer keeps the job there, as with any program.
-pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize)) -> Result<String, Error> {
+pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize), cancel: &Cancel) -> Result<String, Error> {
     let read = sheets::read(pdf)?;
     read.check_print_annotations()?;
     let count = read.sheets.len();
@@ -210,14 +289,30 @@ pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnM
         if updated.is_none() && !edits.is_empty() {
             updated = Some(read.update(&edits)?);
         }
+        // The last point before anything reaches the spooler. Until then the job may wait on a
+        // driver (a sleeping printer can hold one for long), its own or another job's holding the
+        // provider, and a job cancelled meanwhile stops here and is never sent. winprint converts
+        // the ticket to a DEVMODE through the driver before it creates the native job, so that
+        // conversion is done here first, while the job can still be cancelled; the provider stays
+        // held until the first copy's own conversion has run, so no other job comes between them.
+        let mut first = Some(print_ticket_provider());
+        #[cfg(test)]
+        hold(job, HELD_CONVERSION_TITLE);
+        ticket.to_dev_mode(&device).map_err(spool_error)?;
+        cancel.start_sending()?;
+        // Written once sending: a cancelled job leaves no copy of the document behind.
         let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map_err(written)?;
         file.write_all(updated.as_deref().unwrap_or(pdf)).map_err(written)?;
         drop(file);
         let printer = WinPdfPrinter::new(device);
         let jobs = jobs as usize;
         for copy in 0..jobs {
+            // winprint converts the ticket to a DEVMODE through the provider before each job's
+            // first progress report, which releases the guard.
+            let mut provider = first.take().or_else(|| Some(print_ticket_provider()));
             printer
                 .print_with_progress(&path, ticket.clone(), |processed, total| {
+                    drop(provider.take());
                     // Page acceptance is distinct from terminal job success. The callback
                     // drains on the submitter's thread, so it can retain non-Send UI state.
                     let (processed, total) = (processed as usize, total as usize);
@@ -256,6 +351,41 @@ mod tests {
         assert!(select_device(Vec::new(), None, None).is_err());
     }
 
+    #[test]
+    fn one_thread_at_a_time_is_in_the_print_ticket_provider() {
+        use std::sync::Barrier;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        const THREADS: usize = 12;
+        let inside = AtomicUsize::new(0);
+        let most = AtomicUsize::new(0);
+        let start = Barrier::new(THREADS);
+        std::thread::scope(|s| {
+            for _ in 0..THREADS {
+                s.spawn(|| {
+                    start.wait();
+                    for _ in 0..20 {
+                        let _provider = print_ticket_provider();
+                        most.fetch_max(inside.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                        inside.fetch_sub(1, Ordering::SeqCst);
+                    }
+                });
+            }
+        });
+        assert_eq!(most.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_panic_inside_the_print_ticket_provider_does_not_lock_it_out() {
+        let panicked = std::thread::spawn(|| {
+            let _provider = print_ticket_provider();
+            panic!("a driver call panicked");
+        })
+        .join();
+        assert!(panicked.is_err());
+        drop(print_ticket_provider());
+    }
+
     /// What a real driver makes of a job's ticket: Letter, portrait, two copies. Checks explicit
     /// option retention separately; unsupported options must fail before submission. Sends no job.
     /// `CRAFT_PRINT_TEST_PRINTER` names the queue;
@@ -271,9 +401,12 @@ mod tests {
         assert_eq!(paper, (215_900, 279_400));
         // The ticket names the driver's vendor namespaces as the driver does (the merge renamed them).
         // `respell` returning `None` would not show it: it also does when it refused the ticket.
-        let mut own = PrintTicketBuilder::new(&device).unwrap();
-        own.merge(PrintTicket::from_xml(ticket::empty_ticket())).unwrap();
-        let own = own.build().unwrap();
+        let own = {
+            let _provider = print_ticket_provider();
+            let mut own = PrintTicketBuilder::new(&device).unwrap();
+            own.merge(PrintTicket::from_xml(ticket::empty_ticket())).unwrap();
+            own.build().unwrap()
+        };
         let unlike =
             ticket::prefixes_unlike_the_drivers(std::str::from_utf8(ticket.get_xml()).unwrap(), std::str::from_utf8(own.get_xml()).unwrap()).unwrap();
         assert!(unlike.is_empty(), "vendor namespaces under another prefix than the driver's (namespace, ticket, driver): {unlike:?}");
@@ -281,7 +414,11 @@ mod tests {
         if let Ok(path) = std::env::var("CRAFT_PRINT_TEST_TICKET_OUTPUT") {
             std::fs::write(path, ticket.get_xml()).unwrap();
         }
-        let capabilities = PrintCapabilities::fetch(&device).unwrap();
+        let capabilities = {
+            let _provider = print_ticket_provider();
+            PrintCapabilities::fetch(&device)
+        }
+        .unwrap();
         for (feature, wanted, requested) in [
             ("PageOutputColor", "Monochrome", Job { grayscale: true, ..Job::default() }),
             ("JobDuplexAllDocumentsContiguously", "TwoSidedLongEdge", Job { duplex: Some(crate::Duplex::LongEdge), ..Job::default() }),
@@ -337,9 +474,12 @@ mod tests {
         }
         let name = std::env::var("CRAFT_PRINT_TEST_PRINTER").unwrap();
         let device = select_device(PrinterDevice::all().unwrap(), Some(&name), None).unwrap();
-        let mut builder = PrintTicketBuilder::new(&device).unwrap();
-        builder.merge(PrintTicket::from_xml(winprint::ticket::DEFAULT_PRINT_TICKET_XML.as_bytes().to_vec())).unwrap();
-        let preferences = colour(&builder.build().unwrap());
+        let preferences = {
+            let _provider = print_ticket_provider();
+            let mut builder = PrintTicketBuilder::new(&device).unwrap();
+            builder.merge(PrintTicket::from_xml(winprint::ticket::DEFAULT_PRINT_TICKET_XML.as_bytes().to_vec())).unwrap();
+            colour(&builder.build().unwrap())
+        };
         eprintln!("the preferences' colour: {preferences:?}");
         let (ticket, _) = driver_ticket(&device, &Job::default(), (595.28, 841.89), false).unwrap();
         assert_eq!(colour(&ticket), preferences, "a job without grayscale keeps the preferences' colour");

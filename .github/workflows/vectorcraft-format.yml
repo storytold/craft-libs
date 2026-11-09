@@ -1,0 +1,35 @@
+name: VectorCraft format
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/vectorcraft-format/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/vectorcraft-format.yml']
+  pull_request:
+    paths: ['crates/vectorcraft-format/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/vectorcraft-format.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  vectorcraft-format:
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS runners are kept for releases: macOS runs only when started by hand.
+        os: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["ubuntu-latest","windows-latest","macos-latest"]') || fromJSON('["ubuntu-latest","windows-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: "1.95"
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - run: cargo fmt --check
+      - run: cargo clippy -p craft-vectorcraft-format --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-vectorcraft-format --locked -- --nocapture
+      - run: cargo check -p craft-vectorcraft-format --locked --target wasm32-unknown-unknown
