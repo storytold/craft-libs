@@ -79,6 +79,7 @@
     "In `src/curve/mod.rs`, `intersect_cubics_rec` checks that both curves are on the interval's side at each interval end after re-centering only when the `slow-asserts` feature is on, as the crate's other expensive self-checks are. Re-centering rounds each end, and with finite curves near 1e8 the curves at a rounded end were on the wrong side by up to 69 times `ish_tolerance`, so debug builds panicked with `assertion failed: solve_x_for_y(cubic0.c, y0) > solve_x_for_y(cubic1.c, y0)` or one of its three companions. Release builds already skipped the check, and the change gives debug builds the release result. The test `curve::test::crossing_at_large_coordinates` covers it."
     "In `src/curve/transverse.rs`, `transversal_after` (and `transversal_before`, which calls it) returns `false` when either dy/dt bound is not positive, instead of cross-multiplying the slope bounds, which reverses the comparison for a negative bound."
     "In `src/curve/mod.rs`, `CurveOrder::with_y_slop` keeps the comparison's `metrics` when it changes the entries, instead of returning empty metrics. `y_slop_keeps_metrics` tests it."
+    "In `src/sweep/sweep_line.rs`, the doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out."
   ],
   "files": [
     { "path": ".cargo_vcs_info.json", "source_sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc", "source_git_blob": null, "sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc" },
@@ -212,6 +213,7 @@
     { "path": "src/sweep/sweep_line.rs", "source_sha256": "822b261f682911ea0c0370eaf17d9201a1e639b315359dcb6a3b877a229816e3", "source_git_blob": null, "sha256": "644dcaeacd1afcf056920916acdf271f099dc5e0c0324b5fbacd6aae4f597adb" },
     { "path": "src/sweep/sweep_line.rs", "source_sha256": "822b261f682911ea0c0370eaf17d9201a1e639b315359dcb6a3b877a229816e3", "source_git_blob": null, "sha256": "fd0ae254cb23b7c9dfda7dd172d6afd88f7496a2579b973b49a55d7246bb427e" },
     { "path": "src/sweep/sweep_line.rs", "source_sha256": "822b261f682911ea0c0370eaf17d9201a1e639b315359dcb6a3b877a229816e3", "source_git_blob": null, "sha256": "b4f7da196be5676424f0f19e5f21f29ffa1ff60f2a4f6b9846357e73fecf0daf" },
+    { "path": "src/sweep/sweep_line.rs", "source_sha256": "822b261f682911ea0c0370eaf17d9201a1e639b315359dcb6a3b877a229816e3", "source_git_blob": null, "sha256": "b8569de346ffe8f35f9b56a3e3621ed0910c5a572c58b3184fe2810d6c82a416" },
     { "path": "src/topology.rs", "source_sha256": "9c9b48bc3853884425127e2d64e8ed957ba0d27e1696e2c457e95282e52d6a5b", "source_git_blob": null, "sha256": "9c9b48bc3853884425127e2d64e8ed957ba0d27e1696e2c457e95282e52d6a5b" },
     { "path": "src/treevec.rs", "source_sha256": "d88b9fbf02fa9f318560e1d483d465555f2b696ae12c00f8e4f5b71ea6779445", "source_git_blob": null, "sha256": "f37cde80ea90fcbfc5799abf855e8516cd00dbbd809ed25d11993e864c4516ad" },
     { "path": "src/sweep/sweep_line.rs", "source_sha256": "822b261f682911ea0c0370eaf17d9201a1e639b315359dcb6a3b877a229816e3", "source_git_blob": null, "sha256": "822b261f682911ea0c0370eaf17d9201a1e639b315359dcb6a3b877a229816e3" },
