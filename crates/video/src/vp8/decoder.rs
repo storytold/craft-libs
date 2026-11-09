@@ -182,8 +182,12 @@ impl Decoder {
             self.height = h;
             self.mb_w = mb_w;
             self.mb_h = mb_h;
-            self.seg_map = vec![0; self.mb_w * self.mb_h];
         }
+        // RFC 6386 20.11: on a key frame that does not update the map every macroblock is in
+        // segment 0, so ids kept from earlier frames must not survive, whether or not the size
+        // changed.
+        self.seg_map.clear();
+        self.seg_map.resize(self.mb_w * self.mb_h, 0);
         self.ctx = EntropyContext::default();
         self.seg.absolute = false;
         self.seg.quant = [0; 4];
@@ -924,5 +928,45 @@ fn loop_filter(frame: &mut Frame, mb_w: usize, mb_h: usize, lf_info: &[(u8, bool
                 loopfilter::filter_edge::<8>(&mut frame.v, cs, c0 + 4 * cs, false, Kind::NormalSub, &prm);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod segment_map_tests {
+    use super::*;
+
+    fn key_tag(width: u16, height: u16) -> FrameTag {
+        FrameTag {
+            key_frame: true,
+            version: 0,
+            show_frame: true,
+            first_part_size: 0,
+            width,
+            height,
+            horizontal_scale: 0,
+            vertical_scale: 0,
+            header_len: 10,
+        }
+    }
+
+    /// RFC 6386 20.11: a key frame that does not update the map puts every macroblock in segment 0,
+    /// also when it has the size of the previous frame.
+    #[test]
+    fn same_size_key_frame_clears_the_segment_map() {
+        let mut d = Decoder::new();
+        d.begin_key_frame(&key_tag(32, 32)).unwrap();
+        assert_eq!(d.seg_map, vec![0; 4]);
+        d.seg_map.iter_mut().for_each(|s| *s = 3);
+        d.begin_key_frame(&key_tag(32, 32)).unwrap();
+        assert_eq!(d.seg_map, vec![0; 4], "ids of the earlier frame survived a same-size key frame");
+    }
+
+    #[test]
+    fn resized_key_frame_sizes_the_segment_map() {
+        let mut d = Decoder::new();
+        d.begin_key_frame(&key_tag(32, 32)).unwrap();
+        d.seg_map.iter_mut().for_each(|s| *s = 2);
+        d.begin_key_frame(&key_tag(48, 16)).unwrap();
+        assert_eq!(d.seg_map, vec![0; 3]);
     }
 }
