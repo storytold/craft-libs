@@ -1298,6 +1298,92 @@ mod tests {
         }
     }
 
+    /// An input can have a pair that passes what a curved piece is paid for only where its most bent segment, with another as bent, makes more than
+    /// 6 whole steps over the tolerance (`costly`), and a segment can be in one only where it, with the most bent, does (`can_pass`): checked at the edge
+    /// of 6 steps, for a cubic whose third difference is 0.8 (6.5 steps for the two, over a tolerance of 2), 1.2 (7.4) and 1.7, and the line that closes it.
+    #[test]
+    fn what_can_pass_what_a_piece_is_paid_for_is_told_at_the_edge_of_six_steps() {
+        let with_third = |third: f64| {
+            let mut path = BezPath::new();
+            path.move_to((0.0, 0.0));
+            path.curve_to((0.0, 1.0), (0.0, 2.0), (third, 3.0));
+            path.close_path();
+            path
+        };
+        for (third, costly, line_can, bent_can) in
+            [(0.8, false, false, false), (1.2, true, false, true), (1.7, true, false, true), (4.0, true, true, true)]
+        {
+            let path = with_third(third);
+            let segments = segments_of([&path]).expect("segments");
+            let compared = Comparisons::new(&segments, 2.0);
+            assert_eq!(compared.costly(), costly, "a third difference of {third}");
+            let (line, bent) = {
+                let ids: Vec<SegIdx> = segments.entrances().iter().map(|e| e.1).collect();
+                let bent = ids.iter().copied().find(|&i| !segments[i].is_line()).expect("the cubic");
+                (ids.iter().copied().find(|&i| segments[i].is_line()).expect("the line"), bent)
+            };
+            assert_eq!(compared.can_pass(line), line_can, "the line, with a third difference of {third}");
+            assert_eq!(compared.can_pass(bent), bent_can, "the cubic, with a third difference of {third}");
+        }
+    }
+
+    /// Every place of the line that the window reads is counted: for each range of a few inputs, at least the places of the window it gives, and not
+    /// more than those with the halving to find where it starts and the two it reads past.
+    #[test]
+    fn the_window_of_the_line_counts_the_places_it_reads() {
+        let mut all = 0usize;
+        for (name, path) in
+            [("circles with a crescent", circle_pairs_with_blockers(3, 1e6, 0.03)), ("rings", rings(12, 4.0)), ("lenses", row_of_lenses(30))]
+        {
+            let path = closed(&path);
+            let eps = eps_for([&path]).expect("finite");
+            let segments = segments_of([&path]).expect("segments");
+            let mut sweeper = Sweeper::new(&segments, eps);
+            let (mut line_bufs, mut range_bufs) = (SweepLineBuffers::default(), SweepLineRangeBuffers::default());
+            let mut windows = 0usize;
+            while let Some(mut line) = sweeper.next_line(&mut line_bufs) {
+                while let Some(range) = line.next_range(&mut range_bufs, &segments) {
+                    let y = range.line().y();
+                    let places: Vec<f64> = range.segment_range().map(|s| across(&segments[s], y)).collect();
+                    let (Some(&left), Some(&right)) = (places.iter().min_by(|a, b| a.total_cmp(b)), places.iter().max_by(|a, b| a.total_cmp(b)))
+                    else {
+                        continue;
+                    };
+                    let mut probes = 0u64;
+                    let window = line_window(range.line(), left, right, eps, &mut probes);
+                    windows += 1;
+                    let n = window.len() as u64;
+                    // The window, and the places read to find where it starts (the halving reads at least one).
+                    assert!(probes >= n + 2, "{name}: {probes} places counted for a window of {n}");
+                    // The halving reads at most twice the log of the line, the window itself, and the places read back from where it starts.
+                    assert!(probes <= 2 * 64 + 2 * n + 64, "{name}: {probes} places counted for a window of {n}");
+                }
+            }
+            all += windows;
+            assert!(windows > 0, "{name}: no windows");
+        }
+        assert!(all > 50, "{all} windows");
+    }
+
+    /// The steps of a pair are charged for the share of the taller one's height that the two have: a cubic and its copy a unit across, whose
+    /// nearest reading makes 50 steps for the whole height, and the first half of it (the copy cut at half) 21, which is under the 32 that are counted
+    /// as none.
+    #[test]
+    fn a_pair_that_shares_half_its_height_is_charged_half() {
+        use kurbo::ParamCurve;
+        let eps = 1e-6;
+        let a = kurbo::CubicBez::new((0.0, 0.0), (0.0, 1.0), (0.0, 2.0), (182.0, 3.0));
+        let moved = |c: kurbo::CubicBez| Segment::from_kurbo_cubic(kurbo::Affine::translate((1.0, 0.0)) * c);
+        let whole = comparison_steps(&Segment::from_kurbo_cubic(a), &moved(a), eps).0;
+        let half = comparison_steps(&Segment::from_kurbo_cubic(a), &moved(a.subsegment(0.0..0.5)), eps).0;
+        // 7 * cbrt(364) = 50 by the nearest reading, more by the readings across the height (the gap is the same all along: 50 exactly).
+        assert!((49..=51).contains(&whole), "{whole} steps for the whole height");
+        assert_eq!(half, 0, "half the height, at 21 steps by the nearest reading, is counted as none");
+        // Past the cap, the share is what is charged: a cut at 0.8 (7 * cbrt(364 * 0.76) * 0.8) is 36 steps.
+        let most = comparison_steps(&Segment::from_kurbo_cubic(a), &moved(a.subsegment(0.0..0.8)), eps).0;
+        assert!((32..=40).contains(&most), "{most} steps for four fifths of the height");
+    }
+
     /// Curves under the tolerance from one another all along are one curve to the comparison, and take no steps; from the tolerance, or
     /// under it along a part only, they are charged: at a gap just under the cap (0.9 tolerance) none, and just over it the tolerance's worth.
     #[test]
@@ -1318,6 +1404,10 @@ mod tests {
         let at_eight = comparison_steps(&a, &b, eps).0;
         assert!(at_eight < at_cap && at_eight as f64 > 0.45 * at_cap as f64, "{at_eight} against {at_cap}");
         // Under the tolerance along the first part only (the rest of the arc is far): the part is charged, not none.
+        // A pair of curves that are little bent (third differences of 25 each, which make 26 steps at a gap of one and 2,500 at the tolerance) and
+        // under the tolerance all along is read in full, and none; its nearest reading is under the tolerance, which is not the gap of a unit.
+        let little = |dx: f64| Segment::from_kurbo_cubic(kurbo::CubicBez::new((dx, 0.0), (dx, 1.0), (dx, 2.0), (dx + 25.0, 3.0)));
+        assert_eq!(comparison_steps(&little(0.0), &little(0.5 * eps), eps), (0, (COARSE_SAMPLES + GAP_SAMPLES) as u64));
         let (a, b) = tailed_pair(0.5 * eps, 100.0);
         assert!(comparison_steps(&a, &b, eps).0 > 100);
     }
