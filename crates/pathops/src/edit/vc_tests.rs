@@ -1,9 +1,31 @@
-// Carved from VectorCraft's crates/pathops (src/fit.rs tests, 199c4c3, 4a7d732 and bc19dd6) at storytold/vectorcraft 0945eaf2b3d4e93963aaa6d796b9efe53feaf624, on `BezPath`.
+// Carved in part from VectorCraft's crates/pathops (the tests of src/fit.rs and src/edit.rs, 199c4c3, 4a7d732 and bc19dd6) at storytold/vectorcraft 0945eaf2b3d4e93963aaa6d796b9efe53feaf624, on `BezPath`; the tests listed below as this crate's own are not VectorCraft's.
 // Copyright (c) 2026 ArtCraft Team and the VectorCraft contributors. MIT OR Apache-2.0.
 
-//! VectorCraft's tests of Simplify, run on this crate's: each path is simplified, and each of the path and its result must be within the
+//! Tests of Simplify with an oracle that does not use the fit: each path is simplified, and each of the path and its result must be within the
 //! tolerance of the other, measured on the curves themselves (no sample of the fit, no bound of its own: the nearest point on each
-//! cubic of the other). They are the oracle that does not use the fit.
+//! cubic of the other). Some are VectorCraft's, ported on `BezPath` with their names; the others are this crate's own.
+//!
+//! VectorCraft's (the same names in its `fit.rs` and `edit.rs` tests): `long_arcs_stay_within_the_tolerance`,
+//! `long_arcs_and_short_anchors_stay_within_the_tolerance`, `long_arcs_converted_to_straight_lines_stay_within_the_tolerance`,
+//! `long_and_short_segments_stay_within_the_tolerance`, `a_segment_that_needs_too_many_samples_stays_as_it_is`,
+//! `a_segment_that_needs_too_many_samples_becomes_lines_when_asked_for_lines`,
+//! `a_path_that_turns_back_past_its_end_converted_to_straight_lines_keeps_its_tip`, `no_fitted_piece_is_farther_than_the_tolerance`,
+//! `a_zigzag_stays_within_the_tolerance`, `closed_paths_stay_within_the_tolerance`, `compound_paths_stay_within_the_tolerance`,
+//! `coincident_anchors_stay_within_the_tolerance`, `random_paths_stay_within_the_tolerance`,
+//! `smoothing_work_per_sample_stays_bounded_on_dense_paths`, `smoothing_points_whose_arc_length_overflows_returns_every_point` and
+//! `grouped_smoothing_stays_within_a_thousandth_of_a_spread_of_weighing_one_by_one`; adapted from VectorCraft's
+//! `lines_for_segments_that_need_too_many_samples_are_limited`: `lines_for_curves_too_fine_to_sample_are_held_to_the_result_limit` (the
+//! limit here is the element limit over the whole call).
+//!
+//! This crate's own: `a_smoothed_loop_has_no_kink_at_its_start` (from the description of 199c4c3),
+//! `a_smoothed_loop_is_fitted_along_the_sum_of_its_end_tangents`, `only_a_smoothed_loop_is_fitted_across_its_start`,
+//! `a_corner_in_a_smoothed_loop_stays_a_corner`, `a_loop_of_long_arcs_with_a_small_turn_at_its_start_is_fitted_across_it`,
+//! `a_long_straight_cubic_is_sampled_as_a_line_for_straight_lines`, `the_lines_of_a_fine_curve_are_charged_to_the_unit`,
+//! `a_part_that_exactly_fills_the_samples_is_one_part`, `the_tree_of_sums_is_charged_by_its_samples_before_it_is_made`,
+//! `what_is_made_is_held_to_the_element_limit_over_all_the_runs_of_a_path`,
+//! `remove_redundant_points_is_held_to_the_oracle_on_the_inputs_simplify_is_tested_with`, and the tests of the fix round of the review
+//! (`a_smoothed_loop_fitted_in_parts_leaves_each_joint_along_the_circle`, `big_smoothed_loops_fitted_in_parts_leave_each_joint_along_the_circle`,
+//! `a_piece_that_stays_as_it_was_gives_back_what_its_flushed_parts_made` and `a_part_holds_no_more_samples_than_the_call_has_room_for`).
 
 use kurbo::{BezPath, CubicBez, ParamCurve, ParamCurveExtrema, ParamCurveNearest, Point, Vec2};
 
