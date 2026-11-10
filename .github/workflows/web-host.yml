@@ -13,7 +13,8 @@ permissions:
 
 concurrency:
   group: shared-web-host-${{ github.ref }}
-  cancel-in-progress: true
+  # A newer push to a pull request replaces its older run; runs on main always finish (and save the cache).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
@@ -33,6 +34,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-web-host
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt -p craft-web-host --check
       - run: cargo clippy -p craft-web-host --all-targets --locked -- -D warnings
       - run: cargo clippy -p craft-web-host --all-targets --locked --target wasm32-unknown-unknown -- -D warnings

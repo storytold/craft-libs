@@ -11,6 +11,11 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: web-api-${{ github.ref }}
+  # A newer push to a pull request replaces its older run; runs on main always finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   web-api:
     # One OS: the crate is platform-independent JSON handling plus wasm32; no platform code.

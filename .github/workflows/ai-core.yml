@@ -11,6 +11,11 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ai-core-${{ github.ref }}
+  # A newer push to a pull request replaces its older run; runs on main always finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   ai-core:
     timeout-minutes: 15

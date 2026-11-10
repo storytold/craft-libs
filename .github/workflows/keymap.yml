@@ -13,7 +13,8 @@ permissions:
 
 concurrency:
   group: keymap-${{ github.ref }}
-  cancel-in-progress: true
+  # A newer push to a pull request replaces its older run; runs on main always finish (and save the cache).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   linux:
@@ -27,7 +28,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Checkout test fonts
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/craft-fonts
           ref: b076417b5880bd4154bd22f00695b1d28c6bea83
@@ -39,6 +40,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-keymap-linux
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt -p craft-keymap --check
       - run: cargo clippy -p craft-keymap --all-targets --no-default-features --locked -- -D warnings
       # `snapshot` covers `ui` and `egui` and compiles the dialog screenshots, which need a GPU
@@ -65,7 +67,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Checkout test fonts
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/craft-fonts
           ref: b076417b5880bd4154bd22f00695b1d28c6bea83
@@ -75,6 +77,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-keymap-${{ matrix.os }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test -p craft-keymap --features ui --locked
   wasm:
     timeout-minutes: 10
@@ -90,4 +93,5 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-keymap-wasm
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo check -p craft-keymap --features ui --locked --target wasm32-unknown-unknown

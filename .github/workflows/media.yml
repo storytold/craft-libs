@@ -13,7 +13,8 @@ permissions:
 
 concurrency:
   group: shared-media-${{ github.ref }}
-  cancel-in-progress: true
+  # A newer push to a pull request replaces its older run; runs on main always finish (and save the cache).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lint:
@@ -31,6 +32,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-media-lint
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt -p craft-media --check
       - run: cargo clippy -p craft-media --all-targets --locked --no-default-features -- -D warnings
       - run: cargo clippy -p craft-media --all-targets --locked --no-default-features --features bitstream -- -D warnings
@@ -53,6 +55,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-media-test
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build tests while installing ffmpeg
         run: |
           # The man-db index rebuild after dpkg is slow on hosted runners.

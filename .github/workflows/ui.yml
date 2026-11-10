@@ -13,7 +13,8 @@ permissions:
 
 concurrency:
   group: shared-ui-${{ github.ref }}
-  cancel-in-progress: true
+  # A newer push to a pull request replaces its older run; runs on main always finish (and save the cache).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   native:
@@ -39,6 +40,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-ui
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt --check
       - run: cargo clippy -p craft-ui --all-targets --locked -- -D warnings
       - run: cargo clippy -p craft-ui --all-targets --all-features --locked -- -D warnings
@@ -56,4 +58,5 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-ui-wasm
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo check -p craft-ui --all-features --locked --target wasm32-unknown-unknown

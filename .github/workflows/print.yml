@@ -8,6 +8,10 @@ on:
     paths: ['crates/print/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/print.yml']
 permissions:
   contents: read
+concurrency:
+  group: print-${{ github.ref }}
+  # A newer push to a pull request replaces its older run; runs on main always finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   print:
     timeout-minutes: 30
