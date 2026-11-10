@@ -289,6 +289,17 @@ fn detect(app: &App, exe: &Path) -> Option<Install> {
     if crate::detect::linux::has_pacman_db() && process::capture("pacman", &["-Q", &app.bundle_id()], t).is_some() {
         return Some(Install::Package(PackageKind::ArchPkg, exe.to_path_buf()));
     }
+    // Another pacman package owns the binary (an AUR build, or anything else a repository
+    // installed): replacing files pacman keeps is pacman's to do, and staging beside them ends
+    // in a permission error (storytold/craft-launcher#1094). No self-update is offered; the
+    // package manager that owns the copy updates it.
+    if crate::detect::linux::has_pacman_db()
+        && let Some(path) = exe.to_str()
+        && let Some(answer) = process::capture("pacman", &["-Qoq", path], t)
+        && crate::packages::pacman_owner(&answer).is_some()
+    {
+        return None;
+    }
     if exe.is_file() {
         return Some(Install::Standalone(exe.to_path_buf()));
     }
@@ -1294,6 +1305,26 @@ mod tests {
         let loose = dir.path().join("artcraft-launcher");
         std::fs::write(&loose, b"binary").unwrap();
         assert_eq!(detect(&crate::suite::LAUNCHER, &loose), Some(Install::Standalone(loose.clone())));
+    }
+
+    /// A binary another pacman package owns (an AUR build of the launcher, or any other
+    /// package's file) is not a standalone copy of ours to replace: staging beside it only ends
+    /// in a permission error, so no self-update is offered at all. Skipped where pacman is not
+    /// the system's manager or the release's own package is installed — those systems have no
+    /// such case, and verified on a real pacman database in an Arch container.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_pacman_owned_binary_is_not_self_updatable() {
+        if !crate::detect::linux::has_pacman_db()
+            || process::capture("pacman", &["-Q", &crate::suite::LAUNCHER.bundle_id()], std::time::Duration::from_secs(10)).is_some()
+        {
+            return;
+        }
+        let owned = Path::new("/usr/bin/pacman");
+        if !owned.is_file() {
+            return;
+        }
+        assert_eq!(detect(&crate::suite::LAUNCHER, owned), None);
     }
 
     #[cfg(unix)]

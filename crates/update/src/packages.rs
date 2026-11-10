@@ -46,6 +46,15 @@ pub fn parse_pacman(text: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// `pacman -Qoq <path>`: the name of the package that owns `path`, alone. The quiet form
+/// answers with data rather than prose, so the answer reads the same in every language; a path
+/// no package owns makes `pacman` exit with an error, and warnings about the sync databases go
+/// to stderr, so neither ever reaches here.
+pub fn pacman_owner(text: &str) -> Option<String> {
+    let name = text.lines().next()?.trim();
+    (!name.is_empty() && !name.contains(char::is_whitespace)).then(|| name.to_string())
+}
+
 /// `flatpak list --app --columns=application,version`: the version column is often empty for
 /// bundles built from a release tarball.
 pub fn parse_flatpak_list(text: &str) -> Vec<(String, String)> {
@@ -114,6 +123,15 @@ mod tests {
         let info = "\nWordCraft - Word processor\n\n          ID: ai.storyteller.wordcraft\n     Version: 0.3.0\n      Branch: master\n";
         assert_eq!(parse_flatpak_info(info).as_deref(), Some("0.3.0"));
         assert_eq!(parse_flatpak_info("Version: \n"), None);
+    }
+
+    #[test]
+    fn an_ownership_answer_names_the_package_that_owns_the_path() {
+        assert_eq!(pacman_owner("artcraft-launcher-bin\n"), Some("artcraft-launcher-bin".into()));
+        // The quiet query answers with a name alone; anything else on a line is not one.
+        assert_eq!(pacman_owner("error: No package owns /usr/bin/artcraft-launcher\n"), None);
+        assert_eq!(pacman_owner("/usr/bin/artcraft-launcher is owned by artcraft-launcher-bin 0.10.0-1\n"), None);
+        assert_eq!(pacman_owner(""), None);
     }
 
     #[test]
