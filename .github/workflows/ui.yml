@@ -12,8 +12,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: shared-ui-${{ github.ref }}
-  # A newer push to a pull request replaces its older run; runs on main always finish (and save the cache).
+  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
+  # run (main, manual) gets its own group: it is never cancelled or replaced while queued, so it
+  # always gets to save the cache.
+  group: shared-ui-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

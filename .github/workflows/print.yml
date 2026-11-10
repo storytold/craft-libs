@@ -9,8 +9,9 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: print-${{ github.ref }}
-  # A newer push to a pull request replaces its older run; runs on main always finish.
+  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
+  # run (main, manual) gets a group of its own, so it is neither cancelled nor replaced while queued.
+  group: print-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   print:
