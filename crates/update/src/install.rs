@@ -617,7 +617,7 @@ fn prepare_home(home: &Path) {
 
 /// A new folder of our own inside `dir`, removed when dropped: a predictable name there may be
 /// the user's.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn staging_dir(dir: &Path) -> Result<tempfile::TempDir, String> {
     tempfile::Builder::new()
         .prefix(".artcraft-launcher-")
@@ -1416,6 +1416,7 @@ pub mod macos {
         // attach that was interrupted or timed out, and hdiutil won't mount another over it.
         let attempt = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or_default();
         let mount = paths.cache.join(format!("mount-{}-{}-{attempt}", app.id, std::process::id()));
+        let _in_use = InUse::new(&mount);
         std::fs::create_dir_all(&mount).map_err(|e| format!("couldn't create a folder to open the disk image in ({e})"))?;
         let (Some(dmg_s), Some(mount_s)) = (dmg.to_str(), mount.to_str()) else {
             let _ = std::fs::remove_dir(&mount);
@@ -1428,6 +1429,8 @@ pub mod macos {
         // would only add minutes on a large image.
         let attached = {
             let _one_at_a_time = DISK_IMAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            // An image an earlier install left attached makes hdiutil refuse the same file.
+            clear_mounts(app, &paths.cache, process_ended(), detach);
             let attach = || {
                 process::run(
                     HDIUTIL,
@@ -1442,18 +1445,40 @@ pub mod macos {
                     break;
                 }
                 let _ = detach(&mount);
+                let _ = detach_unmounted(dmg);
                 std::thread::sleep(Duration::from_secs(wait));
                 attached = attach();
             }
             attached
         };
         if let Err(reason) = attached {
-            let _ = std::fs::remove_dir(&mount);
-            return Err(format!("couldn't open the disk image: {reason}"));
+            let mut reason = format!("couldn't open the disk image: {reason}");
+            if let Err(why) = detach_unmounted(dmg) {
+                log::warn!("couldn't detach the disk image {} ({why})", dmg.display());
+                reason = format!("{reason}; the disk image may still be attached ({why})");
+            }
+            // An attach that timed out can still finish mounting the image.
+            return close_image(Err(reason), &mount, detach);
         }
         let result = copy_app(app, &mount, existing, destination, replace, expect);
-        let _ = detach(&mount);
-        let _ = std::fs::remove_dir(&mount);
+        close_image(result, &mount, detach)
+    }
+
+    /// Detaches the image at `mount` through `detach` and removes the mount point. An image that
+    /// stays attached is logged, and the error of a failed install says so after its reason. A
+    /// later install detaches it.
+    pub(crate) fn close_image(
+        result: Result<PathBuf, String>,
+        mount: &Path,
+        detach: impl Fn(&Path) -> Result<(), String>,
+    ) -> Result<PathBuf, String> {
+        if let Err(why) = detach(mount) {
+            log::warn!("couldn't detach the disk image at {} ({why})", mount.display());
+            return result.map_err(|reason| format!("{reason}; the disk image is still attached at {} ({why})", mount.display()));
+        }
+        if let Err(e) = std::fs::remove_dir(mount) {
+            log::warn!("couldn't remove the empty folder {} ({e})", mount.display());
+        }
         result
     }
 
@@ -1476,8 +1501,15 @@ pub mod macos {
         {
             return Err(format!("{} already exists and wasn't installed by ArtCraft Launcher", dest.display()));
         }
-        let staging = super::staging_dir(&dir)?;
-        let staged = staging.path().join(&bundle);
+        clear_staging(app, &dir, process_ended(), std::time::SystemTime::now());
+        let staging = staging_dir(&dir)?;
+        let result = place(app, &src, staging.path(), &dest, expect);
+        remove_staging(result, staging)
+    }
+
+    /// Copies the app at `src` into `staging`, checks the copy and replaces `dest` with it.
+    fn place(app: &App, src: &Path, staging: &Path, dest: &Path, expect: &Expect<'_>) -> Result<PathBuf, String> {
+        let staged = staging.join(format!("{}.app", app.name));
         let (Some(src_s), Some(staged_s)) = (src.to_str(), staged.to_str()) else { return Err("unusual characters in a path".into()) };
         // ditto keeps the code signature and symlinks intact. The disk image's volume adds Finder
         // metadata (com.apple.FinderInfo) to the files; leave it and the extended attributes
@@ -1489,8 +1521,18 @@ pub mod macos {
             .ok_or_else(|| "the copied app is incomplete".to_string())
             .and_then(|found| check(&staged, &found, expect));
         checked?;
-        swap_into_place(&staged, &dest)?;
-        Ok(dest)
+        swap_into_place(&staged, dest)?;
+        Ok(dest.to_path_buf())
+    }
+
+    /// Removes `staging` with whatever is still in it: the new copy when the install failed. A
+    /// folder that can't be removed is logged, and the error of a failed install says so after
+    /// its reason.
+    pub(crate) fn remove_staging(result: Result<PathBuf, String>, staging: tempfile::TempDir) -> Result<PathBuf, String> {
+        let path = staging.path().to_path_buf();
+        let Err(e) = staging.close() else { return result };
+        log::warn!("couldn't remove the staging folder {} ({e})", path.display());
+        result.map_err(|reason| format!("{reason}; couldn't remove the partial copy at {} ({e})", path.display()))
     }
 
     /// Checks a copied bundle against what its release promises, before it replaces anything.
@@ -1526,13 +1568,211 @@ pub mod macos {
         (found.major, found.minor, found.patch) == (release.major, release.minor, release.patch) && (found.pre.is_empty() || found.pre == release.pre)
     }
 
-    fn detach(mount: &Path) -> Option<String> {
-        let m = mount.to_str()?;
-        if !mount.join(".").exists() {
+    /// Detaches the image mounted at `mount`, if one is. `Ok` when none is mounted there.
+    fn detach(mount: &Path) -> Result<(), String> {
+        if !is_mounted(mount) {
+            return Ok(());
+        }
+        let m = mount.to_str().ok_or("unusual characters in the mount point's path")?;
+        process::run(HDIUTIL, &["detach", m, "-quiet"], Duration::from_secs(60))
+            .or_else(|_| process::run(HDIUTIL, &["detach", m, "-force", "-quiet"], Duration::from_secs(60)))
+            .map(drop)
+    }
+
+    /// Detaches the image file `dmg` where it is attached with no volume mounted, which a failed
+    /// attach can leave. An attachment with a mounted volume is left alone: another install may
+    /// be using it. So is every attachment while a program started with `dmg` in its arguments
+    /// (another process's `hdiutil attach`) is running.
+    fn detach_unmounted(dmg: &Path) -> Result<(), String> {
+        if process::is_running(dmg) {
+            return Ok(());
+        }
+        let info = process::run(HDIUTIL, &["info", "-plist"], Duration::from_secs(30))?;
+        let image = [Some(dmg.to_path_buf()), std::fs::canonicalize(dmg).ok()];
+        for device in unmounted_attachments(&info, &image.into_iter().flatten().collect::<Vec<_>>()) {
+            process::run(HDIUTIL, &["detach", &device, "-force", "-quiet"], Duration::from_secs(60))?;
+        }
+        Ok(())
+    }
+
+    /// The devices of the attachments, in `hdiutil info -plist`'s output `info`, of an image file
+    /// at one of the paths in `image` that have no volume mounted.
+    pub(crate) fn unmounted_attachments(info: &str, image: &[PathBuf]) -> Vec<String> {
+        let Ok(info) = plist::Value::from_reader_xml(info.as_bytes()) else { return Vec::new() };
+        let images = info.as_dictionary().and_then(|d| d.get("images")).and_then(plist::Value::as_array);
+        let mut devices = Vec::new();
+        for attached in images.into_iter().flatten().filter_map(plist::Value::as_dictionary) {
+            let path = attached.get("image-path").and_then(plist::Value::as_string);
+            if !path.is_some_and(|p| image.iter().any(|i| i.as_path() == Path::new(p))) {
+                continue;
+            }
+            let entities: Vec<_> = attached
+                .get("system-entities")
+                .and_then(plist::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(plist::Value::as_dictionary)
+                .collect();
+            if entities.iter().any(|e| e.contains_key("mount-point")) {
+                continue;
+            }
+            // The first entity is the whole disk; detaching it detaches the rest.
+            if let Some(device) = entities.first().and_then(|e| e.get("dev-entry")).and_then(plist::Value::as_string) {
+                devices.push(device.to_string());
+            }
+        }
+        devices
+    }
+
+    /// Whether a volume is mounted at `dir`: it is on a different device from its parent folder.
+    fn is_mounted(dir: &Path) -> bool {
+        use std::os::unix::fs::MetadataExt;
+        let (Ok(here), Some(Ok(above))) = (std::fs::symlink_metadata(dir), dir.parent().map(std::fs::metadata)) else { return false };
+        here.is_dir() && here.dev() != above.dev()
+    }
+
+    /// The start of the name of the folder an install copies the new app into, beside the
+    /// installed app. The installing process's id, `-` and six random letters and digits follow it.
+    const STAGING: &str = ".artcraft-launcher-staging-";
+
+    /// The empty file an install writes in its staging folder before copying anything into it.
+    const STAGING_MARKER: &str = ".artcraft-launcher-staging";
+
+    /// The mount points of this process's installs in progress.
+    static MOUNTS_IN_USE: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+    /// Lists a mount point in [`MOUNTS_IN_USE`] until dropped.
+    pub(crate) struct InUse(PathBuf);
+
+    impl InUse {
+        pub(crate) fn new(mount: &Path) -> Self {
+            MOUNTS_IN_USE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(mount.to_path_buf());
+            Self(mount.to_path_buf())
+        }
+    }
+
+    impl Drop for InUse {
+        fn drop(&mut self) {
+            let mut in_use = MOUNTS_IN_USE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(at) = in_use.iter().position(|m| *m == self.0) {
+                in_use.swap_remove(at);
+            }
+        }
+    }
+
+    /// The process id in `name` when `name` is `prefix`, then digits, then `-` and a rest that
+    /// `rest` accepts.
+    fn owner(name: &str, prefix: &str, rest: impl Fn(&str) -> bool) -> Option<u32> {
+        let (pid, after) = name.strip_prefix(prefix)?.split_once('-')?;
+        if pid.is_empty() || !pid.bytes().all(|b| b.is_ascii_digit()) || after.is_empty() || !rest(after) {
             return None;
         }
-        process::capture(HDIUTIL, &["detach", m, "-quiet"], Duration::from_secs(60))
-            .or_else(|| process::capture(HDIUTIL, &["detach", m, "-force", "-quiet"], Duration::from_secs(60)))
+        pid.parse().ok()
+    }
+
+    /// The ids of the running processes, from one `ps` run. `None` when `ps` fails.
+    fn running_processes() -> Option<std::collections::HashSet<u32>> {
+        let out = process::run("/bin/ps", &["-A", "-o", "pid="], Duration::from_secs(10)).ok()?;
+        out.lines().map(str::trim).filter(|l| !l.is_empty()).map(|l| l.parse().ok()).collect()
+    }
+
+    /// Says whether the process with a given id has ended, from one `ps` run made at the first
+    /// call. No process counts as ended when `ps` fails.
+    fn process_ended() -> impl Fn(u32) -> bool {
+        let running = std::cell::OnceCell::new();
+        move |pid| running.get_or_init(running_processes).as_ref().is_some_and(|r| !r.contains(&pid))
+    }
+
+    /// Detaches the images that installs of `app` left attached in `cache` when they ended
+    /// partway, and removes their mount points. A mount point belongs to an install that ended
+    /// when `ended` says its process ended, or when it is this process's and no install here uses
+    /// it. `detach` detaches an image. Failures are logged and the install goes on.
+    pub(crate) fn clear_mounts(app: &App, cache: &Path, ended: impl Fn(u32) -> bool, detach: impl Fn(&Path) -> Result<(), String>) {
+        let Ok(entries) = std::fs::read_dir(cache) else { return };
+        let prefix = format!("mount-{}-", app.id);
+        // Read before `ended` runs `ps`, which then lists every process that made one of them.
+        let names: Vec<_> = entries.flatten().map(|e| e.file_name()).collect();
+        // Listed after the folder is read: an install registers its mount point before creating it.
+        let in_use = MOUNTS_IN_USE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        for name in names {
+            let Some(pid) = name.to_str().and_then(|n| owner(n, &prefix, |rest| rest.bytes().all(|b| b.is_ascii_digit()))) else { continue };
+            let mount = cache.join(&name);
+            let gone = if pid == std::process::id() { !in_use.contains(&mount) } else { ended(pid) };
+            if !gone {
+                continue;
+            }
+            match detach(&mount).and_then(|()| std::fs::remove_dir(&mount).map_err(|e| e.to_string())) {
+                Ok(()) => log::info!("removed {}, left by an install that ended partway", mount.display()),
+                Err(e) => log::warn!("couldn't clear {}, left by an install that ended partway ({e})", mount.display()),
+            }
+        }
+    }
+
+    /// The start of the name of the staging folders of launcher versions that didn't record the
+    /// installing process. Six random letters and digits follow it.
+    const OLD_STAGING: &str = ".artcraft-launcher-";
+
+    /// How long a staging folder of [`OLD_STAGING`]'s kind stays unchanged before it counts as
+    /// left by an install that ended. An install's copy times out after 10 minutes.
+    const OLD_STAGING_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+
+    /// Removes the staging folders in `dir` whose install of `app` ended partway, with the partial
+    /// copies in them:
+    ///
+    /// - a folder named as [`STAGING`] describes, holding [`STAGING_MARKER`], whose process
+    ///   `ended` says has ended. Without the marker, the folder is removed only when it is empty.
+    /// - a folder named as [`OLD_STAGING`] describes that holds only `<app>.app` and has not
+    ///   changed for [`OLD_STAGING_AGE`] before `now`.
+    ///
+    /// Folders of this process's installs, other apps' folders and backup folders (one may hold
+    /// the only copy of an app) are left alone. Failures are logged and the install goes on.
+    pub(crate) fn clear_staging(app: &App, dir: &Path, ended: impl Fn(u32) -> bool, now: std::time::SystemTime) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        // Read before `ended` runs `ps`, which then lists every process that made one of them.
+        let folders: Vec<_> = entries.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_dir())).collect();
+        let random = |rest: &str| rest.len() == 6 && rest.bytes().all(|b| b.is_ascii_alphanumeric());
+        for folder in folders {
+            let (name, path) = (folder.file_name(), folder.path());
+            let Some(name) = name.to_str() else { continue };
+            let removed = match owner(name, STAGING, random) {
+                Some(pid) if pid == std::process::id() || !ended(pid) => continue,
+                Some(_) if std::fs::symlink_metadata(path.join(STAGING_MARKER)).is_ok_and(|m| m.is_file()) => std::fs::remove_dir_all(&path),
+                // Stopped before it wrote the marker. A folder with something in it may be the user's.
+                Some(_) => match std::fs::remove_dir(&path) {
+                    Ok(()) => Ok(()),
+                    Err(_) => continue,
+                },
+                None if name.strip_prefix(OLD_STAGING).is_some_and(random) && left_by_old_install(app, &path, now) => std::fs::remove_dir_all(&path),
+                None => continue,
+            };
+            match removed {
+                Ok(()) => log::info!("removed {}, left by an install that ended partway", path.display()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => log::warn!("couldn't remove {}, left by an install that ended partway ({e})", path.display()),
+            }
+        }
+    }
+
+    /// Whether `folder` holds only `<app>.app`, a folder, and has not changed for
+    /// [`OLD_STAGING_AGE`] before `now`.
+    fn left_by_old_install(app: &App, folder: &Path, now: std::time::SystemTime) -> bool {
+        let Ok(entries) = std::fs::read_dir(folder) else { return false };
+        let bundle = format!("{}.app", app.name);
+        let names: Vec<_> = entries.take(2).map(|e| e.map(|e| e.file_name())).collect();
+        let [Ok(only)] = names.as_slice() else { return false };
+        only.to_str() == Some(bundle.as_str())
+            && std::fs::symlink_metadata(folder.join(&bundle)).is_ok_and(|m| m.is_dir())
+            && std::fs::symlink_metadata(folder)
+                .and_then(|m| m.modified())
+                .is_ok_and(|at| now.duration_since(at).is_ok_and(|age| age >= OLD_STAGING_AGE))
+    }
+
+    /// A new staging folder for this process in `dir`, holding [`STAGING_MARKER`]. See [`STAGING`].
+    fn staging_dir(dir: &Path) -> Result<tempfile::TempDir, String> {
+        let failed = |e: std::io::Error| format!("couldn't create a staging folder in {} ({e})", dir.display());
+        let staging = tempfile::Builder::new().prefix(&format!("{STAGING}{}-", std::process::id())).rand_bytes(6).tempdir_in(dir).map_err(failed)?;
+        std::fs::write(staging.path().join(STAGING_MARKER), b"").map_err(failed)?;
+        Ok(staging)
     }
 
     /// Moves an app to the user's Trash (so it can be put back).
@@ -3199,6 +3439,261 @@ esac
                 std::fs::read_dir(&apps).unwrap().map(|e| e.unwrap().file_name()).collect::<Vec<_>>(),
                 [std::ffi::OsString::from("PhotoCraft.app")]
             );
+        }
+
+        /// Detaches the image at a mount point when dropped, so a failing test leaves none attached.
+        struct Attached(PathBuf);
+
+        impl Drop for Attached {
+            fn drop(&mut self) {
+                if self.0.exists() {
+                    let _ = std::process::Command::new("hdiutil").args(["detach", "-force", "-quiet"]).arg(&self.0).status();
+                }
+            }
+        }
+
+        #[test]
+        fn an_install_that_ended_partway_does_not_block_the_next() {
+            let dir = tempfile::tempdir().unwrap();
+            let apps = dir.path().join("Applications");
+            let current = bundle(&apps, "0.5.0");
+            let existing = Installed { version: None, source: InstallSource::MacApp, location: current.display().to_string(), package: None };
+            let paths = Paths::under(dir.path());
+            let image = dmg(dir.path(), "0.6.0");
+
+            // What an install in a process that has ended left behind: its image still attached,
+            // and the copy it was making beside the app.
+            let mut ended = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+            let pid = ended.id();
+            ended.wait().unwrap();
+            let mount = paths.cache.join(format!("mount-photocraft-{pid}-1"));
+            std::fs::create_dir_all(&mount).unwrap();
+            // The disk-image helper turns requests away while it is busy, as in `dmg`.
+            let attached = {
+                let _one_at_a_time = super::macos::DISK_IMAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut said = String::new();
+                let mut attached = false;
+                for attempt in 0..5u64 {
+                    if attempt > 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(400 * attempt));
+                    }
+                    let output = std::process::Command::new("hdiutil")
+                        .args(["attach", "-nobrowse", "-readonly", "-noautoopen", "-noverify", "-mountpoint"])
+                        .arg(&mount)
+                        .arg(&image)
+                        .output()
+                        .unwrap();
+                    if output.status.success() {
+                        attached = true;
+                        break;
+                    }
+                    said = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                }
+                attached.then_some(()).ok_or(said)
+            };
+            let _attached = Attached(mount.clone());
+            assert_eq!(attached, Ok(()), "hdiutil attach failed after 5 tries");
+            let staging = apps.join(format!(".artcraft-launcher-staging-{pid}-Ab12Cd"));
+            bundle(&staging, "0.6.0");
+            std::fs::write(staging.join(".artcraft-launcher-staging"), "").unwrap();
+
+            let result = install_dmg(photocraft(), &image, Some(&existing), None, false, &paths, &Expect { team: None, version: None });
+            assert_eq!(result, Ok(current.clone()));
+            assert_eq!(std::fs::read_to_string(current.join("Contents/MacOS/PhotoCraft")).unwrap(), "0.6.0");
+            assert!(!mount.exists(), "the earlier install's image is still attached");
+            assert_eq!(
+                std::fs::read_dir(&apps).unwrap().map(|e| e.unwrap().file_name()).collect::<Vec<_>>(),
+                [std::ffi::OsString::from("PhotoCraft.app")]
+            );
+            let mounts = std::fs::read_dir(&paths.cache).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().starts_with("mount-"));
+            assert_eq!(mounts.count(), 0);
+        }
+
+        #[test]
+        fn only_staging_folders_of_installs_that_ended_are_removed() {
+            let dir = tempfile::tempdir().unwrap();
+            let apps = dir.path().join("Applications");
+            let (ended, running, ours) = (4_000_001, 4_000_002, std::process::id());
+            let staging = |pid: u32, rest: &str| {
+                let folder = apps.join(format!(".artcraft-launcher-staging-{pid}-{rest}"));
+                bundle(&folder, "0.6.0");
+                std::fs::write(folder.join(".artcraft-launcher-staging"), "").unwrap();
+                folder
+            };
+            let left = staging(ended, "Ab12Cd");
+            let kept = [
+                staging(running, "Ef34Gh"),
+                staging(ours, "Ij56Kl"),
+                // Not the name or the contents of a staging folder.
+                staging(ended, "photo"),
+                staging(ended, "Ab12Cd7"),
+                staging(ended, "Ab-2Cd"),
+                // Without the marker, a folder with something in it may be the user's.
+                bundle(&apps.join(format!(".artcraft-launcher-staging-{ended}-Yz34Ab")), "0.6.0"),
+                // A backup may hold the only copy of the app.
+                bundle(&apps.join(".artcraft-launcher-backup-Mn78Op/old"), "0.5.0"),
+                bundle(&apps.join(format!(".artcraft-launcher-staging-{ended}")), "0.6.0"),
+                bundle(&apps.join(format!(".artcraft-launcher-staging-x{ended}-Uv12Wx")), "0.6.0"),
+                bundle(&apps, "0.5.0"),
+            ];
+            // An install that stopped before it wrote the marker.
+            let empty = apps.join(format!(".artcraft-launcher-staging-{ended}-Zz99Yy"));
+            std::fs::create_dir(&empty).unwrap();
+            let file = apps.join(format!(".artcraft-launcher-staging-{ended}-file"));
+            std::fs::write(&file, "the user's").unwrap();
+            let elsewhere = bundle(&dir.path().join("Elsewhere"), "0.4.0");
+            let link = apps.join(format!(".artcraft-launcher-staging-{ended}-link"));
+            std::os::unix::fs::symlink(elsewhere.parent().unwrap(), &link).unwrap();
+            // Staging folders of launcher versions that didn't record the process.
+            let old = bundle(&apps.join(".artcraft-launcher-Qr90St"), "0.6.0");
+            let old_kept = [
+                bundle(&apps.join(".artcraft-launcher-Qr90St7"), "0.6.0"),
+                {
+                    let two = bundle(&apps.join(".artcraft-launcher-St12Uv"), "0.6.0");
+                    std::fs::write(apps.join(".artcraft-launcher-St12Uv/notes.txt"), "the user's").unwrap();
+                    two
+                },
+                {
+                    let other = apps.join(".artcraft-launcher-Wx34Yz/VectorCraft.app");
+                    std::fs::create_dir_all(&other).unwrap();
+                    other
+                },
+            ];
+            let now = std::time::SystemTime::now();
+
+            super::macos::clear_staging(photocraft(), &apps, |pid| pid == ended, now);
+            assert!(!left.exists(), "the partial copy of an install that ended is still there");
+            assert!(!empty.exists(), "the empty staging folder of an install that ended is still there");
+            for path in kept.iter().chain([&file, &link, &old]).chain(&old_kept) {
+                assert!(path.exists(), "{} was removed", path.display());
+            }
+            assert_eq!(std::fs::read_to_string(elsewhere.join("Contents/MacOS/PhotoCraft")).unwrap(), "0.4.0");
+
+            // A day later, with every process still in the same state.
+            let day = std::time::Duration::from_secs(24 * 60 * 60);
+            super::macos::clear_staging(photocraft(), &apps, |pid| pid == ended, now + day + std::time::Duration::from_secs(60));
+            assert!(!old.exists(), "the partial copy of an earlier launcher version's install is still there");
+            for path in kept.iter().chain([&file, &link]).chain(&old_kept) {
+                assert!(path.exists(), "{} was removed", path.display());
+            }
+        }
+
+        #[test]
+        fn only_mount_points_of_installs_that_ended_are_cleared() {
+            let dir = tempfile::tempdir().unwrap();
+            let cache = dir.path();
+            let (ended, running, ours) = (4_000_001, 4_000_002, std::process::id());
+            let folder = |name: String| {
+                let path = cache.join(name);
+                std::fs::create_dir(&path).unwrap();
+                path
+            };
+            let left = folder(format!("mount-photocraft-{ended}-1"));
+            let busy = folder(format!("mount-photocraft-{ended}-2"));
+            let own_left = folder(format!("mount-photocraft-{ours}-3"));
+            let own_in_use = folder(format!("mount-photocraft-{ours}-4"));
+            let _in_use = super::macos::InUse::new(&own_in_use);
+            let kept = [
+                folder(format!("mount-photocraft-{running}-5")),
+                folder(format!("mount-vectorcraft-{ended}-6")),
+                folder(format!("mount-photocraft-{ended}-x7")),
+                folder(format!("mount-photocraft-{ended}")),
+                folder("downloads".into()),
+            ];
+
+            let asked = std::cell::RefCell::new(Vec::new());
+            super::macos::clear_mounts(
+                photocraft(),
+                cache,
+                |pid| pid == ended,
+                |mount| {
+                    asked.borrow_mut().push(mount.to_path_buf());
+                    if mount == busy { Err("Resource busy".into()) } else { Ok(()) }
+                },
+            );
+            let mut asked = asked.into_inner();
+            asked.sort();
+            let mut cleared = vec![left.clone(), busy.clone(), own_left.clone()];
+            cleared.sort();
+            assert_eq!(asked, cleared);
+            assert!(!left.exists() && !own_left.exists());
+            for path in kept.iter().chain([&busy, &own_in_use]) {
+                assert!(path.exists(), "{} was removed", path.display());
+            }
+        }
+
+        #[test]
+        fn a_failed_attach_detaches_only_unmounted_attachments_of_its_image() {
+            let image = |path: &str, entities: &[(&str, Option<&str>)]| {
+                let entities: String = entities
+                    .iter()
+                    .map(|(dev, mount)| {
+                        let mount = mount.map(|m| format!("<key>mount-point</key><string>{m}</string>")).unwrap_or_default();
+                        format!("<dict><key>dev-entry</key><string>{dev}</string>{mount}</dict>")
+                    })
+                    .collect();
+                format!("<dict><key>image-path</key><string>{path}</string><key>system-entities</key><array>{entities}</array></dict>")
+            };
+            let ours = "/Users/a/Library/Caches/craft/photocraft-0.6.0.dmg";
+            let info = format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict><key>images</key><array>{}{}{}{}</array></dict></plist>",
+                image(ours, &[("/dev/disk5", None), ("/dev/disk5s1", None), ("/dev/disk9", None)]),
+                image(ours, &[("/dev/disk6", None), ("/dev/disk6s1", Some("/Users/a/Library/Caches/craft/mount-photocraft-1-2"))]),
+                image("/Users/a/Downloads/other.dmg", &[("/dev/disk7", None)]),
+                image(&format!("/private{ours}"), &[("/dev/disk8", None)]),
+            );
+            let paths = [PathBuf::from(ours)];
+            assert_eq!(super::macos::unmounted_attachments(&info, &paths), ["/dev/disk5"]);
+            let both = [PathBuf::from(ours), PathBuf::from(format!("/private{ours}"))];
+            assert_eq!(super::macos::unmounted_attachments(&info, &both), ["/dev/disk5", "/dev/disk8"]);
+            assert!(super::macos::unmounted_attachments("hdiutil: info failed", &paths).is_empty());
+        }
+
+        #[test]
+        fn a_failed_cleanup_is_reported_after_the_reason_the_install_failed() {
+            use std::os::unix::fs::PermissionsExt;
+
+            let dir = tempfile::tempdir().unwrap();
+            let placed = PathBuf::from("/Applications/PhotoCraft.app");
+            let mount = dir.path().join("mount-photocraft-1-2");
+            std::fs::create_dir(&mount).unwrap();
+            let busy = |_: &Path| Err("Resource busy".to_string());
+            assert_eq!(
+                super::macos::close_image(Err("the copied app is incomplete".into()), &mount, busy),
+                Err(format!("the copied app is incomplete; the disk image is still attached at {} (Resource busy)", mount.display()))
+            );
+            assert_eq!(super::macos::close_image(Ok(placed.clone()), &mount, busy), Ok(placed.clone()));
+            assert!(mount.exists());
+            assert_eq!(super::macos::close_image(Err("failed".into()), &mount, |_| Ok(())), Err("failed".into()));
+            assert!(!mount.exists());
+
+            // A staging folder with a copy that can't be removed.
+            let locked_staging = || {
+                let staging = tempfile::Builder::new().prefix(".artcraft-launcher-staging-").tempdir_in(dir.path()).unwrap();
+                let copy = bundle(staging.path(), "0.6.0").join("Contents");
+                std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o555)).unwrap();
+                (staging, copy)
+            };
+            let (staging, copy) = locked_staging();
+            let path = staging.path().to_path_buf();
+            let failed = super::macos::remove_staging(Err("the app isn't signed by its developer, so it wasn't installed".into()), staging);
+            std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let message = failed.unwrap_err();
+            let start =
+                format!("the app isn't signed by its developer, so it wasn't installed; couldn't remove the partial copy at {} (", path.display());
+            assert!(message.starts_with(&start), "{message}");
+            assert!(path.exists());
+
+            let (staging, copy) = locked_staging();
+            let placed_anyway = super::macos::remove_staging(Ok(placed.clone()), staging);
+            std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert_eq!(placed_anyway, Ok(placed.clone()));
+
+            let staging = tempfile::Builder::new().prefix(".artcraft-launcher-staging-").tempdir_in(dir.path()).unwrap();
+            let path = staging.path().to_path_buf();
+            bundle(&path, "0.6.0");
+            assert_eq!(super::macos::remove_staging(Err("failed".into()), staging), Err("failed".into()));
+            assert!(!path.exists());
         }
 
         /// A real release passes. Run with `CRAFT_APP=/path/to/PhotoCraft.app cargo test -p
