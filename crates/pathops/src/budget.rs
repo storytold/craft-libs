@@ -171,9 +171,13 @@ pub const MAX_FILL_WORK: usize = 1 << 26;
 /// of them one, and the nearest point of a curve to a junction 64 (about 0.3 microseconds
 /// in a release build, against 5 nanoseconds for a step). An inset checks that every segment of its subpaths
 /// is covered by the boundary of their fill, a search of the same kind for each segment of the boundary
-/// and each segment of the subpaths near it. About 5 seconds of the slowest of them. Past it a Pathfinder
-/// Outline fails as [`crate::PathOpsError::TooComplex`] (no shapes, for [`crate::pathfinder`]), and an inset
-/// takes the boundary of the fill, which is right for any input and differs from the subpaths themselves only in
+/// and each segment of the subpaths near it. The search for a point inside each face of a planar map
+/// ([`crate::live_paint`], [`crate::shape_builder`]) costs a step for each edge of the face's outline that it flattens (a curve is charged
+/// twice the lines it makes at the most) and for each edge at each of the heights it is crossed with a line at (up to 150): a face thinner than
+/// a thousandth of its size is searched again at a finer outline, and a face whose curves are long and bend a great deal is thousands of edges
+/// to the curve. About 5 seconds of the slowest of them. Past it a Pathfinder Outline fails as
+/// [`crate::PathOpsError::TooComplex`] (no shapes, for [`crate::pathfinder`]), a planar map is not built (as for the work of winding points:
+/// [`MAX_FILL_WORK`]), and an inset takes the boundary of the fill, which is right for any input and differs from the subpaths themselves only in
 /// how it is cut. The default of [`Limits::search_work`].
 pub const MAX_SEARCH_WORK: usize = 1 << 30;
 

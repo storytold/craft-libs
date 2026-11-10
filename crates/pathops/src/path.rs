@@ -403,7 +403,41 @@ const MAX_FLATTEN_LENGTH: f64 = 1e60;
 /// coordinates before producing anything, so a small curve with far-out handles asks for
 /// gigabytes). A curve whose points aren't finite, or are past [`MAX_FLATTEN_LENGTH`], is drawn as a
 /// line to its end.
-pub(crate) fn flatten(path: impl IntoIterator<Item = PathEl>, tolerance: f64, mut callback: impl FnMut(PathEl)) {
+pub(crate) fn flatten(path: impl IntoIterator<Item = PathEl>, tolerance: f64, callback: impl FnMut(PathEl)) {
+    flatten_charged(path, tolerance, &|_| true, callback);
+}
+
+/// The most lines `kurbo::flatten` makes of a curve, as a multiple of Wang's count of them (measured on random cubics and quadratics, 4,000 of them
+/// at tolerances from a thousandth to a million times what they bow: 2 at the most, in the curves that make a line or two).
+const FLATTEN_OVER_WANG: f64 = 2.0;
+
+/// An upper bound of the lines [`flatten`] makes of the curve `el` that starts at `from`, to within `tolerance` (the tolerance it is flattened to,
+/// raised as `flatten` raises it): Wang's count (`sqrt(n (n - 1) / 8 * M / tol)` for a curve of degree `n` whose second differences are at most
+/// `M`) times [`FLATTEN_OVER_WANG`] and two more, at most the most a curve makes. A line is one.
+fn lines_bound(el: PathEl, from: Point, tolerance: f64) -> usize {
+    let (wang_squared_per_tol, length) = match el {
+        PathEl::QuadTo(a, b) => (0.25 * (from.to_vec2() - a.to_vec2() * 2.0 + b.to_vec2()).hypot(), from.distance(a) + a.distance(b)),
+        PathEl::CurveTo(a, b, c) => {
+            let (d0, d1) = ((from.to_vec2() - a.to_vec2() * 2.0 + b.to_vec2()).hypot(), (a.to_vec2() - b.to_vec2() * 2.0 + c.to_vec2()).hypot());
+            (0.75 * d0.max(d1), from.distance(a) + a.distance(b) + b.distance(c))
+        }
+        _ => return 1,
+    };
+    let tol = tolerance.max(length / (MAX_FLATTEN_PER_CURVE * MAX_FLATTEN_PER_CURVE));
+    let wang = (wang_squared_per_tol / tol).sqrt().ceil();
+    // A bound that is not a number (a second difference past what a float holds) is the most.
+    let lines = if wang.is_finite() { wang * FLATTEN_OVER_WANG + 2.0 } else { MAX_FLATTEN_PER_CURVE };
+    lines.min(MAX_FLATTEN_PER_CURVE * FLATTEN_OVER_WANG) as usize
+}
+
+/// [`flatten`] that asks `charge` for the lines of each curve ([`lines_bound`]) before it flattens it, and stops where `charge` says no. False
+/// then, with what was flattened before given to `callback` already; true when the whole path was.
+pub(crate) fn flatten_charged(
+    path: impl IntoIterator<Item = PathEl>,
+    tolerance: f64,
+    charge: &dyn Fn(usize) -> bool,
+    mut callback: impl FnMut(PathEl),
+) -> bool {
     let mut last = None;
     let mut start = None;
     for el in path {
@@ -439,6 +473,9 @@ pub(crate) fn flatten(path: impl IntoIterator<Item = PathEl>, tolerance: f64, mu
             callback(PathEl::LineTo(to));
             continue;
         }
+        if !charge(lines_bound(el, from, tolerance)) {
+            return false;
+        }
         let tol = tolerance.max(length / (MAX_FLATTEN_PER_CURVE * MAX_FLATTEN_PER_CURVE));
         kurbo::flatten([PathEl::MoveTo(from), el], tol, |e| {
             if !matches!(e, PathEl::MoveTo(_)) {
@@ -446,6 +483,7 @@ pub(crate) fn flatten(path: impl IntoIterator<Item = PathEl>, tolerance: f64, mu
             }
         });
     }
+    true
 }
 
 /// Every control point of `path` is finite.
@@ -717,5 +755,116 @@ mod tests {
         assert_eq!((out[0].clone(), out[1].clone(), out[2].elements().len()), (clean.clone(), clean.clone(), 0));
         assert!(matches!(outlines_without_leading_closes(&[clean.clone(), clean]), Cow::Borrowed(_)));
         assert!(matches!(outlines_without_leading_closes(&[]), Cow::Borrowed(_)));
+    }
+
+    /// The lines [`flatten`] makes of a curve are never more than the bound it is charged ([`lines_bound`]): random cubics and quadratics, of every
+    /// bow and size, at tolerances from a thousandth to a thousand times what they bow. (A bound is for the worst curve of its control points: a
+    /// cubic that overshoots its ends with handles along its chord is flattened to far fewer lines than it is charged; see the arcs below.)
+    #[test]
+    fn the_lines_a_curve_is_flattened_to_are_within_the_bound_it_is_charged() {
+        let mut rng = crate::testutil::Rng(0x9e37_79b9_7f4a_7c15);
+        let mut worst = 0.0f64;
+        for case in 0..4000 {
+            let size = 10f64.powf(rng.unit() * 6.0 - 1.0);
+            let mut p = || Point::new((rng.unit() - 0.5) * size, (rng.unit() - 0.5) * size);
+            let from = p();
+            let el = if case % 2 == 0 { PathEl::CurveTo(p(), p(), p()) } else { PathEl::QuadTo(p(), p()) };
+            let tol = size * 10f64.powf(-rng.unit() * 6.0);
+            let mut lines = 0usize;
+            flatten([PathEl::MoveTo(from), el], tol, |e| lines += usize::from(matches!(e, PathEl::LineTo(_))));
+            let bound = lines_bound(el, from, tol);
+            assert!(lines < bound, "case {case}: {lines} lines against a bound of {bound} ({el:?} from {from:?} at {tol})");
+            worst = worst.max(lines as f64 / (bound as f64 - 2.0).max(1.0) * FLATTEN_OVER_WANG);
+        }
+        // The factor was chosen on this: the most lines as a multiple of Wang's count is the factor of it, and no more.
+        assert!(worst <= FLATTEN_OVER_WANG, "{worst}");
+    }
+
+    /// A bound that is not wasteful where it matters: for the arcs of a circle (what the thin faces of the map are bounded by), at radii of a
+    /// hundred to a million and tolerances of a ten-thousandth to a hundredth of the radius, it is at most 2.5 times the lines made, and at
+    /// least those.
+    #[test]
+    fn the_bound_on_the_lines_of_an_arc_is_within_two_and_a_half_times_the_lines() {
+        let mut worst = 0.0f64;
+        for r in [1e2, 1e4, 1e6] {
+            for tol_per_r in [1e-4, 1e-5, 1e-7, 1e-9] {
+                let tol = r * tol_per_r;
+                let arcs = crate::testutil::cubic_circle(4, r, 0.0, 0.0);
+                let (mut lines, mut bound) = (0usize, 0usize);
+                let mut from = Point::new(r, 0.0);
+                for el in arcs.elements().iter().skip(1) {
+                    if let PathEl::CurveTo(_, _, c) = *el {
+                        bound += lines_bound(*el, from, tol);
+                        flatten([PathEl::MoveTo(from), *el], tol, |e| lines += usize::from(matches!(e, PathEl::LineTo(_))));
+                        from = c;
+                    }
+                }
+                assert!(lines <= bound, "radius {r}, tolerance {tol}: {lines} lines against {bound}");
+                worst = worst.max(bound as f64 / lines as f64);
+            }
+        }
+        assert!(worst <= 2.5, "{worst}");
+    }
+
+    /// A path flattened with a charge is charged for each curve, before it is flattened (a move, a line and a close are not charged), and where the
+    /// charge says no the flattening stops with what was made before: the answer is false, and the curves after it are not asked for.
+    #[test]
+    fn a_flattening_stops_where_it_is_not_charged() {
+        let arc = |x: f64| [PathEl::CurveTo(Point::new(x + 30.0, 40.0), Point::new(x + 70.0, 40.0), Point::new(x + 100.0, 0.0))];
+        let mut path = vec![PathEl::MoveTo(Point::ZERO)];
+        path.extend(arc(0.0));
+        path.push(PathEl::LineTo(Point::new(150.0, 10.0)));
+        path.extend(arc(150.0));
+        path.extend(arc(250.0));
+        path.push(PathEl::ClosePath);
+        let lines_of = |upto: usize| {
+            let mut n = 0usize;
+            flatten(path[..upto].iter().copied(), 0.01, |e| n += usize::from(matches!(e, PathEl::LineTo(_))));
+            n
+        };
+        let asked = std::cell::RefCell::new(Vec::new());
+        let mut made = 0usize;
+        let charge = |n: usize| {
+            asked.borrow_mut().push(n);
+            true
+        };
+        assert!(flatten_charged(path.iter().copied(), 0.01, &charge, |e| made += usize::from(matches!(e, PathEl::LineTo(_)))));
+        assert_eq!(made, lines_of(path.len()), "charged and not refused: what flatten makes");
+        let asked = asked.into_inner();
+        assert_eq!(asked.len(), 3, "the three curves: {asked:?}");
+        assert!(asked.iter().all(|&n| n > 10), "each is charged its lines: {asked:?}");
+        // Refused at the second curve (the third is never asked for): the first curve and the line are made, and not the rest.
+        let count = std::cell::Cell::new(0usize);
+        let mut made = 0usize;
+        let refusing = |_: usize| {
+            count.set(count.get() + 1);
+            count.get() < 2
+        };
+        let done = flatten_charged(path.iter().copied(), 0.01, &refusing, |e| made += usize::from(matches!(e, PathEl::LineTo(_))));
+        assert!(!done);
+        assert_eq!(count.get(), 2, "nothing is asked for after a no");
+        assert_eq!(made, lines_of(3), "the first curve and the line");
+    }
+
+    /// The bound is Wang's count times two and two more, from the larger second difference of the control points and the tolerance (raised, for
+    /// a curve of a length over `4096^2` tolerances, to its length over that), checked to the line on curves whose numbers are exact: a quadratic
+    /// with a second difference of 20 at a tolerance of 0.05 (wang 10: 22), a cubic with one of 20 and one of 10 at 0.15 (wang 10: 22), a
+    /// quadratic whose tolerance is raised (3,448), a cubic that reaches the most any curve is charged (5,796), a line, and a curve with a
+    /// coordinate that is not a number.
+    #[test]
+    fn the_bound_on_the_lines_of_a_curve_is_wangs_count_twice_and_two() {
+        let p = |x: f64, y: f64| Point::new(x, y);
+        assert_eq!(lines_bound(PathEl::QuadTo(p(5.0, 10.0), p(10.0, 0.0)), p(0.0, 0.0), 0.05), 22);
+        assert_eq!(lines_bound(PathEl::CurveTo(p(0.0, 10.0), p(0.0, 0.0), p(0.0, 0.0)), p(0.0, 0.0), 0.15), 22);
+        // The larger of the two second differences: here the first is 10 and the second 20 (and 22 is the count of 20).
+        assert_eq!(lines_bound(PathEl::CurveTo(p(0.0, 0.0), p(0.0, 10.0), p(0.0, 0.0)), p(0.0, 0.0), 0.15), 22, "0.75 x 20 / 0.15 is 100");
+        // 2,000,000 of second difference over a length of 2.83 million, at a tolerance of a billionth that is raised to length / 4096^2.
+        let raised = lines_bound(PathEl::QuadTo(p(1e6, 1e6), p(2e6, 0.0)), p(0.0, 0.0), 1e-9);
+        assert_eq!(raised, 3_448);
+        assert_eq!(lines_bound(PathEl::CurveTo(p(0.0, 1000.0), p(0.0, 0.0), p(0.0, 1000.0)), p(0.0, 0.0), 1e-9), 5_796);
+        assert_eq!(lines_bound(PathEl::LineTo(p(1.0, 1.0)), p(0.0, 0.0), 0.01), 1);
+        assert_eq!(lines_bound(PathEl::MoveTo(p(1.0, 1.0)), p(0.0, 0.0), 0.01), 1);
+        // A second difference past what a float holds is the most a curve is charged, twice what it can make.
+        assert_eq!(lines_bound(PathEl::QuadTo(p(1e308, 1e308), p(-1e308, 0.0)), p(1e308, 0.0), 1e-3), 4096);
     }
 }

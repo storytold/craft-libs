@@ -218,11 +218,18 @@ work of each operation is bounded before it starts, in counts the tests assert o
   overlap) counts nine, so 58 thousand such pairs overlapping are refused, whatever they do;
 - what is done with the output of a sweep is bounded as well: a Pathfinder Outline finds the junctions on each
   segment among those inside the bounds of the segment (a grid of 100 and 100 open lines makes 10,000 of them,
-  and every arch round it holds them all in its bounds with the curve nowhere near), and an inset checks
-  each segment of its subpaths against the boundary of their fill. Each step is charged before it is made, to
+  and every arch round it holds them all in its bounds with the curve nowhere near), an inset checks
+  each segment of its subpaths against the boundary of their fill, and a planar map looks for a point inside each of its faces (a face thinner
+  than a thousandth of its size is looked in again at a finer outline, thousands of edges to a curve of a large circle, each crossed with a
+  line at up to 150 heights). Each step is charged before it is made, to
   `MAX_SEARCH_WORK` (2^30 steps: a junction looked at is one, a block of 64 of them one, the nearest point of a
-  curve to a point 64, a third of a microsecond; about 5 s). Past it a Pathfinder Outline is `TooComplex` (no
-  shapes, for `pathfinder`), and an inset takes the boundary of the fill, which is right for any input;
+  curve to a point 64, a third of a microsecond; an edge flattened or crossed with a line is one, the lines of a curve at twice what it makes at
+  the most; about 5 s). Past it a Pathfinder Outline is `TooComplex` (no
+  shapes, for `pathfinder`), a planar map is not built (`live_paint` gives nothing, `shape_builder` falls back to the filled areas, and the
+  `try_` forms say `TooComplex`), and an inset takes the boundary of the fill, which is right for any input. The finer outline is kept: a
+  coarser one loses the sources of the face. The searches of 2,048 pairs of circles 2,000,000 across that are 0.03 apart (2,387 faces, the thin
+  crescents the finer outline is for among them) are charged 17.7 million steps, a sixtieth of it, in 0.05 s of the 17.5 s the map takes;
+  the map takes its time in the sweep, as a plain union of the same circles does (18 s, 2.3 times the star), see Known limits;
 - segments that meet at one point cost about the fourth power of their number, which none of those counts
   (a pie of k slices has 2k ends at its centre): more than `MAX_ENDS_AT_A_POINT` (512) ends at one point is
   `TooComplex`. The ends are counted in a hash at the sweep's tolerance, which every point of every element
@@ -714,6 +721,12 @@ or so, measured once in a release build:
   inset sees it.
 - The counts themselves are made before the sweep and cost time: up to 0.3 to 0.5 s on an input of 250,000
   segments (they are a few sweeps of the bounds), with 64,000 dots as separate inputs the most.
+- Circles a few hundredths apart: 2,048 pairs of circles of radius 1,000,000 (four arcs each), the second of a pair 0.03 to the right of the
+  first, are swept in 18.4 s by `unite_all` and mapped in 17.5 s by `live_paint` (2,387 faces), 2.2 to 2.4 times the star of
+  1,291 points beside them (7.7 to 8.0 s, on a loaded machine), in 0.47 GB; the most a map admits, 6,000 pairs (6,942 faces), takes 49 to 54 s,
+  6.4 to 6.9 times the star, in 1.6 GB (4,096 pairs: 34 s). The time is the sweep's, not the search for a point inside each face (0.05 s of it): the
+  meter admits curves that run along one another for most of their length when they are this far apart. At radius 100,000 the same
+  pairs take 8.8 s for 2,048 (1.1 times the star).
 - A long, low union is admitted turned, as the same input stood on end is, which can take twice the star: three rows of a zigzag of 80,000
   cubics took 15.6 and 16.1 s beside the star's 7.6 and 7.7 s (64,000 cubics a row took 13.5 s beside 8.1); stood on end, the crate before the quarter
   turn took 16.2 and 16.0 s beside 7.5. The gap was there already; the turn reaches it from low art, which upright was refused in 0.28 s.

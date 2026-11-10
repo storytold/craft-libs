@@ -7,6 +7,7 @@ use super::graph::{
 use super::index::{Crossings, Frame, RectIndex, mid, try_frame_for};
 use super::*;
 use crate::PathOpsError;
+use crate::budget::SearchBudget;
 use crate::work::{self, Work};
 
 /// The planar graph of `shapes` (in the sweep's frame) with its faces walked: what [`build`] makes
@@ -385,6 +386,8 @@ pub(super) fn try_build(shapes: &[Shape], precision: f64, strict: bool) -> Resul
         let segs: Vec<Seg> = cycle.iter().flat_map(|&h| half_segs(edges, h)).collect();
         segs_to_bezpath(&tidy_segments(segs, true, tidy), true)
     };
+    // What the searches for a point inside a face may spend, in all the faces of the map ([`crate::Limits::search_work`]).
+    let search = SearchBudget::new();
     let mut regions = Vec::with_capacity(faces.len());
     for ((cycle, _, _), hs) in faces.iter().zip(&face_holes) {
         let Some(mut path) = subpath(cycle) else { continue };
@@ -395,10 +398,21 @@ pub(super) fn try_build(shapes: &[Shape], precision: f64, strict: bool) -> Resul
         // A face thinner than the flattening the point is looked for in (a thousandth of its size: a lens a
         // hundred long and 0.03 wide between two curves has none of its middles in it) needs a finer outline: the
         // outline's flattening is made a quarter of the precision, or an eighth of what it was where that is less.
-        let inside = interior_point(&path).or_else(|| {
-            let first = flattening_of(&path)?;
-            interior_point_within(&path, (precision / 4.0).min(first / 8.0))
-        });
+        // Both searches are charged to the budget of the searches after a sweep ([`crate::Limits::search_work`]), a step an edge, before the edges
+        // they look at are flattened (the lines a curve is flattened to, at the most, [`crate::path::flatten_charged`]) and before each height they
+        // are crossed with a line at: a face that is thin makes far more edges at the finer outline, and a face is searched at up to 150 heights.
+        // An edge at a height takes a nanosecond and a line flattened 4 (measured, in a release build, on the crescents of circles 100,000 across),
+        // a step 4.6 (the budget is 5 s): so the whole of it spent on this is 1 to 4 s, and out of it the map is not built, as for the windings.
+        // A coarser outline would lose the sources of the face, so there is none.
+        let charge = |edges: usize| search.charge(edges);
+        let inside = (|| -> Result<Option<Point>, Exhausted> {
+            let Some(first) = flattening_of(&path) else { return Ok(None) };
+            match interior_point_charged(&path, first, &charge)? {
+                Some(p) => Ok(Some(p)),
+                None => interior_point_charged(&path, retry_tolerance(precision, first), &charge),
+            }
+        })()
+        .map_err(|Exhausted| PathOpsError::TooComplex)?;
         #[cfg(test)]
         let inside = if path.area().abs() < NO_POINTS_BELOW.with(std::cell::Cell::get) { None } else { inside };
         if inside.is_none() && strict && !crate::boolean::is_sliver(&path, precision) {
@@ -498,6 +512,15 @@ pub fn interior_point(path: &BezPath) -> Option<Point> {
     interior_point_within(&path, flattening_of(&path)?)
 }
 
+/// The tolerance a face that the first outline (flattened to `first`, a thousandth of its size) finds no point in is flattened to: a quarter of
+/// the precision, or an eighth of what the first was where that is less.
+pub(super) fn retry_tolerance(precision: f64, first: f64) -> f64 {
+    (precision / 4.0).min(first / 8.0)
+}
+
+/// The search for a point inside a face spent more than it was allowed to ([`crate::Limits::search_work`]).
+pub(super) struct Exhausted;
+
 /// The tolerance [`interior_point`] flattens `path` to: a thousandth of its size, and not under 1e-4. `None`
 /// for a path whose points are not finite or that draws nothing.
 fn flattening_of(path: &BezPath) -> Option<f64> {
@@ -517,13 +540,19 @@ fn finite_bounds(path: &BezPath) -> Option<kurbo::Rect> {
 /// [`interior_point`] with the path's curves flattened to within `tolerance` (taken coarser where
 /// a curve would need more than a few thousand lines, [`crate::path::flatten`]).
 fn interior_point_within(path: &BezPath, tolerance: f64) -> Option<Point> {
-    let bb = finite_bounds(path)?;
+    interior_point_charged(path, tolerance, &|_| true).ok().flatten()
+}
+
+/// [`interior_point_within`] that asks `charge` for the edges it is about to flatten (each curve's, before it is) and for the edges it is about to
+/// cross with a line (before each height), and gives up with [`Exhausted`] when `charge` says there is no more.
+pub(super) fn interior_point_charged(path: &BezPath, tolerance: f64, charge: &dyn Fn(usize) -> bool) -> Result<Option<Point>, Exhausted> {
+    let Some(bb) = finite_bounds(path) else { return Ok(None) };
     if !(tolerance.is_finite() && tolerance > 0.0) {
-        return None;
+        return Ok(None);
     }
     let mut edges: Vec<(Point, Point)> = vec![];
     let (mut first, mut last) = (Point::ZERO, Point::ZERO);
-    crate::path::flatten(path.iter(), tolerance, |el| match el {
+    let flattened = crate::path::flatten_charged(path.iter(), tolerance, charge, |el| match el {
         kurbo::PathEl::MoveTo(p) => {
             if last != first {
                 edges.push((last, first));
@@ -543,11 +572,14 @@ fn interior_point_within(path: &BezPath, tolerance: f64) -> Option<Point> {
         }
         _ => {}
     });
+    if !flattened {
+        return Err(Exhausted);
+    }
     if last != first {
         edges.push((last, first));
     }
-    if let Some(found) = inside_edges(path, &edges, bb) {
-        return Some(found);
+    if let Some(found) = inside_edges(path, &edges, bb, charge)? {
+        return Ok(Some(found));
     }
     // Nothing found. Edges that run back over each other cancel in the winding and bound nothing: a path
     // that retraces itself (out and back to a stub, as an open path in a planar map is traced) puts
@@ -556,19 +588,24 @@ fn interior_point_within(path: &BezPath, tolerance: f64) -> Option<Point> {
     let before = edges.len();
     let kept = without_retraces(edges);
     if kept.len() == before {
-        return None;
+        return Ok(None);
     }
-    inside_edges(path, &kept, bounds_of_edges(&kept)?)
+    let Some(bounds) = bounds_of_edges(&kept) else { return Ok(None) };
+    inside_edges(path, &kept, bounds, charge)
 }
 
 /// A point inside `path` found from its flattened `edges`, whose box is `bb`: the middle of a gap
-/// of the polygon between two crossings, at a few heights, where the path winds.
-fn inside_edges(bp: &BezPath, edges: &[(Point, Point)], bb: kurbo::Rect) -> Option<Point> {
+/// of the polygon between two crossings, at a few heights, where the path winds. `charge` is asked for the edges, before each height they are
+/// crossed with a line at ([`Exhausted`] when it says no).
+fn inside_edges(bp: &BezPath, edges: &[(Point, Point)], bb: kurbo::Rect, charge: &dyn Fn(usize) -> bool) -> Result<Option<Point>, Exhausted> {
     // The gaps between consecutive crossings of the polygon with a line at each of a few heights,
     // each with the width the polygon has at its middle: the widest where the polygon winds. A gap
     // must be wider than the rounding of its two crossings: one thinner is where edges retrace each
     // other a hair apart (out and back along a slanted line, through points rounded each way), not a part.
-    let gaps_at = |y: f64, gaps: &mut Vec<(f64, Point)>| {
+    let gaps_at = |y: f64, gaps: &mut Vec<(f64, Point)>| -> bool {
+        if !charge(edges.len()) {
+            return false;
+        }
         work::add(Work::InteriorHeights, 1);
         // Each crossing's x and which way the edge goes, so that the winding number in a gap is
         // the sum of the crossings before it (one sort and one pass, not a winding per gap), and how
@@ -620,6 +657,7 @@ fn inside_edges(bp: &BezPath, edges: &[(Point, Point)], bb: kurbo::Rect) -> Opti
                 gaps.push((width, Point::new(middle, y)));
             }
         }
+        true
     };
     // The widest first, the earlier of equal ones first. The polygon is the path flattened, so
     // the winding of the path itself decides, at the few widest middles (a middle the polygon has
@@ -638,10 +676,12 @@ fn inside_edges(bp: &BezPath, edges: &[(Point, Point)], bb: kurbo::Rect) -> Opti
     for f in [0.5, 0.25, 0.75, 0.125, 0.375, 0.625, 0.875, 0.0625, 0.9375] {
         // A little off the round fractions, which on art drawn to a grid fall on the height of
         // some corner, where testing the point against other paths is unreliable.
-        gaps_at(bb.y0 + bb.height() * (f + 0.0061803), &mut gaps);
+        if !gaps_at(bb.y0 + bb.height() * (f + 0.0061803), &mut gaps) {
+            return Err(Exhausted);
+        }
     }
     if let Some(p) = widest_inside(gaps) {
-        return Some(p);
+        return Ok(Some(p));
     }
     // Nothing at those heights: the path may be parts far apart (two squares a hundred units
     // from each other, each a unit high, are missed by every one of them). Between two heights
@@ -654,11 +694,13 @@ fn inside_edges(bp: &BezPath, edges: &[(Point, Point)], bb: kurbo::Rect) -> Opti
     for k in 0..tries {
         // Evenly spaced among the stretches, the first and the last included.
         let at = if tries > 1 { k * (stretches - 1) / (tries - 1) } else { 0 };
-        if let (Some(lo), Some(hi)) = (ys.get(at), ys.get(at + 1)) {
-            gaps_at((lo + hi) / 2.0, &mut gaps);
+        if let (Some(lo), Some(hi)) = (ys.get(at), ys.get(at + 1))
+            && !gaps_at((lo + hi) / 2.0, &mut gaps)
+        {
+            return Err(Exhausted);
         }
     }
-    widest_inside(gaps)
+    Ok(widest_inside(gaps))
 }
 
 /// How far the crossing of the edge `a` to `c` with a line can be off its computed `x` (of

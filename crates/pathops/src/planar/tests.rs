@@ -1809,3 +1809,174 @@ fn the_fill_work_of_a_map_is_charged_before_each_test_and_held_to_its_limit() {
     assert_eq!(live_paint(&[Shape::new(col, FillRule::NonZero, 0)]).0.len(), 2_000);
     assert!(work::take(Work::FillElements) <= 6 * 2_000, "a few elements a face");
 }
+
+/// `n` pairs of circles of radius 100,000 (four arcs each), the second of each pair 0.03 to the right of the first: each pair makes two crescents
+/// 0.03 across (and a lens). A face thinner than a thousandth of its size has no point at the first outline, which is flattened to that
+/// tolerance, and gets the finer outline (a quarter of the precision), whose arcs of a quarter of a circle are thousands of lines each.
+fn crescents(n: usize) -> Vec<Shape> {
+    let side = (n as f64).sqrt().ceil() as usize;
+    let mut shapes = Vec::new();
+    for i in 0..n {
+        let (cx, cy) = ((i % side) as f64 * 400_000.0, (i / side) as f64 * 400_000.0);
+        shapes.push(Shape::new(crate::testutil::cubic_circle(4, 1e5, cx, cy), FillRule::NonZero, 2 * i as u64));
+        shapes.push(Shape::new(crate::testutil::cubic_circle(4, 1e5, cx + 0.03, cy), FillRule::NonZero, 2 * i as u64 + 1));
+    }
+    shapes
+}
+
+/// What a map of `shapes` is charged to the budget of the searches after a sweep: the steps (an edge flattened or crossed with a line at one
+/// height is one), which are the searches for a point inside a face; and the faces it has.
+fn charged(shapes: &[Shape]) -> (usize, usize) {
+    work::reset();
+    let faces = live_paint(shapes).0.len();
+    assert!(faces >= 3 * shapes.len() / 2, "{faces} faces of {} circles", shapes.len());
+    (work::take(Work::SearchSteps), faces)
+}
+
+/// The search for a point inside a thin face is charged by the edges it flattens and looks at, before it does: the charge of 4 times as many
+/// faces is 4 times as much (no more: the search of a face does not look at the others), at any size of the map; and it is charged to the budget
+/// of the searches after a sweep ([`crate::Limits::search_work`]), which runs out at exactly what the map is charged: a map of n pairs is made with
+/// that and refused under it by one, and one of 4n pairs is refused with it (`TooComplex`, where there was no budget for these searches and all
+/// were made).
+#[test]
+fn the_search_for_a_point_in_a_thin_face_is_charged_to_the_search_budget() {
+    let (small, big) = (crescents(4), crescents(16));
+    let ((steps_n, faces_n), (steps_4n, faces_4n)) = (charged(&small), charged(&big));
+    assert!(steps_n > 100_000, "the thin faces need the finer outline: {steps_n} steps for {faces_n} faces");
+    // Which crescents need the finer outline depends on where each lies, so the charge of 4 times the faces is about 4 times: not 16 times.
+    assert!(
+        steps_4n >= 3 * steps_n && steps_4n <= 6 * steps_n,
+        "4 times the faces ({faces_n} and {faces_4n}), 3 to 6 times the charge: {steps_n} and {steps_4n}"
+    );
+    let with = |budget: usize, shapes: &[Shape]| {
+        crate::with_limits(crate::Limits { search_work: budget, ..crate::Limits::default() }, || try_shape_builder(shapes, true))
+    };
+    assert!(with(steps_n, &small).is_ok(), "n pairs with what they are charged");
+    assert_eq!(with(steps_n - 1, &small).err(), Some(crate::PathOpsError::TooComplex), "and one less");
+    assert_eq!(with(steps_n, &big).err(), Some(crate::PathOpsError::TooComplex), "4n pairs with the same");
+    assert!(with(steps_4n, &big).is_ok(), "and with their own");
+    // The budget that winds points is no part of it: a map is made with all of that one gone, and none of the searches' steps are its.
+    let no_windings = crate::with_limits(crate::Limits { fill_work: 0, ..crate::Limits::default() }, || live_paint(&small));
+    assert!(no_windings.0.is_empty(), "a map with no work of winding is not made, whatever the searches' budget");
+}
+
+/// A face that needs the finer outline still gets its sources within the budget (it is not made coarser to fit): each crescent of the four pairs is
+/// covered by the one circle it belongs to, each lens by both, and the first outline finds no point in some of the crescents.
+#[test]
+fn a_thin_face_that_needs_the_finer_outline_still_gets_its_sources() {
+    let shapes = crescents(4);
+    let (faces, _) = live_paint(&shapes);
+    let (mut crescent, mut lens, mut needing_the_finer) = (0, 0, 0);
+    for f in &faces {
+        match f.sources.len() {
+            1 => {
+                crescent += 1;
+                needing_the_finer += usize::from(crate::interior_point(&f.path).is_none());
+            }
+            2 => lens += 1,
+            n => panic!("a face of {n} sources"),
+        }
+    }
+    assert_eq!((crescent, lens), (8, 4));
+    assert!(
+        needing_the_finer >= 2,
+        "the first outline finds no point in {needing_the_finer} of the crescents (a crescent is thinner than a thousandth of its size)"
+    );
+    // One of each of a pair's circles has the crescent that is outside the other: both circles, one crescent each.
+    for pair in 0..4 {
+        let owners: Vec<usize> = faces.iter().filter(|f| f.sources.len() == 1 && f.sources[0] / 2 == pair).map(|f| f.sources[0] % 2).collect();
+        assert_eq!(owners.len(), 2, "pair {pair}");
+        assert_ne!(owners[0], owners[1], "pair {pair}: a crescent of each circle");
+    }
+}
+
+/// The search for a point asks for what it is about to flatten and look at, before it does, and gives up where it is refused: a charge that
+/// says no at the first curve, at a later one, and at the first height each give up; one that never says no gives what the search without a
+/// budget gives, and asks for the edges of every height.
+#[test]
+fn the_search_for_a_point_gives_up_where_it_is_refused() {
+    use super::map::{Exhausted, interior_point_charged};
+    // A crescent that the first outline has no point in (a lens of two arcs, a hundred long and 0.03 wide), whose finer outline is thousands of lines.
+    let lens = polyline_pts(&[Point::new(0.0, 0.0), Point::new(100.0, 0.0), Point::new(100.0, 0.03), Point::new(0.0, 0.03)], true);
+    let circle = crate::testutil::cubic_circle(4, 1e5, 0.0, 0.0);
+    let tol = 0.0025;
+    let asked = std::cell::RefCell::new(Vec::<usize>::new());
+    let record = |n: usize| {
+        asked.borrow_mut().push(n);
+        true
+    };
+    let found = interior_point_charged(&circle, tol, &record);
+    assert!(matches!(found, Ok(Some(_))), "a circle has a point");
+    let asked_all = asked.borrow().clone();
+    assert!(asked_all.len() >= 4 + 9, "the four arcs, each before it is flattened, and a height or more after: {} asks", asked_all.len());
+    assert!(asked_all[..4].iter().all(|&n| n > 1_000), "each arc of a circle 100,000 across is charged thousands of lines: {:?}", &asked_all[..4]);
+    let edges: usize = 4 * 3_000;
+    assert!(asked_all[4..].iter().all(|&n| n > edges / 2 && n < edges * 3), "and then the edges, for each height: {:?}", &asked_all[4..]);
+    // Refused at the first curve, at the third, and at the first height.
+    for refuse_at in [0usize, 2, 4] {
+        let count = std::cell::Cell::new(0usize);
+        let refusing = |_: usize| {
+            count.set(count.get() + 1);
+            count.get() <= refuse_at
+        };
+        assert!(matches!(interior_point_charged(&circle, tol, &refusing), Err(Exhausted)), "refused at the ask after {refuse_at}");
+        assert_eq!(count.get(), refuse_at + 1, "nothing is asked for after a no");
+    }
+    // A path that is not there, and a tolerance that is not one, are no point and nothing asked.
+    let nothing = |_: usize| panic!("nothing to charge");
+    assert!(matches!(interior_point_charged(&BezPath::new(), tol, &nothing), Ok(None)));
+    assert!(matches!(interior_point_charged(&lens, f64::NAN, &nothing), Ok(None)));
+}
+
+/// A face that the first outline finds no point in is flattened to a quarter of the precision, or an eighth of what the first outline was where
+/// that is less.
+#[test]
+fn the_finer_outline_is_a_quarter_of_the_precision_or_an_eighth_of_the_first() {
+    use super::map::retry_tolerance;
+    assert_eq!(retry_tolerance(0.01, 0.1), 0.0025, "the precision's quarter, the eighth of the first being 0.0125");
+    assert_eq!(retry_tolerance(0.04, 1.0), 0.01);
+    assert_eq!(retry_tolerance(0.01, 0.0016), 0.0002, "an eighth of the first where that is less");
+    assert_eq!(retry_tolerance(8.0, 4.0), 0.5);
+}
+
+/// A tolerance that is not a positive number is no search and nothing asked for, and a path with no area has no point; the search is for the
+/// outline it was given.
+#[test]
+fn a_search_for_a_point_needs_a_positive_tolerance() {
+    use super::map::interior_point_charged;
+    let square = rect_path(0.0, 0.0, 10.0, 10.0);
+    let nothing = |_: usize| panic!("nothing to charge");
+    for tol in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert!(matches!(interior_point_charged(&square, tol, &nothing), Ok(None)), "{tol}");
+    }
+    assert!(matches!(interior_point_charged(&square, 0.01, &|_| true), Ok(Some(_))));
+}
+
+/// The heights the search looks at first are the fractions 1/2, 1/4, 3/4, 1/8 ... of the height of the path and a little off them (0.0061803 of it:
+/// art drawn to a grid has corners at the round ones): a thin bar at exactly the first, between a speck at each end, is found at that height; and
+/// the stretches between the heights of the polygon's vertices are tried evenly, the last of them too: a speck at the very top, in a path of
+/// hundreds of vertices and nothing else of any area, is found.
+#[test]
+fn the_search_for_a_point_looks_at_the_heights_it_is_documented_to() {
+    use super::map::interior_point_charged;
+    let mut bars = BezPath::new();
+    for (x0, y0, x1, y1) in [(0.0, 0.0, 0.5, 0.5), (0.0, 506.1, 100.0, 506.3), (0.0, 999.5, 0.5, 1000.0)] {
+        bars.extend(rect_path(x0, y0, x1, y1).iter());
+    }
+    let p = interior_point_charged(&bars, 0.01, &|_| true).ok().flatten().expect("the bar");
+    assert!((p.y - 1000.0 * (0.5 + 0.0061803)).abs() < 1e-9 && (p.x - 50.0).abs() < 1e-9, "{p:?}");
+    // A zigzag of 300 vertices that has no area (a line out and back is no gap), and a speck of 1 at the very top, 10,000 high: only the last of
+    // the stretches between the vertices' heights has a gap, and it is the 64th and last of the evenly spaced ones tried.
+    let mut path = BezPath::new();
+    path.move_to((0.0, 0.0));
+    for i in 1..300 {
+        path.line_to((if i % 2 == 0 { 0.0 } else { 3.0 }, f64::from(i) * 30.0));
+    }
+    for i in (1..300).rev() {
+        path.line_to((if i % 2 == 0 { 0.0 } else { 3.0 }, f64::from(i) * 30.0));
+    }
+    path.close_path();
+    path.extend(rect_path(10.0, 9_999.0, 11.0, 10_000.0).iter());
+    let p = interior_point_charged(&path, 0.01, &|_| true).ok().flatten().expect("the speck");
+    assert!(p.y > 9_999.0 && p.y < 10_000.0, "{p:?}");
+}
