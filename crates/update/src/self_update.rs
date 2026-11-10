@@ -269,7 +269,7 @@ fn can_replace_share(app: &App, file: &Path) -> bool {
     use rustix::fs::Access;
 
     let Some(bin) = file.parent() else { return true };
-    if sticky_folder_refuses(bin, |path| is_program(app, path)) {
+    if sticky_folder_refuses(bin, |path| is_app_program(app, path)) {
         return false;
     }
     let Some(prefix) = prefix_with_share(app, bin) else { return true };
@@ -281,7 +281,7 @@ fn can_replace_share(app: &App, file: &Path) -> bool {
 /// Whether `path` names one of the app's programs: `<id>`, or `<id>-<name>` with no extension,
 /// such as `<id>-cli`.
 #[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
-fn is_program(app: &App, path: &Path) -> bool {
+fn is_app_program(app: &App, path: &Path) -> bool {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     name == app.id || name.strip_prefix(app.id).is_some_and(|rest| rest.starts_with('-') && !rest.contains('.'))
 }
@@ -1918,12 +1918,12 @@ mod tests {
     fn the_sticky_check_counts_only_the_apps_files() {
         let app = &crate::suite::LAUNCHER;
         let bin = Path::new("/p/bin");
-        assert!(is_program(app, &bin.join(app.id)));
-        assert!(is_program(app, &bin.join(format!("{}-cli", app.id))));
-        assert!(!is_program(app, &bin.join(format!("{}.log", app.id))));
-        assert!(!is_program(app, &bin.join(format!("{}-cli.log", app.id))));
-        assert!(!is_program(app, &bin.join(format!("{}x", app.id))));
-        assert!(!is_program(app, &bin.join("other")));
+        assert!(is_app_program(app, &bin.join(app.id)));
+        assert!(is_app_program(app, &bin.join(format!("{}-cli", app.id))));
+        assert!(!is_app_program(app, &bin.join(format!("{}.log", app.id))));
+        assert!(!is_app_program(app, &bin.join(format!("{}-cli.log", app.id))));
+        assert!(!is_app_program(app, &bin.join(format!("{}x", app.id))));
+        assert!(!is_app_program(app, &bin.join("other")));
 
         let share = Path::new("/p/share");
         assert!(is_share_file(app, share, &share.join(app.id).join("models/weights.bin")));
