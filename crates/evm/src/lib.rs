@@ -338,10 +338,15 @@ fn cbor_item(b: &[u8], pos: &mut usize, depth: u32) -> Option<Value> {
             }
             let mut m = Map::new();
             for _ in 0..n {
-                let k = match cbor_item(b, pos, depth + 1)? {
-                    Value::String(s) => s,
-                    other => other.to_string(),
-                };
+                // The metadata view uses JSON object keys. Coercing other CBOR key
+                // types to strings can merge distinct keys and hide bytecode.
+                if b.get(*pos).map(|byte| byte >> 5) != Some(3) {
+                    return None;
+                }
+                let Value::String(k) = cbor_item(b, pos, depth + 1)? else { return None };
+                if m.contains_key(&k) {
+                    return None;
+                }
                 let v = cbor_item(b, pos, depth + 1)?;
                 let v = match (k.as_str(), &v) {
                     ("solc", Value::String(s)) if s.starts_with("0x") && s.len() == 8 => {
