@@ -72,8 +72,27 @@ impl Decoder {
         u32::from(self.config.bit_depth)
     }
 
+    /// The frames `packet` holds, from its first element's header alone (for concealing a packet
+    /// that fails to decode): the partial-frame count when the header has one, else the frame
+    /// length. `None` when the packet does not start with an audio element or its header is cut
+    /// short or out of range.
+    pub fn packet_frames(&self, packet: &[u8]) -> Option<usize> {
+        let mut r = BitReader::new(packet);
+        if !matches!(r.read(3).ok()?, ID_SCE | ID_LFE | ID_CPE) {
+            return None;
+        }
+        let _instance_and_unused = r.read(16).ok()?;
+        let flags = r.read(4).ok()?;
+        let frames = if flags & 0b1000 != 0 { r.read(32).ok()? } else { self.config.frame_length };
+        (frames <= self.config.frame_length).then_some(frames as usize)
+    }
+
     /// Decode one packet into one `Vec` per channel, in ALAC channel order. Channels the packet
     /// has no element for are silent, as in the reference decoder.
+    ///
+    /// After the last channel the packet must hold a whole element tag (the end tag, after any
+    /// fill and data stream elements): a packet cut short after its samples is an error. Other
+    /// elements there end the packet, as in the reference decoder.
     pub fn decode(&mut self, packet: &[u8]) -> Result<Vec<Vec<i32>>> {
         let channels = self.channels();
         let mut out: Vec<Vec<i32>> = vec![Vec::new(); channels];
@@ -82,6 +101,8 @@ impl Decoder {
         // the sample count of the elements decoded so far
         let mut frames: Option<usize> = None;
         let mut index = 0;
+        // whether the packet ended (or stopped as the reference stops) before the last channel
+        let mut stopped = false;
         while index < channels {
             if r.position() / 8 >= packet.len() {
                 return Err(Error::Eof);
@@ -91,6 +112,7 @@ impl Decoder {
                     let pair = tag == ID_CPE;
                     if pair && index + 2 > channels {
                         // a pair past the channel count: the reference stops here
+                        stopped = true;
                         break;
                     }
                     let (a, b) = self.element(&mut r, pair, &mut num_samples)?;
@@ -110,10 +132,14 @@ impl Decoder {
                 ID_FIL => fill_element(&mut r)?,
                 ID_END => {
                     r.byte_align();
+                    stopped = true;
                     break;
                 }
                 _ => return Err(Error::Bitstream("element tag")),
             }
+        }
+        if !stopped {
+            trailer(&mut r)?;
         }
         let frames = frames.unwrap_or(0);
         for ch in out.iter_mut().filter(|c| c.len() != frames) {
@@ -211,6 +237,19 @@ impl Decoder {
     }
 }
 
+/// What follows the last channel: fill and data stream elements, then the end tag. The
+/// reference decoder stops after the last channel; this needs the next tag to be whole, so a
+/// packet missing its last byte is found, and like the reference ignores any other element.
+fn trailer(r: &mut BitReader) -> Result<()> {
+    loop {
+        match r.read(3)? {
+            ID_DSE => data_stream_element(r)?,
+            ID_FIL => fill_element(r)?,
+            _ => return Ok(()),
+        }
+    }
+}
+
 /// Skip a fill element (`FillElement`): a 4-bit count, 15 meaning 14 plus an 8-bit count.
 fn fill_element(r: &mut BitReader) -> Result<()> {
     let mut count = r.read(4)? as usize;
@@ -274,6 +313,51 @@ mod tests {
         w.put(ID_END, 3);
         let mut dec = Decoder::new(&stereo16()).unwrap();
         assert_eq!(dec.decode(&w.into_bytes()).unwrap(), vec![vec![1, 32767], vec![-1, -32768]]);
+    }
+
+    /// An escaped mono packet that lost its last byte keeps every sample but not its end tag.
+    #[test]
+    fn a_packet_without_its_end_tag_is_an_error() {
+        use super::super::bits::{BitSink, BitWriter};
+        let mut w = BitWriter::new();
+        for (value, bits) in [(ID_SCE, 3), (0, 4), (0, 12), (0b1001, 4), (3, 32)] {
+            w.put(value, bits);
+        }
+        for s in [5u32, 6, 7] {
+            w.put(s, 16);
+        }
+        w.put(ID_END, 3);
+        let packet = w.into_bytes();
+        let mut dec = Decoder::new(&SpecificConfig::new(44_100, 1, 16, 4096).to_cookie()).unwrap();
+        assert_eq!(dec.decode(&packet).unwrap(), vec![vec![5, 6, 7]]);
+        assert_eq!(dec.decode(&packet[..packet.len() - 1]), Err(Error::Eof));
+        // a fill element before the end tag is skipped
+        let mut w = BitWriter::new();
+        for (value, bits) in [(ID_SCE, 3), (0, 4), (0, 12), (0b1001, 4), (1, 32), (9, 16), (ID_FIL, 3), (1, 4), (0xA5, 8), (ID_END, 3)] {
+            w.put(value, bits);
+        }
+        assert_eq!(dec.decode(&w.into_bytes()).unwrap(), vec![vec![9]]);
+    }
+
+    #[test]
+    fn the_frames_of_a_packet_come_from_its_header() {
+        use super::super::bits::{BitSink, BitWriter};
+        let dec = Decoder::new(&SpecificConfig::new(44_100, 2, 16, 4096).to_cookie()).unwrap();
+        let header = |flags: u32, frames: Option<u32>| {
+            let mut w = BitWriter::new();
+            for (value, bits) in [(ID_CPE, 3), (0, 4), (0, 12), (flags, 4)] {
+                w.put(value, bits);
+            }
+            if let Some(n) = frames {
+                w.put(n, 32);
+            }
+            w.into_bytes()
+        };
+        assert_eq!(dec.packet_frames(&header(0b1001, Some(300))), Some(300));
+        assert_eq!(dec.packet_frames(&header(0b0001, None)), Some(4096));
+        assert_eq!(dec.packet_frames(&header(0b1001, Some(5000))), None);
+        assert_eq!(dec.packet_frames(&header(0b1001, None)), None);
+        assert_eq!(dec.packet_frames(&[0xE0]), None); // ID_END first
     }
 
     #[test]

@@ -143,6 +143,9 @@ impl TrackDecoder {
                 let cfg = *dec.config();
                 // The cookie's rate is the codec's; the container's stands in when it is 0.
                 let rate = if cfg.sample_rate > 0 { cfg.sample_rate } else { rate };
+                if rate == 0 {
+                    return Err(AudioError::Malformed("ALAC track without a sample rate in its cookie or container".into()));
+                }
                 let (layout, order) = if cfg.has_standard_layout() {
                     (ChannelLayout::from_mask(alac::channel_mask(cfg.channels)), alac::wav_order(cfg.channels))
                 } else {
@@ -266,9 +269,12 @@ impl TrackDecoder {
                     None => Some(per_unit),
                 }
             }
-            // A lost packet is as long as the last one (a full one at the start).
+            // A damaged packet whose header survives says its length; otherwise a packet is as
+            // long as the last one (a full one at the start).
             #[cfg(feature = "alac-decode")]
-            Inner::Alac { dec, .. } => Some(if self.last_frames > 0 { self.last_frames } else { dec.config().frame_length as usize }),
+            Inner::Alac { dec, .. } => {
+                Some(dec.packet_frames(data).unwrap_or(if self.last_frames > 0 { self.last_frames } else { dec.config().frame_length as usize }))
+            }
             Inner::Pcm { kind, channels } => Some(data.len() / (kind.bytes() * *channels).max(1)),
         };
         let frames = frames.filter(|&n| n > 0).unwrap_or(self.last_frames);
@@ -285,6 +291,18 @@ impl TrackDecoder {
             #[cfg(feature = "alac-decode")]
             Inner::Alac { .. } => None,
             Inner::Pcm { .. } => None,
+        }
+    }
+
+    /// The frames of a full packet, for codecs whose packets all have that length except ones
+    /// at the end of the stream: ALAC's frame length (only the last packet is shorter). Where
+    /// [`Self::frames_per_packet`] is `Some`, the same value.
+    #[cfg(feature = "decode-native")]
+    pub(crate) fn full_packet_frames(&self) -> Option<usize> {
+        match &self.inner {
+            #[cfg(feature = "alac-decode")]
+            Inner::Alac { dec, .. } => Some(dec.config().frame_length as usize),
+            _ => self.frames_per_packet(),
         }
     }
 
@@ -779,6 +797,15 @@ mod tests {
 
     #[cfg(feature = "alac-decode")]
     #[test]
+    fn alac_needs_a_sample_rate() {
+        let cookie = alac::SpecificConfig::new(0, 2, 16, 4096).to_bytes();
+        assert!(matches!(TrackDecoder::new(&CodecParams::new(CodecId::Alac).with_extradata(cookie.clone()), &[]), Err(AudioError::Malformed(_))));
+        let dec = TrackDecoder::new(&CodecParams::new(CodecId::Alac).with_extradata(cookie).with_sample_rate(32_000), &[]).unwrap();
+        assert_eq!(dec.sample_rate(), 32_000);
+    }
+
+    #[cfg(feature = "alac-decode")]
+    #[test]
     fn alac_needs_its_cookie() {
         assert!(matches!(TrackDecoder::new(&CodecParams::new(CodecId::Alac), &[]), Err(AudioError::Malformed(_))));
         let bad = CodecParams::new(CodecId::Alac).with_extradata(vec![0; 10]);
@@ -795,6 +822,8 @@ mod tests {
         let packet = enc.encode(&input.iter().map(Vec::as_slice).collect::<Vec<_>>()).unwrap();
         let params = CodecParams::new(CodecId::Alac).with_extradata(enc.cookie()).with_sample_rate(44_100);
         let mut dec = TrackDecoder::new(&params, &[]).unwrap();
+        // a damaged packet whose header survives is concealed with its own length
+        assert_eq!(dec.conceal(Some(&packet[..8])).unwrap().frames(), 300);
         assert_eq!((dec.sample_rate(), dec.layout(), dec.sample_format()), (48_000, ChannelLayout::SURROUND_5_1, SampleFormat::Int16));
         assert_eq!(dec.conceal(None).unwrap().frames(), 1024);
         let out = dec.decode(&packet).unwrap();

@@ -715,7 +715,10 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
         (0..t.samples.len().min(crate::track::LOOKAHEAD_PACKETS)).filter_map(|i| demux.read_sample(track, i).ok()).collect();
     let probe = TrackDecoder::new(&params, &lookahead.iter().map(Vec::as_slice).collect::<Vec<_>>()).ok()?;
     let rate = probe.sample_rate();
-    let frames_of = match (probe.frames_per_packet(), params.pcm) {
+    // Packet starts come from the packets where they can: block timestamps are rounded (to
+    // milliseconds by default). ALAC packets are all its frame length except the last, so every
+    // start is a multiple of it.
+    let frames_of = match (probe.full_packet_frames(), params.pcm) {
         (Some(n), _) => MkvFrames::Constant(n as u64),
         (None, Some(pcm)) => {
             let frame_bytes = u64::from(pcm.bits.div_ceil(8)) * u64::from(params.channels.unwrap_or(1).max(1));
@@ -1132,30 +1135,33 @@ mod adts_tests {
         assert!(matches!(opened, Err(AudioError::Io(_))), "{:?}", opened.err());
     }
 
+    /// An escaped (uncompressed) stereo 16-bit ALAC packet of `chunk`, partial when shorter than
+    /// `frame_length`.
+    fn alac_escaped_stereo(chunk: &[[i16; 2]], frame_length: usize) -> Vec<u8> {
+        let mut w = craft_media::bitstream::BitWriter::new();
+        let partial = chunk.len() != frame_length;
+        for (value, bits) in [(1, 3), (0, 4), (0, 12), (u32::from(partial) << 3 | 1, 4)] {
+            w.write_bits(value, bits);
+        }
+        if partial {
+            w.write_bits(chunk.len() as u32, 32);
+        }
+        for f in chunk {
+            w.write_bits(u32::from(f[0] as u16), 16);
+            w.write_bits(u32::from(f[1] as u16), 16);
+        }
+        w.write_bits(7, 3);
+        w.finish()
+    }
+
     /// ALAC in MP4 decodes natively (without symphonia this is the only path): every sample,
     /// the short last packet included, and a seek lands on the exact frame.
     #[test]
     fn alac_in_mp4_decodes_and_seeks_natively() {
-        use craft_media::bitstream::BitWriter;
         use craft_media::isobmff::{Brand, CodecConfig, FourCc, Mp4Writer, SampleEntry, TrackConfig, WriteSample, WriterOptions};
         // Escaped (uncompressed) stereo 16-bit packets of 4 frames, the last one of 2.
         let frames: Vec<[i16; 2]> = (0..10).map(|i| [i * 100 - 300, -(i * 77)]).collect();
-        let packet = |chunk: &[[i16; 2]]| {
-            let mut w = BitWriter::new();
-            let partial = chunk.len() != 4;
-            for (value, bits) in [(1, 3), (0, 4), (0, 12), (u32::from(partial) << 3 | 1, 4)] {
-                w.write_bits(value, bits);
-            }
-            if partial {
-                w.write_bits(chunk.len() as u32, 32);
-            }
-            for f in chunk {
-                w.write_bits(u32::from(f[0] as u16), 16);
-                w.write_bits(u32::from(f[1] as u16), 16);
-            }
-            w.write_bits(7, 3);
-            w.finish()
-        };
+        let packet = |chunk: &[[i16; 2]]| alac_escaped_stereo(chunk, 4);
         let cookie = crate::alac::SpecificConfig::new(48_000, 2, 16, 4).to_bytes();
         let entry = SampleEntry::audio(FourCc(*b"alac"), CodecConfig::Alac { cookie }, 2, 48_000.0, 16);
         let mut w = Mp4Writer::new(std::io::Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).unwrap();
@@ -1172,5 +1178,31 @@ mod adts_tests {
         d.seek(5).unwrap();
         let block = d.next_block().unwrap().unwrap();
         assert_eq!((block.channels[0][0] * 32768.0) as i16, frames[5][0]);
+    }
+
+    /// ALAC in Matroska seeks to the exact frame: packet starts come from the frame length, not
+    /// from the millisecond timestamps (packet 1 starts at frame 4096, stored as 85 ms = 4080).
+    #[test]
+    fn alac_in_matroska_seeks_to_the_exact_frame() {
+        use craft_media::matroska::{MkvWriter, MuxOptions, TrackKind, TrackSpec};
+        let frames: Vec<[i16; 2]> = (0..10_000).map(|i| [i as i16, -(i as i16)]).collect();
+        let mut spec = TrackSpec::new(TrackKind::Audio, "A_ALAC");
+        spec.codec_private = crate::alac::SpecificConfig::new(48_000, 2, 16, 4096).to_bytes();
+        spec.audio = Some((48_000.0, 2, Some(16)));
+        let mut m = MkvWriter::new(std::io::Cursor::new(Vec::new()), vec![spec], MuxOptions::default()).unwrap();
+        for (k, chunk) in frames.chunks(4096).enumerate() {
+            let pts_ns = (k * 4096) as i64 * 1_000_000_000 / 48_000;
+            let duration_ns = chunk.len() as u64 * 1_000_000_000 / 48_000;
+            m.write_frame(0, pts_ns, true, &alac_escaped_stereo(chunk, 4096), Some(duration_ns)).unwrap();
+        }
+        let file = m.finish().unwrap().into_inner();
+        let (info, buf) = decode(&file, Some("mka")).unwrap();
+        assert_eq!((info.codec, buf.frames()), (crate::CodecId::Alac, 10_000));
+        let mut d = Decoder::from_bytes(&file, Some("mka"), &DecodeOptions::default()).unwrap();
+        for target in [5000u64, 4096, 8191, 9999] {
+            d.seek(target).unwrap();
+            let block = d.next_block().unwrap().unwrap();
+            assert_eq!((block.channels[0][0] * 32768.0).round() as i64, target as i64, "seek to {target}");
+        }
     }
 }

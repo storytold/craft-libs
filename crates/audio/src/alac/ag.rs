@@ -143,7 +143,8 @@ pub(crate) fn decompress(params: AgParams, r: &mut BitReader, out: &mut [i32], m
         // the least significant bit is the sign
         let nd = n.wrapping_add(zmode);
         let multiplier = (nd & 1).wrapping_neg() | 1;
-        out[c] = (nd.wrapping_add(1) >> 1).wrapping_mul(multiplier) as i32;
+        // ceil(nd / 2) without the reference's `nd + 1`, which wraps 0xffffffff (i32::MIN) to 0
+        out[c] = ((nd >> 1) + (nd & 1)).wrapping_mul(multiplier) as i32;
         c += 1;
         mb = next_mean(params.pb, mb, n, zmode);
         zmode = 0;
@@ -268,6 +269,18 @@ mod tests {
         let wide: Vec<i32> = (0..500).map(|i| ((i * 7919) % 65_536 - 32_768) << 8).collect();
         roundtrip(&wide, 25);
         roundtrip(&[i32::MAX >> 1, i32::MIN >> 1, 0, 0, 0, 1], 32);
+    }
+
+    /// The largest escaped magnitude, 0xffffffff, is i32::MIN (the reference wraps it to 0).
+    #[test]
+    fn the_full_width_escape_decodes_to_the_minimum() {
+        let mut w = BitWriter::new();
+        w.put(0x1FF, 9); // nine ones: escape
+        w.put(u32::MAX, 32);
+        let bytes = w.into_bytes();
+        let mut out = [7];
+        decompress(AgParams::standard(), &mut BitReader::new(&bytes), &mut out, 32).unwrap();
+        assert_eq!(out, [i32::MIN]);
     }
 
     #[test]
