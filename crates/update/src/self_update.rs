@@ -605,6 +605,8 @@ pub fn prepare_update(
     #[cfg(windows)]
     windows_precheck(app, install, paths)?;
     let mut job = Job { http, paths, stop, phase, install_locations: &Default::default(), replace: false };
+    #[cfg(not(windows))]
+    let recorded = keep_download(paths, &asset);
     let file = install::download(release, &asset, &mut job)?;
     #[cfg(windows)]
     windows_check_download(app, install, &file)?;
@@ -625,20 +627,21 @@ pub fn prepare_update(
                 let wait = install::macos::CheckTurn { stop, phase: &mut *phase };
                 let placed =
                     install::macos::install_dmg(app, &file, Some(&existing), None, false, paths, &install::macos::Expect::self_update(release), wait);
-                let _ = std::fs::remove_file(&file);
+                after_install(paths, &file, recorded, &placed);
                 let placed = placed?;
                 Ok(relaunch_after_exit(app, pid, &[Path::new("/usr/bin/open").as_os_str(), placed.as_os_str()]))
             }
             #[cfg(target_os = "linux")]
             Install::AppImage(path) => {
-                replace_appimage(&file, path)?;
-                let _ = std::fs::remove_file(&file);
+                let result = replace_appimage(&file, path);
+                after_install(paths, &file, recorded, &result);
+                result?;
                 Ok(relaunch_after_exit(app, pid, &[path.as_os_str()]))
             }
             #[cfg(target_os = "linux")]
             Install::Package(kind, exe) => {
                 let result = install::linux::install_package(*kind, &file, None, stop, phase);
-                let _ = std::fs::remove_file(&file);
+                after_install(paths, &file, recorded, &result);
                 result?;
                 Ok(relaunch_after_exit(app, pid, &[exe.as_os_str()]))
             }
@@ -652,7 +655,7 @@ pub fn prepare_update(
                     None => return Err(format!("this copy of {} can't update itself; download the new version instead", app.name)),
                 };
                 let result = install::linux::update_flatpak_bundle(&file, &app.bundle_id(), system, stop, phase);
-                let _ = std::fs::remove_file(&file);
+                after_install(paths, &file, recorded, &result);
                 result?;
                 relaunch_flatpak_after_exit(app)
             }
@@ -671,7 +674,7 @@ pub fn prepare_update(
             #[cfg(unix)]
             Install::Standalone(exe) => {
                 let result = replace_standalone(app, paths, &file, exe);
-                let _ = std::fs::remove_file(&file);
+                after_install(paths, &file, recorded, &result);
                 result?;
                 Ok(relaunch_after_exit(app, pid, &[exe.as_os_str()]))
             }
@@ -712,6 +715,70 @@ fn done_file(paths: &Paths) -> PathBuf {
 fn record_done(paths: &Paths, version: &str) {
     if let Err(e) = crate::paths::write_atomic(&done_file(paths), version.as_bytes()) {
         log::warn!("couldn't record the finished self-update: {e}");
+    }
+}
+
+/// Where a self-update records the name and size of the release file it downloads. The file stays
+/// in the download folder after a failed install, and the next try checks it against its
+/// published checksum and skips the transfer. On Windows the update helper removes the download
+/// itself, so nothing is recorded there.
+#[cfg(not(windows))]
+fn kept_download_record(paths: &Paths) -> PathBuf {
+    paths.cache.join("self-update-download.txt")
+}
+
+/// Records `asset` as this app's self-update download. A finished or partial download of another
+/// release file that the record named is removed first, so the download folder holds the files of
+/// one self-update download at most. Returns whether the record was written.
+#[cfg(not(windows))]
+fn keep_download(paths: &Paths, asset: &crate::release::Asset) -> bool {
+    let record = kept_download_record(paths);
+    if let Some(text) = read_record(&record) {
+        let mut lines = text.lines();
+        let (name, size) = (lines.next().unwrap_or_default(), lines.next().and_then(|s| s.parse::<u64>().ok()));
+        if (name, size) != (asset.name.as_str(), Some(asset.size)) && crate::release::valid_file_name(name) {
+            let dest = paths.downloads().join(name);
+            match size {
+                Some(size) => crate::http::discard(&dest, size),
+                // A record without a size still names a finished download.
+                None => {
+                    let _ = std::fs::remove_file(dest);
+                }
+            }
+        }
+    }
+    let text = format!("{}\n{}\n", asset.name, asset.size);
+    match crate::paths::write_atomic(&record, text.as_bytes()) {
+        Ok(()) => true,
+        Err(e) => {
+            log::warn!("couldn't record the self-update download: {e}");
+            false
+        }
+    }
+}
+
+/// Keeps the download `file` for the next try when the install's `result` is a failure that
+/// [`keeps_download`] allows and [`keep_download`] `recorded` it; otherwise removes the file and
+/// its record. A download without a record is removed, since nothing would remove it later.
+#[cfg(not(windows))]
+fn after_install<T>(paths: &Paths, file: &Path, recorded: bool, result: &Result<T, String>) {
+    if !(recorded && keeps_download(result)) {
+        let _ = std::fs::remove_file(file);
+        let _ = std::fs::remove_file(kept_download_record(paths));
+    }
+}
+
+/// Whether the download stays for the next try after the install's `result`. A failed install
+/// keeps it, except on macOS when the disk image could not be opened: an image still attached
+/// from an install that ended part way makes hdiutil refuse every attach of the same file with
+/// "Resource busy", while a new download of it attaches.
+#[cfg(not(windows))]
+fn keeps_download<T>(result: &Result<T, String>) -> bool {
+    match result {
+        Ok(_) => false,
+        #[cfg(target_os = "macos")]
+        Err(e) if e.starts_with(install::macos::IMAGE_NOT_OPENED) => false,
+        Err(_) => true,
     }
 }
 
@@ -2838,6 +2905,227 @@ mod tests {
             std::fs::read_dir(&apps).unwrap().map(|e| e.unwrap().file_name()).collect::<Vec<_>>(),
             [std::ffi::OsString::from("ArtCraft Launcher.app")]
         );
+    }
+
+    /// A disk image holding an unsigned `ArtCraft Launcher.app` of `version`, which a self-update
+    /// downloads and then refuses at the signature check.
+    #[cfg(target_os = "macos")]
+    fn unsigned_launcher_dmg(dir: &Path, version: &str) -> Vec<u8> {
+        let contents = dir.join(format!("src-{version}")).join("ArtCraft Launcher.app/Contents");
+        std::fs::create_dir_all(contents.join("MacOS")).unwrap();
+        std::fs::write(
+            contents.join("Info.plist"),
+            format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict>\
+                 <key>CFBundleIdentifier</key><string>ai.storyteller.artcraft-launcher</string>\
+                 <key>CFBundleShortVersionString</key><string>{version}</string></dict></plist>"
+            ),
+        )
+        .unwrap();
+        std::fs::write(contents.join("MacOS/ArtCraft Launcher"), version).unwrap();
+        let dmg = dir.join(format!("built-{version}.dmg"));
+        let one_at_a_time = install::macos::DISK_IMAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let ok = std::process::Command::new("hdiutil")
+            .args(["create", "-quiet", "-format", "UDZO", "-volname", "ArtCraft Launcher", "-srcfolder"])
+            .arg(dir.join(format!("src-{version}")))
+            .arg(&dmg)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "hdiutil create failed");
+        drop(one_at_a_time);
+        std::fs::read(dmg).unwrap()
+    }
+
+    /// A launcher release of `version` whose disk image `body` is served at `url`.
+    #[cfg(target_os = "macos")]
+    fn launcher_release(version: &str, body: &[u8], url: String, dir: &Path) -> Release {
+        let file = dir.join(format!("sha-{version}"));
+        std::fs::write(&file, body).unwrap();
+        let sha = crate::http::sha256_file(&file).unwrap();
+        Release {
+            version: version::parse(version),
+            tag: format!("v{version}"),
+            assets: vec![crate::release::Asset {
+                name: format!("artcraft-launcher-{version}-macos-universal.dmg"),
+                size: body.len() as u64,
+                url,
+                sha256: Some(sha),
+            }],
+            ..Release::default()
+        }
+    }
+
+    /// A self-update that fails after its download keeps the disk image, and the next try reuses
+    /// it without a second transfer. A newer release replaces the kept image.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_failed_self_update_keeps_its_download_for_the_next_try() {
+        use crate::http::tests::{Reply, serve};
+        use crate::{Arch, Os};
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(&dir.path().join("home"));
+        let apps = dir.path().join("Applications");
+        let current = apps.join("ArtCraft Launcher.app/Contents");
+        std::fs::create_dir_all(current.join("MacOS")).unwrap();
+        std::fs::write(
+            current.join("Info.plist"),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict>\
+             <key>CFBundleIdentifier</key><string>ai.storyteller.artcraft-launcher</string>\
+             <key>CFBundleShortVersionString</key><string>0.1.0</string></dict></plist>",
+        )
+        .unwrap();
+        std::fs::write(current.join("MacOS/ArtCraft Launcher"), "0.1.0").unwrap();
+        let install = Install::MacApp(apps.join("ArtCraft Launcher.app"));
+        let platform = Platform { os: Os::MacOs, arch: Arch::X64 };
+        let http = Http::new(crate::TEST_AGENT).unwrap();
+        let stop = Stop::default();
+        let mut phase = |_| ();
+
+        let body = unsigned_launcher_dmg(dir.path(), "0.2.0");
+        let (url, requests) = serve(body.clone(), vec![Reply::Full, Reply::Full]);
+        let release = launcher_release("0.2.0", &body, url, dir.path());
+        let kept = install::download_path(&paths, &release.assets[0]);
+        for _ in 0..2 {
+            let error = prepare_update(&crate::suite::LAUNCHER, &install, &release, platform, &http, &paths, &stop, &mut phase, &|| Ok(()), None)
+                .unwrap_err();
+            assert!(error.contains("isn't signed"), "{error}");
+            assert_eq!(std::fs::read(&kept).unwrap(), body, "the download stays after a failed install");
+        }
+        assert_eq!(requests.lock().unwrap().len(), 1, "the second try reuses the kept download");
+
+        // A newer release's download replaces the kept one, even when that update stops before
+        // installing.
+        let newer = b"the 0.3.0 disk image".to_vec();
+        let (url, _) = serve(newer.clone(), vec![Reply::Full]);
+        let release = launcher_release("0.3.0", &newer, url, dir.path());
+        let error = prepare_update(
+            &crate::suite::LAUNCHER,
+            &install,
+            &release,
+            platform,
+            &http,
+            &paths,
+            &stop,
+            &mut phase,
+            &|| Err("another job is running".into()),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(error, "another job is running");
+        assert!(!kept.exists(), "the older kept download is removed");
+        assert_eq!(std::fs::read(install::download_path(&paths, &release.assets[0])).unwrap(), newer);
+        assert_eq!(std::fs::read_dir(paths.downloads()).unwrap().count(), 1);
+    }
+
+    /// A self-update download asset of `name` and `size`.
+    #[cfg(not(windows))]
+    fn update_asset(name: &str, size: u64) -> crate::release::Asset {
+        crate::release::Asset { name: name.into(), size, url: String::new(), sha256: None }
+    }
+
+    /// An install that succeeds removes the download and its record; a failed one keeps both, and
+    /// so does an update that stops before installing.
+    #[cfg(not(windows))]
+    #[test]
+    fn only_a_failed_install_keeps_the_download() {
+        assert!(!keeps_download(&Ok(())));
+        assert!(keeps_download::<()>(&Err("the app isn't signed by its developer, so it wasn't installed".into())));
+        assert!(keeps_download::<()>(&Err("couldn't copy the app: No space left on device".into())));
+
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        std::fs::create_dir_all(paths.downloads()).unwrap();
+        let asset = update_asset("artcraft-launcher-0.2.0-linux-x64.tar.gz", 5);
+        let file = paths.downloads().join(&asset.name);
+        std::fs::write(&file, b"image").unwrap();
+        assert!(keep_download(&paths, &asset));
+        after_install::<()>(&paths, &file, true, &Err("couldn't replace it".into()));
+        assert!(file.exists() && kept_download_record(&paths).exists());
+        after_install(&paths, &file, true, &Ok(()));
+        assert!(!file.exists() && !kept_download_record(&paths).exists());
+    }
+
+    /// When hdiutil can't attach the disk image, the download is removed: an image left attached
+    /// by an install that ended part way makes every attach of the same file fail.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_disk_image_that_does_not_attach_is_not_kept() {
+        assert!(!keeps_download::<()>(&Err(format!("{}: hdiutil: attach failed - Resource busy", install::macos::IMAGE_NOT_OPENED))));
+    }
+
+    /// A download that could not be recorded is removed after a failed install, since nothing
+    /// would remove it later.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_download_without_a_record_is_not_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        std::fs::create_dir_all(paths.downloads()).unwrap();
+        // A folder where the record goes makes writing it fail.
+        std::fs::create_dir_all(kept_download_record(&paths).join("in-the-way")).unwrap();
+        let asset = update_asset("artcraft-launcher-0.2.0-linux-x64.tar.gz", 5);
+        let file = paths.downloads().join(&asset.name);
+        std::fs::write(&file, b"image").unwrap();
+        let recorded = keep_download(&paths, &asset);
+        assert!(!recorded);
+        after_install::<()>(&paths, &file, recorded, &Err("couldn't replace it".into()));
+        assert!(!file.exists());
+    }
+
+    /// A self-update for another release file removes the finished and the partial download of the
+    /// one the record names, and leaves other files alone. A download of the same file keeps its
+    /// partial file, so it resumes.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_new_release_removes_the_kept_and_partial_download() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let downloads = paths.downloads();
+        std::fs::create_dir_all(&downloads).unwrap();
+        let old = update_asset("artcraft-launcher-0.2.0-linux-x64.tar.gz", 100);
+        let finished = downloads.join(&old.name);
+        let partial = downloads.join(format!("{}.100.part", old.name));
+        let other = downloads.join("photocraft-0.5.0-linux-x64.tar.gz");
+        for file in [&finished, &partial, &other] {
+            std::fs::write(file, b"bytes").unwrap();
+        }
+        assert!(keep_download(&paths, &old));
+        assert!(keep_download(&paths, &old));
+        assert!(finished.exists() && partial.exists(), "the same release keeps its files");
+
+        let new = update_asset("artcraft-launcher-0.3.0-linux-x64.tar.gz", 200);
+        assert!(keep_download(&paths, &new));
+        assert!(!finished.exists() && !partial.exists());
+        assert!(other.exists());
+        assert_eq!(std::fs::read_to_string(kept_download_record(&paths)).unwrap(), format!("{}\n200\n", new.name));
+    }
+
+    /// The record names a file in the download folder only: a name with a path in it removes
+    /// nothing, and a kept file the user already deleted is no error.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_kept_download_record_removes_only_its_own_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        std::fs::create_dir_all(paths.downloads()).unwrap();
+        let outside = paths.cache.join("escape.dmg");
+        std::fs::write(&outside, b"not ours").unwrap();
+        std::fs::write(kept_download_record(&paths), "../escape.dmg\n8\n").unwrap();
+        let new = update_asset("artcraft-launcher-0.3.0-macos-universal.dmg", 10);
+        assert!(keep_download(&paths, &new));
+        assert!(outside.exists());
+
+        let newer = update_asset("artcraft-launcher-0.4.0-macos-universal.dmg", 10);
+        assert!(keep_download(&paths, &newer));
+        assert!(std::fs::read_to_string(kept_download_record(&paths)).unwrap().starts_with(&newer.name));
+
+        // A record without a size still removes the file it names.
+        let kept = paths.downloads().join(&newer.name);
+        std::fs::write(&kept, b"image").unwrap();
+        std::fs::write(kept_download_record(&paths), &newer.name).unwrap();
+        assert!(keep_download(&paths, &update_asset("artcraft-launcher-0.5.0-macos-universal.dmg", 10)));
+        assert!(!kept.exists());
     }
 
     /// A directory laid out like Cargo's target tree: `.rustc_info.json` at the root and the

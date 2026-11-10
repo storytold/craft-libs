@@ -1389,6 +1389,9 @@ pub mod macos {
     /// Machines LLC): the macOS side of the Windows publisher check.
     pub const TEAM_ID: &str = "DJ6XS33FX8";
 
+    /// The start of [`install_dmg`]'s error when hdiutil can't attach the disk image.
+    pub(crate) const IMAGE_NOT_OPENED: &str = "couldn't open the disk image";
+
     /// What a new copy must prove before it replaces anything. The checksum shows the download is
     /// the file the release lists; these show the app inside is the one the release promises.
     pub struct Expect<'a> {
@@ -1486,7 +1489,7 @@ pub mod macos {
         };
         if let Err(reason) = attached {
             let _ = std::fs::remove_dir(&mount);
-            return Err(format!("couldn't open the disk image: {reason}"));
+            return Err(format!("{IMAGE_NOT_OPENED}: {reason}"));
         }
         let result = copy_app(app, &mount, existing, destination, replace, expect, wait);
         let _ = detach(&mount);
