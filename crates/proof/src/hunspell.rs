@@ -769,26 +769,30 @@ mod tests {
         let exe = std::env::current_exe().unwrap();
         let dir = exe.parent().unwrap().join("dictionaries");
         std::fs::create_dir_all(&dir).unwrap();
-        // Cargo may reuse the directory and Windows may reuse a PID. Leave earlier files
-        // alone and choose a fresh pair; create_new below also refuses concurrent overwrites.
-        let name = (0..u64::MAX)
-            .map(|n| format!("portable_test_{}_{n}", std::process::id()))
-            .find(|name| !dir.join(format!("{name}.aff")).exists() && !dir.join(format!("{name}.dic")).exists())
-            .expect("a fresh dictionary name");
-        let names = [name.as_str()];
-        assert!(find(&names).is_none(), "no pair has been packaged yet");
-        let aff = dir.join(format!("{name}.aff"));
-        let dic = dir.join(format!("{name}.dic"));
-        use std::io::Write;
-        std::fs::File::create_new(&aff).unwrap().write_all(b"SET UTF-8\nSFX A Y 1\nSFX A 0 e .\n").unwrap();
-        std::fs::File::create_new(&dic).unwrap().write_all(b"1\ndocument/A\n").unwrap();
-        assert!(user_dirs().contains(&dir), "portable dictionaries must also outrank embedded English data");
-        assert!(user_candidates(&names).contains(&(aff.clone(), dic.clone())));
-        let (found_aff, found_dic) = find(&names).expect("the executable's dictionaries folder is searched");
-        assert_eq!((&found_aff, &found_dic), (&aff, &dic));
-        let dict = load(&found_aff, &found_dic).unwrap();
-        assert!(dict.check("document") && dict.check("documente"));
-        assert!(!dict.check("documant"));
+        // Both iterations share one PID and leave their files in place, reproducing a later
+        // run encountering the previous pair without deleting or overwriting it.
+        for _ in 0..2 {
+            // Cargo may reuse the directory and Windows may reuse a PID. Leave earlier files
+            // alone and choose a fresh pair; create_new below also refuses concurrent overwrites.
+            let name = (0..u64::MAX)
+                .map(|n| format!("portable_test_{}_{n}", std::process::id()))
+                .find(|name| !dir.join(format!("{name}.aff")).exists() && !dir.join(format!("{name}.dic")).exists())
+                .expect("a fresh dictionary name");
+            let names = [name.as_str()];
+            assert!(find(&names).is_none(), "no pair has been packaged yet");
+            let aff = dir.join(format!("{name}.aff"));
+            let dic = dir.join(format!("{name}.dic"));
+            use std::io::Write;
+            std::fs::File::create_new(&aff).unwrap().write_all(b"SET UTF-8\nSFX A Y 1\nSFX A 0 e .\n").unwrap();
+            std::fs::File::create_new(&dic).unwrap().write_all(b"1\ndocument/A\n").unwrap();
+            assert!(user_dirs().contains(&dir), "portable dictionaries must also outrank embedded English data");
+            assert!(user_candidates(&names).contains(&(aff.clone(), dic.clone())));
+            let (found_aff, found_dic) = find(&names).expect("the executable's dictionaries folder is searched");
+            assert_eq!((&found_aff, &found_dic), (&aff, &dic));
+            let dict = load(&found_aff, &found_dic).unwrap();
+            assert!(dict.check("document") && dict.check("documente"));
+            assert!(!dict.check("documant"));
+        }
     }
 
     #[test]
