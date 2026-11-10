@@ -24,3 +24,7 @@ use JavaClassError as FormatError;
 #[cfg(test)]
 #[path="regressions/java_array_operands.rs"]
 mod java_array_operands;
+
+#[cfg(test)]
+#[path="regressions/java_attribute_names.rs"]
+mod java_attribute_names;
