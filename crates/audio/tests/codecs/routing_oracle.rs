@@ -1,8 +1,8 @@
 //! `craft_audio::decode` routes each container and codec below to the home-grown demuxers and
 //! decoders, or to symphonia (FLAC): each pair decodes, sample-aligned, to its presentation length
-//! (edit lists, Matroska `CodecDelay` and `DiscardPadding` applied), within an SNR
-//! of ffmpeg's decode; truncated and corrupted copies never panic. Fixtures are written by ffmpeg
-//! (skipped without it).
+//! (edit lists, Matroska `CodecDelay` and `DiscardPadding`, Ogg Opus pre-skip and end trimming
+//! applied), within an SNR of ffmpeg's decode; truncated and corrupted copies never panic. Fixtures
+//! are written by ffmpeg (skipped without it).
 
 use craft_audio::{ChannelLayout, CodecId, Container, decode, probe};
 use std::path::{Path, PathBuf};
@@ -27,7 +27,7 @@ struct Case {
     channels: usize,
     /// Presented frames, or `None` for a raw stream (as many as ffmpeg decodes).
     frames: Option<usize>,
-    /// Minimum SNR against ffmpeg.
+    /// Minimum SNR against ffmpeg (AC-3 is limited by decoder-specific dither, §7.3.4).
     min_snr: f64,
 }
 
@@ -98,6 +98,123 @@ const CASES: &[Case] = &[
         min_snr: 120.0,
     },
     Case {
+        name: "ac3.ac3",
+        surround: false,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "ac3", "-b:a", "192k"],
+        container: Container::Ac3,
+        codec: CodecId::Ac3,
+        layout: ChannelLayout::STEREO,
+        channels: 2,
+        frames: None,
+        min_snr: 25.0,
+    },
+    Case {
+        name: "ac3-5.1.ac3",
+        surround: true,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "ac3", "-b:a", "448k"],
+        container: Container::Ac3,
+        codec: CodecId::Ac3,
+        layout: ChannelLayout::SURROUND_5_1_SIDE,
+        channels: 6,
+        frames: None,
+        min_snr: 25.0,
+    },
+    Case {
+        name: "eac3.eac3",
+        surround: false,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "eac3", "-b:a", "192k"],
+        container: Container::Ac3,
+        codec: CodecId::Eac3,
+        layout: ChannelLayout::STEREO,
+        channels: 2,
+        frames: None,
+        min_snr: 25.0,
+    },
+    Case {
+        name: "ac3.mp4",
+        surround: false,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "ac3"],
+        container: Container::Mp4,
+        codec: CodecId::Ac3,
+        layout: ChannelLayout::STEREO,
+        channels: 2,
+        frames: Some(240_000),
+        min_snr: 25.0,
+    },
+    Case {
+        name: "eac3-5.1.mkv",
+        surround: true,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "eac3"],
+        container: Container::Matroska,
+        codec: CodecId::Eac3,
+        layout: ChannelLayout::SURROUND_5_1_SIDE,
+        channels: 6,
+        frames: Some(240_000),
+        min_snr: 25.0,
+    },
+    Case {
+        name: "opus.opus",
+        surround: false,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "libopus", "-b:a", "128k"],
+        container: Container::Ogg,
+        codec: CodecId::Opus,
+        layout: ChannelLayout::STEREO,
+        channels: 2,
+        frames: Some(240_000),
+        min_snr: 120.0,
+    },
+    Case {
+        name: "opus-5.1.opus",
+        surround: true,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "libopus", "-b:a", "256k", "-mapping_family", "1"],
+        container: Container::Ogg,
+        codec: CodecId::Opus,
+        layout: ChannelLayout::SURROUND_5_1,
+        channels: 6,
+        frames: Some(240_000),
+        min_snr: 120.0,
+    },
+    Case {
+        name: "opus.webm",
+        surround: false,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "libopus", "-b:a", "96k"],
+        container: Container::WebM,
+        codec: CodecId::Opus,
+        layout: ChannelLayout::STEREO,
+        channels: 2,
+        frames: Some(240_000),
+        min_snr: 120.0,
+    },
+    Case {
+        name: "opus.mp4",
+        surround: false,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "libopus", "-b:a", "96k"],
+        container: Container::Mp4,
+        codec: CodecId::Opus,
+        layout: ChannelLayout::STEREO,
+        channels: 2,
+        frames: Some(240_000),
+        min_snr: 120.0,
+    },
+    Case {
         name: "pcm-s24be.mov",
         surround: false,
         mono: false,
@@ -157,6 +274,41 @@ fn reference(ff: &Path, file: &Path) -> Vec<f32> {
     out.stdout.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect()
 }
 
+/// Read the actual cached MP4 presentation duration with an independent demuxer. A fixture
+/// may have been written by a different ffmpeg version, so a version-based length tolerance
+/// cannot establish whether this particular file was fully decoded.
+fn mp4_presentation_frames(ffprobe: &Path, file: &Path, sample_rate: u32) -> usize {
+    let out = Command::new(ffprobe)
+        .args(["-v", "error", "-select_streams", "a:0", "-show_entries", "stream=duration_ts,time_base", "-of", "default=noprint_wrappers=1"])
+        .arg(file)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "ffprobe duration of {}: {}", file.display(), String::from_utf8_lossy(&out.stderr));
+    let text = String::from_utf8(out.stdout).unwrap();
+    let value = |key: &str| text.lines().find_map(|line| line.strip_prefix(key)).unwrap_or_else(|| panic!("missing {key} in {text}"));
+    let ticks: u128 = value("duration_ts=").parse().unwrap();
+    let (num, den) = value("time_base=").split_once('/').unwrap();
+    let num: u128 = num.parse().unwrap();
+    let den: u128 = den.parse().unwrap();
+    assert!(den > 0);
+    let samples = ticks.checked_mul(num).unwrap().checked_mul(u128::from(sample_rate)).unwrap();
+    assert_eq!(samples % den, 0, "fixture duration must resolve to whole PCM frames");
+    usize::try_from(samples / den).unwrap()
+}
+
+#[test]
+fn ac3_mp4_decodes_exactly_the_independent_presentation_length() {
+    let ff = require_ffmpeg!();
+    let Some(ffprobe) = craft_media_testkit::ffprobe() else { return };
+    let case = CASES.iter().find(|case| case.name == "ac3.mp4").unwrap();
+    let Some(path) = fixture(&ff, case) else { return };
+    let expected = mp4_presentation_frames(&ffprobe, &path, case.rate);
+    let (_, decoded) = decode(&std::fs::read(&path).unwrap(), None).unwrap();
+    assert_eq!(decoded.frames(), expected, "AC-3 must present the complete declared MP4 interval");
+    let reference = reference(&ff, &path);
+    assert!(snr(&decoded.channels, &reference) >= case.min_snr);
+}
+
 /// The major version of this ffmpeg, or `None` for one that does not say (a git build).
 fn ffmpeg_major(ff: &Path) -> Option<u32> {
     let out = Command::new(ff).arg("-version").output().ok()?;
@@ -170,6 +322,7 @@ fn ffmpeg_major(ff: &Path) -> Option<u32> {
 fn reference_lead(name: &str) -> usize {
     match name {
         "aac.mkv" => 1024,
+        "eac3-5.1.mkv" => 256,
         _ => 0,
     }
 }
@@ -191,6 +344,15 @@ fn snr(ours: &[Vec<f32>], reference: &[f32]) -> f64 {
     if e == 0.0 { f64::INFINITY } else { 10.0 * (s / e).log10() }
 }
 
+/// How many frames short of the input ffmpeg before 9 ends `name`: its lengths for these tracks
+/// leave out about the encoder's delay. The decoder presents what the file declares.
+fn early_end(name: &str) -> usize {
+    match name {
+        "eac3-5.1.mkv" => 240,
+        _ => 0,
+    }
+}
+
 #[test]
 fn every_container_and_codec_decodes_home_grown() {
     let ff = require_ffmpeg!();
@@ -205,8 +367,16 @@ fn every_container_and_codec_decodes_home_grown() {
         let reference = reference(&ff, &path);
         assert_eq!((info.container, info.codec, info.sample_rate, buf.channels.len()), (c.container, c.codec, c.rate, c.channels), "{}", c.name);
         assert_eq!(info.layout, c.layout, "{}: layout", c.name);
-        let expected = c.frames.unwrap_or(reference.len() / c.channels);
-        assert_eq!(buf.frames(), expected, "{}: presented frames", c.name);
+        let frames = buf.frames();
+        if c.name == "ac3.mp4" {
+            if let Some(ffprobe) = craft_media_testkit::ffprobe() {
+                let expected = mp4_presentation_frames(&ffprobe, &path, c.rate);
+                assert_eq!(frames, expected, "{}: declared presentation frames", c.name);
+            }
+        } else {
+            let expected = c.frames.unwrap_or(reference.len() / c.channels);
+            assert!(frames == expected || frames == expected - early_end(c.name), "{}: presented frames: {frames} of {expected}", c.name);
+        }
         // One alignment, so audio that keeps the priming, or loses more than it, cannot pass.
         let lead = reference_lead(c.name) * c.channels;
         let s = match major {
@@ -293,7 +463,9 @@ fn streaming_and_seeking_match_the_whole_file_decode() {
             assert_eq!(after[0].len(), whole.frames() - target, "{}: frames after a seek to {target}", c.name);
             let expected: Vec<Vec<f32>> = whole.channels.iter().map(|ch| ch[target..].to_vec()).collect();
             let s = snr_planar(&after, &expected);
-            assert!(s == f64::INFINITY, "{}: SNR {s:.1} dB after a seek to {target}", c.name);
+            // Opus rebuilds its predictor state from the pre-roll; AC-3 dither is random per decode.
+            let bound = if matches!(c.codec, CodecId::Opus | CodecId::Ac3 | CodecId::Eac3) { c.min_snr.min(25.0) } else { f64::INFINITY };
+            assert!(s >= bound, "{}: SNR {s:.1} dB after a seek to {target}", c.name);
         }
     }
 }
@@ -305,7 +477,7 @@ fn track_decoder_on_demuxed_packets_matches_decode() {
     use craft_audio::TrackDecoder;
     use craft_media::isobmff;
     let ff = require_ffmpeg!();
-    for name in ["aac.m4a", "aac-5.1.m4a", "pcm-s24be.mov"] {
+    for name in ["aac.m4a", "aac-5.1.m4a", "opus.mp4", "pcm-s24be.mov"] {
         let c = CASES.iter().find(|c| c.name == name).unwrap();
         let Some(path) = fixture(&ff, c) else { continue };
         let bytes = std::fs::read(&path).unwrap();

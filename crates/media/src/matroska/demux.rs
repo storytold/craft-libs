@@ -1122,6 +1122,28 @@ impl<S: ByteSource> Demuxer<S> {
         Ok(sp)
     }
 
+    /// Position at an exact indexed sample, including its position within a laced block.
+    /// Unlike time-based seeking this does not round through the container timestamp grid or
+    /// back up to a keyframe. Callers must choose any codec preroll/keyframe they need.
+    pub fn seek_sample(&mut self, track: usize, index: usize) -> Result<SeekPoint> {
+        if !self.file.indexed {
+            self.build_index()?;
+        }
+        let t = self.file.tracks.get(track).ok_or(Error::NoSuchTrack(track))?;
+        let s = *t.samples.get(index).ok_or(Error::NoSuchSample(index))?;
+        let c = *self.file.clusters.get(s.cluster as usize).ok_or_else(|| Error::Invalid("sample has no cluster".into()))?;
+        let point = SeekPoint {
+            track,
+            pts: s.pts,
+            pts_ns: t.ticks_to_ns(s.pts),
+            sample: Some(index),
+            cluster_offset: c.offset,
+            block_offset: s.block_offset,
+        };
+        self.position_at(c, s.block_offset, s.lace);
+        Ok(point)
+    }
+
     fn position_at(&mut self, c: ClusterInfo, block_offset: u64, lace: u16) {
         self.pending.clear();
         self.done = false;

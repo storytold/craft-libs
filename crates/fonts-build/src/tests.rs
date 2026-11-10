@@ -119,6 +119,10 @@ fn required_fails_without_a_usable_checkout() {
 
 #[cfg(unix)]
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "APFS rejects invalid UTF-8 filenames before the library runs; table_rejects_non_utf8_path tests the guard without filesystem access"
+)]
 fn rejects_a_checkout_under_a_non_utf8_path() {
     use std::os::unix::ffi::OsStrExt;
     let scratch = Scratch::new("non-utf8");

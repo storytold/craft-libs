@@ -1,5 +1,5 @@
-//! Tests of the codecs ported from FilmCraft, built as one test binary: each file is a module, as
-//! in their original crates.
+//! Tests of the codecs ported from FilmCraft and EffectCraft, built as one test binary: each file
+//! is a module, as in their original crates.
 // Index loops follow the specifications, as in FilmCraft (which allows this lint workspace-wide).
 #![allow(clippy::needless_range_loop)]
 
@@ -8,4 +8,10 @@ use craft_media_testkit as common;
 mod testkit;
 
 mod aac;
+mod ac3_encoder_oracle;
+mod ac3_oracle;
+mod concealment;
+mod opus;
+mod opusenc;
 mod routing_oracle;
+mod track_decoder;
