@@ -15,7 +15,6 @@ opens Windows printer preferences and submits jobs with copies, collation, duple
 
 - **macOS/Linux:** CUPS `lpstat`, `lpoptions` and `lp`. Jobs stream through stdin. Exact-size
   sheets use `fit-to-page=false`; shrink-to-fit uses IPP `print-scaling=auto-fit`.
-<<<<<<< HEAD
 - **macOS paper tray:** a job whose options name no `InputSlot` also sends `AP_D_InputSlot=`,
   the system Print dialog's Paper Feed: Auto Select. Without it CUPS uses the PPD's default
   tray, and a printer whose default tray is empty holds the job while CUPS reports it completed
@@ -25,7 +24,6 @@ opens Windows printer preferences and submits jobs with copies, collation, duple
   "Auto Select", first and as the default unless the user's defaults name another tray. Apps
   may show their own translation of the label. Other CUPS builds don't know `AP_D_InputSlot`,
   so Linux jobs are unchanged.
-=======
 - **Flatpak:** the Freedesktop runtime has libcups but not `lpstat`/`lp`/`lpoptions`, so the app
   bundles them (the apps' manifests build them from CUPS as a `cups-client` module). What each
   piece is for:
@@ -45,7 +43,6 @@ opens Windows printer preferences and submits jobs with copies, collation, duple
     `/var/run/cups/cups.sock`, so the manifests' wrapper around the tools points CUPS there when
     CUPS' socket is the one Flatpak chose, and fails when it isn't rather than reach another
     server. Server names and `CUPS_SERVER` are left alone.
->>>>>>> origin/main
 - **Windows:** in this process, with no PowerShell, script or other program started, so
   printing works where App Control for Business or AppLocker enforce script rules. Printers
   come from `EnumPrinters` (local queues and `\\server\queue` connections) and the default from
