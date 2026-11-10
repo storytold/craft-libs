@@ -3,17 +3,20 @@ name: Shared UI
 on:
   push:
     branches: [main]
-    paths: ["crates/ui/**", "Cargo.toml", "Cargo.lock", ".github/workflows/ui.yml"]
+    paths: ["crates/ui/**", "crates/i18n/**", "Cargo.toml", "Cargo.lock", ".github/workflows/ui.yml"]
   pull_request:
-    paths: ["crates/ui/**", "Cargo.toml", "Cargo.lock", ".github/workflows/ui.yml"]
+    paths: ["crates/ui/**", "crates/i18n/**", "Cargo.toml", "Cargo.lock", ".github/workflows/ui.yml"]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: shared-ui-${{ github.ref }}
-  cancel-in-progress: true
+  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
+  # run (main, manual) gets its own group: it is never cancelled or replaced while queued, so it
+  # always gets to save the cache.
+  group: shared-ui-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   native:
@@ -22,10 +25,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # macOS runners are kept for releases: macOS runs only when started by hand.
+        os: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["ubuntu-latest","windows-latest","macos-latest"]') || fromJSON('["ubuntu-latest","windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install software Vulkan renderer
         if: runner.os == 'Linux'
         run: |
@@ -38,6 +42,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-ui
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt --check
       - run: cargo clippy -p craft-ui --all-targets --locked -- -D warnings
       - run: cargo clippy -p craft-ui --all-targets --all-features --locked -- -D warnings
@@ -48,11 +53,12 @@ jobs:
     name: UI WASM
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-ui-wasm
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo check -p craft-ui --all-features --locked --target wasm32-unknown-unknown

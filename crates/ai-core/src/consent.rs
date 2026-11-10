@@ -67,9 +67,13 @@ impl Disclosure {
         }
     }
 
-    /// The distinct kinds of data this request sends.
+    /// The distinct kinds of data this request sends. Parameters carry values the app chose,
+    /// free text among them, so a request with any counts as sending text even with no inputs.
     pub fn kinds(&self) -> Vec<PayloadKind> {
         let mut kinds: Vec<PayloadKind> = self.items.iter().map(|i| i.kind).collect();
+        if !self.param_names.is_empty() {
+            kinds.push(PayloadKind::Text);
+        }
         kinds.sort();
         kinds.dedup();
         kinds
@@ -240,6 +244,17 @@ mod tests {
         assert!(ledger.needs_consent(&other, 0));
         ledger.revoke(&app(), &remote("a").id);
         assert!(ledger.needs_consent(&d, 0));
+    }
+
+    #[test]
+    fn parameters_alone_still_need_consent() {
+        let only_params = Request::new(CapabilityId::parse("image.inpaint").unwrap()).with_param("negative", "a private note".into());
+        let d = disclosure_for(&only_params);
+        assert_eq!(d.kinds(), vec![PayloadKind::Text]);
+        let mut ledger = ConsentLedger::default();
+        assert!(ledger.needs_consent(&d, 0));
+        ledger.grant(&d);
+        assert!(!ledger.needs_consent(&d, 0));
     }
 
     fn upscale_req() -> Request {

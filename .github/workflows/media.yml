@@ -3,17 +3,20 @@ name: Shared media
 on:
   push:
     branches: [main]
-    paths: ["crates/media/**", "Cargo.toml", "Cargo.lock", ".github/workflows/media.yml"]
+    paths: ["crates/media/**", "crates/media-testkit/**", "Cargo.toml", "Cargo.lock", ".github/workflows/media.yml"]
   pull_request:
-    paths: ["crates/media/**", "Cargo.toml", "Cargo.lock", ".github/workflows/media.yml"]
+    paths: ["crates/media/**", "crates/media-testkit/**", "Cargo.toml", "Cargo.lock", ".github/workflows/media.yml"]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: shared-media-${{ github.ref }}
-  cancel-in-progress: true
+  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
+  # run (main, manual) gets its own group: it is never cancelled or replaced while queued, so it
+  # always gets to save the cache.
+  group: shared-media-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lint:
@@ -21,7 +24,9 @@ jobs:
     name: Media lint, feature sets, WASM
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustfmt, clippy
@@ -29,23 +34,30 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-media-lint
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt -p craft-media --check
       - run: cargo clippy -p craft-media --all-targets --locked --no-default-features -- -D warnings
       - run: cargo clippy -p craft-media --all-targets --locked --no-default-features --features bitstream -- -D warnings
       - run: cargo clippy -p craft-media --all-targets --locked -- -D warnings
       - run: cargo clippy -p craft-media --all-targets --locked --no-default-features --features matroska -- -D warnings
+      - run: cargo clippy -p craft-media --all-targets --locked --no-default-features --features ogg -- -D warnings
       - run: cargo clippy -p craft-media --all-targets --locked --all-features -- -D warnings
+      - run: cargo clippy -p craft-media-testkit --all-targets --locked -- -D warnings
+      - run: cargo clippy -p craft-media --all-targets --locked --no-default-features --features serde -- -D warnings
       - run: cargo check -p craft-media --all-features --locked --target wasm32-unknown-unknown
   test:
     timeout-minutes: 15
     name: Media tests with ffmpeg oracles
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-media-test
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build tests while installing ffmpeg
         run: |
           # The man-db index rebuild after dpkg is slow on hosted runners.

@@ -2,7 +2,8 @@
 
 use craft_media::isobmff::*;
 use proptest::prelude::*;
-use std::io::Cursor;
+use std::collections::BTreeMap;
+use std::io::{Cursor, Seek, SeekFrom, Write};
 
 #[derive(Clone, Debug)]
 struct S {
@@ -164,9 +165,9 @@ fn sample_lookup() {
 }
 
 #[test]
-fn large_offsets_use_co64_and_largesize_mdat() {
-    // Files > 4 GiB are impractical in tests, so patch a small file into the same layout the
-    // writer produces for them: co64 chunk offsets and a 16-byte large-size mdat header.
+fn patched_co64_and_largesize_mdat_are_read() {
+    // A small file patched into the layout of a file past 4 GiB: co64 chunk offsets and a
+    // 16-byte large-size mdat header.
     let mut moov = Vec::new();
     let mut w = Mp4Writer::new(Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).unwrap();
     let t = w.add_track(TrackConfig::new(entry(3), 30)).unwrap();
@@ -220,4 +221,96 @@ fn all_empty_samples_roundtrip() {
         assert_eq!(f.tracks[0].samples.len(), n);
         assert!(f.tracks[0].samples.iter().all(|s| s.size == 0));
     }
+}
+
+/// An output that keeps only writes under 1 MiB and reads everything else as zeros, so tests can
+/// write files past 4 GiB from a reused zero buffer.
+#[derive(Default)]
+struct Sparse {
+    pos: u64,
+    len: u64,
+    kept: BTreeMap<u64, Vec<u8>>,
+}
+
+impl Write for Sparse {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        let end = self.pos + b.len() as u64;
+        self.kept.retain(|&at, _| at < self.pos || at >= end);
+        if b.len() < 1 << 20 {
+            self.kept.insert(self.pos, b.to_vec());
+        }
+        self.pos += b.len() as u64;
+        self.len = self.len.max(self.pos);
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Seek for Sparse {
+    fn seek(&mut self, to: SeekFrom) -> std::io::Result<u64> {
+        self.pos = match to {
+            SeekFrom::Start(p) => p,
+            SeekFrom::End(d) => self.len.checked_add_signed(d).unwrap(),
+            SeekFrom::Current(d) => self.pos.checked_add_signed(d).unwrap(),
+        };
+        Ok(self.pos)
+    }
+}
+
+impl ByteSource for Sparse {
+    fn len(&self) -> u64 {
+        self.len
+    }
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
+        buf.fill(0);
+        let end = offset + buf.len() as u64;
+        for (&at, data) in &self.kept {
+            let (lo, hi) = (at.max(offset), (at + data.len() as u64).min(end));
+            if lo < hi {
+                buf[(lo - offset) as usize..(hi - offset) as usize].copy_from_slice(&data[(lo - at) as usize..(hi - at) as usize]);
+            }
+        }
+        Ok(())
+    }
+}
+
+const MIB: usize = 1 << 20;
+
+#[test]
+fn writer_uses_co64_and_largesize_mdat_past_4_gib() {
+    let zeros = vec![0u8; MIB];
+    let mut w = Mp4Writer::new(Sparse::default(), WriterOptions::new(Brand::Mp4)).unwrap();
+    let t = w.add_track(TrackConfig::new(entry(3), 30)).unwrap();
+    let n = 4 * 1024 + 1;
+    for _ in 0..n {
+        w.write_sample(t, WriteSample { data: &zeros, duration: 1, composition_offset: 0, is_sync: true }).unwrap();
+    }
+    w.write_sample(t, WriteSample { data: b"abc", duration: 1, composition_offset: 0, is_sync: true }).unwrap();
+    let out = w.finish().unwrap();
+    let f = open(&out).unwrap();
+    let s = &f.tracks[0].samples;
+    assert_eq!(s.len(), n + 1);
+    assert!(s[n].offset > u64::from(u32::MAX));
+    assert_eq!(f.read_sample(&out, 0, n).unwrap(), b"abc");
+}
+
+#[test]
+fn pcm_past_4_gib_reads_back_whole() {
+    let pcm = PcmConfig { bits: 16, float: false, big_endian: true, signed: true, channels: 2, sample_rate: 48000.0 };
+    let zeros = vec![0u8; MIB];
+    let mut w = Mp4Writer::new(Sparse::default(), WriterOptions::new(Brand::Mov)).unwrap();
+    let t = w.add_track(TrackConfig::new(SampleEntry::pcm(pcm), 48000)).unwrap();
+    let writes = 4 * 1024 + 1;
+    for _ in 0..writes {
+        w.write_sample(t, WriteSample { data: &zeros, duration: 0, composition_offset: 0, is_sync: true }).unwrap();
+    }
+    let out = w.finish().unwrap();
+    let f = open(&out).unwrap();
+    let s = &f.tracks[0].samples;
+    let bytes = (writes * MIB) as u64;
+    assert_eq!(s.iter().map(|s| u64::from(s.size)).sum::<u64>(), bytes);
+    assert_eq!(s.iter().map(|s| u64::from(s.duration)).sum::<u64>(), bytes / 4);
+    assert!(s.iter().all(|s| s.size <= 1 << 20));
 }

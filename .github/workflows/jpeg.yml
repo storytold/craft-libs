@@ -1,0 +1,41 @@
+name: Shared JPEG
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/jpeg/**", "Cargo.toml", "Cargo.lock", ".github/workflows/jpeg.yml"]
+  pull_request:
+    paths: ["crates/jpeg/**", "Cargo.toml", "Cargo.lock", ".github/workflows/jpeg.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
+  # run (main, manual) gets its own group: it is never cancelled or replaced while queued, so it
+  # always gets to save the cache.
+  group: shared-jpeg-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    timeout-minutes: 10
+    name: JPEG lint, tests, WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-jpeg
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo fmt -p craft-jpeg --check
+      - run: cargo clippy -p craft-jpeg --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-jpeg --locked
+      - run: cargo check -p craft-jpeg --locked --target wasm32-unknown-unknown

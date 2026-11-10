@@ -66,9 +66,11 @@ impl<'a> Pages<'a> {
     /// Of course this could result in the order of pages being messed up, but
     /// this is still better than nothing.
     pub(crate) fn new_brute_force(ctx: &ReaderContext<'a>, xref: &'a XRef) -> Option<Self> {
+        crate::cancel::check(ctx.control())?;
         let mut pages = vec![];
 
         for object in xref.objects() {
+            crate::cancel::check(ctx.control())?;
             if let Some(dict) = object.into_dict()
                 && let Some(page) = Page::new(
                     &dict,
@@ -81,6 +83,7 @@ impl<'a> Pages<'a> {
             }
         }
 
+        crate::cancel::check(ctx.control())?;
         if pages.is_empty() {
             return None;
         }
@@ -113,6 +116,7 @@ const MAX_PAGE_TREE_WORK: usize = 100_000;
 enum PageTreeError {
     Malformed,
     Limit,
+    Cancelled,
 }
 
 struct PageTreeFrame<'a> {
@@ -142,6 +146,7 @@ fn resolve_pages<'a>(
     reader_ctx: &ReaderContext<'a>,
     work_limit: usize,
 ) -> Result<(), PageTreeError> {
+    crate::cancel::check(reader_ctx.control()).ok_or(PageTreeError::Cancelled)?;
     let mut remaining = work_limit.checked_sub(1).ok_or(PageTreeError::Limit)?;
     let root =
         PageTreeFrame::new(pages_dict, PagesContext::new(), Resources::new(Dict::empty(), None, reader_ctx)).ok_or(PageTreeError::Malformed)?;
@@ -154,6 +159,7 @@ fn resolve_pages<'a>(
     stack.push(root);
 
     while let Some(frame) = stack.last_mut() {
+        crate::cancel::check(reader_ctx.control()).ok_or(PageTreeError::Cancelled)?;
         let Some(kid) = frame.kids.next() else {
             stack.pop();
             continue;
@@ -196,6 +202,7 @@ fn resolve_pages<'a>(
         }
     }
 
+    crate::cancel::check(reader_ctx.control()).ok_or(PageTreeError::Cancelled)?;
     Ok(())
 }
 
@@ -604,9 +611,17 @@ impl<'a> Page<'a> {
         {
             (A4.width() as f32, A4.height() as f32)
         } else {
+            // PdfCraft patch: retain a one-point floor after UserUnit, not one raw unit.
+            // The stored unit is finite and within 1..=75000. Round upward only if the
+            // reciprocal's f32 product would fall below one and trigger a placeholder.
+            let mut raw_floor = 1.0 / self.user_unit;
+            if raw_floor * self.user_unit < 1.0 {
+                raw_floor = raw_floor.next_up();
+            }
+            let raw_floor = f64::from(raw_floor);
             (
-                crop_box.width().max(1.0) as f32,
-                crop_box.height().max(1.0) as f32,
+                crop_box.width().max(raw_floor) as f32,
+                crop_box.height().max(raw_floor) as f32,
             )
         }
     }
@@ -874,7 +889,7 @@ pub(crate) mod cached {
                     Err(PageTreeError::Malformed) => Pages::new_brute_force(&ctx, xref_reference)?,
                     // A limit is a failed load, never permission to bypass the bound
                     // or return a partially walked page tree through repair.
-                    Err(PageTreeError::Limit) => return None,
+                    Err(PageTreeError::Limit | PageTreeError::Cancelled) => return None,
                 },
                 None => Pages::new_brute_force(&ctx, xref_reference)?,
             };
@@ -915,6 +930,30 @@ mod page_tree_tests {
     fn cached_with_limit(objects: &[String], limit: usize) -> Option<cached::CachedPages> {
         let xref = crate::xref::root_xref(pdf_bytes(objects).into(), b"", DecodeLimits::default()).unwrap();
         cached::CachedPages::new_with_limit(cached::Arc::new(xref), limit)
+    }
+
+    #[test]
+    fn cancellation_interrupts_initial_page_tree_construction() {
+        use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let armed = alloc::sync::Arc::new(AtomicBool::new(false));
+        let polls = alloc::sync::Arc::new(AtomicUsize::new(0));
+        let flag = armed.clone();
+        let counter = polls.clone();
+        let cancellation = crate::Cancellation::new(move || {
+            flag.load(Ordering::Relaxed) && counter.fetch_add(1, Ordering::Relaxed) + 1 == 100
+        });
+        let control = crate::cancel::Control::new(&cancellation);
+        let kids = (3..1003).map(|i| format!("{i} 0 R ")).collect::<String>();
+        let mut objects = vec![
+            String::from("<< /Type /Catalog /Pages 2 0 R >>"),
+            format!("<< /Type /Pages /Kids [{kids}] /Count 1000 >>"),
+        ];
+        objects.extend((0..1000).map(|_| String::from("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >>")));
+        let xref = crate::xref::root_xref_controlled(pdf_bytes(&objects).into(), b"", DecodeLimits::default(), Some(control)).unwrap();
+        armed.store(true, Ordering::Relaxed);
+        assert!(cached::CachedPages::new(cached::Arc::new(xref)).is_none());
+        assert_eq!(polls.load(Ordering::Relaxed), 100);
+        assert_eq!(cached_with_limit(&objects, 100_000).unwrap().get().len(), 1000);
     }
 
     fn assert_deep_tree() {
@@ -1004,6 +1043,45 @@ mod page_tree_tests {
         let repaired = cached_with_limit(&objects, 1).unwrap();
         assert_eq!(repaired.get().len(), 1);
         assert_eq!(repaired.get()[0].raw().obj_id().unwrap().obj_number, 3);
+    }
+
+    fn raw_crop_unit_page(unit: f64, crop: [f64; 4]) -> Vec<u8> {
+        let bounds = crop.map(|n| n.to_string()).join(" ");
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [{bounds}] /CropBox [{bounds}] /UserUnit {unit} /Resources << >> /Contents [] >>"),
+        ];
+        pdf_bytes(&objects)
+    }
+
+    /// PdfCraft patch: a tiny crop box keeps a one-point floor after `/UserUnit`, not one raw unit.
+    #[test]
+    fn raw_crop_unit_floor_is_one_point_after_user_unit() {
+        for (unit, width, height) in [(1.0, 1.0, 1.0), (4096.0, 512.0, 1024.0), (75000.0, 9375.0, 18750.0)] {
+            let pdf = Pdf::new(raw_crop_unit_page(unit, [10.0, 20.0, 10.125, 20.25])).unwrap();
+            let page = &pdf.pages()[0];
+            assert_eq!(page.base_dimensions(), ((width / unit) as f32, (height / unit) as f32), "unit={unit}");
+        }
+        // In f32, the nearest reciprocal of 41 or 47 multiplies back to 0.99999994.
+        for unit in [1.0, 41.0, 47.0] {
+            let pdf = Pdf::new(raw_crop_unit_page(unit, [0.0, 0.0, 0.01, 0.01])).unwrap();
+            let page = &pdf.pages()[0];
+            let (width, height) = page.base_dimensions();
+            assert!(width * page.user_unit() >= 1.0 && height * page.user_unit() >= 1.0, "unit={unit}");
+            let (width, height) = page.render_dimensions();
+            assert!((1.0..=1.000001).contains(&width) && (1.0..=1.000001).contains(&height), "unit={unit}: {width} by {height}");
+        }
+        // A nearly-zero crop box still falls back to A4.
+        for unit in [1.0, 4096.0, 75000.0] {
+            for side in [0.0, 0.0001] {
+                let pdf = Pdf::new(raw_crop_unit_page(unit, [0.0, 0.0, side, side])).unwrap();
+                let page = &pdf.pages()[0];
+                let expected = (595.2755905511812_f64 as f32, 841.8897637795277_f64 as f32);
+                assert_eq!(page.base_dimensions(), expected, "unit={unit}, side={side}");
+                assert_eq!(page.render_dimensions(), (expected.0 * unit as f32, expected.1 * unit as f32));
+            }
+        }
     }
 }
 

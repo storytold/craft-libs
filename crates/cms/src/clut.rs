@@ -223,15 +223,22 @@ impl Clut {
     }
 
     fn multilinear(&self, input: &[f32], out: &mut [f32]) {
-        let n = self.inputs;
+        // Only dimensions that sit between two grid points spread over corners. A singleton
+        // dimension, or an input on a node, takes its lower corner with weight 1, so a table of
+        // many such dimensions costs no more than the dimensions that actually interpolate.
         let mut base = 0usize;
         let mut r = [0.0f32; MAX_CHANNELS];
         let mut s = [0usize; MAX_CHANNELS];
-        for d in 0..n {
-            let (b, rr, ss) = self.locate(d, input[d]);
+        let mut n = 0;
+        for (d, &v) in input.iter().enumerate().take(self.inputs) {
+            let (b, rr, ss) = self.locate(d, v);
             base += b;
-            r[d] = rr;
-            s[d] = ss;
+            // `!= 0.0` keeps a NaN fraction, so a NaN input still gives a NaN result.
+            if ss > 0 && rr != 0.0 {
+                r[n] = rr;
+                s[n] = ss;
+                n += 1;
+            }
         }
         let o = self.outputs;
         out[..o].iter_mut().for_each(|v| *v = 0.0);
@@ -308,5 +315,39 @@ mod tests {
         let c = Clut::sample(vec![2, 2], 1, |p, o| o[0] = p[0] + p[1]).unwrap();
         c.eval(&[0.5, 0.25], &mut o).unwrap();
         assert!((o[0] - 0.75).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_nan_input_still_gives_nan() {
+        let c = Clut::sample(vec![2; 5], 1, |p, o| o[0] = p.iter().sum()).unwrap();
+        let mut o = [0.0];
+        c.eval_multilinear(&[0.5, f32::NAN, 0.5, 0.5, 0.5], &mut o).unwrap();
+        assert!(o[0].is_nan(), "{o:?}");
+    }
+
+    #[test]
+    fn singleton_dimensions_do_not_multiply_corners() {
+        // Fifteen inputs, all but two on a single grid point: the result interpolates only those
+        // two, and matches the same table built with two inputs.
+        let mut grid = vec![1usize; 15];
+        grid[3] = 2;
+        grid[9] = 3;
+        let wide = Clut::sample(grid, 2, |p, o| {
+            o[0] = p[3] * 0.5 + p[9] * 0.25;
+            o[1] = p[3] * p[9];
+        })
+        .unwrap();
+        let narrow = Clut::sample(vec![2, 3], 2, |p, o| {
+            o[0] = p[0] * 0.5 + p[1] * 0.25;
+            o[1] = p[0] * p[1];
+        })
+        .unwrap();
+        let mut input = [0.4f32; 15];
+        input[3] = 0.3;
+        input[9] = 0.7;
+        let (mut a, mut b) = ([0.0; 2], [0.0; 2]);
+        wide.eval_multilinear(&input, &mut a).unwrap();
+        narrow.eval_multilinear(&[0.3, 0.7], &mut b).unwrap();
+        assert!((a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6, "{a:?} {b:?}");
     }
 }

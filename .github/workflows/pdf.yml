@@ -3,17 +3,20 @@ name: Shared PDF
 on:
   push:
     branches: [main]
-    paths: ["crates/pdf/**", "vendor/hayro*/**", "vendor/krilla/**", "scripts/test-pdf-backends.sh", "scripts/*fetch-pdf-test-fonts.py", "Cargo.toml", "Cargo.lock", ".github/workflows/pdf.yml"]
+    paths: ["crates/pdf/**", "crates/plate-test/**", "crates/prepress/**", "crates/cms/**", "vendor/hayro*/**", "vendor/krilla/**", "scripts/test-pdf-backends.sh", "scripts/*fetch-pdf-test-fonts.py", "Cargo.toml", "Cargo.lock", ".github/workflows/pdf.yml"]
   pull_request:
-    paths: ["crates/pdf/**", "vendor/hayro*/**", "vendor/krilla/**", "scripts/test-pdf-backends.sh", "scripts/*fetch-pdf-test-fonts.py", "Cargo.toml", "Cargo.lock", ".github/workflows/pdf.yml"]
+    paths: ["crates/pdf/**", "crates/plate-test/**", "crates/prepress/**", "crates/cms/**", "vendor/hayro*/**", "vendor/krilla/**", "scripts/test-pdf-backends.sh", "scripts/*fetch-pdf-test-fonts.py", "Cargo.toml", "Cargo.lock", ".github/workflows/pdf.yml"]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: shared-pdf-${{ github.ref }}
-  cancel-in-progress: true
+  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
+  # run (main, manual) gets its own group: it is never cancelled or replaced while queued, so it
+  # always gets to save the cache.
+  group: shared-pdf-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   native:
@@ -21,19 +24,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # macOS runners are kept for releases: macOS runs only when started by hand.
+        os: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["ubuntu-latest","windows-latest","macos-latest"]') || fromJSON('["ubuntu-latest","windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     env:
       RUSTFLAGS: --cfg craft_pdf_unicode_fixtures
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-pdf
-      - uses: actions/setup-python@v5
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Provision licensed PDF test fonts
@@ -50,11 +55,12 @@ jobs:
     name: PDF vendored contracts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-pdf-backends
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: bash scripts/test-pdf-backends.sh
   wasm:
     name: PDF WASM runtime
@@ -63,14 +69,15 @@ jobs:
       RUSTFLAGS: --cfg craft_pdf_unicode_fixtures
       CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-pdf-wasm
-      - uses: actions/setup-python@v5
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Provision licensed PDF test fonts
@@ -79,10 +86,41 @@ jobs:
           python scripts/test-fetch-pdf-test-fonts.py
           python scripts/fetch-pdf-test-fonts.py "$RUNNER_TEMP/craft-pdf-test-fonts"
           echo "CRAFT_PDF_TEST_FONT_DIR=$RUNNER_TEMP/craft-pdf-test-fonts" >> "$GITHUB_ENV"
-      - name: Install the matching WASM test runner
+      - name: Read the wasm-bindgen version from Cargo.lock
+        id: wasm-bindgen
         shell: bash
         run: |
           runner_version=$(python3 -c 'import tomllib; d=tomllib.load(open("Cargo.lock", "rb")); print(next(p["version"] for p in d["package"] if p["name"] == "wasm-bindgen"))')
-          cargo install wasm-bindgen-cli --version "$runner_version" --locked
+          echo "version=$runner_version" >> "$GITHUB_OUTPUT"
+      - name: Install the matching WASM test runner
+        # A prebuilt, checksum-verified binary instead of building it from source on every run.
+        # A version the pinned action does not list yet falls back to `cargo install --locked`.
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+        with:
+          tool: wasm-bindgen@${{ steps.wasm-bindgen.outputs.version }}
+          fallback: cargo-install
       - run: cargo test -p craft-pdf --all-features --locked --target wasm32-unknown-unknown
       - run: cargo test --manifest-path crates/pdf/read-only-contract/Cargo.toml --locked --target wasm32-unknown-unknown
+  plate-test:
+    name: Plate tests and craft-prepress
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-plate-test
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Provision licensed PDF test fonts
+        shell: bash
+        run: |
+          python scripts/test-fetch-pdf-test-fonts.py
+          python scripts/fetch-pdf-test-fonts.py "$RUNNER_TEMP/craft-pdf-test-fonts"
+          echo "CRAFT_PDF_TEST_FONT_DIR=$RUNNER_TEMP/craft-pdf-test-fonts" >> "$GITHUB_ENV"
+      - run: cargo clippy -p craft-plate-test -p craft-prepress --all-targets --all-features --locked -- -D warnings
+      - run: cargo test -p craft-plate-test -p craft-prepress --all-features --locked

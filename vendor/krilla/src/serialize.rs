@@ -6,9 +6,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
-use pdf_writer::types::{StructRole, StructRole2};
-use pdf_writer::writers::{OutputIntent, StructTreeRoot};
+use pdf_writer::types::{OutputIntentSubtype, StructRole, StructRole2, TrappingStatus};
+use pdf_writer::writers::{DocumentInfo, OutputIntent as OutputIntentWriter, StructTreeRoot};
 use pdf_writer::{Chunk, Content, Finish, Limits, Name, Pdf, Ref, Settings, Str, TextStr};
+use xmp_writer::{Namespace, XmpWriter};
 
 use crate::chunk_container::ChunkContainer;
 use crate::color::{CieBasedColorSpace, DeviceColorSpace, SpecialColorSpace};
@@ -16,10 +17,12 @@ use crate::configure::validate::ValidationStore;
 use crate::configure::{Configuration, PdfVersion, ValidationError, Validators};
 use crate::error::{KrillaError, KrillaResult, LimitError};
 use crate::geom::Size;
-use crate::graphics::color::{rgb, ColorSpace};
+use crate::graphics::color::{cmyk, luma, rgb, ColorSpace};
+use crate::graphics::device_n::DeviceNColorSpace;
 use crate::graphics::icc::{ICCBasedColorSpace, ICCProfile};
 #[cfg(feature = "raster-images")]
 use crate::graphics::image::Image;
+use crate::graphics::optional_content::OptionalContent;
 use crate::graphics::separation::SeparationColorSpace;
 use crate::interactive::destination::{NamedDestination, XyzDestination};
 use crate::interchange::embed::EmbeddedFile;
@@ -29,7 +32,7 @@ use crate::page::{InternalPage, PageLabel, PageLabelContainer};
 #[cfg(feature = "pdf")]
 use crate::pdf::{PdfDocument, PdfSerializerContext};
 use crate::resource;
-use crate::resource::{Resource, Resourceable};
+use crate::resource::{Resource, ResourceDictionary, Resourceable};
 use crate::surface::{Location, Surface};
 use crate::text::GlyphId;
 use crate::text::{Font, FontContainer, FontIdentifier};
@@ -116,6 +119,77 @@ pub struct SerializeSettings {
     /// just use the default function which doesn't render them at all. If you do want this, it
     /// is recommended that you use the function provided by the `krilla-svg` crate.
     pub render_svg_glyph_fn: RenderSvgGlyphFn,
+    /// The color space in which transparency is blended.
+    ///
+    /// See [`GroupColorSpace`].
+    pub group_color_space: GroupColorSpace,
+    /// The printing condition the document is prepared for, written as a `GTS_PDFX`
+    /// output intent. See [`OutputIntent`].
+    pub output_intent: Option<OutputIntent>,
+    /// Whether the document has been trapped: `/Trapped` in the document information
+    /// dictionary and `pdf:Trapped` in the XMP metadata.
+    pub trapped: Option<Trapped>,
+    /// The PDF/X version the caller claims, such as `PDF/X-4`: `/GTS_PDFXVersion` in the
+    /// document information dictionary and `pdfxid:GTS_PDFXVersion` in the XMP metadata.
+    ///
+    /// krilla does not check PDF/X conformance; the caller does. PDF/A-1, -2 and -3 need an
+    /// extension schema for the XMP property, which krilla does not write, so export under
+    /// them fails with [`ValidationError::PdfxVersionWithoutExtensionSchema`].
+    pub pdfx_version: Option<String>,
+    /// The PDF/X conformance level the caller claims, such as `PDF/X-1a:2003`:
+    /// `/GTS_PDFXConformance` in the document information dictionary. PDF/X-1a and X-3
+    /// require it next to the version (`PDF/X-1:2003` for PDF/X-1a:2003); later parts
+    /// have no conformance key. It has no XMP property, so PDF 2.0 output omits it.
+    pub pdfx_conformance: Option<String>,
+}
+
+/// A CMYK printing condition, written as an `/OutputIntents` entry with `/S /GTS_PDFX`.
+///
+/// When a PDF/A validator is active, its `GTS_PDFA1` entry names the same profile and
+/// condition, because PDF/A requires all output intents to share one destination profile.
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub struct OutputIntent {
+    /// The destination profile (`/DestOutputProfile`).
+    pub profile: ICCProfile<4>,
+    /// `/OutputConditionIdentifier`, such as `FOGRA39`, or `Custom`.
+    pub condition_identifier: String,
+    /// `/OutputCondition`: a human-readable description of the condition.
+    pub condition: Option<String>,
+    /// `/RegistryName`, such as `http://www.color.org`.
+    pub registry_name: Option<String>,
+    /// `/Info`: required by PDF/X when the identifier is not in the registry.
+    pub info: Option<String>,
+}
+
+/// The trapping state of a document.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub enum Trapped {
+    /// The document is fully trapped.
+    True,
+    /// The document has not been trapped.
+    False,
+    /// The document is partly trapped or the state is unknown.
+    Unknown,
+}
+
+/// The color space in which transparency groups blend.
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
+pub enum GroupColorSpace {
+    /// Every transparency group gets an RGB `/CS` (DeviceRGB, or sRGB when
+    /// `no_device_cs` is set). Pages get no `/Group`. Suits screen output.
+    #[default]
+    Rgb,
+    /// Pages that use transparency get a page group with a CMYK `/CS`: DeviceCMYK, or the
+    /// [`SerializeSettings::cmyk_profile`] when `no_device_cs` is set. Content groups and
+    /// embedded PDF pages write no `/CS` and inherit it. Soft-mask groups, which have no
+    /// parent, name DeviceCMYK, or sGrey when `no_device_cs` is set. Pages without
+    /// transparency get no page group.
+    ///
+    /// With `no_device_cs` and no `cmyk_profile`, [`Document::finish`] fails with
+    /// [`KrillaError::MissingGroupCmykProfile`].
+    ///
+    /// [`Document::finish`]: crate::Document::finish
+    Cmyk,
 }
 
 pub type RenderSvgGlyphFn = fn(&[u8], rgb::Color, GlyphId, (f32, f32), &mut Surface) -> Option<()>;
@@ -127,6 +201,51 @@ impl SerializeSettings {
 
     pub(crate) fn validators(&self) -> Validators {
         self.configuration.validators()
+    }
+
+    /// Whether the document information dictionary carries print markers. Like the rest of
+    /// the dictionary, they are deprecated in PDF 2.0 and only written to XMP there.
+    pub(crate) fn has_print_info(&self, version: PdfVersion) -> bool {
+        version < PdfVersion::Pdf20
+            && (self.trapped.is_some()
+                || self.pdfx_version.is_some()
+                || self.pdfx_conformance.is_some())
+    }
+
+    pub(crate) fn write_print_info(&self, info: &mut DocumentInfo<'_>) {
+        if let Some(trapped) = self.trapped {
+            info.trapped(match trapped {
+                Trapped::True => TrappingStatus::Trapped,
+                Trapped::False => TrappingStatus::NotTrapped,
+                Trapped::Unknown => TrappingStatus::Unknown,
+            });
+        }
+        if let Some(version) = &self.pdfx_version {
+            info.pair(Name(b"GTS_PDFXVersion"), TextStr(version));
+        }
+        if let Some(conformance) = &self.pdfx_conformance {
+            info.pair(Name(b"GTS_PDFXConformance"), TextStr(conformance));
+        }
+    }
+
+    pub(crate) fn write_print_xmp(&self, xmp: &mut XmpWriter) {
+        match self.trapped {
+            Some(Trapped::True) => {
+                xmp.trapped(true);
+            }
+            Some(Trapped::False) => {
+                xmp.trapped(false);
+            }
+            // The Adobe PDF schema allows `Unknown`, which `XmpWriter::trapped` can't write.
+            // PDF/A-1 requires it to match the information dictionary.
+            Some(Trapped::Unknown) => {
+                xmp.element("Trapped", Namespace::AdobePdf).value("Unknown");
+            }
+            None => {}
+        }
+        if let Some(version) = &self.pdfx_version {
+            xmp.pdfx_version(version);
+        }
     }
 
     /// Whether the `/AF` key is supported, accounting for the PDF version and active standards.
@@ -148,6 +267,11 @@ impl Default for SerializeSettings {
             configuration: Configuration::default(),
             enable_tagging: true,
             render_svg_glyph_fn: |_, _, _, _, _| None,
+            group_color_space: GroupColorSpace::Rgb,
+            output_intent: None,
+            trapped: None,
+            pdfx_version: None,
+            pdfx_conformance: None,
         }
     }
 }
@@ -242,6 +366,11 @@ pub(crate) enum MaybeDeviceColorSpace {
 pub(crate) struct SerializeContext {
     /// An unfinished or failed page/surface must never serialize as a complete document.
     pub(crate) poisoned: bool,
+    /// Where the first mesh gradient whose corner colors share no color space was drawn;
+    /// [`SerializeContext::finish`] fails with [`KrillaError::MixedMeshColorSpaces`].
+    pub(crate) mixed_mesh_colors: Option<Option<Location>>,
+    /// The document's optional content groups.
+    pub(crate) optional_content: OptionalContent,
     /// The ref of the page tree.
     page_tree_ref: Ref,
     /// PDF 2.0 namespaces.
@@ -275,6 +404,11 @@ pub(crate) struct SerializeContext {
     validation_store: ValidationStore,
     /// The current location, if set.
     pub(crate) location: Option<Location>,
+    /// Objects whose use makes a page blend: transparent graphics states, groups, images
+    /// with alpha, and forms, patterns and Type 3 fonts that use any of these. Decides
+    /// which pages get a page group under [`GroupColorSpace::Cmyk`]. Cached objects are
+    /// serialized once, so this is tracked by reference instead of by location.
+    transparent_refs: HashSet<Ref>,
 }
 
 impl SerializeContext {
@@ -297,6 +431,8 @@ impl SerializeContext {
 
         Self {
             poisoned: false,
+            mixed_mesh_colors: None,
+            optional_content: OptionalContent::default(),
             cached_mappings: HashMap::new(),
             pdf2_ns,
             global_objects: GlobalObjects::default(),
@@ -309,6 +445,50 @@ impl SerializeContext {
             chunk_settings,
             limits: Limits::new(),
             validation_store: ValidationStore::new(),
+            transparent_refs: HashSet::new(),
+        }
+    }
+
+    /// Record that drawing `object` involves transparency.
+    pub(crate) fn mark_transparent(&mut self, object: Ref) {
+        self.transparent_refs.insert(object);
+    }
+
+    /// Whether content using `resources` involves transparency.
+    pub(crate) fn uses_transparency(&self, resources: &ResourceDictionary) -> bool {
+        resources
+            .ext_g_states
+            .refs()
+            .chain(resources.x_objects.refs())
+            .chain(resources.patterns.refs())
+            .chain(resources.fonts.refs())
+            .any(|r| self.transparent_refs.contains(&r))
+    }
+
+    /// The CMYK blending color space for page groups under [`GroupColorSpace::Cmyk`]. Falls back to DeviceCMYK when `no_device_cs` is set
+    /// without a CMYK profile; `finish` rejects that configuration.
+    pub(crate) fn cmyk_group_color_space(
+        &mut self,
+        chunk_container: &mut ChunkContainer,
+    ) -> MaybeDeviceColorSpace {
+        let cs = cmyk::color_space(&self.serialize_settings)
+            .unwrap_or_else(|| DeviceColorSpace::Cmyk.into());
+        self.register_colorspace(chunk_container, cs.into())
+    }
+
+    /// The blending color space of soft-mask groups under [`GroupColorSpace::Cmyk`]:
+    /// DeviceCMYK, or sGrey when `no_device_cs` is set. A mask group has no parent, so it
+    /// need not match the page group. An ICC CMYK mask group would give the default black
+    /// backdrop a luminosity above 0, because 100% black through a CMYK profile is not black,
+    /// and the masked object would show where the mask content paints nothing.
+    pub(crate) fn mask_group_color_space(
+        &mut self,
+        chunk_container: &mut ChunkContainer,
+    ) -> MaybeDeviceColorSpace {
+        if self.serialize_settings.no_device_cs {
+            self.register_colorspace(chunk_container, luma::color_space(true).into())
+        } else {
+            self.cmyk_group_color_space(chunk_container)
         }
     }
 
@@ -428,9 +608,13 @@ impl SerializeContext {
         let xobj_ref = self.new_ref();
 
         // Note that `add_xobject` might return a different ref than the one we created.
-        self.global_objects
-            .pdf_ctx
-            .add_xobject(pdf, page_idx, xobj_ref, self.location)
+        let xobj_ref =
+            self.global_objects
+                .pdf_ctx
+                .add_xobject(pdf, page_idx, xobj_ref, self.location);
+        // Embedded pages are always drawn as isolated transparency groups.
+        self.mark_transparent(xobj_ref);
+        xobj_ref
     }
 
     pub(crate) fn page_tree_ref(&mut self) -> Ref {
@@ -450,6 +634,23 @@ impl SerializeContext {
     }
 
     pub(crate) fn finish(mut self, mut chunk_container: ChunkContainer) -> KrillaResult<Pdf> {
+        let settings = &self.serialize_settings;
+        if settings.group_color_space == GroupColorSpace::Cmyk
+            && settings.no_device_cs
+            && settings.cmyk_profile.is_none()
+        {
+            return Err(KrillaError::MissingGroupCmykProfile);
+        }
+        if self.serialize_settings.pdfx_version.is_some() {
+            self.register_validation_error(ValidationError::PdfxVersionWithoutExtensionSchema);
+        }
+        if let Some(location) = self.mixed_mesh_colors {
+            return Err(KrillaError::MixedMeshColorSpaces(location));
+        }
+        if let Some(location) = self.optional_content.misuse {
+            return Err(KrillaError::UnbalancedOptionalContent(location));
+        }
+
         // We need to be careful here that we serialize the objects in the right order,
         // as in some cases we use MaybeTake::take to remove an object, which means that
         // no object that is serialized afterwards must depend on it.
@@ -680,6 +881,11 @@ impl SerializeContext {
                     self.register_resourceable(chunk_container, SeparationColorSpace::new(s)),
                 )
             }
+            ColorSpace::Special(SpecialColorSpace::DeviceN(s)) => {
+                MaybeDeviceColorSpace::ColorSpace(
+                    self.register_resourceable(chunk_container, DeviceNColorSpace::new(s)),
+                )
+            }
         }
     }
 }
@@ -689,18 +895,42 @@ impl SerializeContext {
 impl SerializeContext {
     fn serialize_destination_profiles(&mut self, chunk_container: &mut ChunkContainer) {
         let validators = self.serialize_settings.validators();
-        chunk_container.non_stream.destination_profiles =
-            validators.output_intent().map(|subtype| {
-                let root_ref = self.new_ref();
-                let mut chunk = self.new_chunk();
+        let pdfa = validators.output_intent();
+        let print = self.serialize_settings.output_intent.clone();
+        if pdfa.is_none() && print.is_none() {
+            return;
+        }
 
+        let root_ref = self.new_ref();
+        let mut chunk = self.new_chunk();
+        let mut intents = Vec::new();
+
+        if let Some(print) = print {
+            let profile_ref = self.register_cacheable(chunk_container, print.profile.clone());
+            for subtype in pdfa.into_iter().chain([OutputIntentSubtype::PDFX]) {
                 let oi_ref = self.new_ref();
-                let mut oi = chunk.indirect(oi_ref).start::<OutputIntent>();
-                let icc_profile = self.serialize_settings.pdf_version().rgb_icc();
+                let mut oi = chunk.indirect(oi_ref).start::<OutputIntentWriter>();
+                oi.dest_output_profile(profile_ref)
+                    .subtype(subtype)
+                    .output_condition_identifier(TextStr(&print.condition_identifier));
+                if let Some(condition) = &print.condition {
+                    oi.output_condition(TextStr(condition));
+                }
+                if let Some(registry_name) = &print.registry_name {
+                    oi.registry_name(TextStr(registry_name));
+                }
+                if let Some(info) = &print.info {
+                    oi.info(TextStr(info));
+                }
+                oi.finish();
+                intents.push(oi_ref);
+            }
+        } else if let Some(subtype) = pdfa {
+            let oi_ref = self.new_ref();
+            let mut oi = chunk.indirect(oi_ref).start::<OutputIntentWriter>();
+            let icc_profile = self.serialize_settings.pdf_version().rgb_icc();
 
-                oi.dest_output_profile(
-                    self.register_cacheable(chunk_container, icc_profile.clone()),
-                )
+            oi.dest_output_profile(self.register_cacheable(chunk_container, icc_profile.clone()))
                 .subtype(subtype)
                 .output_condition_identifier(TextStr("Custom"))
                 .output_condition(TextStr("sRGB"))
@@ -713,14 +943,12 @@ impl SerializeContext {
                     )
                     .as_str(),
                 ));
-                oi.finish();
+            oi.finish();
+            intents.push(oi_ref);
+        }
 
-                let mut array = chunk.indirect(root_ref).array();
-                array.item(oi_ref);
-                array.finish();
-
-                (root_ref, chunk)
-            });
+        chunk.indirect(root_ref).array().items(intents);
+        chunk_container.non_stream.destination_profiles = Some((root_ref, chunk));
     }
 
     fn serialize_page_label_tree(&mut self, chunk_container: &mut ChunkContainer) {
@@ -803,7 +1031,7 @@ impl SerializeContext {
     ) -> KrillaResult<()> {
         let xyz_destinations = self.global_objects.xyz_destinations.take();
         for (ref_, dest) in &xyz_destinations {
-            dest.serialize(self, chunk_container, *ref_);
+            dest.serialize(self, chunk_container, *ref_)?;
         }
 
         Ok(())

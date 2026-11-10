@@ -36,18 +36,22 @@ pub fn new_document(version: u32) -> DocumentMut {
 /// is kept. This is what keeps a renamed enum variant from resetting the whole file.
 pub fn deserialize_sections<T: Settings>(doc: &DocumentMut) -> (T, Vec<SectionError>) {
     let defaults = T::default();
-    let Ok(mut merged) = toml_edit::ser::to_document(&defaults) else {
+    let Ok(base) = toml_edit::ser::to_document(&defaults) else {
         return (defaults, Vec::new());
     };
+    let mut merged = base.clone();
     let mut errors = Vec::new();
     for (key, item) in doc.iter() {
         if key == SCHEMA_VERSION_KEY {
             continue;
         }
-        let mut candidate = merged.clone();
+        // Each section is tried against the defaults alone, never against the sections accepted
+        // before it, so a file of many keys costs the defaults plus that key per key instead of
+        // the whole document so far.
+        let mut candidate = base.clone();
         candidate[key] = item.clone();
-        match toml_edit::de::from_document::<T>(candidate.clone()) {
-            Ok(_) => merged = candidate,
+        match toml_edit::de::from_document::<T>(candidate) {
+            Ok(_) => merged[key] = item.clone(),
             Err(e) => errors.push(SectionError { section: key.to_owned(), message: e.to_string() }),
         }
     }

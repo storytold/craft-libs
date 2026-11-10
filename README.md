@@ -34,25 +34,88 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-cms`](crates/cms/README.md): pure-Rust ICC v2/v4 colour management: profile parsing
   and writing, transforms, rendering intents, black point compensation, soft proofing, gamut
   checks, 3D LUTs and built-in profiles (sRGB, Display P3, synthetic coated CMYK and others).
+- [`craft-crw`](crates/crw/README.md): clean-room Canon CRW (CIFF) raw decoder, from LightCraft:
+  the heap container, the entropy coding derived by black-box analysis (frozen code tables), sensor
+  black and white levels and as-shot white balance. The complete derivation record (plan, sources
+  log, scripts, verification) is in `crates/crw/clean-room/`. Colour stays in each app.
+- [`craft-dialogs`](crates/dialogs/README.md): native file and message dialogs that never block
+  the event loop: queued requests shown at the end of the frame and answered on a later frame,
+  free-standing Open and Folder panels and Save sheets on macOS, case-insensitive filters. What
+  to do with the answer stays in each app.
+- [`craft-doc`](crates/doc/README.md): reads PhotoCraft `.pcraft`, VectorCraft `.vectorcraft`
+  and EffectCraft `.ecproj` documents without the apps: the kind and version, the previews and
+  PDF they carry, and their pages and layers. Rendering and editing stay in each app.
 - [`craft-docpath`](crates/docpath/src/lib.rs): decides whether a path or `file:` URL stored in a
   document may be opened. Paths stored in documents are followed only when they are local or on the
   document's own network share; other network paths, device paths and non-file URLs are refused.
+- [`craft-ecproj-format`](crates/ecproj-format/README.md): the envelope of EffectCraft `.ecproj`
+  project files: `savedBy`, the schema version and its check, and the file object with the
+  project and its saved view as type parameters. The project model stays in EffectCraft.
+- [`craft-font-catalog`](crates/font-catalog/README.md): the installed fonts on every platform
+  (font folders, fontconfig and Flatpak host folders, CoreText, DirectWrite, the font store),
+  lookup by family, style, localized, legacy, full and PostScript names, family loads shared
+  between threads, and rescans when fonts are installed or removed.
+- [`craft-font-manager`](crates/font-manager/README.md): Craft Font Manager as a library: search
+  and filters over the Google Fonts index, installed fonts by family, the font store interface,
+  and (`egui` feature) `FontsPanel`, the whole interface as one panel for the launcher's Fonts tab
+  and the standalone app.
+- [`craft-font-store`](crates/font-store/README.md): the suite's font store: the pinned Google
+  Fonts and Noto indexes plus indexes the user adds (never curated), exact lookup by family and
+  style or PostScript name, and installs from each source's URLs (jsDelivr, then raw GitHub)
+  checked by size, sha256 and parsing, with the licence, a manifest, and removal. Off until the
+  user turns downloading on; agents can't.
+- [`craft-fonts-build`](crates/fonts-build/README.md): embeds the optional craft-fonts faces
+  from an app's `build.rs` (`CRAFT_FONTS_DIR`, `CRAFT_FONTS_REQUIRED`, script filters) as a table
+  of `EmbeddedFace`s. No dependencies; the app picks the faces.
 - [`craft-i18n`](crates/i18n/README.md): translations over the embedded craft-i18n catalogs:
   lookup with fallback (`pt-br` → `pt` → English), plurals, language names, the system locale and
   a pseudo locale. The catalogs stay a fully optional build input; apps keep `tl!` and their
   language setting.
+- [`craft-jpeg`](crates/jpeg/README.md): clean-room decoder for 12-bit and arithmetic-coded
+  JPEG (T.81 SOF0/SOF1 at 12 bits, SOF9, SOF10), from PhotoCraft, and a frame probe for routing.
+  Metadata stays in each app.
+- [`craft-keymap`](crates/keymap/README.md): keyboard bindings: chords and their text forms,
+  scopes, conflicts, user overrides stored through craft-settings and import of other
+  applications' shortcut sets. Command catalogs, file readers and the shortcut editor UI stay
+  in each app.
+- [`craft-audio`](crates/audio/README.md): audio file I/O and codecs (WAV, AIFF, FLAC, AAC),
+  streaming and seeking, and packet decoding for any demuxer. See its README for formats and
+  features.
 - [`craft-media`](crates/media/README.md): bit-level I/O (`bitstream`), clean-room MP4/MOV
-  (`isobmff`) and Matroska/WebM (`matroska`) demuxers and muxers, from FilmCraft, and an ISO BMFF
-  box reader. Containers only; codecs stay in each app.
+  (`isobmff`) and Matroska/WebM (`matroska`) demuxers and muxers, an Ogg demuxer (`ogg`), from
+  FilmCraft, and an ISO BMFF box reader. Containers only; codecs are in `craft-audio`, and
+  video codecs will go in a separate crate.
+- [`craft-menu`](crates/menu/README.md): an app's menus as a macOS menu bar: the Mac layout
+  (app menu, Window, Help, system-key clashes), a platform backend trait, and key equivalents
+  fed back to egui as the input egui-winit would have made. Commands and their enabled state
+  stay in each app.
+- [`craft-pcraft-format`](crates/pcraft-format/README.md): the envelope of PhotoCraft's `.pcraft`
+  bundle: `Manifest<D>` with the document as a type parameter, `TileRef`, the entry paths, the
+  manifest decode limits and the migration runner. The document model stays in PhotoCraft.
 - [`craft-print`](crates/print/README.md): PDF submission to CUPS and Windows, printer discovery,
   duplex/copies/colour and driver preferences. PDF generation stays in each app.
+- [`craft-proof`](crates/proof/README.md): proofing per language (spelling, suggestions, grammar,
+  hyphenation, a Hunspell reader, user words, Language packs). The word lists and patterns are
+  craft-i18n's `language-data/`, embedded at build time from `CRAFT_I18N_DIR`: English and the
+  carry-over locales by default, the set `CRAFT_PROOF_EMBED` names otherwise (`en` for English
+  only); other languages come from installed Language packs.
 
 - [`craft-quit`](crates/quit/src/lib.rs): native macOS quit, egui close handling and an optional
   app menu. Unsaved-document decisions and save prompts stay in each app.
 
 - [`craft-settings`](crates/settings/README.md): `config.toml` settings storage for every app: platform folders, portable mode and overrides, atomic saves while running, backup, damaged-file recovery and schema migrations. Policy in [docs/settings-storage.md](docs/settings-storage.md).
+- [`craft-text`](crates/text/README.md): text processing below the composer. Its `hyphen` module finds
+  hyphenation points, with a bundled US English dictionary and patterns and optional hypher patterns
+  for 47 more languages (one cargo feature each).
 - [`craft-ui`](crates/ui/README.md): SVG catalogs, icon buttons, tabs, pane controls, transactional docking, print settings and theme helpers for egui frontends;
   assets, themes, localization and command handling stay in each app. Requires Rust 1.95 or later.
+- [`craft-vectorcraft-format`](crates/vectorcraft-format/README.md): the envelope of VectorCraft's
+  `.vectorcraft` file: its members, versions, embedded images and the data after the JSON, with the
+  document as a type parameter. The document and its migrations stay in VectorCraft.
+- [`craft-web-api`](crates/web-api/README.md): the page command API every Craft web build offers its page — one
+  `window.<app>` shape (`request`, `execute`, `commands`, `docInspect`, `uiInspect`, `screenshot`) over the app's
+  JSON control channel.
+- [`craft-web-host`](crates/web-host/README.md): the host messages between a Craft app's web build and the page that hosts it (`?host=parent` or `data-host="page"`): one contract and one bridge for every app.
 - [Shared UI component audit](docs/ui-components-audit.md): source inventory, extraction priorities
   and compatibility boundaries across the Craft suite.
 - [Theme infrastructure](docs/theme-infrastructure.md): eight-app comparison and the small shared
