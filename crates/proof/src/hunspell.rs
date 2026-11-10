@@ -239,17 +239,10 @@ pub fn user_candidates(names: &[&str]) -> Vec<(PathBuf, PathBuf)> {
     candidates_in(&user_dirs(), names)
 }
 
-/// The folders of [`search_dirs`] the user keeps dictionaries in for WordCraft: the one set with
-/// [`set_dictionary_dir`], `WORDCRAFT_DICTIONARIES`, and WordCraft's own `dictionaries` folder
-/// under the user's application data. The rest are the system's (and LibreOffice's).
+/// The application dictionary tier: configured folders, the user's application-data folder,
+/// and, on Windows, dictionaries beside the executable. System dictionaries remain excluded.
 pub fn user_dirs() -> Vec<PathBuf> {
-    let extra = EXTRA_DIR.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-    let env = std::env::var_os("WORDCRAFT_DICTIONARIES").filter(|v| !v.is_empty()).map(PathBuf::from);
-    let wordcraft_own = |d: &Path| {
-        d.file_name().is_some_and(|n| n == "dictionaries")
-            && d.parent().and_then(Path::file_name).is_some_and(|n| n.eq_ignore_ascii_case("wordcraft"))
-    };
-    search_dirs(None).into_iter().filter(|d| Some(d) == extra.as_ref() || Some(d) == env.as_ref() || wordcraft_own(d)).collect()
+    search_tiers(None).0
 }
 
 /// [`candidates`] in `dirs`.
@@ -776,7 +769,12 @@ mod tests {
         let exe = std::env::current_exe().unwrap();
         let dir = exe.parent().unwrap().join("dictionaries");
         std::fs::create_dir_all(&dir).unwrap();
-        let name = format!("portable_test_{}", std::process::id());
+        // Cargo may reuse the directory and Windows may reuse a PID. Leave earlier files
+        // alone and choose a fresh pair; create_new below also refuses concurrent overwrites.
+        let name = (0..u64::MAX)
+            .map(|n| format!("portable_test_{}_{n}", std::process::id()))
+            .find(|name| !dir.join(format!("{name}.aff")).exists() && !dir.join(format!("{name}.dic")).exists())
+            .expect("a fresh dictionary name");
         let names = [name.as_str()];
         assert!(find(&names).is_none(), "no pair has been packaged yet");
         let aff = dir.join(format!("{name}.aff"));
@@ -784,6 +782,8 @@ mod tests {
         use std::io::Write;
         std::fs::File::create_new(&aff).unwrap().write_all(b"SET UTF-8\nSFX A Y 1\nSFX A 0 e .\n").unwrap();
         std::fs::File::create_new(&dic).unwrap().write_all(b"1\ndocument/A\n").unwrap();
+        assert!(user_dirs().contains(&dir), "portable dictionaries must also outrank embedded English data");
+        assert!(user_candidates(&names).contains(&(aff.clone(), dic.clone())));
         let (found_aff, found_dic) = find(&names).expect("the executable's dictionaries folder is searched");
         assert_eq!((&found_aff, &found_dic), (&aff, &dic));
         let dict = load(&found_aff, &found_dic).unwrap();
