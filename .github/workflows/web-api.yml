@@ -32,11 +32,19 @@ jobs:
         with:
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
-      - name: Install the matching WASM test runner
+      - name: Read the wasm-bindgen version from Cargo.lock
+        id: wasm-bindgen
         shell: bash
         run: |
           runner_version=$(python3 -c 'import tomllib; d=tomllib.load(open("Cargo.lock", "rb")); print(next(p["version"] for p in d["package"] if p["name"] == "wasm-bindgen"))')
-          cargo install wasm-bindgen-cli --version "$runner_version" --locked
+          echo "version=$runner_version" >> "$GITHUB_OUTPUT"
+      - name: Install the matching WASM test runner
+        # A prebuilt, checksum-verified binary instead of building it from source on every run.
+        # A version the pinned action does not list yet falls back to `cargo install --locked`.
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+        with:
+          tool: wasm-bindgen@${{ steps.wasm-bindgen.outputs.version }}
+          fallback: cargo-install
       - run: cargo fmt --check
       - run: cargo clippy -p craft-web-api --all-targets --locked -- -D warnings
       - run: cargo clippy -p craft-web-api --all-targets --locked --target wasm32-unknown-unknown -- -D warnings
