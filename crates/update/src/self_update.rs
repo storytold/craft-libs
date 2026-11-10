@@ -2305,7 +2305,9 @@ mod tests {
         for _ in 0..2 {
             let error = prepare_update(&crate::suite::LAUNCHER, &install, &release, platform, &http, &paths, &stop, &mut phase, &|| Ok(()), None)
                 .unwrap_err();
-            assert!(error.contains("isn't signed"), "{error}");
+            // An unsigned bundle is refused as "isn't signed" or, where codesign reports it, as a
+            // failed signature check; either way the install stops after the download.
+            assert!(error.contains("signed") && error.ends_with("so it wasn't installed"), "{error}");
             assert_eq!(std::fs::read(&kept).unwrap(), body, "the download stays after a failed install");
         }
         assert_eq!(requests.lock().unwrap().len(), 1, "the second try reuses the kept download");
