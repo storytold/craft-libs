@@ -39,12 +39,12 @@
 //! The terms are weights fitted to inputs measured on one machine (the README gives the fit and where it is loose), and the budget is set so that
 //! the most the meter admits takes about as long as the star of 1,291 points.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use kurbo::{BezPath, PathEl};
-use linesweeper::Segments;
-use linesweeper::sweep::{SegmentsConnectedAtX, SweepLineBuffers, SweepLineRangeBuffers, Sweeper};
+use linesweeper::sweep::{SegmentsConnectedAtX, SweepLine, SweepLineBuffers, SweepLineRangeBuffers, Sweeper};
+use linesweeper::{SegIdx, Segment, Segments};
 
 use crate::PathOpsError;
 use crate::budget::limits;
@@ -95,6 +95,26 @@ pub(crate) const GROUP_PICOS: u64 = 70;
 /// What the square of the segments that start (or end) at one height is worth, in nanoseconds.
 pub(crate) const BATCH_WORK: u64 = 3;
 
+/// What a step of the comparison of two cubics is worth in sweep time, in nanoseconds: the comparison of two curves halves the stretch of
+/// height it looks at until the bounds of the gap between them are tighter than the tolerance, and a step is one such stretch (about 0.56
+/// microsecond measured, with the cache and the bookkeeping around it 575 estimated).
+pub(crate) const COMPARE_NODE_WORK: u64 = 575;
+
+/// The steps of a comparison that a curved piece has been paid for already, in [`CURVED_WORK`]: only the steps beyond them are charged.
+pub(crate) const FREE_NODES: u64 = CURVED_WORK / COMPARE_NODE_WORK;
+
+/// The steps of the comparison of two cubics for each cube root of the third differences of the pair over their gap: fitted to circles,
+/// ellipses (turned and not), and blobs of arcs, whose pairs the sweep compares in 1.0, 1.0 and 0.9 of the steps this counts (a turned ellipse
+/// in 1.7 of them), at gaps of 3 parts in a hundred thousand of their size to 1 in 300 million.
+const NODES_PER_ROOT: f64 = 7.0;
+
+/// The heights at which the gap between two curves is sampled: the middle one is the gap taken (a pair that crosses or touches has a
+/// few gaps near zero and the rest the size of the curves, which its comparison does not take the least of: the tolerance bounds it).
+const GAP_SAMPLES: usize = 5;
+
+/// How many places of the sweep line, at most, are read in the search for a segment that lies among others within a tolerance across.
+const LINE_SCAN: usize = 32;
+
 /// How far apart, in tolerances of the sweep, segments may lie across and be one cluster.
 const CLUSTER_WIDTH: f64 = 8.0;
 
@@ -127,6 +147,8 @@ pub(crate) struct Counts {
     pub(crate) batch: u64,
     /// The pairs of segments that start or end together: the entries the sweep makes in its cache of comparisons.
     pub(crate) pairs: u64,
+    /// The steps of the comparisons of curves that lie close to one another, beyond those that a curved piece pays for.
+    pub(crate) compared: u64,
 }
 
 impl Counts {
@@ -139,6 +161,7 @@ impl Counts {
             .saturating_add(self.tangle.saturating_mul(TANGLE_PICOS) / 1000)
             .saturating_add(self.groups.saturating_mul(GROUP_PICOS) / 1000)
             .saturating_add(self.batch.saturating_mul(BATCH_WORK))
+            .saturating_add(self.compared.saturating_mul(COMPARE_NODE_WORK))
     }
 
     /// The memory the sweep would hold, in the nanoseconds the budget is counted in: the topology of the pieces, and the cache of
@@ -280,6 +303,186 @@ fn static_counts(segments: &Segments, eps: f64) -> (u64, u64, u64) {
     (groups, squares(&starts).saturating_add(squares(&ends)), pairs)
 }
 
+/// The greatest third difference of a segment's control points, over the two axes: how far a cubic is from a quadratic, and so how many
+/// times the comparison of it with another halves the stretch it looks at. Nothing for a line.
+fn third_difference(segment: &Segment) -> f64 {
+    if segment.is_line() {
+        return 0.0;
+    }
+    let c = segment.to_kurbo_cubic();
+    let dx = (c.p3.x - 3.0 * c.p2.x + 3.0 * c.p1.x - c.p0.x).abs();
+    let dy = (c.p3.y - 3.0 * c.p2.y + 3.0 * c.p1.y - c.p0.y).abs();
+    dx.max(dy)
+}
+
+/// The most steps the comparison of two segments can take that a curved piece has not been paid for already, from the third differences alone:
+/// the gap between the curves is not under the tolerance, so the steps are at most what the cube root of the third differences over the
+/// tolerance makes of them. Curves of ordinary size (a circle of 100,000 cubics, a stroke) cannot pass it, and are told without looking at
+/// where they lie.
+fn may_take_more_than_is_paid(a: &Segment, b: &Segment, eps: f64) -> bool {
+    let third = third_difference(a) + third_difference(b);
+    // A float converted with `as` saturates (a count that is not a number is none), and a count this large is charged.
+    (NODES_PER_ROOT * (third / eps).cbrt()) as u64 > FREE_NODES
+}
+
+/// The steps the sweep takes to compare two segments, estimated from what makes them many: the comparison of two cubics halves a stretch of
+/// height until the error of its quadratic approximations, which goes with the third differences of the two curves, is under the gap
+/// between them, so that the steps go with the cube root of the third differences over the gap (circles of a million in radius, 0.03
+/// apart, take 320 for each comparison), over the stretch of height the two share. Two curves that are far apart take one, whatever their
+/// third differences are, and so do two that share no height.
+fn comparison_steps(a: &Segment, b: &Segment, eps: f64) -> u64 {
+    let span = |s: &Segment| (s.start().y.min(s.end().y), s.start().y.max(s.end().y));
+    let ((a0, a1), (b0, b1)) = (span(a), span(b));
+    let (y0, y1) = (a0.max(b0), a1.min(b1));
+    // Level segments, and pairs that share no height, are not compared along their length.
+    if y1.partial_cmp(&y0) != Some(std::cmp::Ordering::Greater) {
+        return 0;
+    }
+    let mut gaps = [0.0f64; GAP_SAMPLES];
+    for (i, gap) in gaps.iter_mut().enumerate() {
+        let y = y0 + (y1 - y0) * (i as f64 + 0.5) / GAP_SAMPLES as f64;
+        *gap = (a.at_y(y) - b.at_y(y)).abs();
+    }
+    gaps.sort_by(f64::total_cmp);
+    // `max` takes the tolerance for a gap that is not a number, as for one under it.
+    let gap = gaps.get(GAP_SAMPLES / 2).copied().unwrap_or(0.0).max(eps);
+    let third = third_difference(a) + third_difference(b);
+    let shared = (y1 - y0) / (a1 - a0).max(b1 - b0);
+    // A float converted with `as` saturates, and a count this large is refused.
+    ((NODES_PER_ROOT * (third / gap).cbrt() * shared).max(1.0)) as u64
+}
+
+/// Where a segment lies across the sweep line at height `y` (a segment that ends at the line, or is the least out of its range by the
+/// rounding of the tolerance, is read at its nearest end).
+fn across(segment: &Segment, y: f64) -> f64 {
+    let (low, high) = (segment.start().y.min(segment.end().y), segment.start().y.max(segment.end().y));
+    segment.at_y(y.clamp(low, high))
+}
+
+/// The place of `target` on the sweep line, found by where it lies across, as the line is in order across: the first place that is not left of
+/// it is found by halving, and the places within two tolerances of it, where the order is not exact, are read in turn, `LINE_SCAN` at the most.
+fn line_position(line: &SweepLine<'_, '_, '_>, target: SegIdx, eps: f64) -> Option<usize> {
+    let segments = line.segments();
+    let y = line.y();
+    let tolerance = 2.0 * eps;
+    let at = |i: usize| line.line_segment(i).map(|s| across(&segments[s], y));
+    let target_x = across(&segments[target], y);
+    let left_of_it = |i: usize| at(i).is_some_and(|x| x < target_x - tolerance);
+    // A place past the end of the line is not left of anything: one that is not, found by doubling, ends the search.
+    let mut high = 1usize;
+    while left_of_it(high) {
+        high = high.checked_mul(2)?;
+    }
+    let mut low = 0usize;
+    while low < high {
+        let mid = low + (high - low) / 2;
+        if left_of_it(mid) {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    (low..low.saturating_add(LINE_SCAN))
+        .take_while(|&i| at(i).is_some_and(|x| x <= target_x + tolerance))
+        .find(|&i| line.line_segment(i) == Some(target))
+}
+
+/// The comparisons of curves the sweep makes, which each pair of segments has once (the sweep keeps the order of the pairs it has compared):
+/// the steps of each, beyond those a curved piece is paid for, charged the first time the pair is seen.
+struct Comparisons<'a> {
+    segments: &'a Segments,
+    eps: f64,
+    seen: HashSet<(SegIdx, SegIdx)>,
+}
+
+impl<'a> Comparisons<'a> {
+    fn new(segments: &'a Segments, eps: f64) -> Self {
+        Self { segments, eps, seen: HashSet::new() }
+    }
+
+    /// The steps to charge for the comparison of `a` and `b`: none if two lines, or if the pair was seen before.
+    fn charge(&mut self, a: SegIdx, b: SegIdx) -> u64 {
+        let (sa, sb) = (&self.segments[a], &self.segments[b]);
+        if a == b || (sa.is_line() && sb.is_line()) {
+            return 0;
+        }
+        // The pairs a curved piece pays for are not kept: only those that may be charged are.
+        if !may_take_more_than_is_paid(sa, sb, self.eps) || !self.seen.insert((a.min(b), a.max(b))) {
+            return 0;
+        }
+        comparison_steps(sa, sb, self.eps).saturating_sub(FREE_NODES)
+    }
+
+    /// The steps to charge for the pairs the sweep compares to put the segments of a range in order: those next to one another in it, and
+    /// where a curve that enters at this line is at the edge of the range, its neighbour on the line, which the range does not hold (a copy
+    /// that starts at a height a little apart from the one it runs along, beside it): the neighbours of the first and the last.
+    fn in_range(&mut self, ids: &[SegIdx], line: &SweepLine<'_, '_, '_>) -> u64 {
+        let mut steps = 0u64;
+        for w in ids.windows(2) {
+            if let [a, b] = *w {
+                steps = steps.saturating_add(self.charge(a, b));
+            }
+        }
+        let y = line.y();
+        for (edge, above) in [(ids.first().copied(), false), (ids.last().copied(), true)] {
+            let entering = |e: &SegIdx| {
+                let s = &self.segments[*e];
+                !s.is_line() && y - s.start().y.min(s.end().y) <= self.eps
+            };
+            let Some(edge) = edge.filter(entering) else { continue };
+            let Some(place) = line_position(line, edge, self.eps) else { continue };
+            let next = if above { place.checked_add(1) } else { place.checked_sub(1) };
+            if let Some(other) = next.and_then(|i| line.line_segment(i)) {
+                steps = steps.saturating_add(self.charge(edge, other));
+            }
+        }
+        steps
+    }
+
+    /// The pairs the sweep compares as segments come to its line together, before it sweeps: the segments that start at one height (and
+    /// those that end at one) are put in the order of the line at once, and a pair of them next to one another across is compared. For
+    /// copies of a shape moved a little each, this is where the sweep meets the pairs that cost it most, in one step, which no count made
+    /// as it goes can stop in time. Charged into `counts` and held to `budget`: `true` if it passes.
+    fn over_budget_at_one_height(&mut self, counts: &mut Counts, budget: u64) -> bool {
+        let segments = self.segments;
+        let mut run: Vec<(f64, SegIdx)> = Vec::new();
+        let mut height = f64::NAN;
+        let entrances = segments.entrances().iter().filter(|e| !segments[e.1].is_horizontal()).map(|&(y, idx)| (y, segments[idx].start().x, idx));
+        let exits = segments.exits().iter().map(|&(y, idx)| (y, segments[idx].end().x, idx));
+        for ends in [entrances.collect::<Vec<_>>(), exits.collect::<Vec<_>>()] {
+            for (y, x, idx) in ends {
+                // The ends come in order of height; a run is the ends at exactly one.
+                if y != height && self.over_budget_in_run(&mut run, counts, budget) {
+                    return true;
+                }
+                height = y;
+                run.push((x, idx));
+            }
+            if self.over_budget_in_run(&mut run, counts, budget) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// The pairs next to one another across in `run` (emptied), charged into `counts`: `true` if they pass `budget`.
+    fn over_budget_in_run(&mut self, run: &mut Vec<(f64, SegIdx)>, counts: &mut Counts, budget: u64) -> bool {
+        run.sort_by(|p, q| p.0.total_cmp(&q.0));
+        let mut over = false;
+        for w in run.windows(2) {
+            if let [(_, a), (_, b)] = *w {
+                counts.compared = counts.compared.saturating_add(self.charge(a, b));
+                if counts.work() > budget {
+                    over = true;
+                    break;
+                }
+            }
+        }
+        run.clear();
+        over
+    }
+}
+
 /// How many segments span the sweep line at each height, as the sweep reaches them: those that have started (a level segment is not on
 /// the line) and not ended above it. A contour that goes on through a point takes one place there for the two segments that meet, so this
 /// is the line's length or the segments that start there more.
@@ -319,11 +522,18 @@ pub(crate) fn dry_sweep(segments: &Segments, eps: f64, budget: u64) -> Result<Co
     if counts.work() > budget {
         return Err(counts);
     }
+    // The pairs of lines cost the sweep nothing a piece is not paid for: an input of lines has none to look for.
+    let curved_input = segments.segments().any(|s| !s.is_line());
+    let mut compared = Comparisons::new(segments, eps);
+    if curved_input && compared.over_budget_at_one_height(&mut counts, budget) {
+        return Err(counts);
+    }
     let mut sweeper = Sweeper::new(segments, eps);
     let mut line_bufs = SweepLineBuffers::default();
     let mut range_bufs = SweepLineRangeBuffers::default();
     let mut connected = SegmentsConnectedAtX::default();
     let mut xs: Vec<f64> = Vec::new();
+    let mut ids: Vec<SegIdx> = Vec::new();
     let mut spanning = Spanning::new(segments);
     while let Some(mut line) = sweeper.next_line(&mut line_bufs) {
         counts.steps += 1;
@@ -331,8 +541,13 @@ pub(crate) fn dry_sweep(segments: &Segments, eps: f64, budget: u64) -> Result<Co
         let on_line = spanning.at(y);
         while let Some(mut range) = line.next_range(&mut range_bufs, segments) {
             counts.ranges += 1;
+            ids.clear();
+            ids.extend(range.segment_range());
             xs.clear();
-            xs.extend(range.segment_range().map(|s| segments[s].at_y(y)));
+            xs.extend(ids.iter().map(|&s| segments[s].at_y(y)));
+            if curved_input {
+                counts.compared = counts.compared.saturating_add(compared.in_range(&ids, range.line()));
+            }
             // A range of one or two cannot be a cluster that costs more than its pieces.
             let cluster = if xs.len() <= 2 { xs.len() } else { tightest(&mut xs, CLUSTER_WIDTH * eps) } as u64;
             let mut made = 0u64;
@@ -418,9 +633,10 @@ mod tests {
     use super::*;
     use crate::boolean::eps_for;
     use crate::testutil::{
-        arc_fan, arc_windows, bars_on_a_baseline, bowed_star, cubic_circle, cubic_fan, diagonals, fan_along_a_line, grid_of_squares, groups_of_loops,
-        jittered_pencil, jittered_pies, mesh, nearly_parallel_lines, polygons_a_few_tolerances_apart, polygons_an_ulp_apart, polyline, rect, rings,
-        row_of_lenses, s_strokes, stacked_arcs, stacked_pies, stacked_polygons, stacked_segments, star, wheel, windows_sharing_a_tenth,
+        arc_fan, arc_windows, bars_on_a_baseline, bowed_star, circle_pairs, circle_pairs_apart, cubic_circle, cubic_fan, diagonals, fan_along_a_line,
+        grid_of_squares, groups_of_loops, jittered_pencil, jittered_pies, mesh, nearly_parallel_lines, polygons_a_few_tolerances_apart,
+        polygons_an_ulp_apart, polyline, rect, rings, row_of_lenses, s_strokes, stacked_arcs, stacked_pies, stacked_polygons, stacked_segments, star,
+        wheel, windows_sharing_a_tenth,
     };
     use crate::{FillRule, Limits, with_limits};
 
@@ -652,13 +868,14 @@ mod tests {
     /// The terms of the work are charged by their weights.
     #[test]
     fn the_work_is_the_sum_of_its_terms_at_their_weights() {
-        let c = Counts { pieces: 3, curved: 5, scan: 11_000, tangle: 7_000, groups: 13_000, batch: 17, pairs: 19, ..Counts::default() };
+        let c = Counts { pieces: 3, curved: 5, scan: 11_000, tangle: 7_000, groups: 13_000, batch: 17, pairs: 19, compared: 23, ..Counts::default() };
         let time = 3 * PIECE_WORK
             + 5 * CURVED_WORK
             + 11_000 * SCAN_PICOS / 1000
             + 7_000 * TANGLE_PICOS / 1000
             + 13_000 * GROUP_PICOS / 1000
-            + 17 * BATCH_WORK;
+            + 17 * BATCH_WORK
+            + 23 * COMPARE_NODE_WORK;
         assert_eq!(c.time(), time);
         assert_eq!(c.memory(), 3 * PIECE_MEMORY + 19 * CACHE_MEMORY);
         assert_eq!(c.work(), time.max(3 * PIECE_MEMORY + 19 * CACHE_MEMORY).max(19 * PAIR_WORK));
@@ -676,7 +893,10 @@ mod tests {
         assert_eq!(both.work(), both.memory());
         assert_eq!(both.memory(), 1_000_000 * PIECE_MEMORY + 3_000_000 * CACHE_MEMORY);
         assert!(both.memory() > 3_000_000 * PAIR_WORK);
-        assert_eq!(Counts { pieces: u64::MAX, curved: u64::MAX, pairs: u64::MAX, ..Counts::default() }.work(), u64::MAX);
+        assert_eq!(Counts { pieces: u64::MAX, curved: u64::MAX, pairs: u64::MAX, compared: u64::MAX, ..Counts::default() }.work(), u64::MAX);
+        // Steps of comparisons that are many are held by the time they take.
+        let steps = Counts { compared: 1_000_000, ..Counts::default() };
+        assert_eq!(steps.work(), 1_000_000 * COMPARE_NODE_WORK);
     }
 
     /// The budget admits 3.56 million pairs that start or end together and no more, whatever else the sweep holds, as the cache of
@@ -692,6 +912,257 @@ mod tests {
         // A pair is worth less in the sum with the pieces than alone, and more than the 650 bytes it holds: the 3 GB is 3.8 million.
         const { assert!(CACHE_MEMORY < PAIR_WORK) };
         assert!((3_700_000..=3_900_000).contains(&(budget / CACHE_MEMORY)));
+    }
+
+    /// The steps the comparisons of the pairs of circles that start together are charged before the sweep, and the dry sweep makes of them.
+    fn steps_charged_before_the_sweep(path: &BezPath) -> u64 {
+        let eps = eps_for([path]).expect("finite");
+        let segments = segments_of([path]).expect("segments");
+        let mut counts = Counts::default();
+        assert!(!Comparisons::new(&segments, eps).over_budget_at_one_height(&mut counts, u64::MAX));
+        counts.compared
+    }
+
+    /// Curves that run along one another are charged by the steps of the comparison of them: the same for each pair at chained sizes (twice the
+    /// pairs, twice the steps), and more the closer they run, by the cube root of the gap.
+    #[test]
+    fn curves_that_run_along_one_another_are_charged_by_the_steps_of_their_comparison() {
+        let charged = |n: usize, r: f64, d: f64| steps_charged_before_the_sweep(&circle_pairs(n, r, d));
+        let sizes = [64usize, 128, 256, 512, 1_024];
+        let steps: Vec<u64> = sizes.iter().map(|&n| charged(n, 1e6, 0.03)).collect();
+        for (w, n) in steps.windows(2).zip(sizes.windows(2)) {
+            let ratio = w[1] as f64 / w[0] as f64;
+            assert!((1.95..=2.05).contains(&ratio), "{} pairs to {}: {ratio:.3} times the steps ({steps:?})", n[0], n[1]);
+        }
+        // A pair of circles of a million 0.03 apart takes the sweep about 7,900 steps (503,000 counted in the sweep for 64 pairs), and the count says
+        // 7,924: within a twentieth.
+        let each = steps[0] as f64 / sizes[0] as f64;
+        assert!((7_500.0..=8_300.0).contains(&each), "{each:.0} steps for each pair");
+        // The cube root: a hundred times the gap, a fifth of the steps (4.64), a thousand times a tenth.
+        let (close, far, farther) = (charged(64, 1e5, 0.003), charged(64, 1e5, 0.3), charged(64, 1e5, 3.0));
+        let (r1, r2) = (close as f64 / far as f64, far as f64 / farther as f64);
+        assert!((4.0..=5.2).contains(&r1), "a hundred times the gap: {r1:.2} times the steps ({close}, {far})");
+        assert!((1.9..=2.4).contains(&r2), "ten times the gap: {r2:.2} times the steps ({far}, {farther})");
+        // Pairs that are far apart take what a curved piece pays for, and nothing is charged.
+        assert_eq!(charged(64, 1e5, 1e5), 0);
+        // Lines, however close they run, take no steps (the comparison of two lines is a formula).
+        let lines = nearly_parallel_lines(60, 1e8, 1.6, true, true);
+        assert_eq!(steps_charged_before_the_sweep(&lines), 0);
+    }
+
+    /// The third difference of a segment is the greater of those of its control points over the two axes (the way off a quadratic a cubic is), and
+    /// a line has none.
+    #[test]
+    fn the_third_difference_is_the_greater_over_the_two_axes() {
+        let cubic = |p: [(f64, f64); 4]| {
+            Segment::from_kurbo_cubic(kurbo::CubicBez::new(
+                Point::new(p[0].0, p[0].1),
+                Point::new(p[1].0, p[1].1),
+                Point::new(p[2].0, p[2].1),
+                Point::new(p[3].0, p[3].1),
+            ))
+        };
+        // x: 3 - 3(-2) + 3(7) - 0 = 30; y: 10 - 3(4) + 3(1) - 0 = 1 (and the sign does not matter).
+        assert_eq!(third_difference(&cubic([(0.0, 0.0), (7.0, 1.0), (-2.0, 4.0), (3.0, 10.0)])), 30.0);
+        assert_eq!(third_difference(&cubic([(3.0, 0.0), (-2.0, 1.0), (7.0, 4.0), (0.0, 10.0)])), 30.0);
+        // y: 10 - 0 + 0 - 0 = 10; x: 3 - 6 + 3 - 0 = 0.
+        assert_eq!(third_difference(&cubic([(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 10.0)])), 10.0);
+        // y: 10 - 3(10) + 3(10) - 0 = 10 beats x: 3 - 3(2) + 3(1) - 0 = 0.
+        assert_eq!(third_difference(&cubic([(0.0, 0.0), (1.0, 10.0), (2.0, 10.0), (3.0, 10.0)])), 10.0);
+        // y: 8 - 3(4) + 3(1) - 0 = -1 (a negative third difference counts by its size) and x: 9 - 3(9) + 3(5) - 2 = -5.
+        assert_eq!(third_difference(&cubic([(2.0, 0.0), (5.0, 1.0), (9.0, 4.0), (9.0, 8.0)])), 5.0);
+        // A line, and a cubic that is one, have none.
+        assert_eq!(third_difference(&Segment::from_kurbo_cubic(kurbo::CubicBez::new((0.0, 0.0), (1.0, 1.0), (2.0, 2.0), (3.0, 3.0)))), 0.0);
+        let level = Segment::from_kurbo_cubic(kurbo::CubicBez::new((0.0, 5.0), (1.0, 6.0), (9.0, 6.0), (3.0, 5.0)));
+        assert!(level.is_line());
+        assert_eq!(third_difference(&level), 0.0);
+    }
+
+    /// A pair whose third differences cannot make it more steps than a curved piece is paid for (6) is passed at once: seven times the cube root of
+    /// the sum of the third differences over the tolerance, as a whole number of steps, must be more than 6.
+    #[test]
+    fn a_pair_that_cannot_pass_what_a_piece_is_paid_for_is_passed_at_once() {
+        // A cubic whose third difference is `third` along x (its y is evenly spaced, so none along y).
+        let cubic = |third: f64| Segment::from_kurbo_cubic(kurbo::CubicBez::new((0.0, 0.0), (0.0, 1.0), (0.0, 2.0), (third, 3.0)));
+        let level = || Segment::from_kurbo_cubic(kurbo::CubicBez::new((0.0, 5.0), (1.0, 6.0), (9.0, 6.0), (3.0, 5.0)));
+        let passes = |a: f64, b: f64, eps: f64| may_take_more_than_is_paid(&cubic(a), &if b == 0.0 { level() } else { cubic(b) }, eps);
+        assert_eq!(FREE_NODES, 6);
+        // 7 * cbrt(0.4) = 5.2 steps: passed.
+        assert!(!passes(0.8, 0.0, 2.0));
+        // 7 * cbrt(0.85) = 6.6, which is 6 whole steps: passed, and 7 * cbrt(1.1) = 7.2, which is 7: not.
+        assert!(!passes(1.7, 0.0, 2.0));
+        assert!(passes(2.2, 0.0, 2.0));
+        // The two curves' third differences add: 1.1 and 1.1 are 2.2.
+        assert!(passes(1.1, 1.1, 2.0));
+        assert!(passes(0.0001, 2.2, 2.0));
+        // A tolerance a tenth the size is ten times the ratio.
+        assert!(passes(0.8, 0.0, 0.2));
+    }
+
+    /// The pairs a curved piece pays for (curves of ordinary size, whose steps cannot pass what the piece is paid) are charged nothing, and kept
+    /// nowhere: the set the dry sweep holds is of the pairs that may be charged.
+    #[test]
+    fn pairs_a_curved_piece_pays_for_are_not_kept() {
+        let path = closed(&cubic_circle(4_000, 100.0, 0.0, 0.0));
+        let eps = eps_for([&path]).expect("finite");
+        let segments = segments_of([&path]).expect("segments");
+        let mut compared = Comparisons::new(&segments, eps);
+        let ids: Vec<SegIdx> = segments.entrances().iter().map(|e| e.1).chain(segments.exits().iter().map(|e| e.1)).collect();
+        assert!(ids.len() > 100);
+        for w in ids.windows(2) {
+            if let [a, b] = *w {
+                assert_eq!(compared.charge(a, b), 0);
+            }
+        }
+        assert!(compared.seen.is_empty(), "{} pairs kept", compared.seen.len());
+        // The pairs of circles that run along one another are.
+        let path = circle_pairs(4, 1e6, 0.03);
+        let eps = eps_for([&path]).expect("finite");
+        let segments = segments_of([&path]).expect("segments");
+        let mut compared = Comparisons::new(&segments, eps);
+        let mut counts = Counts::default();
+        assert!(!compared.over_budget_at_one_height(&mut counts, u64::MAX));
+        assert!(counts.compared > 0 && !compared.seen.is_empty());
+    }
+
+    /// A pair of curves that cross, or touch, is charged by the gap that is typical of it (the median of five), not by the nearest, which is the
+    /// tolerance where they meet: 64 pairs of circles that overlap by half their width, or touch, are a few steps for each pair, where the tolerance
+    /// as the gap would charge thousands.
+    #[test]
+    fn curves_that_cross_are_charged_by_the_typical_gap_and_not_the_nearest() {
+        let crossing = steps_charged_before_the_sweep(&circle_pairs(64, 1e5, 5e4));
+        assert!(crossing < 64 * 20, "{crossing} steps for 64 pairs of circles that cross");
+        let touching = steps_charged_before_the_sweep(&circle_pairs(64, 1e5, 2e5));
+        assert!(touching < 64 * 20, "{touching} steps for 64 pairs of tangent circles");
+    }
+
+    /// The budget holds the steps charged before the sweep as exactly as it holds the rest: a budget of the work they come to lets the sweep start,
+    /// and one less refuses it before the first step.
+    #[test]
+    fn the_steps_charged_before_the_sweep_are_held_to_the_budget_exactly() {
+        let path = circle_pairs(32, 1e6, 0.03);
+        let eps = eps_for([&path]).expect("finite");
+        let segments = segments_of([&path]).expect("segments");
+        let (groups, batch, pairs) = static_counts(&segments, eps);
+        let mut counts = Counts { groups, batch, pairs, ..Counts::default() };
+        assert!(!Comparisons::new(&segments, eps).over_budget_at_one_height(&mut counts, u64::MAX));
+        let at = counts.work();
+        assert!(counts.compared > 0);
+        let again = |budget: u64| {
+            let mut counts = Counts { groups, batch, pairs, ..Counts::default() };
+            (Comparisons::new(&segments, eps).over_budget_at_one_height(&mut counts, budget), counts)
+        };
+        assert!(!again(at).0, "the work they come to is admitted");
+        let (over, stopped) = again(at - 1);
+        assert!(over, "one less is refused");
+        assert!(stopped.work() > at - 1 && stopped.work() <= at);
+        // And a tenth of it stops long before the last pair.
+        let (over, early) = again(at / 10);
+        assert!(over && early.compared < counts.compared / 5, "stopped at {} of {} steps", early.compared, counts.compared);
+        // Through the sweep, as for the pieces: the whole of the sweep's work is admitted at the work it counts and refused by one less.
+        let full = dry_sweep(&segments, eps, u64::MAX).expect("no budget");
+        assert_eq!(dry_sweep(&segments, eps, full.work()), Ok(full));
+        assert!(dry_sweep(&segments, eps, full.work() - 1).is_err());
+    }
+
+    /// The comparisons are charged once for each pair, whether the pair is met among the segments that start together, in the ranges of the
+    /// sweep, or in both: the sweep keeps the order of a pair it has compared.
+    #[test]
+    fn a_pair_is_charged_once_wherever_it_is_met() {
+        let path = circle_pairs(8, 1e6, 0.03);
+        let eps = eps_for([&path]).expect("finite");
+        let segments = segments_of([&path]).expect("segments");
+        let before = steps_charged_before_the_sweep(&path);
+        assert!(before > 0);
+        let full = dry_sweep(&segments, eps, u64::MAX).expect("no budget");
+        // The pairs the ranges add to those next to one another at their start are few: the same steps, and not twice.
+        assert!(full.compared >= before && (full.compared as f64) < 1.1 * before as f64, "{} against {before} before the sweep", full.compared);
+        // Seen twice, the pair is charged the once.
+        let mut seen = Comparisons::new(&segments, eps);
+        let first = segments.entrances().first().expect("an entrance").1;
+        let other = segments.entrances().iter().map(|e| e.1).find(|&i| i != first).expect("another");
+        let _ = seen.charge(first, other);
+        assert_eq!(seen.charge(first, other), 0);
+        assert_eq!(seen.charge(other, first), 0);
+    }
+
+    /// A copy that starts a little higher or lower than the one it runs along is compared with it as one that starts together with it is: the
+    /// pair is met in the sweep, where the new curve is at the edge of its range and its neighbour on the line is not in it, and the steps
+    /// are those of the same pair moved to start together (within a tenth), which the count before the sweep alone does not see.
+    #[test]
+    fn a_copy_that_starts_at_another_height_is_charged_as_one_that_starts_together_is() {
+        let steps = |path: &BezPath| {
+            let eps = eps_for([path]).expect("finite");
+            dry_sweep(&segments_of([path]).expect("segments"), eps, u64::MAX).expect("no budget").compared
+        };
+        let together = steps(&circle_pairs(8, 1e6, 0.03));
+        assert!(together > 0);
+        for dy in [3e-5, 3e-4, 3e-3, 0.03] {
+            let apart = circle_pairs_apart(8, 1e6, 0.03, dy);
+            let (full, before) = (steps(&apart), steps_charged_before_the_sweep(&apart));
+            assert!((0.8 * together as f64..=1.3 * together as f64).contains(&(full as f64)), "dy {dy}: {full} steps against {together}");
+            assert!((before as f64) < 0.5 * full as f64, "dy {dy}: {before} before the sweep of {full}");
+        }
+    }
+
+    /// The place of a segment on the sweep line is found by where it lies across: for the segments that enter at each line of a few inputs,
+    /// the place is the one the line gives it, or none where the search is stopped (segments within two tolerances of one another, more than
+    /// `LINE_SCAN` of them, are not told apart) and for pairs of circles never none.
+    #[test]
+    fn the_place_of_a_segment_on_the_line_is_found_by_where_it_lies() {
+        let inputs = [
+            ("circles", circle_pairs_apart(6, 1e5, 0.03, 3e-4)),
+            ("star", star(61)),
+            ("rings", rings(12, 4.0)),
+            ("stacked arcs", stacked_arcs(30)),
+            ("row of lenses", row_of_lenses(20)),
+        ];
+        for (name, path) in inputs {
+            let path = closed(&path);
+            let eps = eps_for([&path]).expect("finite");
+            let segments = segments_of([&path]).expect("segments");
+            let mut sweeper = Sweeper::new(&segments, eps);
+            let (mut line_bufs, mut range_bufs) = (SweepLineBuffers::default(), SweepLineRangeBuffers::default());
+            let (mut found, mut none) = (0usize, 0usize);
+            while let Some(mut line) = sweeper.next_line(&mut line_bufs) {
+                while let Some(range) = line.next_range(&mut range_bufs, &segments) {
+                    for s in range.segment_range() {
+                        match line_position(range.line(), s, eps) {
+                            Some(i) => {
+                                assert_eq!(range.line().line_segment(i), Some(s), "{name}: the place of a segment");
+                                found += 1;
+                            }
+                            None => none += 1,
+                        }
+                    }
+                }
+            }
+            assert!(found > 0, "{name}");
+            if name == "circles" || name == "star" {
+                assert_eq!(none, 0, "{name}: {none} of {} not placed", found + none);
+            }
+        }
+    }
+
+    /// The pairs of circles of a million in radius, the second of each 0.03 from the first, took the sweep 17.5 s for 2,048 pairs and 50 s
+    /// for the 6,000 the map admits, which no count of pieces or of ends at one place had seen (the star of 1,291 points takes 4): they are
+    /// refused before the sweep, by the steps of the comparisons of the pairs that start together, and a budget that is a time of 1 s
+    /// refuses the 512 pairs that take the sweep 2.3 s.
+    #[test]
+    fn pairs_of_circles_that_take_the_sweep_a_minute_are_refused_before_it() {
+        for n in [2_048, 6_000] {
+            let path = circle_pairs(n, 1e6, 0.03);
+            let eps = eps_for([&path]).expect("finite");
+            let segments = segments_of([&path]).expect("segments");
+            let refused = dry_sweep(&segments, eps, limits().sweep_work as u64).expect_err("a sweep of seventeen seconds or more");
+            assert_eq!(refused.steps, 0, "{n} pairs: refused before the first step");
+            assert!(refused.compared > 0 && refused.work() > limits().sweep_work as u64);
+            assert_eq!(within([&path], eps), Err(PathOpsError::TooComplex), "{n} pairs");
+        }
+        let path = circle_pairs(512, 1e6, 0.03);
+        let eps = eps_for([&path]).expect("finite");
+        let one_second = Limits { sweep_work: 1_000_000_000, ..Limits::default() };
+        assert_eq!(with_limits(one_second, || within([&path], eps)), Err(PathOpsError::TooComplex));
     }
 
     /// The pairs of `points` that lie within `cell` of one another across and up, counted one at a time.

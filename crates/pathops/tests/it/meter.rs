@@ -15,8 +15,9 @@ use craft_pathops::*;
 use kurbo::BezPath;
 
 use crate::common::{
-    arc_fan, arc_windows, cubic_circle, cubic_fan, fan_along_a_line, jittered_pencil, jittered_pies, nearly_parallel_lines,
-    polygons_a_few_tolerances_apart, polygons_an_ulp_apart, stacked_pies, stacked_polygons, stacked_segments, windows_sharing_a_tenth,
+    arc_fan, arc_windows, circle_pairs, circle_pairs_apart, cubic_circle, cubic_fan, fan_along_a_line, jittered_pencil, jittered_pies,
+    nearly_parallel_lines, polygons_a_few_tolerances_apart, polygons_an_ulp_apart, stacked_pies, stacked_polygons, stacked_segments,
+    windows_sharing_a_tenth,
 };
 
 const NZ: FillRule = FillRule::NonZero;
@@ -114,6 +115,30 @@ fn windows_that_share_a_tenth_of_an_arc_are_refused_by_the_meter_alone() {
 }
 
 /// What the meter refuses is refused by every operation that sweeps, as the pricing's refusals are.
+/// Pairs of circles, the second of each pair a few hundredths from the first (the copy of a shape moved a little, a shadow, an offset): the
+/// sweep compares the cubics of a pair by halving the stretch of height it looks at until the bounds of the gap between them are tighter
+/// than the tolerance, which at a gap of 3 parts in a hundred million of the size takes 8,000 steps for each pair. No count of pieces, of
+/// ends at one place or of crossings saw it: 2,048 pairs of a million in radius took 17.5 s, and the 6,000 the map admits 49 to 54 s and 1.6 GB.
+#[test]
+fn pairs_of_circles_that_run_along_one_another_are_refused_by_the_meter_alone() {
+    for (n, r, d) in [(1_024, 1e6, 0.03), (2_048, 1e6, 0.03), (6_000, 1e6, 0.03), (1_024, 1e5, 0.003), (6_000, 1e5, 0.3), (6_000, 1e6, 3.0)] {
+        refused_by_the_meter(&circle_pairs(n, r, d), &format!("{n} pairs of circles of {r}, {d} apart"));
+    }
+}
+
+/// The same pairs with the second circle of each a little higher than the first, so that the two start at different heights and the sweep meets each
+/// pair as the new curve comes in beside the old (not among the segments that start together): the dry sweep refuses them as it goes, in about the time
+/// of its budget at the most.
+#[cfg_attr(debug_assertions, ignore = "seconds: run with cargo test --release")]
+#[test]
+fn pairs_of_circles_that_start_at_different_heights_are_refused_by_the_meter_alone() {
+    for (n, r, dx, dy) in
+        [(1_024, 1e6, 0.03, 3e-4), (2_048, 1e6, 0.03, 3e-4), (2_048, 1e6, 0.03, 0.03), (6_000, 1e6, 0.03, 1.0), (6_000, 1e5, 0.003, 1e-3)]
+    {
+        refused_by_the_meter(&circle_pairs_apart(n, r, dx, dy), &format!("{n} pairs of circles of {r}, {dx} across and {dy} up"));
+    }
+}
+
 #[test]
 fn every_operation_that_sweeps_is_refused_by_the_meter() {
     let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
@@ -179,7 +204,16 @@ fn memory_cases() -> Vec<(&'static str, BezPath)> {
         ("2,250 pies of 30 slices", stacked_pies(2_250, 30)),
         ("5,000 pies of 20 slices", stacked_pies(5_000, 20)),
         ("6,000 pies of 20 slices", stacked_pies(6_000, 20)),
+        // The sweep of these took 49 to 54 s and 1.6 GB: the meter refuses them from the pairs that start together, before it sweeps.
+        ("6,000 pairs of circles of a million, 0.03 apart", circle_pairs(6_000, 1e6, 0.03)),
+        ("2,048 pairs of circles of a million, 0.03 apart", circle_pairs(2_048, 1e6, 0.03)),
     ]
+}
+
+/// The cases a child process runs under the same limit that the dry sweep refuses, after about 4 s, and not before it: 2,048 pairs of circles of a
+/// million, the second 0.03 across and 3e-4 up.
+fn slow_memory_cases() -> Vec<(&'static str, BezPath)> {
+    vec![("2,048 pairs of circles of a million, 0.03 across and 3e-4 up", circle_pairs_apart(2_048, 1e6, 0.03, 3e-4))]
 }
 
 /// The cases a child process makes under the same limit: the most the meter admits of the pies that fill the cache.
@@ -192,7 +226,8 @@ fn admitted_memory_cases() -> Vec<(&'static str, BezPath)> {
 #[test]
 fn child_case() {
     let Ok(name) = std::env::var("PATHOPS_METER_CASE") else { return };
-    let (_, path) = memory_cases().into_iter().chain(admitted_memory_cases()).find(|(n, _)| *n == name).expect("a case of the list");
+    let (_, path) =
+        memory_cases().into_iter().chain(slow_memory_cases()).chain(admitted_memory_cases()).find(|(n, _)| *n == name).expect("a case of the list");
     let result = with_limits(pricing_off(), || try_area(&path, NZ).map(|_| ()));
     println!("CASE-RESULT {name}: {result:?}");
 }
@@ -205,6 +240,18 @@ fn child_case() {
 fn a_refusal_holds_memory_under_a_limit_of_three_gigabytes() {
     let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
     for (name, _) in memory_cases() {
+        let text = run_child_under_the_limit(name);
+        assert!(text.contains(&format!("CASE-RESULT {name}: Err(TooComplex)")), "{name}: {text}");
+    }
+}
+
+/// [`a_refusal_holds_memory_under_a_limit_of_three_gigabytes`] for the case the dry sweep refuses as it goes (seconds, so a release build only).
+#[cfg(target_os = "linux")]
+#[cfg_attr(debug_assertions, ignore = "seconds: run with cargo test --release")]
+#[test]
+fn a_refusal_in_the_dry_sweep_holds_memory_under_a_limit_of_three_gigabytes() {
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    for (name, _) in slow_memory_cases() {
         let text = run_child_under_the_limit(name);
         assert!(text.contains(&format!("CASE-RESULT {name}: Err(TooComplex)")), "{name}: {text}");
     }
@@ -240,7 +287,8 @@ fn an_admission_holds_memory_under_a_limit_of_three_gigabytes() {
 }
 
 /// The inputs that must be made: rings, S-strokes, a hatch of 400, a circle of 100,000 cubics at 0, 1e9 and 1e12, 250 and 1,000 bars on one
-/// baseline, meshes of 140 and 170 cells a side, grids of squares of 200 and 250, 2,000 pies of 30 slices, and the star of 1,291 points.
+/// baseline, meshes of 140 and 170 cells a side, grids of squares of 200 and 250, 2,000 pies of 30 slices, the star of 1,291 points, and pairs
+/// of circles that run along one another, 512 of 1e6 and 2,048 of 1e5.
 /// Seconds and up to 2.3 GB: in a release build only.
 #[cfg_attr(debug_assertions, ignore = "seconds and gigabytes: run with cargo test --release")]
 #[test]
@@ -254,6 +302,9 @@ fn the_false_refusal_set_is_admitted() {
         ("a circle of 100,000 cubics at 1e12", cubic_circle(100_000, 1_000.0, 1e12, 1e12)),
         ("2,000 pies of 30 slices", pies_of(2_000, 30)),
         ("a polygon of 262,000 sides", polygon_path(&many_sided(262_000))),
+        // Curves that run along one another, as many as the budget admits: it takes the sweep about as long as the star.
+        ("512 pairs of circles of a million, 0.03 apart", circle_pairs(512, 1e6, 0.03)),
+        ("2,048 pairs of circles of 1e5, 3 apart", circle_pairs(2_048, 1e5, 3.0)),
     ];
     for (name, path) in cases {
         let start = Instant::now();

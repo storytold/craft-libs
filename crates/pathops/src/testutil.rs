@@ -571,6 +571,25 @@ pub(crate) fn cubic_circle(n: usize, r: f64, cx: f64, cy: f64) -> BezPath {
     bp
 }
 
+/// `n` pairs of circles of radius `r`, each of four cubics, the second of each pair `d` to the right of the first: curves that run along one another,
+/// as the two copies of a shape do that are moved a little. The pairs lie in a square grid 4 radii apart, in one path.
+pub(crate) fn circle_pairs(n: usize, r: f64, d: f64) -> BezPath {
+    circle_pairs_apart(n, r, d, 0.0)
+}
+
+/// [`circle_pairs`] with the second circle of each pair `dx` to the right of the first and `dy` further along y: where `dy` is more than the tolerance of
+/// the sweep the two start at different heights, and the pairs are not found among the segments that start together.
+pub(crate) fn circle_pairs_apart(n: usize, r: f64, dx: f64, dy: f64) -> BezPath {
+    let side = (n as f64).sqrt().ceil() as usize;
+    let mut bp = BezPath::new();
+    for i in 0..n {
+        let (cx, cy) = ((i % side) as f64 * 4.0 * r, (i / side) as f64 * 4.0 * r);
+        bp.extend(cubic_circle(4, r, cx, cy));
+        bp.extend(cubic_circle(4, r, cx + dx, cy + dy));
+    }
+    bp
+}
+
 /// A path as the polygon of its flattening, to read the winding number of a point from, as an oracle for the winding of
 /// the curves: the crossings of a ray to the left with straight edges, found by none of the arithmetic of the cubics. It
 /// holds for a point farther from the path than the flattening's tolerance (and than the rounding of the crossing, which

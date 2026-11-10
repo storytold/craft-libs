@@ -449,7 +449,7 @@ filter (an input they refuse is refused in milliseconds, without sweeping); the 
   nanoseconds: a piece of the topology is 400 to 700 bytes, and is worth 1.8 microseconds, so that the budget is 2.3 million pieces, 0.9 to 1.6 GB: the star holds
   1.96 million and 0.9 GB, 50 stars stacked 2.3 million and 1.6 GB; and a pair of segments that start or end together, which the sweep's cache of comparisons
   holds, is worth 1.1 microseconds more, below). The time is a
-  sum of five terms, each priced for the kind of input that makes it large (weights fitted to about 180 inputs of 30 kinds):
+  sum of six terms, each priced for the kind of input that makes it large (weights fitted to about 180 inputs of 30 kinds, and the sixth to 38 more of five):
 
   | Term | Counted as | Weight | What makes it large |
   |---|---|---|---|
@@ -458,6 +458,7 @@ filter (an input they refuse is refused in milliseconds, without sweeping); the 
   | tangle | each piece times the square of its cluster: the most of the segments of its range that lie within 8 tolerances of one another across | 0.23 ns | pencils of lines, curves that run along one another, copies of a shape: where many segments lie within a few tolerances of each other the sweep takes time for every pair of them |
   | ends that start together | the fourth power of the segments that start, and of those that end, within 8 tolerances of one another in a grid (across and up, in four grids, each moved half a cell: a cluster of 4 tolerances lies in one cell of one of them) | 0.07 ns | stacks of copies, pies, fans: what the sweep does at a height it does in one step, which nothing counted as the sweep goes can stop in time (a stack of copies of one shape is a dozen steps and nine seconds), so these are counted from the segments before the sweep; copies a unit in the last place or a fraction of a tolerance apart start together as copies one on another do |
   | segments that start at one height | the square of those that start (and of those that end) at one height, wherever they are across | 3 ns | a row of dots on one line: their shapes put their pieces into the sweep line in one step |
+  | steps of comparisons | the steps the sweep takes to compare two curves that lie next to one another, beyond the 6 a curved piece has been paid for (estimated from the curves, below) | 575 ns | smooth shapes that run along one another a few hundredths apart (copies moved a little, shadows, offsets): a pair of circles of a million in radius 0.03 apart takes about 8,000 steps |
 
   The star of 1,291 points counts 3.8e9 (91% of the budget), a hatch of 400 and 400 strokes 3.1e9.
 - **The cache of comparisons.** `linesweeper` keeps the order of each pair of segments it compares in two tables that it never clears (`ComparisonCache` in its
@@ -476,6 +477,23 @@ filter (an input they refuse is refused in milliseconds, without sweeping); the 
   pairs, need 2.9 GB, and 530 of 60 and 190 of 100 need 2.9 GB, which is why the pairs have a limit of their own and not only their weight with the pieces'. The shapes that make entries
   by their crossings and not by their ends (a mesh, a grid of squares, rings: 4 to 11 for each piece, 1 or so for most shapes) make them in proportion to their pieces and are held by the
   piece's weight and by the counts of crossings (a mesh of 180 cells, the most the default limits admit, makes 2.1 million, in 1.3 GB).
+- **Curves that run along one another.** `linesweeper` compares two cubics once for each pair (it keeps the order in the cache above), by halving the stretch of height it
+  looks at until the error of its quadratic approximations is under the gap between them, so the steps of a comparison go with the cube root of the curves' third differences over the
+  gap: 320 for a circle of a million in radius against its copy 0.03 away, about 8,000 for a pair of such circles (four arcs each), at 0.56 microsecond a step (counted in an instrumented copy of the
+  sweep, which is not kept). No term above sees it: the boxes, the scan, the clusters and the ends at one place are the same at every offset. 2,048 pairs of circles of a million, the second 0.03 to the right, took
+  17.5 s (2.2 times the star of 1,291 points, which is 8 s with the meter on), and 6,000, the most a map admits, 49 to 54 s and 1.6 GB, before the meter priced the steps.
+  The meter prices them from the segments the sweep compares. For a pair of segments that are not both lines the steps are estimated as 7 times the cube root of the sum of the two curves'
+  greatest third differences (of the control points, over both axes) over the median of five gaps between them (taken across the height they share, and not less than a tolerance), times the share of the
+  taller one's height that they share; each step is worth 575 nanoseconds, and only the steps past the 6 that a curved piece is paid for already (4 microseconds) are charged, once for each pair. A pair whose third
+  differences cannot make it more than 6 steps is passed at once, without a look at where the curves lie and kept nowhere, so that a circle of 100,000 cubics, a stroke or a mesh of curves costs the dry sweep nothing more; an input of lines is not searched at all.
+  The pairs are those the sweep makes: the segments that start at one height (and those that end at one), each next to the one beside it across, are charged **before** the sweep (what the sweep does at one height it
+  does in one step, which nothing counted as it goes can stop: the 6,000 pairs are refused in 0.13 s without a step); and, as the dry sweep goes, the segments next to one another in each range of a sweep
+  line, and the neighbour on the line of a curve that enters at the edge of a range (a copy that starts a little higher or lower than the one it runs along is put in beside it, and the neighbour is not in the range: it is found by halving the line by where the curve lies across,
+  as the line is in order across). The work of the term against the time the sweep takes, over 38 inputs of five kinds (circles of 100,000 and 1,000,000 in radius, 0.003 to 3 apart, and 256 pairs up to 30,000 apart; ellipses of aspect 3 and 2, upright and turned; blobs of six smooth arcs, the copy moved in a
+  random direction; waves; lines and quadratics): 0.98 to 1.07 for circles (a pair 30,000 apart takes 17 ms, which is the other terms), 0.96 to 1.05 for ellipses upright and 1.08 to 1.20 turned half a radian, **2.0 to 2.6 for blobs** (priced too high: the gap along a curve moved sideways and up is not one gap, and the median reads
+  it high), and 0.45 to 0.9 for waves (priced too low; the 32 copies the counts before the sweep admit take 0.24 s to sweep, 0.78 s over a span of 1e7, and 40 are refused by them in 0.02 s). Lines and quadratics take no steps. Pairs of circles of a million in radius 0.03 apart: 512 are swept in 4.5 s and 1,024 and more are refused in 0.05 to 0.13 s; at
+  100,000 and 3 apart 2,048 are swept in 2.2 s, 0.3 apart 2,048 in 4.4 s, 0.03 apart 1,024 in 4.3 s, 0.003 apart 256 in 2.3 s, and the sizes past those are refused; 6,000 pairs of every kind measured are refused in 0.13 s or less. The second circle moved up by 3e-4 as well (so that the two start at different heights and
+  no count before the sweep sees the pair): 512 pairs are swept in 4.3 s, and 1,024 are refused by the dry sweep after 3.9 s. Circles that touch, cross or lie far apart are cheap (4,096 pairs a diameter apart, touching, take 0.7 s). Beside it the star takes 7.5 to 8.3 s, and the rows of the Costs table the same as before, within 3% (the star, a hatch of 400, 50 stars, 19 bowed stars, 2,000 pies, a mesh of 170, a circle of 100,000 cubics and 40,000 S-strokes, each twice, old and new back to back).
 - **The budget.** The work is held to `MAX_SWEEP_WORK` as it is counted: after each range of each sweep line the sweep stops, refusing the input
   as `TooComplex`, if the work counted so far is past it, so an input that is refused has cost about the budget of sweep at most. The counts made
   before the sweep refuse stacks of copies, fans and pies in 0.3 to 40 ms; the other holes were refused in 0.14 to 1.5 s, and in 3.8 to 5.1 s
@@ -487,13 +505,14 @@ filter (an input they refuse is refused in milliseconds, without sweeping); the 
   tenths of a second in the sweep: the worst of 22 shapes that cost most for their pieces (fans and stacks of copies, pies, pencils and zigzags of lines, stars whose every edge
   crosses every other, curves that run along one another), each at the largest size under the gate, takes 0.2 s or less in the sweep (a fan of 96 straight cubics) and up to 1.0 s in a planar map (a star of 92 bowed cubics), a test times them all. Past it every input
   pays for the dry sweep, which costs about as much as the sweep it guards: `try_area` with the meter on against off, back to back (a release build, best of two, the star of 1,291 points 4.6 s and 9.1 s; a hatch of 400 strokes each way 3.1 and 5.8 s; 15,000 rings 1.5 and 2.4 s; 40,000 S-strokes 1.2 and 1.6 s; a circle of 100,000 cubics 0.37 and 0.49 s; a polygon of 262,000 sides 0.85 and 1.1 s; a mesh of 170 by 170 cells 2.3 and 4.2 s; 2,000 pies of 30 slices 4.2 and 7.8 s) is 1.2 to 2.0 times the time (1.1 to 2.2 in the recheck of the commit before this one, over the rows of the table of costs), in the same memory but for 4% more at the most (2,000 pies of 30 slices 2.35 and 2.45 GB). The counts before the sweep, for inputs of 250,000 segments, take 0.1 s of it.
-- **What it bounds.** The time of the sweep and, with the 1.8 microseconds a piece, the memory of the topology (the star holds 1.96 million pieces and 0.9 GB; 2.3 million
+- **What it bounds.** The time of the sweep (the comparisons of curves that run along one another included) and, with the 1.8 microseconds a piece, the memory of the topology (the star holds 1.96 million pieces and 0.9 GB; 2.3 million
   are the most that are admitted). The dry sweep's own memory is that of the sweep it is, up to 0.7 GB for the star and the zigzags at their refusal, and is freed before the
   operation sweeps (2,000 pies of 30 slices hold 2.4 GB in it, which the cache's term bounds). Every input a review found, and the two classes the scan named, are refused by the meter alone, with the other limits lifted (tests in `tests/it/meter.rs`;
   the table of costs gives the times).
 
 What it does not bound is in Known limits: a step of the sweep is not interrupted, the weights are a fit (near the budget the time is 0.4 to 1.4 of the work, and far under
-it for the kinds the memory and the stacks of copies are tuned to refuse), and the stages after the sweep.
+it for the kinds the memory and the stacks of copies are tuned to refuse), the steps of comparisons are an estimate from the curves (0.4 of the work for smooth shapes moved in a random
+direction, 1 for circles and ellipses, up to 2.2 for crossing waves, which the counts before the sweep refuse in numbers), and the stages after the sweep.
 
 ### Choosing the limits
 
@@ -722,12 +741,14 @@ or so, measured once in a release build:
   inset sees it.
 - The counts themselves are made before the sweep and cost time: up to 0.3 to 0.5 s on an input of 250,000
   segments (they are a few sweeps of the bounds), with 64,000 dots as separate inputs the most.
-- Circles a few hundredths apart: 2,048 pairs of circles of radius 1,000,000 (four arcs each), the second of a pair 0.03 to the right of the
-  first, are swept in 18.4 s by `unite_all` and mapped in 17.5 s by `live_paint` (2,387 faces), 2.2 to 2.4 times the star of
-  1,291 points beside them (7.7 to 8.0 s, on a loaded machine), in 0.47 GB; the most a map admits, 6,000 pairs (6,942 faces), takes 49 to 54 s,
-  6.4 to 6.9 times the star, in 1.6 GB (4,096 pairs: 34 s). The time is the sweep's, not the search for a point inside each face (0.05 s of it): the
-  meter admits curves that run along one another for most of their length when they are this far apart. At radius 100,000 the same
-  pairs take 8.8 s for 2,048 (1.1 times the star).
+- Curves that run along one another (pairs of circles of a million in radius, four arcs each, the second 0.03 to the right of the first, were here: 2,048 pairs took 17.5 s and 6,000
+  49 to 54 s, 2.2 and 6.4 to 6.9 times the star) are priced by the meter from an estimate of the steps of the sweep's comparisons (the units above), and the estimate is loose. It is 2.0 to 2.6 times
+  too high for blobs of six smooth arcs, the second of a pair moved in a random direction (512 pairs 0.003 apart are made, and 1,024, which take 6.2 s beside the star's 7.7, are refused; 1,024 pairs 0.03 apart are made, and 2,048, which take 6.3 s, are refused: a false refusal of an input under the star's time, which a weight that fits circles gives),
+  and 1.1 to 2.2 times too low for waves that cross (the sweep of the copies the counts before it admit takes under a second). It prices the pairs where the sweep makes them
+  next to one another: at one height, in a range, or beside a curve that enters at the edge of a range. A pair that becomes next to one another only when a curve between them ends is
+  not seen, and neither is one the search for a curve's place on the line (up to 32 places within two tolerances of it) does not find. The comparisons of one range of the sweep line are made
+  before the dry sweep counts them, as before, so a refusal in the dry sweep can pass the budget by the comparisons of one range (none of the measured families refused after more than 4 s of the budget's 4.2 s). The pairs that are charged
+  are kept in a set for the dry sweep (a pair is 16 bytes and a hash; as many as the sweep has pieces at the most).
 - A long, low union is admitted turned, as the same input stood on end is, which can take twice the star: three rows of a zigzag of 80,000
   cubics took 15.6 and 16.1 s beside the star's 7.6 and 7.7 s (64,000 cubics a row took 13.5 s beside 8.1); stood on end, the crate before the quarter
   turn took 16.2 and 16.0 s beside 7.5. The gap was there already; the turn reaches it from low art, which upright was refused in 0.28 s.
@@ -765,6 +786,7 @@ a load of 15, it took 10.7 and 5.9 s.
 | `try_area` of 450 lines through one point at angles under 1e-10 (2e7 to 1e10 long, their ends 1.6 to 10 tolerances apart; counted as no crossing at all before) / of 2,040 nearly parallel lines that cross along their length (2.08 million crossings) | refused in 6 ms (31 to 41 s before the limit) / in 50 ms (14 to 21 s before) |
 | `try_area` of a bundle of 450 / 2,040 nearly parallel lines that cross nowhere | 2 / 10 ms, as before |
 | `try_area` of a circle of 100,000 cubics, radius 1,000, at the origin / at (1e12, 1e12) | 0.5 s / 0.56 s |
+| `try_area` of 512 / 1,024 / 2,048 / 6,000 pairs of circles of a million in radius, the second of a pair 0.03 to the right (four arcs a circle: curves that run along one another) | 4.5 s / refused in 0.05 s / in 0.1 s / in 0.13 s (9.2 / 17.5 / about 50 s before the steps of their comparisons were counted, the star beside them 8 s) |
 | `try_area` of 256 straight cubics from one point down a diagonal (each closed by a line back: 512 segments on one line) / of 256 pieces of one arc from its start / of 256 windows of one arc that share no end | refused in 2 / 17 / 7 ms (they took 7.8 / 7.2 / 7.3 s, beside the star of 1,291 points at 5.3 / 5.7 / 5.9) |
 | `try_area` of 100 / 128 straight cubics down a diagonal, 150 pieces of an arc from its start, 160 windows of an arc | 0.27 / 0.83 / 0.78 / 0.94 s |
 | `try_area` of 300 lines through a point, each moved sideways by up to 10 / 40 tolerances | refused in 3 ms (2.6 GB and aborting under a limit of 3 GB / 0.6 s and 0.4 GB) |

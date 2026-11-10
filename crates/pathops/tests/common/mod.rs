@@ -424,6 +424,25 @@ pub fn cubic_circle(n: usize, r: f64, cx: f64, cy: f64) -> BezPath {
     bp
 }
 
+/// `n` pairs of circles of radius `r`, each of four cubics, the second of each pair `d` to the right of the first: curves that run along one another,
+/// as the two copies of a shape do that are moved a little. The pairs lie in a square grid 4 radii apart, in one path.
+pub fn circle_pairs(n: usize, r: f64, d: f64) -> BezPath {
+    circle_pairs_apart(n, r, d, 0.0)
+}
+
+/// [`circle_pairs`] with the second circle of each pair `dx` to the right of the first and `dy` further along y: where `dy` is more than the tolerance of
+/// the sweep the two start at different heights, and the pairs are not found among the segments that start together.
+pub fn circle_pairs_apart(n: usize, r: f64, dx: f64, dy: f64) -> BezPath {
+    let side = (n as f64).sqrt().ceil() as usize;
+    let mut bp = BezPath::new();
+    for i in 0..n {
+        let (cx, cy) = ((i % side) as f64 * 4.0 * r, (i / side) as f64 * 4.0 * r);
+        bp.extend(cubic_circle(4, r, cx, cy));
+        bp.extend(cubic_circle(4, r, cx + dx, cy + dy));
+    }
+    bp
+}
+
 /// `n` segments from the point (0, 0) along one line, the k-th to `(k, k)` (kind 0, the diagonal), `(0, k)` (kind 1, the vertical)
 /// or `(k, 0)` (any other, level), each its own open subpath: lengths 1 to `n`, and every two share their start and overlap.
 pub fn fan_along_a_line(n: usize, kind: usize) -> BezPath {
