@@ -77,14 +77,7 @@ impl Decoder {
     /// length. `None` when the packet does not start with an audio element or its header is cut
     /// short or out of range.
     pub fn packet_frames(&self, packet: &[u8]) -> Option<usize> {
-        let mut r = BitReader::new(packet);
-        if !matches!(r.read(3).ok()?, ID_SCE | ID_LFE | ID_CPE) {
-            return None;
-        }
-        let _instance_and_unused = r.read(16).ok()?;
-        let flags = r.read(4).ok()?;
-        let frames = if flags & 0b1000 != 0 { r.read(32).ok()? } else { self.config.frame_length };
-        (frames <= self.config.frame_length).then_some(frames as usize)
+        header_frames(packet, u64::from(self.config.frame_length)).map(|n| n as usize)
     }
 
     /// Decode one packet into one `Vec` per channel, in ALAC channel order. Channels the packet
@@ -271,6 +264,18 @@ fn data_stream_element(r: &mut BitReader) -> Result<()> {
         r.byte_align();
     }
     r.skip(count * 8)
+}
+
+/// [`Decoder::packet_frames`] for a stream of `frame_length` frames a packet.
+pub(crate) fn header_frames(packet: &[u8], frame_length: u64) -> Option<u64> {
+    let mut r = BitReader::new(packet);
+    if !matches!(r.read(3).ok()?, ID_SCE | ID_LFE | ID_CPE) {
+        return None;
+    }
+    let _instance_and_unused = r.read(16).ok()?;
+    let flags = r.read(4).ok()?;
+    let frames = if flags & 0b1000 != 0 { u64::from(r.read(32).ok()?) } else { frame_length };
+    (frames <= frame_length).then_some(frames)
 }
 
 #[cfg(test)]

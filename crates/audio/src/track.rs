@@ -35,6 +35,10 @@ enum Inner {
     },
 }
 
+/// Reads the frames a packet holds from its data, given the frames of a full packet.
+#[cfg(feature = "decode-native")]
+pub(crate) type PacketFrames = fn(&[u8], u64) -> Option<u64>;
+
 /// Decodes the packets of one audio track to planar `f32`, in WAV channel order when
 /// [`TrackDecoder::layout`] is ordered.
 ///
@@ -303,6 +307,17 @@ impl TrackDecoder {
             #[cfg(feature = "alac-decode")]
             Inner::Alac { dec, .. } => Some(dec.config().frame_length as usize),
             _ => self.frames_per_packet(),
+        }
+    }
+
+    /// How many frames a packet holds, read from the packet alone, for codecs whose packets
+    /// say: ALAC's headers (given the frame length).
+    #[cfg(feature = "decode-native")]
+    pub(crate) fn packet_frames_reader(&self) -> Option<PacketFrames> {
+        match &self.inner {
+            #[cfg(feature = "alac-decode")]
+            Inner::Alac { .. } => Some(crate::alac::header_frames),
+            _ => None,
         }
     }
 

@@ -40,6 +40,8 @@ mod matrix;
 
 #[cfg(feature = "alac-decode")]
 pub use decoder::Decoder;
+#[cfg(feature = "decode-native")]
+pub(crate) use decoder::header_frames;
 #[cfg(feature = "alac-encode")]
 pub use encoder::{Encoder, EncoderConfig};
 

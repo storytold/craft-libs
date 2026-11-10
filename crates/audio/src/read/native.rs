@@ -154,10 +154,9 @@ impl Packets<'_> {
                         *pending = Some(p);
                         // Timestamps are rounded to the file's timestamp scale (often 1 ms), so the
                         // packet's index places it exactly where packets have a known length.
-                        let by_index = point.sample.and_then(|k| frames.start(k));
-                        Ok(by_index.unwrap_or_else(|| {
-                            rescale_round(u64::try_from(pts_ns.saturating_sub(*first_ns)).unwrap_or(0), 1_000_000_000, u64::from(*rate))
-                        }))
+                        let timed = rescale_round(u64::try_from(pts_ns.saturating_sub(*first_ns)).unwrap_or(0), 1_000_000_000, u64::from(*rate));
+                        let start = point.sample.and_then(|k| frames.start(k, timed, |i| demux.read_sample(*track, i).ok()));
+                        Ok(start.unwrap_or(timed))
                     }
                     Some(Err(e)) => Err(e),
                     None => Ok(frame),
@@ -169,8 +168,12 @@ impl Packets<'_> {
 
 /// How the decoded-timeline start of a Matroska packet is found from its index.
 enum MkvFrames {
-    /// Every packet decodes to this many frames.
-    Constant(u64),
+    /// Every packet decodes to `frames` frames, except where a packet's timestamp is more than
+    /// `slack` frames (the timestamps' rounding) from that place: after a short packet. Then the
+    /// packets before it are counted with `count` (reading each packet's frames from its header,
+    /// into `starts`, the starts of the packets counted so far), or without one the timestamp
+    /// places it.
+    Constant { frames: u64, slack: u64, count: Option<crate::track::PacketFrames>, starts: Vec<u64> },
     /// PCM: the stored sizes of the track's packets, and the bytes per frame.
     Pcm { sizes: Vec<u32>, frame_bytes: u64 },
     /// From the timestamps.
@@ -178,10 +181,23 @@ enum MkvFrames {
 }
 
 impl MkvFrames {
-    /// The decoded-timeline start of packet `k`, when the packets say.
-    fn start(&self, k: usize) -> Option<u64> {
+    /// The decoded-timeline start of packet `k`, when the packets say (`timed`: the start its
+    /// timestamp gives; `read`: packet `i`'s data).
+    fn start(&mut self, k: usize, timed: u64, mut read: impl FnMut(usize) -> Option<Vec<u8>>) -> Option<u64> {
         match self {
-            MkvFrames::Constant(n) => Some(k as u64 * *n),
+            MkvFrames::Constant { frames, slack, count, starts } => {
+                let even = (k as u64).saturating_mul(*frames);
+                if even.abs_diff(timed) <= *slack {
+                    return Some(even);
+                }
+                let count = (*count)?;
+                while starts.len() <= k {
+                    let last = starts.last().copied().unwrap_or(0);
+                    let n = read(starts.len() - 1).and_then(|p| count(&p, *frames)).unwrap_or(*frames);
+                    starts.push(last.saturating_add(n));
+                }
+                starts.get(k).copied()
+            }
             MkvFrames::Pcm { sizes, frame_bytes } => Some(sizes.iter().take(k).map(|&s| u64::from(s)).sum::<u64>() / *frame_bytes),
             MkvFrames::Timestamps => None,
         }
@@ -717,9 +733,12 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
     let rate = probe.sample_rate();
     // Packet starts come from the packets where they can: block timestamps are rounded (to
     // milliseconds by default). ALAC packets are all its frame length except the last, so every
-    // start is a multiple of it.
+    // start is a multiple of it, unless a short packet came earlier: then the timestamp is further
+    // from that multiple than its rounding allows, and the earlier packets' headers are counted.
+    let (num, den) = t.timebase;
+    let tick = rescale_round(num, den.max(1), u64::from(rate)).saturating_add(1);
     let frames_of = match (probe.full_packet_frames(), params.pcm) {
-        (Some(n), _) => MkvFrames::Constant(n as u64),
+        (Some(n), _) => MkvFrames::Constant { frames: n as u64, slack: tick, count: probe.packet_frames_reader(), starts: vec![0] },
         (None, Some(pcm)) => {
             let frame_bytes = u64::from(pcm.bits.div_ceil(8)) * u64::from(params.channels.unwrap_or(1).max(1));
             MkvFrames::Pcm { sizes: t.samples.iter().map(|s| s.size).collect(), frame_bytes: frame_bytes.max(1) }
@@ -734,7 +753,6 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
     // and the presentation starts `CodecDelay` later. Both are counted in timestamp ticks, the
     // delay rounded to one, so a file whose first frame is stored at 0 presents from exactly 0
     // although its timestamps are rounded (AAC's 1024-frame priming is 21.33 ms, stored as -21).
-    let (num, den) = t.timebase;
     let last = t.samples.iter().max_by_key(|s| s.pts);
     let delay_ticks = i64::try_from(rescale_round(t.codec_delay_ns.saturating_mul(den), num.saturating_mul(1_000_000_000), 1)).unwrap_or(i64::MAX);
     let start = t.samples.iter().map(|s| s.pts).min().unwrap_or(0).saturating_add(delay_ticks);
@@ -743,7 +761,7 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
             s.duration
         } else {
             // ffmpeg 6 writes AAC without block durations, and records the end in a tag.
-            let MkvFrames::Constant(n) = frames_of else { return None };
+            let MkvFrames::Constant { frames: n, .. } = frames_of else { return None };
             let packet = rescale_round(n.saturating_mul(den), u64::from(rate).saturating_mul(num), 1);
             tagged_last_duration(track_duration_tag(&file.tags, t.uid)?, s.pts, delay_ticks, packet, t.timebase)?
         };
@@ -1200,6 +1218,32 @@ mod adts_tests {
         assert_eq!((info.codec, buf.frames()), (crate::CodecId::Alac, 10_000));
         let mut d = Decoder::from_bytes(&file, Some("mka"), &DecodeOptions::default()).unwrap();
         for target in [5000u64, 4096, 8191, 9999] {
+            d.seek(target).unwrap();
+            let block = d.next_block().unwrap().unwrap();
+            assert_eq!((block.channels[0][0] * 32768.0).round() as i64, target as i64, "seek to {target}");
+        }
+    }
+
+    /// A short ALAC packet before the end moves every later packet: seeks after it still land on
+    /// the exact frame.
+    #[test]
+    fn alac_in_matroska_seeks_past_a_short_packet() {
+        use craft_media::matroska::{MkvWriter, MuxOptions, TrackKind, TrackSpec};
+        let frames: Vec<[i16; 2]> = (0..12_000).map(|i| [i as i16, -(i as i16)]).collect();
+        let mut spec = TrackSpec::new(TrackKind::Audio, "A_ALAC");
+        spec.codec_private = crate::alac::SpecificConfig::new(48_000, 2, 16, 4096).to_bytes();
+        spec.audio = Some((48_000.0, 2, Some(16)));
+        let mut m = MkvWriter::new(std::io::Cursor::new(Vec::new()), vec![spec], MuxOptions::default()).unwrap();
+        let mut start = 0;
+        for len in [4096, 1000, 4096, 2808] {
+            let chunk = &frames[start..start + len];
+            let pts_ns = start as i64 * 1_000_000_000 / 48_000;
+            m.write_frame(0, pts_ns, true, &alac_escaped_stereo(chunk, 4096), Some(len as u64 * 1_000_000_000 / 48_000)).unwrap();
+            start += len;
+        }
+        let file = m.finish().unwrap().into_inner();
+        let mut d = Decoder::from_bytes(&file, Some("mka"), &DecodeOptions::default()).unwrap();
+        for target in [6000u64, 5096, 9191, 11_999, 100] {
             d.seek(target).unwrap();
             let block = d.next_block().unwrap().unwrap();
             assert_eq!((block.channels[0][0] * 32768.0).round() as i64, target as i64, "seek to {target}");
