@@ -40,7 +40,8 @@ opens Windows printer preferences and submits jobs with copies, collation, duple
   `GetDefaultPrinter`. `printers` also reads each driver's PrintCapabilities to report two-sided
   support, which can wait on the device (a networked printer in power save); `printer_queues`
   lists the same queues without asking any driver, so a Print dialog's list never waits on a
-  device. A job asks the driver too before it is sent; `submit_cancellable` with a
+  device, and `two_sided(name)` asks the driver of just the printer picked. A job asks the
+  driver too before it is sent; `submit_cancellable` with a
   `Cancel` token lets the app stop a job still waiting on it, and a cancelled job is never
   sent. A job is drawn as vectors by the in-box `Windows.Data.Pdf` with Direct2D
   into the XPS print API (the `winprint` crate), and copies, collation, duplex, colour, paper,
@@ -68,8 +69,12 @@ opens Windows printer preferences and submits jobs with copies, collation, duple
   Parsing caps cumulative cross-reference/object-stream records at 500,000, decoded streams
   at 16 MiB each and 32 MiB per job, and parsed nodes/tokens at 250,000/16 MiB per job and
   32,000/1 MiB per object. Files exceeding these limits return a clear error.
-  Long-edge duplex is `TwoSidedLongEdge` and short-edge `TwoSidedShortEdge`; `duplex: None`
-  leaves duplex out of the ticket. Driver-specific defaults remain in Windows printer
+  Long-edge duplex is `TwoSidedLongEdge` and short-edge `TwoSidedShortEdge`.
+  Explicit bindings use `JobDuplexAllDocumentsContiguously` when it offers the requested standard option,
+  otherwise `DocumentDuplex` when that feature offers that exact binding. Discovery and selection
+  resolve option names against their in-scope namespaces, including the default namespace. Validation accepts either
+  scope and rejects missing, changed or conflicting bindings before submission.
+  `duplex: None` leaves duplex out of the ticket. Driver-specific defaults remain in Windows printer
   preferences (`rundll32 printui.dll`, the one process this crate starts, and only when asked).
 - **Browser/other targets:** discovery is empty and submission reports an unsupported
   platform; callers can offer PDF export instead.
@@ -112,15 +117,7 @@ change an application's UI.
 Receipts are backend messages, not portable job IDs. `Job::duplex = None` preserves the queue's
 duplex default; `Some(Duplex::Off)` forces simplex. `Job::scaling` defaults to `Scaling::Exact`;
 callers exporting arbitrary document sizes can choose `Scaling::ShrinkToFit`. Exact mode reports
-a driver paper-size mismatch. `printer_papers` lists the sizes a driver offers (Windows:
-its PrintCapabilities page media sizes, keyed by Print Schema or vendor name, in points, as
-the driver has them: a label's width is across the feed; the driver's current default marked;
-only the driver's own sizes, so a form added only in Print Server Properties is not among them
-unless the driver offers it),
-so an app's Print dialog can offer them, start on the driver's default and lay the sheets out
-on one the driver has; on CUPS it is empty, the queue's PPD
-(`*PaperDimension`) holding them instead.
-On Windows `command_preview` describes the in-process job
+a driver paper-size mismatch. On Windows `command_preview` describes the in-process job
 (`xps-print`, then the printer and options as `key=value`) instead of a command line. The crate
 does not provide PostScript output, separations, trapping or colour-managed device rendering.
 

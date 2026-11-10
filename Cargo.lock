@@ -1250,7 +1250,7 @@ dependencies = [
 [[package]]
 name = "craft-winprint-gdi"
 version = "0.1.0"
-source = "git+https://github.com/MaxFairwinds/winprint.rs?rev=d7a8d86927d1c933c859d95f713c5d5cdabf9a97#d7a8d86927d1c933c859d95f713c5d5cdabf9a97"
+source = "git+https://github.com/MaxFairwinds/winprint.rs?rev=1444c1766abded6324f116cb7a625ca342ffc028#1444c1766abded6324f116cb7a625ca342ffc028"
 dependencies = [
  "windows-sys 0.61.2",
 ]
@@ -7106,7 +7106,7 @@ dependencies = [
 [[package]]
 name = "winprint"
 version = "0.2.1"
-source = "git+https://github.com/MaxFairwinds/winprint.rs?rev=d7a8d86927d1c933c859d95f713c5d5cdabf9a97#d7a8d86927d1c933c859d95f713c5d5cdabf9a97"
+source = "git+https://github.com/MaxFairwinds/winprint.rs?rev=1444c1766abded6324f116cb7a625ca342ffc028#1444c1766abded6324f116cb7a625ca342ffc028"
 dependencies = [
  "flate2",
  "fmt-derive",
@@ -7121,6 +7121,7 @@ dependencies = [
  "windows",
  "windows-core",
  "windows-implement",
+ "windows-numerics",
  "xml",
 ]
 

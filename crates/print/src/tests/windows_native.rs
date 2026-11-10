@@ -31,27 +31,6 @@ fn windows_printers_are_sorted_once_with_their_default() {
     assert!(spool::printer_list([("Office".to_string(), None)], None).iter().all(|p| !p.default));
 }
 
-/// The driver's paper sizes come from its capabilities (Windows: the in-box PDF printer offers
-/// Letter and A4, keyed by Print Schema names, in points, as the driver has them); an unknown
-/// printer and the other platforms list none.
-#[test]
-fn printer_papers_come_from_the_drivers_capabilities() {
-    assert!(spool::printer_papers("No Such Printer (craft-print test)").is_empty());
-    assert!(spool::printer_papers("").is_empty());
-    #[cfg(windows)]
-    {
-        let Some(printer) = spool::printers().into_iter().find(|p| p.name == "Microsoft Print to PDF") else { return };
-        let papers = spool::printer_papers(&printer.name);
-        assert!(papers.len() > 1, "{papers:?}");
-        let letter = papers.iter().find(|p| p.key == "NorthAmericaLetter").expect("Letter by its Print Schema name");
-        assert!((letter.size.0 - 612.0).abs() < 1.0 && (letter.size.1 - 792.0).abs() < 1.0 && !letter.label.is_empty(), "{letter:?}");
-        assert!(papers.iter().all(|p| !p.key.is_empty() && p.size.0 >= 1.0 && p.size.1 >= 1.0), "no roll media");
-        let keys: std::collections::BTreeSet<&str> = papers.iter().map(|p| p.key.as_str()).collect();
-        assert_eq!(keys.len(), papers.len(), "no repeated keyword");
-        assert_eq!(papers.iter().filter(|p| p.default).count(), 1, "the driver's default paper is marked, once: {papers:?}");
-    }
-}
-
 /// One page of a test PDF: its MediaBox (`None` = inherited from the page tree's root, which is
 /// Letter), CropBox and `/Rotate`.
 #[derive(Clone, Copy)]
@@ -344,6 +323,14 @@ fn an_encrypted_file_is_turned_but_not_reframed() {
 }
 
 #[test]
+fn two_sided_is_unknown_for_a_printer_that_is_not_there() {
+    // A name no queue has, as when a printer was removed after the list was read: unknown, at
+    // once, never an error or a guess.
+    assert_eq!(spool::two_sided("craft-print: no such printer \u{1F5A8}"), None);
+    assert_eq!(spool::two_sided(""), None);
+}
+
+#[test]
 fn unreadable_sheets_are_errors_never_panics() {
     for bad in [&b""[..], b"not a pdf", b"%PDF-1.7\nstartxref\n999999\n%%EOF", b"%PDF-1.7\nxref\n0 1\ntrailer\n<< >>\nstartxref\n9\n%%EOF"] {
         assert!(crate::sheets::read(bad).is_err());
@@ -373,6 +360,22 @@ fn unreadable_sheets_are_errors_never_panics() {
             }
         }
     }
+}
+
+/// What `f` returns, and how many driver capability queries it made on this thread.
+#[cfg(windows)]
+fn driver_queries<T>(f: impl FnOnce() -> T) -> (T, usize) {
+    let queries = || crate::windows::CAPABILITY_QUERIES.with(std::cell::Cell::get);
+    let start = queries();
+    let out = f();
+    (out, queries().saturating_sub(start))
+}
+
+/// `two_sided(name)` and the driver queries it made, beside what it should be: the answer
+/// `printers()` listed for that queue, from one query.
+#[cfg(windows)]
+fn picked_printer(name: &str, listed: Option<&Printer>) -> ((Option<bool>, usize), (Option<bool>, usize)) {
+    (driver_queries(|| spool::two_sided(name)), (listed.and_then(|p| p.two_sided), 1))
 }
 
 /// Windows: the printer list comes from the spooler. A bare machine may have no printer; the
@@ -470,15 +473,12 @@ fn windows_jobs_reach_the_spooler() {
         eprintln!("skipping the real print: the test printer could not be prepared: {why}");
         return;
     }
-    let queries = || crate::windows::CAPABILITY_QUERIES.with(std::cell::Cell::get);
-    let start = queries();
-    let listed = spool::printers().into_iter().find(|p| p.name == name);
-    let probed = queries().saturating_sub(start);
+    let (listed, probed) = driver_queries(|| spool::printers().into_iter().find(|p| p.name == name));
     // The list a Print dialog shows first: the same queue, named without asking its driver (a
     // networked printer in power save can hold that query, storytold/wordcraft#5710).
-    let start = queries();
-    let queue = spool::printer_queues().into_iter().find(|p| p.name == name);
-    let unprobed = queries().saturating_sub(start);
+    let (queue, unprobed) = driver_queries(|| spool::printer_queues().into_iter().find(|p| p.name == name));
+    // Then the one printer picked: its driver alone, the same answer printers() gave.
+    let (picked, expected) = picked_printer(name, listed.as_ref());
     let mixed = test_pdf(&[LETTER, LETTER_LANDSCAPE, LETTER], true);
     let job = Job { printer: Some(name.into()), title: "mixed.pdf".into(), ..Job::default() };
     let caller = std::thread::current().id();
@@ -523,7 +523,8 @@ fn windows_jobs_reach_the_spooler() {
     assert!(listed.as_ref().is_some_and(|p| p.two_sided.is_some()), "the new printer is listed, its duplex support known: {listed:?}");
     assert!(queue.as_ref().is_some_and(|p| p.two_sided.is_none()), "the new printer is listed, its duplex support unknown: {queue:?}");
     assert!(probed > 0, "printers() asks each driver, so the count sees driver queries: {probed}");
-    assert_eq!(unprobed, 0, "printer_queues() asks no driver");
+    // printer_queues() asks no driver; two_sided(name) answers as printers() did, asking that one only.
+    assert_eq!((unprobed, picked), (0, expected));
     assert_eq!(sent.as_deref(), Ok("spooled 3 sheet(s)"), "{sent:?}");
     if let Some(refused) = duplex_refused {
         assert!(matches!(refused, Err(Error::Spool(ref m)) if m.contains("simplex/duplex") && m.contains("nothing was sent")), "{refused:?}");

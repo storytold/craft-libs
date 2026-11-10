@@ -14,12 +14,12 @@ use std::io::Write as _;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use winprint::printer::{PrinterDevice, WinPdfPrinter};
-use winprint::ticket::document::{NS_PSK, OwnedName, PrintFeature, PrintTicketDocument, WithScoredProperties as _, reader::ParsableXmlDocument as _};
+use winprint::ticket::document::{NS_PSK, OwnedName, PrintCapabilitiesDocument, PrintFeature, PrintTicketDocument, reader::ParsableXmlDocument as _};
 use winprint::ticket::{FeatureOptionPack as _, PageMediaSize, PrintCapabilities, PrintTicket, PrintTicketBuilder};
 
 use crate::sheets::{self, Fit, SAME};
 use crate::ticket::{self, Paper};
-use crate::{Cancel, Error, Job, Printer, PrinterPaper, Scaling};
+use crate::{Cancel, Error, Job, Printer, Scaling};
 
 fn spool_error(e: impl std::fmt::Display) -> Error {
     Error::Spool(e.to_string())
@@ -64,6 +64,11 @@ fn spooler_list(two_sided: impl Fn(&PrinterDevice) -> Option<bool>) -> Vec<Print
     }
 }
 
+/// [`two_sided`] for the queue named `name` only; `None` when no queue has that name.
+pub(crate) fn two_sided_named(name: &str) -> Option<bool> {
+    PrinterDevice::all().ok()?.iter().find(|d| d.name() == name).and_then(two_sided)
+}
+
 #[cfg(test)]
 thread_local! {
     /// The driver capability queries printer discovery made on this thread, so a test can show
@@ -77,72 +82,18 @@ thread_local! {
 fn two_sided(device: &PrinterDevice) -> Option<bool> {
     #[cfg(test)]
     CAPABILITY_QUERIES.with(|n| n.set(n.get().saturating_add(1)));
-    let capabilities = capabilities_for(device, user_ticket(device).as_ref()).ok()?;
-    let duplex = OwnedName::qualified("JobDuplexAllDocumentsContiguously", NS_PSK, Some("psk"));
-    Some(capabilities.options_for_feature(duplex).any(|o| o.name.as_ref().is_some_and(|n| n.local_name.starts_with("TwoSided"))))
+    let xml = capabilities_xml_for(device, user_ticket(device).as_ref()).ok()?;
+    ticket::two_sided(std::str::from_utf8(&xml).ok()?)
 }
 
 /// What the driver's PrintCapabilities offer for the job options [`ticket::verify_job_options`]
 /// checks, for the user's own settings (else the printer's defaults); all unknown when they
 /// can't be read.
 fn driver_offers(device: &PrinterDevice) -> ticket::Offered {
-    let base = user_ticket(device);
-    let fetch = |ticket: Option<&PrintTicket>| {
-        let _provider = print_ticket_provider();
-        PrintCapabilities::fetch_xml_for_ticket(device, ticket).ok()
-    };
-    base.as_ref()
-        .and_then(|base| fetch(Some(base)))
-        .or_else(|| fetch(None))
+    capabilities_xml_for(device, user_ticket(device).as_ref())
+        .ok()
         .and_then(|xml| String::from_utf8(xml).ok())
         .map_or_else(ticket::Offered::default, |xml| ticket::offered(&xml))
-}
-
-/// [`crate::printer_papers`]: the driver's page media sizes as it has them, keyed by their
-/// Print Schema or vendor name and named by their display name, the driver's current default
-/// marked. Roll media (a side of 0), sizes beyond PDF's 200-inch page limit and the driver's
-/// custom-size entry are left out, as are repeated keywords.
-pub(crate) fn printer_papers(printer: &str) -> Vec<PrinterPaper> {
-    let Ok(devices) = PrinterDevice::all() else { return Vec::new() };
-    let Some(device) = devices.iter().find(|d| d.name() == printer) else { return Vec::new() };
-    let base = user_ticket(device);
-    let Ok(capabilities) = capabilities_for(device, base.as_ref()) else { return Vec::new() };
-    let default_key = default_media_keyword(device, base.as_ref(), &capabilities);
-    papers_in(&capabilities, default_key.as_deref())
-}
-
-/// [`printer_papers`] from capabilities already read, so tests need no driver.
-fn papers_in(capabilities: &PrintCapabilities, default_key: Option<&str>) -> Vec<PrinterPaper> {
-    const MAX_SIDE: f64 = 14_400.0;
-    let mut out: Vec<PrinterPaper> = Vec::new();
-    for media in capabilities.page_media_sizes() {
-        if out.len() >= crate::MAX_PRINTER_PAPERS {
-            break;
-        }
-        let Some(key) = media.option().name.as_ref().map(|n| n.local_name.clone()).filter(|k| !k.is_empty()) else { continue };
-        if sized_by_parameter(&media) {
-            continue;
-        }
-        let size = media.size();
-        let (w, h) = (ticket::points(size.width_in_micron()), ticket::points(size.height_in_micron()));
-        if size.is_roll() || !(1.0..=MAX_SIDE).contains(&w) || !(1.0..=MAX_SIDE).contains(&h) || out.iter().any(|p| p.key == key) {
-            continue;
-        }
-        let label = media.display_name().filter(|l| !l.trim().is_empty()).map_or_else(|| key.clone(), |l| l.trim().to_string());
-        let default = default_key == Some(key.as_str());
-        out.push(PrinterPaper { key, label, size: (w, h), default });
-    }
-    out
-}
-
-/// Whether the driver leaves `media`'s width or height to a parameter: its custom-size entry
-/// (`psk:CustomMediaSize`, "User defined size"), whose size is the user's to type. Read as a
-/// paper it takes the parameter's default, the driver's smallest size (10 × 10 mm on an Xprinter
-/// XP-90), and a job on it would come out at that size.
-fn sized_by_parameter(media: &PageMediaSize) -> bool {
-    ["MediaSizeWidth", "MediaSizeHeight"]
-        .iter()
-        .any(|side| media.option().get_scored_property(side, Some(NS_PSK)).is_some_and(|p| p.parameter_ref.is_some()))
 }
 
 /// The signed-in user's own settings for the printer as a job ticket: what they set in its
@@ -158,17 +109,21 @@ fn user_ticket(device: &PrinterDevice) -> Option<PrintTicket> {
 
 /// The driver's capabilities for the user's settings, else for the printer's defaults.
 fn capabilities_for(device: &PrinterDevice, base: Option<&PrintTicket>) -> Result<PrintCapabilities, Error> {
-    let _provider = print_ticket_provider();
-    fetch_capabilities(device, base)
+    let xml = capabilities_xml_for(device, base)?;
+    Ok(PrintCapabilities { document: PrintCapabilitiesDocument::parse_from_bytes(&xml).map_err(spool_error)? })
 }
 
-/// [`capabilities_for`] by a caller that holds the provider.
-fn fetch_capabilities(device: &PrinterDevice, base: Option<&PrintTicket>) -> Result<PrintCapabilities, Error> {
-    match base {
-        Some(base) => PrintCapabilities::fetch_for_ticket(device, base).or_else(|_| PrintCapabilities::fetch(device)),
-        None => PrintCapabilities::fetch(device),
-    }
-    .map_err(spool_error)
+/// The driver's capabilities document for the user's settings, else for the printer's defaults.
+fn capabilities_xml_for(device: &PrinterDevice, base: Option<&PrintTicket>) -> Result<Vec<u8>, Error> {
+    let _provider = print_ticket_provider();
+    fetch_capabilities_xml(device, base)
+}
+
+/// [`capabilities_xml_for`] by a caller that holds the provider.
+fn fetch_capabilities_xml(device: &PrinterDevice, base: Option<&PrintTicket>) -> Result<Vec<u8>, Error> {
+    base.and_then(|base| PrintCapabilities::fetch_xml_for_ticket(device, Some(base)).ok())
+        .map_or_else(|| PrintCapabilities::fetch_xml_for_ticket(device, None), Ok)
+        .map_err(spool_error)
 }
 
 /// [`crate::is_label_printer`]: the driver's PageOutputColor options and the paper of the user's
@@ -229,7 +184,7 @@ fn select_device(devices: Vec<PrinterDevice>, requested: Option<&str>, default: 
         .ok_or_else(|| spool_error(format!("the printer is not available: {name} (reopen Print to refresh the list)")))
 }
 
-/// The ticket the driver accepted: [`ticket::ticket_xml`] with the driver's own paper option for
+/// The ticket the driver accepted: [`ticket::ticket_xml_with`] with the driver's own paper option for
 /// `sheet` (its exact option, so a vendor's sizes survive; a ticket with dimensions only can come
 /// back as Letter) and its own "no scaling" option, merged and validated against the printer's
 /// capabilities. For exact size the driver must have that paper; for shrink-to-fit without one,
@@ -264,12 +219,14 @@ fn hold(job: &Job, title: &str) {
 
 fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape: bool) -> Result<DriverTicket, Error> {
     let base = user_ticket(device);
-    let capabilities = {
+    let capabilities_xml = {
         let _provider = print_ticket_provider();
         #[cfg(test)]
         hold(job, HELD_TITLE);
-        fetch_capabilities(device, base.as_ref())
+        fetch_capabilities_xml(device, base.as_ref())
     }?;
+    let capabilities = PrintCapabilities { document: PrintCapabilitiesDocument::parse_from_bytes(&capabilities_xml).map_err(spool_error)? };
+    let capabilities_xml = std::str::from_utf8(&capabilities_xml).map_err(spool_error)?;
     let medias: Vec<PageMediaSize> = capabilities.page_media_sizes().collect();
     let papers: Vec<Paper<'_>> = medias
         .iter()
@@ -305,7 +262,8 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
         Some((m.size().width_in_micron(), m.size().height_in_micron()))
     });
     let turned = ticket::turned(landscape, fed);
-    let requested = PrintTicket::from_xml(ticket::ticket_xml(job, turned));
+    let document_only = ticket::document_duplex_only(capabilities_xml, job.duplex);
+    let requested = PrintTicket::from_xml(ticket::ticket_xml_with(job, turned, document_only, ticket::grey_option(capabilities_xml)));
     let mut document = PrintTicketDocument::parse_from_bytes(requested.get_xml()).map_err(spool_error)?;
     if let Some(media) = media {
         let media_ticket: PrintTicket = media.clone().into();
@@ -543,23 +501,55 @@ pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnM
 mod tests {
     use super::*;
 
-    /// The page media sizes of an Xprinter XP-90 (Windows 11): a driver paper, two forms from
-    /// Print Server Properties, and the custom-size entry, whose sides are parameters.
-    const XP90_MEDIA: &str = r#"<psf:PrintCapabilities xmlns:psf="http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" version="1" xmlns:ns0000="http://schemas.microsoft.com/windows/printing/oemdriverpt/XP_90_10_0_26100_9711_" xmlns:psk="http://schemas.microsoft.com/windows/2003/08/printing/printschemakeywords"><psf:Feature name="psk:PageMediaSize"><psf:Property name="psf:SelectionType"><psf:Value xsi:type="xsd:QName">psk:PickOne</psf:Value></psf:Property><psf:Property name="psk:DisplayName"><psf:Value xsi:type="xsd:string">Kağıt Boyutu</psf:Value></psf:Property><psf:Option name="ns0000:Option1" constrained="psk:None"><psf:ScoredProperty name="psk:MediaSizeWidth"><psf:Value xsi:type="xsd:integer">72071</psf:Value></psf:ScoredProperty><psf:ScoredProperty name="psk:MediaSizeHeight"><psf:Value xsi:type="xsd:integer">209957</psf:Value></psf:ScoredProperty><psf:Property name="psk:DisplayName"><psf:Value xsi:type="xsd:string">80(72.1) x 210 mm</psf:Value></psf:Property></psf:Option><psf:Option name="ns0000:UserForm225" constrained="psk:None"><psf:ScoredProperty name="psk:MediaSizeWidth"><psf:Value xsi:type="xsd:integer">58000</psf:Value></psf:ScoredProperty><psf:ScoredProperty name="psk:MediaSizeHeight"><psf:Value xsi:type="xsd:integer">40000</psf:Value></psf:ScoredProperty><psf:Property name="psk:DisplayName"><psf:Value xsi:type="xsd:string">BARKOD</psf:Value></psf:Property></psf:Option><psf:Option name="ns0000:UserForm226" constrained="psk:None"><psf:ScoredProperty name="psk:MediaSizeWidth"><psf:Value xsi:type="xsd:integer">58000</psf:Value></psf:ScoredProperty><psf:ScoredProperty name="psk:MediaSizeHeight"><psf:Value xsi:type="xsd:integer">48000</psf:Value></psf:ScoredProperty><psf:Property name="psk:DisplayName"><psf:Value xsi:type="xsd:string">58x44</psf:Value></psf:Property></psf:Option><psf:Option name="psk:CustomMediaSize" constrained="psk:None"><psf:Property name="psk:DisplayName"><psf:Value xsi:type="xsd:string">Kullanıcı Tanımlı Boyut</psf:Value></psf:Property><psf:ScoredProperty name="psk:MediaSizeWidth"><psf:ParameterRef name="psk:PageMediaSizeMediaSizeWidth"/></psf:ScoredProperty><psf:ScoredProperty name="psk:MediaSizeHeight"><psf:ParameterRef name="psk:PageMediaSizeMediaSizeHeight"/></psf:ScoredProperty></psf:Option></psf:Feature><psf:ParameterDef name="psk:PageMediaSizeMediaSizeWidth"><psf:Property name="psf:DataType"><psf:Value xsi:type="xsd:QName">xsd:integer</psf:Value></psf:Property><psf:Property name="psf:UnitType"><psf:Value xsi:type="xsd:string">microns</psf:Value></psf:Property><psf:Property name="psf:Multiple"><psf:Value xsi:type="xsd:integer">1</psf:Value></psf:Property><psf:Property name="psf:MaxValue"><psf:Value xsi:type="xsd:integer">72070</psf:Value></psf:Property><psf:Property name="psf:MinValue"><psf:Value xsi:type="xsd:integer">10009</psf:Value></psf:Property><psf:Property name="psf:DefaultValue"><psf:Value xsi:type="xsd:integer">10009</psf:Value></psf:Property><psf:Property name="psf:Mandatory"><psf:Value xsi:type="xsd:QName">psk:Conditional</psf:Value></psf:Property></psf:ParameterDef><psf:ParameterDef name="psk:PageMediaSizeMediaSizeHeight"><psf:Property name="psf:DataType"><psf:Value xsi:type="xsd:QName">xsd:integer</psf:Value></psf:Property><psf:Property name="psf:UnitType"><psf:Value xsi:type="xsd:string">microns</psf:Value></psf:Property><psf:Property name="psf:Multiple"><psf:Value xsi:type="xsd:integer">1</psf:Value></psf:Property><psf:Property name="psf:MaxValue"><psf:Value xsi:type="xsd:integer">4099910</psf:Value></psf:Property><psf:Property name="psf:MinValue"><psf:Value xsi:type="xsd:integer">10009</psf:Value></psf:Property><psf:Property name="psf:DefaultValue"><psf:Value xsi:type="xsd:integer">10009</psf:Value></psf:Property><psf:Property name="psf:Mandatory"><psf:Value xsi:type="xsd:QName">psk:Conditional</psf:Value></psf:Property></psf:ParameterDef></psf:PrintCapabilities>"#;
-
+    /// Exact option support determines scope, including asymmetric duplex and simplex drivers.
     #[test]
-    fn the_custom_size_entry_is_not_listed_as_a_paper() {
-        let document = winprint::ticket::document::PrintCapabilitiesDocument::parse_from_bytes(XP90_MEDIA).unwrap();
-        let papers = papers_in(&PrintCapabilities { document }, Some("UserForm226"));
-        let keys: Vec<&str> = papers.iter().map(|p| p.key.as_str()).collect();
-        assert_eq!(keys, ["Option1", "UserForm225", "UserForm226"]);
-        let barkod = &papers[1];
-        assert_eq!(barkod.label, "BARKOD");
-        let mm = |pt: f64| pt * 25.4 / 72.0;
-        assert!((mm(barkod.size.0) - 58.0).abs() < 0.01 && (mm(barkod.size.1) - 40.0).abs() < 0.01, "{barkod:?}");
-        assert_eq!(papers.iter().filter(|p| p.default).map(|p| p.key.as_str()).collect::<Vec<_>>(), ["UserForm226"]);
+    fn simplex_job_feature_does_not_hide_document_duplex() {
+        for (job_option, document_option, duplex, expected) in [
+            ("OneSided", "TwoSidedLongEdge", Some(crate::Duplex::LongEdge), true),
+            ("OneSided", "TwoSidedShortEdge", Some(crate::Duplex::ShortEdge), true),
+            ("TwoSidedLongEdge", "TwoSidedShortEdge", Some(crate::Duplex::ShortEdge), true),
+            ("TwoSidedShortEdge", "TwoSidedLongEdge", Some(crate::Duplex::LongEdge), true),
+            ("TwoSidedLongEdge", "OneSided", Some(crate::Duplex::Off), true),
+            ("TwoSidedLongEdge", "TwoSidedLongEdge", Some(crate::Duplex::LongEdge), false),
+            ("OneSided", "TwoSidedLongEdge", None, false),
+            ("OneSided", "OneSided", Some(crate::Duplex::Off), false),
+        ] {
+            let xml = format!(
+                r#"<psf:PrintCapabilities version="1" xmlns:psf="http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework" xmlns:psk="{NS_PSK}">
+                <psf:Feature name="psk:JobDuplexAllDocumentsContiguously"><psf:Option name="psk:{job_option}"/></psf:Feature>
+                <psf:Feature name="psk:DocumentDuplex"><psf:Option name="psk:{document_option}"/></psf:Feature>
+                </psf:PrintCapabilities>"#
+            );
+            assert_eq!(ticket::document_duplex_only(&xml, duplex), expected, "job={job_option}, document={document_option}");
+            let job = Job { duplex, ..Job::default() };
+            let ticket = ticket::ticket_xml_for_duplex(&job, false, ticket::document_duplex_only(&xml, duplex));
+            assert_eq!(ticket.contains("psk:DocumentDuplex"), expected);
+        }
     }
 
+    /// Vendor options with standard-looking local names cannot claim Print Schema support.
+    #[test]
+    fn duplex_scope_requires_standard_option_namespaces() {
+        for (job_options, document_options, expected) in [
+            ("<psf:Option name='vendor:TwoSidedLongEdge'/>", "<psf:Option name='psk:TwoSidedLongEdge'/>", true),
+            ("<psf:Option name='psk:OneSided'/>", "<psf:Option name='vendor:TwoSidedLongEdge'/>", false),
+            (
+                "<psf:Option name='vendor:TwoSidedLongEdge'/><psf:Option name='psk:TwoSidedLongEdge'/>",
+                "<psf:Option name='psk:TwoSidedLongEdge'/>",
+                false,
+            ),
+        ] {
+            let xml = format!(
+                r#"<psf:PrintCapabilities version="1" xmlns:psf="http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework" xmlns:psk="{NS_PSK}" xmlns:vendor="urn:vendor">
+                <psf:Feature name="psk:JobDuplexAllDocumentsContiguously">{job_options}</psf:Feature>
+                <psf:Feature name="psk:DocumentDuplex">{document_options}</psf:Feature>
+                </psf:PrintCapabilities>"#
+            );
+            assert_eq!(ticket::document_duplex_only(&xml, Some(crate::Duplex::LongEdge)), expected);
+        }
+    }
+
+    /// Missing queues fail instead of sending private output to a different printer.
     #[test]
     fn a_missing_printer_never_falls_back_to_another_queue() {
         assert!(select_device(Vec::new(), Some("missing"), Some("default")).is_err());
@@ -642,9 +632,15 @@ mod tests {
             let DriverTicket { validated, .. } = driver_ticket(&device, &requested, (612.0, 792.0), false).unwrap();
             let retained = ticket::verify_job_options(std::str::from_utf8(validated.get_xml()).unwrap(), &requested, 3, ticket::Offered::default());
             eprintln!("{feature}={wanted}: {retained:?}");
-            let offered = capabilities
-                .options_for_feature(OwnedName::qualified(feature, NS_PSK, Some("psk")))
-                .any(|o| o.name.as_ref().is_some_and(|n| n.local_name == wanted || (feature == "PageOutputColor" && n.local_name == "Grayscale")));
+            let offered =
+                [feature, if feature == "JobDuplexAllDocumentsContiguously" { "DocumentDuplex" } else { feature }].into_iter().any(|name| {
+                    capabilities.options_for_feature(OwnedName::qualified(name, NS_PSK, Some("psk"))).any(|o| {
+                        o.name.as_ref().is_some_and(|n| {
+                            n.namespace_ref() == Some(NS_PSK) && n.local_name == wanted
+                                || (feature == "PageOutputColor" && n.local_name == "Grayscale")
+                        })
+                    })
+                });
             if !offered {
                 assert!(retained.is_err(), "unsupported explicit option must not be silently dropped");
             }
