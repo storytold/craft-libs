@@ -469,24 +469,6 @@ pub fn printers() -> Vec<Printer> {
     }
 }
 
-/// Whether `printer`'s driver takes two-sided settings from other programs (Windows: its
-/// PrintCapabilities offer a two-sided option); `None` when that can't be read (no printer by that
-/// name, or a driver that doesn't answer), or off Windows.
-/// [`printer_queues`] leaves [`Printer::two_sided`] unknown. Read only the selected printer, off the
-/// UI thread: Windows can block while contacting an unavailable printer. Use [`query_two_sided`]
-/// for an isolated, cancellable read.
-pub fn two_sided(printer: &str) -> Option<bool> {
-    #[cfg(windows)]
-    {
-        windows::two_sided_named(printer)
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = printer;
-        None
-    }
-}
-
 /// The printers the system knows, without asking their drivers anything: [`printers`] with
 /// `two_sided` unknown. On Windows [`printers`] reads each driver's PrintCapabilities, which can
 /// wait on the device (a networked printer in power save), so a Print dialog that only needs
@@ -500,6 +482,23 @@ pub fn printer_queues() -> Vec<Printer> {
     #[cfg(not(windows))]
     {
         printers()
+    }
+}
+
+/// Whether `printer`'s driver takes two-sided settings, read for that one printer: the answer
+/// [`printers`] gives for it, without asking every other driver too. On Windows that is its
+/// PrintCapabilities; `None` when they can't be read or no queue has that name. Elsewhere `None`,
+/// as [`printers`] reports. It can wait on the device, so a Print dialog listing from
+/// [`printer_queues`] asks it for the printer picked, off the UI thread.
+pub fn two_sided(printer: &str) -> Option<bool> {
+    #[cfg(windows)]
+    {
+        windows::two_sided_named(printer)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = printer;
+        None
     }
 }
 

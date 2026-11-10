@@ -191,6 +191,42 @@ mod tests {
     }
 
     #[test]
+    fn switching_selection_cancels_the_old_read_and_discards_its_late_answer() {
+        let (started, ready) = mpsc::channel();
+        let (stopped, cancelled) = mpsc::channel();
+        let (finished, done) = mpsc::channel();
+        let released = Arc::new(AtomicBool::new(false));
+        let release = released.clone();
+        let source: DuplexSource = Arc::new(move |printer, cancel| {
+            if printer != "Slow" {
+                return Some(true);
+            }
+            started.send(()).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !cancel.load(Ordering::Acquire) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            stopped.send(cancel.load(Ordering::Acquire)).unwrap();
+            while !release.load(Ordering::Acquire) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            finished.send(()).unwrap();
+            Some(false)
+        });
+        let mut session = DuplexSession::default();
+        session.select(Some("Slow"), &source, Arc::new(|| {}));
+        ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        session.select(Some("Office"), &source, Arc::new(|| {}));
+        assert!(cancelled.recv_timeout(Duration::from_secs(5)).unwrap());
+        settle(&mut session, "Office");
+        released.store(true, Ordering::Release);
+        done.recv_timeout(Duration::from_secs(5)).unwrap();
+        session.poll();
+        assert_eq!(session.answer("Office"), Some(&Some(true)));
+        assert_eq!(session.answer("Slow"), None);
+    }
+
+    #[test]
     fn dropping_a_session_cancels_its_reader_and_panic_becomes_unknown() {
         let (started, ready) = mpsc::channel();
         let (stopped, cancelled) = mpsc::channel();
