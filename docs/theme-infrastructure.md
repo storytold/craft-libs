@@ -159,6 +159,28 @@ shared tabs and buttons now also serve PdfCraft, WordCraft, GridCraft, DeckCraft
 SoundCraft; their full palettes stay local. Further extractions need two real consumers and their
 own visual and interaction checks.
 
+## Suite themes (2026-10)
+
+PdfCraft, PhotoCraft and the ArtCraft Launcher are the runtime consumers of a shared suite-theme
+contract:
+theme identity, 13 core colour roles, derived states, resolution and contrast checks, following
+skylartaylor's brief on [pdfcraft#1090](https://github.com/storytold/pdfcraft/pull/1090). It is not
+a universal token struct: apps keep their `Tokens`, `Visuals` and saved preferences and map the
+core roles through their own adapters. There is no shared theme enum: themes are data with a string
+`ThemeId`. The app identifier appears only as the key of the app's saved choice and of reserved
+per-app overrides in theme files. The shared crates store nothing in egui's context.
+
+The contract lives in the egui-free [`craft-theme`](../crates/theme/README.md) crate, so a CLI, the
+launcher's catalogue or an extension validator can use it without egui. Theme files, storage and
+change watching belong to `craft-theme-store`, outside rendering. `craft_ui::theme` only bridges to
+egui (`color32`, `install`). The contrast checks run on the colour pairs the apps paint; PdfCraft
+(its Appearance warnings and adapter tests), PhotoCraft and the launcher (their adapter tests) are
+their runtime consumers. [Suite themes](suite-themes.md) describes the
+contract and how an app adopts it.
+
+The earlier statements on this page remain true for `WidgetPalette` and everything outside the
+core roles.
+
 [vector-loop]: https://github.com/storytold/vectorcraft/blob/825d4fdb8b527c597855d273fb4bcc1971855b6a/crates/ui-egui/src/theme.rs#L299-L312
 
 [design-loop]: https://github.com/storytold/designcraft/blob/66c7ce7e96ec286a091878cc2541ee8369aa79d6/crates/ui-egui/src/theme.rs#L336-L348
