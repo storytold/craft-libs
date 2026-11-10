@@ -438,6 +438,23 @@ pub fn printer_queues() -> Vec<Printer> {
     }
 }
 
+/// Whether `printer`'s driver takes two-sided settings, read for that one printer: the answer
+/// [`printers`] gives for it, without asking every other driver too. On Windows that is its
+/// PrintCapabilities; `None` when they can't be read or no queue has that name. Elsewhere `None`,
+/// as [`printers`] reports. It can wait on the device, so a Print dialog listing from
+/// [`printer_queues`] asks it for the printer picked, off the UI thread.
+pub fn two_sided(printer: &str) -> Option<bool> {
+    #[cfg(windows)]
+    {
+        windows::two_sided_named(printer)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = printer;
+        None
+    }
+}
+
 /// The Print dialog's printers from lpstat's two answers: the spooler's queues (`-p -d`), then
 /// the driverless destinations of `available` (`-e`) that have no queue — CUPS builds a temporary
 /// queue when `lp` sends them a job. Each destination once, queues first; the default still comes
