@@ -866,16 +866,15 @@ mod tests {
 
     #[test]
     fn inconsistent_windings_are_degenerate() {
-        // The sweep gives both paths winding numbers that disagree around a point.
-        for d in [
-            "M4,-1 C8,1 -7,-2 5,8 L-4,-8 L2,1 L1,1 Z",
-            "M6,5 L3,7 L0,7 L3,6 C3,0 7,6 0,4 L4,2 C4,5 7,4 4,6 L3,3 L3,5 C6,7 2,5 3,1 L2,0 Z \
-             M6,6 L4,4 C5,6 2,5 7,6 L7,6 L7,7 Z M1,4 C5,2 3,3 5,7 L0,6 L0,7 L6,7 C4,5 3,7 2,1 Z \
-             M3,3 C1,2 3,6 5,6 C6,4 2,7 2,0 L1,6 L6,4 L3,4 L6,7 C0,0 7,1 0,7 C0,0 1,1 1,0 Z",
-        ] {
-            let shapes = [fill(BezPath::from_svg(d).unwrap())];
-            assert!(matches!(regions(&shapes, &[]), Err(GeomError::Degenerate)), "{d}");
-        }
+        // A predicate that changes its answer makes the windings around a point disagree.
+        let shapes = [fill(rect(0.0, 0.0, 10.0, 10.0))];
+        let arrangement = Arrangement::new(&shapes, &[], DEFAULT_SLIVER, MAX_SWEEP_WORK).unwrap();
+        let calls = std::cell::Cell::new(0_u32);
+        let flipping = |_: &Multi| {
+            calls.set(calls.get() + 1);
+            calls.get().is_multiple_of(2)
+        };
+        assert_eq!(contours(&arrangement.top, flipping).err(), Some(GeomError::Degenerate));
     }
 
     /// The regions with their sources and areas rounded to 1e-6, sorted.

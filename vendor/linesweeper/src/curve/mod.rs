@@ -2976,8 +2976,8 @@ mod test {
         // entry at depth zero.
         #[cfg(feature = "metrics")]
         assert_eq!(
-            order.metrics.entries,
-            vec![MetricsEntry { end: 1.0, depth: 0 }]
+            order.metrics.entries.as_slice(),
+            &[MetricsEntry { end: 1.0, depth: 0 }]
         );
         assert_eq!(
             &order.cmps[..],

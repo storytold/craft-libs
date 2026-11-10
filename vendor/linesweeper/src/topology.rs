@@ -700,6 +700,7 @@ impl<W: WindingNumber> Topology<W> {
         let mut segments = Segments::default();
         let mut tag = Vec::new();
         for (p, t) in paths {
+            crate::check_coordinates(p)?;
             segments.add_path_without_updating_enter_exit(p, true)?;
             tag.resize(segments.len(), t);
         }
@@ -3872,6 +3873,18 @@ mod tests {
         let paths = |c: &super::Contours| c.contours().map(|c| c.path.clone()).collect::<Vec<_>>();
         assert_eq!(paths(&actual), paths(&expected));
         assert!(!paths(&actual).is_empty());
+    }
+
+    #[test]
+    fn work_limit_constructor_rejects_coordinates_that_are_too_large() {
+        let huge = f64::MAX / 8.0;
+        let mut path = BezPath::new();
+        path.move_to((0.0, 0.0));
+        path.line_to((huge, 0.0));
+        path.line_to((0.0, huge));
+        path.close_path();
+        let result = Topology::<i32>::from_paths_with_work_limit([(&path, ())], 1e-6, 1_000_000);
+        assert_eq!(result.err(), Some(crate::Error::TooLarge));
     }
 
     // `n` tall bars (the second set) west of a column of `m` small squares (the first set).
