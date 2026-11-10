@@ -6,7 +6,7 @@ demuxer, written from the public specifications. No `unsafe`, no panics on malfo
 for `wasm32-unknown-unknown`. Dependencies: `thiserror` (for `isobmff`), `serde` (optional).
 
 Codecs are in separate crates that depend on this one: [`craft-audio`](../audio/README.md) for
-audio; video codecs will go in a separate crate. What both need lives here: the containers, the
+audio; `craft-video` for video. What both need lives here: the containers, the
 bit I/O, one `ByteSource` trait, and the [shared identifiers](#containers-codecs-and-codec-parameters)
 that codec crates use to describe a file and configure a decoder.
 
@@ -39,8 +39,8 @@ craft-media = { git = "https://github.com/storytold/craft-libs", rev = "<commit>
 
 - In scope: bit-level reading and writing, and container demuxing and muxing (boxes, sample
   tables, sample entries and codec configuration records) for audio and video tracks.
-- Out of scope: codecs. Audio codecs are in `craft-audio`; video codecs (H.264, HEVC, ProRes and
-  others) stay in the apps until a video crate exists. Containers only FilmCraft reads (MXF,
+- Out of scope: codecs. Audio codecs are in `craft-audio`; video codecs (H.264, HEVC, ProRes,
+  DNx, VP8, VP9, AV1) are in `craft-video`. Containers only FilmCraft reads (MXF,
   MPEG-TS/PS, AVI) are not here yet.
 - Anything both the audio and the video codec crates need belongs here, so the two never depend
   on each other.
