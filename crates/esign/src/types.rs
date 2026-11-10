@@ -149,11 +149,25 @@ pub struct Envelope {
 }
 
 /// The finished document plus whatever evidence the provider returns.
+///
+/// Carries two digests as distinct fields, never conflated: the original
+/// document's content digest and the returned signed artifact's digest. The
+/// two are the same hash family as [`Envelope::content_sha256`] and can
+/// differ in value. A provider's sealing (a certificate page, flattening, a
+/// visible audit stamp) can change the signed bytes relative to the document
+/// the envelope was created from, so a caller must not assume `bytes` hashes
+/// back to `original_content_sha256`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompletedDocument {
     pub envelope_id: String,
     /// Signed document bytes. Opaque to this crate.
     pub bytes: Vec<u8>,
+    /// SHA-256 of the original document bytes the envelope was created from,
+    /// lowercase hex. Matches the envelope's own `content_sha256`.
+    pub original_content_sha256: String,
+    /// SHA-256 of `bytes`, the returned signed artifact, lowercase hex. May
+    /// differ from `original_content_sha256`; see the struct's docs.
+    pub signed_content_sha256: String,
     /// Provider evidence (certificate of completion, audit export, …).
     pub evidence: Vec<u8>,
 }
