@@ -389,28 +389,25 @@ fn lpstat_e_command() -> std::process::Command {
     lpstat_with(&["-e"])
 }
 
+/// How long the printer list waits for `lpstat -l -p -d`. It reads the scheduler's own queues, so
+/// it answers at once unless `cupsd` itself has stopped answering (storytold/pdfcraft#6761, where
+/// macOS's scheduler had stopped serving its local socket and the Print dialog looked for printers
+/// forever).
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+const QUEUES_LIMIT: std::time::Duration = std::time::Duration::from_secs(15);
+/// How long the printer list waits for `lpstat -e`, which also browses the network for driverless
+/// printers. Past it the list has the queues without them.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+const DISCOVERY_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// The printers the system knows (empty when there are none or no spooler): its queues, then the
-/// driverless destinations CUPS can print to without one.
+/// driverless destinations CUPS can print to without one. On CUPS neither question may take more
+/// than [`QUEUES_LIMIT`] and [`DISCOVERY_LIMIT`]: a scheduler that doesn't answer gives an empty
+/// list rather than a Print dialog that waits forever.
 pub fn printers() -> Vec<Printer> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
-        let queues = match lpstat_command().output() {
-            Ok(o) => {
-                // Exits 1 with only driverless printers ("No destinations added"); `-e` still finds them.
-                if !o.status.success() {
-                    log::info!("lpstat -p -d exited with {}: {}", o.status, String::from_utf8_lossy(&o.stderr).trim());
-                }
-                String::from_utf8_lossy(&o.stdout).into_owned()
-            }
-            Err(e) => {
-                // A Flatpak needs lpstat/lp bundled plus the CUPS socket and Avahi (see README).
-                log::warn!("no printers: lpstat could not run ({e}); install the CUPS client tools");
-                return Vec::new();
-            }
-        };
-        // A spooler without `-e`, or one whose discovery times out, only loses the driverless names.
-        let available = lpstat_e_command().output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
-        printers_parsed(&queues, available.as_deref())
+        printers_via(&mut lpstat_command(), QUEUES_LIMIT, &mut lpstat_e_command(), DISCOVERY_LIMIT)
     }
     #[cfg(windows)]
     {
@@ -419,6 +416,145 @@ pub fn printers() -> Vec<Printer> {
     #[cfg(not(any(windows, all(unix, not(target_arch = "wasm32")))))]
     {
         Vec::new()
+    }
+}
+
+/// [`printers`] with the two `lpstat` commands and their limits supplied, so tests can stand in a
+/// command that hangs.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn printers_via(
+    queues: &mut std::process::Command,
+    queues_limit: std::time::Duration,
+    available: &mut std::process::Command,
+    available_limit: std::time::Duration,
+) -> Vec<Printer> {
+    // Exits 1 with only driverless printers ("No destinations added"); `-e` still finds them, so
+    // the exit status isn't checked.
+    let queues = match output_within(queues, queues_limit) {
+        Ok(out) => String::from_utf8_lossy(&out).into_owned(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // A Flatpak needs lpstat/lp bundled plus the CUPS socket and Avahi (see README).
+            log::warn!("no printers: lpstat could not run ({e}); install the CUPS client tools");
+            return Vec::new();
+        }
+        Err(e) => {
+            log::warn!("no printers: the CUPS scheduler did not list its queues ({e}); is cupsd running and answering?");
+            return Vec::new();
+        }
+    };
+    // A spooler without `-e`, or one whose discovery doesn't answer in time, only loses the
+    // driverless names.
+    let available = match output_within(available, available_limit) {
+        Ok(out) => Some(String::from_utf8_lossy(&out).into_owned()),
+        Err(e) => {
+            log::info!("lpstat -e gave no driverless printers ({e})");
+            None
+        }
+    };
+    printers_parsed(&queues, available.as_deref())
+}
+
+/// The most of a command's output that is read: far more than any `lpstat` listing.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+const OUTPUT_CAP: u64 = 4 << 20;
+
+/// Run `command` and collect its standard output, giving it `limit`: a command still running
+/// then is killed and reaped, and the error is `TimedOut`. Standard input and error are not
+/// connected. The exit status is not checked, as `Command::output` leaves it to the caller.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn output_within(command: &mut std::process::Command, limit: std::time::Duration) -> std::io::Result<Vec<u8>> {
+    use std::io::Read as _;
+    use std::process::Stdio;
+    let mut child = command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
+    let stop = |child: &mut std::process::Child| {
+        let _ = child.kill();
+        let _ = child.wait();
+    };
+    let Some(mut stdout) = child.stdout.take() else {
+        stop(&mut child);
+        return Err(std::io::Error::other("the command's output could not be read"));
+    };
+    // Read on a thread of its own, so a full pipe never holds the command while the deadline is
+    // kept here. Past the cap the rest is drained and dropped, so the command still finishes.
+    // The output comes back over a channel rather than through `join`: a process the command
+    // started can keep the pipe open after the command itself has exited or been killed, and the
+    // wait for the output must end at the deadline too. Such a reader is left to finish on its
+    // own when that process closes the pipe.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let reader = std::thread::Builder::new().name("command output".into()).spawn(move || {
+        let mut out = Vec::new();
+        let read = (&mut stdout).take(OUTPUT_CAP).read_to_end(&mut out);
+        let _ = std::io::copy(&mut stdout, &mut std::io::sink());
+        let _ = tx.send(read.map(|_| out));
+    });
+    if let Err(e) = reader {
+        stop(&mut child);
+        return Err(e);
+    }
+    let timed_out = || std::io::Error::new(std::io::ErrorKind::TimedOut, format!("the command did not answer within {limit:?}"));
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                // A moment's grace, so output written just before an exit at the deadline counts.
+                let left = deadline.saturating_duration_since(std::time::Instant::now()).max(std::time::Duration::from_millis(100));
+                return match rx.recv_timeout(left) {
+                    Ok(read) => read,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(timed_out()),
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(std::io::Error::other("the command's output was lost")),
+                };
+            }
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                stop(&mut child);
+                return Err(timed_out());
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
+            Err(e) => {
+                stop(&mut child);
+                return Err(e);
+            }
+        }
+    }
+}
+
+#[cfg(all(test, unix, not(target_arch = "wasm32")))]
+mod lpstat_limits {
+    use super::*;
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+
+    fn sh(script: &str) -> Command {
+        let mut c = Command::new("sh");
+        c.args(["-c", script]);
+        c
+    }
+
+    /// storytold/pdfcraft#6761: a scheduler that never answers gives an empty list in time.
+    #[test]
+    fn a_scheduler_that_never_answers_gives_no_printers_in_time() {
+        let started = Instant::now();
+        let found = printers_via(&mut sh("sleep 30"), Duration::from_millis(300), &mut sh("sleep 30"), Duration::from_millis(300));
+        assert!(found.is_empty());
+        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+    }
+
+    /// Discovery that hangs only loses the driverless printers; the queues are listed.
+    #[test]
+    fn discovery_that_hangs_keeps_the_queues() {
+        let mut queues =
+            sh("printf 'printer Office_Laser is idle.  enabled since Mon\\n\\tDescription: Office\\nsystem default destination: Office_Laser\\n'");
+        let started = Instant::now();
+        let found = printers_via(&mut queues, Duration::from_secs(5), &mut sh("sleep 30"), Duration::from_millis(300));
+        assert_eq!(found.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["Office_Laser"]);
+        assert!(found[0].default);
+        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+    }
+
+    /// A command that isn't there is no printers, at once.
+    #[test]
+    fn no_lpstat_is_no_printers() {
+        let found = printers_via(&mut Command::new("craft-print-no-such-lpstat"), Duration::from_secs(5), &mut sh("true"), Duration::from_secs(5));
+        assert!(found.is_empty());
     }
 }
 
