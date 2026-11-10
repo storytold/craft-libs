@@ -340,7 +340,7 @@ fn base(pc: usize, opcode: u8, name: &'static str) -> Insn {
     Insn { pc: pc as u32, opcode, name, len: 1, local: None, int: None, cp_index: None, branch: None, switch: None, wide: false }
 }
 
-/// Decode one instruction at `pc`, or `None` when it (or its operands) runs past the end.
+/// Decode one instruction at `pc`, or `None` for invalid or incomplete operands.
 pub fn decode_one(code: &[u8], pc: usize) -> Option<Insn> {
     let b = *code.get(pc)?;
     let o = opcode(b);
@@ -452,16 +452,17 @@ fn decode_tableswitch(code: &[u8], pc: usize) -> Option<Insn> {
     if high < low {
         return None;
     }
-    let count = (i64::from(high) - i64::from(low) + 1).max(0) as usize;
+    let count = usize::try_from(i64::from(high) - i64::from(low) + 1).ok()?;
     if count > MAX_SWITCH {
         return None;
     }
-    let mut pairs = Vec::with_capacity(count.min(MAX_SWITCH));
+    let end = at.checked_add(count.checked_mul(4)?)?;
+    code.get(at..end)?;
+    let mut pairs = Vec::with_capacity(count);
     for i in 0..count {
         let off = s32(code, at + i * 4)?;
         pairs.push((low.wrapping_add(i as i32), rel_i64(pc, off)));
     }
-    let end = at + count * 4;
     let mut insn = base(pc, 0xaa, "tableswitch");
     insn.switch = Some(Switch { default, pairs });
     insn.len = (end - pc) as u32;
@@ -480,13 +481,19 @@ fn decode_lookupswitch(code: &[u8], pc: usize) -> Option<Insn> {
     if count > MAX_SWITCH {
         return None;
     }
-    let mut pairs = Vec::with_capacity(count.min(MAX_SWITCH));
+    let end = at.checked_add(count.checked_mul(8)?)?;
+    code.get(at..end)?;
+    let mut pairs = Vec::with_capacity(count);
+    let mut previous = None;
     for i in 0..count {
         let key = s32(code, at + i * 8)?;
+        if previous.is_some_and(|previous| key <= previous) {
+            return None;
+        }
+        previous = Some(key);
         let off = s32(code, at + i * 8 + 4)?;
         pairs.push((key, rel_i64(pc, off)));
     }
-    let end = at + count * 8;
     let mut insn = base(pc, 0xab, "lookupswitch");
     insn.switch = Some(Switch { default, pairs });
     insn.len = (end - pc) as u32;
@@ -498,7 +505,7 @@ fn rel_i64(pc: usize, off: i32) -> i64 {
 }
 
 /// Decode a whole method body, stopping at `max` instructions. `complete` is false when a
-/// trailing instruction runs past the end or the cap was hit.
+/// instruction has invalid/incomplete operands or the cap was hit.
 pub fn decode(code: &[u8], max: usize) -> (Vec<Insn>, bool) {
     let mut out = Vec::new();
     let mut pc = 0usize;
@@ -525,6 +532,85 @@ pub fn decode(code: &[u8], max: usize) -> (Vec<Insn>, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn lookup(pc: usize, keys: &[i32]) -> Vec<u8> {
+        let mut code = vec![0; pc];
+        code.push(0xab);
+        while !code.len().is_multiple_of(4) {
+            code.push(0);
+        }
+        code.extend_from_slice(&0i32.to_be_bytes());
+        code.extend_from_slice(&(keys.len() as i32).to_be_bytes());
+        for key in keys {
+            code.extend_from_slice(&key.to_be_bytes());
+            code.extend_from_slice(&0i32.to_be_bytes());
+        }
+        code
+    }
+
+    #[test]
+    fn lookup_keys_must_increase_strictly() {
+        for keys in [&[1, 1][..], &[1, 0], &[0, -1], &[i32::MIN, i32::MAX, i32::MIN]] {
+            for pc in 0..4 {
+                let mut code = lookup(pc, keys);
+                code.push(0xb1);
+                assert!(decode_one(&code, pc).is_none(), "pc {pc}, keys {keys:?}");
+                let (decoded, complete) = decode(&code, 100);
+                assert!(!complete);
+                assert_eq!(decoded.len(), pc, "preserve preceding nops, stop before the bad switch");
+            }
+        }
+    }
+
+    #[test]
+    fn lookup_keys_use_signed_order_at_every_alignment() {
+        for keys in [&[][..], &[i32::MIN, -1, 0, i32::MAX]] {
+            for pc in 0..4 {
+                let code = lookup(pc, keys);
+                let insn = decode_one(&code, pc).unwrap();
+                assert_eq!(insn.len as usize, code.len() - pc);
+                let switch = insn.switch.unwrap();
+                assert_eq!(switch.default, pc as i64);
+                assert_eq!(switch.pairs, keys.iter().map(|&key| (key, pc as i64)).collect::<Vec<_>>());
+                assert!(decode(&code, 100).1);
+            }
+        }
+    }
+
+    #[test]
+    fn switch_payloads_must_be_complete() {
+        for pc in 0..4 {
+            let lookup = lookup(pc, &[-1, 1]);
+            let mut dense = vec![0; pc];
+            dense.push(0xaa);
+            while !dense.len().is_multiple_of(4) {
+                dense.push(0);
+            }
+            for word in [0i32, i32::MAX - 1, i32::MAX, 0, 0] {
+                dense.extend_from_slice(&word.to_be_bytes());
+            }
+            for code in [lookup, dense] {
+                assert!(decode_one(&code, pc).is_some());
+                for end in pc + 1..code.len() {
+                    assert!(decode_one(&code[..end], pc).is_none(), "pc {pc}, end {end}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn switch_counts_cannot_reserve_an_absent_table() {
+        let mut lookup = lookup(0, &[]);
+        lookup[8..12].copy_from_slice(&(MAX_SWITCH as i32).to_be_bytes());
+        assert!(decode_one(&lookup, 0).is_none());
+        for (low, high) in [(0i32, MAX_SWITCH as i32 - 1), (i32::MIN, i32::MAX)] {
+            let mut dense = vec![0xaa, 0, 0, 0];
+            for word in [0, low, high] {
+                dense.extend_from_slice(&word.to_be_bytes());
+            }
+            assert!(decode_one(&dense, 0).is_none());
+        }
+    }
 
     #[test]
     fn table_covers_defined_opcodes() {
