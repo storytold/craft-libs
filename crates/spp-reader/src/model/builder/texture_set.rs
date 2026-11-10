@@ -20,8 +20,10 @@ impl ModelBuilder {
         self.report.extra_stacks += stacks.count();
         let mut channels = Vec::new();
         let mut layers = Vec::new();
+        let mut shader_model = None;
         if let Some(stack) = first {
             self.seen(stack);
+            shader_model = stack.u64("shaderModel");
             channels = stack.objects("channels").map(|c| self.channel(c)).collect();
             if let Some(items) = stack.object("stack") {
                 layers = self.layer_stack(items, 0);
@@ -33,6 +35,7 @@ impl ModelBuilder {
             name: material.string("sceneMaterialName").unwrap_or_default().to_string(),
             resolution_log2: material.ivec2("resolutionLog2"),
             channels,
+            shader_model,
             layers,
             mesh_maps: mesh_maps(material),
             unhandled: Vec::new(),

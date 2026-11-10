@@ -16,6 +16,9 @@ pub struct ProjectTextureSet {
     pub resolution_log2: Option<[i32; 2]>,
     /// `stacks[0].channels`.
     pub channels: Vec<ChannelDecl>,
+    /// `stacks[0].shaderModel`, stored from format 92 on: 2 in a project the reference app brought over from an older
+    /// format, 4 in one it created (Measured on one of each). It decides what uncovered channels show.
+    pub shader_model: Option<u64>,
     /// `stacks[0].stack.items`, **bottom → top**.
     pub layers: Vec<ProjectLayer>,
     /// The mesh maps assigned to the set (`additionalMaps`, then `normalMapBitmap`): a resource URL, or

@@ -24,12 +24,26 @@ pub enum Scalar {
     WideMask(u128),
 }
 
-fn bit_of_wide(mask: u128) -> Option<u64> {
-    const USER_BITS: u32 = 8;
-    const USER_WIDE: u32 = 64;
-    const USER_NARROW: u32 = 14;
-    let users = (mask >> USER_WIDE) as u64 & ((1 << USER_BITS) - 1);
-    Some(mask as u64 | users << USER_NARROW)
+/// File-format data: the compact layout numbers channels by index (bit `i` of a 128-bit mask). Indices 0-13 and
+/// 22-48 are the tagged layout's bits; indices 14-21 hold channels the tagged layout never had, while its user
+/// channels 0-7 sat at bits 14-21 and moved to indices 64-71. Measured: one fresh project with every channel type.
+const INDEX_ONLY_FIRST: u32 = 14;
+const INDEX_ONLY_COUNT: u32 = 8;
+/// Where indices 14-21 go in the tagged numbering: bits 49-56, which no channel uses in either layout.
+const INDEX_ONLY_NARROW: u32 = 49;
+const USER_WIDE: u32 = 64;
+const USER_COUNT: u32 = 8;
+const USER_NARROW: u32 = 14;
+
+/// A compact-layout mask in the tagged numbering (see [`INDEX_ONLY_FIRST`]). User channels 8 and up have no bit there
+/// and are dropped.
+fn bit_of_wide(mask: u128) -> u64 {
+    let field = |m: u64, at: u32, n: u32| (m >> at) & ((1 << n) - 1);
+    let low = mask as u64;
+    let index_only = field(low, INDEX_ONLY_FIRST, INDEX_ONLY_COUNT);
+    let users = field((mask >> USER_WIDE) as u64, 0, USER_COUNT);
+    let cleared = low & !(((1 << INDEX_ONLY_COUNT) - 1) << INDEX_ONLY_FIRST) & !(((1 << INDEX_ONLY_COUNT) - 1) << INDEX_ONLY_NARROW);
+    cleared | index_only << INDEX_ONLY_NARROW | users << USER_NARROW
 }
 
 impl Scalar {
@@ -66,16 +80,16 @@ impl Scalar {
     /// layout stores its index in the mask as an enum, see [`Scalar::channel_mask`] for where user channels go.
     pub fn channel_bit(&self) -> Option<u64> {
         match self {
-            Scalar::Enum(index) => bit_of_wide(u128::from(1u8).checked_shl(u32::try_from(*index).ok()?)?),
+            Scalar::Enum(index) => Some(bit_of_wide(u128::from(1u8).checked_shl(u32::try_from(*index).ok()?)?)).filter(|b| *b != 0),
             other => other.as_u64(),
         }
     }
 
-    /// A channel mask in the numbering of the tagged layout. Wide masks keep the named channels' bits and move the
-    /// eight user channels, which they keep at bits 64-71, back to bits 14-21.
+    /// A channel mask in the numbering of the tagged layout. Wide masks keep the shared channels' bits, move their
+    /// indices 14-21 to bits 49-56 and the eight user channels, which they keep at bits 64-71, back to bits 14-21.
     pub fn channel_mask(&self) -> Option<u64> {
         match self {
-            Scalar::WideMask(mask) => bit_of_wide(*mask),
+            Scalar::WideMask(mask) => Some(bit_of_wide(*mask)),
             other => other.as_u64(),
         }
     }
@@ -132,10 +146,16 @@ mod tests {
         assert_eq!(Scalar::Enum(13).channel_bit(), Some(8192));
         assert_eq!(Scalar::Enum(64).channel_bit(), Some(1 << 14));
         assert_eq!(Scalar::Enum(200).channel_bit(), None);
+        assert_eq!(Scalar::Enum(14).channel_bit(), Some(1 << 49), "index-only channels leave the user bits free");
+        assert_eq!(Scalar::Enum(21).channel_bit(), Some(1 << 56));
+        assert_eq!(Scalar::Enum(71).channel_bit(), Some(1 << 21));
+        assert_eq!(Scalar::Enum(72).channel_bit(), None, "user channel 8 has no bit in the tagged numbering");
+        assert_eq!(Scalar::Enum(48).channel_bit(), Some(1 << 48));
         assert_eq!(Scalar::ChannelType(8192).channel_bit(), Some(8192));
         assert_eq!(Scalar::WideMask(128).channel_mask(), Some(128));
         assert_eq!(Scalar::WideMask(u128::MAX).channel_mask(), Some(u64::MAX));
         assert_eq!(Scalar::WideMask(0xff << 64 | 0x1f3a).channel_mask(), Some(0x3fc000 | 0x1f3a));
+        assert_eq!(Scalar::WideMask(1 << 17 | 1 << 66).channel_mask(), Some(1 << 52 | 1 << 16));
         assert_eq!(Scalar::Enum(5).channel_mask(), Some(5));
     }
 }

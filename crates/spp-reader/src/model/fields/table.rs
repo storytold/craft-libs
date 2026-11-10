@@ -374,7 +374,7 @@ pub(super) static TABLE: &[Entry] = &[
     ("DataMaterialStack", "channels", Read),
     ("DataMaterialStack", "label", Ignored("the stack's name (always empty)")),
     ("DataMaterialStack", "selections", Ignored("selection sets; they change pixels only through an effect's `selection`, which is checked there")),
-    ("DataMaterialStack", "shaderModel", Ignored("the viewport shader model of the stack")),
+    ("DataMaterialStack", "shaderModel", Read),
     ("DataMaterialStack", "stack", Read),
     ("DataMaterialStack", "type", Unhandled { default: "e0", what: "the stack's type" }),
     ("DataMaterialStack", "typeMetadata", Unhandled { default: "\"\"", what: "data of the stack's type" }),
