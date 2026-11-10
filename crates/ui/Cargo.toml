@@ -44,7 +44,11 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 default = []
 serde = ["dep:serde"]
 # Floating windows may move to their own OS windows (desktop egui backends with viewports).
-native-windows = []
+native-windows = ["ime"]
+# Canvas text input methods via the suite egui fork's `egui::ime_context` API. Fork-only:
+# does not compile against stock crates.io egui, so it is off by default and published
+# `craft-ui` without it stays stock-0.37-compatible (docs/egui-037-migration-plan.md §5.2).
+ime = []
 # Draw colour glyphs (COLR, sbix, CBDT), e.g. colour emoji.
 color_fonts = ["epaint/color_fonts"]
 # Find installed fonts for characters the app's faces lack (desktop only).

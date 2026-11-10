@@ -286,7 +286,7 @@ fn show<R>(ui: &mut Ui, button_id: Id, mut combo: ComboBox<'_>, open: impl FnOnc
     let min_size = Vec2::new(min_width, 0.0).at_least(atom_layout_style.min_size);
 
     let icon = RefCell::new(icon);
-    let rtl = ui.style().right_to_left;
+    let rtl = crate::direction::is_rtl(ui);
     let icon_atom = Atom::paint(Vec2::splat(ui.spacing().icon_width), move |ui, args| {
         let rect = args.rect.expand(visuals.expansion);
         if let Some(icon) = icon.borrow_mut().take() {
@@ -392,7 +392,7 @@ impl<'a> Menu<'a> {
 
     fn with_popup(popup: Popup<'a>, ui: &Ui, field: &Response) -> Self {
         // Below the field or above it, never beside it.
-        let flipped: &'static [RectAlign] = if ui.ctx().global_style().right_to_left { &[RectAlign::TOP_END] } else { &[RectAlign::TOP_START] };
+        let flipped: &'static [RectAlign] = if crate::direction::is_rtl(ui.ctx()) { &[RectAlign::TOP_END] } else { &[RectAlign::TOP_START] };
         Self {
             popup: popup.align_alternatives(flipped),
             ctx: field.ctx.clone(),
