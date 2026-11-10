@@ -1,7 +1,7 @@
 // Carved from VectorCraft's crates/pathops (src/boolean.rs) at storytold/vectorcraft ff9deee46d1c59dc9ecef0b668c25e57cd80b55e.
 // Copyright (c) 2026 ArtCraft Team and the VectorCraft contributors. MIT OR Apache-2.0.
 // Brought up to storytold/vectorcraft 0945eaf2b3d4e93963aaa6d796b9efe53feaf624 by porting its changes to this file (3fcd157..0945eaf; see the README), and to
-// ef81d550e47623a6922fc14574eee66cc5fed083 by porting 1090965 (a union of one input whose own sweep is the union is not swept a second time: `Swept`, `splits_nothing`).
+// ef81d550e47623a6922fc14574eee66cc5fed083 by porting 1090965 and 4060f14 (a union of one input is not swept a second time: `Swept`, `splits_nothing`, `crate::close`).
 
 //! Curve-preserving boolean operations built on `linesweeper`'s robust sweep-line topology.
 //!
@@ -1300,14 +1300,14 @@ impl Swept {
 
     /// The union, refit to `precision` keeping the anchors of `inputs` (the inputs as they were filled, freed before the contours are swept
     /// again, as the tidy holds what it needs of them): the contours of a lone input as its sweep made them when they are its own segments
-    /// ([`lone_union`]), else all the contours swept again ([`held_union`]).
+    /// and none comes within twice the sweep's tolerance of another ([`lone_union`]), else all the contours swept again ([`held_union`]).
     fn union(mut self, inputs: Vec<BezPath>, precision: f64) -> Result<BezPath, PathOpsError> {
         if self.inputs == 0 || (self.all.elements().is_empty() && self.lone_elements == 0) {
             return Ok(BezPath::new());
         }
         let tidy = Tidy::keeping(precision, inputs.iter());
         if let Some((c, input_segments)) = &self.lone {
-            if let Some(path) = lone_union(c, *input_segments, &tidy) {
+            if let Some(path) = lone_union(c, *input_segments, &inputs, &tidy) {
                 // What is written is held to the limit, as [`held_union`] holds it.
                 return if path.elements().len() > crate::budget::limits().elements { Err(PathOpsError::TooComplex) } else { Ok(path) };
             }
@@ -1322,9 +1322,12 @@ impl Swept {
 
 /// The union of one input whose own sweep made the contours `c`, when they are that union already: they are the input's own segments, as
 /// many as it has, each starting at an anchor `tidy` keeps (a segment split where paths cross gives a piece that starts away from the anchors,
-/// and a piece dropped inside another path leaves fewer segments than the input). `None` when the contours are to be swept again.
-fn lone_union(c: &Contours, input_segments: usize, tidy: &Tidy) -> Option<BezPath> {
-    if !splits_nothing(c, input_segments, tidy) {
+/// and a piece dropped inside another path leaves fewer segments than the input), and no two lie within twice the sweep's tolerance of each
+/// other ([`crate::close::comes_close`]: a second sweep joins contours that lie that close, and the first leaves them apart). `None` when
+/// the contours are to be swept again.
+fn lone_union(c: &Contours, input_segments: usize, inputs: &[BezPath], tidy: &Tidy) -> Option<BezPath> {
+    let eps = eps_for(inputs.iter()).ok()?;
+    if !splits_nothing(c, input_segments, tidy) || crate::close::comes_close(c, 2.0 * eps) {
         return None;
     }
     work::add(Work::LoneUnions, 1);
@@ -2716,6 +2719,44 @@ mod tests {
         for (got, sweeps, metered) in unite_counting_sweeps(&pair) {
             assert_eq!((sweeps, metered), (3, 3), "two inputs past the gate: each sweep is held");
             assert_eq!(got, unite_swept_twice(&pair, DEFAULT_PRECISION));
+        }
+    }
+
+    /// A sweep can leave segments within its tolerance apart where a second sweep joins them: a lone input that has two within twice the
+    /// tolerance is swept again, and one with none is not (VectorCraft 4060f14).
+    #[test]
+    fn a_lone_input_with_segments_within_the_tolerance_is_swept_again() {
+        let triangles = |gap: f64, lift: f64| {
+            let mut bp = BezPath::new();
+            bp.extend(crate::testutil::polyline(&[(0.0, 0.0), (10.0, 0.0), (0.0, 10.0)], true).iter());
+            bp.extend(crate::testutil::polyline(&[(10.0 + gap, lift), (10.0 + gap, 10.0 + lift), (gap, 10.0 + lift)], true).iter());
+            bp
+        };
+        let mut circles = BezPath::new();
+        circles.extend(kurbo::Circle::new((0.0, 0.0), 10.0).path_elements(0.1));
+        circles.extend(kurbo::Circle::new((20.000001, 0.0), 10.0).path_elements(0.1));
+        for (name, path, joined) in
+            [("snapped", triangles(0.99e-6, 0.99e-6), Some(1)), ("same heights", triangles(0.9e-6, 0.0), Some(1)), ("circles", circles, None)]
+        {
+            let want = unite_swept_twice(&[(&path, FillRule::NonZero)], DEFAULT_PRECISION);
+            if let Some(n) = joined {
+                assert_eq!(want.elements().iter().filter(|e| matches!(e, kurbo::PathEl::MoveTo(_))).count(), n, "{name}");
+                // The first sweep alone leaves the two triangles apart: skipping the second would give a different union.
+                let first = normalize_bez(&fill_bezpath(&path), FillRule::NonZero).unwrap();
+                assert_eq!(first.contours().count(), n + 1, "{name}: the sweep of the input has the two contours");
+            }
+            for (got, sweeps, _) in unite_counting_sweeps(&[(&path, FillRule::NonZero)]) {
+                assert_eq!(sweeps, 2, "{name}");
+                assert_eq!(got, want, "{name}");
+            }
+        }
+        // Farther apart than that, the sweep's own contours stand.
+        let apart = triangles(1e-5, 0.0);
+        let want = unite_swept_twice(&[(&apart, FillRule::NonZero)], DEFAULT_PRECISION);
+        assert_eq!(want.elements().iter().filter(|e| matches!(e, kurbo::PathEl::MoveTo(_))).count(), 2);
+        for (got, sweeps, _) in unite_counting_sweeps(&[(&apart, FillRule::NonZero)]) {
+            assert_eq!(sweeps, 1);
+            assert_eq!(got, want);
         }
     }
 

@@ -29,6 +29,7 @@
 
 mod boolean;
 mod budget;
+mod close;
 mod crossings;
 mod edit;
 mod fit;

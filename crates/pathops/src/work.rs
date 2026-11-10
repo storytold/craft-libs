@@ -111,6 +111,12 @@ pub(crate) enum Work {
     MeteredSweeps,
     /// The fourth powers of the segments that start (or end) together, summed, as the meter counts them before its sweep.
     MeterGroups,
+    /// Segments of the contours of a lone input that were read to find whether two of them come close.
+    CloseSegments,
+    /// Pairs of those segments that were looked at (their extents meet along the side they are sorted on), counted before each is.
+    ClosePairs,
+    /// Pairs of those segments that were compared (their extents meet both ways), counted before each is.
+    CloseCompared,
     /// Unions of one input whose own sweep was the union (the second sweep was not made).
     LoneUnions,
 }
