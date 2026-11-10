@@ -458,10 +458,13 @@ pub fn prepare_update(
         .ok_or_else(|| format!("{} {} has no {} for {}", app.name, release.version_label(), install.kind().label(), platform.label()))?;
     let asset = asset.clone();
     crate::install::bind_artifact_version(app, release, &asset)?;
+    // Nothing is downloaded for a copy that can't install it.
+    #[cfg(windows)]
+    windows_precheck(app, install, paths)?;
     let mut job = Job { http, paths, stop, phase, install_locations: &Default::default(), replace: false };
     let file = install::download(release, &asset, &mut job)?;
     #[cfg(windows)]
-    windows_precheck(app, install, paths, &file)?;
+    windows_check_download(app, install, &file)?;
     // The restart ends this process: nothing else may be under way.
     last()?;
     phase(JobPhase::Installing);
@@ -1115,16 +1118,16 @@ fn own_executable(app: &App, exe: &Path) -> Result<(), String> {
     if is_own_executable(app, exe) { Ok(()) } else { Err(format!("the update helper only finishes {}'s own update", app.name)) }
 }
 
-/// Checks, while the app still runs and can show the error, what the helper checks before
-/// it installs: this program, the installed exe and the new MSI are signed by one publisher, and
-/// the helper finds the cache in `paths` that holds its copy, the download and the staging folder.
+/// Checks, before anything is downloaded, what the helper checks before it installs and what
+/// does not depend on the download: this program and the installed exe are signed by one
+/// publisher, and the helper finds the cache in `paths` that holds its copy, the download and the
+/// staging folder.
 #[cfg(windows)]
-fn windows_precheck(app: &App, install: &Install, paths: &Paths, download: &Path) -> Result<(), String> {
+fn windows_precheck(app: &App, install: &Install, paths: &Paths) -> Result<(), String> {
     let me = std::env::current_exe().map_err(|e| format!("couldn't find this program ({e})"))?;
     match install {
         Install::Msi(exe) => signed_like(app, &me, exe)
             .and_then(|()| msi_step(app, exe).map(drop))
-            .and_then(|()| signed_like(app, &me, download))
             .and_then(|()| own_executable(app, exe))
             .and_then(|()| same_cache_as_helper(app, paths, exe)),
         Install::Portable(exe) | Install::Standalone(exe) => {
@@ -1134,11 +1137,26 @@ fn windows_precheck(app: &App, install: &Install, paths: &Paths, download: &Path
     }
 }
 
+/// Checks the finished download, while the app still runs and can show the error: a new MSI is
+/// signed by this program's publisher.
+#[cfg(windows)]
+fn windows_check_download(app: &App, install: &Install, download: &Path) -> Result<(), String> {
+    match install {
+        Install::Msi(_) => {
+            let me = std::env::current_exe().map_err(|e| format!("couldn't find this program ({e})"))?;
+            signed_like(app, &me, download)
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Accepts `paths` when the update helper, which finds the app's folders again from `exe`
 /// ([`Paths::for_exe`]), finds the same cache. Refuses an app that keeps its files in the
-/// temporary folder because its own folders couldn't be found.
+/// temporary folder because its own folders couldn't be found. The cache is created first, so a
+/// first update finds it before the download does.
 #[cfg(windows)]
 fn same_cache_as_helper(app: &App, paths: &Paths, exe: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(&paths.cache).map_err(|e| format!("couldn't create {} ({e})", paths.cache.display()))?;
     let canonical = |p: &Path| p.canonicalize().ok();
     let theirs = Paths::for_exe(app, exe).ok().and_then(|helper| canonical(&helper.cache));
     if theirs.is_some() && theirs == canonical(&paths.cache) {
@@ -1845,12 +1863,68 @@ mod tests {
     #[test]
     fn an_unsigned_launcher_refuses_to_update_before_it_quits() {
         let dir = tempfile::tempdir().unwrap();
-        let msi = dir.path().join("artcraft-launcher-0.2.0-windows-x64.msi");
-        std::fs::write(&msi, "not a package").unwrap();
         for install in [Install::Msi(system_program("msiexec.exe")), Install::Portable(system_program("msiexec.exe"))] {
-            let error = windows_precheck(&crate::suite::LAUNCHER, &install, &Paths::under(dir.path()), &msi).unwrap_err();
+            let error = windows_precheck(&crate::suite::LAUNCHER, &install, &Paths::under(dir.path())).unwrap_err();
             assert!(error.contains("isn't signed"), "{error}");
         }
+    }
+
+    /// A copy that can't install an update stops before the download: the address here can't be
+    /// reached, so a download attempt would give a different error.
+    #[cfg(windows)]
+    #[test]
+    fn a_copy_that_cannot_install_downloads_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = "artcraft-launcher-0.2.0-windows-x64-portable.zip";
+        let asset = crate::release::Asset { name: name.into(), size: 1, url: format!("http://127.0.0.1:1/{name}"), sha256: Some("00".repeat(32)) };
+        let release = Release { tag: "v0.2.0".into(), version: version::parse("0.2.0"), assets: vec![asset], ..Release::default() };
+        let mut phases = 0;
+        let error = prepare_update(
+            &crate::suite::LAUNCHER,
+            &Install::Portable(system_program("msiexec.exe")),
+            &release,
+            Platform { os: crate::Os::Windows, arch: crate::Arch::X64 },
+            &Http::new(crate::TEST_AGENT).unwrap(),
+            &Paths::under(dir.path()),
+            &Stop::default(),
+            &mut |_| phases += 1,
+            &|| Ok(()),
+            None,
+        )
+        .unwrap_err();
+        assert!(error.contains("isn't signed"), "{error}");
+        assert_eq!(phases, 0, "no download phase was reported");
+    }
+
+    /// The cache may not exist yet at the first update: the check runs before the download
+    /// creates it.
+    #[cfg(windows)]
+    #[test]
+    fn the_cache_check_passes_before_the_cache_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("artcraft-launcher.exe");
+        std::fs::write(&exe, "MZ").unwrap();
+        std::fs::write(dir.path().join("portable.txt"), "").unwrap();
+        let paths = Paths::for_exe(&crate::suite::LAUNCHER, &exe).unwrap();
+        assert!(!paths.cache.exists());
+        assert_eq!(same_cache_as_helper(&crate::suite::LAUNCHER, &paths, &exe), Ok(()));
+    }
+
+    /// A cache folder that can't be created is reported with its path and error, not as a cache
+    /// in the wrong place.
+    #[cfg(windows)]
+    #[test]
+    fn a_cache_that_cannot_be_created_is_named_with_its_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("artcraft-launcher.exe");
+        std::fs::write(&exe, "MZ").unwrap();
+        std::fs::write(dir.path().join("portable.txt"), "").unwrap();
+        let file = dir.path().join("a-file");
+        std::fs::write(&file, "").unwrap();
+        let mut paths = Paths::for_exe(&crate::suite::LAUNCHER, &exe).unwrap();
+        paths.cache = file.join("cache");
+        let error = same_cache_as_helper(&crate::suite::LAUNCHER, &paths, &exe).unwrap_err();
+        assert!(error.contains("couldn't create") && error.contains(&paths.cache.display().to_string()), "{error}");
     }
 
     /// An MSI that isn't signed by the launcher's publisher is never handed to the Windows Installer.
