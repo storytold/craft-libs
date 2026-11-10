@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 craft-fonts-build = { workspace = true }
 craft-i18n = { workspace = true }
+craft-theme = { workspace = true }
 egui = { workspace = true }
 epaint = { version = "0.37", default-features = false }
 log = "0.4"
