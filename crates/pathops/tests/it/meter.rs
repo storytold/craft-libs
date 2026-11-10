@@ -6,6 +6,7 @@
 //! length), are refused here by the meter alone: the limits that price a sweep before it is made are lifted, so that only the meter is
 //! left to say no. The false-refusal set, the inputs that must be made, is admitted in a release build.
 
+#[cfg(target_os = "linux")]
 use std::process::Command;
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -197,8 +198,9 @@ fn child_case() {
 }
 
 /// The meter refuses each case in a child process under `ulimit -v 3000000` (a limit of 3 GB of address space, as the earlier reviews
-/// measured under), cleanly: the child does not abort, and its answer is `TooComplex`.
-#[cfg(unix)]
+/// measured under), cleanly: the child does not abort, and its answer is `TooComplex`. Linux only: `ulimit -v` limits the address space
+/// there (`RLIMIT_AS`), and the sizes are those of Linux's; macOS refuses it ("Invalid argument") and the BSDs count it otherwise.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_refusal_holds_memory_under_a_limit_of_three_gigabytes() {
     let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
@@ -209,7 +211,7 @@ fn a_refusal_holds_memory_under_a_limit_of_three_gigabytes() {
 }
 
 /// A child of [`child_case`] run under `ulimit -v 3000000`: what it printed, and whether it came back cleanly (it did not abort).
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn run_child_under_the_limit(name: &str) -> String {
     let exe = std::env::current_exe().expect("the test binary");
     let output = Command::new("sh")
@@ -225,8 +227,8 @@ fn run_child_under_the_limit(name: &str) -> String {
 }
 
 /// The most the meter admits of the pies that fill the cache is made under the same limit: it fits (2,000 pies of 30 slices need a limit
-/// of about 2.6 GB, and 4,500 of 20 one of about 2.8 GB, of address space), and it comes back with an answer.
-#[cfg(unix)]
+/// of about 2.6 GB, and 4,500 of 20 one of about 2.8 GB, of address space), and it comes back with an answer. Linux only, as the test above.
+#[cfg(target_os = "linux")]
 #[cfg_attr(debug_assertions, ignore = "seconds and gigabytes: run with cargo test --release")]
 #[test]
 fn an_admission_holds_memory_under_a_limit_of_three_gigabytes() {
