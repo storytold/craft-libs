@@ -590,6 +590,76 @@ pub(crate) fn circle_pairs_apart(n: usize, r: f64, dx: f64, dy: f64) -> BezPath 
     bp
 }
 
+/// The arc of a circle of radius `r` at `(cx, cy)` from the angle `a0` to `a1`, as one cubic's four points.
+pub(crate) fn circle_arc(cx: f64, cy: f64, r: f64, a0: f64, a1: f64) -> [Point; 4] {
+    let k = 4.0 / 3.0 * ((a1 - a0) / 4.0).tan();
+    let at = |a: f64| Point::new(cx + r * a.cos(), cy + r * a.sin());
+    let along = |a: f64| kurbo::Vec2::new(-a.sin(), a.cos()) * r;
+    [at(a0), at(a0) + along(a0) * k, at(a1) - along(a1) * k, at(a1)]
+}
+
+/// [`circle_pairs`] (the second circle of each `g` to the right of the first) with, between the two, a thin crescent along the first 45 degrees
+/// of each of the four arcs, in the order the sweep meets them: the crescent keeps the two circles' arcs apart in the order across until it ends,
+/// at which they become next to one another though they started together.
+pub(crate) fn circle_pairs_with_blockers(n: usize, r: f64, g: f64) -> BezPath {
+    circle_pairs_with_blockers_apart(n, r, g, 0.0)
+}
+
+/// [`circle_pairs_with_blockers`] with the second circle of each pair `dy` further along y than the first (and the crescents a third and two thirds
+/// of the way): the pairs of arcs do not start or end at one height, so that what starts and ends together sees none of them, and the crescent
+/// keeps them from being next to one another in a range when they come in, until it has gone.
+pub(crate) fn circle_pairs_with_blockers_apart(n: usize, r: f64, g: f64, dy: f64) -> BezPath {
+    let side = (n as f64).sqrt().ceil() as usize;
+    let quarter = std::f64::consts::FRAC_PI_4;
+    let (left, bottom) = (std::f64::consts::PI, 1.5 * std::f64::consts::PI);
+    let mut bp = BezPath::new();
+    for i in 0..n {
+        let (cx, cy) = ((i % side) as f64 * 4.0 * r, (i / side) as f64 * 4.0 * r);
+        bp.extend(cubic_circle(4, r, cx, cy));
+        bp.extend(cubic_circle(4, r, cx + g, cy + dy));
+        for (a0, a1) in [(0.0, quarter), (left, left - quarter), (bottom, bottom - quarter), (bottom, bottom + quarter)] {
+            let forward = circle_arc(cx + g / 3.0, cy + dy / 3.0, r, a0, a1);
+            let back = circle_arc(cx + 2.0 * g / 3.0, cy + 2.0 * dy / 3.0, r, a0, a1);
+            bp.move_to(forward[0]);
+            bp.curve_to(forward[1], forward[2], forward[3]);
+            bp.line_to(back[3]);
+            bp.curve_to(back[2], back[1], back[0]);
+            bp.close_path();
+        }
+    }
+    bp
+}
+
+/// `n` clusters, each a circle `C1` of radius `r` whose right-most arc is on the sweep line at the height where the first arc of `C2` (the same circle
+/// `g` further across, its first arc cut at the angle where it has risen a thousandth, so that it comes in on its own) comes in beside it, and `k`
+/// thin rectangles in a crowd to the left of `C1`, all within a tenth of a millionth of it and so within two tolerances of where `C2` comes in (more
+/// than the places a search of the line that reads thirty-two of them would reach), so that the new curve and the one it runs along are next to one another in the middle of a crowd.
+pub(crate) fn curves_beside_a_crowd(n: usize, r: f64, g: f64, k: usize) -> BezPath {
+    let side = (n as f64).sqrt().ceil() as usize;
+    let half = std::f64::consts::FRAC_PI_2;
+    let mut bp = BezPath::new();
+    for i in 0..n {
+        let (cx, cy) = ((i % side) as f64 * 4.0 * r, (i / side) as f64 * 4.0 * r);
+        bp.extend(cubic_circle(4, r, cx, cy - 1.0));
+        let turn = (1e-3f64 / r).asin();
+        let (mx, my) = (cx + g, cy - 1.0);
+        let (sliver, main) = (circle_arc(mx, my, r, 0.0, turn), circle_arc(mx, my, r, turn, half));
+        bp.move_to(sliver[0]);
+        bp.curve_to(sliver[1], sliver[2], sliver[3]);
+        bp.curve_to(main[1], main[2], main[3]);
+        for q in 1..4 {
+            let a = circle_arc(mx, my, r, f64::from(q) * half, f64::from(q + 1) * half);
+            bp.curve_to(a[1], a[2], a[3]);
+        }
+        bp.close_path();
+        for j in 1..=k {
+            let x = cx + r - 1e-7 * j as f64 / k as f64;
+            bp.extend(rect(x, cy - 10.0, x + 1e-8, cy + 10.0).iter());
+        }
+    }
+    bp
+}
+
 /// A path as the polygon of its flattening, to read the winding number of a point from, as an oracle for the winding of
 /// the curves: the crossings of a ray to the left with straight edges, found by none of the arithmetic of the cubics. It
 /// holds for a point farther from the path than the flattening's tolerance (and than the rounding of the crossing, which

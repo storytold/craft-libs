@@ -15,9 +15,9 @@ use craft_pathops::*;
 use kurbo::BezPath;
 
 use crate::common::{
-    arc_fan, arc_windows, circle_pairs, circle_pairs_apart, cubic_circle, cubic_fan, fan_along_a_line, jittered_pencil, jittered_pies,
-    nearly_parallel_lines, polygons_a_few_tolerances_apart, polygons_an_ulp_apart, stacked_pies, stacked_polygons, stacked_segments,
-    windows_sharing_a_tenth,
+    arc_fan, arc_windows, circle_pairs, circle_pairs_apart, circle_pairs_with_blockers_apart, cubic_circle, cubic_fan, fan_along_a_line,
+    jittered_pencil, jittered_pies, nearly_parallel_lines, polygons_a_few_tolerances_apart, polygons_an_ulp_apart, stacked_pies, stacked_polygons,
+    stacked_segments, windows_sharing_a_tenth,
 };
 
 const NZ: FillRule = FillRule::NonZero;
@@ -136,6 +136,23 @@ fn pairs_of_circles_that_start_at_different_heights_are_refused_by_the_meter_alo
         [(1_024, 1e6, 0.03, 3e-4), (2_048, 1e6, 0.03, 3e-4), (2_048, 1e6, 0.03, 0.03), (6_000, 1e6, 0.03, 1.0), (6_000, 1e5, 0.003, 1e-3)]
     {
         refused_by_the_meter(&circle_pairs_apart(n, r, dx, dy), &format!("{n} pairs of circles of {r}, {dx} across and {dy} up"));
+    }
+}
+
+/// Circles with a thin crescent between each pair of them, along the first quarter of each arc: the crescent keeps the two circles' arcs apart in
+/// the order across until it ends, and they are next to one another, and compared, from then on (the segments that start together do not see
+/// them, and neither does a range that has them come in; the second circle of each pair 3e-4 higher is not seen by the heights either). Before
+/// the pairs that a leaving curve makes next to one another were charged the meter counted 0.71 to 0.80 of what the sweep of such circles takes
+/// (256 pairs: 1.6 s of 2.2 s), so that it admitted 576 pairs, which take 5 s of sweep and 10 s of `try_area` beside the star's 8; it counts
+/// 1.02 to 1.13 now, and refuses them.
+#[cfg_attr(debug_assertions, ignore = "seconds: run with cargo test --release")]
+#[test]
+fn circles_kept_apart_by_a_curve_that_leaves_are_refused_by_the_meter_alone() {
+    for (n, dy) in [(576, 0.0), (576, 3e-4), (1_024, 0.0), (1_024, 3e-4)] {
+        refused_by_the_meter(
+            &circle_pairs_with_blockers_apart(n, 1e6, 0.03, dy),
+            &format!("{n} pairs of circles of a million with a crescent between, {dy} up"),
+        );
     }
 }
 

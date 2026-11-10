@@ -443,6 +443,46 @@ pub fn circle_pairs_apart(n: usize, r: f64, dx: f64, dy: f64) -> BezPath {
     bp
 }
 
+/// The arc of a circle of radius `r` at `(cx, cy)` from the angle `a0` to `a1`, as one cubic's four points.
+pub fn circle_arc(cx: f64, cy: f64, r: f64, a0: f64, a1: f64) -> [Point; 4] {
+    let k = 4.0 / 3.0 * ((a1 - a0) / 4.0).tan();
+    let at = |a: f64| Point::new(cx + r * a.cos(), cy + r * a.sin());
+    let along = |a: f64| kurbo::Vec2::new(-a.sin(), a.cos()) * r;
+    [at(a0), at(a0) + along(a0) * k, at(a1) - along(a1) * k, at(a1)]
+}
+
+/// [`circle_pairs`] (the second circle of each `g` to the right of the first) with, between the two, a thin crescent along the first 45 degrees
+/// of each of the four arcs, in the order the sweep meets them: the crescent keeps the two circles' arcs apart in the order across until it ends,
+/// at which they become next to one another though they started together.
+pub fn circle_pairs_with_blockers(n: usize, r: f64, g: f64) -> BezPath {
+    circle_pairs_with_blockers_apart(n, r, g, 0.0)
+}
+
+/// [`circle_pairs_with_blockers`] with the second circle of each pair `dy` further along y than the first (and the crescents a third and two thirds
+/// of the way): the pairs of arcs do not start or end at one height, so that what starts and ends together sees none of them, and the crescent
+/// keeps them from being next to one another in a range when they come in, until it has gone.
+pub fn circle_pairs_with_blockers_apart(n: usize, r: f64, g: f64, dy: f64) -> BezPath {
+    let side = (n as f64).sqrt().ceil() as usize;
+    let quarter = std::f64::consts::FRAC_PI_4;
+    let (left, bottom) = (std::f64::consts::PI, 1.5 * std::f64::consts::PI);
+    let mut bp = BezPath::new();
+    for i in 0..n {
+        let (cx, cy) = ((i % side) as f64 * 4.0 * r, (i / side) as f64 * 4.0 * r);
+        bp.extend(cubic_circle(4, r, cx, cy));
+        bp.extend(cubic_circle(4, r, cx + g, cy + dy));
+        for (a0, a1) in [(0.0, quarter), (left, left - quarter), (bottom, bottom - quarter), (bottom, bottom + quarter)] {
+            let forward = circle_arc(cx + g / 3.0, cy + dy / 3.0, r, a0, a1);
+            let back = circle_arc(cx + 2.0 * g / 3.0, cy + 2.0 * dy / 3.0, r, a0, a1);
+            bp.move_to(forward[0]);
+            bp.curve_to(forward[1], forward[2], forward[3]);
+            bp.line_to(back[3]);
+            bp.curve_to(back[2], back[1], back[0]);
+            bp.close_path();
+        }
+    }
+    bp
+}
+
 /// `n` segments from the point (0, 0) along one line, the k-th to `(k, k)` (kind 0, the diagonal), `(0, k)` (kind 1, the vertical)
 /// or `(k, 0)` (any other, level), each its own open subpath: lengths 1 to `n`, and every two share their start and overlap.
 pub fn fan_along_a_line(n: usize, kind: usize) -> BezPath {
