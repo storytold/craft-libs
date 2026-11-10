@@ -157,3 +157,154 @@ pub fn generate_and_report<T>(name: &str, outputs: &[PathBuf], generate: impl Fn
     println!("FIXTURE {status} {name}");
     r
 }
+
+/// Check if ffmpeg has a specific encoder compiled in.
+pub fn ffmpeg_has_encoder(ff: &Path, encoder: &str) -> bool {
+    let Ok(output) = Command::new(ff).args(["-hide_banner", "-encoders"]).output() else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    parse_has_encoder(&String::from_utf8_lossy(&output.stdout), encoder)
+}
+
+fn parse_has_encoder(stdout: &str, encoder: &str) -> bool {
+    stdout.lines().any(|line| {
+        let mut parts = line.split_whitespace();
+        if let (Some(_flags), Some(name)) = (parts.next(), parts.next()) { name == encoder } else { false }
+    })
+}
+
+/// Find ffmpeg, or print a skip message and return None.
+pub fn ffmpeg_or_skip(reason: &str) -> Option<PathBuf> {
+    let ff = ffmpeg();
+    if ff.is_none() {
+        eprintln!("SKIPPED ({reason}): ffmpeg not found");
+    }
+    ff
+}
+
+/// Log progress of long tests.
+pub fn set_progress(label: &str) {
+    eprintln!("PROGRESS: {label}");
+}
+
+/// Run closure with an execution deadline, terminating with a panic if the limit is exceeded.
+#[allow(clippy::panic)]
+pub fn with_deadline<F: FnOnce() + Send + 'static>(secs: u64, f: F) {
+    let timeout_secs = timeout_from_env(
+        secs,
+        std::env::var("CRAFT_TEST_TIMEOUT_SECS").ok().as_deref(),
+        std::env::var("FILMCRAFT_HOSTILE_TIMEOUT_SECS").ok().as_deref(),
+    );
+    with_timeout(timeout_secs, f);
+}
+
+fn timeout_from_env(secs: u64, craft_timeout: Option<&str>, legacy_timeout: Option<&str>) -> u64 {
+    craft_timeout.or(legacy_timeout).and_then(|s| s.parse().ok()).unwrap_or(secs)
+}
+
+#[allow(clippy::panic)]
+fn with_timeout<F: FnOnce() + Send + 'static>(timeout_secs: u64, f: F) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        f();
+        let _ = tx.send(());
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(timeout_secs)) {
+        Ok(()) => {
+            if let Err(payload) = handle.join() {
+                std::panic::resume_unwind(payload);
+            }
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            panic!("test exceeded execution deadline of {timeout_secs} seconds");
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            if let Err(payload) = handle.join() {
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+}
+
+/// Return fixture directory for a crate/category, creating it if needed.
+pub fn fixtures_dir(subdir: &str) -> PathBuf {
+    fixture_subdir(subdir)
+}
+
+pub mod fixtures {
+    use super::temp_path;
+    use std::path::{Path, PathBuf};
+
+    /// Atomically publish a fixture by renaming `tmp` to `path`.
+    pub fn publish(tmp: &Path, path: &Path) -> std::io::Result<()> {
+        std::fs::rename(tmp, path)
+    }
+
+    /// Generate fixture `out` using generator closure if it does not already exist.
+    pub fn generate<F: FnOnce(&Path) -> bool>(out: &Path, f: F) -> Option<PathBuf> {
+        if out.exists() {
+            return Some(out.to_path_buf());
+        }
+        let tmp = temp_path(out);
+        if f(&tmp) {
+            match std::fs::rename(&tmp, out) {
+                Ok(()) => Some(out.to_path_buf()),
+                Err(_) => {
+                    let _ = std::fs::remove_file(&tmp);
+                    None
+                }
+            }
+        } else {
+            let _ = std::fs::remove_file(&tmp);
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_has_encoder_exact_match() {
+        let sample = "\
+Encoders:
+ V..... = Video
+ ------
+ V....D libvpx-vp9          libvpx VP9 (codec vp9)
+ V....D libvpx              libvpx VP8 (codec vp8)
+ A....D flac                FLAC (Free Lossless Audio Codec)
+";
+        assert!(parse_has_encoder(sample, "libvpx"));
+        assert!(parse_has_encoder(sample, "libvpx-vp9"));
+        assert!(parse_has_encoder(sample, "flac"));
+        assert!(!parse_has_encoder(sample, "vp8"));
+        assert!(!parse_has_encoder(sample, "libvp"));
+    }
+
+    #[test]
+    fn with_deadline_completes() {
+        with_deadline(5, || {
+            // fast operation
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "test exceeded execution deadline")]
+    fn with_deadline_times_out() {
+        with_timeout(1, || {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+        });
+    }
+
+    #[test]
+    fn timeout_environment_overrides_are_selected_separately() {
+        assert_eq!(timeout_from_env(300, Some("4"), Some("5")), 4);
+        assert_eq!(timeout_from_env(300, None, Some("5")), 5);
+        assert_eq!(timeout_from_env(300, Some("invalid"), Some("5")), 300);
+        assert_eq!(timeout_from_env(300, None, None), 300);
+    }
+}

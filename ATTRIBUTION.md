@@ -77,3 +77,16 @@ and the exact transfer revision are recorded in each vendored crate's SOURCE.jso
 | `hayro-interpret 0.7.0 / assets/CGATS001Compat-v2-micro.icc` | Clinton Ingram (saucecontrol/Compact-ICC-Profiles) | https://github.com/storytold/pdfcraft/blob/7437bde378f43856eada40af25b983812e615e8a/vendor/hayro-interpret/assets/CGATS001Compat-v2-micro.icc | CC0-1.0 | `73e1ba37d2bad5bab2a964f40a9eed96209666efc067c3322626214bbef234a0` | Default CMYK colour conversion (pinned hayro-interpret) |
 | `hayro-cmap 0.1.0 / assets/cmaps.brotli` | Adobe | https://github.com/storytold/pdfcraft/blob/a2ec27b4775f53c40cad3456936d9406611e3a8d/vendor/hayro-cmap/assets/cmaps.brotli | BSD-3-Clause | `ddf37af521d904d5646c2fc37b2b7e912dc1b56f0d210190b61f598154758e46` | Character-code mapping tables required to read CJK PDFs. Non-visual dependency data; existing embedding unchanged |
 | `hayro-interpret 0.7.0 / src/font/generated/metrics.rs` | Adobe (Core 14 AFM metrics, PDF specification encodings); tables by The Hayro Authors | https://github.com/storytold/pdfcraft/blob/7437bde378f43856eada40af25b983812e615e8a/vendor/hayro-interpret/src/font/generated/metrics.rs | MIT OR Apache-2.0 | `2ec9e608573eda459de1e1d9bda3bb494315e36bee885acc88912a11fe0caa41` | Glyph widths and encodings for non-embedded standard fonts. Non-visual dependency data; existing embedding unchanged |
+
+## Video Codec Tables and Normative Specification Derivations
+
+The pure-Rust video codec crates derive and extract tables strictly from normative open standards specifications:
+
+| Crate / file | Specification / Author | Extraction / Source | Licence | Use |
+| --- | --- | --- | --- | --- |
+| `crates/dnx/tools/extract_tables.py`, `crates/dnx/src/tables.rs` | SMPTE ST 2019-1:2016 | Extracted from SMPTE ST 2019-1 document text via committed Python script | SMPTE normative constants | DNxHD / DNxHR macroblock, VLC, and quantization tables |
+| `crates/vp8/tools/extract_tables.py`, `crates/vp8/src/tables.rs` | IETF RFC 6386 (VP8) | Extracted from RFC 6386 normative specification text | RFC 6386 / IETF Trust | VP8 tree probabilities and quantizer tables |
+| `crates/av1enc/src/tables.rs`, `crates/av1enc/src/cdf.rs` | Alliance for Open Media (AOMedia) | AV1 Bitstream & Decoding Process Specification v1.0.0 with Errata 1 | Alliance for Open Media Patent and Copyright License (MIT OR Apache-2.0) | Normative AV1 transform, scan, and symbol CDF tables |
+| `crates/hevcenc/src/tables.rs` | ITU-T H.265 | ITU-T Recommendation H.265 | ITU-T normative tables | HEVC scan orders, deblock thresholds, and scaling matrices |
+| `crates/vp9enc/src/tables.rs` | VP9 Bitstream & Decoding Process Specification | VP9 specification text | MIT OR Apache-2.0 | VP9 scan orders, intra mode contexts, and MV contexts |
+

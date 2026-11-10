@@ -1,0 +1,20 @@
+[package]
+name = "craft-h264enc"
+description = "Clean-room pure-Rust H.264/AVC encoder for the Craft ecosystem"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["threads"]
+threads = ["dep:rayon"]
+
+[dependencies]
+craft-media = { workspace = true, default-features = false, features = ["bitstream"] }
+thiserror = { workspace = true }
+rayon = { workspace = true, optional = true }
