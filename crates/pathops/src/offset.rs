@@ -346,13 +346,24 @@ fn split_closed_open(path: &BezPath) -> (BezPath, BezPath) {
 fn filled_boundary(closed: &BezPath) -> Result<BezPath, PathOpsError> {
     let mut boundary = BezPath::new();
     let mut contours = 0usize;
-    let (swept, all_boundary) = normalize_bez_counted(closed, FillRule::NonZero, usize::MAX)?.ok_or(PathOpsError::TooComplex)?;
+    // The boundary is held to the element limit, as the contours of a union are ([`crate::boolean::held_union`]): a sweep whose boundary has
+    // more segments than that makes no contours (a mesh of 1,022 bars crossing in a million places made 1.6 million elements of them,
+    // three times the limit, and was refused after), and what is copied into the boundary is counted before it is, and stops at the limit.
+    // `closed` is reused, when it is, only once its contours are in hand to measure it against: the inset of a boundary over the limit would
+    // be refused for its size all the same.
+    let limit = crate::budget::limits().elements;
+    let (swept, all_boundary) = normalize_bez_counted(closed, FillRule::NonZero, limit)?.ok_or(PathOpsError::TooComplex)?;
     let eps = eps_for([closed])?;
     for contour in swept.contours() {
         // Without the pieces it goes out and back along: two passes of one curve that the sweep keeps a
         // rounding apart (a cubic out and back along a line, which it does not take for a retrace),
         // whose stroke would cut a notch in the inset. A contour that is nothing else bounds nothing.
         let Some(path) = without_spurs(&contour.path) else { continue };
+        let copied = boundary.elements().len().saturating_add(path.elements().len());
+        if copied > limit {
+            return Err(PathOpsError::TooComplex);
+        }
+        work::add(Work::BoundaryCopied, path.elements().len());
         boundary.extend(path.iter());
         contours += 1;
     }
@@ -1803,5 +1814,80 @@ mod tests {
         assert_eq!(widest_span(vec![(0.0, at(1.0)), (-1.0, at(2.0)), (0.5, at(3.0))]), Some(at(3.0)));
         assert_eq!(widest_span(vec![(0.0, at(1.0)), (f64::NAN, at(2.0))]), None);
         assert_eq!(widest_span(Vec::new()), None);
+    }
+
+    /// `n` horizontal and `n` vertical bars (rectangles 1 thick, 3 apart), one path: every two of them cross, and the cells between are holes.
+    pub(super) fn mesh_of_bars(n: usize) -> BezPath {
+        let len = 3.0 * n as f64;
+        let mut bp = BezPath::new();
+        for i in 0..n {
+            let y = 3.0 * i as f64;
+            bp.extend(crate::testutil::polyline(&[(0.0, y), (len, y), (len, y + 1.0), (0.0, y + 1.0)], true).iter());
+        }
+        for j in 0..n {
+            let x = 3.0 * j as f64;
+            bp.extend(crate::testutil::polyline(&[(x, 0.0), (x + 1.0, 0.0), (x + 1.0, len), (x, len)], true).iter());
+        }
+        bp
+    }
+
+    /// The limits of the elements with `n` elements.
+    fn limited(n: usize) -> crate::Limits {
+        crate::Limits { elements: n, ..crate::Limits::default() }
+    }
+
+    /// The boundary of an inset is held to the element limit before its contours are made: a mesh of 30 bars each way (60 bars, the input
+    /// within the limit) crosses in 3,600 places and leaves 841 cells, whose contours are over 5,000 elements. Under a limit of the elements
+    /// of the input the sweep counts its boundary, finds it more than that, and makes no contour and copies none; before, the contours were
+    /// made (3 times the limit, in the worst the sweep limits admit: 1,022 bars made 1.6 million elements, 2.99 times the limit of 524,288)
+    /// and refused after. The inset is `TooComplex` either way.
+    #[test]
+    fn an_inset_makes_no_contours_past_the_element_limit() {
+        let mesh = mesh_of_bars(30);
+        let (closed, _) = split_closed_open(&mesh);
+        let input = closed.elements().len();
+        work::reset();
+        let r = crate::with_limits(limited(input), || try_offset_path(&mesh, -0.2, Join::Miter, 4.0));
+        assert_eq!(r, Err(PathOpsError::TooComplex));
+        assert_eq!(work::take(Work::ContourElements), 0, "no contour of the boundary is made");
+        assert_eq!(work::take(Work::BoundaryCopied), 0);
+        assert!(work::take(Work::BoundarySegments) > input, "the boundary the sweep counted is over the limit");
+        // Without the limit the contours are made: 5,000 and more elements, which the limit above refused to make.
+        work::reset();
+        let (swept, _) = normalize_bez_counted(&closed, FillRule::NonZero, usize::MAX).unwrap().unwrap();
+        let elements: usize = swept.contours().map(|c| c.path.elements().len()).sum();
+        assert!(elements > 5_000 && work::take(Work::ContourElements) == elements, "{elements}");
+    }
+
+    /// What is copied into the boundary is counted before it is and stops at the limit: under a limit of the segments of the boundary (which
+    /// the sweep admits) the contours are 2 elements a contour more, and the copy of them is refused before it passes the limit.
+    #[test]
+    fn an_inset_copies_no_more_of_its_boundary_than_the_element_limit() {
+        let mesh = mesh_of_bars(30);
+        let (closed, _) = split_closed_open(&mesh);
+        work::reset();
+        normalize_bez_counted(&closed, FillRule::NonZero, usize::MAX).unwrap().unwrap();
+        let (segments, elements) = (work::take(Work::BoundarySegments), work::take(Work::ContourElements));
+        assert!(elements > segments, "{elements} elements of contours for {segments} segments");
+        work::reset();
+        let r = crate::with_limits(limited(segments), || filled_boundary(&closed));
+        assert_eq!(r, Err(PathOpsError::TooComplex));
+        let copied = work::take(Work::BoundaryCopied);
+        assert!(copied > 0 && copied <= segments, "{copied} of the {elements} elements were copied, for a limit of {segments}");
+        assert_eq!(work::take(Work::ContourElements), elements, "the sweep made its contours: its boundary is within the limit");
+    }
+
+    /// A boundary that is within the limit is made, and the path is reused where it was: exactly at the limit (the elements of the contours of
+    /// a square) the boundary is the square, and one under it is refused.
+    #[test]
+    fn an_inset_boundary_at_the_element_limit_is_made_and_the_path_reused() {
+        let square = crate::testutil::rect(0.0, 0.0, 100.0, 100.0);
+        let (closed, _) = split_closed_open(&square);
+        work::reset();
+        normalize_bez_counted(&closed, FillRule::NonZero, usize::MAX).unwrap().unwrap();
+        let elements = work::take(Work::ContourElements);
+        assert!(elements >= 5, "{elements}");
+        assert_eq!(crate::with_limits(limited(elements), || filled_boundary(&closed)), Ok(closed.clone()), "at the limit: the path itself");
+        assert_eq!(crate::with_limits(limited(elements - 1), || filled_boundary(&closed)), Err(PathOpsError::TooComplex), "one under");
     }
 }

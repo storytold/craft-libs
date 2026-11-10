@@ -140,6 +140,7 @@ pub(crate) fn diagonals(m: usize) -> BezPath {
 /// `k = (n - 1) / 2`: each edge goes to a vertex nearly opposite, and crosses most of the others (`n (k - 1)`
 /// crossings in all, about n²/2).
 pub(crate) fn star(n: usize) -> BezPath {
+    debug_assert!(n % 2 == 1, "a star has an odd number of points, not {n}");
     let k = (n - 1) / 2;
     let mut bp = BezPath::new();
     for i in 0..n {
@@ -158,6 +159,7 @@ pub(crate) fn star(n: usize) -> BezPath {
 /// A star polygon of `n` points (`n` odd) of radius 100 at `(dx, dy)`, each joined to the one nearly opposite, as [`star`]
 /// but with the edges bowed sideways by `bow` (a cubic for each; 0 gives the lines of [`star`]).
 pub(crate) fn bowed_star(n: usize, bow: f64, dx: f64, dy: f64) -> BezPath {
+    debug_assert!(n % 2 == 1, "a star has an odd number of points, not {n}");
     let k = (n - 1) / 2;
     let at = |i: usize| {
         let a = std::f64::consts::TAU * ((k * i) % n) as f64 / n as f64;

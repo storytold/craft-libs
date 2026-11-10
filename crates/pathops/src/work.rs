@@ -119,11 +119,24 @@ pub(crate) enum Work {
     CloseCompared,
     /// Unions of one input whose own sweep was the union (the second sweep was not made).
     LoneUnions,
+    /// Elements of the contours of an inset's boundary that were copied into it, counted before each contour is.
+    BoundaryCopied,
+    /// Not a counter: the number of counters, which must fit the slots of the counts (`SLOTS`). Keep it the last.
+    #[cfg_attr(not(test), allow(dead_code))]
+    Count,
 }
+
+/// The slots of the counts of one thread: one for each [`Work`], so [`Work::Count`] must not pass it (checked as the tests are built, so that a
+/// counter added past the slots is no counter that is silently not counted).
+#[cfg(test)]
+const SLOTS: usize = 64;
+
+#[cfg(test)]
+const _: () = assert!((Work::Count as usize) <= SLOTS, "more counters than slots: raise SLOTS");
 
 #[cfg(test)]
 thread_local! {
-    static COUNTS: std::cell::RefCell<[usize; 64]> = const { std::cell::RefCell::new([0; 64]) };
+    static COUNTS: std::cell::RefCell<[usize; SLOTS]> = const { std::cell::RefCell::new([0; SLOTS]) };
 }
 
 /// Counts `n` more of `what` on this thread (tests only).
@@ -148,5 +161,5 @@ pub(crate) fn take(what: Work) -> usize {
 /// Resets every count on this thread.
 #[cfg(test)]
 pub(crate) fn reset() {
-    COUNTS.with(|c| *c.borrow_mut() = [0; 64]);
+    COUNTS.with(|c| *c.borrow_mut() = [0; SLOTS]);
 }

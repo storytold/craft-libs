@@ -42,11 +42,29 @@ pub(crate) fn winding(path: &BezPath, p: Point) -> i32 {
 
 /// The winding of one segment round `p`: the crossing of the ray to the left of `p` with it, -1, 0 or +1 for each
 /// monotone piece of it.
+///
+/// A segment with a coordinate that is not a number winds nothing, and neither does a point that is not one: the box of the control points
+/// drops a NaN (`f64::min` and `f64::max` return the other operand), so a cubic whose finite ends straddle the point's height would count a
+/// crossing it has no way to find. Everything the crate sweeps has been refused for a coordinate that is not a number first
+/// ([`crate::PathOpsError::NonFinite`]); [`crate::Region::contains`] takes a path a caller made.
 pub(crate) fn segment_winding(seg: PathSeg, p: Point) -> i32 {
+    if has_nan(seg) || p.x.is_nan() || p.y.is_nan() {
+        return 0;
+    }
     match seg {
         PathSeg::Line(l) => line_winding(l.p0, l.p1, p),
         PathSeg::Quad(q) => cubic_winding(&q.raise(), p),
         PathSeg::Cubic(c) => cubic_winding(&c, p),
+    }
+}
+
+/// Does a control point of `seg` have a coordinate that is not a number?
+fn has_nan(seg: PathSeg) -> bool {
+    let nan = |p: Point| p.x.is_nan() || p.y.is_nan();
+    match seg {
+        PathSeg::Line(l) => nan(l.p0) || nan(l.p1),
+        PathSeg::Quad(q) => nan(q.p0) || nan(q.p1) || nan(q.p2),
+        PathSeg::Cubic(c) => nan(c.p0) || nan(c.p1) || nan(c.p2) || nan(c.p3),
     }
 }
 
@@ -510,6 +528,42 @@ mod tests {
         assert_eq!(segment_winding(PathSeg::Quad(q), Point::new(7.0, 5.0)), -1, "right of the bulge, which is 6 at the middle");
         assert_eq!(segment_winding(PathSeg::Quad(q), Point::new(5.0, 5.0)), 0, "left of it");
         assert_eq!(segment_winding(PathSeg::Quad(q), Point::new(7.0, 20.0)), 0);
+    }
+
+    /// A segment with a coordinate that is not a number winds nothing: `f64::min` and `f64::max` return the other operand for a NaN, so the
+    /// box of the control points left it out, and a cubic whose finite ends straddle the height of the point (and whose box the point is
+    /// right of) counted a crossing it had no way to find. Asserted on the segments alone, which a closing segment cannot cancel, and on an
+    /// open path made of them.
+    #[test]
+    fn a_segment_with_a_coordinate_that_is_not_a_number_winds_nothing() {
+        let nan = f64::NAN;
+        let at = Point::new(5.0, 5.0);
+        // Ends (0, 0) and (0, 10) straddle the height 5, and the finite control points have x of 0 to 2: the point is right of the box.
+        let handle_x = CubicBez::new((0.0, 0.0), (nan, 3.0), (2.0, 7.0), (0.0, 10.0));
+        let handle_y = CubicBez::new((0.0, 0.0), (1.0, nan), (2.0, 7.0), (0.0, 10.0));
+        let both = CubicBez::new((0.0, 0.0), (nan, nan), (nan, nan), (0.0, 10.0));
+        let finite = CubicBez::new((0.0, 0.0), (1.0, 3.0), (2.0, 7.0), (0.0, 10.0));
+        assert_eq!(segment_winding(PathSeg::Cubic(finite), at), -1, "the same cubic with finite handles crosses the ray");
+        for (name, c) in [("a handle's x", handle_x), ("a handle's y", handle_y), ("both handles", both)] {
+            assert_eq!(segment_winding(PathSeg::Cubic(c), at), 0, "{name}");
+            let mut open = BezPath::new();
+            open.extend([kurbo::PathEl::MoveTo(c.p0), kurbo::PathEl::CurveTo(c.p1, c.p2, c.p3)]);
+            assert_eq!(winding(&open, at), 0, "{name}, an open path of it");
+        }
+        let quad = kurbo::QuadBez::new((0.0, 0.0), (nan, 5.0), (0.0, 10.0));
+        assert_eq!(segment_winding(PathSeg::Quad(quad), at), 0, "a quadratic");
+        // A line from (0, 0) to (NaN, 10): its x ends are 0 and nothing as far as the box goes.
+        assert_eq!(segment_winding(PathSeg::Line(kurbo::Line::new((0.0, 0.0), (nan, 10.0))), at), 0, "a line with an x that is not a number");
+        assert_eq!(segment_winding(PathSeg::Line(kurbo::Line::new((0.0, 0.0), (0.0, nan))), at), 0, "a line with a y that is not a number");
+        assert_eq!(segment_winding(PathSeg::Line(kurbo::Line::new((0.0, 0.0), (0.0, 10.0))), at), -1, "and the finite line crosses");
+        // The one public way to it: a `Region` a caller made, whose `path` is its own (every other entry point refuses a coordinate that is not
+        // a number before it sweeps). An open path, so that no closing segment cancels the crossing.
+        let mut open = BezPath::new();
+        open.extend([kurbo::PathEl::MoveTo(handle_x.p0), kurbo::PathEl::CurveTo(handle_x.p1, handle_x.p2, handle_x.p3)]);
+        assert!(!crate::Region { path: open, sources: vec![] }.contains(at), "Region::contains");
+        // A point that is not a number has nothing wound round it.
+        assert_eq!(segment_winding(PathSeg::Cubic(finite), Point::new(nan, 5.0)), 0);
+        assert_eq!(segment_winding(PathSeg::Cubic(finite), Point::new(5.0, nan)), 0);
     }
 
     /// Where a piece's height has a flat spot (`y = t^3`, whose slope is nothing at the end) Newton's method is not

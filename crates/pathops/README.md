@@ -350,6 +350,12 @@ work of each operation is bounded before it starts, in counts the tests assert o
   `stroke_region`, and of the paths in `unite_all`, counts the boundary of its sweep before its contours are
   made and the contours before they are written, and is `TooComplex` (or empty) past the element limit too
   (outlines that each pass cross each other a great deal);
+- the boundary an inset takes of the fill is held to the element limit too: a sweep whose boundary has more segments than `MAX_ELEMENTS` makes
+  no contours, and what is copied into the boundary is counted before it is and stops at the limit. The worst the sweep limits admit, 1,022 bars
+  in a mesh that crosses in a million places (511 each way; 515 are refused by the sweep), made 1.6 million elements of contours (2.99 times the
+  limit) before the inset was refused, in 0.77 s and 0.82 GB under `ulimit -v 3000000`; it is refused in 0.27 s and 0.30 GB now, with none made.
+  The path of the fill is reused for the inset only where its contours are in hand to be measured against it, so a boundary over the limit is
+  refused (the stroke of it would be);
 - a union of one input is not swept a second time when its own sweep is the union. `unite_all` sweeps each input under its own fill rule and then
   all the contours together, and for one input whose sweep made as many segments as the input has, each starting at an anchor of the input (nothing
   split where it crosses itself, nothing dropped inside itself), with no two segments within twice the sweep's tolerance (a second sweep joins

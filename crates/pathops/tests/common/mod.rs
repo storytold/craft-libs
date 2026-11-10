@@ -325,6 +325,8 @@ pub fn arb_smooth_curve() -> impl Strategy<Value = BezPath> {
 /// crosses itself in `n (k - 1)` places (`k = (n - 1) / 2`), with the edges bowed sideways by `bow` (a cubic for each; 0 gives
 /// lines).
 pub fn star_at(n: usize, bow: f64, dx: f64, dy: f64) -> BezPath {
+    // An even `n` joins each point to the one opposite and makes no star (and 0 has no point to join): `n` is odd.
+    debug_assert!(n % 2 == 1, "a star has an odd number of points, not {n}");
     let k = (n - 1) / 2;
     let at = |i: usize| {
         let a = std::f64::consts::TAU * ((k * i) % n) as f64 / n as f64;
