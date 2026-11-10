@@ -58,6 +58,15 @@ pub fn install(
 
 type RecordCommit<'a> = Option<&'a mut dyn FnMut(&Record) -> Result<(), String>>;
 
+/// Refuses to change an app that is running, or one whose state couldn't be checked.
+fn not_running(app: &App, answer: Result<bool, String>) -> Result<(), String> {
+    match answer {
+        Ok(false) => Ok(()),
+        Ok(true) => Err(format!("{} is running. Quit it, then try again.", app.name)),
+        Err(reason) => Err(format!("couldn't check whether {} is running ({reason}), so nothing was changed", app.name)),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn install_at(
     app: &App,
@@ -77,9 +86,8 @@ pub fn install_at(
     let destination = destination(app, kind, existing, previous, job.install_locations)?;
     if let Some(inst) = existing
         && inst.source.launcher_can_update()
-        && process::is_running(Path::new(&inst.location))
     {
-        return Err(format!("{} is running. Quit it, then try again.", app.name));
+        not_running(app, process::running(Path::new(&inst.location)))?;
     }
     bind_artifact_version(app, release, asset)?;
     if !job.replace
@@ -99,7 +107,8 @@ pub fn install_at(
     let result = match kind {
         #[cfg(target_os = "macos")]
         PackageKind::Dmg => {
-            macos::install_dmg(app, &file, existing, destination.as_deref(), job.replace, job.paths, &macos::Expect::release(release))
+            let wait = macos::CheckTurn { stop: job.stop, phase: &mut *job.phase };
+            macos::install_dmg(app, &file, existing, destination.as_deref(), job.replace, job.paths, &macos::Expect::release(release), wait)
                 .map(|path| Some(record(&version, kind, path, Vec::new(), false)))
         }
         #[cfg(windows)]
@@ -484,10 +493,8 @@ pub fn uninstall(
     if let Some(msg) = managed_elsewhere(app, installed, true) {
         return Err(msg);
     }
-    if matches!(installed.source, InstallSource::MacApp | InstallSource::Msi | InstallSource::AppImage | InstallSource::Launcher)
-        && process::is_running(&path)
-    {
-        return Err(format!("{} is running. Quit it, then try again.", app.name));
+    if matches!(installed.source, InstallSource::MacApp | InstallSource::Msi | InstallSource::AppImage | InstallSource::Launcher) {
+        not_running(app, process::running(&path))?;
     }
     match installed.source {
         #[cfg(windows)]
@@ -755,14 +762,14 @@ pub fn failed_in_shared_call(error: &str) -> bool {
 #[cfg(any(target_os = "linux", windows))]
 static INSTALLER: crate::queue::Queue = crate::queue::Queue::new();
 
-/// For [`INSTALLER`]: reports [`JobPhase::Waiting`] while a job waits, then `working` again.
-#[cfg(any(target_os = "linux", windows))]
+/// For a [`crate::queue::Queue`]: reports [`JobPhase::Waiting`] while a job waits, then `working` again.
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 fn turn<'a>(phase: &'a mut dyn FnMut(JobPhase), working: JobPhase) -> impl FnMut(bool) + 'a {
     move |waiting| phase(if waiting { JobPhase::Waiting } else { working })
 }
 
-/// For [`INSTALLER`]: whether the user cancelled the job while it waits.
-#[cfg(any(target_os = "linux", windows))]
+/// For a [`crate::queue::Queue`]: whether the user cancelled the job while it waits.
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 fn cancelled(stop: &Stop) -> impl Fn() -> bool + '_ {
     || stop.check().is_err_and(|e| e == crate::protocol::CANCELLED)
 }
@@ -1348,9 +1355,14 @@ pub(crate) mod linux {
 pub mod macos {
     use std::time::Duration;
 
+    use crate::process::HelperFailure;
+    use crate::protocol::CANCELLED;
+    use crate::queue::Queue;
     use crate::version::Version;
 
-    use super::{App, InstallSource, Installed, Path, PathBuf, Paths, Release, process, swap_into_place};
+    use super::{
+        App, InstallSource, Installed, JobPhase, Path, PathBuf, Paths, Release, Stop, cancelled, not_running, process, swap_into_place, turn,
+    };
 
     /// `/Applications` when we can write there, else `~/Applications`.
     fn applications_dir(existing: Option<&Installed>, destination: Option<&Path>) -> Result<PathBuf, String> {
@@ -1385,11 +1397,19 @@ pub mod macos {
         pub team: Option<&'a str>,
         /// The release's version, which the bundle must report. `None` when the tag isn't one.
         pub version: Option<&'a Version>,
+        /// Refuse the swap when the app it replaces is running. `false` for an app replacing
+        /// itself, which is running on purpose.
+        pub quit_first: bool,
     }
 
     impl<'a> Expect<'a> {
         pub fn release(release: &'a Release) -> Self {
-            Self { team: Some(TEAM_ID), version: release.version.as_ref() }
+            Self { team: Some(TEAM_ID), version: release.version.as_ref(), quit_first: true }
+        }
+
+        /// [`Self::release`] for an app replacing itself.
+        pub fn self_update(release: &'a Release) -> Self {
+            Self { quit_first: false, ..Self::release(release) }
         }
     }
 
@@ -1397,12 +1417,28 @@ pub mod macos {
     /// `hdiutil create` too), since it turns concurrent requests away.
     pub(crate) static DISK_IMAGES: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    /// Deep signature checks wait their turn here. `codesign --deep` reads every file of the
+    /// bundle, so checks that overlap compete for the disk and all slow down. The time limit
+    /// starts when a check's turn comes.
+    static SIGNATURE_CHECKS: Queue = Queue::new();
+
+    /// How a job waits for its turn at the signature check: `phase` hears of the wait, and `stop`
+    /// can cancel it.
+    pub struct CheckTurn<'a> {
+        pub stop: &'a Stop,
+        pub phase: &'a mut dyn FnMut(JobPhase),
+    }
+
     /// Apple's tools, by full path: a launcher started from Finder or at login gets a minimal
     /// `PATH`, and nothing earlier on it should stand in for these.
     const HDIUTIL: &str = "/usr/bin/hdiutil";
     const DITTO: &str = "/usr/bin/ditto";
     const CODESIGN: &str = "/usr/bin/codesign";
 
+    /// Stops a `codesign` that hangs.
+    const CODESIGN_TIMEOUT: Duration = Duration::from_secs(600);
+
+    #[allow(clippy::too_many_arguments)]
     pub fn install_dmg(
         app: &App,
         dmg: &Path,
@@ -1411,6 +1447,7 @@ pub mod macos {
         replace: bool,
         paths: &Paths,
         expect: &Expect<'_>,
+        wait: CheckTurn<'_>,
     ) -> Result<PathBuf, String> {
         // A new, empty mount point for every install. A fixed one can still hold an image from an
         // attach that was interrupted or timed out, and hdiutil won't mount another over it.
@@ -1451,7 +1488,7 @@ pub mod macos {
             let _ = std::fs::remove_dir(&mount);
             return Err(format!("couldn't open the disk image: {reason}"));
         }
-        let result = copy_app(app, &mount, existing, destination, replace, expect);
+        let result = copy_app(app, &mount, existing, destination, replace, expect, wait);
         let _ = detach(&mount);
         let _ = std::fs::remove_dir(&mount);
         result
@@ -1464,6 +1501,7 @@ pub mod macos {
         destination: Option<&Path>,
         replace: bool,
         expect: &Expect<'_>,
+        wait: CheckTurn<'_>,
     ) -> Result<PathBuf, String> {
         let bundle = format!("{}.app", app.name);
         let src = mount.join(&bundle);
@@ -1485,20 +1523,47 @@ pub mod macos {
         // bundle's signature lives in its files, not in extended attributes.
         process::run(DITTO, &["--norsrc", "--noextattr", "--noacl", src_s, staged_s], Duration::from_secs(600))
             .map_err(|reason| format!("couldn't copy the app: {reason}"))?;
-        let checked = crate::detect::macos::read_bundle(app, &staged)
-            .ok_or_else(|| "the copied app is incomplete".to_string())
-            .and_then(|found| check(&staged, &found, expect));
-        checked?;
-        swap_into_place(&staged, &dest)?;
-        Ok(dest)
+        place_checked(app, &staged, &dest, expect, process::run_detailed, process::running, wait)
+    }
+
+    /// Checks the copy at `staged` and replaces `dest` with it. `codesign` runs through `run`, and
+    /// `running` says whether `dest` is running. Tests pass stand-ins.
+    pub(crate) fn place_checked(
+        app: &App,
+        staged: &Path,
+        dest: &Path,
+        expect: &Expect<'_>,
+        run: impl FnOnce(&str, &[&str], Duration) -> Result<String, HelperFailure>,
+        running: impl FnOnce(&Path) -> Result<bool, String>,
+        wait: CheckTurn<'_>,
+    ) -> Result<PathBuf, String> {
+        let found = crate::detect::macos::read_bundle(app, staged).ok_or("the copied app is incomplete")?;
+        check(staged, &found, expect, run, wait)?;
+        // The check can wait behind other apps' checks, and the user may have opened the app.
+        if expect.quit_first {
+            not_running(app, running(dest))?;
+        }
+        swap_into_place(staged, dest)?;
+        Ok(dest.to_path_buf())
     }
 
     /// Checks a copied bundle against what its release promises, before it replaces anything.
-    fn check(bundle: &Path, found: &Installed, expect: &Expect<'_>) -> Result<(), String> {
-        if let Some(team) = expect.team
-            && !signed_by(bundle, team)
-        {
-            return Err("the app isn't signed by its developer, so it wasn't installed".into());
+    /// `codesign` runs through `run`.
+    pub(crate) fn check(
+        bundle: &Path,
+        found: &Installed,
+        expect: &Expect<'_>,
+        run: impl FnOnce(&str, &[&str], Duration) -> Result<String, HelperFailure>,
+        wait: CheckTurn<'_>,
+    ) -> Result<(), String> {
+        if let Some(team) = expect.team {
+            match signature(bundle, team, run, wait) {
+                Signature::Valid => {}
+                Signature::Canceled => return Err(CANCELLED.into()),
+                Signature::Wrong => return Err("the app isn't signed by its developer, so it wasn't installed".into()),
+                Signature::Failed(reason) => return Err(format!("the app failed its signature check ({reason}), so it wasn't installed")),
+                Signature::Unchecked(reason) => return Err(format!("the app's signature couldn't be checked ({reason}), so it wasn't installed")),
+            }
         }
         if let Some(want) = expect.version
             && !found.version.as_ref().is_some_and(|v| same_release(v, want))
@@ -1510,14 +1575,49 @@ pub mod macos {
 
     /// Whether `bundle` has a valid Developer ID signature from `team`, nested code included. The
     /// requirement pins the signer, so a valid ad-hoc or other developer's signature fails it.
-    /// Unlike a Gatekeeper assessment it needs no network.
+    /// Unlike a Gatekeeper assessment it needs no network. `false` also means the check couldn't
+    /// finish, so an app that couldn't be checked never passes.
     pub fn signed_by(bundle: &Path, team: &str) -> bool {
-        let Some(path) = bundle.to_str() else { return false };
+        let stop = Stop::default();
+        matches!(signature(bundle, team, process::run_detailed, CheckTurn { stop: &stop, phase: &mut |_| {} }), Signature::Valid)
+    }
+
+    /// What `codesign` found out about a bundle.
+    #[derive(Debug, PartialEq, Eq)]
+    pub(crate) enum Signature {
+        Valid,
+        /// The signature isn't the developer's.
+        Wrong,
+        /// `codesign` failed the verification, with its reason: no signature at all, a damaged
+        /// signature, or a bundle it couldn't read.
+        Failed(String),
+        /// `codesign` gave no answer, with the reason why.
+        Unchecked(String),
+        /// The user canceled the job while it waited for its turn. `codesign` did not run.
+        Canceled,
+    }
+
+    /// Runs `codesign` on `bundle` through `run`, one bundle at a time.
+    pub(crate) fn signature(
+        bundle: &Path,
+        team: &str,
+        run: impl FnOnce(&str, &[&str], Duration) -> Result<String, HelperFailure>,
+        wait: CheckTurn<'_>,
+    ) -> Signature {
+        let Some(path) = bundle.to_str() else { return Signature::Unchecked("unusual characters in the app's path".into()) };
         if team.is_empty() || !team.bytes().all(|b| b.is_ascii_alphanumeric()) {
-            return false;
+            return Signature::Wrong;
         }
         let requirement = format!("=anchor apple generic and certificate leaf[subject.OU] = \"{team}\"");
-        process::capture(CODESIGN, &["--verify", "--deep", "-R", &requirement, path], Duration::from_secs(120)).is_some()
+        let verify = || match run(CODESIGN, &["--verify", "--deep", "-R", &requirement, path], CODESIGN_TIMEOUT) {
+            Ok(_) => Signature::Valid,
+            // codesign(1): 3 is a signature that fails the requirement, and 1 any other failed
+            // verification.
+            Err(HelperFailure::Exited { code: 3, .. }) => Signature::Wrong,
+            Err(HelperFailure::Exited { code: 1, reason }) => Signature::Failed(reason),
+            Err(failure) => Signature::Unchecked(failure.into_reason()),
+        };
+        SIGNATURE_CHECKS.alone(&cancelled(wait.stop), &mut turn(wait.phase, JobPhase::Installing), verify).unwrap_or(Signature::Canceled)
     }
 
     /// Whether a bundle's version is the release's. A bundle that reports only the numbers
@@ -3031,13 +3131,58 @@ esac
 
     #[cfg(target_os = "macos")]
     mod macos_checks {
+        use crate::process::HelperFailure;
         use crate::{SUITE, version};
 
-        use super::macos::{Expect, TEAM_ID, install_dmg, signed_by};
+        use super::macos::{CheckTurn, Expect, Signature, TEAM_ID, signed_by};
         use super::*;
 
         fn photocraft() -> &'static App {
             SUITE.iter().find(|a| a.id == "photocraft").unwrap()
+        }
+
+        /// [`macos::install_dmg`] for a job nobody cancels.
+        fn install_dmg(
+            app: &App,
+            dmg: &Path,
+            existing: Option<&Installed>,
+            destination: Option<&Path>,
+            replace: bool,
+            paths: &Paths,
+            expect: &Expect<'_>,
+        ) -> Result<PathBuf, String> {
+            let stop = Stop::default();
+            macos::install_dmg(app, dmg, existing, destination, replace, paths, expect, CheckTurn { stop: &stop, phase: &mut |_| {} })
+        }
+
+        /// [`macos::signature`] for a job nobody cancels.
+        fn signature(bundle: &Path, team: &str, run: impl FnOnce(&str, &[&str], std::time::Duration) -> Result<String, HelperFailure>) -> Signature {
+            let stop = Stop::default();
+            macos::signature(bundle, team, run, CheckTurn { stop: &stop, phase: &mut |_| {} })
+        }
+
+        /// [`macos::check`] for a job nobody cancels.
+        fn check(
+            bundle: &Path,
+            found: &Installed,
+            expect: &Expect<'_>,
+            run: impl FnOnce(&str, &[&str], std::time::Duration) -> Result<String, HelperFailure>,
+        ) -> Result<(), String> {
+            let stop = Stop::default();
+            macos::check(bundle, found, expect, run, CheckTurn { stop: &stop, phase: &mut |_| {} })
+        }
+
+        /// [`macos::place_checked`] for a job nobody cancels.
+        fn place_checked(
+            app: &App,
+            staged: &Path,
+            dest: &Path,
+            expect: &Expect<'_>,
+            run: impl FnOnce(&str, &[&str], std::time::Duration) -> Result<String, HelperFailure>,
+            running: impl FnOnce(&Path) -> Result<bool, String>,
+        ) -> Result<PathBuf, String> {
+            let stop = Stop::default();
+            macos::place_checked(app, staged, dest, expect, run, running, CheckTurn { stop: &stop, phase: &mut |_| {} })
         }
 
         /// A minimal `PhotoCraft.app` at `dir`, reporting `version`.
@@ -3095,7 +3240,7 @@ esac
             std::fs::create_dir(&apps).unwrap();
             let paths = Paths::under(dir.path());
             let image = dmg(dir.path(), "0.6.0");
-            let expect = Expect { team: None, version: None };
+            let expect = Expect { team: None, version: None, quit_first: false };
             let placed = install_dmg(photocraft(), &image, None, Some(&apps), false, &paths, &expect).unwrap();
             assert_eq!(placed, apps.join("PhotoCraft.app"));
             let mut manifest = crate::manifest::Manifest::default();
@@ -3127,8 +3272,8 @@ esac
             let unrelated = std::fs::read_to_string(&plist).unwrap().replace("ai.storyteller.photocraft", "com.example.other");
             std::fs::write(&plist, &unrelated).unwrap();
             let image = dmg(dir.path(), "0.6.0");
-            let result =
-                install_dmg(photocraft(), &image, None, Some(dir.path()), false, &Paths::under(dir.path()), &Expect { team: None, version: None });
+            let expect = Expect { team: None, version: None, quit_first: false };
+            let result = install_dmg(photocraft(), &image, None, Some(dir.path()), false, &Paths::under(dir.path()), &expect);
             assert!(result.unwrap_err().contains("already exists"));
             assert_eq!(std::fs::read_to_string(plist).unwrap(), unrelated);
             assert_eq!(std::fs::read(placed.join("Contents/MacOS/PhotoCraft")).unwrap(), b"0.5.0");
@@ -3150,6 +3295,207 @@ esac
             assert!(!signed_by(&app, ""));
         }
 
+        /// `codesign`'s own exit codes for the two kinds of refusal, which [`signature`] reads as
+        /// answers and not as a check that couldn't finish.
+        #[test]
+        fn real_refusals_are_answers_from_codesign() {
+            let dir = tempfile::tempdir().unwrap();
+            let app = bundle(dir.path(), "0.6.0");
+            let unsigned = signature(&app, TEAM_ID, crate::process::run_detailed);
+            assert!(matches!(&unsigned, Signature::Failed(reason) if reason.contains("not signed")), "an unsigned bundle: {unsigned:?}");
+            let ok = std::process::Command::new("codesign").args(["--force", "--sign", "-"]).arg(&app).status().unwrap().success();
+            assert!(ok, "codesign failed");
+            assert_eq!(signature(&app, TEAM_ID, crate::process::run_detailed), Signature::Wrong, "an ad-hoc signature");
+        }
+
+        /// `codesign` exits 1 for a bundle it can't read too, which says nothing about who signed it.
+        #[test]
+        fn a_bundle_codesign_cannot_read_is_not_called_unsigned() {
+            let dir = tempfile::tempdir().unwrap();
+            let gone = dir.path().join("Gone.app");
+            let expect = Expect { team: Some(TEAM_ID), version: None, quit_first: false };
+            let refusal = check(&gone, &found_at(&gone), &expect, crate::process::run_detailed).unwrap_err();
+            assert!(refusal.contains("No such file"), "{refusal}");
+            assert!(!refusal.contains("isn't signed"), "{refusal}");
+        }
+
+        fn found_at(bundle: &Path) -> Installed {
+            Installed { version: None, source: InstallSource::MacApp, location: bundle.display().to_string(), package: None }
+        }
+
+        /// What [`check`] says when `codesign` fails with `failure`.
+        fn refusal_for(failure: HelperFailure) -> Result<(), String> {
+            let bundle = Path::new("/private/owned/PhotoCraft.app");
+            let expect = Expect { team: Some(TEAM_ID), version: None, quit_first: false };
+            check(bundle, &found_at(bundle), &expect, |_, _, _| Err(failure))
+        }
+
+        #[test]
+        fn a_check_that_timed_out_is_not_reported_as_a_bad_signature() {
+            let result = refusal_for(HelperFailure::Unfinished("codesign didn't finish within 600 seconds".into()));
+            assert_eq!(
+                result,
+                Err("the app's signature couldn't be checked (codesign didn't finish within 600 seconds), so it wasn't installed".into())
+            );
+        }
+
+        /// Exit 2 is a bad command line, which says nothing about the bundle.
+        #[test]
+        fn a_check_with_a_bad_command_line_is_not_reported_as_a_bad_signature() {
+            let result = refusal_for(HelperFailure::Exited { code: 2, reason: "bad flag".into() });
+            assert_eq!(result, Err("the app's signature couldn't be checked (bad flag), so it wasn't installed".into()));
+        }
+
+        #[test]
+        fn a_signature_that_fails_the_requirement_is_refused_as_not_the_developers() {
+            let result = refusal_for(HelperFailure::Exited { code: 3, reason: "no".into() });
+            assert_eq!(result, Err("the app isn't signed by its developer, so it wasn't installed".into()));
+        }
+
+        #[test]
+        fn a_failed_verification_is_refused_with_codesigns_reason() {
+            let result = refusal_for(HelperFailure::Exited { code: 1, reason: "a sealed resource is missing".into() });
+            assert_eq!(result, Err("the app failed its signature check (a sealed resource is missing), so it wasn't installed".into()));
+        }
+
+        #[test]
+        fn the_signature_check_gets_a_slow_macs_time() {
+            let mut limit = None;
+            let found = signature(Path::new("/private/owned/PhotoCraft.app"), TEAM_ID, |program, args, timeout| {
+                assert_eq!(program, "/usr/bin/codesign");
+                assert_eq!(args[..3], ["--verify", "--deep", "-R"]);
+                limit = Some(timeout);
+                Ok(String::new())
+            });
+            assert_eq!(found, Signature::Valid);
+            assert!(limit.is_some_and(|limit| limit >= std::time::Duration::from_secs(600)), "{limit:?}");
+        }
+
+        /// Runs `behind` while a signature check of another app holds the turn, and frees the turn
+        /// when `behind` has returned, or when `release` is called.
+        fn behind_a_running_check<R>(behind: impl FnOnce(&dyn Fn()) -> R) -> R {
+            let (started, has_started) = std::sync::mpsc::channel();
+            let (released, wait_for_release) = std::sync::mpsc::channel::<()>();
+            std::thread::scope(|scope| {
+                scope.spawn(move || {
+                    signature(Path::new("/private/owned/Other.app"), TEAM_ID, |_, _, _| {
+                        started.send(()).unwrap();
+                        let _ = wait_for_release.recv();
+                        Ok(String::new())
+                    })
+                });
+                has_started.recv().unwrap();
+                let release = move || {
+                    let _ = released.send(());
+                };
+                let result = behind(&release);
+                release();
+                result
+            })
+        }
+
+        #[test]
+        fn a_second_signature_check_waits_its_turn_and_says_so() {
+            behind_a_running_check(|release| {
+                let (phases, phase) = std::sync::mpsc::channel();
+                let ran = std::sync::atomic::AtomicBool::new(false);
+                std::thread::scope(|scope| {
+                    let second = scope.spawn(|| {
+                        let stop = Stop::default();
+                        let mut report = move |p| phases.send(p).unwrap();
+                        let run = |_: &str, _: &[&str], _: std::time::Duration| {
+                            ran.store(true, std::sync::atomic::Ordering::SeqCst);
+                            Ok(String::new())
+                        };
+                        macos::signature(Path::new("/private/owned/PhotoCraft.app"), TEAM_ID, run, CheckTurn { stop: &stop, phase: &mut report })
+                    });
+                    assert_eq!(phase.recv().unwrap(), JobPhase::Waiting);
+                    assert!(!ran.load(std::sync::atomic::Ordering::SeqCst), "the second check started during the first");
+                    release();
+                    assert_eq!(phase.recv().unwrap(), JobPhase::Installing);
+                    assert_eq!(second.join().unwrap(), Signature::Valid);
+                });
+            });
+        }
+
+        #[test]
+        fn a_job_canceled_while_it_waits_for_the_signature_check_stops_there() {
+            let refused = behind_a_running_check(|_| {
+                let bundle = Path::new("/private/owned/PhotoCraft.app");
+                let expect = Expect { team: Some(TEAM_ID), version: None, quit_first: false };
+                let stop = Stop::default();
+                let mut cancel_when_waiting = |p| {
+                    if p == JobPhase::Waiting {
+                        stop.cancel();
+                    }
+                };
+                let wait = CheckTurn { stop: &stop, phase: &mut cancel_when_waiting };
+                macos::check(bundle, &found_at(bundle), &expect, |_, _, _| Err(HelperFailure::Unfinished("codesign ran".into())), wait)
+            });
+            assert_eq!(refused, Err(CANCELLED.into()));
+        }
+
+        /// A copy waiting to replace the installed 0.5.0, and the installed copy.
+        fn staged_and_installed(dir: &Path) -> (PathBuf, PathBuf) {
+            (bundle(&dir.join("staged"), "0.6.0"), bundle(&dir.join("Applications"), "0.5.0"))
+        }
+
+        fn version_at(app: &Path) -> String {
+            std::fs::read_to_string(app.join("Contents/MacOS/PhotoCraft")).unwrap()
+        }
+
+        /// The stand-in for `codesign` opens the app, so the app is running only once the check
+        /// has started.
+        #[test]
+        fn an_app_opened_during_the_signature_check_is_not_replaced() {
+            let dir = tempfile::tempdir().unwrap();
+            let (staged, installed) = staged_and_installed(dir.path());
+            let expect = Expect { team: Some(TEAM_ID), version: None, quit_first: true };
+            let opened = std::cell::Cell::new(false);
+            let run = |_: &str, _: &[&str], _: std::time::Duration| {
+                opened.set(true);
+                Ok(String::new())
+            };
+            let result = place_checked(photocraft(), &staged, &installed, &expect, run, |_| Ok(opened.get()));
+            assert_eq!(result, Err("PhotoCraft is running. Quit it, then try again.".into()));
+            assert_eq!(version_at(&installed), "0.5.0");
+        }
+
+        #[test]
+        fn an_app_whose_state_could_not_be_checked_is_not_replaced() {
+            let dir = tempfile::tempdir().unwrap();
+            let (staged, installed) = staged_and_installed(dir.path());
+            let expect = Expect { team: None, version: None, quit_first: true };
+            let result = place_checked(photocraft(), &staged, &installed, &expect, |_, _, _| Ok(String::new()), |_| Err("too slow".into()));
+            assert_eq!(result, Err("couldn't check whether PhotoCraft is running (too slow), so nothing was changed".into()));
+            assert_eq!(version_at(&installed), "0.5.0");
+        }
+
+        #[test]
+        fn a_closed_app_is_replaced() {
+            let dir = tempfile::tempdir().unwrap();
+            let (staged, installed) = staged_and_installed(dir.path());
+            let expect = Expect { team: None, version: None, quit_first: true };
+            place_checked(photocraft(), &staged, &installed, &expect, |_, _, _| Ok(String::new()), |_| Ok(false)).unwrap();
+            assert_eq!(version_at(&installed), "0.6.0");
+        }
+
+        #[test]
+        fn an_app_replacing_itself_is_replaced_while_it_runs() {
+            let dir = tempfile::tempdir().unwrap();
+            let (staged, installed) = staged_and_installed(dir.path());
+            let expect = Expect { team: None, version: None, quit_first: false };
+            place_checked(photocraft(), &staged, &installed, &expect, |_, _, _| Ok(String::new()), |_| Ok(true)).unwrap();
+            assert_eq!(version_at(&installed), "0.6.0");
+        }
+
+        #[test]
+        fn only_a_self_update_replaces_an_app_that_is_running() {
+            let release = Release { tag: "v0.6.0".into(), version: version::parse("0.6.0"), ..Release::default() };
+            assert!(Expect::release(&release).quit_first);
+            assert!(!Expect::self_update(&release).quit_first);
+        }
+
         #[test]
         fn the_bundle_must_be_the_releases_version() {
             let dir = tempfile::tempdir().unwrap();
@@ -3162,7 +3508,7 @@ esac
             for (release, ok) in [("0.6.0", true), ("0.7.0", false), ("0.6.0-rc.1", true), ("0.5.0", false)] {
                 std::fs::write(current.join("Contents/MacOS/PhotoCraft"), "0.5.0").unwrap();
                 let want = version::parse(release).unwrap();
-                let expect = Expect { team: None, version: Some(&want) };
+                let expect = Expect { team: None, version: Some(&want), quit_first: false };
                 let result = install_dmg(photocraft(), &image, Some(&existing), None, false, &paths, &expect);
                 assert_eq!(result.is_ok(), ok, "release {release}: {result:?}");
                 let now = std::fs::read_to_string(current.join("Contents/MacOS/PhotoCraft")).unwrap();
@@ -3179,7 +3525,7 @@ esac
             // A bundle that names a pre-release must name the release's.
             let rc = dmg(dir.path(), "0.8.0-rc.2");
             let want = version::parse("0.8.0-rc.1").unwrap();
-            let expect = Expect { team: None, version: Some(&want) };
+            let expect = Expect { team: None, version: Some(&want), quit_first: false };
             assert!(install_dmg(photocraft(), &rc, Some(&existing), None, false, &paths, &expect).is_err());
         }
 
@@ -3193,7 +3539,8 @@ esac
             let release = Release { tag: "v0.6.0".into(), version: version::parse("0.6.0"), ..Release::default() };
 
             let result = install_dmg(photocraft(), &image, Some(&existing), None, false, &Paths::under(dir.path()), &Expect::release(&release));
-            assert_eq!(result, Err("the app isn't signed by its developer, so it wasn't installed".into()));
+            let refusal = result.unwrap_err();
+            assert!(refusal.starts_with("the app failed its signature check (") && refusal.contains("not signed"), "{refusal}");
             assert_eq!(std::fs::read_to_string(current.join("Contents/MacOS/PhotoCraft")).unwrap(), "0.5.0");
             assert_eq!(
                 std::fs::read_dir(&apps).unwrap().map(|e| e.unwrap().file_name()).collect::<Vec<_>>(),

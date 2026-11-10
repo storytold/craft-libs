@@ -591,7 +591,9 @@ pub fn prepare_update(
             #[cfg(target_os = "macos")]
             Install::MacApp(bundle) => {
                 let existing = Installed { version: None, source: InstallSource::MacApp, location: bundle.display().to_string(), package: None };
-                let placed = install::macos::install_dmg(app, &file, Some(&existing), None, false, paths, &install::macos::Expect::release(release));
+                let wait = install::macos::CheckTurn { stop, phase: &mut *phase };
+                let placed =
+                    install::macos::install_dmg(app, &file, Some(&existing), None, false, paths, &install::macos::Expect::self_update(release), wait);
                 let _ = std::fs::remove_file(&file);
                 let placed = placed?;
                 Ok(relaunch_after_exit(app, pid, &[Path::new("/usr/bin/open").as_os_str(), placed.as_os_str()]))
@@ -2793,9 +2795,12 @@ mod tests {
         let current = apps.join("ArtCraft Launcher.app");
         let existing = Installed { version: None, source: InstallSource::MacApp, location: current.display().to_string(), package: None };
         // An unsigned test bundle: the signature check has its own tests in `install`.
-        let expect = install::macos::Expect { team: None, version: None };
+        let expect = install::macos::Expect { team: None, version: None, quit_first: false };
+        let stop = Stop::default();
+        let wait = install::macos::CheckTurn { stop: &stop, phase: &mut |_| {} };
         let placed =
-            install::macos::install_dmg(&crate::suite::LAUNCHER, &dmg, Some(&existing), None, false, &Paths::under(dir.path()), &expect).unwrap();
+            install::macos::install_dmg(&crate::suite::LAUNCHER, &dmg, Some(&existing), None, false, &Paths::under(dir.path()), &expect, wait)
+                .unwrap();
         assert_eq!(placed, current);
         assert_eq!(std::fs::read_to_string(current.join("Contents/MacOS/ArtCraft Launcher")).unwrap(), "0.2.0");
         assert_eq!(
