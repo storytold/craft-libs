@@ -182,7 +182,8 @@ fn is_cargo_build_dir(dir: &Path) -> bool {
     profile_parent.parent().is_some_and(|root| root.join(CARGO_CACHE_MARKER).is_file())
 }
 
-/// Whether this installed copy can update itself.
+/// Whether this installed copy can update itself. [`release_installs`] says whether a given
+/// release has a file to update it from.
 pub fn is_self_updating(app: &App) -> bool {
     std::env::current_exe().is_ok_and(|exe| can_self_update_at(app, &exe, std::env::var_os(DEV_VAR).is_some()))
 }
@@ -204,6 +205,36 @@ fn is_signed(exe: &Path) -> bool {
 #[cfg(not(windows))]
 fn is_signed(_exe: &Path) -> bool {
     true
+}
+
+/// Whether `release` has a file the self-update can install this copy from. Only a standalone
+/// program on macOS is checked, against the release's macOS `.tar.gz`, with or without
+/// [`DEV_VAR`]. Call it together with [`is_self_updating`], which answers for every other reason
+/// a copy can't update itself.
+pub fn release_installs(app: &App, release: &Release) -> bool {
+    if !cfg!(target_os = "macos") {
+        return true;
+    }
+    let Ok(exe) = std::env::current_exe() else { return true };
+    release_installs_at(app, &exe, std::env::var_os(DEV_VAR).is_some(), release, Platform::current())
+}
+
+/// [`release_installs`] for a known executable, opt-in setting and platform, without reading the
+/// ambient environment.
+fn release_installs_at(app: &App, exe: &Path, opted_in: bool, release: &Release, platform: Option<Platform>) -> bool {
+    current_at(app, exe, opted_in).is_none_or(|install| installs_from(app, &install, release, platform))
+}
+
+/// Whether the update can install `install` from `release` on `platform`. Only a standalone
+/// program on macOS is checked against the release's files. A release without its file list
+/// passes: `updater::install` fetches the full release before it picks the file.
+fn installs_from(app: &App, install: &Install, release: &Release, platform: Option<Platform>) -> bool {
+    match (install, platform) {
+        (Install::Standalone(_), Some(platform)) if platform.os == crate::Os::MacOs => {
+            release.assets.is_empty() || pick_asset(release, &[app.id], platform, &[install.kind()]).is_some()
+        }
+        _ => true,
+    }
 }
 
 /// Whether `exe` sits in a folder a macOS package manager owns (Homebrew, MacPorts, Nix).
@@ -3036,6 +3067,79 @@ mod tests {
         assert_eq!(pick(Os::Linux, Install::Package(PackageKind::Deb, PathBuf::new()).kind()).as_deref(), Some(names[4]));
         assert_eq!(pick(Os::Linux, Install::Flatpak.kind()).as_deref(), Some(names[5]));
         assert_eq!(pick(Os::Linux, Install::Package(PackageKind::ArchPkg, PathBuf::new()).kind()).as_deref(), Some(names[6]));
+    }
+
+    fn release_with(names: &[&str]) -> Release {
+        Release {
+            assets: names.iter().map(|n| crate::release::Asset { name: (*n).into(), size: 1, url: String::new(), sha256: None }).collect(),
+            ..Release::default()
+        }
+    }
+
+    /// A macOS release carries a disk image and a command-line zip, and no `.tar.gz` that a
+    /// standalone program could be replaced from, so that copy gets the download link.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_standalone_macos_program_without_a_tarball_gets_the_download_link() {
+        let app = &crate::suite::SOUNDCRAFT;
+        let release = release_with(&["soundcraft-0.19.0-macos-universal.dmg", "soundcraft-cli-0.19.0-macos-universal.zip"]);
+        let standalone = Install::Standalone(PathBuf::from("/Users/someone/bin/soundcraft"));
+        for arch in [crate::Arch::Arm64, crate::Arch::X64] {
+            let mac = Some(Platform { os: crate::Os::MacOs, arch });
+            assert!(!installs_from(app, &standalone, &release, mac), "{arch:?}");
+            // the bundle installs from the disk image
+            assert!(installs_from(app, &Install::MacApp(PathBuf::from("/Applications/SoundCraft.app")), &release, mac), "{arch:?}");
+        }
+    }
+
+    /// A release that adds a macOS `.tar.gz` is offered to the standalone program again.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_standalone_macos_program_is_offered_a_release_with_a_tarball() {
+        let app = &crate::suite::SOUNDCRAFT;
+        let standalone = Install::Standalone(PathBuf::from("/Users/someone/bin/soundcraft"));
+        let mac = Some(Platform { os: crate::Os::MacOs, arch: crate::Arch::Arm64 });
+        let with_tarball = release_with(&["soundcraft-0.19.0-macos-universal.dmg", "soundcraft-0.19.0-macos-universal.tar.gz"]);
+        assert!(installs_from(app, &standalone, &with_tarball, mac));
+    }
+
+    /// A release whose file list wasn't loaded keeps the offer: the install fetches the full
+    /// release before it picks the file.
+    #[test]
+    fn a_standalone_macos_program_is_offered_a_release_without_its_file_list() {
+        let standalone = Install::Standalone(PathBuf::from("/Users/someone/bin/soundcraft"));
+        let mac = Some(Platform { os: crate::Os::MacOs, arch: crate::Arch::Arm64 });
+        assert!(installs_from(&crate::suite::SOUNDCRAFT, &standalone, &release_with(&[]), mac));
+    }
+
+    /// Other platforms keep offering the update to a standalone copy, whatever the release holds.
+    #[test]
+    fn a_standalone_copy_elsewhere_is_not_checked_against_the_release() {
+        let app = &crate::suite::SOUNDCRAFT;
+        let standalone = Install::Standalone(PathBuf::from("soundcraft"));
+        let empty = release_with(&[]);
+        for os in [crate::Os::Linux, crate::Os::Windows, crate::Os::FreeBsd] {
+            assert!(installs_from(app, &standalone, &empty, Some(Platform { os, arch: crate::Arch::X64 })), "{os:?}");
+        }
+        assert!(installs_from(app, &standalone, &empty, None));
+    }
+
+    /// A loose program on macOS is checked against the release from its executable's path, with
+    /// or without `CRAFT_UPDATE_DEV`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_loose_macos_program_is_checked_against_the_release() {
+        let app = &crate::suite::SOUNDCRAFT;
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("soundcraft");
+        std::fs::write(&exe, b"").unwrap();
+        let mac = Some(Platform { os: crate::Os::MacOs, arch: crate::Arch::Arm64 });
+        let without = release_with(&["soundcraft-0.19.0-macos-universal.dmg", "soundcraft-cli-0.19.0-macos-universal.zip"]);
+        let with_tarball = release_with(&["soundcraft-0.19.0-macos-universal.dmg", "soundcraft-0.19.0-macos-universal.tar.gz"]);
+        for opted_in in [false, true] {
+            assert!(!release_installs_at(app, &exe, opted_in, &without, mac), "opted_in {opted_in}");
+            assert!(release_installs_at(app, &exe, opted_in, &with_tarball, mac), "opted_in {opted_in}");
+        }
     }
 
     #[test]
