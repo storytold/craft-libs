@@ -332,11 +332,13 @@ const SHARE_ENTRY_LIMIT: usize = 4096;
 /// - `icons/hicolor`, and each `<size>/apps` folder in it that holds the app's icon;
 /// - `applications`, `metainfo`, `mime/packages` and `pixmaps`.
 ///
-/// When the app's folder, `icons/hicolor` or `applications` doesn't exist, the check takes its
-/// nearest existing parent instead. When one of the others doesn't exist, the check takes its
-/// nearest existing parent inside `share`, and never `share` itself. The walk follows links, as
-/// the update's writes do, and reads a folder it reaches twice only once. An icon size that the
-/// installed copy doesn't have yet is not checked.
+/// When the app's folder, `doc/<id>`, `icons/hicolor`, `applications`, `metainfo` or
+/// `mime/packages` doesn't exist, the check takes its nearest existing parent instead, `share`
+/// included, since the update creates the folder there. Only the old flat release layout writes
+/// to `pixmaps`, so for a missing `pixmaps` the check takes its nearest existing parent inside
+/// `share`, and never `share` itself. The walk follows links, as the update's writes do, and
+/// reads a folder it reaches twice only once. An icon size that the installed copy doesn't have
+/// yet is not checked, whether or not its `<size>` folder exists.
 #[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
 fn share_folders(app: &App, share: &Path) -> Vec<PathBuf> {
     share_folders_within(app, share, SHARE_ENTRY_LIMIT)
@@ -359,7 +361,7 @@ fn share_folders_within(app: &App, share: &Path, limit: usize) -> Vec<PathBuf> {
     if doc.is_dir() {
         walk_folders(doc, limit, &mut folders);
     } else {
-        folders.extend(nearest_inside(&doc));
+        folders.extend(nearest(&doc));
     }
     let hicolor = share.join("icons/hicolor");
     if hicolor.is_dir() {
@@ -376,8 +378,8 @@ fn share_folders_within(app: &App, share: &Path, limit: usize) -> Vec<PathBuf> {
     } else {
         folders.extend(nearest(&hicolor));
     }
-    folders.extend(nearest(&share.join("applications")));
-    folders.extend(["metainfo", "mime/packages", "pixmaps"].iter().filter_map(|folder| nearest_inside(&share.join(folder))));
+    folders.extend(["applications", "metainfo", "mime/packages"].iter().filter_map(|folder| nearest(&share.join(folder))));
+    folders.extend(nearest_inside(&share.join("pixmaps")));
     folders.sort();
     folders.dedup();
     folders
@@ -385,7 +387,8 @@ fn share_folders_within(app: &App, share: &Path, limit: usize) -> Vec<PathBuf> {
 
 /// Adds `root` and every folder inside it to `folders`, reading at most `limit` entries. Links
 /// are followed, and a folder reached a second time, through a link or a loop, is listed but not
-/// read again.
+/// read again. A folder that can't be read is listed, and the folders inside it are not. An
+/// entry that can't be read is skipped.
 #[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
 fn walk_folders(root: PathBuf, limit: usize, folders: &mut Vec<PathBuf>) {
     let mut read = std::collections::HashSet::new();
@@ -1674,9 +1677,9 @@ mod tests {
         std::fs::create_dir_all(outside.join("inner")).unwrap();
         std::os::unix::fs::symlink(&outside, share.join(app.id).join("linked")).unwrap();
         let found = share_folders(app, &share);
-        // `applications` doesn't exist, so `share` is checked for it; `hicolor` doesn't, so `icons`
-        // is. `SomeTheme` isn't a folder a release writes to. The walk follows the link. `doc`,
-        // `metainfo`, `mime` and `pixmaps` don't exist, and nothing inside `share` is checked for them.
+        // `applications`, `doc`, `metainfo` and `mime` don't exist, so `share` is checked for them;
+        // `hicolor` doesn't, so `icons` is. `SomeTheme` isn't a folder a release writes to. The walk
+        // follows the link. `pixmaps` doesn't exist, and nothing inside `share` is checked for it.
         let mut expected = vec![
             share.clone(),
             share.join("icons"),
@@ -1741,7 +1744,8 @@ mod tests {
         let walked = found.iter().filter(|folder| folder.starts_with(share.join(app.id))).count();
         // The app's folder and the two entries read in it.
         assert_eq!(walked, 3, "{found:?}");
-        // `share` is checked for `icons/hicolor` and `applications`.
+        // `share` is checked for `icons/hicolor`, `applications`, `doc/<id>`, `metainfo` and
+        // `mime/packages`.
         assert_eq!(found.len(), 4, "{found:?}");
         assert_eq!(share_folders(app, &share).len(), 6, "the default limit takes in the whole tree");
 
@@ -1813,8 +1817,8 @@ mod tests {
         }
     }
 
-    /// When the app's folder, `applications` and `icons/hicolor` exist, a `share` folder the user
-    /// can't write doesn't refuse, even with `doc`, `metainfo`, `mime` or `pixmaps` missing.
+    /// When every folder a release writes to exists, a `share` folder the user can't write doesn't
+    /// refuse, even with `pixmaps` missing: only the old flat layout writes there.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn a_share_folder_it_cannot_write_does_not_refuse_when_the_release_folders_exist() {
@@ -1826,13 +1830,71 @@ mod tests {
         let bin = dir.path().join("bin");
         let share = dir.path().join("share");
         std::fs::create_dir_all(&bin).unwrap();
-        for folder in [app.id, "applications", "icons/hicolor"] {
+        let doc = format!("doc/{}", app.id);
+        for folder in [app.id, "applications", "icons/hicolor", &doc, "metainfo", "mime/packages"] {
             std::fs::create_dir_all(share.join(folder)).unwrap();
         }
         let exe = bin.join(app.id);
         std::fs::write(&exe, b"binary").unwrap();
         let _guard = ModeGuard::set(&share, 0o555);
         assert!(current_at(app, &exe, false).is_some());
+    }
+
+    /// A release writes into `doc/<id>`, `metainfo` and `mime/packages`, and the update creates a
+    /// missing one in its nearest existing parent, `share` included, so a copy that lacks one of
+    /// them and whose such parent the user can't write gets the download link.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_missing_release_folder_in_a_share_folder_it_cannot_write_gets_the_download_link() {
+        if running_as_root() {
+            return;
+        }
+        let app = &crate::suite::LAUNCHER;
+        let doc = format!("doc/{}", app.id);
+        for (missing, parent) in [("doc", ""), ("metainfo", ""), ("mime", ""), (doc.as_str(), "doc"), ("mime/packages", "mime")] {
+            let dir = tempfile::tempdir().unwrap();
+            let bin = dir.path().join("bin");
+            let share = dir.path().join("share");
+            std::fs::create_dir_all(&bin).unwrap();
+            for folder in [app.id, "applications", "icons/hicolor", "pixmaps", &doc, "metainfo", "mime/packages"] {
+                if !folder.starts_with(missing) {
+                    std::fs::create_dir_all(share.join(folder)).unwrap();
+                }
+            }
+            std::fs::create_dir_all(share.join(parent)).unwrap();
+            let exe = bin.join(app.id);
+            std::fs::write(&exe, b"binary").unwrap();
+            let guard = ModeGuard::set(&share.join(parent), 0o555);
+            assert_eq!(current_at(app, &exe, false), None, "{missing}");
+            drop(guard);
+            assert!(current_at(app, &exe, false).is_some(), "{missing}: the answer follows the folder's permissions");
+        }
+    }
+
+    /// A folder in the app's folder that the user can't read is still checked itself, but the
+    /// folders inside it are not, even one the user can't write.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_folder_in_the_app_folder_it_cannot_read_counts_only_by_its_own_permissions() {
+        if running_as_root() {
+            return;
+        }
+        let app = &crate::suite::LAUNCHER;
+        for (mode, refused) in [(0o000, true), (0o111, true), (0o333, false)] {
+            let dir = tempfile::tempdir().unwrap();
+            let bin = dir.path().join("bin");
+            let data = dir.path().join("share").join(app.id).join("data");
+            std::fs::create_dir_all(&bin).unwrap();
+            std::fs::create_dir_all(data.join("inner")).unwrap();
+            let exe = bin.join(app.id);
+            std::fs::write(&exe, b"binary").unwrap();
+            let inner = ModeGuard::set(&data.join("inner"), 0o555);
+            let guard = ModeGuard::set(&data, mode);
+            assert_eq!(current_at(app, &exe, false).is_none(), refused, "{mode:o}");
+            drop(guard);
+            drop(inner);
+            assert!(current_at(app, &exe, false).is_some(), "{mode:o}: the answer follows the folder's permissions");
+        }
     }
 
     /// The update writes through a linked folder, so a folder inside the link's target that the
