@@ -13,6 +13,7 @@ const GL_RG8: u32 = 0x822B;
 const GL_RG16: u32 = 0x822C;
 const GL_RG16F: u32 = 0x822F;
 const GL_RGBA16F: u32 = 0x881A;
+const GL_RGBA16: u32 = 0x805B;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceFormat {
@@ -25,6 +26,8 @@ pub enum SourceFormat {
     CacheRg16F,
     /// Cache: encoded vector + coverage, premultiplied (normals).
     CacheRgba16F,
+    /// Cache of a 16-bit RGB (RGB16) channel: three values + coverage, premultiplied.
+    CacheRgba16,
     Bgra8,
     Rgba8,
     Rgba16,
@@ -69,6 +72,7 @@ impl SourceFormat {
             GL_RG16 => SourceFormat::CacheRg16,
             GL_RG16F => SourceFormat::CacheRg16F,
             GL_RGBA16F => SourceFormat::CacheRgba16F,
+            GL_RGBA16 => SourceFormat::CacheRgba16,
             _ => return None,
         })
     }
@@ -91,7 +95,7 @@ impl SourceFormat {
             SourceFormat::Lum8 => 1,
             SourceFormat::CacheRg8 | SourceFormat::Lum16 => 2,
             SourceFormat::CacheSrgb8Alpha8 | SourceFormat::CacheRg16 | SourceFormat::CacheRg16F | SourceFormat::Bgra8 | SourceFormat::Rgba8 => 4,
-            SourceFormat::CacheRgba16F | SourceFormat::Rgba16 | SourceFormat::Rgba16F => 8,
+            SourceFormat::CacheRgba16F | SourceFormat::CacheRgba16 | SourceFormat::Rgba16 | SourceFormat::Rgba16F => 8,
             SourceFormat::Rgba32F => 16,
         }
     }
@@ -99,7 +103,9 @@ impl SourceFormat {
     pub fn alpha(self) -> Alpha {
         match self {
             SourceFormat::CacheSrgb8Alpha8 => Alpha::PremultipliedLinearSrgb,
-            SourceFormat::CacheRg8 | SourceFormat::CacheRg16 | SourceFormat::CacheRg16F | SourceFormat::CacheRgba16F => Alpha::Premultiplied,
+            SourceFormat::CacheRg8 | SourceFormat::CacheRg16 | SourceFormat::CacheRg16F | SourceFormat::CacheRgba16F | SourceFormat::CacheRgba16 => {
+                Alpha::Premultiplied
+            }
             _ => Alpha::Straight,
         }
     }
@@ -120,7 +126,7 @@ impl SourceFormat {
             SourceFormat::CacheRg16 => [u16n(0), u16n(0), u16n(0), u16n(1)],
             SourceFormat::CacheRg16F => [f16(0), f16(0), f16(0), f16(1)],
             SourceFormat::CacheRgba16F | SourceFormat::Rgba16F => [f16(0), f16(1), f16(2), f16(3)],
-            SourceFormat::Rgba16 => [u16n(0), u16n(1), u16n(2), u16n(3)],
+            SourceFormat::CacheRgba16 | SourceFormat::Rgba16 => [u16n(0), u16n(1), u16n(2), u16n(3)],
             SourceFormat::Rgba32F => [f32n(0), f32n(1), f32n(2), f32n(3)],
             SourceFormat::Lum8 => [u8n(0), u8n(0), u8n(0), 1.0],
             SourceFormat::Lum16 => [u16n(0), u16n(0), u16n(0), 1.0],
@@ -170,6 +176,9 @@ mod tests {
         assert_eq!(SourceFormat::from_gl(0x822C), Some(SourceFormat::CacheRg16));
         assert_eq!(SourceFormat::CacheRg16.decode(&[0xff, 0xff, 0, 0]), [1.0, 1.0, 1.0, 0.0]);
         assert_eq!(SourceFormat::CacheRg16.alpha(), Alpha::Premultiplied);
+        assert_eq!(SourceFormat::from_gl(0x805B), Some(SourceFormat::CacheRgba16));
+        assert_eq!(SourceFormat::CacheRgba16.decode(&[0xff, 0xff, 0, 0, 0xff, 0x7f, 0xff, 0xff]), [1.0, 0.0, 32767.0 / 65535.0, 1.0]);
+        assert_eq!((SourceFormat::CacheRgba16.alpha(), SourceFormat::CacheRgba16.bytes_per_pixel()), (Alpha::Premultiplied, 8));
         assert_eq!(SourceFormat::from_gl(1), None);
         assert_eq!(SourceFormat::from_image(&ImageFormat::Lum8), Some(SourceFormat::Lum8));
         for f in [SourceFormat::Rgba32F, SourceFormat::CacheRgba16F, SourceFormat::Lum8, SourceFormat::Rgba16] {

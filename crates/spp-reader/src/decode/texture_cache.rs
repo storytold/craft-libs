@@ -12,7 +12,8 @@ use crate::container::bytes::ByteReader;
 
 const RECORD: &str = "texture cache entry";
 
-/// OpenGL internal formats: (enum, name, bytes per pixel). The first four occur in the original's cache.
+/// OpenGL internal formats: (enum, name, bytes per pixel). The first four, RG16 and RGBA16 (channels declared RGB16)
+/// occur in the original's cache.
 const GL_FORMATS: &[(u32, &str, usize)] = &[
     (0x8C43, "SRGB8_ALPHA8", 4),
     (0x822B, "RG8", 2),

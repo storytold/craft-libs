@@ -24,6 +24,10 @@ pub struct ProjectTextureSet {
     /// The mesh maps assigned to the set (`additionalMaps`, then `normalMapBitmap`): a resource URL, or
     /// `resourcealias:<Map>` when the slot is empty.
     pub mesh_maps: Vec<MeshMapRef>,
+    /// `useUVTiles`: the set is painted per UV tile (one texture per tile) rather than over UV 0..1.
+    pub uses_uv_tiles: bool,
+    /// The number of `uvTiles` entries (per-tile settings; their layout has not been seen yet).
+    pub uv_tile_entries: usize,
     /// Fields of the set's own objects (`DataMaterial`, its stack and channel declarations) and of the document
     /// (they apply to every set) that the reader does not handle ([`super::fields`]), with their values.
     pub unhandled: Vec<UnhandledSetting>,

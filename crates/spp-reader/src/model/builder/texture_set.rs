@@ -38,6 +38,8 @@ impl ModelBuilder {
             shader_model,
             layers,
             mesh_maps: mesh_maps(material),
+            uses_uv_tiles: material.bool("useUVTiles").unwrap_or(false),
+            uv_tile_entries: material.list("uvTiles").len(),
             unhandled: Vec::new(),
         }
     }

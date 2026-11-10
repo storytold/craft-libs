@@ -20,6 +20,30 @@ fn reads_the_texture_set() {
 }
 
 #[test]
+fn reads_whether_a_set_is_painted_per_uv_tile() {
+    let (doc, _) = build(&single_set(vec![]));
+    assert_eq!((doc.texture_sets[0].uses_uv_tiles, doc.texture_sets[0].uv_tile_entries), (false, 0));
+    let channel = obj("DataChannel", vec![("format", V::Enum(0)), ("type", V::Channel(1)), ("userName", V::Str(""))]);
+    let material_stack = obj("DataMaterialStack", vec![("channels", V::List(vec![channel])), ("stack", stack("DataStackLayers", 3, vec![]))]);
+    let tile = || obj("DataUVTile", vec![("uid", V::Uid(9))]);
+    let material = obj(
+        "DataMaterial",
+        vec![
+            ("sceneMaterialName", V::Str("Tiles")),
+            ("sceneMaterialUID", V::Uid(77)),
+            ("stacks", V::List(vec![material_stack])),
+            ("uid", V::Uid(2)),
+            ("useUVTiles", V::Bool(true)),
+            ("uvTiles", V::List(vec![tile(), tile()])),
+        ],
+    );
+    let (doc, _) = build(&document(78, obj("DataDocument", vec![("materials", V::List(vec![material]))])));
+    let set = &doc.texture_sets[0];
+    assert_eq!((set.uses_uv_tiles, set.uv_tile_entries), (true, 2));
+    assert!(!set.unhandled.iter().any(|u| u.key().contains("UVTiles") || u.key().contains("uvTiles")), "read, not reported as unhandled");
+}
+
+#[test]
 fn layer_kinds_follow_the_first_content_effect() {
     let paint_group = obj(
         "DataActionGroup",
