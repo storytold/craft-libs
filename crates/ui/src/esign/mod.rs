@@ -4,6 +4,7 @@
 //! Nothing here blocks: answers arrive on a channel and are read once per
 //! frame. Signing is not sharing: recipients are never [`craft_cloud::ShareTarget`]s.
 
+use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 
@@ -12,6 +13,8 @@ use craft_esign::{Envelope, EnvelopeDraft, EnvelopeStatus, EsignCapability, Fiel
 use egui::{Context, RichText, Ui};
 
 mod backend;
+#[cfg(test)]
+mod review_repro;
 
 pub use backend::{Answer, EsignBackend, Replier, Request};
 
@@ -23,6 +26,17 @@ const MIN_QUERY: usize = 2;
 const RETRY: f64 = 20.0;
 
 type Inbox = (u64, Result<Answer, String>);
+
+/// What dialog state a reply belongs to: which document, under which
+/// signed-in account. A reply installs only when this still matches the
+/// dialog's current context; see [`EsignDialog::submit_in_context`] and
+/// [`EsignDialog::pump`]. Deliberately excludes incidental UI state such as
+/// search text, which changes without the dialog meaning something new.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct EsignContext {
+    document_id: String,
+    account: Option<String>,
+}
 
 /// Every string the dialog shows.
 #[derive(Clone, Debug)]
@@ -103,6 +117,9 @@ pub struct EsignDialog {
     tx: Sender<Inbox>,
     rx: Receiver<Inbox>,
     newest: u64,
+    /// Context (document plus account) each in-flight context-sensitive
+    /// request was issued under. Consulted, then removed, in [`Self::pump`].
+    contexts: HashMap<u64, EsignContext>,
     document_id: String,
     document_etag: Option<String>,
     document_title: String,
@@ -141,6 +158,7 @@ impl Default for EsignDialog {
             tx,
             rx,
             newest: 0,
+            contexts: HashMap::new(),
             document_id: String::new(),
             document_etag: None,
             document_title: String::new(),
@@ -202,6 +220,10 @@ impl EsignDialog {
             self.completed_bytes = None;
             self.error = None;
             self.draft_idempotency_key = None;
+            // Any job still in flight was issued for the context being left.
+            // Its reply will be dropped in `pump` (context no longer
+            // matches), so nothing will ever clear `busy` on its behalf.
+            self.busy = false;
         }
         self.account_fingerprint = Some(fingerprint);
         self.document_id = document_id;
@@ -230,7 +252,7 @@ impl EsignDialog {
     /// Submit a request through the host backend (for example after the app
     /// encoded document bytes for a [`SendRequest`]).
     pub fn submit_request(&mut self, request: Request) {
-        let _ = self.submit(request);
+        let _ = self.submit_in_context(request);
     }
 
     /// Completed document bytes after a successful download request.
@@ -262,19 +284,38 @@ impl EsignDialog {
         seq
     }
 
+    /// The context (document plus account) a reply must still match to install.
+    fn current_context(&self) -> EsignContext {
+        EsignContext { document_id: self.document_id.clone(), account: self.account_fingerprint.clone() }
+    }
+
+    /// Like [`Self::submit`], but tags the request with the dialog's current
+    /// context. Everything that acts on one envelope (create, status,
+    /// completed, void, remind) goes through here. Capabilities does not:
+    /// it is answered before a document is ever opened and stays valid
+    /// across documents and accounts. Lookup does: a contact search issued
+    /// before a reopen must not populate the reopened dialog either.
+    fn submit_in_context(&mut self, request: Request) -> u64 {
+        let seq = self.submit(request);
+        self.contexts.insert(seq, self.current_context());
+        seq
+    }
+
     fn pump(&mut self, now: f64) {
         while let Ok((seq, result)) = self.rx.try_recv() {
             if self.caps_seq == Some(seq) {
                 self.caps_seq = None;
             }
-            if seq < self.newest && !matches!(result, Ok(Answer::Capabilities { .. })) {
-                // Stale lookup or status; keep capabilities even if older.
-                if !matches!(&result, Ok(Answer::Lookup(_))) {
-                    continue;
-                }
-                if seq != self.lookup_seq {
-                    continue;
-                }
+            // A context-tagged reply installs only for the context that
+            // issued it; it drops silently for any other, including a
+            // document switch or an account switch. Typing in the signer
+            // search bumps `newest` and is not a context change, so it no
+            // longer gates a create/status/completed/void/remind reply: the
+            // rule here is context equality, nothing else.
+            if let Some(context) = self.contexts.remove(&seq)
+                && context != self.current_context()
+            {
+                continue;
             }
             match result {
                 Ok(Answer::Capabilities { capabilities, responsible_party, linked }) => {
@@ -336,7 +377,7 @@ impl EsignDialog {
         }
         self.looking = true;
         self.last_lookup_query = self.query.clone();
-        self.lookup_seq = self.submit(Request::Lookup { query: self.query.clone(), limit: MATCHES });
+        self.lookup_seq = self.submit_in_context(Request::Lookup { query: self.query.clone(), limit: MATCHES });
     }
 
     fn add_contact(&mut self, contact: Contact) {
@@ -521,18 +562,18 @@ impl EsignDialog {
                 && let Some(r) = env.recipients.iter().find(|r| r.status == RecipientStatus::Pending)
             {
                 self.busy = true;
-                let _ = self.submit(Request::Remind { envelope: env.id.clone(), recipient: r.id.clone() });
+                let _ = self.submit_in_context(Request::Remind { envelope: env.id.clone(), recipient: r.id.clone() });
             }
             if caps.contains(&EsignCapability::Void)
                 && env.status == EnvelopeStatus::Sent
                 && ui.add_enabled(!self.busy, egui::Button::new(&self.labels.void)).clicked()
             {
                 self.busy = true;
-                let _ = self.submit(Request::Void { envelope: env.id.clone(), reason: "voided by sender".into() });
+                let _ = self.submit_in_context(Request::Void { envelope: env.id.clone(), reason: "voided by sender".into() });
             }
             if env.status == EnvelopeStatus::Completed && ui.add_enabled(!self.busy, egui::Button::new(&self.labels.download)).clicked() {
                 self.busy = true;
-                let _ = self.submit(Request::Completed { envelope: env.id.clone() });
+                let _ = self.submit_in_context(Request::Completed { envelope: env.id.clone() });
             }
             if ui.button(&self.labels.close).clicked() {
                 self.open = false;
@@ -540,7 +581,7 @@ impl EsignDialog {
         });
         if ui.button("Refresh status").clicked() {
             self.busy = true;
-            let _ = self.submit(Request::Status { envelope: env.id.clone() });
+            let _ = self.submit_in_context(Request::Status { envelope: env.id.clone() });
         }
     }
 }

@@ -47,7 +47,11 @@ pub trait Envelopes {
 
     /// The finished document and provider evidence.
     ///
-    /// Fails unless status is [`EnvelopeStatus::Completed`].
+    /// Fails unless status is [`EnvelopeStatus::Completed`]. The returned
+    /// [`CompletedDocument`] carries both the original document's content
+    /// digest and the signed artifact's digest, computed honestly rather
+    /// than copied from one another: the implementation must not assume the
+    /// provider's sealing left the bytes unchanged.
     fn completed(&self, envelope: &str) -> Result<CompletedDocument>;
 
     /// Cancel an in-flight envelope.
@@ -99,6 +103,8 @@ pub trait SigningService: Envelopes + EventIntake {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
     use craft_cloud::Identity;
 
@@ -191,5 +197,122 @@ mod tests {
         assert!(err.is_transient());
         let err = Error::Declined("no".into());
         assert!(!err.is_transient());
+    }
+
+    /// A non-cryptographic stand-in for a content digest. Good enough to
+    /// prove two byte strings differ; this crate takes no hashing
+    /// dependency, since hashing the document is an adapter's job.
+    fn fake_digest(bytes: &[u8]) -> String {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        bytes.hash(&mut hasher);
+        format!("{:016x}", hasher.finish())
+    }
+
+    /// An honest in-process double for [`Envelopes`]. It keeps the exact
+    /// bytes `create` was given, and on `completed` returns a "signed"
+    /// artifact built by appending a stub provider seal to those bytes, so
+    /// `original_content_sha256` and `signed_content_sha256` are computed
+    /// from genuinely different byte strings, the way a real provider's
+    /// sealing would produce them, rather than one copied from the other.
+    struct Double {
+        document: Mutex<Option<Vec<u8>>>,
+    }
+
+    impl Double {
+        fn new() -> Double {
+            Double { document: Mutex::new(None) }
+        }
+    }
+
+    impl Envelopes for Double {
+        fn create(&self, draft: &EnvelopeDraft, document: &[u8], _idempotency_key: &str) -> Result<Envelope> {
+            *self.document.lock().expect("lock") = Some(document.to_vec());
+            Ok(Envelope {
+                id: "env-double".into(),
+                title: draft.title.clone(),
+                message: draft.message.clone(),
+                sender: draft.sender.clone(),
+                document_id: draft.document_id.clone(),
+                document_etag: draft.document_etag.clone(),
+                content_sha256: fake_digest(document),
+                recipients: draft.recipients.clone(),
+                placements: draft.placements.clone(),
+                status: EnvelopeStatus::Draft,
+                expires: draft.expires.clone(),
+                created: None,
+                completed_at: None,
+            })
+        }
+
+        fn send(&self, envelope: &str) -> Result<Envelope> {
+            self.status(envelope)
+        }
+
+        fn status(&self, envelope: &str) -> Result<Envelope> {
+            let document = self.document.lock().expect("lock").clone().unwrap_or_default();
+            Ok(Envelope {
+                id: envelope.into(),
+                title: "Double".into(),
+                message: None,
+                sender: Identity { id: "u1".into(), display: "Ada".into(), email: None, avatar: None },
+                document_id: None,
+                document_etag: None,
+                content_sha256: fake_digest(&document),
+                recipients: Vec::new(),
+                placements: Vec::new(),
+                status: EnvelopeStatus::Completed,
+                expires: None,
+                created: None,
+                completed_at: None,
+            })
+        }
+
+        fn completed(&self, envelope: &str) -> Result<CompletedDocument> {
+            let original = self.document.lock().expect("lock").clone().unwrap_or_default();
+            let mut signed = original.clone();
+            signed.extend_from_slice(b"\0provider-seal");
+            Ok(CompletedDocument {
+                envelope_id: envelope.into(),
+                bytes: signed.clone(),
+                original_content_sha256: fake_digest(&original),
+                signed_content_sha256: fake_digest(&signed),
+                evidence: b"certificate-of-completion".to_vec(),
+            })
+        }
+    }
+
+    /// RFC-0021's evidence guarantee: `CompletedDocument` carries the
+    /// original document's digest and the signed artifact's digest as two
+    /// distinct, honestly computed fields, and they differ when the
+    /// provider's sealing changes the bytes.
+    #[test]
+    fn completed_document_keeps_original_and_signed_digests_distinct() {
+        let double = Double::new();
+        let draft = EnvelopeDraft {
+            title: "Contract".into(),
+            message: None,
+            sender: Identity { id: "u1".into(), display: "Ada".into(), email: None, avatar: None },
+            document_id: Some("doc-1".into()),
+            document_etag: None,
+            recipients: Vec::new(),
+            placements: Vec::new(),
+            expires: None,
+        };
+        let original_bytes = b"the original document bytes";
+        let envelope = double.create(&draft, original_bytes, "idem-1").expect("create");
+        let completed = double.completed(&envelope.id).expect("completed");
+
+        assert_eq!(completed.original_content_sha256, fake_digest(original_bytes));
+        assert_ne!(completed.bytes, original_bytes, "the signed artifact's bytes differ from the original");
+        assert_eq!(completed.signed_content_sha256, fake_digest(&completed.bytes));
+        assert_ne!(
+            completed.original_content_sha256, completed.signed_content_sha256,
+            "sealing changed the bytes, so the two digests must not be conflated"
+        );
+
+        let json = serde_json::to_string(&completed).expect("serialize");
+        let back: CompletedDocument = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, completed);
     }
 }
