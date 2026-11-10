@@ -142,6 +142,12 @@ IDs come from the surrounding UI scope/position, independent of the translated l
 than 4096 points; other sizes produce an inert zero-size response. Invalid stroke widths are
 ignored and large strokes are bounded to half the smaller button dimension.
 
+## Pick controls
+
+`pick::swatch_labeled` takes the swatch's accessible name from the app, so screen-reader text can
+use the app's translations. `pick::swatch` keeps compatibility and reports only the hexadecimal
+colour as its accessible name; use the labeled variant for localized colour names.
+
 ## Tabs
 
 `tabs::fit(natural_widths, selected, available, minimum, overflow_width)` returns visible tab

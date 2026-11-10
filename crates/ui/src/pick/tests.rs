@@ -186,7 +186,7 @@ fn a_swatch_returns_a_click_and_notes_its_colour() {
     let mut h = Harness::builder().with_size(egui::vec2(100.0, 60.0)).build_ui_state(
         |ui, s: &mut (bool, Option<String>)| {
             let _ = take_hover(ui.ctx());
-            s.0 |= swatch(ui, Color32::from_rgb(255, 192, 0), SWATCH);
+            s.0 |= swatch_labeled(ui, Color32::from_rgb(255, 192, 0), SWATCH, "Farbe #FFC000");
             s.1 = take_hover(ui.ctx());
         },
         (false, None),
@@ -207,7 +207,7 @@ fn a_swatch_has_an_accessible_name_and_can_be_activated() {
     let mut h = Harness::builder().with_size(egui::vec2(100.0, 60.0)).build_ui_state(
         |ui, s: &mut (bool, Option<Id>)| {
             set_current_pick(ui.ctx(), Some("FFC000".into()));
-            let response = swatch_response(ui, Color32::from_rgb(255, 192, 0), SWATCH);
+            let response = swatch_response(ui, Color32::from_rgb(255, 192, 0), SWATCH, "Farbe #FFC000");
             s.0 |= response.clicked();
             s.1 = Some(response.id);
         },
@@ -215,7 +215,7 @@ fn a_swatch_has_an_accessible_name_and_can_be_activated() {
     );
     h.run();
 
-    let swatch = h.get_by_label("Color #FFC000");
+    let swatch = h.get_by_label("Farbe #FFC000");
     let node = swatch.accesskit_node();
     assert_eq!(node.role(), egui::accesskit::Role::Button);
     assert_eq!(node.toggled(), Some(egui::accesskit::Toggled::True));

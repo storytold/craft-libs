@@ -64,14 +64,23 @@ pub fn hex(c: Color32) -> String {
 /// A colour swatch. An accent ring marks it when the current pick is its colour.
 /// Returns true when clicked.
 pub fn swatch(ui: &mut Ui, color: Color32, style: SwatchStyle) -> bool {
-    swatch_response(ui, color, style).clicked()
+    let name = format!("#{}", hex(color));
+    swatch_response(ui, color, style, &name).clicked()
 }
 
-fn swatch_response(ui: &mut Ui, color: Color32, style: SwatchStyle) -> Response {
+/// A colour swatch with a caller-provided, localized accessible name.
+///
+/// Use this when the app has a translated colour label; [`swatch`] uses the hexadecimal value
+/// alone so it does not announce a hardcoded language.
+pub fn swatch_labeled(ui: &mut Ui, color: Color32, style: SwatchStyle, accessible_name: &str) -> bool {
+    swatch_response(ui, color, style, accessible_name).clicked()
+}
+
+fn swatch_response(ui: &mut Ui, color: Color32, style: SwatchStyle, accessible_name: &str) -> Response {
     let (r, resp) = ui.allocate_exact_size(vec2(SWATCH_SIZE, SWATCH_SIZE), Sense::click());
     let value = hex(color);
     let selected = current_pick(ui.ctx()).is_some_and(|cur| cur.eq_ignore_ascii_case(&value));
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), selected, format!("Color #{value}")));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), selected, accessible_name.to_owned()));
     ui.painter().rect_filled(r, 0.0, color);
     let (width, line) = if resp.hovered() { (1.5, style.accent) } else { (0.5, style.border) };
     ui.painter().rect_stroke(r, 0.0, Stroke::new(width, line), StrokeKind::Inside);
