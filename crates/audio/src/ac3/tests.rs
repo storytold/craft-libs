@@ -206,32 +206,35 @@ fn eac3_tools_we_do_not_decode_are_refused() {
     assert_eq!(Decoder::new().decode(&ecpl).unwrap_err(), Error::Unsupported("E-AC-3 enhanced coupling".into()));
 }
 
+/// A mono E-AC-3 syncframe of one block (256 samples) that sends exponents (all 10, bandwidth
+/// code 0) when `new_exps`, else reuses the last ones. Zero SNR offsets allocate no bits: every
+/// coefficient is dither.
+pub(crate) fn single_block_eac3(new_exps: bool) -> Vec<u8> {
+    eac3_frame(0, 0, 32, 0, 1, |w| {
+        // (expstre and ahte are not sent with fewer than six blocks)
+        w.put(2, 0); // snroffststr
+        w.put(8, 0); // transproce … spxattene
+        w.put(2, new_exps as u32); // chexpstr[0]: D15 or reuse
+        w.put(1, 0); // convexpstre
+        w.put(10, 0); // frmcsnroffst, frmfsnroffst
+        w.put(1, 0); // dynrnge
+        w.put(1, 0); // spxinu
+        if new_exps {
+            w.put(6, 0); // chbwcod → 73 coefficients
+            w.put(4, 10); // absolute exponent
+            for _ in 0..24 {
+                w.put(7, 62); // three zero deltas
+            }
+            w.put(2, 0); // gainrng
+        }
+        w.put(1, 0); // convsnroffste
+    })
+}
+
 #[test]
 fn eac3_single_block_frames_reuse_exponents_across_syncframes() {
-    // mono, one block per syncframe; the first sends exponents (all 10, bandwidth code 0), the
-    // second reuses them. Zero SNR offsets allocate no bits: every coefficient is dither.
-    let frame = |new_exps: bool| {
-        eac3_frame(0, 0, 32, 0, 1, |w| {
-            // (expstre and ahte are not sent with fewer than six blocks)
-            w.put(2, 0); // snroffststr
-            w.put(8, 0); // transproce … spxattene
-            w.put(2, new_exps as u32); // chexpstr[0]: D15 or reuse
-            w.put(1, 0); // convexpstre
-            w.put(10, 0); // frmcsnroffst, frmfsnroffst
-            w.put(1, 0); // dynrnge
-            w.put(1, 0); // spxinu
-            if new_exps {
-                w.put(6, 0); // chbwcod → 73 coefficients
-                w.put(4, 10); // absolute exponent
-                for _ in 0..24 {
-                    w.put(7, 62); // three zero deltas
-                }
-                w.put(2, 0); // gainrng
-            }
-            w.put(1, 0); // convsnroffste
-        })
-    };
-    let (first, second) = (frame(true), frame(false));
+    // the first sends exponents, the second reuses them
+    let (first, second) = (single_block_eac3(true), single_block_eac3(false));
     let mut d = Decoder::new();
     let a = d.decode(&first).unwrap();
     assert_eq!((a.header.samples(), a.channels.len(), a.channels[0].len()), (256, 1, 256));

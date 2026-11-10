@@ -1345,4 +1345,4 @@ fn wav_order(mut pcm: Vec<Vec<f32>>, acmod: usize, lfeon: bool) -> Vec<Vec<f32>>
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

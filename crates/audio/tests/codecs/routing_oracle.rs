@@ -340,8 +340,7 @@ fn snr_planar(ours: &[Vec<f32>], reference: &[Vec<f32>]) -> f64 {
 }
 
 /// The streaming decoder gives the same audio as `decode`, block by block, and a seek lands on the
-/// exact frame: what follows matches `decode` from there (bit for bit for the deterministic
-/// codecs; within the codec's bound where the decoder state is reconstructed from a pre-roll).
+/// exact frame: what follows matches `decode` from there, bit for bit.
 #[test]
 fn streaming_and_seeking_match_the_whole_file_decode() {
     use craft_audio::{DecodeOptions, Decoder};
@@ -369,10 +368,9 @@ fn streaming_and_seeking_match_the_whole_file_decode() {
             }
             assert_eq!(after[0].len(), whole.frames() - target, "{}: frames after a seek to {target}", c.name);
             let expected: Vec<Vec<f32>> = whole.channels.iter().map(|ch| ch[target..].to_vec()).collect();
-            let s = snr_planar(&after, &expected);
-            // AC-3 dither is random per decode.
-            let bound = if matches!(c.codec, CodecId::Ac3 | CodecId::Eac3) { c.min_snr.min(25.0) } else { f64::INFINITY };
-            assert!(s >= bound, "{}: SNR {s:.1} dB after a seek to {target}", c.name);
+            // AC-3 / E-AC-3 dither is seeded from each syncframe, and the pre-roll frame restores
+            // the overlap: exact too.
+            assert!(after == expected, "{}: SNR {:.1} dB after a seek to {target}", c.name, snr_planar(&after, &expected));
         }
     }
 }
