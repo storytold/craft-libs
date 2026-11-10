@@ -381,6 +381,15 @@ fn legacy_modules_are_detected_by_export_prefix_and_bypass_the_gate() {
     assert_eq!(mixed.legacy, None);
 }
 
+#[test]
+fn mixed_legacy_prefixes_still_report_the_resource_caps() {
+    let bytes =
+        wat::parse_str(r#"(module (memory (export "memory") 1) (table 1 funcref) (func (export "ec_run")) (func (export "pc_run")))"#).unwrap();
+    let report = gate(&bytes);
+    assert_eq!(report.legacy, None);
+    assert_only(&report, &[Violation::MixedLegacyPrefixes, Violation::TableMaxMissing { index: 0 }]);
+}
+
 /// A legacy prefix renames the exports the shim wants. It does not lift the resource caps.
 #[test]
 fn legacy_modules_still_meet_the_size_table_and_memory_caps() {

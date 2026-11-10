@@ -505,8 +505,7 @@ fn check_features(bytes: &[u8], allowed: WasmFeatures, out: &mut Vec<Violation>)
 /// Run the gate on a package. Always returns a report. Never panics on hostile input.
 ///
 /// The report lists every violation, with one exception. A package over `MAX_PACKAGE_BYTES` is
-/// refused with `PackageTooLarge` alone, before any parsing, so an oversized package costs no
-/// allocation or validation work.
+/// refused with `PackageTooLarge` alone, before any parsing or validation.
 pub fn check_package(bytes: &[u8], host: &HostPolicy) -> PolicyReport {
     let mut report = PolicyReport { violations: Vec::new(), legacy: None, manifest: None };
     if bytes.len() > MAX_PACKAGE_BYTES {
@@ -536,6 +535,9 @@ pub fn check_package(bytes: &[u8], host: &HostPolicy) -> PolicyReport {
         Ok(None) => {}
         Err(()) => {
             report.violations.push(Violation::MixedLegacyPrefixes);
+            // The prefix mix is one violation. The resource caps hold for any module, so the author
+            // hears about a table problem in the same report.
+            check_resource_caps(&facts, true, &mut report.violations);
             return report;
         }
     }
