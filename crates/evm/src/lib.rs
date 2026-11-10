@@ -6,6 +6,7 @@
 use crate::FormatError;
 use serde::Serialize;
 use serde_json::{Map, Value};
+use std::collections::BTreeSet;
 
 /// Largest bytecode we analyse (16 MiB; deployed contracts are at most 24 KiB).
 pub const MAX_CODE: usize = 16 << 20;
@@ -455,6 +456,7 @@ pub fn analyze(code: &[u8]) -> Result<EvmInterface, FormatError> {
         .any(|(k, i)| i.op == 0x34 && rejects_value(body, &ins, k, &index_of));
 
     let mut functions: Vec<EvmFunction> = Vec::new();
+    let mut selectors = BTreeSet::new();
     let mut splits = 0usize;
     let mut last_jumpi: Option<usize> = None;
     let mut solc_like = 0usize;
@@ -510,10 +512,10 @@ pub fn analyze(code: &[u8]) -> Result<EvmInterface, FormatError> {
         if n < 4 && extraction.is_none() {
             continue;
         }
-        let selector = format!("0x{sel:08x}");
-        if functions.iter().any(|f| f.selector == selector) {
+        if !selectors.insert(sel) {
             continue;
         }
+        let selector = format!("0x{sel:08x}");
         if pattern == "eq-jumpi" {
             solc_like += 1;
         } else {
