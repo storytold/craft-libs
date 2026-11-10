@@ -124,7 +124,7 @@ fn libopus_oracle() {
         return;
     };
     if !has_libopus(&ff) {
-        eprintln!("ffmpeg without libopus; skipping");
+        crate::common::skip::<()>("opus oracle: ffmpeg was built without libopus");
         return;
     }
     let cases = [
@@ -218,6 +218,7 @@ fn libopus_oracle_output_rates() {
         return;
     };
     if !has_libopus(&ff) {
+        crate::common::skip::<()>("opus oracle: ffmpeg was built without libopus");
         return;
     }
     let cases = [

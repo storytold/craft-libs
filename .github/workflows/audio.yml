@@ -117,19 +117,24 @@ jobs:
           # A mirror can stall for most of the job's time limit, and the next try usually gets a good one.
           install_ffmpeg() {
             for attempt in 1 2 3; do
-              timeout -k 10 180 sudo sh -c 'apt-get update -qq && apt-get install -y -qq --no-install-recommends ffmpeg' && return 0
+              # timeout runs as root, so a stalled apt-get is killed too and frees the dpkg lock.
+              sudo timeout -k 10 180 sh -c 'apt-get update -qq && apt-get install -y -qq --no-install-recommends ffmpeg' && return 0
               echo "apt: attempt $attempt failed with exit code $?"
-              timeout -k 10 60 sudo dpkg --configure -a || true
+              sudo timeout -k 10 60 dpkg --configure -a || true
             done
             return 1
           }
-          install_ffmpeg > "$RUNNER_TEMP/apt.log" 2>&1 &
-          apt=$!
-          scripts/fetch-opus-vectors.sh "$RUNNER_TEMP/media-fixtures/opus/vectors" > "$RUNNER_TEMP/vectors.log" 2>&1 &
-          vectors=$!
+          # The vectors are fetched after ffmpeg, so the two downloads do not slow each other.
+          {
+            install_ffmpeg > "$RUNNER_TEMP/apt.log" 2>&1 || exit 1
+            scripts/fetch-opus-vectors.sh "$RUNNER_TEMP/media-fixtures/opus/vectors" > "$RUNNER_TEMP/vectors.log" 2>&1 || exit 2
+          } &
+          fetch=$!
           cargo test -p craft-audio --all-features --locked --no-run
-          wait "$apt" || { cat "$RUNNER_TEMP/apt.log"; exit 1; }
-          wait "$vectors" || { cat "$RUNNER_TEMP/vectors.log"; exit 1; }
+          wait "$fetch" || case $? in
+            1) cat "$RUNNER_TEMP/apt.log"; exit 1 ;;
+            *) cat "$RUNNER_TEMP/vectors.log"; exit 1 ;;
+          esac
           ffmpeg -hide_banner -version | sed -n 1p
       - run: cargo test -p craft-audio --all-features --locked
         env:

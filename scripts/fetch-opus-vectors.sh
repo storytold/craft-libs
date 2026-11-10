@@ -19,7 +19,7 @@ fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-len=$(curl -fsSIL "$URL" | tr -d '\r' | awk 'tolower($1) == "content-length:" { n = $2 } END { print n }')
+len=$(curl -fsSIL --retry 10 --retry-delay 2 --retry-all-errors --connect-timeout 20 --max-time 60 "$URL" | tr -d '\r' | awk 'tolower($1) == "content-length:" { n = $2 } END { print n }')
 [ -n "$len" ] || { echo "could not read the archive size" >&2; exit 1; }
 
 # Small ranges, eight at a time: a range whose connection drops below 50 KB/s for 15 s is

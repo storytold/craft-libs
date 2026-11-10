@@ -210,19 +210,20 @@ impl MkvFrames {
             MkvFrames::Constant(n) => Some(k as u64 * *n),
             MkvFrames::Pcm { sizes, frame_bytes } => Some(sizes.iter().take(k).map(|&s| u64::from(s)).sum::<u64>() / *frame_bytes),
             MkvFrames::Opus { samples, starts } => {
-                let starts = starts.get_or_insert_with(|| {
+                if starts.is_none() {
+                    // A read that fails leaves the starts unknown (the caller then places the
+                    // packet by its timestamp) and is tried again on the next seek.
                     let mut acc = 0u64;
-                    samples
-                        .iter()
-                        .map(|&(at, size)| {
-                            let s = acc;
-                            let prefix = src.bytes(at, 2).and_then(|b| <[u8; 2]>::try_from(b).ok()).unwrap_or([0, 0]);
-                            acc += u64::from(ogg::opus_packet_samples(prefix, size).unwrap_or(0));
-                            s
-                        })
-                        .collect()
-                });
-                starts.get(k).copied()
+                    let mut found = Vec::with_capacity(samples.len());
+                    for &(at, size) in samples.iter() {
+                        let b = src.bytes(at, size.min(2) as usize)?;
+                        let prefix = [b.first().copied().unwrap_or(0), b.get(1).copied().unwrap_or(0)];
+                        found.push(acc);
+                        acc += u64::from(ogg::opus_packet_samples(prefix, size).unwrap_or(0));
+                    }
+                    *starts = Some(found);
+                }
+                starts.as_ref()?.get(k).copied()
             }
             MkvFrames::Timestamps => None,
         }
@@ -855,7 +856,12 @@ fn open_ogg<'a>(src: &Src<'a>, track: Option<usize>) -> Option<Result<Native<'a>
         return None;
     }
     let params = s.codec_params();
-    let head = crate::opus::OpusHead::parse(&params.extradata).ok()?;
+    let head = match crate::opus::OpusHead::parse(&params.extradata) {
+        Ok(head) => head,
+        // A feature this decoder lacks is left to the fallback; a broken header is reported.
+        Err(crate::opus::Error::Unsupported(_)) => return None,
+        Err(e) => return Some(Err(e.into())),
+    };
     let timing = ogg::OpusTiming::of(s, u32::from(head.pre_skip));
     let limit = u64::try_from(timing.total).ok();
     let skip = u64::from(timing.pre_skip);

@@ -81,7 +81,9 @@ impl Decoder {
         self.streams.first().map_or(0, |s| s.final_range())
     }
 
-    /// Reset every stream's decoder state (e.g. after a seek) and restart pre-skip trimming.
+    /// Reset every stream's decoder state (e.g. after a seek). With [`Self::set_trim_pre_skip`]
+    /// on, trimming starts again too, which is right only when decoding restarts from the start of
+    /// the stream (RFC 7845 §4 applies pre-skip once); turn it off before a seek anywhere else.
     pub fn reset(&mut self) {
         for s in &mut self.streams {
             s.reset();

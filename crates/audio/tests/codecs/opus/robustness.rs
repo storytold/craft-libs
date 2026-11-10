@@ -124,3 +124,44 @@ fn corrupted_real_packets() {
         }
     }
 }
+
+/// An Ogg page holding `packet` whole (RFC 3533), with its CRC.
+fn ogg_page(packet: &[u8], flags: u8, granule: u64, seq: u32) -> Vec<u8> {
+    let mut p = b"OggS\0".to_vec();
+    p.push(flags);
+    p.extend_from_slice(&granule.to_le_bytes());
+    p.extend_from_slice(&1u32.to_le_bytes());
+    p.extend_from_slice(&seq.to_le_bytes());
+    p.extend_from_slice(&[0; 4]);
+    let mut lacing = vec![255u8; packet.len() / 255];
+    lacing.push((packet.len() % 255) as u8);
+    p.push(lacing.len() as u8);
+    p.extend_from_slice(&lacing);
+    p.extend_from_slice(packet);
+    let mut crc = 0u32;
+    for &b in &p {
+        crc ^= u32::from(b) << 24;
+        for _ in 0..8 {
+            crc = if crc & 0x8000_0000 != 0 { (crc << 1) ^ 0x04C1_1DB7 } else { crc << 1 };
+        }
+    }
+    p[22..26].copy_from_slice(&crc.to_le_bytes());
+    p
+}
+
+#[test]
+fn ogg_with_a_malformed_opus_head_reports_it() {
+    // Mapping family 0 with three channels: RFC 7845 §5.1.1 allows at most two.
+    let mut head = b"OpusHead\x01\x03".to_vec();
+    head.extend_from_slice(&312u16.to_le_bytes());
+    head.extend_from_slice(&48_000u32.to_le_bytes());
+    head.extend_from_slice(&[0, 0, 0]);
+    let mut file = ogg_page(&head, 2, 0, 0);
+    file.extend(ogg_page(b"OpusTags\0\0\0\0\0\0\0\0", 0, 0, 1));
+    // One 20 ms silent CELT frame.
+    file.extend(ogg_page(&[0xF8, 0xFF, 0xFE], 4, 960, 2));
+    match craft_audio::decode(&file, Some("opus")) {
+        Err(craft_audio::AudioError::Malformed(m)) => assert!(m.contains("family 0"), "{m}"),
+        other => panic!("expected a malformed-header error, got {:?}", other.map(|(info, _)| info)),
+    }
+}
