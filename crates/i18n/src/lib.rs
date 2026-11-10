@@ -596,6 +596,11 @@ fn candidates(tag: &str) -> Vec<String> {
     if tag.len() > MAX_TAG_LEN {
         return Vec::new();
     }
+    candidates_unchecked(tag)
+}
+
+/// `candidates` without the length check: the implied-script recursion may push a tag just past the limit.
+fn candidates_unchecked(tag: &str) -> Vec<String> {
     let tag = tag.to_ascii_lowercase();
     let base = tag.split(['.', '@']).next().unwrap_or("").replace('_', "-");
     let mut parts: Vec<&str> = base.split('-').filter(|p| !p.is_empty()).collect();
@@ -618,7 +623,7 @@ fn candidates(tag: &str) -> Vec<String> {
     {
         let mut out = vec![parts.join("-")];
         parts.insert(1, implied);
-        out.extend(candidates(&parts.join("-")));
+        out.extend(candidates_unchecked(&parts.join("-")));
         return out;
     }
     let mut out: Vec<String> = (1..=parts.len()).rev().map(|n| parts.get(..n).unwrap_or_default().join("-")).collect();
@@ -1044,6 +1049,8 @@ mod tests {
 
     #[test]
     fn region_implies_script() {
+        let long = format!("pa-PK-{}", "a".repeat(120));
+        assert!(candidates(&long).contains(&"pa-arab".to_owned()), "an implied script may push the tag past the limit");
         assert_eq!(candidates("pa-PK"), ["pa-pk", "pa-arab-pk", "pa-arab"]);
         assert_eq!(candidates("pa_PK.UTF-8"), ["pa-pk", "pa-arab-pk", "pa-arab"]);
         assert_eq!(candidates("pa-IN"), ["pa-in", "pa"]);
