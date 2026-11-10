@@ -143,7 +143,8 @@ pub fn pathfinder_with(op: PathfinderOp, shapes: &[Shape], precision: f64) -> Ve
 /// [`pathfinder`] that reports what it cannot do instead of giving no shapes, or falling back to the
 /// filled areas: [`crate::PathOpsError::TooComplex`] past the element limit, past a limit of the sweep or
 /// of the work of a contour pass ([`crate::MAX_PASS_WORK`]), or past one of the planar map's (more than
-/// [`crate::SHAPE_BUILDER_MAX_SEGMENTS`] segments, or [`crate::MAX_FILL_WORK`]) for Divide and Outline
+/// [`crate::SHAPE_BUILDER_MAX_SEGMENTS`] segments, [`crate::MAX_FILL_WORK`], or the searches for a point
+/// inside each face and for the junctions of the Outline, [`crate::MAX_SEARCH_WORK`]) for Divide and Outline
 /// with an open path, and past the limit on the faces of closed shapes ([`crate::Limits::mask_work`], or
 /// the passes' [`crate::Limits::pass_work`]) for Divide; [`crate::PathOpsError::NonFinite`] for a point that
 /// is not finite, and [`crate::PathOpsError::Degenerate`] for one so large that the sweep cannot take it,

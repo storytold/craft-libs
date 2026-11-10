@@ -368,7 +368,8 @@ thread_local! {
 /// The faces, edges and pieces under other paths of [`build`], and why there are none: `Ok(None)` when
 /// the shapes draw nothing, the map's error ([`try_map_with`]; a panic of the sweep is
 /// [`PathOpsError::Degenerate`]), and [`PathOpsError::TooComplex`] past the limit on the work of winding
-/// points against fills and faces ([`crate::Limits::fill_work`]); and, with `strict`, [`PathOpsError::Degenerate`]
+/// points against fills and faces ([`crate::Limits::fill_work`]) or on the searches for a point inside each
+/// face ([`crate::Limits::search_work`]); and, with `strict`, [`PathOpsError::Degenerate`]
 /// for a face thicker than the precision that no point is found in (what covers it is not known, and it would
 /// be listed as a gap that nothing fills).
 pub(super) fn try_build(shapes: &[Shape], precision: f64, strict: bool) -> Result<Option<Built>, PathOpsError> {
@@ -505,8 +506,12 @@ fn chains_by(edges: &[Edge], around: &[Vec<usize>], keys: impl Fn(&Edge) -> Vec<
 }
 
 /// A point strictly inside a filled path, well away from its edges where it can be. None for a path
-/// with no area, or one whose points are not finite.
+/// with no area, or one whose points are not finite, or one of more elements than [`crate::MAX_ELEMENTS`].
 pub fn interior_point(path: &BezPath) -> Option<Point> {
+    // The size first, before the path is copied: a path of more elements than the limit that begins with a close would be copied whole.
+    if !crate::budget::fits_elements([path]) {
+        return None;
+    }
     // A close at the start closes nothing, and kurbo's bounding box panics on it.
     let path = crate::path::without_leading_closes(path);
     interior_point_within(&path, flattening_of(&path)?)

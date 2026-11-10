@@ -336,6 +336,7 @@ work of each operation is bounded before it starts, in counts the tests assert o
   `SHAPE_BUILDER_MAX_SEGMENTS`: not `TooComplex` or no shapes, but an answer that is not the arrangement
   asked for, the faces unsplit by the open paths (rectangles nested 3,300 deep pass, in 0.75 s; 3,400 do not).
   `try_shape_builder` and `try_pathfinder` give `TooComplex` there instead, so a caller can tell, and also
+  where the searches for a point inside each face are past `search_work` (`MAX_SEARCH_WORK`, above) and
   where the faces of closed shapes are past `mask_work` or `pass_work` (Divide gives no shapes and
   `shape_builder` no regions of the filled areas there, as `regions` gives none), which they do not hide as
   an empty drawing or a map with the filled areas missing; they check the shapes as given as well, before

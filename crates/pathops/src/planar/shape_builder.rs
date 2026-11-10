@@ -65,8 +65,9 @@ pub fn shape_builder(shapes: &[Shape], edges: bool) -> BuilderArrangement {
 
 /// [`shape_builder`] that reports a planar map it cannot make, instead of falling back to the filled
 /// areas: [`PathOpsError::TooComplex`] past the element limit, past [`SHAPE_BUILDER_MAX_SEGMENTS`]
-/// segments ([`crate::Limits::shape_builder_segments`]), past the limit on pairs of segments or on the
-/// work of winding points against fills and faces ([`crate::Limits::fill_work`]), and past the limit on
+/// segments ([`crate::Limits::shape_builder_segments`]), past the limit on pairs of segments, on the
+/// work of winding points against fills and faces ([`crate::Limits::fill_work`]) or on the searches for
+/// a point inside each face ([`crate::Limits::search_work`]), and past the limit on
 /// the faces of the filled areas ([`crate::Limits::mask_work`], [`crate::Limits::pass_work`]), which a map
 /// that was made would be given without; [`PathOpsError::NonFinite`] for a point that is not finite, and
 /// [`PathOpsError::Degenerate`] for one so large that the sweep cannot take it, in the shapes as they are

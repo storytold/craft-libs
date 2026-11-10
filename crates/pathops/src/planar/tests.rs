@@ -245,6 +245,49 @@ fn nothing_or_garbage_gives_an_empty_map() {
     assert_eq!(edges.len(), 1);
 }
 
+/// A path that begins with a close and is past the element limit is refused before it is copied (`without_leading_closes` copies the elements
+/// that follow the closes), in `interior_point` and in `try_stroke_region` and `stroke_region` (which check the size first), and one within the
+/// limit is taken as the path without the closes.
+#[test]
+fn interior_point_checks_the_size_before_it_copies_a_path_that_begins_with_a_close() {
+    use kurbo::PathEl;
+    let limit = |n: usize| crate::Limits { elements: n, ..crate::Limits::default() };
+    // `extend` takes what `push` refuses in a build for tests: a path that does not begin with a move.
+    let with_leading_close = |lines: usize| {
+        let mut p = BezPath::new();
+        p.extend([PathEl::ClosePath, PathEl::MoveTo((0.0, 0.0).into()), PathEl::LineTo((10.0, 0.0).into()), PathEl::LineTo((10.0, 10.0).into())]);
+        p.extend((0..lines).map(|i| PathEl::LineTo((10.0 - 10.0 * (i % 2) as f64, 10.0).into())));
+        p.extend([PathEl::ClosePath]);
+        p
+    };
+    let big = with_leading_close(100);
+    assert!(big.elements().len() > 100);
+    work::reset();
+    assert_eq!(crate::with_limits(limit(100), || crate::interior_point(&big)), None);
+    assert_eq!(work::take(Work::Visited), 0, "the elements of a path past the limit are not copied");
+    // `try_stroke_region` and `stroke_region` do the same for an outline: the size first, then the copy that takes the closes off.
+    work::reset();
+    assert_eq!(crate::with_limits(limit(100), || crate::try_stroke_region(std::slice::from_ref(&big))), Err(crate::PathOpsError::TooComplex));
+    assert!(crate::with_limits(limit(100), || crate::stroke_region(std::slice::from_ref(&big))).elements().is_empty());
+    assert_eq!(work::take(Work::Visited), 0, "nor are those of an outline past the limit");
+    // Within the limit it is the path without the close: the point of the triangle, and the copy is made.
+    let small = with_leading_close(0);
+    work::reset();
+    let p = crate::with_limits(limit(100), || crate::interior_point(&small)).expect("a point");
+    assert!(p.x > 0.0 && p.x < 10.0 && p.y > 0.0 && p.y < 10.0, "{p:?}");
+    assert!(work::take(Work::Visited) >= small.elements().len(), "the path within the limit is copied");
+    // At the limit exactly it is made too, and one element more is not.
+    let exact = with_leading_close(100 - small.elements().len());
+    assert_eq!(exact.elements().len(), 100);
+    work::reset();
+    let _ = crate::with_limits(limit(100), || crate::interior_point(&exact));
+    assert!(work::take(Work::Visited) >= 100, "a path at the limit is copied");
+    let over = with_leading_close(100 - small.elements().len() + 1);
+    work::reset();
+    assert_eq!(crate::with_limits(limit(100), || crate::interior_point(&over)), None);
+    assert_eq!(work::take(Work::Visited), 0, "one element past the limit is not");
+}
+
 /// `interior_point` answers None, and returns, for a path it cannot place a point in.
 #[test]
 fn interior_point_of_hostile_paths_is_none() {

@@ -288,8 +288,8 @@ pub struct Limits {
     /// Most flags a boolean operation sets to tell its predicate what covers the faces, and entries Divide
     /// and `regions` walk to list the inputs that cover each side of an edge ([`crate::MASK_WORK`]).
     pub mask_work: usize,
-    /// Most steps of the searches a Pathfinder Outline and an inset make on curves after their sweeps
-    /// ([`MAX_SEARCH_WORK`]).
+    /// Most steps of the searches a Pathfinder Outline and an inset make on curves after their sweeps, and a planar map makes
+    /// for a point inside each of its faces ([`MAX_SEARCH_WORK`]).
     pub search_work: usize,
     /// Most work the metered dry sweep counts, in nanoseconds of sweep ([`MAX_SWEEP_WORK`]); `usize::MAX` leaves the meter off.
     pub sweep_work: usize,
