@@ -371,6 +371,8 @@ where
 {
     // An inline image dictionary has no enclosing << >> pair; count only actual
     // containers. Its array/dictionary operands still enter the same depth guard.
+    crate::cancel::check(ctx.control())?;
+    r.set_control(ctx.control().cloned());
     let container = start_tag.is_some();
     if container {
         r.enter_container()?;
