@@ -136,6 +136,8 @@ struct Walk {
     seen: HashMap<ObjectIdentifier, usize>,
     /// Streams whose `/Resources` were left unread at the depth limit, and not expanded since.
     truncated: HashSet<ObjectIdentifier>,
+    /// Graphics states and form groups already listed, so a re-expansion does not list them twice.
+    recorded: HashSet<(ObjectIdentifier, String)>,
     depth: usize,
 }
 
@@ -253,7 +255,9 @@ impl Walk {
                 self.x_object(&source, "soft mask");
             }
         }
-        self.summary.ext_g_states.push(state);
+        if gs.obj_id().is_none_or(|id| self.recorded.insert((id, String::new()))) {
+            self.summary.ext_g_states.push(state);
+        }
     }
 
     fn shading(&mut self, shading: &Object<'_>) {
@@ -278,7 +282,9 @@ impl Walk {
                 }
             }
             Some("Form") => {
-                if let Some(group) = dict.get::<Dict<'_>>(b"Group".as_slice()) {
+                if let Some(group) = dict.get::<Dict<'_>>(b"Group".as_slice())
+                    && self.recorded.insert((xobject.obj_id(), at.to_owned()))
+                {
                     self.group(at, &group);
                 }
                 self.content(xobject);
@@ -293,7 +299,10 @@ impl Walk {
         }
         if let Some(res) = stream.dict().get::<Dict<'_>>(b"Resources".as_slice()) {
             if self.depth >= MAX_RESOURCE_DEPTH {
-                self.truncated.insert(stream.obj_id());
+                // An empty dictionary names nothing, so nothing was left unread.
+                if res.keys().next().is_some() {
+                    self.truncated.insert(stream.obj_id());
+                }
                 return;
             }
             self.truncated.remove(&stream.obj_id());
@@ -548,6 +557,10 @@ mod tests {
         let s = summarize(&bytes).unwrap();
         assert_eq!(s.ext_g_states.len(), 1, "{s:?}");
         assert!(summarize(&pdf(4, 4, &chain(MAX_RESOURCE_DEPTH + 1))).is_err());
+        // An empty terminal /Resources at the limit leaves nothing unread.
+        let mut forms = chain(MAX_RESOURCE_DEPTH + 1);
+        *forms.last_mut().unwrap() = "/Resources<<>>".to_owned();
+        assert!(summarize(&pdf(4, 4, &forms)).is_ok());
     }
 
     #[test]
