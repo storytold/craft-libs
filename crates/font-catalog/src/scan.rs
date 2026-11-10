@@ -176,7 +176,8 @@ const MAX_NAME_RECORDS: usize = 512;
 /// Distinct strings, with their language, kept per name ID.
 const MAX_NAMES: usize = 128;
 /// Distinct legacy family and style pairs kept per face. The pairs are a product of two name
-/// lists, so they get a budget of their own.
+/// lists, so they get a budget of their own. Pairs past the cap are dropped in record order, so a
+/// legacy family name that appears only in them gets no alias (intended: bounded work on hostile fonts).
 const MAX_LEGACY_PAIRS: usize = 256;
 
 /// Every distinct string of `id`, with its language, in the order the font lists them (at most
@@ -195,8 +196,20 @@ fn localized(font: &skrifa::FontRef<'_>, id: StringId) -> Vec<(Option<String>, S
     out
 }
 
+/// Every distinct non-empty string of `id`, ignoring language (at most [`MAX_NAMES`], from the
+/// first [`MAX_NAME_RECORDS`] records), so many language tags sharing one text cannot crowd out another.
 fn all_names(font: &skrifa::FontRef<'_>, id: StringId) -> Vec<String> {
-    localized(font, id).into_iter().map(|(_, s)| s).collect()
+    let mut out: Vec<String> = Vec::new();
+    for s in font.localized_strings(id).take(MAX_NAME_RECORDS) {
+        let text = s.to_string();
+        if !text.is_empty() && !out.contains(&text) {
+            out.push(text);
+            if out.len() == MAX_NAMES {
+                break;
+            }
+        }
+    }
+    out
 }
 
 fn sort_dedup(v: &mut Vec<String>) {
@@ -215,7 +228,9 @@ pub(crate) fn font_faces(font: &skrifa::FontRef<'_>, index: u32, path: Option<&P
     let legacy_family = localized(font, StringId::FAMILY_NAME);
     let legacy_style = localized(font, StringId::SUBFAMILY_NAME);
 
-    let family_records = if typo_family.is_empty() { &legacy_family } else { &typo_family };
+    // `name` read past the record cap `localized` keeps, so it decides whether a typographic family exists.
+    let has_typo_family = name(font, &[StringId::TYPOGRAPHIC_FAMILY_NAME]).is_some();
+    let family_records = if has_typo_family { &typo_family } else { &legacy_family };
     let mut localized_families: Vec<LocalizedName> = Vec::new();
     for (language, n) in family_records {
         if *n != family && !localized_families.iter().any(|l| l.name == *n) {
@@ -230,7 +245,7 @@ pub(crate) fn font_faces(font: &skrifa::FontRef<'_>, index: u32, path: Option<&P
     // Sorted and distinct; the budget counts distinct pairs, so repeats across languages do not
     // crowd out real ones.
     let mut legacy_pairs: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
-    if !typo_family.is_empty() {
+    if has_typo_family {
         let pairs = legacy_family
             .iter()
             .flat_map(|(lf, f)| legacy_style.iter().filter(move |(ls, _)| ls == lf).map(move |(_, s)| (norm(f), norm(s))))
@@ -264,7 +279,7 @@ pub(crate) fn font_faces(font: &skrifa::FontRef<'_>, index: u32, path: Option<&P
     let fs_type = os2.as_ref().map_or(0, |t| t.fs_type());
     let code_pages = os2.as_ref().map_or([0, 0], |t| [t.ul_code_page_range_1().unwrap_or(0), t.ul_code_page_range_2().unwrap_or(0)]);
     let axes = font.axes();
-    let legacy_pair = (!typo_family.is_empty())
+    let legacy_pair = has_typo_family
         .then(|| name(font, &[StringId::FAMILY_NAME]))
         .flatten()
         .filter(|f| *f != family)
