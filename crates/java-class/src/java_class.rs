@@ -390,7 +390,7 @@ pub fn parse(data: &[u8]) -> Result<ClassFile, FormatError> {
     let mut inner_classes = Vec::new();
     let mut annotations = Vec::new();
     for a in &attrs {
-        match a.name.as_str() {
+        match a.name {
             "SourceFile" => {
                 if let Some(i) = Reader::new(a.info).u16_be(0) {
                     source_file = Some(utf8_of(&pool, i).to_string());
@@ -462,18 +462,20 @@ fn trunc(what: &str) -> FormatError {
     FormatError::Truncated(format!("constant pool {what}"))
 }
 
-struct RawAttr<'a> {
-    name: String,
+struct RawAttr<'a, 'p> {
+    // Many attributes can reference one long constant-pool name. The pool
+    // already owns it for the entire parse; a per-attribute copy amplifies it.
+    name: &'p str,
     info: &'a [u8],
 }
 
-fn read_attrs<'a>(c: &mut Cursor<'a>, pool: &[Const]) -> Vec<RawAttr<'a>> {
+fn read_attrs<'a, 'p>(c: &mut Cursor<'a>, pool: &'p [Const]) -> Vec<RawAttr<'a, 'p>> {
     let n = c.u16().unwrap_or(0) as usize;
     let mut out = Vec::new();
     for _ in 0..n.min(MAX_ATTRS) {
         let (Some(ni), Some(len)) = (c.u16(), c.u32()) else { break };
         let Some(info) = c.take(len as usize) else { break };
-        out.push(RawAttr { name: utf8_of(pool, ni).to_string(), info });
+        out.push(RawAttr { name: utf8_of(pool, ni), info });
     }
     out
 }
@@ -488,7 +490,7 @@ fn parse_members(c: &mut Cursor<'_>, pool: &[Const], warnings: &mut Vec<String>,
         };
         let mut m = Member { access, name: utf8_of(pool, name_idx).to_string(), descriptor: utf8_of(pool, desc_idx).to_string(), ..Default::default() };
         for a in read_attrs(c, pool) {
-            match a.name.as_str() {
+            match a.name {
                 "Code" => m.code = parse_code(a.info, pool),
                 "ConstantValue" => {
                     if let Some(i) = Reader::new(a.info).u16_be(0) {
