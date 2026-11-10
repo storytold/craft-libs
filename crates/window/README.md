@@ -99,6 +99,7 @@ window bookkeeping. The core has no egui dependency.
 | `WindowList<T>` | Open windows with the app's per-window data `T`. Opening order (stable, for menus) and most-recent order; the first in most-recent order is the active window, which menu commands go to. `close` returns the data and, when the active window closed, the window to focus next. `find` returns the most recent window whose data matches, e.g. the window already showing a file. |
 | `WindowId` | A window's id: `Copy`, `Hash`, `Ord`, from one process-wide counter, so never reused while the app runs. Use it as the key for per-window state (UI state, pending dialogs). |
 | `cascade` | Places a new window one step (about a title bar, `CASCADE_STEP`) right of and below the most recent window. Each axis that would run off the bounds (monitor or work area) starts over at the bounds' edge. |
+| `monitor_of` | The monitor a window is on: the one showing most of it or, when none shows it, the nearest. |
 | `WindowMenu` | The Window menu (macOS) or View › Switch Windows list: (id, title, dirty, active) per window, in opening order. Windows on the same document are titled `Name:1`, `Name:2`, numbered by opening order; a document with one window keeps its plain name. The app supplies each window's document key, name and dirty flag. |
 
 With the `egui` feature, `Viewports` shows the windows as egui immediate viewports:
@@ -109,6 +110,11 @@ With the `egui` feature, `Viewports` shows the windows as egui immediate viewpor
 - New windows get `decorate` (the frame decision above) and a cascade position from the most
   recently focused window. On Wayland, where windows have no known position, the compositor places
   them.
+- Give the driver the monitors with `set_monitors`, in physical pixels from `available_monitors()`:
+  egui reports only a monitor's size, so without them the driver guesses that monitors tile the
+  desktop, which is wrong when monitors differ in size or sit at other offsets. It asks only when
+  it places a new window. A window keeps to the monitor of the window before it, at any size,
+  place or scale; `set_bounds` overrides that with an area the app chooses.
 - The root viewport stays the app's. `set_root(Some(id))` draws window `id` in it. When the root's
   window closes while others stay open, `adopt` moves another window into the root viewport (its
   position, size and focus); that window's id and data stay the same.

@@ -37,7 +37,13 @@ opens Windows printer preferences and submits jobs with copies, collation, duple
 - **Windows:** in this process, with no PowerShell, script or other program started, so
   printing works where App Control for Business or AppLocker enforce script rules. Printers
   come from `EnumPrinters` (local queues and `\\server\queue` connections) and the default from
-  `GetDefaultPrinter`. A job is drawn as vectors by the in-box `Windows.Data.Pdf` with Direct2D
+  `GetDefaultPrinter`. `printers` also reads each driver's PrintCapabilities to report two-sided
+  support, which can wait on the device (a networked printer in power save); `printer_queues`
+  lists the same queues without asking any driver, so a Print dialog's list never waits on a
+  device, and `two_sided(name)` asks the driver of just the printer picked. A job asks the
+  driver too before it is sent; `submit_cancellable` with a
+  `Cancel` token lets the app stop a job still waiting on it, and a cancelled job is never
+  sent. A job is drawn as vectors by the in-box `Windows.Data.Pdf` with Direct2D
   into the XPS print API (the `winprint` crate), and copies, collation, duplex, colour, paper,
   orientation and "no scaling" travel in a PrintTicket that the driver validates first; a
   driver that would change the paper, orientation or scaling is refused before anything is
@@ -61,8 +67,12 @@ opens Windows printer preferences and submits jobs with copies, collation, duple
   Parsing caps cumulative cross-reference/object-stream records at 500,000, decoded streams
   at 16 MiB each and 32 MiB per job, and parsed nodes/tokens at 250,000/16 MiB per job and
   32,000/1 MiB per object. Files exceeding these limits return a clear error.
-  Long-edge duplex is `TwoSidedLongEdge` and short-edge `TwoSidedShortEdge`; `duplex: None`
-  leaves duplex out of the ticket. Driver-specific defaults remain in Windows printer
+  Long-edge duplex is `TwoSidedLongEdge` and short-edge `TwoSidedShortEdge`.
+  Explicit bindings use `JobDuplexAllDocumentsContiguously` when it offers the requested standard option,
+  otherwise `DocumentDuplex` when that feature offers that exact binding. Discovery and selection
+  resolve option names against their in-scope namespaces, including the default namespace. Validation accepts either
+  scope and rejects missing, changed or conflicting bindings before submission.
+  `duplex: None` leaves duplex out of the ticket. Driver-specific defaults remain in Windows printer
   preferences (`rundll32 printui.dll`, the one process this crate starts, and only when asked).
 - **Browser/other targets:** discovery is empty and submission reports an unsupported
   platform; callers can offer PDF export instead.
@@ -81,7 +91,11 @@ each sheet is successfully added to the native print job. These are source PDF s
 copies and duplex; the events describe sheet processing, and do not confirm physical output.
 The callback runs on the thread calling submission, can capture non-`Send` state, and should
 return promptly. It is never retained. Keep waiting for the final `Result` even at full progress:
-the job can still fail. The API does not provide cancellation. CUPS reports no progress.
+the job can still fail. `submit_cancellable` can cancel a job only until it starts reaching
+the spooler (on Windows after craft-print's driver queries and preflight DEVMODE conversion;
+with CUPS before `lp` starts); a job already being sent completes. On Windows, winprint repeats
+the DEVMODE conversion after that boundary. Cancellation is already unavailable during this
+repeat, so a driver that stalls there can still block submission. CUPS reports no progress.
 UI callers must forward events to their own progress state; adopting the API alone does not
 change an application's UI.
 Receipts are backend messages, not portable job IDs. `Job::duplex = None` preserves the queue's

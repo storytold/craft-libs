@@ -57,7 +57,7 @@ if craft_crw::probe(&bytes) {
 
 ### Output
 
-`Image { header, samples, black, white }`:
+`Image { header, samples, black, white, stream_end_fill }`:
 
 - `samples`: `width × height` `u16`s, row-major, the whole sensor including the masked borders,
   `bits` (10 or 12) deep, black not subtracted. Rows are in sensor order; apply
@@ -79,6 +79,7 @@ if craft_crw::probe(&bytes) {
   offset. Convert with chrono (`DateTime::from_timestamp`), never by hand.
 - `header.make` / `header.model`: the MakeModel record, e.g. `Canon` / `Canon EOS D60`. CRW
   files carry no Exif block, so this is where the camera name comes from.
+- `stream_end_fill`: how many samples were filled after the entropy stream ended (below).
 
 ### Errors and limits
 
@@ -91,8 +92,12 @@ by depth (16) and by a per-file record budget (4,096), and `width × height` is 
 buffers at its peak. `Limits` is `#[non_exhaustive]`: start from `Limits::default()` and set the
 fields you change.
 
-A stream that ends early is not an error: the remaining samples keep their predictor values (the
-frozen stream-end rule; real files end 1–3 samples short).
+When the entropy stream ends before the frame does, the remaining samples keep their predictor
+values (the frozen stream-end rule) and `Image::stream_end_fill` says how many. Up to
+`Limits::max_stream_end_fill` (default 64, one block) that is accepted; more is `Corrupt`, a stream
+cut short, which would otherwise decode as a smeared image. Every real file measured fills none:
+1,318 files of all seven verified bodies (1,308 of them EOS D60), whose last samples come from an
+end-of-block code.
 
 ### Performance
 

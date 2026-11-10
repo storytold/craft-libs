@@ -1,0 +1,45 @@
+name: Shared web host
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/web-host/**", "Cargo.toml", "Cargo.lock", ".github/workflows/web-host.yml"]
+  pull_request:
+    paths: ["crates/web-host/**", "Cargo.toml", "Cargo.lock", ".github/workflows/web-host.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shared-web-host-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    timeout-minutes: 20
+    name: Web host lint, tests, WASM tests
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-web-host
+      - run: cargo fmt -p craft-web-host --check
+      - run: cargo clippy -p craft-web-host --all-targets --locked -- -D warnings
+      - run: cargo clippy -p craft-web-host --all-targets --locked --target wasm32-unknown-unknown -- -D warnings
+      - run: cargo test -p craft-web-host --locked
+      - name: Install the matching WASM test runner
+        shell: bash
+        run: |
+          runner_version=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')
+          cargo install wasm-bindgen-cli --version "$runner_version" --locked
+      - run: cargo test -p craft-web-host --locked --target wasm32-unknown-unknown
