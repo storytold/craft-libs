@@ -14,6 +14,8 @@
 //!   arrives at its start, then `ClosePath`);
 //! - a cubic is a straight line when neither of its handles leaves its end ([`HANDLE_EPS`]).
 
+use std::borrow::Cow;
+
 use kurbo::{BezPath, CubicBez, PathEl, PathSeg, Point};
 
 use crate::fit::is_straight;
@@ -91,6 +93,29 @@ pub(crate) struct Sub {
     /// The `LineTo`, `QuadTo` and `CurveTo` elements, in order. Never empty.
     pub(crate) draws: Vec<PathEl>,
     pub(crate) closed: bool,
+}
+
+/// `path` less the `ClosePath` elements it begins with. A close with no subpath before it closes nothing (it is no subpath, as [`subs`]
+/// reads it), and kurbo's `segments`, with its `bounding_box` and everything else that walks the segments, panics on a path that begins
+/// with one. Borrowed when there is none.
+pub(crate) fn without_leading_closes(path: &BezPath) -> Cow<'_, BezPath> {
+    let closes = path.elements().iter().take_while(|el| matches!(el, PathEl::ClosePath)).count();
+    if closes == 0 {
+        return Cow::Borrowed(path);
+    }
+    work::add(Work::Visited, path.elements().len());
+    // `extend` takes what `push` refuses in a build for tests: a path that does not begin with a move.
+    let mut out = BezPath::new();
+    out.extend(path.elements().iter().skip(closes).copied());
+    Cow::Owned(out)
+}
+
+/// `outlines` with each one [`without_leading_closes`]: borrowed when none begins with one.
+pub(crate) fn outlines_without_leading_closes(outlines: &[BezPath]) -> Cow<'_, [BezPath]> {
+    if !outlines.iter().any(|o| matches!(o.elements().first(), Some(PathEl::ClosePath))) {
+        return Cow::Borrowed(outlines);
+    }
+    Cow::Owned(outlines.iter().map(|o| without_leading_closes(o).into_owned()).collect())
 }
 
 /// The subpaths of `bp` that have a segment. A lone `MoveTo` and a `MoveTo` followed only by
@@ -659,5 +684,38 @@ mod tests {
         let curve = [PathEl::MoveTo(Point::ZERO), PathEl::CurveTo(Point::new(100.0, 0.0), Point::new(0.0, 100.0), Point::new(100.0, 100.0))];
         flatten(curve, 1e-300, |e| lines += usize::from(matches!(e, PathEl::LineTo(_))));
         assert!(lines > 100 && lines <= 5000, "{lines}");
+    }
+
+    /// The closes a path begins with are taken off it, and nothing else: a path with none is borrowed (no copy), what follows is as it was
+    /// (a later close stays), and a path of closes only is empty. The work is counted for a copy only.
+    #[test]
+    fn the_closes_a_path_begins_with_are_taken_off_it() {
+        let mut odd = BezPath::new();
+        odd.extend([
+            PathEl::ClosePath,
+            PathEl::ClosePath,
+            PathEl::MoveTo(Point::new(1.0, 1.0)),
+            PathEl::LineTo(Point::new(5.0, 1.0)),
+            PathEl::ClosePath,
+            PathEl::ClosePath,
+        ]);
+        let clean =
+            BezPath::from_vec(vec![PathEl::MoveTo(Point::new(1.0, 1.0)), PathEl::LineTo(Point::new(5.0, 1.0)), PathEl::ClosePath, PathEl::ClosePath]);
+        work::reset();
+        assert_eq!(without_leading_closes(&odd).into_owned(), clean);
+        assert_eq!(work::take(Work::Visited), odd.elements().len(), "a copy reads the path once");
+        assert!(matches!(without_leading_closes(&clean), Cow::Borrowed(_)), "a path with none is borrowed");
+        assert_eq!(work::take(Work::Visited), 0, "and costs nothing");
+        let mut closes = BezPath::new();
+        closes.extend([PathEl::ClosePath, PathEl::ClosePath]);
+        assert!(without_leading_closes(&closes).elements().is_empty());
+        assert!(without_leading_closes(&BezPath::new()).elements().is_empty());
+        // Each outline of a list is taken off its own, and a list with none is borrowed.
+        let list = [odd.clone(), clean.clone(), closes.clone()];
+        let out = outlines_without_leading_closes(&list);
+        assert!(matches!(out, Cow::Owned(_)));
+        assert_eq!((out[0].clone(), out[1].clone(), out[2].elements().len()), (clean.clone(), clean.clone(), 0));
+        assert!(matches!(outlines_without_leading_closes(&[clean.clone(), clean]), Cow::Borrowed(_)));
+        assert!(matches!(outlines_without_leading_closes(&[]), Cow::Borrowed(_)));
     }
 }

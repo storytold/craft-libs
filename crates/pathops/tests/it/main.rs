@@ -12,6 +12,7 @@ mod crossings;
 mod far_out;
 mod hostile_params;
 mod limits;
+mod malformed;
 mod meter;
 mod offset_faces;
 mod ops;

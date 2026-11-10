@@ -493,7 +493,9 @@ fn chains_by(edges: &[Edge], around: &[Vec<usize>], keys: impl Fn(&Edge) -> Vec<
 /// A point strictly inside a filled path, well away from its edges where it can be. None for a path
 /// with no area, or one whose points are not finite.
 pub fn interior_point(path: &BezPath) -> Option<Point> {
-    interior_point_within(path, flattening_of(path)?)
+    // A close at the start closes nothing, and kurbo's bounding box panics on it.
+    let path = crate::path::without_leading_closes(path);
+    interior_point_within(&path, flattening_of(&path)?)
 }
 
 /// The tolerance [`interior_point`] flattens `path` to: a thousandth of its size, and not under 1e-4. `None`

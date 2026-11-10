@@ -214,14 +214,16 @@ pub fn try_outline_stroke(path: &BezPath, width: f64, cap: Cap, join: Join, mite
 }
 
 /// [`stroke_region`] that reports an outline it could not combine (non-finite or too large
-/// coordinates, too many segments) instead of leaving it out.
+/// coordinates, too many segments) instead of leaving it out. An outline that begins with a `ClosePath` is the outline without it.
 pub fn try_stroke_region(outlines: &[BezPath]) -> Result<BezPath, PathOpsError> {
     // The size first, before any outline is copied.
     ensure_size(outlines)?;
+    // An outline that begins with a close has nothing before it to close: it is the outline without it (kurbo's `segments` panics on it).
+    let outlines = crate::path::outlines_without_leading_closes(outlines);
     // A long, low stroke is swept along its length, a quarter turn from the page, and the result turned back.
-    match crate::sweep_axis::turned_outlines(outlines) {
+    match crate::sweep_axis::turned_outlines(&outlines) {
         Some(turned) => try_stroke_region_upright(&turned).map(crate::sweep_axis::unturn),
-        None => try_stroke_region_upright(outlines),
+        None => try_stroke_region_upright(&outlines),
     }
 }
 
@@ -256,9 +258,11 @@ pub fn stroke_region(outlines: &[BezPath]) -> BezPath {
     if ensure_size(outlines).is_err() {
         return BezPath::new();
     }
-    match crate::sweep_axis::turned_outlines(outlines) {
+    // As in [`try_stroke_region`]: an outline that begins with a close is the outline without it.
+    let outlines = crate::path::outlines_without_leading_closes(outlines);
+    match crate::sweep_axis::turned_outlines(&outlines) {
         Some(turned) => crate::sweep_axis::unturn(stroke_region_upright(&turned)),
-        None => stroke_region_upright(outlines),
+        None => stroke_region_upright(&outlines),
     }
 }
 

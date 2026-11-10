@@ -133,7 +133,8 @@ fn elements<'a>(paths: impl IntoIterator<Item = &'a BezPath>) -> usize {
 }
 
 /// `outlines` turned a quarter turn, when sweeping them that way is clearly cheaper. The size of
-/// `outlines` has been held to the element limit.
+/// `outlines` has been held to the element limit, and none begins with a `ClosePath` (kurbo's `segments` panics on one;
+/// [`crate::path::without_leading_closes`]).
 pub(crate) fn turned_outlines(outlines: &[BezPath]) -> Option<Vec<BezPath>> {
     // A segment is at least an element: fewer elements than the gate are fewer segments.
     if elements(outlines) < MIN_SEGMENTS {
