@@ -1,0 +1,22 @@
+[package]
+name = "texturecraft-import-reader"
+description = "Reads projects of the reference app: the file container, its records, its layer model and its compiled graphs (decompiled to graph text)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+lz4_flex = { workspace = true }
+# Unpacks graph packages (7z, LZMA) to read their compiled graphs. Apache-2.0.
+sevenz-rust2 = { version = "0.24", default-features = false }
+# Image resources saved by version 12.2 are JPEG 2000. Pure Rust, Apache-2.0 OR MIT.
+hayro-jpeg2000 = { version = "0.5", default-features = false, features = ["std", "simd"] }
+# JPEGs stored inside compiled graphs (other than baseline greyscale ones, decoded here). MIT OR Apache-2.0 OR Zlib.
+zune-jpeg = "0.5"
+zune-core = "0.5"
+
+[lints]
+workspace = true
