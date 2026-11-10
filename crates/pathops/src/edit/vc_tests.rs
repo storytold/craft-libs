@@ -879,3 +879,111 @@ fn a_loop_of_long_arcs_with_a_small_turn_at_its_start_is_fitted_across_it() {
     let (leaves, arrives) = ends_of(&out);
     assert!(leaves.dot(across) > 0.999_999_9 && arrives.dot(across) > 0.999_999_9, "across {across:?}; leaves {leaves:?}, arrives {arrives:?}");
 }
+
+/// A closed polygon of `n` vertices round the circle of radius `r` about the origin: smooth, with no corner in it.
+fn circle_loop(n: usize, r: f64) -> BezPath {
+    let pts: Vec<Point> = (0..n)
+        .map(|i| {
+            let a = i as f64 / n as f64 * std::f64::consts::TAU;
+            Point::new(r * a.cos(), r * a.sin())
+        })
+        .collect();
+    polyline_path(&pts, true)
+}
+
+/// The least cosine, over the anchors of `path` (a loop round the origin), between the direction the curve arrives at the anchor along or leaves
+/// it along and the direction of the circle through the anchor there.
+fn least_cosine_to_circle(path: &BezPath) -> f64 {
+    let cs = cubics(path);
+    let mut least: f64 = 1.0;
+    for (i, c) in cs.iter().enumerate() {
+        let Some(circle) = crate::fit::unit(Vec2::new(-c.p0.y, c.p0.x)) else { continue };
+        let arriving = crate::fit::end_tangent(&cs[(i + cs.len() - 1) % cs.len()]);
+        least = least.min(crate::fit::start_tangent(c).dot(circle)).min(arriving.dot(circle));
+    }
+    least
+}
+
+/// A smoothed loop with no corner that is fitted in parts leaves each joint of two parts along the circle, as it does anywhere else. Only a
+/// part that is the whole of the piece is fitted across the loop's start: that direction is the circle's at the start and at no other
+/// place, and a part given it at its joint turns the curve back on itself there (a loop of 3,000 vertices round a circle of radius 1,000 had a
+/// joint 114 degrees off the circle, and one of 4,000 round a radius of 2,000 had one 176 degrees off). Parts of 3,000 samples, five of them
+/// for this loop; the result is within the tolerance of the loop both ways, and fitted.
+#[test]
+fn a_smoothed_loop_fitted_in_parts_leaves_each_joint_along_the_circle() {
+    let (tol, r) = (0.05, 50.0);
+    let path = circle_loop(400, r);
+    let opts = SimplifyOptions::default().tolerance(tol).smooth(0.5);
+    let mut fit = Fit::new(usize::MAX, 3000);
+    let out = simplify_within(&path, &opts, &mut fit);
+    let k = cubics(&out).len();
+    assert!((5..40).contains(&k), "{k} curves: fitted in several parts");
+    let cos = least_cosine_to_circle(&out);
+    assert!(cos > 0.999, "a joint leaves or arrives {:.1} degrees off the circle (cosine {cos})", cos.clamp(-1.0, 1.0).acos().to_degrees());
+    assert_within(&cubics(&path), &cubics(&out), tol, "a loop fitted in parts");
+    // As one part, the same loop is fitted across its start (and its other anchors are along the circle too).
+    let whole = simplify_within(&path, &opts, &mut fit_unlimited());
+    assert!(cubics(&whole).len() < k, "fitted in one part: fewer curves");
+    assert!(least_cosine_to_circle(&whole) > 0.999);
+}
+
+/// The loops of the review at their sizes, with the default limits (parts of 524,288 samples: the first loop has 768,000 samples and the
+/// second 1,024,000, so each is fitted in two parts): the direction at every joint is the circle's to within a small angle, and the
+/// result is within the tolerance. Seconds in a release build, minutes in a debug one.
+#[test]
+#[ignore = "seconds: run with cargo test --release"]
+fn big_smoothed_loops_fitted_in_parts_leave_each_joint_along_the_circle() {
+    for (n, r) in [(3000, 1000.0), (4000, 2000.0)] {
+        let path = circle_loop(n, r);
+        let opts = SimplifyOptions::default().tolerance(0.01).smooth(0.5);
+        let out = simplify_with(&path, &opts);
+        let k = cubics(&out).len();
+        assert!((4..400).contains(&k), "{n} vertices: {k} curves");
+        let cos = least_cosine_to_circle(&out);
+        assert!(cos > 0.999, "{n} vertices at radius {r}: a joint is {:.1} degrees off the circle", cos.clamp(-1.0, 1.0).acos().to_degrees());
+        assert_within(&cubics(&path), &cubics(&out), 0.01, &format!("{n} vertices"));
+    }
+}
+
+/// A piece that stays as it was gives back all that its parts made, those that were flushed before the one that gave out too: a straight run
+/// of short lines in parts of 60 samples, then a line too long to be sampled, which stays as it is and takes the whole run with it.
+#[test]
+fn a_piece_that_stays_as_it_was_gives_back_what_its_flushed_parts_made() {
+    let mut path = BezPath::new();
+    path.move_to((0.0, 0.0));
+    for i in 1..=80 {
+        path.line_to((f64::from(i) * 0.5, 0.0));
+    }
+    path.line_to((3e9, 0.0));
+    let opts = SimplifyOptions::default().tolerance(0.1);
+    // Made without the long line: the parts are fitted and flushed.
+    let mut short = BezPath::new();
+    short.extend(path.iter().take(81));
+    let mut fit = Fit::new(usize::MAX, 60);
+    let fitted = simplify_within(&short, &opts, &mut fit);
+    assert!(fit.made >= 2 && fitted.elements().len() < short.elements().len(), "{} made: the parts of the short run are fitted", fit.made);
+    // With it: the piece stays as it was, and nothing is counted as made.
+    let mut fit = Fit::new(usize::MAX, 60);
+    let out = simplify_within(&path, &opts, &mut fit);
+    assert_eq!(out.elements().len(), path.elements().len(), "the piece stays as it was");
+    assert_eq!(fit.made, 0, "what the flushed parts made is given back");
+    assert_eq!(fit.room(), crate::budget::limits().elements);
+}
+
+/// A part holds no more samples than the call has room to make segments for ([`Fit::part_size`]): a run of 12,600 samples under a limit of
+/// 4,096 elements is fitted in parts of 4,096, and does not stay as it was for being longer than the room (as it would if the part were as long
+/// as `max_points`, 2^20).
+#[test]
+fn a_part_holds_no_more_samples_than_the_call_has_room_for() {
+    let tol = 0.05;
+    let path = path_of(&arc_anchors(100.0, 0.0, 2.0, 91), false);
+    let opts = SimplifyOptions::default().tolerance(tol);
+    let limits = crate::Limits { elements: 4096, ..crate::Limits::default() };
+    let mut fit = fit_unlimited();
+    let out = crate::with_limits(limits, || simplify_within(&path, &opts, &mut fit));
+    let k = cubics(&out).len();
+    assert!((4..20).contains(&k), "{k} curves from 90: fitted in parts of the room the call has");
+    assert!(fit.made <= limits.elements);
+    assert_within(&cubics(&path), &cubics(&out), tol, "parts held to the room");
+    assert_eq!(fit_unlimited().part_size(), MAX_FIT_POINTS.min(crate::budget::limits().elements));
+}

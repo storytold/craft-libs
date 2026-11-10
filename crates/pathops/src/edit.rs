@@ -100,7 +100,8 @@ fn turn_deg(a: &Seg, b: &Seg) -> f64 {
 /// Least-squares Bézier refit of every subpath, keeping corners sharper than the threshold.
 ///
 /// The work is bounded: a path of more than [`crate::MAX_ELEMENTS`] elements is returned as it is, a
-/// run of segments is sampled and fitted in parts of at most [`MAX_FIT_POINTS`] samples (an anchor where two meet), and
+/// run of segments is sampled and fitted in parts of at most [`MAX_FIT_POINTS`] samples, and no more than the call has room to make segments for
+/// (an anchor where two parts meet), and
 /// every run left when the samples taken, smoothed and fitted add up to [`FIT_WORK`] stays as it is. What the fits and the
 /// lines of Convert to Straight Lines make is held to [`crate::Limits::elements`] segments in all, over every run of every subpath,
 /// charged before it is made; a piece past that stays as it was, which keeps the result within the tolerance of the path.
@@ -232,8 +233,9 @@ fn sample_error(s: &Seg, m: usize, straight: f64) -> f64 {
 }
 
 /// The refit of the consecutive segments `run`, split at its corners sharper than the threshold:
-/// it starts and ends where `run` does, leaving the same way. `ends`, when the whole run is one piece (no corner in it), is the
-/// direction the refit leaves and arrives along, in place of those of its first and last segments.
+/// it starts and ends where `run` does, leaving the same way. `ends`, when the whole run is one piece (no corner in it) and that piece is
+/// fitted as one part, is the direction the refit leaves and arrives along, in place of those of its first and last segments (a piece
+/// fitted in parts is fitted from its own tangents, the joints of its parts included).
 fn simplify_run(run: &[Seg], opts: &SimplifyOptions, fit: &mut Fit, ends: Option<Vec2>) -> Vec<Seg> {
     let tol = opts.tolerance.max(1e-6);
     let mut cuts: Vec<usize> = (1..run.len()).filter(|&i| turn_deg(&run[i - 1], &run[i]) > opts.corner_angle_deg).collect();
@@ -293,13 +295,15 @@ fn intervals(s: &Seg, tol: f64, opts: &SimplifyOptions) -> Sampling {
     Sampling::In(m)
 }
 
-/// The refit of one `piece` (between two corners): it is sampled and fitted in parts of at most [`Fit::max_points`] samples each,
+/// The refit of one `piece` (between two corners): it is sampled and fitted in parts of at most [`Fit::part_size`] samples each,
 /// with an anchor where two parts meet (a run longer than one fit holds is refitted in parts, not left as it is), and a curve too
 /// fine to sample for Convert to Straight Lines becomes as many equal lines as keep it within the tolerance, if a segment holds
 /// that many ([`MAX_CHORD_INTERVALS`]). False (and what was made may be dropped by the caller) for a segment that cannot be measured
 /// or sampled, and when the work runs out.
 fn simplify_piece(piece: &[Seg], (tol, ends): (f64, Option<Vec2>), opts: &SimplifyOptions, fit: &mut Fit, result: &mut Vec<Seg>) -> bool {
     let mut part = Part::default();
+    // A part that is not the whole piece is fitted along its own tangents: a direction across the start of the loop is the loop's there and
+    // nowhere else, and a joint of two parts given it would turn the curve back on itself (`ends` is for the last flush, below).
     for s in piece {
         let m = match intervals(s, tol, opts) {
             Sampling::In(m) => m,
@@ -309,7 +313,7 @@ fn simplify_piece(piece: &[Seg], (tol, ends): (f64, Option<Vec2>), opts: &Simpli
                 let lines = line_steps(&s.c, tol).max(1);
                 // A segment holds up to [`MAX_CHORD_INTERVALS`] lines, and the call [`Fit::room`] segments in all, charged (after what
                 // the part before made) before the lines are.
-                if lines > MAX_CHORD_INTERVALS || !flush(&mut part, (tol, ends), opts, fit, result) || lines > fit.room() || !fit.charge(lines + 1) {
+                if lines > MAX_CHORD_INTERVALS || !flush(&mut part, (tol, None), opts, fit, result) || lines > fit.room() || !fit.charge(lines + 1) {
                     return false;
                 }
                 fit.made += lines;
@@ -323,7 +327,7 @@ fn simplify_piece(piece: &[Seg], (tol, ends): (f64, Option<Vec2>), opts: &Simpli
         };
         // The first segment of a part has a sample at its start besides one at the end of each interval.
         let first = part.segs.is_empty();
-        if !first && part.pts.len().saturating_add(m) > fit.part_size() && !flush(&mut part, (tol, ends), opts, fit, result) {
+        if !first && part.pts.len().saturating_add(m) > fit.part_size() && !flush(&mut part, (tol, None), opts, fit, result) {
             return false;
         }
         let taken = m + usize::from(part.segs.is_empty());
@@ -335,6 +339,9 @@ fn simplify_piece(piece: &[Seg], (tol, ends): (f64, Option<Vec2>), opts: &Simpli
         sample(&s.c, m, &mut part.pts, part.segs.is_empty());
         part.segs.push(*s);
     }
+    // The direction across the start is for a part that is the whole piece: a piece that was parted, or had a segment made into lines, is
+    // fitted from its own tangents.
+    let ends = ends.filter(|_| part.segs.len() == piece.len());
     flush(&mut part, (tol, ends), opts, fit, result)
 }
 
