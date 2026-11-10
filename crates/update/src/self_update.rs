@@ -254,14 +254,74 @@ fn can_replace_share(app: &App, file: &Path) -> bool {
     share_folders(app, &prefix.join("share")).iter().all(|folder| !refused(folder, Access::WRITE_OK | Access::EXEC_OK))
 }
 
-/// The folders under `share` that a release's files go in: the app's own folder, `applications`
-/// and `icons/hicolor`, or the nearest existing parent of one that doesn't exist yet.
+/// The most folder entries [`share_folders`] reads in the app's own folder and `icons/hicolor`.
+/// The check runs at every start, so a larger tree is checked only this far; the install reports
+/// a folder past it that it can't write.
+const SHARE_ENTRY_LIMIT: usize = 4096;
+
+/// The existing folders under `share` that a release's files can go in: the app's own folder
+/// with every folder inside it, `icons/hicolor` and each of its `<size>/apps` folders that holds
+/// the app's icon, `applications` and `pixmaps`. For one of these that doesn't exist yet, the
+/// nearest existing parent stands in, since the update creates the folder there. The walk
+/// doesn't go into a linked folder, but lists the link, because the update writes through it.
 #[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
 fn share_folders(app: &App, share: &Path) -> Vec<PathBuf> {
-    [share.join(app.id), share.join("applications"), share.join("icons/hicolor")]
-        .iter()
-        .filter_map(|folder| folder.ancestors().find(|p| p.is_dir()).map(Path::to_path_buf))
-        .collect()
+    share_folders_within(app, share, SHARE_ENTRY_LIMIT)
+}
+
+/// [`share_folders`], reading at most `limit` folder entries in the app's folder and
+/// `icons/hicolor`.
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
+fn share_folders_within(app: &App, share: &Path, limit: usize) -> Vec<PathBuf> {
+    let nearest = |folder: &Path| folder.ancestors().find(|p| p.is_dir()).map(Path::to_path_buf);
+    let mut folders = Vec::new();
+    let mut budget = limit;
+    let own = share.join(app.id);
+    if own.is_dir() {
+        let mut pending = vec![own];
+        while let Some(dir) = pending.pop() {
+            folders.push(dir.clone());
+            if budget == 0 || dir.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
+                continue;
+            }
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            for entry in entries.flatten() {
+                if budget == 0 {
+                    break;
+                }
+                budget -= 1;
+                let path = entry.path();
+                if entry.file_type().is_ok_and(|kind| kind.is_dir()) || path.is_dir() {
+                    pending.push(path);
+                }
+            }
+        }
+    } else {
+        folders.extend(nearest(&own));
+    }
+    let hicolor = share.join("icons/hicolor");
+    if hicolor.is_dir() {
+        folders.push(hicolor.clone());
+        let icons = [app.bundle_id(), app.id.to_string()].map(|name| [format!("{name}.png"), format!("{name}.svg")]);
+        if let Ok(sizes) = std::fs::read_dir(&hicolor) {
+            for size in sizes.flatten() {
+                if budget == 0 {
+                    break;
+                }
+                budget -= 1;
+                let apps = size.path().join("apps");
+                if icons.iter().flatten().any(|icon| apps.join(icon).symlink_metadata().is_ok()) {
+                    folders.push(apps);
+                }
+            }
+        }
+    } else {
+        folders.extend(nearest(&hicolor));
+    }
+    folders.extend([share.join("applications"), share.join("pixmaps")].iter().filter_map(|folder| nearest(folder)));
+    folders.sort();
+    folders.dedup();
+    folders
 }
 
 /// Other platforms make no check here, as in [`can_replace`].
@@ -1516,19 +1576,116 @@ mod tests {
         assert!(current_at(&crate::suite::LAUNCHER, &exe, false).is_some(), "the answer follows the folder's permissions");
     }
 
+    #[cfg(unix)]
     #[test]
     fn share_folders_are_the_ones_a_release_writes_to() {
         let app = &crate::suite::LAUNCHER;
         let dir = tempfile::tempdir().unwrap();
         let share = dir.path().join("share");
-        std::fs::create_dir_all(share.join(app.id).join("models")).unwrap();
-        std::fs::create_dir_all(share.join("icons/SomeTheme")).unwrap();
-        let mut found = share_folders(app, &share);
-        found.sort();
-        // `applications` doesn't exist, so `share` stands in for it; `hicolor` doesn't, so `icons` does.
-        let mut expected = vec![share.clone(), share.join("icons"), share.join(app.id)];
+        std::fs::create_dir_all(share.join(app.id).join("models/small")).unwrap();
+        std::fs::create_dir_all(share.join("icons/SomeTheme/apps")).unwrap();
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(outside.join("inner")).unwrap();
+        std::os::unix::fs::symlink(&outside, share.join(app.id).join("linked")).unwrap();
+        let found = share_folders(app, &share);
+        // `applications` and `pixmaps` don't exist, so `share` stands in for them; `hicolor` doesn't,
+        // so `icons` does. `SomeTheme` isn't a folder a release writes to. The linked folder is
+        // listed but not walked.
+        let mut expected = vec![
+            share.clone(),
+            share.join("icons"),
+            share.join(app.id),
+            share.join(app.id).join("linked"),
+            share.join(app.id).join("models"),
+            share.join(app.id).join("models/small"),
+        ];
         expected.sort();
         assert_eq!(found, expected);
+
+        let apps = share.join("icons/hicolor/256x256/apps");
+        std::fs::create_dir_all(&apps).unwrap();
+        std::fs::write(apps.join(format!("{}.png", app.bundle_id())), b"icon").unwrap();
+        std::fs::create_dir_all(share.join("icons/hicolor/48x48/apps")).unwrap();
+        std::fs::create_dir_all(share.join("applications")).unwrap();
+        std::fs::create_dir_all(share.join("pixmaps")).unwrap();
+        let found = share_folders(app, &share);
+        for folder in ["icons/hicolor", "icons/hicolor/256x256/apps", "applications", "pixmaps"] {
+            assert!(found.contains(&share.join(folder)), "{folder} in {found:?}");
+        }
+        // Another package's icon folder isn't one the release writes to.
+        assert!(!found.contains(&share.join("icons/hicolor/48x48/apps")), "{found:?}");
+        assert!(!found.contains(&share), "every folder exists, so `share` stands in for none: {found:?}");
+    }
+
+    /// The walk reads at most the limit's number of entries inside the app's folder and
+    /// `icons/hicolor`, so a large tree doesn't slow every start.
+    #[test]
+    fn share_folders_stop_at_the_limit() {
+        let app = &crate::suite::LAUNCHER;
+        let dir = tempfile::tempdir().unwrap();
+        let share = dir.path().join("share");
+        for name in ["a", "b", "c", "d"] {
+            std::fs::create_dir_all(share.join(app.id).join(name)).unwrap();
+        }
+        let found = share_folders_within(app, &share, 2);
+        let walked = found.iter().filter(|folder| folder.starts_with(share.join(app.id))).count();
+        // The app's folder and the two entries read in it.
+        assert_eq!(walked, 3, "{found:?}");
+        // `share` stands in for `icons/hicolor`, `applications` and `pixmaps`.
+        assert_eq!(found.len(), 4, "{found:?}");
+        assert_eq!(share_folders(app, &share).len(), 6, "the default limit takes in the whole tree");
+    }
+
+    /// A release writes into the folders inside the app's folder and `icons/hicolor`, and into
+    /// `pixmaps`, so a copy whose such folder the user can't write gets the download link.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_standalone_copy_with_a_nested_share_folder_it_cannot_write_gets_the_download_link() {
+        if running_as_root() {
+            return;
+        }
+        let app = &crate::suite::LAUNCHER;
+        for nested in [format!("{}/models", app.id), "icons/hicolor/256x256/apps".to_string(), "pixmaps".to_string()] {
+            let dir = tempfile::tempdir().unwrap();
+            let bin = dir.path().join("bin");
+            let share = dir.path().join("share");
+            std::fs::create_dir_all(&bin).unwrap();
+            std::fs::create_dir_all(share.join(app.id)).unwrap();
+            std::fs::create_dir_all(share.join(&nested)).unwrap();
+            if nested.starts_with("icons") {
+                std::fs::write(share.join(&nested).join(format!("{}.png", app.bundle_id())), b"icon").unwrap();
+            }
+            let exe = bin.join(app.id);
+            std::fs::write(&exe, b"binary").unwrap();
+            let guard = ModeGuard::set(&share.join(&nested), 0o555);
+            assert_eq!(current_at(app, &exe, false), None, "{nested}");
+            drop(guard);
+            assert!(current_at(app, &exe, false).is_some(), "{nested}: the answer follows the folder's permissions");
+        }
+    }
+
+    /// A folder outside the ones a release writes to doesn't count, such as another theme or
+    /// another package's icon folder in a shared prefix.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_share_folder_a_release_does_not_write_to_does_not_refuse() {
+        if running_as_root() {
+            return;
+        }
+        let app = &crate::suite::LAUNCHER;
+        for other in ["icons/SomeTheme", "icons/hicolor/48x48/apps"] {
+            let dir = tempfile::tempdir().unwrap();
+            let bin = dir.path().join("bin");
+            let share = dir.path().join("share");
+            std::fs::create_dir_all(&bin).unwrap();
+            std::fs::create_dir_all(share.join(app.id)).unwrap();
+            std::fs::create_dir_all(share.join(other)).unwrap();
+            std::fs::write(share.join(other).join("other-app.png"), b"icon").unwrap();
+            let exe = bin.join(app.id);
+            std::fs::write(&exe, b"binary").unwrap();
+            let _guard = ModeGuard::set(&share.join(other), 0o555);
+            assert!(current_at(app, &exe, false).is_some(), "{other}");
+        }
     }
 
     #[test]
