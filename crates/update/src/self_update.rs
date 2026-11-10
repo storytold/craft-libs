@@ -176,6 +176,29 @@ pub fn is_self_updating(app: &App) -> bool {
     current(app).is_some()
 }
 
+/// Whether `release` has a file the self-update can install this copy from. Only a standalone
+/// program on macOS is checked, against the release's macOS `.tar.gz`; [`DEV_VAR`] still offers
+/// the update without one. Call it together with [`is_self_updating`], which answers for every
+/// other reason a copy can't update itself.
+pub fn release_installs(app: &App, release: &Release) -> bool {
+    if !cfg!(target_os = "macos") {
+        return true;
+    }
+    current(app).is_none_or(|install| installs_from(app, &install, release, Platform::current(), std::env::var_os(DEV_VAR).is_some()))
+}
+
+/// Whether the update can install `install` from `release` on `platform`. Only a standalone
+/// program on macOS is checked against the release's files. A release without its file list
+/// passes: `updater::install` fetches the full release before it picks the file.
+fn installs_from(app: &App, install: &Install, release: &Release, platform: Option<Platform>, opted_in: bool) -> bool {
+    match (install, platform) {
+        (Install::Standalone(_), Some(platform)) if platform.os == crate::Os::MacOs && !opted_in => {
+            release.assets.is_empty() || pick_asset(release, &[app.id], platform, &[install.kind()]).is_some()
+        }
+        _ => true,
+    }
+}
+
 /// Whether `exe` sits in a folder a macOS package manager owns (Homebrew, MacPorts, Nix).
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn macos_package_manager_owns(exe: &Path) -> bool {
@@ -2354,6 +2377,64 @@ mod tests {
         assert_eq!(pick(Os::Linux, Install::Package(PackageKind::Deb, PathBuf::new()).kind()).as_deref(), Some(names[4]));
         assert_eq!(pick(Os::Linux, Install::Flatpak.kind()).as_deref(), Some(names[5]));
         assert_eq!(pick(Os::Linux, Install::Package(PackageKind::ArchPkg, PathBuf::new()).kind()).as_deref(), Some(names[6]));
+    }
+
+    fn release_with(names: &[&str]) -> Release {
+        Release {
+            assets: names.iter().map(|n| crate::release::Asset { name: (*n).into(), size: 1, url: String::new(), sha256: None }).collect(),
+            ..Release::default()
+        }
+    }
+
+    /// A macOS release carries a disk image and a command-line zip, and no `.tar.gz` that a
+    /// standalone program could be replaced from, so that copy gets the download link.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_standalone_macos_program_without_a_tarball_gets_the_download_link() {
+        let app = &crate::suite::LAUNCHER;
+        let release = release_with(&["artcraft-launcher-0.2.0-macos-universal.dmg", "artcraft-launcher-cli-0.2.0-macos-universal.zip"]);
+        let standalone = Install::Standalone(PathBuf::from("/Users/someone/bin/artcraft-launcher"));
+        for arch in [crate::Arch::Arm64, crate::Arch::X64] {
+            let mac = Some(Platform { os: crate::Os::MacOs, arch });
+            assert!(!installs_from(app, &standalone, &release, mac, false), "{arch:?}");
+            // the bundle installs from the disk image
+            assert!(installs_from(app, &Install::MacApp(PathBuf::from("/Applications/ArtCraft Launcher.app")), &release, mac, false), "{arch:?}");
+        }
+    }
+
+    /// A release that adds a macOS `.tar.gz` is offered to the standalone program again, and
+    /// `CRAFT_UPDATE_DEV` offers it without one.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_standalone_macos_program_is_offered_a_release_with_a_tarball_or_when_opted_in() {
+        let app = &crate::suite::LAUNCHER;
+        let standalone = Install::Standalone(PathBuf::from("/Users/someone/bin/artcraft-launcher"));
+        let mac = Some(Platform { os: crate::Os::MacOs, arch: crate::Arch::Arm64 });
+        let with_tarball = release_with(&["artcraft-launcher-0.2.0-macos-universal.dmg", "artcraft-launcher-0.2.0-macos-universal.tar.gz"]);
+        assert!(installs_from(app, &standalone, &with_tarball, mac, false));
+        let without = release_with(&["artcraft-launcher-0.2.0-macos-universal.dmg"]);
+        assert!(installs_from(app, &standalone, &without, mac, true));
+    }
+
+    /// A release whose file list wasn't loaded keeps the offer: the install fetches the full
+    /// release before it picks the file.
+    #[test]
+    fn a_standalone_macos_program_is_offered_a_release_without_its_file_list() {
+        let standalone = Install::Standalone(PathBuf::from("/Users/someone/bin/artcraft-launcher"));
+        let mac = Some(Platform { os: crate::Os::MacOs, arch: crate::Arch::Arm64 });
+        assert!(installs_from(&crate::suite::LAUNCHER, &standalone, &release_with(&[]), mac, false));
+    }
+
+    /// Other platforms keep offering the update to a standalone copy, whatever the release holds.
+    #[test]
+    fn a_standalone_copy_elsewhere_is_not_checked_against_the_release() {
+        let app = &crate::suite::LAUNCHER;
+        let standalone = Install::Standalone(PathBuf::from("artcraft-launcher"));
+        let empty = release_with(&[]);
+        for os in [crate::Os::Linux, crate::Os::Windows, crate::Os::FreeBsd] {
+            assert!(installs_from(app, &standalone, &empty, Some(Platform { os, arch: crate::Arch::X64 }), false), "{os:?}");
+        }
+        assert!(installs_from(app, &standalone, &empty, None, false));
     }
 
     #[test]
