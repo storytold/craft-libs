@@ -272,7 +272,8 @@ pub struct Limits {
     pub real_crossings: usize,
     /// Most segments [`crate::shape_builder`] sweeps into its map ([`crate::SHAPE_BUILDER_MAX_SEGMENTS`]).
     pub shape_builder_segments: usize,
-    /// Most samples of one part of a run of segments `simplify` fits, a longer run being fitted in parts ([`crate::MAX_FIT_POINTS`]).
+    /// Most samples of one part of a run of segments `simplify` fits, a longer run being fitted in parts ([`crate::MAX_FIT_POINTS`]); a part
+    /// is held to the room the call has left to make segments in ([`Limits::elements`]) too, so no part holds more than that.
     pub fit_points: usize,
     /// Most work `simplify` does in all ([`crate::FIT_WORK`]).
     pub fit_work: usize,

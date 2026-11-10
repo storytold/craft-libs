@@ -355,16 +355,17 @@ work of each operation is bounded before it starts, in counts the tests assert o
   from each run of them, at a position that changes from run to run, so that input that repeats is measured at every
   position), and where the input turned a quarter turn is under two thirds of the upright estimate (2,048 segments or more)
   they run on the turned input and turn the result back (a quarter turn swaps and negates coordinates: no point moves by
-  rounding; the result differs from the upright one only by what the sweep's snapping to its tolerance does differently, within
-  the refit precision). Offset Path is not turned. The estimate only chooses the direction: the operation runs turned from its
+  rounding; the area covered differs from the upright one only by what the sweep's snapping to its tolerance does differently, within
+  the refit precision, and the contours can differ: see Known limits). Offset Path is not turned. The estimate only chooses the direction: the operation runs turned from its
   first step, so the counts of its limits and the metered dry sweep see the turned input, and the meter holds the work of the
   sweep that really runs, whichever way it runs (a budget between the work upright and turned admits the turned sweep and
   refuses the upright one, and one under the turned work refuses both). The estimate is made after the element limit and
   reads each segment once (it reads nothing below 2,048). Here a row of 5,500 dots, which took 2.8 s, and one of 7,000 lenses, which
   the pairs of pieces refused, are made, and a wavy stroke past 3,100 cubics is no longer refused: see "Ordinary input the defaults refuse";
 - the operations without a `Result` answer an empty path, no shapes, or the input unchanged, as their
-  documentation says. `simplify` samples and fits a run in parts of at most `MAX_FIT_POINTS` samples (an anchor
-  where two meet) and stops fitting at `FIT_WORK` in all, and what its fits and its lines make is held to
+  documentation says. `simplify` samples and fits a run in parts of at most `MAX_FIT_POINTS` samples (1,048,576), and no more than the call has room
+  to make segments for (`MAX_ELEMENTS` less what it has made, so 524,288 for the first part by default), with an anchor
+  where two meet, and stops fitting at `FIT_WORK` in all, and what its fits and its lines make is held to
   `MAX_ELEMENTS` segments over the whole call, over every run of every subpath, charged before it is made (the lines of
   a curve too fine to sample, before they are; the samples of a part, before it is refit, with what it did not make given
   back): a piece past that stays as it was, which keeps the result within the tolerance (VectorCraft holds it to 2^21
@@ -693,6 +694,14 @@ or so, measured once in a release build:
   inset sees it.
 - The counts themselves are made before the sweep and cost time: up to 0.3 to 0.5 s on an input of 250,000
   segments (they are a few sweeps of the bounds), with 64,000 dots as separate inputs the most.
+- A long, low union is admitted turned, as the same input stood on end is, which can take twice the star: three rows of a zigzag of 80,000
+  cubics took 15.6 and 16.1 s beside the star's 7.6 and 7.7 s (64,000 cubics a row took 13.5 s beside 8.1); stood on end, the crate before the quarter
+  turn took 16.2 and 16.0 s beside 7.5. The gap was there already; the turn reaches it from low art, which upright was refused in 0.28 s.
+- Refusals of such unions can come after 12 to 14 s, at 2.4 GB (125,000 to 130,000 cubics a row), as they did for the same input stood on end
+  before the quarter turn (12.6 s, 2.4 GB). Nothing aborts under `ulimit -v 3000000`.
+- A turned union can give holes as contours of their own where the upright sweep gives one contour that wraps round them: a zigzag of 3 times 1,100
+  cubics gives 471 subpaths, 163 of them holes, against 311 with none. The area covered is the same (every one of the 163 holes is uncovered in both
+  results; 15464.7196 against 15464.7183 square units).
 
 An operation within the limits that takes longer than the seconds above, or more than a gigabyte, is not
 known; the inputs above were found by testing and by independent review, and review has found more after each
@@ -744,7 +753,7 @@ a load of 15, it took 10.7 and 5.9 s.
 | `try_outline_stroke` of 3,000 / 8,000 / 100,000 wavy cubics 3 wide (a long, low path, swept along its length; 3,100 and more were refused by the sweep-line limit before, 3,000 took 0.75 s) | 0.07 / 0.18 / 2.7 s |
 | `try_outline_stroke` of 1,000 cubics 1,000 wide (22,000 elements of outline, much of it crossing itself) | 5.4 s |
 | `try_outline_stroke` of 200,000 cubics 100 million wide | refused in 0.3 s |
-| `simplify` of a serpentine of 100,000 / 400,000 smooth anchors (1.6 apart, 2 up and down, at a tolerance of 1: one run of 600,000 / 2.4 million samples, fitted in parts of the million the fit holds; before, it was left as it was, in 0.06 s, the fit running out of splits) | 0.18 / 0.70 s (91,078 / 361,457 elements) |
+| `simplify` of a serpentine of 100,000 / 400,000 smooth anchors (1.6 apart, 2 up and down, at a tolerance of 1: one run of 600,000 / 2.4 million samples, fitted in parts of at most 524,288 samples, the million the fit holds less than the room the call has for segments; before, it was left as it was, in 0.06 s, the fit running out of splits) | 0.18 / 0.70 s (91,078 / 361,457 elements) |
 | `simplify` with `smooth` of 30 of a traced circle of 100,000 / 400,000 sides, and the same converted to straight lines | 0.07 / 0.35 s, and 0.015 / 0.056 s (30,772 / 123,080 elements) |
 | `join` of 4,096 lines to a chain of 500,000 segments | 0.36 s |
 | `interior_point` of a comb of 40,000 teeth (160,000 elements) | 11 ms |
@@ -1131,7 +1140,7 @@ as above: nothing else, the ORACLE rows included.
 |---|---|---|
 | `3fcd157`, `f74c7e8` | Region building lists the shapes covering each region (a sorted set of lists, in the order of the old flag masks) instead of a flag for every shape. | Already here (Divide and `regions`, from the review rounds: `Arrangement::distinct_masks`, `cmp_masks`, counted in `MaskEntries` and held to `MASK_WORK`). The order test of 3fcd157 is ported. |
 | `72c46b8` | The contour passes of the booleans, Offset Path and `boolean_n` test the list of the inputs covering a face, not a flag for every input; `boolean_n` takes `Fn(&[usize]) -> bool`. | Ported. `mask_work` counts the entries listed (before the pass) where it counted four flags for each segment and input; the answer is still kept for each distinct winding. Its two tests are ported. |
-| `199c4c3` | Simplify: fitted curves stay within the tolerance (`bulge`), the split moves to two fifths of a piece, `join_pieces`, a first fit to about 16 points, `sample_steps`, runs fitted in parts, a closed smoothed path fitted across its start, limits on the samples and result. | Ported where it adds to this crate's fit: the inward split, `join_pieces` (each try charged to the work), the first fit to 16 points and the give-up, the direction at a split, parts of a run (at `fit_points` samples), lines for a curve too fine to sample (up to 65,536, as VectorCraft; never past the tolerance, which VectorCraft's can), the direction across the start of a smoothed loop. Not ported, because the crate's bound is stronger: `bulge`, which looks at samples (the bound proves it), and the 98% of the tolerance. Its limits: see below. |
+| `199c4c3` | Simplify: fitted curves stay within the tolerance (`bulge`), the split moves to two fifths of a piece, `join_pieces`, a first fit to about 16 points, `sample_steps`, runs fitted in parts, a closed smoothed path fitted across its start, limits on the samples and result. | Ported where it adds to this crate's fit: the inward split, `join_pieces` (each try charged to the work), the first fit to 16 points and the give-up, the direction at a split, parts of a run (of at most `fit_points` samples, and no more than the room the call has to make segments in, `Limits::elements`: 524,288 by default), lines for a curve too fine to sample (up to 65,536, as VectorCraft; never past the tolerance, which VectorCraft's can), the direction across the start of a smoothed loop (given to a loop fitted as one part only, as VectorCraft's `simplify_run_within` does: the joints of a loop fitted in parts are fitted along its own tangents). Not ported, because the crate's bound is stronger: `bulge`, which looks at samples (the bound proves it), and the 98% of the tolerance. Its limits: see below. |
 | `4a7d732` | Smoothing weighs consecutive samples within a sixteenth of a spread together, through a tree of sums. | Ported (charged: the tree by its samples before it is made, with a fallible allocation, each point by the nodes it looks at). |
 | `bc19dd6` | Convert to Straight Lines measures to the segment, not the line through it. | Already here; the test is ported. |
 | `4cf4ea3`, `500f74b` | Tests count the items an index lookup reads (before the repeats are removed) where they timed. | Already counted here (`work`); the bounds on the shape builder of a ring of 65,528 segments and on `live_paint` of 60 lines, and a test that a lookup counts every entry it reads, are ported. The same commits' changes to `doc` and `run_around` are not in this crate. |
@@ -1146,9 +1155,11 @@ What VectorCraft main limits (the pathops sources, not its add-ons, which are no
 (`MAX_SWEEP_EPS`, as `Degenerate` here), windings up to 8 checked (`MAX_CHECKED_WINDING`; it checks two operands, where this crate checks up to eight), and, since the 15 commits: 2^20
 samples of one fit (`MAX_FIT_SAMPLES`: `fit_points` here, per part), 2^16 samples of one segment (`MAX_SEGMENT_SAMPLES`: 65,536
 intervals for the chords of a curve here), 2^24 samples of one run (`MAX_RUN_SAMPLES`: here `FIT_WORK`, for the whole call), 2^21
-segments made by one run (`MAX_RUN_RESULT`: here `Limits::elements` for the whole call), 32 joins of a curve (`MAX_JOINS`, as here), 1,024 samples to
-check a curve between two points (`MAX_BULGE_SAMPLES`, not needed here), the quarter turn's 2,048 segments, 4,096 sampled boxes and gain of 1.5 (as here),
-and the caller's limit of `regions_within`. It has none of this crate's others: its bound on the work of a sweep is the two
+segments made by one run (`MAX_RUN_RESULT`: here `Limits::elements` for the whole call), 32 joins of a curve (`MAX_JOINS`, as here), 6 rounds of reparameterisation of a fit (`MAX_REPARAM`, as here), 1,024 samples to
+check a curve between two points (`MAX_BULGE_SAMPLES`, not needed here), 65,536 segments for the shape builder and live paint
+(`SHAPE_BUILDER_MAX_SEGMENTS`, as here: more are answered with the filled areas only), the quarter turn's 2,048 segments, 4,096 sampled boxes and gain of 1.5 (as here),
+and the caller's limit of `regions_within`. (What is left in VectorCraft has limits of its own, which are not listed: the widths of a trap, the 72 of
+Gap Detection with the grid it searches, and the add-ons'.) It has none of this crate's others: its bound on the work of a sweep is the two
 limits on pairs. Its `MAX_RUN_RESULT` and `MAX_RUN_SAMPLES` are for each run, so that many subpaths each under them add up
 past any bound: 16 subpaths of 37 quarter arcs of radius 1e7 (608 anchors) converted to straight lines at a tolerance of 0.001 make 33
 million anchors (2 GB, in 1 s), and 32 abort a process held to `ulimit -v 3000000` in 8 s; here the count is for the whole call, charged
