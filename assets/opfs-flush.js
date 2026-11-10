@@ -1,6 +1,10 @@
 // Warm-tier OPFS flush for craft-runtime (craft-libs#4).
-// Maps StoreKey strings to paths under effectcraft-store/v1/…
-const WARM_ROOT = 'effectcraft-store/v1';
+// Maps StoreKey strings to paths under <app-id>/store/v1/…, namespaced per app so two Craft
+// apps sharing an origin never collide in OPFS. The app id comes from the `init` HostMessage
+// (craft-worker-host-routing.js records it on globalThis.craftAppId); this file never hard-codes
+// one app's name.
+const FALLBACK_APP_SEGMENT = 'craft-app';
+const WARM_ROOT_SUFFIX = ['store', 'v1'];
 
 function hasOpfs() {
   return (
@@ -10,9 +14,29 @@ function hasOpfs() {
   );
 }
 
+/**
+ * A single OPFS path SEGMENT may not contain `/` (Chrome's getDirectoryHandle throws
+ * "Name is not allowed"). Strip anything but ASCII letters, digits, `-` and `_`, and refuse to
+ * produce an empty, `.`, or `..` segment.
+ */
+function sanitizeAppSegment(appId) {
+  const cleaned = String(appId == null ? '' : appId)
+    .replace(/[^A-Za-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  if (!cleaned || cleaned === '.' || cleaned === '..') {
+    return FALLBACK_APP_SEGMENT;
+  }
+  return cleaned;
+}
+
+/** Warm-tier root as separate path segments -- each applied via its own getDirectoryHandle call. */
+function warmRootSegments() {
+  return [sanitizeAppSegment(globalThis.craftAppId), ...WARM_ROOT_SUFFIX];
+}
+
 function keyToSegments(key) {
   const trimmed = String(key).replace(/^\/+/, '');
-  return [WARM_ROOT, ...trimmed.split('/').filter(Boolean)];
+  return [...warmRootSegments(), ...trimmed.split('/').filter(Boolean)];
 }
 
 async function ensureParentDir(root, segments) {
@@ -68,5 +92,5 @@ if (typeof globalThis !== 'undefined') {
   globalThis.craftRuntimeFlushPending =
     globalThis.craftRuntimeFlushPending || craftRuntimeFlushPending;
   globalThis.craftOpfsKeyToSegments = keyToSegments;
-  globalThis.craftOpfsWarmRoot = WARM_ROOT;
+  globalThis.craftOpfsWarmRootSegments = warmRootSegments;
 }

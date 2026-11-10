@@ -62,11 +62,12 @@ fn host_storage_put_and_flush_json_shape() {
 fn storage_flushed_pending_export_json() {
     let msg = WorkerMessage::StorageFlushed {
         pending_count: 1,
-        pending: Some(vec![crate::PendingFlushEntry { key: "config/a".into(), bytes: vec![1, 2] }]),
+        pending: Some(vec![crate::PendingFlushEntry { key: "config/a".into(), bytes: vec![1, 2], revision: 3 }]),
     };
     let json = serde_json::to_string(&msg).expect("serialize");
     assert!(json.contains(r#""pending_count":1"#));
     assert!(json.contains(r#""key":"config/a""#));
+    assert!(json.contains(r#""revision":3"#));
     let back: WorkerMessage = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(msg, back);
 }

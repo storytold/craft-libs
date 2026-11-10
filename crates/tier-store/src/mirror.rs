@@ -5,11 +5,15 @@ use crate::{KeyClass, StoreKey, TierPolicy};
 /// Coalesced async flush (newest write wins per key).
 ///
 /// `deleted` is a tombstone: the warm tier should remove the key. Bytes are empty then.
+/// `revision` is the key's [`MirrorStore`] revision at the moment this write was captured (bumped
+/// on every `put`/`delete`): a later ack or restore compares against the key's *current*
+/// revision to tell a stale, superseded attempt from the one that still matters.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingWrite {
     pub key: StoreKey,
     pub bytes: Vec<u8>,
     pub deleted: bool,
+    pub revision: u64,
 }
 
 /// In-memory hot tier with optional LRU byte cap on cache-class keys.
@@ -25,8 +29,18 @@ pub struct MirrorStore<P: TierPolicy> {
     revisions: HashMap<StoreKey, u64>,
     /// Explicit deletes. Eviction is not a delete.
     tombstones: HashSet<StoreKey>,
-    /// Bytes for a cache key dropped from `data` while a flush may still need them.
+    /// Bytes for a cache key dropped from `data` while a flush may still need them. Only keys
+    /// whose revision is not yet [`saved_revisions`](Self::saved_revisions) are retained here;
+    /// retention itself is capped against `byte_budget` (see `enforce_eviction_retention_budget`).
     evicted: HashMap<StoreKey, Vec<u8>>,
+    /// Eviction order (oldest first) for `evicted`, so retention pressure drops the oldest
+    /// already-saved payload first rather than picking arbitrarily.
+    evicted_order: VecDeque<StoreKey>,
+    /// Bytes currently retained in `evicted`.
+    evicted_bytes_used: usize,
+    /// Highest revision per key that a flush has confirmed as durably persisted. Compared
+    /// against `revisions` to tell a current save from one a later `put`/`delete` superseded.
+    saved_revisions: HashMap<StoreKey, u64>,
 }
 
 impl<P: TierPolicy> MirrorStore<P> {
@@ -41,20 +55,60 @@ impl<P: TierPolicy> MirrorStore<P> {
             revisions: HashMap::new(),
             tombstones: HashSet::new(),
             evicted: HashMap::new(),
+            evicted_order: VecDeque::new(),
+            evicted_bytes_used: 0,
+            saved_revisions: HashMap::new(),
         }
     }
 
     pub fn get(&mut self, key: &StoreKey) -> Option<&[u8]> {
-        let hit = self.data.get(key).is_some();
+        let hit = self.data.contains_key(key);
         if hit && self.policy.classify(key) == KeyClass::Cache {
             self.lru_touch(key.clone());
         }
         self.data.get(key).map(|v| v.as_slice())
     }
 
-    /// Put flushed writes back when a sink accepted only part of a batch.
+    /// Put flushed writes back when a sink failed to persist them. Only entries whose captured
+    /// revision still matches the key's current revision are restored: a write superseded by a
+    /// newer `put`/`delete` has nothing to retry (the newer write is already pending, or already
+    /// saved), and restoring it would risk clobbering that newer state.
     pub fn restore_pending(&mut self, writes: impl IntoIterator<Item = PendingWrite>) {
-        self.pending.splice(0..0, writes);
+        let current: Vec<PendingWrite> = writes.into_iter().filter(|write| self.revisions.get(&write.key).copied() == Some(write.revision)).collect();
+        self.pending.splice(0..0, current);
+    }
+
+    /// Mark pending writes durably saved once a sink confirms it persisted them. A write whose
+    /// captured revision no longer matches the key's current revision is a stale ack (a newer
+    /// `put`/`delete` happened since it was taken): it must not mark anything saved, and must
+    /// never touch resident bytes. A write that is still current frees any retained eviction
+    /// copy for that key immediately -- a durable copy exists now, so nothing needs to keep
+    /// backing a `requeue`.
+    pub fn ack_saved(&mut self, writes: &[PendingWrite]) {
+        for write in writes {
+            if self.revisions.get(&write.key).copied() != Some(write.revision) {
+                continue;
+            }
+            self.saved_revisions.insert(write.key.clone(), write.revision);
+            self.drop_evicted_retention(&write.key);
+        }
+    }
+
+    /// True when the key's current revision is confirmed durably persisted.
+    pub fn is_saved(&self, key: &StoreKey) -> bool {
+        matches!((self.saved_revisions.get(key), self.revisions.get(key)), (Some(saved), Some(current)) if saved == current)
+    }
+
+    /// Bytes currently retained for evicted-but-possibly-unflushed cache entries.
+    pub fn retained_bytes(&self) -> usize {
+        self.evicted_bytes_used
+    }
+
+    /// True when retained bytes (resident cache, or evicted-but-unflushed) exceed the byte
+    /// budget and nothing safe remains to reclaim. Surfaces that condition explicitly instead of
+    /// growing retention without bound or discarding a write nothing has confirmed yet.
+    pub fn over_budget(&self) -> bool {
+        self.bytes_used > self.byte_budget || self.evicted_bytes_used > self.byte_budget
     }
 
     /// Resident bytes from a warm-tier load. Nothing is queued to flush.
@@ -69,43 +123,49 @@ impl<P: TierPolicy> MirrorStore<P> {
     }
 
     pub fn put(&mut self, key: StoreKey, bytes: Vec<u8>) {
-        self.note_mutation(&key);
+        let revision = self.note_mutation(&key);
         self.tombstones.remove(&key);
-        self.evicted.remove(&key);
+        self.drop_evicted_retention(&key);
         self.insert_resident(key.clone(), bytes.clone());
-        self.pending.push(PendingWrite { key, bytes, deleted: false });
+        self.pending.push(PendingWrite { key, bytes, deleted: false, revision });
     }
 
     /// Drop the key and queue a warm-tier delete.
     pub fn delete(&mut self, key: StoreKey) {
-        self.note_mutation(&key);
-        self.evicted.remove(&key);
+        let revision = self.note_mutation(&key);
+        self.drop_evicted_retention(&key);
         self.tombstones.insert(key.clone());
         if let Some(old) = self.data.remove(&key) {
             self.bytes_used = self.bytes_used.saturating_sub(old.len());
         }
         self.cache_lru.retain(|k| k != &key);
-        self.pending.push(PendingWrite { key, bytes: Vec::new(), deleted: true });
+        self.pending.push(PendingWrite { key, bytes: Vec::new(), deleted: true, revision });
     }
 
     /// Queue the key again after a failed flush.
     ///
-    /// Uses resident bytes when they are still hot. A cache entry evicted under the byte budget
-    /// is retried from the bytes that were queued, not as a delete. A real `delete` stays a tombstone.
+    /// A no-op when the key's current revision is already confirmed saved: nothing needs a
+    /// retry. Otherwise uses resident bytes when they are still hot, or the retained eviction
+    /// copy. A real `delete` stays a tombstone.
     pub fn requeue(&mut self, key: &StoreKey) {
+        if self.is_saved(key) {
+            return;
+        }
+        let revision = self.revisions.get(key).copied().unwrap_or(0);
         if self.tombstones.contains(key) {
-            self.pending.push(PendingWrite { key: key.clone(), bytes: Vec::new(), deleted: true });
+            self.pending.push(PendingWrite { key: key.clone(), bytes: Vec::new(), deleted: true, revision });
             return;
         }
         let Some(bytes) = self.data.get(key).cloned().or_else(|| self.evicted.get(key).cloned()) else {
             return;
         };
-        self.pending.push(PendingWrite { key: key.clone(), bytes, deleted: false });
+        self.pending.push(PendingWrite { key: key.clone(), bytes, deleted: false, revision });
     }
 
-    fn note_mutation(&mut self, key: &StoreKey) {
+    fn note_mutation(&mut self, key: &StoreKey) -> u64 {
         let revision = self.revisions.entry(key.clone()).or_insert(0);
         *revision = revision.saturating_add(1);
+        *revision
     }
 
     pub fn has_pending(&self) -> bool {
@@ -133,6 +193,7 @@ impl<P: TierPolicy> MirrorStore<P> {
             if let Some(&idx) = index_by_key.get(&write.key) {
                 coalesced[idx].bytes = write.bytes;
                 coalesced[idx].deleted = write.deleted;
+                coalesced[idx].revision = write.revision;
             } else {
                 index_by_key.insert(write.key.clone(), coalesced.len());
                 coalesced.push(write);
@@ -148,9 +209,66 @@ impl<P: TierPolicy> MirrorStore<P> {
             };
             if let Some(bytes) = self.data.remove(&victim) {
                 self.bytes_used = self.bytes_used.saturating_sub(bytes.len());
-                self.evicted.insert(victim, bytes);
+                if self.needs_retention_on_evict(&victim) {
+                    self.retain_evicted(victim, bytes);
+                }
+                // Else: a durable copy already exists (saved, or loaded from the warm tier via
+                // `seed` and never mutated) -- drop the bytes outright, no retention needed.
             }
         }
+        self.enforce_eviction_retention_budget();
+    }
+
+    /// A key needs its evicted bytes retained only if it has an outstanding write (a `put` or
+    /// `delete` revision) that is not yet confirmed saved. A key only ever `seed`ed has no
+    /// pending obligation at all: the warm tier already has it.
+    fn needs_retention_on_evict(&self, key: &StoreKey) -> bool {
+        match self.revisions.get(key) {
+            None => false,
+            Some(revision) => self.saved_revisions.get(key).copied() != Some(*revision),
+        }
+    }
+
+    fn retain_evicted(&mut self, key: StoreKey, bytes: Vec<u8>) {
+        let added = bytes.len();
+        if let Some(old) = self.evicted.insert(key.clone(), bytes) {
+            self.evicted_bytes_used = self.evicted_bytes_used.saturating_sub(old.len());
+        } else {
+            self.evicted_order.push_back(key);
+        }
+        self.evicted_bytes_used = self.evicted_bytes_used.saturating_add(added);
+    }
+
+    fn drop_evicted_retention(&mut self, key: &StoreKey) {
+        if let Some(bytes) = self.evicted.remove(key) {
+            self.evicted_bytes_used = self.evicted_bytes_used.saturating_sub(bytes.len());
+            self.evicted_order.retain(|k| k != key);
+        }
+    }
+
+    /// Reclaim retained-eviction bytes once they exceed the byte budget, oldest first, but only
+    /// payloads already confirmed saved: nothing else is safe to drop. When nothing safe remains
+    /// and retention is still over budget, stop -- that is backpressure, surfaced via
+    /// [`over_budget`](Self::over_budget), never a silent discard of an unflushed write.
+    fn enforce_eviction_retention_budget(&mut self) {
+        while self.evicted_bytes_used > self.byte_budget {
+            if !self.drop_oldest_saved_eviction() {
+                break;
+            }
+        }
+    }
+
+    fn drop_oldest_saved_eviction(&mut self) -> bool {
+        let Some(pos) = self.evicted_order.iter().position(|key| self.is_saved(key)) else {
+            return false;
+        };
+        let Some(key) = self.evicted_order.remove(pos) else {
+            return false;
+        };
+        if let Some(bytes) = self.evicted.remove(&key) {
+            self.evicted_bytes_used = self.evicted_bytes_used.saturating_sub(bytes.len());
+        }
+        true
     }
 
     fn pick_cache_victim(&mut self) -> Option<StoreKey> {

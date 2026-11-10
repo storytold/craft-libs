@@ -5,7 +5,7 @@ use craft_tier_store::{DefaultTierPolicy, MirrorStore, StoreKey};
 use craft_worker_host::{HostMessage, PendingFlushEntry, WorkerMessage};
 
 use crate::dispatch_gpu_jobs;
-use crate::flush::FlushSink;
+use crate::flush::{FlushOutcome, FlushSink};
 
 /// Which [`GpuContext`] implementation the runtime uses.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -199,18 +199,47 @@ impl Runtime {
             }
             HostMessage::StorageFlush => {
                 let pending = self.mirror.take_pending();
-                let export = self.flush_sink.is_none();
-                let mut count = pending.len();
-                let mut pending_msg = None;
-                if export {
-                    pending_msg = Some(pending.into_iter().map(|write| PendingFlushEntry { key: write.key.0, bytes: write.bytes }).collect());
-                } else if let Some(sink) = self.flush_sink.as_mut() {
-                    count = sink.write_all(&pending).min(pending.len());
-                    if count < pending.len() {
-                        self.mirror.restore_pending(pending.into_iter().skip(count));
+                match self.flush_sink.as_mut() {
+                    None => {
+                        // No native sink: hand the batch to the host (JS), which is responsible
+                        // for actually persisting it (and for not claiming success it can't back
+                        // up -- see assets/craft-worker-host-routing.js).
+                        let pending_count = pending.len();
+                        let pending_msg = pending
+                            .into_iter()
+                            .map(|write| PendingFlushEntry { key: write.key.0, bytes: write.bytes, revision: write.revision })
+                            .collect();
+                        vec![WorkerMessage::StorageFlushed { pending_count, pending: Some(pending_msg) }]
+                    }
+                    Some(_) if pending.is_empty() => {
+                        vec![WorkerMessage::StorageFlushed { pending_count: 0, pending: None }]
+                    }
+                    Some(sink) => {
+                        let outcomes = sink.write_all(&pending);
+                        let mut persisted = Vec::new();
+                        let mut failed = Vec::new();
+                        for (index, write) in pending.into_iter().enumerate() {
+                            if matches!(outcomes.get(index), Some(FlushOutcome::Persisted)) {
+                                persisted.push(write);
+                            } else {
+                                failed.push(write);
+                            }
+                        }
+                        let count = persisted.len();
+                        self.mirror.ack_saved(&persisted);
+                        if !failed.is_empty() {
+                            self.mirror.restore_pending(failed);
+                        }
+                        if count == 0 {
+                            // Every entry failed (or the sink reported nothing at all): the
+                            // pending writes are already restored above. Never report success
+                            // for data that was not actually persisted.
+                            vec![WorkerMessage::Error { message: "storage flush: sink persisted none of the pending writes".into() }]
+                        } else {
+                            vec![WorkerMessage::StorageFlushed { pending_count: count, pending: None }]
+                        }
                     }
                 }
-                vec![WorkerMessage::StorageFlushed { pending_count: count, pending: pending_msg }]
             }
             HostMessage::GpuJobs { batch_id, jobs } => match dispatch_gpu_jobs(&self.registry, &mut self.ctx, &jobs) {
                 Ok(outcomes) => vec![WorkerMessage::GpuBatchDone { batch_id, outcomes }],

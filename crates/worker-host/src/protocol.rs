@@ -29,6 +29,10 @@ pub enum HostMessage {
 pub struct PendingFlushEntry {
     pub key: String,
     pub bytes: Vec<u8>,
+    /// The mirror's revision for `key` when this write was captured. Carried through so a host
+    /// that acks a flush later can tell a current write from one a newer `put`/`delete`
+    /// superseded in the meantime.
+    pub revision: u64,
 }
 
 /// Worker → tab.

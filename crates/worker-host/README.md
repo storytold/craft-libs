@@ -31,7 +31,11 @@ globalThis.craftRuntimeFlushPending = async (data) => {
 ```
 
 If `craftRuntimeHandleGpuBatch` is unset, the stub completes `gpu_jobs` with empty outcomes.
-If `craftRuntimeFlushPending` is unset, `storage_flush` replies with `pending_count` equal to the drained pending batch length.
+If `craftRuntimeFlushPending` is unset, or it throws or rejects, `storage_flush` replies with an
+`error` message and leaves every pending write queued for the next flush attempt; it never
+reports `storage_flushed` for data that was not actually persisted. A hook that resolves with a
+`pending_count` lower than the number of entries it was given confirms only that many (oldest
+queued first); the rest stay queued and are retried on the next flush.
 Loading `opfs-flush.js` from the worker bootstrap installs a default flush hook.
 
 ## WebAssembly.Module sharing

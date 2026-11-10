@@ -21,6 +21,6 @@ pub use craft_tier_store::CloudBlobRef;
 #[cfg(feature = "web")]
 pub use craft_gpu_wgpu::WgpuContext;
 
-pub use flush::{FlushSink, MemoryFlushSink};
+pub use flush::{FlushOutcome, FlushSink, MemoryFlushSink};
 pub use gpu::dispatch_gpu_jobs;
 pub use runtime::{ContextBackend, Runtime, RuntimeBuilder};

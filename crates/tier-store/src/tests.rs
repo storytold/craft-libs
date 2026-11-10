@@ -148,3 +148,110 @@ fn versioned_mirror_bumps_per_key_version() {
     assert_eq!(store.get(&key), Some(b"v2".as_slice()));
     assert_eq!(store.version(&key), 2);
 }
+
+// --- review_repro: revision-tied flush acknowledgment (PR #662 review, failure 2) -------------
+
+/// Two overlapping flushes for the same key settle out of order. Regardless of which
+/// acknowledgment arrives first, the newer revision's bytes and saved-state must win: an older,
+/// stale ack must neither overwrite resident state nor mark its (superseded) revision saved.
+#[test]
+fn ack_saved_ties_to_revision_so_a_stale_completion_never_wins() {
+    let key = StoreKey::new("files/doc");
+
+    // Ordering 1: the newer flush (B) is acknowledged before the older one (A).
+    let mut store = MirrorStore::new(DefaultTierPolicy, 1024);
+    store.put(key.clone(), b"v1".to_vec());
+    let flush_a = store.take_pending();
+    store.put(key.clone(), b"v2".to_vec());
+    let flush_b = store.take_pending();
+    store.ack_saved(&flush_b);
+    store.ack_saved(&flush_a); // stale: key's revision has moved past flush_a's
+    assert_eq!(store.get(&key), Some(b"v2".as_slice()), "a stale ack must not touch resident state");
+    assert!(store.is_saved(&key), "the current (newer) revision must be the one marked saved");
+
+    // Ordering 2: the older flush (A) is acknowledged before the newer one (B).
+    let mut store = MirrorStore::new(DefaultTierPolicy, 1024);
+    store.put(key.clone(), b"v1".to_vec());
+    let flush_a = store.take_pending();
+    store.put(key.clone(), b"v2".to_vec());
+    let flush_b = store.take_pending();
+    store.ack_saved(&flush_a); // stale on arrival: a newer write already exists
+    assert!(!store.is_saved(&key), "an ack for a superseded revision must not mark the current one saved");
+    store.ack_saved(&flush_b);
+    assert_eq!(store.get(&key), Some(b"v2".as_slice()));
+    assert!(store.is_saved(&key));
+}
+
+/// Once a key's current revision is confirmed saved, `requeue` is a no-op: there is nothing left
+/// to retry, matching the gist's H7 repro (an evicted, already-flushed payload must not come back
+/// through `requeue`).
+#[test]
+fn requeue_is_a_noop_once_saved() {
+    let mut store = MirrorStore::new(DefaultTierPolicy, 1024);
+    let key = StoreKey::new("cache/a");
+    store.put(key.clone(), vec![7u8; 16]);
+    let batch = store.take_pending();
+    store.ack_saved(&batch);
+    store.requeue(&key);
+    assert!(store.take_pending().is_empty(), "a saved key has nothing to retry");
+}
+
+// --- review_repro: retained-eviction bytes are bounded (PR #662 review, failure 3) ------------
+
+/// Mirrors the gist's exact workload (put, then flush-and-ack immediately, repeated): when every
+/// write keeps getting durably saved before the budget cycles back around to it, retention stays
+/// bounded by the budget instead of growing with every eviction (the gist's 1 MiB budget growing
+/// RSS by 32.6 MiB over 512 such writes).
+#[test]
+fn retained_eviction_bytes_stay_bounded_when_every_write_is_saved_before_its_turn() {
+    let mut store = MirrorStore::new(DefaultTierPolicy, 64);
+    for i in 0..200 {
+        store.put(StoreKey::new(format!("cache/{i}")), vec![9u8; 8]);
+        let batch = store.take_pending();
+        store.ack_saved(&batch);
+        assert!(store.retained_bytes() <= 64, "retained eviction bytes grew unbounded at entry {i}: {} bytes retained", store.retained_bytes());
+    }
+}
+
+/// When nothing is ever flushed, retention legitimately holds every unflushed byte: there is
+/// nothing safe to drop. That must surface as explicit backpressure, and nothing may be silently
+/// discarded -- every write stays fully recoverable through `take_pending`.
+#[test]
+fn retained_eviction_bytes_surface_as_backpressure_when_nothing_is_ever_saved() {
+    let mut store = MirrorStore::new(DefaultTierPolicy, 16);
+    for i in 0..50 {
+        store.put(StoreKey::new(format!("cache/{i}")), vec![9u8; 8]);
+    }
+    assert!(store.over_budget(), "retention over budget with nothing flushed must surface as backpressure, not silent growth");
+    // Nothing was silently discarded: every one of the 50 writes is still queued to flush.
+    assert_eq!(store.take_pending().len(), 50);
+}
+
+/// A key already confirmed saved before it is ever evicted is dropped outright, not retained:
+/// there is nothing left for a retry to need. Compares against an identical, unsaved sibling run
+/// so the assertion does not depend on the exact arithmetic of an unrelated eviction cascade.
+#[test]
+fn a_saved_key_is_dropped_outright_on_eviction_not_retained() {
+    let others = |store: &mut MirrorStore<DefaultTierPolicy>| {
+        for i in 0..10 {
+            store.put(StoreKey::new(format!("cache/other-{i}")), vec![9u8; 8]);
+        }
+    };
+
+    let mut unsaved = MirrorStore::new(DefaultTierPolicy, 16);
+    unsaved.put(StoreKey::new("cache/a"), vec![9u8; 8]);
+    others(&mut unsaved);
+
+    let mut saved = MirrorStore::new(DefaultTierPolicy, 16);
+    saved.put(StoreKey::new("cache/a"), vec![9u8; 8]);
+    let batch = saved.take_pending();
+    saved.ack_saved(&batch);
+    others(&mut saved);
+
+    assert!(
+        saved.retained_bytes() < unsaved.retained_bytes(),
+        "a saved key's eviction must retain fewer bytes than an identical unsaved one: saved={} unsaved={}",
+        saved.retained_bytes(),
+        unsaved.retained_bytes()
+    );
+}

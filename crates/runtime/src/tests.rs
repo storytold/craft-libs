@@ -74,9 +74,9 @@ fn storage_flush_uses_flush_sink() {
     let cap = captured.clone();
     struct Capture(Arc<Mutex<Vec<PendingWrite>>>);
     impl FlushSink for Capture {
-        fn write_all(&mut self, pending: &[PendingWrite]) -> usize {
+        fn write_all(&mut self, pending: &[PendingWrite]) -> Vec<crate::FlushOutcome> {
             self.0.lock().expect("test lock").extend_from_slice(pending);
-            pending.len()
+            vec![crate::FlushOutcome::Persisted; pending.len()]
         }
     }
 
