@@ -26,7 +26,7 @@ fn param_name(slot: u8, expression: bool) -> Option<(&'static str, usize)> {
 }
 
 /// A built-in pattern: the compiled format's code to the graph language's shape name (`pattern="<shape>"` on `pp_quadrant`).
-pub(super) fn pattern_shape(code: u8) -> Option<&'static str> {
+pub fn pattern_shape(code: u8) -> Option<&'static str> {
     Some(match code {
         0 => "square",
         1 => "disc",

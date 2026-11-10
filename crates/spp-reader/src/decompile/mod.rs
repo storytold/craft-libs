@@ -248,7 +248,7 @@ fn input_ref(out: &mut String, slot: &str, a: &AtomicNode, k: usize) {
 // ---- the compiled format's codes, to the graph language's names (they stay here, nowhere else) ----
 
 /// A blend node's mode: the compiled format's code to the `blend` node's `mode` name.
-fn blend_mode(m: u32) -> &'static str {
+pub fn blend_mode(m: u32) -> &'static str {
     match m {
         1 => "add_compiled",
         2 => "subtract_compiled",
@@ -266,7 +266,7 @@ fn blend_mode(m: u32) -> &'static str {
 }
 
 /// What a node holds per channel, as the graph language's Output Format name (`None`: the graph's default, single floats).
-fn output_format(depth: SampleDepth) -> Option<&'static str> {
+pub fn output_format(depth: SampleDepth) -> Option<&'static str> {
     match depth {
         SampleDepth::Int8 => Some("u8_compiled"),
         SampleDepth::Int16 => Some("u16_compiled"),
