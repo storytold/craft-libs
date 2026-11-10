@@ -1,6 +1,7 @@
 // Carved from VectorCraft's crates/pathops (src/boolean.rs) at storytold/vectorcraft ff9deee46d1c59dc9ecef0b668c25e57cd80b55e.
 // Copyright (c) 2026 ArtCraft Team and the VectorCraft contributors. MIT OR Apache-2.0.
-// Brought up to storytold/vectorcraft 0945eaf2b3d4e93963aaa6d796b9efe53feaf624 by porting its changes to this file (3fcd157..0945eaf; see the README).
+// Brought up to storytold/vectorcraft 0945eaf2b3d4e93963aaa6d796b9efe53feaf624 by porting its changes to this file (3fcd157..0945eaf; see the README), and to
+// ef81d550e47623a6922fc14574eee66cc5fed083 by porting 1090965 (a union of one input whose own sweep is the union is not swept a second time: `Swept`, `splits_nothing`).
 
 //! Curve-preserving boolean operations built on `linesweeper`'s robust sweep-line topology.
 //!
@@ -1242,21 +1243,106 @@ pub(crate) fn try_unite_all_upright(paths: &[(&BezPath, FillRule)], precision: f
     // number makes a loop of one cubic draw nothing, and that is an error, not an empty input).
     eps_for(paths.iter().map(|(p, _)| *p))?;
     let precision = sane_precision(precision);
-    let mut all = BezPath::new();
-    for (p, r) in paths {
-        let bp = fill_bezpath(p);
+    // The inputs as they are filled, once: the sweeps read them, and so does the tidy's index of their curves.
+    let bps: Vec<BezPath> = paths.iter().map(|(p, _)| fill_bezpath(p)).collect();
+    let mut swept = Swept::default();
+    for (bp, (_, r)) in bps.iter().zip(paths) {
         if bp.elements().is_empty() {
             continue;
         }
-        let left = crate::budget::limits().elements.saturating_sub(all.elements().len());
-        let Some(c) = normalize_bez_within(&bp, *r, left)? else { return Err(PathOpsError::TooComplex) };
-        append_contours(&mut all, &c, crate::budget::limits().elements)?;
+        let left = crate::budget::limits().elements.saturating_sub(swept.elements());
+        let Some(c) = normalize_bez_within(bp, *r, left)? else { return Err(PathOpsError::TooComplex) };
+        swept.push(c, bp.segments().count(), crate::budget::limits().elements)?;
     }
-    if all.elements().is_empty() {
-        return Ok(BezPath::new());
+    swept.union(bps, precision)
+}
+
+/// The contours of the inputs of a union, as they are swept one by one. A lone input's are kept as they came from its sweep (with the
+/// number of segments the input has) until a second input comes, in case its sweep is the union; those of several are joined into one path
+/// that is swept again, under the non-zero rule, which merges the pieces the first sweeps leave where a path crosses itself.
+#[derive(Default)]
+struct Swept {
+    /// The contours of the inputs after the first, and of the first when there is a second.
+    all: BezPath,
+    /// The contours of the first input, and the segments of the input, while it is the only one.
+    lone: Option<(Contours, usize)>,
+    /// The elements of the contours in `lone`.
+    lone_elements: usize,
+    /// The inputs that were swept (those with a segment to sweep).
+    inputs: usize,
+}
+
+impl Swept {
+    /// The elements held so far.
+    fn elements(&self) -> usize {
+        self.all.elements().len().saturating_add(self.lone_elements)
     }
-    let tidy = Tidy::keeping(precision, paths.iter().map(|(p, _)| fill_bezpath(p)).collect::<Vec<_>>().iter());
-    held_union(&all, &tidy)
+
+    /// Adds the contours `c` of the next input, which has `input_segments` segments: an error, with nothing added, when the union then holds more
+    /// than `budget` elements ([`append_contours`]).
+    fn push(&mut self, c: Contours, input_segments: usize, budget: usize) -> Result<(), PathOpsError> {
+        let added: usize = c.contours().map(|ct| ct.path.elements().len()).sum();
+        if self.elements().saturating_add(added) > budget {
+            return Err(PathOpsError::TooComplex);
+        }
+        self.inputs += 1;
+        if self.inputs == 1 {
+            self.lone = Some((c, input_segments));
+            self.lone_elements = added;
+            return Ok(());
+        }
+        if let Some((first, _)) = self.lone.take() {
+            self.lone_elements = 0;
+            append_contours(&mut self.all, &first, budget)?;
+        }
+        append_contours(&mut self.all, &c, budget)
+    }
+
+    /// The union, refit to `precision` keeping the anchors of `inputs` (the inputs as they were filled, freed before the contours are swept
+    /// again, as the tidy holds what it needs of them): the contours of a lone input as its sweep made them when they are its own segments
+    /// ([`lone_union`]), else all the contours swept again ([`held_union`]).
+    fn union(mut self, inputs: Vec<BezPath>, precision: f64) -> Result<BezPath, PathOpsError> {
+        if self.inputs == 0 || (self.all.elements().is_empty() && self.lone_elements == 0) {
+            return Ok(BezPath::new());
+        }
+        let tidy = Tidy::keeping(precision, inputs.iter());
+        if let Some((c, input_segments)) = &self.lone {
+            if let Some(path) = lone_union(c, *input_segments, &tidy) {
+                // What is written is held to the limit, as [`held_union`] holds it.
+                return if path.elements().len() > crate::budget::limits().elements { Err(PathOpsError::TooComplex) } else { Ok(path) };
+            }
+            if let Some((first, _)) = self.lone.take() {
+                append_contours(&mut self.all, &first, crate::budget::limits().elements)?;
+            }
+        }
+        drop(inputs);
+        held_union(&self.all, &tidy)
+    }
+}
+
+/// The union of one input whose own sweep made the contours `c`, when they are that union already: they are the input's own segments, as
+/// many as it has, each starting at an anchor `tidy` keeps (a segment split where paths cross gives a piece that starts away from the anchors,
+/// and a piece dropped inside another path leaves fewer segments than the input). `None` when the contours are to be swept again.
+fn lone_union(c: &Contours, input_segments: usize, tidy: &Tidy) -> Option<BezPath> {
+    if !splits_nothing(c, input_segments, tidy) {
+        return None;
+    }
+    work::add(Work::LoneUnions, 1);
+    Some(all_contours_to_path(c, tidy))
+}
+
+/// Are the contours `c` the input's own segments: as many as `input_segments`, each starting at an anchor `tidy` keeps?
+fn splits_nothing(c: &Contours, input_segments: usize, tidy: &Tidy) -> bool {
+    let mut n = 0usize;
+    for ct in c.contours() {
+        for s in ct.path.segments() {
+            if !tidy.is_kept(Seg::straight(s).c.p0) {
+                return false;
+            }
+            n += 1;
+        }
+    }
+    n == input_segments
 }
 
 /// The union of `all` (the contours of the inputs, each already resolved), as one clean path held to
@@ -1307,7 +1393,7 @@ pub(crate) fn unite_all_upright(paths: &[(&BezPath, FillRule)], precision: f64) 
         return BezPath::new();
     }
     let precision = sane_precision(precision);
-    let mut all = BezPath::new();
+    let mut swept = Swept::default();
     // The paths the union is made of, as they were filled: the tidy's index of input curves is made of these
     // and no others, or a boundary piece near a curve of a path that was left out would be rebuilt as it.
     let mut made: Vec<BezPath> = Vec::new();
@@ -1321,7 +1407,7 @@ pub(crate) fn unite_all_upright(paths: &[(&BezPath, FillRule)], precision: f64) 
         if bp.elements().is_empty() {
             continue;
         }
-        let left = crate::budget::limits().elements.saturating_sub(all.elements().len());
+        let left = crate::budget::limits().elements.saturating_sub(swept.elements());
         let c = match normalize_bez_within(&bp, *r, left) {
             Ok(Some(c)) => c,
             // Past the limit the union would be refused as too complex when swept: it is not made.
@@ -1329,17 +1415,13 @@ pub(crate) fn unite_all_upright(paths: &[(&BezPath, FillRule)], precision: f64) 
             Err(_) => continue,
         };
         // Past the limit the union would be refused as too complex when swept: it is not made.
-        if append_contours(&mut all, &c, crate::budget::limits().elements).is_err() {
+        if swept.push(c, bp.segments().count(), crate::budget::limits().elements).is_err() {
             return BezPath::new();
         }
         made.push(bp);
     }
-    if all.elements().is_empty() {
-        return BezPath::new();
-    }
-    let tidy = Tidy::keeping(precision, made.iter());
     // Past the limit, or an error of the sweep: no union.
-    held_union(&all, &tidy).unwrap_or_default()
+    swept.union(made, precision).unwrap_or_default()
 }
 
 /// [`area`] that reports a refused input instead of an area of zero.
@@ -2520,5 +2602,239 @@ mod tests {
         });
         assert_eq!(widest.get(), 1);
         assert_eq!(c.contours().count(), 100);
+    }
+
+    /// The union with every input swept on its own and then all their contours swept together under the non-zero rule: what `unite_all` made
+    /// of a lone input before a sweep of its own that was the union was not swept again (VectorCraft 1090965's `unite_swept_twice`).
+    fn unite_swept_twice(paths: &[(&BezPath, FillRule)], precision: f64) -> BezPath {
+        let bps: Vec<BezPath> = paths.iter().map(|(p, _)| fill_bezpath(p)).collect();
+        let mut all = BezPath::new();
+        for (bp, (_, r)) in bps.iter().zip(paths) {
+            for ct in normalize_bez(bp, *r).unwrap().contours() {
+                all.extend(ct.path.iter());
+            }
+        }
+        all_contours_to_path(&normalize_bez(&all, FillRule::NonZero).unwrap(), &Tidy::keeping(precision, bps.iter()))
+    }
+
+    /// The unions of `paths` by [`unite_all_with`] and [`try_unite_all_with`], each with the sweeps it made and the dry sweeps that held them
+    /// (every sweep past the meter's gate is held by one).
+    fn unite_counting_sweeps(paths: &[(&BezPath, FillRule)]) -> [(BezPath, usize, usize); 2] {
+        let counted = |f: &dyn Fn() -> BezPath| {
+            work::reset();
+            let out = f();
+            (out, work::take(Work::Sweeps), work::take(Work::MeteredSweeps))
+        };
+        [counted(&|| unite_all_with(paths, DEFAULT_PRECISION)), counted(&|| try_unite_all_with(paths, DEFAULT_PRECISION).unwrap())]
+    }
+
+    /// Disjoint rings, each a circle with a circular hole, as one even-odd compound path.
+    fn rings(n: usize) -> BezPath {
+        let mut bp = BezPath::new();
+        for i in 0..n {
+            let c = Point::new((i % 10) as f64 * 30.0, (i / 10) as f64 * 30.0);
+            bp.extend(kurbo::Circle::new(c, 12.0).path_elements(0.1));
+            bp.extend(kurbo::Circle::new(c, 5.0).path_elements(0.1));
+        }
+        bp
+    }
+
+    /// A polygon with `n` teeth of different heights along its top.
+    fn zigzag(n: usize) -> BezPath {
+        let mut pts: Vec<Point> = (0..=n).map(|i| Point::new(i as f64 * 4.0, if i % 2 == 0 { 0.0 } else { -10.0 - (i * 37 % 11) as f64 })).collect();
+        pts.push(Point::new(n as f64 * 4.0, 20.0));
+        pts.push(Point::new(0.0, 20.0));
+        crate::testutil::polyline_pts(&pts, true)
+    }
+
+    /// A lone input whose own sweep split none of its segments is swept once, and the dry sweep is run for that sweep and no other: each
+    /// sweep past the gate is held by one (VectorCraft 1090965). The result is what the two sweeps made, to the bit, by both functions.
+    #[test]
+    fn a_lone_input_its_own_sweep_does_not_split_is_swept_once() {
+        for (name, path, rule) in [("rings", rings(40), FillRule::EvenOdd), ("zigzag", zigzag(301), FillRule::NonZero)] {
+            let want = unite_swept_twice(&[(&path, rule)], DEFAULT_PRECISION);
+            assert!(!want.elements().is_empty(), "{name}");
+            for (got, sweeps, metered) in unite_counting_sweeps(&[(&path, rule)]) {
+                assert_eq!(sweeps, 1, "{name}: sweeps");
+                assert_eq!(metered, 1, "{name}: the dry sweep is run for the sweep that runs, past the gate");
+                assert_eq!(got, want, "{name}");
+            }
+            // An empty path beside it is not an input: the union is still a lone one's.
+            let none = BezPath::new();
+            for (got, sweeps, _) in unite_counting_sweeps(&[(&none, rule), (&path, rule), (&none, rule)]) {
+                assert_eq!((sweeps, &got), (1, &want), "{name}, beside empty paths");
+            }
+        }
+    }
+
+    /// Inputs that cross themselves or are several are swept again together, and each sweep is held by a dry sweep, as the sweeps of the
+    /// first pass are (VectorCraft 1090965).
+    #[test]
+    fn inputs_that_cross_or_are_several_are_swept_again_together() {
+        // Overlapping circles in one compound path: the first sweep splits them where they cross.
+        let mut overlapping = BezPath::new();
+        for i in 0..12 {
+            overlapping.extend(kurbo::Circle::new(((i % 4) as f64 * 15.0, (i / 4) as f64 * 15.0), 10.0).path_elements(0.1));
+        }
+        // Two overlapping squares in one compound path, each with an anchor where the other crosses it: the first sweep splits no segment and
+        // starts every piece at an anchor, but drops the pieces inside the other square.
+        let mut anchored = BezPath::new();
+        for pts in [
+            [(0.0, 0.0), (10.0, 0.0), (10.0, 5.0), (10.0, 10.0), (5.0, 10.0), (0.0, 10.0)],
+            [(5.0, 5.0), (10.0, 5.0), (15.0, 5.0), (15.0, 15.0), (5.0, 15.0), (5.0, 10.0)],
+        ] {
+            anchored.extend(crate::testutil::polyline(&pts, true).iter());
+        }
+        // Two plain overlapping squares: as many segments come out as go in, because the sweep drops the two pieces inside the other square and
+        // adds two where the outlines cross.
+        let mut balanced = BezPath::new();
+        for (x, y) in [(0.0, 0.0), (5.0, 5.0)] {
+            balanced.extend(square(x, y, 10.0).iter());
+        }
+        assert_eq!(
+            normalize_bez(&fill_bezpath(&balanced), FillRule::NonZero).unwrap().contours().map(|c| c.path.segments().count()).sum::<usize>(),
+            8
+        );
+        for (name, path) in [("circles", &overlapping), ("anchored squares", &anchored), ("balanced squares", &balanced)] {
+            let want = unite_swept_twice(&[(path, FillRule::NonZero)], DEFAULT_PRECISION);
+            for (got, sweeps, _) in unite_counting_sweeps(&[(path, FillRule::NonZero)]) {
+                assert_eq!(sweeps, 2, "{name}");
+                assert_eq!(got, want, "{name}");
+            }
+        }
+        // Two inputs that do not cross each other or themselves are still swept together: three sweeps, and each of the 80 rings of the
+        // first is held by its dry sweep (the squares are under the gate).
+        let (a, b) = (square(0.0, 0.0, 10.0), square(20.0, 0.0, 10.0));
+        let both = [(&a, FillRule::NonZero), (&b, FillRule::NonZero)];
+        let want = unite_swept_twice(&both, DEFAULT_PRECISION);
+        for (got, sweeps, _) in unite_counting_sweeps(&both) {
+            assert_eq!(sweeps, 3);
+            assert_eq!(got, want);
+        }
+        let (rings, zig) = (rings(40), zigzag(301));
+        let pair = [(&rings, FillRule::EvenOdd), (&zig, FillRule::NonZero)];
+        for (got, sweeps, metered) in unite_counting_sweeps(&pair) {
+            assert_eq!((sweeps, metered), (3, 3), "two inputs past the gate: each sweep is held");
+            assert_eq!(got, unite_swept_twice(&pair, DEFAULT_PRECISION));
+        }
+    }
+
+    /// An input that is left out of a union (a coordinate that is not a number) is not one of its inputs: what is left is a lone input's union.
+    #[test]
+    fn a_lone_part_beside_a_refused_input_keeps_its_union() {
+        let square = square(0.0, 0.0, 10.0);
+        let refused = crate::testutil::polyline_pts(&[Point::new(f64::NAN, 0.0), Point::new(1.0, 1.0), Point::new(0.0, 1.0)], true);
+        let want = unite_swept_twice(&[(&square, FillRule::NonZero)], DEFAULT_PRECISION);
+        work::reset();
+        assert_eq!(unite_all(&[(&square, FillRule::NonZero), (&refused, FillRule::NonZero)]), want);
+        assert_eq!(work::take(Work::Sweeps), 1);
+        assert_eq!(try_unite_all(&[(&square, FillRule::NonZero), (&refused, FillRule::NonZero)]), Err(PathOpsError::NonFinite));
+    }
+
+    /// A lone input is the union two sweeps make of it, whichever of the two ways it is made: 600 compound paths of one to six random shapes
+    /// (rectangles, circles and polygons on a coarse grid, so that edges meet, touch and cross), each under both rules, by both functions.
+    /// Some are swept once and some twice (both happen), and none differs from the union of the two sweeps.
+    #[test]
+    fn a_lone_union_is_the_union_of_two_sweeps_for_random_inputs() {
+        use crate::testutil::hash01;
+        let (mut once, mut twice) = (0usize, 0usize);
+        for case in 0..600u64 {
+            let at = |k: u64| (hash01(case, k) * 6.0).floor() * 10.0;
+            let mut bp = BezPath::new();
+            for shape in 0..=(case % 6) {
+                let k = 10 * shape;
+                match (case + shape) % 3 {
+                    0 => bp.extend(square(at(k), at(k + 1), 10.0 + at(k + 2) / 2.0).iter()),
+                    1 => bp.extend(kurbo::Circle::new((at(k), at(k + 1)), 5.0 + at(k + 2) / 4.0).path_elements(0.1)),
+                    _ => {
+                        let pts: Vec<Point> = (0..5).map(|j| Point::new(at(k + 3 + 2 * j), at(k + 4 + 2 * j))).collect();
+                        bp.extend(crate::testutil::polyline_pts(&pts, true).iter());
+                    }
+                }
+            }
+            for rule in [FillRule::NonZero, FillRule::EvenOdd] {
+                let Ok(want) = std::panic::catch_unwind(|| unite_swept_twice(&[(&bp, rule)], DEFAULT_PRECISION)) else { continue };
+                for (got, sweeps, _) in unite_counting_sweeps(&[(&bp, rule)]) {
+                    assert_eq!(got, want, "case {case}, {rule:?}");
+                    match sweeps {
+                        1 => once += 1,
+                        _ => twice += 1,
+                    }
+                }
+            }
+        }
+        assert!(once > 100 && twice > 100, "swept once {once} times and twice {twice} times");
+    }
+
+    /// `n` squares 10 wide, 30 apart from `x0`, in one path: 5 elements each, and 6 in the contours of their sweep and in the path made of them.
+    fn squares_path(n: usize, x0: f64) -> BezPath {
+        let mut bp = BezPath::new();
+        for i in 0..n {
+            bp.extend(square(x0 + i as f64 * 30.0, 0.0, 10.0).iter());
+        }
+        bp
+    }
+
+    /// `n` circles in one path: 6 elements each, the same in the contours of their sweep and in the path made of them.
+    fn circles_path(n: usize) -> BezPath {
+        let mut bp = BezPath::new();
+        for i in 0..n {
+            bp.extend(kurbo::Circle::new((i as f64 * 30.0, 0.0), 12.0).path_elements(0.1));
+        }
+        bp
+    }
+
+    /// A lone union is held to the element limit as the union of the contours swept again is: the contours of the sweep, and the path made of
+    /// them, may have as many elements as the limit and no more. Five squares are 25 elements and 30 as contours and as the path made of them,
+    /// so are refused under 30 (by both functions) and made at 30; five circles are 30 in all three and are made at 30.
+    #[test]
+    fn a_lone_union_is_held_to_the_element_limit_exactly() {
+        let squares = squares_path(5, 0.0);
+        assert_eq!(squares.elements().len(), 25);
+        let at = |limit: usize, path: &BezPath| {
+            crate::with_limits(crate::Limits { elements: limit, ..crate::Limits::default() }, || {
+                (try_unite_all(&[(path, FillRule::NonZero)]).map(|p| p.elements().len()), unite_all(&[(path, FillRule::NonZero)]).elements().len())
+            })
+        };
+        for limit in 25..30 {
+            assert_eq!(at(limit, &squares), (Err(PathOpsError::TooComplex), 0), "squares, a limit of {limit}");
+        }
+        assert_eq!(at(30, &squares), (Ok(30), 30));
+        assert_eq!(at(31, &squares), (Ok(30), 30));
+        let circles = circles_path(5);
+        assert_eq!(circles.elements().len(), 30);
+        assert_eq!(at(30, &circles), (Ok(30), 30), "circles, a limit of 30");
+    }
+
+    /// The contours of the inputs already swept are counted against the limit before the next input is swept, and a sweep whose boundary is
+    /// more than what is left makes no contours. Three inputs of 10 squares (50 elements each, 60 as contours) under a limit of 150: the
+    /// first two leave 30, which the 40 segments of the third's boundary are more than, and its contours are not made.
+    #[test]
+    fn the_sweep_of_an_input_is_held_to_what_the_inputs_before_it_left() {
+        let inputs = [squares_path(10, 0.0), squares_path(10, 1000.0), squares_path(10, 2000.0)];
+        let paths: Vec<(&BezPath, FillRule)> = inputs.iter().map(|p| (p, FillRule::NonZero)).collect();
+        let limits = crate::Limits { elements: 150, ..crate::Limits::default() };
+        work::reset();
+        assert_eq!(crate::with_limits(limits, || try_unite_all(&paths)), Err(PathOpsError::TooComplex));
+        assert_eq!(work::take(Work::ContourElements), 120, "the contours of the first two, and none of the third");
+        assert_eq!(work::take(Work::BoundarySegments), 120, "the boundaries of the three: 40 each");
+        assert_eq!(crate::with_limits(limits, || unite_all(&paths)), BezPath::new());
+        assert_eq!(work::take(Work::ContourElements), 120);
+        // With room for all three, all three are made.
+        let roomy = crate::Limits { elements: 400, ..crate::Limits::default() };
+        assert!(crate::with_limits(roomy, || try_unite_all(&paths)).is_ok());
+        assert_eq!(work::take(Work::ContourElements), 180 + 180, "the contours of the three, and of the union of them");
+    }
+
+    /// An input whose sweep makes no contours (a square twice, under the even-odd rule: nothing is inside it) is a lone input with nothing to
+    /// sweep again: it is swept once, and the union is empty.
+    #[test]
+    fn a_lone_input_that_sweeps_to_nothing_is_not_swept_again() {
+        let mut twice = BezPath::new();
+        twice.extend(square(0.0, 0.0, 10.0).iter());
+        twice.extend(square(0.0, 0.0, 10.0).iter());
+        for (out, sweeps, _) in unite_counting_sweeps(&[(&twice, FillRule::EvenOdd)]) {
+            assert_eq!((out, sweeps), (BezPath::new(), 1));
+        }
     }
 }

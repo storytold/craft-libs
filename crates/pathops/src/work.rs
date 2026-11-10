@@ -111,6 +111,8 @@ pub(crate) enum Work {
     MeteredSweeps,
     /// The fourth powers of the segments that start (or end) together, summed, as the meter counts them before its sweep.
     MeterGroups,
+    /// Unions of one input whose own sweep was the union (the second sweep was not made).
+    LoneUnions,
 }
 
 #[cfg(test)]
