@@ -24,8 +24,9 @@ pub struct ComparisonCache {
     next_purge: usize,
     accuracy: f64,
     tolerance: f64,
-    // Craft patch (work limit): the number of calls to `compare_segments`,
-    // cached or not, which `Sweeper` checks against its work limit.
+    // Craft patch (work limit): the number of calls to `compare_segments` and
+    // `with_order`, cached or not, which `Sweeper` checks against its work
+    // limit.
     pub(crate) calls: u64,
     // Craft patch (comparison cache arena): the arena that `inner` describes.
     arena: Option<u64>,
@@ -149,13 +150,16 @@ impl ComparisonCache {
     ///
     /// `f` receives the order that [`ComparisonCache::compare_segments`] would return: the stored
     /// one if there is one, otherwise one computed the same way and dropped after `f` returns.
+    /// Each call counts as one comparison toward the sweep's work limit, as a call to
+    /// [`ComparisonCache::compare_segments`] does.
     pub fn with_order<R>(
-        &self,
+        &mut self,
         segments: &Segments,
         i: SegIdx,
         j: SegIdx,
         f: impl FnOnce(&CurveOrder) -> R,
     ) -> R {
+        self.calls = self.calls.saturating_add(1);
         let (i, j, flipped) = if i.0 < j.0 {
             (i, j, false)
         } else {
@@ -540,7 +544,7 @@ mod tests {
 
         for (tolerance, accuracy) in [(1e-6, 5e-7), (4e-6, 5e-7), (0.25, 0.125)] {
             let mut stored = ComparisonCache::new(tolerance, accuracy);
-            let unstored = ComparisonCache::new(tolerance, accuracy);
+            let mut unstored = ComparisonCache::new(tolerance, accuracy);
             for i in segments.indices() {
                 for j in segments.indices() {
                     if i == j {

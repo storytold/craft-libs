@@ -563,11 +563,11 @@ impl<'segs> Sweeper<'segs> {
         if self.start_together_here(i, j, y) {
             let touch = self
                 .comparisons
-                .borrow()
+                .borrow_mut()
                 .with_order(self.segments, i, j, |c| c.next_touch_after(y));
             let first =
                 self.conservative_comparisons
-                    .borrow()
+                    .borrow_mut()
                     .with_order(self.segments, i, j, |c| c.iter().find(|(_, y1, _)| *y1 > y));
             return (touch, first);
         }
@@ -3234,6 +3234,37 @@ mod tests {
         sweep.set_work_limit(u64::MAX);
         assert!(sweep.work_limit_exceeded());
         assert!(sweep.next_line(&mut bufs).is_none());
+    }
+
+    // Craft patch (work limit). Comparisons of segments that start at one point
+    // are made without storing them, and they count toward the work limit too.
+    #[test]
+    fn work_limit_counts_comparisons_of_segments_that_start_together() {
+        let path = shared_apex_triangles(200, false);
+        let mut segs = Segments::default();
+        segs.add_bez_path(&path).unwrap();
+
+        // The first sweep line is at the apex, where all 400 edges start and
+        // the scans and insertion searches compare most pairs of them.
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        let mut bufs = SweepLineBuffers::default();
+        assert!(sweep.next_line(&mut bufs).is_some());
+        let comparisons =
+            sweep.comparisons.borrow().calls + sweep.conservative_comparisons.borrow().calls;
+        assert!(comparisons > 100_000, "{comparisons} comparisons");
+        while sweep.next_line(&mut bufs).is_some() {}
+        assert!(!sweep.work_limit_exceeded());
+
+        // The sweep stops while the edges enter, before it checks the
+        // positions of the changed intervals.
+        let limit = 10_000;
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        sweep.set_work_limit(limit);
+        assert!(sweep.next_line(&mut bufs).is_none());
+        assert!(sweep.work_limit_exceeded());
+        assert_eq!(sweep.position_checks, 0);
+        let work = sweep.work();
+        assert!(work <= limit + 200, "{work} units of work");
     }
 
     // Craft patch (work limit). Every limit below the sweep's total work stops
