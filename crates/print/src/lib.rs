@@ -82,6 +82,11 @@ pub struct Job {
     pub duplex: Option<Duplex>,
     pub scaling: Scaling,
     pub grayscale: bool,
+    /// The caller has already made the pages grey (storytold/pdfcraft#5806): `grayscale` is then
+    /// asked of the driver where it has a grey option, but a driver that has none, or doesn't keep
+    /// it, still prints the job instead of refusing it. Off, a driver that drops `grayscale` is
+    /// refused, since the pages would come out in colour. Windows only; CUPS never refuses.
+    pub grey_pages: bool,
     pub title: String,
     /// The printer driver's own job options (a PPD keyword and the chosen value), such as the
     /// paper tray or paper type; see [`printer_options`]. CUPS only.
@@ -97,6 +102,7 @@ impl Default for Job {
             duplex: None,
             scaling: Scaling::Exact,
             grayscale: false,
+            grey_pages: false,
             title: "Craft".into(),
             options: Vec::new(),
         }
