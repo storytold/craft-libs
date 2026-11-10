@@ -161,7 +161,9 @@ fn stroke_bez_without_spine_compact(bp: &BezPath, width: f64, cap: Cap, join: Jo
     close_all(&kurbo::stroke(bp.iter(), &style, &StrokeOpts::default(), STROKE_TOL))
 }
 
-/// kurbo's stroker may leave the outline of an open path without a final `ClosePath`.
+/// kurbo's stroker may leave the outline of an open path without a final `ClosePath`. An outline with no `MoveTo` before its first
+/// segment (a line, a quad or a cubic first) is taken as it is, as every other reader here takes it: the elements are added with `extend`,
+/// which does not check, where `push` and `close_path` assert in a build for tests that a path begins with a move.
 fn close_all(bp: &BezPath) -> BezPath {
     work::add(Work::Visited, bp.elements().len());
     let mut out = BezPath::new();
@@ -170,17 +172,17 @@ fn close_all(bp: &BezPath) -> BezPath {
         match el {
             PathEl::MoveTo(_) => {
                 if open {
-                    out.close_path();
+                    out.extend([PathEl::ClosePath]);
                 }
                 open = true;
             }
             PathEl::ClosePath => open = false,
             _ => {}
         }
-        out.push(el);
+        out.extend([el]);
     }
     if open {
-        out.close_path();
+        out.extend([PathEl::ClosePath]);
     }
     out
 }

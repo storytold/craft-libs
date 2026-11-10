@@ -115,3 +115,58 @@ fn no_entry_point_panics_on_a_path_that_begins_with_a_close() {
         }
     }
 }
+
+/// Paths with no `MoveTo` before the first segment: a line, a quad and a cubic first, then two lines and a close. kurbo reads such a path as
+/// starting at the end of its first element, and says in a build for tests (by an assertion in `push`) that it is not a path; a release
+/// build takes it, and so does every function but two in a build for tests. `stroke_region` and `try_stroke_region` added its elements with
+/// `push` and `close_path`, and panicked in a build for tests.
+fn no_move_cases() -> Vec<(&'static str, BezPath, BezPath)> {
+    let rest = [PathEl::LineTo(p(4.0, 0.0)), PathEl::LineTo(p(4.0, 4.0)), PathEl::ClosePath];
+    let firsts = [
+        ("a line first", PathEl::LineTo(p(0.0, 0.0))),
+        ("a quad first", PathEl::QuadTo(p(1.0, 1.0), p(0.0, 0.0))),
+        ("a cubic first", PathEl::CurveTo(p(1.0, 1.0), p(2.0, 2.0), p(0.0, 0.0))),
+    ];
+    firsts
+        .into_iter()
+        .map(|(name, first)| {
+            let mut odd = BezPath::new();
+            odd.extend(std::iter::once(first).chain(rest));
+            // The same path with its first element a move to where kurbo takes it to start.
+            let clean = BezPath::from_vec(std::iter::once(PathEl::MoveTo(p(0.0, 0.0))).chain(rest).collect());
+            (name, odd, clean)
+        })
+        .collect()
+}
+
+/// The stroke region of a path with no move first is that of the path with one: the triangle it draws, 8 square units, alone and beside a long
+/// outline (which makes the turn happen), by both functions. In a debug build both panicked.
+#[test]
+fn a_stroke_region_of_a_path_with_no_move_first_is_that_of_the_path_with_one() {
+    for (name, odd, clean) in no_move_cases() {
+        let covers = area(&clean, NZ).abs();
+        assert!((covers - 8.0).abs() < 1e-9, "{name}: the triangle covers {covers}");
+        for beside in [vec![], vec![zigzag()]] {
+            let with = |first: &BezPath| beside.iter().cloned().chain([first.clone()]).collect::<Vec<_>>();
+            let (odd_in, clean_in) = (with(&odd), with(&clean));
+            let label = format!("{name}, beside {} long outline(s)", beside.len());
+            let (made, tried) = (stroke_region(&odd_in), try_stroke_region(&odd_in).unwrap());
+            let (want, want_tried) = (stroke_region(&clean_in), try_stroke_region(&clean_in).unwrap());
+            // Alone it covers the triangle; beside the long outline it covers what the outline does and the triangle's part outside it.
+            let floor = if beside.is_empty() { covers } else { area(&zigzag(), NZ).abs() };
+            for (path, kind) in [(&made, "stroke_region"), (&tried, "try_stroke_region")] {
+                let got = area(path, NZ).abs();
+                assert!(got >= floor - 1e-3 && (!beside.is_empty() || (got - covers).abs() < 1e-9), "{label}: {kind} covers {got}");
+            }
+            // The same region as the path with the move: the shape is the same, though a degenerate first curve can change where the contour starts.
+            for (path, expected, kind) in [(&made, &want, "stroke_region"), (&tried, &want_tried, "try_stroke_region")] {
+                assert!(
+                    (area(path, NZ) - area(expected, NZ)).abs() < 1e-6,
+                    "{label}: {kind} covers {} where the path with a move covers {}",
+                    area(path, NZ),
+                    area(expected, NZ)
+                );
+            }
+        }
+    }
+}
