@@ -228,12 +228,29 @@ fn refused(path: &Path, wanted: rustix::fs::Access) -> bool {
 }
 
 /// Whether the update can replace the file at `file`. It writes the new file beside it and
-/// renames that over it, which needs permission to write and search the folder.
+/// renames that over it, which needs permission to write and search the folder. In a folder with
+/// the sticky bit, the rename also needs the user to own the folder or the file.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn can_replace_file(file: &Path) -> bool {
     use rustix::fs::Access;
+    use std::os::unix::fs::MetadataExt;
 
-    file.parent().is_none_or(|folder| !refused(folder, Access::WRITE_OK | Access::EXEC_OK))
+    file.parent().is_none_or(|folder| {
+        if refused(folder, Access::WRITE_OK | Access::EXEC_OK) {
+            return false;
+        }
+        // A folder or file whose details can't be read doesn't refuse.
+        let (Ok(folder), Ok(file)) = (std::fs::metadata(folder), std::fs::symlink_metadata(file)) else { return true };
+        !sticky_refuses(folder.mode(), folder.uid(), file.uid(), rustix::process::geteuid().as_raw())
+    })
+}
+
+/// Whether a folder's sticky bit stops `user` renaming over a file in it: the folder (`mode`,
+/// owned by `folder_owner`) has the bit, and `user` owns neither the folder nor the file. Root is
+/// never stopped.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn sticky_refuses(mode: u32, folder_owner: u32, file_owner: u32, user: u32) -> bool {
+    mode & 0o1000 != 0 && user != 0 && folder_owner != user && file_owner != user
 }
 
 /// The prefix of a program in `bin`, when `bin` is a folder named `bin` with the app's
@@ -244,71 +261,112 @@ fn prefix_with_share<'a>(app: &App, bin: &'a Path) -> Option<&'a Path> {
     bin.parent().filter(|prefix| bin.file_name().is_some_and(|n| n == "bin") && prefix.join("share").join(app.id).is_dir())
 }
 
-/// Whether the update can replace the `share` files of the standalone copy at `file`, in the
-/// folders a release writes to. A copy with no `share/<id>` folder has no such files.
+/// Whether the update can replace the other files of the standalone copy at `file`: the app's
+/// other programs beside it, and its `share` files in the folders a release writes to. A copy
+/// with no `share/<id>` folder has no such `share` files.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn can_replace_share(app: &App, file: &Path) -> bool {
     use rustix::fs::Access;
 
-    let Some(prefix) = file.parent().and_then(|bin| prefix_with_share(app, bin)) else { return true };
-    share_folders(app, &prefix.join("share")).iter().all(|folder| !refused(folder, Access::WRITE_OK | Access::EXEC_OK))
+    let Some(bin) = file.parent() else { return true };
+    if sticky_folder_refuses(bin, |path| is_program(app, path)) {
+        return false;
+    }
+    let Some(prefix) = prefix_with_share(app, bin) else { return true };
+    let share = prefix.join("share");
+    let replaced = |path: &Path| is_share_file(app, &share, path);
+    share_folders(app, &share).iter().all(|folder| !refused(folder, Access::WRITE_OK | Access::EXEC_OK) && !sticky_folder_refuses(folder, replaced))
 }
 
-/// The most folder entries [`share_folders`] reads in the app's own folder and `icons/hicolor`.
-/// The check runs at every start, so a larger tree is checked only this far; the install reports
-/// a folder past it that it can't write.
+/// Whether `path` names one of the app's programs: `<id>`, or `<id>-<name>` with no extension,
+/// such as `<id>-cli`.
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
+fn is_program(app: &App, path: &Path) -> bool {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    name == app.id || name.strip_prefix(app.id).is_some_and(|rest| rest.starts_with('-') && !rest.contains('.'))
+}
+
+/// Whether `path` under `share` is one of the app's files: anything in `<id>` or `doc/<id>`, and
+/// elsewhere a file named `<id>.<ext>` or `<bundle id>.<ext>`.
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
+fn is_share_file(app: &App, share: &Path, path: &Path) -> bool {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    path.starts_with(share.join(app.id))
+        || path.starts_with(share.join("doc").join(app.id))
+        || [app.id.to_string(), app.bundle_id()].iter().any(|stem| name.strip_prefix(stem.as_str()).is_some_and(|rest| rest.starts_with('.')))
+}
+
+/// Whether `folder` has the sticky bit and holds a file that `replaced` accepts and that the
+/// user can't rename over (see [`sticky_refuses`]). At most [`SHARE_ENTRY_LIMIT`] entries are
+/// read. A folder or entry that can't be read doesn't refuse.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn sticky_folder_refuses(folder: &Path, replaced: impl Fn(&Path) -> bool) -> bool {
+    sticky_folder_refuses_for(folder, replaced, rustix::process::geteuid().as_raw())
+}
+
+/// [`sticky_folder_refuses`] for the user with id `user`.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn sticky_folder_refuses_for(folder: &Path, replaced: impl Fn(&Path) -> bool, user: u32) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    let Ok(meta) = std::fs::metadata(folder) else { return false };
+    if meta.mode() & 0o1000 == 0 {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(folder) else { return false };
+    entries.flatten().take(SHARE_ENTRY_LIMIT).any(|entry| {
+        let path = entry.path();
+        replaced(&path)
+            && std::fs::symlink_metadata(&path).is_ok_and(|file| !file.is_dir() && sticky_refuses(meta.mode(), meta.uid(), file.uid(), user))
+    })
+}
+
+/// The most entries, files and folders together, that [`share_folders`] reads in each of the
+/// app's folder, `doc/<id>` and `icons/hicolor`. A folder past the limit is not checked, and the
+/// install reports it if it can't write there.
 const SHARE_ENTRY_LIMIT: usize = 4096;
 
-/// The existing folders under `share` that a release's files can go in: the app's own folder
-/// with every folder inside it, `icons/hicolor` and each of its `<size>/apps` folders that holds
-/// the app's icon, `applications` and `pixmaps`. For one of these that doesn't exist yet, the
-/// nearest existing parent stands in, since the update creates the folder there. The walk
-/// doesn't go into a linked folder, but lists the link, because the update writes through it.
+/// The existing folders under `share` that a release's files can go in:
+/// - the app's own folder and every folder inside it;
+/// - `doc/<id>` and every folder inside it;
+/// - `icons/hicolor`, and each `<size>/apps` folder in it that holds the app's icon;
+/// - `applications`, `metainfo`, `mime/packages` and `pixmaps`.
+///
+/// When the app's folder, `icons/hicolor` or `applications` doesn't exist, the check takes its
+/// nearest existing parent instead. When one of the others doesn't exist, the check takes its
+/// nearest existing parent inside `share`, and never `share` itself. The walk follows links, as
+/// the update's writes do, and reads a folder it reaches twice only once. An icon size that the
+/// installed copy doesn't have yet is not checked.
 #[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
 fn share_folders(app: &App, share: &Path) -> Vec<PathBuf> {
     share_folders_within(app, share, SHARE_ENTRY_LIMIT)
 }
 
-/// [`share_folders`], reading at most `limit` folder entries in the app's folder and
-/// `icons/hicolor`.
+/// [`share_folders`], reading at most `limit` entries in each of the app's folder, `doc/<id>`
+/// and `icons/hicolor`.
 #[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
 fn share_folders_within(app: &App, share: &Path, limit: usize) -> Vec<PathBuf> {
     let nearest = |folder: &Path| folder.ancestors().find(|p| p.is_dir()).map(Path::to_path_buf);
+    let nearest_inside = |folder: &Path| folder.ancestors().take_while(|p| *p != share).find(|p| p.is_dir()).map(Path::to_path_buf);
     let mut folders = Vec::new();
-    let mut budget = limit;
     let own = share.join(app.id);
     if own.is_dir() {
-        let mut pending = vec![own];
-        while let Some(dir) = pending.pop() {
-            folders.push(dir.clone());
-            if budget == 0 || dir.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
-                continue;
-            }
-            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
-            for entry in entries.flatten() {
-                if budget == 0 {
-                    break;
-                }
-                budget -= 1;
-                let path = entry.path();
-                if entry.file_type().is_ok_and(|kind| kind.is_dir()) || path.is_dir() {
-                    pending.push(path);
-                }
-            }
-        }
+        walk_folders(own, limit, &mut folders);
     } else {
         folders.extend(nearest(&own));
+    }
+    let doc = share.join("doc").join(app.id);
+    if doc.is_dir() {
+        walk_folders(doc, limit, &mut folders);
+    } else {
+        folders.extend(nearest_inside(&doc));
     }
     let hicolor = share.join("icons/hicolor");
     if hicolor.is_dir() {
         folders.push(hicolor.clone());
         let icons = [app.bundle_id(), app.id.to_string()].map(|name| [format!("{name}.png"), format!("{name}.svg")]);
         if let Ok(sizes) = std::fs::read_dir(&hicolor) {
-            for size in sizes.flatten() {
-                if budget == 0 {
-                    break;
-                }
-                budget -= 1;
+            for size in sizes.flatten().take(limit) {
                 let apps = size.path().join("apps");
                 if icons.iter().flatten().any(|icon| apps.join(icon).symlink_metadata().is_ok()) {
                     folders.push(apps);
@@ -318,10 +376,38 @@ fn share_folders_within(app: &App, share: &Path, limit: usize) -> Vec<PathBuf> {
     } else {
         folders.extend(nearest(&hicolor));
     }
-    folders.extend([share.join("applications"), share.join("pixmaps")].iter().filter_map(|folder| nearest(folder)));
+    folders.extend(nearest(&share.join("applications")));
+    folders.extend(["metainfo", "mime/packages", "pixmaps"].iter().filter_map(|folder| nearest_inside(&share.join(folder))));
     folders.sort();
     folders.dedup();
     folders
+}
+
+/// Adds `root` and every folder inside it to `folders`, reading at most `limit` entries. Links
+/// are followed, and a folder reached a second time, through a link or a loop, is listed but not
+/// read again.
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
+fn walk_folders(root: PathBuf, limit: usize, folders: &mut Vec<PathBuf>) {
+    let mut read = std::collections::HashSet::new();
+    let mut budget = limit;
+    let mut pending = vec![root];
+    while let Some(dir) = pending.pop() {
+        folders.push(dir.clone());
+        if budget == 0 || !std::fs::canonicalize(&dir).is_ok_and(|real| read.insert(real)) {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            if budget == 0 {
+                break;
+            }
+            budget -= 1;
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            }
+        }
+    }
 }
 
 /// Other platforms make no check here, as in [`can_replace`].
@@ -1588,14 +1674,15 @@ mod tests {
         std::fs::create_dir_all(outside.join("inner")).unwrap();
         std::os::unix::fs::symlink(&outside, share.join(app.id).join("linked")).unwrap();
         let found = share_folders(app, &share);
-        // `applications` and `pixmaps` don't exist, so `share` stands in for them; `hicolor` doesn't,
-        // so `icons` does. `SomeTheme` isn't a folder a release writes to. The linked folder is
-        // listed but not walked.
+        // `applications` doesn't exist, so `share` is checked for it; `hicolor` doesn't, so `icons`
+        // is. `SomeTheme` isn't a folder a release writes to. The walk follows the link. `doc`,
+        // `metainfo`, `mime` and `pixmaps` don't exist, and nothing inside `share` is checked for them.
         let mut expected = vec![
             share.clone(),
             share.join("icons"),
             share.join(app.id),
             share.join(app.id).join("linked"),
+            share.join(app.id).join("linked/inner"),
             share.join(app.id).join("models"),
             share.join(app.id).join("models/small"),
         ];
@@ -1606,19 +1693,42 @@ mod tests {
         std::fs::create_dir_all(&apps).unwrap();
         std::fs::write(apps.join(format!("{}.png", app.bundle_id())), b"icon").unwrap();
         std::fs::create_dir_all(share.join("icons/hicolor/48x48/apps")).unwrap();
-        std::fs::create_dir_all(share.join("applications")).unwrap();
-        std::fs::create_dir_all(share.join("pixmaps")).unwrap();
+        for folder in ["applications", "pixmaps", "metainfo", "mime"] {
+            std::fs::create_dir_all(share.join(folder)).unwrap();
+        }
+        std::fs::create_dir_all(share.join("doc").join(app.id).join("html")).unwrap();
         let found = share_folders(app, &share);
-        for folder in ["icons/hicolor", "icons/hicolor/256x256/apps", "applications", "pixmaps"] {
+        let doc = format!("doc/{}", app.id);
+        let html = format!("doc/{}/html", app.id);
+        for folder in ["icons/hicolor", "icons/hicolor/256x256/apps", "applications", "pixmaps", "metainfo", "mime", &doc, &html] {
             assert!(found.contains(&share.join(folder)), "{folder} in {found:?}");
         }
         // Another package's icon folder isn't one the release writes to.
         assert!(!found.contains(&share.join("icons/hicolor/48x48/apps")), "{found:?}");
-        assert!(!found.contains(&share), "every folder exists, so `share` stands in for none: {found:?}");
+        assert!(!found.contains(&share), "every folder exists, so `share` is checked for none: {found:?}");
     }
 
-    /// The walk reads at most the limit's number of entries inside the app's folder and
-    /// `icons/hicolor`, so a large tree doesn't slow every start.
+    /// When the app's folder is a link, the walk goes through it.
+    #[cfg(unix)]
+    #[test]
+    fn share_folders_walk_a_linked_app_folder() {
+        let app = &crate::suite::LAUNCHER;
+        let dir = tempfile::tempdir().unwrap();
+        let share = dir.path().join("share");
+        let elsewhere = dir.path().join("elsewhere");
+        std::fs::create_dir_all(elsewhere.join("models")).unwrap();
+        std::fs::create_dir_all(&share).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, share.join(app.id)).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, elsewhere.join("models/loop")).unwrap();
+        let found = share_folders(app, &share);
+        assert!(found.contains(&share.join(app.id).join("models")), "{found:?}");
+        // The loop is listed once and not read again.
+        assert!(found.contains(&share.join(app.id).join("models/loop")), "{found:?}");
+        assert!(!found.contains(&share.join(app.id).join("models/loop/models")), "{found:?}");
+    }
+
+    /// The walk reads at most the limit's number of entries in each of the app's folder,
+    /// `doc/<id>` and `icons/hicolor`.
     #[test]
     fn share_folders_stop_at_the_limit() {
         let app = &crate::suite::LAUNCHER;
@@ -1631,13 +1741,21 @@ mod tests {
         let walked = found.iter().filter(|folder| folder.starts_with(share.join(app.id))).count();
         // The app's folder and the two entries read in it.
         assert_eq!(walked, 3, "{found:?}");
-        // `share` stands in for `icons/hicolor`, `applications` and `pixmaps`.
+        // `share` is checked for `icons/hicolor` and `applications`.
         assert_eq!(found.len(), 4, "{found:?}");
         assert_eq!(share_folders(app, &share).len(), 6, "the default limit takes in the whole tree");
+
+        // A full app folder doesn't use up the icon folders' entries.
+        let apps = share.join("icons/hicolor/256x256/apps");
+        std::fs::create_dir_all(&apps).unwrap();
+        std::fs::write(apps.join(format!("{}.png", app.bundle_id())), b"icon").unwrap();
+        let found = share_folders_within(app, &share, 2);
+        assert!(found.contains(&apps), "{found:?}");
     }
 
-    /// A release writes into the folders inside the app's folder and `icons/hicolor`, and into
-    /// `pixmaps`, so a copy whose such folder the user can't write gets the download link.
+    /// A release writes into the folders inside the app's folder, `doc/<id>` and `icons/hicolor`,
+    /// and into `metainfo`, `mime/packages` and `pixmaps`, so a copy whose such folder the user
+    /// can't write gets the download link.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn a_standalone_copy_with_a_nested_share_folder_it_cannot_write_gets_the_download_link() {
@@ -1645,7 +1763,14 @@ mod tests {
             return;
         }
         let app = &crate::suite::LAUNCHER;
-        for nested in [format!("{}/models", app.id), "icons/hicolor/256x256/apps".to_string(), "pixmaps".to_string()] {
+        for nested in [
+            format!("{}/models", app.id),
+            format!("doc/{}/html", app.id),
+            "icons/hicolor/256x256/apps".to_string(),
+            "metainfo".to_string(),
+            "mime/packages".to_string(),
+            "pixmaps".to_string(),
+        ] {
             let dir = tempfile::tempdir().unwrap();
             let bin = dir.path().join("bin");
             let share = dir.path().join("share");
@@ -1686,6 +1811,127 @@ mod tests {
             let _guard = ModeGuard::set(&share.join(other), 0o555);
             assert!(current_at(app, &exe, false).is_some(), "{other}");
         }
+    }
+
+    /// When the app's folder, `applications` and `icons/hicolor` exist, a `share` folder the user
+    /// can't write doesn't refuse, even with `doc`, `metainfo`, `mime` or `pixmaps` missing.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_share_folder_it_cannot_write_does_not_refuse_when_the_release_folders_exist() {
+        if running_as_root() {
+            return;
+        }
+        let app = &crate::suite::LAUNCHER;
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        let share = dir.path().join("share");
+        std::fs::create_dir_all(&bin).unwrap();
+        for folder in [app.id, "applications", "icons/hicolor"] {
+            std::fs::create_dir_all(share.join(folder)).unwrap();
+        }
+        let exe = bin.join(app.id);
+        std::fs::write(&exe, b"binary").unwrap();
+        let _guard = ModeGuard::set(&share, 0o555);
+        assert!(current_at(app, &exe, false).is_some());
+    }
+
+    /// The update writes through a linked folder, so a folder inside the link's target that the
+    /// user can't write gets the download link, also when the app's folder is the link.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_folder_behind_a_link_it_cannot_write_gets_the_download_link() {
+        if running_as_root() {
+            return;
+        }
+        let app = &crate::suite::LAUNCHER;
+        for linked_app_folder in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let bin = dir.path().join("bin");
+            let share = dir.path().join("share");
+            let elsewhere = dir.path().join("elsewhere");
+            std::fs::create_dir_all(&bin).unwrap();
+            std::fs::create_dir_all(elsewhere.join("models")).unwrap();
+            std::fs::create_dir_all(&share).unwrap();
+            if linked_app_folder {
+                std::os::unix::fs::symlink(&elsewhere, share.join(app.id)).unwrap();
+            } else {
+                std::fs::create_dir_all(share.join(app.id)).unwrap();
+                std::os::unix::fs::symlink(&elsewhere, share.join(app.id).join("data")).unwrap();
+            }
+            let exe = bin.join(app.id);
+            std::fs::write(&exe, b"binary").unwrap();
+            let guard = ModeGuard::set(&elsewhere.join("models"), 0o555);
+            assert_eq!(current_at(app, &exe, false), None, "linked app folder: {linked_app_folder}");
+            drop(guard);
+            assert!(current_at(app, &exe, false).is_some(), "linked app folder: {linked_app_folder}");
+        }
+    }
+
+    /// In a sticky folder such as `/tmp`, only the owner of the folder or of the file, or root,
+    /// can rename over the file.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_sticky_folder_refuses_a_file_another_user_owns() {
+        let (me, other) = (501, 502);
+        assert!(sticky_refuses(0o1777, 0, other, me), "neither the folder nor the file is mine");
+        assert!(!sticky_refuses(0o1777, 0, me, me), "my file");
+        assert!(!sticky_refuses(0o1777, me, other, me), "my folder");
+        assert!(!sticky_refuses(0o1777, other, other, 0), "root");
+        assert!(!sticky_refuses(0o777, 0, other, me), "no sticky bit");
+
+        // A sticky folder of the user's own keeps the update.
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("artcraft-launcher");
+        std::fs::write(&exe, b"binary").unwrap();
+        let _guard = ModeGuard::set(dir.path(), 0o1777);
+        assert!(can_replace_file(&exe));
+    }
+
+    /// The update also renames over the app's other programs and its `share` files, so a sticky
+    /// folder holding one that another user owns refuses. The test reads the folder as another
+    /// user, to whom the temporary folder and its files belong to someone else.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_sticky_folder_holding_a_file_the_update_replaces_refuses() {
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("artcraft-launcher-cli"), b"binary").unwrap();
+        std::fs::write(dir.path().join("notes.txt"), b"").unwrap();
+        let me = std::fs::metadata(dir.path()).unwrap().uid();
+        let someone_else = me + 1;
+        let cli = |path: &Path| path.ends_with("artcraft-launcher-cli");
+        let notes = |path: &Path| path.ends_with("notes.txt");
+        let none = |_: &Path| false;
+        assert!(!sticky_folder_refuses_for(dir.path(), cli, someone_else), "no sticky bit");
+        let _guard = ModeGuard::set(dir.path(), 0o1777);
+        assert!(sticky_folder_refuses_for(dir.path(), cli, someone_else));
+        assert!(sticky_folder_refuses_for(dir.path(), notes, someone_else));
+        assert!(!sticky_folder_refuses_for(dir.path(), none, someone_else), "a file the update doesn't replace");
+        assert!(!sticky_folder_refuses_for(dir.path(), cli, me), "the user's own folder");
+        assert!(!sticky_folder_refuses(dir.path(), cli));
+    }
+
+    /// The sticky check counts only files the update renames over: the app's programs, and its
+    /// own files under `share`.
+    #[test]
+    fn the_sticky_check_counts_only_the_apps_files() {
+        let app = &crate::suite::LAUNCHER;
+        let bin = Path::new("/p/bin");
+        assert!(is_program(app, &bin.join(app.id)));
+        assert!(is_program(app, &bin.join(format!("{}-cli", app.id))));
+        assert!(!is_program(app, &bin.join(format!("{}.log", app.id))));
+        assert!(!is_program(app, &bin.join(format!("{}-cli.log", app.id))));
+        assert!(!is_program(app, &bin.join(format!("{}x", app.id))));
+        assert!(!is_program(app, &bin.join("other")));
+
+        let share = Path::new("/p/share");
+        assert!(is_share_file(app, share, &share.join(app.id).join("models/weights.bin")));
+        assert!(is_share_file(app, share, &share.join("doc").join(app.id).join("README.md")));
+        assert!(is_share_file(app, share, &share.join("applications").join(format!("{}.desktop", app.bundle_id()))));
+        assert!(is_share_file(app, share, &share.join("pixmaps").join(format!("{}.png", app.id))));
+        assert!(!is_share_file(app, share, &share.join("applications/other.desktop")));
+        assert!(!is_share_file(app, share, &share.join("pixmaps").join(format!("{}-old.png", app.id))));
     }
 
     #[test]
