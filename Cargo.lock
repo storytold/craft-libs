@@ -876,6 +876,15 @@ name = "craft-docpath"
 version = "0.1.0"
 
 [[package]]
+name = "craft-dxf"
+version = "0.1.0"
+dependencies = [
+ "encoding_rs",
+ "log",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-ecproj-format"
 version = "0.1.0"
 dependencies = [
