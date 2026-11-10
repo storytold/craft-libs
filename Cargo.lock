@@ -1153,6 +1153,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-tiff"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-ui"
 version = "0.1.0"
 dependencies = [
