@@ -317,7 +317,9 @@ fn load(locale: PackLocale) -> (Arc<AffixDict>, Option<PathBuf>, u64) {
 /// Select an embedded dictionary with regional-to-language fallback.
 fn embedded_dictionary(packs: &[&crate::packs::EmbeddedPack], key: &str) -> Option<(Arc<AffixDict>, Option<PathBuf>, u64)> {
     for pack in packs {
-        let read = crate::hunspell::decode(pack.aff, pack.dic).and_then(|(a, d)| AffixDict::from_hunspell(&a, &d, &[]));
+        let read = crate::hunspell::decode(pack.aff, pack.dic)
+            .and_then(|(a, d)| AffixDict::from_hunspell(&a, &d, &[]))
+            .and_then(|dictionary| if dictionary.is_empty() { Err("dictionary contains no words".into()) } else { Ok(dictionary) });
         let source = PathBuf::from(format!("<embedded Language pack {}>", pack.locale));
         match crate::hunspell::note_load(key, &source, read) {
             Ok(d) => {
@@ -396,6 +398,24 @@ mod tests {
         let (dictionary, _, _) = embedded_dictionary(&[&packs[0], &packs[1]], "test-embedded-fallback").unwrap();
         assert!(dictionary.check("word"));
     }
+    /// A wordless regional dictionary falls back without suppressing spelling or suggestions.
+    #[test]
+    fn empty_embedded_regional_spelling_tries_the_generic_pack() {
+        crate::hold_dictionary_tests();
+        let packs = [
+            crate::packs::EmbeddedPack { locale: "hu-hu", aff: b"SET UTF-8\n", dic: b"0\n", patterns: "", nonstandard: "" },
+            crate::packs::EmbeddedPack { locale: "hu", aff: b"SET UTF-8\n", dic: b"1\nword\n", patterns: "", nonstandard: "" },
+        ];
+        let key = "test-empty-regional-fallback";
+        assert!(embedded_dictionary(&[&packs[0]], key).is_none());
+        assert!(crate::hunspell::load_error(key).unwrap().1.contains("no words"));
+        let (dictionary, file, bytes) = embedded_dictionary(&[&packs[0], &packs[1]], key).unwrap();
+        assert!(dictionary.check("word") && !dictionary.check("wrongword"));
+        assert!(file.is_none());
+        assert_eq!(bytes, ((packs[1].aff.len() + packs[1].dic.len()) as u64) * BYTES_PER_FILE_BYTE);
+        assert!(crate::hunspell::load_error(key).is_none());
+    }
+
     /// Review follow-up (craft-libs#485): a full list of locales with no dictionary forgets its
     /// oldest one, not all of them, so a document in more languages doesn't look every one up again.
     #[test]

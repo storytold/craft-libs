@@ -13,6 +13,12 @@ and command handling remain in each application. No icons, fonts or application 
 
 ## Host-owned docking chrome
 
+Iconic flyouts resize from their canvas-side edge, bottom and shared corner, keeping
+the edge against the icon column anchored. Resizing saves the group's `height`
+and `flyout_width`, so workspaces retain independent sizes for each group.
+An explicit height overrides content fitting; untouched heights continue to fit
+content, including after a width-only drag. Layout locks and float bounds apply.
+
 `DockContent` can replace an iconic column or a complete tab group without a
 second layout tree. `column_rect` reports the fitted column before painting;
 `owns_iconic_column`/`iconic_column` and `custom_group` suppress the corresponding

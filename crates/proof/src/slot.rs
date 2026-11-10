@@ -150,14 +150,16 @@ impl<D: Dictionary> DictSlot<D> {
             log::info!("{} spelling: no Hunspell {name} dictionary available", self.english);
             return D::default();
         };
-        let loaded = D::load(&aff, &dic);
+        let loaded = D::load(&aff, &dic)
+            .and_then(|dictionary| if dictionary.is_empty() { Err("dictionary contains no words".into()) } else { Ok(dictionary) });
         if let Err(error) = &loaded {
             log::warn!("{} spelling: {error}", self.english);
-            if let Some(dictionary) = self.load_embedded(table) {
-                return dictionary;
-            }
+            let fallback = self.load_embedded(table);
+            // `installed_dictionaries` still names this file, even when embedded data works.
+            // Preserve its failure so `dictionary_load_error` explains which source failed.
+            let _ = crate::hunspell::note_load::<()>(name, &dic, Err(error.clone()));
+            return fallback.unwrap_or_default();
         }
-        // A failed fallback must not erase the original installed-file diagnostic.
         crate::hunspell::note_load(name, &dic, loaded).unwrap_or_default()
     }
 
@@ -327,7 +329,10 @@ mod tests {
             }
             let loaded = slot.load_from(Some((aff.clone(), dic.clone())), &packs);
             assert!(loaded.check("embeddedword") && !loaded.check("nativeword"));
-            assert!(crate::hunspell::load_error(slot.name()).is_none());
+            let (source, reason) = crate::hunspell::load_error(slot.name()).unwrap();
+            assert_eq!(source, dic);
+            assert!(!reason.is_empty());
+            assert_eq!(crate::dictionary_load_error(crate::ProofLang::Pl), Some(reason));
         }
         assert!(slot.load_from(Some((aff.clone(), dic.clone())), &[]).is_empty());
         let (source, error) = crate::hunspell::load_error(slot.name()).unwrap();
@@ -337,6 +342,29 @@ mod tests {
         let loaded = slot.load_from(Some((aff, dic)), &packs);
         assert!(loaded.check("nativeword") && !loaded.check("embeddedword"));
         assert!(crate::hunspell::load_error(slot.name()).is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A parsed-empty native dictionary cannot disable a usable embedded dictionary.
+    #[test]
+    fn builtin_empty_native_dictionary_uses_embedded_and_reports_original_source() {
+        crate::hold_dictionary_tests();
+        let root = std::env::temp_dir().join(format!("craft-proof-empty-native-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let (aff, dic) = (root.join("pl_PL.aff"), root.join("pl_PL.dic"));
+        std::fs::write(&aff, "SET UTF-8\n").unwrap();
+        std::fs::write(&dic, "0\n").unwrap();
+        let slot: DictSlot<AffixDict> = DictSlot::new(&["pl_PL", "pl"], "Test");
+        let packs = [crate::packs::EmbeddedPack { locale: "pl", aff: b"", dic: b"1\nfallbackword\n", patterns: "", nonstandard: "" }];
+        let dictionary = slot.load_from(Some((aff, dic.clone())), &packs);
+        assert!(dictionary.check("fallbackword") && !dictionary.check("wrongword"));
+        let (file, reason) = crate::hunspell::load_error(slot.name()).unwrap();
+        assert_eq!(file, dic);
+        assert!(reason.contains("no words"));
+        assert_eq!(crate::dictionary_load_error(crate::ProofLang::Pl), Some(reason));
+        let _ = slot.keep(0, Arc::new(dictionary));
+        assert!(slot.has_dictionary());
+        crate::hunspell::clear_load_error(slot.name());
         std::fs::remove_dir_all(root).unwrap();
     }
 
