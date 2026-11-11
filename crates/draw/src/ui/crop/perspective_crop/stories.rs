@@ -1,12 +1,15 @@
-//! Stories of the perspective crop quad.
+//! Stories of the perspective crop quad, and of the Perspective Crop tool run live: with no quad a drag draws a box
+//! and four clicks place the corners; then the quad takes its own gestures, and Enter or Esc ends the crop.
 
+use super::super::PerspectiveCropTool;
 use super::{CORNER, PerspectiveCropQuad, PerspectiveQuad};
+use craft_behavior::CanvasView;
 use craft_behavior::kurbo::{BezPath, Point};
 use craft_ui::canvas::RasterSource as _;
 use craft_ui::contract::{Bind, Show as _, Validity};
 use craft_ui::runtime::env::Message;
 use craft_ui::testing::canvas_story::{OUTLINE, StoryDocument, StoryPicture, StoryShape, on_picture, paint_shapes};
-use craft_ui::testing::{Drive, Grip, StoryData, StoryOutput, story};
+use craft_ui::testing::{Drive, Grip, StoryData, StoryOutput, ToolStory, story, tool_story};
 use egui::{Color32, Ui};
 
 /// A skewed page marked from corner to corner: a quad that can be committed.
@@ -48,5 +51,27 @@ fn bent_page(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             _ => Validity::Ok,
         });
         PerspectiveCropQuad::new("Perspective crop", bind).show_at(ui, at).edit
+    })
+}
+
+/// The tool from no quad over the page. The quad is the story's document: the tool keeps it as its own and follows
+/// the document when Reset puts it back; Enter or Esc on the quad ends the crop, which clears it.
+#[story(PerspectiveCropQuad<'static>, covers = [], drive = Drive::Never)]
+fn drawing_a_quad(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let picture = paper();
+    let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, tool: &mut PerspectiveCropTool, quad: &PerspectiveQuad| {
+        if tool.quad() != quad {
+            tool.set(*quad);
+        }
+        let shown = PerspectiveCropQuad::new("Perspective crop", Bind::bound(tool.quad_mut())).show_at(ui, at);
+        if shown.apply || shown.discard {
+            tool.clear();
+        }
+    };
+    tool_story(ui, data, ToolStory::new("Document", &picture), PerspectiveCropTool::new, None, body, |run| {
+        let _ = run.host.run(run.tool);
+        let _ = run.tool.take_events();
+        *run.document = *run.tool.quad();
+        StoryOutput::default()
     })
 }
