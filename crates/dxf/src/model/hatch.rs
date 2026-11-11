@@ -202,8 +202,13 @@ fn spline_edge(c: &mut Cur<'_>) -> HatchEdge {
     if weights.len() != control.len() {
         weights.clear();
     }
+    // A 97 here is the edge's fit point count (R2010 and later) when fit points follow it, or
+    // when it is 0 and the loop's own 97 comes next; otherwise it is the loop's source count.
     let mut fit = Vec::new();
-    if let Some(n) = c.take(97).map(count) {
+    let next = c.tags.get(c.at + 1).map(|t| t.code);
+    let fit_count = c.peek().filter(|t| t.code == 97 && (next == Some(11) || (t.i64() == 0 && next == Some(97))));
+    if let Some(n) = fit_count.map(count) {
+        c.at += 1;
         while fit.len() < n && c.peek().is_some_and(|t| t.code == 11) {
             fit.push(c.xy(11));
         }

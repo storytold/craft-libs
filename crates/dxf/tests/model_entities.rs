@@ -375,3 +375,19 @@ fn entities_of_a_whole_drawing() {
     let kinds: Vec<EntityKind> = d.entities.iter().chain(&d.blocks[0].entities).map(|e| Entity::read(e).kind).collect();
     assert!(matches!(kinds.as_slice(), [EntityKind::Insert(_), EntityKind::Polyline(p), EntityKind::Circle { .. }] if p.vertices.len() == 1));
 }
+
+#[test]
+fn a_spline_edge_without_fit_data_leaves_the_loops_source_count() {
+    // Before R2010 a spline edge has no 97 of its own: the one after it counts the loop's sources.
+    let EntityKind::Hatch(h) = one(
+        "0|HATCH|91|1|92|1|93|1|72|4|94|1|73|0|74|0|95|4|96|2|40|0.0|40|0.0|40|1.0|40|1.0|10|0.0|20|0.0|10|1.0|20|1.0|97|2|330|A1|330|A2|75|0|98|0",
+    )
+    .kind
+    else {
+        panic!("a hatch")
+    };
+    assert_eq!(h.loops[0].sources, [0xA1, 0xA2]);
+    assert!(
+        matches!(&h.loops[0].path, HatchPath::Edges(e) if matches!(&e[0], HatchEdge::Spline { fit, control, .. } if fit.is_empty() && control.len() == 2))
+    );
+}
