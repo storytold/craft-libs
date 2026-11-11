@@ -956,6 +956,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-eps"
+version = "0.1.0"
+
+[[package]]
 name = "craft-epub"
 version = "0.1.0"
 dependencies = [
