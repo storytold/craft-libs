@@ -8,11 +8,17 @@
 //! The store also hands a scroll area, for the run that lays its content out, where its children start: the child
 //! its scroll position names (`Anchor`) and the first child at or after the view's start, so the area keeps the
 //! content in view in place when extents before it change.
+//!
+//! A settling child (`Lazy::settles`) also keeps its last real run (`runtime::replay`): while it is settled, it adds
+//! that run to the pass again in place of running, in view or not, inside a scroll area or not. It is settled when
+//! nothing the framework tracks has changed for it since that run (`settled`).
 
 use crate::runtime::egui::pass;
 use crate::runtime::focus::{self, Transcript};
-use crate::runtime::frame::PerViewport;
-use egui::{Context, Id, Rect, Vec2};
+use crate::runtime::frame::{self, PerViewport};
+use crate::runtime::reads::BindKey;
+use crate::runtime::replay::{self, Record};
+use egui::{Context, Id, LayerId, Layout, Rect, Vec2};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -104,13 +110,53 @@ struct Entry {
     focus: Arc<Transcript>,
     /// Whether this pass skips the child, under the pass number that decided it.
     decided: Option<(u64, bool)>,
+    /// The last real run of a settling child.
+    settled: Option<Arc<Settled>>,
+    /// Whether this pass replays the settling child's last run, under the pass number that decided it.
+    replays: Option<(u64, bool)>,
     /// The last frame that read or wrote the entry.
     touched: u64,
+}
+
+/// Where a settling child ran: it is settled only while it runs at the same place.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Place {
+    /// The region its parent offered it.
+    pub(crate) room: Rect,
+    pub(crate) clip: Rect,
+    pub(crate) layer: LayerId,
+    pub(crate) layout: Layout,
+    pub(crate) pixels_per_point: f32,
+}
+
+/// The last real run of a settling child.
+struct Settled {
+    record: Record,
+    /// The frame it ran in.
+    frame: u64,
+    place: Place,
+    /// The rect its content took.
+    rect: Rect,
+    /// The pointer was over it, or one of its stops held focus: it runs again to show that they left.
+    engaged: bool,
+}
+
+/// What changed in the frame for every settling child.
+#[derive(Default)]
+struct Changes {
+    /// Every settling child runs through this frame: a frame with input other than pointer motion, an app's repaint
+    /// request or an edit of a given value unsettles every child for that frame and the next.
+    unsettled_through: u64,
+    /// The pass whose input was looked at.
+    scanned: u64,
+    /// The bound values written in a frame, and the frame.
+    edited: (u64, HashSet<BindKey>),
 }
 
 #[derive(Default)]
 pub(crate) struct Store {
     entries: HashMap<Id, Entry>,
+    changes: Changes,
     /// The last frame each scroll area reached one of its children in.
     reached: HashMap<Id, u64>,
     /// What the real run that lays a scroll area's content out found, by area, from `begin` to `placed`.
@@ -121,10 +167,12 @@ pub(crate) struct Store {
 
 impl Store {
     /// The entry of the child `id` of the scroll area `owner`, touched in `frame`.
-    fn touch(&mut self, owner: Id, id: Id, frame: u64) -> &mut Entry {
-        self.reached.insert(owner, frame);
+    fn touch(&mut self, owner: Option<Id>, id: Id, frame: u64) -> &mut Entry {
+        if let Some(owner) = owner {
+            self.reached.insert(owner, frame);
+        }
         let entry = self.entries.entry(id).or_default();
-        entry.owner = Some(owner);
+        entry.owner = owner;
         entry.touched = frame;
         entry
     }
@@ -139,9 +187,9 @@ fn with<R>(ctx: &Context, f: impl FnOnce(&mut Store, u64, u64) -> R) -> R {
         if store.pruned != frame {
             store.pruned = frame;
             let reached = &store.reached;
-            store
-                .entries
-                .retain(|_, entry| entry.touched + 1 >= frame || entry.owner.and_then(|owner| reached.get(&owner)).is_none_or(|ran| ran + 1 < frame));
+            store.entries.retain(|_, entry| {
+                entry.touched + 1 >= frame || entry.owner.is_some_and(|owner| reached.get(&owner).is_none_or(|ran| ran + 1 < frame))
+            });
             let owners: HashSet<Id> = store.entries.values().filter_map(|entry| entry.owner).collect();
             store.reached.retain(|owner, _| owners.contains(owner));
         }
@@ -156,7 +204,7 @@ fn with<R>(ctx: &Context, f: impl FnOnce(&mut Store, u64, u64) -> R) -> R {
 pub(crate) fn decide(ctx: &Context, id: Id, view: &View, at: impl FnOnce(Vec2) -> Rect, sizing: bool, estimate: Vec2) -> Decision {
     let targets = crate::runtime::focus::targets(ctx);
     with(ctx, |store, pass_nr, frame| {
-        let entry = store.touch(view.owner, id, frame);
+        let entry = store.touch(Some(view.owner), id, frame);
         let kind = usize::from(!sizing);
         // A child the other kind of run showed last takes that run's extent.
         let size = entry.sizes[kind].or(entry.sizes[1 - kind]).unwrap_or(estimate);
@@ -175,7 +223,7 @@ pub(crate) fn decide(ctx: &Context, id: Id, view: &View, at: impl FnOnce(Vec2) -
 
 /// Records what a run that showed the child `id` found: its extent in a run of this kind and, from a real run, what
 /// it registered with the focus service.
-pub(crate) fn shown(ctx: &Context, owner: Id, id: Id, size: Vec2, sizing: bool, registered: Option<Transcript>) {
+pub(crate) fn shown(ctx: &Context, owner: Option<Id>, id: Id, size: Vec2, sizing: bool, registered: Option<Transcript>) {
     with(ctx, |store, _, frame| {
         let entry = store.touch(owner, id, frame);
         entry.sizes[usize::from(!sizing)] = Some(size);
@@ -194,10 +242,135 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
     }
 }
 
+/// Whether the settling child `id` adds its last real run to this pass in place of running, and the extent that run
+/// took in a run of this kind (`sizing`). The first run of a pass decides from what changed since that run; a real run
+/// also needs the child at the `place` it ran at, which a measuring run cannot tell.
+///
+/// It replays when its last run was in an earlier frame and since then:
+/// - nothing in it moves: no animation off its end value, no repaint asked from inside it, no wake time reached;
+/// - the pointer is not over it, no press started on it and none of its widgets is dragged or holds egui focus, and
+///   none of that held in its last run;
+/// - none of its stops holds focus or is the target of a focus request, now or in its last run;
+/// - no bound value it read was written this frame (`note_edit`);
+/// - no frame unsettled every child (`unsettle`): input other than pointer motion this frame or the one before, an app's
+///   repaint request or an edit of a given value;
+/// - the run did nothing a replay cannot repeat (`runtime::replay`).
+pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, place: Option<Place>) -> Option<Vec2> {
+    let input = ctx.input(|input| {
+        input.events.iter().any(|event| !matches!(event, egui::Event::PointerMoved(_) | egui::Event::MouseMoved(_) | egui::Event::PointerGone))
+    });
+    let targets = focus::targets(ctx);
+    let now = frame::clock(ctx);
+    let held = (ctx.dragged_id(), ctx.memory(|memory| memory.focused()));
+    let settled = with(ctx, |store, pass_nr, frame| {
+        if store.changes.scanned != pass_nr {
+            store.changes.scanned = pass_nr;
+            if input {
+                store.changes.unsettled_through = store.changes.unsettled_through.max(frame + 1);
+            }
+        }
+        let changes = &store.changes;
+        // Usually empty: only the values written this frame.
+        let edited = (changes.edited.0 == frame).then(|| changes.edited.1.clone());
+        let unsettled = changes.unsettled_through >= frame;
+        let entry = store.touch(owner, id, frame);
+        let replays = match entry.replays {
+            Some((decided_in, replays)) if decided_in == pass_nr => replays,
+            _ => {
+                let replays = !unsettled
+                    && entry.settled.as_ref().is_some_and(|settled| {
+                        let facts = &settled.record.facts;
+                        settled.frame < frame
+                            && !settled.engaged
+                            && !facts.unsettled
+                            && !facts.blocked
+                            && facts.wake.is_none_or(|at| at > now)
+                            && edited.as_ref().is_none_or(|edited| facts.reads.is_disjoint(edited))
+                            && !settled.record.focus.stop_ids().any(|stop| targets.contains(&Some(stop)))
+                            && ![held.0, held.1].iter().flatten().any(|widget| settled.record.widgets.contains(widget))
+                    });
+                entry.replays = Some((pass_nr, replays));
+                replays
+            }
+        };
+        let at = |settled: &Settled| place.is_none_or(|place| place == settled.place);
+        let settled = entry.settled.clone().filter(|settled| replays && at(settled));
+        if replays && settled.is_none() {
+            entry.replays = Some((pass_nr, false));
+        }
+        let kind = usize::from(!sizing);
+        settled.map(|settled| (entry.sizes[kind].or(entry.sizes[1 - kind]).unwrap_or(settled.rect.size()), settled))
+    });
+    // The pointer over it, or a press that started on it, is read outside the store.
+    let (size, settled) = settled?;
+    if engaged(ctx, &settled) {
+        with(ctx, |store, pass_nr, _| {
+            if let Some(entry) = store.entries.get_mut(&id) {
+                entry.replays = Some((pass_nr, false));
+            }
+        });
+        return None;
+    }
+    Some(size)
+}
+
+/// Whether the pointer is over the rect the settled run took on its layer, or a press that is held started there.
+fn engaged(ctx: &Context, settled: &Settled) -> bool {
+    let rect = settled.rect.intersect(settled.place.clip);
+    let screen = ctx.layer_transform_to_global(settled.place.layer).map_or(rect, |transform| transform * rect);
+    ctx.rect_contains_pointer(settled.place.layer, rect)
+        || ctx.input(|input| input.pointer.any_down() && input.pointer.press_origin().is_some_and(|origin| screen.contains(origin)))
+}
+
+/// Adds the last real run of the settling child `id` to the running pass, in place of running it.
+pub(crate) fn replay_settled(ctx: &Context, id: Id) {
+    let settled = with(ctx, |store, _, _| store.entries.get(&id).and_then(|entry| entry.settled.clone()));
+    if let Some(settled) = settled {
+        replay::replay(ctx, &settled.record);
+    }
+}
+
+/// Keeps the entry of the child `id` this frame: a replayed run does not reach the children inside it.
+pub(crate) fn keep(ctx: &Context, owner: Option<Id>, id: Id) {
+    with(ctx, |store, _, frame| {
+        store.touch(owner, id, frame);
+    });
+}
+
+/// Keeps the real run `record` of the settling child `id`, which ran at `place` and took `rect`.
+pub(crate) fn ran(ctx: &Context, id: Id, record: Record, place: Place, rect: Rect) {
+    let targets = focus::targets(ctx);
+    let engaged_now = record.focus.stop_ids().any(|stop| targets.contains(&Some(stop)));
+    let mut settled = Settled { record, frame: 0, place, rect, engaged: engaged_now };
+    settled.engaged |= engaged(ctx, &settled);
+    with(ctx, |store, _, frame| {
+        settled.frame = frame;
+        if let Some(entry) = store.entries.get_mut(&id) {
+            entry.settled = Some(Arc::new(settled));
+        }
+    });
+}
+
+/// Notes that the bound value `key` was written in this frame: a settling child that read it runs.
+pub(crate) fn note_edit(ctx: &Context, key: BindKey) {
+    with(ctx, |store, _, frame| {
+        let edited = &mut store.changes.edited;
+        if edited.0 != frame {
+            *edited = (frame, HashSet::new());
+        }
+        edited.1.insert(key);
+    });
+}
+
+/// Unsettles every settling child for this frame and the next: a change the framework cannot attribute to a child.
+pub(crate) fn unsettle(ctx: &Context) {
+    with(ctx, |store, _, frame| store.changes.unsettled_through = store.changes.unsettled_through.max(frame + 1));
+}
+
 /// Records the extent of a row of the collection `owner` that was built this pass. The collection places the rows it
 /// does not build by it (its item layout answers for rows it never built).
 pub(crate) fn remember(ctx: &Context, owner: Id, id: Id, size: Vec2) {
-    shown(ctx, owner, id, size, false, None);
+    shown(ctx, Some(owner), id, size, false, None);
 }
 
 /// Runs `f` with a reader of the extents the rows of the collection `owner` had in the last pass that built them, for

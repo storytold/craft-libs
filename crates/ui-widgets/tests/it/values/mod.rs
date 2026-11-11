@@ -6,7 +6,7 @@ mod gestures;
 
 mod history;
 
-mod kit;
+pub(crate) mod kit;
 
 mod reads;
 

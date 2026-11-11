@@ -155,11 +155,15 @@ pub(crate) fn rerun_after_edit(
     leaf: bool,
 ) {
     if edit.given {
+        crate::runtime::lazy::unsettle(&p.core_ref().ctx);
         sizing::request_discard(&p.core_ref().ctx, sizing::Rerun::Edit);
         return;
     }
     let Some(key) = edit.key.filter(|_| edit.written || edit.shown) else { return };
     let (ctx, id) = (p.core_ref().ctx.clone(), p.core_ref().id);
+    if edit.written {
+        crate::runtime::lazy::note_edit(&ctx, key);
+    }
     let earlier = reads::earlier(&ctx, key, id);
     if edit.written && earlier.other {
         return sizing::request_discard(&ctx, sizing::Rerun::Edit);

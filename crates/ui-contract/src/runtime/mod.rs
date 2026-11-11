@@ -26,6 +26,7 @@ pub(crate) mod pass_state;
 pub mod pending;
 pub mod pointer;
 pub(crate) mod reads;
+pub(crate) mod replay;
 pub mod requests;
 pub mod sampler;
 pub mod toast;

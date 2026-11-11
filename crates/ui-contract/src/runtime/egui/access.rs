@@ -45,7 +45,7 @@ pub(crate) fn with_parent(builder: egui::UiBuilder, parent: Id) -> egui::UiBuild
 /// Creates the node of `id` empty if it has none. False while AccessKit is off or the widget is invisible (a
 /// popup in its first-show sizing pass).
 pub(crate) fn create_node(ctx: &Context, id: Id) -> bool {
-    with_emitted(ctx, |emitted| emitted.emit(id));
+    emit(ctx, id);
     ctx.accesskit_node_builder(id, |_| ()).is_some()
 }
 
@@ -104,7 +104,13 @@ fn with_emitted<R>(ctx: &Context, f: impl FnOnce(&mut Emitted) -> R) -> R {
 /// Makes `parent` the node `id` attaches to. Call it before the node of `id` is created.
 pub(crate) fn register_parent(ctx: &Context, id: Id, parent: Id) {
     ctx.register_accesskit_parent(id, parent);
+    emit(ctx, id);
+}
+
+/// Notes that the runtime emitted the node of `id`.
+fn emit(ctx: &Context, id: Id) {
     with_emitted(ctx, |emitted| emitted.emit(id));
+    crate::runtime::replay::journal(ctx, || move |ctx: &Context| emit(ctx, id));
 }
 
 /// Notes that the node of the text widget `widget` folds into the node of `owner`.
@@ -112,6 +118,7 @@ fn note_folded(ctx: &Context, widget: Id, owner: Id) {
     with_emitted(ctx, |emitted| {
         emitted.folded.insert(widget, owner);
     });
+    crate::runtime::replay::journal(ctx, || move |ctx: &Context| note_folded(ctx, widget, owner));
 }
 
 /// Notes that the runtime wrote the node of `id`.
@@ -119,6 +126,7 @@ pub(crate) fn note_written(ctx: &Context, id: Id) {
     with_emitted(ctx, |emitted| {
         emitted.written.insert(id);
     });
+    crate::runtime::replay::journal(ctx, || move |ctx: &Context| note_written(ctx, id));
 }
 
 /// The pass-end step: the children of each node the runtime wrote follow the order the runtime emitted them in,

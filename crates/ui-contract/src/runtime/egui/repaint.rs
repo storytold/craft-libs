@@ -4,16 +4,19 @@ use egui::Context;
 
 /// Asks for one more pass after this one.
 pub(crate) fn request(ctx: &Context) {
+    crate::runtime::replay::note_unsettled(ctx);
     ctx.request_repaint();
 }
 
 /// Asks for a pass of `viewport` at once.
 pub(crate) fn request_of(ctx: &Context, viewport: egui::ViewportId) {
+    crate::runtime::replay::note_unsettled(ctx);
     ctx.request_repaint_of(viewport);
 }
 
 /// Asks for one pass of `viewport` after `seconds`; the earliest request of a frame wins.
 pub(crate) fn request_after(ctx: &Context, viewport: egui::ViewportId, seconds: f64) {
+    crate::runtime::replay::note_wake(ctx, crate::runtime::frame::clock(ctx) + seconds);
     ctx.request_repaint_after_for(std::time::Duration::from_secs_f64(seconds.max(0.0)), viewport);
 }
 

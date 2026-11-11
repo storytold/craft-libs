@@ -19,6 +19,7 @@ pub(crate) fn redirect_node(ctx: &Context, node: Id, owner: Id, part: PartRef) {
 /// Records the expanded state of the node registered by `register_node`: an `Expand` or `Collapse` request on a node
 /// with the state asks to change it, and acts as the node's activation.
 pub(crate) fn register_expanded(ctx: &Context, node: Id, expanded: Option<bool>) {
+    crate::runtime::replay::journal(ctx, || move |ctx: &Context| register_expanded(ctx, node, expanded));
     current(ctx, |stage| {
         if let Some(entry) = stage.nodes.get_mut(&node_key(node)) {
             entry.expanded = expanded;
@@ -28,6 +29,7 @@ pub(crate) fn register_expanded(ctx: &Context, node: Id, expanded: Option<bool>)
 
 /// Registers an AccessKit node so a request that targets it reaches `owner`.
 pub(crate) fn register_node(ctx: &Context, node: Id, owner: Id, part: Option<PartRef>, focusable: bool) {
+    crate::runtime::replay::journal(ctx, || move |ctx: &Context| register_node(ctx, node, owner, part, focusable));
     current(ctx, |stage| {
         stage.nodes.insert(node_key(node), Node { owner, part, focusable, expanded: None });
     });

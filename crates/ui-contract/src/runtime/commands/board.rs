@@ -372,6 +372,7 @@ pub fn focus_within(ctx: &Context, id: Id) -> bool {
 
 /// Records that the container `id` is an instance of `scope` in the running pass of its viewport.
 pub(crate) fn register_instance(ctx: &Context, scope: CommandScope, id: Id) {
+    crate::runtime::replay::journal(ctx, || move |ctx: &Context| register_instance(ctx, scope, id));
     let viewport = pass::current_viewport(ctx);
     let stamp = pass::pass_nr(ctx, viewport);
     with(ctx, |board| match board.instances.iter_mut().find(|i| i.id == id) {

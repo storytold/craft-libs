@@ -386,6 +386,7 @@ pub(crate) fn appears(ctx: &Context, id: Id, exiting: bool) -> bool {
 /// Marks the layer `id`'s body as running, so layers opened from inside it become its children. A layer shown
 /// again while it fades out opens anew: it appears in this frame and pass.
 pub(crate) fn begin_layer(ctx: &Context, id: Id, exiting: bool) {
+    crate::runtime::replay::block(ctx);
     let reopened = reopened(ctx, id, exiting);
     with_pass(ctx, |pass| pass.drawing.push(id));
     let viewport = pass::current_viewport(ctx);
@@ -533,6 +534,7 @@ pub(crate) fn note_peers(ctx: &Context, id: Id, peers: Vec<Rect>) {
 /// from inside it, so it goes in front of them, and every layer then stacks above the layer it was opened from. A
 /// layer shown again in a discarded pass replaces its entry.
 pub(crate) fn record(ctx: &Context, entry: OpenEntry) {
+    crate::runtime::replay::block(ctx);
     with_pass(ctx, |pass| {
         if let Some(at) = pass.current.iter().position(|recorded| recorded.id == entry.id) {
             pass.current[at] = entry;

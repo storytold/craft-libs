@@ -148,6 +148,11 @@ pub(crate) struct ResetFact {
 #[derive(Default)]
 pub(crate) struct Stack(Vec<Scope>);
 
+/// How many label and merge scopes are open around the running code.
+pub(crate) fn depth(ctx: &Context) -> usize {
+    pass_state::with::<Stack, _>(ctx, |stack| stack.0.len())
+}
+
 /// Opens the scope of `container`; its body shows inside it.
 pub(crate) fn begin(ctx: &Context, container: Id, owner: Id, kind: Kind) {
     pass_state::with::<Stack, _>(ctx, |stack| {

@@ -1,12 +1,14 @@
-//! `Lazy`: a child of a scroll area that runs only while it is in view (`runtime::lazy`).
+//! `Lazy`: a child of a scroll area that runs only while it is in view, and a child that runs only when something it
+//! shows changed (`runtime::lazy`).
 
 use crate::layout::{flow_region, take_in_flow};
 use crate::runtime::egui::alloc;
 use crate::runtime::env::Env;
 use crate::runtime::focus;
 use crate::runtime::layout_memory;
-use crate::runtime::lazy::{self, Decision};
+use crate::runtime::lazy::{self, Decision, Place};
 use crate::runtime::memory::sub;
+use crate::runtime::replay;
 use egui::{Pos2, Rect, Ui, UiBuilder, Vec2};
 use std::hash::Hash;
 
@@ -25,11 +27,15 @@ use std::hash::Hash;
 /// The key names the child among every `Lazy` of its scroll area, nested containers included. The idiom is
 /// `Lazy::new(key, estimate).show(ui, |ui| ..)` around each large child (a card, a section of a panel) in the scroll
 /// body.
+///
+/// A settling child ([`Lazy::settles`]) also keeps what its last run painted and registered, and while it is settled
+/// it adds that again in place of running, in view or not.
 #[must_use]
 pub struct Lazy {
     key: u64,
     estimate: f32,
     reveal: bool,
+    settles: bool,
 }
 
 impl Lazy {
@@ -39,7 +45,7 @@ impl Lazy {
         use std::hash::Hasher;
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         key.hash(&mut hasher);
-        Lazy { key: hasher.finish(), estimate, reveal: false }
+        Lazy { key: hasher.finish(), estimate, reveal: false, settles: false }
     }
 
     /// When `reveal` holds, the scroll area glides until the child starts at the view's start (as far as the
@@ -47,6 +53,21 @@ impl Lazy {
     /// an item is. A wheel, drag or other move of the area ends the glide.
     pub fn reveal(mut self, reveal: bool) -> Lazy {
         self.reveal = reveal;
+        self
+    }
+
+    /// When `settles` holds, the child runs only when something it shows may have changed, inside a scroll area or
+    /// not. Otherwise it repaints its last run and registers again what that run registered (its stops, hit shapes,
+    /// widgets and accessibility nodes), as if it ran. It runs in a frame where any of these holds:
+    /// - the pointer is over it or was in its last run, a press started on it, or it holds focus or held it;
+    /// - an animation in it is not at its end, something in it asked for a repaint, or a wake time it asked for came;
+    /// - a bound value it read was written;
+    /// - its place, room, clip or scale differs from its last run;
+    /// - the frame or the one before had input other than pointer motion, the app asked for a repaint, or a given
+    ///   value was edited: the framework cannot see which children show plain app data, so every child runs then;
+    /// - its last run showed an overlay or painted on another layer.
+    pub fn settles(mut self, settles: bool) -> Lazy {
+        self.settles = settles;
         self
     }
 
@@ -65,6 +86,9 @@ impl Lazy {
         // The child is not part of its body's transcript: in a real run it counts there by its extent, whether it
         // runs or not, so what scrolls into reach does not change the body's content.
         let real = !sizing && !crate::runtime::measure::active(&ctx);
+        let owner = view.map(|view| view.owner);
+        // A run around this one that is replayed later keeps the child's entry.
+        replay::journal(&ctx, || move |ctx: &egui::Context| lazy::keep(ctx, owner, id));
         if let Some(view) = view {
             let at = |size: Vec2| {
                 let x = if rtl { available.max.x - size.x } else { available.min.x };
@@ -84,21 +108,48 @@ impl Lazy {
                 return None;
             }
         }
-        let mark = focus::mark(&ctx);
         let layout = *ui.layout();
+        let place = Place { room: available, clip: ui.clip_rect(), layer: ui.layer_id(), layout, pixels_per_point: ctx.pixels_per_point() };
+        if self.settles
+            && let Some(size) = lazy::settled(&ctx, owner, id, sizing, real.then_some(place))
+        {
+            let (took, _) = take_in_flow(ui, size);
+            if real {
+                layout_memory::backstop(&ctx, id, size);
+                lazy::replay_settled(&ctx, id);
+                if let Some(view) = view {
+                    lazy::place(&ctx, &view, id, took);
+                }
+            }
+            return None;
+        }
+        let mark = focus::mark(&ctx);
+        let records = self.settles && real;
+        if records {
+            replay::open(&ctx);
+        }
         let mut child = alloc::child(ui, UiBuilder::new().max_rect(available).layout(layout).scope_id(id));
         // Its extent in the body around it comes from its content's measure, so a change inside reaches that body.
         let out = layout_memory::boundary(&ctx, false, || add(&mut child));
         let rect = child.min_rect();
+        // The child `Ui` writes its widget rect when it drops: the record holds it as written.
+        drop(child);
+        let record = records.then(|| replay::close(&ctx, place.layer));
         if real {
             layout_memory::backstop(&ctx, id, rect.size());
         }
         alloc::advance_past(ui, rect);
-        if let Some(view) = view {
-            lazy::shown(&ctx, view.owner, id, rect.size(), sizing, real.then(|| focus::transcript(&ctx, mark)));
-            if real {
-                lazy::place(&ctx, &view, id, rect);
-            }
+        if view.is_some() || self.settles {
+            let registered = real.then(|| record.as_ref().map_or_else(|| focus::transcript(&ctx, mark), |record| record.focus.clone()));
+            lazy::shown(&ctx, owner, id, rect.size(), sizing, registered);
+        }
+        if let Some(view) = view
+            && real
+        {
+            lazy::place(&ctx, &view, id, rect);
+        }
+        if let Some(record) = record {
+            lazy::ran(&ctx, id, record, place, rect);
         }
         Some(out)
     }

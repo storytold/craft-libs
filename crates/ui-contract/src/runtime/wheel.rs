@@ -22,6 +22,7 @@ pub(crate) struct State {
 
 /// Registers a taker for next pass's split.
 pub(crate) fn register(ctx: &Context, taker: WheelTaker<Id>) {
+    crate::runtime::replay::journal(ctx, || move |ctx: &Context| register(ctx, taker));
     PerViewport::<State>::with(ctx, pass::current_viewport(ctx), |state| state.this.push(taker));
 }
 

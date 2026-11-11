@@ -367,6 +367,7 @@ pub(crate) fn announce(ctx: &Context, text: String) {
 /// Asks for another pass of the viewport the running pass belongs to.
 #[doc(hidden)]
 pub fn request_repaint(ctx: &Context) {
+    crate::runtime::lazy::unsettle(ctx);
     raw_input::request_repaint_of(ctx, pass::current_viewport(ctx));
 }
 

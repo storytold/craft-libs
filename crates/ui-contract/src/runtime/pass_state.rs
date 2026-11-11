@@ -99,6 +99,7 @@ pass_state! {
         drag_board: crate::runtime::drag::Board,
         commands: crate::runtime::commands::board::Board,
         inspect: crate::runtime::inspect::Log,
+        recorder: crate::runtime::replay::Recorder,
         #[cfg(feature = "testing")]
         noted: crate::runtime::egui::widgets::noted::Noted,
         #[cfg(feature = "testing")]

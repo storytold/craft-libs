@@ -32,7 +32,7 @@ pub(crate) struct Sample {
     pub took: Vec2,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Read {
     key: BindKey,
     reader: Id,
@@ -87,7 +87,13 @@ pub(crate) fn note(ctx: &Context, key: BindKey, reader: Id, measuring: bool, sam
     if measuring && crate::runtime::measure::active(ctx) {
         layout_memory::contribute(ctx, Arc::new(MeasuredRead { key, reader, runs, samples }));
     } else {
-        with(ctx, |reads| reads.reads.push(Read { key, reader, measuring, runs, samples }));
+        let read = Read { key, reader, measuring, runs, samples };
+        crate::runtime::replay::note_read(ctx, key);
+        crate::runtime::replay::journal(ctx, || {
+            let read = read.clone();
+            move |ctx: &Context| with(ctx, |reads| reads.reads.push(read.clone()))
+        });
+        with(ctx, |reads| reads.reads.push(read));
     }
 }
 

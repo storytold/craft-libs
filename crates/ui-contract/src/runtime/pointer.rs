@@ -259,6 +259,11 @@ pub(crate) fn record_shapes(ctx: &Context, layer: Layer, root: Id, shapes: impl 
 
 /// `record_shapes` for a caller that already read the running viewport.
 pub(crate) fn record_shapes_in(ctx: &Context, viewport: ViewportId, layer: Layer, root: Id, shapes: impl IntoIterator<Item = Shape<Id>>) {
+    let shapes: Vec<Shape<Id>> = shapes.into_iter().collect();
+    crate::runtime::replay::journal(ctx, || {
+        let shapes = shapes.clone();
+        move |ctx: &Context| record_shapes(ctx, layer, root, shapes.iter().cloned())
+    });
     PerViewport::<Shapes>::with(ctx, viewport, |record| record.this.entry(layer).or_default().entry(root).or_default().shapes.extend(shapes));
 }
 
@@ -270,6 +275,10 @@ pub(crate) fn record_widgets(ctx: &Context, layer: Layer, root: Id, widgets: &[I
 
 /// `record_widgets` for a caller that already read the running viewport.
 pub(crate) fn record_widgets_in(ctx: &Context, viewport: ViewportId, layer: Layer, root: Id, widgets: &[Id], click: bool) {
+    crate::runtime::replay::journal(ctx, || {
+        let widgets = widgets.to_vec();
+        move |ctx: &Context| record_widgets(ctx, layer, root, &widgets, click)
+    });
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
         let entry = record.this.entry(layer).or_default().entry(root).or_default();
         entry.widgets.extend_from_slice(widgets);
