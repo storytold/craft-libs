@@ -113,7 +113,9 @@ impl Locale {
                     rows.entry(e.context).or_default().insert(e.source, e.translation);
                 }
             }
-            problems.iter().for_each(|p| log::warn!("translation catalog: {p}; row skipped"));
+            for p in &problems {
+                log::warn!("translation catalog: {p}; row skipped");
+            }
             Parsed { rows, problems }
         })
     }
@@ -478,13 +480,12 @@ fn wrap(initiator: char, value: &str) -> String {
             PDF if open.last() == Some(&false) => {
                 open.pop();
             }
-            PDF => continue,
             PDI if open.contains(&true) => {
                 while open.pop() == Some(false) {
                     out.push(PDF);
                 }
             }
-            PDI => continue,
+            PDF | PDI => continue,
             _ => {}
         }
         out.push(c);
@@ -693,11 +694,11 @@ fn plural_rules(code: &str) -> Option<(PluralRules, Vec<PluralCategory>)> {
             categories.push(c);
         }
     }
-    categories.sort_by_key(rank);
+    categories.sort_by_key(|c| rank(*c));
     Some((rules, categories))
 }
 
-fn rank(c: &PluralCategory) -> u8 {
+fn rank(c: PluralCategory) -> u8 {
     match c {
         PluralCategory::Zero => 0,
         PluralCategory::One => 1,

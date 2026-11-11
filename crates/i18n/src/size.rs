@@ -104,6 +104,10 @@ impl FileSize {
     }
 
     /// The unit `bytes` is written in, the number in it and its digits after the point.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "File sizes are displayed as rounded f64 values; exact u64 arithmetic is not required for presentation"
+    )]
     fn parts(&self, bytes: u64) -> (SizeUnit, f64, usize) {
         let (smallest, largest) = (self.smallest.min(self.largest), self.largest);
         let mut unit = smallest;
@@ -137,6 +141,7 @@ impl FileSize {
         }
     }
 
+    #[expect(clippy::cast_precision_loss, reason = "Unit scales are displayed as f64 values; exact u64 arithmetic is not required for presentation")]
     fn scale(&self, unit: SizeUnit) -> f64 {
         (self.step as f64).powi(unit as i32)
     }
