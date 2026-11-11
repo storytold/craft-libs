@@ -62,7 +62,10 @@ plates_in_bands(&pdf, 0, 600.0, &Options::default(), |band| {
 })?;
 ```
 
-Each band renders the page again once per ink, so time grows with the number of bands.
+Each band renders the page again once per ink, so time grows with the number of bands: a
+Letter page at 900 dpi makes 19 bands. Across the page the renderer's side limit
+(`craft_pdf::raster::MAX_SIDE`, 8192 pixels) still applies, about 960 dpi on Letter or A4; down
+the page it doesn't.
 
 The plates are the PDF as printed, so a preview built on them shows what the writer produced,
 not what the document model intended.
