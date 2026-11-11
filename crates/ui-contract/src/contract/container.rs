@@ -86,7 +86,9 @@ pub enum PaneEdge {
 /// A pane is placed one of three ways. With [`at`](Self::at) it fills the rect its caller laid out, takes no room from
 /// its siblings (so a pane can overlay another) and ignores the extent. Otherwise an edge pane takes
 /// [`extent`](Self::extent) along its edge from the room left, or, without an extent, the size it first took, which it
-/// keeps in pane memory until the user resizes it. The central pane fills what the edge panes leave.
+/// keeps in pane memory until the user resizes it. The central pane fills what the edge panes leave. A pane at a rect
+/// that is as tall as its content (a content-sized embedded shell's body) takes the rect's width, its content's height
+/// from the rect's top, and that room in the flow of its parent.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ShellPane {
@@ -98,12 +100,14 @@ pub struct ShellPane {
     pub extent: Option<f32>,
     /// The rect the caller laid the pane out in.
     pub at: Option<Rect>,
+    /// The pane at `at` is as tall as its content.
+    pub(crate) content_height: bool,
 }
 
 impl ShellPane {
     /// The central pane named `name`.
     pub const fn new(name: &'static str) -> Self {
-        ShellPane { name, edge: PaneEdge::Center, extent: None, at: None }
+        ShellPane { name, edge: PaneEdge::Center, extent: None, at: None, content_height: false }
     }
 
     /// The pane at `edge`.
@@ -121,6 +125,14 @@ impl ShellPane {
     /// The pane in `rect`, which the caller laid out for this pass. The pane takes no room from its siblings.
     pub const fn at(mut self, rect: Rect) -> Self {
         self.at = Some(rect);
+        self
+    }
+
+    /// The pane at `rect`, as tall as its content from the rect's top, taking that room in its parent's flow.
+    #[doc(hidden)]
+    pub const fn at_content_height(mut self, rect: Rect) -> Self {
+        self.at = Some(rect);
+        self.content_height = true;
         self
     }
 }

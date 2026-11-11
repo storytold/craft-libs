@@ -13,7 +13,8 @@ pub(crate) fn advance_past(ui: &mut Ui, rect: Rect) {
 }
 
 /// Makes `ui`'s own rect reach down to `y`.
-pub(crate) fn reach_down_to(ui: &mut Ui, y: f32) {
+#[doc(hidden)]
+pub fn reach_down_to(ui: &mut Ui, y: f32) {
     ui.expand_to_include_y(y);
 }
 

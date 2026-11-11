@@ -145,9 +145,17 @@ pub(super) fn pane_grip_id(id: Id) -> Id {
 
 impl Host for PaneHost {
     fn run(&mut self, id: Id, parent: &mut Ui, env: &Env, pass: &mut HostPass<'_>) {
-        // A pane the caller laid out shows in its rect and leaves the room of its siblings alone.
+        // A pane the caller laid out shows in its rect and leaves the room of its siblings alone; one as tall as its
+        // content flows from the rect's top and takes its height in the parent's flow.
         if let Some(rect) = self.0.at {
-            pass(parent, Some(ShowAt::Rect(rect)), None);
+            if self.0.content_height {
+                let builder = egui::UiBuilder::new().max_rect(rect);
+                let mut ui = crate::runtime::egui::alloc::child(parent, builder);
+                pass(&mut ui, Some(ShowAt::Flow), None);
+                crate::runtime::egui::alloc::advance_past(parent, ui.min_rect());
+            } else {
+                pass(parent, Some(ShowAt::Rect(rect)), None);
+            }
             return;
         }
         let rtl = env.direction.is_rtl();

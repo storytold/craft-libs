@@ -15,7 +15,7 @@ use super::words::ShellWords;
 use crate::contract::overlay::Resize;
 use crate::contract::{
     Bind, BodyCx, Common, Component, Container, ContainerProps, Cx, Mount, NoValue, Outcome, PaneEdge, Props as _, Remember as _, Role, ShellPane,
-    ShowContainer as _,
+    ShowContainer as _, Sizing,
 };
 use crate::notices::ToastStack;
 use crate::runtime::commands::{CommandAccess as _, CommandSet as _};
@@ -262,7 +262,8 @@ impl Outcome for AppShellOutput {
 /// - **Dialogs.** The window owns one dialog host, shared by every body in it (`ShellDialogsCx::dialogs`). The shell runs it
 ///   after the body in each pass, so dialogs show over the window.
 /// - **Embedded.** [`embedded`](Self::embedded) shows a shell inside a region of another window. Its screen modes
-///   hide and reveal its slots in that region and never ask the OS window for anything.
+///   hide and reveal its slots in that region and never ask the OS window for anything. With
+///   [`content_height`](Self::content_height) it is as tall as its body's content and its top and bottom slots.
 #[must_use = "show the shell with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
 #[pattern(probe(AppShell<'static, ()>))]
@@ -270,6 +271,8 @@ pub struct AppShell<'a, S> {
     window: WindowKey,
     bare: bool,
     embedded: bool,
+    /// An embedded shell as tall as its content, with the room a body that fills is given.
+    content_room: Option<f32>,
     /// The screen mode. Without a binding the shell keeps it, starting at `Standard`.
     #[prop]
     screen_mode: Bind<'a, ScreenMode>,
@@ -299,6 +302,7 @@ impl<'a, S> AppShell<'a, S> {
             window,
             bare: false,
             embedded: false,
+            content_room: None,
             screen_mode: Bind::kept(),
             allow_reveal: true,
             edge_reveal: true,
@@ -321,6 +325,13 @@ impl<'a, S> AppShell<'a, S> {
     /// its state, its Tab toggle and its dialog host, so two embedded shells need two keys.
     pub fn embedded(window: WindowKey) -> Self {
         AppShell { embedded: true, ..Self::new(window) }
+    }
+
+    /// An embedded shell as wide as the room of the flow it is shown in and as tall as its body's content and its top
+    /// and bottom slots, from the measure its body keeps while its inputs hold; a body that fills is given `room`.
+    /// Shown with [`show`](Self::show), it takes that room in the flow.
+    pub fn content_height(self, room: f32) -> Self {
+        AppShell { embedded: true, content_room: Some(room), ..self }
     }
 
     /// The title bar slot, the first top slot, keyed `"title"`: visible, and revealing in body-only mode. The title bar
@@ -401,7 +412,20 @@ impl<'a, S> AppShell<'a, S> {
     }
 
     fn show_in(self, ui: &mut Ui, at: Option<Rect>, app: &mut S) -> AppShellOutput {
-        let AppShell { window, bare, embedded, mut screen_mode, allow_reveal, edge_reveal, document_tabs, body_label, title, slots, mut body } = self;
+        let AppShell {
+            window,
+            bare,
+            embedded,
+            content_room,
+            mut screen_mode,
+            allow_reveal,
+            edge_reveal,
+            document_tabs,
+            body_label,
+            title,
+            slots,
+            mut body,
+        } = self;
         let env = Env::of(ui);
         let outer = env.get::<ShellEntry>().0;
         let words = env.words::<ShellWords>();
@@ -410,7 +434,11 @@ impl<'a, S> AppShell<'a, S> {
         let mut slots: Vec<Placed<'a, S>> = title.into_iter().chain(slots).collect();
         slots.sort_by_key(Placed::rank);
 
-        let root = if embedded { ShellRegion::embedded() } else { ShellRegion::window() }.id_salt(window.as_str()).label(words.window.clone());
+        let mut root = if embedded { ShellRegion::embedded() } else { ShellRegion::window() }.id_salt(window.as_str()).label(words.window.clone());
+        if let Some(room) = content_room {
+            root.props = root.props.room_height(room);
+            root = root.sizing(Sizing::FillWidth);
+        }
         let shell_body = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
             let ctx = ui.ctx().clone();
             let viewport = pass::current_viewport(&ctx);
@@ -457,7 +485,7 @@ impl<'a, S> AppShell<'a, S> {
             // it.
             let region = cx.rect.intersect(ui.clip_rect());
             // An embedded shell scrolled or clipped out of sight shows nothing in this pass: its region has no room for
-            // its body or its dialogs.
+            // its body or its dialogs. A measuring run measures it wherever it is.
             let unseen = embedded && !region.is_positive();
             if embedded {
                 shell = shell.with_region(region);
@@ -469,8 +497,12 @@ impl<'a, S> AppShell<'a, S> {
 
             let rect_of = |key| regions.slots.iter().find(|(shown, _)| *shown == key).map_or(Rect::ZERO, |(_, rect)| *rect);
             let scope = shell.clone();
-            ShellRegion::scope(shell).id_salt("shell").show(ui, |ui, _| {
-                if unseen {
+            let mut scope_region = ShellRegion::scope(shell).id_salt("shell");
+            if content_room.is_some() {
+                scope_region = scope_region.sizing(Sizing::FillWidth);
+            }
+            scope_region.show(ui, |ui, _| {
+                if unseen && !ui.is_sizing_pass() {
                     return;
                 }
                 let mut show_slots = |ui: &mut Ui, covering: bool, app: &mut S| {
@@ -504,15 +536,22 @@ impl<'a, S> AppShell<'a, S> {
                 show_slots(ui, false, app);
                 // Only a body-only shell paints behind its body (the scrim). Otherwise the body paints what it shows, and the gaps
                 // between its parts (the dock's gutters) are the window's own clear colour.
-                let mut center = ShellRegion::pane(ShellPane::new("body").at(regions.body)).label(body_label.clone());
+                let pane = ShellPane::new("body");
+                let pane = if content_room.is_some() { pane.at_content_height(regions.body) } else { pane.at(regions.body) };
+                let mut center = ShellRegion::pane(pane).label(body_label.clone());
                 if only {
                     center = center.surface(SurfaceKind::Scrim);
                 }
-                center.show(ui, |ui, bcx| {
+                let shown = center.show(ui, |ui, bcx| {
                     if let Some(SlotBody(body)) = body.as_mut() {
                         body(ui, bcx, app);
                     }
                 });
+                // A shell as tall as its content reaches past its body by the bottom slots, which the layout puts there.
+                if content_room.is_some() {
+                    let bottom: f32 = claims.iter().filter(|claim| claim.edge == PaneEdge::Bottom && !claim.overlay).map(|claim| claim.extent).sum();
+                    crate::runtime::egui::alloc::reach_down_to(ui, shown.output.response.rect.max.y + bottom);
+                }
                 show_slots(ui, true, app);
                 if let Some(dialogs) = WindowDialogs::existing(ui.ctx(), &window) {
                     dialogs.run(ui);
@@ -520,7 +559,10 @@ impl<'a, S> AppShell<'a, S> {
             });
             // What shows here counts for the shell around this one too, so a host reads it from its own shell.
             let opened = scope.dialog_shown();
-            if opened && let Some(outer) = &outer {
+            if opened
+                && !ui.is_sizing_pass()
+                && let Some(outer) = &outer
+            {
                 outer.note_dialog();
             }
             let dialog = embedded && opened;

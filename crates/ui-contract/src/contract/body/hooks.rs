@@ -276,8 +276,13 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
     fn measured_extent(&mut self, comp: &mut C, at: &Measuring<'_, '_>, cx: &mut Cx<'_, C>) -> Vec2 {
         let props = comp.props(Internal::new()).clone();
         // A mount outside the flow takes no room in a parent's sizing pass, so its regions run only when it is
-        // measured itself.
-        if !matches!(props.mount, Mount::Inline) && at.ui.is_sizing_pass() {
+        // measured itself. A pane as tall as its content takes its height in the flow.
+        let flows = match &props.mount {
+            Mount::Inline => true,
+            Mount::Pane(pane) => pane.content_height,
+            _ => false,
+        };
+        if !flows && at.ui.is_sizing_pass() {
             return self.extent(comp, at.ui, at.at, cx.core.id, at.scx);
         }
         let (id, ctx) = (cx.core.id, at.ui.ctx().clone());
