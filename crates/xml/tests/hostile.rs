@@ -384,3 +384,30 @@ fn an_internal_subset_is_refused_wherever_it_hides() {
     let _ = opts.parse(unclosed.as_bytes());
     assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
 }
+
+/// A reader of many parts keeps one budget: each tree is charged at its node count and the next
+/// part is read with what is left, so it stops before its tree is built.
+#[test]
+fn a_node_count_charges_a_budget_shared_by_several_parts() {
+    let part = format!("<r>{}</r>", "<a>t</a>".repeat(100));
+    let mut left = 450_usize;
+    let mut read = 0;
+    for _ in 0..4 {
+        let opts = Options::default().with_limits(Limits { max_nodes: left, ..Limits::DEFAULT });
+        match opts.parse(part.as_bytes()) {
+            Ok(root) => {
+                // the root, 100 elements and 100 text nodes
+                assert_eq!(root.node_count(), 201);
+                left -= root.node_count();
+                read += 1;
+            }
+            Err(e) => assert_eq!(e, Error::TooManyNodes(48)),
+        }
+    }
+    assert_eq!((read, left), (2, 48));
+    // exactly what the limit counts: a tree of n nodes reads with max_nodes n, not n - 1
+    let exact = Options::default().with_limits(Limits { max_nodes: 201, ..Limits::DEFAULT });
+    assert!(exact.parse(part.as_bytes()).is_ok());
+    let short = Options::default().with_limits(Limits { max_nodes: 200, ..Limits::DEFAULT });
+    assert_eq!(short.parse(part.as_bytes()), Err(Error::TooManyNodes(200)));
+}

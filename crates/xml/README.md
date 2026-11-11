@@ -110,7 +110,11 @@ Booleans (`attr_bool`, `flag`, `value::to_bool`): `1`, `true`, `on`, `t` and `0`
 `f`, trimmed, case-sensitive. That is GridCraft's set; DeckCraft's lacks `t`/`f` and IDML only
 writes `true`/`false`, so both are covered. `attr_f64` is finite values only, as in every app.
 
-`descendants`, `find`, `find_all`, `deep_text` and the writer do not recurse.
+`descendants`, `find`, `find_all`, `deep_text`, `node_count` and the writer do not recurse.
+
+`node_count()` is what `max_nodes` counted for an element. A reader of a package of many parts
+keeps one budget with it: charge each tree it keeps, and read the next part with what is left as
+`max_nodes`, so a part over the budget stops before its tree is built.
 
 ## Writing
 
