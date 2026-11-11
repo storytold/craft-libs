@@ -1,6 +1,6 @@
 //! CABAC arithmetic encoder (ITU-T H.264 §9.3.4.2) and a matching bit-cost estimator.
 
-use crate::h264::tables::{NUM_CTX, RANGE_LPS, TRANS_LPS};
+use crate::h264::encode::tables::{NUM_CTX, RANGE_LPS, TRANS_LPS};
 
 /// A sink for CABAC bins. Implemented by the real arithmetic coder and by the rate estimator, so the same
 /// syntax-element code drives both bitstream writing and RD cost estimation.
@@ -273,7 +273,7 @@ mod tests {
     }
 
     fn roundtrip(n: usize, seed: u32) {
-        let table = crate::h264::tables::cabac_init_pb0();
+        let table = crate::h264::encode::tables::cabac_init_pb0();
         let ctx = Contexts::init(&table, 26);
         let mut enc = CabacEncoder::new(ctx.clone(), vec![0xa5]);
         let mut seed = seed;
@@ -327,7 +327,7 @@ mod tests {
 
     #[test]
     fn long_bypass_runs_and_carries() {
-        let ctx = Contexts::init(&crate::h264::tables::cabac_init_pb0(), 26);
+        let ctx = Contexts::init(&crate::h264::encode::tables::cabac_init_pb0(), 26);
         for bin in 0..2 {
             let mut enc = CabacEncoder::new(ctx.clone(), Vec::new());
             for _ in 0..5000 {

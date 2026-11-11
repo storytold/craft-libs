@@ -4,8 +4,8 @@
 //! never filtered (slices are MB-row aligned and either there is one slice, or
 //! `disable_deblocking_filter_idc = 2` is used).
 
-use crate::h264::mbinfo::{MbInfo, Mv};
-use crate::h264::tables::{ALPHA, BETA, TC0, chroma_qp};
+use crate::h264::encode::mbinfo::{MbInfo, Mv};
+use crate::h264::encode::tables::{ALPHA, BETA, TC0, chroma_qp};
 
 pub struct DeblockParams {
     pub alpha_offset: i32,

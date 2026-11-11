@@ -1,10 +1,10 @@
 //! CABAC binarisation and context selection for macroblock-layer syntax elements (§9.3.2, §9.3.3.1).
 
-use crate::h264::cabac::BinSink;
-use crate::h264::mbinfo::{MbInfo, MbKind, Part};
-use crate::h264::nal::SliceType;
-use crate::h264::syntax::{MbCode, NbCtx};
-use crate::h264::tables::{BLK4_XY, LAST8X8, SIG8X8_FRAME};
+use crate::h264::encode::cabac::BinSink;
+use crate::h264::encode::mbinfo::{MbInfo, MbKind, Part};
+use crate::h264::encode::nal::SliceType;
+use crate::h264::encode::syntax::{MbCode, NbCtx};
+use crate::h264::encode::tables::{BLK4_XY, LAST8X8, SIG8X8_FRAME};
 
 pub fn write_skip_flag<S: BinSink>(s: &mut S, nb: &NbCtx, skip: bool) {
     let cond = |m: Option<&MbInfo>| m.is_some_and(|m| !m.kind.is_skip()) as usize;

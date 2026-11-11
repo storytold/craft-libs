@@ -1,6 +1,6 @@
 //! Integer transforms, quantisation and the normative inverse transforms/scaling (§8.5.12).
 
-use crate::h264::tables::{DEQUANT4, DEQUANT8, QUANT4, pos_class4, pos_class8};
+use crate::h264::encode::tables::{DEQUANT4, DEQUANT8, QUANT4, pos_class4, pos_class8};
 
 /// Forward 4x4 core transform of a residual block (raster order).
 #[inline]

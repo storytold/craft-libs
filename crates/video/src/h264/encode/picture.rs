@@ -1,6 +1,6 @@
 //! Padded picture planes, reference pictures and motion-compensated prediction (§8.4.2.2).
 
-use crate::h264::mbinfo::{MbInfo, Mv};
+use crate::h264::encode::mbinfo::{MbInfo, Mv};
 
 pub const LUMA_PAD: usize = 64;
 pub const CHROMA_PAD: usize = 32;
