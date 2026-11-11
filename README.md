@@ -118,6 +118,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   pipeline.
 - [`craft-idml`](crates/idml/README.md): IDML (InDesign Markup Language) packages: the ZIP container read with bounded part sizes and lenient part names, `designmap.xml` with its includes in place, the `<Properties>` form on craft-xml elements, value codecs and the package writer; and InDesign Tagged Text, read and written.
 - [`craft-timeline`](crates/timeline/README.md): editorial timeline interchange: exact media time and SMPTE timecode, import/export reports, media path and `file://` URL handling, Avid Log Exchange (ALE) and CMX 3600 EDL documents, format detection. From FilmCraft.
+- [`craft-metadata`](crates/metadata/README.md): photo metadata, from LightCraft: EXIF (read and write,
+  maker-note lens and focus point, every tag by name), IPTC-IIM, XMP packets (read, write, and a merge
+  that keeps what another program wrote), GPX track logs, and the blocks that carry them in JPEG, PNG,
+  WebP, TIFF-based, RAF and CR3 files. One `Metadata` model for all of them. Built on `craft-tiff`.
 - [`craft-tiff`](crates/tiff/README.md): TIFF and BigTIFF IFD reader and writer, from LightCraft:
   every field type, the IFD chain, SubIFDs and Exif/GPS/Interop pointer IFDs, maker-note IFDs
   (Canon, Nikon, Sony, Fujifilm, Olympus, Panasonic, Pentax), strip and tile layout. Bounded and

@@ -1164,6 +1164,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-metadata"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "craft-tiff",
+ "proptest",
+ "quick-xml 0.41.0",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-metafile"
 version = "0.1.0"
 dependencies = [
