@@ -24,6 +24,10 @@ jobs:
     name: Media lint, feature sets, WASM
     runs-on: ubuntu-latest
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
@@ -50,6 +54,10 @@ jobs:
     name: Media tests with ffmpeg oracles
     runs-on: ubuntu-latest
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
