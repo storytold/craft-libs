@@ -116,6 +116,10 @@ pub(crate) struct Bsi {
     /// reduced rates.
     pub fscod: usize,
     pub numblkscod: usize,
+    /// Explicit dependent-substream channel assignments (Table E.1.4).
+    pub chanmap: Option<u16>,
+    /// Presence of compression metadata also marks the last dependent substream.
+    pub compre: bool,
 }
 
 /// Read syncinfo and bsi (§E2.2.1-2), leaving `r` at the audio frame.
@@ -138,7 +142,8 @@ pub(crate) fn read_bsi(r: &mut Bits) -> Result<Bsi> {
     let acmod = r.read(3) as usize;
     let lfeon = r.bit();
     r.skip(5 + 5); // bsid, dialnorm
-    if r.bit() {
+    let compre = r.bit();
+    if compre {
         r.skip(8); // compr
     }
     if acmod == 0 {
@@ -147,9 +152,7 @@ pub(crate) fn read_bsi(r: &mut Bits) -> Result<Bsi> {
             r.skip(8); // compr2
         }
     }
-    if strmtyp == 1 && r.bit() {
-        r.skip(16); // chanmap
-    }
+    let chanmap = if strmtyp == 1 && r.bit() { Some(r.read(16) as u16) } else { None };
     if r.bit() {
         // mixing metadata
         if acmod > 2 {
@@ -235,7 +238,7 @@ pub(crate) fn read_bsi(r: &mut Bits) -> Result<Bsi> {
         let l = r.read(6) as usize;
         r.skip((l + 1) * 8); // addbsi
     }
-    Ok(Bsi { strmtyp, fscod: rate_code, numblkscod })
+    Ok(Bsi { strmtyp, fscod: rate_code, numblkscod, chanmap, compre })
 }
 
 /// The audio frame (§E2.2.3) and the state that runs from block to block within a syncframe.
