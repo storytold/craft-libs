@@ -198,7 +198,10 @@ Boxes with 64-bit sizes and with size 0 (runs to the end of the file) are suppor
 | anything else | `Unknown { fourcc, raw }` |
 
 Video entries also parse `colr` (`nclx`/`nclc`/ICC), `pasp`, `clap`, `fiel`, `gama` and `btrt` into
-`VideoParams`. Audio entries parse QuickTime sound description v0/v1/v2 into `AudioParams`.
+`VideoParams`, and QuickTime's `logs` box into `VideoParams::log_transfer_function`: the CoreMedia log
+transfer-function identifier (`com.apple.rec2020.apple-log` for Apple Log), kept as text whatever
+curve it names. It is non-empty UTF-8 without NUL of at most 255 bytes; anything else, or a second
+`logs` box, reads as unknown, and the writer refuses an identifier the reader would not accept. Audio entries parse QuickTime sound description v0/v1/v2 into `AudioParams`.
 
 #### Robustness
 The parser does not panic on malformed input; every error comes back as an `Error`. Table counts are
