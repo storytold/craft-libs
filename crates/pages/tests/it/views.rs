@@ -1,12 +1,13 @@
-//! The page view: the scroll anchor under a zoom change and wheel input at the end of the document.
+//! The page view and the page preview: the scroll anchor under a zoom change, wheel input at the end of the document,
+//! the view's page and arrow keys and its zoom commands, and the preview's keys.
 
 use craft_behavior::kurbo;
 use craft_pages::layout::{Fit, LayoutOptions};
 use craft_pages::ui::fixtures::{DemoPages, PAPER};
-use craft_pages::ui::{PageView, PageViewState};
+use craft_pages::ui::{PagePreview, PageView, PageViewState};
 
 use craft_ui::testing::{Fixture, trial};
-use egui::{Modifiers, pos2, vec2};
+use egui::{Key, Modifiers, pos2, vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -87,4 +88,27 @@ fn wheel_gathered_past_the_bottom_is_forgotten_by_a_pass_without_wheel_input() {
     assert_eq!(state.borrow().current, 0, "each half notch alone is not a turn");
     wheel(&mut fixture, -3.0);
     assert_eq!(state.borrow().current, 1, "a whole notch at once is");
+}
+
+#[trial]
+fn the_preview_steps_with_the_arrow_and_page_keys_from_a_footer_button() {
+    let at = Rc::new(RefCell::new(1_usize));
+    let kept = Rc::clone(&at);
+    let pages = DemoPages::new(5);
+    let mut fixture = Fixture::new(move |ui| {
+        let shown = [0, 1, 2, 3, 4];
+        PagePreview::new(&pages, &shown, &mut kept.borrow_mut(), PAPER).show(ui);
+    });
+    fixture.room(vec2(900.0, 600.0));
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    let button = fixture.focused_stop();
+    assert!(button.is_some(), "Tab focuses a footer button");
+    fixture.key(Key::ArrowRight, Modifiers::NONE);
+    assert_eq!(*at.borrow(), 2, "Right steps forward");
+    fixture.key(Key::PageDown, Modifiers::NONE);
+    assert_eq!(*at.borrow(), 3, "Page Down steps forward");
+    fixture.key(Key::ArrowLeft, Modifiers::NONE);
+    assert_eq!(*at.borrow(), 2, "Left steps back");
+    assert_eq!(fixture.focused_stop(), button, "the keys leave the focus where it was");
 }

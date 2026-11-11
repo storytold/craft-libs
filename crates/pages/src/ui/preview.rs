@@ -1,16 +1,16 @@
 //! `PagePreview`: a page shown large in a modal dialog with previous and next, as PdfCraft's Combine Files preview
 //! and VectorCraft's Place PDF page choice show it: the page as large as fits, "Page 3 of 12", the arrow and Page
-//! keys to step, Escape or the close action to leave.
+//! keys to step from anywhere in the preview, Escape or the close action to leave.
 
 #[cfg(feature = "screen-testing")]
 mod stories;
 
 use super::view::PageSource;
 use craft_behavior::IconId;
-use craft_behavior::{Input, Metrics, NavMove, PartKey, Sense};
+use craft_behavior::{Input, Metrics, PartKey, Sense};
 use craft_ui::buttons::IconButton;
 use craft_ui::contract::{
-    Common, Component, Cx, Focus as _, MeasureCx, NoValue, Outcome, PaintUi, PartsCx, Props as _, Role, Show as _, ShowContainer as _, clicked,
+    CommandSet, Common, Component, Cx, MeasureCx, NoValue, Outcome, PaintUi, PartsCx, Props as _, Role, Show as _, ShowContainer as _, clicked,
 };
 use craft_ui::dialog::Dialog;
 use craft_ui::layout_components::Row;
@@ -18,8 +18,9 @@ use craft_ui::primitives::textures::{
     MAX_TEXTURE, Priority, TextureState, TextureStoreOptions, TextureWords, ThumbPaint, ThumbRequest, ThumbnailOptions, Thumbnails,
 };
 use craft_ui::primitives::{PaintShape, TextRun};
+use craft_ui::runtime::commands::Commands as _;
 use craft_ui::runtime::env::Env;
-use craft_ui::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
+use craft_ui::runtime::focus::KeyUse;
 use craft_ui::style::{ComponentStyle, DataColor, StyleColor, StyleCx, TypeRole};
 use egui::{CornerRadius, Rect, Response, Ui, Vec2};
 use std::cell::Cell;
@@ -32,6 +33,27 @@ craft_ui::words! {
         next: "pagePreview.next" = "Next page";
         unavailable: "pagePreview.unavailable" = "Preview unavailable";
     }
+}
+
+/// The keys of the page preview: Page Up and Page Down step back and forward, and the arrows step in reading order
+/// (Left goes back in a left-to-right interface, forward in a right-to-left one). They belong to the preview's dialog,
+/// so they work wherever the focus is in it; a widget that acts on its own moves keeps them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
+#[command(prefix = "pagePreview", scope = "pagePreview")]
+#[non_exhaustive]
+pub enum PagePreviewCommands {
+    /// The previous page.
+    #[command(modal = "in_dialogs", label = "Previous Page", default = "PageUp")]
+    Previous,
+    /// The next page.
+    #[command(modal = "in_dialogs", label = "Next Page", default = "PageDown")]
+    Next,
+    /// The page to the left: the previous one in a left-to-right interface.
+    #[command(modal = "in_dialogs", label = "Page to the Left", default = "Left")]
+    Left,
+    /// The page to the right: the next one in a left-to-right interface.
+    #[command(modal = "in_dialogs", label = "Page to the Right", default = "Right")]
+    Right,
 }
 
 /// What the preview did this pass.
@@ -61,8 +83,8 @@ impl Outcome for PagePreviewOutput {
 ///   the stand-in until the new one lands), on `paper` while it loads. A page that fails to render shows [`PagePreviewWords::unavailable`].
 /// - In the footer: previous and next, disabled at the ends. The pages stepped through are `pages` (the pages a
 ///   range selects), in order.
-/// - Keys (with the picture focused): Left and Page Up previous, Right and Page Down next (reversed in a
-///   right-to-left interface), Escape closes.
+/// - Keys ([`PagePreviewCommands`], wherever the focus is in the preview): Left and Page Up previous, Right and Page
+///   Down next (the arrows reversed in a right-to-left interface), Escape closes.
 #[derive(craft_ui::contract::Pattern)]
 pub struct PagePreview<'a> {
     source: &'a dyn PageSource,
@@ -91,7 +113,9 @@ impl<'a> PagePreview<'a> {
         let title = words.page_of.fill(&[("p", source.page_label(page).as_str()), ("n", format.integer(source.page_count() as u64).as_str())]);
         let step = Cell::new(0_isize);
         let shown = *at;
+        let side = if env.direction.is_rtl() { -1 } else { 1 };
         let dialog = Dialog::new(title)
+            .command_scope(PagePreviewCommands::SCOPE)
             .footer(|ui, _| {
                 Row::new().show(ui, |ui, _| {
                     if clicked(&IconButton::new(IconId::new("chevron_left")).label(words.previous.clone()).enabled(shown > 0).show(ui)) {
@@ -102,9 +126,17 @@ impl<'a> PagePreview<'a> {
                     }
                 });
             })
-            .show(ui, |ui, _| {
-                let picture = PagePicture::new(source, page, words.unavailable.as_str(), paper).label(source.page_label(page)).show(ui);
-                step.set(step.get() + picture.step);
+            .show(ui, |ui, cx| {
+                while let Some((command, _)) = cx.take_command::<PagePreviewCommands>() {
+                    let by = match command {
+                        PagePreviewCommands::Previous => -1,
+                        PagePreviewCommands::Next => 1,
+                        PagePreviewCommands::Left => -side,
+                        PagePreviewCommands::Right => side,
+                    };
+                    step.set(step.get() + by);
+                }
+                PagePicture::new(source, page, words.unavailable.as_str(), paper).label(source.page_label(page)).show(ui);
             });
         let target = (*at as isize + step.get()).clamp(0, last as isize) as usize;
         let stepped = target != *at;
@@ -125,11 +157,10 @@ pub struct PagePictureStyle {
     message: StyleColor,
 }
 
-/// What the preview picture reports: the pages the keys asked to step, negative for back.
+/// What the preview picture reports.
 #[derive(Debug)]
 struct PagePictureOutput {
     response: Response,
-    step: isize,
 }
 
 impl Outcome for PagePictureOutput {
@@ -140,7 +171,7 @@ impl Outcome for PagePictureOutput {
     }
 }
 
-/// The page picture of the preview: one Tab stop that turns the page with the arrow and Page keys.
+/// The page picture of the preview.
 #[derive(craft_ui::contract::Component)]
 #[component(content_painter)]
 struct PagePicture<'a> {
@@ -150,7 +181,6 @@ struct PagePicture<'a> {
     page: usize,
     unavailable: &'a str,
     paper: DataColor,
-    step: isize,
     /// The page's picture as step 7 asked for it, which `paint` shows.
     state: Option<TextureState>,
 }
@@ -160,7 +190,7 @@ const PICTURE: PartKey = PartKey::new("picture");
 
 impl<'a> PagePicture<'a> {
     fn new(source: &'a dyn PageSource, page: usize, unavailable: &'a str, paper: DataColor) -> Self {
-        PagePicture { common: Common::new(), source, page, unavailable, paper, step: 0, state: None }
+        PagePicture { common: Common::new(), source, page, unavailable, paper, state: None }
     }
 
     /// The page pictures of the component `id`.
@@ -182,7 +212,7 @@ impl<'a> PagePicture<'a> {
 
 impl Component for PagePicture<'_> {
     const ROLE: Role = Role::IMAGE;
-    const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_keep(KeepKeys::BlockArrows).with_activate(ActivateKeys::Neither).with_moves();
+    const KEYS: KeyUse = KeyUse::of(Input::Pointer);
     type Style = PagePictureStyle;
     type Output = PagePictureOutput;
 
@@ -191,26 +221,13 @@ impl Component for PagePicture<'_> {
     }
 
     fn sense(&self) -> Sense {
-        Sense::FOCUS | Sense::TAKE_FOCUS
+        Sense::HOVER
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let ideal = cx.style.ideal;
         let room = Vec2::new(cx.room.unwrap_or(f32::INFINITY), ideal);
         self.fitted(room)
-    }
-
-    fn update(&mut self, cx: &mut Cx<'_, Self>) {
-        let side = if cx.flow.is_rtl() { -1 } else { 1 };
-        while let Some((mv, _)) = cx.intents().take_move() {
-            match mv {
-                NavMove::Back => self.step -= side,
-                NavMove::Forward => self.step += side,
-                NavMove::PageUp => self.step -= 1,
-                NavMove::PageDown => self.step += 1,
-                _ => {}
-            }
-        }
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
@@ -243,6 +260,6 @@ impl Component for PagePicture<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> PagePictureOutput {
-        PagePictureOutput { response: cx.response.clone(), step: self.step }
+        PagePictureOutput { response: cx.response.clone() }
     }
 }

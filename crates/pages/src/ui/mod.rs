@@ -44,7 +44,7 @@ pub use header_footer::{HeaderFooterPage, HeaderFooterZones, HeaderFooterZonesOu
 pub use list::{PageList, PageListEvent, PageListOutput, PageListRow, PageListWords};
 pub use margins::{MarginChange, MarginEdge, MarginHandles, MarginHandlesOutput, MarginRules, PageEdges, clamp_margin, dragged_margin, margin_range};
 pub use marks::{FrameExtras, HiddenMark, PlacedMark, TextFrameMarks};
-pub use preview::{PagePreview, PagePreviewOutput, PagePreviewWords};
+pub use preview::{PagePreview, PagePreviewCommands, PagePreviewOutput, PagePreviewWords};
 pub use range::{PageRangeCodec, PageRangeField, PageRangeFieldOutput, PageRangeOptions, PageRangeOptionsOutput, PageSelection};
 pub use reading::{ReadingNav, ReadingNavOutput, ReadingState, ReadingView, ReadingViewOutput};
 pub use setup::{PageLayoutChoice, PageLayoutMenus, PageSetupDialog};

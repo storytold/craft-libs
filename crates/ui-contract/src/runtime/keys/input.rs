@@ -64,7 +64,7 @@ impl Strip<'_> {
                 if input.physical.or(input.typed) == Some(Key::Enter) {
                     batch.enter_down = Some(false);
                 }
-                batch.shortcuts.push(Shortcut { input, phase: FirePhase::Release, typed: false, press: None, moved: false });
+                batch.shortcuts.push(Shortcut { input, phase: FirePhase::Release, typed: false, press: None });
                 true
             }
             KeyEvent::Text(text) => {
@@ -104,7 +104,7 @@ impl Strip<'_> {
                     // A component that reads every chord gets the event as the chord's press, the way the key made it.
                     self.press(batch, key, &input, false);
                 } else if !sent {
-                    batch.shortcuts.push(Shortcut { input, phase: FirePhase::Press, typed: false, press: None, moved: false });
+                    batch.shortcuts.push(Shortcut { input, phase: FirePhase::Press, typed: false, press: None });
                 }
                 // The event stands for the chord, so the shortcut path is its only reader: egui does not copy or paste
                 // on top of the command.
@@ -159,7 +159,7 @@ impl Strip<'_> {
             // The canvas has Space (`runtime::sampler`): only the shortcut dispatcher reads it, so the dialog's
             // focused control does not activate.
             if !repeat {
-                batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, typed: false, press: None, moved: false });
+                batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, typed: false, press: None });
             }
             false
         } else if bare_tab && !self.keeps_tab {
@@ -186,13 +186,7 @@ impl Strip<'_> {
         } else {
             batch.presses.push(Press { key, mods, repeat });
             if !repeat {
-                batch.shortcuts.push(Shortcut {
-                    input: *input,
-                    phase: FirePhase::Press,
-                    typed: false,
-                    press: Some(batch.presses.len() - 1),
-                    moved: false,
-                });
+                batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, typed: false, press: Some(batch.presses.len() - 1) });
             }
             true
         }

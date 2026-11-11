@@ -1,7 +1,7 @@
 //! The begin hook's routing: key presses, shortcuts and AccessKit requests to the intents of their owners.
 
 use super::input::chrome_toggle_of;
-use super::{Batch, Item, Node, Press, Routed, Shortcut, Shortcuts, Taken, current, with};
+use super::{Batch, Item, Node, Press, Routed, Shortcuts, Taken, current, with};
 use crate::runtime::commands::{self, FirePhase};
 use crate::runtime::egui::input::{Action, ActionKind};
 use crate::runtime::focus::{self, StopRec};
@@ -194,8 +194,6 @@ fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consu
         let Some(keys) = keys else { return false };
         consumed[at] == Taken::Yes || kept(keys, at)
     };
-    // A move the widget did not declare it keeps (`KeyUse::keep`) stays a candidate for the scoped commands.
-    let only_moved = |keys: Option<&focus::KeyUse>, at: usize| consumed[at] == Taken::Moved && keys.is_some_and(|keys| !kept(keys, at));
     let silent = matches!(owner, KeyOwner::Class(OwnerClass::Menu | OwnerClass::Recorder));
     let dialog = owner == KeyOwner::Class(OwnerClass::Dialog);
     // The focused component keeps its own keys inside a dialog: a text field its typing, a widget its activation.
@@ -211,7 +209,7 @@ fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consu
             .iter()
             .filter(|shortcut| !(typing && shortcut.typed))
             .filter(|shortcut| !(widget && shortcut.press.is_some_and(|at| held_by(owner_keys, at))))
-            .map(|shortcut| Shortcut { moved: widget && shortcut.press.is_some_and(|at| only_moved(owner_keys, at)), ..*shortcut })
+            .copied()
             .collect()
     };
     Shortcuts { keys, typing, dialog, layout: Layout::default() }
@@ -378,22 +376,21 @@ fn route_press(
         }
         return Taken::Yes;
     }
-    let mut taken = Taken::Yes;
     match keys::intent(os, press.key, press.mods, stop.role) {
         Some(Intent::Move(mv, mods)) => {
             // Up, Down, Page, Home and End leave a row's children: the collection takes the move. A component stop keeps
             // its declared arrows from the roving group around it; a part stop belongs to the component's own group.
             let vertical = matches!(mv, NavMove::Up | NavMove::Down | NavMove::PageUp | NavMove::PageDown | NavMove::Start | NavMove::End);
+            let kept = stop.part.is_none() && stop.keys.keep.keeps_arrow(mv);
             if let Some(owner) = vertical.then(|| focus::leave_row(ctx, rec.stop.key())).flatten() {
                 push(routed, Some(owner), Intent::Move(mv, mods), horizontal);
-            } else if (stop.part.is_none() && stop.keys.keep.keeps_arrow(mv))
-                || focus::roving_move(ctx, rec.stop.key(), mv, mods, horizontal).is_none()
-            {
+            } else if !kept && !stop.role.moves && commands::binds_scoped(ctx, &Chord { mods: press.mods, key: press.key }) {
+                // A stop that does not act on its moves leaves a move key a scoped command around it binds to that
+                // command, ahead of its roving group and the scroll owner.
+                return Taken::No;
+            } else if kept || focus::roving_move(ctx, rec.stop.key(), mv, mods, horizontal).is_none() {
+                // Page, Home and End go to the scroll owner around the stop.
                 push(routed, id, Intent::Move(mv, mods), horizontal);
-                // Page, Home and End go to the scroll owner around the stop; a stop that acts on its moves keeps its arrows.
-                if !stop.role.moves && matches!(press.key, Key::Left | Key::Right | Key::Up | Key::Down) {
-                    taken = Taken::Moved;
-                }
             }
         }
         Some(Intent::Activate) => route_activate(ctx, rec, routed, activated),
@@ -437,7 +434,7 @@ fn route_press(
         }
         None => return Taken::No,
     }
-    taken
+    Taken::Yes
 }
 
 /// `Activate` of a group member goes to the group's root, which reads `activated_member`. A child or part of a

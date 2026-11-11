@@ -75,9 +75,6 @@ pub(crate) struct Shortcut {
     typed: bool,
     /// The index of the press in `Batch::presses`.
     press: Option<usize>,
-    /// The focused widget does not act on the arrow move the press became: a command scoped to a container around
-    /// the focus takes the press, an app command does not.
-    pub(crate) moved: bool,
 }
 
 /// What the intent routing did with one press.
@@ -85,8 +82,6 @@ pub(crate) struct Shortcut {
 enum Taken {
     /// Nothing: the press is a shortcut candidate.
     No,
-    /// The press became an arrow move routed to a focused stop that does not act on moves.
-    Moved,
     /// The press became an intent, a focus move or an activation.
     Yes,
 }
