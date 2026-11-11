@@ -236,7 +236,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   element nesting and entity expansion before any XML reader sees the text; `paths` reads geometry
   (shapes, transforms, `<use>`/`<symbol>` instances and the CSS cascade as Bézier paths in
   millimetres, each tagged by the caller); `color` parses CSS colours; `write` writes documents
-  (elements with escaping, path data, numbers).
+  (elements with escaping, path data, numbers). Feature `tree`: the full parser, usvg at the one
+  version every Craft app uses, re-exported behind an entry point that runs those checks first
+  (plus nesting with references followed, attribute counts, bounded embedded SVGs), and a budget
+  check for drawing a tree with resvg. Apps take usvg from here, not as their own dependency.
 - [`craft-svg-paths`](crates/svg-paths/src/lib.rs): the former name of `craft-svg`'s `paths`,
   `color` and `write`; re-exports them for existing users.
 - [`craft-text`](crates/text/README.md): text processing below the composer. Its `hyphen` module finds
