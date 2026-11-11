@@ -13,7 +13,7 @@ use crate::primitives::{PaintShape, StrokeWidth};
 use crate::runtime::env::Label;
 use crate::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
 use crate::style::{ComponentStyle, FocusLook, StyleColor, StyleCx, TextLook, TrackLook};
-use craft_behavior::{Flow, HitLevel, HitPriority, Metrics, PartKey, PressPhase, Sense};
+use craft_behavior::{Flow, HitLevel, HitPriority, Metrics, PartKey, PressPhase, Proposal, Sense};
 use craft_theme::Stateful;
 use egui::{Pos2, Rect, Vec2};
 use std::ops::RangeInclusive;
@@ -166,7 +166,8 @@ impl Component for Slider<'_> {
         let accent = &colors.accent;
         let length = cx.tokens.size.length.track;
         SliderStyle {
-            metrics: Metrics::new().min_size(Vec2::new(length, control.height)),
+            // Where a row shrinks it, the track narrows to a short field's length.
+            metrics: Metrics::new().min_size(Vec2::new(length, control.height)).least_width(cx.tokens.size.length.short),
             focus: cx.focus_look(),
             mark_text: track::mark_text(cx),
             track: cx.track(),
@@ -180,7 +181,8 @@ impl Component for Slider<'_> {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         self.marks.lay_out(&cx.style.mark_text, cx.style.space, |label| cx.env.resolve(label), |run| cx.layout(run).size());
-        Vec2::new(cx.style.length, cx.icon() + self.marks.below(&cx.style.track))
+        let along = if cx.proposal == Proposal::Min { 0.0 } else { cx.style.length };
+        Vec2::new(along, cx.icon() + self.marks.below(&cx.style.track))
     }
 
     fn sense(&self) -> Sense {

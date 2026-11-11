@@ -171,6 +171,10 @@ impl<C: Component> Erased for Typed<'_, '_, C> {
         self.hooks.fills_width(self.comp.get_ref())
     }
 
+    fn overflow(&self) -> f32 {
+        self.hooks.overflow()
+    }
+
     fn sized(&self, ui: &Ui, id: Id, size: Vec2) -> Vec2 {
         self.hooks.sized(self.comp.get_ref(), ui, id, size)
     }

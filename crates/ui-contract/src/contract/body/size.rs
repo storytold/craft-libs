@@ -233,9 +233,10 @@ impl<'b> BodyHooks<'b> {
                 (_, ShowAt::Flow) => {
                     let room = crate::layout::flow_room(ui);
                     // A row that shrinks its children to fit gives a body among them a width: it measures and shows
-                    // in that room.
+                    // in that room. A body that fills a bounded row takes the rest of it instead.
+                    let fills = self.sizing(props) != Sizing::Content && room.x.is_finite();
                     let cap = match Env::of(ui).shrink {
-                        Some(crate::layout::Shrink::Apply(row)) => crate::layout::shrink_cap(ui.ctx(), row, id),
+                        Some(crate::layout::Shrink::Apply(row)) if !fills => crate::layout::shrink_cap(ui.ctx(), row, id),
                         _ => None,
                     };
                     let room = Vec2::new(cap.map_or(room.x, |cap| room.x.min(cap)), props.room_height.unwrap_or(room.y));

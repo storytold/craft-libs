@@ -442,6 +442,8 @@ pub(crate) trait Erased {
     fn in_flow(&self) -> bool;
     /// Whether the shape fills the width of the room it is shown in (a body not sized from its content).
     fn fills_width(&self) -> bool;
+    /// How much wider than the size it measured to the shape's content wants to be (`ShapeHooks::overflow`).
+    fn overflow(&self) -> f32;
     fn sized(&self, ui: &Ui, id: Id, size: Vec2) -> Vec2;
     fn arena(&self) -> bool;
     fn extent(&mut self, ui: &Ui, at: ShowAt, id: Id, scx: &StyleCx<'_>) -> Vec2;
@@ -1121,8 +1123,8 @@ pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<T
     // room (`mount_room`). A body that fills the width of a bounded room takes the room or its share of it (`sized`),
     // so it is no unit.
     let in_flow = matches!(at, ShowAt::Flow) && t.fills().is_none();
-    let unit_body = || t.in_flow() && !(t.fills_width() && crate::layout::flow_room(ui).x.is_finite());
-    let shrink = env.shrink.filter(|_| in_flow && (shape == ShapeKind::Leaf || (shape == ShapeKind::Body && unit_body())));
+    let fill_body = shape == ShapeKind::Body && in_flow && t.in_flow() && t.fills_width() && crate::layout::flow_room(ui).x.is_finite();
+    let shrink = env.shrink.filter(|_| in_flow && (shape == ShapeKind::Leaf || (shape == ShapeKind::Body && t.in_flow() && !fill_body)));
     let cap = match shrink {
         Some(crate::layout::Shrink::Apply(row)) if shape == ShapeKind::Leaf => crate::layout::shrink_cap(&ctx, row, id),
         _ => None,
@@ -1218,6 +1220,12 @@ pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<T
         Some(crate::layout::Shrink::Count(row)) => crate::layout::report_shrink(&ctx, row, id, size.x, size.x, None),
         Some(crate::layout::Shrink::Least(row)) if shape == ShapeKind::Body => crate::layout::report_least(&ctx, row, id, size.x),
         _ => {}
+    }
+    // A body that fills the rest of a shrinking row needs at least its content: the row counts it at that width, so
+    // the units narrow to leave it, and it takes what they leave.
+    if let Some(crate::layout::Shrink::Count(row)) = env.shrink.filter(|_| fill_body) {
+        let content = measured.x + t.overflow();
+        crate::layout::report_shrink(&ctx, row, id, size.x.min(content), content, Some(content));
     }
     // A component shown at a rect fills it: the rect is its size, and a leaf that measures nothing (a content
     // painter) still shows there.

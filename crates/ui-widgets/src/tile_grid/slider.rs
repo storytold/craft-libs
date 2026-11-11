@@ -7,7 +7,7 @@ use crate::contract::{
 };
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx};
-use craft_behavior::{IconId, Metrics, Mixed, NavShape, PartKey, Proposal, Roving, Sense};
+use craft_behavior::{IconId, Metrics, Mixed, NavShape, PartKey, Roving, Sense};
 use egui::{Rect, Vec2};
 use std::ops::RangeInclusive;
 
@@ -162,7 +162,7 @@ impl Component for ThumbnailSlider<'_> {
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let button = cx.face(IconButton::new(IconId::new(SMALLER_ICON)));
         let shown = cx.value().copied().map_or(Mixed::Mixed, Mixed::Same);
-        let track = cx.child("slider", &mut self.track(shown, cx.label()), Proposal::Ideal);
+        let track = cx.child("slider", &mut self.track(shown, cx.label()), cx.proposal);
         let width = 2.0 * (button.x + cx.gap()) + track.x;
         Vec2::new(cx.room.map_or(width, |room| width.min(room)), button.y.max(track.y))
     }
