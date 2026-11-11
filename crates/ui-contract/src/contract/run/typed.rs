@@ -468,12 +468,15 @@ pub(crate) fn show_container_taking<C: Container, R>(
 }
 
 pub(crate) fn show_container<C: Container, R>(
-    comp: C,
+    mut comp: C,
     ui: &mut Ui,
     at: ShowAt,
     mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
     tip: Option<TipFn<'_>>,
 ) -> Inner<C::Output, R> {
+    if let Some(output) = unshown(&mut comp, ui) {
+        return Inner { output, inner: None, settle: None };
+    }
     let mut inner: Option<R> = None;
     let mut ran = false;
     let mut call = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
@@ -487,6 +490,29 @@ pub(crate) fn show_container<C: Container, R>(
     let id = crate::contract::Outcome::response(&output).id;
     let settle = ran.then(|| crate::contract::settle::SettleAt { ctx, body: sub(id, "body"), owner: id });
     Inner { output, inner, settle }
+}
+
+/// A layer-like container that shows nothing this pass runs no pipeline: it takes its id as step 3 would, forgets
+/// its layer and returns its output's unshown form. `None` when it shows, or when its output has no unshown form.
+fn unshown<C: Container>(comp: &mut C, ui: &Ui) -> Option<C::Output> {
+    let props = comp.props(Internal::new());
+    if matches!(props.mount, crate::contract::Mount::Inline | crate::contract::Mount::Pane(_) | crate::contract::Mount::Window { .. }) {
+        return None;
+    }
+    let props = props.clone();
+    let facts = TypeFacts::of::<C>();
+    let source = comp.common(Internal::new()).id.clone();
+    let id = steps::id(ui, &source, false, false, facts.style_key, facts.name);
+    let output = <C::Output as crate::contract::Outcome>::unshown(steps::inert_response(ui, id))?;
+    let sizing = ui.is_sizing_pass();
+    if !crate::contract::body::unshown(comp, ui.ctx(), id, &props, sizing) {
+        return None;
+    }
+    steps::id(ui, &source, !sizing, true, facts.style_key, facts.name);
+    if !sizing {
+        crate::contract::overlay::forget_layer(ui.ctx(), id, id);
+    }
+    Some(output)
 }
 
 pub(crate) fn show_items<'r, C: Collection>(comp: C, ui: &mut Ui, source: &dyn ItemSource<C::Key>, item: &mut ItemFn<'r, C>) -> C::Output {

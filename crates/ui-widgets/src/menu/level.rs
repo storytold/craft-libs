@@ -134,6 +134,21 @@ impl MenuLevel {
         self.with(|state| state.pad)
     }
 
+    /// Starts a run of the menu in pass `pass`. A menu that did not run in the pass before (it was closed, and a
+    /// closed menu does not run) drops what its last open run left for the next: the letters shown, a typed row, a
+    /// close or a step not yet taken.
+    pub(crate) fn resume(&self, pass: u64) {
+        self.with(|state| {
+            if state.pass.saturating_add(1) < pass {
+                state.now.clear();
+                state.shown.clear();
+                state.run = None;
+                state.close = false;
+                state.step = None;
+            }
+        });
+    }
+
     /// Ends a body run of pass `pass`: the rows of this pass give the letters the user sees. A pass that registered no
     /// rows shows none.
     pub(crate) fn end(&self, pass: u64) {

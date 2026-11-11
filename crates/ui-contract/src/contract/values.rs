@@ -25,6 +25,16 @@ pub trait Outcome {
     /// The component's response.
     fn response(&self) -> &Response;
 
+    /// The output of a layer-like container that shows nothing this pass (closed, past its exit fade): `response` is
+    /// its id's inert response. A container whose output gives one runs no pipeline while closed; `None` runs it.
+    fn unshown(response: Response) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        let _ = response;
+        None
+    }
+
     /// The shown value as the component words it to assistive technology; `None` for a component that gives none.
     fn value_text(&self) -> Option<&str> {
         None

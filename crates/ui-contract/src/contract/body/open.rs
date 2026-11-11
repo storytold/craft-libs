@@ -2,10 +2,10 @@
 
 use super::BodyHooks;
 use super::placement::opener_of;
-use crate::contract::{Container, ContainerProps, Cx, Internal};
+use crate::contract::{Container, ContainerProps, Cx, Internal, Mount};
 use crate::runtime::memory::{MemoryStage, SaveKey, sub};
 use craft_behavior::{EditEvent, Mixed};
-use egui::Id;
+use egui::{Context, Id};
 use serde::{Deserialize, Serialize};
 
 /// The open state a container with no `Container::open` binding keeps: for the session, or saved under `save`.
@@ -29,6 +29,29 @@ pub(super) fn open_now<C: Container>(comp: &mut C, stage: &mut MemoryStage, id: 
             None => *open_slot(stage, id, props.save.as_ref()).0.get_or_insert(initially_open),
         },
     }
+}
+
+/// Whether the layer-like container `id` shows nothing this pass: closed, past its exit fade, with no close waiting
+/// for it. The read step and the mount host would decide the same; a peek stage decides it, so a container found open
+/// runs with nothing applied twice. A closed one writes what deciding changed (a hold's dwell, its slot's first value)
+/// as its read step would have, outside a sizing pass.
+pub(crate) fn unshown<C: Container>(comp: &mut C, ctx: &Context, id: Id, props: &ContainerProps, sizing: bool) -> bool {
+    if !matches!(props.mount, Mount::Layer(_) | Mount::FullWindow | Mount::Viewport { .. }) {
+        return false;
+    }
+    if crate::runtime::overlay::peek_close(ctx, id).is_some() || crate::runtime::motion::layer_fading(ctx, sub(id, "presence")) {
+        return false;
+    }
+    if open_now(comp, &mut MemoryStage::open_peek(ctx, id), id, props) {
+        return false;
+    }
+    if !sizing {
+        let mut stage = MemoryStage::open(ctx, id);
+        let open = open_now(comp, &mut stage, id, props);
+        debug_assert!(!open, "a peek and a real stage decide the same open state");
+        stage.write_back();
+    }
+    true
 }
 
 impl BodyHooks<'_> {

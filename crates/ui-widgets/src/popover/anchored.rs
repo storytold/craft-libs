@@ -46,6 +46,10 @@ impl Outcome for PopoverOutput {
     fn response(&self) -> &Response {
         &self.response
     }
+
+    fn unshown(response: Response) -> Option<Self> {
+        Some(PopoverOutput { response, closed: None, pressed_outside: false })
+    }
 }
 
 /// A non-modal popup that hangs from the control that opened it and holds the app's body (a colour picker, a stroke

@@ -2,6 +2,8 @@
 
 mod bar;
 
+mod closed;
+
 mod native;
 
 mod openers;

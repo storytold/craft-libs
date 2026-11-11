@@ -24,6 +24,7 @@ pub(crate) mod scroll;
 mod size;
 mod window;
 
+pub(crate) use open::unshown;
 pub(crate) use placement::shown_placement;
 #[doc(hidden)]
 pub use regions::pad_of;

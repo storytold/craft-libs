@@ -55,6 +55,10 @@ impl Outcome for MenuOutput {
     fn response(&self) -> &Response {
         &self.response
     }
+
+    fn unshown(response: Response) -> Option<Self> {
+        Some(MenuOutput { response, closed: None, step: None })
+    }
 }
 
 /// What [`Menu::pick`] returns: the response, how the menu closed and the value of the entry that ran.
@@ -289,6 +293,7 @@ impl Component for Menu<'_> {
     /// move that lit it starts from the row lit before.
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let level = MenuLevel::of(cx.memory::<LevelMemory>());
+        level.resume(cx.core.ctx.cumulative_pass_nr());
         let keyboard = crate::runtime::focus::keyboard_in_menu(&cx.core.ctx);
         self.props.roving = self.props.roving.map(|roving| roving.no_lead(!keyboard && !level.has_active()));
         if let Some(row) = level.active() {
