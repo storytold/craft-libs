@@ -16,8 +16,12 @@
 //! No codec is on by default. Feature `threads` spreads the work of the codecs that support it
 //! over rayon worker threads.
 //!
+//! The decoders that keep reference pictures bound them with a memory budget ([`budget`]).
+//!
 //! Containers and bit-level I/O are in `craft-media`; the codecs here share its `bitstream`
 //! module and describe their streams with `craft_media::CodecParams`.
+
+pub mod budget;
 
 #[cfg(feature = "dnx")]
 pub mod dnx;
@@ -31,7 +35,7 @@ pub mod prores;
 #[cfg(feature = "h264")]
 pub mod h264;
 
-#[cfg(feature = "hevc")]
+#[cfg(any(feature = "hevc-decode", feature = "hevc-encode"))]
 pub mod hevc;
 
 #[cfg(feature = "vp9")]
