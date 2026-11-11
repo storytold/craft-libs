@@ -213,7 +213,9 @@ impl Profile {
         self.color_space.channels()
     }
 
-    /// Hash of the profile's ICC bytes (stable within a process; used as a cache key).
+    /// Hash of the profile's ICC bytes (stable within a process; used as a cache key). It is a
+    /// fixed-key 64-bit hash, so a crafted profile can share another's: equal hashes only narrow
+    /// the search, [`Profile::same_bytes`] decides.
     pub fn content_hash(&self) -> u64 {
         *self.hash.get_or_init(|| {
             use std::hash::{Hash, Hasher};
@@ -223,6 +225,16 @@ impl Profile {
         })
     }
 
+    /// Whether `self` and `other` have the same ICC bytes.
+    pub fn same_bytes(&self, other: &Profile) -> bool {
+        if let (Some(a), Some(b)) = (&self.bytes, &other.bytes)
+            && Arc::ptr_eq(a, b)
+        {
+            return true;
+        }
+        self.content_hash() == other.content_hash() && self.to_bytes() == other.to_bytes()
+    }
+
     /// Whether `self` and `other` describe the same colours: same colour space, and every sample
     /// of a device-value grid has the same colour through both (relative colorimetric, within
     /// [`SAME_COLORS_MAX_DELTA_E`]). Different encodings of one space are the same colours: the
@@ -230,7 +242,7 @@ impl Profile {
     /// parametric curves) differ in every byte. Colours are compared rather than round-tripped
     /// because CMYK → PCS → CMYK is not an identity even through a single profile.
     pub fn same_colors(&self, other: &Profile) -> bool {
-        if self.content_hash() == other.content_hash() {
+        if self.same_bytes(other) {
             return true;
         }
         let n = self.channels();
@@ -724,24 +736,28 @@ fn parse_lut(d: &[u8], a2b: bool) -> Result<Lut, CmsError> {
                 return Err(CmsError::Invalid("bad lutAB dimensions".into()));
             }
             let (ob, om, omc, oc, oa) = (r.u32(12)? as usize, r.u32(16)? as usize, r.u32(20)? as usize, r.u32(24)? as usize, r.u32(28)? as usize);
+            // Offsets come straight from the file: each element is cut out with one checked slice
+            // and read with local offsets, so no `off + k` can wrap (wasm32, overflow checks off).
             let matrix = |off: usize| -> Result<Stage, CmsError> {
+                let e = Reader { b: r.slice(off, 48)? };
                 let mut m = vec![0.0; 9];
                 for (k, v) in m.iter_mut().enumerate() {
-                    *v = r.s15f16(off + k * 4)?;
+                    *v = e.s15f16(k * 4)?;
                 }
-                let offset = vec![r.s15f16(off + 36)?, r.s15f16(off + 40)?, r.s15f16(off + 44)?];
+                let offset = vec![e.s15f16(36)?, e.s15f16(40)?, e.s15f16(44)?];
                 Ok(Stage::Matrix { rows: 3, cols: 3, m, offset })
             };
             let clut = |off: usize, cin: usize, cout: usize| -> Result<Stage, CmsError> {
+                let h = Reader { b: r.slice(off, 20)? };
                 let mut grid = Vec::with_capacity(cin);
                 for k in 0..cin {
-                    let g = r.u8(off + k)? as usize;
+                    let g = h.u8(k)? as usize;
                     if g < 1 {
                         return Err(CmsError::Invalid("zero grid points".into()));
                     }
                     grid.push(g);
                 }
-                let prec = r.u8(off + 16)? as usize;
+                let prec = h.u8(16)? as usize;
                 let nodes: u128 = grid.iter().map(|g| *g as u128).product();
                 if nodes * cout as u128 > MAX_CLUT_VALUES as u128 {
                     return Err(CmsError::Invalid("CLUT too large".into()));
@@ -848,6 +864,7 @@ fn parse_text(d: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::builtin::Builtin;
 
     /// The count from a `curv` tag must be bounded before `12 + n * 2` is computed: on a 32-bit
     /// target the multiplication panics with overflow checks on, which is what the guard exists
@@ -872,6 +889,65 @@ mod tests {
         d.extend_from_slice(&(u32::MAX - 20).to_be_bytes());
         d.extend_from_slice(&[0u8; 12]);
         assert!(parse_text(&d).is_empty());
+    }
+
+    #[test]
+    fn mab_offsets_near_the_end_of_the_address_space_are_errors() {
+        // Offsets are file-controlled u32s: element reads must be checked slices, never `off + k`.
+        for tag in [b"mAB ", b"mBA "] {
+            for off in [u32::MAX, u32::MAX - 3, u32::MAX - 19, u32::MAX - 47] {
+                for (ob, om, omc, oc, oa) in [(off, 0, 0, 0, 0), (32, off, 32, 0, 0), (32, 32, 32, off, 32), (32, 0, 0, 32, off)] {
+                    let mut e = tag.to_vec();
+                    e.extend([0u8; 4]);
+                    e.extend([3, 3, 0, 0]);
+                    for v in [ob, om, omc, oc, oa] {
+                        e.extend(v.to_be_bytes());
+                    }
+                    e.resize(256, 0);
+                    assert!(parse_lut(&e, true).is_err() || parse_lut(&e, false).is_err());
+                }
+            }
+        }
+    }
+
+    /// `p` with the content hash of `other`: the hash is a fixed-key 64-bit SipHash, so a
+    /// crafted profile can have another's. Setting it stands in for finding one.
+    fn with_hash_of(p: &Profile, other: &Profile) -> Profile {
+        let p = Profile { hash: std::sync::OnceLock::from(other.content_hash()), ..p.clone() };
+        assert_eq!(p.content_hash(), other.content_hash());
+        p
+    }
+
+    #[test]
+    fn a_hash_collision_is_not_the_same_colours() {
+        let srgb = Builtin::Srgb.profile();
+        let p3 = with_hash_of(Builtin::DisplayP3.profile(), srgb);
+        assert!(!p3.same_bytes(srgb));
+        assert!(!p3.same_colors(srgb));
+        // Controls: equal bytes are the same, whatever object holds them.
+        assert!(srgb.same_bytes(srgb));
+        assert!(srgb.same_bytes(&Profile::parse(&srgb.to_bytes()).unwrap()));
+        assert!(Builtin::DisplayP3.profile().same_colors(Builtin::DisplayP3.profile()));
+    }
+
+    #[test]
+    fn a_hash_collision_does_not_get_the_cached_transform() {
+        use crate::transform::{Transform, TransformOptions, cached};
+        let (srgb, lab) = (Builtin::Srgb.profile(), Builtin::LabD50.profile());
+        let p3 = with_hash_of(Builtin::DisplayP3.profile(), srgb);
+        let opts = TransformOptions::default();
+        let green = [0.0, 1.0, 0.0];
+        let eval = |t: &Transform| {
+            let mut out = [0f32; 3];
+            t.eval(&green, &mut out).unwrap();
+            out
+        };
+        let want = eval(&Transform::with_options(Builtin::DisplayP3.profile(), lab, opts).unwrap());
+        assert_ne!(want, eval(&Transform::with_options(srgb, lab, opts).unwrap()), "P3 green is not sRGB green");
+        let sr = eval(&cached(srgb, lab, opts).unwrap());
+        assert_eq!(eval(&cached(&p3, lab, opts).unwrap()), want);
+        // Control: sRGB still gets its own transform after the colliding lookup.
+        assert_eq!(eval(&cached(srgb, lab, opts).unwrap()), sr);
     }
 }
 

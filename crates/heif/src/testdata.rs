@@ -50,6 +50,12 @@ pub struct Spec<'a> {
     /// A stereo pair (a spatial photo): a second image of the same size and samples (the
     /// right eye) and a `grpl` box with a `ster` entity group naming the primary image (left) and it.
     pub stereo: bool,
+    /// When nonzero, the alpha image is instead a grid of `n` × `n` references to one alpha tile
+    /// (a hostile file: the same stored picture rebuilt for every reference).
+    pub alpha_tile_repeats: u8,
+    /// When nonzero, a thumbnail that is a grid of `n` × `n` references to one tile, written
+    /// after any `thumbnail` item (a hostile file, as with `alpha_tile_repeats`).
+    pub thumbnail_tile_repeats: u8,
 }
 
 impl<'a> Spec<'a> {
@@ -65,6 +71,8 @@ impl<'a> Spec<'a> {
             thumbnail: None,
             ignored_aux: Vec::new(),
             stereo: false,
+            alpha_tile_repeats: 0,
+            thumbnail_tile_repeats: 0,
         }
     }
 }
@@ -551,7 +559,20 @@ pub fn build(spec: &Spec<'_>) -> Vec<u8> {
         }
         f.refs.push((b"auxl", id, vec![primary]));
     };
-    if let Some(alpha) = spec.alpha {
+    if let (Some(alpha), n @ 1..) = (spec.alpha, spec.alpha_tile_repeats) {
+        let tile = f.image(TILE, TILE, bd, true, &|x, y| [alpha(x, y), 0, 0]);
+        if let Some(it) = f.items.iter_mut().find(|i| i.id == tile) {
+            it.hidden = true;
+        }
+        let side = u32::from(n) * TILE;
+        let mut g = vec![0u8, 0, n - 1, n - 1];
+        g.extend_from_slice(&(side as u16).to_be_bytes());
+        g.extend_from_slice(&(side as u16).to_be_bytes());
+        let auxc = f.prop(full_box(b"auxC", 0, b"urn:mpeg:hevc:2015:auxid:1\0"));
+        let id = f.add(b"grid", g, vec![(auxc, true)]);
+        f.refs.push((b"dimg", id, vec![tile; usize::from(n) * usize::from(n)]));
+        f.refs.push((b"auxl", id, vec![primary]));
+    } else if let Some(alpha) = spec.alpha {
         aux(&mut f, "urn:mpeg:hevc:2015:auxid:1", &|x, y| [alpha(x, y), 0, 0]);
     }
     for urn in &spec.ignored_aux {
@@ -569,6 +590,19 @@ pub fn build(spec: &Spec<'_>) -> Vec<u8> {
         // The right eye: another image of the primary's size (the decoder still picks `pitm`)
         let right = f.image(spec.width, spec.height, spec.bit_depth, false, spec.sample);
         f.groups.push((b"ster", 1000, vec![u32::from(primary), u32::from(right)]));
+    }
+    if let n @ 1.. = spec.thumbnail_tile_repeats {
+        let tile = f.image(TILE, TILE, bd, false, spec.sample);
+        if let Some(it) = f.items.iter_mut().find(|i| i.id == tile) {
+            it.hidden = true;
+        }
+        let side = u32::from(n) * TILE;
+        let mut g = vec![0u8, 0, n - 1, n - 1];
+        g.extend_from_slice(&(side as u16).to_be_bytes());
+        g.extend_from_slice(&(side as u16).to_be_bytes());
+        let id = f.add(b"grid", g, Vec::new());
+        f.refs.push((b"dimg", id, vec![tile; usize::from(n) * usize::from(n)]));
+        f.refs.push((b"thmb", id, vec![primary]));
     }
     f.write(primary)
 }

@@ -2,7 +2,7 @@
 //! description: EncodeDecision, EncodeBypass, EncodeTerminate, EncodeFlush) and a fractional-bit
 //! estimator with the same context-state evolution, used for rate-distortion decisions.
 
-use crate::hevc::tables::{CABAC_INIT, NEXT_STATE, NUM_CTX, RANGE_TAB_LPS};
+use crate::hevc::encode::tables::{CABAC_INIT, NEXT_STATE, NUM_CTX, RANGE_TAB_LPS};
 use craft_media::bitstream::BitWriter;
 use std::sync::OnceLock;
 
@@ -205,9 +205,9 @@ mod tests {
     fn context_init_formula() {
         let ctx = init_contexts(30, 0);
         // initValue 154: m = 0, n = 64 -> pStateIdx 0, valMps 1
-        assert_eq!(ctx[crate::hevc::tables::CU_TRANSQUANT_BYPASS], 1);
+        assert_eq!(ctx[crate::hevc::encode::tables::CU_TRANSQUANT_BYPASS], 1);
         // split_cu_flag ctx 0 (initValue 139) at QP 30: preCtxState 62
-        assert_eq!(ctx[crate::hevc::tables::SPLIT_CU], (63 - 62) << 1);
+        assert_eq!(ctx[crate::hevc::encode::tables::SPLIT_CU], (63 - 62) << 1);
     }
 
     #[test]
