@@ -838,10 +838,11 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     let decls = parts.decls.parts();
     let enabled = resolved.enabled && !inert;
     // A control that draws only its mark senses over its own label too: indicator, gap and label are one target.
-    let hit = if facts.labelled_after && !inert { scope::claim(&ctx).map_or(rect, |label| rect.union(label)) } else { rect };
+    let label = if facts.labelled_after && !inert { scope::claim(&ctx) } else { None };
+    let hit = label.map_or(rect, |label| rect.union(label));
     let sensing::RootResult { mut response, parts: results, press, activation, activated_member, sense: root_sense } =
         sense_root(ui, member, RootSpec { id, rect: hit, own_sense: own, own: decls, enabled }, arena);
-    if hit != rect {
+    if label.is_some() {
         let shown = response.rect.intersect(rect);
         response.rect = Rect::from_min_max(shown.min, shown.max.max(shown.min));
     }
