@@ -2,16 +2,16 @@
 //! slice_segment_data() syntax (7.3.8): coding quadtree, coding unit, prediction unit, transform tree
 //! and residual coding. Reconstruction mirrors the decoding process exactly (no in-loop filters).
 
-use crate::hevc::cabac::{BIT, CabacEncoder, Estimator, Sink};
-use crate::hevc::inter::{self, PlaneRef};
-use crate::hevc::intra::{self, Refs};
-use crate::hevc::me::MeRef;
-use crate::hevc::params::{LOG2_CTB, LOG2_MAX_TB, LOG2_MIN_CB, MAX_MERGE_CAND};
-use crate::hevc::tables::{
+use crate::hevc::encode::cabac::{BIT, CabacEncoder, Estimator, Sink};
+use crate::hevc::encode::inter::{self, PlaneRef};
+use crate::hevc::encode::intra::{self, Refs};
+use crate::hevc::encode::me::MeRef;
+use crate::hevc::encode::params::{LOG2_CTB, LOG2_MAX_TB, LOG2_MIN_CB, MAX_MERGE_CAND};
+use crate::hevc::encode::tables::{
     ABS_MVD_GT0, ABS_MVD_GT1, CBF_CHROMA, CBF_LUMA, CODED_SUB_BLOCK, CTX_IDX_MAP, CU_SKIP, GT1, GT2, INTRA_CHROMA, LAST_X_PREFIX, LAST_Y_PREFIX,
     MERGE_FLAG, MERGE_IDX, MVP_FLAG, PART_MODE, PRED_MODE, PREV_INTRA_LUMA, RQT_ROOT_CBF, SCAN_4, SIG_COEFF, SPLIT_CU, qpc_420, scan_order,
 };
-use crate::hevc::transform;
+use crate::hevc::encode::transform;
 
 pub const F_INTRA: u8 = 1;
 pub const F_SKIP: u8 = 2;
@@ -243,7 +243,7 @@ impl<'a> FrameCoder<'a> {
 
     /// In-loop deblocking of the finished picture.
     pub fn deblock(&mut self) {
-        crate::hevc::deblock::deblock(&mut self.rec, &self.blk, self.w, self.h, self.slice_qp, self.bd);
+        crate::hevc::encode::deblock::deblock(&mut self.rec, &self.blk, self.w, self.h, self.slice_qp, self.bd);
     }
 
     fn snap(&self, x: usize, y: usize, n: usize) -> Snap {

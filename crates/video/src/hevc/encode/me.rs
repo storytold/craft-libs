@@ -3,7 +3,7 @@
 //! approximated by averaging neighbouring half-grid samples. Used for estimation only; the coded
 //! prediction always uses the normative interpolation in `inter`.
 
-use crate::hevc::tables::LUMA_FILTER;
+use crate::hevc::encode::tables::LUMA_FILTER;
 
 const MARGIN: i32 = 80;
 

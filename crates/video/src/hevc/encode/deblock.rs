@@ -2,8 +2,8 @@
 //! decoder: all vertical edges on the 8x8 grid first, then all horizontal edges. One slice, one QP,
 //! uni-directional prediction from a single reference picture, offsets 0.
 
-use crate::hevc::frame::{Blk, E_EDGE_H, E_EDGE_V, F_CBF, F_INTRA};
-use crate::hevc::tables::{BETA_TABLE, TC_TABLE, qpc_420};
+use crate::hevc::encode::frame::{Blk, E_EDGE_H, E_EDGE_V, F_CBF, F_INTRA};
+use crate::hevc::encode::tables::{BETA_TABLE, TC_TABLE, qpc_420};
 
 #[inline]
 fn tc_beta(q: i32, bs: i32, bd: u32) -> (i32, i32) {

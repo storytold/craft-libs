@@ -2,7 +2,7 @@
 //! reconstructs exactly like a decoder: reference substitution, filtering (incl. strong intra
 //! smoothing), planar, DC and the 33 angular modes.
 
-use crate::hevc::tables::{INTRA_PRED_ANGLE, INV_ANGLE};
+use crate::hevc::encode::tables::{INTRA_PRED_ANGLE, INV_ANGLE};
 
 /// Reference samples of an nTbS block: `left[0]` = `top[0]` = p[-1][-1], `left[1 + y]` = p[-1][y],
 /// `top[1 + x]` = p[x][-1] for x, y = 0..2*nTbS-1.

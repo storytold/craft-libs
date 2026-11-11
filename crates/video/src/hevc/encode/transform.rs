@@ -3,7 +3,7 @@
 //! is exact integer arithmetic: the even/odd decomposition computes the same sums as the matrix
 //! products of the specification.
 
-use crate::hevc::tables::{DST_MATRIX, LEVEL_SCALE, TRANS_MATRIX};
+use crate::hevc::encode::tables::{DST_MATRIX, LEVEL_SCALE, TRANS_MATRIX};
 
 #[inline]
 fn m(n: usize, k: usize, i: usize) -> i32 {
@@ -199,7 +199,7 @@ pub fn quantize(c: &[i32], l: &mut [i32], n: usize, qp: i32, intra: bool, bit_de
 /// the +-1 level change that adds the least quantisation error, without moving the first / last
 /// non-zero positions.
 pub fn sign_hiding(c: &[i32], l: &mut [i32], log2: u32, scan_idx: usize, qp: i32, bit_depth: u32) {
-    use crate::hevc::tables::{SCAN_4, scan_order};
+    use crate::hevc::encode::tables::{SCAN_4, scan_order};
     let n = 1usize << log2;
     let tshift = 15 - bit_depth as i32 - log2 as i32;
     let qbits = 14 + qp / 6 + tshift;

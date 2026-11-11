@@ -23,8 +23,10 @@ vp8 = []
 prores = ["craft-media/bitstream"]
 # H.264 / AVC (ITU-T H.264): encoder.
 h264 = ["craft-media/isobmff"]
-# H.265 / HEVC (ITU-T H.265): encoder.
-hevc = ["craft-media/isobmff"]
+# H.265 / HEVC: decoder and encoder; `hevc-decode` or `hevc-encode` for one of them.
+hevc = ["hevc-decode", "hevc-encode"]
+hevc-decode = ["craft-media/bitstream"]
+hevc-encode = ["craft-media/isobmff"]
 # VP9: decoder and encoder; `vp9-decode` or `vp9-encode` for one of them.
 vp9 = ["vp9-decode", "vp9-encode"]
 vp9-decode = ["craft-media/bitstream"]
@@ -57,6 +59,14 @@ required-features = ["vp8"]
 [[example]]
 name = "vp8_vp8dec"
 required-features = ["vp8"]
+
+[[test]]
+name = "hevc_decode"
+required-features = ["hevc-decode"]
+
+[[example]]
+name = "hevc_hevcdec"
+required-features = ["hevc-decode"]
 
 [[test]]
 name = "vp9_decode"
