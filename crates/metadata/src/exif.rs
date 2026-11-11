@@ -100,7 +100,10 @@ pub fn from_tiff(tiff: &Tiff) -> Metadata {
         m.lens_spec = nikon_lens_spec(exif, m.make.as_deref(), tiff.order);
     }
     m.orientation = ifd0.and_then(|i| i.u16(t::ORIENTATION)).filter(|v| (1..=8).contains(v)).map(Orientation::from_exif);
-    m.rating = ifd0.and_then(|i| i.i64(t::RATING)).map(|r| r.clamp(-1, 5) as i8);
+    m.rating = ifd0.and_then(|i| i.i64(t::RATING)).map(|r| {
+        let r = if r == 65535 || r == -1 { -1 } else { r };
+        r.clamp(-1, 5) as i8
+    });
 
     m.exposure_time = pos(either(t::EXPOSURE_TIME).and_then(|v| v.get_f64(0)))
         .or_else(|| exif.and_then(|e| e.f64(t::SHUTTER_SPEED_VALUE)).filter(|v| v.abs() < 64.0).map(|tv| 2f64.powf(-tv)));
@@ -969,6 +972,9 @@ pub fn write_exif(meta: &Metadata) -> Vec<u8> {
             ifd0.set(tag, v);
         }
     }
+    if let Some(r) = meta.rating {
+        ifd0.set(t::RATING, if r < 0 { Value::Short(vec![0xffff]) } else { Value::Short(vec![r as u16]) });
+    }
     let mut ex = IfdBuilder::new();
     ex.set(t::EXIF_VERSION, Value::Undefined(b"0232".to_vec()));
     let r = |v: Option<f64>| v.filter(|v| v.is_finite() && *v > 0.0).map(|v| Value::Rational(vec![rational(v)]));
@@ -1062,6 +1068,7 @@ mod write_tests {
             focal_length: Some(35.0),
             lens_model: Some("35mm F2".into()),
             gps: Some(Gps { latitude: 43.7904, longitude: -110.6818, altitude: Some(2000.0) }),
+            rating: Some(4),
             ..Default::default()
         };
         let back = read_exif(&write_exif(&m));
@@ -1074,8 +1081,12 @@ mod write_tests {
         assert!((back.f_number.unwrap() - 2.8).abs() < 1e-6);
         assert!((back.exposure_time.unwrap() - 0.004).abs() < 1e-9);
         assert_eq!(back.lens_model, m.lens_model);
+        assert_eq!(back.rating, Some(4));
         let g = back.gps.unwrap();
         assert!((g.latitude - 43.7904).abs() < 1e-5 && (g.longitude + 110.6818).abs() < 1e-5, "{g:?}");
+
+        let rejected = read_exif(&write_exif(&Metadata { rating: Some(-1), ..Default::default() }));
+        assert_eq!(rejected.rating, Some(-1));
     }
 
     #[test]
