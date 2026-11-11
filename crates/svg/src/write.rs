@@ -5,7 +5,7 @@
 //! writes well-formed. Attribute values and text are escaped, so no value can inject markup.
 //!
 //! ```
-//! use craft_svg_paths::write::{SvgWriter, num, path_data};
+//! use craft_svg::write::{SvgWriter, num, path_data};
 //!
 //! let mut path = kurbo::BezPath::new();
 //! path.move_to((1.0, 2.0));
@@ -206,13 +206,13 @@ mod tests {
         );
         #[derive(Clone, Default)]
         struct NoKind;
-        impl crate::Kind for NoKind {
+        impl crate::paths::Kind for NoKind {
             const PROPERTIES: &'static [&'static str] = &[];
-            fn of(_: &crate::StyleMap, _: &str) -> Option<Self> {
+            fn of(_: &crate::paths::StyleMap, _: &str) -> Option<Self> {
                 None
             }
         }
-        let read = crate::import::<NoKind>(&svg, "written.svg").unwrap();
+        let read = crate::paths::import::<NoKind>(&svg, "written.svg").unwrap();
         assert_eq!((read.width_mm, read.height_mm), (20.0, 10.0));
         assert_eq!(read.shapes.len(), 1);
         assert_eq!(read.shapes.first().map(|s| &s.path), Some(&sample()));
