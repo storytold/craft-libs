@@ -3,15 +3,22 @@
 //! focused canvas, a tool takes the deletes it claims in its state at the end of the last pass: the plain ones, and
 //! with Alt held while it keeps the keyboard (Photoshop's polygonal lasso removes its last point while Alt holds the
 //! freehand switch). Unclaimed deletes are the app's (Edit > Clear, Fill). Enter and Escape reach a tool as `Submit`
-//! and `Cancel` with Alt carried, and Shift+Delete is no delete (Photoshop opens Fill, which the app binds).
+//! and `Cancel` with Alt carried, and Shift+Delete is no delete (Photoshop opens Fill, which the app binds). A
+//! session control in the canvas body (a crop frame) takes the arrows, Enter and Escape before the tool, with the
+//! canvas focused or nothing focused; with none shown, the arrows reach the tool with nothing focused.
 
-use craft_behavior::CancelReason;
-use craft_ui::canvas::{CanvasTool, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
+use craft_behavior::geometry::CropBox;
+use craft_behavior::kurbo::{Point, Rect};
+use craft_behavior::{CancelReason, CanvasView};
+use craft_ui::canvas::{CanvasTool, CropOverlay, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
+use craft_ui::contract::{Bind, Show as _};
 use craft_ui::primitives::Draw;
 use craft_ui::testing::focus::key_release;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::{ToolFixture, pointer, trial};
 use egui::{Key, Modifiers};
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Seen {
@@ -81,4 +88,81 @@ fn a_tool_whose_release_opens_an_outline_takes_alt_backspace_in_the_next_frame()
     canvas.fixture().frame(vec![key_press(Key::Backspace, Modifiers::ALT)]).frame(vec![key_release(Key::Backspace, Modifiers::ALT)]);
     canvas.fixture().hold(Modifiers::NONE).settle();
     assert_eq!(canvas.tool().seen, [Seen::Delete { forward: false }], "the outline the release opened takes Alt+Backspace");
+}
+
+/// A tool that takes every key the host offers it.
+#[derive(Default)]
+struct Taker {
+    seen: Vec<ToolKey>,
+}
+
+impl CanvasTool for Taker {
+    fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        ToolAction::Ignored
+    }
+
+    fn drag(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn key(&mut self, key: &ToolKey, _: &mut ToolContext<'_>) -> bool {
+        self.seen.push(key.clone());
+        true
+    }
+
+    fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Command("the tool's form")
+    }
+}
+
+/// What the crop frame reported: applied, discarded.
+type Reports = Rc<Cell<(bool, bool)>>;
+
+/// A canvas at 100 % with the document point (200, 150) at its centre, the `Taker` tool and, when `frame`, a crop
+/// frame over (100, 80)-(300, 220).
+fn session(frame: bool) -> (ToolFixture<Taker>, Rc<RefCell<CropBox>>, Reports) {
+    let crop = Rc::new(RefCell::new(CropBox::new(Rect::new(100.0, 80.0, 300.0, 220.0), 0.0)));
+    let reports: Reports = Rc::new(Cell::new((false, false)));
+    let (c, r) = (Rc::clone(&crop), Rc::clone(&reports));
+    let view = |rect| CanvasView::new(rect, Point::new(200.0, 150.0), 1.0);
+    let canvas = ToolFixture::with_view("Document", Taker::default(), view, move |ui, body| {
+        if !frame {
+            return;
+        }
+        let out = CropOverlay::new("Crop", Bind::bound(&mut *c.borrow_mut())).show_at(ui, body.rect);
+        let (applied, discarded) = r.get();
+        r.set((applied || out.apply, discarded || out.discard));
+    });
+    (canvas, crop, reports)
+}
+
+#[trial]
+fn a_crop_frame_takes_the_arrows_enter_and_escape_before_the_tool() {
+    let (mut canvas, crop, reports) = session(true);
+    let start = crop.borrow().rect;
+    // Nothing focused: the window's arrows and Escape reach the frame.
+    canvas.fixture().key(Key::ArrowRight, Modifiers::NONE).settle();
+    assert_eq!(crop.borrow().rect, start + craft_behavior::kurbo::Vec2::new(1.0, 0.0), "the arrow moves the whole frame");
+    canvas.fixture().key(Key::Escape, Modifiers::NONE).settle();
+    assert_eq!(reports.get(), (false, true), "Escape discards");
+    // The canvas focused: it is the first Tab stop, the frame the next.
+    canvas.fixture().key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(canvas.fixture().focused(), Some(canvas.canvas_id()), "Tab focuses the canvas");
+    canvas.fixture().key(Key::ArrowDown, Modifiers::SHIFT).settle();
+    assert_eq!(crop.borrow().rect, start + craft_behavior::kurbo::Vec2::new(1.0, 10.0), "Shift moves the frame by ten");
+    canvas.fixture().key(Key::Enter, Modifiers::NONE).settle();
+    assert_eq!(reports.get(), (true, true), "Enter applies");
+    assert!(canvas.tool().seen.is_empty(), "the tool gets none of the frame's keys: {:?}", canvas.tool().seen);
+}
+
+#[trial]
+fn with_no_session_control_the_arrows_and_enter_reach_the_tool_with_nothing_focused() {
+    let (mut canvas, ..) = session(false);
+    canvas.fixture().key(Key::ArrowRight, Modifiers::NONE).key(Key::Enter, Modifiers::NONE).settle();
+    let seen = &canvas.tool().seen;
+    assert!(matches!(seen[..], [ToolKey::Nudge { .. }, ToolKey::Submit]), "{seen:?}");
 }

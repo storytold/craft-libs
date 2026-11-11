@@ -4,6 +4,8 @@ mod crop;
 
 mod navigate;
 
+mod pasteboard;
+
 mod raster;
 
 mod scrollbars;

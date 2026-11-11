@@ -357,3 +357,15 @@ fn hit_test_matches_the_overlays_press_priority() {
 // ---- the anchor tools and the Curvature tool ----
 
 // Arrows, select all and Escape belong to Direct, Convert and Curvature; Add, Delete and Auto Add/Delete have none.
+
+#[trial]
+fn insert_on_a_picked_anchor_adds_one_halfway_along_the_segment_leaving_it() {
+    let mut h = two_paths();
+    // The canvas, then the overlay; Home picks the first anchor of path 1.
+    h.fixture.key(egui::Key::Tab, egui::Modifiers::NONE).key(egui::Key::Tab, egui::Modifiers::NONE).key(egui::Key::Home, egui::Modifiers::NONE);
+    h.fixture.key(egui::Key::Insert, egui::Modifiers::NONE).settle();
+    assert_eq!(h.state.borrow().inserts, [(1, kr(0), 0.5)]);
+    // End picks the last anchor of path 2's open line: no segment leaves it.
+    h.fixture.key(egui::Key::End, egui::Modifiers::NONE).key(egui::Key::Insert, egui::Modifiers::NONE).settle();
+    assert_eq!(h.state.borrow().inserts.len(), 1, "nothing to insert after the last anchor of an open subpath");
+}
