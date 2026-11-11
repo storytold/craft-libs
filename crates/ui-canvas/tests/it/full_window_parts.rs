@@ -125,6 +125,97 @@ mod canvas_navigation {
     }
 }
 
+/// The momentary tools every full-window canvas runs.
+mod momentary {
+    use craft_behavior::{CancelReason, PixelSize};
+    use craft_ui::canvas::{CanvasTool, PixelRect, RasterSource, ToolAction, ToolContext, ToolPath, ToolPointer};
+    use craft_ui::contract::{Bind, ShowContainer as _};
+    use craft_ui::dialog::{FullWindowCanvas, FullWindowDialog, FullWindowView};
+    use craft_ui::primitives::{Draw, Revision};
+    use craft_ui::runtime::focus::Initial;
+    use craft_ui::testing::input::key_press;
+    use craft_ui::testing::{Fixture, pointer, trial};
+    use egui::{Color32, ColorImage, Key, Modifiers, Vec2};
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    /// An image larger than the canvas.
+    struct Grey;
+
+    impl RasterSource for Grey {
+        fn size(&self) -> PixelSize {
+            PixelSize::new(1600, 1200)
+        }
+
+        fn revision(&self) -> Revision {
+            Revision::new(1)
+        }
+
+        fn damage(&self, _: Revision) -> Option<PixelRect> {
+            Some(PixelRect::default())
+        }
+
+        fn read(&self, _: PixelRect, _: u32, out: &mut ColorImage) {
+            out.pixels.fill(Color32::from_rgb(0x80, 0x80, 0x80));
+        }
+    }
+
+    /// A tool that counts the presses it takes.
+    struct Counter(Rc<Cell<usize>>);
+
+    impl CanvasTool for Counter {
+        fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+            self.0.set(self.0.get() + 1);
+            ToolAction::Claimed
+        }
+
+        fn drag(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+        fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+        fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+        fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+        fn command_form(&self) -> ToolPath {
+            ToolPath::Command("the Edit command")
+        }
+    }
+
+    // The app gives the canvas no momentary set: Space held turns a drag into a pan, and the tool sees no press.
+    #[trial]
+    fn space_held_pans_a_full_window_canvas_instead_of_pressing_the_tool() {
+        let view = Rc::new(RefCell::new(FullWindowView::new()));
+        let presses = Rc::new(Cell::new(0));
+        let (shown, counted) = (view.clone(), presses.clone());
+        let mut fixture = Fixture::new(move |ui| {
+            let mut open = true;
+            let mut view = shown.borrow_mut();
+            let mut tool = Counter(counted.clone());
+            FullWindowDialog::new("Edit").opened(Bind::bound(&mut open)).initial_focus(Initial::First).show(ui, |ui, _| {
+                FullWindowCanvas::new(Bind::bound(&mut *view), &Grey).tool(&mut tool).show(ui);
+            });
+        });
+        fixture.settle();
+        view.borrow_mut().set_device_zoom(2.0);
+        fixture.settle();
+        let before = view.borrow().view().center;
+        let at = view.borrow().view().rect.center();
+
+        fixture.frame(vec![pointer::moved(at), key_press(Key::Space, Modifiers::NONE)]);
+        fixture.frame(vec![pointer::press(at)]);
+        for step in 1..=4 {
+            fixture.frame(vec![pointer::moved(at + Vec2::new(15.0, 10.0) * step as f32)]);
+        }
+        fixture.frame(vec![pointer::release(at + Vec2::new(60.0, 40.0))]);
+        fixture.settle();
+
+        assert_eq!(presses.get(), 0, "the tool sees no press while Space is held");
+        let after = view.borrow().view().center;
+        assert!(after.x < before.x && after.y < before.y, "the drag pans the view: {before:?} {after:?}");
+    }
+}
+
 /// An overlay drawn through a frame.
 mod mapped_overlay {
     use craft_behavior::PixelSize;

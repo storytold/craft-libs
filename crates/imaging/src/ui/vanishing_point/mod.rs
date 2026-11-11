@@ -48,15 +48,13 @@ use egui::{Color32, Id, Response, Ui};
 
 use craft_behavior::edit_history::Step;
 use craft_behavior::{CancelReason, EditEvent, EditHistory, Mixed};
-use craft_ui::canvas::{
-    HandTool, Momentary, MomentaryCommands, NavigationOptions, PickStep, RasterSource, ToolHost, ViewCommands, ZoomTool, tool_pick,
-};
+use craft_ui::canvas::{HandTool, NavigationOptions, PickStep, RasterSource, ToolHost, ViewCommands, ZoomTool, tool_pick};
 use craft_ui::contract::{Bind, Job, NoValue, Outcome, Pending, Remember as _, Show as _, ShowContainer as _};
 use craft_ui::dialog::{FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowStatus, FullWindowTitle, FullWindowView, RasterOverlay};
 use craft_ui::layout_components::Row;
 use craft_ui::primitives::Checker;
 use craft_ui::rails::{LastUsed, RailTool, ToolRail, ToolSlot};
-use craft_ui::runtime::commands::{CommandSet as _, Commands as _, FirePhase};
+use craft_ui::runtime::commands::{CommandSet as _, Commands as _};
 use craft_ui::runtime::env::Env;
 use craft_ui::runtime::words::CommonWords;
 use craft_ui::sections::{DialogRole, FooterButton};
@@ -216,7 +214,7 @@ struct NewPlaneState {
 ///
 /// Keys ([`VanishingPointCommands`], on the dialog's scope): V, C, S, H, Z pick the tools; Delete and Backspace remove
 /// the selected plane while the canvas has the keyboard. The app forwards ⌘Z and ⇧⌘Z (`EditCommands::Undo`, `Redo`) to
-/// [`step`](Self::step) and the momentary Hand and Zoom commands to [`momentary`](Self::momentary); Enter is OK and
+/// [`step`](Self::step); Enter is OK and
 /// Esc Cancel (with the canvas focused, Esc drops pending corners first, and during a drag cancels the drag only). A
 /// tool switch cancels the old tool's gesture (`CancelReason::Removed`), and so does an undo
 /// (`CancelReason::UndoDuringGesture`).
@@ -237,7 +235,6 @@ pub struct VanishingPointWorkspace {
     strip: VanishingPointStripTool,
     hand: HandTool,
     zoom: ZoomTool,
-    momentary: Momentary,
     new_plane: NewPlaneState,
     /// Steps the app asked for while a drag was open: the next `show` cancels the drag, then steps.
     requested: Vec<Step>,
@@ -262,7 +259,6 @@ impl VanishingPointWorkspace {
             strip: VanishingPointStripTool::Editor,
             hand: HandTool::new(open.navigation),
             zoom: ZoomTool::new(open.navigation),
-            momentary: Momentary::new(open.navigation),
             new_plane: NewPlaneState::default(),
             requested: Vec::new(),
             zoom_percent: 100.0,
@@ -376,7 +372,7 @@ impl VanishingPointWorkspace {
                 let current = Pick::of(work.strip, work.editor.tool());
                 let document = [f64::from(work.size[0]), f64::from(work.size[1])];
                 let mut chosen = None;
-                let VanishingPointWorkspace { editor, session, settings, hand, zoom, momentary, checkerboard, navigation, strip, .. } = &mut *work;
+                let VanishingPointWorkspace { editor, session, settings, hand, zoom, checkerboard, navigation, strip, .. } = &mut *work;
                 let (checkerboard, navigation, strip) = (*checkerboard, *navigation, *strip);
                 let pass = editor.pass(&ctx, session, settings, scene, source);
                 let paste = source.paste().filter(|_| !strokes || source.stamp_preview().is_none()).zip(pass.paste_placement());
@@ -392,7 +388,6 @@ impl VanishingPointWorkspace {
                         let mut canvas = FullWindowCanvas::new(Bind::bound(&mut state.view), image)
                             .checkerboard(checkerboard)
                             .navigation(navigation)
-                            .momentary(&mut *momentary)
                             .controls(|ui, rect| {
                                 pass.planes().show_at(ui, rect);
                             });
@@ -463,11 +458,6 @@ impl VanishingPointWorkspace {
             };
         }
         self.step_now(step)
-    }
-
-    /// A momentary Hand or Zoom command the app routes here (Space, ⌘Space), with its phase.
-    pub fn momentary(&mut self, command: MomentaryCommands, phase: FirePhase) {
-        self.momentary.fired(command, phase);
     }
 }
 

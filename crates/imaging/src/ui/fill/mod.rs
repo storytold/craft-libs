@@ -54,7 +54,7 @@ use craft_behavior::kurbo::{Point, Rect};
 use craft_behavior::{CancelReason, EditEvent, EditHistory, IconId, Mixed, PixelSize};
 use craft_theme::Srgba;
 use craft_ui::buttons::IconButton;
-use craft_ui::canvas::{HandTool, Momentary, NavigationOptions, PickStep, RasterSource, ToolHost, ViewCommands, ZoomTool, tool_pick};
+use craft_ui::canvas::{HandTool, NavigationOptions, PickStep, RasterSource, ToolHost, ViewCommands, ZoomTool, tool_pick};
 use craft_ui::canvas_controls::brush::{BrushCursorOptions, TipFalloff};
 use craft_ui::canvas_controls::{Marquee, MarqueeLook};
 use craft_ui::contract::{Bind, BodyCx, NoValue, Outcome, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _, clicked};
@@ -238,7 +238,6 @@ pub struct ContentAwareFillWorkspace {
     canvas: FillCanvas,
     hand: HandTool,
     zoom: ZoomTool,
-    momentary: Momentary,
     canvas_id: Option<Id>,
     /// The user's navigation options and transparency grid, the app's.
     navigation: NavigationOptions,
@@ -295,7 +294,6 @@ impl ContentAwareFillWorkspace {
             canvas: FillCanvas::new(),
             hand: HandTool::new(navigation),
             zoom: ZoomTool::new(navigation),
-            momentary: Momentary::new(navigation),
             canvas_id: None,
             navigation,
             checkerboard: Checker::default(),
@@ -326,7 +324,6 @@ impl ContentAwareFillWorkspace {
         self.navigation = navigation;
         self.hand.options = navigation;
         self.zoom.options = navigation;
-        self.momentary.set_options(navigation);
     }
 
     /// The user's transparency grid under the image and the preview.
@@ -620,7 +617,6 @@ impl ContentAwareFillWorkspace {
         let mut canvas = FullWindowCanvas::new(Bind::bound(&mut self.view), image)
             .checkerboard(self.checkerboard)
             .navigation(self.navigation)
-            .momentary(&mut self.momentary)
             .controls(|ui, rect| {
                 if let Some(edges) = &ants {
                     Marquee::segments(fill_area_name.clone(), edges.iter().copied()).look(MarqueeLook::Ants).show_at(ui, rect);

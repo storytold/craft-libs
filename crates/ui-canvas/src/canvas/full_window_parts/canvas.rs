@@ -125,8 +125,8 @@ type ControlsFn<'a> = Box<dyn FnMut(&mut Ui, Rect) + 'a>;
 ///   user zooms or pans. The canvas settles it on the rect its body fills and writes it back. The inner `Canvas`
 ///   moves the view as every document canvas does: the wheel, pinch and two-finger scroll follow the user's
 ///   [`NavigationOptions`], zooming about the pointer; the middle button pans; Overscroll off keeps the image in view;
-///   a tool's eased zoom eases. Space-drag and the momentary Zoom run in the tool host when the app gives it its
-///   [`Momentary`] set. The zoom commands (`ViewCommands`) reach the view through the dialog's command scope and the
+///   a tool's eased zoom eases. Space-drag and the momentary Zoom (Cmd+Space, Alt+Space) run in the tool host
+///   from a [`Momentary`] set the canvas keeps between passes. The zoom commands (`ViewCommands`) reach the view through the dialog's command scope and the
 ///   zoom bar; the canvas is no instance of them, so the chords act on the view while it has the focus.
 /// - **Tool.** One `CanvasTool` in a `ToolHost` on this canvas; presses, drags, keys and the cursor are the host's.
 ///   Without a tool the canvas navigates with a Hand tool it keeps between passes.
@@ -140,7 +140,6 @@ pub struct FullWindowCanvas<'a> {
     checkerboard: Option<Checker>,
     overlays: Vec<RasterOverlay<'a>>,
     tool: Option<&'a mut dyn CanvasTool>,
-    momentary: Option<&'a mut Momentary>,
     navigation: NavigationOptions,
     controls: Option<ControlsFn<'a>>,
 }
@@ -158,7 +157,6 @@ impl<'a> FullWindowCanvas<'a> {
             checkerboard: None,
             overlays: Vec::new(),
             tool: None,
-            momentary: None,
             navigation: NavigationOptions::default(),
             controls: None,
         }
@@ -182,12 +180,6 @@ impl<'a> FullWindowCanvas<'a> {
         self
     }
 
-    /// The app's momentary tools (Space for the Hand, Cmd+Space for Zoom In).
-    pub fn momentary(mut self, momentary: &'a mut Momentary) -> Self {
-        self.momentary = Some(momentary);
-        self
-    }
-
     /// The user's navigation options (default: Photoshop's).
     pub fn navigation(mut self, options: NavigationOptions) -> Self {
         self.navigation = options;
@@ -203,7 +195,7 @@ impl<'a> FullWindowCanvas<'a> {
 
     /// Shows the canvas in the rest of `ui`.
     pub fn show(self, ui: &mut Ui) -> FullWindowCanvasOutput {
-        let FullWindowCanvas { mut view, source, checkerboard, overlays, mut tool, mut momentary, navigation, mut controls } = self;
+        let FullWindowCanvas { mut view, source, checkerboard, overlays, mut tool, navigation, mut controls } = self;
         let ppp = ui.pixels_per_point();
         let label: Label = Env::of(ui).words::<DialogWords>().full_window_canvas.clone();
         let name: Arc<str> = Arc::from(label.as_str());
@@ -248,20 +240,22 @@ impl<'a> FullWindowCanvas<'a> {
                 },
             );
             let output = canvas.output;
-            // The body runs for the measuring pass and again for the real one. The tool and the momentary set are
-            // reborrowed on each run; the host delivers no input in the measuring run.
-            let mut host = ToolHost::new();
-            if let Some(momentary) = momentary.as_deref_mut() {
-                host = host.momentary(momentary);
-            }
-            let hosted = match tool.as_deref_mut() {
-                Some(tool) => host.run(ui, &output, tool),
-                None => with_session(&ui.ctx().clone(), global("craft-ui full-window canvas hand", output.response.id), |slot: &mut FallbackHand| {
-                    let hand = slot.0.get_or_insert_with(|| HandTool::new(navigation));
-                    hand.options = navigation;
-                    host.run(ui, &output, hand)
-                }),
-            };
+            // The body runs for the measuring pass and again for the real one. The tool is reborrowed on each run; the
+            // host delivers no input in the measuring run.
+            let key = global("craft-ui full-window canvas tools", output.response.id);
+            let hosted = with_session(&ui.ctx().clone(), key, |slot: &mut KeptTools| {
+                let momentary = slot.momentary.get_or_insert_with(|| Momentary::new(navigation));
+                momentary.set_options(navigation);
+                let host = ToolHost::new().momentary(momentary);
+                match tool.as_deref_mut() {
+                    Some(tool) => host.run(ui, &output, tool),
+                    None => {
+                        let hand = slot.hand.get_or_insert_with(|| HandTool::new(navigation));
+                        hand.options = navigation;
+                        host.run(ui, &output, hand)
+                    }
+                }
+            });
             // The host's view is the tool's, else the canvas's own (the wheel, a middle-button pan, the clamp).
             let next = shown.took(hosted.view.unwrap_or_else(|| shown.view()));
             if next != given && measure::effect(&ui.ctx().clone(), "full-window canvas view write") {
@@ -275,9 +269,13 @@ impl<'a> FullWindowCanvas<'a> {
     }
 }
 
-/// The Hand tool a canvas without a tool navigates with. It keeps the drag it began between passes.
+/// The tools the canvas keeps between passes: the momentary set, and the Hand a canvas without a tool navigates with.
+/// Each keeps the drag it began.
 #[derive(Clone, Default)]
-struct FallbackHand(Option<HandTool>);
+struct KeptTools {
+    momentary: Option<Momentary>,
+    hand: Option<HandTool>,
+}
 
 #[cfg(feature = "testing")]
 mod trials {}
