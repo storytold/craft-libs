@@ -2,10 +2,10 @@
 
 use craft_media::bitstream::BitWriter;
 
-use crate::h264::mbinfo::{MbKind, Part};
-use crate::h264::nal::SliceType;
-use crate::h264::syntax::{MbCode, NbCtx};
-use crate::h264::tables::{
+use crate::h264::encode::mbinfo::{MbKind, Part};
+use crate::h264::encode::nal::SliceType;
+use crate::h264::encode::syntax::{MbCode, NbCtx};
+use crate::h264::encode::tables::{
     BLK4_XY, CBP_INTER_TO_CODE, CBP_INTRA_TO_CODE, COEFF_TOKEN_CDC_CODE, COEFF_TOKEN_CDC_LEN, COEFF_TOKEN_CODE, COEFF_TOKEN_LEN, RUN_BEFORE,
     TOTAL_ZEROS, TOTAL_ZEROS_CDC,
 };

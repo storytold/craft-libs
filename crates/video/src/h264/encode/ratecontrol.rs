@@ -1,6 +1,6 @@
 //! Frame-level rate control: constant QP, constant quality (CRF-like), 1-pass ABR with VBV, and 2-pass VBR.
 
-use crate::h264::nal::SliceType;
+use crate::h264::encode::nal::SliceType;
 
 pub fn qp2qscale(qp: f64) -> f64 {
     0.85 * 2f64.powf((qp - 12.0) / 6.0)

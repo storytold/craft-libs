@@ -1,7 +1,7 @@
 //! Cheap half-resolution analysis used for rate control, scene-cut detection and adaptive quantisation.
 
-use crate::h264::dsp::{block_var, sad, satd};
-use crate::h264::picture::Frame;
+use crate::h264::encode::dsp::{block_var, sad, satd};
+use crate::h264::encode::picture::Frame;
 
 /// Half-resolution luma (2x2 box filtered) of the macroblock-aligned picture.
 pub struct LowRes {

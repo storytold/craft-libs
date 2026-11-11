@@ -1,7 +1,7 @@
 //! Macroblock-layer syntax values produced by mode decision and consumed by the entropy coders.
 
-use crate::h264::mbinfo::{MbInfo, MbKind, Mv, Part};
-use crate::h264::nal::SliceType;
+use crate::h264::encode::mbinfo::{MbInfo, MbKind, Mv, Part};
+use crate::h264::encode::nal::SliceType;
 
 #[derive(Clone)]
 pub struct MbCode {

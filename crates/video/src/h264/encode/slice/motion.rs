@@ -2,7 +2,7 @@ use super::{
     Avail, Cand, MbCtx, MbEdges, MbInfo, MbKind, Mv, MvNb, Part, PartGeom, PartSearch, PredOut, RefPic, SearchBlock, Shape, SliceEnc, Src, mv_bits,
     sad, sad8, sad16, satd,
 };
-use crate::h264::picture::McBlock;
+use crate::h264::encode::picture::McBlock;
 
 fn search_starts(seed: Mv, neighbour: Mv, candidates: &[Mv]) -> ([Mv; 5], usize) {
     let mut starts = [Mv::ZERO; 5];

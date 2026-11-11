@@ -2,19 +2,19 @@
 
 use craft_media::bitstream::BitWriter;
 
-use crate::h264::cabac::{BinSink, CabacEncoder, CabacEstimator, Contexts, CostTable};
-use crate::h264::dsp::{sad, sad8, sad16, satd, ssd};
-use crate::h264::intra::{Edge4, Edge8, filter8, mode_available, pred_chroma, pred4x4, pred8x8, pred16x16};
-use crate::h264::mbinfo::{MbInfo, MbKind, Mv, Part};
-use crate::h264::nal::{SliceHeader, SliceType, nal};
-use crate::h264::picture::{CHROMA_PAD, Frame, LUMA_PAD, RefPic, avg_into};
-use crate::h264::syntax::{MbCode, NbCtx};
-use crate::h264::tables::{BLK4_XY, NUM_CTX, RASTER_TO_BLK4, ZIGZAG4, ZIGZAG8, chroma_qp};
-use crate::h264::transform::{
+use crate::h264::encode::cabac::{BinSink, CabacEncoder, CabacEstimator, Contexts, CostTable};
+use crate::h264::encode::dsp::{sad, sad8, sad16, satd, ssd};
+use crate::h264::encode::intra::{Edge4, Edge8, filter8, mode_available, pred_chroma, pred4x4, pred8x8, pred16x16};
+use crate::h264::encode::mbinfo::{MbInfo, MbKind, Mv, Part};
+use crate::h264::encode::nal::{SliceHeader, SliceType, nal};
+use crate::h264::encode::picture::{CHROMA_PAD, Frame, LUMA_PAD, RefPic, avg_into};
+use crate::h264::encode::syntax::{MbCode, NbCtx};
+use crate::h264::encode::tables::{BLK4_XY, NUM_CTX, RASTER_TO_BLK4, ZIGZAG4, ZIGZAG8, chroma_qp};
+use crate::h264::encode::transform::{
     Deadzone, QuantTables, dequant_chroma_dc, dequant_luma_dc, dequant4, dequant8, fdct4, fdct8, idct4, idct8, quant_chroma_dc, quant_luma_dc,
     quant4, quant8,
 };
-use crate::h264::{cabac_mb, cavlc};
+use crate::h264::encode::{cabac_mb, cavlc};
 
 mod b_slices;
 mod intra;
