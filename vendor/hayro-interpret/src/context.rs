@@ -698,6 +698,7 @@ mod saved_state_tests {
         let cache = InterpreterCache::new();
         let mut ctx = Context::new(Affine::IDENTITY, Rect::new(0.0, 0.0, 100.0, 100.0), &cache, pdf.xref(), InterpreterSettings::default());
         let empty = state_bytes(ctx.get());
+        ctx.get_mut().text_state.clip_paths.move_to((0.0, 0.0));
         for i in 0..100_000 {
             ctx.get_mut().text_state.clip_paths.line_to((f64::from(i), 1.0));
         }
