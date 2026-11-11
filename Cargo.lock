@@ -1374,6 +1374,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-sheet"
+version = "0.1.0"
+
+[[package]]
 name = "craft-silhouette-studio"
 version = "0.1.0"
 dependencies = [
@@ -1568,6 +1572,7 @@ name = "craft-xls"
 version = "0.1.0"
 dependencies = [
  "craft-cfb",
+ "craft-sheet",
  "thiserror 2.0.21",
 ]
 
