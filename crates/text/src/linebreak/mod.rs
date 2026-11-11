@@ -419,6 +419,9 @@ struct Sums<'a> {
     z: Vec<Tiers>,
     over: Vec<f64>,
     fill: Vec<u32>,
+    /// After item `k`: the first box or forced break, or the item count. Looked up for a break
+    /// at `k`, so it is found once per item rather than by a scan per candidate.
+    next: Vec<usize>,
 }
 
 impl<'a> Sums<'a> {
@@ -450,7 +453,12 @@ impl<'a> Sums<'a> {
         z.push(sz);
         over.push(so);
         fill.push(sf);
-        Sums { items, w, y, z, over, fill }
+        let mut next = vec![m; m + 1];
+        for b in (0..m).rev() {
+            let i = b + 1;
+            next[b] = if items.get(i).is_some_and(|it| it.kind == Kind::Box || it.is_forced()) { i } else { next[i] };
+        }
+        Sums { items, w, y, z, over, fill, next }
     }
 
     fn len(&self) -> usize {
@@ -481,14 +489,7 @@ impl<'a> Sums<'a> {
     /// First item of the line after a break at `b`: glue and penalties are discarded up to the next
     /// box or forced break.
     fn next_start(&self, b: usize) -> usize {
-        let mut i = b + 1;
-        while let Some(it) = self.items.get(i) {
-            if it.kind == Kind::Box || it.is_forced() {
-                break;
-            }
-            i += 1;
-        }
-        i.min(self.len())
+        self.next.get(b).copied().unwrap_or(self.len())
     }
 
     fn at(&self, k: usize) -> (f64, Tiers, Tiers, f64, u32) {

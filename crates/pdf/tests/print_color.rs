@@ -1112,6 +1112,18 @@ fn f32_colors_keep_their_inks_in_shadings() {
     assert_eq!(mesh_shadings(&bytes), vec![(("DeviceCMYK".to_owned(), vec![]), 4, vec![corner.repeat(4)])]);
 }
 
+/// A gray stop in a CMYK gradient becomes the black ink `1 - gray`: gray 0.96 is K 0.04, and the
+/// 8-bit gray 128 is K 127/255, as `cmyk::Color::new` writes it.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn gray_stops_keep_their_exact_black_in_cmyk_shadings() {
+    let cyan = || -> backend::color::Color { cmyk::Color::new_f32(0.04, 0.0, 0.0, 0.0).into() };
+    let bytes = page_with(|surface| fill_rect(surface, 0.0, linear([luma::Color::new_f32(0.96).into(), cyan()])));
+    assert_eq!(shading_ends(&bytes), (vec![0.0, 0.0, 0.0, 0.04], vec![0.04, 0.0, 0.0, 0.0]));
+    let bytes = page_with(|surface| fill_rect(surface, 0.0, linear([luma::Color::new(128).into(), cyan()])));
+    assert_eq!(shading_ends(&bytes).0, vec![0.0, 0.0, 0.0, 127.0 / 255.0]);
+}
+
 const FOGRA39: &[u8] = include_bytes!("../../cms/profiles/craft-coated-fogra39.icc");
 
 fn text(dict: &Dict<'_>, key: &[u8]) -> Option<String> {

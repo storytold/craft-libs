@@ -4,7 +4,8 @@
 //! copy was installed. A small helper process waits for this launcher to exit, finishes anything
 //! that can't happen while it runs (Windows locks a running exe), and starts the new one. The
 //! launcher has to exit first anyway: it holds the single-instance lock, and a new copy started
-//! while it runs would only ask it to show its window.
+//! while it runs would only ask it to show its window. A macOS bundle, an AppImage or a Linux
+//! standalone copy that can't be replaced gets the download link.
 //!
 //! | Installed as | Swap |
 //! |---|---|
@@ -15,7 +16,8 @@
 //! | Linux `.deb` / `.rpm` | the system package manager, with the password prompt; then restart |
 //! | Linux Flatpak | reinstall the bundle on the same installation (per-user, or system-wide through `pkexec`); then restart |
 //!
-//! Anything else (FreeBSD, a development build) gets the download link instead.
+//! Anything else (FreeBSD, a development build, an unsigned Windows copy) gets the download link
+//! instead.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -126,13 +128,20 @@ pub fn current(app: &App) -> Option<Install> {
 }
 
 /// [`current`] for a known executable and opt-in setting, without reading the ambient
-/// environment.
+/// environment. A copy the update can't replace doesn't count; [`DEV_VAR`] still counts it, to
+/// try the self-update.
 fn current_at(app: &App, exe: &Path, opted_in: bool) -> Option<Install> {
     let exe = exe.canonicalize().unwrap_or_else(|_| exe.to_path_buf());
     if is_development_build(&exe, opted_in) {
         return None;
     }
-    detect(app, &exe)
+    detect(app, &exe).filter(|install| opted_in || can_replace_all(app, install))
+}
+
+/// Whether the update can replace `install` and, for a standalone copy, the `share` files it
+/// replaces along with the program.
+fn can_replace_all(app: &App, install: &Install) -> bool {
+    can_replace(install) && !matches!(install, Install::Standalone(file) if !can_replace_share(app, file))
 }
 
 /// Cargo's cache-directory marker at the root of a target directory.
@@ -144,7 +153,9 @@ const CARGO_CACHE_MARKER: &str = "CACHEDIR.TAG";
 /// app in doesn't carry it, so this doesn't depend on the directory being called `target`. But
 /// the cache can be disabled (`CARGO_CACHE_RUSTC_INFO=0`) or a tree copied without the hidden
 /// file, so a profile output directory is also accepted when it has Cargo's `.fingerprint`,
-/// `deps` and `build` subdirectories and its target root carries `CACHEDIR.TAG`.
+/// `deps` and `build` subdirectories and its target root carries `CACHEDIR.TAG`. With
+/// `build.build-dir` set, `.rustc_info.json` and those subdirectories live elsewhere and the
+/// profile directory has only Cargo's `.cargo-lock` file, which is accepted too.
 /// `CACHEDIR.TAG` alone isn't Cargo-specific (the same signature marks any cache directory), so
 /// it only corroborates that profile layout.
 fn is_development_build(exe: &Path, opted_in: bool) -> bool {
@@ -158,7 +169,7 @@ fn is_cargo_build_dir(dir: &Path) -> bool {
         return true;
     }
     let Some(profile_parent) = dir.parent() else { return false };
-    let is_profile = [".fingerprint", "deps", "build"].into_iter().all(|name| dir.join(name).is_dir());
+    let is_profile = dir.join(".cargo-lock").is_file() || [".fingerprint", "deps", "build"].into_iter().all(|name| dir.join(name).is_dir());
     if !is_profile {
         return false;
     }
@@ -171,9 +182,59 @@ fn is_cargo_build_dir(dir: &Path) -> bool {
     profile_parent.parent().is_some_and(|root| root.join(CARGO_CACHE_MARKER).is_file())
 }
 
-/// Whether this installed copy can update itself.
+/// Whether this installed copy can update itself. [`release_installs`] says whether a given
+/// release has a file to update it from.
 pub fn is_self_updating(app: &App) -> bool {
-    current(app).is_some()
+    std::env::current_exe().is_ok_and(|exe| can_self_update_at(app, &exe, std::env::var_os(DEV_VAR).is_some()))
+}
+
+/// [`is_self_updating`] for a known executable and opt-in setting. On Windows the update helper
+/// installs nothing for an unsigned copy, so only a signed one is offered the update; [`DEV_VAR`]
+/// still offers it, to try the self-update.
+fn can_self_update_at(app: &App, exe: &Path, opted_in: bool) -> bool {
+    current_at(app, exe, opted_in).is_some() && (opted_in || is_signed(exe))
+}
+
+/// Whether `exe` carries a valid Authenticode signature.
+#[cfg(windows)]
+fn is_signed(exe: &Path) -> bool {
+    verifysign::verify_file(exe).is_ok()
+}
+
+/// Only Windows refuses an unsigned copy's update.
+#[cfg(not(windows))]
+fn is_signed(_exe: &Path) -> bool {
+    true
+}
+
+/// Whether `release` has a file the self-update can install this copy from. Only a standalone
+/// program on macOS is checked, against the release's macOS `.tar.gz`, with or without
+/// [`DEV_VAR`]. Call it together with [`is_self_updating`], which answers for every other reason
+/// a copy can't update itself.
+pub fn release_installs(app: &App, release: &Release) -> bool {
+    if !cfg!(target_os = "macos") {
+        return true;
+    }
+    let Ok(exe) = std::env::current_exe() else { return true };
+    release_installs_at(app, &exe, std::env::var_os(DEV_VAR).is_some(), release, Platform::current())
+}
+
+/// [`release_installs`] for a known executable, opt-in setting and platform, without reading the
+/// ambient environment.
+fn release_installs_at(app: &App, exe: &Path, opted_in: bool, release: &Release, platform: Option<Platform>) -> bool {
+    current_at(app, exe, opted_in).is_none_or(|install| installs_from(app, &install, release, platform))
+}
+
+/// Whether the update can install `install` from `release` on `platform`. Only a standalone
+/// program on macOS is checked against the release's files. A release without its file list
+/// passes: `updater::install` fetches the full release before it picks the file.
+fn installs_from(app: &App, install: &Install, release: &Release, platform: Option<Platform>) -> bool {
+    match (install, platform) {
+        (Install::Standalone(_), Some(platform)) if platform.os == crate::Os::MacOs => {
+            release.assets.is_empty() || pick_asset(release, &[app.id], platform, &[install.kind()]).is_some()
+        }
+        _ => true,
+    }
 }
 
 /// Whether `exe` sits in a folder a macOS package manager owns (Homebrew, MacPorts, Nix).
@@ -181,6 +242,257 @@ pub fn is_self_updating(app: &App) -> bool {
 fn macos_package_manager_owns(exe: &Path) -> bool {
     // Homebrew (both prefixes), MacPorts and the Nix store; component-wise, so `/opt/homebrewed` is not one
     ["/opt/homebrew", "/usr/local/Cellar", "/usr/local/Homebrew", "/usr/local/opt", "/opt/local", "/nix"].iter().any(|root| exe.starts_with(root))
+}
+
+/// Whether the update can replace `install`, for the kinds it replaces in place from this
+/// process.
+#[cfg(target_os = "macos")]
+fn can_replace(install: &Install) -> bool {
+    match install {
+        Install::MacApp(bundle) => can_replace_bundle(bundle),
+        Install::Standalone(file) => can_replace_file(file),
+        _ => true,
+    }
+}
+
+/// Whether the update can replace `install`, for the kinds it replaces in place from this
+/// process.
+#[cfg(target_os = "linux")]
+fn can_replace(install: &Install) -> bool {
+    match install {
+        Install::AppImage(file) | Install::Standalone(file) => can_replace_file(file),
+        _ => true,
+    }
+}
+
+/// Other platforms install from the helper or a package manager, or have no self-update.
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn can_replace(_install: &Install) -> bool {
+    true
+}
+
+/// Whether `access(2)` refuses `wanted` on `path`. Only a clear refusal counts: a check that
+/// fails for another reason leaves the update on offer, and the install reports any failure.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn refused(path: &Path, wanted: rustix::fs::Access) -> bool {
+    use rustix::io::Errno;
+
+    matches!(rustix::fs::access(path, wanted), Err(Errno::ACCESS | Errno::PERM | Errno::ROFS))
+}
+
+/// Whether the update can replace the file at `file`. It writes the new file beside it and
+/// renames that over it, which needs permission to write and search the folder. In a folder with
+/// the sticky bit, the rename also needs the user to own the folder or the file.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn can_replace_file(file: &Path) -> bool {
+    use rustix::fs::Access;
+    use std::os::unix::fs::MetadataExt;
+
+    file.parent().is_none_or(|folder| {
+        if refused(folder, Access::WRITE_OK | Access::EXEC_OK) {
+            return false;
+        }
+        // A folder or file whose details can't be read doesn't refuse.
+        let (Ok(folder), Ok(file)) = (std::fs::metadata(folder), std::fs::symlink_metadata(file)) else { return true };
+        !sticky_refuses(folder.mode(), folder.uid(), file.uid(), rustix::process::geteuid().as_raw())
+    })
+}
+
+/// Whether a folder's sticky bit stops `user` renaming over a file in it: the folder (`mode`,
+/// owned by `folder_owner`) has the bit, and `user` owns neither the folder nor the file. Root is
+/// never stopped.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn sticky_refuses(mode: u32, folder_owner: u32, file_owner: u32, user: u32) -> bool {
+    mode & 0o1000 != 0 && user != 0 && folder_owner != user && file_owner != user
+}
+
+/// The prefix of a program in `bin`, when `bin` is a folder named `bin` with the app's
+/// `share/<id>` folder next to it. The update then also replaces the release's `share` files
+/// under that prefix.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn prefix_with_share<'a>(app: &App, bin: &'a Path) -> Option<&'a Path> {
+    bin.parent().filter(|prefix| bin.file_name().is_some_and(|n| n == "bin") && prefix.join("share").join(app.id).is_dir())
+}
+
+/// Whether the update can replace the other files of the standalone copy at `file`: the app's
+/// other programs beside it, and its `share` files in the folders a release writes to. A copy
+/// with no `share/<id>` folder has no such `share` files.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn can_replace_share(app: &App, file: &Path) -> bool {
+    use rustix::fs::Access;
+
+    let Some(bin) = file.parent() else { return true };
+    if sticky_folder_refuses(bin, |path| is_app_program(app, path)) {
+        return false;
+    }
+    let Some(prefix) = prefix_with_share(app, bin) else { return true };
+    let share = prefix.join("share");
+    let replaced = |path: &Path| is_share_file(app, &share, path);
+    share_folders(app, &share).iter().all(|folder| !refused(folder, Access::WRITE_OK | Access::EXEC_OK) && !sticky_folder_refuses(folder, replaced))
+}
+
+/// Whether `path` names one of the app's programs: `<id>`, or `<id>-<name>` with no extension,
+/// such as `<id>-cli`.
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
+fn is_app_program(app: &App, path: &Path) -> bool {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    name == app.id || name.strip_prefix(app.id).is_some_and(|rest| rest.starts_with('-') && !rest.contains('.'))
+}
+
+/// Whether `path` under `share` is one of the app's files: anything in `<id>` or `doc/<id>`, and
+/// elsewhere a file named `<id>.<ext>` or `<bundle id>.<ext>`.
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
+fn is_share_file(app: &App, share: &Path, path: &Path) -> bool {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    path.starts_with(share.join(app.id))
+        || path.starts_with(share.join("doc").join(app.id))
+        || [app.id.to_string(), app.bundle_id()].iter().any(|stem| name.strip_prefix(stem.as_str()).is_some_and(|rest| rest.starts_with('.')))
+}
+
+/// Whether `folder` has the sticky bit and holds a file that `replaced` accepts and that the
+/// user can't rename over (see [`sticky_refuses`]). At most [`SHARE_ENTRY_LIMIT`] entries are
+/// read. A folder or entry that can't be read doesn't refuse.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn sticky_folder_refuses(folder: &Path, replaced: impl Fn(&Path) -> bool) -> bool {
+    sticky_folder_refuses_for(folder, replaced, rustix::process::geteuid().as_raw())
+}
+
+/// [`sticky_folder_refuses`] for the user with id `user`.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn sticky_folder_refuses_for(folder: &Path, replaced: impl Fn(&Path) -> bool, user: u32) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    let Ok(meta) = std::fs::metadata(folder) else { return false };
+    if meta.mode() & 0o1000 == 0 {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(folder) else { return false };
+    entries.flatten().take(SHARE_ENTRY_LIMIT).any(|entry| {
+        let path = entry.path();
+        replaced(&path)
+            && std::fs::symlink_metadata(&path).is_ok_and(|file| !file.is_dir() && sticky_refuses(meta.mode(), meta.uid(), file.uid(), user))
+    })
+}
+
+/// The most entries, files and folders together, that [`share_folders`] reads in each of the
+/// app's folder, `doc/<id>` and `icons/hicolor`. A folder past the limit is not checked, and the
+/// install reports it if it can't write there.
+const SHARE_ENTRY_LIMIT: usize = 4096;
+
+/// The existing folders under `share` that a release's files can go in:
+/// - the app's own folder and every folder inside it;
+/// - `doc/<id>` and every folder inside it;
+/// - `icons/hicolor`, and each `<size>/apps` folder in it that holds the app's icon;
+/// - `applications`, `metainfo`, `mime/packages` and `pixmaps`.
+///
+/// When the app's folder, `doc/<id>`, `icons/hicolor`, `applications`, `metainfo` or
+/// `mime/packages` doesn't exist, the check takes its nearest existing parent instead, `share`
+/// included, since the update creates the folder there. Only the old flat release layout writes
+/// to `pixmaps`, so for a missing `pixmaps` the check takes its nearest existing parent inside
+/// `share`, and never `share` itself. The walk follows links, as the update's writes do, and
+/// reads a folder it reaches twice only once. An icon size that the installed copy doesn't have
+/// yet is not checked, whether or not its `<size>` folder exists.
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
+fn share_folders(app: &App, share: &Path) -> Vec<PathBuf> {
+    share_folders_within(app, share, SHARE_ENTRY_LIMIT)
+}
+
+/// [`share_folders`], reading at most `limit` entries in each of the app's folder, `doc/<id>`
+/// and `icons/hicolor`.
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
+fn share_folders_within(app: &App, share: &Path, limit: usize) -> Vec<PathBuf> {
+    let nearest = |folder: &Path| folder.ancestors().find(|p| p.is_dir()).map(Path::to_path_buf);
+    let nearest_inside = |folder: &Path| folder.ancestors().take_while(|p| *p != share).find(|p| p.is_dir()).map(Path::to_path_buf);
+    let mut folders = Vec::new();
+    let own = share.join(app.id);
+    if own.is_dir() {
+        walk_folders(own, limit, &mut folders);
+    } else {
+        folders.extend(nearest(&own));
+    }
+    let doc = share.join("doc").join(app.id);
+    if doc.is_dir() {
+        walk_folders(doc, limit, &mut folders);
+    } else {
+        folders.extend(nearest(&doc));
+    }
+    let hicolor = share.join("icons/hicolor");
+    if hicolor.is_dir() {
+        folders.push(hicolor.clone());
+        let icons = [app.bundle_id(), app.id.to_string()].map(|name| [format!("{name}.png"), format!("{name}.svg")]);
+        if let Ok(sizes) = std::fs::read_dir(&hicolor) {
+            for size in sizes.flatten().take(limit) {
+                let apps = size.path().join("apps");
+                if icons.iter().flatten().any(|icon| apps.join(icon).symlink_metadata().is_ok()) {
+                    folders.push(apps);
+                }
+            }
+        }
+    } else {
+        folders.extend(nearest(&hicolor));
+    }
+    folders.extend(["applications", "metainfo", "mime/packages"].iter().filter_map(|folder| nearest(&share.join(folder))));
+    folders.extend(nearest_inside(&share.join("pixmaps")));
+    folders.sort();
+    folders.dedup();
+    folders
+}
+
+/// Adds `root` and every folder inside it to `folders`, reading at most `limit` entries. Links
+/// are followed, and a folder reached a second time, through a link or a loop, is listed but not
+/// read again. A folder that can't be read is listed, and the folders inside it are not. An
+/// entry that can't be read is skipped.
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
+fn walk_folders(root: PathBuf, limit: usize, folders: &mut Vec<PathBuf>) {
+    let mut read = std::collections::HashSet::new();
+    let mut budget = limit;
+    let mut pending = vec![root];
+    while let Some(dir) = pending.pop() {
+        folders.push(dir.clone());
+        if budget == 0 || !std::fs::canonicalize(&dir).is_ok_and(|real| read.insert(real)) {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            if budget == 0 {
+                break;
+            }
+            budget -= 1;
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            }
+        }
+    }
+}
+
+/// Other platforms make no check here, as in [`can_replace`].
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn can_replace_share(_app: &App, _file: &Path) -> bool {
+    true
+}
+
+/// `access(2)`'s `_APPEND_OK`: on a directory, permission to add a subdirectory.
+#[cfg(target_os = "macos")]
+const ADD_SUBDIRECTORY_OK: rustix::fs::Access = rustix::fs::Access::from_bits_retain(1 << 13);
+
+/// `access(2)`'s `_DELETE_OK`: permission to remove the entry from its folder.
+#[cfg(target_os = "macos")]
+const DELETE_OK: rustix::fs::Access = rustix::fs::Access::from_bits_retain(1 << 12);
+
+/// Whether the update can replace the bundle at `bundle`. It creates a staging folder beside the
+/// bundle and renames the bundle into another folder, which needs permission to add a
+/// subdirectory to the parent and permission to move the bundle itself.
+#[cfg(target_os = "macos")]
+fn can_replace_bundle(bundle: &Path) -> bool {
+    let Some(parent) = bundle.parent() else { return true };
+    !is_translocated(bundle) && !refused(parent, ADD_SUBDIRECTORY_OK) && !refused(bundle, ADD_SUBDIRECTORY_OK | DELETE_OK)
+}
+
+/// Whether `bundle` sits in an App Translocation folder under the system's per-user folders.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn is_translocated(bundle: &Path) -> bool {
+    bundle.starts_with("/private/var/folders") && bundle.components().any(|part| part.as_os_str() == "AppTranslocation")
 }
 
 /// Whether `exe` sits in a folder a Windows package manager owns (scoop, winget, Chocolatey, the
@@ -244,11 +556,12 @@ fn msi_step(app: &App, exe: &Path) -> Result<crate::msi_migrate::Step, String> {
     crate::msi_migrate::windows::step(app, exe)
 }
 
-/// Whether the helper starts the app after the update step: always after a successful one, and
-/// after a failed one only while its exe is still there.
+/// Whether the helper starts the app after the update step: never while the old app is still
+/// running (a second copy of it would open), always after a successful step, and after a failed
+/// one only while its exe is still there.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn restarts(step_succeeded: bool, exe_exists: bool) -> bool {
-    step_succeeded || exe_exists
+fn restarts(app_exited: bool, step_succeeded: bool, exe_exists: bool) -> bool {
+    app_exited && (step_succeeded || exe_exists)
 }
 
 /// The exe to start after an MSI update of a registered copy: the one its registrations name now
@@ -262,6 +575,11 @@ fn exe_after_msi(app: &App, registered: bool, exe: &Path) -> PathBuf {
         .unwrap_or_else(|| exe.to_path_buf())
 }
 
+/// How the running copy at `exe` was installed on Linux, or `None` when it isn't this app's to
+/// update: a Flatpak release bundle (per user or system-wide), an AppImage, the deb/rpm/Arch
+/// package at `/usr/bin/<id>`, or a standalone copy outside the package managers' folders
+/// ([`linux_location`]). A `/usr/bin/<id>` that none of those package databases claims is also
+/// `None`: it sits in a system folder, so it isn't treated as a standalone copy.
 #[cfg(target_os = "linux")]
 fn detect(app: &App, exe: &Path) -> Option<Install> {
     if process::in_sandbox() {
@@ -276,6 +594,11 @@ fn detect(app: &App, exe: &Path) -> Option<Install> {
     if let Some(appimage) = std::env::var_os("APPIMAGE") {
         return Some(Install::AppImage(PathBuf::from(appimage)));
     }
+    match linux_location(app, exe) {
+        LinuxLocation::PackagePath => {}
+        LinuxLocation::System => return None,
+        LinuxLocation::Elsewhere => return exe.is_file().then(|| Install::Standalone(exe.to_path_buf())),
+    }
     let t = std::time::Duration::from_secs(10);
     if process::capture("dpkg-query", &["-W", "-f", "${db:Status-Status}", app.id], t).is_some_and(|s| s.trim() == "installed") {
         return Some(Install::Package(PackageKind::Deb, exe.to_path_buf()));
@@ -288,10 +611,45 @@ fn detect(app: &App, exe: &Path) -> Option<Install> {
     if crate::detect::linux::has_pacman_db() && process::capture("pacman", &["-Q", &app.bundle_id()], t).is_some() {
         return Some(Install::Package(PackageKind::ArchPkg, exe.to_path_buf()));
     }
-    if exe.is_file() {
-        return Some(Install::Standalone(exe.to_path_buf()));
-    }
+    // `/usr/bin/<id>` that no package database claims, e.g. copied there by hand or put there by a
+    // package whose name isn't the app's id. Replacing it would write over a system folder without
+    // a package to do it, so it doesn't update itself.
+    log::info!("{}: {} belongs to no deb, rpm or Arch package, so it doesn't update itself", app.name, exe.display());
     None
+}
+
+/// Where a Linux executable outside a Flatpak or AppImage runs from, for [`detect`].
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[derive(Debug, PartialEq, Eq)]
+enum LinuxLocation {
+    /// `/usr/bin/<id>`, where the release's deb, rpm and Arch packages put it. Only this path is
+    /// checked against the package databases: a copy elsewhere isn't the package's even when the
+    /// package is installed too.
+    PackagePath,
+    /// Anywhere else under a folder a package manager owns (`/usr` but not `/usr/local`, `/opt`,
+    /// `/bin`, `/sbin`, `/nix`, `/snap` or `/var/lib/snapd/snap` (Snap on Fedora and Arch), Guix's
+    /// `/gnu`, or a Homebrew `.linuxbrew` prefix): a
+    /// distribution, AUR, Nix, Snap, Guix or Homebrew copy. It's theirs to update, and replacing
+    /// it in place would write over a file the package manager owns (or fail on a read-only
+    /// store), as on macOS ([`macos_package_manager_owns`]).
+    System,
+    /// Anywhere else, such as a folder in the user's home: a standalone copy that replaces itself.
+    Elsewhere,
+}
+
+/// Which [`LinuxLocation`] `exe` is in, from its path alone.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn linux_location(app: &App, exe: &Path) -> LinuxLocation {
+    if exe == Path::new("/usr/bin").join(app.id) {
+        LinuxLocation::PackagePath
+    } else if (!exe.starts_with("/usr/local") && ["/usr", "/opt", "/bin", "/sbin", "/nix", "/snap", "/var/lib/snapd/snap", "/gnu"].iter().any(|dir| exe.starts_with(dir)))
+        // Homebrew on Linux: /home/linuxbrew/.linuxbrew, or ~/.linuxbrew for one user
+        || exe.components().any(|c| c.as_os_str() == ".linuxbrew")
+    {
+        LinuxLocation::System
+    } else {
+        LinuxLocation::Elsewhere
+    }
 }
 
 /// Where this sandbox's Flatpak copy is installed, from `app-path` in `/.flatpak-info`.
@@ -371,6 +729,60 @@ pub fn update(
     last: &dyn Fn() -> Result<(), String>,
     running_version: Option<&str>,
 ) -> Result<(), String> {
+    prepare_update(app, install, release, platform, http, paths, stop, phase, last, running_version)?.start()
+}
+
+/// What remains of an update after [`prepare_update`]: starting the helper, which waits for this
+/// process to exit. On Windows the helper then installs the update and starts the new version;
+/// on macOS and Linux the update is already in place and the helper starts the new version.
+#[must_use = "the update only installs or restarts once the restart is started"]
+pub struct Restart {
+    helper: Option<Box<dyn FnOnce() -> Result<(), String> + Send>>,
+}
+
+impl Restart {
+    /// Nothing is left to start.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn scheduled() -> Self {
+        Self { helper: None }
+    }
+
+    /// `start` runs when the app closes.
+    #[cfg_attr(not(any(windows, unix, test)), allow(dead_code))]
+    pub(crate) fn later(start: impl FnOnce() -> Result<(), String> + Send + 'static) -> Self {
+        Self { helper: Some(Box::new(start)) }
+    }
+
+    /// Starts the helper. Call it when the app's exit is certain: the helper waits only a minute
+    /// for the app to exit. On Windows it installs nothing when the app is still running after
+    /// that; on macOS and Linux the Flatpak helper starts nothing then, and the other helpers
+    /// start the new version anyway.
+    pub fn start(self) -> Result<(), String> {
+        self.helper.map_or(Ok(()), |start| start())
+    }
+}
+
+impl std::fmt::Debug for Restart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Restart").field("pending", &self.helper.is_some()).finish()
+    }
+}
+
+/// [`update`] without starting the helper: the caller starts the returned [`Restart`] when the
+/// app's exit is certain. On macOS and Linux the update is in place when this returns.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_update(
+    app: &App,
+    install: &Install,
+    release: &Release,
+    platform: Platform,
+    http: &Http,
+    paths: &Paths,
+    stop: &Stop,
+    phase: &mut dyn FnMut(JobPhase),
+    last: &dyn Fn() -> Result<(), String>,
+    running_version: Option<&str>,
+) -> Result<Restart, String> {
     let cur_v = running_version.and_then(|v| current_version(app, v));
     if let (Some(rel_v), Some(cur_v)) = (release.version.as_ref(), cur_v.as_ref())
         && !version::offers_update(rel_v, cur_v)
@@ -383,39 +795,50 @@ pub fn update(
         .ok_or_else(|| format!("{} {} has no {} for {}", app.name, release.version_label(), install.kind().label(), platform.label()))?;
     let asset = asset.clone();
     crate::install::bind_artifact_version(app, release, &asset)?;
+    crate::install::check_download_link(app, release, &asset)?;
+    // Nothing is downloaded for a copy that can't install it.
+    #[cfg(windows)]
+    windows_precheck(app, install, paths)?;
     let mut job = Job { http, paths, stop, phase, install_locations: &Default::default(), replace: false };
+    #[cfg(not(windows))]
+    let recorded = keep_download(paths, &asset);
     let file = install::download(release, &asset, &mut job)?;
     #[cfg(windows)]
-    windows_precheck(app, install, paths, &file)?;
+    windows_check_download(app, install, &file)?;
     // The restart ends this process: nothing else may be under way.
     last()?;
     phase(JobPhase::Installing);
-    // Written before the swap starts: the Windows helper runs alongside this process and clears
-    // it when it fails, which a write after scheduling could undo.
+    // Written before the swap starts. On Windows the helper does the swap, so the record is
+    // written when it starts (see `windows_helper`): it clears the record when it fails, which a
+    // write after it started could undo.
+    #[cfg(not(windows))]
     mark_installed(paths, release);
     let pid = std::process::id();
-    let scheduled = (|| -> Result<(), String> {
+    let scheduled = (|| -> Result<Restart, String> {
         match install {
             #[cfg(target_os = "macos")]
             Install::MacApp(bundle) => {
                 let existing = Installed { version: None, source: InstallSource::MacApp, location: bundle.display().to_string(), package: None };
-                let placed = install::macos::install_dmg(app, &file, Some(&existing), None, false, paths, &install::macos::Expect::release(release));
-                let _ = std::fs::remove_file(&file);
+                let wait = install::macos::CheckTurn { stop, phase: &mut *phase };
+                let placed =
+                    install::macos::install_dmg(app, &file, Some(&existing), None, false, paths, &install::macos::Expect::self_update(release), wait);
+                after_install(paths, &file, recorded, &placed);
                 let placed = placed?;
-                relaunch_after_exit(app, pid, &[Path::new("/usr/bin/open").as_os_str(), placed.as_os_str()])
+                Ok(relaunch_after_exit(app, pid, &[Path::new("/usr/bin/open").as_os_str(), placed.as_os_str()]))
             }
             #[cfg(target_os = "linux")]
             Install::AppImage(path) => {
-                replace_appimage(&file, path)?;
-                let _ = std::fs::remove_file(&file);
-                relaunch_after_exit(app, pid, &[path.as_os_str()])
+                let result = replace_appimage(&file, path);
+                after_install(paths, &file, recorded, &result);
+                result?;
+                Ok(relaunch_after_exit(app, pid, &[path.as_os_str()]))
             }
             #[cfg(target_os = "linux")]
             Install::Package(kind, exe) => {
                 let result = install::linux::install_package(*kind, &file, None, stop, phase);
-                let _ = std::fs::remove_file(&file);
+                after_install(paths, &file, recorded, &result);
                 result?;
-                relaunch_after_exit(app, pid, &[exe.as_os_str()])
+                Ok(relaunch_after_exit(app, pid, &[exe.as_os_str()]))
             }
             #[cfg(target_os = "linux")]
             Install::Flatpak => {
@@ -427,28 +850,28 @@ pub fn update(
                     None => return Err(format!("this copy of {} can't update itself; download the new version instead", app.name)),
                 };
                 let result = install::linux::update_flatpak_bundle(&file, &app.bundle_id(), system, stop, phase);
-                let _ = std::fs::remove_file(&file);
+                after_install(paths, &file, recorded, &result);
                 result?;
                 relaunch_flatpak_after_exit(app)
             }
             #[cfg(windows)]
-            Install::Msi(exe) => windows_helper(app, paths, pid, exe, &msi_finish(&file)?),
+            Install::Msi(exe) => windows_helper(app, paths, release, pid, exe, &msi_finish(&file)?),
             #[cfg(windows)]
             Install::Portable(exe) => {
                 exe.parent().ok_or_else(|| format!("{} isn't in a folder", app.name))?;
-                windows_helper(app, paths, pid, exe, &Finish::Portable { zip: file, tmp: paths.cache.join(PORTABLE_STAGING) })
+                windows_helper(app, paths, release, pid, exe, &Finish::Portable { zip: file, tmp: paths.cache.join(PORTABLE_STAGING) })
             }
             #[cfg(windows)]
             Install::Standalone(exe) => {
                 exe.parent().ok_or_else(|| format!("{} isn't in a folder", app.name))?;
-                windows_helper(app, paths, pid, exe, &Finish::Portable { zip: file, tmp: paths.cache.join(PORTABLE_STAGING) })
+                windows_helper(app, paths, release, pid, exe, &Finish::Portable { zip: file, tmp: paths.cache.join(PORTABLE_STAGING) })
             }
             #[cfg(unix)]
             Install::Standalone(exe) => {
                 let result = replace_standalone(app, paths, &file, exe);
-                let _ = std::fs::remove_file(&file);
+                after_install(paths, &file, recorded, &result);
                 result?;
-                relaunch_after_exit(app, pid, &[exe.as_os_str()])
+                Ok(relaunch_after_exit(app, pid, &[exe.as_os_str()]))
             }
             #[allow(unreachable_patterns)]
             _ => {
@@ -457,19 +880,184 @@ pub fn update(
             }
         }
     })();
-    unmark_unless_scheduled(paths, scheduled)
+    let scheduled = unmark_unless_scheduled(paths, scheduled);
+    // On macOS and Linux the update is in place once it is prepared.
+    #[cfg(not(windows))]
+    if scheduled.is_ok() {
+        record_done(paths, &release.version_label());
+    }
+    scheduled
 }
 
-/// Records `release` as just installed, so it isn't offered again for [`JUST_UPDATED_FOR`].
+/// Records `release` as just installed, so it isn't offered again for [`JUST_UPDATED_FOR`]: its
+/// tag, the time, and the version it installs. The outcome records of an earlier update are
+/// removed: this update writes its own.
 fn mark_installed(paths: &Paths, release: &Release) {
-    if let Err(e) = crate::paths::write_atomic(&marker(paths), format!("{}\n{}\n", release.tag, crate::now()).as_bytes()) {
+    let _ = std::fs::remove_file(failure_file(paths));
+    let _ = std::fs::remove_file(done_file(paths));
+    let text = format!("{}\n{}\n{}\n", release.tag, crate::now(), release.version_label());
+    if let Err(e) = crate::paths::write_atomic(&marker(paths), text.as_bytes()) {
         log::warn!("couldn't record the self-update: {e}");
     }
 }
 
+/// Where a finished update records the version it installed, for the new version's first start.
+fn done_file(paths: &Paths) -> PathBuf {
+    paths.data.join("self-update-done.txt")
+}
+
+/// Records that the update to `version` has been installed.
+fn record_done(paths: &Paths, version: &str) {
+    if let Err(e) = crate::paths::write_atomic(&done_file(paths), version.as_bytes()) {
+        log::warn!("couldn't record the finished self-update: {e}");
+    }
+}
+
+/// Where a self-update records the name and size of the release file it downloads. The file stays
+/// in the download folder after a failed install, and the next try checks it against its
+/// published checksum and skips the transfer. On Windows the update helper removes the download
+/// itself, so nothing is recorded there.
+#[cfg(not(windows))]
+fn kept_download_record(paths: &Paths) -> PathBuf {
+    paths.cache.join("self-update-download.txt")
+}
+
+/// Records `asset` as this app's self-update download. A finished or partial download of another
+/// release file that the record named is removed first, so the download folder holds the files of
+/// one self-update download at most. Returns whether the record was written.
+#[cfg(not(windows))]
+fn keep_download(paths: &Paths, asset: &crate::release::Asset) -> bool {
+    let record = kept_download_record(paths);
+    if let Some(text) = read_record(&record) {
+        let mut lines = text.lines();
+        let (name, size) = (lines.next().unwrap_or_default(), lines.next().and_then(|s| s.parse::<u64>().ok()));
+        if (name, size) != (asset.name.as_str(), Some(asset.size)) && crate::release::valid_file_name(name) {
+            let dest = paths.downloads().join(name);
+            match size {
+                Some(size) => crate::http::discard(&dest, size),
+                // A record without a size still names a finished download.
+                None => {
+                    let _ = std::fs::remove_file(dest);
+                }
+            }
+        }
+    }
+    let text = format!("{}\n{}\n", asset.name, asset.size);
+    match crate::paths::write_atomic(&record, text.as_bytes()) {
+        Ok(()) => true,
+        Err(e) => {
+            log::warn!("couldn't record the self-update download: {e}");
+            false
+        }
+    }
+}
+
+/// Keeps the download `file` for the next try when the install's `result` is a failure that
+/// [`keeps_download`] allows and [`keep_download`] `recorded` it; otherwise removes the file and
+/// its record. A download without a record is removed, since nothing would remove it later.
+#[cfg(not(windows))]
+fn after_install<T>(paths: &Paths, file: &Path, recorded: bool, result: &Result<T, String>) {
+    if !(recorded && keeps_download(result)) {
+        let _ = std::fs::remove_file(file);
+        let _ = std::fs::remove_file(kept_download_record(paths));
+    }
+}
+
+/// Whether the download stays for the next try after the install's `result`. A failed install
+/// keeps it, except on macOS when the disk image could not be opened: an image still attached
+/// from an install that ended part way makes hdiutil refuse every attach of the same file with
+/// "Resource busy", while a new download of it attaches.
+#[cfg(not(windows))]
+fn keeps_download<T>(result: &Result<T, String>) -> bool {
+    match result {
+        Ok(_) => false,
+        #[cfg(target_os = "macos")]
+        Err(e) if e.starts_with(install::macos::IMAGE_NOT_OPENED) => false,
+        Err(_) => true,
+    }
+}
+
+/// The version the scheduled update installs, from the record [`mark_installed`] wrote: its third
+/// line, or the tag on its first line in a record without one.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn scheduled_version(paths: &Paths) -> Option<String> {
+    let text = read_record(&marker(paths))?;
+    let mut lines = text.lines();
+    let tag = lines.next();
+    let version = lines.nth(1).filter(|version| !version.trim().is_empty()).or(tag);
+    version.map(str::trim).filter(|version| !version.is_empty()).map(str::to_owned)
+}
+
+/// The most of an outcome record that is read: a reason longer than this is cut short.
+const RECORD_LIMIT: usize = 4096;
+
+/// The text of the record at `path`, at most [`RECORD_LIMIT`] bytes of it. `None` when it is
+/// missing, unreadable or not a plain file (a link is not followed).
+fn read_record(path: &Path) -> Option<String> {
+    use std::io::Read;
+    if !is_plain_file(path) {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(path).ok()?.take(RECORD_LIMIT as u64 + 1).read_to_end(&mut bytes).ok()?;
+    let cut = bytes.len() > RECORD_LIMIT;
+    bytes.truncate(RECORD_LIMIT);
+    let mut text = String::from_utf8_lossy(&bytes).into_owned();
+    if cut {
+        // A multi-byte character split at the limit decodes as U+FFFD; drop it.
+        text = text.trim_end_matches('\u{FFFD}').to_owned();
+        text.push('…');
+    }
+    Some(text)
+}
+
+/// What the last self-update came to, read once by the next start ([`take_outcome`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// The update installed this version, which is the one running now.
+    Installed(Version),
+    /// The update could not be installed, for this reason.
+    Failed(String),
+}
+
+/// What the last self-update came to, once: the records are removed as they are read. A
+/// recorded failure wins over a record of a finished update, unless this program was put in place
+/// after the failure: the copy that failed has been replaced, and the failure is dropped. A
+/// finished update counts only when the version it installed is `running`, the version this copy
+/// counts as.
+pub fn take_outcome(paths: &Paths, running: &str) -> Option<Outcome> {
+    let program = std::env::current_exe().ok();
+    take_outcome_of(paths, running, program.as_deref())
+}
+
+/// [`take_outcome`] for a known program, without reading the ambient executable.
+fn take_outcome_of(paths: &Paths, running: &str, program: Option<&Path>) -> Option<Outcome> {
+    let stale = program.is_some_and(|program| failure_predates(paths, program));
+    let failure = take_failure(paths).filter(|_| !stale);
+    let done = read_record(&done_file(paths));
+    let _ = std::fs::remove_file(done_file(paths));
+    if let Some(reason) = failure {
+        let reason = reason.trim();
+        let reason = if reason.is_empty() { "no reason was recorded" } else { reason };
+        return Some(Outcome::Failed(reason.to_owned()));
+    }
+    let installed = version::parse(done?.trim())?;
+    (Some(&installed) == version::parse(running).as_ref()).then_some(Outcome::Installed(installed))
+}
+
+/// Whether the recorded failure is older than `program`, by its modified or created time. A
+/// program installed from a package carries the package's build time, so one built before the
+/// failure is not detected and the failure is reported once as usual. `false` when either time
+/// can't be read.
+fn failure_predates(paths: &Paths, program: &Path) -> bool {
+    let (Ok(record), Ok(program)) = (std::fs::metadata(failure_file(paths)), std::fs::metadata(program)) else { return false };
+    let Ok(recorded) = record.modified() else { return false };
+    [program.modified(), program.created()].into_iter().flatten().any(|at| at > recorded)
+}
+
 /// Removes the record of [`mark_installed`] when the swap couldn't be scheduled, so the update
 /// stays on offer.
-fn unmark_unless_scheduled(paths: &Paths, scheduled: Result<(), String>) -> Result<(), String> {
+fn unmark_unless_scheduled<T>(paths: &Paths, scheduled: Result<T, String>) -> Result<T, String> {
     if scheduled.is_err() {
         let _ = std::fs::remove_file(marker(paths));
     }
@@ -504,8 +1092,32 @@ fn replace_standalone(app: &App, paths: &Paths, tarball: &Path, exe: &Path) -> R
     // Per-process names, so two updates running at once can't remove each other's files.
     let staging = paths.cache.join(format!("{}.standalone.{}", app.id, std::process::id()));
     let result = install::tree::unpack(app, tarball, &staging).and_then(|tree| replace_from_tree(app, &tree, exe));
-    let _ = std::fs::remove_dir_all(&staging);
+    remove_staging(&staging);
     result
+}
+
+/// Removes an unpacked release. The archive sets each folder's mode, and a folder its owner can't
+/// list or write can't be emptied, so those folders get owner access back first.
+#[cfg(unix)]
+fn remove_staging(staging: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if std::fs::remove_dir_all(staging).is_ok() || std::fs::symlink_metadata(staging).is_err() {
+        return;
+    }
+    let mut pending = vec![staging.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        if !std::fs::symlink_metadata(&dir).is_ok_and(|m| m.file_type().is_dir()) {
+            continue;
+        }
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                pending.push(entry.path());
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(staging);
 }
 
 #[cfg(unix)]
@@ -514,18 +1126,21 @@ fn replace_from_tree(app: &App, tree: &Path, exe: &Path) -> Result<(), String> {
     if !is_plain_file(&new_exe) {
         return Err(format!("release archive did not contain binary for {}", app.id));
     }
+    // A `bin` that is a link would bring in programs from outside the release.
+    let release_bin = tree.join("bin");
+    if !std::fs::symlink_metadata(&release_bin).is_ok_and(|m| m.file_type().is_dir()) {
+        return Err(format!("{} isn't a folder", release_bin.display()));
+    }
     let bin = exe.parent().ok_or_else(|| "executable isn't in a folder".to_string())?;
     let mut moves = Vec::new();
-    for entry in std::fs::read_dir(tree.join("bin")).map_err(|e| format!("couldn't read the release's programs ({e})"))?.flatten() {
+    for entry in std::fs::read_dir(&release_bin).map_err(|e| format!("couldn't read the release's programs ({e})"))? {
+        let entry = entry.map_err(|e| format!("couldn't read {} ({e})", release_bin.display()))?;
         let name = entry.file_name();
         if name != app.id && is_plain_file(&entry.path()) && bin.join(&name).is_file() {
             moves.push((entry.path(), bin.join(&name)));
         }
     }
-    let prefix = bin.parent().filter(|_| bin.file_name().is_some_and(|n| n == "bin"));
-    if let Some(prefix) = prefix
-        && prefix.join("share").join(app.id).is_dir()
-    {
+    if let Some(prefix) = prefix_with_share(app, bin) {
         for file in plain_files(&tree.join("share"))? {
             let relative = file.strip_prefix(tree).map_err(|_| "staged file escapes the release".to_string())?;
             moves.push((file.clone(), prefix.join(relative)));
@@ -587,21 +1202,28 @@ fn stage(from: &Path, to: &Path, executable: bool) -> Result<PathBuf, String> {
 }
 
 /// A regular file, not a link to one.
-#[cfg(unix)]
 fn is_plain_file(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file())
 }
 
-/// The regular files under `dir`, without following links; none when `dir` doesn't exist.
+/// The regular files under `dir`, without following links; none when `dir` doesn't exist. Links
+/// and other entries that aren't files or folders are skipped. A `dir` that is a link or a file, and
+/// a folder that can't be read, are errors, so an update never goes ahead with its files left out.
 #[cfg(unix)]
 fn plain_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
+    match std::fs::symlink_metadata(dir) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("couldn't read {} ({e})", dir.display())),
+        Ok(m) if !m.file_type().is_dir() => return Err(format!("{} isn't a folder", dir.display())),
+        Ok(_) => {}
+    }
     let mut files = Vec::new();
     let mut pending = vec![dir.to_path_buf()];
     while let Some(dir) = pending.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let entries = std::fs::read_dir(&dir).map_err(|e| format!("couldn't read {} ({e})", dir.display()))?;
         for entry in entries {
             let entry = entry.map_err(|e| format!("couldn't read {} ({e})", dir.display()))?;
-            let kind = entry.file_type().map_err(|e| e.to_string())?;
+            let kind = entry.file_type().map_err(|e| format!("couldn't read {} ({e})", entry.path().display()))?;
             if kind.is_dir() {
                 pending.push(entry.path());
             } else if kind.is_file() {
@@ -612,10 +1234,24 @@ fn plain_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(files)
 }
 
-/// Starts `sh`, which waits for `pid` to exit and then runs `command`. Detached, so it outlives us.
+/// A [`Restart`] that starts `sh`, which waits for `pid` to exit and then runs `command`.
+/// Detached, so it outlives us. Nothing starts before the app's exit is certain: a close the user
+/// cancels leaves no helper counting down its wait.
 #[cfg(unix)]
-fn relaunch_after_exit(app: &App, pid: u32, command: &[&std::ffi::OsStr]) -> Result<(), String> {
-    process::spawn_detached(helper_command(app, pid, command)).map_err(|e| format!("couldn't schedule the restart ({e})"))
+fn relaunch_after_exit(app: &App, pid: u32, command: &[&std::ffi::OsStr]) -> Restart {
+    relaunch_with(app, pid, command, process::spawn_detached)
+}
+
+/// [`relaunch_after_exit`], with `spawn` starting the helper.
+#[cfg(unix)]
+fn relaunch_with(
+    app: &App,
+    pid: u32,
+    command: &[&std::ffi::OsStr],
+    spawn: impl FnOnce(std::process::Command) -> Result<(), String> + Send + 'static,
+) -> Restart {
+    let cmd = helper_command(app, pid, command);
+    Restart::later(move || spawn(cmd).map_err(|e| format!("couldn't schedule the restart ({e})")))
 }
 
 #[cfg(unix)]
@@ -669,9 +1305,10 @@ fn flatpak_host_pid() -> Option<u32> {
     parse_flatpak_host_pid(&out, &instance_id)
 }
 
-/// Starts a host helper that waits for this Flatpak instance to exit, then relaunches it via Flatpak on the host.
+/// A [`Restart`] that starts a host helper, which waits for this Flatpak instance to exit, then
+/// relaunches it via Flatpak on the host. Nothing starts before the app's exit is certain.
 #[cfg(target_os = "linux")]
-fn relaunch_flatpak_after_exit(app: &App) -> Result<(), String> {
+fn relaunch_flatpak_after_exit(app: &App) -> Result<Restart, String> {
     let host_pid = flatpak_host_pid();
     let instance_id = flatpak_instance_id();
     // Each wait clause polls until the old process is gone, then execs the relaunch command.
@@ -690,7 +1327,8 @@ fn relaunch_flatpak_after_exit(app: &App) -> Result<(), String> {
         (None, None) => return Err(format!("{} is updated; quit and reopen it to start the new version", app.name)),
     };
     let script = format!("({wait_clause}) &");
-    process::spawn_detached(flatpak_restart_command(app, &script, &target_arg)).map_err(|e| format!("couldn't schedule the Flatpak restart ({e})"))
+    let cmd = flatpak_restart_command(app, &script, &target_arg);
+    Ok(Restart::later(move || process::spawn_detached(cmd).map_err(|e| format!("couldn't schedule the Flatpak restart ({e})"))))
 }
 
 #[cfg(target_os = "linux")]
@@ -759,11 +1397,12 @@ const HELPER_DIR: &str = "launcher-update-helper";
 #[cfg_attr(not(windows), allow(dead_code))]
 const PORTABLE_STAGING: &str = "launcher-update";
 
-/// Copies this program into the cache and starts the copy as the update helper, which waits for
-/// `pid` to exit, does `finish` and starts `exe`. Run from the cache, the helper doesn't hold the
-/// installed exe that the step replaces.
+/// Copies this program into the cache as the update helper, which waits for `pid` to exit, does
+/// `finish` and starts `exe`. Run from the cache, the helper doesn't hold the installed exe that
+/// the step replaces. The returned [`Restart`] records `release` as installed and starts the
+/// helper.
 #[cfg(windows)]
-fn windows_helper(app: &App, paths: &Paths, pid: u32, exe: &Path, finish: &Finish) -> Result<(), String> {
+fn windows_helper(app: &App, paths: &Paths, release: &Release, pid: u32, exe: &Path, finish: &Finish) -> Result<Restart, String> {
     let program = std::env::current_exe().map_err(|e| format!("couldn't find this program ({e})"))?;
     let dir = paths.cache.join(HELPER_DIR);
     // The previous update's copy, when it's still there.
@@ -774,7 +1413,12 @@ fn windows_helper(app: &App, paths: &Paths, pid: u32, exe: &Path, finish: &Finis
     let mut cmd = process::command(&helper);
     cmd.args(helper_args(pid, exe, finish));
     clear_pretend_version(&mut cmd, app);
-    process::spawn_detached(cmd).map_err(|e| format!("couldn't schedule the update ({e})"))
+    let (paths, release) = (paths.clone(), release.clone());
+    Ok(Restart::later(move || {
+        mark_installed(&paths, &release);
+        let started = process::spawn_detached(cmd).map_err(|e| format!("couldn't schedule the update ({e})"));
+        unmark_unless_scheduled(&paths, started)
+    }))
 }
 
 /// Finishes an update when this program was started as the update helper; `args` are its
@@ -799,23 +1443,96 @@ pub fn finish(app: &App, args: &[OsString]) -> Option<Result<(), String>> {
     // Read before the step: the update may move or replace the old exe.
     let registered =
         matches!(step, Finish::Msi(_)) && matches!(crate::msi_copy::windows::find(app, &exe), Some(crate::msi_copy::MsiCopy::Registered { .. }));
-    let done = run_step(app, &me, pid, &exe, &step, std::time::Duration::from_secs(60));
+    let wait = |pid| process::wait_for_exit(pid, std::time::Duration::from_secs(60));
+    let start = |exe: &Path| {
+        signed_like(app, &me, exe)
+            .and_then(|()| process::spawn_detached(std::process::Command::new(exe)).map_err(|e| format!("couldn't start {} ({e})", exe.display())))
+    };
+    Some(finish_step(app, &me, &paths, pid, exe, &step, registered, &wait, &start))
+}
+
+/// The helper's work once its checks have passed: waits for `pid` with `wait`, does `step`, and
+/// starts the app with `start` when [`restarts`] allows it. Every failure is recorded for the
+/// app's next start.
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+fn finish_step(
+    app: &App,
+    reference: &Path,
+    paths: &Paths,
+    pid: u32,
+    exe: PathBuf,
+    step: &Finish,
+    registered: bool,
+    wait: &dyn Fn(u32) -> bool,
+    start: &dyn Fn(&Path) -> Result<(), String>,
+) -> Result<(), String> {
+    let portable_before = has_portable_marker(&exe);
+    let stepped = step_after_wait(app, reference, pid, &exe, step, wait);
+    let done = stepped.result;
     if let Err(e) = &done {
-        record_failure(&paths, e);
+        record_failure(paths, e);
     }
     // The new app, or the old one when the step failed.
     let exe = if done.is_ok() { exe_after_msi(app, registered, &exe) } else { exe };
-    // A failed move can leave no program to start; its recorded error already says how to get
-    // the app back, and a restart error must not replace it.
-    if !restarts(done.is_ok(), exe.is_file()) {
-        return Some(done);
+    // A standalone copy updated from the portable zip gains `portable.txt` and keeps its folders
+    // beside it from now on: the records the new app reads go there.
+    let version = scheduled_version(paths);
+    let moved = (done.is_ok() && has_portable_marker(&exe) != portable_before).then(|| Paths::for_exe(app, &exe).ok()).flatten();
+    if let Some(after) = &moved {
+        move_marker(paths, after);
     }
-    let started = signed_like(app, &me, &exe)
-        .and_then(|()| process::spawn_detached(std::process::Command::new(&exe)).map_err(|e| format!("couldn't start {} ({e})", exe.display())));
-    if let Err(e) = &started {
-        record_failure(&paths, e);
+    let paths = moved.as_ref().unwrap_or(paths);
+    // An app that is still running gets no second copy. A failed move can leave no program to
+    // start; its recorded error already says how to get the app back, and a restart error must
+    // not replace it.
+    if !restarts(stepped.exited, done.is_ok(), exe.is_file()) {
+        return done;
     }
-    Some(done.and(started))
+    // Written before the new app starts, so its first start finds it. A failed start removes it.
+    if done.is_ok()
+        && let Some(version) = &version
+    {
+        record_done(paths, version);
+    }
+    let started = start(&exe);
+    let restarted = started.is_ok();
+    let result = with_restart(done, started);
+    if !restarted && let Err(e) = &result {
+        record_failure(paths, e);
+    }
+    result
+}
+
+/// The helper's result once it has tried to start the app: when both the update step and the
+/// start fail, the error names both, the step's first.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn with_restart(done: Result<(), String>, started: Result<(), String>) -> Result<(), String> {
+    match (done, started) {
+        (done, Ok(())) => done,
+        (Ok(()), Err(restart)) => Err(restart),
+        (Err(update), Err(restart)) => Err(format!("{update}; {restart}")),
+    }
+}
+
+/// Whether `exe` has `portable.txt` beside it, which makes [`Paths::for_exe`] keep its folders
+/// there.
+#[cfg(windows)]
+fn has_portable_marker(exe: &Path) -> bool {
+    exe.parent().is_some_and(|dir| dir.join("portable.txt").is_file())
+}
+
+/// Moves the record of the scheduled update from `from` to `to`, the folders the updated app
+/// reads, and removes outcome records left in `to` by an earlier update.
+#[cfg(windows)]
+fn move_marker(from: &Paths, to: &Paths) {
+    let _ = std::fs::remove_file(failure_file(to));
+    let _ = std::fs::remove_file(done_file(to));
+    if let Some(text) = read_record(&marker(from))
+        && crate::paths::write_atomic(&marker(to), text.as_bytes()).is_ok()
+    {
+        let _ = std::fs::remove_file(marker(from));
+    }
 }
 
 /// Finishes an update on non-Windows platforms (no-op helper).
@@ -829,20 +1546,25 @@ fn failure_file(paths: &Paths) -> PathBuf {
     paths.logs().join("self-update-error.txt")
 }
 
-/// Records a failed update: the next check offers the update again, and the next start logs `error`.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn record_failure(paths: &Paths, error: &str) {
+/// Records a failed update: the next check offers the update again, and the next start shows
+/// `error`. A record of the update as finished is removed.
+#[cfg_attr(not(any(windows, feature = "egui")), allow(dead_code))]
+pub(crate) fn record_failure(paths: &Paths, error: &str) {
     let _ = std::fs::remove_file(marker(paths));
+    let _ = std::fs::remove_file(done_file(paths));
     let _ = std::fs::create_dir_all(paths.logs());
     let _ = crate::paths::write_atomic(&failure_file(paths), error.as_bytes());
 }
 
-/// The error of the last update, if it failed, once.
+/// The error of the last update, if it failed, once. A long error is cut short at
+/// [`RECORD_LIMIT`] bytes.
 pub fn take_failure(paths: &Paths) -> Option<String> {
     let file = failure_file(paths);
-    let error = std::fs::read_to_string(&file).ok()?;
-    let _ = std::fs::remove_file(&file);
-    Some(error)
+    let error = read_record(&file);
+    if is_plain_file(&file) {
+        let _ = std::fs::remove_file(&file);
+    }
+    error
 }
 
 /// Whether `exe` is named like this app's own executable (case-insensitive, any of its ids).
@@ -857,16 +1579,16 @@ fn own_executable(app: &App, exe: &Path) -> Result<(), String> {
     if is_own_executable(app, exe) { Ok(()) } else { Err(format!("the update helper only finishes {}'s own update", app.name)) }
 }
 
-/// Checks, while the app still runs and can show the error, what the helper checks before
-/// it installs: this program, the installed exe and the new MSI are signed by one publisher, and
-/// the helper finds the cache in `paths` that holds its copy, the download and the staging folder.
+/// Checks, before anything is downloaded, what the helper checks before it installs and what
+/// does not depend on the download: this program and the installed exe are signed by one
+/// publisher, and the helper finds the cache in `paths` that holds its copy, the download and the
+/// staging folder.
 #[cfg(windows)]
-fn windows_precheck(app: &App, install: &Install, paths: &Paths, download: &Path) -> Result<(), String> {
+fn windows_precheck(app: &App, install: &Install, paths: &Paths) -> Result<(), String> {
     let me = std::env::current_exe().map_err(|e| format!("couldn't find this program ({e})"))?;
     match install {
         Install::Msi(exe) => signed_like(app, &me, exe)
             .and_then(|()| msi_step(app, exe).map(drop))
-            .and_then(|()| signed_like(app, &me, download))
             .and_then(|()| own_executable(app, exe))
             .and_then(|()| same_cache_as_helper(app, paths, exe)),
         Install::Portable(exe) | Install::Standalone(exe) => {
@@ -876,11 +1598,26 @@ fn windows_precheck(app: &App, install: &Install, paths: &Paths, download: &Path
     }
 }
 
+/// Checks the finished download, while the app still runs and can show the error: a new MSI is
+/// signed by this program's publisher.
+#[cfg(windows)]
+fn windows_check_download(app: &App, install: &Install, download: &Path) -> Result<(), String> {
+    match install {
+        Install::Msi(_) => {
+            let me = std::env::current_exe().map_err(|e| format!("couldn't find this program ({e})"))?;
+            signed_like(app, &me, download)
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Accepts `paths` when the update helper, which finds the app's folders again from `exe`
 /// ([`Paths::for_exe`]), finds the same cache. Refuses an app that keeps its files in the
-/// temporary folder because its own folders couldn't be found.
+/// temporary folder because its own folders couldn't be found. The cache is created first, so a
+/// first update finds it before the download does.
 #[cfg(windows)]
 fn same_cache_as_helper(app: &App, paths: &Paths, exe: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(&paths.cache).map_err(|e| format!("couldn't create {} ({e})", paths.cache.display()))?;
     let canonical = |p: &Path| p.canonicalize().ok();
     let theirs = Paths::for_exe(app, exe).ok().and_then(|helper| canonical(&helper.cache));
     if theirs.is_some() && theirs == canonical(&paths.cache) {
@@ -941,65 +1678,26 @@ fn check_helper(app: &App, me: &Path, paths: &Paths, exe: &Path, step: &Finish) 
     if allowed { Ok(()) } else { Err(refused()) }
 }
 
-/// Lets a Windows test observe both sides of `run_step`'s wait for the old launcher. Compiled only
-/// for tests, so production behavior is unchanged.
-#[cfg(all(test, windows))]
-mod wait_watch {
-    use std::sync::mpsc::{self, Receiver, Sender};
-    use std::sync::{Mutex, PoisonError};
-
-    /// A test's two observations of one wait, keyed by the launcher's pid.
-    pub(super) struct Channels {
-        /// Sent just before `run_step` calls the wait.
-        pub(super) entered: Receiver<()>,
-        /// Sent right after the wait returns, before any extraction, and carries the wait's result.
-        pub(super) returned: Receiver<bool>,
-    }
-
-    struct Watch {
-        pid: u32,
-        entered: Option<Sender<()>>,
-        returned: Option<Sender<bool>>,
-    }
-
-    static WATCH: Mutex<Option<Watch>> = Mutex::new(None);
-
-    pub(super) fn watch(pid: u32) -> Channels {
-        let (entered, entered_rx) = mpsc::channel();
-        let (returned, returned_rx) = mpsc::channel();
-        *WATCH.lock().unwrap_or_else(PoisonError::into_inner) = Some(Watch { pid, entered: Some(entered), returned: Some(returned) });
-        Channels { entered: entered_rx, returned: returned_rx }
-    }
-
-    /// Notes that `run_step` is about to wait. Only the first call for a watched pid is kept.
-    pub(super) fn entered(pid: u32) {
-        let mut watch = WATCH.lock().unwrap_or_else(PoisonError::into_inner);
-        let sender = watch.as_mut().filter(|watch| watch.pid == pid).and_then(|watch| watch.entered.take());
-        if let Some(sender) = sender {
-            let _ = sender.send(());
-        }
-    }
-
-    /// Notes the wait's result as soon as it returns; the step hasn't run yet.
-    pub(super) fn returned(pid: u32, waited: bool) {
-        let mut watch = WATCH.lock().unwrap_or_else(PoisonError::into_inner);
-        let sender = watch.as_mut().filter(|watch| watch.pid == pid).and_then(|watch| watch.returned.take());
-        if let Some(sender) = sender {
-            let _ = sender.send(waited);
-        }
-    }
+/// [`step_after_wait`], waiting up to `wait` for `pid` to exit.
+#[cfg(all(windows, test))]
+fn run_step(app: &App, reference: &Path, pid: u32, exe: &Path, step: &Finish, wait: std::time::Duration) -> Result<(), String> {
+    step_after_wait(app, reference, pid, exe, step, &|pid| process::wait_for_exit(pid, wait)).result
 }
 
-/// Waits up to `wait` for `pid` to exit, does `step` once it has, and removes the download either
-/// way. The MSI, and every program in the portable zip, must be signed like `reference`.
+/// What [`step_after_wait`] came to.
 #[cfg(windows)]
-fn run_step(app: &App, reference: &Path, pid: u32, exe: &Path, step: &Finish, wait: std::time::Duration) -> Result<(), String> {
-    #[cfg(test)]
-    wait_watch::entered(pid);
-    // The test hook needs the result, so it is stored rather than consumed by the branch.
-    let waited = process::wait_for_exit(pid, wait);
-    #[cfg(test)]
-    wait_watch::returned(pid, waited);
+struct Stepped {
+    /// The old app had exited when the wait returned.
+    exited: bool,
+    result: Result<(), String>,
+}
+
+/// Calls `wait`, which says whether `pid` exited in time, does `step` once it has, and removes
+/// the download either way. The MSI, and every program in the portable zip, must be signed like
+/// `reference`.
+#[cfg(windows)]
+fn step_after_wait(app: &App, reference: &Path, pid: u32, exe: &Path, step: &Finish, wait: &dyn Fn(u32) -> bool) -> Stepped {
+    let waited = wait(pid);
     let result = if waited {
         match step {
             Finish::Msi(msi) => {
@@ -1025,7 +1723,7 @@ fn run_step(app: &App, reference: &Path, pid: u32, exe: &Path, step: &Finish, wa
             let _ = std::fs::remove_file(zip);
         }
     }
-    result
+    Stepped { exited: waited, result }
 }
 
 #[cfg(test)]
@@ -1095,6 +1793,711 @@ mod tests {
         let loose = dir.path().join("artcraft-launcher");
         std::fs::write(&loose, b"binary").unwrap();
         assert_eq!(detect(&crate::suite::LAUNCHER, &loose), Some(Install::Standalone(loose.clone())));
+    }
+
+    /// A minimal launcher bundle in `folder`; returns its executable.
+    #[cfg(target_os = "macos")]
+    fn launcher_bundle(folder: &Path) -> PathBuf {
+        let contents = folder.join("Launcher.app/Contents");
+        std::fs::create_dir_all(contents.join("MacOS")).unwrap();
+        let mut info = plist::Dictionary::new();
+        info.insert("CFBundleIdentifier".into(), plist::Value::String(crate::suite::LAUNCHER.bundle_id()));
+        plist::Value::Dictionary(info).to_file_xml(contents.join("Info.plist")).unwrap();
+        let exe = contents.join("MacOS/artcraft-launcher");
+        std::fs::write(&exe, b"binary").unwrap();
+        exe
+    }
+
+    /// Sets a folder's mode and gives it back to `0o755` when dropped, so the temporary folder
+    /// can be removed however the test ends.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    struct ModeGuard(PathBuf);
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    impl ModeGuard {
+        fn set(path: &Path, mode: u32) -> Self {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+            Self(path.to_path_buf())
+        }
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    impl Drop for ModeGuard {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    /// Root passes the permission checks these tests rely on.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn running_as_root() -> bool {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = ModeGuard::set(dir.path(), 0o555);
+        std::fs::write(dir.path().join("probe"), b"").is_ok()
+    }
+
+    /// A copy in a folder the user can write, as in `~/Applications`, keeps the update.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_copy_it_can_write_is_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = launcher_bundle(&dir.path().join("Applications"));
+        let bundle = exe.ancestors().nth(3).unwrap().canonicalize().unwrap();
+        assert_eq!(current_at(&crate::suite::LAUNCHER, &exe, false), Some(Install::MacApp(bundle)));
+    }
+
+    /// The staging folder can't be created in a folder the user can't write. [`DEV_VAR`] still
+    /// offers the update, to try it.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_copy_in_a_folder_it_cannot_write_gets_the_download_link() {
+        if running_as_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("Applications");
+        let exe = launcher_bundle(&folder);
+        let guard = ModeGuard::set(&folder, 0o555);
+        assert_eq!(current_at(&crate::suite::LAUNCHER, &exe, false), None);
+        assert!(current_at(&crate::suite::LAUNCHER, &exe, true).is_some(), "the opt-in still offers it");
+        drop(guard);
+        assert!(current_at(&crate::suite::LAUNCHER, &exe, false).is_some(), "the answer follows the folder's permissions");
+    }
+
+    /// A standalone copy is replaced by writing beside it, so the folder has to be writable.
+    /// [`DEV_VAR`] still offers the update, to try it.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_standalone_copy_in_a_folder_it_cannot_write_gets_the_download_link() {
+        if running_as_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("bin");
+        std::fs::create_dir(&folder).unwrap();
+        let exe = folder.join("artcraft-launcher");
+        std::fs::write(&exe, b"binary").unwrap();
+        let guard = ModeGuard::set(&folder, 0o555);
+        assert_eq!(current_at(&crate::suite::LAUNCHER, &exe, false), None);
+        assert!(current_at(&crate::suite::LAUNCHER, &exe, true).is_some(), "the opt-in still offers it");
+        drop(guard);
+        assert!(current_at(&crate::suite::LAUNCHER, &exe, false).is_some(), "the answer follows the folder's permissions");
+    }
+
+    /// The update replaces a standalone copy's `share` files too, so that folder has to be
+    /// writable as well. [`DEV_VAR`] still offers the update, to try it.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_standalone_copy_whose_share_folder_it_cannot_write_gets_the_download_link() {
+        if running_as_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        let share = dir.path().join("share").join(crate::suite::LAUNCHER.id);
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&share).unwrap();
+        let exe = bin.join(crate::suite::LAUNCHER.id);
+        std::fs::write(&exe, b"binary").unwrap();
+        let guard = ModeGuard::set(&share, 0o555);
+        assert_eq!(current_at(&crate::suite::LAUNCHER, &exe, false), None);
+        assert!(current_at(&crate::suite::LAUNCHER, &exe, true).is_some(), "the opt-in still offers it");
+        drop(guard);
+        assert!(current_at(&crate::suite::LAUNCHER, &exe, false).is_some(), "the answer follows the folder's permissions");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn share_folders_are_the_ones_a_release_writes_to() {
+        let app = &crate::suite::LAUNCHER;
+        let dir = tempfile::tempdir().unwrap();
+        let share = dir.path().join("share");
+        std::fs::create_dir_all(share.join(app.id).join("models/small")).unwrap();
+        std::fs::create_dir_all(share.join("icons/SomeTheme/apps")).unwrap();
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(outside.join("inner")).unwrap();
+        std::os::unix::fs::symlink(&outside, share.join(app.id).join("linked")).unwrap();
+        let found = share_folders(app, &share);
+        // `applications`, `doc`, `metainfo` and `mime` don't exist, so `share` is checked for them;
+        // `hicolor` doesn't, so `icons` is. `SomeTheme` isn't a folder a release writes to. The walk
+        // follows the link. `pixmaps` doesn't exist, and nothing inside `share` is checked for it.
+        let mut expected = vec![
+            share.clone(),
+            share.join("icons"),
+            share.join(app.id),
+            share.join(app.id).join("linked"),
+            share.join(app.id).join("linked/inner"),
+            share.join(app.id).join("models"),
+            share.join(app.id).join("models/small"),
+        ];
+        expected.sort();
+        assert_eq!(found, expected);
+
+        let apps = share.join("icons/hicolor/256x256/apps");
+        std::fs::create_dir_all(&apps).unwrap();
+        std::fs::write(apps.join(format!("{}.png", app.bundle_id())), b"icon").unwrap();
+        std::fs::create_dir_all(share.join("icons/hicolor/48x48/apps")).unwrap();
+        for folder in ["applications", "pixmaps", "metainfo", "mime"] {
+            std::fs::create_dir_all(share.join(folder)).unwrap();
+        }
+        std::fs::create_dir_all(share.join("doc").join(app.id).join("html")).unwrap();
+        let found = share_folders(app, &share);
+        let doc = format!("doc/{}", app.id);
+        let html = format!("doc/{}/html", app.id);
+        for folder in ["icons/hicolor", "icons/hicolor/256x256/apps", "applications", "pixmaps", "metainfo", "mime", &doc, &html] {
+            assert!(found.contains(&share.join(folder)), "{folder} in {found:?}");
+        }
+        // Another package's icon folder isn't one the release writes to.
+        assert!(!found.contains(&share.join("icons/hicolor/48x48/apps")), "{found:?}");
+        assert!(!found.contains(&share), "every folder exists, so `share` is checked for none: {found:?}");
+    }
+
+    /// When the app's folder is a link, the walk goes through it.
+    #[cfg(unix)]
+    #[test]
+    fn share_folders_walk_a_linked_app_folder() {
+        let app = &crate::suite::LAUNCHER;
+        let dir = tempfile::tempdir().unwrap();
+        let share = dir.path().join("share");
+        let elsewhere = dir.path().join("elsewhere");
+        std::fs::create_dir_all(elsewhere.join("models")).unwrap();
+        std::fs::create_dir_all(&share).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, share.join(app.id)).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, elsewhere.join("models/loop")).unwrap();
+        let found = share_folders(app, &share);
+        assert!(found.contains(&share.join(app.id).join("models")), "{found:?}");
+        // The loop is listed once and not read again.
+        assert!(found.contains(&share.join(app.id).join("models/loop")), "{found:?}");
+        assert!(!found.contains(&share.join(app.id).join("models/loop/models")), "{found:?}");
+    }
+
+    /// The walk reads at most the limit's number of entries in each of the app's folder,
+    /// `doc/<id>` and `icons/hicolor`.
+    #[test]
+    fn share_folders_stop_at_the_limit() {
+        let app = &crate::suite::LAUNCHER;
+        let dir = tempfile::tempdir().unwrap();
+        let share = dir.path().join("share");
+        for name in ["a", "b", "c", "d"] {
+            std::fs::create_dir_all(share.join(app.id).join(name)).unwrap();
+        }
+        let found = share_folders_within(app, &share, 2);
+        let walked = found.iter().filter(|folder| folder.starts_with(share.join(app.id))).count();
+        // The app's folder and the two entries read in it.
+        assert_eq!(walked, 3, "{found:?}");
+        // `share` is checked for `icons/hicolor`, `applications`, `doc/<id>`, `metainfo` and
+        // `mime/packages`.
+        assert_eq!(found.len(), 4, "{found:?}");
+        assert_eq!(share_folders(app, &share).len(), 6, "the default limit takes in the whole tree");
+
+        // A full app folder doesn't use up the icon folders' entries.
+        let apps = share.join("icons/hicolor/256x256/apps");
+        std::fs::create_dir_all(&apps).unwrap();
+        std::fs::write(apps.join(format!("{}.png", app.bundle_id())), b"icon").unwrap();
+        let found = share_folders_within(app, &share, 2);
+        assert!(found.contains(&apps), "{found:?}");
+    }
+
+    /// A release writes into the folders inside the app's folder, `doc/<id>` and `icons/hicolor`,
+    /// and into `metainfo`, `mime/packages` and `pixmaps`, so a copy whose such folder the user
+    /// can't write gets the download link.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_standalone_copy_with_a_nested_share_folder_it_cannot_write_gets_the_download_link() {
+        if running_as_root() {
+            return;
+        }
+        let app = &crate::suite::LAUNCHER;
+        for nested in [
+            format!("{}/models", app.id),
+            format!("doc/{}/html", app.id),
+            "icons/hicolor/256x256/apps".to_string(),
+            "metainfo".to_string(),
+            "mime/packages".to_string(),
+            "pixmaps".to_string(),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let bin = dir.path().join("bin");
+            let share = dir.path().join("share");
+            std::fs::create_dir_all(&bin).unwrap();
+            std::fs::create_dir_all(share.join(app.id)).unwrap();
+            std::fs::create_dir_all(share.join(&nested)).unwrap();
+            if nested.starts_with("icons") {
+                std::fs::write(share.join(&nested).join(format!("{}.png", app.bundle_id())), b"icon").unwrap();
+            }
+            let exe = bin.join(app.id);
+            std::fs::write(&exe, b"binary").unwrap();
+            let guard = ModeGuard::set(&share.join(&nested), 0o555);
+            assert_eq!(current_at(app, &exe, false), None, "{nested}");
+            drop(guard);
+            assert!(current_at(app, &exe, false).is_some(), "{nested}: the answer follows the folder's permissions");
+        }
+    }
+
+    /// A folder outside the ones a release writes to doesn't count, such as another theme or
+    /// another package's icon folder in a shared prefix.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_share_folder_a_release_does_not_write_to_does_not_refuse() {
+        if running_as_root() {
+            return;
+        }
+        let app = &crate::suite::LAUNCHER;
+        for other in ["icons/SomeTheme", "icons/hicolor/48x48/apps"] {
+            let dir = tempfile::tempdir().unwrap();
+            let bin = dir.path().join("bin");
+            let share = dir.path().join("share");
+            std::fs::create_dir_all(&bin).unwrap();
+            std::fs::create_dir_all(share.join(app.id)).unwrap();
+            std::fs::create_dir_all(share.join(other)).unwrap();
+            std::fs::write(share.join(other).join("other-app.png"), b"icon").unwrap();
+            let exe = bin.join(app.id);
+            std::fs::write(&exe, b"binary").unwrap();
+            let _guard = ModeGuard::set(&share.join(other), 0o555);
+            assert!(current_at(app, &exe, false).is_some(), "{other}");
+        }
+    }
+
+    /// When every folder a release writes to exists, a `share` folder the user can't write doesn't
+    /// refuse, even with `pixmaps` missing: only the old flat layout writes there.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_share_folder_it_cannot_write_does_not_refuse_when_the_release_folders_exist() {
+        if running_as_root() {
+            return;
+        }
+        let app = &crate::suite::LAUNCHER;
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        let share = dir.path().join("share");
+        std::fs::create_dir_all(&bin).unwrap();
+        let doc = format!("doc/{}", app.id);
+        for folder in [app.id, "applications", "icons/hicolor", &doc, "metainfo", "mime/packages"] {
+            std::fs::create_dir_all(share.join(folder)).unwrap();
+        }
+        let exe = bin.join(app.id);
+        std::fs::write(&exe, b"binary").unwrap();
+        let _guard = ModeGuard::set(&share, 0o555);
+        assert!(current_at(app, &exe, false).is_some());
+    }
+
+    /// A release writes into `doc/<id>`, `metainfo` and `mime/packages`, and the update creates a
+    /// missing one in its nearest existing parent, `share` included, so a copy that lacks one of
+    /// them and whose such parent the user can't write gets the download link.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_missing_release_folder_in_a_share_folder_it_cannot_write_gets_the_download_link() {
+        if running_as_root() {
+            return;
+        }
+        let app = &crate::suite::LAUNCHER;
+        let doc = format!("doc/{}", app.id);
+        for (missing, parent) in [("doc", ""), ("metainfo", ""), ("mime", ""), (doc.as_str(), "doc"), ("mime/packages", "mime")] {
+            let dir = tempfile::tempdir().unwrap();
+            let bin = dir.path().join("bin");
+            let share = dir.path().join("share");
+            std::fs::create_dir_all(&bin).unwrap();
+            for folder in [app.id, "applications", "icons/hicolor", "pixmaps", &doc, "metainfo", "mime/packages"] {
+                if !folder.starts_with(missing) {
+                    std::fs::create_dir_all(share.join(folder)).unwrap();
+                }
+            }
+            std::fs::create_dir_all(share.join(parent)).unwrap();
+            let exe = bin.join(app.id);
+            std::fs::write(&exe, b"binary").unwrap();
+            let guard = ModeGuard::set(&share.join(parent), 0o555);
+            assert_eq!(current_at(app, &exe, false), None, "{missing}");
+            drop(guard);
+            assert!(current_at(app, &exe, false).is_some(), "{missing}: the answer follows the folder's permissions");
+        }
+    }
+
+    /// A folder in the app's folder that the user can't read is still checked itself, but the
+    /// folders inside it are not, even one the user can't write.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_folder_in_the_app_folder_it_cannot_read_counts_only_by_its_own_permissions() {
+        if running_as_root() {
+            return;
+        }
+        let app = &crate::suite::LAUNCHER;
+        for (mode, refused) in [(0o000, true), (0o111, true), (0o333, false)] {
+            let dir = tempfile::tempdir().unwrap();
+            let bin = dir.path().join("bin");
+            let data = dir.path().join("share").join(app.id).join("data");
+            std::fs::create_dir_all(&bin).unwrap();
+            std::fs::create_dir_all(data.join("inner")).unwrap();
+            let exe = bin.join(app.id);
+            std::fs::write(&exe, b"binary").unwrap();
+            let inner = ModeGuard::set(&data.join("inner"), 0o555);
+            let guard = ModeGuard::set(&data, mode);
+            assert_eq!(current_at(app, &exe, false).is_none(), refused, "{mode:o}");
+            drop(guard);
+            drop(inner);
+            assert!(current_at(app, &exe, false).is_some(), "{mode:o}: the answer follows the folder's permissions");
+        }
+    }
+
+    /// The update writes through a linked folder, so a folder inside the link's target that the
+    /// user can't write gets the download link, also when the app's folder is the link.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_folder_behind_a_link_it_cannot_write_gets_the_download_link() {
+        if running_as_root() {
+            return;
+        }
+        let app = &crate::suite::LAUNCHER;
+        for linked_app_folder in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let bin = dir.path().join("bin");
+            let share = dir.path().join("share");
+            let elsewhere = dir.path().join("elsewhere");
+            std::fs::create_dir_all(&bin).unwrap();
+            std::fs::create_dir_all(elsewhere.join("models")).unwrap();
+            std::fs::create_dir_all(&share).unwrap();
+            if linked_app_folder {
+                std::os::unix::fs::symlink(&elsewhere, share.join(app.id)).unwrap();
+            } else {
+                std::fs::create_dir_all(share.join(app.id)).unwrap();
+                std::os::unix::fs::symlink(&elsewhere, share.join(app.id).join("data")).unwrap();
+            }
+            let exe = bin.join(app.id);
+            std::fs::write(&exe, b"binary").unwrap();
+            let guard = ModeGuard::set(&elsewhere.join("models"), 0o555);
+            assert_eq!(current_at(app, &exe, false), None, "linked app folder: {linked_app_folder}");
+            drop(guard);
+            assert!(current_at(app, &exe, false).is_some(), "linked app folder: {linked_app_folder}");
+        }
+    }
+
+    /// In a sticky folder such as `/tmp`, only the owner of the folder or of the file, or root,
+    /// can rename over the file.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_sticky_folder_refuses_a_file_another_user_owns() {
+        let (me, other) = (501, 502);
+        assert!(sticky_refuses(0o1777, 0, other, me), "neither the folder nor the file is mine");
+        assert!(!sticky_refuses(0o1777, 0, me, me), "my file");
+        assert!(!sticky_refuses(0o1777, me, other, me), "my folder");
+        assert!(!sticky_refuses(0o1777, other, other, 0), "root");
+        assert!(!sticky_refuses(0o777, 0, other, me), "no sticky bit");
+
+        // A sticky folder of the user's own keeps the update.
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("artcraft-launcher");
+        std::fs::write(&exe, b"binary").unwrap();
+        let _guard = ModeGuard::set(dir.path(), 0o1777);
+        assert!(can_replace_file(&exe));
+    }
+
+    /// The update also renames over the app's other programs and its `share` files, so a sticky
+    /// folder holding one that another user owns refuses. The test reads the folder as another
+    /// user, to whom the temporary folder and its files belong to someone else.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_sticky_folder_holding_a_file_the_update_replaces_refuses() {
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("artcraft-launcher-cli"), b"binary").unwrap();
+        std::fs::write(dir.path().join("notes.txt"), b"").unwrap();
+        let me = std::fs::metadata(dir.path()).unwrap().uid();
+        let someone_else = me + 1;
+        let cli = |path: &Path| path.ends_with("artcraft-launcher-cli");
+        let notes = |path: &Path| path.ends_with("notes.txt");
+        let none = |_: &Path| false;
+        assert!(!sticky_folder_refuses_for(dir.path(), cli, someone_else), "no sticky bit");
+        let _guard = ModeGuard::set(dir.path(), 0o1777);
+        assert!(sticky_folder_refuses_for(dir.path(), cli, someone_else));
+        assert!(sticky_folder_refuses_for(dir.path(), notes, someone_else));
+        assert!(!sticky_folder_refuses_for(dir.path(), none, someone_else), "a file the update doesn't replace");
+        assert!(!sticky_folder_refuses_for(dir.path(), cli, me), "the user's own folder");
+        assert!(!sticky_folder_refuses(dir.path(), cli));
+    }
+
+    /// The sticky check counts only files the update renames over: the app's programs, and its
+    /// own files under `share`.
+    #[test]
+    fn the_sticky_check_counts_only_the_apps_files() {
+        let app = &crate::suite::LAUNCHER;
+        let bin = Path::new("/p/bin");
+        assert!(is_app_program(app, &bin.join(app.id)));
+        assert!(is_app_program(app, &bin.join(format!("{}-cli", app.id))));
+        assert!(!is_app_program(app, &bin.join(format!("{}.log", app.id))));
+        assert!(!is_app_program(app, &bin.join(format!("{}-cli.log", app.id))));
+        assert!(!is_app_program(app, &bin.join(format!("{}x", app.id))));
+        assert!(!is_app_program(app, &bin.join("other")));
+
+        let share = Path::new("/p/share");
+        assert!(is_share_file(app, share, &share.join(app.id).join("models/weights.bin")));
+        assert!(is_share_file(app, share, &share.join("doc").join(app.id).join("README.md")));
+        assert!(is_share_file(app, share, &share.join("applications").join(format!("{}.desktop", app.bundle_id()))));
+        assert!(is_share_file(app, share, &share.join("pixmaps").join(format!("{}.png", app.id))));
+        assert!(!is_share_file(app, share, &share.join("applications/other.desktop")));
+        assert!(!is_share_file(app, share, &share.join("pixmaps").join(format!("{}-old.png", app.id))));
+    }
+
+    #[test]
+    fn a_prefix_counts_only_with_a_bin_folder_and_the_apps_share_folder() {
+        let app = &crate::suite::LAUNCHER;
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        assert_eq!(prefix_with_share(app, &bin), None, "no share folder");
+        std::fs::create_dir_all(dir.path().join("share").join(app.id)).unwrap();
+        assert_eq!(prefix_with_share(app, &bin), Some(dir.path()));
+        let other = dir.path().join("tools");
+        std::fs::create_dir_all(&other).unwrap();
+        assert_eq!(prefix_with_share(app, &other), None, "not a bin folder");
+    }
+
+    /// Renaming a directory into another folder needs write permission on the directory, so a
+    /// writable parent is not enough. Mode 555 stands in for a bundle another account owns.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_bundle_it_cannot_write_gets_the_download_link() {
+        if running_as_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let exe = launcher_bundle(dir.path());
+        let _guard = ModeGuard::set(exe.ancestors().nth(3).unwrap(), 0o555);
+        assert_eq!(current_at(&crate::suite::LAUNCHER, &exe, false), None);
+    }
+
+    /// A copy opened from a mounted disk image is on a read-only volume.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_copy_on_a_read_only_image_gets_the_download_link() {
+        struct Detach(PathBuf);
+        impl Drop for Detach {
+            fn drop(&mut self) {
+                let _ = std::process::Command::new("hdiutil").arg("detach").arg("-force").arg(&self.0).output();
+            }
+        }
+        /// Tries a few times, because the disk-image helper turns requests away while it is busy,
+        /// and removes what a failed `create` left at `partial` first. Returns what it last said.
+        fn hdiutil(args: &[&std::ffi::OsStr], partial: Option<&Path>) -> Result<(), String> {
+            let mut said = String::new();
+            for _ in 0..5 {
+                if let Some(partial) = partial {
+                    let _ = std::fs::remove_file(partial);
+                }
+                let output = std::process::Command::new("hdiutil").args(args).output().unwrap();
+                if output.status.success() {
+                    return Ok(());
+                }
+                said = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            }
+            Err(said)
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (src, image, mount) = (dir.path().join("src"), dir.path().join("test.dmg"), dir.path().join("mount"));
+        launcher_bundle(&src);
+        std::fs::create_dir(&mount).unwrap();
+        let _one_at_a_time = crate::install::macos::DISK_IMAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let text = std::ffi::OsStr::new;
+        let created = hdiutil(
+            &[text("create"), text("-quiet"), text("-format"), text("UDZO"), text("-srcfolder"), src.as_os_str(), image.as_os_str()],
+            Some(&image),
+        );
+        let attached = created.and_then(|()| {
+            let attach = [
+                text("attach"),
+                text("-nobrowse"),
+                text("-readonly"),
+                text("-noautoopen"),
+                text("-noverify"),
+                text("-mountpoint"),
+                mount.as_os_str(),
+                image.as_os_str(),
+            ];
+            hdiutil(&attach, None)
+        });
+        if let Err(said) = attached {
+            eprintln!("skipped: the disk-image helper stayed busy: {said}");
+            return;
+        }
+        let _detach = Detach(mount.clone());
+        let exe = mount.join("Launcher.app/Contents/MacOS/artcraft-launcher");
+        assert!(exe.is_file(), "the image holds the bundle");
+        assert_eq!(current_at(&crate::suite::LAUNCHER, &exe, false), None);
+    }
+
+    /// The update replaces the bundle a symlink leads to, so that bundle's folder decides.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_symlinked_copy_is_judged_by_where_it_really_is() {
+        if running_as_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        launcher_bundle(&real);
+        let links = dir.path().join("links");
+        std::fs::create_dir(&links).unwrap();
+        std::os::unix::fs::symlink(real.join("Launcher.app"), links.join("Launcher.app")).unwrap();
+        let exe = links.join("Launcher.app/Contents/MacOS/artcraft-launcher");
+        {
+            let _guard = ModeGuard::set(&links, 0o555);
+            let found = current_at(&crate::suite::LAUNCHER, &exe, false);
+            assert_eq!(found, Some(Install::MacApp(real.canonicalize().unwrap().join("Launcher.app"))));
+        }
+        let _guard = ModeGuard::set(&real, 0o555);
+        assert_eq!(current_at(&crate::suite::LAUNCHER, &exe, false), None);
+    }
+
+    /// A check that can't answer does not take the update away.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_check_that_cannot_answer_keeps_the_update() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(can_replace_bundle(&dir.path().join("missing/Launcher.app")));
+        assert!(can_replace_bundle(Path::new("Launcher.app")));
+    }
+
+    /// A copy under an App Translocation folder gets the download link even where the folder
+    /// allows the update.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_translocated_copy_gets_the_download_link() {
+        let output = std::process::Command::new("/usr/bin/getconf").arg("DARWIN_USER_TEMP_DIR").output().unwrap();
+        let system_temp = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim()).canonicalize().unwrap();
+        let dir = tempfile::tempdir_in(system_temp).unwrap();
+        let exe = launcher_bundle(&dir.path().join("AppTranslocation/0A1B/d"));
+        assert_eq!(current_at(&crate::suite::LAUNCHER, &exe, false), None);
+    }
+
+    /// A locked bundle answers with a different refusal from a bundle without permission, and
+    /// can't be moved either.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_locked_bundle_gets_the_download_link() {
+        struct Unlock(PathBuf);
+        impl Drop for Unlock {
+            fn drop(&mut self) {
+                let _ = std::process::Command::new("/usr/bin/chflags").arg("nouchg").arg(&self.0).status();
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let exe = launcher_bundle(dir.path());
+        let bundle = dir.path().join("Launcher.app");
+        assert!(std::process::Command::new("/usr/bin/chflags").arg("uchg").arg(&bundle).status().unwrap().success());
+        let _unlock = Unlock(bundle);
+        assert_eq!(current_at(&crate::suite::LAUNCHER, &exe, false), None);
+    }
+
+    /// Only the App Translocation folder under the system's per-user folders counts.
+    #[test]
+    fn only_the_system_translocation_folder_counts() {
+        assert!(is_translocated(Path::new("/private/var/folders/ab/cd/T/AppTranslocation/0A1B/d/Launcher.app")));
+        for other in ["/Applications/Launcher.app", "/Users/ada/AppTranslocation/Launcher.app", "/private/var/folders/ab/cd/T/Launcher.app"] {
+            assert!(!is_translocated(Path::new(other)), "{other}");
+        }
+    }
+
+    /// Adds a deny entry to `path`'s access control list; the list is cleared when dropped, so
+    /// the temporary folder can be removed however the test ends.
+    #[cfg(target_os = "macos")]
+    struct DenyGuard(PathBuf);
+
+    #[cfg(target_os = "macos")]
+    impl DenyGuard {
+        fn add(path: &Path, right: &str) -> Self {
+            let status = std::process::Command::new("/bin/chmod").arg("+a").arg(format!("everyone deny {right}")).arg(path).status().unwrap();
+            assert!(status.success(), "chmod +a {right}");
+            Self(path.to_path_buf())
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    impl Drop for DenyGuard {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("/bin/chmod").arg("-N").arg(&self.0).status();
+        }
+    }
+
+    /// The update adds a subdirectory to the folder and moves the bundle, so a list that denies
+    /// only adding files keeps it, and one that denies either step does not.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn access_control_lists_are_judged_by_the_rights_the_update_uses() {
+        if running_as_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("Applications");
+        let exe = launcher_bundle(&folder);
+        let bundle = folder.join("Launcher.app");
+        let found = || current_at(&crate::suite::LAUNCHER, &exe, false);
+        for (path, right, keeps_the_update) in [
+            (&folder, "add_file", true),
+            (&bundle, "add_file", true),
+            (&folder, "add_subdirectory", false),
+            (&bundle, "add_subdirectory", false),
+            (&bundle, "delete", false),
+            (&folder, "delete_child", false),
+        ] {
+            let _guard = DenyGuard::add(path, right);
+            assert_eq!(found().is_some(), keeps_the_update, "{right} denied on {}", path.display());
+        }
+        assert!(found().is_some(), "the answer follows the list");
+    }
+
+    /// A folder with the sticky bit: its owner may still move the bundle.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_sticky_folder_keeps_the_update_for_the_bundles_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = launcher_bundle(dir.path());
+        let _guard = ModeGuard::set(dir.path(), 0o1777);
+        assert!(current_at(&crate::suite::LAUNCHER, &exe, false).is_some());
+    }
+
+    /// The update writes beside an AppImage or a standalone program, so a folder the user can't
+    /// write can't take either.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_linux_copy_in_a_folder_it_cannot_write_cannot_be_replaced() {
+        if running_as_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("launcher.AppImage");
+        std::fs::write(&file, b"binary").unwrap();
+        let kinds = [Install::AppImage(file.clone()), Install::Standalone(file.clone())];
+        assert!(kinds.iter().all(can_replace), "a folder it can write keeps the update");
+        let guard = ModeGuard::set(dir.path(), 0o555);
+        assert!(!kinds.iter().any(can_replace));
+        drop(guard);
+        assert!(kinds.iter().all(can_replace), "the answer follows the folder's permissions");
+    }
+
+    /// A standalone copy in a folder the user can't write gets the download link; [`DEV_VAR`]
+    /// still offers the update, to try it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_standalone_linux_copy_it_cannot_replace_gets_the_download_link() {
+        if running_as_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("artcraft-launcher");
+        std::fs::write(&exe, b"binary").unwrap();
+        let _guard = ModeGuard::set(dir.path(), 0o555);
+        assert_eq!(current_at(&crate::suite::LAUNCHER, &exe, false), None);
+        assert!(current_at(&crate::suite::LAUNCHER, &exe, true).is_some(), "the opt-in still offers it");
+    }
+
+    /// A check that can't answer does not take the update away.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_linux_check_that_cannot_answer_keeps_the_update() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(can_replace(&Install::AppImage(dir.path().join("missing/launcher.AppImage"))));
+        assert!(can_replace(&Install::AppImage(PathBuf::from("launcher.AppImage"))));
     }
 
     #[cfg(unix)]
@@ -1178,18 +2581,23 @@ mod tests {
         let tmp = dir.path().join("cache").join("launcher-update");
         let step = Finish::Portable { zip: zip.clone(), tmp: tmp.clone() };
 
-        let mut old = std::process::Command::new("ping").args(["-n", "3", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn().unwrap();
+        let mut old = BlockedLauncher::start();
         let exe = folder.join("artcraft-launcher.exe");
-        let helper = {
-            let (exe, step, pid) = (exe.clone(), step.clone(), old.id());
-            std::thread::spawn(move || {
-                run_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), pid, &exe, &step, std::time::Duration::from_secs(30))
-            })
-        };
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        assert_eq!(std::fs::read_to_string(&exe).unwrap(), "0.1.0", "replaced while the old launcher was still running");
-        old.wait().unwrap();
-        helper.join().unwrap().unwrap();
+        std::thread::scope(|scope| {
+            // Inside the scope, so a failed assertion drops the gate and releases the helper
+            // before the scope joins it.
+            let (gate, wait) = WaitGate::new();
+            let (helper_exe, pid) = (exe.clone(), old.id());
+            let helper = scope.spawn(move || step_after_wait(&crate::suite::LAUNCHER, &system_program("cmd.exe"), pid, &helper_exe, &step, &wait));
+            gate.entered();
+            old.assert_running("while the helper was waiting");
+            assert_eq!(std::fs::read(&exe).unwrap(), b"0.1.0", "replaced while the old launcher was still running");
+            old.finish().expect("the stand-in launcher couldn't be reaped");
+            gate.release();
+            let stepped = helper.join().unwrap();
+            assert!(stepped.exited, "the wait reported that the launcher was still running although it had exited");
+            stepped.result.unwrap();
+        });
         assert_eq!(std::fs::read(&exe).unwrap(), signed_exe);
         assert_eq!(std::fs::read_to_string(folder.join("ArtCraftLauncherData").join("settings.json")).unwrap(), "{}");
         assert!(!folder.join("artcraft-launcher-0.2.0-windows-x64-portable").exists(), "the zip's folder must not be nested in the launcher's");
@@ -1248,20 +2656,52 @@ mod tests {
         }
     }
 
+    /// A wait for [`step_after_wait`] that the test controls: it reports when the helper has
+    /// reached its wait, blocks until the test releases it, and then asks the real
+    /// [`process::wait_for_exit`] whether the launcher has exited, without waiting.
+    #[cfg(windows)]
+    struct WaitGate {
+        entered: std::sync::mpsc::Receiver<()>,
+        release: std::sync::mpsc::Sender<()>,
+    }
+
+    #[cfg(windows)]
+    impl WaitGate {
+        /// The gate and the wait to hand to the helper. The wait holds the only sender of
+        /// `entered`, so a helper that ends without reaching its wait fails [`WaitGate::entered`]
+        /// instead of blocking it, and dropping the gate releases the wait.
+        fn new() -> (Self, impl Fn(u32) -> bool + Send) {
+            let (entered_tx, entered) = std::sync::mpsc::channel();
+            let (release, released) = std::sync::mpsc::channel::<()>();
+            let released = std::sync::Mutex::new(released);
+            let wait = move |pid| {
+                let _ = entered_tx.send(());
+                let _ = released.lock().map(|released| released.recv());
+                process::wait_for_exit(pid, std::time::Duration::ZERO)
+            };
+            (Self { entered, release }, wait)
+        }
+
+        /// Blocks until the helper has reached its wait.
+        fn entered(&self) {
+            self.entered.recv().expect("the helper never reached its wait");
+        }
+
+        /// Lets the helper's wait return.
+        fn release(&self) {
+            self.release.send(()).expect("the helper stopped before its wait was released");
+        }
+    }
+
     /// A launcher without `portable.txt` is a standalone installation, and the helper still
     /// replaces its own executable after it exits. The test holds a stand-in launcher alive
-    /// through a pipe and observes both sides of the helper's wait: the first assertion runs only
-    /// after the helper announces it is about to wait. A wait that returns while the stand-in is alive
-    /// fails the test before any extraction can replace the executable.
-    ///
-    /// The "still blocked" check is a bounded observation, not proof: a helper descheduled for the
-    /// whole window could hide a missing wait until the release below. A premature timeout longer
-    /// than this observation window is also outside this test's coverage.
+    /// through a pipe and holds the helper inside its wait until the stand-in has exited, so the
+    /// executable must still be the old one while the helper waits, and the real
+    /// [`process::wait_for_exit`] must report the live stand-in as running and the exited one as gone.
     #[cfg(windows)]
     #[test]
     fn a_standalone_update_replaces_the_launcher_after_it_exits() {
         use std::io::Write;
-        use std::sync::mpsc::RecvTimeoutError;
         let dir = tempfile::tempdir().unwrap();
         let folder = dir.path().join("ArtCraft Launcher");
         std::fs::create_dir_all(folder.join("ArtCraftLauncherData")).unwrap();
@@ -1282,49 +2722,23 @@ mod tests {
         let tmp = dir.path().join("cache").join(PORTABLE_STAGING);
         let step = Finish::Portable { zip: zip.clone(), tmp: tmp.clone() };
 
-        // Timeouts only bound the test; each failure names the observation that never arrived.
-        let entered_timeout = std::time::Duration::from_secs(10);
-        let blocked_window = std::time::Duration::from_secs(2);
-        let returned_timeout = std::time::Duration::from_secs(30);
-
+        let mut old = BlockedLauncher::start();
+        let pid = old.id();
         std::thread::scope(|scope| {
-            let mut old = BlockedLauncher::start();
-            let pid = old.id();
-            let watch = wait_watch::watch(pid);
+            // Inside the scope, so a failed assertion drops the gate and releases the helper
+            // before the scope joins it.
+            let (gate, wait) = WaitGate::new();
             let helper_exe = exe.clone();
-            let step = step.clone();
-            let helper = scope.spawn(move || {
-                run_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), pid, &helper_exe, &step, std::time::Duration::from_secs(30))
-            });
-            match watch.entered.recv_timeout(entered_timeout) {
-                Ok(()) => {}
-                Err(RecvTimeoutError::Timeout) => {
-                    panic!("the helper didn't reach its wait within {entered_timeout:?} (helper already finished: {})", helper.is_finished())
-                }
-                Err(RecvTimeoutError::Disconnected) => panic!("the entered channel disconnected before the helper reached its wait"),
-            }
-            old.assert_running("before the first replacement check");
-            assert_eq!(std::fs::read_to_string(&exe).unwrap(), "0.1.0", "replaced while the old launcher was still running");
-
-            // A correct wait can't return while the stand-in holds the pipe.
-            match watch.returned.recv_timeout(blocked_window) {
-                Err(RecvTimeoutError::Timeout) => {}
-                Ok(waited) => panic!("run_step left its wait while the old launcher was still running (waited: {waited})"),
-                Err(RecvTimeoutError::Disconnected) => panic!("the returned channel disconnected while the old launcher was still running"),
-            }
-            old.assert_running("after the wait was expected to stay blocked");
-            assert_eq!(std::fs::read_to_string(&exe).unwrap(), "0.1.0", "replaced while the old launcher was still running");
-
+            let helper = scope.spawn(move || step_after_wait(&crate::suite::LAUNCHER, &system_program("cmd.exe"), pid, &helper_exe, &step, &wait));
+            gate.entered();
+            old.assert_running("while the helper was waiting");
+            assert_eq!(std::fs::read(&exe).unwrap(), b"0.1.0", "replaced while the old launcher was still running");
+            assert!(!process::wait_for_exit(pid, std::time::Duration::ZERO), "the wait reported the running launcher as exited");
             old.finish().expect("the stand-in launcher couldn't be reaped");
-            match watch.returned.recv_timeout(returned_timeout) {
-                Ok(waited) => assert!(waited, "the wait reported that the launcher was still running although it had exited"),
-                Err(RecvTimeoutError::Timeout) => panic!(
-                    "the helper didn't leave its wait within {returned_timeout:?} after the launcher exited (helper already finished: {})",
-                    helper.is_finished()
-                ),
-                Err(RecvTimeoutError::Disconnected) => panic!("the returned channel disconnected before reporting the wait's result"),
-            }
-            helper.join().unwrap().unwrap();
+            gate.release();
+            let stepped = helper.join().unwrap();
+            assert!(stepped.exited, "the wait reported that the launcher was still running although it had exited");
+            stepped.result.unwrap();
         });
         assert_eq!(std::fs::read(&exe).unwrap(), signed_exe);
         assert_eq!(std::fs::read_to_string(folder.join("ArtCraftLauncherData").join("settings.json")).unwrap(), "{}");
@@ -1434,7 +2848,7 @@ mod tests {
         std::fs::create_dir_all(&paths.data).unwrap();
         let release = Release { tag: "v0.2.0".into(), ..Release::default() };
         mark_installed(&paths, &release);
-        assert!(unmark_unless_scheduled(&paths, Err("couldn't schedule the update".into())).is_err());
+        assert!(unmark_unless_scheduled(&paths, Err::<(), _>("couldn't schedule the update".into())).is_err());
         assert!(!just_updated_to(&paths, &release));
         mark_installed(&paths, &release);
         assert!(unmark_unless_scheduled(&paths, Ok(())).is_ok());
@@ -1461,6 +2875,119 @@ mod tests {
         assert_eq!(take_failure(&paths), None);
     }
 
+    /// The outcome is read once; a failure wins over a finished update, which counts only for the
+    /// version it installed.
+    #[test]
+    fn the_outcome_of_an_update_is_read_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        assert_eq!(take_outcome(&paths, "0.2.0"), None);
+        record_done(&paths, "v0.2.0");
+        assert_eq!(take_outcome(&paths, "0.2.0"), Some(Outcome::Installed(Version::new(0, 2, 0))));
+        assert_eq!(take_outcome(&paths, "0.2.0"), None, "read once");
+
+        record_done(&paths, "v0.2.0");
+        assert_eq!(take_outcome(&paths, "0.1.0"), None, "the old version still runs");
+        assert!(!done_file(&paths).exists(), "a record that doesn't match is removed too");
+
+        record_done(&paths, "v0.2.0");
+        record_failure(&paths, "the Windows Installer stopped with error 1603");
+        assert!(!done_file(&paths).exists(), "a failure removes the record of a finished update");
+        record_done(&paths, "v0.2.0");
+        assert_eq!(take_outcome(&paths, "0.2.0"), Some(Outcome::Failed("the Windows Installer stopped with error 1603".into())));
+        assert_eq!(take_outcome(&paths, "0.2.0"), None);
+
+        // Damaged records: no version, an empty reason, a reason longer than the limit.
+        crate::paths::write_atomic(&done_file(&paths), b"\xff\xfe not a version").unwrap();
+        assert_eq!(take_outcome(&paths, "0.2.0"), None);
+        record_failure(&paths, "  \n");
+        assert_eq!(take_outcome(&paths, "0.2.0"), Some(Outcome::Failed("no reason was recorded".into())));
+        record_failure(&paths, &"é".repeat(RECORD_LIMIT));
+        let Some(Outcome::Failed(reason)) = take_outcome(&paths, "0.2.0") else { panic!("a long reason is still a failure") };
+        assert!(reason.len() <= RECORD_LIMIT + '…'.len_utf8() && reason.ends_with("é…"), "{}", reason.len());
+        // A folder where a record goes is not read, and not removed.
+        std::fs::create_dir_all(failure_file(&paths)).unwrap();
+        std::fs::create_dir_all(done_file(&paths)).unwrap();
+        assert_eq!(take_outcome(&paths, "0.2.0"), None);
+        assert!(failure_file(&paths).is_dir());
+    }
+
+    /// A failure recorded before this program was put in place is removed without being
+    /// reported; one recorded after it, like a failed helper's, is reported.
+    #[test]
+    fn a_failure_older_than_the_running_program_is_not_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let program = dir.path().join("artcraft-launcher");
+        std::fs::write(&program, "program").unwrap();
+        let hour = std::time::Duration::from_secs(3600);
+        let set_program_time = |at| std::fs::OpenOptions::new().write(true).open(&program).unwrap().set_modified(at).unwrap();
+
+        record_failure(&paths, "the Windows Installer stopped with error 1603");
+        let recorded = std::fs::metadata(failure_file(&paths)).unwrap().modified().unwrap();
+        set_program_time(recorded - hour);
+        assert_eq!(take_outcome_of(&paths, "0.2.0", Some(&program)), Some(Outcome::Failed("the Windows Installer stopped with error 1603".into())));
+
+        record_failure(&paths, "this copy isn't signed");
+        let recorded = std::fs::metadata(failure_file(&paths)).unwrap().modified().unwrap();
+        set_program_time(recorded + hour);
+        assert_eq!(take_outcome_of(&paths, "0.2.0", Some(&program)), None);
+        assert!(!failure_file(&paths).exists(), "the old failure is removed");
+    }
+
+    /// A link where a record goes is not followed: neither record is read through it, and the
+    /// file it points to stays. Skipped where the system refuses to create the link (Windows
+    /// without the privilege for symbolic links).
+    #[test]
+    fn a_record_that_is_a_link_is_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        std::fs::create_dir_all(paths.logs()).unwrap();
+        std::fs::create_dir_all(&paths.data).unwrap();
+        let elsewhere = dir.path().join("elsewhere.txt");
+        std::fs::write(&elsewhere, "v0.2.0").unwrap();
+        #[cfg(unix)]
+        let link = |to: &Path, at: &Path| std::os::unix::fs::symlink(to, at);
+        #[cfg(windows)]
+        let link = |to: &Path, at: &Path| std::os::windows::fs::symlink_file(to, at);
+        if let Err(e) = link(&elsewhere, &failure_file(&paths)).and_then(|()| link(&elsewhere, &done_file(&paths))) {
+            eprintln!("skipped: couldn't create a symbolic link ({e})");
+            return;
+        }
+        assert_eq!(take_failure(&paths), None);
+        assert_eq!(take_outcome(&paths, "0.2.0"), None);
+        assert_eq!(std::fs::read_to_string(&elsewhere).unwrap(), "v0.2.0");
+    }
+
+    /// Scheduling a new update clears the outcome records of an earlier one, so a stale failure
+    /// is not reported after it.
+    #[test]
+    fn a_new_update_clears_the_last_ones_outcome() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        record_failure(&paths, "the Windows Installer stopped with error 1603");
+        mark_installed(&paths, &Release { tag: "v0.3.0".into(), ..Release::default() });
+        assert_eq!(take_failure(&paths), None);
+        assert_eq!(scheduled_version(&paths).as_deref(), Some("v0.3.0"));
+    }
+
+    /// A release whose tag is not its version (an app may build its own `Release`) is recorded
+    /// by its version, so the new version's first start still reports the update.
+    #[test]
+    fn a_finished_update_is_recorded_by_its_version_not_its_tag() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let release = Release { tag: "stable".into(), version: version::parse("0.2.0"), ..Release::default() };
+        mark_installed(&paths, &release);
+        assert!(just_updated_to(&paths, &release), "the tag still guards against offering it again");
+        assert_eq!(scheduled_version(&paths).as_deref(), Some("0.2.0"));
+        record_done(&paths, &scheduled_version(&paths).unwrap());
+        assert_eq!(take_outcome(&paths, "0.2.0"), Some(Outcome::Installed(Version::new(0, 2, 0))));
+        // A record without the version line, from before it was written, names the tag.
+        crate::paths::write_atomic(&marker(&paths), format!("v0.3.0\n{}\n", crate::now()).as_bytes()).unwrap();
+        assert_eq!(scheduled_version(&paths).as_deref(), Some("v0.3.0"));
+    }
+
     /// A launcher that doesn't quit keeps its files, and the download is still removed.
     #[cfg(windows)]
     #[test]
@@ -1471,19 +2998,11 @@ mod tests {
         let msi = dir.path().join("artcraft-launcher-0.2.0-windows-x64.msi");
         std::fs::write(&msi, "not a package").unwrap();
         let running = std::process::id();
-        let started = std::time::Instant::now();
-        // The test process itself never exits within the wait, so the package is never run.
-        let error = run_step(
-            &crate::suite::LAUNCHER,
-            &system_program("cmd.exe"),
-            running,
-            &exe,
-            &Finish::Msi(msi.clone()),
-            std::time::Duration::from_millis(300),
-        )
-        .unwrap_err();
+        // The test process itself is still running when the wait asks, so the package is never run.
+        let error =
+            run_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), running, &exe, &Finish::Msi(msi.clone()), std::time::Duration::ZERO)
+                .unwrap_err();
         assert!(error.contains("still running"), "{error}");
-        assert!(started.elapsed() < std::time::Duration::from_secs(30));
         assert_eq!(std::fs::read_to_string(&exe).unwrap(), "0.1.0");
         assert!(!msi.exists());
     }
@@ -1513,18 +3032,88 @@ mod tests {
         assert!(signed_like(&crate::suite::LAUNCHER, &unsigned, &cmd).is_err_and(|e| e.contains("doesn't install updates")));
     }
 
+    /// An unsigned copy gets the download link instead of an update it cannot install, unless
+    /// [`DEV_VAR`] asks to try the self-update.
+    #[cfg(windows)]
+    #[test]
+    fn only_a_signed_copy_is_offered_the_self_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let unsigned = dir.path().join("artcraft-launcher.exe");
+        std::fs::write(&unsigned, "MZ").unwrap();
+        std::fs::write(dir.path().join("portable.txt"), "").unwrap();
+        assert!(!can_self_update_at(&crate::suite::LAUNCHER, &unsigned, false));
+        assert!(can_self_update_at(&crate::suite::LAUNCHER, &unsigned, true));
+        assert!(can_self_update_at(&crate::suite::LAUNCHER, &system_program("cmd.exe"), false));
+    }
+
     /// An unsigned launcher says so before it quits for an update. `cargo test` binaries are
     /// unsigned, like a package built without the signing secrets.
     #[cfg(windows)]
     #[test]
     fn an_unsigned_launcher_refuses_to_update_before_it_quits() {
         let dir = tempfile::tempdir().unwrap();
-        let msi = dir.path().join("artcraft-launcher-0.2.0-windows-x64.msi");
-        std::fs::write(&msi, "not a package").unwrap();
         for install in [Install::Msi(system_program("msiexec.exe")), Install::Portable(system_program("msiexec.exe"))] {
-            let error = windows_precheck(&crate::suite::LAUNCHER, &install, &Paths::under(dir.path()), &msi).unwrap_err();
+            let error = windows_precheck(&crate::suite::LAUNCHER, &install, &Paths::under(dir.path())).unwrap_err();
             assert!(error.contains("isn't signed"), "{error}");
         }
+    }
+
+    /// A copy that can't install an update stops before the download: the address here can't be
+    /// reached, so a download attempt would give a different error.
+    #[cfg(windows)]
+    #[test]
+    fn a_copy_that_cannot_install_downloads_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = "artcraft-launcher-0.2.0-windows-x64-portable.zip";
+        let asset = crate::release::Asset { name: name.into(), size: 1, url: format!("http://127.0.0.1:1/{name}"), sha256: Some("00".repeat(32)) };
+        let release = Release { tag: "v0.2.0".into(), version: version::parse("0.2.0"), assets: vec![asset], ..Release::default() };
+        let mut phases = 0;
+        let error = prepare_update(
+            &crate::suite::LAUNCHER,
+            &Install::Portable(system_program("msiexec.exe")),
+            &release,
+            Platform { os: crate::Os::Windows, arch: crate::Arch::X64 },
+            &Http::new(crate::TEST_AGENT).unwrap(),
+            &Paths::under(dir.path()),
+            &Stop::default(),
+            &mut |_| phases += 1,
+            &|| Ok(()),
+            None,
+        )
+        .unwrap_err();
+        assert!(error.contains("isn't signed"), "{error}");
+        assert_eq!(phases, 0, "no download phase was reported");
+    }
+
+    /// The cache may not exist yet at the first update: the check runs before the download
+    /// creates it.
+    #[cfg(windows)]
+    #[test]
+    fn the_cache_check_passes_before_the_cache_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("artcraft-launcher.exe");
+        std::fs::write(&exe, "MZ").unwrap();
+        std::fs::write(dir.path().join("portable.txt"), "").unwrap();
+        let paths = Paths::for_exe(&crate::suite::LAUNCHER, &exe).unwrap();
+        assert!(!paths.cache.exists());
+        assert_eq!(same_cache_as_helper(&crate::suite::LAUNCHER, &paths, &exe), Ok(()));
+    }
+
+    /// A cache folder that can't be created is reported with its path and error, not as a cache
+    /// in the wrong place.
+    #[cfg(windows)]
+    #[test]
+    fn a_cache_that_cannot_be_created_is_named_with_its_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("artcraft-launcher.exe");
+        std::fs::write(&exe, "MZ").unwrap();
+        std::fs::write(dir.path().join("portable.txt"), "").unwrap();
+        let file = dir.path().join("a-file");
+        std::fs::write(&file, "").unwrap();
+        let mut paths = Paths::for_exe(&crate::suite::LAUNCHER, &exe).unwrap();
+        paths.cache = file.join("cache");
+        let error = same_cache_as_helper(&crate::suite::LAUNCHER, &paths, &exe).unwrap_err();
+        assert!(error.contains("couldn't create") && error.contains(&paths.cache.display().to_string()), "{error}");
     }
 
     /// An MSI that isn't signed by the launcher's publisher is never handed to the Windows Installer.
@@ -1718,22 +3307,102 @@ mod tests {
         }
     }
 
-    /// The helper waits for the old launcher to exit before it starts the new one.
+    /// The restart helper starts only when the restart is started, at the app's exit: a close the
+    /// user cancels leaves no helper counting down its one-minute wait. The test starts the helper
+    /// with its standard streams set to null, as `spawn_detached` does, and a thread that waits
+    /// for the helper to exit writes `exited`, so a helper that exits without writing `started`
+    /// fails the test.
+    #[cfg(unix)]
+    #[test]
+    fn the_restart_helper_starts_only_when_the_restart_is_started() {
+        use std::io::{BufRead, Write};
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let dir = tempfile::tempdir().unwrap();
+        let events = dir.path().join("events");
+        assert!(std::process::Command::new("mkfifo").arg(&events).status().unwrap().success());
+        // Open for reading and writing, so neither this open nor the helper's blocks.
+        let pipe = std::fs::OpenOptions::new().read(true).write(true).open(&events).unwrap();
+        let mut exited = pipe.try_clone().unwrap();
+        let mut lines = std::io::BufReader::new(pipe).lines();
+        let mut gone = std::process::Command::new("true").spawn().unwrap();
+        gone.wait().unwrap();
+        let started = r#"printf 'started\n' > "$1""#;
+        let command = [std::ffi::OsStr::new("/bin/sh"), "-c".as_ref(), started.as_ref(), "sh".as_ref(), events.as_os_str()];
+        let spawned = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&spawned);
+        let spawn = move |mut cmd: std::process::Command| -> Result<(), String> {
+            flag.store(true, Ordering::SeqCst);
+            let mut helper = cmd
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            std::thread::spawn(move || {
+                let _ = helper.wait();
+                let _ = exited.write_all(b"exited\n");
+            });
+            Ok(())
+        };
+        let restart = relaunch_with(&crate::suite::LAUNCHER, gone.id(), &command, spawn);
+        assert!(!spawned.load(Ordering::SeqCst), "the helper must wait for the restart to be started");
+        assert_eq!(format!("{restart:?}"), "Restart { pending: true }", "the helper must wait for the restart to be started");
+        assert_eq!(restart.start(), Ok(()));
+        assert_eq!(lines.next().unwrap().unwrap(), "started", "the helper exited without starting the command");
+        assert_eq!(lines.next().unwrap().unwrap(), "exited");
+    }
+
+    /// The helper waits for the old launcher to exit before it starts the new one. The helper's
+    /// `sleep` is a script on `PATH` that reports each pause through a named pipe and pauses until
+    /// the test releases it, and the started command reports whether the old launcher was still
+    /// running. The test holds both pipes open for reading and writing, so no open blocks, and a
+    /// thread that waits for the helper to exit writes `exited`, so every read gets a line.
     #[cfg(unix)]
     #[test]
     fn the_restart_waits_for_the_old_process_to_exit() {
+        use std::io::{BufRead, Write};
+        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
-        let marker = dir.path().join("started");
-        let mut old = std::process::Command::new("sleep").arg("1").spawn().unwrap();
-        relaunch_after_exit(&crate::suite::LAUNCHER, old.id(), &[std::ffi::OsStr::new("touch"), marker.as_os_str()]).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(400));
-        assert!(!marker.exists(), "started while the old launcher was still running");
-        old.wait().unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !marker.exists() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(50));
+        let (events, release) = (dir.path().join("events"), dir.path().join("release"));
+        for fifo in [&events, &release] {
+            assert!(std::process::Command::new("mkfifo").arg(fifo).status().unwrap().success());
         }
-        assert!(marker.exists(), "never started after the old launcher exited");
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let sleep = bin.join("sleep");
+        std::fs::write(&sleep, "#!/bin/sh\nprintf 'waiting\\n' > \"$CRAFT_TEST_EVENTS\"\nread _ < \"$CRAFT_TEST_RELEASE\"\n").unwrap();
+        std::fs::set_permissions(&sleep, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut path = std::ffi::OsString::from(bin.as_os_str());
+        if let Some(rest) = std::env::var_os("PATH") {
+            path.push(":");
+            path.push(rest);
+        }
+
+        let mut old = std::process::Command::new("cat").stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).spawn().unwrap();
+        let pid = old.id().to_string();
+        let started = r#"if kill -0 "$1" 2>/dev/null; then s=alive; else s=gone; fi; printf 'started %s\n' "$s" > "$CRAFT_TEST_EVENTS""#;
+        let command = [std::ffi::OsStr::new("/bin/sh"), "-c".as_ref(), started.as_ref(), "sh".as_ref(), pid.as_ref()];
+        let open = |fifo: &Path| std::fs::OpenOptions::new().read(true).write(true).open(fifo).unwrap();
+        let (events_pipe, mut release_pipe) = (open(&events), open(&release));
+        let mut exited = events_pipe.try_clone().unwrap();
+        let mut lines = std::io::BufReader::new(events_pipe).lines();
+        let mut next = move || lines.next().unwrap().unwrap();
+
+        let mut helper = helper_command(&crate::suite::LAUNCHER, old.id(), &command);
+        helper.env("PATH", path).env("CRAFT_TEST_EVENTS", &events).env("CRAFT_TEST_RELEASE", &release);
+        let mut helper = helper.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).spawn().unwrap();
+        std::thread::spawn(move || {
+            let _ = helper.wait();
+            let _ = exited.write_all(b"exited\n");
+        });
+
+        assert_eq!(next(), "waiting", "the helper didn't wait while the old launcher was still running");
+        drop(old.stdin.take());
+        old.wait().unwrap();
+        release_pipe.write_all(b"go\n").unwrap();
+        assert_eq!(next(), "started gone", "didn't start once the old launcher had exited");
+        assert_eq!(next(), "exited");
     }
 
     /// A real disk image: the new `ArtCraft Launcher.app` replaces the old one in place.
@@ -1773,15 +3442,241 @@ mod tests {
         let current = apps.join("ArtCraft Launcher.app");
         let existing = Installed { version: None, source: InstallSource::MacApp, location: current.display().to_string(), package: None };
         // An unsigned test bundle: the signature check has its own tests in `install`.
-        let expect = install::macos::Expect { team: None, version: None };
+        let expect = install::macos::Expect { team: None, version: None, quit_first: false };
+        let stop = Stop::default();
+        let wait = install::macos::CheckTurn { stop: &stop, phase: &mut |_| {} };
         let placed =
-            install::macos::install_dmg(&crate::suite::LAUNCHER, &dmg, Some(&existing), None, false, &Paths::under(dir.path()), &expect).unwrap();
+            install::macos::install_dmg(&crate::suite::LAUNCHER, &dmg, Some(&existing), None, false, &Paths::under(dir.path()), &expect, wait)
+                .unwrap();
         assert_eq!(placed, current);
         assert_eq!(std::fs::read_to_string(current.join("Contents/MacOS/ArtCraft Launcher")).unwrap(), "0.2.0");
         assert_eq!(
             std::fs::read_dir(&apps).unwrap().map(|e| e.unwrap().file_name()).collect::<Vec<_>>(),
             [std::ffi::OsString::from("ArtCraft Launcher.app")]
         );
+    }
+
+    /// A disk image holding an unsigned `ArtCraft Launcher.app` of `version`, which a self-update
+    /// downloads and then refuses at the signature check.
+    #[cfg(target_os = "macos")]
+    fn unsigned_launcher_dmg(dir: &Path, version: &str) -> Vec<u8> {
+        let contents = dir.join(format!("src-{version}")).join("ArtCraft Launcher.app/Contents");
+        std::fs::create_dir_all(contents.join("MacOS")).unwrap();
+        std::fs::write(
+            contents.join("Info.plist"),
+            format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict>\
+                 <key>CFBundleIdentifier</key><string>ai.storyteller.artcraft-launcher</string>\
+                 <key>CFBundleShortVersionString</key><string>{version}</string></dict></plist>"
+            ),
+        )
+        .unwrap();
+        std::fs::write(contents.join("MacOS/ArtCraft Launcher"), version).unwrap();
+        let dmg = dir.join(format!("built-{version}.dmg"));
+        let one_at_a_time = install::macos::DISK_IMAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let ok = std::process::Command::new("hdiutil")
+            .args(["create", "-quiet", "-format", "UDZO", "-volname", "ArtCraft Launcher", "-srcfolder"])
+            .arg(dir.join(format!("src-{version}")))
+            .arg(&dmg)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "hdiutil create failed");
+        drop(one_at_a_time);
+        std::fs::read(dmg).unwrap()
+    }
+
+    /// A launcher release of `version` whose disk image `body` is served at `url`.
+    #[cfg(target_os = "macos")]
+    fn launcher_release(version: &str, body: &[u8], url: String, dir: &Path) -> Release {
+        let file = dir.join(format!("sha-{version}"));
+        std::fs::write(&file, body).unwrap();
+        let sha = crate::http::sha256_file(&file).unwrap();
+        Release {
+            version: version::parse(version),
+            tag: format!("v{version}"),
+            assets: vec![crate::release::Asset {
+                name: format!("artcraft-launcher-{version}-macos-universal.dmg"),
+                size: body.len() as u64,
+                url,
+                sha256: Some(sha),
+            }],
+            ..Release::default()
+        }
+    }
+
+    /// A self-update that fails after its download keeps the disk image, and the next try reuses
+    /// it without a second transfer. A newer release replaces the kept image.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_failed_self_update_keeps_its_download_for_the_next_try() {
+        use crate::http::tests::{Reply, serve};
+        use crate::{Arch, Os};
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(&dir.path().join("home"));
+        let apps = dir.path().join("Applications");
+        let current = apps.join("ArtCraft Launcher.app/Contents");
+        std::fs::create_dir_all(current.join("MacOS")).unwrap();
+        std::fs::write(
+            current.join("Info.plist"),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict>\
+             <key>CFBundleIdentifier</key><string>ai.storyteller.artcraft-launcher</string>\
+             <key>CFBundleShortVersionString</key><string>0.1.0</string></dict></plist>",
+        )
+        .unwrap();
+        std::fs::write(current.join("MacOS/ArtCraft Launcher"), "0.1.0").unwrap();
+        let install = Install::MacApp(apps.join("ArtCraft Launcher.app"));
+        let platform = Platform { os: Os::MacOs, arch: Arch::X64 };
+        let http = Http::new(crate::TEST_AGENT).unwrap();
+        let stop = Stop::default();
+        let mut phase = |_| ();
+
+        let body = unsigned_launcher_dmg(dir.path(), "0.2.0");
+        let (url, requests) = serve(body.clone(), vec![Reply::Full, Reply::Full]);
+        let release = launcher_release("0.2.0", &body, url, dir.path());
+        let kept = install::download_path(&paths, &release.assets[0]);
+        for _ in 0..2 {
+            let error = prepare_update(&crate::suite::LAUNCHER, &install, &release, platform, &http, &paths, &stop, &mut phase, &|| Ok(()), None)
+                .unwrap_err();
+            // An unsigned bundle is refused as "isn't signed" or, where codesign reports it, as a
+            // failed signature check; either way the install stops after the download.
+            assert!(error.contains("signed") && error.ends_with("so it wasn't installed"), "{error}");
+            assert_eq!(std::fs::read(&kept).unwrap(), body, "the download stays after a failed install");
+        }
+        assert_eq!(requests.lock().unwrap().len(), 1, "the second try reuses the kept download");
+
+        // A newer release's download replaces the kept one, even when that update stops before
+        // installing.
+        let newer = b"the 0.3.0 disk image".to_vec();
+        let (url, _) = serve(newer.clone(), vec![Reply::Full]);
+        let release = launcher_release("0.3.0", &newer, url, dir.path());
+        let error = prepare_update(
+            &crate::suite::LAUNCHER,
+            &install,
+            &release,
+            platform,
+            &http,
+            &paths,
+            &stop,
+            &mut phase,
+            &|| Err("another job is running".into()),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(error, "another job is running");
+        assert!(!kept.exists(), "the older kept download is removed");
+        assert_eq!(std::fs::read(install::download_path(&paths, &release.assets[0])).unwrap(), newer);
+        assert_eq!(std::fs::read_dir(paths.downloads()).unwrap().count(), 1);
+    }
+
+    /// A self-update download asset of `name` and `size`.
+    #[cfg(not(windows))]
+    fn update_asset(name: &str, size: u64) -> crate::release::Asset {
+        crate::release::Asset { name: name.into(), size, url: String::new(), sha256: None }
+    }
+
+    /// An install that succeeds removes the download and its record; a failed one keeps both, and
+    /// so does an update that stops before installing.
+    #[cfg(not(windows))]
+    #[test]
+    fn only_a_failed_install_keeps_the_download() {
+        assert!(!keeps_download(&Ok(())));
+        assert!(keeps_download::<()>(&Err("the app isn't signed by its developer, so it wasn't installed".into())));
+        assert!(keeps_download::<()>(&Err("couldn't copy the app: No space left on device".into())));
+
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        std::fs::create_dir_all(paths.downloads()).unwrap();
+        let asset = update_asset("artcraft-launcher-0.2.0-linux-x64.tar.gz", 5);
+        let file = paths.downloads().join(&asset.name);
+        std::fs::write(&file, b"image").unwrap();
+        assert!(keep_download(&paths, &asset));
+        after_install::<()>(&paths, &file, true, &Err("couldn't replace it".into()));
+        assert!(file.exists() && kept_download_record(&paths).exists());
+        after_install(&paths, &file, true, &Ok(()));
+        assert!(!file.exists() && !kept_download_record(&paths).exists());
+    }
+
+    /// When hdiutil can't attach the disk image, the download is removed: an image left attached
+    /// by an install that ended part way makes every attach of the same file fail.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_disk_image_that_does_not_attach_is_not_kept() {
+        assert!(!keeps_download::<()>(&Err(format!("{}: hdiutil: attach failed - Resource busy", install::macos::IMAGE_NOT_OPENED))));
+    }
+
+    /// A download that could not be recorded is removed after a failed install, since nothing
+    /// would remove it later.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_download_without_a_record_is_not_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        std::fs::create_dir_all(paths.downloads()).unwrap();
+        // A folder where the record goes makes writing it fail.
+        std::fs::create_dir_all(kept_download_record(&paths).join("in-the-way")).unwrap();
+        let asset = update_asset("artcraft-launcher-0.2.0-linux-x64.tar.gz", 5);
+        let file = paths.downloads().join(&asset.name);
+        std::fs::write(&file, b"image").unwrap();
+        let recorded = keep_download(&paths, &asset);
+        assert!(!recorded);
+        after_install::<()>(&paths, &file, recorded, &Err("couldn't replace it".into()));
+        assert!(!file.exists());
+    }
+
+    /// A self-update for another release file removes the finished and the partial download of the
+    /// one the record names, and leaves other files alone. A download of the same file keeps its
+    /// partial file, so it resumes.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_new_release_removes_the_kept_and_partial_download() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let downloads = paths.downloads();
+        std::fs::create_dir_all(&downloads).unwrap();
+        let old = update_asset("artcraft-launcher-0.2.0-linux-x64.tar.gz", 100);
+        let finished = downloads.join(&old.name);
+        let partial = downloads.join(format!("{}.100.part", old.name));
+        let other = downloads.join("photocraft-0.5.0-linux-x64.tar.gz");
+        for file in [&finished, &partial, &other] {
+            std::fs::write(file, b"bytes").unwrap();
+        }
+        assert!(keep_download(&paths, &old));
+        assert!(keep_download(&paths, &old));
+        assert!(finished.exists() && partial.exists(), "the same release keeps its files");
+
+        let new = update_asset("artcraft-launcher-0.3.0-linux-x64.tar.gz", 200);
+        assert!(keep_download(&paths, &new));
+        assert!(!finished.exists() && !partial.exists());
+        assert!(other.exists());
+        assert_eq!(std::fs::read_to_string(kept_download_record(&paths)).unwrap(), format!("{}\n200\n", new.name));
+    }
+
+    /// The record names a file in the download folder only: a name with a path in it removes
+    /// nothing, and a kept file the user already deleted is no error.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_kept_download_record_removes_only_its_own_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        std::fs::create_dir_all(paths.downloads()).unwrap();
+        let outside = paths.cache.join("escape.dmg");
+        std::fs::write(&outside, b"not ours").unwrap();
+        std::fs::write(kept_download_record(&paths), "../escape.dmg\n8\n").unwrap();
+        let new = update_asset("artcraft-launcher-0.3.0-macos-universal.dmg", 10);
+        assert!(keep_download(&paths, &new));
+        assert!(outside.exists());
+
+        let newer = update_asset("artcraft-launcher-0.4.0-macos-universal.dmg", 10);
+        assert!(keep_download(&paths, &newer));
+        assert!(std::fs::read_to_string(kept_download_record(&paths)).unwrap().starts_with(&newer.name));
+
+        // A record without a size still removes the file it names.
+        let kept = paths.downloads().join(&newer.name);
+        std::fs::write(&kept, b"image").unwrap();
+        std::fs::write(kept_download_record(&paths), &newer.name).unwrap();
+        assert!(keep_download(&paths, &update_asset("artcraft-launcher-0.5.0-macos-universal.dmg", 10)));
+        assert!(!kept.exists());
     }
 
     /// A directory laid out like Cargo's target tree: `.rustc_info.json` at the root and the
@@ -1920,6 +3815,35 @@ mod tests {
         assert!(!is_development_build(&exe, false), "a directory named CACHEDIR.TAG");
     }
 
+    /// With `build.build-dir` set, the profile directory holds the program and `.cargo-lock`; the
+    /// lock file and the target root's `CACHEDIR.TAG` identify a development build, and neither
+    /// does alone.
+    #[test]
+    fn a_cargo_build_with_a_separate_build_dir_is_detected() {
+        let tree = |profile: &str, lock: bool, tag: bool| {
+            let dir = tempfile::tempdir().unwrap();
+            let profile = dir.path().join("target").join(profile);
+            std::fs::create_dir_all(&profile).unwrap();
+            let exe = profile.join("artcraft-launcher");
+            std::fs::write(&exe, "ELF").unwrap();
+            if lock {
+                std::fs::write(profile.join(".cargo-lock"), "").unwrap();
+            }
+            if tag {
+                std::fs::write(dir.path().join("target").join(CARGO_CACHE_MARKER), "Signature: 8a477f597d28d172789f06886806bc55\n").unwrap();
+            }
+            (dir, exe)
+        };
+        for profile in ["debug", "release", "x86_64-pc-windows-gnu/release"] {
+            let (_dir, exe) = tree(profile, true, true);
+            assert!(is_development_build(&exe, false), "{profile}");
+        }
+        let (_dir, exe) = tree("release", true, false);
+        assert!(!is_development_build(&exe, false), "a lock file alone");
+        let (_dir, exe) = tree("release", false, true);
+        assert!(!is_development_build(&exe, false), "a cache marker alone");
+    }
+
     /// `CRAFT_UPDATE_DEV` still lets a development build try the self-update.
     #[test]
     fn a_development_build_can_opt_in_to_updating_itself() {
@@ -1984,12 +3908,331 @@ mod tests {
         assert_eq!(pick(Os::Linux, Install::Package(PackageKind::ArchPkg, PathBuf::new()).kind()).as_deref(), Some(names[6]));
     }
 
+    fn release_with(names: &[&str]) -> Release {
+        Release {
+            assets: names.iter().map(|n| crate::release::Asset { name: (*n).into(), size: 1, url: String::new(), sha256: None }).collect(),
+            ..Release::default()
+        }
+    }
+
+    /// A macOS release carries a disk image and a command-line zip, and no `.tar.gz` that a
+    /// standalone program could be replaced from, so that copy gets the download link.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_standalone_macos_program_without_a_tarball_gets_the_download_link() {
+        let app = &crate::suite::SOUNDCRAFT;
+        let release = release_with(&["soundcraft-0.19.0-macos-universal.dmg", "soundcraft-cli-0.19.0-macos-universal.zip"]);
+        let standalone = Install::Standalone(PathBuf::from("/Users/someone/bin/soundcraft"));
+        for arch in [crate::Arch::Arm64, crate::Arch::X64] {
+            let mac = Some(Platform { os: crate::Os::MacOs, arch });
+            assert!(!installs_from(app, &standalone, &release, mac), "{arch:?}");
+            // the bundle installs from the disk image
+            assert!(installs_from(app, &Install::MacApp(PathBuf::from("/Applications/SoundCraft.app")), &release, mac), "{arch:?}");
+        }
+    }
+
+    /// A release that adds a macOS `.tar.gz` is offered to the standalone program again.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_standalone_macos_program_is_offered_a_release_with_a_tarball() {
+        let app = &crate::suite::SOUNDCRAFT;
+        let standalone = Install::Standalone(PathBuf::from("/Users/someone/bin/soundcraft"));
+        let mac = Some(Platform { os: crate::Os::MacOs, arch: crate::Arch::Arm64 });
+        let with_tarball = release_with(&["soundcraft-0.19.0-macos-universal.dmg", "soundcraft-0.19.0-macos-universal.tar.gz"]);
+        assert!(installs_from(app, &standalone, &with_tarball, mac));
+    }
+
+    /// A release whose file list wasn't loaded keeps the offer: the install fetches the full
+    /// release before it picks the file.
+    #[test]
+    fn a_standalone_macos_program_is_offered_a_release_without_its_file_list() {
+        let standalone = Install::Standalone(PathBuf::from("/Users/someone/bin/soundcraft"));
+        let mac = Some(Platform { os: crate::Os::MacOs, arch: crate::Arch::Arm64 });
+        assert!(installs_from(&crate::suite::SOUNDCRAFT, &standalone, &release_with(&[]), mac));
+    }
+
+    /// Other platforms keep offering the update to a standalone copy, whatever the release holds.
+    #[test]
+    fn a_standalone_copy_elsewhere_is_not_checked_against_the_release() {
+        let app = &crate::suite::SOUNDCRAFT;
+        let standalone = Install::Standalone(PathBuf::from("soundcraft"));
+        let empty = release_with(&[]);
+        for os in [crate::Os::Linux, crate::Os::Windows, crate::Os::FreeBsd] {
+            assert!(installs_from(app, &standalone, &empty, Some(Platform { os, arch: crate::Arch::X64 })), "{os:?}");
+        }
+        assert!(installs_from(app, &standalone, &empty, None));
+    }
+
+    /// A loose program on macOS is checked against the release from its executable's path, with
+    /// or without `CRAFT_UPDATE_DEV`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_loose_macos_program_is_checked_against_the_release() {
+        let app = &crate::suite::SOUNDCRAFT;
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("soundcraft");
+        std::fs::write(&exe, b"").unwrap();
+        let mac = Some(Platform { os: crate::Os::MacOs, arch: crate::Arch::Arm64 });
+        let without = release_with(&["soundcraft-0.19.0-macos-universal.dmg", "soundcraft-cli-0.19.0-macos-universal.zip"]);
+        let with_tarball = release_with(&["soundcraft-0.19.0-macos-universal.dmg", "soundcraft-0.19.0-macos-universal.tar.gz"]);
+        for opted_in in [false, true] {
+            assert!(!release_installs_at(app, &exe, opted_in, &without, mac), "opted_in {opted_in}");
+            assert!(release_installs_at(app, &exe, opted_in, &with_tarball, mac), "opted_in {opted_in}");
+        }
+    }
+
     #[test]
     fn a_failed_step_that_removed_the_app_starts_nothing_and_keeps_its_message() {
-        assert!(restarts(true, true));
-        assert!(restarts(true, false));
-        assert!(restarts(false, true));
-        assert!(!restarts(false, false));
+        assert!(restarts(true, true, true));
+        assert!(restarts(true, true, false));
+        assert!(restarts(true, false, true));
+        assert!(!restarts(true, false, false));
+    }
+
+    /// An app still running after the helper's wait never gets a second copy, whatever the step
+    /// and the exe would allow.
+    #[test]
+    fn an_app_still_running_is_never_started_again() {
+        for (step_succeeded, exe_exists) in [(true, true), (true, false), (false, true), (false, false)] {
+            assert!(!restarts(false, step_succeeded, exe_exists), "{step_succeeded} {exe_exists}");
+        }
+    }
+
+    /// A helper whose wait ends with the old app still running installs nothing, starts no
+    /// program, records why, and removes the download.
+    #[cfg(windows)]
+    #[test]
+    fn the_helper_starts_nothing_while_the_old_app_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let exe = dir.path().join("artcraft-launcher.exe");
+        std::fs::write(&exe, "0.1.0").unwrap();
+        let zip = dir.path().join("artcraft-launcher-0.2.0-windows-x64-portable.zip");
+        std::fs::write(&zip, "zip").unwrap();
+        let step = Finish::Portable { zip: zip.clone(), tmp: dir.path().join(PORTABLE_STAGING) };
+        let started = std::sync::Mutex::new(Vec::<PathBuf>::new());
+        let start = |exe: &Path| {
+            started.lock().unwrap().push(exe.to_path_buf());
+            Ok(())
+        };
+        let never_exits = |_pid| false;
+        let error = finish_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), &paths, 4242, exe.clone(), &step, false, &never_exits, &start)
+            .unwrap_err();
+        assert!(error.contains("still running"), "{error}");
+        assert_eq!(*started.lock().unwrap(), Vec::<PathBuf>::new(), "no copy of the app may start while it still runs");
+        assert_eq!(std::fs::read_to_string(&exe).unwrap(), "0.1.0");
+        assert!(!zip.exists(), "the download is removed");
+        assert_eq!(take_failure(&paths).as_deref(), Some(error.as_str()));
+    }
+
+    /// A step that fails after the old app exited starts the old app again, as it was.
+    #[cfg(windows)]
+    #[test]
+    fn the_helper_starts_the_old_app_after_a_failed_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let exe = dir.path().join("artcraft-launcher.exe");
+        std::fs::write(&exe, "0.1.0").unwrap();
+        // Not a zip, so the step fails.
+        let zip = dir.path().join("artcraft-launcher-0.2.0-windows-x64-portable.zip");
+        std::fs::write(&zip, "not a zip").unwrap();
+        let step = Finish::Portable { zip, tmp: dir.path().join(PORTABLE_STAGING) };
+        let started = std::sync::Mutex::new(Vec::<PathBuf>::new());
+        let start = |exe: &Path| {
+            started.lock().unwrap().push(exe.to_path_buf());
+            Ok(())
+        };
+        let exited = |_pid| true;
+        assert!(finish_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), &paths, 4242, exe.clone(), &step, false, &exited, &start).is_err());
+        assert_eq!(*started.lock().unwrap(), vec![exe.clone()]);
+        assert_eq!(std::fs::read_to_string(&exe).unwrap(), "0.1.0");
+    }
+
+    /// When the update step fails and the old app can't be started again either, the error kept
+    /// for the next start names both.
+    #[cfg(windows)]
+    #[test]
+    fn a_failed_step_and_a_failed_restart_are_both_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let exe = dir.path().join("artcraft-launcher.exe");
+        std::fs::write(&exe, "0.1.0").unwrap();
+        // Not a zip, so the step fails.
+        let zip = dir.path().join("artcraft-launcher-0.2.0-windows-x64-portable.zip");
+        std::fs::write(&zip, "not a zip").unwrap();
+        let step = Finish::Portable { zip, tmp: dir.path().join(PORTABLE_STAGING) };
+        let start = |_exe: &Path| Err("couldn't start artcraft-launcher.exe (denied)".to_string());
+        let exited = |_pid| true;
+        let error =
+            finish_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), &paths, 4242, exe.clone(), &step, false, &exited, &start).unwrap_err();
+        assert!(error.ends_with("; couldn't start artcraft-launcher.exe (denied)"), "{error}");
+        assert!(error.len() > "; couldn't start artcraft-launcher.exe (denied)".len(), "the step's error comes first: {error}");
+        assert_eq!(take_failure(&paths).as_deref(), Some(error.as_str()));
+    }
+
+    /// The helper's result keeps the update step's error when the start fails too.
+    #[test]
+    fn a_failed_restart_keeps_the_step_error() {
+        assert_eq!(with_restart(Ok(()), Ok(())), Ok(()));
+        assert_eq!(with_restart(Err("step".into()), Ok(())), Err("step".into()));
+        assert_eq!(with_restart(Ok(()), Err("start".into())), Err("start".into()));
+        assert_eq!(with_restart(Err("step".into()), Err("start".into())), Err("step; start".into()));
+    }
+
+    /// A successful step starts the new app once.
+    #[cfg(windows)]
+    #[test]
+    fn the_helper_starts_the_new_app_after_the_update() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let folder = dir.path().join("ArtCraft Launcher");
+        std::fs::create_dir_all(&folder).unwrap();
+        let exe = folder.join("artcraft-launcher.exe");
+        std::fs::write(&exe, "0.1.0").unwrap();
+        let zip = dir.path().join("artcraft-launcher-0.2.0-windows-x64-portable.zip");
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(&zip).unwrap());
+        let signed_exe = std::fs::read(system_program("cmd.exe")).unwrap();
+        writer.start_file("artcraft-launcher-0.2.0-windows-x64-portable/artcraft-launcher.exe", zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(&signed_exe).unwrap();
+        writer.finish().unwrap();
+        let step = Finish::Portable { zip, tmp: dir.path().join(PORTABLE_STAGING) };
+        let started = std::sync::Mutex::new(Vec::<(PathBuf, Vec<u8>)>::new());
+        let start = |exe: &Path| {
+            started.lock().unwrap().push((exe.to_path_buf(), std::fs::read(exe).unwrap()));
+            Ok(())
+        };
+        let exited = |_pid| true;
+        mark_installed(&paths, &Release { tag: "v0.2.0".into(), ..Release::default() });
+        assert_eq!(
+            finish_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), &paths, 4242, exe.clone(), &step, false, &exited, &start),
+            Ok(())
+        );
+        assert_eq!(*started.lock().unwrap(), vec![(exe, signed_exe)], "the new app starts once");
+        assert_eq!(take_outcome(&paths, "0.2.0"), Some(Outcome::Installed(Version::new(0, 2, 0))), "the new version's first start says so");
+    }
+
+    /// A standalone copy updated from the portable zip becomes portable: the outcome and the
+    /// record of the update go to the folders beside it, which the new app reads.
+    #[cfg(windows)]
+    #[test]
+    fn a_standalone_copy_that_becomes_portable_finds_the_outcome_beside_it() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        // The per-user folders the old, standalone copy used.
+        let paths = Paths::under(&dir.path().join("per-user"));
+        let folder = dir.path().join("ArtCraft Launcher");
+        std::fs::create_dir_all(&folder).unwrap();
+        let exe = folder.join("artcraft-launcher.exe");
+        std::fs::write(&exe, "0.1.0").unwrap();
+        let zip = dir.path().join("artcraft-launcher-0.2.0-windows-x64-portable.zip");
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(&zip).unwrap());
+        writer.start_file("artcraft-launcher-0.2.0-windows-x64-portable/artcraft-launcher.exe", zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(&std::fs::read(system_program("cmd.exe")).unwrap()).unwrap();
+        writer.start_file("artcraft-launcher-0.2.0-windows-x64-portable/portable.txt", zip::write::SimpleFileOptions::default()).unwrap();
+        writer.finish().unwrap();
+        let step = Finish::Portable { zip, tmp: dir.path().join(PORTABLE_STAGING) };
+        let release = Release { tag: "v0.2.0".into(), version: version::parse("0.2.0"), ..Release::default() };
+        mark_installed(&paths, &release);
+        let exited = |_pid| true;
+        let start = |_: &Path| Ok(());
+        assert_eq!(
+            finish_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), &paths, 4242, exe.clone(), &step, false, &exited, &start),
+            Ok(())
+        );
+        let after = Paths::for_exe(&crate::suite::LAUNCHER, &exe).unwrap();
+        assert_eq!(after.data, folder.join("ArtCraftLauncherData").join("data"));
+        assert!(just_updated_to(&after, &release), "the new app does not offer the same update again");
+        assert_eq!(take_outcome(&after, "0.2.0"), Some(Outcome::Installed(Version::new(0, 2, 0))));
+        assert_eq!(take_outcome(&paths, "0.2.0"), None, "nothing is left where the new app no longer looks");
+
+        // A new app that cannot start is reported there too.
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(&dir.path().join("per-user"));
+        let (exe, step) = portable_update(dir.path());
+        if let Finish::Portable { zip, .. } = &step {
+            let mut writer = zip::ZipWriter::new(std::fs::File::create(zip).unwrap());
+            writer
+                .start_file("artcraft-launcher-0.2.0-windows-x64-portable/artcraft-launcher.exe", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(&std::fs::read(system_program("cmd.exe")).unwrap()).unwrap();
+            writer.start_file("artcraft-launcher-0.2.0-windows-x64-portable/portable.txt", zip::write::SimpleFileOptions::default()).unwrap();
+            writer.finish().unwrap();
+        }
+        mark_installed(&paths, &release);
+        let denied = |_: &Path| Err("couldn't start the launcher (denied)".to_owned());
+        assert!(finish_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), &paths, 4242, exe.clone(), &step, false, &exited, &denied).is_err());
+        let after = Paths::for_exe(&crate::suite::LAUNCHER, &exe).unwrap();
+        assert_eq!(take_outcome(&after, "0.2.0"), Some(Outcome::Failed("couldn't start the launcher (denied)".into())));
+    }
+
+    /// A portable update of the launcher to 0.2.0 in `dir`: its exe and the step.
+    #[cfg(windows)]
+    fn portable_update(dir: &Path) -> (PathBuf, Finish) {
+        use std::io::Write;
+        let folder = dir.join("ArtCraft Launcher");
+        std::fs::create_dir_all(&folder).unwrap();
+        let exe = folder.join("artcraft-launcher.exe");
+        std::fs::write(&exe, "0.1.0").unwrap();
+        let zip = dir.join("artcraft-launcher-0.2.0-windows-x64-portable.zip");
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(&zip).unwrap());
+        writer.start_file("artcraft-launcher-0.2.0-windows-x64-portable/artcraft-launcher.exe", zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(&std::fs::read(system_program("cmd.exe")).unwrap()).unwrap();
+        writer.finish().unwrap();
+        (exe, Finish::Portable { zip, tmp: dir.join(PORTABLE_STAGING) })
+    }
+
+    /// A finished step whose new app can't be started is a failure at the next start, never a
+    /// finished update.
+    #[cfg(windows)]
+    #[test]
+    fn a_failed_relaunch_is_not_reported_as_a_finished_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let (exe, step) = portable_update(dir.path());
+        mark_installed(&paths, &Release { tag: "v0.2.0".into(), ..Release::default() });
+        let start = |_: &Path| Err("couldn't start the launcher (denied)".to_owned());
+        let exited = |_pid| true;
+        let result = finish_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), &paths, 4242, exe, &step, false, &exited, &start);
+        assert_eq!(result, Err("couldn't start the launcher (denied)".into()));
+        assert_eq!(take_outcome(&paths, "0.2.0"), Some(Outcome::Failed("couldn't start the launcher (denied)".into())));
+    }
+
+    /// A helper that times out or whose step fails records no finished update.
+    #[cfg(windows)]
+    #[test]
+    fn a_timed_out_or_failed_step_is_not_reported_as_a_finished_update() {
+        for (exits, zip_ok) in [(false, true), (true, false)] {
+            let dir = tempfile::tempdir().unwrap();
+            let paths = Paths::under(dir.path());
+            let (exe, step) = portable_update(dir.path());
+            if !zip_ok && let Finish::Portable { zip, .. } = &step {
+                std::fs::write(zip, "not a zip").unwrap();
+            }
+            mark_installed(&paths, &Release { tag: "v0.2.0".into(), ..Release::default() });
+            let start = |_: &Path| Ok(());
+            let wait = |_pid| exits;
+            assert!(finish_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), &paths, 4242, exe, &step, false, &wait, &start).is_err());
+            assert!(!done_file(&paths).exists(), "exits {exits}, zip {zip_ok}");
+            assert!(matches!(take_outcome(&paths, "0.2.0"), Some(Outcome::Failed(_))), "exits {exits}, zip {zip_ok}");
+        }
+    }
+
+    /// A prepared Windows restart does nothing until it is started, and runs once when it is.
+    #[test]
+    fn a_prepared_restart_runs_only_when_started() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let runs = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&runs);
+        let restart = Restart::later(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        });
+        assert_eq!(runs.load(Ordering::SeqCst), 0, "nothing starts before the app closes");
+        assert_eq!(restart.start(), Ok(()));
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+        assert_eq!(Restart::scheduled().start(), Ok(()));
     }
 
     #[test]
@@ -2034,6 +4277,89 @@ mod tests {
         let running = Some("0.2.0-integration.20261029.f5b3f123");
         let result = update(&crate::suite::LAUNCHER, &install, &release, platform, &http, &paths, &stop, &mut phase, &last, running);
         assert!(result.unwrap_err().contains("is not newer than currently running version"));
+    }
+
+    /// Only `/usr/bin/<id>` is checked against the package databases, as before the launcher's
+    /// self-update moved here; another copy under a system folder (an AUR build, say) is left to
+    /// its package manager, and only a copy outside them (`/usr/local` included, which no package
+    /// manager owns) replaces itself.
+    #[test]
+    fn only_the_packages_own_path_is_a_package_and_system_folders_are_left_alone() {
+        let app = &crate::suite::LAUNCHER;
+        assert_eq!(linux_location(app, Path::new("/usr/bin/artcraft-launcher")), LinuxLocation::PackagePath);
+        for system in [
+            "/usr/bin/artcraft-launcher-bin",
+            "/nix/store/abc-artcraft-launcher/bin/artcraft-launcher",
+            "/opt/artcraft-launcher/artcraft-launcher",
+            "/bin/artcraft-launcher",
+            "/gnu/store/abc-artcraft-launcher/bin/artcraft-launcher",
+            "/snap/artcraft-launcher/12/bin/artcraft-launcher",
+            "/var/lib/snapd/snap/artcraft-launcher/12/bin/artcraft-launcher",
+            "/home/linuxbrew/.linuxbrew/Cellar/artcraft-launcher/1.0/bin/artcraft-launcher",
+            "/home/me/.linuxbrew/bin/artcraft-launcher",
+        ] {
+            assert_eq!(linux_location(app, Path::new(system)), LinuxLocation::System, "{system}");
+        }
+        for own in [
+            "/usr/local/bin/artcraft-launcher",
+            "/home/me/bin/artcraft-launcher",
+            "/home/me/.local/bin/artcraft-launcher",
+            "/usrlocal/artcraft-launcher",
+            "/var/lib/snapdx/artcraft-launcher",
+        ] {
+            assert_eq!(linux_location(app, Path::new(own)), LinuxLocation::Elsewhere, "{own}");
+        }
+    }
+
+    /// storytold/craft-launcher#764: a self-update downloads only its own release's link. One into
+    /// another app's releases, with the right tag and name, is refused before anything is fetched.
+    #[test]
+    fn update_refuses_a_link_that_is_not_its_releases_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let http = Http::new(crate::TEST_AGENT).unwrap();
+        let mut phase = |_| ();
+        let last = || Ok(());
+        let stop = Stop::default();
+        let name = "artcraft-launcher-0.3.0-linux-x86_64.AppImage";
+        let release = Release {
+            version: version::parse("0.3.0"),
+            tag: "v0.3.0".into(),
+            assets: vec![crate::release::Asset {
+                name: name.into(),
+                size: 1,
+                url: format!("https://github.com/storytold/photocraft/releases/download/v0.3.0/{name}"),
+                sha256: None,
+            }],
+            ..Release::default()
+        };
+        let install = Install::AppImage(dir.path().join("launcher.AppImage"));
+        use crate::{Arch, Os};
+        let platform = Platform { os: Os::Linux, arch: Arch::X64 };
+        let result = update(&crate::suite::LAUNCHER, &install, &release, platform, &http, &paths, &stop, &mut phase, &last, Some("0.2.0"));
+        assert!(result.unwrap_err().contains("isn't the one its release publishes"));
+    }
+
+    /// A launcher release whose tag has a `+` (semver build metadata) has `%2B` in its links.
+    /// The self-update accepts them and gets as far as the download, which the cancelled stop ends
+    /// before anything is fetched.
+    #[test]
+    fn update_accepts_a_plus_release_up_to_the_download() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let http = Http::new(crate::TEST_AGENT).unwrap();
+        let mut phase = |_| ();
+        let last = || Ok(());
+        let stop = Stop::default();
+        stop.cancel();
+        let app = &crate::suite::LAUNCHER;
+        let name = "artcraft-launcher-0.3.0+build.1-linux-x86_64.AppImage";
+        let release = crate::release::release_from_sums(app.repo, "v0.3.0+build.1", &[("a".repeat(64), name.to_string())]);
+        let install = Install::AppImage(dir.path().join("launcher.AppImage"));
+        use crate::{Arch, Os};
+        let platform = Platform { os: Os::Linux, arch: Arch::X64 };
+        let result = update(app, &install, &release, platform, &http, &paths, &stop, &mut phase, &last, Some("0.2.0"));
+        assert_eq!(result.unwrap_err(), crate::protocol::CANCELLED);
     }
 
     #[cfg(target_os = "linux")]
@@ -2087,6 +4413,12 @@ mod tests {
     /// A release tarball like `package.sh` makes: everything under one `<app>-<ver>-<platform>/`.
     #[cfg(unix)]
     fn release_tarball(path: &Path, files: &[(&str, &[u8])]) {
+        release_tarball_with(path, files, |_| {});
+    }
+
+    /// [`release_tarball`], with entries that `more` appends after the files.
+    #[cfg(unix)]
+    fn release_tarball_with(path: &Path, files: &[(&str, &[u8])], more: impl FnOnce(&mut tar::Builder<flate2::write::GzEncoder<std::fs::File>>)) {
         let f = std::fs::File::create(path).unwrap();
         let mut b = tar::Builder::new(flate2::write::GzEncoder::new(f, flate2::Compression::fast()));
         for (name, bytes) in files {
@@ -2096,7 +4428,18 @@ mod tests {
             h.set_cksum();
             b.append_data(&mut h, format!("pdfcraft-9.9.9-linux-x86_64/{name}"), *bytes).unwrap();
         }
+        more(&mut b);
         b.into_inner().unwrap().finish().unwrap();
+    }
+
+    /// Appends a link at `name` in the release, pointing at `target`.
+    #[cfg(unix)]
+    fn append_release_link(b: &mut tar::Builder<flate2::write::GzEncoder<std::fs::File>>, name: &str, target: &Path) {
+        let mut h = tar::Header::new_gnu();
+        h.set_entry_type(tar::EntryType::Symlink);
+        h.set_size(0);
+        h.set_cksum();
+        b.append_link(&mut h, format!("pdfcraft-9.9.9-linux-x86_64/{name}"), target).unwrap();
     }
 
     #[cfg(unix)]
@@ -2178,6 +4521,116 @@ mod tests {
         assert_eq!(read("share/pdfcraft/models/a.rten"), b"old model");
         let leftovers: Vec<_> = walk(&prefix).into_iter().filter(|p| p.to_string_lossy().contains(".update")).collect();
         assert!(leftovers.is_empty(), "staged files are removed: {leftovers:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_folder_in_the_release_stops_the_update_before_anything_changes() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let probe = dir.path().join("probe");
+        std::fs::create_dir(&probe).unwrap();
+        std::fs::set_permissions(&probe, std::fs::Permissions::from_mode(0o300)).unwrap();
+        let readable = std::fs::read_dir(&probe).is_ok();
+        std::fs::set_permissions(&probe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if readable {
+            return; // running as root: permissions don't stop reads, so there's nothing to test
+        }
+        let prefix = dir.path().join("local");
+        std::fs::create_dir_all(prefix.join("bin")).unwrap();
+        std::fs::create_dir_all(prefix.join("share/pdfcraft/models")).unwrap();
+        let exe = prefix.join("bin/pdfcraft");
+        std::fs::write(&exe, b"old app").unwrap();
+        std::fs::write(prefix.join("share/pdfcraft/a.txt"), b"old data").unwrap();
+        std::fs::write(prefix.join("share/pdfcraft/models/a.rten"), b"old model").unwrap();
+        let tarball = dir.path().join("new.tar.gz");
+        let files: [(&str, &[u8]); 3] =
+            [("bin/pdfcraft", b"new app"), ("share/pdfcraft/a.txt", b"new data"), ("share/pdfcraft/models/a.rten", b"new model")];
+        release_tarball_with(&tarball, &files, |b| {
+            // The archive keeps this folder's mode, which lets nobody list it.
+            let mut h = tar::Header::new_gnu();
+            h.set_entry_type(tar::EntryType::Directory);
+            h.set_size(0);
+            h.set_mode(0o300);
+            h.set_cksum();
+            b.append_data(&mut h, "pdfcraft-9.9.9-linux-x86_64/share/pdfcraft/models/", &[][..]).unwrap();
+        });
+        let paths = Paths::under(&dir.path().join("data"));
+        let error = replace_standalone(&crate::suite::PDFCRAFT, &paths, &tarball, &exe).unwrap_err();
+        assert!(
+            error.starts_with("couldn't read ") && error.contains("pdfcraft-9.9.9-linux-x86_64/share/pdfcraft/models ("),
+            "the error names the folder: {error}"
+        );
+        let staged = paths.cache.join(format!("pdfcraft.standalone.{}", std::process::id()));
+        assert!(!staged.exists(), "the unpacked release is removed");
+        let read = |p: &str| std::fs::read(prefix.join(p)).unwrap();
+        assert_eq!(read("bin/pdfcraft"), b"old app");
+        assert_eq!(read("share/pdfcraft/a.txt"), b"old data");
+        assert_eq!(read("share/pdfcraft/models/a.rten"), b"old model");
+        let leftovers: Vec<_> = walk(&prefix).into_iter().filter(|p| p.to_string_lossy().contains(".update")).collect();
+        assert!(leftovers.is_empty(), "no staged files left behind: {leftovers:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_release_without_shared_files_still_updates_a_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefix = dir.path().join("local");
+        std::fs::create_dir_all(prefix.join("bin")).unwrap();
+        std::fs::create_dir_all(prefix.join("share/pdfcraft")).unwrap();
+        let exe = prefix.join("bin/pdfcraft");
+        std::fs::write(&exe, b"old app").unwrap();
+        std::fs::write(prefix.join("share/pdfcraft/a.txt"), b"old data").unwrap();
+        let tarball = dir.path().join("new.tar.gz");
+        release_tarball(&tarball, &[("bin/pdfcraft", b"new app")]);
+        let paths = Paths::under(&dir.path().join("data"));
+        replace_standalone(&crate::suite::PDFCRAFT, &paths, &tarball, &exe).unwrap();
+        assert_eq!(std::fs::read(&exe).unwrap(), b"new app");
+        assert_eq!(std::fs::read(prefix.join("share/pdfcraft/a.txt")).unwrap(), b"old data");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_release_with_a_link_for_its_shared_files_stops_the_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefix = dir.path().join("local");
+        std::fs::create_dir_all(prefix.join("bin")).unwrap();
+        std::fs::create_dir_all(prefix.join("share/pdfcraft")).unwrap();
+        let exe = prefix.join("bin/pdfcraft");
+        std::fs::write(&exe, b"old app").unwrap();
+        let outside = dir.path().join("outside/pdfcraft");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("a.txt"), b"not from the release").unwrap();
+        let tarball = dir.path().join("new.tar.gz");
+        let outside = dir.path().join("outside");
+        release_tarball_with(&tarball, &[("bin/pdfcraft", b"new app")], |b| append_release_link(b, "share", &outside));
+        let paths = Paths::under(&dir.path().join("data"));
+        let error = replace_standalone(&crate::suite::PDFCRAFT, &paths, &tarball, &exe).unwrap_err();
+        assert!(error.ends_with("pdfcraft-9.9.9-linux-x86_64/share isn't a folder"), "{error}");
+        assert_eq!(std::fs::read(&exe).unwrap(), b"old app");
+        assert!(!prefix.join("share/pdfcraft/a.txt").exists(), "nothing is copied in through the link");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_release_with_a_link_for_its_programs_stops_the_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefix = dir.path().join("local");
+        std::fs::create_dir_all(prefix.join("bin")).unwrap();
+        let exe = prefix.join("bin/pdfcraft");
+        std::fs::write(&exe, b"old app").unwrap();
+        std::fs::write(prefix.join("bin/pdfcraft-cli"), b"old cli").unwrap();
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("pdfcraft"), b"not from the release").unwrap();
+        std::fs::write(outside.join("pdfcraft-cli"), b"not from the release").unwrap();
+        let tarball = dir.path().join("new.tar.gz");
+        release_tarball_with(&tarball, &[("share/pdfcraft/a.txt", b"new data")], |b| append_release_link(b, "bin", &outside));
+        let paths = Paths::under(&dir.path().join("data"));
+        let error = replace_standalone(&crate::suite::PDFCRAFT, &paths, &tarball, &exe).unwrap_err();
+        assert!(error.ends_with("pdfcraft-9.9.9-linux-x86_64/bin isn't a folder"), "{error}");
+        assert_eq!(std::fs::read(&exe).unwrap(), b"old app");
+        assert_eq!(std::fs::read(prefix.join("bin/pdfcraft-cli")).unwrap(), b"old cli");
     }
 
     #[cfg(unix)]

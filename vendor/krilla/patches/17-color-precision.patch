@@ -1,5 +1,5 @@
 diff --git a/src/graphics/color.rs b/src/graphics/color.rs
-index 6fb0618..06a3098 100644
+index 6fb0618..581de00 100644
 --- a/src/graphics/color.rs
 +++ b/src/graphics/color.rs
 @@ -69,7 +69,7 @@
@@ -11,7 +11,7 @@ index 6fb0618..06a3098 100644
  
  use crate::configure::ValidationError;
  use crate::graphics::icc::ICCBasedColorSpace;
-@@ -82,6 +82,48 @@ pub(crate) const DEVICE_GRAY: &str = "DeviceGray";
+@@ -82,6 +82,60 @@ pub(crate) const DEVICE_GRAY: &str = "DeviceGray";
  /// The PDF name for the device CMYK color space.
  pub(crate) const DEVICE_CMYK: &str = "DeviceCMYK";
  
@@ -41,6 +41,18 @@ index 6fb0618..06a3098 100644
 +    pub(crate) fn to_u8(self) -> u8 {
 +        (self.0 * 255.0).round() as u8
 +    }
++
++    /// `1 - value`, the black ink of a gray. An 8-bit value `n / 255` gives `(255 - n) / 255`,
++    /// as the 8-bit constructors write it. Any other value is subtracted from 1 in f64, from
++    /// the shortest decimal that writes it, so gray 0.96 gives 0.04 rather than 0.04000002.
++    pub(crate) fn complement(self) -> f32 {
++        let byte = self.to_u8();
++        if Tint::from_u8(byte) == self {
++            return Tint::from_u8(255 - byte).0;
++        }
++        let written = self.0.to_string().parse::<f64>().unwrap_or(f64::from(self.0));
++        (1.0 - written) as f32
++    }
 +}
 +
 +impl PartialEq for Tint {
@@ -60,7 +72,7 @@ index 6fb0618..06a3098 100644
  /// A wrapper for storing colors from different color spaces.
  #[derive(Debug, Hash, Eq, PartialEq, Clone)]
  pub enum Color {
-@@ -160,7 +202,10 @@ impl RegularColor {
+@@ -160,7 +214,10 @@ impl RegularColor {
      pub(crate) fn as_rgb(self) -> Option<rgb::Color> {
          Some(match self {
              Self::Rgb(r) => r,
@@ -72,7 +84,7 @@ index 6fb0618..06a3098 100644
              Self::Cmyk(_) => return None,
          })
      }
-@@ -183,16 +228,24 @@ impl SpecialColor {
+@@ -183,16 +240,24 @@ impl SpecialColor {
  
  /// Gray-scale colors.
  pub mod luma {
@@ -100,7 +112,7 @@ index 6fb0618..06a3098 100644
          }
  
          /// Create a black luma color.
-@@ -206,7 +259,7 @@ pub mod luma {
+@@ -206,7 +271,7 @@ pub mod luma {
          }
  
          pub(crate) fn to_pdf_color(self) -> f32 {
@@ -109,7 +121,7 @@ index 6fb0618..06a3098 100644
          }
      }
  
-@@ -251,27 +304,43 @@ impl From<SpecialColor> for Color {
+@@ -251,27 +316,43 @@ impl From<SpecialColor> for Color {
  
  /// CMYK colors.
  pub mod cmyk {
@@ -162,7 +174,7 @@ index 6fb0618..06a3098 100644
          }
      }
  
-@@ -390,23 +459,35 @@ pub mod rgb {
+@@ -390,23 +471,35 @@ pub mod rgb {
  
  /// Separation (spot) colors.
  pub mod separation {
@@ -202,7 +214,7 @@ index 6fb0618..06a3098 100644
          }
  
          pub(crate) fn color_space(&self) -> SeparationSpace {
-@@ -498,7 +579,7 @@ pub mod separation {
+@@ -498,7 +591,7 @@ pub mod separation {
  pub mod device_n {
      use std::sync::Arc;
  
@@ -211,7 +223,7 @@ index 6fb0618..06a3098 100644
  
      /// A process colorant.
      #[derive(Debug, Eq, PartialEq, Hash, Clone, Copy)]
-@@ -656,7 +737,7 @@ pub mod device_n {
+@@ -656,7 +749,7 @@ pub mod device_n {
      /// A DeviceN color: one tint per colorant of its space.
      #[derive(Debug, Hash, Eq, PartialEq, Clone)]
      pub struct Color {
@@ -220,7 +232,7 @@ index 6fb0618..06a3098 100644
          pub(crate) space: DeviceNSpace,
      }
  
-@@ -666,20 +747,30 @@ pub mod device_n {
+@@ -666,20 +759,30 @@ pub mod device_n {
          ///
          /// Returns `None` unless there is one tint per colorant.
          pub fn new(tints: Vec<u8>, space: DeviceNSpace) -> Option<Self> {
@@ -258,7 +270,7 @@ index 6fb0618..06a3098 100644
      }
  
 diff --git a/src/graphics/shading_function.rs b/src/graphics/shading_function.rs
-index 74c56f3..8aae81a 100644
+index 74c56f3..47b55c5 100644
 --- a/src/graphics/shading_function.rs
 +++ b/src/graphics/shading_function.rs
 @@ -277,12 +277,12 @@ impl GradientProperties {
@@ -290,7 +302,7 @@ index 74c56f3..8aae81a 100644
 -            Color::Regular(RegularColor::Cmyk(c)) => inks.process = [c.0, c.1, c.2, c.3],
 -            Color::Regular(RegularColor::Luma(l)) => inks.process[3] = 255 - l.0,
 +            Color::Regular(RegularColor::Cmyk(c)) => inks.process = c.to_pdf_color(),
-+            Color::Regular(RegularColor::Luma(l)) => inks.process[3] = 1.0 - l.to_pdf_color(),
++            Color::Regular(RegularColor::Luma(l)) => inks.process[3] = l.0.complement(),
              Color::Regular(RegularColor::Rgb(_)) => return None,
              Color::Special(SpecialColor::Separation(s)) => {
                  let SeparationColorant::Custom(name) = &s.space.colorant else {
