@@ -175,8 +175,8 @@ enum MkvFrames {
     Pcm { sizes: Vec<u32>, frame_bytes: u64 },
     /// E-AC-3, whose packets can differ in length: each packet's length from the headers of its
     /// primary syncframes. The packets' places and stored sizes, the bytes header stripping took
-    /// off each one, and their starts once read.
-    Eac3 { samples: Vec<(u64, u32)>, prefix: Vec<u8>, starts: Option<Vec<u64>> },
+    /// off each one, and the starts of the packets read so far.
+    Eac3 { samples: Vec<(u64, u32)>, prefix: Vec<u8>, starts: Vec<u64> },
     /// From the timestamps.
     Timestamps,
 }
@@ -188,18 +188,23 @@ impl MkvFrames {
             MkvFrames::Constant(n) => Some(k as u64 * *n),
             MkvFrames::Pcm { sizes, frame_bytes } => Some(sizes.iter().take(k).map(|&s| u64::from(s)).sum::<u64>() / *frame_bytes),
             MkvFrames::Eac3 { samples, prefix, starts } => {
-                if starts.is_none() {
-                    // A packet that cannot be read leaves the starts unknown (the caller then
-                    // places the packet by its timestamp) and is tried again on the next seek.
-                    let mut acc = 0u64;
-                    let mut found = Vec::with_capacity(samples.len());
-                    for &(at, size) in samples.iter() {
-                        found.push(acc);
-                        acc += eac3_packet_frames(src, prefix, at, size)? as u64;
-                    }
-                    *starts = Some(found);
+                // Headers are read only as far as packet `k`; a later seek extends the list. A
+                // packet that cannot be read leaves the rest unknown (the caller then places the
+                // packet by its timestamp) and is tried again on the next seek.
+                if k >= samples.len() {
+                    return None;
                 }
-                starts.as_ref()?.get(k).copied()
+                while starts.len() <= k {
+                    let start = match starts.len().checked_sub(1) {
+                        None => 0,
+                        Some(prev) => {
+                            let &(at, size) = samples.get(prev)?;
+                            starts.get(prev)? + eac3_packet_frames(src, prefix, at, size)? as u64
+                        }
+                    };
+                    starts.push(start);
+                }
+                starts.get(k).copied()
             }
             MkvFrames::Timestamps => None,
         }
@@ -207,7 +212,8 @@ impl MkvFrames {
 }
 
 /// The frames a stored Matroska E-AC-3 packet decodes to, from the headers of its primary
-/// syncframes, reading only those headers; `None` when a read fails or no header parses.
+/// syncframes, reading only those headers; `None` when a read fails or a header does not parse.
+/// A packet of dependent syncframes alone is zero frames, not a failure.
 fn eac3_packet_frames(src: &Src<'_>, prefix: &[u8], at: u64, size: u32) -> Option<usize> {
     // Enough bytes for any AC-3 / E-AC-3 header ahead of the audio blocks.
     const HEADER_BYTES: usize = 32;
@@ -227,7 +233,7 @@ fn eac3_packet_frames(src: &Src<'_>, prefix: &[u8], at: u64, size: u32) -> Optio
         }
         p += h.frame_bytes.max(1);
     }
-    (frames > 0).then_some(frames)
+    (len > 0).then_some(frames)
 }
 
 /// The next packet of Matroska track `track` and its timestamp in nanoseconds.
@@ -778,7 +784,7 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
     let rate = probe.sample_rate();
     let frames_of = match (probe.frames_per_packet(), params.pcm) {
         _ if probe.codec() == CodecId::Eac3 => {
-            MkvFrames::Eac3 { samples: t.samples.iter().map(|s| (s.offset, s.size)).collect(), prefix: t.frame_prefix(0), starts: None }
+            MkvFrames::Eac3 { samples: t.samples.iter().map(|s| (s.offset, s.size)).collect(), prefix: t.frame_prefix(0), starts: Vec::new() }
         }
         (Some(n), _) => MkvFrames::Constant(n as u64),
         (None, Some(pcm)) => {
