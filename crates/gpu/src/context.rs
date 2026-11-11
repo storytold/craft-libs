@@ -81,6 +81,12 @@ pub trait GpuContext {
     /// in `craft-gpu-providers`. The default drains [`request_read`](Self::request_read) and
     /// [`poll_reads`](Self::poll_reads) in a loop; see the trait docs for which backends honestly
     /// support blocking here and which override this to fail instead of hanging.
+    ///
+    /// The default body has nowhere to put completions that belong to other requests, so it
+    /// drops them: with the default body, never call this while another
+    /// [`request_read`](Self::request_read) is outstanding. A backend that stores completions
+    /// overrides this to put the other requests' outcomes back for the next
+    /// [`poll_reads`](Self::poll_reads); both bundled backends do.
     fn read_buffer(&mut self, handle: HandleId) -> Result<Vec<u8>, GpuFault> {
         let request = self.request_read(handle)?;
         loop {

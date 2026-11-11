@@ -1,4 +1,4 @@
-use craft_gpu::{GpuContext, GpuFault, GpuJob, GpuJobOutcome, GpuProvider, chunk_buffer, f16_rgba_to_f32_bytes};
+use craft_gpu::{GpuContext, GpuFault, GpuJob, GpuJobOutcome, GpuProvider, f16_rgba_to_f32_bytes};
 
 use crate::params::{params_contain, parse_u32};
 
@@ -15,8 +15,12 @@ impl GpuProvider for ReadbackProvider {
         let height = parse_u32(&job.params, b"h:").unwrap_or(0);
         let input = job.inputs.first().copied().ok_or_else(|| GpuFault::InvalidJob("craft.readback expects one input buffer".into()))?;
         let raw = ctx.read_buffer(input)?;
-        let caps = ctx.caps();
-        let _chunks = chunk_buffer(&caps, &raw)?;
+        // A real GPU provider binds the input as a storage buffer. Refuse a caps report no
+        // device path could satisfy, instead of pretending this stand-in's readback would have
+        // worked there.
+        if ctx.caps().max_storage_buffer_binding_size == 0 {
+            return Err(GpuFault::Operation("max_storage_buffer_binding_size must be non-zero".into()));
+        }
 
         let out_bytes = if params_contain(&job.params, b"fmt:u8") {
             let need = usize::try_from(width.saturating_mul(height).saturating_mul(4)).map_err(|_| GpuFault::InvalidJob("w*h overflow".into()))?;
