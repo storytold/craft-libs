@@ -181,17 +181,23 @@ fn root_env() -> RootEnv {
 }
 
 /// `show` at the screen's top left, `width` wide, until it settles: the frames, then a second past every fade, then the
-/// frames again.
+/// frames again. It runs in a shell as large as the gallery's window, over which its dialogs open as over a gallery
+/// view, so a dialog or workspace gets the room it gets in the gallery, not the card's width.
 fn settle(frames: &mut Frames, width: f32, show: &mut dyn FnMut(&mut Ui)) {
-    let region = Rect::from_min_size(Pos2::ZERO, Vec2::new(width, Vec2::from(WINDOW).y));
+    let window = Rect::from_min_size(Pos2::ZERO, Vec2::from(WINDOW));
     for at in 0..8 {
         if at == 4 {
             frames.advance(1.0);
         }
         frames.frame(Vec::new(), |ui| {
-            // What shows runs in a shell, over which its dialogs open, as over a gallery view.
-            craft_ui::testing::layout::in_region(ui, region, |ui| {
-                AppShell::embedded(WindowKey::new("story-render")).body(|ui, _, _: &mut ()| show(ui)).show(ui, &mut ())
+            craft_ui::testing::layout::in_region(ui, window, |ui| {
+                AppShell::embedded(WindowKey::new("story-render"))
+                    .body(|ui, _, _: &mut ()| {
+                        let view = ui.available_rect_before_wrap();
+                        let column = Rect::from_min_size(view.min, Vec2::new(width, view.height()));
+                        craft_ui::testing::layout::in_region(ui, column, |ui| show(ui));
+                    })
+                    .show(ui, &mut ())
             });
         });
     }
