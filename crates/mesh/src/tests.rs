@@ -2,6 +2,8 @@
 
 use super::*;
 
+#[cfg(feature = "fbx")]
+mod fbx;
 #[cfg(feature = "gltf")]
 mod gltf;
 #[cfg(feature = "obj")]
