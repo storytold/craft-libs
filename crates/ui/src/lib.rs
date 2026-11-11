@@ -18,6 +18,9 @@ pub mod icons;
 pub mod ime;
 pub mod layout;
 pub mod localized;
+// Split-button menu helper carried with the esign slice; main's craft-ui no longer has a
+// standalone menu module, and only the esign dialog uses this one.
+#[cfg(feature = "esign")]
 pub mod menu;
 pub mod panes;
 pub mod printing;
