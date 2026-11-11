@@ -51,7 +51,7 @@ lists at most 20 characters per stream.
 | SubRip `.srt` | yes | yes | BOM, UTF-16, Windows-1252 fallback, CRLF/CR, missing or wrong indexes, `,` or `.` milliseconds, 1–9 fraction digits, missing hours, SSA coordinates, cues not separated by blank lines. Inline tags are kept as text. |
 | WebVTT `.vtt` | yes | yes | Cue identifiers, cue settings (verbatim), a leading `<v Speaker>` voice span (as the caption's speaker) and STYLE / REGION / NOTE blocks are kept. A missing `WEBVTT` signature is tolerated. |
 | Scenarist SCC `.scc` | yes | yes | CEA-608 at 29.97 fps, drop-frame or not. Reads pop-on, roll-up and paint-on (channel 1); writes pop-on. |
-| MacCaption MCC `.mcc` | yes | yes | One SMPTE ST 334-2 caption distribution packet (CDP) per frame carrying caption data, omitting empty frames, in MacCaption's hex text with letter abbreviations. Writes 29.97 fps (`30DF` / `30`) with CEA-608 field 1 (the SCC schedule) **and** CEA-708 service 1 (two-window pop-on emulation). Reads CEA-608 field 1 when present, else CEA-708 service 1; time code rates 30DF, 30, 60DF, 60, 25, 24, 50. |
+| MacCaption MCC `.mcc` | yes | yes | One SMPTE ST 334-2 caption distribution packet (CDP) per frame carrying caption data, omitting empty frames (or on every frame, on request), in MacCaption's hex text with letter abbreviations. Writes 29.97 fps (`30DF` / `30`) with CEA-608 field 1 (the SCC schedule) **and** CEA-708 service 1 (two-window pop-on emulation). Reads CEA-608 field 1 when present, else CEA-708 service 1; time code rates 30DF, 30, 60DF, 60, 25, 24, 50. |
 | EBU STL `.stl` | yes | yes | EBU Tech 3264-E: GSI block + 128-byte TTI blocks, `STL25.01` (25 fps) or `STL30.01` (read/written as 29.97 fps, non-drop labels), ISO/IEC 6937 Latin text (accents as diacritic + letter), italics / underline codes as `<i>` / `<u>`, extension blocks for long subtitles, start-of-programme (TCP) subtracted. |
 | TTML `.ttml` (IMSC1) | yes | yes | Writes the IMSC1 Text profile (TTML2 namespaces) with the document's language as `xml:lang` (read back on import): `<p>` per cue, `<br/>`, styled `<span>`s for `<i>` / `<b>` / `<u>`, `ttm:agent` speakers, exact frame times (`123f`) at the sequence rate. Reads any TTML (TTML1, TTML2, the 2006 `ttaf1` drafts): clock / frame / offset / tick times, `dur`, nested time containers (`body` / `div` begins offset and ends clip their contents; `seq` containers are read as `par` with a warning), timed spans, referenced styles. |
 | DFXP `.dfxp` | yes | yes | TTML1 with the DFXP presentation profile; clock times in milliseconds (frame-exact after `snap_to_frames`). |
@@ -117,4 +117,19 @@ character, as the standard requires); a few have a close stand-in (’ as ', –
 dropped. `charset_warnings` names each dropped or replaced character. If there is no room to load a caption
 before its in point (for example a caption at 00:00:00:00), it appears as soon as it is loaded.
 
-#
+### MCC writer
+
+The writer merges the scheduled CEA-608 and CEA-708 frames in timestamp order. Frames without
+caption data are omitted, including during a displayed caption; its explicit erase/hide command
+still lands at its out point. CDP sequence counters advance per emitted packet, wrapping at 16 bits.
+CEA-708 text uses the G0 and G1 (Latin-1) sets and part of G2 (… ‘ ’ “ ” • ™ and a few more);
+other characters are sent as `?`, and `charset_warnings` names them.
+Export work and output size therefore follow the scheduled caption data, not the time between
+cues or their duration.
+
+For consumers that need a packet on every video frame (SDI, frame-wrapped MXF with a SMPTE 436M
+track), `WriteOptions::every_frame_until` also writes one on every frame without caption data,
+from the start to that time: CEA-608 null pairs and CEA-708 padding. The packets are 29.97 fps,
+so they line up with the video only at that rate; the caller decides whether to offer it. It is
+off by default, covers at most 24 hours (`mcc::MAX_PADDED_FRAMES`), and can be streamed
+(`write_to`).
