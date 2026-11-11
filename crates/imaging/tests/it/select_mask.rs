@@ -9,6 +9,7 @@ use std::time::Duration;
 use craft_behavior::PixelSize;
 use craft_host::{AppInfo, Host, InlineJobs};
 use craft_imaging::trace::MaskSource;
+use craft_imaging::ui::mask_view::MaskViewMode;
 use craft_imaging::ui::select_mask::{
     SelectMaskEvent, SelectMaskLimits, SelectMaskOpen, SelectMaskPreviewRequest, SelectMaskSource, SelectMaskWorkspace,
 };
@@ -17,8 +18,10 @@ use craft_ui::canvas::{PixelRect, RasterSource};
 use craft_ui::primitives::Revision;
 use craft_ui::runtime::access::Role;
 use craft_ui::runtime::pending::Job;
+use craft_ui::testing::focus::key_release;
+use craft_ui::testing::input::key_press;
 use craft_ui::testing::{Fixture, pointer, trial};
-use egui::{Color32, ColorImage, Pos2, Vec2};
+use egui::{Color32, ColorImage, Key, Modifiers, Pos2, Vec2};
 
 /// The document's size in pixels.
 const DOCUMENT: [u32; 2] = [800, 600];
@@ -126,4 +129,21 @@ fn select_mask_preview_is_asked_for_only_when_it_changes() {
     assert_eq!(jobs.load(Ordering::SeqCst), first, "hovering changes nothing");
     press_label(&mut fixture, "Invert");
     assert_eq!(jobs.load(Ordering::SeqCst), first + 1, "an edit asks for a new preview");
+}
+
+// The view keys work from inside the workspace with no help from the app: K picks Black & White, X held hides the
+// view until it is released.
+#[trial]
+fn select_mask_view_keys_pick_the_view_and_x_held_hides_it() {
+    let (mut fixture, app, _) = open();
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    fixture.key(Key::K, Modifiers::NONE).settle();
+    assert_eq!(app.borrow().workspace.recipe().mode, MaskViewMode::BlackAndWhite);
+
+    fixture.frame(vec![key_press(Key::X, Modifiers::NONE)]);
+    fixture.settle();
+    assert!(app.borrow().workspace.recipe().hidden, "X held hides the view");
+    fixture.frame(vec![key_release(Key::X, Modifiers::NONE)]);
+    fixture.settle();
+    assert!(!app.borrow().workspace.recipe().hidden, "the release shows it again");
 }

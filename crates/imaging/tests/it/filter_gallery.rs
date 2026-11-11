@@ -7,7 +7,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use craft_behavior::PixelSize;
-use craft_behavior::edit_history::Step;
 use craft_host::{AppInfo, Host};
 use craft_imaging::ui::filter_gallery::{
     EffectChange, EffectLayer, FilterCatalog, FilterCategory, FilterGalleryEvent, FilterGalleryOpen, FilterGalleryOutput, FilterGallerySession,
@@ -21,7 +20,7 @@ use craft_ui::primitives::Revision;
 use craft_ui::primitives::textures::{FakeThumbSource, ThumbnailOptions, Thumbnails};
 use craft_ui::testing::{Fixture, trial};
 use craft_ui::value_drag::SliderScale;
-use egui::{Color32, ColorImage, Vec2};
+use egui::{Color32, ColorImage, Key, Modifiers, Vec2};
 
 const WINDOW: Vec2 = Vec2::new(1100.0, 640.0);
 const LAYER: PixelSize = PixelSize::new(400, 300);
@@ -162,10 +161,10 @@ impl Rig {
     }
 }
 
-// The workspace's `step` clamps the selection to the layers that remain and leaves the `Select` event to the
-// pass's comparison with the selection the app knows: it is reported once.
+// ⌘Z steps the stack's history: the selection moves onto the layers that remain, and the `Select` event comes from
+// the pass's comparison with the selection the app knows, once.
 #[trial]
-fn gallery_workspace_step_clamps_the_selection_without_queuing_select() {
+fn gallery_undo_by_key_clamps_the_selection_and_reports_select_once() {
     let mut rig = rig(FilterGallerySession::new("cutout", &Catalog), true);
     let add = rig.fixture.by_label("New effect layer").expect("the stack offers New");
     rig.fixture.click(&add).settle();
@@ -174,12 +173,12 @@ fn gallery_workspace_step_clamps_the_selection_without_queuing_select() {
     let selects = |rig: &Rig| rig.events().iter().filter(|event| matches!(event, FilterGalleryEvent::Select(0))).count();
     assert_eq!(selects(&rig), 0);
 
-    assert!(rig.workspace.borrow_mut().step(Step::Undo));
+    rig.fixture.key(Key::Z, Modifiers::COMMAND).settle();
     assert_eq!(rig.workspace.borrow().session().effects.len(), 1);
     assert_eq!(rig.workspace.borrow().selected(), 0, "the selection moves onto the layer that remains");
-    rig.fixture.settle();
-    assert_eq!(selects(&rig), 1, "the next pass reports `Select` from its comparison, once");
-    assert!(!rig.workspace.borrow_mut().step(Step::Undo), "nothing left to undo");
+    assert_eq!(selects(&rig), 1, "the pass reports `Select` from its comparison, once");
+    rig.fixture.key(Key::Z, Modifiers::COMMAND).settle();
+    assert_eq!(rig.workspace.borrow().session().effects.len(), 1, "nothing left to undo");
 }
 
 // The app answers a color request by key and `Srgba`: the selected effect's field takes it as one undo step.

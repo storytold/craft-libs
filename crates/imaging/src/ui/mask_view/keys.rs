@@ -17,36 +17,36 @@ use craft_ui::contract::CommandSet;
 #[non_exhaustive]
 pub enum MaskViewKeys {
     /// Onion Skin.
-    #[command(label = "Onion Skin", default = "O")]
+    #[command(modal = "in_dialogs", label = "Onion Skin", default = "O")]
     OnionSkin,
     /// Marching Ants.
-    #[command(label = "Marching Ants", default = "M")]
+    #[command(modal = "in_dialogs", label = "Marching Ants", default = "M")]
     MarchingAnts,
     /// Overlay.
-    #[command(label = "Overlay", default = "V")]
+    #[command(modal = "in_dialogs", label = "Overlay", default = "V")]
     Overlay,
     /// On Black.
-    #[command(label = "On Black", default = "A")]
+    #[command(modal = "in_dialogs", label = "On Black", default = "A")]
     OnBlack,
     /// On White.
-    #[command(label = "On White", default = "T")]
+    #[command(modal = "in_dialogs", label = "On White", default = "T")]
     OnWhite,
     /// Black & White.
-    #[command(label = "Black & White", default = "K")]
+    #[command(modal = "in_dialogs", label = "Black & White", default = "K")]
     BlackAndWhite,
     /// On Layers.
-    #[command(label = "On Layers", default = "Y")]
+    #[command(modal = "in_dialogs", label = "On Layers", default = "Y")]
     OnLayers,
     /// The next view in menu order.
-    #[command(label = "Next View", default = "F")]
+    #[command(modal = "in_dialogs", label = "Next View", default = "F")]
     NextView,
     /// Show Edge.
-    #[command(label = "Show Edge", default = "J")]
+    #[command(modal = "in_dialogs", label = "Show Edge", default = "J")]
     ShowEdge,
     /// Show Original.
-    #[command(label = "Show Original", default = "P")]
+    #[command(modal = "in_dialogs", label = "Show Original", default = "P")]
     ShowOriginal,
     /// The image without the view, while the key is held.
-    #[command(label = "Hide View (Hold)", kind = "momentary", default = "X")]
+    #[command(modal = "in_dialogs", label = "Hide View (Hold)", kind = "momentary", default = "X")]
     HideView,
 }

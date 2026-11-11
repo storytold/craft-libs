@@ -139,8 +139,8 @@ struct Pass<'w> {
 
 /// The Filter Gallery workspace.
 ///
-/// Keys: the zoom commands zoom the preview, never the canvas behind; Undo and Redo reach the stack's history
-/// through [`step`](Self::step); Enter OK, Esc Cancel.
+/// Keys: the zoom commands zoom the preview, never the canvas behind; ⌘Z and ⇧⌘Z step the stack's history (a field
+/// being edited steps its own text first); Enter OK, Esc Cancel.
 #[derive(Pattern)]
 pub struct FilterGalleryWorkspace {
     session: FilterGallerySession,
@@ -264,6 +264,9 @@ impl FilterGalleryWorkspace {
             .show(ui, |ui, cx| {
                 let mut pass = pass.borrow_mut();
                 let workspace = &mut *pass.workspace;
+                while let Some(step) = cx.take_step(workspace.history.can_undo(), workspace.history.can_redo()) {
+                    workspace.step(step);
+                }
                 let mut view = workspace.view;
                 while let Some((command, _)) = cx.take_command::<ViewCommands>() {
                     view.apply(command);
@@ -339,15 +342,13 @@ impl FilterGalleryWorkspace {
         self.queued.push(FilterGalleryEvent::Stack(EffectChange::with_fields(index, fields)));
     }
 
-    /// Undo or redo from the app's Edit menu; returns whether it stepped. The next pass clamps the
-    /// selection and reports it as a `Select` event when it moved.
-    pub fn step(&mut self, step: Step) -> bool {
-        if !self.history.step(&mut self.session, step) {
-            return false;
+    /// Undoes or redoes, keeping the selection on a layer that remains. The pass reports the selection as a `Select`
+    /// event when it moved.
+    fn step(&mut self, step: Step) {
+        if self.history.step(&mut self.session, step) {
+            self.selected = self.selected.min(self.session.effects.len().saturating_sub(1));
+            self.revision += 1;
         }
-        self.selected = self.selected.min(self.session.effects.len().saturating_sub(1));
-        self.revision += 1;
-        true
     }
 
     /// Records the session as one undo step named `name`, after `before`.

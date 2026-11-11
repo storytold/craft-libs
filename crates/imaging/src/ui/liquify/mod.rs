@@ -240,8 +240,8 @@ struct LiquifyView {
 ///
 /// Keys ([`LiquifyCommands`], on the scope of the dialog's body): W R E C S B O F D L pick the Liquify tools and H, Z the Hand
 /// and Zoom tools; `[` and `]` scale the brush, ⌘H shows or hides the mask, ⌘I inverts the mask, ⌘D clears it. The
-/// dialog applies the zoom commands to its view. The app forwards ⌘Z and ⇧⌘Z (`EditCommands::Undo`, `Redo`) to
-/// [`step`](Self::step); Enter is OK and Esc Cancel (Esc during a stroke cancels the stroke only). A tool switch or
+/// dialog applies the zoom commands to its view. ⌘Z and ⇧⌘Z step the workspace's history (a field being edited
+/// steps its own text first); Enter is OK and Esc Cancel (Esc during a stroke cancels the stroke only). A tool switch or
 /// an undo during a stroke cancels it first (`CancelReason::Removed`, `CancelReason::UndoDuringGesture`); the app's
 /// field is rebuilt by the [`LiquifyEvent::Replay`] that follows.
 ///
@@ -257,12 +257,6 @@ pub struct LiquifyWorkspace {
     checkerboard: Checker,
     /// The backdrop the app was last asked for, while Show Backdrop is on.
     asked: Option<Option<u64>>,
-    /// Events that happened between passes ([`step`](Self::step)), reported by the next `show`.
-    queued: Vec<LiquifyEvent>,
-    /// A step the app asked for while a stroke was open; the next `show` cancels the stroke, then steps.
-    requested: Vec<Step>,
-    /// A stroke, a lasso or a resize was open at the end of the last pass.
-    busy: bool,
     /// The zoom on screen at the end of the last pass, for the title.
     zoom_percent: f64,
     /// The timing of the latest stroke, as of the last pass.
@@ -300,9 +294,6 @@ impl LiquifyWorkspace {
             navigation: open.navigation,
             checkerboard: open.checkerboard,
             asked: None,
-            queued: Vec::new(),
-            requested: Vec::new(),
-            busy: false,
             zoom_percent: 100.0,
             timing: None,
             cursor: None,
@@ -327,7 +318,7 @@ impl LiquifyWorkspace {
     /// Shows the workspace for this pass.
     ///
     /// A [`FullWindowDialog`] titled by [`FullWindowTitle`] (the subject and the zoom), with the Properties column ([`LiquifyPanel`], OK and Cancel at its bottom) in the dialog's
-    /// side region. The body, in order: the events [`step`](Self::step) queued; the commands, in the scope of
+    /// side region. The body, in order: Undo and Redo; the commands, in the scope of
     /// [`LiquifyCommands`]; the tool strip (a `ToolRail` over [`LiquifyTool::slots`]; a pick
     /// cancels the old tool's gesture with `Removed`); the canvas ([`FullWindowCanvas`]) with the source's image under
     /// [`BackdropLayering`], the freeze mask as a `RasterOverlay` tinted red while Show Mask is on, the mesh while
@@ -342,8 +333,7 @@ impl LiquifyWorkspace {
         let layers = source.layers();
         let title = FullWindowTitle::new(words.name.clone()).subject(self.subject.clone()).zoom(self.zoom_percent).label(&env);
         let settings_before = self.edit.settings.clone();
-        let mut asked_steps = std::mem::take(&mut self.requested);
-        self.edit.events = std::mem::take(&mut self.queued);
+        self.edit.events.clear();
         if !self.edit.settings.show_backdrop {
             self.asked = None;
         } else if self.asked.is_none() {
@@ -351,17 +341,6 @@ impl LiquifyWorkspace {
             let of = backdrop_id(self.edit.settings.backdrop);
             self.edit.events.push(LiquifyEvent::BackdropWanted(of));
             self.asked = Some(of);
-        }
-        // An open stroke is cancelled first; the replay of the step supersedes the one the cancel reports. This runs before
-        // the container, so an undo during a releasing stroke cancels it instead of undoing.
-        for step in asked_steps.drain(..) {
-            self.edit.cancel_gesture(&ui.ctx().clone(), &mut self.view, CancelReason::UndoDuringGesture);
-            if self.edit.history.step(&mut self.edit.session, step) {
-                if matches!(self.edit.events.last(), Some(LiquifyEvent::Replay(_))) {
-                    self.edit.events.pop();
-                }
-                self.edit.events.push(LiquifyEvent::Replay(self.edit.session.steps().to_vec()));
-            }
         }
         let slots = LiquifyTool::slots();
         let this = RefCell::new(&mut *self);
@@ -396,6 +375,10 @@ impl LiquifyWorkspace {
                 let ctx = ui.ctx().clone();
                 let mut guard = this.borrow_mut();
                 let work: &mut LiquifyWorkspace = &mut guard;
+                // Before the canvas runs, so an undo during a releasing stroke cancels it instead of undoing.
+                while let Some(step) = cx.take_step(work.edit.history.can_undo(), work.edit.history.can_redo()) {
+                    work.edit.step(&ctx, &mut work.view, step);
+                }
                 let state = &mut work.view;
                 state.canvas.navigate(work.navigation);
                 while let Some((command, _)) = cx.take_command::<ViewCommands>() {
@@ -496,7 +479,6 @@ impl LiquifyWorkspace {
             }
             work.zoom_percent = work.view.view.zoom_percent();
             work.edit.absorb_canvas_events(&mut work.view);
-            work.busy = work.view.canvas.busy();
             work.timing = work.view.canvas.timing();
         });
         let this = this.into_inner();
@@ -521,26 +503,6 @@ impl LiquifyWorkspace {
     /// What the app persists (always: PhotoCraft remembers Liquify's settings on every close).
     pub fn settings(&self) -> &LiquifySettings {
         &self.edit.settings
-    }
-
-    /// Undo or redo from the app's Edit menu. Returns whether a step will happen; its
-    /// [`LiquifyEvent::Replay`] comes with the next [`show`](Self::show)'s events. With a stroke
-    /// open the step waits for that pass, which cancels the stroke (`UndoDuringGesture`) first.
-    pub fn step(&mut self, step: Step) -> bool {
-        // pc: crates/ui-egui/src/dialogs/liquify_ui.rs:340 `undo`, :351 `redo`.
-        if self.busy {
-            self.requested.push(step);
-            return match step {
-                Step::Undo => self.edit.history.can_undo(),
-                Step::Redo => self.edit.history.can_redo(),
-                _ => false,
-            };
-        }
-        let stepped = self.edit.history.step(&mut self.edit.session, step);
-        if stepped {
-            self.queued.push(LiquifyEvent::Replay(self.edit.session.steps().to_vec()));
-        }
-        stepped
     }
 }
 
@@ -612,6 +574,19 @@ impl Edit {
             canvas.tool(&mut self.settings, &cursor).abandon(reason);
         }
         self.absorb_canvas_events(state);
+    }
+
+    /// Undoes or redoes, cancelling an open stroke first (`UndoDuringGesture`); the replay of the step supersedes the
+    /// one the cancel reports.
+    fn step(&mut self, ctx: &egui::Context, state: &mut LiquifyView, step: Step) {
+        // pc: crates/ui-egui/src/dialogs/liquify_ui.rs:340 `undo`, :351 `redo`.
+        self.cancel_gesture(ctx, state, CancelReason::UndoDuringGesture);
+        if self.history.step(&mut self.session, step) {
+            if matches!(self.events.last(), Some(LiquifyEvent::Replay(_))) {
+                self.events.pop();
+            }
+            self.events.push(LiquifyEvent::Replay(self.session.steps().to_vec()));
+        }
     }
 
     /// Switches to `tool`, cancelling the old tool's gesture first.

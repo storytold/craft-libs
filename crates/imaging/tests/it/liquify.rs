@@ -3,7 +3,6 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use craft_behavior::edit_history::Step;
 use craft_behavior::{CancelReason, PixelSize};
 use craft_imaging::ui::liquify::{
     LiquifyBrush, LiquifyEvent, LiquifyMesh, LiquifyOpen, LiquifySource, LiquifyTool, LiquifyWorkspace, MeshSize, StrokeEvent, StrokeRecorder,
@@ -11,8 +10,9 @@ use craft_imaging::ui::liquify::{
 use craft_ui::canvas::{PixelRect, RasterSource};
 use craft_ui::primitives::Revision;
 use craft_ui::runtime::access::Role;
+use craft_ui::testing::input::key_press;
 use craft_ui::testing::{Fixture, pointer, trial};
-use egui::{Color32, ColorImage, Event, Pos2, Vec2};
+use egui::{Color32, ColorImage, Event, Key, Modifiers, Pos2, Vec2};
 
 /// The document's size in pixels.
 const DOCUMENT: [u32; 2] = [800, 600];
@@ -137,8 +137,7 @@ fn liquify_undo_mid_stroke_cancels_the_stroke_then_steps() {
     open_stroke(&mut fixture, below);
     app.borrow_mut().events.clear();
 
-    assert!(app.borrow_mut().workspace.step(Step::Undo), "the step waits for the next pass");
-    fixture.frame(Vec::new());
+    fixture.frame(vec![key_press(Key::Z, Modifiers::COMMAND)]);
     let events = app.borrow().events.clone();
     assert!(
         matches!(

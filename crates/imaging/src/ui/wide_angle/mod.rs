@@ -186,8 +186,8 @@ const TOOL_SLOT: [(WideAngleTool, WideAngleCommands); 3] = [
 /// The Adaptive Wide Angle workspace.
 ///
 /// Keys: A, H, Z (the tool commands); Delete and Backspace the focused constraint; the zoom commands the view; Enter
-/// OK; Esc Cancel (a drag in progress first). Undo and redo are the app's Edit commands, forwarded to
-/// [`step`](Self::step).
+/// OK; Esc Cancel (a drag in progress first). ⌘Z and ⇧⌘Z step the history, ending a drag in progress first (a field
+/// being edited steps its own text first).
 #[derive(Pattern)]
 pub struct WideAngleWorkspace {
     session: WideAngleSession,
@@ -204,7 +204,6 @@ pub struct WideAngleWorkspace {
     navigation: NavigationOptions,
     /// The panel's Add button was pressed and the form is not open yet.
     add_requested: bool,
-    steps: Vec<Step>,
 }
 
 impl WideAngleWorkspace {
@@ -220,7 +219,6 @@ impl WideAngleWorkspace {
             zoom_percent: 100.0,
             navigation: NavigationOptions::default(),
             add_requested: false,
-            steps: Vec::new(),
         }
     }
 
@@ -244,19 +242,6 @@ impl WideAngleWorkspace {
         &self.session
     }
 
-    /// Undo or redo from the app's Edit menu; returns whether it will step. The next [`show`](Self::show) ends a drag
-    /// in progress first, then steps.
-    pub fn step(&mut self, step: Step) -> bool {
-        let can = match step {
-            Step::Undo => self.history.can_undo(),
-            Step::Redo => self.history.can_redo(),
-            _ => false,
-        };
-        // The body ends a drag in its own pass, so a step is queued even when there is nothing to undo.
-        self.steps.push(step);
-        can
-    }
-
     /// Shows the workspace for this pass: the title, the strip, the side column ([`WideAnglePanel`], OK and Cancel),
     /// the canvas (the corrected preview while Preview is on and no drag runs, else the source) with the Constraint
     /// tool (or Hand, Zoom) and the [`ConstraintLines`], and the constraint menu while a constraint asked for it.
@@ -272,8 +257,8 @@ impl WideAngleWorkspace {
         let snapshot = self.session.clone();
         let size = self.size;
         let navigation = self.navigation;
-        let steps = std::mem::take(&mut self.steps);
-        let ending = !steps.is_empty();
+        let can_step = (self.history.can_undo(), self.history.can_redo());
+        let steps = RefCell::new(Vec::<Step>::new());
         let preview_on = Cell::new(self.preview_on);
         let actions = RefCell::new(Vec::<Action>::new());
         let timing = Cell::new(self.timing);
@@ -308,7 +293,13 @@ impl WideAngleWorkspace {
                 if add.replace(false) {
                     body.adding = true;
                 }
-                if ending {
+                // A drag in progress ends first; the steps run after the dialog, before this pass's edits.
+                let mut stepping = false;
+                while let Some(step) = cx.take_step(can_step.0, can_step.1) {
+                    steps.borrow_mut().push(step);
+                    stepping = true;
+                }
+                if stepping {
                     end_gesture(&ctx, &mut body, CancelReason::UndoDuringGesture);
                 }
 
@@ -441,7 +432,7 @@ impl WideAngleWorkspace {
         self.add_requested = add.get();
         self.timing = timing.get();
         self.zoom_percent = zoom_percent.get();
-        for step in steps {
+        for step in steps.into_inner() {
             self.history.step(&mut self.session, step);
         }
         let mut events = Vec::new();

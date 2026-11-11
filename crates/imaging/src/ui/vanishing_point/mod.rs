@@ -213,8 +213,8 @@ struct NewPlaneState {
 /// while Vanishing Point is open. The view and the strip's memory live in the dialog's body.
 ///
 /// Keys ([`VanishingPointCommands`], on the dialog's scope): V, C, S, H, Z pick the tools; Delete and Backspace remove
-/// the selected plane while the canvas has the keyboard. The app forwards ⌘Z and ⇧⌘Z (`EditCommands::Undo`, `Redo`) to
-/// [`step`](Self::step); Enter is OK and
+/// the selected plane while the canvas has the keyboard. ⌘Z and ⇧⌘Z step the history (a field being edited steps its own
+/// text first); Enter is OK and
 /// Esc Cancel (with the canvas focused, Esc drops pending corners first, and during a drag cancels the drag only). A
 /// tool switch cancels the old tool's gesture (`CancelReason::Removed`), and so does an undo
 /// (`CancelReason::UndoDuringGesture`).
@@ -236,8 +236,6 @@ pub struct VanishingPointWorkspace {
     hand: HandTool,
     zoom: ZoomTool,
     new_plane: NewPlaneState,
-    /// Steps the app asked for while a drag was open: the next `show` cancels the drag, then steps.
-    requested: Vec<Step>,
     /// The zoom on screen at the end of the last pass, for the title.
     zoom_percent: f64,
 }
@@ -260,7 +258,6 @@ impl VanishingPointWorkspace {
             hand: HandTool::new(open.navigation),
             zoom: ZoomTool::new(open.navigation),
             new_plane: NewPlaneState::default(),
-            requested: Vec::new(),
             zoom_percent: 100.0,
         }
     }
@@ -295,7 +292,6 @@ impl VanishingPointWorkspace {
         let common = env.words::<CommonWords>();
         let title = FullWindowTitle::new(words.name.clone()).subject(self.subject.clone()).zoom(self.zoom_percent).label(&env);
         let settings_before = self.settings;
-        let mut asked = std::mem::take(&mut self.requested);
         let slots = slots();
         let status: RefCell<Option<Pending<PreviewDone, String>>> = RefCell::new(None);
         let events = RefCell::new(Vec::<VanishingPointEvent>::new());
@@ -319,7 +315,8 @@ impl VanishingPointWorkspace {
                 let mut out = Vec::new();
 
                 // An open drag is cancelled first, so the step finds the session as the history has it.
-                for step in asked.drain(..) {
+                while let Some(step) = cx.take_step(work.history.can_undo(), work.history.can_redo()) {
+                    // pc: crates/ui-egui/src/dialogs/vp_ui.rs:383 `step`.
                     work.cancel_gesture(&ctx, &state, CancelReason::UndoDuringGesture, &mut out);
                     work.step_now(step);
                 }
@@ -445,20 +442,6 @@ impl VanishingPointWorkspace {
     pub fn settings(&self) -> &VanishingPointSettings {
         &self.settings
     }
-
-    /// Undo or redo from the app's Edit menu; returns whether a step will happen. With a drag open the step waits for
-    /// the next [`show`](Self::show), which cancels the drag (`UndoDuringGesture`) first.
-    pub fn step(&mut self, step: Step) -> bool {
-        // pc: crates/ui-egui/src/dialogs/vp_ui.rs:383 `step`.
-        if self.editor.busy() {
-            self.requested.push(step);
-            return match step {
-                Step::Undo => self.history.can_undo(),
-                _ => self.history.can_redo(),
-            };
-        }
-        self.step_now(step)
-    }
 }
 
 /// The strip: Edit Plane (V), Create Plane (C), Stamp (S), a gap, Hand (H) and Zoom (Z); each slot runs the tool's
@@ -476,14 +459,12 @@ fn slots() -> Vec<ToolSlot<Pick>> {
 
 impl VanishingPointWorkspace {
     /// Steps the history now; the editor drops what the old session left (pending corners, a stale selection).
-    fn step_now(&mut self, step: Step) -> bool {
-        let stepped = self.history.step(&mut self.session, step);
-        if stepped {
+    fn step_now(&mut self, step: Step) {
+        if self.history.step(&mut self.session, step) {
             self.editor.after_step(&self.session);
             self.recorded = self.session.clone();
             self.revision += 1;
         }
-        stepped
     }
 
     /// Cancels the gesture the strip's tool holds with `reason`: the editor puts back what the press found (the

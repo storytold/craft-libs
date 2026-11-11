@@ -64,7 +64,7 @@ use craft_ui::dialog::{FullWindowCanvas, FullWindowDialog, FullWindowSide, FullW
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::primitives::Checker;
 use craft_ui::rails::{LastUsed, ToolRail};
-use craft_ui::runtime::commands::{CommandSet as _, Commands as _, FirePhase};
+use craft_ui::runtime::commands::{CommandSet as _, Commands as _};
 use craft_ui::runtime::edit::next_gesture_id;
 use craft_ui::runtime::env::Env;
 use craft_ui::runtime::pending::{Job, Pending};
@@ -228,9 +228,8 @@ impl Outcome for SelectMaskOutput {
 ///
 /// Keys ([`SelectMaskCommands`], on the dialog's scope; none while a text field edits): W, R, B, L, H, Z pick the
 /// tools, a pressed-again W or L (or Shift+W, Shift+L) cycles its group; `[` and `]` the brush size
-/// ([`BrushSizes::step`]); the app forwards the fired `MaskViewKeys` (O M V A T K Y, F, J, P and X held) to
-/// [`mask_view`](Self::mask_view) and ⌘Z, ⇧⌘Z to
-/// [`step`](Self::step). Backspace and Delete remove the polygon's last vertex; Enter closes an open polygon first,
+/// ([`BrushSizes::step`]); `MaskViewKeys` pick the view (O M V A T K Y, F, J, P, and X held hides it); ⌘Z and ⇧⌘Z
+/// step the history (a field being edited steps its own text first; an open stroke is cancelled first). Backspace and Delete remove the polygon's last vertex; Enter closes an open polygon first,
 /// else is OK; Esc drops it first, else is Cancel.
 #[derive(Clone, Pattern)]
 pub struct SelectMaskWorkspace {
@@ -262,8 +261,6 @@ pub struct SelectMaskWorkspace {
     /// The key of the request a released brush stroke was made under: the stroke stays drawn until another key's
     /// preview is ready.
     trail_since: Option<String>,
-    /// Steps the app asked for while a stroke was open; the next `show` cancels the stroke, then steps.
-    requested: Vec<Step>,
     /// The zoom on screen at the end of the last pass, for the title.
     zoom_percent: f64,
     /// This pass's events.
@@ -301,7 +298,6 @@ impl SelectMaskWorkspace {
             panel_open: false,
             request: None,
             trail_since: None,
-            requested: Vec::new(),
             zoom_percent: 100.0,
             events: Vec::new(),
             pick_color: None,
@@ -336,8 +332,8 @@ impl SelectMaskWorkspace {
     ///
     /// A [`FullWindowDialog`] titled by [`FullWindowTitle`] (the document and the zoom), in the scope of
     /// [`SelectMaskCommands`], with the Properties column ([`SelectMaskPanel`], the preview's status, Reset at the
-    /// footer's leading end, OK and Cancel) in the dialog's side region. The body, in order: the steps
-    /// [`step`](Self::step) held back, the commands, [`SelectMaskBar`], the tool strip (a pick cancels the old
+    /// footer's leading end, OK and Cancel) in the dialog's side region. The body, in order: Undo and
+    /// Redo, the commands, [`SelectMaskBar`], the tool strip (a pick cancels the old
     /// tool's gesture with `Removed`), the canvas ([`FullWindowCanvas`]) with the source's view (the image while X
     /// is held), the ants as a `SelectionOverlay` control while the recipe has them, the brush resize preview, and
     /// [`SelectMaskCanvasTool`], the Zoom tool or the canvas's Hand as its tool. Commits from the canvas go through
@@ -351,13 +347,6 @@ impl SelectMaskWorkspace {
         let common = env.words::<CommonWords>();
         let title = FullWindowTitle::new(words.name.clone()).subject(self.subject.clone()).zoom(self.zoom_percent).label(&env);
         let settings_before = self.settings.clone();
-        // Steps asked while a stroke was open run before the canvas: an open stroke is cancelled first, so its
-        // Commit never lands on the restored session.
-        for step in std::mem::take(&mut self.requested) {
-            self.cancel_gesture(ui.ctx(), CancelReason::UndoDuringGesture);
-            self.canvas.drop_polygon();
-            self.step_now(step);
-        }
         let slots = SelectMaskTool::slots();
         let request = self.request_now();
         let key = format!("{request:?}");
@@ -404,8 +393,16 @@ impl SelectMaskWorkspace {
                 let work: &mut SelectMaskWorkspace = &mut guard;
                 work.zoom_tool.options = work.navigation;
 
+                // Before the canvas runs: an open stroke is cancelled first, so its Commit never lands on the restored
+                // session.
+                while let Some(step) = cx.take_step(work.history.can_undo(), work.history.can_redo()) {
+                    work.step(&ctx, step);
+                }
                 while let Some((command, _)) = cx.take_command::<ViewCommands>() {
                     work.view.apply(command);
+                }
+                while let Some((command, fired)) = cx.take_command::<MaskViewKeys>() {
+                    work.mask_view.run(command, fired.phase);
                 }
 
                 while let Some((command, fired)) = cx.take_command::<SelectMaskCommands>() {
@@ -541,27 +538,6 @@ impl SelectMaskWorkspace {
     pub fn recipe(&self) -> MaskViewRecipe {
         self.mask_view.recipe()
     }
-
-    /// Undo or redo from the app's Edit menu (`EditCommands::Undo`, `Redo`). Returns whether it stepped. With a stroke
-    /// open the step waits for the next pass, which cancels the stroke (`UndoDuringGesture`) first.
-    pub fn step(&mut self, step: Step) -> bool {
-        // pc: crates/ui-egui/src/dialogs/select_mask_ui.rs:644 `undo`, :672 `redo`.
-        if self.canvas.busy() {
-            self.requested.push(step);
-            return match step {
-                Step::Undo => self.history.can_undo(),
-                _ => self.history.can_redo(),
-            };
-        }
-        self.canvas.drop_polygon();
-        self.step_now(step)
-    }
-
-    /// Runs a fired view command (`MaskViewKeys`: the views O M V A T K Y, F, J, P, and X held) on the view state.
-    /// Returns whether it changed the view. The app calls it with each fired command and its phase.
-    pub fn mask_view(&mut self, command: MaskViewKeys, phase: FirePhase) -> bool {
-        self.mask_view.run(command, phase).is_some()
-    }
 }
 
 impl SelectMaskWorkspace {
@@ -591,15 +567,16 @@ impl SelectMaskWorkspace {
         self.history.record(&EditEvent::set(Mixed::Same(before), self.session.clone(), name, None));
     }
 
-    /// Steps the history now.
-    fn step_now(&mut self, step: Step) -> bool {
-        let moved = self.history.step(&mut self.session, step);
-        if moved {
+    /// Undoes or redoes, cancelling an open stroke (`UndoDuringGesture`) and dropping an open polygon first.
+    fn step(&mut self, ctx: &egui::Context, step: Step) {
+        // pc: crates/ui-egui/src/dialogs/select_mask_ui.rs:644 `undo`, :672 `redo`.
+        self.cancel_gesture(ctx, CancelReason::UndoDuringGesture);
+        self.canvas.drop_polygon();
+        if self.history.step(&mut self.session, step) {
             self.error = None;
             self.settings.refine = self.session.refine.clone();
             self.settled = self.session.clone();
         }
-        moved
     }
 
     /// Records a button's edit (Select Subject, Clear Selection, Invert) as a `Set`.

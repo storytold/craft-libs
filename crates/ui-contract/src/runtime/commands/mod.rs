@@ -26,6 +26,7 @@ pub(crate) use board::{begin, binds_scoped, edit_chords, end, install, note_focu
 pub(crate) use board::{fire_bound, fire_resolved, resolve_bound, resolve_scoped};
 
 use craft_behavior::CommandFlags;
+use craft_behavior::edit_history::Step;
 use craft_keymap::{Chord, Overrides};
 use egui::{Context, Id, ViewportId};
 use std::borrow::Cow;
@@ -325,6 +326,28 @@ pub trait Commands: CommandAccess {
             .innermost_any()
             .and_then(|declaring| board::take(ctx, Some(declaring), false, S::from_ref))
             .or_else(|| board::take(ctx, board::innermost(ctx, chain, S::SCOPE.name()), true, S::from_ref))
+    }
+
+    /// Declares Undo and Redo on the innermost instance around this context, enabled as `can_undo` and `can_redo`
+    /// say, and takes the next of them fired at it this pass. A body with its own history calls it in a `while let`
+    /// loop and steps that history: inside a modal layer Undo and Redo reach the instance that declares them, after a
+    /// focused text field that has a step of its own to take (11.3).
+    fn take_step(&mut self, can_undo: bool, can_redo: bool) -> Option<Step> {
+        fn step(command: &CommandRef) -> Option<Step> {
+            match EditCommands::from_ref(command)? {
+                EditCommands::Undo => Some(Step::Undo),
+                EditCommands::Redo => Some(Step::Redo),
+                _ => None,
+            }
+        }
+        self.publish(EditCommands::Undo, CommandState::new().enabled(can_undo));
+        self.publish(EditCommands::Redo, CommandState::new().enabled(can_redo));
+        let (ctx, chain) = (self.command_ctx(), self.command_chain());
+        chain
+            .innermost_any()
+            .and_then(|declaring| board::take(ctx, Some(declaring), false, step))
+            .or_else(|| board::take(ctx, board::innermost(ctx, chain, CommandScope::APP.name()), true, step))
+            .map(|(step, _)| step)
     }
 
     /// `command` as this context shows it: the label, icon and chord with the scoped bindings of the scopes above

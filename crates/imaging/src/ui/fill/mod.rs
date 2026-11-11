@@ -216,7 +216,7 @@ type Ants = (SamplingPlane, Arc<Vec<(Point, Point)>>);
 ///
 /// Keys ([`FillCommands`], on the body's scope, none while a text field edits): B, L, H, Z pick the tools; `[` and
 /// `]` the brush size ([`FillToolOptions::step_size`]); ⌘H hides or shows the tint. The zoom chords are the
-/// dialog's view commands. The app routes ⌘Z and ⇧⌘Z (`EditCommands::Undo`, `Redo`) to [`step`](Self::step); Enter
+/// dialog's view commands. ⌘Z and ⇧⌘Z step the history (a field being edited steps its own text first); Enter
 /// is OK and Esc Cancel (Esc during a stroke or lasso cancels that only). A tool switch or an undo during a stroke
 /// cancels it first (`CancelReason::Removed`, `CancelReason::UndoDuringGesture`).
 #[derive(Pattern)]
@@ -257,10 +257,6 @@ pub struct ContentAwareFillWorkspace {
     color_owed: bool,
     /// The outline of the fill area's covered cells, kept for as long as the plane is the same.
     ants: Option<Ants>,
-    /// Steps the app asked for while a stroke was open; the next `show` cancels the stroke, then steps.
-    requested: Vec<Step>,
-    /// A stroke, a lasso or a resize was open at the end of the last pass.
-    busy: bool,
     /// This pass's events and colour request.
     events: Vec<FillEvent>,
     pick_color: Option<ColorRequest>,
@@ -306,8 +302,6 @@ impl ContentAwareFillWorkspace {
             settings_gesture: false,
             color_owed: false,
             ants: None,
-            requested: Vec::new(),
-            busy: false,
             events: Vec::new(),
             pick_color: None,
         }
@@ -354,7 +348,6 @@ impl ContentAwareFillWorkspace {
         let title =
             FullWindowTitle::new(env.words::<FillWords>().name.clone()).subject(self.subject.clone()).zoom(self.view.zoom_percent()).label(&env);
         let settings_before = self.settings.clone();
-        let asked_steps = std::mem::take(&mut self.requested);
         self.pick_color = None;
         let slots = FillTool::slots();
         let mut open = self.open;
@@ -379,7 +372,7 @@ impl ContentAwareFillWorkspace {
             })
             .show(ui, |ui, cx| {
                 let mut guard = this.borrow_mut();
-                guard.show_body(ui, cx, &env, &slots, source, &asked_steps);
+                guard.show_body(ui, cx, &env, &slots, source);
             });
 
         let work = this.into_inner();
@@ -467,20 +460,6 @@ impl ContentAwareFillWorkspace {
         self.synced();
         self.error = Some(FillIssue::Message(message));
     }
-
-    /// Undo or redo from the app's Edit menu; returns whether it stepped, or with a stroke open whether it will:
-    /// the next [`show`](Self::show) cancels the stroke (`UndoDuringGesture`) first, then steps.
-    pub fn step(&mut self, step: Step) -> bool {
-        // pc: crates/ui-egui/src/dialogs/caf_ui/controls.rs:151-159 (⌘Z, ⇧⌘Z).
-        if self.busy {
-            self.requested.push(step);
-            return match step {
-                Step::Undo => self.history.can_undo(),
-                _ => self.history.can_redo(),
-            };
-        }
-        self.step_now(step)
-    }
 }
 
 impl ContentAwareFillWorkspace {
@@ -535,16 +514,17 @@ impl ContentAwareFillWorkspace {
     }
 
     /// The body: the steps and keys, the options bar, the tool strip and the canvas; then the preview job.
-    fn show_body(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>, env: &Env, slots: &[ToolSlot<FillTool>], source: &dyn FillSource, asked: &[Step]) {
+    fn show_body(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>, env: &Env, slots: &[ToolSlot<FillTool>], source: &dyn FillSource) {
         let ctx = ui.ctx().clone();
         let words = env.words::<FillWords>();
         while let Some((command, _)) = cx.take_command::<ViewCommands>() {
             self.view.apply(command);
         }
         // An open stroke is cancelled first; the step follows.
-        for step in asked {
+        while let Some(step) = cx.take_step(self.history.can_undo(), self.history.can_redo()) {
+            // pc: crates/ui-egui/src/dialogs/caf_ui/controls.rs:151-159 (⌘Z, ⇧⌘Z).
             self.cancel_gesture(&ctx, CancelReason::UndoDuringGesture);
-            self.step_now(*step);
+            self.step_now(step);
         }
         {
             while let Some((command, fired)) = cx.take_command::<FillCommands>() {
@@ -593,7 +573,6 @@ impl ContentAwareFillWorkspace {
             });
         }
         self.absorb_canvas_events();
-        self.busy = self.canvas.busy();
         self.ask_for_preview(cx, source);
     }
 
@@ -732,12 +711,10 @@ impl ContentAwareFillWorkspace {
         self.error = None;
     }
 
-    fn step_now(&mut self, step: Step) -> bool {
-        let stepped = self.history.step(&mut self.session, step);
-        if stepped {
+    fn step_now(&mut self, step: Step) {
+        if self.history.step(&mut self.session, step) {
             self.synced();
         }
-        stepped
     }
 
     /// Switches to `tool`, cancelling the old tool's gesture first.

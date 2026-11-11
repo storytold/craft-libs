@@ -78,10 +78,11 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
+use craft_behavior::edit_history::Step;
 use craft_keymap::{Binding, Builtins, CommandDef, CommandRef, ForeignSet, ImportOptions, Keymap, ProfileError, Profiles, Trigger};
 use craft_ui::contract::{Animate as _, Bind, NoValue, Pattern, SaveKey, ShowContainer as _};
 use craft_ui::dialog::{Dialog, DialogOutput};
-use craft_ui::runtime::commands::{CommandState, Commands as _, EditCommands};
+use craft_ui::runtime::commands::Commands as _;
 use craft_ui::runtime::overlay::CloseReason;
 use craft_ui::sections::{DialogRole, FooterButton};
 use egui::{Response, Ui};
@@ -529,12 +530,10 @@ fn frame(ui: &mut Ui, env: &mut Env<'_>, state: &mut DialogState) -> ShortcutsOu
         .show(ui, |ui, cx| {
             let mut guard = session.borrow_mut();
             let Session { env, state } = &mut *guard;
-            cx.publish(EditCommands::Undo, CommandState::new().enabled(!state.modal() && state.can_undo()));
-            cx.publish(EditCommands::Redo, CommandState::new().enabled(!state.modal() && state.can_redo()));
-            while let Some((command, _)) = cx.take_command::<EditCommands>() {
-                match command {
-                    EditCommands::Undo if !state.modal() => state.undo(env),
-                    EditCommands::Redo if !state.modal() => state.redo(env),
+            while let Some(step) = cx.take_step(!state.modal() && state.can_undo(), !state.modal() && state.can_redo()) {
+                match step {
+                    Step::Undo => state.undo(env),
+                    Step::Redo => state.redo(env),
                     _ => {}
                 }
             }
