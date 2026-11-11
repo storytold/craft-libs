@@ -140,3 +140,19 @@ fn an_areas_first_pass_keeps_a_running_drag() {
     bed.fixture.frame(Vec::new());
     assert!(dragging(&bed), "the second area's first pass kept the drag");
 }
+
+/// A floating window takes no room in the area: the docked tree reaches as far down as it does without the window.
+#[trial]
+fn a_floating_window_leaves_the_docked_tree_its_room() {
+    let docked_bottom = |layout: Layout<usize>| {
+        let bed = bed(layout, |_| Permissions::ALL);
+        let panels = bed.fixture.by_role(Role::TAB_PANEL);
+        let docked: Vec<f32> =
+            panels.iter().filter(|panel| !WINDOW_AT.expand(SLACK).contains_rect(panel.rect)).map(|panel| panel.rect.bottom()).collect();
+        assert_eq!(docked.len(), 1, "one docked group shows: {panels:?}");
+        docked[0]
+    };
+    let alone = docked_bottom(Layout::new(Some(Node::tabs(vec![DOCKED], 0)), Vec::new()));
+    let beside = docked_bottom(with_window(Some(Node::tabs(vec![DOCKED], 0))));
+    assert!((beside - alone).abs() <= SLACK, "the docked group ends at {beside} beside the window, at {alone} without it");
+}

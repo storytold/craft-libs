@@ -313,8 +313,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         // A body that fills the main axis of the body it sits in is measured and shown at its share of it. The first
         // sweep of that body's measuring run only counts it: its contents run in the second sweep, at the share.
         let (x, y) = (craft_behavior::Axis::X, craft_behavior::Axis::Y);
-        // A container placed at an explicit rect is no flow child of that body: it takes its rect, not a share.
-        let flows = matches!(at.at, ShowAt::Flow);
+        // A container placed at an explicit rect, or mounted on a layer or in a window, is no flow child of that body:
+        // it takes its own room, not a share.
+        let flows = matches!(at.at, ShowAt::Flow) && self.in_flow(comp);
         if flows
             && at.ui.is_sizing_pass()
             && ((self.given.0 && crate::layout::counting_fills(at.ui, x)) || (self.given.1 && crate::layout::counting_fills(at.ui, y)))

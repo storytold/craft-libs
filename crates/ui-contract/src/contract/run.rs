@@ -1017,7 +1017,9 @@ fn run<C: Component>(mut comp: C, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>
     // The row gave the leaf no less than its least, so a leaf whose measure does not follow its room still fits.
     let size = cap.map_or(size, |cap| Vec2::new(size.x.min(cap), size.y));
     let measured = size;
-    let size = hooks.sized(&comp, ui, id, size);
+    // A component on a layer or in a window of its own takes no room in the parent's flow: the parent neither sizes it
+    // nor counts it among the children that share its room. Its host sizes it in its own `Ui`.
+    let size = if hooks.in_flow(&comp) { hooks.sized(&comp, ui, id, size) } else { size };
     if let Some(crate::layout::Shrink::Count(row)) = shrink {
         let mut width = |proposal| {
             let input = MeasureIn { ui: &*ui, env, proposal, room: None };
