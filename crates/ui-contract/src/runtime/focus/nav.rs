@@ -467,6 +467,7 @@ pub(super) fn initial_focus(state: &mut State, frame: u64) -> Vec<Act> {
     let pick = match policy.initial {
         Initial::First => stops.first(),
         Initial::Default => stops.iter().find(|rec| rec.stop.default).or_else(|| stops.first()),
+        Initial::FirstField => stops.iter().find(|rec| rec.stop.text).or_else(|| stops.iter().find(|rec| rec.stop.default)),
         Initial::Key(name) => stops.iter().find(|rec| rec.stop.name == Some(name)),
         _ => None,
     };

@@ -12,7 +12,6 @@ use craft_ui::layout_components::Row;
 use craft_ui::patterns::form_dialogs::{FormDialog, HostRequests};
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, UnitKind};
-use craft_ui::runtime::focus::{self, FocusTarget};
 use craft_ui::runtime::requests::{ColorRequest, HostAnswer};
 use craft_ui::text::{NumberField, TextField};
 use egui::Ui;
@@ -136,18 +135,13 @@ impl StackDialog for SliceOptionsDialog {
                     options.background = Some(color);
                 }
             }
-            let first = form.first();
             FieldGroup::new(words.options_title.clone()).show(ui, |ui, _| {
                 Field::new(words.kind.clone()).show(ui, |ui, _| {
                     if let Some(kind) = Select::new(words.kind.clone(), Bind::given(options.kind), &kinds).show(ui).value().copied() {
                         options.kind = kind;
                     }
                 });
-                let name = Field::new(words.name.clone())
-                    .show(ui, |ui, _| TextField::new(words.name.clone(), Bind::bound(&mut options.name)).show(ui).response.id);
-                if first && let Some(id) = name.inner {
-                    focus::request(ui.ctx(), FocusTarget::Id(id));
-                }
+                Field::new(words.name.clone()).show(ui, |ui, _| TextField::new(words.name.clone(), Bind::bound(&mut options.name)).show(ui));
                 for (label, value) in [(&words.url, &mut options.url), (&words.target, &mut options.target), (&words.message, &mut options.message)] {
                     Field::new(label.clone()).show(ui, |ui, _| {
                         TextField::new(label.clone(), Bind::bound(value)).show(ui);

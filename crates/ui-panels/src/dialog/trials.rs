@@ -145,3 +145,28 @@ fn side_buttons_stand_in_one_column_beside_the_body() {
     assert!((ok.min.y - body.min.y).abs() < 4.0, "the column starts at the body's top: {ok:?} {body:?}");
     assert!(preview.min.y >= other.max.y, "the footer content sits under the buttons");
 }
+
+#[trial]
+fn a_dialog_opens_on_its_first_field_else_its_default_button() {
+    let focus_on_open = |field: bool, buttons: bool| {
+        let mut fixture = Fixture::new(move |ui| {
+            let (mut open, mut name, mut on) = (true, String::new(), false);
+            let mut dialog = Dialog::new("Options").opened(Bind::bound(&mut open));
+            if buttons {
+                dialog = dialog.buttons([FooterButton::new("OK", DialogRole::Accept), FooterButton::new("Cancel", DialogRole::Cancel)]);
+            }
+            dialog.show(ui, |ui, _| {
+                Checkbox::new(Bind::bound(&mut on)).label("Snap").show(ui);
+                if field {
+                    TextField::new("Name", Bind::bound(&mut name)).show(ui);
+                }
+            });
+        });
+        fixture.idle(30);
+        let focused = crate::testing::access::focused_key(fixture.tree());
+        ["Name", "OK", "Snap"].into_iter().find(|label| fixture.by_label(label).is_some_and(|target| target.node == focused))
+    };
+    assert_eq!(focus_on_open(true, true), Some("Name"), "the first field takes the focus though a check box comes first");
+    assert_eq!(focus_on_open(false, true), Some("OK"), "without a field the default button takes it");
+    assert_eq!(focus_on_open(false, false), None, "without either nothing takes it");
+}

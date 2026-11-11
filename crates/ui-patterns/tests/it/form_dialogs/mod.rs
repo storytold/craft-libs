@@ -4,5 +4,6 @@
 mod dialog;
 mod export;
 mod params;
+mod password;
 mod preview;
 mod size_model;

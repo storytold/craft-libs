@@ -12,6 +12,8 @@ pub enum Initial {
     Keep,
     /// The scope's first stop.
     First,
+    /// The scope's first text or number field, else its default stop, else nothing: a dialog's default.
+    FirstField,
     /// The stop registered as the default.
     Default,
     /// The stop registered under this name.
@@ -67,7 +69,7 @@ impl FocusPolicy {
         kind: ScopeKind::Dialog,
         trap: true,
         restore: true,
-        initial: Initial::First,
+        initial: Initial::FirstField,
         enter: EnterRule::Submit,
         cancel: CancelRule::Close,
         pages: false,

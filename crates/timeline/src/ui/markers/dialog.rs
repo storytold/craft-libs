@@ -1,13 +1,12 @@
 //! The Marker dialog: the draft it edits, its result and the dialog itself.
 
 use craft_ui::choice::{RadioGroup, Swatch};
-use craft_ui::contract::{Bind, Outcome as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::Row;
 use craft_ui::patterns::form_dialogs::FormDialog;
 use craft_ui::runtime::env::Env;
-use craft_ui::runtime::focus::{self, FocusTarget};
 use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::text::TextField;
 use egui::{Color32, Ui};
@@ -116,15 +115,11 @@ impl StackDialog for MarkerDialog {
             .extra_buttons(extras.iter().map(|(_, label)| FooterButton::new((*label).clone(), DialogRole::Other)))
             .shaped(|dialog| dialog.side_buttons(true))
             .show(ui, |ui, form, draft| {
-                let first = form.first();
                 let timeline_words = Env::of(ui).words::<TimelineWords>();
                 let palette = label_palette(&form.env);
                 FieldGroup::new(words.title.clone()).show(ui, |ui, _| {
                     Field::new(words.name.clone()).show(ui, |ui, _| {
-                        let field = TextField::new(words.name.clone(), Bind::bound(&mut draft.name)).show(ui);
-                        if first {
-                            focus::request(ui.ctx(), FocusTarget::Id(field.response().id));
-                        }
+                        TextField::new(words.name.clone(), Bind::bound(&mut draft.name)).show(ui);
                     });
                     Field::new(words.time.clone()).show(ui, |ui, _| {
                         TextField::with_codec(words.time.clone(), Bind::bound(&mut draft.start), TimecodeCodec::new(format)).show(ui);

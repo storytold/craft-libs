@@ -22,6 +22,7 @@ use craft_ui::layout_components::{Row, Stack};
 use craft_ui::list::ListRow;
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Units};
+use craft_ui::runtime::focus::{self, FocusTarget};
 use craft_ui::runtime::words::CommonWords;
 use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::table::Table;
@@ -99,6 +100,8 @@ pub struct TabStopsDialog {
     unit: DocUnit,
     /// The row and position an in-place position edit began from, for Escape.
     draft: Option<(usize, f32)>,
+    /// The selected stop's Position field takes the focus the next time it shows: Set moves into the new stop.
+    to_edit: bool,
 }
 
 impl TabStopsDialog {
@@ -106,7 +109,7 @@ impl TabStopsDialog {
     pub fn new(mut stops: Vec<TabStop>, default_interval: f32) -> Self {
         stops.retain(|stop| stop.position.is_finite());
         stops.truncate(MAX_STOPS);
-        TabStopsDialog { stops, cleared: Vec::new(), default_interval, selected: None, edited: None, unit: DocUnit::default(), draft: None }
+        TabStopsDialog { stops, cleared: Vec::new(), default_interval, selected: None, edited: None, unit: DocUnit::default(), draft: None, to_edit: false }
     }
 
     /// Sets the unit the position fields show.
@@ -138,6 +141,7 @@ impl TabStopsDialog {
         self.stops.sort_by(|a, b| a.position.total_cmp(&b.position));
         self.selected = self.stops.iter().position(|stop| (stop.position - position).abs() < SAME_POSITION);
         self.edited = None;
+        self.to_edit = self.selected.is_some();
     }
 
     /// Position order after in-place edits, merging stops within [`SAME_POSITION`] (the edited
@@ -330,11 +334,15 @@ impl TabStopsDialog {
         let aligns: Vec<Entry<TabAlign>> = TabAlign::ALL.into_iter().map(|align| Entry::new(align, align_text(words, align))).collect();
         let leaders: Vec<Entry<TabLeader>> = TabLeader::ALL.into_iter().map(|leader| Entry::new(leader, leader_text(words, leader))).collect();
         let mut edits = Vec::new();
+        let to_edit = &mut self.to_edit;
         Row::new().show(ui, |ui, _| {
             let range = -f64::from(MAX_POSITION)..=f64::from(MAX_POSITION);
             let field = Field::new(words.position.clone())
                 .show(ui, |ui, _| length_field(unit, words.position.clone(), Mixed::Same(Some(f64::from(stop.position))), range.clone()).show(ui))
                 .inner;
+            if let Some(field) = field.as_ref().filter(|_| *to_edit) {
+                *to_edit = !focus::request(ui.ctx(), FocusTarget::Id(field.response.id));
+            }
             edits.extend(field.into_iter().flat_map(|field| field.edit.events).map(CellEdit::Position));
             let align = Select::new(words.alignment.clone(), Bind::given(stop.align), &aligns).show(ui);
             edits.extend(align.value().copied().map(CellEdit::Align));

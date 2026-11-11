@@ -2,3 +2,4 @@
 
 mod editor;
 mod notes;
+mod tabs;

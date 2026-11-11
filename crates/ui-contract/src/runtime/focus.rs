@@ -418,17 +418,19 @@ pub(crate) fn register_doc(ctx: &Context, key: DocKey, id: Id) {
 
 /// Moves focus to `target`, leaves modality unchanged and asks the enclosing scroll owner to reveal it. Called
 /// while a pass runs, it moves focus in that pass, so the rest of the pass reads the new focus; called between
-/// passes, it moves focus at the next pass's begin hook. The one public path to programmatic focus.
-pub fn request(ctx: &Context, target: FocusTarget) {
+/// passes, it moves focus at the next pass's begin hook. The one public path to programmatic focus. `false` in a measuring
+/// run, which moves nothing: a caller that keeps a pending request keeps it until a run takes it.
+pub fn request(ctx: &Context, target: FocusTarget) -> bool {
     if !crate::runtime::measure::effect(ctx, "focus::request") {
-        return;
+        return false;
     }
     if crate::runtime::frame::in_pass(ctx) {
         request_now(ctx, target);
-        return;
+        return true;
     }
     with(ctx, |state| state.pending = Some(target));
     crate::runtime::egui::repaint::request_of(ctx, crate::runtime::egui::pass::current_viewport(ctx));
+    true
 }
 
 /// Applies `target` now, for an AccessKit `Focus` action, which moves focus in the pass that carries it.

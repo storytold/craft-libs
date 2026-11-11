@@ -24,7 +24,6 @@ use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::patterns::form_dialogs::{FormCx, FormDialog, FormOutput};
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Label, UnitKind, Units};
-use craft_ui::runtime::focus::{self, FocusTarget};
 use craft_ui::text::NumberField;
 use egui::{Response, Ui};
 
@@ -202,7 +201,6 @@ struct Length {
     get: fn(&PageSetup) -> f64,
     set: fn(&mut PageSetup, f64),
     range: RangeInclusive<f64>,
-    first: bool,
 }
 
 /// Runs the events of a number field of the dialog in order: `write` puts their values into the setup. A `Begin`
@@ -235,7 +233,7 @@ impl Rows<'_> {
     /// that rounds to what the field showed changes nothing, so an untouched length keeps its exact value. `false`
     /// while the field's text is not a number.
     fn length(&self, ui: &mut Ui, form: &mut FormCx<'_, '_>, setup: &mut PageSetup, length: Length) -> bool {
-        let Length { key, label, get, set, range, first } = length;
+        let Length { key, label, get, set, range } = length;
         let unit = self.unit;
         let places = *unit.decimals().end();
         let exact = get(setup);
@@ -253,9 +251,6 @@ impl Rows<'_> {
             })
             .inner;
         let Some(field) = field else { return true };
-        if first && form.first() {
-            focus::request(ui.ctx(), FocusTarget::Id(field.response.id));
-        }
         apply(form, setup, &field.edit, |next, value| {
             let points = if rounded(value, places) == shown { exact } else { to_points(unit, value).clamp(*range.start(), *range.end()) };
             set(next, points);
@@ -278,16 +273,15 @@ impl Rows<'_> {
                                     key: &'static str,
                                     label: Label,
                                     get: fn(&PageSetup) -> f64,
-                                    set: fn(&mut PageSetup, f64),
-                                    first: bool| {
-                    valid &= self.length(ui, form, setup, Length { key, label, get, set, range: side.clone(), first });
+                                    set: fn(&mut PageSetup, f64)| {
+                    valid &= self.length(ui, form, setup, Length { key, label, get, set, range: side.clone() });
                 };
-                side_row(ui, form, setup, "top", words.top.clone(), |s| s.margins.top, |s, v| s.margins.top = v, true);
-                side_row(ui, form, setup, "bottom", words.bottom.clone(), |s| s.margins.bottom, |s, v| s.margins.bottom = v, false);
-                side_row(ui, form, setup, "left", left.clone(), |s| s.margins.left, |s, v| s.margins.left = v, false);
-                side_row(ui, form, setup, "right", right.clone(), |s| s.margins.right, |s, v| s.margins.right = v, false);
+                side_row(ui, form, setup, "top", words.top.clone(), |s| s.margins.top, |s, v| s.margins.top = v);
+                side_row(ui, form, setup, "bottom", words.bottom.clone(), |s| s.margins.bottom, |s, v| s.margins.bottom = v);
+                side_row(ui, form, setup, "left", left.clone(), |s| s.margins.left, |s, v| s.margins.left = v);
+                side_row(ui, form, setup, "right", right.clone(), |s| s.margins.right, |s, v| s.margins.right = v);
                 if !document_setup {
-                    side_row(ui, form, setup, "gutter", words.gutter.clone(), |s| s.gutter, |s, v| s.gutter = v, false);
+                    side_row(ui, form, setup, "gutter", words.gutter.clone(), |s| s.gutter, |s, v| s.gutter = v);
                 }
                 valid
             })
@@ -391,7 +385,6 @@ impl Rows<'_> {
                     get: |s| s.width,
                     set: |s, v| s.set_size(v, s.height),
                     range: sides.clone(),
-                    first: false,
                 };
                 let height = Length {
                     key: "height",
@@ -399,7 +392,6 @@ impl Rows<'_> {
                     get: |s| s.height,
                     set: |s, v| s.set_size(s.width, v),
                     range: sides,
-                    first: false,
                 };
                 let wide = self.length(ui, form, setup, width);
                 self.length(ui, form, setup, height) && wide

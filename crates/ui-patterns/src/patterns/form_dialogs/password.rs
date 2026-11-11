@@ -1,13 +1,14 @@
 //! `PasswordDialog`: the password for a protected file, a permissions password, or a new password with its strength.
 
 use crate::buttons::ToggleButton;
-use crate::contract::{Bind, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _};
+use crate::contract::{Bind, NoValue, Outcome, Props as _, clicked, Remember as _, Show as _, ShowContainer as _};
 use crate::dialog::{Dialog, DialogOutput};
 use crate::display::{Icon, Progress, Text};
 use crate::form::{Field, FieldGroup, Help};
 use crate::layout_components::{Row, Stack};
 use crate::primitives::IconSpec;
 use crate::runtime::env::{Env, Label};
+use crate::runtime::focus::{self, FocusTarget};
 use crate::runtime::overlay::CloseReason;
 use crate::runtime::words::CommonWords;
 use crate::sections::{DialogRole, FooterButton};
@@ -224,7 +225,8 @@ impl Entries {
 /// field and the strength of the first entry.
 ///
 /// - Keys: Enter submits only when the entries are valid; Escape and the close action cancel. The reveal button
-///   beside the first field shows or hides the text, and its name says what it does.
+///   beside the first field shows or hides the text, and its name says what it does. The first field takes the focus
+///   back after a press on the reveal button and whenever nothing has it, so typing goes on.
 /// - A wrong password: the app opens the dialog again with `error`; the field starts empty.
 /// - The password comes back in the output's answer, the pass the dialog closed as OK.
 #[must_use = "show the dialog with `show`"]
@@ -307,9 +309,14 @@ impl<'a> PasswordDialog<'a> {
                             if !entries.reveal {
                                 text = text.masked();
                             }
-                            text.show(ui);
+                            let text = text.show(ui);
                             let name = if entries.reveal { words.hide.clone() } else { words.show.clone() };
-                            ToggleButton::new(name, Bind::bound(&mut entries.reveal)).icon(IconId::new("eye")).icon_only().show(ui);
+                            let reveal = ToggleButton::new(name, Bind::bound(&mut entries.reveal)).icon(IconId::new("eye")).icon_only().show(ui);
+                            // Typing goes on in the field: the reveal button hands the focus back, as does a press that left
+                            // nothing focused.
+                            if clicked(reveal.response()) || focus::focused_rec(ui.ctx()).is_none() {
+                                focus::request(ui.ctx(), FocusTarget::Id(text.response().id));
+                            }
                         });
                     });
                     if setting {
