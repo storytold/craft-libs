@@ -2,7 +2,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::{COMPOSITE, Error, Limits, Manifest, Step, THUMB, migrate, parse_manifest};
+use crate::{COMPOSITE, Error, FULL_COMPOSITE, Limits, Manifest, Step, THUMB, migrate, parse_manifest};
 
 /// Reads manifest JSON into a [`Manifest`] whose document is `D`.
 ///
@@ -17,6 +17,8 @@ use crate::{COMPOSITE, Error, Limits, Manifest, Step, THUMB, migrate, parse_mani
 /// `document`, which is reported after the members that are present, in the order serde's derived
 /// `Deserialize` reports them. A `thumbnail` other than [`THUMB`] or a `composite` other than
 /// [`COMPOSITE`] is [`Error::Corrupt`], checked after the members are read.
+/// A missing or null `full_composite` reads as `None`; any path other than [`FULL_COMPOSITE`]
+/// is [`Error::Corrupt`], and a value of the wrong type is [`Error::Json`].
 pub fn read_manifest<D: DeserializeOwned, E: From<Error>>(json: &[u8], limits: &Limits, steps: &[Step<E>], target: u32) -> Result<Manifest<D>, E> {
     read_manifest_with(json, limits, steps, target, |document| serde_json::from_value(document).map_err(|e| E::from(Error::Json(e))))
 }
@@ -37,6 +39,7 @@ pub fn read_manifest_with<D, E: From<Error>>(
         return Err(Error::Corrupt("the manifest is not a JSON object".to_owned()).into());
     };
     let (mut format_version, mut generator, mut doc, mut thumbnail, mut composite) = (None, None, None, None, None);
+    let mut full_composite = None;
     for (name, member) in members {
         match name.as_str() {
             "format_version" => format_version = Some(u32::deserialize(member).map_err(Error::Json)?),
@@ -48,6 +51,7 @@ pub fn read_manifest_with<D, E: From<Error>>(
             }
             "thumbnail" => thumbnail = Option::<String>::deserialize(member).map_err(Error::Json)?,
             "composite" => composite = Option::<String>::deserialize(member).map_err(Error::Json)?,
+            "full_composite" => full_composite = Option::<String>::deserialize(member).map_err(Error::Json)?,
             _ => {}
         }
     }
@@ -58,9 +62,11 @@ pub fn read_manifest_with<D, E: From<Error>>(
         document: doc.ok_or_else(|| missing("document"))?,
         thumbnail,
         composite,
+        full_composite,
     };
     check_preview("thumbnail", manifest.thumbnail.as_deref(), THUMB)?;
     check_preview("composite", manifest.composite.as_deref(), COMPOSITE)?;
+    check_preview("full_composite", manifest.full_composite.as_deref(), FULL_COMPOSITE)?;
     Ok(manifest)
 }
 

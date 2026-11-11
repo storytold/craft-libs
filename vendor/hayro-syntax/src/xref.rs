@@ -38,23 +38,29 @@ pub(crate) enum XRefError {
 }
 
 /// Parse the "root" xref from the PDF.
+#[cfg(test)]
 pub(crate) fn root_xref(data: PdfData, password: &[u8], limits: DecodeLimits) -> Result<XRef, XRefError> {
-    let mut xref_map = FxHashMap::default();
-    let xref_pos = find_last_xref_pos(data.as_ref()).ok_or(XRefError::Unknown)?;
-    let trailer = populate_xref_impl(data.as_ref(), xref_pos, &mut xref_map, limits).ok_or(XRefError::Unknown)?;
+    root_xref_controlled(data, password, limits, None)
+}
 
-    XRef::new(data.clone(), xref_map, XRefInput::TrailerDictData(trailer), false, password, limits)
+pub(crate) fn root_xref_controlled(data: PdfData, password: &[u8], limits: DecodeLimits, control: Option<crate::cancel::Control>) -> Result<XRef, XRefError> {
+    let mut xref_map = FxHashMap::default();
+    let xref_pos = find_last_xref_pos_controlled(data.as_ref(), control.as_ref()).ok_or(XRefError::Unknown)?;
+    let trailer = populate_xref_controlled(data.as_ref(), xref_pos, &mut xref_map, limits, control.clone()).ok_or(XRefError::Unknown)?;
+
+    XRef::new(data.clone(), xref_map, XRefInput::TrailerDictData(trailer), false, password, limits, control)
 }
 
 /// Try to manually parse the PDF to build an xref table and trailer dictionary.
-pub(crate) fn fallback(data: PdfData, password: &[u8], limits: DecodeLimits) -> Option<XRef> {
+pub(crate) fn fallback_controlled(data: PdfData, password: &[u8], limits: DecodeLimits, control: Option<crate::cancel::Control>) -> Option<XRef> {
+    crate::cancel::check(control.as_ref())?;
     warn!("xref table was invalid, trying to manually build xref table");
-    let (xref_map, xref_input) = fallback_xref_map(&data, password, limits);
+    let (xref_map, xref_input) = fallback_xref_map(&data, password, limits, control.clone());
 
     if let Some(xref_input) = xref_input {
         warn!("rebuild xref table with {} entries", xref_map.len());
 
-        XRef::new(data.clone(), xref_map, xref_input, true, password, limits).ok()
+        XRef::new(data.clone(), xref_map, xref_input, true, password, limits, control).ok()
     } else {
         warn!("couldn't find trailer dictionary, failed to rebuild xref table");
 
@@ -62,8 +68,8 @@ pub(crate) fn fallback(data: PdfData, password: &[u8], limits: DecodeLimits) -> 
     }
 }
 
-fn fallback_xref_map<'a>(data: &'a PdfData, password: &[u8], limits: DecodeLimits) -> (XrefMap, Option<XRefInput<'a>>) {
-    fallback_xref_map_inner(data, ReaderContext::dummy_with_limits(limits), true, password)
+fn fallback_xref_map<'a>(data: &'a PdfData, password: &[u8], limits: DecodeLimits, control: Option<crate::cancel::Control>) -> (XrefMap, Option<XRefInput<'a>>) {
+    fallback_xref_map_inner(data, ReaderContext::dummy_with_control(limits, control), true, password)
 }
 
 fn fallback_xref_map_inner<'a>(
@@ -77,10 +83,14 @@ fn fallback_xref_map_inner<'a>(
     let mut root_ref = None;
 
     let mut r = Reader::new(data.as_ref());
+    r.set_control(dummy_ctx.control().cloned());
 
     let mut last_obj_num = None;
 
     loop {
+        if crate::cancel::check(dummy_ctx.control()).is_none() {
+            return (XrefMap::default(), None);
+        }
         let cur_pos = r.offset();
 
         let mut old_r = r.clone();
@@ -91,8 +101,9 @@ fn fallback_xref_map_inner<'a>(
                 let mut cloned = r.clone();
                 // Check that the object following it is actually valid before inserting it.
                 cloned.skip_white_spaces_and_comments();
-                if cloned.skip::<Object<'_>>(false).is_some() {
-                    xref_map.insert(obj_id, EntryType::Normal(cur_pos));
+                if cloned.skip::<Object<'_>>(false).is_some()
+                    && insert_entry(&mut xref_map, obj_id, EntryType::Normal(cur_pos)).is_some()
+                {
                     last_obj_num = Some(obj_id);
                     dummy_ctx.set_obj_number(obj_id);
                 }
@@ -139,13 +150,10 @@ fn fallback_xref_map_inner<'a>(
                                     .get(&id)
                                     .is_none_or(|e| !matches!(e, &EntryType::Normal(_)))
                                 {
-                                    xref_map.insert(
-                                        id,
-                                        EntryType::ObjStream(
-                                            last_obj_num.obj_number as u32,
-                                            idx as u32,
-                                        ),
-                                    );
+                                    let entry = EntryType::ObjStream(last_obj_num.obj_number as u32, idx as u32);
+                                    if insert_entry(&mut xref_map, id, entry).is_none() {
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -242,6 +250,7 @@ fn fallback_xref_map_inner<'a>(
             true,
             password,
             dummy_ctx.decode_limits(),
+            dummy_ctx.control().cloned(),
         ) {
             let ctx = ReaderContext::new(&xref, false);
             let (patched_map, _) = fallback_xref_map_inner(data, ctx, false, password);
@@ -283,7 +292,8 @@ impl XRef {
         Some(f(&mut cache))
     }
 
-    fn new(data: PdfData, xref_map: XrefMap, input: XRefInput<'_>, repaired: bool, password: &[u8], limits: DecodeLimits) -> Result<Self, XRefError> {
+    fn new(data: PdfData, xref_map: XrefMap, input: XRefInput<'_>, repaired: bool, password: &[u8], limits: DecodeLimits, control: Option<crate::cancel::Control>) -> Result<Self, XRefError> {
+        crate::cancel::check(control.as_ref()).ok_or(XRefError::Unknown)?;
         // This is a bit hacky, but the problem is we can't read the resolved trailer dictionary
         // before we actually created the xref struct. So we first create it using dummy data
         // and then populate the data.
@@ -298,6 +308,7 @@ impl XRef {
             trailer_data,
             password: password.to_vec(),
             limits,
+            control,
             dict_cache: Arc::new(Mutex::new(DictCache::default())),
         })));
 
@@ -397,6 +408,13 @@ impl XRef {
         }
     }
 
+    pub(crate) fn control(&self) -> Option<&crate::cancel::Control> {
+        match &self.0 {
+            Inner::Dummy => None,
+            Inner::Some(repr) => repr.control.as_ref().filter(|c| c.active()),
+        }
+    }
+
     pub(crate) fn len(&self) -> usize {
         match &self.0 {
             Inner::Dummy => 0,
@@ -436,10 +454,12 @@ impl XRef {
             Inner::Dummy => unimplemented!(),
             Inner::Some(r) => {
                 let locked = r.map.get();
+                let control = self.control();
                 let mut elements = locked
                     .xref_map
                     .iter()
-                    .map(|(id, e)| {
+                    .map_while(|(id, e)| {
+                        crate::cancel::check(control)?;
                         let offset = match e {
                             EntryType::Normal(o) => (*o, 0),
                             EntryType::ObjStream(id, index) => {
@@ -453,18 +473,30 @@ impl XRef {
                             }
                         };
 
-                        (*id, offset)
+                        Some((*id, offset))
                     })
                     .collect::<Vec<_>>();
 
                 // Try to yield in the order the objects appeared in the
                 // PDF.
-                elements.sort_by(|e1, e2| e1.1.cmp(&e2.1));
+                if let Some(control) = control {
+                    let mut sorted = alloc::collections::BTreeMap::new();
+                    for (order, (id, offset)) in elements.drain(..).enumerate() {
+                        if control.check().is_none() {
+                            break;
+                        }
+                        sorted.insert((offset, order), (id, offset));
+                    }
+                    elements.extend(sorted.into_values().map_while(|entry| control.check().map(|_| entry)));
+                } else {
+                    elements.sort_by(|e1, e2| e1.1.cmp(&e2.1));
+                }
 
                 let mut iter = elements.into_iter();
 
                 iter::from_fn(move || {
                     for next in iter.by_ref() {
+                        crate::cancel::check(control)?;
                         if let Some(obj) = self.get_with(next.0, &ReaderContext::new(self, false)) {
                             return Some(obj);
                         } else {
@@ -494,7 +526,10 @@ impl XRef {
         // Set first so an unwinding fallback cannot trigger a reparse storm.
         // Assignment below publishes a complete replacement atomically.
         locked.repaired = true;
-        let (xref_map, _) = fallback_xref_map(r.data.get(), &r.password, r.limits);
+        if crate::cancel::check(self.control()).is_none() {
+            return;
+        }
+        let (xref_map, _) = fallback_xref_map(r.data.get(), &r.password, r.limits, self.control().cloned());
         locked.xref_map = xref_map;
     }
 
@@ -545,6 +580,7 @@ impl XRef {
     where
         T: ObjectLike<'a>,
     {
+        crate::cancel::check(ctx.control())?;
         let Inner::Some(repr) = &self.0 else {
             return None;
         };
@@ -648,10 +684,30 @@ pub(crate) enum XRefInput<'a> {
     RootRef(ObjectIdentifier),
 }
 
+#[cfg(test)]
 pub(crate) fn find_last_xref_pos(data: &[u8]) -> Option<usize> {
+    find_last_xref_pos_controlled(data, None)
+}
+
+fn find_last_xref_pos_controlled(data: &[u8], control: Option<&crate::cancel::Control>) -> Option<usize> {
     let needle = b"startxref";
-    let pos = findr_needle(data, needle)?;
+    let pos = if control.is_some() {
+        let mut found = None;
+        for i in (0..data.len().div_ceil(64 * 1024)).rev() {
+            crate::cancel::check(control)?;
+            let start = i * 64 * 1024;
+            let end = (start + 64 * 1024 + needle.len() - 1).min(data.len());
+            if let Some(at) = findr_needle(data.get(start..end)?, needle) {
+                found = Some(start + at);
+                break;
+            }
+        }
+        found?
+    } else {
+        findr_needle(data, needle)?
+    };
     let mut finder = Reader::new(data);
+    finder.set_control(control.cloned());
     finder.jump(pos);
     finder.forward_tag(needle)?;
     finder.skip_white_spaces_and_comments();
@@ -670,6 +726,44 @@ enum EntryType {
 }
 
 type XrefMap = FxHashMap<ObjectIdentifier, EntryType>;
+
+/// PdfCraft patch: the most entries one document's xref map may hold, the PDF 32000-1 (Annex C)
+/// limit on indirect objects. An xref-stream entry can be one decoded byte, so a stream at the
+/// decode limit could otherwise become hundreds of millions of map entries (gigabytes of map).
+const MAX_XREF_ENTRIES: usize = 8_388_607;
+
+/// PdfCraft patch: insert an entry unless that would take `map` past [`MAX_XREF_ENTRIES`].
+fn insert_entry(map: &mut XrefMap, id: ObjectIdentifier, entry: EntryType) -> Option<()> {
+    if map.len() >= MAX_XREF_ENTRIES && !map.contains_key(&id) {
+        warn!("xref holds more than {MAX_XREF_ENTRIES} entries");
+
+        return None;
+    }
+    map.insert(id, entry);
+
+    Some(())
+}
+
+/// PdfCraft patch: merge a section's entries into `map`, refusing a result past
+/// [`MAX_XREF_ENTRIES`].
+fn merge_entries(map: &mut XrefMap, own: XrefMap) -> Option<()> {
+    for (id, entry) in own {
+        insert_entry(map, id, entry)?;
+    }
+
+    Some(())
+}
+
+fn merge_entries_controlled(map: &mut XrefMap, own: XrefMap, control: Option<&crate::cancel::Control>) -> Option<()> {
+    if control.is_none() {
+        return merge_entries(map, own);
+    }
+    for (id, entry) in own {
+        crate::cancel::check(control)?;
+        insert_entry(map, id, entry)?;
+    }
+    Some(())
+}
 
 /// Representation of a proper xref table.
 #[derive(Debug)]
@@ -705,6 +799,7 @@ struct SomeRepr {
     has_ocgs: bool,
     password: Vec<u8>,
     limits: DecodeLimits,
+    control: Option<crate::cancel::Control>,
     trailer_data: TrailerData,
 }
 
@@ -754,9 +849,14 @@ impl XRefEntry {
     }
 }
 
+#[cfg(test)]
 fn populate_xref_impl<'a>(data: &'a [u8], pos: usize, xref_map: &mut XrefMap, limits: DecodeLimits) -> Option<&'a [u8]> {
+    populate_xref_controlled(data, pos, xref_map, limits, None)
+}
+
+fn populate_xref_controlled<'a>(data: &'a [u8], pos: usize, xref_map: &mut XrefMap, limits: DecodeLimits, control: Option<crate::cancel::Control>) -> Option<&'a [u8]> {
     let mut visited = BTreeSet::new();
-    populate_xref_impl_inner(data, pos, xref_map, &mut visited, limits)
+    populate_xref_impl_inner(data, pos, xref_map, &mut visited, limits, control)
 }
 
 /// The offset of the previous xref section (`Prev`).
@@ -776,7 +876,7 @@ fn prev_offset(data: &[u8], trailer: &Dict<'_>, own: &XrefMap) -> Option<usize> 
             let mut reader = Reader::new(data);
             reader.jump(*at);
             reader
-                .read_with_context::<IndirectObject<i32>>(&ReaderContext::dummy())
+                .read_with_context::<IndirectObject<i32>>(&ReaderContext::dummy_with_control(trailer.ctx().decode_limits(), trailer.ctx().control().cloned()))
                 .filter(|o| o.id() == &id)
                 .map(|o| o.get())
                 .filter(|p| *p >= 0)
@@ -796,7 +896,9 @@ fn populate_xref_impl_inner<'a>(
     xref_map: &mut XrefMap,
     visited: &mut BTreeSet<usize>,
     limits: DecodeLimits,
+    control: Option<crate::cancel::Control>,
 ) -> Option<&'a [u8]> {
+    crate::cancel::check(control.as_ref())?;
     if !visited.insert(pos) {
         warn!("circular xref PREV chain detected at offset {}", pos);
 
@@ -813,6 +915,7 @@ fn populate_xref_impl_inner<'a>(
     }
 
     let mut reader = Reader::new(data);
+    reader.set_control(control);
     reader.jump(pos);
     // In case the position points to before the object number of a xref stream.
     reader.skip_white_spaces_and_comments();
@@ -852,7 +955,8 @@ fn populate_from_xref_table<'a>(
 ) -> Option<&'a [u8]> {
     let trailer = {
         let mut reader = reader.clone();
-        read_xref_table_trailer(&mut reader, &ReaderContext::dummy_with_limits(limits))?
+        let ctx = ReaderContext::dummy_with_control(limits, reader.control().cloned());
+        read_xref_table_trailer(&mut reader, &ctx)?
     };
 
     reader.skip_white_spaces();
@@ -877,26 +981,27 @@ fn populate_from_xref_table<'a>(
             // Specification says we should ignore any object number > SIZE, but probably
             // not important?
             if entry.used {
-                own.insert(
+                insert_entry(
+                    &mut own,
                     ObjectIdentifier::new(obj_number as i32, entry.gen_number),
                     EntryType::Normal(entry.offset),
-                );
+                )?;
             }
         }
     }
 
     if let Some(prev) = prev_offset(data, &trailer, &own) {
         // First insert the entries from any previous xref tables.
-        populate_xref_impl_inner(data, prev, insert_map, visited, limits)?;
+        populate_xref_impl_inner(data, prev, insert_map, visited, limits, reader.control().cloned())?;
     }
 
     // In hybrid files, entries in `XRefStm` should have higher priority, therefore we insert them
     // after looking at `PREV`.
     if let Some(xref_stm) = trailer.get::<i32>(XREF_STM) {
-        populate_xref_impl_inner(data, xref_stm as usize, insert_map, visited, limits)?;
+        populate_xref_impl_inner(data, xref_stm as usize, insert_map, visited, limits, reader.control().cloned())?;
     }
 
-    insert_map.extend(own);
+    merge_entries_controlled(insert_map, own, reader.control())?;
 
     Some(trailer.data())
 }
@@ -908,7 +1013,8 @@ fn populate_from_xref_stream<'a>(
     visited: &mut BTreeSet<usize>,
     limits: DecodeLimits,
 ) -> Option<&'a [u8]> {
-    let stream = reader.read_with_context::<IndirectObject<Stream<'_>>>(&ReaderContext::dummy_with_limits(limits))?.get();
+    let ctx = ReaderContext::dummy_with_control(limits, reader.control().cloned());
+    let stream = reader.read_with_context::<IndirectObject<Stream<'_>>>(&ctx)?.get();
 
     let size = stream.dict().get::<u32>(SIZE)?;
 
@@ -925,6 +1031,7 @@ fn populate_from_xref_stream<'a>(
     // PdfCraft patch: (PdfCraft #2400) this section's entries are read first, for `prev_offset`.
     let mut own = XrefMap::default();
     let mut xref_reader = Reader::new(xref_data.as_ref());
+    xref_reader.set_control(reader.control().cloned());
 
     if let Some(arr) = stream.dict().get::<Array<'_>>(INDEX) {
         let iter = arr.iter::<(u32, u32)>();
@@ -946,10 +1053,10 @@ fn populate_from_xref_stream<'a>(
 
     if let Some(prev) = prev_offset(data, stream.dict(), &own) {
         // First insert the entries from any previous xref tables.
-        let _ = populate_xref_impl_inner(data, prev, insert_map, visited, limits)?;
+        let _ = populate_xref_impl_inner(data, prev, insert_map, visited, limits, reader.control().cloned())?;
     }
 
-    insert_map.extend(own);
+    merge_entries_controlled(insert_map, own, reader.control())?;
 
     Some(stream.dict().data())
 }
@@ -1036,10 +1143,11 @@ fn xref_stream_subsection<'a>(
                     0
                 };
 
-                insert_map.insert(
+                insert_entry(
+                    insert_map,
                     ObjectIdentifier::new(obj_number, gen_number as i32),
                     EntryType::Normal(offset as usize),
-                );
+                )?;
             }
             2 => {
                 let obj_stream_number = {
@@ -1054,10 +1162,11 @@ fn xref_stream_subsection<'a>(
                     0
                 };
 
-                insert_map.insert(
+                insert_entry(
+                    insert_map,
                     ObjectIdentifier::new(obj_number, gen_number),
                     EntryType::ObjStream(obj_stream_number, index),
-                );
+                )?;
             }
             _ => {
                 warn!("xref has unknown field type {f_type}");
@@ -1132,10 +1241,12 @@ impl<'a> ObjectStream<'a> {
         let first_offset = inner.dict().get::<usize>(FIRST)?;
 
         let mut r = Reader::new(data);
+        r.set_control(inner.dict().ctx().control().cloned());
 
         let mut offsets = vec![];
 
         for _ in 0..num_objects {
+            crate::cancel::check(inner.dict().ctx().control())?;
             r.skip_white_spaces_and_comments();
             // Skip object number
             let obj_num = r.read_without_context::<u32>()?;
@@ -1153,6 +1264,7 @@ impl<'a> ObjectStream<'a> {
     {
         let offset = self.offsets.get(index as usize)?.1;
         let mut r = Reader::new(self.data);
+        r.set_control(self.ctx.control().cloned());
         r.jump(offset);
         r.skip_white_spaces_and_comments();
 
@@ -1194,6 +1306,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cancellation_stops_before_a_whole_xref_subsection_is_read() {
+        let data = vec![1; 512 * 1024];
+        let (control, polls) = crate::cancel::stop_at(3);
+        let mut reader = Reader::new(&data);
+        reader.set_control(Some(control));
+        let mut map = XrefMap::default();
+        assert!(xref_stream_subsection(&mut reader, 0, data.len() as u32, 1, 0, 0, &mut map).is_none());
+        assert!(reader.offset() > 0 && reader.offset() < data.len());
+        assert!(!map.is_empty() && map.len() < data.len());
+        assert_eq!(polls.load(core::sync::atomic::Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn cancellation_interrupts_the_recovery_scanner() {
+        let data: PdfData = vec![b'a'; 2 << 20].into();
+        let (control, polls) = crate::cancel::stop_at(10);
+        assert!(fallback_controlled(data, b"", DecodeLimits::default(), Some(control.clone())).is_none());
+        assert!(control.check().is_none());
+        assert_eq!(polls.load(core::sync::atomic::Ordering::Relaxed), 10);
+    }
+
+    #[test]
     fn xref_stream_entries_need_backing_bytes() {
         let mut map = XrefMap::default();
         // All widths zero: an entry reads nothing, so none may be declared.
@@ -1214,6 +1348,30 @@ mod tests {
             assert!(xref_stream_subsection(&mut wrap, start, 2, 1, 1, 1, &mut past_end).is_none());
             assert!(past_end.keys().all(|id| id.obj_number >= 0));
         }
+    }
+
+    #[test]
+    fn xref_entries_stop_at_the_document_limit() {
+        // One-byte entries (type 1, offset and generation zero): the cheapest a stream can encode.
+        let data = vec![1u8; MAX_XREF_ENTRIES + 1];
+        let mut map = XrefMap::default();
+        let mut full = Reader::new(&data[..MAX_XREF_ENTRIES]);
+        assert!(xref_stream_subsection(&mut full, 0, MAX_XREF_ENTRIES as u32, 1, 0, 0, &mut map).is_some());
+        assert_eq!(map.len(), MAX_XREF_ENTRIES);
+
+        // A new object past the limit is refused, from a stream, a table section or a merge.
+        let mut over = Reader::new(&data[..1]);
+        assert!(xref_stream_subsection(&mut over, MAX_XREF_ENTRIES as u32, 1, 1, 0, 0, &mut map).is_none());
+        let mut other = XrefMap::default();
+        other.insert(ObjectIdentifier::new(i32::MAX, 0), EntryType::Normal(0));
+        assert!(merge_entries(&mut map, other).is_none());
+        assert_eq!(map.len(), MAX_XREF_ENTRIES);
+
+        // Replacing an existing object (an incremental update) still works at the limit.
+        let mut update = XrefMap::default();
+        update.insert(ObjectIdentifier::new(0, 0), EntryType::Normal(42));
+        assert!(merge_entries(&mut map, update).is_some());
+        assert_eq!(map.get(&ObjectIdentifier::new(0, 0)), Some(&EntryType::Normal(42)));
     }
 
     #[test]

@@ -116,6 +116,25 @@ fn a_compressed_member_past_max_entry_is_refused_before_the_tail_is_inflated() {
 }
 
 #[test]
+fn a_compressed_member_whose_offset_passes_max_total_is_refused_before_the_tail_is_inflated() {
+    // A 4-byte preview stated 200 MiB past the marker, in a file whose data after the JSON is
+    // 1 MiB.
+    let mut file = vectorcraft_json(4, &format!(r#""preview":{}"#, blob("image/png", 200 << 20, 4))).into_bytes();
+    file.extend(BLOB_MAGIC);
+    file.extend(vec![0u8; 1 << 20]);
+    let gz = gzip(&file);
+    let mut limits = small();
+    limits.max_total = 64 << 20;
+    match renditions(&gz, &limits) {
+        Err(Error::LimitExceeded(m)) => assert!(m.contains("max_total"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+    // Within max_total, the stream is read as far as it goes, and it ends first.
+    limits.max_total = 256 << 20;
+    assert!(matches!(renditions(&gz, &limits), Err(Error::Malformed(_))));
+}
+
+#[test]
 fn a_nul_outside_the_marker_is_malformed_without_reading_on() {
     // A NUL where the marker is not, then 8 MiB that compress to almost nothing.
     let mut file = vectorcraft_json(4, "").into_bytes();
@@ -223,6 +242,47 @@ fn only_the_json_of_a_compressed_file_is_counted_when_no_member_follows_it() {
     assert_eq!(info(&gz, &limits).unwrap().version, 4);
     assert_eq!(outline(&gz, &limits).unwrap().pages.len(), 2);
     assert_eq!(renditions(&gz, &limits).unwrap(), vec![]);
+}
+
+#[test]
+fn a_compressed_member_is_counted_against_max_total_once() {
+    // A 40 KiB PDF after the JSON, with max_total 64 KiB: it reads compressed as it does
+    // uncompressed.
+    let pdf: Vec<u8> = (0..40u32 << 10).map(|i| (i % 251) as u8).collect();
+    let mut file = vectorcraft_json(4, &format!(r#""pdf":{}"#, blob("application/pdf", 0, pdf.len()))).into_bytes();
+    file.extend(BLOB_MAGIC);
+    file.extend(&pdf);
+    let mut limits = small();
+    limits.max_total = 64 << 10;
+    for bytes in [file.clone(), gzip(&file)] {
+        assert_eq!(renditions(&bytes, &limits).unwrap()[0].bytes, pdf);
+    }
+    // Without room for the JSON and the PDF, the compressed file is refused.
+    limits.max_total = pdf.len() as u64;
+    assert!(limit_exceeded(renditions(&gzip(&file), &limits)));
+    // A preview naming the same bytes is a second copy, counted too.
+    let mut twice = vectorcraft_json(4, &format!(r#""preview":{0},"pdf":{0}"#, blob("image/png", 0, pdf.len()))).into_bytes();
+    twice.extend(BLOB_MAGIC);
+    twice.extend(&pdf);
+    for bytes in [twice.clone(), gzip(&twice)] {
+        limits.max_total = 64 << 10;
+        assert!(limit_exceeded(renditions(&bytes, &limits)));
+        limits.max_total = 128 << 10;
+        assert_eq!(renditions(&bytes, &limits).unwrap().len(), 2);
+    }
+}
+
+#[test]
+fn a_large_array_in_place_of_the_generator_or_a_preview_is_skipped() {
+    // A million elements, where a buffered read would keep each one.
+    let zeros = format!("[{}0]", "0,".repeat(1 << 20));
+    let members = format!(r#""generator":{zeros},"preview":{{"mime":{zeros}}},"pdf":[{zeros}]"#);
+    let vc = vectorcraft_json(4, &members).replacen(r#""generator":"VectorCraft 0.1.0","#, "", 1);
+    assert_eq!(info(vc.as_bytes(), &Limits::default()).unwrap().generator, None);
+    assert_eq!(renditions(vc.as_bytes(), &Limits::default()).unwrap(), vec![]);
+    let manifest = pcraft_manifest(1, "[]", "").replacen(r#""generator":"photocraft-format 0.1.0""#, &format!(r#""generator":{zeros}"#), 1);
+    let pc = zip(&[store("manifest.json", manifest.as_bytes())]);
+    assert_eq!(info(&pc, &Limits::default()).unwrap().generator, None);
 }
 
 #[test]
