@@ -5,7 +5,11 @@ use super::ItemsHooks;
 use crate::contract::collection::{
     CollectionEvent, CollectionProps, ColumnEvent, ColumnKind, ColumnSort, ColumnSpec, HeaderMenuRequest, ToggleColumn,
 };
-use crate::contract::{Collection, Common, Component, Cx, Focus as _, MeasureCx, PaintUi, PartsCx, Pointer as _, Props as _, Role, Show as _};
+use crate::contract::reorder::{self, Gap};
+use crate::contract::{
+    Collection, Common, Component, Cx, DragPreview, DropMark, DropTarget, Focus as _, MeasureCx, PaintUi, PartsCx, Pointer as _, Props as _, Role,
+    Show as _,
+};
 use crate::primitives::{IconSpec, TextRun};
 use crate::runtime::access::items::{HeaderCell, report_header};
 use crate::runtime::commands::{self, CommandRef, CommandSet, CommandState};
@@ -15,8 +19,8 @@ use crate::runtime::memory::{MemoryStage, sub};
 use crate::style::{ComponentStyle, StyleCx, TypeRole, scroll_bar_look};
 use craft_behavior::grid::resolve_columns;
 use craft_behavior::{
-    ColumnKey, ColumnWidth, CursorIcon, Flow, HitLevel, HitPriority, IconId, Insets, Intent, Metrics, NavMove, NavShape, PartKey, PointerButton,
-    PressPhase, Roving, Sense,
+    Axis, ColumnKey, ColumnWidth, CursorIcon, DropOperation, Flow, HitLevel, HitPriority, IconId, Insets, Intent, Metrics, NavMove, NavShape,
+    PartKey, PointerButton, PressPhase, Roving, Sense,
 };
 use egui::{Align, Context, Id, Pos2, Rect, Response, Ui, UiBuilder, Vec2};
 
@@ -49,11 +53,33 @@ impl ColumnCommands {
     pub const ALL: [ColumnCommands; 3] = [ColumnCommands::Resize, ColumnCommands::MoveLeft, ColumnCommands::MoveRight];
 }
 
-/// A header gesture in progress.
+/// A column resize in progress: the column and its width before the drag.
 #[derive(Clone, Debug, PartialEq)]
-enum Grab {
-    Resize { key: ColumnKey, from: f32 },
-    Move { key: ColumnKey, from: usize, to: usize },
+struct Grab {
+    key: ColumnKey,
+    from: f32,
+}
+
+/// The payload of a header drag: the column it moves, in the collection `table`.
+#[derive(Clone, Debug)]
+struct ColumnDrag {
+    table: Id,
+    key: ColumnKey,
+}
+
+/// Where a column drop lands: the gap among the header cells nearest the pointer, in display order.
+struct ColumnGap(Option<Gap>);
+
+impl DropTarget<ColumnDrag> for ColumnGap {
+    type Drop = Gap;
+
+    fn accept(&self, _: &ColumnDrag, _: Pos2, op: DropOperation) -> Option<Gap> {
+        if matches!(op, DropOperation::Copy) { None } else { self.0 }
+    }
+
+    fn mark(&self, drop: &Gap) -> DropMark {
+        drop.mark
+    }
 }
 
 /// The names the toggle cells of one row gave themselves this pass, by column.
@@ -331,10 +357,15 @@ impl Header {
         self.events.push(ColumnEvent::Moved { key: key.clone(), to });
     }
 
-    /// The display position a drag at `x` drops on: the column whose centre is nearest.
-    fn drop_at(&self, x: f32) -> usize {
-        let distance = |cell: &Cell| (cell.rect.center().x - x).abs();
-        (0..self.cells.len()).min_by(|&a, &b| distance(&self.cells[a]).total_cmp(&distance(&self.cells[b]))).unwrap_or(0)
+    /// The gap a column drag at `at` drops in, its `insert` in display order: the edge of the cell under the pointer on
+    /// the side of its centre the pointer is on.
+    fn gap_at(&self, at: Pos2, rtl: bool) -> Option<Gap> {
+        let mut rects: Vec<Rect> = self.cells.iter().map(|cell| cell.rect).collect();
+        if rtl {
+            rects.reverse();
+        }
+        let gap = reorder::gap_at(&rects, Axis::X, at)?;
+        Some(Gap { insert: if rtl { rects.len() - gap.insert } else { gap.insert }, ..gap })
     }
 
     /// Whether `command` can act on the column at display position `at`.
@@ -374,30 +405,16 @@ impl Header {
                 self.memory.menu = Some((key.clone(), crate::runtime::egui::pass::root_frame_nr(&ctx)));
                 self.menus.push(HeaderMenuRequest { column: key.clone(), at: rect.left_bottom() });
             }
-            if movable {
-                match phase {
-                    PressPhase::DragStart { pos, .. } | PressPhase::Drag { pos, .. } => {
-                        let to = self.drop_at(pos.x);
-                        self.memory.grab = Some(Grab::Move { key: key.clone(), from: at, to });
-                    }
-                    PressPhase::Release { click: false, .. } => {
-                        if let Some(Grab::Move { key: held, to, .. }) = self.memory.grab.take()
-                            && held == key
-                        {
-                            self.move_to(&key, to);
-                        }
-                    }
-                    PressPhase::Cancel { .. } => self.memory.grab = None,
-                    _ => {}
-                }
+            if movable && primary && matches!(phase, PressPhase::DragStart { .. }) {
+                cx.start_drag(ColumnDrag { table: id, key: key.clone() }, DragPreview::None);
             }
             if resizable {
                 match cx.part(GRIP.at(hash)).press.phase {
                     PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } => {
                         let from = match &self.memory.grab {
-                            Some(Grab::Resize { key: held, from }) if *held == key => *from,
+                            Some(Grab { key: held, from }) if *held == key => *from,
                             _ => {
-                                self.memory.grab = Some(Grab::Resize { key: key.clone(), from: rect.width() });
+                                self.memory.grab = Some(Grab { key: key.clone(), from: rect.width() });
                                 rect.width()
                             }
                         };
@@ -405,12 +422,12 @@ impl Header {
                         self.resize(&key, from + travel, rect.width());
                     }
                     PressPhase::Release { .. } => {
-                        if matches!(&self.memory.grab, Some(Grab::Resize { key: held, .. }) if *held == key) {
+                        if matches!(&self.memory.grab, Some(Grab { key: held, .. }) if *held == key) {
                             self.memory.grab = None;
                         }
                     }
                     PressPhase::Cancel { .. } => {
-                        if let Some(Grab::Resize { key: held, from }) = self.memory.grab.take()
+                        if let Some(Grab { key: held, from }) = self.memory.grab.take()
                             && held == key
                         {
                             self.resize(&key, from, rect.width());
@@ -424,12 +441,25 @@ impl Header {
                 self.menus.push(HeaderMenuRequest { column: key, at: rect.left_bottom() });
             }
         }
+        self.column_drop(cx, id, rtl);
         self.keyboard_resize(cx);
         self.commands(cx, id, active, rtl);
         active.is_some() || self.memory.resizing.is_some()
     }
 
     /// The keyboard resize the `Resize` command starts: Forward widens, Back narrows, Enter or Escape ends it.
+    /// The drop target of this collection's own header drag: the gap mark while the drag is over the header, the move
+    /// on release.
+    fn column_drop<C: Collection>(&mut self, cx: &mut Cx<'_, C>, id: Id, rtl: bool) {
+        let Some((drag, at)) = cx.dragging::<ColumnDrag>().filter(|(drag, _)| drag.table == id) else { return };
+        let target = ColumnGap(self.gap_at(at, rtl));
+        if let Some(gap) = cx.drop_target::<ColumnDrag, _>(&target)
+            && let Some(from) = self.cells.iter().position(|cell| self.specs[cell.spec].key == drag.key)
+        {
+            self.move_to(&drag.key, reorder::move_to(from, gap.insert));
+        }
+    }
+
     fn keyboard_resize<C: Collection>(&mut self, cx: &mut Cx<'_, C>) {
         let Some(key) = self.memory.resizing.clone() else { return };
         let Some(at) = self.cell_at(&key).filter(|_| cx.is_focused()) else {

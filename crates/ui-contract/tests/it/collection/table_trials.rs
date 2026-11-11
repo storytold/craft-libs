@@ -6,6 +6,7 @@ use craft_behavior::{ColumnKey, ColumnWidth, ItemSource, keyed};
 use craft_ui::contract::{
     CollectionEvent, CollectionProps, CollectionResponse, ColumnEvent, ColumnKind, ColumnSpec, Props as _, ShowCollection as _, ToggleColumn,
 };
+use craft_ui::runtime::drag::{self, DropMark};
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::{Frames, input, pointer, trial};
 use egui::{Key, Modifiers, Pos2, Rect, Ui, Vec2};
@@ -110,7 +111,8 @@ fn file_columns(width: f32) -> CollectionProps {
     ])
 }
 
-/// Dragging a header's edge resizes a column the app owns the width of; dragging the header moves it.
+/// Dragging a header's edge resizes a column the app owns the width of; dragging the header marks the gap on the side
+/// of the column centre the pointer is on, and the release moves the column into that gap.
 #[trial]
 fn a_header_drag_resizes_and_moves_a_column() {
     let (scene, source) = (Scene::default(), Count(4));
@@ -128,8 +130,22 @@ fn a_header_drag_resizes_and_moves_a_column() {
 
     let widths = [width, COL, COL];
     let from = scene.header_cell(0, &widths);
-    let to_second = Vec2::new(width / 2.0 + COL / 2.0, 0.0);
-    pointer::drag(&mut frames, from, to_second, &mut show);
+    let past_second = scene.header_cell(1, &widths) + Vec2::new(COL / 4.0, 0.0);
+    frames.frame(vec![pointer::moved(from)], &mut show);
+    frames.frame(vec![pointer::press(from)], &mut show);
+    for step in 1..=4 {
+        frames.frame(vec![pointer::moved(from + (past_second - from) * (step as f32 / 4.0))], &mut show);
+    }
+    frames.idle(1, &mut show);
+    let gap = ORIGIN.x + width + COL;
+    assert!(
+        matches!(drag::mark(&frames.ctx), Some(DropMark::Line { from, to, .. }) if from.x == gap && to.x == gap),
+        "the drop line stands at the second column's far edge: {:?}",
+        drag::mark(&frames.ctx)
+    );
+    assert!(scene.moves().is_empty(), "nothing moves before the release");
+    frames.frame(vec![pointer::release(past_second)], &mut show);
+    frames.idle(1, &mut show);
     assert_eq!(scene.moves(), vec![(NAME, 1)]);
     assert!(scene.sorts().is_empty(), "a drag is not a click");
 }
