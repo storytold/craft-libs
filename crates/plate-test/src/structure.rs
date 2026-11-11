@@ -69,6 +69,9 @@ pub struct ExtGState {
     pub smask_tr: bool,
 }
 
+/// The most decoded content bytes read per page (the former `page.operations()` decode limit).
+const MAX_PAGE_CONTENT: usize = 256 * 1024 * 1024;
+
 /// Summarize `pdf`. Malformed objects are skipped rather than reported.
 pub fn summarize(pdf: &[u8]) -> Result<Summary, Error> {
     let pdf = Pdf::new(Arc::new(pdf.to_vec())).map_err(|e| Error::Read(format!("{e:?}")))?;
@@ -88,7 +91,7 @@ pub fn summarize(pdf: &[u8]) -> Result<Summary, Error> {
         // Read and dropped page by page: `page.operations()` keeps every page's decoded content
         // for as long as the document, so pages sharing one stream would each hold a copy.
         let mut content = Vec::new();
-        page.content_reader().read_into(&mut content, usize::MAX);
+        page.content_reader().read_into(&mut content, MAX_PAGE_CONTENT);
         walk.operators(&mut UntypedIter::new(&content));
         let res = page.resources();
         walk.resources(&Resources {
