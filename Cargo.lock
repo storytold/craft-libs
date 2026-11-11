@@ -795,6 +795,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-aaf"
+version = "0.1.0"
+dependencies = [
+ "craft-audio",
+ "craft-cfb",
+ "craft-timeline",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-aep"
 version = "0.1.0"
 
