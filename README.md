@@ -48,6 +48,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-docpath`](crates/docpath/src/lib.rs): decides whether a path or `file:` URL stored in a
   document may be opened. Paths stored in documents are followed only when they are local or on the
   document's own network share; other network paths, device paths and non-file URLs are refused.
+- [`craft-dxf`](crates/dxf/src/lib.rs): DXF tag reader and writer, from CADCraft: ASCII and
+  binary DXF as (group code, value) tags, split into sections and entities, with pre-2007 code
+  pages and version detection, and written back. Bounded on hostile input. Mapping tags to a
+  drawing stays in each app.
 - [`craft-ecproj-format`](crates/ecproj-format/README.md): the envelope of EffectCraft `.ecproj`
   project files: `savedBy`, the schema version and its check, and the file object with the
   project and its saved view as type parameters. The project model stays in EffectCraft.
@@ -67,10 +71,20 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-fonts-build`](crates/fonts-build/README.md): embeds the optional craft-fonts faces
   from an app's `build.rs` (`CRAFT_FONTS_DIR`, `CRAFT_FONTS_REQUIRED`, script filters) as a table
   of `EmbeddedFace`s. No dependencies; the app picks the faces.
+- [`craft-gcode`](crates/gcode/src/lib.rs): Grbl-style G-code writer: polylines in
+  millimetres to `G0`/`G1` moves with laser power and feed, for cutting lasers and plotters.
+- [`craft-heif`](crates/heif/README.md): optional HEIF/HEIC still-image decoder, from LightCraft:
+  heic-rs reads the container and HEVC pictures, and this crate converts to 16-bit RGB to match
+  libheif (VUI range and matrix, chroma upsampling, `imir`, ICC on grid tiles). Also orientation,
+  alpha, EXIF/XMP and thumbnails. It never panics, and apps put it behind a non-default feature.
 - [`craft-i18n`](crates/i18n/README.md): translations over the embedded craft-i18n catalogs:
   lookup with fallback (`pt-br` → `pt` → English), plurals, language names, the system locale and
   a pseudo locale. The catalogs stay a fully optional build input; apps keep `tl!` and their
   language setting.
+- [`craft-tiff`](crates/tiff/README.md): TIFF and BigTIFF IFD reader and writer, from LightCraft:
+  every field type, the IFD chain, SubIFDs and Exif/GPS/Interop pointer IFDs, maker-note IFDs
+  (Canon, Nikon, Sony, Fujifilm, Olympus, Panasonic, Pentax), strip and tile layout. Bounded and
+  panic-free on hostile input. Pixel decompression stays with the callers.
 - [`craft-jpeg`](crates/jpeg/README.md): clean-room decoder for 12-bit and arithmetic-coded
   JPEG (T.81 SOF0/SOF1 at 12 bits, SOF9, SOF10), from PhotoCraft, and a frame probe for routing.
   Metadata stays in each app.
@@ -104,6 +118,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   app menu. Unsaved-document decisions and save prompts stay in each app.
 
 - [`craft-settings`](crates/settings/README.md): `config.toml` settings storage for every app: platform folders, portable mode and overrides, atomic saves while running, backup, damaged-file recovery and schema migrations. Policy in [docs/settings-storage.md](docs/settings-storage.md).
+- [`craft-silhouette-studio`](crates/silhouette-studio/src/lib.rs): bounded, fail-closed reader for Silhouette Studio `.studio` and `.studio3` documents: outlines, line colours and page size in millimetres. Protected designs are refused.
+- [`craft-svg-paths`](crates/svg-paths/src/lib.rs): SVG geometry reader: shapes,
+  transforms, `<use>`/`<symbol>` instances and the CSS cascade as Bézier paths in millimetres, each
+  tagged by the caller. Import only; not the shared SVG model.
 - [`craft-text`](crates/text/README.md): text processing below the composer. Its `hyphen` module finds
   hyphenation points, with a bundled US English dictionary and patterns and optional hypher patterns
   for 47 more languages (one cargo feature each).

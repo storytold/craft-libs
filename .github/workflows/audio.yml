@@ -12,8 +12,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: shared-audio-${{ github.ref }}
-  cancel-in-progress: true
+  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
+  # run (main, manual) gets its own group: it is never cancelled or replaced while queued, so it
+  # always gets to save the cache.
+  group: shared-audio-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lint:
@@ -31,11 +34,12 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-audio-lint
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt -p craft-audio --check
       # Each feature on its own, so code that needs another feature fails here.
       - name: Clippy, each feature alone
         run: |
-          for f in "" decode decode-native symphonia encode lossless-encode pcm-encode flac-encode peaks aac-decode serde; do
+          for f in "" decode decode-native symphonia encode lossless-encode pcm-encode flac-encode peaks aac-decode aac-encode "aac-encode,rayon" serde; do
             echo "::group::features: ${f:-none}"
             cargo clippy -p craft-audio --all-targets --locked --no-default-features ${f:+--features "$f"} -- -D warnings
             echo "::endgroup::"
@@ -67,6 +71,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-audio-msrv
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo +1.95.0 check -p craft-audio -p craft-media --all-features --locked
   features:
     timeout-minutes: 10
@@ -80,6 +85,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-audio-features
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test -p craft-audio --no-default-features --features lossless-encode --locked
       - run: cargo test -p craft-audio --no-default-features --features pcm-encode --locked --lib
       - run: cargo test -p craft-audio --no-default-features --features flac-encode --locked --lib
@@ -98,6 +104,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-audio-test
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build tests while installing ffmpeg
         run: |
           # The man-db index rebuild after dpkg is slow on hosted runners.

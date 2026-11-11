@@ -6,7 +6,7 @@ demuxer, written from the public specifications. No `unsafe`, no panics on malfo
 for `wasm32-unknown-unknown`. Dependencies: `thiserror` (for `isobmff`), `serde` (optional).
 
 Codecs are in separate crates that depend on this one: [`craft-audio`](../audio/README.md) for
-audio; video codecs will go in a separate crate. What both need lives here: the containers, the
+audio; `craft-video` for video. What both need lives here: the containers, the
 bit I/O, one `ByteSource` trait, and the [shared identifiers](#containers-codecs-and-codec-parameters)
 that codec crates use to describe a file and configure a decoder.
 
@@ -39,8 +39,8 @@ craft-media = { git = "https://github.com/storytold/craft-libs", rev = "<commit>
 
 - In scope: bit-level reading and writing, and container demuxing and muxing (boxes, sample
   tables, sample entries and codec configuration records) for audio and video tracks.
-- Out of scope: codecs. Audio codecs are in `craft-audio`; video codecs (H.264, HEVC, ProRes and
-  others) stay in the apps until a video crate exists. Containers only FilmCraft reads (MXF,
+- Out of scope: codecs. Audio codecs are in `craft-audio`; video codecs (H.264, HEVC, ProRes,
+  DNx, VP8, VP9, AV1) are in `craft-video`. Containers only FilmCraft reads (MXF,
   MPEG-TS/PS, AVI) are not here yet.
 - Anything both the audio and the video codec crates need belongs here, so the two never depend
   on each other.
@@ -151,7 +151,8 @@ let bytes = mp4.read_sample(&file, v, key)?;    // raw sample (AVCC/HVCC length-
   The one exception is the first sample of a `tmcd` track, which it reads (4 bytes) to get the timecode
   start frame.
 - `Mp4File`: brands, `is_quicktime`, movie `timescale`/`duration`, `tracks`, `metadata`, `fragmented`,
-  `fragment_count`.
+  `fragment_count`, `chpl_chapters` (Nero `udta/chpl`). `read_chapters(src)` returns the chapter list:
+  the QuickTime chapter track (`tref/chap`) when there is one, else `chpl`.
 - `Track`: `id`, `kind` (Video/Audio/Timecode/Subtitle/Other), `handler`, `timescale`, `duration`,
   `language`, `tkhd` fields (size, matrix, volume, enabled), `entries: Vec<SampleEntry>`, `samples`,
   `edits`, `edit_offset`, `references` (`tref`), `sdtp`, `sample_groups` (`sbgp`+`sgpd`, raw), `pcm_chunked`.
@@ -171,7 +172,7 @@ let bytes = mp4.read_sample(&file, v, key)?;    // raw sample (AVCC/HVCC length-
 #### Parsed boxes
 `ftyp`, `moov/mvhd`, `trak/tkhd`, `edts/elst` (v0/v1), `tref`, `mdia/mdhd` (v0/v1, ISO and Mac language
 codes), `hdlr` (ISO and Pascal names), `minf/stbl`: `stsd`, `stts`, `ctts` (v0/v1, read as signed), `stss`,
-`stsc`, `stsz`/`stz2` (4/8/16-bit), `stco`/`co64`, `sdtp`, `sbgp`/`sgpd`. Also `mvex/trex`, `moof/traf/tfhd/tfdt/trun`
+`stsc`, `stsz`/`stz2` (4/8/16-bit), `stco`/`co64`, `sdtp`, `sbgp`/`sgpd`, `udta/chpl`. Also `mvex/trex`, `moof/traf/tfhd/tfdt/trun`
 (every `tfhd` base-offset mode and multiple `moof`s), and `udta` metadata (QuickTime `©xxx` atoms,
 `meta/ilst`, and `meta/keys` (mdta)). `uuid`, `free`, `skip`, `wide`, `sidx` and `mfra` are skipped.
 Boxes with 64-bit sizes and with size 0 (runs to the end of the file) are supported.
@@ -239,6 +240,15 @@ let bytes = w.finish_faststart()?.into_inner(); // or finish() for moov-at-end
 - Timecode: `add_timecode_track(video, TimecodeConfig, start_frame)` adds a `tmcd` track (with `gmhd`)
   and a `tref/tmcd` link from the video track.
 - `WriterOptions::metadata` writes `©xxx` text atoms to `udta`.
+- `WriterOptions::chapters` (`Chapter { start, title }`, starts in the movie timescale) writes a chapter
+  list in both forms players read: a QuickTime chapter track (a disabled `text` track with `gmhd`,
+  one length-prefixed UTF-8 sample plus `encd` atom per chapter, referenced by `tref/chap` from the first
+  video or audio track; Apple's QuickTime File Format Specification, 2016 edition, "Chapter lists"
+  and "Text media") for Apple players, and a Nero `udta/chpl` list (version 1, 100 ns units; there is
+  no official specification, this is the publicly documented layout) for VLC and ffprobe. Chapters are
+  sorted, one per start time, cut to the movie duration, at most 255 (`MAX_CHAPTERS`) with titles of at
+  most 255 bytes (`MAX_CHAPTER_TITLE_BYTES`, cut at a character boundary). A first chapter after the
+  start is placed with an empty edit. The fragmented writer writes only `chpl`.
 - `FragmentedWriter<W: Write>` writes fMP4. The init segment is `ftyp` + `moov` with `mvex/trex`. Each
   `flush_fragment()` then writes `moof` (`mfhd`, `traf` with default-base-is-moof `tfhd`, `tfdt` v1,
   `trun` with per-sample duration, size, flags and composition offset) followed by `mdat`.
@@ -286,6 +296,11 @@ for b in BoxIter::new(&bytes) {
 - Muxer: one `mdat`, no chunk-size or duration limits outside PCM (the caller controls interleaving), no `sdtp`,
   `sgpd`/`sbgp` or `cslg` output, ISO-style `meta/ilst` metadata is not written, and the fragmented
   writer has no PCM, `sidx` or `mfra`.
+- Chapters: at most 255 per file and 255 bytes per title (the `chpl` count and length fields are one
+  byte each); chapters past the end of the movie are dropped. Only the first `tref/chap` reference is
+  read, and chapter-track samples are read as titles only (`styl`/`hlit` atoms and per-chapter URLs or
+  images are ignored). ffprobe ends the last chapter early by the empty edit when the first chapter
+  starts after zero.
 
 ## `matroska`
 
@@ -460,7 +475,9 @@ custom source (a web `Blob`, a network range reader) to use every container with
   fragmented) and read them back.
 - `tests/oracle_demux.rs` and `tests/oracle_mux.rs` compare the demuxer and muxer with ffprobe and
   ffmpeg on generated fixtures in `target/fixtures/isobmff/` (`$CRAFT_MEDIA_FIXTURES_DIR`
-  overrides it). Fixtures are never committed.
+  overrides it). Fixtures are never committed. `chapters_are_listed_by_ffprobe` checks that
+  `ffprobe -show_chapters` lists the chapters the muxer writes (count, starts, ends, UTF-8 titles) in
+  MP4 and MOV.
 - `tests/oracle_matroska.rs` compares every packet (stream, size, keyframe flag, pts, duration),
   codec names, time bases, dimensions and audio parameters with ffprobe on fixtures in
   `target/fixtures/matroska/`: H.264+AAC, VP9+Opus WebM, FLAC, Vorbis, SRT+ASS, WebVTT WebM, Cues
