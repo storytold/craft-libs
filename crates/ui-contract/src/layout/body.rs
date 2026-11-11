@@ -174,18 +174,14 @@ fn shrink_key(row: Id, leaf: Id) -> Id {
     sub(row, ("shrink", leaf))
 }
 
-/// The widths of the leaves of a row whose leaves, with `fixed` (its other children and gaps), ask for more than
-/// `room`: the shortfall comes off the last leaf first, down to its least, then off the one before it, and so on, as
-/// a flow gives each child what the ones before it left. A row that fits gives each leaf what it asks for.
+/// The widths of the units of a row whose units, with `fixed` (its other children and gaps), ask for more than `room`:
+/// the shortfall comes off every unit in proportion to what it can give (its ideal less its least), the same share of
+/// that from each, so all reach their least together. A row that fits gives each unit its ideal.
 fn shrink_widths(leaves: &[Reported], fixed: f32, room: f32) -> Vec<f32> {
-    let mut short = fixed + leaves.iter().map(|leaf| leaf.ideal).sum::<f32>() - room;
-    let mut widths: Vec<f32> = leaves.iter().map(|leaf| leaf.ideal).collect();
-    for (leaf, width) in leaves.iter().zip(widths.iter_mut()).rev() {
-        let cut = short.clamp(0.0, leaf.ideal - leaf.least);
-        *width -= cut;
-        short -= cut;
-    }
-    widths
+    let short = fixed + leaves.iter().map(|leaf| leaf.ideal).sum::<f32>() - room;
+    let slack: f32 = leaves.iter().map(|leaf| leaf.ideal - leaf.least).sum();
+    let share = if short > 0.0 && slack > 0.0 { (short / slack).min(1.0) } else { 0.0 };
+    leaves.iter().map(|leaf| leaf.ideal - (leaf.ideal - leaf.least) * share).collect()
 }
 
 /// Runs `body`, the children of the unwrapped `Row` body `id`, in `ui`, the block they are placed in, with the row's

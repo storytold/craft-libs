@@ -37,12 +37,24 @@ pub struct Metrics {
     /// The width the component takes where its room allows, though its content needs less: its ideal measure is at
     /// least this wide, up to the room it is offered, and its least measure is its content's.
     pub ideal_width: f32,
+    /// The least width of the component, padding included, where its least measure (`Proposal::Min`) floors at it in
+    /// place of `min_size`'s width: a field that is at least `min_size` wide where it takes its own width, and narrows
+    /// past that only where a row shrinks it.
+    pub least_width: Option<f32>,
 }
 
 impl Metrics {
     /// No padding, no minimum, no wrap width.
     pub const fn new() -> Self {
-        Metrics { padding: Insets::new(0.0, 0.0, 0.0, 0.0), min_size: Vec2::ZERO, max_width: None, gap: 0.0, min_text: 0.0, ideal_width: 0.0 }
+        Metrics {
+            padding: Insets::new(0.0, 0.0, 0.0, 0.0),
+            min_size: Vec2::ZERO,
+            max_width: None,
+            gap: 0.0,
+            min_text: 0.0,
+            ideal_width: 0.0,
+            least_width: None,
+        }
     }
 
     /// Sets the padding.
@@ -78,6 +90,12 @@ impl Metrics {
     /// Sets the width the component takes where its room allows.
     pub const fn ideal_width(mut self, width: f32) -> Self {
         self.ideal_width = width;
+        self
+    }
+
+    /// Sets the least width, padding included, that the least measure floors at in place of `min_size`'s width.
+    pub const fn least_width(mut self, width: f32) -> Self {
+        self.least_width = Some(width);
         self
     }
 }

@@ -117,9 +117,12 @@ impl Component for SelectFace<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        // At its least the face elides its name to nothing.
+        // At its least the face elides its name to an ellipsis.
         let text = match (self.name, cx.proposal) {
-            (true, Proposal::Min) => Vec2::new(0.0, cx.layout(&TextRun::new(cx.resolved.label).role(cx.style.text.role)).size().y),
+            (true, Proposal::Min) => {
+                let ellipsis = cx.layout(&TextRun::new("…").role(cx.style.text.role)).size().x;
+                Vec2::new(ellipsis, cx.layout(&TextRun::new(cx.resolved.label).role(cx.style.text.role)).size().y)
+            }
             (true, _) => cx.layout(&TextRun::new(cx.resolved.label).role(cx.style.text.role)).size(),
             (false, _) => Vec2::ZERO,
         };

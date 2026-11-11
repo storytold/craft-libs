@@ -31,13 +31,17 @@ pub(crate) fn measure_content<C: Component>(
 }
 
 /// Step 5, measure: the `content` size plus padding, then `max(min_size)`, and for any proposal but `Min` at least the
-/// ideal width, up to the room. `extent` is what the shape adds to the content: a body's remembered size or a
-/// collection's content size.
+/// ideal width, up to the room. At `Min` a least width the style sets takes the place of `min_size`'s width. `extent`
+/// is what the shape adds to the content: a body's remembered size or a collection's content size.
 pub(crate) fn measure(style: &dyn StyleView, input: &MeasureIn<'_>, content: Vec2, extent: Vec2) -> Vec2 {
     let metrics = style.metrics();
     let content = content + extent;
     let padding = Vec2::new(metrics.padding.start + metrics.padding.end, metrics.padding.top + metrics.padding.bottom);
-    let mut size = (content + padding).max(metrics.min_size);
+    let floor = match (input.proposal, metrics.least_width) {
+        (Proposal::Min, Some(least)) => Vec2::new(least, metrics.min_size.y),
+        _ => metrics.min_size,
+    };
+    let mut size = (content + padding).max(floor);
     if input.proposal != Proposal::Min {
         size.x = size.x.max(input.room.map_or(metrics.ideal_width, |room| metrics.ideal_width.min(room)));
     }

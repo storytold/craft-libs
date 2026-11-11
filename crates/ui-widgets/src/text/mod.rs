@@ -53,7 +53,10 @@ impl FieldStyle {
             .padding(Insets::horizontal(control.pad_x))
             .gap(control.gap)
             .min_size(Vec2::new(cx.tokens.size.length.short, control.height))
-            .ideal_width(cx.tokens.size.length.field);
+            .ideal_width(cx.tokens.size.length.field)
+            // Where a row shrinks it, a field narrows to its padding and one glyph; what it shows there (an
+            // ellipsis, its adornments) its content measure adds.
+            .least_width(2.0 * control.pad_x + control.icon);
         let ink = cx.ink(Ink::OnPanel);
         let off = cx.color(cx.tokens.color.text.disabled);
         let glyph = IconLook::new(control.icon, Stateful::new(ink).off(States::new(ink, ink, ink, off)));

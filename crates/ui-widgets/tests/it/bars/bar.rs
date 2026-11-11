@@ -1,5 +1,6 @@
 //! `Bar`: a body too wide for the bar shrinks its members before it scrolls, a captioned field among them too.
 
+use craft_behavior::IconId;
 use craft_ui::bars::{Bar, BarKind, BreadcrumbBar, path_crumbs};
 use craft_ui::buttons::{Button, IconButton};
 use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
@@ -8,7 +9,6 @@ use craft_ui::form::Field;
 use craft_ui::pickers::Select;
 use craft_ui::testing::{Fixture, shrink_least_runs, trial};
 use craft_ui::text::TextField;
-use craft_behavior::IconId;
 use egui::{Rect, Vec2};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -119,4 +119,31 @@ fn the_members_of_a_tool_bar_never_overlap_as_it_narrows() {
             assert!(pair[0].max.x <= pair[1].min.x + SLACK, "at {width} points {:?} runs into {:?}", pair[0], pair[1]);
         }
     }
+}
+
+/// What a select in an options bar `width` wide shows, with three buttons after it: its rect and whether its text
+/// was elided.
+fn select_in(width: f32) -> (Rect, bool) {
+    let seen = Rc::new(Cell::new(Rect::NOTHING));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let entries = [Entry::new(0u8, "Point Sample"), Entry::new(1, "5 by 5 Average")];
+        Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
+            out.set(Select::new("Sample Size", Bind::given(0u8), &entries).show(ui).response.rect);
+            for at in 0..3 {
+                Button::new(format!("Button {at}")).show(ui);
+            }
+        });
+    });
+    fixture.room(Vec2::new(width, 80.0)).settle();
+    let elided = fixture.texts().iter().any(|text| text.text == "Point Sample" && text.elided);
+    (seen.get(), elided)
+}
+
+#[trial]
+fn a_select_in_a_short_bar_narrows_past_a_fields_own_least_and_elides() {
+    let (wide, _) = select_in(900.0);
+    let (narrow, elided) = select_in(200.0);
+    assert!(narrow.width() < 96.0, "the select stayed {} wide", narrow.width());
+    assert!(narrow.width() < wide.width() - SLACK && elided, "the select {narrow:?} did not elide its pick");
 }
