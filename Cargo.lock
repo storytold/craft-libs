@@ -1051,6 +1051,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-mime"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "encoding_rs",
+ "proptest",
+]
+
+[[package]]
 name = "craft-pcraft-format"
 version = "0.1.0"
 dependencies = [
