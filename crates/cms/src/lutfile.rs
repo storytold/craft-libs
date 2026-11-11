@@ -157,14 +157,19 @@ pub fn parse_cube(text: &str) -> Result<LutFile, LutError> {
     let (mut dmin, mut dmax) = ([0.0f32; 3], [1.0f32; 3]);
     let mut rows: Vec<f32> = Vec::new();
     for line in text.lines() {
-        // A '#' inside a quoted TITLE is part of the title, not a comment.
-        let raw = line.trim_start();
-        let skip = if raw.starts_with("TITLE") { raw.find('"').and_then(|q| raw[q + 1..].find('"').map(|e| q + e + 2)) } else { None }.unwrap_or(0);
-        let line = match raw[skip..].find('#') {
-            Some(i) => &raw[..skip + i],
-            None => raw,
+        // Only a quote at the beginning of a TITLE value protects '#'. Quotes inside an
+        // unquoted title's comment must not turn that comment into part of the title.
+        if let Some(quoted) = line
+            .trim_start()
+            .strip_prefix("TITLE")
+            .filter(|rest| rest.starts_with(char::is_whitespace))
+            .and_then(|rest| rest.trim_start().strip_prefix('"'))
+        {
+            let Some((value, _)) = quoted.split_once('"') else { return err("unterminated quoted TITLE") };
+            title = value.to_string();
+            continue;
         }
-        .trim();
+        let line = line.split('#').next().unwrap_or("").trim();
         if line.is_empty() {
             continue;
         }
@@ -596,6 +601,22 @@ pub fn builtin(id: &str) -> Option<LutFile> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cube_title_hashes_and_comment_quotes_are_distinct() {
+        let rows = "LUT_1D_SIZE 2\n0 0 0 # low\n1 1 1 # high\n";
+        for (line, title) in [
+            (r#"TITLE "Look #3" # comment "ignored""#, "Look #3"),
+            (r#"TITLE Look # "draft""#, "Look"),
+            ("  TITLE\t\"Été #2\"", "Été #2"),
+            (r#"TITLE "" # empty"#, ""),
+        ] {
+            assert_eq!(parse_cube(&format!("{line}\n{rows}")).unwrap().title, title);
+        }
+        let lut = LutFile::from_fn("Look #3", 2, |c| c).unwrap();
+        assert_eq!(parse_cube(&write_cube(&lut)).unwrap().title, "Look #3");
+        assert!(parse_cube(&format!("TITLE \"unterminated # title\n{rows}")).is_err());
+    }
 
     #[test]
     fn cube_rejects_invalid_numeric_fields() {
