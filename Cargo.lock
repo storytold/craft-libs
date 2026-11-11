@@ -826,6 +826,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-captions"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "proptest",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-cfb"
 version = "0.1.0"
 
@@ -1025,6 +1034,14 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+]
+
+[[package]]
+name = "craft-lottie"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1318,6 +1335,14 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-vectordrawable"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "kurbo 0.13.1",
 ]
 
 [[package]]
