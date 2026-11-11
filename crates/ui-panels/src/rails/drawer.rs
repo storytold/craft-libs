@@ -124,6 +124,7 @@ impl<T: Value> Outcome for ToolbarDrawerOutput<T> {
 ///   edit.
 /// - **Closing.** Escape, the close button or a press outside the drawer and the rail closes it: `closed` is set and
 ///   the host stops showing it. A press on the rail is the start of a drag or a pick there, so it leaves the drawer open.
+///   The focus then returns to the drawer's [opener](ToolbarDrawer::opened_by), the rail's Edit Toolbar button.
 #[must_use = "show the drawer with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
 #[pattern(probe(ToolbarDrawer<'static, u8>))]
@@ -135,13 +136,22 @@ pub struct ToolbarDrawer<'a, T: Value + 'static> {
     #[prop]
     opens: Side,
     dropped: Option<ToolDropped>,
+    opener: Option<Response>,
 }
 
 impl<'a, T: Value + 'static> ToolbarDrawer<'a, T> {
     /// A drawer beside `rail` (the rail's rect), listing `groups`, over a toolbar of `toolbar` slots. `dropped` is the
     /// drag the rail took in this pass (`ToolRailOutput::dropped`); the drawer turns it into an edit.
     pub fn new(rail: Rect, groups: &'a [DrawerGroup<T>], toolbar: &'a [ToolSlot<T>], dropped: Option<ToolDropped>) -> Self {
-        ToolbarDrawer { rail, groups, toolbar, opens: Side::End, dropped }
+        ToolbarDrawer { rail, groups, toolbar, opens: Side::End, dropped, opener: None }
+    }
+
+    /// The control that opened the drawer, the rail's Edit Toolbar button (`ToolRailOutput::edit_toolbar`): the focus
+    /// returns to it when the drawer closes. The drawer still hangs from the rail.
+    #[must_use]
+    pub fn opened_by(mut self, opener: &Response) -> Self {
+        self.opener = Some(opener.clone());
+        self
     }
 }
 
@@ -207,7 +217,7 @@ fn on_toolbar<T: PartialEq>(toolbar: &[ToolSlot<T>], id: &T) -> bool {
 impl<T: Value + 'static> ToolbarDrawer<'_, T> {
     /// Shows the drawer and reports what the user changed.
     pub fn show(self, ui: &mut Ui) -> ToolbarDrawerOutput<T> {
-        let ToolbarDrawer { rail, groups, toolbar, opens, dropped } = self;
+        let ToolbarDrawer { rail, groups, toolbar, opens, dropped, opener } = self;
         let env = Env::of(ui);
         let words = env.words::<RailWords>();
         let os = os_of(ui.ctx());
@@ -222,9 +232,16 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
         let layout = env.view().keyboard_layout();
         let chord_of = |command: &ResolvedCommand| command.chord.as_ref().map(|chord| chord.display_for(os, layout));
 
-        let popover = Popover::new(words.drawer_title.clone(), Bind::bound(&mut open))
+        let mut popover = Popover::new(words.drawer_title.clone(), Bind::bound(&mut open));
+        if let Some(opener) = &opener {
+            popover = popover.opened_by(opener);
+        }
+        let popover = popover
             .overlay(|overlay| {
                 let mut overlay = overlay.place(Place::anchored(Anchor::Rect(rail), opens, Align::Start));
+                if overlay.opener.is_some() {
+                    overlay = overlay.opener_anchor(Anchor::Rect(rail));
+                }
                 overlay.fit = Overlay::dialog().fit;
                 overlay
             })

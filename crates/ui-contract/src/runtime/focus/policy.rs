@@ -39,7 +39,8 @@ pub struct FocusPolicy {
     pub kind: ScopeKind,
     /// Tab wraps inside the scope and cannot leave it.
     pub trap: bool,
-    /// Focus returns to the opener when the scope disappears.
+    /// Focus returns to the opener when the scope disappears. In a scope that does not trap, the opener is the stop
+    /// focus entered the scope from.
     pub restore: bool,
     /// Where focus goes when the scope first appears.
     pub initial: Initial,
@@ -86,6 +87,9 @@ impl FocusPolicy {
     };
     /// A menu: like a popup.
     pub const MENU: FocusPolicy = FocusPolicy { kind: ScopeKind::Menu, ..FocusPolicy::POPUP };
+    /// A layer that only Tab reaches, such as the toasts: it traps nothing and takes no focus on its own, and when it
+    /// goes away with focus inside, focus returns to the stop it came from.
+    pub const TAB_LAYER: FocusPolicy = FocusPolicy { restore: true, ..FocusPolicy::NONE };
 
     /// Whether Tab wraps inside the scope.
     pub const fn trap(mut self, on: bool) -> Self {

@@ -164,11 +164,13 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     // The opener of the layer's scope is the stop focused when the layer first appears: egui's modal gate takes focus
     // from the widgets below a modal layer by the first pass that shows the layer. A dropdown that keeps its anchor's key
     // focus belongs to the component that opened it: a press moves the key focus onto that component only at the end of
-    // the frame that opens the layer, so the stop focused then is the previous one.
+    // the frame that opens the layer, so the stop focused then is the previous one. A layer the app opens from a recorded
+    // opener (a button whose click the app answers) returns focus to that opener's stop.
     let opener = *memory.opener_stop.get_or_insert_with(|| {
         let owned = (overlay.focus.initial == focus::Initial::KeepAnchor).then(|| focus::stop_rec(ctx, (layer.owner, None))).flatten();
         let pressed = overlay.opener.as_ref().filter(|first| first.fired && first.pressed).and_then(|_| focus::pressed_stop(ctx));
-        owned.map(|rec| rec.stop.key()).or(pressed).or_else(|| focus::focused_stop(ctx))
+        let recorded = overlay.opener.as_ref().and_then(|first| focus::stop_rec(ctx, (first.id, None))).map(|rec| rec.stop.key());
+        owned.map(|rec| rec.stop.key()).or(pressed).or(recorded).or_else(|| focus::focused_stop(ctx))
     });
     overlay::begin_layer(ctx, layer.id, layer.exiting);
     let shown = areas::show_layer(ctx, &spec, |ui| {

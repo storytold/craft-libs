@@ -33,3 +33,37 @@ fn a_tool_moved_down_its_own_slot_lands_at_the_index_after_it_leaves() {
     let edit = ToolbarEdit::move_to(UNDO, DropAt::into_slot(0, 3));
     assert_eq!(layout(&apply_toolbar_edit(&slots, &edit, &[])), [(0, vec![REDO, CUT, UNDO])], "the removal shifts the index");
 }
+
+// The drawer opened from the rail's Edit Toolbar button gives the focus back to that button when it closes.
+#[trial]
+fn closing_the_drawer_returns_the_focus_to_the_rails_edit_toolbar_button() {
+    use craft_ui::rails::{DrawerGroup, LastUsed, ToolRail, ToolbarDrawer};
+    use craft_ui::testing::Fixture;
+    use egui::{Key, Modifiers};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let open = Rc::new(Cell::new(false));
+    let shown = open.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let slots = [slot(0, &[UNDO]), slot(1, &[REDO])];
+        let groups = [DrawerGroup::new("Edit", vec![tool(UNDO), tool(REDO), tool(CUT)])];
+        let last = LastUsed::default();
+        let rail = ToolRail::new("Tools", &slots, &UNDO, &last).edit_toolbar("Customize").show_rail(ui, |_, _| {});
+        let opener = rail.edit_toolbar.expect("the rail shows its Edit Toolbar button");
+        if craft_ui::contract::clicked(&opener) {
+            shown.set(true);
+        }
+        if shown.get() && ToolbarDrawer::new(rail.response.rect, &groups, &slots, None).opened_by(&opener).show(ui).closed {
+            shown.set(false);
+        }
+    });
+    fixture.idle(30);
+    let customize = fixture.by_label("Customize").expect("the rail shows its Edit Toolbar button");
+    fixture.click(&customize).idle(6);
+    assert!(open.get(), "the button opened the drawer");
+    fixture.key(Key::Escape, Modifiers::NONE).idle(6);
+    assert!(!open.get(), "Escape closed the drawer");
+    let focused = craft_ui::testing::access::focused_key(fixture.tree());
+    assert!(fixture.by_label("Customize").is_some_and(|button| button.node == focused), "the focus is back on Edit Toolbar");
+}

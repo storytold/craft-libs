@@ -65,8 +65,9 @@ pub struct ToolRailOutput<T> {
     pub double_clicked: Option<T>,
     /// The column toggle was clicked; the host flips its column count.
     pub toggle_columns: bool,
-    /// The Edit Toolbar button was clicked.
-    pub edit_toolbar: bool,
+    /// The Edit Toolbar button's response while the rail shows it: a click on it opens the drawer, and the drawer
+    /// takes it as its opener ([`ToolbarDrawer::opened_by`](crate::rails::ToolbarDrawer::opened_by)).
+    pub edit_toolbar: Option<Response>,
     /// The slot whose flyout is open.
     pub flyout: Option<SlotId>,
     /// A tool dropped on a slot while the toolbar is edited, and where it goes.
@@ -87,14 +88,14 @@ impl<T: Value> Outcome for ToolRailOutput<T> {
 struct Collected<T> {
     select: Option<T>,
     double_clicked: Option<T>,
-    edit_toolbar: bool,
+    edit_toolbar: Option<Response>,
     flyout: Option<SlotId>,
     dropped: Option<ToolDropped>,
 }
 
 impl<T> Default for Collected<T> {
     fn default() -> Self {
-        Collected { select: None, double_clicked: None, edit_toolbar: false, flyout: None, dropped: None }
+        Collected { select: None, double_clicked: None, edit_toolbar: None, flyout: None, dropped: None }
     }
 }
 
@@ -232,7 +233,7 @@ impl<'a, T: Value + 'static> ToolRail<'a, T> {
                             None => {
                                 let label = edit_label.clone().unwrap_or(Label::Empty);
                                 let more = IconButton::new(IconId::new("more")).id_salt("edit-toolbar").label(label).show(ui);
-                                collected.edit_toolbar |= clicked(&more);
+                                collected.edit_toolbar = Some(more.response);
                             }
                         }
                     }
@@ -280,7 +281,7 @@ impl<T: Value + 'static> Component for ToolRail<'_, T> {
             select: None,
             double_clicked: None,
             toggle_columns: self.toggled,
-            edit_toolbar: false,
+            edit_toolbar: None,
             flyout: None,
             dropped: None,
             last_used: None,

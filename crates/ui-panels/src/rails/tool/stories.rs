@@ -60,7 +60,7 @@ fn tool_rail(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         *note = format!("double clicked {tool}");
     } else if out.toggle_columns {
         *note = "toggle columns".to_owned();
-    } else if out.edit_toolbar {
+    } else if out.edit_toolbar.as_ref().is_some_and(crate::contract::clicked) {
         *note = "edit toolbar".to_owned();
     }
     let flyout = out.flyout.map_or_else(|| "closed".to_owned(), |slot| format!("of slot {slot} open"));

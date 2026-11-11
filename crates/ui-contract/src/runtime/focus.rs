@@ -52,7 +52,8 @@ pub(crate) struct ScopeRec {
     pub(crate) policy: FocusPolicy,
     pub(crate) parent: Option<Id>,
     pub(crate) label: Option<Arc<str>>,
-    /// The stop that held focus when the scope was first pushed, which `restore` returns to.
+    /// The stop that held focus when the scope was first pushed, or for a scope that does not trap the stop focus last
+    /// entered it from, which `restore` returns to.
     pub(crate) opener: Option<StopKey>,
     /// The scope's layer is playing its exit: focus inside it already returns to the opener.
     pub(crate) closing: bool,

@@ -147,6 +147,7 @@ impl State {
 
     /// Moves focus to `rec`: the egui widget is its root, and the stop is recorded under that root.
     pub(super) fn focus_stop(&mut self, rec: StopRec) -> Vec<Act> {
+        self.note_entry(&rec);
         let stop = &rec.stop;
         let roving = stop.group.is_some();
         let keys = stop.keys;
@@ -165,6 +166,26 @@ impl State {
         self.focus_now = Some(stop.root);
         self.revealed = Some(stop.key());
         vec![Act::Focus(stop.root, filter)]
+    }
+
+    /// Focus moving to `rec` from outside a scope that traps nothing and restores focus (a layer that Tab reaches, such as
+    /// the toasts) makes the stop it comes from that scope's opener: when the scope goes away with focus inside, focus
+    /// returns there.
+    fn note_entry(&mut self, rec: &StopRec) {
+        let Some(from) = self.stop_of_focus() else { return };
+        let mut at = rec.scope;
+        while let Some(id) = at {
+            let Some(scope) = self.scopes.get(&id).or_else(|| self.last_scopes.get(&id)) else { return };
+            let (policy, parent) = (scope.policy, scope.parent);
+            if policy.restore && !policy.trap && !self.in_scope(from.scope, Some(id)) {
+                for scopes in [&mut self.scopes, &mut self.last_scopes] {
+                    if let Some(scope) = scopes.get_mut(&id) {
+                        scope.opener = Some(from.stop.key());
+                    }
+                }
+            }
+            at = parent;
+        }
     }
 
     fn in_scope(&self, scope: Option<Id>, root: Option<Id>) -> bool {
