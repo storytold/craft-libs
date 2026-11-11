@@ -1498,6 +1498,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-vcard"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "craft-mime",
+ "proptest",
+]
+
+[[package]]
 name = "craft-vectorcraft-format"
 version = "0.1.0"
 dependencies = [
