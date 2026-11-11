@@ -4,6 +4,7 @@
 use super::kit::{Leaf, Opened, PlainStyle, Seen};
 use craft_behavior::Sense;
 use craft_ui::contract::{Common, Component, Cx, MeasureCx, Overlay, OverlayUi, Overlays as _, Props as _, Role, Sampler as _, Show as _, Trigger};
+use craft_ui::runtime::focus::Initial;
 use craft_ui::style::StyleCx;
 use craft_ui::testing::focus::is_focused;
 use craft_ui::testing::input::key_press;
@@ -62,7 +63,10 @@ impl Component for Dialog<'_> {
         let popup = cx.popup("popup");
         let scene = self.scene;
         let canvas = self.canvas;
-        let shown = ui.show(popup, Overlay::modal(), |ui, body| {
+        // Focus starts on the armer: it is no field and no default button, where a dialog starts with nothing focused.
+        let mut overlay = Overlay::modal();
+        overlay.focus = overlay.focus.initial(Initial::First);
+        let shown = ui.show(popup, overlay, |ui, body| {
             match scene.arm.get() {
                 Arm::Nothing => {}
                 Arm::Sampler => body.arm_sampler(canvas),

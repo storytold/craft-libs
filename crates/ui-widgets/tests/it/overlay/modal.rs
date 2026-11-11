@@ -3,7 +3,7 @@
 use super::kit::{Go, Leaf, Opened, Opener, Seen};
 use craft_ui::contract::{Overlay, Props as _, Show as _, Trigger};
 use craft_ui::runtime::commands::{FireSource, fire};
-use craft_ui::runtime::focus::{FocusTarget, request};
+use craft_ui::runtime::focus::{FocusTarget, Initial, request};
 use craft_ui::runtime::overlay::{OpenFilter, any_open};
 use craft_ui::testing::focus::is_focused;
 use craft_ui::testing::pointer::{moved, press, release};
@@ -13,6 +13,14 @@ use std::cell::{Cell, RefCell};
 
 const OPENER: Rect = Rect { min: Pos2::new(100.0, 100.0), max: Pos2::new(180.0, 120.0) };
 const BELOW: Rect = Rect { min: Pos2::new(600.0, 500.0), max: Pos2::new(660.0, 530.0) };
+
+/// A modal whose focus starts on its first stop: the content here has no field and no default button, where a dialog
+/// starts with nothing focused.
+fn modal_on_first() -> Overlay {
+    let mut overlay = Overlay::modal();
+    overlay.focus = overlay.focus.initial(Initial::First);
+    overlay
+}
 
 #[trial]
 fn a_modal_blocks_hits_and_commands_below_and_returns_focus_on_close() {
@@ -24,7 +32,7 @@ fn a_modal_blocks_hits_and_commands_below_and_returns_focus_on_close() {
     let opener_id = Cell::new(Id::NULL);
     let mut show = |ui: &mut Ui| {
         opened.shown.set(false);
-        let opener = Opener::new(&opened, &content, Trigger::Manual, Overlay::modal).open(open.get()).close(close.get());
+        let opener = Opener::new(&opened, &content, Trigger::Manual, modal_on_first).open(open.get()).close(close.get());
         let response = opener.id_salt("opener").show_at(ui, OPENER);
         opener_id.set(response.id);
         Leaf::new(&below, Vec2::new(60.0, 30.0)).id_salt("below").show_at(ui, BELOW);
