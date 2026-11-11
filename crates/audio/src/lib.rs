@@ -28,7 +28,7 @@
 
 #[cfg(any(feature = "aac-decode", feature = "aac-encode"))]
 pub mod aac;
-#[cfg(feature = "ac3-decode")]
+#[cfg(any(feature = "ac3-decode", feature = "ac3-encode", feature = "eac3-encode"))]
 pub mod ac3;
 #[cfg(any(feature = "alac-decode", feature = "alac-encode"))]
 pub mod alac;
@@ -125,6 +125,13 @@ impl From<ac3::Error> for AudioError {
             ac3::Error::Unsupported(_) => AudioError::Unsupported(e.to_string()),
             _ => AudioError::Malformed(e.to_string()),
         }
+    }
+}
+
+#[cfg(any(feature = "ac3-encode", feature = "eac3-encode"))]
+impl From<ac3::encoder::Error> for AudioError {
+    fn from(e: ac3::encoder::Error) -> Self {
+        AudioError::Encode(e.to_string())
     }
 }
 
