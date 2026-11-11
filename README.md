@@ -41,6 +41,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   the heap container, the entropy coding derived by black-box analysis (frozen code tables), sensor
   black and white levels and as-shot white balance. The complete derivation record (plan, sources
   log, scripts, verification) is in `crates/crw/clean-room/`. Colour stays in each app.
+- [`craft-csv`](crates/csv/README.md): delimited text (CSV, TSV) and SYLK: encoding detection (UTF-8, UTF-16, Windows-1252 or Windows-1256), delimiter sniffing, a record parser with a cap on fields per record, field quoting for writers, and a SYLK (`.slk`) reader with R1C1 formulas rewritten to A1.
 - [`craft-dialogs`](crates/dialogs/README.md): native file and message dialogs that never block
   the event loop: queued requests shown at the end of the frame and answered on a later frame,
   free-standing Open and Folder panels and Save sheets on macOS, case-insensitive filters. What
