@@ -31,6 +31,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-pdf`](crates/pdf/README.md): independently optional PDF parsing, interpretation, rasterization and guarded authoring. Apps retain layout, fonts, editing and export policy; writer-only consumers do not enable the shared reader.
 
 - [`craft-atomic`](crates/atomic/README.md): Crash-safe atomic file writing and replacement with same-directory staging, directory fsync, Apple `F_FULLFSYNC` fallback, transient lock backoff, and fault injection for the Craft suite.
+- [`craft-captions`](crates/captions/README.md): caption and subtitle files behind one neutral
+  model (cues with exact tick times): SubRip, WebVTT, Scenarist SCC, MacCaption MCC, EBU STL and
+  TTML / IMSC1 / DFXP readers and writers, and CEA-608 / CEA-708 byte-pair coding. Carved from
+  FilmCraft.
 - [`craft-cfb`](crates/cfb/README.md): clean-room Compound File Binary ([MS-CFB], OLE structured
   storage) reader and writer: the container of legacy Office files, Outlook messages, encrypted
   OOXML packages and AAF. Bounded on hostile input; what the streams hold stays with each format.
@@ -84,6 +88,12 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   lookup with fallback (`pt-br` → `pt` → English), plurals, language names, the system locale and
   a pseudo locale. The catalogs stay a fully optional build input; apps keep `tl!` and their
   language setting.
+- [`craft-raw`](crates/raw/README.md): camera raw files, the file-format layer, from LightCraft with
+  what PhotoCraft's and FilmCraft's readers added: container parsing and decompression to a neutral
+  raw image (samples, CFA, black and white levels, active area, crop, orientation, colour tags,
+  opcode lists, embedded previews), one Cargo feature per format. DNG reading and writing,
+  Hasselblad 3FR/FFF and Canon CRW (through `craft-crw`) so far; demosaicing and everything after stay with the develop
+  pipeline.
 - [`craft-tiff`](crates/tiff/README.md): TIFF and BigTIFF IFD reader and writer, from LightCraft:
   every field type, the IFD chain, SubIFDs and Exif/GPS/Interop pointer IFDs, maker-note IFDs
   (Canon, Nikon, Sony, Fujifilm, Olympus, Panasonic, Pentax), strip and tile layout. Bounded and
@@ -103,9 +113,13 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   AC-3/E-AC-3, MP1/MP2), streaming and seeking, and packet decoding for any demuxer. See its
   README for formats and features.
 - [`craft-media`](crates/media/README.md): bit-level I/O (`bitstream`), clean-room MP4/MOV
-  (`isobmff`) and Matroska/WebM (`matroska`) demuxers and muxers, an Ogg demuxer (`ogg`), from
+  (`isobmff`) and Matroska/WebM (`matroska`) demuxers and muxers, Ogg (`ogg`) and AVI (`avi`) demuxers, from
   FilmCraft, and an ISO BMFF box reader. Containers only; codecs are in `craft-audio`, and
   video codecs will go in a separate crate.
+- [`craft-lottie`](crates/lottie/README.md): Lottie (Bodymovin) JSON, the wire layer: the document
+  header, animatable properties and keyframes (legacy end values, hold keys, spatial tangents),
+  ease tangents to and from speed and influence, bezier paths, gradients and embedded image data
+  URIs. From EffectCraft; mapping layers and shapes onto a document stays in the app.
 - [`craft-menu`](crates/menu/README.md): an app's menus as a macOS menu bar: the Mac layout
   (app menu, Window, Help, system-key clashes), a platform backend trait, and key equivalents
   fed back to egui as the input egui-winit would have made. Commands and their enabled state
@@ -146,6 +160,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-vectorcraft-format`](crates/vectorcraft-format/README.md): the envelope of VectorCraft's
   `.vectorcraft` file: its members, versions, embedded images and the data after the JSON, with the
   document as a type parameter. The document and its migrations stay in VectorCraft.
+- [`craft-vectordrawable`](crates/vectordrawable/src/lib.rs): Android Vector Drawable writer: a model of
+  paths, groups, clip outlines, strokes and linear, radial and sweep gradients; the XML as Android
+  Studio formats it; and the mapping of a gradient on any affine frame to what a drawable can say.
+  What a drawable cannot draw is the caller's to bake in or leave out. No reader.
 - [`craft-web-api`](crates/web-api/README.md): the page command API every Craft web build offers its page — one
   `window.<app>` shape (`request`, `execute`, `commands`, `docInspect`, `uiInspect`, `screenshot`) over the app's
   JSON control channel.
