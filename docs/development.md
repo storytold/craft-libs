@@ -34,7 +34,14 @@ What still differs, by design: a framework crate's own tests have no eframe in t
 - `--bins` on the gallery: three 1 GB executables nobody opens locally.
 - Workspace-wide builds and tests (`--workspace`, `cargo xtask ci`): 43 minutes for the test build alone. Locally, build the crate you changed and run its trials; the GitHub workflows cover the rest of what they cover.
 
-What CI covers today (.github/workflows): `ui.yml` is the framework's gate: clippy and tests of the seven ui crates with and without `--all-features`, and a wasm check of the facade, on every push that touches them; `theme.yml` covers craft-theme and craft-theme-store; `docs.yml` builds the documentation; and some leaf crates have their own path-filtered workflow (ai-core, atomic, audio, crw, dialogs, doc, docpath, ecproj-format, font-store, i18n, jpeg, keymap, media, pcraft-format, pdf, print, proof, update, vectorcraft-format, web-api, web-host, window). What it does not cover: the domain crates that use the framework (color, imaging, draw, browse, text, pages, table, timeline, review, layers, menu, font-manager, automation), the gallery, the story renderer and the umbrella crate have no workflow, and nothing runs the full workspace build or test. A change in one of those crates is checked by its own `cl test` only.
+What CI covers today (.github/workflows):
+
+- `ui.yml` is the framework's gate: clippy and tests of the seven ui crates (`craft-ui` and the six it re-exports) with and without `--all-features`, their docs, and a wasm check of the facade. It runs on changes under those crates, `craft-ui-macros` and `craft-i18n`. A change to `craft-behavior` or `craft-host` alone does not run it.
+- `theme.yml` covers craft-theme and craft-theme-store, and checks that craft-ui's library still builds.
+- `docs.yml` builds the documentation.
+- Some leaf crates have their own path-filtered workflow: ai-core, atomic, audio, crw, dialogs, doc, docpath, ecproj-format, font-store, i18n, jpeg, keymap, media, pcraft-format, pdf, print, proof, update, vectorcraft-format, web-api, web-host, window.
+
+No workflow runs the tests of: craft-behavior, craft-host and craft-ui-macros; the domain crates that use the framework (automation, browse, color, draw, font-manager, imaging, layers, menu, pages, review, table, text, timeline); cms, font-catalog, fonts-build, platform and quit; the gallery, the story renderer, the benchmark, the test kit, craft-design-lint, craft-win32 and the `craft` facade. Nothing runs the full workspace build or test. A change in one of those crates is checked by its own `cl test` only.
 
 ## Profiles
 
