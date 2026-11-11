@@ -288,15 +288,16 @@ fn film(scale: f32) -> raster::Options {
 /// limit across the page and [`MAX_BANDED_PIXELS`]. Down the page there is no side limit.
 fn banded_scale(w: f32, h: f32, scale: f32) -> f32 {
     let (w, h) = (w.max(1.0), h.max(1.0));
-    let by_area = (MAX_BANDED_PIXELS / (w * h)).sqrt();
+    // The margin keeps the floored size under the cap despite f32 rounding.
+    let cap = MAX_BANDED_PIXELS * 0.999;
+    let by_area = (cap / (w * h)).sqrt();
     let mut s = scale.min(by_area).min(MAX_SIDE as f32 / w);
-    // A side scaled under one pixel still renders one, so the other side alone must fit. The
-    // margin keeps the floored size under the cap despite f32 rounding.
+    // A side scaled under one pixel still renders one, so the other side alone must fit.
     if w * s < 1.0 {
-        s = s.min(MAX_BANDED_PIXELS * 0.999 / h);
+        s = s.min(cap / h);
     }
     if h * s < 1.0 {
-        s = s.min(MAX_BANDED_PIXELS * 0.999 / w);
+        s = s.min(cap / w);
     }
     if s.is_finite() && s > 0.0 { s } else { f32::MIN_POSITIVE }
 }
@@ -586,6 +587,10 @@ endstream endobj
         let s = banded_scale(1.0, 1.0e9, 1.0);
         let [width, height] = [1.0f32, 1.0e9].map(|side| (side * s).floor().max(1.0));
         assert!(width * height <= MAX_BANDED_PIXELS);
+        // A page whose exact area scale rounds up in f32 by a pixel row.
+        let s = banded_scale(17.0, 15_058_824.0, 1.0);
+        let [width, height] = [17.0f32, 15_058_824.0].map(|side| u64::from((side * s).floor().max(1.0) as u32));
+        assert!(width * height <= MAX_BANDED_PIXELS as u64);
     }
 
     #[test]
