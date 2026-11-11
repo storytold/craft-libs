@@ -99,6 +99,7 @@ geometry, transforms, the hierarchy and materials. Not read: FBX 5 and older, 6.
 animation, skin deformers, blend shapes, cameras, lights, NURBS.
 
 Not read (glTF): required geometry extensions (Draco, meshopt) are
+Not read (glTF): sparse accessors and required geometry extensions (Draco, meshopt) are
 `Error::Unsupported`; points, lines, morph targets, tangents and other extensions are passed over.
 Not written: skins, animations, cameras, lights, and `.gltf` with separate files.
 
