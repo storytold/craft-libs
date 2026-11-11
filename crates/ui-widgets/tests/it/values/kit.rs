@@ -54,15 +54,22 @@ pub struct Scrub<'a> {
     common: Common,
     value: Bind<'a, f32>,
     seen: Option<&'a Seen>,
+    /// The measured width follows the value.
+    grows: bool,
 }
 
 impl<'a> Scrub<'a> {
     pub fn new(value: Bind<'a, f32>) -> Self {
-        Scrub { common: Common::new(), value, seen: None }
+        Scrub { common: Common::new(), value, seen: None, grows: false }
     }
 
     pub fn seen(mut self, seen: &'a Seen) -> Self {
         self.seen = Some(seen);
+        self
+    }
+
+    pub fn grows(mut self) -> Self {
+        self.grows = true;
         self
     }
 }
@@ -76,8 +83,9 @@ impl Component for Scrub<'_> {
         PlainStyle::default()
     }
 
-    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
-        AT.size()
+    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        let grown = if self.grows { cx.value().copied().unwrap_or_default() } else { 0.0 };
+        AT.size() + Vec2::new(grown, 0.0)
     }
 
     fn sense(&self) -> Sense {

@@ -1,6 +1,6 @@
 //! The pass core: `CxCore`, `Cx` over it, their stage access and the inherent methods of `Cx`.
 
-use super::parts::Toggle;
+use super::parts::{PartKeys, Toggle};
 use super::pointer::Pointer;
 use super::scroll::ScrollMove;
 use crate::contract::{Component, Resolved, Validity, ValueOf};
@@ -126,9 +126,9 @@ pub struct CxCore<'a> {
     /// The visible range each scroll part moved to this pass, from step 8's results.
     pub(crate) scroll_moves: Vec<ScrollMove>,
     /// The parts that show the value, whose double click resets it like the root's.
-    pub(crate) value_parts: Vec<(PartKey, Option<u64>)>,
+    pub(crate) value_parts: PartKeys,
     /// The value parts that declared `own_reset`.
-    pub(crate) own_reset_parts: Vec<(PartKey, Option<u64>)>,
+    pub(crate) own_reset_parts: PartKeys,
     /// The parts that declared `toggles`, with whether their popup is open as of step 9.
     #[doc(hidden)]
     pub toggles: Vec<Toggle>,

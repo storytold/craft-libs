@@ -63,3 +63,19 @@ fn a_reader_above_the_control_shows_the_dragged_value_in_the_same_frame() {
     assert!(frames.iter().all(|(_, (value, shown))| *shown == Some(*value)), "the reader above shows the dragged value: {frames:?}");
     assert!(frames.iter().all(|(passes, _)| *passes == 2), "the frame runs again once: {frames:?}");
 }
+
+/// A control whose size follows its value, with no other reader, read the old value in its own real run: its edit
+/// runs the frame again, so the frame shows it at the new value's size.
+#[trial]
+fn a_drag_that_resizes_the_control_runs_the_frame_again() {
+    let mut frames = Frames::new();
+    let value = Cell::new(INITIAL);
+    let mut show = |ui: &mut Ui| {
+        let mut held = value.get();
+        Scrub::new(Bind::bound(&mut held)).id_salt("scrub").grows().show_at(ui, AT);
+        value.set(held);
+    };
+    let frames = drag(&mut frames, Pos2::new(AT.left() + 10.0, AT.center().y), &mut show, || value.get());
+    assert!(frames.iter().all(|(passes, _)| *passes == 2), "the frame runs again once: {frames:?}");
+    assert!(frames.windows(2).all(|pair| matches!(pair, [(_, a), (_, b)] if b > a)), "the drag moves the value: {frames:?}");
+}

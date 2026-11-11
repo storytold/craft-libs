@@ -6,6 +6,7 @@ use crate::runtime::frame::{PerViewport, Stamped};
 use crate::runtime::layout_memory::{self, Contribution};
 use craft_behavior::Proposal;
 use egui::{Context, Id, Vec2};
+use smallvec::SmallVec;
 use std::any::TypeId;
 use std::sync::Arc;
 
@@ -36,8 +37,11 @@ struct Read {
     measuring: bool,
     /// The measuring runs the read happened in, outermost first: the measured components' ids.
     runs: Vec<Id>,
-    samples: Vec<Sample>,
+    samples: Samples,
 }
+
+/// The measures a reader made from one read: its ideal size, and its least in a label scope.
+type Samples = SmallVec<[Sample; 2]>;
 
 #[derive(Default)]
 struct Reads {
@@ -73,13 +77,14 @@ pub(crate) fn measuring<R>(ctx: &Context, id: Id, f: impl FnOnce() -> R) -> R {
 
 /// Notes that `reader` read the binding `key`, in a measuring run when `measuring`, and the measures it made from it.
 /// A read in a measuring run is handed forward through layout memory, so a pass that takes the body's kept
-/// transcript instead of running it holds the read as well.
+/// transcript instead of running it holds the read as well. Only a measuring read is attributed to the measuring runs
+/// open at it; nothing asks which runs a real read was inside.
 pub(crate) fn note(ctx: &Context, key: BindKey, reader: Id, measuring: bool, samples: &[Sample]) {
-    let read = MeasuredRead { key, reader, runs: with_runs(ctx, |runs| runs.clone()), samples: samples.to_vec() };
+    let runs = if measuring { with_runs(ctx, |runs| runs.clone()) } else { Vec::new() };
+    let samples = Samples::from_slice(samples);
     if measuring && crate::runtime::measure::active(ctx) {
-        layout_memory::contribute(ctx, Arc::new(read));
+        layout_memory::contribute(ctx, Arc::new(MeasuredRead { key, reader, runs, samples }));
     } else {
-        let MeasuredRead { key, reader, runs, samples } = read;
         with(ctx, |reads| reads.reads.push(Read { key, reader, measuring, runs, samples }));
     }
 }
@@ -90,7 +95,7 @@ struct MeasuredRead {
     reader: Id,
     /// The measuring runs open at the read, outermost first.
     runs: Vec<Id>,
-    samples: Vec<Sample>,
+    samples: Samples,
 }
 
 impl Contribution for MeasuredRead {

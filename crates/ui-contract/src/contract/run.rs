@@ -10,7 +10,7 @@ use super::{
 use super::{Inner, ItemFn};
 use super::{overlay, tooltip};
 use crate::layout::InFlow;
-use crate::primitives::sensing::{self, MemberSpec, PartDecl, RootSpec};
+use crate::primitives::sensing::{self, MemberSpec, RootSpec};
 use crate::primitives::{FaceRecord, PaintRecord, PartResult, face_id};
 use crate::runtime::access::{self, Politeness, Role, SetPosition, scope};
 use crate::runtime::env::{AppValues, Env, EnvView};
@@ -342,8 +342,8 @@ fn blank_core<'a>(
         reveal: None,
         press_cancel: None,
         scroll_moves: Vec::new(),
-        value_parts: Vec::new(),
-        own_reset_parts: Vec::new(),
+        value_parts: Default::default(),
+        own_reset_parts: Default::default(),
         toggles: Vec::new(),
         reset_part: None,
         root_sense: Sense::empty(),
@@ -520,7 +520,7 @@ fn stops_step<C: Component>(at: StopsStep<'_>, hooks: &dyn ShapeHooks<C>, comp: 
 }
 
 /// The key and index of every declared part whose extras `has` accepts.
-fn declared_with(parts: &PartsStep, has: impl Fn(&super::cx::PartExtras) -> bool) -> Vec<(craft_behavior::PartKey, Option<u64>)> {
+fn declared_with(parts: &PartsStep, has: impl Fn(&super::cx::PartExtras) -> bool) -> super::cx::PartKeys {
     parts.decls.iter().filter(|(_, extras)| has(extras)).map(|(decl, _)| (decl.key, decl.index)).collect()
 }
 
@@ -635,7 +635,7 @@ fn run_in_host<C: Component>(p: &mut Pass<'_, '_, C>, ui: &mut Ui, host_at: Opti
     // 7 parts
     p.trace.mark(Step::Parts);
     let flow = Flow::new(rect, rtl);
-    let mut parts = PartsStep { decls: Vec::new(), rovings: Vec::new(), scrolls: Vec::new(), text: super::text::TextStep::default() };
+    let mut parts = PartsStep { decls: Default::default(), rovings: Vec::new(), scrolls: Vec::new(), text: super::text::TextStep::default() };
     if !inert && matches!(C::INPUT, Input::Text | Input::Editor) {
         parts.text.commit_now = focus::commit_now(&ctx) == Some(id);
     }
@@ -680,10 +680,10 @@ fn run_in_host<C: Component>(p: &mut Pass<'_, '_, C>, ui: &mut Ui, host_at: Opti
     }
     // 8 sense
     p.trace.mark(Step::Sense);
-    let decls: Vec<PartDecl> = parts.decls.iter().map(|(decl, _)| decl.clone()).collect();
+    let decls = parts.decls.parts();
     let enabled = resolved.enabled && !inert;
     let sensing::RootResult { mut response, parts: results, press, activation, activated_member, sense: root_sense } =
-        sense_root(ui, member, RootSpec { id, rect, own_sense: own, own: &decls, enabled }, arena);
+        sense_root(ui, member, RootSpec { id, rect, own_sense: own, own: decls, enabled }, arena);
     // A root in an arena's body that is not one of its members lies over the members shown before it, and under those
     // shown after it (8.3).
     if member.is_none()
@@ -700,7 +700,7 @@ fn run_in_host<C: Component>(p: &mut Pass<'_, '_, C>, ui: &mut Ui, host_at: Opti
     if C::ROLE == Role::None && !root_sense.is_empty() {
         access::hide(&ctx, id);
     }
-    cx.core.part_cursors = sensing::hovered_cursor(&decls, &results).into_iter().collect();
+    cx.core.part_cursors = sensing::hovered_cursor(decls, &results).into_iter().collect();
     cx.core.rect = rect;
     cx.core.content_rect = flow.inset(metrics.padding);
     cx.core.flow = flow;
@@ -855,7 +855,7 @@ fn run_in_host<C: Component>(p: &mut Pass<'_, '_, C>, ui: &mut Ui, host_at: Opti
     }
     // The `over` parts are placed before `paint_over`, so the children it shows stack above them (8.3).
     ui.set_clip_rect(outer_clip);
-    sensing::place_over_widgets(ui, id, member, &decls);
+    sensing::place_over_widgets(ui, id, member, decls);
     ui.set_clip_rect(inside);
     comp.paint_over(&mut paint_ui(&mut *ui, env, cx), cx);
     ui.set_clip_rect(outer_clip);

@@ -30,8 +30,46 @@ pub struct PartBuilder<'a> {
     pub(in crate::contract) window: Option<(&'a egui::Context, Id)>,
 }
 
-/// The parts a component declared, each with what it declares beyond the sensing core's `PartDecl`.
-pub(crate) type Decls = Vec<(PartDecl, PartExtras)>;
+/// The parts a component declared, each with what it declares beyond the sensing core's `PartDecl`. The two lists
+/// stand side by side, so the sensing step borrows the `PartDecl`s as they are.
+#[derive(Default)]
+pub(crate) struct Decls {
+    parts: Vec<PartDecl>,
+    extras: Vec<PartExtras>,
+}
+
+impl Decls {
+    fn push(&mut self, decl: PartDecl) -> (&mut PartDecl, &mut PartExtras) {
+        self.parts.push(decl);
+        self.extras.push(PartExtras::default());
+        (self.parts.last_mut().expect("just pushed"), self.extras.last_mut().expect("just pushed"))
+    }
+
+    /// The sensing core's declarations, in declaration order.
+    pub(crate) fn parts(&self) -> &[PartDecl] {
+        &self.parts
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.parts.is_empty()
+    }
+
+    pub(crate) fn iter(&self) -> std::iter::Zip<std::slice::Iter<'_, PartDecl>, std::slice::Iter<'_, PartExtras>> {
+        self.parts.iter().zip(&self.extras)
+    }
+}
+
+impl<'a> IntoIterator for &'a Decls {
+    type Item = (&'a PartDecl, &'a PartExtras);
+    type IntoIter = std::iter::Zip<std::slice::Iter<'a, PartDecl>, std::slice::Iter<'a, PartExtras>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+/// The parts of one kind a component declared (its value parts, its reset parts): seldom more than two.
+pub(crate) type PartKeys = smallvec::SmallVec<[(PartKey, Option<u64>); 2]>;
 
 /// What a part declares beyond the sensing core's `PartDecl`.
 #[derive(Clone, Debug, Default)]
@@ -257,9 +295,7 @@ impl<C: Component> PartsCx<'_, C> {
         {
             decl.flags |= crate::contract::items::rows::cell_flags(self.measure.ui.ctx(), self.measure.id, column);
         }
-        let at = self.decls.len();
-        self.decls.push((decl, PartExtras::default()));
-        let (decl, declared) = &mut self.decls[at];
+        let (decl, declared) = self.decls.push(decl);
         let window = (!self.measure.ui.is_sizing_pass()).then(|| (self.measure.ui.ctx(), self.measure.id));
         PartBuilder { decl, declared, window }
     }

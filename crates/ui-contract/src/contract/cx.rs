@@ -26,7 +26,7 @@ pub(crate) use edit::gesture_key;
 pub use focus::Focus;
 pub use item::{ItemCx, ItemOpener};
 pub use measure::MeasureCx;
-pub(crate) use parts::{Decls, PartExtras, Toggle};
+pub(crate) use parts::{Decls, PartExtras, PartKeys, Toggle};
 pub use parts::{PartBuilder, PartsCx};
 pub use pointer::Pointer;
 pub(crate) use pointer::write_cursor;

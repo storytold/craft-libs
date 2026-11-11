@@ -20,6 +20,7 @@ use craft_behavior::{
 use craft_keymap::Mods;
 use craft_theme::Flags;
 use egui::{Context, Id, Pos2, Rect, Response, Ui, ViewportId};
+use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -133,7 +134,7 @@ pub(crate) struct MemberDecl {
     pub id: Id,
     pub rect: Rect,
     pub sense: Sense,
-    pub parts: Vec<PartDecl>,
+    pub parts: SmallVec<[PartDecl; 4]>,
     /// The shapes lie in the body layer's space; `join` sets it.
     pub local: bool,
     /// The stack position of the member's `over` parts: just above the member until its body has run, then above
@@ -143,8 +144,8 @@ pub(crate) struct MemberDecl {
 
 impl MemberDecl {
     /// A member `id` over `rect` sensing `sense`, with `parts`.
-    pub(crate) fn new(id: Id, rect: Rect, sense: Sense, parts: Vec<PartDecl>) -> Self {
-        MemberDecl { id, rect, sense, parts, local: false, over_at: 0 }
+    pub(crate) fn new(id: Id, rect: Rect, sense: Sense, parts: &[PartDecl]) -> Self {
+        MemberDecl { id, rect, sense, parts: parts.iter().cloned().collect(), local: false, over_at: 0 }
     }
 }
 
@@ -246,8 +247,11 @@ fn with_arena_in<R>(ctx: &Context, viewport: ViewportId, arena: ArenaId, pass_nr
 
 fn rotate(state: &mut ArenaState, pass_nr: u64) {
     if state.pass != pass_nr {
-        state.previous = std::mem::take(&mut state.members);
-        state.previous_own = std::mem::take(&mut state.own);
+        // Last pass's lists become `previous`; the older lists' buffers take this pass's registrations.
+        std::mem::swap(&mut state.previous, &mut state.members);
+        state.members.clear();
+        std::mem::swap(&mut state.previous_own, &mut state.own);
+        state.own.clear();
         state.previous_own_over_at = state.own_over_at;
         state.own_over_at = u32::MAX;
         state.previous_union_sense = std::mem::take(&mut state.union_sense);
@@ -261,8 +265,8 @@ fn own_part_shape(part: &PartDecl, root: Id, position: u32, target: f32) -> Shap
 }
 
 /// The root's own parts but the `over` ones, at position 0.
-fn own_shapes(own: &[PartDecl], root: Id, target: f32) -> Vec<Shape<Id>> {
-    own.iter().filter(|part| !part.over).map(|part| own_part_shape(part, root, 0, target)).collect()
+fn own_shapes(own: &[PartDecl], root: Id, target: f32) -> impl Iterator<Item = Shape<Id>> + '_ {
+    own.iter().filter(|part| !part.over).map(move |part| own_part_shape(part, root, 0, target))
 }
 
 /// The root's own `over` parts, at the position the owner left them.
@@ -286,7 +290,7 @@ fn member_part_shape(member: &MemberDecl, part: &PartDecl, position: u32, target
 }
 
 /// The member's root shape and its parts but the `over` ones, at its stack position.
-fn member_shapes(member: &MemberDecl, position: u32, target: f32) -> Vec<Shape<Id>> {
+fn member_shapes(member: &MemberDecl, position: u32, target: f32) -> SmallVec<[Shape<Id>; 4]> {
     let root = (!member.sense.is_empty())
         .then(|| Shape::new(member.rect.into(), member.sense, member.id, None, HitPriority::BODY, position).local(member.local));
     let parts = member.parts.iter().filter(|part| !part.over).map(|part| member_part_shape(member, part, position, target));
@@ -302,7 +306,7 @@ fn member_over_shapes(member: &MemberDecl, target: f32) -> impl Iterator<Item = 
 /// above the members its body showed, and the own `over` parts at their position among them.
 fn candidates(state: &ArenaState, target: f32) -> Vec<Shape<Id>> {
     let root = state.root.map_or(Id::NULL, |root| root.id);
-    let mut shapes = own_shapes(&state.previous_own, root, target);
+    let mut shapes: Vec<Shape<Id>> = own_shapes(&state.previous_own, root, target).collect();
     for (at, member) in state.previous.iter().enumerate() {
         shapes.extend(member_shapes(member, member_position(at), target));
         shapes.extend(member_over_shapes(member, target));
@@ -462,15 +466,15 @@ pub(crate) fn sense_root(ui: &Ui, spec: RootSpec<'_>) -> RootResult {
         }
     }
     widgets.extend(over_parts(spec.own).map(|part| over_widget(spec.id, part)));
-    let mut shapes = own_shapes(spec.own, spec.id, read.target());
-    if !spec.own_sense.is_empty() {
-        shapes.push(Shape::new(spec.rect.into(), spec.own_sense, spec.id, None, HitPriority::new(HitLevel::Background, 0), 0));
-    }
+    let background = (!spec.own_sense.is_empty())
+        .then(|| Shape::new(spec.rect.into(), spec.own_sense, spec.id, None, HitPriority::new(HitLevel::Background, 0), 0));
+    pointer::record_widgets_in(ctx, read.viewport, layer, spec.id, &widgets, sense.contains(Sense::CLICK));
     // The parts last pass registered, which this pass's results read.
     let known = with_arena_in(ctx, read.viewport, arena, read.pass_nr, |state| {
-        state.own = spec.own.to_vec();
+        state.own.clear();
+        state.own.extend_from_slice(spec.own);
         state.root = Some(RootInfo { id: spec.id, rect: spec.rect, own_sense: spec.own_sense });
-        state.widgets = widgets.clone();
+        state.widgets = widgets;
         state.last_layer = Some(layer);
         state.last_sense = sense;
         // A root that stepped early while it was not yet known to be inert: an open press ends as the disabled root's
@@ -480,8 +484,7 @@ pub(crate) fn sense_root(ui: &Ui, spec: RootSpec<'_>) -> RootResult {
         }
         known_in(state, spec.id)
     });
-    pointer::record_shapes_in(ctx, read.viewport, layer, spec.id, shapes);
-    pointer::record_widgets_in(ctx, read.viewport, layer, spec.id, &widgets, sense.contains(Sense::CLICK));
+    pointer::record_shapes_in(ctx, read.viewport, layer, spec.id, own_shapes(spec.own, spec.id, read.target()).chain(background));
     let mut response = response;
     let outcome = outcome_in(ctx, &read, arena, layer, spec.enabled, sense);
     response::keep_press_flags(&mut response, outcome.target.is_some_and(|target| target.owner == spec.id));
@@ -586,7 +589,7 @@ pub(crate) fn sense_member(ui: &Ui, arena: ArenaId, spec: MemberSpec<'_>) -> Mem
     let (pointer_pos, target, mods, sample) = pointer::with_frame(ctx, |frame, hover| {
         (hover, frame.map_or(0.0, |frame| frame.target), frame.map_or(Mods::NONE, |frame| frame.mods), frame.and_then(|frame| frame.sample))
     });
-    let mut decl = MemberDecl::new(spec.id, spec.rect, spec.sense, spec.parts.to_vec());
+    let mut decl = MemberDecl::new(spec.id, spec.rect, spec.sense, spec.parts);
     let presses =
         spec.parts.iter().filter(|part| !part.over).fold(spec.sense, |sense, part| sense | part.sense).intersection(Sense::CLICK | Sense::DRAG);
     let (local, shapes, outcome, known, covers) = with_arena(ctx, arena, pass_nr, |state| {

@@ -8,7 +8,7 @@
 //! (or an instance does, through `Component::shows_label`): the label is then its only name and no text paints it.
 //! A component that paints its label shows it whole as the tooltip when the paint cut it.
 
-use super::cx::PartExtras;
+use super::cx::{Decls, PartExtras};
 use super::overlay::{self, Anchor, Layer, Overlay, Place};
 use super::{Common, Component, Cx, Props as _, Show, TipFn, Tooltip, TooltipAt, TooltipSpec, TooltipWhen};
 use crate::primitives::sensing::PartDecl;
@@ -52,7 +52,7 @@ pub(crate) struct TipIn<'a> {
     /// The rich content closure of `show_with_tip`.
     pub rich: Option<TipFn<'a>>,
     /// The parts the component declared this pass, with their tooltips.
-    pub parts: &'a [(PartDecl, PartExtras)],
+    pub parts: &'a Decls,
     /// The instance's `shows_label` fact.
     pub shows_label: bool,
 }
@@ -104,7 +104,7 @@ struct PartTip {
 }
 
 /// The part whose tooltip shows: the hovered one with a tooltip, else the keyboard's active part.
-fn part_tip<C: Component>(cx: &Cx<'_, C>, parts: &[(PartDecl, PartExtras)]) -> Option<PartTip> {
+fn part_tip<C: Component>(cx: &Cx<'_, C>, parts: &Decls) -> Option<PartTip> {
     let core = &cx.core;
     let tip = |decl: &PartDecl, extras: &PartExtras, hovered: bool| {
         let part = PartRef { key: decl.key, index: decl.index };

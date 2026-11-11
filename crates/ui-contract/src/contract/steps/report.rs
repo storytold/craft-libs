@@ -1,10 +1,9 @@
 //! Step 16, report: the AccessKit node and its sub-nodes.
 
 use super::stops::takes_focus;
-use crate::contract::cx::{CxCore, PartExtras};
+use crate::contract::cx::{CxCore, Decls};
 use crate::contract::{Component, Cx, Validity};
 use crate::primitives::FaceRecord;
-use crate::primitives::sensing::PartDecl;
 use crate::runtime::access::{self, Access, FaceFacts, Own, Politeness, Role, SetPosition, SubDecl, SubNode, scope};
 use crate::runtime::commands::{self, ResolvedCommand};
 use crate::runtime::env::{Label, Message};
@@ -18,7 +17,7 @@ use egui::Id;
 pub(crate) struct ReportIn<'a> {
     /// The node step 8 created, `None` for a role with no node or while AccessKit is off.
     pub node: bool,
-    pub decls: &'a [(PartDecl, PartExtras)],
+    pub decls: &'a Decls,
     pub sense: Sense,
     /// The container's `ContainerProps.live`.
     pub live: Option<Politeness>,
