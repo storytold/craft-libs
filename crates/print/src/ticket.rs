@@ -34,12 +34,44 @@ pub(crate) fn ticket_xml(job: &Job, landscape: bool) -> String {
     ticket_xml_for_duplex(job, landscape, false)
 }
 
+/// [`ticket_xml_with`] asking for grey as `Monochrome`, as every ticket did before drivers with
+/// only `Grayscale` were asked for that.
+#[cfg(test)]
+pub(crate) fn ticket_xml_for_duplex(job: &Job, landscape: bool, document_only: bool) -> String {
+    ticket_xml_with(job, landscape, document_only, Grey::Monochrome)
+}
+
+/// The Print Schema option a ticket asks for grey output with (`PageOutputColor`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Grey {
+    Monochrome,
+    Grayscale,
+}
+
+/// The grey option to ask this driver for: `Grayscale` when its PrintCapabilities list that and
+/// not `Monochrome` (Windows drops an option the driver doesn't list when it validates the
+/// ticket, and the driver's default, colour, comes back); `Monochrome` otherwise, also when the
+/// capabilities can't be read.
+pub(crate) fn grey_option(capabilities_xml: &str) -> Grey {
+    let Ok(document) = roxmltree::Document::parse(capabilities_xml) else { return Grey::Monochrome };
+    let root = document.root_element();
+    let offers = |option: &str| {
+        root.children()
+            .filter(|n| n.has_tag_name((NS_PSF, "Feature")) && named(*n, "PageOutputColor"))
+            .flat_map(|f| f.children().filter(|n| n.has_tag_name((NS_PSF, "Option"))))
+            .any(|n| named(n, option))
+    };
+    if offers("Grayscale") && !offers("Monochrome") { Grey::Grayscale } else { Grey::Monochrome }
+}
+
 /// Build the job's PrintTicket XML with orientation, copies, collation and no scaling.
 /// `document_only` selects `DocumentDuplex`; otherwise an explicit duplex choice uses
 /// `JobDuplexAllDocumentsContiguously`. With no duplex choice, neither feature is emitted.
-/// Paper is added separately by the caller. The caller reads capabilities before choosing the
-/// feature and returns an error when those capabilities cannot be read.
-pub(crate) fn ticket_xml_for_duplex(job: &Job, landscape: bool, document_only: bool) -> String {
+/// Grayscale asks for `grey` ([`grey_option`]); colour asks for nothing, so the driver's own
+/// colour setting stands. Paper is added separately by the caller. The caller reads
+/// capabilities before choosing the feature and returns an error when those capabilities
+/// cannot be read.
+pub(crate) fn ticket_xml_with(job: &Job, landscape: bool, document_only: bool, grey: Grey) -> String {
     let orientation = if landscape { "Landscape" } else { "Portrait" };
     let duplex = match job.duplex {
         None => String::new(),
@@ -56,7 +88,11 @@ pub(crate) fn ticket_xml_for_duplex(job: &Job, landscape: bool, document_only: b
     let collate = if job.collate { "Collated" } else { "Uncollated" };
     // Only grayscale is asked for. Without it the ticket says nothing about colour, so a black and
     // white chosen in the driver's own preferences (Properties…) still applies (storytold/pdfcraft#2422).
-    let color = if job.grayscale { "\n <psf:Feature name=\"psk:PageOutputColor\"><psf:Option name=\"psk:Monochrome\"/></psf:Feature>" } else { "" };
+    let color = match (job.grayscale, grey) {
+        (false, _) => "",
+        (true, Grey::Monochrome) => "\n <psf:Feature name=\"psk:PageOutputColor\"><psf:Option name=\"psk:Monochrome\"/></psf:Feature>",
+        (true, Grey::Grayscale) => "\n <psf:Feature name=\"psk:PageOutputColor\"><psf:Option name=\"psk:Grayscale\"/></psf:Feature>",
+    };
     let copies = job.copies.clamp(1, 999);
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -225,6 +261,9 @@ pub(crate) struct Offered {
     pub duplex: Option<bool>,
     /// The colour feature (`PageOutputColor`) has an option other than Monochrome and Grayscale.
     pub color: Option<bool>,
+    /// The colour feature has a grey option (Monochrome or Grayscale). A driver without one may
+    /// still have a vendor's own grey setting, which a ticket can't ask for by name.
+    pub grey: Option<bool>,
     /// The collation feature (`DocumentCollate`) has a Collated option.
     pub collate: Option<bool>,
 }
@@ -247,6 +286,7 @@ pub(crate) fn offered(capabilities_xml: &str) -> Offered {
         duplex: Some(options("JobDuplexAllDocumentsContiguously").chain(options("DocumentDuplex")).next().is_some()),
         // A vendor's own option might be colour, so only the two schema keywords count as not.
         color: Some(options("PageOutputColor").any(|n| !named(n, "Monochrome") && !named(n, "Grayscale"))),
+        grey: Some(options("PageOutputColor").any(|n| named(n, "Monochrome") || named(n, "Grayscale"))),
         collate: Some(options("DocumentCollate").any(|n| named(n, "Collated"))),
     }
 }
@@ -348,7 +388,14 @@ pub(crate) fn verify_job_options(xml: &str, job: &Job, pages: usize, offered: Of
         }
     }
     let monochrome_only = offered.color == Some(false);
-    if job.grayscale && !monochrome_only && !option("PageOutputColor").is_some_and(|n| named(n, "Monochrome") || named(n, "Grayscale")) {
+    // Pages the caller has already made grey print grey whatever the driver does with colour, so
+    // grey on the driver is best-effort: a driver with no grey option (Microsoft Print to PDF), or
+    // only a vendor's own (storytold/pdfcraft#5806), still prints.
+    if job.grayscale
+        && !job.grey_pages
+        && !monochrome_only
+        && !option("PageOutputColor").is_some_and(|n| named(n, "Monochrome") || named(n, "Grayscale"))
+    {
         return Err(refused("grayscale"));
     }
     Ok(())
@@ -945,7 +992,7 @@ mod tests {
     #[test]
     fn a_driver_without_a_duplex_feature_prints_one_side_and_is_not_refused_for_it() {
         let offered = |duplex| offered(&capabilities_xml(duplex, COLOR, COLLATE));
-        assert_eq!(offered(true), Offered { duplex: Some(true), color: Some(true), collate: Some(true) });
+        assert_eq!(offered(true), Offered { duplex: Some(true), color: Some(true), grey: Some(true), collate: Some(true) });
         assert_eq!(offered(false).duplex, Some(false));
         assert_eq!(super::offered("<psf:PrintCapabilities xmlns:psf=\"x\"/>"), Offered::default(), "another namespace is not capabilities");
         assert_eq!(super::offered("<not xml"), Offered::default());
@@ -1004,6 +1051,57 @@ mod tests {
         assert!(verify_job_options(&color, &gray, 3, caps(COLOR)).is_err());
         assert!(verify_job_options(&dropped, &gray, 3, caps(COLOR)).is_err());
         assert!(verify_job_options(&dropped, &gray, 3, Offered::default()).is_err(), "unknown stays strict");
+    }
+
+    /// storytold/pdfcraft#5806: a driver whose only grey option is `Grayscale` is asked for that,
+    /// since Windows drops a `Monochrome` it doesn't list and the driver's colour comes back.
+    #[test]
+    fn the_ticket_asks_for_the_grey_option_the_driver_lists() {
+        let grey = |colors: &[&str]| grey_option(&capabilities_xml(true, colors, COLLATE));
+        assert_eq!(grey(&["psk:Color", "psk:Grayscale"]), Grey::Grayscale);
+        assert_eq!(grey(&["psk:Color", "psk:Monochrome"]), Grey::Monochrome);
+        assert_eq!(grey(&["psk:Color", "psk:Grayscale", "psk:Monochrome"]), Grey::Monochrome, "both: as before");
+        assert_eq!(grey(&["psk:Color"]), Grey::Monochrome, "none to ask for: as before");
+        assert_eq!(grey(&["psk:Color", "ns0000:Grayscale"]), Grey::Monochrome, "a vendor's option is not the schema's");
+        assert_eq!(grey_option("<not xml"), Grey::Monochrome);
+
+        let gray = Job { grayscale: true, ..Job::default() };
+        let asked = ticket_xml_with(&gray, false, false, Grey::Grayscale);
+        assert!(asked.contains("<psf:Option name=\"psk:Grayscale\"/>") && !asked.contains("psk:Monochrome"));
+        assert_eq!(ticket_xml_with(&gray, false, false, Grey::Monochrome), ticket_xml(&gray, false));
+        assert!(!ticket_xml_with(&Job::default(), false, false, Grey::Grayscale).contains("PageOutputColor"), "colour asks nothing");
+        // The driver keeps it, and the check reads it back.
+        assert!(verify_job_options(&asked, &gray, 3, Offered::default()).is_ok());
+    }
+
+    /// storytold/pdfcraft#5806: pages the caller has already made grey print on a driver with no
+    /// grey option (Microsoft Print to PDF lists only Color; an HP driver has only its own
+    /// `ns0000:JobHPPrintInGrayScale`), and on one that dropped the request. Without them, such a
+    /// driver is still refused, since the pages would come out in colour.
+    #[test]
+    fn grey_pages_print_on_a_driver_that_has_no_grey_option() {
+        let caps = |colors: &[&str]| offered(&capabilities_xml(true, colors, COLLATE));
+        assert_eq!(caps(&["psk:Color"]).grey, Some(false));
+        assert_eq!(caps(&["psk:Color", "ns0000:Gray"]).grey, Some(false), "a vendor's option can't be asked for by name");
+        assert_eq!(caps(COLOR).grey, Some(true));
+        assert_eq!(caps(&["psk:Grayscale"]).grey, Some(true));
+        assert_eq!(super::offered("<not xml").grey, None);
+
+        let gray = Job { grayscale: true, ..Job::default() };
+        let grey_pages = Job { grey_pages: true, ..gray.clone() };
+        // What such a driver returns: colour, or nothing about colour.
+        let color = ticket_xml(&gray, false).replace("psk:Monochrome", "psk:Color");
+        let dropped = without(&ticket_xml(&gray, false), "PageOutputColor");
+        for xml in [&color, &dropped] {
+            assert!(verify_job_options(xml, &gray, 3, caps(&["psk:Color"])).is_err(), "colour pages are refused");
+            assert!(verify_job_options(xml, &grey_pages, 3, caps(&["psk:Color"])).is_ok(), "grey pages print");
+            assert!(verify_job_options(xml, &grey_pages, 3, Offered::default()).is_ok(), "unread capabilities too");
+            assert!(verify_job_options(xml, &grey_pages, 3, caps(COLOR)).is_ok(), "and a driver that dropped it");
+        }
+        // The other options are still checked.
+        let copies = Job { copies: 2, ..grey_pages.clone() };
+        assert!(verify_job_options(&color, &copies, 3, caps(&["psk:Color"])).is_err(), "copy count");
+        assert!(!Job::default().grey_pages, "off unless the caller says so");
     }
 
     #[test]

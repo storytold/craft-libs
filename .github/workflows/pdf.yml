@@ -12,8 +12,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: shared-pdf-${{ github.ref }}
-  cancel-in-progress: true
+  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
+  # run (main, manual) gets its own group: it is never cancelled or replaced while queued, so it
+  # always gets to save the cache.
+  group: shared-pdf-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   native:
@@ -27,6 +30,10 @@ jobs:
     env:
       RUSTFLAGS: --cfg craft_pdf_unicode_fixtures
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
@@ -34,6 +41,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-pdf
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -51,11 +59,16 @@ jobs:
     name: PDF vendored contracts
     runs-on: ubuntu-latest
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-pdf-backends
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: bash scripts/test-pdf-backends.sh
   wasm:
     name: PDF WASM runtime
@@ -64,6 +77,10 @@ jobs:
       RUSTFLAGS: --cfg craft_pdf_unicode_fixtures
       CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
@@ -71,6 +88,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-pdf-wasm
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -80,17 +98,29 @@ jobs:
           python scripts/test-fetch-pdf-test-fonts.py
           python scripts/fetch-pdf-test-fonts.py "$RUNNER_TEMP/craft-pdf-test-fonts"
           echo "CRAFT_PDF_TEST_FONT_DIR=$RUNNER_TEMP/craft-pdf-test-fonts" >> "$GITHUB_ENV"
-      - name: Install the matching WASM test runner
+      - name: Read the wasm-bindgen version from Cargo.lock
+        id: wasm-bindgen
         shell: bash
         run: |
           runner_version=$(python3 -c 'import tomllib; d=tomllib.load(open("Cargo.lock", "rb")); print(next(p["version"] for p in d["package"] if p["name"] == "wasm-bindgen"))')
-          cargo install wasm-bindgen-cli --version "$runner_version" --locked
+          echo "version=$runner_version" >> "$GITHUB_OUTPUT"
+      - name: Install the matching WASM test runner
+        # A prebuilt, checksum-verified binary instead of building it from source on every run.
+        # A version the pinned action does not list yet falls back to `cargo install --locked`.
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+        with:
+          tool: wasm-bindgen@${{ steps.wasm-bindgen.outputs.version }}
+          fallback: cargo-install
       - run: cargo test -p craft-pdf --all-features --locked --target wasm32-unknown-unknown
       - run: cargo test --manifest-path crates/pdf/read-only-contract/Cargo.toml --locked --target wasm32-unknown-unknown
   plate-test:
     name: Plate tests and craft-prepress
     runs-on: ubuntu-latest
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
@@ -98,6 +128,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-plate-test
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
