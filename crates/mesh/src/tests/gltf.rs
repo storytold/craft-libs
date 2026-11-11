@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 
 use super::hammer;
-use crate::gltf::{MAX_ZERO_COMPONENTS, base64_decode, glb_container, read, split_glb, uri_decode, write_glb};
+use crate::gltf::{MAX_UV_SETS, MAX_ZERO_COMPONENTS, base64_decode, glb_container, read, split_glb, uri_decode, write_glb};
 use crate::{
     AlphaMode, ChannelPath, Corner, Error, IDENTITY, Image, Interpolation, LightKind, Limits, Material, Mesh, NONE, Node, Part, Projection, Scene,
     TextureRef, Wrap, face_normal, no_external, transform_point,
@@ -315,6 +315,20 @@ fn primitives_of_a_mesh_share_its_pools() {
     let short = b.f32s(&[0.0, 0.0, 1.0], "VEC3", 3);
     let s = parse(&one_mesh(&b, json!({ "attributes": { "POSITION": p, "NORMAL": short } }))).unwrap();
     assert!(s.meshes[0].normals.is_empty());
+}
+
+#[test]
+fn uv_sets_past_the_bound_are_not_read() {
+    let mut b = B::default();
+    let p = b.f32s(&QUAD[..9], "VEC3", 3);
+    let t = b.f32s(&[0.5; 6], "VEC2", 2);
+    let mut attrs = json!({ "POSITION": p });
+    for k in 0..MAX_UV_SETS + 2 {
+        attrs[format!("TEXCOORD_{k}")] = json!(t);
+    }
+    let s = parse(&one_mesh(&b, json!({ "attributes": attrs }))).unwrap();
+    assert_eq!(s.meshes[0].uv_sets.len(), MAX_UV_SETS);
+    s.validate().unwrap();
 }
 
 #[test]

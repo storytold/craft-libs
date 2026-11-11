@@ -103,6 +103,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   (app menu, Window, Help, system-key clashes), a platform backend trait, and key equivalents
   fed back to egui as the input egui-winit would have made. Commands and their enabled state
   stay in each app.
+- [`craft-mesh`](crates/mesh/README.md): 3D mesh file formats behind one neutral model (meshes
+  of polygons with per-corner indices, materials, a node hierarchy): STL, OBJ with MTL, PLY and
+  glTF 2.0 / GLB, one feature each. Readers are bounded by `Limits`, never open a file themselves
+  and never panic. Carved from EffectCraft, SolidCraft, TextureCraft and MaterialCraft.
 - [`craft-pcraft-format`](crates/pcraft-format/README.md): the envelope of PhotoCraft's `.pcraft`
   bundle: `Manifest<D>` with the document as a type parameter, `TileRef`, the entry paths, the
   manifest decode limits and the migration runner. The document model stays in PhotoCraft.
