@@ -128,6 +128,24 @@ fn a_settled_form_rows_card_runs_one_pass_per_frame() {
     }
 }
 
+/// A settled card repaints its last run: a settled frame of the Slider cards runs no Slider and no card chrome, and still
+/// shows the Maximum story's value text.
+#[trial]
+fn a_settled_overview_card_runs_no_component() {
+    let mut gallery = gallery_filtered("Controls", "Slider");
+    let mut fixture = Fixture::new(move |ui| gallery.ui(ui));
+    fixture.room(Vec2::new(1400.0, 900.0)).settle();
+    for frame in 0..4 {
+        fixture.idle(1);
+        let runs = last_pass_runs(fixture.ctx());
+        // Type names carry their generics: the path before them names the component.
+        let named = |ty: &str, name: &str| ty.split('<').next().is_some_and(|path| path.ends_with(name));
+        let card: Vec<_> = runs.iter().filter(|(ty, _)| ["::Slider", "::Panel", "::TitleRow"].iter().any(|name| named(ty, name))).collect();
+        assert!(card.is_empty(), "settled frame {frame} ran the card: {card:?}");
+        assert!(painted(&fixture, "100.0"), "settled frame {frame} shows the Maximum story's value text");
+    }
+}
+
 /// The registered type name of the component listed as `name`.
 fn type_of(name: &str) -> &'static str {
     Catalog::linked().components.iter().find(|component| component.name == name).unwrap_or_else(|| panic!("{name} is listed")).type_name

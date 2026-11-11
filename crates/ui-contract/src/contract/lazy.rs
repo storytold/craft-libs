@@ -66,6 +66,10 @@ impl Lazy {
     /// - the frame or the one before had input other than pointer motion, the app asked for a repaint, or a given
     ///   value was edited: the framework cannot see which children show plain app data, so every child runs then;
     /// - its last run showed an overlay or painted on another layer.
+    ///
+    /// A bound value is known by where it lives, so a settled reader needs a binding that stays in place between
+    /// frames: a value copied into a local each frame and bound there is a new place each frame, and an edit of it
+    /// does not reach the reader until the next frame with input.
     pub fn settles(mut self, settles: bool) -> Lazy {
         self.settles = settles;
         self

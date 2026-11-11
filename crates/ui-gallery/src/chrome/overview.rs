@@ -143,8 +143,9 @@ pub(super) fn on_background(ui: &mut Ui, key: &str, mut add: impl FnMut(&mut Ui,
         .show(ui, &mut ());
 }
 
-/// The cards in one or two columns, scrolling vertically; each row is as tall as its tallest card. A card out of view
-/// does not run (`Lazy`); the card of the component `reveal` names glides to the top of the view. The selected card of
+/// The cards in one or two columns, scrolling vertically; each row is as tall as its tallest card. A row out of view
+/// does not run (`Lazy`), and a settled card in view repaints its last run (`Lazy::settles`); the card of the component
+/// `reveal` names glides to the top of the view. The selected card of
 /// `tab` is inspected while the inspector is on. The cards report into `reported`.
 pub(super) fn grid(
     ui: &mut Ui,
@@ -171,11 +172,15 @@ pub(super) fn grid(
             Lazy::new((generation, columns, keys), estimate).reveal(revealed).show(ui, |ui| {
                 Grid::new(if columns == 1 { ONE } else { TWO }).gap(Gap::CardColumn).fill_width().show(ui, |ui, _| {
                     for (at, spec) in chunk.iter().enumerate() {
-                        let stories = spec.card_stories();
-                        let mut card = spec.card(&stories, format!("{}-{generation}", spec.key), room);
-                        card.inspect = p.inspect.of(tab, spec.selected);
-                        let events = card.show(ui, p.cells);
-                        reported.push(Reported { spec: row * columns + at, events });
+                        // A settled card repaints its last run; a card that does not run reports nothing, as it took
+                        // no press and ran no command.
+                        Lazy::new((generation, spec.key.as_str()), spec.estimate()).settles(true).show(ui, |ui| {
+                            let stories = spec.card_stories();
+                            let mut card = spec.card(&stories, format!("{}-{generation}", spec.key), room);
+                            card.inspect = p.inspect.of(tab, spec.selected);
+                            let events = card.show(ui, p.cells);
+                            reported.push(Reported { spec: row * columns + at, events });
+                        });
                     }
                 });
             });
