@@ -112,3 +112,58 @@ fn the_preview_steps_with_the_arrow_and_page_keys_from_a_footer_button() {
     assert_eq!(*at.borrow(), 2, "Left steps back");
     assert_eq!(fixture.focused_stop(), button, "the keys leave the focus where it was");
 }
+
+/// Tabs to the view's canvas.
+fn focus_canvas(fixture: &mut Fixture) {
+    for _ in 0..4 {
+        if fixture.focused_role().is_some_and(|role| role.nudge) {
+            return;
+        }
+        fixture.key(Key::Tab, Modifiers::NONE);
+    }
+    assert!(fixture.focused_role().is_some_and(|role| role.nudge), "Tab reaches the view's canvas");
+}
+
+#[trial]
+fn page_keys_turn_and_go_to_the_ends_in_a_view_that_is_not_continuous() {
+    let (mut fixture, state, _) = layout_rig(
+        5,
+        state_with(|s| {
+            s.continuous = false;
+            s.fit = Fit::Page;
+        }),
+    );
+    focus_canvas(&mut fixture);
+    fixture.key(Key::PageDown, Modifiers::NONE);
+    fixture.idle(1);
+    assert_eq!(state.borrow().current, 1, "Page Down turns one page");
+    fixture.key(Key::End, Modifiers::NONE);
+    fixture.idle(1);
+    assert_eq!(state.borrow().current, 4, "End goes to the last page");
+    fixture.key(Key::Home, Modifiers::NONE);
+    fixture.idle(1);
+    assert_eq!(state.borrow().current, 0, "Home goes to the first page");
+}
+
+#[trial]
+fn arrows_go_to_the_next_page_and_scroll_a_line_in_a_continuous_view() {
+    let (mut fixture, state, _) = layout_rig(5, state_with(|s| s.fit = Fit::Page));
+    focus_canvas(&mut fixture);
+    fixture.key(Key::ArrowRight, Modifiers::NONE);
+    fixture.idle(1);
+    assert_eq!(state.borrow().current, 1, "Right goes to the next page while the page fits the width");
+    let before = state.borrow().offset.1;
+    fixture.key(Key::ArrowDown, Modifiers::NONE);
+    fixture.idle(1);
+    assert!(state.borrow().offset.1 > before, "Down scrolls forward");
+}
+
+#[trial]
+fn zoom_in_zooms_a_focused_view_with_animated_zoom() {
+    let (mut fixture, state, _) = layout_rig(3, PageViewState::default());
+    focus_canvas(&mut fixture);
+    let before = state.borrow().zoom;
+    fixture.key(Key::Equals, Modifiers::COMMAND);
+    fixture.settle();
+    assert!(state.borrow().zoom > before, "Zoom In zooms: {before} -> {}", state.borrow().zoom);
+}

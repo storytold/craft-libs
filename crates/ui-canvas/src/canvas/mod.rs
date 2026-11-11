@@ -57,7 +57,7 @@ pub(crate) use rulers::LABEL_STEP_MIN;
 pub use rulers::{NUDGE, NUDGE_FAR};
 pub use snap::{Snap, canvas_snap};
 pub(crate) use space::context_menu;
-pub use space::{BackgroundPress, CanvasRulers, context_click};
+pub use space::{BackgroundPress, BodyKeys, CanvasRulers, context_click};
 // End of l4d-space.
 
 // canvas-navigate-a
@@ -187,6 +187,11 @@ pub struct Canvas<'a> {
     /// Whether the rulers show along the top and left edges (View > Rulers): the view lies inside them.
     #[prop]
     show_rulers: bool,
+    /// Whether the canvas leaves Page Up, Page Down, Home, End and the arrows to its body: it applies no page keys
+    /// and gives no tool or session control the arrows, and its body reads them in [`CanvasSpace::keys`]. For a
+    /// body that pages its document itself (a page view).
+    #[prop]
+    keys_to_body: bool,
     /// The rulers' units and zero point, published to the body in its [`CanvasSpace`].
     rulers: Option<CanvasRulers>,
     /// The snapping of the coordinates the pointer sets on this canvas (View > Snap To): one function that the rulers
@@ -207,6 +212,8 @@ struct Settled {
     target: CanvasView,
     /// The view on screen: the target, or a view part way to it while a zoom eases.
     shown: CanvasView,
+    /// The keys the canvas leaves to its body.
+    keys: BodyKeys,
 }
 
 impl<'a> Canvas<'a> {
@@ -222,6 +229,7 @@ impl<'a> Canvas<'a> {
             document: None,
             navigation: NavigationOptions::default(),
             show_rulers: false,
+            keys_to_body: false,
             rulers: None,
             snap: None,
             settled: None,
@@ -295,11 +303,18 @@ impl<'a> Canvas<'a> {
             pan(&mut view, delta);
             jumped = true;
         }
-        // Page Up and Down, Home and End scroll the view as in Photoshop; the arrows are the tool's nudges.
+        // Page Up and Down, Home and End scroll the view as in Photoshop; the arrows are the tool's nudges. A canvas
+        // that leaves its keys to its body hands both to it.
+        let mut keys = BodyKeys::default();
         while let Some((step, mods)) = cx.intents().take_move() {
-            if let (Some(document), Some(key)) = (self.document, PageKey::of(step, mods, area.size())) {
+            if self.keys_to_body {
+                keys.page = Some((step, mods));
+            } else if let (Some(document), Some(key)) = (self.document, PageKey::of(step, mods, area.size())) {
                 jumped |= key.apply(&mut view, document);
             }
+        }
+        if self.keys_to_body {
+            keys.nudge = cx.intents().take_nudge();
         }
         // A pan or a scroll takes over from an ease, here or in a tool.
         let mut steer = motion.steer.take();
@@ -328,7 +343,7 @@ impl<'a> Canvas<'a> {
         }
         let shown = motion.animation.shown(&target, progress);
         motion.restore(&ctx, id);
-        Settled { target, shown }
+        Settled { target, shown, keys }
     }
 
     /// Measures the document's axes in `x` and `y`, counted from `zero` (document units). The rulers, the guides and
@@ -342,10 +357,12 @@ impl<'a> Canvas<'a> {
     }
 
     fn space(&self, id: egui::Id, pixels_per_point: f32, background: BackgroundPress) -> Option<CanvasSpace> {
-        let view = self.settled.map(|settled| settled.shown).or(self.given);
-        view.map(|view| {
-            CanvasSpace::new(view, pixels_per_point).with_document(self.document).with_rulers(self.rulers).with_background(background).with_canvas(id)
-        })
+        let (shown, target, keys) = match self.settled {
+            Some(settled) => (settled.shown, settled.target, settled.keys),
+            None => (self.given?, self.given?, BodyKeys::default()),
+        };
+        let space = CanvasSpace::new(shown, pixels_per_point).with_target(target).with_keys(keys);
+        Some(space.with_document(self.document).with_rulers(self.rulers).with_background(background).with_canvas(id))
     }
 
     /// The press on the background part as the canvas reports it, and the pan of a middle-button drag: a middle press

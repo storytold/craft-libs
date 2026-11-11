@@ -9,8 +9,9 @@ use crate::contract::{Component, Cx, Focus as _, Pointer as _};
 use crate::runtime::env::{AppValues, EnvValue, EnvView, UnitKind, Units};
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::{Point, Size};
-use craft_behavior::{Axis, CanvasView, Intent, PartRef, PointerButton, PressPhase, PressState, RulerUnits, Ticks};
-use egui::Pos2;
+use craft_behavior::{Axis, CanvasView, Intent, MoveMods, NavMove, PartRef, PointerButton, PressPhase, PressState, RulerUnits, Ticks};
+use craft_keymap::Mods;
+use egui::{Pos2, Vec2};
 use std::ops::RangeInclusive;
 
 /// How a canvas shows its document, as its body and its tool see it: the view, and the interface scale it is
@@ -18,10 +19,13 @@ use std::ops::RangeInclusive;
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct CanvasSpace {
-    /// The view: document to the canvas root's screen space.
+    /// The view on screen: document to the canvas root's screen space, part way to [`target`](Self::target) while a
+    /// zoom eases.
     pub view: CanvasView,
     /// Device pixels per point.
     pub pixels_per_point: f32,
+    target: CanvasView,
+    keys: BodyKeys,
     document: Option<Size>,
     rulers: Option<CanvasRulers>,
     background: BackgroundPress,
@@ -33,7 +37,30 @@ impl CanvasSpace {
     /// The space of `view` at `pixels_per_point` device pixels per point, with no rulers published and no press on
     /// the background.
     pub fn new(view: CanvasView, pixels_per_point: f32) -> Self {
-        Self { view, pixels_per_point, document: None, rulers: None, background: BackgroundPress::default(), canvas: None }
+        Self {
+            view,
+            pixels_per_point,
+            target: view,
+            keys: BodyKeys::default(),
+            document: None,
+            rulers: None,
+            background: BackgroundPress::default(),
+            canvas: None,
+        }
+    }
+
+    /// This space with `target`, the view the canvas settled on in the pass, which `view` eases toward.
+    #[must_use]
+    pub fn with_target(mut self, target: CanvasView) -> Self {
+        self.target = target;
+        self
+    }
+
+    /// This space with the keys the canvas left to its body in the pass.
+    #[must_use]
+    pub fn with_keys(mut self, keys: BodyKeys) -> Self {
+        self.keys = keys;
+        self
     }
 
     /// This space with the size of the document the canvas shows, in document units: the one size the zoom ladder's
@@ -84,6 +111,17 @@ impl CanvasSpace {
     /// The presses on the canvas background in this pass.
     pub fn background(&self) -> BackgroundPress {
         self.background
+    }
+
+    /// The view the canvas settled on in this pass: what the app keeps, and what a body that keeps its own view state
+    /// decides from. It differs from `view` only while a zoom eases.
+    pub fn target(&self) -> CanvasView {
+        self.target
+    }
+
+    /// The page and arrow keys the canvas left to its body in this pass ([`Canvas::keys_to_body`](super::Canvas)).
+    pub fn keys(&self) -> BodyKeys {
+        self.keys
     }
 
     /// Device pixels per document unit (1 is 100 %) of the view at this scale.
@@ -142,6 +180,17 @@ pub struct BackgroundPress {
     /// The Menu key or Shift+F10 asked the focused canvas for its menu (the canvas leaves the request untaken): a
     /// control that offers a canvas menu opens it at the view's centre.
     pub context_key: bool,
+}
+
+/// The keys a canvas that leaves them to its body took in a pass, one of each kind: a key held down repeats over
+/// passes, not within one.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct BodyKeys {
+    /// Page Up, Page Down, Home or End, with the modifiers held.
+    pub page: Option<(NavMove, MoveMods)>,
+    /// An arrow: a unit direction on screen and the modifiers held.
+    pub nudge: Option<(Vec2, Mods)>,
 }
 
 impl BackgroundPress {
