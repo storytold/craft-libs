@@ -1716,7 +1716,8 @@ pub mod macos {
     /// Detaches the image file `dmg` where it is attached with no volume mounted, which a failed
     /// attach can leave. An attachment with a mounted volume is left alone: another install may
     /// be using it. So is every attachment while a program started with `dmg` in its arguments
-    /// (another process's `hdiutil attach`) is running, or while the check for one gets no answer.
+    /// (another process's `hdiutil attach`) is running, or while the check for one gets no answer;
+    /// in that case the error gives the check's reason.
     fn detach_unmounted(dmg: &Path) -> Result<(), String> {
         detach_unmounted_with(dmg, process::running, process::run)
     }
@@ -1728,8 +1729,10 @@ pub mod macos {
         running: impl FnOnce(&Path) -> Result<bool, String>,
         run: impl Fn(&str, &[&str], Duration) -> Result<String, String>,
     ) -> Result<(), String> {
-        if running(dmg) != Ok(false) {
-            return Ok(());
+        match running(dmg) {
+            Ok(false) => {}
+            Ok(true) => return Ok(()),
+            Err(why) => return Err(format!("couldn't check for a running attach of the image ({why})")),
         }
         let info = run(HDIUTIL, &["info", "-plist"], Duration::from_secs(30))?;
         let image = [Some(dmg.to_path_buf()), std::fs::canonicalize(dmg).ok()];
@@ -4288,11 +4291,16 @@ esac
                 "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict><key>images</key><array><dict><key>image-path</key><string>{}</string><key>system-entities</key><array><dict><key>dev-entry</key><string>/dev/disk5</string></dict></array></dict></array></dict></plist>",
                 dmg.display()
             );
-            for (answer, expected) in [
-                (Ok(true), vec![]),
-                // pgrep gave no answer: an attach of the image may still be running.
-                (Err("pgrep didn't finish within 30 seconds".to_string()), vec![]),
-                (Ok(false), vec!["info -plist".to_string(), "detach /dev/disk5 -force -quiet".to_string()]),
+            for (answer, expected, outcome) in [
+                (Ok(true), vec![], Ok(())),
+                // pgrep gave no answer: an attach of the image may still be running, and the image
+                // may still be attached.
+                (
+                    Err("pgrep didn't finish within 30 seconds".to_string()),
+                    vec![],
+                    Err("couldn't check for a running attach of the image (pgrep didn't finish within 30 seconds)".to_string()),
+                ),
+                (Ok(false), vec!["info -plist".to_string(), "detach /dev/disk5 -force -quiet".to_string()], Ok(())),
             ] {
                 let ran = std::cell::RefCell::new(Vec::new());
                 let result = super::macos::detach_unmounted_with(
@@ -4307,7 +4315,7 @@ esac
                         Ok(if args[0] == "info" { info.clone() } else { String::new() })
                     },
                 );
-                assert_eq!(result, Ok(()));
+                assert_eq!(result, outcome, "with the process check giving {answer:?}");
                 assert_eq!(ran.into_inner(), expected, "with the process check giving {answer:?}");
             }
         }
