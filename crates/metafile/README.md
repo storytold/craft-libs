@@ -79,7 +79,10 @@ decoder is where the size, pixel and work limits have to be enforced.
 
 ### EMF+ (MS-EMFPLUS)
 
-An EMF+ only file is played from its EMF+ records. A dual file is played from its EMF records.
+A file with EMF+ records is played from them, as GDI+ plays it. In a dual file (one that also
+draws the picture with plain EMF records, as a fallback for GDI) the plain records are skipped,
+except those between an `EmfPlusGetDC` record and the next EMF+ record. What the EMF+ reader does
+not read (the table's last row) is therefore lost in a dual file even where its EMF records carry it.
 
 | Feature | Read |
 |---|---|
