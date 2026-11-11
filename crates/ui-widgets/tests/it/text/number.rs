@@ -22,6 +22,8 @@ struct Rig {
     picked: Cell<Option<NumberPick>>,
     range: Option<RangeInclusive<f64>>,
     presets: Vec<Entry<NumberPick>>,
+    /// The field writes whole numbers (`fixed_decimals(0)`).
+    whole: bool,
 }
 
 impl Rig {
@@ -33,14 +35,15 @@ impl Rig {
             picked: Cell::new(None),
             range,
             presets: Vec::new(),
+            whole: false,
         };
         rig.idle(3);
         rig
     }
 
     fn frame(&mut self, events: Vec<Event>) {
-        let Rig { frames, value, rect, picked, range, presets } = self;
-        frames.frame(events, |ui| show(ui, value, rect, picked, range, presets));
+        let Rig { frames, value, rect, picked, range, presets, whole } = self;
+        frames.frame(events, |ui| show(ui, value, rect, picked, range, presets, *whole));
     }
 
     fn idle(&mut self, frames: usize) {
@@ -50,9 +53,9 @@ impl Rig {
     }
 
     fn focus(&mut self) {
-        let Rig { frames, value, rect, picked, range, presets } = self;
+        let Rig { frames, value, rect, picked, range, presets, whole } = self;
         let at = rect.get().center();
-        click(frames, at, &mut |ui| show(ui, value, rect, picked, range, presets));
+        click(frames, at, &mut |ui| show(ui, value, rect, picked, range, presets, *whole));
         self.idle(2);
     }
 
@@ -73,6 +76,7 @@ fn show(
     picked: &Cell<Option<NumberPick>>,
     range: &Option<RangeInclusive<f64>>,
     presets: &[Entry<NumberPick>],
+    whole: bool,
 ) {
     let mut guard = value.borrow_mut();
     let mut field = NumberField::new("Size", Bind::bound(&mut *guard)).id_salt("size");
@@ -81,6 +85,9 @@ fn show(
     }
     if !presets.is_empty() {
         field = field.presets(presets);
+    }
+    if whole {
+        field = field.fixed_decimals(0);
     }
     let out = field.show(ui);
     rect.set(out.response.rect);
@@ -103,6 +110,22 @@ fn arrows_step_to_the_next_multiple_and_stay_in_range() {
     assert_eq!(rig.value(), Some(7.0), "up at the end stays there");
     rig.key(Key::ArrowDown, Modifiers::SHIFT);
     assert_eq!(rig.value(), Some(0.0), "Shift moves ten steps and stops at the start of the range");
+}
+
+/// Alt steps a tenth where the field's decimals show it, and a whole step on a whole-number field.
+#[trial]
+fn a_fine_step_moves_only_as_far_as_the_decimals_show() {
+    let mut rig = Rig::new(5.0, None);
+    rig.focus();
+    rig.key(Key::ArrowUp, Modifiers::ALT);
+    let fine = rig.value().unwrap_or_default() - 5.0;
+    let mut whole = Rig::new(5.0, None);
+    whole.whole = true;
+    whole.focus();
+    whole.key(Key::ArrowUp, Modifiers::ALT);
+    let plain = whole.value().unwrap_or_default() - 5.0;
+    assert!(fine > 0.0 && fine < 1.0, "Alt moves a share of the step on a field with decimals");
+    assert_eq!(plain, 1.0, "a whole-number field takes the plain step");
 }
 
 /// A field of `kind` (plain without one) under `host`'s locale, with `text` typed over its value and committed.

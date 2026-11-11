@@ -277,7 +277,7 @@ impl<'a> TableProperties<'a> {
 fn count(ui: &mut Ui, caption: &Label, value: usize, least: usize, change: fn(usize) -> TableChange) -> Option<TableChange> {
     let mut picked = None;
     Field::new(caption.clone()).show(ui, |ui, _| {
-        let edit = NumberField::new(caption.clone(), Bind::given(Some(value as f64))).range(least as f64..=f64::INFINITY).step(1.0).show(ui);
+        let edit = NumberField::new(caption.clone(), Bind::given(Some(value as f64))).range(least as f64..=f64::INFINITY).fixed_decimals(0).show(ui);
         picked = edit.value().copied().flatten().map(|n| change(n.round().max(least as f64) as usize));
     });
     picked

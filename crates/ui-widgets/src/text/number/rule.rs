@@ -82,11 +82,12 @@ pub(super) fn round_to(value: f64, decimals: usize) -> f64 {
     (value * scale).round() / scale
 }
 
-/// The scale of a step by an arrow key: Shift moves `LARGE_STEPS` steps, Alt a share of one, both together one.
-pub(super) fn key_scale(mods: MoveMods) -> f64 {
+/// The scale of a step by an arrow key: Shift moves `LARGE_STEPS` steps, Alt a share of one where the field's
+/// decimals show that share (`fine_shows`), both together one.
+pub(super) fn key_scale(mods: MoveMods, fine_shows: bool) -> f64 {
     match (mods.extend, mods.fine) {
         (true, false) => LARGE_STEPS,
-        (false, true) => 1.0 / LARGE_STEPS,
+        (false, true) if fine_shows => 1.0 / LARGE_STEPS,
         _ => 1.0,
     }
 }

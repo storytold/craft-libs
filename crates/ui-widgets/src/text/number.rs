@@ -412,15 +412,17 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
 
     /// Arrows, Page keys, the wheel and AccessKit Increment and Decrement step the value, AccessKit sets it, and the
     /// chevrons open the popups. Up and Down step by the step, with Shift by `LARGE_STEPS` steps and, on a field
-    /// without a dropdown, with Alt by a tenth; on a field with presets or a popup slider Alt+Down opens the dropdown
-    /// instead, and the wheel keeps its Alt fine step. A step starts from the applied value, or from 0 kept in the
+    /// without a dropdown, with Alt by a tenth where the decimals show it (else by the step); on a field with presets
+    /// or a popup slider Alt+Down opens the dropdown instead, so it has no fine key step, and the wheel keeps its Alt
+    /// fine step. A step starts from the applied value, or from 0 kept in the
     /// range while the field is blank.
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let rule = self.rule();
+        let fine_shows = self.decimals() >= decimals_for_step(rule.step / LARGE_STEPS);
         while let Some((mv, mods)) = cx.intents().take_move() {
             let (notches, scale) = match mv {
-                NavMove::Up => (1, key_scale(mods)),
-                NavMove::Down => (-1, key_scale(mods)),
+                NavMove::Up => (1, key_scale(mods, fine_shows)),
+                NavMove::Down => (-1, key_scale(mods, fine_shows)),
                 NavMove::PageUp => (1, LARGE_STEPS),
                 NavMove::PageDown => (-1, LARGE_STEPS),
                 // AccessKit Increment and Decrement: the text keeps the horizontal arrows, so only those arrive.

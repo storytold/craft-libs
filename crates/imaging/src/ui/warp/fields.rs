@@ -302,8 +302,11 @@ impl<'a> WarpFields<'a> {
                 ];
                 for (name, value, edit) in fields {
                     Field::new(name.clone()).layout(caption).sizing(Sizing::Content).show(ui, |ui, _| {
-                        let field =
-                            NumberField::new(name.clone(), Bind::given(Some(value))).range(DISTORTION_RANGE).unit_kind(UnitKind::Percent).show(ui);
+                        let field = NumberField::new(name.clone(), Bind::given(Some(value)))
+                            .range(DISTORTION_RANGE)
+                            .unit_kind(UnitKind::Percent)
+                            .fixed_decimals(0)
+                            .show(ui);
                         for event in field.edit.events.iter().cloned() {
                             edits.push(edit(event.map(|typed| typed.unwrap_or(value))));
                         }
