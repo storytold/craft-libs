@@ -55,6 +55,10 @@ pub struct EncoderConfig {
     pub keyint: u32,
     /// BT.709 limited range is signalled unless this is set.
     pub full_range: bool,
+    /// The colour description of `color_config` (ITU-T H.273 code points); BT.709 by default.
+    pub color_primaries: u8,
+    pub transfer_characteristics: u8,
+    pub matrix_coefficients: u8,
 }
 
 impl EncoderConfig {
@@ -69,6 +73,9 @@ impl EncoderConfig {
             rate: RateControl::ConstantQ(100),
             keyint: 60,
             full_range: false,
+            color_primaries: 1,
+            transfer_characteristics: 1,
+            matrix_coefficients: 1,
         }
     }
 }
@@ -389,9 +396,9 @@ impl Encoder {
         w.write_bits((c.bit_depth > 8) as u32, 1); // high_bitdepth
         w.write_bits(0, 1); // mono_chrome
         w.write_bits(1, 1); // color_description_present_flag
-        w.write_bits(1, 8); // color_primaries: BT.709
-        w.write_bits(1, 8); // transfer_characteristics: BT.709
-        w.write_bits(1, 8); // matrix_coefficients: BT.709
+        w.write_bits(c.color_primaries as u32, 8); // color_primaries
+        w.write_bits(c.transfer_characteristics as u32, 8); // transfer_characteristics
+        w.write_bits(c.matrix_coefficients as u32, 8); // matrix_coefficients
         w.write_bits(c.full_range as u32, 1); // color_range
         w.write_bits(0, 2); // chroma_sample_position: unknown
         w.write_bits(0, 1); // separate_uv_delta_q

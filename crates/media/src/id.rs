@@ -36,6 +36,10 @@ pub enum Container {
     MpegAudio,
     /// A raw AC-3 or E-AC-3 stream.
     Ac3,
+    /// AVI (RIFF), including OpenDML.
+    Avi,
+    /// MXF (SMPTE ST 377-1): OP1a, OP-Atom.
+    Mxf,
 }
 
 impl Container {
@@ -54,6 +58,8 @@ impl Container {
             Container::Adts => "ADTS",
             Container::MpegAudio => "MPEG audio",
             Container::Ac3 => "AC-3",
+            Container::Avi => "AVI",
+            Container::Mxf => "MXF",
         }
     }
 }

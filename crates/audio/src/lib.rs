@@ -18,11 +18,12 @@
 //! - [`encode`], [`FileEncoder`]: WAV/BWF/RF64 and AIFF/AIFF-C (feature `pcm-encode`, which also
 //!   gives [`wav_float_header`]) and FLAC (feature `flac-encode`), whole-buffer or incremental into
 //!   any `Write + Seek`. Feature `lossless-encode` turns on both; feature `encode` turns on
-//!   `lossless-encode` and `aac-encode`.
+//!   `lossless-encode` and every codec's encoder.
 //! - [`peaks`] (feature `peaks`): min/max/RMS pyramid for waveform drawing.
 //! - Codec modules for packet-level use, each with its own features: [`aac`] (`aac-decode`,
 //!   `aac-encode`), [`alac`] (`alac-decode`, `alac-encode`), [`opus`] (`opus-decode`), [`ac3`]
-//!   (`ac3-decode`), [`mpa`] (`mpa-decode`), [`flac`] (`flac-encode`: the packet encoder).
+//!   (`ac3-decode`), [`mpa`] (`mpa-decode`), [`mp3`] (`mp3-encode`: the Layer III encoder),
+//!   [`flac`] (`flac-encode`: the packet encoder).
 //!
 //! The shared types below build with no features.
 
@@ -34,6 +35,8 @@ pub mod ac3;
 pub mod alac;
 mod buffer;
 mod layout;
+#[cfg(feature = "mp3-encode")]
+pub mod mp3;
 #[cfg(feature = "mpa-decode")]
 pub mod mpa;
 #[cfg(feature = "opus-decode")]
@@ -158,6 +161,13 @@ impl From<ac3::Error> for AudioError {
 #[cfg(any(feature = "ac3-encode", feature = "eac3-encode"))]
 impl From<ac3::encoder::Error> for AudioError {
     fn from(e: ac3::encoder::Error) -> Self {
+        AudioError::Encode(e.to_string())
+    }
+}
+
+#[cfg(feature = "mp3-encode")]
+impl From<mp3::Error> for AudioError {
+    fn from(e: mp3::Error) -> Self {
         AudioError::Encode(e.to_string())
     }
 }
@@ -337,7 +347,7 @@ pub struct AudioInfo {
     /// Broadcast Wave metadata from a WAV `bext` chunk.
     pub bwf: Option<BwfInfo>,
     /// Packets that were damaged or failed to decode and were replaced by concealment (silence of
-    /// their length), counted as audio is decoded: by [`decode`] for the whole file, and so far by
+    /// their length), and runs of FLAC frames lost to a failed checksum, counted as audio is decoded: by [`decode`] for the whole file, and so far by
     /// a [`Decoder`]. 0 from [`probe`] when it read only headers.
     pub damaged: u64,
 }

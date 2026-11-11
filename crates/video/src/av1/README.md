@@ -5,7 +5,7 @@ no `unsafe`, builds for `wasm32-unknown-unknown`).
 
 ## What is implemented
 
-- **Stream**: Main profile (`seq_profile` 0), 4:2:0, 8 or 10 bit, BT.709 colour description,
+- **Stream**: Main profile (`seq_profile` 0), 4:2:0, 8 or 10 bit, the configured colour description (BT.709 by default),
   limited or full range. Sequence header with one operating point; `seq_level_idx` given or the
   lowest Annex A level whose MaxPicSize / MaxH/VSize / MaxDisplayRate (and, in bitrate mode, Main
   tier MaxBitrate) fit. Order hints, film grain, superres, CDEF, loop restoration, intra edge
