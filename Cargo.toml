@@ -68,6 +68,7 @@ craft-plotter = { path = "crates/plotter" }
 craft-prepress = { path = "crates/prepress" }
 craft-print = { path = "crates/print" }
 craft-proof = { path = "crates/proof" }
+craft-raster-codecs = { path = "crates/raster-codecs" }
 craft-psd = { path = "crates/psd" }
 craft-quit = { path = "crates/quit" }
 craft-rtf = { path = "crates/rtf" }
