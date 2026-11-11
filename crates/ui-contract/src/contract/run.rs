@@ -894,6 +894,7 @@ fn run_in_host<C: Component>(p: &mut Pass<'_, '_, C>, ui: &mut Ui, host_at: Opti
 
 fn run<C: Component>(mut comp: C, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>, hooks: &mut dyn ShapeHooks<C>) -> C::Output {
     let ctx = ui.ctx().clone();
+    crate::runtime::measure::count_run::<C>(&ctx);
     // Slots the last end hook evicted drop here, outside every lock and hook.
     memory::dispose_evicted(&ctx);
     let shape = hooks.shape();

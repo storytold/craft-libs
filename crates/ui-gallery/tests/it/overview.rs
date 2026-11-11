@@ -3,7 +3,7 @@
 use craft_settings::{Location, OpenOptions, SettingsStore};
 use craft_ui::runtime::access::Role;
 use craft_ui::shell::app::ShellApp;
-use craft_ui::testing::{Fixture, last_pass_measuring_runs, pointer, trial};
+use craft_ui::testing::{Fixture, last_pass_measuring_runs, last_pass_runs, pointer, trial};
 use craft_ui_gallery::chrome::{Gallery, Persisted};
 use craft_ui_gallery::viewer::{Catalog, GallerySettings, by_level};
 use egui::Vec2;
@@ -42,8 +42,7 @@ fn each_level_of_the_overview_first_runs_the_cards_in_view() {
     }
 }
 
-/// A settled Overview pass runs each story once, in its card's shell: no card or story runs a measuring run while its
-/// inputs hold.
+/// A settled Overview pass runs each story once: no card or story runs a measuring run while its inputs hold.
 #[trial]
 fn a_settled_overview_pass_runs_no_measuring_run() {
     let mut gallery = gallery_at("Composites");
@@ -51,6 +50,23 @@ fn a_settled_overview_pass_runs_no_measuring_run() {
     fixture.room(Vec2::new(1400.0, 900.0)).settle().idle(1);
     let runs = last_pass_measuring_runs(fixture.ctx());
     assert!(runs.is_empty(), "a settled pass measured {} bodies: {runs:?}", runs.len());
+}
+
+/// The `ShellRegion` runs of a settled Overview pass: the regions of the window's and the view's shells.
+fn shell_runs(level: &str, filter: &str) -> u32 {
+    let mut gallery = gallery_filtered(level, filter);
+    let mut fixture = Fixture::new(move |ui| gallery.ui(ui));
+    fixture.room(Vec2::new(1400.0, 900.0)).settle().idle(1);
+    last_pass_runs(fixture.ctx()).iter().filter(|(ty, _)| ty.ends_with("::ShellRegion")).map(|(_, runs)| runs).sum()
+}
+
+/// A story runs in the view's shell, not in one of its own: a settled Overview pass runs as many shell regions with
+/// every card of a level in view as with one card.
+#[trial]
+fn a_settled_overview_pass_runs_no_shell_per_story() {
+    let (all, one) = (shell_runs("Controls", ""), shell_runs("Controls", "Slider"));
+    assert!(all > 0, "the window's shell runs its regions");
+    assert_eq!(all, one, "the shell regions grow with the stories in view: {one} with the Slider cards, {all} with the level");
 }
 
 /// A card in form rows shows each story's value text beside it, as the story's run found it: a settled frame of the
@@ -77,45 +93,56 @@ fn painted(fixture: &Fixture, text: &str) -> bool {
 }
 
 fn openers(fixture: &Fixture) -> usize {
-    fixture.texts().iter().filter(|run| run.text == "Show dialog").count()
+    painted_times(fixture, "Show dialog")
 }
 
-/// A dialog in an embedded shell of the story's own is out of the story's measure; the card still starts it closed
-/// before anything of it paints, opens it by the button, and shows the button again once the story closed both.
+fn painted_times(fixture: &Fixture, text: &str) -> usize {
+    fixture.texts().iter().filter(|run| run.text == text).count()
+}
+
+/// The level the component listed as `name` is on.
+fn level_of(name: &str) -> &'static str {
+    let catalog = Catalog::linked();
+    by_level(&catalog, "")
+        .into_iter()
+        .find(|(_, cards)| cards.iter().any(|component| component.name == name))
+        .map(|(level, _)| level.title())
+        .unwrap_or_else(|| panic!("{name} is on a level"))
+}
+
+/// A story's dialog opens over the view, in the view's shell: the card starts it closed before anything of it paints,
+/// opens it by the button, and shows the button again once the dialog closed.
 #[trial]
-fn dialogs_in_a_storys_own_shell_start_closed_and_close_back_to_the_opener() {
+fn a_storys_dialog_starts_closed_opens_over_the_view_and_closes_back_to_the_opener() {
     let (mut store, report) = SettingsStore::<GallerySettings>::open_with(OpenOptions::new(Location::Memory));
     let mut settings = store.get().clone();
-    settings.level = "Shells".to_owned();
-    settings.filter = "AppShell".to_owned();
-    settings.stories.insert(type_of("AppShell").to_owned(), "app_shell_dialogs_in_regions".to_owned());
+    settings.level = level_of("Dialog").to_owned();
+    settings.filter = "Dialog".to_owned();
+    settings.stories.insert(type_of("Dialog").to_owned(), "dialog".to_owned());
     store.set(settings);
     let mut gallery = Gallery::new(Catalog::linked(), Persisted::new(store, &report));
     let mut fixture = Fixture::new(move |ui| gallery.ui(ui));
-    fixture.room(Vec2::new(1400.0, 900.0)).idle(1);
-    let over = fixture.by_label("Open").expect("the card's Open").rect.center();
-    let high = fixture.shown().height() / 5.0;
-    assert_eq!(openers(&fixture), 1, "the picked story shows its opener");
-    assert!(!painted(&fixture, "Snap to grid"), "nothing of the dialogs paints before the opener is pressed");
-    let opener = fixture.by_label("Show dialog").expect("the opener");
+    fixture.room(Vec2::new(1400.0, 900.0)).settle();
+    // Other cards of the filter show the same body in flow.
+    let (closed, inline) = (openers(&fixture), painted_times(&fixture, "Snap to grid"));
+    assert!(closed >= 1, "the picked story shows its opener");
+    // The Dialog card's opener: the first under the card's title, in its column.
+    let title = fixture.texts().into_iter().find(|run| run.text == "Dialog").expect("the Dialog card's title").rect;
+    let opener = fixture
+        .by_role(Role::BUTTON)
+        .into_iter()
+        .filter(|button| fixture.tree().name_of(button.node) == Some("Show dialog"))
+        .filter(|button| button.rect.top() > title.top() && button.rect.left() < title.right() && button.rect.right() > title.left() - 40.0)
+        .min_by(|a, b| a.rect.top().total_cmp(&b.rect.top()))
+        .expect("the Dialog card's opener");
     fixture.click(&opener).settle();
-    assert!(painted(&fixture, "Snap to grid"), "the opener opens the dialogs");
-    assert_eq!(openers(&fixture), 0, "the opener gives way to the story");
-    // The story now takes a view's height under the opener's place: the wheel brings its dialogs up into view.
-    for _ in 0..60 {
-        if fixture.by_label("Close").is_some_and(|close| close.rect.top() < 2.0 * high) {
-            break;
-        }
-        fixture.frame(vec![pointer::moved(over)]).frame(vec![pointer::wheel(-120.0)]).idle(1);
-    }
-    for _ in 0..2 {
-        let close = fixture.by_label("Close").expect("a dialog's close button");
-        fixture.click(&close).settle();
-        // The exit fade runs on the fixture's clock.
-        fixture.advance(1.0).settle();
-    }
-    assert!(!painted(&fixture, "Snap to grid"), "both dialogs closed");
-    assert_eq!(openers(&fixture), 1, "closing the story's dialogs brings the opener back");
+    assert_eq!(painted_times(&fixture, "Snap to grid"), inline + 1, "the opener opens the dialog");
+    assert_eq!(openers(&fixture), closed - 1, "the opener gives way to the story");
+    fixture.key(egui::Key::Escape, egui::Modifiers::NONE).settle();
+    // The exit fade runs on the fixture's clock.
+    fixture.advance(1.0).settle();
+    assert_eq!(painted_times(&fixture, "Snap to grid"), inline, "the dialog closed");
+    assert_eq!(openers(&fixture), closed, "closing the story's dialog brings the opener back");
 }
 
 /// Regression: the wheel over a canvas card went to its story and the Overview stopped scrolling; inside a

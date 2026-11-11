@@ -80,7 +80,7 @@ pub(super) fn host(props: &ContainerProps, at: &HostCx<'_>, open: bool, title: &
 }
 
 /// Whether a shown container of `mount` is a dialog, a modal or a window for the shell it shows in
-/// (`ShellCx::dialog_shown`): an OS window or its fallback, a full-window layer, or a layer with a dialog's focus
+/// (`ShellCx::dialogs_shown`): an OS window or its fallback, a full-window layer, or a layer with a dialog's focus
 /// scope, modal or not. Menus, list boxes, popovers, tooltips and floating panes are not.
 fn opens_dialog(mount: &Mount) -> bool {
     match mount {

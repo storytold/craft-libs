@@ -1,7 +1,8 @@
 //! One card: stories live on their surface under a header with the component's name and, while a story differs from
 //! its start, Reset; the Open command of an Overview card opens the component's tab. A card of several stories lays
-//! them out as the component's catalog entry says, each under its caption. Each story runs in an embedded shell, so
-//! its dialogs open inside the card. [`StoryBody`] is the story part alone, which the story renderer (`story-render`) shows too.
+//! them out as the component's catalog entry says, each under its caption. A story runs in the shell of the view the card
+//! is in, so its dialogs open over that view, as an app's do. [`StoryBody`] is the story part alone, which the story
+//! renderer (`story-render`) shows too.
 
 use crate::viewer::{CardState, Cells, DialogState};
 use craft_behavior::{ColumnWidth, IconId};
@@ -12,16 +13,15 @@ use craft_ui::contract::Show as _;
 use craft_ui::contract::{CommandSet, Commands as _, Gap, Pad, Props as _, ShowContainer as _, Sizing, StoryLayout, Surface, ThemeScope};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Grid, Stack};
-use craft_ui::runtime::env::{WindowKey, with_env};
+use craft_ui::runtime::env::with_env;
 use craft_ui::runtime::layout_memory;
 use craft_ui::sections::{HeaderCommand, HeaderStrength, Panel};
-use craft_ui::shell::AppShell;
 use craft_ui::style::SurfaceKind;
 use craft_ui::testing::{StoryData, StoryOutput, StoryRegistration};
 
 /// A story's show function.
 type StoryFn = fn(&mut Ui, &mut StoryData) -> StoryOutput;
-use egui::{Id, Rect, Ui, vec2};
+use egui::{Id, Rect, Ui};
 
 /// The header commands of a card.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
@@ -182,7 +182,7 @@ impl Card<'_> {
                     for story in self.stories {
                         Text::new(story.caption.to_owned()).show(ui);
                         let body = self.story_body(story, None);
-                        Stack::new().fill_width().show(ui, |ui, _| body.show(ui, cells.entry(story.index).or_default()));
+                        body.show(ui, cells.entry(story.index).or_default());
                         Text::new(body.value_text(ui).unwrap_or_default()).shade(Shade::Muted).show(ui);
                     }
                 });
@@ -193,7 +193,7 @@ impl Card<'_> {
                 let columns = fit.clamp(1, usize::from(most).clamp(1, COLUMNS.len()));
                 Grid::new(&COLUMNS[..columns]).gap(Gap::Item).fill_width().show(ui, |ui, _| {
                     for story in self.stories {
-                        Stack::new().fill_width().show(ui, |ui, _| self.body(ui, story, Some(story.caption), cells));
+                        self.body(ui, story, Some(story.caption), cells);
                     }
                 });
             }
@@ -249,8 +249,7 @@ pub struct StoryBody {
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 pub struct BodyShown {
-    /// Where the story shows in flow: its surface, or the whole room for a story that takes no room in flow; `None`
-    /// for a story that shows only a dialog.
+    /// Where the story shows in flow: its surface; `None` while the button that opens the story's dialog shows.
     pub flow: Option<Rect>,
 }
 
@@ -260,17 +259,16 @@ impl StoryBody {
         StoryBody { key: key.into(), story, surface, room, look: Look::default(), gated: false, panel_pad, caption: None }
     }
 
-    /// The story on its surface, in an embedded shell of its own so its dialogs stay in the card. The shell is as tall
-    /// as the story's content, or the whole room for a story that shows a dialog.
+    /// The story on its surface, in the shell around the body: its dialogs open over the shell's view.
     ///
     /// A story that opens a dialog, a modal or a window starts closed behind a button, and nothing of what it opens
-    /// paints before the button is pressed. The card's shell records what the story shows (`ShellCx::dialog_shown`). A
-    /// story that has not painted yet runs only in a pass that can still be discarded, and when the shell's record
-    /// changes what the card shows, the card discards the pass, so nothing of that pass paints. The button turns the
-    /// story's `open` value on and runs it, which opens the real thing (an OS window where the component uses one).
-    /// Once nothing shows any more, the exit fade included, the card shows the button again.
+    /// paints before the button is pressed. The shell counts what shows as a dialog (`ShellCx::dialogs_shown`), and the
+    /// body reads the count before and after its story. A story that has not painted yet runs only in a pass that can
+    /// still be discarded, and when the count changes what the card shows, the card discards the pass, so nothing of
+    /// that pass paints. The button turns the story's `open` value on and runs it, which opens the real thing (an OS
+    /// window where the component uses one). Once nothing shows any more, the exit fade included, the card shows the
+    /// button again.
     pub fn show(&self, ui: &mut Ui, state: &mut CardState) -> BodyShown {
-        let window = WindowKey::new(format!("card-{}-{}", self.key, state.resets));
         let host = Host {
             caption: self.caption.as_deref(),
             id: craft_ui::testing::memory::global("gallery.card.story", (&self.key, state.resets)),
@@ -289,51 +287,44 @@ impl StoryBody {
             ui.ctx().request_repaint();
             state.show_dialog();
         }
-        // A story that has not painted yet runs only in a pass that can still be discarded: what its shell's record
-        // finds open would paint otherwise. The next frame's first pass runs it.
+        // A story that has not painted yet runs only in a pass that can still be discarded: what the shell's count finds
+        // open would paint otherwise. The next frame's first pass runs it.
         let runs = state.dialog.painted || craft_ui::runtime::frame::discardable(ui.ctx());
-        let ran = std::cell::Cell::new(false);
-        let flow = std::cell::Cell::new(None);
+        // Whether the story ran for real in this pass (not in a measuring run, nor in place of a kept measurement), and
+        // whether a dialog of it showed then.
+        let ran = std::cell::Cell::new(None);
         let value_key = self.value_key();
-        let shell = AppShell::embedded(window).body(|ui, _, data: &mut StoryData| {
-            if runs {
-                ran.set(!ui.is_sizing_pass());
-                let surface = host.stack().show(ui, |ui, _| host.content(ui, show, data));
-                flow.set(Some(surface.output.rect));
-                if let Some(output) = &surface.inner {
-                    layout_memory::emit_text(ui.ctx(), value_key, output.value_text.as_deref());
-                }
+        let data = &mut state.data;
+        let surface = host.stack().show(ui, |ui, cx| {
+            if !runs {
+                return;
             }
+            let shell = cx.shell();
+            let before = shell.as_ref().map_or(0, |shell| shell.dialogs_shown());
+            let output = host.content(ui, show, data);
+            if !ui.is_sizing_pass() {
+                ran.set(Some(shell.is_some_and(|shell| shell.dialogs_shown() > before)));
+            }
+            layout_memory::emit_text(ui.ctx(), value_key, output.value_text.as_deref());
         });
-        // A story that shows a dialog gets the whole room for it.
-        let dialog_room = state.dialog.known;
-        let shown = if dialog_room {
-            let rect = Rect::from_min_size(ui.available_rect_before_wrap().min, vec2(ui.available_width(), self.room));
-            shell.show_at(ui, rect, &mut state.data)
-        } else {
-            shell.content_height(self.room).show(ui, &mut state.data)
-        };
         if !runs {
             ui.ctx().request_repaint();
         }
-        // The shell runs its body only in real runs (not in the card's own measuring runs, nor scrolled out of sight), so
-        // its record counts only when the story ran.
-        if ran.get() {
+        if let Some(shown) = ran.get() {
             let dialog = &mut state.dialog;
-            if shown.dialog && !dialog.painted {
+            if shown && !dialog.painted {
                 close_at_start(state);
                 craft_ui::runtime::frame::discard_pass(ui.ctx(), "gallery: a card's story showed a dialog before it painted");
-            } else if dialog.known && !dialog.hidden && dialog.shown && !shown.dialog {
+            } else if dialog.known && !dialog.hidden && dialog.shown && !shown {
                 *dialog = DialogState { known: true, hidden: true, shown: false, painted: true };
                 craft_ui::runtime::frame::discard_pass(ui.ctx(), "gallery: a card's dialog closed");
             } else {
-                dialog.shown |= dialog.known && shown.dialog;
+                dialog.shown |= dialog.known && shown;
                 dialog.painted = true;
             }
         }
         state.note_start();
-        let flow = if dialog_room { None } else { flow.get() };
-        BodyShown { flow }
+        BodyShown { flow: Some(surface.output.rect) }
     }
 
     /// The shown value as the story's component words it ([`StoryOutput::value_text`]), as this pass's run of the

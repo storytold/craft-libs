@@ -201,7 +201,6 @@ struct Parts {
     revealed: bool,
     panels_hidden: bool,
     mode: ScreenMode,
-    dialog: bool,
 }
 
 /// What [`AppShell::show`] drew.
@@ -219,12 +218,6 @@ pub struct AppShellOutput {
     pub panels_hidden: bool,
     /// The screen mode after this pass.
     pub screen_mode: ScreenMode,
-    /// For an embedded shell: its body or its dialog host showed a container on this pass as a dialog, a modal, a
-    /// full-window layer or an OS window, open or still fading out (`ShellCx::dialog_shown`), its own or one of an
-    /// embedded shell inside it. Menus, popovers and tooltips do not count. A host that keeps such content closed until
-    /// asked reads it from a measure of the body under a `ShellCx` of its own, before the first paint, and here for
-    /// what the measure cannot reach: the body of an embedded shell inside, which runs in real runs only.
-    pub dialog: bool,
 }
 
 impl Outcome for AppShellOutput {
@@ -558,14 +551,12 @@ impl<'a, S> AppShell<'a, S> {
                 }
             });
             // What shows here counts for the shell around this one too, so a host reads it from its own shell.
-            let opened = scope.dialog_shown();
-            if opened
+            if scope.dialogs_shown() > 0
                 && !ui.is_sizing_pass()
                 && let Some(outer) = &outer
             {
                 outer.note_dialog();
             }
-            let dialog = embedded && opened;
 
             ToastStack::show(ui);
 
@@ -580,7 +571,7 @@ impl<'a, S> AppShell<'a, S> {
             kept.reveal.record(edges);
             let revealed = only && !regions.slots.is_empty();
             *cx.keep::<ShellState>() = kept;
-            Parts { regions, revealed, panels_hidden, mode, dialog }
+            Parts { regions, revealed, panels_hidden, mode }
         };
         let shown = match at {
             Some(rect) => root.show_at_taking_room(ui, rect, shell_body),
@@ -594,7 +585,6 @@ impl<'a, S> AppShell<'a, S> {
                 revealed: parts.revealed,
                 panels_hidden: parts.panels_hidden,
                 screen_mode: parts.mode,
-                dialog: parts.dialog,
             },
             None => AppShellOutput {
                 response,
@@ -602,7 +592,6 @@ impl<'a, S> AppShell<'a, S> {
                 revealed: false,
                 panels_hidden: false,
                 screen_mode: ScreenMode::default(),
-                dialog: false,
             },
         }
     }

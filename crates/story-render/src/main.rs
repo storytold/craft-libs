@@ -4,8 +4,8 @@
 //! `new-<Name>--<story>.png` for every story of the component, `new-<Name>.png` for the story its Overview card
 //! shows (its first), `stories.tsv` and `components.tsv`. Each story runs in a card's story body (`StoryBody`) in a
 //! fresh context, in ArtCraft Dark at 2 pixels per point with the interface fonts, and its image is cropped to the
-//! story's surface and the layers it opened. A story whose dialog the card holds behind its button is shown with the
-//! dialog open.
+//! story's surface and the layers it opened. A story runs in an embedded shell, over which its dialogs open, and a story
+//! whose dialog the card holds behind its button is shown with the dialog open.
 //!
 //! The bin links the framework and only the domain crates its features name (`--features color` for craft-color's
 //! components; `--features apps` for every crate, as the gallery links them), so a change in one crate rebuilds that
@@ -17,7 +17,8 @@
 
 use craft_ui::contract::{Pad, Surface};
 use craft_ui::fonts::{I18nScripts, UiFonts};
-use craft_ui::runtime::env::RootEnv;
+use craft_ui::runtime::env::{RootEnv, WindowKey};
+use craft_ui::shell::AppShell;
 use craft_ui::testing::snapshot::{Renderer, RgbaImage, layer_rects};
 use craft_ui::testing::{Frames, StoryRegistration};
 use craft_ui_gallery::WINDOW;
@@ -131,7 +132,10 @@ fn settle(frames: &mut Frames, body: &StoryBody, width: f32, state: &mut CardSta
     let region = Rect::from_min_size(Pos2::ZERO, Vec2::new(width, Vec2::from(WINDOW).y));
     let mut frame = |frames: &mut Frames| {
         frames.frame(Vec::new(), |ui| {
-            *shown = craft_ui::testing::layout::in_region(ui, region, |ui| body.show(ui, state));
+            // The story's dialogs open over the shell around it, as over a gallery view.
+            craft_ui::testing::layout::in_region(ui, region, |ui| {
+                AppShell::embedded(WindowKey::new("story-render")).body(|ui, _, _: &mut ()| *shown = body.show(ui, state)).show(ui, &mut ())
+            });
         });
     };
     for _ in 0..4 {

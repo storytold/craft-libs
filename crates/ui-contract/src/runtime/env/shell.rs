@@ -4,7 +4,7 @@
 use super::{AppValues, EnvValue};
 use egui::Rect;
 use std::fmt;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// The stable key of a slot.
@@ -138,9 +138,10 @@ impl PartialEq for RevealedRects {
     }
 }
 
-/// Whether the body showed a dialog, modal or window on this pass. The record is shared by the clones of one `ShellCx`.
+/// How many dialogs, modals and windows the body showed on this pass. The record is shared by the clones of one
+/// `ShellCx`.
 #[derive(Clone, Debug, Default)]
-struct DialogRecord(Arc<AtomicBool>);
+struct DialogRecord(Arc<AtomicU32>);
 
 impl PartialEq for DialogRecord {
     fn eq(&self, other: &Self) -> bool {
@@ -271,14 +272,15 @@ impl ShellCx {
     /// container mount records itself here, measuring runs included.
     #[doc(hidden)]
     pub fn note_dialog(&self) {
-        self.inner.dialog.0.store(true, Ordering::Relaxed);
+        self.inner.dialog.0.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Whether a container in this shell showed on this pass as a dialog (a layer with a dialog's focus scope, modal or
-    /// not), a full-window layer or an OS window: open, or closed and still fading out. Menus, list boxes, popovers and
-    /// tooltips do not count. A host reads it after the body ran. A measure of the body records open containers only
-    /// (it runs no fades), so a host that reads it there knows before the first paint.
-    pub fn dialog_shown(&self) -> bool {
+    /// How many times a container in this shell showed on this pass as a dialog (a layer with a dialog's focus scope,
+    /// modal or not), a full-window layer or an OS window: open, or closed and still fading out. Menus, list boxes,
+    /// popovers and tooltips do not count. A host reads it after the body ran, or before and after a part of the body
+    /// to learn whether that part showed one. A measure of the body records open containers only (it runs no fades), so
+    /// a host that reads it there knows before the first paint.
+    pub fn dialogs_shown(&self) -> u32 {
         self.inner.dialog.0.load(Ordering::Relaxed)
     }
 

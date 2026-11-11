@@ -25,6 +25,14 @@ struct BodyRuns {
     runs: Vec<(Id, u32)>,
 }
 
+/// The runs of each component type, with the pass that counted them.
+#[cfg(feature = "testing")]
+#[derive(Default)]
+struct TypeRuns {
+    pass: u64,
+    runs: Vec<(&'static str, u32)>,
+}
+
 /// The collections whose widest row was built and measured, with the pass that counted them.
 #[cfg(feature = "testing")]
 #[derive(Default)]
@@ -132,6 +140,35 @@ pub fn last_pass_body_runs(ctx: &Context) -> Vec<(Id, u32)> {
 #[cfg(feature = "testing")]
 pub fn body_runs(ctx: &Context) -> Vec<(Id, u32)> {
     store::with::<BodyRuns, _>(ctx, |log| log.runs.clone())
+}
+
+/// Counts a run of a component of type `C` in this pass, measuring or real. Counts nothing without `testing`.
+#[inline]
+pub(crate) fn count_run<C>(ctx: &Context) {
+    #[cfg(feature = "testing")]
+    {
+        let name = std::any::type_name::<C>();
+        let pass = ctx.cumulative_pass_nr();
+        store::with::<TypeRuns, _>(ctx, |log| {
+            if log.pass != pass {
+                *log = TypeRuns { pass, runs: Vec::new() };
+            }
+            match log.runs.iter_mut().find(|(ty, _)| *ty == name) {
+                Some((_, count)) => *count += 1,
+                None => log.runs.push((name, 1)),
+            }
+        });
+    }
+    #[cfg(not(feature = "testing"))]
+    let _ = ctx;
+}
+
+/// The component types that ran in the last pass, by type name, and how many runs each, measuring runs included;
+/// empty when that pass ran none.
+#[cfg(feature = "testing")]
+pub fn last_pass_runs(ctx: &Context) -> Vec<(&'static str, u32)> {
+    let last = ctx.cumulative_pass_nr().saturating_sub(1);
+    store::with::<TypeRuns, _>(ctx, |log| if log.pass == last { log.runs.clone() } else { Vec::new() })
 }
 
 /// Counts a build and measure of the rows of the collection `id` for its widest row in this pass.
