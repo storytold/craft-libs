@@ -260,6 +260,9 @@ pub(crate) fn font_faces(font: &skrifa::FontRef<'_>, index: u32, path: Option<&P
     let legacy: Vec<(String, String)> = legacy_pairs.into_iter().collect();
     let mut postscript: Vec<String> = all_names(font, StringId::POSTSCRIPT_NAME).iter().map(|n| norm(n)).collect();
     let mut full_names: Vec<String> = all_names(font, StringId::FULL_NAME).iter().map(|n| norm(n)).collect();
+    // `all_names` is capped; the names `FaceInfo` reports stay findable even when the cap cut them.
+    postscript.extend(name(font, &[StringId::POSTSCRIPT_NAME]).map(|n| norm(&n)));
+    full_names.extend(name(font, &[StringId::FULL_NAME]).map(|n| norm(&n)));
     for v in [&mut families, &mut styles, &mut full_names, &mut postscript] {
         sort_dedup(v);
     }
@@ -352,6 +355,7 @@ fn named_instances(font: &skrifa::FontRef<'_>, face: &FaceInfo, keys: &mut Keys)
         let mut postscript: Vec<String> =
             inst.postscript_name_id().map(|id| all_names(font, id)).unwrap_or_default().iter().map(|n| norm(n)).collect();
         postscript.push(norm(&ps_default));
+        postscript.extend(own_ps.as_deref().map(norm));
         sort_dedup(&mut styles);
         sort_dedup(&mut postscript);
         let info = FaceInfo {
