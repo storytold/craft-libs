@@ -14,8 +14,10 @@
 //! map a buffer that way. Native, with a real device, drives it with `Buffer::map_async` plus
 //! `Device::poll`. The blocking `read_buffer` convenience (see
 //! [`GpuContext`](craft_gpu::GpuContext)'s trait docs) blocks efficiently on native by polling
-//! the device while it waits; on `wasm32` it instead returns a fault, since blocking there would
-//! freeze the one thread the map's own completion callback needs to run on.
+//! the device while it waits. On `wasm32` the backing is always the in-memory staging store
+//! today, whose reads complete synchronously, and `read_buffer` serves them; only a read that
+//! did not complete synchronously returns a fault there, since blocking would freeze the one
+//! thread a real map's completion callback would need to run on.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
