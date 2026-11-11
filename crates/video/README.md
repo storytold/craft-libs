@@ -23,6 +23,6 @@ No codec feature is on by default.
 | `prores` | `prores` | Apple ProRes (SMPTE RDD 36): decoder and encoder |
 | `h264` | `h264` | ITU-T H.264 / AVC: encoder |
 | `hevc` | [`hevc`](src/hevc/decode/README.md) | ITU-T H.265 / HEVC: decoder (`hevc-decode` alone) and encoder (`hevc-encode` alone) |
-| `vp9` | `vp9` | VP9: encoder |
+| `vp9` | [`vp9`](src/vp9/decode/README.md) | VP9: decoder (`vp9-decode` alone) and encoder (`vp9-encode` alone) |
 | `av1` | `av1` | AV1 (AOMedia Video 1): encoder |
 | `threads` | — | Multi-threaded slice/row parallelism via `rayon` |

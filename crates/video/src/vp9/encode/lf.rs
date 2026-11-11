@@ -4,7 +4,7 @@
 //! Transform edges inside a skipped inter block are left alone; every 4×4 edge uses the 4-tap
 //! filter except edges on a 32-sample boundary, which get the 8-tap (flat) filter.
 
-use crate::vp9::{BLOCK_16X16, Mi, Plane};
+use crate::vp9::encode::{BLOCK_16X16, Mi, Plane};
 
 #[derive(Clone, Copy)]
 struct Limits {
