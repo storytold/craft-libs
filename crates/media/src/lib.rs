@@ -9,12 +9,13 @@
 //! - `matroska` (feature `matroska`): a clean-room Matroska (MKV) and WebM demuxer and muxer.
 //! - `ogg` (feature `ogg`): a clean-room Ogg demuxer with Ogg Opus and Ogg Vorbis stream mapping.
 //! - `avi` (feature `avi`): a clean-room AVI (RIFF) and OpenDML demuxer.
+//! - `mxf` (feature `mxf`, enables `chrono`): a clean-room MXF demuxer and writer (OP1a, OP-Atom).
 //! - `mpegts` (feature `mpegts`): a clean-room MPEG-2 Systems demuxer (transport streams and
 //!   program streams).
 //! - [`Container`] and [`CodecId`] (no feature): the identifiers the codec crates report a file's
 //!   container and codec with.
 //!
-//! `bitstream` and `isobmff` are on by default; `matroska`, `ogg`, `avi` and `mpegts` are opt-in. A crate that needs
+//! `bitstream` and `isobmff` are on by default; `matroska`, `ogg`, `avi`, `mxf` and `mpegts` are opt-in. A crate that needs
 //! only bit I/O uses `default-features = false, features = ["bitstream"]`.
 
 #[cfg(feature = "avi")]
@@ -26,6 +27,8 @@ mod id;
 pub mod isobmff;
 #[cfg(feature = "matroska")]
 pub mod matroska;
+#[cfg(feature = "mxf")]
+pub mod mxf;
 #[cfg(feature = "mpegts")]
 pub mod mpegts;
 #[cfg(feature = "ogg")]

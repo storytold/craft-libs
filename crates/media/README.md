@@ -1,9 +1,10 @@
 # craft-media
 
 Media containers and bit-level I/O for the Craft apps: an MSB-first bit reader and writer,
-clean-room ISO BMFF (MP4), QuickTime (MOV) and Matroska (MKV, WebM) demuxers and muxers, and Ogg,
-AVI and MPEG-2 Systems (transport and program stream) demuxers, written from the public specifications. No `unsafe`, no panics on malformed input, builds
-for `wasm32-unknown-unknown`. Dependencies: `thiserror` (for `isobmff`), `serde` (optional).
+clean-room ISO BMFF (MP4), QuickTime (MOV) and Matroska (MKV, WebM) and MXF demuxers and muxers, and
+Ogg, AVI and MPEG-2 Systems (transport and program stream) demuxers, written from the public specifications. No `unsafe`, no panics on malformed
+input, builds for `wasm32-unknown-unknown`. Dependencies: `thiserror` (for `isobmff`), `chrono`
+(for `mxf`), `serde` (optional).
 
 Codecs are in separate crates that depend on this one: [`craft-audio`](../audio/README.md) for
 audio; `craft-video` for video. What both need lives here: the containers, the
@@ -19,13 +20,14 @@ that codec crates use to describe a file and configure a decoder.
 | `matroska` | `craft_media::matroska` | none |
 | `ogg` | `craft_media::ogg` | none |
 | `avi` | `craft_media::avi` | none |
+| `mxf` | `craft_media::mxf` | `chrono` |
 | `mpegts` | `craft_media::mpegts` | none |
 | (none) | `Container`, `CodecId`, `CodecParams`, `PcmFormat`, `xiph_lace`, `ByteSource`, `ReadSeekSource` | none |
 | `serde` | `Serialize`/`Deserialize` on `Container`, `CodecId`, `CodecParams` and `PcmFormat` | `serde` |
 
 `default = ["isobmff"]`, so `bitstream` and `isobmff` build. `matroska` is opt-in: it is about as
 much code as `isobmff`, and most users of MP4/MOV (LightCraft, FigCraft, SoundCraft, EffectCraft)
-do not read Matroska. `ogg`, `avi` and `mpegts` are opt-in as well. The features are independent.
+do not read Matroska. `ogg`, `avi`, `mxf` and `mpegts` are opt-in as well. The features are independent.
 
 ```toml
 craft-media = { git = "https://github.com/storytold/craft-libs", rev = "<commit>", features = ["matroska"] }
@@ -114,7 +116,7 @@ Other differences:
 - `isobmff::ByteSource`, `matroska::ByteSource` and `ogg::ByteSource` are one trait,
   `craft_media::ByteSource` (with `ReadSeekSource`, which was Matroska's). A type FilmCraft
   implements both traits for keeps one of its two impls.
-- `isobmff::Track`, `matroska::Track`, `ogg::Stream`, `avi::Stream` and `mpegts::Stream` have `codec_params()`, all returning a
+- `isobmff::Track`, `matroska::Track`, `ogg::Stream`, `avi::Stream`, `mxf::EssenceTrack` and `mpegts::Stream` have `codec_params()`, all returning a
   `CodecParams` (`CodecId::Unknown` for a codec without an identifier). The MP4 one describes
   the first sample's sample description; `codec_params_for(description_index)` gives any other,
   and `has_mixed_descriptions()` says whether the samples use more than one.
@@ -584,12 +586,178 @@ helpers on arbitrary bytes. `tests/oracle_mpegts.rs` compares ten ffmpeg-made fi
 and HEVC video; MP2, ADTS and LATM AAC, AC-3, E-AC-3, Blu-ray and DVD LPCM; TS, M2TS, VOB and
 MPEG-1 system streams) with ffprobe's packets: unit counts, sizes, timestamps and key flags.
 
+## `mxf`
+
+A clean-room MXF demuxer and writer from FilmCraft's `filmcraft-mxf` (storytold/filmcraft@4bec22b):
+OP1a and OP-Atom, index tables, AVC / VC-3 / ProRes / MPEG-2 pictures and PCM sound. No GPL/LGPL
+code (FFmpeg, libMXF, bmx, MXFLib) was consulted; FFmpeg is a fixture generator and test oracle
+only. One dependency: `chrono`, for the calendar dates the writer stores.
+
+### Specifications
+
+Implemented from the SMPTE documents (editions used):
+
+| Document | Edition | Used for |
+|---|---|---|
+| SMPTE ST 336 | 2017 | KLV coding: 16-byte UL keys, BER lengths |
+| SMPTE ST 377-1 | 2011 (+ Amd 1:2012) | partitions, primer pack, header metadata sets and local tags, index table segments, random index pack, run-in |
+| SMPTE ST 378 | 2004 | OP1a |
+| SMPTE ST 390 | 2011 | OP-Atom |
+| SMPTE ST 379-1 / 379-2 | 2009 / 2010 | generic container: content packages, element keys, frame / clip wrapping |
+| SMPTE ST 381-1 | 2005 | MPEG video mapping (MPEG-2 identified, MPEG video descriptor) |
+| SMPTE ST 381-3 | 2013 | AVC byte-stream mapping and AVC sub-descriptor |
+| SMPTE ST 382 | 2007 | AES3 and Broadcast Wave audio mapping (wave / AES3 descriptors) |
+| SMPTE ST 331 | 2011 | element data of 8-channel AES3 sound (D-10) |
+| SMPTE ST 386 | 2004 | D-10 (IMX) mapping: container label, sound element type |
+| SMPTE ST 2019-4 | 2009 | VC-3 (DNxHD / DNxHR) mapping |
+| SMPTE RDD 44 | 2017 | Apple ProRes mapping |
+| SMPTE RP 224 / RP 210 | registers | labels: data definitions, picture coding, essence containers, operational patterns; property labels of the primer pack (writer) |
+| SMPTE ST 330 | 2011 | basic UMIDs of the written packages |
+
+### Reading a file
+
+```rust
+use craft_media::mxf::{TrackKind, open};
+
+let mxf = open(&file)?; // any ByteSource
+println!("{} {:?}", mxf.operational_pattern.name(), mxf.timecode.map(|t| t.format()));
+let v = mxf.track_of_kind(TrackKind::Picture).unwrap();
+let t = &mxf.tracks[v];
+let key = t.sync_before(t.sample_at(42).unwrap()); // stored index of the random-access picture
+let bytes = mxf.read_sample(&file, v, key)?; // one edit unit's essence
+let a = mxf.track_of_kind(TrackKind::Sound).unwrap();
+let pcm = mxf.read_pcm(&file, a, 48_000, 1920)?; // planar f32, sample-exact
+```
+
+- **Open.** The header partition pack is found in the run-in (≤ 64 KiB). Every KLV packet is then
+  walked (keys and lengths only; essence values are skipped, never read): partition packs, primer
+  packs, header metadata local sets, index table segments, fill, and generic-container elements
+  (system items are ignored). A lost KLV sync resynchronises on the next partition pack; a
+  truncated file keeps everything before the cut (a truncated frame-wrapped picture is dropped,
+  clip-wrapped essence keeps its whole edit units).
+- **Metadata.** The header metadata of the most complete partition is used (closed complete >
+  open complete > closed > open; later partitions win ties, so the footer's final durations are
+  preferred). Dynamic local tags resolve through the primer pack (e.g. `SubDescriptors`).
+- **Tracks.** Material package picture/sound tracks → source clip → file package track (track
+  number, edit rate, origin) → descriptor (a multiple descriptor's sub-descriptor by
+  `LinkedTrackID`). Without a usable material package the file packages' tracks are used directly.
+  Elements are matched by track number, or — when the number is 0 or does not match (some OP-Atom
+  writers) — the only unclaimed element stream of the right kind.
+- **Pictures.** One `Sample` per edit unit in stored order: frame wrapping (one element each) or
+  clip wrapping (one element split by the index: constant `EditUnitByteCount` or VBR entries).
+  Random access from index flag bit 7 (intra-only codings: every picture); without an index the
+  essence is scanned (AVC IDR, MPEG-2 sequence header). Presentation order from the index temporal
+  offsets (display position *n* is stored at *n* + `TemporalOffset[n]`). When the index marks B
+  pictures but has no temporal offsets (FFmpeg-written AVC), `needs_reorder` is set: the caller
+  orders by the bitstream (the AVC picture order counts).
+- **Codecs.** From the picture essence coding label, then the essence container label, then the
+  essence bytes: AVC / AVC-Intra, VC-3, ProRes (profile from the label), MPEG-2,
+  MPEG-4 visual, JPEG 2000, DV, uncompressed.
+- **Sound.** PCM chunks (frame- or clip-wrapped) with sample counts; `read_pcm` decodes
+  little-endian 8/16/24/32-bit PCM (wave / AES3 descriptors) and ST 331 AES3 elements (D-10).
+- **Timecode.** The material package timecode component (start frame count, rounded base,
+  drop frame), falling back to the file package's; `Timecode::format` gives `HH:MM:SS:FF` /
+  `HH:MM:SS;FF`.
+
+Not supported: OP1b/OP2x+ edit lists beyond the first source clip, external essence (OP-Atom
+material packages whose other tracks live in other files are opened track by track), partial or
+encrypted essence (ST 429-6), and descriptive metadata (parsed sets are ignored).
+
+`Codec::codec_id()` and `EssenceTrack::codec_params()` give the crate-wide `CodecId` /
+`CodecParams`: AVC is `H264`, VC-3 is `Dnxhd`, PCM and AES3 element data are `Pcm`; JPEG 2000, DV
+and uncompressed pictures have no identifier. The size is the displayed frame, sound gets its
+sample rate, channels and (for plain PCM) the little-endian `PcmFormat`. MXF essence carries its
+configuration in band, so `extradata` is empty.
+
+Limits, each with a test: a run-in of at most 65 535 bytes before the header partition pack, a
+metadata or index value of at most 64 MiB (larger is refused before it is read), 16 MiB scanned
+for the next partition pack after a lost KLV sync, an index position that cannot make a sparse
+table, at most 256 sound channels (8 in an AES3 element), a PCM block alignment of at most 4096
+bytes, and a sound request of at most 2²⁴ samples past the stored essence.
+
+### Writing a file
+
+```rust
+use craft_media::mxf::*;
+
+let ids = PackageIds::from_seed("unique seed (path + time)", "Clip name"); // material + file UMIDs
+let mut cfg = WriterConfig::new(Pattern::Op1a, Rational::new(25, 1), ids);
+cfg.picture = Some(PictureDesc::new(PictureCoding::Vc3 { cid: 1272 }, 1920, 1080));
+cfg.sound = vec![SoundDesc { sample_rate: 48_000, channels: 2, bits: 24 }];
+cfg.timecode = Some(StartTimecode { frames: 90_000, rate: Rational::new(25, 1), drop_frame: false });
+cfg.company = "My company".into(); // `craft-media` unless set, like `product`
+let mut w = MxfWriter::new(std::io::BufWriter::new(std::fs::File::create("out.mxf")?), cfg)?;
+w.push_picture(&frame_bytes, FrameInfo::intra())?; // stored order; AVC: key / P / B + display position
+w.push_sound(0, &interleaved_le_pcm)?; // any chunking: content packages are cut per edit unit
+w.finish()?;
+```
+
+- **Streaming.** Any `Write + Seek` sink. `new` writes the header partition (open, incomplete,
+  durations unknown) and a body partition; essence follows as it is pushed; `finish` writes the
+  footer partition (closed, complete header metadata with the final durations and the index table
+  segments), the random index pack, then rewrites the header partition pack and header metadata in
+  place (the metadata's size does not depend on the durations; a reserved fill item absorbs any
+  difference) and the body partition pack's footer offset. Only the index entries (11 bytes per
+  edit unit, plus 4 per sound slice) are kept in memory.
+- **OP1a** (ST 378): one content package per edit unit, frame wrapping (ST 379-1): the picture
+  element then one element per sound track. Sound is buffered and cut into edit units exactly
+  (`floor((n+1)·rate·den/num) − floor(n·rate·den/num)` samples: 1601/1602 at 29.97). Pictures
+  without their sound yet wait; `finish` pads the last units' sound with silence. A multiple
+  descriptor with one sub-descriptor per track (linked track ids), the "multiple wrappings"
+  container label.
+- **OP-Atom** (ST 390, Avid style): exactly one essence track per file, clip-wrapped (one element
+  with a 9-byte BER length patched by `finish`). Several atom files of one clip can share the
+  material package UMID with distinct track ids (`WriterConfig::first_track_id`). Sound files may
+  use the sample rate as the edit rate (a constant-bytes index) or the frame rate (VBR entries).
+- **Index tables** (ST 377-1 §11): VBR entries per edit unit — stream offset (from the first
+  essence byte; clip-wrapped: from the element value), key-frame offset, flags (`0x80` random
+  access, `0xC0` AVC IDR with its parameter sets, `0x22` P, `0x33` B) and temporal offsets from the
+  display positions (`TO[d] = stored(d) − d`); a delta entry and a slice per sound element. Split
+  into segments of at most ~60 KB (the entry array is a 2-byte-length local set item).
+- **Metadata.** Preface, identification (company / product / version / modification date),
+  content storage, essence container data (BodySID 1, IndexSID 2), material and file packages
+  (`PackageIds`: UMIDs and names) with a timecode track (start, rounded base, drop frame) and one
+  timeline track per essence (source clip → file package track; track numbers = element keys),
+  CDCI picture descriptors (size, aspect ratio, depth, subsampling, black / white / range, BT.709 /
+  BT.2020 PQ / HLG colour labels, coding label) and wave audio descriptors.
+- **Mappings.** VC-3 (ST 2019-4: coding label `…71 cc` from the compression id, container `02 11`,
+  element types 0x0C / 0x0D), ProRes (RDD 44: coding label profile byte, container `02 1C`),
+  AVC byte stream (ST 381-3: container `02 10 60`, coding label from `profile_idc`; Annex B access
+  units with in-band SPS / PPS — the AVC sub-descriptor is not written), Broadcast Wave PCM
+  (ST 382: container `02 06 01/02`, element types 0x01 / 0x02).
+- `write_opatom_pcm(&OpAtomPcm, &[i32])` builds a complete in-memory OP-Atom PCM file (AAF media
+  consolidation); `encode_pcm` interleaves planar f32 as little-endian PCM.
+
+### Differences from `filmcraft-mxf`
+
+- `ByteSource` is `craft_media::ByteSource`.
+- `WriterConfig::new` sets `company` and `product` to `craft-media` (FilmCraft: `FilmCraft`), and
+  the identification set's product UID is derived from `craft-media MXF writer`. Apps set their
+  own names; `write_opatom_pcm` always writes the defaults.
+- `EssenceTrack::sync_before` returns 0 for a track without picture samples (a sound track); it
+  indexed an empty table and panicked.
+- `Timecode::format` saturates for a drop-frame start near `i64::MAX`; it overflowed (a panic in
+  a debug build).
+- `Error` is `#[non_exhaustive]`; `Codec::codec_id()` and `EssenceTrack::codec_params()` are new.
+
+### Tests
+
+Synthetic OP1a files (temporal offsets, key flags, PCM, timecode), writer output read back (OP1a
+with two sound tracks, 29.97 sound per edit unit, long-GOP AVC index, OP-Atom picture and PCM,
+multi-segment index), truncation and mutation, and `hostile_tests.rs`: every metadata item, index
+item and partition pack field set to extreme values, KLV lengths that lie, and the parsers on
+arbitrary bytes. `tests/oracle_mxf.rs`: eight ffmpeg-written files (OP1a H.264 with and without B
+pictures, DNxHR, ProRes, MPEG-2; OP-Atom DNxHR and PCM; D-10) compared with ffprobe's packets and
+ffmpeg's decoded sound sample for sample; and files written by `MxfWriter` from the same essence,
+which ffprobe must describe like their source and ffmpeg must decode to the same pictures and
+sound.
+
 ## Containers, codecs and codec parameters
 
 Always built, with no dependencies, so codec crates share them:
 
 - `Container`: the file format (`Wav`, `Aiff`, `Flac`, `Mp4`, `QuickTime`, `Matroska`, `WebM`,
-  `Ogg`, `Caf`, `Adts`, `MpegAudio`, `Ac3`, `Avi`, `MpegTs`, `MpegPs`), with `name()`.
+  `Ogg`, `Caf`, `Adts`, `MpegAudio`, `Ac3`, `Avi`, `Mxf`, `MpegTs`, `MpegPs`), with `name()`.
 - `CodecId`: audio and video codecs (`Aac`, `HeAac`, `Opus`, `Eac3`, `Speex`, …, `H264`, `Hevc`,
   `Av1`, `ProRes`, `Dnxhd`, `Apv`, `Theora`, …, `Unknown`), with `name()`, `is_audio()`,
   `is_video()`.
@@ -611,7 +779,7 @@ All are `#[non_exhaustive]`: new formats and fields are minor changes.
 
 `craft_media::ByteSource` (`len`, `read_at(offset, buf)`) is what every demuxer reads from. It is
 always built, so a crate that uses only `bitstream` can name it too. `isobmff::ByteSource`,
-`matroska::ByteSource`, `ogg::ByteSource`, `avi::ByteSource` and `mpegts::ByteSource` are the same trait. It is implemented for `[u8]`,
+`matroska::ByteSource`, `ogg::ByteSource`, `avi::ByteSource`, `mxf::ByteSource` and `mpegts::ByteSource` are the same trait. It is implemented for `[u8]`,
 `Vec<u8>`, `&T`, `Arc<T>`, `Box<T>` and `std::fs::File` (not on wasm). `ReadSeekSource` adapts any
 `Read + Seek`; it is `Send + Sync` when the reader is `Send`. Implement the trait once for a
 custom source (a web `Blob`, a network range reader) to use every container with it.
