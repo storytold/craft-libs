@@ -3,4 +3,5 @@
 
 mod export;
 mod params;
+mod preview;
 mod size_model;

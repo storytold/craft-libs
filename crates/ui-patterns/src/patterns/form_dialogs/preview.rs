@@ -3,7 +3,7 @@
 
 use crate::buttons::IconButton;
 use crate::contract::{
-    Common, Component, Cx, Focus as _, Input, MeasureCx, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role, Show as _,
+    Bind, Common, Component, Cx, Focus as _, Input, MeasureCx, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role, Show as _,
     ShowContainer as _,
 };
 use crate::display::{Progress, Text};
@@ -13,6 +13,7 @@ use crate::runtime::access::Access;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
 use crate::style::{ComponentStyle, FocusLook, StyleCx};
+use crate::text::NumberField;
 use craft_behavior::{AccessAction, AccessData, CanvasTransform, CursorIcon, CursorPriority, IconId, Metrics, NavMove, PartKey, PressPhase, Sense};
 use egui::load::SizedTexture;
 use egui::{Rect, Response, Ui, Vec2, pos2};
@@ -49,6 +50,7 @@ craft_ui::words! {
     pub struct PreviewWords {
         zoom_in: "preview.zoomIn" = "Zoom in";
         zoom_out: "preview.zoomOut" = "Zoom out";
+        zoom: "preview.zoom" = "Zoom";
         rendering: "preview.rendering" = "Rendering preview";
     }
 }
@@ -146,6 +148,16 @@ impl PreviewView {
             return self.clone();
         }
         PreviewView { transform: PreviewPane::zoom_out_within(self.transform, &self.range), fit: false, ..self.clone() }
+    }
+
+    /// The view at `scale`, kept inside the zoom range, with the picture's centre kept in place; it no longer follows
+    /// the well.
+    #[must_use]
+    pub fn zoomed_to(&self, scale: f32) -> Self {
+        if self.fixed {
+            return self.clone();
+        }
+        PreviewView { transform: PreviewPane::rescaled(self.transform, scale, &self.range, Vec2::ZERO), fit: false, ..self.clone() }
     }
 }
 
@@ -551,7 +563,8 @@ impl Outcome for PreviewZoomOutput {
     }
 }
 
-/// The zoom row of a preview: a zoom-out button, the zoom as a percentage and a zoom-in button.
+/// The zoom row of a preview: a zoom-out button, the zoom as a percentage field and a zoom-in button. A typed zoom
+/// applies at once, kept inside the view's zoom range.
 #[must_use = "show the zoom row with `show`"]
 #[derive(crate::contract::Pattern)]
 pub struct PreviewZoom {
@@ -569,11 +582,19 @@ impl PreviewZoom {
     pub fn show(self, ui: &mut Ui) -> PreviewZoomOutput {
         let env = Env::of(ui);
         let words = env.words::<PreviewWords>();
-        let readout = env.units().percent(f64::from(self.view.transform.scale) * 100.0);
+        let percent = |scale: f32| f64::from(scale) * 100.0;
+        let range = percent(*self.view.range.start())..=percent(*self.view.range.end());
         let mut next = None;
         let row = Row::new().show(ui, |ui, _| {
             let out = IconButton::new(IconId::new("minus")).label(words.zoom_out.clone()).enabled(self.view.can_zoom_out()).show(ui);
-            Text::new(readout.clone()).show(ui);
+            let field = NumberField::new(words.zoom.clone(), Bind::given(Some(percent(self.view.transform.scale))))
+                .codec(env.units().zoom_codec())
+                .range(range.clone())
+                .enabled(!self.view.fixed)
+                .show(ui);
+            if let Some(Some(typed)) = field.edit.events.value() {
+                next = Some(self.view.zoomed_to((typed / 100.0) as f32));
+            }
             let into = IconButton::new(IconId::new("plus")).label(words.zoom_in.clone()).enabled(self.view.can_zoom_in()).show(ui);
             if crate::contract::clicked(&out) {
                 next = Some(self.view.zoomed_out());
