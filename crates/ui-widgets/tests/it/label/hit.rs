@@ -115,3 +115,33 @@ fn the_pointer_over_a_check_box_or_its_label_is_a_pointing_hand_unless_it_is_dis
         assert_eq!(frames.cursor_icon(), expected, "the cursor over the label (enabled: {enabled})");
     }
 }
+
+#[trial]
+fn arrows_move_through_a_radio_group_without_picking_and_enter_picks() {
+    use craft_ui::testing::input::key_press;
+    use egui::{Key, Modifiers};
+    let mut frames = Frames::new();
+    let picked = Cell::new(1u8);
+    let mut show = |ui: &mut Ui| {
+        let mut value = picked.get();
+        in_region(ui, REGION, |ui| {
+            RadioGroup::new("Size", Bind::bound(&mut value)).show(ui, |ui, _| {
+                Stack::new().show(ui, |ui, _| {
+                    for (at, label) in [(1u8, "Small"), (2, "Medium"), (3, "Large")] {
+                        Radio::new(at).label(label).show(ui);
+                    }
+                });
+            })
+        });
+        picked.set(value);
+    };
+    frames.frame(vec![], &mut show);
+    for key in [Key::Tab, Key::ArrowDown] {
+        frames.frame(vec![key_press(key, Modifiers::NONE)], &mut show);
+        frames.frame(vec![], &mut show);
+    }
+    assert_eq!(picked.get(), 1, "the arrow moves focus without picking");
+    frames.frame(vec![key_press(Key::Enter, Modifiers::NONE)], &mut show);
+    frames.frame(vec![], &mut show);
+    assert_eq!(picked.get(), 2, "Enter picks the focused radio");
+}

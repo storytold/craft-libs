@@ -3,12 +3,11 @@
 //! is the label step's, as the check box's is.
 
 use crate::contract::{
-    Bind, BindMut, Common, Component, Container, ContainerProps, Cx, Edit as _, EditResponse, GroupHandle, GroupKind, GroupState, Input, MeasureCx,
-    PaintUi, Pointer as _, Props as _, Remember as _, Role, Styled as _, Validity,
+    Bind, BindMut, Common, Component, Container, ContainerProps, Cx, Edit as _, EditResponse, GroupHandle, GroupKind, GroupState, MeasureCx, PaintUi,
+    Pointer as _, Props as _, Remember as _, Role, Styled as _, Validity,
 };
 use crate::primitives::glyph;
 use crate::runtime::env::EnvValue;
-use crate::runtime::focus::{ActivateKeys, KeyUse};
 use crate::style::{ComponentStyle, Flags, FocusLook, StyleColor, StyleCx, SurfaceLook};
 use craft_behavior::{Metrics, NavShape, Roving, Value};
 use craft_theme::Stateful;
@@ -58,7 +57,7 @@ pub struct GroupStyle {
     metrics: Metrics,
 }
 
-/// A group of radio buttons over one value: one Tab stop, arrows move focus, Space or a click selects.
+/// A group of radio buttons over one value: one Tab stop, arrows move focus, Space, Enter or a click selects.
 #[derive(crate::contract::Component)]
 #[component(container, probe(RadioGroup<'static, u8>))]
 pub struct RadioGroup<'a, T: Value + 'static> {
@@ -86,7 +85,6 @@ impl<'a, T: Value + 'static> RadioGroup<'a, T> {
 
 impl<T: Value + 'static> Component for RadioGroup<'_, T> {
     const ROLE: Role = Role::RADIO_GROUP;
-    const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_activate(ActivateKeys::Space);
     const PARTS: bool = false;
     type Style = GroupStyle;
     type Output = EditResponse<T>;
@@ -173,7 +171,6 @@ impl<T: Value + 'static> Radio<T> {
 
 impl<T: Value + 'static> Component for Radio<T> {
     const ROLE: Role = Role::RADIO_BUTTON;
-    const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_activate(ActivateKeys::Space);
     const LABELLED_AFTER: bool = true;
     const PARTS: bool = false;
     const OVERLAYS: bool = false;

@@ -1,9 +1,8 @@
 //! `Checkbox`: a box with a check mark, a dash while the value is mixed. Its text is the label step's (a `Field`'s,
 //! `PaintUi::labelled`'s, or the one `show` runs for a labelled instance); the control draws only the box.
 
-use crate::contract::{Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Input, MeasureCx, PaintUi, Pointer as _, Role, Styled as _};
+use crate::contract::{Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, PaintUi, Pointer as _, Role, Styled as _};
 use crate::primitives::{PaintShape, StrokeWidth, glyph};
-use crate::runtime::focus::{ActivateKeys, KeyUse};
 use crate::style::{ComponentStyle, FocusLook, StyleColor, StyleCx, SurfaceKind, SurfaceLook};
 use craft_behavior::{Metrics, Sense};
 use craft_theme::Stateful;
@@ -44,7 +43,6 @@ impl<'a> Checkbox<'a> {
 
 impl Component for Checkbox<'_> {
     const ROLE: Role = Role::CHECK_BOX;
-    const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_activate(ActivateKeys::Space);
     const PARTS: bool = false;
     const LABELLED_AFTER: bool = true;
     const OVERLAYS: bool = false;

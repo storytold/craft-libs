@@ -76,7 +76,7 @@ impl Outcome for AppearancePageOutput {
 /// The page edits the bound draft, a [`SelectionChange`] the Preferences model keeps; the chips and lists show
 /// [`SuiteClient::shown`] with the draft applied. Nothing reaches the suite until the window applies: the model's
 /// `apply` calls `client.change(draft)`, its `cancel` clears the draft. Each chip row is one radio group: one Tab
-/// stop, arrows move, Space or a click picks; a chip's context menu (the Menu key and Shift+F10 open it) has Add to
+/// stop, arrows move, Space, Enter or a click picks; a chip's context menu (the Menu key and Shift+F10 open it) has Add to
 /// Favorites / Remove from Favorites, the keyboard path to the star.
 #[must_use = "show the page with `show`"]
 #[derive(craft_ui::contract::Pattern, craft_ui::contract::Props)]

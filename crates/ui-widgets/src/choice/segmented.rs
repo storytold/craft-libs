@@ -1,15 +1,13 @@
 //! `Segmented`: one of a few options as a strip of segments. A leaf with a part per segment; each segment wears a
-//! face that is flat and muted, with a hover fill, and takes the selection fill and edge while it is picked. The row is one Tab stop over its segments: arrows, Home and End move focus between them, Space
-//! or a click picks the focused one.
+//! face that is flat and muted, with a hover fill, and takes the selection fill and edge while it is picked. The row is one Tab stop over its segments: arrows, Home and End move focus between them, Space,
+//! Enter or a click picks the focused one.
 
 use crate::buttons::face::{self, FaceLook, FaceSpec};
 use crate::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Entry, Input, MeasureCx, Name, PaintUi, PartsCx, Props as _, Role,
-    SetPosition,
+    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Entry, MeasureCx, Name, PaintUi, PartsCx, Props as _, Role, SetPosition,
 };
 use crate::primitives::IconSpec;
 use crate::runtime::env::Label;
-use crate::runtime::focus::{ActivateKeys, KeyUse};
 use crate::style::{ComponentStyle, Flags, FocusLook, IconLook, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole, UiTokens};
 use craft_behavior::{Flow, Metrics, NavShape, PartKey, PartRef, Roving, Sense, Value};
 use craft_theme::{Rgba, Stateful, States};
@@ -71,7 +69,6 @@ impl<'a, T: Value + 'static> Segmented<'a, T> {
 impl<T: Value + 'static> Component for Segmented<'_, T> {
     const ROLE: Role = Role::RADIO_GROUP;
     const OVERLAYS: bool = false;
-    const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_activate(ActivateKeys::Space);
     type Style = SegmentedStyle;
     type Output = EditResponse<T>;
 

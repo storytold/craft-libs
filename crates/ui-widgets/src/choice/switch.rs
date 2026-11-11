@@ -2,10 +2,9 @@
 //! label step's, as the check box's is.
 
 use crate::contract::{
-    Animate as _, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Input, MeasureCx, PaintUi, Pointer as _, Role, Styled as _, spec,
+    Animate as _, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, PaintUi, Pointer as _, Role, Styled as _, spec,
 };
 
-use crate::runtime::focus::{ActivateKeys, KeyUse};
 use crate::style::{ComponentStyle, FocusLook, StyleCx, SurfaceKind, SurfaceLook, SurfaceStyle};
 use craft_behavior::{Flow, Metrics, Sense};
 use craft_theme::{Stateful, States};
@@ -49,7 +48,6 @@ impl<'a> Switch<'a> {
 
 impl Component for Switch<'_> {
     const ROLE: Role = Role::SWITCH;
-    const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_activate(ActivateKeys::Space);
     const PARTS: bool = false;
     const LABELLED_AFTER: bool = true;
     const OVERLAYS: bool = false;
