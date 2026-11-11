@@ -49,6 +49,11 @@ pub struct MirrorStore<P: TierPolicy> {
     /// shared reference: an in-flight reservation must not block every other read of the store
     /// (`over_budget`, `tracked_bytes`) for as long as the fetch it covers is running.
     inflight_range_bytes: Cell<usize>,
+    /// Bytes a caller has exported across the worker boundary (a flush batch handed to a host
+    /// awaiting [`PendingWrite`]-style acknowledgment) and not yet confirmed or restored. A
+    /// `Cell`, like `inflight_range_bytes`, so charging and releasing it needs only `&self`. See
+    /// [`charge_pending_export`](Self::charge_pending_export).
+    exported_pending_bytes: Cell<usize>,
 }
 
 impl<P: TierPolicy> MirrorStore<P> {
@@ -67,6 +72,7 @@ impl<P: TierPolicy> MirrorStore<P> {
             evicted_bytes_used: 0,
             saved_revisions: HashMap::new(),
             inflight_range_bytes: Cell::new(0),
+            exported_pending_bytes: Cell::new(0),
         }
     }
 
@@ -121,21 +127,60 @@ impl<P: TierPolicy> MirrorStore<P> {
     }
 
     /// Every byte counted against the single `byte_budget`: resident cache bytes, retained
-    /// eviction bytes, in-flight ranged-hydration reservations, and bytes sitting in unflushed
-    /// pending writes (the copies that will cross the worker boundary on the next flush).
+    /// eviction bytes, in-flight ranged-hydration reservations, bytes sitting in unflushed
+    /// pending writes (the copies that will cross the worker boundary on the next flush), and
+    /// bytes already exported across that boundary but not yet acknowledged.
     ///
     /// RFC-0023 required fix 3: resident and retained-eviction bytes used to be checked against
-    /// `byte_budget` in two separate pools, and in-flight hydration and pending-write bytes were
-    /// not counted at all, so the true total could reach roughly twice the nominal budget (or
-    /// more) before anything surfaced it. This is the one sum every caller must check.
+    /// `byte_budget` in two separate pools, and in-flight hydration, pending-write, and exported
+    /// bytes were not counted at all, so the true total could reach roughly twice the nominal
+    /// budget (or more) before anything surfaced it. This is the one sum every caller must
+    /// check.
     pub fn tracked_bytes(&self) -> usize {
-        self.bytes_used.saturating_add(self.evicted_bytes_used).saturating_add(self.inflight_range_bytes.get()).saturating_add(self.pending_bytes())
+        self.bytes_used
+            .saturating_add(self.evicted_bytes_used)
+            .saturating_add(self.inflight_range_bytes.get())
+            .saturating_add(self.pending_bytes())
+            .saturating_add(self.exported_pending_bytes.get())
     }
 
     /// Bytes still available before [`tracked_bytes`](Self::tracked_bytes) would exceed the
     /// budget. Zero once already over budget (never negative).
     pub fn remaining_budget(&self) -> usize {
         self.byte_budget.saturating_sub(self.tracked_bytes())
+    }
+
+    /// Would `put(key, bytes_len bytes)` push [`tracked_bytes`](Self::tracked_bytes) past the
+    /// budget? `put` always adds two copies, a resident one and a pending-write one, not the
+    /// single copy a naive `bytes_len > remaining_budget()` check assumes: with a 10-byte budget
+    /// and nothing resident yet, a 6-byte `config/` put used to pass that check and then leave
+    /// `tracked_bytes` at 12 (6 resident + 6 pending), past the budget, with no eviction able to
+    /// correct it (`config/` keys are never LRU-evicted). This accounts for both copies, and for
+    /// any existing resident bytes under `key` that the new resident copy would replace (so a
+    /// same-size or shrinking overwrite near the budget ceiling is not wrongly refused). It does
+    /// not assume LRU eviction will free room `put` has not freed yet: a conservative "no" is
+    /// safe, a wrong "yes" is not.
+    pub fn would_exceed_budget_after_put(&self, key: &StoreKey, bytes_len: usize) -> bool {
+        let replaced_resident = self.data.get(key).map_or(0, Vec::len);
+        let resident_delta = bytes_len.saturating_sub(replaced_resident);
+        let pending_delta = bytes_len;
+        self.tracked_bytes().saturating_add(resident_delta).saturating_add(pending_delta) > self.byte_budget
+    }
+
+    /// Charge bytes a caller has exported across the worker boundary (handed to a host as part
+    /// of a flush batch) and is holding outside this mirror until an acknowledgment resolves.
+    /// Without this, `take_pending` already dropped those bytes from `pending_bytes`, so an
+    /// exported-but-unacknowledged batch cost nothing here: a stalled host could let a caller
+    /// keep admitting new writes indefinitely while its own retained export memory grew past the
+    /// budget unseen. Release with [`release_pending_export`](Self::release_pending_export) once
+    /// the export is confirmed, restored, or otherwise no longer held outside the mirror.
+    pub fn charge_pending_export(&self, bytes_len: usize) {
+        self.exported_pending_bytes.set(self.exported_pending_bytes.get().saturating_add(bytes_len));
+    }
+
+    /// Release a charge added by [`charge_pending_export`](Self::charge_pending_export).
+    pub fn release_pending_export(&self, bytes_len: usize) {
+        self.exported_pending_bytes.set(self.exported_pending_bytes.get().saturating_sub(bytes_len));
     }
 
     fn pending_bytes(&self) -> usize {

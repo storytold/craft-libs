@@ -121,6 +121,29 @@ fn slice_cache_key_format() {
     assert_eq!(key, StoreKey::new("cache/slice/abcd/4096+512"));
 }
 
+/// CodeRabbit finding on opfs-flush.js:60: "docs/a" and "/docs/a" reached the same OPFS file
+/// (the JS warm-tier path strips a leading slash) while StoreKey kept them as two distinct
+/// hot-tier keys. Canonicalizing in StoreKey::new means a mirror put under either spelling hits
+/// the exact same key, matching what the warm tier already does.
+#[test]
+fn store_key_strips_a_leading_slash_so_both_spellings_collide_on_purpose() {
+    assert_eq!(StoreKey::new("docs/a"), StoreKey::new("/docs/a"));
+    assert_eq!(StoreKey::new("/docs/a").0, "docs/a");
+    assert_eq!(StoreKey::new("//docs/a").0, "docs/a");
+    assert_eq!(StoreKey::new("docs/a").0, "docs/a", "a key with no leading slash is untouched");
+}
+
+/// A mirror put under one spelling is visible under the other: they are now the same key end to
+/// end, not just equal by value.
+#[test]
+fn a_put_under_either_leading_slash_spelling_lands_on_the_same_mirror_entry() {
+    let mut store = MirrorStore::new(DefaultTierPolicy, 1024);
+    store.put(StoreKey::new("/docs/a"), b"first".to_vec());
+    assert_eq!(store.get(&StoreKey::new("docs/a")), Some(b"first".as_slice()));
+    store.put(StoreKey::new("docs/a"), b"second".to_vec());
+    assert_eq!(store.get(&StoreKey::new("/docs/a")), Some(b"second".as_slice()));
+}
+
 #[test]
 fn default_coordinator_warm_and_cold_paths() {
     let coord = DefaultTierCoordinator::default();
@@ -396,4 +419,47 @@ fn pending_write_bytes_count_against_the_budget() {
     assert!(store.over_budget(), "a pending write's byte copy must count against the budget alongside its resident copy");
     store.take_pending();
     assert!(!store.over_budget(), "draining pending must release its share of the budget");
+}
+
+// --- review_repro: admission must account for both copies a put adds (PR 662 review) ----------
+
+/// CodeRabbit finding on runtime.rs:252 (mirror.rs cited): a naive `bytes_len > remaining_budget`
+/// check only accounts for one of the two copies `put` adds. A 6-byte write against a 10-byte
+/// budget with nothing resident yet would pass that check, then leave `tracked_bytes` at 12 (6
+/// resident + 6 pending): over budget, with no LRU eviction able to correct a `config/` key.
+#[test]
+fn would_exceed_budget_after_put_accounts_for_both_the_resident_and_pending_copy() {
+    let store = MirrorStore::new(DefaultTierPolicy, 10);
+    let key = StoreKey::new("config/a");
+    // A naive check (6 > 10? no) would have let this through; the real total is 12.
+    assert!(store.would_exceed_budget_after_put(&key, 6), "6 resident + 6 pending = 12 bytes must be refused against a 10-byte budget");
+    assert!(!store.would_exceed_budget_after_put(&key, 3), "3 resident + 3 pending = 6 bytes must fit a 10-byte budget");
+}
+
+/// A same-size replacement of an already-resident key must not be refused: the old resident copy
+/// is freed by the same `put`, so it is not double-counted against the new one.
+#[test]
+fn would_exceed_budget_after_put_does_not_double_count_a_same_key_replacement() {
+    let mut store = MirrorStore::new(DefaultTierPolicy, 10);
+    let key = StoreKey::new("config/a");
+    store.put(key.clone(), vec![9u8; 3]);
+    store.take_pending();
+    // tracked_bytes is now 3 (resident only). A same-size overwrite adds 0 net resident bytes
+    // and 3 pending bytes: 3 + 0 + 3 = 6, well within budget.
+    assert!(!store.would_exceed_budget_after_put(&key, 3), "an equal-size replacement must not be refused as if it added a second full copy");
+}
+
+/// CodeRabbit finding on runtime.rs:281: bytes a caller has exported across the worker boundary
+/// and not yet acknowledged must still count against the budget, even though `take_pending`
+/// already removed them from `pending_bytes`. Otherwise a stalled acknowledgment lets retained
+/// export memory grow with no limit while the mirror keeps reporting room to spare.
+#[test]
+fn charge_pending_export_counts_against_the_budget_until_released() {
+    let store = MirrorStore::new(DefaultTierPolicy, 10);
+    assert_eq!(store.remaining_budget(), 10);
+    store.charge_pending_export(6);
+    assert_eq!(store.remaining_budget(), 4);
+    assert!(store.would_exceed_budget_after_put(&StoreKey::new("config/a"), 3), "3 + 3 = 6 on top of 6 already exported must exceed a 10-byte budget");
+    store.release_pending_export(6);
+    assert_eq!(store.remaining_budget(), 10);
 }
