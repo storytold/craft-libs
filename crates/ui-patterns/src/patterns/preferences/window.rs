@@ -1,4 +1,4 @@
-//! `PreferencesWindow`: the preferences body in a modeless `Dialog` that opens in its own OS window where windows
+//! `PreferencesWindow`: the preferences body in an app-modal `Dialog` that opens in its own OS window where windows
 //! exist.
 
 #[cfg(feature = "testing")]
@@ -50,7 +50,9 @@ pub struct PreferencesState {
 ///   cancels, once the search text, a field's own gesture and a popup have had them.
 /// - **Nested dialogs.** While [`PreferencesModel::nested_open`] is true the window takes no input and refuses to
 ///   close; [`PreferencesModel::nested`] draws the nested dialogs inside the window's own viewport.
-/// - **Placement.** The window opens in its own OS window where there are any, else as a modeless dialog layer
+/// - **App-modal.** While the window is open the app's other windows take no input, show the blocked cursor and
+///   refuse to close, and a press on one raises the window.
+/// - **Placement.** The window opens in its own OS window where there are any, else as a modal dialog layer
 ///   ([`embedded`](PreferencesWindow::embedded) forces the layer). [`remember`](PreferencesWindow::remember) keeps
 ///   its place and size across runs.
 #[must_use = "show the window with `show`"]
@@ -157,7 +159,6 @@ impl<'a> PreferencesWindow<'a> {
         });
         let mut dialog = Dialog::new(title.clone())
             .collection_body()
-            .modeless()
             .resizable(true)
             .close_on_enter(can_ok)
             .on_pick(|button, cx| {

@@ -1,7 +1,7 @@
 //! `Tour` (24.4): a guided walk through the interface, one step at a time, a card beside the part it explains.
 
 use super::words::PanelWords;
-use crate::contract::overlay::{Anchor, FloatPlace, OverlayFit, Place, ViewportShare};
+use crate::contract::overlay::{Anchor, Dismiss, FloatPlace, Outside, OverlayFit, Place, ViewportShare};
 use crate::contract::{Bind, Overlay, Pattern, Props, Show as _, ShowContainer as _};
 use crate::display::Text;
 use crate::layout_components::Stack;
@@ -10,7 +10,6 @@ use crate::popover::Popover;
 use crate::runtime::commands::{CommandSet as _, Commands as _};
 use crate::runtime::env::{Env, Label};
 use crate::runtime::focus::Initial;
-use crate::runtime::overlay::{Backdrop, Rank};
 use craft_behavior::overlay::{Align, Side};
 use craft_behavior::{EditEvent, Mixed};
 use craft_theme::variant::Tone;
@@ -21,7 +20,7 @@ use std::sync::Arc;
 mod stories;
 
 /// The keys of a tour: Right goes to the next step and Left back (the keymap mirrors them in a right-to-left
-/// interface). They belong to the tour that holds the focus and work under the tour's own modal layer.
+/// interface). They belong to the tour that holds the focus.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui_macros::CommandSet)]
 #[command(prefix = "tour", scope = "tour")]
 #[non_exhaustive]
@@ -41,8 +40,8 @@ const CARD_SHARE: ViewportShare = ViewportShare::new(0.3, 0.6);
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct TourStep {
-    /// The part the step points at, in window coordinates. The scrim leaves it clear and the card sits beside it; a
-    /// step without one shows its card in the middle of the window.
+    /// The part the step points at, in window coordinates. The card sits beside it; a step without one shows its card
+    /// in the middle of the window.
     pub target: Option<Rect>,
     /// The step's heading.
     pub title: Label,
@@ -87,7 +86,8 @@ pub struct TourOutput {
 }
 
 /// A guided tour of the interface: a card with the step's heading and text, Skip, Back and Next (Done on the last
-/// step) and the step count, beside the part the step points at, with the rest of the window dimmed.
+/// step) and the step count, beside the part the step points at. The rest of the window stays usable and undimmed:
+/// only the card takes presses, and a press outside it leaves the tour running.
 ///
 /// - Show it while the tour runs; the app stops showing it on `Finished` and `Skipped`.
 /// - The index binding holds the step; Next and Back change it and report the event. An index past the last step
@@ -172,20 +172,14 @@ impl<'a> Tour<'a> {
     }
 }
 
-/// The card's layer: modal, with the scrim leaving `target` clear and the card beside it, else a plain scrim and the
-/// card in the middle.
+/// The card's layer: a popup beside `target`, else in the middle of the window. It blocks nothing and dims nothing; a
+/// press outside leaves it open.
 fn layer(target: Option<Rect>) -> Overlay {
-    let mut overlay = Overlay::modal();
+    let mut overlay = Overlay::popover().dismiss(Dismiss::new().outside(Outside::Keep));
     overlay.fit = OverlayFit::ContentCapped(CARD_SHARE);
-    match target {
-        Some(target) => {
-            overlay.rank = Rank::modal(Backdrop::ScrimWithHole(target));
-            overlay.place = Place::anchored(Anchor::Rect(target), Side::End, Align::Center);
-        }
-        None => {
-            overlay.rank = Rank::modal(Backdrop::Scrim);
-            overlay.place = Place::Float(FloatPlace::centred());
-        }
-    }
+    overlay.place = match target {
+        Some(target) => Place::anchored(Anchor::Rect(target), Side::End, Align::Center),
+        None => Place::Float(FloatPlace::centred()),
+    };
     overlay
 }

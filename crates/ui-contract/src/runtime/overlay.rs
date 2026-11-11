@@ -23,8 +23,6 @@ pub enum Backdrop {
     None,
     /// One scrim over the viewport.
     Scrim,
-    /// A scrim with a hole around a rect (the tour).
-    ScrimWithHole(Rect),
 }
 
 /// An overlay's place in the order. `Rank` is the only place a layer's egui order is chosen.

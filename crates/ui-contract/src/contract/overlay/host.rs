@@ -145,14 +145,10 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     // A modal's scrim; it takes the presses below the modal while the modal is open.
     let cover_id = sub(layer.id, "cover");
     let cover = match overlay.rank {
-        Rank::Modal { backdrop } if backdrop != Backdrop::None => {
-            let hole = match backdrop {
-                Backdrop::ScrimWithHole(hole) => Some(hole),
-                _ => None,
-            };
+        Rank::Modal { backdrop: Backdrop::Scrim } => {
             let scrim = crate::style::scrim_color(&layer.env.tokens).gamma_multiply(layer.fade);
             let through = crate::runtime::sampler::through(ctx, crate::runtime::egui::pass::current_viewport(ctx), layer.id);
-            areas::show_cover_layer(ctx, areas::CoverLayer { id: cover_id, tier, screen: bounds, scrim, hole, through, absorbs: !layer.exiting });
+            areas::show_cover_layer(ctx, areas::CoverLayer { id: cover_id, tier, screen: bounds, scrim, through, absorbs: !layer.exiting });
             Some(areas::layer_of(tier, cover_id))
         }
         _ => None,

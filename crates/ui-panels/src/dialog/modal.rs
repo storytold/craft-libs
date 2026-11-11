@@ -16,7 +16,7 @@ use crate::runtime::overlay::{self, Backdrop, CloseReason, Rank};
 use crate::runtime::windows::{self, WindowHost};
 use crate::sections::{DialogRole, FooterButton};
 use crate::style::{ComponentStyle, StyleCx};
-use craft_behavior::{Metrics, Sense};
+use craft_behavior::{CancelRule, Metrics, Sense};
 use craft_host::target::WindowState;
 use egui::{Context, Id, Pos2, Rangef, Rect, Response, Ui, ViewportId};
 
@@ -42,6 +42,8 @@ type SettleFn<'a> = Box<dyn FnMut(&mut BodyCx<'_>, &mut [FooterButton]) + 'a>;
 /// - Placement and size: saved across runs under [`remember`](Dialog::remember); a resizable dialog also saves the
 ///   size the user left it at.
 /// - A modal dialog blocks input below it in every window; a press outside does nothing.
+/// - Escape closes a modal dialog, and a modeless one with a footer; a modeless tool window without one ignores it.
+/// - Focus starts on the body's first text or number field, else on the default button, else nowhere.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container)]
 pub struct Dialog<'a> {
@@ -124,6 +126,8 @@ impl<'a> Dialog<'a> {
     /// dialog has until the user resizes it (`Overlay::size`) and the least it may be resized to (`Overlay::min_size`).
     #[must_use]
     pub fn overlay(mut self, change: impl FnOnce(Overlay) -> Overlay) -> Self {
+        let footer = self.props.footer.is_some();
+        let change = |overlay| escape_rule(change(overlay), footer);
         self.props = match std::mem::take(&mut self.props.mount) {
             Mount::Layer(overlay) => self.props.mount(Mount::Layer(change(overlay))),
             Mount::Viewport { fallback, spec } => self.props.mount(Mount::Viewport { fallback: change(fallback), spec }),
@@ -248,7 +252,7 @@ impl<'a> Dialog<'a> {
         let region = self.footer_region();
         self.props = self.props.footer(region);
         self.footer = Some(Box::new(content));
-        self
+        self.overlay(|overlay| overlay)
     }
 
     /// The footer stands in a column at the end edge, beside the whole body and at its top, instead of across the
@@ -291,6 +295,14 @@ impl Dialog<'_> {
             ModalDragStrip::new(strip).id(sub(dialog, ("drag_strip", at))).show(ui, |_, _| {});
         }
     }
+}
+
+/// Escape closes a modal dialog, and a modeless one whose footer answers it; a modeless tool window without a footer
+/// ignores it.
+fn escape_rule(mut overlay: Overlay, footer: bool) -> Overlay {
+    let cancel = if overlay.rank.is_modal() || footer { CancelRule::Close } else { CancelRule::Ignore };
+    overlay.focus = overlay.focus.cancel(cancel);
+    overlay
 }
 
 /// Whether the dialog `id` is the layer that takes the keys: no popup of the dialog and no other modal is open above

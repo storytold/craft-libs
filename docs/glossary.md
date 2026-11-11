@@ -17,7 +17,7 @@ One row per name in the author table (Overview) and per `pub` item a component a
 | Arena member | A component that joins the innermost `Env.arena` because it is neither an arena root nor a text or editor leaf | `craft_ui::contract` | 8.3 |
 | Arena root | A container with `ContainerProps.arena`, or any collection | `craft_ui::contract` | 8.3 |
 | `ArenaId` | The id of an arena, carried in `Env.arena` | `craft_ui::runtime::env` | 8.3 |
-| `Backdrop` | A modal's scrim (`None`, `Scrim`, `ScrimWithHole`), carried by `Rank::Modal` | `craft_ui::runtime` (layer stack) | 15.2 |
+| `Backdrop` | A modal's scrim (`None`, `Scrim`), carried by `Rank::Modal` | `craft_ui::runtime` (layer stack) | 15.2 |
 | `Bind<T>` | The one value binding | `craft_ui::contract` | 10.2 |
 | `BindMut<T>` | A reborrowed `Bind<T>` that `bind()`, `open()`, `scroll()` and `selection()` return | `craft_ui::contract` | 10.2 |
 | Body | The caller's closure that a container shows, its one caller region | — | 16.3 |
