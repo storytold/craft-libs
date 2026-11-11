@@ -1,4 +1,4 @@
-//! The panel's commands, its panel-menu rows, the row menu and the eye's label-colour menu.
+//! The panel's commands and keys, its panel-menu rows, the row menu and the eye's label-colour menu.
 
 use craft_theme::{LabelColor, Srgba};
 use craft_ui::contract::{CommandSet, Entry};
@@ -17,9 +17,9 @@ use crate::ui::options::LayersSettings;
 use crate::ui::thumbs::ThumbContents;
 use crate::ui::tree::LayerTree;
 
-/// The commands of the Layers panel: its panel-menu rows, the stacking keys and the effects keys.
+/// The commands of the Layers panel: its panel-menu rows and the stacking keys.
 ///
-/// They are the app's commands. Settings commands run with
+/// They are the app's commands; the effects keys are the panel's own ([`LayersPanelKeys`]). Settings commands run with
 /// [`settings_action`](LayersPanelCommands::settings_action); the others become events with
 /// [`event`](LayersPanelCommands::event), which the app applies like the panel's own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
@@ -50,6 +50,15 @@ pub enum LayersPanelCommands {
     /// Move the selected layers to the bottom.
     #[command(label = "Send to Back", default = "Cmd+Shift+[")]
     MoveToBottom,
+}
+
+/// The effects keys of the Layers panel, on the panel's own scope: they work while focus is anywhere in the panel, and
+/// the panel reports them as [`LayersEvent::FxOpen`]. In the rows they are Shift with Left and Right, which the list
+/// leaves to the panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
+#[command(prefix = "layersPanel", scope = "layersPanel")]
+#[non_exhaustive]
+pub enum LayersPanelKeys {
     /// Open the effects and Smart Filter rows of the active layer.
     #[command(label = "Show Effects", default = "Shift+Right")]
     ShowEffects,
@@ -97,24 +106,30 @@ impl LayersPanelCommands {
         }
     }
 
-    /// The event a stacking or effects command makes over `tree`'s selection; `None` when there is
-    /// nothing to do. `label` names the undo step of a move.
+    /// The event a stacking command makes over `tree`'s selection; `None` when there is nothing to do. `label` names
+    /// the undo step of a move.
     pub fn event<T: LayerTree>(self, tree: &T, label: impl Into<Arc<str>>) -> Option<LayersEvent<T::Id>> {
-        let fx = |open: bool, all: bool| {
-            let layer = tree.selection().active?;
-            let info = tree.info(&layer);
-            (info.has_effects || info.has_smart_filters).then_some(LayersEvent::FxOpen { layer, open, all })
-        };
         match self {
             LayersPanelCommands::MoveUp | LayersPanelCommands::MoveDown | LayersPanelCommands::MoveToTop | LayersPanelCommands::MoveToBottom => {
                 stacking_event(tree, self, label.into())
             }
-            LayersPanelCommands::ShowEffects => fx(true, false),
-            LayersPanelCommands::HideEffects => fx(false, false),
-            LayersPanelCommands::ShowAllEffects => fx(true, true),
-            LayersPanelCommands::HideAllEffects => fx(false, true),
             _ => None,
         }
+    }
+}
+
+impl LayersPanelKeys {
+    /// The event the key makes over `tree`'s active layer; `None` when it has no effects or Smart Filters.
+    pub(super) fn event<T: LayerTree>(self, tree: &T) -> Option<LayersEvent<T::Id>> {
+        let (open, all) = match self {
+            LayersPanelKeys::ShowEffects => (true, false),
+            LayersPanelKeys::HideEffects => (false, false),
+            LayersPanelKeys::ShowAllEffects => (true, true),
+            LayersPanelKeys::HideAllEffects => (false, true),
+        };
+        let layer = tree.selection().active?;
+        let info = tree.info(&layer);
+        (info.has_effects || info.has_smart_filters).then_some(LayersEvent::FxOpen { layer, open, all })
     }
 }
 

@@ -240,6 +240,15 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     pub(super) fn selects_cells(comp: &C) -> bool {
         Self::select_mode(comp) == SelectMode::Cells
     }
+
+    /// Whether the rows stack one per line down the collection: a list or tree laid out vertically whose selection is
+    /// not of cells, so Left and Right only open and close.
+    pub(super) fn stacked(&self, comp: &C) -> bool {
+        let cells = Self::selects_cells(comp) && self.layout.as_ref().is_some_and(|layout| layout.column_count() > 0);
+        comp.items().overflow != craft_behavior::Axis::X
+            && !cells
+            && self.layout.as_ref().is_some_and(|layout| matches!(layout.nav(), craft_behavior::NavShape::Flat | craft_behavior::NavShape::Tree))
+    }
 }
 
 /// Whether the move is the one that enters a row's children.

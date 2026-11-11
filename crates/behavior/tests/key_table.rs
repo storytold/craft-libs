@@ -28,3 +28,18 @@ fn ctrl_space_toggles_the_pick_only_in_a_multi_select_collection() {
     }
     assert_eq!(intent(Os::Mac, Key::Space, Mods::CMD, multi), None, "Cmd+Space stays the system's on macOS");
 }
+
+/// Shift with Left or Right is no move in rows stacked one per line, so the app's keys get it; a grid keeps it as an
+/// extending move.
+#[test]
+fn shift_left_and_right_are_no_moves_in_stacked_rows() {
+    let grid = KeyRole::new().space(true).moves(true);
+    let stacked = grid.stacked(true);
+    for os in [Os::Mac, Os::Windows] {
+        for key in [Key::Left, Key::Right] {
+            assert_eq!(intent(os, key, Mods::SHIFT, stacked), None, "{os:?} {key:?}: stacked rows");
+            assert!(matches!(intent(os, key, Mods::SHIFT, grid), Some(Intent::Move(_, mods)) if mods.extend), "{os:?} {key:?}: a grid extends");
+            assert!(matches!(intent(os, key, Mods::NONE, stacked), Some(Intent::Move(..))), "{os:?} {key:?}: plain arrows still move");
+        }
+    }
+}

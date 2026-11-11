@@ -6,7 +6,7 @@ use craft_layers::ui::mock::FakeLayers;
 use craft_layers::ui::panel::{LayerColumn, LayerDrop, LayerPosition, LayerToggle, LayersEvent, LayersPanel};
 use craft_layers::ui::tree::{LayerKind, LayerPart, LayerSelection};
 use craft_ui::testing::{Fixture, Target, pointer, trial};
-use egui::{Pos2, Ui, Vec2};
+use egui::{Key, Modifiers, Pos2, Ui, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -225,4 +225,20 @@ fn drop_zones_into_before_and_after_the_last_row() {
     let last = row(&fixture, "Background");
     let below = Pos2::new(last.rect.center().x, last.rect.bottom() + 20.0);
     assert_eq!(dropped(&mut fixture, &app, from, below), Some((vec![8], 9, LayerPosition::After, false)), "the space below the last row");
+}
+
+/// With the rows focused on a layer that has effects, Shift+Right opens its effects and Shift+Left closes them.
+#[trial]
+fn shift_right_and_left_open_and_close_the_active_layers_effects() {
+    let (mut fixture, app) = rig(FakeLayers::sample());
+    let styled = row(&fixture, "Styled");
+    fixture.click(&styled).idle(2);
+    take(&app);
+    let fx = |events: Vec<LayersEvent<u32>>| -> Vec<(u32, bool)> {
+        events.into_iter().filter_map(|event| if let LayersEvent::FxOpen { layer, open, .. } = event { Some((layer, open)) } else { None }).collect()
+    };
+    fixture.key(Key::ArrowRight, Modifiers::SHIFT).idle(2);
+    assert_eq!(fx(take(&app)), [(7, true)], "Shift+Right opens the effects");
+    fixture.key(Key::ArrowLeft, Modifiers::SHIFT).idle(2);
+    assert_eq!(fx(take(&app)), [(7, false)], "Shift+Left closes them");
 }

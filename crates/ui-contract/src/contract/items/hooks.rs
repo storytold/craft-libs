@@ -61,6 +61,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             .moves(true)
             .deletes(props.deletable)
             .owner_arrows(props.item_keys == crate::contract::collection::ItemKeys::Owner)
+            .stacked(self.stacked(comp))
             .home_row(self.layout.as_ref().map_or(0, |layout| layout.first_navigable()))
     }
 

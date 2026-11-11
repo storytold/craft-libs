@@ -39,6 +39,9 @@ pub struct KeyRole {
     /// The component acts on Delete and Backspace (text edits, deleting a selection): they reach it as
     /// `Intent::Delete`. Any other role leaves them to the command scope chain.
     pub deletes: bool,
+    /// A collection of rows stacked one per line (a list or tree, no cells): Shift with Left or Right is no move, so it
+    /// stays a shortcut candidate (Photoshop's Show and Hide Effects in the Layers panel).
+    pub stacked: bool,
     /// A collection that leaves its arrow keys to the component around it (`ItemKeys::Owner`): they are no moves
     /// of this role.
     pub owner_arrows: bool,
@@ -63,6 +66,7 @@ impl KeyRole {
             text: false,
             moves: false,
             deletes: false,
+            stacked: false,
             owner_arrows: false,
             home_row: 0,
         }
@@ -137,6 +141,12 @@ impl KeyRole {
     /// Delete and Backspace are the component's own.
     pub const fn deletes(mut self, on: bool) -> Self {
         self.deletes = on;
+        self
+    }
+
+    /// Shift with Left or Right is no move.
+    pub const fn stacked(mut self, on: bool) -> Self {
+        self.stacked = on;
         self
     }
 
@@ -267,6 +277,9 @@ pub fn intent(os: Os, key: Key, mods: Mods, role: KeyRole) -> Option<Intent> {
         _ => {}
     }
     if role.owner_arrows && is_arrow(key) {
+        return None;
+    }
+    if role.stacked && mods.shift && matches!(key, Key::Left | Key::Right) {
         return None;
     }
     movement(mac, key, mods, role)
