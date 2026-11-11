@@ -139,7 +139,7 @@ fn every_public_function_runs_without_data() {
     // English results depend on the dictionaries other tests install.
     crate::hold_dictionary_tests();
     let lim = Limits { min_word: 0, after_first: 0, before_last: 0, capitalized: true };
-    let opts = Options { ignore_uppercase: false, ignore_numbers: false, ignore_internet: false };
+    let opts = Options { ignore_uppercase: false, ignore_numbers: false, ignore_internet: false, detect_language: true };
     for text in SAMPLES {
         let len = text.len();
         let _ = crate::words(text);
