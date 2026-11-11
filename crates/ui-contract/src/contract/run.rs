@@ -1215,16 +1215,17 @@ fn measure_shape<C: Component>(
     let scx = steps::style_cx(ui.ctx(), &env, &step1);
     let style = steps::style::<C>(ui.ctx(), &scx, comp.style_key());
     let resolved = steps::resolved(id, &step1, &common);
-    let width = match proposal {
-        Proposal::Width(width) => Some(width),
-        _ => None,
+    let (at, width) = match proposal {
+        Proposal::Width(width) => (ShowAt::Flow, Some(width)),
+        Proposal::Size(size) => (ShowAt::Rect(Rect::from_min_size(ui.available_rect_before_wrap().min, size)), None),
+        _ => (ShowAt::Flow, None),
     };
     // A leaf adds nothing to its own measure, so it opens no stage.
     let (extent, shown) = if hooks.shape() == ShapeKind::Leaf {
         (Vec2::ZERO, shown)
     } else {
         let mut stage = MemoryStage::open_peek(ui.ctx(), id);
-        let measuring = Measuring { ui, at: ShowAt::Flow, width, env: &env, scx: &scx, resolved: &resolved, command: step1.command.clone(), mixed };
+        let measuring = Measuring { ui, at, width, env: &env, scx: &scx, resolved: &resolved, command: step1.command.clone(), mixed };
         measured_extent(comp, hooks, &measuring, &mut stage, &style, shown)
     };
     let ask = |comp: &mut C, proposal: Proposal| {

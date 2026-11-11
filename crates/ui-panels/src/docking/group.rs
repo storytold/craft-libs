@@ -152,7 +152,8 @@ pub struct DockGroupOutput {
     pub toggle_minimized: bool,
     /// A tab was dragged out of the dock's windows.
     pub torn_off: Option<TornOff<PanelKey>>,
-    /// A drag of the whole group started on the grip.
+    /// A drag started on the group this pass: of the whole group on the grip, or of a tab. The host may add the size
+    /// the dragged unit floats at with `drag::amend` in this pass.
     pub drag_started: bool,
 }
 
@@ -329,6 +330,7 @@ impl<P: Clone + Hash + Send + Sync + 'static> Container for DockGroup<'_, P> {
         let surface_pressed = cx.surface_pressed();
         let (size, movable, move_group) = (self.size, self.movable, words.move_group.fill(&[]));
         let reported = &mut self.reported;
+        let drags = crate::runtime::drag::started(ui.ctx());
         Row::new().show(ui, |ui, _| {
             if let Some(hook) = extra.as_mut() {
                 hook.run(ui, cx);
@@ -362,6 +364,8 @@ impl<P: Clone + Hash + Send + Sync + 'static> Container for DockGroup<'_, P> {
             if let Some(dock) = dock {
                 register_insertions(ui.ctx(), dock, &anchor, panels, &strip.tab_rects, rtl);
             }
+            reported.drag_started |= crate::runtime::drag::started(ui.ctx()) != drags
+                && crate::runtime::drag::active::<PanelDrag>(ui.ctx()).is_some_and(|drag| drag.from == from);
             reported.picked = strip.picked.or(reported.picked);
             reported.closed.extend(strip.closed);
             reported.menu = strip.menu.or(reported.menu.take());

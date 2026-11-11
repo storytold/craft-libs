@@ -14,6 +14,10 @@ pub enum Proposal {
     Min,
     /// The height at this width.
     Width(f32),
+    /// The size in a room this wide and tall, as the component takes it shown at a rect of that size: it takes no share
+    /// of the room of the body it is measured in. A container's content that fills the room takes it; other content
+    /// its own size.
+    Size(Vec2),
 }
 
 /// What the pipeline adds around a component's measured content.

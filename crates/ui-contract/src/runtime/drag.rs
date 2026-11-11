@@ -163,6 +163,8 @@ struct Session {
     os: bool,
     /// The root frame in which the OS dropped the files.
     dropped: Option<u64>,
+    /// The root frame the session started in, the only one in which [`amend`] changes its payload.
+    began: u64,
 }
 
 /// A drop a target took: the source's `drag_ended` reads it in the next frame.
@@ -210,6 +212,7 @@ fn board<R>(ctx: &Context, f: impl FnOnce(&mut Board) -> R) -> R {
 #[doc(hidden)]
 pub fn start(ctx: &Context, source: Id, payload: Arc<dyn Any + Send + Sync>, also: Option<Arc<dyn Any + Send + Sync>>, preview: DragPreview) {
     let viewport = WindowHost::of(ctx).viewport_of(source).unwrap_or_else(|| pass::current_viewport(ctx));
+    let began = pass::root_frame_nr(ctx);
     board(ctx, |board| {
         if board.session.is_none() {
             let buttons = pointer::buttons_of(ctx, viewport);
@@ -230,6 +233,7 @@ pub fn start(ctx: &Context, source: Id, payload: Arc<dyn Any + Send + Sync>, als
                 taken: false,
                 os: false,
                 dropped: None,
+                began,
             });
             board.ended = None;
             board.started += 1;
@@ -240,6 +244,23 @@ pub fn start(ctx: &Context, source: Id, payload: Arc<dyn Any + Send + Sync>, als
 
 fn operation(ctx: &Context, mods: Mods) -> DropOperation {
     drop_operation(windows::os_of(ctx), mods)
+}
+
+/// Changes the running session's payload of type `P` (or its second payload of that type) with `change`, in the frame
+/// the session started only: a host completes what a drag its component started carries with what only the host knows
+/// (a dock measures the panel a tab drag floats). Returns whether a payload changed; from the next frame on, the
+/// payload is fixed and nothing changes.
+pub fn amend<P: Clone + Send + Sync + 'static>(ctx: &Context, change: impl FnOnce(&mut P)) -> bool {
+    let frame = pass::root_frame_nr(ctx);
+    board(ctx, |board| {
+        let Some(session) = board.session.as_mut().filter(|session| session.began == frame) else { return false };
+        let slot = if session.payload.is::<P>() { Some(&mut session.payload) } else { session.also.as_mut().filter(|also| also.is::<P>()) };
+        let Some(slot) = slot else { return false };
+        let Some(mut payload) = slot.downcast_ref::<P>().cloned() else { return false };
+        change(&mut payload);
+        *slot = Arc::new(payload);
+        true
+    })
 }
 
 /// The active drag payload of type `P`, from any viewport. For code without a `Cx`.
@@ -308,6 +329,7 @@ fn os_files(ctx: &Context) {
                 taken: false,
                 os: true,
                 dropped: None,
+                began: frame,
             });
             board.ended = None;
             board.started += 1;

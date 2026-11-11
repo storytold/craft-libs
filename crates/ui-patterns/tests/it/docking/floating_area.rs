@@ -1,19 +1,26 @@
 //! Floating windows of a `DockArea`: a drop over a window lands on it.
 
-use craft_behavior::dock::{Action, Floating, Layout, Node, Permissions, Workspace};
-use craft_ui::contract::{Bind, BodyCx, Role};
+use craft_behavior::Axis;
+use craft_behavior::dock::{Action, Floating, Layout, Node, Permissions, SplitSize, Workspace};
+use craft_ui::contract::{Bind, BodyCx, Role, Show as _, ShowContainer as _};
+use craft_ui::display::Text;
 use craft_ui::docking::{DockConfig, DockPanels, GroupDrag, PanelSpec};
+use craft_ui::layout_components::Stack;
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::runtime::drag::{self, DropMark};
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::{Fixture, trial};
-use egui::{Pos2, Rect, Ui, Vec2};
+use egui::{Modifiers, Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 const DOCKED: usize = 1;
 const WINDOW: usize = 2;
 const SECOND: usize = 3;
+/// A panel whose content is two lines of text.
+const SHORT: usize = 4;
+/// A panel whose content fills its body.
+const FILL: usize = 5;
 /// Inside the fixture's room, so the area's bounds clamp neither the window nor the moves and resizes made of it.
 const WINDOW_AT: Rect = Rect { min: Pos2::new(130.0, 90.0), max: Pos2::new(330.0, 210.0) };
 const SLACK: f32 = 1.5;
@@ -35,7 +42,20 @@ impl DockPanels<usize> for Panels {
         (self.rights)(panel)
     }
 
-    fn body(&mut self, _: &usize, _: &mut Ui, _: &mut BodyCx<'_>) {}
+    fn body(&mut self, panel: &usize, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        match *panel {
+            SHORT => {
+                Text::new("One").show(ui);
+                Text::new("Two").show(ui);
+            }
+            FILL => {
+                Stack::new().fill().show(ui, |ui, _| {
+                    Text::new("Fills").show(ui);
+                });
+            }
+            _ => {}
+        }
+    }
 }
 
 /// A dock area over a bound workspace; the area applies its actions. A second area over its own workspace shows
@@ -45,13 +65,16 @@ struct Bed {
     workspace: Rc<RefCell<Workspace<usize>>>,
     actions: Rc<RefCell<Vec<Action<usize>>>>,
     second: Rc<Cell<bool>>,
+    /// The tallest a floated panel opens (`FloatSpace::default_size`), as the area reported it.
+    float_height: Rc<Cell<f32>>,
 }
 
 fn bed(layout: Layout<usize>, rights: fn(&usize) -> Permissions) -> Bed {
     let workspace = Rc::new(RefCell::new(Workspace::new(layout)));
     let actions: Rc<RefCell<Vec<Action<usize>>>> = Rc::default();
     let second = Rc::new(Cell::new(false));
-    let (held, seen_actions, shows_second) = (Rc::clone(&workspace), Rc::clone(&actions), Rc::clone(&second));
+    let float_height = Rc::new(Cell::new(0.0));
+    let (held, seen_actions, shows_second, seen_height) = (Rc::clone(&workspace), Rc::clone(&actions), Rc::clone(&second), Rc::clone(&float_height));
     let mut other = Workspace::new(Layout::new(Some(Node::tabs(vec![SECOND], 0)), Vec::new()));
     let mut fixture = Fixture::new(move |ui| {
         let mut workspace = held.borrow().clone();
@@ -59,12 +82,15 @@ fn bed(layout: Layout<usize>, rights: fn(&usize) -> Permissions) -> Bed {
         let out = DockArea::new("Floating dock", Bind::bound(&mut workspace), &mut panels, DockConfig::default()).show(ui);
         *held.borrow_mut() = workspace;
         seen_actions.borrow_mut().extend(out.actions);
+        if let Some(space) = out.float_space {
+            seen_height.set(space.default_size.y);
+        }
         if shows_second.get() {
             DockArea::new("Second dock", Bind::bound(&mut other), &mut panels, DockConfig::default()).show(ui);
         }
     });
     fixture.settle();
-    Bed { fixture, workspace, actions, second }
+    Bed { fixture, workspace, actions, second, float_height }
 }
 
 /// A point on the floating window's title row.
@@ -167,16 +193,47 @@ fn a_floating_windows_drag_bar_shows_no_title() {
 
 /// A tab dragged out of the window floats at the width its group had where it was docked, not a default size.
 #[trial]
-fn a_tab_torn_out_of_its_group_floats_at_the_groups_width() {
-    let mut bed = bed(Layout::new(Some(Node::tabs(vec![DOCKED, SECOND], 0)), Vec::new()), |_| Permissions::ALL);
-    let group = bed.fixture.by_role(Role::TAB_PANEL).first().expect("the docked group shows").rect;
-    let tab = bed.fixture.by_role(Role::TAB).into_iter().max_by(|a, b| a.rect.min.x.total_cmp(&b.rect.min.x)).expect("the second tab shows");
+fn a_floated_panel_fits_its_content_up_to_the_float_height() {
+    let floated = |bed: &Bed, panel: usize| {
+        let layout = bed.workspace.borrow().layout.clone();
+        let window = layout.floating.iter().find(|window| window.contains(&panel)).map(|window| window.rect);
+        window.unwrap_or_else(|| panic!("panel {panel} floats: {:?}", bed.actions.borrow()))
+    };
+
+    // Torn out of the window: the filling panel floats at the group's width and the cap, which a measure of its
+    // content alone would not reach.
+    let mut torn = bed(Layout::new(Some(Node::tabs(vec![FILL, SHORT], 0)), Vec::new()), |_| Permissions::ALL);
+    let group = torn.fixture.by_role(Role::TAB_PANEL).first().expect("the docked group shows").rect;
+    let tab = torn.fixture.by_role(Role::TAB).into_iter().min_by(|a, b| a.rect.min.x.total_cmp(&b.rect.min.x)).expect("FILL's tab shows").rect;
     let outside = Pos2::new(group.center().x, -40.0);
-    press_and_move(&mut bed.fixture, tab.center(), outside - tab.center());
-    bed.fixture.frame(vec![release(outside)]);
-    bed.fixture.settle();
-    let layout = bed.workspace.borrow().layout.clone();
-    let window =
-        layout.floating.iter().find(|window| window.contains(&SECOND)).unwrap_or_else(|| panic!("the tab floats: {:?}", bed.actions.borrow()));
-    assert!((window.rect.width() - group.width()).abs() <= SLACK, "floated {:?}, docked group {group:?}", window.rect);
+    press_and_move(&mut torn.fixture, tab.center(), outside - tab.center());
+    torn.fixture.frame(vec![release(outside)]);
+    torn.fixture.settle();
+    let fill = floated(&torn, FILL);
+    let cap = torn.float_height.get();
+    assert!(cap < group.height() - SLACK, "the cap {cap} is below the docked group {group:?}");
+    assert!((fill.width() - group.width()).abs() <= SLACK, "floated {fill:?}, docked group {group:?}");
+    assert!((fill.height() - cap).abs() <= SLACK, "filling content floats at the cap: {fill:?}, cap {cap}");
+
+    // The group dragged by its strip's empty room into its own body and released with the key that floats: the
+    // drag carries the measure the area added in the pass it started, and the short panel floats at its content's
+    // height.
+    let root = Node::split(Axis::X, SplitSize::Ratio(0.5), Node::tabs(vec![SHORT], 0), Node::tabs(vec![DOCKED], 0));
+    let mut dragged = bed(Layout::new(Some(root), Vec::new()), |_| Permissions::ALL);
+    let tab = dragged.fixture.by_role(Role::TAB).into_iter().min_by(|a, b| a.rect.min.x.total_cmp(&b.rect.min.x)).expect("the tab shows").rect;
+    let group = dragged.fixture.by_role(Role::TAB_PANEL).into_iter().find(|group| group.rect.contains(tab.center())).expect("its group shows").rect;
+    assert!(cap < group.height() - SLACK, "the cap {cap} is below the docked group {group:?}");
+    let grip = Pos2::new(group.center().x + group.width() / 4.0, tab.center().y);
+    let inside = group.center();
+    press_and_move(&mut dragged.fixture, grip, inside - grip);
+    assert!(dragging(&dragged), "the strip's empty room drags the group");
+    // The key goes down while the pointer still moves, so the drop target marks the float before the release.
+    dragged.fixture.hold(Modifiers::COMMAND);
+    dragged.fixture.frame(vec![moved(inside)]);
+    dragged.fixture.frame(vec![release(inside)]);
+    dragged.fixture.hold(Modifiers::NONE);
+    dragged.fixture.settle();
+    let short = floated(&dragged, SHORT);
+    assert!((short.width() - group.width()).abs() <= SLACK, "floated {short:?}, docked group {group:?}");
+    assert!(short.height() < cap - SLACK, "short content floats at its height: {short:?}, cap {cap}");
 }

@@ -58,9 +58,6 @@ impl<P> Clone for HidePanels<'_, P> {
 
 impl<P> Copy for HidePanels<'_, P> {}
 
-/// How much shorter than its body content must be to count as not filling it.
-const FILL_TOLERANCE: f32 = 1.0;
-
 /// Where a docking command floats a panel, group or column when it gives no rect. A dock records one each pass;
 /// the host reads it to turn a command into placements.
 #[derive(Clone, Debug, PartialEq)]
@@ -72,13 +69,11 @@ pub struct FloatSpace<P> {
     pub inset: f32,
     /// The height of a floating window's title row (`DockSizes::bar`), which a drop keeps under the pointer.
     pub title_row: f32,
-    /// The size a unit floats at when neither its panel nor where it came from gives one.
+    /// The size a unit floats at when neither its panel nor where it came from gives one. Its height is also the
+    /// most a panel, group or column floats at.
     pub default_size: Vec2,
     /// The float size of each panel that has one of its own (`PanelSpec::float_size`).
     panels: Vec<(P, Vec2)>,
-    /// The height each panel's content used when it was last drawn, which fits a floated group to its content;
-    /// `None` for content that filled its body.
-    contents: Vec<(P, Option<f32>)>,
     /// The area draws with `DockConfig::side_edge_zones`: an outer edge drop wraps the part between the docks.
     side_edge_zones: bool,
 }
@@ -93,7 +88,6 @@ impl<P: PartialEq> FloatSpace<P> {
             title_row: sizes.bar,
             default_size: sizes.float_size,
             panels: Vec::new(),
-            contents: Vec::new(),
             side_edge_zones: false,
         }
     }
@@ -122,15 +116,26 @@ impl<P: PartialEq> FloatSpace<P> {
         Self::find(&self.panels, panel)
     }
 
-    /// The size `unit` floats at: a panel's own float size, else the size it had where it came from (`source`, a
-    /// window's own or a group's or column's with the window's title row above it), else the default.
+    /// The size `unit` floats at: a panel's own float size, else the size it had where it came from (`source`), else
+    /// the default. A window keeps its own size. A panel, group or column takes the source's width and its height
+    /// with the window's title row above it, at most the default height: the dock passes the height its content
+    /// measures at in that room, so content that fills floats at the default height.
     pub fn size_of(&self, unit: &DragUnit<P>, source: Option<Vec2>) -> Vec2 {
         let own = match unit {
             DragUnit::Panel(panel) => self.panel(panel),
             _ => None,
         };
-        let framed = |size: Vec2| if matches!(unit, DragUnit::Window(_)) { size } else { size + Vec2::new(0.0, self.title_row) };
+        let framed = |size: Vec2| match unit {
+            DragUnit::Window(_) => size,
+            _ => Vec2::new(size.x, (size.y + self.title_row).min(self.default_size.y)),
+        };
         own.or(source.map(framed)).unwrap_or(self.default_size)
+    }
+
+    /// The height a panel, group or column's content is measured in for a float of it: the default height less the
+    /// window's title row.
+    pub fn content_room(&self) -> f32 {
+        (self.default_size.y - self.title_row).max(0.0)
     }
 
     fn find(sizes: &[(P, Vec2)], panel: &P) -> Option<Vec2> {
@@ -142,19 +147,5 @@ impl<P: PartialEq> FloatSpace<P> {
         let size = size.min(self.area.size());
         let min = (self.area.min + Vec2::splat(self.inset)).min(self.area.max - size).max(self.area.min);
         Rect::from_min_size(min, size)
-    }
-
-    /// Records the height `panel`'s content used in a body `available` tall. Content that reaches the body's bottom
-    /// filled it and has no height of its own, unless the body was sized to the height recorded before (a fitted
-    /// window).
-    pub fn record(&mut self, panel: P, used: f32, available: f32) {
-        let used = if used.is_finite() { used.max(0.0) } else { 0.0 };
-        let at = self.contents.iter().position(|(held, _)| *held == panel);
-        let fitted = at.and_then(|at| self.contents[at].1).is_some_and(|height| height >= available - FILL_TOLERANCE);
-        let height = (used < available - FILL_TOLERANCE || fitted).then_some(used);
-        match at {
-            Some(at) => self.contents[at].1 = height,
-            None => self.contents.push((panel, height)),
-        }
     }
 }

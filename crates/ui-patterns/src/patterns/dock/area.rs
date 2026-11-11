@@ -15,6 +15,7 @@ use crate::docking::{
 };
 use crate::menu::{GroupItem, MenuWords, PanelMenu, PanelRow};
 use crate::runtime::commands::{CommandRef, CommandSet as _, Commands as _, focus_within};
+use crate::runtime::drag;
 use crate::runtime::env::{Env, Label, RevealEdge, ShellCx, ShellEntry};
 use crate::runtime::memory::Remember as _;
 use crate::runtime::windows::WindowHost;
@@ -680,27 +681,61 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let permissions = |panel: &P| scene.permissions(panel);
         let states = dock_states(&DockScene::new(scene.layout, scene.space, false, &permissions), shown);
         let panels = RefCell::new(&mut *self.panels);
-        let mut group = DockGroup::new(anchor.clone(), &titles, PanelKey::of(shown))
-            .extra(|ui, body| panels.borrow_mut().group_header(members, active, ui, body))
-            .dock(self.dock)
-            .zones(scene.config.zone_rule())
-            .movable(scene.permissions(shown).movable)
-            .menu(menu)
-            .panel_menu_shown(hosted)
-            .command_states(states);
-        if look.minimized {
-            group = group.minimized();
-        }
-        if scene.config.tab_close_buttons {
-            group = group.closable();
-        }
+        // The group with `members[at]` shown: as it shows, or as it is measured.
+        let make = |at: usize, minimized: bool| {
+            let panels = &panels;
+            let mut group = DockGroup::new(anchor.clone(), &titles, PanelKey::of(&members[at]))
+                .extra(move |ui, body| panels.borrow_mut().group_header(members, at, ui, body))
+                .dock(self.dock)
+                .zones(scene.config.zone_rule())
+                .movable(scene.permissions(shown).movable)
+                .menu(menu.clone())
+                .panel_menu_shown(hosted)
+                .command_states(states.clone());
+            if minimized {
+                group = group.minimized();
+            }
+            if scene.config.tab_close_buttons {
+                group = group.closable();
+            }
+            group
+        };
         let rect = match at {
             GroupAt::Measure(width) => {
-                return Some(group.measure_in(ui, Proposal::Width(width), |ui, body| panels.borrow_mut().body(shown, ui, body)).y);
+                let measured =
+                    make(active, look.minimized).measure_in(ui, Proposal::Width(width), |ui, body| panels.borrow_mut().body(shown, ui, body));
+                return Some(measured.y);
             }
             GroupAt::Show(rect) => rect,
         };
-        let output = group.show_at(ui, rect, |ui, body| panels.borrow_mut().body(shown, ui, body)).output;
+        let output = make(active, look.minimized).show_at(ui, rect, |ui, body| panels.borrow_mut().body(shown, ui, body)).output;
+        // The size `panel` floats at out of this group: the group's width, and the height the group measures at with
+        // `panel` shown in a floating window's room, so content that fills the body takes that room.
+        let fitted = |ui: &Ui, panel: &P| {
+            let at = members.iter().position(|member| member == panel).unwrap_or(active);
+            let room = Vec2::new(rect.width(), scene.space.content_room());
+            let measured = make(at, false).id(output.response.id).measure_in(ui, Proposal::Size(room), |ui, body| {
+                panels.borrow_mut().body(&members[at], ui, body);
+            });
+            Vec2::new(rect.width(), measured.y)
+        };
+        let floats = output.commands.iter().any(|command| matches!(command, DockCommands::FloatPanel | DockCommands::FloatGroup));
+        let source = if floats { fitted(ui, shown) } else { rect.size() };
+        if output.drag_started {
+            let ctx = ui.ctx().clone();
+            let tab = drag::active::<PanelDrag>(&ctx).and_then(|drag| scene.panel(drag.panel).cloned());
+            let size = fitted(ui, tab.as_ref().unwrap_or(shown));
+            drag::amend::<PanelDrag>(&ctx, |drag| drag.source = Some(size));
+            drag::amend::<GroupDrag<P>>(&ctx, |drag| drag.source = Some(size));
+        }
+        // A tear-off inside the window is a release no spot took: it floats only with `float_on_empty_drop`.
+        let torn =
+            output.torn_off.as_ref().and_then(|torn| scene.panel(torn.grabbed).map(|panel| (panel, torn.pointer))).filter(|(panel, pointer)| {
+                scene.permissions(panel).movable
+                    && scene.permissions(panel).floatable
+                    && (scene.config.float_on_empty_drop || !ui.ctx().content_rect().contains(*pointer))
+            });
+        let torn = torn.map(|(panel, pointer)| float_drop(&DragUnit::Panel(panel.clone()), scene.space, pointer, Some(fitted(ui, panel))).action);
         if let Some(panel) = output.picked.and_then(|key| scene.panel(key)) {
             self.report.actions.push(Action::activate(panel.clone()));
             self.report.picked = Some(panel.clone());
@@ -715,7 +750,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             self.pick(shown, item);
         }
         for command in output.commands {
-            self.run(shown, command, Some(rect.size()));
+            self.run(shown, command, Some(source));
         }
         if output.toggle_minimized {
             self.report.actions.push(match look.section {
@@ -723,15 +758,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 None => Action::set_minimized(shown.clone(), !look.minimized),
             });
         }
-        // A tear-off inside the window is a release no spot took: it floats only with `float_on_empty_drop`.
-        if let Some(torn) = output.torn_off
-            && let Some(panel) = scene.panel(torn.grabbed)
-            && scene.permissions(panel).movable
-            && scene.permissions(panel).floatable
-            && (scene.config.float_on_empty_drop || !ui.ctx().content_rect().contains(torn.pointer))
-        {
-            self.report.actions.push(float_drop(&DragUnit::Panel(panel.clone()), scene.space, torn.pointer, Some(rect.size())).action);
-        }
+        self.report.actions.extend(torn);
         None
     }
 
