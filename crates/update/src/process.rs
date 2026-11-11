@@ -382,8 +382,14 @@ fn explorer_select_arg(path: &Path) -> Option<std::ffi::OsString> {
     Some(arg)
 }
 
-/// Whether a process started from inside `path` (an exe, an AppImage, or a `.app`) is running.
+/// Whether `path` (an exe, an AppImage, or a `.app`'s main executable) is running.
 pub fn is_running(path: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    if path.extension() == Some(OsStr::new("app"))
+        && let Some(running) = mac_bundle_running(path)
+    {
+        return running;
+    }
     if cfg!(windows) {
         let Some(name) = path.file_name().and_then(OsStr::to_str) else { return false };
         let filter = format!("IMAGENAME eq {name}");
@@ -401,6 +407,27 @@ pub fn is_running(path: &Path) -> bool {
             capture("pgrep", &["-f", "--", &pattern], Duration::from_secs(5)).is_some()
         }
     }
+}
+
+/// Match the executable, not every command line mentioning the bundle: MCP clients keep
+/// bundled CLI helpers alive after the editor quits, and those must not block updates.
+/// If bundle metadata or the process listing is unavailable, retain the conservative
+/// whole-path check below rather than bypassing the running-app guard.
+#[cfg(target_os = "macos")]
+fn mac_bundle_running(bundle: &Path) -> Option<bool> {
+    let info = plist::Value::from_file(bundle.join("Contents/Info.plist")).ok()?;
+    let name = info.as_dictionary()?.get("CFBundleExecutable")?.as_string()?;
+    // CFBundleExecutable names one file inside Contents/MacOS, never a relative/absolute path.
+    if Path::new(name).file_name() != Some(OsStr::new(name)) {
+        return None;
+    }
+    let executable = bundle.join("Contents/MacOS").join(name).canonicalize().ok()?;
+    // comm is the executable path on macOS; args would include unrelated path arguments.
+    let processes = capture("ps", &["-axww", "-o", "comm="], Duration::from_secs(5))?;
+    Some(processes.lines().any(|line| {
+        let path = Path::new(line);
+        path == executable || (path.is_absolute() && path.canonicalize().is_ok_and(|path| path == executable))
+    }))
 }
 
 fn windows_system_program(relative: &str) -> Result<PathBuf, String> {
@@ -475,6 +502,62 @@ mod tests {
             let _probe = RunningProbe::start(&actual);
             assert_eq!(is_running(Path::new(&requested)), expected, "{requested}");
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "self-spawned bundle process fixture"]
+    fn bundle_process() {
+        println!("ready");
+        std::io::stdin().read_line(&mut String::new()).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_bundle_helpers_do_not_block_updates_but_the_main_executable_does() {
+        let dir = tempfile::Builder::new().prefix("craft-process [apps] ").tempdir().unwrap();
+        let bundle = dir.path().join("PhotoCraft.app");
+        let bin = bundle.join("Contents/MacOS");
+        std::fs::create_dir_all(&bin).unwrap();
+        let mut info = plist::Dictionary::new();
+        // The executable need not share the bundle's name.
+        info.insert("CFBundleExecutable".into(), plist::Value::String("PhotoCraft Editor".into()));
+        plist::Value::Dictionary(info).to_file_xml(bundle.join("Contents/Info.plist")).unwrap();
+        for name in ["PhotoCraft Editor", "photocraft-cli", "PhotoCraft Editor Helper"] {
+            std::fs::copy(std::env::current_exe().unwrap(), bin.join(name)).unwrap();
+        }
+        let start = |name: &str| {
+            let (_, module) = module_path!().split_once("::").unwrap();
+            let child = command(bin.join(name))
+                .args(["--ignored", "--exact", &format!("{module}::bundle_process"), "--nocapture"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let mut probe = RunningProbe(child);
+            let mut output = BufReader::new(probe.0.stdout.take().unwrap());
+            loop {
+                let mut line = String::new();
+                assert!(output.read_line(&mut line).unwrap() > 0, "bundle fixture exited before becoming ready");
+                if line.trim() == "ready" {
+                    break;
+                }
+            }
+            probe
+        };
+
+        let _helper = start("photocraft-cli");
+        let _similar_name = start("PhotoCraft Editor Helper");
+        assert!(!is_running(&bundle), "a headless helper must not block updating the closed editor");
+        let _argument = RunningProbe::start(bin.join("PhotoCraft Editor").to_str().unwrap());
+        assert!(!is_running(&bundle), "a bundle path in another process's arguments is not the editor");
+        let editor = start("PhotoCraft Editor");
+        assert!(is_running(&bundle), "the running main executable must still block updates");
+        let alias = dir.path().join("Alias.app");
+        std::os::unix::fs::symlink(&bundle, &alias).unwrap();
+        assert!(is_running(&alias), "a bundle alias must still detect the running editor");
+        drop(editor);
+        assert!(!is_running(&bundle), "the helper can stay alive after the editor exits");
     }
 }
 
