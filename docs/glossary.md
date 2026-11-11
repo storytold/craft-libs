@@ -1,6 +1,6 @@
 # Glossary
 
-One row per name in the author table (Overview) and per `pub` item a component author touches (`contract`, `style`, `primitives`, the `Cx` traits and their re-exports); a doc test checks them against it. "Lives in" is the defining module, from the layer map; a re-exported item has one row, under its defining module. Definitions are in the "Defined in" sections.
+One row per name in the author table (Overview) and per `pub` item a component author touches (`contract`, `style`, `primitives`, the `Cx` traits and their re-exports). "Lives in" is the defining module by its path under the `craft_ui` facade, which re-exports each library crate's modules under the same name ([craft-framework.md 3.2](craft-framework.md#32-the-ui-library-crates)); a re-exported item has one row, under its defining module. "Defined in" names the section of the framework specification that defines the term; the specification is not part of this repository.
 
 | Term | What it is | Lives in | Defined in |
 |---|---|---|---|
@@ -63,7 +63,7 @@ One row per name in the author table (Overview) and per `pub` item a component a
 | `CustomVariant` | A `const` variant built for one component's `StyleKey` with a crate-prefixed id and a look function over semantic tokens | craft-theme | 4.4 |
 | `CxCore`, `Cx` | The per-show interaction context | `craft_ui::contract` | 1.5 |
 | `DataColor` | A colour from data (a swatch, a label dot), the one colour `Draw` accepts besides `StyleColor` | `craft_ui::style` | 4.3 |
-| Decision record | The record each step writes about why it decided what it did, read by `runtime::inspect` and shown by `DebugInspector` | `craft_ui::runtime::inspect` | 1.7 |
+| Decision record | The record each step writes about why it decided what it did, read by `runtime::inspect` | `craft_ui::runtime::inspect` | 1.7 |
 | Decorator | A container whose body shows the decorated component (a badge, an attention dot) | component families | 16.1 |
 | Dense item | An ordinary item with many parts (a sheet row, a timeline track) | — | 17.2 |
 | `Dismiss` | An egui layer's dismissal rules, in `Overlay.dismiss` | `craft_ui::contract` | 15.4 |
