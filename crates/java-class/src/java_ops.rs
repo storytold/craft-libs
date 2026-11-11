@@ -382,7 +382,11 @@ pub fn decode_one(code: &[u8], pc: usize) -> Option<Insn> {
             insn.len = 3;
         }
         Operands::NewArray => {
-            insn.int = Some(i32::from(*code.get(pc + 1)?));
+            let atype = *code.get(pc + 1)?;
+            if !(4..=11).contains(&atype) {
+                return None;
+            }
+            insn.int = Some(i32::from(atype));
             insn.len = 2;
         }
         Operands::InvokeInterface => {
@@ -401,7 +405,11 @@ pub fn decode_one(code: &[u8], pc: usize) -> Option<Insn> {
         }
         Operands::MultiANewArray => {
             insn.cp_index = Some(u16b(code, pc + 1)?);
-            insn.int = Some(i32::from(*code.get(pc + 3)?));
+            let dimensions = *code.get(pc + 3)?;
+            if dimensions == 0 {
+                return None;
+            }
+            insn.int = Some(i32::from(dimensions));
             insn.len = 4;
         }
         Operands::Wide => return decode_wide(code, pc),
