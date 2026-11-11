@@ -147,13 +147,27 @@ impl GpuContext for RuntimeContext {
         }
     }
 
-    fn read_buffer(&self, handle: craft_gpu::HandleId) -> Result<Vec<u8>, GpuFault> {
+    fn request_read(&mut self, handle: craft_gpu::HandleId) -> Result<craft_gpu::ReadRequest, GpuFault> {
         match self {
-            Self::Null(c) => c.read_buffer(handle),
+            Self::Null(c) => c.request_read(handle),
             #[cfg(feature = "web")]
-            Self::Wgpu(c) => c.read_buffer(handle),
+            Self::Wgpu(c) => c.request_read(handle),
         }
     }
+
+    fn poll_reads(&mut self) -> Vec<craft_gpu::ReadOutcome> {
+        match self {
+            Self::Null(c) => c.poll_reads(),
+            #[cfg(feature = "web")]
+            Self::Wgpu(c) => c.poll_reads(),
+        }
+    }
+
+    // read_buffer is intentionally not overridden here: both NullContext and WgpuContext
+    // already override it to preserve unrelated in-flight completions (see
+    // craft-gpu's GpuContext::read_buffer docs), so RuntimeContext forwards through the
+    // trait's default body, which calls request_read/poll_reads on whichever backend is
+    // active rather than duplicating each backend's own override.
 }
 
 /// Worker-side runtime: provider registry + GPU context + host RPC handling.
