@@ -91,6 +91,10 @@ pub struct LoadReport {
     pub dir: Option<PathBuf>,
     /// The rule that chose `dir` (see [`crate::Rule`]), as text so the report stays `Debug`-only.
     pub rule: String,
+    /// Set when a portable folder could not be written and the platform folder was used instead
+    /// ([`crate::Resolved::warning`]). Not part of [`LoadReport::has_problems`]; show it where
+    /// the app shows start-up notes.
+    pub warning: Option<String>,
     /// Where the values came from.
     pub source: Source,
     /// Set when a damaged `config.toml` was renamed; the new name.

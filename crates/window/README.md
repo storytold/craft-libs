@@ -2,146 +2,167 @@ craft-window
 ============
 
 Decide who draws the window frame — the desktop or the app — so every Craft app shows the same
-titlebar and borders on a given desktop, make the app's own top strip act as the title bar
-when it draws one, and keep the window list, cascade placement and Window menu for apps with one
+titlebar and borders on a given desktop, and keep the window list and Window menu for apps with one
 window per document.
 
 ## Why
 
-egui apps either keep the desktop's window frame (titlebar, borders, window buttons) or turn it off
-and draw their own. Across the suite this had drifted:
-
-- some apps always drew their own frame on Linux (so KDE's titlebar was replaced by the app's),
-- some always kept the desktop's,
-- some probed the compositor and only drew their own on GNOME.
-
-So two Craft apps open side by side on KDE could wear different titlebars. This crate makes the
-decision in one place, matching each desktop.
+egui apps either keep the desktop's window frame (title bar, borders, window buttons) or turn it
+off and draw their own. This crate makes that decision in one place, so every Craft app wears the
+same title bar on a given desktop.
 
 ## The rule
 
-| Platform | Frame |
-| --- | --- |
-| macOS, Windows | desktop (the OS) |
-| Linux/BSD on X11 | desktop (the window manager) |
-| Linux/BSD on Wayland **with** `zxdg_decoration_manager_v1` (KDE, Sway, Hyprland, COSMIC) | desktop (the compositor) |
-| Linux/BSD on Wayland **without** it (GNOME's Mutter) | the app |
+The app's own bar is the title bar by default (`Frame::Integrated`). The user setting "Use system
+title bar" (`TitleBarPref::System`) gives the frame to the OS, window manager or compositor
+(`Frame::Native`).
 
-When the app draws the frame, the decision carries the window-button `Layout` the desktop names
-(GNOME's `button-layout`), so the app's header bar puts minimize/maximize/close where that desktop
-puts them. This crate decides *whether* and *where*; drawing the buttons stays in each app, whose
-title bars differ.
+| Platform, desktop, backend | Default | With "Use system title bar" |
+| --- | --- | --- |
+| macOS | `Inset`: full-size content view, hidden title, traffic lights over the app's bar | `Native` |
+| Windows | `Integrated(Windows)`: minimize, maximize, close at the right | `Native` |
+| GNOME, Wayland or XWayland | `Integrated(Adwaita)`, in the order of `button-layout` | `Native` |
+| KDE, Wayland or X11 | `Integrated(Breeze)`, in the order of KWin's `ButtonsOnLeft` and `ButtonsOnRight` | `Native` |
+| COSMIC, Xfce, Cinnamon, MATE, other floating desktops | `Integrated(Generic)` in the order of `gtk-decoration-layout`; Adwaita or Breeze when the GTK theme is one of those | `Native` |
+| Tiling compositors and window managers (Sway, Hyprland, i3, niri, river, from `XDG_CURRENT_DESKTOP`) | `Native` | `Native` |
+| Wayland without server-side decorations, not GNOME | `Integrated(Generic)` | `Native` |
+| Web | `Native`; no frame code runs | `Native` |
+
+The backend is the one the app opens its window on: an app that forces XWayland on a Wayland
+session passes `Backend::X11`. The Wayland registry is probed (500 ms at most) only for
+`Backend::Wayland`.
+
+`policy::decide` is pure and takes the OS, backend, desktop, setting and override. `decide_for`
+reads the platform once and calls it.
 
 ### Override
 
-`<PREFIX>_TITLEBAR` forces the choice. With the default prefix `CRAFT`: `CRAFT_TITLEBAR=app` forces
-the app frame, `=system` (or `=desktop`) forces the desktop frame. Apps pass their own prefix
-(`Prefix::new("PDFCRAFT")` → `PDFCRAFT_TITLEBAR`) so each keeps its own variable name.
+`<PREFIX>_TITLEBAR` wins over the setting. With the default prefix `CRAFT`: `CRAFT_TITLEBAR=app`
+forces the app's bar (also on tiling compositors), `=system` or `=desktop` forces the native frame.
+Apps pass their own prefix (`Prefix::new("PDFCRAFT")` reads `PDFCRAFT_TITLEBAR`).
+When `<PREFIX>_TITLEBAR` is unset, `CRAFT_TITLEBAR` applies, so one variable covers every app. `Decision::overridden` reports `Some(true)` or `Some(false)` when the variable decided.
 
 ## Use
 
 ```rust,ignore
-use craft_window::{Choice, Prefix, decorate};
+use craft_window::Prefix;
+use craft_window::policy::{Backend, Frame, TitleBarPref, apply, decide_for};
 
 // Once at startup, before the window is created:
-let choice = Choice::probe(Prefix::new("PHOTOCRAFT"));
-let viewport = decorate(egui::ViewportBuilder::default().with_title("PhotoCraft"), choice.frame());
+let pref = if settings.system_title_bar { TitleBarPref::System } else { TitleBarPref::Integrated };
+// Backend::from_env() is what winit opens; an app that forces XWayland passes Backend::X11.
+let decision = decide_for(Prefix::new("PHOTOCRAFT"), Backend::from_env(), pref);
+let viewport = apply(egui::ViewportBuilder::default().with_title("PhotoCraft"), &decision.frame);
 
-// If the app draws the frame, lay the header-bar buttons out by the desktop's order:
-if let Some(layout) = choice.frame().layout() {
-    // layout.left / layout.right -> draw Minimize/Maximize/Close there
+if let Frame::Integrated(captions) = &decision.frame {
+    // captions.family picks the button look; captions.layout.left / .right place the buttons.
 }
 ```
 
-An app that offers a "System title bar" preference checks `choice.overridden()` and its own setting,
-and can override the probe by setting the frame to `Frame::Desktop`.
+This crate decides *whether* and *where*; craft-ui's title bar draws the buttons, the drag area and the resize zones for the frame it chose.
 
-The `egui` feature adds [`decorate`], the [`title_bar`](#the-apps-own-title-bar) module and
-`Viewports`. Without it, the crate is pure decision and bookkeeping logic with no egui dependency.
+### Live layout changes
 
-## The app's own title bar
-
-An app that draws over the title bar — a hidden macOS title bar with a full-size content view, or
-`Frame::App` — makes its top strip act as one with `craft_window::title_bar` (`egui` feature):
-
-| Where the drag or double-click starts | What happens |
-| --- | --- |
-| The strip's empty part | A drag moves the window (`ViewportCommand::StartDrag`); a double-click follows the system setting (macOS `AppleActionOnDoubleClick`: zoom, minimize or nothing; zoom elsewhere) |
-| A control on the strip | The control gets it; the window stays put |
-| An in-window panel over the strip (an `Order::Middle` layer: a floating dock, an `egui::Window`) | The panel gets it; the window stays put |
-| A modal's backdrop or a tooltip (`Foreground`/`Tooltip`) | The window moves, as under AppKit's own title bar |
-| Anything, in full screen | Nothing happens to the window |
+`policy::LayoutWatch` keeps the caption layout current without a restart:
 
 ```rust,ignore
-egui::Panel::top("app_bar").show(ui, |ui| {
-    // Before the bar's controls, so they sit on top and take their own clicks.
-    craft_window::title_bar::empty_area(ui, ui.max_rect());
-    // ... the bar's controls ...
-});
-// macOS, once per frame after the UI: `applied` is app state, starting at `None`.
-#[cfg(target_os = "macos")]
-craft_window::title_bar::sync_movable(ui.ctx(), &mut self.applied);
+use craft_window::policy::{Frame, LayoutWatch};
+
+let mut layouts = LayoutWatch::new(&decision);
+// Each frame, with the app's one craft_platform::appearance::Watcher (it also supplies the theme):
+let mut changed = layouts.set_gnome(watcher.button_layout().as_deref());
+if window_gained_focus {
+    changed |= layouts.on_focus();
+}
+if changed && let Frame::Integrated(captions) = &mut decision.frame {
+    captions.layout = layouts.layout().clone();
+}
 ```
 
-On macOS, AppKit moves a full-size-content window from a drag anywhere in the title-bar band, the
-app's controls and panels included, unless `NSWindow.movable` is false. `sync_movable` sets that
-flag from `title_bar::window_movable`, which is false while the pointer is on a control or a panel
-over the strip. It leaves windows with hidden window buttons alone, such as floating panels in
-their own windows.
+| Desktop | Live source |
+| --- | --- |
+| GNOME | `button-layout` from the settings portal, through `craft_platform::appearance` |
+| KDE | `kwinrc`, re-read by `on_focus` |
+| Other Linux and BSD desktops | GTK's `settings.ini`, re-read by `on_focus` |
+| Windows, macOS, web | Fixed |
+
+A value with no usable button gives the desktop's default. The app passes the string from
+craft-platform, so this crate has no D-Bus dependency and the theme and layout share one
+connection.
+
+## Older API
+
+`Choice::probe` and the root `Frame::{Desktop, App}` follow the earlier two-way rule (the desktop
+draws the frame, except on Wayland without server-side decorations). They still work; `policy`
+supersedes them.
+
+The `ui` feature adds `policy::apply` (the frame decision on an `egui::ViewportBuilder`) and
+`desktop::fits`. Without it, the crate is pure decision and bookkeeping logic with no egui
+dependency.
+
+### macOS traffic lights
+
+`mac::measure` measures the zoom button of a titled full-size-content window and returns the
+`MacInset` the app's bar reserves: `leading` is the width to the end of the lights plus the gap
+they keep from the top, `centre_from_top` their centre line. `mac::Cache` keeps the result and
+measures again only after leaving full screen or on a scale change. Until a window can be measured
+`mac::default_inset(major)` gives the inset for the running macOS version (67 / 14 before macOS 26,
+78 / 16 from 26, the latter measured on 27). In full screen there is none.
+
+To check on a Mac (macOS 26 and 27): the inset ends one gap after the green button and centres on
+the lights; a second window gets the same inset; full screen drops it and leaving full screen
+restores it; moving the window between displays of different scale re-measures.
 
 ## One window per document
 
 For apps that open each document in its own top-level window, the crate also keeps the shared
-window bookkeeping. The core has no egui dependency.
+window bookkeeping. It has no egui dependency.
 
 | Type | What it does |
 | --- | --- |
 | `WindowList<T>` | Open windows with the app's per-window data `T`. Opening order (stable, for menus) and most-recent order; the first in most-recent order is the active window, which menu commands go to. `close` returns the data and, when the active window closed, the window to focus next. `find` returns the most recent window whose data matches, e.g. the window already showing a file. |
 | `WindowId` | A window's id: `Copy`, `Hash`, `Ord`, from one process-wide counter, so never reused while the app runs. Use it as the key for per-window state (UI state, pending dialogs). |
-| `cascade` | Places a new window one step (about a title bar, `CASCADE_STEP`) right of and below the most recent window. Each axis that would run off the bounds (monitor or work area) starts over at the bounds' edge. |
-| `monitor_of` | The monitor a window is on: the one showing most of it or, when none shows it, the nearest. |
 | `WindowMenu` | The Window menu (macOS) or View › Switch Windows list: (id, title, dirty, active) per window, in opening order. Windows on the same document are titled `Name:1`, `Name:2`, numbered by opening order; a document with one window keeps its plain name. The app supplies each window's document key, name and dirty flag. |
 
-With the `egui` feature, `Viewports` shows the windows as egui immediate viewports:
+## Desktop and fit
 
-- Call `show` once per frame from the root viewport's UI. It runs the app's callback for each
-  window inside that window's viewport, so `ui.ctx()` input (close requests, IME) and commands
-  belong to that window. A window's viewport id is `child_viewport_id(id)`.
-- New windows get `decorate` (the frame decision above) and a cascade position from the most
-  recently focused window. On Wayland, where windows have no known position, the compositor places
-  them.
-- Give the driver the monitors with `set_monitors`, in physical pixels from `available_monitors()`:
-  egui reports only a monitor's size, so without them the driver guesses that monitors tile the
-  desktop, which is wrong when monitors differ in size or sit at other offsets. It asks only when
-  it places a new window. A window keeps to the monitor of the window before it, at any size,
-  place or scale; `set_bounds` overrides that with an area the app chooses.
-- The root viewport stays the app's. `set_root(Some(id))` draws window `id` in it. When the root's
-  window closes while others stay open, `adopt` moves another window into the root viewport (its
-  position, size and focus); that window's id and data stay the same.
-- `show` returns `WindowEvent::Focused` and `WindowEvent::CloseRequested`. Focus also updates the
-  list's active window. Close and quit policy stay with the app: a child window closes when the app
-  removes it from the list, and for the root's window the app sends `ViewportCommand::CancelClose`
-  to the root in the same frame unless the app should quit.
+`craft_window::desktop` is a public module: `Backend` and the desktop detection read the environment
+and, on Wayland, the compositor's registry. With the `ui` feature it adds `fits(outer, monitor)`:
+whether a window of outer size `outer` fits `monitor`, keeping `TASKBAR` clear at the monitor's
+bottom. egui does not expose the OS work area, so this is an estimate, not an OS query.
 
-```rust,ignore
-use craft_window::{Document, Viewports, WindowEvent, WindowList, WindowMenu};
+## The application menu bar
 
-let menu = WindowMenu::new(&windows, |_, w| Document { key: w.doc, name: name_of(w.doc), dirty: is_dirty(w.doc) });
-let base = egui::ViewportBuilder::default().with_inner_size([1000.0, 700.0]);
-for event in viewports.show(
-    ui,
-    &mut windows,
-    |id, _| base.clone().with_title(menu.title(id).unwrap_or_default()),
-    |ui, id, window| draw_window(ui, id, window),
-) {
-    if let WindowEvent::CloseRequested(id) = event {
-        // The app's policy: prompt for the document's last dirty window, then `windows.close(id)`,
-        // and `adopt` or `focus` the window `Closed::focus` names.
-    }
-}
-```
+`native_menu` makes the platform's own menu bar (macOS, feature `appkit`, built on muda) from a plain
+description: `Bar` of `Menu`s of `Node`s (`Item { id, label, enabled, checked, shortcut }`, submenus,
+separators, and the platform's own items such as Services and Zoom). `NativeBar::install` makes it the
+application's menu bar, `NativeBar::apply` keeps it in step (a changed `structure` key rebuilds, a changed
+`windows` key rebuilds only the Windows menu, anything else updates in place), and the `Handler` set with
+`NativeBar::set_handler` receives each chosen item's `id` and, for a key equivalent, the modifiers held.
+`install_app_menu` installs a minimal app menu whose Quit reports to a handler. Off macOS (and without the
+feature) every call does nothing, so callers need no platform check. craft-menu lowers its menu model to
+this description.
 
-Immediate viewports repaint every window when one repaints, so cache expensive per-window drawing.
+## Window restore
+
+`craft_window::restore` (no egui).
+
+- `place(saved, monitors, home, &Defaults) -> Placement` is pure. First launch: the default size fitted
+  to the home monitor, maximized when it does not fit. Saved sizes are points at interface zoom 1.
+  A window with less than 64×64 pt of its top strip on any one monitor moves to its saved monitor,
+  else the nearest, else the primary; sizes clamp to the monitor's usable area and `min`. Positions
+  are physical pixels (negative left of or above the primary). `Defaults::no_position` (Wayland)
+  neither reads nor returns a position. Full screen returns only with `Defaults::restore_fullscreen`.
+- `Store::open(app_id)` keeps `window.json` beside `config.toml` (same folder rules as
+  `craft-settings`), `Store::in_memory()` keeps nothing. `get`, `set`, `save`.
+  Format: `{ "schema_version": 1, "windows": { "main": Placement, "<key>": Placement } }`.
+  Writes are atomic and private; a damaged file is moved aside as `window.broken-<ts>.json`; a newer
+  `schema_version` is read-only; unknown keys are written back unchanged.
+- `restore::legacy` reads eframe's `"window"` entry of `app.ron` (without a RON crate) and has small
+  JSON helpers for an app's own old format.
+
+Multi-window apps save the first window under `restore::MAIN`. Share one store between all windows as
+`Arc<Mutex<Store>>`.
 
 ## Notes
 

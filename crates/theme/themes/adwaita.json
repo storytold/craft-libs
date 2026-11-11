@@ -1,0 +1,80 @@
+{
+  "schema": "craft-design-theme",
+  "schema_version": 1,
+  "id": "craft.adwaita",
+  "name": "Adwaita",
+  "version": 1,
+  "variants": "both",
+  "contrast_intent": "standard",
+  "seeds": {
+    "accent": "#3584e4",
+    "neutral": "#36363a",
+    "status": {
+      "bad": "#ff7b63",
+      "good": "#85dc6a",
+      "info": "#3584e4",
+      "warn": "#f8e45c"
+    }
+  },
+  "shape": {
+    "edge": "flat",
+    "radius": {
+      "button": 6.0,
+      "control": 6.0,
+      "panel": 9.0,
+      "surface": 9.0,
+      "window": 12.0
+    },
+    "rows": "rounded"
+  },
+  "light": {
+    "accent.border": "#3584e482",
+    "accent.soft": "#3584e428",
+    "accent.solid": "#3584e4",
+    "caption.close_hover": "#d4d4d8",
+    "caption.close_text": "#323236",
+    "line.border": "#dadadd",
+    "line.control_edge": "#dadadd",
+    "line.divider": "#dedee1",
+    "state.hover": "#e2e2e5",
+    "state.pressed": "#d4d4d8",
+    "state.selected": "{accent.soft}",
+    "state.selected_hover": "{accent.soft}",
+    "surface.background": "#ebebed",
+    "surface.canvas": "#dededf",
+    "surface.panel": "#ffffff",
+    "surface.shadow": "#0000002d",
+    "surface.sunken": "#ebebed",
+    "text.faint": "#9b9ba0",
+    "text.muted": "#646468",
+    "text.normal": "#323236",
+    "text.on_accent": "#ffffff"
+  },
+  "dark": {
+    "accent.border": "#78aeed8c",
+    "accent.soft": "#3584e43c",
+    "accent.solid": "#3584e4",
+    "caption.close_hover": "#48484c",
+    "caption.close_text": "#ffffff",
+    "data.scope": "#1d1d20",
+    "line.border": "#404044",
+    "line.control_edge": "#4c4c50",
+    "line.divider": "#18181b",
+    "state.hover": "#48484c",
+    "state.pressed": "#56565a",
+    "state.selected": "{accent.soft}",
+    "state.selected_hover": "{accent.soft}",
+    "status.bad.fg": "#ff7b63",
+    "status.warn.fg": "#f8e45c",
+    "surface.background": "#222226",
+    "surface.canvas": "#1d1d20",
+    "surface.chrome": "#2e2e32",
+    "surface.panel": "#36363a",
+    "surface.shadow": "#0000008c",
+    "surface.sunken": "#404044",
+    "text.faint": "#919194",
+    "text.muted": "#c0c0c2",
+    "text.normal": "#ffffff",
+    "text.on_accent": "#ffffff"
+  }
+}

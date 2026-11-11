@@ -1,0 +1,47 @@
+{
+  "schema": "craft-design-theme",
+  "schema_version": 1,
+  "id": "craft.solarized-dark",
+  "name": "Solarized Dark",
+  "version": 1,
+  "variants": "dark",
+  "contrast_intent": "standard",
+  "seeds": {
+    "accent": "#268bd2",
+    "neutral": "#073642",
+    "status": {
+      "bad": "#dc322f",
+      "good": "#85dc6a",
+      "info": "#268bd2",
+      "warn": "#b58900"
+    }
+  },
+  "shape": {
+    "rows": "rounded"
+  },
+  "dark": {
+    "accent.border": "#268bd278",
+    "accent.soft": "#268bd22e",
+    "accent.solid": "#268bd2",
+    "caption.close_hover": "#dc322f",
+    "caption.close_text": "#fdf6e3",
+    "data.scope": "#002b36",
+    "line.border": "#00252f",
+    "line.control_edge": "#15505f",
+    "line.divider": "#00252f",
+    "state.hover": "#0e4a5a",
+    "state.pressed": "#12596b",
+    "state.selected": "{accent.soft}",
+    "state.selected_hover": "{accent.soft}",
+    "status.bad.fg": "#dc322f",
+    "status.warn.fg": "#b58900",
+    "surface.background": "#00252f",
+    "surface.canvas": "#002b36",
+    "surface.canvas_pattern": "#0a3d4a",
+    "surface.panel": "#073642",
+    "surface.sunken": "#00252f",
+    "text.faint": "#586e75",
+    "text.muted": "#657b83",
+    "text.normal": "#839496"
+  }
+}

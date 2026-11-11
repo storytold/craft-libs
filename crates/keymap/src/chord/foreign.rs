@@ -50,9 +50,11 @@ pub enum ReadNote {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum ForeignError {
+    /// The text is empty.
     Empty,
     /// Longer than [`MAX_CHORD_TEXT`].
     TooLong,
+    /// A key name with no counterpart here, as written.
     UnknownKey(String),
     /// A modifier with no counterpart here, such as the Windows key.
     UnsupportedModifier(String),

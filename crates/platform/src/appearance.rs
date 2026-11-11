@@ -1,11 +1,17 @@
-//! Desktop colour preference through the XDG Settings portal.
+//! Desktop colour, contrast and motion preferences and GNOME's window-button layout through the
+//! XDG Settings portal, plus the browser's contrast and motion media queries on the web.
 //!
 //! Derived from PdfCraft's activation-safe subscription and GNOME schema fallback,
 //! CADCraft's BSD support, and ArtCraft Launcher's ReadOne/Read compatibility.
 //! Palettes, manual choices and the fallback when no preference exists belong to the host.
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicU8, Ordering},
+mod reader;
+pub use reader::{Reading, SystemReader};
+use std::{
+    sync::{
+        Arc, Condvar, Mutex, PoisonError,
+        atomic::{AtomicBool, AtomicU8, Ordering},
+    },
+    time::Duration,
 };
 
 /// Desktop color preference observed independently of the application palette.
@@ -17,9 +23,32 @@ pub enum Theme {
     Light,
 }
 
+/// Desktop contrast preference.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Contrast {
+    /// The desktop has no contrast preference.
+    Standard,
+    /// The desktop requests higher contrast.
+    High,
+}
+
 struct Shared {
     value: AtomicU8,
+    /// 0 unknown, 1 standard, 2 high.
+    contrast: AtomicU8,
+    /// 0 unknown, 1 animations allowed, 2 reduced motion.
+    motion: AtomicU8,
     active: AtomicBool,
+    /// True once the source has answered, found no answer, or been cancelled.
+    settled: Mutex<bool>,
+    settled_changed: Condvar,
+    /// GNOME's `button-layout` as the desktop reported it; `None` until an answer arrives.
+    layout: Mutex<Option<String>>,
+    /// GNOME's `icon-theme` name as the desktop reported it; `None` until an answer arrives.
+    icons: Mutex<Option<String>>,
+    /// `XDG_CURRENT_DESKTOP` names GNOME; read once when the watcher starts.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    gnome: bool,
     #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
     wake: Box<dyn Fn() + Send + Sync>,
 }
@@ -32,13 +61,64 @@ impl Shared {
         }
     }
     #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    fn settle(&self) {
+        *self.settled.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        self.settled_changed.notify_all();
+    }
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
     fn publish(&self, theme: Option<Theme>) {
         let code = match theme {
             Some(Theme::Dark) => 1,
             Some(Theme::Light) => 2,
             None => 0,
         };
-        if self.value.swap(code, Ordering::AcqRel) != code && self.active.load(Ordering::Acquire) {
+        let changed = self.value.swap(code, Ordering::AcqRel) != code;
+        self.settle();
+        if changed && self.active.load(Ordering::Acquire) {
+            (self.wake)();
+        }
+    }
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    fn publish_code(&self, slot: &AtomicU8, code: u8) {
+        if slot.swap(code, Ordering::AcqRel) != code && self.active.load(Ordering::Acquire) {
+            (self.wake)();
+        }
+    }
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    fn publish_contrast(&self, contrast: Contrast) {
+        self.publish_code(
+            &self.contrast,
+            match contrast {
+                Contrast::Standard => 1,
+                Contrast::High => 2,
+            },
+        );
+    }
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    fn publish_motion(&self, reduced: bool) {
+        self.publish_code(&self.motion, if reduced { 2 } else { 1 });
+    }
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    fn publish_layout(&self, layout: String) {
+        self.publish_text(&self.layout, layout);
+    }
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    fn publish_icons(&self, icons: String) {
+        // The GNOME key holds a value on every desktop that has the schema (`gsettings` answers
+        // "Adwaita" on KDE), but it is the user's setting only on GNOME-like desktops.
+        if self.gnome {
+            self.publish_text(&self.icons, icons);
+        }
+    }
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    fn publish_text(&self, slot: &Mutex<Option<String>>, text: String) {
+        let mut current = slot.lock().unwrap_or_else(PoisonError::into_inner);
+        if current.as_deref() == Some(text.as_str()) {
+            return;
+        }
+        *current = Some(text);
+        drop(current);
+        if self.active.load(Ordering::Acquire) {
             (self.wake)();
         }
     }
@@ -81,6 +161,72 @@ impl Watcher {
     pub fn current(&self) -> Option<Theme> {
         self.shared.get()
     }
+    /// GNOME's `org.gnome.desktop.wm.preferences` `button-layout` as the desktop reports it, such
+    /// as `appmenu:minimize,close`; an empty string is an answer too. `None` until the portal or
+    /// the `gsettings` fallback has answered, and on targets without a desktop watcher.
+    ///
+    /// It comes over the same connection as the theme, and a change runs the same wake callback.
+    /// Only a GNOME-family window manager follows this setting; `craft_window::policy::LayoutWatch`
+    /// decides when it applies. [`Watcher::wait_first`] does not wait for it.
+    pub fn button_layout(&self) -> Option<String> {
+        self.shared.layout.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+    /// GNOME's `org.gnome.desktop.interface` `icon-theme` name as the desktop reports it, such as
+    /// `Adwaita`. `None` until the portal or the `gsettings` fallback has answered, on targets
+    /// without a desktop watcher, and always off GNOME-like desktops (`XDG_CURRENT_DESKTOP` names
+    /// GNOME), where the key holds the schema's default rather than the user's choice. Other
+    /// desktops keep the name in their own files; read those with
+    /// `craft_window::Desktop::icon_theme`.
+    ///
+    /// It comes over the same connection as the theme, a change runs the same wake callback, and
+    /// [`Watcher::wait_first`] does not wait for it. A name that is empty or has no theme folder is
+    /// the caller's to ignore.
+    pub fn icon_theme(&self) -> Option<String> {
+        self.shared.icons.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+    /// The desktop's contrast preference, from the portal's `org.freedesktop.appearance`
+    /// `contrast`. `None` until the portal answers, when it has no such key, and on targets
+    /// without a desktop watcher.
+    ///
+    /// It comes over the same connection as the theme, a change runs the same wake callback, and
+    /// [`Watcher::wait_first`] returns after the first read of it. macOS and Windows have no
+    /// watcher: reading their settings needs platform bindings, and this crate forbids `unsafe`.
+    /// On the web use `browser_contrast`.
+    pub fn contrast(&self) -> Option<Contrast> {
+        match self.shared.contrast.load(Ordering::Acquire) {
+            1 => Some(Contrast::Standard),
+            2 => Some(Contrast::High),
+            _ => None,
+        }
+    }
+    /// Whether the desktop asks for reduced motion, from the portal's `org.freedesktop.appearance`
+    /// `reduced-motion`, or GNOME's `org.gnome.desktop.interface` `enable-animations` (inverted)
+    /// when the portal has no `reduced-motion` key. `None` until one answers, when neither key
+    /// exists, and on targets without a desktop watcher.
+    ///
+    /// Wake and [`Watcher::wait_first`] behave as for [`Watcher::contrast`]. On the web use
+    /// `browser_reduced_motion`.
+    pub fn reduced_motion(&self) -> Option<bool> {
+        match self.shared.motion.load(Ordering::Acquire) {
+            1 => Some(false),
+            2 => Some(true),
+            _ => None,
+        }
+    }
+    /// Block until the first answer is known, then return it; at most `timeout`.
+    ///
+    /// Returns early, with `current()`, when the portal is absent and the `gsettings` fallback
+    /// found nothing, or when the desktop reports no preference. Call it once while building the
+    /// first frame so a light desktop does not flash dark:
+    ///
+    /// ```ignore
+    /// let theme = watcher.wait_first(std::time::Duration::from_millis(250));
+    /// ```
+    pub fn wait_first(&self, timeout: Duration) -> Option<Theme> {
+        let settled = self.shared.settled.lock().unwrap_or_else(PoisonError::into_inner);
+        drop(self.shared.settled_changed.wait_timeout_while(settled, timeout, |settled| !*settled).unwrap_or_else(PoisonError::into_inner));
+        self.current()
+    }
     /// Enable or suppress future change notifications without stopping observation.
     /// Changing this flag does not itself wake the host or clear the cached preference.
     pub fn set_active(&self, active: bool) {
@@ -92,7 +238,19 @@ impl Watcher {
         wake: impl Fn() + Send + Sync + 'static,
         source: impl FnOnce(Arc<Shared>) -> F + Send + 'static,
     ) -> Option<Self> {
-        let shared = Arc::new(Shared { value: AtomicU8::new(0), active: AtomicBool::new(active), wake: Box::new(wake) });
+        let gnome = is_gnome_session(&|k| std::env::var(k).ok());
+        let shared = Arc::new(Shared {
+            value: AtomicU8::new(0),
+            contrast: AtomicU8::new(0),
+            motion: AtomicU8::new(0),
+            active: AtomicBool::new(active),
+            settled: Mutex::new(false),
+            settled_changed: Condvar::new(),
+            layout: Mutex::new(None),
+            icons: Mutex::new(None),
+            gnome,
+            wake: Box::new(wake),
+        });
         let worker_shared = Arc::clone(&shared);
         let (stop, stopped) = async_channel::bounded::<()>(1);
         let (done, finished) = std::sync::mpsc::channel();
@@ -103,8 +261,9 @@ impl Watcher {
                     async {
                         let _ = stopped.recv().await;
                     },
-                    source(worker_shared),
+                    source(Arc::clone(&worker_shared)),
                 ));
+                worker_shared.settle();
                 let _ = done.send(());
             })
             .ok()?;
@@ -116,6 +275,7 @@ impl Drop for Watcher {
         self.set_active(false);
         #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
         {
+            self.shared.settle();
             self.stop.close();
             if let Some(worker) = self.worker.take() {
                 let _ = self.finished.recv_timeout(std::time::Duration::from_millis(100));
@@ -129,507 +289,43 @@ impl Drop for Watcher {
     }
 }
 
+/// The browser's `prefers-contrast: more` media query: `None` outside a browser window or when
+/// the browser doesn't know the feature. The query runs on each call; there is no change
+/// notification, so read it when building a frame.
+#[cfg(target_arch = "wasm32")]
+pub fn browser_contrast() -> Option<Contrast> {
+    media_matches("(prefers-contrast: more)").map(|more| if more { Contrast::High } else { Contrast::Standard })
+}
+/// The browser's `prefers-reduced-motion: reduce` media query, read like [`browser_contrast`].
+#[cfg(target_arch = "wasm32")]
+pub fn browser_reduced_motion() -> Option<bool> {
+    media_matches("(prefers-reduced-motion: reduce)")
+}
+#[cfg(target_arch = "wasm32")]
+fn media_matches(query: &str) -> Option<bool> {
+    let list = web_sys::window()?.match_media(query).ok()??;
+    // A browser that doesn't know the feature serializes the query as `not all`.
+    (list.media() != "not all").then(|| list.matches())
+}
+
+/// Whether the session is GNOME, by the same rules as `kind_from_env` in craft-window's
+/// `desktop.rs` (the crates don't depend on each other, so change both together): a compositor
+/// socket or a tiling entry means no; otherwise the first set of `XDG_CURRENT_DESKTOP`,
+/// `XDG_SESSION_DESKTOP`, `DESKTOP_SESSION` decides by containing "gnome"; with none set,
+/// `KDE_FULL_SESSION` means no and `GNOME_DESKTOP_SESSION_ID` means yes.
 #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
-mod portal {
-    use super::{Shared, Theme};
-    use futures_lite::StreamExt;
-    use std::{sync::Arc, time::Duration};
-    use zbus::zvariant::{OwnedValue, Value};
-    const DEST: &str = "org.freedesktop.portal.Desktop";
-    const PATH: &str = "/org/freedesktop/portal/desktop";
-    const IFACE: &str = "org.freedesktop.portal.Settings";
-    const STANDARD: &str = "org.freedesktop.appearance";
-    const GNOME: &str = "org.gnome.desktop.interface";
-    const KEY: &str = "color-scheme";
-    const TIMEOUT: Duration = Duration::from_secs(2);
-
-    // Outer None means unknown/malformed; Some(None) is an explicit no-preference answer.
-    fn decode(namespace: &str, value: &Value<'_>) -> Option<Option<Theme>> {
-        match (namespace, value) {
-            (STANDARD, Value::U32(n)) => Some(match n {
-                1 => Some(Theme::Dark),
-                2 => Some(Theme::Light),
-                _ => None,
-            }),
-            (GNOME, Value::Str(s)) => Some(match s.as_str() {
-                "prefer-dark" => Some(Theme::Dark),
-                "prefer-light" => Some(Theme::Light),
-                _ => None,
-            }),
-            _ => None,
-        }
+fn is_gnome_session(var: &dyn Fn(&str) -> Option<String>) -> bool {
+    const TILING: &[&str] =
+        &["sway", "hyprland", "i3", "niri", "river", "bspwm", "awesome", "dwl", "qtile", "herbstluftwm", "leftwm", "xmonad", "dwm"];
+    if ["SWAYSOCK", "I3SOCK", "HYPRLAND_INSTANCE_SIGNATURE", "NIRI_SOCKET"].iter().any(|k| var(k).is_some_and(|v| !v.is_empty())) {
+        return false;
     }
-    fn reply(namespace: &str, value: &Value<'_>, legacy: bool) -> Option<Option<Theme>> {
-        if legacy {
-            let Value::Value(inner) = value else { return None };
-            decode(namespace, inner)
-        } else {
-            decode(namespace, value)
-        }
+    for key in ["XDG_CURRENT_DESKTOP", "XDG_SESSION_DESKTOP", "DESKTOP_SESSION"] {
+        let Some(v) = var(key).map(|v| v.to_ascii_lowercase()).filter(|v| !v.trim().is_empty()) else { continue };
+        return !v.split(':').map(str::trim).any(|entry| TILING.contains(&entry)) && v.contains("gnome");
     }
-    fn combined(standard: Option<Option<Theme>>, gnome: Option<Option<Theme>>) -> Option<Option<Theme>> {
-        if standard.is_none() && gnome.is_none() { None } else { Some(standard.flatten().or(gnome.flatten())) }
-    }
-    async fn bounded<T>(future: impl std::future::Future<Output = T>) -> Option<T> {
-        futures_lite::future::race(async { Some(future.await) }, async {
-            async_io::Timer::after(TIMEOUT).await;
-            None
-        })
-        .await
-    }
-    async fn read(connection: &zbus::Connection, namespace: &str) -> Option<Option<Theme>> {
-        for (method, legacy) in [("ReadOne", false), ("Read", true)] {
-            if let Some(Ok(message)) = bounded(connection.call_method(Some(DEST), PATH, Some(IFACE), method, &(namespace, KEY))).await
-                && let Ok(value) = message.body().deserialize::<OwnedValue>()
-                && let Some(answer) = reply(namespace, &value, legacy)
-            {
-                return Some(answer);
-            }
-        }
-        None
-    }
-    fn rule() -> zbus::Result<zbus::MatchRule<'static>> {
-        Ok(zbus::MatchRule::builder()
-            .msg_type(zbus::message::Type::Signal)
-            .sender(DEST)?
-            .path(PATH)?
-            .interface(IFACE)?
-            .member("SettingChanged")?
-            .arg(1, KEY)?
-            .build())
-    }
-    fn owner_rule() -> zbus::Result<zbus::MatchRule<'static>> {
-        Ok(zbus::MatchRule::builder()
-            .msg_type(zbus::message::Type::Signal)
-            .sender("org.freedesktop.DBus")?
-            .interface("org.freedesktop.DBus")?
-            .member("NameOwnerChanged")?
-            .arg(0, DEST)?
-            .build())
-    }
-    pub(super) async fn watch(shared: Arc<Shared>) {
-        let mut retry = Duration::from_secs(5);
-        let mut fallback_used = false;
-        loop {
-            let mut connected = false;
-            let _ = session(&shared, &mut fallback_used, &mut connected).await;
-            if connected {
-                retry = Duration::from_secs(5);
-            }
-            // Keep the last valid answer during disconnect; a new explicit no-preference clears it.
-            async_io::Timer::after(retry).await;
-            retry = (retry * 2).min(Duration::from_secs(300));
-        }
-    }
-    // Keep Nix/profile PATH entries, but never execute a helper from a relative search folder.
-    fn gsettings_exe(path: Option<&std::ffi::OsStr>) -> Option<std::path::PathBuf> {
-        let dirs = path.map(std::env::split_paths).into_iter().flatten().filter(|p| p.is_absolute());
-        dirs.chain(["/usr/bin", "/bin", "/usr/local/bin"].map(std::path::PathBuf::from)).map(|p| p.join("gsettings")).find(|p| p.is_file())
-    }
-    async fn fallback(shared: &Shared, used: &mut bool) {
-        if *used {
-            return;
-        }
-        *used = true;
-        if let Some(exe) = gsettings_exe(std::env::var_os("PATH").as_deref())
-            && let Some(text) = crate::process::capture(&exe, &["get", GNOME, KEY], TIMEOUT).await
-        {
-            let text = text.trim().trim_matches('\'');
-            if let Some(answer) = decode(GNOME, &Value::from(text)) {
-                shared.publish(answer);
-            }
-        }
-    }
-    async fn session(shared: &Shared, fallback_used: &mut bool, connected: &mut bool) -> Option<()> {
-        let connection = match zbus::connection::Builder::session() {
-            Ok(builder) => bounded(builder.method_timeout(TIMEOUT).build()).await.and_then(Result::ok),
-            Err(_) => None,
-        };
-        let Some(connection) = connection else {
-            fallback(shared, fallback_used).await;
-            return None;
-        };
-        watch_connection(shared, fallback_used, connected, connection).await
-    }
-    async fn watch_connection(shared: &Shared, fallback_used: &mut bool, connected: &mut bool, connection: zbus::Connection) -> Option<()> {
-        // MatchRule installs before activation: unlike a proxy subscription it needs no current owner.
-        let mut changes = bounded(zbus::MessageStream::for_match_rule(rule().ok()?, &connection, Some(64))).await?.ok()?;
-        let mut owners = bounded(zbus::MessageStream::for_match_rule(owner_rule().ok()?, &connection, Some(8))).await?.ok()?;
-        let mut standard = read(&connection, STANDARD).await;
-        let mut gnome = read(&connection, GNOME).await;
-        match combined(standard, gnome) {
-            Some(answer) => {
-                *connected = true;
-                shared.publish(answer);
-            }
-            None => {
-                fallback(shared, fallback_used).await;
-                return None;
-            }
-        }
-        loop {
-            let message =
-                futures_lite::future::race(async { changes.next().await.map(|m| (false, m)) }, async { owners.next().await.map(|m| (true, m)) })
-                    .await?;
-            let (owner, message) = message;
-            let message = message.ok()?;
-            if owner {
-                // Activation is already covered by the initial read. Loss/replacement reconnects.
-                if let Ok((_, old, _)) = message.body().deserialize::<(String, String, String)>()
-                    && !old.is_empty()
-                {
-                    return None;
-                }
-                continue;
-            }
-            let Ok((namespace, key, value)) = message.body().deserialize::<(String, String, OwnedValue)>() else { continue };
-            if key != KEY {
-                continue;
-            }
-            let Some(answer) = decode(&namespace, &value) else { continue };
-            match namespace.as_str() {
-                STANDARD => standard = Some(answer),
-                GNOME => gnome = Some(answer),
-                _ => continue,
-            }
-            if let Some(answer) = combined(standard, gnome) {
-                shared.publish(answer);
-            }
-        }
-    }
-    #[cfg(test)]
-    #[path = "appearance_bus_tests.rs"]
-    mod bus_tests;
-    #[cfg(test)]
-    mod tests {
-        #[test]
-        fn gsettings_respects_absolute_nix_style_path_without_using_relative_folders() -> Result<(), Box<dyn std::error::Error>> {
-            struct Fixture(std::path::PathBuf);
-            impl Drop for Fixture {
-                fn drop(&mut self) {
-                    let _ = std::fs::remove_dir_all(&self.0);
-                }
-            }
-            let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos();
-            let directory = std::env::temp_dir().join(format!("craft-platform-gsettings-{}-{nonce}", std::process::id()));
-            std::fs::create_dir(&directory)?;
-            let fixture = Fixture(directory);
-            let helper = fixture.0.join("gsettings");
-            std::fs::write(&helper, b"fixture")?;
-            let path = std::env::join_paths([std::path::Path::new("relative-untrusted"), fixture.0.as_path()])?;
-            assert_eq!(super::gsettings_exe(Some(path.as_os_str())), Some(helper));
-            assert!(super::gsettings_exe(Some(std::ffi::OsStr::new("relative-untrusted"))).is_none_or(|p| p.is_absolute()));
-            Ok(())
-        }
-
-        use super::{GNOME, STANDARD, combined, decode, reply};
-        use crate::appearance::{Theme, Watcher};
-        use std::{
-            sync::{Arc, atomic::Ordering},
-            time::Duration,
-        };
-        use zbus::zvariant::Value;
-        #[test]
-        fn no_preference_is_an_answer_and_gnome_only_fills_missing_preference() {
-            assert_eq!(combined(None, None), None);
-            assert_eq!(combined(Some(None), None), Some(None));
-            assert_eq!(combined(Some(None), Some(Some(Theme::Dark))), Some(Some(Theme::Dark)));
-            assert_eq!(combined(Some(Some(Theme::Light)), Some(Some(Theme::Dark))), Some(Some(Theme::Light)));
-            assert_eq!(combined(None, Some(None)), Some(None));
-        }
-        #[test]
-        fn malformed_is_distinct_from_no_preference_and_legacy_is_exact() {
-            assert_eq!(decode(STANDARD, &Value::U32(0)), Some(None));
-            assert_eq!(decode(STANDARD, &Value::U32(77)), Some(None));
-            assert_eq!(decode(STANDARD, &Value::from("dark")), None);
-            assert_eq!(reply(STANDARD, &Value::Value(Box::new(Value::U32(1))), true), Some(Some(Theme::Dark)));
-            assert_eq!(reply(STANDARD, &Value::U32(1), true), None);
-            assert_eq!(reply(STANDARD, &Value::Value(Box::new(Value::Value(Box::new(Value::U32(1))))), true), None);
-            assert_eq!(decode(STANDARD, &Value::Value(Box::new(Value::U32(1)))), None);
-            assert_eq!(decode(STANDARD, &Value::I32(1)), None);
-            assert_eq!(decode(GNOME, &Value::from("default")), Some(None));
-            assert_eq!(decode(GNOME, &Value::U32(1)), None);
-
-            assert_eq!(reply(GNOME, &Value::from("prefer-light"), false), Some(Some(Theme::Light)));
-        }
-        #[test]
-        fn manual_cache_changes_do_not_wake_and_drop_cancels_pending_source() -> Result<(), Box<dyn std::error::Error>> {
-            let (tx, rx) = std::sync::mpsc::channel();
-            let (cancelled, cancellation) = std::sync::mpsc::channel();
-            struct Cancelled(std::sync::mpsc::Sender<()>);
-            impl Drop for Cancelled {
-                fn drop(&mut self) {
-                    let _ = self.0.send(());
-                }
-            }
-            let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            let observed = Arc::clone(&wakes);
-            let watcher = Watcher::spawn(
-                false,
-                move || {
-                    observed.fetch_add(1, Ordering::Relaxed);
-                },
-                move |shared| async move {
-                    let _cancelled = Cancelled(cancelled);
-                    shared.publish(Some(Theme::Dark));
-                    let _ = tx.send(());
-                    futures_lite::future::pending::<()>().await;
-                },
-            )
-            .ok_or("worker creation failed")?;
-            rx.recv_timeout(Duration::from_secs(2))?;
-            assert_eq!(watcher.current(), Some(Theme::Dark));
-            assert_eq!(wakes.load(Ordering::Relaxed), 0);
-            watcher.set_active(true);
-            watcher.shared.publish(Some(Theme::Dark));
-            assert_eq!(wakes.load(Ordering::Relaxed), 0);
-            watcher.shared.publish(Some(Theme::Light));
-            assert_eq!(watcher.current(), Some(Theme::Light));
-            watcher.shared.publish(Some(Theme::Dark));
-            assert_eq!(watcher.current(), Some(Theme::Dark));
-            watcher.shared.publish(None);
-            assert_eq!(watcher.current(), None);
-            assert_eq!(wakes.load(Ordering::Relaxed), 3);
-            drop(watcher);
-            cancellation.recv_timeout(Duration::from_secs(2))?;
-            Ok(())
-        }
-        #[test]
-        fn drop_does_not_wait_for_a_synchronously_blocked_source() -> Result<(), Box<dyn std::error::Error>> {
-            let (started, ready) = std::sync::mpsc::channel();
-            let (release, blocked) = std::sync::mpsc::channel();
-            let (exited, exit) = std::sync::mpsc::channel();
-            struct Release(Option<std::sync::mpsc::Sender<()>>);
-            impl Drop for Release {
-                fn drop(&mut self) {
-                    if let Some(release) = self.0.take() {
-                        let _ = release.send(());
-                    }
-                }
-            }
-            // Declared before the watcher: every error/unwind releases the synchronous poll.
-            let release = Release(Some(release));
-            let watcher = Watcher::spawn(
-                false,
-                || {},
-                move |_| async move {
-                    let _ = started.send(());
-                    let _ = blocked.recv();
-                    let _ = exited.send(());
-                },
-            )
-            .ok_or("worker creation failed")?;
-            ready.recv_timeout(Duration::from_secs(2))?;
-            let (dropped, drop_result) = std::sync::mpsc::channel();
-            let dropper = std::thread::spawn(move || {
-                drop(watcher);
-                let _ = dropped.send(());
-            });
-            let bounded = drop_result.recv_timeout(Duration::from_secs(1)).is_ok();
-            // Release before asserting, including when an unbounded implementation regresses.
-            drop(release);
-            exit.recv_timeout(Duration::from_secs(2))?;
-            assert!(dropper.join().is_ok(), "watcher drop panicked");
-            assert!(bounded, "watcher drop waited for a blocked synchronous poll");
-            Ok(())
-        }
-    }
-}
-/// Owned callback that supplies an observed theme and updates egui native-window hints.
-#[cfg(feature = "egui")]
-pub type SystemThemeFn = Box<dyn Fn(&egui::Context) -> Option<egui::Theme>>;
-/// Create an egui theme callback that owns the subscription and wakes its first context.
-/// Return `None` when no desktop watcher can start; the host retains its fallback policy.
-#[cfg(feature = "egui")]
-pub fn egui_service() -> Option<SystemThemeFn> {
-    let context = Arc::new(std::sync::OnceLock::<egui::Context>::new());
-    let worker_context = Arc::clone(&context);
-    let watcher = Watcher::start(move || {
-        if let Some(ctx) = worker_context.get() {
-            ctx.request_repaint();
-        }
-    })?;
-    Some(Box::new(move |ctx| {
-        let _ = context.set(ctx.clone());
-        sync_native_window_theme(ctx, watcher.current());
-        watcher.current().map(|t| match t {
-            Theme::Dark => egui::Theme::Dark,
-            Theme::Light => egui::Theme::Light,
-        })
-    }))
+    var("KDE_FULL_SESSION").is_none() && var("GNOME_DESKTOP_SESSION_ID").is_some()
 }
 
-/// Supply the portal answer for native window decorations without changing egui's theme choice
-/// or either palette. A missing portal answer falls back to the current toolkit system theme;
-/// when both are absent the native pin is released. Linux/BSD window backends cannot reliably
-/// resolve `SystemDefault` themselves.
-/// The output hook runs after egui's own window-theme synchronization, so it cannot be overwritten
-/// by a later automatic `SetTheme(SystemDefault)` in the same pass.
-#[cfg(feature = "egui")]
-pub fn sync_native_window_theme(ctx: &egui::Context, observed: Option<Theme>) {
-    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
-    {
-        ctx.add_plugin(NativeWindowTheme::default());
-        ctx.with_plugin(|plugin: &mut NativeWindowTheme| plugin.observed = observed);
-    }
-    #[cfg(not(all(unix, not(target_os = "macos"), not(target_arch = "wasm32"))))]
-    let _ = (ctx, observed);
-}
-
-#[cfg(all(feature = "egui", unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
-#[derive(Default)]
-struct NativeWindowTheme {
-    observed: Option<Theme>,
-    sent: std::collections::HashMap<egui::ViewportId, egui::SystemTheme>,
-}
-#[cfg(all(feature = "egui", unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
-impl egui::Plugin for NativeWindowTheme {
-    fn debug_name(&self) -> &'static str {
-        "desktop window appearance"
-    }
-    fn output_hook(&mut self, ctx: &egui::Context, output: &mut egui::FullOutput) {
-        if !ctx.options(|o| o.sync_window_theme) {
-            // Another owner may alter the native theme while synchronization is disabled.
-            self.sent.clear();
-            return;
-        }
-        let desired = match ctx.options(|o| o.theme_preference) {
-            egui::ThemePreference::Dark => egui::SystemTheme::Dark,
-            egui::ThemePreference::Light => egui::SystemTheme::Light,
-            egui::ThemePreference::System => match self.observed.or_else(|| {
-                ctx.system_theme().map(|theme| match theme {
-                    egui::Theme::Dark => Theme::Dark,
-                    egui::Theme::Light => Theme::Light,
-                })
-            }) {
-                Some(Theme::Dark) => egui::SystemTheme::Dark,
-                Some(Theme::Light) => egui::SystemTheme::Light,
-                None => egui::SystemTheme::SystemDefault,
-            },
-        };
-        // FullOutput can carry child-window commands too. Rewrite every viewport so a deferred
-        // or immediate child cannot reintroduce egui's inherited hint after its own UI pass.
-        for (id, viewport) in &mut output.viewport_output {
-            let had_sync = viewport.commands.iter().any(|command| matches!(command, egui::ViewportCommand::SetTheme(_)));
-            viewport.commands.retain(|command| !matches!(command, egui::ViewportCommand::SetTheme(_)));
-            if had_sync || self.sent.get(id) != Some(&desired) {
-                viewport.commands.push(egui::ViewportCommand::SetTheme(desired));
-                self.sent.insert(*id, desired);
-            }
-        }
-        // Forget destroyed native windows: a reused viewport identifier must receive its hint.
-        self.sent.retain(|id, _| output.viewport_output.contains_key(id));
-    }
-}
-
-#[cfg(all(test, feature = "egui", unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
-mod native_window_tests {
-    use super::{Theme, sync_native_window_theme};
-    fn pass(ctx: &egui::Context, observed: Option<Theme>, preference: egui::ThemePreference) -> Vec<egui::SystemTheme> {
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            sync_native_window_theme(ui.ctx(), observed);
-            // Deliberately apply the host's choice AFTER the observer, as real palette adapters do.
-            ui.ctx().set_theme(preference);
-        });
-        output.textures_delta.clear(); // Headless policy test; no renderer consumes uploads.
-        output
-            .viewport_output
-            .values()
-            .flat_map(|v| &v.commands)
-            .filter_map(|command| match command {
-                egui::ViewportCommand::SetTheme(theme) => Some(*theme),
-                _ => None,
-            })
-            .collect()
-    }
-    #[test]
-    fn actual_end_pass_maps_system_manual_and_reset_without_overwriting_palettes() {
-        use egui::{SystemTheme as Native, ThemePreference as Choice};
-        let ctx = egui::Context::default();
-        let marker = egui::Color32::from_rgb(12, 34, 56);
-        ctx.all_styles_mut(|s| s.visuals.panel_fill = marker);
-        assert_eq!(pass(&ctx, Some(Theme::Light), Choice::System), vec![Native::Light]);
-        assert_eq!(ctx.options(|o| o.theme_preference), Choice::System);
-        assert!(pass(&ctx, Some(Theme::Light), Choice::System).is_empty());
-        assert_eq!(pass(&ctx, Some(Theme::Dark), Choice::System), vec![Native::Dark]);
-        // A portal change cannot override a concrete manual native preference.
-        assert_eq!(pass(&ctx, Some(Theme::Light), Choice::Dark), vec![Native::Dark]);
-        assert_eq!(pass(&ctx, Some(Theme::Dark), Choice::Light), vec![Native::Light]);
-        assert_eq!(pass(&ctx, Some(Theme::Dark), Choice::System), vec![Native::Dark]);
-        assert_eq!(pass(&ctx, None, Choice::System), vec![Native::SystemDefault]);
-        assert!(pass(&ctx, None, Choice::System).is_empty());
-        assert_eq!(ctx.style_of(egui::Theme::Dark).visuals.panel_fill, marker);
-        assert_eq!(ctx.style_of(egui::Theme::Light).visuals.panel_fill, marker);
-    }
-    #[test]
-    fn native_system_hint_uses_current_toolkit_fallback_without_retaining_stale_input() {
-        let ctx = egui::Context::default();
-        for (raw_theme, observed, expected) in [
-            (Some(egui::Theme::Light), None, egui::SystemTheme::Light),
-            (Some(egui::Theme::Dark), None, egui::SystemTheme::Dark),
-            (Some(egui::Theme::Dark), Some(Theme::Light), egui::SystemTheme::Light),
-            (None, None, egui::SystemTheme::SystemDefault),
-        ] {
-            let mut output = ctx.run_ui(egui::RawInput { system_theme: raw_theme, ..Default::default() }, |ui| {
-                sync_native_window_theme(ui.ctx(), observed);
-                ui.ctx().set_theme(egui::ThemePreference::System);
-            });
-            let hints: Vec<_> = output
-                .viewport_output
-                .values()
-                .flat_map(|v| &v.commands)
-                .filter_map(|command| match command {
-                    egui::ViewportCommand::SetTheme(theme) => Some(*theme),
-                    _ => None,
-                })
-                .collect();
-            output.textures_delta.clear();
-            assert_eq!(hints, vec![expected]);
-        }
-    }
-    #[test]
-    fn deferred_windows_receive_the_same_hint_and_reset() {
-        let ctx = egui::Context::default();
-        ctx.set_embed_viewports(false);
-        let child = egui::ViewportId::from_hash_of("appearance-child");
-        for observed in [Some(Theme::Light), Some(Theme::Dark), None] {
-            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                sync_native_window_theme(ui.ctx(), observed);
-                ui.ctx().set_theme(egui::ThemePreference::System);
-                ui.ctx().show_viewport_deferred(child, egui::ViewportBuilder::default(), |_, _| {});
-            });
-            output.textures_delta.clear();
-            let expected = match observed {
-                Some(Theme::Light) => egui::SystemTheme::Light,
-                Some(Theme::Dark) => egui::SystemTheme::Dark,
-                None => egui::SystemTheme::SystemDefault,
-            };
-            for id in [egui::ViewportId::ROOT, child] {
-                let commands: Vec<_> = output
-                    .viewport_output
-                    .get(&id)
-                    .into_iter()
-                    .flat_map(|v| &v.commands)
-                    .filter_map(|c| match c {
-                        egui::ViewportCommand::SetTheme(t) => Some(*t),
-                        _ => None,
-                    })
-                    .collect();
-                assert_eq!(commands, vec![expected]);
-            }
-        }
-    }
-    #[test]
-    fn custom_palette_system_policy_and_explicit_sync_opt_out_are_preserved() {
-        use egui::{SystemTheme as Native, ThemePreference as Choice};
-        let ctx = egui::Context::default();
-        // Photo/PDF/Sound keep System native policy even when their custom palette is manual.
-        ctx.all_styles_mut(|s| s.visuals = egui::Visuals::dark());
-        assert_eq!(pass(&ctx, Some(Theme::Light), Choice::System), vec![Native::Light]);
-        assert!(ctx.style_of(egui::Theme::Light).visuals.dark_mode);
-        ctx.options_mut(|o| o.sync_window_theme = false);
-        assert!(pass(&ctx, Some(Theme::Dark), Choice::System).is_empty());
-        ctx.options_mut(|o| o.sync_window_theme = true);
-        assert_eq!(pass(&ctx, Some(Theme::Dark), Choice::System), vec![Native::Dark]);
-    }
-}
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+mod portal;

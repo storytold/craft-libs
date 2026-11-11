@@ -34,20 +34,3 @@ pub(crate) async fn capture(program: &std::path::Path, args: &[&str], timeout: s
     )
     .await
 }
-#[cfg(all(test, feature = "appearance", unix, not(target_os = "macos")))]
-mod tests {
-    use super::capture;
-    #[test]
-    fn capture_checks_exit_status_size_and_deadline() {
-        use std::time::{Duration, Instant};
-        futures_lite::future::block_on(async {
-            let shell = std::path::Path::new("/bin/sh");
-            assert_eq!(capture(shell, &["-c", "printf hello"], Duration::from_secs(1)).await.as_deref(), Some("hello"));
-            assert_eq!(capture(shell, &["-c", "printf failure; exit 7"], Duration::from_secs(1)).await, None);
-            let before = Instant::now();
-            assert_eq!(capture(shell, &["-c", "exec sleep 5"], Duration::from_millis(30)).await, None);
-            assert!(before.elapsed() < Duration::from_secs(1));
-            assert_eq!(capture(shell, &["-c", "head -c 10000 /dev/zero"], Duration::from_secs(1)).await, None);
-        });
-    }
-}

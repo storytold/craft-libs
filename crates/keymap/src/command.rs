@@ -12,6 +12,7 @@ pub const MAX_KEY: usize = 256;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandRef {
+    /// The command's id.
     pub id: String,
     /// `Null` for no parameters.
     #[serde(default)]
@@ -24,6 +25,7 @@ impl CommandRef {
         CommandRef { id: id.into(), params: Value::Null }
     }
 
+    /// A command with the parameters its binding runs it with.
     pub fn with_params(id: impl Into<String>, params: Value) -> CommandRef {
         CommandRef { id: id.into(), params }
     }

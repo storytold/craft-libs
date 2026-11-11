@@ -74,6 +74,7 @@ pub(crate) fn script_matches(face_tag: &str, wanted: &str) -> bool {
 pub struct ParseError {
     /// 1-based line number.
     pub line: usize,
+    /// What is wrong with the line.
     pub reason: String,
 }
 

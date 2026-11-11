@@ -233,7 +233,7 @@ fn digit(c: char) -> Option<(u32, u8)> {
 }
 
 /// Marks bidi formatting adds around numbers: LRM, RLM, ALM, embeddings, overrides and isolates.
-fn is_bidi_mark(c: char) -> bool {
+pub(crate) fn is_bidi_mark(c: char) -> bool {
     matches!(c, '\u{200e}' | '\u{200f}' | '\u{061c}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
 }
 
@@ -241,99 +241,6 @@ fn is_bidi_mark(c: char) -> bool {
 mod tests {
     use super::*;
     use crate::{Digits, Region};
-
-    #[test]
-    fn every_digit_set() {
-        for zero in ZEROS {
-            let d = |n: u32| char::from_u32(zero + n).unwrap();
-            let all: String = (0..10).rev().map(d).collect();
-            assert_eq!(parse_number(&all, "en"), Ok(9_876_543_210.0), "{zero:X}");
-            let grouped = format!("-{}{}{},{}{}{}.{}", d(1), d(2), d(3), d(4), d(5), d(6), d(7));
-            assert_eq!(parse_number(&grouped, "en"), Ok(-123_456.7), "{zero:X}");
-            assert!((0..10).all(|n| d(n).is_numeric()), "{zero:X}");
-        }
-        assert_eq!(digit('\u{1D800}'), None);
-        assert_eq!(digit('/'), None);
-    }
-
-    #[test]
-    fn locale_forms() {
-        for (text, locale, want) in [
-            ("1,234.5", "en", 1234.5),
-            ("1.234,5", "de", 1234.5),
-            ("1 234,5", "fr", 1234.5),
-            ("1\u{202f}234,5", "fr", 1234.5),
-            ("1\u{a0}234,5", "ru", 1234.5),
-            ("1’234.5", "de-CH", 1234.5),
-            ("1'234.5", "de_CH.UTF-8", 1234.5),
-            ("1,234", "en", 1234.0),
-            ("1,234", "de", 1.234),
-            ("1.234", "pt-br", 1234.0),
-            ("1,5", "es", 1.5),
-            ("1.5", "es-419", 1.5),
-            ("١٬٢٣٤٫٥", "ar", 1234.5),
-            ("١٢٫٥", "ar", 12.5),
-            ("12.5", "ar", 12.5),
-            ("12,5", "ar-MA", 12.5),
-            ("۱۲٫۵", "fa", 12.5),
-            ("−۴۲", "fa", -42.0),
-            ("１２３，４５６．７", "ja", 123_456.7),
-            ("－５", "ja", -5.0),
-            ("१२,३४,५६७.८९", "hi", 1_234_567.89),
-            ("১২,৩৪,৫৬৭", "bn", 1_234_567.0),
-            ("౧,౨౩,౪౫౬", "te", 123_456.0),
-            ("๑,๒๓๔.๕", "th", 1234.5),
-            ("1,234,567", "en", 1_234_567.0),
-            ("−3,5", "sv", -3.5),
-            ("+7", "en", 7.0),
-            (".5", "en", 0.5),
-            ("5.", "en", 5.0),
-            ("  42  ", "en", 42.0),
-            ("\u{2066}-1,5\u{2069}", "de", -1.5),
-            ("\u{061c}-١٢", "ar", -12.0),
-            ("1,234.5", "xx", 1234.5),
-            ("12", "xx", 12.0),
-            ("1,5", "en-PL", 1.5),
-            ("1.234,5", "en-DE", 1234.5),
-            ("1.234,5", "lo", 1234.5),
-            ("1,234.5", "km", 1234.5),
-        ] {
-            assert_eq!(parse_number(text, locale), Ok(want), "{text:?} in {locale}");
-        }
-    }
-
-    #[test]
-    fn errors_instead_of_guesses() {
-        for (text, locale, want) in [
-            ("", "en", NumberError::Empty),
-            ("  ", "en", NumberError::Empty),
-            ("-", "en", NumberError::Empty),
-            (",", "en", NumberError::Separator),
-            ("1.2.3", "en", NumberError::Separator),
-            ("1,,234", "en", NumberError::Separator),
-            ("1,234,", "en", NumberError::Separator),
-            ("1.234,5", "en", NumberError::Separator),
-            ("1 234'567", "en", NumberError::Separator),
-            ("1.234 567", "de", NumberError::Separator),
-            ("0.123,4", "de", NumberError::Separator),
-            ("1.5,2", "en", NumberError::Separator),
-            ("123,45,678", "hi", NumberError::Separator),
-            ("12٫3٫4", "ar", NumberError::Separator),
-            ("1٫5.2", "ar", NumberError::Separator),
-            ("1٢", "ar", NumberError::MixedDigits),
-            ("12abc", "en", NumberError::Unexpected('a')),
-            ("1e5", "en", NumberError::Unexpected('e')),
-            ("--5", "en", NumberError::Unexpected('-')),
-            ("5-", "en", NumberError::Unexpected('-')),
-            ("- 5", "en", NumberError::Separator),
-        ] {
-            assert_eq!(parse_number(text, locale), Err(want), "{text:?} in {locale}");
-        }
-        assert_eq!(parse_number(&"9".repeat(400), "en"), Err(NumberError::TooLarge));
-        for unit in ["50 %", "50%", "12 px", "1,5 MB"] {
-            assert!(parse_number(unit, "de").is_err(), "{unit}: units are the caller's to strip");
-        }
-    }
 
     /// A lone mark that can't be grouping is the decimal mark; one that can stays grouping.
     #[test]

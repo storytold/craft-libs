@@ -34,7 +34,7 @@ pub fn system(platform: Platform) -> Vec<Chord> {
     let list = match platform {
         Platform::Mac => MAC,
         Platform::Windows => WINDOWS,
-        Platform::Linux => LINUX,
+        _ => LINUX,
     };
     list.iter().filter_map(|t| Chord::parse(t).ok()).collect()
 }

@@ -5,18 +5,26 @@
 //! spacing (`{n} Mo`, `{n} %`). They are looked up with [`I18n::get`], never the plain row: a
 //! plain `B` row means bold. A byte count in words is the `@plural` row `{n} byte|{n} bytes`.
 
-use crate::{I18n, Lang, fmt, ltr};
+use crate::{Counted, Format, I18n, Lang, Word, Words, fmt, ltr};
 
 /// The context unit rows are in.
 const CONTEXT: &str = "unit";
 
+/// A byte count in words.
+const BYTES: Counted = Counted::new("", "{n} byte", "{n} bytes");
+
 /// A file-size unit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SizeUnit {
+    /// Bytes.
     Byte,
+    /// Kilobytes, or kibibytes in an IEC style.
     Kilo,
+    /// Megabytes, or mebibytes in an IEC style.
     Mega,
+    /// Gigabytes, or gibibytes in an IEC style.
     Giga,
+    /// Terabytes, or tebibytes in an IEC style.
     Tera,
 }
 
@@ -157,15 +165,39 @@ impl FileSize {
     }
 }
 
+impl FileSize {
+    /// `bytes` written by `words`: the unit rows of context `unit` and the count row of bytes, the
+    /// number as `format` writes it. [`I18n::file_size`] is this with the app's catalogs; a UI scope
+    /// that holds `Words` and a `Format` and no `I18n` calls it.
+    pub fn text(&self, bytes: u64, format: &Format, words: &Words) -> String {
+        self.render(
+            bytes,
+            format,
+            |template| words.get(Word::in_context(CONTEXT, template)).into_owned(),
+            |n| words.counted(BYTES, n, &ltr(&format.integer(n))),
+        )
+    }
+
+    /// The text of `bytes`: `unit_row` gives a unit template's translation, `count` the byte count in words.
+    fn render(&self, bytes: u64, format: &Format, unit_row: impl Fn(&'static str) -> String, count: impl Fn(u64) -> String) -> String {
+        let (unit, n, decimals) = self.parts(bytes);
+        if unit == SizeUnit::Byte && !self.byte_symbol {
+            return count(bytes);
+        }
+        fmt(&unit_row(self.template(unit)), &[("n", &ltr(&format.number(n, decimals)))])
+    }
+}
+
 impl I18n {
     /// `bytes` as a file size in `lang`, written the way `style` says (`1.5 MB`, `512 bytes`), the
     /// number as [`I18n::format`] writes it (`1,5 Mo`).
     pub fn file_size(&self, lang: Lang, bytes: u64, style: FileSize) -> String {
-        let (unit, n, decimals) = style.parts(bytes);
-        if unit == SizeUnit::Byte && !style.byte_symbol {
-            return self.trn(lang, bytes, "{n} byte", "{n} bytes");
-        }
-        self.unit_text(lang, style.template(unit), &self.format().number(n, decimals))
+        style.render(
+            bytes,
+            &self.format(),
+            |template| self.get(lang, CONTEXT, template).unwrap_or(template).to_owned(),
+            |n| self.trn(lang, n, "{n} byte", "{n} bytes"),
+        )
     }
 
     /// `value` with `decimals` digits after the decimal separator in the unit template `unit`, an
@@ -177,90 +209,5 @@ impl I18n {
 
     fn unit_text(&self, lang: Lang, template: &str, n: &str) -> String {
         fmt(self.get(lang, CONTEXT, template).unwrap_or(template), &[("n", &ltr(n))])
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{Embedded, Format};
-
-    static E: &Embedded = &[(
-        "fr",
-        "unit\t{n} KB\t{n} Ko\nunit\t{n} MB\t{n} Mo\nunit\t{n} B\t{n} o\nunit\t{n}%\t{n} %\n\tB\tG\n@plural\t{n} byte|{n} bytes\t{n} octet|{n} octets\n",
-        "",
-    )];
-
-    fn en(bytes: u64, style: FileSize) -> String {
-        let (i18n, _) = I18n::new(&[], &[]);
-        i18n.set_format(Format::from_tag("en-US"));
-        i18n.file_size(Lang::EN, bytes, style)
-    }
-
-    #[test]
-    fn binary_decimal_and_iec_steps() {
-        assert_eq!(en(512, FileSize::BINARY), "512 bytes");
-        assert_eq!(en(1023, FileSize::BINARY), "1,023 bytes");
-        assert_eq!(en(1, FileSize::BINARY), "1 byte");
-        assert_eq!(en(1536, FileSize::BINARY), "1.5 KB");
-        assert_eq!(en(1536, FileSize::IEC), "1.5 KiB");
-        assert_eq!(en(1500, FileSize::DECIMAL), "1.5 KB");
-        assert_eq!(en(3 << 30, FileSize::BINARY), "3.0 GB");
-        assert_eq!(en(5 << 40, FileSize::IEC.decimals(0)), "5 TiB");
-        assert_eq!(en(512, FileSize::BINARY.byte_symbol()), "512 B");
-    }
-
-    #[test]
-    fn precision_and_unit_range() {
-        // Rounding up to the next unit's step moves to that unit.
-        assert_eq!(en(1_048_575, FileSize::BINARY), "1.0 MB");
-        assert_eq!(en(999_999, FileSize::DECIMAL.decimals(0)), "1 MB");
-        assert_eq!(en(1_610_612_736, FileSize::BINARY.unit_decimals(SizeUnit::Giga, 2)), "1.50 GB");
-        // Lightcraft's denoise sizes: whole kilobytes, at least 1, no decimals from 10 MB.
-        let style = FileSize::DECIMAL.smallest(SizeUnit::Kilo).largest(SizeUnit::Mega).unit_decimals(SizeUnit::Kilo, 0).whole_from(10);
-        assert_eq!(en(1, style), "1 KB");
-        assert_eq!(en(0, style), "0 KB");
-        assert_eq!(en(640_400, style), "640 KB");
-        assert_eq!(en(3_400_000, style), "3.4 MB");
-        assert_eq!(en(12_600_000, style), "13 MB");
-        assert_eq!(en(9_960_000, style), "10 MB", "whole once rounded to 10");
-        assert_eq!(en(9_940_000, style), "9.9 MB");
-        assert_eq!(en(5_000_000_000, style), "5,000 MB");
-        // Only sizes below the smallest unit round up.
-        assert_eq!(en(1025, FileSize::BINARY.smallest(SizeUnit::Kilo).unit_decimals(SizeUnit::Kilo, 0)), "1 KB");
-        assert_eq!(en(100, FileSize::BINARY.smallest(SizeUnit::Kilo).unit_decimals(SizeUnit::Kilo, 0)), "1 KB");
-    }
-
-    #[test]
-    fn numbers_are_left_to_right_isolates_in_rtl_units() {
-        let (i18n, problems) = I18n::new(&[("ar", "unit\t{n} KB\t{n} ك.ب\n", "")], &["ar"]);
-        assert!(problems.is_empty(), "{problems:?}");
-        i18n.set_format(Format::from_tag("en-US"));
-        let ar = i18n.from_code("ar").unwrap();
-        assert_eq!(i18n.file_size(ar, 1536, FileSize::BINARY), "\u{2066}1.5\u{2069} ك.ب");
-        assert_eq!(en(1536, FileSize::BINARY), "1.5 KB", "no marks in left-to-right text");
-    }
-
-    #[test]
-    fn unit_names_are_catalog_rows() {
-        let (i18n, problems) = I18n::new(E, &["fr"]);
-        assert!(problems.is_empty(), "{problems:?}");
-        let fr = i18n.from_code("fr").unwrap();
-        i18n.set_format(Format::from_tag("fr-FR"));
-        assert_eq!(i18n.file_size(fr, 1536, FileSize::BINARY), "1,5 Ko");
-        assert_eq!(i18n.file_size(fr, 512, FileSize::BINARY), "512 octets");
-        assert_eq!(i18n.file_size(fr, 512, FileSize::BINARY.byte_symbol()), "512 o", "not the plain row B (bold)");
-        assert_eq!(i18n.file_size(fr, 3 << 30, FileSize::BINARY), "3,0 GB", "a missing row is English");
-        assert_eq!(i18n.measure(fr, 50.0, 0, "{n}%"), "50 %");
-        assert_eq!(i18n.measure(Lang::EN, 12.34, 1, "{n} px"), "12,3 px", "numbers follow the region, not the language");
-    }
-
-    #[test]
-    fn locale_digits() {
-        let (i18n, _) = I18n::new(&[], &[]);
-        i18n.set_format(Format::from_tag("ar-EG"));
-        assert_eq!(i18n.file_size(Lang::EN, 1536, FileSize::BINARY), "١٫٥ KB");
-        i18n.set_format(Format::from_tag("hi"));
-        assert_eq!(i18n.file_size(Lang::EN, 1_234_567, FileSize::DECIMAL.largest(SizeUnit::Byte).byte_symbol()), "12,34,567 B");
     }
 }

@@ -109,8 +109,12 @@ import, a different debounce, and a `Probe` for tests.
    const PORTABLE_MARKERS: &'static [&'static str] = &["portable.txt", "PhotoCraft.portable"];
    const PORTABLE_DIR: &'static str = "PhotoCraftData";
    ```
+
+   If the portable folder cannot be created or written, the platform folder is used and
+   `LoadReport::warning` says why.
 4. The platform config folder: `$XDG_CONFIG_HOME/<app>/` or `~/.config/<app>/` on Linux,
-   `~/Library/Application Support/<app>/` on macOS, `%APPDATA%\<app>\` on Windows.
+   `~/Library/Application Support/<app>/` on macOS, `%APPDATA%\<app>\` on Windows. `Settings::FOLDER_NAME` renames `<app>` (default `APP_ID`)
+   for an app whose existing folder is spelled differently, such as `Photocraft`.
 
 With no folder (isolated or `Location::Memory`), `store.dir()` and `store.path()` are `None`,
 `is_persistent()` is false, legacy files are not imported, and `flush()` returns `Ok`.
@@ -179,4 +183,4 @@ cargo check --target wasm32-unknown-unknown -p craft-settings
 
 The tests in `tests/` write only to temporary folders and never touch the real config folder.
 
-On `wasm32` only the `Settings` trait, the document helpers and the error types are available.
+On `wasm32` the `Settings` trait, the document helpers, the error types, `Remembered` and `presets` (`PresetFolder`, with entries kept in the app's settings sections) are available.

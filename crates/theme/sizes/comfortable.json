@@ -1,0 +1,191 @@
+{
+  "schema": "craft-design-sizes",
+  "schema_version": 1,
+  "id": "comfortable",
+  "name": "Comfortable",
+  "base": {
+    "edge": "flat",
+    "radius": {
+      "button": "full",
+      "control": 6.0,
+      "panel": 0.0,
+      "pill": "full",
+      "surface": 8.0,
+      "window": 12.0
+    },
+    "rows": "rounded",
+    "size": {
+      "bar": {
+        "options": 42.0,
+        "options_narrow": 36.0,
+        "status": 30.0,
+        "tab": 30.0,
+        "title": 38.0
+      },
+      "canvas": {
+        "compass": 34.0,
+        "stage_height": 450.0,
+        "stage_width_max": 900.0,
+        "stage_width_min": 300.0
+      },
+      "checker": 4.0,
+      "control": {
+        "md": 30.0,
+        "sm": 24.0
+      },
+      "dial": 52.0,
+      "dock": {
+        "column": 340.0
+      },
+      "float": {
+        "height": 300.0,
+        "width": 240.0
+      },
+      "groove": 3.0,
+      "handle": {
+        "band_inner": 5.0,
+        "band_outer": 18.0,
+        "hit": 12.0,
+        "md": 8.0,
+        "ring": 18.0,
+        "rotate_reach": 36.0,
+        "sm": 6.0
+      },
+      "hit": {
+        "dead_zone": 3.0,
+        "reveal": 56.0,
+        "slop": 3.0,
+        "target": 8.0
+      },
+      "icon": {
+        "glyph_md": 14.0,
+        "glyph_sm": 12.0,
+        "lg": 22.0,
+        "md": 18.0,
+        "sm": 14.0
+      },
+      "length": {
+        "field": 240.0,
+        "number": 90.0,
+        "short": 120.0,
+        "track": 144.0
+      },
+      "marker": {
+        "height": 8.0,
+        "width": 11.0
+      },
+      "meter": 6.0,
+      "pane": {
+        "least": 50.0
+      },
+      "panel_header": 34.0,
+      "plot": {
+        "height": 180.0,
+        "most": 375.0,
+        "width": 300.0
+      },
+      "pointer_tip": {
+        "x": 24.0,
+        "y": 27.0
+      },
+      "popup_min": 240.0,
+      "rail": {
+        "button": 36.0,
+        "width": 50.0
+      },
+      "ramp": {
+        "bar": 10.0,
+        "groove": 5.0
+      },
+      "ruler": {
+        "tick": {
+          "mid": 4.5
+        }
+      },
+      "scroll_fade": 20.0,
+      "thumb": {
+        "card": 160.0,
+        "lg": 48.0,
+        "md": 34.0,
+        "sm": 18.0
+      },
+      "thumb_row": 42.0,
+      "toggle": 36.0,
+      "window": {
+        "cascade": 38.0
+      }
+    },
+    "space": {
+      "gap": {
+        "card_column": 16.0,
+        "card_row": 24.0,
+        "inline": 6.0,
+        "item": 10.0,
+        "row": 6.0,
+        "section": 16.0,
+        "stack": 8.0,
+        "tight": 3.0
+      },
+      "inset": {
+        "screen": 20.0
+      },
+      "pad": {
+        "chip": 6.0,
+        "control": 8.0,
+        "regular": 12.0,
+        "roomy": 20.0,
+        "segment": 14.0
+      }
+    },
+    "stroke": {
+      "dash": 4.0,
+      "dash_gap": 3.0,
+      "heavy": 3.0,
+      "medium": 1.5,
+      "thick": 2.0,
+      "thin": 1.0
+    },
+    "typography": {
+      "body": {
+        "font": "ui",
+        "line_height": 18.0,
+        "size": 13.0
+      },
+      "body_large": {
+        "font": "ui",
+        "line_height": 22.0,
+        "size": 16.0
+      },
+      "body_strong": {
+        "font": "ui_semibold",
+        "line_height": 18.0,
+        "size": 13.0
+      },
+      "caption": {
+        "font": "ui",
+        "line_height": 16.0,
+        "size": 11.5
+      },
+      "heading": {
+        "font": "ui_semibold",
+        "line_height": 24.0,
+        "size": 17.0
+      },
+      "label": {
+        "font": "ui",
+        "line_height": 18.0,
+        "size": 12.5
+      },
+      "mono": {
+        "font": "mono",
+        "line_height": 18.0,
+        "size": 12.5
+      },
+      "title": {
+        "font": "ui_semibold",
+        "line_height": 20.0,
+        "size": 14.0
+      }
+    }
+  }
+}

@@ -1,6 +1,6 @@
 //! TOML document handling: `schema_version`, per-section parsing and comment-preserving merges.
 
-use toml_edit::{DocumentMut, Item, Table, TableLike};
+use toml_edit::{DocumentMut, Item, Table, TableLike, Value};
 
 use crate::Settings;
 use crate::error::SectionError;
@@ -71,7 +71,7 @@ pub fn merge_into<T: Settings>(doc: &mut DocumentMut, value: &T) -> Result<(), t
 
 /// Serde writes nested structs as inline tables (`general = { … }`); files are nicer to read
 /// and edit as `[general]` sections, so new sections are converted before merging.
-fn expand_inline_tables(table: &mut Table) {
+pub(crate) fn expand_inline_tables(table: &mut Table) {
     let keys: Vec<String> = table.iter().map(|(k, _)| k.to_owned()).collect();
     for key in keys {
         let Some(item) = table.get_mut(&key) else { continue };
@@ -104,6 +104,112 @@ fn merge_tables(into: &mut dyn TableLike, from: &dyn TableLike) {
                 into.insert(key, item.clone());
             }
         }
+    }
+}
+
+/// Merges this instance's changes into the file another instance wrote (gap 31, PhotoCraft's
+/// multi-instance merge): `base` is the document as this store last read or wrote it, `ours` what
+/// it would write now, `theirs` the file on disk, which becomes the result.
+///
+/// - `ours == base`: nothing changes; `theirs` is kept.
+/// - Tables merge key by key: a key in both `base` and `theirs` recurses; a key removed on disk
+///   and unchanged here stays removed; any other key of `ours` is written (`ours` wins at the
+///   leaf, scalars and arrays replaced whole); a key `base` had and `ours` dropped is removed.
+/// - Comments and formatting of `theirs` stay, as in [`merge_into`].
+///
+/// When the disk's `schema_version` is newer than `base`'s, `base` is migrated to it with
+/// [`Settings::migrate`] first, so a migration this instance ran is not written over another
+/// instance's choice (PhotoCraft's `without_stale_migration`).
+// pc: crates/ui-egui/src/prefs/prefs_ui/save.rs:151 merge_changes, :134 without_stale_migration, :115 write_prefs
+pub fn merge_changes<T: Settings>(base: &DocumentMut, ours: &DocumentMut, theirs: &mut DocumentMut) {
+    if same_table(base.as_table(), ours.as_table()) {
+        return;
+    }
+    let base = migrated_base::<T>(base, theirs);
+    merge_changed_tables(base.as_table(), ours.as_table(), theirs.as_table_mut());
+}
+
+/// `base` migrated up to the version `theirs` has, when `theirs` is newer; otherwise `base`.
+fn migrated_base<T: Settings>(base: &DocumentMut, theirs: &DocumentMut) -> DocumentMut {
+    let (Some(from), Some(to)) = (schema_version(base), schema_version(theirs)) else {
+        return base.clone();
+    };
+    let mut migrated = base.clone();
+    for step in from..to.min(T::SCHEMA_VERSION) {
+        if T::migrate(step, &mut migrated).is_err() {
+            return base.clone();
+        }
+        set_schema_version(&mut migrated, step + 1);
+    }
+    migrated
+}
+
+fn merge_changed_tables(base: &dyn TableLike, ours: &dyn TableLike, theirs: &mut dyn TableLike) {
+    for (key, our_item) in ours.iter() {
+        match (base.get(key), theirs.get_mut(key)) {
+            (Some(base_item), Some(their_item)) => merge_changed_items(base_item, our_item, their_item),
+            // Removed on disk and unchanged here: it stays removed.
+            (Some(base_item), None) if same_item(base_item, our_item) => {}
+            (None, Some(their_item)) => match (their_item.as_table_like_mut(), our_item.as_table_like()) {
+                (Some(their_table), Some(our_table)) => merge_changed_tables(&Table::new(), our_table, their_table),
+                _ => replace_item(their_item, our_item),
+            },
+            (_, None) => {
+                theirs.insert(key, our_item.clone());
+            }
+        }
+    }
+    let removed: Vec<String> = base.iter().map(|(k, _)| k).filter(|k| !ours.contains_key(k)).map(str::to_owned).collect();
+    for key in removed {
+        theirs.remove(&key);
+    }
+}
+
+fn merge_changed_items(base: &Item, ours: &Item, theirs: &mut Item) {
+    if same_item(base, ours) {
+        return;
+    }
+    match (base.as_table_like(), ours.as_table_like(), theirs.as_table_like_mut()) {
+        (Some(base), Some(ours), Some(theirs)) => merge_changed_tables(base, ours, theirs),
+        _ => replace_item(theirs, ours),
+    }
+}
+
+/// Replaces `theirs` with `ours`, keeping the spacing and trailing comment of a replaced value.
+fn replace_item(theirs: &mut Item, ours: &Item) {
+    let mut fresh = ours.clone();
+    if let (Some(old), Some(new)) = (theirs.as_value(), fresh.as_value_mut()) {
+        *new.decor_mut() = old.decor().clone();
+    }
+    *theirs = fresh;
+}
+
+/// Equal in content, ignoring comments, spacing and key order.
+fn same_table(a: &dyn TableLike, b: &dyn TableLike) -> bool {
+    a.len() == b.len() && a.iter().all(|(k, ai)| b.get(k).is_some_and(|bi| same_item(ai, bi)))
+}
+
+fn same_item(a: &Item, b: &Item) -> bool {
+    if let (Some(a), Some(b)) = (a.as_table_like(), b.as_table_like()) {
+        return same_table(a, b);
+    }
+    match (a, b) {
+        (Item::Value(a), Item::Value(b)) => same_value(a, b),
+        (Item::ArrayOfTables(a), Item::ArrayOfTables(b)) => a.len() == b.len() && a.iter().zip(b.iter()).all(|(a, b)| same_table(a, b)),
+        _ => false,
+    }
+}
+
+fn same_value(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::String(a), Value::String(b)) => a.value() == b.value(),
+        (Value::Integer(a), Value::Integer(b)) => a.value() == b.value(),
+        (Value::Float(a), Value::Float(b)) => a.value() == b.value(),
+        (Value::Boolean(a), Value::Boolean(b)) => a.value() == b.value(),
+        (Value::Datetime(a), Value::Datetime(b)) => a.value() == b.value(),
+        (Value::Array(a), Value::Array(b)) => a.len() == b.len() && a.iter().zip(b.iter()).all(|(a, b)| same_value(a, b)),
+        (Value::InlineTable(a), Value::InlineTable(b)) => same_table(a, b),
+        _ => false,
     }
 }
 

@@ -3,6 +3,8 @@
 //! First match wins: an override from the application, the `<APP>_CONFIG_DIR` variable, a
 //! portable marker next to the executable, then the platform's own config folder. An empty
 //! `<APP>_CONFIG_DIR`, or [`Location::Memory`], means no folder at all: nothing is read or written.
+//! A portable folder that cannot be created or written to is skipped in favour of the platform
+//! folder, and the reason comes back in [`Resolved::warning`].
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -74,6 +76,15 @@ pub struct Resolved {
     pub dir: Option<PathBuf>,
     /// Why.
     pub rule: Rule,
+    /// Set when a portable marker was found but its folder cannot be written, so the platform
+    /// folder was chosen instead. Show it or log it; the store opens normally.
+    pub warning: Option<String>,
+}
+
+impl Resolved {
+    fn new(dir: Option<PathBuf>, rule: Rule) -> Self {
+        Self { dir, rule, warning: None }
+    }
 }
 
 /// Reads an environment variable by name.
@@ -112,36 +123,67 @@ pub fn env_var_name(app_id: &str) -> String {
     name
 }
 
-/// Applies the rules for `app_id`, with the app's portable-mode names.
+/// Applies the rules for `app_id`, with the app's portable-mode names. The platform folder is
+/// named after `app_id`; see [`resolve_named`] to name it differently.
 pub fn resolve(app_id: &str, portable: &Portable, location: &Location, probe: &Probe) -> Resolved {
+    resolve_named(app_id, app_id, portable, location, probe)
+}
+
+/// Like [`resolve`], with the platform folder (and the current-directory fallback) named
+/// `folder` instead of the app id, so an app whose existing settings sit in a differently spelled
+/// folder (`Photocraft` on macOS and Windows) keeps them. The `<APP>_CONFIG_DIR` variable still
+/// comes from `app_id`.
+pub fn resolve_named(app_id: &str, folder: &str, portable: &Portable, location: &Location, probe: &Probe) -> Resolved {
     match location {
-        Location::Dir(dir) => return Resolved { dir: Some(dir.clone()), rule: Rule::Override },
-        Location::Memory => return Resolved { dir: None, rule: Rule::Memory },
+        Location::Dir(dir) => return Resolved::new(Some(dir.clone()), Rule::Override),
+        Location::Memory => return Resolved::new(None, Rule::Memory),
         Location::Auto => {}
     }
     let var = env_var_name(app_id);
     if let Some(value) = (probe.env)(&var) {
         if value.is_empty() {
-            return Resolved { dir: None, rule: Rule::Isolated(var) };
+            return Resolved::new(None, Rule::Isolated(var));
         }
-        return Resolved { dir: Some(PathBuf::from(value)), rule: Rule::EnvVar(var) };
+        return Resolved::new(Some(PathBuf::from(value)), Rule::EnvVar(var));
     }
-    if let Some(dir) = probe.exe_dir.as_deref().and_then(|d| portable_dir(d, portable)) {
-        return Resolved { dir: Some(dir), rule: Rule::Portable };
+    let mut warning = None;
+    if let Some((marker, dir)) = probe.exe_dir.as_deref().and_then(|d| portable_dir(d, portable)) {
+        match ensure_writable(&dir) {
+            Ok(()) => return Resolved::new(Some(dir), Rule::Portable),
+            Err(e) => {
+                let instead = match &probe.platform_config_dir {
+                    Some(base) => base.join(folder).display().to_string(),
+                    None => PathBuf::from(".").join(folder).display().to_string(),
+                };
+                warning = Some(format!(
+                    "portable mode ({} found) but {} isn't writable ({e}); settings are kept in {instead} instead",
+                    marker.display(),
+                    dir.display()
+                ));
+            }
+        }
     }
-    match &probe.platform_config_dir {
-        Some(base) => Resolved { dir: Some(base.join(app_id)), rule: Rule::Platform },
-        None => Resolved { dir: Some(PathBuf::from(".").join(app_id)), rule: Rule::Fallback },
-    }
+    let mut resolved = match &probe.platform_config_dir {
+        Some(base) => Resolved::new(Some(base.join(folder)), Rule::Platform),
+        None => Resolved::new(Some(PathBuf::from(".").join(folder)), Rule::Fallback),
+    };
+    resolved.warning = warning;
+    resolved
 }
 
-/// The folder a portable marker points at, when `exe_dir` has one.
+/// Creates `dir` and proves a file can be written in it: a folder can exist and still be read-only.
+fn ensure_writable(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    crate::recovery::check_writable(dir)
+}
+
+/// The marker found and the folder it points at, when `exe_dir` has one.
 ///
 /// On macOS the executable sits in `X.app/Contents/MacOS`; the marker is looked for next to the
 /// `.app` bundle, because writing inside a signed bundle breaks its signature.
-fn portable_dir(exe_dir: &Path, portable: &Portable) -> Option<PathBuf> {
+fn portable_dir(exe_dir: &Path, portable: &Portable) -> Option<(PathBuf, PathBuf)> {
     let base = bundle_parent(exe_dir).unwrap_or(exe_dir);
-    portable.markers.iter().any(|m| base.join(m).is_file()).then(|| base.join(portable.dir))
+    portable.markers.iter().map(|m| base.join(m)).find(|m| m.is_file()).map(|marker| (marker, base.join(portable.dir)))
 }
 
 fn bundle_parent(exe_dir: &Path) -> Option<&Path> {

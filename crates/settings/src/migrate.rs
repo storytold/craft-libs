@@ -14,9 +14,15 @@ pub enum Upgrade {
     /// Already at the current version, or no `schema_version` key (treated as current).
     Current,
     /// Upgraded step by step from this older version.
-    Migrated { from: u32 },
+    Migrated {
+        /// The schema version the document had.
+        from: u32,
+    },
     /// Written by a newer build; the document was left alone.
-    Newer { file: u32 },
+    Newer {
+        /// The schema version the document has.
+        file: u32,
+    },
 }
 
 /// Brings `doc` up to [`Settings::SCHEMA_VERSION`] by calling [`Settings::migrate`] once per step.

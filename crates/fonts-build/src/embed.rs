@@ -725,31 +725,80 @@ pub enum Error {
     /// `CRAFT_FONTS_REQUIRED=1` but `CRAFT_FONTS_DIR` is unset or empty.
     NotSet,
     /// The manifest or a font file it lists can't be read.
-    Read { path: PathBuf, source: io::Error },
+    Read {
+        /// The file that failed.
+        path: PathBuf,
+        /// The I/O error.
+        source: io::Error,
+    },
     /// The manifest has a malformed line.
-    Parse { manifest: PathBuf, error: ParseError },
+    Parse {
+        /// The manifest.
+        manifest: PathBuf,
+        /// The malformed line.
+        error: ParseError,
+    },
     /// Required, but no face in the manifest was selected.
-    NoFaces { manifest: PathBuf },
+    NoFaces {
+        /// The manifest.
+        manifest: PathBuf,
+    },
     /// Required, but no face in the manifest has these requested script tags.
-    MissingScripts { manifest: PathBuf, scripts: Vec<String> },
+    MissingScripts {
+        /// The manifest.
+        manifest: PathBuf,
+        /// The requested script tags no face has.
+        scripts: Vec<String>,
+    },
     /// The generated table can't be written.
-    Write { path: PathBuf, source: io::Error },
+    Write {
+        /// The file that could not be written.
+        path: PathBuf,
+        /// The I/O error.
+        source: io::Error,
+    },
     /// `out_file` is relative and `OUT_DIR` is unset (not running as a build script).
     NoOutDir,
     /// An interface face has CFF outlines, which can't be cut correctly; it must be TrueType.
-    NotTrueType { path: PathBuf },
+    NotTrueType {
+        /// The face's file.
+        path: PathBuf,
+    },
     /// An interface face can't be cut.
-    Subset { path: PathBuf, reason: String },
+    Subset {
+        /// The face's file.
+        path: PathBuf,
+        /// Why cutting failed.
+        reason: String,
+    },
     /// [`Embed::documents`] names families the manifest lacks; `known` lists the manifest's.
-    UnknownFamilies { manifest: PathBuf, families: Vec<String>, known: Vec<String> },
+    UnknownFamilies {
+        /// The manifest.
+        manifest: PathBuf,
+        /// The families the manifest lacks.
+        families: Vec<String>,
+        /// The families the manifest has.
+        known: Vec<String>,
+    },
     /// A face to embed has a path that isn't UTF-8, which `include_bytes!` can't name.
-    NonUtf8Path { path: PathBuf },
+    NonUtf8Path {
+        #[allow(missing_docs)]
+        path: PathBuf,
+    },
     /// A manifest font or licence path is absolute, climbs out with `..`, or resolves (through a
     /// symlink) to a file outside the checkout.
-    OutsideCheckout { manifest: PathBuf, file: String },
+    OutsideCheckout {
+        #[allow(missing_docs)]
+        manifest: PathBuf,
+        #[allow(missing_docs)]
+        file: String,
+    },
     /// A path that goes into a `cargo::rerun-if-changed` line has a line break, which would start
     /// another cargo instruction.
-    LineBreakInPath { path: PathBuf },
+    LineBreakInPath {
+        /// The path.
+        path: PathBuf,
+    },
 }
 
 impl fmt::Display for Error {

@@ -8,6 +8,7 @@ use std::fmt;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::layout::Layout;
+use crate::parity::ReturnGlyph;
 
 pub mod foreign;
 
@@ -15,32 +16,7 @@ pub mod foreign;
 pub const MAX_CHORD_TEXT: usize = 72;
 
 /// The platform a keymap is used on. It decides display text and whether `ctrl` folds into `cmd`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-#[non_exhaustive]
-pub enum Platform {
-    Mac,
-    Windows,
-    Linux,
-}
-
-impl Platform {
-    /// The platform this build runs on. Web builds count as Linux; with the `egui` feature,
-    /// `egui::platform` gives the browser's operating system.
-    pub const fn current() -> Platform {
-        if cfg!(target_os = "macos") {
-            Platform::Mac
-        } else if cfg!(target_os = "windows") {
-            Platform::Windows
-        } else {
-            Platform::Linux
-        }
-    }
-
-    pub const fn is_mac(self) -> bool {
-        matches!(self, Platform::Mac)
-    }
-}
+pub use craft_host::target::Os as Platform;
 
 macro_rules! keys {
     ($($variant:ident => $name:literal),* $(,)?) => {
@@ -50,10 +26,116 @@ macro_rules! keys {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
         #[non_exhaustive]
         pub enum Key {
-            $($variant),*
+            $(#[allow(missing_docs)] $variant),*
         }
 
         impl Key {
+    /// The W3C `KeyboardEvent.code` of the physical key that types this key on a US keyboard: `KeyA`, `Digit5`,
+    /// `F10`, `ArrowUp`, `Equal`. A shifted key (`+`, `:`, `?`, `{`) names the key it is typed on.
+    pub const fn code_name(self) -> &'static str {
+        match self {
+            Key::A => "KeyA",
+            Key::B => "KeyB",
+            Key::C => "KeyC",
+            Key::D => "KeyD",
+            Key::E => "KeyE",
+            Key::F => "KeyF",
+            Key::G => "KeyG",
+            Key::H => "KeyH",
+            Key::I => "KeyI",
+            Key::J => "KeyJ",
+            Key::K => "KeyK",
+            Key::L => "KeyL",
+            Key::M => "KeyM",
+            Key::N => "KeyN",
+            Key::O => "KeyO",
+            Key::P => "KeyP",
+            Key::Q => "KeyQ",
+            Key::R => "KeyR",
+            Key::S => "KeyS",
+            Key::T => "KeyT",
+            Key::U => "KeyU",
+            Key::V => "KeyV",
+            Key::W => "KeyW",
+            Key::X => "KeyX",
+            Key::Y => "KeyY",
+            Key::Z => "KeyZ",
+            Key::Num0 => "Digit0",
+            Key::Num1 => "Digit1",
+            Key::Num2 => "Digit2",
+            Key::Num3 => "Digit3",
+            Key::Num4 => "Digit4",
+            Key::Num5 => "Digit5",
+            Key::Num6 => "Digit6",
+            Key::Num7 => "Digit7",
+            Key::Num8 => "Digit8",
+            Key::Num9 => "Digit9",
+            Key::F1 => "F1",
+            Key::F2 => "F2",
+            Key::F3 => "F3",
+            Key::F4 => "F4",
+            Key::F5 => "F5",
+            Key::F6 => "F6",
+            Key::F7 => "F7",
+            Key::F8 => "F8",
+            Key::F9 => "F9",
+            Key::F10 => "F10",
+            Key::F11 => "F11",
+            Key::F12 => "F12",
+            Key::F13 => "F13",
+            Key::F14 => "F14",
+            Key::F15 => "F15",
+            Key::F16 => "F16",
+            Key::F17 => "F17",
+            Key::F18 => "F18",
+            Key::F19 => "F19",
+            Key::F20 => "F20",
+            Key::F21 => "F21",
+            Key::F22 => "F22",
+            Key::F23 => "F23",
+            Key::F24 => "F24",
+            Key::F25 => "F25",
+            Key::F26 => "F26",
+            Key::F27 => "F27",
+            Key::F28 => "F28",
+            Key::F29 => "F29",
+            Key::F30 => "F30",
+            Key::F31 => "F31",
+            Key::F32 => "F32",
+            Key::F33 => "F33",
+            Key::F34 => "F34",
+            Key::F35 => "F35",
+            Key::Escape => "Escape",
+            Key::Tab => "Tab",
+            Key::Menu => "ContextMenu",
+            Key::Backspace => "Backspace",
+            Key::Enter => "Enter",
+            Key::Space => "Space",
+            Key::Insert => "Insert",
+            Key::Delete => "Delete",
+            Key::Home => "Home",
+            Key::End => "End",
+            Key::PageUp => "PageUp",
+            Key::PageDown => "PageDown",
+            Key::Up => "ArrowUp",
+            Key::Down => "ArrowDown",
+            Key::Left => "ArrowLeft",
+            Key::Right => "ArrowRight",
+            Key::Minus => "Minus",
+            Key::Equals | Key::Plus => "Equal",
+            Key::OpenBracket | Key::OpenCurlyBracket => "BracketLeft",
+            Key::CloseBracket | Key::CloseCurlyBracket => "BracketRight",
+            Key::Backslash | Key::Pipe => "Backslash",
+            Key::Semicolon | Key::Colon => "Semicolon",
+            Key::Quote => "Quote",
+            Key::Backtick => "Backquote",
+            Key::Comma => "Comma",
+            Key::Period => "Period",
+            Key::Slash | Key::Questionmark => "Slash",
+            Key::IntlBackslash => "IntlBackslash",
+            Key::Exclamationmark => "Digit1",
+        }
+    }
             /// Every key, in declaration order.
             pub const ALL: &'static [Key] = &[$(Key::$variant),*];
 
@@ -86,7 +168,7 @@ keys! {
     F20 => "F20", F21 => "F21", F22 => "F22", F23 => "F23", F24 => "F24", F25 => "F25",
     F26 => "F26", F27 => "F27", F28 => "F28", F29 => "F29", F30 => "F30", F31 => "F31",
     F32 => "F32", F33 => "F33", F34 => "F34", F35 => "F35",
-    Escape => "Escape", Tab => "Tab", Backspace => "Backspace", Enter => "Enter",
+    Escape => "Escape", Tab => "Tab", Menu => "Menu", Backspace => "Backspace", Enter => "Enter",
     Space => "Space", Insert => "Insert", Delete => "Delete", Home => "Home", End => "End",
     PageUp => "PageUp", PageDown => "PageDown",
     Up => "Up", Down => "Down", Left => "Left", Right => "Right",
@@ -258,13 +340,13 @@ impl Key {
     }
 
     /// The key as macOS menus show it: arrows and editing keys as glyphs.
-    pub(crate) fn mac_symbol(self) -> &'static str {
+    pub(crate) fn mac_symbol(self, glyph: ReturnGlyph) -> &'static str {
         match self {
             Key::Up => "↑",
             Key::Down => "↓",
             Key::Left => "←",
             Key::Right => "→",
-            Key::Enter => "⏎",
+            Key::Enter => glyph.symbol(),
             Key::Backspace => "⌫",
             Key::Delete => "⌦",
             Key::Escape => "⎋",
@@ -314,18 +396,54 @@ pub struct Mods {
     pub ctrl: bool,
     /// Alt, Option on macOS.
     pub alt: bool,
+    /// The Shift key.
     pub shift: bool,
 }
 
 impl Mods {
+    /// No modifiers.
     pub const NONE: Mods = Mods { cmd: false, ctrl: false, alt: false, shift: false };
+    /// Only [`cmd`](Mods::cmd).
     pub const CMD: Mods = Mods { cmd: true, ctrl: false, alt: false, shift: false };
+    /// Only [`ctrl`](Mods::ctrl).
     pub const CTRL: Mods = Mods { cmd: false, ctrl: true, alt: false, shift: false };
+    /// Only [`alt`](Mods::alt).
     pub const ALT: Mods = Mods { cmd: false, ctrl: false, alt: true, shift: false };
+    /// Only [`shift`](Mods::shift).
     pub const SHIFT: Mods = Mods { cmd: false, ctrl: false, alt: false, shift: true };
 
+    /// Whether no modifier is held.
     pub const fn is_none(self) -> bool {
         !(self.cmd || self.ctrl || self.alt || self.shift)
+    }
+
+    /// The modifiers' text before a key: `⌃⌥⇧⌘` on macOS, `Ctrl+Alt+Shift+` elsewhere.
+    pub(crate) fn prefix(self, platform: Platform) -> String {
+        let parts = self.parts(platform);
+        if platform.is_mac() { parts.concat() } else { parts.iter().map(|name| format!("{name}+")).collect() }
+    }
+
+    /// The held modifiers one by one, in the platform's order: `⌃ ⌥ ⇧ ⌘` on macOS, `Ctrl Alt Shift` elsewhere.
+    pub(crate) fn parts(self, platform: Platform) -> Vec<&'static str> {
+        let m = self.effective(platform);
+        let table: [(bool, &'static str); 4] = if platform.is_mac() {
+            [(m.ctrl, "⌃"), (m.alt, "⌥"), (m.shift, "⇧"), (m.cmd, "⌘")]
+        } else {
+            [(m.cmd, "Ctrl"), (m.alt, "Alt"), (m.shift, "Shift"), (false, "")]
+        };
+        table.into_iter().filter(|(on, _)| *on).map(|(_, name)| name).collect()
+    }
+
+    /// The held modifiers' names for a screen reader, in the platform's order: `Ctrl Option Shift Cmd` on macOS,
+    /// `Ctrl Alt Shift` elsewhere.
+    fn spoken(self, platform: Platform) -> Vec<&'static str> {
+        let m = self.effective(platform);
+        let table: [(bool, &'static str); 4] = if platform.is_mac() {
+            [(m.ctrl, "Ctrl"), (m.alt, "Option"), (m.shift, "Shift"), (m.cmd, "Cmd")]
+        } else {
+            [(m.cmd, "Ctrl"), (m.alt, "Alt"), (m.shift, "Shift"), (false, "")]
+        };
+        table.into_iter().filter(|(on, _)| *on).map(|(_, name)| name).collect()
     }
 
     /// The modifiers as `platform` sees them: off macOS `ctrl` becomes `cmd`.
@@ -337,7 +455,9 @@ impl Mods {
 /// A key with modifiers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Chord {
+    /// The modifiers held with the key.
     pub mods: Mods,
+    /// The key.
     pub key: Key,
 }
 
@@ -346,13 +466,17 @@ pub struct Chord {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum ParseError {
+    /// The text is empty.
     Empty,
     /// Longer than [`MAX_CHORD_TEXT`].
     TooLong,
     /// Modifiers with no key, or a trailing `+`.
     MissingKey,
+    /// A key name nothing here recognises, as written.
     UnknownKey(String),
+    /// A modifier name nothing here recognises, as written.
     UnknownModifier(String),
+    /// A modifier written twice, as written.
     DuplicateModifier(String),
     /// Two different chords: key sequences are not supported.
     Sequence,
@@ -432,6 +556,7 @@ fn add_modifier(mods: &mut Mods, m: Modifier, written: &str) -> Result<(), Parse
 }
 
 impl Chord {
+    /// A chord of `key` held with `mods`.
     pub const fn new(mods: Mods, key: Key) -> Chord {
         Chord { mods, key }
     }
@@ -518,26 +643,40 @@ impl Chord {
     }
 
     fn display_key(&self, platform: Platform, key_text: Option<&str>) -> String {
-        let m = self.mods.effective(platform);
-        let mut s = String::new();
-        if platform.is_mac() {
-            for (on, glyph) in [(m.ctrl, "⌃"), (m.alt, "⌥"), (m.shift, "⇧"), (m.cmd, "⌘")] {
-                if on {
-                    s.push_str(glyph);
-                }
-            }
-            s.push_str(key_text.unwrap_or(self.key.mac_symbol()));
-        } else {
-            for (on, name) in [(m.cmd, "Ctrl+"), (m.alt, "Alt+"), (m.shift, "Shift+")] {
-                if on {
-                    s.push_str(name);
-                }
-            }
-            s.push_str(key_text.unwrap_or(self.key.text_name()));
-        }
+        self.display_key_with(platform, key_text, ReturnGlyph::Enter)
+    }
+
+    pub(crate) fn display_key_with(&self, platform: Platform, key_text: Option<&str>, glyph: ReturnGlyph) -> String {
+        let mut s = self.mods.prefix(platform);
+        s.push_str(&self.key_text(platform, key_text, glyph));
         s
     }
 
+    fn key_text(&self, platform: Platform, key_text: Option<&str>, glyph: ReturnGlyph) -> String {
+        match key_text {
+            Some(text) => text.to_owned(),
+            None if platform.is_mac() => self.key.mac_symbol(glyph).to_owned(),
+            None => self.key.text_name().to_owned(),
+        }
+    }
+
+    /// The chord as one text per key, modifiers first, each as [`display_for`](Self::display_for) writes it:
+    /// `["Ctrl", "Shift", "K"]`, or `["⇧", "⌘", "K"]` on macOS. A keycap is drawn around each.
+    pub fn parts_for(&self, platform: Platform, layout: &Layout) -> Vec<String> {
+        let mut parts: Vec<String> = self.mods.parts(platform).into_iter().map(str::to_owned).collect();
+        parts.push(self.key_text(platform, layout.key_label(self.key).as_deref(), ReturnGlyph::Enter));
+        parts
+    }
+
+    /// The chord as names for a screen reader and AccessKit's `keyboard_shortcut`, in the platform's order
+    /// whatever its symbols: `Ctrl+Option+Shift+Cmd+K` on macOS, `Ctrl+Alt+Shift+K` elsewhere.
+    pub fn spoken(&self, platform: Platform) -> String {
+        let mut names: Vec<&str> = self.mods.spoken(platform);
+        names.push(self.key.text_name());
+        names.join("+")
+    }
+
+    /// Whether the key is a function key.
     pub const fn is_function_key(&self) -> bool {
         self.key.is_function_key()
     }
@@ -594,16 +733,19 @@ impl<'de> Deserialize<'de> for Chord {
 /// What starts a command: a chord, pressed once or twice in a row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Trigger {
+    /// The chord to press.
     pub chord: Chord,
     /// The chord pressed twice.
     pub double: bool,
 }
 
 impl Trigger {
+    /// A trigger that fires on one press of `chord`.
     pub const fn single(chord: Chord) -> Trigger {
         Trigger { chord, double: false }
     }
 
+    /// A trigger that fires on two presses of `chord` in a row.
     pub const fn double(chord: Chord) -> Trigger {
         Trigger { chord, double: true }
     }
@@ -633,6 +775,7 @@ impl Trigger {
         self.to_string()
     }
 
+    /// The trigger with its chord's modifiers as `platform` sees them ([`Mods::effective`]).
     pub const fn effective(self, platform: Platform) -> Trigger {
         Trigger { chord: self.chord.effective(platform), double: self.double }
     }

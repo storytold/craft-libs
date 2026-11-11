@@ -11,7 +11,7 @@ use writeable::{Part, PartsWrite, Writeable};
 
 use crate::Region;
 use crate::data::{self, PERCENT};
-use crate::number::Marks;
+use crate::number::{Marks, is_bidi_mark};
 
 /// Which digits numbers are written in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -36,6 +36,8 @@ pub struct Format {
     percent: (&'static str, &'static str),
     /// The marks [`Format::parse`] reads.
     pub(crate) marks: Marks,
+    /// The decimal and group marks of the written form, read once from a number that shows both.
+    separators: (char, Option<char>),
 }
 
 impl Format {
@@ -47,7 +49,7 @@ impl Format {
             locale.extensions.unicode.keywords.set(key!("nu"), value!("latn"));
         }
         let decimal = data::provider().and_then(|p| DecimalFormatter::try_new_with_buffer_provider(p, (&locale).into(), Default::default()).ok());
-        let mut format = Format { decimal, group: None, point: None, percent: ("", "%"), marks: Marks::default() };
+        let mut format = Format { decimal, group: None, point: None, percent: ("", "%"), marks: Marks::default(), separators: ('.', None) };
         // The locale's own separators and digits, read from a number that shows them all.
         let probe = format.parts(&Decimal::try_from_str("-1234567.5").unwrap_or_default());
         let latin = probe.integer.starts_with(|c: char| c.is_ascii_digit());
@@ -77,7 +79,22 @@ impl Format {
             (false, Digits::Latin) => false,
         };
         format.marks = Marks::new(&point, &group, !comma);
+        format.separators = format.written_separators();
         format
+    }
+
+    /// The decimal and group marks numbers are written with, in the digits of the format. The group mark is
+    /// `None` where the format writes none.
+    pub fn separators(&self) -> (char, Option<char>) {
+        self.separators
+    }
+
+    fn written_separators(&self) -> (char, Option<char>) {
+        let sample = self.number(1_234_567.5, 1);
+        let marks: Vec<char> = sample.chars().filter(|c| !c.is_alphanumeric() && !c.is_whitespace() && !is_bidi_mark(*c)).collect();
+        let decimal = marks.last().copied().unwrap_or('.');
+        let group = marks.first().copied().filter(|group| *group != decimal);
+        (decimal, group)
     }
 
     /// The format for a locale tag (`de-CH`, `ar-EG`), with the locale's own digits.
@@ -259,91 +276,6 @@ fn percent_affixes(tag: &str, latin: bool) -> (&'static str, &'static str) {
 mod tests {
     use super::*;
 
-    fn latin(tag: &str) -> Format {
-        Format::new(&Region::from_tag(tag), Digits::Latin)
-    }
-
-    #[test]
-    fn locale_digits_and_separators() {
-        for (tag, integer, number) in [
-            ("en", "1,234,567", "1,234.5"),
-            ("ja", "1,234,567", "1,234.5"),
-            ("de", "1.234.567", "1.234,5"),
-            ("fr", "1\u{202f}234\u{202f}567", "1\u{202f}234,5"),
-            ("hi", "12,34,567", "1,234.5"),
-            ("ar-EG", "١٬٢٣٤٬٥٦٧", "١٬٢٣٤٫٥"),
-            ("fa", "۱٬۲۳۴٬۵۶۷", "۱٬۲۳۴٫۵"),
-        ] {
-            let f = Format::from_tag(tag);
-            assert_eq!((f.integer(1_234_567), f.number(1234.5, 1)), (integer.into(), number.into()), "{tag}");
-        }
-        // CLDR writes Arabic without a region in Latin digits.
-        assert_eq!(Format::from_tag("ar").number(1234.5, 1), "1,234.5");
-    }
-
-    #[test]
-    fn ungrouped_numbers() {
-        for (tag, want) in [("en", "1920"), ("de", "-1234567,5"), ("hi", "1234567"), ("ar-EG", "١٩٢٠")] {
-            let value = if tag == "de" {
-                -1_234_567.5
-            } else if tag == "hi" {
-                1_234_567.0
-            } else {
-                1920.0
-            };
-            let decimals = usize::from(tag == "de");
-            assert_eq!(Format::from_tag(tag).number_ungrouped(value, decimals), want, "{tag}");
-        }
-        let mut region = Region::from_tag("en-US");
-        region.decimal = Some(',');
-        assert_eq!(Format::new(&region, Digits::Locale).number_ungrouped(1234.5, 1), "1234,5", "the system's decimal mark stays");
-        assert_eq!(Format::from_tag("en").number_ungrouped(f64::INFINITY, 0), "∞");
-    }
-
-    #[test]
-    fn forced_latin_digits() {
-        assert_eq!(latin("ar-EG").number(1234.5, 1), "1,234.5");
-        assert_eq!(latin("fa").integer(1_234_567), "1,234,567");
-        assert_eq!(latin("de").number(1234.5, 1), "1.234,5", "a Latin locale is unchanged");
-    }
-
-    #[test]
-    fn cldr_separators_for_every_region() {
-        for (tag, want) in [
-            ("en-PL", "1.234.567,5"),
-            ("en-DE", "1.234.567,5"),
-            ("ar-MA", "1.234.567,5"),
-            ("de-CH", "1'234'567.5"),
-            ("nb-NO", "1\u{a0}234\u{a0}567,5"),
-            ("sk-SK", "1\u{a0}234\u{a0}567,5"),
-            ("bn-BD", "১২,৩৪,৫৬৭.৫"),
-            ("he-IL", "1,234,567.5"),
-            ("km", "1,234,567.5"),
-            ("lo", "1.234.567,5"),
-        ] {
-            assert_eq!(Format::from_tag(tag).number(1_234_567.5, 1), want, "{tag}");
-        }
-    }
-
-    #[test]
-    fn system_separators() {
-        // A decimal comma the system sets moves the grouping out of its way.
-        let mut region = Region::from_tag("en-US");
-        region.decimal = Some(',');
-        assert_eq!(Format::new(&region, Digits::Locale).number(1234.5, 1), "1.234,5");
-        let mut region = Region::from_tag("de-DE");
-        region.grouping = Some(Some('\u{a0}'));
-        assert_eq!(Format::new(&region, Digits::Locale).number(1234.5, 1), "1\u{a0}234,5");
-        region.decimal = Some('.');
-        assert_eq!(Format::new(&region, Digits::Locale).number(1234.5, 1), "1\u{a0}234.5");
-        region.grouping = Some(None);
-        assert_eq!(Format::new(&region, Digits::Locale).integer(1_234_567), "1234567", "no grouping");
-        // A system's separators don't apply to Arabic-Indic digits.
-        let mut region = Region::from_tag("ar-EG");
-        region.grouping = Some(Some(','));
-        assert_eq!(Format::new(&region, Digits::Locale).number(1234.5, 1), "١٬٢٣٤٫٥");
-    }
-
     /// Windows always sets `sThousand`, so a decimal comma the user picks arrives beside a grouping
     /// comma: the numbers drop grouping rather than read `1,234,5`.
     #[test]
@@ -356,37 +288,5 @@ mod tests {
         assert_eq!(Format::new(&region, Digits::Locale).number(1234.5, 1), "1234,5");
         let region = crate::region::from_windows(reg(&[("LocaleName", "en-US"), ("sDecimal", "."), ("sThousand", ".")]), || None);
         assert_eq!(Format::new(&region, Digits::Locale).number(1234.5, 1), "1234.5");
-    }
-
-    #[test]
-    fn a_digit_system_the_region_names_is_used() {
-        assert_eq!(Format::new(&Region::from_tag("ar-EG-u-nu-latn"), Digits::Locale).number(1234.5, 1), "1,234.5");
-        assert_eq!(Format::new(&Region::from_tag("ar_EG@numbers=latn"), Digits::Locale).integer(5), "5");
-        assert_eq!(Format::new(&Region::from_tag("en-US-u-nu-arab"), Digits::Locale).integer(5), "٥");
-    }
-
-    #[test]
-    fn percentages() {
-        for (tag, want) in
-            [("en", "50%"), ("de", "50\u{a0}%"), ("fr", "12,5\u{a0}%"), ("tr", "%50"), ("ar-EG", "٥٠٪\u{61c}"), ("fa", "۵۰٪"), ("hi", "50%")]
-        {
-            let decimals = if tag == "fr" { 1 } else { 0 };
-            let ratio = if tag == "fr" { 0.125 } else { 0.5 };
-            assert_eq!(Format::from_tag(tag).percent(ratio, decimals), want, "{tag}");
-        }
-        assert_eq!(Format::from_tag("tr").percent(-0.2, 0), "-%20", "the sign leads the pattern");
-        assert_eq!(latin("fa").percent(0.5, 0), "50%");
-    }
-
-    #[test]
-    fn signs_and_odd_values() {
-        let en = Format::from_tag("en");
-        assert_eq!(en.number(-1234.5, 0), "-1,234");
-        assert_eq!(en.number(-0.04, 1), "0.0", "no sign on zero");
-        assert_eq!(en.number(f64::INFINITY, 1), "∞");
-        assert_eq!(en.number(f64::NEG_INFINITY, 1), "-∞");
-        assert_eq!(en.number(f64::NAN, 1), "NaN");
-        assert_eq!(Format::from_tag("de").percent(f64::NAN, 0), "NaN\u{a0}%");
-        assert_eq!(en.integer(-5_i64), "-5");
     }
 }

@@ -5,6 +5,9 @@
 //! returns an [`ImportReport`]. Matching and the apply rules are ported from the DesignCraft
 //! InDesign importer (#1180).
 
+pub mod kys;
+#[cfg(test)]
+mod kys_tests;
 pub mod namematch;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -14,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::chord::Trigger;
 use crate::chord::foreign::{Flavor, ForeignError, ReadNote, read_foreign};
 use crate::command::CommandRef;
-use crate::keymap::{Bindable, Binding, Keymap, Kind, MAX_BINDINGS, Policy};
+use crate::keymap::{Binding, CommandDef, CommandKind, Keymap, MAX_BINDINGS, Policy};
 use crate::scope::Scope;
 
 /// Most entries of a set read; the rest are ignored and counted in [`ImportReport::truncated`].
@@ -33,7 +36,9 @@ pub const MAX_SUGGESTIONS: usize = 200;
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct ForeignSet {
+    /// The set's name, when the source has one.
     pub name: Option<String>,
+    /// The set's items, in source order.
     pub entries: Vec<ForeignEntry>,
     /// Entries the reader dropped at its own limits; [`plan`] counts them in
     /// [`ImportReport::truncated`].
@@ -50,6 +55,7 @@ pub struct ForeignEntry {
     pub path: Vec<String>,
     /// Empty when the source says the item has no shortcut.
     pub keys: Vec<ForeignKey>,
+    /// The entry's line in the source file, when the reader gives one.
     pub line: Option<usize>,
     /// The item selects a tool.
     pub is_tool: bool,
@@ -61,6 +67,10 @@ pub struct ForeignEntry {
     /// is a segment of some catalog path. Without keys, an entry matched only these ways
     /// changes nothing ([`ImportReport::matched_without_change`]).
     pub panel_menu: bool,
+    /// The command id a set written by the suite names (`.kys` rows carry it). It is matched
+    /// before the path, so such a set reads back exactly whatever the labels say; an id the
+    /// keymap lacks falls back to the path.
+    pub id: Option<String>,
 }
 
 impl ForeignSet {
@@ -100,6 +110,12 @@ impl ForeignEntry {
         self
     }
 
+    /// Names the command by its id ([`ForeignEntry::id`]).
+    pub fn with_id(mut self, id: impl Into<String>) -> ForeignEntry {
+        self.id = Some(id.into());
+        self
+    }
+
     /// Adds a key after the others.
     pub fn with_key(mut self, key: ForeignKey) -> ForeignEntry {
         self.keys.push(key);
@@ -132,6 +148,7 @@ pub struct ForeignKey {
     pub context: Option<String>,
     /// The key text as written, for reports.
     pub text: String,
+    /// The key read as a trigger, or why it could not be.
     pub trigger: Result<Trigger, ForeignError>,
     /// What reading the text approximated, reported in [`ImportReport::approximated`].
     pub notes: Vec<ReadNote>,
@@ -195,7 +212,9 @@ pub struct ImportOptions {
     pub contexts: Vec<(String, ContextRule)>,
     /// Earlier answers of the user, by [`ForeignEntry::remember_key`]. They are tried first.
     pub remembered: BTreeMap<String, CommandRef>,
+    /// What the import starts from.
     pub start: Start,
+    /// What an entry without keys does to its command.
     pub none_defined: NoneDefined,
     /// Look for likely commands for unmatched entries ([`ImportReport::suggestions`]).
     pub suggest: bool,
@@ -206,8 +225,11 @@ pub struct ImportOptions {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct PlannedBinding {
+    /// The binding to add.
     pub binding: Binding,
+    /// The source's path of the entry, as the set names it.
     pub item: String,
+    /// The entry's line in the source file, when the reader gives one.
     pub line: Option<usize>,
     /// The entry's position in the set: a later entry takes a chord from an earlier one.
     pub order: usize,
@@ -218,10 +240,13 @@ pub struct PlannedBinding {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct Planned {
+    /// The command.
     pub command: CommandRef,
     /// The first entry matched to it, and its line.
     pub item: String,
+    /// The entry's line in the source file, when the reader gives one.
     pub line: Option<usize>,
+    /// The bindings the set gives the command.
     pub bindings: Vec<PlannedBinding>,
     /// Every matched entry had no keys, so [`NoneDefined::Clear`] clears the command. One entry
     /// with keys, in any order, keeps an entry without keys from clearing them.
@@ -238,7 +263,9 @@ pub struct Planned {
 pub struct ImportPlan {
     /// In the order of their first entry.
     pub commands: Vec<Planned>,
+    /// What the import starts from.
     pub start: Start,
+    /// What an entry without keys does to its command.
     pub none_defined: NoneDefined,
     /// `unmatched`, `unreadable`, `approximated`, `suggestions`, `matched_without_change` and the
     /// counts;
@@ -251,12 +278,17 @@ pub struct ImportPlan {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct Changed {
+    /// The command.
     pub command: CommandRef,
+    /// The command's label, as the UI shows it.
     pub label: String,
     /// The first entry matched to the command, and its line.
     pub item: String,
+    /// The entry's line in the source file, when the reader gives one.
     pub line: Option<usize>,
+    /// The command's shortcuts before the import, as binding texts.
     pub from: Vec<String>,
+    /// The command's shortcuts after the import, as binding texts.
     pub to: Vec<String>,
 }
 
@@ -265,8 +297,11 @@ pub struct Changed {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct Cleared {
+    /// The command that lost the binding.
     pub command: CommandRef,
+    /// The command's label, as the UI shows it.
     pub label: String,
+    /// The binding that was taken, as binding text.
     pub shortcut: String,
 }
 
@@ -289,12 +324,17 @@ pub enum SkipReason {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct Skipped {
+    /// The command.
     pub command: CommandRef,
+    /// The source's path of the entry, as the set names it.
     pub item: String,
+    /// The entry's line in the source file, when the reader gives one.
     pub line: Option<usize>,
+    /// The key that was not bound, as binding text.
     pub shortcut: String,
     /// The command of the later entry that takes the chord ([`SkipReason::Taken`]).
     pub kept_by: Option<CommandRef>,
+    /// Why it was not bound.
     pub reason: SkipReason,
 }
 
@@ -307,8 +347,11 @@ pub struct Skipped {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct Failed {
+    /// The command that kept its bindings.
     pub command: CommandRef,
+    /// The command's label, as the UI shows it.
     pub label: String,
+    /// Which change failed.
     pub change: FailedChange,
     /// The set's shortcuts for [`FailedChange::Bind`]; empty for [`FailedChange::Clear`].
     pub shortcuts: Vec<String>,
@@ -331,6 +374,7 @@ pub enum FailedChange {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum UnmatchedReason {
+    /// No command fits the entry.
     NoMatch,
     /// Several commands fit and no match step picked one.
     Ambiguous,
@@ -345,10 +389,13 @@ pub enum UnmatchedReason {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct Unmatched {
+    /// The source's path of the entry, as the set names it.
     pub item: String,
+    /// The entry's line in the source file, when the reader gives one.
     pub line: Option<usize>,
     /// The keys as written, `<context>: <keys>` joined with `, `.
     pub keys: String,
+    /// Why the keys were not used.
     pub reason: UnmatchedReason,
 }
 
@@ -357,8 +404,11 @@ pub struct Unmatched {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct Unreadable {
+    /// The source's path of the entry, as the set names it.
     pub item: String,
+    /// The entry's line in the source file, when the reader gives one.
     pub line: Option<usize>,
+    /// The keys as written.
     pub keys: String,
     /// Why the first of them could not be read.
     pub reason: ForeignError,
@@ -369,10 +419,15 @@ pub struct Unreadable {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct MatchedWithoutChange {
+    /// The command.
     pub command: CommandRef,
+    /// The command's label, as the UI shows it.
     pub label: String,
+    /// The source's path of the entry, as the set names it.
     pub item: String,
+    /// The entry's line in the source file, when the reader gives one.
     pub line: Option<usize>,
+    /// Why the command was not cleared.
     pub reason: NoChangeReason,
 }
 
@@ -392,8 +447,11 @@ pub enum NoChangeReason {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct Suggestion {
+    /// The source's path of the entry, as the set names it.
     pub item: String,
+    /// The entry's line in the source file, when the reader gives one.
     pub line: Option<usize>,
+    /// The likely commands, best first.
     pub candidates: Vec<CommandRef>,
 }
 
@@ -403,10 +461,13 @@ pub struct Suggestion {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct Approximated {
+    /// The source's path of the entry, as the set names it.
     pub item: String,
+    /// The entry's line in the source file, when the reader gives one.
     pub line: Option<usize>,
     /// The keys with this note, as written: `<context>: <keys>` joined with `, `.
     pub keys: String,
+    /// What was approximated.
     pub note: ReadNote,
 }
 
@@ -416,23 +477,32 @@ pub struct Approximated {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct ImportReport {
+    /// The set's name, when the source has one.
     pub set: Option<String>,
     /// Commands of the set whose bindings changed.
     pub imported: usize,
+    /// Commands whose bindings changed.
     pub changed: Vec<Changed>,
+    /// Bindings taken from commands outside the set.
     pub conflicts_cleared: Vec<Cleared>,
+    /// Keys of the set that were not bound.
     pub skipped: Vec<Skipped>,
     #[serde(default)]
+    /// Changes that could not be made.
     pub failed: Vec<Failed>,
     /// Entries without keys that matched a command and changed nothing.
     #[serde(default)]
     pub matched_without_change: Vec<MatchedWithoutChange>,
+    /// Entries with keys that were not used.
     pub unmatched: Vec<Unmatched>,
     /// Entries that matched no command and have no keys, or keys only in
     /// [`ContextRule::Skip`] contexts.
     pub unmatched_without_shortcut: usize,
+    /// Keys that could not be read.
     pub unreadable: Vec<Unreadable>,
+    /// Keys read approximately.
     pub approximated: Vec<Approximated>,
+    /// Likely commands for unmatched entries; never applied.
     pub suggestions: Vec<Suggestion>,
     /// Entries, keys, path segments, bindings and text fields cut at the caps, unmatched entries
     /// past [`MAX_SUGGESTIONS`] that got no suggestion, and [`ForeignSet::truncated`].
@@ -449,7 +519,7 @@ pub fn normalize_label(s: &str) -> String {
 
 /// A normalized name without a leading `show/hide `, `show ` or `hide ` when something remains:
 /// sources name a toggle by what choosing it does now. Only toggle commands
-/// ([`Bindable::is_toggle`]) are matched by this form.
+/// (kind [`CommandKind::Toggle`]) are matched by this form.
 fn toggle_name(s: &str) -> String {
     ["show/hide ", "show ", "hide "].iter().find_map(|p| s.strip_prefix(p).filter(|r| !r.is_empty())).unwrap_or(s).to_string()
 }
@@ -731,7 +801,9 @@ impl ImportPlan {
             }
             let effective = pb.binding.trigger.effective(platform);
             let (scope, tools) = match keymap.bindable(&p.command) {
-                Some(b) => (pb.binding.scope_or(&b.scope).clone(), if let Kind::Tool { group } = &b.kind { Some(group.clone()) } else { None }),
+                Some(b) => {
+                    (pb.binding.scope_or(&b.scope).clone(), if let CommandKind::Tool { group } = &b.kind { Some(group.clone()) } else { None })
+                }
                 None => (pb.binding.scope.clone().unwrap_or_else(Scope::app), None),
             };
             let groups = taken.entry(effective).or_default();
@@ -851,7 +923,15 @@ fn capped(e: &ForeignEntry, cut: &mut usize) -> ForeignEntry {
             }),
         })
         .collect();
-    ForeignEntry { menu: e.menu.as_deref().map(|m| cap_text(m, cut)), path, keys, line: e.line, is_tool: e.is_tool, panel_menu: e.panel_menu }
+    ForeignEntry {
+        menu: e.menu.as_deref().map(|m| cap_text(m, cut)),
+        path,
+        keys,
+        line: e.line,
+        is_tool: e.is_tool,
+        panel_menu: e.panel_menu,
+        id: e.id.as_deref().map(|i| cap_text(i, cut)),
+    }
 }
 
 enum Found {
@@ -884,7 +964,7 @@ fn add<K: std::hash::Hash + Eq>(map: &mut HashMap<K, Vec<usize>>, key: K, i: usi
 
 impl Names {
     /// Adds command `i`, its label, aliases and the last segment of each path passed through `form`.
-    fn add(&mut self, i: usize, b: &Bindable, form: fn(&str) -> String) {
+    fn add(&mut self, i: usize, b: &CommandDef, form: fn(&str) -> String) {
         let label = form(&normalize_label(&b.label));
         let names: Vec<String> = std::iter::once(label.clone()).chain(b.aliases.iter().map(|a| form(&normalize_label(a)))).collect();
         for name in &names {
@@ -950,6 +1030,10 @@ impl Names {
 /// The catalog by normalized path and label, for the match steps.
 struct Index {
     tool: Vec<bool>,
+    /// Whether each command has a default binding, for choosing among same-named commands.
+    has_default: Vec<bool>,
+    /// Whether each command has a menu path of its own (not an import-only one).
+    has_menu: Vec<bool>,
     /// Binding keys, for remembered answers.
     keys: HashMap<String, usize>,
     names: Names,
@@ -961,25 +1045,44 @@ struct Index {
 
 impl Index {
     fn new(keymap: &Keymap) -> Index {
-        let mut ix = Index { tool: Vec::new(), keys: HashMap::new(), names: Names::default(), toggles: Names::default(), segments: HashSet::new() };
+        let mut ix = Index {
+            tool: Vec::new(),
+            has_default: Vec::new(),
+            has_menu: Vec::new(),
+            keys: HashMap::new(),
+            names: Names::default(),
+            toggles: Names::default(),
+            segments: HashSet::new(),
+        };
         for (i, b) in keymap.catalog().iter().enumerate() {
-            ix.tool.push(matches!(b.kind, Kind::Tool { .. }));
+            ix.tool.push(matches!(b.kind, CommandKind::Tool { .. }));
+            ix.has_default.push(!b.defaults.is_empty());
+            ix.has_menu.push(!b.paths.is_empty());
             ix.keys.insert(b.command.key(), i);
             ix.names.add(i, b, str::to_string);
             ix.segments.extend(b.paths.iter().chain(&b.import_paths).flatten().map(|s| normalize_label(s)));
-            if b.is_toggle {
+            if b.kind == CommandKind::Toggle {
                 ix.toggles.add(i, b, toggle_name);
             }
         }
         ix
     }
 
+    /// The one command of `list` of the wanted kind. Among several, those with a default binding
+    /// win over those without, then those with a menu path over those without; the pick is
+    /// unique only when one is left. Aliases such as `history.undo` thus lose to the command
+    /// users know from the menu.
     fn pick(&self, list: Option<&Vec<usize>>, tool: bool) -> Found {
-        let mut fits = list.into_iter().flatten().filter(|i| self.tool.get(**i) == Some(&tool));
-        match (fits.next(), fits.next()) {
-            (Some(i), None) => Found::One(*i, false),
-            (Some(_), Some(_)) => Found::Many,
-            _ => Found::None,
+        let mut fits: Vec<usize> = list.into_iter().flatten().copied().filter(|i| self.tool.get(*i) == Some(&tool)).collect();
+        for preferred in [&self.has_default, &self.has_menu] {
+            if fits.len() > 1 && fits.iter().any(|i| preferred[*i]) {
+                fits.retain(|i| preferred[*i]);
+            }
+        }
+        match fits.as_slice() {
+            [i] => Found::One(*i, false),
+            [] => Found::None,
+            _ => Found::Many,
         }
     }
 
@@ -992,6 +1095,9 @@ impl Index {
             && let Some(&i) = self.keys.get(&c.key())
             && self.tool.get(i) == Some(&tool)
         {
+            return Found::One(i, false);
+        }
+        if let Some(&i) = entry.id.as_ref().and_then(|id| self.keys.get(id)).filter(|&&i| self.tool.get(i) == Some(&tool)) {
             return Found::One(i, false);
         }
         let segs: Vec<String> = entry.path.iter().map(|s| normalize_label(s)).collect();
@@ -1025,8 +1131,8 @@ struct ToSuggest {
 
 /// Fuzzy candidates for unmatched entries, among commands of the same kind.
 fn suggest(keymap: &Keymap, entries: &[ToSuggest]) -> Vec<Suggestion> {
-    let pool = |tool: bool| -> Vec<&Bindable> { keymap.catalog().iter().filter(|b| matches!(b.kind, Kind::Tool { .. }) == tool).collect() };
-    let matcher = |pool: &[&Bindable]| {
+    let pool = |tool: bool| -> Vec<&CommandDef> { keymap.catalog().iter().filter(|b| matches!(b.kind, CommandKind::Tool { .. }) == tool).collect() };
+    let matcher = |pool: &[&CommandDef]| {
         let candidates: Vec<namematch::Candidate> = pool
             .iter()
             .map(|b| {

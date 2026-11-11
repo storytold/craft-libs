@@ -1,0 +1,23 @@
+[package]
+autotests = false
+name = "craft-theme"
+description = "The Craft design system's theme model: colour, scale and token primitives, semantic and component tokens derived from theme seeds and pins, contrast rules, the `craft-design-theme` file format, built-in themes and the suite selection. No egui (the `ecolor` feature adds conversion from egui's colour type). The library does no file I/O; the `craft-theme` binary reads theme files to check them."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+bitflags = { workspace = true }
+ecolor = { workspace = true }
+serde = { workspace = true }
+smallvec = { workspace = true }
+log = "0.4"
+serde_json = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true

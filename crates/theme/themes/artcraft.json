@@ -1,0 +1,63 @@
+{
+  "schema": "craft-design-theme",
+  "schema_version": 1,
+  "id": "craft.artcraft",
+  "name": "ArtCraft",
+  "version": 1,
+  "variants": "both",
+  "contrast_intent": "standard",
+  "seeds": {
+    "accent": "#78adf6",
+    "neutral": "#535353",
+    "status": {
+      "bad": "#ff8080",
+      "good": "#85dc6a",
+      "info": "#78adf6",
+      "warn": "#e8b046"
+    }
+  },
+  "shape": null,
+  "light": {
+    "accent.soft": "#d6d6d6",
+    "accent.solid": "#378ef0",
+    "accent.text": "#1062c4",
+    "caption.close_hover": "#c42b1c",
+    "caption.close_text": "#ffffff",
+    "line.border": "#d6d6d6",
+    "line.control_edge": "#bababa",
+    "line.divider": "#d6d6d6",
+    "line.knob_edge": "#282828",
+    "state.hover": "#e2e2e2",
+    "state.pressed": "#cecece",
+    "state.selected": "#cccccc",
+    "surface.background": "#e2e2e2",
+    "surface.canvas": "#d6d6d6",
+    "surface.panel": "#f0f0f0",
+    "surface.sunken": "#ffffff",
+    "text.faint": "#787878",
+    "text.muted": "#404040",
+    "text.normal": "#141414",
+    "text.on_accent": "#ffffff"
+  },
+  "dark": {
+    "accent.soft": "#6e6e6e",
+    "accent.solid": "#378ef0",
+    "caption.close_hover": "#c42b1c",
+    "caption.close_text": "#ffffff",
+    "line.border": "#424242",
+    "line.control_edge": "#686868",
+    "line.divider": "#3e3e3e",
+    "line.knob_edge": "#282828",
+    "state.hover": "#626262",
+    "state.pressed": "#707070",
+    "state.selected": "#6b6b6b",
+    "surface.background": "#424242",
+    "surface.canvas": "#282828",
+    "surface.panel": "#535353",
+    "surface.sunken": "#454545",
+    "text.faint": "#a0a0a0",
+    "text.muted": "#d4d4d4",
+    "text.normal": "#eeeeee",
+    "text.on_accent": "#ffffff"
+  }
+}

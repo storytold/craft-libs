@@ -37,21 +37,33 @@
 
 pub mod document;
 pub mod error;
+pub mod files;
 pub mod migrate;
+mod names;
+pub mod presets;
+pub mod remember;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod paths;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod profiles;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod recovery;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod store;
 
 pub use error::{LoadReport, MigrateError, ReadOnlyReason, SaveStatus, SectionError, SettingsError, Source, TickResult};
+#[cfg(not(target_arch = "wasm32"))]
+pub use files::DiskFiles;
+pub use files::SettingsFiles;
 pub use migrate::LegacyFile;
 #[cfg(not(target_arch = "wasm32"))]
 pub use paths::{Location, Portable, Probe, Resolved, Rule};
 #[cfg(not(target_arch = "wasm32"))]
-pub use store::{OpenOptions, SettingsStore};
+pub use profiles::{ProfileError, Profiles};
+pub use remember::{Remembered, RememberedSection};
+#[cfg(not(target_arch = "wasm32"))]
+pub use store::{OpenOptions, SettingsStore, SharedSettings};
 pub use toml_edit::DocumentMut;
 
 use serde::Serialize;
@@ -72,6 +84,10 @@ pub trait Settings: Serialize + DeserializeOwned + Default + Clone + PartialEq {
     /// Lowercase application id, used for the folder name and the `<APP>_CONFIG_DIR` variable.
     const APP_ID: &'static str;
 
+    /// Name of the platform config folder (and the current-directory fallback). Override to keep
+    /// a folder that existing settings already sit in, e.g. `Photocraft` on macOS and Windows.
+    const FOLDER_NAME: &'static str = Self::APP_ID;
+
     /// Version written as `schema_version` at the top of `config.toml`.
     const SCHEMA_VERSION: u32;
 
@@ -89,3 +105,10 @@ pub trait Settings: Serialize + DeserializeOwned + Default + Clone + PartialEq {
         Ok(())
     }
 }
+
+#[cfg(test)]
+extern crate self as craft_settings;
+
+#[cfg(test)]
+#[path = "../tests/main.rs"]
+mod integration;

@@ -1,0 +1,71 @@
+{
+  "schema": "craft-design-theme",
+  "schema_version": 1,
+  "id": "craft.pro",
+  "name": "Pro",
+  "version": 1,
+  "variants": "both",
+  "contrast_intent": "standard",
+  "seeds": {
+    "accent": "#378ef0",
+    "neutral": "#323232",
+    "status": {
+      "bad": "#ec5b62",
+      "good": "#85dc6a",
+      "info": "#378ef0",
+      "warn": "#e8b046"
+    }
+  },
+  "shape": null,
+  "light": {
+    "accent.soft": "#d6d6d6",
+    "accent.solid": "#378ef0",
+    "accent.text": "#1062c4",
+    "caption.close_hover": "#c42b1c",
+    "caption.close_text": "#ffffff",
+    "line.border": "#d6d6d6",
+    "line.control_edge": "#bababa",
+    "line.divider": "#d6d6d6",
+    "line.knob_edge": "#282828",
+    "seeds": {
+      "neutral": "#f0f0f0",
+      "status": {
+        "good": "#4e712e"
+      }
+    },
+    "state.hover": "#e2e2e2",
+    "state.pressed": "#cecece",
+    "state.selected": "#cccccc",
+    "surface.background": "#e2e2e2",
+    "surface.canvas": "#d6d6d6",
+    "surface.panel": "#f0f0f0",
+    "surface.sunken": "#ffffff",
+    "text.faint": "#787878",
+    "text.muted": "#404040",
+    "text.normal": "#141414",
+    "text.on_accent": "#ffffff"
+  },
+  "dark": {
+    "accent.soft": "#4e4e4e",
+    "accent.solid": "#378ef0",
+    "caption.close_hover": "#c42b1c",
+    "caption.close_text": "#ffffff",
+    "line.border": "#1e1e1e",
+    "line.control_edge": "#4a4a4a",
+    "line.divider": "#1e1e1e",
+    "line.knob_edge": "#282828",
+    "state.hover": "#424242",
+    "state.pressed": "#4e4e4e",
+    "state.selected": "#525252",
+    "status.bad.fg": "#ec5b62",
+    "status.warn.fg": "#e8b046",
+    "surface.background": "#1e1e1e",
+    "surface.canvas": "#282828",
+    "surface.panel": "#323232",
+    "surface.sunken": "#242424",
+    "text.faint": "#808080",
+    "text.muted": "#b2b2b2",
+    "text.normal": "#dedede",
+    "text.on_accent": "#ffffff"
+  }
+}

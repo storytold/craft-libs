@@ -1,0 +1,29 @@
+[package]
+autotests = false
+name = "craft-behavior"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Pure UI behaviours for craft-ui: press lifecycle, drags, navigation, layout rules and edit events, with no egui"
+
+[lints]
+workspace = true
+
+[dependencies]
+emath = { version = "0.37", default-features = false }
+kurbo = { workspace = true }
+# `Intent` carries AccessKit actions; the one data crate beyond layer 0 and emath.
+accesskit = "0.25"
+smallvec = "1"
+bitflags = "2"
+craft-host = { workspace = true }
+craft-keymap = { workspace = true }
+craft-theme = { workspace = true }
+
+# The dock layout is a persisted shape.
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

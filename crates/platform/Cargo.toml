@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "craft-platform"
 version.workspace = true
 edition.workspace = true
@@ -12,13 +13,31 @@ workspace = true
 
 [features]
 default = []
-dialogs = []
-appearance = ["dep:zbus", "dep:futures-lite", "dep:async-channel", "dep:async-io", "dep:async-process"]
+appearance = ["dep:zbus", "dep:futures-lite", "dep:async-channel", "dep:async-io", "dep:async-process", "dep:web-sys"]
 browser = ["dep:wasm-bindgen", "dep:js-sys", "dep:web-sys"]
-egui = ["dep:egui"]
+# Moving the system pointer (a scrub's screen-edge wrap).
+pointer = ["dep:core-graphics"]
+# `usage`: the process's memory use.
+usage = ["dep:sysinfo"]
+# Screen capture for the screen colour picker (`craft_platform::screen`).
+screen = ["dep:zbus", "zbus?/blocking-api", "dep:futures-lite", "dep:async-io", "dep:x11rb", "dep:core-graphics2", "dep:xcap"]
+# `clipboard`: the system clipboard with size limits, the synthetic-input fence and the paste probe.
+# The presence check asks the system which formats the clipboard offers (no content is read): Windows, macOS, Wayland and X11.
+clipboard = ["dep:arboard", "dep:clipboard-win", "dep:objc2-app-kit", "dep:objc2-foundation", "dep:wl-clipboard-rs", "dep:x11rb"]
 
 [dependencies]
-egui = { workspace = true, optional = true }
+craft-theme = { workspace = true }
+log = "0.4"
+web-time = "1.1"
+craft-atomic = { workspace = true }
+craft-docpath = { workspace = true }
+craft-host = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Version eframe already pulls in; image data only (no default features beyond it).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+arboard = { version = "3.7", default-features = false, features = ["image-data", "wayland-data-control"], optional = true }
 
 [target.'cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))'.dependencies]
 zbus = { version = "5", default-features = false, features = ["async-io"], optional = true }
@@ -26,11 +45,31 @@ futures-lite = { version = "2", optional = true }
 async-channel = { version = "2", optional = true }
 async-io = { version = "2", optional = true }
 async-process = { version = "2", optional = true }
+x11rb = { version = "0.13", default-features = false, features = ["image", "randr"], optional = true }
+
+# Wayland's offer list; the version arboard (feature `wayland-data-control`) already locks.
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))))'.dependencies]
+wl-clipboard-rs = { version = "0.9", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The versions arboard already pulls in: the pasteboard's format list for the clipboard presence check.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPasteboard"], optional = true }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSString", "NSEnumerator"], optional = true }
+core-graphics = { version = "0.23", optional = true }
+core-graphics2 = { version = "=0.6.1", default-features = false, features = ["display", "window", "link"], optional = true }
+
+# Linux reads `/proc`; elsewhere `sysinfo` gives the system's available memory (MIT).
+[target.'cfg(any(target_os = "macos", windows))'.dependencies]
+sysinfo = { version = "=0.39.6", default-features = false, features = ["system"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+clipboard-win = { version = "5.3.1", features = ["std"], optional = true }
+xcap = { version = "=0.9.8", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { version = "0.2", optional = true }
 js-sys = { version = "0.3", optional = true }
-web-sys = { version = "0.3", features = ["Window", "Document", "HtmlElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "Node", "Element"], optional = true }
+web-sys = { version = "0.3", features = ["Window", "Document", "HtmlElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "Node", "Element", "MediaQueryList"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"

@@ -13,8 +13,7 @@
 //! user's keyboard layout, for matching, recording and labels. [`editor`] is the model of a
 //! shortcut editor: undo, a chord recorder, conflict queries and search. With the `egui` feature,
 //! the `egui` module
-//! converts to and from egui keys, matches key presses against bindings and dispatches a frame's
-//! key events.
+//! converts to and from egui keys and matches key presses against bindings.
 //!
 //! ```
 //! use craft_keymap::{Chord, Platform};
@@ -32,22 +31,22 @@
 //! cycle. A binding can name a scope other than the command's home scope.
 //!
 //! ```
-//! use craft_keymap::{Active, Bindable, Binding, Chord, CommandRef, Keymap, Kind, Lookup, Platform, Scope, Scopes};
+//! use craft_keymap::{Active, CommandDef, Binding, Chord, CommandRef, Keymap, CommandKind, Lookup, Platform, Scope, Scopes};
 //! use serde_json::json;
 //!
 //! let key = |text: &str| Binding::parse(text).unwrap();
 //! let layers = CommandRef::with_params("window.panel", json!({"panel": "layers"}));
-//! let select = Kind::Tool { group: Some("select".into()) };
+//! let select = CommandKind::Tool { group: Some("select".into()) };
 //! let catalog = vec![
-//!     Bindable::new("file.save", "Save", Scope::app()).with_path(vec!["File".into(), "Save".into()]).with_default(key("Cmd+S")),
-//!     Bindable::new(layers.clone(), "Layers", Scope::app()).with_path(vec!["Window".into(), "Layers".into()]).with_default(key("F7")),
-//!     Bindable::new("tool.marquee", "Marquee Tool", Scope::app()).with_kind(select.clone()).with_default(key("M")),
-//!     Bindable::new("tool.ellipse", "Elliptical Marquee Tool", Scope::app()).with_kind(select).with_default(key("M")),
+//!     CommandDef::new("file.save", "Save", Scope::app()).with_path(vec!["File".into(), "Save".into()]).with_default(key("Cmd+S")),
+//!     CommandDef::new(layers.clone(), "Layers", Scope::app()).with_path(vec!["Window".into(), "Layers".into()]).with_default(key("F7")),
+//!     CommandDef::new("tool.marquee", "Marquee Tool", Scope::app()).with_kind(select.clone()).with_default(key("M")),
+//!     CommandDef::new("tool.ellipse", "Elliptical Marquee Tool", Scope::app()).with_kind(select).with_default(key("M")),
 //!     // Home scope: the Timeline panel, where it wins over the app's L.
-//!     Bindable::new("timeline.loop", "Loop", Scope::new("Timeline").unwrap()).with_default(key("L")),
-//!     Bindable::new("layer.lock", "Lock Layer", Scope::app()).with_default(key("L")),
+//!     CommandDef::new("timeline.loop", "Loop", Scope::new("Timeline").unwrap()).with_default(key("L")),
+//!     CommandDef::new("layer.lock", "Lock Layer", Scope::app()).with_default(key("L")),
 //!     // An app command whose binding works only in the Text context.
-//!     Bindable::new("type.bold", "Bold", Scope::app()).with_default(key("Text: Cmd+B")),
+//!     CommandDef::new("type.bold", "Bold", Scope::app()).with_default(key("Text: Cmd+B")),
 //! ];
 //! let keymap = Keymap::new(catalog, Scopes::new().with_panel("Timeline").with_context("Text"), Platform::Mac);
 //! assert_eq!(layers.key(), r#"window.panel {"panel":"layers"}"#);
@@ -62,8 +61,6 @@
 //! assert_eq!(press("Cmd+B", &editing), Lookup::Run("type.bold".into()));
 //! assert_eq!(press("M", &editing), Lookup::None, "plain keys go to the text field");
 //! ```
-//!
-//! With the `egui` feature, `egui::Dispatcher` does this for a frame's key events.
 //!
 //! # Storing overrides
 //!
@@ -111,10 +108,10 @@
 //! review UI can show [`ImportPlan::commands`] and the report first.
 //!
 //! ```
-//! use craft_keymap::{Bindable, Binding, ContextRule, Flavor, ForeignEntry, ForeignKey, ForeignSet, ImportOptions, Keymap, Platform};
+//! use craft_keymap::{CommandDef, Binding, ContextRule, Flavor, ForeignEntry, ForeignKey, ForeignSet, ImportOptions, Keymap, Platform};
 //! use craft_keymap::{Scope, Scopes, plan};
 //!
-//! let save = Bindable::new("file.save", "Save", Scope::app())
+//! let save = CommandDef::new("file.save", "Save", Scope::app())
 //!     .with_path(vec!["File".into(), "Save".into()])
 //!     .with_default(Binding::parse("Cmd+S").unwrap());
 //! let mut keymap = Keymap::new(vec![save], Scopes::new(), Platform::Windows);
@@ -137,27 +134,39 @@
 
 pub mod chord;
 pub mod command;
+mod commands;
 pub mod editor;
 #[cfg(feature = "egui")]
 pub mod egui;
 pub mod import;
 pub mod keymap;
 pub mod layout;
+mod matcher;
+pub mod mnemonic;
+mod parity;
 pub mod profiles;
 pub mod reserved;
 pub mod scope;
-#[cfg(feature = "ui")]
-pub mod ui;
 
 pub use chord::foreign::Flavor;
 pub use chord::{Chord, Key, MAX_CHORD_TEXT, Mods, ParseError, Platform, Trigger};
 pub use command::{CommandRef, MAX_KEY};
+pub use commands::KeymapCommands;
 pub use editor::{DOUBLE_PRESS, EditSession, MAX_UNDO, MAX_UNDO_BYTES, Recorded, Recorder};
 pub use import::{ContextRule, ForeignEntry, ForeignKey, ForeignSet, ImportOptions, ImportPlan, ImportReport, NoneDefined, Start, plan};
 pub use keymap::{
-    AssignError, Assigned, Bindable, Binding, BindingError, Conflict, ConflictKind, DropReason, Holder, Keymap, Kind, Lookup, MAX_BINDING_TEXT,
-    MAX_BINDINGS, MAX_COMMANDS, MAX_CONFLICTS, Overrides, Policy, Problem, TypingRule, text_editing_chords,
+    AssignError, Assigned, Binding, BindingError, CommandDef, CommandKind, Conflict, ConflictKind, DropReason, Holder, Keymap, Lookup,
+    MAX_BINDING_TEXT, MAX_BINDINGS, MAX_COMMANDS, MAX_CONFLICTS, ModalRule, Overrides, Policy, Problem, TypingRule, text_editing_chords,
 };
-pub use layout::{KeyInput, Layout};
+pub use layout::{COMMON_SYMBOLS, KeyInput, Layout, SYMBOL_TABLE, SymbolLayout};
+pub use matcher::{Hit, Matcher, Press};
+pub use parity::ReturnGlyph;
 pub use profiles::{Builtins, MAX_EXPORT_BYTES, MAX_SET_NAME, MAX_SETS, ProfileError, Profiles, SetProblem};
-pub use scope::{Active, MAX_SCOPE_NAME, Scope, ScopeKind, Scopes};
+pub use scope::{Active, CommandScope, MAX_SCOPE_NAME, Scope, ScopeKind, Scopes};
+
+#[cfg(test)]
+extern crate self as craft_keymap;
+
+#[cfg(test)]
+#[path = "../tests/main.rs"]
+mod integration;

@@ -8,21 +8,43 @@ rust-version.workspace = true
 repository.workspace = true
 
 [features]
-# `decorate`: set the decision on an `egui::ViewportBuilder`. `title_bar`: an app-drawn strip as
-# the title bar (on macOS with AppKit's `movable` flag). `Viewports`: one immediate viewport per window.
-egui = ["dep:egui", "dep:objc2", "dep:objc2-app-kit"]
+# `policy::apply` and `desktop::fits`: the frame decision on an `egui::ViewportBuilder`, and whether a window fits its monitor.
+ui = ["dep:egui"]
+# `mac::set_movable`: AppKit's `movable` flag, without egui. `native_menu`: the application menu bar
+# on macOS (other platforms build the same API as no-ops).
+appkit = ["dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation", "dep:muda"]
 
 [dependencies]
 egui = { workspace = true, optional = true }
+craft-atomic = { workspace = true }
+craft-behavior = { workspace = true }
+craft-host = { workspace = true }
+craft-settings = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 # Only Linux and the BSDs probe a Wayland compositor; everywhere else the frame is the OS's.
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))'.dependencies]
 wayland-client = "0.31"
 
-# `title_bar::sync_movable` (`NSWindow.movable`); eframe's winit already uses these.
+# `mac::set_movable` (`NSWindow.movable`), `mac::measure` (button frames, OS version),
+# `native_menu` (muda menus, AppKit titles).
 [target.'cfg(target_os = "macos")'.dependencies]
+muda = { version = "0.21.2", default-features = false, optional = true }
 objc2 = { version = "0.6.4", default-features = false, features = ["std"], optional = true }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSButton", "NSControl", "NSResponder", "NSView", "NSWindow"], optional = true }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSButton", "NSControl", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder", "NSView", "NSWindow"], optional = true }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSBundle", "NSEnumerator", "NSGeometry", "NSLocale", "NSProcessInfo", "NSString"], optional = true }
+
+# `caps_lock`: the toggle bit of the Caps Lock key, through winsafe's safe wrapper (the workspace forbids `unsafe`).
+# `win32`: the window procedure of an app-drawn frame and layered-window opacity; craft-win32 holds the `unsafe` calls,
+# `raw-window-handle` is the root window's handle from eframe.
+[target.'cfg(windows)'.dependencies]
+winsafe = { version = "0.0.29", default-features = false, features = ["user"] }
+craft-win32 = { workspace = true }
+raw-window-handle = "0.6"
+
+[dev-dependencies]
+tempfile = "3"
 
 [lints]
 workspace = true

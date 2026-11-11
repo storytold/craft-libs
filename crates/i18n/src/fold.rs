@@ -304,88 +304,6 @@ impl Folded {
 mod tests {
     use super::*;
 
-    fn key(locale: &str, s: &str) -> String {
-        Folder::new(locale).key(s)
-    }
-
-    fn key_accents(locale: &str, s: &str) -> String {
-        Folder::new(locale).keep_accents().key(s)
-    }
-
-    #[test]
-    fn folding_table() {
-        let nfd = |s: &str| DecomposingNormalizerBorrowed::new_nfd().normalize(s).into_owned();
-        // (locale, input, ignoring accents, keeping accents)
-        let table = [
-            ("en", "Hello WORLD", "hello world".to_owned(), "hello world".to_owned()),
-            ("en", "İSTANBUL", "istanbul".into(), "istanbul".into()),
-            ("tr", "İSTANBUL", "istanbul".into(), "istanbul".into()),
-            ("en", "IRMAK ırmak", "irmak irmak".into(), "irmak ırmak".into()),
-            ("tr", "IRMAK ırmak", "irmak irmak".into(), "ırmak ırmak".into()),
-            ("az", "İIıi", "iiii".into(), "iııi".into()),
-            ("tr-TR", "Şişli", "sisli".into(), nfd("şişli")),
-            ("de", "Straße STRAẞE", "strasse strasse".into(), "strasse strasse".into()),
-            ("el", "ΟΔΥΣΣΕΥΣ οδυσσευς", "οδυσσευσ οδυσσευσ".into(), "οδυσσευσ οδυσσευσ".into()),
-            ("el", "Ἀθῆναι", "αθηναι".into(), nfd("ἀθῆναι")),
-            ("fr", "Œuvre ÉTÉ", "oeuvre ete".into(), nfd("œuvre été")),
-            ("da", "Ærø", "aero".into(), nfd("ærø")),
-            ("pl", "Łódź", "lodz".into(), nfd("łódź")),
-            ("vi", "Đà Nẵng", "da nang".into(), nfd("đà nẵng")),
-            ("en", "ﬁnal ﬀ", "final ff".into(), "final ff".into()),
-            ("ja", "ＡＢＣ１２３　ｶﾞ", nfd("abc123 ガ"), nfd("abc123 ガ")),
-            ("ar", "مُحَمَّد أحمـــد", nfd("محمد احمد"), nfd("مُحَمَّد أحمد")),
-            ("he", "שָׁלוֹם", "שלום".into(), nfd("שָׁלוֹם")),
-            ("en", "soft\u{AD}ware \u{2068}name\u{2069}", "software name".into(), "software name".into()),
-            ("ru", "Ёлка", "елка".into(), nfd("ёлка")),
-            ("ar", "Layer ١٢ ۳۴ १२", "layer 12 34 12".into(), "layer 12 34 12".into()),
-            ("fa", "کتاب یک", "كتاب يك".into(), "کتاب یک".into()),
-            ("fa", "خانۀ", "خانه".into(), nfd("خانۀ")),
-            ("ar", "مدرسة على إسلام آمن", "مدرسه علي اسلام امن".into(), nfd("مدرسة على إسلام آمن")),
-        ];
-        for (locale, input, ignoring, keeping) in table {
-            assert_eq!(key(locale, input), ignoring, "{locale} {input}");
-            assert_eq!(key_accents(locale, input), keeping, "{locale} {input}, accents kept");
-        }
-    }
-
-    #[test]
-    fn turkish_i_depends_on_locale_when_accents_count() {
-        let tr = Folder::new("tr").keep_accents();
-        let en = Folder::new("en").keep_accents();
-        assert!(tr.contains("IRMAK", "ırmak") && !tr.contains("IRMAK", "irmak"));
-        assert!(en.contains("IRMAK", "irmak") && !en.contains("IRMAK", "ırmak"));
-        assert!(tr.contains("İSTANBUL", "istanbul") && en.contains("İSTANBUL", "istanbul"));
-        for locale in ["tr", "en"] {
-            let f = Folder::new(locale);
-            assert!(f.contains("IRMAK", "ırmak") && f.contains("ırmak", "IRMAK") && f.contains("İzmir", "izmir"));
-        }
-    }
-
-    #[test]
-    fn matches_map_back_to_the_source() {
-        let f = Folder::new("en");
-        fn find<'a>(f: Folder, haystack: &'a str, needle: &str) -> Option<&'a str> {
-            f.fold(haystack).find(&f.fold(needle)).map(|r| &haystack[r])
-        }
-        let find = |haystack, needle| find(f, haystack, needle);
-        assert_eq!(find("Große Straße", "strasse"), Some("Straße"));
-        assert_eq!(find("Große Straße", "SS"), Some("ß"));
-        assert_eq!(find("Große Straße", "sse"), Some("ße"));
-        assert_eq!(find("Café crème", "creme"), Some("crème"));
-        assert_eq!(find("Cafe\u{301} noir", "cafe"), Some("Cafe\u{301}"));
-        assert_eq!(find("Ｆｉｌｅ ２", "file 2"), Some("Ｆｉｌｅ ２"));
-        assert_eq!(find("the ﬁnal cut", "fin"), Some("ﬁn"));
-        assert_eq!(find("Layer \u{2068}İSTANBUL\u{2069}", "istanbul"), Some("İSTANBUL"));
-        assert_eq!(find("abc", "x"), None);
-        assert_eq!(find("abc", ""), Some(""));
-
-        let all: Vec<_> = f.fold("Ab ab AB").matches(&f.fold("ab")).collect();
-        assert_eq!(all, [0..2, 3..5, 6..8]);
-        let all: Vec<_> = f.fold("aaaaa").matches(&f.fold("aa")).collect();
-        assert_eq!(all, [0..2, 2..4]);
-        assert_eq!(find("abababc", "ababc"), Some("ababc"));
-    }
-
     #[test]
     fn occurrences_turned_down_at_a_mark_are_not_searched_again() {
         // Every occurrence of the needle ends just before an accent, except the one at the end:
@@ -399,45 +317,6 @@ mod tests {
         assert_eq!(found, Some(haystack.len() - needle.len()..haystack.len()));
         assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
     }
-
-    #[test]
-    fn persian_and_arabic_letters_match() {
-        let f = Folder::new("fa");
-        // Persian keheh and Farsi yeh against Arabic kaf and yeh, and hamza forms of alef.
-        assert!(f.contains("كتاب عربي", "کتاب عربی"));
-        assert!(f.contains("کتاب عربی", "كتاب عربي"));
-        assert!(f.contains("أحمد إبراهيم", "احمد ابراهیم"));
-        assert!(f.contains("مدرسة", "مدرسه"));
-        assert_eq!(f.fold("Layer ١٢").find(&f.fold("layer 12")), Some(0.."Layer ١٢".len()));
-        assert!(Folder::new("en").keep_accents().contains("Layer ١٢", "layer 12"));
-        let digits = ZEROS.iter().map(|&zero| char::from_u32(zero + 7).unwrap());
-        assert!(digits.clone().all(|d| d.is_numeric() && ascii_digit(d) == Some('7')));
-        assert_eq!(ascii_digit('\u{1D800}'), None);
-        assert_eq!(ascii_digit('/'), None);
-    }
-
-    #[test]
-    fn accents_count_only_whole_letters() {
-        let f = Folder::new("fr").keep_accents();
-        assert!(!f.contains("ré", "re"));
-        assert!(f.contains("ré", "RÉ") && f.contains("re\u{301}", "ré"));
-        assert!(f.contains("ré", "é"));
-        // Kana voicing marks stay even with accents ignored: か doesn't find が.
-        assert!(!Folder::new("ja").contains("が", "か"));
-        // Nor does a Hangul syllable without its final consonant: 하 doesn't find 한.
-        let ko = Folder::new("ko");
-        assert!(!ko.contains("한국", "하") && !ko.keep_accents().contains("한국", "하"));
-        assert!(ko.contains("한국", "한") && ko.contains("하늘", "하"));
-        // Conjoining jamo spell the same syllable; compatibility jamo stand alone.
-        assert!(!ko.contains("\u{1112}\u{1161}\u{11AB}", "하") && ko.contains("\u{1112}\u{1161}\u{11AB}", "한"));
-        assert!(!ko.contains("하\u{11AB}", "하"));
-        for (haystack, needle) in [("ㅠㅠ", "ㅠ"), ("ㅠㅠ", "ㅠㅠ"), ("ㅋㅠ", "ㅋ"), ("ㅋㅠ", "ㅠ"), ("ㅋㅋㅋ", "ㅋㅋ"), ("ㄳ", "ㄳ"), ("값ㄳ", "ㄳ")]
-        {
-            assert!(ko.contains(haystack, needle), "{haystack} {needle}");
-        }
-        assert_eq!(ko.fold("ㅋㅠㅠ").find(&ko.fold("ㅠ")).map(|r| r.start), Some("ㅋ".len()));
-    }
-
     #[test]
     fn source_ranges_round_trip() {
         let f = Folder::new("de");

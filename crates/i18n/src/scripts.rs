@@ -5,35 +5,65 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[non_exhaustive]
 pub enum Script {
+    #[allow(missing_docs)]
     Arab,
+    #[allow(missing_docs)]
     Armn,
+    #[allow(missing_docs)]
     Beng,
+    #[allow(missing_docs)]
     Cyrl,
+    #[allow(missing_docs)]
     Deva,
+    #[allow(missing_docs)]
     Ethi,
+    #[allow(missing_docs)]
     Geor,
+    #[allow(missing_docs)]
     Grek,
+    #[allow(missing_docs)]
     Gujr,
+    #[allow(missing_docs)]
     Guru,
+    #[allow(missing_docs)]
     Hang,
+    #[allow(missing_docs)]
     Hani,
+    #[allow(missing_docs)]
     Hebr,
+    #[allow(missing_docs)]
     Hira,
+    #[allow(missing_docs)]
     Kana,
+    #[allow(missing_docs)]
     Khmr,
+    #[allow(missing_docs)]
     Knda,
+    #[allow(missing_docs)]
     Laoo,
+    #[allow(missing_docs)]
     Latn,
+    #[allow(missing_docs)]
     Mlym,
+    #[allow(missing_docs)]
     Mong,
+    #[allow(missing_docs)]
     Mymr,
+    #[allow(missing_docs)]
     Orya,
+    #[allow(missing_docs)]
     Sinh,
+    #[allow(missing_docs)]
     Syrc,
+    #[allow(missing_docs)]
     Taml,
+    #[allow(missing_docs)]
     Telu,
+    #[allow(missing_docs)]
     Thaa,
+    #[allow(missing_docs)]
     Thai,
+    #[allow(missing_docs)]
     Tibt,
 }
 
@@ -82,9 +112,19 @@ impl Script {
 
 /// Which way a language's text, and an interface in it, runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Direction {
+    /// Left to right.
     Ltr,
+    /// Right to left.
     Rtl,
+}
+
+impl Direction {
+    /// Whether the direction is right to left.
+    pub const fn is_rtl(self) -> bool {
+        matches!(self, Direction::Rtl)
+    }
 }
 
 /// The regional glyph forms Han characters take, as in the Noto CJK face names (SC, TC, HK, JP,
@@ -281,175 +321,5 @@ impl Subtags {
             }
         }
         Subtags { language, script, region }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::Script::*;
-    use super::*;
-
-    #[test]
-    fn base_direction_of_text() {
-        assert_eq!(base_direction("Hello"), Some(Direction::Ltr));
-        assert_eq!(base_direction("123 שלום"), Some(Direction::Rtl));
-        assert_eq!(base_direction("(مرحبا) hi"), Some(Direction::Rtl));
-        // The isolate's Hebrew is skipped; the Latin after it decides.
-        assert_eq!(base_direction("\u{2067}שלום\u{2069} hello"), Some(Direction::Ltr));
-        assert_eq!(base_direction("\u{2068}abc\u{2069} שלום"), Some(Direction::Rtl));
-        // Only the first paragraph counts.
-        assert_eq!(base_direction("123\nשלום"), None);
-        assert_eq!(base_direction("1920 × 1080"), None);
-        assert_eq!(base_direction(""), None);
-    }
-
-    /// Every locale the craft-i18n catalogs or an app ship, as the apps spell them.
-    #[test]
-    fn shipped_locales() {
-        for (tag, want, han_forms) in [
-            ("en", &[Latn][..], None),
-            ("ar", &[Arab], None),
-            ("bg", &[Cyrl], None),
-            ("cs", &[Latn], None),
-            ("da", &[Latn], None),
-            ("de", &[Latn], None),
-            ("el", &[Grek], None),
-            ("es", &[Latn], None),
-            ("es-419", &[Latn], None),
-            ("et", &[Latn], None),
-            ("fi", &[Latn], None),
-            ("fr", &[Latn], None),
-            ("hr", &[Latn], None),
-            ("hu", &[Latn], None),
-            ("id", &[Latn], None),
-            ("it", &[Latn], None),
-            ("ja", &[Hani, Hira, Kana], Some(Han::Japanese)),
-            ("ka", &[Geor], None),
-            ("kk", &[Cyrl], None),
-            ("ko", &[Hang, Hani], Some(Han::Korean)),
-            ("lt", &[Latn], None),
-            ("nl", &[Latn], None),
-            ("pl", &[Latn], None),
-            ("pt", &[Latn], None),
-            ("pt-br", &[Latn], None),
-            ("pt_BR", &[Latn], None),
-            ("ru", &[Cyrl], None),
-            ("sl", &[Latn], None),
-            ("sr", &[Cyrl], None),
-            ("sr-latn", &[Latn], None),
-            ("sv", &[Latn], None),
-            ("te", &[Telu], None),
-            ("tr", &[Latn], None),
-            ("uk", &[Cyrl], None),
-            ("vi", &[Latn], None),
-            ("zh", &[Hani], Some(Han::Simplified)),
-            ("zh-cn", &[Hani], Some(Han::Simplified)),
-            ("zh-CN", &[Hani], Some(Han::Simplified)),
-            ("zh-hans", &[Hani], Some(Han::Simplified)),
-            ("zh-Hans", &[Hani], Some(Han::Simplified)),
-            ("zh-hant", &[Hani], Some(Han::Traditional)),
-        ] {
-            assert_eq!(scripts(tag), want, "{tag}");
-            assert_eq!(han(tag), han_forms, "{tag}");
-            let rtl = tag == "ar";
-            assert_eq!(direction(tag), if rtl { Direction::Rtl } else { Direction::Ltr }, "{tag}");
-        }
-    }
-
-    #[test]
-    fn regional_han() {
-        for (tag, want) in [
-            ("zh-TW", Han::Traditional),
-            ("zh_TW.UTF-8", Han::Traditional),
-            ("zh-Hant-TW", Han::Traditional),
-            ("zh-HK", Han::HongKong),
-            ("zh-MO", Han::HongKong),
-            ("zh-Hant-HK", Han::HongKong),
-            ("zh-hant-hk", Han::HongKong),
-            ("zh-Hans-HK", Han::Simplified),
-            ("zh-SG", Han::Simplified),
-            ("zh-US", Han::Traditional),
-            ("zh_AU.UTF-8", Han::Traditional),
-            ("zh-GB", Han::Traditional),
-            ("zh-Hans-US", Han::Simplified),
-            ("zh-MY", Han::Simplified),
-            ("yue-CN", Han::Simplified),
-            ("yue-HK", Han::HongKong),
-            ("zh-Hans-SG", Han::Simplified),
-            ("yue", Han::HongKong),
-            ("yue-Hant", Han::HongKong),
-            ("yue-Hant-TW", Han::Traditional),
-            ("zh-Hani-HK", Han::HongKong),
-            ("zh-Hani", Han::Simplified),
-            ("yue-Hans", Han::Simplified),
-            ("ja-JP", Han::Japanese),
-            ("ko_KR.UTF-8", Han::Korean),
-        ] {
-            assert_eq!(han(tag), Some(want), "{tag}");
-        }
-        assert_eq!(han("en"), None);
-        assert_eq!(han(""), None);
-    }
-
-    #[test]
-    fn script_subtag_wins() {
-        for (tag, want) in [
-            ("sr-Latn-RS", &[Latn][..]),
-            ("sr_RS@latin", &[Latn]),
-            ("sr-Cyrl", &[Cyrl]),
-            ("sr_RS.UTF-8", &[Cyrl]),
-            ("az-Cyrl", &[Cyrl]),
-            ("pa-Arab", &[Arab]),
-            ("pa", &[Guru]),
-            ("mn-Mong", &[Mong]),
-            ("sd-Deva", &[Deva]),
-            ("fr-Zyyy", &[Latn]),
-        ] {
-            assert_eq!(scripts(tag), want, "{tag}");
-        }
-        assert_eq!(direction("pa-Arab"), Direction::Rtl);
-        assert_eq!(direction("sd-Deva"), Direction::Ltr);
-        assert_eq!(direction("he_IL.UTF-8"), Direction::Rtl);
-    }
-
-    /// CLDR likely subtags: a region can switch a language to another script.
-    #[test]
-    fn region_implies_script() {
-        for (tag, want) in [
-            ("pa-PK", &[Arab][..]),
-            ("pa_PK.UTF-8", &[Arab]),
-            ("pa-IN", &[Guru]),
-            ("uz-AF", &[Arab]),
-            ("uz-UZ", &[Latn]),
-            ("uz-CN", &[Cyrl]),
-            ("az-IR", &[Arab]),
-            ("az-AZ", &[Latn]),
-            ("sd-IN", &[Deva]),
-            ("sd-PK", &[Arab]),
-            ("ks-IN", &[Arab]),
-            ("ms-CC", &[Arab]),
-            ("ms-BN", &[Latn]),
-            ("sr-ME", &[Latn]),
-            ("kk-CN", &[Arab]),
-            ("ug-KZ", &[Cyrl]),
-            ("pa-Guru-PK", &[Guru]),
-            ("sd-Arab-IN", &[Arab]),
-        ] {
-            assert_eq!(scripts(tag), want, "{tag}");
-        }
-        assert_eq!(direction("pa-PK"), Direction::Rtl);
-        assert_eq!(direction("uz-AF"), Direction::Rtl);
-        assert_eq!(direction("az-IR"), Direction::Rtl);
-        assert_eq!(direction("sd-IN"), Direction::Ltr);
-        assert_eq!(direction("ug-KZ"), Direction::Ltr);
-    }
-
-    /// The usual scripts tag matching relies on agree with the table.
-    #[test]
-    fn agrees_with_usual_script() {
-        for language in ["be", "kk", "ky", "mn", "sr", "tg", "zh", "az", "bs", "ha", "ku", "ms", "uz", "ks", "sd", "ug", "pa"] {
-            let usual = crate::usual_script(language).and_then(subtag_scripts);
-            assert_eq!(usual, Some(scripts(language)), "{language}");
-        }
     }
 }

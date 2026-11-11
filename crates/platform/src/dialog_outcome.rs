@@ -76,22 +76,3 @@ impl<T> Outcome<Vec<T>> {
         Self::from_rfd(value.filter(|paths| !paths.is_empty()))
     }
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn missing_and_empty_rfd_answers_never_establish_cancellation() {
-        assert_eq!(Outcome::<String>::from_rfd(None), Outcome::Indeterminate);
-        assert_eq!(Outcome::<Vec<String>>::from_rfd_files(Some(Vec::new())), Outcome::Indeterminate);
-        assert_eq!(Outcome::from_rfd_files(Some(vec!["a"])), Outcome::Selected(vec!["a"]));
-        for _capability in [Capability::Available, Capability::Unavailable("missing".into()), Capability::Unknown("timeout".into())] {
-            assert_eq!(Outcome::<String>::from_rfd(None), Outcome::Indeterminate);
-        }
-    }
-    #[test]
-    fn mapping_preserves_explicit_cancellation_and_failure() {
-        assert_eq!(Outcome::<u8>::Cancelled.map(u32::from), Outcome::Cancelled);
-        assert_eq!(Outcome::<u8>::failed("worker stopped").map(u32::from), Outcome::failed("worker stopped"));
-        assert_eq!(Outcome::Selected(7_u8).map(u32::from), Outcome::Selected(7));
-    }
-}

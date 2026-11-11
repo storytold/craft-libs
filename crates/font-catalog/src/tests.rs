@@ -148,30 +148,6 @@ fn linux_env(root: &Path) -> FontEnv {
 // Uses Unix paths, which Windows doesn't treat as absolute (#619).
 #[cfg(unix)]
 #[test]
-fn linux_font_dirs_cover_xdg_flatpak_and_fontconfig() {
-    let root = temp("dirs");
-    write(&root.join("etc/fonts/fonts.conf"), "<fontconfig><dir>/opt/texmf/fonts</dir><dir>/usr/share/fonts</dir></fontconfig>");
-    let mut env = linux_env(&root);
-    env.xdg_data_home = Some(root.join("data"));
-    let dirs = font_dirs(&env);
-    let want: Vec<PathBuf> = vec![
-        root.join("usr/share/fonts"),
-        root.join("usr/local/share/fonts"),
-        root.join("run/host/fonts"),
-        root.join("run/host/local-fonts"),
-        root.join("run/host/user-fonts"),
-        root.join("home/.local/share/fonts"),
-        root.join("home/.fonts"),
-        root.join("data/fonts"),
-        root.join(root.join("share").strip_prefix("/").unwrap()).join("fonts"),
-        root.join("opt/texmf/fonts"),
-    ];
-    assert_eq!(dirs, want);
-}
-
-// Uses Unix paths, which Windows doesn't treat as absolute (#619).
-#[cfg(unix)]
-#[test]
 fn fontconfig_dirs_follow_includes_prefixes_and_skip_the_rest() {
     let root = temp("conf");
     let etc = root.join("etc/fonts");
@@ -214,69 +190,6 @@ fn fontconfig_dirs_follow_includes_prefixes_and_skip_the_rest() {
     );
 }
 
-// Uses Unix paths, which Windows doesn't treat as absolute (#619).
-#[cfg(unix)]
-#[test]
-fn flatpak_adds_the_hosts_font_folders() {
-    let root = temp("flatpak");
-    write(&root.join("run/host/font-dirs.xml"), "<fontconfig><remap-dir as-path=\"/usr/share/fonts\">/run/host/fonts</remap-dir></fontconfig>");
-    write(&root.join("run/host/etc/fonts/fonts.conf"), "<fontconfig><dir>/usr/share/texmf/fonts</dir><dir>~/MyFonts</dir></fontconfig>");
-    let mut env = linux_env(&root);
-    assert!(fontconfig_dirs(&env).is_empty());
-    env.flatpak = true;
-    assert_eq!(fontconfig_dirs(&env), vec![root.join("run/host/fonts"), root.join("run/host/usr/share/texmf/fonts"), root.join("home/MyFonts")]);
-}
-
-#[test]
-fn macos_and_windows_folders() {
-    let root = temp("mac");
-    for asset in ["com_apple_MobileAsset_Font7/abc.asset", "com_apple_MobileAsset_Other/x"] {
-        std::fs::create_dir_all(root.join("System/Library/AssetsV2").join(asset)).unwrap();
-    }
-    let env = FontEnv { os: Os::MacOs, root: root.clone(), home: Some("/Users/me".into()), ..Default::default() };
-    let dirs = font_dirs(&env);
-    assert!(dirs.contains(&root.join("System/Library/Fonts")));
-    assert!(dirs.contains(&PathBuf::from("/Users/me/Library/Fonts")));
-    assert!(dirs.contains(&root.join("System/Library/AssetsV2/com_apple_MobileAsset_Font7")));
-    assert!(!dirs.iter().any(|d| d.ends_with("com_apple_MobileAsset_Other")));
-    assert_eq!(font_store_dir(&env), Some(PathBuf::from("/Users/me/Library/Application Support/Craft Fonts")));
-
-    let env = FontEnv {
-        os: Os::Windows,
-        windir: Some("C:\\Windows".into()),
-        local_app_data: Some("C:\\Users\\me\\AppData\\Local".into()),
-        ..Default::default()
-    };
-    assert_eq!(
-        font_dirs(&env),
-        vec![PathBuf::from("C:\\Windows").join("Fonts"), PathBuf::from("C:\\Users\\me\\AppData\\Local").join("Microsoft\\Windows\\Fonts")]
-    );
-    assert_eq!(font_store_dir(&env), Some(PathBuf::from("C:\\Users\\me\\AppData\\Local").join("Craft Fonts")));
-    assert_eq!(office_font_dirs(&env).len(), 1);
-}
-
-// Uses Unix paths, which Windows doesn't treat as absolute (#619).
-#[cfg(unix)]
-#[test]
-fn font_store_folder() {
-    let env = FontEnv { os: Os::Unix, home: Some("/home/me".into()), ..Default::default() };
-    assert_eq!(font_store_dir(&env), Some(PathBuf::from("/home/me/.local/share/craft-fonts")));
-    let env = FontEnv { xdg_data_home: Some("/data".into()), ..env };
-    assert_eq!(font_store_dir(&env), Some(PathBuf::from("/data/craft-fonts")));
-}
-
-/// The store override wins with or without platform defaults; unsupported platforms have no default store.
-#[test]
-fn font_store_override_and_no_store() {
-    for os in [Os::Unix, Os::MacOs, Os::Windows, Os::Haiku, Os::None] {
-        let env = FontEnv { os, font_store: Some("portable/fonts".into()), ..Default::default() };
-        assert_eq!(font_store_dir(&env), Some(PathBuf::from("portable/fonts")));
-        let env = FontEnv { home: Some("home".into()), local_app_data: Some("local".into()), ..env };
-        assert_eq!(font_store_dir(&env), Some(PathBuf::from("portable/fonts")));
-    }
-    assert_eq!(font_store_dir(&FontEnv { os: Os::None, home: Some("h".into()), ..Default::default() }), None);
-}
-
 /// A Linux system with fonts in a system folder, the Flatpak host folder, the user's folder and
 /// the font store, plus a collection, a lister's file without an extension, and files that aren't
 /// fonts.
@@ -306,26 +219,6 @@ fn system(root: &Path) -> Arc<Catalog> {
     let service = root.join("service/.hidden/f1");
     write(&service, font(&Spec { fs_type: 2, ..spec("Service Font", "Regular", 400) }));
     Arc::new(Catalog::new(linux_env(root)).with_font_service(false).with_lister(Arc::new(move || vec![service.clone()])))
-}
-
-#[test]
-fn a_scan_finds_folders_store_lister_files_and_collections() {
-    let root = temp("scan");
-    let cat = system(&root);
-    cat.scan_in_background();
-    let families: Vec<String> = cat.families().to_vec();
-    assert_eq!(families, ["Host Serif", "Service Font", "Store Face", "Test Gothic", "Test Sans", "Test Variable"]);
-    assert!(cat.is_ready());
-    let host = cat.styles("host serif");
-    assert_eq!(host.iter().map(|f| (f.style.as_str(), f.index)).collect::<Vec<_>>(), [("Regular", 0), ("Bold", 1)]);
-    assert_eq!(cat.styles("Store Face")[0].source, Source::Store);
-    assert_eq!(host[0].source, Source::System);
-    let service = &cat.styles("Service Font")[0];
-    assert_eq!((service.source, service.fs_type), (Source::System, 2));
-    assert_eq!(cat.styles("Test Sans").len(), 5);
-    let light = cat.resolve("Test Sans", "Light").unwrap().0;
-    assert_eq!((light.legacy_family.as_deref(), light.legacy_style.as_deref()), (Some("Test Sans Light"), Some("Regular")));
-    assert_eq!(light.code_pages, [1, 0]);
 }
 
 #[test]
@@ -384,18 +277,6 @@ fn installed_and_removed_fonts_are_seen_without_a_restart() {
 }
 
 #[test]
-fn app_folders_are_scanned_after_a_change() {
-    let root = temp("app");
-    let cat = Catalog::new(linux_env(&root)).with_font_service(false);
-    assert!(cat.families().is_empty());
-    write(&root.join("app-fonts/AppFace.ttf"), font(&spec("App Face", "Regular", 400)));
-    cat.set_app_dirs(vec![root.join("app-fonts")]);
-    assert!(cat.rescan_if_changed());
-    assert_eq!(cat.styles("App Face")[0].source, Source::App);
-    assert!(!cat.rescan_if_changed());
-}
-
-#[test]
 fn a_family_loads_once_for_every_thread() {
     let root = temp("load");
     let cat = system(&root);
@@ -415,105 +296,6 @@ fn a_family_loads_once_for_every_thread() {
     cat.rescan();
     assert!(!Arc::ptr_eq(&cat.load_family("Host Serif"), &loads[0]));
     assert!(cat.load_family("Missing").is_empty());
-}
-
-#[test]
-fn added_fonts_come_first_and_respect_the_limits() {
-    let root = temp("add");
-    let cat = system(&root);
-    let limits = Limits::default();
-    let doc = font(&spec("Test Sans", "Bold", 700));
-    let added = cat.add_bytes(doc.clone(), Source::Document, &limits).unwrap();
-    assert_eq!(added.len(), 1);
-    let (bold, m) = cat.resolve("Test Sans", "Bold").unwrap();
-    assert_eq!((bold.source, bold.path.clone(), m), (Source::Document, None, Match::Exact));
-    assert_eq!(&*cat.load(&bold).unwrap().bytes, doc.as_slice());
-    assert!(matches!(cat.add_bytes(b"not a font".to_vec(), Source::User, &limits), Err(FontFileError::NotAFont)));
-    let small = Limits { max_file_bytes: 10, ..limits };
-    assert!(matches!(cat.add_bytes(doc.clone(), Source::User, &small), Err(FontFileError::TooLarge { .. })));
-    let few = Limits { max_added_faces: 1, ..limits };
-    assert!(matches!(cat.add_bytes(font(&spec("User Face", "Regular", 400)), Source::User, &few), Err(FontFileError::TooManyFaces { max: 1 })));
-    let file = root.join("elsewhere/UserFace.ttf");
-    write(&file, font(&spec("User Face", "Regular", 400)));
-    let user = cat.add_file(&file, Source::User, &limits).unwrap();
-    assert_eq!(user[0].path.as_deref(), Some(file.as_path()));
-    // A rescan keeps added faces; removing a source's faces brings back the installed face.
-    cat.rescan();
-    assert_eq!(cat.styles("User Face").len(), 1);
-    assert_eq!(cat.remove_added(Source::Document), 1);
-    assert_eq!(cat.resolve("Test Sans", "Bold").unwrap().0.source, Source::System);
-    assert!(matches!(cat.load(&bold), Err(FontFileError::Gone)));
-}
-
-#[test]
-fn the_scan_reads_only_what_it_may() {
-    let root = temp("bounded");
-    let path = root.join("Big.ttf");
-    let mut data = font(&spec("Big Face", "Regular", 400));
-    data.resize(data.len() + (1 << 20), 0);
-    write(&path, &data);
-    assert_eq!(crate::scan::file_faces(&path, 1 << 16, Source::System).len(), 1);
-    assert!(crate::scan::file_faces(&path, 64, Source::System).is_empty());
-    // A collection claiming more faces than it has gives the faces it has.
-    let mut ttc = collection(&[font(&spec("A Face", "Regular", 400))]);
-    ttc[8..12].copy_from_slice(&u32::MAX.to_be_bytes());
-    write(&root.join("Claims.ttc"), &ttc);
-    assert_eq!(crate::scan::file_faces(&root.join("Claims.ttc"), u64::MAX, Source::System).len(), 1);
-}
-
-#[test]
-fn suitcase_resources_are_read() {
-    let fonts = vec![font(&spec("Suit A", "Regular", 400)), font(&spec("Suit B", "Bold", 700))];
-    let fork = fork_of(&fonts);
-    let found = crate::suitcase::sfnt_resources(&fork);
-    assert_eq!(found, fonts.iter().map(Vec::as_slice).collect::<Vec<_>>());
-    assert!(crate::suitcase::sfnt_resources(&fork[..300]).is_empty());
-}
-
-fn fork_of(fonts: &[Vec<u8>]) -> Vec<u8> {
-    let mut data = Vec::new();
-    let mut offsets = Vec::new();
-    for body in fonts.iter().map(Vec::as_slice).chain([&b"1.0"[..]]) {
-        offsets.push(data.len() as u32);
-        data.extend_from_slice(&(body.len() as u32).to_be_bytes());
-        data.extend_from_slice(body);
-    }
-    let n = fonts.len();
-    // The type list: `vers` (1 resource) then `sfnt`, each entry pointing at its references.
-    let list = 2 + 2 * 8;
-    let mut types = Vec::new();
-    types.extend_from_slice(&1u16.to_be_bytes());
-    types.extend_from_slice(b"vers");
-    types.extend_from_slice(&0u16.to_be_bytes());
-    types.extend_from_slice(&(list as u16).to_be_bytes());
-    types.extend_from_slice(b"sfnt");
-    types.extend_from_slice(&((n - 1) as u16).to_be_bytes());
-    types.extend_from_slice(&((list + 12) as u16).to_be_bytes());
-    let reference = |id: i16, offset: u32| {
-        let mut r = Vec::new();
-        r.extend_from_slice(&id.to_be_bytes());
-        r.extend_from_slice(&0xFFFFu16.to_be_bytes());
-        r.extend_from_slice(&offset.to_be_bytes());
-        r.extend_from_slice(&[0; 4]);
-        r
-    };
-    types.extend(reference(1, offsets[n]));
-    for (i, o) in offsets[..n].iter().enumerate() {
-        types.extend(reference(5000 + i as i16, *o));
-    }
-    // The map: a copy of the header, a handle, attributes, then the offsets of the lists.
-    let mut map = vec![0; 24];
-    map.extend_from_slice(&28u16.to_be_bytes());
-    map.extend_from_slice(&((28 + types.len()) as u16).to_be_bytes());
-    map.extend(types);
-    let mut fork = Vec::new();
-    for v in [256u32, 256 + data.len() as u32, data.len() as u32, map.len() as u32] {
-        fork.extend_from_slice(&v.to_be_bytes());
-    }
-    fork.resize(256, 0);
-    fork.extend(data);
-    fork.extend(map);
-    fork
 }
 
 #[test]

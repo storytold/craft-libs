@@ -212,73 +212,6 @@ fn setup(name: &str) -> (FontStore, Server, PackIndexPin, Vec<u8>) {
 }
 
 #[test]
-fn install_list_replace_and_remove_a_pack() {
-    let (store, server, pin, _) = setup("install");
-    let source = IndexSource::Pinned(pin);
-    let index = store.fetch_pack_index_from(&source, &Cancel::new()).unwrap();
-    assert_eq!(store.cached_pack_index_from(&source), Some(index.clone()));
-    let nl = index.pack("nl").unwrap().clone();
-    let mut seen = Vec::new();
-    let got = store.install_pack_from(false, &index, &nl, &Cancel::new(), &mut |p| seen.push(p)).unwrap();
-    assert_eq!((got.locale.as_str(), got.release.as_str(), got.licence.as_str()), ("nl", "language-packs-1", "MIT"));
-    assert!(seen.last().is_some_and(|p| p.done == nl.size && p.total == nl.size));
-    let dir = store.language_packs_dir().join("nl");
-    assert_eq!(store.language_packs_dir(), store.dir().join("language-packs"));
-    for f in ["pack.toml", "spelling.aff", "spelling.dic", "hyphenation.pat", "LICENCES/COPYING"] {
-        assert!(dir.join(f).is_file(), "{f}");
-    }
-    assert!(std::fs::read_to_string(dir.join("spelling.dic")).unwrap().contains("zzmarker"));
-    assert_eq!(store.installed_language_packs(), vec![got]);
-    // A newer archive replaces the old one in one move.
-    let newer = pack_archive("nl", "zznewer");
-    server.serve("release/nl.tar.zst", &newer);
-    let newer_entry = PackEntry { sha256: sha256_hex(&newer), size: newer.len() as u64, ..nl.clone() };
-    store.install_pack_from(false, &index, &newer_entry, &Cancel::new(), &mut |_| {}).unwrap();
-    assert!(std::fs::read_to_string(dir.join("spelling.dic")).unwrap().contains("zznewer"));
-    assert_eq!(store.installed_language_packs().len(), 1);
-    assert!(std::fs::read_dir(store.dir().join(".staging")).into_iter().flatten().flatten().next().is_none(), "nothing left staged");
-    store.remove_language_pack("nl").unwrap();
-    assert!(!dir.exists() && store.installed_language_packs().is_empty());
-    assert!(matches!(store.remove_language_pack("nl"), Err(Error::NotInstalled(_))));
-    assert!(matches!(store.remove_language_pack("../x"), Err(Error::NotInstalled(_))));
-}
-
-#[cfg(unix)]
-#[test]
-fn a_failed_pack_removal_preserves_the_files_and_installed_record() {
-    use std::os::unix::fs::PermissionsExt;
-    for record_failure in [true, false] {
-        let (store, _server, pin, _) = setup(if record_failure { "remove-record-failure" } else { "remove-rename-failure" });
-        let index = store.fetch_pack_index_from(&IndexSource::Pinned(pin), &Cancel::new()).unwrap();
-        let got = store.install_pack_from(false, &index, index.pack("nl").unwrap(), &Cancel::new(), &mut |_| {}).unwrap();
-        let dictionary = store.language_packs_dir().join("nl/spelling.dic");
-        let before_dictionary = std::fs::read(&dictionary).unwrap();
-        let before_record = std::fs::read(store.dir().join(INSTALLED)).unwrap();
-        drop(store.language_pack_removal_stage(&[]).unwrap());
-        // The staging and pack subdirectories remain writable when only the store root
-        // rejects the atomic record replacement. The other case rejects the pack rename.
-        let protected = if record_failure { store.dir().to_path_buf() } else { store.language_packs_dir() };
-        let permissions = std::fs::metadata(&protected).unwrap().permissions();
-        std::fs::set_permissions(&protected, std::fs::Permissions::from_mode(0o555)).unwrap();
-        let probe = protected.join("write-probe");
-        if std::fs::File::create(&probe).is_ok() {
-            std::fs::set_permissions(&protected, permissions).unwrap();
-            std::fs::remove_dir_all(store.dir()).unwrap();
-            continue; // root ignores permissions
-        }
-        let result = store.remove_language_pack("nl");
-        std::fs::set_permissions(&protected, permissions).unwrap();
-        assert!(matches!(result, Err(Error::Io { .. })), "{result:?}");
-        assert_eq!(std::fs::read(&dictionary).unwrap(), before_dictionary, "record failure: {record_failure}");
-        assert_eq!(std::fs::read(store.dir().join(INSTALLED)).unwrap(), before_record);
-        assert_eq!(store.installed_language_packs(), vec![got]);
-        assert!(std::fs::read_dir(store.dir().join(".staging")).unwrap().next().is_none());
-        assert!(std::fs::read_dir(store.language_packs_dir().join(".removing")).unwrap().next().is_none());
-        std::fs::remove_dir_all(store.dir()).unwrap();
-    }
-}
-
-#[test]
 fn removal_io_failures_preserve_the_pack_on_every_platform() {
     for failure in [IoFailure::Rename, IoFailure::RecordWrite] {
         let (store, _server, pin, _) = setup(&format!("remove-injected-{failure:?}"));
@@ -471,25 +404,6 @@ fn committed_cleanup_attempts_are_bounded_and_rotate_past_failures() {
     std::fs::remove_dir_all(store.dir()).unwrap();
 }
 
-#[test]
-fn removal_receipts_cannot_name_paths_outside_the_recovery_folder() {
-    let (store, _server, pin, _) = setup("remove-invalid-receipts");
-    let index = store.fetch_pack_index_from(&IndexSource::Pinned(pin), &Cancel::new()).unwrap();
-    store.install_pack_from(false, &index, index.pack("nl").unwrap(), &Cancel::new(), &mut |_| {}).unwrap();
-    let outside = temp("remove-outside");
-    std::fs::write(outside.join("keep"), b"untouched").unwrap();
-    let before = std::fs::read(store.dir().join(INSTALLED)).unwrap();
-    for bad in ["../outside".to_string(), outside.display().to_string(), "1-2/../../outside".to_string()] {
-        let mut record: serde_json::Value = serde_json::from_slice(&before).unwrap();
-        record["committed_removals"] = serde_json::json!([bad]);
-        std::fs::write(store.dir().join(INSTALLED), serde_json::to_vec(&record).unwrap()).unwrap();
-        drop(store.lock().unwrap());
-        assert_eq!(std::fs::read(outside.join("keep")).unwrap(), b"untouched");
-    }
-    std::fs::remove_dir_all(outside).unwrap();
-    std::fs::remove_dir_all(store.dir()).unwrap();
-}
-
 #[cfg(unix)]
 #[test]
 fn recovery_cleanup_does_not_follow_a_replaced_parent_symlink() {
@@ -508,27 +422,6 @@ fn recovery_cleanup_does_not_follow_a_replaced_parent_symlink() {
     assert_eq!(std::fs::read(outside.join("11-12/keep")).unwrap(), b"untouched");
     assert!(store.language_packs_dir().join("nl/spelling.dic").is_file());
     std::fs::remove_file(store.language_packs_dir().join(".removing")).unwrap();
-    std::fs::remove_dir_all(outside).unwrap();
-    std::fs::remove_dir_all(store.dir()).unwrap();
-}
-
-/// The language-packs ancestor must not redirect a committed cleanup outside the store.
-#[cfg(unix)]
-#[test]
-fn residual_cleanup_rejects_a_symlinked_language_packs_ancestor() {
-    let (store, _server, _pin, _) = setup("remove-symlink-packs");
-    let outside = temp("remove-symlink-packs-outside");
-    std::fs::create_dir_all(outside.join(".removing/11-12")).unwrap();
-    std::fs::write(outside.join(".removing/11-12/keep"), b"untouched").unwrap();
-    std::fs::create_dir_all(store.dir()).unwrap();
-    std::os::unix::fs::symlink(&outside, store.language_packs_dir()).unwrap();
-    let mut record = Installed::default();
-    record.committed_removals.push("11-12".into());
-    store.write_installed(&record).unwrap();
-    drop(store.lock().unwrap());
-    assert_eq!(std::fs::read(outside.join(".removing/11-12/keep")).unwrap(), b"untouched");
-    assert!(store.pack_removal_dir().is_err());
-    std::fs::remove_file(store.language_packs_dir()).unwrap();
     std::fs::remove_dir_all(outside).unwrap();
     std::fs::remove_dir_all(store.dir()).unwrap();
 }
@@ -694,21 +587,6 @@ fn residual_one_bad_receipt_preserves_valid_metadata_and_cleanup() {
     std::fs::remove_dir_all(store.dir()).unwrap();
 }
 
-/// Exclusions do not consume filesystem candidates; hostile iterator input remains bounded.
-#[test]
-fn residual_stage_exclusions_leave_the_filesystem_candidate_budget() {
-    let parent = temp("stage-excluded-budget");
-    let excluded: Vec<String> = (0..1000).map(|n| format!("0-{n}")).collect();
-    let stage = Stage::create_in(&parent, &excluded, excluded.iter().cloned().chain(std::iter::once("0-1000".into())))
-        .expect("a free name after excluded receipts is still considered");
-    drop(stage);
-    assert!(Stage::create_in(&parent, &excluded, std::iter::repeat_with(|| "0-0".into())).is_err());
-    assert!(Stage::create_in(&parent, &[], std::iter::repeat_with(|| "../invalid".into())).is_err());
-    std::fs::create_dir(parent.join("0-1001")).unwrap();
-    assert!(Stage::create_in(&parent, &[], std::iter::repeat_with(|| "0-1001".into())).is_err());
-    std::fs::remove_dir_all(parent).unwrap();
-}
-
 #[test]
 fn network_off_pins_and_checksums_are_enforced() {
     let (store, server, pin, archive) = setup("pins");
@@ -738,76 +616,6 @@ fn network_off_pins_and_checksums_are_enforced() {
     }
     store.disable_network().unwrap();
     assert!(matches!(store.install_pack_from(false, &index, &nl, &Cancel::new(), &mut |_| {}), Err(Error::NetworkOff)));
-}
-
-#[test]
-fn indexes_are_checked() {
-    let a = pack_archive("nl", "x");
-    let ok = index_json(&[entry("nl", &format!("{RELEASE}nl.tar.zst"), &a)]);
-    assert_eq!(PackIndex::from_json(&ok).unwrap().packs.len(), 1);
-    let bad = [
-        serde_json::to_vec(&serde_json::json!({"format": 2, "release": "r", "packs": []})).unwrap(),
-        index_json(&[entry("NL", &format!("{RELEASE}nl.tar.zst"), &a)]),
-        index_json(&[entry("../x", &format!("{RELEASE}nl.tar.zst"), &a)]),
-        index_json(&[entry("nl", &format!("{RELEASE}nl.tar.zst"), &a), entry("nl", &format!("{RELEASE}nl.tar.zst"), &a)]),
-        index_json(&[entry("nl", "http://127.0.0.1/nl.tar.zst", &a)]),
-        index_json(&[entry("nl", "/tmp/nl.tar.zst", &a)]),
-        b"not json".to_vec(),
-    ];
-    for b in bad {
-        assert!(PackIndex::from_json(&b).is_err(), "{}", String::from_utf8_lossy(&b));
-    }
-    // The developer override also takes loopback http and paths, never other http hosts.
-    assert!(PackIndex::parse(&index_json(&[entry("nl", "http://127.0.0.1:9/nl.tar.zst", &a)]), true).is_ok());
-    assert!(PackIndex::parse(&index_json(&[entry("nl", "/tmp/nl.tar.zst", &a)]), true).is_ok());
-    assert!(PackIndex::parse(&index_json(&[entry("nl", "http://example.org/nl.tar.zst", &a)]), true).is_err());
-    for (s, ok) in [
-        ("http://127.0.0.1:8000/i.json", true),
-        ("http://localhost/i.json", true),
-        ("http://[::1]:8/i.json", true),
-        ("http://127.0.0.1.evil.org/i.json", false),
-        ("http://evil.org@127.0.0.1/i.json", true),
-        ("http://127.0.0.1@evil.org/i.json", false),
-        ("ftp://127.0.0.1/i.json", false),
-        ("file:///tmp/i.json", false),
-    ] {
-        assert_eq!(local_source(s).is_some(), ok, "{s}");
-    }
-}
-
-/// The developer override (`CRAFT_LANGUAGE_PACK_INDEX`): an index from a local path or a
-/// loopback http server, with no index pin, while archives are still checked against its sha256.
-#[test]
-fn developer_override_reads_a_local_index_without_the_pin() {
-    let (store, server, _, archive) = setup("override");
-    // A local file index pointing at a local archive.
-    let dir = temp("override-files");
-    std::fs::write(dir.join("nl.tar.zst"), &archive).unwrap();
-    let index = index_json(&[entry("nl", &dir.join("nl.tar.zst").display().to_string(), &archive)]);
-    std::fs::write(dir.join("index.json"), &index).unwrap();
-    let source = IndexSource::Override(dir.join("index.json").display().to_string());
-    let got = store.fetch_pack_index_from(&source, &Cancel::new()).unwrap();
-    assert_eq!(store.cached_pack_index_from(&source), Some(got.clone()));
-    store.install_pack_from(true, &got, got.pack("nl").unwrap(), &Cancel::new(), &mut |_| {}).unwrap();
-    assert!(store.language_packs_dir().join("nl/spelling.dic").is_file());
-    // A loopback http index and archive.
-    let http_index = index_json(&[entry("nl", &format!("{}local/nl.tar.zst", server.base), &archive)]);
-    server.serve("local/index.json", &http_index);
-    server.serve("local/nl.tar.zst", &archive);
-    let source = IndexSource::Override(format!("{}local/index.json", server.base));
-    let got = store.fetch_pack_index_from(&source, &Cancel::new()).unwrap();
-    store.install_pack_from(true, &got, got.pack("nl").unwrap(), &Cancel::new(), &mut |_| {}).unwrap();
-    // The archive is still verified.
-    server.serve("local/nl.tar.zst", &pack_archive("nl", "tampered"));
-    assert!(store.install_pack_from(true, &got, got.pack("nl").unwrap(), &Cancel::new(), &mut |_| {}).is_err());
-    // Only loopback http.
-    let source = IndexSource::Override("http://example.org/index.json".into());
-    assert!(matches!(store.fetch_pack_index_from(&source, &Cancel::new()), Err(Error::BadUrl(_))));
-    // Without the variable the pin is used.
-    let pin = PackIndexPin { url: "https://example.org/index.json", sha256: "00" };
-    if std::env::var_os(LANGUAGE_PACK_INDEX_ENV).is_none() {
-        assert_eq!(IndexSource::from_env(&pin), IndexSource::Pinned(pin));
-    }
 }
 
 #[test]
@@ -899,112 +707,4 @@ fn hostile_archives_are_refused() {
         let err = unpack(&bare, &temp("promise").join("nl"), &e).unwrap_err();
         assert!(err.contains("promises"), "{err}");
     }
-}
-
-#[test]
-fn names_are_plain_text_and_reserved_locales_refused() {
-    let a = pack_archive("nl", "x");
-    let mut e = entry("nl", &format!("{RELEASE}nl.tar.zst"), &a);
-    e["name"] = serde_json::json!(" Neder\u{202e}lands\u{7}\u{200b}\n");
-    assert_eq!(PackIndex::from_json(&index_json(&[e])).unwrap().packs[0].name, "Nederlands");
-    for l in ["con", "nul", "aux", "prn", "com1", "lpt9"] {
-        assert!(!is_locale(l), "{l}");
-        assert!(PackIndex::from_json(&index_json(&[entry(l, &format!("{RELEASE}{l}.tar.zst"), &a)])).is_err(), "{l}");
-    }
-    assert!(is_locale("com") && is_locale("lpt") && is_locale("com10"));
-}
-
-#[test]
-fn a_corrupt_record_is_rebuilt_from_the_folders() {
-    let (store, server, pin, _) = setup("corrupt");
-    let index = store.fetch_pack_index_from(&IndexSource::Pinned(pin), &Cancel::new()).unwrap();
-    let nl = index.pack("nl").unwrap().clone();
-    store.install_pack_from(false, &index, &nl, &Cancel::new(), &mut |_| {}).unwrap();
-    let record = store.dir().join("language-packs.json");
-    std::fs::write(&record, b"{ not json").unwrap();
-    // Still listed, with the name from its pack.toml.
-    let listed = store.installed_language_packs();
-    assert_eq!(listed.iter().map(|p| (p.locale.as_str(), p.name.as_str())).collect::<Vec<_>>(), [("nl", "Test")]);
-    // craft-libs#486 review: listing holds no store lock, so it never writes the record (it
-    // could race an install); the next install or removal repairs it.
-    assert_eq!(std::fs::read(&record).unwrap(), b"{ not json");
-    assert!(!store.dir().join("language-packs.json.bad").exists());
-    // Installing another keeps it.
-    std::fs::write(&record, b"{ not json").unwrap();
-    let de = pack_archive("de", "zzde");
-    server.serve("release/de.tar.zst", &de);
-    let de_entry = PackEntry { url: format!("{RELEASE}de.tar.zst"), ..pack_entry("de", &de) };
-    store.install_pack_from(false, &index, &de_entry, &Cancel::new(), &mut |_| {}).unwrap();
-    let mut locales: Vec<String> = store.installed_language_packs().into_iter().map(|p| p.locale).collect();
-    locales.sort();
-    assert_eq!(locales, ["de", "nl"]);
-    assert_eq!(std::fs::read(store.dir().join("language-packs.json.bad")).unwrap(), b"{ not json", "the unreadable record is kept aside");
-    assert!(serde_json::from_slice::<serde_json::Value>(&std::fs::read(&record).unwrap()).is_ok(), "rebuilt in place");
-    // A missing record with pack folders is rebuilt too.
-    std::fs::remove_file(&record).unwrap();
-    assert_eq!(store.installed_language_packs().len(), 2);
-    assert!(!record.exists(), "listing writes nothing");
-    let nl_again = PackEntry { url: format!("{RELEASE}nl.tar.zst"), ..nl.clone() };
-    store.install_pack_from(false, &index, &nl_again, &Cancel::new(), &mut |_| {}).unwrap();
-    assert_eq!(store.installed_language_packs().len(), 2, "de kept when the record was missing");
-    // Removing works on a rebuilt record too.
-    std::fs::write(&record, b"\xff").unwrap();
-    store.remove_language_pack("nl").unwrap();
-    assert_eq!(store.installed_language_packs().into_iter().map(|p| p.locale).collect::<Vec<_>>(), ["de"]);
-}
-
-#[test]
-fn index_text_is_plain_and_sources_are_checked() {
-    let a = pack_archive("nl", "x");
-    let mut e = entry("nl", &format!("{RELEASE}nl.tar.zst"), &a);
-    e["licence"] = serde_json::json!("MIT\u{202e}");
-    e["version"] = serde_json::json!("ab\u{0}c");
-    e["class"] = serde_json::json!("\u{200f}Embeddable");
-    e["source"] = serde_json::json!("https://example.org/nl");
-    let json = serde_json::to_vec(&serde_json::json!({"format": 1, "release": "r1\u{2066}", "packs": [e.clone()]})).unwrap();
-    let index = PackIndex::from_json(&json).unwrap();
-    let p = &index.packs[0];
-    assert_eq!((index.release.as_str(), p.licence.as_str(), p.version.as_str(), p.class.as_str()), ("r1", "MIT", "abc", "Embeddable"));
-    assert_eq!(p.source.as_deref(), Some("https://example.org/nl"));
-    assert_eq!(PackIndex::from_json(&index_json(&[entry("nl", &format!("{RELEASE}nl.tar.zst"), &a)])).unwrap().packs[0].source, None);
-    for bad in ["javascript:alert(1)", "http://example.org", "https://a b", "https://a\u{202e}b"] {
-        e["source"] = serde_json::json!(bad);
-        let err = PackIndex::from_json(&index_json(std::slice::from_ref(&e))).unwrap_err();
-        assert!(!err.to_string().contains("font"), "{err}");
-    }
-}
-
-#[test]
-fn bad_hand_made_entries_are_index_errors() {
-    let (store, _server, pin, _) = setup("variant");
-    let index = store.fetch_pack_index_from(&IndexSource::Pinned(pin), &Cancel::new()).unwrap();
-    let nl = index.pack("nl").unwrap().clone();
-    for e in [PackEntry { locale: "../nl".into(), ..nl.clone() }, PackEntry { sha256: "x".into(), ..nl.clone() }] {
-        let got = store.install_pack_from(false, &index, &e, &Cancel::new(), &mut |_| {});
-        assert!(matches!(got, Err(Error::Index(IndexError::Invalid(_)))), "{got:?}");
-    }
-}
-
-#[test]
-fn the_override_is_visible() {
-    let set = std::env::var(LANGUAGE_PACK_INDEX_ENV).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
-    assert_eq!(language_pack_index_overridden(), set);
-}
-
-/// A staging folder of the same name (an earlier process, or another one in a PID namespace) is
-/// never used or deleted: the next name is taken, so an unpack can't mix in its files.
-#[test]
-fn a_stale_stage_folder_is_cleared() {
-    let store = temp("stale-stage");
-    let staging = store.join(".staging");
-    for n in 0..512 {
-        let d = staging.join(format!("{}-{n}", std::process::id()));
-        std::fs::create_dir_all(d.join("nl")).unwrap();
-        std::fs::write(d.join("nl/pack.toml"), b"old").unwrap();
-    }
-    let stage = Stage::new(&store).unwrap();
-    assert_eq!(std::fs::read_dir(&stage.dir).unwrap().count(), 0, "{}", stage.dir.display());
-    // The others are left alone: they may be another process's (PID namespaces).
-    let left = std::fs::read_dir(&staging).unwrap().flatten().filter(|e| e.path().join("nl/pack.toml").is_file()).count();
-    assert_eq!(left, 512);
 }

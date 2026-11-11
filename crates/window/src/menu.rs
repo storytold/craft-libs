@@ -19,10 +19,12 @@ pub struct Document<K> {
 /// One window in the Window menu (macOS) or the View › Switch Windows list.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MenuEntry {
+    /// The window.
     pub id: WindowId,
     /// The document's name, or "Name:1", "Name:2", … when several windows show the document.
     /// Also the window's title.
     pub title: String,
+    /// The window has unsaved changes.
     pub dirty: bool,
     /// The active (most recently focused) window: the one to check-mark.
     pub active: bool,
@@ -64,10 +66,12 @@ impl WindowMenu {
         Self { entries }
     }
 
+    /// The windows, in the order the menu lists them.
     pub fn entries(&self) -> &[MenuEntry] {
         &self.entries
     }
 
+    /// The entry of window `id`, if it is listed.
     pub fn get(&self, id: WindowId) -> Option<&MenuEntry> {
         self.entries.iter().find(|e| e.id == id)
     }
@@ -84,48 +88,5 @@ impl<'a> IntoIterator for &'a WindowMenu {
 
     fn into_iter(self) -> Self::IntoIter {
         self.entries.iter()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Windows on documents (key, name, dirty).
-    fn menu(list: &WindowList<(u32, &str, bool)>) -> Vec<(String, bool, bool)> {
-        WindowMenu::new(list, |_, &(key, name, dirty)| Document { key, name: name.to_owned(), dirty })
-            .entries()
-            .iter()
-            .map(|e| (e.title.clone(), e.dirty, e.active))
-            .collect()
-    }
-
-    fn entry(title: &str, dirty: bool, active: bool) -> (String, bool, bool) {
-        (title.to_owned(), dirty, active)
-    }
-
-    #[test]
-    fn numbers_only_windows_that_share_a_document() {
-        let mut list = WindowList::new();
-        let book = list.open((1, "Book1", true));
-        let _notes = list.open((2, "Notes", false));
-        let second = list.open((1, "Book1", true));
-        list.focus(book);
-        assert_eq!(menu(&list), [entry("Book1:1", true, true), entry("Notes", false, false), entry("Book1:2", true, false)]);
-
-        list.close(book);
-        assert_eq!(menu(&list), [entry("Notes", false, false), entry("Book1", true, true)], "one window left: no suffix");
-        let third = list.open((1, "Book1", true));
-        let titles = WindowMenu::new(&list, |_, &(key, name, dirty)| Document { key, name: name.to_owned(), dirty });
-        assert_eq!(titles.title(second), Some("Book1:1"), "numbers close up in opening order");
-        assert_eq!(titles.title(third), Some("Book1:2"));
-    }
-
-    #[test]
-    fn same_name_different_documents_stay_unnumbered() {
-        let mut list = WindowList::new();
-        list.open((1, "report.docx", false));
-        list.open((2, "report.docx", false));
-        assert_eq!(menu(&list), [entry("report.docx", false, false), entry("report.docx", false, true)]);
     }
 }

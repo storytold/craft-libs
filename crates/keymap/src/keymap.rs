@@ -5,7 +5,7 @@ pub(crate) mod overrides;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
 use crate::chord::{Chord, Key, Mods, ParseError, Platform, Trigger};
 use crate::command::{CommandRef, MAX_KEY};
@@ -23,306 +23,22 @@ pub const MAX_BINDING_TEXT: usize = 128;
 /// Most entries [`Keymap::conflicts`] returns.
 pub const MAX_CONFLICTS: usize = 4096;
 
-/// What a binding does when pressed.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[non_exhaustive]
-pub enum Kind {
-    #[default]
-    Command,
-    /// Selects a tool. Tools of one group share keys and cycle; tools without a group name form one
-    /// group together.
-    Tool { group: Option<String> },
-}
+mod binding;
+mod command;
 
-/// A trigger in a scope. `scope: None` is the command's home scope.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Binding {
-    pub trigger: Trigger,
-    pub scope: Option<Scope>,
-}
+pub use binding::{Binding, BindingError};
+pub use command::{CommandDef, CommandKind, ModalRule, TypingRule};
 
-/// Why binding text was refused.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[non_exhaustive]
-pub enum BindingError {
-    TooLong,
-    /// The part before `": "` is not a scope name.
-    Scope,
-    Trigger(ParseError),
-}
-
-impl fmt::Display for BindingError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            BindingError::TooLong => write!(f, "binding text over {MAX_BINDING_TEXT} bytes"),
-            BindingError::Scope => f.write_str("bad scope name"),
-            BindingError::Trigger(e) => e.fmt(f),
-        }
-    }
-}
-
-impl std::error::Error for BindingError {}
-
-impl Binding {
-    /// A binding in the command's home scope.
-    pub fn new(trigger: impl Into<Trigger>) -> Binding {
-        Binding { trigger: trigger.into(), scope: None }
-    }
-
-    pub fn in_scope(trigger: impl Into<Trigger>, scope: Scope) -> Binding {
-        Binding { trigger: trigger.into(), scope: Some(scope) }
-    }
-
-    /// Reads `<trigger>` or `<Scope>: <trigger>`. The whole text is tried as a trigger first, so
-    /// `Cmd+: Cmd+:` is the Colon chord pressed twice; otherwise it is split at the first `": "`.
-    pub fn parse(text: &str) -> Result<Binding, BindingError> {
-        if text.len() > MAX_BINDING_TEXT {
-            return Err(BindingError::TooLong);
-        }
-        let whole = match Trigger::parse(text.trim()) {
-            Ok(trigger) => return Ok(Binding::new(trigger)),
-            Err(e) => e,
-        };
-        match text.split_once(": ") {
-            Some((scope, trigger)) => {
-                let scope = Scope::new(scope.trim()).ok_or(BindingError::Scope)?;
-                let trigger = Trigger::parse(trigger.trim()).map_err(BindingError::Trigger)?;
-                Ok(Binding::in_scope(trigger, scope))
-            }
-            None => Err(BindingError::Trigger(whole)),
-        }
-    }
-
-    /// The binding text for a command whose home scope is `home`: the scope is written only when
-    /// it differs.
-    pub fn text(&self, home: &Scope) -> String {
-        match &self.scope {
-            Some(s) if s != home => format!("{s}: {}", self.trigger),
-            _ => self.trigger.to_string(),
-        }
-    }
-
-    /// The scope, `home` when unset.
-    pub fn scope_or<'a>(&'a self, home: &'a Scope) -> &'a Scope {
-        self.scope.as_ref().unwrap_or(home)
-    }
-}
-
-impl fmt::Display for Binding {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.scope {
-            Some(s) => write!(f, "{s}: {}", self.trigger),
-            None => write!(f, "{}", self.trigger),
-        }
-    }
-}
-
-impl Serialize for Binding {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
-    }
-}
-
-impl<'de> Deserialize<'de> for Binding {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Binding, D::Error> {
-        let text = <std::borrow::Cow<'de, str>>::deserialize(deserializer)?;
-        Binding::parse(&text).map_err(serde::de::Error::custom)
-    }
-}
-
-/// A command the user can bind, as the app describes it.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Bindable {
-    pub command: CommandRef,
-    pub label: String,
-    /// Menu paths, the main one first; used by search and import.
-    #[serde(default)]
-    pub paths: Vec<Vec<String>>,
-    /// Paths only import matching reads: where foreign sets file the command and the app's menus
-    /// do not, such as `["Tools", label]` for a tool. They make no areas or groups in the dialog.
-    #[serde(default)]
-    pub import_paths: Vec<Vec<String>>,
-    /// Other names: labels in other UI languages, older names.
-    #[serde(default)]
-    pub aliases: Vec<String>,
-    /// Home scope.
-    pub scope: Scope,
-    #[serde(default)]
-    pub kind: Kind,
-    /// The command shows and hides something (a panel, guides, rulers). Import matching reads a
-    /// foreign name without a leading `Show`, `Hide` or `Show/Hide` only for such commands.
-    #[serde(default)]
-    pub is_toggle: bool,
-    #[serde(default)]
-    pub defaults: Vec<Binding>,
-}
-
-impl Bindable {
-    /// A command in `scope` without default bindings.
-    pub fn new(command: impl Into<CommandRef>, label: impl Into<String>, scope: Scope) -> Bindable {
-        Bindable {
-            command: command.into(),
-            label: label.into(),
-            paths: Vec::new(),
-            import_paths: Vec::new(),
-            aliases: Vec::new(),
-            scope,
-            kind: Kind::Command,
-            is_toggle: false,
-            defaults: Vec::new(),
-        }
-    }
-
-    /// Marks the command as showing and hiding something ([`Bindable::is_toggle`]).
-    pub fn toggle(mut self) -> Bindable {
-        self.is_toggle = true;
-        self
-    }
-
-    pub fn with_kind(mut self, kind: Kind) -> Bindable {
-        self.kind = kind;
-        self
-    }
-
-    pub fn with_default(mut self, binding: Binding) -> Bindable {
-        self.defaults.push(binding);
-        self
-    }
-
-    pub fn with_path(mut self, path: Vec<String>) -> Bindable {
-        self.paths.push(path);
-        self
-    }
-
-    /// Adds a path only import matching reads ([`Bindable::import_paths`]).
-    pub fn with_import_path(mut self, path: Vec<String>) -> Bindable {
-        self.import_paths.push(path);
-        self
-    }
-
-    pub fn with_alias(mut self, alias: impl Into<String>) -> Bindable {
-        self.aliases.push(alias.into());
-        self
-    }
-}
-
-/// Which chords work while a text field has the keyboard. Under every rule, the
-/// [`text_editing_chords`] go to the text field too. Bindings in an active context always work: a
-/// `Text: Cmd+B` binding is meant for typing.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[non_exhaustive]
-pub enum TypingRule {
-    /// Plain chords (no cmd, ctrl or alt) go to the text; function keys still fire.
-    #[default]
-    PlainKeysWait,
-    /// Only chords with the command modifier and function keys fire.
-    CommandKeysOnly,
-    /// Nothing fires.
-    AllWait,
-}
-
-impl TypingRule {
-    /// Whether `chord` may fire while typing on `platform`.
-    pub fn fires(self, chord: &Chord, platform: Platform) -> bool {
-        if text_editing_chords(platform).contains(&chord.effective(platform)) {
-            return false;
-        }
-        match self {
-            TypingRule::PlainKeysWait => !chord.is_plain() || chord.is_function_key(),
-            TypingRule::CommandKeysOnly => chord.has_command() || chord.is_function_key(),
-            TypingRule::AllWait => false,
-        }
-    }
-}
-
-const CMD: Mods = Mods::CMD;
-const CMD_SHIFT: Mods = Mods { shift: true, ..Mods::CMD };
-const ALT: Mods = Mods::ALT;
-const ALT_SHIFT: Mods = Mods { shift: true, ..Mods::ALT };
-const CTRL: Mods = Mods::CTRL;
-
-// The chords egui's TextEdit acts on that follow the platform's conventions. egui also takes
-// Ctrl+H, Ctrl+K, Ctrl+U and Ctrl+W everywhere, but off macOS those are app commands.
-const MAC_EDITING: &[Chord] = &[
-    // Undo, redo, select all.
-    Chord::new(CMD, Key::Z),
-    Chord::new(CMD_SHIFT, Key::Z),
-    Chord::new(CMD, Key::A),
-    // Words.
-    Chord::new(ALT, Key::Left),
-    Chord::new(ALT, Key::Right),
-    Chord::new(ALT_SHIFT, Key::Left),
-    Chord::new(ALT_SHIFT, Key::Right),
-    Chord::new(ALT, Key::Backspace),
-    Chord::new(ALT, Key::Delete),
-    // Line start and end.
-    Chord::new(CMD, Key::Left),
-    Chord::new(CMD, Key::Right),
-    Chord::new(CMD_SHIFT, Key::Left),
-    Chord::new(CMD_SHIFT, Key::Right),
-    Chord::new(CMD, Key::Backspace),
-    Chord::new(CMD, Key::Delete),
-    // Text start and end.
-    Chord::new(CMD, Key::Up),
-    Chord::new(CMD, Key::Down),
-    Chord::new(CMD_SHIFT, Key::Up),
-    Chord::new(CMD_SHIFT, Key::Down),
-    // The Control keys of Cocoa text fields: line start and end, character and line moves,
-    // deletion.
-    Chord::new(CTRL, Key::A),
-    Chord::new(CTRL, Key::E),
-    Chord::new(CTRL, Key::B),
-    Chord::new(CTRL, Key::F),
-    Chord::new(CTRL, Key::P),
-    Chord::new(CTRL, Key::N),
-    Chord::new(CTRL, Key::H),
-    Chord::new(CTRL, Key::K),
-    Chord::new(CTRL, Key::U),
-    Chord::new(CTRL, Key::W),
-];
-
-const PC_EDITING: &[Chord] = &[
-    // Undo, redo, select all.
-    Chord::new(CMD, Key::Z),
-    Chord::new(CMD, Key::Y),
-    Chord::new(CMD_SHIFT, Key::Z),
-    Chord::new(CMD, Key::A),
-    // Words.
-    Chord::new(CMD, Key::Left),
-    Chord::new(CMD, Key::Right),
-    Chord::new(CMD_SHIFT, Key::Left),
-    Chord::new(CMD_SHIFT, Key::Right),
-    Chord::new(CMD, Key::Backspace),
-    Chord::new(CMD, Key::Delete),
-    // Text start and end.
-    Chord::new(CMD, Key::Home),
-    Chord::new(CMD, Key::End),
-    Chord::new(CMD_SHIFT, Key::Home),
-    Chord::new(CMD_SHIFT, Key::End),
-    Chord::new(CMD, Key::Up),
-    Chord::new(CMD, Key::Down),
-    Chord::new(CMD_SHIFT, Key::Up),
-    Chord::new(CMD_SHIFT, Key::Down),
-];
-
-/// The chords with modifiers that edit text on `platform`, as effective chords: undo, redo,
-/// select all, and moving and deleting by word, line and text. While typing they go to the text
-/// field under every [`TypingRule`]; only a binding in an active context takes one. Plain keys
-/// (arrows, Home, End, Backspace, Delete, with or without Shift) are not listed, since every rule
-/// holds them already. The `egui` dispatcher keeps the clipboard chords for the field itself.
-pub fn text_editing_chords(platform: Platform) -> &'static [Chord] {
-    if platform.is_mac() { MAC_EDITING } else { PC_EDITING }
-}
+mod editing;
+pub use editing::text_editing_chords;
 
 /// What a key press runs.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum Lookup {
+    /// No binding matches.
     None,
+    /// Run this command.
     Run(CommandRef),
     /// Tools of one group share the chord: the app picks the next one (catalog order).
     Cycle(Vec<CommandRef>),
@@ -345,7 +61,9 @@ pub enum Policy {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Holder {
+    /// The command holding the binding.
     pub command: CommandRef,
+    /// The binding it holds.
     pub binding: Binding,
 }
 
@@ -365,6 +83,7 @@ pub struct Assigned {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum AssignError {
+    /// The catalog has no such command.
     UnknownCommand,
     /// The system takes this chord.
     Reserved(Trigger),
@@ -398,11 +117,13 @@ impl std::error::Error for AssignError {}
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum DropReason {
+    /// The overrides key is longer than [`MAX_KEY`].
     KeyTooLong,
     /// The value is not a list of texts.
     NotAList,
     /// Items of the list that are not text.
     NotText,
+    /// A binding text is longer than [`MAX_BINDING_TEXT`].
     TextTooLong,
     /// Texts past [`MAX_BINDINGS`].
     TooManyBindings,
@@ -414,19 +135,50 @@ pub enum DropReason {
 #[non_exhaustive]
 pub enum Problem {
     /// No command in the catalog has this key; the entry is kept.
-    UnknownCommand { key: String },
+    UnknownCommand {
+        /// The overrides key.
+        key: String,
+    },
     /// A text that does not parse; the entry keeps it.
-    BadBinding { key: String, text: String, error: BindingError },
+    BadBinding {
+        /// The overrides key.
+        key: String,
+        /// The binding text that did not parse.
+        text: String,
+        /// Why it did not parse.
+        error: BindingError,
+    },
     /// A reserved chord; not bound.
-    Reserved { key: String, text: String },
+    Reserved {
+        /// The overrides key.
+        key: String,
+        /// The binding text.
+        text: String,
+    },
     /// A scope that is neither registered in [`Scopes`] nor used by the catalog; not bound.
-    UnknownScope { key: String, text: String },
+    UnknownScope {
+        /// The overrides key.
+        key: String,
+        /// The binding text.
+        text: String,
+    },
     /// Another entry names the same command; this one is ignored.
-    DuplicateKey { key: String },
+    DuplicateKey {
+        /// The overrides key.
+        key: String,
+    },
     /// Part of an entry dropped while loading.
-    Dropped { key: String, reason: DropReason },
+    Dropped {
+        /// The overrides key.
+        key: String,
+        /// What was dropped.
+        reason: DropReason,
+    },
     /// Entries past [`MAX_COMMANDS`] dropped while loading.
-    TooManyCommands { ignored: usize },
+    TooManyCommands {
+        /// How many entries were dropped.
+        ignored: usize,
+    },
 }
 
 /// How two bindings on one chord relate.
@@ -447,8 +199,11 @@ pub enum ConflictKind {
 pub struct Conflict {
     /// The effective trigger on the keymap's platform.
     pub chord: Trigger,
+    /// The first command and its binding.
     pub a: (CommandRef, Binding),
+    /// The second command and its binding.
     pub b: (CommandRef, Binding),
+    /// How the two relate.
     pub kind: ConflictKind,
     /// Both bindings are defaults.
     pub in_defaults: bool,
@@ -473,7 +228,7 @@ type Pair<'a> = (usize, usize, bool, (usize, &'a Bound), (usize, &'a Bound));
 /// The catalog, the scope registry, the platform and the user's overrides.
 #[derive(Clone, Debug)]
 pub struct Keymap {
-    catalog: Vec<Bindable>,
+    catalog: Vec<CommandDef>,
     keys: Vec<String>,
     index: HashMap<String, usize>,
     defaults: Vec<Vec<Bound>>,
@@ -492,12 +247,14 @@ pub struct Keymap {
     typing: TypingRule,
     reserved: Vec<Chord>,
     overrides: Overrides,
+    /// Tools of different groups may share a chord ([`Keymap::with_shared_tool_keys`]).
+    pub(crate) shared_tool_keys: bool,
 }
 
 impl Keymap {
     /// A keymap with default bindings. Entries past [`MAX_COMMANDS`], with a key over
     /// [`MAX_KEY`] bytes, or repeating an earlier key are left out.
-    pub fn new(catalog: Vec<Bindable>, scopes: Scopes, platform: Platform) -> Keymap {
+    pub fn new(catalog: Vec<CommandDef>, scopes: Scopes, platform: Platform) -> Keymap {
         let mut km = Keymap {
             catalog: Vec::new(),
             keys: Vec::new(),
@@ -513,6 +270,7 @@ impl Keymap {
             typing: TypingRule::default(),
             reserved: Vec::new(),
             overrides: Overrides::new(),
+            shared_tool_keys: false,
         };
         for b in catalog {
             let key = b.command.key();
@@ -533,6 +291,7 @@ impl Keymap {
         km
     }
 
+    /// Sets the [`TypingRule`] for presses while a text field is being typed in.
     pub fn with_typing_rule(mut self, rule: TypingRule) -> Keymap {
         self.typing = rule;
         self
@@ -546,37 +305,45 @@ impl Keymap {
         self
     }
 
+    /// Loads `overrides` ([`Keymap::set_overrides`]).
     pub fn with_overrides(mut self, overrides: Overrides) -> Keymap {
         self.set_overrides(overrides);
         self
     }
 
+    /// Replaces the user's overrides and rebuilds the bindings.
     pub fn set_overrides(&mut self, overrides: Overrides) {
         self.overrides = overrides;
         self.reload();
     }
 
+    /// The user's overrides.
     pub fn overrides(&self) -> &Overrides {
         &self.overrides
     }
 
+    /// The platform the keymap was built for.
     pub fn platform(&self) -> Platform {
         self.platform
     }
 
+    /// The scope registry.
     pub fn scopes(&self) -> &Scopes {
         &self.scopes
     }
 
+    /// The rule for presses while a text field is being typed in.
     pub fn typing_rule(&self) -> TypingRule {
         self.typing
     }
 
-    pub fn catalog(&self) -> &[Bindable] {
+    /// Every command the user can bind, in catalog order.
+    pub fn catalog(&self) -> &[CommandDef] {
         &self.catalog
     }
 
-    pub fn bindable(&self, command: &CommandRef) -> Option<&Bindable> {
+    /// The catalog entry of `command`, if it is in the catalog.
+    pub fn bindable(&self, command: &CommandRef) -> Option<&CommandDef> {
         self.find(command).map(|i| &self.catalog[i])
     }
 
@@ -590,6 +357,7 @@ impl Keymap {
         self.find(command).map(|i| self.defaults[i].iter().map(|b| self.public(i, b)).collect()).unwrap_or_default()
     }
 
+    /// Whether `chord` is reserved, as `platform` sees chords.
     pub fn is_reserved(&self, chord: &Chord) -> bool {
         let c = chord.effective(self.platform);
         self.reserved.iter().any(|r| r.effective(self.platform) == c)
@@ -603,13 +371,18 @@ impl Keymap {
 
     /// The command `chord` (pressed twice when `double`) runs with `active` focus.
     pub fn lookup(&self, chord: &Chord, double: bool, active: &Active) -> Lookup {
+        self.lookup_nested(chord, double, active, &[])
+    }
+
+    /// [`lookup`](Self::lookup) with the panels around the focused one in `outer` ([`Scopes::rank_nested`]).
+    pub fn lookup_nested(&self, chord: &Chord, double: bool, active: &Active, outer: &[&str]) -> Lookup {
         let want = Trigger { chord: chord.effective(self.platform), double };
         let held = active.typing && !self.typing.fires(&want.chord, self.platform);
         let Some(holders) = self.by_trigger.get(&want) else { return Lookup::None };
         // Each command's nearest rank; `holders` is in catalog order.
         let mut ranks: Vec<(usize, u8)> = Vec::new();
         for &(i, k) in holders {
-            let Some(r) = self.at(i, k).and_then(|(_, s)| self.scopes.rank(s, active)) else { continue };
+            let Some(r) = self.at(i, k).and_then(|(_, s)| self.scopes.rank_nested(s, active, outer)) else { continue };
             // The typing rule holds back everything except bindings of an active context (rank 0).
             if held && r != 0 {
                 continue;
@@ -787,8 +560,7 @@ impl Keymap {
 
     /// Whether both commands of `conflict` have its chord among their defaults, so they share it by
     /// design and [`Keymap::clashing`] leaves them out.
-    #[cfg(feature = "ui")]
-    pub(crate) fn twins_in(&self, conflict: &Conflict) -> bool {
+    pub fn twins_in(&self, conflict: &Conflict) -> bool {
         let (Some(i), Some(j)) = (self.find(&conflict.a.0), self.find(&conflict.b.0)) else { return false };
         self.twins(i, j, conflict.chord)
     }
@@ -837,7 +609,7 @@ impl Keymap {
 
     fn same_group(&self, i: usize, j: usize) -> bool {
         match (&self.catalog[i].kind, &self.catalog[j].kind) {
-            (Kind::Tool { group: a }, Kind::Tool { group: b }) => a == b,
+            (CommandKind::Tool { group: a }, CommandKind::Tool { group: b }) => self.shared_tool_keys || a == b,
             _ => false,
         }
     }
@@ -887,7 +659,7 @@ impl Keymap {
         for (pos, &(i, k)) in holders.iter().enumerate() {
             let Some(b) = self.at(i, k) else { continue };
             let tools = match &self.catalog[i].kind {
-                Kind::Tool { group } => Some(group),
+                CommandKind::Tool { group } => Some(group),
                 _ => None,
             };
             let g = *group_of.entry((&b.1, tools)).or_insert_with(|| {
@@ -902,7 +674,7 @@ impl Keymap {
         let mut found: Vec<Pair> = Vec::new();
         'groups: for (n, g) in groups.iter().enumerate() {
             for (m, h) in groups.iter().enumerate().skip(n) {
-                if g.tools.is_some() && g.tools == h.tools {
+                if g.tools.is_some() && (self.shared_tool_keys && h.tools.is_some() || g.tools == h.tools) {
                     continue;
                 }
                 let Some(clash) = self.conflict_relation(g.scope, h.scope) else { continue };
@@ -1036,6 +808,12 @@ impl Keymap {
     /// Whether a stored binding of a command with home scope `home` works here.
     fn usable(&self, binding: &Binding, home: &Scope) -> bool {
         !self.is_reserved(&binding.trigger.chord) && self.usable_scope(binding.scope_or(home), home)
+    }
+
+    /// The command's overrides texts as stored, when it has an entry.
+    pub(crate) fn stored_texts(&self, command: &CommandRef) -> Option<&[String]> {
+        let i = self.find(command)?;
+        self.stored[i].as_deref().and_then(|key| self.overrides.get(key))
     }
 
     /// The texts of a command's overrides entry this build cannot use: a key name from a newer
