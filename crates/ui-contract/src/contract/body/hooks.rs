@@ -4,8 +4,8 @@ use super::inherit::{BodyScope, register_instances};
 use super::open::open_now;
 use super::placement::{Placement, measure_layer, overlay_of, shown_placement};
 use super::regions::{
-    RegionFrame, RegionSizes, footer_in_end, gap_of, header_gap_of, label_extra_of, least_of, pad_of, paint_rules, rect_of, shared_labels,
-    shared_line,
+    RegionFrame, RegionSizes, footer_in_end, gap_of, header_gap_of, label_extra_of, least_of, pad_of, paint_edge_rule, paint_rules, rect_of,
+    shared_labels, shared_line,
 };
 use super::reorder::REORDER_BAND;
 use super::scroll::{Glide, Jumps, ScrollState, aim_glide, follow_anchor, jump_frame, overflow_inset, scroll_of};
@@ -988,6 +988,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             ui.painter().set(band_slot, Shape::rect_filled(regions.header, radius, surface_style(&env.tokens, kind).fill));
         }
         paint_rules(ui, &props, env, inner, &regions);
+        paint_edge_rule(ui, &props, env, rect);
     }
 
     fn settle(&mut self, comp: &mut C, cx: &mut Cx<'_, C>) {

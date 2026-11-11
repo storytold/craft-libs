@@ -2,7 +2,7 @@
 
 use super::BodyHooks;
 use crate::contract::cx::BodyCx;
-use crate::contract::{Container, ContainerProps, FooterPlace, Gap, LeastWidth, Pad, Sizing};
+use crate::contract::{Container, ContainerProps, FooterPlace, Gap, LeastWidth, Pad, PaneEdge, Sizing};
 use crate::layout::ColumnGroup;
 use crate::primitives::Rule;
 use crate::runtime::access::{self};
@@ -112,6 +112,25 @@ impl RegionFrame<'_> {
         let builder = UiBuilder::new().max_rect(rect).layout(child::column_layout(self.rtl)).scope_id(sub(self.id, name));
         if self.node { access::with_parent(builder, self.id) } else { builder }
     }
+}
+
+/// The divider along the inner edge of the edge pane that encloses a container with `edge_rule`, inside `rect`: the
+/// edge toward the window's centre, mirrored for a start or end pane under right-to-left.
+pub(super) fn paint_edge_rule(ui: &mut Ui, props: &ContainerProps, env: &Env, rect: Rect) {
+    let Some(edge) = env.pane_edge.filter(|_| props.edge_rule) else { return };
+    let rule = rule_look(&env.tokens, RuleKind::Divider);
+    let half = rule.width / 2.0;
+    let rtl = env.direction.is_rtl();
+    let (from, to) = match edge {
+        PaneEdge::Start if rtl => (Pos2::new(rect.min.x + half, rect.min.y), Pos2::new(rect.min.x + half, rect.max.y)),
+        PaneEdge::Start => (Pos2::new(rect.max.x - half, rect.min.y), Pos2::new(rect.max.x - half, rect.max.y)),
+        PaneEdge::End if rtl => (Pos2::new(rect.max.x - half, rect.min.y), Pos2::new(rect.max.x - half, rect.max.y)),
+        PaneEdge::End => (Pos2::new(rect.min.x + half, rect.min.y), Pos2::new(rect.min.x + half, rect.max.y)),
+        PaneEdge::Top => (Pos2::new(rect.min.x, rect.max.y - half), Pos2::new(rect.max.x, rect.max.y - half)),
+        PaneEdge::Bottom => (Pos2::new(rect.min.x, rect.min.y + half), Pos2::new(rect.max.x, rect.min.y + half)),
+        PaneEdge::Center => return,
+    };
+    ui.painter().extend(Rule::shapes(&rule, from, to, ui.ctx().pixels_per_point()));
 }
 
 /// The divider rules above and under the header and above the footer.

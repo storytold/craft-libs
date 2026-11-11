@@ -573,6 +573,9 @@ pub struct ContainerProps {
     pub body_gap: Gap,
     /// The least width of the content, from a size role; the content may be wider.
     pub least_width: Option<LeastWidth>,
+    /// A divider along the inner edge of the edge pane the container sits in: the edge that faces the window's centre.
+    /// Outside an edge pane it draws nothing.
+    pub edge_rule: bool,
     /// A scope size for the body.
     pub child_size: Option<ControlSize>,
     /// The container is an arena root.
@@ -654,6 +657,7 @@ impl ContainerProps {
             collapse: None,
             body_gap: Gap::Row,
             least_width: None,
+            edge_rule: false,
             child_size: None,
             arena: false,
             gates: false,
@@ -772,6 +776,12 @@ impl ContainerProps {
     /// The least width of the content, from a size role.
     pub const fn least_width(mut self, least: LeastWidth) -> Self {
         self.least_width = Some(least);
+        self
+    }
+
+    /// Draws a divider along the inner edge of the edge pane the container sits in.
+    pub const fn edge_rule(mut self, on: bool) -> Self {
+        self.edge_rule = on;
         self
     }
 

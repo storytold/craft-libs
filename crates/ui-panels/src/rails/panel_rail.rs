@@ -58,7 +58,8 @@ impl<P: Value> Outcome for PanelRailOutput<P> {
 
 type FooterFn<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
 
-/// The rail of icons that open panels, as a side panel at one edge of the window. A panel is a toggle command: its
+/// The rail of icons that open panels, as a side panel at one edge of the window, with a rule along the edge that faces
+/// the canvas (the inner edge of its pane). A panel is a toggle command: its
 /// label, icon, chord and enabled state come from the command, the icon shows the on look while the command is
 /// checked (the panel is open), and the command's `marked` state and `hint` tell that the closed panel has content
 /// to show. A click runs the command and reports the request that matches the panel's state. The icons are one
@@ -87,7 +88,8 @@ impl<'a, P: Value + 'static> PanelRail<'a, P> {
             .child_size(ControlSize::Md)
             .roving(Roving::new(NavShape::Flat))
             .scroll(Scroll::vertical())
-            .footer(FooterRegion::new());
+            .footer(FooterRegion::new())
+            .edge_rule(true);
         PanelRail { common: Common::new(), props, panels, footer: None }.label(label)
     }
 
