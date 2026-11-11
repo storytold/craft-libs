@@ -459,7 +459,10 @@ fn charge_pending_export_counts_against_the_budget_until_released() {
     assert_eq!(store.remaining_budget(), 10);
     store.charge_pending_export(6);
     assert_eq!(store.remaining_budget(), 4);
-    assert!(store.would_exceed_budget_after_put(&StoreKey::new("config/a"), 3), "3 + 3 = 6 on top of 6 already exported must exceed a 10-byte budget");
+    assert!(
+        store.would_exceed_budget_after_put(&StoreKey::new("config/a"), 3),
+        "3 + 3 = 6 on top of 6 already exported must exceed a 10-byte budget"
+    );
     store.release_pending_export(6);
     assert_eq!(store.remaining_budget(), 10);
 }

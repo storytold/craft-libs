@@ -131,7 +131,10 @@ fn storage_put_accounts_for_both_the_resident_and_pending_copy() {
 
     let reply = runtime.handle_host_message(HostMessage::StoragePut { key: "config/a".into(), bytes: vec![0u8; 6] });
 
-    assert!(matches!(reply.as_slice(), [WorkerMessage::Error { .. }]), "6 resident + 6 pending = 12 bytes must be refused against a 10-byte budget, got {reply:?}");
+    assert!(
+        matches!(reply.as_slice(), [WorkerMessage::Error { .. }]),
+        "6 resident + 6 pending = 12 bytes must be refused against a 10-byte budget, got {reply:?}"
+    );
     assert_eq!(runtime.store_get(&StoreKey::new("config/a")), None);
 }
 
