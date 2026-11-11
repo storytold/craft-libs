@@ -30,7 +30,6 @@ name = "contract-api"
 path = "src/bin/contract-api.rs"
 test = false
 
-# The component sheet's renderer: every story to a PNG, offscreen (desktop only).
 [features]
 # One feature per domain crate whose stories the viewer links; `apps` is all of them and the default. A build
 # that needs one crate's stories only (the story renderer) turns the default off and names the crate.
@@ -101,7 +100,6 @@ craft-timeline = { workspace = true, features = ["screen-testing"], optional = t
 craft-dialogs = { workspace = true, features = ["screen-testing"], optional = true }
 craft-font-manager = { workspace = true, features = ["screen-testing"], optional = true }
 craft-update = { workspace = true, features = ["screen-testing"], optional = true }
-# The component sheet crops and writes its images.
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4"

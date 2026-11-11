@@ -1,7 +1,7 @@
 //! One card: stories live on their surface under a header with the component's name and, while a story differs from
 //! its start, Reset; the Open command of an Overview card opens the component's tab. A card of several stories lays
 //! them out as the component's catalog entry says, each under its caption. Each story runs in an embedded shell, so
-//! its dialogs open inside the card. [`StoryBody`] is the story part alone, which the component sheet renders too.
+//! its dialogs open inside the card. [`StoryBody`] is the story part alone, which the story renderer (`story-render`) shows too.
 
 use crate::viewer::{CardState, Cells, DialogState};
 use craft_behavior::{ColumnWidth, IconId};
