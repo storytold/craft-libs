@@ -60,7 +60,7 @@ Ship `craft-dedicated-worker.js` (+ brotli) beside `craft-worker-host.js` on the
 Tier key layout and OPFS paths: [tier-store.md](./tier-store.md).
 4. `gpu_jobs` → `gpu_batch_done` or `error`
 
-Cloud hydration/flush over HTTP is **`craft-cloud-client` from the worker**, not provider code in craft-libs. See [collabcraft-range-api.md](./collabcraft-range-api.md) for range streaming on the gateway.
+Cloud hydration/flush over HTTP is **`craft-cloud-client` from the worker**, not provider code in craft-libs. The gateway's range streaming design lives at https://github.com/storytold/craft-libs/pull/160. That PR also carries the `craft-cloud` crate this document references. Neither is on `main` yet.
 
 ## Build and test
 

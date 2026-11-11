@@ -2,7 +2,7 @@
 
 Portable tier model for Craft `-web` apps: **hot** mirror in WASM/worker memory, **warm** OPFS (and parallel app-specific cache trees), **cold** File System Access volumes, **cloud** byte ranges via `craft-cloud` refs. This crate has **no IO** — hosts implement persistence in JS (OPFS, FS Access) or HTTP (`craft-cloud-client` in collab-craft, not in craft-libs).
 
-**Out of scope here:** `craft-nextcloud`, collab HTTP, and desktop sync. Cloud identity only: [`CloudBlobRef`](../crates/tier-store/src/cloud_ref.rs) + [`craft-cloud`](../crates/cloud/).
+**Out of scope here:** `craft-nextcloud`, collab HTTP, and desktop sync. Cloud identity only: [`CloudBlobRef`](../crates/tier-store/src/cloud_ref.rs) + `craft-cloud`. This crate's dependency on `craft-cloud` lives at https://github.com/storytold/craft-libs/pull/160. It does not exist on `main` yet.
 
 ## Tier namespaces
 
@@ -12,7 +12,7 @@ Portable tier model for Craft `-web` apps: **hot** mirror in WASM/worker memory,
 | **Warm** | OPFS under app warm root (EffectCraft: `effectcraft-store/v1/<StoreKey>`) | `StoreKey` path segments | App flush loop; coalesced pending ([`mirror.rs`](../crates/tier-store/src/mirror.rs)) |
 | **Warm (parallel)** | Separate OPFS tree for render disk cache (EffectCraft: `effectcraft-cache/v1/…`) | **Not** `StoreKey` today — u128 / layer hex names | App-owned; do not rename without migration ([pilot-effectcraft](./pilot-effectcraft.md)) |
 | **Cold** | User-picked directories (FS Access) | Logical keys still `files/…`; physical path under [`ExternalVolume`](../crates/tier-store/src/external_volume.rs) `handle_id` | Config stays warm-only; media/export paths may map to cold ([`TierCoordinator`](../crates/tier-store/src/coordinator.rs)) |
-| **Cloud** | Remote blob via gateway | Hydration targets `StoreKey::slice_cache(hash, offset, len)` | Range reads; see [collabcraft-range-api.md](./collabcraft-range-api.md) |
+| **Cloud** | Remote blob via gateway | Hydration targets `StoreKey::slice_cache(hash, offset, len)` | Range reads; the gateway's range API design is in https://github.com/storytold/craft-libs/pull/160, not merged to `main` |
 
 ## EffectCraft `StoreKey` mapping
 
@@ -65,7 +65,7 @@ SharedWorker bootstrap: [`craft-worker-host.js`](../assets/craft-worker-host.js)
 
 ## Cloud refs
 
-[`CloudBlobRef`](../crates/tier-store/src/cloud_ref.rs) aligns with [`craft-cloud`](../crates/cloud/) file identity. Streaming writes target slice-cache keys; HTTP lives in the worker through `craft-cloud-client` (collab-craft repo).
+[`CloudBlobRef`](../crates/tier-store/src/cloud_ref.rs) aligns with `craft-cloud` file identity (https://github.com/storytold/craft-libs/pull/160). Streaming writes target slice-cache keys; HTTP lives in the worker through `craft-cloud-client` (collab-craft repo). The gateway's range API (design doc at the PR above) streams a blob by `file_id` plus a byte `offset`/`length` pair. It answers with exactly those bytes and the blob's full size. A caller then has everything it needs to decide whether a follow-up range or a whole-file read fits its remaining budget.
 
 ## Build and test
 
@@ -79,4 +79,4 @@ Rust workspace tests for the runtime crates need a Linux host with `cargo`:
 
 - [web-runtime.md](./web-runtime.md) — SharedWorker message flow
 - [pilot-effectcraft.md](./pilot-effectcraft.md) — key preservation checklist
-- [collabcraft-range-api.md](./collabcraft-range-api.md) — cloud range hydration
+- https://github.com/storytold/craft-libs/pull/160: cloud range hydration design
