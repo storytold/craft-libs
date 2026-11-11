@@ -204,3 +204,17 @@ fn selecting_a_component_glides_its_card_to_the_top() {
     assert!(arrived, "{}'s card reached the top of the view", target.name);
     assert!(frames > 2, "the card glided over several frames, not in one: {frames}");
 }
+
+/// A card shows Reset only once its story's values differ from its start: at rest, with no input, no card shows it.
+/// Regression: the start was noted on a pass where the story had not run (a kept measurement, a held-back story),
+/// so every value the story then made counted as a change, on most cards of a level.
+#[trial]
+fn a_card_at_rest_shows_no_reset() {
+    for name in ["ToggleButton", "TipEllipse", "CompareTile", "CurvesPanel", "Menu"] {
+        let mut gallery = gallery_filtered(level_of(name), name);
+        let mut fixture = Fixture::new(move |ui| gallery.ui(ui));
+        fixture.room(Vec2::new(1400.0, 900.0)).settle().idle(3).settle();
+        assert!(fixture.by_label("Open").is_some(), "{name}'s card shows");
+        assert!(fixture.by_label("Reset").is_none(), "{name}'s card shows Reset with no input");
+    }
+}

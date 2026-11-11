@@ -337,8 +337,10 @@ impl StoryBody {
                 dialog.shown |= dialog.known && shown;
                 dialog.painted = true;
             }
+            // The start is the values after the story's first real run: a pass that took a kept measurement, ran
+            // only the measuring run or held the story back has not made them yet.
+            state.note_start();
         }
-        state.note_start();
         BodyShown { flow: Some(surface.output.rect) }
     }
 
