@@ -421,6 +421,12 @@ impl TypeFacts {
     fn text(&self) -> bool {
         matches!(self.input, Input::Text | Input::Editor)
     }
+
+    /// Whether the component holds cells the keyboard moves between, its text part editing one cell at a time. Read
+    /// only, it stays a Tab stop, so the keyboard still reaches its cells to read and copy them.
+    fn holds_cells(&self) -> bool {
+        [Role::GRID, Role::TABLE, Role::TREE].contains(&self.role)
+    }
 }
 
 /// A component and its shape's hooks, with the component type erased, as steps 1 to 5, the measuring runs and step 17
@@ -676,7 +682,7 @@ fn stops_step(at: StopsStep<'_>, e: &mut dyn ErasedPass<'_>, facts: &TypeFacts, 
         focusable: !inert && steps::takes_focus(resolved) && own.contains(Sense::FOCUS) && env.item != Some(id),
         parts_focus: !inert && steps::takes_focus(resolved),
         text,
-        press_only: text && resolved.read_only,
+        press_only: text && resolved.read_only && !facts.holds_cells(),
         keys,
         role: role.resettable(resettable).value(value).text(text).moves(role.moves || keys.moves).deletes(role.deletes || keys.deletes || text),
         rtl,
