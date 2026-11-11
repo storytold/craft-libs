@@ -37,6 +37,25 @@ impl Lut3d {
         Ok(Lut3d { size, data })
     }
 
+    /// Samples `f` (RGB in, RGB out) on a `size`³ grid, `size` from 2 to [`MAX_SIZE`]: a display
+    /// chain that is more than one [`Transform`].
+    pub fn from_fn(size: usize, mut f: impl FnMut([f32; 3]) -> [f32; 3]) -> Result<Lut3d, CmsError> {
+        if !(2..=MAX_SIZE).contains(&size) {
+            return Err(invalid_arg(format!("3D LUT size {size} (2 to {MAX_SIZE})")));
+        }
+        let s = (size - 1) as f32;
+        let mut data = Vec::with_capacity(size * size * size);
+        for b in 0..size {
+            for g in 0..size {
+                for r in 0..size {
+                    let v = f([r as f32 / s, g as f32 / s, b as f32 / s]);
+                    data.push([v[0], v[1], v[2], 1.0]);
+                }
+            }
+        }
+        Ok(Lut3d { size, data })
+    }
+
     /// Edge length.
     pub fn size(&self) -> usize {
         self.size
@@ -155,5 +174,18 @@ mod tests {
         }
         assert_eq!(f32_to_f16(1.0), 0x3C00);
         assert_eq!(f32_to_f16(1e6), 0x7C00);
+    }
+
+    #[test]
+    fn from_fn_samples_red_fastest_and_bounds_the_size() {
+        let lut = Lut3d::from_fn(3, |[r, g, b]| [r, g * 0.5, 1.0 - b]).unwrap();
+        assert_eq!(lut.size(), 3);
+        assert_eq!(lut.data().len(), 27);
+        assert_eq!(lut.data()[1], [0.5, 0.0, 1.0, 1.0]);
+        assert_eq!(lut.data()[3], [0.0, 0.25, 1.0, 1.0]);
+        assert_eq!(lut.data()[26], [1.0, 0.5, 0.0, 1.0]);
+        for size in [0, 1, MAX_SIZE + 1, usize::MAX] {
+            assert!(matches!(Lut3d::from_fn(size, |v| v), Err(CmsError::InvalidArgument(_))), "{size}");
+        }
     }
 }
