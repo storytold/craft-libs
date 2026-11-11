@@ -169,6 +169,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-pcraft-format`](crates/pcraft-format/README.md): the envelope of PhotoCraft's `.pcraft`
   bundle: `Manifest<D>` with the document as a type parameter, `TileRef`, the entry paths, the
   manifest decode limits and the migration runner. The document model stays in PhotoCraft.
+- [`craft-penpot`](crates/penpot/README.md): clean-room reader and writer for the Penpot 2.x export
+  container (`.penpot`): the ZIP archive, its manifest, the per-file, per-page and per-shape JSON
+  members and media objects, as the JSON the file holds. Bounded on hostile input. Carved from
+  FigCraft.
 - [`craft-plotter`](crates/plotter/README.md): cutter and pen-plotter command languages: HP-GL,
   DMPL and GP-GL (plain and the Silhouette dialect, three generations, registration marks) from a
   job in millimetres, plus the Silhouette device queries and reply parsers. No I/O.

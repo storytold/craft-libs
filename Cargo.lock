@@ -1202,6 +1202,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-penpot"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "serde_json",
+ "thiserror 2.0.21",
+ "zip",
+]
+
+[[package]]
 name = "craft-plate-test"
 version = "0.1.0"
 dependencies = [
