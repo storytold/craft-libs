@@ -526,4 +526,17 @@ mod tests {
         // no Panasonic note, no row
         assert!(lens(&file_tag_rows(&synthetic_raw(Some(3)))).is_empty());
     }
+
+    /// Tag 0x002E is a JpgFromRaw only in a RW2: in an ordinary TIFF it is someone else's private tag, whose bytes
+    /// name no lens of this photo. Its own maker note still does.
+    #[test]
+    fn panasonic_lens_row_reads_a_jpg_from_raw_only_in_a_rw2() {
+        let lens = |rows: &[TagRow]| rows.iter().filter(|r| r.group == "Panasonic" && r.tag == 0x0051).count();
+        let mut bytes = crate::exif::tests::panasonic_rw2("LUMIX S 85/F1.8");
+        assert_eq!(lens(&file_tag_rows(&bytes)), 1);
+        bytes[2..4].copy_from_slice(&42u16.to_le_bytes());
+        assert_eq!(lens(&file_tag_rows(&bytes)), 0);
+        let own = crate::exif::tests::panasonic_exif(craft_tiff::ByteOrder::Little, Some("LUMIX G 25/F1.7"), None);
+        assert_eq!(lens(&file_tag_rows(&own)), 1);
+    }
 }

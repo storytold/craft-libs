@@ -1,7 +1,7 @@
 //! Exif / TIFF tags → [`Metadata`] (CIPA DC-008 Exif 2.32, TIFF 6.0, DNG 1.7 tag semantics).
 
 use crate::{DateTime, Flash, Gps, Metadata, Orientation};
-use craft_tiff::{Ifd, ParseOptions, Tiff, TiffError, tags as t};
+use craft_tiff::{FieldType, Ifd, ParseOptions, Tiff, TiffError, tags as t};
 
 /// Strip an `Exif\0\0` (or `Exif\0\xff`) prefix as found in JPEG APP1 and some WebP `EXIF` chunks.
 pub fn strip_exif_header(b: &[u8]) -> &[u8] {
@@ -29,8 +29,9 @@ pub fn try_read_exif_with(bytes: &[u8], opts: &ParseOptions) -> Result<Metadata,
     let mut m = from_tiff(&tiff);
     // Panasonic (and some Canons) write no LensModel, only the name in their maker note
     if m.lens_model.is_none() {
-        m.lens_model = panasonic_maker_note_lens(data, &tiff).or_else(|| canon_maker_note_lens(data, &tiff));
+        m.lens_model = panasonic_lens(data, &tiff).or_else(|| canon_maker_note_lens(data, &tiff));
     }
+    fill_from_panasonic_raw(&mut m, data, &tiff, opts);
     // the maker note's values are offsets into the stream, which `from_tiff` doesn't have
     m.focus = crate::focus::read(data, &tiff, m.make.as_deref(), m.model.as_deref(), m.orientation);
     Ok(m)
@@ -52,6 +53,22 @@ fn pos(v: Option<f64>) -> Option<f64> {
 pub(crate) fn ifd0_orientation(bytes: &[u8]) -> Option<Orientation> {
     let tiff = Tiff::parse_with(strip_exif_header(bytes), &ParseOptions::default()).ok()?;
     tiff.ifds.first().and_then(|i| i.u16(t::ORIENTATION)).filter(|v| (1..=8).contains(v)).map(Orientation::from_exif)
+}
+
+/// The ISO an Exif IFD states beyond the 16-bit ISOSpeedRatings: RecommendedExposureIndex, else
+/// ISOSpeedRatingsExt. A zero states nothing.
+fn extended_iso(exif: Option<&Ifd>) -> Option<u64> {
+    let e = exif?;
+    let stated = |tag| e.u64(tag).filter(|&v| v > 0);
+    stated(t::RECOMMENDED_EXPOSURE_INDEX).or_else(|| stated(t::ISO_SPEED_RATINGS_EXT))
+}
+
+/// `iso`, unless it is only the overflow marker of this stream's ISOSpeedRatings, which states no ISO.
+fn without_iso_overflow(iso: Option<u32>, tiff: &Tiff) -> Option<u32> {
+    // 65535 is an overflow marker only in the short field; a LONG or an extended measurement may equal it.
+    let entry = tiff.exif().and_then(|e| e.get(t::ISO_SPEED)).or_else(|| tiff.ifds.first().and_then(|i| i.get(t::ISO_SPEED)));
+    let short = entry.is_some_and(|e| e.field_type() == FieldType::Short);
+    iso.filter(|&v| v != u32::from(u16::MAX) || !short || extended_iso(tiff.exif()).is_some())
 }
 
 /// Build [`Metadata`] from a parsed TIFF stream (IFD0 + Exif + GPS; DNG tags as fallbacks).
@@ -90,7 +107,7 @@ pub fn from_tiff(tiff: &Tiff) -> Metadata {
     m.f_number = pos(either(t::F_NUMBER).and_then(|v| v.get_f64(0)))
         .or_else(|| exif.and_then(|e| e.f64(t::APERTURE_VALUE)).filter(|v| v.abs() < 64.0).map(|av| 2f64.powf(av / 2.0)));
     let iso = either(t::ISO_SPEED).and_then(|v| v.get_u64(0)).filter(|&v| v > 0);
-    let iso_ext = exif.and_then(|e| e.u64(t::RECOMMENDED_EXPOSURE_INDEX).or_else(|| e.u64(t::ISO_SPEED_RATINGS_EXT))).filter(|&v| v > 0);
+    let iso_ext = extended_iso(exif);
     m.iso = match (iso, iso_ext) {
         (Some(65535), Some(x)) | (None, Some(x)) => Some(x),
         (Some(v), _) => Some(v),
@@ -187,9 +204,14 @@ const PANASONIC_LENS_TYPE: u16 = 0x0051;
 const PANASONIC_JPG_FROM_RAW: u16 = 0x002E;
 
 /// The lens name in the Panasonic maker note (tag `0x0051`) of this Exif or RW2 stream (`data` starts at its
-/// TIFF header): the note of its own Exif IFD, else, for a raw, the note in its JpgFromRaw's Exif.
+/// TIFF header): the note of its own Exif IFD, else, for a RW2, the note in its JpgFromRaw's Exif.
 pub(crate) fn panasonic_maker_note_lens(data: &[u8], tiff: &Tiff) -> Option<String> {
-    panasonic_lens(data, tiff).or_else(|| panasonic_jpg_from_raw_lens(tiff))
+    panasonic_lens(data, tiff).or_else(|| is_panasonic_raw(data).then(|| panasonic_jpg_from_raw_lens(tiff, &ParseOptions::default())).flatten())
+}
+
+/// A RW2/RWL stream: its private IFD0 tags, the JpgFromRaw too, mean nothing in any other TIFF.
+fn is_panasonic_raw(data: &[u8]) -> bool {
+    data.starts_with(b"IIU\0")
 }
 
 /// The lens name in a `Panasonic\0` maker note of this Exif stream (`data` starts at its TIFF header).
@@ -204,12 +226,47 @@ fn panasonic_lens(data: &[u8], tiff: &Tiff) -> Option<String> {
     text(Some(&mn.ifd), PANASONIC_LENS_TYPE)
 }
 
+/// RW2/RWL IFD0 tags `0x0017` (ISO, int16u) and `0x0037` (the int32u ISO of newer bodies).
+const PANASONIC_ISO: u16 = 0x0017;
+const PANASONIC_ISO_32: u16 = 0x0037;
+
+/// A RW2's own Exif IFD is a short subset (older bodies such as the GF6 or GM1 leave out ISOSpeedRatings and
+/// more). The full Exif is in the APP1 of its JpgFromRaw: fill what the raw stream lacks from there, then fall
+/// back to the ISO in the Panasonic raw IFD0. The raw's own dimensions stay; the preview's would be smaller.
+fn fill_from_panasonic_raw(m: &mut Metadata, data: &[u8], tiff: &Tiff, opts: &ParseOptions) {
+    if !is_panasonic_raw(data) {
+        return;
+    }
+    let Some(ifd0) = tiff.ifds.first() else { return };
+    m.iso = without_iso_overflow(m.iso, tiff);
+    if let Some(jpg) = ifd0.bytes(PANASONIC_JPG_FROM_RAW)
+        && let Some(exif) = crate::jpeg_segments(jpg).exif
+        && let Ok(inner) = Tiff::parse_with(strip_exif_header(&exif), opts)
+    {
+        let mut full = from_tiff(&inner);
+        // Reuse this parse for the lens name too, under the same caller policy.
+        if full.lens_model.is_none() {
+            full.lens_model = panasonic_lens(strip_exif_header(&exif), &inner);
+        }
+        (full.width, full.height) = (None, None);
+        full.iso = without_iso_overflow(full.iso, &inner);
+        m.fill_missing(&full);
+    }
+    if m.iso.is_none() {
+        // Ifd::u32 also accepts untyped bytes; these ISO fields have specific unsigned types.
+        let iso = |tag, kind| ifd0.get(tag).filter(|entry| entry.field_type() == kind).and_then(|_| ifd0.u32(tag));
+        m.iso = iso(PANASONIC_ISO, FieldType::Short)
+            .filter(|&v| v > 0 && v < u32::from(u16::MAX))
+            .or_else(|| iso(PANASONIC_ISO_32, FieldType::Long).filter(|&v| v > 0 && v < u32::MAX));
+    }
+}
+
 /// The lens name from the Exif of a RW2's (or Leica RWL's) embedded JpgFromRaw.
-fn panasonic_jpg_from_raw_lens(tiff: &Tiff) -> Option<String> {
+fn panasonic_jpg_from_raw_lens(tiff: &Tiff, opts: &ParseOptions) -> Option<String> {
     let jpg = tiff.ifds.first()?.bytes(PANASONIC_JPG_FROM_RAW)?;
     let exif = crate::jpeg_segments(jpg).exif?;
     let data = strip_exif_header(&exif);
-    panasonic_lens(data, &Tiff::parse(data).ok()?)
+    panasonic_lens(data, &Tiff::parse_with(data, opts).ok()?)
 }
 
 /// Canon maker note tag `0x0095` (LensModel in the ExifTool Canon tag names): the lens name as ASCII. Older
@@ -360,7 +417,9 @@ pub(crate) mod tests {
         ifd0.set(t::MAKE, Value::Ascii("Panasonic".into()));
         ifd0.set(PANASONIC_JPG_FROM_RAW, Value::Undefined(jpg));
         ifd0.set_child(t::EXIF_IFD, exif);
-        TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()
+        let mut bytes = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
+        bytes[2..4].copy_from_slice(&0x55u16.to_le_bytes());
+        bytes
     }
 
     #[test]
@@ -370,6 +429,285 @@ pub(crate) mod tests {
         assert_eq!(m.lens_model.as_deref(), Some("LUMIX S 85/F1.8"));
         assert_eq!(m.focal_length, Some(85.0));
         assert_eq!(crate::extract(&rw2).lens_model.as_deref(), Some("LUMIX S 85/F1.8"));
+    }
+
+    /// A RW2 whose own short Exif IFD lacks ISO, with `inner` as the Exif of its JpgFromRaw and `raw_iso` in
+    /// the Panasonic IFD0 tag 0x0017.
+    fn rw2_with(inner: Option<IfdBuilder>, raw_iso: Option<u16>) -> Vec<u8> {
+        rw2_with_options(inner, raw_iso, None, true, None)
+    }
+
+    /// [`rw2_with`], also with the 32-bit raw ISO, an optional JpgFromRaw and an ISO in the raw's own Exif IFD.
+    fn rw2_with_options(inner: Option<IfdBuilder>, raw_iso: Option<u16>, raw_iso32: Option<u32>, with_jpg: bool, exif_iso: Option<u16>) -> Vec<u8> {
+        let mut jpg = vec![0xff, 0xd8];
+        if let Some(e) = inner {
+            let mut i0 = IfdBuilder::new();
+            i0.set(t::MAKE, Value::Ascii("Panasonic".into()));
+            i0.set_child(t::EXIF_IFD, e);
+            let mut app1 = b"Exif\0\0".to_vec();
+            app1.extend(TiffWriter::new(ByteOrder::Little, false).write(&[i0]).unwrap());
+            jpg.extend_from_slice(&[0xff, 0xe1]);
+            jpg.extend_from_slice(&((app1.len() + 2) as u16).to_be_bytes());
+            jpg.extend(app1);
+        }
+        jpg.extend_from_slice(&[0xff, 0xda, 0, 2, 0xff, 0xd9]);
+        let mut exif = IfdBuilder::new();
+        exif.set(t::EXPOSURE_TIME, Value::Rational(vec![(8, 1)]));
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set(t::MAKE, Value::Ascii("Panasonic".into()));
+        ifd0.set(t::IMAGE_WIDTH, Value::Long(vec![4816]));
+        if let Some(v) = raw_iso {
+            ifd0.set(PANASONIC_ISO, Value::Short(vec![v]));
+        }
+        if let Some(v) = raw_iso32 {
+            ifd0.set(PANASONIC_ISO_32, Value::Long(vec![v]));
+        }
+        if let Some(v) = exif_iso {
+            exif.set(t::ISO_SPEED, Value::Short(vec![v]));
+        }
+        if with_jpg {
+            ifd0.set(PANASONIC_JPG_FROM_RAW, Value::Undefined(jpg));
+        }
+        ifd0.set_child(t::EXIF_IFD, exif);
+        let mut bytes = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
+        bytes[2..4].copy_from_slice(&0x55u16.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn rw2_raw_iso_does_not_require_a_jpeg() {
+        for with_jpg in [false, true] {
+            for (iso16, iso32, want) in [
+                (Some(200), None, Some(200)),
+                (None, Some(102400), Some(102400)),
+                (None, Some(65535), Some(65535)),
+                (Some(0), Some(400), Some(400)),
+                (Some(u16::MAX), Some(102400), Some(102400)),
+                (Some(u16::MAX), Some(u32::MAX), None),
+                (None, Some(0), None),
+                (None, None, None),
+            ] {
+                assert_eq!(read_exif(&rw2_with_options(None, iso16, iso32, with_jpg, None)).iso, want);
+            }
+        }
+    }
+
+    #[test]
+    fn rw2_private_iso_tags_are_not_interpreted_in_ordinary_tiff() {
+        for with_jpg in [false, true] {
+            let mut bytes = rw2_with_options(None, Some(200), Some(250), with_jpg, None);
+            assert_eq!(read_exif(&bytes).iso, Some(200));
+            bytes[2..4].copy_from_slice(&42u16.to_le_bytes());
+            assert_eq!(read_exif(&bytes).iso, None);
+        }
+    }
+
+    #[test]
+    fn ordinary_tiff_does_not_import_a_private_jpeg_tag_collision() {
+        let mut inner = IfdBuilder::new();
+        inner.set(t::ISO_SPEED, Value::Short(vec![160]));
+        inner.set(t::LENS_MODEL, Value::Ascii("Preview lens".into()));
+        inner.set(t::DATE_TIME_ORIGINAL, Value::Ascii("2020:01:02 03:04:05".into()));
+        let mut bytes = rw2_with(Some(inner), Some(200));
+        assert_eq!(read_exif(&bytes).iso, Some(160));
+        assert_eq!(read_exif(&bytes).lens_model.as_deref(), Some("Preview lens"));
+        assert!(read_exif(&bytes).capture_time.is_some());
+        bytes[2..4].copy_from_slice(&42u16.to_le_bytes());
+        let m = read_exif(&bytes);
+        assert_eq!(m.iso, None);
+        assert_eq!(m.lens_model, None);
+        assert_eq!(m.capture_time, None);
+        assert_eq!(m.width, Some(4816));
+        assert_eq!(m.exposure_time, Some(8.0));
+    }
+
+    #[test]
+    fn rw2_raw_iso_requires_the_recorded_unsigned_field_types() {
+        for with_jpg in [false, true] {
+            for (iso16, iso32, want) in [
+                (Value::Undefined(vec![98]), Value::Long(vec![250]), Some(250)),
+                (Value::Byte(vec![98]), Value::Long(vec![250]), Some(250)),
+                (Value::SLong(vec![-1]), Value::Long(vec![250]), Some(250)),
+                (Value::Long(vec![98]), Value::Long(vec![250]), Some(250)),
+                (Value::Short(vec![0]), Value::Undefined(vec![98]), None),
+                (Value::Short(vec![0]), Value::Short(vec![98]), None),
+            ] {
+                let mut ifd0 = IfdBuilder::new();
+                ifd0.set(t::MAKE, Value::Ascii("Panasonic".into()));
+                ifd0.set(PANASONIC_ISO, iso16);
+                ifd0.set(PANASONIC_ISO_32, iso32);
+                if with_jpg {
+                    ifd0.set(PANASONIC_JPG_FROM_RAW, Value::Undefined(vec![0xff, 0xd8, 0xff, 0xd9]));
+                }
+                let mut bytes = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
+                bytes[2..4].copy_from_slice(&0x55u16.to_le_bytes());
+                assert_eq!(read_exif(&bytes).iso, want);
+            }
+        }
+    }
+
+    #[test]
+    fn rw2_saturated_exif_iso_uses_real_measurements() {
+        let inner = |iso| {
+            let mut e = IfdBuilder::new();
+            e.set(t::ISO_SPEED, Value::Short(vec![iso]));
+            e
+        };
+        assert_eq!(read_exif(&rw2_with_options(Some(inner(160)), Some(200), None, true, Some(u16::MAX))).iso, Some(160));
+        assert_eq!(read_exif(&rw2_with_options(Some(inner(u16::MAX)), Some(u16::MAX), Some(102400), true, Some(u16::MAX))).iso, Some(102400));
+        assert_eq!(read_exif(&rw2_with_options(Some(inner(160)), Some(200), None, true, Some(100))).iso, Some(100));
+        assert_eq!(read_exif(&rw2_with_options(None, None, None, false, Some(u16::MAX))).iso, None);
+    }
+
+    #[test]
+    fn rw2_extended_exif_iso_65535_is_a_measurement_not_an_overflow_marker() {
+        for tag in [t::RECOMMENDED_EXPOSURE_INDEX, t::ISO_SPEED_RATINGS_EXT] {
+            let mut inner = IfdBuilder::new();
+            inner.set(t::ISO_SPEED, Value::Short(vec![u16::MAX]));
+            inner.set(tag, Value::Long(vec![65535]));
+            assert_eq!(read_exif(&rw2_with_options(Some(inner), Some(200), None, true, None)).iso, Some(65535));
+            let bytes = rw2_with_options(None, Some(200), None, false, Some(u16::MAX));
+            let mut tiff = Tiff::parse(&bytes).unwrap();
+            tiff.ifds[0].exif.as_mut().unwrap().entries.push(craft_tiff::Entry { tag, value: Value::Long(vec![65535]), offset: 0 });
+            tiff.ifds[0].exif.as_mut().unwrap().entries.sort_by_key(|e| e.tag);
+            let mut m = from_tiff(&tiff);
+            fill_from_panasonic_raw(&mut m, &bytes, &tiff, &ParseOptions::default());
+            assert_eq!(m.iso, Some(65535));
+        }
+    }
+
+    /// An extended ISO tag holding 0 states nothing: the next one still answers, for the 65535 marker too.
+    #[test]
+    fn rw2_zero_recommended_exposure_index_does_not_hide_the_extended_iso() {
+        let inner = |ext: Option<u32>| {
+            let mut e = IfdBuilder::new();
+            e.set(t::ISO_SPEED, Value::Short(vec![u16::MAX]));
+            e.set(t::RECOMMENDED_EXPOSURE_INDEX, Value::Long(vec![0]));
+            if let Some(v) = ext {
+                e.set(t::ISO_SPEED_RATINGS_EXT, Value::Long(vec![v]));
+            }
+            e
+        };
+        assert_eq!(read_exif(&rw2_with_options(Some(inner(Some(102400))), Some(200), None, true, None)).iso, Some(102400));
+        assert_eq!(read_exif(&rw2_with_options(Some(inner(Some(65535))), Some(200), None, true, None)).iso, Some(65535));
+        // nothing else states one: 65535 is still the short field's overflow marker
+        assert_eq!(read_exif(&rw2_with_options(Some(inner(None)), Some(200), None, true, None)).iso, Some(200));
+    }
+
+    /// 65535 marks an overflow only in the SHORT form of ISOSpeedRatings: a LONG can hold the value itself.
+    #[test]
+    fn rw2_long_iso_65535_is_a_measurement_not_an_overflow_marker() {
+        let mut inner = IfdBuilder::new();
+        inner.set(t::ISO_SPEED, Value::Long(vec![65535]));
+        assert_eq!(read_exif(&rw2_with_options(Some(inner), Some(200), None, true, None)).iso, Some(65535));
+        // the raw's own Exif IFD
+        let bytes = rw2_with_options(None, Some(200), None, false, Some(u16::MAX));
+        let mut tiff = Tiff::parse(&bytes).unwrap();
+        let exif = tiff.ifds[0].exif.as_mut().unwrap();
+        exif.entries.iter_mut().find(|e| e.tag == t::ISO_SPEED).unwrap().value = Value::Long(vec![65535]);
+        let mut m = from_tiff(&tiff);
+        fill_from_panasonic_raw(&mut m, &bytes, &tiff, &ParseOptions::default());
+        assert_eq!(m.iso, Some(65535));
+        // the same short value is still the marker
+        assert_eq!(read_exif(&rw2_with_options(None, Some(200), None, false, Some(u16::MAX))).iso, Some(200));
+    }
+
+    #[test]
+    fn rw2_embedded_exif_respects_caller_parse_options() {
+        let mut inner = IfdBuilder::new();
+        inner.set(t::ISO_SPEED, Value::Short(vec![160]));
+        let bytes = rw2_with(Some(inner), None);
+        assert_eq!(try_read_exif(&bytes).unwrap().iso, Some(160));
+        let opts = ParseOptions { follow_children: false, ..Default::default() };
+        assert_eq!(try_read_exif_with(&bytes, &opts).unwrap().iso, None);
+        assert_eq!(try_read_exif_with(&panasonic_rw2("LUMIX S 85/F1.8"), &opts).unwrap().lens_model, None);
+    }
+
+    #[test]
+    fn rw2_damaged_jpg_keeps_raw_metadata_and_iso_fallback() {
+        let mut inner = IfdBuilder::new();
+        inner.set(t::ISO_SPEED, Value::Short(vec![160]));
+        let complete = rw2_with(Some(inner), Some(200));
+        let parsed = Tiff::parse(&complete).unwrap();
+        let jpg = parsed.ifds[0].bytes(PANASONIC_JPG_FROM_RAW).unwrap();
+        // Truncation can retain readable Exif; otherwise the private raw ISO is used.
+        let mut damaged: Vec<&[u8]> = (0..jpg.len()).map(|end| &jpg[..end]).collect();
+        damaged.push(b"not a JPEG");
+        for payload in damaged {
+            let mut raw = IfdBuilder::new();
+            raw.set(t::MAKE, Value::Ascii("Panasonic".into()));
+            raw.set(t::IMAGE_WIDTH, Value::Long(vec![4816]));
+            raw.set(PANASONIC_ISO, Value::Short(vec![200]));
+            raw.set(PANASONIC_JPG_FROM_RAW, Value::Undefined(payload.to_vec()));
+            let mut bytes = TiffWriter::new(ByteOrder::Little, false).write(&[raw]).unwrap();
+            bytes[2..4].copy_from_slice(&0x55u16.to_le_bytes());
+            let m = try_read_exif(&bytes).unwrap();
+            assert!(matches!(m.iso, Some(160 | 200)), "payload length {}: {:?}", payload.len(), m.iso);
+            if payload.len() < 12 || !payload.starts_with(&[0xff, 0xd8]) {
+                assert_eq!(m.iso, Some(200));
+            }
+            assert_eq!(m.width, Some(4816));
+        }
+    }
+
+    #[test]
+    fn rw2_fills_missing_exif_from_its_jpg_from_raw() {
+        let mut inner = IfdBuilder::new();
+        inner.set(t::ISO_SPEED, Value::Short(vec![160]));
+        inner.set(t::EXPOSURE_TIME, Value::Rational(vec![(1, 60)]));
+        inner.set(t::PIXEL_X_DIMENSION, Value::Long(vec![1920]));
+        inner.set(t::LENS_MODEL, Value::Ascii("Preview lens".into()));
+        inner.set(t::DATE_TIME_ORIGINAL, Value::Ascii("2020:01:02 03:04:05".into()));
+        let m = read_exif(&rw2_with(Some(inner), Some(200)));
+        assert_eq!(m.iso, Some(160), "the JpgFromRaw's ISOSpeedRatings");
+        assert_eq!(m.exposure_time, Some(8.0), "the raw's own Exif wins");
+        assert_eq!(m.width, Some(4816), "the raw's size, not the preview's");
+        assert_eq!(m.lens_model.as_deref(), Some("Preview lens"));
+        assert!(m.capture_time.is_some());
+    }
+
+    #[test]
+    fn rw2_embedded_standard_lens_wins_over_its_maker_note() {
+        let mut app1 = b"Exif\0\0".to_vec();
+        app1.extend(panasonic_exif(ByteOrder::Little, Some("Maker lens"), Some("Standard lens")));
+        let mut jpg = vec![0xff, 0xd8, 0xff, 0xe1];
+        jpg.extend_from_slice(&((app1.len() + 2) as u16).to_be_bytes());
+        jpg.extend(app1);
+        jpg.extend_from_slice(&[0xff, 0xd9]);
+        let mut raw = IfdBuilder::new();
+        raw.set(PANASONIC_JPG_FROM_RAW, Value::Undefined(jpg));
+        let mut bytes = TiffWriter::new(ByteOrder::Little, false).write(&[raw]).unwrap();
+        bytes[2..4].copy_from_slice(&0x55u16.to_le_bytes());
+        assert_eq!(read_exif(&bytes).lens_model.as_deref(), Some("Standard lens"));
+    }
+
+    #[test]
+    fn rw2_raw_lens_and_date_win_over_embedded_exif() {
+        let mut inner = IfdBuilder::new();
+        inner.set(t::LENS_MODEL, Value::Ascii("Preview lens".into()));
+        inner.set(t::DATE_TIME_ORIGINAL, Value::Ascii("2020:01:02 03:04:05".into()));
+        let with_preview = rw2_with(Some(inner), None);
+        let preview = Tiff::parse(&with_preview).unwrap();
+        let mut raw_exif = IfdBuilder::new();
+        raw_exif.set(t::LENS_MODEL, Value::Ascii("Raw lens".into()));
+        raw_exif.set(t::DATE_TIME_ORIGINAL, Value::Ascii("2021:02:03 04:05:06".into()));
+        let mut raw = IfdBuilder::new();
+        raw.set(PANASONIC_JPG_FROM_RAW, Value::Undefined(preview.ifds[0].bytes(PANASONIC_JPG_FROM_RAW).unwrap().to_vec()));
+        raw.set_child(t::EXIF_IFD, raw_exif);
+        let mut bytes = TiffWriter::new(ByteOrder::Little, false).write(&[raw]).unwrap();
+        bytes[2..4].copy_from_slice(&0x55u16.to_le_bytes());
+        let m = read_exif(&bytes);
+        assert_eq!(m.lens_model.as_deref(), Some("Raw lens"));
+        assert!(m.capture_time.is_some());
+        assert_eq!(m.capture_time, from_tiff(&Tiff::parse(&bytes).unwrap()).capture_time);
+        assert_ne!(m.capture_time, read_exif(&with_preview).capture_time);
+    }
+
+    #[test]
+    fn rw2_falls_back_to_the_panasonic_raw_iso() {
+        assert_eq!(read_exif(&rw2_with(None, Some(200))).iso, Some(200));
+        assert_eq!(read_exif(&rw2_with(Some(IfdBuilder::new()), Some(200))).iso, Some(200));
+        assert_eq!(read_exif(&rw2_with(None, None)).iso, None);
     }
 
     /// Canon maker note tags: `0x0095` holds the lens name as ASCII; `0x0001` is CameraSettings, a table of
