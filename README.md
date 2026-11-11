@@ -150,10 +150,11 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   (`isobmff`), Matroska/WebM (`matroska`) and MXF (`mxf`) demuxers and muxers, Ogg (`ogg`) and AVI (`avi`) demuxers, from
   FilmCraft, and an ISO BMFF box reader. Containers only; codecs are in `craft-audio`, and
   video codecs will go in a separate crate.
-- [`craft-lottie`](crates/lottie/README.md): Lottie (Bodymovin) JSON, the wire layer: the document
-  header, animatable properties and keyframes (legacy end values, hold keys, spatial tangents),
-  ease tangents to and from speed and influence, bezier paths, gradients and embedded image data
-  URIs. From EffectCraft; mapping layers and shapes onto a document stays in the app.
+- [`craft-lottie`](crates/lottie/README.md): Lottie (Bodymovin) JSON: the document model of
+  lottie-spec 1.0 (animation, assets, layers by type, shape items, masks, effects, text, markers)
+  with a bounded reader and a writer that keep what they do not know, and the encodings of its
+  values (keyframes, ease tangents, bezier paths, gradients, data URIs). From EffectCraft; mapping
+  onto an app's document stays in the app.
 - [`craft-menu`](crates/menu/README.md): an app's menus as a macOS menu bar: the Mac layout
   (app menu, Window, Help, system-key clashes), a platform backend trait, and key equivalents
   fed back to egui as the input egui-winit would have made. Commands and their enabled state
