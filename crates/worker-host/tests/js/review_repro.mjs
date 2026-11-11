@@ -293,8 +293,12 @@ test('M1 (serialized): an older queued flush is superseded by newer bytes before
   g.calls[0].fail('quota'); // the first flush fails; 'doc' stays queued, already carrying v2's bytes
   await tick();
   assert.equal(g.calls.length, 2, 'the second flush must start once the first settles, even by failing');
+  // `g.calls[1].pending` is an array from the vm context's own realm: build a plain outer-realm
+  // array from it (via the OUTER Array.from) rather than `.map()`, which inherits the vm
+  // realm's Array constructor and would fail deepEqual's cross-realm prototype check even when
+  // the contents already match.
   assert.deepEqual(
-    g.calls[1].pending.map((e) => e.bytes),
+    Array.from(g.calls[1].pending, (e) => e.bytes),
     ['v2'],
     'the second flush must see the current bytes, never the stale snapshot the first flush captured',
   );
@@ -418,20 +422,20 @@ test('sanitizeAppSegment: distinct app ids never collapse to the same OPFS root 
 });
 
 test('OPFS: storage_delete removes a previously-written file via opfs-flush.js', async () => {
-  const { ctx, root } = bootOpfs({ appId: 'collab-photo' });
-  await ctx.craftRuntimeFlushPending({ pending: [{ key: 'docs/a.bin', bytes: [1, 2, 3], deleted: false }], app_id: 'collab-photo' });
-  const appDir = root.dirs.get('collab-photo');
+  const { ctx, root } = bootOpfs({ appId: 'collabphoto' });
+  await ctx.craftRuntimeFlushPending({ pending: [{ key: 'docs/a.bin', bytes: [1, 2, 3], deleted: false }], app_id: 'collabphoto' });
+  const appDir = root.dirs.get('collabphoto');
   const docsDir = appDir.dirs.get('store').dirs.get('v1').dirs.get('docs');
   assert.ok(docsDir.files.has('a.bin'), 'the file must exist before the delete');
 
-  const result = await ctx.craftRuntimeFlushPending({ pending: [{ key: 'docs/a.bin', bytes: [], deleted: true }], app_id: 'collab-photo' });
+  const result = await ctx.craftRuntimeFlushPending({ pending: [{ key: 'docs/a.bin', bytes: [], deleted: true }], app_id: 'collabphoto' });
   assert.equal(result.pending_count, 1);
   assert.ok(!docsDir.files.has('a.bin'), 'a deleted key must remove its warm-tier file');
 });
 
 test('OPFS: deleting a key that was never written is a no-op, not an error', async () => {
-  const { ctx } = bootOpfs({ appId: 'collab-photo' });
-  const result = await ctx.craftRuntimeFlushPending({ pending: [{ key: 'docs/never-existed.bin', bytes: [], deleted: true }], app_id: 'collab-photo' });
+  const { ctx } = bootOpfs({ appId: 'collabphoto' });
+  const result = await ctx.craftRuntimeFlushPending({ pending: [{ key: 'docs/never-existed.bin', bytes: [], deleted: true }], app_id: 'collabphoto' });
   assert.equal(result.pending_count, 1);
 });
 
