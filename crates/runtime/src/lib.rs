@@ -2,6 +2,8 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(feature = "cloud-delegate")]
+mod cloud;
 mod flush;
 mod gpu;
 mod runtime;
@@ -12,9 +14,11 @@ mod tests;
 pub use craft_gpu::{DeviceCaps, GpuContext, GpuFault, GpuJob, GpuJobOutcome, GpuProvider, HandleId, ProviderRegistry, WorkerKind};
 pub use craft_gpu_null::NullContext;
 pub use craft_gpu_providers::{NoopProvider, register_all, register_all_into};
-pub use craft_tier_store::{DefaultTierPolicy, KeyClass, MirrorStore, PendingWrite, StoreKey, TierPolicy, VersionedMirror};
+pub use craft_tier_store::{DefaultTierPolicy, HydrationGuard, KeyClass, MirrorStore, PendingWrite, StoreKey, TierPolicy, VersionedMirror};
 pub use craft_worker_host::{HostMessage, PendingFlushEntry, WorkerMessage};
 
+#[cfg(feature = "cloud-delegate")]
+pub use cloud::{CloudFetchDelegate, CloudFetchFault, hydrate_whole_file_fallback};
 #[cfg(feature = "cloud-delegate")]
 pub use craft_tier_store::CloudBlobRef;
 
