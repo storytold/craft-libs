@@ -75,6 +75,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   lookup with fallback (`pt-br` → `pt` → English), plurals, language names, the system locale and
   a pseudo locale. The catalogs stay a fully optional build input; apps keep `tl!` and their
   language setting.
+- [`craft-tiff`](crates/tiff/README.md): TIFF and BigTIFF IFD reader and writer, from LightCraft:
+  every field type, the IFD chain, SubIFDs and Exif/GPS/Interop pointer IFDs, maker-note IFDs
+  (Canon, Nikon, Sony, Fujifilm, Olympus, Panasonic, Pentax), strip and tile layout. Bounded and
+  panic-free on hostile input. Pixel decompression stays with the callers.
 - [`craft-jpeg`](crates/jpeg/README.md): clean-room decoder for 12-bit and arithmetic-coded
   JPEG (T.81 SOF0/SOF1 at 12 bits, SOF9, SOF10), from PhotoCraft, and a frame probe for routing.
   Metadata stays in each app.
