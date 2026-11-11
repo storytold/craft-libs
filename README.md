@@ -130,6 +130,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-jpeg`](crates/jpeg/README.md): clean-room decoder for 12-bit and arithmetic-coded
   JPEG (T.81 SOF0/SOF1 at 12 bits, SOF9, SOF10), from PhotoCraft, and a frame probe for routing.
   Metadata stays in each app.
+- [`craft-kiwi`](crates/kiwi/README.md): clean-room decoder and encoder for the kiwi binary schema
+  format (the encoding inside `.fig` files): a schema of enums, structs and messages, and messages
+  decoded with it into a tree keyed by field name. Bounded on hostile input. Carved from FigCraft.
 - [`craft-keymap`](crates/keymap/README.md): keyboard bindings: chords and their text forms,
   scopes, conflicts, user overrides stored through craft-settings and import of other
   applications' shortcut sets. Command catalogs, file readers and the shortcut editor UI stay
