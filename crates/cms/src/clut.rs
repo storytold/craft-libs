@@ -350,4 +350,18 @@ mod tests {
         narrow.eval_multilinear(&[0.3, 0.7], &mut b).unwrap();
         assert!((a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6, "{a:?} {b:?}");
     }
+
+    #[test]
+    fn degenerate_dimensions_do_not_change_the_result() {
+        // Axes 1 and 3 have a single grid point (degenerate); axes 0, 2, 4 vary. Interpolating
+        // over the effective dimensions only gives the same answer as the function sampled.
+        let f = |p: &[f32], o: &mut [f32]| o[0] = 0.25 * p[0] + 0.5 * p[2] + 0.125 * p[4];
+        let c = Clut::sample(vec![3, 1, 4, 1, 5], 1, f).unwrap();
+        let mut got = [0.0];
+        for p in [[0.2f32, 0.0, 0.7, 0.0, 0.4], [1.0, 0.0, 0.0, 0.0, 1.0], [0.5, 0.0, 0.5, 0.0, 0.5]] {
+            c.eval_multilinear(&p, &mut got).unwrap();
+            let want = 0.25 * p[0] + 0.5 * p[2] + 0.125 * p[4];
+            assert!((got[0] - want).abs() < 1e-5, "got {} want {want}", got[0]);
+        }
+    }
 }

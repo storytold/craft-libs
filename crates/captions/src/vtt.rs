@@ -52,7 +52,53 @@ pub fn split_voice(text: &str) -> (Option<String>, String) {
 /// as a timing line to anything scanning the block, so it is written `--&gt;`. Other entities
 /// (`&amp;`, `&lt;`, …) are cue markup and stay verbatim, as `parse` has always kept them.
 fn unescape_text(text: &str) -> String {
-    text.replace("--&gt;", "-->")
+    rewrite_arrows(text, false)
+}
+
+/// Apply [`write`]'s cue-text escape. `-->` becomes `--&gt;`, and a literal `--&gt;` (or the same
+/// with more `&amp;` in front of `gt;`) gains one `&amp;`, so the escape is reversible.
+fn escape_text(text: &str) -> String {
+    rewrite_arrows(text, true)
+}
+
+/// Treat `--&` + `amp;`×k + `gt;` as level k, and `-->` as level -1. Escaping raises the level by
+/// one, unescaping lowers it by one; anything else is copied unchanged.
+fn rewrite_arrows(text: &str, escape: bool) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        if let Some(after) = rest.strip_prefix("--") {
+            if escape && after.starts_with('>') {
+                out.push_str("--&gt;");
+                rest = &after[1..];
+                continue;
+            }
+            let mut tail = after.strip_prefix('&').unwrap_or("\0");
+            let mut k = 0usize;
+            while let Some(t) = tail.strip_prefix("amp;") {
+                tail = t;
+                k += 1;
+            }
+            if let Some(t) = tail.strip_prefix("gt;") {
+                if escape {
+                    out.push_str("--&");
+                    out.push_str(&"amp;".repeat(k + 1));
+                    out.push_str("gt;");
+                } else if k == 0 {
+                    out.push_str("-->");
+                } else {
+                    out.push_str("--&");
+                    out.push_str(&"amp;".repeat(k - 1));
+                    out.push_str("gt;");
+                }
+                rest = t;
+                continue;
+            }
+        }
+        out.push(c);
+        rest = &rest[c.len_utf8()..];
+    }
+    out
 }
 
 pub fn parse(text: &str) -> Result<Document> {
@@ -142,11 +188,15 @@ pub fn write(doc: &Document) -> String {
         out.push('\n');
         let mut text = String::new();
         if let Some(s) = c.speaker.as_deref().filter(|s| !s.is_empty()) {
-            text.push_str(&format!("<v {s}>"));
+            // `>` would end the voice tag early and spill the rest of the name into the cue text, so it
+            // is written as the lookalike `›` (U+203A), and a line break as a space. A name ending
+            // in `-` gets a space before the closing `>`, so the two never read as an arrow.
+            let name = s.replace('>', "\u{203a}").replace(['\r', '\n'], " ");
+            text.push_str(&format!("<v {name}{}>", if name.ends_with('-') { " " } else { "" }));
         }
         text.push_str(&c.text);
         for l in text.lines().filter(|l| !l.trim().is_empty()) {
-            out.push_str(&l.replace("-->", "--&gt;"));
+            out.push_str(&escape_text(l));
             out.push('\n');
         }
         out.push('\n');
@@ -194,6 +244,19 @@ mod tests {
         let w = write(&d);
         assert!(w.starts_with("WEBVTT\n\nSTYLE\n::cue { color: yellow }\n\nNOTE a comment\nspanning lines\n\nintro\n00:00:01.000 --> 00:00:03.500 line:90% align:start\n<v Ann Smith>Hello there\n"));
         assert_eq!(parse(&w).unwrap().cues, d.cues);
+    }
+
+    #[test]
+    fn speaker_with_gt_keeps_cue_text_intact() {
+        for (name, back_name) in [("A > B", "A \u{203a} B"), ("Tom &amp; Jerry", "Tom &amp; Jerry"), ("A > --", "A \u{203a} --"), ("A\nB", "A B")] {
+            let mut doc = Document::default();
+            doc.cues.push(Cue { start: Tick(0), end: Tick(TICKS_PER_MS), text: "Hi".into(), speaker: Some(name.into()), ..Default::default() });
+            let written = write(&doc);
+            assert!(!written.contains("--&gt;"), "the voice tag keeps its own `>`: {written}");
+            let back = parse(&written).unwrap();
+            assert_eq!(back.cues[0].speaker.as_deref(), Some(back_name));
+            assert_eq!(back.cues[0].text, "Hi");
+        }
     }
 
     #[test]
@@ -265,6 +328,17 @@ mod tests {
         assert_eq!(back.cues.len(), 1);
         assert_eq!(back.cues[0].text, "A --> B", "the parser decodes the writer's escape");
         assert_eq!(write(&back), w, "stable from there on");
+    }
+
+    /// A literal `--&gt;` in cue text must not turn into `-->` on a round trip.
+    #[test]
+    fn a_literal_escaped_arrow_survives_a_round_trip() {
+        for text in ["a --&gt; b", "a --> b", "--&amp;gt;", "---&gt;-->", "x --&amp;amp;gt; y"] {
+            let mut d = Document::default();
+            d.cues.push(Cue { start: Tick(0), end: Tick(1000 * TICKS_PER_MS), text: text.into(), ..Cue::default() });
+            let back = parse(&write(&d)).unwrap();
+            assert_eq!(back.cues[0].text, text);
+        }
     }
 
     /// Only the writer's own `-->` escape is reversed: cue markup keeps its entities verbatim,
