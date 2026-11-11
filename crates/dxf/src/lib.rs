@@ -7,7 +7,6 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
-use std::fmt::Write as _;
 use std::io::Write as _;
 
 mod version;
@@ -52,6 +51,10 @@ impl Value {
             Value::Bool(b) => i64::from(*b).to_string(),
         }
     }
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "DXF numeric accessors intentionally convert integer values to f64, accepting precision loss beyond 2^53."
+    )]
     pub fn as_f64(&self) -> f64 {
         match self {
             Value::Real(r) if r.is_finite() => *r,
@@ -61,6 +64,7 @@ impl Value {
             _ => 0.0,
         }
     }
+    #[expect(clippy::cast_possible_truncation, reason = "DXF numeric accessors intentionally truncate finite real values to i64.")]
     pub fn as_i64(&self) -> i64 {
         match self {
             Value::Int(i) => *i,
@@ -96,6 +100,13 @@ impl Tag {
     pub fn str(&self) -> String {
         self.value.as_str()
     }
+    /// The value when it is text, without a copy.
+    pub fn str_ref(&self) -> Option<&str> {
+        match &self.value {
+            Value::Str(s) | Value::Hex(s) => Some(s),
+            _ => None,
+        }
+    }
     pub fn f64(&self) -> f64 {
         self.value.as_f64()
     }
@@ -118,46 +129,21 @@ pub enum Kind {
 
 pub fn kind_of(code: i32) -> Kind {
     match code {
-        0..=9 => Kind::Str,
-        10..=59 => Kind::Real,
-        60..=79 => Kind::Int16,
-        90..=99 => Kind::Int32,
-        100..=109 => Kind::Str,
-        110..=149 => Kind::Real,
+        10..=59 | 110..=149 | 210..=239 | 460..=469 | 1010..=1059 => Kind::Real,
+        60..=79 | 170..=179 | 270..=289 | 370..=389 | 400..=409 | 1060..=1070 => Kind::Int16,
+        90..=99 | 420..=429 | 440..=449 | 450..=459 | 1071 => Kind::Int32,
         160..=169 => Kind::Int64,
-        170..=179 => Kind::Int16,
-        210..=239 => Kind::Real,
-        270..=289 => Kind::Int16,
         290..=299 => Kind::Bool,
-        300..=309 => Kind::Str,
-        310..=319 => Kind::Hex,
-        320..=369 => Kind::Str,
-        370..=389 => Kind::Int16,
-        390..=399 => Kind::Str,
-        400..=409 => Kind::Int16,
-        410..=419 => Kind::Str,
-        420..=429 => Kind::Int32,
-        430..=439 => Kind::Str,
-        440..=449 => Kind::Int32,
-        450..=459 => Kind::Int32,
-        460..=469 => Kind::Real,
-        470..=479 => Kind::Str,
-        480..=481 => Kind::Str,
-        999 => Kind::Str,
-        1000..=1003 => Kind::Str,
-        1004 => Kind::Hex,
-        1005..=1009 => Kind::Str,
-        1010..=1059 => Kind::Real,
-        1060..=1070 => Kind::Int16,
-        1071 => Kind::Int32,
+        310..=319 | 1004 => Kind::Hex,
         _ => Kind::Str,
     }
 }
 
+#[expect(clippy::cast_possible_truncation, reason = "DXF numeric parsing intentionally truncates finite real values to i64.")]
 fn typed(code: i32, text: &str) -> Value {
     let t = text.trim();
     match kind_of(code) {
-        Kind::Real => t.parse::<f64>().ok().filter(|v| v.is_finite()).map(Value::Real).unwrap_or(Value::Real(0.0)),
+        Kind::Real => t.parse::<f64>().ok().filter(|v| v.is_finite()).map_or(Value::Real(0.0), Value::Real),
         Kind::Int16 | Kind::Int32 | Kind::Int64 => {
             // A float spelling ("1e3", "12.0") is accepted when finite, clamped to what the
             // group's width holds, signed or unsigned (files write 16-bit flags up to 65535, as
@@ -168,8 +154,7 @@ fn typed(code: i32, text: &str) -> Value {
                 _ => (i64::MIN, i64::MAX),
             };
             t.parse::<i64>()
-                .map(Value::Int)
-                .unwrap_or_else(|_| Value::Int(t.parse::<f64>().ok().filter(|f| f.is_finite()).map_or(0, |f| (f as i64).clamp(lo, hi))))
+                .map_or_else(|_| Value::Int(t.parse::<f64>().ok().filter(|f| f.is_finite()).map_or(0, |f| (f as i64).clamp(lo, hi))), Value::Int)
         }
         Kind::Bool => Value::Bool(t.parse::<i64>().unwrap_or(0) != 0),
         Kind::Hex => Value::Hex(normalize_hex(t)),
@@ -201,8 +186,15 @@ fn max_tags_from(v: Option<&str>) -> usize {
 
 mod codepage;
 pub use codepage::decode_code_page;
+mod dos_tables;
 
 /// Parse a DXF file (ASCII or binary).
+///
+/// # Errors
+///
+/// Returns an error for empty input, an invalid group code, an incomplete group-code/value pair,
+/// truncated binary data, or more than [`MAX_TAGS`] group codes. For ASCII input, invalid numeric
+/// text becomes `0.0` for real values or `0` for integer values, and an EOF tag is not required.
 pub fn parse(bytes: &[u8]) -> Result<Vec<Tag>> {
     parse_with_limit(bytes, max_tags())
 }
@@ -210,6 +202,12 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Tag>> {
 /// [`parse`] with an explicit group-code limit. For ASCII DXF the limit is checked up front from
 /// the line count, before the text is decoded or any tag allocated, so an oversized file fails in
 /// milliseconds instead of after it has filled memory.
+///
+/// # Errors
+///
+/// Returns an error for empty input, an invalid group code, an incomplete group-code/value pair,
+/// truncated binary data, or more than `max_tags` group codes. For ASCII input, invalid numeric
+/// text becomes `0.0` for real values or `0` for integer values, and an EOF tag is not required.
 pub fn parse_with_limit(bytes: &[u8], max_tags: usize) -> Result<Vec<Tag>> {
     if let Some(body) = bytes.strip_prefix(BINARY_SENTINEL) {
         return parse_binary_with_limit(body, max_tags);
@@ -254,16 +252,13 @@ pub fn mif_escape_at(chars: &[char], i: usize) -> Option<char> {
     if chars.get(i) != Some(&'\\') || chars.get(i + 1) != Some(&'M') || chars.get(i + 2) != Some(&'+') {
         return None;
     }
-    let enc = codepage::mif_encoding(*chars.get(i + 3)?)?;
+    let n = *chars.get(i + 3)?;
     let hex = chars.get(i + 4..i + 8)?;
     if !hex.iter().all(char::is_ascii_hexdigit) {
         return None;
     }
     let code = hex.iter().try_fold(0u16, |acc, c| Some(acc * 16 + u16::try_from(c.to_digit(16)?).ok()?))?;
-    let bytes = code.to_be_bytes();
-    let text = enc.decode_without_bom_handling_and_without_replacement(&bytes)?;
-    let mut it = text.chars();
-    it.next().filter(|_| it.next().is_none())
+    codepage::mif_char(n, code.to_be_bytes())
 }
 
 /// Unescape the `\U+XXXX` sequences pre-R2007 DXF uses for characters outside the file's code
@@ -271,36 +266,68 @@ pub fn mif_escape_at(chars: &[char], i: usize) -> Option<char> {
 /// escapes), and the `\M+nXXXX` sequences for double-byte East Asian characters. Malformed
 /// escapes, unpaired surrogates and unknown `\M+` code pages are kept as literal text.
 fn unescape_unicode(s: &str) -> String {
-    if !s.contains("\\U+") && !s.contains("\\M+") {
+    if !has_escape(s) {
         return s.to_string();
     }
+    unescape_found(s)
+}
+
+/// [`unescape_unicode`] for a string the caller owns: without escapes (nearly always) it is
+/// returned as it is, with no copy.
+fn unescape_owned(s: String) -> String {
+    if has_escape(&s) { unescape_found(&s) } else { s }
+}
+
+fn has_escape(s: &str) -> bool {
+    s.contains("\\U+") || s.contains("\\M+")
+}
+
+/// The longest escape: a surrogate pair of two `\U+XXXX` (14 characters).
+const MAX_ESCAPE_CHARS: usize = 14;
+
+fn unescape_found(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
-    let chars: Vec<char> = s.chars().collect();
-    let mut i = 0;
-    while let Some(&c) = chars.get(i) {
-        if let Some(ch) = mif_escape_at(&chars, i) {
-            out.push(ch);
-            i += 8;
-            continue;
+    let mut rest = s;
+    // Everything up to the next backslash is copied as it is; an escape is looked for in a window
+    // of the next few characters only, so no copy of the whole string (4 bytes a character) is made.
+    while let Some(at) = rest.find('\\') {
+        let (plain, tail) = rest.split_at(at);
+        out.push_str(plain);
+        let mut buf = ['\0'; MAX_ESCAPE_CHARS];
+        let mut n = 0;
+        for (slot, c) in buf.iter_mut().zip(tail.chars()) {
+            *slot = c;
+            n += 1;
         }
-        if let Some(unit) = escape_at(&chars, i) {
+        let window = buf.get(..n).unwrap_or_default();
+        let (ch, used) = if let Some(ch) = mif_escape_at(window, 0) {
+            (Some(ch), 8)
+        } else if let Some(unit) = escape_at(window, 0) {
             if let Some(ch) = char::from_u32(unit) {
-                out.push(ch);
-                i += 7;
-                continue;
-            }
-            if (0xD800..0xDC00).contains(&unit)
-                && let Some(low) = escape_at(&chars, i + 7).filter(|u| (0xDC00..0xE000).contains(u))
-                && let Some(ch) = char::from_u32(0x10000 + ((unit - 0xD800) << 10) + (low - 0xDC00))
+                (Some(ch), 7)
+            } else if (0xD800..0xDC00).contains(&unit)
+                && let Some(low) = escape_at(window, 7).filter(|u| (0xDC00..0xE000).contains(u))
             {
+                (char::from_u32(0x10000 + ((unit - 0xD800) << 10) + (low - 0xDC00)), 14)
+            } else {
+                (None, 0)
+            }
+        } else {
+            (None, 0)
+        };
+        match ch {
+            Some(ch) => {
                 out.push(ch);
-                i += 14;
-                continue;
+                // Every escape character is ASCII, so `used` characters are `used` bytes.
+                rest = tail.get(used..).unwrap_or_default();
+            }
+            None => {
+                out.push('\\');
+                rest = tail.get(1..).unwrap_or_default();
             }
         }
-        out.push(c);
-        i += 1;
     }
+    out.push_str(rest);
     out
 }
 
@@ -337,6 +364,13 @@ fn byte_lines(mut rest: &[u8]) -> impl Iterator<Item = &[u8]> {
     })
 }
 
+/// Parse ASCII DXF text into typed tags.
+///
+/// # Errors
+///
+/// Returns an error for empty input, an invalid group code, an incomplete group-code/value pair,
+/// or too many tags. Invalid numeric text becomes `0.0` for real values or `0` for integer values.
+/// A complete tag stream does not require an EOF tag.
 pub fn parse_ascii(text: &str) -> Result<Vec<Tag>> {
     parse_ascii_counted(text, max_tags(), 0)
 }
@@ -358,16 +392,17 @@ fn parse_ascii_counted(text: &str, max_tags: usize, expected: usize) -> Result<V
         }
         let code: i32 = ct.parse().map_err(|_| DxfError::BadCode { line: ln + 1, text: ct.chars().take(40).collect() })?;
         let Some((_, val)) = lines.next() else { return Err(DxfError::Eof) };
-        let v = typed(code, val);
-        let v = match v {
-            Value::Str(s) => Value::Str(unescape_unicode(&s)),
+        let v = match typed(code, val) {
+            // Only text with a backslash can hold an escape; the rest moves in as it is.
+            Value::Str(s) => Value::Str(unescape_owned(s)),
             o => o,
         };
+        let eof = code == 0 && matches!(&v, Value::Str(s) if s.trim_end() == "EOF");
         tags.push(Tag { code, value: v });
         if tags.len() > max_tags {
             return Err(DxfError::TooLarge { tags: tags.len(), limit: max_tags });
         }
-        if code == 0 && tags.last().is_some_and(|t| t.str().trim_end() == "EOF") {
+        if eof {
             break;
         }
     }
@@ -414,22 +449,36 @@ impl<'a> Cur<'a> {
     }
     /// The bytes of a zero-terminated string (without the zero), decoded by the caller.
     fn cstr(&mut self) -> Result<&'a [u8]> {
-        let start = self.p;
-        while self.p < self.b.len() && self.b.get(self.p) != Some(&0) {
-            self.p += 1;
-        }
-        let s = self.b.get(start..self.p).unwrap_or(&[]);
-        if self.p >= self.b.len() {
-            return Err(DxfError::Eof);
-        }
-        self.p += 1;
-        Ok(s)
+        let rest = self.b.get(self.p..).unwrap_or(&[]);
+        let len = rest.iter().position(|&b| b == 0).ok_or(DxfError::Eof)?;
+        self.p += len + 1;
+        Ok(rest.get(..len).unwrap_or(&[]))
     }
 }
 
-/// Binary DXF (R13+: 2-byte group codes).
+const HEX_DIGITS: &[u8; 16] = b"0123456789ABCDEF";
+
+/// Binary DXF, the body after the sentinel: R13+ (2-byte group codes) or R12 and earlier (1-byte
+/// group codes, where 255 is followed by a 2-byte code).
+///
+/// # Errors
+///
+/// Returns an error for an empty or malformed file, an unexpected end of file, or too many tags.
 pub fn parse_binary(b: &[u8]) -> Result<Vec<Tag>> {
     parse_binary_with_limit(b, max_tags())
+}
+
+/// Whether a binary DXF body uses the pre-R13 layout with 1-byte group codes, told from its first
+/// tag: R13+ starts with a 2-byte code (`00 00` for the usual `0 SECTION`, `E7 03` for a 999
+/// comment), the old layout with a 1-byte `00` followed by the string's first character, or with
+/// the 255 escape and a code that needs it (255 to 1071; an R13+ file whose first group is code 255
+/// has the string's first character there instead).
+fn legacy_binary_layout(b: &[u8]) -> bool {
+    match b {
+        [0, next, ..] => *next != 0,
+        [255, lo, hi, ..] => (255..=1071).contains(&u16::from_le_bytes([*lo, *hi])),
+        _ => false,
+    }
 }
 
 fn parse_binary_with_limit(b: &[u8], max_tags: usize) -> Result<Vec<Tag>> {
@@ -447,11 +496,17 @@ fn parse_binary_with_limit(b: &[u8], max_tags: usize) -> Result<Vec<Tag>> {
 fn parse_binary_pass(b: &[u8], max_tags: usize, text: &mut codepage::BinaryText) -> Result<Vec<Tag>> {
     let mut c = Cur { b, p: 0 };
     let mut tags = Vec::new();
+    let legacy = legacy_binary_layout(b);
     while c.p < b.len() {
-        let mut code = i32::from(c.i16()?);
-        if code == 255 {
-            code = i32::from(c.i16()?);
-        }
+        // 255 escapes a 2-byte code only in the 1-byte layout; in R13+ it is an ordinary code.
+        let code = if legacy {
+            match c.u8()? {
+                255 => i32::from(c.i16()?),
+                x => i32::from(x),
+            }
+        } else {
+            i32::from(c.i16()?)
+        };
         let v = match kind_of(code) {
             Kind::Str => Value::Str(unescape_unicode(&text.string(code, c.cstr()?))),
             Kind::Real => Value::Real(Some(c.f64()?).filter(|v| v.is_finite()).unwrap_or(0.0)),
@@ -463,8 +518,9 @@ fn parse_binary_pass(b: &[u8], max_tags: usize, text: &mut codepage::BinaryText)
                 let n = usize::from(c.u8()?);
                 let bytes = c.take(n)?;
                 let mut s = String::with_capacity(n * 2);
-                for x in bytes {
-                    let _ = write!(s, "{x:02X}");
+                for &x in bytes {
+                    s.push(char::from(HEX_DIGITS[usize::from(x >> 4)]));
+                    s.push(char::from(HEX_DIGITS[usize::from(x & 15)]));
                 }
                 Value::Hex(s)
             }
@@ -489,8 +545,42 @@ pub fn format_real(v: f64) -> String {
     if !v.is_finite() {
         return "0.0".into();
     }
+    // Very large and very small values in exponent form, as AutoCAD writes them (`1.0E+20`):
+    // plain digits would run to hundreds of characters.
+    let a = v.abs();
+    if a != 0.0 && !(1e-10..1e16).contains(&a) {
+        let e = format!("{v:E}");
+        let (m, x) = e.split_once('E').unwrap_or((&e, "0"));
+        let x: i32 = x.parse().unwrap_or(0);
+        let m = if m.contains('.') { m.to_string() } else { format!("{m}.0") };
+        return format!("{m}E{}{:02}", if x < 0 { '-' } else { '+' }, x.abs());
+    }
     let s = format!("{v}");
     if s.contains('.') || s.contains('e') || s.contains("inf") || s.contains("NaN") { s } else { format!("{s}.0") }
+}
+
+/// Most characters one string group holds: longer text is split over several groups (MTEXT
+/// contents, field codes).
+pub const MAX_STRING_CHARS: usize = 250;
+
+/// `s` split into strings of at most [`MAX_STRING_CHARS`] characters, in order; none for an
+/// empty string.
+pub fn string_groups(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut n = 0;
+    for c in s.chars() {
+        if n == MAX_STRING_CHARS {
+            out.push(std::mem::take(&mut cur));
+            n = 0;
+        }
+        cur.push(c);
+        n += 1;
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
 }
 
 /// Write tags as ASCII DXF (CRLF line ends, codes right-aligned to 3 as is conventional).
@@ -513,16 +603,24 @@ pub fn write_ascii_as(tags: &[Tag], utf8: bool) -> String {
 /// Write tags as pre-R2007 ASCII DXF with text in the code page `code_page` names (a
 /// `$DWGCODEPAGE` value such as `ANSI_1252`), as the DXF Reference describes for those versions:
 /// a character the code page has is written as its bytes, any other as a `\U+XXXX` escape. A
-/// code page CADCraft doesn't know, `ASCII`, and `UTF8`/`UNICODE` (not a pre-2007 code page)
+/// code page this crate doesn't know, `ASCII`, and `UTF8`/`UNICODE` (not a pre-2007 code page)
 /// give [`write_ascii`]'s pure ASCII output. So does a file whose code page bytes happen to be
 /// valid UTF-8 (`СІ` in ANSI_1251 is D1 B2, U+0472), since readers, ours included, take an ASCII
 /// DXF that is valid UTF-8 as UTF-8.
 pub fn write_ascii_in(tags: &[Tag], code_page: &str) -> Vec<u8> {
-    let bytes = ascii(tags, Strings::Escaped(codepage::encoder(code_page)));
+    let bytes = write_ascii_in_page(tags, code_page);
     if !bytes.is_ascii() && std::str::from_utf8(&bytes).is_ok() {
         return ascii(tags, Strings::Escaped(None));
     }
     bytes
+}
+
+/// [`write_ascii_in`] without its fallback to pure ASCII: the text is in the code page even when
+/// its bytes happen to be valid UTF-8. For a reader that decodes a pre-2007 DXF by the
+/// `$DWGCODEPAGE` it declares and never guesses UTF-8, as the DWG bridge's acadrust does. A code
+/// page this crate doesn't know, `ASCII`, and `UTF8`/`UNICODE` still give pure ASCII.
+pub fn write_ascii_in_page(tags: &[Tag], code_page: &str) -> Vec<u8> {
+    ascii(tags, Strings::Escaped(codepage::encoder(code_page)))
 }
 
 /// How a writer stores string values.
@@ -694,6 +792,9 @@ fn push_string(s: &str, strings: Strings, out: &mut Vec<u8>) {
                 out.extend_from_slice(b"\\U+005C");
             }
             (c, Strings::Utf8) => out.extend_from_slice(c.encode_utf8(&mut [0; 4]).as_bytes()),
+            (c, Strings::Escaped(Some(d))) if d.shadows_ascii(c) => {
+                let _ = write!(out, "\\U+{:04X}", u32::from(c));
+            }
             (c, _) if c.is_ascii() => out.extend_from_slice(c.encode_utf8(&mut [0; 4]).as_bytes()),
             (c, Strings::Escaped(Some(d))) if code_page_bytes(c, d, escape_at(i + 1), out) => {}
             (c, Strings::Escaped(_)) => {
@@ -729,18 +830,32 @@ pub struct Section {
 
 /// Split a tag stream into sections.
 pub fn sections(tags: &[Tag]) -> Vec<Section> {
+    section_slices(tags).into_iter().map(|s| Section { name: s.name.to_string(), tags: s.tags.to_vec() }).collect()
+}
+
+/// A section borrowed from the tag stream it was split from: [`Section`] without the copy.
+#[derive(Clone, Copy, Debug)]
+pub struct SectionRef<'a> {
+    pub name: &'a str,
+    pub tags: &'a [Tag],
+}
+
+/// [`sections`] without copying the tags: each section is a slice of `tags`. A large file's tags
+/// take gigabytes (40 bytes a tag, 25 million tags in a 0.5 GB DXF), so a reader that holds the
+/// stream while it reads the sections should take them this way.
+pub fn section_slices(tags: &[Tag]) -> Vec<SectionRef<'_>> {
+    let is = |t: &Tag, word: &str| t.code == 0 && t.str_ref().is_some_and(|s| s.trim_end() == word);
     let mut out = Vec::new();
     let mut i = 0;
     while i < tags.len() {
-        let is_sec = tags.get(i).is_some_and(|t| t.code == 0 && t.str().trim_end() == "SECTION");
-        if is_sec {
-            let name = tags.get(i + 1).filter(|t| t.code == 2).map(|t| t.str().trim_end().to_string()).unwrap_or_default();
+        if tags.get(i).is_some_and(|t| is(t, "SECTION")) {
+            let name = tags.get(i + 1).filter(|t| t.code == 2).and_then(Tag::str_ref).unwrap_or_default().trim_end();
             let start = i + 2;
             let mut j = start;
-            while j < tags.len() && !(tags.get(j).is_some_and(|t| t.code == 0 && t.str().trim_end() == "ENDSEC")) {
+            while j < tags.len() && !tags.get(j).is_some_and(|t| is(t, "ENDSEC")) {
                 j += 1;
             }
-            out.push(Section { name, tags: tags.get(start..j).unwrap_or(&[]).to_vec() });
+            out.push(SectionRef { name, tags: tags.get(start..j).unwrap_or(&[]) });
             i = j + 1;
         } else {
             i += 1;
@@ -751,15 +866,20 @@ pub fn sections(tags: &[Tag]) -> Vec<Section> {
 
 /// Split a run of tags into records starting at each code-0 tag: (type, tags after the 0).
 pub fn records(tags: &[Tag]) -> Vec<(String, Vec<Tag>)> {
-    let mut out: Vec<(String, Vec<Tag>)> = Vec::new();
-    for t in tags {
-        if t.code == 0 {
-            out.push((t.str(), Vec::new()));
-        } else if let Some(last) = out.last_mut() {
-            last.1.push(t.clone());
-        }
-    }
-    out
+    record_slices(tags).into_iter().map(|(kind, tags)| (kind, tags.to_vec())).collect()
+}
+
+/// [`records`] without copying the tags: each record's tags are a slice of `tags`.
+pub fn record_slices(tags: &[Tag]) -> Vec<(String, &[Tag])> {
+    let starts: Vec<usize> = tags.iter().enumerate().filter(|(_, t)| t.code == 0).map(|(i, _)| i).collect();
+    starts
+        .iter()
+        .enumerate()
+        .map(|(n, &i)| {
+            let end = starts.get(n + 1).copied().unwrap_or(tags.len());
+            (tags.get(i).map(Tag::str).unwrap_or_default(), tags.get(i + 1..end).unwrap_or(&[]))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -828,6 +948,128 @@ mod tests {
         assert_eq!(tags[2], Tag::i(62, 5));
     }
 
+    /// A pre-R13 binary body: 1-byte group codes, 255 escaping a 2-byte code (1001 here).
+    fn r12_binary() -> Vec<u8> {
+        let mut b = BINARY_SENTINEL.to_vec();
+        let push_str = |b: &mut Vec<u8>, code: u8, s: &str| {
+            b.push(code);
+            b.extend_from_slice(s.as_bytes());
+            b.push(0);
+        };
+        push_str(&mut b, 0, "SECTION");
+        push_str(&mut b, 2, "ENTITIES");
+        push_str(&mut b, 0, "LINE");
+        push_str(&mut b, 8, "RAILROAD");
+        b.push(10);
+        b.extend_from_slice(&3.25f64.to_le_bytes());
+        b.push(62);
+        b.extend_from_slice(&5i16.to_le_bytes());
+        b.push(255);
+        b.extend_from_slice(&1001i16.to_le_bytes());
+        b.extend_from_slice(b"APP\0");
+        push_str(&mut b, 0, "ENDSEC");
+        push_str(&mut b, 0, "EOF");
+        b
+    }
+
+    #[test]
+    fn r12_binary_parse() {
+        let tags = parse(&r12_binary()).unwrap();
+        assert_eq!(tags[0], Tag::s(0, "SECTION"));
+        assert_eq!(tags[3], Tag::s(8, "RAILROAD"));
+        assert_eq!(tags[4], Tag::f(10, 3.25));
+        assert_eq!(tags[5], Tag::i(62, 5));
+        assert_eq!(tags[6], Tag::s(1001, "APP"));
+        assert_eq!(tags.last(), Some(&Tag::s(0, "EOF")));
+    }
+
+    #[test]
+    fn r13_binary_code_255_is_ordinary() {
+        let mut b = BINARY_SENTINEL.to_vec();
+        for (code, s) in [(0i16, "LINE"), (255, "x"), (0, "EOF")] {
+            b.extend_from_slice(&code.to_le_bytes());
+            b.extend_from_slice(s.as_bytes());
+            b.push(0);
+        }
+        let tags = parse(&b).unwrap();
+        assert_eq!(tags.get(1).map(|t| t.code), Some(255));
+        assert_eq!(tags.len(), 3);
+    }
+
+    #[test]
+    fn binary_layout_detection() {
+        assert!(legacy_binary_layout(b"\0SECTION\0"));
+        assert!(legacy_binary_layout(&[255, 0xE7, 0x03]));
+        assert!(!legacy_binary_layout(b"\0\0SECTION\0"));
+        assert!(!legacy_binary_layout(&[0xE7, 0x03, b'x', 0]));
+        assert!(!legacy_binary_layout(b""));
+        assert!(!legacy_binary_layout(&[0]));
+        // R13+ code 255 with the string "x": not the escape
+        assert!(!legacy_binary_layout(&[255, 0, b'x', 0]));
+        assert!(!legacy_binary_layout(&[255, 0xE7]));
+    }
+
+    #[test]
+    fn truncated_r12_binary_never_panics() {
+        let b = r12_binary();
+        for n in BINARY_SENTINEL.len()..b.len() {
+            let _ = parse(b.get(..n).unwrap_or(&[]));
+        }
+        let mut cut = BINARY_SENTINEL.to_vec();
+        cut.extend_from_slice(&[0, b'S', 0, 255, 0x10]);
+        assert!(parse(&cut).is_err());
+    }
+
+    #[test]
+    fn borrowed_sections_and_records_match_the_copies() {
+        let text = "999\nstray\n  0\nSECTION\n  2\nHEADER\n  9\n$ACADVER\n  1\nAC1015\n  0\nENDSEC\n  0\nSECTION\n  2\nENTITIES\n  5\n1A\n  0\nLINE\n  8\n0\n 10\n1.5\n  0\nCIRCLE\n 40\n2.0\n  0\nENDSEC\n  0\nEOF\n";
+        let tags = parse(text.as_bytes()).unwrap();
+        let (copies, slices) = (sections(&tags), section_slices(&tags));
+        assert_eq!(slices.iter().map(|s| s.name).collect::<Vec<_>>(), ["HEADER", "ENTITIES"]);
+        assert_eq!(copies.len(), slices.len());
+        for (c, s) in copies.iter().zip(&slices) {
+            assert_eq!(c.name, s.name);
+            assert_eq!(c.tags.as_slice(), s.tags);
+            let (rc, rs) = (records(&c.tags), record_slices(s.tags));
+            assert_eq!(rc.len(), rs.len());
+            for ((kc, tc), (ks, ts)) in rc.iter().zip(&rs) {
+                assert_eq!((kc, tc.as_slice()), (ks, *ts));
+            }
+        }
+        // Tags before the first record start none, as in `records`.
+        assert_eq!(record_slices(slices[1].tags).iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(), ["LINE", "CIRCLE"]);
+        assert_eq!(slices[1].tags[0].str_ref(), Some("1A"));
+        assert_eq!(Tag::f(10, 1.5).str_ref(), None);
+    }
+
+    #[test]
+    fn huge_and_tiny_reals_in_exponent_form() {
+        // Plain digits would run to hundreds of characters; the value reads back exactly.
+        assert_eq!(format_real(1e20), "1.0E+20");
+        assert_eq!(format_real(-2.5e-12), "-2.5E-12");
+        assert_eq!(format_real(0.5), "0.5");
+        assert_eq!(format_real(12.0), "12.0");
+        for v in [f64::MAX, -f64::MAX, 1e308, f64::MIN_POSITIVE, 5e-324, 1.2345678901234567e16] {
+            let s = format_real(v);
+            assert!(s.len() < 32, "{s}");
+            assert_eq!(s.parse::<f64>().ok(), Some(v), "{s}");
+            // and through the writer and the reader
+            let back = parse(write_ascii(&[Tag::f(10, v), Tag::s(0, "EOF")]).as_bytes()).unwrap();
+            assert_eq!(back[0], Tag::f(10, v));
+        }
+    }
+
+    #[test]
+    fn long_strings_split_into_250_character_groups() {
+        assert!(string_groups("").is_empty());
+        assert_eq!(string_groups("abc"), ["abc"]);
+        let s = "é".repeat(251);
+        let g = string_groups(&s);
+        assert_eq!(g.iter().map(|x| x.chars().count()).collect::<Vec<_>>(), [250, 1]);
+        assert_eq!(g.concat(), s);
+        assert_eq!(string_groups(&"x".repeat(500)).len(), 2);
+    }
+
     #[test]
     fn malformed_inputs() {
         assert!(parse(b"").is_err());
@@ -839,7 +1081,7 @@ mod tests {
         assert!(parse(&b).is_err());
         // Bad numbers become 0 rather than failing.
         let t = parse(b"10\nnotanumber\n0\nEOF\n").unwrap();
-        assert_eq!(t[0].f64(), 0.0);
+        assert!(t[0].f64().abs() < f64::EPSILON);
     }
 
     #[test]
