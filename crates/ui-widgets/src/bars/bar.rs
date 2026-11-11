@@ -73,12 +73,12 @@ impl Outcome for BarOutput {
 }
 
 /// A bar over a chrome surface whose body holds the members in reading order at the small control size. They are
-/// one roving group. The bar is as tall as its tallest member plus the control padding. A horizontal bar takes the
-/// width it is offered and no more height than that; a vertical bar sizes to its content. A bar of one row lays its
-/// body out as a row; a bar of several rows, or a vertical one, as a stack whose rows the caller makes with `Row`.
-/// The body scrolls along the row axis (along y for a vertical bar), so a member past the edge is reached by Tab
-/// and revealed. A bar with `commit_cancel` ends with a cancel and a commit button in its end region, outside the
-/// scroll; they run `BarCommands`.
+/// one roving group. The bar is as tall as its tallest member plus the control padding, and takes the width it is
+/// offered. A bar of one row lays its body out as a row; a bar of several rows as a stack whose rows the caller makes
+/// with `Row`. A row too long for the bar first narrows its selects and elidable text, then scrolls, so a member past
+/// the edge is reached by Tab and revealed. A rule between groups of members is a `Divider::vertical()`. A bar with
+/// `commit_cancel` ends with a cancel and a commit button in its end region, outside the scroll; they run
+/// `BarCommands`.
 #[derive(crate::contract::Component)]
 #[component(container)]
 pub struct Bar<'a> {
@@ -87,8 +87,6 @@ pub struct Bar<'a> {
     #[container]
     props: ContainerProps,
     kind: BarKind,
-    rows: NonZeroU8,
-    vertical: bool,
     commit_cancel: Option<(Label, Label)>,
     committed: bool,
     cancelled: bool,
@@ -116,32 +114,16 @@ impl<'a> Bar<'a> {
         if kind == BarKind::Status {
             props = props.live(Politeness::Polite);
         }
-        Bar {
-            common: Common::new(),
-            props,
-            kind,
-            rows: NonZeroU8::MIN,
-            vertical: false,
-            commit_cancel: None,
-            committed: false,
-            cancelled: false,
-            trailing: None,
-        }
-        .label(label)
+        Bar { common: Common::new(), props, kind, commit_cancel: None, committed: false, cancelled: false, trailing: None }.label(label)
     }
 
     /// Sets the number of rows the body holds.
     #[must_use]
     pub fn rows(mut self, rows: NonZeroU8) -> Self {
-        self.rows = rows;
-        self.lay_out()
-    }
-
-    /// Lays the body out along the vertical axis.
-    #[must_use]
-    pub fn vertical(mut self) -> Self {
-        self.vertical = true;
-        self.lay_out()
+        if rows.get() > 1 {
+            self.props = self.props.layout(BodyLayout::stack());
+        }
+        self
     }
 
     /// Ends the bar with a cancel and a commit button named `cancel` and `commit`. They run `BarCommands::Cancel`
@@ -154,18 +136,11 @@ impl<'a> Bar<'a> {
     }
 
     /// Ends the bar with a group of controls that stays at the reading end, outside the scroll, while the members
-    /// before it scroll. The group sits before the commit and cancel buttons.
+    /// before it scroll. The group sits after the cancel and commit buttons.
     #[must_use]
     pub fn trailing(mut self, group: impl FnMut(&mut Ui) + 'a) -> Self {
         self.trailing = Some(Box::new(group));
         self.props = self.props.end(EndRegion::new());
-        self
-    }
-
-    fn lay_out(mut self) -> Self {
-        let layout = if self.vertical || self.rows.get() > 1 { BodyLayout::stack() } else { BodyLayout::row() };
-        let scroll = if self.vertical { Scroll::vertical() } else { Scroll::horizontal() };
-        self.props = self.props.layout(layout).sizing(if self.vertical { Sizing::Content } else { Sizing::FillWidth }).scroll(scroll);
         self
     }
 }
@@ -227,13 +202,14 @@ impl Component for Bar<'_> {
 }
 
 impl Container for Bar<'_> {
-    /// The trailing group, then the cancel button and the commit button at the reading end.
+    /// The cancel button and the commit button, then the trailing group.
     fn end(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        if let Some((commit, cancel)) = &self.commit_cancel {
+            IconButton::command(IconId::new("ban"), BarCommands::Cancel).label(cancel.clone()).show(ui);
+            IconButton::command(IconId::new("check"), BarCommands::Commit).label(commit.clone()).show(ui);
+        }
         if let Some(group) = &mut self.trailing {
             group(ui);
         }
-        let Some((commit, cancel)) = &self.commit_cancel else { return };
-        IconButton::command(IconId::new("ban"), BarCommands::Cancel).label(cancel.clone()).show(ui);
-        IconButton::command(IconId::new("check"), BarCommands::Commit).label(commit.clone()).show(ui);
     }
 }

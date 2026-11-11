@@ -19,6 +19,8 @@ use crate::annotate::{AnnotationGroup, AnnotationKind, AnnotationTool};
 const WIDTH_RANGE: std::ops::RangeInclusive<f64> = 1.0..=12.0;
 /// The most decimals the width field shows.
 const WIDTH_DECIMALS: usize = 1;
+/// The bar's rows: the tools, then the colour and width.
+const TWO_ROWS: std::num::NonZeroU8 = std::num::NonZeroU8::MIN.saturating_add(1);
 
 /// What [`AnnotationToolbar::show`] reports.
 #[derive(Debug)]
@@ -68,29 +70,34 @@ impl<'a> AnnotationToolbar<'a> {
             .enumerate()
             .map(|(n, group)| ToolSlot::new(n as SlotId, group.tools().iter().map(|&tool| RailTool::new(tool, AnnotateCommand::of(tool))).collect()))
             .collect();
-        let bar = Bar::new(words.toolbar.clone(), BarKind::Tool).show(ui, |ui, body| {
+        // The tool buttons on the first row, the colour well and the width on the second.
+        let bar = Bar::new(words.toolbar.clone(), BarKind::Tool).rows(TWO_ROWS).show(ui, |ui, body| {
             let last = body.memory::<LastUsed<AnnotationTool>>().clone();
             let current = annotate.tool;
-            let out =
-                FlyoutButton::new(&select, &AnnotationTool::Select).label(words.select.clone()).selected(current == AnnotationTool::Select).show(ui);
-            if let Some(tool) = out.select {
-                annotate.tool = tool;
-            }
-            for (slot, group) in slots.iter().zip(AnnotationGroup::ALL) {
-                let tools: Vec<&RailTool<AnnotationTool>> = slot.tools.iter().collect();
-                let shown = shown_tool(&current, slot.id, &tools, &last, |_| true).map_or(current, |tool| tool.id);
-                let out = FlyoutButton::new(&slot.tools, &shown)
-                    .label(words.group(group).to_owned())
-                    .selected(slot.tools.iter().any(|tool| tool.id == current))
+            Row::new().show(ui, |ui, _| {
+                let out = FlyoutButton::new(&select, &AnnotationTool::Select)
+                    .label(words.select.clone())
+                    .selected(current == AnnotationTool::Select)
                     .show(ui);
                 if let Some(tool) = out.select {
                     annotate.tool = tool;
                 }
-            }
+                for (slot, group) in slots.iter().zip(AnnotationGroup::ALL) {
+                    let tools: Vec<&RailTool<AnnotationTool>> = slot.tools.iter().collect();
+                    let shown = shown_tool(&current, slot.id, &tools, &last, |_| true).map_or(current, |tool| tool.id);
+                    let out = FlyoutButton::new(&slot.tools, &shown)
+                        .label(words.group(group).to_owned())
+                        .selected(slot.tools.iter().any(|tool| tool.id == current))
+                        .show(ui);
+                    if let Some(tool) = out.select {
+                        annotate.tool = tool;
+                    }
+                }
+            });
             if let Some(next) = remembered(&slots, &annotate.tool, &last) {
                 *body.memory::<LastUsed<AnnotationTool>>() = next;
             }
-            style_controls(ui, body, annotate, &words);
+            Row::new().show(ui, |ui, _| style_controls(ui, body, annotate, &words));
         });
         let changed = before != (annotate.tool, annotate.color, annotate.highlight_color, annotate.width);
         AnnotationToolbarOutput { response: bar.output.response, changed }

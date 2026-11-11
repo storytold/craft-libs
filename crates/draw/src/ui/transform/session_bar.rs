@@ -78,10 +78,11 @@ impl<W> Outcome for TransformBarOutput<W> {
 /// phase.
 ///
 /// - Box phase, in Tab order: the [`TransformFields`] strip (reference point, X, Y, W, link, H, angle, H and V skew,
-///   interpolation), the Show Reference Point check, the app's [`extra`](Self::extra) group, the Free Transform / Warp
-///   switch (an icon button, pressed in the Warp phase), then cancel and commit at the reading end.
-/// - Warp phase: the app's [`warp_fields`](Self::warp_fields) group in place of the fields, Reset warp and the
-///   switch, then cancel and commit.
+///   interpolation), the Show Reference Point check and the app's [`extra`](Self::extra) group; then, pinned at the
+///   reading end, cancel, commit, a rule and the Free Transform / Warp switch (an icon button, pressed in the Warp
+///   phase).
+/// - Warp phase: the app's [`warp_fields`](Self::warp_fields) group in place of the fields; then cancel, commit, Reset
+///   warp, a rule and the switch.
 /// - [`groups`](Self::groups) narrows the strip; [`mode_switch`](Self::mode_switch) hides the switch (Content-Aware
 ///   Scale).
 /// - Every control is an ordinary focusable control. The bar never changes the session: it reports
@@ -167,7 +168,20 @@ impl<'a, W: TransformWarp> TransformBar<'a, W> {
         let mut edits: Vec<TransformEdit<W>> = Vec::new();
         let mut reset_warp = false;
         let mut unit_picked = None;
-        let shown = Bar::new(label.clone(), BarKind::Options).commit_cancel(commit.clone(), cancel.clone()).show(ui, |ui, cx| {
+        let mut switched = false;
+        // Reset warp and the mode switch stay in view after commit and cancel while the fields scroll.
+        let trailing = |ui: &mut Ui| {
+            if warping {
+                let reset = IconButton::new(IconId::new("undo")).label(words.reset_warp.clone()).show(ui);
+                reset_warp = clicked(&reset);
+            }
+            if mode_switch {
+                Divider::vertical().show(ui);
+                let switch = IconButton::new(IconId::new("grid")).label(words.switch_warp.clone()).selected(warping).show(ui);
+                switched = clicked(&switch);
+            }
+        };
+        let shown = Bar::new(label.clone(), BarKind::Options).commit_cancel(commit.clone(), cancel.clone()).trailing(trailing).show(ui, |ui, cx| {
             let current = match settings.reborrow().read(cx) {
                 Some(Mixed::Same(held)) => held,
                 _ => TransformSettings::default(),
@@ -203,21 +217,13 @@ impl<'a, W: TransformWarp> TransformBar<'a, W> {
                     slot.show(ui);
                 }
             }
-            if warping {
-                let reset = IconButton::new(IconId::new("undo")).label(words.reset_warp.clone()).show(ui);
-                reset_warp = clicked(&reset);
-            }
-            if mode_switch {
-                Divider::vertical().show(ui);
-                let switch = IconButton::new(IconId::new("grid")).label(words.switch_warp.clone()).selected(warping).show(ui);
-                if clicked(&switch) {
-                    edits.push(if warping { TransformEdit::LeaveWarp } else { TransformEdit::WarpRequested });
-                }
-            }
             if next != current {
                 let _ = settings.reborrow().write(cx, &EditEvent::set(Mixed::Same(current), next, name.clone(), None));
             }
         });
+        if switched {
+            edits.push(if warping { TransformEdit::LeaveWarp } else { TransformEdit::WarpRequested });
+        }
         TransformBarOutput {
             response: shown.output.response.clone(),
             edits,

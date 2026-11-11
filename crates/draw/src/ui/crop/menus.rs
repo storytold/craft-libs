@@ -2,7 +2,7 @@
 //! ([`CropOptionsMenu`]).
 
 use super::bar_words::CropBarWords;
-use super::options::{CropFill, CropSettings};
+use super::options::CropSettings;
 use craft_behavior::geometry::crop::{CropGuide, GuideShow};
 use craft_behavior::{IconId, Mixed};
 use craft_keymap::{Chord, Key, Mods, Platform};
@@ -10,13 +10,12 @@ use craft_ui::buttons::IconButton;
 use craft_ui::canvas::{CropShield, ShieldColor};
 use craft_ui::choice::{Checkbox, Radio, RadioGroup, Swatch};
 use craft_ui::contract::{
-    Bind, Entry, FieldLayout, NoValue, Outcome, PopupKind, Props as _, Remember as _, Show as _, ShowContainer as _, SideLabel, Trigger, clicked,
+    Bind, FieldLayout, NoValue, Outcome, PopupKind, Props as _, Remember as _, Show as _, ShowContainer as _, SideLabel, Trigger, clicked,
 };
 use craft_ui::display::Divider;
 use craft_ui::form::{Field, SliderField};
 use craft_ui::layout_components::Row;
 use craft_ui::menu::{Menu, MenuItem};
-use craft_ui::pickers::Select;
 use craft_ui::popover::Popover;
 use craft_ui::runtime::env::{Env, UnitKind};
 use craft_ui::runtime::requests::ColorRequest;
@@ -164,9 +163,8 @@ struct Open(bool);
 /// The gear popover: an icon button named "Set additional Crop options" that opens a [`Popover`] of form rows: Use
 /// Classic Mode (shortcut text P), Show Cropped Area (H; shown on and disabled in Classic Mode), Auto Center Preview
 /// (disabled in Classic Mode), Enable Crop Shield, the colour (Match Canvas, or Custom… with its swatch), Opacity (0 to
-/// 100 %) and Auto Adjust Opacity, then Delete Cropped Pixels and the Fill select. The colour rows, Opacity and Auto
-/// Adjust Opacity are disabled with the shield off. The popover stays open on clicks inside and closes on a click
-/// outside, Escape or the button.
+/// 100 %) and Auto Adjust Opacity. The colour rows, Opacity and Auto Adjust Opacity are disabled with the shield off.
+/// The popover stays open on clicks inside and closes on a click outside, Escape or the button.
 #[must_use = "show the menu with `show`"]
 #[derive(craft_ui::contract::Pattern, craft_ui::contract::Props)]
 pub struct CropOptionsMenu<'a> {
@@ -268,24 +266,6 @@ impl<'a> CropOptionsMenu<'a> {
                     SideLabel::new().layout(FieldLayout::After),
                     Checkbox::new(Bind::bound(&mut shield.auto_adjust)).enabled(on),
                 );
-                Divider::horizontal().show(ui);
-                cx.labelled(
-                    ui,
-                    "delete",
-                    words.delete_pixels.clone(),
-                    SideLabel::new().layout(FieldLayout::After),
-                    Checkbox::new(Bind::bound(&mut settings.delete_pixels)),
-                );
-                let fills = [
-                    Entry::new(CropFill::Background, words.fill_background.clone()),
-                    Entry::new(CropFill::ContentAware, words.fill_content_aware.clone()),
-                ];
-                Field::new(words.fill_name.clone()).show(ui, |ui, _| {
-                    let pick = Select::new(words.fill_name.clone(), Bind::given(settings.fill), &fills).show(ui);
-                    if let Some(fill) = pick.value().copied() {
-                        settings.fill = fill;
-                    }
-                });
             });
             button
         });

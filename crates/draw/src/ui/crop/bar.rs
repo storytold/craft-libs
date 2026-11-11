@@ -3,12 +3,13 @@
 use super::bar_words::CropBarWords;
 use super::menus::{CropOptionsMenu, CropOverlayMenu};
 use super::options::{
-    CROP_RATIOS, CROP_SIZES, CropLength, CropPresetChoice, CropRatio, CropSettings, CropSizeFields, CropUserPreset, FIELD_MAX, LENGTH_MIN,
+    CROP_RATIOS, CROP_SIZES, CropFill, CropLength, CropPresetChoice, CropRatio, CropSettings, CropSizeFields, CropUserPreset, FIELD_MAX, LENGTH_MIN,
     RATIO_DECIMALS, RATIO_MAX, RATIO_STEP, ResolutionUnit,
 };
 use super::session::CropDocument;
 use craft_behavior::{EditEvent, EditEvents, IconId, NumberCodec};
 use craft_ui::buttons::{Button, IconButton, ToggleButton};
+use craft_ui::choice::Checkbox;
 use craft_ui::contract::{
     Bind, BodyCx, Entry, LabelKind, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _, SideLabel, Sizing, clicked,
 };
@@ -74,7 +75,8 @@ impl Outcome for CropBarOutput {
 ///   presets, Front Image, a rule, New Crop Preset…, Delete Crop Preset…); the W and H ratio fields (0 to 99,999 with 3
 ///   decimals) with the swap button between them, or in W × H × Resolution mode the W, H and Resolution fields with
 ///   the px/in or px/cm select; Clear; the Angle field; the Straighten toggle (pressed while armed); the overlay menu
-///   ([`CropOverlayMenu`]); the gear popover ([`CropOptionsMenu`]).
+///   ([`CropOverlayMenu`]); the gear popover ([`CropOptionsMenu`]); the Delete Cropped Pixels check box; Fill and its
+///   select.
 /// - W and H keep their lengths with the unit they were entered in ([`CropLength`]); a cleared field is unset.
 /// - A scrub or a step of a ratio field refits live; Escape puts the ratio back.
 /// - Delete Crop Preset… is disabled when no user preset is given; New Crop Preset… when [`CropSettings::preset_name`]
@@ -135,6 +137,17 @@ impl<'a> CropBar<'a> {
             report.straighten |= toggle.value().is_some();
             CropOverlayMenu::new(settings).show(ui);
             report.pick_color = CropOptionsMenu::new(settings).show(ui).pick_color;
+            Checkbox::new(Bind::bound(&mut settings.delete_pixels)).label(words.delete_pixels.clone()).show(ui);
+            let fills = [
+                Entry::new(CropFill::Background, words.fill_background.clone()),
+                Entry::new(CropFill::ContentAware, words.fill_content_aware.clone()),
+            ];
+            Field::new(words.fill_name.clone()).id_salt("fill").sizing(Sizing::Content).show(ui, |ui, _| {
+                let pick = Select::new(words.fill_name.clone(), Bind::given(settings.fill), &fills).show(ui);
+                if let Some(fill) = pick.value().copied() {
+                    settings.fill = fill;
+                }
+            });
         });
         let changed = *settings != before;
         CropBarOutput {
