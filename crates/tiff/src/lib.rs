@@ -450,6 +450,13 @@ impl Tiff {
     pub fn parse_with(data: &[u8], opts: &ParseOptions) -> Result<Tiff> {
         reader::parse(data, opts)
     }
+    /// Parse a TIFF stream and report whether the complete reachable IFD structure was read.
+    ///
+    /// The parsed value retains the reader's best-effort behavior. `complete` is false when an
+    /// IFD, entry value, pointer target, or IFD-chain link could not be fully inspected.
+    pub fn parse_with_status(data: &[u8], opts: &ParseOptions) -> Result<(Tiff, bool)> {
+        reader::parse_with_status(data, opts)
+    }
     /// Header check only: returns the byte order and BigTIFF flag.
     pub fn sniff(data: &[u8]) -> Option<(ByteOrder, bool)> {
         reader::header(data).ok().map(|(o, b, _)| (o, b))
