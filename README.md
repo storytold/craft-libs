@@ -94,6 +94,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   opcode lists, embedded previews), one Cargo feature per format. DNG reading and writing,
   Hasselblad 3FR/FFF and Canon CRW (through `craft-crw`) so far; demosaicing and everything after stay with the develop
   pipeline.
+- [`craft-idml`](crates/idml/README.md): IDML (InDesign Markup Language) packages: the ZIP container read with bounded part sizes and lenient part names, `designmap.xml` with its includes in place, the `<Properties>` form on craft-xml elements, value codecs and the package writer; and InDesign Tagged Text, read and written.
 - [`craft-tiff`](crates/tiff/README.md): TIFF and BigTIFF IFD reader and writer, from LightCraft:
   every field type, the IFD chain, SubIFDs and Exif/GPS/Interop pointer IFDs, maker-note IFDs
   (Canon, Nikon, Sony, Fujifilm, Olympus, Panasonic, Pentax), strip and tile layout. Bounded and

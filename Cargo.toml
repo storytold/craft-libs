@@ -41,6 +41,7 @@ craft-mesh = { path = "crates/mesh" }
 craft-heif = { path = "crates/heif" }
 craft-fonts-build = { path = "crates/fonts-build" }
 craft-i18n = { path = "crates/i18n" }
+craft-idml = { path = "crates/idml" }
 craft-jpeg = { path = "crates/jpeg" }
 craft-keymap = { path = "crates/keymap" }
 craft-audio = { path = "crates/audio" }
