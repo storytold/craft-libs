@@ -20,6 +20,6 @@ pub use cloud_ref::CloudBlobRef;
 pub use coordinator::{DefaultTierCoordinator, TierCoordinator};
 pub use external_volume::ExternalVolume;
 pub use key::StoreKey;
-pub use mirror::{MirrorStore, PendingWrite};
+pub use mirror::{HydrationGuard, MirrorStore, PendingWrite};
 pub use policy::{DefaultTierPolicy, KeyClass, TierPolicy};
 pub use versioned::VersionedMirror;

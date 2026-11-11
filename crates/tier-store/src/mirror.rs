@@ -41,6 +41,10 @@ pub struct MirrorStore<P: TierPolicy> {
     /// Highest revision per key that a flush has confirmed as durably persisted. Compared
     /// against `revisions` to tell a current save from one a later `put`/`delete` superseded.
     saved_revisions: HashMap<StoreKey, u64>,
+    /// Bytes reserved for in-flight ranged hydrations (or whole-file fallbacks) that have not
+    /// yet landed in `data` via `put`/`seed`. Released when the returned
+    /// [`HydrationGuard`] drops.
+    inflight_range_bytes: usize,
 }
 
 impl<P: TierPolicy> MirrorStore<P> {
@@ -58,6 +62,7 @@ impl<P: TierPolicy> MirrorStore<P> {
             evicted_order: VecDeque::new(),
             evicted_bytes_used: 0,
             saved_revisions: HashMap::new(),
+            inflight_range_bytes: 0,
         }
     }
 
@@ -104,11 +109,43 @@ impl<P: TierPolicy> MirrorStore<P> {
         self.evicted_bytes_used
     }
 
-    /// True when retained bytes (resident cache, or evicted-but-unflushed) exceed the byte
-    /// budget and nothing safe remains to reclaim. Surfaces that condition explicitly instead of
-    /// growing retention without bound or discarding a write nothing has confirmed yet.
+    /// True when every byte counted against the budget (see [`tracked_bytes`](Self::tracked_bytes))
+    /// exceeds it and nothing safe remains to reclaim. Surfaces that condition explicitly instead
+    /// of growing retention without bound or discarding a write nothing has confirmed yet.
     pub fn over_budget(&self) -> bool {
-        self.bytes_used > self.byte_budget || self.evicted_bytes_used > self.byte_budget
+        self.tracked_bytes() > self.byte_budget
+    }
+
+    /// Every byte counted against the single `byte_budget`: resident cache bytes, retained
+    /// eviction bytes, in-flight ranged-hydration reservations, and bytes sitting in unflushed
+    /// pending writes (the copies that will cross the worker boundary on the next flush).
+    ///
+    /// RFC-0023 required fix 3: resident and retained-eviction bytes used to be checked against
+    /// `byte_budget` in two separate pools, and in-flight hydration and pending-write bytes were
+    /// not counted at all, so the true total could reach roughly twice the nominal budget (or
+    /// more) before anything surfaced it. This is the one sum every caller must check.
+    pub fn tracked_bytes(&self) -> usize {
+        self.bytes_used.saturating_add(self.evicted_bytes_used).saturating_add(self.inflight_range_bytes).saturating_add(self.pending_bytes())
+    }
+
+    /// Bytes still available before [`tracked_bytes`](Self::tracked_bytes) would exceed the
+    /// budget. Zero once already over budget (never negative).
+    pub fn remaining_budget(&self) -> usize {
+        self.byte_budget.saturating_sub(self.tracked_bytes())
+    }
+
+    fn pending_bytes(&self) -> usize {
+        self.pending.iter().map(|write| write.bytes.len()).sum()
+    }
+
+    /// Reserve `bytes` against the budget for an in-flight ranged hydration, or a whole-file
+    /// fallback read, that has not landed in `data` yet. Without this, a fetch in flight costs
+    /// nothing against the budget while its bytes sit in memory waiting to land, so a burst of
+    /// concurrent hydrations could blow well past `byte_budget` before any of them called `put`.
+    /// Dropping the returned guard releases the reservation.
+    pub fn begin_range_hydration(&mut self, bytes: usize) -> HydrationGuard<'_, P> {
+        self.inflight_range_bytes = self.inflight_range_bytes.saturating_add(bytes);
+        HydrationGuard { mirror: self, bytes }
     }
 
     /// Resident bytes from a warm-tier load. Nothing is queued to flush.
@@ -251,7 +288,7 @@ impl<P: TierPolicy> MirrorStore<P> {
     /// and retention is still over budget, stop -- that is backpressure, surfaced via
     /// [`over_budget`](Self::over_budget), never a silent discard of an unflushed write.
     fn enforce_eviction_retention_budget(&mut self) {
-        while self.evicted_bytes_used > self.byte_budget {
+        while self.tracked_bytes() > self.byte_budget {
             if !self.drop_oldest_saved_eviction() {
                 break;
             }
@@ -286,5 +323,20 @@ impl<P: TierPolicy> MirrorStore<P> {
         }
         self.cache_lru.retain(|k| k != &key);
         self.cache_lru.push_back(key);
+    }
+}
+
+/// Holds an in-flight ranged-hydration (or whole-file fallback) reservation open against a
+/// [`MirrorStore`]'s byte budget. Returned by
+/// [`MirrorStore::begin_range_hydration`]; releases the reservation on drop, including on an
+/// early return from the fetch, so a failed or cancelled hydration never leaks budget.
+pub struct HydrationGuard<'a, P: TierPolicy> {
+    mirror: &'a mut MirrorStore<P>,
+    bytes: usize,
+}
+
+impl<P: TierPolicy> Drop for HydrationGuard<'_, P> {
+    fn drop(&mut self) {
+        self.mirror.inflight_range_bytes = self.mirror.inflight_range_bytes.saturating_sub(self.bytes);
     }
 }

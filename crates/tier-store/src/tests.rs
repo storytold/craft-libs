@@ -255,3 +255,62 @@ fn a_saved_key_is_dropped_outright_on_eviction_not_retained() {
         unsaved.retained_bytes()
     );
 }
+
+// --- review_repro: unified byte budget (PR #662 review, RFC-0023 required fix 3) --------------
+
+/// Resident and retained-eviction bytes used to be checked against `byte_budget` as two separate
+/// pools (`over_budget` was `bytes_used > budget || evicted_bytes_used > budget`), so a store
+/// sitting at 60 percent resident and 60 percent retained passed both checks even though it held
+/// 120 percent of the budget in memory. `over_budget` must trip on the true sum.
+#[test]
+fn over_budget_trips_on_the_combined_total_not_either_pool_alone() {
+    let mut store = MirrorStore::new(DefaultTierPolicy, 100);
+    let a = StoreKey::new("cache/a");
+    let b = StoreKey::new("cache/b");
+
+    // `a` resident at 60% of budget, unsaved. Drain the pending copy so this scenario isolates
+    // resident vs. retained bytes; pending-byte accounting is its own test below.
+    store.put(a.clone(), vec![1u8; 60]);
+    store.take_pending();
+    assert!(!store.over_budget(), "60% resident alone must not trip the budget");
+
+    // `b` resident at another 60%: `enforce_budget` evicts `a` (LRU) to bring resident back
+    // under budget, retaining its unsaved bytes rather than dropping them, so `a`'s 60 bytes
+    // move from resident into retained eviction while `b`'s 60 bytes become the new resident.
+    store.put(b.clone(), vec![2u8; 60]);
+    store.take_pending();
+    assert!(store.get(&a).is_none(), "a should have been evicted to make room for b");
+    assert_eq!(store.retained_bytes(), 60, "a's unsaved bytes must be retained, not dropped");
+
+    assert!(
+        store.over_budget(),
+        "resident (60) + retained (60) = 120% of a 100-byte budget must trip over_budget even though neither pool alone exceeds it"
+    );
+    assert_eq!(store.tracked_bytes(), 120, "tracked_bytes must report the true combined total");
+}
+
+/// Bytes reserved for an in-flight ranged hydration count against the budget even before they
+/// land anywhere in `data`: otherwise a fetch in flight is invisible to `over_budget` no matter
+/// how large it is.
+#[test]
+fn inflight_range_hydration_bytes_count_against_the_budget() {
+    let mut store = MirrorStore::new(DefaultTierPolicy, 100);
+    assert!(!store.over_budget());
+    let guard = store.begin_range_hydration(150);
+    assert!(store.over_budget(), "a 150-byte in-flight reservation against a 100-byte budget must be visible even though nothing landed in `data` yet");
+    drop(guard);
+    assert!(!store.over_budget(), "dropping the hydration guard must release the reservation");
+}
+
+/// Bytes sitting in unflushed pending writes (the copies that will cross the worker boundary on
+/// the next flush) count against the budget: they are a second copy of (or, for a delete, no
+/// copy of) the resident bytes, held in memory until `take_pending` hands them off.
+#[test]
+fn pending_write_bytes_count_against_the_budget() {
+    let mut store = MirrorStore::new(DefaultTierPolicy, 100);
+    store.put(StoreKey::new("files/one"), vec![9u8; 60]);
+    // Resident (60) + pending copy (60) = 120% of budget, even though nothing was evicted.
+    assert!(store.over_budget(), "a pending write's byte copy must count against the budget alongside its resident copy");
+    store.take_pending();
+    assert!(!store.over_budget(), "draining pending must release its share of the budget");
+}
