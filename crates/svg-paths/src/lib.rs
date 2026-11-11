@@ -3,12 +3,14 @@
 //! For tools that need the shapes of a drawing and not its paint: cutters, plotters, CAD import.
 //! [`import`] walks the document, applies transforms, viewport units, `<use>`/`<symbol>`
 //! instances and the CSS cascade, and returns each drawable element as a [`kurbo::BezPath`] in
-//! millimetres. The caller tags shapes through [`Kind`] (cut or engrave, layer, pen…) from each
-//! element's computed style and class. Input is treated as hostile: size, node, depth and
-//! instance limits, and cyclic references, are errors.
+//! millimetres, with its stroke paint and the clip regions that apply to it. The caller tags
+//! shapes through [`Kind`] (cut or engrave, layer, pen…) from each element's computed style and
+//! class. Input is treated as hostile: size, node, depth and instance limits, and cyclic
+//! references, are errors.
 //!
-//! Import only, and geometry only: this is not the shared SVG model of craft-libs#789. Depends on
-//! no other Craft crate.
+//! Import only, and geometry only: this is not the shared SVG model of craft-libs#789. Boolean
+//! operations (applying [`Clip`]s) and colour parsing are left to the caller, so the crate
+//! depends on no other Craft crate.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -26,8 +28,7 @@ pub type StyleMap = std::collections::HashMap<String, String>;
 /// The caller's tag on a shape, inherited down the element tree.
 pub trait Kind: Clone + Default {
     /// Property names of the caller's own (`data-kind`, say) to follow through attributes, inline
-    /// styles and stylesheets, as well as `display`, `visibility`, `fill`, `stroke` and
-    /// `stroke-width`.
+    /// styles and stylesheets, as well as the presentation properties the reader tracks itself.
     const PROPERTIES: &'static [&'static str] = &[];
 
     /// The tag an element sets, from its computed style and `class` attribute; `None` inherits
@@ -48,11 +49,32 @@ impl Kind for () {
     }
 }
 
-/// One drawable element, transformed into the document's millimetre space.
+/// How a clip piece's interior is decided (`clip-rule`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FillRule {
+    NonZero,
+    EvenOdd,
+}
+
+/// One `clip-path` region in document space: the union of its pieces. A clip with no pieces
+/// clips everything away (CSS Masking §6.1).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Clip {
+    pub pieces: Vec<(BezPath, FillRule)>,
+}
+
+/// One drawable element, transformed into the document's millimetre space and not yet clipped.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Shape<K> {
     pub path: BezPath,
     pub kind: K,
+    /// `<tag id="…">`, for the caller's own warnings about this element.
+    pub label: String,
+    /// The stroke colour as written (`currentColor` and paint-server fallbacks resolved), or
+    /// `None` without a stroke.
+    pub stroke: Option<String>,
+    /// The regions the shape is clipped by, as indices into [`Imported::clips`], outermost first.
+    pub clips: Vec<usize>,
 }
 
 /// What [`import`] read. Shapes may lie outside the `width_mm` × `height_mm` viewport.
@@ -61,11 +83,17 @@ pub struct Imported<K> {
     pub width_mm: f64,
     pub height_mm: f64,
     pub shapes: Vec<Shape<K>>,
+    pub clips: Vec<Clip>,
+    /// What was skipped or approximated. A caller adding its own goes through [`push_warning`]
+    /// with `dropped_warnings`, to keep the list bounded.
+    pub warnings: Vec<String>,
+    /// Warnings past the bound, counted and not kept.
+    pub dropped_warnings: usize,
 }
 
-const MAX_SVG_BYTES: usize = 16 * 1024 * 1024;
-const MAX_SVG_NODES: usize = 100_000;
-const MAX_SVG_DEPTH: usize = 128;
+pub const MAX_SVG_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_SVG_NODES: usize = 100_000;
+pub const MAX_SVG_DEPTH: usize = 128;
 const MAX_SVG_INSTANCES: usize = 10_000;
 
 #[derive(Clone)]
@@ -75,6 +103,8 @@ struct ImportState<K> {
     display_none: bool,
     visibility_hidden: bool,
     inherited_style: std::collections::HashMap<String, String>,
+    /// Active `clip-path` regions (indices into the context's list), outermost first.
+    clips: Vec<usize>,
 }
 
 impl<K: Kind> Default for ImportState<K> {
@@ -85,9 +115,17 @@ impl<K: Kind> Default for ImportState<K> {
             display_none: false,
             visibility_hidden: false,
             inherited_style: std::collections::HashMap::new(),
+            clips: Vec::new(),
         }
     }
 }
+
+/// Most warnings one import keeps; the rest are counted in one summary line.
+pub const MAX_SVG_WARNINGS: usize = 64;
+/// Most nested `clip-path` regions one shape is clipped by.
+const MAX_SVG_CLIPS: usize = 16;
+/// Most clip-path pieces one import keeps, over all its clip regions.
+const MAX_SVG_CLIP_PIECES: usize = 100_000;
 
 /// Reads the drawable geometry of an SVG document, in document order.
 ///
@@ -95,16 +133,24 @@ impl<K: Kind> Default for ImportState<K> {
 /// `<line>`, `<polyline>` and `<polygon>`. Nested groups, transforms (`matrix`, `translate`,
 /// `scale`, `rotate`, `skewX/Y`) and inherited presentation and inline styles (`display`,
 /// `visibility`, CSS `style`, `class`) are applied. Embedded stylesheets support type, class, ID
-/// and attribute selectors, descendant and child combinators, selector lists, and a bounded
-/// presentation-property cascade by specificity. Curves stay curves: nothing is flattened.
+/// and attribute selectors (`=`, `~=`, `^=`, `$=`, `*=`, `|=`), descendant, child and sibling
+/// combinators, `:not()`, `:first-child`, `:last-child`, `:root`, selector lists, and a bounded
+/// presentation-property cascade. Curves stay curves: nothing is flattened.
+///
+/// Each shape carries its stroke paint as written and the `clip-path` regions that apply to it;
+/// parsing the colour and cutting the shape down to its clips are the caller's.
+///
+/// What cannot be represented is skipped with a line in [`Imported::warnings`]: `<text>` (no
+/// fonts here), masks and filters (the art comes unmasked and unfiltered), ignored CSS at-rules
+/// and selectors, and clip paths that cannot be applied. A caller that must lose nothing
+/// refuses an import with warnings.
 ///
 /// Physical root dimensions accept unitless SVG px, `px`, `mm`, `cm`, `in`, `pt` and `pc`; a
 /// `viewBox` maps its user coordinates onto that physical viewport, following
 /// `preserveAspectRatio`. Without physical dimensions, `viewBox` units are read as millimetres,
 /// and so is a fragment without an SVG root. Local `<use>` references instantiate supported
-/// shapes, groups and `<symbol>` templates with viewBox sizing. External references, text,
-/// gradients, clipping and percentage lengths are not expanded; an unsupported drawable element
-/// is an error, not a silent loss.
+/// shapes, groups and `<symbol>` templates with viewBox sizing; external references and
+/// percentage lengths are not expanded.
 ///
 /// `name` (a file name, say) prefixes every error message.
 pub fn import<K: Kind>(svg: &str, name: &str) -> Result<Imported<K>, Error> {
@@ -129,12 +175,31 @@ pub fn import<K: Kind>(svg: &str, name: &str) -> Result<Imported<K>, Error> {
             return Err(svg_error(path_name, &format!("duplicate SVG id {id:?}")));
         }
     }
-    let css_rules = parse_stylesheets(root, K::PROPERTIES, path_name)?;
-    let mut context =
-        ImportContext { visited: 0, path_name, id_index, css_rules, reference_stack: Vec::new(), instance_count: 0, shapes: Vec::new() };
+    let mut warnings = Vec::new();
+    let css_rules = parse_stylesheets(root, K::PROPERTIES, path_name, &mut warnings)?;
+    let mut context = ImportContext {
+        visited: 0,
+        path_name,
+        id_index,
+        css_rules,
+        reference_stack: Vec::new(),
+        instance_count: 0,
+        shapes: Vec::new(),
+        clips: Vec::new(),
+        clip_pieces: 0,
+        warnings,
+        dropped_warnings: 0,
+    };
     let base = ImportState { transform: viewport, ..ImportState::default() };
     import_node(root, base, 0, &mut context)?;
-    Ok(Imported { width_mm, height_mm, shapes: context.shapes })
+    Ok(Imported {
+        width_mm,
+        height_mm,
+        shapes: context.shapes,
+        clips: context.clips,
+        warnings: context.warnings,
+        dropped_warnings: context.dropped_warnings,
+    })
 }
 
 struct ImportContext<'a, 'input, K> {
@@ -145,6 +210,28 @@ struct ImportContext<'a, 'input, K> {
     reference_stack: Vec<String>,
     instance_count: usize,
     shapes: Vec<Shape<K>>,
+    clips: Vec<Clip>,
+    clip_pieces: usize,
+    warnings: Vec<String>,
+    dropped_warnings: usize,
+}
+
+/// Records a warning once, up to a fixed number; the rest are only counted in `dropped`.
+pub fn push_warning(warnings: &mut Vec<String>, dropped: &mut usize, message: String) {
+    if warnings.contains(&message) {
+        return;
+    }
+    if warnings.len() < MAX_SVG_WARNINGS {
+        warnings.push(message);
+    } else {
+        *dropped = dropped.saturating_add(1);
+    }
+}
+
+impl<K> ImportContext<'_, '_, K> {
+    fn warn(&mut self, message: String) {
+        push_warning(&mut self.warnings, &mut self.dropped_warnings, message);
+    }
 }
 
 fn import_node<'a, 'input, K: Kind>(
@@ -177,7 +264,7 @@ fn import_node<'a, 'input, K: Kind>(
         state.transform = compose(inherited.transform, local);
     }
     let style = computed_style(node, &state.inherited_style, &context.css_rules, K::PROPERTIES);
-    state.inherited_style = style.iter().filter(|(key, _)| key.as_str() != "display").map(|(key, value)| (key.clone(), value.clone())).collect();
+    state.inherited_style = inheritable(&style);
     if let Some(kind) = K::of(&style, node.attribute("class").unwrap_or("")) {
         state.kind = kind;
     }
@@ -194,6 +281,39 @@ fn import_node<'a, 'input, K: Kind>(
         if style.get("stroke").is_some_and(|v| v == "none") && style.get("fill").is_some_and(|v| v == "none") {
             state.display_none = true;
         }
+    }
+    if !state.display_none && !state.visibility_hidden {
+        for (property, effect) in [("mask", "the art is imported unmasked"), ("filter", "the art is imported unfiltered")] {
+            if style.get(property).is_some_and(|v| v != "none") {
+                context.warn(format!("{}: {property} ignored; {effect}", label(node)));
+            }
+        }
+    }
+    if tag == "text" {
+        // Hidden text is skipped quietly; its <tspan>s never reach the geometry readers.
+        if !state.display_none && !state.visibility_hidden {
+            let content: String = node
+                .descendants()
+                .filter(|n| n.is_text())
+                .filter_map(|n| n.text())
+                .collect::<String>()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .chars()
+                .take(40)
+                .collect();
+            context.warn(format!("{} {content:?} skipped: SVG text needs fonts; convert text to paths before importing", label(node)));
+        }
+        return Ok(());
+    }
+    if let Some(value) = style.get("clip-path").filter(|v| v.as_str() != "none")
+        && let Some(region) = clip_region(node, value, state.transform, context)?
+    {
+        if state.clips.len() >= MAX_SVG_CLIPS {
+            return Err(svg_error(context.path_name, "clip-path nesting exceeds 16 levels"));
+        }
+        state.clips.push(region);
     }
     if tag == "use" {
         if !state.display_none {
@@ -241,7 +361,13 @@ fn import_node<'a, 'input, K: Kind>(
     {
         let transformed = transform_path(&path, state.transform);
         validate_import_path(&transformed, context.path_name)?;
-        context.shapes.push(Shape { path: transformed, kind: state.kind.clone() });
+        context.shapes.push(Shape {
+            path: transformed,
+            kind: state.kind.clone(),
+            label: label(node),
+            stroke: stroke_paint(&style),
+            clips: state.clips.clone(),
+        });
     }
     for child in node.children().filter(|n| n.is_element()) {
         import_node(child, state.clone(), depth + 1, context)?;
@@ -279,7 +405,7 @@ fn import_symbol<'a, 'input, K: Kind>(
     if let Some(kind) = K::of(&style, symbol.attribute("class").unwrap_or("")) {
         state.kind = kind;
     }
-    state.inherited_style = style.iter().filter(|(key, _)| key.as_str() != "display").map(|(key, value)| (key.clone(), value.clone())).collect();
+    state.inherited_style = inheritable(&style);
 
     if let Some(raw_view_box) = symbol.attribute("viewBox") {
         let values = parse_number_list(raw_view_box)
@@ -339,6 +465,118 @@ fn import_children<'a, 'input, K: Kind>(
         import_node(child, state.clone(), depth + 1, context)?;
     }
     Ok(())
+}
+
+/// The properties children inherit: `display`, `clip-path`, `mask` and `filter` are
+/// not inherited (SVG 1.1 property index; CSS Masking §5, Filter Effects §5).
+fn inheritable(style: &StyleMap) -> StyleMap {
+    style
+        .iter()
+        .filter(|(key, _)| !matches!(key.as_str(), "display" | "clip-path" | "mask" | "filter"))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+/// `<tag id="…">` for warnings, so a user can find the element in the file.
+fn label(node: roxmltree::Node<'_, '_>) -> String {
+    let tag = node.tag_name().name();
+    match node.attribute("id") {
+        Some(id) => format!("<{tag} id={:?}>", id.chars().take(64).collect::<String>()),
+        None => format!("<{tag}>"),
+    }
+}
+
+/// The colour a shape is stroked in, as written, or `None` for no stroke or a paint server
+/// without a colour fallback (SVG 2 §13.2 `<paint>`).
+fn stroke_paint(style: &StyleMap) -> Option<String> {
+    let raw = style.get("stroke")?.trim();
+    // `url(#gradient) red`: the colour after the reference is the fallback.
+    let paint = match raw.strip_prefix("url(") {
+        Some(rest) => rest.split_once(')')?.1.trim(),
+        None => raw,
+    };
+    let paint = if paint.eq_ignore_ascii_case("currentcolor") {
+        // `color`'s initial value is the user agent's; black is what every browser uses.
+        style.get("color").map_or("black", String::as_str)
+    } else {
+        paint
+    };
+    if paint.is_empty() || paint == "none" || paint.eq_ignore_ascii_case("transparent") {
+        return None;
+    }
+    Some(paint.to_string())
+}
+
+/// The document-space region of `clip-path: url(#id)` on `node` (CSS Masking §6) as an index
+/// into the context's clips, or `None` with a warning when it cannot be applied.
+fn clip_region<K>(
+    node: roxmltree::Node<'_, '_>,
+    value: &str,
+    transform: kurbo::Affine,
+    context: &mut ImportContext<'_, '_, K>,
+) -> Result<Option<usize>, Error> {
+    let id = value
+        .trim()
+        .strip_prefix("url(")
+        .and_then(|rest| rest.strip_suffix(')'))
+        .map(|inner| inner.trim().trim_matches(['"', '\'']))
+        .and_then(|inner| inner.strip_prefix('#'));
+    let Some(target) = id.and_then(|id| context.id_index.get(id).copied()) else {
+        context.warn(format!(
+            "{}: clip-path {:?} is not a local <clipPath> reference; imported unclipped",
+            label(node),
+            value.chars().take(64).collect::<String>()
+        ));
+        return Ok(None);
+    };
+    if target.tag_name().name() != "clipPath" {
+        context.warn(format!("{}: clip-path targets {}, not a <clipPath>; imported unclipped", label(node), label(target)));
+        return Ok(None);
+    }
+    if target.attribute("clipPathUnits") == Some("objectBoundingBox") {
+        context.warn(format!("{}: objectBoundingBox clip units are not supported; imported unclipped", label(target)));
+        return Ok(None);
+    }
+    if target.attribute("clip-path").is_some() {
+        context.warn(format!("{}: a clip-path on a <clipPath> is not applied", label(target)));
+    }
+    let mut space = transform;
+    if let Some(raw) = target.attribute("transform") {
+        let local = parse_transform(raw).map_err(|e| svg_error(context.path_name, &format!("<clipPath> transform: {e}")))?;
+        space = compose(space, local);
+    }
+    let mut pieces = Vec::new();
+    for child in target.children().filter(|n| n.is_element()) {
+        let tag = child.tag_name().name();
+        if child.attribute("display") == Some("none") {
+            continue;
+        }
+        if !matches!(tag, "path" | "rect" | "circle" | "ellipse" | "line" | "polyline" | "polygon") {
+            if !matches!(tag, "title" | "desc" | "metadata") {
+                context.warn(format!("{}: {} inside a clip path is not supported; it adds nothing to the clip", label(target), label(child)));
+            }
+            continue;
+        }
+        let Some(path) = geometry_for(child, context.path_name)? else {
+            continue;
+        };
+        let mut child_space = space;
+        if let Some(raw) = child.attribute("transform") {
+            let local = parse_transform(raw).map_err(|e| svg_error(context.path_name, &format!("<{tag}> transform: {e}")))?;
+            child_space = compose(child_space, local);
+        }
+        let path = transform_path(&path, child_space);
+        validate_import_path(&path, context.path_name)?;
+        let evenodd = child.attribute("clip-rule").or(target.attribute("clip-rule"));
+        let rule = if evenodd == Some("evenodd") { FillRule::EvenOdd } else { FillRule::NonZero };
+        context.clip_pieces += 1;
+        if context.clip_pieces > MAX_SVG_CLIP_PIECES {
+            return Err(svg_error(context.path_name, "SVG clip paths exceed the 100,000-piece limit"));
+        }
+        pieces.push((path, rule));
+    }
+    context.clips.push(Clip { pieces });
+    Ok(Some(context.clips.len() - 1))
 }
 
 fn geometry_for(node: roxmltree::Node<'_, '_>, path_name: &str) -> Result<Option<BezPath>, Error> {
@@ -523,12 +761,12 @@ fn ellipse_path(cx: f64, cy: f64, rx: f64, ry: f64) -> BezPath {
     p
 }
 
-const MAX_CSS_BYTES: usize = 1024 * 1024;
+pub const MAX_CSS_BYTES: usize = 1024 * 1024;
 const MAX_CSS_RULES: usize = 10_000;
 const MAX_CSS_PROPERTIES: usize = 32;
-const SUPPORTED_STYLE_PROPERTIES: &[&str] = &["display", "visibility", "fill", "stroke", "stroke-width"];
+const SUPPORTED_STYLE_PROPERTIES: &[&str] = &["display", "visibility", "fill", "stroke", "stroke-width", "color", "clip-path", "mask", "filter"];
 
-/// Whether the cascade tracks `property`: the presentation properties above and [`Kind::PROPERTIES`].
+/// Whether the cascade tracks `property`: the properties above and [`Kind::PROPERTIES`].
 fn supported(extra: &[&str], property: &str) -> bool {
     SUPPORTED_STYLE_PROPERTIES.contains(&property) || extra.contains(&property)
 }
@@ -547,16 +785,26 @@ struct CssRule {
 #[derive(Clone)]
 struct SimpleSelector {
     compounds: Vec<CompoundSelector>,
+    /// Between consecutive compounds: ' ' descendant, '>' child, '+' next sibling,
+    /// '~' later sibling (Selectors Level 3 §8).
     combinators: Vec<char>,
     specificity: (u32, u32, u32),
 }
 
-#[derive(Clone)]
+/// `[name]` or `[name op value]`, op one of `=`, `~`, `^`, `$`, `*`, `|`.
+type AttributeSelector = (String, Option<(char, String)>);
+
+#[derive(Clone, Default)]
 struct CompoundSelector {
     tag: Option<String>,
     id: Option<String>,
     classes: Vec<String>,
-    attributes: Vec<(String, Option<String>)>,
+    attributes: Vec<AttributeSelector>,
+    first_child: bool,
+    last_child: bool,
+    root: bool,
+    /// `:not(…)` arguments; each is a compound without its own `:not`.
+    nots: Vec<CompoundSelector>,
 }
 
 impl CompoundSelector {
@@ -571,10 +819,45 @@ impl CompoundSelector {
         if self.classes.iter().any(|class| !classes.contains(&class.as_str())) {
             return false;
         }
-        self.attributes.iter().all(|(name, value)| match value {
-            Some(value) => node.attribute(name.as_str()) == Some(value.as_str()),
-            None => node.attribute(name.as_str()).is_some(),
+        if (self.first_child && node.prev_sibling_element().is_some())
+            || (self.last_child && node.next_sibling_element().is_some())
+            || (self.root && node.parent_element().is_some())
+            || self.nots.iter().any(|not| not.matches(node))
+        {
+            return false;
+        }
+        self.attributes.iter().all(|(name, test)| {
+            let Some(actual) = node.attribute(name.as_str()) else {
+                return false;
+            };
+            let Some((op, value)) = test else {
+                return true;
+            };
+            let value = value.as_str();
+            match op {
+                '=' => actual == value,
+                '~' => actual.split_ascii_whitespace().any(|word| word == value),
+                '^' => !value.is_empty() && actual.starts_with(value),
+                '$' => !value.is_empty() && actual.ends_with(value),
+                '*' => !value.is_empty() && actual.contains(value),
+                '|' => actual == value || actual.strip_prefix(value).is_some_and(|rest| rest.starts_with('-')),
+                _ => false,
+            }
         })
+    }
+
+    fn specificity(&self) -> (u32, u32, u32) {
+        let mut total = (
+            u32::from(self.id.is_some()),
+            (self.classes.len() + self.attributes.len()) as u32 + u32::from(self.first_child) + u32::from(self.last_child) + u32::from(self.root),
+            u32::from(self.tag.as_deref().is_some_and(|tag| tag != "*")),
+        );
+        // `:not()` counts as its argument (Selectors Level 3 §16).
+        for not in &self.nots {
+            let (a, b, c) = not.specificity();
+            total = (total.0 + a, total.1 + b, total.2 + c);
+        }
+        total
     }
 }
 
@@ -588,41 +871,43 @@ impl SimpleSelector {
         }
         let mut current = node;
         for index in (0..self.combinators.len()).rev() {
-            let previous = &self.compounds[index];
-            match self.combinators[index] {
-                '>' => {
-                    let Some(parent) = current.parent_element() else {
-                        return false;
-                    };
-                    if !previous.matches(parent) {
-                        return false;
-                    }
-                    current = parent;
-                }
-                ' ' => {
-                    let mut ancestor = current.parent_element();
-                    let mut found = None;
-                    while let Some(candidate) = ancestor {
+            let (Some(previous), Some(combinator)) = (self.compounds.get(index), self.combinators.get(index)) else {
+                return false;
+            };
+            // shortcut: descendant and later-sibling steps take the nearest match without
+            // backtracking, which misses a few long selector chains; fine for SVG styling.
+            let found = match combinator {
+                '>' => current.parent_element().filter(|n| previous.matches(*n)),
+                '+' => current.prev_sibling_element().filter(|n| previous.matches(*n)),
+                ' ' => current.ancestors().skip(1).find(|n| n.is_element() && previous.matches(*n)),
+                '~' => {
+                    let mut sibling = current.prev_sibling_element();
+                    while let Some(candidate) = sibling {
                         if previous.matches(candidate) {
-                            found = Some(candidate);
                             break;
                         }
-                        ancestor = candidate.parent_element();
+                        sibling = candidate.prev_sibling_element();
                     }
-                    let Some(parent) = found else {
-                        return false;
-                    };
-                    current = parent;
+                    sibling
                 }
-                _ => return false,
-            }
+                _ => None,
+            };
+            let Some(next) = found else {
+                return false;
+            };
+            current = next;
         }
         true
     }
 }
 
-fn parse_stylesheets(root: roxmltree::Node<'_, '_>, extra: &[&str], path_name: &str) -> Result<Vec<CssRule>, Error> {
+/// CSS block at-rules whose content never styles geometry; skipped without a warning.
+const QUIET_AT_RULES: &[&str] = &["font-face", "keyframes", "-webkit-keyframes", "page", "counter-style", "charset", "namespace"];
+
+fn parse_stylesheets(root: roxmltree::Node<'_, '_>, extra: &[&str], path_name: &str, warnings: &mut Vec<String>) -> Result<Vec<CssRule>, Error> {
     let mut rules = Vec::new();
+    let mut dropped = 0usize;
+    let mut warn = |message: String| push_warning(warnings, &mut dropped, message);
     for node in root.descendants().filter(|node| node.is_element() && node.tag_name().name() == "style") {
         if let Some(media) = node.attribute("media")
             && !matches!(media.trim(), "" | "all" | "screen")
@@ -634,35 +919,81 @@ fn parse_stylesheets(root: roxmltree::Node<'_, '_>, extra: &[&str], path_name: &
             return Err(svg_error(path_name, "CSS stylesheet exceeds the 1 MiB limit"));
         }
         let stylesheet = strip_css_comments(stylesheet);
-        for raw_rule in stylesheet.split('}') {
-            let Some((raw_selector, raw_declarations)) = raw_rule.split_once('{') else {
-                if !raw_rule.trim().is_empty() {
-                    return Err(svg_error(path_name, "malformed CSS rule"));
+        let mut rest = stylesheet.as_str();
+        loop {
+            rest = rest.trim_start();
+            if rest.is_empty() {
+                break;
+            }
+            if let Some(at_rule) = rest.strip_prefix('@') {
+                let name: String =
+                    at_rule.chars().take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '-').take(64).collect::<String>().to_ascii_lowercase();
+                let quiet = QUIET_AT_RULES.contains(&name.as_str());
+                match (rest.find('{'), rest.find(';')) {
+                    (Some(open), semi) if semi.is_none_or(|semi| open < semi) => {
+                        let close = matching_brace(rest, open).ok_or_else(|| svg_error(path_name, "malformed CSS at-rule"))?;
+                        if !quiet {
+                            warn(format!("CSS @{name} block ignored; its rules are not applied"));
+                        }
+                        rest = rest.get(close + 1..).unwrap_or("");
+                    }
+                    (_, Some(semi)) => {
+                        if !quiet {
+                            warn(format!("CSS @{name} ignored (external stylesheets are not loaded)"));
+                        }
+                        rest = rest.get(semi + 1..).unwrap_or("");
+                    }
+                    _ => return Err(svg_error(path_name, "malformed CSS at-rule")),
                 }
                 continue;
+            }
+            let (Some(open), Some(close)) = (rest.find('{'), rest.find('}')) else {
+                return Err(svg_error(path_name, "malformed CSS rule"));
             };
-            let selector_cleaned = strip_css_comments(raw_selector);
-            let selector_text = selector_cleaned.trim();
+            if close < open {
+                return Err(svg_error(path_name, "malformed CSS rule"));
+            }
+            let selector_text = rest.get(..open).unwrap_or("").trim();
+            let raw_declarations = rest.get(open + 1..close).unwrap_or("");
+            rest = rest.get(close + 1..).unwrap_or("");
             if selector_text.is_empty() {
                 continue;
             }
             let (declarations, important) = parse_declarations(raw_declarations, extra, path_name)?;
             for selector in split_selector_list(selector_text) {
-                let selector =
-                    parse_selector(selector.trim()).ok_or_else(|| svg_error(path_name, &format!("unsupported CSS selector {selector:?}")))?;
-                rules.push(CssRule {
-                    selectors: vec![selector],
-                    declarations: declarations.clone(),
-                    important: important.clone(),
-                    order: rules.len(),
-                });
+                let Some(parsed) = parse_selector(selector.trim()) else {
+                    warn(format!("unsupported CSS selector {:?}; its rule is not applied", selector.chars().take(64).collect::<String>()));
+                    continue;
+                };
+                rules.push(CssRule { selectors: vec![parsed], declarations: declarations.clone(), important: important.clone(), order: rules.len() });
                 if rules.len() > MAX_CSS_RULES {
                     return Err(svg_error(path_name, "CSS exceeds the 10,000-rule limit"));
                 }
             }
         }
     }
+    if dropped > 0 {
+        warnings.push(format!("…and {dropped} more CSS warnings"));
+    }
     Ok(rules)
+}
+
+/// Byte index of the `}` closing the `{` at `open`, counting nested blocks.
+fn matching_brace(text: &str, open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (index, byte) in text.bytes().enumerate().skip(open) {
+        match byte {
+            b'{' => depth += 1,
+            b'}' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn strip_css_comments(raw: &str) -> String {
@@ -685,8 +1016,8 @@ fn split_selector_list(raw: &str) -> Vec<&str> {
     let mut start = 0usize;
     for (index, ch) in raw.char_indices() {
         match ch {
-            '[' => depth += 1,
-            ']' => depth = depth.saturating_sub(1),
+            '[' | '(' => depth += 1,
+            ']' | ')' => depth = depth.saturating_sub(1),
             ',' if depth == 0 => {
                 selectors.push(raw[start..index].trim());
                 start = index + 1;
@@ -702,32 +1033,30 @@ fn parse_selector(raw: &str) -> Option<SimpleSelector> {
     let mut compounds = Vec::new();
     let mut combinators = Vec::new();
     let mut compound = String::new();
-    let mut bracket_depth = 0usize;
+    let mut depth = 0usize;
     let mut pending_space = false;
     for ch in raw.chars() {
-        if ch == '[' {
-            bracket_depth += 1;
+        if matches!(ch, '[' | '(') {
+            depth += 1;
             compound.push(ch);
-        } else if ch == ']' {
-            bracket_depth = bracket_depth.saturating_sub(1);
+        } else if matches!(ch, ']' | ')') {
+            depth = depth.saturating_sub(1);
             compound.push(ch);
-        } else if bracket_depth == 0 && ch.is_ascii_whitespace() {
+        } else if depth == 0 && ch.is_ascii_whitespace() {
             if !compound.is_empty() {
                 compounds.push(parse_compound(&compound)?);
                 compound.clear();
                 pending_space = true;
             }
-        } else if bracket_depth == 0 && ch == '>' {
+        } else if depth == 0 && matches!(ch, '>' | '+' | '~') {
             if !compound.is_empty() {
                 compounds.push(parse_compound(&compound)?);
                 compound.clear();
             } else if compounds.is_empty() || combinators.len() == compounds.len() {
                 return None;
             }
-            if pending_space {
-                pending_space = false;
-            }
-            combinators.push('>');
+            pending_space = false;
+            combinators.push(ch);
         } else {
             if pending_space {
                 combinators.push(' ');
@@ -742,34 +1071,32 @@ fn parse_selector(raw: &str) -> Option<SimpleSelector> {
     if compounds.is_empty() || combinators.len() + 1 != compounds.len() {
         return None;
     }
-    let specificity = compounds.iter().fold((0, 0, 0), |mut total, part| {
-        total.0 += u32::from(part.id.is_some());
-        total.1 += part.classes.len() as u32 + part.attributes.len() as u32;
-        total.2 += u32::from(part.tag.as_deref().is_some_and(|tag| tag != "*"));
-        total
+    let specificity = compounds.iter().fold((0, 0, 0), |total, part| {
+        let (a, b, c) = part.specificity();
+        (total.0 + a, total.1 + b, total.2 + c)
     });
     Some(SimpleSelector { compounds, combinators, specificity })
 }
 
 fn parse_compound(raw: &str) -> Option<CompoundSelector> {
-    let mut selector = CompoundSelector { tag: None, id: None, classes: Vec::new(), attributes: Vec::new() };
+    let mut selector = CompoundSelector::default();
     let chars: Vec<char> = raw.chars().collect();
     let mut index = 0usize;
+    let name_char = |ch: &char| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_');
     if chars.first().is_some_and(|ch| *ch == '*' || ch.is_ascii_alphabetic() || *ch == '_') {
         let start = index;
         index += 1;
-        while chars.get(index).is_some_and(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '*')) {
+        while chars.get(index).is_some_and(|ch| name_char(ch) || *ch == '*') {
             index += 1;
         }
         selector.tag = Some(chars[start..index].iter().collect());
     }
-    while index < chars.len() {
-        match chars[index] {
+    while let Some(&marker) = chars.get(index) {
+        match marker {
             '#' | '.' => {
-                let marker = chars[index];
                 index += 1;
                 let start = index;
-                while chars.get(index).is_some_and(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | ':')) {
+                while chars.get(index).is_some_and(name_char) {
                     index += 1;
                 }
                 if start == index {
@@ -795,17 +1122,67 @@ fn parse_compound(raw: &str) -> Option<CompoundSelector> {
                 }
                 let content: String = chars[start..index].iter().collect();
                 index += 1;
-                if let Some((name, value)) = content.split_once('=') {
-                    let value = value.trim().trim_matches(['"', '\'']);
-                    selector.attributes.push((name.trim().to_string(), Some(value.to_string())));
-                } else {
-                    selector.attributes.push((content.trim().to_string(), None));
+                selector.attributes.push(parse_attribute_selector(&content)?);
+            }
+            ':' => {
+                index += 1;
+                let start = index;
+                while chars.get(index).is_some_and(name_char) {
+                    index += 1;
+                }
+                let name: String = chars[start..index].iter().collect::<String>().to_ascii_lowercase();
+                match name.as_str() {
+                    "first-child" => selector.first_child = true,
+                    "last-child" => selector.last_child = true,
+                    "root" => selector.root = true,
+                    "not" => {
+                        if chars.get(index) != Some(&'(') {
+                            return None;
+                        }
+                        let start = index + 1;
+                        let end = start + chars.get(start..)?.iter().position(|ch| *ch == ')')?;
+                        let inner: String = chars.get(start..end)?.iter().collect();
+                        // One level only (Selectors Level 3): no recursion on hostile input.
+                        if inner.contains(':') && inner.to_ascii_lowercase().contains(":not") {
+                            return None;
+                        }
+                        selector.nots.push(parse_compound(inner.trim())?);
+                        index = end + 1;
+                    }
+                    _ => return None,
                 }
             }
             _ => return None,
         }
     }
-    (selector.tag.is_some() || selector.id.is_some() || !selector.classes.is_empty() || !selector.attributes.is_empty()).then_some(selector)
+    let empty = selector.tag.is_none()
+        && selector.id.is_none()
+        && selector.classes.is_empty()
+        && selector.attributes.is_empty()
+        && !selector.first_child
+        && !selector.last_child
+        && !selector.root
+        && selector.nots.is_empty();
+    (!empty).then_some(selector)
+}
+
+/// The inside of `[…]`: `name`, or `name` `op=` `value` with optional quotes.
+fn parse_attribute_selector(content: &str) -> Option<AttributeSelector> {
+    let Some((left, value)) = content.split_once('=') else {
+        let name = content.trim();
+        return (!name.is_empty()).then(|| (name.to_string(), None));
+    };
+    let left = left.trim_end();
+    let (name, op) = match left.chars().last() {
+        Some(op @ ('~' | '^' | '$' | '*' | '|')) => (&left[..left.len() - 1], op),
+        _ => (left, '='),
+    };
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let value = value.trim().trim_matches(['"', '\'']);
+    Some((name.to_string(), Some((op, value.to_string()))))
 }
 
 fn parse_declarations(raw: &str, extra: &[&str], path_name: &str) -> Result<(StyleMap, std::collections::HashSet<String>), Error> {
@@ -1222,7 +1599,6 @@ mod tests {
         fails("<path></path>", "d attribute");
         fails("<path d=\"M 0 0 Q\"/>", "");
         fails("<g transform=\"scale(nope)\"><path d=\"M0 0 L1 0 Z\"/></g>", "transform");
-        fails(r#"<svg xmlns="http://www.w3.org/2000/svg"><text x="0" y="10">hello</text></svg>"#, "<text> is not supported");
         fails("<svg><g></svg>", "invalid XML");
     }
 
@@ -1380,8 +1756,7 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_selectors_and_oversized_stylesheets_are_errors() {
-        fails(r##"<svg><style>path:hover { display:none; }</style><path d="M0 0L1 1"/></svg>"##, "");
+    fn an_oversized_stylesheet_is_an_error() {
         fails(&format!("<svg><style>{}</style></svg>", " ".repeat(MAX_CSS_BYTES + 1)), "");
     }
 
@@ -1422,5 +1797,134 @@ mod tests {
                 }
             }
         }
+    }
+    #[test]
+    fn the_stroke_paint_comes_as_written_with_fallbacks_resolved() {
+        let got = read(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+          <style>.blue { stroke: rgb(0 0 100%); }</style>
+          <rect width="1" height="1" stroke="red"/>
+          <rect width="1" height="1" class="blue"/>
+          <g color="rgba(0, 128, 0, 0.5)"><rect width="1" height="1" stroke="currentColor"/></g>
+          <rect width="1" height="1" stroke="currentColor"/>
+          <rect width="1" height="1" stroke="url(#gradient) cornflowerblue"/>
+          <rect width="1" height="1" stroke="url(#gradient)"/>
+          <rect width="1" height="1" fill="black"/>
+          <rect width="1" height="1" stroke="none" fill="black"/>
+          <rect width="1" height="1" stroke="transparent"/>
+        </svg>"##,
+        );
+        let strokes: Vec<Option<&str>> = got.shapes.iter().map(|s| s.stroke.as_deref()).collect();
+        assert_eq!(
+            strokes,
+            [Some("red"), Some("rgb(0 0 100%)"), Some("rgba(0, 128, 0, 0.5)"), Some("black"), Some("cornflowerblue"), None, None, None, None]
+        );
+        assert!(got.warnings.is_empty(), "{:?}", got.warnings);
+    }
+
+    #[test]
+    fn clip_paths_come_as_regions_in_document_space() {
+        let got = read(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+          <defs>
+            <clipPath id="half"><rect x="0" y="0" width="10" height="20"/></clipPath>
+            <clipPath id="moved" transform="translate(50 0)"><rect width="5" height="5"/><circle r="1" clip-rule="evenodd"/></clipPath>
+            <clipPath id="nothing"/>
+          </defs>
+          <g clip-path="url(#half)">
+            <rect id="a" width="20" height="20"/>
+            <rect width="20" height="20" clip-path="url('#moved')"/>
+          </g>
+          <g transform="translate(0 60)"><rect width="20" height="20" style="clip-path: url(#half)"/></g>
+          <rect width="20" height="20" clip-path="url(#nothing)"/>
+          <rect width="20" height="20"/>
+        </svg>"##,
+        );
+        assert!(got.warnings.is_empty(), "{:?}", got.warnings);
+        // The shape itself is not cut down, and says who it is.
+        assert_eq!(bounds(&got, 0), kurbo::Rect::new(0.0, 0.0, 20.0, 20.0));
+        assert_eq!(got.shapes[0].label, r#"<rect id="a">"#);
+        let region = |shape: usize, clip: usize| {
+            let pieces = &got.clips[got.shapes[shape].clips[clip]].pieces;
+            pieces.iter().map(|(path, rule)| (path.bounding_box(), *rule)).collect::<Vec<_>>()
+        };
+        assert_eq!(region(0, 0), [(kurbo::Rect::new(0.0, 0.0, 10.0, 20.0), FillRule::NonZero)]);
+        // Nested clips are listed outermost first; a clip path's own transform applies.
+        assert_eq!(got.shapes[1].clips.len(), 2);
+        assert_eq!(region(1, 0), region(0, 0));
+        let moved = region(1, 1);
+        assert_eq!(moved[0], (kurbo::Rect::new(50.0, 0.0, 55.0, 5.0), FillRule::NonZero));
+        assert_eq!(moved[1].1, FillRule::EvenOdd);
+        // The region lives in the referencing element's user space.
+        assert_eq!(region(2, 0), [(kurbo::Rect::new(0.0, 60.0, 10.0, 80.0), FillRule::NonZero)]);
+        // An empty clip path is a region with no pieces: it clips everything away.
+        assert!(region(3, 0).is_empty());
+        assert!(got.shapes[4].clips.is_empty());
+    }
+
+    #[test]
+    fn clip_paths_that_cannot_be_applied_warn_and_leave_the_shape_unclipped() {
+        for (svg, needle) in [
+            (
+                r##"<svg><clipPath id="c" clipPathUnits="objectBoundingBox"><rect width="1" height="1"/></clipPath><rect width="9" height="9" clip-path="url(#c)"/></svg>"##,
+                "objectBoundingBox",
+            ),
+            (r##"<svg><rect width="9" height="9" clip-path="url(#missing)"/></svg>"##, "not a local <clipPath>"),
+            (r##"<svg><rect width="9" height="9" clip-path="inset(1px)"/></svg>"##, "not a local <clipPath>"),
+            (r##"<svg><rect id="r" width="1" height="1"/><rect width="9" height="9" clip-path="url(#r)"/></svg>"##, "not a <clipPath>"),
+        ] {
+            let got = read(svg);
+            assert!(got.warnings.iter().any(|w| w.contains(needle)), "{svg}: {:?}", got.warnings);
+            assert!(got.shapes.iter().all(|s| s.clips.is_empty()), "{svg}");
+        }
+        let deep = format!(
+            "<svg><clipPath id=\"c\"><rect width=\"1\" height=\"1\"/></clipPath>{}<rect/>{}</svg>",
+            "<g clip-path=\"url(#c)\">".repeat(17),
+            "</g>".repeat(17)
+        );
+        fails(&deep, "clip-path nesting exceeds 16 levels");
+    }
+
+    #[test]
+    fn text_masks_filters_and_ignored_css_warn_by_name() {
+        let got = read(
+            r##"<svg xmlns="http://www.w3.org/2000/svg">
+          <style>@import url(other.css); rect:hover, rect.ok { stroke: red; }</style>
+          <text id="title" x="0" y="10" font-size="12">Hello <tspan>  wide   world</tspan></text>
+          <text display="none">hidden</text>
+          <rect id="masked" class="ok" width="1" height="1" mask="url(#m)"/>
+          <g filter="url(#shadow)"><rect width="1" height="1"/></g>
+          <rect width="1" height="1" style="filter:none; mask:none"/>
+        </svg>"##,
+        );
+        assert_eq!(got.shapes.len(), 3);
+        // The rule's supported selector still applies.
+        assert_eq!(got.shapes[0].stroke.as_deref(), Some("red"));
+        let warnings = got.warnings.join("\n");
+        for needle in [
+            "@import",
+            "rect:hover",
+            r#"<text id="title"> "Hello wide world""#,
+            "convert text to paths",
+            r#"<rect id="masked">: mask ignored"#,
+            "<g>: filter ignored",
+        ] {
+            assert!(warnings.contains(needle), "{needle}: {warnings}");
+        }
+        assert_eq!(got.warnings.len(), 5, "{warnings}");
+    }
+
+    #[test]
+    fn warnings_are_capped_and_the_rest_counted() {
+        let svg = format!("<svg>{}</svg>", (0..200).map(|i| format!("<text id=\"t{i}\">x</text>")).collect::<String>());
+        let mut got = read(&svg);
+        assert_eq!((got.warnings.len(), got.dropped_warnings), (MAX_SVG_WARNINGS, 136));
+        // A caller's own warnings go through the same bound, and repeats are kept once.
+        push_warning(&mut got.warnings, &mut got.dropped_warnings, "mine".into());
+        assert_eq!((got.warnings.len(), got.dropped_warnings), (MAX_SVG_WARNINGS, 137));
+        let (mut few, mut dropped) = (Vec::new(), 0);
+        push_warning(&mut few, &mut dropped, "once".into());
+        push_warning(&mut few, &mut dropped, "once".into());
+        assert_eq!((few.len(), dropped), (1, 0));
     }
 }
