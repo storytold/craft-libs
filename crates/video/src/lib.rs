@@ -10,14 +10,18 @@
 //! | `prores` | [`prores`] | Apple ProRes (SMPTE RDD 36): decoder and encoder |
 //! | `h264` | [`h264`] | ITU-T H.264 / AVC: encoder |
 //! | `hevc` | [`hevc`] | ITU-T H.265 / HEVC: encoder |
-//! | `vp9` | [`vp9`] | VP9: encoder |
+//! | `vp9` | [`vp9`] | VP9: decoder (`vp9-decode`) and encoder (`vp9-encode`) |
 //! | `av1` | [`av1`] | AV1 (AOMedia Video 1): encoder |
 //!
 //! No codec is on by default. Feature `threads` spreads the work of the codecs that support it
 //! over rayon worker threads.
 //!
+//! The decoders that keep reference pictures bound them with a memory budget ([`budget`]).
+//!
 //! Containers and bit-level I/O are in `craft-media`; the codecs here share its `bitstream`
 //! module and describe their streams with `craft_media::CodecParams`.
+
+pub mod budget;
 
 #[cfg(feature = "dnx")]
 pub mod dnx;
@@ -34,7 +38,7 @@ pub mod h264;
 #[cfg(feature = "hevc")]
 pub mod hevc;
 
-#[cfg(feature = "vp9")]
+#[cfg(any(feature = "vp9-decode", feature = "vp9-encode"))]
 pub mod vp9;
 
 #[cfg(feature = "av1")]
