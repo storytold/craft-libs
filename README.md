@@ -91,7 +91,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   metadata and Adobe `hdrgm` XMP (read and write), measuring a gain map from SDR and HDR
   renditions, applying one, and Apple's legacy maps. Encoding and the container stay in each app.
 - [`craft-gcode`](crates/gcode/src/lib.rs): Grbl-style G-code writer: polylines in
-  millimetres to `G0`/`G1` moves with laser power and feed, for cutting lasers and plotters.
+  millimetres to `G0`/`G1` moves with laser power and feed, for cutting lasers and plotters, as a
+  commented file or as bare lines for streaming. Its `grbl` module has the real-time command bytes
+  and the status and acknowledgement parsers.
 - [`craft-heif`](crates/heif/README.md): optional HEIF/HEIC still-image decoder, from LightCraft:
   heic-rs reads the container and HEVC pictures, and this crate converts to 16-bit RGB to match
   libheif (VUI range and matrix, chroma upsampling, `imir`, ICC on grid tiles). Also orientation,
@@ -162,6 +164,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-pcraft-format`](crates/pcraft-format/README.md): the envelope of PhotoCraft's `.pcraft`
   bundle: `Manifest<D>` with the document as a type parameter, `TileRef`, the entry paths, the
   manifest decode limits and the migration runner. The document model stays in PhotoCraft.
+- [`craft-plotter`](crates/plotter/README.md): cutter and pen-plotter command languages: HP-GL,
+  DMPL and GP-GL (plain and the Silhouette dialect, three generations, registration marks) from a
+  job in millimetres, plus the Silhouette device queries and reply parsers. No I/O.
 - [`craft-print`](crates/print/README.md): PDF submission to CUPS and Windows, printer discovery,
   duplex/copies/colour and driver preferences. PDF generation stays in each app.
 - [`craft-proof`](crates/proof/README.md): proofing per language (spelling, suggestions, grammar,
