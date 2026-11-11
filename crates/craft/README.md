@@ -26,7 +26,7 @@ The `[features]` table in `Cargo.toml` is written by `tests/features.rs` from th
 
 Reached through other crates, not named in the facade: the six library crates (`craft-ui-contract` to `craft-ui-shell`), `craft-ui-macros` and `craft-behavior` through `craft-ui`, and `craft-win32` through `craft-window`.
 
-Not in the facade, because they are tools or test harnesses: `craft-ui-gallery`, `story-render`, `craft-ui-bench`, `craft-ui-test-kit`, `craft-fonts-build` (a build-script helper), `craft-design-lint`, `craft-plate-test`, `craft-media-testkit`.
+Not in the facade, because they are tools or test harnesses: `craft-ui-gallery`, `story-render`, `feature-root` (the features local builds resolve with), `craft-ui-bench`, `craft-ui-test-kit`, `craft-fonts-build` (a build-script helper), `craft-design-lint`, `craft-plate-test`, `craft-media-testkit`.
 
 ## Family dependencies
 

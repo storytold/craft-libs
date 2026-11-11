@@ -8,13 +8,13 @@ How to build, test and look at this workspace without waiting for it. The rules 
 
 | What | Command | Builds |
 |---|---|---|
-| check the crate you changed | `cl check <crate>` | `cargo check -p <crate> --tests` with the fixed feature set |
-| build its tests | `cl test <crate> --no-run` | `cargo test -p <crate> --tests` with the fixed feature set |
+| check the crate you changed | `cl check <crate>` | `cargo check` of the crate's lib, bins and tests |
+| build its tests | `cl test <crate> --no-run` | `cargo test -p <crate> --tests` |
 | run some trials | `cl test <crate> -- <filter> --test-threads 4` | nothing new when warm |
 | the debug gallery | `cl build gallery` | the `craft-ui-gallery` binary only |
 | one component's stories as PNGs | `cl render <crate\|ui> <Component> [--story <name>] [--out <dir>]` | the `story-render` binary with that crate's feature |
-| anything else | `cl cargo <args>` | what you asked for, through the job pool |
-| the fixed feature set of a crate | `cl features <crate>` | nothing |
+| anything else | `cl cargo <args>` | what you asked for, through the job pool, nothing added |
+| the features `cl` adds for a crate | `cl features <crate>` | nothing |
 
 `<crate>` is the package name with or without `craft-` (`color`, `craft-ui-widgets`). `cl` uses `<worktree>-target` as the target directory when that directory exists beside the worktree, else `CARGO_TARGET_DIR`, else `target/`.
 
@@ -22,11 +22,13 @@ How to build, test and look at this workspace without waiting for it. The rules 
 
 A fix to one gallery component, from the edit to its old/new picture on a page: edit the component's crate, then `cl render <crate> <Component>` (about 10–25 s warm: the changed crate, the renderer's link, the render) and compare the PNGs with the previous ones; the box's comparison page does the compare step (`gal-sheet/pair.py`, box only). `story-render` links the framework and only the domain crates its features name, so a change in craft-color rebuilds craft-color and the renderer, not the gallery and its 17 crates. `cl render ui <Component>` renders the framework's own components.
 
-## One fixed feature set
+## One feature resolution
 
-cargo compiles a crate once per distinct feature set it is asked for, and every crate above it once more. Before `cl`, local commands differed in craft-ui's `app` (the gallery), `snapshot` (the sheet), `testing` (the tests) and the domain crates' `screen-testing`, so a target directory held two to five copies of the framework and rebuilt it between one agent's test, gallery and sheet commands. `cl` adds the same features to every command: the crate's test feature (`screen-testing`, else `testing`) plus craft-ui's `app` and `testing` (for the facade and the shell: craft-ui-shell's `app`). The runtime's `testing` includes the snapshot renderer, because a feature can be named on the command line only for a direct dependency, and crates above widgets reach the runtime through other framework crates. The proc-macro crate pins syn's and proc-macro2's features to everything other derive crates may add, so the one syn every proc macro shares is the same in every build; craft-ui-contract depends on craft-window with `ui`, so the shell's `app` changes nothing below the shell; and dev-dependency lines ask for no egui features the test kit does not need.
+cargo compiles a crate once per distinct feature set, and every crate above it once more, and it unifies features only over the packages a command selects. A framework crate's tests have no eframe in their graph; a domain crate's tests do; the gallery adds every domain crate, whose dependencies turn on more features of egui, wgpu, craft-window, image and others below the framework. Each kind of command would build its own copy of the framework, and wgpu with it.
 
-What still differs, by design: a framework crate's own tests have no eframe in their graph, domain crates do; two domain crates can differ in a few of their own dependencies' features; the gallery with every app enables a few more features below the framework. Each of those is one extra framework build in a target directory, once; `cl` names the crate and the feature set whenever it happens.
+`cl` selects the `feature-root` package beside the package of every command (`-p <crate> -p feature-root`). Its dependencies are the gallery's, with every domain crate's `screen-testing`, so every local build resolves features as the gallery does, and a target directory holds one build of each crate. Nothing of `feature-root` is compiled: its one target is a bin no `cl` command selects (`cl` names the crate's own targets), and only the targets a command names are built, so a render still links one domain crate and a framework crate's tests still link no app. On top, `cl` adds the crate's own test feature (`screen-testing`, else `testing`). The Mac's and CI's commands never select `feature-root` and are unaffected.
+
+Three manifest facts keep this true, and `cl doctor` checks them: `feature-root` lists every optional domain crate of the gallery with the gallery's features, and depends on the gallery without its default features (so the gallery lib's own features stay each command's: `apps` for the gallery, one crate for a render); dev-dependency lines ask egui for no features (a feature there differs between a crate's tests and everything else); the proc-macro crate pins syn's and proc-macro2's features to everything other derive crates may add, so the one syn every proc macro shares is the same with or without design-lint in the graph. `cl` names any new build of a framework crate in the target directory after each command; after a manifest change one is expected, otherwise run `cl doctor`.
 
 ## What not to run locally
 

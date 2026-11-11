@@ -1,0 +1,52 @@
+[package]
+name = "feature-root"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Never built: the dependency set every local build resolves features with (tools/cl selects it beside each command's package)"
+autobins = false
+autotests = false
+autoexamples = false
+autobenches = false
+
+# cargo unifies features over the packages a command selects. tools/cl selects this package in every command, so each
+# local build resolves the features of every shared crate (the framework, egui, wgpu, ...) as the gallery with every
+# domain crate does, and a target directory holds one build of the framework. No command selects this bin, so nothing
+# here is compiled.
+[[bin]]
+name = "feature-root"
+path = "src/main.rs"
+test = false
+doc = false
+bench = false
+
+[lints]
+workspace = true
+
+# The gallery's own dependencies, without its domain-crate features: the gallery lib's features stay each command's
+# own (`apps` for the gallery, one crate for a render), so a render links one domain crate.
+[dependencies]
+craft-ui-gallery = { path = "../ui-gallery", default-features = false }
+# The gallery's optional domain crates, with the gallery's features (`cl doctor` checks that the lists match).
+craft-automation = { workspace = true, features = ["screen-testing"] }
+craft-browse = { workspace = true, features = ["screen-testing"] }
+craft-color = { workspace = true, features = ["screen-testing"] }
+craft-draw = { workspace = true, features = ["screen-testing"] }
+craft-imaging = { workspace = true, features = ["screen-testing"] }
+craft-layers = { workspace = true, features = ["screen-testing"] }
+craft-menu = { workspace = true, features = ["screen-testing"] }
+craft-pages = { workspace = true, features = ["screen-testing"] }
+craft-print = { workspace = true, features = ["screen-testing"] }
+craft-review = { workspace = true, features = ["screen-testing"] }
+craft-table = { workspace = true, features = ["screen-testing"] }
+craft-text = { workspace = true, features = ["screen-testing"] }
+craft-theme-store = { workspace = true, features = ["screen-testing"] }
+craft-timeline = { workspace = true, features = ["screen-testing"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-dialogs = { workspace = true, features = ["screen-testing"] }
+craft-font-manager = { workspace = true, features = ["screen-testing"] }
+craft-update = { workspace = true, features = ["screen-testing"] }

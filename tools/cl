@@ -1,30 +1,32 @@
 #!/usr/bin/env -S python3 -I
-"""The craft-libs build loop: cargo with one fixed feature set, so every local build shares one variant of each crate.
+"""The craft-libs build loop: cargo with one resolution of features, so every local build shares one build of each crate.
 
-    cl check <crate> [cargo args]                 cargo check -p <crate> --tests, canonical features
-    cl test <crate> [cargo args] [-- test args]   cargo test -p <crate> --tests, canonical features
+    cl check <crate> [cargo args]                 cargo check of the crate's lib, bins and tests
+    cl test <crate> [cargo args] [-- test args]   cargo test -p <crate> --tests
     cl build gallery [cargo args]                 the debug gallery binary (target/debug/craft-ui-gallery)
-    cl build <crate> [cargo args]                 cargo build -p <crate>, canonical features
+    cl build <crate> [cargo args]                 cargo build of the crate's lib and bins
     cl render <crate|ui> <Component> [--card] [--story <name>] [--out <dir>] [--threads N]
                                                   the component's stories (--card: its Overview cards) as PNGs through the story-render bin
-    cl features <crate>                           print the canonical --features value for <crate>
-    cl doctor                                     check the manifests for drift from the one feature set
-    cl cargo <args...>                            cargo through the job pool, no features added
+    cl features <crate>                           print the --features value cl adds for <crate>
+    cl doctor                                     check the manifests for drift from the one feature resolution
+    cl cargo <args...>                            cargo through the job pool, nothing added
 
 Every cargo command runs through the command in CL_LAUNCHER when it is set (for example a wrapper that gives several
-builds on one machine a shared jobserver; docs/development.md "The job pool"), else plain cargo. CARGO_TARGET_DIR defaults to <worktree>-target when that directory exists beside the worktree.
+builds on one machine a shared jobserver; docs/development.md "The job pool"), else plain cargo. CARGO_TARGET_DIR
+defaults to <worktree>-target when that directory exists beside the worktree.
 
-Why one feature set: cargo builds a crate once per distinct feature set, and everything above it again. The gallery
-turns on craft-ui's `app`, the tests `testing` (which includes the snapshot renderer) and the domain crates'
-`screen-testing`; a command that leaves one of them off builds a second variant of the framework (minutes) and the
-dependants above it. The canonical set for a crate is its own test feature (`screen-testing`, else `testing`) plus,
-for every crate that depends on the framework, craft-ui's `app` and `testing` (craft-ui-shell's `app` for the facade
-and the shell). Builds that take other features (CI's `--all-features`, wasm checks) belong on GitHub.
-docs/development.md has the whole picture.
+Why one resolution: cargo builds a crate once per distinct feature set, and everything above it again, and it unifies
+features only over the packages a command selects. A framework crate's tests, a domain crate's tests, the gallery and
+the story renderer each pull in different crates, which turn on different features of egui, wgpu, craft-window and
+others below the framework, so each would build its own copy of the framework (minutes, and wgpu again). cl selects
+the `feature-root` package beside every command's package: its dependencies are the gallery's, with every domain
+crate, so every command resolves features as the gallery does and builds only the targets it names. The crate's own
+test feature (`screen-testing`, else `testing`) is added on top. Builds that take other features (CI's
+`--all-features`, wasm checks) belong on GitHub. docs/development.md has the whole picture.
 
 Guards: `--all-features`, `--bins` and workspace-wide builds are refused with the reason; after every command, a new
-feature variant of a framework crate in the target directory is named, with its feature set; `cl doctor` (also run
-before every command, it reads a few manifests) reports manifest lines that would bring the churn back.
+build of a framework crate in the target directory is named, with its feature set; `cl doctor` (also run before every
+command, it reads a few manifests) reports manifest lines that would bring a second build back.
 """
 
 import json
@@ -35,16 +37,8 @@ import subprocess
 import sys
 
 FRAMEWORK = ["craft-ui-contract", "craft-ui-widgets", "craft-ui-panels", "craft-ui-canvas", "craft-ui-patterns", "craft-ui-shell", "craft-ui"]
-ANCHORS = {
-    # package -> the features of its framework dependencies that every local build keeps on. A feature can only be
-    # named for a direct dependency (`craft-ui-shell/app` from the facade, not `craft-ui-contract/...` from panels), so
-    # the runtime's test kit is one feature, `testing`, that every crate's own `testing` reaches.
-    "craft-ui": ["craft-ui-shell/app"],
-    "craft-ui-shell": ["app"],
-    "craft-ui-gallery": ["apps"],
-    "story-render": [],
-}
-FACADE_ANCHORS = ["craft-ui/app", "craft-ui/testing"]
+# Selected beside every command's package; its dependencies decide every shared crate's features (its manifest).
+ROOT = "feature-root"
 # Domain crates the story renderer can link, by the crate's short name.
 RENDER_FEATURES = {
     "automation", "browse", "color", "draw", "imaging", "layers", "menu", "pages", "print", "review", "table", "text",
@@ -100,18 +94,24 @@ def package(packages, name):
 
 
 def canonical(packages, name):
-    """The canonical feature list of a package."""
+    """The package's name and the features cl adds for it, qualified: its own test feature."""
     p = package(packages, name)
-    features = []
     if "screen-testing" in p["features"]:
-        features.append("screen-testing")
-    elif "testing" in p["features"] and p["name"] != "craft-ui-test-kit":
-        features.append("testing")
-    if p["name"] in ANCHORS:
-        features += ANCHORS[p["name"]]
-    elif any(d["name"] == "craft-ui" for d in p["dependencies"]):
-        features += FACADE_ANCHORS
-    return p["name"], features
+        return p["name"], [p["name"] + "/screen-testing"]
+    if "testing" in p["features"] and p["name"] != "craft-ui-test-kit":
+        return p["name"], [p["name"] + "/testing"]
+    return p["name"], []
+
+
+def own_targets(p):
+    """Target-selection flags naming the package's lib and bins, so the root's bin is never selected."""
+    flags = []
+    for t in p["targets"]:
+        if "lib" in t["kind"] or "rlib" in t["kind"] or "proc-macro" in t["kind"]:
+            flags.append("--lib")
+        elif "bin" in t["kind"]:
+            flags += ["--bin", t["name"]]
+    return flags
 
 
 def doctor(top, packages, quiet=False):
@@ -127,24 +127,26 @@ def doctor(top, packages, quiet=False):
             if d["name"] == "egui" and d["kind"] == "dev" and d["features"]:
                 problems.append(f"{manifest}: the egui dev-dependency asks for {d['features']}; a feature on a dev-dependency "
                                 "line changes egui under the framework between a crate's tests and its render")
-    # Every crate's canonical set must resolve: a plain feature of the crate, or `dep/feature` with `dep` a direct
-    # dependency (workspace members: a feature it defines), else cargo refuses the command.
-    for p in packages.values():
-        direct = {d["name"]: d for d in p["dependencies"]}
-        for feature in canonical(packages, p["name"])[1]:
-            if "/" in feature:
-                dep, feat = feature.split("/", 1)
-                if dep not in direct:
-                    problems.append(f"{p['name']}: canonical feature {feature} names {dep}, which is not a direct dependency")
-                elif dep in packages and feat not in packages[dep]["features"] and not any(d["name"] == feat and d["optional"] for d in packages[dep]["dependencies"]):
-                    problems.append(f"{p['name']}: canonical feature {feature}: {dep} has no feature {feat}")
-            elif feature not in p["features"]:
-                problems.append(f"{p['name']}: canonical feature {feature} is not a feature of the crate")
     gallery = packages.get("craft-ui-gallery")
     if gallery:
         for d in gallery["dependencies"]:
             if d["name"].startswith("craft-") and "screen-testing" in d["features"] and not d["optional"]:
                 problems.append(f"crates/ui-gallery/Cargo.toml: {d['name']} must be optional (one feature per domain crate), or the story renderer links every crate")
+    root = packages.get(ROOT)
+    if not root:
+        problems.append(f"crates/{ROOT}: missing; without it every kind of command builds its own copy of the framework")
+    elif gallery:
+        mine = {d["name"]: d for d in root["dependencies"] if d["kind"] is None}
+        g = mine.get("craft-ui-gallery")
+        if not g or g["uses_default_features"] or g["features"]:
+            problems.append(f"crates/{ROOT}/Cargo.toml: must depend on craft-ui-gallery with default-features = false and no "
+                            "features, or every render links all domain crates")
+        for d in gallery["dependencies"]:
+            if d["kind"] is None and d["optional"] and d["name"].startswith("craft-"):
+                r = mine.get(d["name"])
+                if not r or not set(d["features"]) <= set(r["features"]):
+                    problems.append(f"crates/{ROOT}/Cargo.toml: must depend on {d['name']} with {d['features']} as the gallery "
+                                    "does, or a domain crate's tests and the gallery build different copies of the framework")
     for problem in problems:
         print(f"cl doctor: {problem}", file=sys.stderr)
     if not problems and not quiet:
@@ -192,14 +194,16 @@ def report_new_variants(before, after):
             continue
         feats = " | ".join(sorted(by_crate[crate]))
         same = [f for f in by_crate[crate] if f in olds.get(crate, set())]
-        why = ("same features as a variant already here, so a crate below it changed its features (another crate's dependencies "
-               "or dev-dependencies, or the gallery's apps)" if same else "a feature set this target dir had not built")
-        print(f"cl: new variant of {crate} built, features {feats}: {why}; {len(olds.get(crate, []))} variant(s) were there before. "
-              "Expected once per crate family (docs/development.md); otherwise check the command against `cl features`.",
+        why = ("same features as a build already here, so a crate below it changed its features (a dev-dependency line, "
+               "a manifest change, or a command run outside cl)" if same else "a feature set this target dir had not built")
+        print(f"cl: new build of {crate}, features {feats}: {why}; {len(olds.get(crate, []))} build(s) were there before. "
+              "Expected once per target dir after a manifest change (docs/development.md); otherwise run `cl doctor`.",
               file=sys.stderr)
 
 
-def run(top, cargo_args):
+def run(top, cargo_args, then=None):
+    """Runs cargo through the launcher and reports new framework builds; `then` (a command) runs after a successful
+    cargo, through the launcher too. Exits with the last return code."""
     # cargo fmt builds nothing, so its `--all` is the usual whole-workspace format.
     for arg in ([] if cargo_args[:1] == ["fmt"] else cargo_args):
         if arg in REFUSED:
@@ -213,11 +217,17 @@ def run(top, cargo_args):
     before = variants(target)
     rc = subprocess.run(cmd, cwd=top, env=env).returncode
     report_new_variants(before, variants(target))
+    if rc == 0 and then:
+        rc = subprocess.run(launcher + [os.path.join(target, "debug", then[0])] + then[1:], cwd=top, env=env).returncode
     sys.exit(rc)
 
 
 def with_features(args, features):
     return args + (["--features", ",".join(features)] if features else [])
+
+
+def selected(pkg):
+    return ["-p", pkg, "-p", ROOT]
 
 
 def main():
@@ -242,14 +252,13 @@ def main():
             fail(f"cl {command} <crate> [args]")
         name, args = rest[0], rest[1:]
         if command == "build" and name == "gallery":
-            pkg, features = canonical(packages, "craft-ui-gallery")
-            run(top, with_features(["build", "-p", pkg, "--bin", "craft-ui-gallery"], features) + args)
+            run(top, ["build"] + selected("craft-ui-gallery") + ["--bin", "craft-ui-gallery"] + args)
         pkg, features = canonical(packages, name)
         if command == "check":
-            run(top, with_features(["check", "-p", pkg, "--tests"], features) + args)
+            run(top, with_features(["check"] + selected(pkg) + ["--tests"] + own_targets(packages[pkg]), features) + args)
         if command == "test":
-            run(top, with_features(["test", "-p", pkg, "--tests"], features) + args)
-        run(top, with_features(["build", "-p", pkg], features) + args)
+            run(top, with_features(["test"] + selected(pkg) + ["--tests"], features) + args)
+        run(top, with_features(["build"] + selected(pkg) + own_targets(packages[pkg]), features) + args)
     if command == "render":
         if len(rest) < 2:
             fail("cl render <crate|ui> <Component> [--card] [--story <name>] [--out <dir>] [--threads N]")
@@ -259,10 +268,12 @@ def main():
         if short != "ui":
             if short not in RENDER_FEATURES:
                 fail(f"{crate} is not a crate the story renderer links; one of: ui, " + ", ".join(sorted(RENDER_FEATURES)))
-            features = [short]
+            features = ["story-render/" + short]
         if "--out" not in options:
             options += ["--out", os.path.join(os.environ.get("CL_RENDER_DIR", os.path.expanduser("~/.cache/story-render")), component)]
-        run(top, with_features(["run", "-q", "-p", "story-render", "--bin", "story-render"], features) + ["--", "--only", component] + options)
+        # `cargo run` takes one package, so the bin is built with the root selected and then run.
+        run(top, with_features(["build", "-q"] + selected("story-render") + ["--bin", "story-render"], features),
+            then=["story-render", "--only", component] + options)
     fail(f"unknown command {command}; see cl --help")
 
 

@@ -1141,6 +1141,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-cfb"
+version = "0.1.0"
+
+[[package]]
 name = "craft-cms"
 version = "0.1.0"
 dependencies = [
@@ -1474,6 +1478,31 @@ dependencies = [
  "egui",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "craft-mesh"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
+name = "craft-metafile"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "kurbo 0.13.1",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-mime"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "encoding_rs",
+ "proptest",
 ]
 
 [[package]]
@@ -2069,6 +2098,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-xml"
+version = "0.1.0"
+dependencies = [
+ "quick-xml 0.41.0",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2651,6 +2688,30 @@ name = "fearless_simd"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b97b65636e5b9ef369943878ac74335ba1c55c1cb6adbf1e2c293c624248d693"
+
+[[package]]
+name = "feature-root"
+version = "0.1.0"
+dependencies = [
+ "craft-automation",
+ "craft-browse",
+ "craft-color",
+ "craft-dialogs",
+ "craft-draw",
+ "craft-font-manager",
+ "craft-imaging",
+ "craft-layers",
+ "craft-menu",
+ "craft-pages",
+ "craft-print",
+ "craft-review",
+ "craft-table",
+ "craft-text",
+ "craft-theme-store",
+ "craft-timeline",
+ "craft-ui-gallery",
+ "craft-update",
+]
 
 [[package]]
 name = "filetime"
@@ -3785,6 +3846,8 @@ checksum = "85ab80394333c02fe689eaf900ab500fbd0c2213da414687ebf995a65d5a6104"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
+ "color_quant",
+ "gif",
  "moxcms",
  "num-traits",
  "png 0.18.1",
