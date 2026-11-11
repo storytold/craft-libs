@@ -359,3 +359,15 @@ fn the_ispe_crop_precedes_the_transforms() {
         assert_eq!(px, [luma(31, x) * 257; 3], "({x}, 0)");
     }
 }
+
+#[test]
+fn a_stereo_pair_decodes_its_primary_image() {
+    // A spatial photo: a second image and a `grpl`/`ster` entity group. The decoder ignores the
+    // group and still decodes `pitm`; the file is what a stereo detector's tests are built from.
+    let plain = build(&Spec::new(32, 32, &grey));
+    let stereo = build(&Spec { stereo: true, ..Spec::new(32, 32, &grey) });
+    assert!(stereo.windows(4).any(|w| w == b"grpl") && stereo.windows(4).any(|w| w == b"ster"));
+    assert!(!plain.windows(4).any(|w| w == b"grpl"));
+    let (a, b) = (decode(&plain, &Options::default()).unwrap(), decode(&stereo, &Options::default()).unwrap());
+    assert_eq!((a.width, a.height, &a.data), (b.width, b.height, &b.data));
+}
