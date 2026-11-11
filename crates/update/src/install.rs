@@ -1685,15 +1685,25 @@ pub mod macos {
     /// Detaches the image file `dmg` where it is attached with no volume mounted, which a failed
     /// attach can leave. An attachment with a mounted volume is left alone: another install may
     /// be using it. So is every attachment while a program started with `dmg` in its arguments
-    /// (another process's `hdiutil attach`) is running.
+    /// (another process's `hdiutil attach`) is running, or while the check for one gets no answer.
     fn detach_unmounted(dmg: &Path) -> Result<(), String> {
-        if process::is_running(dmg) {
+        detach_unmounted_with(dmg, process::running, process::run)
+    }
+
+    /// [`detach_unmounted`], with `running` checking for a program started with `dmg` in its
+    /// arguments and `run` running `hdiutil`.
+    pub(crate) fn detach_unmounted_with(
+        dmg: &Path,
+        running: impl FnOnce(&Path) -> Result<bool, String>,
+        run: impl Fn(&str, &[&str], Duration) -> Result<String, String>,
+    ) -> Result<(), String> {
+        if running(dmg) != Ok(false) {
             return Ok(());
         }
-        let info = process::run(HDIUTIL, &["info", "-plist"], Duration::from_secs(30))?;
+        let info = run(HDIUTIL, &["info", "-plist"], Duration::from_secs(30))?;
         let image = [Some(dmg.to_path_buf()), std::fs::canonicalize(dmg).ok()];
         for device in unmounted_attachments(&info, &image.into_iter().flatten().collect::<Vec<_>>()) {
-            process::run(HDIUTIL, &["detach", &device, "-force", "-quiet"], Duration::from_secs(60))?;
+            run(HDIUTIL, &["detach", &device, "-force", "-quiet"], Duration::from_secs(60))?;
         }
         Ok(())
     }
@@ -3998,6 +4008,37 @@ esac
             let both = [PathBuf::from(ours), PathBuf::from(format!("/private{ours}"))];
             assert_eq!(super::macos::unmounted_attachments(&info, &both), ["/dev/disk5", "/dev/disk8"]);
             assert!(super::macos::unmounted_attachments("hdiutil: info failed", &paths).is_empty());
+        }
+
+        #[test]
+        fn attachments_are_left_alone_unless_no_attach_of_the_image_is_running() {
+            let dmg = Path::new("/Users/a/Library/Caches/craft/photocraft-0.6.0.dmg");
+            let info = format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict><key>images</key><array><dict><key>image-path</key><string>{}</string><key>system-entities</key><array><dict><key>dev-entry</key><string>/dev/disk5</string></dict></array></dict></array></dict></plist>",
+                dmg.display()
+            );
+            for (answer, expected) in [
+                (Ok(true), vec![]),
+                // pgrep gave no answer: an attach of the image may still be running.
+                (Err("pgrep didn't finish within 30 seconds".to_string()), vec![]),
+                (Ok(false), vec!["info -plist".to_string(), "detach /dev/disk5 -force -quiet".to_string()]),
+            ] {
+                let ran = std::cell::RefCell::new(Vec::new());
+                let result = super::macos::detach_unmounted_with(
+                    dmg,
+                    |path| {
+                        assert_eq!(path, dmg);
+                        answer.clone()
+                    },
+                    |program, args, _| {
+                        assert_eq!(program, "/usr/bin/hdiutil");
+                        ran.borrow_mut().push(args.join(" "));
+                        Ok(if args[0] == "info" { info.clone() } else { String::new() })
+                    },
+                );
+                assert_eq!(result, Ok(()));
+                assert_eq!(ran.into_inner(), expected, "with the process check giving {answer:?}");
+            }
         }
 
         #[test]
