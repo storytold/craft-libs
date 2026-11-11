@@ -1294,6 +1294,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-rtf"
+version = "0.1.0"
+dependencies = [
+ "encoding_rs",
+]
+
+[[package]]
 name = "craft-settings"
 version = "0.1.0"
 dependencies = [
