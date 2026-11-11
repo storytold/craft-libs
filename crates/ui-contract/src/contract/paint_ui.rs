@@ -165,7 +165,7 @@ impl PaintUi<'_> {
         let focus = self.active.filter(|(active, _)| *active == part).map(|(_, visible)| visible);
         let source =
             FaceSource { id: self.id, result, focus, response: self.response, ink, muted: self.muted, flags: self.flags, enabled: self.enabled };
-        let (record, _) = run::paint_face(self.ui, self.env, &source, part, face);
+        let record = run::paint_face(self.ui, self.env, &source, part, face);
         let mut own = self.record.borrow_mut();
         if let Some(baseline) = record.baseline {
             own.baseline.get_or_insert(baseline);

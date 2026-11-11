@@ -457,6 +457,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Collection 
     type Selection = Selection<K>;
     type Item<'r> = Tab<'r>;
     type ItemEvent = TabPartEvent;
+    const MEMBERS: bool = true;
 
     fn items(&self) -> &CollectionProps {
         &self.items

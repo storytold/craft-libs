@@ -572,7 +572,7 @@ pub(crate) fn measured_extent<C: Component>(
 /// A face run is steps 1, 2, 4 (read only), 12 and 13 of the face component, inside the composite's step 13, under
 /// the composite's `env`. It registers no id, senses nothing, opens no memory stage and fires nothing. Returns the
 /// record step 16 fills the part's sub-node from, and the facts the face's `access` declared.
-pub(crate) fn paint_face<C: Show>(ui: &mut Ui, env: &Env, source: &super::FaceSource<'_>, part: PartRef, mut face: C) -> (FaceRecord, Access) {
+pub(crate) fn paint_face<C: Show>(ui: &mut Ui, env: &Env, source: &super::FaceSource<'_>, part: PartRef, mut face: C) -> FaceRecord {
     let ctx = ui.ctx().clone();
     let common = std::mem::take(face.common_mut(Internal::new()));
     debug_assert!(common.tooltip.is_none(), "a face instance carries no tooltip; use `PartBuilder::tooltip`");
@@ -643,7 +643,199 @@ pub(crate) fn paint_face<C: Show>(ui: &mut Ui, env: &Env, source: &super::FaceSo
     // The face's own `access` adds its facts; the composite's step 16 fills the part's sub-node from the record.
     let mut access = Access::default();
     face.access(&mut access, &cx);
-    let record =
-        FaceRecord { part, name, flags, role: C::ROLE, numeric: access.numeric.clone(), expanded: access.expanded, enabled: step1.enabled, baseline };
-    (record, access)
+    FaceRecord { part, name, flags, role: C::ROLE, numeric: access.numeric, expanded: access.expanded, enabled: step1.enabled, baseline }
+}
+
+/// A member of a collection's run (`Collection::MEMBERS`) after steps 1, 2, 4 (read only) and 7: what the batch join
+/// reads and what [`member_show`] runs on.
+pub(crate) struct MemberPrep<C: Component> {
+    item: C,
+    common: Common,
+    step1: steps::EnvStep,
+    style: Arc<C::Style>,
+    shown: Option<Arc<ValueOf<C>>>,
+    mixed: bool,
+    pub decls: crate::contract::cx::Decls,
+    /// What the member senses of its own: the item's sense less the press and the focus, which the collection's root
+    /// takes (17.2), as for an item that runs.
+    pub sense: Sense,
+    pub tooltip: Option<crate::contract::Tooltip>,
+}
+
+/// Steps 1, 2, 4 (read only) and 7 of the member `id` at `row`; `hovered` is the arena's hover of the member this pass,
+/// which `PartsCx::hovered` reads.
+pub(crate) fn member_prepare<C: Show>(ui: &Ui, env: &Env, id: Id, row: Rect, hovered: bool, mut item: C) -> MemberPrep<C> {
+    let ctx = ui.ctx();
+    let mut common = std::mem::take(item.common_mut(Internal::new()));
+    let tooltip = common.tooltip.take();
+    let step1 = steps::env(ctx, env, &common, steps::variants::<C>(common.variant));
+    let style = steps::style::<C>(ctx, &steps::style_cx(ctx, env, &step1), item.style_key());
+    let (shown, mixed) = steps::peek_value(&mut item, ctx, id, step1.command.as_deref());
+    if let Some(key) = item.bind().and_then(|bind| bind.key(id)) {
+        reads::note(ctx, key, id, crate::runtime::measure::active(ctx), &[]);
+    }
+    let mut parts = PartsStep { decls: Default::default(), rovings: Vec::new(), scrolls: Vec::new(), text: Default::default() };
+    if C::PARTS {
+        let resolved = steps::resolved(id, &step1, &common);
+        let flow = Flow::new(row, env.direction.is_rtl());
+        let content_rect = flow.inset(StyleView::metrics(&*style).padding);
+        let input = MeasureIn { ui, env, proposal: Proposal::Ideal, room: None };
+        let mut pcx = PartsCx {
+            content_rect,
+            flow,
+            decls: &mut parts.decls,
+            rovings: &mut parts.rovings,
+            scrolls: &mut parts.scrolls,
+            text: &mut parts.text,
+            last_state: (hovered, false),
+            measure: steps::measure_cx::<C>(&input, &style, &resolved, shown.as_deref()),
+            items: None,
+        };
+        item.parts(row, &mut pcx);
+    }
+    debug_assert!(
+        parts.rovings.is_empty() && parts.scrolls.is_empty() && parts.text.decl.is_none() && parts.decls.iter().all(|(_, extras)| !extras.focusable),
+        "a member of a collection's run declares no stop, roving group, scroll part or text part"
+    );
+    let sense = item.sense().difference(Sense::CLICK | Sense::FOCUS) | Sense::HOVER;
+    MemberPrep { item, common, step1, style, shown, mixed, decls: parts.decls, sense, tooltip }
+}
+
+/// Where a member's sub-node goes: the collection's node `owner`, the item part it reports as, and its row facts.
+pub(crate) struct MemberNode {
+    pub owner: Id,
+    pub part: PartRef,
+    pub parent: Id,
+    pub position: SetPosition,
+    /// The row's flags: selected, lead, expanded, current, dragging, drop target.
+    pub flags: Flags,
+    pub enabled: bool,
+    /// The member's sense as an item: whether its sub-node takes AccessKit focus and clicks, which the collection serves.
+    pub item_sense: Sense,
+}
+
+/// What a member's show leaves for the collection: its output, and its tooltip while the pointer rests on it.
+pub(crate) struct MemberShown<O> {
+    pub output: O,
+    pub tip: Option<crate::contract::tooltip::MemberTip>,
+}
+
+/// Steps 9 (update), 12, 13, 16 and the finish of a member that joined the arena as `sensed`: the item's `update`
+/// reads its parts and its press, its `paint` and `paint_over` draw at its row, its node and its parts' nodes are
+/// reported under the collection's node, and `finish` makes its output.
+pub(crate) fn member_show<C: Show>(
+    ui: &mut Ui,
+    env: &Env,
+    (id, row): (Id, Rect),
+    prep: MemberPrep<C>,
+    sensed: crate::primitives::sensing::MemberResult,
+    node: &MemberNode,
+) -> MemberShown<C::Output> {
+    let ctx = ui.ctx().clone();
+    let MemberPrep { mut item, common, step1, style, shown, mixed, decls, sense: _, tooltip } = prep;
+    let rtl = env.direction.is_rtl();
+    let resolved = steps::resolved(id, &step1, &common);
+    let enabled = node.enabled && step1.enabled;
+    let hovered = sensed.response.hovered();
+    let result = crate::primitives::PartResult { rect: row, press: sensed.press, hovered, hover_pos: None, flags: node.flags, inactive: false };
+    let part_state = steps::part_state(&result, enabled, None);
+    let mut flags = part_state.flags | item.flags();
+    if (shown.as_deref().map(|value| value as &dyn std::any::Any)).and_then(|value| value.downcast_ref::<bool>()) == Some(&true) {
+        flags |= Flags::CHECKED;
+    }
+    if mixed {
+        flags |= Flags::MIXED;
+    }
+    let on = f32::from(u8::from(flags.intersects(Flags::ON)));
+    let state = StateSet::new(part_state.state, flags, crate::style::StateMix::new(part_state.t.hover, part_state.t.press, on));
+    // A peek that opens no lifetime stage and is dropped without a write-back, as a face's.
+    let mut stage = MemoryStage::open_peek(&ctx, id);
+    stage.face = true;
+    let mut core = blank_core(env.view(), &resolved, &mut stage, ctx.clone(), env.ink, sensed.response, step1.command.clone());
+    let flow = Flow::new(row, rtl);
+    core.rect = row;
+    core.content_rect = flow.inset(StyleView::metrics(&*style).padding);
+    core.flow = flow;
+    core.state = state;
+    core.stated = true;
+    core.ink = steps::surface_ink(StyleView::surface(&*style), &state, env.ink);
+    core.visible = row.intersect(ui.clip_rect());
+    core.part_cursors = crate::primitives::sensing::hovered_cursor(decls.parts(), &sensed.parts).into_iter().collect();
+    core.results = sensed.parts;
+    core.press = sensed.press;
+    core.member_of = Some(node.owner);
+    core.intents = crate::runtime::keys::intents_of(&ctx, Some(id), rtl);
+    let mut cx = Cx::<C> { core, style: &style, shown, mixed, events: Vec::new(), applied: 0, validity: Validity::Ok };
+    item.update(&mut cx);
+    steps::paint_surface(ui, env, &cx.core, &*style);
+    steps::paint_part_layers(ui, env, &cx.core);
+    item.paint(&mut super::paint_ui(ui, env, &cx.core, &*style), &cx);
+    item.paint_over(&mut super::paint_ui(ui, env, &cx.core, &*style), &cx);
+    let mut access = Access::default();
+    item.access(&mut access, &cx);
+    let member_node = report_member(&cx.core, &access, node, C::ROLE);
+    {
+        let paint = cx.core.paint.borrow();
+        steps::report_parts(&cx.core, &decls, &access.nodes, &paint.faces, member_node);
+    }
+    crate::contract::cx::write_cursor(&cx.core);
+    let tip = member_tip(&cx.core, &decls, node.part, tooltip, row);
+    MemberShown { output: item.finish(cx), tip }
+}
+
+/// The member's own sub-node of the collection's node: the facts the item's `access` declared, its row's place and
+/// flags. Returns the node's id, which its parts' nodes attach to.
+fn report_member(core: &CxCore<'_>, access: &Access, node: &MemberNode, role: crate::contract::Role) -> Id {
+    use crate::runtime::access::{Name, SubDecl, SubNode};
+    let name = match &access.name {
+        Name::FromLabel => Name::Text(core.paint.borrow().elided.clone().unwrap_or_else(|| core.resolved.label.to_owned())),
+        name => name.clone(),
+    };
+    let mut sub = SubNode::new(node.part, access.role.unwrap_or(role));
+    sub.name = name;
+    sub.description = access.description.clone();
+    sub.value = access.value.clone();
+    sub.color = access.color;
+    sub.numeric = access.numeric.clone();
+    sub.expanded = access.expanded;
+    sub.position = Some(node.position);
+    sub.flags = node.flags;
+    let decl = SubDecl {
+        owner: node.owner,
+        component: "",
+        node: &sub,
+        rect: core.rect,
+        enabled: node.enabled,
+        focusable: node.enabled && node.item_sense.contains(Sense::FOCUS),
+        clickable: node.enabled && node.item_sense.contains(Sense::CLICK),
+        active: false,
+        face: None,
+        label: "",
+        parent: node.parent,
+    };
+    crate::runtime::access::report_sub(&core.ctx, &decl);
+    crate::runtime::access::sub_node_id(node.owner, node.part)
+}
+
+/// The tooltip of a hovered member: its hovered part's, else its own. A part's subject is keyed by the member, so two
+/// members' same part are two subjects.
+fn member_tip(
+    core: &CxCore<'_>,
+    decls: &crate::contract::cx::Decls,
+    member: PartRef,
+    own: Option<crate::contract::Tooltip>,
+    row: Rect,
+) -> Option<crate::contract::tooltip::MemberTip> {
+    if !core.response.hovered() {
+        return None;
+    }
+    let pressed = core.press.phase.is_press();
+    let hash = member.index.unwrap_or(0);
+    let part = decls.iter().find_map(|(decl, extras)| {
+        let result = core.results.get(&(decl.key, decl.index)).filter(|result| result.hovered)?;
+        let tip = extras.tooltip.as_ref()?;
+        let index = decl.index.map_or(hash, |index| hash ^ index.rotate_left(32));
+        Some(crate::contract::tooltip::MemberTip { part: decl.key.at(index), spec: tip.spec().clone(), rect: result.rect, pressed })
+    });
+    part.or_else(|| own.map(|tip| crate::contract::tooltip::MemberTip { part: member, spec: tip.spec().clone(), rect: row, pressed }))
 }

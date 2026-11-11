@@ -28,7 +28,10 @@ use std::sync::Arc;
 
 mod typed;
 
-pub(crate) use typed::{measure_container, measure_under, measured_extent, paint_face, show_container, show_container_taking, show_items, show_leaf};
+pub(crate) use typed::{
+    MemberNode, MemberPrep, MemberShown, measure_container, measure_under, measured_extent, member_prepare, member_show, paint_face, show_container,
+    show_container_taking, show_items, show_leaf,
+};
 
 /// Where a component is placed.
 #[derive(Clone, Copy)]

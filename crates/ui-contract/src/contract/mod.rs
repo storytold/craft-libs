@@ -474,11 +474,12 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
     type ItemEvent: 'static;
 
     /// Whether the items are members of the collection's run instead of runs of their own. Each visible item is then
-    /// sensed as a member of the collection's arena, painted as a face at its row with the row's flags, and reported as
-    /// an access sub-node of the collection with the facts the face's `access` declares; its `tooltip` shows as the
-    /// collection's while the pointer rests on it. Of the item's hooks only those a face uses run (style, measure,
-    /// sense, flags, paint, access), so a member reports no output: no item event, open request or label rect. A
-    /// member declares no parts of its own and takes no rich tooltip.
+    /// sensed with its parts as a member of the collection's arena, painted at its row with the row's flags, and
+    /// reported as an access sub-node of the collection, its parts' nodes under it; its `tooltip`, or its hovered part's,
+    /// shows as the collection's while the pointer rests on it. The item's `style`, `measure`, `sense`, `flags`,
+    /// `parts`, `update`, `paint`, `paint_over`, `access` and `finish` run, so its output gives the item event, open
+    /// request and label rect as a run's does. A member has no stop and no focusable part, shows no popup, edits no
+    /// value and takes no rich tooltip.
     const MEMBERS: bool = false;
 
     /// Plain data: selection mode, reorder, rename, columns.

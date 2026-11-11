@@ -24,7 +24,7 @@ mod update;
 mod value;
 
 pub(crate) use apply::{ValueEdit, apply_values, rerun_after_edit};
-pub(crate) use env::{env, resolved, variants};
+pub(crate) use env::{EnvStep, env, resolved, variants};
 pub(crate) use finish::{before_finish, inert_response, record_size, value_changed};
 pub(super) use id::measuring;
 pub(crate) use id::{draft, id, keeping_ids};
@@ -33,7 +33,7 @@ pub(crate) use measure::{MeasureIn, guard, measure, measure_content, measure_cx}
 pub(crate) use paint::{paint_focus, paint_part_layers, paint_surface, surface_ink};
 pub(crate) use parts::{PartsStep, check_parts, declares_none};
 pub(crate) use place::place;
-pub(crate) use report::{ReportIn, report, report_inert, validity_of};
+pub(crate) use report::{ReportIn, report, report_inert, report_parts, validity_of};
 #[cfg(feature = "testing")]
 pub(crate) use scroll_owner::queue_reveal;
 pub(crate) use scroll_owner::{child_reveal, peek_reveal, peek_scroll_moves, queue_child_reveal, take_reveal, take_scroll_moves};

@@ -172,7 +172,6 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
     if core.member_of.is_some() && flags.contains(Flags::FOCUSED) {
         access::set_focus(ctx, id);
     }
-    let mut seen = Vec::new();
     let facts = core.env.facts_of(id);
     for node in &mut access.nodes {
         // A cell of an item row knows its row; its column is the position of its column key among the columns the
@@ -192,19 +191,27 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
             ..node.grid
         };
     }
-    for node in &access.nodes {
+    let parent = access::fold::owner_of(ctx, id).unwrap_or(id);
+    report_parts(core, input.decls, &access.nodes, &paint.faces, parent);
+}
+
+/// The sub-nodes of a component's parts: the nodes its `access` declared, each with the face painted for it, then a
+/// node for every other face. `parent` is the node a part attaches to unless it names one (`SubNode::under`).
+pub(crate) fn report_parts(core: &CxCore<'_>, decls: &Decls, nodes: &[SubNode], faces: &[FaceRecord], parent: Id) {
+    let mut seen = Vec::with_capacity(nodes.len());
+    for node in nodes {
         seen.push(node.part);
-        report_sub(core, input, node, paint.faces.iter().find(|face| face.part == node.part));
+        report_sub(core, decls, node, faces.iter().find(|face| face.part == node.part), parent);
     }
-    for face in paint.faces.iter().filter(|face| !seen.contains(&face.part)) {
-        report_sub(core, input, &SubNode::new(face.part, face.role), Some(face));
+    for face in faces.iter().filter(|face| !seen.contains(&face.part)) {
+        report_sub(core, decls, &SubNode::new(face.part, face.role), Some(face), parent);
     }
 }
 
-fn report_sub(core: &CxCore<'_>, input: &ReportIn<'_>, node: &SubNode, face: Option<&FaceRecord>) {
+fn report_sub(core: &CxCore<'_>, decls: &Decls, node: &SubNode, face: Option<&FaceRecord>, parent: Id) {
     let key = (node.part.key, node.part.index);
     let result = core.results.get(&key);
-    let declared = input.decls.iter().find(|(decl, _)| (decl.key, decl.index) == key);
+    let declared = decls.iter().find(|(decl, _)| (decl.key, decl.index) == key);
     let mut node = node.clone();
     node.flags |= result.map_or(Flags::empty(), |result| result.flags);
     let decl = SubDecl {
@@ -218,7 +225,7 @@ fn report_sub(core: &CxCore<'_>, input: &ReportIn<'_>, node: &SubNode, face: Opt
         active: core.active == Some(node.part),
         face: face.map(|face| FaceFacts { name: &face.name, flags: face.flags, numeric: face.numeric.as_ref(), expanded: face.expanded }),
         label: core.resolved.label,
-        parent: node.under.map_or_else(|| access::fold::owner_of(&core.ctx, core.id).unwrap_or(core.id), |under| access::sub_node_id(core.id, under)),
+        parent: node.under.map_or(parent, |under| access::sub_node_id(core.id, under)),
     };
     access::report_sub(&core.ctx, &decl);
 }
