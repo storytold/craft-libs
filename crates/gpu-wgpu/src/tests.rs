@@ -228,8 +228,7 @@ fn upload_buffer_succeeds_normally_with_the_allocation_error_scope_in_place() {
 fn a_failed_allocation_scope_pop_is_ordered_strictly_before_the_call_that_would_use_the_buffer() {
     let source = include_str!("lib.rs");
     let upload_create_pop = source.find("create_scope.pop()").expect("upload_buffer must pop a create scope");
-    let upload_write_scope_push =
-        source.find("let write_scope = d.device.push_error_scope").expect("upload_buffer must push a separate write scope");
+    let upload_write_scope_push = source.find("let write_scope = d.device.push_error_scope").expect("upload_buffer must push a separate write scope");
     assert!(
         upload_create_pop < upload_write_scope_push,
         "upload_buffer must check the create scope's result before it ever pushes the write scope or calls write_buffer"
