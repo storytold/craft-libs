@@ -12,6 +12,9 @@ use craft_ui::cloud::{self, Account, CloudApp, CloudFiles, Destination, Document
 
 const NOTE: DocumentKind = DocumentKind { extensions: &["txt"], mimes: &["text/plain"], noun: "note", default_extension: "txt" };
 
+/// A document the harness was told to open: its name and its bytes.
+type OpenedDocs = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
+
 /// The least a [`CloudApp`] can be. What it was told to open is recorded, so a
 /// round trip can be checked by content and not only by the entry metadata
 /// `craft_ui` itself remembers.
@@ -19,7 +22,7 @@ struct Harness {
     cloud: CloudFiles,
     share: craft_ui::share::ShareDialog,
     presence: craft_ui::presence::PresenceBar,
-    opened: Arc<Mutex<Vec<(String, Vec<u8>)>>>,
+    opened: OpenedDocs,
     said: Arc<Mutex<Vec<String>>>,
 }
 
