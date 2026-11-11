@@ -137,16 +137,49 @@ impl<D: Dictionary> DictSlot<D> {
     }
 
     fn load_installed(&self) -> D {
+        self.load_from(crate::hunspell::find(self.names), crate::data::PACKS)
+    }
+
+    /// Prefer the installed dictionary, then embedded data if the installed pair is absent or unreadable.
+    fn load_from(&self, installed: Option<(PathBuf, PathBuf)>, table: &[crate::packs::EmbeddedPack]) -> D {
         let name = self.name();
-        let Some((aff, dic)) = crate::hunspell::find(self.names) else {
-            crate::hunspell::clear_load_error(name);
-            log::info!("{} spelling: no Hunspell {name} dictionary installed", self.english);
+        let Some((aff, dic)) = installed else {
+            if let Some(dictionary) = self.load_embedded(table) {
+                return dictionary;
+            }
+            log::info!("{} spelling: no Hunspell {name} dictionary available", self.english);
             return D::default();
         };
-        crate::hunspell::note_load(name, &dic, D::load(&aff, &dic)).unwrap_or_else(|e| {
-            log::warn!("{} spelling: {e}", self.english);
-            D::default()
-        })
+        let loaded = D::load(&aff, &dic)
+            .and_then(|dictionary| if dictionary.is_empty() { Err("dictionary contains no words".into()) } else { Ok(dictionary) });
+        if let Err(error) = &loaded {
+            log::warn!("{} spelling: {error}", self.english);
+            let fallback = self.load_embedded(table);
+            // `installed_dictionaries` still names this file, even when embedded data works.
+            // Preserve its failure so `dictionary_load_error` explains which source failed.
+            let _ = crate::hunspell::note_load::<()>(name, &dic, Err(error.clone()));
+            return fallback.unwrap_or_default();
+        }
+        crate::hunspell::note_load(name, &dic, loaded).unwrap_or_default()
+    }
+
+    /// Try the selected embedded packs with the same aliases and parser as an installed dictionary.
+    fn load_embedded(&self, table: &[crate::packs::EmbeddedPack]) -> Option<D> {
+        let packs = crate::packs::embedded_spelling_in(table, self.names);
+        if packs.is_empty() {
+            crate::hunspell::clear_load_error(self.name());
+        }
+        for pack in packs {
+            let read = crate::hunspell::decode(pack.aff, pack.dic)
+                .and_then(|(aff, dic)| D::parse(&aff, &dic))
+                .and_then(|dictionary| if dictionary.is_empty() { Err("dictionary contains no words".into()) } else { Ok(dictionary) });
+            let source = PathBuf::from(format!("<embedded Language pack {}>", pack.locale));
+            match crate::hunspell::note_load(self.name(), &source, read) {
+                Ok(dictionary) => return Some(dictionary),
+                Err(error) => log::warn!("{} spelling: {error}", self.english),
+            }
+        }
+        None
     }
 
     /// Use this dictionary from now on (Hunspell `.aff` and `.dic` text, decoded to UTF-8), for
@@ -201,6 +234,134 @@ mod tests {
         SLOT.reload();
         assert!(!SLOT.has_dictionary(), "reloaded from disk, where there is none");
         assert_eq!(SLOT.name(), "zz_SLOT_TEST");
+    }
+
+    /// Built-in slots use matching embedded dictionaries, including regional fallback and load diagnostics.
+    #[test]
+    fn builtin_slots_load_embedded_spelling_with_alias_fallback() {
+        crate::hold_dictionary_tests();
+        for (names, regional, language) in [(&["pl_PL", "pl-PL", "pl"][..], "pl-pl", "pl"), (&["pt_PT", "pt-PT", "pt"][..], "pt-pt", "pt")] {
+            let packs = [
+                crate::packs::EmbeddedPack { locale: regional, aff: b"SET UTF-8\n\xff", dic: b"1\nword\n", patterns: "", nonstandard: "" },
+                crate::packs::EmbeddedPack { locale: language, aff: b"SET UTF-8\n", dic: b"1\nword\n", patterns: "", nonstandard: "" },
+            ];
+            let slot: DictSlot<AffixDict> = DictSlot::new(names, "Test");
+            let dictionary = slot.load_embedded(&packs).unwrap();
+            assert!(dictionary.check("word") && !dictionary.check("wrong"));
+            assert!(crate::hunspell::load_error(slot.name()).is_none(), "successful fallback clears the failed regional diagnostic");
+            let _ = slot.keep(0, Arc::new(dictionary));
+            assert!(slot.has_dictionary(), "the loaded slot must not report a missing dictionary");
+            assert!(slot.load_embedded(&[]).is_none());
+        }
+    }
+
+    /// A regional spelling-only pack is a fallback, but another language or script never is.
+    #[test]
+    fn builtin_embedded_spelling_uses_regional_fallback_without_crossing_scripts() {
+        crate::hold_dictionary_tests();
+        for (names, regional, wrong_script) in [
+            (&["pl_PL", "pl-PL", "pl"][..], "pl-cz", "pl-cyrl"),
+            (&["sr_Cyrl_RS", "sr_Cyrl", "sr"][..], "sr-cyrl-ba", "sr-latn-rs"),
+            (&["sr_Latn_RS", "sr_Latn"][..], "sr-latn-ba", "sr-cyrl-rs"),
+        ] {
+            let packs = [
+                crate::packs::EmbeddedPack { locale: wrong_script, aff: b"SET UTF-8\n", dic: b"1\nwrongscript\n", patterns: "", nonstandard: "" },
+                crate::packs::EmbeddedPack { locale: "de", aff: b"SET UTF-8\n", dic: b"1\nunrelated\n", patterns: "", nonstandard: "" },
+                crate::packs::EmbeddedPack { locale: regional, aff: b"SET UTF-8\n", dic: b"1\nregionalword\n", patterns: "", nonstandard: "" },
+            ];
+            let slot: DictSlot<AffixDict> = DictSlot::new(names, "Test");
+            assert!(slot.load_embedded(&packs[..2]).is_none(), "unrelated language/script is not a fallback");
+            let dictionary = slot.load_embedded(&packs).unwrap();
+            assert!(dictionary.check("regionalword") && !dictionary.check("wrongscript") && !dictionary.check("unrelated"));
+            let _ = slot.keep(0, Arc::new(dictionary));
+            assert!(slot.has_dictionary());
+        }
+    }
+
+    /// An empty affix file is valid; only a missing word list makes an embedded resource unusable.
+    #[test]
+    fn builtin_embedded_spelling_accepts_empty_affixes_but_not_empty_word_lists() {
+        crate::hold_dictionary_tests();
+        let slot: DictSlot<AffixDict> = DictSlot::new(&["pl_PL", "pl"], "Test");
+        let packs = [
+            crate::packs::EmbeddedPack { locale: "pl-pl", aff: b"SET UTF-8\n", dic: b"", patterns: "a1b", nonstandard: "" },
+            crate::packs::EmbeddedPack { locale: "pl", aff: b"", dic: b"1\nplainword\n", patterns: "", nonstandard: "" },
+        ];
+        assert!(slot.load_embedded(&packs[..1]).is_none());
+        let dictionary = slot.load_embedded(&packs).unwrap();
+        assert!(dictionary.check("plainword") && !dictionary.check("plainwrong"));
+        let _ = slot.keep(0, Arc::new(dictionary));
+        assert!(slot.has_dictionary());
+        assert!(crate::hunspell::load_error(slot.name()).is_none());
+    }
+
+    /// A parsed-empty exact pack cannot hide a usable regional/language fallback.
+    #[test]
+    fn builtin_parsed_empty_dictionary_tries_the_next_embedded_pack() {
+        crate::hold_dictionary_tests();
+        let slot: DictSlot<AffixDict> = DictSlot::new(&["pl_PL", "pl"], "Test");
+        let packs = [
+            crate::packs::EmbeddedPack { locale: "pl-pl", aff: b"SET UTF-8\n", dic: b"0\n", patterns: "", nonstandard: "" },
+            crate::packs::EmbeddedPack { locale: "pl", aff: b"", dic: b"1\nfallbackword\n", patterns: "", nonstandard: "" },
+        ];
+        assert!(slot.load_embedded(&packs[..1]).is_none());
+        assert!(crate::hunspell::load_error(slot.name()).unwrap().1.contains("no words"));
+        let dictionary = slot.load_embedded(&packs).unwrap();
+        assert!(dictionary.check("fallbackword") && !dictionary.check("wrongword"));
+        assert!(crate::hunspell::load_error(slot.name()).is_none());
+        let _ = slot.keep(0, Arc::new(dictionary));
+        assert!(slot.has_dictionary());
+    }
+
+    /// Missing or invalid native files use embedded data, while valid native files retain precedence.
+    #[test]
+    fn builtin_failed_native_load_tries_embedded_and_preserves_failure_diagnostics() {
+        crate::hold_dictionary_tests();
+        let root = tempfile::Builder::new().prefix("craft-proof-native-embedded-").tempdir().unwrap();
+        let (aff, dic) = (root.path().join("pl_PL.aff"), root.path().join("pl_PL.dic"));
+        std::fs::write(&dic, "1\nnativeword\n").unwrap();
+        let packs = [crate::packs::EmbeddedPack { locale: "pl", aff: b"", dic: b"1\nembeddedword\n", patterns: "", nonstandard: "" }];
+        let slot: DictSlot<AffixDict> = DictSlot::new(&["pl_PL", "pl"], "Test");
+        for invalid in [None, Some("FLAG invalid\n")] {
+            if let Some(text) = invalid {
+                std::fs::write(&aff, text).unwrap();
+            }
+            let loaded = slot.load_from(Some((aff.clone(), dic.clone())), &packs);
+            assert!(loaded.check("embeddedword") && !loaded.check("nativeword"));
+            let (source, reason) = crate::hunspell::load_error(slot.name()).unwrap();
+            assert_eq!(source, dic);
+            assert!(!reason.is_empty());
+            assert_eq!(crate::dictionary_load_error(crate::ProofLang::Pl), Some(reason));
+        }
+        assert!(slot.load_from(Some((aff.clone(), dic.clone())), &[]).is_empty());
+        let (source, error) = crate::hunspell::load_error(slot.name()).unwrap();
+        assert_eq!(source, dic);
+        assert!(!error.is_empty());
+        std::fs::write(&aff, "SET UTF-8\n").unwrap();
+        let loaded = slot.load_from(Some((aff, dic)), &packs);
+        assert!(loaded.check("nativeword") && !loaded.check("embeddedword"));
+        assert!(crate::hunspell::load_error(slot.name()).is_none());
+    }
+
+    /// A parsed-empty native dictionary cannot disable a usable embedded dictionary.
+    #[test]
+    fn builtin_empty_native_dictionary_uses_embedded_and_reports_original_source() {
+        crate::hold_dictionary_tests();
+        let root = tempfile::Builder::new().prefix("craft-proof-empty-native-").tempdir().unwrap();
+        let (aff, dic) = (root.path().join("pl_PL.aff"), root.path().join("pl_PL.dic"));
+        std::fs::write(&aff, "SET UTF-8\n").unwrap();
+        std::fs::write(&dic, "0\n").unwrap();
+        let slot: DictSlot<AffixDict> = DictSlot::new(&["pl_PL", "pl"], "Test");
+        let packs = [crate::packs::EmbeddedPack { locale: "pl", aff: b"", dic: b"1\nfallbackword\n", patterns: "", nonstandard: "" }];
+        let dictionary = slot.load_from(Some((aff, dic.clone())), &packs);
+        assert!(dictionary.check("fallbackword") && !dictionary.check("wrongword"));
+        let (file, reason) = crate::hunspell::load_error(slot.name()).unwrap();
+        assert_eq!(file, dic);
+        assert!(reason.contains("no words"));
+        assert_eq!(crate::dictionary_load_error(crate::ProofLang::Pl), Some(reason));
+        let _ = slot.keep(0, Arc::new(dictionary));
+        assert!(slot.has_dictionary());
+        crate::hunspell::clear_load_error(slot.name());
     }
 
     /// A load that started before a dictionaries-folder change is not kept after its reload.

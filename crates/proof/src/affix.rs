@@ -848,7 +848,9 @@ impl FlagMode {
 /// search gets a small budget ([`compound::MAX_SUGGEST_WORK`]); the fourth: `KEEPCASE`, kept
 /// apart since it holds for a compound's first part only (and may share its id with another).
 #[derive(Clone, Copy, Debug, Default)]
-struct Excluded([Option<u16>; 5], bool, bool, Option<u16>);
+// The final bit permits a forbidden stem only while analysing a COMPOUNDRULE
+// terminal suffix (the CLI accepts 28-ok, although 8-ok is forbidden on its own).
+struct Excluded([Option<u16>; 5], bool, bool, Option<u16>, bool);
 
 impl Excluded {
     /// Does the flag set `set` carry an excluded flag?
@@ -868,6 +870,17 @@ impl Excluded {
 
     fn suggesting(self) -> bool {
         self.2
+    }
+
+    /// Allow forbidden stems while analysing a COMPOUNDRULE terminal suffix.
+    fn allowing_forbidden(mut self) -> Self {
+        self.4 = true;
+        self
+    }
+
+    /// Whether a terminal-suffix analysis may inspect a forbidden stem.
+    fn forbidden_allowed(self) -> bool {
+        self.4
     }
 
     /// These exclusions and `KEEPCASE` (`flag`): a case variant of the word is being checked.
@@ -2079,7 +2092,7 @@ impl AffixDict {
         false
     }
 
-    /// Is `w` a compound of two or more stems (no affixes) whose flags spell out one of the
+    /// Is `w` a compound of two or more stems, with optional final suffixes, whose flags spell out one of the
     /// `COMPOUNDRULE` patterns, each part at least `COMPOUNDMIN` characters? `21st` is `2/m` +
     /// `1st/p` under `n*mp`. A dynamic programme over (byte offset, token, parts so far), so a
     /// hostile pattern costs at most a few thousand lookups. A forbidden word is never rebuilt
@@ -2103,18 +2116,27 @@ impl AffixDict {
         // after a cut a rule reaches are looked up, so a word with no first part costs `n`.
         let mut parts: Vec<Option<Option<&[u16]>>> = vec![None; n * n];
         let min = self.compound_min;
-        let mut part = |a: usize, b: usize| -> Option<&[u16]> {
+        // A number such as 2026-ban is 2/0 + 0/0 + 2/0 + 6/1 with a suffix
+        // licensed by the final digit's flags. Share a bounded analysis budget.
+        let mut work = 0;
+        let mut final_parts: Vec<Option<compound::TerminalFlags<'_>>> = vec![None; n];
+        let mut part = |a: usize, b: usize, flag: u16| -> bool {
             if b < a.saturating_add(min) {
-                return None;
+                return false;
             }
-            let slot = parts.get_mut(a * n + b)?;
-            *slot.get_or_insert_with(|| {
+            if b + 1 == n {
+                let Some(flags) = final_parts.get_mut(a) else { return false };
+                return cuts.get(a).and_then(|&at| w.get(at..)).is_some_and(|p| self.rule_final_has_flag(p, excluded, flag, &mut work, flags));
+            }
+            let Some(slot) = parts.get_mut(a * n + b) else { return false };
+            let set = *slot.get_or_insert_with(|| {
                 let (Some(&x), Some(&y)) = (cuts.get(a), cuts.get(b)) else { return None };
                 w.get(x..y)
                     .and_then(|p| self.stem_lookup(p))
                     .map(|(stem, set)| self.rule_sets.get(&stem).map_or(set, |&s| self.set(s)))
                     .filter(|set| !excluded.hits(set) && bare(set))
-            })
+            });
+            set.is_some_and(|set| has(set, flag))
         };
         self.compound_rules.iter().any(|rule| compound_matches(rule, &mut part, n))
     }
@@ -2765,10 +2787,10 @@ impl FlagText {
     }
 }
 
-/// Does a compound rule's token list match a split of the word into two or more parts? `part(a,
-/// b)` is the flags of the stem between char cuts `a` and `b` (`None`: not a stem). States are
+/// Does a compound rule's token list match a split of the word into two or more parts?
+/// `part(a, b, flag)` checks the required flag between char cuts `a` and `b`. States are
 /// (cut, token, parts so far capped at 2), each visited once.
-fn compound_matches<'a>(rule: &[(Option<u16>, Repeat)], part: &mut impl FnMut(usize, usize) -> Option<&'a [u16]>, n: usize) -> bool {
+fn compound_matches(rule: &[(Option<u16>, Repeat)], part: &mut impl FnMut(usize, usize, u16) -> bool, n: usize) -> bool {
     let t = rule.len();
     let idx = |cut: usize, tok: usize, k: usize| (cut * (t + 1) + tok) * 3 + k;
     let mut seen = vec![false; n * (t + 1) * 3];
@@ -2789,8 +2811,12 @@ fn compound_matches<'a>(rule: &[(Option<u16>, Repeat)], part: &mut impl FnMut(us
             stack.push((cut, tok + 1, k));
         }
         for next in cut + 1..n {
+            // A rule compound must contain at least two parts.
+            if k == 0 && next + 1 == n {
+                continue;
+            }
             if let Some(flag) = flag
-                && part(cut, next).is_some_and(|set| has(set, flag))
+                && part(cut, next, flag)
             {
                 let k = (k + 1).min(2);
                 stack.push((next, if repeat == Repeat::Any { tok } else { tok + 1 }, k));

@@ -1129,6 +1129,7 @@ dependencies = [
  "log",
  "miniz_oxide 0.9.1",
  "proptest",
+ "tempfile",
  "toml",
  "unicode-normalization",
 ]

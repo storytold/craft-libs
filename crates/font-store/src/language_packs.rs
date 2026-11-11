@@ -790,7 +790,8 @@ impl Read for Frames<'_> {
 }
 
 /// Unpacks the `.tar.zst` of `pack` into `dest` (created). Only the contract's files are allowed:
-/// `pack.toml`, `spelling.aff`, `spelling.dic`, `hyphenation.pat` at the root and
+/// `pack.toml`, `spelling.aff`, `spelling.dic`, `hyphenation.pat`, optional
+/// `hyphenation.nonstandard` at the root and
 /// `LICENCES/<name>` ([`licence_name`]); regular files and that folder only, each file at most
 /// [`MAX_PACK_FILE_BYTES`], all of them [`MAX_PACK_UNPACKED_BYTES`], at most [`MAX_PACK_ENTRIES`].
 /// Every zstd frame is read, and nothing but tar padding may follow the archive's end. `pack.toml`
@@ -877,6 +878,9 @@ pub(crate) fn unpack(archive: &[u8], dest: &Path, pack: &PackEntry) -> Result<()
     if pack.spelling && !(has("spelling.aff") && has("spelling.dic")) {
         return Err("the index promises a spelling dictionary the archive doesn't have".into());
     }
+    if has("hyphenation.nonstandard") && !has("hyphenation.pat") {
+        return Err("nonstandard hyphenation needs the standard hyphenation.pat fallback".into());
+    }
     if pack.hyphenation && !has("hyphenation.pat") {
         return Err("the index promises hyphenation patterns the archive doesn't have".into());
     }
@@ -884,7 +888,7 @@ pub(crate) fn unpack(archive: &[u8], dest: &Path, pack: &PackEntry) -> Result<()
 }
 
 /// The files a pack holds at its root.
-const ROOT_FILES: [&str; 4] = ["pack.toml", "spelling.aff", "spelling.dic", "hyphenation.pat"];
+const ROOT_FILES: [&str; 5] = ["pack.toml", "spelling.aff", "spelling.dic", "hyphenation.pat", "hyphenation.nonstandard"];
 /// The folder of a pack's licence texts.
 const LICENCES_DIR: &str = "LICENCES";
 /// Largest `pack.toml` read back.

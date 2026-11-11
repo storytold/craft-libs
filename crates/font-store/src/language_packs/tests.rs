@@ -901,6 +901,59 @@ fn hostile_archives_are_refused() {
     }
 }
 
+/// The optional file installs alongside spelling and the required standard fallback.
+#[test]
+fn nonstandard_patterns_install_without_dropping_spelling() {
+    let archive = zst(&tar_of(&[
+        ("pack.toml", FILE, b"locale = \"hu\"\n"),
+        ("spelling.aff", FILE, b"SET UTF-8\n"),
+        ("spelling.dic", FILE, b"1\nasszony\n"),
+        ("hyphenation.pat", FILE, b"as1szony\n"),
+        ("hyphenation.nonstandard", FILE, b"UTF-8\nas5szon2y/sz=,2,1\n"),
+        ("LICENCES/MPL-1.1.txt", FILE, b"Test licence."),
+    ]));
+    let (store, server, pin, _) = setup("nonstandard");
+    server.serve("release/hu.tar.zst", &archive);
+    let index = PackIndex::from_json(&index_json(&[entry("hu", &format!("{RELEASE}hu.tar.zst"), &archive)])).unwrap();
+    let _ = pin;
+    store.install_pack_from(false, &index, index.pack("hu").unwrap(), &Cancel::new(), &mut |_| {}).unwrap();
+    let root = store.language_packs_dir().join("hu");
+    assert_eq!(std::fs::read(root.join("hyphenation.nonstandard")).unwrap(), b"UTF-8\nas5szon2y/sz=,2,1\n");
+    assert_eq!(std::fs::read(root.join("spelling.dic")).unwrap(), b"1\nasszony\n");
+    assert!(root.join("hyphenation.pat").is_file());
+}
+
+/// Even a spelling-only index cannot bypass the fallback or root-file allow-list.
+#[test]
+fn nonstandard_patterns_require_the_exact_name_and_standard_fallback() {
+    let pack = PackEntry { spelling: false, hyphenation: false, ..pack_entry("hu", b"") };
+    for (name, error) in [("hyphenation.nonstandard", "standard hyphenation.pat"), ("hyphenation.nonstandard.exe", "not a file")] {
+        let archive = zst(&tar_of(&[("pack.toml", FILE, b"locale = \"hu\"\n"), (name, FILE, b"UTF-8\na1a\n")]));
+        assert!(unpack(&archive, &temp("nonstandard-invalid").join("hu"), &pack).unwrap_err().contains(error));
+    }
+}
+
+/// Exercise the actual craft-i18n archive, not a reconstructed fixture.
+#[test]
+#[ignore = "requires CRAFT_TEST_HU_ARTIFACTS and CRAFT_TEST_HU_ORIGINAL from the verified pack build"]
+fn real_hungarian_archive_preserves_upstream_bytes_and_install_contract() {
+    let artifacts = PathBuf::from(std::env::var("CRAFT_TEST_HU_ARTIFACTS").unwrap());
+    let original = std::fs::read(std::env::var("CRAFT_TEST_HU_ORIGINAL").unwrap()).unwrap();
+    let index = PackIndex::from_json(&std::fs::read(artifacts.join("index.json")).unwrap()).unwrap();
+    let pack = index.pack("hu").unwrap();
+    let archive = std::fs::read(artifacts.join("hu.tar.zst")).unwrap();
+    assert_eq!(archive.len() as u64, pack.size);
+    assert_eq!(sha256_hex(&archive), pack.sha256);
+    let root = temp("actual-hu").join("hu");
+    unpack(&archive, &root, pack).unwrap();
+    assert_eq!(std::fs::read(root.join("hyphenation.nonstandard")).unwrap(), original);
+    for name in ["hyphenation.pat", "spelling.aff", "spelling.dic", "LICENCES/MPL-1.1.txt", "LICENCES/MPL-2.0.txt"] {
+        assert!(std::fs::metadata(root.join(name)).unwrap().len() > 0, "{name}");
+    }
+    assert!(!root.join("LICENCES/MODIFICATIONS-hu-hyphenation.txt").exists());
+    std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+}
+
 #[test]
 fn names_are_plain_text_and_reserved_locales_refused() {
     let a = pack_archive("nl", "x");
