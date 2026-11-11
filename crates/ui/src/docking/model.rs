@@ -467,6 +467,11 @@ pub enum Action<P> {
         panel: P,
         height: Option<f32>,
     },
+    /// Preferred flyout width of the dock group holding `panel`; `None` uses its column.
+    ResizeFlyoutWidth {
+        panel: P,
+        width: Option<f32>,
+    },
     ResizeIconic {
         panel: P,
         width: Option<f32>,
@@ -747,7 +752,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
         };
         let own = groups.get(group).ok_or(DockError::MissingPanel)?;
         let mut location = group_location(&own.panels, panel).ok_or(DockError::MissingPanel)?;
-        location.group = Some(GroupLocation { minimized: own.minimized, height: own.height, column });
+        location.group = Some(GroupLocation { minimized: own.minimized, height: own.height, flyout_width: own.flyout_width, column });
         if location.anchor.is_some() {
             return Ok(location);
         }
@@ -810,14 +815,21 @@ impl<P: Clone + Eq + Hash> Layout<P> {
         }
         let state = location.group.as_ref();
         if state.is_some_and(|s| {
-            !valid_height(s.height) || s.column.is_some_and(|c| !valid_width(c.width) || c.iconic_width.is_some_and(|w| !valid_width(w)))
+            !valid_height(s.height)
+                || s.flyout_width.is_some_and(|w| !valid_width(w))
+                || s.column.is_some_and(|c| !valid_width(c.width) || c.iconic_width.is_some_and(|w| !valid_width(w)))
         }) {
             return Err(DockError::InvalidGeometry);
         }
         // A restore that creates a group, column or dock gives it the saved state.
         let moving = || {
-            let group =
-                Group { panels: vec![panel.clone()], active: 0, minimized: state.is_some_and(|s| s.minimized), height: state.and_then(|s| s.height) };
+            let group = Group {
+                panels: vec![panel.clone()],
+                active: 0,
+                minimized: state.is_some_and(|s| s.minimized),
+                height: state.and_then(|s| s.height),
+                flyout_width: state.and_then(|s| s.flyout_width),
+            };
             let column = state.and_then(|s| s.column);
             Moving {
                 width: column.map(|c| c.width),
@@ -1211,6 +1223,15 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                 entry.height = height;
                 Ok(())
             }
+            Action::ResizeFlyoutWidth { panel, width } => {
+                if width.is_some_and(|w| !valid_width(w)) {
+                    return Err(DockError::InvalidGeometry);
+                }
+                let place = self.place(&panel).ok_or(DockError::MissingPanel)?;
+                let group = self.group_mut(&place).ok_or(DockError::InvalidPlacement)?;
+                group.flyout_width = width;
+                Ok(())
+            }
             Action::SetIconic { panel, iconic } => {
                 self.column_of(&panel)?.iconic = iconic;
                 Ok(())
@@ -1395,8 +1416,9 @@ fn check_leaf<'a, P: Eq + Hash>(node: &'a Node<P>, seen: &mut HashSet<&'a P>) ->
     }
 }
 
+/// Validate group dimensions and nonempty membership, then check the active tab and uniqueness.
 fn check_group<'a, P: Eq + Hash>(group: &'a Group<P>, seen: &mut HashSet<&'a P>) -> Result<(), DockError> {
-    if group.panels.is_empty() || !valid_height(group.height) {
+    if group.panels.is_empty() || !valid_height(group.height) || group.flyout_width.is_some_and(|w| !valid_width(w)) {
         return Err(DockError::InvalidGeometry);
     }
     check_tabs(&group.panels, group.active, seen)
