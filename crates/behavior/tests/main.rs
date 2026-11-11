@@ -7,3 +7,4 @@ mod dock_apply;
 mod fit;
 #[path = "geometry/main.rs"]
 mod geometry;
+mod key_table;

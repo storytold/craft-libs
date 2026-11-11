@@ -137,7 +137,7 @@ impl<Id> Default for Session<Id> {
 ///
 /// - **Keys**: the rows are one Tab stop (the list's keys: arrows, Home, End and Page with Shift;
 ///   Cmd/Ctrl moves the lead alone; Left and Right close and open a group, Alt for every group;
-///   Cmd/Ctrl+] and [ move the selected layers, Shift to the ends; Enter activates; the per-OS rename key renames). The panel's
+///   Cmd/Ctrl+] and [ move the selected layers, Shift to the ends; Enter activates; F2 renames). The panel's
 ///   commands ([`LayersPanelCommands`]) are the app's: the stacking keys and the effects keys.
 /// - **Pointer**: clicks select (Cmd/Ctrl toggles, Shift extends, the empty space clears), the eye
 ///   and lock columns sweep, Alt-click on an eye shows only that layer, the eye's right-click opens
