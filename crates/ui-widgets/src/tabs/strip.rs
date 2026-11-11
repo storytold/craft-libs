@@ -47,8 +47,8 @@ pub struct TornOff<K> {
 #[non_exhaustive]
 #[must_use = "the host applies the strip's events"]
 pub struct TabStripOutput<K> {
-    /// The collection's response and events: a selection change (a click, or Space or an arrow on the lead), Enter or
-    /// a double click as `Activate`, a reorder or a drop from another strip. Close and context-menu events are in the
+    /// The collection's response and events: a selection change (a click, or Space or Enter on the lead), Enter or a
+    /// double click as `Activate`, a reorder or a drop from another strip. Close and context-menu events are in the
     /// fields below.
     pub response: CollectionResponse<K, TabPartEvent>,
     /// The tabs whose close button was pressed, or that a middle click closed where the kind closes on it.
@@ -245,8 +245,8 @@ impl<K: Send + Sync + 'static> WindowDropTarget<ListDrag<K>> for TearOff {
     }
 }
 
-/// A strip of tabs: one Tab stop, arrows move the lead (and the selection with it), a click selects, Enter and a
-/// double click activate, Cmd/Ctrl+] and [ (or a drag) move the tab later and earlier, Shift to the ends, the menu key
+/// A strip of tabs: one Tab stop, arrows move the lead without showing its tab, a click, Space or Enter shows the tab,
+/// Enter and a double click activate, Cmd/Ctrl+] and [ (or a drag) move the tab later and earlier, Shift to the ends, the menu key
 /// asks for the tab's context menu.
 ///
 /// The `kind` picks the rules: document and text tabs keep whole titles and send the rest to an overflow menu of
@@ -268,7 +268,7 @@ pub struct TabStrip<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + '
     /// The strip's taller form with the body type.
     #[prop(flag)]
     large: bool,
-    /// The tab the host shows. A click, an arrow key or a drop reports the new one in the output.
+    /// The tab the host shows. A click, Space, Enter or a drop reports the new one in the output.
     #[prop]
     shown: Option<K>,
     /// A tab dragged out and released where no target takes it is reported as `torn_off`.
@@ -299,7 +299,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
         TabStrip {
             common: Common::new(),
             props: ContainerProps::new().sizing(Sizing::FillWidth),
-            items: CollectionProps::new().select(SelectMode::Single).pages(true).overflow(craft_behavior::Axis::X),
+            items: CollectionProps::new().select(SelectMode::Single).pages(true).arrows_select(false).overflow(craft_behavior::Axis::X),
             kind: TabKind::Document,
             large: false,
             shown: None,

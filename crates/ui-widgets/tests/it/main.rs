@@ -23,6 +23,7 @@ mod runtime;
 mod suite_rtl;
 mod suite_rules;
 mod suite_title;
+mod tabs;
 mod text;
 mod tile_grid;
 mod value_drag;

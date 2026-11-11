@@ -128,8 +128,9 @@ impl<'a, K> ThumbPainter<'a, K> {
 ///   a header over its presets; the list view shows the tree.
 /// - **State.** `state` is the view, the thumbnail zoom, the open groups and the search text. Bind it with
 ///   `Bind::bound`: the browser writes a changed state through the binding.
-/// - **Keys and pointer.** A click selects, a double click or Enter applies, F2 renames, Left and Right close and open
-///   a group, and a drag reorders by the `reorder` rules. The host performs the delete, rename and move it is told of.
+/// - **Keys and pointer.** The arrows move the focus without selecting; a click or Space selects, Enter selects and
+///   applies, a double click applies, F2 renames, Left and Right close and open a group, and a drag or Cmd/Ctrl+] and [
+///   (Shift to the ends) reorder by the `reorder` rules. The host performs the delete, rename and move it is told of.
 /// - **Search.** The toolbar's field keeps the presets whose name matches, with their groups, all open; Up, Down and
 ///   Enter go from the field to the presets.
 /// - **Row menu.** Rename, Move to, Delete and the host's `extra_items` act on the row the menu was asked for, which the
@@ -583,6 +584,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                 let mut grid = TileGrid::<BrowserKey<K>>::new(label.clone())
                     .id(list_id)
                     .select(SelectMode::Single)
+                    .arrows_select(false)
                     .selection(Bind::given(selection))
                     .caption(captions)
                     .thumb_size(ThumbSize::Large)
@@ -628,6 +630,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                     .id(list_id)
                     .tree(true)
                     .select(SelectMode::Single)
+                    .arrows_select(false)
                     .selection(Bind::given(selection))
                     .rename(true)
                     .rows_stamp(stamp)

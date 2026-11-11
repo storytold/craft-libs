@@ -146,7 +146,7 @@ pub struct CollectionProps {
     /// moves: menus, popup lists and the undo list.
     pub lead_follows_hover: bool,
     /// The arrow keys select the row they move the lead to. Off: they move the lead only, and Space, Enter or a click
-    /// selects it (a swatch table).
+    /// selects it (a swatch table, a tab strip, a preset browser); Enter then activates it as well.
     pub arrows_select: bool,
     /// A primary press moves key focus to the collection. Off: a press picks and activates and focus stays where it
     /// is, for a popup list whose opener keeps focus.

@@ -185,6 +185,12 @@ impl<'a> List<'a> {
         self
     }
 
+    /// The arrows move the lead only.
+    pub fn arrows_move_only(mut self) -> Self {
+        self.items = self.items.arrows_select(false);
+        self
+    }
+
     /// Typed letters move the lead.
     pub fn type_ahead(mut self) -> Self {
         self.items = self.items.type_ahead(true);

@@ -141,6 +141,10 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             && !header_held
             && let Some(row) = lead_at
         {
+            // Where the arrows leave the selection, Enter picks the lead it activates.
+            if !props.arrows_select && !self.holds(row) {
+                self.pick(comp, row, false, false);
+            }
             self.events.push(CollectionEvent::Activate(self.source.key(row)));
         }
     }

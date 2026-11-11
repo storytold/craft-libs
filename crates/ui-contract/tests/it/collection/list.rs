@@ -165,6 +165,31 @@ fn a_list_with_one_tab_stop_moves_its_lead_and_selects() {
     assert!(seen.selections().len() >= 3);
 }
 
+/// Where the arrows move the lead only, an arrow leaves the selection and Enter selects the lead and activates it.
+#[trial]
+fn enter_picks_the_lead_where_arrows_leave_the_selection() {
+    let words = Words::flat(&labels());
+    let seen = Seen::default();
+    let selection = RefCell::new(Selection::<usize>::single(0));
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        let mut held = selection.borrow().clone();
+        show_words(ui, List::new(SelectMode::Single).arrows_move_only().selection(Bind::bound(&mut held)), &words, &seen);
+        *selection.borrow_mut() = held;
+    };
+    frames.idle(2, &mut show);
+    focus_list(&mut frames, &seen, &mut show);
+    press(&mut frames, Key::ArrowDown, Modifiers::NONE, &mut show);
+    press(&mut frames, Key::ArrowDown, Modifiers::NONE, &mut show);
+    assert_eq!(selection.borrow().items, vec![0], "the arrows leave the selection");
+    let lead = *seen.leads().last().expect("the lead moved");
+    seen.events.borrow_mut().clear();
+    press(&mut frames, Key::Enter, Modifiers::NONE, &mut show);
+    assert_eq!(selection.borrow().items, vec![lead], "Enter selects the lead");
+    let activated = seen.events.borrow().iter().any(|event| matches!(event, CollectionEvent::Activate(key) if *key == lead));
+    assert!(activated, "Enter activates the lead");
+}
+
 /// A list without type-ahead leaves typed letters to the app's tool keys: the lead stays where it is.
 #[trial]
 fn a_list_without_type_ahead_leaves_typed_letters_alone() {
