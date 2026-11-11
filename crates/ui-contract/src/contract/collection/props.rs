@@ -159,6 +159,8 @@ pub struct CollectionProps {
     /// Typed letters move the lead to the next item whose text starts with them. Off: they stay shortcut candidates,
     /// so single-letter tool keys keep working while a list has focus. On for popup lists and pickers.
     pub type_ahead: bool,
+    /// The arrow keys wrap from the last item to the first and back (a command palette's list).
+    pub arrows_wrap: bool,
     /// The header row shows when a column has a header text. Off: the columns lay the rows out and no header row is built.
     pub header: bool,
     /// Typed digits reach the collection's own `update` as `Intent::Digit` (rating keys); other typed text stays
@@ -252,6 +254,7 @@ impl CollectionProps {
             rows_stamp: None,
             space: SpaceAction::Activate,
             type_ahead: false,
+            arrows_wrap: false,
             header: true,
             digit_keys: false,
             menu_on_click: false,
@@ -370,6 +373,13 @@ impl CollectionProps {
     #[must_use]
     pub const fn type_ahead(mut self, on: bool) -> Self {
         self.type_ahead = on;
+        self
+    }
+
+    /// The arrow keys wrap at the ends (`CollectionProps::arrows_wrap`).
+    #[must_use]
+    pub const fn arrows_wrap(mut self, on: bool) -> Self {
+        self.arrows_wrap = on;
         self
     }
 

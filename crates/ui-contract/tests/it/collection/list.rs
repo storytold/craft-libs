@@ -190,6 +190,24 @@ fn enter_picks_the_lead_where_arrows_leave_the_selection() {
     assert!(activated, "Enter activates the lead");
 }
 
+/// In a list that wraps, Down on the last row goes to the first and Up on the first to the last.
+#[trial]
+fn arrows_wrap_at_the_ends_of_a_wrapping_list() {
+    let words = Words::flat(&labels());
+    let seen = Seen::default();
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| show_words(ui, List::new(SelectMode::Single).wrap(), &words, &seen);
+    frames.idle(2, &mut show);
+    focus_list(&mut frames, &seen, &mut show);
+    press(&mut frames, Key::ArrowDown, Modifiers::NONE, &mut show);
+    press(&mut frames, Key::End, Modifiers::NONE, &mut show);
+    let last = *seen.leads().last().expect("the lead moved");
+    press(&mut frames, Key::ArrowDown, Modifiers::NONE, &mut show);
+    assert_eq!(seen.leads().last(), Some(&0), "Down on the last row wraps to the first");
+    press(&mut frames, Key::ArrowUp, Modifiers::NONE, &mut show);
+    assert_eq!(seen.leads().last(), Some(&last), "Up on the first row wraps to the last");
+}
+
 /// A list without type-ahead leaves typed letters to the app's tool keys: the lead stays where it is.
 #[trial]
 fn a_list_without_type_ahead_leaves_typed_letters_alone() {

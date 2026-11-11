@@ -191,6 +191,12 @@ impl<'a> List<'a> {
         self
     }
 
+    /// The arrows wrap at the ends.
+    pub fn wrap(mut self) -> Self {
+        self.items = self.items.arrows_wrap(true);
+        self
+    }
+
     /// Typed letters move the lead.
     pub fn type_ahead(mut self) -> Self {
         self.items = self.items.type_ahead(true);

@@ -66,7 +66,8 @@ impl crate::contract::Outcome for PaletteOutput {
 ///   the label, the menu path under it and the command's chord at the end; a disabled command is listed and does
 ///   not run.
 /// - Empty query: the commands last run, newest first (the `recents` binding), else the first entries.
-/// - Keys: the field keeps the focus; Up, Down, Page Up, Page Down move the active row, Enter picks it, Escape clears
+/// - Keys: the field keeps the focus; Up, Down, Page Up, Page Down move the active row (Up and Down wrap at the ends),
+///   Enter picks it, Escape clears
 ///   the query and, on an empty query, closes the box; a press outside closes it. A caption under the list names the keys. The number of results is announced politely.
 /// - Picking: the output's `picked` names the command and the box closes. With `recents` bound the command is also
 ///   put first in the list; [`CommandPalette::remember`] is the rule.
@@ -134,6 +135,7 @@ impl<'a> CommandPalette<'a> {
                         let stamp = stamp_of(&state.query);
                         let events = List::options(words.palette_list.clone())
                             .id(list_id)
+                            .arrows_wrap(true)
                             .empty(words.palette_empty.clone())
                             .selection(Bind::bound(&mut state.selection))
                             .rows_stamp(stamp)

@@ -170,6 +170,7 @@ const COLLECTION: &[Forwarded] = &[
     ("lead_on_open", "::craft_ui::contract::LeadOnOpen", "Where the lead lands when rows first show."),
     ("lead_follows_hover", "bool", "The lead, and the selection with it, moves to the row under the pointer when the pointer moves."),
     ("arrows_select", "bool", "The arrow keys select the row they move the lead to; off, they move the lead only."),
+    ("arrows_wrap", "bool", "The arrow keys wrap from the last item to the first and back."),
     ("type_ahead", "bool", "Typed letters move the lead to the next item whose text starts with them; off, they stay shortcut candidates."),
     (
         "rows_stamp",

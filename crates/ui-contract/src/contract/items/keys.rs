@@ -33,7 +33,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             let start = lead
                 .map(|at| (at, self.lead.column))
                 .map(|lead| if cells && mods.extend { self.cell_head(comp, layout).unwrap_or(lead) } else { lead });
-            let mut state = NavState::new().page(page).column(start.map_or(self.lead.column, |(_, column)| column));
+            let mut state = NavState::new().page(page).wrap(comp.items().arrows_wrap).column(start.map_or(self.lead.column, |(_, column)| column));
             state.lead = start.map(|(at, _)| at);
             state.anchor = lead.map(|at| self.anchor_at(at)).filter(|_| mods.extend);
             let step = match nav::step(layout.nav(), &outline, &mut state, mv, mods) {
