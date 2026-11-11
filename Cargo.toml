@@ -44,6 +44,7 @@ craft-gainmap = { path = "crates/gainmap" }
 craft-gcode = { path = "crates/gcode" }
 craft-mesh = { path = "crates/mesh" }
 craft-heif = { path = "crates/heif" }
+craft-fig = { path = "crates/fig" }
 craft-fonts-build = { path = "crates/fonts-build" }
 craft-i18n = { path = "crates/i18n" }
 craft-idml = { path = "crates/idml" }

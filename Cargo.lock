@@ -959,6 +959,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-fig"
+version = "0.1.0"
+dependencies = [
+ "craft-kiwi",
+ "flate2",
+ "ruzstd",
+ "serde_json",
+ "thiserror 2.0.21",
+ "zip",
+]
+
+[[package]]
 name = "craft-font-catalog"
 version = "0.1.0"
 dependencies = [
