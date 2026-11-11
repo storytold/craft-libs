@@ -12,6 +12,7 @@ use crate::testing::story::{EditKind, Required, StoryData, StoryOutput};
 use craft_behavior::Input;
 use egui::{Id, Key, Modifiers};
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 pub(super) const CASES: &[Case] = &[
@@ -106,14 +107,16 @@ fn each_part_activates_once(subject: &Subject) -> Result<(), String> {
     Ok(())
 }
 
-/// What a node tree says about values and states: any change of it is an effect.
-fn signature(tree: &AccessTree) -> Vec<String> {
+/// What a node tree says about values and states, by node: any change of it is an effect, a node that appears or
+/// goes (a closed tab) included. The order the tree reports its nodes in is not part of it.
+fn signature(tree: &AccessTree) -> HashMap<NodeKey, String> {
     tree.keys()
         .into_iter()
         .map(|key| {
-            tree.data_of(key).map_or_else(String::new, |node| {
+            let state = tree.data_of(key).map_or_else(String::new, |node| {
                 format!("{:?}|{:?}|{:?}|{:?}|{:?}", node.toggled(), node.is_expanded(), node.is_selected(), node.numeric_value(), node.value())
-            })
+            });
+            (key, state)
         })
         .collect()
 }
