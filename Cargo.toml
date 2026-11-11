@@ -14,6 +14,7 @@ repository = "https://github.com/storytold/craft-libs"
 # internal: add each crate here as `craft-<name> = { path = "crates/<name>" }`
 craft-platform = { path = "crates/platform" }
 craft-aep = { path = "crates/aep" }
+craft-affinity = { path = "crates/affinity" }
 craft-ai-core = { path = "crates/ai-core" }
 craft-pdf = { path = "crates/pdf", version = "=0.1.0" }
 craft-plate-test = { path = "crates/plate-test" }
@@ -135,3 +136,8 @@ overflow-checks = false
 # Codec hot loops: the oracle and conformance tests of a debug build take minutes below opt-level 3.
 [profile.dev.package.craft-video]
 opt-level = 3
+
+# The object-stream parser follows nesting 384 levels deep: unoptimised, its frames overflow the
+# 2 MiB stack of a test thread. The apps this reader came from build their crates at this level.
+[profile.dev.package.craft-affinity]
+opt-level = 1
