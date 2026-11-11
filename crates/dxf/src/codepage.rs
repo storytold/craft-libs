@@ -6,7 +6,8 @@
 //! Asian code page) escapes, which [`crate::parse`] decodes after the bytes.
 //!
 //! The Windows, ISO and East Asian code pages are decoded with `encoding_rs`; DOS 437, 850 and
-//! 852 with the tables below and the other DOS pages with those of `dos_tables.rs` (the upper
+//! 852 with the tables below, Korean Johab (`ANSI_1361`) by its definition in KS X 1001 annex 3,
+//! and the other DOS pages with those of `dos_tables.rs` (the upper
 //! halves of the IBM PC code pages; the lower halves are ASCII). Decoding never fails: a byte sequence that is invalid in the code page (a truncated
 //! double-byte character, an unassigned byte) becomes U+FFFD and the bytes after it decode
 //! normally, so line ends and the group structure survive.
@@ -27,6 +28,8 @@ pub(crate) enum Decoder {
     Table(&'static [char; 128]),
     /// DOS 864: like [`Decoder::Table`], but byte 0x25 is U+066A ARABIC PERCENT SIGN, not `%`.
     Dos864,
+    /// Korean Johab (code page 1361).
+    Johab,
 }
 
 /// What byte 0x25 of DOS 864 stands for.
@@ -85,6 +88,7 @@ pub(crate) fn decoder(code_page: &str) -> Option<Decoder> {
         "DOS864" => return Some(Decoder::Dos864),
         "DOS865" => return Some(Decoder::Table(&dos::DOS865)),
         "DOS869" => return Some(Decoder::Table(&dos::DOS869)),
+        "ANSI_1361" | "JOHAB" => return Some(Decoder::Johab),
         _ => return None,
     };
     Some(Decoder::Encoding(enc))
@@ -114,7 +118,8 @@ pub(crate) fn encode_char(c: char, d: Decoder, out: &mut Vec<u8>) -> bool {
     let mut buf = [0; 4];
     match d {
         // Not a pre-2007 code page ([`encoder`] never gives it): escaped.
-        Decoder::Utf8 => return false,
+        // Johab is read only: a writer escapes every character.
+        Decoder::Utf8 | Decoder::Johab => return false,
         Decoder::Encoding(e) => {
             let (bytes, _, unmappable) = e.encode(c.encode_utf8(&mut buf));
             // A code page byte that is ASCII would read back as another character, and a NUL,
@@ -151,6 +156,10 @@ pub(crate) fn decode(bytes: &[u8], d: Decoder) -> Cow<'_, str> {
             Err(_) => encoding_rs::WINDOWS_1252.decode_without_bom_handling(bytes).0,
         },
         Decoder::Encoding(e) => e.decode_without_bom_handling(bytes).0,
+        Decoder::Johab => match std::str::from_utf8(bytes) {
+            Ok(s) if s.is_ascii() => Cow::Borrowed(s),
+            _ => Cow::Owned(decode_johab(bytes)),
+        },
         Decoder::Dos864 => {
             if bytes.is_ascii() && !bytes.contains(&b'%') {
                 return Cow::Borrowed(std::str::from_utf8(bytes).unwrap_or_default());
@@ -197,18 +206,118 @@ fn ascii_header_value<'a>(bytes: &'a [u8], name: &[u8], code: &[u8]) -> Option<&
     None
 }
 
+/// Decode Johab text: ASCII, double-byte Hangul (lead bytes 0x84–0xD3), symbols (0xD9–0xDE) and
+/// Hanja (0xE0–0xF9). An unassigned code in that area is one U+FFFD for its two bytes; any other
+/// byte that can't start a character is one U+FFFD and the next byte starts afresh.
+fn decode_johab(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len());
+    let mut i = 0;
+    while let Some(&b) = bytes.get(i) {
+        if b.is_ascii() {
+            out.push(char::from(b));
+            i += 1;
+            continue;
+        }
+        let trail = bytes.get(i + 1).copied();
+        match trail.and_then(|t| johab_char(b, t)) {
+            Some(c) => {
+                out.push(c);
+                i += 2;
+            }
+            None => {
+                out.push('\u{FFFD}');
+                i += if trail.is_some_and(|t| johab_lead(b) && johab_trail(b, t)) { 2 } else { 1 };
+            }
+        }
+    }
+    out
+}
+
+fn johab_lead(b: u8) -> bool {
+    matches!(b, 0x84..=0xD3 | 0xD8..=0xDE | 0xE0..=0xF9)
+}
+
+fn johab_trail(lead: u8, t: u8) -> bool {
+    if lead <= 0xD3 { matches!(t, 0x41..=0x7E | 0x81..=0xFE) } else { matches!(t, 0x31..=0x7E | 0x91..=0xFE) }
+}
+
+/// The character of the Johab code `lead trail`, if it has one.
+pub(crate) fn johab_char(lead: u8, trail: u8) -> Option<char> {
+    if !johab_lead(lead) || !johab_trail(lead, trail) {
+        return None;
+    }
+    if lead <= 0xD3 {
+        return johab_hangul((u16::from(lead) << 8) | u16::from(trail));
+    }
+    // Symbols and Hanja: each lead byte holds two KS X 1001 rows of 94 cells, the first in
+    // trail bytes 0x31–0x7E and 0x91–0xA0, the second in 0xA1–0xFE (0xD8 is user-defined).
+    let first = match lead {
+        0xD9..=0xDE => (lead - 0xD9) * 2 + 0x21,
+        0xE0..=0xF9 => (lead - 0xE0) * 2 + 0x4A,
+        _ => return None,
+    };
+    let (row, col) = match trail {
+        0x31..=0x7E => (first, trail - 0x31 + 0x21),
+        0x91..=0xA0 => (first, trail - 0x91 + 0x6F),
+        _ => (first + 1, trail.saturating_sub(0xA1) + 0x21),
+    };
+    let euc = [row | 0x80, col | 0x80];
+    let text = encoding_rs::EUC_KR.decode_without_bom_handling_and_without_replacement(&euc)?;
+    let mut it = text.chars();
+    it.next().filter(|_| it.next().is_none())
+}
+
+/// A Johab Hangul code (bit 15 set, then 5 bits each for the initial, medial and final jamo):
+/// a precomposed syllable, or a lone jamo (as a compatibility jamo) when the others are fillers.
+fn johab_hangul(code: u16) -> Option<char> {
+    let (i, m, f) = ((code >> 10) & 0x1F, (code >> 5) & 0x1F, code & 0x1F);
+    // Initial: 1 filler, 2–20 the 19 consonants. Medial: 2 filler, then the 21 vowels in four
+    // runs (3–7, 10–15, 18–23, 26–29). Final: 1 none, 2–17 and 19–29 the 27 final consonants.
+    let lead = match i {
+        1 => None,
+        2..=20 => Some(i - 2),
+        _ => return None,
+    };
+    let vowel = match m {
+        2 => None,
+        3..=7 => Some(m - 3),
+        10..=15 => Some(m - 5),
+        18..=23 => Some(m - 7),
+        26..=29 => Some(m - 9),
+        _ => return None,
+    };
+    let tail = match f {
+        1 => 0,
+        2..=17 => f - 1,
+        19..=29 => f - 2,
+        _ => return None,
+    };
+    // The compatibility jamo (offsets from U+3131) of the initial and of the final consonants.
+    const LEADS: [u16; 19] = [0, 1, 3, 6, 7, 8, 16, 17, 18, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29];
+    const TAILS: [u16; 27] = [0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22, 23, 25, 26, 27, 28, 29];
+    let cp = match (lead, vowel, tail) {
+        (Some(l), Some(v), t) => 0xAC00 + (u32::from(l) * 21 + u32::from(v)) * 28 + u32::from(t),
+        (None, None, 0) => 0x3164,
+        (Some(l), None, 0) => 0x3131 + u32::from(*LEADS.get(usize::from(l))?),
+        (None, Some(v), 0) => 0x314F + u32::from(v),
+        (None, None, t) => 0x3131 + u32::from(*TAILS.get(usize::from(t.saturating_sub(1)))?),
+        _ => return None,
+    };
+    char::from_u32(cp)
+}
+
 /// The `$DWGCODEPAGE` value of an ASCII DXF file.
 fn ascii_code_page(bytes: &[u8]) -> Option<&[u8]> {
     ascii_header_value(bytes, b"$DWGCODEPAGE", b"3")
 }
 
 impl Decoder {
-    /// True for the multi-byte East Asian code pages (Shift-JIS, GBK, EUC-KR/Wansung, Big5).
+    /// True for the multi-byte East Asian code pages (Shift-JIS, GBK, EUC-KR/Wansung, Big5, Johab).
     /// Their short double-byte strings are often also valid UTF-8, so UTF-8 is only trusted for
     /// a whole file there (see [`decode_ascii_file`] and [`BinaryText`]).
     fn is_east_asian(self) -> bool {
         use encoding_rs as e;
-        matches!(self, Decoder::Encoding(x) if x == e::SHIFT_JIS || x == e::GBK || x == e::EUC_KR || x == e::BIG5)
+        matches!(self, Decoder::Johab) || matches!(self, Decoder::Encoding(x) if x == e::SHIFT_JIS || x == e::GBK || x == e::EUC_KR || x == e::BIG5)
     }
 }
 
@@ -346,17 +455,21 @@ impl BinaryText {
     }
 }
 
-/// The double-byte code page of a `\M+n` escape: 1 Japanese (Shift-JIS), 2 Traditional Chinese
-/// (Big5), 3 Korean (Wansung), 5 Simplified Chinese (GB 2312). 4 (Korean Johab) is not
-/// supported, so its escapes stay literal.
-pub(crate) fn mif_encoding(n: char) -> Option<&'static Encoding> {
-    match n {
-        '1' => Some(encoding_rs::SHIFT_JIS),
-        '2' => Some(encoding_rs::BIG5),
-        '3' => Some(encoding_rs::EUC_KR),
-        '5' => Some(encoding_rs::GBK),
-        _ => None,
-    }
+/// The character of a `\M+n` escape's two bytes in its double-byte code page `n`: 1 Japanese
+/// (Shift-JIS), 2 Traditional Chinese (Big5), 3 Korean (Wansung), 4 Korean (Johab), 5 Simplified
+/// Chinese (GB 2312). Other code pages and unassigned codes give `None`.
+pub(crate) fn mif_char(n: char, bytes: [u8; 2]) -> Option<char> {
+    let enc: &'static Encoding = match n {
+        '1' => encoding_rs::SHIFT_JIS,
+        '2' => encoding_rs::BIG5,
+        '3' => encoding_rs::EUC_KR,
+        '4' => return johab_char(bytes[0], bytes[1]),
+        '5' => encoding_rs::GBK,
+        _ => return None,
+    };
+    let text = enc.decode_without_bom_handling_and_without_replacement(&bytes)?;
+    let mut it = text.chars();
+    it.next().filter(|_| it.next().is_none())
 }
 
 // Generated from the IBM PC code page definitions (bytes 0x80–0xFF in order).
@@ -422,7 +535,6 @@ mod tests {
         assert_eq!(d(b"\xBD\xA2\x88w", "DOS852").as_deref(), Some("Żółw"));
         assert_eq!(d(b"\x91\xAB\xAE\xA9", "DOS866").as_deref(), Some("Слой"));
         assert_eq!(d("é".as_bytes(), "UTF8").as_deref(), Some("é"));
-        assert_eq!(d(b"x", "ANSI_1361"), None);
         assert_eq!(d(b"x", "EBCDIC"), None);
         assert_eq!(d(b"x", ""), None);
     }
@@ -468,6 +580,30 @@ mod tests {
         assert!(decode_ascii_file(file("AC1021", "DOS864").as_bytes()).ends_with("50%\n"));
     }
 
+    /// Korean Johab (`ANSI_1361`): Hangul syllables composed from their jamo, lone jamo,
+    /// symbols and Hanja through KS X 1001.
+    #[test]
+    fn johab() {
+        let d = |bytes: &[u8]| decode_code_page(bytes, "ANSI_1361");
+        // 한글 (U+D55C U+AE00) and 가 (U+AC00).
+        assert_eq!(d(b"\xD0\x65\x8B\x69 \x88\x61").as_deref(), Some("한글 가"));
+        // Lone initial ㄱ, lone vowel ㅏ, the Hangul filler.
+        assert_eq!(d(b"\x88\x41\x84\x61\x84\x41").as_deref(), Some("ㄱㅏ\u{3164}"));
+        // The ideographic space (KS X 1001 0x2121) and 伽 (0x4A21, the first Hanja).
+        assert_eq!(d(b"\xD9\x31\xE0\x31").as_deref(), Some("\u{3000}伽"));
+        assert_eq!(decode_code_page(b"\x88\x61", "johab").as_deref(), Some("가"));
+        // A truncated lead byte, a lead byte without a valid trail byte, a user-defined code.
+        assert_eq!(d(b"A\x88").as_deref(), Some("A\u{FFFD}"));
+        assert_eq!(d(b"\x88\x20B").as_deref(), Some("\u{FFFD} B"));
+        assert_eq!(d(b"\xD8\x31C").as_deref(), Some("\u{FFFD}C"));
+        // Every pair of bytes decodes to something without panicking.
+        for a in 0x80..=0xFFu8 {
+            for b in 0..=0xFFu8 {
+                assert!(!d(&[a, b, b'\n']).unwrap_or_default().is_empty());
+            }
+        }
+    }
+
     #[test]
     fn invalid_sequences_become_replacement_characters() {
         // A Shift-JIS lead byte cut off by the line end keeps the line end.
@@ -495,8 +631,10 @@ mod tests {
         let one = |s: &str| crate::parse(format!("1\n{s}\n0\nEOF\n").as_bytes()).unwrap()[0].str();
         assert_eq!(one("\\M+5BCFE\\M+1907D\\M+2B9CF\\M+3B5B5!"), "件図圖도!");
         assert_eq!(one("\\M+5BCFE\\U+0021"), "件!");
-        // Johab, unknown code pages, bad hex, short escapes and unassigned codes stay literal.
-        for s in ["\\M+4ABCD", "\\M+9BCFE", "\\M+5GGGG", "\\M+5BC", "\\M+", "\\M+50041", "\\M+5FFFF"] {
+        // Johab: 한.
+        assert_eq!(one("\\M+4D065"), "한");
+        // Unknown code pages, bad hex, short escapes and unassigned codes stay literal.
+        for s in ["\\M+4D820", "\\M+9BCFE", "\\M+5GGGG", "\\M+5BC", "\\M+", "\\M+50041", "\\M+5FFFF"] {
             assert_eq!(one(s), s);
         }
     }

@@ -37,8 +37,6 @@ fn more_dos_and_iso_code_pages_decode() {
     }
     // An unassigned byte is the replacement character, the rest decodes.
     assert_eq!(decode_code_page(b"\xD5A", "DOS857").as_deref(), Some("\u{FFFD}A"));
-    // Johab still has no decoder.
-    assert_eq!(decode_code_page(b"x", "ANSI_1361"), None);
 }
 
 #[test]

@@ -252,16 +252,13 @@ pub fn mif_escape_at(chars: &[char], i: usize) -> Option<char> {
     if chars.get(i) != Some(&'\\') || chars.get(i + 1) != Some(&'M') || chars.get(i + 2) != Some(&'+') {
         return None;
     }
-    let enc = codepage::mif_encoding(*chars.get(i + 3)?)?;
+    let n = *chars.get(i + 3)?;
     let hex = chars.get(i + 4..i + 8)?;
     if !hex.iter().all(char::is_ascii_hexdigit) {
         return None;
     }
     let code = hex.iter().try_fold(0u16, |acc, c| Some(acc * 16 + u16::try_from(c.to_digit(16)?).ok()?))?;
-    let bytes = code.to_be_bytes();
-    let text = enc.decode_without_bom_handling_and_without_replacement(&bytes)?;
-    let mut it = text.chars();
-    it.next().filter(|_| it.next().is_none())
+    codepage::mif_char(n, code.to_be_bytes())
 }
 
 /// Unescape the `\U+XXXX` sequences pre-R2007 DXF uses for characters outside the file's code
