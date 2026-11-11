@@ -29,10 +29,17 @@ pub struct Limits {
     /// With [`Names::Canonical`] it is also the most namespace declarations in scope at once.
     /// Default 1024.
     pub max_attrs: usize,
+    /// Most attributes kept in a tree at once, over all its elements. An attribute costs 48
+    /// bytes before its strings and five bytes of input (` a=""`), so without this a document
+    /// inside every other limit could take ten times its size in attribute headers. Elements
+    /// handed to a streaming callback take their attributes out of the count. Default
+    /// 4,000,000: two for every node at the node limit.
+    pub max_attrs_total: usize,
 }
 
 impl Limits {
-    pub const DEFAULT: Limits = Limits { max_input: 256 * 1024 * 1024, max_depth: 256, max_nodes: 2_000_000, max_attrs: 1024 };
+    pub const DEFAULT: Limits =
+        Limits { max_input: 256 * 1024 * 1024, max_depth: 256, max_nodes: 2_000_000, max_attrs: 1024, max_attrs_total: 4_000_000 };
 }
 
 impl Default for Limits {
@@ -243,7 +250,7 @@ impl<'a> Options<'a> {
         }
         let text = to_utf8(bytes);
         let mut events = Events::new(*self, &text, false);
-        let mut tree = Builder { opts: self, split, stack: Vec::new(), marks: Vec::new(), kept: 0, root: None, at: 0 };
+        let mut tree = Builder { opts: self, split, stack: Vec::new(), marks: Vec::new(), kept: 0, attrs: 0, root: None, at: 0 };
         while let Some(ev) = events.next()? {
             tree.at = events.span().start;
             tree.event(ev, &mut each)?;
@@ -581,9 +588,11 @@ struct Builder<'b, 'o> {
     opts: &'b Options<'o>,
     split: &'b [&'b str],
     stack: Vec<El>,
-    /// The node count when each open element started.
-    marks: Vec<usize>,
+    /// The node and attribute counts when each open element started.
+    marks: Vec<(usize, usize)>,
     kept: usize,
+    /// Attributes in the elements built so far and not handed out.
+    attrs: usize,
     root: Option<El>,
     /// Where the event being handled starts, for errors.
     at: usize,
@@ -625,8 +634,12 @@ impl Builder<'_, '_> {
                 if self.root.is_some() {
                     return Err(Error::Syntax { at: self.at, msg: "more than one root element".into() }.into());
                 }
+                self.marks.push((self.kept, self.attrs));
+                self.attrs = self.attrs.saturating_add(attrs.len());
+                if self.attrs > self.opts.limits.max_attrs_total {
+                    return Err(Error::TooManyAttrsTotal(self.opts.limits.max_attrs_total).into());
+                }
                 self.stack.push(El { name, attrs, children: Vec::new() });
-                self.marks.push(self.kept);
             }
             Event::End { .. } => {
                 if let Some(el) = self.stack.pop() {
@@ -645,7 +658,7 @@ impl Builder<'_, '_> {
 
     /// Attaches a complete element to its parent, hands it out, or makes it the root.
     fn finish<E: From<Error>>(&mut self, mut el: El, each: &mut impl FnMut(El) -> Result<(), E>) -> Result<(), E> {
-        let mark = self.marks.pop().unwrap_or(0);
+        let (mark, attrs_mark) = self.marks.pop().unwrap_or((0, 0));
         if self.opts.drop_blank_text && el.children.iter().any(|n| matches!(n, Node::El(_))) {
             let is_text = |n: &Node| matches!(n, Node::Text(_));
             if el.children.iter().all(|n| !is_text(n) || matches!(n, Node::Text(t) if t.trim().is_empty())) {
@@ -662,6 +675,7 @@ impl Builder<'_, '_> {
             each(el)?;
             // The element and everything inside it have left the tree.
             self.kept = mark;
+            self.attrs = attrs_mark;
         } else {
             self.push(Node::El(el))?;
         }

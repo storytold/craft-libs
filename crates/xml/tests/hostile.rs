@@ -20,8 +20,11 @@ fn text_len(e: &El) -> usize {
 
 #[test]
 fn the_defaults_are_the_documented_ones() {
-    assert_eq!(Limits::default(), Limits { max_input: 256 * 1024 * 1024, max_depth: 256, max_nodes: 2_000_000, max_attrs: 1024 });
-    for e in [Error::TooLarge(1), Error::TooDeep(1), Error::TooManyNodes(1), Error::TooManyAttrs(1)] {
+    assert_eq!(
+        Limits::default(),
+        Limits { max_input: 256 * 1024 * 1024, max_depth: 256, max_nodes: 2_000_000, max_attrs: 1024, max_attrs_total: 4_000_000 }
+    );
+    for e in [Error::TooLarge(1), Error::TooDeep(1), Error::TooManyNodes(1), Error::TooManyAttrs(1), Error::TooManyAttrsTotal(1)] {
         assert!(e.is_limit(), "{e}");
     }
     assert!(!Error::NoRoot.is_limit() && !Error::Doctype.is_limit());
@@ -327,4 +330,34 @@ fn markup_that_is_not_xml_is_an_error() {
             assert!(opts.first_start(bytes, "a").is_none() || bytes.starts_with(b"<a "));
         }
     }
+}
+
+/// Attributes are the one thing a node count does not see: 1,025 elements of 1,024 attributes
+/// each are 1,025 nodes and 1,049,600 `(String, String)` pairs, about 50 MB of headers from
+/// 5 MB of input.
+#[test]
+fn attributes_are_bounded_over_the_whole_tree() {
+    let el = format!("<c{}/>", " a=\"\"".repeat(1024));
+    let doc = format!("<r>{}</r>", el.repeat(1025));
+    let limits = Limits { max_attrs_total: 1024 * 1024, ..Limits::DEFAULT };
+    let opts = Options::default().with_limits(limits);
+    let err = opts.parse(doc.as_bytes()).unwrap_err();
+    assert_eq!(err, Error::TooManyAttrsTotal(1024 * 1024));
+    assert!(err.is_limit());
+    // exactly at the limit is accepted
+    let fits = format!("<r>{}</r>", el.repeat(1024));
+    assert_eq!(opts.parse(fits.as_bytes()).map(|r| r.children.len()), Ok(1024));
+    // the default stops a document that is nothing but attributes
+    let hostile = format!("<r>{}</r>", el.repeat(4000));
+    assert_eq!(parse(hostile.as_bytes()), Err(Error::TooManyAttrsTotal(4_000_000)));
+    // streamed elements take their attributes with them: any number of rows, as long as the
+    // ones held at once fit
+    let mut rows = 0;
+    let root = opts.parse_streaming(doc.as_bytes(), &["c"], |c| {
+        rows += c.attrs.len();
+        Ok::<(), Error>(())
+    });
+    assert_eq!((rows, root.map(|r| r.children.len())), (1025 * 1024, Ok(0)));
+    let tight = Options::default().with_limits(Limits { max_attrs_total: 1023, ..Limits::DEFAULT });
+    assert_eq!(tight.parse_streaming(doc.as_bytes(), &["c"], |_| Ok::<(), Error>(())), Err(Error::TooManyAttrsTotal(1023)));
 }

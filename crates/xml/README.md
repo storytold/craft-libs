@@ -47,9 +47,10 @@ assert_eq!((rows, sheet.map(|s| s.children.len())), (3, Ok(0)));
 | `max_depth` | 256 levels (the root is 1) | `TooDeep` |
 | `max_nodes` | 2,000,000 nodes kept in the tree: elements, text stretches, kept CDATA, instructions and comments | `TooManyNodes` |
 | `max_attrs` | 1024 on one start tag, namespace declarations and malformed ones included; with canonical names, also the declarations in scope at once | `TooManyAttrs` |
+| `max_attrs_total` | 4,000,000 attributes kept in the tree, over all its elements | `TooManyAttrsTotal` |
 
 A limit exceeded is an error, never a panic and never a truncated tree. Elements handed to a
-streaming callback leave the node count, so a streamed part may be of any length. Text is not
+streaming callback leave the node and attribute counts, so a streamed part may be of any length. Text is not
 counted separately: nothing expands, so it is never more than three times the input (the worst
 case is input that is not UTF-8, where each bad byte becomes U+FFFD).
 
