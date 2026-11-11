@@ -188,7 +188,11 @@ pub fn write(doc: &Document) -> String {
         out.push('\n');
         let mut text = String::new();
         if let Some(s) = c.speaker.as_deref().filter(|s| !s.is_empty()) {
-            text.push_str(&format!("<v {s}>"));
+            // `>` would end the voice tag early and spill the rest of the name into the cue text, so it
+            // is written as the lookalike `›` (U+203A), and a line break as a space. A name ending
+            // in `-` gets a space before the closing `>`, so the two never read as an arrow.
+            let name = s.replace('>', "\u{203a}").replace(['\r', '\n'], " ");
+            text.push_str(&format!("<v {name}{}>", if name.ends_with('-') { " " } else { "" }));
         }
         text.push_str(&c.text);
         for l in text.lines().filter(|l| !l.trim().is_empty()) {
@@ -240,6 +244,19 @@ mod tests {
         let w = write(&d);
         assert!(w.starts_with("WEBVTT\n\nSTYLE\n::cue { color: yellow }\n\nNOTE a comment\nspanning lines\n\nintro\n00:00:01.000 --> 00:00:03.500 line:90% align:start\n<v Ann Smith>Hello there\n"));
         assert_eq!(parse(&w).unwrap().cues, d.cues);
+    }
+
+    #[test]
+    fn speaker_with_gt_keeps_cue_text_intact() {
+        for (name, back_name) in [("A > B", "A \u{203a} B"), ("Tom &amp; Jerry", "Tom &amp; Jerry"), ("A > --", "A \u{203a} --"), ("A\nB", "A B")] {
+            let mut doc = Document::default();
+            doc.cues.push(Cue { start: Tick(0), end: Tick(TICKS_PER_MS), text: "Hi".into(), speaker: Some(name.into()), ..Default::default() });
+            let written = write(&doc);
+            assert!(!written.contains("--&gt;"), "the voice tag keeps its own `>`: {written}");
+            let back = parse(&written).unwrap();
+            assert_eq!(back.cues[0].speaker.as_deref(), Some(back_name));
+            assert_eq!(back.cues[0].text, "Hi");
+        }
     }
 
     #[test]
