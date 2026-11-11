@@ -171,7 +171,8 @@ fn seconds() -> u64 {
 ///   slow); until a scan ends the list shows the last one. Another folder drops the old list at
 ///   once. Web has no folder.
 /// - The wheel and the arrow keys over the closed field step through None and the built-ins
-///   only (a folder file would be read from disk at each step).
+///   only (a folder file would be read from disk at each step). From a folder file or the loaded
+///   LUT, a step forward lands on None and a step back on the last built-in.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component]
 pub struct LutPicker<'a> {
@@ -192,25 +193,26 @@ impl<'a> LutPicker<'a> {
     }
 
     fn entries(words: &LutWords, current: Option<&LutChoice>, files: &FolderFiles) -> Vec<Entry<Row>> {
-        let mut entries = vec![Entry::new(Row::Load, words.load.clone()), Entry::new(Row::Choice(LutChoice::None), words.none.clone())];
+        let mut entries =
+            vec![Entry::new(Row::Load, words.load.clone()).stepped(false), Entry::new(Row::Choice(LutChoice::None), words.none.clone())];
         for (id, _) in craft_cms::lutfile::BUILTIN {
             entries.push(Entry::new(Row::Choice(LutChoice::Builtin(id)), builtin_name(words, id)));
         }
         let mut listed = false;
         for (name, path) in files {
             listed |= matches!(current, Some(LutChoice::Folder(held)) if held == path);
-            entries.push(Entry::new(Row::Choice(LutChoice::Folder(path.clone())), Label::from(name.clone())));
+            entries.push(Entry::new(Row::Choice(LutChoice::Folder(path.clone())), Label::from(name.clone())).stepped(false));
         }
         // The file in use while a scan has not found it yet (or the folder changed under it).
         if let Some(LutChoice::Folder(path)) = current
             && !listed
         {
             let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
-            entries.push(Entry::new(Row::Choice(LutChoice::Folder(path.clone())), Label::from(name)));
+            entries.push(Entry::new(Row::Choice(LutChoice::Folder(path.clone())), Label::from(name)).stepped(false));
         }
         if let Some(LutChoice::Loaded { name, size }) = current {
             let text = words.custom.fill(&[("name", name), ("size", &size.to_string())]);
-            entries.push(Entry::new(Row::Choice(current.cloned().unwrap_or(LutChoice::None)), Label::from(text)));
+            entries.push(Entry::new(Row::Choice(current.cloned().unwrap_or(LutChoice::None)), Label::from(text)).stepped(false));
         }
         entries
     }
@@ -320,12 +322,7 @@ impl Component for LutPicker<'_> {
         for event in &out.events {
             match event.value() {
                 Some(Row::Load) => self.load_asked |= matches!(event, EditEvent::Commit { .. }),
-                Some(Row::Choice(choice)) => {
-                    let step = matches!(event, EditEvent::Set { .. });
-                    if !step || matches!(choice, LutChoice::None | LutChoice::Builtin(_)) {
-                        adopted.push(event.clone());
-                    }
-                }
+                Some(Row::Choice(_)) => adopted.push(event.clone()),
                 None => {}
             }
         }

@@ -66,7 +66,7 @@ pub use cx::THUMB;
 pub use cx::{
     Accessible, Activation, BodyCx, Cx, CxCore, Edit, Focus, ItemCx, ItemOpener, MeasureCx, PartBuilder, PartsCx, Pointer, Styled, WordSetCx,
 };
-pub use entry::Entry;
+pub use entry::{Entry, step_stop, step_stops};
 pub use group::{GroupHandle, GroupKind, GroupState};
 pub use held::Held;
 #[doc(hidden)]

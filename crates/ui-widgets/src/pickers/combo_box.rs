@@ -13,7 +13,7 @@ use super::words::PickerWords;
 use crate::buttons::IconButton;
 use crate::contract::{
     Bind, BindMut, CollectionEvent, Common, Component, Cx, Edit as _, EditResponse, Entry, Focus as _, Input, MeasureCx, Overlay, OverlayUi,
-    Overlays as _, PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role, ShowCollection as _, WordSetCx as _,
+    Overlays as _, PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role, ShowCollection as _, WordSetCx as _, step_stop, step_stops,
 };
 use crate::list::{List, ListRow};
 use crate::primitives::{TextKey, TextOptions, TextRun};
@@ -41,7 +41,7 @@ struct Typing {
 /// A text field with a list of options. The typed text filters the list by the options' labels: the labels that
 /// match it best first, ignoring case and accents. The chevron and Alt+Down open the list on every option. Enter or a
 /// click on a row puts the option's text in the field; Escape closes the list, and the next Escape restores the text.
-/// Up, Down and the wheel on the focused, closed field step to the previous or next option.
+/// Up, Down and the wheel on the focused, closed field step to the previous or next stepped option ([`Entry::stepped`]).
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(overlay)]
 pub struct ComboBox<'a> {
@@ -81,19 +81,10 @@ impl<'a> ComboBox<'a> {
         self.options.iter().filter(|option| !option.is_separator()).any(|option| matcher.score(cx.env.resolve(option.label()).as_str()).is_some())
     }
 
-    /// The option whose text steps from the field's text in the direction of the move, over the options that can be
-    /// picked. From text that is none of them, forward goes to the first and back to the last.
+    /// The option whose text steps from the field's text in the direction of the move, over the stepped options.
     fn neighbour(&self, text: &str, forward: bool) -> Option<usize> {
-        let pickable: Vec<usize> =
-            (0..self.options.len()).filter(|&at| self.options[at].value().is_some() && self.options[at].is_enabled()).collect();
-        let here = pickable.iter().position(|&at| self.options[at].value().is_some_and(|value| value == text));
-        let to = match (here, forward) {
-            (Some(here), true) => (here + 1).min(pickable.len().checked_sub(1)?),
-            (Some(here), false) => here.saturating_sub(1),
-            (None, true) => 0,
-            (None, false) => pickable.len().checked_sub(1)?,
-        };
-        pickable.get(to).copied()
+        let here = self.options.iter().position(|option| option.value().is_some_and(|value| value == text));
+        step_stop(&step_stops(self.options), here, forward)
     }
 }
 

@@ -13,7 +13,7 @@ use crate::contract::overlay::{Popup, Trigger};
 use crate::contract::{
     Access, Bind, BindMut, BodyCx, CollectionEvent, Common, Component, Cx, Edit as _, EditResponse, Entry, Focus as _, LeadOnOpen, LeadSource,
     MeasureCx, Numeric, Overlay, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, PopupKind, Props as _, Remember as _, Role, Show as _,
-    ShowCollection as _, ShowContainer as _, WordSetCx as _,
+    ShowCollection as _, ShowContainer as _, WordSetCx as _, step_stop, step_stops,
 };
 use crate::list::{List, ListRow};
 use crate::menu::Menu;
@@ -67,7 +67,8 @@ impl<'a> HeaderMenu<'a> {
 /// A field that shows the picked entry and opens a listbox of all of them. A click, Enter, Space or Alt+Down opens the
 /// listbox with the picked entry active; Up, Down, Home, End and type-ahead move through it, Enter or a click picks,
 /// Escape and Alt+Up close it. Closed, the arrow keys, Home, End and the wheel (while the field is focused or armed)
-/// step the pick through the enabled entries. The field is as wide as its widest entry, placeholder or mixed word, so it keeps its
+/// step the pick through the stepped entries ([`Entry::stepped`]); from a value that is none of them, forward lands on
+/// the first and back on the last. The field is as wide as its widest entry, placeholder or mixed word, so it keeps its
 /// width whichever is shown.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(overlay, probe(Select<'static, u8>))]
@@ -113,23 +114,16 @@ impl<'a, T: Value + 'static> Select<'a, T> {
             cx.set(value.clone());
         }
     }
-
-    /// The positions of the entries that can be picked, in order.
-    fn picks(&self) -> Vec<usize> {
-        (0..self.entries.len()).filter(|&at| self.entries[at].is_enabled()).collect()
-    }
 }
 
-/// The pick a move reaches: `picks` are the positions of the enabled entries and `from` the position of the current
-/// value. From a value that is none of the picks, an arrow lands on the first.
-fn step(picks: &[usize], from: Option<usize>, mv: NavMove) -> Option<usize> {
-    let (first, last) = (*picks.first()?, *picks.last()?);
-    let at = from.and_then(|from| picks.iter().position(|&pick| pick == from));
+/// The stop a move over the closed field reaches: `stops` are the positions of the stepped entries and `from` the
+/// position of the current value.
+fn step(stops: &[usize], from: Option<usize>, mv: NavMove) -> Option<usize> {
     match mv {
-        NavMove::Up | NavMove::Back => Some(at.map_or(first, |at| picks[at.saturating_sub(1)])),
-        NavMove::Down | NavMove::Forward => Some(at.map_or(first, |at| picks[(at + 1).min(picks.len() - 1)])),
-        NavMove::Start => Some(first),
-        NavMove::End => Some(last),
+        NavMove::Up | NavMove::Back => step_stop(stops, from, false),
+        NavMove::Down | NavMove::Forward => step_stop(stops, from, true),
+        NavMove::Start => stops.first().copied(),
+        NavMove::End => stops.last().copied(),
         _ => None,
     }
 }
@@ -173,7 +167,7 @@ impl<T: Value + 'static> Component for Select<'_, T> {
     }
 
     /// Enter and Space toggle the listbox; a press on the face toggles it through the part. While it is closed, the
-    /// arrow keys, Home, End and the wheel step the pick through the enabled entries, and AccessKit sets it. A preview
+    /// arrow keys, Home, End and the wheel step the pick through the stepped entries, and AccessKit sets it. A preview
     /// that the list closed on without a pick is cancelled.
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let list = cx.popup("list");
@@ -181,36 +175,38 @@ impl<T: Value + 'static> Component for Select<'_, T> {
         if self.preview && !list.is_open(cx) && matches!(cx.gesture(), Some(GesturePhase::Begin | GesturePhase::Update)) {
             cx.cancel(CancelReason::Dismissed);
         }
-        let picks = self.picks();
-        if list.is_open(cx) || picks.is_empty() {
+        let stops = step_stops(self.entries);
+        if list.is_open(cx) || stops.is_empty() {
             return;
         }
         let held = self.position(cx.value());
         if let Some(at) = cx.intents().take_set_value() {
-            let to = (at.round().max(0.0) as usize).min(picks.len() - 1);
-            self.pick(cx, picks[to]);
+            let to = (at.round().max(0.0) as usize).min(stops.len() - 1);
+            self.pick(cx, stops[to]);
         }
         while let Some((mv, _)) = cx.intents().take_move() {
-            if let Some(to) = step(&picks, self.position(cx.value()), mv) {
+            if let Some(to) = step(&stops, self.position(cx.value()), mv) {
                 self.pick(cx, to);
             }
         }
-        if let Some(wheel) = cx.take_wheel() {
-            let at = held.and_then(|held| picks.iter().position(|&pick| pick == held)).unwrap_or(0);
-            let steps = ValueSteps::new(at as f64, 0.0, (picks.len() - 1) as f64, 1.0, 1.0);
-            if let StepResult::Set(next) = wheel_step(&steps, ValueAxes::Both, &wheel, cx.env.direction().is_rtl()) {
-                self.pick(cx, picks[(next.round().max(0.0) as usize).min(picks.len() - 1)]);
-            }
+        // The wheel gives one notch, up for a step forward.
+        if let Some(wheel) = cx.take_wheel()
+            && let StepResult::Set(along) =
+                wheel_step(&ValueSteps::new(0.0, -1.0, 1.0, 1.0, 1.0), ValueAxes::Both, &wheel, cx.env.direction().is_rtl())
+            && along != 0.0
+            && let Some(to) = step_stop(&stops, held, along > 0.0)
+        {
+            self.pick(cx, to);
         }
     }
 
     /// The picked entry's place among the entries that can be picked, shown as its label, so AccessKit steps and sets it.
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
-        let picks = self.picks();
-        let range = 0.0..=picks.len().saturating_sub(1) as f64;
+        let stops = step_stops(self.entries);
+        let range = 0.0..=stops.len().saturating_sub(1) as f64;
         let held = self.position(cx.value());
-        let numeric = match held.and_then(|held| picks.iter().position(|&pick| pick == held)) {
-            Some(at) => Numeric::new(at as f64, range).text(cx.env.resolve(self.entries[picks[at]].label()).as_str()),
+        let numeric = match held.and_then(|held| stops.iter().position(|&stop| stop == held)) {
+            Some(at) => Numeric::new(at as f64, range).text(cx.env.resolve(self.entries[stops[at]].label()).as_str()),
             None => Numeric::empty(range),
         };
         access.numeric(numeric.step(1.0));
