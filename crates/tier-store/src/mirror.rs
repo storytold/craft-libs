@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::{KeyClass, StoreKey, TierPolicy};
@@ -43,8 +44,11 @@ pub struct MirrorStore<P: TierPolicy> {
     saved_revisions: HashMap<StoreKey, u64>,
     /// Bytes reserved for in-flight ranged hydrations (or whole-file fallbacks) that have not
     /// yet landed in `data` via `put`/`seed`. Released when the returned
-    /// [`HydrationGuard`] drops.
-    inflight_range_bytes: usize,
+    /// [`HydrationGuard`] drops. A `Cell` rather than a plain field so
+    /// [`begin_range_hydration`](Self::begin_range_hydration) can hand out a guard that holds a
+    /// shared reference: an in-flight reservation must not block every other read of the store
+    /// (`over_budget`, `tracked_bytes`) for as long as the fetch it covers is running.
+    inflight_range_bytes: Cell<usize>,
 }
 
 impl<P: TierPolicy> MirrorStore<P> {
@@ -62,7 +66,7 @@ impl<P: TierPolicy> MirrorStore<P> {
             evicted_order: VecDeque::new(),
             evicted_bytes_used: 0,
             saved_revisions: HashMap::new(),
-            inflight_range_bytes: 0,
+            inflight_range_bytes: Cell::new(0),
         }
     }
 
@@ -125,7 +129,7 @@ impl<P: TierPolicy> MirrorStore<P> {
     /// not counted at all, so the true total could reach roughly twice the nominal budget (or
     /// more) before anything surfaced it. This is the one sum every caller must check.
     pub fn tracked_bytes(&self) -> usize {
-        self.bytes_used.saturating_add(self.evicted_bytes_used).saturating_add(self.inflight_range_bytes).saturating_add(self.pending_bytes())
+        self.bytes_used.saturating_add(self.evicted_bytes_used).saturating_add(self.inflight_range_bytes.get()).saturating_add(self.pending_bytes())
     }
 
     /// Bytes still available before [`tracked_bytes`](Self::tracked_bytes) would exceed the
@@ -143,8 +147,8 @@ impl<P: TierPolicy> MirrorStore<P> {
     /// nothing against the budget while its bytes sit in memory waiting to land, so a burst of
     /// concurrent hydrations could blow well past `byte_budget` before any of them called `put`.
     /// Dropping the returned guard releases the reservation.
-    pub fn begin_range_hydration(&mut self, bytes: usize) -> HydrationGuard<'_, P> {
-        self.inflight_range_bytes = self.inflight_range_bytes.saturating_add(bytes);
+    pub fn begin_range_hydration(&self, bytes: usize) -> HydrationGuard<'_, P> {
+        self.inflight_range_bytes.set(self.inflight_range_bytes.get().saturating_add(bytes));
         HydrationGuard { mirror: self, bytes }
     }
 
@@ -331,12 +335,12 @@ impl<P: TierPolicy> MirrorStore<P> {
 /// [`MirrorStore::begin_range_hydration`]; releases the reservation on drop, including on an
 /// early return from the fetch, so a failed or cancelled hydration never leaks budget.
 pub struct HydrationGuard<'a, P: TierPolicy> {
-    mirror: &'a mut MirrorStore<P>,
+    mirror: &'a MirrorStore<P>,
     bytes: usize,
 }
 
 impl<P: TierPolicy> Drop for HydrationGuard<'_, P> {
     fn drop(&mut self) {
-        self.mirror.inflight_range_bytes = self.mirror.inflight_range_bytes.saturating_sub(self.bytes);
+        self.mirror.inflight_range_bytes.set(self.mirror.inflight_range_bytes.get().saturating_sub(self.bytes));
     }
 }
