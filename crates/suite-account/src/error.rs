@@ -23,6 +23,11 @@ pub enum Error {
         expected: u32,
         current: u32,
     },
+    /// This handle has reached the highest generation `u32` can hold. Nothing can bump it
+    /// further. The write that would have is refused. Wrapping back to a small generation would
+    /// let a stale caller pass the check again. Reaching this needs about four billion sign-ins
+    /// or removals of the same handle.
+    GenerationExhausted(String),
 }
 
 impl std::fmt::Display for Error {
@@ -38,6 +43,7 @@ impl std::fmt::Display for Error {
                     "account {id} moved from generation {expected} to {current}; this write was made against a generation that is no longer current"
                 )
             }
+            Error::GenerationExhausted(id) => write!(f, "account {id} has reached the highest generation this build can record"),
         }
     }
 }

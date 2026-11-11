@@ -145,6 +145,20 @@ fn two_deployments_are_two_accounts() {
 }
 
 #[test]
+fn the_linked_flag_is_persisted_and_read_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::at(Some(dir.path().to_path_buf()), Memory::new());
+    let linked = NewAccount { linked: true, ..new_account() };
+    let account = store.sign_in(&linked, &Secret::new(TOKEN), NOW).unwrap();
+    assert!(account.linked, "sign_in's own return value should carry it");
+    assert!(store.accounts().unwrap().get(&account.id).unwrap().linked, "the row on file should carry it too");
+
+    let unlinked = NewAccount { linked: false, ..new_account() };
+    let account = store.sign_in(&unlinked, &Secret::new(TOKEN), NOW + 1).unwrap();
+    assert!(!account.linked, "a later sign-in's value replaces the earlier one");
+}
+
+#[test]
 fn discarding_an_account_clears_both_the_entry_and_the_row() {
     let dir = tempfile::tempdir().unwrap();
     let keychain = Memory::new();
@@ -168,6 +182,25 @@ fn forgetting_an_account_clears_only_the_entry_and_leaves_the_row() {
     assert!(!keychain.has(&account.id), "the keychain entry should be gone");
     assert_eq!(store.accounts().unwrap().accounts.len(), 1, "forgetting leaves the row; discard removes it too");
     assert!(matches!(store.shared(), Shared::None), "no readable token behind the row still reads as nobody signed in");
+}
+
+#[test]
+fn an_isolated_store_refuses_to_forget_a_credential_it_does_not_own() {
+    let keychain = Memory::new();
+    keychain.put("somebody-elses-handle", &Secret::new(TOKEN)).unwrap();
+    let store: Store<Memory> = Store::at(None, keychain.clone());
+
+    assert_eq!(store.forget("somebody-elses-handle").unwrap_err(), Error::Isolated);
+    assert!(keychain.has("somebody-elses-handle"), "an isolated store must never reach another application's entry");
+}
+
+#[test]
+fn an_isolated_store_refuses_to_read_has_token_too() {
+    let keychain = Memory::new();
+    keychain.put("somebody-elses-handle", &Secret::new(TOKEN)).unwrap();
+    let store: Store<Memory> = Store::at(None, keychain);
+
+    assert_eq!(store.has_token("somebody-elses-handle").unwrap_err(), Error::Isolated);
 }
 
 #[test]
@@ -223,6 +256,206 @@ fn a_write_against_an_unknown_account_says_so_rather_than_claiming_a_stale_gener
     let dir = tempfile::tempdir().unwrap();
     let store = Store::at(Some(dir.path().to_path_buf()), Memory::new());
     assert_eq!(store.update_token("nobody", 0, &Secret::new(TOKEN), NOW).unwrap_err(), Error::Unknown("nobody".to_owned()));
+}
+
+// ---- a rejected refresh only ever deletes its own keychain write ----------
+
+#[test]
+fn a_stale_refresh_racing_a_discard_and_re_sign_in_does_not_delete_the_new_sessions_token() {
+    use std::sync::mpsc;
+
+    let dir = tempfile::tempdir().unwrap();
+    let keychain = Memory::new();
+    let store = Store::at(Some(dir.path().to_path_buf()), keychain.clone());
+    let x = store.sign_in(&new_account(), &Secret::new(TOKEN), NOW).unwrap();
+    let seen_generation = x.generation;
+
+    /// The new sign-in pauses right after its own token lands in the keychain, before it asks
+    /// for the accounts lock: the exact window a stale refresh's second check can still read the
+    /// account as tombstoned.
+    struct PauseAfterPut {
+        inner: Memory,
+        landed: mpsc::SyncSender<()>,
+        release: mpsc::Receiver<()>,
+    }
+    impl TokenStore for PauseAfterPut {
+        fn available(&self) -> Result<(), String> {
+            self.inner.available()
+        }
+        fn get(&self, h: &str) -> Result<Option<Secret>, String> {
+            self.inner.get(h)
+        }
+        fn put(&self, h: &str, t: &Secret) -> Result<(), String> {
+            let r = self.inner.put(h, t);
+            self.landed.send(()).unwrap();
+            self.release.recv().unwrap();
+            r
+        }
+        fn remove(&self, h: &str) -> Result<(), String> {
+            self.inner.remove(h)
+        }
+    }
+
+    /// Fires once the stale refresh's own token write has landed, before the refresh asks for
+    /// the accounts lock. Runs a discard (committing a tombstone), then starts a new sign-in and
+    /// waits for its own token write to land too, overwriting the refresh's token with the new
+    /// session's. That leaves the refresh's upcoming second check looking at exactly the state
+    /// its unconditional cleanup must not simply delete.
+    struct RunDiscardThenSignInAfterPut {
+        inner: Memory,
+        hook: std::sync::Mutex<Option<Box<dyn FnOnce()>>>,
+    }
+    impl TokenStore for RunDiscardThenSignInAfterPut {
+        fn available(&self) -> Result<(), String> {
+            self.inner.available()
+        }
+        fn get(&self, h: &str) -> Result<Option<Secret>, String> {
+            self.inner.get(h)
+        }
+        fn put(&self, h: &str, t: &Secret) -> Result<(), String> {
+            let r = self.inner.put(h, t);
+            let hook = self.hook.lock().unwrap().take();
+            if let Some(hook) = hook {
+                hook();
+            }
+            r
+        }
+        fn remove(&self, h: &str) -> Result<(), String> {
+            self.inner.remove(h)
+        }
+    }
+
+    let (landed_tx, landed_rx) = mpsc::sync_channel::<()>(0);
+    let (release_tx, release_rx) = mpsc::sync_channel::<()>(0);
+    let handle_slot: std::sync::Arc<std::sync::Mutex<Option<std::thread::JoinHandle<Result<Account, Error>>>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+
+    let hook_dir = dir.path().to_path_buf();
+    let hook_keychain = keychain.clone();
+    let hook_x_id = x.id.clone();
+    let hook_slot = handle_slot.clone();
+    let hook: Box<dyn FnOnce()> = Box::new(move || {
+        Store::at(Some(hook_dir.clone()), hook_keychain.clone()).discard(&hook_x_id).unwrap();
+        let new_store = Store::at(Some(hook_dir), PauseAfterPut { inner: hook_keychain, landed: landed_tx, release: release_rx });
+        let handle = std::thread::spawn(move || new_store.sign_in(&new_account(), &Secret::new("session-2"), NOW + 10));
+        *hook_slot.lock().unwrap() = Some(handle);
+        landed_rx.recv().unwrap();
+    });
+
+    let refresh_store =
+        Store::at(Some(dir.path().to_path_buf()), RunDiscardThenSignInAfterPut { inner: keychain.clone(), hook: std::sync::Mutex::new(Some(hook)) });
+    let refresh = refresh_store.update_token(&x.id, seen_generation, &Secret::new("stale-refresh-token"), NOW + 20);
+    release_tx.send(()).unwrap();
+    let s2 = handle_slot.lock().unwrap().take().unwrap().join().unwrap().unwrap();
+
+    assert_eq!(
+        refresh,
+        Err(Error::StaleGeneration { id: x.id.clone(), expected: seen_generation, current: seen_generation + 1 }),
+        "the refresh must still be refused as stale"
+    );
+    assert!(keychain.has(&s2.id), "the freshly re-signed-in session's token must survive the stale refresh's cleanup");
+    assert_eq!(keychain.get(&s2.id).unwrap(), Some(Secret::new("session-2")));
+}
+
+// ---- generations never wrap ------------------------------------------------
+
+/// What a crafted accounts file at the limit looks like: one account, holding `generation`.
+fn account_at(id: &str, generation: u32) -> Account {
+    Account { id: id.to_owned(), service: SERVICE.to_owned(), user: USER.to_owned(), display: "Ada Lovelace".to_owned(), generation, ..Account::default() }
+}
+
+#[test]
+fn remove_with_tombstone_refuses_to_wrap_past_the_maximum_generation() {
+    let mut list = accounts::Accounts::default();
+    let err = list.remove_with_tombstone("x", u32::MAX).unwrap_err();
+    assert_eq!(err, Error::GenerationExhausted("x".to_owned()));
+    assert!(list.tombstones.is_empty(), "a refused bump must leave no tombstone behind");
+}
+
+#[test]
+fn a_refresh_against_an_account_already_at_the_maximum_generation_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(paths::FILE);
+    let id = accounts::handle(SERVICE, USER);
+    let list = accounts::Accounts { format: accounts::FORMAT, accounts: vec![account_at(&id, u32::MAX)], active: Some(id.clone()), tombstones: Vec::new() };
+    accounts::write(&path, &list).unwrap();
+    let keychain = Memory::new();
+    keychain.put(&id, &Secret::new(TOKEN)).unwrap();
+    let store = Store::at(Some(dir.path().to_path_buf()), keychain);
+
+    let err = store.update_token(&id, u32::MAX, &Secret::new("refreshed"), NOW + 1).unwrap_err();
+    assert_eq!(err, Error::GenerationExhausted(id));
+}
+
+#[test]
+fn signing_in_over_a_tombstone_at_the_maximum_generation_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(paths::FILE);
+    let id = accounts::handle(SERVICE, USER);
+    let list = accounts::Accounts {
+        format: accounts::FORMAT,
+        accounts: Vec::new(),
+        active: None,
+        tombstones: vec![accounts::Tombstone { id: id.clone(), generation: u32::MAX }],
+    };
+    accounts::write(&path, &list).unwrap();
+    let store = Store::at(Some(dir.path().to_path_buf()), Memory::new());
+
+    let err = store.sign_in(&new_account(), &Secret::new(TOKEN), NOW).unwrap_err();
+    assert_eq!(err, Error::GenerationExhausted(id));
+}
+
+// ---- the list never grows past what the next reader can open ---------------
+
+#[test]
+fn write_refuses_a_list_too_large_for_read_to_ever_open_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(paths::FILE);
+    let oversized = accounts::Accounts {
+        format: accounts::FORMAT,
+        accounts: vec![Account { display: "x".repeat(2 << 20), ..account_at("huge", 0) }],
+        active: None,
+        tombstones: Vec::new(),
+    };
+
+    assert!(matches!(accounts::write(&path, &oversized), Err(Error::Malformed(_))));
+    assert!(!path.exists(), "a write that cannot be read back must never land on disk");
+}
+
+#[test]
+fn write_leaves_a_previously_good_file_untouched_when_the_new_one_is_too_large() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(paths::FILE);
+    let good = accounts::Accounts { format: accounts::FORMAT, accounts: vec![account_at("a", 0)], active: Some("a".to_owned()), tombstones: Vec::new() };
+    accounts::write(&path, &good).unwrap();
+
+    let oversized = accounts::Accounts {
+        format: accounts::FORMAT,
+        accounts: vec![Account { display: "x".repeat(2 << 20), ..account_at("huge", 0) }],
+        active: None,
+        tombstones: Vec::new(),
+    };
+    assert!(accounts::write(&path, &oversized).is_err());
+
+    assert_eq!(accounts::read(&path).unwrap(), good, "the earlier, readable file must still be exactly what was there before");
+}
+
+#[test]
+fn a_sign_in_with_an_oversized_display_name_fails_without_bricking_the_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let keychain = Memory::new();
+    let store = Store::at(Some(dir.path().to_path_buf()), keychain.clone());
+    store.sign_in(&new_account(), &Secret::new(TOKEN), NOW).unwrap();
+
+    let huge = NewAccount { display: "x".repeat(2 << 20), ..NewAccount { service: "https://other.example.com".to_owned(), ..new_account() } };
+    assert!(store.sign_in(&huge, &Secret::new("another-token"), NOW + 1).is_err());
+
+    // The list a moment ago is still exactly readable. The first account is still there.
+    // `shared()` still answers normally. Without the guard, every later call would fail on a
+    // file nothing can parse back.
+    let list = store.accounts().unwrap();
+    assert_eq!(list.accounts.len(), 1);
+    assert!(matches!(store.shared(), Shared::Session { .. }));
 }
 
 // ---- nobody is signed in ---------------------------------------------------
@@ -366,6 +599,49 @@ fn migration_repairs_an_orphan_keychain_token_with_the_legacy_file() {
         Shared::Session { token, .. } => assert_eq!(token, Secret::new(LEGACY)),
         other => panic!("expected a session, got {other:?}"),
     }
+}
+
+#[test]
+fn migration_leaves_a_legacy_file_alone_once_it_changed_after_being_read() {
+    let suite = tempfile::tempdir().unwrap();
+    let app = tempfile::tempdir().unwrap();
+    let path = legacy_file(app.path());
+
+    /// Stands in for another process still running the application's own, now-superseded
+    /// writer: it rewrites the legacy file with a different token the moment the suite store
+    /// writes this account's token, the exact window between `adopt`'s read of the file and its
+    /// removal of it.
+    struct RewriteFileOnPut {
+        inner: Memory,
+        path: PathBuf,
+    }
+    impl TokenStore for RewriteFileOnPut {
+        fn available(&self) -> Result<(), String> {
+            self.inner.available()
+        }
+        fn get(&self, h: &str) -> Result<Option<Secret>, String> {
+            self.inner.get(h)
+        }
+        fn put(&self, h: &str, t: &Secret) -> Result<(), String> {
+            let body = format!(r#"{{"service":"{SERVICE}","token":"refreshed-elsewhere","user":"{USER}","display":"Ada Lovelace"}}"#);
+            std::fs::write(&self.path, body.as_bytes()).unwrap();
+            self.inner.put(h, t)
+        }
+        fn remove(&self, h: &str) -> Result<(), String> {
+            self.inner.remove(h)
+        }
+    }
+
+    let store = Store::at(Some(suite.path().to_path_buf()), RewriteFileOnPut { inner: Memory::new(), path: path.clone() });
+    let account = match crate::migrate::adopt(&store, &path, NOW).unwrap() {
+        Adopted::Taken(account) => account,
+        other => panic!("expected the session to be taken over, got {other:?}"),
+    };
+    assert_eq!(account.service, SERVICE, "the session that was actually read is still the one adopted");
+
+    assert!(path.exists(), "the file changed after it was read; deleting it would discard the rewritten session with nothing left to recover it from");
+    let left_behind = std::fs::read_to_string(&path).unwrap();
+    assert!(left_behind.contains("refreshed-elsewhere"), "the file on disk must still be the rewritten one: {left_behind}");
 }
 
 #[test]

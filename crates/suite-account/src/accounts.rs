@@ -38,6 +38,10 @@ pub struct Account {
     pub added: i64,
     /// Unix seconds when an application last used it.
     pub last_used: i64,
+    /// Whether cloud storage is linked, as recorded by [`crate::NewAccount::linked`] at sign-in.
+    /// For a user interface only; the deployment is the authority and is asked again on each
+    /// start.
+    pub linked: bool,
     /// Bumped every time this row's content changes: a sign-in that replaces the entry, or (per
     /// RFC-0025's cross-app lifecycle guarantees) a removal. A caller that read the account before
     /// one of those passes its generation back on a later write; [`crate::Store::update_token`]
@@ -141,15 +145,21 @@ impl Accounts {
     /// Drops an account and leaves a tombstone holding its generation, bumped once more by the
     /// removal itself (RFC-0025 lifecycle guarantee 2). Whoever is left over, if anybody, becomes
     /// active.
-    pub fn remove_with_tombstone(&mut self, id: &str, generation: u32) {
+    ///
+    /// Refuses with [`Error::GenerationExhausted`] when `generation` is already `u32::MAX`.
+    /// Wrapping past it would hand out a small number again. A stale caller's check against that
+    /// small number would then pass. Monotonic generations exist to rule that out.
+    pub fn remove_with_tombstone(&mut self, id: &str, generation: u32) -> Result<(), Error> {
+        let bumped = generation.checked_add(1).ok_or_else(|| Error::GenerationExhausted(id.to_owned()))?;
         self.accounts.retain(|a| a.id != id);
         if self.active.as_deref() == Some(id) {
             self.active = self.accounts.first().map(|a| a.id.clone());
         }
         match self.tombstones.iter_mut().find(|t| t.id == id) {
-            Some(existing) => existing.generation = generation + 1,
-            None => self.tombstones.push(Tombstone { id: id.to_owned(), generation: generation + 1 }),
+            Some(existing) => existing.generation = bumped,
+            None => self.tombstones.push(Tombstone { id: id.to_owned(), generation: bumped }),
         }
+        Ok(())
     }
 }
 
@@ -196,10 +206,23 @@ pub fn read(path: &Path) -> Result<Accounts, Error> {
 ///
 /// Readable by this user alone where the platform has file modes. The file holds no token. It does
 /// say who is signed in. That is nobody else's business.
+///
+/// Refuses a list that would serialize past [`MAX_BYTES`], before any file is touched. [`read`]
+/// rejects a file that large; writing one anyway would succeed here and then make every later
+/// read of this list fail, including the reads every other mutation needs before it can repair
+/// anything. An oversized `display` or `email` on one account is the realistic way to reach this,
+/// not the ordinary handful of accounts a suite ever holds.
 pub fn write(path: &Path, accounts: &Accounts) -> Result<(), Error> {
     let dir = path.parent().ok_or_else(|| Error::Io(format!("{} has no parent folder", path.display())))?;
-    std::fs::create_dir_all(dir).map_err(|e| Error::Io(format!("couldn't create {} ({e})", dir.display())))?;
     let json = serde_json::to_vec_pretty(accounts).map_err(|e| Error::Malformed(e.to_string()))?;
+    if json.len() as u64 > MAX_BYTES {
+        return Err(Error::Malformed(format!(
+            "the account list would be {} bytes, too large to write; {} would reject it unread",
+            json.len(),
+            path.display()
+        )));
+    }
+    std::fs::create_dir_all(dir).map_err(|e| Error::Io(format!("couldn't create {} ({e})", dir.display())))?;
     use std::io::Write;
 
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
