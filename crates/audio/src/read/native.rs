@@ -154,7 +154,7 @@ impl Packets<'_> {
                         *pending = Some(p);
                         // Timestamps are rounded to the file's timestamp scale (often 1 ms), so the
                         // packet's index places it exactly where packets have a known length.
-                        let by_index = point.sample.and_then(|k| frames.start(k));
+                        let by_index = point.sample.and_then(|k| frames.start(demux.source(), k));
                         Ok(by_index.unwrap_or_else(|| {
                             rescale_round(u64::try_from(pts_ns.saturating_sub(*first_ns)).unwrap_or(0), 1_000_000_000, u64::from(*rate))
                         }))
@@ -173,19 +173,61 @@ enum MkvFrames {
     Constant(u64),
     /// PCM: the stored sizes of the track's packets, and the bytes per frame.
     Pcm { sizes: Vec<u32>, frame_bytes: u64 },
+    /// E-AC-3, whose packets can differ in length: each packet's length from the headers of its
+    /// primary syncframes. The packets' places and stored sizes, the bytes header stripping took
+    /// off each one, and their starts once read.
+    Eac3 { samples: Vec<(u64, u32)>, prefix: Vec<u8>, starts: Option<Vec<u64>> },
     /// From the timestamps.
     Timestamps,
 }
 
 impl MkvFrames {
     /// The decoded-timeline start of packet `k`, when the packets say.
-    fn start(&self, k: usize) -> Option<u64> {
+    fn start(&mut self, src: &Src<'_>, k: usize) -> Option<u64> {
         match self {
             MkvFrames::Constant(n) => Some(k as u64 * *n),
             MkvFrames::Pcm { sizes, frame_bytes } => Some(sizes.iter().take(k).map(|&s| u64::from(s)).sum::<u64>() / *frame_bytes),
+            MkvFrames::Eac3 { samples, prefix, starts } => {
+                if starts.is_none() {
+                    // A packet that cannot be read leaves the starts unknown (the caller then
+                    // places the packet by its timestamp) and is tried again on the next seek.
+                    let mut acc = 0u64;
+                    let mut found = Vec::with_capacity(samples.len());
+                    for &(at, size) in samples.iter() {
+                        found.push(acc);
+                        acc += eac3_packet_frames(src, prefix, at, size)? as u64;
+                    }
+                    *starts = Some(found);
+                }
+                starts.as_ref()?.get(k).copied()
+            }
             MkvFrames::Timestamps => None,
         }
     }
+}
+
+/// The frames a stored Matroska E-AC-3 packet decodes to, from the headers of its primary
+/// syncframes, reading only those headers; `None` when a read fails or no header parses.
+fn eac3_packet_frames(src: &Src<'_>, prefix: &[u8], at: u64, size: u32) -> Option<usize> {
+    // Enough bytes for any AC-3 / E-AC-3 header ahead of the audio blocks.
+    const HEADER_BYTES: usize = 32;
+    let len = prefix.len() + size as usize;
+    let mut frames = 0;
+    let mut p = 0;
+    while p < len {
+        let n = HEADER_BYTES.min(len - p);
+        let mut head = prefix.get(p..).unwrap_or_default().iter().copied().take(n).collect::<Vec<u8>>();
+        if head.len() < n {
+            let stored = (p + head.len() - prefix.len()) as u64;
+            head.extend(src.bytes(at + stored, n - head.len())?);
+        }
+        let h = ac3::parse_header(&head).ok()?;
+        if h.is_primary() {
+            frames += h.samples();
+        }
+        p += h.frame_bytes.max(1);
+    }
+    (frames > 0).then_some(frames)
 }
 
 /// The next packet of Matroska track `track` and its timestamp in nanoseconds.
@@ -735,6 +777,9 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
     let probe = TrackDecoder::new(&params, &lookahead.iter().map(Vec::as_slice).collect::<Vec<_>>()).ok()?;
     let rate = probe.sample_rate();
     let frames_of = match (probe.frames_per_packet(), params.pcm) {
+        _ if probe.codec() == CodecId::Eac3 => {
+            MkvFrames::Eac3 { samples: t.samples.iter().map(|s| (s.offset, s.size)).collect(), prefix: t.frame_prefix(0), starts: None }
+        }
         (Some(n), _) => MkvFrames::Constant(n as u64),
         (None, Some(pcm)) => {
             let frame_bytes = u64::from(pcm.bits.div_ceil(8)) * u64::from(params.channels.unwrap_or(1).max(1));
@@ -758,8 +803,12 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
         let duration = if s.duration > 0 {
             s.duration
         } else {
-            // ffmpeg 6 writes AAC without block durations, and records the end in a tag.
-            let MkvFrames::Constant(n) = frames_of else { return None };
+            // ffmpeg 6 writes AAC and E-AC-3 without block durations, and records the end in a tag.
+            let n = match &frames_of {
+                MkvFrames::Constant(n) => *n,
+                MkvFrames::Eac3 { prefix, .. } => eac3_packet_frames(src, prefix, s.offset, s.size)? as u64,
+                _ => return None,
+            };
             let packet = rescale_round(n.saturating_mul(den), u64::from(rate).saturating_mul(num), 1);
             tagged_last_duration(track_duration_tag(&file.tags, t.uid)?, s.pts, delay_ticks, packet, t.timebase)?
         };

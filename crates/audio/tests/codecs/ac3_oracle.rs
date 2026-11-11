@@ -263,3 +263,41 @@ fn generate_fixtures() {
         crate::testkit::fixtures::generate_and_report(&format!("ac3/{}", s.name), &[out], || make(&ff, s));
     }
 }
+
+/// E-AC-3 in Matroska whose packets change length after the packets read ahead at open (here
+/// one syncframe each, then two): a seek finds its packet's place from the packets' own headers,
+/// not as the first packet's length times its index.
+#[test]
+fn a_seek_in_matroska_e_ac3_whose_packets_change_length_lands_exactly() {
+    use craft_media::matroska::{MkvWriter, MuxOptions, TrackKind, TrackSpec};
+    let ff = require_ffmpeg!();
+    let s = SPECS.iter().find(|s| s.name == "eac3_stereo_192k").unwrap();
+    let raw = std::fs::read(make(&ff, s).unwrap_or_else(|| panic!("could not generate {}", s.name))).unwrap();
+    let syncframes = frames(&raw);
+    let mut track = TrackSpec::new(TrackKind::Audio, "A_EAC3");
+    track.audio = Some((f64::from(s.rate), u64::from(s.channels), None));
+    let mut mkv = MkvWriter::new(std::io::Cursor::new(Vec::new()), vec![track], MuxOptions::default()).unwrap();
+    let (mut i, mut pts_ns) = (0, 0i64);
+    while i < syncframes.len() {
+        let n = if i < 12 { 1 } else { 2.min(syncframes.len() - i) };
+        let packet = syncframes[i..i + n].concat();
+        let duration = 32_000_000 * n as u64;
+        mkv.write_frame(0, pts_ns, true, &packet, Some(duration)).unwrap();
+        pts_ns += duration as i64;
+        i += n;
+    }
+    let file = mkv.finish().unwrap().into_inner();
+
+    let (_, whole) = craft_audio::decode(&file, Some("mkv")).unwrap();
+    assert_eq!(whole.frames(), syncframes.len() * 1536);
+    for target in [20 * 1536 + 700, 30 * 1536] {
+        let mut dec = craft_audio::Decoder::open(file.clone(), Some("mkv"), &craft_audio::DecodeOptions::default()).unwrap();
+        assert_eq!(dec.seek(target as u64).unwrap(), target as u64);
+        let block = dec.next_block().unwrap().unwrap();
+        let n = block.channels[0].len();
+        assert!(n > 0);
+        for (ours, theirs) in block.channels.iter().zip(&whole.channels) {
+            assert!(ours[..] == theirs[target..target + n], "after a seek to {target}");
+        }
+    }
+}

@@ -190,6 +190,9 @@ impl TrackDecoder {
     /// every codec: call [`TrackDecoder::conceal`] for audio of its length, so what follows keeps
     /// its timing.
     pub fn decode(&mut self, packet: &[u8]) -> Result<AudioBuffer> {
+        // A packet decoded only in part says nothing of how long packets are.
+        #[cfg_attr(not(feature = "ac3-decode"), allow(unused_mut))]
+        let mut partial = false;
         let channels = match &mut self.inner {
             #[cfg(feature = "aac-decode")]
             Inner::Aac { dec, up, order, adts_format } => {
@@ -224,7 +227,10 @@ impl TrackDecoder {
                     let f = match d.decode(rest) {
                         Ok(f) => f,
                         Err(e) if out.is_empty() => return Err(e.into()),
-                        Err(_) => break,
+                        Err(_) => {
+                            partial = true;
+                            break;
+                        }
                     };
                     p += f.header.frame_bytes.max(1);
                     shape.short |= f.header.is_primary() && f.header.samples() < AC3_FRAME_SAMPLES;
@@ -237,7 +243,7 @@ impl TrackDecoder {
                     }
                 }
                 let frames = out.first().map_or(0, Vec::len);
-                shape.varies |= frames > 0 && shape.first > 0 && frames != shape.first;
+                shape.varies |= !partial && frames > 0 && shape.first > 0 && frames != shape.first;
                 out
             }
             Inner::Pcm { kind, channels } => {
@@ -245,7 +251,7 @@ impl TrackDecoder {
                 deinterleave(packet, *kind, *channels, frames)?
             }
         };
-        if let Some(n) = channels.iter().map(Vec::len).min().filter(|&n| n > 0) {
+        if let Some(n) = channels.iter().map(Vec::len).min().filter(|&n| n > 0 && !partial) {
             self.last_frames = n;
             if channels.len() != usize::from(self.layout.channels()) {
                 self.layout = ChannelLayout::unordered(crate::layout::count(channels.len()));
@@ -862,6 +868,22 @@ mod tests {
         dec.reset();
         assert_eq!(dec.conceal(Some(&six)).unwrap().channels[0].len(), 1536);
         assert_eq!(dec.conceal(Some(&one)).unwrap().channels[0].len(), 256);
+    }
+
+    #[cfg(feature = "ac3-decode")]
+    #[test]
+    fn a_packet_decoded_in_part_keeps_the_length_lost_packets_are_concealed_at() {
+        use crate::ac3::tests::single_block_eac3;
+        let params = CodecParams::new(CodecId::Eac3);
+        let one = single_block_eac3(true);
+        let six = [one.clone(), (0..5).flat_map(|_| single_block_eac3(false)).collect()].concat();
+        let mut dec = TrackDecoder::new(&params, &[&six, &six]).unwrap();
+        assert_eq!(dec.decode(&six).unwrap().channels[0].len(), 1536);
+        // The second syncframe is damaged: its first one decodes, the rest of the packet is lost.
+        let damaged = [one.clone(), vec![0x0B, 0x77, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]].concat();
+        assert_eq!(dec.decode(&damaged).unwrap().channels[0].len(), 256);
+        assert_eq!(dec.conceal(None).unwrap().channels[0].len(), 1536, "a lost packet is as long as the last whole one");
+        assert_eq!(dec.frames_per_packet(), Some(1536), "a damaged packet does not make the packets' lengths differ");
     }
 
     #[cfg(feature = "ac3-decode")]
