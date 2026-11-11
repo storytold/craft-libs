@@ -603,6 +603,32 @@ mod lossy_tests {
         assert!(matches!(image(&encode(256, 256)), Err(RawError::Corrupt(_))));
     }
 
+    /// A Deflate tile that is nearly all padding outside the image (a 4096 × 4096 tile holding one column of a
+    /// 4097-wide picture) is refused before its nominal buffer is inflated; the writer's largest padded tile
+    /// (2048 × 2048) is within the slack (`dngwrite`'s clamp test).
+    #[test]
+    fn a_deflate_tile_that_is_mostly_padding_is_refused() {
+        let file = vec![0u8; 8 + 8192];
+        let info = ImageInfo {
+            width: 4097,
+            height: 4096,
+            bits_per_sample: vec![8],
+            samples_per_pixel: 1,
+            compression: comp::ADOBE_DEFLATE,
+            photometric: 32803,
+            planar: 1,
+            predictor: 1,
+            sample_format: 1,
+            new_subfile_type: 0,
+            layout: Layout::Tiles { tile_width: 4096, tile_height: 4096 },
+            offsets: vec![8, 8],
+            byte_counts: vec![8192, 8192],
+        };
+        let chunks = info.chunks(file.len() as u64);
+        let edge = decode_chunk(&file, &info, &chunks[1], ByteOrder::Little, Packing::Msb, 1, 8, false, &Limits::default());
+        assert!(matches!(edge, Err(RawError::Limit(_))), "{:?}", edge.err());
+    }
+
     fn strip_info(compression: u16, offsets: Vec<u64>, byte_counts: Vec<u64>) -> ImageInfo {
         ImageInfo {
             width: 4,
