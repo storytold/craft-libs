@@ -23,6 +23,7 @@ pub use craft_ui_widgets::{
 
 #[doc(hidden)]
 pub mod canvas_data;
+mod collapse;
 pub mod dialog;
 pub mod docking;
 pub mod rails;

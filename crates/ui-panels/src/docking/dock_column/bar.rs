@@ -8,13 +8,12 @@ use crate::contract::{Access, BodyCx, Name, PaintUi, Props as _, Role, Show as _
 use crate::docking::group::GroupGrip;
 use crate::docking::{DockWords, PanelSpec};
 use crate::menu::{GroupItem, Menu, MenuWords, PanelMenu, PanelRow};
-use crate::primitives::{Glyph, IconSpec};
 use crate::runtime::env::Label;
 use craft_behavior::PartKey;
 use craft_behavior::dock::{Column, DockEdge};
 use craft_theme::variant::Tone;
 use craft_theme::{ControlSize, CustomVariant, Emphasis, States, Tokens, Variant, VariantLook};
-use egui::{Color32, Pos2, Rect, Ui};
+use egui::{Rect, Ui};
 
 /// The chevron of a column's bar: a click collapses an expanded column to icons and expands an iconic one.
 pub(in crate::docking) const CHEVRON: PartKey = PartKey::new("chevron");
@@ -28,14 +27,6 @@ pub(in crate::docking) struct BarRecord {
     pub(in crate::docking) picked: Option<GroupItem>,
 }
 
-/// A double chevron's arms, as a share of the icon box's side: the glyph the collapse control draws is small beside
-/// the bar's other icons.
-const ARM: f32 = 0.17;
-
-/// How far each chevron of the pair reaches along the arrow, and the distance between the two, as shares of an arm.
-const REACH: f32 = 0.8;
-const PITCH: f32 = 1.4;
-
 /// The look of the collapse control: ghost, with the muted text until the pointer is over it, and no fill under the
 /// pointer.
 fn collapse_look(tokens: &Tokens) -> VariantLook {
@@ -46,29 +37,6 @@ fn collapse_look(tokens: &Tokens) -> VariantLook {
 }
 
 const COLLAPSE: CustomVariant = CustomVariant::new::<IconButtonStyleKey>("craft_ui.dock-collapse", collapse_look);
-
-/// The glyph of a column's collapse control: a double chevron that points where the column goes, towards the window
-/// edge when it collapses to icons and away from it when it expands.
-struct DoubleChevron {
-    /// Whether it points to the right of the screen.
-    right: bool,
-    /// The stroke width.
-    width: f32,
-}
-
-impl Glyph for DoubleChevron {
-    fn paint(&self, painter: &egui::Painter, _: &crate::style::UiTokens, rect: Rect, color: Color32, _: bool) {
-        let arm = rect.width().min(rect.height()) * ARM;
-        let flip = if self.right { 1.0 } else { -1.0 };
-        let centre = rect.center();
-        let stroke = egui::Stroke::new(self.width, color);
-        for step in [-0.5, 0.5] {
-            let x = centre.x + flip * arm * PITCH * step;
-            let points = [(-0.5, -1.0), (0.5, 0.0), (-0.5, 1.0)].map(|(dx, dy)| Pos2::new(x + flip * arm * REACH * dx, centre.y + arm * dy)).to_vec();
-            painter.add(egui::Shape::line(points, stroke));
-        }
-    }
-}
 
 /// Whether the column's collapse control points to the right of the screen: towards the window edge when it collapses
 /// to icons and away from it when it expands.
@@ -97,8 +65,8 @@ pub(in crate::docking) fn chevron_name(words: &DockWords, expanded: bool) -> Lab
 
 /// Paints the chevron part: a small ghost button with the double chevron pointing where the column goes.
 pub(in crate::docking) fn paint_chevron(ui: &mut PaintUi<'_>, edge: DockEdge, expanded: bool, rtl: bool, name: Label) {
-    let chevron = DoubleChevron { right: points_right(edge, expanded, rtl), width: ui.env.tokens.stroke.thin };
-    ui.face(CHEVRON, IconButton::new(IconSpec::glyph(&chevron)).size(ControlSize::Sm).variant(Variant::Custom(COLLAPSE)).label(name));
+    let chevrons = crate::collapse::chevrons(points_right(edge, expanded, rtl));
+    ui.face(CHEVRON, IconButton::new(chevrons).size(ControlSize::Sm).variant(Variant::Custom(COLLAPSE)).label(name));
 }
 
 /// The chevron's node.

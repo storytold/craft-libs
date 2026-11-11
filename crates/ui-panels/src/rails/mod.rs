@@ -14,7 +14,7 @@ pub use drawer::{DrawerGroup, ToolbarDrawer, ToolbarDrawerOutput, ToolbarEdit, a
 pub use flyout::{FlyoutButton, FlyoutButtonStyle, FlyoutOutput, SlotEdit};
 pub use panel_rail::{PanelRail, PanelRailOutput, PanelRailRequest, PanelRailStyle};
 pub use tool::{
-    DropAt, LastUsed, RailFooter, RailTool, SlotId, ToolDrag, ToolDropped, ToolRail, ToolRailOutput, ToolRailStyle, ToolSlot, column_toggle_icon,
-    drop_in_slot, remembered, shown_tool, visible_slots,
+    DropAt, LastUsed, RailFooter, RailTool, SlotId, ToolDrag, ToolDropped, ToolRail, ToolRailOutput, ToolRailStyle, ToolSlot, drop_in_slot,
+    remembered, shown_tool, visible_slots,
 };
 pub use words::RailWords;

@@ -36,12 +36,10 @@ pub struct RailFooter {
     pub columns: usize,
 }
 
-/// The column toggle's icon. Widening (from one column) points away from the rail's edge, towards the canvas;
-/// narrowing points back to the edge. Directional icons mirror in a right-to-left interface, so the icon that draws
-/// pointing right there is the left one.
-pub fn column_toggle_icon(columns: usize, at_left: bool, rtl: bool) -> &'static str {
-    let points_right = (columns == 1) == at_left;
-    if points_right != rtl { "chevrons_right" } else { "chevrons_left" }
+/// Whether the column toggle points to the right of the screen: widening (from one column) points away from the
+/// rail's edge, towards the canvas; narrowing points back to the edge.
+fn column_toggle_points_right(columns: usize, at_left: bool) -> bool {
+    (columns == 1) == at_left
 }
 
 /// The style of a tool rail: it paints its chrome surface and takes its spacing from the body gap its props name.
@@ -294,8 +292,8 @@ impl<T: Value + 'static> Container for ToolRail<'_, T> {
     fn header(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
         let Some(label) = self.column_toggle.clone() else { return };
         let (columns, rtl) = (self.column_count(), Env::of(ui).direction.is_rtl());
-        let icon = column_toggle_icon(columns, !self.at_end() != rtl, rtl);
-        let toggle = IconButton::new(IconId::new(icon)).id_salt("column-toggle").label(label).show(ui);
+        let icon = crate::collapse::chevrons(column_toggle_points_right(columns, !self.at_end() != rtl));
+        let toggle = IconButton::new(icon).id_salt("column-toggle").label(label).show(ui);
         self.toggled |= clicked(&toggle);
     }
 
