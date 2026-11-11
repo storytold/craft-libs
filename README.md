@@ -87,6 +87,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   and message, images, and the vector network and geometry blobs. Bounded on hostile input.
   Carved from FigCraft.
 - [`craft-epub`](crates/epub/README.md): EPUB packages: the OCF ZIP container, the package document (metadata, manifest, spine) and the navigation document, written as EPUB 3 (reflowable and fixed layout) and read (EPUB 2 and 3) with bounded entry sizes. Content documents are the caller's.
+- [`craft-exr`](crates/exr/src/lib.rs): OpenEXR pieces shared by PhotoCraft and EffectCraft: layer
+  and channel names, the channels that make a colour picture, and Cryptomatte IDs, metadata keys,
+  manifests and rank channels. Takes names and attribute text; decoding is not part of it yet.
 - [`craft-font-catalog`](crates/font-catalog/README.md): the installed fonts on every platform
   (font folders, fontconfig and Flatpak host folders, CoreText, DirectWrite, the font store),
   lookup by family, style, localized, legacy, full and PostScript names, family loads shared
@@ -191,6 +194,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   header fields, MIME parts and multiparts, encoded-words, RFC 2231 parameters, base64 and
   quoted-printable, character sets, address lists, dates, mbox files and the `multipart/related`
   lookups of MHT web archives. What a message means (body, attachments, flags) stays in each app.
+- [`craft-offcrypto`](crates/offcrypto/README.md): clean-room Office document cryptography ([MS-OFFCRYPTO]): password-encrypted OOXML packages on `craft-cfb` (agile and standard encryption read, with the integrity check enforced; agile written), unsupported schemes named, and the password hashes of document and sheet protection.
 - [`craft-opc`](crates/opc/README.md): Open Packaging Conventions, the ZIP container of DOCX, XLSX and PPTX
   files: bounded readers (every part up front, or on demand), part names, relationships, content
   types and a deterministic package writer. What the parts hold stays with each format's crate.
@@ -211,6 +215,12 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   craft-i18n's `language-data/`, embedded at build time from `CRAFT_I18N_DIR`: English and the
   carry-over locales by default, the set `CRAFT_PROOF_EMBED` names otherwise (`en` for English
   only); other languages come from installed Language packs.
+
+- [`craft-pst`](crates/pst/README.md): Outlook personal folders files (`.pst`, [MS-PST]) read over any
+  `Read + Seek`, from MailCraft: the node database, property and table contexts, folders, messages,
+  recipients, attachments, attached messages and named properties, ANSI and Unicode, encoded or not,
+  with a password. Salvages damaged files. Bounded and panic-free on hostile input. What an item
+  means stays in each app.
 
 - [`craft-quit`](crates/quit/src/lib.rs): native macOS quit, egui close handling and an optional
   app menu. Unsaved-document decisions and save prompts stay in each app.
@@ -246,6 +256,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   JSON control channel.
 - [`craft-web-host`](crates/web-host/README.md): the host messages between a Craft app's web build and the page that hosts it (`?host=parent` or `data-host="page"`): one contract and one bridge for every app.
 - [`craft-xls`](crates/xls/README.md): clean-room Excel 97-2003 workbook (`.xls`, BIFF8) reader: worksheets, cell values, formulas as A1 text (shared and array formulas included), cell formats with resolved palette colours, merged cells, column and row records, defined names, print areas and calculation settings, with limits on records, cells and text.
+- [`craft-ora`](crates/ora/README.md): OpenRaster documents (`.ora`): the ZIP archive and the `stack.xml` layer tree as written, read with bounded sizes and written. From PhotoCraft.
+- [`craft-y4m`](crates/y4m/src/lib.rs): YUV4MPEG2 (`.y4m`) reader, from FilmCraft: the stream
+  header, colour space layouts at 8 to 16 bits, a frame index built from the `FRAME` lines without
+  loading the file, and plane access. Bounded on hostile input.
 - [`craft-kra`](crates/kra/README.md): Krita documents (`.kra`, `.krz`), read: the ZIP archive, the `maindoc.xml` node tree as written, and the tiled pixel files with their LZF compression, a tile at a time. From PhotoCraft.
 - [`craft-xml`](crates/xml/README.md): bounded XML for hostile input: an owned element tree with limits on size, depth, nodes and attributes, streaming of repeated elements, namespace handling (as written, by local name, or canonical prefixes by URI), escaping and a writer. No DTDs and no entity expansion.
 - [Shared UI component audit](docs/ui-components-audit.md): source inventory, extraction priorities
