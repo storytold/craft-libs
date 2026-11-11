@@ -9,10 +9,9 @@ use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Numeric, PaintUi, PartsCx, Pointer as _,
     Remember as _, Role, Styled as _,
 };
-use crate::primitives::{PaintShape, StrokeWidth};
 use crate::runtime::env::Label;
 use crate::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
-use crate::style::{ComponentStyle, FocusLook, StyleColor, StyleCx, TextLook, TrackLook};
+use crate::style::{ComponentStyle, FocusLook, StyleCx, SurfaceStyle, TextLook, TrackLook};
 use craft_behavior::{Flow, HitLevel, HitPriority, Metrics, PartKey, PressPhase, Proposal, Sense};
 use craft_theme::Stateful;
 use egui::{Pos2, Rect, Vec2};
@@ -39,10 +38,8 @@ pub struct SliderStyle {
     track: TrackLook,
     /// The room marks keep.
     space: MarkSpace,
-    /// The thumb's fill.
-    thumb: Stateful<StyleColor>,
-    /// The thumb's edge.
-    thumb_edge: Stateful<StyleColor>,
+    /// The thumb: the theme's knob.
+    knob: Stateful<SurfaceStyle>,
     /// The diameter of the drawn thumb.
     diameter: f32,
     /// The length a slider asks for along its axis.
@@ -162,8 +159,6 @@ impl Component for Slider<'_> {
 
     fn style(cx: &StyleCx<'_>, _: SliderStyleKey) -> SliderStyle {
         let control = cx.control();
-        let colors = &cx.tokens.color;
-        let accent = &colors.accent;
         let length = cx.tokens.size.length.track;
         SliderStyle {
             // Where a row shrinks it, the track narrows to a short field's length.
@@ -172,8 +167,7 @@ impl Component for Slider<'_> {
             mark_text: track::mark_text(cx),
             track: cx.track(),
             space: MarkSpace::new(cx),
-            thumb: track::states(cx, colors.surface.knob, colors.surface.knob, colors.surface.knob),
-            thumb_edge: track::states(cx, colors.line.knob_edge, accent.strong_hover, accent.strong_pressed),
+            knob: track::knob(cx),
             diameter: cx.tokens.component.slider.thumb_height.get(cx.size),
             length,
         }
@@ -319,16 +313,14 @@ impl Component for Slider<'_> {
         }
         let ink = MarkInk { marks: cx.resolve(&style.track.mark_color), labels: cx.resolve(&style.mark_text.color), role: style.mark_text.role };
         track::paint_marks(&draw, &style.track, &self.marks, &scale, along, cx.rect, &ink);
-        let (fill, edge) = (cx.resolve_part(Self::THUMB, &style.thumb), cx.resolve_part(Self::THUMB, &style.thumb_edge));
-        let knob = match self.thumb {
-            SliderThumb::Round => PaintShape::Circle(centre, style.diameter / 2.0),
+        let knob = cx.resolve_part(Self::THUMB, &style.knob);
+        match self.thumb {
+            SliderThumb::Round => draw.surface_styled(Rect::from_center_size(centre, Vec2::splat(style.diameter)), &knob),
             SliderThumb::Triangle => {
                 let (half, top, x) = (style.diameter / 2.0, track::groove_rect(&style.track, along.area).bottom(), centre.x);
-                PaintShape::Polygon(vec![Pos2::new(x, top), Pos2::new(x + half, top + half), Pos2::new(x - half, top + half)])
+                track::paint_pointer(&draw, vec![Pos2::new(x, top), Pos2::new(x + half, top + half), Pos2::new(x - half, top + half)], &knob);
             }
-        };
-        draw.fill(&knob, fill);
-        draw.stroke(&knob, StrokeWidth::Thin, edge);
+        }
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> EditResponse<f64> {

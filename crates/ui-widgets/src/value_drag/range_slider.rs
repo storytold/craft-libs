@@ -8,13 +8,12 @@ use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Name, Numeric, PaintUi, PartsCx,
     Pointer as _, Remember as _, Role, Styled as _, WordSetCx as _,
 };
-use crate::primitives::{PaintShape, StrokeWidth};
 use crate::runtime::env::Label;
 use crate::runtime::focus::{ActivateKeys, FocusShape, KeepKeys, KeyUse};
-use crate::style::{ComponentStyle, FocusLook, StyleColor, StyleCx, TextLook, TrackLook, UiTokens};
+use crate::style::{ComponentStyle, FocusLook, StyleCx, SurfaceStyle, TextLook, TrackLook};
 use craft_behavior::{Flow, HitLevel, HitPriority, Metrics, Mixed, PartKey, PressPhase, PressState, Sense};
 use craft_theme::Stateful;
-use egui::{CornerRadius, Pos2, Rect, Vec2};
+use egui::{Pos2, Rect, Vec2};
 use std::ops::RangeInclusive;
 
 #[cfg(feature = "testing")]
@@ -42,16 +41,12 @@ pub struct RangeSliderStyle {
     track: TrackLook,
     /// The room marks keep.
     space: MarkSpace,
-    /// The fill of a thumb.
-    thumb: Stateful<StyleColor>,
-    /// The edge of a thumb.
-    thumb_edge: Stateful<StyleColor>,
+    /// A thumb: a flat handle.
+    handle: Stateful<SurfaceStyle>,
     /// The width of a drawn thumb.
     thumb_width: f32,
     /// The height of a drawn thumb.
     thumb_height: f32,
-    /// The corner of a drawn thumb.
-    thumb_corner: CornerRadius,
     /// The length a slider asks for along its axis.
     length: f32,
 }
@@ -176,7 +171,6 @@ impl Component for RangeSlider<'_> {
 
     fn style(cx: &StyleCx<'_>, _: RangeSliderStyleKey) -> RangeSliderStyle {
         let control = cx.control();
-        let colors = &cx.tokens.color;
         let length = cx.tokens.size.length.track;
         RangeSliderStyle {
             metrics: Metrics::new().min_size(Vec2::new(length, control.height)),
@@ -184,11 +178,9 @@ impl Component for RangeSlider<'_> {
             mark_text: track::mark_text(cx),
             track: cx.track(),
             space: MarkSpace::new(cx),
-            thumb: track::states(cx, colors.text.normal, colors.text.normal, colors.text.normal),
-            thumb_edge: track::states(cx, colors.text.muted, colors.text.muted, colors.text.muted),
+            handle: track::handle(cx),
             thumb_width: cx.tokens.size.handle.sm,
             thumb_height: cx.tokens.component.slider.thumb_height.get(cx.size),
-            thumb_corner: UiTokens::corner(cx.tokens.shape.radius.sm),
             length,
         }
     }
@@ -403,9 +395,7 @@ impl Component for RangeSlider<'_> {
         track::paint_marks(&draw, &style.track, &self.marks, &scale, along, cx.rect, &ink);
         for (key, centre, _) in thumbs {
             let drawn = Rect::from_center_size(centre, Vec2::new(style.thumb_width, style.thumb_height));
-            let shape = PaintShape::Rect(drawn, style.thumb_corner);
-            draw.fill(&shape, cx.resolve_part(key, &style.thumb));
-            draw.stroke(&shape, StrokeWidth::Thin, cx.resolve_part(key, &style.thumb_edge));
+            draw.surface_styled(drawn, &cx.resolve_part(key, &style.handle));
         }
     }
 

@@ -231,9 +231,8 @@ impl<'a> StyleCx<'a> {
         let colors = &self.tokens.color;
         let groove = self.color(colors.line.control_edge);
         let muted = self.color(colors.text.muted);
-        let disabled = self.color(colors.state.disabled_fill);
         TrackLook {
-            unfilled: Stateful::new(groove).off(States::new(groove, groove, groove, disabled)),
+            unfilled: Stateful::new(groove),
             filled: Stateful::new(muted).off(States::new(muted, muted, muted, self.color(colors.text.disabled))),
             edge: Stateful::new(self.color(colors.line.control_edge)),
             edge_width: self.tokens.stroke.thin,

@@ -2,23 +2,53 @@
 //! marks, and the press resolver that says which thumb a press moves and how.
 
 use crate::contract::{PaintUi, Show};
-use crate::primitives::{Draw, PaintShape, TextRun};
+use crate::primitives::{Draw, PaintShape, StrokeWidth, TextRun};
 use crate::runtime::env::Label;
-use crate::style::{StyleColor, StyleCx, TextLook, TrackLook, TypeRole};
+use crate::style::{StyleColor, StyleCx, SurfaceEdge, SurfaceKind, SurfaceStyle, TextLook, TrackLook, TypeRole, UiTokens};
 use craft_behavior::intent::{MoveMods, NavMove};
 use craft_behavior::nav::{LARGE_STEPS, STEP_SHARE, StepResult, ValueAxes, ValueSteps, snap_to_step, step_value};
 use craft_behavior::{Flow, PartKey, PartRef, PressPhase, PressState, ValueDrag, Wheel, wheel_step};
 use craft_theme::{Rgba, Stateful, States};
-use egui::{CornerRadius, Pos2, Rangef, Rect, Vec2};
+use egui::{CornerRadius, Pos2, Rangef, Rect, Stroke, Vec2};
 use std::ops::{Range, RangeInclusive};
 
 /// The part a track face paints as: the groove across the middle of the control.
 pub(crate) const GROOVE: PartKey = PartKey::new("groove");
 
-/// A colour that rests, lights on hover and press, and takes the disabled fill when disabled.
-pub(crate) fn states(cx: &StyleCx<'_>, rest: Rgba, hover: Rgba, pressed: Rgba) -> Stateful<StyleColor> {
-    let (rest, hover, pressed, disabled) = (cx.color(rest), cx.color(hover), cx.color(pressed), cx.color(cx.tokens.color.state.disabled_fill));
-    Stateful::new(rest).off(States::new(rest, hover, pressed, disabled))
+/// A slider's thumb: the theme's knob, round. Disabled it lies flat, its face moved toward the panel, as a switch's
+/// knob does.
+pub(crate) fn knob(cx: &StyleCx<'_>) -> Stateful<SurfaceStyle> {
+    let knob = SurfaceStyle { radius: CornerRadius::same(u8::MAX), ..cx.surface(SurfaceKind::Knob) };
+    let colors = &cx.tokens.color;
+    let disabled = knob.disabled(cx.color(colors.state.disabled_fill).egui(), cx.color(colors.line.divider).egui());
+    Stateful::new(knob).off(States::new(knob, knob, knob, disabled))
+}
+
+/// A range slider's thumb: a flat handle in the text colour with a muted edge, all in the disabled text colour when
+/// disabled.
+pub(crate) fn handle(cx: &StyleCx<'_>) -> Stateful<SurfaceStyle> {
+    let text = &cx.tokens.color.text;
+    let width = cx.tokens.stroke.thin;
+    let face = |fill: Rgba, edge: Rgba| SurfaceStyle {
+        fill: cx.color(fill).egui(),
+        radius: UiTokens::corner(cx.tokens.shape.radius.sm),
+        edge: SurfaceEdge::Border(Stroke::new(width, cx.color(edge).egui())),
+        shadow: None,
+    };
+    let on = face(text.normal, text.muted);
+    Stateful::new(on).off(States::new(on, on, on, face(text.disabled, text.disabled)))
+}
+
+/// Paints `points`, a pointer thumb, in the face and edge colours of `face`.
+pub(crate) fn paint_pointer(draw: &Draw<'_>, points: Vec<Pos2>, face: &SurfaceStyle) {
+    let edge = match face.edge {
+        SurfaceEdge::Border(stroke) => stroke.color,
+        SurfaceEdge::Bevel { bottom_right, .. } => bottom_right,
+        _ => face.fill,
+    };
+    let shape = PaintShape::Polygon(points);
+    draw.fill(&shape, StyleColor(face.fill));
+    draw.stroke(&shape, StrokeWidth::Thin, StyleColor(edge));
 }
 
 /// The look of the labels under labelled marks: caption type in the muted text colour.
