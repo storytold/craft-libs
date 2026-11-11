@@ -36,7 +36,9 @@ pub use intents::settle;
 pub use intents::take_submit;
 #[doc(hidden)]
 pub use intents::with_window_intents;
-pub(crate) use intents::{Lent, context_request, give_back, lend, request_context, route_whole_reset, scope_escape, take_cancel, take_window_cancel};
+pub(crate) use intents::{
+    Lent, context_request, give_back, lend, lent_taken, request_context, route_whole_reset, scope_escape, take_cancel, take_window_cancel,
+};
 pub(crate) use nodes::{redirect_node, register_expanded, register_node};
 pub(crate) use route::{activated_member, begin, layout_of, pasted_text, queue_activate, queue_edit, take_shortcuts};
 
@@ -205,6 +207,8 @@ pub(crate) struct Stage {
     modal_open: bool,
     /// The held Enter began before the open modal layer: its repeats reach nobody until a fresh press.
     enter_stale: bool,
+    /// How many lent keys session members have taken (`lend`), counted over the viewport's life.
+    lent_taken: u64,
 }
 
 fn with<R>(ctx: &Context, viewport: ViewportId, f: impl FnOnce(&mut Stage) -> R) -> R {

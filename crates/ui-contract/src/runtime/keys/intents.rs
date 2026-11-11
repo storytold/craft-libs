@@ -338,12 +338,15 @@ pub(crate) fn give_back(ctx: &Context, to: Id, lent: Lent) {
     current(ctx, |stage| {
         let Some(own) = stage.routed.get_mut(&Some(to)) else { return };
         let mut back = Vec::new();
+        let lent_items = lent.items.len();
         for (from, intent) in lent.items {
             if let Some(at) = own.items.iter().position(|item| item.intent == intent) {
                 back.push((from, own.items.remove(at)));
             }
         }
         let nudge = lent.nudge.and_then(|from| own.nudge.take().map(|nudge| (from, nudge)));
+        let taken = lent_items - back.len() + usize::from(lent.nudge.is_some() && nudge.is_none());
+        stage.lent_taken += taken as u64;
         for (from, item) in back {
             stage.routed.entry(from).or_default().items.push(item);
         }
@@ -351,6 +354,12 @@ pub(crate) fn give_back(ctx: &Context, to: Id, lent: Lent) {
             stage.routed.entry(from).or_default().nudge = Some(nudge);
         }
     });
+}
+
+/// How many lent keys session members have taken so far in the current viewport: a check of keyboard parity reads
+/// it before and after its input, since a lent key is the session control's, not the focused component's.
+pub(crate) fn lent_taken(ctx: &Context) -> u64 {
+    current(ctx, |stage| stage.lent_taken)
 }
 
 /// Takes the window's untaken `Cancel` (Escape) while nothing has focus.

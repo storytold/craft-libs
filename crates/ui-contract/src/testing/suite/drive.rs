@@ -286,7 +286,10 @@ fn runs_of(story: &Story, probe: &Probe, plan: Plan) -> Runs {
         let mut fixture = input_fixture(story);
         let before = fixture.data().snapshot();
         fixture.take_outputs();
+        let lent_before = crate::runtime::keys::lent_taken(fixture.ctx());
         run(&mut fixture, plan, variant);
+        // A key the canvas lent its session control is that control's: it has no AccessKit twin on the focused stop.
+        let lent = crate::runtime::keys::lent_taken(fixture.ctx()) != lent_before;
         let changed = !fixture.data().changed_since(&before).is_empty();
         let kinds: Vec<EditKind> = fixture.take_outputs().into_iter().flat_map(|output| output.edits).collect();
         let name = variant_name(plan, variant);
@@ -295,6 +298,9 @@ fn runs_of(story: &Story, probe: &Probe, plan: Plan) -> Runs {
             if changed || kinds.iter().any(|kind| matches!(kind, EditKind::Commit | EditKind::Set)) {
                 runs.failures.push(format!("{}: {name} left a changed value or a commit: {kinds:?}", story.name));
             }
+            continue;
+        }
+        if lent {
             continue;
         }
         if !changed {

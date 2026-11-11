@@ -204,8 +204,11 @@ fn every_intent_has_a_declared_action(subject: &Subject) -> Result<(), String> {
             let focus_before = fixture.tree().focused_key();
             let number = |tree: &AccessTree| tree.numeric_of(focus_before).and_then(|numeric| numeric.value);
             let number_before = number(fixture.tree());
+            let lent_before = crate::runtime::keys::lent_taken(fixture.ctx());
             fixture.key(key, Modifiers::NONE);
             fixture.settle();
+            // A key the canvas lent its session control (a crop frame) is that control's, not the focused stop's.
+            let lent = crate::runtime::keys::lent_taken(fixture.ctx()) != lent_before;
             // The step the key took, from the focused node's number: an arrow's meaning is the control's own.
             let step = step.map(|by_key| match (number_before, number(fixture.tree())) {
                 (Some(before), Some(after)) if after > before => Declared::Increment,
@@ -214,7 +217,7 @@ fn every_intent_has_a_declared_action(subject: &Subject) -> Result<(), String> {
             });
             let could_step = step.is_some_and(|step| if step == Declared::Increment { steps_before.0 } else { steps_before.1 });
             let clicked = fixture.take_outputs().iter().any(|output| output.clicked);
-            let changed = !fixture.data().changed_since(&before).is_empty();
+            let changed = !lent && !fixture.data().changed_since(&before).is_empty();
             let radios = fixture.tree().with_role(Role::RADIO_BUTTON);
             let tree = fixture.tree();
             let roving =
