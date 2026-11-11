@@ -52,6 +52,10 @@ No workflow runs the tests of: craft-behavior, craft-host and craft-ui-macros; t
 - craft-theme, craft-behavior and craft-proof build at `opt-level = 1`: their code runs in every screen-test frame (colour maths, behaviour cores) or in dictionary-sized tests, and they are rarely edited. Every other workspace crate, the runtime (craft-ui-contract) included, builds at 0, where rustc shares generic instantiations across crates and an edit rebuilds in seconds (the runtime's 65k lines cost 35–90 s of codegen per edit at opt-level 1).
 - The `gallery` profile (the owner's native gallery): release optimisation, incremental, 256 codegen units, and the workspace's own crates at `opt-level = 1`, which keeps rustc sharing generics across crates so a framework edit does not re-generate every dependant's copies; dependencies keep `opt-level = 3`.
 
+## Measuring frame time
+
+Frame-time numbers come from the gallery profile, the build the owner runs: `cl cargo build --profile gallery -p craft-ui-gallery --bin craft-ui-gallery` (the same command as `cargo run --profile gallery -p craft-ui-gallery`, with nothing added). Build it in a worktree kept for measuring only, so its gallery profile stays warm and a rebuild after a change compiles only the crates the change reaches. Measure the old and the new gallery at the same time, on two virtual displays, in every round: load on a shared machine moves both by more than one fix does, and the same load cancels in the comparison. What a frame runs (passes per frame, measuring runs, runs per interaction) is asserted by count trials, not counted in the measured build.
+
 ## The job pool
 
 cargo gives each build a jobserver with one token per core, so a build alone uses the whole machine, but several builds at once (worktrees, agents) each take every core and slow each other down. To share one job pool between them, set `CL_LAUNCHER` to a command that runs its arguments with a shared jobserver in `MAKEFLAGS` (cargo joins a jobserver it finds there). `cl` runs every cargo command through that command; without `CL_LAUNCHER` it runs cargo directly.
