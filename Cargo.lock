@@ -953,7 +953,7 @@ name = "craft-epub"
 version = "0.1.0"
 dependencies = [
  "craft-xml",
- "flate2",
+ "craft-zip",
  "thiserror 2.0.21",
  "zip",
 ]
@@ -1085,7 +1085,7 @@ name = "craft-idml"
 version = "0.1.0"
 dependencies = [
  "craft-xml",
- "flate2",
+ "craft-zip",
  "thiserror 2.0.21",
  "zip",
 ]
