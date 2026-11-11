@@ -10,7 +10,7 @@ use crate::runtime::frame::PerViewport;
 use crate::runtime::overlay;
 use crate::runtime::pass_state;
 use craft_behavior::{Cursor, CursorIcon, CursorPriority};
-use craft_host::target::{Caps, EdgeInsets, ShellInfo, WindowChrome, WindowKind};
+use craft_host::target::{Caps, EdgeInsets, Os, ShellInfo, WindowChrome, WindowKind};
 use craft_window::native::NativeWindow;
 use craft_window::policy::{Captions, Decision, Frame, LayoutWatch};
 use craft_window::restore::Store;
@@ -32,7 +32,7 @@ pub use hit::{CaptionRegions, HitSink, ResizeEdge, WindowHit};
 pub(crate) use hit::{hit_sink_installed, note_exclusive};
 use hit::{publish_regions, replay_caption_events};
 pub use host::{KeyEquivalent, WindowFacts, WindowHost};
-pub(crate) use host::{clear_source_pointer, note_source_pointer};
+pub(crate) use host::{clear_source_pointer, note_moved_pointer, note_source_pointer};
 #[doc(hidden)]
 pub use native::keeps_app_drag;
 #[cfg(windows)]
@@ -65,6 +65,12 @@ pub(crate) struct Shared {
     store: Option<Arc<Mutex<Store>>>,
     /// The system pointer read in `set_input`.
     system_pointer: Option<Pos2>,
+    /// The primary button and the command modifier as the system told them in `set_input`; `None` where it does not.
+    system_primary: Option<bool>,
+    system_command: Option<bool>,
+    /// The window the OS moves for a drag it was handed where the platform tracks such moves
+    /// ([`Caps::OS_MOVES_TRACKED`]), until the move ends.
+    tracked_move: Option<ViewportId>,
     /// The pointer of the viewport a drag started in, in desktop points, for platforms that tell no system pointer.
     source_pointer: Option<Pos2>,
     /// Containers whose viewport the OS asked to close in this root frame.
@@ -118,9 +124,14 @@ pub(crate) struct Record {
     searched: Option<u64>,
     /// The opacity the window was last set to; 1 is opaque.
     opacity: Option<f32>,
-    /// The window's component runs its own drag from the move band (a dock window's title row), so a press on the
-    /// band must reach it and the operating system's move loop is not started from the hit test.
+    /// The app runs the window's move from its move band (a dock window's title row, whose move docks the window), so a
+    /// press on the band must reach it and the operating system's move loop is not started from the hit test.
     app_drag: bool,
+    /// While the app moves the window: the desktop pointer, at the pressed point of the window where the move last put
+    /// it. The window's reported place lags the move.
+    moved_pointer: Option<Pos2>,
+    /// The `movable` flag last set on the OS window.
+    movable_applied: Option<bool>,
 }
 
 /// Passes between searches for an OS window that was not found.
@@ -155,9 +166,8 @@ pub(crate) fn take_sent(ctx: &Context) -> Vec<(ViewportId, WindowAction)> {
     shared(ctx, |shared| std::mem::take(&mut shared.sent))
 }
 
-/// Whether `viewport`'s component declared its own drag from the move band.
-#[cfg(feature = "testing")]
-pub(crate) fn keeps_app_drag_of(ctx: &Context, viewport: ViewportId) -> bool {
+/// Whether the app runs the move of `viewport`'s window ([`keeps_app_drag`]).
+pub(crate) fn app_moves(ctx: &Context, viewport: ViewportId) -> bool {
     PerViewport::<Record>::with(ctx, viewport, |record| record.app_drag)
 }
 
@@ -181,22 +191,32 @@ pub(crate) fn install(ctx: &Context, shell: ShellInfo, system: Arc<dyn WindowSys
 }
 
 /// Before the pass, from `set_input`, outside every egui lock: reads the OS services and refreshes the window
-/// info of every viewport the last root input reported.
+/// info of every viewport the last root input reported. The system tells the pointer in its own points; egui's are
+/// those divided by the interface zoom.
 pub(crate) fn set_input(ctx: &Context) {
     let system = shared(ctx, |shared| shared.system.clone());
-    let pointer = system.and_then(|system| system.desktop_pointer()).map(|[x, y]| Pos2::new(x, y));
+    let zoom = ctx.zoom_factor();
+    let pointer = system.as_ref().and_then(|system| system.desktop_pointer()).map(|[x, y]| Pos2::new(x, y) / zoom);
+    let (primary, command) = system.map_or((None, None), |system| (system.primary_held(), system.command_held()));
     for (viewport, facts) in viewports::reported(ctx) {
         refresh(ctx, viewport, facts);
     }
-    shared(ctx, |shared| shared.system_pointer = pointer);
+    shared(ctx, |shared| {
+        shared.system_pointer = pointer;
+        shared.system_primary = primary;
+        shared.system_command = command;
+    });
 }
 
 /// H4, in the input hook. The OS takes the button release of a move or resize it runs, so the press stays down in
-/// egui and every later press is lost. Two cases end it with a release of the primary button, in any chrome:
-/// the first input after [`act`] handed the OS a move or resize, when the input brings no release of its own (where
-/// the OS sends one, a second would turn into a click); and, where the OS resizes undecorated windows from their
-/// edges ([`Caps::OS_RESIZES_UNDECORATED`]), a size change under a held primary press. Reads only the raw input and
-/// the viewport's record. Returns whether it added an event.
+/// egui and every later press is lost. Two cases end it with a release of the primary button, in any chrome: a move
+/// or resize [`act`] handed the OS, when the input brings no release of its own (where the OS sends one, a second
+/// would turn into a click), once the system tells the button is up, or where it does not tell, on the first input
+/// after the hand-off; and, where the OS resizes undecorated windows from their edges
+/// ([`Caps::OS_RESIZES_UNDECORATED`]), a size change under a held primary press. While the OS runs a tracked move
+/// ([`Caps::OS_MOVES_TRACKED`]) it sends no key events, so every window's modifiers are the system's command modifier
+/// alone. Reads only the raw input, the system's button and modifier state and the viewport's record. Returns whether
+/// it added an event.
 pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
     let viewport = input.viewport_id;
     replay_caption_events(ctx, viewport, input);
@@ -206,10 +226,18 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
     let pass = pass::pass_nr(ctx, viewport);
     let os_released =
         input.events.iter().any(|event| matches!(event, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. }));
-    PerViewport::<Record>::with(ctx, viewport, |record| {
+    let (held, command, tracked) = shared(ctx, |shared| (shared.system_primary, shared.system_command, shared.tracked_move));
+    if tracked.is_some()
+        && let Some(command) = command
+    {
+        let mac = base.os == Os::Mac;
+        let modifiers = egui::Modifiers { command, mac_cmd: command && mac, ctrl: command && !mac, ..egui::Modifiers::NONE };
+        input.events.push(egui::Event::ModifiersChanged(modifiers));
+    }
+    let (released, handed_off) = PerViewport::<Record>::with(ctx, viewport, |record| {
         let resized = matches!((record.last_inner_size, size), (Some(before), Some(now)) if before != now);
         record.last_inner_size = size.or(record.last_inner_size);
-        let handed_off = record.handoff.is_some_and(|handoff| handoff.released.is_none() && handoff.pass < pass);
+        let handed_off = record.handoff.is_some_and(|handoff| handoff.released.is_none() && handoff.pass < pass) && held != Some(true);
         if handed_off {
             record.handoff = record.handoff.map(|handoff| HandOff { released: Some(pass), ..handoff });
         }
@@ -218,8 +246,12 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
             raw_input::push_primary_release(input, record.last_pos.unwrap_or(Pos2::ZERO));
         }
         raw_input::follow_primary(&input.events, &mut record.primary_down, &mut record.last_pos);
-        release
-    })
+        (release, handed_off)
+    });
+    if handed_off && tracked == Some(viewport) {
+        shared(ctx, |shared| shared.tracked_move = None);
+    }
+    released
 }
 
 /// The begin hook (H5), where the viewport is current: refreshes its window info, and raises the modal's window
@@ -270,10 +302,11 @@ fn reshow_cursor(ctx: &Context, viewport: ViewportId) {
     }
 }
 
-/// The end hook: keeps the root window's placement, writes a changed placement store once a second, and drops the
-/// close requests the viewport mounts did not take in this frame.
+/// The end hook: sets the window's `movable` flag, keeps the root window's placement, writes a changed placement store
+/// once a second, and drops the close requests the viewport mounts did not take in this frame.
 pub(crate) fn end(ctx: &Context) {
     publish_regions(ctx, pass::current_viewport(ctx));
+    sync_movable(ctx);
     if pass::current_viewport(ctx) != ViewportId::ROOT {
         return;
     }
@@ -316,6 +349,23 @@ pub fn logic(ctx: &Context) {
     if root_close_asked(ctx) && !refuse_close_under_modal(ctx) && craft_quit::quit() {
         viewports::cancel_close(ctx);
     }
+}
+
+/// Sets the `movable` flag of the running viewport's OS window from this pass's [`viewports::movable`]: the one place
+/// AppKit's flag is set, after the window's UI has run. A window is told apart by its viewport: the key window is the one
+/// whose viewport has focus, so an unfocused viewport is left as it is. AppKit is only called when the flag changes.
+/// Only a macOS window with a full-size content view has a flag to set; elsewhere this does nothing.
+fn sync_movable(ctx: &Context) {
+    if !viewports::current(ctx).focus_reported {
+        return;
+    }
+    let movable = viewports::movable(ctx);
+    let viewport = pass::current_viewport(ctx);
+    PerViewport::<Record>::with(ctx, viewport, |record| {
+        if record.movable_applied != Some(movable) {
+            craft_window::mac::set_movable(movable, &mut record.movable_applied);
+        }
+    });
 }
 
 fn flush_store(ctx: &Context) {

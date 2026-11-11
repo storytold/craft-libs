@@ -595,7 +595,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             && let Some(viewport) = os_window(props, cx.core.memory.ctx(), cx.core.id)
         {
             self.window_os(viewport, cx);
-            self.window_movable(cx);
+            self.window_movable(viewport, cx);
         }
         self.pane_drag(props, cx);
         if layer && !(matches!(props.mount, Mount::Viewport { .. }) && viewports::available(cx.core.memory.ctx())) {

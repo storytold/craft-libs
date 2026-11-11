@@ -204,12 +204,15 @@ fn board<R>(ctx: &Context, f: impl FnOnce(&mut Board) -> R) -> R {
     pass_state::with::<Board, _>(ctx, f)
 }
 
-/// Starts a session for `source` with `payload`. A running session stays: one per context.
+/// Starts a session for `source` with `payload`. A running session stays: one per context. A container shown in an OS
+/// window of its own runs in its parent's pass, but the press that starts its drag is its window's: the session follows
+/// that window's pointer.
 #[doc(hidden)]
 pub fn start(ctx: &Context, source: Id, payload: Arc<dyn Any + Send + Sync>, also: Option<Arc<dyn Any + Send + Sync>>, preview: DragPreview) {
+    let viewport = WindowHost::of(ctx).viewport_of(source).unwrap_or_else(|| pass::current_viewport(ctx));
     board(ctx, |board| {
         if board.session.is_none() {
-            let buttons = pointer::frame(ctx).buttons;
+            let buttons = pointer::buttons_of(ctx, viewport);
             let button = [PointerButton::Primary, PointerButton::Secondary, PointerButton::Middle, PointerButton::Extra1, PointerButton::Extra2]
                 .into_iter()
                 .find(|button| buttons.contains(Buttons::of(*button)))
@@ -217,7 +220,7 @@ pub fn start(ctx: &Context, source: Id, payload: Arc<dyn Any + Send + Sync>, als
             board.session = Some(Session {
                 source,
                 moving: Moving { layer: overlay::entry(ctx, source).map(|entry| entry.layer), viewport: Some(viewports::viewport_id(source)) },
-                viewport: pass::current_viewport(ctx),
+                viewport,
                 button,
                 payload,
                 also,

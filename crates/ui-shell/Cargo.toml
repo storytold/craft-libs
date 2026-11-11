@@ -36,7 +36,7 @@ resvg = { version = "0.45.1", default-features = false }
 # `std::time::Instant` on native; the browser clock on wasm, where `Instant::now` panics.
 web-time = "1.1"
 
-# `shell::title_bar::sync_movable` sets `NSWindow.movable` through craft-window's AppKit code, without its egui layer.
+# `AppSpec::new` installs `craft_window::system::SystemWindows`, which reads AppKit without craft-window's egui layer.
 [target.'cfg(target_os = "macos")'.dependencies]
 craft-window = { workspace = true, features = ["appkit"] }
 

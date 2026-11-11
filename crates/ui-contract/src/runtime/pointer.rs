@@ -188,6 +188,17 @@ pub fn with_pass_pointer<R>(ctx: &Context, f: impl FnOnce(&PassPointer) -> R) ->
     PerViewport::<Stamped<Arc<PassPointer>>>::with_pass(ctx, viewport, pass_nr, |_, _| {}, |record| f(record))
 }
 
+/// The buttons held in the latest pass of `viewport`, which may be a child window whose pass ran inside this one.
+pub(crate) fn buttons_of(ctx: &Context, viewport: ViewportId) -> Buttons {
+    PerViewport::<Stamped<Arc<PassPointer>>>::with_pass(
+        ctx,
+        viewport,
+        pass::pass_nr(ctx, viewport),
+        |_, _| {},
+        |record| record.frame.as_ref().map_or(Buttons::empty(), |frame| frame.buttons),
+    )
+}
+
 /// Reads the running pass's pointer frame, `None` before the begin hook, and its hover position in place.
 pub(crate) fn with_frame<R>(ctx: &Context, f: impl FnOnce(Option<&PointerFrame>, Option<Pos2>) -> R) -> R {
     with_pass_pointer(ctx, |pointer| f(pointer.frame.as_ref(), pointer.hover))

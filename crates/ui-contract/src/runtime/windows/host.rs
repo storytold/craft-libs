@@ -296,12 +296,19 @@ pub(super) fn scale_of(ctx: &Context, facts: &viewports::Facts) -> Option<f32> {
 }
 
 /// Records the pointer of the viewport a drag runs in, `local` in that viewport's coordinates, as a desktop
-/// position: the fallback where the platform tells no system pointer. `None` keeps the last position.
+/// position: the fallback where the platform tells no system pointer. While the app moves that viewport's window the
+/// move's own pointer counts ([`note_moved_pointer`]). `None` keeps the last position.
 pub(crate) fn note_source_pointer(ctx: &Context, viewport: ViewportId, local: Option<Pos2>) {
-    let inner = PerViewport::<Record>::with(ctx, viewport, |record| record.facts.and_then(|facts| facts.inner));
-    if let Some(desktop) = local.zip(inner).map(|(local, inner)| inner.min + local.to_vec2()) {
+    let (inner, moved) = PerViewport::<Record>::with(ctx, viewport, |record| (record.facts.and_then(|facts| facts.inner), record.moved_pointer));
+    if let Some(desktop) = moved.or_else(|| local.zip(inner).map(|(local, inner)| inner.min + local.to_vec2())) {
         shared(ctx, |shared| shared.source_pointer = Some(desktop));
     }
+}
+
+/// Records the desktop pointer of a move the app runs of `viewport`'s window: the pressed point of the window where the
+/// move last put it. `None` once the move ends.
+pub(crate) fn note_moved_pointer(ctx: &Context, viewport: ViewportId, desktop: Option<Pos2>) {
+    PerViewport::<Record>::with(ctx, viewport, |record| record.moved_pointer = desktop);
 }
 
 /// Forgets the drag's pointer once the session ends.

@@ -203,9 +203,13 @@ fn movable_id(viewport: ViewportId) -> egui::Id {
     super::memory::unique(("craft_ui.title_bar.movable", viewport))
 }
 
-/// Sets the `movable` flag of the key window when it has a full-size content view and visible window buttons;
-/// `applied` holds the value last set. Does nothing off macOS.
+/// Whether the OS may move the running viewport's window from where the pointer is in this pass: what the move bands
+/// of the pass wrote (the body step writes it for every move band of an OS window, `true` only where a press would go
+/// to the band), else what the app wrote with [`write_movable`], else true.
 #[doc(hidden)]
-pub fn set_native_movable(movable: bool, applied: &mut Option<bool>) {
-    craft_window::mac::set_movable(movable, applied);
+pub fn movable(ctx: &Context) -> bool {
+    match movable_record(ctx) {
+        Some((pass, movable)) if pass == pass_number(ctx) => movable,
+        _ => true,
+    }
 }

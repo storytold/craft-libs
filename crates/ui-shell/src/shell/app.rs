@@ -11,7 +11,7 @@ use craft_host::target::{Backend, Os, ShellInfo, WindowState};
 use craft_window::desktop::fits;
 use craft_window::policy::Decision;
 use craft_window::restore::Store;
-use craft_window::system::{NoWindows, WindowSystem};
+use craft_window::system::{SystemWindows, WindowSystem};
 use egui::{Context, Ui, ViewportId};
 use std::sync::{Arc, Mutex};
 use web_time::Instant;
@@ -29,7 +29,7 @@ pub struct AppSpec {
     pub defaults: Defaults,
     /// Where window placement is kept.
     pub placement: Arc<Mutex<Store>>,
-    /// The OS services the window host reads: the system pointer and its warp.
+    /// The OS services the window host reads: the system pointer, button and modifier state, and the pointer's warp.
     pub window_system: Arc<dyn WindowSystem>,
     /// Who draws the root window's frame (`craft_window::policy::decide_for`). Unset: the OS draws it.
     pub frame: Option<Decision>,
@@ -45,7 +45,7 @@ impl AppSpec {
             shell_info: ShellInfo::default().backend(Backend::from_env()),
             defaults,
             placement: Arc::new(Mutex::new(Store::in_memory())),
-            window_system: Arc::new(NoWindows),
+            window_system: Arc::new(SystemWindows),
             frame: None,
         }
     }
@@ -119,8 +119,6 @@ pub trait ShellApp {
 /// frame. `logic` carries the close path, which must run while the window is hidden.
 struct Driver<A> {
     app: A,
-    /// The `movable` flag last set on the native window.
-    movable: Option<bool>,
     /// Whether the first fit of the root window to its monitor has run.
     fitted: bool,
 }
@@ -174,7 +172,6 @@ impl<A: ShellApp> eframe::App for Driver<A> {
             self.fitted = fit_first(ui.ctx());
         }
         self.app.ui(ui);
-        super::title_bar::sync_movable(ui.ctx(), &mut self.movable);
     }
 }
 
@@ -219,7 +216,7 @@ fn create<A: ShellApp + 'static>(
         crate::install(&cc.egui_ctx, install).map_err(|error| format!("the runtime could not be installed: {error}"))?;
         // The suite's interface face; an app that installs its own fonts in `make` replaces it.
         crate::fonts::UiFonts::new(&crate::fonts::I18nScripts).install(&cc.egui_ctx);
-        Ok(Box::new(Driver { app: make(&cc.egui_ctx), movable: None, fitted: false }))
+        Ok(Box::new(Driver { app: make(&cc.egui_ctx), fitted: false }))
     }
 }
 

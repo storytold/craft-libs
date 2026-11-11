@@ -1,16 +1,20 @@
-//! Native dock windows: when a float gets an OS window, what the dock records when the OS moves it, and the OS close.
+//! Native dock windows: when a float gets an OS window, what the dock records when the OS moves it, the OS close, and
+//! docking the whole window by dragging its title row.
 
-use craft_behavior::dock::{Action, Floating, Layout, Permissions, Workspace};
+use craft_behavior::dock::{Action, Floating, Layout, Node, Permissions, Workspace};
 use craft_behavior::placement::Placement;
 use craft_host::target::{Backend, Caps, Os, ShellInfo};
 use craft_ui::contract::{Bind, BodyCx};
 use craft_ui::docking::{DockConfig, DockPanels, PanelSpec};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::runtime::InstallSpec;
+use craft_ui::runtime::drag;
+use craft_ui::testing::input::key_press;
+use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::trial;
 use craft_ui::testing::windows::FakeSystem;
 use craft_ui_test_kit::windows::Windows;
-use egui::{Pos2, Rect, Ui, Vec2, ViewportEvent, ViewportId, ViewportInfo};
+use egui::{Event, Key, Modifiers, Pos2, Rect, Ui, Vec2, ViewportCommand, ViewportEvent, ViewportId, ViewportInfo};
 use std::sync::Arc;
 
 /// The root window and the palette overlap; the palette is the larger.
@@ -156,6 +160,137 @@ fn the_os_close_of_a_native_float_closes_it_when_its_panels_may_close() {
     };
     assert!(closed(Permissions::ALL), "a closable palette's window closes");
     assert!(!closed(Permissions::ALL.closable(false)), "a window with a panel that may not close stays");
+}
+
+/// The main window, one docked group filling it, and a native palette window away from it.
+const MAIN_AT: Rect = Rect { min: Pos2::new(100.0, 100.0), max: Pos2::new(900.0, 700.0) };
+const FLOAT_AT: Rect = Rect { min: Pos2::new(1000.0, 150.0), max: Pos2::new(1400.0, 450.0) };
+/// A point of the palette's title row, clear of the lights and the actions, in the palette's coordinates.
+const ROW_AT: Pos2 = Pos2::new(150.0, 10.0);
+/// A desktop point over the middle of the main window's group.
+const OVER_GROUP: Pos2 = Pos2::new(550.0, 400.0);
+
+/// A dock of one docked group and one native palette.
+struct NativeDock {
+    windows: Windows,
+    workspace: Workspace<u32>,
+}
+
+impl NativeDock {
+    fn on(os: Os, system: Arc<FakeSystem>) -> Self {
+        let shell = ShellInfo::default().os(os).caps(Caps::native(os));
+        let windows = Windows::with(InstallSpec::new(shell, system));
+        windows.root_info(info(true, MAIN_AT));
+        windows.child_info(info(true, FLOAT_AT));
+        let palette = Floating::single(vec![1], 0, Rect::from_min_size(Pos2::new(40.0, 40.0), FLOAT_AT.size()));
+        let mut dock = NativeDock { windows, workspace: Workspace::new(Layout::new(Some(Node::tabs(vec![2], 0)), vec![palette])) };
+        for _ in 0..3 {
+            dock.frame(vec![]);
+        }
+        dock
+    }
+
+    /// One frame with `child` events for the palette's window: the dock's actions and the palette's window commands.
+    fn frame(&mut self, child: Vec<Event>) -> (Vec<Action<u32>>, Vec<ViewportCommand>) {
+        let mut actions = Vec::new();
+        let workspace = &mut self.workspace;
+        let out = self.windows.frame(vec![], child, |ui| {
+            actions.extend(
+                DockArea::new("Native dock", Bind::bound(workspace), &mut Palettes(Permissions::ALL), DockConfig::default()).show(ui).actions,
+            );
+        });
+        let commands = out.commands.into_iter().filter(|(viewport, _)| *viewport != ViewportId::ROOT).map(|(_, command)| command).collect();
+        (actions, commands)
+    }
+}
+
+fn docks_window(actions: &[Action<u32>]) -> bool {
+    actions.iter().any(|action| matches!(action, Action::MoveWindow { .. }))
+}
+
+fn outer_positions(commands: &[ViewportCommand]) -> Vec<Pos2> {
+    commands.iter().filter_map(|command| if let ViewportCommand::OuterPosition(at) = command { Some(*at) } else { None }).collect()
+}
+
+/// Where the app moves windows itself (X11): a drag of the palette's title row moves the window so the pressed point
+/// stays under the pointer, marks the main window's group under it, and the release docks the whole window there.
+/// Escape puts the window back and docks nothing.
+#[trial]
+fn dragging_a_native_palette_by_its_title_row_docks_it_where_the_app_moves_windows() {
+    // From the title row to the main window's group, in three moves the window follows.
+    let step = (OVER_GROUP - (FLOAT_AT.min + ROW_AT.to_vec2())) / 3.0;
+    let drag_over_group = |dock: &mut NativeDock| {
+        let mut to = Vec::new();
+        for events in [vec![moved(ROW_AT)], vec![press(ROW_AT)]] {
+            dock.frame(events);
+        }
+        for _ in 0..3 {
+            to.extend(outer_positions(&dock.frame(vec![moved(ROW_AT + step)]).1));
+        }
+        for _ in 0..2 {
+            dock.frame(vec![]);
+        }
+        to
+    };
+
+    let mut dock = NativeDock::on(Os::Linux, Arc::new(FakeSystem::new()));
+    let to = drag_over_group(&mut dock);
+    assert_eq!(to.len(), 3, "the window follows each move: {to:?}");
+    assert_eq!(to.last().map(|at| *at + ROW_AT.to_vec2()), Some(OVER_GROUP), "the pressed point stays under the pointer");
+    assert!(drag::mark(&dock.windows.ctx).is_some(), "the group under the pointer shows the drop mark");
+    let mut docked = false;
+    for events in [vec![release(ROW_AT)], vec![], vec![]] {
+        docked |= docks_window(&dock.frame(events).0);
+    }
+    assert!(docked, "the release docks the whole window");
+
+    let mut dock = NativeDock::on(Os::Linux, Arc::new(FakeSystem::new()));
+    drag_over_group(&mut dock);
+    let (actions, commands) = dock.frame(vec![key_press(Key::Escape, Modifiers::NONE)]);
+    assert_eq!(outer_positions(&commands).last(), Some(&FLOAT_AT.min), "Escape puts the window back");
+    let mut docked = docks_window(&actions);
+    for events in [vec![release(ROW_AT)], vec![], vec![]] {
+        docked |= docks_window(&dock.frame(events).0);
+    }
+    assert!(!docked, "a cancelled move docks nothing");
+}
+
+/// Where the OS moves windows and the app reads the system pointer and button meanwhile (macOS): the title row's drag
+/// hands the move to the OS, the system pointer over the main window's group marks it (Cmd keeps the drop floating),
+/// and the window docks when the system tells the button is up, not on the first pass after the hand-off.
+#[trial]
+fn dragging_a_native_palette_by_its_title_row_docks_it_where_the_os_moves_windows() {
+    let system = Arc::new(FakeSystem::new());
+    let mut dock = NativeDock::on(Os::Mac, system.clone());
+    let pressed_at = FLOAT_AT.min + ROW_AT.to_vec2();
+    system.set_pointer(Some([pressed_at.x, pressed_at.y]));
+    system.set_primary_held(Some(true));
+    for events in [vec![moved(ROW_AT)], vec![press(ROW_AT)]] {
+        dock.frame(events);
+    }
+    let (_, commands) = dock.frame(vec![moved(ROW_AT + Vec2::new(12.0, 0.0))]);
+    assert!(commands.contains(&ViewportCommand::StartDrag), "the OS moves the window: {commands:?}");
+    system.set_pointer(Some([OVER_GROUP.x, OVER_GROUP.y]));
+    let mut docked = false;
+    for _ in 0..3 {
+        docked |= docks_window(&dock.frame(vec![]).0);
+    }
+    assert!(drag::mark(&dock.windows.ctx).is_some(), "the group under the system pointer shows the drop mark");
+    system.set_command_held(Some(true));
+    for _ in 0..2 {
+        docked |= docks_window(&dock.frame(vec![]).0);
+    }
+    assert!(drag::mark(&dock.windows.ctx).is_none(), "Cmd keeps the drop floating");
+    system.set_command_held(Some(false));
+    for _ in 0..2 {
+        docked |= docks_window(&dock.frame(vec![]).0);
+    }
+    assert!(!docked, "nothing docks while the system holds the button");
+    system.set_primary_held(Some(false));
+    for _ in 0..3 {
+        docked |= docks_window(&dock.frame(vec![]).0);
+    }
+    assert!(docked, "the button's release docks the whole window");
 }
 
 /// A palette float made in the app window.

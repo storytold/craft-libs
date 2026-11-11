@@ -70,6 +70,10 @@ fontique = { version = "0.11.1", default-features = false, features = ["system",
 egui_kittest = { version = "0.37", features = ["wgpu"], optional = true }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 
+# The window host's end hook sets `NSWindow.movable` through craft-window's AppKit code.
+[target.'cfg(target_os = "macos")'.dependencies]
+craft-window = { workspace = true, features = ["ui", "appkit"] }
+
 # build.rs reads icons/icons.toml and deflates the suite's default fonts (Inter, egui's faces) for `fonts::deflated_default_definitions`.
 [build-dependencies]
 toml = { version = "1.1", default-features = false, features = ["std", "parse", "serde"] }

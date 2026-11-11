@@ -20,7 +20,7 @@ pub fn applied_actions(ctx: &egui::Context) -> Vec<(egui::ViewportId, crate::run
 
 /// Whether the window of `viewport` has a component that runs its own drag from the window's move band.
 pub fn keeps_app_drag(ctx: &egui::Context, viewport: egui::ViewportId) -> bool {
-    crate::runtime::windows::keeps_app_drag_of(ctx, viewport)
+    crate::runtime::windows::app_moves(ctx, viewport)
 }
 
 /// Starts the drag of the window container `source` (what the title row of a dock window does), with the pointer

@@ -152,6 +152,9 @@ bitflags::bitflags! {
         const NATIVE_MENU_BAR = 1 << 6;
         /// The OS resizes undecorated windows from their edges.
         const OS_RESIZES_UNDECORATED = 1 << 7;
+        /// The OS moves a window for a drag the app hands it, and the app keeps reading the system pointer and the
+        /// mouse button meanwhile; elsewhere the app moves the window itself.
+        const OS_MOVES_TRACKED = 1 << 8;
     }
 }
 
@@ -160,7 +163,8 @@ impl Caps {
     pub const fn native(os: Os) -> Caps {
         let base = Caps::VIEWPORTS.union(Caps::WINDOW_COMMANDS).union(Caps::FILE_SYSTEM).union(Caps::THREADS).union(Caps::SYSTEM_CURSOR);
         match os {
-            Os::Mac => base.union(Caps::NATIVE_MENU_BAR).union(Caps::SCREEN_CAPTURE),
+            // AppKit moves a window smoothly; a window the app moves by its position jitters there.
+            Os::Mac => base.union(Caps::NATIVE_MENU_BAR).union(Caps::SCREEN_CAPTURE).union(Caps::OS_MOVES_TRACKED),
             Os::Windows => base.union(Caps::OS_RESIZES_UNDECORATED).union(Caps::SCREEN_CAPTURE),
             Os::Linux => base,
         }

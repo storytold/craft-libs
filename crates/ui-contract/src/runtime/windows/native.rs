@@ -107,6 +107,9 @@ pub fn act(ctx: &Context, viewport: ViewportId, action: WindowAction) -> bool {
         WindowAction::StartMove => {
             viewports::command(ctx, viewport, egui::ViewportCommand::StartDrag);
             hand_off(ctx, viewport);
+            if base.caps.contains(Caps::OS_MOVES_TRACKED) {
+                shared(ctx, |shared| shared.tracked_move = Some(viewport));
+            }
         }
         WindowAction::StartResize(edge) => {
             viewports::command(ctx, viewport, egui::ViewportCommand::BeginResize(viewports::resize_direction(edge)));
@@ -169,9 +172,10 @@ fn native_of(ctx: &Context, viewport: ViewportId) -> Option<NativeWindow> {
     found
 }
 
-/// Records that the component of `viewport`'s window runs its own drag from the window's move band, as the floating
-/// dock group does to dock its window: the Windows hit test then leaves the band to the app, whose press starts that
-/// drag and the OS move together. Runs in each pass of the component.
+/// Records that the app runs the move of `viewport`'s window from its move band, as the floating dock group does to
+/// dock its window, on every platform: the band's press starts the window's move gesture (Begin, Update, Commit or
+/// Cancel through `placement_changed`, as a layer's move reports), not the OS's move, and the Windows hit test leaves
+/// the band to the app. Runs in each pass of the component.
 #[doc(hidden)]
 pub fn keeps_app_drag(ctx: &Context, viewport: ViewportId) {
     PerViewport::<Record>::with(ctx, viewport, |record| record.app_drag = true);
@@ -206,8 +210,8 @@ pub fn route_root(ctx: &Context, handle: impl FnOnce() -> Option<NativeWindow>) 
     }
 }
 
-/// The OS took the press that started a move or resize of `viewport`'s window: [`input_hook`] ends it on the next
-/// input.
+/// The OS took the press that started a move or resize of `viewport`'s window: [`input_hook`] ends it once the system
+/// tells the button is up, or on the next input where it does not tell.
 fn hand_off(ctx: &Context, viewport: ViewportId) {
     let pass = pass::pass_nr(ctx, viewport);
     PerViewport::<Record>::with(ctx, viewport, |record| record.handoff = Some(HandOff { pass, released: None }));

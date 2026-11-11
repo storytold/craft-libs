@@ -10,7 +10,8 @@ repository.workspace = true
 [features]
 # `policy::apply` and `desktop::fits`: the frame decision on an `egui::ViewportBuilder`, and whether a window fits its monitor.
 ui = ["dep:egui"]
-# `mac::set_movable`: AppKit's `movable` flag, without egui. `native_menu`: the application menu bar
+# `mac::set_movable`: AppKit's `movable` flag, without egui. `system::SystemWindows`: AppKit's pointer, button and Cmd.
+# `native_menu`: the application menu bar
 # on macOS (other platforms build the same API as no-ops).
 appkit = ["dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation", "dep:muda"]
 
@@ -27,12 +28,13 @@ serde_json = { workspace = true }
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))'.dependencies]
 wayland-client = "0.31"
 
-# `mac::set_movable` (`NSWindow.movable`), `mac::measure` (button frames, OS version),
+# `mac::set_movable` (`NSWindow.movable`), `mac::measure` (button frames, OS version), `system::SystemWindows`
+# (`NSEvent` pointer, buttons and modifiers, `NSScreen` for the primary screen),
 # `native_menu` (muda menus, AppKit titles).
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = { version = "0.21.2", default-features = false, optional = true }
 objc2 = { version = "0.6.4", default-features = false, features = ["std"], optional = true }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSButton", "NSControl", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder", "NSView", "NSWindow"], optional = true }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSButton", "NSControl", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder", "NSScreen", "NSView", "NSWindow"], optional = true }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSBundle", "NSEnumerator", "NSGeometry", "NSLocale", "NSProcessInfo", "NSString"], optional = true }
 
 # `caps_lock`: the toggle bit of the Caps Lock key, through winsafe's safe wrapper (the workspace forbids `unsafe`).
