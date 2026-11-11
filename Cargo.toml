@@ -80,6 +80,7 @@ craft-silhouette-studio = { path = "crates/silhouette-studio" }
 craft-svg = { path = "crates/svg" }
 craft-svg-paths = { path = "crates/svg-paths" }
 craft-text = { path = "crates/text" }
+craft-tga = { path = "crates/tga" }
 craft-timeline = { path = "crates/timeline" }
 craft-tiff = { path = "crates/tiff" }
 craft-ui = { path = "crates/ui" }
