@@ -29,11 +29,11 @@ impl ProviderRegistry {
         Err(GpuFault::UnknownProvider(job.provider_id.clone()))
     }
 
-    pub fn dispatch_batch(&self, ctx: &mut dyn GpuContext, jobs: &[GpuJob]) -> Result<Vec<GpuJobOutcome>, GpuFault> {
-        let mut out = Vec::with_capacity(jobs.len());
-        for job in jobs {
-            out.push(self.dispatch(ctx, job)?);
-        }
-        Ok(out)
+    /// Run every job in order and answer per job, in input order. A later job's failure never
+    /// discards outcomes earlier providers already produced: the caller replies per job and can
+    /// retry exactly the failed ones. A job whose inputs came from a failed earlier job fails
+    /// honestly on its own bad handles.
+    pub fn dispatch_batch(&self, ctx: &mut dyn GpuContext, jobs: &[GpuJob]) -> Vec<Result<GpuJobOutcome, GpuFault>> {
+        jobs.iter().map(|job| self.dispatch(ctx, job)).collect()
     }
 }
