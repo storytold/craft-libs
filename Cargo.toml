@@ -43,6 +43,7 @@ craft-fonts-build = { path = "crates/fonts-build" }
 craft-i18n = { path = "crates/i18n" }
 craft-jpeg = { path = "crates/jpeg" }
 craft-keymap = { path = "crates/keymap" }
+craft-assuan = { path = "crates/assuan" }
 craft-audio = { path = "crates/audio" }
 # No default features, so craft-audio's `encode` builds craft-media without `isobmff`.
 craft-media = { path = "crates/media", default-features = false }
