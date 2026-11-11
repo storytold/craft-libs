@@ -139,14 +139,16 @@ mod native {
 
 /// No real device: buffers live on the host, exactly like `craft-gpu-null`. RFC-0022's defined
 /// degrade path for "no adapter" (feature off, no GPU present, or the `wasm32` async-init gap).
+/// Each slot is `None` once freed (or never allocated): handles are stable indices, so a freed
+/// slot cannot simply be removed without shifting every later handle's index.
 #[cfg(not(all(not(target_arch = "wasm32"), feature = "adapter-probe")))]
 enum Backing {
-    Staging(Vec<Vec<u8>>),
+    Staging(Vec<Option<Vec<u8>>>),
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "adapter-probe"))]
 enum Backing {
-    Staging(Vec<Vec<u8>>),
+    Staging(Vec<Option<Vec<u8>>>),
     /// A real device. `DeviceCaps` was built from it, not from the adapter it came from.
     Device(DeviceBacking),
 }
@@ -158,8 +160,9 @@ struct DeviceBacking {
     /// Each buffer paired with its true, caller-given byte length. wgpu requires every buffer
     /// with copy usage to be sized in multiples of [`COPY_ALIGN`]; the buffer itself is padded to
     /// that, but callers (`buffer_len`, `request_read`'s returned bytes) see the true length,
-    /// matching the staging path and `craft-gpu-null` exactly, with no padding visible.
-    buffers: Vec<(wgpu::Buffer, u64)>,
+    /// matching the staging path and `craft-gpu-null` exactly, with no padding visible. `None`
+    /// once freed: see the `Backing::Staging` doc for why the slot stays rather than shifting.
+    buffers: Vec<Option<(wgpu::Buffer, u64)>>,
     /// Set by the device-lost callback registered in [`native::create_device`]; checked before
     /// every call that would otherwise touch the (now invalid) device.
     lost: std::sync::Arc<std::sync::Mutex<Option<GpuFault>>>,
@@ -224,7 +227,20 @@ impl WgpuContext {
             if let Some((caps, backing)) = native::create_device() {
                 return Self { caps, worker_kind, backing, next_request: 0, ready: Vec::new() };
             }
+            // request_adapter and/or request_device failed: fall back to the conservative
+            // fallback, never probe_caps(). probe_caps() would re-query the adapter here, and a
+            // second, successful adapter query would report the adapter's advertised limits as
+            // if they came from a granted device -- the exact thing probe_caps's own doc comment
+            // says caps() must never do for a context with no device.
+            return Self {
+                caps: probe_fallback("wgpu", "no-device"),
+                worker_kind,
+                backing: Backing::Staging(Vec::new()),
+                next_request: 0,
+                ready: Vec::new(),
+            };
         }
+        #[cfg(not(all(not(target_arch = "wasm32"), feature = "adapter-probe")))]
         Self { caps: probe_caps(), worker_kind, backing: Backing::Staging(Vec::new()), next_request: 0, ready: Vec::new() }
     }
 
@@ -283,7 +299,7 @@ impl GpuContext for WgpuContext {
         match &mut self.backing {
             Backing::Staging(buffers) => {
                 let id = u32::try_from(buffers.len()).map_err(|_| GpuFault::Operation("too many buffers".into()))?;
-                buffers.push(bytes.to_vec());
+                buffers.push(Some(bytes.to_vec()));
                 Ok(HandleId(id))
             }
             #[cfg(all(not(target_arch = "wasm32"), feature = "adapter-probe"))]
@@ -296,6 +312,13 @@ impl GpuContext for WgpuContext {
                         self.caps.max_buffer_size
                     )));
                 }
+                // The size check above only catches a request past the device's advertised
+                // maximum; it proves nothing about whether the device can actually allocate
+                // padded_len bytes right now (free VRAM varies). wgpu 30.0.1 sends an allocation
+                // failure to the default uncaptured-error handler, which panics, unless a scope
+                // captures it first. An error scope converts that into a value this can return
+                // as a GpuFault instead of taking the worker down with it.
+                d.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
                 let buffer = d.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some(label),
                     size: padded_len,
@@ -309,8 +332,11 @@ impl GpuContext for WgpuContext {
                     padded.resize(usize::try_from(padded_len).unwrap_or(bytes.len()), 0);
                     d.queue.write_buffer(&buffer, 0, &padded);
                 }
+                if let Some(err) = pollster::block_on(d.device.pop_error_scope()) {
+                    return Err(GpuFault::Operation(format!("upload_buffer: device reported an allocation error: {err}")));
+                }
                 let id = u32::try_from(d.buffers.len()).map_err(|_| GpuFault::Operation("too many buffers".into()))?;
-                d.buffers.push((buffer, true_len));
+                d.buffers.push(Some((buffer, true_len)));
                 Ok(HandleId(id))
             }
         }
@@ -321,13 +347,18 @@ impl GpuContext for WgpuContext {
             return Err(fault);
         }
         match &self.backing {
-            Backing::Staging(buffers) => buffers.get(handle.0 as usize).map(Vec::len).ok_or_else(|| GpuFault::InvalidJob("bad handle".into())),
-            #[cfg(all(not(target_arch = "wasm32"), feature = "adapter-probe"))]
-            Backing::Device(d) => {
-                d.buffers.get(handle.0 as usize).ok_or_else(|| GpuFault::InvalidJob("bad handle".into())).and_then(|(_, true_len)| {
-                    usize::try_from(*true_len).map_err(|_| GpuFault::Operation("buffer size exceeds host address space".into()))
-                })
+            Backing::Staging(buffers) => {
+                buffers.get(handle.0 as usize).and_then(Option::as_ref).map(Vec::len).ok_or_else(|| GpuFault::InvalidJob("bad handle".into()))
             }
+            #[cfg(all(not(target_arch = "wasm32"), feature = "adapter-probe"))]
+            Backing::Device(d) => d
+                .buffers
+                .get(handle.0 as usize)
+                .and_then(Option::as_ref)
+                .ok_or_else(|| GpuFault::InvalidJob("bad handle".into()))
+                .and_then(|(_, true_len)| {
+                    usize::try_from(*true_len).map_err(|_| GpuFault::Operation("buffer size exceeds host address space".into()))
+                }),
         }
     }
 
@@ -337,7 +368,8 @@ impl GpuContext for WgpuContext {
         }
         match &mut self.backing {
             Backing::Staging(buffers) => {
-                let bytes = buffers.get(handle.0 as usize).cloned().ok_or_else(|| GpuFault::InvalidJob("bad handle".into()))?;
+                let bytes =
+                    buffers.get(handle.0 as usize).and_then(Option::as_ref).cloned().ok_or_else(|| GpuFault::InvalidJob("bad handle".into()))?;
                 let id = self.next_request;
                 self.next_request = self.next_request.wrapping_add(1);
                 let request = ReadRequest(id);
@@ -346,7 +378,8 @@ impl GpuContext for WgpuContext {
             }
             #[cfg(all(not(target_arch = "wasm32"), feature = "adapter-probe"))]
             Backing::Device(d) => {
-                let (buffer, true_len) = d.buffers.get(handle.0 as usize).ok_or_else(|| GpuFault::InvalidJob("bad handle".into()))?;
+                let (buffer, true_len) =
+                    d.buffers.get(handle.0 as usize).and_then(Option::as_ref).ok_or_else(|| GpuFault::InvalidJob("bad handle".into()))?;
                 let true_len = *true_len;
                 if true_len == 0 {
                     // An empty buffer has nothing to copy or map (wgpu refuses an empty map
@@ -364,6 +397,10 @@ impl GpuContext for WgpuContext {
                         self.caps.max_buffer_size
                     )));
                 }
+                // Same reasoning as upload_buffer's error scope: an allocation failure for the
+                // read-staging buffer must become a GpuFault, not reach the default
+                // uncaptured-error handler and panic.
+                d.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
                 let staging = d.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("craft-gpu-wgpu.read-staging"),
                     size: copy_len,
@@ -373,6 +410,9 @@ impl GpuContext for WgpuContext {
                 let mut encoder = d.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("craft-gpu-wgpu.read-copy") });
                 encoder.copy_buffer_to_buffer(buffer, 0, &staging, 0, copy_len);
                 d.queue.submit(Some(encoder.finish()));
+                if let Some(err) = pollster::block_on(d.device.pop_error_scope()) {
+                    return Err(GpuFault::Operation(format!("request_read: device reported an allocation error: {err}")));
+                }
                 let state = std::sync::Arc::new(std::sync::Mutex::new(None));
                 {
                     let state = std::sync::Arc::clone(&state);
@@ -389,6 +429,35 @@ impl GpuContext for WgpuContext {
                 Ok(request)
             }
         }
+    }
+
+    /// Replaces the slot with `None` rather than removing it: handles are stable indices, and
+    /// removing would shift every later handle's index out from under its caller. Dropping a
+    /// `Some((wgpu::Buffer, _))` here releases that buffer's GPU-side allocation.
+    fn free_buffer(&mut self, handle: HandleId) {
+        match &mut self.backing {
+            Backing::Staging(buffers) => {
+                if let Some(slot) = buffers.get_mut(handle.0 as usize) {
+                    *slot = None;
+                }
+            }
+            #[cfg(all(not(target_arch = "wasm32"), feature = "adapter-probe"))]
+            Backing::Device(d) => {
+                if let Some(slot) = d.buffers.get_mut(handle.0 as usize) {
+                    *slot = None;
+                }
+            }
+        }
+    }
+
+    /// Covers the gap `poll_reads` has when nothing is pending: that method can only attach a
+    /// device-lost fault to a read it has something to attach it to, so a caller whose event
+    /// loop only polls, with no outstanding read, could never observe loss through it alone.
+    fn device_status(&self) -> Result<(), GpuFault> {
+        if let Some(fault) = self.take_lost_fault() {
+            return Err(fault);
+        }
+        Ok(())
     }
 
     #[cfg_attr(not(all(not(target_arch = "wasm32"), feature = "adapter-probe")), allow(unused_mut))]
