@@ -21,8 +21,10 @@ dnx = []
 vp8 = []
 # Apple ProRes (SMPTE RDD 36): decoder and encoder.
 prores = ["craft-media/bitstream"]
-# H.264 / AVC (ITU-T H.264): encoder.
-h264 = ["craft-media/isobmff"]
+# H.264 / AVC: decoder and encoder; `h264-decode` or `h264-encode` for one of them.
+h264 = ["h264-decode", "h264-encode"]
+h264-decode = ["craft-media/bitstream"]
+h264-encode = ["craft-media/isobmff"]
 # H.265 / HEVC: decoder and encoder; `hevc-decode` or `hevc-encode` for one of them.
 hevc = ["hevc-decode", "hevc-encode"]
 hevc-decode = ["craft-media/bitstream"]
@@ -59,6 +61,14 @@ required-features = ["vp8"]
 [[example]]
 name = "vp8_vp8dec"
 required-features = ["vp8"]
+
+[[test]]
+name = "h264_decode"
+required-features = ["h264-decode"]
+
+[[example]]
+name = "h264_h264dec"
+required-features = ["h264-decode"]
 
 [[test]]
 name = "hevc_decode"

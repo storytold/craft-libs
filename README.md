@@ -84,6 +84,12 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   lookup with fallback (`pt-br` → `pt` → English), plurals, language names, the system locale and
   a pseudo locale. The catalogs stay a fully optional build input; apps keep `tl!` and their
   language setting.
+- [`craft-raw`](crates/raw/README.md): camera raw files, the file-format layer, from LightCraft with
+  what PhotoCraft's and FilmCraft's readers added: container parsing and decompression to a neutral
+  raw image (samples, CFA, black and white levels, active area, crop, orientation, colour tags,
+  opcode lists, embedded previews), one Cargo feature per format. DNG reading and writing and
+  Canon CRW (through `craft-crw`) so far; demosaicing and everything after stay with the develop
+  pipeline.
 - [`craft-tiff`](crates/tiff/README.md): TIFF and BigTIFF IFD reader and writer, from LightCraft:
   every field type, the IFD chain, SubIFDs and Exif/GPS/Interop pointer IFDs, maker-note IFDs
   (Canon, Nikon, Sony, Fujifilm, Olympus, Panasonic, Pentax), strip and tile layout. Bounded and
@@ -103,8 +109,8 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   AC-3/E-AC-3, MP1/MP2), streaming and seeking, and packet decoding for any demuxer. See its
   README for formats and features.
 - [`craft-media`](crates/media/README.md): bit-level I/O (`bitstream`), clean-room MP4/MOV
-  (`isobmff`) and Matroska/WebM (`matroska`) demuxers and muxers, Ogg (`ogg`) and MPEG-TS/PS (`mpegts`)
-  demuxers, from FilmCraft, and an ISO BMFF box reader. Containers only; codecs are in `craft-audio`, and
+  (`isobmff`) and Matroska/WebM (`matroska`) demuxers and muxers, Ogg (`ogg`), AVI (`avi`) and
+  MPEG-TS/PS (`mpegts`) demuxers, from FilmCraft, and an ISO BMFF box reader. Containers only; codecs are in `craft-audio`, and
   video codecs will go in a separate crate.
 - [`craft-menu`](crates/menu/README.md): an app's menus as a macOS menu bar: the Mac layout
   (app menu, Window, Help, system-key clashes), a platform backend trait, and key equivalents
@@ -136,7 +142,8 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-silhouette-studio`](crates/silhouette-studio/src/lib.rs): bounded, fail-closed reader for Silhouette Studio `.studio` and `.studio3` documents: outlines, line colours and page size in millimetres. Protected designs are refused.
 - [`craft-svg-paths`](crates/svg-paths/src/lib.rs): SVG geometry reader: shapes,
   transforms, `<use>`/`<symbol>` instances and the CSS cascade as Bézier paths in millimetres, each
-  tagged by the caller. Import only; not the shared SVG model.
+  tagged by the caller; a CSS colour parser (`color`); and a small SVG writer (`write`: elements with
+  escaping, path data, numbers). Not the shared SVG model.
 - [`craft-text`](crates/text/README.md): text processing below the composer. Its `hyphen` module finds
   hyphenation points, with a bundled US English dictionary and patterns and optional hypher patterns
   for 47 more languages (one cargo feature each).

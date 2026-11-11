@@ -269,9 +269,18 @@ impl Vp9Encoder {
         self.rc.debt += bits - per_frame;
     }
 
-    /// Encode one frame; `force_key` starts a new key frame.
+    /// Encode one frame; `force_key` starts a new key frame. Planes shorter than the configured
+    /// size (`y`: width×height, `u`/`v`: ((w+1)/2)×((h+1)/2)) encode nothing: the result has empty
+    /// `data`, the encoder's state is unchanged, and no coding planes are allocated or filled
+    /// from samples that are not there.
     pub fn encode_frame(&mut self, y: &[u8], u: &[u8], v: &[u8], force_key: bool) -> EncodedFrame {
         let (w, h) = (self.cfg.width.max(1) as usize, self.cfg.height.max(1) as usize);
+        let empty = || EncodedFrame { data: Vec::new(), key: false, q_idx: 0, filter_level: 0 };
+        // Checked: on 32-bit targets (wasm32) a large size would wrap to a small one.
+        let (Some(luma), Some(chroma)) = (w.checked_mul(h), w.div_ceil(2).checked_mul(h.div_ceil(2))) else { return empty() };
+        if y.len() < luma || u.len() < chroma || v.len() < chroma {
+            return empty();
+        }
         let key = self.is_key_due(force_key);
         let qidx = self.pick_qidx(key);
         let lossless = qidx == 0;
@@ -280,6 +289,11 @@ impl Vp9Encoder {
         let sb_cols = mi_cols.div_ceil(8);
         let sb_rows = mi_rows.div_ceil(8);
         let (pw, ph) = (sb_cols * 64, sb_rows * 64);
+        // The padded planes are allocated at 1.5 x this (source and reconstruction each); 65536 x
+        // 65536 overflows it on 32-bit targets.
+        if pw.checked_mul(ph).and_then(|n| n.checked_mul(3)).is_none() {
+            return empty();
+        }
         let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
         let mut planes = [
             Plane::new(y, w, h, pw, ph, mi_cols * 8 - 1, mi_rows * 8 - 1),
@@ -493,6 +507,19 @@ mod tests {
         assert_eq!((enc.cfg.width, enc.cfg.height), (65_536, 65_536));
         let enc = Vp9Encoder::new(EncoderConfig { width: 65_536, height: 1, ..Default::default() });
         assert_eq!((enc.cfg.width, enc.cfg.height), (65_536, 1));
+    }
+
+    /// A frame whose planes are shorter than the configured size is refused before any coding
+    /// plane is allocated (65536 x 65536 would be 4 GiB of source and as much reconstruction).
+    #[test]
+    fn planes_shorter_than_the_frame_encode_nothing() {
+        let mut enc = Vp9Encoder::new(EncoderConfig { width: 65_536, height: 65_536, ..Default::default() });
+        assert!(enc.encode_frame(&[1, 2, 3], &[], &[], true).data.is_empty());
+        let mut enc = Vp9Encoder::new(EncoderConfig { width: 16, height: 16, ..Default::default() });
+        for (y, u, v) in [(255, 64, 64), (256, 63, 64), (256, 64, 63)] {
+            assert!(enc.encode_frame(&vec![128; y], &vec![128; u], &vec![128; v], true).data.is_empty());
+        }
+        assert!(!enc.encode_frame(&[128; 256], &[128; 64], &[128; 64], true).data.is_empty());
     }
 
     /// A 1080p stream is above the 983,040 luma samples of level 3.1, so it must not claim 3.1 in

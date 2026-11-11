@@ -116,7 +116,9 @@ let left: &[f32] = &buf.channels[0];
 ```
 
 `decode` returns `TooLarge` above 2³⁰ samples (4 GiB of `f32`). `info.damaged` counts packets
-that were damaged and replaced by silence of their length.
+that were damaged and replaced by silence of their length. A FLAC frame whose checksum fails is
+dropped by the demuxer; the jump in the timestamps shows it, and the lost frames are silence too (one
+count per run of them), so the audio after them stays in place.
 
 ### Choose a track
 
@@ -131,7 +133,11 @@ if let Some(second) = list.get(1) {
 ```
 
 A track index the file does not have is `Unsupported`. `DecodeOptions::with_max_samples` sets
-another size limit. `tracks_of` lists the tracks of a file read from a `ByteSource`;
+another size limit. The default is `DEFAULT_MAX_SAMPLES`, 2^30 samples (4 GiB of `f32`), which
+`decode` and `decode_with` can fill from a small compressed file because they keep the whole
+result. An app that opens files it did not write passes a limit it can hold (for example
+`DEFAULT_MAX_SAMPLES / 8`, or its longest supported clip), or streams with `Decoder`, which has no
+limit because it keeps nothing. `tracks_of` lists the tracks of a file read from a `ByteSource`;
 `detect_container` names a file's container from its first bytes. `DECODE_EXTENSIONS` lists the
 file extensions of the formats `decode` reads, for a file picker's filter.
 
