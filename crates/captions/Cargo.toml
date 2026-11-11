@@ -11,6 +11,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+craft-timeline = { workspace = true }
 craft-xml = { workspace = true }
 thiserror = { workspace = true }
 

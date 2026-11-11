@@ -901,6 +901,7 @@ dependencies = [
 name = "craft-captions"
 version = "0.1.0"
 dependencies = [
+ "craft-timeline",
  "craft-xml",
  "proptest",
  "roxmltree 0.21.2",

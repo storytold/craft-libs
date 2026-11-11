@@ -1,7 +1,8 @@
 # craft-captions
 
 Caption and subtitle files behind one neutral model: bytes in, a `Document` of `Cue`s out, and
-back. One module per format. Depends on `craft-xml` (TTML) and `thiserror`.
+back. One module per format. Depends on `craft-timeline` (exact time),
+`craft-xml` (TTML) and `thiserror`.
 
 ```rust
 use craft_captions::{Format, WriteOptions, detect, parse, write};
@@ -31,8 +32,9 @@ assert!(scc.starts_with(b"Scenarist_SCC V1.0"));
 
 `Tick` is an integer count of 1/254 016 000 000 s: a whole number of ticks per millisecond and
 per frame at every broadcast rate, so no format's times are rounded on the way in. `FrameRate`
-is an exact rational. There are no floating-point seconds anywhere. An application with its own
-time type converts at the boundary (`Tick(t).0` is the tick count).
+is an exact rational. Both are `craft-timeline`'s (`craft_timeline::time`), re-exported here as
+`craft_captions::time`, so a caller that already uses that crate passes its values straight in.
+No format computes with floating-point seconds.
 
 ## Limits
 
