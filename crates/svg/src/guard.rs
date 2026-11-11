@@ -4,7 +4,8 @@
 //! entities with no total limit, so a short hostile file can overflow the stack (an abort, not
 //! an error) or allocate far more than it holds. [`prescan`] measures how deep the elements nest
 //! in one pass over the text; [`entities_expand_past`] bounds what the entity references expand
-//! to. Both read the text as it is written and never build a tree.
+//! to; [`too_wide`] bounds the attributes an element has. All read the text as it is written and
+//! never build a tree.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -89,6 +90,85 @@ pub fn entities_expand_past(svg: &str, most: usize) -> bool {
         total = total.saturating_add(expanded(name, &entities, &mut memo, 0));
         if total > most {
             return true;
+        }
+    }
+    false
+}
+
+/// Whether the document type of `svg` declares an entity whose value holds markup (a `<`). Such
+/// an entity becomes elements where it is referenced, so what the text shows of the tree is not
+/// what a reader builds; drawing apps declare entities for namespace names only. A caller may
+/// refuse these outright instead of counting them ([`prescan`] counts them ten times). Text that
+/// only looks like a declaration (in a comment) counts too. `&#60;` is text, not markup.
+pub fn entity_holds_markup(svg: &str) -> bool {
+    declared(svg).values().flatten().any(|value| value.contains('<'))
+}
+
+/// The most attributes one element may have, as a limit for [`too_wide`]: real elements have a
+/// few dozen at most, and SVG's attribute set is a few hundred names in total.
+pub const MAX_ATTRIBUTES: usize = 4096;
+
+/// The most the duplicate-attribute checks of an XML reader may cost over a whole document, as
+/// a limit for [`too_wide`]: the sum of each element's attribute count squared (a real file
+/// with 100,000 elements of 20 attributes is 40 million).
+pub const MAX_ATTRIBUTE_WORK: usize = 1 << 28;
+
+/// Whether an element of `svg` has more than `most` attributes, or all elements cost more than
+/// `most_work` (the sum of each element's attribute count squared). An XML reader checks each
+/// attribute against the earlier ones on its element, so an element with millions of them is
+/// quadratic work before any other limit applies. Counted as quoted values per start tag,
+/// before a reader sees them; the declarations of a document type count as one element, as
+/// entities can hold elements.
+pub fn too_wide(svg: &str, most: usize, most_work: usize) -> bool {
+    let data = svg.as_bytes();
+    let find = |from: usize, pat: &[u8]| -> usize {
+        data.get(from..).and_then(|r| r.windows(pat.len()).position(|w| w == pat)).map_or(data.len(), |p| from + p + pat.len())
+    };
+    let (mut i, mut work) = (0usize, 0usize);
+    let mut over = |attrs: usize| {
+        work = work.saturating_add(attrs.saturating_mul(attrs));
+        attrs > most || work > most_work
+    };
+    while let Some(off) = data.get(i..).and_then(|r| r.iter().position(|b| *b == b'<')) {
+        i += off;
+        let rest = data.get(i..).unwrap_or(&[]);
+        if rest.starts_with(b"<!--") {
+            i = find(i + 4, b"-->");
+        } else if rest.starts_with(b"<![CDATA[") {
+            i = find(i + 9, b"]]>");
+        } else if rest.starts_with(b"<!DOCTYPE") {
+            // To the `]>` closing its subset (the first `>` when it has none).
+            let end = match (rest.iter().position(|b| *b == b'['), rest.iter().position(|b| *b == b'>')) {
+                (Some(o), Some(g)) if o < g => find(i, b"]>"),
+                _ => find(i, b">"),
+            };
+            let quotes = data.get(i..end).unwrap_or(&[]).iter().filter(|b| matches!(**b, b'"' | b'\'')).count();
+            if over(quotes / 2) {
+                return true;
+            }
+            i = end;
+        } else if rest.starts_with(b"<?") || rest.starts_with(b"<!") || rest.starts_with(b"</") {
+            i = find(i + 2, b">");
+        } else {
+            // A start tag: to its `>` outside quotes.
+            let (mut quote, mut j, mut attrs) = (None, i + 1, 0usize);
+            while let Some(&c) = data.get(j) {
+                match quote {
+                    Some(q) if c == q => quote = None,
+                    Some(_) => {}
+                    None if c == b'"' || c == b'\'' => {
+                        quote = Some(c);
+                        attrs += 1;
+                    }
+                    None if c == b'>' => break,
+                    None => {}
+                }
+                j += 1;
+            }
+            if over(attrs) {
+                return true;
+            }
+            i = j + 1;
         }
     }
     false
@@ -257,6 +337,40 @@ mod tests {
         assert!(!expansion_too_large(&ampersands));
         // A quadratic read would take hours; the bound is loose for a loaded machine.
         assert!(start.elapsed() < std::time::Duration::from_secs(120), "{:?}", start.elapsed());
+    }
+
+    #[test]
+    fn an_entity_holding_markup_is_found_and_a_namespace_entity_is_not() {
+        assert!(entity_holds_markup("<!DOCTYPE svg [<!ENTITY a \"<g><rect/></g>\">]><svg>&a;</svg>"));
+        assert!(entity_holds_markup("<!DOCTYPE svg [<!ENTITY ns 'http://x'><!ENTITY b '<g/>'>]><svg/>"));
+        assert!(!entity_holds_markup("<!DOCTYPE svg [<!ENTITY ns_svg \"http://www.w3.org/2000/svg\">]><svg xmlns=\"&ns_svg;\"/>"));
+        assert!(!entity_holds_markup("<!DOCTYPE svg [<!ENTITY lt \"&#60;\">]><svg/>"));
+        assert!(!entity_holds_markup("<svg><g/></svg>"));
+    }
+
+    fn wide(svg: &str) -> bool {
+        too_wide(svg, MAX_ATTRIBUTES, MAX_ATTRIBUTE_WORK)
+    }
+
+    #[test]
+    fn an_element_with_thousands_of_attributes_is_too_wide() {
+        let many = |n: usize| (0..n).map(|i| format!(" a{i}=\"1\"")).collect::<String>();
+        assert!(!wide(&format!("<svg{}/>", many(4096))));
+        assert!(wide(&format!("<svg><g{}/></svg>", many(4097))));
+        assert!(!wide(&format!("<svg>{}</svg>", "<g a='1' b='2'/>".repeat(10_000))), "per element, not per file");
+        assert!(too_wide("<svg a='1' b='2' c='3'/>", 2, usize::MAX) && !too_wide("<svg a='1' b='2' c='3'/>", 3, usize::MAX));
+        assert!(!wide("<svg><!-- ' \" ' \" --><![CDATA[ '' \"\" ]]></svg>"), "quotes outside tags are no attributes");
+    }
+
+    #[test]
+    fn attribute_work_is_bounded_over_the_whole_document_and_its_dtd() {
+        let many = |n: usize| (0..n).map(|i| format!(" a{i}=\"1\"")).collect::<String>();
+        let tag = format!("<g{}/>", many(4000));
+        assert!(!wide(&format!("<svg>{}</svg>", tag.repeat(10))));
+        assert!(wide(&format!("<svg>{}</svg>", tag.repeat(40))), "each element is within the limit, all together are not");
+        let dtd = format!("<!DOCTYPE svg [<!ENTITY e '<g{}/>'>]><svg>&e;</svg>", many(5000));
+        assert!(wide(&dtd), "entities can hold elements");
+        assert!(!wide("<?xml version='1.0'?><!DOCTYPE svg [<!ENTITY ns 'http://www.w3.org/2000/svg'>]><svg/>"));
     }
 
     #[test]
