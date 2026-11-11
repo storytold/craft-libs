@@ -795,6 +795,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-aep"
+version = "0.1.0"
+
+[[package]]
 name = "craft-ai-core"
 version = "0.1.0"
 dependencies = [
