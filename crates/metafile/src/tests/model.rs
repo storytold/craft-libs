@@ -420,8 +420,53 @@ fn placed_paths_carry_their_line_style_and_shared_clips() {
 #[test]
 fn an_item_under_a_clip_far_off_the_page_is_left_out() {
     let clip = Arc::new(ClipPath { segs: vec![Seg::Move(0.0, 0.0), Seg::Line(f32::MAX, 0.0), Seg::Line(0.0, 10.0), Seg::Close], even_odd: false });
-    let bitmap = |clips| Item::Bitmap { rect: [0.0, 0.0, 10.0, 10.0], width: 1, height: 1, rgba: vec![0; 4], region: None, clips };
+    let bitmap = |clips| Item::Bitmap {
+        rect: [0.0, 0.0, 10.0, 10.0],
+        transform: [10.0, 0.0, 0.0, 10.0, 0.0, 0.0],
+        width: 1,
+        height: 1,
+        rgba: vec![0; 4],
+        region: None,
+        clips,
+    };
     let pic = crate::Picture { width: 10.0, height: 10.0, items: vec![bitmap(vec![clip]), bitmap(Vec::new())], skipped_records: 0 };
     let placed = pic.place(kurbo::Rect::new(0.0, 0.0, 10.0, 10.0), [0.0; 4]);
     assert_eq!(placed.len(), 1);
+}
+
+#[test]
+fn an_upright_bitmap_has_its_rectangle_as_its_transform() {
+    let p = parse(&stretch_dib(dib24_bottom_up())).unwrap();
+    let Item::Bitmap { rect, transform, .. } = &p.items[0] else { panic!("expected a bitmap") };
+    assert_eq!((rect, transform), (&[0.0, 0.0, 20.0, 10.0], &[20.0, 0.0, 0.0, 10.0, 0.0, 0.0]));
+}
+
+#[test]
+fn a_turned_bitmap_keeps_its_pixels_and_carries_the_turn() {
+    // A quarter turn (x' = -y, y' = x) moved 10 right: the 30 x 10 destination stands 10 x 30.
+    let xf: Vec<u8> = [0.0f32, 1.0, -1.0, 0.0, 10.0, 0.0].iter().flat_map(|v| v.to_le_bytes()).collect();
+    let pixels = png(3, 1, [9, 8, 7, 255]);
+    let p = parse(&emf(&[erec(35, &xf), stretch_dibits(3, 1, 5, &pixels)], [0, 0, 10, 30], [0, 0, 2540, 7620])).unwrap();
+    let Item::Bitmap { transform, width, height, .. } = &p.items[0] else { panic!("expected a bitmap") };
+    assert_eq!((*width, *height), (3, 1), "the pixels are not resampled");
+    // 4 device pixels a millimetre and a 25.4 x 76.2 mm frame of 72 x 216 points: 0.709 points a pixel.
+    let k = 72.0 / 101.6;
+    let want = [0.0, 30.0 * k, -10.0 * k, 0.0, 10.0 * k, 0.0];
+    assert!(transform.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-9), "{transform:?}");
+    let placed = p.place(kurbo::Rect::new(0.0, 0.0, 72.0, 216.0), [0.0; 4]);
+    let PlacedItem::Bitmap { transform, .. } = &placed[0] else { panic!("expected a bitmap") };
+    let corner = *transform * kurbo::Point::new(1.0, 1.0);
+    assert!((corner.x - 0.0).abs() < 1e-6 && (corner.y - 30.0 * k).abs() < 1e-6, "{corner:?}");
+}
+
+#[test]
+fn compressed_bitmaps_share_one_decode_budget_per_file() {
+    let small = png(3, 1, [0, 0, 0, 255]);
+    crate::dib::set_decode_budget(7);
+    assert!(crate::dib::decode_compressed(&small).is_some());
+    assert!(crate::dib::decode_compressed(&small).is_some());
+    assert!(crate::dib::decode_compressed(&small).is_none(), "one pixel left: the third image is not decoded");
+    // Every parse starts with the whole budget again.
+    let p = parse_emf(&[stretch_dibits(3, 1, 5, &small)]);
+    assert_eq!(p.items.len(), 1);
 }

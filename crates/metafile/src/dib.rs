@@ -125,8 +125,25 @@ pub(crate) fn decode_compressed(bytes: &[u8]) -> Option<Rgba> {
     if w == 0 || h == 0 || w.checked_mul(h)? > MAX_PIXELS {
         return None;
     }
+    // A few bytes of JPEG or PNG decode to millions of pixels, so the pixels of one file are
+    // budgeted as a whole: an image past the budget is left out before it is decoded.
+    let left = DECODE_LEFT.with(std::cell::Cell::get).checked_sub((w * h) as u64)?;
+    DECODE_LEFT.with(|d| d.set(left));
     let img = reader()?.decode().ok()?.to_rgba8();
     Some(Rgba { w, h, px: img.into_raw() })
+}
+
+/// Pixels that the JPEG and PNG images of one file (nested metafiles included) may decode to.
+pub(crate) const MAX_DECODE_PIXELS: u64 = 1 << 28;
+
+thread_local! {
+    /// What is left of [`MAX_DECODE_PIXELS`] for the file being parsed on this thread.
+    static DECODE_LEFT: std::cell::Cell<u64> = const { std::cell::Cell::new(MAX_DECODE_PIXELS) };
+}
+
+/// Starts a file's decode budget (`MAX_DECODE_PIXELS` for every parse outside the tests).
+pub(crate) fn set_decode_budget(pixels: u64) {
+    DECODE_LEFT.with(|d| d.set(pixels));
 }
 
 /// Largest side of a JPEG or PNG image.

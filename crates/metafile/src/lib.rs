@@ -28,6 +28,9 @@ mod size;
 mod text;
 mod wmf;
 
+#[cfg(feature = "write")]
+pub mod write;
+
 #[cfg(test)]
 mod tests;
 
@@ -136,9 +139,15 @@ pub enum Item {
         /// Clip paths: the item shows inside all of them (and inside `region`). Outermost first.
         clips: Vec<Arc<ClipPath>>,
     },
-    /// A bitmap stretched into `rect` = `[x, y, w, h]` (picture units), RGBA8 rows top-down.
+    /// A bitmap stretched into `rect` = `[x, y, w, h]` (picture units), RGBA8 rows top-down, straight
+    /// alpha.
     Bitmap {
         rect: [f32; 4],
+        /// The unit square (the whole bitmap, y down) to picture space as affine coefficients
+        /// `[a, b, c, d, e, f]` (`x' = a·x + c·y + e`, `y' = b·x + d·y + f`, kurbo's order). For an
+        /// upright bitmap this is `rect` again (`[w, 0, 0, h, x, y]`); under a world transform that
+        /// turns or skews the bitmap it carries the turn, and `rect` only spans two of its corners.
+        transform: [f64; 6],
         width: u32,
         height: u32,
         rgba: Vec<u8>,
@@ -200,6 +209,12 @@ pub(crate) struct Frame {
 
 /// Parses a WMF (placeable or plain) or EMF file.
 pub fn parse(bytes: &[u8]) -> Result<Picture, Error> {
+    dib::set_decode_budget(dib::MAX_DECODE_PIXELS);
+    parse_nested(bytes)
+}
+
+/// [`parse`] for a metafile inside the one being parsed: it draws on the same budgets.
+pub(crate) fn parse_nested(bytes: &[u8]) -> Result<Picture, Error> {
     let b = Bytes(bytes);
     let (cv, frame) = if emf::is_emf(b) {
         emf::parse(b)?
@@ -296,11 +311,16 @@ fn build(raw: Vec<Raw>, frame: Option<Frame>) -> Picture {
             let (region, clips) = clip(region)?;
             Some(Item::Path { segs, fill, stroke, line: line.scaled(stroke_scale)?, even_odd, region, clips })
         }
-        Raw::Bitmap { rect: r, img, region } => {
+        Raw::Bitmap { rect: r, xf, img, region } => {
             let (x, y) = tf((r[0], r[1]));
             let rect = [f(x)?, f(y)?, f(r[2] * sx)?, f(r[3] * sy)?];
+            let (e, g) = tf((xf[4], xf[5]));
+            let transform = [xf[0] * sx, xf[1] * sy, xf[2] * sx, xf[3] * sy, e, g];
+            if !transform.iter().all(|v| v.is_finite()) {
+                return None;
+            }
             let (region, clips) = clip(region)?;
-            Some(Item::Bitmap { rect, width: img.w as u32, height: img.h as u32, rgba: img.px, region, clips })
+            Some(Item::Bitmap { rect, transform, width: img.w as u32, height: img.h as u32, rgba: img.px, region, clips })
         }
         Raw::Pattern { ops, even_odd, tile, region } => {
             let segs = ops.iter().map(|op| seg(op, tf)).collect::<Option<Vec<Seg>>>()?;

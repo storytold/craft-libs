@@ -51,8 +51,10 @@ pub enum PlacedItem {
         region: Option<Arc<BezPath>>,
         clips: Vec<Arc<PlacedClip>>,
     },
-    /// `Picture::items[index]`, a bitmap, stretched into `rect`.
-    Bitmap { index: usize, rect: Rect, region: Option<Arc<BezPath>>, clips: Vec<Arc<PlacedClip>> },
+    /// `Picture::items[index]`, a bitmap, stretched into `rect`. `transform` maps the unit square
+    /// (the whole bitmap) to target units: the same place when the bitmap is upright, and the
+    /// turned or skewed place when it is not.
+    Bitmap { index: usize, rect: Rect, transform: Affine, region: Option<Arc<BezPath>>, clips: Vec<Arc<PlacedClip>> },
     /// `Picture::items[index]`, a pattern fill: `path` (target units) filled with the item's tile
     /// repeated; `tile` maps tile pixels to target units.
     Pattern { index: usize, path: BezPath, even_odd: bool, tile: Affine, region: Option<Arc<BezPath>>, clips: Vec<Arc<PlacedClip>> },
@@ -176,13 +178,15 @@ impl Picture {
                         out.push(PlacedItem::Text { index, transform, clip, region, clips });
                     }
                 }
-                Item::Bitmap { rect: [x, y, w, h], region, clips, .. } => {
+                Item::Bitmap { rect: [x, y, w, h], transform, region, clips, .. } => {
                     let (x0, y0) = (f64::from(*x), f64::from(*y));
                     let rect = tf.transform_rect_bbox(Rect::new(x0, y0, x0 + f64::from(*w), y0 + f64::from(*h)));
                     let Some(region) = get_region(region) else { continue };
                     let Some(clips) = get_clips(clips) else { continue };
-                    if in_range(rect) && rect.width() > MIN_BITMAP_SIDE && rect.height() > MIN_BITMAP_SIDE {
-                        out.push(PlacedItem::Bitmap { index, rect, region, clips });
+                    let transform = tf * Affine::new(*transform);
+                    let finite = transform.as_coeffs().iter().all(|v| v.is_finite() && v.abs() <= MAX_COORD);
+                    if in_range(rect) && finite && rect.width() > MIN_BITMAP_SIDE && rect.height() > MIN_BITMAP_SIDE {
+                        out.push(PlacedItem::Bitmap { index, rect, transform, region, clips });
                     }
                 }
             }

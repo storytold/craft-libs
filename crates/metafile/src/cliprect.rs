@@ -198,7 +198,18 @@ pub(crate) fn clip_raw(raw: Raw, clip: &[P]) -> Vec<Raw> {
             let f = clip_fill(&subs, clip, &mut { MAX_CLIP_WORK }).unwrap_or_default();
             if f.is_empty() { Vec::new() } else { vec![Raw::Pattern { ops: f, even_odd, tile, region }] }
         }
-        Raw::Bitmap { rect, img, region } => crop(rect, img, clip).map(|(rect, img)| vec![Raw::Bitmap { rect, img, region }]).unwrap_or_default(),
+        Raw::Bitmap { rect, xf, img, region } => {
+            // A turned or skewed bitmap is not cut: it stays whole inside the clip and goes otherwise.
+            if xf[1] != 0.0 || xf[2] != 0.0 {
+                let corners =
+                    [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)].map(|(u, v)| (xf[0] * u + xf[2] * v + xf[4], xf[1] * u + xf[3] * v + xf[5]));
+                let whole = pts_bbox(&corners).is_some_and(|b| bbox_inside(b, clip));
+                return if whole { vec![Raw::Bitmap { rect, xf, img, region }] } else { Vec::new() };
+            }
+            crop(rect, img, clip)
+                .map(|(r, img)| vec![Raw::Bitmap { rect: r, xf: [r[2], 0.0, 0.0, r[3], r[0], r[1]], img, region }])
+                .unwrap_or_default()
+        }
         Raw::Text { text: mut t, region } => {
             // Text clips to a rectangle: the one around the polygon.
             let cur = t.clip.map_or(cb, |[a, b, d, e]| intersect(cb, [f64::from(a), f64::from(b), f64::from(d), f64::from(e)]));

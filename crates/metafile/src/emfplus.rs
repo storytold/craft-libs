@@ -896,11 +896,18 @@ impl Painter {
                     }),
                     region: RawClip::default(),
                 },
-                Item::Bitmap { rect, width, height, rgba, .. } => {
+                Item::Bitmap { rect, transform, width, height, rgba, .. } => {
                     let (a, b) = (pt(rect[0], rect[1]), pt(rect[0] + rect[2], rect[1] + rect[3]));
                     let mut img = Rgba { w: *width as usize, h: *height as usize, px: rgba.clone() };
-                    crate::dib::flip(&mut img, a.0 > b.0, a.1 > b.1);
-                    Raw::Bitmap { rect: [a.0.min(b.0), a.1.min(b.1), (b.0 - a.0).abs(), (b.1 - a.1).abs()], img, region: RawClip::default() }
+                    let rect = [a.0.min(b.0), a.1.min(b.1), (b.0 - a.0).abs(), (b.1 - a.1).abs()];
+                    let turned = mul(*transform, m);
+                    let xf = if turned[1] == 0.0 && turned[2] == 0.0 {
+                        crate::dib::flip(&mut img, a.0 > b.0, a.1 > b.1);
+                        [rect[2], 0.0, 0.0, rect[3], rect[0], rect[1]]
+                    } else {
+                        turned
+                    };
+                    Raw::Bitmap { rect, xf, img, region: RawClip::default() }
                 }
                 Item::Text(t) => {
                     let mut t = t.clone();
@@ -1278,7 +1285,7 @@ fn metafile(r: Bytes) -> Option<Picture> {
         return None;
     }
     NESTING.with(|n| n.set(depth + 1));
-    let pic = crate::parse(data).ok();
+    let pic = crate::parse_nested(data).ok();
     NESTING.with(|n| n.set(depth));
     pic.filter(|p| p.width > 0.0 && p.height > 0.0)
 }

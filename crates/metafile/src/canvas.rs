@@ -296,22 +296,13 @@ pub(crate) enum Raw {
         region: RawClip,
     },
     /// A path filled with a repeating tile.
-    Pattern {
-        ops: Vec<Op>,
-        even_odd: bool,
-        tile: Arc<RawTile>,
-        region: RawClip,
-    },
-    Bitmap {
-        rect: [f64; 4],
-        img: Rgba,
-        region: RawClip,
-    },
+    Pattern { ops: Vec<Op>, even_odd: bool, tile: Arc<RawTile>, region: RawClip },
+    /// `xf` maps the unit square onto the bitmap's place: `[a, b, c, d, e, f]` with
+    /// `x' = a·x + c·y + e`, `y' = b·x + d·y + f`. `rect` is `[x, y, w, h]` of the same place when
+    /// the mapping neither turns nor skews it.
+    Bitmap { rect: [f64; 4], xf: [f64; 6], img: Rgba, region: RawClip },
     /// Text whose transform and clip are in device units.
-    Text {
-        text: Box<Text>,
-        region: RawClip,
-    },
+    Text { text: Box<Text>, region: RawClip },
 }
 
 impl Raw {
@@ -1249,14 +1240,23 @@ impl Canvas {
     }
 
     /// A bitmap stretched into a logical rectangle `[x, y, w, h]`. A negative extent mirrors the
-    /// bitmap, as the mapping does.
+    /// bitmap, as the mapping does. Under a world transform that turns or skews, the pixels stay
+    /// as they are and the item's transform carries the turn.
     pub fn bitmap(&mut self, rect: [f64; 4], mut img: Rgba) {
         let [x, y, w, h] = rect;
         let a = self.map.device((x, y));
         let b = self.map.device((x + w, y + h));
-        crate::dib::flip(&mut img, a.0 > b.0, a.1 > b.1);
+        let (ux, uy) = (self.map.device((x + w, y)), self.map.device((x, y + h)));
         let dev = [a.0.min(b.0), a.1.min(b.1), (b.0 - a.0).abs(), (b.1 - a.1).abs()];
-        self.push(Raw::Bitmap { rect: dev, img, region: RawClip::default() });
+        // Upright: the top-right corner is level with the top-left, the bottom-left below it.
+        let tol = 1e-9 * (dev[2] + dev[3]).max(1.0);
+        let xf = if (ux.1 - a.1).abs() <= tol && (uy.0 - a.0).abs() <= tol {
+            crate::dib::flip(&mut img, a.0 > b.0, a.1 > b.1);
+            [dev[2], 0.0, 0.0, dev[3], dev[0], dev[1]]
+        } else {
+            [ux.0 - a.0, ux.1 - a.1, uy.0 - a.0, uy.1 - a.1, a.0, a.1]
+        };
+        self.push(Raw::Bitmap { rect: dev, xf, img, region: RawClip::default() });
     }
 }
 

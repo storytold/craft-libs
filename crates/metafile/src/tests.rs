@@ -5,6 +5,7 @@ use crate::dib::Rgba;
 use crate::{Error, Item, MAX_BYTES, MAX_ITEMS, Seg, is_metafile, parse};
 
 mod model;
+mod played;
 
 fn h16(v: i32) -> Vec<u8> {
     (v as i16).to_le_bytes().to_vec()
@@ -938,7 +939,15 @@ fn the_narrowest_crop_on_the_largest_frame_keeps_its_content() {
         width: 100.0,
         height: 100.0,
         items: vec![
-            Item::Bitmap { rect: [0.0, 0.0, 100.0, 100.0], width: 1, height: 1, rgba: vec![255; 4], region: None, clips: Vec::new() },
+            Item::Bitmap {
+                rect: [0.0, 0.0, 100.0, 100.0],
+                transform: [0.0; 6],
+                width: 1,
+                height: 1,
+                rgba: vec![255; 4],
+                region: None,
+                clips: Vec::new(),
+            },
             Item::Path {
                 segs: vec![Seg::Move(0.0, 0.0), Seg::Line(100.0, 100.0)],
                 fill: None,
@@ -960,7 +969,7 @@ fn the_narrowest_crop_on_the_largest_frame_keeps_its_content() {
 
 #[test]
 fn place_keeps_only_finite_bounded_bitmaps_with_area() {
-    let bitmap = |rect: [f32; 4]| Item::Bitmap { rect, width: 1, height: 1, rgba: vec![0; 4], region: None, clips: Vec::new() };
+    let bitmap = |rect: [f32; 4]| Item::Bitmap { rect, transform: [0.0; 6], width: 1, height: 1, rgba: vec![0; 4], region: None, clips: Vec::new() };
     let pic = crate::Picture {
         width: 100.0,
         height: 50.0,
@@ -1098,13 +1107,21 @@ fn size_speed() {
 
 #[test]
 fn take_pixels_returns_only_drawable_bitmaps() {
-    let mut ok = Item::Bitmap { rect: [0.0; 4], width: 2, height: 1, rgba: vec![7; 8], region: None, clips: Vec::new() };
+    let mut ok = Item::Bitmap { rect: [0.0; 4], transform: [0.0; 6], width: 2, height: 1, rgba: vec![7; 8], region: None, clips: Vec::new() };
     assert_eq!(ok.take_pixels(), Some((2, 1, vec![7; 8])));
     assert!(matches!(&ok, Item::Bitmap { rgba, .. } if rgba.is_empty()), "the pixels move out");
-    let mut short = Item::Bitmap { rect: [0.0; 4], width: 2, height: 2, rgba: vec![0; 8], region: None, clips: Vec::new() };
+    let mut short = Item::Bitmap { rect: [0.0; 4], transform: [0.0; 6], width: 2, height: 2, rgba: vec![0; 8], region: None, clips: Vec::new() };
     assert_eq!(short.take_pixels(), None);
     let side = crate::MAX_BITMAP_SIDE + 1;
-    let mut wide = Item::Bitmap { rect: [0.0; 4], width: side, height: 1, rgba: vec![0; side as usize * 4], region: None, clips: Vec::new() };
+    let mut wide = Item::Bitmap {
+        rect: [0.0; 4],
+        transform: [0.0; 6],
+        width: side,
+        height: 1,
+        rgba: vec![0; side as usize * 4],
+        region: None,
+        clips: Vec::new(),
+    };
     assert_eq!(wide.take_pixels(), None);
     let mut path = Item::Path {
         segs: Vec::new(),
