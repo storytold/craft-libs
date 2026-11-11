@@ -55,6 +55,9 @@ craft_ui::words! {
         metrics: "character.metrics" = "Metrics";
         optical: "character.optical" = "Optical";
         tracking: "character.tracking" = "Tracking";
+        leading_hint: "character.leadingHint" = "Leading (set to the font size × auto-leading when Auto)";
+        kerning_hint: "character.kerningHint" = "Kerning: Metrics, Optical or a value in 1/1000 em (Alt+←/→ at the caret)";
+        tracking_hint: "character.trackingHint" = "Tracking (1/1000 em)";
         vertical_scale: "character.verticalScale" = "Vertical scale";
         horizontal_scale: "character.horizontalScale" = "Horizontal scale";
         baseline_shift: "character.baselineShift" = "Baseline shift";
@@ -477,6 +480,7 @@ impl<'a> CharacterControls<'a> {
                 let size = LengthRow {
                     label: words.size.clone(),
                     glyph: GlyphLabel::text("tT"),
+                    hint: None,
                     value: values.size,
                     range: SIZE_RANGE,
                     presets: &size_presets,
@@ -486,6 +490,7 @@ impl<'a> CharacterControls<'a> {
                 let leading = LengthRow {
                     label: words.leading.clone(),
                     glyph: GlyphLabel::text("A↕"),
+                    hint: Some(words.leading_hint.clone()),
                     value: leading_value,
                     range: LEADING_RANGE,
                     presets: &leading_presets,
@@ -497,11 +502,19 @@ impl<'a> CharacterControls<'a> {
                 }
             });
             Grid::new(&TWO_COLUMNS).fill_width().show(ui, |ui, _| {
-                let event = lengths.kerning(ui, words.kerning.clone(), GlyphLabel::icon(IconId::new("text_cursor")), kerning_shown, &kerning_presets);
+                let event = lengths.kerning(
+                    ui,
+                    words.kerning.clone(),
+                    GlyphLabel::icon(IconId::new("text_cursor")),
+                    words.kerning_hint.clone(),
+                    kerning_shown,
+                    &kerning_presets,
+                );
                 edits.extend(event.map(|value| CharacterChange::Kerning(kerning_of(value))));
                 let tracking = PlainRow {
                     label: words.tracking.clone(),
                     glyph: GlyphLabel::text("VA"),
+                    hint: Some(words.tracking_hint.clone()),
                     value: plain(values.tracking),
                     range: TRACKING_RANGE,
                     percent: false,
@@ -514,6 +527,7 @@ impl<'a> CharacterControls<'a> {
                 let vertical = PlainRow {
                     label: words.vertical_scale.clone(),
                     glyph: GlyphLabel::text("↕T"),
+                    hint: None,
                     value: plain(values.vertical_scale),
                     range: SCALE_RANGE,
                     percent: true,
@@ -524,6 +538,7 @@ impl<'a> CharacterControls<'a> {
                 let horizontal = PlainRow {
                     label: words.horizontal_scale.clone(),
                     glyph: GlyphLabel::text("↔T"),
+                    hint: None,
                     value: plain(values.horizontal_scale),
                     range: SCALE_RANGE,
                     percent: true,
@@ -536,6 +551,7 @@ impl<'a> CharacterControls<'a> {
                 let shift = LengthRow {
                     label: words.baseline_shift.clone(),
                     glyph: GlyphLabel::text("Aª"),
+                    hint: None,
                     value: values.baseline_shift,
                     range: SHIFT_RANGE,
                     presets: &[],

@@ -221,7 +221,7 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                                 let star = TrailingFace::Icon(IconSpec::svg(IconId::new(icon)));
                                 let line = ListRow::new(row.shown.clone()).option().check(current == Some(*key)).trailing_part(STAR, star, name);
                                 let line = match row.class {
-                                    Some(class) => line.trailing(class_mark(class, &words)),
+                                    Some(class) => line.trailing_named(class_mark(class, &words), class_label(class, &words)),
                                     None => line,
                                 };
                                 match size {

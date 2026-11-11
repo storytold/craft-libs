@@ -1,5 +1,6 @@
 //! What a side label is: its kind, glyph, alignment, layout, `SideLabel` and `Scrub`.
 
+use crate::contract::Tooltip;
 use crate::primitives::IconSpec;
 use crate::runtime::access::scope::FieldLabelRole;
 use crate::runtime::env::{Env, Label};
@@ -108,6 +109,8 @@ pub struct SideLabel {
     pub icon: Option<IconSpec<'static>>,
     /// A line after the text in the muted text colour. It joins the control's description, not its name.
     pub detail: Option<Label>,
+    /// The label's tooltip, in place of its text: a hint a short or glyph label has no room for.
+    pub tooltip: Option<Tooltip>,
 }
 
 impl SideLabel {
@@ -122,6 +125,7 @@ impl SideLabel {
             reset_dot: false,
             icon: None,
             detail: None,
+            tooltip: None,
         }
     }
 
@@ -178,6 +182,13 @@ impl SideLabel {
     #[must_use]
     pub fn detail(mut self, detail: impl Into<Label>) -> Self {
         self.detail = Some(detail.into());
+        self
+    }
+
+    /// Shows `tooltip` over the label in place of its text, and adds it to the label's description.
+    #[must_use]
+    pub fn tooltip(mut self, tooltip: impl Into<Tooltip>) -> Self {
+        self.tooltip = Some(tooltip.into());
         self
     }
 }

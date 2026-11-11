@@ -7,20 +7,19 @@ mod stories;
 
 use super::view::PageSource;
 use craft_behavior::IconId;
-use craft_behavior::{Input, Metrics, NavMove, Sense};
+use craft_behavior::{Input, Metrics, NavMove, PartKey, Sense};
 use craft_ui::buttons::IconButton;
 use craft_ui::contract::{
-    Common, Component, Cx, Focus as _, MeasureCx, NoValue, Outcome, PaintUi, Props as _, Role, Show as _, ShowContainer as _, clicked,
+    Common, Component, Cx, Focus as _, MeasureCx, NoValue, Outcome, PaintUi, PartsCx, Props as _, Role, Show as _, ShowContainer as _, clicked,
 };
 use craft_ui::dialog::Dialog;
 use craft_ui::layout_components::Row;
 use craft_ui::primitives::textures::{
-    MAX_TEXTURE, Priority, TextureState, TextureStoreOptions, ThumbPaint, ThumbRequest, ThumbnailOptions, Thumbnails,
+    MAX_TEXTURE, Priority, TextureState, TextureStoreOptions, TextureWords, ThumbPaint, ThumbRequest, ThumbnailOptions, Thumbnails,
 };
 use craft_ui::primitives::{PaintShape, TextRun};
 use craft_ui::runtime::env::Env;
 use craft_ui::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
-use craft_ui::runtime::memory::Remember as _;
 use craft_ui::style::{ComponentStyle, DataColor, StyleColor, StyleCx, TypeRole};
 use egui::{CornerRadius, Rect, Response, Ui, Vec2};
 use std::cell::Cell;
@@ -152,11 +151,21 @@ struct PagePicture<'a> {
     unavailable: &'a str,
     paper: DataColor,
     step: isize,
+    /// The page's picture as step 7 asked for it, which `paint` shows.
+    state: Option<TextureState>,
 }
+
+/// The page's picture; a page that failed to render gives the reason as its tooltip.
+const PICTURE: PartKey = PartKey::new("picture");
 
 impl<'a> PagePicture<'a> {
     fn new(source: &'a dyn PageSource, page: usize, unavailable: &'a str, paper: DataColor) -> Self {
-        PagePicture { common: Common::new(), source, page, unavailable, paper, step: 0 }
+        PagePicture { common: Common::new(), source, page, unavailable, paper, step: 0, state: None }
+    }
+
+    /// The page pictures of the component `id`.
+    fn thumbnails(ctx: &egui::Context, id: egui::Id) -> Thumbnails<usize> {
+        Thumbnails::<usize>::in_context(ctx, id.with("pictures"), ThumbnailOptions::new().max_side(MAX_TEXTURE).store(TextureStoreOptions::pages()))
     }
 
     /// The part of the room the page fills, whole page and no larger than the ideal.
@@ -204,19 +213,26 @@ impl Component for PagePicture<'_> {
         }
     }
 
+    fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
+        let ctx = cx.ui.ctx().clone();
+        let thumbs = Self::thumbnails(&ctx, cx.id);
+        let shape = self.fitted(rect.size());
+        let request = ThumbRequest::for_cell(shape.max_elem(), ctx.pixels_per_point());
+        let state = thumbs.state(&ctx, self.source, &self.page, &request, Priority::VISIBLE);
+        if let TextureState::Failed { failure, .. } = &state {
+            let reason = failure.text(&cx.env.words::<TextureWords>()).to_owned();
+            cx.part(PICTURE, Rect::from_center_size(rect.center(), shape)).tooltip(reason);
+        }
+        self.state = Some(state);
+    }
+
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        let Some(state) = self.state.take() else { return };
         let painter = ui.content_painter(cx);
         let ctx = painter.painter.ctx().clone();
-        let thumbs = Thumbnails::<usize>::in_context(
-            &ctx,
-            cx.key("pictures"),
-            ThumbnailOptions::new().max_side(MAX_TEXTURE).store(TextureStoreOptions::pages()),
-        );
+        let thumbs = Self::thumbnails(&ctx, cx.id);
         let area = cx.rect;
-        let shape = self.fitted(area.size());
-        let rect = Rect::from_center_size(area.center(), shape);
-        let request = ThumbRequest::for_cell(shape.max_elem(), painter.pixels_per_point());
-        let state = thumbs.state(&ctx, self.source, &self.page, &request, Priority::VISIBLE);
+        let rect = Rect::from_center_size(area.center(), self.fitted(area.size()));
         // The paper shows under a page that has no picture yet; under a picture the thumbnail paints it.
         ui.draw().data_fill(&PaintShape::Rect(rect, CornerRadius::ZERO), self.paper);
         thumbs.paint(&painter, rect, &state, &ThumbPaint::default().paper(self.paper));

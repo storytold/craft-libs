@@ -22,10 +22,11 @@ pub(super) struct Lengths<'u> {
     pub(super) unit: DocUnit,
 }
 
-/// A length field of a row: its label, mark, value in points and range in points.
+/// A length field of a row: its label, mark, the mark's hint, value in points and range in points.
 pub(super) struct LengthRow<'p> {
     pub(super) label: Label,
     pub(super) glyph: GlyphLabel,
+    pub(super) hint: Option<Label>,
     pub(super) value: Option<f32>,
     pub(super) range: RangeInclusive<f64>,
     pub(super) presets: &'p [Entry<NumberPick>],
@@ -35,6 +36,7 @@ pub(super) struct LengthRow<'p> {
 pub(super) struct PlainRow<'p> {
     pub(super) label: Label,
     pub(super) glyph: GlyphLabel,
+    pub(super) hint: Option<Label>,
     pub(super) value: Mixed<Option<f64>>,
     pub(super) range: RangeInclusive<f64>,
     pub(super) percent: bool,
@@ -44,9 +46,9 @@ pub(super) struct PlainRow<'p> {
 impl Lengths<'_> {
     /// A field over a length in points, shown in the unit: its event in points and the preset row picked.
     pub(super) fn row(&self, ui: &mut Ui, spec: LengthRow<'_>) -> (EditEvents<Option<f64>>, Option<NumberPick>) {
-        let LengthRow { label, glyph, value, range, presets } = spec;
+        let LengthRow { label, glyph, hint, value, range, presets } = spec;
         let points = value.map_or(Mixed::Mixed, |value| Mixed::Same(Some(f64::from(value))));
-        let field = Field::new(label.clone()).side(mark(glyph)).show(ui, |ui, _| {
+        let field = Field::new(label.clone()).side(mark(glyph, hint)).show(ui, |ui, _| {
             let out = length_field(self.unit, label.clone(), points, range.clone()).presets(presets).scrub_by_label().show(ui);
             (out.edit.events, out.preset)
         });
@@ -59,11 +61,12 @@ impl Lengths<'_> {
         ui: &mut Ui,
         label: Label,
         glyph: GlyphLabel,
+        hint: Label,
         value: Option<NamedOr<KerningName>>,
         presets: &[Entry<NumberPick>],
     ) -> EditEvents<NamedOr<KerningName>> {
         let units = self.units;
-        let shown = Field::new(label.clone()).side(mark(glyph)).show(ui, |ui, _| {
+        let shown = Field::new(label.clone()).side(mark(glyph, Some(hint))).show(ui, |ui, _| {
             let field = NumberField::named(label.clone(), Bind::given(mixed(value))).range(TRACKING_RANGE).presets(presets).scrub_by_label();
             field.codec(NumberCodec::new(units.reader(None), 0)).show(ui).edit.events
         });
@@ -72,9 +75,9 @@ impl Lengths<'_> {
 
     /// A field over a number that is not a length: its event and the preset row picked.
     pub(super) fn plain(&self, ui: &mut Ui, spec: PlainRow<'_>) -> (EditEvents<Option<f64>>, Option<NumberPick>) {
-        let PlainRow { label, glyph, value, range, percent, presets } = spec;
+        let PlainRow { label, glyph, hint, value, range, percent, presets } = spec;
         let units = self.units;
-        let shown = Field::new(label.clone()).side(mark(glyph)).show(ui, |ui, _| {
+        let shown = Field::new(label.clone()).side(mark(glyph, hint)).show(ui, |ui, _| {
             let field = NumberField::new(label.clone(), Bind::given(value)).range(range.clone()).presets(presets).scrub_by_label();
             let field = if percent {
                 field.unit_kind(UnitKind::Percent).unit(units.symbol(UnitKind::Percent)).step(UnitKind::Percent.step())
@@ -88,9 +91,13 @@ impl Lengths<'_> {
     }
 }
 
-/// A label shown as a mark, whose drag scrubs the field.
-pub(super) fn mark(glyph: GlyphLabel) -> SideLabel {
-    SideLabel::new().kind(LabelKind::Glyph(glyph)).scrub(true)
+/// A label shown as a mark, whose drag scrubs the field; `hint`, when given, is its tooltip in place of the label.
+pub(super) fn mark(glyph: GlyphLabel, hint: Option<Label>) -> SideLabel {
+    let side = SideLabel::new().kind(LabelKind::Glyph(glyph)).scrub(true);
+    match hint {
+        Some(hint) => side.tooltip(hint),
+        None => side,
+    }
 }
 
 /// `value` as a field's value: a missing one is mixed.

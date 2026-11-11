@@ -102,7 +102,7 @@ impl<'a> PeopleBar<'a> {
                 if let Some(me) = me {
                     let action = if me.spotlight { words.stop_spotlight.clone() } else { words.spotlight.clone() };
                     let avatar =
-                        Avatar::new(me.name.clone()).fill(me.color).pressable(true).selected(me.spotlight).description(action.as_str().to_owned());
+                        Avatar::new(me.name.clone()).fill(me.color).pressable(true).selected(me.spotlight).tooltip(action.as_str().to_owned());
                     if avatar.show(ui).clicked {
                         requests.push(CollabRequest::Spotlight(!me.spotlight));
                     }
@@ -116,7 +116,7 @@ impl<'a> PeopleBar<'a> {
                     } else {
                         action
                     };
-                    let avatar = Avatar::new(person.name.clone()).fill(person.color).pressable(true).selected(followed).description(name).show(ui);
+                    let avatar = Avatar::new(person.name.clone()).fill(person.color).pressable(true).selected(followed).tooltip(name).show(ui);
                     if avatar.clicked {
                         requests.push(CollabRequest::Follow(if followed { None } else { Some(person.id) }));
                     }

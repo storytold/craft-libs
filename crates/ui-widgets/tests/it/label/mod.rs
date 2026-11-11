@@ -3,6 +3,7 @@
 mod align;
 pub mod group;
 pub mod kit;
+mod tooltip;
 
 use self::kit::{Dial, Field, Seen, Wide};
 use craft_host::target::ShellInfo;

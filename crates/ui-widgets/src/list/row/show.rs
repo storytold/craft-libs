@@ -37,6 +37,7 @@ const PROGRESS: PartKey = PartKey::new("progress");
 const LINES: PartKey = PartKey::new("lines");
 pub(super) const TRAILING: PartKey = PartKey::new("trailing");
 const TRAILING_ICON: PartKey = PartKey::new("trailing-icon");
+const TRAILING_TEXT: PartKey = PartKey::new("trailing-text");
 const THUMB: PartKey = PartKey::new("thumb");
 
 /// The name a pattern with `{row}` gives for the row labelled `row`.
@@ -182,7 +183,9 @@ impl Component for ListRow<'_> {
             };
         }
         if let Some(disclosure) = placed.disclosure {
-            cx.part(DISCLOSURE, disclosure).sense(Sense::CLICK).pointer_only("Left and Right open and close the row");
+            let words = cx.words::<ListWords>();
+            let tip = if self.group == Some(true) { words.collapse_tip.clone() } else { words.expand_tip.clone() };
+            cx.part(DISCLOSURE, disclosure).sense(Sense::CLICK).pointer_only("Left and Right open and close the row").tooltip(tip);
         }
         if self.progress.is_some() {
             cx.part(PROGRESS, self.progress_band(placed.label, &cx.style.sizes));
@@ -213,7 +216,10 @@ impl Component for ListRow<'_> {
             let Some(slot) = slot else { continue };
             let shape = Rect::from_center_size(slot.center(), Vec2::splat(side));
             match &trailing.item {
-                TrailingItem::Text(_) | TrailingItem::Hosted(_) => {}
+                TrailingItem::Text { name: None, .. } | TrailingItem::Hosted(_) => {}
+                TrailingItem::Text { name: Some(name), .. } => {
+                    cx.part(TRAILING_TEXT.at(at as u64), *slot).tooltip(name.clone());
+                }
                 TrailingItem::Icon { name, .. } => {
                     cx.part(TRAILING_ICON.at(at as u64), shape).tooltip(name.clone());
                 }
@@ -303,7 +309,7 @@ impl Component for ListRow<'_> {
         };
         access.name(name);
         let icons = self.trailing.iter().filter_map(|trailing| match &trailing.item {
-            TrailingItem::Icon { name, .. } => Some(name.as_str().to_owned()),
+            TrailingItem::Icon { name, .. } | TrailingItem::Text { name: Some(name), .. } => Some(name.as_str().to_owned()),
             _ => None,
         });
         let percent = self.progress.map(|fraction| cx.format().percent(f64::from(Progress::clamped(fraction)), 0));
@@ -363,7 +369,7 @@ impl Component for ListRow<'_> {
         }
         for (at, trailing) in self.trailing.iter().enumerate() {
             match &trailing.item {
-                TrailingItem::Text(_) | TrailingItem::Hosted(_) => {}
+                TrailingItem::Text { .. } | TrailingItem::Hosted(_) => {}
                 TrailingItem::Icon { name, .. } => {
                     access.node(TRAILING_ICON.at(at as u64), Role::IMAGE).name = Name::Text(name.as_str().to_owned());
                 }

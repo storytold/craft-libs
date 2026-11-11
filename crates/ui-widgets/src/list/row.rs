@@ -378,14 +378,22 @@ impl<'a> ListRow<'a> {
     /// The first item added is the outermost.
     #[must_use]
     pub fn trailing(mut self, text: impl Into<Label>) -> Self {
-        self.trailing.push(Trailing { item: TrailingItem::Text(text.into()), optional: false });
+        self.trailing.push(Trailing { item: TrailingItem::Text { text: text.into(), name: None }, optional: false });
+        self
+    }
+
+    /// A short mark at the trailing end, shown as [`trailing`](Self::trailing) shows a text, that stands for `name`
+    /// (a font class's sign for the class): `name` is its tooltip and part of the row's description.
+    #[must_use]
+    pub fn trailing_named(mut self, text: impl Into<Label>, name: impl Into<Label>) -> Self {
+        self.trailing.push(Trailing { item: TrailingItem::Text { text: text.into(), name: Some(name.into()) }, optional: false });
         self
     }
 
     /// A text at the trailing end that drops out when the label would get narrower than its least width with it.
     #[must_use]
     pub fn optional(mut self, text: impl Into<Label>) -> Self {
-        self.trailing.push(Trailing { item: TrailingItem::Text(text.into()), optional: true });
+        self.trailing.push(Trailing { item: TrailingItem::Text { text: text.into(), name: None }, optional: true });
         self
     }
 

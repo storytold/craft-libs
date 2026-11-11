@@ -43,8 +43,8 @@ struct Opened(Option<Option<u64>>);
 /// [`StrokeEditor`] in a popover under it.
 ///
 /// - The field shows a line sample, the style's name (Solid, Dashed, Dotted, Custom; "No Color" while
-///   [`stroked`](Self::stroked) is false) and a chevron. Its accessible name is the title, "Stroke Options", with the
-///   style's name as its value.
+///   [`stroked`](Self::stroked) is false) and a chevron. Its accessible name and tooltip are the title, "Stroke
+///   Options", with the style's name as its value.
 /// - A click, Enter or Space opens the popover below the field and focus moves into it; Escape closes it and returns
 ///   focus to the field; a press outside closes it and reaches nothing under it. It closes when the
 ///   [`target`](Self::target) changes and when the field is disabled.
@@ -122,6 +122,7 @@ impl<'a> StrokeButton<'a> {
 
 impl Component for StrokeButton<'_> {
     const ROLE: Role = Role::BUTTON;
+    const SHOWS_LABEL: bool = false;
     type Style = StrokeButtonStyle;
     type Output = EditResponse<StrokeStyle>;
 

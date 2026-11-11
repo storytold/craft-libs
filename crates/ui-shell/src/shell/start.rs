@@ -379,6 +379,7 @@ fn recent_section(
                     let Some(file) = file_of(path) else { return Tile::new(Label::Empty) };
                     page.tile(&file.name, page.age(file.opened), page.picture(ThumbKey::Recent(file.path.clone()), file.thumbnail))
                         .corner_action(IconId::new("close"), StartRecentCommands::Remove)
+                        .tooltip(file.path.display().to_string())
                 });
                 let corner: Vec<PathBuf> = out
                     .response
@@ -401,7 +402,7 @@ fn recent_section(
                     .natural_height(true)
                     .show_items(ui, &source, &mut |path, _| {
                         let Some(file) = file_of(path) else { return ListRow::new(Label::Empty) };
-                        let row = ListRow::new(Label::from(file.name.clone())).detail(folder_of(&file.path));
+                        let row = ListRow::new(Label::from(file.name.clone())).detail(folder_of(&file.path)).tooltip(file.path.display().to_string());
                         let row = match page.age(file.opened) {
                             Some(age) => row.trailing(age),
                             None => row,

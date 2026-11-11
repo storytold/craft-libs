@@ -31,6 +31,7 @@ craft_ui::words! {
         exactly: "tableProperties.exactly" = "Exactly";
         column_width: "tableProperties.columnWidth" = "Column Width";
         distribute_rows: "tableProperties.distributeRows" = "Distribute Rows Evenly";
+        distribute_rows_tip: "tableProperties.distributeRowsTip" = "Equal fixed heights for the selected rows; cell text may become overset.";
         cell_text: "tableProperties.cellText" = "Cell Text";
         cell_align: "tableProperties.cellAlign" = "Vertical Alignment";
         align_top: "tableProperties.alignTop" = "Top";
@@ -237,7 +238,8 @@ impl<'a> TableProperties<'a> {
             set(choose(ui, &words.row_height_mode, v.row_height_mode, &modes, TableChange::RowHeightMode));
             set(length(ui, &words.row_height, v.row_height, unit, TableChange::RowHeight));
             set(length(ui, &words.column_width, v.column_width, unit, TableChange::ColumnWidth));
-            set(button(ui, &words.distribute_rows, true, TableChange::DistributeRows));
+            let distribute = Button::new(words.distribute_rows.clone()).tooltip(words.distribute_rows_tip.clone()).show(ui);
+            set(clicked(&distribute).then_some(TableChange::DistributeRows));
             GroupBox::new(words.cell_text.clone(), None).show(ui, |ui, _| {
                 let aligns = [
                     Entry::new(CellAlign::Top, words.align_top.clone()),

@@ -130,6 +130,9 @@ pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>) -> Placed {
     leaf.resettable = reset.is_some();
     leaf.differs = reset.is_some_and(|fact| fact.differs);
     leaf.colon = colon(env, input);
+    if let Some(tooltip) = input.side.tooltip.clone() {
+        leaf = leaf.tooltip(tooltip);
+    }
     match &input.side.kind {
         LabelKind::Glyph(glyph) => leaf.glyph = Some(glyph.resolved(env)),
         _ => {

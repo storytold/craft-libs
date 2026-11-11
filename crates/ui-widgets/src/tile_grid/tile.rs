@@ -601,6 +601,10 @@ impl Component for Tile<'_> {
     type Style = TileStyle;
     type Output = TileOutput;
 
+    fn shows_label(&self) -> bool {
+        self.caption != CaptionPlace::None
+    }
+
     fn style(cx: &StyleCx<'_>, key: TileStyleKey) -> TileStyle {
         let tokens = cx.tokens;
         let colors = &tokens.color;

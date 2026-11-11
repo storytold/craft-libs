@@ -4,8 +4,9 @@
 //! delay, and at once while a neighbour's tooltip was hiding a moment ago. A press, a menu that owns keys and a
 //! running drag hide it.
 //!
-//! A component with no tooltip shows its label as the tooltip when its type declares `Component::SHOWS_LABEL` false
-//! (or an instance does, through `Component::shows_label`): the label is then its only name and no text paints it.
+//! A component with no tooltip shows its own label as the tooltip when its type declares `Component::SHOWS_LABEL`
+//! false (or an instance does, through `Component::shows_label`): no text paints that name, inside a field or not. A
+//! component with no label of its own is named by its field label, which is on screen, and shows none.
 //! A component that paints its label shows it whole as the tooltip when the paint cut it.
 
 use super::cx::{Decls, PartExtras};
@@ -68,8 +69,8 @@ fn spec_text(env: &crate::runtime::env::EnvView<'_>, spec: &TooltipSpec, enabled
 }
 
 /// The text the component's own tooltip shows, or `None` when it has none: the tooltip's text, or its disabled text
-/// while disabled, with the bound command's chord; else the full label when the paint cut it, or when the component
-/// declares it paints no label (`shows_label`) and no field label names it.
+/// while disabled, with the bound command's chord; else the full label when the paint cut it, or its own label when
+/// the component declares it paints no label (`shows_label`).
 fn text_of<C: Component>(cx: &Cx<'_, C>, shows_label: bool) -> Option<String> {
     let core = &cx.core;
     let base = match core.resolved.tooltip.map(|tooltip| tooltip.spec()) {
@@ -78,7 +79,7 @@ fn text_of<C: Component>(cx: &Cx<'_, C>, shows_label: bool) -> Option<String> {
             let paint = core.paint.borrow();
             match paint.elided.clone() {
                 Some(full) => full,
-                None if !shows_label && unnamed_by_field(core) => core.resolved.label.to_owned(),
+                None if !shows_label && !core.resolved.label.is_empty() => core.resolved.label.to_owned(),
                 None => return None,
             }
         }
@@ -88,12 +89,6 @@ fn text_of<C: Component>(cx: &Cx<'_, C>, shows_label: bool) -> Option<String> {
         Some(chord) => format!("{base} ({})", chord.display(platform)),
         None => base,
     })
-}
-
-/// Whether the label is non-empty and no field label shows the component's name, so the label is the only visible
-/// name a tooltip can give.
-fn unnamed_by_field(core: &super::CxCore<'_>) -> bool {
-    !core.resolved.label.is_empty() && crate::runtime::access::scope::field_label(&core.ctx).is_none()
 }
 
 /// A part's tooltip, for the part the pointer is over or the keyboard is on.

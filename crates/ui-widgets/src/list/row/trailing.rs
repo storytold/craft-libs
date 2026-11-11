@@ -44,8 +44,8 @@ pub(super) type HostedShow<'a> = Box<dyn FnOnce(&mut PaintUi<'_>, usize, Rect) +
 
 /// What a trailing item is.
 pub(in crate::list) enum TrailingItem<'a> {
-    /// A caption-role text as wide as it measures.
-    Text(Label),
+    /// A caption-role text as wide as it measures; a short mark carries the `name` it stands for, its tooltip.
+    Text { text: Label, name: Option<Label> },
     /// An icon of the row's icon size, named for the screen reader and the tooltip.
     Icon { icon: IconSpec<'static>, name: Label },
     /// A pressable face of the row's icon size.

@@ -216,7 +216,7 @@ impl ListRow<'_> {
     /// The widths of the trailing items: as `text_width` measures a text, the icon side for the others.
     pub(super) fn item_widths(&self, sizes: &Sizes, text_width: &dyn Fn(&TextRun<'_>) -> f32) -> Vec<(f32, bool)> {
         let width = |item: &TrailingItem| match item {
-            TrailingItem::Text(text) => text_width(&trailing_run(text)),
+            TrailingItem::Text { text, .. } => text_width(&trailing_run(text)),
             TrailingItem::Icon { .. } | TrailingItem::Part { .. } => sizes.icon,
             TrailingItem::Hosted(_) => sizes.field,
         };

@@ -118,6 +118,10 @@ impl Component for LabelLeaf {
     type Style = LabelStyle;
     type Output = LabelOutput;
 
+    fn shows_label(&self) -> bool {
+        self.glyph.is_none()
+    }
+
     fn style(cx: &StyleCx<'_>, _: LabelLeafStyleKey) -> LabelStyle {
         LabelStyle {
             metrics: Metrics::new(),

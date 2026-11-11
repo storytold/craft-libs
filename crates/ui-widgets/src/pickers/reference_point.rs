@@ -178,8 +178,10 @@ impl Component for ReferencePoint<'_> {
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let current = Self::position_of(cx.value());
-        for at in 0..Anchor9::ALL.len() {
-            let part = cx.part(Self::part(at), Self::cell_rect(rect, at)).sense(Sense::CLICK | Sense::FOCUS).focusable();
+        let words = cx.words::<PickerWords>();
+        let names: Vec<Label> = Anchor9::ALL.iter().map(|point| Self::name_of(*point, &words).clone()).collect();
+        for (at, name) in names.into_iter().enumerate() {
+            let part = cx.part(Self::part(at), Self::cell_rect(rect, at)).sense(Sense::CLICK | Sense::FOCUS).focusable().tooltip(name);
             if current == Some(at) {
                 part.flags(Flags::CHECKED).selected();
             }

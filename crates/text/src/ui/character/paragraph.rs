@@ -217,6 +217,7 @@ impl<'a> ParagraphControls<'a> {
                 let start = LengthRow {
                     label: words.start_indent.clone(),
                     glyph: GlyphLabel::text("→|"),
+                    hint: None,
                     value: values.start_indent,
                     range: INDENT_RANGE,
                     presets: &[],
@@ -226,6 +227,7 @@ impl<'a> ParagraphControls<'a> {
                 let end = LengthRow {
                     label: words.end_indent.clone(),
                     glyph: GlyphLabel::text("|←"),
+                    hint: None,
                     value: values.end_indent,
                     range: INDENT_RANGE,
                     presets: &[],
@@ -235,6 +237,7 @@ impl<'a> ParagraphControls<'a> {
                 let first = LengthRow {
                     label: words.first_line_indent.clone(),
                     glyph: GlyphLabel::text("¶→"),
+                    hint: None,
                     value: values.first_line_indent,
                     range: INDENT_RANGE,
                     presets: &[],
@@ -246,6 +249,7 @@ impl<'a> ParagraphControls<'a> {
                 let before = LengthRow {
                     label: words.space_before.clone(),
                     glyph: GlyphLabel::text("↑¶"),
+                    hint: None,
                     value: values.space_before,
                     range: SPACE_RANGE,
                     presets: &[],
@@ -255,6 +259,7 @@ impl<'a> ParagraphControls<'a> {
                 let after = LengthRow {
                     label: words.space_after.clone(),
                     glyph: GlyphLabel::text("¶↓"),
+                    hint: None,
                     value: values.space_after,
                     range: SPACE_RANGE,
                     presets: &[],
