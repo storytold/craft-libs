@@ -27,6 +27,11 @@ use crate::{AudioBuffer, AudioError, AudioInfo, ChannelLayout, CodecId, Containe
 /// takes its frame length from the file (encoders use 4096).
 const MAX_PACKET_FRAMES: u64 = 1 << 20;
 
+/// The most samples (frames x channels) a packet may declare: the PCM decoder allocates
+/// that many for its output up front, so a CAF with thousands of channels and a long packet could
+/// otherwise claim gigabytes before a sample is decoded (64 MiB of `f32`). Ports soundcraft #1332.
+const MAX_PACKET_SAMPLES: u64 = 1 << 24;
+
 /// How far [`first_marker`] looks for the first format marker: the same 1 MiB a default symphonia
 /// probe scans.
 const MAX_PREFIX_SCAN: usize = 1 << 20;
@@ -615,7 +620,13 @@ impl Symph {
             let t = reader.tracks().iter().find(|t| t.id == track_id).ok_or_else(|| AudioError::Malformed("track vanished".into()))?;
             let params = audio_params(t).cloned().ok_or_else(|| AudioError::Malformed("track vanished".into()))?;
             let alac = params.extra_data.as_deref().filter(|_| params.codec == CODEC_ID_ALAC).and_then(|d| be_u32(d, 0));
-            if params.max_frames_per_packet.into_iter().chain(alac.map(u64::from)).any(|n| n > MAX_PACKET_FRAMES) {
+            let channels = u64::from(info.channels);
+            if params
+                .max_frames_per_packet
+                .into_iter()
+                .chain(alac.map(u64::from))
+                .any(|n| n > MAX_PACKET_FRAMES || n.saturating_mul(channels) > MAX_PACKET_SAMPLES)
+            {
                 return Err(AudioError::Malformed("the file declares packets far longer than any codec uses".into()));
             }
             let decoder = symphonia::default::get_codecs().make_audio_decoder(&params, &decoder_options()).map_err(map_err)?;
