@@ -287,7 +287,7 @@ fn an_account_whose_entry_is_gone_reads_as_nobody_signed_in() {
 fn an_active_account_that_is_no_longer_listed_reads_as_nobody_signed_in() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join(paths::FILE);
-    let list = accounts::Accounts { format: accounts::FORMAT, accounts: Vec::new(), active: Some("vanished".to_owned()) };
+    let list = accounts::Accounts { format: accounts::FORMAT, accounts: Vec::new(), active: Some("vanished".to_owned()), tombstones: Vec::new() };
     accounts::write(&path, &list).unwrap();
     let store = Store::at(Some(dir.path().to_path_buf()), Memory::new());
     assert!(matches!(store.shared(), Shared::None));
