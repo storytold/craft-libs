@@ -55,6 +55,8 @@ pub struct VariantParts {
     pub fill: Stateful<StyleColor>,
     /// The text and icon colour per state.
     pub text: Stateful<StyleColor>,
+    /// The colour of secondary glyphs per state.
+    pub muted: Stateful<StyleColor>,
     /// The edge per state.
     pub edge: Option<Stateful<StyleColor>>,
     /// The corner radius.
@@ -366,7 +368,13 @@ impl<'a> StyleCx<'a> {
             RadiusStep::Pill => radius.pill,
             _ => radius.control,
         };
-        VariantParts { fill: states(look.fill), text: states(look.text), edge: look.edge.map(states), radius: UiTokens::corner(px) }
+        VariantParts {
+            fill: states(look.fill),
+            text: states(look.text),
+            muted: states(look.muted),
+            edge: look.edge.map(states),
+            radius: UiTokens::corner(px),
+        }
     }
 
     /// The token group `G` for this token set: derived from the tokens with the theme's values under `G::PATH` laid

@@ -62,6 +62,9 @@ pub struct VariantLook {
     pub fill: States<Rgba>,
     /// Label and icon per state.
     pub text: States<Rgba>,
+    /// Secondary glyphs (a split button's chevron) per state: muted on a neutral button without fill, the text
+    /// colour where muted ink would not read.
+    pub muted: States<Rgba>,
     /// Edge per state; `None` draws no edge.
     pub edge: Option<States<Rgba>>,
     /// The corner radius step.
@@ -140,12 +143,18 @@ pub(crate) fn variant_pairs() -> Vec<(ColorToken, ColorToken)> {
 impl VariantLook {
     /// A look with no edge and control corners.
     pub const fn new(fill: States<Rgba>, text: States<Rgba>) -> Self {
-        VariantLook { fill, text, edge: None, radius: RadiusStep::Control }
+        VariantLook { fill, text, muted: text, edge: None, radius: RadiusStep::Control }
     }
 
     /// Sets the edge colours.
     pub const fn edge(mut self, edge: States<Rgba>) -> Self {
         self.edge = Some(edge);
+        self
+    }
+
+    /// Sets the colours of secondary glyphs.
+    pub const fn muted(mut self, muted: States<Rgba>) -> Self {
+        self.muted = muted;
         self
     }
 
@@ -166,6 +175,8 @@ impl VariantLook {
         let (soft_fill, fg, edge, solid, solid_hover, solid_pressed, on_solid) =
             (c.get(t.soft_fill), c.get(t.fg), c.get(t.edge), c.get(t.solid), c.get(t.solid_hover), c.get(t.solid_pressed), c.get(t.on_solid));
         let button = RadiusStep::Button;
+        // A neutral button without fill shows its secondary glyphs muted; a toned one keeps its tone.
+        let muted = if tone == Tone::Neutral { text(c.text.muted) } else { text(fg) };
         match emphasis {
             Emphasis::Solid => VariantLook::new(States::new(solid, solid_hover, solid_pressed, c.state.disabled_fill), text(on_solid)).radius(button),
             Emphasis::Soft => VariantLook::new(States::new(soft_fill, soft_fill, soft_fill, c.state.disabled_fill), text(fg))
@@ -174,9 +185,9 @@ impl VariantLook {
             // A neutral outline darkens to the strongest ink under the pointer and the press; a toned one keeps its edge.
             Emphasis::Outline => {
                 let lit = if tone == Tone::Neutral { c.text.normal } else { edge };
-                VariantLook::new(state_fill, text(fg)).edge(States::new(edge, lit, lit, c.line.divider)).radius(button)
+                VariantLook::new(state_fill, text(fg)).muted(muted).edge(States::new(edge, lit, lit, c.line.divider)).radius(button)
             }
-            Emphasis::Ghost => VariantLook::new(state_fill, text(fg)).radius(button).edge(flat(clear)),
+            Emphasis::Ghost => VariantLook::new(state_fill, text(fg)).muted(muted).radius(button).edge(flat(clear)),
         }
     }
 }

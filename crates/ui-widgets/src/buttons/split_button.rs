@@ -39,6 +39,8 @@ pub struct SplitButtonStyle {
     face: FaceLook,
     /// What each part adds over the surface: clear at rest, the variant's hover and pressed fills.
     part_fill: Stateful<StyleColor>,
+    /// The chevron: the variant's secondary-glyph ink, muted on a neutral button without fill.
+    chevron: Stateful<StyleColor>,
     /// The line between the parts, in the variant's edge colour.
     divider: Stateful<StyleColor>,
     /// The divider's gap from the top and bottom edges.
@@ -107,6 +109,7 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
         let (fill, clear) = (parts.fill.off, cx.color(craft_theme::Rgba::TRANSPARENT));
         surface.fill = Stateful::new(fill.rest).off(States::new(fill.rest, fill.rest, fill.rest, fill.disabled));
         let divider = parts.edge.unwrap_or_else(|| Stateful::new(clear));
+        let chevron = parts.muted;
         let (text, icon) = face::ink(cx);
         SplitButtonStyle {
             surface,
@@ -116,6 +119,7 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
             icon,
             face: FaceLook::of(cx),
             part_fill: Stateful::new(clear).off(States::new(clear, fill.hover, fill.pressed, clear)),
+            chevron,
             divider,
             divider_inset: cx.tokens.space.gap.inline,
             radius: parts.radius,
@@ -195,7 +199,7 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
         let draw = ui.draw();
         let side = cx.style.icon.side;
         let chevron = Rect::from_center_size(arrow.center(), Vec2::splat(side));
-        draw.icon(chevron, &crate::controls::disclosure::DisclosureGlyph::menu_button().color(cx.resolve(&cx.style.icon.color)));
+        draw.icon(chevron, &crate::controls::disclosure::DisclosureGlyph::menu_button().color(cx.resolve(&cx.style.chevron)));
         let x = if rtl { arrow.right() } else { arrow.left() };
         let x = draw.pixel_centre(x);
         let inset = cx.style.divider_inset;
