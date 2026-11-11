@@ -1,0 +1,16 @@
+[package]
+name = "craft-svg-paths"
+description = "SVG geometry reader: shapes, transforms, use/symbol instances and the CSS cascade, as Bézier paths in millimetres"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+kurbo = { workspace = true }
+roxmltree = "0.21.2"
+thiserror = { workspace = true }

@@ -126,3 +126,28 @@ fn twelve_bit_image_matches_libjpeg_turbo() {
 // Observed: mean 0.50, max 2.46 (of 4095).
 const MAX_MEAN_12: f64 = 0.75;
 const MAX_ABS_12: f64 = 4.0;
+
+/// Every band of each Huffman-coded 8-bit test image, read in order, joined.
+fn bands_of(bytes: &[u8]) -> (Vec<u8>, bool) {
+    let bands = craft_jpeg::Bands::new(bytes, &Limits::default(), None).unwrap_or_else(|e| panic!("bands: {e}"));
+    let mut reader = bands.reader();
+    let mut out = Vec::new();
+    while let Some(band) = reader.next_band().unwrap_or_else(|e| panic!("band: {e}")) {
+        out.extend_from_slice(band.samples);
+    }
+    (out, reader.damaged())
+}
+
+/// The sequential Huffman-coded 8-bit test images (4:2:0 colour, gray, and gray from the
+/// arithmetic white-tail test) decode in bands to exactly the whole-image decode's samples.
+#[test]
+fn baseline_images_decode_in_bands_as_whole() {
+    for name in ["testorig.jpg", "testimgari-huffman.jpg", "whitetail-huffman.jpg"] {
+        let bytes = fixture(name);
+        let whole = decode_clean(name);
+        let Samples::U8(px) = &whole.samples else { panic!("{name}: expected 8-bit samples") };
+        let (bands, damaged) = bands_of(&bytes);
+        assert!(!damaged, "{name}");
+        assert!(&bands == px, "{name}: bands differ from the whole-image decode");
+    }
+}
