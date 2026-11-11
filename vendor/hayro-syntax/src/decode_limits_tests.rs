@@ -142,6 +142,35 @@ fn ordinary_stream_expansion_is_document_local_and_keeps_caller_budget() {
 }
 
 #[test]
+fn uncanceled_open_preserves_stream_limits_and_repair_results() {
+    let cancel = crate::Cancellation::new(|| false);
+    for input in [ordinary_stream_pdf(), object_stream_pdf(false).0, object_stream_pdf(true).0] {
+        for cap in [0, 32, 512, MAX_DECODED_STREAM] {
+            let limits = DecodeLimits::default().with_max_decoded_stream(cap);
+            let normal = Pdf::new_with_limits(input.clone(), limits);
+            let controlled = Pdf::new_with_password_limits_and_cancel(input.clone(), "", limits, &cancel);
+            match (normal, controlled) {
+                (Ok(normal), Ok(controlled)) => {
+                    assert_eq!(controlled.decode_limits(), normal.decode_limits());
+                    assert_eq!(controlled.pages().len(), normal.pages().len());
+                    for object in [40, 41] {
+                        assert_eq!(marker(&controlled, object), marker(&normal, object));
+                    }
+                    let stream = |pdf: &Pdf| {
+                        pdf.xref().get::<Stream<'_>>(ObjectIdentifier::new(4, 0)).map(|s| {
+                            s.decoded().map(|bytes| bytes.into_owned()).map_err(|e| format!("{e:?}"))
+                        })
+                    };
+                    assert_eq!(stream(&controlled), stream(&normal));
+                }
+                (Err(expected), Err(crate::CancellableLoadError::Load(actual))) => assert_eq!(actual, expected),
+                _ => panic!("an uncanceled constructor changed the loading result"),
+            }
+        }
+    }
+}
+
+#[test]
 fn final_known_size_images_keep_their_distinct_pixel_budget() {
     let limits = DecodeLimits::default().with_max_decoded_stream(32);
     let params = ImageDecodeParams { width: 64, height: 1, bpc: Some(8), num_components: Some(1), ..Default::default() };

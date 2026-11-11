@@ -239,7 +239,8 @@ impl PcmFormat {
 /// |---|---|
 /// | AAC | `AudioSpecificConfig` |
 /// | Opus | the `OpusHead` identification header (RFC 7845 §5.1) |
-/// | Vorbis | the three headers, Xiph-laced |
+/// | Vorbis, Theora | the three headers, Xiph-laced |
+/// | Speex | the Speex header |
 /// | FLAC | `fLaC` followed by the metadata blocks (STREAMINFO first) |
 /// | ALAC | the magic cookie (`ALACSpecificConfig`) |
 /// | AC-3 / E-AC-3 | the MP4 `dac3` / `dec3` payload, or empty |

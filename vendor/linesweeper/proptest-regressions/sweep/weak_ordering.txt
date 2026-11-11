@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 9652115745f15b2b647d72abc389e36c8ee3562dfeab63f8075c9135696eac71 # shrinks to perturbations = [Point { perturbation: PointPerturbation { x: RationalPerturbation { eps: 0 }, y: RationalPerturbation { eps: 6687372532051531/72057594037927936 } }, idx: 466820082892447096, next: Base { idx: 0 } }, Point { perturbation: PointPerturbation { x: RationalPerturbation { eps: 0 }, y: RationalPerturbation { eps: 5420508530135135/576460752303423488 } }, idx: 14248258729692824517, next: Base { idx: 0 } }, Superimposition { left: Point { perturbation: PointPerturbation { x: RationalPerturbation { eps: -1501017540037737/18014398509481984 }, y: RationalPerturbation { eps: -8783504785369825/144115188075855872 } }, idx: 9515324635301739004, next: Base { idx: 0 } }, right: Base { idx: 0 } }]
