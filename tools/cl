@@ -11,8 +11,8 @@
     cl doctor                                     check the manifests for drift from the one feature set
     cl cargo <args...>                            cargo through the job pool, no features added
 
-Every cargo command runs through a job-pool launcher when it is on the
-PATH, else plain cargo. CARGO_TARGET_DIR defaults to <worktree>-target when that directory exists beside the worktree.
+Every cargo command runs through the command in CL_LAUNCHER when it is set (for example a wrapper that gives several
+builds on one machine a shared jobserver; docs/development.md "The job pool"), else plain cargo. CARGO_TARGET_DIR defaults to <worktree>-target when that directory exists beside the worktree.
 
 Why one feature set: cargo builds a crate once per distinct feature set, and everything above it again. The gallery
 turns on craft-ui's `app`, the tests `testing` (which includes the snapshot renderer) and the domain crates'
@@ -30,7 +30,7 @@ before every command, it reads a few manifests) reports manifest lines that woul
 import json
 import os
 import re
-import shutil
+import shlex
 import subprocess
 import sys
 
@@ -205,7 +205,7 @@ def run(top, cargo_args):
             fail(f"{arg} refused: {REFUSED[arg]}")
     env = dict(os.environ)
     target = target_dir(top, env)
-    launcher = ["job-pool"] if shutil.which("job-pool") else []
+    launcher = shlex.split(env.get("CL_LAUNCHER", ""))
     cmd = launcher + ["cargo"] + cargo_args
     print("cl: " + " ".join(cmd) + f"  (target {target})", file=sys.stderr)
     sys.stdout.flush()

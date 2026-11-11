@@ -52,8 +52,8 @@ No workflow runs the tests of: craft-behavior, craft-host and craft-ui-macros; t
 
 ## The job pool
 
-On the shared build box every cargo runs through `job-pool` (`~/.local/bin`), which gives all builds one jobserver of 16 tokens through `MAKEFLAGS`: a build alone gets every core, builds together share them and never exceed the count. Elsewhere, plain cargo does the same for one build at a time.
+cargo gives each build a jobserver with one token per core, so a build alone uses the whole machine, but several builds at once (worktrees, agents) each take every core and slow each other down. To share one job pool between them, set `CL_LAUNCHER` to a command that runs its arguments with a shared jobserver in `MAKEFLAGS` (cargo joins a jobserver it finds there). `cl` runs every cargo command through that command; without `CL_LAUNCHER` it runs cargo directly.
 
 ## A new worktree's first build
 
-A new target directory builds the dependencies once (about 240 crates, 2–3 minutes with 16 cores) and then the framework for the first crate you work on (contract, widgets, panels, canvas, patterns, shell: another 1–2 minutes). `seed-target` on the box hardlinks the dependencies from a warm target directory, so only the framework is paid. After that, a one-line edit in a framework crate rebuilds that crate (seconds) and its test binary; a domain crate's test binary after a framework edit takes about 25 s (the chain above the edit at opt-level 0).
+A new target directory builds the dependencies once (about 240 crates, 2–3 minutes with 16 cores) and then the framework for the first crate you work on (contract, widgets, panels, canvas, patterns, shell: another 1–2 minutes). After that, a one-line edit in a framework crate rebuilds that crate (seconds) and its test binary; a domain crate's test binary after a framework edit takes about 25 s (the chain above the edit at opt-level 0).
