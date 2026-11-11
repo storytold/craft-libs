@@ -106,6 +106,9 @@ fn read_at(bytes: &[u8], limits: Limits, budget: &mut Budget, base: Affine, dept
 fn read_archive(archive: &mut Archive, budget: &mut Budget, base: Affine, depth: usize) -> Result<Document, Error> {
     let doc = archive.read("doc.dat")?;
     let s = stream::parse(&doc)?;
+    // The parsed stream owns copies of all it needs: the inflated bytes (hundreds of megabytes
+    // for a large document) are not held while the model is built.
+    drop(doc);
     let mut reader = Reader::new(&s, archive, base, depth);
     reader.budget = *budget;
     let document = reader.document();

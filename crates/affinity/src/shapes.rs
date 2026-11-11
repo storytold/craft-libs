@@ -175,14 +175,22 @@ pub(crate) fn shape(r: &mut Reader, shape: ObjId, b: [f64; 4], world: Affine) ->
         }
     };
     let mut path = Path { subpaths: vec![sub] };
+    let mut multi = false;
     if class == Tag::of(b"ShCg") {
         let hole = num(r, shape, b"Hole").unwrap_or(0.3).clamp(0.0, 0.9);
         if hole > 0.0 {
             path.subpaths.push(ellipse(cx, cy, rx * hole, ry * hole));
         }
-        return Some((path, true));
+        multi = true;
     }
-    Some((path, false))
+    // A box whose size overflows (finite corners far apart) gives infinite or NaN outline points;
+    // its corners are finite, so the box itself stands in.
+    let finite = |p: &Point| p.x.is_finite() && p.y.is_finite();
+    if !path.subpaths.iter().all(|s| finite(&s.start) && s.segments.iter().flatten().all(finite)) {
+        r.warn("a parametric shape too large to compute (imported as its box)");
+        return Some((Path { subpaths: vec![rectangle_sub(x0, y0, x1, y1)] }, false));
+    }
+    Some((path, multi))
 }
 
 fn cloud(cx: f64, cy: f64, rx: f64, ry: f64, bubbles: usize) -> SubPath {
@@ -243,8 +251,11 @@ fn callout_rect(r: &Reader, shape: ObjId, [x0, y0, x1, y1]: [f64; 4], _ellipse: 
     let tail_w = num(r, shape, b"TlWd").unwrap_or(0.1).clamp(0.02, 0.8) * w;
     let tip_x = x0 + num(r, shape, b"TlRP").unwrap_or(0.5).clamp(0.0, 1.0) * w;
     let base_x = x0 + num(r, shape, b"TlEP").unwrap_or(0.4).clamp(0.0, 1.0) * w;
-    let a = (base_x - tail_w / 2.0).clamp(x0, x1);
-    let c = (base_x + tail_w / 2.0).clamp(x0, x1);
+    // A box stored right to left (x0 > x1) would make `clamp` panic: keep the tail inside the
+    // box's extent either way.
+    let (left, right) = (x0.min(x1), x0.max(x1));
+    let a = (base_x - tail_w / 2.0).clamp(left, right);
+    let c = (base_x + tail_w / 2.0).clamp(left, right);
     let body_bottom = y1 - tail_h;
     let radius = (w.min(body_bottom - y0) * 0.12).max(0.0);
     // The three contours overlap inside the fill; no internal edge is visible in a filled shape.

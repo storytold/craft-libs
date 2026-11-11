@@ -249,3 +249,34 @@ fn null_slots_of_shared_lists_are_charged_for_every_visit() {
     let document = read(vec![group(100, vec![F::Null; 1_000]), group(200, vec![F::Ref(100); 20])], 200);
     assert_eq!((document.spreads[0].nodes[0].children.len(), document.warnings.len()), (20, 0));
 }
+
+fn boxed(class: &[u8; 4], b: Vec<f64>) -> F {
+    F::Def(100, vec![tag(b"ShpN")], vec![(tag(b"ShpB"), F::F64s(b)), (tag(b"Shpe"), F::Def(10_100, vec![tag(class)], vec![]))])
+}
+
+/// A callout rectangle (`ShCR`) whose box runs right to left (x0 > x1) panicked in `f64::clamp`
+/// (min > max), found by the `stream` fuzz target. It reads, inside its box.
+#[test]
+fn callout_rectangle_with_a_reversed_box_reads_inside_it() {
+    for b in [vec![10.0_f64, 0.0, 0.0, 20.0], vec![6.8e38, 0.0, 10.0, 20.0]] {
+        let (lo, hi) = (b[0].min(b[2]), b[0].max(b[2]));
+        let document = read(vec![boxed(b"ShCR", b)], 100);
+        let sub = &path(&document).subpaths[0];
+        let points = std::iter::once(&sub.start).chain(sub.segments.iter().flatten());
+        assert!(points.into_iter().all(|q| q.x.is_finite() && q.y.is_finite() && (lo..=hi).contains(&q.x)), "{sub:?}");
+    }
+}
+
+/// A box with finite corners whose width overflows gave infinite and NaN outline points. Such a
+/// shape imports as its box, with a warning.
+#[test]
+fn a_shape_too_large_to_compute_imports_as_its_box() {
+    for class in [b"ShCR", b"ShpE", b"ShCg"] {
+        let document = read(vec![boxed(class, vec![f64::MAX, 0.0, -f64::MAX, 20.0])], 100);
+        let sub = &path(&document).subpaths;
+        assert_eq!(sub.len(), 1, "{class:?}");
+        let corners: Vec<Point> = std::iter::once(sub[0].start).chain(sub[0].segments.iter().map(|s| s[2])).collect();
+        assert!(corners.iter().all(|p| p.x.abs() == f64::MAX && (p.y == 0.0 || p.y == 20.0)), "{class:?}: {corners:?}");
+        assert!(document.warnings.iter().any(|w| w.contains("too large to compute")), "{:?}", document.warnings);
+    }
+}
