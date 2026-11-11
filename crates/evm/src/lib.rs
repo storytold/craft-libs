@@ -434,7 +434,14 @@ pub fn analyze(code: &[u8]) -> Result<EvmInterface, FormatError> {
             let Some(n) = at(k + d) else { break };
             let kind = match n.op {
                 0x60 if imm(body, n) == [0xe0] && op_at(k + d + 1) == Some(0x1c) => Some("shr-224"),
-                0x7c if imm(body, n).first() == Some(&1) && imm(body, n).iter().skip(1).all(|&b| b == 0) => Some("div-2^224"),
+                0x7c if d == 1
+                    && imm(body, n).first() == Some(&1)
+                    && imm(body, n).iter().skip(1).all(|&b| b == 0)
+                    && op_at(k + d + 1) == Some(0x90)
+                    && op_at(k + d + 2) == Some(0x04) =>
+                {
+                    Some("div-2^224")
+                }
                 0x63 if imm(body, n) == [0xff, 0xff, 0xff, 0xff] && (op_at(k + d + 1) == Some(0x16) || op_at(k + d + 2) == Some(0x16)) => Some("and-mask"),
                 _ => None,
             };
@@ -499,13 +506,15 @@ pub fn analyze(code: &[u8]) -> Result<EvmInterface, FormatError> {
             }
         } else if n == 4 {
             // Vyper also loads the selector from memory: PUSH sel, PUSH1 0, MLOAD, EQ, ISZERO …
-            for d in 1..=3 {
-                if op_at(k + d) == Some(0x14) && op_at(k + d + 1) == Some(0x15) && found(k + d + 2).is_some() {
-                    if let Some(next) = at(k + d + 4) {
-                        hit = Some((next.off, k + d + 3, "eq-iszero-fallthrough"));
-                    }
-                    break;
-                }
+            let load = at(k + 1).is_some_and(|p| (p.op == 0x5f || is_push(p.op)) && imm_u64(body, p) == Some(0));
+            if load
+                && op_at(k + 2) == Some(0x51)
+                && op_at(k + 3) == Some(0x14)
+                && op_at(k + 4) == Some(0x15)
+                && found(k + 5).is_some()
+                && let Some(next) = at(k + 7)
+            {
+                hit = Some((next.off, k + 6, "eq-iszero-fallthrough"));
             }
             let direct = matches!(op_at(k + 1), Some(0x10 | 0x11)) && found(k + 2).is_some();
             let via_dup = matches!(op_at(k + 1), Some(0x80..=0x8f)) && matches!(op_at(k + 2), Some(0x10 | 0x11)) && found(k + 3).is_some();
@@ -529,7 +538,9 @@ pub fn analyze(code: &[u8]) -> Result<EvmInterface, FormatError> {
         last_jumpi = Some(jumpi_k);
         let di = index_of(dest);
         let jumpdest_valid = pattern != "eq-jumpi" || di.and_then(at).is_some_and(|x| x.op == 0x5b);
-        let (mutability, reason) = if callvalue_before {
+        let (mutability, reason) = if !jumpdest_valid {
+            ("unknown", "the destination is not a JUMPDEST".to_owned())
+        } else if callvalue_before {
             ("nonpayable", "a CALLVALUE check runs before the dispatcher, so every function refuses payments".to_string())
         } else {
             match di {
@@ -567,10 +578,11 @@ pub fn analyze(code: &[u8]) -> Result<EvmInterface, FormatError> {
         if op_at(k + 1) == Some(0x15) && at(k + 2).is_some_and(|p| is_push(p.op)) && op_at(k + 3) == Some(0x57) {
             receive = "present";
         }
-        let lt = (1..=3).find(|d| op_at(k + d) == Some(0x10));
-        if let Some(d) = lt
-            && at(k + d + 1).is_some_and(|p| is_push(p.op))
-            && op_at(k + d + 2) == Some(0x57)
+        // LT pops the size first in PUSH 4, CALLDATASIZE, LT.
+        if k.checked_sub(1).and_then(at).is_some_and(|p| is_push(p.op) && imm_u64(body, p) == Some(4))
+            && op_at(k + 1) == Some(0x10)
+            && at(k + 2).is_some_and(|p| is_push(p.op))
+            && op_at(k + 3) == Some(0x57)
         {
             short_calldata = true;
         }
