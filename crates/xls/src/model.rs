@@ -405,6 +405,10 @@ pub struct Workbook {
     pub calc: Calc,
     /// The worksheets, in workbook order. Chart, macro and dialog sheets are left out.
     pub sheets: Vec<Sheet>,
+    /// The sheet the workbook was saved on, as an index into `sheets`: `None` when the file has
+    /// no Window1 record or names a sheet that was not read. It may be a hidden sheet; Excel
+    /// then opens on the first visible one.
+    pub active_sheet: Option<usize>,
     pub names: Vec<DefinedName>,
     /// The font of the Normal style: what an unformatted cell shows. `None` when the file has
     /// no font at all.

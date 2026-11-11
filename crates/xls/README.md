@@ -21,6 +21,7 @@ No third-party implementation was consulted.
   shared formulas expanded per cell, array formulas (on their top left cell, with their range),
   3-D references, defined names, add-in and newer functions called by name.
 - The 1904 date flag, "precision as displayed", calculation mode and iteration settings.
+- The sheet the workbook was saved on (Window1).
 - Cell formats: one `CellFormat` per XF record with its font, number format code, alignment,
   borders, fill and protection, and palette colours resolved to RGB; the Normal font;
   user-defined cell styles.

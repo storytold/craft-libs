@@ -661,3 +661,43 @@ fn cell_sheet_and_merge_caps_are_enforced() {
     records.extend(rec(0x00E5, &merges(1)));
     assert!(matches!(read_xls(&one_sheet_with(&records)), Err(Error::TooLarge(_))));
 }
+
+/// The sheet a workbook was saved on (Window1's `itabCur`) is counted over all the file's
+/// sheets, skipped ones included.
+#[test]
+fn reports_the_sheet_it_was_saved_on() {
+    // BoundSheet: position, visibility (0 visible, 1 hidden), kind, name.
+    let boundsheet = |pos: u32, state: u8, name: &str| rec(0x0085, &cat(&[&pos.to_le_bytes(), &[state, 0, name.len() as u8, 0], name.as_bytes()]));
+    let window1 = |tab: u16| rec(0x003D, &u16s(&[0, 0, 0x4000, 0x2000, 0x0038, tab, 0, 1, 600]));
+    let dialog = cat(&[&bof(0x0010), &rec(0x0081, &[0x10, 0x00]), &eof()]);
+    let worksheet = |n: f64| cat(&[&bof(0x0010), &rec(0x0081, &[0x01, 0x04]), &rec(0x0203, &cat(&[&cell(0, 0, 0), &n.to_le_bytes()])), &eof()]);
+    // Dialog1 (skipped), Sheet1, Sheet2, Hidden (hidden).
+    let book = |window: &[u8]| {
+        let globals = |p: [u32; 4]| {
+            cat(&[
+                &bof(0x0005),
+                window,
+                &boundsheet(p[0], 0, "Dialog1"),
+                &boundsheet(p[1], 0, "Sheet1"),
+                &boundsheet(p[2], 0, "Sheet2"),
+                &boundsheet(p[3], 1, "Hidden"),
+                &eof(),
+            ])
+        };
+        let (d, s1, s2, h) = (dialog.clone(), worksheet(1.0), worksheet(2.0), worksheet(3.0));
+        let base = globals([0; 4]).len() as u32;
+        let p = [base, base + d.len() as u32, base + (d.len() + s1.len()) as u32, base + (d.len() + s1.len() + s2.len()) as u32];
+        let stream = cat(&[&globals(p), &d, &s1, &s2, &h]);
+        let (wb, _) = read_xls(&compound("Workbook", &stream)).unwrap();
+        wb.active_sheet.map(|i| wb.sheets[i].name.clone())
+    };
+    assert_eq!(book(&window1(2)).as_deref(), Some("Sheet2"), "itabCur 2 is Sheet2, counting the skipped dialog sheet");
+    assert_eq!(book(&window1(1)).as_deref(), Some("Sheet1"));
+    assert_eq!(book(&window1(3)).as_deref(), Some("Hidden"), "a hidden sheet is reported; the caller falls back");
+    assert_eq!(book(&window1(0)), None, "a skipped sheet");
+    assert_eq!(book(&window1(99)), None, "an index past the sheets");
+    assert_eq!(book(&[]), None, "no window record");
+    assert_eq!(book(&rec(0x003D, &u16s(&[0, 0, 0, 0, 0]))), None, "a window record too short for the index");
+    // Only the first window counts.
+    assert_eq!(book(&cat(&[&window1(1), &window1(2)])).as_deref(), Some("Sheet1"));
+}

@@ -164,6 +164,9 @@ struct Globals {
     links: Links,
     names: Vec<Lbl>,
     precision_as_displayed: bool,
+    /// The sheet the workbook was saved on (`itabCur` of the first Window1), counted over every
+    /// BoundSheet8 record.
+    active_tab: Option<u16>,
 }
 
 /// Reads an Excel 97-2003 workbook with the default [`Limits`].
@@ -219,6 +222,7 @@ pub fn read_with(bytes: &[u8], limits: Limits) -> Result<Read, Error> {
     if wb.sheets.is_empty() {
         return Err(invalid("the workbook has no worksheets"));
     }
+    wb.active_sheet = g.active_tab.and_then(|t| model_index.get(usize::from(t)).copied().flatten());
     defined_names(&g, &model_index, &mut wb, &mut report);
     Ok(Read { workbook: wb, warnings: report.warnings })
 }
@@ -284,6 +288,12 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut Report) -> Result<Gl
                 let code = c.chars(cch.min(fit), high)?;
                 budget.text(code.len())?;
                 g.formats.insert(ifmt, code);
+            }
+            // Window1: position, size and flags (five u16), then the active sheet. Only the first
+            // window counts; a record too short for it is ignored.
+            0x003D if g.active_tab.is_none() && c.remaining() >= 12 => {
+                c.skip(10)?;
+                g.active_tab = Some(c.u16()?);
             }
             0x00E0 => g.styles.xf(&mut c, MAX_XFS),
             0x0031 => g.styles.font(&mut c),
