@@ -882,6 +882,15 @@ name = "craft-docpath"
 version = "0.1.0"
 
 [[package]]
+name = "craft-drawingml"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "kurbo 0.13.1",
+ "serde",
+]
+
+[[package]]
 name = "craft-dxf"
 version = "0.1.0"
 dependencies = [
