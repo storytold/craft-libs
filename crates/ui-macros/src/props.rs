@@ -151,13 +151,14 @@ type Forwarded = (&'static str, &'static str, &'static str);
 /// here.
 const COLLECTION: &[Forwarded] = &[
     ("select", "::craft_ui::contract::SelectMode", "What the user can select."),
-    ("reorder", "::craft_ui::contract::ReorderRule", "Rows reorder by dragging and by Alt with the arrow keys."),
+    ("reorder", "::craft_ui::contract::ReorderRule", "Rows reorder by dragging and by the stacking keys (Cmd/Ctrl+[ and ])."),
     ("rename", "bool", "Rows rename in place: a double click on the label, F2 or the rename command opens the editor."),
     (
         "rename_column",
         "::craft_ui::contract::ColumnKey",
         "A double click on this column of a renamable row opens its rename editor; elsewhere on the row it activates.",
     ),
+    ("slow_click_rename", "bool", "A plain click on the label of the only selected row, with no second click following, opens its rename editor."),
     ("columns", "::std::vec::Vec<::craft_ui::contract::ColumnSpec>", "The columns."),
     (
         "sort",

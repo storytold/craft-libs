@@ -11,7 +11,7 @@ mod stories;
 use super::headers::Outline;
 use super::layout::{Around, ArrangeSpacing, GridLayout, Recipe, Slot, TailRow, TileGroup, Tiling, arrange, aspects_of, slot_at};
 use super::tile::AroundPicture;
-use super::{CaptionPlace, Tile, TilePartEvent};
+use super::{CaptionPlace, Tile, TilePartEvent, ZoomStep};
 use crate::contract::{
     Access, Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, ColumnKind, ColumnSpec, Common, Component,
     ContainerProps, Cx, EditResponse, Focus as _, ListDrag, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role, RowState, SelectMode,
@@ -28,7 +28,7 @@ use crate::style::{ComponentStyle, RuleKind, StyleColor, StyleCx};
 use craft_behavior::{
     ColumnKey, ColumnWidth, HitLevel, HitPriority, Intent, ItemSource, Metrics, Mixed, PartKey, PointerButton, PressPhase, Selection, Sense,
 };
-use craft_keymap::Mods;
+use craft_keymap::{Chord, Key, Mods};
 use egui::{CornerRadius, Id, Pos2, Rect, Response, Ui, pos2, vec2};
 use std::cell::RefCell;
 use std::hash::Hash;
@@ -52,6 +52,8 @@ pub enum RatingKeys {
     None,
     /// The digits 1 to 5 rate and 0 clears. Other typed text still moves by type-ahead.
     Digits,
+    /// Cmd/Ctrl with 1 to 5 rates and with 0 clears (Bridge).
+    CommandDigits,
 }
 
 /// What the grid reports besides the collection's events.
@@ -83,6 +85,9 @@ pub enum GridEvent<K> {
         /// The state asked for.
         open: bool,
     },
+    /// Cmd/Ctrl with `=` or `+`, `-` or `0` on a grid that `zooms`: a step of the tile size. Cmd/Ctrl+0 is a rating key
+    /// under `RatingKeys::CommandDigits`, so it clears the rating there instead of resetting the size.
+    Zoom(ZoomStep),
     /// A group header asks for its context menu: a secondary click, the context-menu key or Shift+F10.
     #[non_exhaustive]
     GroupMenu {
@@ -169,7 +174,7 @@ impl TileGridStyle {
 }
 
 /// A grid of tiles: one Tab stop, the selection rules of the collection contract, type-ahead on the tiles' names (with
-/// `type_ahead`), rename in place, drag to reorder, files dropped from the OS, and the request for the app's context
+/// `type_ahead`), rename in place (F2, or a slow second click on the caption of the only selected tile), drag to reorder, files dropped from the OS, and the request for the app's context
 /// menu.
 ///
 /// The picture side is `zoom` times the thumbnail side (the card thumbnail unless `thumb_size` names one): the factor the app's zoom control holds. A card is the
@@ -234,6 +239,10 @@ pub struct TileGrid<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     tail: &'a [TailRow<K>],
     /// Which keys rate the selected tiles.
     rating_keys: RatingKeys,
+    /// The grid reports zoom steps: Cmd/Ctrl with `=`, `-` and `0` as `GridEvent::Zoom`, and Ctrl/Cmd with the wheel or a
+    /// pinch as `CollectionEvent::Zoom`.
+    #[prop(flag)]
+    zooms: bool,
     /// Tiles show a check box and Space toggles the lead tile's check.
     checks: bool,
     /// Which tiles may be renamed; a rename request on another tile does nothing.
@@ -272,12 +281,14 @@ struct Placed {
 }
 
 impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
-    /// A grid named `label`, with multiple selection and equal square cards of the card thumbnail.
+    /// A grid named `label`, with multiple selection and equal square cards of the card thumbnail. Space picks the lead and
+    /// no key rates or zooms; Bridge's keys are `rating_keys(RatingKeys::CommandDigits)`, `space(SpaceAction::Preview)`
+    /// and `zooms()`.
     pub fn new(label: impl Into<Label>) -> Self {
         TileGrid {
             common: Common::new(),
             props: ContainerProps::new().sizing(Sizing::Fill),
-            items: CollectionProps::new().select(SelectMode::Multi),
+            items: CollectionProps::new().select(SelectMode::Multi).slow_click_rename(true),
             selection: None,
             reveal: None,
             justified: false,
@@ -293,6 +304,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
             collapsible: false,
             tail: &[],
             rating_keys: RatingKeys::None,
+            zooms: false,
             checks: false,
             can_rename: None,
             can_drag: None,
@@ -494,13 +506,37 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
-        if self.rating_keys == RatingKeys::Digits {
-            for rating in 0..=MAX_RATING {
-                while cx.intents().take_exact(&Intent::Digit(rating)) {
-                    let keys = self.rated(cx);
-                    if !keys.is_empty() {
-                        self.events.push(GridEvent::Rate { keys, rating });
+        for rating in 0..=MAX_RATING {
+            let mut pressed = 0;
+            match self.rating_keys {
+                RatingKeys::None => {}
+                RatingKeys::Digits => {
+                    while cx.intents().take_exact(&Intent::Digit(rating)) {
+                        pressed += 1;
                     }
+                }
+                RatingKeys::CommandDigits => {
+                    let chord = Chord::new(Mods::CMD, DIGITS[usize::from(rating)]);
+                    cx.claim(chord);
+                    while cx.take_claimed(chord) {
+                        pressed += 1;
+                    }
+                }
+            }
+            for _ in 0..pressed {
+                let keys = self.rated(cx);
+                if !keys.is_empty() {
+                    self.events.push(GridEvent::Rate { keys, rating });
+                }
+            }
+        }
+        if self.zooms {
+            let reset = (self.rating_keys != RatingKeys::CommandDigits).then_some((Key::Num0, ZoomStep::Reset));
+            for (key, step) in [(Key::Equals, ZoomStep::In), (Key::Plus, ZoomStep::In), (Key::Minus, ZoomStep::Out)].into_iter().chain(reset) {
+                let chord = Chord::new(Mods::CMD, key);
+                cx.claim(chord);
+                while cx.take_claimed(chord) {
+                    self.events.push(GridEvent::Zoom(step));
                 }
             }
         }
@@ -668,6 +704,8 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
 
 /// The highest rating a digit key sets.
 const MAX_RATING: u8 = 5;
+/// The keys of the digits 0 to `MAX_RATING`.
+const DIGITS: [Key; 6] = [Key::Num0, Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5];
 
 impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for TileGrid<'_, K> {
     type Key = K;
@@ -686,6 +724,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for TileGrid<'_, K
 
     fn reveal(&self) -> Option<&K> {
         self.reveal.as_ref()
+    }
+
+    fn zooms(&self) -> bool {
+        self.zooms
     }
 
     /// The tiles with a header row before each group, then the tail rows: the rows the item step walks and the layout

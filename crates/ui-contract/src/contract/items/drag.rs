@@ -161,11 +161,26 @@ pub(super) struct Drags<K> {
     pub(super) activate: Option<K>,
     /// The marquee a press on empty space started.
     pub(super) marquee: Option<MarqueeDrag<K>>,
+    /// A plain press on the only selected item of a `slow_click_rename` collection, waiting to become a rename.
+    pub(super) slow: Option<SlowClick<K>>,
+}
+
+/// A press that opens a rename when it ends as a click on the item's label and no second press follows within the
+/// double-click interval.
+#[derive(Clone)]
+pub(super) struct SlowClick<K> {
+    pub(super) key: K,
+    /// Where the press landed, in the rows' layer space.
+    pub(super) at: Pos2,
+    /// The pass's item showed its label under the press.
+    pub(super) on_label: bool,
+    /// When the press ended as a click.
+    pub(super) released: Option<f64>,
 }
 
 impl<K> Default for Drags<K> {
     fn default() -> Self {
-        Drags { grabbed: None, sweep: None, moving: None, over: None, collapse: None, rename: None, activate: None, marquee: None }
+        Drags { grabbed: None, sweep: None, moving: None, over: None, collapse: None, rename: None, activate: None, marquee: None, slow: None }
     }
 }
 

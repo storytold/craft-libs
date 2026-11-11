@@ -129,6 +129,9 @@ pub struct CollectionProps {
     pub rename: bool,
     /// A double click on this column of a renamable item opens its rename editor instead of activating it.
     pub rename_column: Option<ColumnKey>,
+    /// A plain click on the label of the only selected item, with no second click within the double-click interval,
+    /// opens its rename editor (Finder and Bridge on a tile's caption).
+    pub slow_click_rename: bool,
     /// Empty: no columns and no header row.
     pub columns: Vec<ColumnSpec>,
     /// The sorted column and direction; `None` while the rows are unsorted.
@@ -243,6 +246,7 @@ impl CollectionProps {
             reorder: None,
             rename: false,
             rename_column: None,
+            slow_click_rename: false,
             columns: Vec::new(),
             sort: None,
             empty: None,
@@ -312,6 +316,13 @@ impl CollectionProps {
     #[must_use]
     pub fn rename_column(mut self, column: ColumnKey) -> Self {
         self.rename_column = Some(column);
+        self
+    }
+
+    /// A slow second click on the label of the only selected item opens its rename editor.
+    #[must_use]
+    pub const fn slow_click_rename(mut self, on: bool) -> Self {
+        self.slow_click_rename = on;
         self
     }
 

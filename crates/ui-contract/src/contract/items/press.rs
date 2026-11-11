@@ -1,12 +1,15 @@
 //! Presses on rows: select, activate, ask for a row's menu, and the parts an item opens menus from.
 
+use super::drag::SlowClick;
 use super::{ItemsHooks, Placement, RowPress, SECTION};
 use crate::contract::collection::{ActivateOn, CollectionEvent, CollectionProps, ContextMenuRequest, LeadSource, SelectMode};
 use crate::contract::{Collection, Cx, ItemOpener};
 use crate::runtime::egui::response;
 use crate::runtime::env::ArenaId;
 use crate::runtime::focus;
+use crate::runtime::frame;
 use crate::runtime::memory::sub;
+use crate::runtime::motion::Animate as _;
 use craft_behavior::{Flow, ItemLayout, PressPhase, SelectionChange, Sense};
 use egui::{Context, Id, Pos2, Rect, Ui, Vec2};
 
@@ -53,6 +56,8 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         if let PressPhase::Down { start, .. } = cx.core.press.phase
             && local(start.origin).y >= 0.0
         {
+            // A second press, slow or not, ends the wait of the first.
+            self.drags.slow = None;
             let primary = start.button == craft_behavior::PointerButton::Primary;
             if let Some(at) = layout.hit(local(start.origin), offset).filter(|&at| self.source.enabled(at) && layout.shown(at)) {
                 let on_toggle = self.toggle_cell(props, layout, at, offset, local(start.origin));
@@ -74,6 +79,18 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                         _ => false,
                     };
                     let hold = primary && !mods.shift && !mods.cmd && holds && self.holds(at);
+                    let slow = primary
+                        && start.clicks == 1
+                        && mods == craft_keymap::Mods::NONE
+                        && props.slow_click_rename
+                        && props.rename
+                        && !self.source.section_stop(at)
+                        && comp.can_rename(&key)
+                        && self.selected_keys(&self.selection) == std::slice::from_ref(&key);
+                    if slow {
+                        let point = xf.map_or(start.origin, |map| map.to_layer(start.origin));
+                        self.drags.slow = Some(SlowClick { key: key.clone(), at: point, on_label: false, released: None });
+                    }
                     // A secondary press on a row of the selection leaves the selection whole: its menu acts on all of it.
                     let keep = !primary && matches!(Self::select_mode(comp), SelectMode::Multi) && self.holds(at);
                     match column {
@@ -149,6 +166,10 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     let request = self.menu_request(layout, Placement { rect, offset, rtl }, row, local(pos));
                     self.events.push(CollectionEvent::ContextMenu(request));
                 }
+                match self.drags.slow.as_mut() {
+                    Some(slow) if click && slow.on_label => slow.released = Some(frame::clock(&ctx)),
+                    _ => self.drags.slow = None,
+                }
                 if let Some(key) = self.drags.rename.take()
                     && click
                     && let Some(at) = self.index_of(&key)
@@ -173,7 +194,9 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     }
                 }
             }
+            PressPhase::DragStart { .. } => self.drags.slow = None,
             PressPhase::Cancel { .. } => {
+                self.drags.slow = None;
                 self.drags.collapse = None;
                 self.drags.rename = None;
                 self.drags.activate = None;
@@ -203,6 +226,32 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             self.move_lead(at, LeadSource::Pointer);
             let request = self.menu_request(layout, Placement { rect, offset, rtl }, at, local(pos));
             self.events.push(CollectionEvent::ContextMenu(request));
+        }
+        self.slow_click_due(cx);
+    }
+
+    /// The rename a slow click waits for opens once the double-click interval has passed with no second press and the
+    /// item still the only one selected; until then the pass asks to run again at that time.
+    fn slow_click_due(&mut self, cx: &mut Cx<'_, C>) {
+        let Some((key, released)) = self.drags.slow.as_ref().and_then(|slow| Some((slow.key.clone(), slow.released?))) else { return };
+        let at = self.index_of(&key).filter(|_| self.selected_keys(&self.selection) == std::slice::from_ref(&key));
+        let Some(at) = at else {
+            self.drags.slow = None;
+            return;
+        };
+        let due = released + craft_behavior::press::MULTI_CLICK_TIME;
+        if cx.now() >= due {
+            self.drags.slow = None;
+            self.begin_rename(cx, at);
+        } else {
+            cx.wake_at(due);
+        }
+    }
+
+    /// Where the item `key` shows its label this pass: a slow click waiting on it counts only when it landed there.
+    pub(super) fn slow_click_label(&mut self, key: &C::Key, label: Rect) {
+        if let Some(slow) = self.drags.slow.as_mut().filter(|slow| slow.key == *key && slow.released.is_none()) {
+            slow.on_label = label.contains(slow.at);
         }
     }
 

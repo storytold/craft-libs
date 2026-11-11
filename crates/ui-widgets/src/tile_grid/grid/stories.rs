@@ -1,11 +1,11 @@
 //! Stories of `TileGrid`.
 
-use super::{GridEvent, TileGrid, TileGridOutput, TileGroup};
-use crate::contract::ShowCollection as _;
+use super::{GridEvent, RatingKeys, TileGrid, TileGridOutput, TileGroup};
+use crate::contract::{ShowCollection as _, SpaceAction};
 use crate::list::ThumbAspect;
 use crate::testing::pictures::StoryPictures;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
-use crate::tile_grid::{BadgeKind, BadgeSlot, Tile, TileBadge, TileFlag};
+use crate::tile_grid::{BadgeKind, BadgeSlot, Tile, TileBadge, TileFlag, TileZoom};
 use craft_behavior::{DisplayOrder, ItemSource, SizeHint};
 use craft_theme::Srgba;
 use craft_theme::variant::Tone;
@@ -98,32 +98,42 @@ impl ItemSource<usize> for Photos {
     }
 }
 
-fn grid(ui: &mut Ui, data: &mut StoryData, grid: TileGrid<'_, usize>, count: usize) -> TileGridOutput<usize> {
+/// The grid with Bridge's keys (Cmd/Ctrl+digit ratings, Space previews, Cmd/Ctrl + = / - / 0 zoom) at a zoom kept in the
+/// story's data, starting at `zoom`.
+fn grid(ui: &mut Ui, data: &mut StoryData, grid: TileGrid<'_, usize>, count: usize, zoom: f64) -> TileGridOutput<usize> {
     let pictures = StoryPictures::of(ui.ctx());
+    let zoom = data.value("zoom", zoom);
+    let grid = grid.rating_keys(RatingKeys::CommandDigits).space(SpaceAction::Preview).zooms().zoom(*zoom as f32);
     let mut ratings = Ratings::of(data, count);
     let out = grid.show_items(ui, &Photos(count), &mut |key, _| photo(&pictures, *key, ratings.0[*key]));
     ratings.apply(&out.events);
+    let zoom = data.value("zoom", 1.0);
+    for event in &out.events {
+        if let GridEvent::Zoom(step) = event {
+            *zoom = TileZoom::Ladder.step(*zoom, *step);
+        }
+    }
     out
 }
 
 #[story(TileGrid<'static, usize>, covers = [Default, Many], drive = Drive::Never)]
 fn tile_grid_many(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    grid(ui, data, TileGrid::new("Library").empty("No photos"), 60).into()
+    grid(ui, data, TileGrid::new("Library").empty("No photos"), 60, 1.0).into()
 }
 
 #[story(TileGrid<'static, usize>, covers = [One], drive = Drive::Never)]
 fn tile_grid_one(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    grid(ui, data, TileGrid::new("Library").empty("No photos"), 1).into()
+    grid(ui, data, TileGrid::new("Library").empty("No photos"), 1, 1.0).into()
 }
 
 #[story(TileGrid<'static, usize>, covers = [Empty], drive = Drive::Never)]
 fn tile_grid_empty(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    grid(ui, data, TileGrid::new("Library").empty("No photos"), 0).into()
+    grid(ui, data, TileGrid::new("Library").empty("No photos"), 0, 1.0).into()
 }
 
 #[story(TileGrid<'static, usize>, covers = [], drive = Drive::Never)]
 fn tile_grid_justified(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    grid(ui, data, TileGrid::new("Library").justified(), 40).into()
+    grid(ui, data, TileGrid::new("Library").justified(), 40, 1.0).into()
 }
 
 #[story(TileGrid<'static, usize>, covers = [], drive = Drive::Never)]
@@ -134,7 +144,7 @@ fn tile_grid_groups(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         TileGroup::new(GROUP_KEYS[1], 12, 8, "September 2026").detail("8 photos").open(open[1]),
         TileGroup::new(GROUP_KEYS[2], 20, 10, "August 2026").detail("10 photos").open(open[2]),
     ];
-    let out = grid(ui, data, TileGrid::new("Library").groups(&groups).collapsible().zoom(2.0), 30);
+    let out = grid(ui, data, TileGrid::new("Library").groups(&groups).collapsible(), 30, 2.0);
     let open = data.value("open", open);
     for event in &out.events {
         if let GridEvent::GroupOpen { group, open: wanted } = event {

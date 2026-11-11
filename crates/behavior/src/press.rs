@@ -312,7 +312,7 @@ impl Default for PressState {
 }
 
 /// The longest gap between presses that still count as one multi-click, in seconds.
-const MULTI_CLICK_TIME: f64 = 0.3;
+pub const MULTI_CLICK_TIME: f64 = 0.3;
 
 /// The click count of a press at `pos` and `time`, given the previous press `(pos, time, clicks)`: one more when
 /// it follows within [`MULTI_CLICK_TIME`] and `slop` of the previous one, else 1.
