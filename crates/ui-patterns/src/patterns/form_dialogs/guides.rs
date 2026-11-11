@@ -318,7 +318,8 @@ impl<'a> GuideLayoutDialog<'a> {
         let words = env.words::<GuideDialogWords>();
         let preview_word = env.words::<ParamDialogWords>().preview.clone();
         let number_units = env.units();
-        let mut dialog = FormDialog::new(words.layout_title.clone(), values).outer_gesture(true).answers(answers);
+        let mut dialog =
+            FormDialog::new(words.layout_title.clone(), values).outer_gesture(true).answers(answers).shaped(|dialog| dialog.side_buttons(true));
         if let Some(open) = open {
             dialog = dialog.opened(open);
         }
