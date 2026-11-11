@@ -11,7 +11,8 @@
 //! A tab separates the timecode from the code words. Each line's pairs are sent one per frame
 //! starting at its timecode. **Reading** runs a channel-1
 //! CEA-608 decoder (pop-on, roll-up, paint-on; redundant control codes ignored) and emits a cue
-//! whenever the displayed memory changes. **Writing** produces pop-on captions: for each cue the
+//! whenever the displayed memory changes or an End of Caption swaps it, so neighbours with the
+//! same text stay separate cues. **Writing** produces pop-on captions: for each cue the
 //! load (RCL, ENM, PAC + tab offset per row, text) is scheduled into free frames before the cue so
 //! its End of Caption lands exactly on the cue start; an Erase Displayed Memory clears it at the
 //! cue end (omitted when the next caption replaces it). Rows are bottom-aligned (row 15 last),
@@ -116,13 +117,18 @@ impl Decoder {
         if now == cur {
             return;
         }
+        self.close(f);
+        if !now.is_empty() {
+            self.open = Some((f, now));
+        }
+    }
+
+    /// End the cue being shown at frame `f` (dropped if it never reached a frame).
+    fn close(&mut self, f: i64) {
         if let Some((s, text)) = self.open.take()
             && f > s
         {
             self.cues.push((s, f, text));
-        }
-        if !now.is_empty() {
-            self.open = Some((f, now));
         }
     }
 
@@ -186,6 +192,8 @@ impl Decoder {
                 misc::EOC => {
                     std::mem::swap(&mut self.displayed, &mut self.hidden);
                     self.mode = Mode::PopOn;
+                    // each swap presents its own caption, even one reading the same as the last
+                    self.close(f);
                 }
                 misc::CR => {
                     if let Mode::RollUp(n) = self.mode {
@@ -438,14 +446,32 @@ pub fn schedule(doc: &Document) -> BTreeMap<i64, (u8, u8)> {
         }
         let load = load_pairs(&c.text);
         let n = load.len() as i64;
-        // Doubled codes must stay adjacent, so the load is one contiguous run of free frames:
-        // the latest run ending by `s`, else the first run after `cursor` (delaying the caption).
-        let run_free = |occ: &BTreeMap<i64, (u8, u8)>, b: i64| (b..b + n).all(|f| !occ.contains_key(&f));
-        let b = (cursor..=s - n).rev().find(|&b| run_free(&occ, b)).unwrap_or_else(|| (cursor..).find(|&b| run_free(&occ, b)).unwrap_or(cursor));
-        for (k, p) in load.into_iter().enumerate() {
-            occ.insert(b + k as i64, p);
+        // Erasing displayed memory can interrupt loading non-displayed memory. Keep each
+        // doubled control/character code adjacent, but allow pauses between those groups.
+        let plan_load = |mut f: i64| {
+            let mut plan = Vec::with_capacity(load.len());
+            let mut k = 0;
+            while let Some(&p) = load.get(k) {
+                let doubled = (0x10..=0x1f).contains(&p.0) && load.get(k + 1) == Some(&p);
+                let width = if doubled { 2 } else { 1 };
+                while (f..f + width).any(|at| occ.contains_key(&at)) {
+                    f += 1;
+                }
+                for offset in 0..width {
+                    plan.push((f + offset, p));
+                }
+                f += width;
+                k += width as usize;
+            }
+            (plan, f)
+        };
+        // Prefer the latest load that finishes by the requested start; if it cannot fit,
+        // use the earliest available frames rather than waiting until the prior cue ends.
+        let (plan, end) = (cursor..=s - n).rev().map(plan_load).find(|(_, end)| *end <= s).unwrap_or_else(|| plan_load(cursor));
+        for (f, p) in plan {
+            occ.insert(f, p);
         }
-        let mut d = s.max(b + n);
+        let mut d = s.max(end);
         while occ.contains_key(&d) {
             d += 1;
         }
@@ -559,6 +585,24 @@ mod tests {
         let back = parse(&s).unwrap();
         let got: Vec<(i64, i64, &str)> = back.cues.iter().map(|c| (RATE.frame_at(c.start), RATE.frame_at(c.end), c.text.as_str())).collect();
         assert_eq!(got, vec![(60, 120, "Hello, world!"), (120, 200, "Second caption\nwith two lines"), (260, 300, "Ñandú ♪ {x} * café “q”")]);
+    }
+
+    /// Replaying the `scc_back_to_back` proptest failure: neighbours with the same text merged.
+    #[test]
+    fn identical_back_to_back_cues_stay_separate() {
+        let doc = Document {
+            cues: vec![cue(90, 135, "Ht"), cue(135, 180, "Ht"), cue(180, 225, "Ht"), cue(225, 270, "Other"), cue(270, 315, "Ht")],
+            ..Default::default()
+        };
+        // The stream carries each boundary: every cue has its own End of Caption on its start frame.
+        let occ = schedule(&doc);
+        for start in [90, 135, 180, 225, 270] {
+            assert_eq!(occ.get(&start), Some(&(0x14, misc::EOC)), "frame {start}");
+        }
+        let s = write(&doc, false);
+        let back = parse(&s).unwrap();
+        assert_eq!(back.cues, doc.cues);
+        assert_eq!(write(&back, false), s);
     }
 
     #[test]
