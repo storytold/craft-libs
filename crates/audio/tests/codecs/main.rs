@@ -12,6 +12,7 @@ mod ac3_encoder_oracle;
 mod ac3_oracle;
 mod alac;
 mod concealment;
+mod mp3_encoder_oracle;
 mod mpa_oracle;
 mod opus;
 mod routing_oracle;
