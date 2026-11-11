@@ -118,6 +118,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   app menu. Unsaved-document decisions and save prompts stay in each app.
 
 - [`craft-settings`](crates/settings/README.md): `config.toml` settings storage for every app: platform folders, portable mode and overrides, atomic saves while running, backup, damaged-file recovery and schema migrations. Policy in [docs/settings-storage.md](docs/settings-storage.md).
+- [`craft-silhouette-studio`](crates/silhouette-studio/src/lib.rs): bounded, fail-closed reader for Silhouette Studio `.studio` and `.studio3` documents: outlines, line colours and page size in millimetres. Protected designs are refused.
 - [`craft-svg-paths`](crates/svg-paths/src/lib.rs): SVG geometry reader: shapes,
   transforms, `<use>`/`<symbol>` instances and the CSS cascade as Bézier paths in millimetres, each
   tagged by the caller. Import only; not the shared SVG model.

@@ -1163,6 +1163,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-silhouette-studio"
+version = "0.1.0"
+dependencies = [
+ "kurbo 0.13.1",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-svg-paths"
 version = "0.1.0"
 dependencies = [
