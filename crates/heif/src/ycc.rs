@@ -113,6 +113,9 @@ pub enum Upsampling {
     Nearest,
     /// Centred bilinear: chroma sits between its two luma columns (and rows for 4:2:0).
     Bilinear,
+    /// heic-rs's left-sited bilinear: even columns copy their chroma sample, odd ones average
+    /// two, and 4:2:0 rows blend 3:1. Matches Apple's decoder.
+    Sited,
 }
 
 /// One chroma row brought to the full width `w` of luma row `y`.
@@ -121,6 +124,14 @@ fn chroma_at(planes: &Planes<'_>, cr: bool, y: usize, w: usize, mode: Upsampling
     let (xs, ys) = (chroma.x_shift(), chroma.y_shift());
     let (wf, hf) = planes.size();
     let rows = chroma.chroma_size(wf as u32, hf as u32).1 as usize;
+    if mode == Upsampling::Sited {
+        let (r0, r1, w0) = heic_rs::upsample::row_pair(y, rows, chroma);
+        planes.chroma_row(cr, r0, buf)?;
+        planes.chroma_row(cr, r1, next)?;
+        let mut out = vec![0u16; w];
+        heic_rs::upsample::row(&mut out, buf, next, w0, xs);
+        return Some(out);
+    }
     let cy = y >> ys;
     planes.chroma_row(cr, cy, buf)?;
     let last = buf.len().checked_sub(1)?;
@@ -308,6 +319,20 @@ mod tests {
         assert_eq!(rows[2], [146, 142, 133, 128]);
         assert_eq!(rows[3], [128; 4]);
         assert_eq!(chroma_at(&p, true, 1, 4, Upsampling::Nearest, &mut buf, &mut next).unwrap(), [200, 200, 128, 128]);
+    }
+
+    #[test]
+    fn sited_chroma_averages_odd_columns_and_blends_rows_3_1() {
+        let mut f = frame(4, 4, 8, ChromaFormat::Yuv420, 128, 128, 128);
+        f.cr = vec![200, 128, 128, 128];
+        let p = Planes::Picture(&f);
+        let (mut buf, mut next) = (vec![0; 2], vec![0; 2]);
+        let rows: Vec<Vec<u16>> = (0..4).map(|y| chroma_at(&p, true, y, 4, Upsampling::Sited, &mut buf, &mut next).unwrap()).collect();
+        // Column 0 is chroma column 0, column 1 the midpoint, columns 2–3 chroma column 1.
+        assert_eq!(rows[0], [200, 164, 128, 128]);
+        assert_eq!(rows[1], [182, 155, 128, 128]);
+        assert_eq!(rows[2], [146, 137, 128, 128]);
+        assert_eq!(rows[3], [128; 4]);
     }
 
     #[test]

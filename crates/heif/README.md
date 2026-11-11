@@ -26,6 +26,9 @@ let img = craft_heif::decode(&bytes, &craft_heif::Options::default())?;
 let thumb = craft_heif::decode_thumbnail(&bytes, 256, &Default::default())?; // Option<Decoded>
 ```
 
+Chroma is upsampled like libheif by default. `Options { chroma: Chroma::Apple, .. }` matches Apple's
+decoder (and so Photoshop on macOS) instead; the two differ only by a blended column at sharp colour edges.
+
 Errors are `Error::Unsupported` (image sequences, overlays, 4:2:2/4:4:4, …), `Error::Limit` or
 `Error::Malformed`. It never panics: every call into heic-rs runs under `catch_unwind`, and a panic
 inside it (PhotoCraft's fuzzing found two in 0.1.1) becomes `Error::Malformed`.
