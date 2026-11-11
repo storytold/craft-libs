@@ -67,7 +67,11 @@ impl std::error::Error for CloudFetchFault {}
 /// remains of `mirror`'s byte budget (see [`MirrorStore::remaining_budget`]). This is the guard
 /// RFC-0023 required fix 4 calls for: without it, a whole-file fallback has no idea how big the
 /// blob is until the bytes are already in memory.
-pub fn hydrate_whole_file_fallback<P: TierPolicy>(mirror: &mut MirrorStore<P>, blob: &CloudBlobRef, delegate: &dyn CloudFetchDelegate) -> Result<Vec<u8>, CloudFetchFault> {
+pub fn hydrate_whole_file_fallback<P: TierPolicy>(
+    mirror: &mut MirrorStore<P>,
+    blob: &CloudBlobRef,
+    delegate: &dyn CloudFetchDelegate,
+) -> Result<Vec<u8>, CloudFetchFault> {
     let blob_bytes = delegate.stat_size(blob)?;
     let remaining_budget = mirror.remaining_budget() as u64;
     if blob_bytes > remaining_budget {

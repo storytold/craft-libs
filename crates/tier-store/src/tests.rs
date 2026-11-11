@@ -297,7 +297,10 @@ fn inflight_range_hydration_bytes_count_against_the_budget() {
     let mut store = MirrorStore::new(DefaultTierPolicy, 100);
     assert!(!store.over_budget());
     let guard = store.begin_range_hydration(150);
-    assert!(store.over_budget(), "a 150-byte in-flight reservation against a 100-byte budget must be visible even though nothing landed in `data` yet");
+    assert!(
+        store.over_budget(),
+        "a 150-byte in-flight reservation against a 100-byte budget must be visible even though nothing landed in `data` yet"
+    );
     drop(guard);
     assert!(!store.over_budget(), "dropping the hydration guard must release the reservation");
 }
