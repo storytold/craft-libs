@@ -83,7 +83,7 @@ fn unsaved_changes_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(RecoveryDialog, covers = [], drive = Drive::Never)]
 fn recovery_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let age = *data.choice("age", AGES[1].1, &AGES);
-    let blocked = *data.value("recover_blocked", true);
+    let blocked = *data.value("recover_blocked", false);
     let document = RecoveredDocument::new("poster", "poster.psd", age);
     RecoveryDialog::new(if blocked { document.blocked("Stop recording first") } else { document }).show(ui).into()
 }
