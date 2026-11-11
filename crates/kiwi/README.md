@@ -42,7 +42,8 @@ let schema_bytes = craft_kiwi::encode::schema(&schema);
 
 `Schema::parse` reads a compact text form, one definition per line: `enum Name A B …` (values
 from 0), `struct Name type field, type field[] …` or `message Name …` (field ids from 1); `A=3`
-or `type field=7` gives a value or a field its own number. The encoder checks values against the
+or `type field=7` gives a value or a field its own number. The schema limits below apply to the
+text form too, and it refuses two fields of one name and a message field id that is 0 or repeated. The encoder checks values against the
 schema and fails on what doesn't fit: unknown fields or enum names, missing struct fields, wrong
 types, numbers out of range, NaN.
 

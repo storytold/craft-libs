@@ -8,7 +8,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 /// Deepest struct/message nesting decoded and encoded.
@@ -263,12 +263,14 @@ impl Schema {
                 return err("schema: too many fields");
             }
             let mut fields = Vec::with_capacity(n);
+            // A set, not a scan per field: wide definitions would make the scan quadratic.
+            let mut ids = HashSet::new();
             for _ in 0..n {
                 let fname = r.string()?;
                 let ty = r.var_int()?;
                 let array = r.byte()? & 1 != 0;
                 let value = r.var_uint()?;
-                if kind == Kind::Message && fields.iter().any(|f: &Field| f.value == value) {
+                if kind == Kind::Message && !ids.insert(value) {
                     return err(format!("schema: duplicate field id {value} in {name}"));
                 }
                 raw_types.push(ty);
@@ -606,43 +608,74 @@ impl Schema {
     /// A schema from a compact text form, one definition per line: `enum Name A B …` (values from
     /// 0), `struct Name type field, type field[] …` or `message Name …` (field ids from 1), the
     /// types being built-in names or other definitions'. `A=3` or `type field=7` gives a value or
-    /// a field its own number.
+    /// a field its own number. The limits of [`Schema::decode`] apply, so what parses also reads
+    /// back; field names are distinct within a definition, and so are a message's field ids
+    /// (never 0, which ends a message).
     pub fn parse(text: &str) -> Result<Schema, KiwiError> {
         let lines: Vec<Vec<&str>> = text.lines().map(|l| l.split_whitespace().collect::<Vec<_>>()).filter(|l| !l.is_empty()).collect();
-        let index = |name: &str| lines.iter().position(|l| l.get(1) == Some(&name));
+        if lines.len() > MAX_DEFS {
+            return err("schema text: too many definitions");
+        }
+        // The first definition of a name is the one a type names.
+        let mut index = HashMap::with_capacity(lines.len());
+        for (i, l) in lines.iter().enumerate() {
+            if let Some(name) = l.get(1) {
+                index.entry(*name).or_insert(i);
+            }
+        }
         let mut defs = Vec::with_capacity(lines.len());
+        let mut total_fields = 0usize;
         for l in &lines {
             let (Some(kind), Some(name)) = (l.first(), l.get(1)) else { return err("schema text: a definition needs a kind and a name") };
             let rest = l.get(2..).unwrap_or_default();
+            let (mut names, mut ids) = (HashSet::new(), HashSet::new());
             let (kind, fields) = match *kind {
                 "enum" => {
                     let mut fields = Vec::new();
                     for (n, i) in rest.iter().zip(0..) {
-                        let (name, value) = numbered(n, i)?;
-                        fields.push(Field { name, ty: None, array: false, value });
+                        let (field, value) = numbered(n, i)?;
+                        if !names.insert(field.clone()) {
+                            return err(format!("schema text: duplicate value {field} in {name}"));
+                        }
+                        fields.push(Field { name: field, ty: None, array: false, value });
                     }
                     (Kind::Enum, fields)
                 }
                 "struct" | "message" => {
                     let mut fields = Vec::new();
-                    for (f, id) in rest.join(" ").split(',').zip(1..) {
+                    let list = rest.join(" ");
+                    // A definition may have no fields.
+                    for (f, id) in list.split(',').filter(|_| !rest.is_empty()).zip(1..) {
                         let Some((t, n)) = f.trim().split_once(' ') else { return err(format!("schema text: bad field `{f}` in {name}")) };
                         let base = t.trim_end_matches("[]");
                         let ty = match BUILTIN_NAMES.iter().position(|b| *b == base) {
                             Some(i) => BUILTINS.get(i).copied(),
-                            None => index(base).map(Type::Def),
+                            None => index.get(base).copied().map(Type::Def),
                         }
                         .ok_or_else(|| KiwiError(format!("schema text: unknown type {base}")))?;
-                        let (name, value) = numbered(n.trim(), id)?;
-                        if *kind == "message" && fields.iter().any(|f: &Field| f.value == value) {
-                            return err(format!("schema text: duplicate field id {value} in {name}"));
+                        let (field, value) = numbered(n.trim(), id)?;
+                        if !names.insert(field.clone()) {
+                            return err(format!("schema text: duplicate field {field} in {name}"));
                         }
-                        fields.push(Field { name, ty: Some(ty), array: t.ends_with("[]"), value });
+                        if *kind == "message" {
+                            // Zero ends a message on the wire, so no field can have it.
+                            if value == 0 {
+                                return err(format!("schema text: field id 0 in {name}"));
+                            }
+                            if !ids.insert(value) {
+                                return err(format!("schema text: duplicate field id {value} in {name}"));
+                            }
+                        }
+                        fields.push(Field { name: field, ty: Some(ty), array: t.ends_with("[]"), value });
                     }
                     (if *kind == "struct" { Kind::Struct } else { Kind::Message }, fields)
                 }
                 k => return err(format!("schema text: unknown kind {k}")),
             };
+            total_fields = total_fields.saturating_add(fields.len());
+            if fields.len() > MAX_FIELDS || total_fields > MAX_SCHEMA_FIELDS {
+                return err("schema text: too many fields");
+            }
             defs.push(Def { name: name.to_string(), kind, fields });
         }
         Ok(Schema { defs })

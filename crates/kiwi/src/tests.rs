@@ -302,3 +302,62 @@ fn hostile_input_is_refused() {
     // A message field id the definition doesn't have.
     assert!(array.decode_message(0, &[9, 0]).is_err());
 }
+
+#[test]
+fn a_wide_schema_decodes_without_a_scan_per_field() {
+    // 20 messages of 10 000 distinct field ids each: within every cap. A scan of the earlier
+    // fields for each new one made this a billion comparisons.
+    let mut w = encode::Writer::default();
+    w.var_uint(20);
+    for d in 0..20 {
+        w.string(&format!("D{d}"));
+        w.byte(2);
+        w.var_uint(10_000);
+        for i in 1..=10_000u32 {
+            w.string("f");
+            w.var_int(-1);
+            w.byte(0);
+            w.var_uint(i);
+        }
+    }
+    let started = std::time::Instant::now();
+    let sc = Schema::decode(&w.0).unwrap();
+    assert_eq!(sc.defs.iter().map(|d| d.fields.len()).sum::<usize>(), 200_000);
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+    // A repeated id is still refused.
+    let mut w = encode::Writer::default();
+    w.var_uint(1);
+    w.string("M");
+    w.byte(2);
+    w.var_uint(2);
+    for _ in 0..2 {
+        w.string("f");
+        w.var_int(-1);
+        w.byte(0);
+        w.var_uint(3);
+    }
+    assert_eq!(Schema::decode(&w.0).unwrap_err().0, "schema: duplicate field id 3 in M");
+}
+
+#[test]
+fn the_text_form_keeps_the_limits_and_refuses_ambiguous_definitions() {
+    // Definitions without fields are definitions.
+    let sc = Schema::parse("message Empty\nstruct Nothing\nenum None\nmessage M Empty e, Nothing n").unwrap();
+    assert_eq!(sc.defs.iter().map(|d| d.fields.len()).collect::<Vec<_>>(), [0, 0, 0, 2]);
+    assert_eq!(Schema::decode(&encode::schema(&sc)).unwrap().defs.len(), 4);
+    // Two fields of one name, two values of one name, a message field with id 0 or a repeated id.
+    for bad in ["message M uint x, uint x", "struct S uint x, float x", "enum E A A", "message M uint x=0", "message M uint a=2, uint b=2"] {
+        assert!(Schema::parse(bad).is_err(), "{bad}");
+    }
+    // A struct's fields have no ids on the wire: their numbers are free.
+    assert!(Schema::parse("struct S uint a=0, uint b=0").is_ok());
+    // The caps of the binary form.
+    let wide = |n: usize| format!("message M {}", (0..n).map(|i| format!("bool f{i}")).collect::<Vec<_>>().join(", "));
+    assert!(Schema::parse(&wide(super::MAX_FIELDS)).is_ok());
+    assert_eq!(Schema::parse(&wide(super::MAX_FIELDS + 1)).unwrap_err().0, "schema text: too many fields");
+    let many = (0..=super::MAX_DEFS).map(|i| format!("enum E{i}")).collect::<Vec<_>>().join("\n");
+    assert_eq!(Schema::parse(&many).unwrap_err().0, "schema text: too many definitions");
+    let line = (0..super::MAX_FIELDS).map(|i| format!("bool f{i}")).collect::<Vec<_>>().join(", ");
+    let total = (0..=super::MAX_SCHEMA_FIELDS / super::MAX_FIELDS).map(|i| format!("struct S{i} {line}")).collect::<Vec<_>>().join("\n");
+    assert_eq!(Schema::parse(&total).unwrap_err().0, "schema text: too many fields");
+}
