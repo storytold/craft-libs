@@ -86,6 +86,17 @@ This mapping follows [W3C TTML1, third edition (2018), §§12.1.5–12.2.1](http
 The [April 2006 TTaf1 draft, §§7.2.1 and 12.1.5–12.2.1](https://www.w3.org/TR/2006/WD-ttaf1-dfxp-20060427/)
 defines its earlier metadata namespace and agent ID form.
 
+### TTML cue identifiers
+
+TTML and DFXP writers keep valid explicit cue IDs verbatim unless a style, region or earlier cue
+already uses them. Missing, invalid or repeated IDs receive deterministic replacements that also
+avoid valid IDs on later cues. Emitted cue, style, region and speaker IDs are unique across the
+document. Unicode spelling is preserved without normalization.
+
+Identifier validation follows the `NCName` production in [Namespaces in XML 1.0, third edition
+(2009), §3](https://www.w3.org/TR/2009/REC-xml-names-20091208/#NT-NCName), using the character
+ranges in [XML 1.0, fifth edition (2008), §2.3](https://www.w3.org/TR/2008/REC-xml-20081126/#NT-NameStartChar).
+
 ### SCC writer
 
 Each caption is sent as a pop-on load (RCL, ENM, then per row a preamble address code and tab
