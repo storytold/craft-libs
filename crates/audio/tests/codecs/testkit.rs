@@ -38,6 +38,15 @@ pub fn fixtures_dir(sub: &str) -> PathBuf {
     d
 }
 
+pub mod oracle {
+    use std::path::PathBuf;
+
+    /// A tool by name, silently.
+    pub fn find_tool(name: &str) -> Option<PathBuf> {
+        crate::common::tool(name)
+    }
+}
+
 pub mod fixtures {
     use super::*;
 
@@ -57,5 +66,10 @@ pub mod fixtures {
         }
         std::fs::rename(&tmp, out).ok()?;
         Some(out.to_path_buf())
+    }
+
+    /// Run a fixture generator; FilmCraft's version also reports it to `cargo xtask fixtures`.
+    pub fn generate_and_report<T>(_name: &str, _outputs: &[PathBuf], generate: impl FnOnce() -> Option<T>) -> Option<T> {
+        generate()
     }
 }
