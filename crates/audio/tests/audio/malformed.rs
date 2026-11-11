@@ -324,7 +324,7 @@ fn mp4(frames: u32, entry: &[u8], swap: impl Fn(&[u8; 4], Vec<u8>) -> Vec<u8>) -
     };
     let ftyp = atom(b"ftyp", b"M4A \0\0\0\0M4A isom");
     let offset = (ftyp.len() + moov(0).len() + 8) as u32;
-    let pcm: Vec<u8> = (0..frames as i16).flat_map(|i| (i * 40).to_le_bytes()).collect();
+    let pcm: Vec<u8> = (0..frames as i16).flat_map(|i| i.wrapping_mul(40).to_le_bytes()).collect();
     [ftyp, moov(offset), atom(b"mdat", &pcm)].concat()
 }
 
@@ -872,4 +872,64 @@ fn damaged_mp4_and_matroska_are_malformed() {
         assert!(matches!(probe(&f, None), Err(AudioError::Malformed(_))));
         assert!(matches!(craft_audio::tracks(&f, None), Err(AudioError::Malformed(_))));
     }
+}
+
+/// MP3 in MP4 is decoded by symphonia (PCM, AAC, ALAC, Opus and AC-3 are native), so it reaches
+/// the checks in `read/mp4.rs`.
+fn mp3_mp4(frames: u32, swap: impl Fn(&[u8; 4], Vec<u8>) -> Vec<u8>) -> Vec<u8> {
+    mp4(frames, &sample_entry(b".mp3", 0, &[], &[]), swap)
+}
+
+/// An `stts` atom of `n` one-sample runs.
+fn one_sample_runs(n: u32) -> Vec<u8> {
+    atom(b"stts", &[&[0; 4][..], &n.to_be_bytes(), &[1u32, 1].map(u32::to_be_bytes).concat().repeat(n as usize)[..]].concat())
+}
+
+/// soundcraft #1332: symphonia scans an audio track's `stts` table from its start for every
+/// packet, so a table of one-sample runs made decoding quadratic.
+#[test]
+fn an_audio_timing_table_with_a_run_per_sample_is_bounded() {
+    let frames = 1 << 14;
+    let at_bound = mp3_mp4(frames, |k, a| if k == b"stts" { one_sample_runs(frames) } else { a });
+    assert!(
+        !matches!(decode(&at_bound, None), Err(AudioError::Malformed(m)) if m.contains("timing table")),
+        "a table at the bound is not refused for its size"
+    );
+    let past = mp3_mp4(frames + 1, |k, a| if k == b"stts" { one_sample_runs(frames + 1) } else { a });
+    assert!(matches!(decode(&past, None), Err(AudioError::Malformed(m)) if m.contains("timing table")), "one run past the bound is refused");
+}
+
+/// The bound follows the sample entry, as symphonia decodes by it, not the handler.
+#[test]
+fn the_audio_timing_bound_follows_the_sample_entry_not_the_handler() {
+    let video_handler = atom(b"hdlr", &[0u32, 0, u32::from_be_bytes(*b"vide"), 0, 0, 0, 0].map(u32::to_be_bytes).concat());
+    let frames = (1 << 14) + 1;
+    let f = mp3_mp4(frames, |k, a| match k {
+        b"stts" => one_sample_runs(frames),
+        b"hdlr" => video_handler.clone(),
+        _ => a,
+    });
+    assert!(matches!(decode(&f, None), Err(AudioError::Malformed(m)) if m.contains("timing table")));
+}
+
+/// Symphonia keeps the last `stsd` it reads, so the last one decides.
+#[test]
+fn the_last_sample_entry_decides_whether_the_timing_bound_applies() {
+    let video = sample_entry(b"avc1", 0, &[], &[]);
+    let audio_stsd = atom(b"stsd", &[&[0, 0, 0, 0, 0, 0, 0, 1][..], &sample_entry(b".mp3", 0, &[], &[])].concat());
+    let frames = (1 << 14) + 1;
+    let f = mp4(frames, &video, |k, a| if k == b"stts" { [audio_stsd.clone(), one_sample_runs(frames)].concat() } else { a });
+    assert!(matches!(decode(&f, None), Err(AudioError::Malformed(m)) if m.contains("timing table")));
+}
+
+/// soundcraft #1332: frames per packet times channels sizes the decoder's output buffer, and the
+/// frames bound alone left many channels free to multiply it.
+#[test]
+fn a_caf_packet_of_far_too_many_samples_is_refused() {
+    let wide = caf(&[caf_desc(b"ima4", 34, 1 << 20, 18, 16), (b"data", 4, vec![0; 4])]);
+    let r = decode(&wide, None);
+    assert!(matches!(&r, Err(AudioError::Malformed(m)) if m.contains("declares packets")), "{:?}", r.map(|x| x.0));
+    // the same frames in a stereo stream are within the bound
+    let stereo = caf(&[caf_desc(b"ima4", 34, 1 << 20, 2, 16), (b"data", 4, vec![0; 4])]);
+    assert!(!matches!(decode(&stereo, None), Err(AudioError::Malformed(m)) if m.contains("declares packets")));
 }
