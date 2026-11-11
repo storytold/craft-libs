@@ -256,6 +256,8 @@ pub struct Decoder {
     /// Frames submitted to the workers and not known to be finished (oldest first).
     in_flight: VecDeque<Arc<FrameSlot>>,
     max_in_flight: usize,
+    /// Bytes the picture store may take ([`crate::budget`]).
+    memory_budget: u64,
     /// Shown pictures not yet returned, in output order.
     out: VecDeque<Output>,
     /// pts of the temporal unit being decoded.
@@ -327,7 +329,26 @@ fn push_shown(out: &mut Vec<(Output, usize, u32)>, shown_bytes: &mut usize, item
     Ok(())
 }
 
+/// Whether `pictures` frames of `width` x `height`, padded as `FrameBuf::new` pads them, fit in
+/// `budget` bytes.
+fn store_fits(width: u32, height: u32, color: &ColorConfig, pictures: usize, budget: u64) -> bool {
+    let shape = crate::budget::PictureShape {
+        width: u64::from(width).div_ceil(128) * 128 + 160,
+        height: u64::from(height).div_ceil(128) * 128 + 160,
+        shift_x: u32::from(color.subsampling_x),
+        shift_y: u32::from(color.subsampling_y),
+        chroma_planes: if color.mono_chrome { 0 } else { 2 },
+        bytes_per_sample: 2,
+    };
+    shape.fits(pictures as u64, budget)
+}
+
 impl Decoder {
+    /// Cap the bytes of decoded pictures (references, current, in flight) this decoder may hold.
+    pub fn set_memory_budget(&mut self, bytes: u64) {
+        self.memory_budget = bytes;
+    }
+
     /// A decoder using all available cores (with the `threads` feature).
     pub fn new() -> Decoder {
         Decoder::with_threads(default_threads())
@@ -362,6 +383,7 @@ impl Decoder {
             workers,
             in_flight: VecDeque::new(),
             max_in_flight: fthreads + 2,
+            memory_budget: crate::budget::DECODE_MEMORY_BUDGET,
             out: VecDeque::new(),
             pts: 0,
             #[cfg(test)]
@@ -613,6 +635,12 @@ impl Decoder {
         // 270-line stream coded as 272 lines); like other decoders we accept them.
         if !frame_size_allowed(fh.upscaled_width, fh.frame_height) {
             return Err(Error::Invalid("frame size"));
+        }
+        // The size cap bounds one picture: check the whole store (every reference slot, the new
+        // frame and those in flight, as `FrameBuf::new` pads them) before allocating.
+        let width = fh.upscaled_width.max(fh.frame_width);
+        if !store_fits(width, fh.frame_height, &seq.color, NUM_REF_FRAMES + 1 + self.max_in_flight, self.memory_budget) {
+            return Err(Error::Invalid("frame size exceeds the decoder memory budget"));
         }
         if !fh.frame_is_intra {
             for i in 0..REFS_PER_FRAME {
@@ -1302,5 +1330,34 @@ mod shown_limit_tests {
         let mono = crate::av1::decode::header::ColorConfig { num_planes: 1, ..Default::default() };
         assert_eq!(picture_bytes(10, 5, &mono), 100);
         assert_eq!(picture_bytes(usize::MAX, 2, &c), usize::MAX);
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+    use crate::budget::DECODE_MEMORY_BUDGET;
+
+    fn color(mono: bool) -> ColorConfig {
+        ColorConfig { mono_chrome: mono, subsampling_x: 1, subsampling_y: 1, ..Default::default() }
+    }
+
+    #[test]
+    fn the_axis_maximum_is_over_budget_and_4k_is_not() {
+        let refs = NUM_REF_FRAMES + 1 + 4;
+        assert!(!store_fits(65536, 65536, &color(false), refs, DECODE_MEMORY_BUDGET));
+        assert!(!store_fits(65536, 65536, &color(true), 1, DECODE_MEMORY_BUDGET));
+        assert!(store_fits(3840, 2160, &color(false), refs, DECODE_MEMORY_BUDGET));
+        assert!(store_fits(1920, 1080, &color(false), refs, DECODE_MEMORY_BUDGET));
+    }
+
+    #[test]
+    fn exact_budget_boundary_and_reference_count() {
+        // 8x8 pads to 288x288: luma 82944 + chroma 2 * 20736 samples, 2 bytes each.
+        let one = (288 * 288 + 2 * 144 * 144) * 2;
+        assert!(store_fits(8, 8, &color(false), 9, 9 * one));
+        assert!(!store_fits(8, 8, &color(false), 9, 9 * one - 1));
+        assert!(!store_fits(8, 8, &color(false), 10, 9 * one));
+        assert!(store_fits(8, 8, &color(true), 9, 9 * 288 * 288 * 2));
     }
 }

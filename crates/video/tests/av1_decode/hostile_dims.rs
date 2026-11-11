@@ -165,3 +165,21 @@ fn block_without_chroma_size_is_an_error_not_a_panic() {
     let r = dec.decode(PROFILE_FLIPPED).and_then(|_| dec.flush_result());
     assert!(matches!(r, Err(Error::Invalid(m)) if m.contains("chroma size")), "got {:?}", r.as_ref().map(|p| p.len()));
 }
+
+/// A frame whose picture store would not fit the decoder's memory budget is refused before
+/// anything is allocated for it; the same frame passes the check with the default budget.
+#[test]
+fn frame_over_the_memory_budget_is_refused() {
+    let over_budget = |budget: Option<u64>| {
+        let mut dec = Decoder::with_threads(1);
+        if let Some(b) = budget {
+            dec.set_memory_budget(b);
+        }
+        let r = dec.decode(&stream(64, 64)).and_then(|_| dec.flush_result());
+        matches!(r, Err(Error::Invalid(m)) if m.contains("memory budget"))
+    };
+    // One 64x64 4:2:0 picture pads to 288x288 at two bytes a sample: 248832 bytes, and the
+    // decoder holds at least the eight reference slots and the new frame.
+    assert!(over_budget(Some(9 * 248_832 - 1)));
+    assert!(!over_budget(None));
+}

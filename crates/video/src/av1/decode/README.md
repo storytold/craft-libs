@@ -137,6 +137,12 @@ in total, so 16384 x 2176 or 8192 x 4352 at most) are refused with `Error::Inval
 header can code up to 65536 x 65536, which would ask for gigabytes of buffers from a few bytes of hostile input;
 no real stream comes close to level 6.3, the highest defined level.
 
+A frame is also refused when the pictures the decoder would hold at its size (the eight reference
+slots, the new frame and those in flight, padded as the frame buffers are, two bytes a sample) do
+not fit `Decoder::set_memory_budget` (`craft_video::budget::DECODE_MEMORY_BUDGET` by default:
+4 GiB, 1 GiB on 32-bit targets). Non-uniform tile spacing may not code more than 64 tile columns
+or rows.
+
 ## API
 
 ```rust
