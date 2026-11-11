@@ -123,6 +123,22 @@ impl Mat {
     }
 }
 
+/// A mat is serialized as its short name ([`Mat::id`]); an unknown name is an error.
+#[cfg(feature = "serde")]
+impl serde::Serialize for Mat {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.id())
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Mat {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Mat, D::Error> {
+        let name = <std::borrow::Cow<'de, str>>::deserialize(d)?;
+        Mat::parse(&name).ok_or_else(|| serde::de::Error::custom(format!("unknown mat `{name}`")))
+    }
+}
+
 /// The machine and media a program is written for: what the preamble announces besides the
 /// per-operation tool settings.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -498,6 +514,21 @@ mod tests {
         assert_eq!(Mat::ALL.iter().map(|m| m.code()).collect::<Vec<_>>(), [0, 1, 2, 3, 8, 9, 11]);
         let (down, right) = Mat::Cameo12x24.extent_mm();
         assert!((down - 609.6).abs() < 1e-9 && (right - 304.8).abs() < 1e-9);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn mats_serialize_as_their_names() {
+        use serde::de::value::{Error, StrDeserializer, StringDeserializer};
+        use serde::{Deserialize, de::IntoDeserializer};
+        for m in Mat::ALL {
+            let borrowed: StrDeserializer<Error> = m.id().into_deserializer();
+            assert_eq!(Mat::deserialize(borrowed), Ok(*m));
+        }
+        let owned: StringDeserializer<Error> = "8.5X12 ".to_string().into_deserializer();
+        assert_eq!(Mat::deserialize(owned), Ok(Mat::Portrait8_5x12));
+        let unknown: StrDeserializer<Error> = "13x13".into_deserializer();
+        assert_eq!(Mat::deserialize(unknown).unwrap_err().to_string(), "unknown mat `13x13`");
     }
 
     #[test]

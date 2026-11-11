@@ -12,3 +12,9 @@ workspace = true
 
 [dependencies]
 thiserror = { workspace = true }
+serde = { workspace = true, optional = true }
+
+[features]
+# `Serialize` / `Deserialize` for `gpgl::silhouette::Mat`, as its short name (`"12x24"`).
+serde = ["dep:serde"]
+

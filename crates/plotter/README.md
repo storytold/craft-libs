@@ -37,6 +37,9 @@ A program with registration marks has `registration_wait`: send the first part
 (`Program::split_at_registration`), wait until the device reports the marks found
 (`parse_status` gives `Status::Ready`), then send the rest.
 
+The optional `serde` feature gives `gpgl::silhouette::Mat` `Serialize` and `Deserialize`, as its
+short name (`"12x24"`).
+
 ## Limits
 
 Input is not trusted. A job is refused, and nothing encoded, past 64 operations
