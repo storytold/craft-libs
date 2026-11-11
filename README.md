@@ -71,6 +71,8 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-fonts-build`](crates/fonts-build/README.md): embeds the optional craft-fonts faces
   from an app's `build.rs` (`CRAFT_FONTS_DIR`, `CRAFT_FONTS_REQUIRED`, script filters) as a table
   of `EmbeddedFace`s. No dependencies; the app picks the faces.
+- [`craft-gcode`](crates/gcode/src/lib.rs): Grbl-style G-code writer: polylines in
+  millimetres to `G0`/`G1` moves with laser power and feed, for cutting lasers and plotters.
 - [`craft-heif`](crates/heif/README.md): optional HEIF/HEIC still-image decoder, from LightCraft:
   heic-rs reads the container and HEVC pictures, and this crate converts to 16-bit RGB to match
   libheif (VUI range and matrix, chroma upsampling, `imir`, ICC on grid tiles). Also orientation,
