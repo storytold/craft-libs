@@ -7,7 +7,8 @@
 //! [`parse`] and [`write`] keep the document as a tree of [`Value`]s; what was parsed is written
 //! back in Photoshop's layout, and strings stored as plain bytes stay plain bytes.
 //! [`first_style`] is a typed view of the first style run, for readers that show a type layer
-//! without editing it. Nesting is limited to 64 levels.
+//! without editing it; [`parse_lossy`] reads what it can of a damaged document for them.
+//! Nesting is limited to 64 levels.
 
 use std::fmt::Write as _;
 
@@ -127,11 +128,18 @@ const MAX_DEPTH: usize = 64;
 struct Parser<'a> {
     b: &'a [u8],
     i: usize,
+    /// Best effort: damage ends the value being read instead of failing the document.
+    lenient: bool,
+}
+
+/// Bytes that end a bare token or a `/Name`.
+fn is_delimiter(c: u8) -> bool {
+    matches!(c, b' ' | b'\t' | b'\r' | b'\n' | b'[' | b']' | b'<' | b'>' | b'(' | b'/')
 }
 
 impl Parser<'_> {
     fn ws(&mut self) {
-        while self.i < self.b.len() && matches!(self.b[self.i], b' ' | b'\t' | b'\r' | b'\n' | 0) {
+        while matches!(self.b.get(self.i), Some(b' ' | b'\t' | b'\r' | b'\n' | 0)) {
             self.i += 1;
         }
     }
@@ -143,95 +151,126 @@ impl Parser<'_> {
             return self.err("nesting too deep");
         }
         self.ws();
-        let b = self.b;
-        match b.get(self.i) {
+        match self.b.get(self.i) {
             None => self.err("unexpected end"),
-            Some(b'<') if b.get(self.i + 1) == Some(&b'<') => {
+            Some(b'<') if self.b.get(self.i + 1) == Some(&b'<') => {
                 self.i += 2;
-                let mut items = Vec::new();
-                loop {
-                    self.ws();
-                    match b.get(self.i) {
-                        Some(b'>') if b.get(self.i + 1) == Some(&b'>') => {
-                            self.i += 2;
-                            return Ok(Value::Dict(items));
-                        }
-                        Some(b'/') => {
-                            let k = self.name();
-                            let v = self.value(depth + 1)?;
-                            items.push((k, v));
-                        }
-                        None => return self.err("unterminated dictionary"),
-                        _ => return self.err("expected key"),
-                    }
-                }
+                self.dict(depth)
             }
             Some(b'[') => {
                 self.i += 1;
-                let mut items = Vec::new();
-                loop {
-                    self.ws();
-                    match b.get(self.i) {
-                        Some(b']') => {
-                            self.i += 1;
-                            return Ok(Value::Array(items));
-                        }
-                        None => return self.err("unterminated array"),
-                        _ => items.push(self.value(depth + 1)?),
-                    }
-                }
+                self.array(depth)
             }
             Some(b'(') => {
                 self.i += 1;
-                let mut raw = Vec::new();
-                loop {
-                    match b.get(self.i) {
-                        None => return self.err("unterminated string"),
-                        Some(b'\\') => {
-                            if let Some(&c) = b.get(self.i + 1) {
-                                raw.push(c);
-                            }
-                            self.i += 2;
-                        }
-                        Some(b')') => {
-                            self.i += 1;
-                            break;
-                        }
-                        Some(&c) => {
-                            raw.push(c);
-                            self.i += 1;
-                        }
-                    }
-                }
-                Ok(decode_string(&raw))
+                self.string()
             }
             Some(b'/') => Ok(Value::Name(self.name())),
-            Some(_) => {
-                let start = self.i;
-                while self.i < b.len() && !matches!(b[self.i], b' ' | b'\t' | b'\r' | b'\n' | b'[' | b']' | b'<' | b'>' | b'(' | b'/') {
+            Some(_) => self.token(),
+        }
+    }
+    /// The entries after `<<`.
+    fn dict(&mut self, depth: usize) -> Result<Value, ParseError> {
+        let mut items = Vec::new();
+        loop {
+            self.ws();
+            match self.b.get(self.i) {
+                Some(b'>') if self.b.get(self.i + 1) == Some(&b'>') => {
+                    self.i += 2;
+                    return Ok(Value::Dict(items));
+                }
+                Some(b'/') => {
+                    let k = self.name();
+                    match self.value(depth + 1) {
+                        Ok(v) => items.push((k, v)),
+                        Err(_) if self.lenient => return Ok(Value::Dict(items)),
+                        Err(e) => return Err(e),
+                    }
+                }
+                None if self.lenient => return Ok(Value::Dict(items)),
+                None => return self.err("unterminated dictionary"),
+                // Lenient: skip the byte that is not a key.
+                _ if self.lenient => self.i += 1,
+                _ => return self.err("expected key"),
+            }
+        }
+    }
+    /// The items after `[`.
+    fn array(&mut self, depth: usize) -> Result<Value, ParseError> {
+        let mut items = Vec::new();
+        loop {
+            self.ws();
+            match self.b.get(self.i) {
+                Some(b']') => {
+                    self.i += 1;
+                    return Ok(Value::Array(items));
+                }
+                None if self.lenient => return Ok(Value::Array(items)),
+                None => return self.err("unterminated array"),
+                _ => match self.value(depth + 1) {
+                    Ok(v) => items.push(v),
+                    Err(_) if self.lenient => return Ok(Value::Array(items)),
+                    Err(e) => return Err(e),
+                },
+            }
+        }
+    }
+    /// The string after `(`.
+    fn string(&mut self) -> Result<Value, ParseError> {
+        let mut raw = Vec::new();
+        loop {
+            match self.b.get(self.i) {
+                None if self.lenient => break,
+                None => return self.err("unterminated string"),
+                Some(b'\\') => {
+                    if let Some(&c) = self.b.get(self.i + 1) {
+                        raw.push(c);
+                    }
+                    self.i += 2;
+                }
+                Some(b')') => {
+                    self.i += 1;
+                    break;
+                }
+                Some(&c) => {
+                    raw.push(c);
                     self.i += 1;
                 }
-                let tok = std::str::from_utf8(&b[start..self.i]).unwrap_or("");
-                match tok {
-                    "true" => Ok(Value::Bool(true)),
-                    "false" => Ok(Value::Bool(false)),
-                    "" => {
-                        self.i += 1;
-                        self.err("unexpected byte")
-                    }
-                    t if t.contains('.') || t.contains('e') || t.contains('E') => t.parse().map(Value::Real).or_else(|_| self.err("bad number")),
-                    t => t.parse().map(Value::Int).or_else(|_| t.parse().map(Value::Real).or_else(|_| self.err("bad token"))),
-                }
             }
+        }
+        Ok(decode_string(&raw))
+    }
+    /// A number, `true` or `false`.
+    fn token(&mut self) -> Result<Value, ParseError> {
+        let start = self.i;
+        while self.b.get(self.i).is_some_and(|&c| !is_delimiter(c)) {
+            self.i += 1;
+        }
+        let tok = self.b.get(start..self.i).and_then(|t| std::str::from_utf8(t).ok()).unwrap_or("");
+        let number = match tok {
+            "true" => return Ok(Value::Bool(true)),
+            "false" => return Ok(Value::Bool(false)),
+            "" => {
+                // A delimiter that starts no value (`>`, `]`), or bytes that are not UTF-8.
+                self.i = self.i.max(start + 1);
+                None
+            }
+            t if t.contains(['.', 'e', 'E']) => t.parse().ok().map(Value::Real),
+            t => t.parse().map(Value::Int).ok().or_else(|| t.parse().ok().map(Value::Real)),
+        };
+        match number {
+            Some(v) => Ok(v),
+            None if self.lenient => Ok(Value::Name(tok.to_string())),
+            None => self.err("bad token"),
         }
     }
     fn name(&mut self) -> String {
         self.i += 1; // '/'
         let start = self.i;
-        while self.i < self.b.len() && !matches!(self.b[self.i], b' ' | b'\t' | b'\r' | b'\n' | b'[' | b']' | b'<' | b'>' | b'(' | b'/') {
+        while self.b.get(self.i).is_some_and(|&c| !is_delimiter(c)) {
             self.i += 1;
         }
-        String::from_utf8_lossy(&self.b[start..self.i]).into_owned()
+        String::from_utf8_lossy(self.b.get(start..self.i).unwrap_or_default()).into_owned()
     }
 }
 
@@ -246,8 +285,18 @@ fn decode_string(raw: &[u8]) -> Value {
 
 /// Parses an EngineData document (the top-level dictionary).
 pub fn parse(data: &[u8]) -> Result<Value, ParseError> {
-    let mut p = Parser { b: data, i: 0 };
+    let mut p = Parser { b: data, i: 0, lenient: false };
     p.value(0)
+}
+
+/// Parses as much of a damaged EngineData document as can be read, for readers that only show
+/// the text: a truncated dictionary, array or string keeps what it has, a byte that starts no
+/// key is skipped, and a token that is no number becomes a [`Value::Name`]. Garbage gives an
+/// empty dictionary. What [`parse`] accepts comes out the same. The result is not meant to be
+/// written back.
+pub fn parse_lossy(data: &[u8]) -> Value {
+    let mut p = Parser { b: data, i: 0, lenient: true };
+    p.value(0).unwrap_or_else(|_| Value::dict())
 }
 
 /// Serializes in Photoshop's layout (tab-indented, one key per line).
@@ -613,6 +662,31 @@ mod tests {
         let nested = |n: usize| [vec![b'['; n], vec![b']'; n]].concat();
         assert!(parse(&nested(MAX_DEPTH)).is_ok());
         assert!(parse(&nested(MAX_DEPTH + 2)).is_err());
+    }
+
+    #[test]
+    fn parse_lossy_keeps_what_a_damaged_document_holds() {
+        // What the strict parser accepts comes out the same.
+        assert_eq!(parse_lossy(SAMPLE), parse(SAMPLE).unwrap());
+        // Truncated inside a string inside an array inside a dictionary.
+        let v = parse_lossy(b"<< /A [ 1 2 << /B (unterminated");
+        assert_eq!(v.get("A").and_then(|a| a.index(1)).and_then(Value::as_i64), Some(2));
+        assert_eq!(v.get("A").and_then(|a| a.index(2)).and_then(|d| d.get("B")).and_then(Value::as_str), Some("unterminated"));
+        // A byte that starts no key is skipped; a bad token is a name, not a number.
+        let v = parse_lossy(b"<< ] /Size 12.0 /Bad 1.2.3 /After true >>");
+        assert_eq!(v.get("Size").and_then(Value::as_f64), Some(12.0));
+        assert_eq!(v.get("Bad"), Some(&Value::Name("1.2.3".into())));
+        assert_eq!(v.get("After"), Some(&Value::Bool(true)));
+        // Garbage and every truncation: no panic, no hang.
+        assert_eq!(parse_lossy(b""), Value::dict());
+        let _ = parse_lossy(b"]]]>>>> /x");
+        let _ = parse_lossy(&[0xFF; 64]);
+        for cut in 0..SAMPLE.len() {
+            let _ = parse_lossy(&SAMPLE[..cut]);
+        }
+        // Nesting past the limit ends there; the outer levels stay.
+        let deep = [b"<< /K ".as_slice(), &[b'['; 200]].concat();
+        assert!(matches!(parse_lossy(&deep).get("K"), Some(Value::Array(_))));
     }
 
     #[test]

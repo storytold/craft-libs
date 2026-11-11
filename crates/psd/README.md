@@ -97,7 +97,7 @@ descriptor::{Descriptor, VersionedDescriptor, Value, Id, Class, ReferenceItem, U
 Descriptor::from_bytes / to_bytes;  VersionedDescriptor::from_bytes / to_bytes (version 16)
 
 // Text engine data (`EngineData` in `TySh`, and the document's `Txt2`)
-engine_data::parse(&[u8]) -> Result<Value, ParseError>;  write(&Value);  write_bare(&[(String, Value)])
+engine_data::parse(&[u8]) -> Result<Value, ParseError>;  parse_lossy(&[u8]) -> Value;  write(&Value);  write_bare(&[(String, Value)])
 engine_data::Value::{Dict, Array, String, RawString, Int, Real, Bool, Name}   // RawString is written back as the same bytes
 engine_data::first_style(&Value) -> TextStyle   // font, size, fill, justification, tracking, leading, faux styles, box text
 engine_data::minimal(text, font, size, rgb, justification) -> Vec<u8>
