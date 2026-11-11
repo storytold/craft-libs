@@ -52,7 +52,7 @@ impl<'b> BodyHooks<'b> {
             given: self.given,
             width,
             shows: (self.open, self.presence.t),
-            extent: self.last.extent,
+            extent: self.last_extent,
             env: EnvFacts {
                 style: env.key,
                 words: env.words.generation(),

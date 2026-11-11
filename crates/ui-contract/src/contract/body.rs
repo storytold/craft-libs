@@ -31,10 +31,9 @@ pub use reorder::REORDER_BAND;
 pub(crate) use window::MOVE_BAND;
 use window::WindowMode;
 
-/// What the scroll region and the regions measured last pass.
+/// The scroll region's view in the last pass that showed it.
 #[derive(Clone, Default)]
 struct BodyView {
-    extent: (f32, f32),
     view: Option<[f32; 4]>,
 }
 
@@ -88,6 +87,8 @@ pub(super) struct BodyHooks<'b> {
     scroll_bound: bool,
     moved: bool,
     last: BodyView,
+    /// The content's extent from the last run that laid it out, kept with the offset it bounds (`ScrollState`).
+    last_extent: (f32, f32),
     /// This pass's sizes, recorded at step 17.
     body_size: Option<Vec2>,
     header_size: Option<Vec2>,
@@ -150,6 +151,7 @@ impl<'b> BodyHooks<'b> {
             scroll_bound: false,
             moved: false,
             last: BodyView::default(),
+            last_extent: (0.0, 0.0),
             body_size: None,
             header_size: None,
             footer_size: None,
