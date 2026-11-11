@@ -147,6 +147,14 @@ def doctor(top, packages, quiet=False):
                 if not r or not set(d["features"]) <= set(r["features"]):
                     problems.append(f"crates/{ROOT}/Cargo.toml: must depend on {d['name']} with {d['features']} as the gallery "
                                     "does, or a domain crate's tests and the gallery build different copies of the framework")
+    render = packages.get("story-render")
+    if gallery and render:
+        theirs = {d["name"]: d for d in gallery["dependencies"] if d["kind"] is None}
+        for d in render["dependencies"]:
+            g = theirs.get(d["name"])
+            if d["kind"] is None and g and not set(d["features"]) <= set(g["features"]):
+                problems.append(f"crates/story-render/Cargo.toml: {d['name']} asks for {sorted(set(d['features']) - set(g['features']))} "
+                                "beyond the gallery's line, so renders build a second copy of it and everything above")
     for problem in problems:
         print(f"cl doctor: {problem}", file=sys.stderr)
     if not problems and not quiet:
@@ -161,7 +169,8 @@ def target_dir(top, env):
 
 
 def variants(target):
-    """The framework crates' lib variants in the target dir's debug profile: {(crate, hash): features}."""
+    """The framework crates' lib builds in the target dir's debug profile: {(crate, hash): (features, mode)}, mode
+    "check" for a metadata-only build (`cargo check`, no rlib) and "build" otherwise."""
     found = {}
     fp = os.path.join(target, "debug", ".fingerprint")
     if not os.path.isdir(fp):
@@ -176,29 +185,29 @@ def variants(target):
                     j = json.load(open(os.path.join(fp, d, f)))
                 except (OSError, ValueError):
                     continue
-                found[(m.group(1), m.group(2))] = j.get("features", "")
+                rlib = os.path.join(target, "debug", "deps", f"lib{m.group(1).replace('-', '_')}-{m.group(2)}.rlib")
+                found[(m.group(1), m.group(2))] = (j.get("features", ""), "build" if os.path.exists(rlib) else "check")
     return found
 
 
 def report_new_variants(before, after):
+    """Names each new build of a framework crate. A check and a build of a crate are separate by design; within each,
+    a target dir should hold one."""
     new = {k: v for k, v in after.items() if k not in before}
-    if not new:
-        return
-    by_crate, olds = {}, {}
-    for (crate, _), feats in new.items():
-        by_crate.setdefault(crate, set()).add(feats)
-    for (crate, _), feats in before.items():
-        olds.setdefault(crate, set()).add(feats)
     for crate in FRAMEWORK:
-        if crate not in by_crate:
-            continue
-        feats = " | ".join(sorted(by_crate[crate]))
-        same = [f for f in by_crate[crate] if f in olds.get(crate, set())]
-        why = ("same features as a build already here, so a crate below it changed its features (a dev-dependency line, "
-               "a manifest change, or a command run outside cl)" if same else "a feature set this target dir had not built")
-        print(f"cl: new build of {crate}, features {feats}: {why}; {len(olds.get(crate, []))} build(s) were there before. "
-              "Expected once per target dir after a manifest change (docs/development.md); otherwise run `cl doctor`.",
-              file=sys.stderr)
+        for mode in ("build", "check"):
+            mine = sorted({f for (c, _), (f, m) in new.items() if c == crate and m == mode})
+            if not mine:
+                continue
+            olds = {f for (c, _), (f, m) in before.items() if c == crate and m == mode}
+            if not olds:
+                continue
+            why = ("same features as one already here, so a crate below it changed its features (a dev-dependency line, "
+                   "a manifest change, or a command run outside cl)" if any(f in olds for f in mine)
+                   else "a feature set this target dir had not built")
+            print(f"cl: another {mode} of {crate}, features {' | '.join(mine)}: {why}; {len(olds)} were there before. "
+                  "Expected once per target dir after a manifest change (docs/development.md); otherwise run `cl doctor`.",
+                  file=sys.stderr)
 
 
 def run(top, cargo_args, then=None):

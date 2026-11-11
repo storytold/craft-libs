@@ -41,9 +41,10 @@ font-manager = ["craft-ui-gallery/font-manager"]
 update = ["craft-ui-gallery/update"]
 
 [dependencies]
-# The same framework features as the gallery, so the framework builds once for the gallery, the tests and this bin.
+# The same framework features as the gallery (the runtime's `testing` includes the snapshot renderer), so the
+# framework builds once for the gallery, the tests and this bin.
 craft-behavior = { workspace = true }
-craft-ui = { workspace = true, features = ["app", "testing", "snapshot"] }
+craft-ui = { workspace = true, features = ["app", "testing"] }
 craft-ui-gallery = { path = "../ui-gallery", default-features = false }
 egui = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png"] }
