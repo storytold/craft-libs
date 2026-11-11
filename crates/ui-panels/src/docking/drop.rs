@@ -44,17 +44,30 @@ impl<P> DragUnit<P> {
 pub trait DockDrag<P> {
     /// What the drag moves in `layout`; `None` when the dragged panel is not in it.
     fn unit(&self, layout: &Layout<P>) -> Option<DragUnit<P>>;
+    /// The size of what the drag left where it started, which a float takes; `None` floats it at its own or the
+    /// default size.
+    fn source(&self) -> Option<Vec2> {
+        None
+    }
 }
 
 impl<P: Clone + Eq + Hash> DockDrag<P> for PanelDrag {
     fn unit(&self, layout: &Layout<P>) -> Option<DragUnit<P>> {
         layout.panels().into_iter().find(|panel| PanelKey::of(*panel) == self.panel).cloned().map(DragUnit::Panel)
     }
+
+    fn source(&self) -> Option<Vec2> {
+        self.source
+    }
 }
 
 impl<P: Clone> DockDrag<P> for GroupDrag<P> {
     fn unit(&self, _layout: &Layout<P>) -> Option<DragUnit<P>> {
         Some(self.unit.clone())
+    }
+
+    fn source(&self) -> Option<Vec2> {
+        self.source
     }
 }
 
@@ -201,14 +214,11 @@ fn spot_action<P: Clone + Eq + Hash>(
     }
 }
 
-/// The action that floats `unit` in a window under `at`, inside the area of `space`, at the size `space` recorded for
-/// it, and the outline the ghost paints for it. The pointer sits in the middle of the window's title row.
-pub fn float_drop<P: Clone + PartialEq>(unit: &DragUnit<P>, space: &FloatSpace<P>, at: Pos2) -> DockDropped<P> {
-    let recorded = match unit {
-        DragUnit::Panel(panel) => space.panel(panel),
-        DragUnit::Group(anchor) | DragUnit::Window(anchor) | DragUnit::Column(anchor) => space.group(anchor),
-    };
-    let size = recorded.unwrap_or(space.default_size).min(space.area.size());
+/// The action that floats `unit` in a window under `at`, inside the area of `space`, at [`FloatSpace::size_of`] with
+/// `source` the size the unit had where the drag started, and the outline the ghost paints for it. The pointer sits in
+/// the middle of the window's title row.
+pub fn float_drop<P: Clone + PartialEq>(unit: &DragUnit<P>, space: &FloatSpace<P>, at: Pos2, source: Option<Vec2>) -> DockDropped<P> {
+    let size = space.size_of(unit, source).min(space.area.size());
     let min = (at - Vec2::new(size.x * 0.5, space.title_row * 0.5)).min(space.area.max - size).max(space.area.min);
     let rect = Rect::from_min_size(min, size);
     let action = match unit {
@@ -275,7 +285,7 @@ impl<P: Clone + Eq + Hash + Send + 'static> DockDropTarget<'_, P> {
         let unit = drag.unit(self.layout)?;
         let window = matches!(unit, DragUnit::Window(_));
         if pointer::frame(self.ctx).mods.cmd {
-            return if window { None } else { self.float(&unit, at) };
+            return if window { None } else { self.float(&unit, at, drag.source()) };
         }
         if window && !self.title_bar_docks {
             return None;
@@ -292,12 +302,13 @@ impl<P: Clone + Eq + Hash + Send + 'static> DockDropTarget<'_, P> {
         if window || !self.float_on_empty {
             return None;
         }
-        self.float(&unit, at)
+        self.float(&unit, at, drag.source())
     }
 
-    /// The unit floated under `at`, when it may float and the model takes it.
-    fn float(&self, unit: &DragUnit<P>, at: Pos2) -> Option<DockDropped<P>> {
-        let floated = float_drop(unit, self.space?, at);
+    /// The unit floated under `at`, when it may float and the model takes it; `source` is its size where the drag
+    /// started.
+    fn float(&self, unit: &DragUnit<P>, at: Pos2, source: Option<Vec2>) -> Option<DockDropped<P>> {
+        let floated = float_drop(unit, self.space?, at, source);
         ((self.permissions)(unit.lead()).floatable && takes(self.layout, &floated.action, self.permissions)).then_some(floated)
     }
 }
@@ -367,9 +378,10 @@ pub(crate) fn started(env: &EnvView<'_>) -> Option<Arrangement> {
     env.get::<InDock>().0
 }
 
-/// Starts the drag of `unit`, whose shown panel is `active`. A group or a column drags a ghost frame; `ghost` gives
-/// its size and label. A window moves itself, so its drag has no ghost and `ghost` is `None`.
-pub fn start_group_drag<P, C>(cx: &mut Cx<'_, C>, unit: DragUnit<P>, active: PanelKey, ghost: Option<(Vec2, Label)>)
+/// Starts the drag of `unit`, whose shown panel is `active` and whose size where it starts is `source`. A group or a
+/// column drags a ghost frame; `ghost` gives its size and label. A window moves itself, so its drag has no ghost and
+/// `ghost` is `None`.
+pub fn start_group_drag<P, C>(cx: &mut Cx<'_, C>, unit: DragUnit<P>, active: PanelKey, source: Option<Vec2>, ghost: Option<(Vec2, Label)>)
 where
     P: Clone + Send + Sync + 'static,
     C: Component,
@@ -379,7 +391,7 @@ where
         None => DragPreview::None,
     };
     let started = started(&cx.env);
-    cx.start_drag(GroupDrag { unit, active, started }, preview);
+    cx.start_drag(GroupDrag { unit, active, source, started }, preview);
 }
 
 /// Ends a running tab or group drag that started on `shown`'s dock under another revision: another arrangement

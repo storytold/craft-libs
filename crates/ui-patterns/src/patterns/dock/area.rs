@@ -622,12 +622,16 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         (rows, hosted)
     }
 
-    /// Runs a panel command on `panel`: the event of a command the host carries out, else its actions.
-    fn run(&mut self, panel: &P, command: DockCommands) {
+    /// Runs a panel command on `panel`: the event of a command the host carries out, else its actions. `source` is
+    /// the size of the group the command runs from, which a float of it takes.
+    fn run(&mut self, panel: &P, command: DockCommands, source: Option<Vec2>) {
         let scene = self.scene;
         let permissions = |panel: &P| scene.permissions(panel);
         // The area's permissions are narrowed for a locked workspace already.
-        let commands = DockScene::new(scene.layout, scene.space, false, &permissions);
+        let mut commands = DockScene::new(scene.layout, scene.space, false, &permissions);
+        if let Some(size) = source {
+            commands = commands.source(size);
+        }
         let report = &mut self.report;
         if let Some(event) = command.event(panel) {
             report.events.push(event);
@@ -653,8 +657,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     fn pick(&mut self, panel: &P, item: GroupItem) {
         match item {
             GroupItem::MoveTo(at) => self.move_to(panel, at),
-            GroupItem::CollapseToIcons => self.run(panel, DockCommands::CollapseToIcons),
-            GroupItem::AutoCollapse => self.run(panel, DockCommands::AutoCollapse),
+            GroupItem::CollapseToIcons => self.run(panel, DockCommands::CollapseToIcons, None),
+            GroupItem::AutoCollapse => self.run(panel, DockCommands::AutoCollapse, None),
         }
     }
 
@@ -711,7 +715,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             self.pick(shown, item);
         }
         for command in output.commands {
-            self.run(shown, command);
+            self.run(shown, command, Some(rect.size()));
         }
         if output.toggle_minimized {
             self.report.actions.push(match look.section {
@@ -726,7 +730,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             && scene.permissions(panel).floatable
             && (scene.config.float_on_empty_drop || !ui.ctx().content_rect().contains(torn.pointer))
         {
-            self.report.actions.push(float_drop(&DragUnit::Panel(panel.clone()), scene.space, torn.pointer).action);
+            self.report.actions.push(float_drop(&DragUnit::Panel(panel.clone()), scene.space, torn.pointer, Some(rect.size())).action);
         }
         None
     }
@@ -912,8 +916,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             if let Some(item) = picked.get() {
                 self.pick(&active, item);
             }
+            // The window's commands run from its body, below the title row.
+            let body = opening.rect.size() - Vec2::new(0.0, scene.sizes.bar);
             for command in commands {
-                self.run(&active, command);
+                self.run(&active, command, Some(body));
             }
             if output.minimized_toggled {
                 self.report.actions.push(Action::set_minimized(anchor.clone(), !window.minimized));

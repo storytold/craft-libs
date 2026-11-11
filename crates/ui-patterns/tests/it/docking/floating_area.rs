@@ -156,3 +156,27 @@ fn a_floating_window_leaves_the_docked_tree_its_room() {
     let beside = docked_bottom(with_window(Some(Node::tabs(vec![DOCKED], 0))));
     assert!((beside - alone).abs() <= SLACK, "the docked group ends at {beside} beside the window, at {alone} without it");
 }
+
+/// A floating window's drag bar shows no title: its tab is the one place the panel's name shows in the window.
+#[trial]
+fn a_floating_windows_drag_bar_shows_no_title() {
+    let bed = bed(with_window(Some(Node::tabs(vec![DOCKED], 0))), |_| Permissions::ALL);
+    let named = bed.fixture.texts().iter().filter(|text| text.text == title(WINDOW) && WINDOW_AT.contains_rect(text.rect)).count();
+    assert_eq!(named, 1, "only the tab names the panel: {:?}", bed.fixture.texts());
+}
+
+/// A tab dragged out of the window floats at the width its group had where it was docked, not a default size.
+#[trial]
+fn a_tab_torn_out_of_its_group_floats_at_the_groups_width() {
+    let mut bed = bed(Layout::new(Some(Node::tabs(vec![DOCKED, SECOND], 0)), Vec::new()), |_| Permissions::ALL);
+    let group = bed.fixture.by_role(Role::TAB_PANEL).first().expect("the docked group shows").rect;
+    let tab = bed.fixture.by_role(Role::TAB).into_iter().max_by(|a, b| a.rect.min.x.total_cmp(&b.rect.min.x)).expect("the second tab shows");
+    let outside = Pos2::new(group.center().x, -40.0);
+    press_and_move(&mut bed.fixture, tab.center(), outside - tab.center());
+    bed.fixture.frame(vec![release(outside)]);
+    bed.fixture.settle();
+    let layout = bed.workspace.borrow().layout.clone();
+    let window =
+        layout.floating.iter().find(|window| window.contains(&SECOND)).unwrap_or_else(|| panic!("the tab floats: {:?}", bed.actions.borrow()));
+    assert!((window.rect.width() - group.width()).abs() <= SLACK, "floated {:?}, docked group {group:?}", window.rect);
+}

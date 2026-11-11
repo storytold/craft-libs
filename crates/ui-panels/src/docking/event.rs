@@ -1,6 +1,6 @@
 //! `DockEvent`, `FloatSpace` and `HidePanels`: what a dock reports to the host and the host tells a dock.
 
-use super::{DockCommands, DockSizes};
+use super::{DockCommands, DockSizes, DragUnit};
 use egui::{Rect, Vec2};
 
 /// A request for host state outside the layout, or a report of where something ended up.
@@ -72,12 +72,10 @@ pub struct FloatSpace<P> {
     pub inset: f32,
     /// The height of a floating window's title row (`DockSizes::bar`), which a drop keeps under the pointer.
     pub title_row: f32,
-    /// The size a command floats a panel at when the area never drew it.
+    /// The size a unit floats at when neither its panel nor where it came from gives one.
     pub default_size: Vec2,
-    /// What a drag floats from each drawn panel: the panel alone, its group and its dock column.
+    /// The float size of each panel that has one of its own (`PanelSpec::float_size`).
     panels: Vec<(P, Vec2)>,
-    groups: Vec<(P, Vec2)>,
-    columns: Vec<(P, Vec2)>,
     /// The height each panel's content used when it was last drawn, which fits a floated group to its content;
     /// `None` for content that filled its body.
     contents: Vec<(P, Option<f32>)>,
@@ -95,8 +93,6 @@ impl<P: PartialEq> FloatSpace<P> {
             title_row: sizes.bar,
             default_size: sizes.float_size,
             panels: Vec::new(),
-            groups: Vec::new(),
-            columns: Vec::new(),
             contents: Vec::new(),
             side_edge_zones: false,
         }
@@ -114,27 +110,27 @@ impl<P: PartialEq> FloatSpace<P> {
         self.side_edge_zones
     }
 
-    /// Adds the size a command floats `panel` at alone when the area has not drawn it, such as a hidden panel or a
-    /// headless run. A size the area recorded for the panel takes precedence.
+    /// Adds the size `panel` floats at alone, whatever size it had where it came from.
     #[must_use]
     pub fn with_panel_size(mut self, panel: P, size: Vec2) -> Self {
         self.panels.push((panel, size));
         self
     }
 
-    /// The size a command floats `panel` at alone, when recorded.
+    /// The float size of `panel` of its own, when it has one.
     pub fn panel(&self, panel: &P) -> Option<Vec2> {
         Self::find(&self.panels, panel)
     }
 
-    /// The size a command floats the group of `panel` at, when recorded.
-    pub fn group(&self, panel: &P) -> Option<Vec2> {
-        Self::find(&self.groups, panel)
-    }
-
-    /// The size a command floats the dock column of `panel` at, when recorded.
-    pub fn column(&self, panel: &P) -> Option<Vec2> {
-        Self::find(&self.columns, panel)
+    /// The size `unit` floats at: a panel's own float size, else the size it had where it came from (`source`, a
+    /// window's own or a group's or column's with the window's title row above it), else the default.
+    pub fn size_of(&self, unit: &DragUnit<P>, source: Option<Vec2>) -> Vec2 {
+        let own = match unit {
+            DragUnit::Panel(panel) => self.panel(panel),
+            _ => None,
+        };
+        let framed = |size: Vec2| if matches!(unit, DragUnit::Window(_)) { size } else { size + Vec2::new(0.0, self.title_row) };
+        own.or(source.map(framed)).unwrap_or(self.default_size)
     }
 
     fn find(sizes: &[(P, Vec2)], panel: &P) -> Option<Vec2> {

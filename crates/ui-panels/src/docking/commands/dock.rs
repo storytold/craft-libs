@@ -86,6 +86,7 @@ impl DockCommands {
 pub struct DockScene<'a, P> {
     layout: &'a Layout<P>,
     space: &'a FloatSpace<P>,
+    source: Option<Vec2>,
     locked: bool,
     permissions: &'a dyn Fn(&P) -> Permissions,
 }
@@ -94,7 +95,14 @@ impl<'a, P> DockScene<'a, P> {
     /// A scene over `layout`. `locked` is `WorkspaceSet::locked`; `permissions` is what the host passes to
     /// `Workspace::apply_all`.
     pub fn new(layout: &'a Layout<P>, space: &'a FloatSpace<P>, locked: bool, permissions: &'a dyn Fn(&P) -> Permissions) -> Self {
-        DockScene { layout, space, locked, permissions }
+        DockScene { layout, space, source: None, locked, permissions }
+    }
+
+    /// The size of the group or window the command runs from, which a float of it takes.
+    #[must_use]
+    pub fn source(mut self, size: Vec2) -> Self {
+        self.source = Some(size);
+        self
     }
 
     fn policy(&self, panel: &P) -> Permissions {
@@ -291,19 +299,10 @@ fn float_actions<P: Clone + Eq + Hash>(scene: &DockScene<'_, P>, unit: &DragUnit
     vec![action]
 }
 
-/// The rect a drag would float `unit` at, inside the float area.
+/// The rect a command floats `unit` at, inside the float area: the size [`FloatSpace::size_of`] gives it, from the
+/// size of the group the command runs from.
 fn placed<P: Clone + Eq + Hash>(scene: &DockScene<'_, P>, unit: &DragUnit<P>) -> Rect {
-    let (layout, space) = (scene.layout, scene.space);
-    let panel = unit.lead();
-    let docked = layout.place(panel).and_then(|place| layout.column(&place)).and_then(|column| column.width);
-    let remembered = match unit {
-        DragUnit::Panel(_) => space.panel(panel),
-        DragUnit::Group(_) | DragUnit::Window(_) => space.group(panel),
-        DragUnit::Column(_) => space.column(panel),
-    };
-    let width = docked.filter(|_| !matches!(unit, DragUnit::Panel(_))).unwrap_or(space.default_size.x);
-    let size = remembered.unwrap_or_else(|| Vec2::new(width, space.default_size.y));
-    space.place(size)
+    scene.space.place(scene.space.size_of(unit, scene.source))
 }
 
 /// The panels of the last column of the dock on `edge`.

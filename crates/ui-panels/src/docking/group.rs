@@ -102,7 +102,9 @@ impl<P: Clone + Send + Sync + 'static> Component for GroupGrip<P> {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         self.double = cx.press().double_pressed();
         if self.movable && matches!(cx.press().phase, PressPhase::DragStart { .. }) {
-            start_group_drag(cx, self.unit.clone(), self.active, self.ghost.clone());
+            // The ghost's extent is the group's own.
+            let source = self.ghost.as_ref().map(|(size, _)| *size);
+            start_group_drag(cx, self.unit.clone(), self.active, source, self.ghost.clone());
             self.started = true;
         }
     }
@@ -341,7 +343,7 @@ impl<P: Clone + Hash + Send + Sync + 'static> Container for DockGroup<'_, P> {
                 .tear_off()
                 .natural_height(true)
                 .accept_from(|_| false)
-                .drag_payload(move |drag: &ListDrag<PanelKey>| Some(PanelDrag { panel: drag.grabbed, from, started }))
+                .drag_payload(move |drag: &ListDrag<PanelKey>| Some(PanelDrag { panel: drag.grabbed, from, source: Some(size), started }))
                 .show_items(ui, &source, &mut |key, _| {
                     let panel = panels.iter().find(|panel| &panel.key == key);
                     let title = panel.map_or_else(Label::default, |panel| panel.title.clone());

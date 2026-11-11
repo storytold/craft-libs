@@ -320,7 +320,7 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
             {
                 let shown = lead.active_panel().unwrap_or(anchor);
                 let label = Label::from((self.spec)(shown).label.as_str().to_owned());
-                start_group_drag(cx, DragUnit::Group(anchor.clone()), PanelKey::of(shown), Some((extent.size(), label)));
+                start_group_drag(cx, DragUnit::Group(anchor.clone()), PanelKey::of(shown), None, Some((extent.size(), label)));
                 began = true;
             }
         }
@@ -329,7 +329,7 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
                 && let Some(panel) = self.panel(*group, *panel)
             {
                 let label = Label::from((self.spec)(panel).label.as_str().to_owned());
-                start_group_drag(cx, DragUnit::Panel(panel.clone()), PanelKey::of(panel), Some((cell.size(), label)));
+                start_group_drag(cx, DragUnit::Panel(panel.clone()), PanelKey::of(panel), None, Some((cell.size(), label)));
                 began = true;
             }
         }

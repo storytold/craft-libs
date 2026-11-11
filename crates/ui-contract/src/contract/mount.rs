@@ -333,7 +333,8 @@ impl Host for ViewportHost {
         let open = ViewportOpen {
             id,
             title: title.as_str(),
-            size: layout_memory::read(&ctx, id).or(placed.map(|rect| rect.size())),
+            // A placed rect is the caller's size for the window; the measured size is for a window sized by content.
+            size: placed.map(|rect| rect.size()).or_else(|| layout_memory::read(&ctx, id)),
             save: self.save.as_deref(),
             spec: &spec,
             limits: (Some(self.overlay.size_limits.min), self.overlay.size_limits.max),

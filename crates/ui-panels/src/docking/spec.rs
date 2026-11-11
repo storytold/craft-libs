@@ -63,7 +63,8 @@ pub struct PanelSpec {
     /// free height with the other groups that have none when no group asks for a fill, and takes the group's
     /// minimum when one does.
     pub heights: Option<DockHeights>,
-    /// The size the panel floats at: its width and the most height it takes. `None`: `FloatSpace`'s default size.
+    /// The size the panel floats at: its width and the most height it takes. `None`: the size of the group it floats
+    /// out of, else `FloatSpace`'s default size.
     pub float_size: Option<Vec2>,
     /// Whether the panel's floating window may be an OS window of its own. A panel that disallows it keeps its
     /// window in the main window.

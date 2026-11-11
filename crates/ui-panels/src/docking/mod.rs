@@ -69,7 +69,7 @@ use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::dock::{DockEdge, Layout, Node, SplitSize};
 use craft_behavior::{Axis, EditEvents, Flow, Metrics, PartKey, Sense};
 use divider::{Divider, Drag};
-use egui::{Rect, Response};
+use egui::{Rect, Response, Vec2};
 use std::fmt::Debug;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use tree::{FrameRules, SplitHandle};
@@ -121,13 +121,15 @@ impl PanelTitle {
 }
 
 /// What a dragged tab carries.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct PanelDrag {
     /// The dragged panel.
     pub panel: PanelKey,
     /// The group the tab was in, named by its anchor panel.
     pub from: PanelKey,
+    /// The size of that group where the drag started: a float of the panel takes it.
+    pub source: Option<Vec2>,
     /// The arrangement the drag started on, when it started in a dock area.
     pub(crate) started: Option<drop::Arrangement>,
 }

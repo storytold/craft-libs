@@ -164,7 +164,8 @@ impl<'a> FloatingGroup<'a> {
     #[must_use]
     pub fn window_of<P: Clone + Hash + Send + Sync + 'static>(mut self, anchor: P) -> Self {
         let active = PanelKey::of(&anchor);
-        self.start_drag = Some(Box::new(move |cx| start_group_drag(cx, DragUnit::Window(anchor), active, None)));
+        let size = self.rect.size();
+        self.start_drag = Some(Box::new(move |cx| start_group_drag(cx, DragUnit::Window(anchor), active, Some(size), None)));
         self
     }
 
@@ -283,7 +284,8 @@ impl Container for FloatingGroup<'_> {
     }
 
     fn header(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
-        let shown = TitleRow::new(cx.label()).strength(HeaderStrength::Strong).actions(self.actions.iter().copied()).show(ui);
+        // A drag bar with no title: the tabs below name the panels.
+        let shown = TitleRow::new("").strength(HeaderStrength::Strong).actions(self.actions.iter().copied()).show(ui);
         self.taken = shown.action.or(self.taken);
         if let Some(rows) = self.menu.as_mut() {
             self.menu_opener = rows.hang(ui, &shown, cx.words::<DockWords>().panel_menu.clone());

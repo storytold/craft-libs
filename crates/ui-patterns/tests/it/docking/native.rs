@@ -111,6 +111,23 @@ fn a_native_dock_window_shows_no_os_title_bar() {
     }
 }
 
+/// A native float's OS window opens at the float's own size, not at what its content measured.
+#[trial]
+fn a_native_float_opens_at_its_own_size() {
+    let windows = Windows::new();
+    windows.root_info(info(true, ROOT_AT));
+    let mut workspace = Workspace::new(Layout::new(None, vec![float()]));
+    let mut sizes = Vec::new();
+    for _ in 0..3 {
+        let out = windows.frame(vec![], vec![], |ui| {
+            DockArea::new("Native dock", Bind::bound(&mut workspace), &mut Palettes(Permissions::ALL), DockConfig::default()).show(ui);
+        });
+        sizes.extend(out.builders.into_iter().filter(|(viewport, _)| *viewport != ViewportId::ROOT).map(|(_, builder)| builder.inner_size));
+    }
+    let size = float().rect.size();
+    assert!(!sizes.is_empty() && sizes.iter().all(|shown| *shown == Some(size)), "{size:?} asked, {sizes:?} opened");
+}
+
 /// The OS close of a native float closes its window when every panel may close, and leaves it open otherwise.
 #[trial]
 fn the_os_close_of_a_native_float_closes_it_when_its_panels_may_close() {
