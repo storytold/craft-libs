@@ -377,3 +377,10 @@ comments label them `Craft patch (flatten)`.
 | hayro-interpret `color.rs` | `color::InkSpace`, `ColorSpace::ink_space` and `ColorSpace::ink_values`: how a space's colors are kept as inks (gray, CMYK, its colorants, `All`, `None`) and colors converted in batches, process color as `Color::ink_paint` converts it. `ColorSpace::components`; `ColorSpace::is_device_cmyk` and `ColorSpace::spot_alternate` public |
 | hayro-interpret `types.rs`, `x_object.rs` | `RasterImage::with_inks`: an image's samples in its own space's inks (`InkImage`), `/Decode` and `/Matte` applied, transfer functions left out, with its alpha at the alpha's own size |
 | hayro-interpret `interpret/mod.rs` | The `sh` operator drops the shading's `/Background`, which only a shading pattern paints (ISO 32000-2 §8.7.4.5.1) |
+
+Legacy encryption key length, ported from [PdfCraft #1882](https://github.com/storytold/pdfcraft/pull/1882)
+(commit 344ba9f8, marked `PdfCraft patch` in `hayro-syntax/src/crypto/mod.rs`): an encryption
+dictionary of revision 2–4 whose `/Length` is above 128 bits is refused with `InvalidEncryption`.
+Those revisions take the file key from a 16-byte MD5 hash, so `/V 2 /R 3 /Length 256` sliced past
+the hash and panicked on open. Test:
+`crypto::pdfcraft_password_tests::legacy_key_length_above_128_bits_is_refused_not_a_panic`.

@@ -99,3 +99,11 @@ required-features = ["vp9-decode"]
 [[test]]
 name = "prores"
 required-features = ["prores"]
+
+[[test]]
+name = "hevc"
+required-features = ["hevc-encode"]
+
+[[test]]
+name = "av1"
+required-features = ["av1"]

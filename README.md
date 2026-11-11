@@ -27,10 +27,18 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 
 - [`craft-platform`](crates/platform/README.md): optional native dialog lifecycle, Linux/BSD desktop appearance observation and browser download ownership; application policy stays in the apps.
 
+- [`craft-aep`](crates/aep/README.md): After Effects projects: the `.aep` (RIFX) and `.aepx`
+  container as a lossless chunk tree that writes back byte for byte, and a typed, read-only view
+  of compositions, layers, properties, keyframes, effects, masks, shapes, text and footage.
+  Clean room, from EffectCraft. Mapping onto an app's document stays in the app.
 - [`craft-ai-core`](crates/ai-core/README.md): the data model and contract for AI in the Craft Apps (connections, models, tools, requests, jobs, consent, history, route spec). Pure, no I/O, wasm-safe. Contract in [docs/ai-shared-layer.md](docs/ai-shared-layer.md).
 - [`craft-pdf`](crates/pdf/README.md): independently optional PDF parsing, interpretation, rasterization and guarded authoring. Apps retain layout, fonts, editing and export policy; writer-only consumers do not enable the shared reader.
 
 - [`craft-atomic`](crates/atomic/README.md): Crash-safe atomic file writing and replacement with same-directory staging, directory fsync, Apple `F_FULLFSYNC` fallback, transient lock backoff, and fault injection for the Craft suite.
+- [`craft-captions`](crates/captions/README.md): caption and subtitle files behind one neutral
+  model (cues with exact tick times): SubRip, WebVTT, Scenarist SCC, MacCaption MCC, EBU STL and
+  TTML / IMSC1 / DFXP readers and writers, and CEA-608 / CEA-708 byte-pair coding. Carved from
+  FilmCraft.
 - [`craft-cfb`](crates/cfb/README.md): clean-room Compound File Binary ([MS-CFB], OLE structured
   storage) reader and writer: the container of legacy Office files, Outlook messages, encrypted
   OOXML packages and AAF. Bounded on hostile input; what the streams hold stays with each format.
@@ -51,6 +59,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-docpath`](crates/docpath/src/lib.rs): decides whether a path or `file:` URL stored in a
   document may be opened. Paths stored in documents are followed only when they are local or on the
   document's own network share; other network paths, device paths and non-file URLs are refused.
+- [`craft-drawingml`](crates/drawingml/README.md): the DrawingML that PPTX, DOCX and XLSX share:
+  EMU units and `a:xfrm`, colours with theme slots and colour transforms, preset shape outlines
+  (`a:prstGeom`), custom geometry with guide formulas (`a:custGeom`) and preset text warps
+  (`a:prstTxWarp`). From DeckCraft. Takes `craft-xml` trees; packages stay with each format.
 - [`craft-dxf`](crates/dxf/src/lib.rs): DXF tag reader and writer, from CADCraft: ASCII and
   binary DXF as (group code, value) tags, split into sections and entities, with pre-2007 code
   pages and version detection, and written back. Bounded on hostile input. Mapping tags to a
@@ -87,9 +99,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-raw`](crates/raw/README.md): camera raw files, the file-format layer, from LightCraft with
   what PhotoCraft's and FilmCraft's readers added: container parsing and decompression to a neutral
   raw image (samples, CFA, black and white levels, active area, crop, orientation, colour tags,
-  opcode lists, embedded previews), one Cargo feature per format. DNG reading and writing and
-  Canon CRW (through `craft-crw`) so far; demosaicing and everything after stay with the develop
+  opcode lists, embedded previews), one Cargo feature per format. DNG reading and writing,
+  Hasselblad 3FR/FFF and Canon CRW (through `craft-crw`) so far; demosaicing and everything after stay with the develop
   pipeline.
+- [`craft-idml`](crates/idml/README.md): IDML (InDesign Markup Language) packages: the ZIP container read with bounded part sizes and lenient part names, `designmap.xml` with its includes in place, the `<Properties>` form on craft-xml elements, value codecs and the package writer; and InDesign Tagged Text, read and written.
 - [`craft-tiff`](crates/tiff/README.md): TIFF and BigTIFF IFD reader and writer, from LightCraft:
   every field type, the IFD chain, SubIFDs and Exif/GPS/Interop pointer IFDs, maker-note IFDs
   (Canon, Nikon, Sony, Fujifilm, Olympus, Panasonic, Pentax), strip and tile layout. Bounded and
@@ -109,9 +122,13 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   AC-3/E-AC-3, MP1/MP2), streaming and seeking, and packet decoding for any demuxer. See its
   README for formats and features.
 - [`craft-media`](crates/media/README.md): bit-level I/O (`bitstream`), clean-room MP4/MOV
-  (`isobmff`) and Matroska/WebM (`matroska`) demuxers and muxers, Ogg (`ogg`) and AVI (`avi`) demuxers, from
+  (`isobmff`), Matroska/WebM (`matroska`) and MXF (`mxf`) demuxers and muxers, Ogg (`ogg`) and AVI (`avi`) demuxers, from
   FilmCraft, and an ISO BMFF box reader. Containers only; codecs are in `craft-audio`, and
   video codecs will go in a separate crate.
+- [`craft-lottie`](crates/lottie/README.md): Lottie (Bodymovin) JSON, the wire layer: the document
+  header, animatable properties and keyframes (legacy end values, hold keys, spatial tangents),
+  ease tangents to and from speed and influence, bezier paths, gradients and embedded image data
+  URIs. From EffectCraft; mapping layers and shapes onto a document stays in the app.
 - [`craft-menu`](crates/menu/README.md): an app's menus as a macOS menu bar: the Mac layout
   (app menu, Window, Help, system-key clashes), a platform backend trait, and key equivalents
   fed back to egui as the input egui-winit would have made. Commands and their enabled state
@@ -120,10 +137,16 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   of polygons with per-corner indices, materials, a node hierarchy): STL, OBJ with MTL, PLY and
   glTF 2.0 / GLB, one feature each. Readers are bounded by `Limits`, never open a file themselves
   and never panic. Carved from EffectCraft, SolidCraft, TextureCraft and MaterialCraft.
+- [`craft-midi`](crates/midi/README.md): Standard MIDI Files: a bounded reader for formats 0, 1 and
+  2 and a format-1 writer, over a neutral model of notes and channel events in ticks at 960 per
+  quarter note. From SoundCraft.
 - [`craft-mime`](crates/mime/README.md): Internet messages and MIME, read and written: RFC 5322
   header fields, MIME parts and multiparts, encoded-words, RFC 2231 parameters, base64 and
   quoted-printable, character sets, address lists, dates, mbox files and the `multipart/related`
   lookups of MHT web archives. What a message means (body, attachments, flags) stays in each app.
+- [`craft-opc`](crates/opc/README.md): Open Packaging Conventions, the ZIP container of DOCX, XLSX and PPTX
+  files: bounded readers (every part up front, or on demand), part names, relationships, content
+  types and a deterministic package writer. What the parts hold stays with each format's crate.
 - [`craft-pcraft-format`](crates/pcraft-format/README.md): the envelope of PhotoCraft's `.pcraft`
   bundle: `Manifest<D>` with the document as a type parameter, `TileRef`, the entry paths, the
   manifest decode limits and the migration runner. The document model stays in PhotoCraft.
@@ -140,10 +163,14 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 
 - [`craft-settings`](crates/settings/README.md): `config.toml` settings storage for every app: platform folders, portable mode and overrides, atomic saves while running, backup, damaged-file recovery and schema migrations. Policy in [docs/settings-storage.md](docs/settings-storage.md).
 - [`craft-silhouette-studio`](crates/silhouette-studio/src/lib.rs): bounded, fail-closed reader for Silhouette Studio `.studio` and `.studio3` documents: outlines, line colours and page size in millimetres. Protected designs are refused.
-- [`craft-svg-paths`](crates/svg-paths/src/lib.rs): SVG geometry reader: shapes,
-  transforms, `<use>`/`<symbol>` instances and the CSS cascade as Bézier paths in millimetres, each
-  tagged by the caller; a CSS colour parser (`color`); and a small SVG writer (`write`: elements with
-  escaping, path data, numbers). Not the shared SVG model.
+- [`craft-svg`](crates/svg/src/lib.rs): SVG. `sniff` recognises SVG and SVGZ data; `svgz` unpacks
+  SVGZ within a byte limit, decodes UTF-8, UTF-16 and ISO 8859-1, and compresses; `guard` bounds
+  element nesting and entity expansion before any XML reader sees the text; `paths` reads geometry
+  (shapes, transforms, `<use>`/`<symbol>` instances and the CSS cascade as Bézier paths in
+  millimetres, each tagged by the caller); `color` parses CSS colours; `write` writes documents
+  (elements with escaping, path data, numbers).
+- [`craft-svg-paths`](crates/svg-paths/src/lib.rs): the former name of `craft-svg`'s `paths`,
+  `color` and `write`; re-exports them for existing users.
 - [`craft-text`](crates/text/README.md): text processing below the composer. Its `hyphen` module finds
   hyphenation points, with a bundled US English dictionary and patterns and optional hypher patterns
   for 47 more languages (one cargo feature each).
@@ -152,6 +179,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-vectorcraft-format`](crates/vectorcraft-format/README.md): the envelope of VectorCraft's
   `.vectorcraft` file: its members, versions, embedded images and the data after the JSON, with the
   document as a type parameter. The document and its migrations stay in VectorCraft.
+- [`craft-vectordrawable`](crates/vectordrawable/src/lib.rs): Android Vector Drawable writer: a model of
+  paths, groups, clip outlines, strokes and linear, radial and sweep gradients; the XML as Android
+  Studio formats it; and the mapping of a gradient on any affine frame to what a drawable can say.
+  What a drawable cannot draw is the caller's to bake in or leave out. No reader.
 - [`craft-web-api`](crates/web-api/README.md): the page command API every Craft web build offers its page — one
   `window.<app>` shape (`request`, `execute`, `commands`, `docInspect`, `uiInspect`, `screenshot`) over the app's
   JSON control channel.

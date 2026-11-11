@@ -795,6 +795,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-aep"
+version = "0.1.0"
+
+[[package]]
 name = "craft-ai-core"
 version = "0.1.0"
 dependencies = [
@@ -822,6 +826,15 @@ dependencies = [
  "serde",
  "serde_json",
  "symphonia",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-captions"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "proptest",
  "thiserror 2.0.21",
 ]
 
@@ -880,6 +893,15 @@ dependencies = [
 [[package]]
 name = "craft-docpath"
 version = "0.1.0"
+
+[[package]]
+name = "craft-drawingml"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "kurbo 0.13.1",
+ "serde",
+]
 
 [[package]]
 name = "craft-dxf"
@@ -1003,6 +1025,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-idml"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "flate2",
+ "thiserror 2.0.21",
+ "zip",
+]
+
+[[package]]
 name = "craft-jpeg"
 version = "0.1.0"
 dependencies = [
@@ -1028,9 +1060,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-lottie"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-media"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "craft-media-testkit",
  "proptest",
  "serde",
@@ -1072,12 +1113,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-midi"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-mime"
 version = "0.1.0"
 dependencies = [
  "chrono",
  "encoding_rs",
  "proptest",
+]
+
+[[package]]
+name = "craft-opc"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "flate2",
+ "log",
+ "thiserror 2.0.21",
+ "zip",
 ]
 
 [[package]]
@@ -1222,13 +1284,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "craft-svg-paths"
+name = "craft-svg"
 version = "0.1.0"
 dependencies = [
  "craft-xml",
+ "flate2",
  "kurbo 0.13.1",
  "roxmltree 0.21.2",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-svg-paths"
+version = "0.1.0"
+dependencies = [
+ "craft-svg",
+ "kurbo 0.13.1",
 ]
 
 [[package]]
@@ -1318,6 +1389,14 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-vectordrawable"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "kurbo 0.13.1",
 ]
 
 [[package]]
