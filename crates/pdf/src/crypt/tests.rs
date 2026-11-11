@@ -447,3 +447,19 @@ fn pdfdoc_encoding_round_trips() {
     assert_eq!(legacy_candidates("Çok"), [Zeroizing::new(vec![0xC7, b'o', b'k'])]);
     assert_eq!(legacy_candidates("şifre"), [Zeroizing::new(b"ifre".to_vec()), Zeroizing::new("şifre".as_bytes().to_vec())]);
 }
+
+#[test]
+fn r2_create_sets_every_bit_revision_2_reserves() {
+    // ISO 32000-1 section 7.6.3.2: -44 permits printing and copying only.
+    let d = new(Algorithm::Rc4_40, "user", "owner", 0x14).dict().clone();
+    assert_eq!(d.p, -44);
+    assert_eq!(new(Algorithm::Rc4_40, "user", "owner", 0).dict().p, -64, "R2 reserves bits 7 through 32");
+    let user = SecurityHandler::open(d, ID, Some("user")).unwrap();
+    assert_eq!(user.dict().p, -44);
+    let p = user.permissions();
+    assert_eq!((p.print(), p.print_high_quality(), p.copy(), p.extract_for_accessibility()), (true, true, true, true));
+    assert_eq!((p.modify(), p.annotate(), p.fill_forms(), p.assemble()), (false, false, false, false));
+    for alg in [Algorithm::Rc4_128, Algorithm::Aes128, Algorithm::Aes256] {
+        assert_eq!(new(alg, "user", "owner", 0x14).dict().p, -3884, "{alg:?}");
+    }
+}
