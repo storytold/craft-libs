@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use kurbo::{Affine, BezPath, Rect, Shape};
 
-use crate::{Item, Picture, Seg};
+use std::collections::HashMap;
+
+use crate::{ClipPath, Item, LineStyle, Picture, Seg};
 
 /// Largest bitmap side the renderers draw: within the PDF image limit and the rasteriser's 16-bit sides.
 pub const MAX_BITMAP_SIDE: u32 = 30_000;
@@ -35,19 +37,37 @@ pub fn crop_window(crop: [f32; 4]) -> [f64; 4] {
     [x, y, w, h]
 }
 
-/// One item of a placed picture, in target units.
+/// One item of a placed picture, in target units. `region` is the device-context clip region and
+/// `clips` the clip paths: an item shows inside the region and inside every clip path.
 pub enum PlacedItem {
     /// A filled and/or stroked path. The stroke width is in target units; 0 is a cosmetic hairline that
-    /// the renderer draws at its minimum width.
-    Path { path: BezPath, fill: Option<[u8; 4]>, stroke: Option<([u8; 4], f64)>, even_odd: bool, region: Option<Arc<BezPath>> },
+    /// the renderer draws at its minimum width. `line` has its dash lengths in target units.
+    Path {
+        path: BezPath,
+        fill: Option<[u8; 4]>,
+        stroke: Option<([u8; 4], f64)>,
+        line: LineStyle,
+        even_odd: bool,
+        region: Option<Arc<BezPath>>,
+        clips: Vec<Arc<PlacedClip>>,
+    },
     /// `Picture::items[index]`, a bitmap, stretched into `rect`.
-    Bitmap { index: usize, rect: Rect, region: Option<Arc<BezPath>> },
+    Bitmap { index: usize, rect: Rect, region: Option<Arc<BezPath>>, clips: Vec<Arc<PlacedClip>> },
     /// `Picture::items[index]`, a pattern fill: `path` (target units) filled with the item's tile
     /// repeated; `tile` maps tile pixels to target units.
-    Pattern { index: usize, path: BezPath, even_odd: bool, tile: Affine, region: Option<Arc<BezPath>> },
+    Pattern { index: usize, path: BezPath, even_odd: bool, tile: Affine, region: Option<Arc<BezPath>>, clips: Vec<Arc<PlacedClip>> },
     /// `Picture::items[index]`, a text string: `transform` maps its text space to target units;
-    /// `clip` (target units) bounds what it draws. `region` is the device-context clip.
-    Text { index: usize, transform: Affine, clip: Option<Rect>, region: Option<Arc<BezPath>> },
+    /// `clip` (target units) bounds what it draws.
+    Text { index: usize, transform: Affine, clip: Option<Rect>, region: Option<Arc<BezPath>>, clips: Vec<Arc<PlacedClip>> },
+}
+
+/// A placed clip region: `Some(None)` is the default clip, `None` a region that does not meet the page.
+type PlacedRegion = Option<Option<Arc<BezPath>>>;
+
+/// A clip path in target units. Items under the same clip share it.
+pub struct PlacedClip {
+    pub path: BezPath,
+    pub even_odd: bool,
 }
 
 impl Picture {
@@ -77,8 +97,8 @@ impl Picture {
         let k = (c[0].abs() + c[3].abs()) / 2.0;
         let mut out = Vec::with_capacity(self.items.len());
         let mut total_elements = 0usize;
-        let mut cached_region: Option<(*const [f32; 4], usize, Option<Option<Arc<BezPath>>>)> = None;
-        let mut get_region = |reg: &Option<Vec<[f32; 4]>>| -> Option<Option<Arc<BezPath>>> {
+        let mut cached_region: Option<(*const [f32; 4], usize, PlacedRegion)> = None;
+        let mut get_region = |reg: &Option<Vec<[f32; 4]>>| -> PlacedRegion {
             let (ptr, len) = match reg {
                 None => (std::ptr::null(), 0),
                 Some(v) => (v.as_ptr(), v.len()),
@@ -94,49 +114,75 @@ impl Picture {
             res
         };
 
+        // Clip paths by address: the picture holds them for the whole call. None is a clip that is
+        // not finite or reaches past the coordinate limit; what it clips is left out.
+        let mut placed_clips: HashMap<*const ClipPath, Option<Arc<PlacedClip>>> = HashMap::new();
+        let mut clip_elements = 0usize;
+        let mut get_clips = |clips: &[Arc<ClipPath>]| -> Option<Vec<Arc<PlacedClip>>> {
+            clips
+                .iter()
+                .map(|c| {
+                    placed_clips
+                        .entry(Arc::as_ptr(c))
+                        .or_insert_with(|| {
+                            let path = tf * bez_path(&c.segs);
+                            clip_elements = clip_elements.saturating_add(path.elements().len());
+                            (clip_elements <= MAX_PLACED_ELEMENTS && in_range(path.bounding_box()))
+                                .then(|| Arc::new(PlacedClip { path, even_odd: c.even_odd }))
+                        })
+                        .clone()
+                })
+                .collect()
+        };
+
         for (index, item) in self.items.iter().enumerate() {
             if total_elements >= MAX_PLACED_ELEMENTS {
                 break;
             }
             match item {
-                Item::Path { segs, fill, stroke, even_odd, region } => {
-                    let path = tf * bez(segs);
+                Item::Path { segs, fill, stroke, line, even_odd, region, clips } => {
+                    let path = tf * bez_path(segs);
                     let Some(region) = get_region(region) else { continue };
-                    if in_range(path.bounding_box()) {
+                    let Some(clips) = get_clips(clips) else { continue };
+                    let line = LineStyle { dash: line.dash.iter().map(|d| (f64::from(*d) * k) as f32).collect(), ..line.clone() };
+                    if in_range(path.bounding_box()) && line.dash.iter().all(|d| d.is_finite()) {
                         total_elements = total_elements.saturating_add(path.elements().len());
                         let stroke = stroke.map(|(c, w)| (c, f64::from(w) * k));
-                        out.push(PlacedItem::Path { path, fill: *fill, stroke, even_odd: *even_odd, region });
+                        out.push(PlacedItem::Path { path, fill: *fill, stroke, line, even_odd: *even_odd, region, clips });
                     }
                 }
-                Item::Pattern { segs, even_odd, tile: t, region } => {
-                    let path = tf * bez(segs);
+                Item::Pattern { segs, even_odd, tile: t, region, clips } => {
+                    let path = tf * bez_path(segs);
                     let Some(region) = get_region(region) else { continue };
+                    let Some(clips) = get_clips(clips) else { continue };
                     let tile = tf
                         * Affine::translate((f64::from(t.origin[0]), f64::from(t.origin[1])))
                         * Affine::scale_non_uniform(f64::from(t.cell[0]), f64::from(t.cell[1]));
                     let det = tile.determinant();
                     if in_range(path.bounding_box()) && det.is_finite() && det.abs() > 1e-12 {
                         total_elements = total_elements.saturating_add(path.elements().len());
-                        out.push(PlacedItem::Pattern { index, path, even_odd: *even_odd, tile, region });
+                        out.push(PlacedItem::Pattern { index, path, even_odd: *even_odd, tile, region, clips });
                     }
                 }
                 Item::Text(t) => {
                     let transform = tf * Affine::new(t.transform);
                     let Some(region) = get_region(&t.region) else { continue };
+                    let Some(clips) = get_clips(&t.clips) else { continue };
                     let clip =
                         t.clip.map(|[x0, y0, x1, y1]| tf.transform_rect_bbox(Rect::new(f64::from(x0), f64::from(y0), f64::from(x1), f64::from(y1))));
                     let c = transform.as_coeffs();
                     let origin = Rect::new(c[4], c[5], c[4], c[5]);
                     if in_range(origin) && c.iter().all(|v| v.is_finite() && v.abs() <= MAX_COORD) && clip.is_none_or(in_range) {
-                        out.push(PlacedItem::Text { index, transform, clip, region });
+                        out.push(PlacedItem::Text { index, transform, clip, region, clips });
                     }
                 }
-                Item::Bitmap { rect: [x, y, w, h], region, .. } => {
+                Item::Bitmap { rect: [x, y, w, h], region, clips, .. } => {
                     let (x0, y0) = (f64::from(*x), f64::from(*y));
                     let rect = tf.transform_rect_bbox(Rect::new(x0, y0, x0 + f64::from(*w), y0 + f64::from(*h)));
                     let Some(region) = get_region(region) else { continue };
+                    let Some(clips) = get_clips(clips) else { continue };
                     if in_range(rect) && rect.width() > MIN_BITMAP_SIDE && rect.height() > MIN_BITMAP_SIDE {
-                        out.push(PlacedItem::Bitmap { index, rect, region });
+                        out.push(PlacedItem::Bitmap { index, rect, region, clips });
                     }
                 }
             }
@@ -159,7 +205,7 @@ impl Item {
 
 /// The device-context clip in target units. `Some(None)` is the default clip. `None` means the
 /// region does not meet the page, so the item draws nothing.
-fn placed_region(tf: &Affine, region: &Option<Vec<[f32; 4]>>) -> Option<Option<Arc<BezPath>>> {
+fn placed_region(tf: &Affine, region: &Option<Vec<[f32; 4]>>) -> PlacedRegion {
     let Some(rects) = region else { return Some(None) };
     let mut path = BezPath::new();
     for [x0, y0, x1, y1] in rects {
@@ -172,7 +218,7 @@ fn placed_region(tf: &Affine, region: &Option<Vec<[f32; 4]>>) -> Option<Option<A
 }
 
 /// Segments as a kurbo path. A segment after a close opens a new subpath at the last start point.
-fn bez(segs: &[Seg]) -> BezPath {
+pub fn bez_path(segs: &[Seg]) -> BezPath {
     let mut p = BezPath::new();
     let mut start = (0.0, 0.0);
     let mut open = false;

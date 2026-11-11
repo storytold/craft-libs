@@ -4,6 +4,8 @@ use crate::canvas::Canvas;
 use crate::dib::Rgba;
 use crate::{Error, Item, MAX_BYTES, MAX_ITEMS, Seg, is_metafile, parse};
 
+mod model;
+
 fn h16(v: i32) -> Vec<u8> {
     (v as i16).to_le_bytes().to_vec()
 }
@@ -117,7 +119,9 @@ fn dib24_bottom_up() -> Vec<u8> {
 /// Top-down RGBA of [`dib24_bottom_up`]: top-left red, top-right white, bottom-left blue, bottom-right green.
 const DIB24_RGBA: [u8; 16] = [255, 0, 0, 255, 255, 255, 255, 255, 0, 0, 255, 255, 0, 255, 0, 255];
 
-fn path_segs(item: &Item) -> (&Vec<Seg>, Option<[u8; 4]>, Option<([u8; 4], f32)>, bool) {
+type PathParts<'a> = (&'a Vec<Seg>, Option<[u8; 4]>, Option<([u8; 4], f32)>, bool);
+
+fn path_segs(item: &Item) -> PathParts<'_> {
     match item {
         Item::Path { segs, fill, stroke, even_odd, .. } => (segs, *fill, *stroke, *even_odd),
         other => panic!("expected a path: {other:?}"),
@@ -885,11 +889,22 @@ fn place_fits_the_frame_scales_strokes_and_drops_far_paths() {
                 segs: vec![Seg::Move(0.0, 0.0), Seg::Line(10.0, 10.0)],
                 fill: None,
                 stroke: Some(([0, 0, 0, 255], 4.0)),
+                line: crate::LineStyle::default(),
                 even_odd: true,
                 region: None,
+                clips: Vec::new(),
             },
-            Item::Path { segs: vec![Seg::Move(0.0, 0.0), Seg::Line(2e6, 0.0)], fill: None, stroke: None, even_odd: true, region: None },
+            Item::Path {
+                segs: vec![Seg::Move(0.0, 0.0), Seg::Line(2e6, 0.0)],
+                fill: None,
+                stroke: None,
+                even_odd: true,
+                line: crate::LineStyle::default(),
+                region: None,
+                clips: Vec::new(),
+            },
         ],
+        skipped_records: 0,
     };
     let placed = pic.place(kurbo::Rect::new(0.0, 0.0, 200.0, 100.0), [0.0; 4]);
     assert_eq!(placed.len(), 1);
@@ -903,7 +918,7 @@ fn place_fits_the_frame_scales_strokes_and_drops_far_paths() {
 fn crop_window_keeps_a_sliver_and_stays_finite() {
     let [x, y, w, h] = crate::crop_window([0.0, 0.51771, 0.0, 0.45485]);
     assert!(x == 0.0 && w == 1.0 && (y - 0.51771).abs() < 1e-6 && (h - 0.02744).abs() < 1e-5, "{y} {h}");
-    let pic = crate::Picture { width: 100.0, height: 1000.0, items: Vec::new() };
+    let pic = crate::Picture { width: 100.0, height: 1000.0, items: Vec::new(), skipped_records: 0 };
     let tf = pic.fit(kurbo::Rect::new(0.0, 0.0, 100.0, 27.44), [0.0, 0.51771, 0.0, 0.45485]).unwrap();
     // The kept band of the source (517.71..545.15) is the frame (0..27.44).
     let top = tf * kurbo::Point::new(0.0, 517.71);
@@ -923,9 +938,18 @@ fn the_narrowest_crop_on_the_largest_frame_keeps_its_content() {
         width: 100.0,
         height: 100.0,
         items: vec![
-            Item::Bitmap { rect: [0.0, 0.0, 100.0, 100.0], width: 1, height: 1, rgba: vec![255; 4], region: None },
-            Item::Path { segs: vec![Seg::Move(0.0, 0.0), Seg::Line(100.0, 100.0)], fill: None, stroke: Some(([0, 0, 0, 255], 1.0)), even_odd: false, region: None },
+            Item::Bitmap { rect: [0.0, 0.0, 100.0, 100.0], width: 1, height: 1, rgba: vec![255; 4], region: None, clips: Vec::new() },
+            Item::Path {
+                segs: vec![Seg::Move(0.0, 0.0), Seg::Line(100.0, 100.0)],
+                fill: None,
+                stroke: Some(([0, 0, 0, 255], 1.0)),
+                even_odd: false,
+                line: crate::LineStyle::default(),
+                region: None,
+                clips: Vec::new(),
+            },
         ],
+        skipped_records: 0,
     };
     let frame = kurbo::Rect::new(1584.0, 1584.0, 5584.0, 5584.0);
     // The last sliver, the first sliver, and sides that overlap.
@@ -936,7 +960,7 @@ fn the_narrowest_crop_on_the_largest_frame_keeps_its_content() {
 
 #[test]
 fn place_keeps_only_finite_bounded_bitmaps_with_area() {
-    let bitmap = |rect: [f32; 4]| Item::Bitmap { rect, width: 1, height: 1, rgba: vec![0; 4], region: None };
+    let bitmap = |rect: [f32; 4]| Item::Bitmap { rect, width: 1, height: 1, rgba: vec![0; 4], region: None, clips: Vec::new() };
     let pic = crate::Picture {
         width: 100.0,
         height: 50.0,
@@ -947,6 +971,7 @@ fn place_keeps_only_finite_bounded_bitmaps_with_area() {
             bitmap([0.0, 0.0, f32::INFINITY, 10.0]),
             bitmap([10.0, 5.0, 10.0, 10.0]),
         ],
+        skipped_records: 0,
     };
     let placed = pic.place(kurbo::Rect::new(0.0, 0.0, 200.0, 100.0), [0.0; 4]);
     assert_eq!(placed.len(), 1);
@@ -1073,17 +1098,25 @@ fn size_speed() {
 
 #[test]
 fn take_pixels_returns_only_drawable_bitmaps() {
-    let mut ok = Item::Bitmap { rect: [0.0; 4], width: 2, height: 1, rgba: vec![7; 8], region: None };
+    let mut ok = Item::Bitmap { rect: [0.0; 4], width: 2, height: 1, rgba: vec![7; 8], region: None, clips: Vec::new() };
     assert_eq!(ok.take_pixels(), Some((2, 1, vec![7; 8])));
     assert!(matches!(&ok, Item::Bitmap { rgba, .. } if rgba.is_empty()), "the pixels move out");
-    let mut short = Item::Bitmap { rect: [0.0; 4], width: 2, height: 2, rgba: vec![0; 8], region: None };
+    let mut short = Item::Bitmap { rect: [0.0; 4], width: 2, height: 2, rgba: vec![0; 8], region: None, clips: Vec::new() };
     assert_eq!(short.take_pixels(), None);
     let side = crate::MAX_BITMAP_SIDE + 1;
-    let mut wide = Item::Bitmap { rect: [0.0; 4], width: side, height: 1, rgba: vec![0; side as usize * 4], region: None };
+    let mut wide = Item::Bitmap { rect: [0.0; 4], width: side, height: 1, rgba: vec![0; side as usize * 4], region: None, clips: Vec::new() };
     assert_eq!(wide.take_pixels(), None);
-    let mut path = Item::Path { segs: Vec::new(), fill: None, stroke: None, even_odd: false, region: None };
+    let mut path = Item::Path {
+        segs: Vec::new(),
+        fill: None,
+        stroke: None,
+        even_odd: false,
+        line: crate::LineStyle::default(),
+        region: None,
+        clips: Vec::new(),
+    };
     assert_eq!(path.take_pixels(), None);
-    let pic = |width: f32, height: f32| crate::Picture { width, height, items: Vec::new() };
+    let pic = |width: f32, height: f32| crate::Picture { width, height, items: Vec::new(), skipped_records: 0 };
     assert!(pic(1.0, 2.0).has_size());
     assert!(!pic(0.0, 2.0).has_size() && !pic(f32::NAN, 2.0).has_size() && !pic(1.0, f32::INFINITY).has_size());
 }
@@ -2250,7 +2283,14 @@ fn clip_work_is_shared_by_fill_and_stroke() {
     let mut ops = vec![Op::M((0.0, 95.0))];
     ops.extend((1..1000).map(|i| Op::L((i as f64 * 0.19, if i % 2 == 0 { 95.0 } else { 300.0 }))));
     ops.push(Op::Z);
-    let raw = |fill, stroke| Raw::Path { ops: ops.clone(), fill, stroke, even_odd: false, region: None };
+    let raw = |fill, stroke| Raw::Path {
+        ops: ops.clone(),
+        fill,
+        stroke,
+        even_odd: false,
+        line: crate::LineStyle::default(),
+        region: crate::canvas::RawClip::default(),
+    };
     let black = [0, 0, 0, 255];
     assert!(!crate::cliprect::clip_raw(raw(Some(black), None), &clip).is_empty(), "a fill alone is within the allowance");
     assert!(crate::cliprect::clip_raw(raw(Some(black), Some((black, 1.0))), &clip).is_empty(), "fill and stroke share one allowance");
@@ -2266,7 +2306,14 @@ fn clip_work_is_bounded_across_subpaths() {
         (0..512).map(|i| (i as f64 / 512.0 * std::f64::consts::TAU).sin_cos()).map(|(s, c)| (100.0 + 100.0 * c, 100.0 + 100.0 * s)).collect();
     let tri = |x: f64| [Op::M((x, 95.0)), Op::L((x + 1.0, 95.0)), Op::L((x, 300.0)), Op::Z];
     let many: Vec<Op> = (0..4000).flat_map(|i| tri(i as f64 % 200.0)).collect();
-    let raw = |ops| Raw::Path { ops, fill: Some([0, 0, 0, 255]), stroke: Some(([0, 0, 0, 255], 1.0)), even_odd: false, region: None };
+    let raw = |ops| Raw::Path {
+        ops,
+        fill: Some([0, 0, 0, 255]),
+        stroke: Some(([0, 0, 0, 255], 1.0)),
+        even_odd: false,
+        line: crate::LineStyle::default(),
+        region: crate::canvas::RawClip::default(),
+    };
     assert!(crate::cliprect::clip_raw(raw(many), &clip).is_empty(), "the whole item's clipping work is bounded");
     assert_eq!(crate::cliprect::clip_raw(raw(tri(100.0).to_vec()), &clip).len(), 2, "a small crossing shape is still clipped");
 }
@@ -2282,7 +2329,14 @@ fn growing_fill_clips_share_one_budget() {
         (0..512).map(|i| (i as f64 / 512.0 * std::f64::consts::TAU).sin_cos()).map(|(s, c)| (100.0 + 100.0 * c, 100.0 + 100.0 * s)).collect();
     // A triangle around the whole circle: clipped, it becomes the 512-gon, about 130,000 steps.
     let tri = [Op::M((-1000.0, -1000.0)), Op::L((1000.0, -1000.0)), Op::L((100.0, 1000.0)), Op::Z];
-    let raw = |n: usize| Raw::Path { ops: tri.repeat(n), fill: Some([0, 0, 0, 255]), stroke: None, even_odd: false, region: None };
+    let raw = |n: usize| Raw::Path {
+        ops: tri.repeat(n),
+        fill: Some([0, 0, 0, 255]),
+        stroke: None,
+        even_odd: false,
+        line: crate::LineStyle::default(),
+        region: crate::canvas::RawClip::default(),
+    };
     // 400 of them pass the estimate (400 x 4 x 512 is under a million) but cost about 52 million.
     assert!(crate::cliprect::clip_raw(raw(400), &clip).is_empty(), "the growing work is charged");
     assert_eq!(crate::cliprect::clip_raw(raw(2), &clip).len(), 1, "a couple of them are still clipped");
@@ -2297,7 +2351,14 @@ fn stroke_work_is_charged_and_outside_items_are_cheap() {
     // A stroke-only zigzag of 4,000 segments across the edge: 4,000 x 512 tests, over the allowance.
     let mut ops = vec![Op::M((0.0, 95.0))];
     ops.extend((1..4000).map(|i| Op::L((i as f64 * 0.05, if i % 2 == 0 { 95.0 } else { 300.0 }))));
-    let raw = Raw::Path { ops, fill: None, stroke: Some(([0, 0, 0, 255], 1.0)), even_odd: false, region: None };
+    let raw = Raw::Path {
+        ops,
+        fill: None,
+        stroke: Some(([0, 0, 0, 255], 1.0)),
+        even_odd: false,
+        line: crate::LineStyle::default(),
+        region: crate::canvas::RawClip::default(),
+    };
     assert!(crate::cliprect::clip_raw(raw, &clip).is_empty(), "stroke work is bounded");
 }
 

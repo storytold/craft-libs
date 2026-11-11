@@ -66,6 +66,8 @@ pub struct Text {
     /// Clip region from the device context, in picture units. None is the default clip. Drawn
     /// together with [`Text::clip`] when both are set.
     pub region: Option<Vec<[f32; 4]>>,
+    /// Clip paths from the device context, as on [`crate::Item::Path`].
+    pub clips: Vec<std::sync::Arc<crate::ClipPath>>,
 }
 
 /// TA_UPDATECP: the string starts at the current position, which moves past it.

@@ -4,6 +4,7 @@
 //! per subpath, outlines with Cyrus–Beck per segment. Bitmaps are cropped (and masked outside a
 //! non-rectangular polygon) and text gets the polygon's bounding rectangle.
 
+use crate::LineStyle;
 use crate::canvas::Raw;
 use crate::dib::Rgba;
 use crate::geom::{Op, P};
@@ -159,10 +160,10 @@ fn bbox_inside(b: [f64; 4], clip: &[P]) -> bool {
 pub(crate) fn clip_raw(raw: Raw, clip: &[P]) -> Vec<Raw> {
     let Some(cb) = pts_bbox(clip).filter(|_| clip.len() >= 3) else { return Vec::new() };
     match raw {
-        Raw::Path { ops, fill, stroke, even_odd, region } => {
+        Raw::Path { ops, fill, stroke, line, even_odd, region } => {
             let Some(b) = ops_bbox(&ops) else { return Vec::new() };
             if bbox_inside(b, clip) {
-                return vec![Raw::Path { ops, fill, stroke, even_odd, region }];
+                return vec![Raw::Path { ops, fill, stroke, line, even_odd, region }];
             }
             if disjoint(b, cb) {
                 return Vec::new();
@@ -174,13 +175,13 @@ pub(crate) fn clip_raw(raw: Raw, clip: &[P]) -> Vec<Raw> {
             if fill.is_some() {
                 let Some(f) = clip_fill(&subs, clip, &mut budget) else { return Vec::new() };
                 if !f.is_empty() {
-                    out.push(Raw::Path { ops: f, fill, stroke: None, even_odd, region: region.clone() });
+                    out.push(Raw::Path { ops: f, fill, stroke: None, line: LineStyle::default(), even_odd, region: region.clone() });
                 }
             }
             if stroke.is_some() {
                 let Some(s) = clip_stroke(&subs, clip, &mut budget) else { return Vec::new() };
                 if !s.is_empty() {
-                    out.push(Raw::Path { ops: s, fill: None, stroke, even_odd, region });
+                    out.push(Raw::Path { ops: s, fill: None, stroke, line, even_odd, region });
                 }
             }
             out

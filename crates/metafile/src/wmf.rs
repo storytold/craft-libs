@@ -171,9 +171,19 @@ fn record(cv: &mut Canvas, func: u16, r: Bytes) {
         }
         0x0B41 => dib_stretchblt(cv, r),
         0x0940 => dib_bitblt(cv, r),
-        _ => Some(()),
+        f if IGNORED.contains(&f) => Some(()),
+        _ => {
+            cv.skipped = cv.skipped.saturating_add(1);
+            Some(())
+        }
     };
 }
+
+/// Records that change nothing the picture keeps: stretch and relative-absolute modes, character
+/// spacing and justification, mapper flags, offsets and scales of the window and viewport (not
+/// applied), palettes, the brush origin and escapes.
+const IGNORED: &[u16] =
+    &[0x0105, 0x0107, 0x0108, 0x020A, 0x020F, 0x0211, 0x0410, 0x0412, 0x0231, 0x0234, 0x0035, 0x0037, 0x0139, 0x0436, 0x0626, 0x0220, 0x0228, 0x0229];
 
 /// A 16-bit WMF handle as a canvas object index: stock objects are `0x8000 | index`, which the
 /// canvas reads with the 32-bit stock flag.
@@ -192,7 +202,7 @@ fn create_pen(cv: &mut Canvas, r: Bytes) -> Option<()> {
     let style = r.u16(6)?;
     let width = r.i16(8)?;
     let color = r.u32(12)?;
-    cv.add_object(None, Obj::Pen(Pen { style: u32::from(style), width: f64::from(width), color: colorref(color) }));
+    cv.add_object(None, Obj::Pen(Pen::new(u32::from(style), f64::from(width), colorref(color))));
     Some(())
 }
 

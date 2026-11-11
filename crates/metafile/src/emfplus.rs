@@ -26,13 +26,13 @@
 use std::sync::Arc;
 
 use crate::bytes::Bytes;
-use crate::canvas::Raw;
 use crate::canvas::{BS_NULL, BS_SOLID, Brush, Canvas, LogFont, PS_NULL, Pen, RawTile, Xform, hatch_tile, mul};
+use crate::canvas::{Raw, RawClip};
 use crate::cliprect::{MAX_AREA_CLIP_WORK, clip_polygon_within, convex, flatten, ops_bbox, pts_bbox, rect_poly};
 use crate::dib::Rgba;
 use crate::geom::{Op, P};
 use crate::text::{ETO_CLIPPED, Font};
-use crate::{Item, Picture, Seg};
+use crate::{Item, LineStyle, Picture, Seg};
 
 /// "EMF+" as the comment identifier of an EMR_COMMENT holding EMF+ records.
 pub(crate) const EMF_PLUS: u32 = 0x2B46_4D45;
@@ -810,7 +810,7 @@ impl Painter {
     }
 
     fn no_pen(cv: &mut Canvas) {
-        cv.set_pen(Pen { style: PS_NULL, width: 0.0, color: [0, 0, 0, 0] });
+        cv.set_pen(Pen::new(PS_NULL, 0.0, [0, 0, 0, 0]));
     }
 
     fn fill(&self, cv: &mut Canvas, ops: &[Op], fill: &Fill) {
@@ -841,7 +841,7 @@ impl Painter {
 
     fn stroke(&self, cv: &mut Canvas, ops: &[Op], (color, width): ([u8; 4], f64)) {
         self.begin(cv, IDENTITY);
-        cv.set_pen(Pen { style: 0, width, color });
+        cv.set_pen(Pen::new(0, width, color));
         cv.set_brush(Brush::new(BS_NULL, [0, 0, 0, 0]));
         cv.shape(ops.to_vec(), false, true);
         self.end(cv);
@@ -877,12 +877,13 @@ impl Painter {
                 break;
             }
             let raw = match item {
-                Item::Path { segs, fill, stroke, even_odd, .. } => Raw::Path {
+                Item::Path { segs, fill, stroke, line, even_odd, .. } => Raw::Path {
                     ops: ops(segs),
                     fill: *fill,
                     stroke: stroke.map(|(c, w)| (c, f64::from(w) * scale)),
+                    line: LineStyle { dash: line.dash.iter().map(|d| (f64::from(*d) * scale) as f32).collect(), ..line.clone() },
                     even_odd: *even_odd,
-                    region: None,
+                    region: RawClip::default(),
                 },
                 Item::Pattern { segs, even_odd, tile, .. } => Raw::Pattern {
                     ops: ops(segs),
@@ -893,13 +894,13 @@ impl Painter {
                         px: tile.rgba.clone(),
                         cell: f64::from(tile.cell[0]) * scale,
                     }),
-                    region: None,
+                    region: RawClip::default(),
                 },
                 Item::Bitmap { rect, width, height, rgba, .. } => {
                     let (a, b) = (pt(rect[0], rect[1]), pt(rect[0] + rect[2], rect[1] + rect[3]));
                     let mut img = Rgba { w: *width as usize, h: *height as usize, px: rgba.clone() };
                     crate::dib::flip(&mut img, a.0 > b.0, a.1 > b.1);
-                    Raw::Bitmap { rect: [a.0.min(b.0), a.1.min(b.1), (b.0 - a.0).abs(), (b.1 - a.1).abs()], img, region: None }
+                    Raw::Bitmap { rect: [a.0.min(b.0), a.1.min(b.1), (b.0 - a.0).abs(), (b.1 - a.1).abs()], img, region: RawClip::default() }
                 }
                 Item::Text(t) => {
                     let mut t = t.clone();
@@ -908,7 +909,7 @@ impl Painter {
                         let (p, q) = (pt(x0, y0), pt(x1, y1));
                         t.clip = Some([p.0.min(q.0) as f32, p.1.min(q.1) as f32, p.0.max(q.0) as f32, p.1.max(q.1) as f32]);
                     }
-                    Raw::Text { text: t, region: None }
+                    Raw::Text { text: t, region: RawClip::default() }
                 }
             };
             cv.push_device(raw);
@@ -1287,7 +1288,7 @@ fn bitmap(r: Bytes) -> Option<Rgba> {
     let format = r.u32(20)?;
     let data = r.tail(28)?;
     if r.u32(24)? == 1 {
-        return decode_compressed(data.0);
+        return crate::dib::decode_compressed(data.0);
     }
     let (w, h) = (usize::try_from(w).ok()?, usize::try_from(h).ok()?);
     if w == 0 || h == 0 || w.checked_mul(h)? > crate::MAX_PIXELS {
@@ -1354,28 +1355,6 @@ fn bitmap(r: Bytes) -> Option<Rgba> {
         crate::dib::flip(&mut img, false, true);
     }
     Some(img)
-}
-
-fn decode_compressed(bytes: &[u8]) -> Option<Rgba> {
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(1 << 15);
-    limits.max_image_height = Some(1 << 15);
-    limits.max_alloc = Some((crate::MAX_PIXELS * 4) as u64);
-    reader.limits(limits);
-    let (w, h) = reader.into_dimensions().ok()?;
-    let (w, h) = (w as usize, h as usize);
-    if w == 0 || h == 0 || w.checked_mul(h)? > crate::MAX_PIXELS {
-        return None;
-    }
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(1 << 15);
-    limits.max_image_height = Some(1 << 15);
-    limits.max_alloc = Some((crate::MAX_PIXELS * 4) as u64);
-    reader.limits(limits);
-    let img = reader.decode().ok()?.to_rgba8();
-    Some(Rgba { w, h, px: img.into_raw() })
 }
 
 /// `n` points at `off`: 16-bit integers when compressed, else 32-bit floats.

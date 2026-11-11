@@ -1,10 +1,16 @@
-//! Device-independent bitmaps. BITMAPINFOHEADER DIBs at 1/4/8/16/24/32 bpp with BI_RGB or BI_BITFIELDS
-//! decode to RGBA8 rows, top-down. Compressed (RLE, JPEG, PNG) and V4/V5-only features are not decoded.
+//! Device-independent bitmaps. BITMAPINFOHEADER DIBs at 1/4/8/16/24/32 bpp with BI_RGB or BI_BITFIELDS,
+//! BITMAPCOREHEADER DIBs at 1/4/8/24 bpp, and BI_JPEG and BI_PNG DIBs decode to RGBA8 rows, top-down.
+//! RLE compression and V4/V5-only features are not decoded.
 
 use crate::{MAX_BITMAP_SIDE, MAX_PIXELS, bytes::Bytes};
 
 const BI_RGB: u32 = 0;
 const BI_BITFIELDS: u32 = 3;
+/// The bits are a whole JPEG or PNG file (MS-WMF 2.1.1.7).
+const BI_JPEG: u32 = 4;
+const BI_PNG: u32 = 5;
+/// BITMAPCOREHEADER: 16-bit sizes, RGB triples in the palette, always bottom-up.
+const CORE_HEADER: usize = 12;
 /// Most palette entries a DIB can carry (the colour table never exceeds 2^8).
 const MAX_PALETTE: usize = 256;
 const ROP_SRCAND: u32 = 0x0088_00C6;
@@ -43,11 +49,21 @@ struct Header {
     masks: [u32; 3],
     pal_off: usize,
     pal_n: usize,
+    /// Bytes per palette entry: 4 (BGRX), or 3 (BGR) under a core header.
+    pal_entry: usize,
 }
 
 impl Header {
     fn read(info: Bytes) -> Option<Header> {
         let size = info.u32(0)? as usize;
+        if size == CORE_HEADER {
+            let (w, h, bpp) = (usize::from(info.u16(4)?), usize::from(info.u16(6)?), usize::from(info.u16(10)?));
+            if w == 0 || h == 0 || !matches!(bpp, 1 | 4 | 8 | 24) {
+                return None;
+            }
+            let pal_n = if bpp <= 8 { 1usize << bpp } else { 0 };
+            return Some(Header { w, h, top_down: false, bpp, masks: [0xFF_0000, 0xFF00, 0xFF], pal_off: CORE_HEADER, pal_n, pal_entry: 3 });
+        }
         let w = info.i32(4)?;
         let h = info.i32(8)?;
         let bpp = info.u16(14)? as usize;
@@ -72,15 +88,49 @@ impl Header {
             (true, n) => n.min(1usize << bpp),
             (false, n) => n.min(MAX_PALETTE),
         };
-        Some(Header { w: w as usize, h: h.unsigned_abs() as usize, top_down: h < 0, bpp, masks, pal_off, pal_n })
+        Some(Header { w: w as usize, h: h.unsigned_abs() as usize, top_down: h < 0, bpp, masks, pal_off, pal_n, pal_entry: 4 })
     }
 }
 
 /// Byte length of the info part (header, masks, palette) of a DIB, so the pixel bits follow it.
 pub(crate) fn info_len(dib: Bytes) -> Option<usize> {
+    if compression(dib).is_some() {
+        // No palette: the bits are a whole image file.
+        return Some(dib.u32(0)? as usize).filter(|n| *n >= 40);
+    }
     let h = Header::read(dib)?;
-    h.pal_off.checked_add(h.pal_n.checked_mul(4)?)
+    h.pal_off.checked_add(h.pal_n.checked_mul(h.pal_entry)?)
 }
+
+/// BI_JPEG or BI_PNG when the header says the bits are an image file.
+fn compression(info: Bytes) -> Option<u32> {
+    (info.u32(0)? >= 40).then(|| info.u32(16)).flatten().filter(|c| matches!(*c, BI_JPEG | BI_PNG))
+}
+
+/// Decodes a JPEG or PNG file (the bits of a BI_JPEG or BI_PNG DIB, an EMF+ image) to top-down
+/// RGBA. The size comes from the file's header first, so an image over the side or pixel cap is
+/// refused before any pixel is decoded, and the decoder's own allocations are capped too.
+pub(crate) fn decode_compressed(bytes: &[u8]) -> Option<Rgba> {
+    let reader = || {
+        let mut r = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(MAX_COMPRESSED_SIDE);
+        limits.max_image_height = Some(MAX_COMPRESSED_SIDE);
+        limits.max_alloc = Some((MAX_PIXELS * 4) as u64);
+        r.limits(limits);
+        Some(r)
+    };
+    let (w, h) = reader()?.into_dimensions().ok()?;
+    let (w, h) = (w as usize, h as usize);
+    if w == 0 || h == 0 || w.checked_mul(h)? > MAX_PIXELS {
+        return None;
+    }
+    let img = reader()?.decode().ok()?.to_rgba8();
+    Some(Rgba { w, h, px: img.into_raw() })
+}
+
+/// Largest side of a JPEG or PNG image.
+pub(crate) const MAX_COMPRESSED_SIDE: u32 = 1 << 15;
 
 /// Decodes the part of a DIB that the source rectangle `src` = `[x, y, w, h]` selects and returns it
 /// (top-down) with the part of the destination `dst` that it fills; see [`clip_rect`] for the
@@ -90,6 +140,13 @@ pub(crate) fn info_len(dib: Bytes) -> Option<usize> {
 /// crop, not the whole bitmap; the whole bitmap is still validated (size cap, palette, bits length).
 /// None as well when the clipped width or height is over [`MAX_BITMAP_SIDE`], which no renderer draws.
 pub(crate) fn decode_clip(info: Bytes, bits: Bytes, keep_alpha: bool, src: [i64; 4], dst: [f64; 4]) -> Option<(Rgba, [f64; 4])> {
+    if compression(info).is_some() {
+        // An image file has no bottom-up row order: the source rectangle counts from the top.
+        let img = decode_compressed(bits.0)?;
+        let (part, out) = clip_blit(&img, src, dst)?;
+        let cap = MAX_BITMAP_SIDE as usize;
+        return (part.w <= cap && part.h <= cap).then_some((part, out));
+    }
     let hd = Header::read(info)?;
     let pixels = hd.w.checked_mul(hd.h)?;
     if pixels == 0 || pixels > MAX_PIXELS {
@@ -97,7 +154,7 @@ pub(crate) fn decode_clip(info: Bytes, bits: Bytes, keep_alpha: bool, src: [i64;
     }
     let stride = hd.w.checked_mul(hd.bpp)?.checked_add(31)? / 32 * 4;
     let data = bits.slice(0, stride.checked_mul(hd.h)?)?;
-    let pal = info.slice(hd.pal_off, hd.pal_n * 4)?;
+    let pal = info.slice(hd.pal_off, hd.pal_n * hd.pal_entry)?;
     let (clip, out) = clip_rect(hd.w, hd.h, !hd.top_down, src, dst)?;
     // The renderers draw no bitmap with a side over the cap (`Item::take_pixels`); decoding one
     // would only fill the parse's memory budget with pixels nobody draws.
@@ -199,7 +256,7 @@ impl RowKind {
                 // An index past the palette reads as black, as in `palette`.
                 let mut table = Box::new([[0u8, 0, 0, 255]; 256]);
                 for (i, t) in table.iter_mut().enumerate().take(1 << hd.bpp) {
-                    let [r, g, b] = palette(pal, i);
+                    let [r, g, b] = palette(pal, i, hd.pal_entry);
                     *t = [r, g, b, 255];
                 }
                 RowKind::Indexed { bpp: hd.bpp, table }
@@ -264,9 +321,10 @@ impl RowKind {
     }
 }
 
-/// Palette entries are BGRX quads; an index past the table reads as black rather than failing the image.
-fn palette(pal: &[u8], i: usize) -> [u8; 3] {
-    pal.get(i * 4..i * 4 + 4).and_then(|c| <[u8; 4]>::try_from(c).ok()).map_or([0, 0, 0], |c| [c[2], c[1], c[0]])
+/// Palette entries are BGRX quads (`entry` 4) or BGR triples (3, core headers); an index past the
+/// table reads as black rather than failing the image.
+fn palette(pal: &[u8], i: usize, entry: usize) -> [u8; 3] {
+    pal.get(i * entry..i * entry + 3).map_or([0, 0, 0], |c| [c[2], c[1], c[0]])
 }
 
 /// The columns `x0..x1` and top-down rows `r0..r1` of a bitmap that a clipped source rectangle covers.
@@ -455,13 +513,13 @@ mod tests {
         let [r, g, b] = match hd.bpp {
             1 => {
                 let b = *data.get(row + x / 8)?;
-                palette(pal, usize::from((b >> (7 - x % 8)) & 1))
+                palette(pal, usize::from((b >> (7 - x % 8)) & 1), 4)
             }
             4 => {
                 let b = *data.get(row + x / 2)?;
-                palette(pal, usize::from(if x.is_multiple_of(2) { b >> 4 } else { b & 0x0F }))
+                palette(pal, usize::from(if x.is_multiple_of(2) { b >> 4 } else { b & 0x0F }), 4)
             }
-            8 => palette(pal, usize::from(*data.get(row + x)?)),
+            8 => palette(pal, usize::from(*data.get(row + x)?), 4),
             24 => {
                 let [b, g, r] = data.get(row + x * 3..row + x * 3 + 3)?.try_into().ok()?;
                 [r, g, b]
