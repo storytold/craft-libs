@@ -223,12 +223,22 @@ pub struct Text {
     pub generation: i64,
     /// Group 72: 0 left, 1 centre, 2 right, 3 aligned, 4 middle, 5 fit.
     pub halign: i64,
-    /// Group 73 (74 in an ATTRIB or ATTDEF): 0 baseline, 1 bottom, 2 middle, 3 top.
+    /// Group 73 (74 in an ATTRIB or ATTDEF, whose 73 is the field length): 0 baseline, 1 bottom,
+    /// 2 middle, 3 top.
     pub valign: i64,
 }
 
 impl Text {
+    /// The typed form of TEXT groups.
     pub fn read(g: &Groups<'_>) -> Text {
+        Self::read_as(g, false)
+    }
+
+    /// A TEXT, or (with `attribute`) the text of an ATTRIB or ATTDEF. The vertical alignment is
+    /// group 73 for TEXT and group 74 for attributes, whose group 73 is the field length: a
+    /// writer that emits the field length would otherwise turn every attribute into baseline
+    /// text.
+    pub fn read_as(g: &Groups<'_>, attribute: bool) -> Text {
         Text {
             insert: g.point(10),
             align: g.point_opt(11),
@@ -240,7 +250,7 @@ impl Text {
             style: g.name(7).unwrap_or_else(|| "Standard".into()),
             generation: g.i_or(71, 0),
             halign: g.i_or(72, 0),
-            valign: g.i(73).or_else(|| g.i(74)).unwrap_or(0),
+            valign: g.i_or(if attribute { 74 } else { 73 }, 0),
         }
     }
 }
@@ -272,7 +282,7 @@ impl Attrib {
         let lock_position = rest.iter().position(|t| t.code == 2).is_some_and(|at| rest.iter().skip(at + 1).any(|t| t.code == 280 && t.i64() != 0));
         Attrib {
             tag: g.s(2).unwrap_or_default(),
-            text: Text::read(&g),
+            text: Text::read_as(&g, true),
             prompt: if kind == "ATTDEF" { decode_line(&g.s(3).unwrap_or_default()) } else { String::new() },
             flags: g.i_or(70, 0),
             lock_position,

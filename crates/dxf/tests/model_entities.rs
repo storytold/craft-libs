@@ -391,3 +391,15 @@ fn a_spline_edge_without_fit_data_leaves_the_loops_source_count() {
         matches!(&h.loops[0].path, HatchPath::Edges(e) if matches!(&e[0], HatchEdge::Spline { fit, control, .. } if fit.is_empty() && control.len() == 2))
     );
 }
+
+#[test]
+fn an_attributes_vertical_alignment_is_group_74_not_the_field_length() {
+    // 73 is the field length of an ATTRIB or ATTDEF; a writer that emits it must not turn a
+    // middle-aligned attribute into another alignment.
+    let EntityKind::AttDef(a) = one("0|ATTDEF|10|1.0|1|x|2|TAG|70|0|73|8|74|2").kind else { panic!("an attribute definition") };
+    assert_eq!(a.text.valign, 2);
+    let EntityKind::AttDef(a) = one("0|ATTDEF|10|1.0|1|x|2|TAG|70|0|73|3").kind else { panic!("an attribute definition") };
+    assert_eq!(a.text.valign, 0, "a field length alone is no alignment");
+    let EntityKind::Text(t) = one("0|TEXT|10|1.0|1|x|73|3|74|1").kind else { panic!("text") };
+    assert_eq!(t.valign, 3, "TEXT has its alignment in 73");
+}
