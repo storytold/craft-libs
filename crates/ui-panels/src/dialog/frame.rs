@@ -48,16 +48,23 @@ impl DialogOutput {
 /// The heading level AccessKit reports for a dialog's title.
 const TITLE_LEVEL: usize = 1;
 
-/// What a footer closure reaches: the footer bar's body context, and a request to close the dialog.
-pub struct FooterCx<'a, 'b> {
+/// What a footer closure reaches: the footer bar's body context, the dialog's, and a request to close the dialog.
+pub struct FooterCx<'a, 'b, 'c> {
     bar: &'a mut BodyCx<'b>,
+    dialog: &'a mut BodyCx<'c>,
     close: &'a mut Option<CloseReason>,
 }
 
-impl<'b> FooterCx<'_, 'b> {
+impl<'b, 'c> FooterCx<'_, 'b, 'c> {
     /// The footer bar's body context.
     pub fn bar(&mut self) -> &mut BodyCx<'b> {
         self.bar
+    }
+
+    /// The dialog's body context, the one its body closure gets: footer content that edits what the body shows
+    /// reads and writes its memory and its bindings through it.
+    pub fn dialog(&mut self) -> &mut BodyCx<'c> {
+        self.dialog
     }
 
     /// Asks the dialog to close, as `CloseReason::Requested`: step 15 closes it.
@@ -74,7 +81,7 @@ impl<'b> FooterCx<'_, 'b> {
 
 /// The footer closure of a dialog shell.
 #[doc(hidden)]
-pub type FooterFn<'a> = Box<dyn FnMut(&mut Ui, &mut FooterCx<'_, '_>) + 'a>;
+pub type FooterFn<'a> = Box<dyn FnMut(&mut Ui, &mut FooterCx<'_, '_, '_>) + 'a>;
 
 /// The host's answer to a picked button: given the button and the dialog's body context, whether the dialog may
 /// close.
@@ -165,14 +172,14 @@ pub(crate) fn footer_in(
         None => buttons,
     };
     let mut close = None;
-    let mut show_content = |ui: &mut Ui, close: &mut Option<CloseReason>| {
+    let show_content = |ui: &mut Ui, cx: &mut BodyCx<'_>, content: &mut Option<FooterFn<'_>>, close: &mut Option<CloseReason>| {
         if let Some(content) = content.as_mut() {
             let bar = if column { FooterBar::body().column() } else { FooterBar::body() };
-            bar.show(ui, |ui, bar| content(ui, &mut FooterCx { bar, close }));
+            bar.show(ui, |ui, bar| content(ui, &mut FooterCx { bar, dialog: cx, close }));
         }
     };
     if !column {
-        show_content(ui, &mut close);
+        show_content(ui, cx, content, &mut close);
     }
     if !buttons.is_empty() {
         let bar = FooterBar::buttons(buttons.iter().cloned()).enter_activates(enter);
@@ -192,7 +199,7 @@ pub(crate) fn footer_in(
         }
     }
     if column {
-        show_content(ui, &mut close);
+        show_content(ui, cx, content, &mut close);
     }
     if let Some(why) = close {
         cx.request_close_as(why);
@@ -253,7 +260,7 @@ impl<'a> DialogFrame<'a> {
 
     /// The footer's content: the closure fills a footer bar under the body.
     #[must_use]
-    pub fn footer(mut self, content: impl FnMut(&mut Ui, &mut FooterCx<'_, '_>) + 'a) -> Self {
+    pub fn footer(mut self, content: impl FnMut(&mut Ui, &mut FooterCx<'_, '_, '_>) + 'a) -> Self {
         self.props = self.props.footer(FOOTER);
         self.footer = Some(Box::new(content));
         self

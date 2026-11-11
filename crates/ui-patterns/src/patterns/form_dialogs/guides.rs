@@ -12,6 +12,8 @@ mod new_guide;
 
 #[cfg(feature = "testing")]
 mod stories;
+#[cfg(feature = "testing")]
+mod trials;
 
 pub use layout::{GuideGroup, GuideLayoutError, GuideLayoutOptions, GuideLayoutPreset, GuideLength, GuideRect, GuideTarget, GuideUnits, MAX_COUNT};
 
@@ -270,7 +272,7 @@ struct LastValid(Option<Vec<Guide>>);
 
 /// New Guide Layout, Photoshop's dialog: Preset and Target lists, Color, the Columns and Rows groups (each a check
 /// box with Number, Width or Height, and Gutter), the Margin group (a check box and Top, Left, Bottom, Right), Center
-/// Columns and Clear Existing Guides; OK, Cancel and Preview.
+/// Columns and Clear Existing Guides; beside them a column of OK and Cancel with Preview under it.
 ///
 /// - Keys: Tab walks the fields, Enter is OK when the layout is valid, Escape cancels. Holding Alt turns Cancel
 ///   into Reset, which restores the values from when the dialog opened and keeps the dialog open.
@@ -318,8 +320,15 @@ impl<'a> GuideLayoutDialog<'a> {
         let words = env.words::<GuideDialogWords>();
         let preview_word = env.words::<ParamDialogWords>().preview.clone();
         let number_units = env.units();
-        let mut dialog =
-            FormDialog::new(words.layout_title.clone(), values).outer_gesture(true).answers(answers).shaped(|dialog| dialog.side_buttons(true));
+        let mut dialog = FormDialog::new(words.layout_title.clone(), values)
+            .outer_gesture(true)
+            .answers(answers)
+            .shaped(|dialog| dialog.side_buttons(true))
+            .footer_value(move |ui, values| {
+                if let Some(on) = Checkbox::new(Bind::given(values.preview)).label(preview_word.clone()).show(ui).value().copied() {
+                    values.preview = on;
+                }
+            });
         if let Some(open) = open {
             dialog = dialog.opened(open);
         }
@@ -327,7 +336,7 @@ impl<'a> GuideLayoutDialog<'a> {
         let last = RefCell::new(None::<Vec<Guide>>);
         let previewing = Cell::new(false);
         let measure = Measure { words: &words, numbers: &number_units, units: &units, unparsed: Cell::new(false) };
-        let rows = Form { document: &document, artboards: &artboards, preview_word: &preview_word };
+        let rows = Form { document: &document, artboards: &artboards };
         let shown = dialog.show(ui, |ui, form, values| {
             apply_color_answers(form.take_answers(), GUIDE_LAYOUT_COLOR_KEY, &mut values.color);
             measure.unparsed.set(false);
@@ -394,9 +403,6 @@ fn layout_rows(ui: &mut Ui, measure: &Measure<'_>, form: &Form<'_>, values: &mut
         if let Some(on) = Checkbox::new(Bind::given(clear)).label(words.clear_existing.clone()).show(ui).value().copied() {
             values.options.clear_existing = on;
         }
-        if let Some(on) = Checkbox::new(Bind::given(values.preview)).label(form.preview_word.clone()).show(ui).value().copied() {
-            values.preview = on;
-        }
     });
     if !values.options.same_fields(&before) && values.options.preset == before.preset {
         values.options.preset = GuideLayoutPreset::Custom;
@@ -407,7 +413,6 @@ fn layout_rows(ui: &mut Ui, measure: &Measure<'_>, form: &Form<'_>, values: &mut
 struct Form<'a> {
     document: &'a GuideRect,
     artboards: &'a [GuideRect],
-    preview_word: &'a Label,
 }
 
 fn preset_row(ui: &mut Ui, words: &GuideDialogWords, options: &mut GuideLayoutOptions) {

@@ -102,6 +102,8 @@ pub struct FormOutput<V> {
 
 type FooterExtraFn<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
 
+type FooterValueFn<'a, V> = Box<dyn FnMut(&mut Ui, &mut V) + 'a>;
+
 type OnResetFn<'a> = Box<dyn FnMut(&mut BodyCx<'_>) + 'a>;
 
 type ResetWithFn<'a, V> = Box<dyn Fn(&V, &V) -> V + 'a>;
@@ -131,6 +133,7 @@ pub struct FormDialog<'a, V: Value + Default> {
     closable: bool,
     accept_stays_open: bool,
     footer_extra: Option<FooterExtraFn<'a>>,
+    footer_value: Option<FooterValueFn<'a, V>>,
     extra_buttons: Vec<FooterButton>,
     shaped: Option<Box<dyn FnOnce(Dialog<'a>) -> Dialog<'a> + 'a>>,
     answers: Vec<HostAnswer>,
@@ -156,6 +159,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             closable: true,
             accept_stays_open: false,
             footer_extra: None,
+            footer_value: None,
             extra_buttons: Vec::new(),
             shaped: None,
             answers: Vec::new(),
@@ -236,6 +240,13 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         self
     }
 
+    /// Controls in the footer that edit the value (a Preview check box under side buttons): they run after the body
+    /// and before the footer extra, and what they change is written to the bind as the body's edits are.
+    pub fn footer_value(mut self, edit: impl FnMut(&mut Ui, &mut V) + 'a) -> Self {
+        self.footer_value = Some(Box::new(edit));
+        self
+    }
+
     /// Footer buttons after OK and Cancel, which keep the dialog open: the caller acts on
     /// [`FormOutput::picked`].
     pub fn extra_buttons(mut self, buttons: impl IntoIterator<Item = FooterButton>) -> Self {
@@ -285,6 +296,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             closable,
             accept_stays_open,
             footer_extra,
+            footer_value,
             extra_buttons,
             shaped,
             mut answers,
@@ -328,15 +340,33 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         if collection_body {
             dialog = dialog.collection_body();
         }
-        if let Some(mut extra) = footer_extra {
-            dialog = dialog.footer(move |ui, _| extra(ui));
+        let changed = Rc::new(RefCell::new(None::<V>));
+        if footer_extra.is_some() || footer_value.is_some() {
+            let (bind, changed, name) = (Rc::clone(&bind), Rc::clone(&changed), name.clone());
+            let (mut extra, mut edit) = (footer_extra, footer_value);
+            dialog = dialog.footer(move |ui, footer| {
+                if let Some(edit) = edit.as_mut() {
+                    let cx = footer.dialog();
+                    let mut held = bind.borrow_mut();
+                    if let Some(Mixed::Same(before)) = held.reborrow().read(cx) {
+                        let mut values = before.clone();
+                        edit(ui, &mut values);
+                        if values != before {
+                            let _ = held.reborrow().write(cx, &EditEvent::set(Mixed::Same(before), values.clone(), name.clone(), None));
+                            *changed.borrow_mut() = Some(values);
+                        }
+                    }
+                }
+                if let Some(extra) = extra.as_mut() {
+                    extra(ui);
+                }
+            });
         }
         if let Some(shape) = shaped {
             dialog = shape(dialog);
         }
 
         let work = RefCell::new(None::<V>);
-        let changed = RefCell::new(None::<V>);
         let requests = RefCell::new(HostRequests::new());
         let accepts = Cell::new(ok_enabled);
         let shown = dialog.show(ui, |ui, cx| {
@@ -378,6 +408,6 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             Some(CloseReason::Enter | CloseReason::Activated) if accepts.get() => work.into_inner(),
             _ => None,
         };
-        FormOutput { response, closed, picked, accepted, value: changed.into_inner(), requests: requests.into_inner() }
+        FormOutput { response, closed, picked, accepted, value: changed.take(), requests: requests.into_inner() }
     }
 }

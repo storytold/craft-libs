@@ -168,7 +168,7 @@ impl<'a> FullWindowDialog<'a> {
 
     /// The footer's content: the closure fills a footer bar above the buttons, or alone.
     #[must_use]
-    pub fn footer(mut self, content: impl FnMut(&mut Ui, &mut FooterCx<'_, '_>) + 'a) -> Self {
+    pub fn footer(mut self, content: impl FnMut(&mut Ui, &mut FooterCx<'_, '_, '_>) + 'a) -> Self {
         let region = self.footer_region();
         self.props = self.props.footer(region);
         self.footer = Some(Box::new(content));
