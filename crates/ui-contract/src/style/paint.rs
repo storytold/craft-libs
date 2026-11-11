@@ -46,7 +46,7 @@ pub(crate) fn rule_look(tokens: &UiTokens, kind: RuleKind) -> RuleLook {
         RuleKind::Divider => RuleLook { color: color(c.line.divider), width: thin },
         RuleKind::Edge => RuleLook { color: color(c.line.border), width: thin },
         RuleKind::Grid => RuleLook { color: color(c.overlay.grid), width: thin },
-        RuleKind::DropMark => RuleLook { color: color(c.accent.solid), width: tokens.stroke.medium },
+        RuleKind::DropMark => RuleLook { color: color(c.accent.solid), width: tokens.stroke.thick },
     }
 }
 
