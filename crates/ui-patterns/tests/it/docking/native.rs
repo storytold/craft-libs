@@ -129,7 +129,8 @@ fn a_native_float_opens_at_its_own_size() {
         sizes.extend(out.builders.into_iter().filter(|(viewport, _)| *viewport != ViewportId::ROOT).map(|(_, builder)| builder.inner_size));
     }
     let size = float().rect.size();
-    assert!(!sizes.is_empty() && sizes.iter().all(|shown| *shown == Some(size)), "{size:?} asked, {sizes:?} opened");
+    assert_eq!(sizes.first(), Some(&Some(size)), "{size:?} asked, {sizes:?} opened");
+    assert!(sizes.iter().flatten().all(|shown| *shown == size), "{size:?} asked, {sizes:?} opened");
 }
 
 /// The OS close of a native float closes its window when every panel may close, and leaves it open otherwise.
@@ -291,6 +292,53 @@ fn dragging_a_native_palette_by_its_title_row_docks_it_where_the_os_moves_window
         docked |= docks_window(&dock.frame(vec![]).0);
     }
     assert!(docked, "the button's release docks the whole window");
+}
+
+fn placing(commands: &[ViewportCommand]) -> Vec<&ViewportCommand> {
+    commands.iter().filter(|command| matches!(command, ViewportCommand::OuterPosition(_) | ViewportCommand::InnerSize(_))).collect()
+}
+
+/// The OS resizes a native palette live from its edge and then moves it, as AppKit does on macOS, while the dock model
+/// records each place a pass after the OS reported it. The app sends the window none of those places back: each would
+/// be a pass old, and the two writers would set the window to two places in turn for ever. At rest it stays where the
+/// OS left it.
+#[trial]
+fn a_native_float_the_os_resizes_or_moves_gets_no_place_back() {
+    let mut dock = NativeDock::on(Os::Mac, Arc::new(FakeSystem::new()));
+    let mut sent = Vec::new();
+    let mut at = FLOAT_AT;
+    for step in 1..=4 {
+        at = Rect::from_min_size(FLOAT_AT.min, FLOAT_AT.size() + Vec2::new(2.0, 8.0) * step as f32);
+        dock.windows.child_info(info(true, at));
+        sent.extend(dock.frame(vec![]).1);
+    }
+    for step in 1..=3 {
+        at = at.translate(Vec2::new(-30.0, 12.0) * step as f32);
+        dock.windows.child_info(info(true, at));
+        sent.extend(dock.frame(vec![]).1);
+    }
+    for _ in 0..3 {
+        sent.extend(dock.frame(vec![]).1);
+    }
+    assert!(placing(&sent).is_empty(), "the OS's places come back: {:?}", placing(&sent));
+    let recorded = dock.workspace.layout.floating[0].native.clone().expect("the model records the window");
+    assert_eq!(Vec2::from(recorded.normal.size), at.size(), "the model holds the OS's last size");
+}
+
+/// An app change of a native palette's place (an undo, a reloaded layout) moves and sizes its window, once.
+#[trial]
+fn an_app_change_of_a_native_floats_place_moves_its_window_once() {
+    let mut dock = NativeDock::on(Os::Mac, Arc::new(FakeSystem::new()));
+    let to = Rect::from_min_size(Pos2::new(1100.0, 200.0), Vec2::new(320.0, 260.0));
+    let mut placement = Placement::new(to.size().into(), 1.0);
+    placement.position_px = Some([to.min.x as i32, to.min.y as i32]);
+    dock.workspace.apply(Action::set_native(1, Some(placement)), false, |_| Permissions::ALL).expect("the model takes the place");
+    let mut sent = Vec::new();
+    for _ in 0..3 {
+        sent.extend(dock.frame(vec![]).1);
+    }
+    let placing = placing(&sent);
+    assert_eq!(placing, [&ViewportCommand::OuterPosition(to.min), &ViewportCommand::InnerSize(to.size())], "one move and one size");
 }
 
 /// A palette float made in the app window.

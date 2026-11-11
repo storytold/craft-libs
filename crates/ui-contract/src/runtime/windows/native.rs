@@ -12,7 +12,7 @@ use crate::runtime::frame::PerViewport;
 use craft_host::target::{Caps, DoubleClick, WindowState};
 use craft_window::native::NativeWindow;
 use craft_window::policy::Frame;
-use egui::{Context, Pos2, Vec2, ViewportId};
+use egui::{Context, Pos2, Rect, Vec2, ViewportId};
 use std::sync::Arc;
 
 /// A window command `act` sends.
@@ -115,8 +115,14 @@ pub fn act(ctx: &Context, viewport: ViewportId, action: WindowAction) -> bool {
             viewports::command(ctx, viewport, egui::ViewportCommand::BeginResize(viewports::resize_direction(edge)));
             hand_off(ctx, viewport);
         }
-        WindowAction::SetOuterPosition(pos) => viewports::command(ctx, viewport, egui::ViewportCommand::OuterPosition(pos)),
-        WindowAction::SetInnerSize(size) => viewports::command(ctx, viewport, egui::ViewportCommand::InnerSize(size)),
+        WindowAction::SetOuterPosition(pos) => {
+            viewports::command(ctx, viewport, egui::ViewportCommand::OuterPosition(pos));
+            PerViewport::<Record>::with(ctx, viewport, |record| record.known = record.known.map(|known| Rect::from_min_size(pos, known.size())));
+        }
+        WindowAction::SetInnerSize(size) => {
+            viewports::command(ctx, viewport, egui::ViewportCommand::InnerSize(size));
+            PerViewport::<Record>::with(ctx, viewport, |record| record.known = record.known.map(|known| Rect::from_min_size(known.min, size)));
+        }
         WindowAction::SetLevel(level) => {
             // A window opened by `show_viewport` gets its level with the next build of its viewport; any other (the
             // root) is told now.

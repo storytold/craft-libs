@@ -1,6 +1,6 @@
 //! A frame driver for trials with child viewports: the context opens OS viewports (not embedded), and a renderer
-//! like eframe's runs each child's pass nested inside its parent's UI closure, with events and window facts
-//! the trial gives it.
+//! like eframe's runs each child's pass nested inside its parent's UI closure, with events and window facts the trial
+//! gives it. As an integration does, the window gets what changed in its builder as commands before the pass.
 
 use craft_host::target::ShellInfo;
 use craft_ui::runtime::InstallSpec;
@@ -32,6 +32,9 @@ thread_local! {
     static TREES: RefCell<Vec<(ViewportId, AccessTree)>> = const { RefCell::new(Vec::new()) };
     /// The time every pass of the frame runs at.
     static NOW: Cell<f64> = const { Cell::new(0.0) };
+    /// Each child's builder as its window has it: a later builder patches it, and what changed goes to the window as
+    /// commands, as an integration sends them.
+    static BUILDERS: RefCell<Vec<(ViewportId, ViewportBuilder)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Seconds between two frames.
@@ -81,7 +84,29 @@ fn all_viewports(child: ViewportInfo) -> egui::ViewportIdMap<ViewportInfo> {
     all
 }
 
+/// Patches the window of `id` with `builder`, as an integration does before the child's pass: the fields that
+/// changed go to the window as commands. The first builder opens the window.
+fn patch_window(id: ViewportId, builder: ViewportBuilder) {
+    let commands = BUILDERS.with(|kept| {
+        let mut kept = kept.borrow_mut();
+        match kept.iter_mut().find(|(held, _)| *held == id) {
+            Some((_, window)) => window.patch(builder).0,
+            None => {
+                kept.push((id, builder));
+                Vec::new()
+            }
+        }
+    });
+    COMMANDS.with(|kept| {
+        for command in commands {
+            os_applies(id, &command);
+            kept.borrow_mut().push((id, command));
+        }
+    });
+}
+
 fn render_child(ctx: &Context, viewport: egui::ImmediateViewport<'_>) {
+    patch_window(viewport.ids.this, viewport.builder);
     let mut callback = viewport.viewport_ui_cb;
     let events = CHILD_EVENTS.with(|events| std::mem::take(&mut *events.borrow_mut()));
     let mut info = CHILD_INFO.with(|info| info.borrow().clone());
@@ -143,6 +168,7 @@ impl Windows {
         CHILD_INFO.with(|info| *info.borrow_mut() = ViewportInfo::default());
         CHILDREN.with(|children| children.borrow_mut().clear());
         COMMANDS.with(|kept| kept.borrow_mut().clear());
+        BUILDERS.with(|kept| kept.borrow_mut().clear());
         NOW.with(|now| now.set(0.0));
         Windows { ctx, root_info: RefCell::new(ViewportInfo::default()) }
     }

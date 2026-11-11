@@ -194,12 +194,13 @@ impl WindowHost {
         Some(WindowFacts { inner: facts.inner?, outer: facts.outer, scale: scale_of(&self.ctx, &facts), state: info.state, focused: facts.focused })
     }
 
-    /// `previous` (or a new record) updated to where `viewport`'s window is now, recorded as an app window's saved
-    /// placement is. `None` before the window has reported its rect and scale.
+    /// `previous` (or a new record) updated to where `viewport`'s window is, recorded as an app window's saved
+    /// placement is: where it last reported itself, or where the app last sent it. A caller that places the window at
+    /// this placement sends it nothing. `None` before the window has reported its rect and scale.
     #[doc(hidden)]
     pub fn placement(&self, viewport: ViewportId, previous: Option<Placement>) -> Option<Placement> {
         let facts = PerViewport::<Record>::with(&self.ctx, viewport, |record| record.facts)?;
-        placement_of(&self.ctx, &facts, previous)
+        placement_of(&self.ctx, &super::viewport::at_known(&self.ctx, viewport, facts), previous)
     }
 
     /// The connected monitors, in desktop pixels; none where the platform does not list them.

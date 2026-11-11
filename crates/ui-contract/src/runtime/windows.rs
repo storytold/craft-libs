@@ -132,6 +132,12 @@ pub(crate) struct Record {
     moved_pointer: Option<Pos2>,
     /// The `movable` flag last set on the OS window.
     movable_applied: Option<bool>,
+    /// Where a window `show_viewport` opened is as far as its caller knows: its outer top-left corner and inner size,
+    /// as its own pass last saw them, or as [`act`] last commanded. A caller that records the window's place records
+    /// this one, so a caller that follows the window places it here and sends it nothing.
+    known: Option<Rect>,
+    /// The place the window's own pass last saw.
+    seen: Option<Rect>,
 }
 
 /// Passes between searches for an OS window that was not found.

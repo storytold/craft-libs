@@ -817,7 +817,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             };
             let specs: Vec<PanelSpec> = window.panels().map(|panel| scene.spec(panel)).collect();
             let rights: Vec<Permissions> = window.panels().map(|panel| scene.permissions(panel)).collect();
-            let opening = native::opening(&ctx, scene.config, window, &specs);
+            let dock = scene.dock.with(("floating", window.id));
+            let group_id = dock.with("window");
+            let opening = native::opening(&ctx, scene.config, window, &specs, group_id);
             let mut actions = vec![HeaderAction::Menu];
             if rights.iter().all(|rights| rights.movable) {
                 actions.push(HeaderAction::Float);
@@ -828,7 +830,6 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let (rows, _) = self.menu_rows(body, &active);
             let picked = Cell::new(None);
             let dropped = RefCell::new(None);
-            let dock = scene.dock.with(("floating", window.id));
             let mut target = DockDropTarget::new(&ctx, dock, scene.layout, &policy);
             target.rtl = scene.rtl;
             target.space = Some(scene.space);
@@ -847,7 +848,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 .window_of(anchor.clone())
                 .takes_drops(target, &dropped)
                 .command_scope(DockCommands::SCOPE)
-                .id_salt(("floating", window.id));
+                .id(group_id);
             group = match opening.spec.clone() {
                 Some(window_spec) => group.native(window_spec),
                 None => group.bounds(scene.bounds),

@@ -61,14 +61,21 @@ pub fn restore<P>(ctx: &Context, window: &Floating<P>) -> Rect {
     Rect::from_min_size(at.unwrap_or(window.rect.min), Vec2::from(placed.normal.size))
 }
 
-/// How `window` shows: in an OS window at its restored rect where `config`, the platform and its panels allow one,
-/// else in the app window at its own rect. `specs` are its panels' specs.
+/// How `window` shows: in an OS window where `config`, the platform and its panels allow one, else in the app window
+/// at its own rect. `specs` are its panels' specs; `group` is the id of the group that shows it. A window that opens
+/// opens at its [`restore`]d rect; an open window stays at the placement the dock model recorded for it, so the
+/// monitor fit of `restore` never sends back a place the user gave it.
 #[doc(hidden)]
-pub fn opening<P>(ctx: &Context, config: &DockConfig, window: &Floating<P>, specs: &[PanelSpec]) -> Opening {
-    if allowed(ctx, config, specs) {
-        return Opening { rect: restore(ctx, window), spec: Some(spec_for(specs)) };
+pub fn opening<P>(ctx: &Context, config: &DockConfig, window: &Floating<P>, specs: &[PanelSpec], group: egui::Id) -> Opening {
+    if !allowed(ctx, config, specs) {
+        return Opening { rect: window.rect, spec: None };
     }
-    Opening { rect: window.rect, spec: None }
+    let open = WindowHost::of(ctx).viewport_of(group).is_some();
+    let recorded = window.native.as_ref().filter(|_| open).and_then(|native| {
+        let at = native.position()?;
+        Some(Rect::from_min_size(Pos2::from(at), Vec2::from(native.normal.size)))
+    });
+    Opening { rect: recorded.unwrap_or_else(|| restore(ctx, window)), spec: Some(spec_for(specs)) }
 }
 
 /// The action that records where the OS put the native window `window`, shown in `viewport`: its placement, as an
