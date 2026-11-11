@@ -310,15 +310,26 @@ impl GpuContext for WgpuContext {
                 // maximum; it proves nothing about whether the device can actually allocate
                 // padded_len bytes right now (free VRAM varies). wgpu 30.0.1 sends an allocation
                 // failure to the default uncaptured-error handler, which panics, unless a scope
-                // captures it first. An error scope converts that into a value this can return
-                // as a GpuFault instead of taking the worker down with it.
-                let error_scope = d.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+                // captures it first. Pop this scope immediately, before write_buffer below ever
+                // touches `buffer`: a buffer that failed to create is invalid, and writing to an
+                // invalid buffer raises its own VALIDATION error, a kind this OutOfMemory-only
+                // scope does not catch, so it must reach the default handler and panic regardless
+                // of when this scope is popped. Checking right here is what keeps that from
+                // happening at all.
+                let create_scope = d.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
                 let buffer = d.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some(label),
                     size: padded_len,
                     usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 });
+                if let Some(err) = pollster::block_on(create_scope.pop()) {
+                    return Err(GpuFault::Operation(format!("upload_buffer: device reported an allocation error creating the buffer: {err}")));
+                }
+                // write_buffer makes its own staging allocation to carry `bytes` to the device, a
+                // second allocation that can also run out of memory; it gets its own scope rather
+                // than reusing the one already closed above.
+                let write_scope = d.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
                 if padded_len == true_len {
                     d.queue.write_buffer(&buffer, 0, bytes);
                 } else {
@@ -326,8 +337,16 @@ impl GpuContext for WgpuContext {
                     padded.resize(usize::try_from(padded_len).unwrap_or(bytes.len()), 0);
                     d.queue.write_buffer(&buffer, 0, &padded);
                 }
-                if let Some(err) = pollster::block_on(error_scope.pop()) {
-                    return Err(GpuFault::Operation(format!("upload_buffer: device reported an allocation error: {err}")));
+                // write_buffer only records the copy into wgpu's PendingWrites; wgpu-core flushes
+                // that queue at the sooner of the caller's next real command-buffer submission or
+                // the next map_async on an affected buffer, and keeps the buffer named by the
+                // write alive internally until then. Without a submission here, a free_buffer
+                // right after this call could never actually release the GPU allocation behind
+                // it, since nothing would ever flush PendingWrites to let it go. An empty submit
+                // is still a submission as far as that flush is concerned, so it is enough.
+                d.queue.submit(std::iter::empty());
+                if let Some(err) = pollster::block_on(write_scope.pop()) {
+                    return Err(GpuFault::Operation(format!("upload_buffer: device reported an allocation error writing the buffer: {err}")));
                 }
                 let id = u32::try_from(d.buffers.len()).map_err(|_| GpuFault::Operation("too many buffers".into()))?;
                 d.buffers.push(Some((buffer, true_len)));
@@ -390,19 +409,29 @@ impl GpuContext for WgpuContext {
                 }
                 // Same reasoning as upload_buffer's error scope: an allocation failure for the
                 // read-staging buffer must become a GpuFault, not reach the default
-                // uncaptured-error handler and panic.
-                let error_scope = d.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+                // uncaptured-error handler and panic. Pop immediately, before copy_buffer_to_buffer
+                // below ever names `staging` as a copy destination: a staging buffer that failed
+                // to create is invalid, and copying into an invalid buffer raises its own
+                // VALIDATION error, a kind this OutOfMemory-only scope does not catch, so it must
+                // reach the default handler and panic regardless of when this scope is popped.
+                let create_scope = d.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
                 let staging = d.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("craft-gpu-wgpu.read-staging"),
                     size: copy_len,
                     usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 });
+                if let Some(err) = pollster::block_on(create_scope.pop()) {
+                    return Err(GpuFault::Operation(format!("request_read: device reported an allocation error creating the staging buffer: {err}")));
+                }
+                // The copy and its submission get their own scope rather than reusing the one
+                // already closed above, same split as upload_buffer's create vs. write.
+                let copy_scope = d.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
                 let mut encoder = d.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("craft-gpu-wgpu.read-copy") });
                 encoder.copy_buffer_to_buffer(buffer, 0, &staging, 0, copy_len);
                 d.queue.submit(Some(encoder.finish()));
-                if let Some(err) = pollster::block_on(error_scope.pop()) {
-                    return Err(GpuFault::Operation(format!("request_read: device reported an allocation error: {err}")));
+                if let Some(err) = pollster::block_on(copy_scope.pop()) {
+                    return Err(GpuFault::Operation(format!("request_read: device reported an allocation error copying the buffer: {err}")));
                 }
                 let state = std::sync::Arc::new(std::sync::Mutex::new(None));
                 {

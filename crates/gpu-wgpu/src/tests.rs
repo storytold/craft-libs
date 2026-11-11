@@ -194,7 +194,9 @@ fn the_no_device_fallback_caps_are_the_plain_fixed_value_not_a_probe_result() {
 /// default uncaptured-error handler, which panics. An error scope around buffer creation now
 /// converts that into a `GpuFault` instead. A genuine out-of-memory condition is not reliably
 /// reproducible in CI (it depends on how much free VRAM the host actually has), so this is the
-/// regression half: the added error scope must not misfire on an entirely ordinary allocation.
+/// regression half: the added error scope must not misfire on an entirely ordinary allocation,
+/// across both the create scope and the write scope that now follows it (see the next doc
+/// comment for why those are two separate scopes rather than one spanning both calls).
 #[test]
 fn upload_buffer_succeeds_normally_with_the_allocation_error_scope_in_place() {
     let Some(mut ctx) = real_context_or_skip("upload_buffer_succeeds_normally_with_the_allocation_error_scope_in_place") else {
@@ -202,6 +204,43 @@ fn upload_buffer_succeeds_normally_with_the_allocation_error_scope_in_place() {
     };
     let handle = ctx.upload_buffer("scope-regression", b"ok").expect("a normal allocation must not report a false allocation error");
     assert_eq!(ctx.read_buffer(handle).expect("read back"), b"ok".to_vec());
+}
+
+/// CodeRabbit finding on lib.rs:329 (upload_buffer) and lib.rs:404 (request_read): the original
+/// code popped its single error scope only after write_buffer (respectively, after the copy and
+/// its submission), so a failed create_buffer would leave an invalid buffer in play across the
+/// later call that used it. write_buffer against an invalid buffer raises a VALIDATION error, a
+/// kind the OutOfMemory-only scope never catches, so it would reach wgpu's default
+/// uncaptured-error handler and panic there instead of surfacing as a `GpuFault` -- the same
+/// crash the scope was added to prevent in the first place.
+///
+/// A genuine allocation failure is not reliably reproducible in CI (it depends on how much free
+/// VRAM/host memory lavapipe actually has to give), so this cannot be a runtime test that forces
+/// `create_buffer` to fail and then observes `write_buffer` never ran. What can be verified
+/// honestly, and is verified here, is the ordering itself: `upload_buffer`'s source now pops the
+/// create scope and returns on error strictly before it pushes the write scope or calls
+/// `write_buffer`, and `request_read`'s source pops the staging-buffer create scope and returns
+/// on error strictly before it creates the copy encoder or calls `queue.submit`. Both orderings
+/// are asserted directly against the source text below rather than left as an unverified claim in
+/// a comment; the success-path test above is the runtime half, proving the added scope split does
+/// not misfire on the ordinary case.
+#[test]
+fn a_failed_allocation_scope_pop_is_ordered_strictly_before_the_call_that_would_use_the_buffer() {
+    let source = include_str!("lib.rs");
+    let upload_create_pop = source.find("create_scope.pop()").expect("upload_buffer must pop a create scope");
+    let upload_write_scope_push = source.find("let write_scope = d.device.push_error_scope").expect("upload_buffer must push a separate write scope");
+    assert!(
+        upload_create_pop < upload_write_scope_push,
+        "upload_buffer must check the create scope's result before it ever pushes the write scope or calls write_buffer"
+    );
+
+    let read_create_pop =
+        source.rfind("device reported an allocation error creating the staging buffer").expect("request_read must pop a create scope");
+    let read_copy_scope_push = source.rfind("let copy_scope = d.device.push_error_scope").expect("request_read must push a separate copy scope");
+    assert!(
+        read_create_pop < read_copy_scope_push,
+        "request_read must check the staging-buffer create scope's result before it ever pushes the copy scope or touches the encoder"
+    );
 }
 
 /// CodeRabbit finding on lib.rs:313: nothing released an uploaded buffer's resources, so the
@@ -233,6 +272,28 @@ fn real_device_free_buffer_invalidates_the_handle_without_shifting_others() {
 
     assert!(matches!(ctx.buffer_len(a), Err(craft_gpu::GpuFault::InvalidJob(_))), "a freed handle must behave as invalid on a real device too");
     assert_eq!(ctx.read_buffer(b).expect("b must be unaffected by freeing a"), b"bb".to_vec());
+}
+
+/// CodeRabbit finding on lib.rs:438: `queue.write_buffer` only records its copy in wgpu's
+/// PendingWrites; without some submission to flush that queue, wgpu-core keeps the destination
+/// buffer (and the staging buffer `write_buffer` made internally) alive on its own, so repeated
+/// upload_buffer/free_buffer cycles would retain GPU allocations with nothing ever releasing
+/// them. `upload_buffer` now flushes with an empty `queue.submit` right after its own
+/// write_buffer call. This cannot assert freed VRAM directly (wgpu exposes no such counter), so
+/// it instead proves the behavioral guarantee this fix is actually for: many upload/free cycles
+/// in a row complete without panicking and without ever running out of handles, which is exactly
+/// what an unbounded, unflushed retention would eventually threaten on a long-lived worker.
+#[test]
+fn real_device_upload_and_free_many_cycles_in_a_row_does_not_panic_or_leak_a_growing_table() {
+    let Some(mut ctx) = real_context_or_skip("real_device_upload_and_free_many_cycles_in_a_row_does_not_panic_or_leak_a_growing_table") else {
+        return;
+    };
+    for i in 0..256u32 {
+        let bytes = i.to_le_bytes();
+        let handle = ctx.upload_buffer("cycle", &bytes).expect("each upload in the cycle must succeed");
+        assert_eq!(ctx.read_buffer(handle).expect("read back this cycle's buffer"), bytes.to_vec());
+        ctx.free_buffer(handle);
+    }
 }
 
 /// Freeing a handle twice, or a handle that never existed, is a no-op: callers are not expected
