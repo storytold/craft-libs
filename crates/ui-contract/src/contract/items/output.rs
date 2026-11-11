@@ -1,6 +1,6 @@
 //! What a collection's caller reads from `Cx` after the item step: its selection and response.
 
-use crate::contract::collection::{CollectionEvent, CollectionResponse, ShownRow};
+use crate::contract::collection::{CollectionResponse, ItemsOut};
 use crate::contract::{Collection, Cx};
 
 impl<C: Collection> Cx<'_, C> {
@@ -17,7 +17,7 @@ impl<C: Collection> Cx<'_, C> {
             .core
             .collection_events
             .take()
-            .and_then(|held| held.downcast::<(Vec<CollectionEvent<C::Key, C::ItemEvent>>, Vec<ShownRow<C::Key>>, u8)>().ok())
+            .and_then(|held| held.downcast::<ItemsOut<C::Key, C::ItemEvent>>().ok())
             .map(|held| *held)
             .unwrap_or_default();
         CollectionResponse::new(self.core.response.clone(), events, self.core.visible_rows.clone(), self.core.gestures)

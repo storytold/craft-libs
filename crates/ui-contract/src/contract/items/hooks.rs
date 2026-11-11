@@ -6,7 +6,7 @@ use super::members::Member;
 use super::{Held, ITEM_NODE, ItemsHooks, LastLayout, Lead, Placement, Renaming, Rows, SCROLL, Scrolled, View, key_hash, section_part};
 use super::{request, rows};
 use crate::contract::ValueOf;
-use crate::contract::collection::{CollectionEvent, ContextMenuRequest, Gestures, OpenChange, Rename, RowState, ShownRow};
+use crate::contract::collection::{CollectionEvent, ContextMenuRequest, Gestures, ItemsOut, OpenChange, PendingDrop, Rename, RowState, ShownRow};
 use crate::contract::cx::{BodyCx, Pointer as _};
 use crate::contract::run::{Measuring, ShapeHooks, ShowAt};
 use crate::contract::steps::ShapeKind;
@@ -458,7 +458,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                         run.is_multiple_of(2) && !self.source.is_section(at)
                     },
                     dragging: self.drags.grabbed.as_ref() == Some(&key),
-                    drop_target: self.drags.over.as_ref() == Some(&key),
+                    drop_target: matches!(&self.drags.pending, Some(PendingDrop::Items { key: Some(over), .. }) if *over == key),
                     current: current.as_ref() == Some(&key),
                     open: self.source.has_children(at) && self.source.open(at),
                     hovered: hover_at.is_some_and(|pos| row.contains(pos)),
@@ -711,7 +711,12 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         self.header.report(&cx.core.ctx, id, cx);
         *cx.core.memory.session::<Renaming<C::Key>>(sub(id, "rename")) = self.renaming.clone();
         cx.core.collection_selection = Some(Box::new(self.selection.clone()));
-        cx.core.collection_events = Some(Box::new((std::mem::take(&mut self.events), std::mem::take(&mut self.shown), self.activation_clicks)));
+        cx.core.collection_events = Some(Box::new(ItemsOut {
+            events: std::mem::take(&mut self.events),
+            shown: std::mem::take(&mut self.shown),
+            activation_clicks: self.activation_clicks,
+            pending_drop: self.drags.pending.clone(),
+        }));
         cx.core.visible_rows = self.visible.clone();
         cx.core.gestures = Gestures::of(comp.items());
     }

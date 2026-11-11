@@ -9,9 +9,10 @@
 
 use super::ItemsHooks;
 use super::marquee::MarqueeDrag;
-use crate::contract::collection::{CollectionEvent, CollectionProps, ColumnKind, ListDrag, ReorderMove, ToggleColumn, ToggleEdit};
+use crate::contract::collection::{CollectionEvent, CollectionProps, ColumnKind, ListDrag, PendingDrop, ReorderMove, ToggleColumn, ToggleEdit};
 use crate::contract::reorder;
 use crate::contract::{Collection, Cx, DragPreview, DropMark, DropTarget, OsFiles, Pointer as _};
+use crate::runtime::drag;
 use crate::runtime::env::Label;
 use craft_behavior::{
     Axis, CancelReason, ColumnKey, DropOperation, EditEvent, Flow, GestureId, ItemLayout, Mixed, NavShape, Outline, PointerButton, PressCancel,
@@ -149,8 +150,8 @@ pub(super) struct Drags<K> {
     pub(super) grabbed: Option<K>,
     sweep: Option<Sweep<K>>,
     moving: Option<GestureId>,
-    /// The row a drag from another collection would drop on this pass.
-    pub(super) over: Option<K>,
+    /// The drop a release would make this pass.
+    pub(super) pending: Option<PendingDrop<K>>,
     /// The selected row a plain press landed on: a click on it narrows the selection to it, a drag keeps it.
     pub(super) collapse: Option<K>,
     /// The row whose rename column got a double press: the editor opens when the press ends as a click, not when it
@@ -180,7 +181,7 @@ pub(super) struct SlowClick<K> {
 
 impl<K> Default for Drags<K> {
     fn default() -> Self {
-        Drags { grabbed: None, sweep: None, moving: None, over: None, collapse: None, rename: None, activate: None, marquee: None, slow: None }
+        Drags { grabbed: None, sweep: None, moving: None, pending: None, collapse: None, rename: None, activate: None, marquee: None, slow: None }
     }
 }
 
@@ -427,34 +428,44 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         false
     }
 
+    /// The move a drop of the collection's own `payload` at `landed` makes, before and after; `None` when it would
+    /// leave every item where it is.
+    fn own_move(&self, payload: &ListDrag<C::Key>, landed: Landed, groups: bool) -> Option<(ReorderMove<C::Key>, ReorderMove<C::Key>)> {
+        // The moved items in display order, as they stand in the source now.
+        let at: Vec<usize> =
+            payload.keys.iter().filter_map(|key| self.index_of(key)).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+        let &from = at.first()?;
+        let to = reorder::move_all_to(&at, landed.spot.insert);
+        let copy = matches!(landed.op, DropOperation::Copy);
+        let together = at.iter().enumerate().all(|(n, &place)| place == from + n);
+        let parent = landed.spot.parent.map(|row| self.source.key(row));
+        let held = if groups { reorder::parent_of(&Outline::new(self.source), from).map(|row| self.source.key(row)) } else { None };
+        if to == from && together && !copy && parent == held {
+            return None;
+        }
+        let keys: Vec<C::Key> = at.iter().map(|&place| self.source.key(place)).collect();
+        let key = payload.grabbed.clone();
+        Some((ReorderMove::new(key.clone(), keys.clone(), from, false).in_group(held), ReorderMove::new(key, keys, to, copy).in_group(parent)))
+    }
+
+    /// The drop `payload` makes at `landed`: a reorder of the collection's own items, or items from another one.
+    fn drop_of(&self, own: bool, payload: &ListDrag<C::Key>, landed: Landed, groups: bool) -> Option<PendingDrop<C::Key>> {
+        if own {
+            return self.own_move(payload, landed, groups).map(|(_, after)| PendingDrop::Reorder(after));
+        }
+        let key = (!self.source.is_empty()).then(|| self.source.key(landed.spot.over));
+        Some(PendingDrop::Items { key, insert: landed.spot.insert })
+    }
+
     fn land(&mut self, cx: &mut Cx<'_, C>, payload: &ListDrag<C::Key>, landed: Landed, groups: bool) {
         if payload.list != cx.core.id {
             let key = (!self.source.is_empty()).then(|| self.source.key(landed.spot.over));
             self.events.push(CollectionEvent::Dropped { key, insert: landed.spot.insert, op: landed.op, keys: payload.keys.clone() });
             return;
         }
-        // The moved items in display order, as they stand in the source now.
-        let at: Vec<usize> =
-            payload.keys.iter().filter_map(|key| self.index_of(key)).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
-        let Some(&from) = at.first() else { return };
-        let insert = landed.spot.insert;
-        let to = reorder::move_all_to(&at, insert);
-        let copy = matches!(landed.op, DropOperation::Copy);
-        let together = at.iter().enumerate().all(|(n, &place)| place == from + n);
-        let parent = landed.spot.parent.map(|row| self.source.key(row));
-        let held = if groups { reorder::parent_of(&Outline::new(self.source), from).map(|row| self.source.key(row)) } else { None };
-        if to == from && together && !copy && parent == held {
-            return;
+        if let Some((before, after)) = self.own_move(payload, landed, groups) {
+            self.events.push(CollectionEvent::Reorder(EditEvent::set(Mixed::Same(before), after, cx.core.label_arc(), None)));
         }
-        let keys: Vec<C::Key> = at.iter().map(|&place| self.source.key(place)).collect();
-        let key = payload.grabbed.clone();
-        let before = ReorderMove::new(key.clone(), keys.clone(), from, false).in_group(held);
-        self.events.push(CollectionEvent::Reorder(EditEvent::set(
-            Mixed::Same(before),
-            ReorderMove::new(key, keys, to, copy).in_group(parent),
-            cx.core.label_arc(),
-            None,
-        )));
     }
 
     /// Step 9: sweeps, row drags, drops and the free-layout move, from the collection's own press and the drag session.
@@ -466,7 +477,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         (rect, offset, rtl): (Rect, ScrollPos, bool),
         props: &CollectionProps,
     ) {
-        self.drags.over = None;
+        self.drags.pending = None;
         let free = matches!(layout.nav(), NavShape::Spatial);
         let phase = cx.core.press.phase;
         // The pointer comes in screen space; the rows and a move's offset are in the rows' own space.
@@ -519,15 +530,17 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                         .filter(|spot| comp.accepts(&payload, Some(&self.source.key(spot.over)), spot.insert))
                         .filter(|spot| !(own && groups) || !self.inside_dragged(&payload, spot.parent))
                 };
-                if let Some(spot) = spot
-                    && !own
-                    && !self.source.is_empty()
-                {
-                    self.drags.over = Some(self.source.key(spot.over));
-                }
                 let copy_ok = !own || props.reorder.is_some_and(|rule| rule.copy_with_alt);
+                let ordinal = drag::next_ordinal(&cx.core.ctx, cx.core.id);
                 if let Some(landed) = cx.drop_target::<ListDrag<C::Key>, _>(&RowDrop { spot, copy_ok }) {
                     self.land(cx, &payload, landed, groups);
+                } else if let Some(spot) = spot
+                    && drag::winning(&cx.core.ctx, cx.core.id, ordinal)
+                {
+                    let op = drag::current_operation(&cx.core.ctx);
+                    if copy_ok || !matches!(op, DropOperation::Copy) {
+                        self.drags.pending = self.drop_of(own, &payload, Landed { spot, op }, groups);
+                    }
                 }
             }
         } else {
@@ -538,8 +551,13 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         {
             let at = layer(at);
             let spot = if self.source.is_empty() { self.empty_spot(rect, at) } else { self.spot(layout, rect, offset, rtl, None, at) };
+            let ordinal = drag::next_ordinal(&cx.core.ctx, cx.core.id);
             if let Some(spot) = cx.drop_target::<OsFiles, _>(&FileDrop { spot }) {
                 self.events.push(CollectionEvent::FilesDropped { insert: spot.insert, files: files.files.clone() });
+            } else if let Some(spot) = spot
+                && drag::winning(&cx.core.ctx, cx.core.id, ordinal)
+            {
+                self.drags.pending = Some(PendingDrop::Files { insert: spot.insert });
             }
         }
     }

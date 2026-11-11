@@ -27,7 +27,7 @@ use super::view::PageSource;
 use craft_behavior::{EditEvent, IconId, Selection, SelectionChange, keyed};
 use craft_ui::buttons::Button;
 use craft_ui::contract::{
-    Bind, CollectionEvent, ContextMenuRequest, NoValue, Outcome, ReorderMove, ReorderRule, Show as _, ShowCollection as _, clicked,
+    Bind, CollectionEvent, ContextMenuRequest, NoValue, Outcome, PendingDrop, ReorderMove, ReorderRule, Show as _, ShowCollection as _, clicked,
 };
 use craft_ui::list::ThumbAspect;
 use craft_ui::primitives::textures::{Priority, ThumbPaint, ThumbRequest, ThumbnailOptions, Thumbnails};
@@ -156,6 +156,11 @@ pub struct PageThumbnailsOutput {
     pub response: Response,
     /// What happened this pass, in order.
     pub events: Vec<ThumbnailEvent>,
+    /// While pages are dragged, the move their release would make.
+    pub drop_target: Option<ReorderMove<usize>>,
+    /// While files from the OS are held over the grid, the page they would land before (the page count after the
+    /// last).
+    pub file_gap: Option<usize>,
 }
 
 impl Outcome for PageThumbnailsOutput {
@@ -331,6 +336,11 @@ impl<'a> PageThumbnails<'a> {
                 _ => {}
             }
         }
+        let (drop_target, file_gap) = match shown.response.pending_drop {
+            Some(PendingDrop::Reorder(mv)) => (Some(mv), None),
+            Some(PendingDrop::Files { insert }) => (None, Some(insert)),
+            _ => (None, None),
+        };
         for event in shown.response.events {
             match event {
                 CollectionEvent::Selection(change) => events.push(ThumbnailEvent::Selection(change)),
@@ -356,7 +366,7 @@ impl<'a> PageThumbnails<'a> {
         if new_page_row && clicked(&Button::new(words.new_page.clone()).show(ui)) {
             events.push(ThumbnailEvent::NewPage);
         }
-        PageThumbnailsOutput { response: shown.response.response, events }
+        PageThumbnailsOutput { response: shown.response.response, events, drop_target, file_gap }
     }
 }
 

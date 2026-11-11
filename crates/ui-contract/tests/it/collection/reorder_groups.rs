@@ -1,8 +1,8 @@
-//! Reordering into the groups of a tree: where a drop lands below an open group, and that a group does not drop
-//! inside itself.
+//! Reordering into the groups of a tree: where a drop lands below an open group, that a group does not drop inside
+//! itself, and the drop a release would make, reported while the drag is held.
 
 use super::kit::{Dismissed, List, ROW_H, Row, Words};
-use craft_ui::contract::{CollectionEvent, CollectionResponse, Props as _, SelectMode, ShowCollection as _};
+use craft_ui::contract::{CollectionEvent, CollectionResponse, PendingDrop, Props as _, SelectMode, ShowCollection as _};
 use craft_ui::runtime::drag;
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::pointer::{moved, press, release};
@@ -28,6 +28,7 @@ fn grove() -> Words {
 struct Run {
     events: RefCell<Vec<CollectionEvent<usize, Dismissed>>>,
     rows: RefCell<Vec<(usize, Rect)>>,
+    pending: RefCell<Option<PendingDrop<usize>>>,
 }
 
 impl Run {
@@ -37,6 +38,7 @@ impl Run {
 
     fn take(&self, out: CollectionResponse<usize, Dismissed>) {
         self.events.borrow_mut().extend(out.events);
+        *self.pending.borrow_mut() = out.pending_drop;
     }
 
     /// Every reorder reported: the moved keys, the position and the group.
@@ -113,4 +115,25 @@ fn a_group_does_not_drop_inside_itself() {
     assert!(drag::mark(&frames.ctx).is_none(), "no drop spot inside the dragged group's rows");
     release_at(&mut frames, at, &mut show);
     assert!(run.moves().is_empty());
+}
+
+/// While rows are held over the list, the response carries the move a release would make; the release reports that
+/// move, and over no row there is none.
+#[trial]
+fn a_held_drag_reports_the_move_its_release_makes() {
+    let (words, run) = (grove(), Run::default());
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| show_grove(ui, List::new(SelectMode::Single).tree().reorder_into_groups(), &words, &run);
+    frames.idle(3, &mut show);
+    let outside = ORIGIN + VIEW + Vec2::splat(20.0);
+    drag_to(&mut frames, &run, 0, outside, &mut show);
+    assert_eq!(*run.pending.borrow(), None, "outside the list a release drops nothing here");
+    let at = point(&run, 4, SHALLOW, ROW_H * 0.75);
+    frames.frame(vec![moved(at)], &mut show);
+    frames.idle(1, &mut show);
+    let Some(PendingDrop::Reorder(pending)) = run.pending.borrow().clone() else { panic!("a held reorder: {:?}", run.pending.borrow()) };
+    assert!(run.moves().is_empty(), "nothing moves before the release");
+    release_at(&mut frames, at, &mut show);
+    assert_eq!(run.moves(), vec![(pending.keys, pending.to, pending.parent)]);
+    assert_eq!(*run.pending.borrow(), None, "after the drop nothing is pending");
 }

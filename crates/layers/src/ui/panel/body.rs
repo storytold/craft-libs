@@ -10,15 +10,17 @@ pub(in crate::ui::panel) use rows::{LayerRows, ToggleSweeps, reveal_plan};
 use rows::{RevealPlan, list_selection};
 
 use craft_behavior::{ColumnWidth, IconId};
-use craft_ui::contract::{Bind, CollectionEvent, ColumnKind, ColumnSpec, ListDrag, Props as _, ReorderRule, ShowCollection as _, ToggleColumn};
+use craft_ui::contract::{
+    Bind, CollectionEvent, ColumnKind, ColumnSpec, ListDrag, PendingDrop, Props as _, ReorderRule, ShowCollection as _, ToggleColumn,
+};
 use craft_ui::list::List;
 use craft_ui::runtime::env::Label;
 use egui::Ui;
 
 use super::Session;
 use super::context::PanelContext;
-use super::drag::{LayersDrag, accepts_drop};
-use super::events::LayersEvent;
+use super::drag::{LayersDrag, accepts_drop, layer_drop};
+use super::events::{LayerDrop, LayerMove, LayersEvent};
 use super::row::{EYE, LOCK, NAME, build_row};
 use crate::ui::tree::{LayerRowKey, LayerTree};
 
@@ -26,6 +28,8 @@ use crate::ui::tree::{LayerRowKey, LayerTree};
 pub(super) struct BodyOutput<Id> {
     pub(super) events: Vec<LayersEvent<Id>>,
     pub(super) response: egui::Response,
+    /// The layer move a release of the held rows would make, while the option to preview it is on.
+    pub(super) drop_preview: Option<LayerMove<Id>>,
 }
 
 /// Shows the list over `rows` and maps what it reports.
@@ -84,6 +88,13 @@ pub(super) fn show_body<T: LayerTree>(
     });
 
     let mut events: Vec<LayersEvent<T::Id>> = reveal.opens.iter().cloned().map(LayersEvent::Open).collect();
+    let drop_preview = match &out.pending_drop {
+        Some(PendingDrop::Reorder(mv)) if cx.options.preview_on_canvas_when_reordering => match layer_drop(mv, &order, &parent_of, filtered) {
+            Some(LayerDrop::Layers(layers)) => Some(layers),
+            _ => None,
+        },
+        _ => None,
+    };
     let selection_changed = out.events.iter().any(|event| matches!(event, CollectionEvent::Selection(_)));
     let list_events = out.events;
     map_events(cx, &order, &parent_of, filtered, lock_name, session, list_events, &mut events);
@@ -97,5 +108,5 @@ pub(super) fn show_body<T: LayerTree>(
         session.anchor = selection.anchor.as_ref().map(|key| LayerRowKey::Layer(key.layer().clone()));
         session.produced = layers;
     }
-    BodyOutput { events, response: out.response }
+    BodyOutput { events, response: out.response, drop_preview }
 }

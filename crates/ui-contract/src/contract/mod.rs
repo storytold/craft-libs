@@ -49,8 +49,8 @@ pub use body::REORDER_BAND;
 pub use body::pad_of;
 pub use collection::{
     ActivateOn, CollectionEvent, CollectionProps, CollectionResponse, ColumnAlign, ColumnEvent, ColumnKind, ColumnSort, ColumnSpec,
-    ContextMenuRequest, DragPayload, HeaderMenuRequest, ItemKeys, LeadOnOpen, LeadSource, ListDrag, OpenChange, Rename, ReorderMove, ReorderRule,
-    RowPressed, RowState, SelectMode, ShownRow, SpaceAction, ToggleColumn, ToggleEdit,
+    ContextMenuRequest, DragPayload, HeaderMenuRequest, ItemKeys, LeadOnOpen, LeadSource, ListDrag, OpenChange, PendingDrop, Rename, ReorderMove,
+    ReorderRule, RowPressed, RowState, SelectMode, ShownRow, SpaceAction, ToggleColumn, ToggleEdit,
 };
 #[doc(hidden)]
 pub use container::InBar;

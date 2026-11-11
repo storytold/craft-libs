@@ -1,6 +1,6 @@
 //! A collection's output: `CollectionResponse`, the rows it showed and the gestures it allows.
 
-use super::events::CollectionEvent;
+use super::events::{CollectionEvent, ReorderMove};
 use super::props::{CollectionProps, SelectMode};
 use craft_behavior::ColumnKey;
 use egui::Response;
@@ -27,12 +27,36 @@ pub struct CollectionResponse<K, E> {
     /// The click count of the press behind this pass's `Activate`: 2 for the second click of a double click, 0 when a
     /// key or no pointer activated.
     pub activation_clicks: u8,
+    /// While a drag is over the collection, the drop its release would make; `None` when the collection would take
+    /// none. An app previews it (a layer move on the canvas); the drop itself comes as its event.
+    pub pending_drop: Option<PendingDrop<K>>,
+}
+
+/// The drop a release would make on a collection now.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PendingDrop<K> {
+    /// The collection's own items move: the move `CollectionEvent::Reorder` would carry.
+    Reorder(ReorderMove<K>),
+    /// Items dragged from another collection land before `insert`, over `key` (none over an empty collection), as
+    /// `CollectionEvent::Dropped` would report.
+    Items {
+        /// The item under the pointer.
+        key: Option<K>,
+        /// The position of the display order the items land before.
+        insert: usize,
+    },
+    /// Files from the OS land before `insert`, as `CollectionEvent::FilesDropped` would report.
+    Files {
+        /// The position of the display order the files land before.
+        insert: usize,
+    },
 }
 
 impl<K, E> CollectionResponse<K, E> {
     pub(crate) fn new(
         response: Response,
-        (events, shown, activation_clicks): (Vec<CollectionEvent<K, E>>, Vec<ShownRow<K>>, u8),
+        ItemsOut { events, shown, activation_clicks, pending_drop }: ItemsOut<K, E>,
         visible: Range<usize>,
         gestures: Gestures,
     ) -> Self {
@@ -45,6 +69,7 @@ impl<K, E> CollectionResponse<K, E> {
             rename: gestures.rename,
             reorder: gestures.reorder,
             activation_clicks,
+            pending_drop,
         }
     }
 
@@ -52,6 +77,20 @@ impl<K, E> CollectionResponse<K, E> {
     /// it with `opened_by`, as from a button. `None` while the item is not shown.
     pub fn opener(&self, opener: crate::contract::ItemOpener) -> Option<&Response> {
         self.shown.iter().flat_map(|row| &row.openers).find(|(held, _)| *held == opener).map(|(_, response)| response)
+    }
+}
+
+/// What the item step hands to `collection_response`.
+pub(crate) struct ItemsOut<K, E> {
+    pub(crate) events: Vec<CollectionEvent<K, E>>,
+    pub(crate) shown: Vec<ShownRow<K>>,
+    pub(crate) activation_clicks: u8,
+    pub(crate) pending_drop: Option<PendingDrop<K>>,
+}
+
+impl<K, E> Default for ItemsOut<K, E> {
+    fn default() -> Self {
+        ItemsOut { events: Vec::new(), shown: Vec::new(), activation_clicks: 0, pending_drop: None }
     }
 }
 
