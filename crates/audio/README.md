@@ -273,9 +273,9 @@ use craft_audio::opus::Encoder;
 let mut enc = Encoder::new(2, 128_000)?;            // channels, bits per second
 let frame_len = Encoder::FRAME_SIZE * 2;            // 20 ms, interleaved stereo
 let mut samples = buf.interleaved();                // 48 kHz audio
-// The last frame is padded with silence.
-let padding = (frame_len - samples.len() % frame_len) % frame_len;
-samples.resize(samples.len() + padding, 0.0);
+// Silence after the audio flushes the encoder's delay (the pre-skip) and fills the last frame.
+let frames = samples.len() / 2 + enc.pre_skip() as usize;
+samples.resize(frames.div_ceil(Encoder::FRAME_SIZE) * frame_len, 0.0);
 let mut packets = Vec::new();
 for frame in samples.chunks_exact(frame_len) {
     packets.push(enc.encode_float(frame)?);
@@ -294,8 +294,10 @@ Matroska/WebM or MP4:
   `DiscardPadding`, so the padding at the end stays in the file.
 - **MP4:** the sample entry takes an `isobmff::OpusConfig` (`dOps`) with the same fields as the
   `OpusHead`: channels, pre-skip, input rate, gain and mapping family. `TrackConfig::media_start`
-  set to the pre-skip skips it; an explicit `TrackConfig::edits` with the audio's length also
-  drops the padding.
+  set to the pre-skip skips it. To drop the padding as well, give `TrackConfig::edits` one
+  `Edit` instead, which replaces the edit `media_start` makes: `media_time` the pre-skip (track
+  timescale), `segment_duration` the audio's length (movie timescale), `media_rate`
+  `0x0001_0000`.
 
 ### Waveform overviews
 

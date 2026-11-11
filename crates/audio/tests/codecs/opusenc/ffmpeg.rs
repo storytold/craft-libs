@@ -17,10 +17,12 @@ fn ffmpeg() -> Option<std::path::PathBuf> {
 
 /// Decodes an Ogg Opus file with ffmpeg's decoder `codec`; returns interleaved f32 output.
 fn ffmpeg_decode(exe: &std::path::Path, codec: &str, file: &[u8], channels: usize, tag: &str) -> Option<Vec<f32>> {
-    let has = Command::new(exe).args(["-hide_banner", "-decoders"]).output().ok()?;
+    let has = match Command::new(exe).args(["-hide_banner", "-decoders"]).output() {
+        Ok(out) => out,
+        Err(e) => return crate::common::skip(&format!("ffmpeg -decoders failed: {e}")),
+    };
     if !String::from_utf8_lossy(&has.stdout).lines().any(|l| l.split_whitespace().nth(1) == Some(codec)) {
-        eprintln!("ffmpeg has no {codec} decoder; skipping it");
-        return None;
+        return crate::common::skip(&format!("ffmpeg has no {codec} decoder"));
     }
     let path = std::env::temp_dir().join(format!("effectcraft-opusenc-{}-{tag}.opus", std::process::id()));
     std::fs::write(&path, file).unwrap();
