@@ -68,6 +68,12 @@ pub(crate) fn two_sided_named(name: &str) -> Option<bool> {
     PrinterDevice::all().ok()?.iter().find(|d| d.name() == name).and_then(two_sided)
 }
 
+/// Whether the driver of the queue `name` renders XPS itself (`PRINTER_DRIVER_XPS`); `None`
+/// when no queue has that name or its driver can't be read.
+pub(crate) fn xps_driver_named(name: &str) -> Option<bool> {
+    PrinterDevice::all().ok()?.iter().find(|d| d.name() == name)?.is_xps_driver().ok()
+}
+
 #[cfg(test)]
 thread_local! {
     /// The driver capability queries printer discovery made on this thread, so a test can show

@@ -474,6 +474,10 @@ fn windows_jobs_reach_the_spooler() {
         return;
     }
     let (listed, probed) = driver_queries(|| spool::printers().into_iter().find(|p| p.name == name));
+    // "Generic / Text Only" is a GDI (v3) driver: the XPS print API reaches it through Windows'
+    // XPS-to-GDI conversion, where an app may flatten transparency first (storytold/pdfcraft#6155).
+    assert_eq!(spool::xps_driver(name), Some(false), "the test queue's driver is a GDI driver");
+    assert_eq!(spool::xps_driver("Craft Test Print: no such queue"), None);
     // The list a Print dialog shows first: the same queue, named without asking its driver (a
     // networked printer in power save can hold that query, storytold/wordcraft#5710).
     let (queue, unprobed) = driver_queries(|| spool::printer_queues().into_iter().find(|p| p.name == name));

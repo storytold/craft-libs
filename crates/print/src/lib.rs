@@ -653,6 +653,23 @@ pub fn two_sided(printer: &str) -> Option<bool> {
     }
 }
 
+/// Whether `printer`'s driver renders XPS itself: on Windows, `Some(true)` for v4 drivers and v3
+/// drivers with an XPS rendering filter, `Some(false)` for GDI drivers, which the XPS print API
+/// reaches through Windows' XPS-to-GDI conversion. A page with transparency can come out wrong or
+/// fail to print there (storytold/pdfcraft#6155, #5838, #5940), so an app may flatten it first.
+/// `None` when it can't be read or no queue has that name, and on other systems.
+pub fn xps_driver(printer: &str) -> Option<bool> {
+    #[cfg(windows)]
+    {
+        windows::xps_driver_named(printer)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = printer;
+        None
+    }
+}
+
 /// The Print dialog's printers from lpstat's two answers: the spooler's queues (`-p -d`), then
 /// the driverless destinations of `available` (`-e`) that have no queue — CUPS builds a temporary
 /// queue when `lp` sends them a job. Each destination once, queues first; the default still comes
