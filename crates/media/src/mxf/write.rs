@@ -345,8 +345,9 @@ pub struct WriterConfig {
 }
 
 impl WriterConfig {
-    /// A configuration with no essence tracks yet. `company` and `product` are `craft-media`:
-    /// an app sets its own names.
+    /// A configuration with no essence tracks yet. `company` and `product` are `craft-media` and
+    /// `version` is this crate's: an app sets its own. The identification set's product UID is
+    /// derived from `product`.
     pub fn new(pattern: Pattern, edit_rate: Rational, ids: PackageIds) -> Self {
         WriterConfig {
             pattern,
@@ -878,7 +879,7 @@ impl<W: Write + Seek> MxfWriter<W> {
             .p(0x3C01, &utf16(&cfg.company))
             .p(0x3C02, &utf16(&cfg.product))
             .p(0x3C04, &utf16(&cfg.version))
-            .p(0x3C05, &hash128(b"craft-media MXF writer"))
+            .p(0x3C05, &hash128(format!("{} MXF writer", cfg.product).as_bytes()))
             .p(0x3C06, &ts);
         s.write(&mut out);
         // Content storage, essence container data
@@ -1303,13 +1304,22 @@ pub struct OpAtomPcm {
 }
 
 /// A complete OP-Atom PCM file in memory. `samples` are interleaved integer sample values in the
-/// range of `bits` (e.g. -32768..=32767 for 16 bits).
+/// range of `bits` (e.g. -32768..=32767 for 16 bits). The identification names `craft-media`;
+/// [`write_opatom_pcm_as`] takes the app's own.
 pub fn write_opatom_pcm(opts: &OpAtomPcm, samples: &[i32]) -> io::Result<Vec<u8>> {
+    let d = WriterConfig::new(Pattern::OpAtom, Rational::new(1, 1), opts.ids.clone());
+    write_opatom_pcm_as(opts, samples, &d.company, &d.product, &d.version)
+}
+
+/// [`write_opatom_pcm`] with the identification set's company name, product name and version
+/// string (the [`WriterConfig`] fields of the same names).
+pub fn write_opatom_pcm_as(opts: &OpAtomPcm, samples: &[i32], company: &str, product: &str, version: &str) -> io::Result<Vec<u8>> {
     let sd = SoundDesc { sample_rate: opts.sample_rate, channels: opts.channels.max(1), bits: opts.bits };
     let rate = opts.edit_rate.unwrap_or(Rational::new(opts.sample_rate as i32, 1));
     let mut cfg = WriterConfig::new(Pattern::OpAtom, rate, opts.ids.clone());
     cfg.sound = vec![sd];
     cfg.timecode = opts.timecode;
+    (cfg.company, cfg.product, cfg.version) = (company.into(), product.into(), version.into());
     let mut w = MxfWriter::new(io::Cursor::new(Vec::new()), cfg)?;
     let bps = sd.bits.div_ceil(8).clamp(1, 4) as usize;
     let frames = samples.len() / sd.channels as usize;

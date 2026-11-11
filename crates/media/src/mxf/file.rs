@@ -310,7 +310,7 @@ struct Element {
     truncated: bool,
 }
 
-struct WalkResult {
+pub(super) struct WalkResult {
     run_in: u64,
     partitions: Vec<Partition>,
     /// Header metadata per partition index: (primer, sets as (key, value)).
@@ -322,6 +322,10 @@ struct WalkResult {
 
 /// Values larger than this are never read while opening (metadata and index values are small).
 const MAX_META_VALUE: u64 = 64 << 20;
+/// All the values read while opening (partition packs, primers, metadata sets, index segments)
+/// may hold this much together. Real header metadata is kilobytes; a file made of metadata sets
+/// would otherwise be read whole into memory.
+const MAX_META_TOTAL: u64 = 256 << 20;
 /// Samples (frames x channels) of zero padding `read_pcm` will produce past the stored essence.
 const PCM_PAD_FRAMES_LIMIT: usize = 1 << 24;
 
@@ -367,6 +371,11 @@ impl<S: ByteSource + ?Sized> Window<'_, S> {
 }
 
 fn walk(src: &(impl ByteSource + ?Sized)) -> Result<WalkResult> {
+    walk_within(src, MAX_META_TOTAL)
+}
+
+/// [`walk`] with the budget for all values read (`MAX_META_TOTAL`; tests pass a small one).
+pub(super) fn walk_within(src: &(impl ByteSource + ?Sized), mut meta_budget: u64) -> Result<WalkResult> {
     let len = src.len();
     let head = read_upto(src, 0, 65_536 + 32)?;
     let run_in = find_header_partition(&head).ok_or_else(|| Error::NotMxf("no header partition pack".into()))? as u64;
@@ -411,10 +420,13 @@ fn walk(src: &(impl ByteSource + ?Sized)) -> Result<WalkResult> {
             }
             break;
         }
-        let read_value = || -> Result<Vec<u8>> {
+        let mut read_value = || -> Result<Vec<u8>> {
             if vlen > MAX_META_VALUE {
                 return Err(Error::Invalid(format!("metadata value of {vlen} bytes at {pos}")));
             }
+            meta_budget = meta_budget
+                .checked_sub(vlen)
+                .ok_or_else(|| Error::Invalid(format!("header metadata and index tables past the limit at byte {pos}")))?;
             Ok(read_upto(src, vstart, vlen as usize)?)
         };
         match class {

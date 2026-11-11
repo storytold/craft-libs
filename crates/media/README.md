@@ -670,7 +670,8 @@ sample rate, channels and (for plain PCM) the little-endian `PcmFormat`. MXF ess
 configuration in band, so `extradata` is empty.
 
 Limits, each with a test: a run-in of at most 65 535 bytes before the header partition pack, a
-metadata or index value of at most 64 MiB (larger is refused before it is read), 16 MiB scanned
+metadata or index value of at most 64 MiB (larger is refused before it is read) and 256 MiB of
+them in all, 16 MiB scanned
 for the next partition pack after a lost KLV sync, an index position that cannot make a sparse
 table, at most 256 sound channels (8 in an AES3 element), a PCM block alignment of at most 4096
 bytes, and a sound request of at most 2²⁴ samples past the stored essence.
@@ -731,9 +732,13 @@ w.finish()?;
 ### Differences from `filmcraft-mxf`
 
 - `ByteSource` is `craft_media::ByteSource`.
-- `WriterConfig::new` sets `company` and `product` to `craft-media` (FilmCraft: `FilmCraft`), and
-  the identification set's product UID is derived from `craft-media MXF writer`. Apps set their
-  own names; `write_opatom_pcm` always writes the defaults.
+- `WriterConfig::new` sets `company` and `product` to `craft-media` (FilmCraft: `FilmCraft`) and
+  `version` to this crate's. Apps set their own; `write_opatom_pcm_as` takes them for the
+  in-memory OP-Atom PCM writer (`write_opatom_pcm` writes the defaults). The identification
+  set's product UID is derived from `"<product> MXF writer"`, so `company` and `product` of
+  `FilmCraft` with FilmCraft's version string write the bytes `filmcraft-mxf` wrote.
+- Everything read while opening (partition packs, primers, metadata sets, index segments) shares
+  a budget of 256 MiB; past it the file is refused. `filmcraft-mxf` bounded each value only.
 - `EssenceTrack::sync_before` returns 0 for a track without picture samples (a sound track); it
   indexed an empty table and panicked.
 - `Timecode::format` saturates for a drop-frame start near `i64::MAX`; it overflowed (a panic in
