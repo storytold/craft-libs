@@ -112,10 +112,11 @@ impl ProofLang {
 
     /// The proofing language of a BCP 47 tag (`pl-PL`, `en_GB`, `PL`…). The primary subtag
     /// counts, and for English and Spanish the region too ([`ProofLang::english`],
-    /// [`ProofLang::spanish`]), for Portuguese ([`EUROPEAN_PORTUGUESE`]) and for German (`CH`,
-    /// `LI`). No tag (or an empty one) is English, WordCraft's default editing
-    /// language. Any other valid language tag is [`ProofLang::Pack`] with its [`PackLocale`];
-    /// `x-none`, `und`, `zxx`, `mul`, `mis` and malformed tags are [`ProofLang::Other`].
+    /// [`ProofLang::spanish`]), for Portuguese (Portugal and the regions CLDR gives `pt_PT` as
+    /// parent) and for German (`CH`, `LI`). No tag (or an empty one) is English, WordCraft's
+    /// default editing language. Any other valid language tag is [`ProofLang::Pack`] with its
+    /// [`PackLocale`]; `x-none`, `und`, `zxx`, `mul`, `mis` and malformed tags are
+    /// [`ProofLang::Other`].
     pub fn from_tag(tag: Option<&str>) -> ProofLang {
         let Some(tag) = tag.map(str::trim).filter(|t| !t.is_empty()) else { return ProofLang::En };
         let primary = tag.split(['-', '_', '.', '@']).next().unwrap_or("");
