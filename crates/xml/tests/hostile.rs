@@ -361,3 +361,26 @@ fn attributes_are_bounded_over_the_whole_tree() {
     let tight = Options::default().with_limits(Limits { max_attrs_total: 1023, ..Limits::DEFAULT });
     assert_eq!(tight.parse_streaming(doc.as_bytes(), &["c"], |_| Ok::<(), Error>(())), Err(Error::TooManyAttrsTotal(1023)));
 }
+
+/// An internal subset is found wherever it hides, and looking for it is linear in the input.
+#[test]
+fn an_internal_subset_is_refused_wherever_it_hides() {
+    let opts = Options { doctype: Doctype::RejectInternalSubset, ..Options::default() };
+    assert!(opts.parse(b"<!DOCTYPE xmeml><xmeml/>").is_ok());
+    assert!(opts.parse(b"<!DOCTYPE xmeml SYSTEM \"a>b\"><xmeml/>").is_ok());
+    // the first marker sits in a comment; the real declaration follows
+    let hidden = "<!-- <!DOCTYPE x> --><!DOCTYPE xmeml [<!ENTITY a \"aaaa\">]><xmeml>&a;</xmeml>";
+    assert_eq!(opts.parse(hidden.as_bytes()), Err(Error::Doctype));
+    // a `>` inside the system literal does not end the declaration early
+    let quoted = "<!DOCTYPE xmeml SYSTEM \"a>b\" [<!ENTITY a \"aaaa\">]><xmeml>&a;</xmeml>";
+    assert_eq!(opts.parse(quoted.as_bytes()), Err(Error::Doctype));
+    assert_eq!(opts.parse(b"<?pi <!DOCTYPE a> ?><!DOCTYPE x [<!ENTITY a \"b\">]><x/>"), Err(Error::Doctype));
+    // many markers in one comment, and many that never close
+    let marker = "<!DOCTYPE ";
+    let in_comment = format!("<!--{}--><x/>", marker.repeat(100_000));
+    let unclosed = format!("<x>{}", marker.repeat(100_000));
+    let start = std::time::Instant::now();
+    assert!(opts.parse(in_comment.as_bytes()).is_ok());
+    let _ = opts.parse(unclosed.as_bytes());
+    assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
+}
