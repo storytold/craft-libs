@@ -10,9 +10,10 @@
 //! 3. Escape during a drag arrives as a cancelled press ([`PressCancel`]) and calls `cancel` once.
 //! 4. Keys the canvas holds as intents (arrows, Enter, Escape) go to `key` while the canvas has focus; a text part
 //!    inside the canvas takes its own keys before they are routed here. Enter and Escape carry Alt and Shift
-//!    (`ToolContext::mods`). While nothing in the window has focus, Enter and Escape are offered too, so a tool
-//!    holding a gesture or a pending edit (a transform box) commits and cancels before the canvas is clicked; one the
-//!    tool leaves goes on to the scopes around it. A focused field or control keeps its own Enter and Escape.
+//!    (`ToolContext::mods`). While nothing in the window has focus, the arrows, Enter and Escape are offered too, so a
+//!    tool holding a gesture or a pending edit commits and cancels before the canvas is clicked; one the tool leaves
+//!    goes on to the scopes around it. A focused field or control keeps its own Enter and Escape. A session control
+//!    shown in the canvas body (a crop frame, a transform box: `KeyUse::session`) takes these keys first.
 //! 5. The deletes and the plain keys are the app's unless the tool claims them ([`CanvasTool::claims`]). The host
 //!    reads the claims at the end of every pass, after the pointer events and keys, and holds the claimed chords from
 //!    the app's shortcuts in the next pass: a plain Delete with nothing to delete runs the app's Edit > Clear.
@@ -776,11 +777,13 @@ impl<'a> Run<'a> {
         true
     }
 
-    /// The keys the canvas holds: intents routed to it while it has focus, Enter and Escape while nothing in the
-    /// window has focus, and the chords the tool claimed at the end of the last pass.
+    /// The keys the canvas holds: intents routed to it while it has focus, the arrows, Enter and Escape while nothing
+    /// in the window has focus, and the chords the tool claimed at the end of the last pass. A session control in the
+    /// canvas body (`KeyUse::session`) has taken the arrows, Enter and Escape it acts on before this runs.
     fn keys(&mut self, ctx: &Context, canvas: Id, rtl: bool) {
         keys::with_window_intents(ctx, rtl, |window| {
-            let mut taken = self.offer(window, |intents| intents.take(Intent::Submit).then_some(ToolKey::Submit));
+            let mut taken = self.offer(window, |intents| intents.take_nudge().map(|(direction, mods)| ToolKey::Nudge { direction, mods }));
+            taken |= self.offer(window, |intents| intents.take(Intent::Submit).then_some(ToolKey::Submit));
             if !self.cancelled {
                 taken |= self.offer(window, |intents| intents.take(Intent::Cancel).then_some(ToolKey::Cancel));
             }

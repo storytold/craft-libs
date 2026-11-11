@@ -36,7 +36,7 @@ pub use intents::settle;
 pub use intents::take_submit;
 #[doc(hidden)]
 pub use intents::with_window_intents;
-pub(crate) use intents::{context_request, request_context, route_whole_reset, scope_escape, take_cancel, take_window_cancel};
+pub(crate) use intents::{Lent, context_request, give_back, lend, request_context, route_whole_reset, scope_escape, take_cancel, take_window_cancel};
 pub(crate) use nodes::{redirect_node, register_expanded, register_node};
 pub(crate) use route::{activated_member, begin, layout_of, pasted_text, queue_activate, queue_edit, take_shortcuts};
 

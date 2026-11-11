@@ -285,6 +285,74 @@ pub fn with_window_intents(ctx: &Context, rtl: bool, take: impl FnOnce(&mut Inte
     taken
 }
 
+/// The keys an arena's session control borrowed this pass (`KeyUse::session`), with the ids they were routed to.
+#[derive(Debug, Default)]
+pub(crate) struct Lent {
+    items: Vec<(Option<Id>, Intent)>,
+    nudge: Option<Option<Id>>,
+}
+
+/// Lends `to`, an arena member that holds the arena's session, the Submit, Cancel and nudge routed to its arena root
+/// `arena` and, while nothing in the window has focus, the window's. The member reads them through `intents_of`;
+/// `give_back` returns what it leaves, so the arena's tool and the scopes around it still see those keys.
+pub(crate) fn lend(ctx: &Context, arena: Id, to: Id) -> Lent {
+    let mut lent = Lent::default();
+    if crate::runtime::measure::active(ctx) {
+        return lent;
+    }
+    let window = focus::focused_rec(ctx).is_none();
+    current(ctx, |stage| {
+        let sources = [Some(Some(arena)), window.then_some(None)];
+        let (mut moved, mut nudge) = (Vec::new(), None);
+        for from in sources.into_iter().flatten() {
+            let Some(routed) = stage.routed.get_mut(&from) else { continue };
+            routed.items.retain(|item| {
+                let lends = matches!(item.intent, Intent::Submit | Intent::Cancel);
+                if lends {
+                    moved.push(item.clone());
+                    lent.items.push((from, item.intent.clone()));
+                }
+                !lends
+            });
+            if nudge.is_none()
+                && let Some(taken) = routed.nudge.take()
+            {
+                nudge = Some(taken);
+                lent.nudge = Some(from);
+            }
+        }
+        let own = stage.routed.entry(Some(to)).or_default();
+        own.items.extend(moved);
+        if nudge.is_some() {
+            own.nudge = nudge;
+        }
+    });
+    lent
+}
+
+/// Returns to their sources the keys of `lent` that `to` left untaken (after `settle`).
+pub(crate) fn give_back(ctx: &Context, to: Id, lent: Lent) {
+    if lent.items.is_empty() && lent.nudge.is_none() {
+        return;
+    }
+    current(ctx, |stage| {
+        let Some(own) = stage.routed.get_mut(&Some(to)) else { return };
+        let mut back = Vec::new();
+        for (from, intent) in lent.items {
+            if let Some(at) = own.items.iter().position(|item| item.intent == intent) {
+                back.push((from, own.items.remove(at)));
+            }
+        }
+        let nudge = lent.nudge.and_then(|from| own.nudge.take().map(|nudge| (from, nudge)));
+        for (from, item) in back {
+            stage.routed.entry(from).or_default().items.push(item);
+        }
+        if let Some((from, nudge)) = nudge {
+            stage.routed.entry(from).or_default().nudge = Some(nudge);
+        }
+    });
+}
+
 /// Takes the window's untaken `Cancel` (Escape) while nothing has focus.
 pub(crate) fn take_window_cancel(ctx: &Context) -> bool {
     with_window_intents(ctx, false, |window| window.take(Intent::Cancel))

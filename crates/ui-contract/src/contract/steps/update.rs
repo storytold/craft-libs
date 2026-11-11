@@ -104,6 +104,7 @@ pub(crate) fn record_context(core: &CxCore<'_>) {
 pub(crate) fn after_update(core: &mut CxCore<'_>) {
     route_to_scroll_owner(core);
     keys::settle(&core.ctx, Some(core.id), &core.intents);
+    keys::give_back(&core.ctx, core.id, std::mem::take(&mut core.lent));
     for chord in std::mem::take(&mut core.claims) {
         keys::claim(&core.ctx, core.id, chord);
     }

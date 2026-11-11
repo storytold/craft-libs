@@ -1,20 +1,15 @@
 //! `SymmetryTransform`: Transform Symmetry, a cancellable session over a copy of the symmetry, and `SymmetryTool`, the
-//! session's keys while the canvas has the keyboard.
+//! canvas tool while the session is open.
 
-use super::menu::SymmetryWords;
 use super::model::Symmetry;
-use craft_behavior::{CancelReason, EditEvent, Mixed};
-use craft_ui::canvas::{CanvasTool, NUDGE, NUDGE_FAR, ToolAction, ToolContext, ToolKey, ToolPath, ToolPointer};
+use craft_behavior::{CancelReason, EditEvent};
+use craft_ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
 use craft_ui::primitives::Draw;
-use std::sync::Arc;
 
 /// What Transform Symmetry reports.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum SymmetryEvent {
-    /// The preview changed: a key step (`Set`). The app applies it with [`SymmetryTransform::apply`] and draws the
-    /// preview; nothing is stored.
-    Preview(EditEvent<Symmetry>),
     /// Enter or the commit button: the app stores the symmetry as one undo step and drops the session.
     Apply(Symmetry),
     /// Escape or the cancel button, or the session became invalid: the app drops the session.
@@ -62,9 +57,10 @@ impl SymmetryTransform {
     }
 }
 
-/// The tool of an open [`SymmetryTransform`]: the canvas's keys while it has the keyboard. The arrows move the centre
-/// 1 document unit, Shift 10; Enter commits; Escape discards. A press on the canvas away from the handles is not the
-/// tool's. A session that is no longer valid (the document, the tool, the preset or the window changed since
+/// The tool of an open [`SymmetryTransform`]. The session's [`SymmetryHandles`](super::SymmetryHandles) (shown with
+/// [`session`](super::SymmetryHandles::session)) take its keys: Enter, Escape and the arrows. A press on the canvas away
+/// from the handles does nothing and never reaches a painting tool; the cursor is the arrow. A session that is no
+/// longer valid (the document, the tool, the preset or the window changed since
 /// [`begin`](SymmetryTransform::begin)) reports [`SymmetryEvent::Discard`] in its first pass.
 pub struct SymmetryTool<'a> {
     session: &'a SymmetryTransform,
@@ -78,7 +74,7 @@ impl<'a> SymmetryTool<'a> {
         Self { session, valid, events: Vec::new() }
     }
 
-    /// What the keys asked for since the last call, in order.
+    /// What the tool reported since the last call, in order.
     pub fn take_events(&mut self) -> Vec<SymmetryEvent> {
         std::mem::take(&mut self.events)
     }
@@ -91,8 +87,9 @@ impl CanvasTool for SymmetryTool<'_> {
         }
     }
 
+    /// Spends the press: Transform Symmetry paints nothing.
     fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
-        ToolAction::Ignored
+        ToolAction::Done
     }
 
     fn drag(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
@@ -100,40 +97,6 @@ impl CanvasTool for SymmetryTool<'_> {
     fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
 
     fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
-
-    fn key(&mut self, key: &ToolKey, cx: &mut ToolContext<'_>) -> bool {
-        if !self.valid {
-            return false;
-        }
-        match key {
-            ToolKey::Nudge { direction, mods, .. } => {
-                let Some(space) = cx.space() else { return false };
-                let doc = space.view.unmap_vec(*direction);
-                let length = doc.hypot();
-                if length <= 0.0 {
-                    return false;
-                }
-                let step = if mods.shift { NUDGE_FAR } else { NUDGE };
-                let before = self.session.preview;
-                let moved = Symmetry::new(before.mode, before.center + doc * (step / length), before.rotation).unwrap_or(before);
-                if moved != before {
-                    let name: Arc<str> = Arc::from(cx.words::<SymmetryWords>().group.as_str());
-                    let event = EditEvent::set(Mixed::Same(before), moved, name, None);
-                    self.events.push(SymmetryEvent::Preview(event));
-                }
-                true
-            }
-            ToolKey::Submit => {
-                self.events.push(self.session.commit());
-                true
-            }
-            ToolKey::Cancel => {
-                self.events.push(self.session.discard());
-                true
-            }
-            _ => false,
-        }
-    }
 
     fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
 

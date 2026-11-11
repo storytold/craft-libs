@@ -85,10 +85,14 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> bool {
         }
     } else {
         // With nothing focused, a plain Enter submits to the window, as an unfocused Escape cancels: a tool's pending
-        // edit or a dialog's default button takes it.
+        // edit or a dialog's default button takes it. The arrows nudge the window's canvas content (a tool or the
+        // session control on a canvas), unless a modal layer is open.
         for (press, taken) in batch.presses.iter().zip(&mut consumed) {
             if press.key == Key::Enter && press.mods.is_none() && !press.repeat {
                 push(&mut routed, None, Intent::Submit, false);
+                *taken = Taken::Yes;
+            } else if !modal && let Some(nudge) = nudge_of(press.key, press.mods) {
+                routed.entry(None).or_default().nudge = Some(nudge);
                 *taken = Taken::Yes;
             }
         }

@@ -153,6 +153,8 @@ impl Default for Grip {
 ///   next and previous part (the whole box, the corners and edges clockwise from the top left, the reference
 ///   point), Home and End the first and last. The arrows move the picked part as a plain drag of it would, one
 ///   document unit, Shift ten.
+/// - The box holds the canvas's session (`KeyUse::session`): with the canvas focused or nothing focused, Enter, Escape
+///   and the arrows reach it before the canvas's tool, and the arrows move the whole box.
 /// - Nothing mirrors in a right-to-left interface: the box is the document's.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(canvas_control)]
@@ -368,7 +370,8 @@ impl<'a> TransformBox<'a> {
         *cx.press_slot::<Grip>() = held;
     }
 
-    /// The keys of the focused box: the arrows nudge the picked part, Enter applies and Escape closes the box.
+    /// The session keys: the arrows nudge the picked part (the whole box when no part has focus), Enter applies and
+    /// Escape closes the box.
     fn run_keys(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, shown: &BoxState, pressing: bool) {
         let picked = cx.active_part().filter(|part| part.key == BOX).and_then(|part| part.index).and_then(BoxPart::from_index);
         self.report.picked = picked;
@@ -402,7 +405,7 @@ struct CursorLook<'a> {
 impl Component for TransformBox<'_> {
     const ROLE: Role = Role::GROUP;
     const OVERLAYS: bool = false;
-    const KEYS: KeyUse = KeyUse::CANVAS.with_moves();
+    const KEYS: KeyUse = KeyUse::CANVAS.with_moves().with_session();
     type Style = TransformBoxStyle;
     type Output = TransformBoxOutput;
 
@@ -551,7 +554,7 @@ pub struct TransformBoxOutput {
     pub edit: EditResponse<BoxState>,
     /// Apply the box: Enter, a click outside it, a double click inside it.
     pub apply: bool,
-    /// Close the box without applying it: Escape while no drag is on and the box has the keyboard.
+    /// Close the box without applying it: Escape while no drag is on.
     pub discard: bool,
     /// The part the keys act on, while the box has the keyboard.
     pub picked: Option<BoxPart>,

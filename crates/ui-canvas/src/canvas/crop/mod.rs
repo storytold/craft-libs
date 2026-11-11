@@ -89,6 +89,7 @@ struct Report {
     snapped: Vec<SnapLine>,
     hovered: Option<BoxPart>,
     dragging: bool,
+    nudged: bool,
     turning: Option<f64>,
     sizing: Option<(f64, f64)>,
 }
@@ -107,9 +108,11 @@ struct Live {
 ///   [default frame](CropOverlay::default_frame) a drag draws a new frame (Shift square, Alt from the centre, Space moves
 ///   it while it is drawn). A [ratio](CropOverlay::ratio) is held by every gesture. A drag begins on the first move; a
 ///   press released without moving changes nothing, and a drag that leaves a side under one document unit is cancelled.
-/// - Keys on a focused part: Enter applies; Escape cancels a drag, else discards; the arrows nudge the picked part
-///   (Shift by ten); X swaps portrait and landscape. The frame, its corners and its edges are one Tab stop; Page Down
-///   and Page Up pick the next and previous part.
+/// - Keys, on a focused part, on the focused canvas or with nothing focused (the overlay holds the canvas's session,
+///   `KeyUse::session`, before the canvas's tool): Enter applies; Escape cancels a drag, else discards; the arrows
+///   nudge the picked part, the whole frame when no part has focus (Shift by ten). On a focused part X swaps portrait
+///   and landscape. The frame, its corners and its edges are one Tab stop; Page Down and Page Up pick the next and
+///   previous part.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(canvas_control)]
 pub struct CropOverlay<'a> {
@@ -335,10 +338,17 @@ impl CropOverlay<'_> {
         }
     }
 
-    /// The keys of the focused part: Enter, Escape, the arrows and X.
-    fn run_keys(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, frame: &CropBox) {
-        let Some(part) = cx.active_part().filter(|part| part.key == FRAME).and_then(|part| part.index).and_then(frame_part) else { return };
-        cx.claim(SWAP);
+    /// The keys: Enter, Escape and the arrows, on the focused part or, with no part focused, the whole frame; X on a
+    /// focused part.
+    fn run_keys(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, frame: &CropBox, dragging: bool) {
+        let focused = cx.active_part().filter(|part| part.key == FRAME).and_then(|part| part.index).and_then(frame_part);
+        let part = focused.unwrap_or(BoxPart::Inside);
+        if focused.is_some() {
+            cx.claim(SWAP);
+        }
+        if dragging {
+            return;
+        }
         if cx.intents().take(Intent::Submit) {
             self.report.apply = true;
         }
@@ -352,6 +362,7 @@ impl CropOverlay<'_> {
             let by = DocVec::new(f64::from(direction.x), f64::from(direction.y)) * step;
             let (moved, view) = gesture::nudged(frame, part, by, &space.view, &rules);
             self.report.view = view;
+            self.report.nudged = true;
             next = Some(moved);
         } else if cx.take_claimed(SWAP) {
             let swapped = frame.swapped();
@@ -380,10 +391,10 @@ pub struct CropOverlayOutput {
     /// The edit of the frame: a drag is one `Begin` to `Commit` (a `Cancel` on Escape or when a side ends under one
     /// document unit); a key is a `Set`.
     pub edit: EditResponse<CropBox>,
-    /// Apply the crop: Enter on a focused part, or a double click inside a drawn frame (not a handle, not the default
-    /// frame).
+    /// Apply the crop: Enter (see the overlay's keys), or a double click inside a drawn frame (not a handle, not the
+    /// default frame).
     pub apply: bool,
-    /// Close the frame without applying it: Escape with no drag, on a focused part.
+    /// Close the frame without applying it: Escape with no drag.
     pub discard: bool,
     /// A released Straighten line's frame angle; the line itself sends no edit.
     pub straightened: Option<f64>,
@@ -397,6 +408,8 @@ pub struct CropOverlayOutput {
     pub hovered: Option<BoxPart>,
     /// Whether a drag is running: the input for the guide's visibility and the shield's editing opacity.
     pub dragging: bool,
+    /// The `Set` of this pass is an arrow nudge: a host that bundles nudges into one undo step reads it.
+    pub nudged: bool,
     /// The frame's angle while it is turned.
     pub turning: Option<f64>,
     /// The size Enter would crop to while the frame is drawn or resized.
@@ -418,7 +431,7 @@ impl Outcome for CropOverlayOutput {
 
 impl Component for CropOverlay<'_> {
     const ROLE: Role = Role::GROUP;
-    const KEYS: KeyUse = KeyUse::CANVAS;
+    const KEYS: KeyUse = KeyUse::CANVAS.with_session();
     type Style = CropStyle;
     type Output = CropOverlayOutput;
 
@@ -569,7 +582,7 @@ impl Component for CropOverlay<'_> {
             .filter_map(frame_part)
             .find(|part| cx.hover_pos(craft_behavior::PartRef { key: FRAME, index: Some(part.index()) }).is_some())
             .or_else(|| cx.hover_pos(TURN).map(|_| BoxPart::Outside));
-        self.run_keys(cx, &space, &frame);
+        self.run_keys(cx, &space, &frame, live.drag.is_some());
         *cx.memory::<Live>() = live;
     }
 
@@ -611,7 +624,20 @@ impl Component for CropOverlay<'_> {
 
     fn finish(self, cx: Cx<'_, Self>) -> CropOverlayOutput {
         let picked = cx.active_part().filter(|part| part.key == FRAME).and_then(|part| part.index).and_then(frame_part);
-        let Report { apply, discard, straightened, view, snapped, hovered, dragging, turning, sizing } = self.report;
-        CropOverlayOutput { edit: cx.edit_response(), apply, discard, straightened, view, snapped, picked, hovered, dragging, turning, sizing }
+        let Report { apply, discard, straightened, view, snapped, hovered, dragging, nudged, turning, sizing } = self.report;
+        CropOverlayOutput {
+            edit: cx.edit_response(),
+            apply,
+            discard,
+            straightened,
+            view,
+            snapped,
+            picked,
+            hovered,
+            dragging,
+            nudged,
+            turning,
+            sizing,
+        }
     }
 }

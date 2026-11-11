@@ -1,16 +1,12 @@
 //! `TransformOverlay`: the open session's box on the canvas, which shows a [`TransformBox`](super::TransformBox)
-//! and turns its reports into [`TransformEdit`]s, and `TransformTool`: the session's keys while the canvas has the
-//! keyboard.
+//! and turns its reports into [`TransformEdit`]s, and `TransformTool`: the canvas tool of the open session.
 
 #[cfg(feature = "screen-testing")]
 mod stories;
 
-use std::sync::Arc;
-
+use craft_behavior::CancelReason;
 use craft_behavior::geometry::SnapTargets;
 use craft_behavior::geometry::quad::{BoxPart, BoxRules};
-use craft_behavior::kurbo::Vec2 as DocVec;
-use craft_behavior::{CancelReason, EditEvent, Mixed};
 use craft_keymap::Mods;
 use craft_ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::contract::Bind;
@@ -21,10 +17,6 @@ use craft_ui::runtime::env::{Env, Label};
 use egui::{Rect, Ui};
 
 use super::{TransformBox, TransformChoice, TransformEdit, TransformMenuWords, TransformPhase, TransformSession, TransformSettings, TransformWarp};
-
-/// The distance an arrow key moves the whole box, in document units; Shift moves it by `NUDGE_FAR`.
-const NUDGE: f64 = 1.0;
-const NUDGE_FAR: f64 = 10.0;
 
 /// What the overlay reported this pass.
 #[derive(Debug)]
@@ -140,12 +132,11 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
     }
 }
 
-/// The canvas tool while a session is open, so Free Transform's keys work while the canvas has the keyboard and the
-/// box does not: the arrows move the whole box, Enter applies and Escape discards. Presses are the box's parts', so
-/// the tool ignores them.
+/// The canvas tool while a session is open. Presses are the box's parts', so the tool ignores them. In the Box phase
+/// the box holds the canvas's keys (Enter, Escape and the arrows reach it first, `KeyUse::session`); in the Warp
+/// phase, where no box is shown, Enter applies and Escape discards through the tool.
 pub struct TransformTool<'a, W> {
     session: &'a TransformSession<W>,
-    edits: Vec<TransformEdit<W>>,
     apply: bool,
     discard: bool,
 }
@@ -153,13 +144,12 @@ pub struct TransformTool<'a, W> {
 impl<'a, W: TransformWarp> TransformTool<'a, W> {
     /// The tool of `session`.
     pub fn new(session: &'a TransformSession<W>) -> Self {
-        Self { session, edits: Vec::new(), apply: false, discard: false }
+        Self { session, apply: false, discard: false }
     }
 
-    /// What the keys asked for since the last call: the edits to apply in order, then whether to apply the session
-    /// and whether to discard it.
-    pub fn take_edits(&mut self) -> (Vec<TransformEdit<W>>, bool, bool) {
-        (std::mem::take(&mut self.edits), std::mem::take(&mut self.apply), std::mem::take(&mut self.discard))
+    /// What the keys asked for since the last call: whether to apply the session and whether to discard it.
+    pub fn take_keys(&mut self) -> (bool, bool) {
+        (std::mem::take(&mut self.apply), std::mem::take(&mut self.discard))
     }
 }
 
@@ -174,32 +164,16 @@ impl<W: TransformWarp> CanvasTool for TransformTool<'_, W> {
 
     fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
 
-    fn key(&mut self, key: &ToolKey, cx: &mut ToolContext<'_>) -> bool {
-        match key {
-            ToolKey::Nudge { direction, mods, .. } => {
-                let Some(space) = cx.space().filter(|_| self.session.phase() == TransformPhase::Box) else { return false };
-                let doc = space.view.unmap_vec(*direction);
-                let length = doc.hypot();
-                if length <= 0.0 {
-                    return false;
-                }
-                let step = if mods.shift { NUDGE_FAR } else { NUDGE };
-                let by: DocVec = doc * (step / length);
-                let before = *self.session.state();
-                let event = EditEvent::set(Mixed::Same(before), before.moved(by), Arc::from(""), None);
-                self.edits.push(TransformEdit::Box(event));
-                true
-            }
-            ToolKey::Submit => {
-                self.apply = true;
-                true
-            }
-            ToolKey::Cancel => {
-                self.discard = true;
-                true
-            }
-            _ => false,
+    fn key(&mut self, key: &ToolKey, _: &mut ToolContext<'_>) -> bool {
+        if self.session.phase() != TransformPhase::Warp {
+            return false;
         }
+        match key {
+            ToolKey::Submit => self.apply = true,
+            ToolKey::Cancel => self.discard = true,
+            _ => return false,
+        }
+        true
     }
 
     fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}

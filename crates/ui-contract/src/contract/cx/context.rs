@@ -107,6 +107,8 @@ pub struct CxCore<'a> {
     pub focus: crate::runtime::focus::Facts,
     /// The arena root this component is a member of; `None` for a component with its own egui widget.
     pub(crate) member_of: Option<Id>,
+    /// The keys a session member borrowed from its arena root and the window this pass (`KeyUse::session`).
+    pub(crate) lent: crate::runtime::keys::Lent,
     pub(crate) activation: Option<Activation>,
     /// The activation `Cx::activate` injected this pass, which the pipeline runs as it runs a click.
     pub(crate) injected: Option<FireSource>,

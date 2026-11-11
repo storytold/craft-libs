@@ -11,7 +11,7 @@ use craft_ui::patterns::form_dialogs::{Param, ParamDialog, ParamKind};
 use craft_ui::primitives::{Draw, PaintShape, StrokeWidth};
 use egui::Pos2;
 
-use super::perspective_crop::{PerspectiveQuad, is_valid, ordered};
+use super::perspective_crop::{PerspectiveQuad, ordered};
 use super::words::CropWords;
 
 /// The key of the Perspective Crop To... command form.
@@ -26,10 +26,6 @@ const CORNER_KEYS: [&str; 4] = ["topLeft", "topRight", "bottomRight", "bottomLef
 pub enum PerspectiveCropEvent {
     /// The tool drew the quad: a box drag (`Begin`, `Commit`; `Cancel` on Esc) or the fourth click (`Set`).
     Edit(EditEvent<PerspectiveQuad>),
-    /// Enter with a quad that can be committed.
-    Apply,
-    /// Esc with no pending clicks and a quad: close the tool.
-    Discard,
 }
 
 /// A press the tool owns, on the background.
@@ -51,8 +47,9 @@ struct Press {
 ///
 /// - With no quad, a drag draws an upright box (none while it has no area), and four clicks place corners one by one;
 ///   the fourth makes the quad, corners put in order. A drag clears the clicks.
-/// - Esc drops the pending clicks; with none, it reports [`PerspectiveCropEvent::Discard`]. Enter reports
-///   [`PerspectiveCropEvent::Apply`] for a quad that can be committed.
+/// - Esc drops the pending clicks. Once a quad exists, the quad's control takes Enter, Esc and the arrows
+///   ([`PerspectiveCropOutput::apply`](super::PerspectiveCropOutput::apply) and
+///   [`discard`](super::PerspectiveCropOutput::discard)).
 /// - Its keyboard path is the Perspective Crop To... command ([`perspective_to_form`]).
 #[derive(Clone, Debug, Default)]
 pub struct PerspectiveCropTool {
@@ -162,14 +159,6 @@ impl CanvasTool for PerspectiveCropTool {
         match key {
             ToolKey::Cancel if !self.clicks.is_empty() => {
                 self.clicks.clear();
-                true
-            }
-            ToolKey::Cancel if self.quad.is_some() => {
-                self.events.push(PerspectiveCropEvent::Discard);
-                true
-            }
-            ToolKey::Submit if self.quad.is_some_and(|quad| is_valid(&quad)) => {
-                self.events.push(PerspectiveCropEvent::Apply);
                 true
             }
             _ => false,

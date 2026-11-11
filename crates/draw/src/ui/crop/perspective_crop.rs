@@ -104,6 +104,8 @@ struct Report {
 /// - The quad and its corners are one Tab stop. Page Down and Page Up pick the whole quad or a corner; the arrows move
 ///   the picked corner (1 document unit, Shift 10), or the whole quad when it is picked. Enter applies a valid quad.
 ///   Esc cancels a drag, else discards.
+/// - The quad holds the canvas's session (`KeyUse::session`): with the canvas focused or nothing focused, Enter, Esc
+///   and the arrows reach it before the tool, and the arrows move the whole quad.
 /// - Nothing mirrors in a right-to-left interface: the quad is the document's.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(canvas_control)]
@@ -130,9 +132,9 @@ impl<'a> PerspectiveCropQuad<'a> {
 pub struct PerspectiveCropOutput {
     /// A drag (`Begin` on the first move, `Commit` on release; Esc cancels it) or an arrow key's `Set`.
     pub edit: EditResponse<PerspectiveQuad>,
-    /// Enter on a focused part while the quad is convex and wound like its box.
+    /// Enter while the quad is convex and wound like its box.
     pub apply: bool,
-    /// Esc with no drag, on a focused part.
+    /// Esc with no drag.
     pub discard: bool,
     /// The corner the keys act on, picked by the pointer or the Page keys; `None` for the whole quad.
     pub picked: Option<usize>,
@@ -200,9 +202,9 @@ impl PerspectiveCropQuad<'_> {
         }
     }
 
-    /// The keys of the focused part: Enter, Escape and the arrows.
+    /// The keys: Enter, Escape and the arrows, on the focused part or, with no part focused, the whole quad.
     fn run_keys(&mut self, cx: &mut Cx<'_, Self>, view: &CanvasView, quad: [Point; 4]) {
-        let Some(part) = cx.active_part() else { return };
+        let corner = cx.active_part().filter(|part| part.key == CORNER).and_then(|part| part.index);
         if cx.intents().take(Intent::Submit) {
             self.report.apply = is_valid(&quad);
         }
@@ -212,7 +214,7 @@ impl PerspectiveCropQuad<'_> {
         let Some((direction, mods)) = cx.intents().take_nudge() else { return };
         let distance = if mods.shift { NUDGE_FAR } else { NUDGE };
         let by = screen_step(view, DocVec::new(f64::from(direction.x), f64::from(direction.y)) * distance);
-        let next = match part.index.filter(|_| part.key == CORNER) {
+        let next = match corner {
             Some(index) => {
                 let mut moved = quad;
                 moved[index as usize] += by;
@@ -228,7 +230,7 @@ impl PerspectiveCropQuad<'_> {
 
 impl Component for PerspectiveCropQuad<'_> {
     const ROLE: Role = Role::GROUP;
-    const KEYS: KeyUse = KeyUse::CANVAS;
+    const KEYS: KeyUse = KeyUse::CANVAS.with_session();
     type Style = PerspectiveCropStyle;
     type Output = PerspectiveCropOutput;
 

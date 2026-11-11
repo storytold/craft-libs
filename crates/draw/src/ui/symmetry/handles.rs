@@ -5,7 +5,8 @@ use super::menu::SymmetryWords;
 use super::model::{Symmetry, TURN_STEP_DEGREES};
 use craft_behavior::kurbo::{Point, Size};
 use craft_behavior::{
-    Axis, Cursor, CursorIcon, CursorPriority, HitLevel, HitPriority, HitShape, Metrics, NavShape, PartKey, PointerButton, PressPhase, Roving, Sense,
+    Axis, Cursor, CursorIcon, CursorPriority, HitLevel, HitPriority, HitShape, Intent, Metrics, NavShape, PartKey, PointerButton, PressPhase, Roving,
+    Sense,
 };
 use craft_ui::canvas::{CanvasSpace, NUDGE, NUDGE_FAR, canvas_space};
 use craft_ui::contract::{
@@ -53,6 +54,10 @@ enum Grip {
 /// - One Tab stop. Page Down and Page Up pick the other part. The arrows move the centre 1 document unit, Shift 10;
 ///   with the handle picked Left and Right turn the axes 1 degree, Shift [`TURN_STEP_DEGREES`]. Right is clockwise in
 ///   every language: the canvas does not mirror.
+/// - [`session`](Self::session): the handles edit an open Transform Symmetry and hold the canvas's session
+///   (`KeyUse::session`). With a part, the canvas or nothing focused, Enter reports
+///   [`apply`](SymmetryHandlesOutput::apply), Escape with no drag [`discard`](SymmetryHandlesOutput::discard), and
+///   the arrows move the centre when no part has focus.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(canvas_control)]
 pub struct SymmetryHandles<'a> {
@@ -60,12 +65,23 @@ pub struct SymmetryHandles<'a> {
     common: Common,
     symmetry: Bind<'a, Symmetry>,
     page: Size,
+    session: bool,
+    apply: bool,
+    discard: bool,
 }
 
 impl<'a> SymmetryHandles<'a> {
     /// The handles named `label` over `symmetry`, on a page of `page` document units.
     pub fn new(label: impl Into<Label>, symmetry: Bind<'a, Symmetry>, page: Size) -> Self {
-        SymmetryHandles { common: Common::new(), symmetry, page }.label(label)
+        SymmetryHandles { common: Common::new(), symmetry, page, session: false, apply: false, discard: false }.label(label)
+    }
+
+    /// The handles edit an open [`SymmetryTransform`](super::SymmetryTransform): Enter applies and Escape discards it,
+    /// also while the canvas or nothing has focus.
+    #[must_use]
+    pub fn session(mut self) -> Self {
+        self.session = true;
+        self
     }
 
     /// The symmetry `Symmetry::new` makes of `centre` and `rotation`, or `shown` when it refuses them.
@@ -131,8 +147,16 @@ impl<'a> SymmetryHandles<'a> {
         *cx.press_slot::<GripSlot>() = Some(GripSlot(held));
     }
 
-    /// The keys of the focused part: the arrows move the centre, or turn the axes while the handle is picked.
+    /// The keys: the arrows move the centre, or turn the axes while the handle is picked; in a session Enter applies
+    /// and Escape with no drag discards.
     fn run_keys(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, shown: &Symmetry) {
+        if self.session {
+            let held = (*cx.press_slot::<GripSlot>()).is_some_and(|slot| !matches!(slot.0, Grip::Idle));
+            self.apply |= cx.intents().take(Intent::Submit);
+            if !held && cx.intents().take(Intent::Cancel) {
+                self.discard = true;
+            }
+        }
         let picked = cx.active_part().filter(|part| part.key == SYMMETRY).and_then(|part| part.index);
         let Some((direction, mods)) = cx.intents().take_nudge() else { return };
         let next = if picked == Some(HANDLE) {
@@ -167,6 +191,10 @@ impl Component for SymmetryHandles<'_> {
     const KEYS: KeyUse = KeyUse::CANVAS.with_moves();
     type Style = SymmetryHandlesStyle;
     type Output = SymmetryHandlesOutput;
+
+    fn keys(&self) -> KeyUse {
+        if self.session { Self::KEYS.with_session() } else { Self::KEYS }
+    }
 
     fn style(cx: &StyleCx<'_>, _: SymmetryHandlesStyleKey) -> SymmetryHandlesStyle {
         SymmetryHandlesStyle { metrics: Metrics::new(), hit: cx.tokens.size.hit.target }
@@ -219,7 +247,7 @@ impl Component for SymmetryHandles<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> SymmetryHandlesOutput {
-        SymmetryHandlesOutput { edit: cx.edit_response() }
+        SymmetryHandlesOutput { edit: cx.edit_response(), apply: self.apply, discard: self.discard }
     }
 }
 
@@ -230,6 +258,11 @@ pub struct SymmetryHandlesOutput {
     /// A drag (`Begin` on the first move, `Update`, `Commit` on the release; Escape cancels it) or a key's `Set`.
     /// Apply it with [`SymmetryTransform::apply`](super::SymmetryTransform::apply).
     pub edit: EditResponse<Symmetry>,
+    /// In a [`session`](SymmetryHandles::session), Enter: the app stores the symmetry
+    /// ([`SymmetryTransform::commit`](super::SymmetryTransform::commit)).
+    pub apply: bool,
+    /// In a session, Escape with no drag: the app drops it ([`SymmetryTransform::discard`](super::SymmetryTransform::discard)).
+    pub discard: bool,
 }
 
 impl Outcome for SymmetryHandlesOutput {

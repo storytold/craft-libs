@@ -265,6 +265,10 @@ pub struct KeyUse {
     pub submits: bool,
     /// What a bare End means for the component.
     pub end: EndKey,
+    /// The component is an arena member that holds its arena's edit session (a crop frame, a transform box): while
+    /// none of its parts has focus it takes the Enter, Escape and arrows routed to its arena root (the canvas) and,
+    /// with nothing in the window focused, the window's, before the arena's tool. What it leaves goes on.
+    pub session: bool,
 }
 
 impl KeyUse {
@@ -286,6 +290,7 @@ impl KeyUse {
         deletes: false,
         submits: false,
         end: EndKey::LastItem,
+        session: false,
     };
     /// A divider between panes: it takes the arrows as moves of its value, but it is no document and no canvas tool, so
     /// it marks no window as showing a document and takes no nudges.
@@ -321,6 +326,7 @@ impl KeyUse {
             deletes: owner_text,
             submits: false,
             end: EndKey::LastItem,
+            session: false,
         }
     }
 
@@ -357,6 +363,12 @@ impl KeyUse {
     /// The same use declaring that the component acts on Delete and Backspace.
     pub const fn with_deletes(mut self) -> Self {
         self.deletes = true;
+        self
+    }
+
+    /// The same use declaring that the component holds its arena's edit session (`session`).
+    pub const fn with_session(mut self) -> Self {
+        self.session = true;
         self
     }
 

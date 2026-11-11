@@ -332,6 +332,7 @@ fn blank_core<'a>(
         active: None,
         focus: Default::default(),
         member_of: None,
+        lent: Default::default(),
         activation: None,
         injected: None,
         keep_open: false,
@@ -840,6 +841,7 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     if facts.role == Role::None && !root_sense.is_empty() {
         access::hide(&ctx, id);
     }
+    let session = member.filter(|_| e.keys().session);
     let core = e.core();
     core.part_cursors = sensing::hovered_cursor(decls, &results).into_iter().collect();
     core.rect = rect;
@@ -873,6 +875,10 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     let keyed = member.is_some_and(|arena| keys::activated_member(&ctx, arena.0) == Some(id));
     core.activation = activation_of(&ctx, ui, rect, resolved, keyed, root_sense, activation);
     core.activated_member = activated_member.or_else(|| arena.then(|| keys::activated_member(&ctx, id)).flatten());
+    // A session member with no focused part takes the canvas's and the window's Enter, Escape and arrows first.
+    if let Some(arena) = session.filter(|_| !inert && !core.focus.focused) {
+        core.lent = keys::lend(&ctx, arena.0, id);
+    }
     core.intents = keys::intents_of(&ctx, Some(id), rtl);
     e.sensed();
     if inert {

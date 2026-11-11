@@ -5,18 +5,16 @@
 
 use std::sync::Arc;
 
-use craft_behavior::geometry::{CropBox, SnapLine, SnapTargets, crop_view, screen_step};
-use craft_behavior::kurbo::{Rect as DocRect, Vec2 as DocVec};
+use craft_behavior::geometry::{CropBox, SnapLine, SnapTargets, crop_view};
+use craft_behavior::kurbo::Rect as DocRect;
 use craft_behavior::{CancelReason, CanvasView, EditEvent};
 use craft_keymap::{Key, Mods};
-use craft_ui::canvas::{
-    CanvasTool, CropOverlay, CropOverlayOutput, NUDGE, NUDGE_FAR, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer,
-};
+use craft_ui::canvas::{CanvasTool, CropOverlay, CropOverlayOutput, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::patterns::form_dialogs::{Param, ParamDialog, ParamKind};
 use craft_ui::primitives::Draw;
 use craft_ui::runtime::env::{Env, Units};
-use egui::{Rect, Ui, Vec2};
+use egui::{Rect, Ui};
 
 use super::options::{CropFill, CropSettings, CropTarget};
 use super::session::{CropDocument, CropKept, CropSession, LeaveFrame};
@@ -137,11 +135,13 @@ impl<'a> CropInput<'a> {
 ///   turn the image; the tool sets the turned view and the app adopts
 ///   [`ToolHostResponse::view`](craft_ui::canvas::ToolHostResponse::view). Classic Mode: the frame
 ///   moves and turns over a fixed image.
-/// - Keys while the canvas has the keyboard and no drag runs: Enter applies; Esc discards; arrows
-///   nudge the whole frame 1 unit, Shift 10 (in image mode they move the image); X swaps portrait and
-///   landscape (and W with H in W x H x Resolution); O cycles the overlay, Shift+O its orientation, H
-///   toggles Show Cropped Area (taken but inert in Classic Mode), P toggles Classic Mode; I is Front
-///   Image. The tool keeps the plain keys only while a frame exists and no drag runs.
+/// - Keys while no drag runs. The frame's overlay holds the session: with the canvas or a frame part
+///   focused, or nothing focused, Enter applies, Esc discards and the arrows nudge the whole frame (the
+///   picked part when one has focus) 1 unit, Shift 10 (in image mode they move the image). While the
+///   canvas has the keyboard: X swaps portrait and landscape (and W with H in W x H x Resolution); O
+///   cycles the overlay, Shift+O its orientation, H toggles Show Cropped Area (taken but inert in
+///   Classic Mode), P toggles Classic Mode; I is Front Image. The tool keeps the plain keys only while a
+///   frame exists and no drag runs.
 /// - Straighten: [`toggle_straighten`](Self::toggle_straighten) (the bar's button) arms one line;
 ///   Cmd (Ctrl) held is a temporary Straighten.
 /// - Box Undo and Redo: the app routes Edit > Undo and Redo to [`undo`](Self::undo) and
@@ -401,19 +401,29 @@ impl CropToolPass<'_> {
             overlay = overlay.snap(snap);
         }
         let shown = overlay.show_at(ui, canvas_rect);
-        self.take(shown, &units);
+        self.take(shown, &units, ui.input(|i| i.time));
     }
 
-    /// Turns the overlay's output into events and session steps.
-    fn take(&mut self, shown: CropOverlayOutput, units: &Units) {
-        let CropOverlayOutput { edit, apply, discard, straightened, view, snapped, dragging, .. } = shown;
+    /// Turns the overlay's output into events and session steps. An arrow nudge joins the open run of nudges while
+    /// the Nudge Bundle Pause is set; any other edit is its own box step.
+    fn take(&mut self, shown: CropOverlayOutput, units: &Units, time: f64) {
+        let CropOverlayOutput { edit, apply, discard, straightened, view, snapped, dragging, nudged, .. } = shown;
         self.tool.dragging = dragging;
         self.output.snapped = snapped;
         if let Some(view) = view {
             self.tool.view = Some(view);
         }
         for event in edit.events {
-            self.tool.session.mirror(&event);
+            match &event {
+                EditEvent::Set { after, .. } if nudged && self.input.nudge_pause.is_some() => {
+                    self.tool.last_nudge = Some(time);
+                    self.tool.session.nudge(self.input.ctx, *after, &self.tool.step);
+                }
+                _ => {
+                    self.tool.end_nudges();
+                    self.tool.session.mirror(&event);
+                }
+            }
             self.tool.synced = self.tool.session.frame();
             self.push(CropEvent::Frame(event));
         }
@@ -449,16 +459,10 @@ impl CropToolPass<'_> {
         self.output.events.push(event);
     }
 
-    /// Sets the frame from a key: one box step, or a bundled nudge; the view follows in image mode.
-    fn key_frame(&mut self, next: CropBox, nudge: bool, view: Option<CanvasView>, cx: &mut ToolContext<'_>) {
-        let bundled = nudge && self.input.nudge_pause.is_some();
-        let event = if bundled {
-            self.tool.last_nudge = Some(cx.time);
-            self.tool.session.nudge(self.input.ctx, next, &self.tool.step)
-        } else {
-            self.tool.end_nudges();
-            self.tool.session.set(next, false, &self.tool.step)
-        };
+    /// Sets the frame from a key: one box step; the view follows in image mode.
+    fn key_frame(&mut self, next: CropBox, view: Option<CanvasView>, cx: &mut ToolContext<'_>) {
+        self.tool.end_nudges();
+        let event = self.tool.session.set(next, false, &self.tool.step);
         self.push(CropEvent::Frame(event));
         match view {
             Some(view) => {
@@ -466,25 +470,6 @@ impl CropToolPass<'_> {
                 self.tool.synced = Some(next);
             }
             None => self.tool.synced = None,
-        }
-    }
-
-    /// An arrow moves the whole frame by one step on screen (the image under the frame in image mode).
-    fn nudge(&mut self, frame: CropBox, direction: Vec2, mods: Mods, cx: &mut ToolContext<'_>) {
-        let distance = if mods.shift { NUDGE_FAR } else { NUDGE };
-        let by = DocVec::new(f64::from(direction.x), f64::from(direction.y)) * distance;
-        let space = cx.space();
-        let by = space.map_or(by, |space| screen_step(&space.view, by));
-        let image = !self.classic();
-        let moved = frame.moved(if image { -by } else { by });
-        let next = self.within(moved, frame, false, &cx.units());
-        let view = space.filter(|_| image).map(|space| {
-            let mut view = space.view;
-            view.center += next.center() - frame.center();
-            view
-        });
-        if next != frame {
-            self.key_frame(next, true, view, cx);
         }
     }
 
@@ -519,7 +504,7 @@ impl CropToolPass<'_> {
             view.center = next.center();
             view
         });
-        self.key_frame(next, false, view, cx);
+        self.key_frame(next, view, cx);
     }
 }
 
@@ -585,8 +570,8 @@ impl CanvasTool for CropToolPass<'_> {
 
     fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
 
-    /// Enter applies, Esc discards, the arrows nudge the whole frame; O, Shift+O, H, P, X and I as the
-    /// type's doc says. Returns `false` for a key the tool leaves to the app.
+    /// O, Shift+O, H, P, X and I as the type's doc says; the frame's overlay takes Enter, Esc and the arrows before
+    /// the tool. Returns `false` for a key the tool leaves to the app.
     fn key(&mut self, key: &ToolKey, cx: &mut ToolContext<'_>) -> bool {
         if self.tool.dragging {
             return false;
@@ -595,23 +580,6 @@ impl CanvasTool for CropToolPass<'_> {
         let frame = self.tool.session.frame().filter(CropBox::is_finite);
         let mut next = settings.clone();
         match key {
-            ToolKey::Submit if frame.is_some() => {
-                if let Some(event) = self.tool.apply(settings, document, &cx.units()) {
-                    self.push(event);
-                }
-                return true;
-            }
-            ToolKey::Cancel if frame.is_some() => {
-                if let Some(event) = self.tool.discard() {
-                    self.push(event);
-                }
-                return true;
-            }
-            ToolKey::Nudge { direction, mods, .. } => {
-                let Some(frame) = frame else { return false };
-                self.nudge(frame, *direction, *mods, cx);
-                return true;
-            }
             ToolKey::Kept(chord) => {
                 let plain = chord.mods.is_none();
                 match chord.key {
