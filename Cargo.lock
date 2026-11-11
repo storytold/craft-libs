@@ -970,6 +970,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-exr"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "craft-fig"
 version = "0.1.0"
 dependencies = [

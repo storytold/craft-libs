@@ -39,6 +39,7 @@ craft-doc = { path = "crates/doc" }
 craft-docpath = { path = "crates/docpath" }
 craft-dpx = { path = "crates/dpx" }
 craft-ecproj-format = { path = "crates/ecproj-format" }
+craft-exr = { path = "crates/exr" }
 craft-font-catalog = { path = "crates/font-catalog" }
 craft-font-manager = { path = "crates/font-manager" }
 craft-font-store = { path = "crates/font-store" }
