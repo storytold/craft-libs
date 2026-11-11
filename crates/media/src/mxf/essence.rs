@@ -187,7 +187,8 @@ impl PictureInfo {
     /// transfers. A missing label, or one not among these, is `None`.
     pub fn color_codes(&self) -> (Option<u8>, Option<u8>, Option<u8>) {
         use crate::mxf::write::labels::{CE_709, CE_2020, CP_709, CP_2020, TC_709, TC_HLG, TC_PQ};
-        let code = |label: &Option<Ul>, known: &[([u8; 16], u8)]| known.iter().find(|(k, _)| label.as_ref().is_some_and(|l| l.matches(k))).map(|(_, c)| *c);
+        let code =
+            |label: &Option<Ul>, known: &[([u8; 16], u8)]| known.iter().find(|(k, _)| label.as_ref().is_some_and(|l| l.matches(k))).map(|(_, c)| *c);
         (
             code(&self.color_primaries, &[(CP_709, 1), (CP_2020, 9)]),
             code(&self.transfer_characteristic, &[(TC_709, 1), (TC_PQ, 16), (TC_HLG, 18)]),

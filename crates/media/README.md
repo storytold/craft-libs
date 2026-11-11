@@ -481,8 +481,11 @@ hold.
 
 `Stream::codec_params()` maps `biCompression` and the `WAVEFORMATEX` format tag to a `CodecId`
 (Motion JPEG, H.264, HEVC, MPEG-4 Part 2, MPEG-2, VP8/VP9, AV1, ProRes, DNxHD; PCM, ADPCM, A-law,
-µ-law, MP2, MP3, AAC, AC-3, Vorbis, FLAC). AVI stores H.264 and HEVC as Annex B, so `extradata`
-is the bytes after the format header as stored, not an `avcC` / `hvcC` record. Uncompressed video
+µ-law, MP2, MP3, AAC, AC-3, Vorbis, FLAC). `extradata` is the bytes after the format header
+as stored. For H.264 and HEVC, `Stream::nal_framing()` says what they are: nothing (parameter sets in
+the chunks), Annex B parameter sets (a file written with global headers) or an `avcC` / `hvcC` record
+(a stream copied from MP4, whose chunks are then length-prefixed by the size it gives;
+`bitstream::length_prefixed_nals` splits them). Uncompressed video
 is `CodecId::Unknown` with the FourCC in `tag`.
 
 Differences from `filmcraft-avi`: `ByteSource` is `craft_media::ByteSource`; `Error::Io` holds the

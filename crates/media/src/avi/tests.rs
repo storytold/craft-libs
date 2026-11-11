@@ -635,3 +635,32 @@ fn random_damage_never_panics() {
         }
     }
 }
+
+/// The bytes after an H.264 / HEVC format header say how the chunks are framed: nothing (sets in
+/// band), Annex B parameter sets, or an `avcC` / `hvcC` record with its length-prefix size.
+#[test]
+fn nal_framing_reads_the_stream_header_setup() {
+    let f = open(&avi(true, false, false)).unwrap();
+    let mut s = f.streams[0].clone();
+    assert_eq!(s.nal_framing(), None, "Motion JPEG has no NAL units");
+    assert_eq!(f.streams[1].nal_framing(), None, "nor has audio");
+    let mut framing = |fourcc: &[u8; 4], extra: &[u8]| {
+        let b = s.video.as_mut().unwrap();
+        (b.compression, b.extra) = (*fourcc, extra.to_vec());
+        (s.nal_framing(), s.codec_params().extradata == extra)
+    };
+    assert_eq!(framing(b"H264", &[]), (Some(NalFraming::AnnexB { header_sets: false }), true));
+    assert_eq!(framing(b"H264", &[0, 0, 0, 1, 0x67, 0x64]), (Some(NalFraming::AnnexB { header_sets: true }), true));
+    assert_eq!(framing(b"hevc", &[0, 0, 1, 0x40, 1]), (Some(NalFraming::AnnexB { header_sets: true }), true));
+    // avcC: version 1, profile, compatibility, level, then 6 reserved bits and lengthSizeMinusOne
+    assert_eq!(framing(b"avc1", &[1, 0x64, 0, 0x1F, 0xFF, 0xE1]), (Some(NalFraming::LengthPrefixed(4)), true));
+    assert_eq!(framing(b"avc1", &[1, 0x64, 0, 0x1F, 0xFD]), (Some(NalFraming::LengthPrefixed(2)), true));
+    // hvcC keeps it in byte 21
+    let mut hvcc = vec![1u8; 23];
+    hvcc[21] = 0xF2;
+    assert_eq!(framing(b"hvc1", &hvcc), (Some(NalFraming::LengthPrefixed(3)), true));
+    // a record cut short still frames the chunks, with the usual four bytes
+    assert_eq!(framing(b"hvc1", &[1, 2, 3]), (Some(NalFraming::LengthPrefixed(4)), true));
+    // setup that is neither: left as Annex B with the sets in band
+    assert_eq!(framing(b"H264", &[9, 9, 9]), (Some(NalFraming::AnnexB { header_sets: false }), true));
+}
