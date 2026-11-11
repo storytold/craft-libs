@@ -35,7 +35,7 @@ mod write;
 pub use builtin::Builtin;
 pub use clut::Clut;
 pub use curve::Curve;
-pub use gamut::GamutCheck;
+pub use gamut::{GamutCheck, Metric};
 pub use lut3d::Lut3d;
 pub use named::{NamedColor, NamedColors};
 pub use profile::{ColorSpace, Pcs, Profile, ProfileClass};
