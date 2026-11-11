@@ -8,13 +8,19 @@
 //! class. Input is treated as hostile: size, node, depth and instance limits, and cyclic
 //! references, are errors.
 //!
-//! Import only, and geometry only: this is not the shared SVG model of craft-libs#789. Boolean
-//! operations (applying [`Clip`]s) and colour parsing are left to the caller, so the crate
-//! depends on no other Craft crate.
+//! Geometry only: this is not the shared SVG model of craft-libs#789. Boolean operations
+//! (applying [`Clip`]s) are left to the caller. Stroke paint is returned as written;
+//! [`color::parse_color`] reads it as a CSS colour.
+//!
+//! [`write`] is the other direction: a small writer for SVG documents, their path data and
+//! numbers.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
 use kurbo::BezPath;
+
+pub mod color;
+pub mod write;
 
 /// Why an SVG could not be read; the message starts with the name given to [`import`].
 #[derive(Debug, thiserror::Error)]
@@ -128,7 +134,8 @@ const MAX_SVG_CLIPS: usize = 16;
 const MAX_SVG_CLIP_PIECES: usize = 100_000;
 /// Path segments kept across the whole document: `<use>` can repeat one large path many times.
 const MAX_SVG_SEGMENTS: usize = 4_000_000;
-/// Selector tests across the whole document (rules × elements styled).
+/// Selector tests across the whole document: rules × elements styled, plus each parent, ancestor or
+/// sibling a combinator walks.
 const MAX_CSS_SELECTOR_CHECKS: usize = 5_000_000;
 
 /// Reads the drawable geometry of an SVG document, in document order.
@@ -239,6 +246,10 @@ impl<K> ImportContext<'_, '_, K> {
     /// Counts one element's pass over every stylesheet selector.
     fn charge_cascade(&mut self) -> Result<(), Error> {
         self.selector_checks = self.selector_checks.saturating_add(self.selectors);
+        self.check_selector_budget()
+    }
+
+    fn check_selector_budget(&self) -> Result<(), Error> {
         if self.selector_checks > MAX_CSS_SELECTOR_CHECKS {
             return Err(svg_error(self.path_name, "SVG stylesheet is too large for this many elements"));
         }
@@ -298,7 +309,8 @@ fn import_node<'a, 'input, K: Kind>(
         state.transform = compose(inherited.transform, local);
     }
     context.charge_cascade()?;
-    let style = computed_style(node, &state.inherited_style, &context.css_rules, K::PROPERTIES);
+    let style = computed_style(node, &state.inherited_style, &context.css_rules, K::PROPERTIES, &mut context.selector_checks);
+    context.check_selector_budget()?;
     state.inherited_style = inheritable(&style);
     if let Some(kind) = K::of(&style, node.attribute("class").unwrap_or("")) {
         state.kind = kind;
@@ -432,7 +444,8 @@ fn import_symbol<'a, 'input, K: Kind>(
         state.transform = compose(state.transform, local);
     }
     context.charge_cascade()?;
-    let style = computed_style(symbol, &state.inherited_style, &context.css_rules, K::PROPERTIES);
+    let style = computed_style(symbol, &state.inherited_style, &context.css_rules, K::PROPERTIES, &mut context.selector_checks);
+    context.check_selector_budget()?;
     if style.get("display").is_some_and(|value| value == "none") {
         return Ok(());
     }
@@ -847,8 +860,8 @@ impl CompoundSelector {
         if self.id.as_deref().is_some_and(|id| node.attribute("id") != Some(id)) {
             return false;
         }
-        let classes: Vec<&str> = node.attribute("class").unwrap_or("").split_ascii_whitespace().collect();
-        if self.classes.iter().any(|class| !classes.contains(&class.as_str())) {
+        let class_attribute = node.attribute("class").unwrap_or("");
+        if self.classes.iter().any(|class| !class_attribute.split_ascii_whitespace().any(|word| word == class)) {
             return false;
         }
         if (self.first_child && node.prev_sibling_element().is_some())
@@ -894,7 +907,10 @@ impl CompoundSelector {
 }
 
 impl SimpleSelector {
-    fn matches(&self, node: roxmltree::Node<'_, '_>) -> bool {
+    /// Whether `node` matches. Each compound tested on a parent, ancestor or sibling during the walk
+    /// adds one to `checks`; past `MAX_CSS_SELECTOR_CHECKS` the walk stops (the caller then refuses the
+    /// document), so a flat run of siblings under `a ~ b` cannot cost one walk per element unbounded.
+    fn matches(&self, node: roxmltree::Node<'_, '_>, checks: &mut usize) -> bool {
         let Some(last) = self.compounds.last() else {
             return false;
         };
@@ -908,14 +924,18 @@ impl SimpleSelector {
             };
             // shortcut: descendant and later-sibling steps take the nearest match without
             // backtracking, which misses a few long selector chains; fine for SVG styling.
+            let mut step = |n: &roxmltree::Node<'_, '_>| {
+                *checks = checks.saturating_add(1);
+                *checks <= MAX_CSS_SELECTOR_CHECKS && previous.matches(*n)
+            };
             let found = match combinator {
-                '>' => current.parent_element().filter(|n| previous.matches(*n)),
-                '+' => current.prev_sibling_element().filter(|n| previous.matches(*n)),
-                ' ' => current.ancestors().skip(1).find(|n| n.is_element() && previous.matches(*n)),
+                '>' => current.parent_element().filter(&mut step),
+                '+' => current.prev_sibling_element().filter(&mut step),
+                ' ' => current.ancestors().skip(1).find(|n| n.is_element() && step(n)),
                 '~' => {
                     let mut sibling = current.prev_sibling_element();
                     while let Some(candidate) = sibling {
-                        if previous.matches(candidate) {
+                        if step(&candidate) {
                             break;
                         }
                         sibling = candidate.prev_sibling_element();
@@ -1243,7 +1263,7 @@ fn parse_declarations(raw: &str, extra: &[&str], path_name: &str) -> Result<(Sty
     Ok((declarations, important))
 }
 
-fn computed_style(node: roxmltree::Node<'_, '_>, inherited: &StyleMap, rules: &[CssRule], extra: &[&str]) -> StyleMap {
+fn computed_style(node: roxmltree::Node<'_, '_>, inherited: &StyleMap, rules: &[CssRule], extra: &[&str], checks: &mut usize) -> StyleMap {
     let mut result = inherited.clone();
     result.remove("display");
     let mut winners = CascadeWinners::new();
@@ -1253,7 +1273,7 @@ fn computed_style(node: roxmltree::Node<'_, '_>, inherited: &StyleMap, rules: &[
     }
     for rule in rules {
         for selector in &rule.selectors {
-            if selector.matches(node) {
+            if selector.matches(node, checks) {
                 let (ids, classes, tags) = selector.specificity;
                 for (property, value) in &rule.declarations {
                     let priority = (rule.important.contains(property), ids, classes, tags, rule.order);
@@ -1980,5 +2000,19 @@ mod tests {
         let rules: String = (0..5000).map(|i| format!(".c{i}{{fill:red}}")).collect();
         let paths = r#"<path d="M0 0L1 1"/>"#.repeat(5000);
         assert!(message(&format!("<svg><style>{rules}</style>{paths}</svg>")).contains("stylesheet is too large"));
+    }
+
+    /// One selector, 4,000 flat siblings: each `a ~ path` walks every sibling before it, some 8,000,000
+    /// compound tests, though the rules times the elements is only 4,000. The walk is charged.
+    #[test]
+    fn sibling_and_descendant_walks_are_charged_to_the_selector_budget() {
+        let paths = r#"<path d="M0 0L1 1"/>"#.repeat(4000);
+        fails(&format!("<svg><style>a ~ path{{fill:red}}</style>{paths}</svg>"), "stylesheet is too large");
+        // A descendant walk climbs its 100 ancestors: 400,000 tests, inside the budget.
+        let deep = format!("<svg><style>a path{{fill:red}}</style>{}{paths}{}</svg>", "<g>".repeat(100), "</g>".repeat(100));
+        assert_eq!(read(&deep).shapes.len(), 4000);
+        // A short run of siblings still matches.
+        let got = read(r#"<svg><style>a ~ path{data-kind:engrave}</style><a/><path d="M0 0L1 1"/></svg>"#);
+        assert_eq!(got.shapes[0].kind, Tag::Engrave);
     }
 }

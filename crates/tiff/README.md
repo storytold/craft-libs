@@ -13,6 +13,8 @@ on no other Craft crate.
 - IFD chain + `SubIFDs` (330) + Exif (34665) / GPS (34853) / Interoperability (40965) pointer IFDs, resolved
   into a tree (`Ifd::sub_ifds`, `exif`, `gps`, `interop`). `Entry::offset` records the absolute position of
   each value (needed for maker notes and embedded blobs).
+- `Tiff::parse_with_status` returns the best-effort tree with a completeness flag for callers that must
+  distinguish a clean absence from an IFD, entry, or pointer that could not be inspected.
 - `parse_ifd_at(data, offset, order, base, bigtiff, opts)` parses an IFD whose offsets are relative to an
   arbitrary base; `makernote::parse_makernote` knows the header / byte-order / offset-base conventions of
   Canon, Nikon (types 1 and 3), Sony, Fujifilm, Olympus (old and new), Panasonic and Pentax notes.
@@ -36,7 +38,9 @@ overlap at distinct offsets, and an IFD past that bound ends the chain or is ski
 the first; a next-IFD pointer is followed only when every declared entry was read, with the counts compared as
 64-bit numbers (a BigTIFF declaring 4,294,967,297 entries but holding one can't pass for a whole directory on a
 32-bit target); the total bytes of decoded values are capped at
-`8 × input + 1 MiB` so a file cannot make us allocate far more than its own size.
+`8 × input + 1 MiB` so a file cannot make us allocate far more than its own size. `parse_with_status` reports
+truncated tables, skipped values, unresolved pointers and incomplete IFD chains without changing the parser's
+best-effort tree.
 
 ## Sources
 

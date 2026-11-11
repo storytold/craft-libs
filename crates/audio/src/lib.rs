@@ -84,7 +84,10 @@ pub use layout::{ChannelLayout, Speaker};
 #[cfg(feature = "decode-native")]
 pub use read::SharedSource;
 #[cfg(feature = "decode-native")]
-pub use read::{DEFAULT_MAX_SAMPLES, DecodeOptions, Decoder, TrackInfo, decode, decode_with, detect_container, probe, probe_with, tracks, tracks_of};
+pub use read::{
+    DECODE_EXTENSIONS, DEFAULT_MAX_SAMPLES, DecodeOptions, Decoder, TrackInfo, decode, decode_with, detect_container, probe, probe_with, tracks,
+    tracks_of,
+};
 #[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
 pub use track::{LOOKAHEAD_PACKETS, TrackDecoder};
 #[cfg(feature = "pcm-encode")]
@@ -202,6 +205,29 @@ pub enum EncodeFormat {
 }
 
 impl EncodeFormat {
+    /// Every format, in the order menus list them. Whether [`encode`] writes one depends on its
+    /// feature.
+    pub const ALL: &[EncodeFormat] = &[EncodeFormat::Wav, EncodeFormat::Aiff, EncodeFormat::Flac];
+
+    /// The extension a new file of this format gets, lower case and without the dot: `"wav"`,
+    /// `"aif"`, `"flac"`. [`encode_format_for`] maps it back.
+    pub fn extension(self) -> &'static str {
+        match self {
+            EncodeFormat::Wav => "wav",
+            EncodeFormat::Aiff => "aif",
+            EncodeFormat::Flac => "flac",
+        }
+    }
+
+    /// The media type a file of this format is served or downloaded as.
+    pub fn mime_type(self) -> &'static str {
+        match self {
+            EncodeFormat::Wav => "audio/wav",
+            EncodeFormat::Aiff => "audio/aiff",
+            EncodeFormat::Flac => "audio/flac",
+        }
+    }
+
     /// The container this format writes.
     pub fn container(self) -> Container {
         match self {
@@ -311,7 +337,7 @@ pub struct AudioInfo {
     /// Broadcast Wave metadata from a WAV `bext` chunk.
     pub bwf: Option<BwfInfo>,
     /// Packets that were damaged or failed to decode and were replaced by concealment (silence of
-    /// their length), counted as audio is decoded: by [`decode`] for the whole file, and so far by
+    /// their length), and runs of FLAC frames lost to a failed checksum, counted as audio is decoded: by [`decode`] for the whole file, and so far by
     /// a [`Decoder`]. 0 from [`probe`] when it read only headers.
     pub damaged: u64,
 }

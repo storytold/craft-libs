@@ -24,6 +24,7 @@ bytemuck = "1"
 kurbo = "0.13"
 thiserror = "2"
 craft-atomic = { path = "crates/atomic" }
+craft-cfb = { path = "crates/cfb" }
 craft-cms = { path = "crates/cms" }
 craft-crw = { path = "crates/crw" }
 craft-dialogs = { path = "crates/dialogs" }
@@ -35,6 +36,7 @@ craft-font-catalog = { path = "crates/font-catalog" }
 craft-font-manager = { path = "crates/font-manager" }
 craft-font-store = { path = "crates/font-store" }
 craft-gcode = { path = "crates/gcode" }
+craft-mesh = { path = "crates/mesh" }
 craft-heif = { path = "crates/heif" }
 craft-fonts-build = { path = "crates/fonts-build" }
 craft-i18n = { path = "crates/i18n" }
@@ -44,12 +46,15 @@ craft-audio = { path = "crates/audio" }
 # No default features, so craft-audio's `encode` builds craft-media without `isobmff`.
 craft-media = { path = "crates/media", default-features = false }
 craft-media-testkit = { path = "crates/media-testkit" }
+craft-mime = { path = "crates/mime" }
 craft-menu = { path = "crates/menu" }
+craft-metafile = { path = "crates/metafile" }
 craft-pcraft-format = { path = "crates/pcraft-format" }
 craft-prepress = { path = "crates/prepress" }
 craft-print = { path = "crates/print" }
 craft-proof = { path = "crates/proof" }
 craft-quit = { path = "crates/quit" }
+craft-raw = { path = "crates/raw" }
 craft-settings = { path = "crates/settings" }
 craft-silhouette-studio = { path = "crates/silhouette-studio" }
 craft-svg-paths = { path = "crates/svg-paths" }
@@ -58,6 +63,7 @@ craft-tiff = { path = "crates/tiff" }
 craft-ui = { path = "crates/ui" }
 craft-update = { path = "crates/update" }
 craft-vectorcraft-format = { path = "crates/vectorcraft-format" }
+craft-xml = { path = "crates/xml" }
 craft-video = { path = "crates/video" }
 craft-web-api = { path = "crates/web-api" }
 craft-window = { path = "crates/window" }
@@ -68,6 +74,8 @@ rayon = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 proptest = "1"
+# Character sets of the WHATWG Encoding Standard (craft-mime). (Apache-2.0 OR MIT) AND BSD-3-Clause.
+encoding_rs = "0.8"
 # All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 
@@ -114,3 +122,7 @@ winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457
 # craft-audio's `decode` need the same override in their own workspace.
 [profile.dev.package.symphonia-bundle-flac]
 overflow-checks = false
+
+# Codec hot loops: the oracle and conformance tests of a debug build take minutes below opt-level 3.
+[profile.dev.package.craft-video]
+opt-level = 3

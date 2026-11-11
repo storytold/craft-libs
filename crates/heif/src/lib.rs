@@ -175,13 +175,22 @@ fn probe_unguarded(bytes: &[u8]) -> Result<Info, Error> {
     // items (`iloc` construction method 2) is rebuilt once per extent, so a chain of such items
     // multiplies at every level while each result stays small. Count those visits from the
     // `iloc` table before reconstructing anything: the primary item first (`heic_rs::probe` and
-    // `Context::grid` both rebuild its descriptor), then its alpha plane, then every tile
-    // reference, repeats included.
+    // `Context::grid` both rebuild its descriptor), then its alpha plane and, when that is a grid,
+    // its tiles, then every tile reference, repeats included.
     let mut visits = 0_usize;
     item_visits(&ctx, id, 0, &mut visits)?;
+    // `heic_rs::probe` reads an item without `ispe` from its parameter sets
+    check_item_parameter_sets(&ctx.props(id).map_err(err)?)?;
     let info = heic_rs::probe(bytes).map_err(open_error)?;
-    if let Some(alpha) = ctx.alpha_item(id).map_err(err)? {
+    let alpha = ctx.alpha_item(id).map_err(err)?;
+    if let Some(alpha) = alpha {
         item_visits(&ctx, alpha, 0, &mut visits)?;
+        // an alpha plane may be a grid too: its tiles are rebuilt when it is decoded
+        if let Some((_, tiles)) = ctx.grid(alpha).map_err(err)? {
+            for &tile in tiles.iter().filter(|&&tile| tile != alpha) {
+                item_visits(&ctx, tile, 0, &mut visits)?;
+            }
+        }
     }
     let mut coded = match ctx.grid(id).map_err(err)? {
         Some((_, tiles)) => tiles,
@@ -248,6 +257,20 @@ fn item_visits(ctx: &Context<'_>, id: u32, depth: u32, visits: &mut usize) -> Re
     Ok(())
 }
 
+/// The primary image's EXIF (a TIFF structure, as in [`Decoded::exif`]) and XMP packet, read
+/// from the container alone: no picture is decoded, so cataloguing a photo costs about a
+/// [`probe`]. `(None, None)` for a file that carries neither.
+pub fn read_metadata(bytes: &[u8]) -> Result<(Option<Vec<u8>>, Option<String>), Error> {
+    guarded(|| {
+        census::cap(bytes)?;
+        let ctx = Context::open(bytes).map_err(|e| match e {
+            heic_rs::Error::MissingBox("meta") => Error::Unsupported(SEQUENCE),
+            e => err(e),
+        })?;
+        Ok(metadata(&ctx))
+    })
+}
+
 /// Decodes the primary image, with its metadata.
 pub fn decode(bytes: &[u8], options: &Options) -> Result<Decoded, Error> {
     guarded(|| decode_unguarded(bytes, options))
@@ -259,6 +282,7 @@ pub fn decode(bytes: &[u8], options: &Options) -> Result<Decoded, Error> {
 /// profile) are the primary image's.
 pub fn decode_thumbnail(bytes: &[u8], min_edge: u32, options: &Options) -> Result<Option<Decoded>, Error> {
     guarded(|| {
+        census::cap(bytes)?;
         let ctx = Context::open(bytes).map_err(err)?;
         let primary = ctx.meta.primary;
         let mut best: Option<(u32, u32)> = None;
@@ -270,6 +294,28 @@ pub fn decode_thumbnail(bytes: &[u8], min_edge: u32, options: &Options) -> Resul
                 continue;
             }
             let Ok(p) = ctx.props(r.from) else { continue };
+            if check_item_parameter_sets(&p).is_err() {
+                continue;
+            }
+            // A grid whose tile would fail the same check must not win and then fail in
+            // `decode_item`, with no fallback to a larger valid thumbnail.
+            let grid = match ctx.grid(r.from) {
+                Ok(grid) => grid,
+                // an unreadable grid fails in `decode_item` too: not a candidate
+                Err(_) => continue,
+            };
+            if let Some((_, tiles)) = grid {
+                // every reference is rebuilt and decoded, repeats included, so each is charged;
+                // the properties are checked once per distinct tile
+                let mut checked = std::collections::HashSet::new();
+                let tiles_ok = tiles.iter().all(|&t| {
+                    item_visits(&ctx, t, 0, &mut candidate_visits).is_ok()
+                        && (!checked.insert(t) || ctx.props(t).is_ok_and(|tp| check_item_parameter_sets(&tp).is_ok()))
+                });
+                if !tiles_ok {
+                    continue;
+                }
+            }
             let Ok((w, h)) = ctx.coded_size(r.from, &p) else { continue };
             let edge = w.max(h);
             if edge >= min_edge && best.is_none_or(|(_, e)| edge < e) {
@@ -287,7 +333,9 @@ pub fn decode_thumbnail(bytes: &[u8], min_edge: u32, options: &Options) -> Resul
             }
         }
         let mut decoded = decode_item(&ctx, id, options, false)?;
-        if decoded.icc.is_none() {
+        // `item_icc` rebuilds the primary grid's descriptor: only when that is within the visit
+        // budget (the thumbnail path never counted it).
+        if decoded.icc.is_none() && item_visits(&ctx, primary, 0, &mut 0).is_ok() {
             decoded.icc = item_icc(&ctx, primary);
         }
         (decoded.exif, decoded.xmp) = metadata(&ctx);
@@ -329,7 +377,9 @@ fn decode_item(ctx: &Context<'_>, id: u32, options: &Options, with_alpha: bool) 
         return Err(Error::Limit(format!("the image carries {} transform properties, over the {MAX_TRANSFORMS}-property cap", p.transforms.len())));
     }
     let limit = options.max_pixels;
-    // The declared sizes are refused before anything is decoded or allocated.
+    // The declared sizes are refused before anything is decoded or allocated (an item without
+    // `ispe` takes its size from its parameter sets, checked first).
+    check_item_parameter_sets(&p)?;
     let (cw, ch) = ctx.coded_size(id, &p).map_err(err)?;
     heic_rs::image::check_pixels(cw, ch, limit).map_err(err)?;
     let (tw, th) = heic_rs::transform::transformed_size(cw, ch, &p.transforms).map_err(err)?;
@@ -349,25 +399,39 @@ fn decode_item(ctx: &Context<'_>, id: u32, options: &Options, with_alpha: bool) 
         }
         _ => return Err(Error::Limit(format!("the image canvas is {w}x{h}, beyond the {limit}-pixel limit"))),
     }
+    // The transforms apply to the picture at its declared size, so the `clap` parity that
+    // decides the upsampling is measured there, not on the coded picture.
+    let (dw, dh) = (cw as usize, ch as usize);
     let mode = match options.chroma {
         Chroma::Apple => ycc::Upsampling::Sited,
-        Chroma::Libheif if options.apply_transforms && orient::odd_crop(w, h, &p.transforms)? => ycc::Upsampling::Bilinear,
+        Chroma::Libheif if options.apply_transforms && orient::odd_crop(dw, dh, &p.transforms)? => ycc::Upsampling::Bilinear,
         Chroma::Libheif => ycc::Upsampling::Nearest,
     };
-    let mut data = ycc::to_rgb16(&planes, signal, alpha_id.is_some(), mode)
+    let data = ycc::to_rgb16(&planes, signal, alpha_id.is_some(), mode)
         .ok_or_else(|| Error::Malformed("the decoded pictures don't cover the image".into()))?;
-    if let Some(aux) = alpha_id {
-        let ap = ctx.props(aux).map_err(err)?;
-        let alpha = Coded::decode(ctx, aux, &ap, limit)?;
-        let alpha_planes = alpha.planes()?;
-        if alpha_planes.size() != (w, h) {
-            return Err(Error::Unsupported("an alpha image of a different size than the picture"));
-        }
-        ycc::put_alpha(&alpha_planes, &mut data).ok_or_else(|| Error::Malformed("the alpha image is incomplete".into()))?;
-    }
     let bit_depth = planes.bit_depth();
     let has_alpha = alpha_id.is_some();
     let mut img = orient::Pixels { width: w, height: h, ch: if has_alpha { 4 } else { 3 }, data };
+    // A coded picture is a whole number of coding blocks and may be larger than the image the
+    // container declares (Sony codes 1920 x 1080 as 1920 x 1088 and writes no SPS conformance
+    // window). Crop to `ispe` before the alpha merge and the transforms, both of which are
+    // defined on that size, so decoding agrees with [`probe`] instead of handing back the
+    // encoder's padding.
+    img = orient::to_declared(img, dw, dh)?;
+    if let Some(aux) = alpha_id {
+        let ap = ctx.props(aux).map_err(err)?;
+        // The alpha is a coded item of its own: it declares its own size and may pad it to whole
+        // coding blocks differently from the picture. What has to agree is what the two declare,
+        // not how either is coded; the padding comes off both the same way. Checked before the
+        // alpha is decoded, so a mismatch costs nothing.
+        if ctx.coded_size(aux, &ap).map_err(err)? != (cw, ch) {
+            return Err(Error::Unsupported("an alpha image of a different size than the picture"));
+        }
+        let alpha = Coded::decode(ctx, aux, &ap, limit)?;
+        let alpha_planes = alpha.planes()?;
+        // `put_alpha` refuses a plane that does not cover the declared size.
+        ycc::put_alpha(&alpha_planes, &mut img.data, dw).ok_or_else(|| Error::Malformed("the alpha image is incomplete".into()))?;
+    }
     if options.apply_transforms {
         img = orient::apply(img, &p.transforms)?;
     }
@@ -393,6 +457,44 @@ const GRID_BUDGET: u64 = 2;
 /// most one of each, so anything approaching this is a reordered or hostile association list.
 const MAX_TRANSFORMS: usize = 12;
 
+/// The most parameter sets one `hvcC` may carry: one per id H.265 allows (16 VPS, 16 SPS, 64 PPS).
+/// heic-rs 0.1.4 replaces a repeated id by scanning every set kept so far, so more sets (repeats,
+/// or ids past the standard's range) only make that collection quadratic.
+const MAX_PARAMETER_SETS: usize = 16 + 16 + 64;
+/// Highest `pps_pic_parameter_set_id` H.265 allows (7.4.3.3.1).
+const MAX_PPS_ID: u32 = 63;
+/// Most tile columns and rows a picture may have: H.265's level limits (Table A.8, levels 6 to
+/// 6.2). heic-rs 0.1.4 builds its tile tables by walking the tile boundaries for every coding tree
+/// block, so its work grows with blocks × tiles; these keep that a small multiple of the blocks.
+const MAX_TILE_COLS: u32 = 20;
+const MAX_TILE_ROWS: u32 = 22;
+
+/// Refuses parameter sets that would make heic-rs's set collection or tile tables cost far more
+/// than the picture: too many sets, a PPS id out of range, or more tiles than any level allows.
+fn check_parameter_sets(sets: &[&[u8]]) -> Result<(), Error> {
+    if sets.len() > MAX_PARAMETER_SETS {
+        return Err(Error::Limit(format!("the hvcC record carries {} parameter sets, over the {MAX_PARAMETER_SETS}-set cap", sets.len())));
+    }
+    let layouts = vui::pps_layouts(sets).ok_or_else(|| Error::Malformed("unreadable picture parameter set".into()))?;
+    for p in layouts {
+        if p.id > MAX_PPS_ID {
+            return Err(Error::Malformed(format!("picture parameter set id {} is out of range", p.id)));
+        }
+        if p.tile_cols > MAX_TILE_COLS || p.tile_rows > MAX_TILE_ROWS {
+            return Err(Error::Limit(format!(
+                "a picture of {} × {} tiles, over the {MAX_TILE_COLS} × {MAX_TILE_ROWS} H.265 allows",
+                p.tile_cols, p.tile_rows
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// [`check_parameter_sets`] of a coded item's `hvcC`, if it has one.
+fn check_item_parameter_sets(p: &ItemProps<'_>) -> Result<(), Error> {
+    p.hvcc.as_ref().map_or(Ok(()), |h| check_parameter_sets(&h.parameter_sets()))
+}
+
 /// The decoded pictures of an item: one, or a grid's tiles in `dimg` order.
 struct Coded<'a> {
     frames: Vec<Frame>,
@@ -417,15 +519,24 @@ impl<'a> Coded<'a> {
         // conformance window (or a slice picking another SPS) can make far larger than the
         // declared one, and a grid holds all its tiles at once. Both are refused before decoding.
         let mut total = 0u64;
+        // A grid may list one tile thousands of times: each distinct tile is read and checked
+        // once, so the work follows the file's items, not the grid's cell count.
+        let mut largest_of: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
         for t in &ids {
+            if let Some(largest) = largest_of.get(t) {
+                total = total.saturating_add(*largest);
+                continue;
+            }
             let tp = ctx.props(*t).map_err(err)?;
             let hvcc = tp.hvcc.as_ref().ok_or(heic_rs::Error::MissingBox("hvcC")).map_err(err)?;
+            check_parameter_sets(&hvcc.parameter_sets())?;
             let sizes = vui::coded_sizes(&hvcc.parameter_sets()).ok_or_else(|| Error::Malformed("unreadable sequence parameter set".into()))?;
             let mut largest = 0u64;
             for (w, h) in sizes {
                 heic_rs::image::check_pixels(w, h, limit).map_err(err)?;
                 largest = largest.max(u64::from(w) * u64::from(h));
             }
+            largest_of.insert(*t, largest);
             total = total.saturating_add(largest);
         }
         if total > limit.saturating_mul(GRID_BUDGET) {
@@ -524,7 +635,7 @@ mod tests {
     fn image_sequence_is_unsupported_with_a_clear_message() {
         // An ftyp and nothing else: a HEIF image sequence would have a moov here instead of a meta.
         let bytes = b"\0\0\0\x18ftypmsf1\0\0\0\0msf1hevc";
-        for r in [probe(bytes).map(|_| ()), decode(bytes, &Options::default()).map(|_| ())] {
+        for r in [probe(bytes).map(|_| ()), decode(bytes, &Options::default()).map(|_| ()), read_metadata(bytes).map(|_| ())] {
             assert!(matches!(&r, Err(Error::Unsupported(m)) if m.contains("sequence")), "{r:?}");
         }
     }
@@ -535,6 +646,7 @@ mod tests {
             assert!(probe(bytes).is_err());
             assert!(decode(bytes, &Options::default()).is_err());
             assert!(decode_thumbnail(bytes, 1, &Options::default()).is_err());
+            assert!(read_metadata(bytes).is_err());
         }
     }
 

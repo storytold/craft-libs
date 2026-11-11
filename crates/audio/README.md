@@ -116,7 +116,9 @@ let left: &[f32] = &buf.channels[0];
 ```
 
 `decode` returns `TooLarge` above 2³⁰ samples (4 GiB of `f32`). `info.damaged` counts packets
-that were damaged and replaced by silence of their length.
+that were damaged and replaced by silence of their length. A FLAC frame whose checksum fails is
+dropped by the demuxer; the jump in the timestamps shows it, and the lost frames are silence too (one
+count per run of them), so the audio after them stays in place.
 
 ### Choose a track
 
@@ -131,8 +133,13 @@ if let Some(second) = list.get(1) {
 ```
 
 A track index the file does not have is `Unsupported`. `DecodeOptions::with_max_samples` sets
-another size limit. `tracks_of` lists the tracks of a file read from a `ByteSource`;
-`detect_container` names a file's container from its first bytes.
+another size limit. The default is `DEFAULT_MAX_SAMPLES`, 2^30 samples (4 GiB of `f32`), which
+`decode` and `decode_with` can fill from a small compressed file because they keep the whole
+result. An app that opens files it did not write passes a limit it can hold (for example
+`DEFAULT_MAX_SAMPLES / 8`, or its longest supported clip), or streams with `Decoder`, which has no
+limit because it keeps nothing. `tracks_of` lists the tracks of a file read from a `ByteSource`;
+`detect_container` names a file's container from its first bytes. `DECODE_EXTENSIONS` lists the
+file extensions of the formats `decode` reads, for a file picker's filter.
 
 ### Stream and seek
 
@@ -224,7 +231,8 @@ enc.finish()?;
 `EncodeOptions::default()` is 24-bit WAV. `with_bwf` adds a BWF `bext` chunk and
 `with_force_rf64` writes RF64 below 4 GiB; both apply to WAV only. `encode_format_for("aiff")`
 maps an extension to an `EncodeFormat`, and `ENCODE_EXTENSIONS` lists the extensions the enabled
-features can write. `write` refuses a block without one slice per channel, or with a slice
+features can write. `EncodeFormat::ALL` lists the formats; `extension()` is the extension a new
+file gets and `mime_type()` its media type. `write` refuses a block without one slice per channel, or with a slice
 shorter than `frames`, and writes nothing. After a write fails for another reason, every later
 `write` and `finish` returns an error.
 
@@ -563,6 +571,10 @@ The codec modules' public items keep their names, so apps can re-export them
 - `AudioInfo` has `container`, `codec`, `layout` and `damaged` instead of SoundCraft's `format`.
   `detect_container` replaces `detect_format`. `probe` reports the layout instead of
   `wav_channel_mask`.
+- SoundCraft's `FileFormat` tables are `DECODE_EXTENSIONS` (was `readable_extensions`),
+  `ENCODE_EXTENSIONS` and `encode_format_for` (was `from_write_extension`), and
+  `EncodeFormat::ALL`, `extension()` and `mime_type()` (were `WRITE`, `default_extension` and
+  `mime_type`). `aifc` is a writable name here.
 - `EncodeOptions` is built with `EncodeOptions::new(format)` and `with_*` methods. It carries the
   speaker layout and RF64, which replace `encode_with_layout`, `encode_wav_rf64` and
   `FileEncoder::new`'s layout argument. `BwfInfo` and `aac::EncoderConfig` are built the same way
