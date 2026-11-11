@@ -20,3 +20,7 @@ pub enum JavaClassError {
     Unsupported(String),
 }
 use JavaClassError as FormatError;
+
+#[cfg(test)]
+#[path="regressions/java_array_operands.rs"]
+mod java_array_operands;
