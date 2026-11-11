@@ -185,6 +185,12 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   carry-over locales by default, the set `CRAFT_PROOF_EMBED` names otherwise (`en` for English
   only); other languages come from installed Language packs.
 
+- [`craft-pst`](crates/pst/README.md): Outlook personal folders files (`.pst`, [MS-PST]) read over any
+  `Read + Seek`, from MailCraft: the node database, property and table contexts, folders, messages,
+  recipients, attachments, attached messages and named properties, ANSI and Unicode, encoded or not,
+  with a password. Salvages damaged files. Bounded and panic-free on hostile input. What an item
+  means stays in each app.
+
 - [`craft-quit`](crates/quit/src/lib.rs): native macOS quit, egui close handling and an optional
   app menu. Unsaved-document decisions and save prompts stay in each app.
 

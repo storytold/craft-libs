@@ -67,6 +67,7 @@ craft-prepress = { path = "crates/prepress" }
 craft-print = { path = "crates/print" }
 craft-proof = { path = "crates/proof" }
 craft-psd = { path = "crates/psd" }
+craft-pst = { path = "crates/pst" }
 craft-quit = { path = "crates/quit" }
 craft-rtf = { path = "crates/rtf" }
 craft-raw = { path = "crates/raw" }
