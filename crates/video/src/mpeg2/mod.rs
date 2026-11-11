@@ -693,7 +693,7 @@ impl Decoder {
         let ptype = pd.ph.coding_type;
         if self.need_intra {
             // an MPEG-1 D picture is intra coded, so it restarts decoding like an I picture
-            if ptype != PictureType::I && !(ptype == PictureType::D && !mpeg2) {
+            if ptype != PictureType::I && (mpeg2 || ptype != PictureType::D) {
                 self.errors += 1;
                 return; // its references went with the refused access unit
             }
