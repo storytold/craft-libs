@@ -101,7 +101,7 @@ separate as they are.
 |---|---|---|
 | `MAX_SPOT_INKS` | 32 spot inks per page | A `DeviceN` space has at most 32 colorants, and each plate costs a render and a byte per pixel. Further spots are listed in `Plates::unseparated`. |
 | `MAX_PLATE_PIXELS` | 4 MP per plate (2000 × 2000) | A page with many inks stays within a few hundred megabytes. `plates` lowers the resolution to fit, and `plates_in_bands` makes bands this size; `Plates::dpi` reports the one used. |
-| `MAX_BANDED_PIXELS` | 256 MP per plate of a page separated in bands | Bounds the time a banded page takes. The resolution is lowered to fit. |
+| `MAX_BANDED_PIXELS` | 256 MP per plate of a page separated in bands | Bounds the pixels a banded page adds up to; the resolution is lowered to fit. It does not bound the band count: a very thin, tall page makes one band per 8192 rows. |
 
 The renderer's side limit (`craft_pdf::raster::MAX_SIDE`) also lowers the resolution.
 

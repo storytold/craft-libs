@@ -36,9 +36,10 @@ pub const MAX_SPOT_INKS: usize = 32;
 /// hundred megabytes. The resolution is reduced to fit; [`Plates::dpi`] says what was used.
 pub const MAX_PLATE_PIXELS: f32 = 4.0e6;
 
-/// Pixels per plate of a page separated in bands (256 MP, 16000 × 16000), to bound the time a
-/// page takes. A long page reaches it; across a Letter or A4 page the side limit stops near 960
-/// dpi first. The resolution is reduced to fit.
+/// Pixels per plate of a page separated in bands (256 MP, 16000 × 16000). It bounds the memory a
+/// page's bands add up to; a long page reaches it, while across a Letter or A4 page the side limit
+/// stops near 960 dpi first. The resolution is reduced to fit. It does not bound the band count: a
+/// page a few points wide and very tall still makes one band per 8192 rows.
 pub const MAX_BANDED_PIXELS: f32 = 2.56e8;
 
 /// The resolution, in pixels per point, inks are discovered at before the plates render.
@@ -210,15 +211,15 @@ fn separate(
     let pages = doc.pages();
     let p = pages.get(page).ok_or(Error::NoPage(page))?;
     let (w, h) = p.render_dimensions();
+    if !w.is_finite() || !h.is_finite() || w <= 0.0 || h <= 0.0 {
+        return Err(Error::Render(raster::Error::InvalidPage));
+    }
     let scale = scale_of(w, h, dpi / 72.0);
     let cache = RenderCache::new();
     // Inks are found on a small render of the whole page, within the renderer's limits.
     let (inks, separated, unseparated) = discover(p, &cache, plate_scale(w, h, DISCOVERY_SCALE.min(scale)))?;
     // The page's size in pixels, as the renderer floors it. Only each band's viewport goes to
     // the renderer, so the page itself may pass the renderer's own size limits.
-    if !w.is_finite() || !h.is_finite() || w <= 0.0 || h <= 0.0 {
-        return Err(Error::Render(raster::Error::InvalidPage));
-    }
     let [width, page_height] = [w, h].map(|side| (side * scale).floor().max(1.0) as u32);
     // A band is within the plate cap and, like any render, the renderer's side limit.
     let fit = (MAX_PLATE_PIXELS / width as f32).floor().clamp(1.0, MAX_SIDE as f32) as u32;
