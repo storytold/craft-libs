@@ -8,13 +8,19 @@
 //! class. Input is treated as hostile: size, node, depth and instance limits, and cyclic
 //! references, are errors.
 //!
-//! Import only, and geometry only: this is not the shared SVG model of craft-libs#789. Boolean
-//! operations (applying [`Clip`]s) and colour parsing are left to the caller, so the crate
-//! depends on no other Craft crate.
+//! Geometry only: this is not the shared SVG model of craft-libs#789. Boolean operations
+//! (applying [`Clip`]s) are left to the caller. Stroke paint is returned as written;
+//! [`color::parse_color`] reads it as a CSS colour.
+//!
+//! [`write`] is the other direction: a small writer for SVG documents, their path data and
+//! numbers.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
 use kurbo::BezPath;
+
+pub mod color;
+pub mod write;
 
 /// Why an SVG could not be read; the message starts with the name given to [`import`].
 #[derive(Debug, thiserror::Error)]
