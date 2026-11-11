@@ -136,7 +136,8 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-silhouette-studio`](crates/silhouette-studio/src/lib.rs): bounded, fail-closed reader for Silhouette Studio `.studio` and `.studio3` documents: outlines, line colours and page size in millimetres. Protected designs are refused.
 - [`craft-svg-paths`](crates/svg-paths/src/lib.rs): SVG geometry reader: shapes,
   transforms, `<use>`/`<symbol>` instances and the CSS cascade as Bézier paths in millimetres, each
-  tagged by the caller. Import only; not the shared SVG model.
+  tagged by the caller; a CSS colour parser (`color`); and a small SVG writer (`write`: elements with
+  escaping, path data, numbers). Not the shared SVG model.
 - [`craft-text`](crates/text/README.md): text processing below the composer. Its `hyphen` module finds
   hyphenation points, with a bundled US English dictionary and patterns and optional hypher patterns
   for 47 more languages (one cargo feature each).
