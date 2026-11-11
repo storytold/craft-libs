@@ -124,7 +124,10 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         ui.fonts_mut(|fonts| crate::runtime::egui::text_layout::layout_with(fonts, job))
     };
     let hint_text = hint.map(|hint| egui::RichText::new(hint).font(FontId::proportional(font_id.size)));
-    let output = ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+    // The component's root took its place in the flow already: the editor runs in a child that takes none, so the
+    // parent's cursor stays past the root, not past the text part inside it.
+    let output = {
+        let ui = &mut super::alloc::child(ui, egui::UiBuilder::new().max_rect(rect));
         // The text shows only inside the text part, however wide the line is.
         ui.set_clip_rect(rect.intersect(ui.clip_rect()));
         if !enabled && !focusable {
@@ -179,8 +182,7 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
             });
         }
         shown
-    });
-    let output = output.inner;
+    };
     let focused = output.response.has_focus();
     let caret = output.cursor_range.map(|range| {
         let at = output.galley.pos_from_cursor(range.primary);
