@@ -190,10 +190,10 @@ fn read(root: &Path, entry: &Entry) -> Result<Vec<u8>, Fault> {
 /// conflict with, the same way a provider treats a deleted document.
 fn write(root: &Path, entry: &Entry, bytes: &[u8]) -> Result<Entry, Fault> {
     let file = resolve(root, &entry.id)?;
-    if let Ok(meta) = fs::metadata(&file) {
-        if Some(etag_of(&meta)) != entry.etag {
-            return Err(Fault::Conflict);
-        }
+    if let Ok(meta) = fs::metadata(&file)
+        && Some(etag_of(&meta)) != entry.etag
+    {
+        return Err(Fault::Conflict);
     }
     if let Some(parent) = file.parent() {
         fs::create_dir_all(parent).map_err(|error| io_fault(&error))?;
