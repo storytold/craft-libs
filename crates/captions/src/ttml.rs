@@ -769,8 +769,7 @@ mod tests {
 
     #[test]
     fn only_xml_whitespace_collapses_in_cue_text() {
-        let xml =
-            "<tt xmlns=\"http://www.w3.org/ns/ttml\"><body><div><p begin=\"1s\" end=\"2s\">\t 10\u{a0}km\u{2009}a\u{3000}b \t\r\n  c \n</p></div></body></tt>";
+        let xml = "<tt xmlns=\"http://www.w3.org/ns/ttml\"><body><div><p begin=\"1s\" end=\"2s\">\t 10\u{a0}km\u{2009}a\u{3000}b \t\r\n  c \n</p></div></body></tt>";
         let doc = parse(xml).unwrap();
         assert_eq!(doc.cues[0].text, "10\u{a0}km\u{2009}a\u{3000}b c");
         let xml = "<tt xmlns=\"http://www.w3.org/ns/ttml\"><body><div><p begin=\"1s\" end=\"2s\">\u{a0}x<br/>y\u{a0}</p></div></body></tt>";

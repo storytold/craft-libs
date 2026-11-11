@@ -282,7 +282,8 @@ fn tight_pop_on_load_can_cross_the_previous_caption_end() {
 
 #[test]
 fn interrupted_load_keeps_extended_characters_and_repeated_basic_pairs() {
-    for text in ["A second caption that needs more time to load", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "ÀÀÀÀÀÀÀÀÀÀÀÀÀÀÀÀÀÀ\nÀÀÀÀÀÀÀÀÀÀÀÀÀÀÀÀÀÀ"]
+    for text in
+        ["A second caption that needs more time to load", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "ÀÀÀÀÀÀÀÀÀÀÀÀÀÀÀÀÀÀ\nÀÀÀÀÀÀÀÀÀÀÀÀÀÀÀÀÀÀ"]
     {
         let doc = Document {
             cues: vec![
