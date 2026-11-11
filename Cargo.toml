@@ -62,6 +62,7 @@ craft-lottie = { path = "crates/lottie" }
 craft-menu = { path = "crates/menu" }
 craft-metafile = { path = "crates/metafile" }
 craft-opc = { path = "crates/opc" }
+craft-ora = { path = "crates/ora" }
 craft-penpot = { path = "crates/penpot" }
 craft-pcraft-format = { path = "crates/pcraft-format" }
 craft-plotter = { path = "crates/plotter" }
