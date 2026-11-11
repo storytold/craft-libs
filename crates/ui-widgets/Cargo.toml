@@ -1,0 +1,47 @@
+[package]
+name = "craft-ui-widgets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Components of the craft UI library: buttons, choices, fields, lists, menus, pickers, tabs, tables and bars"
+
+[lib]
+# Every test lives in the `it` integration binary.
+test = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# `craft_ui::testing` with the story helpers that show components.
+testing = ["craft-ui-contract/testing"]
+
+[dependencies]
+craft-ui-contract = { workspace = true }
+craft-behavior = { workspace = true }
+craft-keymap = { workspace = true, features = ["egui"] }
+craft-theme = { workspace = true }
+craft-ui-macros = { workspace = true }
+egui = { workspace = true }
+craft-host = { workspace = true }
+craft-i18n = { workspace = true, features = ["collate"] }
+smallvec = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+craft-ui-widgets = { path = ".", features = ["testing"] }
+craft-behavior = { workspace = true }
+craft-host = { workspace = true }
+craft-i18n = { workspace = true, features = ["collate"] }
+craft-keymap = { workspace = true, features = ["egui"] }
+craft-theme = { workspace = true }
+craft-ui-test-kit = { workspace = true }
+egui = { workspace = true }
+
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+harness = false

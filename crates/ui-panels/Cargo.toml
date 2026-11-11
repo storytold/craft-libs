@@ -1,0 +1,46 @@
+[package]
+name = "craft-ui-panels"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Sections, dialogs, docking and rails of the craft UI library"
+
+[lib]
+# Every test lives in the `it` integration binary.
+test = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# `craft_ui::testing` with `testing::internals`.
+testing = ["craft-ui-widgets/testing"]
+
+[dependencies]
+craft-ui-widgets = { workspace = true }
+craft-behavior = { workspace = true }
+craft-keymap = { workspace = true, features = ["egui"] }
+craft-theme = { workspace = true }
+craft-ui-macros = { workspace = true }
+egui = { workspace = true }
+craft-host = { workspace = true }
+# `dialog::UnsavedChangesDialog` answers a `craft_quit` close.
+craft-quit = { workspace = true }
+craft-i18n = { workspace = true, features = ["collate"] }
+serde = { workspace = true }
+
+[dev-dependencies]
+craft-ui-panels = { path = ".", features = ["testing"] }
+craft-behavior = { workspace = true }
+craft-keymap = { workspace = true, features = ["egui"] }
+egui = { workspace = true }
+serde = { workspace = true }
+toml = { version = "1.1", default-features = false, features = ["std", "parse", "serde"] }
+
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+harness = false

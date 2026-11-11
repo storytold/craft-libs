@@ -1,0 +1,52 @@
+[package]
+name = "craft-ui-patterns"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Ready-made dialogs, presets, preferences and dock patterns of the craft UI library"
+
+[lib]
+# Every test lives in the `it` integration binary.
+test = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# `craft_ui::testing`.
+testing = ["craft-ui-panels/testing"]
+
+[dependencies]
+craft-ui-panels = { workspace = true }
+craft-behavior = { workspace = true }
+craft-keymap = { workspace = true, features = ["egui"] }
+craft-theme = { workspace = true }
+craft-ui-macros = { workspace = true }
+egui = { workspace = true }
+craft-host = { workspace = true }
+craft-i18n = { workspace = true, features = ["collate"] }
+serde = { workspace = true }
+# `patterns::preferences::SettingsDocument` turns an app's settings struct into a draft table and back; `toml_edit` gives
+# the struct's field order, which a `toml::Table` sorts away.
+toml = { version = "1.1", default-features = false, features = ["std", "parse", "serde"] }
+toml_edit = { version = "0.25", features = ["serde"] }
+# `patterns::form_dialogs::PdfExportDialog` edits `craft_pdf::settings::PdfSettings`.
+craft-pdf = { workspace = true, default-features = false }
+# `patterns::form_dialogs::Secret` zeroes its buffer on drop.
+zeroize = "1.9"
+
+[dev-dependencies]
+craft-ui-patterns = { path = ".", features = ["testing"] }
+craft-behavior = { workspace = true }
+craft-theme = { workspace = true }
+craft-ui-test-kit = { workspace = true }
+egui = { workspace = true }
+serde = { workspace = true }
+
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+harness = false

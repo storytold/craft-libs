@@ -1,0 +1,42 @@
+[package]
+name = "craft-ui-canvas"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The canvas, its tools and controls, and the full-window dialogs of the craft UI library"
+
+[lib]
+# Every test lives in the `it` integration binary.
+test = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# `craft_ui::testing` with the canvas test helpers (`ToolFixture`, `tool_story`, `canvas_story`).
+testing = ["craft-ui-panels/testing"]
+
+[dependencies]
+craft-ui-panels = { workspace = true }
+craft-behavior = { workspace = true }
+craft-keymap = { workspace = true, features = ["egui"] }
+craft-theme = { workspace = true }
+craft-ui-macros = { workspace = true }
+egui = { workspace = true }
+craft-i18n = { workspace = true, features = ["collate"] }
+serde = { workspace = true }
+
+[dev-dependencies]
+craft-ui-canvas = { path = ".", features = ["testing"] }
+craft-behavior = { workspace = true }
+craft-keymap = { workspace = true, features = ["egui"] }
+craft-ui-test-kit = { workspace = true }
+egui = { workspace = true }
+
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+harness = false
