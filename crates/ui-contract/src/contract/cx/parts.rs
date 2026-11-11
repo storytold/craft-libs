@@ -132,6 +132,13 @@ impl PartBuilder<'_> {
         self
     }
 
+    /// The component holds a press on the part that the part does not sense itself (a collection's press on a row's
+    /// toggle cell): the part paints pressed.
+    pub fn held(self, held: bool) -> Self {
+        self.decl.held = held;
+        self
+    }
+
     /// The part is the arrival of the component's part roving group: Tab and Shift+Tab into the group land here, not
     /// on the first member. The last part declared `selected` wins.
     pub fn selected(self) -> Self {

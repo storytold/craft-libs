@@ -462,6 +462,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                     current: current.as_ref() == Some(&key),
                     open: self.source.has_children(at) && self.source.open(at),
                     hovered: hover_at.is_some_and(|pos| row.contains(pos)),
+                    pressed: self.pressed.as_ref().filter(|(held, _)| *held == at).map(|(_, pressed)| pressed.clone()),
                     ..RowState::default()
                 };
                 let mut flags = crate::style::Flags::empty();
@@ -495,7 +496,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                     key: &key,
                     at,
                     rect: row,
-                    row: state,
+                    row: state.clone(),
                     depth: self.source.depth(at),
                     set: position,
                     row_index: at,
@@ -539,6 +540,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                                     columns: column_keys,
                                     toggles: toggle_keys,
                                     toggle_keys: self.header.toggle_keys(),
+                                    pressed: state.pressed.clone(),
                                 }));
                             }),
                         );

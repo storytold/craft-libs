@@ -9,7 +9,7 @@
 
 use super::toggle::ToggleCell;
 use super::words::ListWords;
-use crate::contract::{ColumnSpec, Common, OpenChange, RowState, Show};
+use crate::contract::{ColumnSpec, Common, OpenChange, RowPressed, RowState, Show};
 use crate::primitives::{ContentPainterCx, HAlign, IconSpec};
 use crate::runtime::env::Label;
 use craft_behavior::ColumnKey;
@@ -148,6 +148,8 @@ pub struct ListRow<'a> {
     pub(super) rule: bool,
     /// The rename editor replaces the label; `state` sets it from the collection's row state.
     pub(super) renaming: bool,
+    /// Where the collection holds a press on the row, from its row state: the toggle cell it acts on shows it.
+    pub(super) pressed: Option<RowPressed>,
     /// The thumbnails that drag instead of the row, each with what starts its drag session.
     pub(super) drags: Vec<(ThumbTarget, ThumbPayload)>,
     /// The icon or thumbnails come before the disclosure column instead of after it.
@@ -244,6 +246,7 @@ impl<'a> ListRow<'a> {
             clipped: false,
             rule: false,
             renaming: false,
+            pressed: None,
             drags: Vec::new(),
             leading_first: false,
             detail: None,
@@ -295,10 +298,12 @@ impl<'a> ListRow<'a> {
         self
     }
 
-    /// The row state the collection gives the item: the rename editor, the stripe and the app's mark.
+    /// The row state the collection gives the item: the rename editor, the stripe, the app's mark and the press the
+    /// collection holds on the row.
     #[must_use]
     pub fn state(mut self, row: RowState) -> Self {
         self.renaming = row.renaming;
+        self.pressed = row.pressed;
         self.striped = row.striped;
         self.highlight |= row.emphasized;
         self

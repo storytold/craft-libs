@@ -171,6 +171,8 @@ pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
     drags: Drags<C::Key>,
     /// The row a key move brought to the lead in a collection without its own scroll: the page's scroll owner shows it.
     page_reveal: Option<usize>,
+    /// The row the collection's own press is held on this pass, and where on it.
+    pressed: Option<(usize, crate::contract::collection::RowPressed)>,
 }
 
 /// The primary-ness, click count, position in the layout's coordinates and scroll offset of a press on a row.
@@ -224,6 +226,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             header: Header::default(),
             drags: Drags::default(),
             page_reveal: None,
+            pressed: None,
         }
     }
 }

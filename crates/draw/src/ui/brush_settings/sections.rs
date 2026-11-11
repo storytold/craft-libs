@@ -221,7 +221,8 @@ impl<K: Clone + Eq> ItemSource<Slot<K>> for Rows<'_, K> {
 ///   row and precedes the first switch row, taking room and having no AccessKit node. The link row has the brush
 ///   icon.
 /// - **Pointer.** A click on a pane row reports `Select` and, if its box is clear, `Enable { on: true }`; the box
-///   toggles only the flag; the lock toggles only the lock; a click on a switch row toggles it (`Switch`).
+///   toggles only the flag; the lock toggles only the lock; a click on a switch row toggles it (`Switch`). A press on the row (not its lock)
+///   shows the box pressed.
 /// - **Keys.** One Tab stop. The list's own keys (Up, Down, Home, End, Page Up and Page Down) move the lead; onto a
 ///   pane row it also reports `Select`. Space toggles the lead's box or switch, Shift+Space its lock; Enter selects a
 ///   pane row and turns it on.
@@ -299,12 +300,12 @@ impl<'a, K: Value + Eq + Hash> BrushSectionList<'a, K> {
                             BrushSectionKind::Switch => {
                                 uses.insert(0, CHECK);
                                 let state = ToggleState::of(section.enabled == Some(true));
-                                row = row.toggle(ToggleCell::check(CHECK, state, switch_name.clone()));
+                                row = row.toggle(ToggleCell::check(CHECK, state, switch_name.clone()).row_press());
                             }
                             BrushSectionKind::Pane => {
                                 if let Some(on) = section.enabled {
                                     uses.insert(0, CHECK);
-                                    row = row.toggle(ToggleCell::check(CHECK, ToggleState::of(on), enable_name.clone()));
+                                    row = row.toggle(ToggleCell::check(CHECK, ToggleState::of(on), enable_name.clone()).row_press());
                                 }
                                 if let Some(locked) = section.locked {
                                     uses.push(LOCK);

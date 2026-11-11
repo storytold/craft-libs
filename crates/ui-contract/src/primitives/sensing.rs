@@ -41,12 +41,26 @@ pub struct PartResult {
     /// The component declared the part inactive: it paints with the Disabled state and `PaintUi::draw_part` draws data
     /// colours with the disabled fill, and it keeps sensing.
     pub inactive: bool,
+    /// The component holds a press on the part that the part does not sense itself: it paints pressed.
+    pub held: bool,
 }
 
 impl PartResult {
     /// What a read returns for a part with no press history: face mode, or a part first registered this pass.
-    pub const IDLE: PartResult =
-        PartResult { rect: Rect::NOTHING, press: PressState::IDLE, hovered: false, hover_pos: None, flags: Flags::empty(), inactive: false };
+    pub const IDLE: PartResult = PartResult {
+        rect: Rect::NOTHING,
+        press: PressState::IDLE,
+        hovered: false,
+        hover_pos: None,
+        flags: Flags::empty(),
+        inactive: false,
+        held: false,
+    };
+
+    /// The part paints pressed: its own press, or one its component holds on it.
+    pub fn pressed(&self) -> bool {
+        self.press.phase.is_press() || self.held
+    }
 }
 
 /// A text part's result this pass.
@@ -105,6 +119,8 @@ pub(crate) struct PartDecl {
     pub flags: Flags,
     /// The part paints with the Disabled state and its data colours take the theme's disabled fill. It keeps sensing.
     pub inactive: bool,
+    /// The component holds a press on the part (`PartBuilder::held`).
+    pub held: bool,
 }
 
 impl PartDecl {
@@ -120,6 +136,7 @@ impl PartDecl {
             over: false,
             flags: Flags::default(),
             inactive: false,
+            held: false,
         }
     }
 
@@ -831,6 +848,7 @@ fn part_results_in(
                     hover_pos: read.hover_pos,
                     flags: decl.flags,
                     inactive: decl.inactive,
+                    held: decl.held,
                 },
             )
         })

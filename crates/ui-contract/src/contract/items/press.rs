@@ -2,7 +2,7 @@
 
 use super::drag::SlowClick;
 use super::{ItemsHooks, Placement, RowPress, SECTION};
-use crate::contract::collection::{ActivateOn, CollectionEvent, CollectionProps, ContextMenuRequest, LeadSource, SelectMode};
+use crate::contract::collection::{ActivateOn, CollectionEvent, CollectionProps, ContextMenuRequest, LeadSource, RowPressed, SelectMode};
 use crate::contract::{Collection, Cx, ItemOpener};
 use crate::runtime::egui::response;
 use crate::runtime::env::ArenaId;
@@ -53,6 +53,20 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             if layout.mirrors() && rtl { flow.to_physical(Rect::from_min_size(at, Vec2::ZERO)).min } else { at }
         };
         let mods_now = crate::runtime::pointer::frame(&ctx).mods;
+        self.pressed = match cx.core.press.phase {
+            PressPhase::Down { start, .. } | PressPhase::Held { start, .. }
+                if start.button == craft_behavior::PointerButton::Primary && local(start.origin).y >= 0.0 =>
+            {
+                let origin = local(start.origin);
+                layout.hit(origin, offset).filter(|&at| self.source.enabled(at) && layout.shown(at)).and_then(|at| {
+                    match self.toggle_cell(props, layout, at, offset, origin) {
+                        Some((column, _)) => self.toggle_open(at, &column).then_some((at, RowPressed::Cell(column))),
+                        None => Some((at, RowPressed::Row)),
+                    }
+                })
+            }
+            _ => None,
+        };
         if let PressPhase::Down { start, .. } = cx.core.press.phase
             && local(start.origin).y >= 0.0
         {

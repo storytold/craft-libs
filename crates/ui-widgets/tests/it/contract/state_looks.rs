@@ -60,3 +60,54 @@ fn pressing_a_check_box_changes_its_fill_whether_off_or_on() {
         assert_ne!(fills(&pressed, rect), fills(&rest, rect), "a press shows on the box (on: {on})");
     }
 }
+
+/// A press held on a table row shows on the check cell that follows the row's press and on a pressed cell, never on a
+/// lock cell the press is not on.
+#[trial]
+fn a_row_press_shows_on_the_check_cell_that_follows_it_and_a_cell_press_on_its_own_cell() {
+    use craft_behavior::{ColumnKey, ColumnWidth, keyed};
+    use craft_ui::contract::{ColumnKind, ColumnSpec, ShowCollection as _, ToggleColumn};
+    use craft_ui::list::{ListRow, ToggleCell, ToggleState};
+    use craft_ui::table::Table;
+    const CHECK: ColumnKey = ColumnKey::new("check");
+    const NAME: ColumnKey = ColumnKey::new("name");
+    const LOCK: ColumnKey = ColumnKey::new("lock");
+    let cells = Cell::new([Rect::NOTHING; 3]);
+    let mut show = |ui: &mut egui::Ui| {
+        let region = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 80.0));
+        in_region(ui, region, |ui| {
+            let columns = vec![
+                ColumnSpec::new(CHECK, "", ColumnWidth::Controls(1.0)).kind(ColumnKind::Toggle(ToggleColumn::default())),
+                ColumnSpec::new(NAME, "", ColumnWidth::fill(1.0)),
+                ColumnSpec::new(LOCK, "", ColumnWidth::Controls(1.0)).kind(ColumnKind::Toggle(ToggleColumn::default())),
+            ];
+            let order = [0usize];
+            let source = keyed(&order, |&row| row);
+            let shown = Table::new("Sections", columns).header(false).show_items(ui, &source, &mut |_, icx| {
+                let mut found = [Rect::NOTHING; 3];
+                for (at, key) in [CHECK, NAME, LOCK].iter().enumerate() {
+                    found[at] = icx.cell(key).unwrap_or(Rect::NOTHING);
+                }
+                cells.set(found);
+                ListRow::new("Shape Dynamics")
+                    .cells(icx.cells())
+                    .toggle(ToggleCell::check(CHECK, ToggleState::Off, "Enable {row}").row_press())
+                    .toggle(ToggleCell::check(LOCK, ToggleState::Off, "Lock {row}"))
+            });
+            let _ = shown.response;
+        });
+    };
+    let mut held = |at: fn([Rect; 3]) -> egui::Pos2| {
+        let mut frames = Frames::new();
+        let rest = frames.frame_shapes(&mut show);
+        let [check, _, lock] = cells.get();
+        let point = at(cells.get());
+        frames.frame(vec![pointer::moved(point), pointer::press(point)], &mut show);
+        frames.frame(vec![], &mut show);
+        let pressed = frames.frame_shapes(&mut show);
+        (fills(&rest, check) != fills(&pressed, check), fills(&rest, lock) != fills(&pressed, lock))
+    };
+    assert_eq!(held(|[_, name, _]| name.center()), (true, false), "a press on the row shows on the check cell, not the lock");
+    assert_eq!(held(|[_, _, lock]| lock.center()), (false, true), "a press on the lock shows on the lock only");
+    assert_eq!(held(|[check, _, _]| check.center()), (true, false), "a press on the check cell shows on it");
+}

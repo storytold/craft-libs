@@ -75,7 +75,7 @@ pub(super) fn show_body<T: LayerTree>(
         list = list.reveal(key);
     }
     let out = list.show_items(ui, rows, &mut |key, item| {
-        let row = build_row(cx, key).cells(item.cells()).state(item.row);
+        let row = build_row(cx, key).cells(item.cells()).state(item.row.clone());
         match rows.rows.get(item.at) {
             Some(shown) if shown.has_children => row.depth(shown.paint_depth).group(shown.open),
             Some(shown) => row.depth(shown.paint_depth),

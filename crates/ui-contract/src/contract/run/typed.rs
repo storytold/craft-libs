@@ -739,7 +739,8 @@ pub(crate) fn member_show<C: Show>(
     let resolved = steps::resolved(id, &step1, &common);
     let enabled = node.enabled && step1.enabled;
     let hovered = sensed.response.hovered();
-    let result = crate::primitives::PartResult { rect: row, press: sensed.press, hovered, hover_pos: None, flags: node.flags, inactive: false };
+    let result =
+        crate::primitives::PartResult { rect: row, press: sensed.press, hovered, hover_pos: None, flags: node.flags, inactive: false, held: false };
     let part_state = steps::part_state(&result, enabled, None);
     let mut flags = part_state.flags | item.flags();
     if (shown.as_deref().map(|value| value as &dyn std::any::Any)).and_then(|value| value.downcast_ref::<bool>()) == Some(&true) {

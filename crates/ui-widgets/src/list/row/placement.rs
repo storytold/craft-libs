@@ -155,11 +155,15 @@ impl ListRow<'_> {
         }
     }
 
-    /// Takes the toggle columns and their keys from the facts the collection recorded for this row.
+    /// Takes the toggle columns, their keys and the press the collection holds on the row from the facts it recorded
+    /// for this row.
     pub(super) fn adopt_toggle_columns(&mut self, env: &EnvView<'_>, id: egui::Id) {
         if let Some(facts) = env.facts_of(id) {
             self.toggle_columns.clone_from(&facts.toggles);
             self.toggle_keys.clone_from(&facts.toggle_keys);
+            if self.pressed.is_none() {
+                self.pressed.clone_from(&facts.pressed);
+            }
         }
     }
 

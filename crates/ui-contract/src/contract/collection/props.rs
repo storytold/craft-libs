@@ -489,8 +489,18 @@ impl CollectionProps {
     }
 }
 
+/// Where the collection holds a primary press on a row, within slop.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RowPressed {
+    /// On the row's own area.
+    Row,
+    /// On the cell of this toggle column, which the press flips.
+    Cell(ColumnKey),
+}
+
 /// What an item reads of its place in the collection; the item step joins it to the item's flags at step 12.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RowState {
     /// The row is selected.
     pub selected: bool,
@@ -512,4 +522,6 @@ pub struct RowState {
     pub open: bool,
     /// The pointer is over the row.
     pub hovered: bool,
+    /// The collection holds a press on the row, which the item shows on the part it acts on.
+    pub pressed: Option<RowPressed>,
 }

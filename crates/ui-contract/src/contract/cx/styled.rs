@@ -68,7 +68,7 @@ impl CxCore<'_> {
                 flags |= Flags::FOCUS_VISIBLE;
             }
         }
-        let pressed = result.press.phase.is_press();
+        let pressed = result.pressed();
         let state = if !self.resolved.enabled || result.inactive {
             craft_theme::State::Disabled
         } else if pressed {

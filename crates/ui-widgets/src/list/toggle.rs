@@ -83,13 +83,25 @@ pub struct ToggleCell {
     /// A screen reader announces a check box instead of a toggle button: for a setting the row carries rather than
     /// an action on the row.
     pub check_box: bool,
+    /// A press on the row's own area shows on the cell: the row's click acts on what the cell shows.
+    pub row_press: bool,
 }
 
 impl ToggleCell {
     /// A cell of `column` showing `state` with `face`, named `name`: a whole pattern with `{row}` for the row's label
     /// ("Keep {row}").
     pub fn new(column: ColumnKey, face: ToggleFace, state: ToggleState, name: impl Into<Label>) -> Self {
-        ToggleCell { column, face, state, name: CellName::Given(name.into()), tooltip: None, fill: None, always_visible: false, check_box: false }
+        ToggleCell {
+            column,
+            face,
+            state,
+            name: CellName::Given(name.into()),
+            tooltip: None,
+            fill: None,
+            always_visible: false,
+            check_box: false,
+            row_press: false,
+        }
     }
 
     /// An eye cell, named "Visibility {row}" unless [`name`](Self::name) says otherwise.
@@ -147,6 +159,13 @@ impl ToggleCell {
     #[must_use]
     pub fn always_visible(mut self) -> Self {
         self.always_visible = true;
+        self
+    }
+
+    /// A press on the row's own area shows on the cell, for a row whose click turns on what the cell shows.
+    #[must_use]
+    pub fn row_press(mut self) -> Self {
+        self.row_press = true;
         self
     }
 }

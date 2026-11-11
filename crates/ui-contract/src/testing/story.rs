@@ -534,6 +534,7 @@ where
         columns: Vec::new(),
         toggles: Vec::new(),
         toggle_keys: Vec::new(),
+        pressed: None,
     };
     let installed = crate::runtime::env::Env::install_for(
         ui,

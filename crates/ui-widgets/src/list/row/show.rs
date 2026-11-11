@@ -9,7 +9,7 @@ use super::thumb::{RowThumb, target_at};
 use super::trailing::{TrailingFace, TrailingItem};
 use super::{ListRow, RowInk};
 use crate::contract::{
-    Access, Bind, Component, Cx, DragPreview, MeasureCx, Name, OpenChange, PaintUi, PartsCx, Pointer as _, Props as _, Role, Styled as _,
+    Access, Bind, Component, Cx, DragPreview, MeasureCx, Name, OpenChange, PaintUi, PartsCx, Pointer as _, Props as _, Role, RowPressed, Styled as _,
     WordSetCx as _,
 };
 use crate::controls::disclosure::Disclosure;
@@ -188,7 +188,12 @@ impl Component for ListRow<'_> {
                 }
                 (None, None) => None,
             };
-            let part = cx.part(TOGGLE.at(*at as u64), shape).flags(flags);
+            let held = match &self.pressed {
+                Some(RowPressed::Cell(column)) => *column == toggle.column,
+                Some(RowPressed::Row) => toggle.row_press,
+                _ => false,
+            };
+            let part = cx.part(TOGGLE.at(*at as u64), shape).flags(flags).held(held);
             let _ = match tip {
                 Some(tip) => part.tooltip(tip),
                 None => part,

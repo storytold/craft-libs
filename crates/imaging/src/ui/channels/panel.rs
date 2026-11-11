@@ -205,7 +205,7 @@ impl<'a, K: Clone + Eq + Hash + Debug + Send + Sync + 'static> ChannelsPanel<'a,
                     })
                     .show_items(ui, &order, &mut |_key, item| {
                         let at = item.at;
-                        channel_row(&row_cx, at).cells(item.cells()).state(item.row)
+                        channel_row(&row_cx, at).cells(item.cells()).state(item.row.clone())
                     });
 
                 let mut found = Vec::new();

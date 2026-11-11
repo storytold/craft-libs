@@ -185,7 +185,7 @@ fn show_tree(ui: &mut Ui, body: &Body<'_>, state: &mut ActionsPanelState, sessio
     }
     let shown: &ActionsPanelState = state;
     let out = widget.show_items(ui, &rows, &mut |key, item| {
-        let mut row = build_row(body, shown, key).cells(item.cells()).state(item.row).depth(rows.depth_at(item.at));
+        let mut row = build_row(body, shown, key).cells(item.cells()).state(item.row.clone()).depth(rows.depth_at(item.at));
         for cell in cells(body, key) {
             row = row.toggle(cell);
         }
