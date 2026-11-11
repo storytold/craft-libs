@@ -342,6 +342,36 @@ test('missing craftRuntimeHandleGpuBatch reports error, never a fabricated gpu_b
   assert.equal(p.posted[0].type, 'error', `a missing hook must never report success: ${JSON.stringify(p.posted)}`);
 });
 
+// PR 663: ProviderRegistry::dispatch_batch and craft_worker_host::GpuJobResult moved to a
+// per-job result, in input order, instead of one outcomes array for the whole batch.
+// gpu_batch_done's wire shape follows: `results`, each tagged { status: 'done', outcome } here
+// (this hook's own contract still answers a batch in one call, so every entry is 'done').
+test('gpu_batch_done wraps the hook outcomes as per-job results, in order', async () => {
+  const ctx = bootRouting({
+    gpuHook: async ({ jobs }) => jobs.map(() => ({ outputs: [], data: null })),
+  });
+  const p = makePort();
+  ctx.handleHostMessage(p.port, {
+    type: 'gpu_jobs',
+    batch_id: 9,
+    jobs: [
+      { provider_id: 'x', params: [], inputs: [], outputs: [] },
+      { provider_id: 'x', params: [], inputs: [], outputs: [] },
+    ],
+  });
+  await tick();
+  assert.equal(p.posted.length, 1);
+  const [msg] = p.posted;
+  assert.equal(msg.type, 'gpu_batch_done');
+  assert.equal(msg.results.length, 2);
+  // `msg.results` is a vm-realm array (built inside routing.js); rebuild the mapped array
+  // through the OUTER Array.from before comparing, same reasoning as the M1 fix above.
+  assert.deepEqual(
+    Array.from(msg.results, (r) => r.status),
+    ['done', 'done'],
+  );
+});
+
 test('a write that changes mid-flush is not dropped as confirmed by a stale success', async () => {
   let resolveFirstHook;
   const ctx = bootRouting({

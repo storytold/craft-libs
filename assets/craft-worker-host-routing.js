@@ -6,7 +6,9 @@
 // WASM/runtime hooks (assign before or after loading WASM in the worker global):
 //
 //   globalThis.craftRuntimeHandleGpuBatch = async ({ batch_id, jobs }) => {
-//     // Return GpuJobOutcome[] aligned with `jobs` (see craft_gpu::GpuJobOutcome).
+//     // Return GpuJobOutcome[] aligned with `jobs` (see craft_gpu::GpuJobOutcome). Each is
+//     // wrapped as a { status: 'done', outcome } entry in gpu_batch_done's `results`, in the
+//     // same order, mirroring craft_worker_host::GpuJobResult.
 //   };
 //
 //   globalThis.craftRuntimeFlushPending = async (data) => {
@@ -83,10 +85,15 @@ async function dispatchGpuJobs(port, data) {
     if (!Array.isArray(outcomes)) {
       throw new Error('craftRuntimeHandleGpuBatch must return an outcomes array');
     }
+    // Wire shape matches craft_worker_host::GpuJobResult: one tagged entry per job, in input
+    // order. This hook's own contract still answers the whole batch in one call (it has no way
+    // to report one job done and another failed), so every entry here is 'done'; a hook that
+    // throws fails the whole batch through the catch block below instead.
+    const results = outcomes.map((outcome) => ({ status: 'done', outcome }));
     port.postMessage({
       type: 'gpu_batch_done',
       batch_id: batchId,
-      outcomes,
+      results,
     });
   } catch (err) {
     cancelledBatches.delete(batchId);
