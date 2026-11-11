@@ -57,7 +57,7 @@
 //!   lossy value range anyway.
 
 use crate::huffman::{Bits, Huffman, diff};
-use crate::{Camera, Limits, MAX_SAMPLES, RawError, Result};
+use crate::{MAX_SAMPLES, RawError, Result};
 use craft_tiff::ByteOrder;
 
 /// A table code word whose symbol was never observed (see the module docs).

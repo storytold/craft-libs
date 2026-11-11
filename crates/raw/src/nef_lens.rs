@@ -7,7 +7,7 @@
 //! independently by matching the raw against the camera's own corrected JPEG; see docs/nikon-lens-corrections.md.
 //! No lens database or external decoder code.
 
-use crate::{Camera, Limits, Opcode, Rect};
+use crate::{Opcode, Rect};
 use craft_tiff::{ByteOrder, Ifd, ParseOptions, parse_ifd_at};
 
 const NEF_INFO: u16 = 0xc7d5;

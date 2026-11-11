@@ -3,7 +3,7 @@
 //! Sources: TIFF 6.0 (the raw image is a standard CFA SubIFD), Laurent Clévy's NEF structure notes (prose: IFD
 //! layout, SubIFDs, maker note header) and the ExifTool Nikon tag-name documentation (`0x000c` WB_RBLevels,
 //! `0x003d` BlackLevel, `0x0096` NEFLinearizationTable). The Huffman-compressed data (compression 34713) is decoded
-//! by [`crate::shared::nefc`], which documents its clean-room sources; "lossy after split" files are decoded when their strip follows the
+//! by [`crate::nefc`], which documents its clean-room sources; "lossy after split" files are decoded when their strip follows the
 //! rule documented there; files it can't decode are reported as [`RawError::Unsupported`] and their embedded previews still work. So are High Efficiency NEFs
 //! (HE / HE★, Z 8, Z 9, Z 6III, Z f): they keep compression 34713 but carry a wavelet codestream that starts with
 //! the JPEG XS markers SOC + CAP (ISO/IEC 21122-1, `FF10 FF50`) and have no `0x0096` table (storytold/lightcraft#193).
@@ -24,6 +24,18 @@ const WB_RB_LEVELS: u16 = 0x000c;
 const BLACK_LEVEL: u16 = 0x003d;
 const LINEARIZATION_TABLE: u16 = 0x0096;
 const CROP_AREA: u16 = 0x0045;
+/// Maker note NEFCompression (ExifTool's Nikon tag documentation): `0x0093`, or in newer bodies the `u16` at
+/// byte 10 of `0x0051`. 6 is packed 12-bit, 10 packed 14-bit, 13 and 14 High Efficiency and High Efficiency★.
+const NEF_COMPRESSION: u16 = 0x0093;
+const NEF_COMPRESSION_RECORD: u16 = 0x0051;
+
+fn nef_compression(mn: Option<&makernote::MakerNote>) -> Option<u64> {
+    let m = mn?;
+    m.ifd.u64(NEF_COMPRESSION).or_else(|| {
+        let v: [u8; 2] = m.ifd.bytes(NEF_COMPRESSION_RECORD)?.get(10..12)?.try_into().ok()?;
+        Some(u64::from(m.order.u16(v)))
+    })
+}
 /// JPEG XS start of codestream (SOC, `FF10`) followed by its mandatory capabilities marker (CAP, `FF50`).
 const JPEG_XS_START: [u8; 4] = [0xff, 0x10, 0xff, 0x50];
 /// Why a High Efficiency NEF shows its embedded preview: the UI shows the part before " (".
@@ -105,7 +117,8 @@ struct MeasuredBody {
 ///   (8, 6) in 6 files. Bodies whose crop holds only picture beyond the camera frame have no entry (no change).
 const MEASURED_BODIES: &[MeasuredBody] = &[
     MeasuredBody { model: "NIKON D4", size: (4992, 3292), bits: 14, crop: (8, 6, 4928, 3280), white: Some(15520.0) },
-    MeasuredBody { model: "NIKON D4", size: (4992, 3292), bits: 12, crop: (8, 6, 4928, 3280), white: None },
+    // the 12-bit samples are the 14-bit ones shifted right by two, and so is the level: 15520 >> 2
+    MeasuredBody { model: "NIKON D4", size: (4992, 3292), bits: 12, crop: (8, 6, 4928, 3280), white: Some(3880.0) },
     MeasuredBody { model: "NIKON D7100", size: (6036, 4020), bits: 14, crop: (18, 10, 6000, 4000), white: None },
     MeasuredBody { model: "NIKON D7100", size: (4812, 3212), bits: 14, crop: (6, 6, 4800, 3200), white: None },
     MeasuredBody { model: "NIKON D90", size: (4352, 2868), bits: 12, crop: (10, 10, 4288, 2848), white: Some(3830.0) },
@@ -235,7 +248,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     let mn =
         tiff.exif().and_then(|e| e.get(t::MAKER_NOTE)).and_then(|e| makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &make));
     if let Some(strip) = small_raw_strip(&info, bytes.len(), mn.as_ref()) {
-        return small_raw(bytes, &tiff, &info, strip, mode);
+        return small_raw(bytes, &tiff, &info, strip, mode, limits);
     }
     // the header probe reads only the rows the masked-column test needs
     let rows = match mode {
@@ -243,9 +256,9 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         Mode::Header => h.min(MASK_ROWS),
     };
     let data = if info.compression == t::compression::NIKON {
-        compressed(bytes, &info, mn.as_ref(), rows)?
+        compressed(bytes, &info, mn.as_ref(), rows, limits)?
     } else {
-        uncompressed(bytes, &info, tiff.order, mn.as_ref(), rows)?
+        uncompressed(bytes, &info, tiff.order, mn.as_ref(), rows, limits)?
     };
     let RawData::U16(ref samples) = data else { return Err(RawError::Unsupported("float NEF".into())) };
 
@@ -321,7 +334,14 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
 /// Uncompressed strips: 16-bit words or 12-bit packed, told apart by the strip size. Packed 12-bit data is an MSB-first
 /// byte stream, except in files with an NRW data block (Coolpix), where it is MSB-first inside little-endian 32-bit
 /// words (the rows are whole words). Reads the first `rows` rows (the strips that hold them) of the `info.height`.
-fn uncompressed(bytes: &[u8], info: &ImageInfo, order: ByteOrder, mn: Option<&makernote::MakerNote>, rows: usize) -> Result<RawData> {
+fn uncompressed(
+    bytes: &[u8],
+    info: &ImageInfo,
+    order: ByteOrder,
+    mn: Option<&makernote::MakerNote>,
+    rows: usize,
+    limits: &Limits,
+) -> Result<RawData> {
     let (w, h) = (info.width as usize, info.height as usize);
     let bits = info.bits() as u32;
     let row_samples = w * info.samples_per_pixel as usize;
@@ -365,7 +385,7 @@ enum PackedLayout {
     Be16,
 }
 
-fn packed_layout(w: usize, h: usize, bits: u32, strip: u64) -> Option<PackedLayout> {
+fn packed_layout(w: usize, h: usize, bits: u32, strip: u64, stated: bool) -> Option<PackedLayout> {
     if w == 0 || h == 0 || !matches!(bits, 12 | 14) {
         return None;
     }
@@ -379,7 +399,7 @@ fn packed_layout(w: usize, h: usize, bits: u32, strip: u64) -> Option<PackedLayo
     let padded = tight.checked_next_multiple_of(16)?;
     let lsb_ok = match bits {
         12 => stride == tight || stride == padded,
-        _ => stride == padded,
+        _ => stride == padded || stated && stride == tight,
     };
     if lsb_ok {
         return Some(PackedLayout::Lsb { stride });
@@ -456,23 +476,39 @@ fn unpack_packed(src: &[u8], w: usize, h: usize, bits: u32, layout: PackedLayout
     out
 }
 
-/// Nikon Huffman-compressed strip (see [`crate::shared::nefc`]); the decode table is maker note `0x0096`. Without a table the
+/// Nikon Huffman-compressed strip (see [`crate::nefc`]); the decode table is maker note `0x0096`. Without a table the
 /// strip may be packed uncompressed data (see [`PackedLayout`]).
-fn compressed(bytes: &[u8], info: &ImageInfo, mn: Option<&makernote::MakerNote>, rows: usize) -> Result<RawData> {
+fn compressed(bytes: &[u8], info: &ImageInfo, mn: Option<&makernote::MakerNote>, rows: usize, limits: &Limits) -> Result<RawData> {
     let starts_with = |magic: &[u8]| {
         let start = info.chunks(bytes.len() as u64).first().and_then(|c| usize::try_from(c.offset).ok());
         start.and_then(|o| bytes.get(o..o.checked_add(magic.len())?)) == Some(magic)
     };
-    if starts_with(&JPEG_XS_START) {
+    // the maker note's own compression mode decides first: Z bodies label packed data 34713 and may still carry
+    // a 0x0096 table
+    let mode = nef_compression(mn);
+    if starts_with(&JPEG_XS_START) || matches!(mode, Some(13 | 14)) {
         return Err(RawError::Unsupported(HIGH_EFFICIENCY.into()));
     }
+    if let Some(depth) = match mode {
+        Some(6) => Some(12),
+        Some(10) => Some(14),
+        _ => None,
+    } {
+        if info.bits() as u32 != depth {
+            return Err(RawError::Unsupported(format!("Nikon packed {depth}-bit NEF with {}-bit samples", info.bits())));
+        }
+        return packed(bytes, info, rows, true, limits);
+    }
     let Some(table) = mn.and_then(|m| Some((m.ifd.bytes(LINEARIZATION_TABLE)?, m.order))) else {
-        return packed(bytes, info, rows);
+        return packed(bytes, info, rows, false, limits);
     };
     if info.samples_per_pixel != 1 {
         return Err(RawError::Unsupported(format!("Nikon compressed NEF with {} samples per pixel", info.samples_per_pixel)));
     }
     let bits = info.bits() as u32;
+    if u64::from(info.width).saturating_mul(u64::from(info.height)) > limits.samples() as u64 {
+        return Err(RawError::Limit("image too large"));
+    }
     let table = nefc::parse_table(table.0, table.1, bits)?;
     // one strip in every sample; several would be contiguous parts of the same bit stream
     let chunks = info.chunks(bytes.len() as u64);
@@ -483,14 +519,15 @@ fn compressed(bytes: &[u8], info: &ImageInfo, mn: Option<&makernote::MakerNote>,
     Ok(RawData::U16(nefc::decode_rows(src, info.width as usize, info.height as usize, rows, bits, &table)?))
 }
 
-/// A table-less "compressed" strip: packed samples when the strip size matches a measured layout exactly.
-fn packed(bytes: &[u8], info: &ImageInfo, rows: usize) -> Result<RawData> {
+/// A "compressed" strip of packed samples: the strip size must match a measured layout exactly. `stated` is set
+/// when the maker note names the packed mode, which also allows 14-bit rows without padding.
+fn packed(bytes: &[u8], info: &ImageInfo, rows: usize, stated: bool, limits: &Limits) -> Result<RawData> {
     let (w, h) = (info.width as usize, info.height as usize);
     let bits = info.bits() as u32;
     let chunks = info.chunks(bytes.len() as u64);
     let layout = match chunks.as_slice() {
         [c] if info.samples_per_pixel == 1 => {
-            packed_layout(w, h, bits, c.len).or_else(|| d100_layout(w, h, bits, c.len)).or_else(|| be16_layout(w, h, bits, c.len))
+            packed_layout(w, h, bits, c.len, stated).or_else(|| d100_layout(w, h, bits, c.len)).or_else(|| be16_layout(w, h, bits, c.len))
         }
         _ => None,
     };
@@ -553,7 +590,7 @@ fn small_raw_strip(info: &ImageInfo, file_len: usize, mn: Option<&makernote::Mak
 /// Decode one row of a small raw (`3 * width` bytes) into `3 * width` linear RGB values on the 14-bit scale.
 /// Short input reads as zero bytes.
 fn small_raw_row(src: &[u8], w: usize, out: &mut [u16]) {
-    let Some(n) = w.checked_mul(3).filter(|n| *n <= out.len() && *n <= limits.samples()) else { return };
+    let Some(n) = w.checked_mul(3).filter(|n| *n <= out.len()) else { return };
     if w == 0 || !w.is_multiple_of(2) {
         return;
     }
@@ -581,7 +618,7 @@ fn small_raw_row(src: &[u8], w: usize, out: &mut [u16]) {
     }
 }
 
-fn small_raw(bytes: &[u8], tiff: &Tiff, info: &ImageInfo, strip: craft_tiff::image::Chunk, mode: Mode) -> Result<RawImage> {
+fn small_raw(bytes: &[u8], tiff: &Tiff, info: &ImageInfo, strip: craft_tiff::image::Chunk, mode: Mode, limits: &Limits) -> Result<RawImage> {
     use rayon::prelude::*;
     let (w, h) = (info.width as usize, info.height as usize);
     let stride = w.checked_mul(3).ok_or(RawError::Limit("image too large"))?;
@@ -719,9 +756,11 @@ mod tests {
         let [crate::Opcode::WarpRectilinear { planes, center }] = full.opcodes.list3.as_slice() else { panic!("{:?}", full.opcodes.list3) };
         assert!((planes[0][0] - 1.0 / (1.0 - 0.025043)).abs() < 1e-5, "{planes:?}");
         assert!((center[0] * 47.0 - (23.5 + 1.5)).abs() < 0.01 && (center[1] * 31.0 - (15.5 - 0.75)).abs() < 0.01, "{center:?}");
-        let dng = crate::write_dng(&full, &Default::default()).unwrap();
-        assert_eq!(crate::decode(&dng).unwrap().opcodes.list3, full.opcodes.list3);
-        full.develop(crate::Method::Bilinear).unwrap();
+        #[cfg(feature = "dng")]
+        {
+            let dng = crate::write_dng(&full, &Default::default()).unwrap();
+            assert_eq!(crate::decode(&dng).unwrap().opcodes.list3, full.opcodes.list3);
+        }
         assert!(decode(&file("NIKON D850"), Mode::Full, &Limits::default()).unwrap().opcodes.list3.is_empty());
     }
 
@@ -794,8 +833,7 @@ mod tests {
             assert_eq!(raw.crop, expected);
             assert_eq!(raw.active_area, Rect::new(0, 0, 32, 24));
             assert_eq!((raw.crop.width, raw.crop.height), (expected.width, expected.height));
-            let developed = raw.develop(crate::Method::Bilinear).unwrap();
-            assert_eq!((developed.width, developed.height), (expected.width, expected.height));
+            assert_eq!(raw.info().developed_size(), (expected.width, expected.height));
         }
     }
 
@@ -815,12 +853,11 @@ mod tests {
         assert_eq!(d4.crop, Rect::new(8, 6, 4928, 3280));
         assert_eq!(d4.white, vec![15520.0]);
         assert_eq!((d4.crop.width, d4.crop.height), (4928, 3280));
-        let developed = d4.develop(crate::Method::Bilinear).unwrap();
-        assert_eq!((developed.width, developed.height), (4928, 3280));
-        // the 12-bit mode reads out the same area but keeps the white level from its data
+        assert_eq!(d4.info().developed_size(), (4928, 3280));
+        // the 12-bit mode reads out the same area, and its level is the 14-bit one shifted like its samples
         let d4_12 = decode_as("NIKON D4", 12);
         assert_eq!(d4_12.crop, Rect::new(8, 6, 4928, 3280));
-        assert_ne!(d4_12.white, vec![15520.0]);
+        assert_eq!(d4_12.white, vec![3880.0]);
         let other = decode_as("NIKON D5", 14);
         assert_eq!(other.crop, Rect::new(0, 0, w, h));
         assert_ne!(other.white, vec![15520.0]);
@@ -839,8 +876,7 @@ mod tests {
             let raw = decode_as(model, bits);
             assert_eq!(raw.crop, Rect::new(8, 8, 4928, 3264), "{model} {bits}-bit");
             assert_eq!((raw.crop.width, raw.crop.height), (4928, 3264));
-            let developed = raw.develop(crate::Method::Bilinear).unwrap();
-            assert_eq!((developed.width, developed.height), (4928, 3264));
+            assert_eq!(raw.info().developed_size(), (4928, 3264));
         }
         // another model, or the D5100's unmeasured 12-bit mode, keeps the whole data
         for (model, bits) in [("NIKON D7100", 14), ("NIKON D5100", 12), ("NIKON D7000 ", 16)] {
@@ -907,8 +943,7 @@ mod tests {
             assert_eq!(d7100.crop, crop);
             assert_eq!((d7100.crop.width, d7100.crop.height), (crop.width, crop.height));
             assert_ne!(d7100.white, vec![15520.0]);
-            let developed = d7100.develop(crate::Method::Bilinear).unwrap();
-            assert_eq!((developed.width, developed.height), (crop.width, crop.height));
+            assert_eq!(d7100.info().developed_size(), (crop.width, crop.height));
             assert_eq!(decode_as("NIKON D7200", size).crop, Rect::new(0, 0, size.0, size.1));
         }
     }
@@ -1146,13 +1181,63 @@ mod tests {
         let s = strip(&d14, w, 12, |r| pack_lsb(r, 14));
         assert_eq!(s.len(), 10624 * h);
         assert_eq!(decoded(s, 14, w as u32, h as u32).unwrap(), d14);
-        assert_eq!(packed_layout(6064, 4040, 14, 42_920_960), Some(PackedLayout::Lsb { stride: 10624 }));
+        assert_eq!(packed_layout(6064, 4040, 14, 42_920_960, false), Some(PackedLayout::Lsb { stride: 10624 }));
+    }
+
+    /// The maker note's compression mode routes the strip: 6 and 10 are packed samples even when a `0x0096`
+    /// table is present (which the Huffman reader would otherwise take), in the old tag and in the `0x0051`
+    /// record, in either byte order; a depth that contradicts the mode, and High Efficiency (13, 14), are refused.
+    #[test]
+    fn maker_note_compression_mode_routes_packed_and_high_efficiency() {
+        let (w, h) = (40usize, 6usize);
+        let note = |order: ByteOrder, modern: bool, mode: u16| {
+            let mut n = IfdBuilder::new();
+            n.set(LINEARIZATION_TABLE, Value::Undefined(vec![0x44, 0x20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
+            if modern {
+                let mut record = b"01000400\0\0".to_vec();
+                record.extend(if order == ByteOrder::Big { mode.to_be_bytes() } else { mode.to_le_bytes() });
+                n.set(NEF_COMPRESSION_RECORD, Value::Undefined(record));
+            } else {
+                n.set(NEF_COMPRESSION, Value::Short(vec![mode]));
+            }
+            n
+        };
+        let file = |order, modern, mode, bits: u16, image: Vec<u8>| {
+            nef_in(order, 34713, bits, vec![image], w as u32, h as u32, h as u32, Some(note(order, modern, mode)))
+        };
+        for (bits, mode) in [(12u32, 6u16), (14, 10)] {
+            let data = samples(w * h, bits);
+            // rows padded to 16 bytes, and tight rows (14-bit tight rows only when the mode is stated)
+            for pad in [(16 - (w * bits as usize / 8) % 16) % 16, 0] {
+                let image = strip(&data, w, pad, |r| pack_lsb(r, bits));
+                for order in [ByteOrder::Big, ByteOrder::Little] {
+                    for modern in [false, true] {
+                        let RawData::U16(got) = crate::decode(&file(order, modern, mode, bits as u16, image.clone())).unwrap().data else {
+                            panic!("integer samples")
+                        };
+                        assert_eq!(got, data, "{bits}-bit, pad {pad}, {order:?}, modern {modern}");
+                    }
+                }
+            }
+        }
+        let d14 = samples(w * h, 14);
+        let image = strip(&d14, w, 10, |r| pack_lsb(r, 14));
+        // tight 14-bit rows without a stated mode stay refused
+        assert!(decoded(strip(&d14, w, 0, |r| pack_lsb(r, 14)), 14, w as u32, h as u32).is_err());
+        // the mode says 12-bit packed, the IFD 14 bits
+        assert!(matches!(crate::decode(&file(ByteOrder::Big, false, 6, 14, image.clone())), Err(RawError::Unsupported(_))));
+        for mode in [13, 14] {
+            for modern in [false, true] {
+                let err = crate::decode(&file(ByteOrder::Big, modern, mode, 14, image.clone())).unwrap_err();
+                assert!(matches!(&err, RawError::Unsupported(m) if m == HIGH_EFFICIENCY), "{err:?}");
+            }
+        }
     }
 
     #[test]
     fn packed_layout_refuses_overflowing_dimensions() {
         for bits in [12, 14] {
-            assert!(packed_layout(usize::MAX - 3, 1, bits, u64::MAX).is_none());
+            assert!(packed_layout(usize::MAX - 3, 1, bits, u64::MAX, false).is_none());
         }
         assert!(d100_layout(usize::MAX, 1, 12, u64::MAX).is_none());
     }
@@ -1167,7 +1252,7 @@ mod tests {
             let bytes = nef(34713, 12, vec![image], w as u32, h as u32, h as u32);
             let tiff = Tiff::parse(&bytes).unwrap();
             let info = raw_ifd(&tiff).unwrap().image().unwrap();
-            let RawData::U16(top) = packed(&bytes, &info, MASK_ROWS).unwrap() else { panic!("integer samples") };
+            let RawData::U16(top) = packed(&bytes, &info, MASK_ROWS, false, &Limits::default()).unwrap() else { panic!("integer samples") };
             assert_eq!(top, data[..w * MASK_ROWS]);
             let header = decode(&bytes, Mode::Header, &Limits::default()).unwrap();
             let full = decode(&bytes, Mode::Full, &Limits::default()).unwrap();
@@ -1309,7 +1394,7 @@ mod tests {
         let strip = info.chunks(bytes.len() as u64)[0];
         info.width = u32::MAX - 1;
         info.height = u32::MAX;
-        assert!(matches!(small_raw(&bytes, &tiff, &info, strip, Mode::Header), Err(RawError::Limit(_))));
+        assert!(matches!(small_raw(&bytes, &tiff, &info, strip, Mode::Header, &Limits::default()), Err(RawError::Limit(_))));
         let mut out = [0; 12];
         small_raw_row(&[], usize::MAX, &mut out);
         small_raw_row(&[], 3, &mut out);
@@ -1358,13 +1443,16 @@ mod tests {
         // coincide are below the real-world widths; the other groups are tried first)
         for w in (2..=400usize).step_by(2) {
             let strip = 2 * w as u64 * 6;
-            let other = packed_layout(w, 6, 12, strip).or_else(|| d100_layout(w, 6, 12, strip));
+            let other = packed_layout(w, 6, 12, strip, false).or_else(|| d100_layout(w, 6, 12, strip));
             if other.is_some() {
-                assert_eq!(packed_layout(w, 6, 12, strip).or_else(|| d100_layout(w, 6, 12, strip)).or_else(|| be16_layout(w, 6, 12, strip)), other);
+                assert_eq!(
+                    packed_layout(w, 6, 12, strip, false).or_else(|| d100_layout(w, 6, 12, strip)).or_else(|| be16_layout(w, 6, 12, strip)),
+                    other
+                );
             }
         }
         assert_eq!(be16_layout(4032, 3024, 12, 24385536), Some(PackedLayout::Be16));
-        assert!(packed_layout(4032, 3024, 12, 24385536).is_none() && d100_layout(4032, 3024, 12, 24385536).is_none());
+        assert!(packed_layout(4032, 3024, 12, 24385536, false).is_none() && d100_layout(4032, 3024, 12, 24385536).is_none());
         assert!(be16_layout(4032, 3024, 14, 24385536).is_none());
         assert!(be16_layout(usize::MAX, usize::MAX, 12, u64::MAX).is_none());
     }
