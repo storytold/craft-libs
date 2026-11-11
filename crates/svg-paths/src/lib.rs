@@ -126,6 +126,10 @@ pub const MAX_SVG_WARNINGS: usize = 64;
 const MAX_SVG_CLIPS: usize = 16;
 /// Most clip-path pieces one import keeps, over all its clip regions.
 const MAX_SVG_CLIP_PIECES: usize = 100_000;
+/// Path segments kept across the whole document: `<use>` can repeat one large path many times.
+const MAX_SVG_SEGMENTS: usize = 4_000_000;
+/// Selector tests across the whole document (rules × elements styled).
+const MAX_CSS_SELECTOR_CHECKS: usize = 5_000_000;
 
 /// Reads the drawable geometry of an SVG document, in document order.
 ///
@@ -181,12 +185,15 @@ pub fn import<K: Kind>(svg: &str, name: &str) -> Result<Imported<K>, Error> {
         visited: 0,
         path_name,
         id_index,
+        selectors: css_rules.iter().map(|rule| rule.selectors.len()).sum(),
         css_rules,
         reference_stack: Vec::new(),
         instance_count: 0,
         shapes: Vec::new(),
         clips: Vec::new(),
         clip_pieces: 0,
+        segments: 0,
+        selector_checks: 0,
         warnings,
         dropped_warnings: 0,
     };
@@ -212,8 +219,31 @@ struct ImportContext<'a, 'input, K> {
     shapes: Vec<Shape<K>>,
     clips: Vec<Clip>,
     clip_pieces: usize,
+    segments: usize,
+    selectors: usize,
+    selector_checks: usize,
     warnings: Vec<String>,
     dropped_warnings: usize,
+}
+
+impl<K> ImportContext<'_, '_, K> {
+    /// Counts a path about to be copied into the result against the document-wide limit.
+    fn charge_segments(&mut self, path: &BezPath) -> Result<(), Error> {
+        self.segments = self.segments.saturating_add(path.elements().len());
+        if self.segments > MAX_SVG_SEGMENTS {
+            return Err(svg_error(self.path_name, "SVG exceeds the 4,000,000-segment import limit"));
+        }
+        Ok(())
+    }
+
+    /// Counts one element's pass over every stylesheet selector.
+    fn charge_cascade(&mut self) -> Result<(), Error> {
+        self.selector_checks = self.selector_checks.saturating_add(self.selectors);
+        if self.selector_checks > MAX_CSS_SELECTOR_CHECKS {
+            return Err(svg_error(self.path_name, "SVG stylesheet is too large for this many elements"));
+        }
+        Ok(())
+    }
 }
 
 /// Records a warning once, up to a fixed number; the rest are only counted in `dropped`.
@@ -250,8 +280,12 @@ fn import_node<'a, 'input, K: Kind>(
     let tag = node.tag_name().name();
     // Definitions are not drawable content unless instantiated via `<use>`;
     // references resolve directly into supported targets inside these containers.
-    if matches!(tag, "defs" | "symbol" | "clipPath" | "mask" | "pattern") {
+    // A marker's content is drawn only at path vertices, never where it is declared.
+    if matches!(tag, "defs" | "symbol" | "clipPath" | "mask" | "pattern" | "marker") {
         return Ok(());
+    }
+    if tag == "svg" && depth > 0 && ["x", "y", "width", "height", "viewBox", "preserveAspectRatio"].iter().any(|a| node.has_attribute(*a)) {
+        return Err(svg_error(context.path_name, "a nested <svg> with its own viewport is not supported yet"));
     }
     let mut state = inherited.clone();
     // SVG presentation attributes and inline declarations inherit. `display`
@@ -263,6 +297,7 @@ fn import_node<'a, 'input, K: Kind>(
         let local = parse_transform(transform).map_err(|e| svg_error(context.path_name, &format!("<{}> transform: {e}", tag)))?;
         state.transform = compose(inherited.transform, local);
     }
+    context.charge_cascade()?;
     let style = computed_style(node, &state.inherited_style, &context.css_rules, K::PROPERTIES);
     state.inherited_style = inheritable(&style);
     if let Some(kind) = K::of(&style, node.attribute("class").unwrap_or("")) {
@@ -359,6 +394,7 @@ fn import_node<'a, 'input, K: Kind>(
         && !state.visibility_hidden
         && let Some(path) = geometry_for(node, context.path_name)?
     {
+        context.charge_segments(&path)?;
         let transformed = transform_path(&path, state.transform);
         validate_import_path(&transformed, context.path_name)?;
         context.shapes.push(Shape {
@@ -395,6 +431,7 @@ fn import_symbol<'a, 'input, K: Kind>(
         let local = parse_transform(transform).map_err(|e| svg_error(context.path_name, &format!("<symbol> transform: {e}")))?;
         state.transform = compose(state.transform, local);
     }
+    context.charge_cascade()?;
     let style = computed_style(symbol, &state.inherited_style, &context.css_rules, K::PROPERTIES);
     if style.get("display").is_some_and(|value| value == "none") {
         return Ok(());
@@ -565,6 +602,7 @@ fn clip_region<K>(
             let local = parse_transform(raw).map_err(|e| svg_error(context.path_name, &format!("<{tag}> transform: {e}")))?;
             child_space = compose(child_space, local);
         }
+        context.charge_segments(&path)?;
         let path = transform_path(&path, child_space);
         validate_import_path(&path, context.path_name)?;
         let evenodd = child.attribute("clip-rule").or(target.attribute("clip-rule"));
@@ -602,16 +640,10 @@ fn geometry_for(node: roxmltree::Node<'_, '_>, path_name: &str) -> Result<Option
             if w < 0.0 || h < 0.0 {
                 return Err(svg_error(path_name, "<rect> width/height cannot be negative"));
             }
-            let mut rx = number("rx", number("ry", 0.0)?)?;
-            let mut ry = number("ry", rx)?;
+            let rx = number("rx", number("ry", 0.0)?)?;
+            let ry = number("ry", rx)?;
             if rx < 0.0 || ry < 0.0 {
                 return Err(svg_error(path_name, "<rect> corner radii cannot be negative"));
-            }
-            if rx == 0.0 {
-                rx = ry;
-            }
-            if ry == 0.0 {
-                ry = rx;
             }
             rounded_rect(x, y, w, h, rx.min(w / 2.0), ry.min(h / 2.0))
         }
@@ -1926,5 +1958,27 @@ mod tests {
         push_warning(&mut few, &mut dropped, "once".into());
         push_warning(&mut few, &mut dropped, "once".into());
         assert_eq!((few.len(), dropped), (1, 0));
+    }
+
+    #[test]
+    fn review_fixes_markers_nested_viewports_square_corners_and_document_wide_limits() {
+        let message = |svg: &str| import::<Tag>(svg, "test.svg").unwrap_err().0;
+        // A marker declared outside <defs> is a template, not art.
+        let got = read(r#"<svg><marker id="m"><path d="M0 0L1 1"/></marker><path d="M0 0L5 5"/></svg>"#);
+        assert_eq!(got.shapes.len(), 1);
+        // A nested viewport would move and scale its content: refused, not misplaced.
+        assert!(message(r#"<svg><svg x="10" viewBox="0 0 1 1"><path d="M0 0L1 1"/></svg></svg>"#).contains("nested <svg>"));
+        assert_eq!(read(r#"<svg><svg><path d="M0 0L1 1"/></svg></svg>"#).shapes.len(), 1);
+        // rx="0" is square corners, whatever ry says: four lines, no curves.
+        let square = read(r#"<svg><rect width="20" height="10" rx="0" ry="5"/></svg>"#);
+        assert!(!square.shapes[0].path.elements().iter().any(|e| matches!(e, kurbo::PathEl::CurveTo(..))));
+        // One 1,000-segment path instanced 5,000 times is 5,000,000 segments.
+        let d: String = (0..1000).map(|i| format!("L{i} 1")).collect();
+        let uses = r##"<use href="#p"/>"##.repeat(5000);
+        assert!(message(&format!(r#"<svg><defs><path id="p" d="M0 0{d}"/></defs>{uses}</svg>"#)).contains("segment import limit"));
+        // 5,000 rules against 5,000 elements is 25,000,000 selector tests, past the 5,000,000 allowed.
+        let rules: String = (0..5000).map(|i| format!(".c{i}{{fill:red}}")).collect();
+        let paths = r#"<path d="M0 0L1 1"/>"#.repeat(5000);
+        assert!(message(&format!("<svg><style>{rules}</style>{paths}</svg>")).contains("stylesheet is too large"));
     }
 }
