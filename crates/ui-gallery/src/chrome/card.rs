@@ -137,7 +137,10 @@ impl Card<'_> {
         // A story on the card's own surface sits inside the card's padding; any other surface runs edge to edge under the
         // header band.
         let pad = if self.surface == Surface::Panel { Pad::Regular } else { Pad::None };
+        // Its id comes from its key, not from its place: a change of the column count regroups the cards, and each
+        // keeps its state and its stories' ids.
         let mut panel = Panel::new(self.title.to_owned())
+            .id(craft_ui::testing::memory::global("gallery.card", &self.key))
             .sizing(Sizing::Fill)
             .command_scope(CardCommands::SCOPE)
             .selected(self.selected)

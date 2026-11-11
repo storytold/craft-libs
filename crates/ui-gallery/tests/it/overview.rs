@@ -69,6 +69,51 @@ fn a_settled_overview_pass_runs_no_shell_per_story() {
     assert_eq!(all, one, "the shell regions grow with the stories in view: {one} with the Slider cards, {all} with the level");
 }
 
+/// The `Grid` runs and the cards run (their `Open` buttons) of a settled Overview pass in a view as tall as `height`.
+fn grid_runs(level: &str, filter: &str, height: f32) -> (u32, usize) {
+    let mut gallery = gallery_filtered(level, filter);
+    let mut fixture = Fixture::new(move |ui| gallery.ui(ui));
+    fixture.room(Vec2::new(1400.0, height)).settle().idle(1);
+    let grids = last_pass_runs(fixture.ctx()).iter().filter(|(ty, _)| ty.ends_with("::Grid")).map(|(_, runs)| runs).sum();
+    let opens = fixture.by_role(Role::BUTTON).into_iter().filter(|button| fixture.tree().name_of(button.node) == Some("Open")).count();
+    (grids, opens)
+}
+
+/// The cards of `level` that `filter` lists, in the Overview's order.
+fn listed(level: &str, filter: &str) -> Vec<String> {
+    let catalog = Catalog::linked();
+    by_level(&catalog, filter)
+        .into_iter()
+        .find(|(at, _)| at.title() == level)
+        .map_or_else(Vec::new, |(_, cards)| cards.into_iter().map(|component| component.name.clone()).collect())
+}
+
+/// A row of the Overview out of view does not run: a settled pass of a short view runs as many `Grid`s for the whole
+/// Controls level as for a filter that lists the same cards in view and fewer rows after them.
+#[trial]
+fn a_settled_overview_pass_runs_no_row_out_of_view() {
+    const HEIGHT: f32 = 220.0;
+    let level = listed("Controls", "");
+    let (all, in_view) = grid_runs("Controls", "", HEIGHT);
+    assert!((1..level.len()).contains(&in_view), "the view shows some of the level's {} cards, not {in_view}", level.len());
+    // The filter: the part of the first card's name that every card in view matches too, and that lists the fewest
+    // cards. The level is in name order, so the filter lists the cards in view first.
+    let first = level[0].to_lowercase();
+    let filter = (0..first.len())
+        .flat_map(|start| (start + 2..=first.len()).map(move |end| (start, end)))
+        .filter_map(|(start, end)| first.get(start..end))
+        .map(|part| (part, listed("Controls", part)))
+        .filter(|(_, cards)| cards.len() >= in_view && cards[..in_view] == level[..in_view])
+        .min_by_key(|(_, cards)| cards.len())
+        .map(|(part, _)| part.to_owned())
+        .unwrap_or_else(|| panic!("a part of {first:?} lists the {in_view} cards in view first"));
+    let fewer = listed("Controls", &filter).len();
+    assert!(fewer < level.len(), "the filter {filter:?} lists fewer cards than the level: {fewer} of {}", level.len());
+    let (some, some_in_view) = grid_runs("Controls", &filter, HEIGHT);
+    assert_eq!(in_view, some_in_view, "the level and the filter {filter:?} run the same cards");
+    assert_eq!(all, some, "the Grid runs grow with the rows out of view: {some} with {fewer} cards, {all} with {}", level.len());
+}
+
 /// A card in form rows shows each story's value text beside it, as the story's run found it: a settled frame of the
 /// Slider card, whose bodies take their kept measurements in place of running the stories, runs one pass.
 #[trial]

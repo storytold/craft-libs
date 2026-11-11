@@ -22,9 +22,9 @@ use egui::Ui;
 /// story drawn in less is no longer what the apps show.
 const CARD_MIN_WIDTH: f32 = 290.0;
 
-/// A card's height before it ran, for the cards out of view (`Lazy`'s estimate): its header band, and a story row
-/// as tall as a story of one control under its caption. Cards in view run, so the guess only places the cards past
-/// them until those scroll in.
+/// A card's height before it ran, for the rows out of view (`Lazy`'s estimate is the tallest of the row's): its header
+/// band, and a story row as tall as a story of one control under its caption. Rows in view run, so the guess only
+/// places the rows past them until those scroll in.
 const HEADER_GUESS: f32 = 48.0;
 const STORY_ROW_GUESS: f32 = 120.0;
 
@@ -163,20 +163,21 @@ pub(super) fn grid(
     Stack::new().fill().scroll(Scroll::vertical()).gap(Gap::CardRow).id_salt(scroll_id).show(ui, |ui, _| {
         reported.clear();
         for (row, chunk) in cards.chunks(columns).enumerate() {
-            Grid::new(if columns == 1 { ONE } else { TWO }).gap(Gap::CardColumn).fill_width().show(ui, |ui, _| {
-                for (at, spec) in chunk.iter().enumerate() {
-                    // Keyed by the card alone: a change of the column count regroups the rows, and the cards out of
-                    // view keep their extents.
-                    let lazy = Lazy::new((generation, spec.key.as_str()), spec.estimate()).reveal(reveal == Some(spec.type_name));
-                    lazy.show(ui, |ui| {
+            // A row out of view does not run. Keyed by its cards: a change of the column count regroups the rows into
+            // new ones, which take their estimate until they run.
+            let keys: Vec<&str> = chunk.iter().map(|spec| spec.key.as_str()).collect();
+            let estimate = chunk.iter().map(Spec::estimate).fold(0.0, f32::max);
+            let revealed = chunk.iter().any(|spec| reveal == Some(spec.type_name));
+            Lazy::new((generation, columns, keys), estimate).reveal(revealed).show(ui, |ui| {
+                Grid::new(if columns == 1 { ONE } else { TWO }).gap(Gap::CardColumn).fill_width().show(ui, |ui, _| {
+                    for (at, spec) in chunk.iter().enumerate() {
                         let stories = spec.card_stories();
-                        // Each card is its own id scope: a story's `id_salt` and auto ids must not meet another card's.
                         let mut card = spec.card(&stories, format!("{}-{generation}", spec.key), room);
                         card.inspect = p.inspect.of(tab, spec.selected);
                         let events = card.show(ui, p.cells);
                         reported.push(Reported { spec: row * columns + at, events });
-                    });
-                }
+                    }
+                });
             });
         }
     });
