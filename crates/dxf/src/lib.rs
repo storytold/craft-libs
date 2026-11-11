@@ -542,8 +542,18 @@ fn parse_binary_pass(b: &[u8], max_tags: usize, text: &mut codepage::BinaryText)
 
 /// Format a real the way DXF writers usually do (shortest round-trip, with a decimal point).
 pub fn format_real(v: f64) -> String {
+    let mut out = Vec::new();
+    push_real(&mut out, v);
+    // What `push_real` writes is ASCII.
+    String::from_utf8(out).unwrap_or_default()
+}
+
+/// [`format_real`] appended to `out`, without a string of its own (a large drawing writes
+/// millions of reals).
+fn push_real(out: &mut Vec<u8>, v: f64) {
     if !v.is_finite() {
-        return "0.0".into();
+        out.extend_from_slice(b"0.0");
+        return;
     }
     // Very large and very small values in exponent form, as AutoCAD writes them (`1.0E+20`):
     // plain digits would run to hundreds of characters.
@@ -552,11 +562,36 @@ pub fn format_real(v: f64) -> String {
         let e = format!("{v:E}");
         let (m, x) = e.split_once('E').unwrap_or((&e, "0"));
         let x: i32 = x.parse().unwrap_or(0);
-        let m = if m.contains('.') { m.to_string() } else { format!("{m}.0") };
-        return format!("{m}E{}{:02}", if x < 0 { '-' } else { '+' }, x.abs());
+        let point = if m.contains('.') { "" } else { ".0" };
+        let _ = write!(out, "{m}{point}E{}{:02}", if x < 0 { '-' } else { '+' }, x.abs());
+        return;
     }
-    let s = format!("{v}");
-    if s.contains('.') || s.contains('e') || s.contains("inf") || s.contains("NaN") { s } else { format!("{s}.0") }
+    let start = out.len();
+    let _ = write!(out, "{v}");
+    // A finite real in this range prints as an optional sign, digits and an optional point.
+    if !out.get(start..).is_some_and(|s| s.contains(&b'.')) {
+        out.extend_from_slice(b".0");
+    }
+}
+
+/// A group code right-aligned to three characters and its line end, as `write!("{:>3}\r\n")`
+/// writes it, without the formatting machinery for the codes DXF has (0 to 9999).
+fn push_code(out: &mut Vec<u8>, code: i32) {
+    match u16::try_from(code) {
+        Ok(c) if c < 10_000 => {
+            let digits = [c / 1000, c / 100 % 10, c / 10 % 10, c % 10].map(|d| b'0' + u8::try_from(d % 10).unwrap_or(0));
+            // The significant digits (at least one), padded to three.
+            let first = digits.iter().position(|&d| d != b'0').unwrap_or(3);
+            for _ in 1..first {
+                out.push(b' ');
+            }
+            out.extend_from_slice(digits.get(first..).unwrap_or_default());
+            out.extend_from_slice(b"\r\n");
+        }
+        _ => {
+            let _ = write!(out, "{code:>3}\r\n");
+        }
+    }
 }
 
 /// Most characters one string group holds: longer text is split over several groups (MTEXT
@@ -636,12 +671,23 @@ enum Strings {
 fn ascii(tags: &[Tag], strings: Strings) -> Vec<u8> {
     let mut out = Vec::with_capacity(tags.len() * 16);
     for t in tags {
-        let _ = write!(out, "{:>3}\r\n", t.code);
+        push_code(&mut out, t.code);
         match &t.value {
+            // Most text has no line breaks or backslashes and is ASCII (or goes out as UTF-8):
+            // copied as it is. A code page may write an ASCII character another way, so text
+            // for one takes the long path.
+            Value::Str(s)
+                if !s.contains(['\r', '\n', '\\'])
+                    && (matches!(strings, Strings::Utf8) || (matches!(strings, Strings::Escaped(None)) && s.is_ascii())) =>
+            {
+                out.extend_from_slice(s.as_bytes());
+            }
             Value::Str(s) => push_string(s, strings, &mut out),
-            Value::Real(r) => out.extend_from_slice(format_real(*r).as_bytes()),
-            Value::Int(i) => out.extend_from_slice(i.to_string().as_bytes()),
-            Value::Bool(b) => out.extend_from_slice(i64::from(*b).to_string().as_bytes()),
+            Value::Real(r) => push_real(&mut out, *r),
+            Value::Int(i) => {
+                let _ = write!(out, "{i}");
+            }
+            Value::Bool(b) => out.push(if *b { b'1' } else { b'0' }),
             Value::Hex(h) => {
                 // The DXF Reference limits a binary chunk line to 254 hex digits (127 bytes);
                 // longer data continues in further groups of the same code. Only hex digits are
@@ -885,6 +931,81 @@ pub fn record_slices(tags: &[Tag]) -> Vec<(String, &[Tag])> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The writer's own code and real formatting gives the text `format!` gave.
+    #[test]
+    fn fast_code_and_real_formatting_match_format() {
+        for code in [-1_000_000, -10, -1, 0, 1, 9, 10, 42, 99, 100, 330, 999, 1000, 1071, 9999, 10_000, 65_535, 1_000_000] {
+            let mut s = Vec::new();
+            push_code(&mut s, code);
+            assert_eq!(String::from_utf8(s).unwrap(), format!("{code:>3}\r\n"), "{code}");
+        }
+        let old = |v: f64| {
+            if !v.is_finite() {
+                return "0.0".to_string();
+            }
+            let a = v.abs();
+            if a != 0.0 && !(1e-10..1e16).contains(&a) {
+                let e = format!("{v:E}");
+                let (m, x) = e.split_once('E').unwrap_or((&e, "0"));
+                let x: i32 = x.parse().unwrap_or(0);
+                let m = if m.contains('.') { m.to_string() } else { format!("{m}.0") };
+                return format!("{m}E{}{:02}", if x < 0 { '-' } else { '+' }, x.abs());
+            }
+            let s = format!("{v}");
+            if s.contains('.') { s } else { format!("{s}.0") }
+        };
+        for v in [
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            0.1,
+            1.5e-7,
+            123456789.0,
+            1e15,
+            1e16,
+            1e21,
+            1e300,
+            -1e-300,
+            1e-10,
+            9e-11,
+            f64::MAX,
+            f64::MIN_POSITIVE,
+            f64::NAN,
+            f64::INFINITY,
+        ] {
+            assert_eq!(format_real(v), old(v), "{v}");
+        }
+        let tags = [
+            Tag::f(10, 2.0),
+            Tag::i(70, -3),
+            Tag::new(290, Value::Bool(true)),
+            Tag::s(1, "a\r\nb"),
+            Tag::s(1, "é"),
+            Tag::s(1, "plain"),
+            Tag::s(1, "a\\U+0041"),
+        ];
+        assert_eq!(
+            write_ascii_as(&tags, true),
+            " 10\r\n2.0\r\n 70\r\n-3\r\n290\r\n1\r\n  1\r\na  b\r\n  1\r\né\r\n  1\r\nplain\r\n  1\r\na\\U+005CU+0041\r\n"
+        );
+        assert_eq!(write_ascii_as(&tags, false).lines().nth(9), Some("\\U+00E9"));
+        // A code page that writes an ASCII character another way still does.
+        let yen = [Tag::s(1, "a\\b~")];
+        assert_eq!(write_ascii_in_page(&yen, "ANSI_932"), ascii_slow(&yen, "ANSI_932"));
+    }
+
+    /// What the writer gave before the fast path: every string through `push_string`.
+    fn ascii_slow(tags: &[Tag], code_page: &str) -> Vec<u8> {
+        let mut out = Vec::new();
+        for t in tags {
+            let _ = write!(out, "{:>3}\r\n", t.code);
+            push_string(&t.str(), Strings::Escaped(codepage::encoder(code_page)), &mut out);
+            out.extend_from_slice(b"\r\n");
+        }
+        out
+    }
 
     #[test]
     fn literal_escape_text_roundtrips() {
