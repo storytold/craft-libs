@@ -5,7 +5,12 @@
 //! - [`sniff`] tells which app wrote a file, from its first bytes.
 //! - [`info`] reads the format version and the writer the file names.
 //! - [`renditions`] returns the previews and the PDF a file carries.
+//! - [`rendition`] reads just one kind of preview or PDF.
 //! - [`outline`] returns the canvas, the pages (artboards or compositions) and the layers.
+//! - [`pcraft_document`] reads a caller-defined PhotoCraft document head without its payloads.
+//! - `pcraft_layer_rgba`, with the feature `pcraft-pixels`, decodes a PhotoCraft layer's pixels
+//!   and its layer mask.
+//! - `pcraft_icc_profile`, with the same feature, returns a document's raw declared ICC payload.
 //!
 //! Bytes go in and plain data comes out: no file system access, no rendering and no app crate.
 //! Each format's envelope is read through its craft-libs crate: `craft-pcraft-format`,
@@ -24,10 +29,16 @@
 //! assert!(info.supported);
 //! ```
 
+mod cancel;
 mod ecproj;
 mod pcraft;
+#[cfg(feature = "pcraft-pixels")]
+mod pcraft_pixels;
 mod vectorcraft;
 mod zip;
+
+#[cfg(feature = "pcraft-pixels")]
+pub use pcraft_pixels::{LayerMask, LayerPixels, Samples, pcraft_icc_profile, pcraft_layer_rgba};
 
 use std::cell::Cell;
 use std::collections::BTreeMap;
@@ -91,6 +102,9 @@ pub struct Info {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// A cancellation-aware read observed the caller's cancellation request.
+    #[error("document read canceled")]
+    Cancelled,
     /// [`sniff`] does not recognize the bytes as a Craft document, or a ZIP archive's
     /// `manifest.json` is a JSON object without `format_version`, so the archive is not a
     /// PhotoCraft bundle.
@@ -127,9 +141,10 @@ pub struct Limits {
     pub max_json: u64,
     /// Most bytes of one rendition or one ZIP entry. Default 256 MiB.
     pub max_entry: u64,
-    /// Most bytes one call decompresses from gzip, reads out of ZIP entries and returns as
+    /// Most bytes one call consumes from gzip, reads out of ZIP entries and returns as
     /// renditions, together; a rendition decompressed from gzip is counted once, and a second
-    /// rendition of the same bytes as another copy. Default 1 GiB.
+    /// rendition of the same bytes as another copy. Unused lookahead from initial gzip reads
+    /// (chunks of up to 64 KiB) is not counted. Default 1 GiB.
     pub max_total: u64,
     /// Deepest nesting of JSON arrays and objects, at most [`MAX_DEPTH`] (a larger value counts
     /// as [`MAX_DEPTH`]). Default [`MAX_DEPTH`]. [`renditions`] and [`outline`] also refuse a
@@ -139,6 +154,8 @@ pub struct Limits {
     /// Most list elements one call reads, together: EffectCraft project items and composition
     /// layers, VectorCraft artboards and layers, and PhotoCraft layers at every level. Each is
     /// counted before it is read. Default 1,048,576.
+    /// `pcraft_icc_profile` instead caps structural JSON items throughout the manifest,
+    /// including skipped fields, before reading its profile reference.
     pub max_items: u64,
 }
 
@@ -161,7 +178,7 @@ pub enum RenditionKind {
     /// A small preview image: VectorCraft's `preview` (the first artboard) or PhotoCraft's
     /// `thumbnail`.
     Thumbnail,
-    /// PhotoCraft's flattened `composite` preview.
+    /// PhotoCraft's full-canvas flattened image, or its composite preview when absent.
     Composite,
 }
 
@@ -174,6 +191,11 @@ pub struct Rendition {
     /// rendition), or `image/png` for PhotoCraft's previews.
     pub mime: String,
     pub bytes: Vec<u8>,
+    /// True only for a PhotoCraft [`RenditionKind::Composite`] selected from the manifest's
+    /// explicit `full_composite` member. False for the legacy composite preview and all other
+    /// renditions. This records the selected source; image bytes and canvas dimensions are
+    /// not decoded or validated. Equality and debug output include this provenance.
+    pub is_full_composite: bool,
 }
 
 /// The structure of a document, without its content.
@@ -266,39 +288,126 @@ pub fn sniff(head: &[u8]) -> Option<Kind> {
     }
 }
 
+fn read_kind(bytes: &[u8], budget: &Budget) -> Result<Kind, Error> {
+    if pcraft::sniff_checked(bytes, budget.control)? {
+        Ok(Kind::PhotoCraft)
+    } else if vectorcraft::sniff_checked(bytes, budget.control)? {
+        Ok(Kind::VectorCraft)
+    } else if ecproj::sniff_checked(bytes, budget.control)? {
+        Ok(Kind::EffectCraft)
+    } else {
+        Err(Error::Unrecognized)
+    }
+}
+
 /// The document's kind, version and writer. A version newer than this crate reads is not an
 /// error here: [`Info::supported`] is `false`.
 pub fn info(bytes: &[u8], limits: &Limits) -> Result<Info, Error> {
     let mut budget = Budget::new(limits);
-    let kind = sniff(bytes).ok_or(Error::Unrecognized)?;
+    read_info(bytes, &mut budget)
+}
+
+/// [`info`] with cooperative cancellation. The callback runs synchronously on this thread;
+/// returning true stops the read at a checkpoint with [`Error::Cancelled`]. The limits and
+/// returned data are the same as [`info`].
+///
+/// ```
+/// use std::sync::atomic::{AtomicBool, Ordering};
+/// let stopped = AtomicBool::new(true);
+/// let result = craft_doc::info_with_cancel(b"", &craft_doc::Limits::default(), &|| stopped.load(Ordering::Relaxed));
+/// assert_eq!(result, Err(craft_doc::Error::Cancelled));
+/// ```
+pub fn info_with_cancel(bytes: &[u8], limits: &Limits, cancelled: &dyn Fn() -> bool) -> Result<Info, Error> {
+    cancel::run(cancelled, |control| read_info(bytes, &mut Budget::controlled(limits, control)))
+}
+
+fn read_info(bytes: &[u8], budget: &mut Budget) -> Result<Info, Error> {
+    let kind = read_kind(bytes, budget)?;
     let (version, generator) = match kind {
-        Kind::PhotoCraft => pcraft::info(bytes, &mut budget)?,
-        Kind::VectorCraft => vectorcraft::info(bytes, &mut budget)?,
-        Kind::EffectCraft => ecproj::info(bytes, &mut budget)?,
+        Kind::PhotoCraft => pcraft::info(bytes, budget)?,
+        Kind::VectorCraft => vectorcraft::info(bytes, budget)?,
+        Kind::EffectCraft => ecproj::info(bytes, budget)?,
     };
     Ok(Info { kind, version, generator, supported: version <= kind.supported_version() })
 }
 
 /// The previews and the PDF the document carries, the thumbnail first. A
 /// `.vectorcraft` file has a `preview` only when saved with one and a `pdf` only when saved with
-/// Create PDF-Compatible File; a `.pcraft` bundle has the `thumbnail` and `composite` its
+/// Create PDF-Compatible File; a `.pcraft` bundle has the `thumbnail` and flattened composite its
 /// manifest names; an `.ecproj` project has none.
 pub fn renditions(bytes: &[u8], limits: &Limits) -> Result<Vec<Rendition>, Error> {
-    let mut budget = Budget::new(limits);
-    match sniff(bytes).ok_or(Error::Unrecognized)? {
-        Kind::PhotoCraft => pcraft::renditions(bytes, &mut budget),
-        Kind::VectorCraft => vectorcraft::renditions(bytes, &mut budget),
-        Kind::EffectCraft => ecproj::renditions(bytes, &mut budget),
+    read_renditions(bytes, None, &mut Budget::new(limits))
+}
+
+/// [`renditions`] with cooperative cancellation, as [`info_with_cancel`]. This interrupts
+/// extraction; it does not parse or render the PDF or decode the image a rendition contains.
+pub fn renditions_with_cancel(bytes: &[u8], limits: &Limits, cancelled: &dyn Fn() -> bool) -> Result<Vec<Rendition>, Error> {
+    cancel::run(cancelled, |control| read_renditions(bytes, None, &mut Budget::controlled(limits, control)))
+}
+
+fn read_renditions(bytes: &[u8], wanted: Option<RenditionKind>, budget: &mut Budget) -> Result<Vec<Rendition>, Error> {
+    match read_kind(bytes, budget)? {
+        Kind::PhotoCraft => pcraft::renditions(bytes, wanted, budget),
+        Kind::VectorCraft => vectorcraft::renditions(bytes, wanted, budget),
+        Kind::EffectCraft => ecproj::renditions(bytes, budget),
     }
+}
+
+/// Read the requested rendition, or `None` when this format or document carries none of that
+/// kind. Container metadata is still validated. Other rendition payloads are not decoded,
+/// copied or charged against the entry budget; JSON and bytes traversed to reach the selected
+/// compressed member still count against the usual limits.
+pub fn rendition(bytes: &[u8], kind: RenditionKind, limits: &Limits) -> Result<Option<Rendition>, Error> {
+    Ok(read_renditions(bytes, Some(kind), &mut Budget::new(limits))?.pop())
 }
 
 /// The document's canvas, pages and layers (see [`Outline`]).
 pub fn outline(bytes: &[u8], limits: &Limits) -> Result<Outline, Error> {
     let mut budget = Budget::new(limits);
+    read_outline(bytes, &mut budget)
+}
+
+/// [`outline`] with cooperative cancellation, as [`info_with_cancel`].
+pub fn outline_with_cancel(bytes: &[u8], limits: &Limits, cancelled: &dyn Fn() -> bool) -> Result<Outline, Error> {
+    cancel::run(cancelled, |control| read_outline(bytes, &mut Budget::controlled(limits, control)))
+}
+
+fn read_outline(bytes: &[u8], budget: &mut Budget) -> Result<Outline, Error> {
+    match read_kind(bytes, budget)? {
+        Kind::PhotoCraft => pcraft::outline(bytes, budget),
+        Kind::VectorCraft => vectorcraft::outline(bytes, budget),
+        Kind::EffectCraft => ecproj::outline(bytes, budget),
+    }
+}
+
+/// A PhotoCraft manifest's `document` read as the caller's `D`, without reading its previews,
+/// tiles or blobs. `D` may describe only the metadata the caller needs; other members are
+/// skipped by serde. This does not validate the document against PhotoCraft's complete model
+/// or check that its referenced payload entries exist.
+///
+/// The manifest and envelope checks are the same as [`outline`]. Before `D` is deserialized,
+/// [`Limits::max_items`] additionally bounds structural JSON items throughout the manifest,
+/// including members `D` skips, as [`craft_pcraft_format::check_manifest`] counts them; the
+/// count is opening array/object brackets and commas outside strings. The shared format's
+/// own item ceiling still applies. Byte and nesting limits apply as usual.
+/// `D`'s deserializer is caller code: its own allocations and behavior remain the caller's
+/// responsibility. No pixel feature is required.
+///
+/// A recognized document of another kind gives [`Error::Unsupported`].
+///
+/// ```
+/// #[derive(serde::Deserialize)]
+/// struct Head { mode: String }
+/// # fn read(bytes: &[u8]) -> Result<(), craft_doc::Error> {
+/// let head: Head = craft_doc::pcraft_document(bytes, &craft_doc::Limits::default())?;
+/// assert_eq!(head.mode, "Rgb");
+/// # Ok(())
+/// # }
+/// ```
+pub fn pcraft_document<D: DeserializeOwned>(bytes: &[u8], limits: &Limits) -> Result<D, Error> {
     match sniff(bytes).ok_or(Error::Unrecognized)? {
-        Kind::PhotoCraft => pcraft::outline(bytes, &mut budget),
-        Kind::VectorCraft => vectorcraft::outline(bytes, &mut budget),
-        Kind::EffectCraft => ecproj::outline(bytes, &mut budget),
+        Kind::PhotoCraft => pcraft::head(bytes, &mut Budget::new(limits)),
+        kind => Err(Error::Unsupported(format!("document metadata is read from .pcraft bundles, not .{}", kind.extension()))),
     }
 }
 
@@ -306,15 +415,41 @@ fn malformed(m: impl std::fmt::Display) -> Error {
     Error::Malformed(m.to_string())
 }
 
-/// The bytes one call may still decompress, read out of ZIP entries or return as renditions.
+/// The bytes one call may still consume from gzip or ZIP entries, or return as renditions.
 pub(crate) struct Budget<'a> {
     pub(crate) limits: &'a Limits,
+    pub(crate) control: Option<&'a cancel::Control<'a>>,
     left: u64,
 }
 
 impl<'a> Budget<'a> {
     fn new(limits: &'a Limits) -> Self {
-        Budget { limits, left: limits.max_total }
+        Budget { limits, control: None, left: limits.max_total }
+    }
+
+    fn controlled(limits: &'a Limits, control: &'a cancel::Control<'a>) -> Self {
+        Budget { limits, control: Some(control), left: limits.max_total }
+    }
+
+    pub(crate) fn check_cancelled(&self) -> Result<(), Error> {
+        if let Some(control) = self.control {
+            control.check()?;
+        }
+        Ok(())
+    }
+
+    /// Copy bytes whose size the caller has already checked against the budget.
+    pub(crate) fn copy(&self, bytes: &[u8]) -> Result<Vec<u8>, Error> {
+        if self.control.is_none() {
+            return Ok(bytes.to_vec());
+        }
+        self.check_cancelled()?;
+        let mut out = Vec::with_capacity(bytes.len());
+        for chunk in bytes.chunks(cancel::CHUNK) {
+            self.check_cancelled()?;
+            out.extend_from_slice(chunk);
+        }
+        Ok(out)
     }
 
     /// Bytes still allowed.
@@ -324,6 +459,7 @@ impl<'a> Budget<'a> {
 
     /// Count `n` bytes of `what` against the total.
     pub(crate) fn take(&mut self, n: u64, what: &str) -> Result<(), Error> {
+        self.check_cancelled()?;
         self.left = self
             .left
             .checked_sub(n)
@@ -333,6 +469,7 @@ impl<'a> Budget<'a> {
 
     /// Check one rendition or ZIP entry of `n` bytes against `max_entry`.
     pub(crate) fn check_entry(&self, n: u64, what: &str) -> Result<(), Error> {
+        self.check_cancelled()?;
         if n > self.limits.max_entry {
             return Err(Error::LimitExceeded(format!("{what} is {n} bytes, more than max_entry ({})", self.limits.max_entry)));
         }
@@ -347,6 +484,7 @@ impl<'a> Budget<'a> {
 
     /// Check `n` bytes of JSON against `max_json`.
     pub(crate) fn check_json(&self, n: u64, what: &str) -> Result<(), Error> {
+        self.check_cancelled()?;
         if n > self.limits.max_json {
             return Err(Error::LimitExceeded(format!("{what} is more than max_json ({} bytes)", self.limits.max_json)));
         }
@@ -356,29 +494,34 @@ impl<'a> Budget<'a> {
 
 /// Is the JSON text nested at most `max` levels deep (arrays and objects), and at most
 /// [`MAX_DEPTH`]?
-pub(crate) fn check_depth(json: &[u8], max: u32) -> Result<(), Error> {
+pub(crate) fn check_depth(json: &[u8], max: u32, control: Option<&cancel::Control<'_>>) -> Result<(), Error> {
     let max = max.min(MAX_DEPTH);
     let (mut depth, mut in_str, mut escaped) = (0u32, false, false);
-    for &b in json {
-        if in_str {
+    for chunk in json.chunks(cancel::CHUNK) {
+        if let Some(control) = control {
+            control.check()?;
+        }
+        for &b in chunk {
+            if in_str {
+                match b {
+                    _ if escaped => escaped = false,
+                    b'\\' => escaped = true,
+                    b'"' => in_str = false,
+                    _ => {}
+                }
+                continue;
+            }
             match b {
-                _ if escaped => escaped = false,
-                b'\\' => escaped = true,
-                b'"' => in_str = false,
+                b'"' => in_str = true,
+                b'[' | b'{' => {
+                    depth += 1;
+                    if depth > max {
+                        return Err(Error::LimitExceeded(format!("JSON nested deeper than max_depth ({max} levels)")));
+                    }
+                }
+                b']' | b'}' => depth = depth.saturating_sub(1),
                 _ => {}
             }
-            continue;
-        }
-        match b {
-            b'"' => in_str = true,
-            b'[' | b'{' => {
-                depth += 1;
-                if depth > max {
-                    return Err(Error::LimitExceeded(format!("JSON nested deeper than max_depth ({max} levels)")));
-                }
-            }
-            b']' | b'}' => depth = depth.saturating_sub(1),
-            _ => {}
         }
     }
     Ok(())
@@ -484,18 +627,23 @@ pub(crate) fn counted_map<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) 
 }
 
 /// Parse one JSON value of type `T` from `json`, after checking its nesting against the limits.
-pub(crate) fn parse<T: DeserializeOwned>(json: &[u8], limits: &Limits) -> Result<T, Error> {
-    check_depth(json, limits.max_depth)?;
-    counting(limits.max_items, || parse_checked(json).map_err(malformed))
+pub(crate) fn parse<T: DeserializeOwned>(json: &[u8], budget: &Budget) -> Result<T, Error> {
+    check_depth(json, budget.limits.max_depth, budget.control)?;
+    counting(budget.limits.max_items, || parse_checked(json, budget).map_err(malformed))
 }
 
 /// Parse JSON whose nesting [`check_depth`] has accepted.
-fn parse_checked<T: DeserializeOwned>(json: &[u8]) -> Result<T, serde_json::Error> {
-    let mut de = serde_json::Deserializer::from_slice(json);
-    de.disable_recursion_limit();
-    let v = T::deserialize(&mut de)?;
-    de.end()?;
-    Ok(v)
+fn parse_checked<T: DeserializeOwned>(json: &[u8], budget: &Budget) -> Result<T, serde_json::Error> {
+    fn read<'de, T: DeserializeOwned, R: serde_json::de::Read<'de>>(mut de: serde_json::Deserializer<R>) -> Result<T, serde_json::Error> {
+        de.disable_recursion_limit();
+        let v = T::deserialize(&mut de)?;
+        de.end()?;
+        Ok(v)
+    }
+    match budget.control {
+        Some(control) => read(serde_json::Deserializer::from_reader(cancel::Reader::new(json, Some(control)))),
+        None => read(serde_json::Deserializer::from_slice(json)),
+    }
 }
 
 /// The top-level member that holds a document's version number: VectorCraft's `version`,
@@ -538,13 +686,23 @@ impl<'de> Visitor<'de> for VersionIn {
 /// Parse `T` from `json`; when that fails, report [`Error::TooNew`] instead if the file's version
 /// (its top-level member that [`version_member`] names) is newer than `kind` supports, since a
 /// newer format may change what `T` expects.
-pub(crate) fn parse_versioned<T: DeserializeOwned>(json: &[u8], limits: &Limits, kind: Kind) -> Result<T, Error> {
-    check_depth(json, limits.max_depth)?;
-    counting(limits.max_items, || {
-        parse_checked(json).map_err(|e| {
-            let mut de = serde_json::Deserializer::from_slice(json);
-            de.disable_recursion_limit();
-            let version = (&mut de).deserialize_map(VersionIn(version_member(kind))).and_then(|v| de.end().map(|()| v));
+pub(crate) fn parse_versioned<T: DeserializeOwned>(json: &[u8], budget: &Budget, kind: Kind) -> Result<T, Error> {
+    fn version<'de, R: serde_json::de::Read<'de>>(mut de: serde_json::Deserializer<R>, kind: Kind) -> Result<Option<u32>, serde_json::Error> {
+        de.disable_recursion_limit();
+        let version = (&mut de).deserialize_map(VersionIn(version_member(kind)))?;
+        de.end()?;
+        Ok(version)
+    }
+    check_depth(json, budget.limits.max_depth, budget.control)?;
+    counting(budget.limits.max_items, || {
+        parse_checked(json, budget).map_err(|e| {
+            if let Err(cancelled) = budget.check_cancelled() {
+                return cancelled;
+            }
+            let version = match budget.control {
+                Some(control) => version(serde_json::Deserializer::from_reader(cancel::Reader::new(json, Some(control))), kind),
+                None => version(serde_json::Deserializer::from_slice(json), kind),
+            };
             match version {
                 Ok(Some(version)) if version > kind.supported_version() => too_new(kind, version),
                 _ => malformed(e),
@@ -677,9 +835,9 @@ mod tests {
 
     #[test]
     fn depth_counts_brackets_outside_strings() {
-        assert!(check_depth(br#"[[["[[[[[[[["]]]"#, 3).is_ok());
-        assert!(check_depth(br#"[[[["\"[["]]]]"#, 3).is_err());
-        assert!(check_depth(br#"{"a":{"b":[1]}}"#, 3).is_ok());
+        assert!(check_depth(br#"[[["[[[[[[[["]]]"#, 3, None).is_ok());
+        assert!(check_depth(br#"[[[["\"[["]]]]"#, 3, None).is_err());
+        assert!(check_depth(br#"{"a":{"b":[1]}}"#, 3, None).is_ok());
     }
 
     #[test]

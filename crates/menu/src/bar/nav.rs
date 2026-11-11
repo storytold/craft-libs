@@ -120,6 +120,9 @@ impl Nav {
         if top != nav.top {
             nav = Nav { top, tops: std::mem::take(&mut nav.tops), ..Default::default() };
         }
+        // Rows hold the command and enabled state of the frame that drew them. A popup that is
+        // not drawn this frame (closed by a title click) must leave nothing for the keys to run.
+        nav.rows.clear();
         nav
     }
 
