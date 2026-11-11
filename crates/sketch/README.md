@@ -10,7 +10,7 @@ onto an application's document, stays with the caller.
 
 ## Provenance
 
-Written by FigCraft's contributors (the `.sketch` import, mostly by Jindřich Šaršon), from the
+Written by FigCraft's contributors (the `.sketch` import is Jindřich Šaršon's work), from the
 public description of the format only, and files built for each case, checked against Sketch's
 own renders and real files (Sketch 50, 63 and 2026). No code of Sketch or of any other product was copied, and no GPL, LGPL
 or AGPL code was consulted. Moved here from `figcraft/crates/format/src/sketch.rs` (the archive
