@@ -12,8 +12,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: craft-proof-${{ github.ref }}
-  cancel-in-progress: true
+  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
+  # run (main, manual) gets its own group: it is never cancelled or replaced while queued, so it
+  # always gets to save the cache.
+  group: craft-proof-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
@@ -21,13 +24,13 @@ jobs:
     name: Proofing lint, tests with and without Language data, WASM
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # The Language data (craft-i18n `language-data/`), embedded by crates/proof/build.rs.
       # Pinned to storytold/craft-i18n#114's head (#109's SCOWL dictionaries + judgment/judgement,
       # CP2.1); TODO(CP2.1): move to #114's merge commit once it merges.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/craft-i18n
           ref: c239f934ace90b7939afaceb23b472ceeafd6b8a
@@ -40,6 +43,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-proof
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt -p craft-proof --check
       - name: Without Language data (a fork, docs.rs, offline)
         run: |

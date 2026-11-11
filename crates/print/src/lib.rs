@@ -82,6 +82,11 @@ pub struct Job {
     pub duplex: Option<Duplex>,
     pub scaling: Scaling,
     pub grayscale: bool,
+    /// The caller has already made the pages grey (storytold/pdfcraft#5806): `grayscale` is then
+    /// asked of the driver where it has a grey option, but a driver that has none, or doesn't keep
+    /// it, still prints the job instead of refusing it. Off, a driver that drops `grayscale` is
+    /// refused, since the pages would come out in colour. Windows only; CUPS never refuses.
+    pub grey_pages: bool,
     pub title: String,
     /// The printer driver's own job options (a PPD keyword and the chosen value), such as the
     /// paper tray or paper type; see [`printer_options`]. CUPS only.
@@ -97,6 +102,7 @@ impl Default for Job {
             duplex: None,
             scaling: Scaling::Exact,
             grayscale: false,
+            grey_pages: false,
             title: "Craft".into(),
             options: Vec::new(),
         }
@@ -139,8 +145,32 @@ pub fn parse_lpstat_e(out: &str) -> Vec<String> {
     out.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect()
 }
 
+/// The paper tray's PPD keyword.
+const TRAY: &str = "InputSlot";
+
+/// Apple's CUPS option for the macOS Print dialog's Paper Feed. Sent empty (Auto Select), it
+/// drops the PPD's default tray from a job that names none, so the printer feeds from a tray
+/// holding the job's paper.
+const APPLE_TRAY: &str = "AP_D_InputSlot";
+
+/// The paper tray choice that names no tray: the printer picks one holding the job's paper
+/// (macOS: Auto Select). It is empty, which is not a PPD keyword, so [`lp_args`] never sends it
+/// as an `InputSlot`. See [`apply_queue_defaults`].
+pub const AUTO_SELECT: &str = "";
+
 /// The `lp` arguments for a job. There is no file argument: `lp` reads the job from stdin.
+///
+/// On macOS a job that names no paper tray asks for Auto Select (`AP_D_InputSlot=`), as the
+/// system Print dialog does. Without it CUPS takes the tray from the PPD's default, and a printer
+/// whose default tray is empty or holds other paper keeps the job waiting while CUPS reports it
+/// completed (storytold/pdfcraft#3752). A tray the job does name wins: given both, CUPS uses the
+/// `InputSlot`.
 pub fn lp_args(job: &Job) -> Vec<String> {
+    lp_args_for(job, cfg!(target_os = "macos"))
+}
+
+/// [`lp_args`] for Apple's CUPS or another, so tests cover both on any platform.
+fn lp_args_for(job: &Job, apple: bool) -> Vec<String> {
     let mut a = Vec::new();
     if let Some(p) = &job.printer {
         a.extend(["-d".to_string(), p.clone()]);
@@ -164,11 +194,17 @@ pub fn lp_args(job: &Job) -> Vec<String> {
         // PWG 5100.13 §6.2.5: auto-fit fits oversized pages and leaves smaller pages unscaled.
         Scaling::ShrinkToFit => "print-scaling=auto-fit",
     });
+    let mut tray_named = false;
     for (key, value) in &job.options {
         // Driver options are PPD keywords; anything else is not something lp can be given.
         if is_ppd_keyword(key) && is_ppd_keyword(value) && !HANDLED_OPTIONS.contains(&key.as_str()) {
+            // CUPS matches option names without regard to case.
+            tray_named |= key.eq_ignore_ascii_case(TRAY) || key.eq_ignore_ascii_case(APPLE_TRAY);
             a.extend(["-o".to_string(), format!("{key}={value}")]);
         }
+    }
+    if apple && !tray_named {
+        a.extend(["-o".to_string(), format!("{APPLE_TRAY}=")]);
     }
     a
 }
@@ -284,6 +320,38 @@ pub fn parse_lpoptions(out: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Make each option's default the queue's current choice (`current`, from [`parse_lpoptions`]:
+/// the queue's defaults with the user's own), skipping choices the driver doesn't offer.
+///
+/// On macOS the paper tray then starts with [`AUTO_SELECT`], as its default, which is what
+/// [`lp_args`] sends for a job that names no tray. That is left out when the user's own defaults
+/// name a different tray than the driver's default: `lp` adds that tray to every job, and it wins
+/// over Auto Select. A user default naming the driver's own default tray can't be told apart from
+/// no user default, so it shows as Auto Select although the job still goes to that tray.
+pub fn apply_queue_defaults(options: &mut [PrinterOption], current: &[(String, String)]) {
+    apply_queue_defaults_for(options, current, cfg!(target_os = "macos"));
+}
+
+/// [`apply_queue_defaults`] for Apple's CUPS or another, so tests cover both on any platform.
+fn apply_queue_defaults_for(options: &mut [PrinterOption], current: &[(String, String)], apple: bool) {
+    // CUPS matches option and choice names without regard to case; the PPD's spelling is kept.
+    let driver_tray = options.iter().find(|o| o.key.eq_ignore_ascii_case(TRAY)).map(|o| o.default.clone());
+    for (key, value) in current {
+        if let Some(o) = options.iter_mut().find(|o| o.key.eq_ignore_ascii_case(key))
+            && let Some(choice) = o.choices.iter().find(|(c, _)| c.eq_ignore_ascii_case(value)).map(|(c, _)| c.clone())
+        {
+            o.default = choice;
+        }
+    }
+    if apple
+        && let Some(tray) = options.iter_mut().find(|o| o.key.eq_ignore_ascii_case(TRAY))
+        && driver_tray.as_ref() == Some(&tray.default)
+    {
+        tray.choices.insert(0, (AUTO_SELECT.to_string(), "Auto Select".to_string()));
+        tray.default = AUTO_SELECT.to_string();
+    }
+}
+
 /// A PPD's text: UTF-8, or ISO Latin-1 (the PPD default) when it isn't valid UTF-8.
 pub fn ppd_text(bytes: &[u8]) -> String {
     match std::str::from_utf8(bytes) {
@@ -314,13 +382,7 @@ pub fn printer_options(printer: &str) -> Vec<PrinterOption> {
             .output()
             .map(|o| parse_lpoptions(&String::from_utf8_lossy(&o.stdout)))
             .unwrap_or_default();
-        for (key, value) in current {
-            if let Some(o) = options.iter_mut().find(|o| o.key == key)
-                && o.choices.iter().any(|(c, _)| *c == value)
-            {
-                o.default = value;
-            }
-        }
+        apply_queue_defaults(&mut options, &current);
         options
     }
     #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
@@ -389,28 +451,25 @@ fn lpstat_e_command() -> std::process::Command {
     lpstat_with(&["-e"])
 }
 
+/// How long the printer list waits for `lpstat -l -p -d`. It reads the scheduler's own queues, so
+/// it answers at once unless `cupsd` itself has stopped answering (storytold/pdfcraft#6761, where
+/// macOS's scheduler had stopped serving its local socket and the Print dialog looked for printers
+/// forever).
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+const QUEUES_LIMIT: std::time::Duration = std::time::Duration::from_secs(15);
+/// How long the printer list waits for `lpstat -e`, which also browses the network for driverless
+/// printers. Past it the list has the queues without them.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+const DISCOVERY_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// The printers the system knows (empty when there are none or no spooler): its queues, then the
-/// driverless destinations CUPS can print to without one.
+/// driverless destinations CUPS can print to without one. On CUPS neither question may take more
+/// than [`QUEUES_LIMIT`] and [`DISCOVERY_LIMIT`]: a scheduler that doesn't answer gives an empty
+/// list rather than a Print dialog that waits forever.
 pub fn printers() -> Vec<Printer> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
-        let queues = match lpstat_command().output() {
-            Ok(o) => {
-                // Exits 1 with only driverless printers ("No destinations added"); `-e` still finds them.
-                if !o.status.success() {
-                    log::info!("lpstat -p -d exited with {}: {}", o.status, String::from_utf8_lossy(&o.stderr).trim());
-                }
-                String::from_utf8_lossy(&o.stdout).into_owned()
-            }
-            Err(e) => {
-                // A Flatpak needs lpstat/lp bundled plus the CUPS socket and Avahi (see README).
-                log::warn!("no printers: lpstat could not run ({e}); install the CUPS client tools");
-                return Vec::new();
-            }
-        };
-        // A spooler without `-e`, or one whose discovery times out, only loses the driverless names.
-        let available = lpstat_e_command().output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
-        printers_parsed(&queues, available.as_deref())
+        printers_via(&mut lpstat_command(), QUEUES_LIMIT, &mut lpstat_e_command(), DISCOVERY_LIMIT)
     }
     #[cfg(windows)]
     {
@@ -419,6 +478,195 @@ pub fn printers() -> Vec<Printer> {
     #[cfg(not(any(windows, all(unix, not(target_arch = "wasm32")))))]
     {
         Vec::new()
+    }
+}
+
+/// [`printers`] with the two `lpstat` commands and their limits supplied, so tests can stand in a
+/// command that hangs.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn printers_via(
+    queues: &mut std::process::Command,
+    queues_limit: std::time::Duration,
+    available: &mut std::process::Command,
+    available_limit: std::time::Duration,
+) -> Vec<Printer> {
+    // Exits 1 with only driverless printers ("No destinations added"); `-e` still finds them, so
+    // the exit status isn't checked.
+    let queues = match output_within(queues, queues_limit) {
+        Ok(out) => String::from_utf8_lossy(&out).into_owned(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // A Flatpak needs lpstat/lp bundled plus the CUPS socket and Avahi (see README).
+            log::warn!("no printers: lpstat could not run ({e}); install the CUPS client tools");
+            return Vec::new();
+        }
+        Err(e) => {
+            log::warn!("no printers: the CUPS scheduler did not list its queues ({e}); is cupsd running and answering?");
+            return Vec::new();
+        }
+    };
+    // A spooler without `-e`, or one whose discovery doesn't answer in time, only loses the
+    // driverless names.
+    let available = match output_within(available, available_limit) {
+        Ok(out) => Some(String::from_utf8_lossy(&out).into_owned()),
+        Err(e) => {
+            log::info!("lpstat -e gave no driverless printers ({e})");
+            None
+        }
+    };
+    printers_parsed(&queues, available.as_deref())
+}
+
+/// The most of a command's output that is read: far more than any `lpstat` listing.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+const OUTPUT_CAP: u64 = 4 << 20;
+
+/// Run `command` and collect its standard output, giving it `limit`: a command still running
+/// then is killed and reaped, and the error is `TimedOut`. Standard input and error are not
+/// connected. The exit status is not checked, as `Command::output` leaves it to the caller.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn output_within(command: &mut std::process::Command, limit: std::time::Duration) -> std::io::Result<Vec<u8>> {
+    use std::io::Read as _;
+    use std::process::Stdio;
+    let mut child = command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
+    let stop = |child: &mut std::process::Child| {
+        let _ = child.kill();
+        let _ = child.wait();
+    };
+    let Some(mut stdout) = child.stdout.take() else {
+        stop(&mut child);
+        return Err(std::io::Error::other("the command's output could not be read"));
+    };
+    // Read on a thread of its own, so a full pipe never holds the command while the deadline is
+    // kept here. Past the cap the rest is drained and dropped, so the command still finishes.
+    // The output comes back over a channel rather than through `join`: a process the command
+    // started can keep the pipe open after the command itself has exited or been killed, and the
+    // wait for the output must end at the deadline too. Such a reader is left to finish on its
+    // own when that process closes the pipe.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let reader = std::thread::Builder::new().name("command output".into()).spawn(move || {
+        let mut out = Vec::new();
+        let read = (&mut stdout).take(OUTPUT_CAP).read_to_end(&mut out);
+        let _ = std::io::copy(&mut stdout, &mut std::io::sink());
+        let _ = tx.send(read.map(|_| out));
+    });
+    if let Err(e) = reader {
+        stop(&mut child);
+        return Err(e);
+    }
+    let timed_out = || std::io::Error::new(std::io::ErrorKind::TimedOut, format!("the command did not answer within {limit:?}"));
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                // A moment's grace, so output written just before an exit at the deadline counts.
+                let left = deadline.saturating_duration_since(std::time::Instant::now()).max(std::time::Duration::from_millis(100));
+                return match rx.recv_timeout(left) {
+                    Ok(read) => read,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(timed_out()),
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(std::io::Error::other("the command's output was lost")),
+                };
+            }
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                stop(&mut child);
+                return Err(timed_out());
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
+            Err(e) => {
+                stop(&mut child);
+                return Err(e);
+            }
+        }
+    }
+}
+
+#[cfg(all(test, unix, not(target_arch = "wasm32")))]
+mod lpstat_limits {
+    use super::*;
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+
+    fn sh(script: &str) -> Command {
+        let mut c = Command::new("sh");
+        c.args(["-c", script]);
+        c
+    }
+
+    /// storytold/pdfcraft#6761: a scheduler that never answers gives an empty list in time.
+    #[test]
+    fn a_scheduler_that_never_answers_gives_no_printers_in_time() {
+        let started = Instant::now();
+        let found = printers_via(&mut sh("sleep 30"), Duration::from_millis(300), &mut sh("sleep 30"), Duration::from_millis(300));
+        assert!(found.is_empty());
+        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+    }
+
+    /// Discovery that hangs only loses the driverless printers; the queues are listed.
+    #[test]
+    fn discovery_that_hangs_keeps_the_queues() {
+        let mut queues =
+            sh("printf 'printer Office_Laser is idle.  enabled since Mon\\n\\tDescription: Office\\nsystem default destination: Office_Laser\\n'");
+        let started = Instant::now();
+        let found = printers_via(&mut queues, Duration::from_secs(5), &mut sh("sleep 30"), Duration::from_millis(300));
+        assert_eq!(found.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["Office_Laser"]);
+        assert!(found[0].default);
+        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+    }
+
+    /// A command that isn't there is no printers, at once.
+    #[test]
+    fn no_lpstat_is_no_printers() {
+        let found = printers_via(&mut Command::new("craft-print-no-such-lpstat"), Duration::from_secs(5), &mut sh("true"), Duration::from_secs(5));
+        assert!(found.is_empty());
+    }
+}
+
+/// The printers the system knows, without asking their drivers anything: [`printers`] with
+/// `two_sided` unknown. On Windows [`printers`] reads each driver's PrintCapabilities, which can
+/// wait on the device (a networked printer in power save), so a Print dialog that only needs
+/// names lists them from this without that wait. Submission still checks the job's options with
+/// the driver. Elsewhere it is [`printers`], whose `two_sided` is already unknown.
+pub fn printer_queues() -> Vec<Printer> {
+    #[cfg(windows)]
+    {
+        windows::printer_queues()
+    }
+    #[cfg(not(windows))]
+    {
+        printers()
+    }
+}
+
+/// Whether `printer`'s driver takes two-sided settings, read for that one printer: the answer
+/// [`printers`] gives for it, without asking every other driver too. On Windows that is its
+/// PrintCapabilities; `None` when they can't be read or no queue has that name. Elsewhere `None`,
+/// as [`printers`] reports. It can wait on the device, so a Print dialog listing from
+/// [`printer_queues`] asks it for the printer picked, off the UI thread.
+pub fn two_sided(printer: &str) -> Option<bool> {
+    #[cfg(windows)]
+    {
+        windows::two_sided_named(printer)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = printer;
+        None
+    }
+}
+
+/// Whether `printer`'s driver renders XPS itself: on Windows, `Some(true)` for v4 drivers and v3
+/// drivers with an XPS rendering filter, `Some(false)` for GDI drivers, which the XPS print API
+/// reaches through Windows' XPS-to-GDI conversion. A page with transparency can come out wrong or
+/// fail to print there (storytold/pdfcraft#6155, #5838, #5940), so an app may flatten it first.
+/// `None` when it can't be read or no queue has that name, and on other systems.
+pub fn xps_driver(printer: &str) -> Option<bool> {
+    #[cfg(windows)]
+    {
+        windows::xps_driver_named(printer)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = printer;
+        None
     }
 }
 
@@ -486,6 +734,47 @@ pub fn parse_windows_printers(out: &str) -> Vec<Printer> {
     printers
 }
 
+/// Stops a print job before anything reaches the spooler, from any thread. One token per job:
+/// pass it to [`submit_cancellable`] and keep a clone to cancel with.
+///
+/// On Windows a job first asks the printer's driver for its capabilities, and a networked
+/// printer in power save can hold that query for a long time; a driver call can't be
+/// interrupted, but a job cancelled meanwhile is never sent when the call returns.
+#[derive(Clone, Debug, Default)]
+pub struct Cancel(std::sync::Arc<std::sync::atomic::AtomicU8>);
+
+const PENDING: u8 = 0;
+const CANCELLED: u8 = 1;
+const SENDING: u8 = 2;
+const CANCELLED_MESSAGE: &str = "the print job was cancelled before anything was sent to the printer";
+
+impl Cancel {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Cancels the job unless it has started reaching the spooler. `true`: it will never be sent
+    /// (its submission returns an error instead). `false`: it was already being sent, which
+    /// completes as usual; a job already in the spooler is cancelled from the system's queue.
+    pub fn cancel(&self) -> bool {
+        use std::sync::atomic::Ordering::{AcqRel, Acquire};
+        match self.0.compare_exchange(PENDING, CANCELLED, AcqRel, Acquire) {
+            Ok(_) => true,
+            Err(state) => state == CANCELLED,
+        }
+    }
+
+    /// The last point before anything reaches the spooler: the job is being sent from here on,
+    /// unless it was cancelled.
+    pub(crate) fn start_sending(&self) -> Result<(), Error> {
+        use std::sync::atomic::Ordering::{AcqRel, Acquire};
+        match self.0.compare_exchange(PENDING, SENDING, AcqRel, Acquire) {
+            Ok(_) | Err(SENDING) => Ok(()),
+            Err(_) => Err(Error::Spool(CANCELLED_MESSAGE.into())),
+        }
+    }
+}
+
 /// Send a print-ready PDF to the spooler. Returns the spooler's message: CUPS includes a job id;
 /// Windows confirms submission only ("spooled 3 sheet(s)").
 pub fn submit(pdf: &[u8], job: &Job) -> Result<String, Error> {
@@ -501,20 +790,29 @@ pub fn submit(pdf: &[u8], job: &Job) -> Result<String, Error> {
 /// The callback runs synchronously on the thread calling this function, need not be `Send`,
 /// and should return promptly. It is never retained. All sheets processed is not terminal
 /// success: only the returned result confirms submission, and a later failure may follow the
-/// last progress event. This does not report physical printing or provide cancellation.
+/// last progress event. This does not report physical printing; [`submit_cancellable`] can stop
+/// the job before it is sent.
 pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize)) -> Result<String, Error> {
+    submit_cancellable(pdf, job, progress, &Cancel::new())
+}
+
+/// [`submit_with_progress`] that [`Cancel::cancel`] can stop until the job starts reaching the
+/// spooler: on Windows once the driver has been asked about the job and the job holds the
+/// PrintTicket provider, on macOS and Linux before `lp` starts. A cancelled job returns an error
+/// and nothing is sent.
+pub fn submit_cancellable(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize), cancel: &Cancel) -> Result<String, Error> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
         let _ = progress;
-        submit_via(std::process::Command::new("lp"), pdf, job)
+        submit_via(std::process::Command::new("lp"), pdf, job, cancel)
     }
     #[cfg(windows)]
     {
-        windows::submit_with_progress(pdf, job, progress)
+        windows::submit_with_progress(pdf, job, progress, cancel)
     }
     #[cfg(not(any(windows, all(unix, not(target_arch = "wasm32")))))]
     {
-        let _ = (pdf, job, progress);
+        let _ = (pdf, job, progress, cancel);
         Err(Error::Spool("printing to a printer isn't available on this platform yet; save the print-ready PDF instead".into()))
     }
 }
@@ -525,9 +823,10 @@ pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usiz
 /// temp directory lets another local user read printed documents or swap the file before `lp`
 /// reads it.
 #[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
-pub(crate) fn submit_via(mut lp: std::process::Command, pdf: &[u8], job: &Job) -> Result<String, Error> {
+pub(crate) fn submit_via(mut lp: std::process::Command, pdf: &[u8], job: &Job, cancel: &Cancel) -> Result<String, Error> {
     use std::io::Write;
     use std::process::Stdio;
+    cancel.start_sending()?;
     let mut child = lp
         .args(lp_args(job))
         .stdin(Stdio::piped())

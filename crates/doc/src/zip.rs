@@ -1,10 +1,19 @@
 //! A ZIP reader for `.pcraft` bundles: STORE and DEFLATE entries, found through the central
 //! directory, CRC-checked. No ZIP64, no encryption, no archives split across disks.
 
+#[cfg(feature = "pcraft-pixels")]
+use std::collections::HashMap;
 use std::io::Read;
 use std::ops::Range;
 
 use crate::{Budget, Error, malformed};
+
+#[cfg(test)]
+thread_local! {
+    /// How many times this thread has walked a central directory with [`Zip::find`] or
+    /// [`Zip::index`].
+    pub(crate) static SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 const LOCAL_SIG: u32 = 0x0403_4b50;
 const CENTRAL_SIG: u32 = 0x0201_4b50;
@@ -46,7 +55,8 @@ pub(crate) struct Zip<'a> {
 }
 
 impl<'a> Zip<'a> {
-    pub(crate) fn open(bytes: &'a [u8]) -> Result<Self, Error> {
+    pub(crate) fn open(bytes: &'a [u8], control: Option<&crate::cancel::Control<'_>>) -> Result<Self, Error> {
+        crate::cancel::check(control)?;
         let last = bytes.len().checked_sub(EOCD_LEN).ok_or_else(|| malformed("not a ZIP archive (too short)"))?;
         // The comment may itself hold the signature: accept only a record whose comment ends the
         // file and whose central directory ends where the record starts.
@@ -78,6 +88,7 @@ impl<'a> Zip<'a> {
         let mut entries = Vec::with_capacity(count.min(dir_size / CENTRAL_LEN));
         let mut p = dir;
         for _ in 0..count {
+            crate::cancel::check(control)?;
             if u32_at(bytes, p) != Some(CENTRAL_SIG) || p + CENTRAL_LEN > eocd {
                 return Err(malformed("bad ZIP central directory entry"));
             }
@@ -112,9 +123,33 @@ impl<'a> Zip<'a> {
         Ok(Zip { bytes, entries })
     }
 
-    /// The first entry named `name`.
-    pub(crate) fn find(&self, name: &str) -> Option<&Entry> {
-        self.entries.iter().find(|e| self.bytes.get(e.name.clone()) == Some(name.as_bytes()))
+    /// The first entry named `name`. Each call walks the central directory; for many lookups,
+    /// use [`Zip::index`].
+    pub(crate) fn find(&self, name: &str, control: Option<&crate::cancel::Control<'_>>) -> Result<Option<&Entry>, Error> {
+        #[cfg(test)]
+        SCANS.with(|n| n.set(n.get() + 1));
+        for e in &self.entries {
+            crate::cancel::check(control)?;
+            if self.bytes.get(e.name.clone()) == Some(name.as_bytes()) {
+                return Ok(Some(e));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Every entry by name, the first of each name as [`Zip::find`] gives it, built in one walk of
+    /// the central directory.
+    #[cfg(feature = "pcraft-pixels")]
+    pub(crate) fn index(&self) -> HashMap<&'a [u8], &Entry> {
+        #[cfg(test)]
+        SCANS.with(|n| n.set(n.get() + 1));
+        let mut index = HashMap::with_capacity(self.entries.len());
+        for e in &self.entries {
+            if let Some(name) = self.bytes.get(e.name.clone()) {
+                index.entry(name).or_insert(e);
+            }
+        }
+        index
     }
 
     /// The entry's bytes, decompressed and CRC-checked; their size is checked against `max` and
@@ -136,18 +171,26 @@ impl<'a> Zip<'a> {
             if e.compressed != size {
                 return Err(malformed(format!("{what} has the wrong size")));
             }
-            raw.to_vec()
+            budget.copy(raw)?
         } else {
             // DEFLATE expands at most 1032 times.
             let mut out = Vec::with_capacity(size.min(raw.len().saturating_mul(1032)));
-            flate2::read::DeflateDecoder::new(raw).take(e.size + 1).read_to_end(&mut out).map_err(|err| malformed(format!("{what}: {err}")))?;
+            let input = crate::cancel::Reader::new(raw, budget.control);
+            let decoder = flate2::read::DeflateDecoder::new(input);
+            crate::cancel::Reader::new(decoder, budget.control)
+                .take(e.size + 1)
+                .read_to_end(&mut out)
+                .map_err(|err| malformed(format!("{what}: {err}")))?;
             if out.len() != size {
                 return Err(malformed(format!("{what} has the wrong size")));
             }
             out
         };
         let mut crc = flate2::Crc::new();
-        crc.update(&data);
+        for chunk in data.chunks(crate::cancel::CHUNK) {
+            budget.check_cancelled()?;
+            crc.update(chunk);
+        }
         if crc.sum() != e.crc {
             return Err(malformed(format!("{what} failed its CRC check")));
         }
@@ -158,26 +201,27 @@ impl<'a> Zip<'a> {
 /// Does a local header in `head` name `name`? Walks the local headers from the start, for a
 /// head too short to reach the central directory; stops at an entry whose size is only in a
 /// data descriptor.
-pub(crate) fn local_names_include(head: &[u8], name: &str) -> bool {
+pub(crate) fn local_names_include(head: &[u8], name: &str, control: Option<&crate::cancel::Control<'_>>) -> Result<bool, Error> {
     let mut p = 0usize;
     while u32_at(head, p) == Some(LOCAL_SIG) {
+        crate::cancel::check(control)?;
         let (Some(flags), Some(compressed), Some(name_len), Some(extra_len)) =
             (u16_at(head, p + 6), u32_at(head, p + 18), u16_at(head, p + 26), u16_at(head, p + 28))
         else {
-            return false;
+            return Ok(false);
         };
         let start = p + LOCAL_LEN;
         let end = start + usize::from(name_len);
         if head.get(start..end) == Some(name.as_bytes()) {
-            return true;
+            return Ok(true);
         }
         if flags & 8 != 0 {
-            return false;
+            return Ok(false);
         }
         p = match end.checked_add(usize::from(extra_len)).and_then(|q| q.checked_add(compressed as usize)) {
             Some(q) => q,
-            None => return false,
+            None => return Ok(false),
         };
     }
-    false
+    Ok(false)
 }

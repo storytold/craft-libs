@@ -4,6 +4,7 @@ use egui::{Align, Align2, Color32, Layout, RichText, Vec2};
 
 use crate::app::App;
 use crate::release::Release;
+use crate::translate::{Note, Translate, button, english};
 use crate::updater::Status;
 
 /// What the user chose in the startup update prompt.
@@ -27,15 +28,67 @@ pub struct StartupPrompt {
     pub running_version: String,
     pub is_self_updating: bool,
     pub open: bool,
+    /// A message shown as it is: an error from the network or the installer.
     pub status_message: Option<String>,
+    /// One of the crate's own messages, translated each time the prompt draws. `status_message`
+    /// wins when both are set, so an error written straight to it shows.
+    /// [`StartupPrompt::set_note`] and [`StartupPrompt::set_message`] keep only one.
+    pub status_note: Option<Note>,
     pub is_installing: bool,
+    /// The update is ready and waits for the app to close: the main button reads "Restart to
+    /// Update" and answers [`StartupPromptResponse::UpdateAndRestart`].
+    pub is_ready: bool,
+    /// Puts the card's words in the interface language ([`crate::translate`]); English by default.
+    pub translate: Translate,
 }
 
 impl StartupPrompt {
     /// Creates a new prompt dialog state for the given app and newly discovered release.
     pub fn new(app: &'static App, release: Release, running_version: impl Into<String>) -> Self {
-        let is_self_updating = crate::self_update::is_self_updating(app);
-        Self { app, release, running_version: running_version.into(), is_self_updating, open: true, status_message: None, is_installing: false }
+        let is_self_updating = crate::self_update::is_self_updating(app) && crate::self_update::release_installs(app, &release);
+        Self {
+            app,
+            release,
+            running_version: running_version.into(),
+            is_self_updating,
+            open: true,
+            status_message: None,
+            status_note: None,
+            is_installing: false,
+            is_ready: false,
+            translate: english,
+        }
+    }
+
+    /// Shows one of the crate's own messages, in the interface language whenever it draws.
+    pub fn set_note(&mut self, note: Note) {
+        self.status_note = Some(note);
+        self.status_message = None;
+    }
+
+    /// Shows `message` as it is (an error from elsewhere).
+    pub fn set_message(&mut self, message: String) {
+        self.status_note = None;
+        self.status_message = Some(message);
+    }
+
+    /// Clears the message.
+    pub fn clear_message(&mut self) {
+        self.status_note = None;
+        self.status_message = None;
+    }
+
+    /// The message the prompt shows, in the interface language: `status_message` (an error
+    /// written to it), else the note.
+    pub fn message(&self) -> Option<String> {
+        self.status_message.clone().or_else(|| self.status_note.as_ref().map(|note| note.translated(self.translate)))
+    }
+
+    /// The prompt with its words in the interface language ([`crate::translate`]).
+    #[must_use]
+    pub fn with_translator(mut self, translate: Translate) -> Self {
+        self.translate = translate;
+        self
     }
 
     /// Renders the modal window on the given egui context.
@@ -53,7 +106,9 @@ impl StartupPrompt {
         }
 
         let pal = Palette::new(ctx, self.app);
-        let Palette { is_dark, card_bg, border_color, text_primary, text_muted, fill, on_fill } = pal;
+        let Palette { card_bg, border_color, text_primary, text_muted, fill, on_fill, alert, alert_bg, .. } = pal;
+        let t = self.translate;
+        let version = self.release.version_label();
 
         egui::Area::new(egui::Id::unique("craft_update.startup_prompt"))
             .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
@@ -67,24 +122,24 @@ impl StartupPrompt {
                     .show(ui, |ui| {
                         ui.set_width(400.0);
                         style_card(ui, &pal);
-                        let version_line = format!("v{} to {}", self.running_version, self.release.version_label());
-                        if card_header(ui, self.app, &pal, true, &version_line) {
+                        let version_line = t("v{from} to {to}", &[("from", &self.running_version), ("to", &version)]);
+                        if card_header(ui, self.app, &pal, t, true, &version_line) {
                             response = StartupPromptResponse::Later;
                         }
 
                         ui.add_space(8.0);
 
-                        if let Some(msg) = &self.status_message {
-                            let alert_bg = if is_dark { Color32::from_rgb(50, 30, 20) } else { Color32::from_rgb(255, 242, 235) };
-                            let alert_color = Color32::from_rgb(225, 95, 30);
+                        if let Some(msg) = self.message() {
                             egui::Frame::new()
                                 .fill(alert_bg)
-                                .stroke(egui::Stroke::new(1.0, alert_color))
+                                .stroke(egui::Stroke::new(1.0, alert))
                                 .corner_radius(egui::CornerRadius::ZERO)
                                 .inner_margin(egui::Margin::symmetric(10, 6))
                                 .show(ui, |ui| {
                                     ui.set_width(ui.available_width());
-                                    ui.label(RichText::new(msg).size(12.0).color(alert_color));
+                                    bounded(ui, "craft_update.prompt_message", |ui| {
+                                        ui.label(RichText::new(msg).size(12.0).color(alert));
+                                    });
                                 });
                             ui.add_space(4.0);
                         }
@@ -92,11 +147,13 @@ impl StartupPrompt {
                         if self.is_installing {
                             ui.horizontal(|ui| {
                                 ui.spinner();
-                                ui.label(RichText::new("Downloading and installing update…").size(12.0).color(text_primary));
+                                ui.label(RichText::new(t("Downloading and installing update…", &[])).size(12.0).color(text_primary));
                             });
                         } else {
-                            let desc =
-                                format!("{} {} is available with the latest features and bug fixes.", self.app.name, self.release.version_label());
+                            let desc = t(
+                                "{app} {version} is available with the latest features and bug fixes.",
+                                &[("app", self.app.name), ("version", &version)],
+                            );
                             ui.label(RichText::new(desc).size(12.5).color(text_muted));
                         }
 
@@ -110,9 +167,9 @@ impl StartupPrompt {
                         ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                             ui.set_min_height(26.0);
                             // Body text, so it reads on any card; the underline carries the accent.
-                            let link =
-                                ui.add(egui::Label::new(RichText::new("What's new").size(11.5).color(text_primary)).sense(egui::Sense::click()));
-                            link.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Link, true, "What's new"));
+                            let whats_new = t("What's new", &[]);
+                            let link = ui.add(egui::Label::new(RichText::new(&whats_new).size(11.5).color(text_primary)).sense(egui::Sense::click()));
+                            link.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Link, true, &whats_new));
                             let y = link.rect.bottom() - 0.5;
                             ui.painter()
                                 .line_segment([egui::pos2(link.rect.left(), y), egui::pos2(link.rect.right(), y)], egui::Stroke::new(1.0, fill));
@@ -121,22 +178,26 @@ impl StartupPrompt {
                                 let ring = egui::Stroke::new(2.0, text_primary);
                                 ui.painter().rect_stroke(link.rect.expand(2.0), egui::CornerRadius::ZERO, ring, egui::StrokeKind::Outside);
                             }
-                            if link.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                            // `Release`'s fields are public: an app may build one from its own feed or
+                            // cache, so the link is checked here too, not only when parsed from GitHub.
+                            if link.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() && crate::release::safe_web_link(&self.release.html_url)
+                            {
                                 ui.ctx().open_url(egui::OpenUrl::new_tab(&self.release.html_url));
                             }
 
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 if self.is_installing {
-                                    let dismiss_btn = egui::Button::new(RichText::new("DISMISS").size(10.5).monospace().color(text_muted))
+                                    let dismiss_btn = egui::Button::new(RichText::new(button(t, "Dismiss")).size(10.5).monospace().color(text_muted))
                                         .corner_radius(egui::CornerRadius::ZERO)
                                         .min_size(Vec2::new(72.0, 26.0));
                                     if ui.add(dismiss_btn).clicked() {
                                         response = StartupPromptResponse::Later;
                                     }
                                 } else {
-                                    if self.is_self_updating {
+                                    if self.is_self_updating || self.is_ready {
+                                        let label = if self.is_ready { "Restart to Update" } else { "Update and Restart" };
                                         let update_btn =
-                                            egui::Button::new(RichText::new("UPDATE AND RESTART").size(10.5).strong().monospace().color(on_fill))
+                                            egui::Button::new(RichText::new(button(t, label)).size(10.5).strong().monospace().color(on_fill))
                                                 .fill(fill)
                                                 .corner_radius(egui::CornerRadius::ZERO)
                                                 .min_size(Vec2::new(140.0, 26.0));
@@ -144,16 +205,17 @@ impl StartupPrompt {
                                             response = StartupPromptResponse::UpdateAndRestart;
                                         }
                                     } else {
-                                        let dl_btn = egui::Button::new(RichText::new("DOWNLOAD").size(10.5).strong().monospace().color(on_fill))
-                                            .fill(fill)
-                                            .corner_radius(egui::CornerRadius::ZERO)
-                                            .min_size(Vec2::new(90.0, 26.0));
+                                        let dl_btn =
+                                            egui::Button::new(RichText::new(button(t, "Download")).size(10.5).strong().monospace().color(on_fill))
+                                                .fill(fill)
+                                                .corner_radius(egui::CornerRadius::ZERO)
+                                                .min_size(Vec2::new(90.0, 26.0));
                                         if ui.add(dl_btn).clicked() {
                                             response = StartupPromptResponse::Download;
                                         }
                                     }
 
-                                    let later_btn = egui::Button::new(RichText::new("LATER").size(10.5).monospace().color(text_primary))
+                                    let later_btn = egui::Button::new(RichText::new(button(t, "Later")).size(10.5).monospace().color(text_primary))
                                         .corner_radius(egui::CornerRadius::ZERO)
                                         .min_size(Vec2::new(65.0, 26.0));
                                     if ui.add(later_btn).clicked() {
@@ -185,6 +247,10 @@ struct Palette {
     fill: Color32,
     /// Text on `fill`.
     on_fill: Color32,
+    /// Errors and failure reasons, on the card and on `alert_bg`.
+    alert: Color32,
+    /// The box around a message in the prompt.
+    alert_bg: Color32,
 }
 
 impl Palette {
@@ -199,6 +265,8 @@ impl Palette {
             text_muted: if is_dark { Color32::from_rgb(150, 150, 160) } else { Color32::from_rgb(105, 105, 115) },
             fill,
             on_fill: ink_on(fill),
+            alert: if is_dark { Color32::from_rgb(225, 95, 30) } else { Color32::from_rgb(184, 66, 8) },
+            alert_bg: if is_dark { Color32::from_rgb(44, 26, 18) } else { Color32::from_rgb(255, 242, 235) },
         }
     }
 }
@@ -235,8 +303,8 @@ fn style_card(ui: &mut egui::Ui, pal: &Palette) {
 }
 
 /// Header row: app icon (or its initial in a badge), name, developer, `second_line` and a close
-/// button. `update_pill` adds the "UPDATE" chip. True when the close button was clicked.
-fn card_header(ui: &mut egui::Ui, app: &App, pal: &Palette, update_pill: bool, second_line: &str) -> bool {
+/// button, worded by `t`. `update_pill` adds the "UPDATE" chip. True when the close button was clicked.
+fn card_header(ui: &mut egui::Ui, app: &App, pal: &Palette, t: Translate, update_pill: bool, second_line: &str) -> bool {
     let Palette { text_primary, text_muted, fill, on_fill, .. } = *pal;
     let mut closed = false;
     ui.horizontal(|ui| {
@@ -256,12 +324,12 @@ fn card_header(ui: &mut egui::Ui, app: &App, pal: &Palette, update_pill: bool, s
             ui.spacing_mut().item_spacing.y = 2.0;
             ui.horizontal(|ui| {
                 ui.label(RichText::new(app.name).size(15.0).strong().color(text_primary));
-                ui.label(RichText::new(format!("by {}", app.developer)).size(11.5).color(text_muted));
+                ui.label(RichText::new(t("by {developer}", &[("developer", app.developer)])).size(11.5).color(text_muted));
                 if update_pill {
                     // A chip, not accent-coloured text: small accent text misses WCAG's 4.5:1 for
                     // several apps (PdfCraft's red on the dark card, amber on the light one).
                     egui::Frame::new().fill(fill).inner_margin(egui::Margin::symmetric(4, 1)).show(ui, |ui| {
-                        ui.label(RichText::new("UPDATE").size(10.0).monospace().color(on_fill));
+                        ui.label(RichText::new(button(t, "Update")).size(10.0).monospace().color(on_fill));
                     });
                 }
             });
@@ -273,7 +341,7 @@ fn card_header(ui: &mut egui::Ui, app: &App, pal: &Palette, update_pill: bool, s
         ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
             // Two strokes, not a "✕" glyph: none of the bundled faces has U+2715.
             let (rect, close) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
-            close.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Close"));
+            close.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t("Close", &[])));
             let color = if close.hovered() { text_primary } else { text_muted };
             let (center, reach) = (rect.center(), 4.5);
             let stroke = egui::Stroke::new(1.5, color);
@@ -294,38 +362,53 @@ pub enum CheckResultResponse {
     None,
     /// OK, the close button, Esc or a click outside: the app stops showing the dialog.
     Close,
-    /// Failed state only: the app starts another requested check.
+    /// Failed states only: the app starts another requested check.
     CheckAgain,
+    /// Ready state only: the app calls `Updater::restart_to_update`, which asks it to close.
+    RestartToUpdate,
 }
 
 /// The result of a manual "Check for Updates", in the same card as [`StartupPrompt`]: a spinner
-/// while checking, "newest version" when up to date, the error and a retry when it failed.
+/// while checking, "newest version" when up to date, the error and a retry when it failed, an
+/// update installing or ready, and the launcher's choice when it manages the version. It also
+/// shows what the last update came to at the first start after it.
 ///
 /// An app shows it while a requested check is in view: open it when the user starts a check
-/// (`Updater::check_now`), call [`show`](Self::show) every frame with `updater.status()` until it
-/// returns [`CheckResultResponse::Close`], then stop calling it. On
-/// [`CheckResultResponse::CheckAgain`] start another requested check and keep showing it. An
-/// available update goes to [`StartupPrompt`] instead; the app closes this dialog when the prompt opens.
+/// (`Updater::check_now`) or when `updater.status()` is not [`Status::Idle`] after the check at
+/// start, call [`show`](Self::show) every frame with `updater.status()` until it returns
+/// [`CheckResultResponse::Close`], then call `Updater::dismiss_status` and stop calling it. On
+/// [`CheckResultResponse::CheckAgain`] start another requested check and keep showing it; on
+/// [`CheckResultResponse::RestartToUpdate`] call `Updater::restart_to_update`. An available update
+/// goes to [`StartupPrompt`] instead; the app closes this dialog when the prompt opens.
 #[derive(Clone, Copy, Debug)]
 pub struct CheckResultDialog {
     app: &'static App,
     running_version: &'static str,
+    translate: Translate,
 }
 
 impl CheckResultDialog {
     /// A dialog for `app`, which is running `running_version`.
     pub fn new(app: &'static App, running_version: &'static str) -> Self {
-        Self { app, running_version }
+        Self { app, running_version, translate: english }
     }
 
-    /// Draws the modal card for `status` and returns what the user chose. [`Status::Idle`] draws
-    /// nothing and returns [`CheckResultResponse::None`].
+    /// The dialog with its words in the interface language ([`crate::translate`]).
+    #[must_use]
+    pub fn with_translator(mut self, translate: Translate) -> Self {
+        self.translate = translate;
+        self
+    }
+
+    /// Draws the card for `status` and returns what the user chose. [`Status::Idle`] draws
+    /// nothing and returns [`CheckResultResponse::None`]. The card is modal except for
+    /// [`Status::Updated`], a notice that leaves the app usable behind it.
     pub fn show(&self, ctx: &egui::Context, status: &Status) -> CheckResultResponse {
         if matches!(status, Status::Idle) {
             return CheckResultResponse::None;
         }
         let mut response = CheckResultResponse::None;
-        if backdrop(ctx) {
+        if !matches!(status, Status::Updated(_)) && backdrop(ctx) {
             response = CheckResultResponse::Close;
         }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
@@ -333,7 +416,8 @@ impl CheckResultDialog {
         }
 
         let pal = Palette::new(ctx, self.app);
-        let Palette { card_bg, border_color, text_primary, text_muted, fill, on_fill, .. } = pal;
+        let Palette { card_bg, border_color, text_primary, text_muted, fill, on_fill, alert, .. } = pal;
+        let t = self.translate;
         egui::Area::new(egui::Id::unique("craft_update.check_result")).anchor(Align2::CENTER_CENTER, Vec2::ZERO).order(egui::Order::Foreground).show(
             ctx,
             |ui| {
@@ -345,7 +429,7 @@ impl CheckResultDialog {
                     .show(ui, |ui| {
                         ui.set_width(400.0);
                         style_card(ui, &pal);
-                        if card_header(ui, self.app, &pal, false, &format!("v{}", self.running_version)) {
+                        if card_header(ui, self.app, &pal, t, false, &format!("v{}", self.running_version)) {
                             response = CheckResultResponse::Close;
                         }
                         ui.add_space(8.0);
@@ -354,19 +438,52 @@ impl CheckResultDialog {
                             Status::Checking => {
                                 ui.horizontal(|ui| {
                                     ui.spinner();
-                                    ui.label(RichText::new("Checking for updates…").size(12.5).color(text_primary));
+                                    ui.label(RichText::new(t("Checking for updates…", &[])).size(12.5).color(text_primary));
+                                });
+                            }
+                            Status::Installing => {
+                                ui.horizontal(|ui| {
+                                    ui.spinner();
+                                    ui.label(RichText::new(t("Installing update…", &[])).size(12.5).color(text_primary));
+                                });
+                            }
+                            Status::Ready => {
+                                let text = t(crate::updater::READY_TEXT, &[("app", self.app.name)]);
+                                ui.label(RichText::new(text).size(12.5).color(text_primary));
+                            }
+                            Status::Managed => {
+                                let text = t(
+                                    "{app} {version} follows the version chosen in the launcher, so it does not update itself.",
+                                    &[("app", self.app.name), ("version", self.running_version)],
+                                );
+                                ui.label(RichText::new(text).size(12.5).color(text_muted));
+                            }
+                            Status::Updated(version) => {
+                                let text = t("{app} updated to {version}.", &[("app", self.app.name), ("version", version)]);
+                                ui.label(RichText::new(text).size(12.5).color(text_primary));
+                            }
+                            Status::InstallFailed(reason) => {
+                                let text = t("The update could not be installed: {reason}", &[("reason", reason)]);
+                                bounded(ui, "craft_update.install_failure", |ui| {
+                                    ui.add(egui::Label::new(RichText::new(text).size(12.5).color(alert)).selectable(true));
                                 });
                             }
                             Status::UpToDate => {
-                                let text = format!("{} {} is the newest version available.", self.app.name, self.running_version);
+                                let text = t(
+                                    "{app} {version} is the newest version available.",
+                                    &[("app", self.app.name), ("version", self.running_version)],
+                                );
                                 ui.label(RichText::new(text).size(12.5).color(text_muted));
                             }
                             Status::Failed(error) => {
-                                let alert_color = Color32::from_rgb(225, 95, 30);
-                                ui.label(RichText::new("Could not check for updates.").size(12.5).strong().color(alert_color));
-                                ui.add(egui::Label::new(RichText::new(error).size(12.0).color(text_muted)).selectable(true));
+                                ui.label(RichText::new(t("Could not check for updates.", &[])).size(12.5).strong().color(alert));
+                                bounded(ui, "craft_update.check_failure", |ui| {
+                                    ui.add(egui::Label::new(RichText::new(error).size(12.0).color(text_muted)).selectable(true));
+                                });
                                 ui.label(
-                                    RichText::new(format!("All releases are listed at {}", self.app.releases_url())).size(11.5).color(text_muted),
+                                    RichText::new(t("All releases are listed at {url}", &[("url", &self.app.releases_url())]))
+                                        .size(11.5)
+                                        .color(text_muted),
                                 );
                             }
                             Status::Idle => {}
@@ -379,19 +496,28 @@ impl CheckResultDialog {
                             ui.add_space(8.0);
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 ui.set_min_height(26.0);
-                                let ok = egui::Button::new(RichText::new("OK").size(10.5).strong().monospace().color(on_fill))
+                                let ok = egui::Button::new(RichText::new(button(t, "OK")).size(10.5).strong().monospace().color(on_fill))
                                     .fill(fill)
                                     .corner_radius(egui::CornerRadius::ZERO)
                                     .min_size(Vec2::new(65.0, 26.0));
                                 if ui.add(ok).clicked() {
                                     response = CheckResultResponse::Close;
                                 }
-                                if matches!(status, Status::Failed(_)) {
-                                    let again = egui::Button::new(RichText::new("CHECK AGAIN").size(10.5).monospace().color(text_primary))
+                                if matches!(status, Status::Failed(_) | Status::InstallFailed(_)) {
+                                    let again = egui::Button::new(RichText::new(button(t, "Check Again")).size(10.5).monospace().color(text_primary))
                                         .corner_radius(egui::CornerRadius::ZERO)
                                         .min_size(Vec2::new(100.0, 26.0));
                                     if ui.add(again).clicked() {
                                         response = CheckResultResponse::CheckAgain;
+                                    }
+                                }
+                                if matches!(status, Status::Ready) {
+                                    let restart =
+                                        egui::Button::new(RichText::new(button(t, "Restart to Update")).size(10.5).monospace().color(text_primary))
+                                            .corner_radius(egui::CornerRadius::ZERO)
+                                            .min_size(Vec2::new(130.0, 26.0));
+                                    if ui.add(restart).clicked() {
+                                        response = CheckResultResponse::RestartToUpdate;
                                     }
                                 }
                             });
@@ -401,6 +527,16 @@ impl CheckResultDialog {
         );
         response
     }
+}
+
+/// The tallest an error or failure reason draws in a card; a longer one scrolls, so the card's
+/// buttons stay on screen.
+const REASON_MAX_HEIGHT: f32 = 160.0;
+
+/// Draws `add_contents` (an error or a failure reason) at most [`REASON_MAX_HEIGHT`] tall,
+/// scrolling the rest.
+fn bounded(ui: &mut egui::Ui, id: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
+    egui::ScrollArea::vertical().id_salt(id).max_height(REASON_MAX_HEIGHT).auto_shrink([false, true]).show(ui, add_contents);
 }
 
 /// Backgrounds of an unfilled button (LATER, DISMISS) when hovered and when pressed: a step from
@@ -475,7 +611,7 @@ mod tests {
     use egui::{Context, Event, FullOutput, Key, Modifiers, RawInput, Rect};
 
     const DARK_CARD: Color32 = Color32::from_rgb(26, 26, 28);
-    const DARK_STATUS: Color32 = Color32::from_rgb(50, 30, 20);
+    const DARK_STATUS: Color32 = Color32::from_rgb(44, 26, 18);
 
     fn screen() -> Rect {
         Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 480.0))
@@ -499,7 +635,10 @@ mod tests {
             is_self_updating,
             open: true,
             status_message: None,
+            status_note: None,
             is_installing: false,
+            is_ready: false,
+            translate: english,
         }
     }
 
@@ -715,6 +854,33 @@ mod tests {
         assert!((link.y - button.y).abs() <= 1.0, "link centred at {} but the button at {}", link.y, button.y);
     }
 
+    /// #391: the "What's new" link opens the release page only when it is a safe web link; an app
+    /// that builds its own `Release` (a feed, a cache) can't hand the browser anything else.
+    #[test]
+    fn whats_new_opens_only_a_safe_link() {
+        let opened = |url: &str| {
+            let ctx = dark_context();
+            let mut prompt = prompt_for(false);
+            prompt.release.html_url = url.to_string();
+            frame(&ctx, &mut prompt, Vec::new());
+            let (_, output) = frame(&ctx, &mut prompt, Vec::new());
+            let at = text_pos(&output, "What's new").expect("the link is painted");
+            let button = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+            frame(&ctx, &mut prompt, vec![Event::PointerMoved(at)]);
+            frame(&ctx, &mut prompt, vec![button(true)]);
+            let (_, output) = frame(&ctx, &mut prompt, vec![button(false)]);
+            output.platform_output.commands.iter().find_map(|c| match c {
+                egui::OutputCommand::OpenUrl(u) => Some(u.url.clone()),
+                _ => None,
+            })
+        };
+        let page = "https://github.com/storytold/photocraft/releases/tag/v0.2.0";
+        assert_eq!(opened(page).as_deref(), Some(page));
+        for bad in ["", "file:///etc/passwd", "javascript:alert(1)", "https://evil.example/a&calc", "https://user@evil.example/"] {
+            assert_eq!(opened(bad), None, "{bad:?}");
+        }
+    }
+
     #[test]
     fn clicking_download_answers_download() {
         let ctx = dark_context();
@@ -759,6 +925,54 @@ mod tests {
         }
     }
 
+    /// Errors and failure reasons reach WCAG AA's 4.5:1 on the card and in the prompt's message
+    /// box, in both themes.
+    #[test]
+    fn failure_text_reaches_aa_in_both_themes() {
+        for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+            let ctx = Context::default();
+            ctx.set_theme(theme);
+            let pal = Palette::new(&ctx, &PHOTOCRAFT);
+            for (surface, bg) in [("card", pal.card_bg), ("message box", pal.alert_bg)] {
+                let ratio = contrast(pal.alert, bg);
+                assert!(ratio >= 4.5, "{theme:?} {surface}: {ratio:.2}:1");
+            }
+        }
+    }
+
+    /// A long error or failure reason scrolls inside the card, so the card's buttons stay on
+    /// screen.
+    #[test]
+    fn a_long_reason_keeps_the_buttons_on_screen() {
+        let long = "the installer reported an error. ".repeat(120);
+        let on_screen = |output: &FullOutput, label: &str| text_pos(output, label).is_some_and(|pos| screen().contains(pos));
+        let dialog = CheckResultDialog::new(&PHOTOCRAFT, "0.1.0");
+        for status in [Status::InstallFailed(long.clone()), Status::Failed(long.clone())] {
+            let ctx = dark_context();
+            let mut output = None;
+            // The first frame of an area only sizes it; the second paints.
+            for _ in 0..2 {
+                let mut out = ctx.run_ui(RawInput { screen_rect: Some(screen()), ..RawInput::default() }, |ui| {
+                    dialog.show(ui.ctx(), &status);
+                });
+                out.textures_delta.clear();
+                output = Some(out);
+            }
+            let output = output.unwrap();
+            for label in ["OK", "CHECK AGAIN"] {
+                assert!(on_screen(&output, label), "{label} is off screen for a long {status:?}");
+            }
+        }
+        let ctx = dark_context();
+        let mut prompt = prompt_for(true);
+        prompt.set_message(long);
+        frame(&ctx, &mut prompt, Vec::new());
+        let (_, output) = frame(&ctx, &mut prompt, Vec::new());
+        for label in ["UPDATE AND RESTART", "LATER"] {
+            assert!(on_screen(&output, label), "{label} is off screen under a long message");
+        }
+    }
+
     /// Where the frame painted `text` (inside its galley, so a pointer there is over it).
     fn text_pos(output: &FullOutput, text: &str) -> Option<egui::Pos2> {
         fn find(shape: &egui::Shape, text: &str) -> Option<egui::Pos2> {
@@ -788,6 +1002,19 @@ mod tests {
         let (_, output) = frame(&ctx, &mut prompt, Vec::new());
         let painted = painted_text(&output);
         assert!(painted.lines().any(|l| l == "by Someone Else") && !painted.contains("by ArtCraft"), "{painted}");
+    }
+
+    /// An error written straight to `status_message` shows even when a note was set before.
+    #[test]
+    fn a_literal_error_wins_over_a_stale_note() {
+        let mut prompt = prompt_for(false);
+        prompt.set_note(Note::new("Save or close your open work first; the update restarts the app.", &[]));
+        prompt.status_message = Some("disk full".into());
+        assert_eq!(prompt.message().as_deref(), Some("disk full"));
+        prompt.set_note(Note::new("Close {app}", &[("app", "PhotoCraft")]));
+        assert_eq!(prompt.message().as_deref(), Some("Close PhotoCraft"));
+        prompt.clear_message();
+        assert_eq!(prompt.message(), None);
     }
 
     #[test]
@@ -935,7 +1162,92 @@ mod tests {
         let (_, idle) = run(&ctx, &Status::Idle, Vec::new());
         assert!(painted_text(&idle).is_empty());
 
+        // An update under way, the launcher's choice, and what the last update came to.
+        let ready = crate::translate::fill(crate::updater::READY_TEXT, &[("app", "PhotoCraft")]);
+        let backdrop = Color32::from_black_alpha(150);
+        for (status, wants, modal) in [
+            (Status::Installing, vec!["Installing update…", "OK"], true),
+            (Status::Ready, vec![ready.as_str(), "RESTART TO UPDATE", "OK"], true),
+            (Status::Managed, vec!["PhotoCraft 0.1.0 follows the version chosen in the launcher, so it does not update itself.", "OK"], true),
+            (Status::Updated("0.2.0".into()), vec!["PhotoCraft updated to 0.2.0.", "OK"], false),
+            (Status::InstallFailed("disk full".into()), vec!["The update could not be installed: disk full", "CHECK AGAIN", "OK"], true),
+        ] {
+            let (response, output) = run(&ctx, &status, Vec::new());
+            let text = painted_text(&output);
+            for want in wants {
+                assert!(text.contains(want), "{status:?}: {want} missing in {text}");
+            }
+            assert!(!text.contains("newest version"), "{status:?} is not called newest: {text}");
+            assert_eq!(response, CheckResultResponse::None);
+            assert_eq!(rect_fills(&output).iter().any(|(_, fill)| *fill == backdrop), modal, "{status:?} modal");
+        }
+
         let escape = Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
         assert_eq!(run(&dark_context(), &Status::UpToDate, vec![escape]).0, CheckResultResponse::Close);
+    }
+
+    /// A pseudo-language for the tests: every string bracketed, its values reordered first, so a
+    /// string the card draws without asking the app shows up as plain English.
+    fn pseudo(text: &str, args: &[(&str, &str)]) -> String {
+        let values: Vec<&str> = args.iter().map(|(_, value)| *value).collect();
+        format!("[{} | {}]", values.join(", "), text.split('{').next().unwrap_or(""))
+    }
+
+    /// Each painted line of a translated card is the app's (bracketed), or a value the card
+    /// doesn't translate (the badge initial, the app name, an error).
+    fn assert_all_translated(painted: &str, untranslated: &[&str]) {
+        for line in painted.lines() {
+            assert!(line.starts_with('[') || untranslated.contains(&line), "{line:?} is not translated in {painted:?}");
+        }
+    }
+
+    #[test]
+    fn the_prompt_draws_its_words_through_the_apps_translator() {
+        for (self_updating, installing, ready) in [(false, false, false), (true, false, false), (true, true, false), (true, false, true)] {
+            let ctx = dark_context();
+            let mut prompt = StartupPrompt { is_installing: installing, is_ready: ready, ..prompt_for(self_updating) }.with_translator(pseudo);
+            frame(&ctx, &mut prompt, Vec::new());
+            let (_, output) = frame(&ctx, &mut prompt, Vec::new());
+            let painted = painted_text(&output);
+            assert_all_translated(&painted, &["P", "PhotoCraft"]);
+            // Values reach the translation; buttons are looked up in title case and drawn in capitals.
+            assert!(painted.contains("[0.1.0, 0.2.0 | v]") && painted.contains("[ArtCraft | by ]"), "{painted}");
+            let button = match (self_updating, installing, ready) {
+                (_, true, _) => "[ | DISMISS]",
+                (_, false, true) => "[ | RESTART TO UPDATE]",
+                (true, false, false) => "[ | UPDATE AND RESTART]",
+                (false, false, false) => "[ | DOWNLOAD]",
+            };
+            assert!(painted.contains(button) && painted.contains("[ | UPDATE]"), "{painted}");
+        }
+    }
+
+    #[test]
+    fn the_result_dialog_draws_its_words_through_the_apps_translator() {
+        let dialog = CheckResultDialog::new(&PHOTOCRAFT, "0.1.0").with_translator(pseudo);
+        for status in [
+            Status::Checking,
+            Status::UpToDate,
+            Status::Failed("no network".into()),
+            Status::Installing,
+            Status::Ready,
+            Status::Managed,
+            Status::Updated("0.2.0".into()),
+            Status::InstallFailed("no network".into()),
+        ] {
+            let ctx = dark_context();
+            let mut output = None;
+            for _ in 0..2 {
+                let mut out = ctx.run_ui(RawInput { screen_rect: Some(screen()), ..RawInput::default() }, |ui| {
+                    dialog.show(ui.ctx(), &status);
+                });
+                out.textures_delta.clear();
+                output = Some(out);
+            }
+            let painted = output.map(|o| painted_text(&o)).unwrap_or_default();
+            // The version line is a number, and a failure's reason comes from the network as it is.
+            assert_all_translated(&painted, &["P", "PhotoCraft", "v0.1.0", "no network"]);
+            assert!(painted.contains("[ArtCraft | by ]"), "{painted}");
+        }
     }
 }

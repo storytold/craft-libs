@@ -6,7 +6,10 @@
 //!    adding a missing accent is the commonest slip and ranks first, while taking away one the
 //!    writer typed ranks after the known confusions;
 //! 3. the REP table of common confusions (`żeka` → `rzeka`);
-//! 4. a missing space (`napewno` → `na pewno`);
+//! 4. a missing space (`napewno` → `na pewno`), or a missing apostrophe where the dictionary
+//!    knows the elided form (`jadore` → `j'adore`, `lacqua` → `l'acqua`); an elision ranks just
+//!    before the missing space, so after accent-adding, MAP and REP fixes (tying with dropping a
+//!    typed accent);
 //! 5. keyboard neighbours from the KEY rows, then one typo: a letter left out, added, swapped with
 //!    the next or mistyped (TRY letters);
 //! 6. when that finds fewer than asked for: the stems that start like the word (MAP relatives
@@ -38,6 +41,14 @@ pub(crate) const COST_OTHER_MAP: u32 = 7;
 const COST_DROP_DIACRITIC: u32 = 11;
 const COST_REP: u32 = 10;
 pub(crate) const COST_SPLIT: u32 = 12;
+/// A missing apostrophe between an elided word and a dictionary word of two letters or more
+/// (`j'adore`, `qu'il`, `dell'anno`).
+const COST_ELISION: u32 = COST_SPLIT - 1;
+/// Any other missing apostrophe the dictionary accepts (a possessive `church's`, an enclitic
+/// `acusi't`, a contraction `he'd`), ranked after every one-letter fix (`churches`, `acudit`).
+const COST_APOSTROPHE: u32 = COST_MISTYPE + 1;
+/// Longest elided first part tried, in letters (`quoiqu'`, `lorsqu'`, `quell'`).
+const MAX_ELIDED: usize = 7;
 /// A missing space leaving a half shorter than three letters ([`Split::Anywhere`]).
 const COST_SPLIT_SHORT: u32 = 17;
 /// A missing space between two longer halves with no short word beside it ([`Split::Near`]).
@@ -71,6 +82,15 @@ pub(crate) struct Tuning {
     /// Offer a word only the dictionary capitalizes (a name, an abbreviation: `Col`, `Wis`) only
     /// when the word itself is capitalized, and never as half of a missing space (`Che Que`).
     pub strict_case: bool,
+    /// Offer a missing apostrophe before a suggestible word of 2+ letters as an elision (French
+    /// `j'adore`, Italian `l'acqua`), ranked at [`COST_ELISION`]: after accent-adding, MAP and REP fixes (a tie with dropping a typed accent),
+    /// before the missing space (`j adore`) and the typos. On by default ([`Tuning::DEFAULT`]) because
+    /// the pack languages share it, so it does not mean "this language elides": the dictionary check
+    /// gates it, and a dictionary without such forms never offers one. A language that never elides
+    /// and has apostrophe forms that compete turns it off (English); then every missing apostrophe
+    /// ranks after the one-letter fixes (`churchs` → `churches` before `church's`, `neer` → `never`
+    /// before `ne'er`).
+    pub elision: bool,
 }
 
 /// Where a missing space may go.
@@ -97,6 +117,7 @@ impl Tuning {
         map_cost,
         mistype_cost,
         strict_case: false,
+        elision: true,
     };
 }
 
@@ -388,7 +409,7 @@ pub(crate) fn suggest_in(d: &AffixDict, word: &str, max: usize, t: &Tuning) -> V
     let map = groups(d, t);
     add_map_slips(&mut col, &chars, &map, t);
     add_confusions(&mut col, &input, t);
-    add_splits(&mut col, &input, &t.split);
+    add_splits(&mut col, &input, t);
     add_key_neighbours(&mut col, &chars);
     add_typos(&mut col, &chars, t);
     col.compounds();
@@ -474,11 +495,22 @@ fn add_confusions(col: &mut Collector, input: &str, t: &Tuning) {
     }
 }
 
-/// Round 4: a missing space; both halves must be dictionary words.
-fn add_splits(col: &mut Collector, input: &str, split: &Split) {
-    for (i, _) in input.char_indices().skip(1) {
+/// Round 4: a missing space; both halves must be dictionary words. Before it, a missing
+/// apostrophe: the dictionary's own check says whether `a'b` is right, so no language list is
+/// needed and a dictionary without such forms never offers one. A true elision, whose second part
+/// is a word itself (French `j'adore`, Italian and Catalan `l'acqua`, `dell'anno`), ranks before
+/// the space (`j adore`) and every typo while [`Tuning::elision`] is on; any other form ranks
+/// after the one-letter fixes ([`COST_APOSTROPHE`]). At most two lookups per split, and only after
+/// a short first part ([`MAX_ELIDED`]).
+fn add_splits(col: &mut Collector, input: &str, t: &Tuning) {
+    let no_apostrophe = !input.contains(['\'', '’']);
+    for (n, (i, _)) in input.char_indices().enumerate().skip(1) {
         let (Some(a), Some(b)) = (input.get(..i), input.get(i..)) else { continue };
-        if let Some(cost) = split_cost(split, a, b) {
+        if no_apostrophe && n <= MAX_ELIDED {
+            let word = t.elision && b.chars().nth(1).is_some() && col.d.contains_suggestible_with(b, false);
+            col.offer(&format!("{a}'{b}"), if word { COST_ELISION } else { COST_APOSTROPHE });
+        }
+        if let Some(cost) = split_cost(&t.split, a, b) {
             col.offer(&format!("{a} {b}"), cost);
         }
     }
@@ -777,5 +809,69 @@ mod tests {
         assert!(suggest_in(&d, "nakot", 4, &near).contains(&"na kot".into()));
         assert!(!suggest_in(&d, "kotna", 4, &near).contains(&"kot na".into()), "no stray short half");
         assert!(suggest_in(&d, "kotna", 4, &Tuning::DEFAULT).contains(&"kot na".into()));
+    }
+
+    /// A French elision in the shape of the LibreOffice `fr` dictionary (written for this test):
+    /// long flags named after the elided word, `’` read as `'` and written back as `’`.
+    const FR_AFF: &str = "SET UTF-8\nFLAG long\nWORDCHARS -’'\nICONV 1\nICONV ’ '\nOCONV 1\nOCONV ' ’\n\
+        PFX j' Y 1\nPFX j' 0 j' .\nPFX l' Y 1\nPFX l' 0 l' .\n";
+    const FR_DIC: &str = "5\nadore/j'\nami/l'\njade\nj\nl\n";
+
+    /// Craft-proof bug: French `Jadore` was offered `Adore, J adore, Jade` but never `J’adore`. A
+    /// missing apostrophe the dictionary accepts comes before the missing space, in the
+    /// writer's case and with the dictionary's apostrophe.
+    #[test]
+    fn a_missing_elision_apostrophe_is_offered_before_the_missing_space() {
+        let d = AffixDict::from_hunspell(FR_AFF, FR_DIC, &[]).unwrap();
+        assert!(d.check("j'adore") && d.check("j’adore") && !d.check("jadore"));
+        for (word, want, space) in
+            [("Jadore", "J’adore", "J adore"), ("jadore", "j’adore", "j adore"), ("JADORE", "J’ADORE", "J ADORE"), ("lami", "l’ami", "l ami")]
+        {
+            let got = suggest_in(&d, word, 6, &Tuning::DEFAULT);
+            assert_eq!(got.first().map(String::as_str), Some(want), "{word}: {got:?}");
+            let at = |s: &str| got.iter().position(|g| g == s);
+            assert!(at(want) < at(space) || at(space).is_none(), "{word}: {got:?}");
+        }
+        // A word the writer gave an apostrophe isn't split again.
+        assert!(!suggest_in(&d, "j'adorr", 6, &Tuning::DEFAULT).iter().any(|g| g.matches('’').count() > 1));
+    }
+
+    /// A dictionary without elided forms offers no apostrophe: the missing space is still first.
+    #[test]
+    fn no_apostrophe_without_elided_forms_in_the_dictionary() {
+        let d = AffixDict::from_hunspell("SET UTF-8\n", "4\nadore\nj\nna\npewno\n", &[]).unwrap();
+        for word in ["jadore", "napewno"] {
+            let got = suggest_in(&d, word, 6, &Tuning::DEFAULT);
+            assert!(got.iter().all(|g| !g.contains(['\'', '’'])), "{word}: {got:?}");
+        }
+        assert_eq!(suggest_in(&d, "napewno", 6, &Tuning::DEFAULT).first().map(String::as_str), Some("na pewno"));
+    }
+
+    /// Review of the elision fix: an apostrophe form whose second part is no word (a Catalan
+    /// enclitic `acusi't`, an English possessive `church's`) ranks after the one-letter fixes,
+    /// while a true elision (`l'home`) still ranks first among them.
+    #[test]
+    fn an_apostrophe_before_no_word_ranks_after_one_letter_fixes() {
+        let aff = "SET UTF-8\nTRY acdehimorstu\nWORDCHARS '\nSFX T Y 1\nSFX T 0 't .\nPFX L Y 1\nPFX L 0 l' .\nSFX S Y 1\nSFX S 0 es .\nSFX M Y 1\nSFX M 0 's .\n";
+        let d = AffixDict::from_hunspell(aff, "5\nacudit\nacusi/T\nhome/L\nl\nchurch/SM\n", &[]).unwrap();
+        assert!(d.check("acusi't") && d.check("church's"));
+        for (word, before, after) in [("acusit", "acudit", "acusi't"), ("churchs", "churches", "church's"), ("lhome", "l'home", "l home")] {
+            let got = suggest_in(&d, word, 8, &Tuning::DEFAULT);
+            let at = |s: &str| got.iter().position(|g| g == s);
+            assert!(at(before).is_some() && at(before) < at(after) && at(after).is_some(), "{word}: {got:?}");
+        }
+        assert_eq!(suggest_in(&d, "lhome", 8, &Tuning::DEFAULT).first().map(String::as_str), Some("l'home"));
+        assert!(suggest_in(&d, "churchs", 8, &Tuning::DEFAULT).iter().position(|g| g == "church") < Some(2), "drop the s");
+    }
+
+    /// A language without elision ([`Tuning::elision`], English) ranks every missing apostrophe
+    /// after the one-letter fixes, even before a word (`neer` → `near` before `ne'er`).
+    #[test]
+    fn a_language_without_elision_ranks_apostrophes_late() {
+        let d = AffixDict::from_hunspell("SET UTF-8\nTRY aenr\nWORDCHARS '\n", "3\nne'er\ner\nnear\n", &[]).unwrap();
+        let english = Tuning { elision: false, ..Tuning::DEFAULT };
+        assert_eq!(suggest_in(&d, "neer", 4, &english).first().map(String::as_str), Some("near"));
+        assert!(suggest_in(&d, "neer", 4, &english).contains(&"ne'er".to_string()));
+        assert_eq!(suggest_in(&d, "neer", 4, &Tuning::DEFAULT).first().map(String::as_str), Some("ne'er"), "an elision");
     }
 }

@@ -467,6 +467,11 @@ pub enum Action<P> {
         panel: P,
         height: Option<f32>,
     },
+    /// Preferred flyout width of the dock group holding `panel`; `None` uses its column.
+    ResizeFlyoutWidth {
+        panel: P,
+        width: Option<f32>,
+    },
     ResizeIconic {
         panel: P,
         width: Option<f32>,
@@ -747,7 +752,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
         };
         let own = groups.get(group).ok_or(DockError::MissingPanel)?;
         let mut location = group_location(&own.panels, panel).ok_or(DockError::MissingPanel)?;
-        location.group = Some(GroupLocation { minimized: own.minimized, height: own.height, column });
+        location.group = Some(GroupLocation { minimized: own.minimized, height: own.height, flyout_width: own.flyout_width, column });
         if location.anchor.is_some() {
             return Ok(location);
         }
@@ -810,14 +815,21 @@ impl<P: Clone + Eq + Hash> Layout<P> {
         }
         let state = location.group.as_ref();
         if state.is_some_and(|s| {
-            !valid_height(s.height) || s.column.is_some_and(|c| !valid_width(c.width) || c.iconic_width.is_some_and(|w| !valid_width(w)))
+            !valid_height(s.height)
+                || s.flyout_width.is_some_and(|w| !valid_width(w))
+                || s.column.is_some_and(|c| !valid_width(c.width) || c.iconic_width.is_some_and(|w| !valid_width(w)))
         }) {
             return Err(DockError::InvalidGeometry);
         }
         // A restore that creates a group, column or dock gives it the saved state.
         let moving = || {
-            let group =
-                Group { panels: vec![panel.clone()], active: 0, minimized: state.is_some_and(|s| s.minimized), height: state.and_then(|s| s.height) };
+            let group = Group {
+                panels: vec![panel.clone()],
+                active: 0,
+                minimized: state.is_some_and(|s| s.minimized),
+                height: state.and_then(|s| s.height),
+                flyout_width: state.and_then(|s| s.flyout_width),
+            };
             let column = state.and_then(|s| s.column);
             Moving {
                 width: column.map(|c| c.width),
@@ -941,6 +953,9 @@ impl<P: Clone + Eq + Hash> Layout<P> {
             }
             action => action,
         };
+        // A destination in a floating window takes only floatable panels, and a group placed
+        // there becomes a split of the anchor's frame.
+        let floats = |anchor: &P| self.floating.iter().any(|w| w.contains(anchor));
         match &action {
             Action::Move { panel, anchor, placement } | Action::OpenAt { panel, anchor, placement } => {
                 // Opening an absent panel moves nothing, so it works in a locked workspace too.
@@ -948,7 +963,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                 if !opens && !permissions(panel).movable {
                     return Err(DockError::NotAllowed);
                 }
-                if !placement_allowed(placement, permissions(anchor)) {
+                if !placement_allowed(placement, permissions(anchor), floats(anchor)) || floats(anchor) && !permissions(panel).floatable {
                     return Err(DockError::NotAllowed);
                 }
             }
@@ -967,7 +982,9 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                 let allowed = policy.movable
                     && match to {
                         Target::Float { .. } => policy.floatable,
-                        Target::At { anchor, placement } => placement_allowed(placement, permissions(anchor)),
+                        Target::At { anchor, placement } => {
+                            placement_allowed(placement, permissions(anchor), floats(anchor)) && (!floats(anchor) || policy.floatable)
+                        }
                         Target::NewDock { .. } => true,
                     };
                 if !allowed {
@@ -981,7 +998,11 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                 }
                 match to {
                     Target::Float { .. } if members.iter().any(|p| !permissions(p).floatable) => return Err(DockError::NotAllowed),
-                    Target::At { anchor, placement } if !members.contains(anchor) && !placement_allowed(placement, permissions(anchor)) => {
+                    Target::At { anchor, placement }
+                        if !members.contains(anchor)
+                            && (!placement_allowed(placement, permissions(anchor), floats(anchor))
+                                || floats(anchor) && members.iter().any(|p| !permissions(p).floatable)) =>
+                    {
                         return Err(DockError::NotAllowed);
                     }
                     _ => {}
@@ -1202,6 +1223,15 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                 entry.height = height;
                 Ok(())
             }
+            Action::ResizeFlyoutWidth { panel, width } => {
+                if width.is_some_and(|w| !valid_width(w)) {
+                    return Err(DockError::InvalidGeometry);
+                }
+                let place = self.place(&panel).ok_or(DockError::MissingPanel)?;
+                let group = self.group_mut(&place).ok_or(DockError::InvalidPlacement)?;
+                group.flyout_width = width;
+                Ok(())
+            }
             Action::SetIconic { panel, iconic } => {
                 self.column_of(&panel)?.iconic = iconic;
                 Ok(())
@@ -1329,11 +1359,13 @@ impl<P: Clone + Eq + Hash> Layout<P> {
 }
 
 /// Whether the anchor's permissions take this placement: tabs need `accepts_tabs`, side
-/// splits `accepts_splits`.
-fn placement_allowed<P>(placement: &Placement<P>, anchor: Permissions) -> bool {
+/// splits `accepts_splits`, and so does a group placed at an anchor in a floating window
+/// (`floating`), which splits the anchor's frame.
+fn placement_allowed<P>(placement: &Placement<P>, anchor: Permissions, floating: bool) -> bool {
     match placement {
         Placement::Tab { .. } | Placement::Split(Zone::Center) => anchor.accepts_tabs,
         Placement::Split(_) | Placement::SplitSized { .. } => anchor.accepts_splits,
+        Placement::Group { .. } if floating => anchor.accepts_splits,
         _ => true,
     }
 }
@@ -1384,8 +1416,9 @@ fn check_leaf<'a, P: Eq + Hash>(node: &'a Node<P>, seen: &mut HashSet<&'a P>) ->
     }
 }
 
+/// Validate group dimensions and nonempty membership, then check the active tab and uniqueness.
 fn check_group<'a, P: Eq + Hash>(group: &'a Group<P>, seen: &mut HashSet<&'a P>) -> Result<(), DockError> {
-    if group.panels.is_empty() || !valid_height(group.height) {
+    if group.panels.is_empty() || !valid_height(group.height) || group.flyout_width.is_some_and(|w| !valid_width(w)) {
         return Err(DockError::InvalidGeometry);
     }
     check_tabs(&group.panels, group.active, seen)
