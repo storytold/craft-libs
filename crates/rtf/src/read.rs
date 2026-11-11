@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::codepage::{MAC_ROMAN_CODE_PAGE, charset_code_page, is_text_code_page};
+use crate::codepage::{MAC_ROMAN_CODE_PAGE, SYMBOL_CODE_PAGE, charset_code_page, is_text_code_page};
 use crate::lex::{Token, Tokens, is_rtf};
 use crate::model::{Block, COLUMN_BREAK, Cell, CharFmt, Document, LINE_BREAK, PAGE_BREAK, Para, Run, Table};
 use crate::text::TextDecoder;
@@ -81,6 +81,9 @@ struct St {
     fmt: CharFmt,
     /// The code page of the current font, when its charset names one.
     cp: Option<u16>,
+    /// A font was selected (`\f`) in this group or an enclosing one, and no `\plain` has since
+    /// made the default font current again.
+    font_set: bool,
     uc: usize,
     outline_level: Option<u8>,
     left_indent: i32,
@@ -89,7 +92,7 @@ struct St {
 
 impl Default for St {
     fn default() -> St {
-        St { dest: Dest::Body, fmt: CharFmt::default(), cp: None, uc: 1, outline_level: None, left_indent: 0, in_table: false }
+        St { dest: Dest::Body, fmt: CharFmt::default(), cp: None, font_set: false, uc: 1, outline_level: None, left_indent: 0, in_table: false }
     }
 }
 
@@ -107,6 +110,8 @@ struct Reader {
     font_cps: HashMap<i32, u16>,
     font_cur: i32,
     font_cp_cur: Option<u16>,
+    /// The font table entry being read named its code page with `\cpg`.
+    font_cpg_named: bool,
     font_name: String,
     /// Where the text of a destination that keeps none goes.
     scrap: String,
@@ -197,9 +202,15 @@ impl Reader {
     }
 
     /// The code page 8-bit text is read in: the current font's, else the default font's, else
-    /// the document's.
+    /// the document's (Windows-1252 when none is named). The symbol page is for body text set in
+    /// a symbol font, so it never applies outside the body (names in the font table), and a
+    /// symbol default font's page does not apply to text in a font selected with `\f`.
     fn code_page(&self) -> u16 {
-        self.st.cp.or_else(|| self.font_cps.get(&self.deff).copied()).unwrap_or(if self.ansicpg == 0 { 1252 } else { self.ansicpg })
+        let document = if self.ansicpg == 0 { 1252 } else { self.ansicpg };
+        let body = self.st.dest == Dest::Body;
+        let current = self.st.cp.filter(|&cp| cp != SYMBOL_CODE_PAGE || body);
+        let default = self.font_cps.get(&self.deff).copied().filter(|&cp| cp != SYMBOL_CODE_PAGE || (body && !self.st.font_set));
+        current.or(default).unwrap_or(document)
     }
 
     fn bytes(&mut self, chunk: &[u8]) {
@@ -359,9 +370,23 @@ impl Reader {
                 }
             }
             Dest::FontTbl => match name {
-                "f" => self.font_cur = pv,
-                "fcharset" => self.font_cp_cur = charset_code_page(pv),
-                "cpg" => self.font_cp_cur = u16::try_from(pv).ok().filter(|cp| is_text_code_page(*cp)).or(self.font_cp_cur),
+                "f" => {
+                    self.font_cur = pv;
+                    self.font_cpg_named = false;
+                }
+                "fcharset" => {
+                    // The symbol charset doesn't replace a code page the entry named with `\cpg`.
+                    let cp = charset_code_page(pv);
+                    if !(self.font_cpg_named && cp == Some(SYMBOL_CODE_PAGE)) {
+                        self.font_cp_cur = cp;
+                    }
+                }
+                "cpg" => {
+                    if let Some(cp) = u16::try_from(pv).ok().filter(|cp| is_text_code_page(*cp)) {
+                        self.font_cp_cur = Some(cp);
+                        self.font_cpg_named = true;
+                    }
+                }
                 _ => {}
             },
             Dest::Body => self.body_word(name, param),
@@ -432,10 +457,13 @@ impl Reader {
             "f" => {
                 let font = self.fonts.get(&pv).cloned();
                 self.st.cp = self.font_cps.get(&pv).copied();
+                self.st.font_set = true;
                 self.restyle(|f| f.font = font);
             }
             "plain" => {
+                // The default font is current again, and its code page with it.
                 self.st.cp = None;
+                self.st.font_set = false;
                 self.restyle(|f| *f = CharFmt::default());
             }
             "uc" => self.st.uc = usize::try_from(pv).unwrap_or(0),

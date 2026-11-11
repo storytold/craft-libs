@@ -281,9 +281,18 @@ pub fn is_byte_code_page(code_page: u16) -> bool {
     SINGLE_BYTE_CODE_PAGES.contains(&code_page) || OEM_CODE_PAGES.contains(&code_page) || code_page == MAC_ROMAN_CODE_PAGE
 }
 
-/// A byte of 8-bit document text in `code_page` (see [`is_byte_code_page`]) as a char. Below 0x80
-/// it is ASCII in every code page (text, so an OEM page's glyphs for control codes don't apply).
+/// Windows' symbol code page (`CP_SYMBOL`), the charset of symbol fonts (`\fcharset2`): a byte is
+/// the font's own code, not a letter. [`code_page_byte`] reads one from 0x80 as U+F000 + the byte,
+/// the form a Word symbol character takes (`w:sym w:char="F0D8"`).
+pub const SYMBOL_CODE_PAGE: u16 = 42;
+
+/// A byte of 8-bit document text in `code_page` (see [`is_byte_code_page`], and
+/// [`SYMBOL_CODE_PAGE`] for a symbol font) as a char. Below 0x80 it is ASCII in every code page
+/// (text, so an OEM page's glyphs for control codes don't apply).
 pub fn code_page_byte(code_page: u16, b: u8) -> char {
+    if b >= 0x80 && code_page == SYMBOL_CODE_PAGE {
+        return char::from_u32(0xF000 + u32::from(b)).unwrap_or('\u{FFFD}');
+    }
     if b >= 0x80 && OEM_CODE_PAGES.contains(&code_page) { oem_byte(code_page, b) } else { windows_byte(code_page, b) }
 }
 
@@ -319,10 +328,11 @@ pub fn is_text_code_page(code_page: u16) -> bool {
 
 /// The code page of an RTF or Word font charset (`\fcharset`): 204 Russian → 1251, 238 Eastern
 /// European → 1250, 77 Mac → 10000, 254 PC / 255 OEM → 437, 128 Japanese → 932, 129 Korean → 949,
-/// 134 Simplified Chinese → 936, 136 Traditional Chinese → 950… `None` for the ANSI and default
-/// charsets (the document's code page applies) and symbol fonts.
+/// 134 Simplified Chinese → 936, 136 Traditional Chinese → 950, 2 Symbol → [`SYMBOL_CODE_PAGE`]…
+/// `None` for the ANSI and default charsets (the document's code page applies).
 pub fn charset_code_page(charset: i32) -> Option<u16> {
     Some(match charset {
+        2 => SYMBOL_CODE_PAGE,
         77 => MAC_ROMAN_CODE_PAGE,
         128 => 932,
         129 => 949,
@@ -382,6 +392,9 @@ mod tests {
         assert_eq!(decode(850, &[0x9D, 0xE9]), "ØÚ");
         assert_eq!(decode(10000, &[0x8E]), "é");
         assert_eq!(decode(1251, &[0xC4]), "Д");
+        // A symbol font's bytes are its own codes, from 0x80 the private-use form; ASCII stays ASCII.
+        assert_eq!(charset_code_page(2), Some(SYMBOL_CODE_PAGE));
+        assert_eq!(decode(SYMBOL_CODE_PAGE, &[0x4A, 0x93, 0xD8, 0xFC]), "J\u{F093}\u{F0D8}\u{F0FC}");
         for cp in [437, 850, 866, 1250, 1252, 10000] {
             assert!(is_byte_code_page(cp), "{cp}");
         }

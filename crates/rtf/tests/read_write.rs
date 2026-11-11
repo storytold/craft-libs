@@ -145,6 +145,26 @@ fn code_pages() {
     assert_eq!(text(rtf), "α б ł α α");
 }
 
+/// A symbol font (`\fcharset2`: Symbol, Wingdings) has no letters: a byte from 0x80 is the font's
+/// own code, U+F000 + the byte, whatever the document's code page.
+#[test]
+fn a_symbol_fonts_bytes_are_its_own_codes() {
+    for cpg in [1252, 1251] {
+        let rtf = format!(r"{{\rtf1\ansi\ansicpg{cpg}{{\fonttbl{{\f0 Arial;}}{{\f1\fcharset2 Wingdings;}}}}\f1 J\'93\'d8\f0 \'93\f1\'fc\plain\'93}}");
+        assert_eq!(text(rtf.as_bytes()), "J\u{F093}\u{F0D8}\u{201C}\u{F0FC}\u{201C}", "{cpg}");
+    }
+    // The symbol page is not for the font's own name in the table.
+    let doc = read(br"{\rtf1{\fonttbl{\f0\fcharset2 Sym\'e9bol;}}\f0 x}").unwrap();
+    assert_eq!(fmt_of(&doc, "x").font.as_deref(), Some("Symébol"));
+    // A symbol default font's page is its own text's: not the text of a font chosen with \f,
+    // and its again after \plain.
+    let rtf = br"{\rtf1\ansi\deff0{\fonttbl{\f0\fcharset2 Symbol;}{\f1 Arial;}}\'b7 \f1\'b7 \plain\'b7}";
+    assert_eq!(text(rtf), "\u{F0B7} \u{B7} \u{F0B7}");
+    // A code page the entry names with \cpg is not replaced by the symbol charset.
+    let rtf = br"{\rtf1{\fonttbl{\f0\cpg1251\fcharset2 Odd;}{\f1\fcharset2\cpg1251 Odd2;}}\f0\'c4\f1\'c4}";
+    assert_eq!(text(rtf), "\u{414}\u{414}");
+}
+
 #[test]
 fn east_asian_text_decodes_across_tokens() {
     // 日本語 in Shift-JIS: 93 FA 96 7B 8C EA. 0x7B is `{` as a byte, so it must be `\'7b`.
