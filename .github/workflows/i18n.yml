@@ -11,6 +11,12 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
+  # run (main, manual) gets a group of its own, so it is neither cancelled nor replaced while queued.
+  group: i18n-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   i18n:
     timeout-minutes: 15

@@ -24,6 +24,18 @@ including during initial xref reads, object streams, repair and fallback. Known-
 pixels and streaming page content have separate backend budgets. These controls do not bound
 total parser memory or execution time.
 
+`open_with_options_and_cancel` and `open_slice_with_options_and_cancel` additionally accept
+`&syntax::Cancellation`. It owns a `Send + Sync + 'static` callback, which runs on the opening
+thread. Capture shared state such as an `Arc<AtomicBool>` to request cancellation from a worker's
+caller. Each open latches a true result and returns `CancellableOpenError::Cancelled`; other
+failures wrap the existing `OpenError`. Existing opening APIs and their error types are unchanged.
+The returned PDF does not retain the callback or poll it during later reads.
+
+Opening checks cancellation during xref searches and recovery, byte and object scans, ordinary
+stream decoding and predictors, and initial page-tree traversal. The borrowed-input variant also
+checks while copying input. Cryptographic and image-codec calls run to completion between checkpoints.
+These are opening checkpoints; interpretation and rasterization have their own cancellation policy.
+
 For a bare Flate page, `Page::page_stream` materializes content under the ordinary limit,
 while `Page::content_reader` decodes incrementally under the separate streaming budget.
 Interpretation and rasterization use that incremental path. Lowering the ordinary limit
@@ -51,7 +63,7 @@ that all objects survived. Some tolerant whole-stream decoders can return an inc
 prefix without a failure status. Use fresh caches for checks, while retaining these limitations.
 Native unwinding panics become errors; discard partial devices, buffers, parsers and caches
 after backend failure. WASM aborts and process-wide allocation failure cannot be caught.
-Cancellation is polled between operators, so a decoder may finish before noticing it.
+During interpretation, cancellation is polled between operators, so a decoder may finish before noticing it.
 
 ## Backend provenance and consumer pins
 
@@ -88,8 +100,9 @@ stay outside this repository; dependency assets and licences are in the root att
 The Shared PDF workflow runs native and WebAssembly facade contracts, an independent
 `read-only-contract` consumer, and the transferred backend tests. The independent consumer
 keeps interpreter-bearing dev-dependencies out of the shipping `read` feature graph.
-Run `bash scripts/test-pdf-backends.sh` from the repository root to test all four vendored
-backends, the syntax doctest and the syntax-only configuration. The script uses temporary
+Run `bash scripts/test-pdf-backends.sh` from the repository root to test the vendored
+backends, the syntax doctest, syntax-only configuration and alternate `unsafe` codec implementation.
+The script uses temporary
 source copies and the complete local patch set, preserving the vendored lockfiles.
 Run `cargo test --manifest-path crates/pdf/read-only-contract/Cargo.toml --locked` for the
 read-only consumer, then repeat with `--target wasm32-unknown-unknown` and the test runner.

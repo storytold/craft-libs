@@ -244,11 +244,12 @@ fn msi_step(app: &App, exe: &Path) -> Result<crate::msi_migrate::Step, String> {
     crate::msi_migrate::windows::step(app, exe)
 }
 
-/// Whether the helper starts the app after the update step: always after a successful one, and
-/// after a failed one only while its exe is still there.
+/// Whether the helper starts the app after the update step: never while the old app is still
+/// running (a second copy of it would open), always after a successful step, and after a failed
+/// one only while its exe is still there.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn restarts(step_succeeded: bool, exe_exists: bool) -> bool {
-    step_succeeded || exe_exists
+fn restarts(app_exited: bool, step_succeeded: bool, exe_exists: bool) -> bool {
+    app_exited && (step_succeeded || exe_exists)
 }
 
 /// The exe to start after an MSI update of a registered copy: the one its registrations name now
@@ -371,6 +372,60 @@ pub fn update(
     last: &dyn Fn() -> Result<(), String>,
     running_version: Option<&str>,
 ) -> Result<(), String> {
+    prepare_update(app, install, release, platform, http, paths, stop, phase, last, running_version)?.start()
+}
+
+/// What remains of an update after [`prepare_update`]: starting the helper, which waits for this
+/// process to exit. On Windows the helper then installs the update and starts the new version;
+/// on macOS and Linux the update is already in place and the helper starts the new version.
+#[must_use = "the update only installs or restarts once the restart is started"]
+pub struct Restart {
+    helper: Option<Box<dyn FnOnce() -> Result<(), String> + Send>>,
+}
+
+impl Restart {
+    /// Nothing is left to start.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn scheduled() -> Self {
+        Self { helper: None }
+    }
+
+    /// `start` runs when the app closes.
+    #[cfg_attr(not(any(windows, unix, test)), allow(dead_code))]
+    pub(crate) fn later(start: impl FnOnce() -> Result<(), String> + Send + 'static) -> Self {
+        Self { helper: Some(Box::new(start)) }
+    }
+
+    /// Starts the helper. Call it when the app's exit is certain: the helper waits only a minute
+    /// for the app to exit. On Windows it installs nothing when the app is still running after
+    /// that; on macOS and Linux the Flatpak helper starts nothing then, and the other helpers
+    /// start the new version anyway.
+    pub fn start(self) -> Result<(), String> {
+        self.helper.map_or(Ok(()), |start| start())
+    }
+}
+
+impl std::fmt::Debug for Restart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Restart").field("pending", &self.helper.is_some()).finish()
+    }
+}
+
+/// [`update`] without starting the helper: the caller starts the returned [`Restart`] when the
+/// app's exit is certain. On macOS and Linux the update is in place when this returns.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_update(
+    app: &App,
+    install: &Install,
+    release: &Release,
+    platform: Platform,
+    http: &Http,
+    paths: &Paths,
+    stop: &Stop,
+    phase: &mut dyn FnMut(JobPhase),
+    last: &dyn Fn() -> Result<(), String>,
+    running_version: Option<&str>,
+) -> Result<Restart, String> {
     let cur_v = running_version.and_then(|v| current_version(app, v));
     if let (Some(rel_v), Some(cur_v)) = (release.version.as_ref(), cur_v.as_ref())
         && !version::offers_update(rel_v, cur_v)
@@ -390,11 +445,13 @@ pub fn update(
     // The restart ends this process: nothing else may be under way.
     last()?;
     phase(JobPhase::Installing);
-    // Written before the swap starts: the Windows helper runs alongside this process and clears
-    // it when it fails, which a write after scheduling could undo.
+    // Written before the swap starts. On Windows the helper does the swap, so the record is
+    // written when it starts (see `windows_helper`): it clears the record when it fails, which a
+    // write after it started could undo.
+    #[cfg(not(windows))]
     mark_installed(paths, release);
     let pid = std::process::id();
-    let scheduled = (|| -> Result<(), String> {
+    let scheduled = (|| -> Result<Restart, String> {
         match install {
             #[cfg(target_os = "macos")]
             Install::MacApp(bundle) => {
@@ -402,20 +459,20 @@ pub fn update(
                 let placed = install::macos::install_dmg(app, &file, Some(&existing), None, false, paths, &install::macos::Expect::release(release));
                 let _ = std::fs::remove_file(&file);
                 let placed = placed?;
-                relaunch_after_exit(app, pid, &[Path::new("/usr/bin/open").as_os_str(), placed.as_os_str()])
+                Ok(relaunch_after_exit(app, pid, &[Path::new("/usr/bin/open").as_os_str(), placed.as_os_str()]))
             }
             #[cfg(target_os = "linux")]
             Install::AppImage(path) => {
                 replace_appimage(&file, path)?;
                 let _ = std::fs::remove_file(&file);
-                relaunch_after_exit(app, pid, &[path.as_os_str()])
+                Ok(relaunch_after_exit(app, pid, &[path.as_os_str()]))
             }
             #[cfg(target_os = "linux")]
             Install::Package(kind, exe) => {
                 let result = install::linux::install_package(*kind, &file, None, stop, phase);
                 let _ = std::fs::remove_file(&file);
                 result?;
-                relaunch_after_exit(app, pid, &[exe.as_os_str()])
+                Ok(relaunch_after_exit(app, pid, &[exe.as_os_str()]))
             }
             #[cfg(target_os = "linux")]
             Install::Flatpak => {
@@ -432,23 +489,23 @@ pub fn update(
                 relaunch_flatpak_after_exit(app)
             }
             #[cfg(windows)]
-            Install::Msi(exe) => windows_helper(app, paths, pid, exe, &msi_finish(&file)?),
+            Install::Msi(exe) => windows_helper(app, paths, release, pid, exe, &msi_finish(&file)?),
             #[cfg(windows)]
             Install::Portable(exe) => {
                 exe.parent().ok_or_else(|| format!("{} isn't in a folder", app.name))?;
-                windows_helper(app, paths, pid, exe, &Finish::Portable { zip: file, tmp: paths.cache.join(PORTABLE_STAGING) })
+                windows_helper(app, paths, release, pid, exe, &Finish::Portable { zip: file, tmp: paths.cache.join(PORTABLE_STAGING) })
             }
             #[cfg(windows)]
             Install::Standalone(exe) => {
                 exe.parent().ok_or_else(|| format!("{} isn't in a folder", app.name))?;
-                windows_helper(app, paths, pid, exe, &Finish::Portable { zip: file, tmp: paths.cache.join(PORTABLE_STAGING) })
+                windows_helper(app, paths, release, pid, exe, &Finish::Portable { zip: file, tmp: paths.cache.join(PORTABLE_STAGING) })
             }
             #[cfg(unix)]
             Install::Standalone(exe) => {
                 let result = replace_standalone(app, paths, &file, exe);
                 let _ = std::fs::remove_file(&file);
                 result?;
-                relaunch_after_exit(app, pid, &[exe.as_os_str()])
+                Ok(relaunch_after_exit(app, pid, &[exe.as_os_str()]))
             }
             #[allow(unreachable_patterns)]
             _ => {
@@ -457,19 +514,101 @@ pub fn update(
             }
         }
     })();
-    unmark_unless_scheduled(paths, scheduled)
+    let scheduled = unmark_unless_scheduled(paths, scheduled);
+    // On macOS and Linux the update is in place once it is prepared.
+    #[cfg(not(windows))]
+    if scheduled.is_ok() {
+        record_done(paths, &release.version_label());
+    }
+    scheduled
 }
 
-/// Records `release` as just installed, so it isn't offered again for [`JUST_UPDATED_FOR`].
+/// Records `release` as just installed, so it isn't offered again for [`JUST_UPDATED_FOR`]: its
+/// tag, the time, and the version it installs. The outcome records of an earlier update are
+/// removed: this update writes its own.
 fn mark_installed(paths: &Paths, release: &Release) {
-    if let Err(e) = crate::paths::write_atomic(&marker(paths), format!("{}\n{}\n", release.tag, crate::now()).as_bytes()) {
+    let _ = std::fs::remove_file(failure_file(paths));
+    let _ = std::fs::remove_file(done_file(paths));
+    let text = format!("{}\n{}\n{}\n", release.tag, crate::now(), release.version_label());
+    if let Err(e) = crate::paths::write_atomic(&marker(paths), text.as_bytes()) {
         log::warn!("couldn't record the self-update: {e}");
     }
 }
 
+/// Where a finished update records the version it installed, for the new version's first start.
+fn done_file(paths: &Paths) -> PathBuf {
+    paths.data.join("self-update-done.txt")
+}
+
+/// Records that the update to `version` has been installed.
+fn record_done(paths: &Paths, version: &str) {
+    if let Err(e) = crate::paths::write_atomic(&done_file(paths), version.as_bytes()) {
+        log::warn!("couldn't record the finished self-update: {e}");
+    }
+}
+
+/// The version the scheduled update installs, from the record [`mark_installed`] wrote: its third
+/// line, or the tag on its first line in a record without one.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn scheduled_version(paths: &Paths) -> Option<String> {
+    let text = read_record(&marker(paths))?;
+    let mut lines = text.lines();
+    let tag = lines.next();
+    let version = lines.nth(1).filter(|version| !version.trim().is_empty()).or(tag);
+    version.map(str::trim).filter(|version| !version.is_empty()).map(str::to_owned)
+}
+
+/// The most of an outcome record that is read: a reason longer than this is cut short.
+const RECORD_LIMIT: usize = 4096;
+
+/// The text of the record at `path`, at most [`RECORD_LIMIT`] bytes of it. `None` when it is
+/// missing, unreadable or not a plain file (a link is not followed).
+fn read_record(path: &Path) -> Option<String> {
+    use std::io::Read;
+    if !is_plain_file(path) {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(path).ok()?.take(RECORD_LIMIT as u64 + 1).read_to_end(&mut bytes).ok()?;
+    let cut = bytes.len() > RECORD_LIMIT;
+    bytes.truncate(RECORD_LIMIT);
+    let mut text = String::from_utf8_lossy(&bytes).into_owned();
+    if cut {
+        // A multi-byte character split at the limit decodes as U+FFFD; drop it.
+        text = text.trim_end_matches('\u{FFFD}').to_owned();
+        text.push('…');
+    }
+    Some(text)
+}
+
+/// What the last self-update came to, read once by the next start ([`take_outcome`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// The update installed this version, which is the one running now.
+    Installed(Version),
+    /// The update could not be installed, for this reason.
+    Failed(String),
+}
+
+/// What the last self-update came to, once: the records are removed as they are read. A
+/// recorded failure wins over a record of a finished update. A finished update counts only when
+/// the version it installed is `running`, the version this copy counts as.
+pub fn take_outcome(paths: &Paths, running: &str) -> Option<Outcome> {
+    let failure = take_failure(paths);
+    let done = read_record(&done_file(paths));
+    let _ = std::fs::remove_file(done_file(paths));
+    if let Some(reason) = failure {
+        let reason = reason.trim();
+        let reason = if reason.is_empty() { "no reason was recorded" } else { reason };
+        return Some(Outcome::Failed(reason.to_owned()));
+    }
+    let installed = version::parse(done?.trim())?;
+    (Some(&installed) == version::parse(running).as_ref()).then_some(Outcome::Installed(installed))
+}
+
 /// Removes the record of [`mark_installed`] when the swap couldn't be scheduled, so the update
 /// stays on offer.
-fn unmark_unless_scheduled(paths: &Paths, scheduled: Result<(), String>) -> Result<(), String> {
+fn unmark_unless_scheduled<T>(paths: &Paths, scheduled: Result<T, String>) -> Result<T, String> {
     if scheduled.is_err() {
         let _ = std::fs::remove_file(marker(paths));
     }
@@ -588,7 +727,6 @@ fn stage_copy(from: &Path, to: &Path, mode: u32) -> Result<PathBuf, String> {
 }
 
 /// A regular file, not a link to one.
-#[cfg(unix)]
 fn is_plain_file(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file())
 }
@@ -613,10 +751,24 @@ fn plain_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(files)
 }
 
-/// Starts `sh`, which waits for `pid` to exit and then runs `command`. Detached, so it outlives us.
+/// A [`Restart`] that starts `sh`, which waits for `pid` to exit and then runs `command`.
+/// Detached, so it outlives us. Nothing starts before the app's exit is certain: a close the user
+/// cancels leaves no helper counting down its wait.
 #[cfg(unix)]
-fn relaunch_after_exit(app: &App, pid: u32, command: &[&std::ffi::OsStr]) -> Result<(), String> {
-    process::spawn_detached(helper_command(app, pid, command)).map_err(|e| format!("couldn't schedule the restart ({e})"))
+fn relaunch_after_exit(app: &App, pid: u32, command: &[&std::ffi::OsStr]) -> Restart {
+    relaunch_with(app, pid, command, process::spawn_detached)
+}
+
+/// [`relaunch_after_exit`], with `spawn` starting the helper.
+#[cfg(unix)]
+fn relaunch_with(
+    app: &App,
+    pid: u32,
+    command: &[&std::ffi::OsStr],
+    spawn: impl FnOnce(std::process::Command) -> Result<(), String> + Send + 'static,
+) -> Restart {
+    let cmd = helper_command(app, pid, command);
+    Restart::later(move || spawn(cmd).map_err(|e| format!("couldn't schedule the restart ({e})")))
 }
 
 #[cfg(unix)]
@@ -670,9 +822,10 @@ fn flatpak_host_pid() -> Option<u32> {
     parse_flatpak_host_pid(&out, &instance_id)
 }
 
-/// Starts a host helper that waits for this Flatpak instance to exit, then relaunches it via Flatpak on the host.
+/// A [`Restart`] that starts a host helper, which waits for this Flatpak instance to exit, then
+/// relaunches it via Flatpak on the host. Nothing starts before the app's exit is certain.
 #[cfg(target_os = "linux")]
-fn relaunch_flatpak_after_exit(app: &App) -> Result<(), String> {
+fn relaunch_flatpak_after_exit(app: &App) -> Result<Restart, String> {
     let host_pid = flatpak_host_pid();
     let instance_id = flatpak_instance_id();
     // Each wait clause polls until the old process is gone, then execs the relaunch command.
@@ -691,7 +844,8 @@ fn relaunch_flatpak_after_exit(app: &App) -> Result<(), String> {
         (None, None) => return Err(format!("{} is updated; quit and reopen it to start the new version", app.name)),
     };
     let script = format!("({wait_clause}) &");
-    process::spawn_detached(flatpak_restart_command(app, &script, &target_arg)).map_err(|e| format!("couldn't schedule the Flatpak restart ({e})"))
+    let cmd = flatpak_restart_command(app, &script, &target_arg);
+    Ok(Restart::later(move || process::spawn_detached(cmd).map_err(|e| format!("couldn't schedule the Flatpak restart ({e})"))))
 }
 
 #[cfg(target_os = "linux")]
@@ -760,11 +914,12 @@ const HELPER_DIR: &str = "launcher-update-helper";
 #[cfg_attr(not(windows), allow(dead_code))]
 const PORTABLE_STAGING: &str = "launcher-update";
 
-/// Copies this program into the cache and starts the copy as the update helper, which waits for
-/// `pid` to exit, does `finish` and starts `exe`. Run from the cache, the helper doesn't hold the
-/// installed exe that the step replaces.
+/// Copies this program into the cache as the update helper, which waits for `pid` to exit, does
+/// `finish` and starts `exe`. Run from the cache, the helper doesn't hold the installed exe that
+/// the step replaces. The returned [`Restart`] records `release` as installed and starts the
+/// helper.
 #[cfg(windows)]
-fn windows_helper(app: &App, paths: &Paths, pid: u32, exe: &Path, finish: &Finish) -> Result<(), String> {
+fn windows_helper(app: &App, paths: &Paths, release: &Release, pid: u32, exe: &Path, finish: &Finish) -> Result<Restart, String> {
     let program = std::env::current_exe().map_err(|e| format!("couldn't find this program ({e})"))?;
     let dir = paths.cache.join(HELPER_DIR);
     // The previous update's copy, when it's still there.
@@ -775,7 +930,12 @@ fn windows_helper(app: &App, paths: &Paths, pid: u32, exe: &Path, finish: &Finis
     let mut cmd = process::command(&helper);
     cmd.args(helper_args(pid, exe, finish));
     clear_pretend_version(&mut cmd, app);
-    process::spawn_detached(cmd).map_err(|e| format!("couldn't schedule the update ({e})"))
+    let (paths, release) = (paths.clone(), release.clone());
+    Ok(Restart::later(move || {
+        mark_installed(&paths, &release);
+        let started = process::spawn_detached(cmd).map_err(|e| format!("couldn't schedule the update ({e})"));
+        unmark_unless_scheduled(&paths, started)
+    }))
 }
 
 /// Finishes an update when this program was started as the update helper; `args` are its
@@ -800,23 +960,96 @@ pub fn finish(app: &App, args: &[OsString]) -> Option<Result<(), String>> {
     // Read before the step: the update may move or replace the old exe.
     let registered =
         matches!(step, Finish::Msi(_)) && matches!(crate::msi_copy::windows::find(app, &exe), Some(crate::msi_copy::MsiCopy::Registered { .. }));
-    let done = run_step(app, &me, pid, &exe, &step, std::time::Duration::from_secs(60));
+    let wait = |pid| process::wait_for_exit(pid, std::time::Duration::from_secs(60));
+    let start = |exe: &Path| {
+        signed_like(app, &me, exe)
+            .and_then(|()| process::spawn_detached(std::process::Command::new(exe)).map_err(|e| format!("couldn't start {} ({e})", exe.display())))
+    };
+    Some(finish_step(app, &me, &paths, pid, exe, &step, registered, &wait, &start))
+}
+
+/// The helper's work once its checks have passed: waits for `pid` with `wait`, does `step`, and
+/// starts the app with `start` when [`restarts`] allows it. Every failure is recorded for the
+/// app's next start.
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+fn finish_step(
+    app: &App,
+    reference: &Path,
+    paths: &Paths,
+    pid: u32,
+    exe: PathBuf,
+    step: &Finish,
+    registered: bool,
+    wait: &dyn Fn(u32) -> bool,
+    start: &dyn Fn(&Path) -> Result<(), String>,
+) -> Result<(), String> {
+    let portable_before = has_portable_marker(&exe);
+    let stepped = step_after_wait(app, reference, pid, &exe, step, wait);
+    let done = stepped.result;
     if let Err(e) = &done {
-        record_failure(&paths, e);
+        record_failure(paths, e);
     }
     // The new app, or the old one when the step failed.
     let exe = if done.is_ok() { exe_after_msi(app, registered, &exe) } else { exe };
-    // A failed move can leave no program to start; its recorded error already says how to get
-    // the app back, and a restart error must not replace it.
-    if !restarts(done.is_ok(), exe.is_file()) {
-        return Some(done);
+    // A standalone copy updated from the portable zip gains `portable.txt` and keeps its folders
+    // beside it from now on: the records the new app reads go there.
+    let version = scheduled_version(paths);
+    let moved = (done.is_ok() && has_portable_marker(&exe) != portable_before).then(|| Paths::for_exe(app, &exe).ok()).flatten();
+    if let Some(after) = &moved {
+        move_marker(paths, after);
     }
-    let started = signed_like(app, &me, &exe)
-        .and_then(|()| process::spawn_detached(std::process::Command::new(&exe)).map_err(|e| format!("couldn't start {} ({e})", exe.display())));
-    if let Err(e) = &started {
-        record_failure(&paths, e);
+    let paths = moved.as_ref().unwrap_or(paths);
+    // An app that is still running gets no second copy. A failed move can leave no program to
+    // start; its recorded error already says how to get the app back, and a restart error must
+    // not replace it.
+    if !restarts(stepped.exited, done.is_ok(), exe.is_file()) {
+        return done;
     }
-    Some(done.and(started))
+    // Written before the new app starts, so its first start finds it. A failed start removes it.
+    if done.is_ok()
+        && let Some(version) = &version
+    {
+        record_done(paths, version);
+    }
+    let started = start(&exe);
+    let restarted = started.is_ok();
+    let result = with_restart(done, started);
+    if !restarted && let Err(e) = &result {
+        record_failure(paths, e);
+    }
+    result
+}
+
+/// The helper's result once it has tried to start the app: when both the update step and the
+/// start fail, the error names both, the step's first.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn with_restart(done: Result<(), String>, started: Result<(), String>) -> Result<(), String> {
+    match (done, started) {
+        (done, Ok(())) => done,
+        (Ok(()), Err(restart)) => Err(restart),
+        (Err(update), Err(restart)) => Err(format!("{update}; {restart}")),
+    }
+}
+
+/// Whether `exe` has `portable.txt` beside it, which makes [`Paths::for_exe`] keep its folders
+/// there.
+#[cfg(windows)]
+fn has_portable_marker(exe: &Path) -> bool {
+    exe.parent().is_some_and(|dir| dir.join("portable.txt").is_file())
+}
+
+/// Moves the record of the scheduled update from `from` to `to`, the folders the updated app
+/// reads, and removes outcome records left in `to` by an earlier update.
+#[cfg(windows)]
+fn move_marker(from: &Paths, to: &Paths) {
+    let _ = std::fs::remove_file(failure_file(to));
+    let _ = std::fs::remove_file(done_file(to));
+    if let Some(text) = read_record(&marker(from))
+        && crate::paths::write_atomic(&marker(to), text.as_bytes()).is_ok()
+    {
+        let _ = std::fs::remove_file(marker(from));
+    }
 }
 
 /// Finishes an update on non-Windows platforms (no-op helper).
@@ -830,20 +1063,25 @@ fn failure_file(paths: &Paths) -> PathBuf {
     paths.logs().join("self-update-error.txt")
 }
 
-/// Records a failed update: the next check offers the update again, and the next start logs `error`.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn record_failure(paths: &Paths, error: &str) {
+/// Records a failed update: the next check offers the update again, and the next start shows
+/// `error`. A record of the update as finished is removed.
+#[cfg_attr(not(any(windows, feature = "egui")), allow(dead_code))]
+pub(crate) fn record_failure(paths: &Paths, error: &str) {
     let _ = std::fs::remove_file(marker(paths));
+    let _ = std::fs::remove_file(done_file(paths));
     let _ = std::fs::create_dir_all(paths.logs());
     let _ = crate::paths::write_atomic(&failure_file(paths), error.as_bytes());
 }
 
-/// The error of the last update, if it failed, once.
+/// The error of the last update, if it failed, once. A long error is cut short at
+/// [`RECORD_LIMIT`] bytes.
 pub fn take_failure(paths: &Paths) -> Option<String> {
     let file = failure_file(paths);
-    let error = std::fs::read_to_string(&file).ok()?;
-    let _ = std::fs::remove_file(&file);
-    Some(error)
+    let error = read_record(&file);
+    if is_plain_file(&file) {
+        let _ = std::fs::remove_file(&file);
+    }
+    error
 }
 
 /// Whether `exe` is named like this app's own executable (case-insensitive, any of its ids).
@@ -942,65 +1180,26 @@ fn check_helper(app: &App, me: &Path, paths: &Paths, exe: &Path, step: &Finish) 
     if allowed { Ok(()) } else { Err(refused()) }
 }
 
-/// Lets a Windows test observe both sides of `run_step`'s wait for the old launcher. Compiled only
-/// for tests, so production behavior is unchanged.
-#[cfg(all(test, windows))]
-mod wait_watch {
-    use std::sync::mpsc::{self, Receiver, Sender};
-    use std::sync::{Mutex, PoisonError};
-
-    /// A test's two observations of one wait, keyed by the launcher's pid.
-    pub(super) struct Channels {
-        /// Sent just before `run_step` calls the wait.
-        pub(super) entered: Receiver<()>,
-        /// Sent right after the wait returns, before any extraction, and carries the wait's result.
-        pub(super) returned: Receiver<bool>,
-    }
-
-    struct Watch {
-        pid: u32,
-        entered: Option<Sender<()>>,
-        returned: Option<Sender<bool>>,
-    }
-
-    static WATCH: Mutex<Option<Watch>> = Mutex::new(None);
-
-    pub(super) fn watch(pid: u32) -> Channels {
-        let (entered, entered_rx) = mpsc::channel();
-        let (returned, returned_rx) = mpsc::channel();
-        *WATCH.lock().unwrap_or_else(PoisonError::into_inner) = Some(Watch { pid, entered: Some(entered), returned: Some(returned) });
-        Channels { entered: entered_rx, returned: returned_rx }
-    }
-
-    /// Notes that `run_step` is about to wait. Only the first call for a watched pid is kept.
-    pub(super) fn entered(pid: u32) {
-        let mut watch = WATCH.lock().unwrap_or_else(PoisonError::into_inner);
-        let sender = watch.as_mut().filter(|watch| watch.pid == pid).and_then(|watch| watch.entered.take());
-        if let Some(sender) = sender {
-            let _ = sender.send(());
-        }
-    }
-
-    /// Notes the wait's result as soon as it returns; the step hasn't run yet.
-    pub(super) fn returned(pid: u32, waited: bool) {
-        let mut watch = WATCH.lock().unwrap_or_else(PoisonError::into_inner);
-        let sender = watch.as_mut().filter(|watch| watch.pid == pid).and_then(|watch| watch.returned.take());
-        if let Some(sender) = sender {
-            let _ = sender.send(waited);
-        }
-    }
+/// [`step_after_wait`], waiting up to `wait` for `pid` to exit.
+#[cfg(all(windows, test))]
+fn run_step(app: &App, reference: &Path, pid: u32, exe: &Path, step: &Finish, wait: std::time::Duration) -> Result<(), String> {
+    step_after_wait(app, reference, pid, exe, step, &|pid| process::wait_for_exit(pid, wait)).result
 }
 
-/// Waits up to `wait` for `pid` to exit, does `step` once it has, and removes the download either
-/// way. The MSI, and every program in the portable zip, must be signed like `reference`.
+/// What [`step_after_wait`] came to.
 #[cfg(windows)]
-fn run_step(app: &App, reference: &Path, pid: u32, exe: &Path, step: &Finish, wait: std::time::Duration) -> Result<(), String> {
-    #[cfg(test)]
-    wait_watch::entered(pid);
-    // The test hook needs the result, so it is stored rather than consumed by the branch.
-    let waited = process::wait_for_exit(pid, wait);
-    #[cfg(test)]
-    wait_watch::returned(pid, waited);
+struct Stepped {
+    /// The old app had exited when the wait returned.
+    exited: bool,
+    result: Result<(), String>,
+}
+
+/// Calls `wait`, which says whether `pid` exited in time, does `step` once it has, and removes
+/// the download either way. The MSI, and every program in the portable zip, must be signed like
+/// `reference`.
+#[cfg(windows)]
+fn step_after_wait(app: &App, reference: &Path, pid: u32, exe: &Path, step: &Finish, wait: &dyn Fn(u32) -> bool) -> Stepped {
+    let waited = wait(pid);
     let result = if waited {
         match step {
             Finish::Msi(msi) => {
@@ -1026,7 +1225,7 @@ fn run_step(app: &App, reference: &Path, pid: u32, exe: &Path, step: &Finish, wa
             let _ = std::fs::remove_file(zip);
         }
     }
-    result
+    Stepped { exited: waited, result }
 }
 
 #[cfg(test)]
@@ -1195,18 +1394,23 @@ mod tests {
         let tmp = dir.path().join("cache").join("launcher-update");
         let step = Finish::Portable { zip: zip.clone(), tmp: tmp.clone() };
 
-        let mut old = std::process::Command::new("ping").args(["-n", "3", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn().unwrap();
+        let mut old = BlockedLauncher::start();
         let exe = folder.join("artcraft-launcher.exe");
-        let helper = {
-            let (exe, step, pid) = (exe.clone(), step.clone(), old.id());
-            std::thread::spawn(move || {
-                run_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), pid, &exe, &step, std::time::Duration::from_secs(30))
-            })
-        };
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        assert_eq!(std::fs::read_to_string(&exe).unwrap(), "0.1.0", "replaced while the old launcher was still running");
-        old.wait().unwrap();
-        helper.join().unwrap().unwrap();
+        std::thread::scope(|scope| {
+            // Inside the scope, so a failed assertion drops the gate and releases the helper
+            // before the scope joins it.
+            let (gate, wait) = WaitGate::new();
+            let (helper_exe, pid) = (exe.clone(), old.id());
+            let helper = scope.spawn(move || step_after_wait(&crate::suite::LAUNCHER, &system_program("cmd.exe"), pid, &helper_exe, &step, &wait));
+            gate.entered();
+            old.assert_running("while the helper was waiting");
+            assert_eq!(std::fs::read(&exe).unwrap(), b"0.1.0", "replaced while the old launcher was still running");
+            old.finish().expect("the stand-in launcher couldn't be reaped");
+            gate.release();
+            let stepped = helper.join().unwrap();
+            assert!(stepped.exited, "the wait reported that the launcher was still running although it had exited");
+            stepped.result.unwrap();
+        });
         assert_eq!(std::fs::read(&exe).unwrap(), signed_exe);
         assert_eq!(std::fs::read_to_string(folder.join("ArtCraftLauncherData").join("settings.json")).unwrap(), "{}");
         assert!(!folder.join("artcraft-launcher-0.2.0-windows-x64-portable").exists(), "the zip's folder must not be nested in the launcher's");
@@ -1265,20 +1469,52 @@ mod tests {
         }
     }
 
+    /// A wait for [`step_after_wait`] that the test controls: it reports when the helper has
+    /// reached its wait, blocks until the test releases it, and then asks the real
+    /// [`process::wait_for_exit`] whether the launcher has exited, without waiting.
+    #[cfg(windows)]
+    struct WaitGate {
+        entered: std::sync::mpsc::Receiver<()>,
+        release: std::sync::mpsc::Sender<()>,
+    }
+
+    #[cfg(windows)]
+    impl WaitGate {
+        /// The gate and the wait to hand to the helper. The wait holds the only sender of
+        /// `entered`, so a helper that ends without reaching its wait fails [`WaitGate::entered`]
+        /// instead of blocking it, and dropping the gate releases the wait.
+        fn new() -> (Self, impl Fn(u32) -> bool + Send) {
+            let (entered_tx, entered) = std::sync::mpsc::channel();
+            let (release, released) = std::sync::mpsc::channel::<()>();
+            let released = std::sync::Mutex::new(released);
+            let wait = move |pid| {
+                let _ = entered_tx.send(());
+                let _ = released.lock().map(|released| released.recv());
+                process::wait_for_exit(pid, std::time::Duration::ZERO)
+            };
+            (Self { entered, release }, wait)
+        }
+
+        /// Blocks until the helper has reached its wait.
+        fn entered(&self) {
+            self.entered.recv().expect("the helper never reached its wait");
+        }
+
+        /// Lets the helper's wait return.
+        fn release(&self) {
+            self.release.send(()).expect("the helper stopped before its wait was released");
+        }
+    }
+
     /// A launcher without `portable.txt` is a standalone installation, and the helper still
     /// replaces its own executable after it exits. The test holds a stand-in launcher alive
-    /// through a pipe and observes both sides of the helper's wait: the first assertion runs only
-    /// after the helper announces it is about to wait. A wait that returns while the stand-in is alive
-    /// fails the test before any extraction can replace the executable.
-    ///
-    /// The "still blocked" check is a bounded observation, not proof: a helper descheduled for the
-    /// whole window could hide a missing wait until the release below. A premature timeout longer
-    /// than this observation window is also outside this test's coverage.
+    /// through a pipe and holds the helper inside its wait until the stand-in has exited, so the
+    /// executable must still be the old one while the helper waits, and the real
+    /// [`process::wait_for_exit`] must report the live stand-in as running and the exited one as gone.
     #[cfg(windows)]
     #[test]
     fn a_standalone_update_replaces_the_launcher_after_it_exits() {
         use std::io::Write;
-        use std::sync::mpsc::RecvTimeoutError;
         let dir = tempfile::tempdir().unwrap();
         let folder = dir.path().join("ArtCraft Launcher");
         std::fs::create_dir_all(folder.join("ArtCraftLauncherData")).unwrap();
@@ -1299,49 +1535,23 @@ mod tests {
         let tmp = dir.path().join("cache").join(PORTABLE_STAGING);
         let step = Finish::Portable { zip: zip.clone(), tmp: tmp.clone() };
 
-        // Timeouts only bound the test; each failure names the observation that never arrived.
-        let entered_timeout = std::time::Duration::from_secs(10);
-        let blocked_window = std::time::Duration::from_secs(2);
-        let returned_timeout = std::time::Duration::from_secs(30);
-
+        let mut old = BlockedLauncher::start();
+        let pid = old.id();
         std::thread::scope(|scope| {
-            let mut old = BlockedLauncher::start();
-            let pid = old.id();
-            let watch = wait_watch::watch(pid);
+            // Inside the scope, so a failed assertion drops the gate and releases the helper
+            // before the scope joins it.
+            let (gate, wait) = WaitGate::new();
             let helper_exe = exe.clone();
-            let step = step.clone();
-            let helper = scope.spawn(move || {
-                run_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), pid, &helper_exe, &step, std::time::Duration::from_secs(30))
-            });
-            match watch.entered.recv_timeout(entered_timeout) {
-                Ok(()) => {}
-                Err(RecvTimeoutError::Timeout) => {
-                    panic!("the helper didn't reach its wait within {entered_timeout:?} (helper already finished: {})", helper.is_finished())
-                }
-                Err(RecvTimeoutError::Disconnected) => panic!("the entered channel disconnected before the helper reached its wait"),
-            }
-            old.assert_running("before the first replacement check");
-            assert_eq!(std::fs::read_to_string(&exe).unwrap(), "0.1.0", "replaced while the old launcher was still running");
-
-            // A correct wait can't return while the stand-in holds the pipe.
-            match watch.returned.recv_timeout(blocked_window) {
-                Err(RecvTimeoutError::Timeout) => {}
-                Ok(waited) => panic!("run_step left its wait while the old launcher was still running (waited: {waited})"),
-                Err(RecvTimeoutError::Disconnected) => panic!("the returned channel disconnected while the old launcher was still running"),
-            }
-            old.assert_running("after the wait was expected to stay blocked");
-            assert_eq!(std::fs::read_to_string(&exe).unwrap(), "0.1.0", "replaced while the old launcher was still running");
-
+            let helper = scope.spawn(move || step_after_wait(&crate::suite::LAUNCHER, &system_program("cmd.exe"), pid, &helper_exe, &step, &wait));
+            gate.entered();
+            old.assert_running("while the helper was waiting");
+            assert_eq!(std::fs::read(&exe).unwrap(), b"0.1.0", "replaced while the old launcher was still running");
+            assert!(!process::wait_for_exit(pid, std::time::Duration::ZERO), "the wait reported the running launcher as exited");
             old.finish().expect("the stand-in launcher couldn't be reaped");
-            match watch.returned.recv_timeout(returned_timeout) {
-                Ok(waited) => assert!(waited, "the wait reported that the launcher was still running although it had exited"),
-                Err(RecvTimeoutError::Timeout) => panic!(
-                    "the helper didn't leave its wait within {returned_timeout:?} after the launcher exited (helper already finished: {})",
-                    helper.is_finished()
-                ),
-                Err(RecvTimeoutError::Disconnected) => panic!("the returned channel disconnected before reporting the wait's result"),
-            }
-            helper.join().unwrap().unwrap();
+            gate.release();
+            let stepped = helper.join().unwrap();
+            assert!(stepped.exited, "the wait reported that the launcher was still running although it had exited");
+            stepped.result.unwrap();
         });
         assert_eq!(std::fs::read(&exe).unwrap(), signed_exe);
         assert_eq!(std::fs::read_to_string(folder.join("ArtCraftLauncherData").join("settings.json")).unwrap(), "{}");
@@ -1451,7 +1661,7 @@ mod tests {
         std::fs::create_dir_all(&paths.data).unwrap();
         let release = Release { tag: "v0.2.0".into(), ..Release::default() };
         mark_installed(&paths, &release);
-        assert!(unmark_unless_scheduled(&paths, Err("couldn't schedule the update".into())).is_err());
+        assert!(unmark_unless_scheduled(&paths, Err::<(), _>("couldn't schedule the update".into())).is_err());
         assert!(!just_updated_to(&paths, &release));
         mark_installed(&paths, &release);
         assert!(unmark_unless_scheduled(&paths, Ok(())).is_ok());
@@ -1478,6 +1688,96 @@ mod tests {
         assert_eq!(take_failure(&paths), None);
     }
 
+    /// The outcome is read once; a failure wins over a finished update, which counts only for the
+    /// version it installed.
+    #[test]
+    fn the_outcome_of_an_update_is_read_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        assert_eq!(take_outcome(&paths, "0.2.0"), None);
+        record_done(&paths, "v0.2.0");
+        assert_eq!(take_outcome(&paths, "0.2.0"), Some(Outcome::Installed(Version::new(0, 2, 0))));
+        assert_eq!(take_outcome(&paths, "0.2.0"), None, "read once");
+
+        record_done(&paths, "v0.2.0");
+        assert_eq!(take_outcome(&paths, "0.1.0"), None, "the old version still runs");
+        assert!(!done_file(&paths).exists(), "a record that doesn't match is removed too");
+
+        record_done(&paths, "v0.2.0");
+        record_failure(&paths, "the Windows Installer stopped with error 1603");
+        assert!(!done_file(&paths).exists(), "a failure removes the record of a finished update");
+        record_done(&paths, "v0.2.0");
+        assert_eq!(take_outcome(&paths, "0.2.0"), Some(Outcome::Failed("the Windows Installer stopped with error 1603".into())));
+        assert_eq!(take_outcome(&paths, "0.2.0"), None);
+
+        // Damaged records: no version, an empty reason, a reason longer than the limit.
+        crate::paths::write_atomic(&done_file(&paths), b"\xff\xfe not a version").unwrap();
+        assert_eq!(take_outcome(&paths, "0.2.0"), None);
+        record_failure(&paths, "  \n");
+        assert_eq!(take_outcome(&paths, "0.2.0"), Some(Outcome::Failed("no reason was recorded".into())));
+        record_failure(&paths, &"é".repeat(RECORD_LIMIT));
+        let Some(Outcome::Failed(reason)) = take_outcome(&paths, "0.2.0") else { panic!("a long reason is still a failure") };
+        assert!(reason.len() <= RECORD_LIMIT + '…'.len_utf8() && reason.ends_with("é…"), "{}", reason.len());
+        // A folder where a record goes is not read, and not removed.
+        std::fs::create_dir_all(failure_file(&paths)).unwrap();
+        std::fs::create_dir_all(done_file(&paths)).unwrap();
+        assert_eq!(take_outcome(&paths, "0.2.0"), None);
+        assert!(failure_file(&paths).is_dir());
+    }
+
+    /// A link where a record goes is not followed: neither record is read through it, and the
+    /// file it points to stays. Skipped where the system refuses to create the link (Windows
+    /// without the privilege for symbolic links).
+    #[test]
+    fn a_record_that_is_a_link_is_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        std::fs::create_dir_all(paths.logs()).unwrap();
+        std::fs::create_dir_all(&paths.data).unwrap();
+        let elsewhere = dir.path().join("elsewhere.txt");
+        std::fs::write(&elsewhere, "v0.2.0").unwrap();
+        #[cfg(unix)]
+        let link = |to: &Path, at: &Path| std::os::unix::fs::symlink(to, at);
+        #[cfg(windows)]
+        let link = |to: &Path, at: &Path| std::os::windows::fs::symlink_file(to, at);
+        if let Err(e) = link(&elsewhere, &failure_file(&paths)).and_then(|()| link(&elsewhere, &done_file(&paths))) {
+            eprintln!("skipped: couldn't create a symbolic link ({e})");
+            return;
+        }
+        assert_eq!(take_failure(&paths), None);
+        assert_eq!(take_outcome(&paths, "0.2.0"), None);
+        assert_eq!(std::fs::read_to_string(&elsewhere).unwrap(), "v0.2.0");
+    }
+
+    /// Scheduling a new update clears the outcome records of an earlier one, so a stale failure
+    /// is not reported after it.
+    #[test]
+    fn a_new_update_clears_the_last_ones_outcome() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        record_failure(&paths, "the Windows Installer stopped with error 1603");
+        mark_installed(&paths, &Release { tag: "v0.3.0".into(), ..Release::default() });
+        assert_eq!(take_failure(&paths), None);
+        assert_eq!(scheduled_version(&paths).as_deref(), Some("v0.3.0"));
+    }
+
+    /// A release whose tag is not its version (an app may build its own `Release`) is recorded
+    /// by its version, so the new version's first start still reports the update.
+    #[test]
+    fn a_finished_update_is_recorded_by_its_version_not_its_tag() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let release = Release { tag: "stable".into(), version: version::parse("0.2.0"), ..Release::default() };
+        mark_installed(&paths, &release);
+        assert!(just_updated_to(&paths, &release), "the tag still guards against offering it again");
+        assert_eq!(scheduled_version(&paths).as_deref(), Some("0.2.0"));
+        record_done(&paths, &scheduled_version(&paths).unwrap());
+        assert_eq!(take_outcome(&paths, "0.2.0"), Some(Outcome::Installed(Version::new(0, 2, 0))));
+        // A record without the version line, from before it was written, names the tag.
+        crate::paths::write_atomic(&marker(&paths), format!("v0.3.0\n{}\n", crate::now()).as_bytes()).unwrap();
+        assert_eq!(scheduled_version(&paths).as_deref(), Some("v0.3.0"));
+    }
+
     /// A launcher that doesn't quit keeps its files, and the download is still removed.
     #[cfg(windows)]
     #[test]
@@ -1488,19 +1788,11 @@ mod tests {
         let msi = dir.path().join("artcraft-launcher-0.2.0-windows-x64.msi");
         std::fs::write(&msi, "not a package").unwrap();
         let running = std::process::id();
-        let started = std::time::Instant::now();
-        // The test process itself never exits within the wait, so the package is never run.
-        let error = run_step(
-            &crate::suite::LAUNCHER,
-            &system_program("cmd.exe"),
-            running,
-            &exe,
-            &Finish::Msi(msi.clone()),
-            std::time::Duration::from_millis(300),
-        )
-        .unwrap_err();
+        // The test process itself is still running when the wait asks, so the package is never run.
+        let error =
+            run_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), running, &exe, &Finish::Msi(msi.clone()), std::time::Duration::ZERO)
+                .unwrap_err();
         assert!(error.contains("still running"), "{error}");
-        assert!(started.elapsed() < std::time::Duration::from_secs(30));
         assert_eq!(std::fs::read_to_string(&exe).unwrap(), "0.1.0");
         assert!(!msi.exists());
     }
@@ -1735,22 +2027,102 @@ mod tests {
         }
     }
 
-    /// The helper waits for the old launcher to exit before it starts the new one.
+    /// The restart helper starts only when the restart is started, at the app's exit: a close the
+    /// user cancels leaves no helper counting down its one-minute wait. The test starts the helper
+    /// with its standard streams set to null, as `spawn_detached` does, and a thread that waits
+    /// for the helper to exit writes `exited`, so a helper that exits without writing `started`
+    /// fails the test.
+    #[cfg(unix)]
+    #[test]
+    fn the_restart_helper_starts_only_when_the_restart_is_started() {
+        use std::io::{BufRead, Write};
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let dir = tempfile::tempdir().unwrap();
+        let events = dir.path().join("events");
+        assert!(std::process::Command::new("mkfifo").arg(&events).status().unwrap().success());
+        // Open for reading and writing, so neither this open nor the helper's blocks.
+        let pipe = std::fs::OpenOptions::new().read(true).write(true).open(&events).unwrap();
+        let mut exited = pipe.try_clone().unwrap();
+        let mut lines = std::io::BufReader::new(pipe).lines();
+        let mut gone = std::process::Command::new("true").spawn().unwrap();
+        gone.wait().unwrap();
+        let started = r#"printf 'started\n' > "$1""#;
+        let command = [std::ffi::OsStr::new("/bin/sh"), "-c".as_ref(), started.as_ref(), "sh".as_ref(), events.as_os_str()];
+        let spawned = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&spawned);
+        let spawn = move |mut cmd: std::process::Command| -> Result<(), String> {
+            flag.store(true, Ordering::SeqCst);
+            let mut helper = cmd
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            std::thread::spawn(move || {
+                let _ = helper.wait();
+                let _ = exited.write_all(b"exited\n");
+            });
+            Ok(())
+        };
+        let restart = relaunch_with(&crate::suite::LAUNCHER, gone.id(), &command, spawn);
+        assert!(!spawned.load(Ordering::SeqCst), "the helper must wait for the restart to be started");
+        assert_eq!(format!("{restart:?}"), "Restart { pending: true }", "the helper must wait for the restart to be started");
+        assert_eq!(restart.start(), Ok(()));
+        assert_eq!(lines.next().unwrap().unwrap(), "started", "the helper exited without starting the command");
+        assert_eq!(lines.next().unwrap().unwrap(), "exited");
+    }
+
+    /// The helper waits for the old launcher to exit before it starts the new one. The helper's
+    /// `sleep` is a script on `PATH` that reports each pause through a named pipe and pauses until
+    /// the test releases it, and the started command reports whether the old launcher was still
+    /// running. The test holds both pipes open for reading and writing, so no open blocks, and a
+    /// thread that waits for the helper to exit writes `exited`, so every read gets a line.
     #[cfg(unix)]
     #[test]
     fn the_restart_waits_for_the_old_process_to_exit() {
+        use std::io::{BufRead, Write};
+        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
-        let marker = dir.path().join("started");
-        let mut old = std::process::Command::new("sleep").arg("1").spawn().unwrap();
-        relaunch_after_exit(&crate::suite::LAUNCHER, old.id(), &[std::ffi::OsStr::new("touch"), marker.as_os_str()]).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(400));
-        assert!(!marker.exists(), "started while the old launcher was still running");
-        old.wait().unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !marker.exists() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(50));
+        let (events, release) = (dir.path().join("events"), dir.path().join("release"));
+        for fifo in [&events, &release] {
+            assert!(std::process::Command::new("mkfifo").arg(fifo).status().unwrap().success());
         }
-        assert!(marker.exists(), "never started after the old launcher exited");
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let sleep = bin.join("sleep");
+        std::fs::write(&sleep, "#!/bin/sh\nprintf 'waiting\\n' > \"$CRAFT_TEST_EVENTS\"\nread _ < \"$CRAFT_TEST_RELEASE\"\n").unwrap();
+        std::fs::set_permissions(&sleep, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut path = std::ffi::OsString::from(bin.as_os_str());
+        if let Some(rest) = std::env::var_os("PATH") {
+            path.push(":");
+            path.push(rest);
+        }
+
+        let mut old = std::process::Command::new("cat").stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).spawn().unwrap();
+        let pid = old.id().to_string();
+        let started = r#"if kill -0 "$1" 2>/dev/null; then s=alive; else s=gone; fi; printf 'started %s\n' "$s" > "$CRAFT_TEST_EVENTS""#;
+        let command = [std::ffi::OsStr::new("/bin/sh"), "-c".as_ref(), started.as_ref(), "sh".as_ref(), pid.as_ref()];
+        let open = |fifo: &Path| std::fs::OpenOptions::new().read(true).write(true).open(fifo).unwrap();
+        let (events_pipe, mut release_pipe) = (open(&events), open(&release));
+        let mut exited = events_pipe.try_clone().unwrap();
+        let mut lines = std::io::BufReader::new(events_pipe).lines();
+        let mut next = move || lines.next().unwrap().unwrap();
+
+        let mut helper = helper_command(&crate::suite::LAUNCHER, old.id(), &command);
+        helper.env("PATH", path).env("CRAFT_TEST_EVENTS", &events).env("CRAFT_TEST_RELEASE", &release);
+        let mut helper = helper.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).spawn().unwrap();
+        std::thread::spawn(move || {
+            let _ = helper.wait();
+            let _ = exited.write_all(b"exited\n");
+        });
+
+        assert_eq!(next(), "waiting", "the helper didn't wait while the old launcher was still running");
+        drop(old.stdin.take());
+        old.wait().unwrap();
+        release_pipe.write_all(b"go\n").unwrap();
+        assert_eq!(next(), "started gone", "didn't start once the old launcher had exited");
+        assert_eq!(next(), "exited");
     }
 
     /// A real disk image: the new `ArtCraft Launcher.app` replaces the old one in place.
@@ -2003,10 +2375,256 @@ mod tests {
 
     #[test]
     fn a_failed_step_that_removed_the_app_starts_nothing_and_keeps_its_message() {
-        assert!(restarts(true, true));
-        assert!(restarts(true, false));
-        assert!(restarts(false, true));
-        assert!(!restarts(false, false));
+        assert!(restarts(true, true, true));
+        assert!(restarts(true, true, false));
+        assert!(restarts(true, false, true));
+        assert!(!restarts(true, false, false));
+    }
+
+    /// An app still running after the helper's wait never gets a second copy, whatever the step
+    /// and the exe would allow.
+    #[test]
+    fn an_app_still_running_is_never_started_again() {
+        for (step_succeeded, exe_exists) in [(true, true), (true, false), (false, true), (false, false)] {
+            assert!(!restarts(false, step_succeeded, exe_exists), "{step_succeeded} {exe_exists}");
+        }
+    }
+
+    /// A helper whose wait ends with the old app still running installs nothing, starts no
+    /// program, records why, and removes the download.
+    #[cfg(windows)]
+    #[test]
+    fn the_helper_starts_nothing_while_the_old_app_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let exe = dir.path().join("artcraft-launcher.exe");
+        std::fs::write(&exe, "0.1.0").unwrap();
+        let zip = dir.path().join("artcraft-launcher-0.2.0-windows-x64-portable.zip");
+        std::fs::write(&zip, "zip").unwrap();
+        let step = Finish::Portable { zip: zip.clone(), tmp: dir.path().join(PORTABLE_STAGING) };
+        let started = std::sync::Mutex::new(Vec::<PathBuf>::new());
+        let start = |exe: &Path| {
+            started.lock().unwrap().push(exe.to_path_buf());
+            Ok(())
+        };
+        let never_exits = |_pid| false;
+        let error = finish_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), &paths, 4242, exe.clone(), &step, false, &never_exits, &start)
+            .unwrap_err();
+        assert!(error.contains("still running"), "{error}");
+        assert_eq!(*started.lock().unwrap(), Vec::<PathBuf>::new(), "no copy of the app may start while it still runs");
+        assert_eq!(std::fs::read_to_string(&exe).unwrap(), "0.1.0");
+        assert!(!zip.exists(), "the download is removed");
+        assert_eq!(take_failure(&paths).as_deref(), Some(error.as_str()));
+    }
+
+    /// A step that fails after the old app exited starts the old app again, as it was.
+    #[cfg(windows)]
+    #[test]
+    fn the_helper_starts_the_old_app_after_a_failed_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let exe = dir.path().join("artcraft-launcher.exe");
+        std::fs::write(&exe, "0.1.0").unwrap();
+        // Not a zip, so the step fails.
+        let zip = dir.path().join("artcraft-launcher-0.2.0-windows-x64-portable.zip");
+        std::fs::write(&zip, "not a zip").unwrap();
+        let step = Finish::Portable { zip, tmp: dir.path().join(PORTABLE_STAGING) };
+        let started = std::sync::Mutex::new(Vec::<PathBuf>::new());
+        let start = |exe: &Path| {
+            started.lock().unwrap().push(exe.to_path_buf());
+            Ok(())
+        };
+        let exited = |_pid| true;
+        assert!(finish_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), &paths, 4242, exe.clone(), &step, false, &exited, &start).is_err());
+        assert_eq!(*started.lock().unwrap(), vec![exe.clone()]);
+        assert_eq!(std::fs::read_to_string(&exe).unwrap(), "0.1.0");
+    }
+
+    /// When the update step fails and the old app can't be started again either, the error kept
+    /// for the next start names both.
+    #[cfg(windows)]
+    #[test]
+    fn a_failed_step_and_a_failed_restart_are_both_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let exe = dir.path().join("artcraft-launcher.exe");
+        std::fs::write(&exe, "0.1.0").unwrap();
+        // Not a zip, so the step fails.
+        let zip = dir.path().join("artcraft-launcher-0.2.0-windows-x64-portable.zip");
+        std::fs::write(&zip, "not a zip").unwrap();
+        let step = Finish::Portable { zip, tmp: dir.path().join(PORTABLE_STAGING) };
+        let start = |_exe: &Path| Err("couldn't start artcraft-launcher.exe (denied)".to_string());
+        let exited = |_pid| true;
+        let error =
+            finish_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), &paths, 4242, exe.clone(), &step, false, &exited, &start).unwrap_err();
+        assert!(error.ends_with("; couldn't start artcraft-launcher.exe (denied)"), "{error}");
+        assert!(error.len() > "; couldn't start artcraft-launcher.exe (denied)".len(), "the step's error comes first: {error}");
+        assert_eq!(take_failure(&paths).as_deref(), Some(error.as_str()));
+    }
+
+    /// The helper's result keeps the update step's error when the start fails too.
+    #[test]
+    fn a_failed_restart_keeps_the_step_error() {
+        assert_eq!(with_restart(Ok(()), Ok(())), Ok(()));
+        assert_eq!(with_restart(Err("step".into()), Ok(())), Err("step".into()));
+        assert_eq!(with_restart(Ok(()), Err("start".into())), Err("start".into()));
+        assert_eq!(with_restart(Err("step".into()), Err("start".into())), Err("step; start".into()));
+    }
+
+    /// A successful step starts the new app once.
+    #[cfg(windows)]
+    #[test]
+    fn the_helper_starts_the_new_app_after_the_update() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let folder = dir.path().join("ArtCraft Launcher");
+        std::fs::create_dir_all(&folder).unwrap();
+        let exe = folder.join("artcraft-launcher.exe");
+        std::fs::write(&exe, "0.1.0").unwrap();
+        let zip = dir.path().join("artcraft-launcher-0.2.0-windows-x64-portable.zip");
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(&zip).unwrap());
+        let signed_exe = std::fs::read(system_program("cmd.exe")).unwrap();
+        writer.start_file("artcraft-launcher-0.2.0-windows-x64-portable/artcraft-launcher.exe", zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(&signed_exe).unwrap();
+        writer.finish().unwrap();
+        let step = Finish::Portable { zip, tmp: dir.path().join(PORTABLE_STAGING) };
+        let started = std::sync::Mutex::new(Vec::<(PathBuf, Vec<u8>)>::new());
+        let start = |exe: &Path| {
+            started.lock().unwrap().push((exe.to_path_buf(), std::fs::read(exe).unwrap()));
+            Ok(())
+        };
+        let exited = |_pid| true;
+        mark_installed(&paths, &Release { tag: "v0.2.0".into(), ..Release::default() });
+        assert_eq!(
+            finish_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), &paths, 4242, exe.clone(), &step, false, &exited, &start),
+            Ok(())
+        );
+        assert_eq!(*started.lock().unwrap(), vec![(exe, signed_exe)], "the new app starts once");
+        assert_eq!(take_outcome(&paths, "0.2.0"), Some(Outcome::Installed(Version::new(0, 2, 0))), "the new version's first start says so");
+    }
+
+    /// A standalone copy updated from the portable zip becomes portable: the outcome and the
+    /// record of the update go to the folders beside it, which the new app reads.
+    #[cfg(windows)]
+    #[test]
+    fn a_standalone_copy_that_becomes_portable_finds_the_outcome_beside_it() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        // The per-user folders the old, standalone copy used.
+        let paths = Paths::under(&dir.path().join("per-user"));
+        let folder = dir.path().join("ArtCraft Launcher");
+        std::fs::create_dir_all(&folder).unwrap();
+        let exe = folder.join("artcraft-launcher.exe");
+        std::fs::write(&exe, "0.1.0").unwrap();
+        let zip = dir.path().join("artcraft-launcher-0.2.0-windows-x64-portable.zip");
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(&zip).unwrap());
+        writer.start_file("artcraft-launcher-0.2.0-windows-x64-portable/artcraft-launcher.exe", zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(&std::fs::read(system_program("cmd.exe")).unwrap()).unwrap();
+        writer.start_file("artcraft-launcher-0.2.0-windows-x64-portable/portable.txt", zip::write::SimpleFileOptions::default()).unwrap();
+        writer.finish().unwrap();
+        let step = Finish::Portable { zip, tmp: dir.path().join(PORTABLE_STAGING) };
+        let release = Release { tag: "v0.2.0".into(), version: version::parse("0.2.0"), ..Release::default() };
+        mark_installed(&paths, &release);
+        let exited = |_pid| true;
+        let start = |_: &Path| Ok(());
+        assert_eq!(
+            finish_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), &paths, 4242, exe.clone(), &step, false, &exited, &start),
+            Ok(())
+        );
+        let after = Paths::for_exe(&crate::suite::LAUNCHER, &exe).unwrap();
+        assert_eq!(after.data, folder.join("ArtCraftLauncherData").join("data"));
+        assert!(just_updated_to(&after, &release), "the new app does not offer the same update again");
+        assert_eq!(take_outcome(&after, "0.2.0"), Some(Outcome::Installed(Version::new(0, 2, 0))));
+        assert_eq!(take_outcome(&paths, "0.2.0"), None, "nothing is left where the new app no longer looks");
+
+        // A new app that cannot start is reported there too.
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(&dir.path().join("per-user"));
+        let (exe, step) = portable_update(dir.path());
+        if let Finish::Portable { zip, .. } = &step {
+            let mut writer = zip::ZipWriter::new(std::fs::File::create(zip).unwrap());
+            writer
+                .start_file("artcraft-launcher-0.2.0-windows-x64-portable/artcraft-launcher.exe", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(&std::fs::read(system_program("cmd.exe")).unwrap()).unwrap();
+            writer.start_file("artcraft-launcher-0.2.0-windows-x64-portable/portable.txt", zip::write::SimpleFileOptions::default()).unwrap();
+            writer.finish().unwrap();
+        }
+        mark_installed(&paths, &release);
+        let denied = |_: &Path| Err("couldn't start the launcher (denied)".to_owned());
+        assert!(finish_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), &paths, 4242, exe.clone(), &step, false, &exited, &denied).is_err());
+        let after = Paths::for_exe(&crate::suite::LAUNCHER, &exe).unwrap();
+        assert_eq!(take_outcome(&after, "0.2.0"), Some(Outcome::Failed("couldn't start the launcher (denied)".into())));
+    }
+
+    /// A portable update of the launcher to 0.2.0 in `dir`: its exe and the step.
+    #[cfg(windows)]
+    fn portable_update(dir: &Path) -> (PathBuf, Finish) {
+        use std::io::Write;
+        let folder = dir.join("ArtCraft Launcher");
+        std::fs::create_dir_all(&folder).unwrap();
+        let exe = folder.join("artcraft-launcher.exe");
+        std::fs::write(&exe, "0.1.0").unwrap();
+        let zip = dir.join("artcraft-launcher-0.2.0-windows-x64-portable.zip");
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(&zip).unwrap());
+        writer.start_file("artcraft-launcher-0.2.0-windows-x64-portable/artcraft-launcher.exe", zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(&std::fs::read(system_program("cmd.exe")).unwrap()).unwrap();
+        writer.finish().unwrap();
+        (exe, Finish::Portable { zip, tmp: dir.join(PORTABLE_STAGING) })
+    }
+
+    /// A finished step whose new app can't be started is a failure at the next start, never a
+    /// finished update.
+    #[cfg(windows)]
+    #[test]
+    fn a_failed_relaunch_is_not_reported_as_a_finished_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let (exe, step) = portable_update(dir.path());
+        mark_installed(&paths, &Release { tag: "v0.2.0".into(), ..Release::default() });
+        let start = |_: &Path| Err("couldn't start the launcher (denied)".to_owned());
+        let exited = |_pid| true;
+        let result = finish_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), &paths, 4242, exe, &step, false, &exited, &start);
+        assert_eq!(result, Err("couldn't start the launcher (denied)".into()));
+        assert_eq!(take_outcome(&paths, "0.2.0"), Some(Outcome::Failed("couldn't start the launcher (denied)".into())));
+    }
+
+    /// A helper that times out or whose step fails records no finished update.
+    #[cfg(windows)]
+    #[test]
+    fn a_timed_out_or_failed_step_is_not_reported_as_a_finished_update() {
+        for (exits, zip_ok) in [(false, true), (true, false)] {
+            let dir = tempfile::tempdir().unwrap();
+            let paths = Paths::under(dir.path());
+            let (exe, step) = portable_update(dir.path());
+            if !zip_ok && let Finish::Portable { zip, .. } = &step {
+                std::fs::write(zip, "not a zip").unwrap();
+            }
+            mark_installed(&paths, &Release { tag: "v0.2.0".into(), ..Release::default() });
+            let start = |_: &Path| Ok(());
+            let wait = |_pid| exits;
+            assert!(finish_step(&crate::suite::LAUNCHER, &system_program("cmd.exe"), &paths, 4242, exe, &step, false, &wait, &start).is_err());
+            assert!(!done_file(&paths).exists(), "exits {exits}, zip {zip_ok}");
+            assert!(matches!(take_outcome(&paths, "0.2.0"), Some(Outcome::Failed(_))), "exits {exits}, zip {zip_ok}");
+        }
+    }
+
+    /// A prepared Windows restart does nothing until it is started, and runs once when it is.
+    #[test]
+    fn a_prepared_restart_runs_only_when_started() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let runs = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&runs);
+        let restart = Restart::later(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        });
+        assert_eq!(runs.load(Ordering::SeqCst), 0, "nothing starts before the app closes");
+        assert_eq!(restart.start(), Ok(()));
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+        assert_eq!(Restart::scheduled().start(), Ok(()));
     }
 
     #[test]

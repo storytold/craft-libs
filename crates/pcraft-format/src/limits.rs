@@ -65,36 +65,54 @@ impl Default for Limits {
 /// This check also refuses JSON larger than [`Limits::max_manifest_bytes`], so a writer that runs
 /// it before saving refuses a manifest of more than that size.
 pub fn check_manifest(json: &[u8], limits: &Limits) -> Result<(), Error> {
+    checked_manifest(json, limits, None)
+}
+
+/// [`check_manifest`] with cooperative cancellation while scanning the JSON. The callback
+/// runs on this thread; returning true stops validation with [`Error::Cancelled`].
+pub fn check_manifest_with_cancel(json: &[u8], limits: &Limits, cancelled: &dyn Fn() -> bool) -> Result<(), Error> {
+    checked_manifest(json, limits, Some(cancelled))
+}
+
+fn checked_manifest(json: &[u8], limits: &Limits, cancelled: Option<&dyn Fn() -> bool>) -> Result<(), Error> {
+    let check = || match cancelled {
+        Some(cancelled) if cancelled() => Err(Error::Cancelled),
+        _ => Ok(()),
+    };
+    check()?;
     if json.len() > limits.max_manifest_bytes {
         return Err(Error::LimitExceeded(format!("`{}` exceeds {} bytes", crate::MANIFEST, limits.max_manifest_bytes)));
     }
     let max_depth = limits.max_depth.min(MAX_DEPTH);
     let (mut depth, mut items, mut in_str, mut escaped) = (0usize, 0usize, false, false);
-    for &b in json {
-        if in_str {
+    for chunk in json.chunks(64 * 1024) {
+        check()?;
+        for &b in chunk {
+            if in_str {
+                match b {
+                    _ if escaped => escaped = false,
+                    b'\\' => escaped = true,
+                    b'"' => in_str = false,
+                    _ => {}
+                }
+                continue;
+            }
             match b {
-                _ if escaped => escaped = false,
-                b'\\' => escaped = true,
-                b'"' => in_str = false,
+                b'"' => in_str = true,
+                b'[' | b'{' => {
+                    depth += 1;
+                    if depth > max_depth {
+                        return Err(Error::LimitExceeded(format!("manifest JSON nested deeper than {max_depth} levels")));
+                    }
+                }
+                b']' | b'}' => depth = depth.saturating_sub(1),
                 _ => {}
             }
-            continue;
-        }
-        match b {
-            b'"' => in_str = true,
-            b'[' | b'{' => {
-                depth += 1;
-                if depth > max_depth {
-                    return Err(Error::LimitExceeded(format!("manifest JSON nested deeper than {max_depth} levels")));
+            if matches!(b, b'[' | b'{' | b',') {
+                items += 1;
+                if items > limits.max_items {
+                    return Err(Error::LimitExceeded(format!("manifest JSON holds more than {} values", limits.max_items)));
                 }
-            }
-            b']' | b'}' => depth = depth.saturating_sub(1),
-            _ => {}
-        }
-        if matches!(b, b'[' | b'{' | b',') {
-            items += 1;
-            if items > limits.max_items {
-                return Err(Error::LimitExceeded(format!("manifest JSON holds more than {} values", limits.max_items)));
             }
         }
     }
