@@ -34,13 +34,19 @@ Buffers are checked once per call, before any pixel is written.
 * `transform::cached(src, dst, opts)`: process-wide transform cache.
 * `lutfile::parse(name, bytes)` / `lutfile::write_cube(&lut)`: `.cube`, `.3dl` and `.look` LUT
   files; `lutfile::builtin(id)` returns generated looks (`lutfile::BUILTIN`).
-* `Profile::to_bytes()`: original bytes of parsed profiles (byte-exact), or an ICC v4.3 encoding.
+* `Profile::to_bytes()`: original bytes of parsed profiles (byte-exact), or an ICC v4.3 encoding
+  with its profile ID set.
+* `profile_id(bytes)`: the MD5 profile ID of any profile, to check a stored one.
 * `Builtin::from_profile_name(desc)`: the built-in with that description (exact match);
   `Builtin::stand_in_for(desc)`: the built-in that approximates a profile a document names
   when its ICC bytes are not available (see [Selecting by profile name](#selecting-by-profile-name)).
 * `Profile::same_colors(&other)`: the same colour space whatever the encoding (every sample of
   a device grid within ΔE 0.5 through both), e.g. Photoshop's sRGB IEC61966-2.1 and the built-in
   sRGB. `content_hash()` compares bytes and suits cache keys only.
+* `Profile::named_colors()`: a named-colour profile's `ncl2` table (spot-colour libraries), with
+  names joined from prefix, root and suffix, and Lab read in the legacy 16-bit encoding it uses in
+  every profile version. `NamedColors::to_device(name, dst)` converts one into a destination
+  profile, relative colorimetric.
 
 ### Evaluation
 
@@ -185,7 +191,8 @@ let t = Transform::new(cmyk, Builtin::Srgb.profile(), Intent::RelativeColorimetr
 ## Not implemented / approximate
 
 * v4.4 `mpet` (multiProcessElements, D2Bx/B2Dx) tags, named colour, device link and abstract
-  profiles as transform endpoints, `chad`-based adaptation of v2 absolute colorimetry.
+  profiles as transform endpoints (a named-colour table is read through `named_colors()`, but
+  the profile is not a transform endpoint), `chad`-based adaptation of v2 absolute colorimetry.
 * BPC destination black uses the BToA/AToB round trip directly (Adobe's curve fit for
   ill-behaved LUT profiles is not implemented); v2/v4 perceptual reference black mixing is not
   modelled beyond the PRMG black for v4 LUT profiles.

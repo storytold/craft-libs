@@ -68,6 +68,12 @@ pub(crate) fn two_sided_named(name: &str) -> Option<bool> {
     PrinterDevice::all().ok()?.iter().find(|d| d.name() == name).and_then(two_sided)
 }
 
+/// Whether the driver of the queue `name` renders XPS itself (`PRINTER_DRIVER_XPS`); `None`
+/// when no queue has that name or its driver can't be read.
+pub(crate) fn xps_driver_named(name: &str) -> Option<bool> {
+    PrinterDevice::all().ok()?.iter().find(|d| d.name() == name)?.is_xps_driver().ok()
+}
+
 #[cfg(test)]
 thread_local! {
     /// The driver capability queries printer discovery made on this thread, so a test can show
@@ -109,7 +115,7 @@ fn select_device(devices: Vec<PrinterDevice>, requested: Option<&str>, default: 
         .ok_or_else(|| spool_error(format!("the printer is not available: {name} (reopen Print to refresh the list)")))
 }
 
-/// The ticket the driver accepted: [`ticket::ticket_xml_for_duplex`] with the driver's own paper option for
+/// The ticket the driver accepted: [`ticket::ticket_xml_with`] with the driver's own paper option for
 /// `sheet` (its exact option, so a vendor's sizes survive; a ticket with dimensions only can come
 /// back as Letter) and its own "no scaling" option, merged and validated against the printer's
 /// capabilities. For exact size the driver must have that paper; for shrink-to-fit without one,
@@ -176,7 +182,7 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
         }
     };
     let document_only = ticket::document_duplex_only(capabilities_xml, job.duplex);
-    let requested = PrintTicket::from_xml(ticket::ticket_xml_for_duplex(job, landscape, document_only));
+    let requested = PrintTicket::from_xml(ticket::ticket_xml_with(job, landscape, document_only, ticket::grey_option(capabilities_xml)));
     let mut document = PrintTicketDocument::parse_from_bytes(requested.get_xml()).map_err(spool_error)?;
     if let Some(media) = media {
         let media_ticket: PrintTicket = media.clone().into();

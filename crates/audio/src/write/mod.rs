@@ -4,7 +4,7 @@
 #[cfg(feature = "pcm-encode")]
 mod aiff;
 #[cfg(feature = "flac-encode")]
-mod flac;
+pub(crate) mod flac;
 mod pcm;
 #[cfg(feature = "pcm-encode")]
 mod wav;
