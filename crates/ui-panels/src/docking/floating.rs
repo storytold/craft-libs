@@ -11,10 +11,11 @@ use crate::contract::BodyCx;
 use crate::contract::SizeLimits;
 use crate::contract::overlay::{PlacementChange, PlacementKind, Popup};
 use crate::contract::{
-    Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, Inner, Mount, NoValue, Outcome, Overlay, Pad, Pointer as _, Props as _,
-    Role, Show as _, ShowContainer as _, Sizing, WordSetCx as _,
+    Bind, BindMut, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, Inner, Mount, NoValue, Outcome, Overlay, Pad,
+    Pointer as _, Props as _, Role, Show as _, ShowContainer as _, Sizing, WordSetCx as _,
 };
 use crate::runtime::env::{Env, Label};
+use crate::runtime::overlay::CloseReason;
 use crate::runtime::windows::WindowSpec;
 use crate::sections::{HeaderAction, HeaderStrength, MenuRows, TitleRow};
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
@@ -46,8 +47,8 @@ pub struct FloatingGroupOutput {
     /// The last step of a move or resize this pass, with the rect the caller keeps: while the group is minimized
     /// the rect has the height the group has when restored.
     pub placed: Option<PlacementChange>,
-    /// The title row's action part taken this pass. Float and Close are the host's: the dock model docks or closes
-    /// the group. Menu opens the `menu` rows.
+    /// The title row's action part taken this pass, or Close when the OS asked the group's window to close. Float and
+    /// Close are the host's: the dock model docks or closes the group. Menu opens the `menu` rows.
     pub action: Option<HeaderAction>,
     /// Whether a double click on the title band asks to minimize the group, or restore it when it is minimized.
     pub minimized_toggled: bool,
@@ -108,6 +109,8 @@ pub struct FloatingGroup<'a> {
     #[prop(func = "FnMut(&mut Ui, &mut BodyCx<'_>)")]
     menu: Option<MenuRows<'a>>,
     actions: Vec<HeaderAction>,
+    /// Always open: the caller shows the group while its window exists, and a close comes out as the Close action.
+    open: Bind<'a, bool>,
     taken: Option<HeaderAction>,
     menu_opener: Option<Id>,
     toggled: bool,
@@ -144,6 +147,7 @@ impl<'a> FloatingGroup<'a> {
             native: None,
             menu: None,
             actions: ACTIONS.to_vec(),
+            open: Bind::given(true),
             taken: None,
             menu_opener: None,
             toggled: false,
@@ -268,6 +272,16 @@ impl Component for FloatingGroup<'_> {
 }
 
 impl Container for FloatingGroup<'_> {
+    fn open(&mut self) -> Option<BindMut<'_, bool>> {
+        Some(self.open.reborrow())
+    }
+
+    fn closed(&mut self, why: CloseReason) {
+        if why == CloseReason::Requested {
+            self.taken = Some(HeaderAction::Close);
+        }
+    }
+
     fn header(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
         let shown = TitleRow::new(cx.label()).strength(HeaderStrength::Strong).actions(self.actions.iter().copied()).show(ui);
         self.taken = shown.action.or(self.taken);

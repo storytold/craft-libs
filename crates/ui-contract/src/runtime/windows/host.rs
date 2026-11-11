@@ -75,6 +75,11 @@ impl WindowHost {
         base_shell(&self.ctx).caps.contains(Caps::VIEWPORTS) && viewports::available(&self.ctx)
     }
 
+    /// Whether the platform reports where windows are on the desktop and moves them there; false on Wayland.
+    pub fn positions_reported(&self) -> bool {
+        base_shell(&self.ctx).window_positions()
+    }
+
     /// Whether the running viewport's window is drawn; a minimized or covered window runs no UI pass, so this reads
     /// false only from the app's `logic`.
     pub fn visible(&self) -> bool {

@@ -1,8 +1,8 @@
 //! Native dock windows: a floating dock group that shows in an OS window of its own.
 //!
 //! A native group is a [`FloatingGroup`](super::FloatingGroup) mounted in a viewport. The container does the window
-//! work: its title row moves the window, its grips resize it, its limits are the window's, and a close is a
-//! `close_requested` report. What is left is policy, in these functions: whether a window of the dock model gets an
+//! work: its title row moves the window, its grips resize it, its limits are the window's, and the OS close is the
+//! group's Close action. What is left is policy, in these functions: whether a window of the dock model gets an
 //! OS window, what kind of window it is, where it opens on the connected monitors, and what the dock model records
 //! when the OS moves or resizes it. `DockArea` and `FloatingGroup` call them. A native window keeps the
 //! [`Placement`](craft_behavior::placement::Placement) app windows keep, and opens where [`place`] puts it.
@@ -32,9 +32,10 @@ pub struct Opening {
 }
 
 /// Whether the groups of panels with `specs` may open OS windows: the dock's `config` turns them on, the platform
-/// opens them and every panel allows it.
+/// opens them and reports where they are, and every panel allows it.
 pub(crate) fn allowed(ctx: &Context, config: &DockConfig, specs: &[PanelSpec]) -> bool {
-    config.native_windows && WindowHost::of(ctx).viewports_available() && specs.iter().all(|spec| spec.allow_native)
+    let host = WindowHost::of(ctx);
+    config.native_windows && host.viewports_available() && host.positions_reported() && specs.iter().all(|spec| spec.allow_native)
 }
 
 /// The window a group of panels with `specs` opens: a document window when any panel is a document, else a tool
@@ -43,11 +44,10 @@ pub fn spec_for(specs: &[PanelSpec]) -> WindowSpec {
     if specs.iter().any(|spec| spec.window_kind == WindowKind::Document) { WindowSpec::document() } else { WindowSpec::tool() }
 }
 
-/// Where the saved placement of `window` opens on the desktop, in desktop points: [`place`] against the connected
+/// Where `window` opens on the desktop, in desktop points: its saved placement [`place`]d against the connected
 /// monitors, with the main window's monitor as the home of a window whose position is unknown. A window with no
-/// position opens where its group sits in the main window. `None` for a window that is not native.
-pub fn restore<P>(ctx: &Context, window: &Floating<P>) -> Option<Rect> {
-    let saved = window.native.as_ref()?;
+/// position, and one never shown in an OS window, opens where its group sits in the main window.
+pub fn restore<P>(ctx: &Context, window: &Floating<P>) -> Rect {
     let host = WindowHost::of(ctx);
     let monitors = host.monitors();
     let main = host.facts(ViewportId::ROOT);
@@ -56,19 +56,17 @@ pub fn restore<P>(ctx: &Context, window: &Floating<P>) -> Option<Rect> {
         let on = monitor_of(&monitors, Rect::from_min_max(outer.min * scale, outer.max * scale))?;
         monitors.iter().position(|monitor| monitor == on)
     });
-    let placed = place(Some(saved), &monitors, home, &Defaults::new(window.rect.size().into(), [1.0; 2]));
+    let placed = place(window.native.as_ref(), &monitors, home, &Defaults::new(window.rect.size().into(), [1.0; 2]));
     let at = placed.position().map(Pos2::from).or_else(|| main.map(|facts| facts.inner.min + window.rect.min.to_vec2()));
-    Some(Rect::from_min_size(at.unwrap_or(window.rect.min), Vec2::from(placed.normal.size)))
+    Rect::from_min_size(at.unwrap_or(window.rect.min), Vec2::from(placed.normal.size))
 }
 
-/// How `window` shows: in an OS window at its restored rect when it is native and `config`, the platform and its
-/// panels allow one, else in the app window at its own rect. `specs` are its panels' specs.
+/// How `window` shows: in an OS window at its restored rect where `config`, the platform and its panels allow one,
+/// else in the app window at its own rect. `specs` are its panels' specs.
 #[doc(hidden)]
 pub fn opening<P>(ctx: &Context, config: &DockConfig, window: &Floating<P>, specs: &[PanelSpec]) -> Opening {
-    if allowed(ctx, config, specs)
-        && let Some(rect) = restore(ctx, window)
-    {
-        return Opening { rect, spec: Some(spec_for(specs)) };
+    if allowed(ctx, config, specs) {
+        return Opening { rect: restore(ctx, window), spec: Some(spec_for(specs)) };
     }
     Opening { rect: window.rect, spec: None }
 }

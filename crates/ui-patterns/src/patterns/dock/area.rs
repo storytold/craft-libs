@@ -897,7 +897,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 moved = Some((anchor.clone(), change));
             }
             match output.action {
-                Some(HeaderAction::Close) => self.report.actions.push(Action::close_window(anchor.clone())),
+                // The OS close of a native window arrives here as well, also where the title row offers no Close.
+                Some(HeaderAction::Close) if rights.iter().all(|rights| rights.closable) => {
+                    self.report.actions.push(Action::close_window(anchor.clone()));
+                }
                 Some(HeaderAction::Float) => {
                     let commands = DockScene::new(scene.layout, scene.space, false, &policy);
                     if let Ok(docked) = move_actions(&commands, &DragUnit::Window(anchor.clone()), DockTo::Docked) {

@@ -7,7 +7,7 @@ use crate::runtime::InstallSpec;
 use crate::runtime::frame::{FrameInput, FrameOutput, request_repaint_after, set_input, take_output};
 use crate::runtime::windows::{self, WindowAction, WindowHost};
 use craft_behavior::placement::Defaults;
-use craft_host::target::{Os, ShellInfo, WindowState};
+use craft_host::target::{Backend, Os, ShellInfo, WindowState};
 use craft_window::desktop::fits;
 use craft_window::policy::Decision;
 use craft_window::restore::Store;
@@ -36,12 +36,13 @@ pub struct AppSpec {
 }
 
 impl AppSpec {
-    /// A spec for `app_id` titled `title`, with the running build's shell and an in-memory placement store.
+    /// A spec for `app_id` titled `title`, with the running build's shell on the backend winit opens by default (the one
+    /// `run` opens its windows on) and an in-memory placement store.
     pub fn new(app_id: impl Into<String>, title: impl Into<String>, defaults: Defaults) -> Self {
         AppSpec {
             title: title.into(),
             app_id: app_id.into(),
-            shell_info: ShellInfo::default(),
+            shell_info: ShellInfo::default().backend(Backend::from_env()),
             defaults,
             placement: Arc::new(Mutex::new(Store::in_memory())),
             window_system: Arc::new(NoWindows),

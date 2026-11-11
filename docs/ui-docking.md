@@ -87,7 +87,7 @@ The host handles these `DockEvent`s:
 | `title_bar_docks` | on | Dragging a floating window's title bar onto a target docks the whole window. |
 | `close_menu_items`, `close_button` | on | Built-in Close items, and the close action on floating windows. |
 | `tab_close_buttons` | off | Close buttons on tabs (middle click closes too), for tabs that act as documents. |
-| `native_windows` | off | Floating windows open as OS windows where the platform and `PanelSpec::allow_native` allow. |
+| `native_windows` | on | Floating windows open as OS windows where the window host opens them and reports their positions (not on Wayland) and `PanelSpec::allow_native` allows. |
 
 The theme's docking sizes (`DockSizes`) set the drop bands and zones. `DockWords` holds the words.
 
@@ -111,7 +111,7 @@ The theme's docking sizes (`DockSizes`) set the drop bands and zones. `DockWords
 
 ## Floating and native windows
 
-A floating window is a `Floating` in the layout: its `rect` in logical points in the app's viewport, and `native` and `monitor` while it is an OS window. `FloatingGroup` shows it. With `DockConfig::native_windows`, a floating window opens in its own OS window (`docking::native`). A panel with `allow_native` off keeps its window inside the main window. `window_kind` says whether an OS window is a document or a tool window.
+A floating window is a `Floating` in the layout: its `rect` in logical points in the app's viewport, and `native` and `monitor` while it is an OS window. `FloatingGroup` shows it. With `DockConfig::native_windows` (on by default), every floating window opens in its own OS window (`docking::native`) where the window host opens OS windows and reports where they are (`WindowHost::positions_reported`; not on Wayland); a window never shown native yet opens over its place in the main window. Elsewhere, and for a panel with `allow_native` off, the window stays inside the main window. The OS close of a native window is its Close action: the window closes when every panel in it may close. `window_kind` says whether an OS window is a document or a tool window.
 
 ## SplitArea on its own
 

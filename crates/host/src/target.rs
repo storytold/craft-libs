@@ -74,11 +74,13 @@ pub enum Backend {
 }
 
 impl Backend {
-    /// The backend winit opens by default: Wayland when `WAYLAND_DISPLAY` or `WAYLAND_SOCKET` is set, else X11. An app
-    /// that forces X11 (XWayland) passes [`Backend::X11`] instead.
+    /// The backend winit opens by default: on Linux and the BSDs, Wayland when `WAYLAND_DISPLAY` or `WAYLAND_SOCKET` is
+    /// set, else X11; elsewhere X11. An app that forces X11 (XWayland) passes [`Backend::X11`] instead.
     pub fn from_env() -> Backend {
+        let unix_desktop =
+            cfg!(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"));
         let set = |k| std::env::var_os(k).is_some_and(|v| !v.is_empty());
-        if set("WAYLAND_DISPLAY") || set("WAYLAND_SOCKET") { Backend::Wayland } else { Backend::X11 }
+        if unix_desktop && (set("WAYLAND_DISPLAY") || set("WAYLAND_SOCKET")) { Backend::Wayland } else { Backend::X11 }
     }
 }
 
@@ -294,6 +296,12 @@ impl ShellInfo {
     /// Where the menu bar lives: it follows the capabilities and the main window's frame.
     pub fn menu(&self) -> MenuPlacement {
         MenuPlacement::of(self.caps, self.window.chrome)
+    }
+
+    /// Whether the platform reports where its windows are on the desktop and moves them there: a native build, except
+    /// on Wayland, whose compositor keeps window positions to itself.
+    pub fn window_positions(&self) -> bool {
+        self.runtime == Runtime::Native && self.backend != Backend::Wayland
     }
 
     /// The shell of the running build: the OS, runtime and capabilities this binary has.

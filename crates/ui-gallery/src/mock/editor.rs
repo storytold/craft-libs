@@ -71,7 +71,8 @@ fn body(ui: &mut Ui, cx: &mut BodyCx<'_>, state: &mut MockState) {
     let mut tools = cx.keep::<Tools>().clone();
     let events = {
         let mut panels = Panels { document: &mut state.document, tool: state.tool, tools: &mut tools };
-        let mut area = DockArea::new("Dock", Bind::bound(&mut state.workspace), &mut panels, DockConfig::default());
+        // The mock app is a preview inside the gallery's page: its floats stay in it.
+        let mut area = DockArea::new("Dock", Bind::bound(&mut state.workspace), &mut panels, DockConfig::default().native_windows(false));
         if let Some(panel) = state.maximized {
             area = area.maximized(panel);
         }
