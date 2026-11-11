@@ -99,6 +99,7 @@ craft-vectorcraft-format = { path = "crates/vectorcraft-format" }
 craft-vectordrawable = { path = "crates/vectordrawable" }
 craft-xls = { path = "crates/xls" }
 craft-xml = { path = "crates/xml" }
+craft-zip = { path = "crates/zip" }
 craft-y4m = { path = "crates/y4m" }
 craft-epub = { path = "crates/epub" }
 craft-video = { path = "crates/video" }
