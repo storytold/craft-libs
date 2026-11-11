@@ -1580,6 +1580,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-y4m"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
