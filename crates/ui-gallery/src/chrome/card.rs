@@ -117,6 +117,8 @@ pub struct CardEvents {
     pub reset: bool,
     /// Use was run.
     pub used: bool,
+    /// The card's rect: where the story renderer crops it.
+    pub rect: Option<Rect>,
 }
 
 /// The narrowest a column of stories may be, as the old gallery's story grids kept their cases.
@@ -158,7 +160,7 @@ impl Card<'_> {
         if away {
             commands.push(HeaderCommand::new(IconId::new("undo"), CardCommands::Reset).size(ControlSize::Sm));
         }
-        panel.commands(commands).show(ui, |ui, cx| {
+        let shown = panel.commands(commands).show(ui, |ui, cx| {
             while let Some((command, _)) = cx.take_command::<CardCommands>() {
                 match command {
                     CardCommands::Open => events.opened = true,
@@ -169,6 +171,7 @@ impl Card<'_> {
             events.pressed |= cx.surface_pressed();
             self.stories_in(ui, cells);
         });
+        events.rect = Some(shown.response.rect);
         events
     }
 
