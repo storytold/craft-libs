@@ -215,6 +215,14 @@ Their licences and per-file hashes are retained in vendor/hayro-interpret/assets
 vendor/hayro-cmap/assets, licenses/pdf-backend and ATTRIBUTION.md. These are existing reader dependency assets;
 applications retain their own document-font selection and licensing policy.
 
+linesweeper
+
+linesweeper 0.5.0 (https://crates.io/crates/linesweeper/0.5.0), MIT OR Apache-2.0, is stored in
+vendor/linesweeper with its upstream license files and no file changed. Its manifest names Joe Neeman
+as author, and its LICENSE-MIT reads "Copyright (c) 2018 Raph Levien". See
+vendor/linesweeper/README.craft.md and vendor/linesweeper/SOURCE.json for provenance and the files
+left out.
+
 Platform lifecycle source provenance
 
 The optional crates/platform services adapt the preserved local platform candidate
@@ -244,3 +252,10 @@ Its white-level plateau estimate (saturation_plateau) is LightCraft's vendor::wh
 same revision. The CRW compression was derived clean-room from CC0 sample files and the
 maintainer's own photographs by black-box comparison with a reference decoder's command-line
 output; no raw-decoder source was consulted (crates/crw/clean-room/sources.md).
+
+crates/audio/src/alac/ (the ALAC decoder and encoder) is ported from Apple's ALAC reference
+implementation, https://github.com/macosforge/alac at c38887c5c5e64a4b31108733bd79ca9b2496d987
+(codec/), Copyright (c) 2011 Apple Inc., licensed under the Apache License, Version 2.0
+(LICENSE-APACHE). The files are modified: translated to Rust, with bounds checks on hostile input,
+wrapping integer arithmetic, the unrolled predictor and per-width matrix routines folded into one,
+and the average bit rate filled in. Those files are Apache-2.0 only.

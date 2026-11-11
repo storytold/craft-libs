@@ -3,6 +3,7 @@
 `craft-ui` provides small egui components with application-supplied styles. `icons` prepares
 embedded SVG catalogs; `buttons` paints accessible icon buttons; `tabs` handles tab fitting and
 interaction; `layout` provides toolbar fitting, split geometry and resize handles; `theme` shares widget-state styling.
+`layout::Section` groups dialog or inspector settings in caller-styled frames with optional headings.
 `docking` supplies transactional panel moves and an optional docking surface.
 `printing` supplies printer/job controls and asynchronous feedback used by WordCraft and GridCraft.
 `fonts` installs the UI font stack, the same fallback order in every app.
@@ -12,6 +13,12 @@ records their scope and acceptance limits. Assets (font files included), complet
 and command handling remain in each application. No icons, fonts or application engines are bundled.
 
 ## Host-owned docking chrome
+
+Iconic flyouts resize from their canvas-side edge, bottom and shared corner, keeping
+the edge against the icon column anchored. Resizing saves the group's `height`
+and `flyout_width`, so workspaces retain independent sizes for each group.
+An explicit height overrides content fitting; untouched heights continue to fit
+content, including after a width-only drag. Layout locks and float bounds apply.
 
 `DockContent` can replace an iconic column or a complete tab group without a
 second layout tree. `column_rect` reports the fitted column before painting;
@@ -49,6 +56,39 @@ sizes, the viewport edge, and top-gutter opt-out geometry.
 
 Exhaustive `DockStyle` struct literals need `dock_gap: None`; constructors such
 as `from_ui` and `from_visuals` supply the compatible default.
+
+## Dialog and inspector sections
+
+`layout::Section` groups related settings without owning a window, theme or commands. Pass a
+localized heading and a frame built from the application's tokens. Typography stays in the supplied
+`WidgetText`; contents keep normal egui focus, clipping and parent disabled state.
+
+```rust
+use craft_ui::layout::Section;
+use egui::{CornerRadius, Frame, Margin, RichText};
+
+fn display_settings(ui: &mut egui::Ui, show_grid: &mut bool) {
+    let frame = Frame::new()
+        .fill(ui.visuals().window_fill.lerp_to_gamma(ui.visuals().text_color(), 0.04))
+        .stroke(ui.visuals().window_stroke)
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(Margin::symmetric(10, 8));
+    Section::new(frame).heading(RichText::new("Display").strong()).show(ui, |ui| {
+        ui.checkbox(show_grid, "Show grid");
+    });
+}
+```
+
+The default fills available width; `.fill_width(false)` wraps the contents. An empty heading adds
+no row or heading gap. The heading remains above the contents even in a horizontal parent.
+The helper neither indents controls nor adds exterior spacing: compose those
+in the caller's layout. Reusing the same frame for nested sections preserves its fill. A translucent fill
+blends again in each nested section; the component does not change global visuals. Invalid floating-point decoration becomes zero and
+large heading gaps/strokes are capped at 64 logical points; forced widths are capped at one million.
+
+This small framing boundary comes from [WordCraft #4038](https://github.com/storytold/wordcraft/pull/4038)
+and is also suitable for GridCraft/DeckCraft dialogs and creative-app inspectors. Consumer adoption
+is separate; application-specific dialog behavior remains in each app.
 
 ## SVG catalogs
 
