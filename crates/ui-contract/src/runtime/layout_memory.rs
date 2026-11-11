@@ -1,8 +1,9 @@
 //! Layout memory: sizes one pass measures and the next pass places by, the one discard pass a change asks for, what
 //! this pass's measuring runs found, and the measurements bodies keep across passes.
 //!
-//! A body's measuring run leaves a transcript: every value it hands forward (a record by id, a contribution to an
-//! aggregator open around it, the transcripts of the bodies nested in it, in order) and every measure call each
+//! A body's measuring run leaves a transcript: every value it hands forward (a record by id, a measure or a text the
+//! content beside the body shows, a contribution to an aggregator open around it, the transcripts of the bodies nested
+//! in it, in order) and every measure call each
 //! component in it got. A later pass whose inputs are the body's key takes the transcript instead of running the
 //! content: its records serve this pass and its contributions are made again. The real run then asks each component
 //! the calls the transcript holds, at the measuring run's own proposal and room, and compares; a component added,
@@ -82,9 +83,18 @@ pub(crate) trait Contribution: Send + Sync {
     fn report(&self) -> Option<(Id, f32)>;
 }
 
+/// What a record holds: a measure, or a text the run found that content outside the body shows (the value text a
+/// viewer shows beside a story). A text is an output of the measuring run as much as its size, so it serves exactly
+/// when the run's measure does.
+#[derive(Clone, Debug, PartialEq)]
+enum Recorded {
+    Measured(Measured),
+    Text(Option<Arc<str>>),
+}
+
 /// One thing a measuring run handed forward, in the order it did.
 enum Item {
-    Record(Id, Measured),
+    Record(Id, Recorded),
     Contribute(Arc<dyn Contribution>),
     Body(Id, Arc<Transcript>),
 }
@@ -120,12 +130,12 @@ struct Transcript {
     real: Mutex<Option<HashMap<Id, Vec2>>>,
 }
 
-/// A record of this pass's measures.
-#[derive(Clone, Copy)]
+/// A record of this pass's runs.
+#[derive(Clone)]
 struct Found {
     /// The cumulative pass number that recorded it.
     pass: u64,
-    measured: Measured,
+    recorded: Recorded,
     /// The body whose kept transcript gave it, rather than a run of this pass.
     kept: Option<Id>,
 }
@@ -327,35 +337,64 @@ fn real(ctx: &Context) -> bool {
 /// Hands forward what a measuring run found under `id`: it serves the rest of this pass, and joins the transcript of
 /// the innermost body whose measuring run is open. A run of this pass that finds, at the same room, something other
 /// than what a kept transcript gave the pass shows that transcript changed.
-pub(crate) fn emit_record(ctx: &Context, id: Id, mut measured: Measured) {
+pub(crate) fn emit_record(ctx: &Context, id: Id, measured: Measured) {
+    emit(ctx, id, Recorded::Measured(measured));
+}
+
+/// Hands forward a text a run found under `id` that content outside the body it runs in shows, as [`emit_record`]
+/// hands forward a measure: it serves the rest of this pass, and a later pass that takes the kept measurement of a body
+/// it ran in gets it with that measurement, where the content that found it does not run. A real run emits it too: a
+/// text other than the one a kept transcript gave the pass shows that transcript changed.
+pub fn emit_text(ctx: &Context, id: Id, text: Option<&str>) {
+    emit(ctx, id, Recorded::Text(text.map(Arc::from)));
+}
+
+/// The text a run of this pass handed forward under `id` ([`emit_text`]), or a kept transcript gave this pass.
+pub fn text(ctx: &Context, id: Id) -> Option<Arc<str>> {
+    let moment = Moment::of(ctx);
+    let pass = ctx.cumulative_pass_nr();
+    with(ctx, &moment, |memory| match memory.measured.get(&id).filter(|found| found.pass == pass) {
+        Some(Found { recorded: Recorded::Text(text), .. }) => text.clone(),
+        _ => None,
+    })
+}
+
+fn emit(ctx: &Context, id: Id, mut recorded: Recorded) {
     let moment = Moment::of(ctx);
     let pass = ctx.cumulative_pass_nr();
     let tolerance = measure_tolerance(crate::runtime::egui::scale::pixels_per_point(ctx));
     with(ctx, &moment, |memory| {
-        // A record keys on what its measure read: the room, and the inputs the innermost open body read so far.
-        measured.inputs = memory
-            .measuring
-            .iter()
-            .rev()
-            .find_map(|open| match open {
-                Open::Body { inputs, .. } => Some(fingerprint(inputs)),
-                Open::Boundary | Open::Call { .. } => None,
-            })
-            .unwrap_or(0);
-        let last = memory.measured.insert(id, Found { pass, measured, kept: None });
-        if let Some(Found { pass: at, measured: was, kept: Some(from) }) = last
+        // A measure keys on what it read: the room, and the inputs the innermost open body read so far.
+        if let Recorded::Measured(measured) = &mut recorded {
+            measured.inputs = memory
+                .measuring
+                .iter()
+                .rev()
+                .find_map(|open| match open {
+                    Open::Body { inputs, .. } => Some(fingerprint(inputs)),
+                    Open::Boundary | Open::Call { .. } => None,
+                })
+                .unwrap_or(0);
+        }
+        let last = memory.measured.insert(id, Found { pass, recorded: recorded.clone(), kept: None });
+        if let Some(Found { pass: at, recorded: was, kept: Some(from) }) = last
             && at == pass
-            && was.inputs == measured.inputs
-            && (was.room - measured.room).abs().max_elem() <= tolerance
-            && (was.took - measured.took).abs().max_elem() > tolerance
+            && match (&was, &recorded) {
+                (Recorded::Measured(was), Recorded::Measured(now)) => {
+                    was.inputs == now.inputs
+                        && (was.room - now.room).abs().max_elem() <= tolerance
+                        && (was.took - now.took).abs().max_elem() > tolerance
+                }
+                (was, now) => was != now,
+            }
         {
             #[cfg(feature = "testing")]
             if std::env::var_os("CRAFT_UI_TRACE_KEPT").is_some() {
-                eprintln!("layout memory: a run of this pass found {id:?} at {measured:?}, its kept record said {was:?}");
+                eprintln!("layout memory: a run of this pass found {id:?} at {recorded:?}, its kept record said {was:?}");
             }
             memory.changed(moment.frame, Some(from));
         }
-        memory.push(Item::Record(id, measured));
+        memory.push(Item::Record(id, recorded));
     });
 }
 
@@ -580,7 +619,10 @@ pub(crate) fn backstop(ctx: &Context, id: Id, took: Vec2) {
 pub(crate) fn measured(ctx: &Context, id: Id) -> Option<Measured> {
     let moment = Moment::of(ctx);
     let pass = ctx.cumulative_pass_nr();
-    with(ctx, &moment, |memory| memory.measured.get(&id).filter(|found| found.pass == pass).map(|found| found.measured))
+    with(ctx, &moment, |memory| match memory.measured.get(&id).filter(|found| found.pass == pass) {
+        Some(Found { recorded: Recorded::Measured(measured), .. }) => Some(*measured),
+        _ => None,
+    })
 }
 
 /// Whether a run of this pass, not a kept transcript, recorded what serves under `id`.
@@ -677,8 +719,8 @@ pub(crate) fn kept_serves<K: PartialEq + Send + Sync + 'static>(ctx: &Context, b
             let mut nested = Vec::new();
             for item in &transcript.items {
                 match item {
-                    Item::Record(at, measured) => {
-                        memory.measured.insert(*at, Found { pass, measured: *measured, kept: Some(body) });
+                    Item::Record(at, recorded) => {
+                        memory.measured.insert(*at, Found { pass, recorded: recorded.clone(), kept: Some(body) });
                     }
                     Item::Contribute(contribution) => contributions.push(contribution.clone()),
                     Item::Body(at, inner) => nested.push((*at, inner.clone())),

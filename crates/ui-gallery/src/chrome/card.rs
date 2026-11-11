@@ -13,6 +13,7 @@ use craft_ui::contract::{CommandSet, Commands as _, Gap, Pad, Props as _, ShowCo
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Grid, Stack};
 use craft_ui::runtime::env::{WindowKey, with_env};
+use craft_ui::runtime::layout_memory;
 use craft_ui::sections::{HeaderCommand, HeaderStrength, Panel};
 use craft_ui::shell::AppShell;
 use craft_ui::style::SurfaceKind;
@@ -180,8 +181,9 @@ impl Card<'_> {
                 Grid::new(FORM_ROWS).fill_width().show(ui, |ui, _| {
                     for story in self.stories {
                         Text::new(story.caption.to_owned()).show(ui);
-                        let shown = Stack::new().fill_width().show(ui, |ui, _| self.body(ui, story, None, cells)).inner;
-                        Text::new(shown.and_then(|shown| shown.value_text).unwrap_or_default()).shade(Shade::Muted).show(ui);
+                        let body = self.story_body(story, None);
+                        Stack::new().fill_width().show(ui, |ui, _| body.show(ui, cells.entry(story.index).or_default()));
+                        Text::new(body.value_text(ui).unwrap_or_default()).shade(Shade::Muted).show(ui);
                     }
                 });
             }
@@ -207,14 +209,18 @@ impl Card<'_> {
 
     /// The body of `story`, with its state, under `caption` when given.
     fn body(&self, ui: &mut Ui, story: &CardStory<'_>, caption: Option<&str>, cells: &mut Cells) -> BodyShown {
+        self.story_body(story, caption).show(ui, cells.entry(story.index).or_default())
+    }
+
+    /// The body of `story` under `caption` when given.
+    fn story_body(&self, story: &CardStory<'_>, caption: Option<&str>) -> StoryBody {
         let key = format!("{}/{}", self.key, story.story.story.name);
-        let body = StoryBody {
+        StoryBody {
             look: self.look,
             gated: self.gated,
             caption: caption.map(str::to_owned),
             ..StoryBody::new(key, story.story, self.surface, self.room, Pad::None)
-        };
-        body.show(ui, cells.entry(story.index).or_default())
+        }
     }
 }
 
@@ -246,8 +252,6 @@ pub struct BodyShown {
     /// Where the story shows in flow: its surface, or the whole room for a story that takes no room in flow; `None`
     /// for a story that shows only a dialog.
     pub flow: Option<Rect>,
-    /// The shown value as the story's component words it ([`StoryOutput::value_text`]).
-    pub value_text: Option<String>,
 }
 
 impl StoryBody {
@@ -290,13 +294,15 @@ impl StoryBody {
         let runs = state.dialog.painted || craft_ui::runtime::frame::discardable(ui.ctx());
         let ran = std::cell::Cell::new(false);
         let flow = std::cell::Cell::new(None);
-        let output = std::cell::RefCell::new(None);
+        let value_key = self.value_key();
         let shell = AppShell::embedded(window).body(|ui, _, data: &mut StoryData| {
             if runs {
                 ran.set(!ui.is_sizing_pass());
                 let surface = host.stack().show(ui, |ui, _| host.content(ui, show, data));
                 flow.set(Some(surface.output.rect));
-                *output.borrow_mut() = Some(surface.inner);
+                if let Some(output) = &surface.inner {
+                    layout_memory::emit_text(ui.ctx(), value_key, output.value_text.as_deref());
+                }
             }
         });
         // A story that shows a dialog gets the whole room for it.
@@ -327,8 +333,17 @@ impl StoryBody {
         }
         state.note_start();
         let flow = if dialog_room { None } else { flow.get() };
-        let value_text = output.into_inner().flatten().and_then(|output| output.value_text);
-        BodyShown { flow, value_text }
+        BodyShown { flow }
+    }
+
+    /// The shown value as the story's component words it ([`StoryOutput::value_text`]), as this pass's run of the
+    /// story found it, or the kept measurement of a body around the story that this pass took in place of running it.
+    pub fn value_text(&self, ui: &Ui) -> Option<String> {
+        layout_memory::text(ui.ctx(), self.value_key()).map(|text| text.to_string())
+    }
+
+    fn value_key(&self) -> Id {
+        craft_ui::testing::memory::global("gallery.card.value", &self.key)
     }
 }
 

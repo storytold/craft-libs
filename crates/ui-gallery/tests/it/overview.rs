@@ -53,6 +53,20 @@ fn a_settled_overview_pass_runs_no_measuring_run() {
     assert!(runs.is_empty(), "a settled pass measured {} bodies: {runs:?}", runs.len());
 }
 
+/// A card in form rows shows each story's value text beside it, as the story's run found it: a settled frame of the
+/// Slider card, whose bodies take their kept measurements in place of running the stories, runs one pass.
+#[trial]
+fn a_settled_form_rows_card_runs_one_pass_per_frame() {
+    let mut gallery = gallery_filtered("Controls", "Slider");
+    let mut fixture = Fixture::new(move |ui| gallery.ui(ui));
+    fixture.room(Vec2::new(1400.0, 900.0)).settle();
+    for frame in 0..4 {
+        fixture.idle(1);
+        assert_eq!(fixture.passes(), 1, "settled frame {frame} ran {} passes", fixture.passes());
+        assert!(painted(&fixture, "100.0"), "settled frame {frame} shows the Maximum story's value text");
+    }
+}
+
 /// The registered type name of the component listed as `name`.
 fn type_of(name: &str) -> &'static str {
     Catalog::linked().components.iter().find(|component| component.name == name).unwrap_or_else(|| panic!("{name} is listed")).type_name
