@@ -29,10 +29,17 @@ pub struct Limits {
     /// With [`Names::Canonical`] it is also the most namespace declarations in scope at once.
     /// Default 1024.
     pub max_attrs: usize,
+    /// Most attributes kept in a tree at once, over all its elements. An attribute costs 48
+    /// bytes before its strings and five bytes of input (` a=""`), so without this a document
+    /// inside every other limit could take ten times its size in attribute headers. Elements
+    /// handed to a streaming callback take their attributes out of the count. Default
+    /// 4,000,000: two for every node at the node limit.
+    pub max_attrs_total: usize,
 }
 
 impl Limits {
-    pub const DEFAULT: Limits = Limits { max_input: 256 * 1024 * 1024, max_depth: 256, max_nodes: 2_000_000, max_attrs: 1024 };
+    pub const DEFAULT: Limits =
+        Limits { max_input: 256 * 1024 * 1024, max_depth: 256, max_nodes: 2_000_000, max_attrs: 1024, max_attrs_total: 4_000_000 };
 }
 
 impl Default for Limits {
@@ -237,25 +244,45 @@ impl<'a> Options<'a> {
     /// are gone, so a part of any length can be read; each one is itself held to the limit.
     ///
     /// An error from `each` stops the read and is returned.
-    pub fn parse_streaming<E: From<Error>>(&self, bytes: &[u8], split: &[&str], mut each: impl FnMut(El) -> Result<(), E>) -> Result<El, E> {
+    pub fn parse_streaming<E: From<Error>>(&self, bytes: &[u8], split: &[&str], each: impl FnMut(El) -> Result<(), E>) -> Result<El, E> {
+        match self.parse_streaming_partial(bytes, split, each) {
+            (_, Some(e)) => Err(e),
+            (root, None) => root.ok_or_else(|| Error::NoRoot.into()),
+        }
+    }
+
+    /// [`Options::parse_streaming`] that also returns what it had read when it failed: the
+    /// root with the children that were complete (and not handed out) before the error, and
+    /// the elements still open at that point with what they held. A worksheet whose rows
+    /// cannot all be read still gives its properties and merged cells. `(None, Some(_))` when
+    /// nothing was read; `(Some(_), None)` is a whole document.
+    ///
+    /// The partial tree is not a document: it stops where the error was, and an open element
+    /// named in `split` is attached to it instead of being handed to `each`.
+    pub fn parse_streaming_partial<E: From<Error>>(
+        &self,
+        bytes: &[u8],
+        split: &[&str],
+        mut each: impl FnMut(El) -> Result<(), E>,
+    ) -> (Option<El>, Option<E>) {
         if bytes.len() > self.limits.max_input {
-            return Err(Error::TooLarge(self.limits.max_input).into());
+            return (None, Some(Error::TooLarge(self.limits.max_input).into()));
         }
         let text = to_utf8(bytes);
         let mut events = Events::new(*self, &text, false);
-        let mut tree = Builder { opts: self, split, stack: Vec::new(), marks: Vec::new(), kept: 0, root: None, at: 0 };
-        while let Some(ev) = events.next()? {
-            tree.at = events.span().start;
-            tree.event(ev, &mut each)?;
-            if !self.strict && tree.root.is_some() {
-                break;
+        let mut tree = Builder { opts: self, split, stack: Vec::new(), marks: Vec::new(), kept: 0, attrs: 0, root: None, at: 0 };
+        let mut err = tree.run(&mut events, &mut each).err();
+        // What was open when the read stopped goes into its parent as it is.
+        while let Some(el) = tree.stack.pop() {
+            match tree.stack.last_mut() {
+                Some(parent) => parent.children.push(Node::El(el)),
+                None => tree.root = Some(el),
             }
         }
-        // A lenient read keeps what a truncated document had; a strict one failed above.
-        while let Some(el) = tree.stack.pop() {
-            tree.finish(el, &mut each)?;
+        if tree.root.is_none() && err.is_none() {
+            err = Some(Error::NoRoot.into());
         }
-        tree.root.ok_or_else(|| Error::NoRoot.into())
+        (tree.root, err)
     }
 
     /// The first element that matches, from its start tag alone: its name and attributes, no
@@ -327,6 +354,8 @@ pub struct Events<'o, 'i> {
     scope: Vec<(String, String)>,
     /// The end of an empty element, due after its start.
     pending: bool,
+    /// Whether a root element has started.
+    rooted: bool,
     span: Range<usize>,
 }
 
@@ -354,7 +383,7 @@ impl<'o, 'i> Events<'o, 'i> {
         cfg.trim_text_start = false;
         cfg.trim_text_end = false;
         cfg.expand_empty_elements = false;
-        Events { reader, opts, end_names, open: Vec::new(), scope: Vec::new(), pending: false, span: 0..0 }
+        Events { reader, opts, end_names, open: Vec::new(), scope: Vec::new(), pending: false, rooted: false, span: 0..0 }
     }
 
     /// The bytes of the input the last event was read from. Both events of an empty element
@@ -424,8 +453,13 @@ impl<'o, 'i> Events<'o, 'i> {
                 if t.is_empty() {
                     return Ok(None);
                 }
+                // Outside the root element only white space may stand (XML 1.0 [1], [27]).
+                if self.outside_root() && t.iter().any(|b| !matches!(b, b' ' | b'\t' | b'\r' | b'\n')) {
+                    return self.syntax("text outside the root element");
+                }
                 Event::Text(line_ends(self.decode(&t)?))
             }
+            Q::CData(_) | Q::GeneralRef(_) if self.outside_root() => return self.syntax("text outside the root element"),
             Q::CData(t) => Event::CData(line_ends(self.decode(&t)?)),
             Q::GeneralRef(r) => {
                 let name = self.decode(&r)?;
@@ -525,8 +559,17 @@ impl<'o, 'i> Events<'o, 'i> {
         Ok(())
     }
 
+    /// In a strict read: is the reader before or after the root element?
+    fn outside_root(&self) -> bool {
+        self.opts.strict && self.open.is_empty()
+    }
+
     fn start(&mut self, e: &BytesStart<'_>) -> Result<Event, Error> {
         let limits = self.opts.limits;
+        if self.outside_root() && self.rooted {
+            return self.syntax("more than one root element");
+        }
+        self.rooted = true;
         if self.open.len() >= limits.max_depth {
             return Err(Error::TooDeep(limits.max_depth));
         }
@@ -581,15 +624,32 @@ struct Builder<'b, 'o> {
     opts: &'b Options<'o>,
     split: &'b [&'b str],
     stack: Vec<El>,
-    /// The node count when each open element started.
-    marks: Vec<usize>,
+    /// The node and attribute counts when each open element started.
+    marks: Vec<(usize, usize)>,
     kept: usize,
+    /// Attributes in the elements built so far and not handed out.
+    attrs: usize,
     root: Option<El>,
     /// Where the event being handled starts, for errors.
     at: usize,
 }
 
 impl Builder<'_, '_> {
+    fn run<E: From<Error>>(&mut self, events: &mut Events<'_, '_>, each: &mut impl FnMut(El) -> Result<(), E>) -> Result<(), E> {
+        while let Some(ev) = events.next()? {
+            self.at = events.span().start;
+            self.event(ev, each)?;
+            if !self.opts.strict && self.root.is_some() {
+                break;
+            }
+        }
+        // A lenient read keeps what a truncated document had; a strict one failed above.
+        while let Some(el) = self.stack.pop() {
+            self.finish(el, each)?;
+        }
+        Ok(())
+    }
+
     fn count(&mut self) -> Result<(), Error> {
         self.kept = self.kept.saturating_add(1);
         if self.kept > self.opts.limits.max_nodes { Err(Error::TooManyNodes(self.opts.limits.max_nodes)) } else { Ok(()) }
@@ -625,8 +685,12 @@ impl Builder<'_, '_> {
                 if self.root.is_some() {
                     return Err(Error::Syntax { at: self.at, msg: "more than one root element".into() }.into());
                 }
+                self.marks.push((self.kept, self.attrs));
+                self.attrs = self.attrs.saturating_add(attrs.len());
+                if self.attrs > self.opts.limits.max_attrs_total {
+                    return Err(Error::TooManyAttrsTotal(self.opts.limits.max_attrs_total).into());
+                }
                 self.stack.push(El { name, attrs, children: Vec::new() });
-                self.marks.push(self.kept);
             }
             Event::End { .. } => {
                 if let Some(el) = self.stack.pop() {
@@ -645,7 +709,7 @@ impl Builder<'_, '_> {
 
     /// Attaches a complete element to its parent, hands it out, or makes it the root.
     fn finish<E: From<Error>>(&mut self, mut el: El, each: &mut impl FnMut(El) -> Result<(), E>) -> Result<(), E> {
-        let mark = self.marks.pop().unwrap_or(0);
+        let (mark, attrs_mark) = self.marks.pop().unwrap_or((0, 0));
         if self.opts.drop_blank_text && el.children.iter().any(|n| matches!(n, Node::El(_))) {
             let is_text = |n: &Node| matches!(n, Node::Text(_));
             if el.children.iter().all(|n| !is_text(n) || matches!(n, Node::Text(t) if t.trim().is_empty())) {
@@ -662,6 +726,7 @@ impl Builder<'_, '_> {
             each(el)?;
             // The element and everything inside it have left the tree.
             self.kept = mark;
+            self.attrs = attrs_mark;
         } else {
             self.push(Node::El(el))?;
         }

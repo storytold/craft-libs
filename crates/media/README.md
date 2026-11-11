@@ -1,8 +1,8 @@
 # craft-media
 
 Media containers and bit-level I/O for the Craft apps: an MSB-first bit reader and writer,
-clean-room ISO BMFF (MP4), QuickTime (MOV) and Matroska (MKV, WebM) demuxers and muxers, and an Ogg
-demuxer, written from the public specifications. No `unsafe`, no panics on malformed input, builds
+clean-room ISO BMFF (MP4), QuickTime (MOV) and Matroska (MKV, WebM) demuxers and muxers, and Ogg and
+AVI demuxers, written from the public specifications. No `unsafe`, no panics on malformed input, builds
 for `wasm32-unknown-unknown`. Dependencies: `thiserror` (for `isobmff`), `serde` (optional).
 
 Codecs are in separate crates that depend on this one: [`craft-audio`](../audio/README.md) for
@@ -18,12 +18,13 @@ that codec crates use to describe a file and configure a decoder.
 | `isobmff` | `craft_media::isobmff` | `bitstream`, `thiserror` |
 | `matroska` | `craft_media::matroska` | none |
 | `ogg` | `craft_media::ogg` | none |
+| `avi` | `craft_media::avi` | none |
 | (none) | `Container`, `CodecId`, `CodecParams`, `PcmFormat`, `xiph_lace`, `ByteSource`, `ReadSeekSource` | none |
 | `serde` | `Serialize`/`Deserialize` on `Container`, `CodecId`, `CodecParams` and `PcmFormat` | `serde` |
 
 `default = ["isobmff"]`, so `bitstream` and `isobmff` build. `matroska` is opt-in: it is about as
 much code as `isobmff`, and most users of MP4/MOV (LightCraft, FigCraft, SoundCraft, EffectCraft)
-do not read Matroska. `ogg` is opt-in as well. The features are independent.
+do not read Matroska. `ogg` and `avi` are opt-in as well. The features are independent.
 
 ```toml
 craft-media = { git = "https://github.com/storytold/craft-libs", rev = "<commit>", features = ["matroska"] }
@@ -112,7 +113,7 @@ Other differences:
 - `isobmff::ByteSource`, `matroska::ByteSource` and `ogg::ByteSource` are one trait,
   `craft_media::ByteSource` (with `ReadSeekSource`, which was Matroska's). A type FilmCraft
   implements both traits for keeps one of its two impls.
-- `isobmff::Track`, `matroska::Track` and `ogg::Stream` have `codec_params()`, all returning a
+- `isobmff::Track`, `matroska::Track`, `ogg::Stream` and `avi::Stream` have `codec_params()`, all returning a
   `CodecParams` (`CodecId::Unknown` for a codec without an identifier). The MP4 one describes
   the first sample's sample description; `codec_params_for(description_index)` gives any other,
   and `has_mixed_descriptions()` says whether the samples use more than one.
@@ -198,7 +199,10 @@ Boxes with 64-bit sizes and with size 0 (runs to the end of the file) are suppor
 | anything else | `Unknown { fourcc, raw }` |
 
 Video entries also parse `colr` (`nclx`/`nclc`/ICC), `pasp`, `clap`, `fiel`, `gama` and `btrt` into
-`VideoParams`. Audio entries parse QuickTime sound description v0/v1/v2 into `AudioParams`.
+`VideoParams`, and QuickTime's `logs` box into `VideoParams::log_transfer_function`: the CoreMedia log
+transfer-function identifier (`com.apple.rec2020.apple-log` for Apple Log), kept as text whatever
+curve it names. It is non-empty UTF-8 without NUL of at most 255 bytes; anything else, or a second
+`logs` box, reads as unknown, and the writer refuses an identifier the reader would not accept. Audio entries parse QuickTime sound description v0/v1/v2 into `AudioParams`.
 
 #### Robustness
 The parser does not panic on malformed input; every error comes back as an `Error`. Table counts are
@@ -409,6 +413,9 @@ after `cluster_duration_ns`), BlockGroups for frames whose duration differs from
 `default_duration_ns`, optional audio lacing (Xiph, EBML, fixed-size; for tracks with a
 `default_duration_ns`, at most 256 frames, ending at a timestamp gap), and Cues (video keyframes,
 or the first frame of each track per cluster). `MuxOptions::doc_type` = `"webm"` writes WebM.
+`TrackSpec::color` writes a video track's `Colour` element (matrix, range, transfer, primaries,
+chroma layout, light levels and mastering metadata: the fields that are set), which is where a WebM
+file says it is Rec. 2020, P3, PQ or HLG.
 CodecPrivate is fixed when the writer is created, so a codec whose configuration arrives with the
 first frame (AV1 from `rav1e`) creates the writer after that frame.
 
@@ -436,12 +443,60 @@ bounded too, with a warning when a bound is reached.
 `OpusTiming` gives each Opus packet's start, the pre-skip and the end trimming of the final page.
 No muxer.
 
+## `avi`
+
+A clean-room AVI demuxer from FilmCraft's `filmcraft-avi` (storytold/filmcraft@4bec22b), written
+from Microsoft's published AVI RIFF file reference and the OpenDML AVI File Format Extensions 1.02.
+No FFmpeg, libavformat or other AVI implementation was read; ffmpeg and ffprobe are test oracles
+only. No muxer.
+
+```rust
+use craft_media::avi::{open, StreamKind};
+
+let file = open(&bytes)?; // any ByteSource
+for (i, s) in file.streams.iter().enumerate() {
+    let params = s.codec_params(); // CodecId, FourCC, size or sample rate and channels
+    if s.kind == StreamKind::Video {
+        println!("{} {} fps", params.codec.name(), s.rate as f64 / s.scale as f64);
+    }
+    let first = file.read_chunk(&bytes, i, 0)?; // frame data, on demand
+}
+```
+
+| Part | |
+|---|---|
+| Headers | `avih`; per stream `strh`, `strf` (`BITMAPINFOHEADER`, `WAVEFORMATEX` / `WAVEFORMATEXTENSIBLE`), `strn` |
+| Index | OpenDML `indx` super index → `ix##` standard indexes (field indexes too), else `idx1` (offsets relative to `movi` or absolute), else a scan of the `movi` lists |
+| Large files | `RIFF AVIX` extensions: through the OpenDML index, or scanned after `idx1`, which only covers the first RIFF |
+| Key frames | from the index; a scan marks every chunk and says so (`keyframes_known`) |
+| Damage | sizes clamped to the file (a cut-off recording opens with what is there) |
+
+Limits, each with a test: a header list of at most 16 MiB (larger is refused), at most 64 streams
+(more are ignored), `rec ` lists nested at most 3 deep, at most 64 MiB of OpenDML standard indexes
+(past that the file opens from `idx1` or a scan), and chunk tables bounded by what the file could
+hold.
+
+`Stream::codec_params()` maps `biCompression` and the `WAVEFORMATEX` format tag to a `CodecId`
+(Motion JPEG, H.264, HEVC, MPEG-4 Part 2, MPEG-2, VP8/VP9, AV1, ProRes, DNxHD; PCM, ADPCM, A-law,
+µ-law, MP2, MP3, AAC, AC-3, Vorbis, FLAC). AVI stores H.264 and HEVC as Annex B, so `extradata`
+is the bytes after the format header as stored, not an `avcC` / `hvcC` record. Uncompressed video
+is `CodecId::Unknown` with the FourCC in `tag`.
+
+Differences from `filmcraft-avi`: `ByteSource` is `craft_media::ByteSource`; `Error::Io` holds the
+`io::Error` (FilmCraft: its text), so `Error` is no longer `Clone`/`PartialEq`, and is
+`#[non_exhaustive]`; `Stream::codec_params()` is new.
+
+Tests: hand-built files for every index path, truncation, every single-byte mutation and random
+multi-byte damage (never a panic). `tests/oracle_avi.rs` checks ffmpeg-made files (Motion JPEG,
+H.264 with B-frames, BGR24, YUY2; PCM and MP3) against ffprobe; the ignored `opendml_file_past_1_gb`
+checks a 1.16 GB OpenDML file with `AVIX` extensions.
+
 ## Containers, codecs and codec parameters
 
 Always built, with no dependencies, so codec crates share them:
 
 - `Container`: the file format (`Wav`, `Aiff`, `Flac`, `Mp4`, `QuickTime`, `Matroska`, `WebM`,
-  `Ogg`, `Caf`, `Adts`, `MpegAudio`, `Ac3`), with `name()`.
+  `Ogg`, `Caf`, `Adts`, `MpegAudio`, `Ac3`, `Avi`), with `name()`.
 - `CodecId`: audio and video codecs (`Aac`, `HeAac`, `Opus`, `Eac3`, `Speex`, …, `H264`, `Hevc`,
   `Av1`, `ProRes`, `Dnxhd`, `Apv`, `Theora`, …, `Unknown`), with `name()`, `is_audio()`,
   `is_video()`.
@@ -463,7 +518,7 @@ All are `#[non_exhaustive]`: new formats and fields are minor changes.
 
 `craft_media::ByteSource` (`len`, `read_at(offset, buf)`) is what every demuxer reads from. It is
 always built, so a crate that uses only `bitstream` can name it too. `isobmff::ByteSource`,
-`matroska::ByteSource` and `ogg::ByteSource` are the same trait. It is implemented for `[u8]`,
+`matroska::ByteSource`, `ogg::ByteSource` and `avi::ByteSource` are the same trait. It is implemented for `[u8]`,
 `Vec<u8>`, `&T`, `Arc<T>`, `Box<T>` and `std::fs::File` (not on wasm). `ReadSeekSource` adapts any
 `Read + Seek`; it is `Send + Sync` when the reader is `Send`. Implement the trait once for a
 custom source (a web `Blob`, a network range reader) to use every container with it.

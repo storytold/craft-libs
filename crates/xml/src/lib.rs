@@ -52,6 +52,9 @@ pub enum Error {
     /// One start tag has more than [`Limits::max_attrs`] attributes.
     #[error("an XML element has more than {0} attributes")]
     TooManyAttrs(usize),
+    /// The tree would hold more than [`Limits::max_attrs_total`] attributes.
+    #[error("the XML holds more than {0} attributes")]
+    TooManyAttrsTotal(usize),
     /// The document has a document type declaration that [`Options::doctype`] refuses.
     #[error("the XML has a document type declaration, which is not accepted")]
     Doctype,
@@ -73,6 +76,6 @@ pub enum Error {
 impl Error {
     /// Was a limit exceeded (as opposed to the markup being wrong)?
     pub fn is_limit(&self) -> bool {
-        matches!(self, Error::TooLarge(_) | Error::TooDeep(_) | Error::TooManyNodes(_) | Error::TooManyAttrs(_))
+        matches!(self, Error::TooLarge(_) | Error::TooDeep(_) | Error::TooManyNodes(_) | Error::TooManyAttrs(_) | Error::TooManyAttrsTotal(_))
     }
 }

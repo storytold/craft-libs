@@ -24,6 +24,7 @@ let info = craft_heif::probe(&bytes)?;           // size, depth, alpha: check li
 let img = craft_heif::decode(&bytes, &craft_heif::Options::default())?;
 // img.width, img.height, img.has_alpha, img.bit_depth, img.data (RGB/RGBA u16), img.colour, img.icc, img.exif, img.xmp
 let thumb = craft_heif::decode_thumbnail(&bytes, 256, &Default::default())?; // Option<Decoded>
+let (exif, xmp) = craft_heif::read_metadata(&bytes)?;  // no picture decoded: for cataloguing
 ```
 
 Chroma is upsampled like libheif by default.
