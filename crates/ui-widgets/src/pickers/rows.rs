@@ -19,14 +19,14 @@ impl<'a, T> EntryRows<'a, T> {
         EntryRows { entries, labels }
     }
 
-    /// The row of the entry at `at`: its label and icon as an option, a spacer for a separator, the host's dress over
-    /// the rest.
-    pub(super) fn row<'r>(&self, at: usize, dress: Option<&RowDress<'r, T>>) -> ListRow<'r> {
+    /// The row of the entry at `at`: its label and icon as an option, checked when it is the `chosen` entry, a spacer
+    /// for a separator, the host's dress over the rest.
+    pub(super) fn row<'r>(&self, at: usize, chosen: Option<usize>, dress: Option<&RowDress<'r, T>>) -> ListRow<'r> {
         let entry = &self.entries[at];
         let Some(value) = entry.value() else {
             return ListRow::spacer();
         };
-        let row = ListRow::new(self.labels[at].clone()).option().enabled(entry.is_enabled());
+        let row = ListRow::new(self.labels[at].clone()).option().check(chosen == Some(at)).enabled(entry.is_enabled());
         let row = match entry.icon_spec() {
             Some(icon) => row.icon(icon.clone()),
             None => row,

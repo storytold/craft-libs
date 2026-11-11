@@ -207,9 +207,13 @@ pub struct ListRow<'a> {
     /// The row is a tree group with children, `open` or closed: it shows the disclosure part.
     #[prop]
     pub(super) group: Option<bool>,
-    /// The row is an option of a listbox, not an item of a list.
+    /// The row is an option of a listbox, not an item of a list: inset and rounded, the chosen option outlined.
+    #[style_key]
     #[prop(flag)]
     pub(super) option: bool,
+    /// On an option of a list that picks a value: the row keeps a mark column, with the check mark when `true`.
+    #[prop]
+    pub(super) check: Option<bool>,
     pub(super) event: Option<RowEvent>,
     pub(super) open: Option<OpenChange<()>>,
     pub(super) label_rect: Rect,
@@ -261,6 +265,7 @@ impl<'a> ListRow<'a> {
             depth: None,
             group: None,
             option: false,
+            check: None,
             event: None,
             open: None,
             label_rect: Rect::NOTHING,

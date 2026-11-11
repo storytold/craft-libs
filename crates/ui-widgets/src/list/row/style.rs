@@ -46,12 +46,23 @@ pub struct ListRowStyle {
     pub(super) dividers: bool,
 }
 
+/// Which rules a row's fill and ink follow.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum RowForm {
+    /// An item of a list.
+    List,
+    /// A row of a menu: the lead row is the command highlight.
+    Command,
+    /// An option of a listbox: the chosen row keeps the selected fill, the lead row the hover fill.
+    Option,
+}
+
 /// What the row fill depends on.
 #[derive(Clone, Copy)]
 pub(super) struct FillKey {
     pub(super) striped: bool,
     pub(super) layer: bool,
-    pub(super) command: bool,
+    pub(super) form: RowForm,
 }
 
 /// The fill of a row: a stripe at rest, the hover and pressed tints over it, the selection's
@@ -72,13 +83,18 @@ pub(super) fn fill_of(cx: &StyleCx<'_>, key: FillKey) -> Stateful<StyleColor> {
         c(selected_hover),
         c(state.selected),
     ));
-    if key.command {
-        // A command row is active by its lead alone: the pointer rests on a row without activating it.
+    if key.form != RowForm::List {
+        // A command row and an option are active by their lead alone: the pointer moves the lead, so the pointer
+        // resting on a row adds nothing, and a chosen option keeps the selected fill.
         fill = fill.off(States::new(c(rest), c(rest), c(rest), c(rest)));
     }
-    for rule in flag_rules(key.command) {
+    if key.form == RowForm::Option {
+        fill = fill.on(States::new(c(state.selected), c(state.selected), c(state.selected), c(state.selected)));
+    }
+    for rule in flag_rules(key.form) {
         let rgba = match rule.fill {
             RuleFill::Tinted => tinted,
+            RuleFill::Selected => state.selected,
             RuleFill::SelectedHover => selected_hover,
             RuleFill::Accent => cx.tokens.color.accent.solid,
             RuleFill::Hover => hover,
@@ -105,6 +121,7 @@ pub(super) fn selected_outline(cx: &StyleCx<'_>) -> Rgba {
 #[derive(Clone, Copy)]
 enum RuleFill {
     Tinted,
+    Selected,
     SelectedHover,
     Accent,
     /// The hover token itself: translucent, so it tints the surface under a row of a menu.
@@ -129,12 +146,22 @@ struct FlagRule {
 /// The flag rules of a row in priority order. Fill and ink both derive from this list, so an ink always pairs with
 /// the fill under it: an emphasized row keeps its hover-like fill and base ink, the lead row on a selected row
 /// paints the selected hover fill with `text.on_selected`, and the lead row alone keeps the hover tint. The command
-/// form of a menu or popup list paints the lead row with `accent.solid` and `text.on_accent`.
-fn flag_rules(command: bool) -> Vec<FlagRule> {
+/// form of a menu paints the lead row with `accent.solid` and `text.on_accent`. The option form paints the chosen row
+/// with `state.selected` and `text.on_selected`, lead or not, and the lead row alone with `state.hover`.
+fn flag_rules(form: RowForm) -> Vec<FlagRule> {
     let emphasized = FlagRule { flags: Flags::EMPHASIZED, fill: RuleFill::Tinted, ink: RuleInk::Base };
-    if command {
-        let emphasized = FlagRule { fill: RuleFill::Hover, ..emphasized };
-        return vec![emphasized, FlagRule { flags: Flags::LEAD, fill: RuleFill::Accent, ink: RuleInk::OnAccent }];
+    match form {
+        RowForm::Command => {
+            let emphasized = FlagRule { fill: RuleFill::Hover, ..emphasized };
+            return vec![emphasized, FlagRule { flags: Flags::LEAD, fill: RuleFill::Accent, ink: RuleInk::OnAccent }];
+        }
+        RowForm::Option => {
+            return vec![
+                FlagRule { flags: Flags::SELECTED, fill: RuleFill::Selected, ink: RuleInk::OnSelected },
+                FlagRule { flags: Flags::LEAD, fill: RuleFill::Hover, ink: RuleInk::Base },
+            ];
+        }
+        RowForm::List => {}
     }
     vec![
         emphasized,
@@ -163,7 +190,7 @@ pub trait RowStyleCx {
 
 impl RowStyleCx for StyleCx<'_> {
     fn command_row_surface(&self) -> Stateful<StyleColor> {
-        fill_of(self, FillKey { striped: false, layer: false, command: true })
+        fill_of(self, FillKey { striped: false, layer: false, form: RowForm::Command })
     }
 
     fn command_row_look(&self) -> SurfaceLook {
@@ -171,20 +198,20 @@ impl RowStyleCx for StyleCx<'_> {
     }
 
     fn row_ink(&self, base: Rgba) -> Stateful<StyleColor> {
-        row_ink_of(self, self.color(base), false)
+        row_ink_of(self, self.color(base), RowForm::List)
     }
 
     fn command_row_ink(&self, base: Rgba) -> Stateful<StyleColor> {
-        row_ink_of(self, self.color(base), true)
+        row_ink_of(self, self.color(base), RowForm::Command)
     }
 }
 
 /// `row_ink` for a base that is already a style colour (a tone).
-pub(super) fn row_ink_of(cx: &StyleCx<'_>, base: StyleColor, command: bool) -> Stateful<StyleColor> {
+pub(super) fn row_ink_of(cx: &StyleCx<'_>, base: StyleColor, form: RowForm) -> Stateful<StyleColor> {
     let on_selected = cx.color(cx.tokens.color.text.on_selected);
     let on_accent = cx.color(cx.tokens.color.text.on_accent);
     let mut ink = Stateful::new(base).on(States::new(on_selected, on_selected, on_selected, on_selected));
-    for rule in flag_rules(command) {
+    for rule in flag_rules(form) {
         ink = ink.when(
             rule.flags,
             match rule.ink {

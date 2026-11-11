@@ -263,7 +263,7 @@ impl<T: Value + 'static> Component for Select<'_, T> {
                 .selection(Bind::given(selection))
                 .lead_on_open(lead)
                 .filter(&query, |at| labels[*at].clone())
-                .show_items(ui, &rows, &mut |at, _| rows.row(*at, dress))
+                .show_items(ui, &rows, &mut |at, _| rows.row(*at, held, dress))
                 .events
         });
         let mut picked = None;

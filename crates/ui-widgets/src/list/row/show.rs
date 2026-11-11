@@ -4,7 +4,7 @@ use super::ListRowStyleKey;
 use super::output::{RowEvent, RowOutput};
 use super::paint::draw_clip_arrow;
 use super::placement::Sizes;
-use super::style::{FillKey, ListRowStyle, fill_of, row_ink_of, selected_outline};
+use super::style::{FillKey, ListRowStyle, RowForm, fill_of, row_ink_of, selected_outline};
 use super::thumb::{RowThumb, target_at};
 use super::trailing::{TrailingFace, TrailingItem};
 use super::{ListRow, RowInk};
@@ -16,7 +16,7 @@ use crate::controls::disclosure::Disclosure;
 use crate::display::Progress;
 use crate::list::toggle::{ToggleFace, ToggleState};
 use crate::list::words::ListWords;
-use crate::primitives::{RuleKind, TextRun, Wrap};
+use crate::primitives::{RuleKind, StrokeWidth, TextRun, Wrap, glyph};
 use crate::runtime::commands::FireSource;
 use crate::runtime::env::{Label, WordTemplate};
 use crate::style::{Flags, IconLook, StyleCx, SurfaceLook, TextLook, UiTokens};
@@ -57,14 +57,20 @@ impl Component for ListRow<'_> {
         let text = &colors.text;
         let clear = Rgba::TRANSPARENT;
         let c = |rgba: Rgba| cx.color(rgba);
-        let fill = fill_of(cx, FillKey { striped: key.striped, layer: key.layer, command: false });
-        let rounded = tokens.shape.rows == RowStyle::Rounded;
+        let form = if key.option { RowForm::Option } else { RowForm::List };
+        let fill = fill_of(cx, FillKey { striped: key.striped, layer: key.layer, form });
+        // An option sits inset in its popup with rounded corners whatever the theme's row form.
+        let rounded = key.option || tokens.shape.rows == RowStyle::Rounded;
         let radius = if rounded { UiTokens::corner(tokens.shape.radius.control) } else { CornerRadius::ZERO };
         let mut surface = SurfaceLook::new(fill).radius(radius);
         if key.layer {
             surface = surface.border(Stateful::new(c(clear)).when(Flags::SELECTED, c(selected_outline(cx))), tokens.stroke.thin);
         }
-        let ink = |base: Rgba| row_ink_of(cx, c(base), false);
+        if key.option {
+            let edge = Stateful::new(c(clear)).when(Flags::SELECTED, c(colors.accent.text)).when(Flags::LEAD, c(colors.line.control_edge));
+            surface = surface.border(edge, tokens.stroke.thin);
+        }
+        let ink = |base: Rgba| row_ink_of(cx, c(base), form);
         let base = match key.ink {
             RowInk::Normal => text.normal,
             RowInk::Muted => text.muted,
@@ -82,14 +88,14 @@ impl Component for ListRow<'_> {
                 sizes.icon,
                 match key.tone {
                     Tone::Neutral => ink(base),
-                    tone => row_ink_of(cx, cx.tone(tone), false),
+                    tone => row_ink_of(cx, cx.tone(tone), form),
                 },
             ),
             trailing_icon: IconLook::new(
                 sizes.icon,
                 match key.trailing_tone {
                     Tone::Neutral => ink(base),
-                    tone => row_ink_of(cx, cx.tone(tone), false),
+                    tone => row_ink_of(cx, cx.tone(tone), form),
                 },
             ),
             detail: TextLook::new(TypeRole::Caption, ink(text.faint)),
@@ -409,6 +415,9 @@ impl Component for ListRow<'_> {
             let draw = ui.draw();
             if let Some(slot) = placed.marker {
                 draw_clip_arrow(&draw, slot, rtl, ink);
+            }
+            if let (Some(slot), Some(true)) = (placed.check, self.check) {
+                draw.stroke(&glyph::check(Rect::from_center_size(slot.center(), Vec2::splat(sizes.icon))), StrokeWidth::Medium, ink);
             }
             if let Some(slot) = placed.icon
                 && let Some(icon) = self.icon.as_mut()

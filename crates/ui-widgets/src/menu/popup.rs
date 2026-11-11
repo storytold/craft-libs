@@ -5,7 +5,7 @@ use super::level::{LevelMemory, MenuLevel, level_env};
 use crate::contract::overlay::{Anchor, Dismiss, Outside, Popup};
 use crate::contract::{
     Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, Entry, Focus as _, Gap, InMenu, LeastWidth, Mount, NoValue, Outcome,
-    Overlay, Pad, Props as _, Remember as _, Role, Show as _, ShowContainer as _, TooltipSpec, Trigger,
+    Overlay, POPUP_PAD, Props as _, Remember as _, Role, Show as _, ShowContainer as _, TooltipSpec, Trigger,
 };
 use crate::display::Divider;
 use crate::runtime::env::{Env, Label};
@@ -158,9 +158,6 @@ pub struct Menu<'a> {
     step: Option<MenuStep>,
 }
 
-/// The padding of the popup around the rows.
-const POPUP_PAD: Pad = Pad::Regular;
-
 impl<'a> Menu<'a> {
     /// A menu named `label`. Its open state is the menu's slot until [`open`](Menu::open) binds it.
     pub fn new(label: impl Into<Label>) -> Self {
@@ -184,11 +181,10 @@ impl<'a> Menu<'a> {
         self
     }
 
-    /// The rows of a menu in the flow of the layer that shows them, with the padding of a menu but no close rules of
-    /// their own: the menu of a control that owns its popup shows its entries through it, on the layer's surface.
+    /// The rows of a menu in the flow of the layer that shows them, with no close rules of their own: the menu of a
+    /// control that owns its popup shows its entries through it, on the layer's surface and inside its padding.
     pub fn inline(label: impl Into<Label>) -> Self {
         let props = ContainerProps::new()
-            .pad(POPUP_PAD)
             .body_gap(Gap::None)
             .least_width(LeastWidth::Popup)
             .roving(Roving::new(NavShape::Flat).arrows(Arrows::Vertical).wrap(true))

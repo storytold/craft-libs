@@ -5,9 +5,11 @@ use super::place::Anchor;
 use super::placement::resolve_anchor;
 use super::popups::{PopupHandle, with_popups};
 use super::props::Overlay;
-use crate::contract::{BodyCx, Resolved};
+use crate::contract::body::pad_of;
+use crate::contract::{BodyCx, POPUP_PAD, Resolved};
 use crate::primitives::SurfaceSlot;
 use crate::runtime::access::PopupShown;
+use crate::runtime::egui::alloc;
 use crate::runtime::egui::areas::{self};
 use crate::runtime::env::Env;
 use crate::runtime::memory::MemoryStage;
@@ -15,7 +17,7 @@ use crate::runtime::motion::{self};
 use crate::runtime::overlay::{self, CloseReason};
 use crate::style::SurfaceKind;
 use craft_behavior::PartRef;
-use egui::{Context, Id, Rect, Ui};
+use egui::{Context, Id, Rect, Ui, UiBuilder};
 use std::collections::HashMap;
 
 /// What the `overlay` hook gets: one call per anchored popup of this component, built at step 10 with the open state
@@ -60,7 +62,8 @@ impl<'a> OverlayUi<'a> {
         Anchor::Rect(rect.unwrap_or(self.anchor))
     }
 
-    /// Shows the popup while its handle is open, on a popup surface; the content is a body closure. `None` while closed.
+    /// Shows the popup while its handle is open, on a popup surface, inside `POPUP_PAD`; the content is a body closure.
+    /// `None` while closed.
     pub fn show<R>(&mut self, popup: PopupHandle, overlay: Overlay, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Option<R> {
         let Some(open) = self.open.get(&popup.id).copied() else {
             debug_assert!(false, "popup {:?} is shown but was not registered with `cx.popup` this pass", popup.name);
@@ -83,13 +86,16 @@ impl<'a> OverlayUi<'a> {
         let out = host(&ctx, &layer, &mut |ui| {
             let surface = SurfaceSlot::reserve(ui, true);
             let mut stage = if ui.is_sizing_pass() { MemoryStage::open_peek(&ctx, popup.id) } else { MemoryStage::open_owned(&ctx, popup.id, owner) };
-            let rect = ui.available_rect_before_wrap();
-            let mut shown_open = open;
             let env = Env::of(ui);
-            let mut bcx = BodyCx::new(popup.id, env.view(), resolved, rect, &mut stage, &mut shown_open, None);
-            result = Some(body(ui, &mut bcx));
+            let pad = pad_of(&env.tokens, POPUP_PAD);
+            let mut inner = alloc::child(ui, UiBuilder::new().max_rect(ui.available_rect_before_wrap().shrink(pad)));
+            inner.set_min_width((ui.min_rect().width() - 2.0 * pad).max(0.0));
+            let mut shown_open = open;
+            let mut bcx = BodyCx::new(popup.id, env.view(), resolved, inner.max_rect(), &mut stage, &mut shown_open, None);
+            result = Some(body(&mut inner, &mut bcx));
             requested = bcx.close_requested().is_some();
             stage.write_back();
+            alloc::advance_past(ui, inner.min_rect().expand(pad));
             surface.paint(&env.tokens, SurfaceKind::Popup, ui.min_rect(), env.direction);
         });
         if overlay.opener.is_none() && !self.parts.is_empty() {

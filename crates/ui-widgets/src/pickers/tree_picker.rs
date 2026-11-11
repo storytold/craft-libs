@@ -307,7 +307,7 @@ impl<K: Value + Eq + Hash + 'static> Component for TreePicker<'_, K> {
             list.show_items(ui, &rows, &mut |key, _| {
                 let Some(at) = tree.position(key) else { return ListRow::spacer() };
                 let entry = &entries[at];
-                let mut row = ListRow::new(labels[at].clone()).option().depth(depth[at]);
+                let mut row = ListRow::new(labels[at].clone()).option().check(chosen.as_ref() == Some(key)).depth(depth[at]);
                 if entry.folder {
                     row = row.group(open.is_open(key));
                 }

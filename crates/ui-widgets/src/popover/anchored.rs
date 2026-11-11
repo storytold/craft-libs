@@ -2,7 +2,7 @@
 
 use crate::contract::overlay::{Anchor, Dismiss, OverlayFit};
 use crate::contract::{
-    Bind, BindMut, Common, Component, Container, ContainerProps, Cx, Mount, NoValue, Outcome, Overlay, Pad, Props as _, Role, SaveKey, Trigger,
+    Bind, BindMut, Common, Component, Container, ContainerProps, Cx, Mount, NoValue, Outcome, Overlay, POPUP_PAD, Props as _, Role, SaveKey, Trigger,
 };
 use crate::runtime::env::Label;
 use crate::runtime::focus::{FocusPolicy, Initial};
@@ -74,7 +74,7 @@ pub struct Popover<'a> {
 impl<'a> Popover<'a> {
     /// A popover named `label`, open while `open` is true.
     pub fn new(label: impl Into<Label>, open: Bind<'a, bool>) -> Self {
-        let props = ContainerProps::new().surface(SurfaceKind::Popup).pad(Pad::Regular).mount(Mount::Layer(Overlay::popover()));
+        let props = ContainerProps::new().surface(SurfaceKind::Popup).pad(POPUP_PAD).mount(Mount::Layer(Overlay::popover()));
         Popover { common: Common::new(), props, open, closed: None }.label(label)
     }
 

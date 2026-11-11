@@ -152,6 +152,9 @@ pub enum Pad {
     Roomy,
 }
 
+/// The padding of every popup surface around its content.
+pub const POPUP_PAD: Pad = Pad::Control;
+
 /// How a container's size follows its content.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]

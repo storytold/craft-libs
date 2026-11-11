@@ -219,7 +219,7 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                                 let icon = if row.starred { "star_filled" } else { "star" };
                                 let name = Label::from(words.favorite.fill(&[("row", row.shown.as_str())]));
                                 let star = TrailingFace::Icon(IconSpec::svg(IconId::new(icon)));
-                                let line = ListRow::new(row.shown.clone()).option().trailing_part(STAR, star, name);
+                                let line = ListRow::new(row.shown.clone()).option().check(current == Some(*key)).trailing_part(STAR, star, name);
                                 let line = match row.class {
                                     Some(class) => line.trailing(class_mark(class, &words)),
                                     None => line,

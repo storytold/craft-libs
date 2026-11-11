@@ -121,6 +121,8 @@ pub(super) struct Placed {
     pub(super) dividers: Vec<f32>,
     pub(super) disclosure: Option<Rect>,
     pub(super) marker: Option<Rect>,
+    /// The mark column of an option of a value list.
+    pub(super) check: Option<Rect>,
     pub(super) icon: Option<Rect>,
     pub(super) first: Option<Rect>,
     pub(super) extras: Vec<(Rect, Option<Rect>)>,
@@ -301,7 +303,8 @@ impl ListRow<'_> {
         let leading_width = leading.map_or(0.0, |side| side + sizes.gap);
         let disclosure = if self.group.is_some() { sizes.icon } else { 0.0 };
         let marker = if self.clipped { sizes.icon } else { 0.0 };
-        let column = disclosure + marker;
+        let check = if self.check.is_some() { sizes.icon + sizes.gap } else { 0.0 };
+        let column = disclosure + marker + check;
         let base = sizes.pad;
         let indent_full = self.indent_full(sizes);
         let end = band_width - sizes.trailing_pad;
@@ -335,6 +338,7 @@ impl ListRow<'_> {
         let label_start = base + indent + column + leading_width;
         let disclosure_rect = (disclosure > 0.0).then(|| inner.span(column_start, disclosure));
         let marker_rect = (marker > 0.0).then(|| inner.span(column_start + disclosure, marker));
+        let check_rect = (check > 0.0).then(|| inner.span(column_start + disclosure + marker, sizes.icon));
         let mut at = leading_start;
         let (mut icon, mut first, mut extras) = (None, None, Vec::new());
         match leading {
@@ -363,6 +367,7 @@ impl ListRow<'_> {
             dividers,
             disclosure: disclosure_rect,
             marker: marker_rect,
+            check: check_rect,
             icon,
             first,
             extras,

@@ -1,7 +1,7 @@
 //! `PopupList` (15, 17): a dropdown under a field, holding the caller's `List`.
 
 use super::anchored::PopoverOutput;
-use crate::contract::{Bind, BindMut, Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Pad, Props as _, Role, Trigger};
+use crate::contract::{Bind, BindMut, Common, Component, Container, ContainerProps, Cx, Mount, Overlay, POPUP_PAD, Props as _, Role, Trigger};
 use crate::runtime::env::Label;
 use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
@@ -43,7 +43,7 @@ pub struct PopupList<'a> {
 impl<'a> PopupList<'a> {
     /// A popup list named `label`, open while `open` is true.
     pub fn new(label: impl Into<Label>, open: Bind<'a, bool>) -> Self {
-        let props = ContainerProps::new().surface(SurfaceKind::Popup).pad(Pad::None).collection_body().mount(Mount::Layer(Overlay::dropdown()));
+        let props = ContainerProps::new().surface(SurfaceKind::Popup).pad(POPUP_PAD).collection_body().mount(Mount::Layer(Overlay::dropdown()));
         PopupList { common: Common::new(), props, open, closed: None }.label(label)
     }
 
