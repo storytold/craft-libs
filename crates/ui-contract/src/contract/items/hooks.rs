@@ -57,6 +57,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             .type_ahead(props.type_ahead)
             .digits(props.digit_keys)
             .space(true)
+            .multi_select(matches!(props.select, crate::contract::collection::SelectMode::Multi | crate::contract::collection::SelectMode::Cells))
             .moves(true)
             .deletes(props.deletable)
             .owner_arrows(props.item_keys == crate::contract::collection::ItemKeys::Owner)

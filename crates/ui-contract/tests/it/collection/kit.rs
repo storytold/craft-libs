@@ -197,6 +197,12 @@ impl<'a> List<'a> {
         self
     }
 
+    /// What Space does.
+    pub fn space(mut self, action: craft_ui::contract::SpaceAction) -> Self {
+        self.items = self.items.space(action);
+        self
+    }
+
     /// Typed letters move the lead.
     pub fn type_ahead(mut self) -> Self {
         self.items = self.items.type_ahead(true);

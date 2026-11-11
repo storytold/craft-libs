@@ -190,6 +190,36 @@ fn enter_picks_the_lead_where_arrows_leave_the_selection() {
     assert!(activated, "Enter activates the lead");
 }
 
+/// Where Space previews, Space reports the lead's preview and leaves the selection; Ctrl+Space toggles the lead's pick.
+#[trial]
+fn space_previews_and_ctrl_space_toggles_the_lead() {
+    let words = Words::flat(&labels());
+    let seen = Seen::default();
+    let selection = RefCell::new(Selection::<usize>::single(0));
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        let mut held = selection.borrow().clone();
+        let list = List::new(SelectMode::Multi).space(craft_ui::contract::SpaceAction::Preview).selection(Bind::bound(&mut held));
+        show_words(ui, list, &words, &seen);
+        *selection.borrow_mut() = held;
+    };
+    frames.idle(2, &mut show);
+    focus_list(&mut frames, &seen, &mut show);
+    press(&mut frames, Key::ArrowDown, Modifiers::COMMAND, &mut show);
+    let lead = *seen.leads().last().expect("the lead moved");
+    seen.events.borrow_mut().clear();
+    press(&mut frames, Key::Space, Modifiers::NONE, &mut show);
+    let previewed = seen.events.borrow().iter().any(|event| matches!(event, CollectionEvent::Preview(key) if *key == lead));
+    assert!(previewed, "Space previews the lead");
+    assert_eq!(selection.borrow().items, vec![0], "Space leaves the selection");
+    press(&mut frames, Key::Space, Modifiers::CTRL, &mut show);
+    let mut items = selection.borrow().items.clone();
+    items.sort_unstable();
+    assert_eq!(items, vec![0, lead], "Ctrl+Space adds the lead");
+    press(&mut frames, Key::Space, Modifiers::CTRL, &mut show);
+    assert_eq!(selection.borrow().items, vec![0], "Ctrl+Space again takes it out");
+}
+
 /// In a list that wraps, Down on the last row goes to the first and Up on the first to the last.
 #[trial]
 fn arrows_wrap_at_the_ends_of_a_wrapping_list() {

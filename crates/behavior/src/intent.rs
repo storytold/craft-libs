@@ -160,6 +160,8 @@ pub enum Intent {
     },
     /// Space on a collection: the item step turns it into the collection's `SpaceAction`.
     Space,
+    /// Ctrl+Space (Control on macOS) on a multi-select collection: toggles the lead's pick.
+    TogglePick,
     /// One typed digit, for a role that takes digits (`KeyRole::digits`).
     Digit(u8),
     /// Rename the lead.

@@ -15,6 +15,8 @@ pub struct KeyRole {
     pub resettable: bool,
     /// A collection: Space is its own intent (`Intent::Space`), which the item step turns into its `SpaceAction`.
     pub space: bool,
+    /// A collection that selects several items: Ctrl+Space (Control on macOS) toggles the lead's pick.
+    pub multi_select: bool,
     /// A reorderable collection: the stacking keys (`REORDER_KEYS`) move the selected items.
     pub reorderable: bool,
     /// A collection with `CollectionProps.rename`.
@@ -50,6 +52,7 @@ impl KeyRole {
         KeyRole {
             resettable: false,
             space: false,
+            multi_select: false,
             reorderable: false,
             rename: false,
             pages: false,
@@ -74,6 +77,12 @@ impl KeyRole {
     /// Space is the component's own intent.
     pub const fn space(mut self, on: bool) -> Self {
         self.space = on;
+        self
+    }
+
+    /// Ctrl+Space toggles the lead's pick.
+    pub const fn multi_select(mut self, on: bool) -> Self {
+        self.multi_select = on;
         self
     }
 
@@ -235,6 +244,7 @@ pub fn intent(os: Os, key: Key, mods: Mods, role: KeyRole) -> Option<Intent> {
     match key {
         Key::Delete | Key::Backspace if plain && role.resettable => return Some(Intent::Reset),
         Key::Space if plain && role.space => return Some(Intent::Space),
+        Key::Space if role.multi_select && only(if mac { Mods::CTRL } else { Mods::CMD }) => return Some(Intent::TogglePick),
         Key::Menu if plain && !mac => return Some(Intent::ContextMenu),
         Key::F10 if only(Mods::SHIFT) => return Some(Intent::ContextMenu),
         Key::F2 if plain && role.rename => return Some(Intent::Rename),

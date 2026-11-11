@@ -326,7 +326,12 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
         } else {
             Vec::new()
         };
-        self.items = self.items.columns(columns).header(!on).space(if on { SpaceAction::ToggleCell } else { SpaceAction::default() });
+        self.items = self.items.columns(columns).header(!on);
+        if on {
+            self.items = self.items.space(SpaceAction::ToggleCell);
+        } else if self.items.space == SpaceAction::ToggleCell {
+            self.items = self.items.space(SpaceAction::default());
+        }
         self
     }
 

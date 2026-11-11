@@ -76,6 +76,8 @@ pub enum SpaceAction {
     Activate,
     /// Flips the lead row's first enabled toggle cell; with several rows selected, the cell of every selected row.
     ToggleCell,
+    /// Reports `CollectionEvent::Preview` for the lead row (Bridge's preview); Ctrl+Space still toggles the lead's pick.
+    Preview,
     /// Nothing: the key is the app's.
     None,
 }

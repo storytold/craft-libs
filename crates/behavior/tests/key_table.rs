@@ -15,3 +15,16 @@ fn f2_renames_and_enter_activates_on_every_platform() {
         assert_ne!(intent(os, Key::Down, Mods::CMD, role), Some(Intent::Activate), "{os:?}: Cmd+Down does not activate");
     }
 }
+
+/// Ctrl+Space (Control on macOS) toggles the lead's pick only where several items can be picked; elsewhere it is the
+/// app's.
+#[test]
+fn ctrl_space_toggles_the_pick_only_in_a_multi_select_collection() {
+    let single = KeyRole::new().space(true).moves(true);
+    let multi = single.multi_select(true);
+    for (os, mods) in [(Os::Mac, Mods::CTRL), (Os::Windows, Mods::CMD), (Os::Linux, Mods::CMD)] {
+        assert_eq!(intent(os, Key::Space, mods, multi), Some(Intent::TogglePick), "{os:?}: multi-select");
+        assert_eq!(intent(os, Key::Space, mods, single), None, "{os:?}: single-select");
+    }
+    assert_eq!(intent(Os::Mac, Key::Space, Mods::CMD, multi), None, "Cmd+Space stays the system's on macOS");
+}

@@ -127,13 +127,19 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         true
     }
 
-    /// Space and activation at the lead.
+    /// Space, Ctrl+Space and activation at the lead.
     pub(super) fn intent_actions(&mut self, comp: &C, cx: &mut Cx<'_, C>, props: &CollectionProps, lead_at: Option<usize>, header_held: bool) {
         if !header_held
             && cx.core.intents.take(Intent::Space)
             && let Some(row) = lead_at
         {
             self.space_key(comp, cx, props, row);
+        }
+        if !header_held
+            && cx.core.intents.take(Intent::TogglePick)
+            && let Some(row) = lead_at
+        {
+            self.pick(comp, row, false, true);
         }
         // The pass's `update_inputs` turned an `Activate` intent into the keyed activation.
         let activated = cx.core.intents.take(Intent::Activate) || cx.core.activation.is_some_and(|activation| activation.by_key);
@@ -186,6 +192,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 mode => self.pick(comp, row, false, mode != SelectMode::Single),
             },
             SpaceAction::ToggleCell => self.toggle_by_key(cx, row),
+            SpaceAction::Preview => self.events.push(CollectionEvent::Preview(self.source.key(row))),
             SpaceAction::None => {}
         }
     }

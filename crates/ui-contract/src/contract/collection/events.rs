@@ -169,6 +169,8 @@ pub enum CollectionEvent<K, E> {
     },
     /// Enter or a double click on an item.
     Activate(K),
+    /// Space on the lead of a collection whose Space previews (`SpaceAction::Preview`).
+    Preview(K),
     /// The user asked for an item's context menu.
     ContextMenu(ContextMenuRequest<K>),
     /// Delete or Backspace at the lead of a `deletable` collection: the selected items when the lead is selected, else

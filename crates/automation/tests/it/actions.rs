@@ -5,9 +5,9 @@ use std::rc::Rc;
 
 use craft_automation::actions::ActionList;
 use craft_automation::ui::actions::mock::{FakeActionsHost, action, list_of};
-use craft_automation::ui::actions::{ActionMove, ActionPlace, ActionSelection, ActionsEvent, ActionsPanel, ActionsPanelState};
+use craft_automation::ui::actions::{ActionMove, ActionPlace, ActionSelection, ActionsEvent, ActionsPanel, ActionsPanelState, INCLUDE_COLUMN};
 use craft_ui::testing::{Fixture, Target, pointer, trial};
-use egui::{Pos2, Ui, Vec2};
+use egui::{Key, Modifiers, Pos2, Ui, Vec2};
 
 /// The app around the panel: what it holds and what the panel reported.
 struct App {
@@ -108,4 +108,22 @@ fn actions_panel_drop_before_a_later_set_lands_at_the_end_of_the_previous_set() 
         [(ActionSelection::Action(2), ActionPlace::action(1, None))],
         "before the first set the action is loose, after the last loose one"
     );
+}
+
+/// Space on the focused row flips its Include check.
+#[trial]
+fn actions_panel_space_flips_the_include_check_of_the_focused_row() {
+    let (mut fixture, shared) = rig(app(two_sets()));
+    let row = node(&fixture, "Loose").center();
+    fixture.frame(vec![pointer::moved(row)]);
+    fixture.frame(vec![pointer::press(row)]);
+    fixture.frame(vec![pointer::release(row)]);
+    fixture.idle(2);
+    take(&shared);
+    fixture.key(Key::Space, Modifiers::NONE).idle(2);
+    let flipped = take(&shared).into_iter().any(|event| {
+        matches!(event, ActionsEvent::Toggle(craft_ui::contract::SweepStep::Flip(edit))
+            if edit.key == ActionSelection::Action(0) && edit.column == INCLUDE_COLUMN)
+    });
+    assert!(flipped, "Space flips the row's include cell");
 }
