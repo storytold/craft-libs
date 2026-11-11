@@ -149,6 +149,9 @@ struct Registry {
     slots: FastMap<(Id, u8, TypeId), SlotRecord>,
     /// Evicted slots, moved out inside the end hook; the first pipeline run of the next pass drops them.
     graveyard: Vec<Removed>,
+    /// Slot records write-back has written, for the count trials.
+    #[cfg(feature = "testing")]
+    written: usize,
 }
 
 /// Marks a base whose stage was written back: the frame it was first shown in, for `appeared`. A discard pass
@@ -242,6 +245,12 @@ pub(crate) fn dispose_shown<T: Slot>(ctx: &Context, id: Id) {
         QUEUED.fetch_add(1, Ordering::Release);
         Service::<Registry>::run(ctx, |reg| reg.graveyard.push(moved));
     }
+}
+
+/// How many slot records write-back has written in `ctx` so far.
+#[cfg(feature = "testing")]
+pub(crate) fn records_written(ctx: &Context) -> usize {
+    Service::<Registry>::run(ctx, |reg| reg.written)
 }
 
 /// The pass of the viewport that last registered `owner` at step 3, `None` once the owner is evicted.
@@ -503,6 +512,10 @@ impl MemoryStage {
             Service::<Registry>::run(&ctx, |reg| {
                 for key in &ended {
                     reg.slots.remove(key);
+                }
+                #[cfg(feature = "testing")]
+                {
+                    reg.written += record.len();
                 }
                 for (key, remove) in record {
                     reg.slots.insert(key, SlotRecord { owner, remove });

@@ -63,6 +63,11 @@ pub fn forget_saved(ctx: &Context, key: &SaveKey) {
     memory::forget_saved(ctx, key);
 }
 
+/// How many slot records the stages' write-backs have written in `ctx` so far.
+pub fn records_written(ctx: &Context) -> usize {
+    memory::records_written(ctx)
+}
+
 /// Drops the slots the end hook evicted.
 pub fn dispose_evicted(ctx: &Context) {
     memory::dispose_evicted(ctx);

@@ -1,7 +1,7 @@
 //! Memory lifetimes, eviction by owner and the runtime sub-id derivation.
 
 use craft_ui::runtime::memory::{Remember, SaveKey};
-use craft_ui::testing::memory::{Stage, dispose_evicted, forget, forget_saved, global};
+use craft_ui::testing::memory::{Stage, dispose_evicted, forget, forget_saved, global, records_written};
 use craft_ui::testing::{Frames, trial};
 
 const PLACE: SaveKey = SaveKey::new("craft_tests.place");
@@ -85,4 +85,28 @@ fn a_slot_written_by_an_owning_stage_goes_with_that_owner() {
     });
     dispose_evicted(&frames.ctx);
     assert_eq!(last % 10, 1, "the slot its maker wrote stayed with the container that keeps showing it");
+}
+
+/// Write-back records a slot once: a stage that keeps writing the same slots records nothing after its first
+/// frame, and a stage owned by another component than its base records what it writes every frame.
+#[trial]
+fn a_settled_stage_records_no_slot_again() {
+    let mut frames = Frames::new();
+    let (base, container) = (global("settled", ()), global("settled_owner", ()));
+    let show = |ui: &mut egui::Ui| {
+        let mut stage = Stage::open(ui.ctx(), base);
+        *stage.memory::<u32>() += 1;
+        stage.finish();
+    };
+    frames.frame(vec![], show);
+    let first = records_written(&frames.ctx);
+    assert!(first > 0, "the first frame records the slot and its seen mark");
+    frames.idle(3, show);
+    assert_eq!(records_written(&frames.ctx), first, "settled frames record nothing");
+    frames.idle(3, |ui| {
+        let mut stage = Stage::open_owned(ui.ctx(), base, container);
+        *stage.memory::<u32>() += 1;
+        stage.finish();
+    });
+    assert!(records_written(&frames.ctx) >= first + 3, "an owning stage records what it writes in every frame");
 }
