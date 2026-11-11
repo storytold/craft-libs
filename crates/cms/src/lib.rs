@@ -13,7 +13,7 @@
 //! * [`Lut3d`] samples a display transform into a 3D texture for the GPU canvas.
 //!
 //! Implemented from the public ICC.1:2010 (v4.3) and ICC.1:2001-04 (v2) specifications,
-//! CIE 15, and Adobe's published black point compensation paper.
+//! CIE 15, and the ISO 18619 black point compensation standard.
 #![forbid(unsafe_code)]
 
 pub mod builtin;
@@ -34,6 +34,7 @@ pub use clut::Clut;
 pub use curve::Curve;
 pub use gamut::GamutCheck;
 pub use lut3d::Lut3d;
+pub use math::Mat3;
 pub use profile::{ColorSpace, Pcs, Profile, ProfileClass};
 pub use transform::{SampleKind, Transform, TransformOptions, black_point, cached};
 
