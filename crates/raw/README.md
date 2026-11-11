@@ -57,11 +57,13 @@ One module and one Cargo feature per maker or container family. All are on by de
 | `erf` | Epson ERF (R-D1, R-D1s, R-D1x) | 12-bit samples in 16-byte blocks, black levels from the maker note, the measured picture origin. No white balance (the file states none) |
 | `mef` | Mamiya MEF (ZD) | Uncompressed 12-bit packed; default crop from the RGB preview's measured window. No white balance (the file states none) |
 | `kodak` | Kodak DCS520C TIFF | Two-component lossless JPEG CFA with the `GrayResponseCurve`, white balance from the `KodakIFD` |
+| `pef` | Pentax PEF | Uncompressed (packed 12-bit or 16-bit words, also under the PackBits tag some bodies write) and Pentax's Huffman coding (compression 65535, the table from the maker note); image area from the maker note's crop tags, else the dark borders trimmed from the samples; black from `BlackPoint` or the masked columns; as-shot white balance from the maker note; the layout from the Exif `CFAPattern` |
+| `srw` | Samsung SRW | The uncompressed variants: 16-bit words (compression 32769) and 12 bits packed (32770 with exactly the packed size; the bit order is decided from the samples); levels and white balance from the keyed maker-note vectors; framing from `SensorAreas`. The compressed codings (32770 with fewer bytes, 32772, 32773) are reported as unsupported |
 | `hasselblad` | Hasselblad 3FR and FFF, and other CFA TIFFs in the DNG layout without a DNG version tag (`RawFormat::CfaTiff`) | Uncompressed and Hasselblad's lossless JPEG (predictor selection value 8); RGGB from the sensor origin when the file states no `CFAPattern`; an FFF's colour matrix from the 3FR header it embeds; the 8-bit RGB preview handed on as a baseline TIFF. Implies `dng` |
 
 Not decoded: GoPro VC-5 DNG (GPR), CFA with more than three colours, non-rectangular CFA layouts.
 `probe` names every container it can tell apart whatever the features (CR2, CR3, NEF, NRW, ARW,
-RAF, ORF, RW2, PEF, SRW, MRW, X3F, other TIFF-based raws);
+RAF, ORF, RW2, X3F, other TIFF-based raws);
 their decoders are still in the apps and move here one maker family at a time.
 `RawFormat::is_supported` says what this build decodes.
 
@@ -116,6 +118,9 @@ Left as LightCraft has it, with the reason:
   estimated one from the embedded preview's neutral pixels; that is an estimate from picture
   content, so it stays with the developer and `wb_multipliers` is `None` here. The inputs it needs
   (samples, crop, CFA, levels, preview) are all in `RawImage` and `embedded_preview`.
+- Pentax PEF and Samsung SRW are LightCraft's readers unchanged. PhotoCraft has no reader for either: it sends
+  them down its generic TIFF/EP path, which reads an uncompressed CFA IFD and refuses Pentax's Huffman coding
+  and Samsung's private compressions, so there was nothing of PhotoCraft's to fold in.
 - Lossy JPEG is accepted for CFA data (one grey component) as in PhotoCraft; FilmCraft refuses it
   because DNG 1.4 allows the coding for LinearRaw only.
 
