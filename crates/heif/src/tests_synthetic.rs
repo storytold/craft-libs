@@ -1,7 +1,7 @@
 //! Decoding lossless synthetic HEIF files ([`crate::testdata`]): every expected sample is known.
 
 use crate::testdata::{Prop, Spec, build};
-use crate::{Error, Options, decode, decode_thumbnail, probe};
+use crate::{Error, Options, decode, decode_thumbnail, probe, read_metadata};
 
 /// A luma value unique enough to identify its position; chroma neutral.
 fn luma(x: u32, y: u32) -> u16 {
@@ -122,6 +122,9 @@ fn metadata_aux_images_and_thumbnails() {
     assert_eq!((d.width, d.height, d.has_alpha), (64, 64, false));
     assert_eq!(d.icc.as_deref(), Some(icc.as_slice()));
     assert_eq!(d.exif.as_deref(), Some(exif.as_slice()));
+    // the same EXIF without decoding a picture (what cataloguing a photo reads)
+    assert_eq!(read_metadata(&bytes).unwrap(), (Some(exif.clone()), None));
+    assert_eq!(read_metadata(&build(&Spec::new(16, 16, &grey))).unwrap(), (None, None));
     let t = decode_thumbnail(&bytes, 32, &Options::default()).unwrap().unwrap();
     assert_eq!((t.width, t.height, t.data[0]), (32, 32, 77 * 257));
     assert_eq!(t.exif.as_deref(), Some(exif.as_slice()));
@@ -168,6 +171,7 @@ fn truncated_and_corrupted_files_are_errors_not_panics() {
             assert_eq!(d.data, full.data, "cut at {cut} of {}", bytes.len());
         }
         let _ = decode_thumbnail(b, 1, &Options::default());
+        let _ = read_metadata(b);
     }
     // Flip bits all over the file: any outcome but a panic.
     let mut state = 0x2545_f491_u32;
@@ -183,6 +187,7 @@ fn truncated_and_corrupted_files_are_errors_not_panics() {
         let _ = probe(&b);
         let _ = decode(&b, &Options::default());
         let _ = decode_thumbnail(&b, 1, &Options::default());
+        let _ = read_metadata(&b);
     }
 }
 
