@@ -199,6 +199,46 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Tag>> {
     parse_with_limit(bytes, max_tags())
 }
 
+/// [`parse`] for a file that may be cut short or damaged: an ASCII file is read up to the first
+/// line that is no group code (or a last group code with no value), and what came before is
+/// returned with the 1-based number of that line, so a caller can open what the file still holds
+/// and say where it stops. `None` for a file read to its end. A truncated binary file, an empty
+/// one, one damaged before its first group, and one over the limit are still errors.
+///
+/// # Errors
+///
+/// As [`parse`], except for damage after the first group of an ASCII file.
+pub fn parse_recovering(bytes: &[u8]) -> Result<(Vec<Tag>, Option<usize>)> {
+    if let Some(body) = bytes.strip_prefix(BINARY_SENTINEL) {
+        return parse_binary_with_limit(body, max_tags()).map(|tags| (tags, None));
+    }
+    let bytes = bytes.strip_prefix(UTF8_BOM).unwrap_or(bytes);
+    let (tags, limit) = (count_ascii_pairs(bytes), max_tags());
+    if tags > limit {
+        return Err(DxfError::TooLarge { tags, limit });
+    }
+    ascii_tags(&codepage::decode_ascii_file(bytes), limit, tags, true)
+}
+
+/// The nonblank group-code/value pairs of an ASCII file (LF, CRLF and a lone CR each end a
+/// line), up to EOF just as the parser stops there. Blank lines do not count.
+fn count_ascii_pairs(bytes: &[u8]) -> usize {
+    let mut lines = byte_lines(bytes);
+    let mut tags = 0;
+    while let Some(code) = lines.next() {
+        let code = code.trim_ascii();
+        if code.is_empty() {
+            continue;
+        }
+        let Some(value) = lines.next() else { break };
+        tags += 1;
+        if code == b"0" && value.trim_ascii() == b"EOF" {
+            break;
+        }
+    }
+    tags
+}
+
 /// [`parse`] with an explicit group-code limit. For ASCII DXF the limit is checked up front from
 /// the line count, before the text is decoded or any tag allocated, so an oversized file fails in
 /// milliseconds instead of after it has filled memory.
@@ -213,21 +253,8 @@ pub fn parse_with_limit(bytes: &[u8], max_tags: usize) -> Result<Vec<Tag>> {
         return parse_binary_with_limit(body, max_tags);
     }
     let bytes = bytes.strip_prefix(UTF8_BOM).unwrap_or(bytes);
-    // Count nonblank group-code/value pairs (LF, CRLF and a lone CR each end a line), stopping at
-    // EOF just as the parser does. Blank lines do not count toward the limit.
-    let mut lines = byte_lines(bytes);
-    let mut tags = 0;
-    while let Some(code) = lines.next() {
-        let code = code.trim_ascii();
-        if code.is_empty() {
-            continue;
-        }
-        let Some(value) = lines.next() else { break };
-        tags += 1;
-        if code == b"0" && value.trim_ascii() == b"EOF" {
-            break;
-        }
-    }
+    // Counted first, before the text is decoded or any tag allocated.
+    let tags = count_ascii_pairs(bytes);
     if tags > max_tags {
         return Err(DxfError::TooLarge { tags, limit: max_tags });
     }
@@ -379,19 +406,39 @@ pub fn parse_ascii(text: &str) -> Result<Vec<Tag>> {
 /// with an allocation that can fail: where the system refuses that much memory, opening the file
 /// is an error instead of the end of the app. Growing the list instead could also briefly take
 /// half as much again.
-#[allow(clippy::while_let_loop)]
 fn parse_ascii_counted(text: &str, max_tags: usize, expected: usize) -> Result<Vec<Tag>> {
+    ascii_tags(text, max_tags, expected, false).map(|(tags, _)| tags)
+}
+
+/// The tags of ASCII DXF text. With `recover`, a line that is no group code, or a group code
+/// with no value after it, ends the reading instead of failing it: the tags before it are
+/// returned with the 1-based number of that line.
+#[allow(clippy::while_let_loop)]
+fn ascii_tags(text: &str, max_tags: usize, expected: usize, recover: bool) -> Result<(Vec<Tag>, Option<usize>)> {
     let mut tags = Vec::new();
     tags.try_reserve_exact(expected.min(max_tags)).map_err(|_| DxfError::OutOfMemory { tags: expected })?;
     let mut lines = ascii_lines(text.strip_prefix('\u{feff}').unwrap_or(text)).enumerate();
+    let mut damaged = None;
     loop {
         let Some((ln, code_line)) = lines.next() else { break };
         let ct = code_line.trim();
         if ct.is_empty() {
             continue;
         }
-        let code: i32 = ct.parse().map_err(|_| DxfError::BadCode { line: ln + 1, text: ct.chars().take(40).collect() })?;
-        let Some((_, val)) = lines.next() else { return Err(DxfError::Eof) };
+        let Ok(code) = ct.parse::<i32>() else {
+            if recover && !tags.is_empty() {
+                damaged = Some(ln + 1);
+                break;
+            }
+            return Err(DxfError::BadCode { line: ln + 1, text: ct.chars().take(40).collect() });
+        };
+        let Some((_, val)) = lines.next() else {
+            if recover && !tags.is_empty() {
+                damaged = Some(ln + 1);
+                break;
+            }
+            return Err(DxfError::Eof);
+        };
         let v = match typed(code, val) {
             // Only text with a backslash can hold an escape; the rest moves in as it is.
             Value::Str(s) => Value::Str(unescape_owned(s)),
@@ -409,7 +456,7 @@ fn parse_ascii_counted(text: &str, max_tags: usize, expected: usize) -> Result<V
     if tags.is_empty() {
         return Err(DxfError::NotDxf);
     }
-    Ok(tags)
+    Ok((tags, damaged))
 }
 
 struct Cur<'a> {
@@ -898,7 +945,8 @@ pub fn section_slices(tags: &[Tag]) -> Vec<SectionRef<'_>> {
             let name = tags.get(i + 1).filter(|t| t.code == 2).and_then(Tag::str_ref).unwrap_or_default().trim_end();
             let start = i + 2;
             let mut j = start;
-            while j < tags.len() && !tags.get(j).is_some_and(|t| is(t, "ENDSEC")) {
+            // A section cut short has no ENDSEC: the EOF is not one of its records.
+            while j < tags.len() && !tags.get(j).is_some_and(|t| is(t, "ENDSEC") || is(t, "EOF")) {
                 j += 1;
             }
             out.push(SectionRef { name, tags: tags.get(start..j).unwrap_or(&[]) });
