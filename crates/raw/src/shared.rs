@@ -104,13 +104,13 @@ pub(crate) fn declare_strip_len(file: &mut [u8], len: u32, declared: u32) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use craft_tiff::tags as t;
 
     /// `file`, whose image IFD holds one strip, as two strips at the same offset whose StripByteCounts are LONG8 (which
     /// classic TIFF readers accept) `[u64::MAX, 1]`: their sum is past `u64::MAX`.
-    pub(super) fn huge_strip_counts(mut file: Vec<u8>) -> Vec<u8> {
+    pub(crate) fn huge_strip_counts(mut file: Vec<u8>) -> Vec<u8> {
         let tiff = Tiff::parse(&file).unwrap();
         let o = tiff.order;
         let ifd = tiff.all_ifds().into_iter().find(|i| i.contains(t::STRIP_OFFSETS)).unwrap();

@@ -29,6 +29,8 @@
 //! | `erf` | Epson ERF (R-D1 family): 12-bit samples in 16-byte blocks |
 //! | `mef` | Mamiya MEF (ZD): uncompressed 12-bit packed |
 //! | `kodak` | Kodak DCS520C TIFF: two-component lossless JPEG with a response curve |
+//! | `pef` | Pentax PEF: uncompressed (packed or 16-bit words) and Pentax's Huffman coding (compression 65535) |
+//! | `srw` | Samsung SRW: the uncompressed variants (compression 32769 words, 32770 at 12 bits packed) |
 //! | `hasselblad` | Hasselblad 3FR and FFF (and other CFA TIFFs in the DNG layout without a DNG version): uncompressed and Hasselblad's lossless JPEG; implies `dng` |
 //!
 //! [`probe`] names every container it can tell apart whatever the features; [`RawFormat::is_supported`] says
@@ -58,6 +60,9 @@ mod erf;
 pub mod gaintable;
 #[cfg(feature = "hasselblad")]
 mod hasselblad;
+// (the Huffman difference decoder Pentax, Nikon, Panasonic and Sony codings share)
+#[allow(dead_code)]
+mod huffman;
 #[cfg(feature = "jxl")]
 mod jxl;
 #[cfg(feature = "kodak")]
@@ -68,6 +73,8 @@ mod mef;
 #[cfg(feature = "mrw")]
 mod mrw;
 pub mod opcodes;
+#[cfg(feature = "pef")]
+mod pef;
 mod preview;
 pub mod profile;
 #[cfg(feature = "dng")]
@@ -75,6 +82,8 @@ pub mod semantic;
 // (the TIFF pixel plumbing every TIFF-based maker shares; DNG is its only user so far)
 #[allow(dead_code)] // each maker uses some of these helpers; which are live depends on the features
 mod shared;
+#[cfg(feature = "srw")]
+mod srw;
 #[cfg_attr(not(feature = "dng"), allow(dead_code))]
 mod tiffraw;
 #[cfg_attr(not(feature = "dng"), allow(dead_code))]
@@ -314,6 +323,8 @@ impl RawFormat {
             || (self == RawFormat::Mrw && cfg!(feature = "mrw"))
             || (self == RawFormat::Erf && cfg!(feature = "erf"))
             || (self == RawFormat::Mef && cfg!(feature = "mef"))
+            || (self == RawFormat::Pef && cfg!(feature = "pef"))
+            || (self == RawFormat::Srw && cfg!(feature = "srw"))
     }
 }
 
@@ -594,6 +605,10 @@ fn decode_in(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawImage> {
         RawFormat::Erf => erf::decode(bytes, mode, limits),
         #[cfg(feature = "mef")]
         RawFormat::Mef => mef::decode(bytes, mode, limits),
+        #[cfg(feature = "pef")]
+        RawFormat::Pef => pef::decode(bytes, mode, limits),
+        #[cfg(feature = "srw")]
+        RawFormat::Srw => srw::decode(bytes, mode, limits),
         RawFormat::OtherTiff => Err(RawError::Unsupported(other_tiff_reason(bytes))),
         other => Err(RawError::Unsupported(format!("{other:?} files are not decoded by this build"))),
     }
