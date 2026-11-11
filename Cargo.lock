@@ -1081,6 +1081,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-opc"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "flate2",
+ "log",
+ "thiserror 2.0.21",
+ "zip",
+]
+
+[[package]]
 name = "craft-pcraft-format"
 version = "0.1.0"
 dependencies = [
