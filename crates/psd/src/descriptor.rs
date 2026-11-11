@@ -229,6 +229,18 @@ pub enum Value {
     ObjectArray(ObjectArray),
 }
 
+impl Value {
+    /// The value as a number: a double, a unit float, an integer or a large integer.
+    pub fn as_number(&self) -> Option<f64> {
+        match self {
+            Value::Double(v) | Value::UnitFloat { value: v, .. } => Some(*v),
+            Value::Integer(v) => Some(f64::from(*v)),
+            Value::LargeInteger(v) => Some(*v as f64),
+            _ => None,
+        }
+    }
+}
+
 /// `ObAr` object array. Undocumented in the Adobe spec; the layout follows
 /// ag-psd (MIT): a u32 (observed as the element count / version 16) followed
 /// by a descriptor-shaped body whose values are usually `UnFl`.
@@ -274,6 +286,75 @@ impl Descriptor {
     /// Looks up the first item with key `key`.
     pub fn get(&self, key: &str) -> Option<&Value> {
         self.items.iter().find(|(k, _)| k.is(key)).map(|(_, v)| v)
+    }
+
+    /// The object (`Objc` or `GlbO`) at `key`.
+    pub fn object(&self, key: &str) -> Option<&Descriptor> {
+        match self.get(key)? {
+            Value::Descriptor(d) | Value::GlobalObject(d) => Some(d),
+            _ => None,
+        }
+    }
+
+    /// The number at `key`: a double, a unit float, an integer or a large integer.
+    pub fn number(&self, key: &str) -> Option<f64> {
+        self.get(key)?.as_number()
+    }
+
+    /// The numbers at `key`: the values of a unit float array, or the numbers of a list (items
+    /// that are not numbers are left out). Empty when there is neither.
+    pub fn numbers(&self, key: &str) -> Vec<f64> {
+        match self.get(key) {
+            Some(Value::UnitFloats { values, .. }) => values.clone(),
+            Some(Value::List(l)) => l.iter().filter_map(Value::as_number).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The boolean at `key`.
+    pub fn boolean(&self, key: &str) -> Option<bool> {
+        match self.get(key)? {
+            Value::Boolean(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    /// The text at `key`, without its trailing NULs.
+    pub fn text(&self, key: &str) -> Option<String> {
+        match self.get(key)? {
+            Value::Text(s) => Some(s.to_string_lossy()),
+            _ => None,
+        }
+    }
+
+    /// The value id of the enumerated item at `key`.
+    pub fn enumerated(&self, key: &str) -> Option<&Id> {
+        match self.get(key)? {
+            Value::Enumerated { value, .. } => Some(value),
+            _ => None,
+        }
+    }
+
+    /// The raw data (`tdta`) at `key`.
+    pub fn raw_data(&self, key: &str) -> Option<&[u8]> {
+        match self.get(key)? {
+            Value::RawData(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// The colour object at `key` as RGB in 0..1: an `RGBC` object with `Rd  ` / `Grn ` / `Bl  `
+    /// in 0..255 or with `redFloat` / `greenFloat` / `blueFloat` in 0..1, or a gray (`Gry `, in
+    /// percent of ink). Other colour models are `None`.
+    pub fn color(&self, key: &str) -> Option<[f64; 3]> {
+        let c = self.object(key)?;
+        if let (Some(r), Some(g), Some(b)) = (c.number("Rd  "), c.number("Grn "), c.number("Bl  ")) {
+            return Some([r / 255.0, g / 255.0, b / 255.0]);
+        }
+        if let (Some(r), Some(g), Some(b)) = (c.number("redFloat"), c.number("greenFloat"), c.number("blueFloat")) {
+            return Some([r, g, b]);
+        }
+        c.number("Gry ").map(|g| [1.0 - g / 100.0; 3])
     }
 
     /// Parses a descriptor from `data`, which must be consumed entirely.
