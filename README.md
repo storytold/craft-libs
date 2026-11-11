@@ -48,6 +48,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-docpath`](crates/docpath/src/lib.rs): decides whether a path or `file:` URL stored in a
   document may be opened. Paths stored in documents are followed only when they are local or on the
   document's own network share; other network paths, device paths and non-file URLs are refused.
+- [`craft-dxf`](crates/dxf/src/lib.rs): DXF tag reader and writer, from CADCraft: ASCII and
+  binary DXF as (group code, value) tags, split into sections and entities, with pre-2007 code
+  pages and version detection, and written back. Bounded on hostile input. Mapping tags to a
+  drawing stays in each app.
 - [`craft-ecproj-format`](crates/ecproj-format/README.md): the envelope of EffectCraft `.ecproj`
   project files: `savedBy`, the schema version and its check, and the file object with the
   project and its saved view as type parameters. The project model stays in EffectCraft.
@@ -67,10 +71,18 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-fonts-build`](crates/fonts-build/README.md): embeds the optional craft-fonts faces
   from an app's `build.rs` (`CRAFT_FONTS_DIR`, `CRAFT_FONTS_REQUIRED`, script filters) as a table
   of `EmbeddedFace`s. No dependencies; the app picks the faces.
+- [`craft-heif`](crates/heif/README.md): optional HEIF/HEIC still-image decoder, from LightCraft:
+  heic-rs reads the container and HEVC pictures, and this crate converts to 16-bit RGB to match
+  libheif (VUI range and matrix, chroma upsampling, `imir`, ICC on grid tiles). Also orientation,
+  alpha, EXIF/XMP and thumbnails. It never panics, and apps put it behind a non-default feature.
 - [`craft-i18n`](crates/i18n/README.md): translations over the embedded craft-i18n catalogs:
   lookup with fallback (`pt-br` → `pt` → English), plurals, language names, the system locale and
   a pseudo locale. The catalogs stay a fully optional build input; apps keep `tl!` and their
   language setting.
+- [`craft-tiff`](crates/tiff/README.md): TIFF and BigTIFF IFD reader and writer, from LightCraft:
+  every field type, the IFD chain, SubIFDs and Exif/GPS/Interop pointer IFDs, maker-note IFDs
+  (Canon, Nikon, Sony, Fujifilm, Olympus, Panasonic, Pentax), strip and tile layout. Bounded and
+  panic-free on hostile input. Pixel decompression stays with the callers.
 - [`craft-jpeg`](crates/jpeg/README.md): clean-room decoder for 12-bit and arithmetic-coded
   JPEG (T.81 SOF0/SOF1 at 12 bits, SOF9, SOF10), from PhotoCraft, and a frame probe for routing.
   Metadata stays in each app.
@@ -78,8 +90,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   scopes, conflicts, user overrides stored through craft-settings and import of other
   applications' shortcut sets. Command catalogs, file readers and the shortcut editor UI stay
   in each app.
-- [`craft-audio`](crates/audio/README.md): audio file I/O and codecs (WAV, AIFF, FLAC), streaming
-  and seeking, and packet decoding for any demuxer. See its README for formats and features.
+- [`craft-audio`](crates/audio/README.md): audio file I/O and codecs (WAV, AIFF, FLAC, AAC),
+  streaming and seeking, and packet decoding for any demuxer. See its README for formats and
+  features.
 - [`craft-media`](crates/media/README.md): bit-level I/O (`bitstream`), clean-room MP4/MOV
   (`isobmff`) and Matroska/WebM (`matroska`) demuxers and muxers, an Ogg demuxer (`ogg`), from
   FilmCraft, and an ISO BMFF box reader. Containers only; codecs are in `craft-audio`, and
