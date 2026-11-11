@@ -1,11 +1,11 @@
 //! Stories of `SwatchPalette` and `SwatchTable`.
 
-use super::{SwatchCell, SwatchPalette, SwatchTable, SwatchTableOutput};
+use super::{SwatchPalette, SwatchTable, SwatchTableOutput};
 use craft_behavior::Selection;
 use craft_theme::Srgba;
 use craft_ui::contract::Bind;
 use craft_ui::runtime::env::Label;
-use craft_ui::testing::{Drive, StoryData, StoryOutput, show_as_only_item, story};
+use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
 /// The twelve colours of the palette story.
@@ -88,9 +88,4 @@ fn swatch_table_one(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = table_entries().into_iter().take(1).collect::<Vec<_>>();
     let shown = SwatchTable::new("Color Table", &entries).selection(Bind::bound(data.value("selected", Selection::single(0usize)))).show_all(ui);
     with_readout(data, shown)
-}
-
-#[story(SwatchCell, covers = [Default], drive = Drive::Never)]
-fn swatch_cell(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    show_as_only_item(ui, SwatchCell::new("Swatch", Srgba::rgb(0.2, 0.4, 0.8))).into()
 }

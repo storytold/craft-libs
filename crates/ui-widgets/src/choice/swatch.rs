@@ -106,6 +106,13 @@ impl Outcome for SwatchOutput {
     }
 }
 
+/// A swatch in a collection, such as a cell of a colour table, reports no item event.
+impl<E> crate::contract::ItemOutput<E> for SwatchOutput {
+    fn into_event(self) -> Option<E> {
+        None
+    }
+}
+
 /// A colour well that shows a colour from data and reports its activation; it edits nothing.
 ///
 /// The colour fills the well over a checkerboard where it has alpha, inside a thin ring that separates it from the

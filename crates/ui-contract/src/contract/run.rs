@@ -343,6 +343,7 @@ fn blank_core<'a>(
         part_cursors: Vec::new(),
         claims: Vec::new(),
         reveal: None,
+        member_tip: None,
         press_cancel: None,
         scroll_moves: Vec::new(),
         value_parts: Default::default(),

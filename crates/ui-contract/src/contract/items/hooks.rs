@@ -2,6 +2,7 @@
 
 use super::drag::Drags;
 use super::header::HeaderMemory;
+use super::members::Member;
 use super::{Held, ITEM_NODE, ItemsHooks, LastLayout, Lead, Placement, Renaming, Rows, SCROLL, Scrolled, View, key_hash, section_part};
 use super::{request, rows};
 use crate::contract::ValueOf;
@@ -427,6 +428,14 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         // widget above it takes the hover as it does for the rows' parts.
         let hover_at = crate::primitives::sensing::read_outcome(&ctx, ArenaId::new(cx.core.id)).hover.and(ctx.pointer_latest_pos());
         let place_rows = |ui: &mut Ui| {
+            // The items of a collection whose items are members of its run share one `Ui` under the collection's env.
+            let members_ui = C::MEMBERS.then(|| {
+                let builder = UiBuilder::new().max_rect(rect).layout(child::column_layout(rtl)).scope_id(sub(id, "members"));
+                let members_ui = alloc::child(ui, builder);
+                let installed = Env::install_for(&members_ui, base_env.clone());
+                (members_ui, installed)
+            });
+            let mut members = Vec::new();
             for at in order.into_iter() {
                 if self.source.section_stop(at) {
                     continue;
@@ -504,37 +513,58 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 let tip = icx.tip.take();
                 let openers = std::mem::take(&mut icx.openers);
                 drop(icx);
-                let builder = UiBuilder::new().max_rect(row).layout(child::column_layout(rtl)).scope_id(sub(item_id, "row"));
-                let builder = if node { access::with_parent(builder, id) } else { builder };
-                let mut row_ui = alloc::child(ui, builder);
+                item = Props::id(item, item_id);
                 // A scrolled row slides under the frozen rows: it never paints into their band.
                 let below_frozen = Rect::from_min_max(Pos2::new(rect.min.x, rect.min.y + layout.frozen_band(at)), rect.max);
-                row_ui.set_clip_rect(below_frozen.intersect(ui.clip_rect()));
-                let installed = Env::install_for(
-                    &row_ui,
-                    base_env.derive_local(|scoped| {
-                        scoped.item = Some(item_id);
-                        scoped.row = Some(row_group);
-                        scoped.item_facts = Some(Arc::new(ItemFacts { item: item_id, flags, position, columns: column_keys, toggles: toggle_keys }));
-                    }),
-                );
-                item = Props::id(item, item_id);
-                if layout.is_auto(at) {
-                    let measured = item.measure_in(&row_ui, Proposal::Width(row.width())).y;
-                    rows::record_measure(&ctx, id, rows::measured_id(id, &key), Vec2::new(row.width(), measured));
-                    if measured != row.height() {
-                        Arc::make_mut(&mut layout).set_height(at, measured);
+                let clip = below_frozen.intersect(ui.clip_rect());
+                let row_ui = match &members_ui {
+                    Some(_) => None,
+                    None => {
+                        let builder = UiBuilder::new().max_rect(row).layout(child::column_layout(rtl)).scope_id(sub(item_id, "row"));
+                        let builder = if node { access::with_parent(builder, id) } else { builder };
+                        let mut row_ui = alloc::child(ui, builder);
+                        row_ui.set_clip_rect(clip);
+                        let installed = Env::install_for(
+                            &row_ui,
+                            base_env.derive_local(|scoped| {
+                                scoped.item = Some(item_id);
+                                scoped.row = Some(row_group);
+                                scoped.item_facts =
+                                    Some(Arc::new(ItemFacts { item: item_id, flags, position, columns: column_keys, toggles: toggle_keys }));
+                            }),
+                        );
+                        Some((row_ui, installed))
+                    }
+                };
+                {
+                    let measure_ui = match (&row_ui, &members_ui) {
+                        (Some((row_ui, _)), _) => row_ui,
+                        (None, Some((members_ui, _))) => members_ui,
+                        (None, None) => unreachable!("a row is a run or a member"),
+                    };
+                    if layout.is_auto(at) {
+                        let measured = item.measure_in(measure_ui, Proposal::Width(row.width())).y;
+                        rows::record_measure(&ctx, id, rows::measured_id(id, &key), Vec2::new(row.width(), measured));
+                        if measured != row.height() {
+                            Arc::make_mut(&mut layout).set_height(at, measured);
+                            row = self.screen(&layout, rect, at, offset, rtl);
+                        }
+                    }
+                    if layout.auto_widths() {
+                        let ideal = item.measure_in(measure_ui, Proposal::Ideal).x;
+                        let min = item.measure_in(measure_ui, Proposal::Min).x;
+                        rows::record_measure(&ctx, id, rows::measured_width_id(id, &key), Vec2::new(ideal, min));
+                        Arc::make_mut(&mut layout).set_width(at, ideal, min);
                         row = self.screen(&layout, rect, at, offset, rtl);
                     }
                 }
-                if layout.auto_widths() {
-                    let ideal = item.measure_in(&row_ui, Proposal::Ideal).x;
-                    let min = item.measure_in(&row_ui, Proposal::Min).x;
-                    rows::record_measure(&ctx, id, rows::measured_width_id(id, &key), Vec2::new(ideal, min));
-                    Arc::make_mut(&mut layout).set_width(at, ideal, min);
-                    row = self.screen(&layout, rect, at, offset, rtl);
-                }
                 shown_rows.push(ShownRow::new(key.clone(), row, shown_cells.clone()));
+                let Some((mut row_ui, installed)) = row_ui else {
+                    debug_assert!(tip.is_none(), "a member of a collection's run takes no rich tooltip");
+                    let shown = shown_rows.len() - 1;
+                    members.push(Member { at, key, item, row, clip, flags, position, renaming: state.renaming, openers, shown });
+                    continue;
+                };
                 let out = match tip {
                     Some(tip) => item.show_at_with_tip(&mut row_ui, row, tip),
                     None => item.show_at(&mut row_ui, row),
@@ -553,72 +583,13 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                     self.events.push(CollectionEvent::Item(key.clone(), event));
                 }
                 if state.renaming {
-                    let mut draft = std::mem::take(&mut self.renaming.draft);
-                    let name = self.source.text(at).map(|text| text.into_owned()).unwrap_or_default();
-                    let editor = comp.rename_editor(&mut row_ui, Bind::bound(&mut draft), label, &name);
-                    self.renaming.draft = draft;
-                    if let Some(editor) = editor {
-                        if !self.renaming.focused {
-                            focus::request_now(&ctx, focus::FocusTarget::Id(editor.response.id));
-                            self.renaming.focused = true;
-                        }
-                        let gesture = self.renaming.gesture;
-                        let before = Mixed::Same(Rename { key: key.clone(), name: name.clone() });
-                        // The editor's gesture end, if the pass has one, ends the rename.
-                        let end =
-                            editor.events.iter().rev().find(|event| matches!(event, EditEvent::Commit { .. } | EditEvent::Cancel { .. })).cloned();
-                        let edited = !editor.events.is_empty();
-                        if end.is_some() {
-                            self.refocus = focus::is_focused(&ctx, editor.response.id);
-                        }
-                        // The editor claims Escape for the whole rename, as a text part with a draft does: Escape does not leave the
-                        // row. One the editor leaves untaken (it holds no draft yet) cancels the rename.
-                        keys::hold_escape(&ctx, editor.response.id);
-                        let escaped = !edited && focus::is_focused(&ctx, editor.response.id) && {
-                            let mut intents = keys::intents_of(&ctx, Some(editor.response.id), rtl);
-                            let left = intents.take(Intent::Cancel);
-                            keys::settle(&ctx, Some(editor.response.id), &intents);
-                            left
-                        };
-                        match end {
-                            None if edited => {}
-                            None if escaped => {
-                                self.events.push(CollectionEvent::Rename(EditEvent::cancel(gesture, CancelReason::Escape, Some(before))));
-                                self.ended_rename = true;
-                                self.refocus = true;
-                            }
-                            Some(EditEvent::Commit { after, .. }) => {
-                                let after = Rename { key: key.clone(), name: after };
-                                self.events.push(CollectionEvent::Rename(EditEvent::commit(gesture, before, after)));
-                                self.ended_rename = true;
-                            }
-                            Some(EditEvent::Cancel { reason, .. }) => {
-                                self.events.push(CollectionEvent::Rename(EditEvent::cancel(gesture, reason, Some(before))));
-                                self.ended_rename = true;
-                            }
-                            // Enter on a name nobody typed in opens no edit run: the rename ends with no event and no undo step, as a
-                            // text field's empty commit does.
-                            None if editor.submitted => {
-                                self.ended_rename = true;
-                                self.refocus = true;
-                            }
-                            None if editor.left_by_tab.is_some() => {
-                                self.events.push(CollectionEvent::Rename(EditEvent::cancel(gesture, CancelReason::Blur, Some(before))));
-                                self.ended_rename = true;
-                            }
-                            _ => {}
-                        }
-                        if let Some(forward) = editor.left_by_tab.filter(|_| self.ended_rename) {
-                            // Tab continues the rename on the next renamable row; past the last one focus returns to the collection.
-                            let renamable = |row: &usize| !self.source.section_stop(*row) && comp.can_rename(&self.source.key(*row));
-                            let next = if forward { (at + 1..len).find(renamable) } else { (0..at).rev().find(renamable) };
-                            self.refocus = next.is_none();
-                            if let Some(next) = next {
-                                request::request_rename(&ctx, id, &self.source.key(next));
-                            }
-                        }
-                    }
+                    self.rename_row(comp, &mut row_ui, (&ctx, id, rtl), (at, &key), label);
                 }
+                Env::restore(&ctx, installed);
+            }
+            if let Some((mut members_ui, installed)) = members_ui {
+                let base = (&ctx, id, rtl);
+                self.show_members(comp, &mut members_ui, cx, (base, &base_env), members, &mut shown_rows);
                 Env::restore(&ctx, installed);
             }
         };
@@ -655,9 +626,13 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             if self.source.section_stop(at) {
                 access::set_focus(&ctx, crate::runtime::access::sub_node_id(id, section_part(&key)));
             } else {
-                let item_id = sub(id, ("key", key_hash(&key)));
-                let cell = (sheet && self.selection.lead_column().is_some()).then_some(self.lead.column);
-                access::set_focus(&ctx, crate::runtime::access::items::focus_node(item_id, lead_child, cell));
+                if C::MEMBERS {
+                    access::set_focus(&ctx, super::members::lead_node(id, &key));
+                } else {
+                    let item_id = sub(id, ("key", key_hash(&key)));
+                    let cell = (sheet && self.selection.lead_column().is_some()).then_some(self.lead.column);
+                    access::set_focus(&ctx, crate::runtime::access::items::focus_node(item_id, lead_child, cell));
+                }
             }
         }
         if self.source.is_empty() {
@@ -756,6 +731,85 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         if let Some(shift) = lazy::follow(&mut self.anchor, &placed, moved, view, room, (false, true)) {
             self.offset += f64::from(shift.y);
             crate::runtime::egui::sizing::request_discard(ctx, crate::runtime::egui::sizing::Rerun::Layout);
+        }
+    }
+}
+
+impl<C: Collection> ItemsHooks<'_, '_, C> {
+    /// The rename editor of the row `(at, key)` being renamed, over its label rect `label`, and the end of the rename
+    /// it reports.
+    pub(super) fn rename_row(
+        &mut self,
+        comp: &mut C,
+        row_ui: &mut Ui,
+        (ctx, id, rtl): (&Context, Id, bool),
+        (at, key): (usize, &C::Key),
+        label: Rect,
+    ) {
+        let len = self.source.len();
+        let mut draft = std::mem::take(&mut self.renaming.draft);
+        let name = self.source.text(at).map(|text| text.into_owned()).unwrap_or_default();
+        let editor = comp.rename_editor(row_ui, Bind::bound(&mut draft), label, &name);
+        self.renaming.draft = draft;
+        if let Some(editor) = editor {
+            if !self.renaming.focused {
+                focus::request_now(&ctx, focus::FocusTarget::Id(editor.response.id));
+                self.renaming.focused = true;
+            }
+            let gesture = self.renaming.gesture;
+            let before = Mixed::Same(Rename { key: key.clone(), name: name.clone() });
+            // The editor's gesture end, if the pass has one, ends the rename.
+            let end = editor.events.iter().rev().find(|event| matches!(event, EditEvent::Commit { .. } | EditEvent::Cancel { .. })).cloned();
+            let edited = !editor.events.is_empty();
+            if end.is_some() {
+                self.refocus = focus::is_focused(&ctx, editor.response.id);
+            }
+            // The editor claims Escape for the whole rename, as a text part with a draft does: Escape does not leave the
+            // row. One the editor leaves untaken (it holds no draft yet) cancels the rename.
+            keys::hold_escape(&ctx, editor.response.id);
+            let escaped = !edited && focus::is_focused(&ctx, editor.response.id) && {
+                let mut intents = keys::intents_of(&ctx, Some(editor.response.id), rtl);
+                let left = intents.take(Intent::Cancel);
+                keys::settle(&ctx, Some(editor.response.id), &intents);
+                left
+            };
+            match end {
+                None if edited => {}
+                None if escaped => {
+                    self.events.push(CollectionEvent::Rename(EditEvent::cancel(gesture, CancelReason::Escape, Some(before))));
+                    self.ended_rename = true;
+                    self.refocus = true;
+                }
+                Some(EditEvent::Commit { after, .. }) => {
+                    let after = Rename { key: key.clone(), name: after };
+                    self.events.push(CollectionEvent::Rename(EditEvent::commit(gesture, before, after)));
+                    self.ended_rename = true;
+                }
+                Some(EditEvent::Cancel { reason, .. }) => {
+                    self.events.push(CollectionEvent::Rename(EditEvent::cancel(gesture, reason, Some(before))));
+                    self.ended_rename = true;
+                }
+                // Enter on a name nobody typed in opens no edit run: the rename ends with no event and no undo step, as a
+                // text field's empty commit does.
+                None if editor.submitted => {
+                    self.ended_rename = true;
+                    self.refocus = true;
+                }
+                None if editor.left_by_tab.is_some() => {
+                    self.events.push(CollectionEvent::Rename(EditEvent::cancel(gesture, CancelReason::Blur, Some(before))));
+                    self.ended_rename = true;
+                }
+                _ => {}
+            }
+            if let Some(forward) = editor.left_by_tab.filter(|_| self.ended_rename) {
+                // Tab continues the rename on the next renamable row; past the last one focus returns to the collection.
+                let renamable = |row: &usize| !self.source.section_stop(*row) && comp.can_rename(&self.source.key(*row));
+                let next = if forward { (at + 1..len).find(renamable) } else { (0..at).rev().find(renamable) };
+                self.refocus = next.is_none();
+                if let Some(next) = next {
+                    request::request_rename(&ctx, id, &self.source.key(next));
+                }
+            }
         }
     }
 }

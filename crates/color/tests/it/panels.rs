@@ -4,12 +4,15 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use craft_behavior::EditEvent;
-use craft_color::ui::{ColorPanel, ColorPanelMode, ColorPanelState, PanelTarget, PickedColor, SwatchPalette};
+use craft_behavior::{EditEvent, Selection};
+use craft_color::ui::{ColorPanel, ColorPanelMode, ColorPanelState, PanelTarget, PickedColor, SwatchPalette, SwatchTable};
 use craft_theme::Srgba;
+use craft_ui::contract::Role;
+use craft_ui::contract::tooltip::DELAY;
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::requests::ColorRequest;
+use craft_ui::testing::pointer::moved;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Vec2};
 
@@ -140,4 +143,56 @@ fn the_palette_arrows_walk_the_wrapped_grid() {
         assert_eq!(rig.focused().as_deref(), Some(expected), "{key:?}");
     }
     assert_eq!(rig.events.get(), 0);
+}
+
+/// `count` entries of a colour table, each named by its index.
+fn table_entries(count: usize) -> Vec<(Label, Srgba)> {
+    (0..count).map(|i| (Label::from(format!("Index {i}")), Srgba::rgb(i as f32 / count as f32, 0.5, 0.25))).collect()
+}
+
+/// The component runs of a settled pass of a table of `count` entries.
+fn settled_table_runs(count: usize) -> u32 {
+    let entries = table_entries(count);
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = SwatchTable::new("Color Table", &entries).per_row(8).show_all(ui);
+    });
+    fixture.room(Vec2::new(400.0, 400.0)).settle().idle(1);
+    craft_ui::testing::last_pass_runs(fixture.ctx()).iter().map(|(_, runs)| runs).sum()
+}
+
+/// A table's cells are members of its run: a settled pass runs as many components for 64 cells as for 4.
+#[trial]
+fn a_swatch_table_runs_as_many_components_for_many_cells_as_for_few() {
+    let (few, many) = (settled_table_runs(4), settled_table_runs(64));
+    assert!(few > 0, "the table runs");
+    assert_eq!(few, many, "the runs grow with the cells: {few} for 4 cells, {many} for 64");
+}
+
+/// A table's cell is a list box option named by its entry with the colour as its value; a click selects it, and the
+/// pointer's rest shows its name.
+#[trial]
+fn a_swatch_table_cell_reports_its_colour_selects_on_click_and_shows_its_name() {
+    let entries: Vec<(Label, Srgba)> = [("Red", RED), ("Blue", BLUE)].into_iter().map(|(name, color)| (Label::from(name), color)).collect();
+    let chosen = Rc::new(RefCell::new(Selection::<usize>::default()));
+    let held = Rc::clone(&chosen);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut selection = held.borrow().clone();
+        let _ = SwatchTable::new("Color Table", &entries).tips(true).selection(Bind::bound(&mut selection)).show_all(ui);
+        *held.borrow_mut() = selection;
+    });
+    fixture.room(Vec2::new(400.0, 200.0)).settle();
+    let options = fixture.by_role(Role::LIST_BOX_OPTION);
+    assert_eq!(options.len(), 2, "one option per entry");
+    let blue = fixture.by_label("Blue").expect("the Blue cell is named by its entry");
+    assert_eq!(fixture.tree().value_of(blue.node), Some(BLUE.to_hex().as_str()), "the cell's value is its colour");
+    fixture.click(&blue).settle();
+    assert_eq!(chosen.borrow().items, [1], "a click selects the cell");
+    let blue = fixture.by_label("Blue").expect("blue");
+    assert_eq!(fixture.tree().selected_of(blue.node), Some(true), "the selected cell reports it");
+    assert!(!fixture.texts().iter().any(|run| run.text == "Red"), "no tooltip before the rest");
+    let red = fixture.by_label("Red").expect("red");
+    fixture.frame(vec![moved(red.center())]);
+    fixture.advance(DELAY);
+    fixture.settle();
+    assert!(fixture.texts().iter().any(|run| run.text == "Red"), "the pointer's rest on a cell shows its name");
 }

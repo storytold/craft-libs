@@ -535,11 +535,11 @@ pub(crate) fn measured_extent<C: Component>(
     (extent, cx.shown.take())
 }
 
-/// A face run is steps 1, 2, 4 (read only), 12 and 13 of the face component, inside the composite's step 13. It
-/// registers no id, senses nothing, opens no memory stage and fires nothing.
-pub(crate) fn paint_face<C: Show>(ui: &mut Ui, source: &super::FaceSource<'_>, part: PartRef, mut face: C) -> FaceRecord {
+/// A face run is steps 1, 2, 4 (read only), 12 and 13 of the face component, inside the composite's step 13, under
+/// the composite's `env`. It registers no id, senses nothing, opens no memory stage and fires nothing. Returns the
+/// record step 16 fills the part's sub-node from, and the facts the face's `access` declared.
+pub(crate) fn paint_face<C: Show>(ui: &mut Ui, env: &Env, source: &super::FaceSource<'_>, part: PartRef, mut face: C) -> (FaceRecord, Access) {
     let ctx = ui.ctx().clone();
-    let env = Env::of(ui);
     let common = std::mem::take(face.common_mut(Internal::new()));
     debug_assert!(common.tooltip.is_none(), "a face instance carries no tooltip; use `PartBuilder::tooltip`");
     let step1 = steps::env(&ctx, &env, &common, steps::variants::<C>(common.variant));
@@ -609,5 +609,7 @@ pub(crate) fn paint_face<C: Show>(ui: &mut Ui, source: &super::FaceSource<'_>, p
     // The face's own `access` adds its facts; the composite's step 16 fills the part's sub-node from the record.
     let mut access = Access::default();
     face.access(&mut access, &cx);
-    FaceRecord { part, name, flags, role: C::ROLE, numeric: access.numeric.take(), expanded: access.expanded, enabled: step1.enabled, baseline }
+    let record =
+        FaceRecord { part, name, flags, role: C::ROLE, numeric: access.numeric.clone(), expanded: access.expanded, enabled: step1.enabled, baseline };
+    (record, access)
 }

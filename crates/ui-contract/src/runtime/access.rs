@@ -481,6 +481,8 @@ pub struct SubNode {
     pub numeric: Option<Numeric>,
     /// A plain text value, for a sub-node that has one and no number.
     pub(crate) value: Option<String>,
+    /// The colour value of a colour well.
+    pub(crate) color: Option<Srgba>,
     /// Whether the node's popup or region is open; the node is expandable when this or its face says.
     pub expanded: Option<bool>,
     /// The place in a closed set.
@@ -517,6 +519,7 @@ impl SubNode {
             description: None,
             numeric: None,
             value: None,
+            color: None,
             expanded: None,
             position: None,
             grid: GridPlace::default(),

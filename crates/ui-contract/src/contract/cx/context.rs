@@ -122,6 +122,8 @@ pub struct CxCore<'a> {
     pub(crate) part_cursors: Vec<Cursor>,
     pub(crate) claims: Vec<Chord>,
     pub(crate) reveal: Option<Rect>,
+    /// The tooltip of the collection member the pointer rests on, which the item step leaves for step 16.
+    pub(crate) member_tip: Option<crate::contract::tooltip::MemberTip>,
     pub(crate) press_cancel: Option<PressCancel>,
     /// The visible range each scroll part moved to this pass, from step 8's results.
     pub(crate) scroll_moves: Vec<ScrollMove>,

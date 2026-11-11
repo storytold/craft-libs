@@ -58,7 +58,7 @@ pub use paint_chip::{
     PaintListOptions, PaintListOutput, PaintRow, PaintWords,
 };
 pub use pair::{PairWell, SwatchPair, SwatchPairOutput, Well};
-pub use palette::{SwatchCell, SwatchCellStyle, SwatchPalette, SwatchPaletteOutput, SwatchRows, SwatchTable, SwatchTableOutput, SwatchTableStyle};
+pub use palette::{SwatchPalette, SwatchPaletteOutput, SwatchRows, SwatchTable, SwatchTableOutput, SwatchTableStyle};
 pub use panel::{
     ColorPanel, ColorPanelCommand, ColorPanelMenu, ColorPanelMode, ColorPanelOutput, ColorPanelRamp, ColorPanelState, ColorPanelWords, PanelTarget,
 };

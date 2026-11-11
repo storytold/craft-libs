@@ -1,24 +1,21 @@
 //! `SwatchPalette`: a wrapping grid of colour cells that chooses one colour. `SwatchTable`: a table of touching cells
 //! selected by index, for a colour table whose entries may repeat a colour.
 
-use craft_behavior::{DisplayOrder, EditEvent, ItemSource, Metrics, Mixed, PartKey, Selection, Sense, TileLayout};
+use craft_behavior::{DisplayOrder, EditEvent, ItemSource, Metrics, Mixed, Selection, TileLayout};
 use craft_theme::Srgba;
 use craft_ui::choice::{Swatch, SwatchMetrics};
 use craft_ui::contract::{
-    Access, ActivateOn, Bind, BindMut, Collection, CollectionEvent, CollectionProps, Common, Component, ContainerProps, Cx, Held, MeasureCx, NoValue,
-    Outcome, PaintUi, PartsCx, Pattern, Props, Role, SelectMode, ShowCollection as _, ShowContainer as _, Sizing, Styled as _,
+    ActivateOn, Bind, BindMut, Collection, CollectionEvent, CollectionProps, Common, Component, ContainerProps, Cx, Held, NoValue, Outcome, Pattern,
+    Props, Role, SelectMode, ShowCollection as _, ShowContainer as _, Sizing,
 };
 use craft_ui::layout_components::Stack;
 use craft_ui::runtime::env::Label;
-use craft_ui::style::{ComponentStyle, Flags, FocusLook, StyleCx};
-use egui::{Rect, Response, Ui, Vec2};
+use craft_ui::style::{ComponentStyle, StyleCx};
+use egui::{Response, Ui, Vec2};
 use std::sync::Arc;
 
 #[cfg(feature = "screen-testing")]
 mod stories;
-
-/// The part of a cell that shows the colour.
-const WELL: PartKey = PartKey::new("well");
 
 /// What a [`SwatchPalette`] reports.
 #[derive(Debug)]
@@ -124,71 +121,6 @@ impl DisplayOrder<usize> for SwatchRows<'_> {
 
 impl ItemSource<usize> for SwatchRows<'_> {}
 
-/// The style of a table cell: the swatch's own look is painted as the cell's face.
-#[derive(Clone, Debug, PartialEq, ComponentStyle)]
-#[non_exhaustive]
-pub struct SwatchCellStyle {
-    #[style(metrics)]
-    metrics: Metrics,
-    #[style(focus)]
-    focus: FocusLook,
-    /// The side of the cell.
-    side: f32,
-}
-
-/// One cell of a [`SwatchTable`]: a touching, square swatch named by its entry and valued by its hex colour.
-#[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
-pub struct SwatchCell {
-    #[common]
-    common: Common,
-    color: Srgba,
-}
-
-impl SwatchCell {
-    /// A cell of `color` named `name`.
-    pub fn new(name: impl Into<Label>, color: Srgba) -> Self {
-        SwatchCell { common: Common::new(), color }.label(name)
-    }
-}
-
-impl Component for SwatchCell {
-    const ROLE: Role = Role::LIST_BOX_OPTION;
-    const OVERLAYS: bool = false;
-    type Style = SwatchCellStyle;
-    type Output = Response;
-
-    fn style(cx: &StyleCx<'_>, _: SwatchCellStyleKey) -> SwatchCellStyle {
-        let side = SwatchMetrics::of(cx).cell;
-        SwatchCellStyle { metrics: Metrics::new(), focus: cx.focus_look(), side }
-    }
-
-    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        Vec2::splat(cx.style.side)
-    }
-
-    fn sense(&self) -> Sense {
-        Sense::CLICK | Sense::FOCUS
-    }
-
-    fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
-        let _ = cx.part(WELL, rect);
-    }
-
-    fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
-        access.value(self.color.to_hex());
-        access.color(self.color);
-    }
-
-    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        let selected = cx.resolved.selected == Some(true) || cx.state().flags.contains(Flags::SELECTED);
-        ui.face(WELL, Swatch::new(cx.resolved.label.to_owned(), self.color).cell().selected(selected));
-    }
-
-    fn finish(self, cx: Cx<'_, Self>) -> Response {
-        cx.response.clone()
-    }
-}
-
 /// What a [`SwatchTable`] reports.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -266,15 +198,15 @@ impl<'a> SwatchTable<'a> {
     /// Shows the table.
     pub fn show_all(self, ui: &mut Ui) -> SwatchTableOutput {
         let (swatches, tips) = (self.swatches, self.tips);
-        self.show_items(ui, &SwatchRows::new(swatches), &mut |key, _| {
+        self.show_items(ui, &SwatchRows::new(swatches), &mut |key, item| {
             let (name, color) = &swatches[*key];
-            let cell = SwatchCell::new(name.clone(), *color);
+            let cell = Swatch::new(name.clone(), *color).cell().selected(item.row.selected);
             if tips { cell.tooltip(name.clone()) } else { cell }
         })
     }
 }
 
-/// The style of a table: it has no look of its own; its cells paint the swatches.
+/// The style of a table: it has no look of its own; its cells are swatch faces.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct SwatchTableStyle {
@@ -309,8 +241,9 @@ impl Collection for SwatchTable<'_> {
     type Key = usize;
     type ItemLayout = TileLayout;
     type Selection = Selection<usize>;
-    type Item<'r> = SwatchCell;
+    type Item<'r> = Swatch;
     type ItemEvent = std::convert::Infallible;
+    const MEMBERS: bool = true;
 
     fn items(&self) -> &CollectionProps {
         &self.items

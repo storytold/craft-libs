@@ -367,6 +367,7 @@ pub fn report_sub(ctx: &Context, decl: &SubDecl<'_>) {
     spec.description = node.description.clone();
     spec.numeric = numeric.cloned();
     spec.value = node.value.clone();
+    spec.color = node.color;
     spec.expanded = expanded;
     spec.access_key = node.access_key;
     spec.shortcut = node.shortcut.clone();

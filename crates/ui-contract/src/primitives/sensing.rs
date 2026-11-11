@@ -581,50 +581,69 @@ pub(crate) struct MemberResult {
 }
 
 pub(crate) fn sense_member(ui: &Ui, arena: ArenaId, spec: MemberSpec<'_>) -> MemberResult {
+    let mut results = sense_members(ui, arena, std::slice::from_ref(&spec));
+    results.pop().unwrap_or_else(|| unreachable!("one result per member"))
+}
+
+/// Step 8 of the members of `arena` in show order, joined in one read of the pointer and one of the arena: a member
+/// run's own join, or the visible items of a collection whose items are members of its run.
+pub(crate) fn sense_members(ui: &Ui, arena: ArenaId, specs: &[MemberSpec<'_>]) -> Vec<MemberResult> {
     let ctx = ui.ctx();
     debug_assert!(!crate::runtime::measure::active(ctx), "a member joins its arena in a real run only");
     let layer = ui.layer_id();
     let pass_nr = pass::pass_nr(ctx, pass::current_viewport(ctx));
-    // One read of the pointer and one of the arena serve the join, the outcome and the part results.
+    // One read of the pointer and one of the arena serve the joins, the outcome and the part results.
     let (pointer_pos, target, mods, sample) = pointer::with_frame(ctx, |frame, hover| {
         (hover, frame.map_or(0.0, |frame| frame.target), frame.map_or(Mods::NONE, |frame| frame.mods), frame.and_then(|frame| frame.sample))
     });
-    let mut decl = MemberDecl::new(spec.id, spec.rect, spec.sense, spec.parts);
-    let presses =
-        spec.parts.iter().filter(|part| !part.over).fold(spec.sense, |sense, part| sense | part.sense).intersection(Sense::CLICK | Sense::DRAG);
-    let (local, shapes, outcome, known, covers) = with_arena(ctx, arena, pass_nr, |state| {
+    let mut shapes = Vec::new();
+    let mut joined = Vec::with_capacity(specs.len());
+    let outcome = with_arena(ctx, arena, pass_nr, |state| {
         rotate(state, pass_nr);
-        let covers = state.nested.iter().any(|nested| nested.intersects(spec.rect));
-        decl.local = state.layer == Some(layer);
-        let position = member_position(state.members.len());
-        decl.over_at = position + 1;
-        let shapes = member_shapes(&decl, position, target);
-        state.union_sense |= decl.sense;
-        for part in &decl.parts {
-            state.union_sense |= part.sense;
+        for spec in specs {
+            let mut decl = MemberDecl::new(spec.id, spec.rect, spec.sense, spec.parts);
+            let covers = state.nested.iter().any(|nested| nested.intersects(spec.rect));
+            decl.local = state.layer == Some(layer);
+            let position = member_position(state.members.len());
+            decl.over_at = position + 1;
+            shapes.extend(member_shapes(&decl, position, target));
+            state.union_sense |= decl.sense;
+            for part in &decl.parts {
+                state.union_sense |= part.sense;
+            }
+            joined.push((decl.local, known_in(state, spec.id), covers));
+            state.members.push(decl);
         }
-        let local = decl.local;
-        state.members.push(decl);
-        let outcome = state.outcome.filter(|outcome| outcome.pass == pass_nr).unwrap_or_default();
-        let known = known_in(state, spec.id);
-        (local, shapes, outcome, known, covers)
+        state.outcome.filter(|outcome| outcome.pass == pass_nr).unwrap_or_default()
     });
     pointer::record_shapes(ctx, layer, arena.0, shapes);
-    // A member shown over an earlier root that is not a member takes egui's press there through a widget that stands
-    // for the arena root; egui picks the later widget.
-    if covers && spec.enabled && !presses.is_empty() {
-        let widget = member_widget(spec.id);
-        response::widget(ui, widget, spec.rect.intersect(ui.clip_rect()), presses);
-        crate::runtime::egui::access::hide(ctx, widget);
-        pointer::record_widgets_in(ctx, pass::current_viewport(ctx), layer, arena.0, &[widget], presses.contains(Sense::CLICK));
-    }
-    let view = member_view(&outcome, spec.id, local, pointer_pos);
-    MemberResult {
-        response: response::member(ui, spec.id, spec.rect, spec.enabled, view),
-        parts: part_results_in(&outcome, &known, (mods, sample, pointer_pos), spec.id, spec.parts),
-        press: shape_press_in(&outcome, mods, sample, spec.id),
-        activated: view.clicked,
-    }
+    specs
+        .iter()
+        .zip(joined)
+        .map(|(spec, (local, known, covers))| {
+            let presses = spec
+                .parts
+                .iter()
+                .filter(|part| !part.over)
+                .fold(spec.sense, |sense, part| sense | part.sense)
+                .intersection(Sense::CLICK | Sense::DRAG);
+            // A member shown over an earlier root that is not a member takes egui's press there through a widget that
+            // stands for the arena root; egui picks the later widget.
+            if covers && spec.enabled && !presses.is_empty() {
+                let widget = member_widget(spec.id);
+                response::widget(ui, widget, spec.rect.intersect(ui.clip_rect()), presses);
+                crate::runtime::egui::access::hide(ctx, widget);
+                pointer::record_widgets_in(ctx, pass::current_viewport(ctx), layer, arena.0, &[widget], presses.contains(Sense::CLICK));
+            }
+            let view = member_view(&outcome, spec.id, local, pointer_pos);
+            MemberResult {
+                response: response::member(ui, spec.id, spec.rect, spec.enabled, view),
+                parts: part_results_in(&outcome, &known, (mods, sample, pointer_pos), spec.id, spec.parts),
+                press: shape_press_in(&outcome, mods, sample, spec.id),
+                activated: view.clicked,
+            }
+        })
+        .collect()
 }
 
 fn member_view(outcome: &Outcome, id: Id, local: bool, pointer_pos: Option<Pos2>) -> MemberView {

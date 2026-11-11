@@ -90,6 +90,15 @@ fn text_of(core: &super::CxCore<'_>, shows_label: bool) -> Option<String> {
     })
 }
 
+/// The tooltip of a member of a collection's run (`Collection::MEMBERS`) the pointer rests on: shown by the
+/// collection's step 16 as a part's, under the collection's timer, with the member's part as its subject.
+pub(crate) struct MemberTip {
+    pub part: PartRef,
+    pub spec: TooltipSpec,
+    pub rect: Rect,
+    pub pressed: bool,
+}
+
 /// A part's tooltip, for the part the pointer is over or the keyboard is on.
 struct PartTip {
     part: PartRef,
@@ -118,7 +127,14 @@ fn part_tip(core: &super::CxCore<'_>, parts: &Decls) -> Option<PartTip> {
 /// Step 16, after the component's report: advances the component's tooltip timer and shows its tooltip, or the
 /// tooltip of the part the pointer or the keyboard is on.
 pub(crate) fn run(core: &super::CxCore<'_>, input: TipIn<'_>) {
-    let part = part_tip(core, input.parts);
+    // A hovered part's tooltip, else the hovered member's, else the keyboard's active part's.
+    let part = match (part_tip(core, input.parts), &core.member_tip) {
+        (Some(tip), _) if tip.hovered => Some(tip),
+        (_, Some(member)) => Some(PartTip { part: member.part, spec: member.spec.clone(), rect: member.rect, hovered: true }),
+        (tip, None) => tip,
+    };
+    let member_pressed =
+        core.member_tip.as_ref().filter(|member| part.as_ref().is_some_and(|tip| tip.part == member.part)).map(|member| member.pressed);
     let keyboard = core.state.flags.contains(Flags::FOCUS_VISIBLE);
     let own_spec = core.resolved.tooltip.map(|tooltip| tooltip.spec().clone());
     let (text, spec, rect, hovered, subject) = match &part {
@@ -142,7 +158,7 @@ pub(crate) fn run(core: &super::CxCore<'_>, input: TipIn<'_>) {
         rich: if part.is_some() { None } else { input.rich },
         spec,
         wants_input: hovered,
-        pressed: core.press.phase.is_press(),
+        pressed: member_pressed.unwrap_or_else(|| core.press.phase.is_press()),
         subject,
     };
     show_tip(call);
