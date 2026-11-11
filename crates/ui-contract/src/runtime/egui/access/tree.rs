@@ -164,7 +164,12 @@ impl AccessTree {
 
     /// The numeric value and range of the node of `id`.
     pub fn numeric(&self, id: Id) -> Option<Numeric> {
-        let node = self.node(id)?;
+        self.numeric_of(NodeKey::of(id))
+    }
+
+    /// The numeric value and range of a node by key.
+    pub fn numeric_of(&self, key: NodeKey) -> Option<Numeric> {
+        let node = self.lookup(NodeId(key.0))?;
         let range = node.min_numeric_value()?..=node.max_numeric_value()?;
         Some(Numeric { value: node.numeric_value(), range, step: node.numeric_value_step(), wraps: false, text: node.value().map(str::to_owned) })
     }

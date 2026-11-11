@@ -73,6 +73,13 @@ fn select(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     out.inner.flatten().map(StoryOutput::from).unwrap_or_default()
 }
 
+/// The first entry held: a step back offers nothing, so an arrow that steps forward must be the Increment it is.
+#[story(Select<'static, u8>, covers = [], drive = Drive::Never)]
+fn select_first(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let entries = modes();
+    Select::new("Blend mode", Bind::bound(data.value("first", 0u8)), &entries).show(ui).into()
+}
+
 #[story(Select<'static, u8>, covers = [Mixed], drive = Drive::Never)]
 fn select_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = modes();

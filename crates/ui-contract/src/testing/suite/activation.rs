@@ -160,8 +160,9 @@ fn any_expanded(tree: &AccessTree) -> bool {
 
 /// Every intent the component takes has its AccessKit action declared on a node (core 12.2). The intents are read
 /// from what the keys the type keeps do on a focused story: an activation key or arrow that gives a click or changes
-/// the value needs `Click`; an arrow that changes the value of a control needs `Increment` or `Decrement`, declared
-/// before the key (a step onto the end of a range offers none past it afterwards), or, on a
+/// the value needs `Click`; an arrow that changes the value of a control needs the step it took, `Increment` when the
+/// focused node's number rose and `Decrement` when it fell (Up and Right are `Increment` when the node reports no number
+/// on both sides of the key, as from a mixed value, which offers both), declared before the key, or, on a
 /// node that declares scroll actions on the arrow's axis (a view that pans), the scroll action of the arrow's
 /// direction; an arrow that moves the checked or focused node of a group of `RADIO_BUTTON` nodes is a choice, not
 /// a step, and needs `Click` declared on every enabled radio of the group instead; a key that opens something needs `Expand` and one that closes it needs `Collapse`, declared before the key. Text types take edit intents, which the text cases cover.
@@ -198,11 +199,20 @@ fn every_intent_has_a_declared_action(subject: &Subject) -> Result<(), String> {
             };
             let (can_expand, can_collapse) = (declares_before(Declared::Expand), declares_before(Declared::Collapse));
             let can_click = declares_before(Declared::Click);
-            let could_step = step.is_some_and(declares_before);
+            let steps_before = (declares_before(Declared::Increment), declares_before(Declared::Decrement));
             fixture.take_outputs();
             let focus_before = fixture.tree().focused_key();
+            let number = |tree: &AccessTree| tree.numeric_of(focus_before).and_then(|numeric| numeric.value);
+            let number_before = number(fixture.tree());
             fixture.key(key, Modifiers::NONE);
             fixture.settle();
+            // The step the key took, from the focused node's number: an arrow's meaning is the control's own.
+            let step = step.map(|by_key| match (number_before, number(fixture.tree())) {
+                (Some(before), Some(after)) if after > before => Declared::Increment,
+                (Some(before), Some(after)) if after < before => Declared::Decrement,
+                _ => by_key,
+            });
+            let could_step = step.is_some_and(|step| if step == Declared::Increment { steps_before.0 } else { steps_before.1 });
             let clicked = fixture.take_outputs().iter().any(|output| output.clicked);
             let changed = !fixture.data().changed_since(&before).is_empty();
             let radios = fixture.tree().with_role(Role::RADIO_BUTTON);
@@ -227,10 +237,12 @@ fn every_intent_has_a_declared_action(subject: &Subject) -> Result<(), String> {
             }
             let opens = any_expanded(fixture.tree());
             for declared in needs {
-                // A key that closes the container (Enter on its close action) takes the declaring node with it, so
-                // `Click` counts when a node declared it before the key, as `Expand` and `Collapse` do.
-                let before = (declared == Declared::Click && can_click) || (Some(declared) == step && could_step);
-                if !before && !tree.keys().into_iter().any(|node| tree.declares_key(node, declared)) {
+                // A step is taken from the state before the key, so it counts only when declared then. A key that
+                // closes the container (Enter on its close action) takes the declaring node with it, so `Click`
+                // counts when a node declared it before the key, as `Expand` and `Collapse` do.
+                let declared_now = || tree.keys().into_iter().any(|node| tree.declares_key(node, declared));
+                let ok = if Some(declared) == step { could_step } else { (declared == Declared::Click && can_click) || declared_now() };
+                if !ok {
                     return Err(format!("{}: {key:?} took an intent and no node declares {declared:?}", story.name));
                 }
             }
