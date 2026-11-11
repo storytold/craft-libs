@@ -1,16 +1,14 @@
 //! The Marker dialog: the draft it edits, its result and the dialog itself.
 
-use std::cell::Cell;
-
-use craft_ui::buttons::Button;
 use craft_ui::choice::{RadioGroup, Swatch};
-use craft_ui::contract::{Bind, Outcome as _, Show as _, ShowContainer as _, clicked};
+use craft_ui::contract::{Bind, Outcome as _, Show as _, ShowContainer as _};
 use craft_ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::Row;
 use craft_ui::patterns::form_dialogs::FormDialog;
 use craft_ui::runtime::env::Env;
 use craft_ui::runtime::focus::{self, FocusTarget};
+use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::text::TextField;
 use egui::{Color32, Ui};
 
@@ -112,16 +110,11 @@ impl StackDialog for MarkerDialog {
         let env = Env::of(ui);
         let words = env.words::<MarkerWords>();
         let format = self.format;
-        let picked = Cell::new(None::<Extra>);
+        let extras = [(Extra::Delete, &words.delete), (Extra::Previous, &words.previous), (Extra::Next, &words.next)];
         let shown = FormDialog::new(words.title.clone(), Bind::bound(&mut self.draft))
             .outer_gesture(true)
-            .footer_extra(|ui| {
-                for (extra, label) in [(Extra::Delete, &words.delete), (Extra::Previous, &words.previous), (Extra::Next, &words.next)] {
-                    if clicked(&Button::new(label.clone()).show(ui)) {
-                        picked.set(Some(extra));
-                    }
-                }
-            })
+            .extra_buttons(extras.iter().map(|(_, label)| FooterButton::new((*label).clone(), DialogRole::Other)))
+            .shaped(|dialog| dialog.side_buttons(true))
             .show(ui, |ui, form, draft| {
                 let first = form.first();
                 let timeline_words = Env::of(ui).words::<TimelineWords>();
@@ -158,7 +151,7 @@ impl StackDialog for MarkerDialog {
                 true
             });
         let answer = |action| Some(DialogResult::Ok(MarkerDialogResult { marker: self.id, action }));
-        if let Some(extra) = picked.get() {
+        if let Some((extra, _)) = shown.picked.and_then(|at| extras.get(at.checked_sub(2)?)) {
             return match extra {
                 Extra::Delete => answer(MarkerDialogAction::Delete),
                 Extra::Previous => answer(MarkerDialogAction::SaveAndPrevious(self.draft.clone())),

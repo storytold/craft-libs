@@ -30,6 +30,8 @@ use egui::load::SizedTexture;
 use egui::{Response, Ui};
 
 use std::borrow::Cow;
+use std::cell::Cell;
+use std::rc::Rc;
 
 #[cfg(feature = "testing")]
 mod stories;
@@ -46,7 +48,7 @@ craft_ui::words! {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ParamLayout {
-    /// The preview pane to the right of the rows, under the Preview check box and the zoom row.
+    /// The preview pane to the right of the rows, under the zoom row.
     #[default]
     Beside,
     /// The preview pane under the rows.
@@ -76,18 +78,15 @@ impl ParamResult {
     }
 }
 
-/// What a parameter dialog keeps while it is open: the Preview check box and the view of the preview pane.
-#[derive(Clone)]
+/// What a parameter dialog keeps while it is open: the view of the preview pane.
+#[derive(Clone, Default)]
 struct Live {
-    on: bool,
     view: PreviewView,
 }
 
-impl Default for Live {
-    fn default() -> Self {
-        Live { on: true, view: PreviewView::default() }
-    }
-}
+/// What the footer of a dialog with a preview keeps while it is open: the Preview check box is off.
+#[derive(Clone, Default)]
+struct PreviewOff(bool);
 
 /// What a parameter dialog reports.
 #[derive(Debug)]
@@ -124,7 +123,8 @@ impl Outcome for ParamDialogOutput {
 /// - Values: the `values` binding holds them; without one the dialog keeps its own between passes. The first pass
 ///   fills the parameters' defaults and, with `remember`, the values saved by [`ParamResult::remember`].
 /// - Preview: the host renders from the reported values while `preview_on` and hands the picture to `preview`. Drag
-///   pans the picture, the zoom buttons scale it.
+///   pans the picture, the zoom buttons scale it. A dialog with a preview has its buttons in a column beside the
+///   body, with the Preview check box and the footer extra under them.
 /// - A command form is a dialog with no preview and no remember key.
 #[must_use = "show the dialog with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
@@ -297,9 +297,9 @@ impl<'a> ParamDialog<'a> {
             layout,
             closable,
             preview,
-            footer_extra,
+            mut footer_extra,
             below,
-            shaped,
+            mut shaped,
             answers,
         } = self;
         let words = Env::of(ui).words::<ParamDialogWords>();
@@ -333,6 +333,28 @@ impl<'a> ParamDialog<'a> {
         }
         if let Some(open) = open {
             form = form.opened(open);
+        }
+        // With a preview the buttons stand beside the body, and the Preview check box and the extras under them.
+        let preview_on = Rc::new(Cell::new(false));
+        if preview.is_some() {
+            let (on, label) = (Rc::clone(&preview_on), words.preview.clone());
+            let mut extra = footer_extra.take();
+            let caller = shaped.take();
+            form = form.shaped(move |dialog| {
+                let dialog = dialog.side_buttons(true).footer(move |ui, cx| {
+                    let mut value = !cx.bar().memory::<PreviewOff>().0;
+                    Checkbox::new(Bind::bound(&mut value)).label(label.clone()).show(ui);
+                    cx.bar().memory::<PreviewOff>().0 = !value;
+                    on.set(value);
+                    if let Some(FooterExtra(extra)) = extra.as_mut() {
+                        extra(ui);
+                    }
+                });
+                match caller {
+                    Some(Shaped(shape)) => shape(dialog),
+                    None => dialog,
+                }
+            });
         }
         if let Some(FooterExtra(extra)) = footer_extra {
             form = form.footer_extra(extra);
@@ -396,7 +418,7 @@ impl<'a> ParamDialog<'a> {
             result,
             rows,
             values: shown.value,
-            preview_on: preview.is_some() && live.on,
+            preview_on: preview.is_some() && preview_on.get(),
         }
     }
 }
@@ -418,6 +440,8 @@ pub enum ResetPick {
     Reset,
     /// The second button while Alt is not held: the dialog closes without an answer.
     Cancel,
+    /// The extra button at this index in the order [`extra`](ResetFooter::extra) was given.
+    Extra(usize),
 }
 
 /// The two footer buttons of a dialog whose Cancel turns into Reset while Alt is held. Reset restores the values from
@@ -440,6 +464,7 @@ pub struct ResetFooter {
     resetting: bool,
     cancel: Label,
     reset: Label,
+    extra: Vec<FooterButton>,
 }
 
 impl ResetFooter {
@@ -451,7 +476,15 @@ impl ResetFooter {
             resetting: alt_resets && crate::runtime::pointer::frame(ui.ctx()).mods.alt,
             cancel: cancel.unwrap_or_else(|| env.words::<CommonWords>().cancel.clone()),
             reset: env.words::<ParamDialogWords>().reset.clone(),
+            extra: Vec::new(),
         }
+    }
+
+    /// Buttons after the second one, which [`install`](ResetFooter::install) gives the dialog with the two.
+    #[must_use]
+    pub fn extra(mut self, buttons: impl IntoIterator<Item = FooterButton>) -> Self {
+        self.extra = buttons.into_iter().collect();
+        self
     }
 
     /// Whether the second button is Reset in this pass.
@@ -487,7 +520,7 @@ impl ResetFooter {
         let pick = self.clone();
         let settle = self.clone();
         dialog
-            .buttons(self.buttons(accept, false))
+            .buttons(self.buttons(accept, false).into_iter().chain(self.extra.iter().cloned()))
             .settle_buttons(move |cx, buttons| {
                 let footing = *cx.memory::<Footing>();
                 settle.settle(buttons, footing.changed);
@@ -496,7 +529,7 @@ impl ResetFooter {
                 }
             })
             .on_pick(move |button, cx| {
-                if pick.resetting() && button.role() == DialogRole::Other {
+                if pick.resetting() && button.role() == DialogRole::Other && *button.label() == pick.reset {
                     restore(cx);
                     crate::runtime::frame::request_repaint(cx.memory.ctx());
                 }
@@ -513,15 +546,15 @@ impl ResetFooter {
     pub fn pick(&self, picked: Option<usize>) -> Option<ResetPick> {
         match picked? {
             0 => Some(ResetPick::Accept),
-            _ if self.resetting => Some(ResetPick::Reset),
-            _ => Some(ResetPick::Cancel),
+            1 if self.resetting => Some(ResetPick::Reset),
+            1 => Some(ResetPick::Cancel),
+            at => Some(ResetPick::Extra(at - 2)),
         }
     }
 }
 
-/// The Preview check box, the zoom row and the pane.
+/// The zoom row and the pane.
 fn show_preview(ui: &mut Ui, words: &ParamDialogWords, texture: &SizedTexture, live: &mut Live) {
-    Checkbox::new(Bind::bound(&mut live.on)).label(words.preview.clone()).show(ui);
     let zoom = PreviewZoom::new(&live.view).show(ui);
     let pane = PreviewPane::new(words.preview.clone(), *texture, &live.view).show(ui);
     live.view = zoom.view.or(pane.view).unwrap_or(pane.shown);

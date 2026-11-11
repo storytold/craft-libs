@@ -10,7 +10,7 @@ use craft_ui::contract::{
 };
 use craft_ui::display::{Shade, Text};
 use craft_ui::form::Field;
-use craft_ui::layout_components::{Row, Stack};
+use craft_ui::layout_components::Stack;
 use craft_ui::list::{List, ListRow};
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Label};
@@ -121,8 +121,8 @@ impl Outcome for FileListPickerOutput {
 /// Photoshop's Load Files into Stack file list, after PhotoCraft's port of it.
 ///
 /// The user sees "Use:" with Files and Folder (when [`folder_mode`](Self::folder_mode) is on), the list (one row per
-/// file showing its name, the full path as tooltip, and the app's info line under the name when given) and the buttons
-/// under it: Browse… (an open-many picker in Files mode, a folder picker in Folder mode, both through `host.files()`),
+/// file showing its name, the full path as tooltip, and the app's info line under the name when given) and a column of
+/// buttons beside it, one width: Browse… (an open-many picker in Files mode, a folder picker in Folder mode, both through `host.files()`),
 /// Remove (with a row selected), Add Open Files (when the app passed open documents with a path) and Sort By Name (more
 /// than one file; sorts by name ignoring case). In Folder mode the list shows the folder's files the app passes and has
 /// no selection.
@@ -202,9 +202,9 @@ impl<'a> FileListPicker<'a> {
                 };
                 let folder = now.mode == FileListMode::Folder;
                 let (mut browse, mut remove, mut add_open, mut sort) = (false, false, false, false);
-                Row::new().show(ui, |ui, _| {
+                Stack::new().show(ui, |ui, _| {
                     let button = |ui: &mut Ui, label: &Label, key: &'static str, enabled: bool| {
-                        clicked(&Button::new(label.clone()).enabled(enabled).id_salt(key).show(ui))
+                        clicked(&Button::new(label.clone()).enabled(enabled).fill_width(true).id_salt(key).show(ui))
                     };
                     browse = button(ui, &words.browse, "browse", true);
                     remove = button(ui, &words.remove, "remove", !folder && now.selected.is_some());
@@ -233,6 +233,7 @@ impl<'a> FileListPicker<'a> {
                 }
                 pass.finish(cx, label.as_str());
             })
+            .footer_beside()
             .show(ui, |ui, cx| {
                 let mut pass = pass.borrow_mut();
                 let now = pass.load(cx);

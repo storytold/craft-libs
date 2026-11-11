@@ -600,6 +600,7 @@ impl StackDialog for ParagraphDialog {
             FooterButton::new(words.tabs.clone(), DialogRole::Other),
         ];
         let shown = Dialog::new(words.title.clone())
+            .side_buttons(true)
             .buttons(buttons)
             .settle_buttons(|_, buttons| {
                 for (at, button) in buttons.iter_mut().enumerate() {

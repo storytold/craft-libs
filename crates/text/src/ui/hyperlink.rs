@@ -345,11 +345,13 @@ impl HyperlinkDialog {
         if editing {
             buttons.push(FooterButton::new(words.remove.clone(), DialogRole::Destructive));
         }
-        let dialog = Dialog::new(title).buttons(buttons).initial_focus(Initial::Default).opened(Bind::bound(open)).settle_buttons(|_, buttons| {
-            if let Some(accept) = buttons.get_mut(OK) {
-                accept.set_enabled(valid.get());
-            }
-        });
+        let dialog = Dialog::new(title).side_buttons(true).buttons(buttons).initial_focus(Initial::Default).opened(Bind::bound(open)).settle_buttons(
+            |_, buttons| {
+                if let Some(accept) = buttons.get_mut(OK) {
+                    accept.set_enabled(valid.get());
+                }
+            },
+        );
         let given_ref = &*given;
         let shown = dialog.show(ui, |ui, _| {
             body(ui, given_ref, form, &words);

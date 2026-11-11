@@ -11,6 +11,7 @@ use craft_ui::patterns::form_dialogs::FormDialog;
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::Env;
 use craft_ui::runtime::focus::{self, FocusTarget};
+use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::text::TextField;
 use egui::Ui;
 
@@ -117,19 +118,14 @@ impl StackDialog for ContourEditorDialog {
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<Contour>> {
         let words = Env::of(ui).words::<ContourWords>();
         let before = self.draft.contour.clone();
-        let extra = Cell::new(None::<Extra>);
+        let extras = [(Extra::Load, &words.load), (Extra::Save, &words.save), (Extra::New, &words.new)];
         let named = Cell::new(false);
         let focus_name = std::mem::take(&mut self.focus_name);
         let sampler = self.sampler.clone();
         let shown = FormDialog::new(words.editor.clone(), Bind::bound(&mut self.draft))
             .outer_gesture(true)
-            .footer_extra(|ui| {
-                for (which, label) in [(Extra::Load, &words.load), (Extra::Save, &words.save), (Extra::New, &words.new)] {
-                    if clicked(&Button::new(label.clone()).show(ui)) {
-                        extra.set(Some(which));
-                    }
-                }
-            })
+            .extra_buttons(extras.iter().map(|(_, label)| FooterButton::new((*label).clone(), DialogRole::Other)))
+            .shaped(|dialog| dialog.side_buttons(true))
             .show(ui, |ui, _, draft| {
                 FieldGroup::new(words.preset.clone()).show(ui, |ui, _| {
                     Field::new(words.preset.clone()).show(ui, |ui, _| {
@@ -192,7 +188,8 @@ impl StackDialog for ContourEditorDialog {
             self.draft.contour.clone_from(&new);
             self.action = Some(ContourAction::New(new));
         }
-        match extra.get() {
+        let extra = shown.picked.and_then(|at| extras.get(at.checked_sub(2)?)).map(|(which, _)| *which);
+        match extra {
             Some(Extra::Load) => self.action = Some(ContourAction::Load),
             Some(Extra::Save) => self.action = Some(ContourAction::Save),
             Some(Extra::New) if self.draft.naming.is_none() => {

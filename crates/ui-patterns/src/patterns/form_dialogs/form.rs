@@ -88,7 +88,8 @@ pub struct FormOutput<V> {
     pub response: Response,
     /// How the dialog closed in this pass; `None` while it stays open.
     pub closed: Option<CloseReason>,
-    /// The index of the footer button picked in this pass, in the order `ResetFooter::buttons` gives them.
+    /// The index of the footer button picked in this pass, in the order `ResetFooter::buttons` gives them, then the
+    /// [`extra_buttons`](FormDialog::extra_buttons) from 2 on.
     pub picked: Option<usize>,
     /// The value, the pass the dialog closed as OK while it could be accepted.
     pub accepted: Option<V>,
@@ -130,6 +131,7 @@ pub struct FormDialog<'a, V: Value + Default> {
     closable: bool,
     accept_stays_open: bool,
     footer_extra: Option<FooterExtraFn<'a>>,
+    extra_buttons: Vec<FooterButton>,
     shaped: Option<Box<dyn FnOnce(Dialog<'a>) -> Dialog<'a> + 'a>>,
     answers: Vec<HostAnswer>,
     reset_with: Option<ResetWithFn<'a, V>>,
@@ -154,6 +156,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             closable: true,
             accept_stays_open: false,
             footer_extra: None,
+            extra_buttons: Vec::new(),
             shaped: None,
             answers: Vec::new(),
             reset_with: None,
@@ -233,6 +236,13 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         self
     }
 
+    /// Footer buttons after OK and Cancel, which keep the dialog open: the caller acts on
+    /// [`FormOutput::picked`].
+    pub fn extra_buttons(mut self, buttons: impl IntoIterator<Item = FooterButton>) -> Self {
+        self.extra_buttons = buttons.into_iter().map(|button| button.stays_open(true)).collect();
+        self
+    }
+
     /// Changes the built [`Dialog`] before it shows, for the settings this type has no setter for.
     pub fn shaped(mut self, shape: impl FnOnce(Dialog<'a>) -> Dialog<'a> + 'a) -> Self {
         self.shaped = Some(Box::new(shape));
@@ -275,6 +285,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             closable,
             accept_stays_open,
             footer_extra,
+            extra_buttons,
             shaped,
             mut answers,
             reset_with,
@@ -285,7 +296,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         let name: Arc<str> = title.as_str().into();
         let bind = Rc::new(RefCell::new(bind));
 
-        let reset = ResetFooter::new(ui, cancel_label, alt_resets);
+        let reset = ResetFooter::new(ui, cancel_label, alt_resets).extra(extra_buttons);
         let mut accept =
             FooterButton::new(ok_label.unwrap_or_else(|| common.ok.clone()), DialogRole::Accept).enabled(ok_enabled).stays_open(accept_stays_open);
         if let (false, Some(reason)) = (ok_enabled, &ok_reason) {

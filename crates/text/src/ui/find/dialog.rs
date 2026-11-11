@@ -250,7 +250,7 @@ impl StackDialog for FindReplaceDialog {
         buttons.push(FooterButton::new(words.close_button.clone(), DialogRole::Cancel));
         let close_at = buttons.len() - 1;
 
-        let shown = Dialog::new(words.title.clone()).modeless().buttons(buttons).show(ui, |ui, _| {
+        let shown = Dialog::new(words.title.clone()).modeless().side_buttons(true).buttons(buttons).show(ui, |ui, _| {
             Stack::new().show(ui, |ui, _| {
                 if word {
                     let tabs = [

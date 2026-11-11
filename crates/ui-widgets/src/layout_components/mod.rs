@@ -2,7 +2,8 @@
 //! lays its children out (6.3).
 
 use crate::contract::{
-    Access, BodyCx, Common, Component, Container, ContainerProps, Cx, FooterRegion, Gap, HeaderRegion, Pad, Role, Scroll, Sizing, ThemeScope,
+    Access, BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, FooterPlace, FooterRegion, Gap, HeaderRegion, Pad, Role, Scroll,
+    Sizing, ThemeScope,
 };
 use crate::layout::{BodyLayout, RowAlign};
 use crate::style::{ComponentStyle, StyleCx};
@@ -215,6 +216,15 @@ impl<'a> Stack<'a> {
     pub fn footer(mut self, content: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'a) -> Self {
         self.props = self.props.footer(FooterRegion::new());
         self.footer = Some(Box::new(content));
+        self
+    }
+
+    /// The footer stands in a column at the end edge, beside the body and at its top, as wide as its widest child;
+    /// a child that fills the width (`Button::fill_width`) takes that width. Set it after [`footer`](Stack::footer).
+    #[must_use]
+    pub fn footer_beside(mut self) -> Self {
+        self.props.end = Some(EndRegion::new());
+        self.props = self.props.footer(FooterRegion::new().place(FooterPlace::EndTop));
         self
     }
 }

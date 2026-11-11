@@ -23,15 +23,14 @@ use std::ops::Range;
 use craft_behavior::{Selection, SelectionChange, keyed};
 use craft_host::Section;
 use craft_theme::variant::Tone;
-use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{
-    Bind, CollectionEvent, NoValue, Outcome, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing, clicked,
+    Bind, CollectionEvent, NoValue, Outcome, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing,
 };
 use craft_ui::dialog::{Dialog, DialogId, DialogOutput, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft_ui::display::Text;
 use craft_ui::form::Field;
-use craft_ui::layout_components::{Row, Stack};
+use craft_ui::layout_components::Stack;
 use craft_ui::list::{List, ListRow};
 use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::runtime::env::Env;
@@ -65,7 +64,7 @@ craft_ui::words! {
 /// How many suggestions the app asks [`Dictionary::suggest`](crate::spell::Dictionary::suggest) for.
 pub const SUGGESTION_COUNT: usize = 8;
 
-/// A button of the right-hand column that the dialog or the app acts on.
+/// A button of the side column, or a body change, that the dialog or the app acts on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Press {
     Ignore,
@@ -161,8 +160,8 @@ impl Outcome for SpellingOutput {
 
 /// Edit › Check Spelling. Photoshop's layout: at the left, "Not in Dictionary:" with the word (read only),
 /// "Change To:" (a text field, opening with the first suggestion), "Suggestions:" (a list), Check All Layers, and
-/// "Spell check complete." once the list is empty; at the right, the buttons Ignore, Ignore All, Change, Change All
-/// and Add, disabled when the list is empty, and Done in the footer.
+/// "Spell check complete." once the list is empty; at the right, a column of Done and the buttons Ignore, Ignore All,
+/// Change, Change All and Add, which are disabled when the list is empty.
 ///
 /// - A click on a suggestion puts it in Change To; a double click or Enter also changes.
 /// - Enter is Done unless Change To has focus; Escape and the close action are Done too (nothing to undo: every
@@ -225,75 +224,68 @@ impl CheckSpellingDialog {
         let item = self.items.get(self.index).cloned();
         let has_item = item.is_some();
         let body_press = Cell::new(None::<Press>);
-        let button_press = Cell::new(None::<Press>);
         let CheckSpellingDialog { change_to, all_layers, open, .. } = self;
 
-        let dialog = Dialog::new(words.title.clone()).buttons([FooterButton::new(words.done.clone(), DialogRole::Accept)]).opened(Bind::bound(open));
+        let actions = [
+            (&words.ignore, Press::Ignore),
+            (&words.ignore_all, Press::IgnoreAll),
+            (&words.change, Press::Change),
+            (&words.change_all, Press::ChangeAll),
+            (&words.add, Press::Add),
+        ];
+        let buttons = std::iter::once(FooterButton::new(words.done.clone(), DialogRole::Accept))
+            .chain(actions.iter().map(|(label, _)| FooterButton::new((*label).clone(), DialogRole::Other).stays_open(true).enabled(has_item)));
+        let dialog = Dialog::new(words.title.clone()).side_buttons(true).buttons(buttons).opened(Bind::bound(open));
         let shown = dialog.show(ui, |ui, _| {
-            Row::new().show(ui, |ui, _| {
-                Stack::new().show(ui, |ui, _| {
-                    let word = item.as_ref().map_or_else(String::new, |i| i.word.clone());
-                    Field::new(words.not_in_dictionary.clone()).id_salt("word").show(ui, |ui, _| {
-                        TextField::new(words.not_in_dictionary.clone(), Bind::given(word.clone())).enabled(false).show(ui);
-                    });
-                    Field::new(words.change_to.clone()).id_salt("change-to").show(ui, |ui, _| {
-                        TextField::new(words.change_to.clone(), Bind::bound(&mut *change_to)).enabled(has_item).show(ui);
-                    });
-                    Text::new(words.suggestions.clone()).show(ui);
-                    let suggestions: &[String] = item.as_ref().map_or(&[], |i| i.suggestions.as_slice());
-                    let positions: Vec<usize> = (0..suggestions.len()).collect();
-                    let source = keyed(&positions, |at: &usize| *at);
-                    let mut selection =
-                        suggestions.iter().position(|s| s.as_str() == change_to.as_str()).map_or_else(Selection::default, Selection::single);
-                    let events = List::new(words.suggestions.clone())
-                        .select(SelectMode::Single)
-                        .sizing(Sizing::Content)
-                        .natural_height(true)
-                        .selection(Bind::bound(&mut selection))
-                        .show_items(ui, &source, &mut |at, _| ListRow::new(suggestions[*at].clone()))
-                        .events;
-                    for event in events {
-                        match event {
-                            CollectionEvent::Selection(SelectionChange::Set(rows)) => {
-                                if let Some(row) = rows.last() {
-                                    change_to.clone_from(&suggestions[*row]);
-                                }
-                            }
-                            CollectionEvent::Activate(row) => {
-                                change_to.clone_from(&suggestions[row]);
-                                body_press.set(Some(Press::Change));
-                            }
-                            _ => {}
-                        }
-                    }
-                    let before = *all_layers;
-                    Checkbox::new(Bind::bound(&mut *all_layers)).label(words.all_layers.clone()).show(ui);
-                    if *all_layers != before {
-                        body_press.set(Some(Press::Relist));
-                    }
-                    if !has_item {
-                        Notice::new(Tone::Neutral, words.complete.clone()).layout(NoticeLayout::Centred).show(ui);
-                    }
+            Stack::new().show(ui, |ui, _| {
+                let word = item.as_ref().map_or_else(String::new, |i| i.word.clone());
+                Field::new(words.not_in_dictionary.clone()).id_salt("word").show(ui, |ui, _| {
+                    TextField::new(words.not_in_dictionary.clone(), Bind::given(word.clone())).enabled(false).show(ui);
                 });
-                Stack::new().show(ui, |ui, _| {
-                    let buttons = [
-                        (&words.ignore, Press::Ignore),
-                        (&words.ignore_all, Press::IgnoreAll),
-                        (&words.change, Press::Change),
-                        (&words.change_all, Press::ChangeAll),
-                        (&words.add, Press::Add),
-                    ];
-                    for (label, which) in buttons {
-                        if clicked(&Button::new(label.clone()).enabled(has_item).show(ui)) {
-                            button_press.set(Some(which));
-                        }
-                    }
+                Field::new(words.change_to.clone()).id_salt("change-to").show(ui, |ui, _| {
+                    TextField::new(words.change_to.clone(), Bind::bound(&mut *change_to)).enabled(has_item).show(ui);
                 });
+                Text::new(words.suggestions.clone()).show(ui);
+                let suggestions: &[String] = item.as_ref().map_or(&[], |i| i.suggestions.as_slice());
+                let positions: Vec<usize> = (0..suggestions.len()).collect();
+                let source = keyed(&positions, |at: &usize| *at);
+                let mut selection =
+                    suggestions.iter().position(|s| s.as_str() == change_to.as_str()).map_or_else(Selection::default, Selection::single);
+                let events = List::new(words.suggestions.clone())
+                    .select(SelectMode::Single)
+                    .sizing(Sizing::Content)
+                    .natural_height(true)
+                    .selection(Bind::bound(&mut selection))
+                    .show_items(ui, &source, &mut |at, _| ListRow::new(suggestions[*at].clone()))
+                    .events;
+                for event in events {
+                    match event {
+                        CollectionEvent::Selection(SelectionChange::Set(rows)) => {
+                            if let Some(row) = rows.last() {
+                                change_to.clone_from(&suggestions[*row]);
+                            }
+                        }
+                        CollectionEvent::Activate(row) => {
+                            change_to.clone_from(&suggestions[row]);
+                            body_press.set(Some(Press::Change));
+                        }
+                        _ => {}
+                    }
+                }
+                let before = *all_layers;
+                Checkbox::new(Bind::bound(&mut *all_layers)).label(words.all_layers.clone()).show(ui);
+                if *all_layers != before {
+                    body_press.set(Some(Press::Relist));
+                }
+                if !has_item {
+                    Notice::new(Tone::Neutral, words.complete.clone()).layout(NoticeLayout::Centred).show(ui);
+                }
             });
         });
-        let DialogOutput { response, closed, .. } = shown.output;
+        let DialogOutput { response, closed, picked } = shown.output;
+        let button_press = picked.and_then(|at| actions.get(at.checked_sub(1)?)).map(|(_, which)| *which);
 
-        match body_press.get().or(button_press.get()) {
+        match body_press.get().or(button_press) {
             Some(Press::Ignore) => {
                 self.index = (self.index + 1).min(self.items.len());
                 self.change_to = self.items.get(self.index).and_then(|i| i.suggestions.first()).cloned().unwrap_or_default();

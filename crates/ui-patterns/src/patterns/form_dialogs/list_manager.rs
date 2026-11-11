@@ -261,8 +261,8 @@ fn is_enabled(action: &ListManagerAction, entries: &[ListManagerEntry], folder: 
 ///   box also filters the rows to the names that match it.
 /// - Keys: Up and Down in the box or the list move the selection, Enter and a double click run the first action when
 ///   it is enabled, Delete in the list runs the `delete` action, Escape cancels.
-/// - Actions are the footer's buttons, in the given order, with Cancel last. The app replaces `entries` between
-///   passes; the name box keeps its text.
+/// - Actions are the buttons in a column beside the list: the first action, Cancel, then the other actions in the
+///   given order. The app replaces `entries` between passes; the name box keeps its text.
 #[must_use = "show the dialog with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
 pub struct ListManager<'a> {
@@ -334,13 +334,15 @@ impl<'a> ListManager<'a> {
             })
             .collect();
         buttons.push(FooterButton::new(common.cancel.clone(), DialogRole::Cancel));
-        let mut dialog = Dialog::new(title.clone()).collection_body().close_on_enter(false).buttons(buttons).settle_buttons(move |cx, buttons| {
-            let folder = cx.env.folder();
-            let typed = cx.memory::<Session>().name.clone();
-            for (button, action) in buttons.iter_mut().zip(actions) {
-                button.set_enabled(is_enabled(action, entries, &folder, &typed));
-            }
-        });
+        let mut dialog = Dialog::new(title.clone()).collection_body().close_on_enter(false).side_buttons(true).buttons(buttons).settle_buttons(
+            move |cx, buttons| {
+                let folder = cx.env.folder();
+                let typed = cx.memory::<Session>().name.clone();
+                for (button, action) in buttons.iter_mut().zip(actions) {
+                    button.set_enabled(is_enabled(action, entries, &folder, &typed));
+                }
+            },
+        );
         if let Some(open) = open {
             dialog = dialog.opened(open);
         }
