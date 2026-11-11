@@ -318,7 +318,7 @@ impl GpuContext for WgpuContext {
                 // failure to the default uncaptured-error handler, which panics, unless a scope
                 // captures it first. An error scope converts that into a value this can return
                 // as a GpuFault instead of taking the worker down with it.
-                d.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+                let error_scope = d.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
                 let buffer = d.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some(label),
                     size: padded_len,
@@ -332,7 +332,7 @@ impl GpuContext for WgpuContext {
                     padded.resize(usize::try_from(padded_len).unwrap_or(bytes.len()), 0);
                     d.queue.write_buffer(&buffer, 0, &padded);
                 }
-                if let Some(err) = pollster::block_on(d.device.pop_error_scope()) {
+                if let Some(err) = pollster::block_on(error_scope.pop()) {
                     return Err(GpuFault::Operation(format!("upload_buffer: device reported an allocation error: {err}")));
                 }
                 let id = u32::try_from(d.buffers.len()).map_err(|_| GpuFault::Operation("too many buffers".into()))?;
@@ -351,14 +351,11 @@ impl GpuContext for WgpuContext {
                 buffers.get(handle.0 as usize).and_then(Option::as_ref).map(Vec::len).ok_or_else(|| GpuFault::InvalidJob("bad handle".into()))
             }
             #[cfg(all(not(target_arch = "wasm32"), feature = "adapter-probe"))]
-            Backing::Device(d) => d
-                .buffers
-                .get(handle.0 as usize)
-                .and_then(Option::as_ref)
-                .ok_or_else(|| GpuFault::InvalidJob("bad handle".into()))
-                .and_then(|(_, true_len)| {
-                    usize::try_from(*true_len).map_err(|_| GpuFault::Operation("buffer size exceeds host address space".into()))
-                }),
+            Backing::Device(d) => {
+                d.buffers.get(handle.0 as usize).and_then(Option::as_ref).ok_or_else(|| GpuFault::InvalidJob("bad handle".into())).and_then(
+                    |(_, true_len)| usize::try_from(*true_len).map_err(|_| GpuFault::Operation("buffer size exceeds host address space".into())),
+                )
+            }
         }
     }
 
@@ -400,7 +397,7 @@ impl GpuContext for WgpuContext {
                 // Same reasoning as upload_buffer's error scope: an allocation failure for the
                 // read-staging buffer must become a GpuFault, not reach the default
                 // uncaptured-error handler and panic.
-                d.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+                let error_scope = d.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
                 let staging = d.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("craft-gpu-wgpu.read-staging"),
                     size: copy_len,
@@ -410,7 +407,7 @@ impl GpuContext for WgpuContext {
                 let mut encoder = d.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("craft-gpu-wgpu.read-copy") });
                 encoder.copy_buffer_to_buffer(buffer, 0, &staging, 0, copy_len);
                 d.queue.submit(Some(encoder.finish()));
-                if let Some(err) = pollster::block_on(d.device.pop_error_scope()) {
+                if let Some(err) = pollster::block_on(error_scope.pop()) {
                     return Err(GpuFault::Operation(format!("request_read: device reported an allocation error: {err}")));
                 }
                 let state = std::sync::Arc::new(std::sync::Mutex::new(None));

@@ -34,8 +34,7 @@ impl GpuContext for MemContext {
     }
 
     fn request_read(&mut self, handle: HandleId) -> Result<ReadRequest, GpuFault> {
-        let bytes =
-            self.buffers.get(handle.0 as usize).and_then(Option::as_ref).cloned().ok_or_else(|| GpuFault::InvalidJob("bad handle".into()))?;
+        let bytes = self.buffers.get(handle.0 as usize).and_then(Option::as_ref).cloned().ok_or_else(|| GpuFault::InvalidJob("bad handle".into()))?;
         let request = ReadRequest(self.next_request);
         self.next_request = self.next_request.wrapping_add(1);
         self.ready.push(ReadOutcome { request, handle, result: Ok(bytes) });
