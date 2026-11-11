@@ -20,9 +20,9 @@ use crate::primitives::PaintShape;
 use crate::runtime::access::Numeric;
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
-use crate::style::{ComponentStyle, RuleKind, ScrollBarLook, StyleColor, StyleCx};
+use crate::style::{ComponentStyle, ScrollBarKind, ScrollBarLook, StyleCx};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
-use craft_behavior::scroll::{self, ScrollSpan};
+use craft_behavior::scroll::ScrollSpan;
 use craft_behavior::{Axis, CanvasView, Metrics, PartKey, PartRef, PressPhase};
 use egui::{CornerRadius, Pos2, Rect, Response, Vec2};
 use std::ops::{Deref, Range};
@@ -42,10 +42,6 @@ pub struct ScrollbarsStyle {
     #[style(metrics)]
     metrics: Metrics,
     look: ScrollBarLook,
-    /// Between a bar's edge and its thumb.
-    inset: f32,
-    /// The tracks and the corner.
-    track: StyleColor,
 }
 
 /// One axis of the view, in document units counted from the document's start on that axis.
@@ -241,12 +237,7 @@ impl Component for CanvasScrollbars<'_> {
     type Output = CanvasScrollbarsOutput;
 
     fn style(cx: &StyleCx<'_>, _: CanvasScrollbarsStyleKey) -> ScrollbarsStyle {
-        ScrollbarsStyle {
-            metrics: Metrics::new(),
-            look: cx.scroll_bar(),
-            inset: cx.tokens.space.gap.tight,
-            track: cx.color(cx.tokens.color.surface.chrome),
-        }
+        ScrollbarsStyle { metrics: Metrics::new(), look: cx.scroll_bar(ScrollBarKind::Docked) }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
@@ -292,27 +283,13 @@ impl Component for CanvasScrollbars<'_> {
         let bars = self.bars(&view, cx.rect, style.look.thickness);
         let draw = ui.draw();
         if let (Some(h), Some(v)) = (&bars.horizontal, &bars.vertical) {
-            draw.fill(&PaintShape::Rect(Rect::from_min_max(Pos2::new(v.rect.left(), h.rect.top()), cx.rect.max), CornerRadius::ZERO), style.track);
+            draw.fill(
+                &PaintShape::Rect(Rect::from_min_max(Pos2::new(v.rect.left(), h.rect.top()), cx.rect.max), CornerRadius::ZERO),
+                cx.resolve(&style.look.track),
+            );
         }
         for (key, axis, bar) in bars.each() {
-            let track = bar.rect;
-            draw.fill(&PaintShape::Rect(track, CornerRadius::ZERO), style.track);
-            let (from, to) = match axis {
-                Axis::X => (track.left_top(), track.right_top()),
-                _ => (track.left_top(), track.left_bottom()),
-            };
-            draw.rule(RuleKind::Edge, from, to);
-            let length = if axis == Axis::X { track.width() } else { track.height() };
-            let (at, len) = scroll::thumb(&bar.span, length, style.look.min_thumb);
-            let thumb = match axis {
-                Axis::X if cx.flow.is_rtl() => Rect::from_min_size(Pos2::new(track.max.x - at - len, track.min.y), Vec2::new(len, track.height())),
-                Axis::X => Rect::from_min_size(Pos2::new(track.min.x + at, track.min.y), Vec2::new(len, track.height())),
-                _ => Rect::from_min_size(Pos2::new(track.min.x, track.min.y + at), Vec2::new(track.width(), len)),
-            }
-            .shrink(style.inset);
-            // Fully round: the radius is half the thumb's thickness.
-            let radius = (thumb.width().min(thumb.height()) / 2.0).clamp(0.0, f32::from(u8::MAX)) as u8;
-            draw.fill(&PaintShape::Rect(thumb, CornerRadius::same(radius)), cx.resolve_part(thumb_of(key), &style.look.thumb));
+            draw.scroll_bar(&style.look, bar.rect, axis, cx.flow.is_rtl(), &bar.span, &cx.part_state(thumb_of(key)));
         }
     }
 

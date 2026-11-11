@@ -101,10 +101,23 @@ pub(crate) fn handle_look(tokens: &UiTokens) -> HandleLook {
     HandleLook { side: tokens.size.handle.md, fill, stroke: style_color(c.overlay.handle_stroke), stroke_width: tokens.stroke.thin }
 }
 
+/// Where a scroll bar sits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ScrollBarKind {
+    /// Over the content at its end edge: a clear track that tints under the pointer, a thumb as thick as the track.
+    Overlay,
+    /// Beside the view along its bottom and right, as a document window's bars: a solid chrome track with a divider on
+    /// the side facing the view, and a thumb inset from the track's edges.
+    Docked,
+}
+
 /// A scroll bar's track and thumb.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ScrollBarLook {
+    /// Where the bar sits.
+    pub kind: ScrollBarKind,
     /// The track fill per state.
     pub track: Stateful<StyleColor>,
     /// The thumb fill per state.
@@ -113,21 +126,36 @@ pub struct ScrollBarLook {
     pub thickness: f32,
     /// The shortest the thumb gets along the bar.
     pub min_thumb: f32,
+    /// Between the track's edges and the painted thumb.
+    pub inset: f32,
+    /// The rule along the side of the track that faces the view.
+    pub edge: Option<RuleLook>,
     /// The length of the fade at an edge past which content is hidden.
     pub fade: f32,
 }
 
-pub(crate) fn scroll_bar_look(tokens: &UiTokens) -> ScrollBarLook {
+/// The shortest a scroll bar's thumb gets along the bar, whatever the bar's kind.
+pub(crate) fn min_thumb(tokens: &UiTokens) -> f32 {
+    tokens.size.handle.md * 2.0
+}
+
+pub(crate) fn scroll_bar_look(tokens: &UiTokens, kind: ScrollBarKind) -> ScrollBarLook {
     let c = &tokens.color;
     let clear = style_color(Rgba::TRANSPARENT);
-    let track = Stateful::new(clear).off(craft_theme::States::new(clear, style_color(c.state.hover), style_color(c.state.hover), clear));
     let thumb = Stateful::new(style_color(c.text.faint)).off(craft_theme::States::new(
         style_color(c.text.faint),
         style_color(c.text.muted),
         style_color(c.text.normal),
         style_color(c.state.disabled_fill),
     ));
-    ScrollBarLook { track, thumb, thickness: tokens.size.handle.sm, min_thumb: tokens.size.handle.md * 2.0, fade: tokens.size.scroll_fade }
+    let (track, inset, edge) = match kind {
+        ScrollBarKind::Overlay => {
+            let hover = style_color(c.state.hover);
+            (Stateful::new(clear).off(craft_theme::States::new(clear, hover, hover, clear)), 0.0, None)
+        }
+        ScrollBarKind::Docked => (Stateful::new(style_color(c.surface.chrome)), tokens.space.gap.tight, Some(rule_look(tokens, RuleKind::Divider))),
+    };
+    ScrollBarLook { kind, track, thumb, thickness: tokens.size.handle.sm, min_thumb: min_thumb(tokens), inset, edge, fade: tokens.size.scroll_fade }
 }
 
 /// The reset dot's colours and diameter.

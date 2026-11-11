@@ -34,16 +34,6 @@ pub(super) fn track_length(rect: Rect, axis: Axis) -> f32 {
     }
 }
 
-/// The thumb `at` points from the start edge of `track`, `len` long; the start edge of the x axis is the right
-/// edge under right-to-left.
-pub(crate) fn thumb_rect(track: Rect, axis: Axis, rtl: bool, at: f32, len: f32) -> Rect {
-    match axis {
-        Axis::X if rtl => Rect::from_min_size(egui::pos2(track.max.x - at - len, track.min.y), Vec2::new(len, track.height())),
-        Axis::X => Rect::from_min_size(egui::pos2(track.min.x + at, track.min.y), Vec2::new(len, track.height())),
-        _ => Rect::from_min_size(egui::pos2(track.min.x, track.min.y + at), Vec2::new(track.width(), len)),
-    }
-}
-
 /// What one scroll bar can move the visible range to this pass.
 pub(crate) struct ScrollMove {
     pub(super) key: PartKey,

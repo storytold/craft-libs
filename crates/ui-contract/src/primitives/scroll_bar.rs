@@ -1,17 +1,9 @@
 //! `ScrollBar`: the track and thumb of a scroll part, with state.
 
-use crate::style::{ScrollBarLook, StateSet};
-use egui::{Color32, Direction, Rect, Shape, Vec2, pos2, vec2};
-
-/// Which way a bar runs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum BarAxis {
-    /// Along x.
-    Horizontal,
-    /// Along y.
-    Vertical,
-}
+use super::rule::Rule;
+use crate::style::{ScrollBarKind, ScrollBarLook, StateSet};
+use craft_behavior::{Axis, ScrollSpan};
+use egui::{Color32, CornerRadius, Direction, Rect, Shape, Vec2, pos2};
 
 /// The scroll bar painter.
 pub struct ScrollBar;
@@ -45,21 +37,16 @@ impl HiddenContent {
 }
 
 impl ScrollBar {
-    /// The thumb inside `track` for `viewport` points of `content` scrolled by `offset`: its length is the shown
-    /// share of the track, at least `look.min_thumb`, and it sits at the offset's share of the travel.
-    pub fn thumb(look: &ScrollBarLook, axis: BarAxis, track: Rect, content: f32, viewport: f32, offset: f32) -> Rect {
-        let length = match axis {
-            BarAxis::Horizontal => track.width(),
-            BarAxis::Vertical => track.height(),
-        };
-        let share = if content > 0.0 { (viewport / content).clamp(0.0, 1.0) } else { 1.0 };
-        let thumb = (length * share).max(look.min_thumb.min(length));
-        let travel = (length - thumb).max(0.0);
-        let range = (content - viewport).max(f32::EPSILON);
-        let at = travel * (offset / range).clamp(0.0, 1.0);
+    /// The thumb inside `track`, a bar along `axis`, for `span`: its length is the shown share of the track, at least
+    /// `min_thumb`, and it sits at the visible range's share of the travel, from the right under right-to-left
+    /// on the x axis. This is the thumb a press takes; the painted one is inset by its look's `inset`.
+    pub fn thumb(min_thumb: f32, track: Rect, axis: Axis, rtl: bool, span: &ScrollSpan) -> Rect {
+        let length = if axis == Axis::X { track.width() } else { track.height() };
+        let (at, len) = craft_behavior::scroll::thumb(span, length, min_thumb);
         match axis {
-            BarAxis::Horizontal => Rect::from_min_size(pos2(track.min.x + at, track.min.y), vec2(thumb, track.height())),
-            BarAxis::Vertical => Rect::from_min_size(pos2(track.min.x, track.min.y + at), vec2(track.width(), thumb)),
+            Axis::X if rtl => Rect::from_min_size(pos2(track.max.x - at - len, track.min.y), Vec2::new(len, track.height())),
+            Axis::X => Rect::from_min_size(pos2(track.min.x + at, track.min.y), Vec2::new(len, track.height())),
+            _ => Rect::from_min_size(pos2(track.min.x, track.min.y + at), Vec2::new(track.width(), len)),
         }
     }
 
@@ -85,12 +72,29 @@ impl ScrollBar {
         .collect()
     }
 
-    /// The shapes of the track and the thumb in `state`.
-    pub fn shapes(look: &ScrollBarLook, track: Rect, thumb: Rect, state: &StateSet) -> Vec<Shape> {
-        let radius = thumb.width().min(thumb.height()) / 2.0;
-        vec![
-            Shape::rect_filled(track, radius, state.resolve(&look.track).egui()),
-            Shape::rect_filled(thumb, radius, state.resolve(&look.thumb).egui()),
-        ]
+    /// The shapes of the bar in `track` along `axis` for `span`, in `state`: the track, a docked bar's rule along the
+    /// side facing the view (its top for a horizontal bar, its left for a vertical one), and the fully round thumb.
+    pub fn shapes(
+        look: &ScrollBarLook,
+        track: Rect,
+        axis: Axis,
+        rtl: bool,
+        span: &ScrollSpan,
+        state: &StateSet,
+        pixels_per_point: f32,
+    ) -> Vec<Shape> {
+        let thumb = Self::thumb(look.min_thumb, track, axis, rtl, span).shrink(look.inset);
+        let round = |rect: Rect| CornerRadius::from(rect.width().min(rect.height()) / 2.0);
+        let track_round = match look.kind {
+            ScrollBarKind::Overlay => round(thumb),
+            ScrollBarKind::Docked => CornerRadius::ZERO,
+        };
+        let mut shapes = vec![Shape::rect_filled(track, track_round, state.resolve(&look.track).egui())];
+        if let Some(edge) = &look.edge {
+            let (from, to) = if axis == Axis::X { (track.left_top(), track.right_top()) } else { (track.left_top(), track.left_bottom()) };
+            shapes.extend(Rule::shapes(edge, from, to, pixels_per_point));
+        }
+        shapes.push(Shape::rect_filled(thumb, round(thumb), state.resolve(&look.thumb).egui()));
+        shapes
     }
 }

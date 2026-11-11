@@ -1,7 +1,7 @@
 //! `PartsCx` and `PartBuilder`: step 7's part declarations.
 
 use super::measure::MeasureCx;
-use super::scroll::{ScrollDecl, THUMB, thumb_covers_centre, thumb_rect, track_length};
+use super::scroll::{ScrollDecl, THUMB, thumb_covers_centre};
 use crate::contract::{Component, Tooltip};
 use crate::primitives::sensing::PartDecl;
 use crate::runtime::focus::FocusShape;
@@ -349,9 +349,8 @@ impl<C: Component> PartsCx<'_, C> {
     /// track; `Pointer::scroll_moved(key)` reads the range the part moved to.
     pub fn scroll(&mut self, key: PartKey, rect: Rect, axis: Axis, span: ScrollSpan) {
         let rtl = self.flow.is_rtl();
-        let min_thumb = crate::style::scroll_bar_look(self.measure.tokens).min_thumb;
-        let (at, len) = craft_behavior::scroll::thumb(&span, track_length(rect, axis), min_thumb);
-        let thumb = thumb_rect(rect, axis, rtl, at, len);
+        let min_thumb = crate::style::min_thumb(self.measure.tokens);
+        let thumb = crate::primitives::ScrollBar::thumb(min_thumb, rect, axis, rtl, &span);
         self.part(key, rect)
             .sense(Sense::CLICK)
             .access_click(!thumb_covers_centre(rect, thumb, axis))

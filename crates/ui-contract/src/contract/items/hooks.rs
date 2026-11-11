@@ -18,7 +18,7 @@ use crate::runtime::env::WheelScope;
 use crate::runtime::env::{AppValues, ArenaId, Env, ItemFacts};
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::{focus, keys, layout_memory, lazy, overlay, wheel};
-use crate::style::{ComponentStyle as _, StyleCx, SurfaceKind, scroll_bar_look, surface_style};
+use crate::style::{ComponentStyle as _, ScrollBarKind, StyleCx, SurfaceKind, scroll_bar_look, surface_style};
 use craft_behavior::{
     Axis, CancelReason, EditEvent, Intent, ItemLayout, Mixed, Proposal, ScrollPos, ScrollSpan, SelectionModel, Sense, WheelRoom, WheelTaker,
 };
@@ -273,7 +273,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             return;
         }
         let view = self.below_header(pcx.content_rect);
-        let thickness = scroll_bar_look(pcx.tokens).thickness;
+        let thickness = scroll_bar_look(pcx.tokens, ScrollBarKind::Overlay).thickness;
         let track = if pcx.flow.is_rtl() {
             Rect::from_min_max(view.min, Pos2::new(view.min.x + thickness, view.max.y))
         } else {
@@ -661,7 +661,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             Env::restore(&ctx, installed);
         }
         if self.scrolls {
-            let look = scroll_bar_look(&env.tokens);
+            let look = scroll_bar_look(&env.tokens, ScrollBarKind::Overlay);
             // The rows blend into the surface the collection paints, else the one it sits on.
             let own = cx.style.surface().and_then(|surface| surface.kind_in(&cx.core.state));
             let background = surface_style(&env.tokens, SurfaceKind::under(own, env.surface)).fill;
@@ -676,11 +676,9 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             let content = f64::from(self.content.y).max(f64::from(rect.height()));
             if content > f64::from(rect.height()) {
                 let span = ScrollSpan::new(0.0..content, self.offset..self.offset + f64::from(rect.height()));
-                let (at, len) = craft_behavior::scroll::thumb(&span, track.height(), look.min_thumb);
-                let thumb = crate::contract::cx::thumb_rect(track, Axis::Y, rtl, at, len);
                 let result = cx.core.results.get(&(SCROLL, Some(crate::contract::cx::THUMB))).cloned().unwrap_or(crate::primitives::PartResult::IDLE);
                 let state = crate::contract::steps::part_state(&result, cx.core.resolved.enabled, None);
-                ui.painter().extend(ScrollBar::shapes(&look, track, thumb, &state));
+                ui.painter().extend(ScrollBar::shapes(&look, track, Axis::Y, rtl, &span, &state, ui.ctx().pixels_per_point()));
             }
         }
         self.layout = Some(layout);

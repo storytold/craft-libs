@@ -16,7 +16,7 @@ use crate::runtime::commands::{self, CommandRef, CommandSet, CommandState};
 use crate::runtime::egui::{alloc, child};
 use crate::runtime::env::{Env, Label};
 use crate::runtime::memory::{MemoryStage, sub};
-use crate::style::{ComponentStyle, StyleCx, TypeRole, scroll_bar_look};
+use crate::style::{ComponentStyle, ScrollBarKind, StyleCx, TypeRole, scroll_bar_look};
 use craft_behavior::grid::resolve_columns;
 use craft_behavior::{
     Axis, ColumnKey, ColumnWidth, CursorIcon, DropOperation, Flow, HitLevel, HitPriority, IconId, Insets, Intent, Metrics, NavMove, NavShape,
@@ -278,7 +278,7 @@ impl Header {
         }
         let area = pcx.content_rect;
         let row = Rect::from_min_size(area.min, Vec2::new(area.width(), self.height));
-        let grip = scroll_bar_look(pcx.tokens).thickness;
+        let grip = scroll_bar_look(pcx.tokens, ScrollBarKind::Overlay).thickness;
         let rtl = pcx.flow.is_rtl();
         let mut flow = Flow::new(row, rtl);
         let widths = self.widths(area.width());

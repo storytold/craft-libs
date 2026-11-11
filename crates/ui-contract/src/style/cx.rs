@@ -2,7 +2,9 @@
 
 use super::key::{EnvKey, Ink};
 use super::look::{DataColor, FocusLook, StyleColor, SurfaceKind, SurfaceLook, TrackLook};
-use super::paint::{HandleLook, ResetMarkLook, RuleKind, RuleLook, ScrollBarLook, handle_look, reset_mark_look, rule_look, scroll_bar_look};
+use super::paint::{
+    HandleLook, ResetMarkLook, RuleKind, RuleLook, ScrollBarKind, ScrollBarLook, handle_look, reset_mark_look, rule_look, scroll_bar_look,
+};
 use super::surface::{SurfaceStyle, surface_style};
 use super::tokens::UiTokens;
 use crate::fonts::stack_facts;
@@ -339,9 +341,9 @@ impl<'a> StyleCx<'a> {
         handle_look(self.tokens)
     }
 
-    /// The look of a scroll bar.
-    pub fn scroll_bar(&self) -> ScrollBarLook {
-        scroll_bar_look(self.tokens)
+    /// The look of a scroll bar of `kind`.
+    pub fn scroll_bar(&self, kind: ScrollBarKind) -> ScrollBarLook {
+        scroll_bar_look(self.tokens, kind)
     }
 
     /// The state layer: the theme's hover and press fills, clear at rest and while disabled. A part declared

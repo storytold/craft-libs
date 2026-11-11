@@ -8,11 +8,11 @@ use super::stack::TrackSizes;
 use crate::clock::{Follow, FollowMode};
 use crate::time::{Tick, TimeRange, TimeView, VIEW_EXTENT_PAST_END};
 use crate::timecode::TimeFormat;
-use craft_behavior::scroll::{self, ScrollSpan};
+use craft_behavior::scroll::ScrollSpan;
 use craft_behavior::{Axis, ColumnWidth, EditEvent, Granularity, Intent, Metrics, Mixed, NavMove, PartKey, Sense, Wheel};
 use craft_ui::contract::{
     Access, Bind, BindMut, CommandSet, Commands as _, Common, Component, Container, ContainerProps, Cx, Edit as _, EditResponse, Focus as _, Name,
-    Outcome, PaintUi, PartsCx, Pointer as _, Props, Remember as _, Role, Sizing, Styled as _, WordSetCx as _,
+    Outcome, PaintUi, PartsCx, Pointer as _, Props, Remember as _, Role, Sizing, Styled as _, THUMB, WordSetCx as _,
 };
 use craft_ui::primitives::{PaintShape, StrokeWidth};
 use craft_ui::runtime::access::Numeric;
@@ -20,7 +20,7 @@ use craft_ui::runtime::commands::CommandState;
 use craft_ui::runtime::env::{AppValues, EnvValue, EnvView, Label};
 use craft_ui::runtime::focus::KeyUse;
 use craft_ui::runtime::motion::{Animate as _, spec};
-use craft_ui::style::{ComponentStyle, RuleKind, ScrollBarLook, StyleColor, StyleCx, SurfaceKind};
+use craft_ui::style::{ComponentStyle, ScrollBarKind, ScrollBarLook, StyleColor, StyleCx, SurfaceKind};
 use egui::{CornerRadius, Pos2, Rect, Response, Vec2};
 use std::cell::Cell;
 use std::ops::Deref;
@@ -194,10 +194,6 @@ pub struct TimelineViewStyle {
     #[style(metrics)]
     metrics: Metrics,
     look: ScrollBarLook,
-    /// Between the bar's edge and its thumb.
-    inset: f32,
-    /// The bar's track.
-    track: StyleColor,
     /// The sizes of the headers left of the time area.
     sizes: TrackSizes,
     /// The playhead's line over the panes.
@@ -455,9 +451,7 @@ impl Component for TimelineView<'_> {
     fn style(cx: &StyleCx<'_>, _: TimelineViewStyleKey) -> TimelineViewStyle {
         TimelineViewStyle {
             metrics: Metrics::new(),
-            look: cx.scroll_bar(),
-            inset: cx.tokens.space.gap.tight,
-            track: cx.color(cx.tokens.color.surface.chrome),
+            look: cx.scroll_bar(ScrollBarKind::Docked),
             sizes: TrackSizes::of(cx.tokens),
             playhead: cx.color(cx.tokens.color.accent.solid),
             snap: cx.color(cx.tokens.color.overlay.line),
@@ -548,19 +542,8 @@ impl Component for TimelineView<'_> {
         }
         let style = cx.style;
         let track = self.bar(cx.rect, cx.flow, style);
-        let draw = ui.draw();
-        draw.fill(&PaintShape::Rect(track, CornerRadius::ZERO), style.track);
-        draw.rule(RuleKind::Edge, track.left_top(), track.right_top());
         let span = self.span(&view, width);
-        let (at, len) = scroll::thumb(&span, track.width(), style.look.min_thumb);
-        let thumb = if cx.flow.is_rtl() {
-            Rect::from_min_size(Pos2::new(track.max.x - at - len, track.min.y), Vec2::new(len, track.height()))
-        } else {
-            Rect::from_min_size(Pos2::new(track.min.x + at, track.min.y), Vec2::new(len, track.height()))
-        }
-        .shrink(style.inset);
-        let radius = (thumb.width().min(thumb.height()) / 2.0).clamp(0.0, f32::from(u8::MAX)) as u8;
-        draw.fill(&PaintShape::Rect(thumb, CornerRadius::same(radius)), cx.resolve_part(BAR.at(0), &style.look.thumb));
+        ui.draw().scroll_bar(&style.look, track, Axis::X, cx.flow.is_rtl(), &span, &cx.part_state(BAR.at(THUMB)));
     }
 
     /// The lines and the marquee over the panes, after the body has reported them.

@@ -11,7 +11,7 @@ use crate::runtime::egui::{repaint, sizing};
 use crate::runtime::env::Env;
 use crate::runtime::lazy;
 use crate::runtime::pass_state;
-use crate::style::{SurfaceKind, UiTokens, scroll_bar_look, surface_style};
+use crate::style::{ScrollBarKind, SurfaceKind, UiTokens, scroll_bar_look, surface_style};
 use craft_behavior::{Axis, PartKey, ScrollPos, ScrollSpan};
 use egui::{Context, Id, Pos2, Rect, Ui, Vec2};
 
@@ -110,7 +110,7 @@ impl BodyHooks<'_> {
     /// The edge fades and the scroll bars over the body. The fades blend the content into the surface it sits on.
     pub(super) fn paint_scroll_bars<C: Container>(&self, ui: &mut Ui, cx: &Cx<'_, C>, props: &ContainerProps, rtl: bool, env: &Env) {
         let tokens = &*env.tokens;
-        let look = scroll_bar_look(tokens);
+        let look = scroll_bar_look(tokens, ScrollBarKind::Overlay);
         if let Some(view) = self.view
             && let Some(scroll) = scroll_of(props)
         {
@@ -126,19 +126,13 @@ impl BodyHooks<'_> {
                 if !overflow {
                     continue;
                 }
-                let length = match bar.axis {
-                    Axis::X => bar.track.width(),
-                    _ => bar.track.height(),
-                };
-                let (at, len) = craft_behavior::scroll::thumb(&span, length, look.min_thumb);
-                let thumb = crate::contract::cx::thumb_rect(bar.track, bar.axis, rtl, at, len);
                 let enabled = cx.core.resolved.enabled;
                 let state = crate::contract::steps::part_state(
                     cx.core.results.get(&(bar.key, Some(crate::contract::cx::THUMB))).unwrap_or(&crate::primitives::PartResult::IDLE),
                     enabled,
                     None,
                 );
-                ui.painter().extend(ScrollBar::shapes(&look, bar.track, thumb, &state));
+                ui.painter().extend(ScrollBar::shapes(&look, bar.track, bar.axis, rtl, &span, &state, ui.ctx().pixels_per_point()));
             }
         }
     }
@@ -214,7 +208,7 @@ impl BodyHooks<'_> {
 impl<'b> BodyHooks<'b> {
     pub(super) fn scroll_geometry(&self, props: &ContainerProps, view: Rect, rtl: bool, tokens: &UiTokens) -> Vec<(Bar, ScrollSpan)> {
         let Some(scroll) = scroll_of(props) else { return Vec::new() };
-        let thickness = scroll_bar_look(tokens).thickness;
+        let thickness = scroll_bar_look(tokens, ScrollBarKind::Overlay).thickness;
         let (v_on, h_on) = (scroll.vertical_on(), scroll.horizontal_on());
         let (ex, ey) = self.last_extent;
         let mut bars = Vec::new();

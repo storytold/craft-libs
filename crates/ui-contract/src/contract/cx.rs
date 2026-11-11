@@ -32,6 +32,6 @@ pub use pointer::Pointer;
 pub(crate) use pointer::write_cursor;
 #[doc(hidden)]
 pub use scroll::THUMB;
-pub(crate) use scroll::{ScrollDecl, scroll_moves, thumb_rect};
+pub(crate) use scroll::{ScrollDecl, scroll_moves};
 pub use styled::Styled;
 pub use words::WordSetCx;
