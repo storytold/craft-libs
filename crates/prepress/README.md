@@ -49,6 +49,21 @@ let black = p.tint(InkId::process(Process::Black), 10, 10);
 let gold = p.inks.lookup("Gold").and_then(|id| p.tint(id, 10, 10));
 ```
 
+At print resolution, separate in bands. Each band holds every ink for a run of rows, at most
+`MAX_PLATE_PIXELS`, so memory stays bounded however high the resolution:
+
+```rust
+use std::ops::ControlFlow;
+use craft_prepress::{plates_in_bands, Options};
+
+plates_in_bands(&pdf, 0, 600.0, &Options::default(), |band| {
+    // band.plates is page-wide and band.plates.height rows tall, from row band.top.
+    ControlFlow::Continue(())
+})?;
+```
+
+Each band renders the page again once per ink, so time grows with the number of bands.
+
 The plates are the PDF as printed, so a preview built on them shows what the writer produced,
 not what the document model intended.
 
@@ -82,7 +97,8 @@ separate as they are.
 | Constant | Value | Why |
 |---|---|---|
 | `MAX_SPOT_INKS` | 32 spot inks per page | A `DeviceN` space has at most 32 colorants, and each plate costs a render and a byte per pixel. Further spots are listed in `Plates::unseparated`. |
-| `MAX_PLATE_PIXELS` | 4 MP per plate (2000 × 2000) | A page with many inks stays within a few hundred megabytes. The resolution is lowered to fit; `Plates::dpi` reports the one used. |
+| `MAX_PLATE_PIXELS` | 4 MP per plate (2000 × 2000) | A page with many inks stays within a few hundred megabytes. `plates` lowers the resolution to fit, and `plates_in_bands` makes bands this size; `Plates::dpi` reports the one used. |
+| `MAX_BANDED_PIXELS` | 256 MP per plate of a page separated in bands | Bounds the time a banded page takes. The resolution is lowered to fit. |
 
 The renderer's side limit (`craft_pdf::raster::MAX_SIDE`) also lowers the resolution.
 
