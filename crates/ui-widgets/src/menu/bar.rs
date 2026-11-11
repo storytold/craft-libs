@@ -24,7 +24,7 @@ use super::{Menu, MenuItem, MenuStep};
 use crate::buttons::face::{self, FaceLook, FaceSpec};
 use crate::contract::{
     Access, Bind, Common, Component, Cx, Focus as _, MeasureCx, MenuKey, Name, NoValue, Outcome, OverlayUi, Overlays as _, Pad, PaintUi, PartsCx,
-    Pointer as _, PopupHandle, PopupKind, Props as _, Role, SetPosition, Show as _, ShowContainer as _, Styled as _,
+    Pointer as _, PopupHandle, PopupKind, Props as _, Role, SetPosition, Show as _, ShowContainer as _,
 };
 use crate::display::{Divider, Shade, Text};
 use crate::layout_components::Stack;
@@ -399,7 +399,7 @@ impl Component for MenuBar<'_> {
     type Style = MenuBarStyle;
     type Output = MenuBarOutput;
 
-    fn style(cx: &StyleCx<'_>, _: MenuBarStyleKey) -> MenuBarStyle {
+    fn style(_: &StyleCx<'_>, _: MenuBarStyleKey) -> MenuBarStyle {
         MenuBarStyle { metrics: Metrics::new() }
     }
 

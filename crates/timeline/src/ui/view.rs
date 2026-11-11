@@ -12,7 +12,7 @@ use craft_behavior::scroll::ScrollSpan;
 use craft_behavior::{Axis, ColumnWidth, EditEvent, Granularity, Intent, Metrics, Mixed, NavMove, PartKey, Sense, Wheel};
 use craft_ui::contract::{
     Access, Bind, BindMut, CommandSet, Commands as _, Common, Component, Container, ContainerProps, Cx, Edit as _, EditResponse, Focus as _, Name,
-    Outcome, PaintUi, PartsCx, Pointer as _, Props, Remember as _, Role, Sizing, Styled as _, THUMB, WordSetCx as _,
+    Outcome, PaintUi, PartsCx, Pointer as _, Props, Remember as _, Role, Sizing, THUMB, WordSetCx as _,
 };
 use craft_ui::primitives::{PaintShape, StrokeWidth};
 use craft_ui::runtime::access::Numeric;
@@ -21,7 +21,7 @@ use craft_ui::runtime::env::{AppValues, EnvValue, EnvView, Label};
 use craft_ui::runtime::focus::KeyUse;
 use craft_ui::runtime::motion::{Animate as _, spec};
 use craft_ui::style::{ComponentStyle, ScrollBarKind, ScrollBarLook, StyleColor, StyleCx, SurfaceKind};
-use egui::{CornerRadius, Pos2, Rect, Response, Vec2};
+use egui::{CornerRadius, Pos2, Rect, Response};
 use std::cell::Cell;
 use std::ops::Deref;
 use std::sync::Arc;
