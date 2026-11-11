@@ -64,7 +64,9 @@
 //!   generation simply writes through it again. A re-check that instead finds the account gone
 //!   (removed and tombstoned in the window the keychain write opened) removes the token it just
 //!   wrote, under the same lock, before returning [`Error::StaleGeneration`]; see "Cross-app
-//!   lifecycle guarantees" point 2.
+//!   lifecycle guarantees" point 2. That removal only ever takes its own write. A sign-in for the
+//!   same handle can land a token of its own in that same unlocked window. This call never
+//!   deletes a token it did not write itself.
 //!
 //! ```no_run
 //! # fn main() -> Result<(), craft_suite_account::Error> {
@@ -172,7 +174,11 @@ impl<S: TokenStore> Store<S> {
     }
 
     /// Whether a readable token is stored for this account handle.
+    ///
+    /// Checked against isolation first, the same as every call that reaches the keychain. An
+    /// isolated store answers [`Error::Isolated`] here too, before any keychain read.
     pub fn has_token(&self, id: &str) -> Result<bool, Error> {
+        let _ = self.dir.as_deref().ok_or(Error::Isolated)?;
         Ok(self.tokens.get(id).map_err(Error::Keychain)?.is_some())
     }
 
@@ -231,8 +237,11 @@ impl<S: TokenStore> Store<S> {
             // restarting at 0). Either way a write made against the generation this handle held a
             // moment ago is now stale. See [`Account::generation`].
             let generation = match &existing {
-                Some(account) => account.generation + 1,
-                None => list.tombstone_generation(&id).map_or(0, |generation| generation + 1),
+                Some(account) => account.generation.checked_add(1).ok_or_else(|| Error::GenerationExhausted(id.clone()))?,
+                None => match list.tombstone_generation(&id) {
+                    Some(generation) => generation.checked_add(1).ok_or_else(|| Error::GenerationExhausted(id.clone()))?,
+                    None => 0,
+                },
             };
             let account = Account {
                 id: id.clone(),
@@ -242,6 +251,7 @@ impl<S: TokenStore> Store<S> {
                 email: new.email.clone(),
                 added,
                 last_used: now,
+                linked: new.linked,
                 generation,
             };
             list.put(account.clone());
@@ -267,7 +277,10 @@ impl<S: TokenStore> Store<S> {
     /// ("Concurrent mutations and partial-failure recovery") for why that window is not itself
     /// covered by the lock. When the second check finds the account gone, the token the first write
     /// just placed belongs to nobody now; it is removed again, under the same lock as the
-    /// tombstone check, so that race can never resurrect either the row or the keychain entry.
+    /// tombstone check. That race can never resurrect the row this way. The removal itself only
+    /// takes the token this call wrote. A sign-in for the same handle can land its own token in
+    /// that same window. An unconditional removal there would delete the sign-in's token on top
+    /// of this call's own stale write.
     pub fn update_token(&self, id: &str, expected_generation: u32, token: &Secret, now: i64) -> Result<Account, Error> {
         self.usable()?;
         let path = self.path().ok_or(Error::Isolated)?;
@@ -290,7 +303,7 @@ impl<S: TokenStore> Store<S> {
             match list.locate(id) {
                 accounts::Located::Active(account) if account.generation == expected_generation => {
                     let mut updated = account.clone();
-                    updated.generation += 1;
+                    updated.generation = updated.generation.checked_add(1).ok_or_else(|| Error::GenerationExhausted(id.to_owned()))?;
                     updated.last_used = now;
                     list.put(updated.clone());
                     accounts::write(&path, &list)?;
@@ -300,15 +313,29 @@ impl<S: TokenStore> Store<S> {
                     Err(Error::StaleGeneration { id: id.to_owned(), expected: expected_generation, current: account.generation })
                 }
                 accounts::Located::Tombstoned(current) => {
-                    let _ = self.tokens.remove(id);
+                    self.remove_token_if_still(id, token);
                     Err(Error::StaleGeneration { id: id.to_owned(), expected: expected_generation, current })
                 }
                 accounts::Located::Unknown => {
-                    let _ = self.tokens.remove(id);
+                    self.remove_token_if_still(id, token);
                     Err(Error::Unknown(id.to_owned()))
                 }
             }
         })
+    }
+
+    /// Removes the keychain entry for `id`, but only when it still holds exactly `token`.
+    ///
+    /// Used where a caller's own write has already been judged stale and the entry it placed a
+    /// moment ago belongs to nobody now. A plain, unconditional removal here would be wrong. A
+    /// sign-in (or another `update_token`) for the same handle can land its own token in that
+    /// same unlocked window. That token is never this call's to delete. Comparing first keeps
+    /// the cleanup scoped to this call's own write. Any error reading the current entry counts
+    /// as a mismatch too. This leaves the entry alone whenever it cannot confirm the match.
+    fn remove_token_if_still(&self, id: &str, token: &Secret) {
+        if matches!(self.tokens.get(id), Ok(Some(current)) if current == *token) {
+            let _ = self.tokens.remove(id);
+        }
     }
 
     /// Makes an account the current one.
@@ -354,7 +381,7 @@ impl<S: TokenStore> Store<S> {
             let mut list = accounts::read(&path)?;
             if let Some(account) = list.get(id).cloned() {
                 self.tokens.remove(id).map_err(Error::Keychain)?;
-                list.remove_with_tombstone(id, account.generation);
+                list.remove_with_tombstone(id, account.generation)?;
                 accounts::write(&path, &list)?;
             }
             Ok(())
@@ -362,7 +389,12 @@ impl<S: TokenStore> Store<S> {
     }
 
     /// Clears the keychain entry for an account, leaving the list alone.
+    ///
+    /// Checked against isolation first. `Store::at(None, _)` keeps nothing; without this check an
+    /// isolated store could still reach into the keychain and delete another application's
+    /// shared credential on this same machine.
     pub fn forget(&self, id: &str) -> Result<(), Error> {
+        let _ = self.dir.as_deref().ok_or(Error::Isolated)?;
         self.tokens.remove(id).map_err(Error::Keychain)
     }
 }
