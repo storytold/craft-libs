@@ -10,7 +10,8 @@
 //!   another program wrote without losing what it does not understand.
 //! - GPX: [`parse_gpx`] reads track logs for geotagging by capture time.
 //! - Containers: [`embedded`], [`jpeg_segments`], [`png_chunks`] and [`webp_chunks`] locate the Exif,
-//!   XMP, ICC and IPTC blocks of JPEG, PNG, WebP, TIFF-based, Fujifilm RAF and Canon CR3 ([`cr3`]) files.
+//!   XMP, ICC and IPTC blocks of JPEG, PNG, WebP, TIFF-based, Fujifilm RAF, Canon CR3 ([`cr3`]) and
+//!   JPEG XL ([`jxl`]) files.
 //!   [`extract`] does all of the above for a whole file.
 //!
 //! HEIF, PSD and MRW files are read by their own crates. Put the blocks they return into an
@@ -25,6 +26,7 @@ mod focus_read;
 mod geom;
 mod gpx;
 mod iptc;
+pub mod jxl;
 pub mod tags;
 mod xmp;
 mod xmp_merge;
@@ -305,7 +307,7 @@ impl Metadata {
     }
 }
 
-/// Read everything understood from a whole file (JPEG, PNG, WebP, TIFF-based incl. DNG and most raws, RAF, CR3).
+/// Read everything understood from a whole file (JPEG, PNG, WebP, TIFF-based incl. DNG and most raws, RAF, CR3, JPEG XL).
 /// Precedence: EXIF, then IPTC fills gaps, then XMP overrides user fields and fills the rest.
 pub fn extract(bytes: &[u8]) -> Metadata {
     from_embedded(&embedded(bytes))
