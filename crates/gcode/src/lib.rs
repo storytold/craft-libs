@@ -83,8 +83,9 @@ impl Default for Settings {
 impl Settings {
     /// Checks every knob is inside its range.
     pub fn validate(&self) -> Result<(), Error> {
-        if !self.feed_mm_per_min.is_finite() || self.feed_mm_per_min <= 0.0 {
-            return Err(Error::Settings(format!("feed rate {} mm/min is not a positive finite rate", self.feed_mm_per_min)));
+        // Written to three decimals: a smaller rate would come out as `F0`, which Grbl rejects.
+        if !self.feed_mm_per_min.is_finite() || self.feed_mm_per_min < 0.001 {
+            return Err(Error::Settings(format!("feed rate {} mm/min is not a finite rate of at least 0.001", self.feed_mm_per_min)));
         }
         if self.passes == 0 || self.passes > MAX_PASSES {
             return Err(Error::Settings(format!("passes {} is outside the 1–{MAX_PASSES} range", self.passes)));
@@ -137,9 +138,17 @@ impl Writer {
     }
 
     /// A comment line. Control characters become spaces: a line break in `text` (a layer name
-    /// from a file, say) would otherwise start a line the machine runs as a command.
+    /// from a file, say) would otherwise start a line the machine runs as a command. Grbl acts
+    /// on its real-time bytes (`!` feed hold, `?`, `~` and everything past ASCII) wherever they
+    /// arrive, comments included, so those become `_`.
     pub fn comment(&mut self, text: &str) {
-        let text: String = text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+        let safe = |c: char| match c {
+            c if c.is_control() => ' ',
+            '!' | '?' | '~' => '_',
+            c if !c.is_ascii() => '_',
+            c => c,
+        };
+        let text: String = text.chars().map(safe).collect();
         let _ = writeln!(self.out, "; {text}");
     }
 
@@ -171,7 +180,7 @@ impl Writer {
                 let _ = writeln!(self.out, "{on} S{power}");
             }
             for p in path.iter().skip(1) {
-                let _ = writeln!(self.out, "G1 X{:.4} Y{:.4} F{:.0}", p.0, p.1, self.settings.feed_mm_per_min);
+                let _ = writeln!(self.out, "G1 X{:.4} Y{:.4} F{}", p.0, p.1, (self.settings.feed_mm_per_min * 1000.0).round() / 1000.0);
             }
             // Never rapid with the beam on, whatever the mode or controller.
             let _ = writeln!(self.out, "M5");
@@ -267,6 +276,23 @@ mod tests {
         assert_eq!(w.contour(&[(0.0, 0.0), (f64::NAN, 1.0)], false, 500), Err(Error::NotFinite));
         // Nothing of a refused contour is written, not even its travel move.
         assert!(!w.finish().contains("G0 X0.0000"));
+    }
+
+    #[test]
+    fn grbl_real_time_bytes_never_reach_the_program() {
+        let mut w = Writer::new(Settings::default(), "stop! now? ~ café").unwrap();
+        w.comment("\u{18}reset");
+        let g = w.finish();
+        assert!(g.starts_with("; stop_ now_ _ caf_\n"), "{g}");
+        assert!(g.is_ascii() && !g.contains(['!', '?', '~', '\u{18}']), "{g}");
+    }
+
+    #[test]
+    fn a_fractional_feed_is_written_not_rounded_to_zero() {
+        let slow = Settings { feed_mm_per_min: 0.25, ..Settings::default() };
+        assert!(program(slow, &[(0.0, 0.0), (1.0, 0.0)], false).contains(" F0.25\n"));
+        assert!(program(Settings::default(), &[(0.0, 0.0), (1.0, 0.0)], false).contains(" F1000\n"));
+        assert!(matches!(Writer::new(Settings { feed_mm_per_min: 0.0004, ..Settings::default() }, ""), Err(Error::Settings(_))));
     }
 
     #[test]
