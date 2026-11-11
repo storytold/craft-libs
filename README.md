@@ -37,6 +37,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-cms`](crates/cms/README.md): pure-Rust ICC v2/v4 colour management: profile parsing
   and writing, transforms, rendering intents, black point compensation, soft proofing, gamut
   checks, 3D LUTs and built-in profiles (sRGB, Display P3, synthetic coated CMYK and others).
+- [`craft-command`](crates/command/README.md): command registry for the Craft apps: commands added at run time, a gate on each call (`before` and `after` hooks with time budgets), a document change feed and a JSON Schema per command. Its `#[command]` macro is in [`craft-command-derive`](crates/command-derive/README.md). Builds for `wasm32`.
 - [`craft-crw`](crates/crw/README.md): clean-room Canon CRW (CIFF) raw decoder, from LightCraft:
   the heap container, the entropy coding derived by black-box analysis (frozen code tables), sensor
   black and white levels and as-shot white balance. The complete derivation record (plan, sources
@@ -92,6 +93,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   VectorCraft: a WMF, EMF and EMF+ reader into a neutral picture (paths with line styles, pattern
   fills, bitmaps, text, clip regions and clip paths) and, behind `write`, EMF and WMF writers.
   Bounded and panic-free on hostile input. Mapping the picture onto a document stays in each app.
+- [`craft-ipc`](crates/ipc/README.md): Craft apps talking on one machine: per-user local sockets (Unix socket, Windows named pipe), token auth, instance discovery, launch on demand, focus hand-off, frame transfer and linked-file watching. Native only: it does not build for `wasm32`. Protocol in [PROTOCOL.md](crates/ipc/PROTOCOL.md).
 - [`craft-jpeg`](crates/jpeg/README.md): clean-room decoder for 12-bit and arithmetic-coded
   JPEG (T.81 SOF0/SOF1 at 12 bits, SOF9, SOF10), from PhotoCraft, and a frame probe for routing.
   Metadata stays in each app.
@@ -118,6 +120,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   header fields, MIME parts and multiparts, encoded-words, RFC 2231 parameters, base64 and
   quoted-printable, character sets, address lists, dates, mbox files and the `multipart/related`
   lookups of MHT web archives. What a message means (body, attachments, flags) stays in each app.
+- [`craft-plugin-abi`](crates/plugin-abi/README.md): "craft-abi 1" for WebAssembly plugins: the manifest, permission names, host call numbers and the install-time policy gate that checks a package before any guest code runs. No engine. Builds for `wasm32`.
+- [`craft-plugin-host`](crates/plugin-host/README.md): runs craft-abi 1 plugins. Engines (wasmi on every target, optional wasmtime on native, browser engines on wasm32), the checks on each host call, install and reload, and the command, hook, panel and format contributions an app receives. Optional features `link` (Craft Link client) and `legacy-v1` (adapters for the v1 plugin ABIs of EffectCraft, PhotoCraft and VectorCraft).
+- [`craft-plugin-ui`](crates/plugin-ui/README.md): egui views for craft-abi 1 plugins. A validated widget tree that plugins return and the host draws, the permission prompt and grants review, and with feature `host` the plug-in manager and panel windows. The crate builds for `wasm32` without feature `host`.
 - [`craft-pcraft-format`](crates/pcraft-format/README.md): the envelope of PhotoCraft's `.pcraft`
   bundle: `Manifest<D>` with the document as a type parameter, `TileRef`, the entry paths, the
   manifest decode limits and the migration runner. The document model stays in PhotoCraft.

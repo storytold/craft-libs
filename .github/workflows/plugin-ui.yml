@@ -1,0 +1,40 @@
+name: Plugin UI
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/plugin-ui/**", "crates/plugin-abi/**", "crates/plugin-host/**", "crates/command/**", "Cargo.toml", "Cargo.lock", ".github/workflows/plugin-ui.yml"]
+  pull_request:
+    paths: ["crates/plugin-ui/**", "crates/plugin-abi/**", "crates/plugin-host/**", "crates/command/**", "Cargo.toml", "Cargo.lock", ".github/workflows/plugin-ui.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-ui-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    timeout-minutes: 20
+    name: Plugin UI lint, tests, WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-plugin-ui
+      - run: cargo fmt -p craft-plugin-ui --check
+      - run: cargo clippy -p craft-plugin-ui --all-targets --locked -- -D warnings
+      - run: cargo clippy -p craft-plugin-ui --all-targets --features host --locked -- -D warnings
+      - run: cargo test -p craft-plugin-ui --locked
+      - run: cargo test -p craft-plugin-ui --features host --locked
+      - run: cargo check -p craft-plugin-ui --locked --target wasm32-unknown-unknown
+      - run: RUSTDOCFLAGS="-D warnings" cargo doc -p craft-plugin-ui --no-deps --features host --locked
