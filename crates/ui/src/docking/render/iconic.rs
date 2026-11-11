@@ -9,7 +9,7 @@ use egui::{Context, Id, Key, Order, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, U
 
 use super::{GroupKind, Renderer, dock::Edge};
 use crate::docking::{
-    Column, DockStyle, Group, GroupDrag, GroupGesture, begin_drag,
+    Action, Column, DockStyle, Group, GroupDrag, GroupGesture, PanelLimits, begin_drag,
     chrome::{ChromeStyle, FloatingFrame},
     is_dragging,
     targets::{DockDrop, DockTarget, horizontal_line, usable},
@@ -200,7 +200,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         let height = group.height.filter(|h| h.is_finite()).unwrap_or(FLYOUT_HEIGHT);
         let source = Rect::from_min_size(pos2(grip.left(), top), vec2(width.max(self.style.min_pane), height.max(self.style.tab_height)));
         self.record_float(&group.panels, vec2(grip.width(), self.row_height()), source.size());
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &self.style.move_group_label));
+        let shown = group.active_panel().unwrap_or(first);
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), self.move_group_name(shown)));
         if movable && response.drag_started() {
             let origin = ui.input(|i| i.pointer.press_origin()).or_else(|| ui.ctx().pointer_interact_pos()).unwrap_or(grip.center());
             let drag = GroupDrag {
@@ -297,8 +298,16 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             close_flyout::<P>(ctx, self.id);
             return;
         }
-        let bounds = self.workspace.intersect(self.float_bounds);
-        let width = request.width.max(self.style.min_pane).min(bounds.width());
+        let mut bounds = self.workspace.intersect(self.float_bounds);
+        // Keep the column-side edge anchored, even when the saved width exceeds the room.
+        match request.edge {
+            Edge::Left => bounds.min.x = bounds.min.x.max(request.column.right()),
+            Edge::Right => bounds.max.x = bounds.max.x.min(request.column.left()),
+        }
+        if !usable(bounds) {
+            return;
+        }
+        let width = request.group.flyout_width.unwrap_or(request.width).max(self.style.min_pane).min(bounds.width());
         let max = self
             .content
             .floating_size(&active)
@@ -306,9 +315,11 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             .or(request.group.height)
             .filter(|h| h.is_finite() && *h > 0.0)
             .unwrap_or(FLYOUT_HEIGHT);
-        // A flyout fits the content its panel last drew, up to that height.
-        let height = self
-            .fitted_height(&active, self.style.tab_height, max)
+        // Only untouched heights fit content: otherwise the next frame undoes a resize.
+        let height = request
+            .group
+            .height
+            .or_else(|| self.fitted_height(&active, self.style.tab_height, max))
             .unwrap_or(max)
             .max(self.style.tab_height + self.style.min_pane)
             .min(bounds.height());
@@ -320,9 +331,43 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         let rect = Rect::from_min_size(pos2(left, top), vec2(width, height));
         let style = ChromeStyle::from_dock(self.style);
         let group = request.group;
-        let response = FloatingFrame::new(id, rect).bounds(bounds).resizable(false).show(ctx, &style, |ui, rect| {
-            self.group(ui, &group.panels, group.active, false, rect, GroupKind::Dock);
+        let movable = group.panels.iter().all(|panel| self.permissions(panel).movable);
+        // In a viewport smaller than the minimum, keep the other axis resizable instead
+        // of asking AnchoredResize to reject an already-constrained starting rectangle.
+        let limits =
+            PanelLimits { min: vec2(self.style.min_pane, self.style.tab_height + self.style.min_pane).min(bounds.size()), max: bounds.size() };
+        let label = self.style.resize_window_label.clone();
+        let response = FloatingFrame::new(id, rect)
+            .bounds(bounds)
+            .limits(limits)
+            .resizable(movable)
+            .resize_edges([matches!(request.edge, Edge::Right), matches!(request.edge, Edge::Left), false, true])
+            .reserve_top_resize_band(false)
+            .resize_label(&label)
+            .show(ctx, &style, |ui, rect| {
+                self.group(ui, &group.panels, group.active, false, rect, GroupKind::Dock);
+            });
+        for handle in &response.handles {
+            self.register_interaction(ctx, handle.id);
+        }
+        let down = ctx.input(|input| input.pointer.primary_down());
+        ctx.data_mut(|data| {
+            let key = self.id.with("pointer-resize");
+            if let Some(started) = response.resize_started {
+                data.insert_temp(key, started);
+            } else if !down && data.get_temp::<Id>(key).is_some_and(|id| response.handles.iter().any(|handle| handle.id == id)) {
+                data.remove::<Id>(key);
+            }
         });
+        if let Some(resized) = response.resized {
+            // Width-only drags preserve automatic fitting and heights clamped by a small viewport.
+            if resized.height() != response.rect.height() {
+                self.output.actions.push(Action::ResizeGroup { panel: active.clone(), height: Some(resized.height()) });
+            }
+            if resized.width() != response.rect.width() {
+                self.output.actions.push(Action::ResizeFlyoutWidth { panel: active, width: Some(resized.width()) });
+            }
+        }
         self.iconic.rect = Some(response.rect);
     }
 

@@ -401,11 +401,13 @@ fn parse_frame(marker: u8, seg: &[u8], limits: &Limits) -> Result<Frame, Error> 
     let mcux = width.div_ceil(8 * hmax);
     let mcuy = height.div_ceil(8 * vmax);
     // `render` holds the coefficients (4 bytes) and the reconstructed plane (4 bytes) of every
-    // padded sample while it writes the output, so all three count against `max_alloc` together.
+    // padded sample, and a column and a row map for upsampling each component, while it writes
+    // the output, so all of them count against `max_alloc` together.
     let mut total = (width as u64 * height as u64).saturating_mul(bytes_per_pixel);
+    let maps = (width as u64 + height as u64).saturating_mul(size_of::<UpsampleStep>() as u64);
     for &(_, h, v, _) in &raw {
         let samples = (mcux * h * 8) as u64 * (mcuy * v * 8) as u64;
-        total = total.saturating_add(samples.saturating_mul(8));
+        total = total.saturating_add(samples.saturating_mul(8)).saturating_add(maps);
     }
     // No allocation may pass `isize::MAX` bytes, which matters on 32-bit targets when a caller
     // raises `max_alloc`.
@@ -1242,9 +1244,12 @@ fn reconstruct(comp: &Component, q: &[u16; 64], basis: &[[f32; 8]; 8], max: f32)
     plane
 }
 
+/// An output coordinate's two neighboring component samples and the weight of the second.
+type UpsampleStep = (usize, usize, f32);
+
 /// For each output coordinate: the two neighboring component samples and the weight of the
 /// second (centered linear interpolation of a subsampled component).
-fn upsample_map(out: usize, samples: usize, factor: usize, fmax: usize) -> Vec<(usize, usize, f32)> {
+fn upsample_map(out: usize, samples: usize, factor: usize, fmax: usize) -> Vec<UpsampleStep> {
     let last = samples.saturating_sub(1);
     (0..out)
         .map(|x| {
