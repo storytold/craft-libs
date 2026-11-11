@@ -200,7 +200,8 @@ def report_new_variants(before, after):
 
 
 def run(top, cargo_args):
-    for arg in cargo_args:
+    # cargo fmt builds nothing, so its `--all` is the usual whole-workspace format.
+    for arg in ([] if cargo_args[:1] == ["fmt"] else cargo_args):
         if arg in REFUSED:
             fail(f"{arg} refused: {REFUSED[arg]}")
     env = dict(os.environ)
