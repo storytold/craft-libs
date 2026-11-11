@@ -794,6 +794,13 @@ fn cancelled(stop: &Stop) -> impl Fn() -> bool + '_ {
     || stop.check().is_err_and(|e| e == crate::protocol::CANCELLED)
 }
 
+/// For a running helper command: only CANCELLED ends it. PAUSED lets the current command finish
+/// (callers check `stop` before starting the next one).
+#[cfg(any(target_os = "linux", windows))]
+fn kill_on_cancel(stop: &Stop) -> impl Fn() -> Result<(), String> + '_ {
+    || if cancelled(stop)() { Err(crate::protocol::CANCELLED.into()) } else { Ok(()) }
+}
+
 #[cfg(target_os = "linux")]
 pub mod linux {
     use std::ffi::{OsStr, OsString};
@@ -804,7 +811,7 @@ pub mod linux {
 
     use super::{
         App, INSTALLER, InstallSource, Installed, JobPhase, PackageKind, Path, PathBuf, Paths, Record, SHARED_CALL, SYSTEM_BIN_DIRS, Stop, cancelled,
-        find_in, pkexec, process, run_as_root, swap_into_place, tree, turn,
+        find_in, kill_on_cancel, pkexec, process, run_as_root, swap_into_place, tree, turn,
     };
 
     /// apt waits this long for another package tool (a software centre, automatic updates) to
@@ -1044,7 +1051,11 @@ pub mod linux {
                 process::command("flatpak")
             };
             cmd.arg(&scope).args(args);
-            let output = process::cancellable_output(cmd, || if cancellable { stop.check() } else { Ok(()) })?;
+            if cancellable {
+                stop.check()?; // paused or cancelled: start no further command
+            }
+            let end = kill_on_cancel(stop);
+            let output = process::cancellable_output(cmd, || if cancellable { end() } else { Ok(()) })?;
             if !output.status.success() {
                 return Err(format!("Flatpak OCI migration failed: {}", String::from_utf8_lossy(&output.stderr).trim()));
             }
@@ -1117,7 +1128,7 @@ pub mod linux {
             process::command("flatpak")
         };
         cmd.args(["update", &scope_arg, "-y", "--noninteractive", id]);
-        let output = process::cancellable_output(cmd, || stop.check())?;
+        let output = process::cancellable_output(cmd, kill_on_cancel(stop))?;
         if output.status.success() {
             return Ok(());
         }
@@ -2944,6 +2955,20 @@ mod tests {
         stop.cancel();
         let mut phase = |_| ();
         assert_eq!(linux::update_flatpak_app(app, "ai.storyteller.photocraft", Some("user"), &stop, &mut phase), Err(CANCELLED.into()));
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn pause_lets_a_running_flatpak_command_finish_and_only_cancel_ends_it() {
+        let stop = Stop::default();
+        stop.pause();
+        assert_eq!(kill_on_cancel(&stop)(), Ok(()));
+        let app = crate::App::by_id("photocraft").unwrap();
+        let mut phase = |_| ();
+        // A paused job starts no further command.
+        assert_eq!(linux::update_flatpak_app(app, "ai.storyteller.photocraft", Some("user"), &stop, &mut phase), Err(crate::protocol::PAUSED.into()));
+        stop.cancel();
+        assert_eq!(kill_on_cancel(&stop)(), Err(CANCELLED.into()));
     }
 
     #[test]
