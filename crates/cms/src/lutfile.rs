@@ -135,7 +135,8 @@ pub fn parse_as(format: Format, bytes: &[u8]) -> Result<LutFile, LutError> {
     }
 }
 
-/// UTF-16 with a byte-order mark (Photoshop loads such `.look` files, #9118), else UTF-8.
+/// UTF-16 with a byte-order mark (Photoshop loads such `.look` files, #9118), else UTF-8
+/// (a UTF-8 BOM is stripped).
 fn decode_text(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
     let utf16 = |rest: &[u8], from: fn([u8; 2]) -> u16| {
         let units: Vec<u16> = rest.as_chunks::<2>().0.iter().map(|&c| from(c)).collect();
@@ -144,6 +145,7 @@ fn decode_text(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
     match bytes {
         [0xFF, 0xFE, rest @ ..] => utf16(rest, u16::from_le_bytes),
         [0xFE, 0xFF, rest @ ..] => utf16(rest, u16::from_be_bytes),
+        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest),
         _ => String::from_utf8_lossy(bytes),
     }
 }
@@ -553,6 +555,26 @@ pub fn builtin(id: &str) -> Option<LutFile> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn utf8_bom_is_stripped() {
+        let l = LutFile::identity(3).unwrap();
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(write_cube(&l).as_bytes());
+        let p = parse("a.cube", &bytes).unwrap();
+        assert_eq!(p.size, l.size);
+        assert_eq!(p.title, l.title);
+        let titled = LutFile::from_fn("Look", 3, |c| c).unwrap();
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(write_cube(&titled).as_bytes());
+        assert_eq!(parse("a.cube", &bytes).unwrap().title, "Look");
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(b"LUT_3D_SIZE 2\n");
+        for i in 0..8 {
+            bytes.extend_from_slice(format!("{} {} {}\n", i & 1, (i >> 1) & 1, i >> 2).as_bytes());
+        }
+        assert_eq!(parse("a.cube", &bytes).unwrap().size, 2);
+    }
 
     /// An identity `.3dl` of edge `n` (12-bit nodes, blue fastest) under `shaper`.
     fn identity_3dl(shaper: &[u32], n: usize) -> String {
