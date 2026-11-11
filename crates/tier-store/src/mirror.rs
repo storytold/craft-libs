@@ -155,16 +155,26 @@ impl<P: TierPolicy> MirrorStore<P> {
     /// single copy a naive `bytes_len > remaining_budget()` check assumes: with a 10-byte budget
     /// and nothing resident yet, a 6-byte `config/` put used to pass that check and then leave
     /// `tracked_bytes` at 12 (6 resident + 6 pending), past the budget, with no eviction able to
-    /// correct it (`config/` keys are never LRU-evicted). This accounts for both copies, and for
-    /// any existing resident bytes under `key` that the new resident copy would replace (so a
-    /// same-size or shrinking overwrite near the budget ceiling is not wrongly refused). It does
-    /// not assume LRU eviction will free room `put` has not freed yet: a conservative "no" is
-    /// safe, a wrong "yes" is not.
+    /// correct it (`config/` keys are never LRU-evicted).
+    ///
+    /// Projects the total `tracked_bytes()` would actually read after the put, rather than
+    /// summing independent deltas: an earlier version computed the resident delta as
+    /// `bytes_len.saturating_sub(replaced_resident)`, clamped to zero for a shrinking write, so a
+    /// 2-byte replacement of an already-resident 4-byte entry was scored as if the old 4 bytes
+    /// were still there on top of the new 2 (CodeRabbit finding on mirror.rs:165). Subtracting
+    /// `replaced_resident` from the current total first, instead of clamping a delta, lets a
+    /// shrinking (or same-size) replacement net out correctly. `replaced_resident` can never
+    /// exceed `tracked_bytes()` (it is already counted inside `bytes_used`, itself one term of
+    /// that sum), so the subtraction never wraps. This still does not assume LRU eviction will
+    /// free room `put` has not freed yet: a conservative "would exceed" is safe, a wrong "fits" is
+    /// not.
     pub fn would_exceed_budget_after_put(&self, key: &StoreKey, bytes_len: usize) -> bool {
         let replaced_resident = self.data.get(key).map_or(0, Vec::len);
-        let resident_delta = bytes_len.saturating_sub(replaced_resident);
-        let pending_delta = bytes_len;
-        self.tracked_bytes().saturating_add(resident_delta).saturating_add(pending_delta) > self.byte_budget
+        // put() always pushes a brand new pending entry (never replaces one), so the pending
+        // side has no analogous "replaced" amount to subtract: the full bytes_len is a net
+        // addition there regardless of what used to be resident.
+        let projected = self.tracked_bytes().saturating_sub(replaced_resident).saturating_add(bytes_len).saturating_add(bytes_len);
+        projected > self.byte_budget
     }
 
     /// Charge bytes a caller has exported across the worker boundary (handed to a host as part

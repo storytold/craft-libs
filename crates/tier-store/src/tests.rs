@@ -449,6 +449,23 @@ fn would_exceed_budget_after_put_does_not_double_count_a_same_key_replacement() 
     assert!(!store.would_exceed_budget_after_put(&key, 3), "an equal-size replacement must not be refused as if it added a second full copy");
 }
 
+/// CodeRabbit finding on mirror.rs:165: with an 8-byte budget and a 4-byte write still pending
+/// (not yet taken), replacing it with 2 bytes leaves exactly 8 tracked bytes (2 resident + 6
+/// pending: the new 2-byte resident copy, plus the still-queued original 4-byte pending entry,
+/// plus the new 2-byte pending entry). The earlier formula clamped the shrinking resident delta
+/// to zero and scored this as 10, wrongly refusing a write that fits exactly.
+#[test]
+fn would_exceed_budget_after_put_allows_a_shrinking_replacement_that_fits() {
+    let mut store = MirrorStore::new(DefaultTierPolicy, 8);
+    let key = StoreKey::new("config/a");
+    store.put(key.clone(), vec![0u8; 4]); // resident 4, pending 4: tracked_bytes() == 8, still queued.
+
+    assert!(!store.would_exceed_budget_after_put(&key, 2), "a shrinking replacement that fits exactly must not be refused");
+
+    store.put(key, vec![0u8; 2]);
+    assert_eq!(store.tracked_bytes(), 8, "resident 2 + the original 4-byte pending entry + the new 2-byte pending entry");
+}
+
 /// CodeRabbit finding on runtime.rs:281: bytes a caller has exported across the worker boundary
 /// and not yet acknowledged must still count against the budget, even though `take_pending`
 /// already removed them from `pending_bytes`. Otherwise a stalled acknowledgment lets retained
