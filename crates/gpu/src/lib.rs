@@ -19,7 +19,7 @@ mod tests;
 
 pub use caps::DeviceCaps;
 pub use chunk::chunk_buffer;
-pub use context::{GpuContext, WorkerKind};
+pub use context::{GpuContext, ReadOutcome, ReadRequest, WorkerKind};
 pub use error::GpuFault;
 pub use job::{GpuJob, GpuJobOutcome, GpuJobParams, HandleId};
 pub use provider::GpuProvider;

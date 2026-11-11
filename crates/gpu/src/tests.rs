@@ -1,13 +1,15 @@
 #![allow(clippy::expect_used)]
 
 use crate::{
-    DeviceCaps, GpuContext, GpuFault, GpuJob, GpuJobParams, HandleId, ProviderRegistry, WorkerKind, chunk_buffer, f16_rgba_to_f32_bytes, f16_to_f32,
-    f16_to_f32_fast,
+    DeviceCaps, GpuContext, GpuFault, GpuJob, GpuJobParams, HandleId, ProviderRegistry, ReadOutcome, ReadRequest, WorkerKind, chunk_buffer,
+    f16_rgba_to_f32_bytes, f16_to_f32, f16_to_f32_fast,
 };
 
 struct MemContext {
     caps: DeviceCaps,
     buffers: Vec<Vec<u8>>,
+    next_request: u64,
+    ready: Vec<ReadOutcome>,
 }
 
 impl GpuContext for MemContext {
@@ -29,17 +31,42 @@ impl GpuContext for MemContext {
         self.buffers.get(handle.0 as usize).map(|b| b.len()).ok_or_else(|| GpuFault::InvalidJob("bad handle".into()))
     }
 
-    fn read_buffer(&self, handle: HandleId) -> Result<Vec<u8>, GpuFault> {
-        self.buffers.get(handle.0 as usize).cloned().ok_or_else(|| GpuFault::InvalidJob("bad handle".into()))
+    fn request_read(&mut self, handle: HandleId) -> Result<ReadRequest, GpuFault> {
+        let bytes = self.buffers.get(handle.0 as usize).cloned().ok_or_else(|| GpuFault::InvalidJob("bad handle".into()))?;
+        let request = ReadRequest(self.next_request);
+        self.next_request = self.next_request.wrapping_add(1);
+        self.ready.push(ReadOutcome { request, handle, result: Ok(bytes) });
+        Ok(request)
     }
+
+    fn poll_reads(&mut self) -> Vec<ReadOutcome> {
+        std::mem::take(&mut self.ready)
+    }
+}
+
+fn mem_context() -> MemContext {
+    MemContext { caps: DeviceCaps::default(), buffers: Vec::new(), next_request: 0, ready: Vec::new() }
 }
 
 #[test]
 fn unknown_provider_is_fault() {
     let registry = ProviderRegistry::new();
-    let mut ctx = MemContext { caps: DeviceCaps::default(), buffers: Vec::new() };
+    let mut ctx = mem_context();
     let job = GpuJob { provider_id: "missing".into(), params: GpuJobParams(Vec::new()), inputs: vec![], outputs: vec![] };
     assert!(matches!(registry.dispatch(&mut ctx, &job), Err(GpuFault::UnknownProvider(_))));
+}
+
+#[test]
+fn read_buffer_default_resolves_against_request_read_and_poll_reads() {
+    let mut ctx = mem_context();
+    let handle = ctx.upload_buffer("in", b"hello").expect("upload_buffer");
+    assert_eq!(ctx.read_buffer(handle).expect("read_buffer"), b"hello".to_vec());
+}
+
+#[test]
+fn request_read_on_bad_handle_is_invalid_job() {
+    let mut ctx = mem_context();
+    assert!(matches!(ctx.request_read(HandleId(99)), Err(GpuFault::InvalidJob(_))));
 }
 
 #[test]
