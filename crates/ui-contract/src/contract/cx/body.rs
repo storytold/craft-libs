@@ -119,7 +119,31 @@ impl<'a> BodyCx<'a> {
     /// the placement measured: the child (plus the label line when the label stacks), and the label when it is taller.
     /// `ui` is the body's `Ui`; `key` makes the child's id.
     pub fn labelled<C: Show>(&mut self, ui: &mut Ui, key: impl Hash + Debug, label: Label, side: SideLabel, child: C) -> C::Output {
-        label::flow_leaf(ui, self.id.with(key), self.resolved.id, (self.resolved.enabled, self.resolved.size), label, side, child)
+        label::flow_leaf(ui, (self.id.with(key), self.resolved.id), (self.resolved.enabled, self.resolved.size), label, side, child, None)
+    }
+
+    /// `labelled`, with `content` shown inside the label after its text (a sample of what the option picks). The
+    /// content belongs to the label: for a child that draws only its mark (a radio button, a check box) a press on it
+    /// is the child's, as a press on the label is, so the content takes none itself.
+    pub fn labelled_with<C: Show, D: Show>(
+        &mut self,
+        ui: &mut Ui,
+        key: impl Hash + Debug,
+        label: Label,
+        side: SideLabel,
+        child: C,
+        content: D,
+    ) -> C::Output {
+        let id = self.id.with(key);
+        let under = (self.resolved.enabled, self.resolved.size);
+        let content_id = crate::runtime::memory::sub(id, "content");
+        let mut content = content;
+        let size = crate::contract::run::measure_under(&mut content, &*ui, Some(content_id), craft_behavior::Proposal::Ideal, Some(under));
+        let show = Box::new(move |ui: &mut Ui, rect: Rect| {
+            let _ =
+                crate::contract::run::show_leaf(crate::contract::Props::id(content, content_id), ui, crate::contract::run::ShowAt::Rect(rect), None);
+        });
+        label::flow_leaf(ui, (id, self.resolved.id), under, label, side, child, Some(label::Trailing { size, show }))
     }
 }
 

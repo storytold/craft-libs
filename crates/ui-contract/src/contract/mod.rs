@@ -313,7 +313,8 @@ pub trait Component: Meta + Sized {
     const SHOWS_LABEL: bool = true;
     /// Whether the control draws only its mark and its text is the label step's, placed after it: a check box, a
     /// radio button or a switch. `Show::show` then runs the label step for an instance that carries a label and sits
-    /// in no label scope, and a click on the label in any scope activates the control as a click on it does.
+    /// in no label scope. The label of a leaf label step (its own, `labelled`) is part of the control's hit target:
+    /// mark, gap and label hover, press and activate as one.
     const LABELLED_AFTER: bool = false;
     /// Whether the component edits one value that several selected things cannot disagree on (a colour picker's
     /// area, strip or ramp: it edits the colour it is given). Such a type has no mixed state and no mixed story.

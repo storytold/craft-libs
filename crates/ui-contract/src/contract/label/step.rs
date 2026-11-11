@@ -41,6 +41,10 @@ pub(crate) struct LabelIn<'a> {
     pub control_min: f32,
     /// The control is a leaf child shown in the flow with its label after it, not a field's body.
     pub leaf: bool,
+    /// The leaf child draws only its mark (`Component::LABELLED_AFTER`): the label is part of its hit target.
+    pub claims: bool,
+    /// The size of the content shown after the label's text, inside the label; zero without one.
+    pub trailing: Vec2,
 }
 
 /// The label fact the scope records: the name's text, and the detail and the help line (resolved) as the control's
@@ -50,6 +54,13 @@ fn field_label(env: &Env, input: &LabelIn<'_>, id: Id, rect: Rect) -> FieldLabel
     let described: Vec<String> =
         [input.side.detail.as_ref(), input.help].into_iter().flatten().map(|text| env.view().resolve(text).as_str().to_owned()).collect();
     if described.is_empty() { label } else { label.detail(described.join(". ")) }
+}
+
+/// Content the leaf label step shows after the label's text, inside the label (`BodyCx::labelled_with`): its size
+/// and how to show it in the rect the step gives it.
+pub(crate) struct Trailing<'a> {
+    pub size: Vec2,
+    pub show: Box<dyn FnOnce(&mut Ui, Rect) + 'a>,
 }
 
 /// What the label step needs of one leaf child it labels (`PaintUi::labelled`, `BodyCx::labelled`).
@@ -84,9 +95,10 @@ impl LeafPlaced {
     }
 }
 
-/// The label step for one leaf child: measures the child's narrowest width, runs the step in `row` and returns the
-/// rect left for the child. The caller shows the child there and then calls `LeafPlaced::finish`.
-pub(crate) fn leaf<C: Show>(ui: &mut Ui, env: &Env, at: &LeafLabel<'_>, child: &mut C) -> LeafPlaced {
+/// The label step for one leaf child: measures the child's narrowest width, runs the step in `row`, shows the
+/// `trailing` content inside the label and returns the rect left for the child. The caller shows the child there and
+/// then calls `LeafPlaced::finish`.
+pub(crate) fn leaf<C: Show>(ui: &mut Ui, env: &Env, at: &LeafLabel<'_>, child: &mut C, trailing: Option<Trailing<'_>>) -> LeafPlaced {
     let scope = sub(at.id, "field");
     // The child's own `enabled(false)` disables its label too: a disabled field's label does not scrub.
     let enabled = at.enabled && child.common(crate::contract::Internal::new()).enabled.unwrap_or(true);
@@ -105,8 +117,14 @@ pub(crate) fn leaf<C: Show>(ui: &mut Ui, env: &Env, at: &LeafLabel<'_>, child: &
         size: at.size,
         control_min,
         leaf: true,
+        claims: C::LABELLED_AFTER,
+        trailing: trailing.as_ref().map_or(Vec2::ZERO, |trailing| trailing.size),
     };
     let placed = run(ui, env, &input);
+    // The content shows before the control, so a control that claims the label lies over it and takes its presses.
+    if let Some(trailing) = trailing {
+        (trailing.show)(ui, placed.trailing);
+    }
     LeafPlaced { control: placed.control, label: placed.label, scope }
 }
 
@@ -122,7 +140,7 @@ pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>) -> Placed {
     let label_id = sub(input.scope, "label");
     if input.side.kind == LabelKind::Hidden {
         scope::begin(&ctx, input.scope, input.owner, scope::Kind::Label(field_label(env, input, label_id, Rect::NOTHING)));
-        return Placed { label: Rect::NOTHING, control: hidden_control(&ctx, input, flow, gap) };
+        return Placed { label: Rect::NOTHING, control: hidden_control(&ctx, input, flow, gap), trailing: Rect::NOTHING };
     }
     let slot = if reset.is_some() && input.side.reset_dot { slot_side } else { 0.0 };
     let mut leaf = LabelLeaf::new(input.text.clone(), slot);
@@ -130,6 +148,9 @@ pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>) -> Placed {
     leaf.resettable = reset.is_some();
     leaf.differs = reset.is_some_and(|fact| fact.differs);
     leaf.colon = colon(env, input);
+    leaf.wraps = input.side.layout == FieldLayout::After;
+    leaf.claimed = input.claims;
+    leaf.trailing = input.trailing;
     if let Some(tooltip) = input.side.tooltip.clone() {
         leaf = leaf.tooltip(tooltip);
     }
@@ -150,7 +171,14 @@ pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>) -> Placed {
     let kid_env = crate::contract::cx::child_env(env, input.enabled, input.size);
     let installed = Env::install_for(&kids, kid_env);
     let glyph = leaf.glyph.is_some();
-    let placed = decide(&ctx, env, input, &kids, &mut leaf, glyph, flow);
+    let mut placed = decide(&ctx, env, input, &kids, &mut leaf, glyph, flow);
+    // The label without its reset dot, which keeps its own press; the content sits at its end, on the first line.
+    let (_, unslotted) = Flow::new(placed.label, rtl).take_end(slot);
+    if input.trailing.x > 0.0 {
+        let cell = unslotted.take_end(input.trailing.x).0;
+        let middle = cell.top() + leaf.first_line.get() / 2.0;
+        placed.trailing = Rect::from_min_size(egui::pos2(cell.min.x, middle - input.trailing.y / 2.0), input.trailing);
+    }
     let label_id_for_scope = sub(input.scope, "label");
     let shown = Props::id(leaf, label_id_for_scope).show_at(&mut kids, placed.label);
     Env::restore(&ctx, installed);
@@ -159,6 +187,9 @@ pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>) -> Placed {
     }
     let label = field_label(env, input, label_id_for_scope, placed.label).with_press(shown.press).activated(shown.activated);
     scope::begin(&ctx, input.scope, input.owner, scope::Kind::Label(label));
+    if input.claims {
+        scope::offer_claim(&ctx, unslotted.rect());
+    }
     placed
 }
 
@@ -166,15 +197,15 @@ pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>) -> Placed {
 /// icon and detail of `side`, and the child takes the width the label leaves. The row is as high as the placement
 /// measured: the child (plus the label line when the label stacks), and the label when it is taller. `id` is the
 /// child's id, `owner` the component whose eviction takes the label scope's facts, and `under` the enabled state and
-/// size the child inherits.
+/// size the child inherits. `trailing` is content shown inside the label, after its text.
 pub(crate) fn flow_leaf<C: Show>(
     ui: &mut Ui,
-    id: Id,
-    owner: Id,
+    (id, owner): (Id, Id),
     under: (bool, craft_theme::ControlSize),
     label: Label,
     side: SideLabel,
     child: C,
+    trailing: Option<Trailing<'_>>,
 ) -> C::Output {
     let (enabled, size) = under;
     let env = Env::of(ui);
@@ -185,7 +216,7 @@ pub(crate) fn flow_leaf<C: Show>(
     // The child's own height: a stacked label pushes the control down, and the allocation below follows the placement.
     let row = Rect::from_min_size(avail.min, Vec2::new(avail.width(), ideal.y));
     let at = LeafLabel { id, owner, parent: None, row, text: &label, side: &side, enabled, size };
-    let placed = leaf(ui, &env, &at, &mut child);
+    let placed = leaf(ui, &env, &at, &mut child, trailing);
     // In a column that sizes from its content the row is the label plus the control, never the room around them.
     // A row of a horizontal flow is as wide as its label and control: the room it has there is unbounded.
     let content = env.content.0 || ui.layout().is_horizontal();
@@ -230,5 +261,5 @@ pub(crate) fn show_leaf_in_flow<C: Show>(mut child: C, ui: &mut Ui) -> C::Output
     let facts = crate::contract::run::TypeFacts::of::<C>();
     let id = crate::contract::steps::id(ui, &child.common(crate::contract::Internal::new()).id, false, true, facts.style_key, facts.name);
     let side = SideLabel::new().layout(FieldLayout::After);
-    flow_leaf(ui, id, id, (env.enabled, env.size), label, side, child)
+    flow_leaf(ui, (id, id), (env.enabled, env.size), label, side, child, None)
 }

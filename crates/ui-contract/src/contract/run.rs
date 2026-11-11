@@ -824,8 +824,14 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     p.trace.mark(Step::Sense);
     let decls = parts.decls.parts();
     let enabled = resolved.enabled && !inert;
+    // A control that draws only its mark senses over its own label too: indicator, gap and label are one target.
+    let hit = if facts.labelled_after && !inert { scope::claim(&ctx).map_or(rect, |label| rect.union(label)) } else { rect };
     let sensing::RootResult { mut response, parts: results, press, activation, activated_member, sense: root_sense } =
-        sense_root(ui, member, RootSpec { id, rect, own_sense: own, own: decls, enabled }, arena);
+        sense_root(ui, member, RootSpec { id, rect: hit, own_sense: own, own: decls, enabled }, arena);
+    if hit != rect {
+        let shown = response.rect.intersect(rect);
+        response.rect = Rect::from_min_max(shown.min, shown.max.max(shown.min));
+    }
     // A root in an arena's body that is not one of its members lies over the members shown before it, and under those
     // shown after it (8.3).
     if member.is_none()
@@ -833,7 +839,7 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
         && root_sense.intersects(Sense::CLICK | Sense::DRAG)
         && let Some(outer) = env.arena
     {
-        sensing::note_nested(&ctx, outer, rect.intersect(ui.clip_rect()));
+        sensing::note_nested(&ctx, outer, hit.intersect(ui.clip_rect()));
     }
     // The node exists before any child `Ui` runs, so the children find their parent (12.2). A member has no egui
     // widget, so it first registers the `Ui` it sits in as its parent.
@@ -874,7 +880,7 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     core.member_of = member.map(|arena| arena.0);
     // A key or AccessKit activation of a member reaches its arena root, which names the member.
     let keyed = member.is_some_and(|arena| keys::activated_member(&ctx, arena.0) == Some(id));
-    core.activation = activation_of(&ctx, ui, rect, resolved, keyed, root_sense, activation);
+    core.activation = activation_of(&ctx, ui, hit, resolved, keyed, root_sense, activation);
     core.activated_member = activated_member.or_else(|| arena.then(|| keys::activated_member(&ctx, id)).flatten());
     // A session member with no focused part takes the canvas's and the window's Enter, Escape and arrows first.
     if let Some(arena) = session.filter(|_| !inert && !core.focus.focused) {
@@ -911,7 +917,6 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     overlay::drive_toggles(e.core(), facts.overlays, facts.name);
     e.edit_intents();
     e.scrub_by_label();
-    steps::activate_by_label(&ctx, facts.labelled_after);
     e.update();
     if cfg!(debug_assertions) {
         let keys = text_keys.unwrap_or_else(|| e.keys());

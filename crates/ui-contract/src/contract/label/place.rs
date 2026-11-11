@@ -17,22 +17,26 @@ pub(crate) struct Placed {
     pub label: Rect,
     /// The rect left for the control.
     pub control: Rect,
+    /// The rect of the content shown inside the label after its text; `Rect::NOTHING` without one.
+    pub trailing: Rect,
 }
 
 /// The `After` placement: the control's cell first, then the gap, then the label. A leaf control (a box, circle or
 /// track has no text baseline) and its label are centred on each other across the row. For a field's control, as in
 /// `LabelColumn::place`, the one with the lower baseline moves down so the two baselines line up, using the baseline
 /// `record_control_baseline` stored last pass.
-fn place_after(ctx: &egui::Context, input: &LabelIn<'_>, flow: Flow, gap: f32, label: Vec2, label_baseline: f32) -> Placed {
+fn place_after(ctx: &egui::Context, input: &LabelIn<'_>, flow: Flow, gap: f32, label: Vec2, label_baseline: f32, first_line: f32) -> Placed {
     let rtl = flow.is_rtl();
     let (control_cell, rest) = flow.take_start(input.control_min.min(flow.rect().width()));
     let (_, rest) = rest.take_start(gap);
     let label_width = label.x.min(rest.rect().width());
     if input.leaf {
-        let height = control_cell.height().max(label.y);
-        let label = Flow::new(rest.rect(), rtl).align(Vec2::new(label_width, height), Align::Min, Align::Min);
-        let control = control_cell.translate(Vec2::new(0.0, (height - control_cell.height()) / 2.0));
-        return Placed { label, control };
+        // The control and the label's first line are centred on each other; a wrapped label runs on below.
+        let line = control_cell.height().max(first_line);
+        let label_drop = (line - first_line) / 2.0;
+        let label = Flow::new(rest.rect(), rtl).align(Vec2::new(label_width, label.y), Align::Min, Align::Min).translate(Vec2::new(0.0, label_drop));
+        let control = control_cell.translate(Vec2::new(0.0, (line - control_cell.height()) / 2.0));
+        return Placed { label, control, trailing: Rect::NOTHING };
     }
     let control_baseline = crate::layout::control_baseline(ctx, input.scope, label, label_baseline);
     let drop = control_baseline.map_or(0.0, |control| control - label_baseline);
@@ -40,7 +44,7 @@ fn place_after(ctx: &egui::Context, input: &LabelIn<'_>, flow: Flow, gap: f32, l
     let label_size = Vec2::new(label_width, label.y);
     let label = Flow::new(rest.rect(), rtl).align(label_size, Align::Min, Align::Min).translate(Vec2::new(0.0, label_drop));
     let control = Rect::from_min_max(egui::pos2(control_cell.left(), control_cell.top() + control_drop), control_cell.max);
-    Placed { label, control }
+    Placed { label, control, trailing: Rect::NOTHING }
 }
 
 /// The rect a hidden label leaves for its control. In a body whose labelled rows share a label column the label
@@ -78,7 +82,7 @@ pub(super) fn decide(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, kids: 
         let width = natural.x.min((rest.rect().width() - gap).max(0.0));
         let drop = (cell.height() - natural.y).max(0.0) / 2.0;
         let label = Flow::new(rest.rect(), rtl).align(Vec2::new(width, natural.y), Align::Min, Align::Min).translate(Vec2::new(0.0, drop));
-        return Placed { label, control: cell };
+        return Placed { label, control: cell, trailing: Rect::NOTHING };
     }
     let (column, stack_below) = match input.side.layout {
         FieldLayout::Beside => {
@@ -117,7 +121,7 @@ pub(super) fn decide(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, kids: 
     };
 
     if input.side.layout == FieldLayout::After {
-        place_after(ctx, input, flow, gap, natural, baseline)
+        place_after(ctx, input, flow, gap, natural, baseline, leaf.first_line.get())
     } else {
         let placed = crate::layout::place_label(
             kids,
@@ -132,7 +136,7 @@ pub(super) fn decide(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, kids: 
             let spare = (column - label.width()).max(0.0);
             label = label.translate(Vec2::new(if rtl { -spare } else { spare }, 0.0));
         }
-        Placed { label, control: placed.control }
+        Placed { label, control: placed.control, trailing: Rect::NOTHING }
     }
 }
 

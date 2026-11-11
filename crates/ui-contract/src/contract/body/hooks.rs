@@ -721,6 +721,8 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 size: resolved.size,
                 control_min: scope::measured_control_min(&ctx, id),
                 leaf: false,
+                claims: false,
+                trailing: Vec2::ZERO,
             };
             body_rect = label::run(ui, env, &input).control;
             label_input = Some(input);

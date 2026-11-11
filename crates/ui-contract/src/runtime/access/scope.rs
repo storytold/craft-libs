@@ -114,8 +114,9 @@ struct Scope {
     message: Option<(Message, Tone, String)>,
     /// A control inside scrubs by the label.
     scrub: bool,
-    /// A control inside is activated by a click on the label, as a check box is.
-    activates: bool,
+    /// The rect the label offers to its control as part of the control's hit target: the label of a leaf label
+    /// step whose child draws only its mark (`Component::LABELLED_AFTER`). The control takes it at its step 8.
+    claim: Option<Rect>,
     /// The narrowest width of the first control.
     control_min: Option<f32>,
 }
@@ -168,7 +169,7 @@ pub(crate) fn begin(ctx: &Context, container: Id, owner: Id, kind: Kind) {
             message: None,
             control_min: None,
             scrub: false,
-            activates: false,
+            claim: None,
         })
     });
 }
@@ -342,13 +343,20 @@ pub(crate) fn register_scrub(ctx: &Context) {
     });
 }
 
-/// Registers that a control of the innermost label scope is activated by a click on the label.
-pub(crate) fn register_activates(ctx: &Context) {
+/// Offers `rect`, the label of the scope just begun, to the scope's control as part of its hit target.
+pub(crate) fn offer_claim(ctx: &Context, rect: Rect) {
     pass_state::with::<Stack, _>(ctx, |stack| {
-        if let Some(scope) = stack.0.iter_mut().rev().find(|scope| matches!(scope.kind, Kind::Label(_))) {
-            scope.activates = true;
+        if let Some(scope) = stack.0.last_mut() {
+            scope.claim = Some(rect);
         }
     });
+}
+
+/// Takes the label rect the innermost label scope offers its control: the first control that asks gets it.
+pub(crate) fn claim(ctx: &Context) -> Option<Rect> {
+    pass_state::with::<Stack, _>(ctx, |stack| {
+        stack.0.iter_mut().rev().find(|scope| matches!(scope.kind, Kind::Label(_))).and_then(|scope| scope.claim.take())
+    })
 }
 
 /// Whether a control of the label scope of `container` scrubbed by the label last frame.
@@ -508,9 +516,6 @@ pub(crate) fn finish(ctx: &Context, container: Id, merged: Option<Merged>) {
                 && !only.disabled
             {
                 crate::runtime::focus::request(ctx, only.inner_stop.unwrap_or(crate::runtime::focus::FocusTarget::Id(only.id)));
-                if scope.activates {
-                    crate::runtime::keys::queue_activate(ctx, only.id);
-                }
             }
             if let Some(baseline) = scope.baseline {
                 layout_memory::record(ctx, sub(scope.container, "baseline"), Vec2::new(0.0, baseline));

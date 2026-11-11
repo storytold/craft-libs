@@ -40,7 +40,7 @@ pub(crate) use intents::{
     Lent, context_request, give_back, lend, lent_taken, request_context, route_whole_reset, scope_escape, take_cancel, take_window_cancel,
 };
 pub(crate) use nodes::{redirect_node, register_expanded, register_node};
-pub(crate) use route::{activated_member, begin, layout_of, pasted_text, queue_activate, queue_edit, take_shortcuts};
+pub(crate) use route::{activated_member, begin, layout_of, pasted_text, queue_edit, take_shortcuts};
 
 /// A menu-bar key of an in-window bar (spec 9.7). F10 reaches the bar on every OS; Alt keys only off a Mac.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -168,8 +168,6 @@ struct AltTrack {
 #[derive(Default)]
 pub(crate) struct Stage {
     batch: Batch,
-    /// Controls a label click activates, queued by `queue_activate` for the next pass.
-    activate: Vec<Id>,
     routed: HashMap<Option<Id>, Routed>,
     claimed: Vec<(Id, Chord)>,
     claims: Vec<(Id, Chord)>,

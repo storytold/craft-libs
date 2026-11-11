@@ -7,10 +7,10 @@
 mod stories;
 
 use craft_ui::choice::{Checkbox, Radio, RadioGroup};
-use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, FieldLayout, Props as _, Show as _, ShowContainer as _, SideLabel};
 use craft_ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft_ui::display::{Picture, PictureSize};
-use craft_ui::layout_components::{Row, Stack};
+use craft_ui::layout_components::Stack;
 use craft_ui::list::{ListWords, ThumbSize};
 use craft_ui::patterns::form_dialogs::FormDialog;
 use craft_ui::runtime::env::Env;
@@ -196,15 +196,17 @@ impl StackDialog for LayersOptionsDialog {
         let shown = FormDialog::new(words.title.clone(), Bind::bound(&mut self.options)).show(ui, |ui, _, options| {
             Stack::new().show(ui, |ui, _| {
                 GroupBox::new(words.thumbnail_size.clone(), None).show(ui, |ui, _| {
-                    RadioGroup::new(words.thumbnail_size.clone(), Bind::bound(&mut options.thumbnail_size)).show(ui, |ui, _| {
+                    RadioGroup::new(words.thumbnail_size.clone(), Bind::bound(&mut options.thumbnail_size)).show(ui, |ui, cx| {
                         Stack::new().show(ui, |ui, _| {
+                            // Each size's sample sits inside its option: a click on it picks the size.
                             for size in ThumbSize::ALL {
-                                Row::new().show(ui, |ui, _| {
-                                    Radio::new(size).label(size.label(&list)).show(ui);
-                                    if size != ThumbSize::None {
-                                        Picture::new(words.sample.clone(), SAMPLE_KEY, &sample_image).extent(PictureSize::Thumb(size)).show(ui);
-                                    }
-                                });
+                                let side = SideLabel::new().layout(FieldLayout::After);
+                                if size == ThumbSize::None {
+                                    cx.labelled(ui, size, size.label(&list), side, Radio::new(size));
+                                } else {
+                                    let sample = Picture::new(words.sample.clone(), SAMPLE_KEY, &sample_image).extent(PictureSize::Thumb(size));
+                                    cx.labelled_with(ui, size, size.label(&list), side, Radio::new(size), sample);
+                                }
                             }
                         });
                     });
