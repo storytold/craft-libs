@@ -31,11 +31,16 @@ fn palette(ui: &mut Ui, data: &mut StoryData, view: PresetView) -> StoryOutput {
     let mut initial = PresetState::new();
     initial.view = view;
     let state = data.value("state", initial);
-    let _ = GradientPalette::new("Gradients", &groups, Bind::bound(&mut *state))
+    let shown = GradientPalette::new("Gradients", &groups, Bind::bound(&mut *state))
         .recent(&recent)
         .selected(GradientRef::Item { group: 0, item: 1 })
         .show(ui);
-    StoryOutput::default()
+    let last = data.note("last", String::new());
+    if let Some(picked) = shown.picked {
+        *last = format!("{picked:?}");
+    }
+    let readout = format!("Last event: {last}");
+    StoryOutput::from(shown).readout(readout)
 }
 
 #[story(GradientPalette<'static>, covers = [Default])]

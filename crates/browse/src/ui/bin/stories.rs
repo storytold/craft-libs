@@ -138,7 +138,12 @@ fn show_bin(ui: &mut Ui, data: &mut StoryData, view: BinView, cards: &[FreeformC
         .show(ui);
     *data.value(key, BinState::<u32>::default()) = state;
     *data.value("selection", Selection::<u32>::default()) = selection;
-    out.into()
+    let last = data.note("last", None::<String>);
+    if let Some(event) = out.events.last() {
+        *last = Some(format!("{event:?}"));
+    }
+    let readout = last.as_ref().map_or_else(|| "No event yet".to_owned(), |event| format!("Last event: {event}"));
+    StoryOutput::from(out).readout(readout)
 }
 
 #[story(MediaBin<'static, u32, dyn BinModel<u32>>, covers = [], drive = Drive::Never)]

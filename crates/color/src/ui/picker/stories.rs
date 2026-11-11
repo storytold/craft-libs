@@ -8,7 +8,7 @@ use egui::Ui;
 
 use super::channel::{ChannelRow, ChannelRule, TrackRamp};
 use super::screen_pick::ScreenPickButton;
-use super::{ColorPicker, ColorPickerLayout, ColorWarning, ColorWarningChip, PickedColor};
+use super::{ColorPicker, ColorPickerLayout, ColorPickerOutput, ColorWarning, ColorWarningChip, PickedColor};
 use crate::ui::AreaMode;
 
 /// A naive CMYK in percent, without a working space: a host's model for the stories. A real host converts through its
@@ -53,6 +53,16 @@ impl ColorModel for NaiveCmyk {
 
 static CMYK_MODEL: NaiveCmyk = NaiveCmyk;
 
+/// The picker's output with the readout of its latest event, kept in the story's data across passes.
+fn with_readout(data: &mut StoryData, shown: ColorPickerOutput) -> StoryOutput {
+    let last = data.note("last", String::new());
+    if let Some(event) = shown.events.last() {
+        *last = format!("{event:?}");
+    }
+    let readout = format!("Last event: {last}");
+    StoryOutput::from(shown).readout(readout)
+}
+
 fn start() -> PickedColor {
     PickedColor::rgb(Srgba::rgb(0.2, 0.5, 0.8))
 }
@@ -60,7 +70,8 @@ fn start() -> PickedColor {
 #[story(ColorPicker<'static>, covers = [Default], drive = Drive::Never)]
 fn color_picker_compact(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let color = data.value("color", start());
-    ColorPicker::new("Foreground color", Bind::bound(color)).alpha(true).eyedropper(true).show(ui).into()
+    let shown = ColorPicker::new("Foreground color", Bind::bound(color)).alpha(true).eyedropper(true).show(ui);
+    with_readout(data, shown)
 }
 
 #[story(ColorPicker<'static>, covers = [], drive = Drive::Never)]
@@ -68,7 +79,8 @@ fn color_picker_web_colors(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let web = *data.value("web", true);
     let mut web = web;
     let color = data.value("color", start());
-    ColorPicker::new("Foreground color", Bind::bound(color)).web_colors(Bind::bound(&mut web)).show(ui).into()
+    let shown = ColorPicker::new("Foreground color", Bind::bound(color)).web_colors(Bind::bound(&mut web)).show(ui);
+    with_readout(data, shown)
 }
 
 #[story(ColorPicker<'static>, covers = [], drive = Drive::Never)]
@@ -76,21 +88,22 @@ fn color_picker_full(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut mode = *data.value("mode", AreaMode::default());
     let current = Srgba::rgb(0.9, 0.2, 0.1);
     let color = data.value("color", PickedColor::rgb(Srgba::rgb(1.0, 0.0, 1.0)));
-    ColorPicker::new("Foreground color", Bind::bound(color))
+    let shown = ColorPicker::new("Foreground color", Bind::bound(color))
         .layout(ColorPickerLayout::Full)
         .mode(Bind::bound(&mut mode))
         .compare(current)
         .warnings([ColorWarning::new("Out of gamut for printing", Srgba::rgb(0.9, 0.1, 0.9))])
         .eyedropper(true)
-        .show(ui)
-        .into()
+        .show(ui);
+    with_readout(data, shown)
 }
 
 #[story(ColorPicker<'static>, covers = [Many], drive = Drive::Never)]
 fn color_picker_full_models(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let color = data.value("color", start());
     let models: [&'static dyn ColorModel; 5] = [&HsbModel, &RgbModel, &LabModel, &CMYK_MODEL, &OklchModel];
-    ColorPicker::new("Foreground color", Bind::bound(color)).layout(ColorPickerLayout::Full).models(models).alpha(true).show(ui).into()
+    let shown = ColorPicker::new("Foreground color", Bind::bound(color)).layout(ColorPickerLayout::Full).models(models).alpha(true).show(ui);
+    with_readout(data, shown)
 }
 
 #[story(ColorWarningChip<'static>, covers = [Default], drive = Drive::Never)]

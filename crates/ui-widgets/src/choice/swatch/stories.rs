@@ -3,7 +3,6 @@
 use super::Swatch;
 use crate::choice::RadioGroup;
 use crate::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _};
-use crate::display::Text;
 use crate::layout_components::{Row, Stack};
 use crate::testing::{Drive, StoryData, StoryOutput, show_as_only_item, story};
 use craft_behavior::Mixed;
@@ -35,15 +34,16 @@ fn swatch(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 
 /// Opaque, translucent, clear, a colour equal to the panel, mixed and selected, each named by its label.
 #[story(Swatch<u8>, covers = [], drive = Drive::Never)]
-fn swatch_states(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+fn swatch_states(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let clicks = data.note("clicks", 0u32);
     Row::new().show(ui, |ui, _| {
-        Swatch::new("Opaque", BLUE).show(ui);
-        Swatch::new("Translucent", Srgba { r: 0.90, g: 0.28, b: 0.30, a: 0.43 }).show(ui);
-        Swatch::new("Clear", Srgba { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }).show(ui);
-        Swatch::new("Mixed", Mixed::<Srgba>::Mixed).show(ui);
-        Swatch::new("Selected", PALETTE[5]).selected(true).show(ui);
+        *clicks += u32::from(Swatch::new("Opaque", BLUE).show(ui).clicked);
+        *clicks += u32::from(Swatch::new("Translucent", Srgba { r: 0.90, g: 0.28, b: 0.30, a: 0.43 }).show(ui).clicked);
+        *clicks += u32::from(Swatch::new("Clear", Srgba { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }).show(ui).clicked);
+        *clicks += u32::from(Swatch::new("Mixed", Mixed::<Srgba>::Mixed).show(ui).clicked);
+        *clicks += u32::from(Swatch::new("Selected", PALETTE[5]).selected(true).show(ui).clicked);
     });
-    StoryOutput::default()
+    StoryOutput::default().readout(format!("Clicked {clicks} times"))
 }
 
 /// Twelve swatches in a `RadioGroup`: one Tab stop, arrows move, Space picks.
@@ -77,12 +77,11 @@ fn swatch_table_cells(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 /// A well and a line that counts its clicks.
 #[story(Swatch<u8>, covers = [], drive = Drive::Never)]
 fn swatch_clicks(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let clicks = data.value("clicks", 0u32);
+    let clicks = data.note("clicks", 0u32);
     Stack::new().show(ui, |ui, _| {
         if Swatch::new("Fill", BLUE).show(ui).clicked {
             *clicks += 1;
         }
-        Text::new(format!("{clicks} clicks")).show(ui);
     });
-    StoryOutput::default()
+    StoryOutput::default().readout(format!("Clicked {clicks} times"))
 }

@@ -89,9 +89,16 @@ fn section_list(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     BrushSectionList::new("Brush settings sections", &sections, Bind::given(shown)).link_row().show(ui).into()
 }
 
+/// How the story words the angle and roundness it shows.
+fn angle_note(angle: TipAngle) -> String {
+    format!("Angle {:.0}°, roundness {:.0} %", angle.degrees, (angle.roundness * 100.0).round())
+}
+
 #[story(TipEllipse<'static>, covers = [Default], drive = Drive::Drag(Grip::new(super::ellipse::ARROW)))]
 fn tip_ellipse(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    TipEllipse::new("Tip angle and roundness", Bind::bound(data.value("angle", ANGLE))).show(ui).into()
+    let shown = TipEllipse::new("Tip angle and roundness", Bind::bound(data.value("angle", ANGLE))).show(ui);
+    let note = angle_note(*data.value("angle", ANGLE));
+    StoryOutput::from(shown).readout(note)
 }
 
 #[story(TipEllipse<'static>, covers = [Mixed], drive = Drive::Never)]
@@ -102,7 +109,9 @@ fn tip_ellipse_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(TipEllipse<'static>, covers = [Invalid], drive = Drive::Never)]
 fn tip_ellipse_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let refuse_flat = |angle: &TipAngle| if angle.roundness < 0.5 { Validity::Refuse(Message::new("Too flat")) } else { Validity::Ok };
-    TipEllipse::new("Tip angle and roundness", Bind::bound(data.value("flat", ANGLE)).check(refuse_flat)).show(ui).into()
+    let shown = TipEllipse::new("Tip angle and roundness", Bind::bound(data.value("flat", ANGLE)).check(refuse_flat)).show(ui);
+    let note = angle_note(*data.value("flat", ANGLE));
+    StoryOutput::from(shown).readout(note)
 }
 
 #[story(DynamicControlRow<'static, u8>, covers = [Default], drive = Drive::Never)]

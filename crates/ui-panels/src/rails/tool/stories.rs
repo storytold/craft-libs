@@ -53,5 +53,17 @@ fn tool_rail(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .column_toggle("Toolbar")
         .edit_toolbar("Edit Toolbar")
         .show_rail(ui, |_, _| {});
-    out.into()
+    let note = data.note("note", "Nothing yet".to_owned());
+    if let Some(tool) = out.select {
+        *note = format!("selected {tool}");
+    } else if let Some(tool) = out.double_clicked {
+        *note = format!("double clicked {tool}");
+    } else if out.toggle_columns {
+        *note = "toggle columns".to_owned();
+    } else if out.edit_toolbar {
+        *note = "edit toolbar".to_owned();
+    }
+    let flyout = out.flyout.map_or_else(|| "closed".to_owned(), |slot| format!("of slot {slot} open"));
+    let readout = format!("{note}; flyout {flyout}");
+    StoryOutput::from(out).readout(readout)
 }

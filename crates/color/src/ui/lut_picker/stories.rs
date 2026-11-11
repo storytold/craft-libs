@@ -19,12 +19,16 @@ fn pick_second(fixture: &mut Fixture) {
 
 #[story(LutPicker<'static>, covers = [Default], drive = Drive::Custom(pick_second))]
 fn lut_picker(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    LutPicker::new(Bind::bound(data.value("lut", LutChoice::Builtin("warm")))).label("3D LUT File").show(ui).into()
+    let shown = LutPicker::new(Bind::bound(data.value("lut", LutChoice::Builtin("warm")))).label("3D LUT File").show(ui);
+    let chosen = format!("Chosen: {:?}", data.value("lut", LutChoice::Builtin("warm")));
+    StoryOutput::from(shown).readout(chosen)
 }
 
 #[story(LutPicker<'static>, covers = [], drive = Drive::Never)]
 fn lut_picker_loaded(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    LutPicker::new(Bind::bound(data.value("lut", LutChoice::loaded("Film", 33)))).label("3D LUT File").show(ui).into()
+    let shown = LutPicker::new(Bind::bound(data.value("lut", LutChoice::loaded("Film", 33)))).label("3D LUT File").show(ui);
+    let chosen = format!("Chosen: {:?}", data.value("lut", LutChoice::loaded("Film", 33)));
+    StoryOutput::from(shown).readout(chosen)
 }
 
 #[story(LutPicker<'static>, covers = [Invalid], drive = Drive::Never)]
@@ -33,5 +37,7 @@ fn lut_picker_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         LutChoice::Builtin(_) => Validity::Refuse(Message::new("Load a file")),
         _ => Validity::Ok,
     };
-    LutPicker::new(Bind::bound(data.value("lut", LutChoice::Builtin("warm"))).check(refuse_builtin)).label("3D LUT File").show(ui).into()
+    let shown = LutPicker::new(Bind::bound(data.value("lut", LutChoice::Builtin("warm"))).check(refuse_builtin)).label("3D LUT File").show(ui);
+    let chosen = format!("Chosen: {:?}", data.value("lut", LutChoice::Builtin("warm")));
+    StoryOutput::from(shown).readout(chosen)
 }

@@ -4,7 +4,7 @@ use craft_theme::Srgba;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
-use super::{ChannelKind, ChannelRow, ChannelsPanel, ColorIndicates};
+use super::{ChannelKind, ChannelRow, ChannelsOutput, ChannelsPanel, ColorIndicates};
 
 type Rows = Vec<ChannelRow<u32>>;
 
@@ -44,20 +44,33 @@ fn multichannel_rows() -> Rows {
     rows
 }
 
+/// The panel's output with the readout of its latest event, kept in the story's data across passes.
+fn with_readout(data: &mut StoryData, shown: ChannelsOutput<u32>) -> StoryOutput {
+    let last = data.note("last", None::<String>);
+    if let Some(event) = shown.events.last() {
+        *last = Some(format!("{event:?}"));
+    }
+    let readout = last.as_ref().map_or_else(|| "No event yet".to_owned(), |event| format!("Last event: {event}"));
+    StoryOutput::from(shown).readout(readout)
+}
+
 #[story(ChannelsPanel<'static, u32>, covers = [Default], drive = Drive::Never)]
 fn channels_panel_alpha_and_spot(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let rows = data.value("rows", alpha_and_spot_rows()).clone();
-    ChannelsPanel::new(&rows).show(ui).into()
+    let shown = ChannelsPanel::new(&rows).show(ui);
+    with_readout(data, shown)
 }
 
 #[story(ChannelsPanel<'static, u32>, covers = [], drive = Drive::Never)]
 fn channels_panel_quick_mask_and_layer_mask(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let rows = data.value("rows", mask_rows()).clone();
-    ChannelsPanel::new(&rows).show(ui).into()
+    let shown = ChannelsPanel::new(&rows).show(ui);
+    with_readout(data, shown)
 }
 
 #[story(ChannelsPanel<'static, u32>, covers = [], drive = Drive::Never)]
 fn channels_panel_multichannel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let rows = data.value("rows", multichannel_rows()).clone();
-    ChannelsPanel::new(&rows).show(ui).into()
+    let shown = ChannelsPanel::new(&rows).show(ui);
+    with_readout(data, shown)
 }

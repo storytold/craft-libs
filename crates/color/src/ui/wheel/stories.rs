@@ -10,7 +10,13 @@ use egui::Ui;
 #[story(ColorWheel<'static>, covers = [Default], drive = Drive::Drag(Grip::new(super::RING)))]
 fn color_wheel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let values = data.value("values", HsbModel.from_srgb(Srgba::rgb(0.2, 0.5, 0.8)));
-    ColorWheel::new("Color wheel", Bind::bound(values)).show(ui).into()
+    let shown = ColorWheel::new("Color wheel", Bind::bound(values)).show(ui);
+    let last = data.note("last", String::new());
+    if let Some(event) = shown.events.last() {
+        *last = format!("{event:?}");
+    }
+    let readout = format!("Last event: {last}");
+    StoryOutput::from(shown).readout(readout)
 }
 
 #[story(ColorWheel<'static>, covers = [Invalid], drive = Drive::Never)]

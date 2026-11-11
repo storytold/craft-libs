@@ -1,8 +1,8 @@
 //! One card: stories live on their surface under a header with the component's name and, while a story differs from
 //! its start, Reset; the Open command of an Overview card opens the component's tab. A card of several stories lays
-//! them out as the component's catalog entry says, each under its caption. A story runs in the shell of the view the card
-//! is in, so its dialogs open over that view, as an app's do. [`StoryBody`] is the story part alone, which the story
-//! renderer (`story-render`) shows too.
+//! them out as the component's catalog entry says, each under its caption and over its readout. A story runs in the
+//! shell of the view the card is in, so its dialogs open over that view, as an app's do. [`StoryBody`] is the story
+//! part alone, which the story renderer (`story-render`) shows too.
 
 use super::inspect::{Inspected, region_key};
 use crate::viewer::{CardState, Cells, DialogState};
@@ -313,6 +313,9 @@ impl StoryBody {
             let before = shell.as_ref().map_or(0, |shell| shell.dialogs_shown());
             let (output, record) = host.content(ui, show, data, self.inspect.map(|(key, _)| key));
             recorded = record.or(recorded.take());
+            if let Some(readout) = &output.readout {
+                Text::new(readout.clone()).shade(Shade::Muted).show(ui);
+            }
             if !ui.is_sizing_pass() {
                 ran.set(Some(shell.is_some_and(|shell| shell.dialogs_shown() > before)));
             }

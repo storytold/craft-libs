@@ -1,6 +1,6 @@
 //! Stories of `SwatchPalette` and `SwatchTable`.
 
-use super::{SwatchCell, SwatchPalette, SwatchTable};
+use super::{SwatchCell, SwatchPalette, SwatchTable, SwatchTableOutput};
 use craft_behavior::Selection;
 use craft_theme::Srgba;
 use craft_ui::contract::Bind;
@@ -36,27 +36,46 @@ fn table_entries() -> Vec<(Label, Srgba)> {
     }))
 }
 
+/// The table's output with the readout of its latest select or open, kept in the story's data across passes.
+fn with_readout(data: &mut StoryData, shown: SwatchTableOutput) -> StoryOutput {
+    let last = data.note("last", String::new());
+    if let Some(index) = shown.selected {
+        *last = format!("select {index}");
+    }
+    if let Some(index) = shown.open {
+        *last = format!("open {index}");
+    }
+    let readout = format!("Last event: {last}");
+    StoryOutput::from(shown).readout(readout)
+}
+
 #[story(SwatchPalette<'static>, covers = [], drive = Drive::Never)]
 fn swatch_palette(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let swatches = named(PALETTE.iter().map(|(name, color)| ((*name).to_owned(), *color)));
-    SwatchPalette::new("Swatches", Bind::bound(data.value("color", PALETTE[8].1)), &swatches).show(ui).into()
+    let shown = SwatchPalette::new("Swatches", Bind::bound(data.value("color", PALETTE[8].1)), &swatches).show(ui);
+    let last = data.note("last", String::new());
+    if let Some(event) = &shown.edit {
+        *last = format!("{event:?}");
+    }
+    let readout = format!("Last event: {last}");
+    StoryOutput::from(shown).readout(readout)
 }
 
 #[story(SwatchTable<'static>, covers = [Default, Many], drive = Drive::Never)]
 fn swatch_table(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = table_entries();
-    SwatchTable::new("Color Table", &entries)
-        .selection(Bind::bound(data.value("selected", Selection::single(5usize))))
-        .per_row(16)
-        .show_all(ui)
-        .into()
+    let shown =
+        SwatchTable::new("Color Table", &entries).selection(Bind::bound(data.value("selected", Selection::single(5usize)))).per_row(16).show_all(ui);
+    with_readout(data, shown)
 }
 
 #[story(SwatchTable<'static>, covers = [], drive = Drive::Never)]
 fn swatch_table_multiple(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = table_entries();
     let start = Selection::new(vec![2usize, 3, 18], Some(18), Some(2));
-    SwatchTable::new("Color Table", &entries).multiple(true).selection(Bind::bound(data.value("selected", start))).per_row(16).show_all(ui).into()
+    let shown =
+        SwatchTable::new("Color Table", &entries).multiple(true).selection(Bind::bound(data.value("selected", start))).per_row(16).show_all(ui);
+    with_readout(data, shown)
 }
 
 #[story(SwatchTable<'static>, covers = [Empty], drive = Drive::Never)]
@@ -67,7 +86,8 @@ fn swatch_table_empty(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 #[story(SwatchTable<'static>, covers = [One], drive = Drive::Never)]
 fn swatch_table_one(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = table_entries().into_iter().take(1).collect::<Vec<_>>();
-    SwatchTable::new("Color Table", &entries).selection(Bind::bound(data.value("selected", Selection::single(0usize)))).show_all(ui).into()
+    let shown = SwatchTable::new("Color Table", &entries).selection(Bind::bound(data.value("selected", Selection::single(0usize)))).show_all(ui);
+    with_readout(data, shown)
 }
 
 #[story(SwatchCell, covers = [Default], drive = Drive::Never)]

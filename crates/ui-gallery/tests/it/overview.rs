@@ -218,3 +218,33 @@ fn a_card_at_rest_shows_no_reset() {
         assert!(fixture.by_label("Reset").is_none(), "{name}'s card shows Reset with no input");
     }
 }
+
+/// A story's readout shows under the story and follows what happens in it: the LayersPanel card says that nothing
+/// happened yet, and after a click on a layer row it names the event.
+#[trial]
+fn a_card_shows_its_storys_readout_under_the_story_and_follows_it() {
+    let mut gallery = gallery_filtered(level_of("LayersPanel"), "LayersPanel");
+    let mut fixture = Fixture::new(move |ui| gallery.ui(ui));
+    fixture.room(Vec2::new(1400.0, 900.0)).settle();
+    let readout = |fixture: &Fixture| {
+        fixture.texts().iter().find(|run| run.text == "No event yet" || run.text.starts_with("Last event: ")).map(|run| (run.text.clone(), run.rect))
+    };
+    let (before, at) = readout(&fixture).expect("the card shows its story's readout");
+    assert_eq!(before, "No event yet");
+    let card = fixture
+        .by_role(Role::GROUP)
+        .into_iter()
+        .find(|group| fixture.tree().name_of(group.node) == Some("LayersPanel"))
+        .expect("the LayersPanel card shows")
+        .rect;
+    let rows: Vec<_> = [Role::TREE_ITEM, Role::LIST_ITEM, Role::ROW]
+        .into_iter()
+        .flat_map(|role| fixture.by_role(role))
+        .filter(|row| card.contains_rect(row.rect))
+        .collect();
+    let row = *rows.last().expect("the panel shows layer rows");
+    assert!(rows.iter().all(|row| row.rect.bottom() <= at.top()), "the readout lies under the story: {at:?}");
+    fixture.click(&row).settle();
+    let (after, _) = readout(&fixture).expect("the readout stays");
+    assert!(after.starts_with("Last event: "), "the readout names the click's event: {after}");
+}

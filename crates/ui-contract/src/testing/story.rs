@@ -208,6 +208,8 @@ pub struct StoryData {
     /// What a story said about how a value is edited: a range or a list of choices.
     #[doc(hidden)]
     pub how: HashMap<(&'static str, TypeId), Edit>,
+    /// What the story keeps about what happened in it ([`StoryData::note`]).
+    notes: HashMap<(&'static str, TypeId), Box<dyn Any>>,
     /// The story's `disabled_text`.
     disabled_text: Option<&'static str>,
 }
@@ -289,6 +291,19 @@ impl StoryData {
         match slot.any_mut().downcast_mut::<T>() {
             Some(value) => Some(value),
             None => unreachable!("a slot's value has the type its key names"),
+        }
+    }
+
+    /// The note named `name` of type `T`, created from `init` on first use: what the story keeps about what happened in
+    /// it for its readout ([`StoryOutput::readout`]), such as the last event or a click count. A note is not a value:
+    /// the runner's drives and a viewer's Reset compare the values only, so a cancelled drag that the readout reports
+    /// leaves the values as they were.
+    #[allow(clippy::unreachable, reason = "the slot key holds the type, so the downcast cannot fail")]
+    pub fn note<T: Any>(&mut self, name: &'static str, init: T) -> &mut T {
+        let slot = self.notes.entry((name, TypeId::of::<T>())).or_insert_with(|| Box::new(init));
+        match slot.downcast_mut::<T>() {
+            Some(note) => note,
+            None => unreachable!("a slot's note has the type its key names"),
         }
     }
 
@@ -459,9 +474,19 @@ pub struct StoryOutput {
     pub visible: Option<Range<usize>>,
     /// The shown value as the component words it ([`crate::contract::Outcome::value_text`]).
     pub value_text: Option<String>,
+    /// The story's readout: a line in the story's own words about what it shows or what last happened in it ("Last
+    /// event: …", "Clicked 2 times"), which a viewer shows under the story.
+    pub readout: Option<String>,
 }
 
 impl StoryOutput {
+    /// The same output with `text` as its readout.
+    #[must_use]
+    pub fn readout(mut self, text: impl Into<String>) -> Self {
+        self.readout = Some(text.into());
+        self
+    }
+
     pub(crate) fn from_response(response: &Response) -> Self {
         StoryOutput { id: Some(response.id), clicked: super::contract::clicked(response), ..StoryOutput::default() }
     }

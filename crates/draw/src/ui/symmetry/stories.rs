@@ -19,6 +19,11 @@ fn sample(mode: SymmetryMode) -> Symmetry {
     Symmetry { mode, center: SHOWN.centre(), rotation: 20.0 }
 }
 
+/// The count of axes the symmetry draws over the page.
+fn axes(symmetry: &Symmetry) -> String {
+    format!("{} axes on the page", symmetry.segments(PAGE).len())
+}
+
 /// A view that shows the page at 100 %, centred.
 fn view(ui: &Ui, room: egui::Rect) -> CanvasView {
     SHOWN.view(room, ui.pixels_per_point(), 100.0)
@@ -48,7 +53,7 @@ fn dual_axis(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         craft_ui::testing::canvas_story::show_document(ui, body.rect, &SHOWN);
         SymmetryOverlay::new("Symmetry", &symmetry, PAGE).show_at(ui, body.rect);
     });
-    StoryOutput::default()
+    StoryOutput::default().readout(axes(&symmetry))
 }
 
 #[story(SymmetryOverlay<'static>, covers = [Default], drive = Drive::Never)]
@@ -60,7 +65,7 @@ fn editing_guides(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         craft_ui::testing::canvas_story::show_document(ui, body.rect, &SHOWN);
         SymmetryOverlay::new("Symmetry", &symmetry, PAGE).editing(true).show_at(ui, body.rect);
     });
-    StoryOutput::default()
+    StoryOutput::default().readout(axes(&symmetry))
 }
 
 #[story(SymmetryHandles<'static>, covers = [Default], drive = Drive::Drag(Grip::part(SYMMETRY.at(CENTRE))))]
@@ -72,5 +77,6 @@ fn handles_on_a_canvas(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         craft_ui::testing::canvas_story::show_document(ui, body.rect, &SHOWN);
         SymmetryHandles::new("Symmetry", Bind::bound(&mut *symmetry), PAGE).show_at(ui, body.rect)
     });
-    shown.inner.map(|output| StoryOutput::from(output.edit)).unwrap_or_default()
+    let output = shown.inner.map(|output| StoryOutput::from(output.edit)).unwrap_or_default();
+    output.readout(axes(symmetry))
 }
