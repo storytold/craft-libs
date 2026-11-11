@@ -52,6 +52,10 @@ impl Value {
             Value::Bool(b) => i64::from(*b).to_string(),
         }
     }
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "DXF numeric accessors intentionally convert integer values to f64, accepting precision loss beyond 2^53."
+    )]
     pub fn as_f64(&self) -> f64 {
         match self {
             Value::Real(r) if r.is_finite() => *r,
@@ -61,6 +65,7 @@ impl Value {
             _ => 0.0,
         }
     }
+    #[expect(clippy::cast_possible_truncation, reason = "DXF numeric accessors intentionally truncate finite real values to i64.")]
     pub fn as_i64(&self) -> i64 {
         match self {
             Value::Int(i) => *i,
@@ -118,46 +123,21 @@ pub enum Kind {
 
 pub fn kind_of(code: i32) -> Kind {
     match code {
-        0..=9 => Kind::Str,
-        10..=59 => Kind::Real,
-        60..=79 => Kind::Int16,
-        90..=99 => Kind::Int32,
-        100..=109 => Kind::Str,
-        110..=149 => Kind::Real,
+        10..=59 | 110..=149 | 210..=239 | 460..=469 | 1010..=1059 => Kind::Real,
+        60..=79 | 170..=179 | 270..=289 | 370..=389 | 400..=409 | 1060..=1070 => Kind::Int16,
+        90..=99 | 420..=429 | 440..=449 | 450..=459 | 1071 => Kind::Int32,
         160..=169 => Kind::Int64,
-        170..=179 => Kind::Int16,
-        210..=239 => Kind::Real,
-        270..=289 => Kind::Int16,
         290..=299 => Kind::Bool,
-        300..=309 => Kind::Str,
-        310..=319 => Kind::Hex,
-        320..=369 => Kind::Str,
-        370..=389 => Kind::Int16,
-        390..=399 => Kind::Str,
-        400..=409 => Kind::Int16,
-        410..=419 => Kind::Str,
-        420..=429 => Kind::Int32,
-        430..=439 => Kind::Str,
-        440..=449 => Kind::Int32,
-        450..=459 => Kind::Int32,
-        460..=469 => Kind::Real,
-        470..=479 => Kind::Str,
-        480..=481 => Kind::Str,
-        999 => Kind::Str,
-        1000..=1003 => Kind::Str,
-        1004 => Kind::Hex,
-        1005..=1009 => Kind::Str,
-        1010..=1059 => Kind::Real,
-        1060..=1070 => Kind::Int16,
-        1071 => Kind::Int32,
+        310..=319 | 1004 => Kind::Hex,
         _ => Kind::Str,
     }
 }
 
+#[expect(clippy::cast_possible_truncation, reason = "DXF numeric parsing intentionally truncates finite real values to i64.")]
 fn typed(code: i32, text: &str) -> Value {
     let t = text.trim();
     match kind_of(code) {
-        Kind::Real => t.parse::<f64>().ok().filter(|v| v.is_finite()).map(Value::Real).unwrap_or(Value::Real(0.0)),
+        Kind::Real => t.parse::<f64>().ok().filter(|v| v.is_finite()).map_or(Value::Real(0.0), Value::Real),
         Kind::Int16 | Kind::Int32 | Kind::Int64 => {
             // A float spelling ("1e3", "12.0") is accepted when finite, clamped to what the
             // group's width holds, signed or unsigned (files write 16-bit flags up to 65535, as
@@ -168,8 +148,7 @@ fn typed(code: i32, text: &str) -> Value {
                 _ => (i64::MIN, i64::MAX),
             };
             t.parse::<i64>()
-                .map(Value::Int)
-                .unwrap_or_else(|_| Value::Int(t.parse::<f64>().ok().filter(|f| f.is_finite()).map_or(0, |f| (f as i64).clamp(lo, hi))))
+                .map_or_else(|_| Value::Int(t.parse::<f64>().ok().filter(|f| f.is_finite()).map_or(0, |f| (f as i64).clamp(lo, hi))), Value::Int)
         }
         Kind::Bool => Value::Bool(t.parse::<i64>().unwrap_or(0) != 0),
         Kind::Hex => Value::Hex(normalize_hex(t)),
@@ -203,6 +182,12 @@ mod codepage;
 pub use codepage::decode_code_page;
 
 /// Parse a DXF file (ASCII or binary).
+///
+/// # Errors
+///
+/// Returns an error for empty input, an invalid group code, an incomplete group-code/value pair,
+/// truncated binary data, or more than [`MAX_TAGS`] group codes. For ASCII input, invalid numeric
+/// text becomes `0.0` for real values or `0` for integer values, and an EOF tag is not required.
 pub fn parse(bytes: &[u8]) -> Result<Vec<Tag>> {
     parse_with_limit(bytes, max_tags())
 }
@@ -210,6 +195,12 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Tag>> {
 /// [`parse`] with an explicit group-code limit. For ASCII DXF the limit is checked up front from
 /// the line count, before the text is decoded or any tag allocated, so an oversized file fails in
 /// milliseconds instead of after it has filled memory.
+///
+/// # Errors
+///
+/// Returns an error for empty input, an invalid group code, an incomplete group-code/value pair,
+/// truncated binary data, or more than `max_tags` group codes. For ASCII input, invalid numeric
+/// text becomes `0.0` for real values or `0` for integer values, and an EOF tag is not required.
 pub fn parse_with_limit(bytes: &[u8], max_tags: usize) -> Result<Vec<Tag>> {
     if let Some(body) = bytes.strip_prefix(BINARY_SENTINEL) {
         return parse_binary_with_limit(body, max_tags);
@@ -337,6 +328,13 @@ fn byte_lines(mut rest: &[u8]) -> impl Iterator<Item = &[u8]> {
     })
 }
 
+/// Parse ASCII DXF text into typed tags.
+///
+/// # Errors
+///
+/// Returns an error for empty input, an invalid group code, an incomplete group-code/value pair,
+/// or too many tags. Invalid numeric text becomes `0.0` for real values or `0` for integer values.
+/// A complete tag stream does not require an EOF tag.
 pub fn parse_ascii(text: &str) -> Result<Vec<Tag>> {
     parse_ascii_counted(text, max_tags(), 0)
 }
@@ -429,6 +427,10 @@ impl<'a> Cur<'a> {
 }
 
 /// Binary DXF (R13+: 2-byte group codes).
+///
+/// # Errors
+///
+/// Returns an error for an empty or malformed file, an unexpected end of file, or too many tags.
 pub fn parse_binary(b: &[u8]) -> Result<Vec<Tag>> {
     parse_binary_with_limit(b, max_tags())
 }
@@ -848,7 +850,7 @@ mod tests {
         assert!(parse(&b).is_err());
         // Bad numbers become 0 rather than failing.
         let t = parse(b"10\nnotanumber\n0\nEOF\n").unwrap();
-        assert_eq!(t[0].f64(), 0.0);
+        assert!(t[0].f64().abs() < f64::EPSILON);
     }
 
     #[test]
