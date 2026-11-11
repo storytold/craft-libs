@@ -8,11 +8,11 @@ use super::thumb::{RowThumb, target_at};
 use super::trailing::{TrailingFace, TrailingItem, trailing_run};
 use crate::buttons::IconButton;
 use crate::choice::Checkbox;
-use crate::contract::{Bind, Cx, PaintUi, Pointer as _, Props as _, Styled as _};
+use crate::contract::{Bind, Cx, PaintUi, Pointer as _, Props as _, Styled as _, item_part_open};
 use crate::controls::disclosure::Disclosure;
 use crate::list::toggle::{ToggleFace, ToggleState};
 use crate::primitives::{Draw, HAlign, IconSpec, PaintShape, Span, StrokeWidth, TextRun, Wrap};
-use crate::style::{Ink, StyleColor};
+use crate::style::{Flags, Ink, StyleColor};
 use craft_behavior::{Flow, IconId, Mixed};
 use craft_theme::ControlSize;
 use egui::{CornerRadius, Pos2, Rect, Vec2};
@@ -20,6 +20,7 @@ use egui::{CornerRadius, Pos2, Rect, Vec2};
 impl ListRow<'_> {
     pub(super) fn paint_trailing(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, placed: &Placed) {
         let side = Vec2::splat(cx.style.sizes.icon);
+        let selected = cx.resolved.selected == Some(true) || cx.env.facts_of(cx.id).is_some_and(|facts| facts.flags.contains(Flags::SELECTED));
         for (at, (trailing, slot)) in self.trailing.iter_mut().zip(&placed.items).enumerate() {
             let Some(slot) = slot else { continue };
             let shape = Rect::from_center_size(slot.center(), side);
@@ -37,8 +38,16 @@ impl ListRow<'_> {
                         show(ui, at, Rect::from_center_size(slot.center(), Vec2::new(slot.width(), cx.style.sizes.row)));
                     }
                 }
-                TrailingItem::Part { part, face, enabled, .. } => {
+                TrailingItem::Part { part, face, enabled, revealed, .. } => {
                     let key = TRAILING.at(u64::from(part.0));
+                    let shown = !*revealed
+                        || cx.response.hovered()
+                        || selected
+                        || cx.part_state(key).flags.contains(Flags::FOCUSED)
+                        || item_part_open(&cx.ctx, cx.id, key);
+                    if !shown {
+                        continue;
+                    }
                     match face {
                         TrailingFace::Icon(icon) => ui.face(key, IconButton::new(icon.clone()).focusable(false).enabled(*enabled)),
                         TrailingFace::Disclosure { open } => ui.face(key, Disclosure::new(Bind::given(*open)).node(false).enabled(*enabled)),

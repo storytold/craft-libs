@@ -6,7 +6,7 @@ use super::members::Member;
 use super::{Held, ITEM_NODE, ItemsHooks, LastLayout, Lead, Placement, Renaming, Rows, SCROLL, Scrolled, View, key_hash, section_part};
 use super::{request, rows};
 use crate::contract::ValueOf;
-use crate::contract::collection::{CollectionEvent, Gestures, OpenChange, Rename, RowState, ShownRow};
+use crate::contract::collection::{CollectionEvent, ContextMenuRequest, Gestures, OpenChange, Rename, RowState, ShownRow};
 use crate::contract::cx::{BodyCx, Pointer as _};
 use crate::contract::run::{Measuring, ShapeHooks, ShowAt};
 use crate::contract::steps::ShapeKind;
@@ -590,6 +590,9 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 }
                 if let Some(ask) = out.open_request() {
                     self.events.push(CollectionEvent::Open(OpenChange { key: key.clone(), open: ask.open, all: ask.all }));
+                }
+                if let Some(at) = out.menu_request() {
+                    self.events.push(CollectionEvent::ContextMenu(ContextMenuRequest { key: key.clone(), at: self.on_screen(at), column: None }));
                 }
                 if let Some(event) = out.into_event() {
                     self.events.push(CollectionEvent::Item(key.clone(), event));

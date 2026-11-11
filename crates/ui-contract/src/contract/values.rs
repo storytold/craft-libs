@@ -535,6 +535,12 @@ pub trait ItemOutput<E>: Outcome {
         None
     }
 
+    /// The item asks for its menu from one of its parts (a row's "More" button): where the menu hangs, in the item's
+    /// layer. The collection reports it as `CollectionEvent::ContextMenu`, as it does a secondary click on the row.
+    fn menu_request(&self) -> Option<egui::Pos2> {
+        None
+    }
+
     /// The rect of the item's label, where a rename editor goes; `None` puts it over the whole row.
     fn label_rect(&self) -> Option<egui::Rect> {
         None

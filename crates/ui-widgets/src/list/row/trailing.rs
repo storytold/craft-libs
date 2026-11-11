@@ -12,6 +12,9 @@ use egui::Rect;
 pub struct TrailingPart(pub(super) u16);
 
 impl TrailingPart {
+    /// The row's own menu button (`ListRow::row_menu`).
+    pub const MENU: TrailingPart = TrailingPart(u16::MAX);
+
     /// The part numbered `n`.
     pub const fn new(n: u16) -> Self {
         TrailingPart(n)
@@ -48,8 +51,9 @@ pub(in crate::list) enum TrailingItem<'a> {
     Text { text: Label, name: Option<Label> },
     /// An icon of the row's icon size, named for the screen reader and the tooltip.
     Icon { icon: IconSpec<'static>, name: Label },
-    /// A pressable face of the row's icon size.
-    Part { part: TrailingPart, face: TrailingFace, name: Label, enabled: bool },
+    /// A pressable face of the row's icon size; a `revealed` one shows only on a hovered or selected row, while it has
+    /// focus or while the menu it opens is open.
+    Part { part: TrailingPart, face: TrailingFace, name: Label, enabled: bool, revealed: bool },
     /// A component of its own, shown in a short field's width; its stop joins the row's group and it takes its own keys.
     Hosted(Option<HostedShow<'a>>),
 }

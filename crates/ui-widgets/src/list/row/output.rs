@@ -55,6 +55,8 @@ pub struct RowOutput {
     /// The disclosure of a group row was clicked: the state it asks for. The collection reports it as
     /// `CollectionEvent::Open`, as it does the keys.
     pub open: Option<OpenChange<()>>,
+    /// The row's menu button was clicked: where the menu hangs, in the row's layer.
+    pub menu: Option<egui::Pos2>,
     /// Where the label and detail are drawn, the full height of the row.
     pub label: Rect,
 }
@@ -74,6 +76,10 @@ impl ItemOutput<RowEvent> for RowOutput {
 
     fn open_request(&self) -> Option<OpenChange<()>> {
         self.open.clone()
+    }
+
+    fn menu_request(&self) -> Option<egui::Pos2> {
+        self.menu
     }
 
     fn label_rect(&self) -> Option<Rect> {

@@ -368,6 +368,11 @@ impl MemoryStage {
         store::peek_clone::<Wrapped<SHOWN, T>>(ctx, id).map(|wrapped| wrapped.0).unwrap_or_default()
     }
 
+    /// Read-only access to a session slot, as `peek` does for a shown one.
+    pub(crate) fn peek_session<T: Slot>(ctx: &Context, id: Id) -> T {
+        store::peek_clone::<Wrapped<SESSION, T>>(ctx, id).map(|wrapped| wrapped.0).unwrap_or_default()
+    }
+
     /// Read-only access to a saved slot, as `peek` does for a shown one.
     #[doc(hidden)]
     pub fn peek_saved<T: Slot>(ctx: &Context, key: &SaveKey) -> T {

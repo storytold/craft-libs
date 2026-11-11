@@ -2,7 +2,7 @@
 //! arena, updated, painted and finished at their rows, reported as sub-nodes of the collection.
 
 use super::{ITEM_NODE, ItemsHooks, key_hash};
-use crate::contract::collection::{CollectionEvent, OpenChange, ShownRow};
+use crate::contract::collection::{CollectionEvent, ContextMenuRequest, OpenChange, ShownRow};
 use crate::contract::run;
 use crate::contract::{Collection, Component as _, Cx, Internal, ItemOpener, ItemOutput as _, Meta as _};
 use crate::primitives::sensing::{self, MemberSpec};
@@ -85,6 +85,9 @@ impl<'r, C: Collection> ItemsHooks<'_, 'r, C> {
             let label = output.label_rect().unwrap_or(row);
             if let Some(ask) = output.open_request() {
                 self.events.push(CollectionEvent::Open(OpenChange { key: key.clone(), open: ask.open, all: ask.all }));
+            }
+            if let Some(at) = output.menu_request() {
+                self.events.push(CollectionEvent::ContextMenu(ContextMenuRequest { key: key.clone(), at: self.on_screen(at), column: None }));
             }
             if let Some(event) = output.into_event() {
                 self.events.push(CollectionEvent::Item(key.clone(), event));

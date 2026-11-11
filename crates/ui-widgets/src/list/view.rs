@@ -7,7 +7,7 @@ use super::predicate::{DropTest, RowTest, RowText, SourceTest};
 use super::{ListRow, RowEvent};
 use crate::contract::{
     Access, ActivateOn, Bind, BindMut, Collection, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, EditResponse,
-    LeadOnOpen, ListDrag, Props as _, Role, SelectMode, Sizing,
+    LeadOnOpen, ListDrag, Props as _, Role, RowState, SelectMode, Sizing,
 };
 use crate::runtime::env::{Env, Label};
 use crate::style::{ComponentStyle, StyleCx};
@@ -73,6 +73,10 @@ pub struct List<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// The list is a listbox of options: the popup of a value picker.
     #[prop(flag)]
     listbox: bool,
+    /// Every row has a "More" button, shown on a hovered or selected row and while its menu is open, that asks for the
+    /// row's menu as a secondary click does (`CollectionEvent::ContextMenu`). The menu's Rename sends `request_rename`.
+    #[prop(flag)]
+    row_menu: bool,
     /// The rows the query keeps, set by `filter`.
     filter: Option<Filter<'a, K>>,
     /// The kept rows are in order of how well they match the query.
@@ -97,6 +101,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> List<'a, K> {
             accepts: None,
             takes_files: false,
             listbox: false,
+            row_menu: false,
             filter: None,
             ranked: false,
         }
@@ -203,6 +208,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for List<'_, K> {
     fn item_layout(&self, source: &dyn ItemSource<K>, width: f32, cx: &StyleCx<'_>) -> SpanLayout {
         let layout = SpanLayout::sized(source, width, cx.control().height);
         if self.tree { layout.tree() } else { layout }
+    }
+
+    fn dress<'r>(&self, row: Self::Item<'r>, _: &RowState) -> Self::Item<'r> {
+        if self.row_menu { row.row_menu() } else { row }
     }
 
     fn rename_draft(&self, key: &K) -> Option<String> {

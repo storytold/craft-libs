@@ -27,5 +27,6 @@ craft_ui::words! {
         collapse: "listRow.collapse" = "Collapse {row}";
         expand_tip: "listRow.expandTip" = "Expand (Alt-click: all groups)";
         collapse_tip: "listRow.collapseTip" = "Collapse (Alt-click: all groups)";
+        more: "listRow.more" = "More ({row})";
     }
 }

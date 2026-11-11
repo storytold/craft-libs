@@ -222,6 +222,8 @@ pub struct ListRow<'a> {
     pub(super) check: Option<bool>,
     pub(super) event: Option<RowEvent>,
     pub(super) open: Option<OpenChange<()>>,
+    /// The row's menu button was clicked: where the menu hangs.
+    pub(super) menu: Option<egui::Pos2>,
     pub(super) label_rect: Rect,
 }
 
@@ -277,6 +279,7 @@ impl<'a> ListRow<'a> {
             check: None,
             event: None,
             open: None,
+            menu: None,
             label_rect: Rect::NOTHING,
         }
         .label(label)
@@ -434,8 +437,27 @@ impl<'a> ListRow<'a> {
             !self.trailing.iter().any(|held| matches!(&held.item, TrailingItem::Part { part: have, .. } if *have == part)),
             "trailing part {part:?} is already in the row"
         );
-        self.trailing.push(Trailing { item: TrailingItem::Part { part, face, name: name.into(), enabled: true }, optional: false });
+        self.trailing.push(Trailing { item: TrailingItem::Part { part, face, name: name.into(), enabled: true, revealed: false }, optional: false });
         self
+    }
+
+    /// A trailing part as [`trailing_part`](Self::trailing_part) adds one, shown only on a hovered or selected row,
+    /// while it has focus or while the menu it opens (`ItemCx::part_opener`) is open: a row's "More" button. It keeps
+    /// its place and takes a press where it is hidden.
+    #[must_use]
+    pub fn trailing_part_revealed(mut self, part: TrailingPart, face: TrailingFace, name: impl Into<Label>) -> Self {
+        self = self.trailing_part(part, face, name);
+        if let Some(Trailing { item: TrailingItem::Part { revealed, .. }, .. }) = self.trailing.last_mut() {
+            *revealed = true;
+        }
+        self
+    }
+
+    /// The row's "More" button, a [revealed](Self::trailing_part_revealed) part named "More ({row})": a click on it
+    /// asks for the row's menu, which the collection reports as `CollectionEvent::ContextMenu` hung from the button.
+    #[must_use]
+    pub fn row_menu(self) -> Self {
+        self.trailing_part_revealed(TrailingPart::MENU, TrailingFace::Icon(IconSpec::svg(craft_behavior::IconId::new("more"))), Label::Empty)
     }
 
     /// A component at the trailing end, in the width of a short field, that always shows: a field that edits a

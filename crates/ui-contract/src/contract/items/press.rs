@@ -300,9 +300,20 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     pointer: ctx.pointer_latest_pos(),
                     ..response::MemberView::default()
                 };
-                let response = response::member(ui, sub(opener.item, ("opener", opener.part)), rect, enabled, view);
+                let response = response::member(ui, opener_id(opener.item, opener.part), rect, enabled, view);
                 Some((opener, response))
             })
             .collect()
     }
+}
+
+/// The id of the response `CollectionResponse::opener` gives for the part `part` of the item `item`.
+fn opener_id(item: Id, part: craft_behavior::PartRef) -> Id {
+    sub(item, ("opener", part))
+}
+
+/// Whether a menu or popover hung from the part `part` of the item `item` (`ItemCx::part_opener`) is open: an item
+/// keeps such a part shown while its menu is.
+pub fn item_part_open(ctx: &Context, item: Id, part: impl Into<craft_behavior::PartRef>) -> bool {
+    crate::contract::overlay::container_open::opened_from(ctx, opener_id(item, part.into()))
 }

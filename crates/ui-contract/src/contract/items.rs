@@ -20,6 +20,7 @@ pub use drag::{SweepApply, SweepStep};
 pub use header::ColumnCommands;
 #[doc(hidden)]
 pub use header::put_toggle_names;
+pub use press::item_part_open;
 #[doc(hidden)]
 pub use request::lead_position;
 pub use request::request_rename;

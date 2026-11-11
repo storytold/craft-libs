@@ -6,7 +6,7 @@ use super::paint::draw_clip_arrow;
 use super::placement::Sizes;
 use super::style::{FillKey, ListRowStyle, RowForm, fill_of, row_ink_of, selected_outline};
 use super::thumb::{RowThumb, target_at};
-use super::trailing::{TrailingFace, TrailingItem};
+use super::trailing::{TrailingFace, TrailingItem, TrailingPart};
 use super::{ListRow, RowInk};
 use crate::contract::{
     Access, Bind, Component, Cx, DragPreview, MeasureCx, Name, OpenChange, PaintUi, PartsCx, Pointer as _, Props as _, Role, RowPressed, Styled as _,
@@ -246,7 +246,8 @@ impl Component for ListRow<'_> {
                     cx.part(TRAILING_ICON.at(at as u64), shape).tooltip(name.clone());
                 }
                 TrailingItem::Part { part, name, enabled: true, .. } => {
-                    cx.part(TRAILING.at(u64::from(part.0)), shape).sense(Sense::CLICK | Sense::FOCUS).focusable().tooltip(name.clone());
+                    let name = self.part_name(*part, name, &cx.words::<ListWords>(), cx.resolved.label);
+                    cx.part(TRAILING.at(u64::from(part.0)), shape).sense(Sense::CLICK | Sense::FOCUS).focusable().tooltip(name);
                     focusable = true;
                 }
                 TrailingItem::Part { part, name, enabled: false, .. } => {
@@ -308,7 +309,11 @@ impl Component for ListRow<'_> {
             let TrailingItem::Part { part, .. } = &trailing.item else { continue };
             let key = TRAILING.at(u64::from(part.0));
             if let Some(source) = cx.part_activated(key) {
-                self.event = Some(RowEvent::Trailing { part: *part, mods: part_mods(cx, key, source) });
+                if *part == TrailingPart::MENU {
+                    self.menu = Some(cx.part(key).rect.left_bottom());
+                } else {
+                    self.event = Some(RowEvent::Trailing { part: *part, mods: part_mods(cx, key, source) });
+                }
             }
         }
     }
@@ -396,6 +401,7 @@ impl Component for ListRow<'_> {
                     access.node(TRAILING_ICON.at(at as u64), Role::IMAGE).name = Name::Text(name.as_str().to_owned());
                 }
                 TrailingItem::Part { part, face, name, .. } => {
+                    let name = self.part_name(*part, name, &words, label);
                     let node = access.node(TRAILING.at(u64::from(part.0)), Role::BUTTON);
                     node.name = Name::Text(name.as_str().to_owned());
                     if let TrailingFace::Disclosure { open } = face {
@@ -465,7 +471,7 @@ impl Component for ListRow<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> RowOutput {
-        RowOutput { response: cx.response.clone(), event: self.event, open: self.open, label: self.label_rect }
+        RowOutput { response: cx.response.clone(), event: self.event, open: self.open, menu: self.menu, label: self.label_rect }
     }
 }
 
@@ -474,5 +480,12 @@ fn part_mods(cx: &Cx<'_, ListRow<'_>>, part: PartRef, source: FireSource) -> Mod
     match source {
         FireSource::Pointer => cx.part(part).press.mods,
         _ => Mods::NONE,
+    }
+}
+
+impl ListRow<'_> {
+    /// The name of the trailing part `part`: the one given, or "More ({row})" for the row's menu button.
+    fn part_name(&self, part: TrailingPart, name: &Label, words: &ListWords, row: &str) -> Label {
+        if part == TrailingPart::MENU { Label::from(named(&words.more, row)) } else { name.clone() }
     }
 }

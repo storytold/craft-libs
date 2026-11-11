@@ -5,7 +5,7 @@
 
 pub use crate::runtime::overlay::{OpenFilter, any_open, family, is_open, request_close, top};
 
-mod container_open;
+pub(crate) mod container_open;
 mod dismissal;
 mod host;
 mod opener;

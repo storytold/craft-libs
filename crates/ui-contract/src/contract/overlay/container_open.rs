@@ -56,6 +56,11 @@ pub(crate) fn opener_open(stage: &mut MemoryStage, first: &Opener) -> bool {
     open
 }
 
+/// Whether the container hung from the opener `opener` (the id of its response) is open, as its slot holds it.
+pub(crate) fn opened_from(ctx: &egui::Context, opener: Id) -> bool {
+    MemoryStage::peek_session::<OpenerOpen>(ctx, sub(opener, "opens")).open
+}
+
 /// Writes the opener's slot: the container closed itself (Escape, a press outside, a row ran).
 pub(crate) fn set_opener_open(stage: &mut MemoryStage, opener: &Opener, open: bool) {
     stage.session::<OpenerOpen>(sub(opener.id, "opens")).open = open;
