@@ -1,0 +1,147 @@
+# craft-raw
+
+Camera raw files, the file-format layer: bytes in, the sensor data out as a neutral `RawImage` with
+what the file says about rendering it, and back for DNG. No `unsafe`, no panics on malformed input,
+no I/O (`&[u8]` in), and it builds for `wasm32-unknown-unknown`.
+
+```toml
+craft-raw = { git = "https://github.com/storytold/craft-libs", rev = "<commit>" }
+```
+
+```rust
+match craft_raw::probe(&bytes) {
+    Some(format) if format.is_supported() => {
+        let raw = craft_raw::decode(&bytes)?;      // or decode_with(&bytes, &limits)
+        // raw.data: the samples as stored; raw.cfa, raw.black, raw.white, raw.active_area, raw.crop,
+        // raw.orientation, raw.color (matrices, as-shot white), raw.opcodes, raw.camera
+    }
+    Some(_) => { /* a raw this build does not decode: show craft_raw::embedded_preview(&bytes) */ }
+    None => { /* not a raw file */ }
+}
+```
+
+It is the first of the three crates planned in craft-libs#587 (`craft-raw`, `craft-develop-model`,
+`craft-develop`) and part of the move of all format code into craft-libs (#778). The base is
+LightCraft's `lightcraft-raw`; what PhotoCraft's `photocraft-raw` and FilmCraft's `filmcraft-dng`
+did that it did not was ported, each with a test (see [Ported behaviour](#ported-behaviour)).
+
+## Where the crate stops
+
+The format layer ends where arithmetic on the picture begins.
+
+| In this crate | In the develop pipeline (not here) |
+|---|---|
+| Recognising containers (`probe`), walking TIFF/IFD structure on `craft-tiff` | Black subtraction, white scaling, cropping to the active area |
+| Decompressing the samples: unpacking, lossless JPEG, lossy JPEG, Deflate, JPEG XL | Demosaicing, binned previews, hot-pixel and highlight handling |
+| A DNG `LinearizationTable` (a storage code, applied so the samples are sensor values) | Raising samples stuck below the stated white level (`lift_clipped_samples`) |
+| Black and white levels, CFA layout, active area, default crop, orientation, pixel aspect | The DNG colour model's arithmetic (illuminant interpolation, camera to working space) |
+| Colour tags as data: matrices, calibration illuminants, as-shot neutral / white | White balance, Kelvin scales, spectral or fitted camera colour |
+| Opcode lists parsed and written (`opcodes`), profile tables and gain table maps as data | Applying opcodes (gain maps, warps, bad pixels), profile look tables, tone curves |
+| Embedded previews and semantic masks, as stored | Rendering, resampling, lens corrections, tone, colour, masks, GPU kernels |
+| Writing DNG from a `RawImage` (uncompressed, lossless JPEG, Deflate) | Lossy DNG and rendered DNG export (they start from a developed picture and call this writer) |
+
+`RawImage` carries no Exif/XMP/IPTC model. `Camera` holds the make, the model and DNG's
+`UniqueCameraModel` (decoders and colour lookups need them) and, for a container without an Exif
+block (CRW), the capture time. A metadata reader reads the rest from the same bytes (#783).
+
+## Formats
+
+One module and one Cargo feature per maker or container family. All are on by default.
+
+| Feature | Format | Status |
+|---|---|---|
+| `dng` | Adobe DNG | Uncompressed at 1 to 16 bits (packed MSB-first, or 8/16-bit in file byte order), lossless JPEG (all seven predictors, 1 to 4 components, point transform, restart intervals), lossy JPEG (compression 34892, 8-bit baseline tiles or strips), Deflate with predictors 1, 2 and the floating-point predictors (16, 24 and 32-bit floats), strips and tiles, planar or interleaved, CFA of any period up to 16 × 16 (Bayer, X-Trans) and LinearRaw with 1, 3 or 4 samples, DNG 1.7 row and column interleave, reduced-resolution LinearRaw copies (`decode_reduced`), semantic masks, CinemaDNG frame tags. Writing: uncompressed, lossless JPEG tiles, Deflate tiles (integer, half and single floats) |
+| `jxl` | JPEG XL DNG (DNG 1.7, compression 52546) | Lossless and lossy tiles through `jxl-oxide`; implies `dng` |
+| `crw` | Canon CRW (CIFF) | Decoded by [`craft-crw`](../crw/README.md), the one CRW decoder, and returned through this crate's types |
+| `hasselblad` | Hasselblad 3FR and FFF, and other CFA TIFFs in the DNG layout without a DNG version tag (`RawFormat::CfaTiff`) | Uncompressed and Hasselblad's lossless JPEG (predictor selection value 8); RGGB from the sensor origin when the file states no `CFAPattern`; an FFF's colour matrix from the 3FR header it embeds; the 8-bit RGB preview handed on as a baseline TIFF. Implies `dng` |
+
+Not decoded: GoPro VC-5 DNG (GPR), CFA with more than three colours, non-rectangular CFA layouts.
+`probe` names every container it can tell apart whatever the features (CR2, CR3, NEF, NRW, ARW,
+RAF, ORF, RW2, PEF, SRW, MRW, X3F, other TIFF-based raws);
+their decoders are still in the apps and move here one maker family at a time.
+`RawFormat::is_supported` says what this build decodes.
+
+## Limits
+
+`Limits` (`#[non_exhaustive]`; start from `Limits::default()`) caps what a file may make the
+decoder allocate. Each has a test.
+
+| Limit | Default | Checked |
+|---|---|---|
+| `max_samples` | 2³⁰ (the crate's own ceiling, `MAX_SAMPLES`) | against `width × height × samples per pixel` before any allocation, in the header probe too |
+| `max_lossy_tile_samples` | 2²⁶ | against a lossy tile's own JPEG header before it is decoded |
+
+Independent of the limits, sizes are checked against the bytes present: an image must have a chunk
+for every tile or strip, its chunks may not be much larger than the image, and no coding may claim
+more than 2048 samples per stored byte, so a small file cannot ask for a large buffer. CRW keeps
+`craft-crw`'s own cap of 2²³ samples (or the caller's, when lower). Semantic masks are capped at 16
+masks of 2²⁵ samples; opcode lists at 4096 opcodes.
+
+## Ported behaviour
+
+Where the three readers disagreed on the same file, the reading that the specification or two of
+the three supported was kept:
+
+| From | What | Before (LightCraft's reader) |
+|---|---|---|
+| PhotoCraft | `DefaultCropSize` without `DefaultCropOrigin` crops from the active area's corner: each tag has its own default (DNG 1.7.1) | both tags were required; a size alone was ignored |
+| PhotoCraft | A default crop that is empty, starts outside the area or is not a pixel count is the whole active area | an empty rectangle stayed in `crop` |
+| PhotoCraft | A non-finite `WhiteLevel` (a DOUBLE past `f32::MAX`) is ignored | the white level became infinite |
+| PhotoCraft | Without `WhiteLevel`, a linearized image's white is the table's largest output (DNG chapter 5 linearizes before it rescales) | the stored depth's maximum, 255 for an 8-bit file whose table expands to 16 bits |
+| PhotoCraft | `AsShotWhiteXY` must lie inside (0, 1) | any positive pair |
+| PhotoCraft, FilmCraft | Lossy JPEG DNG is 8 bits per sample; another depth is `Unsupported` | 8-bit codes were read as the declared depth |
+| PhotoCraft, FilmCraft | A lossy tile's JPEG must cover the part of its tile inside the image | a smaller JPEG left the rest of the tile black |
+| FilmCraft | CinemaDNG `FrameRate`, `TimeCodes` and `ReelName` (`RawImage::cinema`), read and written | not read |
+| craft-crw | A big-endian (`MM`) CIFF header is a CRW | `probe` knew only `II` |
+| PhotoCraft | Hasselblad: four `BlackLevel` values without `BlackLevelRepeatDim` are one per site of the 2 × 2 CFA (files that are not DNGs only) | the first value was used for every site |
+
+Left as LightCraft has it, with the reason:
+
+- An `ActiveArea` that reaches outside the image is ignored (the whole image is the area).
+  PhotoCraft clips it to the image instead. The specification requires the area to be inside the
+  image and says nothing about a file that breaks that; no real file settles it.
+- An edge tile's lossless or lossy JPEG smaller than the nominal tile is accepted when it covers
+  the rows inside the image. PhotoCraft and FilmCraft refuse any size mismatch; LightCraft's
+  tolerance is for writers that encode edge tiles at their visible size.
+- A Hasselblad-layout file without `AsShotNeutral` is not claimed (`OtherTiff`, preview only):
+  nothing in it says how to read its colour. PhotoCraft decodes any Hasselblad CFA IFD and measures
+  a missing white level from the samples, which is develop-side work. PhotoCraft refuses the
+  lossless-JPEG files; LightCraft's selection-value-8 decoder reads them. Both measured the same
+  CFA phase (red at the sensor origin) on different bodies (H4D-40, X2D II 100C).
+- Lossy JPEG is accepted for CFA data (one grey component) as in PhotoCraft; FilmCraft refuses it
+  because DNG 1.4 allows the coding for LinearRaw only.
+
+## Sources (clean room)
+
+Written only from public specifications and from observation of files:
+
+- TIFF 6.0, TIFF/EP (ISO 12234-2), TIFF Technical Note 1 (SubIFDs).
+- Adobe DNG Specification 1.4 to 1.7.1; Adobe's TIFF technical notes for Deflate and the
+  floating-point predictor; the CinemaDNG Image Data Format Specification 1.0 and SMPTE ST 12-1
+  (time code packing).
+- ITU-T T.81 (ISO/IEC 10918-1) Annex H: lossless JPEG.
+- ExifTool's tag-name documentation (prose), for maker-note and private tag numbers.
+- Canon CRW: see `crates/crw/clean-room/`.
+
+No code from dcraw, LibRaw, rawspeed, rawloader/rawler, dnglab, darktable, RawTherapee, ExifTool's
+Perl or Adobe's SDKs was read or used, and no camera colour tables or profiles are shipped. The
+code was moved from the Craft apps (see `NOTICE`, *Source provenance*); nothing was added from
+another project to fill a gap. The derivation records of the maker formats that are not here yet
+(LightCraft's `docs/arw6-compression.md`, `docs/raf-compression.md`, `docs/orf-compression.md`,
+`docs/cr3.md` and their logs) move with those formats.
+
+## Dependencies
+
+`craft-tiff` (IFD parsing and writing), `craft-crw` (feature `crw`), `miniz_oxide` (Deflate),
+`zune-jpeg` (the 8-bit baseline JPEG of lossy DNG tiles: `craft-jpeg` covers the JPEG processes
+baseline decoders lack and sends baseline frames to one), `jxl-oxide` (feature `jxl`), `rayon`,
+`serde`, `thiserror`, `chrono` (feature `crw`: the plausibility of a capture time).
+
+## Tests
+
+No sample files are committed. Every storage variant is written by the crate's own DNG writer or by
+hand with `craft-tiff`'s `TiffWriter` and the lossless-JPEG encoder (`ljpeg::encode`), and must
+decode bit-exactly; lossy tiles are made with `jpeg-encoder`, JPEG XL tiles with `zune-jpegxl`
+(tests only). Hostile input: every truncation of each sample, byte mutations across the
+header, 400 random mutations per property, random TIFF-like, lossless-JPEG, opcode-list and CIFF
+bytes, and a test per limit.
