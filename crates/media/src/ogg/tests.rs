@@ -647,3 +647,52 @@ fn theora_codec_params_carry_the_picture_size() {
     let p = open(&f).unwrap().streams[0].codec_params();
     assert_eq!((p.width, p.height), (Some(1920), Some(1080)));
 }
+
+/// Bit-at-a-time CRC of RFC 3533 §6 (polynomial 0x04C11DB7, initial value 0, no reflection, no final XOR).
+fn crc32_bitwise(mut crc: u32, data: &[u8]) -> u32 {
+    for &b in data {
+        crc ^= u32::from(b) << 24;
+        for _ in 0..8 {
+            crc = if crc & 0x8000_0000 != 0 { (crc << 1) ^ 0x04C1_1DB7 } else { crc << 1 };
+        }
+    }
+    crc
+}
+
+#[test]
+fn crc_matches_bitwise_reference_on_every_length_and_alignment() {
+    let mut seed = 7u64;
+    let buf: Vec<u8> = (0..70_100)
+        .map(|_| {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) as u8
+        })
+        .collect();
+    // every short length (covers the 16-byte main loop and every tail length), at several start offsets
+    for start in 0..4 {
+        for len in 0..=64 {
+            let d = &buf[start..start + len];
+            assert_eq!(crc32(d), crc32_bitwise(0, d), "start {start} len {len}");
+        }
+    }
+    for len in [65, 255, 4096, 65_307, 70_000] {
+        for start in [0, 1, 3] {
+            let d = &buf[start..start + len];
+            assert_eq!(crc32(d), crc32_bitwise(0, d), "start {start} len {len}");
+        }
+    }
+    // all-zero and all-ones input
+    assert_eq!(crc32(&[0u8; 100]), 0);
+    assert_eq!(crc32(&[0xFFu8; 100]), crc32_bitwise(0, &[0xFFu8; 100]));
+}
+
+#[test]
+fn crc_update_continues_across_any_split() {
+    let data: Vec<u8> = (0..200u32).map(|i| (i * 31 + 5) as u8).collect();
+    let whole = crc32(&data);
+    for cut in 0..=data.len() {
+        let (a, b) = data.split_at(cut);
+        assert_eq!(crc32_update(crc32_update(0, a), b), whole, "cut {cut}");
+        assert_eq!(crc32_update(crc32_bitwise(0, a), b), whole, "cut {cut} (reference head)");
+    }
+}
