@@ -43,9 +43,17 @@ pub struct StartupPrompt {
 }
 
 impl StartupPrompt {
-    /// Creates a new prompt dialog state for the given app and newly discovered release.
+    /// Creates a new prompt dialog state for the given app and newly discovered release. It reads
+    /// the installed files to set `is_self_updating`, on the calling thread;
+    /// [`StartupPrompt::with_self_update`] takes the answer from elsewhere.
     pub fn new(app: &'static App, release: Release, running_version: impl Into<String>) -> Self {
         let is_self_updating = crate::self_update::is_self_updating(app) && crate::self_update::release_installs(app, &release);
+        Self::with_self_update(app, release, running_version, is_self_updating)
+    }
+
+    /// [`StartupPrompt::new`] with `is_self_updating` already known, for example found by a
+    /// worker thread, so that no installed file is read here.
+    pub fn with_self_update(app: &'static App, release: Release, running_version: impl Into<String>, is_self_updating: bool) -> Self {
         Self {
             app,
             release,

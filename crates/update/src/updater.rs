@@ -78,6 +78,19 @@ pub enum Action {
 
 type Checked = Result<Option<Release>, String>;
 
+/// What the check's thread sends: the release it found, if any, with whether this copy can install
+/// it itself ([`can_install_itself`]).
+type Found = Result<Option<(Release, bool)>, String>;
+
+/// Says whether this copy can install a release itself (tests stand in for the files with one).
+type InstallProbe = Arc<dyn Fn(&'static App, &Release) -> bool + Send + Sync>;
+
+/// Whether this copy can install `release` itself. It reads the installed files, which can take
+/// long on slow storage, so the check's thread calls it, never a frame.
+fn can_install_itself(app: &'static App, release: &Release) -> bool {
+    self_update::is_self_updating(app) && self_update::release_installs(app, release)
+}
+
 /// Why an installation failed: the installer's own words, shown as they are, or the updater's,
 /// shown in the interface language.
 #[derive(Debug)]
@@ -135,7 +148,12 @@ pub struct Updater {
     /// The check running (or queued behind it) was asked for by the user.
     requested: bool,
     started: bool,
-    check: Option<Receiver<Checked>>,
+    check: Option<Receiver<Found>>,
+    /// Replaces [`can_install_itself`] on the check's thread (tests).
+    probe: Option<InstallProbe>,
+    /// Whether the copy could install the release that is installing itself, as the prompt that
+    /// started the installation said. A failed installation reopens the prompt with it.
+    installing_itself: bool,
     install: Option<(Receiver<Result<Restart, Failure>>, Release)>,
     prompt: Option<StartupPrompt>,
     /// A finished installation waiting for the app to exit: what still has to start then, and
@@ -176,6 +194,8 @@ impl Updater {
             requested: false,
             started: false,
             check: None,
+            probe: None,
+            installing_itself: false,
             install: None,
             prompt: None,
             restart: None,
@@ -202,15 +222,16 @@ impl Updater {
         self
     }
 
-    /// The startup prompt for `release`, in the interface language.
-    fn prompt_for(&self, release: Release) -> StartupPrompt {
-        StartupPrompt::new(self.app, release, self.version.clone()).with_translator(self.translate)
+    /// The startup prompt for `release`, in the interface language. `installs_itself` says whether
+    /// this copy can install it itself ([`can_install_itself`]).
+    fn prompt_for(&self, release: Release, installs_itself: bool) -> StartupPrompt {
+        StartupPrompt::with_self_update(self.app, release, self.version.clone(), installs_itself).with_translator(self.translate)
     }
 
     /// Opens the prompt offering `release`. A failed update offered again says why the last
     /// attempt failed, once.
-    fn open_offer(&mut self, release: Release) {
-        let mut prompt = self.prompt_for(release);
+    fn open_offer(&mut self, release: Release, installs_itself: bool) {
+        let mut prompt = self.prompt_for(release, installs_itself);
         if let Some(reason) = self.failed_reason.take() {
             prompt.set_note(Note::new("The update could not be installed: {reason}", &[("reason", &reason)]));
         }
@@ -225,6 +246,14 @@ impl Updater {
     /// Replaces the network with `source` (tests).
     pub fn with_source(mut self, source: CheckSource) -> Self {
         self.source = Some(source);
+        self
+    }
+
+    /// Replaces [`can_install_itself`], which the check's thread calls for a release it found
+    /// (tests).
+    #[cfg(test)]
+    fn with_probe(mut self, probe: InstallProbe) -> Self {
+        self.probe = Some(probe);
         self
     }
 
@@ -315,10 +344,13 @@ impl Updater {
 
     /// Opens the startup prompt for a release the app found itself. After a failed update the
     /// prompt says why it failed, like the one a check opens. Opening the prompt sets
-    /// [`Self::status`] to [`Status::Idle`].
+    /// [`Self::status`] to [`Status::Idle`]. It reads the installed files on the calling thread to
+    /// decide whether the prompt offers Update and Restart; a release found by a check is
+    /// inspected on the check's thread instead.
     pub fn offer(&mut self, release: Release) {
         if self.install.is_none() && !self.installed && !self.read_choice() {
-            self.open_offer(release);
+            let installs_itself = can_install_itself(self.app, &release);
+            self.open_offer(release, installs_itself);
             self.status = Status::Idle;
         }
     }
@@ -359,11 +391,22 @@ impl Updater {
             return;
         }
         let (tx, rx) = channel();
-        let (source, app, version, ctx) = (self.source.clone(), self.app, self.version.clone(), ctx.clone());
+        let (source, probe, app, version, ctx) = (self.source.clone(), self.probe.clone(), self.app, self.version.clone(), ctx.clone());
         let spawned = std::thread::Builder::new().name("update-check".into()).spawn(move || {
-            let ask = || match source {
-                Some(ask) => ask(),
-                None => Http::new(&format!("{}/Update", app.name)).and_then(|http| check_for_update(app, &http, &version)),
+            let ask = || -> Found {
+                let checked: Checked = match source {
+                    Some(ask) => ask(),
+                    None => Http::new(&format!("{}/Update", app.name)).and_then(|http| check_for_update(app, &http, &version)),
+                };
+                // Whether the copy installs the release itself is read from the installed files
+                // here, on the check's thread, and not in `tick`.
+                Ok(checked?.map(|release| {
+                    let installs_itself = match &probe {
+                        Some(probe) => probe(app, &release),
+                        None => can_install_itself(app, &release),
+                    };
+                    (release, installs_itself)
+                }))
             };
             let answer =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(ask)).unwrap_or_else(|_| Err("the update check failed unexpectedly".into()));
@@ -407,13 +450,13 @@ impl Updater {
 
     /// Sets the outcome of a check. The check at start leaves the status as it is: nothing, or
     /// the outcome of the last update ([`Self::read_outcome`]).
-    fn finish_check(&mut self, answer: Checked) {
+    fn finish_check(&mut self, answer: Found) {
         let requested = std::mem::take(&mut self.requested);
         // A check that was running when an installation started answers with the installation's
         // state: the update installing, ready, or the recorded helper failure.
         if self.install.is_some() || self.installed {
             match &answer {
-                Ok(Some(release)) => log::info!("{} update check found {} while an update installs", self.app.name, release.tag),
+                Ok(Some((release, _))) => log::info!("{} update check found {} while an update installs", self.app.name, release.tag),
                 Ok(None) => log::info!("{} update check found nothing newer while an update installs", self.app.name),
                 Err(e) => log::warn!("{} update check failed while an update installs: {e}", self.app.name),
             }
@@ -434,9 +477,9 @@ impl Updater {
             return;
         }
         match answer {
-            Ok(Some(release)) => {
+            Ok(Some((release, installs_itself))) => {
                 match &mut self.prompt {
-                    None => self.open_offer(release),
+                    None => self.open_offer(release, installs_itself),
                     // A prompt the app opened before (`offer`) says why the last update failed.
                     Some(prompt) => {
                         if let Some(reason) = self.failed_reason.take() {
@@ -512,7 +555,7 @@ impl Updater {
                         if self.prompt.is_none()
                             && let Some(release) = release
                         {
-                            self.prompt = Some(self.prompt_for(release));
+                            self.prompt = Some(self.prompt_for(release, self.installing_itself));
                         }
                         if let Some(prompt) = &mut self.prompt {
                             prompt.is_installing = false;
@@ -633,6 +676,7 @@ impl Updater {
         prompt.is_installing = true;
         prompt.clear_message();
         self.failed_reason = None;
+        self.installing_itself = prompt.is_self_updating;
         let (tx, rx) = channel();
         let (app, version, ctx, release) = (self.app, self.version.clone(), ctx.clone(), prompt.release.clone());
         let worker_release = release.clone();
@@ -901,6 +945,53 @@ mod tests {
         assert!(u.check.is_none());
     }
 
+    /// Whether the copy installs a found release itself is decided on the check's thread: a frame
+    /// that runs while reading the installed files is stalled returns at once, and the prompt that
+    /// opens afterwards takes the thread's answer without reading them again.
+    #[test]
+    fn a_stalled_install_inspection_does_not_block_a_frame() {
+        enum Seen {
+            Inspecting,
+            Answered(Box<Found>),
+        }
+        let ctx = egui::Context::default();
+        let (seen_tx, seen) = channel();
+        let (resume, resumed) = channel::<()>();
+        let resumed = Mutex::new(resumed);
+        let calls = Arc::new(Mutex::new(0_u32));
+        let (probe_seen, probe_calls) = (seen_tx.clone(), Arc::clone(&calls));
+        let mut u = updater(Ok(Some(newer()))).with_probe(Arc::new(move |_, _| {
+            *probe_calls.lock().unwrap_or_else(PoisonError::into_inner) += 1;
+            let _ = probe_seen.send(Seen::Inspecting);
+            // Stalled until the test lets it go, like a read on storage that does not answer.
+            let _ = resumed.lock().unwrap_or_else(PoisonError::into_inner).recv();
+            true
+        }));
+        u.check_at_start(&ctx);
+        // The check's answer goes to the same channel as the inspection's start, so whichever
+        // comes first is seen first.
+        let Some(answer) = u.check.take() else { panic!("the check started") };
+        std::thread::spawn(move || {
+            if let Ok(found) = answer.recv() {
+                let _ = seen_tx.send(Seen::Answered(Box::new(found)));
+            }
+        });
+        assert!(matches!(seen.recv(), Ok(Seen::Inspecting)), "the check's thread inspects the install before it answers");
+
+        let (tx, rx) = channel();
+        u.check = Some(rx);
+        u.tick(&ctx);
+        assert!(u.prompt.is_none(), "no prompt while the inspection is stalled");
+        assert!(u.check.is_some(), "the check is still running");
+
+        assert!(resume.send(()).is_ok());
+        let Ok(Seen::Answered(found)) = seen.recv() else { panic!("the check answered") };
+        assert!(tx.send(*found).is_ok());
+        u.tick(&ctx);
+        assert!(u.prompt.as_ref().is_some_and(|p| p.is_self_updating), "the prompt offers Update and Restart");
+        assert_eq!(*calls.lock().unwrap_or_else(PoisonError::into_inner), 1, "the frame did not inspect the install again");
+    }
+
     #[test]
     fn a_failed_install_returns_to_the_prompt_even_after_it_was_dismissed() {
         let ctx = egui::Context::default();
@@ -912,6 +1003,21 @@ mod tests {
         let prompt = u.prompt.as_ref().map(|p| (p.is_installing, p.status_message.clone()));
         assert_eq!(prompt, Some((false, Some("disk full".into()))));
         assert!(u.install.is_none());
+    }
+
+    /// The prompt a failed installation reopens offers Update and Restart again when the prompt
+    /// that started it did, without reading the installed files in the frame. This test binary
+    /// is a copy that can't install itself, so reading them would answer no.
+    #[test]
+    fn a_failed_install_reopens_the_prompt_as_it_was_offered() {
+        let ctx = egui::Context::default();
+        let mut u = updater(Ok(None));
+        u.installing_itself = true;
+        let (tx, rx) = channel();
+        u.install = Some((rx, newer()));
+        assert!(tx.send(Err("disk full".into())).is_ok());
+        u.tick(&ctx);
+        assert!(u.prompt.as_ref().is_some_and(|p| p.is_self_updating), "the reopened prompt offers Update and Restart");
     }
 
     #[test]
@@ -1294,12 +1400,13 @@ mod tests {
         Updater::new(&PHOTOCRAFT, version).with_source(Arc::new(|| Ok(None))).with_pins_path(no_pins()).with_paths(paths.clone())
     }
 
-    /// The check at start, answered with `answer` without waiting on its thread.
+    /// The check at start, answered with `answer` without waiting on its thread, for a copy that
+    /// does not install a release itself.
     fn start_answered(u: &mut Updater, ctx: &egui::Context, answer: Checked) {
         u.check_at_start(ctx);
         let (tx, rx) = channel();
         u.check = Some(rx);
-        assert!(tx.send(answer).is_ok());
+        assert!(tx.send(answer.map(|found| found.map(|release| (release, false)))).is_ok());
         u.tick(ctx);
     }
 
@@ -1366,7 +1473,7 @@ mod tests {
         assert_eq!(u.status(), &Status::Checking);
         let (tx, rx) = channel();
         u.check = Some(rx);
-        assert!(tx.send(Ok(Some(newer()))).is_ok());
+        assert!(tx.send(Ok(Some((newer(), false)))).is_ok());
         u.tick(&ctx);
         assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message).as_deref(), Some("The update could not be installed: disk full"));
 
@@ -1374,7 +1481,7 @@ mod tests {
         u.check_now(&ctx);
         let (tx, rx) = channel();
         u.check = Some(rx);
-        assert!(tx.send(Ok(Some(newer()))).is_ok());
+        assert!(tx.send(Ok(Some((newer(), false)))).is_ok());
         u.tick(&ctx);
         assert!(u.prompt.is_some());
         assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message), None, "the reason is shown once");
@@ -1434,7 +1541,7 @@ mod tests {
     #[test]
     fn a_check_answering_during_an_update_reports_the_update() {
         let ctx = egui::Context::default();
-        for answer in [Ok(None), Err("offline".to_owned()), Ok(Some(newer()))] {
+        for answer in [Ok(None), Err("offline".to_owned()), Ok(Some((newer(), false)))] {
             let mut u = updater(Ok(None));
             u.offer(newer());
             u.check_now(&ctx);
@@ -1511,7 +1618,7 @@ mod tests {
         u.prompt = None;
         let (tx, rx) = channel();
         u.check = Some(rx);
-        assert!(tx.send(Ok(Some(newer()))).is_ok());
+        assert!(tx.send(Ok(Some((newer(), false)))).is_ok());
         u.tick(&ctx);
         assert!(u.prompt.is_some());
         assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message), None, "the reason is shown once");
