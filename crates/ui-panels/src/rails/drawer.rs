@@ -266,6 +266,10 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
                         let list = List::<DrawerKey>::new(words.drawer_tools.clone())
                             .id(ui.scope_id().with("drawer-tools"))
                             .select(SelectMode::Single)
+                            .can_drag(|key| match *key {
+                                DrawerKey::Tool { group, tool } => !on_toolbar(toolbar, &groups[group].tools[tool].id),
+                                DrawerKey::Group(_) => false,
+                            })
                             .drag_payload(|drag: &ListDrag<DrawerKey>| match drag.grabbed {
                                 DrawerKey::Tool { group, tool } => Some(ToolDrag::drawer(group, tool)),
                                 DrawerKey::Group(_) => None,

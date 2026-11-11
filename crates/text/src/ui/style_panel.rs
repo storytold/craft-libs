@@ -379,6 +379,7 @@ impl<'a> TextStylesPanel<'a> {
                     .allow_empty(true)
                     .deletable(true)
                     .natural_height(true)
+                    .can_drag(move |_| highlighting)
                     .drag_payload(|drag: &ListDrag<u64>| Some(drag.clone()))
                     .selection(selection.reborrowed())
                     .show_items(ui, &source, &mut |id, _| {

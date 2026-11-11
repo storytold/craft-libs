@@ -1,8 +1,11 @@
-//! The drawer's own logic: how an edit changes the toolbar and what a drop on the rail asks for.
+//! The drawer's own logic: how an edit changes the toolbar and what a drop on the rail asks for, and which of its tools
+//! drag.
 
 use craft_ui::rails::{DropAt, RailTool, ToolSlot, ToolbarEdit, apply_toolbar_edit};
 use craft_ui::runtime::commands::EditCommands;
-use craft_ui::testing::trial;
+use craft_ui::runtime::drag;
+use craft_ui::testing::{Fixture, stories, trial};
+use egui::Vec2;
 
 const UNDO: u8 = 1;
 const REDO: u8 = 2;
@@ -66,4 +69,22 @@ fn closing_the_drawer_returns_the_focus_to_the_rails_edit_toolbar_button() {
     assert!(!open.get(), "Escape closed the drawer");
     let focused = craft_ui::testing::access::focused_key(fixture.tree());
     assert!(fixture.by_label("Customize").is_some_and(|button| button.node == focused), "the focus is back on Edit Toolbar");
+}
+
+/// A tool already on the toolbar is dimmed and does not drag; a tool that is not on it drags to the rail.
+#[trial]
+fn only_a_tool_off_the_toolbar_drags() {
+    let entry = stories().into_iter().find(|entry| entry.story.name == "toolbar_drawer").expect("the drawer story");
+    let mut fixture = Fixture::story(&entry.story);
+    fixture.settle();
+    let drags = |fixture: &mut Fixture, label: &str| {
+        let row = fixture.by_label(label).unwrap_or_else(|| panic!("the {label} row"));
+        let before = drag::started(fixture.ctx());
+        fixture.drag_hold_at(row.center(), Vec2::new(0.0, 30.0));
+        let started = drag::started(fixture.ctx()) > before;
+        fixture.release_at(row.center() + Vec2::new(0.0, 30.0)).settle();
+        started
+    };
+    assert!(!drags(&mut fixture, "Brush"), "Brush is on the toolbar");
+    assert!(drags(&mut fixture, "Eraser"), "Eraser is not");
 }
