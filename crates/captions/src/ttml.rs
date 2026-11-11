@@ -88,6 +88,8 @@ fn esc(s: &str) -> String {
             '>' => o.push_str("&gt;"),
             '"' => o.push_str("&quot;"),
             '\'' => o.push_str("&apos;"),
+            // XML 1.0 forbids these (C0 controls, U+FFFE, U+FFFF), even escaped
+            c if !craft_xml::is_xml_char(c) => {}
             c => o.push(c),
         }
     }
@@ -103,6 +105,75 @@ fn time_expr(t: Tick, rate: Option<FrameRate>) -> String {
     match rate {
         Some(r) if r.tick_of(r.frame_at(t)) == t => format!("{}f", r.frame_at(t)),
         _ => clock(t),
+    }
+}
+
+/// Memoised "next occurrence of a quote byte" searches, so unterminated quotes are not rescanned.
+#[derive(Default)]
+struct QuoteCache {
+    found: [Option<(usize, Option<usize>)>; 2],
+}
+
+impl QuoteCache {
+    /// Index of the next `quote` byte at or after `from`.
+    fn next(&mut self, bytes: &[u8], quote: u8, from: usize) -> Option<usize> {
+        let slot = usize::from(quote == b'\'');
+        if let Some((searched, result)) = self.found[slot]
+            && searched <= from
+            && result.is_none_or(|r| r >= from)
+        {
+            return result;
+        }
+        let result = bytes.get(from..).and_then(|t| t.iter().position(|&c| c == quote)).map(|i| from + i);
+        self.found[slot] = Some((from, result));
+        result
+    }
+}
+
+/// Parses a tag starting at `bytes[start] == b'<'`: optional `/` (closing), a name of ASCII
+/// letters/digits starting with a letter immediately after, then whitespace-separated
+/// `name="value"` / `name='value'` attributes, optional `/` before `>`. A `>` inside a quoted
+/// value does not end the tag. Returns `(index after '>', closing, lowercase name)`; the name is empty for a self-closing tag.
+fn parse_tag(bytes: &[u8], start: usize, cache: &mut QuoteCache) -> Option<(usize, bool, String)> {
+    let mut i = start + 1;
+    let closing = bytes.get(i) == Some(&b'/');
+    if closing {
+        i += 1;
+    }
+    let name_start = i;
+    if !bytes.get(i)?.is_ascii_alphabetic() {
+        return None;
+    }
+    while bytes.get(i).is_some_and(u8::is_ascii_alphanumeric) {
+        i += 1;
+    }
+    let name = String::from_utf8_lossy(bytes.get(name_start..i)?).to_ascii_lowercase();
+    loop {
+        let ws_start = i;
+        while bytes.get(i).is_some_and(u8::is_ascii_whitespace) {
+            i += 1;
+        }
+        match bytes.get(i)? {
+            b'>' => return Some((i + 1, closing, name)),
+            // self-closing: no markup
+            b'/' if !closing && bytes.get(i + 1) == Some(&b'>') => return Some((i + 2, closing, String::new())),
+            _ => {}
+        }
+        if i == ws_start {
+            return None;
+        }
+        let key_start = i;
+        while bytes.get(i).is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b':' | b'_')) {
+            i += 1;
+        }
+        if i == key_start || bytes.get(i) != Some(&b'=') {
+            return None;
+        }
+        let quote = *bytes.get(i + 1)?;
+        if quote != b'"' && quote != b'\'' {
+            return None;
+        }
+        i = cache.next(bytes, quote, i + 2)? + 1;
     }
 }
 
@@ -127,25 +198,12 @@ fn inline(text: &str) -> String {
         }
     };
     let mut rest = text;
-    // Once no `>` remains, no later `<` can start a tag either. Remember that instead of searching
-    // the shrinking suffix again after every literal `<`, which made `<<<<…` quadratic.
-    let mut closer_remains = true;
+    let mut cache = QuoteCache::default();
     while !rest.is_empty() {
-        let tag_end = match rest.strip_prefix('<') {
-            Some(after) if closer_remains => {
-                let end = after.find('>');
-                closer_remains = end.is_some();
-                end
-            }
-            _ => None,
-        };
-        if let Some(end) = tag_end {
-            let after = &rest[1..];
-            let tag = after[..end].trim().to_ascii_lowercase();
-            let (closing, name) = match tag.strip_prefix('/') {
-                Some(n) => (true, n.trim().to_string()),
-                None => (false, tag.split_whitespace().next().unwrap_or("").to_string()),
-            };
+        // Only a well-formed tag is markup; "1 < 2 and 3 > 2" and "a<b and c>d" are text.
+        if rest.starts_with('<')
+            && let Some((end, closing, name)) = parse_tag(text.as_bytes(), text.len() - rest.len(), &mut cache)
+        {
             let attr = match name.as_str() {
                 "i" => Some("tts:fontStyle=\"italic\""),
                 "b" => Some("tts:fontWeight=\"bold\""),
@@ -159,7 +217,7 @@ fn inline(text: &str) -> String {
                     active.push(a);
                 }
             }
-            rest = &after[end + 1..];
+            rest = text.get(end..).unwrap_or("");
             continue;
         }
         let Some(ch) = rest.chars().next() else { break };
@@ -177,13 +235,34 @@ fn inline(text: &str) -> String {
     out
 }
 
+/// An XML name without a colon (Namespaces in XML, NCName).
 fn is_ncname(s: &str) -> bool {
-    let mut c = s.chars();
-    c.next().is_some_and(|f| f.is_alphabetic() || f == '_') && c.all(|x| x.is_alphanumeric() || matches!(x, '_' | '-' | '.'))
+    craft_xml::is_name(s) && !s.contains(':')
 }
 
-fn cue_id(cue: &Cue, index: usize) -> String {
-    cue.id.as_deref().filter(|x| is_ncname(x)).map(str::to_string).unwrap_or_else(|| format!("c{}", index + 1))
+fn cue_ids(doc: &Document) -> Vec<String> {
+    // Reserve every valid explicit ID before allocating fallbacks, including IDs on later cues.
+    let reserved: HashSet<&str> =
+        ["s1", "r1"].into_iter().chain(doc.cues.iter().filter_map(|cue| cue.id.as_deref()).filter(|id| is_ncname(id))).collect();
+    let mut used: HashSet<String> = ["s1".into(), "r1".into()].into_iter().collect();
+    doc.cues
+        .iter()
+        .enumerate()
+        .map(|(index, cue)| {
+            if let Some(id) = cue.id.as_deref().filter(|id| is_ncname(id))
+                && used.insert(id.to_string())
+            {
+                return id.to_string();
+            }
+            let mut id = format!("c{}", index.saturating_add(1));
+            // Each collision consumes a distinct reserved or used ID, so this loop is bounded by their combined size.
+            while reserved.contains(id.as_str()) || used.contains(&id) {
+                id.push('_');
+            }
+            used.insert(id.clone());
+            id
+        })
+        .collect()
 }
 
 /// Write `doc` as TTML. `rate` (IMSC1 only) makes times exact frame offsets; `lang` is the
@@ -205,8 +284,9 @@ pub fn write(doc: &Document, flavor: Flavor, rate: Option<FrameRate>, lang: &str
     }
     o.push_str(&format!(" xml:lang=\"{}\">\n", esc(if lang.is_empty() { "en" } else { lang })));
     // Keep agent identifiers distinct from the IDs already emitted for cues, style and region.
+    let cue_ids = cue_ids(doc);
     let mut ids: HashSet<String> = ["s1".into(), "r1".into()].into_iter().collect();
-    ids.extend(doc.cues.iter().enumerate().map(|(i, c)| cue_id(c, i)));
+    ids.extend(cue_ids.iter().cloned());
     let mut speakers = Vec::new();
     let mut speaker_ids = HashMap::new();
     for speaker in doc.cues.iter().filter_map(|c| c.speaker.as_deref()) {
@@ -235,8 +315,7 @@ pub fn write(doc: &Document, flavor: Flavor, rate: Option<FrameRate>, lang: &str
         "    <layout>\n      <region xml:id=\"r1\" tts:origin=\"10% 10%\" tts:extent=\"80% 80%\" tts:displayAlign=\"after\"/>\n    </layout>\n",
     );
     o.push_str("  </head>\n  <body region=\"r1\" style=\"s1\">\n    <div>\n");
-    for (i, c) in doc.cues.iter().enumerate() {
-        let id = cue_id(c, i);
+    for (c, id) in doc.cues.iter().zip(cue_ids) {
         let agent =
             c.speaker.as_deref().and_then(|s| speaker_ids.get(s)).map(|id| format!(" ttm:role=\"x-speaker\" ttm:agent=\"{id}\"")).unwrap_or_default();
         o.push_str(&format!(
@@ -541,7 +620,7 @@ fn collect(n: &El, styles: &std::collections::HashMap<String, Fmt>, fmt: Fmt, ou
     for c in &n.children {
         if let Node::Text(text) | Node::CData(text) = c {
             for ch in text.chars() {
-                if ch.is_whitespace() {
+                if is_xml_space(ch) {
                     out.pending = true;
                 } else {
                     out.flush();
@@ -578,8 +657,14 @@ fn collect(n: &El, styles: &std::collections::HashMap<String, Fmt>, fmt: Fmt, ou
     }
 }
 
+/// XML whitespace: only these characters collapse (U+00A0 and other Unicode spaces are content).
+fn is_xml_space(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\r')
+}
+
 fn clean(s: &str) -> String {
-    s.lines().map(str::trim).collect::<Vec<_>>().join("\n").trim().to_string()
+    // `split` (not `lines`) keeps the empty edge lines produced by a leading or trailing `<br/>`.
+    s.split('\n').map(|l| l.trim_matches(is_xml_space)).collect::<Vec<_>>().join("\n")
 }
 
 pub fn parse(text: &str) -> Result<Document> {
@@ -718,7 +803,7 @@ fn walk(n: &El, parent: Scope, tm: &Timing, styles: &HashMap<String, Fmt>, speak
                             o.s.push_str(&format!("</{t}>"));
                         }
                         let text = clean(&o.s);
-                        if e > b && !text.is_empty() {
+                        if e > b && !text.trim_matches(is_xml_space).is_empty() {
                             doc.cues.push(Cue { start: b, end: e, text, speaker: cue_speaker, id, ..Default::default() });
                         }
                     }
@@ -732,7 +817,7 @@ fn walk(n: &El, parent: Scope, tm: &Timing, styles: &HashMap<String, Fmt>, speak
                                 let mut o = Out { s: String::new(), pending: false };
                                 collect(sp, styles, style_of(sp, styles, f), &mut o);
                                 let text = clean(&o.s);
-                                if se > sb && !text.is_empty() {
+                                if se > sb && !text.trim_matches(is_xml_space).is_empty() {
                                     doc.cues.push(Cue {
                                         start: sb,
                                         end: se,
@@ -757,6 +842,28 @@ mod tests {
 
     fn tm(rate: FrameRate) -> Timing {
         Timing { rate, base: rate.timecode_base(), sub_frame_rate: 1, tick_rate: FrameRate::new(1, 1) }
+    }
+
+    #[test]
+    fn only_xml_whitespace_collapses_in_cue_text() {
+        let xml = "<tt xmlns=\"http://www.w3.org/ns/ttml\"><body><div><p begin=\"1s\" end=\"2s\">\t 10\u{a0}km\u{2009}a\u{3000}b \t\r\n  c \n</p></div></body></tt>";
+        let doc = parse(xml).unwrap();
+        assert_eq!(doc.cues[0].text, "10\u{a0}km\u{2009}a\u{3000}b c");
+        let xml = "<tt xmlns=\"http://www.w3.org/ns/ttml\"><body><div><p begin=\"1s\" end=\"2s\">\u{a0}x<br/>y\u{a0}</p></div></body></tt>";
+        let doc = parse(xml).unwrap();
+        assert_eq!(doc.cues[0].text, "\u{a0}x\ny\u{a0}");
+    }
+
+    #[test]
+    fn edge_line_breaks_survive_round_trip() {
+        for (body, want) in [("<br/>text", "\ntext"), ("text<br/>", "text\n"), (" <br/> text <br/> ", "\ntext\n")] {
+            let xml = format!("<tt xmlns=\"http://www.w3.org/ns/ttml\"><body><div><p begin=\"1s\" end=\"2s\">{body}</p></div></body></tt>");
+            let doc = parse(&xml).unwrap();
+            assert_eq!(doc.cues[0].text, want);
+            let out = write(&doc, Flavor::Dfxp, None, "en");
+            let again = parse(&out).unwrap();
+            assert_eq!(again.cues[0].text, want);
+        }
     }
 
     #[test]
