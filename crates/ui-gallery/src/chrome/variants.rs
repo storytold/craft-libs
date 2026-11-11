@@ -135,7 +135,7 @@ pub(super) fn show(ui: &mut Ui, p: &mut Panels<'_>, tab: PanelId) -> bool {
                     type_name,
                     title: value.label.to_owned(),
                     note: shown(&value.look).then(|| "shown now".to_owned()),
-                    stories: vec![SpecStory::of(p, index, &entry.name)],
+                    stories: vec![SpecStory::of(p.catalog, index, &entry.name)],
                     layout: StoryLayout::Stacked,
                     surface: entry.surface,
                     open: false,

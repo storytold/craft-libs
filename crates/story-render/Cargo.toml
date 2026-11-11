@@ -42,6 +42,7 @@ update = ["craft-ui-gallery/update"]
 
 [dependencies]
 # The same framework features as the gallery, so the framework builds once for the gallery, the tests and this bin.
+craft-behavior = { workspace = true }
 craft-ui = { workspace = true, features = ["app", "testing", "snapshot"] }
 craft-ui-gallery = { path = "../ui-gallery", default-features = false }
 egui = { workspace = true }

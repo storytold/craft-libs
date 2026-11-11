@@ -4,7 +4,7 @@
 use super::card::{Card, CardEvents, CardStory, Look};
 use super::panels::Panels;
 use super::variants;
-use crate::viewer::{ComponentInfo, PanelId, TreeKey, by_level, entry_of};
+use crate::viewer::{Catalog, ComponentInfo, PanelId, TreeKey, by_level, entry_of};
 use craft_behavior::{ColumnWidth, Selection};
 use craft_theme::variant::Tone;
 use craft_ui::contract::{Bind, BodyCx, Entry, Gap, Lazy, Pad, Props as _, Scroll, Show as _, ShowContainer as _, StoryLayout};
@@ -32,9 +32,10 @@ const ONE: &[ColumnWidth] = &[ColumnWidth::fill(1.0)];
 const TWO: &[ColumnWidth] = &[ColumnWidth::fill(1.0); 2];
 
 /// One story of a card to show.
-pub(super) struct SpecStory {
+pub struct SpecStory {
     /// The index of the story in the catalog.
     pub index: usize,
+    /// The story's registration.
     pub story: &'static StoryRegistration,
     /// The story's caption.
     pub caption: String,
@@ -42,14 +43,14 @@ pub(super) struct SpecStory {
 
 impl SpecStory {
     /// The story at catalog index `index` of the component whose display name is `name`.
-    pub fn of(p: &Panels<'_>, index: usize, name: &str) -> Self {
-        let story = p.catalog.entries[index].registration;
+    pub fn of(catalog: &Catalog, index: usize, name: &str) -> Self {
+        let story = catalog.entries[index].registration;
         SpecStory { index, story, caption: story.story.caption(name) }
     }
 }
 
 /// The card of one component to show, before it is laid out.
-pub(super) struct Spec {
+pub struct Spec {
     /// The id scope of the card.
     pub key: String,
     /// The registered name of the component.
@@ -62,10 +63,15 @@ pub(super) struct Spec {
     pub stories: Vec<SpecStory>,
     /// How the stories are laid out together.
     pub layout: StoryLayout,
+    /// The surface the stories sit on.
     pub surface: craft_ui::contract::Surface,
+    /// Whether the header has Open.
     pub open: bool,
+    /// Whether the header has Use.
     pub usable: bool,
+    /// Whether the card has the selection ring.
     pub selected: bool,
+    /// The values the card sets for its stories.
     pub look: Look,
     /// Whether the card gates its story's wheel takers (`Card::gated`).
     pub gated: bool,
@@ -79,6 +85,30 @@ impl Spec {
             _ => 1,
         };
         HEADER_GUESS + self.stories.len().div_ceil(per_row) as f32 * STORY_ROW_GUESS
+    }
+
+    /// The stories as the card takes them.
+    pub fn card_stories(&self) -> Vec<CardStory<'_>> {
+        self.stories.iter().map(|story| CardStory::new(story.index, story.story, &story.caption)).collect()
+    }
+
+    /// The card of this spec, with `stories` from [`Spec::card_stories`], `key` as its id scope and `room` as the
+    /// height a filling story gets.
+    pub fn card<'a>(&'a self, stories: &'a [CardStory<'a>], key: String, room: f32) -> Card<'a> {
+        Card {
+            key,
+            title: &self.title,
+            note: self.note.as_deref(),
+            stories,
+            layout: self.layout,
+            surface: self.surface,
+            room,
+            open: self.open,
+            usable: self.usable,
+            selected: self.selected,
+            look: self.look,
+            gated: self.gated,
+        }
     }
 }
 
@@ -135,24 +165,9 @@ pub(super) fn grid(
                     // Keyed by the card alone: a change of the column count regroups the rows, and the cards out of
                     // view keep their extents.
                     Lazy::new((generation, spec.key.as_str()), spec.estimate()).keep(target).show(ui, |ui| {
-                        let stories: Vec<CardStory<'_>> =
-                            spec.stories.iter().map(|story| CardStory::new(story.index, story.story, &story.caption)).collect();
+                        let stories = spec.card_stories();
                         // Each card is its own id scope: a story's `id_salt` and auto ids must not meet another card's.
-                        let card = Card {
-                            key: format!("{}-{generation}", spec.key),
-                            title: &spec.title,
-                            note: spec.note.as_deref(),
-                            stories: &stories,
-                            layout: spec.layout,
-                            surface: spec.surface,
-                            room,
-                            open: spec.open,
-                            usable: spec.usable,
-                            selected: spec.selected,
-                            look: spec.look,
-                            gated: spec.gated,
-                        };
-                        let events = card.show(ui, p.cells);
+                        let events = spec.card(&stories, format!("{}-{generation}", spec.key), room).show(ui, p.cells);
                         reported.push(Reported { spec: row * columns + at, events });
                     });
                 }
@@ -250,8 +265,8 @@ pub(super) fn overview(ui: &mut Ui, p: &mut Panels<'_>) {
 }
 
 /// The stories of group `group` of the component registered as `type_name`, under their captions.
-fn group_stories(p: &Panels<'_>, type_name: &'static str, group: usize, name: &str) -> Vec<SpecStory> {
-    p.catalog.group_stories(type_name, group).into_iter().map(|at| SpecStory::of(p, at, name)).collect()
+fn group_stories(catalog: &Catalog, type_name: &'static str, group: usize, name: &str) -> Vec<SpecStory> {
+    catalog.group_stories(type_name, group).into_iter().map(|at| SpecStory::of(catalog, at, name)).collect()
 }
 
 /// The group the component registered as `type_name` shows: the group of its picked story, else its first.
@@ -259,13 +274,20 @@ fn target_group(p: &Panels<'_>, type_name: &'static str) -> usize {
     target_story(p, type_name).and_then(|at| p.catalog.group_at(type_name, at)).unwrap_or(0)
 }
 
-/// The Overview's card of `component`: the cases of the group of its picked story, in catalog order, with the group's
-/// name as a note when it is not the first group.
+/// The Overview's card of `component`: the cases of the group of its picked story; selected when it is the selected
+/// component.
 fn component_card(p: &Panels<'_>, component: &ComponentInfo, selected: Option<&'static str>) -> Option<Spec> {
+    let mut spec = overview_card(p.catalog, component, target_group(p, component.type_name))?;
+    spec.selected = selected == Some(component.type_name);
+    Some(spec)
+}
+
+/// The Overview's card of `component` showing its story group `group`: the group's cases in catalog order, with the
+/// group's name as a note when it is not the first group. Not selected.
+pub fn overview_card(catalog: &Catalog, component: &ComponentInfo, group: usize) -> Option<Spec> {
     let entry = entry_of(component.type_name)?;
-    let group = target_group(p, component.type_name);
     let name = &component.groups.get(group)?.name;
-    let stories = group_stories(p, component.type_name, group, &entry.name);
+    let stories = group_stories(catalog, component.type_name, group, &entry.name);
     if stories.is_empty() {
         return None;
     }
@@ -279,7 +301,7 @@ fn component_card(p: &Panels<'_>, component: &ComponentInfo, selected: Option<&'
         surface: entry.surface,
         open: true,
         usable: false,
-        selected: selected == Some(component.type_name),
+        selected: false,
         look: Look::default(),
         gated: true,
     })
@@ -307,7 +329,7 @@ pub(super) fn component_tab(ui: &mut Ui, p: &mut Panels<'_>, type_name: &'static
             type_name,
             title: group.name.clone(),
             note: None,
-            stories: group_stories(p, type_name, at, &entry.name),
+            stories: group_stories(p.catalog, type_name, at, &entry.name),
             layout: entry.story_layout(&group.name),
             surface: entry.surface,
             open: false,

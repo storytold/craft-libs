@@ -5,8 +5,8 @@
     cl test <crate> [cargo args] [-- test args]   cargo test -p <crate> --tests, canonical features
     cl build gallery [cargo args]                 the debug gallery binary (target/debug/craft-ui-gallery)
     cl build <crate> [cargo args]                 cargo build -p <crate>, canonical features
-    cl render <crate|ui> <Component> [--story <name>] [--out <dir>] [--threads N]
-                                                  the component's stories as PNGs through the story-render bin
+    cl render <crate|ui> <Component> [--card] [--story <name>] [--out <dir>] [--threads N]
+                                                  the component's stories (--card: its Overview cards) as PNGs through the story-render bin
     cl features <crate>                           print the canonical --features value for <crate>
     cl doctor                                     check the manifests for drift from the one feature set
     cl cargo <args...>                            cargo through the job pool, no features added
@@ -252,7 +252,7 @@ def main():
         run(top, with_features(["build", "-p", pkg], features) + args)
     if command == "render":
         if len(rest) < 2:
-            fail("cl render <crate|ui> <Component> [--story <name>] [--out <dir>] [--threads N]")
+            fail("cl render <crate|ui> <Component> [--card] [--story <name>] [--out <dir>] [--threads N]")
         crate, component, options = rest[0], rest[1], rest[2:]
         short = crate.removeprefix("craft-")
         features = []
