@@ -2,7 +2,7 @@
 //! (linear prediction, stereo decorrelation, STREAMINFO MD5) into any `Write + Seek`.
 
 mod crc;
-mod encoder;
+pub(crate) mod encoder;
 mod frame;
 mod md5;
 mod predict;
@@ -49,7 +49,7 @@ fn mask_comment(channels: usize, mask: Option<u32>) -> Option<String> {
 }
 
 fn encoder_error(e: encoder::Error) -> AudioError {
-    AudioError::Encode(format!("FLAC: {e}"))
+    e.into()
 }
 
 /// A FLAC stream written block by block; [`Writer::finish`] fills in the STREAMINFO sizes, sample

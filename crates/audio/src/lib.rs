@@ -22,7 +22,7 @@
 //! - [`peaks`] (feature `peaks`): min/max/RMS pyramid for waveform drawing.
 //! - Codec modules for packet-level use, each with its own features: [`aac`] (`aac-decode`,
 //!   `aac-encode`), [`alac`] (`alac-decode`, `alac-encode`), [`opus`] (`opus-decode`), [`ac3`]
-//!   (`ac3-decode`), [`mpa`] (`mpa-decode`).
+//!   (`ac3-decode`), [`mpa`] (`mpa-decode`), [`flac`] (`flac-encode`: the packet encoder).
 //!
 //! The shared types below build with no features.
 
@@ -50,6 +50,30 @@ mod track;
 mod wav;
 #[cfg(any(feature = "pcm-encode", feature = "flac-encode"))]
 mod write;
+
+/// The FLAC packet encoder (RFC 9639), for a caller that muxes FLAC itself (into MP4, Matroska or
+/// its own `.flac` writer): planar integer samples in, frames out, and the STREAMINFO to patch in
+/// at the end. [`FileEncoder`] and [`encode`] write whole `.flac` files from `f32` instead.
+///
+/// ```
+/// use craft_audio::flac::{Encoder, EncoderConfig, STREAMINFO_OFFSET};
+///
+/// let left: Vec<i32> = (0..48_000).map(|i| ((i as f64 * 0.05).sin() * 20_000.0) as i32).collect();
+/// let right = left.clone();
+/// let mut enc = Encoder::new(EncoderConfig::new(48_000, 2, 16))?;
+/// let mut file = enc.header(&[]);
+/// file.extend(enc.encode(&[&left, &right])?);
+/// file.extend(enc.finish());
+/// let at = STREAMINFO_OFFSET as usize;
+/// file[at..at + 34].copy_from_slice(&enc.streaminfo());
+/// assert_eq!(&file[..4], b"fLaC");
+/// assert!(file.len() < 48_000 * 2 * 2 / 2); // well under half of 16-bit PCM
+/// # Ok::<(), craft_audio::flac::Error>(())
+/// ```
+#[cfg(feature = "flac-encode")]
+pub mod flac {
+    pub use crate::write::flac::encoder::{Encoder, EncoderConfig, Error, STREAMINFO_OFFSET};
+}
 
 pub use buffer::AudioBuffer;
 /// The craft-media this crate is built with, for its containers: using it rather than a separate
@@ -132,6 +156,13 @@ impl From<ac3::Error> for AudioError {
 impl From<ac3::encoder::Error> for AudioError {
     fn from(e: ac3::encoder::Error) -> Self {
         AudioError::Encode(e.to_string())
+    }
+}
+
+#[cfg(feature = "flac-encode")]
+impl From<flac::Error> for AudioError {
+    fn from(e: flac::Error) -> Self {
+        AudioError::Encode(format!("FLAC: {e}"))
     }
 }
 
