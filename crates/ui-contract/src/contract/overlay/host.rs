@@ -142,11 +142,14 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     if sized && areas::layer_rect(ctx, area).is_none() {
         areas::seed_area(ctx, areas::layer_of(tier, area), placed.at, placed.room);
     }
-    // A modal's scrim; it takes the presses below the modal while the modal is open.
+    // A modal's cover: it takes the presses below the modal while the modal is open, and paints the scrim if it has one.
     let cover_id = sub(layer.id, "cover");
     let cover = match overlay.rank {
-        Rank::Modal { backdrop: Backdrop::Scrim } => {
-            let scrim = crate::style::scrim_color(&layer.env.tokens).gamma_multiply(layer.fade);
+        Rank::Modal { backdrop } => {
+            let scrim = match backdrop {
+                Backdrop::Scrim => crate::style::scrim_color(&layer.env.tokens).gamma_multiply(layer.fade),
+                Backdrop::None => egui::Color32::TRANSPARENT,
+            };
             let through = crate::runtime::sampler::through(ctx, crate::runtime::egui::pass::current_viewport(ctx), layer.id);
             areas::show_cover_layer(ctx, areas::CoverLayer { id: cover_id, tier, screen: bounds, scrim, through, absorbs: !layer.exiting });
             Some(areas::layer_of(tier, cover_id))
