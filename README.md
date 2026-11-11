@@ -132,6 +132,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   of polygons with per-corner indices, materials, a node hierarchy): STL, OBJ with MTL, PLY and
   glTF 2.0 / GLB, one feature each. Readers are bounded by `Limits`, never open a file themselves
   and never panic. Carved from EffectCraft, SolidCraft, TextureCraft and MaterialCraft.
+- [`craft-midi`](crates/midi/README.md): Standard MIDI Files: a bounded reader for formats 0, 1 and
+  2 and a format-1 writer, over a neutral model of notes and channel events in ticks at 960 per
+  quarter note. From SoundCraft.
 - [`craft-mime`](crates/mime/README.md): Internet messages and MIME, read and written: RFC 5322
   header fields, MIME parts and multiparts, encoded-words, RFC 2231 parameters, base64 and
   quoted-printable, character sets, address lists, dates, mbox files and the `multipart/related`

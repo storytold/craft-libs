@@ -48,6 +48,7 @@ craft-audio = { path = "crates/audio" }
 # No default features, so craft-audio's `encode` builds craft-media without `isobmff`.
 craft-media = { path = "crates/media", default-features = false }
 craft-media-testkit = { path = "crates/media-testkit" }
+craft-midi = { path = "crates/midi" }
 craft-mime = { path = "crates/mime" }
 craft-lottie = { path = "crates/lottie" }
 craft-menu = { path = "crates/menu" }
