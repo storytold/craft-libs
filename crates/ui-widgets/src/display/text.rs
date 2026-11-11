@@ -147,9 +147,16 @@ impl Component for Text {
                 _ => layout.size(),
             };
         }
+        let role = cx.style.text.role;
+        if cx.proposal == Proposal::Min && self.elide == Elide::Off {
+            // At its least a wrapped text is its widest word: a line breaks between words, never inside one.
+            let widest =
+                cx.resolved.label.split_whitespace().map(|word| cx.layout_at(&self.run(role, word), f32::INFINITY).size().x).fold(0.0, f32::max);
+            return Vec2::new(widest, cx.layout_at(&self.run(role, cx.resolved.label), widest).size().y);
+        }
         // At its least an elided line is the ellipsis.
-        let band = if cx.proposal == Proposal::Min && self.elide != Elide::Off { 0.0 } else { wrap.unwrap_or(f32::INFINITY) };
-        let layout = cx.layout_at(&self.run(cx.style.text.role, cx.resolved.label), band);
+        let band = if cx.proposal == Proposal::Min { 0.0 } else { wrap.unwrap_or(f32::INFINITY) };
+        let layout = cx.layout_at(&self.run(role, cx.resolved.label), band);
         // A cut line takes the whole room: its width must not follow where the last glyph happened to fit.
         match cx.room {
             Some(room) if layout.elided => Vec2::new(room, layout.size().y),
