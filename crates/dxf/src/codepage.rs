@@ -181,7 +181,7 @@ pub(crate) fn decode_ascii_file(bytes: &[u8]) -> Cow<'_, str> {
         Some(name) => {
             let name = String::from_utf8_lossy(name);
             decoder(&name).unwrap_or_else(|| {
-                log::warn!("DXF: unknown code page `{name}`; reading the text as ANSI_1252");
+                log::warn!("DXF: unknown code page {}; reading the text as ANSI_1252", loggable(&name));
                 Decoder::Utf8
             })
         }
@@ -269,7 +269,7 @@ impl BinaryText {
             (3, Some(HeaderVar::CodePage)) => {
                 self.code_page = decoder(&s);
                 if self.code_page.is_none() {
-                    log::warn!("DXF: unknown code page `{}`; reading the text as ANSI_1252", s.trim());
+                    log::warn!("DXF: unknown code page {}; reading the text as ANSI_1252", loggable(s.trim()));
                 }
             }
             _ => {}
@@ -337,9 +337,28 @@ const DOS852: [char; 128] = [
     '\u{00B0}', '\u{00A8}', '\u{02D9}', '\u{0171}', '\u{0158}', '\u{0159}', '\u{25A0}', '\u{00A0}',
 ];
 
+/// A name from the file for a log line: quoted, with line breaks and other control characters
+/// escaped, and cut at 64 characters, so a file can't forge log lines or fill the log.
+fn loggable(name: &str) -> String {
+    let mut shown: String = name.chars().take(64).collect();
+    if name.chars().nth(64).is_some() {
+        shown.push('…');
+    }
+    format!("{shown:?}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_code_page_name_is_escaped_and_cut_before_it_is_logged() {
+        assert_eq!(loggable("ANSI_1252"), "\"ANSI_1252\"");
+        let shown = loggable("x\r\n[ERROR] forged\u{1b}[31m");
+        assert!(!shown.contains(['\r', '\n', '\u{1b}']), "{shown}");
+        let long = loggable(&"a".repeat(10_000));
+        assert!(long.chars().count() <= 70, "{}", long.chars().count());
+    }
 
     #[test]
     fn code_page_names() {
