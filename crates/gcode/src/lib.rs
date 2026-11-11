@@ -8,8 +8,7 @@
 //! given.
 //!
 //! Flattening curves, choosing what to cut and at what power, and machine or material presets
-//! are the caller's business. Depends on no other Craft crate. Moved from StencilCraft's
-//! `stencilcraft-gcode`.
+//! are the caller's business. Depends on no other Craft crate.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
