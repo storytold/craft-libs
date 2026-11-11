@@ -281,3 +281,21 @@ fn writer_places_meshes_keeps_colours_and_names_materials_apart() {
     scene.meshes[0].parts[0].corners[0].position = 9;
     assert!(write(&scene, None, &Limits::default()).is_err());
 }
+
+#[test]
+fn map_options_are_passed_over_by_their_argument_counts() {
+    // `-o` takes one to three numbers, so the name after it may hold spaces; the final token alone
+    // would be `checker.png`.
+    let mtl = "newmtl A\nmap_Kd -o 0.5 0.5 my checker.png\nmap_Bump -bm 0.3 -clamp on rough bump.png\nmap_Ke -s 2 2 2 -mm 0 1 glow.png\n\
+               newmtl B\nmap_Kd -o 1 wood.png\nmap_Bump -unknown 3 my bump.png\nmap_Ke -bm\n";
+    let (materials, images) = read_mtl(mtl.as_bytes(), &Limits::default()).unwrap();
+    let name = |t: Option<crate::TextureRef>| t.map(|t| images[t.image].uri.clone().unwrap());
+    assert_eq!(name(materials[0].base_color_texture).as_deref(), Some("my checker.png"));
+    assert_eq!(name(materials[0].normal_texture).as_deref(), Some("rough bump.png"));
+    assert_eq!(name(materials[0].emissive_texture).as_deref(), Some("glow.png"));
+    assert_eq!(name(materials[1].base_color_texture).as_deref(), Some("wood.png"));
+    // an option this reader does not know: the final token
+    assert_eq!(name(materials[1].normal_texture).as_deref(), Some("bump.png"));
+    // a lone token is the name, whatever it looks like
+    assert_eq!(name(materials[1].emissive_texture).as_deref(), Some("-bm"));
+}
