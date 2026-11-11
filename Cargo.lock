@@ -876,6 +876,15 @@ name = "craft-docpath"
 version = "0.1.0"
 
 [[package]]
+name = "craft-dxf"
+version = "0.1.0"
+dependencies = [
+ "encoding_rs",
+ "log",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-ecproj-format"
 version = "0.1.0"
 dependencies = [
@@ -947,6 +956,21 @@ name = "craft-fonts-build-consumer"
 version = "0.1.0"
 dependencies = [
  "craft-fonts-build",
+]
+
+[[package]]
+name = "craft-gcode"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-heif"
+version = "0.1.0"
+dependencies = [
+ "heic-rs",
+ "rayon",
 ]
 
 [[package]]
@@ -1139,6 +1163,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-silhouette-studio"
+version = "0.1.0"
+dependencies = [
+ "kurbo 0.13.1",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-svg-paths"
+version = "0.1.0"
+dependencies = [
+ "kurbo 0.13.1",
+ "roxmltree 0.21.2",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-text"
 version = "0.1.0"
 dependencies = [
@@ -1150,6 +1191,15 @@ dependencies = [
  "unicode-general-category",
  "unicode-linebreak",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "craft-tiff"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1194,6 +1244,7 @@ dependencies = [
  "image",
  "log",
  "plist",
+ "rustix 1.1.5",
  "semver",
  "serde",
  "serde_json",
@@ -2470,6 +2521,15 @@ name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
+
+[[package]]
+name = "heic-rs"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8883c3bfa6b4ff19a40e52a6dc051c5612cbe21bf408fc6d4875e8dfd777cb66"
+dependencies = [
+ "rayon",
+]
 
 [[package]]
 name = "hermit-abi"
@@ -7106,7 +7166,7 @@ dependencies = [
 [[package]]
 name = "winprint"
 version = "0.2.1"
-source = "git+https://github.com/storytold/winprint.rs?rev=3c978dfcf3d460577fabd87aeea7a84ffdcfb396#3c978dfcf3d460577fabd87aeea7a84ffdcfb396"
+source = "git+https://github.com/storytold/winprint.rs?rev=bc06a7c48b768eb27a828c7986f6d2868b245ee0#bc06a7c48b768eb27a828c7986f6d2868b245ee0"
 dependencies = [
  "flate2",
  "fmt-derive",
