@@ -315,8 +315,7 @@ impl<K: Value + Eq + Hash + 'static> Component for PresetPicker<'_, K> {
             .sense(Sense::CLICK | Sense::HOVER | Sense::TAKE_FOCUS)
             .priority(HitPriority::new(HitLevel::Body, 0))
             .pointer_only("Enter, Space and Alt+Down open the presets")
-            .toggles("browser")
-            .on_press();
+            .toggles("browser");
         if self.edit_face {
             let (thumb, _) = cx.flow.take_start(cx.content_rect.height());
             cx.part(THUMB, thumb)

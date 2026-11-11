@@ -390,7 +390,6 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
             .priority(HitPriority::new(HitLevel::Edge, 0))
             .over()
             .toggles("menu")
-            .on_press()
             .pointer_only("Alt+Down opens the overflow menu");
     }
 

@@ -469,8 +469,7 @@ impl Component for FontPicker<'_> {
                 .sense(Sense::CLICK | Sense::KEEP_FOCUS)
                 .priority(HitPriority::new(HitLevel::Handle, 0))
                 .pointer_only("Alt+Down opens the list")
-                .toggles(POPUP)
-                .on_press();
+                .toggles(POPUP);
         }
         let codec = self.codec(&cx.env);
         let family = cx.value().cloned().unwrap_or_default();

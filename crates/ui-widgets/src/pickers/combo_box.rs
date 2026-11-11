@@ -124,8 +124,7 @@ impl Component for ComboBox<'_> {
                 .sense(Sense::CLICK | Sense::KEEP_FOCUS)
                 .priority(HitPriority::new(HitLevel::Handle, 0))
                 .pointer_only("Alt+Down opens the list")
-                .toggles("options")
-                .on_press();
+                .toggles("options");
         }
         if let Some(value) = value.or(Some(&self.empty)) {
             cx.text(text_key(), placed.text, &PlainText, value, &self.text_options());

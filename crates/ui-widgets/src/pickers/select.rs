@@ -162,8 +162,7 @@ impl<T: Value + 'static> Component for Select<'_, T> {
             .sense(Sense::CLICK | Sense::HOVER | Sense::TAKE_FOCUS)
             .priority(HitPriority::new(HitLevel::Body, 0))
             .pointer_only("Enter, Space and Alt+Down open the list")
-            .toggles("list")
-            .on_press();
+            .toggles("list");
     }
 
     /// Enter and Space toggle the listbox; a press on the face toggles it through the part. While it is closed, the

@@ -210,8 +210,7 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
                 .sense(Sense::CLICK)
                 .priority(HitPriority::new(HitLevel::Handle, 0))
                 .pointer_only("Alt+Down, the Menu key and a right click open the flyout")
-                .toggles("menu")
-                .on_press();
+                .toggles("menu");
         }
         self.laid = Some(laid);
     }

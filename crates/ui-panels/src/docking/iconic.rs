@@ -298,7 +298,8 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
                 .sense(Sense::CLICK | Sense::DRAG | Sense::TAKE_FOCUS)
                 .focusable()
                 .tooltip(label)
-                .toggles_at("flyout", at);
+                .toggles_at("flyout", at)
+                .on_click();
         }
         for (group, grip) in &plan.grips {
             cx.part(GRIP.at(*group as u64), *grip)

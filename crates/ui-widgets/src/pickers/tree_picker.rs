@@ -264,8 +264,7 @@ impl<K: Value + Eq + Hash + 'static> Component for TreePicker<'_, K> {
             .sense(Sense::CLICK | Sense::HOVER | Sense::TAKE_FOCUS)
             .priority(HitPriority::new(HitLevel::Body, 0))
             .pointer_only("Enter, Space and Alt+Down open the tree")
-            .toggles("tree")
-            .on_press();
+            .toggles("tree");
     }
 
     fn bind(&mut self) -> Option<BindMut<'_, Option<K>>> {

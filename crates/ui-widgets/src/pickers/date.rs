@@ -269,7 +269,8 @@ impl Component for DatePicker<'_> {
                 .sense(Sense::CLICK | Sense::KEEP_FOCUS)
                 .priority(HitPriority::new(HitLevel::Handle, 0))
                 .pointer_only("Alt+Down opens the calendar")
-                .toggles("calendar");
+                .toggles("calendar")
+                .on_click();
         }
     }
 

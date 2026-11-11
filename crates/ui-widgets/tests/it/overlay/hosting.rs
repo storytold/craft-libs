@@ -1,4 +1,4 @@
-//! Hosting menus on the overlay contract: one popup per part, toggling on press.
+//! Hosting menus on the overlay contract: one popup per part, toggling on press (on the click with `on_click`).
 
 use super::kit::PlainStyle;
 use craft_behavior::{HitLevel, HitPriority, PartKey, Sense};
@@ -29,7 +29,7 @@ struct Rows {
 struct Titles<'a> {
     #[common]
     common: Common,
-    on_press: bool,
+    on_click: bool,
     rows: &'a Rows,
 }
 
@@ -54,8 +54,8 @@ impl Component for Titles<'_> {
         for (key, at, index) in [(FIRST, TITLES.min, 0), (SECOND, TITLES.min + Vec2::new(70.0, 0.0), 1)] {
             let rect = Rect::from_min_size(at, Vec2::new(60.0, 20.0));
             let part = cx.part(key, rect).sense(Sense::CLICK | Sense::HOVER).priority(HitPriority::new(HitLevel::Body, 0)).toggles_at("menu", index);
-            if self.on_press {
-                part.on_press();
+            if self.on_click {
+                part.on_click();
             }
         }
     }
@@ -79,18 +79,18 @@ impl Component for Titles<'_> {
     }
 }
 
-fn show_titles<'a>(rows: &'a Rows, on_press: bool) -> impl FnMut(&mut Ui) + 'a {
+fn show_titles<'a>(rows: &'a Rows, on_click: bool) -> impl FnMut(&mut Ui) + 'a {
     move |ui| {
         rows.shown[0].set(false);
         rows.shown[1].set(false);
-        Titles { common: Common::new(), on_press, rows }.id_salt("titles").show_at(ui, TITLES);
+        Titles { common: Common::new(), on_click, rows }.id_salt("titles").show_at(ui, TITLES);
     }
 }
 
 #[trial]
-fn a_part_that_toggles_on_press_opens_on_the_press_and_a_release_over_a_row_picks_it() {
+fn a_toggling_part_opens_on_the_press_and_a_release_over_a_row_picks_it() {
     let (mut frames, rows) = (Frames::new(), Rows::default());
-    let mut show = show_titles(&rows, true);
+    let mut show = show_titles(&rows, false);
     frames.idle(3, &mut show);
     frames.frame(vec![moved(FIRST_AT)], &mut show);
     frames.frame(vec![press(FIRST_AT)], &mut show);
@@ -102,4 +102,18 @@ fn a_part_that_toggles_on_press_opens_on_the_press_and_a_release_over_a_row_pick
     frames.frame(vec![release(row)], &mut show);
     frames.idle(2, &mut show);
     assert_eq!(rows.activations.get(), 1, "the release over the row picked it");
+}
+
+#[trial]
+fn a_part_that_toggles_on_click_opens_on_the_release() {
+    let (mut frames, rows) = (Frames::new(), Rows::default());
+    let mut show = show_titles(&rows, true);
+    frames.idle(3, &mut show);
+    frames.frame(vec![moved(FIRST_AT)], &mut show);
+    frames.frame(vec![press(FIRST_AT)], &mut show);
+    frames.idle(2, &mut show);
+    assert!(!rows.shown[0].get(), "the press alone leaves the popup closed");
+    frames.frame(vec![release(FIRST_AT)], &mut show);
+    frames.idle(2, &mut show);
+    assert!(rows.shown[0].get(), "the click's release opened it");
 }

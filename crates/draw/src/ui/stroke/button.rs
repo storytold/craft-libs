@@ -152,8 +152,7 @@ impl Component for StrokeButton<'_> {
             .sense(Sense::CLICK | Sense::HOVER | Sense::TAKE_FOCUS)
             .priority(HitPriority::new(HitLevel::Body, 0))
             .pointer_only("Enter and Space open the stroke options")
-            .toggles("editor")
-            .on_press();
+            .toggles("editor");
     }
 
     fn bind(&mut self) -> Option<BindMut<'_, StrokeStyle>> {

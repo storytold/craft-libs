@@ -232,8 +232,9 @@ impl PartBuilder<'_> {
         self
     }
 
-    /// The part opens and closes the component's popup `popup` (the name given to `cx.popup`): a click on it toggles
-    /// the popup, AccessKit Expand and Collapse on its sub-node open and close it, Alt+Down from the part (or from
+    /// The part opens and closes the component's popup `popup` (the name given to `cx.popup`): a press on it toggles
+    /// the popup, so press, drag and release over a row picks it, and a click leaves it open (`on_click` acts on the
+    /// release instead), AccessKit Expand and Collapse on its sub-node open and close it, Alt+Down from the part (or from
     /// the component when no toggling part is focused) opens the first toggled popup that is closed and Alt+Up closes
     /// the open ones, and the sub-node reports `expanded`. The component declares the sub-node with `Access::node`.
     pub fn toggles(self, popup: &'static str) -> Self {

@@ -449,11 +449,11 @@ impl Component for MenuBar<'_> {
         for (at, width) in widths.iter().take(fit.shown).enumerate() {
             let (cell, rest) = flow.take_start(*width);
             flow = rest;
-            cx.part(TITLE.at(at as u64), cell).sense(Sense::CLICK | Sense::FOCUS).focusable().toggles_at("menu", at).on_press();
+            cx.part(TITLE.at(at as u64), cell).sense(Sense::CLICK | Sense::FOCUS).focusable().toggles_at("menu", at);
         }
         if fit.overflow {
             let (cell, _) = flow.take_start(more);
-            cx.part(MORE, cell).sense(Sense::CLICK | Sense::FOCUS).focusable().toggles_at("menu", fit.shown).on_press();
+            cx.part(MORE, cell).sense(Sense::CLICK | Sense::FOCUS).focusable().toggles_at("menu", fit.shown);
         }
         cx.roving(Roving::new(NavShape::Flat).arrows(Arrows::Horizontal));
     }

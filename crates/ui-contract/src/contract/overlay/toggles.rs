@@ -14,14 +14,15 @@ use egui::Id;
 pub struct ToggleDecl {
     pub popup: &'static str,
     pub index: usize,
-    /// The toggle acts on the pass the press began, and a release over the opened popup picks the row under it.
+    /// The toggle acts on the pass the press began, and a release over the opened popup picks the row under it; off,
+    /// it acts on the click's release.
     pub on_press: bool,
 }
 
 impl ToggleDecl {
-    /// A toggle of the popup `popup` repeat `index`, acting on release.
+    /// A toggle of the popup `popup` repeat `index`, acting on press.
     pub(crate) const fn new(popup: &'static str, index: usize) -> Self {
-        ToggleDecl { popup, index, on_press: false }
+        ToggleDecl { popup, index, on_press: true }
     }
 }
 
@@ -39,21 +40,21 @@ impl PartBuilder<'_> {
         self
     }
 
-    /// The part's toggle acts on the pass the press began, not on release, as a menu bar's titles do: a release over
-    /// a row of the popup it opened picks that row (press, drag, release), and a click on the part leaves the popup
-    /// open. Follows `toggles` or `toggles_at`.
-    pub fn on_press(self) -> Self {
+    /// The part's toggle acts on a click's release instead of the press: for a part that also drags (an icon that
+    /// moves) or that opens a popover the user works in rather than picks from. Follows `toggles` or `toggles_at`.
+    pub fn on_click(self) -> Self {
         let toggle = self.declared.toggles.as_mut();
-        debug_assert!(toggle.is_some(), "`on_press` follows `toggles` or `toggles_at`");
+        debug_assert!(toggle.is_some(), "`on_click` follows `toggles` or `toggles_at`");
         if let Some(toggle) = toggle {
-            toggle.on_press = true;
+            toggle.on_press = false;
         }
         self
     }
 }
 
-/// Step 9, before `update`: what the component's parts declared with `PartBuilder::toggles`. A click on the part
-/// or Enter or Space on it when focused toggles its popup (the pass its press began, for a part that declared `on_press`), AccessKit Expand and Collapse
+/// Step 9, before `update`: what the component's parts declared with `PartBuilder::toggles`. A press on the part
+/// (the release of a click, for a part that declared `on_click`) or Enter or Space on it when focused toggles its
+/// popup; a release over a row of a popup a press opened picks that row. AccessKit Expand and Collapse
 /// on its sub-node open and close it, Alt+Down opens the popup of the focused toggling part (else the first one that
 /// is closed), and Alt+Up closes the open ones. Opening one popup of the component closes the others. Each toggle
 /// keeps the popup's open state for the part's `expanded`. A click a toggling part took is not left as the root's
