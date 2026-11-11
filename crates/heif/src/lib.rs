@@ -68,8 +68,8 @@ impl Default for Options {
     }
 }
 
-/// How 4:2:0 and 4:2:2 chroma is brought to full resolution. The two differ only near sharp
-/// colour edges, by up to a column of blended colour.
+/// How 4:2:0 and 4:2:2 chroma is brought to full resolution. The two differ only next to sharp
+/// colour edges, where Apple's blends the neighbouring column and, for 4:2:0, the neighbouring row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Chroma {
     /// libheif: each chroma sample covers its luma block, blended only after an odd `clap` crop.
