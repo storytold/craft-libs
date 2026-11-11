@@ -34,6 +34,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-ai-core`](crates/ai-core/README.md): the data model and contract for AI in the Craft Apps (connections, models, tools, requests, jobs, consent, history, route spec). Pure, no I/O, wasm-safe. Contract in [docs/ai-shared-layer.md](docs/ai-shared-layer.md).
 - [`craft-pdf`](crates/pdf/README.md): independently optional PDF parsing, interpretation, rasterization and guarded authoring. Apps retain layout, fonts, editing and export policy; writer-only consumers do not enable the shared reader.
 
+- [`craft-assuan`](crates/assuan/README.md): the Assuan protocol and gpg-agent's operations (key lookup, signing a digest, decrypting a session key) over any `Read + Write` stream, with a bounded canonical S-expression reader. No sockets; everything the agent sends is capped.
 - [`craft-affinity`](crates/affinity/README.md): bounded reader for native Affinity documents (`.af`, `.afdesign`, `.afphoto`, `.afpub`): archive, object stream and a neutral document model with layers, artboards, vectors, text, tables, images and masks. Read only; mapping onto an app's document stays in the app.
 - [`craft-atomic`](crates/atomic/README.md): Crash-safe atomic file writing and replacement with same-directory staging, directory fsync, Apple `F_FULLFSYNC` fallback, transient lock backoff, and fault injection for the Craft suite.
 - [`craft-captions`](crates/captions/README.md): caption and subtitle files behind one neutral
