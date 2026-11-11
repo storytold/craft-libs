@@ -12,7 +12,7 @@ use crate::primitives::IconSpec;
 use crate::runtime::commands::{CommandRef, ResolvedCommand};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx};
-use craft_behavior::fit::{FitItem, FitKeep, fit_items, run_extent};
+use craft_behavior::fit::{FitItem, FitKeep, fit_items};
 use craft_behavior::{Axis, IconId, Metrics, NavShape, PartKey, PartRef, Proposal, Roving, Sense};
 use craft_theme::Variant;
 use egui::{Rect, Response, Vec2, pos2};
@@ -33,13 +33,25 @@ pub enum ItemDisplay {
     IconText,
 }
 
+/// What the "More" menu of a `BarItems` strip lists.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MoreMenu {
+    /// The items the strip has no room for, and the `Menu` items; "More" shows only when there are any.
+    #[default]
+    Overflow,
+    /// Every item, shown on the strip or not; "More" always shows.
+    Every,
+}
+
 /// One command of a `BarItems` strip.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct BarItem {
     /// The command the item shows and runs.
     pub command: CommandRef,
-    /// The section: a rule separates neighbouring items of different sections.
+    /// The section: neighbouring items of one section are a group, which the strip shows or moves into "More" whole.
+    /// A rule separates the groups of a horizontal strip, extra space those of a vertical one.
     pub section: u16,
     /// What the item shows.
     pub display: ItemDisplay,
@@ -75,7 +87,8 @@ impl BarItem {
     }
 }
 
-/// The style of a bar item strip: the gap between items and the space around the rule of a section change.
+/// The style of a bar item strip: the gap between items, the space around the rule of a section change and the
+/// space between the groups of a vertical strip.
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct BarItemsStyle {
@@ -85,6 +98,8 @@ pub struct BarItemsStyle {
     joint: f32,
     /// The clear space of a section change, on both sides of its rule together.
     section_gap: f32,
+    /// Between the groups of a vertical strip, which draws no rule: an item gap and `space.gap.stack`.
+    stack_gap: f32,
 }
 
 /// An item whose command resolved this pass.
@@ -108,6 +123,13 @@ struct Sizes {
     items: Vec<Vec2>,
     rule: f32,
     more: Vec2,
+}
+
+/// A run of neighbouring items of one section: the items it shows on the strip, in order, and its length there.
+struct Group {
+    items: Vec<usize>,
+    extent: f32,
+    keep: FitKeep,
 }
 
 /// What an item's part wears.
@@ -187,8 +209,9 @@ fn slot(rect: Rect, axis: Axis, rtl: bool, from: f32, length: f32) -> Rect {
 /// A strip of command items. Each item is a part that wears the face of a button resolved from its command: an
 /// icon button, a toggle for a command with a checked state, or a text button. The items are one Tab stop with
 /// arrow keys between them, and the strip joins the roving group of the body it is shown in. An icon item's tooltip
-/// is the command's label and its chord. When the room is too short, the last `Free` items move into a menu behind
-/// a "More" part, as rows of the same commands; `Menu` items are always there.
+/// is the command's label and its chord. Neighbouring items of one section are a group. When the room is too short,
+/// the last group with no `Pinned` item moves into a menu behind a "More" part, whole, as rows of the same commands,
+/// a rule between the groups; `Menu` items are always there. With `MoreMenu::Every` the menu lists every item.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(overlay)]
 pub struct BarItems {
@@ -198,13 +221,16 @@ pub struct BarItems {
     /// The axis the strip runs along.
     #[prop]
     axis: Axis,
+    /// What the "More" menu lists.
+    #[prop]
+    more: MoreMenu,
     laid: Option<Laid>,
 }
 
 impl BarItems {
     /// A strip of `items`, in the order given, running along the horizontal axis.
     pub fn new(items: Vec<BarItem>) -> Self {
-        BarItems { common: Common::new(), items, axis: Axis::X, laid: None }
+        BarItems { common: Common::new(), items, axis: Axis::X, more: MoreMenu::Overflow, laid: None }
     }
 
     /// The items whose command the registry knows.
@@ -221,12 +247,44 @@ impl BarItems {
         Sizes { items, rule, more }
     }
 
-    fn fit_items_of(&self, sizes: &Sizes, present: &[Present]) -> Vec<FitItem> {
-        present
-            .iter()
-            .zip(&sizes.items)
-            .map(|(present, size)| FitItem::new(along(self.axis, *size), present.item.section, present.item.keep))
-            .collect()
+    /// The space between two groups on the strip: around the rule of a horizontal strip, or the stack gap of a
+    /// vertical one.
+    fn group_gap(&self, style: &BarItemsStyle, sizes: &Sizes) -> f32 {
+        if self.axis == Axis::Y { style.stack_gap } else { style.section_gap + sizes.rule }
+    }
+
+    /// The groups of the items the strip can show, in order. `Menu` items are in no group.
+    fn groups(&self, sizes: &Sizes, present: &[Present], gap: f32) -> Vec<Group> {
+        let mut groups: Vec<(u16, Group)> = Vec::new();
+        for (at, present) in present.iter().enumerate().filter(|(_, present)| present.item.keep != FitKeep::Menu) {
+            let length = along(self.axis, sizes.items[at]);
+            match groups.last_mut() {
+                Some((section, group)) if *section == present.item.section => {
+                    group.items.push(at);
+                    group.extent += gap + length;
+                }
+                _ => groups.push((present.item.section, Group { items: vec![at], extent: length, keep: FitKeep::Free })),
+            }
+            if present.item.keep == FitKeep::Pinned {
+                groups.last_mut().expect("just pushed").1.keep = FitKeep::Pinned;
+            }
+        }
+        groups.into_iter().map(|(_, group)| group).collect()
+    }
+
+    /// Whether "More" shows whatever the room.
+    fn more_always(&self, present: &[Present]) -> bool {
+        self.more == MoreMenu::Every || present.iter().any(|present| present.item.keep == FitKeep::Menu)
+    }
+
+    /// The groups the strip shows, by index, fitted into `available`.
+    fn fit(&self, groups: &[Group], present: &[Present], available: f32, gap: f32, group_gap: f32, more: f32) -> Vec<usize> {
+        // Each group is one fit item of a section of its own; a `Menu` item at the end keeps "More" on the strip.
+        let mut items: Vec<FitItem> = groups.iter().enumerate().map(|(at, group)| FitItem::new(group.extent, at as u16, group.keep)).collect();
+        if self.more_always(present) {
+            items.push(FitItem::new(0.0, u16::MAX, FitKeep::Menu));
+        }
+        fit_items(&items, available, gap, group_gap, more).shown.into_iter().filter(|&at| at < groups.len()).collect()
     }
 }
 
@@ -237,30 +295,34 @@ impl Component for BarItems {
 
     fn style(cx: &StyleCx<'_>, _: BarItemsStyleKey) -> BarItemsStyle {
         let gap = cx.tokens.space.gap.inline;
-        BarItemsStyle { metrics: Metrics::new().gap(gap), joint: gap, section_gap: gap * 2.0 }
+        BarItemsStyle { metrics: Metrics::new().gap(gap), joint: gap, section_gap: gap * 2.0, stack_gap: gap + cx.tokens.space.gap.stack }
     }
 
     /// The whole strip, or the room along the strip when that is shorter. Asked for the narrowest it takes (a
-    /// `Proposal::Min`), it gives the least that shows an item: the first item and the "More" part. The real run fits
-    /// the items into the width it is given, so the strip moves items into "More" only when that is narrower than
-    /// the whole strip. The strip with no item to move into "More" is as long as its items.
+    /// `Proposal::Min`), it gives the least that shows a group: the first group and the "More" part. The real run fits
+    /// the groups into the width it is given, so the strip moves groups into "More" only when that is narrower than
+    /// the whole strip. The strip with one group and no "More" is as long as its items.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let present = self.present(cx);
         if present.is_empty() {
             return Vec2::ZERO;
         }
         let sizes = self.sizes(cx, &present);
-        let all = vec![true; present.len()];
-        let section_gap = cx.style.section_gap + sizes.rule;
-        let natural = run_extent(&self.fit_items_of(&sizes, &present), &all, f64::from(cx.gap()), f64::from(section_gap)) as f32;
-        let cross = sizes.items.iter().map(|size| across(self.axis, *size)).fold(across(self.axis, sizes.more), f32::max);
+        let gap = cx.gap();
+        let groups = self.groups(&sizes, &present, gap);
+        let group_gap = self.group_gap(cx.style, &sizes);
+        let more = along(self.axis, sizes.more);
+        let run: f32 = groups.iter().map(|group| group.extent).sum::<f32>() + group_gap * groups.len().saturating_sub(1) as f32;
+        let more_after = |run: f32| if run > 0.0 { run + gap + more } else { more };
+        let natural = if self.more_always(&present) { more_after(run) } else { run };
         let least = if cx.proposal == Proposal::Min {
-            let first = sizes.items.first().map_or(0.0, |size| along(self.axis, *size));
-            (present.len() > 1).then(|| (first + cx.gap() + along(self.axis, sizes.more)).min(natural as f32))
+            let first = groups.first().map_or(0.0, |group| group.extent);
+            (groups.len() > 1 || self.more_always(&present)).then(|| more_after(first).min(natural))
         } else {
             None
         };
-        let natural = least.unwrap_or(natural as f32);
+        let natural = least.unwrap_or(natural);
+        let cross = sizes.items.iter().map(|size| across(self.axis, *size)).fold(across(self.axis, sizes.more), f32::max);
         match self.axis {
             Axis::Y => Vec2::new(cross, natural),
             _ => Vec2::new(cx.room.map_or(natural, |room| natural.min(room)), cross),
@@ -278,28 +340,35 @@ impl Component for BarItems {
         let present = self.present(cx);
         let sizes = self.sizes(cx, &present);
         let (gap, joint, rtl, os) = (cx.gap(), cx.style.joint, cx.flow.is_rtl(), cx.env.shell().os);
-        let section_gap = cx.style.section_gap + sizes.rule;
+        let group_gap = self.group_gap(cx.style, &sizes);
         let more_length = along(axis, sizes.more);
-        let fit = fit_items(&self.fit_items_of(&sizes, &present), along(axis, rect.size()), gap, section_gap, more_length);
-        let (mut at, mut previous) = (0.0, None::<u16>);
+        let groups = self.groups(&sizes, &present, gap);
+        let fitted = self.fit(&groups, &present, along(axis, rect.size()), gap, group_gap, more_length);
+        let mut at = 0.0;
         let (mut shown, mut rules) = (Vec::new(), Vec::new());
-        for &index in &fit.shown {
-            let section = present[index].item.section;
-            if let Some(before) = previous {
-                if before == section {
-                    at += gap;
-                } else {
+        for (n, group) in fitted.iter().map(|&index| &groups[index]).enumerate() {
+            if n > 0 {
+                if axis != Axis::Y {
                     rules.push(slot(rect, axis, rtl, at + joint, sizes.rule));
-                    at += section_gap;
                 }
+                at += group_gap;
             }
-            let length = along(axis, sizes.items[index]);
-            shown.push((index, slot(rect, axis, rtl, at, length)));
-            at += length;
-            previous = Some(section);
+            for (k, &index) in group.items.iter().enumerate() {
+                if k > 0 {
+                    at += gap;
+                }
+                let length = along(axis, sizes.items[index]);
+                shown.push((index, slot(rect, axis, rtl, at, length)));
+                at += length;
+            }
         }
-        let more = (!fit.overflow.is_empty()).then(|| {
-            let from = if previous.is_some() { at + gap } else { at };
+        let on_strip: Vec<usize> = shown.iter().map(|&(index, _)| index).collect();
+        let overflow: Vec<usize> = match self.more {
+            MoreMenu::Every => (0..present.len()).collect(),
+            MoreMenu::Overflow => (0..present.len()).filter(|index| !on_strip.contains(index)).collect(),
+        };
+        let more = (!overflow.is_empty()).then(|| {
+            let from = if shown.is_empty() { at } else { at + gap };
             slot(rect, axis, rtl, from, more_length)
         });
         for &(index, cell) in &shown {
@@ -316,7 +385,7 @@ impl Component for BarItems {
             cx.part(MORE, more).sense(Sense::CLICK | Sense::FOCUS).focusable().toggles("menu");
         }
         cx.roving(Roving::new(NavShape::Flat));
-        self.laid = Some(Laid { present, shown, rules, overflow: fit.overflow, more });
+        self.laid = Some(Laid { present, shown, rules, overflow, more });
     }
 
     /// The strip joins the body's roving group; a click or the activation key on an item runs its command.
@@ -330,7 +399,7 @@ impl Component for BarItems {
         }
     }
 
-    /// The overflow menu: one command row per overflowed item, a rule between sections.
+    /// The "More" menu: one command row per item it lists, a rule between sections.
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
         let Some(laid) = self.laid.as_ref().filter(|laid| laid.more.is_some()) else { return };
         let popup = cx.popup("menu");

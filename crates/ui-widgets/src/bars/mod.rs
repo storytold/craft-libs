@@ -17,6 +17,6 @@ pub use breadcrumb::{BreadcrumbBar, BreadcrumbBarStyle, BreadcrumbOutput, path_c
 pub use cell::BarCell;
 pub use constraint_fields::{ConstraintFields, ConstraintFieldsOutput};
 pub use craft_behavior::fit::FitKeep;
-pub use items::{BarItem, BarItems, BarItemsStyle, ItemDisplay};
+pub use items::{BarItem, BarItems, BarItemsStyle, ItemDisplay, MoreMenu};
 pub use status_readout::{StatusItem, StatusReadout, StatusReadoutOutput, StatusValues};
 pub use words::BarWords;

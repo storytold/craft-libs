@@ -1,8 +1,8 @@
 //! `AlignBar`: the Align and Distribute controls of the Move tool's options bar. A pattern over `BarItems`: the six
-//! align commands, then the eight distribute commands after a rule, which overflow into the "More" menu or live in
-//! it.
+//! align commands, then the eight distribute commands after a rule or only in the "More" menu, which lists all
+//! fourteen.
 
-use super::items::{BarItem, BarItems};
+use super::items::{BarItem, BarItems, MoreMenu};
 use super::words::BarWords;
 use crate::contract::{NoValue, Outcome, Props as _, Show as _};
 use crate::runtime::env::Env;
@@ -113,7 +113,8 @@ impl Outcome for AlignBarOutput {
     }
 }
 
-/// The align buttons, the optional distribute buttons and the menu button, shown as children of a `Bar`.
+/// The align buttons, the optional distribute buttons and the menu button, shown as children of a `Bar`. The menu
+/// lists every command, the align commands, a rule, then the distribute commands.
 #[derive(crate::contract::Pattern)]
 pub struct AlignBar {
     distribute: DistributeButtons,
@@ -138,7 +139,7 @@ impl AlignBar {
         let distribute_keep = if self.distribute == DistributeButtons::Row { FitKeep::Free } else { FitKeep::Menu };
         let align = AlignAction::ALIGN.into_iter().map(BarItem::new);
         let distribute = AlignAction::DISTRIBUTE.into_iter().map(|action| BarItem::new(action).section(1).keep(distribute_keep));
-        let response = BarItems::new(align.chain(distribute).collect()).label(name).show(ui);
+        let response = BarItems::new(align.chain(distribute).collect()).label(name).more(MoreMenu::Every).show(ui);
         AlignBarOutput { response }
     }
 }
