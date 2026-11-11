@@ -14,6 +14,8 @@
 //! list) on damaged data instead of failing.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+// Ranges and borrowed bytes are passed around as plain tuples, as in EffectCraft, which allows this lint.
+#![allow(clippy::type_complexity)]
 
 mod aepx;
 mod arbitrary;
@@ -24,6 +26,7 @@ mod effects;
 mod error;
 mod footage;
 mod header;
+pub mod index;
 mod keys;
 mod masks;
 mod matte;
@@ -36,7 +39,7 @@ mod values;
 mod version;
 mod write;
 
-pub use aepx::{is_aepx, parse_any, read_aepx, read_aepx_with_limits};
+pub use aepx::{AepxDrafts, index_aepx, is_aepx, parse_any, read_aepx, read_aepx_with_limits};
 pub use arbitrary::{
     CURVE_IDENTITY, CryptomatteData, CurvesData, ExtractorChannels, HueSaturationData, LevelsData, MeshData, curve_lut, identifier_channel_type,
 };
@@ -46,6 +49,7 @@ pub use effects::{DefinitionSource, Effect, EffectDefinitions, EffectParam, Laye
 pub use error::AepError;
 pub use footage::{Footage, PsdLayer, SequenceInfo};
 pub use header::{BlendMode, CompHeader, LayerHeader, LayerType, LightType, Quality, Rational, Renderer};
+pub use index::{Draft, Node, NodeWalk, Nodes, Root, TreeIndex};
 pub use keys::{ExpressionFlags, Interpolation, KeyEase, KeyframeKind, SpatialKey};
 pub use masks::{Mask, MaskAtom, MaskMode, PathVertex, ShapePath};
 pub use matte::{MatteMode, TrackMatte};
