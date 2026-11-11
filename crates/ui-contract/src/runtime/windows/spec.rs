@@ -1,8 +1,9 @@
 //! How a window opens: its level, its spec and the frame it gets.
 
 use super::shared;
+use super::shell::{base_shell, os_of};
 use craft_host::target::{Os, WindowChrome, WindowKind};
-use craft_window::policy::{CaptionFamily, Captions, Frame, MacInset};
+use craft_window::policy::{CaptionFamily, Captions, Frame, MacInset, tool_frame};
 use egui::Context;
 
 /// Where a window stands in the stack of windows.
@@ -60,8 +61,8 @@ pub struct WindowSpec {
 }
 
 impl WindowSpec {
-    /// A tool window (a native dock window): the installed decision's frame without caption buttons, a palette level,
-    /// no taskbar entry.
+    /// A tool window (a native dock window): its own title row in place of the OS title bar
+    /// (`craft_window::policy::tool_frame`), no caption buttons, a palette level, no taskbar entry.
     pub fn tool() -> Self {
         WindowSpec { kind: WindowKind::Tool, level: WindowLevel::Palette, taskbar: false, ..Self::dialog() }
     }
@@ -138,20 +139,16 @@ impl WindowSpec {
     }
 }
 
-/// The frame the installed decision gives a window of `kind`: a tool window shows no caption buttons. `None` while
-/// no decision is installed.
+/// The frame a window of `kind` gets: a tool window's own ([`tool_frame`]), whatever the main window has; any other
+/// the installed decision's. `None` for those while no decision is installed.
 fn installed_frame(ctx: &Context, kind: WindowKind) -> Option<Frame> {
-    let frame = shared(ctx, |shared| shared.root_frame.clone())?;
-    Some(match frame {
-        Frame::Integrated(captions) if kind == WindowKind::Tool => {
-            Frame::Integrated(Captions { family: captions.family, layout: craft_window::Layout { left: Vec::new(), right: Vec::new() } })
-        }
-        frame => frame,
-    })
+    if kind == WindowKind::Tool {
+        return Some(tool_frame(os_of(ctx), base_shell(ctx).runtime));
+    }
+    shared(ctx, |shared| shared.root_frame.clone())
 }
 
-/// The chrome and caption buttons `spec` opens with: its own, else the installed decision's for its kind, else the
-/// OS's frame.
+/// The chrome and caption buttons `spec` opens with: its own, else the frame for its kind, else the OS's frame.
 pub(super) fn frame_of_spec(ctx: &Context, spec: &WindowSpec) -> (WindowChrome, Option<Captions>) {
     let decided = installed_frame(ctx, spec.kind);
     let chrome = spec.chrome.or_else(|| decided.as_ref().map(chrome_of)).unwrap_or(WindowChrome::Native);

@@ -15,6 +15,9 @@
 //! | Wayland without server-side decorations, not GNOME | `Integrated(Generic)` | `Native` |
 //! | Web | `Native` (no frame code runs) | `Native` |
 //!
+//! A tool window (a palette, a native dock window) draws its own title row whatever the main window has
+//! ([`tool_frame`]): `Inset` with the traffic lights hidden on macOS, `Integrated` without caption buttons elsewhere.
+//!
 //! ```ignore
 //! let d = craft_window::policy::decide_for(Prefix::default(), Backend::Wayland, TitleBarPref::Integrated);
 //! let viewport = craft_window::policy::apply(egui::ViewportBuilder::default(), &d.frame);
@@ -129,8 +132,8 @@ pub struct Decision {
 
 /// The decision for a window of `kind`, pure. `env` is the value of `<PREFIX>_TITLEBAR` (`app`, `system`
 /// or `desktop`); it wins over `pref`. Caption layouts are each family's default; [`decide_for`] fills in
-/// the desktop's own. A browser draws no frame code ([`Frame::Native`]). A tool window has the frame the
-/// others have but no caption buttons: its captions have an empty layout.
+/// the desktop's own. A browser draws no frame code ([`Frame::Native`]). A tool window's frame is
+/// [`tool_frame`], whatever `pref` and `env` say.
 pub fn decide(os: Os, runtime: Runtime, backend: Backend, desktop: &Desktop, kind: WindowKind, pref: TitleBarPref, env: Option<&str>) -> Decision {
     decide_with(&Inputs { os, runtime, backend, desktop, kind, pref, env }, &layout::default_layout)
 }
@@ -151,21 +154,32 @@ struct Inputs<'a> {
 fn decide_with(inputs: &Inputs<'_>, layout: &dyn Fn(DesktopKind) -> Layout) -> Decision {
     let Inputs { os, runtime, backend, desktop, kind, pref, env } = *inputs;
     let overridden = crate::parse_override(env);
+    if kind == WindowKind::Tool {
+        return Decision { frame: tool_frame(os, runtime), overridden, desktop: desktop.clone() };
+    }
     let integrated = match (overridden, pref) {
         (Some(app), _) => app,
         (None, pref) => pref == TitleBarPref::Integrated,
     };
-    let mut frame = if integrated && runtime == Runtime::Native {
+    let frame = if integrated && runtime == Runtime::Native {
         integrated_frame(os, backend, desktop, overridden.is_some(), INTEGRATED_ON_SSD_DESKTOPS, layout)
     } else {
         Frame::Native
     };
-    if kind == WindowKind::Tool
-        && let Frame::Integrated(captions) = &mut frame
-    {
-        captions.layout = Layout { left: Vec::new(), right: Vec::new() };
-    }
     Decision { frame, overridden, desktop: desktop.clone() }
+}
+
+/// The frame of a tool window on `os`: its own title row replaces the OS title bar, whatever frame the main window
+/// has. macOS keeps the OS frame with the title bar hidden (`Inset`; a tool window shows no traffic lights), so AppKit
+/// still resizes it from its edges and draws its rounded corners and shadow; elsewhere decorations are off, with no
+/// caption buttons. A browser draws no frame code.
+pub fn tool_frame(os: Os, runtime: Runtime) -> Frame {
+    match (runtime, os) {
+        (Runtime::Web, _) => Frame::Native,
+        (_, Os::Mac) => Frame::Inset(MacInset::default()),
+        (_, Os::Windows) => Frame::Integrated(Captions { family: CaptionFamily::Windows, layout: Layout { left: Vec::new(), right: Vec::new() } }),
+        _ => Frame::Integrated(Captions { family: CaptionFamily::Generic, layout: Layout { left: Vec::new(), right: Vec::new() } }),
+    }
 }
 
 /// The frame when the app's bar is wanted. `forced` is set when the override asked for it, which

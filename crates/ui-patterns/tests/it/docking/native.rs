@@ -2,7 +2,7 @@
 
 use craft_behavior::dock::{Action, Floating, Layout, Permissions, Workspace};
 use craft_behavior::placement::Placement;
-use craft_host::target::{Backend, ShellInfo};
+use craft_host::target::{Backend, Caps, Os, ShellInfo};
 use craft_ui::contract::{Bind, BodyCx};
 use craft_ui::docking::{DockConfig, DockPanels, PanelSpec};
 use craft_ui::patterns::dock::DockArea;
@@ -88,6 +88,27 @@ fn a_float_opens_an_os_window_where_the_host_reports_window_positions() {
     assert_eq!(opened(Windows::new()), (true, true), "an OS window opens and its placement is recorded");
     let wayland = ShellInfo::default().backend(Backend::Wayland);
     assert_eq!(opened(Windows::with(InstallSpec::new(wayland, Arc::new(FakeSystem::new())))), (false, false), "Wayland: in the app window");
+}
+
+/// A native dock window's own title row is its only title bar, on macOS and elsewhere, with no frame decision
+/// installed: the OS title bar and its buttons are hidden.
+#[trial]
+fn a_native_dock_window_shows_no_os_title_bar() {
+    let builder = |os: Os| {
+        let windows = Windows::with(InstallSpec::new(ShellInfo::default().os(os).caps(Caps::native(os)), Arc::new(FakeSystem::new())));
+        windows.root_info(info(true, ROOT_AT));
+        windows.child_info(info(true, PALETTE_AT));
+        let mut workspace = Workspace::new(Layout::new(None, vec![float()]));
+        let out = windows.frame(vec![], vec![], |ui| {
+            DockArea::new("Native dock", Bind::bound(&mut workspace), &mut Palettes(Permissions::ALL), DockConfig::default()).show(ui);
+        });
+        out.builders.into_iter().find(|(viewport, _)| *viewport != ViewportId::ROOT).map(|(_, builder)| builder).expect("an OS window opens")
+    };
+    let mac = builder(Os::Mac);
+    assert_eq!((mac.titlebar_shown, mac.titlebar_buttons_shown, mac.fullsize_content_view), (Some(false), Some(false), Some(true)), "macOS");
+    for os in [Os::Linux, Os::Windows] {
+        assert_eq!(builder(os).decorations, Some(false), "{os:?}");
+    }
 }
 
 /// The OS close of a native float closes its window when every panel may close, and leaves it open otherwise.
