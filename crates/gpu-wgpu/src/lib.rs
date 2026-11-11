@@ -280,9 +280,6 @@ impl GpuContext for WgpuContext {
         if let Some(fault) = self.take_lost_fault() {
             return Err(fault);
         }
-        if bytes.is_empty() {
-            return Err(GpuFault::InvalidJob("upload_buffer: bytes must be non-empty".into()));
-        }
         match &mut self.backing {
             Backing::Staging(buffers) => {
                 let id = u32::try_from(buffers.len()).map_err(|_| GpuFault::Operation("too many buffers".into()))?;
@@ -293,6 +290,12 @@ impl GpuContext for WgpuContext {
             Backing::Device(d) => {
                 let true_len = bytes.len() as u64;
                 let padded_len = true_len.next_multiple_of(COPY_ALIGN);
+                if padded_len > self.caps.max_buffer_size {
+                    return Err(GpuFault::InvalidJob(format!(
+                        "upload_buffer: {true_len} bytes (padded to {padded_len}) exceeds the device's max_buffer_size {}",
+                        self.caps.max_buffer_size
+                    )));
+                }
                 let buffer = d.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some(label),
                     size: padded_len,
@@ -345,7 +348,22 @@ impl GpuContext for WgpuContext {
             Backing::Device(d) => {
                 let (buffer, true_len) = d.buffers.get(handle.0 as usize).ok_or_else(|| GpuFault::InvalidJob("bad handle".into()))?;
                 let true_len = *true_len;
+                if true_len == 0 {
+                    // An empty buffer has nothing to copy or map (wgpu refuses an empty map
+                    // range); resolve it immediately, same as the staging path.
+                    let id = self.next_request;
+                    self.next_request = self.next_request.wrapping_add(1);
+                    let request = ReadRequest(id);
+                    self.ready.push(ReadOutcome { request, handle, result: Ok(Vec::new()) });
+                    return Ok(request);
+                }
                 let copy_len = true_len.next_multiple_of(COPY_ALIGN);
+                if copy_len > self.caps.max_buffer_size {
+                    return Err(GpuFault::Operation(format!(
+                        "request_read: staging copy of {copy_len} bytes exceeds the device's max_buffer_size {}",
+                        self.caps.max_buffer_size
+                    )));
+                }
                 let staging = d.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("craft-gpu-wgpu.read-staging"),
                     size: copy_len,
@@ -401,10 +419,20 @@ impl GpuContext for WgpuContext {
     fn read_buffer(&mut self, handle: HandleId) -> Result<Vec<u8>, GpuFault> {
         let request = self.request_read(handle)?;
         loop {
+            let mut matched = None;
+            let mut others = Vec::new();
             for outcome in self.poll_reads() {
                 if outcome.request == request {
-                    return outcome.result;
+                    matched = Some(outcome.result);
+                } else {
+                    others.push(outcome);
                 }
+            }
+            // Completions belonging to other outstanding requests go back on the queue for the
+            // caller's next poll_reads instead of being dropped.
+            self.ready.extend(others);
+            if let Some(result) = matched {
+                return result;
             }
             // Block on the GPU between polls instead of busy-spinning the CPU. A no-op when
             // `backing` is `Staging` (nothing to wait for; the request already resolved above)

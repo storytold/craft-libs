@@ -150,3 +150,58 @@ fn device_destroy_surfaces_as_device_lost_and_stops_further_buffer_calls() {
     let after = ctx.upload_buffer("after-loss", b"x");
     assert!(matches!(after, Err(GpuFault::DeviceLost(_))), "a call after device loss must return GpuFault::DeviceLost, got {after:?}");
 }
+
+/// The staging path promises "same shape as `craft-gpu-null`": an empty upload is accepted and
+/// reads back empty rather than being refused.
+#[test]
+fn staging_path_accepts_an_empty_buffer_and_reads_it_back_empty() {
+    let mut ctx = WgpuContext::with_caps(WorkerKind::Main, craft_gpu::DeviceCaps::default());
+    let handle = ctx.upload_buffer("empty", b"").expect("upload empty");
+    assert_eq!(ctx.buffer_len(handle).expect("buffer_len"), 0);
+    assert_eq!(ctx.read_buffer(handle).expect("read_buffer"), Vec::<u8>::new());
+}
+
+/// `read_buffer` must not eat completions that belong to another outstanding `request_read`.
+#[test]
+fn staging_read_buffer_keeps_another_outstanding_requests_completion_queued() {
+    let mut ctx = WgpuContext::with_caps(WorkerKind::Main, craft_gpu::DeviceCaps::default());
+    let a = ctx.upload_buffer("a", b"aa").expect("upload a");
+    let b = ctx.upload_buffer("b", b"bb").expect("upload b");
+    let request_a = ctx.request_read(a).expect("request_read a");
+    assert_eq!(ctx.read_buffer(b).expect("read_buffer b"), b"bb".to_vec());
+    let outcomes = ctx.poll_reads();
+    assert_eq!(outcomes.len(), 1, "a's completion must survive b's read_buffer");
+    assert_eq!(outcomes[0].request, request_a);
+    assert_eq!(outcomes[0].result.as_deref(), Ok(b"aa".as_slice()));
+}
+
+/// Same two guarantees on a real device: empty buffers round-trip (the readback resolves without
+/// mapping, since wgpu refuses an empty map range) and `read_buffer` re-queues completions that
+/// belong to another outstanding request.
+#[test]
+fn real_device_empty_buffer_and_interleaved_read_buffer_behave_like_staging() {
+    let Some(mut ctx) = real_context_or_skip("real_device_empty_buffer_and_interleaved_read_buffer_behave_like_staging") else {
+        return;
+    };
+    let empty = ctx.upload_buffer("empty", b"").expect("upload empty");
+    assert_eq!(ctx.buffer_len(empty).expect("buffer_len"), 0);
+    assert_eq!(ctx.read_buffer(empty).expect("read_buffer empty"), Vec::<u8>::new());
+
+    let a = ctx.upload_buffer("a", b"aa").expect("upload a");
+    let b = ctx.upload_buffer("b", b"bb").expect("upload b");
+    let request_a = ctx.request_read(a).expect("request_read a");
+    assert_eq!(ctx.read_buffer(b).expect("read_buffer b"), b"bb".to_vec());
+    let mut seen_a = false;
+    for _ in 0..1000 {
+        for outcome in ctx.poll_reads() {
+            if outcome.request == request_a {
+                assert_eq!(outcome.result.as_deref(), Ok(b"aa".as_slice()));
+                seen_a = true;
+            }
+        }
+        if seen_a {
+            break;
+        }
+    }
+    assert!(seen_a, "a's completion must still arrive through poll_reads after b's read_buffer");
+}
