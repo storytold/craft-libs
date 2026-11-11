@@ -20,7 +20,7 @@ pub fn row_indent_steps(row: &ListRow<'_>) -> usize {
 
 /// The indexes of `roles` in display order.
 pub fn footer_order(roles: &[DialogRole], windows: bool) -> Vec<usize> {
-    crate::sections::footer::display_order(roles, windows)
+    crate::sections::footer::display_order(roles, windows, false)
 }
 
 /// The index an item ends at when it moves from `from` to the gap before item `insert`.

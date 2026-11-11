@@ -48,6 +48,8 @@ pub struct FooterBar {
     /// default button (the first enabled `Accept` one) like a click on it.
     #[prop(name = "enter_activates")]
     enter: bool,
+    /// The members stand in a column, each as wide as the widest.
+    column: bool,
 }
 
 /// The payload a dropped-on action reports, type-erased so actions of different payload types share one footer.
@@ -494,10 +496,19 @@ enum Content {
     Buttons(Vec<FooterButton>),
 }
 
-/// The indexes of `roles` in display order: by role rank, and in the given order within a rank.
-pub(crate) fn display_order(roles: &[DialogRole], windows: bool) -> Vec<usize> {
+/// The indexes of `roles` in display order: by role rank, and in the given order within a rank. A column puts
+/// `Accept` on top and `Cancel` under it on every platform, then the others.
+pub(crate) fn display_order(roles: &[DialogRole], windows: bool, column: bool) -> Vec<usize> {
     let mut order: Vec<usize> = (0..roles.len()).collect();
-    order.sort_by_key(|&at| roles[at].rank(windows));
+    if column {
+        order.sort_by_key(|&at| match roles[at] {
+            DialogRole::Accept => 0,
+            DialogRole::Cancel => 1,
+            DialogRole::Destructive | DialogRole::Other => 2,
+        });
+    } else {
+        order.sort_by_key(|&at| roles[at].rank(windows));
+    }
     order
 }
 
@@ -529,7 +540,17 @@ impl FooterBar {
             props: ContainerProps::new().sizing(Sizing::FillWidth).roving(Roving::new(NavShape::Flat)).layout(BodyLayout::row().align(RowAlign::End)),
             content: Content::Body,
             enter: false,
+            column: false,
         }
+    }
+
+    /// The members stand in a column at the top of the bar, each as wide as the widest: the buttons of a dialog whose
+    /// footer stands beside the body. Buttons go `Accept`, `Cancel`, then the others in the given order.
+    #[must_use]
+    pub fn column(mut self) -> Self {
+        self.props = self.props.layout(BodyLayout::stack());
+        self.column = true;
+        self
     }
 
     /// A footer bar of icon actions, in the given order. Show it with `show_footer`.
@@ -546,7 +567,7 @@ impl FooterBar {
     /// Shows the bar with the actions or buttons it was made with and reports what happened to them.
     pub fn show_footer(mut self, ui: &mut Ui) -> FooterOutput {
         let content = std::mem::take(&mut self.content);
-        let enter = self.enter;
+        let (enter, column) = (self.enter, self.column);
         let shown = self.show(ui, |ui, _| match &content {
             Content::Body => Shown::default(),
             Content::Actions(actions) => {
@@ -585,14 +606,15 @@ impl FooterBar {
                 let labels = accelerator_labels(&lettering, crate::runtime::windows::os_of(&ctx));
                 // Initial focus lands on the first enabled Accept button on every OS.
                 let default_at = buttons.iter().position(|button| button.role == DialogRole::Accept && button.enabled);
-                for at in display_order(&roles, crate::runtime::windows::os_of(ui.ctx()) == Os::Windows) {
+                for at in display_order(&roles, crate::runtime::windows::os_of(ui.ctx()) == Os::Windows, column) {
                     let button = &buttons[at];
                     let variant = match button.role {
                         DialogRole::Accept => Variant::PRIMARY,
                         DialogRole::Destructive => Variant::DANGER,
                         DialogRole::Cancel | DialogRole::Other => Variant::SECONDARY,
                     };
-                    let mut widget = Button::new(button.label.clone()).painted(labels[at].clone()).variant(variant).enabled(button.enabled);
+                    let mut widget =
+                        Button::new(button.label.clone()).painted(labels[at].clone()).variant(variant).enabled(button.enabled).fill_width(column);
                     let tip = if button.enabled { button.tooltip.clone() } else { button.disabled_reason.clone().or_else(|| button.tooltip.clone()) };
                     if let Some(tip) = tip {
                         widget = widget.tooltip(TooltipSpec::new(tip.clone()).disabled_text(tip));

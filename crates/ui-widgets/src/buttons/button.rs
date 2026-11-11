@@ -130,12 +130,16 @@ pub struct Button<'a> {
     #[style_key]
     #[prop]
     tint: Option<Rgba>,
+    /// Takes the width its column offers; in a column sized from its content, the width of the widest member, so a
+    /// column of buttons shares one width.
+    #[prop]
+    fill_width: bool,
 }
 
 impl<'a> Button<'a> {
     /// A button showing `label`, which is also its accessible name.
     pub fn new(label: impl Into<Label>) -> Self {
-        Button { common: Common::new(), icon: None, trailing_icon: None, loading: false, painted: None, tint: None }.label(label)
+        Button { common: Common::new(), icon: None, trailing_icon: None, loading: false, painted: None, tint: None, fill_width: false }.label(label)
     }
 
     /// A button bound to `command`: its label, enabled state and activation follow the command.
@@ -164,6 +168,10 @@ impl Component for Button<'_> {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         face::measure(cx, &self.spec(cx.resolved.label))
+    }
+
+    fn fills(&self) -> Option<craft_behavior::Axis> {
+        self.fill_width.then_some(craft_behavior::Axis::X)
     }
 
     fn sense(&self) -> Sense {

@@ -99,3 +99,43 @@ fn a_dialog_widens_for_a_footer_wider_than_its_body() {
     assert!(short.iter().all(|width| *width > 0.0), "each button is shown: {short:?}");
     assert_eq!(short, long, "a short body does not squeeze the buttons");
 }
+
+#[trial]
+fn side_buttons_stand_in_one_column_beside_the_body() {
+    let mut frames = Frames::new();
+    let mut ui = |ui: &mut Ui| {
+        let (mut open, mut snap, mut preview) = (true, false, true);
+        Dialog::new("Options")
+            .opened(Bind::bound(&mut open))
+            .side_buttons(true)
+            .buttons([
+                FooterButton::new("Add to Swatches", DialogRole::Other),
+                FooterButton::new("Cancel", DialogRole::Cancel),
+                FooterButton::new("OK", DialogRole::Accept),
+            ])
+            .footer(|ui, _| {
+                Checkbox::new(Bind::bound(&mut preview)).label("Preview").show(ui);
+            })
+            .show(ui, |ui, _| {
+                Checkbox::new(Bind::bound(&mut snap)).label("Snap to the grid").show(ui);
+            });
+    };
+    frames.idle(30, &mut ui);
+    let tree = frames.tree();
+    let rect = |name: &str| {
+        let key = tree.keys().into_iter().find(|key| tree.name_of(*key) == Some(name));
+        key.and_then(|key| tree.bounds_of(key))
+    };
+    let [Some(ok), Some(cancel), Some(other), Some(preview), Some(body)] =
+        ["OK", "Cancel", "Add to Swatches", "Preview", "Snap to the grid"].map(rect)
+    else {
+        panic!("every part is shown");
+    };
+    assert!(ok.max.y <= cancel.min.y && cancel.max.y <= other.min.y, "OK, Cancel, then the other button, top to bottom");
+    for button in [cancel, other] {
+        assert!((button.min.x - ok.min.x).abs() < 0.5 && (button.width() - ok.width()).abs() < 0.5, "one column, one width: {ok:?} {button:?}");
+    }
+    assert!(ok.min.x >= body.max.x, "the column stands past the body's end edge");
+    assert!((ok.min.y - body.min.y).abs() < 4.0, "the column starts at the body's top: {ok:?} {body:?}");
+    assert!(preview.min.y >= other.max.y, "the footer content sits under the buttons");
+}

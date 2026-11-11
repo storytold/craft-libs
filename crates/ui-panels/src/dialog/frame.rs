@@ -140,6 +140,20 @@ pub fn header(ui: &mut Ui, cx: &mut BodyCx<'_>, actions: &[HeaderAction]) {
 /// Enter the focused part left untaken picks the default button, so it takes the way of a click on it, guard included.
 #[doc(hidden)]
 pub fn footer(ui: &mut Ui, cx: &mut BodyCx<'_>, content: &mut Option<FooterFn<'_>>, buttons: &[FooterButton], enter: bool, host: FooterHost<'_, '_>) {
+    footer_in(ui, cx, content, buttons, enter, host, false);
+}
+
+/// [`footer`], with the buttons in a `column` beside the body when asked: the buttons on top, each as wide as the
+/// widest, and the content closure under them.
+pub(crate) fn footer_in(
+    ui: &mut Ui,
+    cx: &mut BodyCx<'_>,
+    content: &mut Option<FooterFn<'_>>,
+    buttons: &[FooterButton],
+    enter: bool,
+    host: FooterHost<'_, '_>,
+    column: bool,
+) {
     let FooterHost { picked, guard, on_pick, settle } = host;
     let mut settled;
     let buttons = match settle.as_mut() {
@@ -151,11 +165,18 @@ pub fn footer(ui: &mut Ui, cx: &mut BodyCx<'_>, content: &mut Option<FooterFn<'_
         None => buttons,
     };
     let mut close = None;
-    if let Some(content) = content.as_mut() {
-        FooterBar::body().show(ui, |ui, bar| content(ui, &mut FooterCx { bar, close: &mut close }));
+    let mut show_content = |ui: &mut Ui, close: &mut Option<CloseReason>| {
+        if let Some(content) = content.as_mut() {
+            let bar = if column { FooterBar::body().column() } else { FooterBar::body() };
+            bar.show(ui, |ui, bar| content(ui, &mut FooterCx { bar, close }));
+        }
+    };
+    if !column {
+        show_content(ui, &mut close);
     }
     if !buttons.is_empty() {
-        *picked = FooterBar::buttons(buttons.iter().cloned()).enter_activates(enter).show_footer(ui).picked;
+        let bar = FooterBar::buttons(buttons.iter().cloned()).enter_activates(enter);
+        *picked = if column { bar.column() } else { bar }.show_footer(ui).picked;
         if let Some(at) = *picked {
             if let Some(act) = on_pick.as_mut() {
                 act(&buttons[at], cx);
@@ -169,6 +190,9 @@ pub fn footer(ui: &mut Ui, cx: &mut BodyCx<'_>, content: &mut Option<FooterFn<'_
                 }
             }
         }
+    }
+    if column {
+        show_content(ui, &mut close);
     }
     if let Some(why) = close {
         cx.request_close_as(why);

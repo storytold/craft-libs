@@ -51,6 +51,26 @@ fn dialog_with_footer(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 }
 
 #[story(Dialog<'static>, covers = [], drive = Drive::Never)]
+fn dialog_with_side_buttons(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut checks = *data.value("checks", [true, false]);
+    let shown: StoryOutput = Dialog::new("Grid options")
+        .opened(Bind::bound(data.value("open", true)))
+        .side_buttons(true)
+        .buttons([
+            FooterButton::new("OK", DialogRole::Accept),
+            FooterButton::new("Cancel", DialogRole::Cancel),
+            FooterButton::new("Add to Swatches", DialogRole::Other).stays_open(true),
+        ])
+        .footer(|ui, _| {
+            Checkbox::new(Bind::given(true)).label("Preview").show(ui);
+        })
+        .show(ui, |ui, _| body(ui, &mut checks))
+        .into();
+    *data.value("checks", [true, false]) = checks;
+    shown
+}
+
+#[story(Dialog<'static>, covers = [], drive = Drive::Never)]
 fn dialog_resizable_with_initial_focus(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut checks = *data.value("checks", [true, false]);
     let shown: StoryOutput = Dialog::new("Grid options")

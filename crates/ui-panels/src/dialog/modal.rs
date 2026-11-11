@@ -4,8 +4,8 @@
 use super::frame::{self, DialogOutput, FOOTER, FooterCx, FooterFn, FooterHooks};
 use crate::contract::overlay::{FloatPlace, OverlayFit, Place};
 use crate::contract::{
-    Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, Mount, Overlay, Pad, Props as _, Role, SaveKey,
-    ShowContainer as _,
+    Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, EndRegion, FooterPlace, FooterRegion, HeaderRegion, Mount,
+    Overlay, Pad, Props as _, Role, SaveKey, ShowContainer as _,
 };
 use crate::edit::outer::{self, OuterEnd};
 use crate::runtime::access::Access;
@@ -73,6 +73,8 @@ pub struct Dialog<'a> {
     /// Whether the title row has a close action.
     #[prop]
     closable: bool,
+    /// The footer stands in a column at the end edge, beside the whole body.
+    side: bool,
     closed: Option<CloseReason>,
     picked: Option<usize>,
     /// The body ran in this pass: the header region marks it.
@@ -109,6 +111,7 @@ impl<'a> Dialog<'a> {
             buttons: Vec::new(),
             enter: false,
             closable: true,
+            side: false,
             closed: None,
             picked: None,
             body_shown: false,
@@ -232,17 +235,39 @@ impl<'a> Dialog<'a> {
     /// `DialogOutput::picked` says which.
     #[must_use]
     pub fn buttons(mut self, buttons: impl IntoIterator<Item = FooterButton>) -> Self {
-        self.props = self.props.footer(FOOTER);
+        let region = self.footer_region();
+        self.props = self.props.footer(region);
         self.buttons = buttons.into_iter().collect();
         self.route_enter()
     }
 
-    /// The footer's content: the closure fills a footer bar above the buttons, or alone.
+    /// The footer's content: the closure fills a footer bar above the buttons (under them with
+    /// [`side_buttons`](Dialog::side_buttons)), or alone.
     #[must_use]
     pub fn footer(mut self, content: impl FnMut(&mut Ui, &mut FooterCx<'_, '_>) + 'a) -> Self {
-        self.props = self.props.footer(FOOTER);
+        let region = self.footer_region();
+        self.props = self.props.footer(region);
         self.footer = Some(Box::new(content));
         self
+    }
+
+    /// The footer stands in a column at the end edge, beside the whole body and at its top, instead of across the
+    /// dialog's foot: the buttons go `Accept`, `Cancel`, then the others, each as wide as the widest, and the footer
+    /// content sits under them.
+    #[must_use]
+    pub fn side_buttons(mut self, on: bool) -> Self {
+        self.side = on;
+        self.props.end = on.then(EndRegion::new);
+        if self.props.footer.is_some() {
+            let region = self.footer_region();
+            self.props = self.props.footer(region);
+        }
+        self
+    }
+
+    /// The footer region: in the end region's column, else across the foot.
+    fn footer_region(&self) -> FooterRegion {
+        if self.side { FooterRegion::new().place(FooterPlace::EndTop) } else { FOOTER }
     }
 }
 
@@ -432,13 +457,14 @@ impl Container for Dialog<'_> {
     }
 
     fn footer(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
-        frame::footer(
+        frame::footer_in(
             ui,
             cx,
             &mut self.footer,
             &self.buttons,
             self.enter,
             frame::FooterHost { picked: &mut self.picked, guard: &mut self.guard, on_pick: &mut self.on_pick, settle: &mut self.settle },
+            self.side,
         );
     }
 
