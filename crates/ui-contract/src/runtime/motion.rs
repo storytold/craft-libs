@@ -328,7 +328,12 @@ impl Driver<'_> {
             tween = Tween::at(target);
         } else {
             if tween.target() != target {
-                tween.retarget(target, now);
+                // A follow steps from its last evaluation toward wherever its target is now; restarting its clock
+                // would hold it still for a frame each time the target moves.
+                match spec.curve {
+                    Curve::Tween => tween.retarget(target, now),
+                    Curve::Follow => tween.to = target,
+                }
             }
             tween.step(now, spec.motion(&self.policy), spec.curve);
         }

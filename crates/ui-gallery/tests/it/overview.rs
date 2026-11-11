@@ -164,3 +164,43 @@ fn the_wheel_over_a_card_scrolls_the_overview() {
     let after = fixture.by_label("Open").expect("a card header has Open").rect.min.y;
     assert!(after < title, "the wheel over a canvas card scrolled the Overview: {title} -> {after}");
 }
+
+/// A selection of a component whose card is far down another level, here the one the gallery opens with, shows that
+/// level and glides its card to the top of the view over several frames, as the old gallery's jump did. Regression:
+/// the request went to egui's scroll target, which no scroll body reads, so the card never moved.
+#[trial]
+fn selecting_a_component_glides_its_card_to_the_top() {
+    const GLIDE_FRAMES: usize = 120;
+    let catalog = Catalog::linked();
+    let controls = by_level(&catalog, "").into_iter().find(|(level, _)| level.title() == "Controls").expect("Controls has cards").1;
+    // Far enough down to be out of view, with enough cards after it to scroll it to the top.
+    let target = controls[controls.len() / 2];
+    let (mut store, report) = SettingsStore::<GallerySettings>::open_with(OpenOptions::new(Location::Memory));
+    let mut settings = store.get().clone();
+    settings.level = "Primitives".to_owned();
+    settings.selected = target.type_name.to_owned();
+    store.set(settings);
+    let mut gallery = Gallery::new(Catalog::linked(), Persisted::new(store, &report));
+    let mut fixture = Fixture::new(move |ui| gallery.ui(ui));
+    fixture.room(Vec2::new(1400.0, 900.0));
+    let mut frames = 0;
+    let arrived = loop {
+        fixture.frame(Vec::new());
+        frames += 1;
+        let window = fixture.shown();
+        let top = fixture
+            .by_role(Role::BUTTON)
+            .into_iter()
+            .filter(|button| fixture.tree().name_of(button.node) == Some("Open") && window.contains_rect(button.rect))
+            .min_by(|a, b| a.rect.top().total_cmp(&b.rect.top()));
+        // The target's card heads the view: its title sits in the band of the topmost card's Open.
+        let heads = top.is_some_and(|open| {
+            fixture.texts().iter().any(|run| run.text == target.name && (run.rect.center().y - open.rect.center().y).abs() < open.rect.height())
+        });
+        if heads || frames == GLIDE_FRAMES {
+            break heads;
+        }
+    };
+    assert!(arrived, "{}'s card reached the top of the view", target.name);
+    assert!(frames > 2, "the card glided over several frames, not in one: {frames}");
+}

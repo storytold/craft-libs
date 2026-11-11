@@ -16,7 +16,7 @@ use craft_ui::runtime::env::WindowKey;
 use craft_ui::shell::AppShell;
 use craft_ui::style::SurfaceKind;
 use craft_ui::testing::StoryRegistration;
-use egui::{Align, Ui};
+use egui::Ui;
 
 /// The narrowest a card may be before the cards go to one column: a dock panel of the apps is about this wide, and a
 /// story drawn in less is no longer what the apps show.
@@ -143,13 +143,15 @@ pub(super) fn on_background(ui: &mut Ui, key: &str, mut add: impl FnMut(&mut Ui,
 }
 
 /// The cards in one or two columns, scrolling vertically; each row is as tall as its tallest card. A card out of view
-/// does not run (`Lazy`), except the one the selection scrolls to. The cards report into `reported`.
+/// does not run (`Lazy`); the card of the component `reveal` names glides to the top of the view. The cards report
+/// into `reported`.
 pub(super) fn grid(
     ui: &mut Ui,
     scroll_id: impl std::hash::Hash + std::fmt::Debug,
     cards: &[Spec],
     p: &mut Panels<'_>,
     one_column: bool,
+    reveal: Option<&'static str>,
 ) -> Vec<Reported> {
     let mut reported = Vec::new();
     let columns = if one_column || ui.available_width() < 2.0 * CARD_MIN_WIDTH { 1 } else { 2 };
@@ -161,10 +163,10 @@ pub(super) fn grid(
         for (row, chunk) in cards.chunks(columns).enumerate() {
             Grid::new(if columns == 1 { ONE } else { TWO }).gap(Gap::CardColumn).fill_width().show(ui, |ui, _| {
                 for (at, spec) in chunk.iter().enumerate() {
-                    let target = *p.scroll_to == Some(spec.type_name);
                     // Keyed by the card alone: a change of the column count regroups the rows, and the cards out of
                     // view keep their extents.
-                    Lazy::new((generation, spec.key.as_str()), spec.estimate()).keep(target).show(ui, |ui| {
+                    let lazy = Lazy::new((generation, spec.key.as_str()), spec.estimate()).reveal(reveal == Some(spec.type_name));
+                    lazy.show(ui, |ui| {
                         let stories = spec.card_stories();
                         // Each card is its own id scope: a story's `id_salt` and auto ids must not meet another card's.
                         let events = spec.card(&stories, format!("{}-{generation}", spec.key), room).show(ui, p.cells);
@@ -178,11 +180,8 @@ pub(super) fn grid(
 }
 
 /// Applies what the cards reported: a press selects the card's component and picks the card's first story unless the
-/// picked one is on the card, Open
-/// opens its tab, Reset gives the card's stories their start values.
-pub(super) fn apply(ui: &mut Ui, p: &mut Panels<'_>, cards: &[Spec], reported: Vec<Reported>) {
-    let scroll = *p.scroll_to;
-    let mut scrolled = false;
+/// picked one is on the card, Open opens its tab, Reset gives the card's stories their start values.
+pub(super) fn apply(p: &mut Panels<'_>, cards: &[Spec], reported: Vec<Reported>) {
     for Reported { spec, events } in reported {
         let Some(spec) = cards.get(spec) else { continue };
         if events.reset {
@@ -203,32 +202,20 @@ pub(super) fn apply(ui: &mut Ui, p: &mut Panels<'_>, cards: &[Spec], reported: V
                 p.story_of.insert(spec.type_name, first.story.story.name);
             }
         }
-        if scroll == Some(spec.type_name)
-            && let Some(rect) = events.rect
-        {
-            ui.scroll_to_rect(rect, Some(Align::TOP));
-            scrolled = true;
-        }
-    }
-    if scrolled {
-        *p.scroll_to = None;
     }
 }
 
-/// The level the selected component sits on, and a request to bring its card into view, when the selection changed
-/// since the last pass of the Overview.
-fn follow_selection(p: &mut Panels<'_>) {
+/// The selection, when it changed since the Overview's cards last followed it, and its component's level as the shown
+/// one.
+fn follow_selection(p: &mut Panels<'_>) -> Option<Option<&'static str>> {
     let selected = selected_type(p);
     if *p.followed == Some(selected) {
-        return;
+        return None;
     }
-    *p.followed = Some(selected);
-    if let Some(type_name) = selected
-        && let Some(entry) = entry_of(type_name)
-    {
+    if let Some(entry) = selected.and_then(entry_of) {
         *p.level = entry.level.title().to_owned();
-        *p.scroll_to = Some(type_name);
     }
+    Some(selected)
 }
 
 /// The Overview: the level select over the cards of the level's components.
@@ -236,7 +223,7 @@ pub(super) fn overview(ui: &mut Ui, p: &mut Panels<'_>) {
     if variants::show(ui, p, PanelId::Overview) {
         return;
     }
-    follow_selection(p);
+    let follow = follow_selection(p);
     let groups = by_level(p.catalog, p.filter);
     let Some(shown) = groups.iter().position(|(level, _)| level.title() == p.level.as_str()).or(if groups.is_empty() { None } else { Some(0) })
     else {
@@ -251,17 +238,23 @@ pub(super) fn overview(ui: &mut Ui, p: &mut Panels<'_>) {
     let cards: Vec<Spec> = groups[shown].1.iter().filter_map(|component| component_card(p, component, selected)).collect();
     let mut chosen = level;
     let mut reported = Vec::new();
+    // The cards follow the selection in the pass they run: its card glides into view, and only then is it followed.
+    let mut ran = false;
     on_background(ui, "overview", |ui, _| {
+        ran = true;
         Row::new().show(ui, |ui, _| {
             Text::new("Level:").shade(Shade::Muted).show(ui);
             Select::new("Level", Bind::bound(&mut chosen), &entries).show(ui);
         });
-        reported = grid(ui, level.title(), &cards, p, false);
+        reported = grid(ui, level.title(), &cards, p, false, follow.flatten());
     });
+    if ran && let Some(selected) = follow {
+        *p.followed = Some(selected);
+    }
     if chosen != level {
         *p.level = chosen.title().to_owned();
     }
-    apply(ui, p, &cards, reported);
+    apply(p, &cards, reported);
 }
 
 /// The stories of group `group` of the component registered as `type_name`, under their captions.
@@ -340,6 +333,6 @@ pub(super) fn component_tab(ui: &mut Ui, p: &mut Panels<'_>, type_name: &'static
         })
         .collect();
     let mut reported = Vec::new();
-    on_background(ui, "component", |ui, _| reported = grid(ui, ("component", type_name), &cards, p, true));
-    apply(ui, p, &cards, reported);
+    on_background(ui, "component", |ui, _| reported = grid(ui, ("component", type_name), &cards, p, true, None));
+    apply(p, &cards, reported);
 }

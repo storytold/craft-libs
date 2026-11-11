@@ -14,9 +14,9 @@ use std::hash::Hash;
 /// extent it had in the last pass that showed it, at any room, and its stops from that pass keep their place in Tab
 /// order. A child no pass showed yet takes its estimate: that long along the axes the area scrolls and nothing across
 /// them, as a collection places the rows it never built by its item layout's estimate. It runs when that extent
-/// meets the view, while one of the stops of its last run holds keyboard focus or is the target of a focus request,
-/// and when `keep` asks. Content that was never shown has no stops to find: Tab reaches it once it was shown, and a
-/// child an app focuses or scrolls to before it was ever in view needs `keep`. Outside a scroll area it always runs.
+/// meets the view, and while one of the stops of its last run holds keyboard focus or is the target of a focus
+/// request. Content that was never shown has no stops to find: Tab reaches it once it was shown, and an app brings
+/// it into view with `reveal`. Outside a scroll area it always runs.
 ///
 /// It is a child in flow of its body. In a `Grid` or spread `Row` body it holds one cell: its content is the one child
 /// in flow that takes the cell, and out of view it takes the cell at its remembered extent, so the cell's row counts
@@ -29,7 +29,7 @@ use std::hash::Hash;
 pub struct Lazy {
     key: u64,
     estimate: f32,
-    keep: bool,
+    reveal: bool,
 }
 
 impl Lazy {
@@ -39,12 +39,14 @@ impl Lazy {
         use std::hash::Hasher;
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         key.hash(&mut hasher);
-        Lazy { key: hasher.finish(), estimate, keep: false }
+        Lazy { key: hasher.finish(), estimate, reveal: false }
     }
 
-    /// Runs the child out of view too, while `keep` holds: the target of a scroll the app asks for.
-    pub fn keep(mut self, keep: bool) -> Lazy {
-        self.keep = keep;
+    /// When `reveal` holds, the scroll area glides until the child starts at the view's start (as far as the
+    /// content lets it), whether or not the child ran yet: a request of the pass that sets it, as an app's jump to
+    /// an item is. A wheel, drag or other move of the area ends the glide.
+    pub fn reveal(mut self, reveal: bool) -> Lazy {
+        self.reveal = reveal;
         self
     }
 
@@ -69,7 +71,10 @@ impl Lazy {
                 Rect::from_min_size(Pos2::new(x, available.min.y), size)
             };
             let estimate = view.estimate(self.estimate);
-            if let Decision::Skip(size) = lazy::decide(&ctx, id, &view, at, sizing, self.keep, estimate) {
+            if self.reveal {
+                crate::contract::queue_child_reveal(&ctx, view.owner, id);
+            }
+            if let Decision::Skip(size) = lazy::decide(&ctx, id, &view, at, sizing, estimate) {
                 let (took, _) = take_in_flow(ui, size);
                 if real {
                     layout_memory::backstop(&ctx, id, size);

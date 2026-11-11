@@ -28,9 +28,21 @@ pub(super) struct ScrollState {
     pub(super) follow_end: Option<bool>,
     /// The same position named by content: the offset follows it while extents before its child change.
     pub(super) anchor: Option<crate::runtime::lazy::Anchor>,
+    /// The glide to a `Lazy` child a reveal asked for, until the offset reaches it or something else moves it.
+    pub(super) glide: Option<Glide>,
     /// The content's extent from the last run that laid it out: it bounds the offset, so it is kept as long, a hidden
     /// body's included.
     pub(super) extent: (f32, f32),
+}
+
+/// A glide of the offset to the `Lazy` child `child` (`Lazy::reveal`). `to` is the offset that puts the child at the
+/// view's start, from the last real run that placed it; it moves while extents before the child resolve, so the
+/// offset follows it (`spec::FOLLOW`). `running` once the glide's tween started from the offset shown.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Glide {
+    pub(super) child: Id,
+    pub(super) to: Option<Vec2>,
+    pub(super) running: bool,
 }
 
 /// The offsets `scroll_input` moved scroll bodies to, with the frame that queued each, for step 4 of each body's next
@@ -62,17 +74,16 @@ pub(super) fn scroll_of(props: &ContainerProps) -> Option<Scroll> {
     props.scroll.or_else(|| overlay_of(props).filter(|overlay| overlay.body_scroll).map(|_| Scroll::vertical()))
 }
 
-/// After the real run of the scroll body `id` laid out content of `extent` behind a view of `view`: the anchor rule
-/// (`lazy::follow`) moves the offset, and the pass runs again at it. A body that `keeps` no anchor (its offset is bound
-/// to the app, or it follows its end) has none.
+/// After the real run of a scroll body laid out content of `extent` behind a view of `view`, from what its children
+/// reported (`placed`): the anchor rule (`lazy::follow`) moves the offset, and the pass runs again at it. A body that
+/// `keeps` no anchor (its offset is bound to the app, or it follows its end) has none.
 pub(super) fn follow_anchor(
     ctx: &Context,
-    (id, scroll, keeps): (Id, Scroll, bool),
+    (placed, scroll, keeps): (&lazy::Placed, Scroll, bool),
     (extent, view): (Vec2, Vec2),
     (offset, read): (&mut ScrollPos, ScrollPos),
     anchor: &mut Option<lazy::Anchor>,
 ) {
-    let placed = lazy::placed(ctx, id);
     if !keeps {
         *anchor = None;
         return;
@@ -81,7 +92,7 @@ pub(super) fn follow_anchor(
     let moved = Vec2::new(short(offset.x - read.x), short(offset.y - read.y));
     let back = Vec2::new(short(offset.x), short(offset.y));
     let ahead = (extent - view) - back;
-    if let Some(shift) = lazy::follow(anchor, &placed, moved, view, (back, ahead), (scroll.horizontal_on(), scroll.vertical_on())) {
+    if let Some(shift) = lazy::follow(anchor, placed, moved, view, (back, ahead), (scroll.horizontal_on(), scroll.vertical_on())) {
         offset.x += f64::from(shift.x);
         offset.y += f64::from(shift.y);
         sizing::request_discard(ctx, sizing::Rerun::Layout);
@@ -244,4 +255,21 @@ impl<'b> BodyHooks<'b> {
             y: if scroll.vertical_on() { offset.y.clamp(0.0, max.y) } else { 0.0 },
         }
     }
+}
+
+/// After the real run of a scroll body that glides: the offset that puts the glide's child at the view's start, from
+/// its place in this run (`at`, from the view shown at `shown`), within the offsets the content allows. A run that did
+/// not reach the child ends the glide.
+pub(super) fn aim_glide(glide: &mut Option<Glide>, at: Option<Vec2>, shown: ScrollPos, (extent, view): (Vec2, Vec2), scroll: Scroll) {
+    let Some(aim) = glide.as_mut() else { return };
+    let Some(at) = at else {
+        *glide = None;
+        return;
+    };
+    let most = (extent - view).max(Vec2::ZERO);
+    let to = Vec2::new(
+        if scroll.horizontal_on() { (shown.x as f32 + at.x).clamp(0.0, most.x) } else { shown.x as f32 },
+        if scroll.vertical_on() { (shown.y as f32 + at.y).clamp(0.0, most.y) } else { shown.y as f32 },
+    );
+    aim.to = Some(to);
 }

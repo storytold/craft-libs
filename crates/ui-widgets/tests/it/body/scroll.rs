@@ -23,6 +23,8 @@ const JUMP_VIEWS: f32 = 3.0;
 /// What the gaps between lines add to a body's height, at most.
 const GAPS: f32 = 20.0;
 const VIEW: Vec2 = Vec2::new(300.0, 200.0);
+/// How far a wheel step reaches into the child above the view.
+const STEP: f32 = 10.0;
 const ORIGIN: Pos2 = Pos2::new(10.0, 10.0);
 
 /// What a frame of the body saw.
@@ -121,14 +123,14 @@ fn a_focus_request_into_an_out_of_view_child_runs_it_and_scrolls_it_in() {
     let runs: Vec<Cell<usize>> = (0..CHILDREN).map(|_| Cell::new(0)).collect();
     let buttons: Vec<Cell<(Id, Rect)>> = (0..CHILDREN).map(|_| Cell::new((Id::NULL, Rect::NOTHING))).collect();
     let view = Cell::new(Rect::NOTHING);
-    // Every child runs once first, so each has stops to name.
-    let warm = Cell::new(true);
+    // Every child runs once first, in a room that shows them all, so each has stops to name.
+    let room = Cell::new(Vec2::new(VIEW.x, CHILDREN as f32 * 2.0 * HUNDRED));
     let mut show = |ui: &mut Ui| {
-        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+        in_region(ui, Rect::from_min_size(ORIGIN, room.get()), |ui| {
             Slab::new(ContainerProps::new().scroll(Scroll::vertical())).id_salt("panel").show(ui, |ui, cx| {
                 view.set(cx.rect);
                 for (at, (count, button)) in runs.iter().zip(&buttons).enumerate() {
-                    craft_ui::contract::Lazy::new(at, HUNDRED).keep(warm.get()).show(ui, |ui| {
+                    craft_ui::contract::Lazy::new(at, HUNDRED).show(ui, |ui| {
                         count.set(count.get() + 1);
                         let out = Button::new(format!("Child {at}")).show(ui);
                         if !ui.is_sizing_pass() {
@@ -141,8 +143,10 @@ fn a_focus_request_into_an_out_of_view_child_runs_it_and_scrolls_it_in() {
         });
     };
     let mut frames = Frames::new();
+    frames.screen(room.get());
     frames.idle(3, &mut show);
-    warm.set(false);
+    assert!(runs.iter().all(|count| count.get() > 0), "every child ran in the tall room");
+    room.set(VIEW);
     frames.idle(1, &mut show);
     let last = CHILDREN - 1;
     runs.iter().for_each(|count| count.set(0));
@@ -166,14 +170,14 @@ fn tab_reaches_the_control_of_a_child_out_of_view() {
     let runs: Vec<Cell<usize>> = (0..CHILDREN).map(|_| Cell::new(0)).collect();
     let buttons: Vec<Cell<(Id, Rect)>> = (0..CHILDREN).map(|_| Cell::new((Id::NULL, Rect::NOTHING))).collect();
     let view = Cell::new(Rect::NOTHING);
-    // Every child runs once first, so each has stops to name.
-    let warm = Cell::new(true);
+    // Every child runs once first, in a room that shows them all, so each has stops to name.
+    let room = Cell::new(Vec2::new(VIEW.x, CHILDREN as f32 * 2.0 * VIEW.y));
     let mut show = |ui: &mut Ui| {
-        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+        in_region(ui, Rect::from_min_size(ORIGIN, room.get()), |ui| {
             Slab::new(ContainerProps::new().scroll(Scroll::vertical())).id_salt("panel").show(ui, |ui, cx| {
                 view.set(cx.rect);
                 for (at, (count, button)) in runs.iter().zip(&buttons).enumerate() {
-                    craft_ui::contract::Lazy::new(at, HUNDRED).keep(warm.get()).show(ui, |ui| {
+                    craft_ui::contract::Lazy::new(at, HUNDRED).show(ui, |ui| {
                         count.set(count.get() + 1);
                         let out = Button::new(format!("Child {at}")).show(ui);
                         if !ui.is_sizing_pass() {
@@ -187,8 +191,10 @@ fn tab_reaches_the_control_of_a_child_out_of_view() {
         });
     };
     let mut frames = Frames::new();
+    frames.screen(room.get());
     frames.idle(3, &mut show);
-    warm.set(false);
+    assert!(runs.iter().all(|count| count.get() > 0), "every child ran in the tall room");
+    room.set(VIEW);
     request(&frames.ctx, FocusTarget::Id(buttons[0].get().0));
     frames.idle(3, &mut show);
     runs.iter().for_each(|count| count.set(0));
@@ -300,8 +306,8 @@ struct LazyColumn {
     runs: Vec<Cell<usize>>,
     shown: RefCell<Vec<(usize, Rect)>>,
     view: Cell<Rect>,
-    /// A child kept running out of view.
-    keep: Cell<Option<usize>>,
+    /// The child the next frames ask to reveal.
+    reveal: Cell<Option<usize>>,
     /// Whether the body shows at all: hidden, as a tab switched away is.
     visible: Cell<bool>,
 }
@@ -312,7 +318,7 @@ impl LazyColumn {
             runs: (0..children).map(|_| Cell::new(0)).collect(),
             shown: RefCell::new(Vec::new()),
             view: Cell::new(Rect::NOTHING),
-            keep: Cell::new(None),
+            reveal: Cell::new(None),
             visible: Cell::new(true),
         }
     }
@@ -326,7 +332,7 @@ impl LazyColumn {
             Slab::new(ContainerProps::new().scroll(Scroll::vertical())).id_salt("column").show(ui, |ui, cx| {
                 self.view.set(cx.rect);
                 for (at, count) in self.runs.iter().enumerate() {
-                    craft_ui::contract::Lazy::new(at, estimate(at)).keep(self.keep.get() == Some(at)).show(ui, |ui| {
+                    craft_ui::contract::Lazy::new(at, estimate(at)).reveal(self.reveal.get() == Some(at)).show(ui, |ui| {
                         count.set(count.get() + 1);
                         let rect = Block::new(Vec2::new(LINE.x, height(at))).show(ui).rect;
                         if !ui.is_sizing_pass() && !craft_ui::testing::is_measuring(ui.ctx()) {
@@ -415,9 +421,9 @@ fn a_scroll_area_shown_again_runs_only_the_children_in_view() {
     assert!((at.min - rect.min).length() <= SAME, "and at the same place: {at:?}, then {rect:?}");
 }
 
-/// A child above the view that runs for the first time (kept, as a scroll target is) is taller than its estimate:
-/// the children in view stay where they were, in the frame it runs, and the frame after runs no extra pass. Guards
-/// the scroll anchor: the scroll position follows the first child at or after the view's start.
+/// A child above the view that runs for the first time, as a wheel step up brings it in, is taller than its estimate:
+/// the children in view move only by the wheel's step, in the frame it runs, and the frame after runs no
+/// extra pass. Guards the scroll anchor: the scroll position follows the first child at or after the view's start.
 #[trial]
 fn content_in_view_stays_when_an_estimate_above_it_resolves() {
     const CHILDREN: usize = 40;
@@ -435,23 +441,69 @@ fn content_in_view_stays_when_an_estimate_above_it_resolves() {
     frames.frame(vec![pointer::release(thumb + Vec2::new(0.0, 60.0))], &mut show);
     frames.idle(2, &mut show);
     let before = column.rects();
-    let (first, _) = column.top().expect("a child in view");
-    let above = first.checked_sub(2).expect("the drag moved past the first children");
+    // Where a child starts: the rects are clipped to the view, and one clipped at its start ends a child's height
+    // after it.
+    let start = |rect: &Rect| if rect.min.y <= view.min.y + SAME { rect.max.y - HUNDRED } else { rect.min.y };
+    let (first, top) = column.top().expect("a child in view");
+    let above = first.checked_sub(1).expect("the drag moved past the first children");
     assert_eq!(column.runs[above].get(), 0, "child {above} above the view never ran");
+    // Up past the start of the first child in view, into the one above it.
+    let wheel = view.min.y - start(&top) + STEP;
+    frames.frame(vec![pointer::moved(view.center())], &mut show);
     let idle = frames.frame(vec![], &mut show);
-    column.keep.set(Some(above));
-    let resolved = frames.frame(vec![], &mut show);
-    assert!(column.runs[above].get() > 0, "the kept child ran");
+    let resolved = frames.frame(vec![pointer::wheel(wheel)], &mut show);
+    assert!(column.runs[above].get() > 0, "the child the wheel brought in ran");
     let after = column.rects();
-    let mut kept = 0;
-    for (at, rect) in &before {
-        if let Some(now) = after.get(at) {
-            assert!((now.min - rect.min).length() <= SAME, "child {at} in view stayed: {now:?}, then {rect:?}");
-            kept += 1;
-        }
+    let moved: Vec<(usize, f32)> = before.iter().filter_map(|(at, rect)| Some((*at, start(after.get(at)?) - start(rect)))).collect();
+    let &(_, step) = moved.first().expect("children in view ran in both frames");
+    for (at, by) in &moved {
+        assert!((by - step).abs() <= SAME, "child {at} moved with the others: {by}, then {step}");
     }
-    assert!(kept > 0, "children in view ran in both frames");
+    // Without the anchor the content would move by the wheel and by what the estimate above it grew, half a child.
+    assert!((step - wheel).abs() < HUNDRED / 4.0, "the content moved by the wheel's {wheel}, not by the resolved estimate: {step}");
     let next = frames.frame(vec![], &mut show);
     assert!(resolved > idle, "the frame the estimate resolved in ran the pass again at the anchored offset");
     assert_eq!(next, idle, "an idle frame after it runs no extra pass");
+}
+
+/// A reveal of a child far below the view that never ran glides the body to it: the frames between show children
+/// between the start and the child at the top, each frame runs only the children in view, and the child ends at the
+/// view's start. Guards `Lazy::reveal`: a skipped child placed by its estimate is a target, and the glide follows
+/// its place while the estimates before it resolve.
+#[trial]
+fn a_revealed_child_glides_to_the_view_start() {
+    const CHILDREN: usize = 40;
+    // Frames the glide may take: two seconds at 60 Hz.
+    const GLIDE_FRAMES: usize = 120;
+    let column = LazyColumn::new(CHILDREN);
+    let mut show = |ui: &mut Ui| column.show(ui, varied, |_| HUNDRED / 2.0);
+    let mut frames = Frames::new();
+    frames.idle(3, &mut show);
+    let target = CHILDREN - 6;
+    assert_eq!(column.runs[target].get(), 0, "the child far below the view never ran");
+    column.reveal.set(Some(target));
+    frames.frame(vec![], &mut show);
+    column.reveal.set(None);
+    let mut between = 0;
+    let mut arrived = false;
+    for _ in 0..GLIDE_FRAMES {
+        column.clear();
+        frames.frame(vec![], &mut show);
+        let view = column.view.get();
+        let rects = column.rects();
+        for at in column.ran() {
+            let rect = rects.get(&at).expect("a child that ran has a rect");
+            assert!(rect.intersects(view), "frame ran child {at} out of view: {rect:?} in {view:?}");
+        }
+        let (top, rect) = column.top().expect("a child in view");
+        if top == target && (rect.min.y - view.min.y).abs() <= SAME {
+            arrived = true;
+            break;
+        }
+        if top > 0 && top < target {
+            between += 1;
+        }
+    }
+    assert!(arrived, "the child reached the view's start");
+    assert!(between > 1, "the glide showed offsets between the start and the child: {between} frames");
 }

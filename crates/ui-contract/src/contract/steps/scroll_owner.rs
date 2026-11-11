@@ -22,38 +22,76 @@ pub(super) fn route_to_scroll_owner(core: &mut CxCore<'_>) {
     let Some(owner) = core.env.scroll_owner().or_else(|| wheel::nearest_scroll_owner(&core.ctx, core.rect)) else { return };
     pass_state::with::<ScrollMoves, _>(&core.ctx, |queue| queue.0.extend(moves.into_iter().map(|mv| (owner, mv))));
     if reveal {
-        pass_state::with::<Reveals, _>(&core.ctx, |reveals| reveals.0.push(Reveal { owner, rect: core.rect }));
+        pass_state::with::<Reveals, _>(&core.ctx, |reveals| reveals.0.push(Reveal { owner, to: RevealTo::Rect(core.rect) }));
     }
     repaint::request(&core.ctx);
 }
 
-/// A request to bring a rect into view, read by the scroll owner that step 4 of its next pass names.
+/// A request to bring something into view, read by the scroll owner that step 4 of its next pass names.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Reveal {
     pub owner: Id,
-    pub rect: Rect,
+    pub to: RevealTo,
+}
+
+/// What a reveal brings into view.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum RevealTo {
+    /// A rect, by the least move that shows it, at once: a focused or AccessKit-shown component.
+    Rect(Rect),
+    /// A `Lazy` child of the owner's body, by its id: the body glides until the child starts at the view's start.
+    Child(Id),
 }
 
 #[derive(Default)]
 pub(crate) struct Reveals(pub(super) Vec<Reveal>);
 
-/// The reveal request addressed to `owner`, once.
+/// The rect reveal addressed to `owner`, once.
 pub(crate) fn take_reveal(ctx: &Context, owner: Id) -> Option<Rect> {
     pass_state::with::<Reveals, _>(ctx, |reveals| {
-        let at = reveals.0.iter().position(|reveal| reveal.owner == owner)?;
-        Some(reveals.0.remove(at).rect)
+        let at = reveals.0.iter().position(|reveal| reveal.owner == owner && matches!(reveal.to, RevealTo::Rect(_)))?;
+        match reveals.0.remove(at).to {
+            RevealTo::Rect(rect) => Some(rect),
+            RevealTo::Child(_) => None,
+        }
     })
 }
 
 /// Queues a reveal request for `owner`.
 #[cfg(feature = "testing")]
 pub(crate) fn queue_reveal(ctx: &Context, owner: Id, rect: Rect) {
-    pass_state::with::<Reveals, _>(ctx, |reveals| reveals.0.push(Reveal { owner, rect }));
+    pass_state::with::<Reveals, _>(ctx, |reveals| reveals.0.push(Reveal { owner, to: RevealTo::Rect(rect) }));
 }
 
-/// The reveal request addressed to `owner`, left queued.
+/// The rect reveal addressed to `owner`, left queued.
 pub(crate) fn peek_reveal(ctx: &Context, owner: Id) -> Option<Rect> {
-    pass_state::with::<Reveals, _>(ctx, |reveals| reveals.0.iter().find(|reveal| reveal.owner == owner).map(|reveal| reveal.rect))
+    pass_state::with::<Reveals, _>(ctx, |reveals| {
+        reveals.0.iter().find_map(|reveal| match reveal.to {
+            RevealTo::Rect(rect) if reveal.owner == owner => Some(rect),
+            _ => None,
+        })
+    })
+}
+
+/// Asks the scroll body `owner` to bring its `Lazy` child `child` to the view's start; a later request replaces it.
+pub(crate) fn queue_child_reveal(ctx: &Context, owner: Id, child: Id) {
+    pass_state::with::<Reveals, _>(ctx, |reveals| {
+        reveals.0.retain(|reveal| !(reveal.owner == owner && matches!(reveal.to, RevealTo::Child(_))));
+        reveals.0.push(Reveal { owner, to: RevealTo::Child(child) });
+    });
+    repaint::request(ctx);
+}
+
+/// The child reveal addressed to `owner`: taken, or left queued when `quiet`.
+pub(crate) fn child_reveal(ctx: &Context, owner: Id, quiet: bool) -> Option<Id> {
+    pass_state::with::<Reveals, _>(ctx, |reveals| {
+        let at = reveals.0.iter().position(|reveal| reveal.owner == owner && matches!(reveal.to, RevealTo::Child(_)))?;
+        let reveal = if quiet { reveals.0[at] } else { reveals.0.remove(at) };
+        match reveal.to {
+            RevealTo::Child(child) => Some(child),
+            RevealTo::Rect(_) => None,
+        }
+    })
 }
 
 /// A page or end move a focused component left untaken, addressed to the scroll owner around it (9.2 rule 5).

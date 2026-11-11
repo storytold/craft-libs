@@ -115,7 +115,7 @@ pub(crate) use run::measure_under;
 pub(crate) use steps::keeping_ids;
 #[cfg(feature = "testing")]
 pub(crate) use steps::queue_reveal;
-pub(crate) use steps::{peek_reveal, take_reveal};
+pub(crate) use steps::{child_reveal, peek_reveal, queue_child_reveal, take_reveal};
 
 /// Adds the runtime to `ctx`: `runtime::install` with the overlay host's ghost-layer painter in the end hook.
 pub fn install(ctx: &egui::Context, spec: crate::runtime::InstallSpec) -> Result<(), crate::runtime::InstallError> {

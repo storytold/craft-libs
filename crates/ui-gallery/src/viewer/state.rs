@@ -45,9 +45,8 @@ pub struct Browser {
     pub cells: Cells,
     /// The component whose tab a panel asked to open in this pass.
     pub open_request: Option<&'static str>,
-    /// The component whose card the Overview brings into view when it is drawn, by its registered name.
-    pub scroll_to: Option<&'static str>,
-    /// The selected component the Overview last followed to its level; the outer `None` before the first pass.
+    /// The selection the Overview's cards last followed: its level shown and its card brought into view; the outer `None`
+    /// before they first ran.
     pub followed: Option<Option<&'static str>>,
     /// The selected component the tree last opened the level of; the outer `None` before the first pass. Applying settings
     /// sets it to the restored selection, so a level closed before a restart stays closed.
@@ -117,7 +116,6 @@ impl Viewer {
             generation: 0,
             cells: Cells::new(),
             open_request: None,
-            scroll_to: None,
             followed: None,
             tree_seen: None,
         };

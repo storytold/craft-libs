@@ -1,7 +1,7 @@
 //! Step 15, settle.
 
 use super::apply::{ValueEdit, apply_values};
-use super::scroll_owner::{Reveal, Reveals};
+use super::scroll_owner::{Reveal, RevealTo, Reveals};
 use crate::contract::{Component, Cx, ValueOf};
 use crate::runtime::egui::repaint;
 use crate::runtime::focus::{self};
@@ -28,7 +28,7 @@ pub(crate) fn settle<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) -> ValueEdi
     if let Some(rect) = cx.core.reveal.take()
         && let Some(owner) = cx.core.env.scroll_owner().or_else(|| wheel::nearest_scroll_owner(&cx.core.ctx, rect))
     {
-        pass_state::with::<Reveals, _>(&cx.core.ctx, |reveals| reveals.0.push(Reveal { owner, rect }));
+        pass_state::with::<Reveals, _>(&cx.core.ctx, |reveals| reveals.0.push(Reveal { owner, to: RevealTo::Rect(rect) }));
         repaint::request(&cx.core.ctx);
     }
     edit

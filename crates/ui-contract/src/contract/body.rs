@@ -88,6 +88,9 @@ pub(super) struct BodyHooks<'b> {
     /// The scroll position named by content, kept with an offset the framework holds (`ScrollState`).
     anchor: Option<crate::runtime::lazy::Anchor>,
     anchor_at_read: Option<crate::runtime::lazy::Anchor>,
+    /// The glide to a revealed `Lazy` child, kept with the offset (`ScrollState`).
+    glide: Option<scroll::Glide>,
+    glide_at_read: Option<scroll::Glide>,
     scroll_bound: bool,
     moved: bool,
     last: BodyView,
@@ -153,6 +156,8 @@ impl<'b> BodyHooks<'b> {
             view_offset: ScrollPos::default(),
             anchor: None,
             anchor_at_read: None,
+            glide: None,
+            glide_at_read: None,
             scroll_bound: false,
             moved: false,
             last: BodyView::default(),

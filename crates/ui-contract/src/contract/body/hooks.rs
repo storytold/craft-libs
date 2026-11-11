@@ -8,7 +8,7 @@ use super::regions::{
     shared_line,
 };
 use super::reorder::REORDER_BAND;
-use super::scroll::{Jumps, ScrollState, follow_anchor, jump_frame, overflow_inset, scroll_of};
+use super::scroll::{Glide, Jumps, ScrollState, aim_glide, follow_anchor, jump_frame, overflow_inset, scroll_of};
 use super::window::{WindowMode, os_window, window_instance};
 use super::{BodyHooks, BodyView};
 use crate::contract::cx::{BodyCx, BodyOwner};
@@ -20,7 +20,7 @@ use crate::primitives::SurfaceSlot;
 use crate::runtime::access::scope;
 use crate::runtime::access::{self, Politeness, Role};
 use crate::runtime::commands;
-use crate::runtime::egui::{alloc, areas, child, response, style, viewports};
+use crate::runtime::egui::{alloc, areas, child, repaint, response, style, viewports};
 use crate::runtime::env::{AppValues, ArenaId, Env};
 use crate::runtime::focus::FocusPolicy;
 use crate::runtime::memory::{MemoryStage, sub};
@@ -241,6 +241,29 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                     self.offset.x = range.start;
                 }
                 self.moved = true;
+            }
+        }
+        // A move of the area's own ends a glide; a child reveal starts one. A running glide moves the offset toward
+        // its aim.
+        self.glide = if self.moved { None } else { stage.session::<ScrollState>(sub(id, "scroll")).glide };
+        if let Some(child) = crate::contract::child_reveal(&ctx, id, quiet) {
+            self.glide = Some(Glide { child, to: None, running: false });
+        }
+        self.glide_at_read = self.glide;
+        if let Some(glide) = self.glide.as_mut()
+            && let Some(to) = glide.to
+            && (glide.running || !quiet)
+        {
+            let driver = Driver { stage: &*stage, base: id, policy: env.motion };
+            if !glide.running {
+                driver.jump("glide", Vec2::new(self.offset.x as f32, self.offset.y as f32));
+                glide.running = true;
+            }
+            let at = driver.anim("glide", to, spec::FOLLOW);
+            self.offset = ScrollPos { x: f64::from(at.x), y: f64::from(at.y) };
+            self.moved = true;
+            if at == to {
+                self.glide = None;
             }
         }
         let follows = stage.session::<ScrollState>(sub(id, "scroll")).follow_end.unwrap_or(true);
@@ -789,6 +812,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                             axes: (scroll.horizontal_on(), scroll.vertical_on()),
                             rtl,
                             anchor: self.anchor.map(|anchor| anchor.child),
+                            reveal: self.glide.map(|glide| glide.child),
                         };
                         // Only the run that lays the content out for the view places its children; a measure lays it
                         // out for its own question.
@@ -804,14 +828,19 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                         Env::restore(&ctx, region_env);
                         let extent = region_ui.min_rect().size();
                         if lays_out {
+                            let placed = crate::runtime::lazy::placed(&ctx, id);
                             let keeps = !self.scroll_bound && !self.follows_end;
                             follow_anchor(
                                 &ctx,
-                                (id, scroll, keeps),
+                                (&placed, scroll, keeps),
                                 (extent, seen.size()),
                                 (&mut self.offset, self.offset_at_read),
                                 &mut self.anchor,
                             );
+                            aim_glide(&mut self.glide, placed.reveal, shown, (extent, seen.size()), scroll);
+                            if self.glide.is_some_and(|glide| glide.to != Some(Vec2::new(shown.x as f32, shown.y as f32))) {
+                                repaint::request(&ctx);
+                            }
                         }
                         if real {
                             crate::runtime::egui::widgets::note_scroll_region(&ctx, region_ui.clip_rect(), region_ui.min_rect().intersect(max));
@@ -1019,6 +1048,10 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             }
             self.offset_at_read = self.offset;
             self.anchor_at_read = self.anchor;
+        }
+        if self.glide != self.glide_at_read {
+            cx.core.memory.session::<ScrollState>(sub(cx.core.id, "scroll")).glide = self.glide;
+            self.glide_at_read = self.glide;
         }
     }
 

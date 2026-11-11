@@ -39,9 +39,7 @@ pub struct Panels<'a> {
     pub cells: &'a mut Cells,
     /// The component whose tab the tree asked to open in this pass.
     pub open_request: &'a mut Option<&'static str>,
-    /// The component whose card the Overview brings into view when it is drawn.
-    pub scroll_to: &'a mut Option<&'static str>,
-    /// The selected component the Overview last followed to its level.
+    /// The selection the Overview's cards last followed.
     pub followed: &'a mut Option<Option<&'static str>>,
     /// The selected component the tree last opened the level of.
     pub tree_seen: &'a mut Option<Option<&'static str>>,

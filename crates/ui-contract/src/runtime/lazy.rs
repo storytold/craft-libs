@@ -30,6 +30,8 @@ pub(crate) struct View {
     pub(crate) rtl: bool,
     /// The child the area's scroll position names.
     pub(crate) anchor: Option<Id>,
+    /// The child the area glides to (`Lazy::reveal`).
+    pub(crate) reveal: Option<Id>,
 }
 
 impl View {
@@ -62,6 +64,8 @@ pub(crate) struct Placed {
     pub(crate) anchor: Option<(Vec2, Vec2)>,
     /// The first child, in flow order, that starts at or after the view's start, and its place.
     pub(crate) first: Option<(Id, Vec2)>,
+    /// The place of the child the area glides to, when the run reached it.
+    pub(crate) reveal: Option<Vec2>,
 }
 
 impl Placed {
@@ -146,10 +150,10 @@ fn with<R>(ctx: &Context, f: impl FnOnce(&mut Store, u64, u64) -> R) -> R {
 }
 
 /// Decides whether the child `id`, whose content starts at `at` in this run, runs this pass. It runs when its extent
-/// placed at `at` meets the view, when one of its stops holds focus or is the target of a focus request, or when
-/// `keep` asks for it. Its extent is the one a run showed it at, else `estimate`. The first run of a pass decides;
-/// every later run of the pass gets the same answer, so a measuring run and the real run lay out the same children.
-pub(crate) fn decide(ctx: &Context, id: Id, view: &View, at: impl FnOnce(Vec2) -> Rect, sizing: bool, keep: bool, estimate: Vec2) -> Decision {
+/// placed at `at` meets the view, or when one of its stops holds focus or is the target of a focus request. Its
+/// extent is the one a run showed it at, else `estimate`. The first run of a pass decides; every later run of the
+/// pass gets the same answer, so a measuring run and the real run lay out the same children.
+pub(crate) fn decide(ctx: &Context, id: Id, view: &View, at: impl FnOnce(Vec2) -> Rect, sizing: bool, estimate: Vec2) -> Decision {
     let targets = crate::runtime::focus::targets(ctx);
     with(ctx, |store, pass_nr, frame| {
         let entry = store.touch(view.owner, id, frame);
@@ -160,7 +164,7 @@ pub(crate) fn decide(ctx: &Context, id: Id, view: &View, at: impl FnOnce(Vec2) -
             Some((decided_in, skip)) if decided_in == pass_nr => skip,
             _ => {
                 let focus = entry.focus.stop_ids().any(|stop| targets.contains(&Some(stop)));
-                let skip = !keep && !focus && !at(size).intersects(view.rect);
+                let skip = !focus && !at(size).intersects(view.rect);
                 entry.decided = Some((pass_nr, skip));
                 skip
             }
@@ -224,6 +228,9 @@ pub(crate) fn place(ctx: &Context, view: &View, id: Id, rect: Rect) {
     with(ctx, |store, _, _| {
         if let Some(placed) = store.placed.get_mut(&view.owner) {
             placed.note((view.anchor, view.axes), id, at, rect.size());
+            if view.reveal == Some(id) {
+                placed.reveal = Some(at);
+            }
         }
     });
 }
