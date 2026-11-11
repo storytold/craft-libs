@@ -102,13 +102,13 @@ enum Item {
 /// The inputs outside a measure that it read (`read_input`), by key: the widest value of each.
 pub(crate) type Inputs = HashMap<Id, f32>;
 
-/// One measure call a component got in a measuring run, the inputs besides its room it read, and its answer.
+/// One measure call a component got, the inputs besides its room it read, and its answer.
 #[derive(Clone)]
-struct Call {
-    proposal: Proposal,
-    room: Option<f32>,
-    inputs: Inputs,
-    took: Vec2,
+pub(crate) struct Call {
+    pub proposal: Proposal,
+    pub room: Option<f32>,
+    pub inputs: Inputs,
+    pub took: Vec2,
 }
 
 /// What the components of a body's content got from its measuring run: each measure call, and whether it filled the
@@ -200,8 +200,9 @@ struct Entries {
     served: HashMap<Id, Arc<Transcript>>,
     measuring: Vec<Open>,
     scopes: Vec<Scope>,
-    /// The inputs of the kept calls a real run asks again, innermost last: `read_input` gives what they read.
-    replaying: Vec<Inputs>,
+    /// The kept calls a real run asks again, as the transcript, the component and the call's index, innermost last:
+    /// `read_input` gives what they read.
+    replaying: Vec<(Arc<Transcript>, Id, usize)>,
     ask: bool,
     asked: Option<u64>,
 }
@@ -418,7 +419,8 @@ pub(crate) fn calls_from(ctx: &Context) -> usize {
 pub(crate) fn read_input(ctx: &Context, from: usize, key: Id, value: f32) -> f32 {
     let moment = Moment::of(ctx);
     with(ctx, &moment, |memory| {
-        if let Some(read) = memory.replaying.iter().rev().find_map(|inputs| inputs.get(&key)) {
+        let replayed = memory.replaying.iter().rev().find_map(|(transcript, id, at)| transcript.leaves.get(id)?.calls.get(*at)?.inputs.get(&key));
+        if let Some(read) = replayed {
             return *read;
         }
         for open in memory.measuring.iter_mut().skip(from) {
@@ -504,53 +506,55 @@ pub(crate) fn boundary<R>(ctx: &Context, stops_changes: bool, f: impl FnOnce() -
     out
 }
 
-/// A measure call component `id` got, with the `inputs` it read (`measure_call`) and its answer `took`. A measuring
-/// run adds it to the innermost body's transcript. A real run inside a body whose records a kept transcript gave asks
-/// the component again (`ask`) at each call the transcript holds for it, under the inputs that call read, once per
-/// pass, and compares; `ask` runs outside the memory's lock.
-pub(crate) fn leaf_call(
-    ctx: &Context,
-    id: Id,
-    proposal: Proposal,
-    room: Option<f32>,
-    inputs: Inputs,
-    took: Vec2,
-    ask: impl FnMut(Proposal, Option<f32>) -> Vec2,
-) {
+/// The measure calls component `id` got in this run (`calls`: each with the inputs it read, `measure_call`, and its
+/// answer). A measuring run adds them to the innermost body's transcript. A real run inside a body whose records a
+/// kept transcript gave checks each call the transcript holds for the component, once per pass: a kept call this run
+/// made too (same proposal and room, no inputs read besides the room) compares with this run's answer, and any other
+/// is asked again (`ask`) under the inputs it read. `ask` runs outside the memory's lock.
+pub(crate) fn leaf_call(ctx: &Context, id: Id, calls: &mut [Call], ask: impl FnMut(Proposal, Option<f32>) -> Vec2) {
     let moment = Moment::of(ctx);
     if !real(ctx) {
         with(ctx, &moment, |memory| {
             if let Some(leaves) = memory.leaf() {
-                let calls = &mut leaves.entry(id).or_default().calls;
-                if !calls.iter().any(|call| call.proposal == proposal && call.room == room) {
-                    calls.push(Call { proposal, room, inputs, took });
+                let kept = &mut leaves.entry(id).or_default().calls;
+                for call in calls {
+                    if !kept.iter().any(|kept| kept.proposal == call.proposal && kept.room == call.room) {
+                        let inputs = std::mem::take(&mut call.inputs);
+                        kept.push(Call { proposal: call.proposal, room: call.room, inputs, took: call.took });
+                    }
                 }
             }
         });
         return;
     }
-    check(ctx, &moment, id, ask);
+    check(ctx, &moment, id, calls, ask);
 }
 
-fn check(ctx: &Context, moment: &Moment, id: Id, mut ask: impl FnMut(Proposal, Option<f32>) -> Vec2) {
-    let calls = with(ctx, moment, |memory| {
+fn check(ctx: &Context, moment: &Moment, id: Id, made: &[Call], mut ask: impl FnMut(Proposal, Option<f32>) -> Vec2) {
+    let transcript = with(ctx, moment, |memory| {
         let scope = memory.checking()?;
         if !scope.visited.insert(id) {
             return None;
         }
-        let transcript = scope.served.clone()?;
-        Some(transcript.leaves.get(&id).map(|leaf| leaf.calls.clone()))
+        scope.served.clone()
     });
-    let Some(calls) = calls else { return };
+    let Some(transcript) = transcript else { return };
     let tolerance = measure_tolerance(crate::runtime::egui::scale::pixels_per_point(ctx));
     // A component the transcript does not hold was added; one that answers differently under the inputs it read then
     // changed. An input that changed since (a shared column a later row widened in the measuring run's sweep) is not a
     // change of this component: the input's own records and reports are checked where they are made.
-    let same = calls.is_some_and(|calls| {
-        calls.iter().all(|call| {
-            with(ctx, moment, |memory| memory.replaying.push(call.inputs.clone()));
-            let now = ask(call.proposal, call.room);
-            with(ctx, moment, |memory| memory.replaying.pop());
+    let same = transcript.leaves.get(&id).is_some_and(|leaf| {
+        leaf.calls.iter().enumerate().all(|(at, call)| {
+            let made = made.iter().find(|made| call.inputs.is_empty() && made.proposal == call.proposal && made.room == call.room);
+            let now = match made {
+                Some(made) => made.took,
+                None => {
+                    with(ctx, moment, |memory| memory.replaying.push((transcript.clone(), id, at)));
+                    let now = ask(call.proposal, call.room);
+                    with(ctx, moment, |memory| memory.replaying.pop());
+                    now
+                }
+            };
             (now - call.took).abs().max_elem() <= tolerance
         })
     });

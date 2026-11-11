@@ -9,6 +9,8 @@ use crate::runtime::memory::sub;
 use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{Metrics, Sense};
 use egui::{Id, Rect, Response, Ui, Vec2};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Runs a body laid out by `layout` under `key` and places one child per entry of `sizes` in flow, as step 6
 /// does. Returns each child's rect.
@@ -70,12 +72,19 @@ pub struct Block {
     #[common]
     common: Common,
     size: Vec2,
+    measures: Option<Arc<AtomicUsize>>,
 }
 
 impl Block {
     /// A child that takes `size`.
     pub const fn new(size: Vec2) -> Self {
-        Block { common: Common::new(), size }
+        Block { common: Common::new(), size, measures: None }
+    }
+
+    /// Counts each call of its measure in `measures`.
+    pub fn counted(mut self, measures: &Arc<AtomicUsize>) -> Self {
+        self.measures = Some(measures.clone());
+        self
     }
 }
 
@@ -98,6 +107,9 @@ impl Component for Block {
     }
 
     fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
+        if let Some(measures) = &self.measures {
+            measures.fetch_add(1, Ordering::Relaxed);
+        }
         self.size
     }
 

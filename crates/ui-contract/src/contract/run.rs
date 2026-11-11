@@ -14,6 +14,7 @@ use crate::primitives::sensing::{self, MemberSpec, PartDecl, RootSpec};
 use crate::primitives::{FaceRecord, PaintRecord, PartResult, face_id};
 use crate::runtime::access::{self, Politeness, Role, SetPosition, scope};
 use crate::runtime::env::{AppValues, Env, EnvView};
+use crate::runtime::layout_memory::Call;
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::overlay::CloseReason;
 use crate::runtime::reads::{self, Sample};
@@ -972,28 +973,36 @@ fn run<C: Component>(mut comp: C, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>
         steps::measure(comp, &input, &style, &resolved, shown.as_deref(), extent)
     };
     let (size, inputs) = ask(&mut comp, Proposal::Ideal, room, extent);
-    // A leaf's measure calls are what its body's layout takes from it: a measuring run keeps them in the body's
-    // transcript, and a real run its kept transcript serves asks them again. A leaf shown at a rect takes no room in
-    // the flow: its body's layout takes the rect, and any measure its caller sized the rect by records itself.
-    let leaf = shape == ShapeKind::Leaf && matches!(at, ShowAt::Flow) && (!sizing || crate::runtime::measure::active(&ctx));
-    if leaf {
-        crate::runtime::layout_memory::leaf_call(&ctx, id, Proposal::Ideal, room, inputs, size, |proposal, room| {
-            ask(&mut comp, proposal, room, extent).0
-        });
-    }
-    trace.mark(Step::Measure);
+    let ideal = Call { proposal: Proposal::Ideal, room, inputs, took: size };
     // A control in a label scope reports its narrowest width, in a measuring run too: the real run's label step reads
     // it to decide whether the row fits the label beside it.
     let min = (shape == ShapeKind::Leaf && scope::in_label(&ctx)).then(|| {
-        let (min, inputs) = ask(&mut comp, Proposal::Min, None, Vec2::ZERO);
-        if leaf {
-            crate::runtime::layout_memory::leaf_call(&ctx, id, Proposal::Min, None, inputs, min, |proposal, room| {
-                ask(&mut comp, proposal, room, Vec2::ZERO).0
-            });
-        }
-        scope::record_control_min(&ctx, min.x);
-        min
+        let (took, inputs) = ask(&mut comp, Proposal::Min, None, Vec2::ZERO);
+        Call { proposal: Proposal::Min, room: None, inputs, took }
     });
+    let min_took = min.as_ref().map(|min| min.took);
+    // A leaf's measure calls are what its body's layout takes from it: a measuring run keeps them in the body's
+    // transcript, and a real run its kept transcript serves checks them against this run's. A leaf shown at a rect
+    // takes no room in the flow: its body's layout takes the rect, and any measure its caller sized the rect by
+    // records itself.
+    let leaf = shape == ShapeKind::Leaf && matches!(at, ShowAt::Flow) && (!sizing || crate::runtime::measure::active(&ctx));
+    if leaf {
+        let mut both;
+        let mut one;
+        let calls: &mut [Call] = match min {
+            Some(min) => {
+                both = [ideal, min];
+                &mut both
+            }
+            None => {
+                one = [ideal];
+                &mut one
+            }
+        };
+        crate::runtime::layout_memory::leaf_call(&ctx, id, calls, |proposal, room| ask(&mut comp, proposal, room, extent).0);
+    }
+    trace.mark(Step::Measure);
+    let min = min_took.inspect(|min| scope::record_control_min(&ctx, min.x));
     // The read record: the binding step 4 read, and the sizes step 5 made from it.
     if let Some(key) = comp.bind().and_then(|bind| bind.key(id)) {
         let ideal = Sample { proposal: Proposal::Ideal, room, took: size };
@@ -1218,7 +1227,8 @@ fn measure_shape<C: Component>(
     };
     let (took, inputs) = ask(comp, proposal);
     if hooks.shape() == ShapeKind::Leaf && (!ui.is_sizing_pass() || crate::runtime::measure::active(ui.ctx())) {
-        crate::runtime::layout_memory::leaf_call(ui.ctx(), id, proposal, None, inputs, took, |proposal, _| ask(comp, proposal).0);
+        let calls = &mut [Call { proposal, room: None, inputs, took }];
+        crate::runtime::layout_memory::leaf_call(ui.ctx(), id, calls, |proposal, _| ask(comp, proposal).0);
     }
     if let Some(key) = comp.bind().and_then(|bind| bind.key(id)) {
         reads::note(ui.ctx(), key, id, true, &[Sample { proposal, room: None, took }]);
