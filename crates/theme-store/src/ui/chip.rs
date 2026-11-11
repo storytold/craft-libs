@@ -1,7 +1,7 @@
 //! `ThemeChip`: a miniature of a theme, a member of a row's radio group.
 
 use super::page::AppearanceWords;
-use craft_behavior::{Flow, IconId, Metrics, PartKey, Sense};
+use craft_behavior::{Flow, IconId, Insets, Metrics, PartKey, Sense};
 use craft_theme::{Appearance, Contrast, Mode, Size, Stateful, States, TextSize, ThemeDef, ThemeId};
 use craft_ui::buttons::IconButton;
 use craft_ui::choice::RadioKind;
@@ -45,7 +45,7 @@ pub struct ThemeChipStyle {
     metrics: Metrics,
     #[style(focus)]
     focus: FocusLook,
-    /// The chip's size.
+    /// The chip's size inside its padding: a medium control's height across, a small control's height down.
     size: Vec2,
     /// The outline: the card border, the muted ink under the pointer, the accent when chosen.
     outline: Stateful<StyleColor>,
@@ -144,10 +144,12 @@ impl Component for ThemeChip<'_> {
         let muted = cx.color(colors.text.muted);
         let accent = cx.color(colors.accent.solid);
         let disabled = cx.color(colors.text.disabled);
+        let mut metrics = Metrics::new();
+        metrics.padding = Insets::uniform(space.pad.control);
         ThemeChipStyle {
-            metrics: Metrics::new(),
+            metrics,
             focus: cx.focus_look(),
-            size: Vec2::new(size.thumb.md, size.thumb.sm),
+            size: Vec2::new(size.control.md, size.control.sm),
             outline: Stateful::new(rest).off(States::new(rest, muted, muted, disabled)).on(States::new(accent, accent, accent, disabled)),
             radius: cx.surface(SurfaceKind::Raised).radius,
             inset: space.gap.tight,

@@ -23,8 +23,8 @@ const FACE: PartKey = PartKey::new("face");
 /// The corner mark: a press on it opens the flyout at once, and releasing over a row picks it.
 const MARK: PartKey = PartKey::new("mark");
 
-/// The style of a flyout button: it paints through its face, so it holds no look of its own besides the size of the
-/// corner mark's press area, which is the size and the inset of the mark the face paints.
+/// The style of a flyout button: it paints through its face, so it holds no look of its own besides its side, the rail
+/// button's, and the size of the corner mark's press area, which is the size and the inset of the mark the face paints.
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct FlyoutButtonStyle {
@@ -175,7 +175,8 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
     type Output = FlyoutOutput<T>;
 
     fn style(cx: &StyleCx<'_>, _: FlyoutButtonStyleKey<T>) -> FlyoutButtonStyle {
-        FlyoutButtonStyle { mark: cx.tokens.space.gap.tight, ..FlyoutButtonStyle::default() }
+        let side = cx.tokens.size.rail.button;
+        FlyoutButtonStyle { metrics: Metrics::new().min_size(Vec2::splat(side)), mark: cx.tokens.space.gap.tight }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {

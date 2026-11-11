@@ -70,7 +70,7 @@ impl<'a> SwatchPalette<'a> {
             let before = held.read(cx)?;
             let selected = swatches.iter().position(|(_, c)| c.to_rgba() == before.to_rgba());
             let mut current = selected.map_or_else(Selection::default, Selection::single);
-            let table = SwatchTable::new(label.clone(), swatches).tips(true).selection(Bind::bound(&mut current)).show_all(ui);
+            let table = SwatchTable::new(label.clone(), swatches).tips(true).wells(true).selection(Bind::bound(&mut current)).show_all(ui);
             let picked = table.selected.or(table.open)?;
             let after = swatches.get(picked)?.1;
             if after.to_rgba() == before.to_rgba() {
@@ -171,6 +171,9 @@ pub struct SwatchTable<'a> {
     /// Whether each cell's name is its tooltip.
     #[prop]
     tips: bool,
+    /// Whether the cells are wells at the control height, as a palette's swatches are, instead of small touching cells.
+    #[prop]
+    wells: bool,
 }
 
 impl<'a> SwatchTable<'a> {
@@ -184,6 +187,7 @@ impl<'a> SwatchTable<'a> {
             selection: None,
             per_row: None,
             tips: false,
+            wells: false,
         }
         .label(label)
     }
@@ -197,10 +201,11 @@ impl<'a> SwatchTable<'a> {
 
     /// Shows the table.
     pub fn show_all(self, ui: &mut Ui) -> SwatchTableOutput {
-        let (swatches, tips) = (self.swatches, self.tips);
+        let (swatches, tips, wells) = (self.swatches, self.tips, self.wells);
         self.show_items(ui, &SwatchRows::new(swatches), &mut |key, _| {
             let (name, color) = &swatches[*key];
             let cell = Swatch::new(name.clone(), *color).cell();
+            let cell = if wells { cell.well() } else { cell };
             if tips { cell.tooltip(name.clone()) } else { cell }
         })
     }
@@ -254,7 +259,8 @@ impl Collection for SwatchTable<'_> {
     }
 
     fn item_layout(&self, source: &dyn ItemSource<usize>, width: f32, cx: &StyleCx<'_>) -> TileLayout {
-        let cell = SwatchMetrics::of(cx).cell;
+        let metrics = SwatchMetrics::of(cx);
+        let cell = if self.wells { metrics.side } else { metrics.cell };
         let layout = TileLayout::new(source, width, Vec2::splat(cell), 0.0);
         match self.per_row {
             Some(columns) => layout.in_columns(columns),

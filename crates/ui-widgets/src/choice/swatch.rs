@@ -139,6 +139,10 @@ pub struct Swatch<T: Value + 'static = ()> {
     #[style_key]
     #[prop(flag)]
     cell: bool,
+    /// A cell shown as a well, at the control height with the well's corners: a palette's swatches.
+    #[style_key]
+    #[prop(flag)]
+    well: bool,
     /// Takes the width the layout offers, at the control height.
     #[prop(flag)]
     fill: bool,
@@ -152,8 +156,18 @@ pub struct Swatch<T: Value + 'static = ()> {
 impl Swatch<()> {
     /// A swatch of `color` named `label`.
     pub fn new(label: impl Into<crate::runtime::env::Label>, color: impl Into<Mixed<Srgba>>) -> Self {
-        Swatch { common: Common::new(), color: color.into(), member: None, cell: false, fill: false, picker: None, checked: false, activation: None }
-            .label(label)
+        Swatch {
+            common: Common::new(),
+            color: color.into(),
+            member: None,
+            cell: false,
+            well: false,
+            fill: false,
+            picker: None,
+            checked: false,
+            activation: None,
+        }
+        .label(label)
     }
 }
 
@@ -165,6 +179,7 @@ impl<T: Value + 'static> Swatch<T> {
             color: self.color,
             member: Some(value),
             cell: self.cell,
+            well: self.well,
             fill: self.fill,
             picker: self.picker,
             checked: false,
@@ -191,8 +206,8 @@ impl<T: Value + 'static> Component for Swatch<T> {
         SwatchStyle {
             metrics: Metrics::new(),
             focus: cx.focus_look(),
-            side: if key.cell { metrics.cell } else { metrics.side },
-            radius: if key.cell { CornerRadius::ZERO } else { metrics.radius },
+            side: if key.cell && !key.well { metrics.cell } else { metrics.side },
+            radius: if key.cell && !key.well { CornerRadius::ZERO } else { metrics.radius },
             edge: Stateful::new(rest).off(States::new(rest, rest, rest, disabled)),
             ring: Stateful::new(clear).on(States::new(accent, accent, accent, disabled)),
             mixed_fill: cx.color(colors.surface.sunken),
