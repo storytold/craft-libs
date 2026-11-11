@@ -36,8 +36,8 @@ No default features. The shared types (`AudioBuffer`, `AudioInfo`, `ChannelLayou
 | `alac-decode` | `alac::Decoder` | none |
 | `alac-encode` | `alac::Encoder` | none |
 | `opus-decode` | `opus::Decoder`/`StreamDecoder` | none |
-| `ac3-decode` | `ac3::Decoder`, `ac3::ProgrammeDecoder` | none |
-| `ac3-encode`, `eac3-encode` | `ac3::encoder::Encoder` | none |
+| `ac3-decode` | `ac3::Decoder`, `ac3::ProgrammeDecoder` | craft-media `bitstream` |
+| `ac3-encode`, `eac3-encode` | `ac3::encoder::Encoder` | craft-media `bitstream` |
 | `mpa-decode` | `mpa::Decoder` | craft-media `bitstream` |
 | `peaks` | `peaks::Peaks` | none |
 | `rayon` | parallel AAC encoding (with `aac-encode`) | `rayon` |

@@ -38,6 +38,7 @@ pub use program::{ProgrammeDecoder, ProgrammeFrame};
 pub mod encoder;
 mod tables;
 
+use craft_media::bitstream::BitReader;
 use std::sync::OnceLock;
 
 /// Errors from header parsing and decoding.
@@ -165,33 +166,38 @@ pub fn parse_header(b: &[u8]) -> Result<Header> {
     })
 }
 
-/// MSB-first bit reader; reads past the end give zeros.
+/// MSB-first bit reader over the shared [`BitReader`]. Reads past the end give zeros, and
+/// `skip` may move past the end: a damaged frame decodes to something, and [`Bits::overrun`]
+/// tells afterwards whether it ran out of data.
 struct Bits<'a> {
-    d: &'a [u8],
-    pos: usize,
+    r: BitReader<'a>,
 }
 
 impl<'a> Bits<'a> {
     fn new(d: &'a [u8]) -> Self {
-        Self { d, pos: 0 }
+        Self { r: BitReader::new(d) }
     }
+    #[inline]
     fn read(&mut self, n: u32) -> u32 {
-        let mut v = 0u32;
-        for _ in 0..n {
-            let byte = self.d.get(self.pos >> 3).copied().unwrap_or(0);
-            v = (v << 1) | ((byte >> (7 - (self.pos & 7))) & 1) as u32;
-            self.pos += 1;
-        }
+        let v = self.r.peek(n);
+        self.skip(n as usize);
         v
     }
+    #[inline]
     fn bit(&mut self) -> bool {
         self.read(1) == 1
     }
+    #[inline]
     fn skip(&mut self, n: usize) {
-        self.pos += n;
+        self.r.seek_bits(self.r.position() + n);
     }
     fn overrun(&self) -> bool {
-        self.pos > self.d.len() * 8
+        self.r.position() > self.r.data().len() * 8
+    }
+    /// The position in bits.
+    #[cfg(test)]
+    fn pos(&self) -> usize {
+        self.r.position()
     }
 }
 
@@ -1276,7 +1282,7 @@ impl Decoder {
         }
         // mantissas
         #[cfg(test)]
-        let mantissa_start = r.pos;
+        let mantissa_start = r.pos();
         let mut gr = Groups::default();
         let mut cpl = [0f32; 256];
         let mut got_cpl = false;
@@ -1303,7 +1309,7 @@ impl Decoder {
             }
         }
         #[cfg(test)]
-        self.block_bit_positions.push((mantissa_start, r.pos));
+        self.block_bit_positions.push((mantissa_start, r.pos()));
         // decoupling
         if f.cplinu {
             for ch in 0..nf {

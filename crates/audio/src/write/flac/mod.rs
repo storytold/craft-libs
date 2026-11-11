@@ -10,6 +10,8 @@ mod predict;
 #[cfg(test)]
 use craft_media_testkit as common;
 #[cfg(test)]
+mod golden_tests;
+#[cfg(test)]
 mod oracle_tests;
 
 use super::pcm::{Quantizer, validate_buffer, validate_layout};
