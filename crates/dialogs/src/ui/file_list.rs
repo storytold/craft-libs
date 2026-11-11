@@ -127,8 +127,8 @@ impl Outcome for FileListPickerOutput {
 /// than one file; sorts by name ignoring case). In Folder mode the list shows the folder's files the app passes and has
 /// no selection.
 ///
-/// Keys: the list is one Tab stop; arrows move the selection; Delete and Backspace remove the selected file; Alt+Up and
-/// Alt+Down move it. Dropped files are added by the dialog with [`FileList::add`].
+/// Keys: the list is one Tab stop; arrows move the selection; Delete and Backspace remove the selected file; Cmd+] and
+/// Cmd+[ move it up and down (Ctrl off macOS; Shift to the ends). Dropped files are added by the dialog with [`FileList::add`].
 #[must_use = "show the picker with `show`"]
 #[derive(craft_ui::contract::Pattern, craft_ui::contract::Props)]
 pub struct FileListPicker<'a> {

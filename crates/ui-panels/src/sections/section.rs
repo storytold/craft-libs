@@ -37,8 +37,8 @@ pub struct SectionOutput {
     pub action: Option<HeaderAction>,
     /// The header band was press-dragged past the drag threshold this pass.
     pub grabbed: bool,
-    /// Alt+Up or Alt+Down was pressed with focus in the section: `true` toward the end.
-    pub nudged: Option<bool>,
+    /// A stacking key was pressed with focus in the section.
+    pub nudged: Option<reorder::ItemMove>,
 }
 
 impl Outcome for SectionOutput {
@@ -75,7 +75,7 @@ pub struct Section<'a> {
     controls: Option<Controls<'a>>,
     taken: Option<HeaderAction>,
     menu_opener: Option<Id>,
-    nudged: Option<bool>,
+    nudged: Option<reorder::ItemMove>,
 }
 
 impl<'a> Section<'a> {

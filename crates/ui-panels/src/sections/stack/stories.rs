@@ -9,12 +9,12 @@ use egui::{Key, Modifiers, Ui};
 
 const TITLES: [&str; 3] = ["Layers", "Effects", "Paths"];
 
-/// Focuses the first section's disclosure and moves its section down with Alt+Down.
+/// Focuses the first section's disclosure and moves its section down with Cmd+[.
 fn move_first_down(fixture: &mut Fixture) {
     let lead = fixture.by_role(Role::BUTTON).into_iter().find(|button| fixture.tree().name_of(button.node) == Some(TITLES[0]));
     if let Some(lead) = lead {
         fixture.click(&lead);
-        fixture.key(Key::ArrowDown, Modifiers::ALT);
+        fixture.key(Key::OpenBracket, Modifiers::COMMAND);
     }
 }
 

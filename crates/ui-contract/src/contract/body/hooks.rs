@@ -585,7 +585,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 .sense(craft_behavior::Sense::DRAG)
                 .cursor(CursorIcon::Grab)
                 .drag_cursor(CursorIcon::Grabbing)
-                .pointer_only("Alt+Up and Alt+Down move the section");
+                .pointer_only("Cmd+] and Cmd+[ move the section, with Shift to the ends");
         }
         Self::move_parts(&props, &regions, rect, pcx);
         self.pane_grip = Self::pane_grip(&props, rect, pcx);

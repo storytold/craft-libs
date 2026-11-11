@@ -1,9 +1,9 @@
 //! The shared parts of reordering by pointer or key: where a drop lands between items, where a moved item ends up,
-//! and the Alt+arrow intent. A collection's row drag and a section stack both use them.
+//! and the stacking keys' move. A collection's row drag and a section stack both use them.
 
 use crate::runtime::drag::DropMark;
 use crate::runtime::keys::Intents;
-use craft_behavior::{Axis, Intent, NavOutline};
+use craft_behavior::{Axis, Intent, NavOutline, keys};
 use egui::{Pos2, Rect};
 
 /// The gap a drop would land in.
@@ -51,21 +51,29 @@ pub fn move_all_to(places: &[usize], insert: usize) -> usize {
     insert - places.iter().filter(|&&place| place < insert).count()
 }
 
-/// The index an Alt+arrow nudge moves item `at` of `len` to: one step toward the end when `forward`, else toward the
-/// start, stopping at the ends.
-pub fn nudge_to(at: usize, len: usize, forward: bool) -> usize {
-    if forward { (at + 1).min(len.saturating_sub(1)) } else { at.saturating_sub(1) }
+/// A stacking-key move of this pass (`Intent::MoveItem`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ItemMove {
+    /// Toward the front (`]`).
+    pub front: bool,
+    /// All the way, not one place.
+    pub all_the_way: bool,
 }
 
-/// The Alt+arrow move of the focused item this pass: `Some(true)` toward the end, `Some(false)` toward the start.
-pub fn take_move_item(intents: &mut Intents) -> Option<bool> {
-    if intents.take_exact(&Intent::move_item(true)) {
-        Some(true)
-    } else if intents.take_exact(&Intent::move_item(false)) {
-        Some(false)
-    } else {
-        None
+impl ItemMove {
+    /// Whether the move goes toward the end of an order laid out along `axis`.
+    pub fn toward_end(self, axis: Axis) -> bool {
+        keys::toward_end(self.front, axis)
     }
+}
+
+/// The stacking-key move routed to the focused item this pass.
+pub fn take_move_item(intents: &mut Intents) -> Option<ItemMove> {
+    [(true, false), (false, false), (true, true), (false, true)]
+        .into_iter()
+        .find(|&(front, all_the_way)| intents.take_exact(&Intent::move_item(front, all_the_way)))
+        .map(|(front, all_the_way)| ItemMove { front, all_the_way })
 }
 
 /// The share of a group row's height, at its top and at its bottom, where a drop lands before or after the row; the
@@ -127,43 +135,54 @@ pub fn tree_gap_at(outline: &dyn NavOutline, over: usize, row: Rect, rtl: bool, 
     TreeGap { insert: over + 1, parent: holder_below(outline, over, landed), mark: line(row.max.y, landed) }
 }
 
-/// Where an Alt+arrow nudge of row `at` in a tree puts it.
+/// Where a stacking-key move lands: the gap before position `insert` of the display order (`len` after the last), in
+/// the group row `parent` (`None` at the top level).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct TreeNudge {
-    /// The row's new position, counted in the order that remains once it is taken out.
-    pub to: usize,
-    /// The group row the row lands in; `None` at the top level.
+pub struct KeyGap {
+    /// The insert position among the rows, as for `Gap::insert`.
+    pub insert: usize,
+    /// The group row the items land in.
     pub parent: Option<usize>,
 }
 
-/// The move of Alt+arrow on row `at` of a tree: one display row toward the end when `forward`, else toward the start.
-/// Moving onto a group's header from outside enters it (first child going forward); moving past the end of an open
-/// group's children from below enters it as its last child. Moving past a group's first or last child leaves it. `None`
-/// at the ends of the top level.
-pub fn nudge_in_tree(outline: &dyn NavOutline, at: usize, forward: bool) -> Option<TreeNudge> {
-    let depth = outline.depth(at);
-    let parent = parent_of(outline, at);
-    let enters = |row: usize| outline.has_children(row) && outline.open(row);
-    if forward {
-        let next = at + 1;
-        if next >= outline.len() || outline.depth(next) < depth {
-            return parent.map(|group| TreeNudge { to: at, parent: parent_of(outline, group) });
+/// Where a stacking key moves the items at `places` (display positions in order, none inside another) of an order of
+/// `len` items: one place toward the end when `toward_end`, else toward the start, or all the way with `all_the_way`.
+/// With `tree` (a reorder rule that lands `into_groups`) the items move as subtrees: one place toward the start lands
+/// before the row above the first item, at that row's depth; one place toward the end steps out of a group past its
+/// last child, into an open group past its header, and otherwise past the next row; all the way lands at the start or
+/// end of the top level. `None` when the items cannot move that way.
+pub fn key_move(len: usize, tree: Option<&dyn NavOutline>, places: &[usize], toward_end: bool, all_the_way: bool) -> Option<KeyGap> {
+    let (&first, &last) = (places.first()?, places.last()?);
+    let depth = |row: usize| tree.map_or(0, |outline| outline.depth(row));
+    let parent = |row: usize| tree.and_then(|outline| parent_of(outline, row));
+    // The last row of the subtree at `row`.
+    let subtree_end = |row: usize| (row + 1..len).find(|&below| depth(below) <= depth(row)).map_or(len - 1, |below| below - 1);
+    let block_end = subtree_end(last);
+    let packed = places.windows(2).all(|pair| pair[1] == subtree_end(pair[0]) + 1);
+    let gap = match (toward_end, all_the_way) {
+        (false, false) if first > 0 => KeyGap { insert: first - 1, parent: parent(first - 1) },
+        (false, true) if !(first == 0 && packed) => KeyGap { insert: 0, parent: None },
+        (true, false) if block_end + 1 < len => {
+            let next = block_end + 1;
+            let opens = tree.is_some_and(|outline| outline.has_children(next) && outline.open(next));
+            if depth(next) < depth(last) {
+                KeyGap { insert: next, parent: parent(next) }
+            } else if opens && next + 1 < len && depth(next + 1) > depth(next) {
+                KeyGap { insert: next + 1, parent: Some(next) }
+            } else {
+                KeyGap { insert: subtree_end(next) + 1, parent: parent(next) }
+            }
         }
-        if outline.depth(next) > depth {
+        (true, true) if !(block_end + 1 == len && packed) => KeyGap { insert: len, parent: None },
+        _ => return None,
+    };
+    let mut held = gap.parent;
+    while let Some(row) = held {
+        if places.contains(&row) {
             return None;
         }
-        Some(if enters(next) { TreeNudge { to: next, parent: Some(next) } } else { TreeNudge { to: next, parent } })
-    } else {
-        let above = at.checked_sub(1)?;
-        let above_depth = outline.depth(above);
-        if above_depth > depth {
-            let sibling = (0..above).rev().find(|&row| outline.depth(row) <= depth).filter(|&row| outline.depth(row) == depth)?;
-            return Some(TreeNudge { to: at, parent: Some(sibling) });
-        }
-        if above_depth < depth {
-            return Some(TreeNudge { to: above, parent: parent_of(outline, above) });
-        }
-        Some(if enters(above) { TreeNudge { to: at, parent: Some(above) } } else { TreeNudge { to: above, parent } })
+        held = parent(row);
     }
+    Some(gap)
 }

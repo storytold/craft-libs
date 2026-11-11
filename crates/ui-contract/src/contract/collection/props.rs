@@ -28,7 +28,7 @@ pub enum SelectMode {
 pub struct ReorderRule {
     /// Alt turns a drag into a copy (8.4).
     pub copy_with_alt: bool,
-    /// In a tree, a drop or an Alt+arrow move may land inside a group, and `ReorderMove::parent` names the group. A row
+    /// In a tree, a drop or a stacking-key move may land inside a group, and `ReorderMove::parent` names the group. A row
     /// that `has_children` is a group; an open group without visible children takes items through the middle of its row.
     pub into_groups: bool,
 }

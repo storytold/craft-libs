@@ -1,4 +1,4 @@
-//! `SectionStack`: sections in a column that the user reorders by dragging a header or with Alt+Up and Alt+Down. It
+//! `SectionStack`: sections in a column that the user reorders by dragging a header or with the stacking keys. It
 //! reuses the drag session, the drop mark and the list move event; the app applies and undoes the moves as it does a
 //! list's `Reorder`.
 
@@ -45,7 +45,7 @@ pub struct SectionStackStyle {
     metrics: Metrics,
 }
 
-/// What a stack reports: its response and the moves of this pass, one per drop or Alt+arrow.
+/// What a stack reports: its response and the moves of this pass, one per drop or stacking key.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct SectionStackOutput<K> {
@@ -68,14 +68,14 @@ struct Seen<K> {
     key: K,
     rect: Rect,
     grabbed: bool,
-    nudged: Option<bool>,
+    nudged: Option<reorder::ItemMove>,
 }
 
 /// The shared record of the sections a pass showed, which the stack reads when it finishes.
 type SeenRows<K> = Arc<Mutex<Vec<Seen<K>>>>;
 
 /// Sections in the order of `order`, each shown by the caller's closure as a `Section::in_stack`. Dragging a header
-/// or pressing Alt+Up or Alt+Down in a section moves it among the others; the stack reports the move and the app
+/// or pressing Cmd+] or Cmd+[ in a section (Ctrl off macOS; Shift to the top or bottom) moves it among the others; the stack reports the move and the app
 /// applies it. A section is moved, never copied.
 ///
 /// The stack is a container: show it with `ShowContainer::show` and fill its body with [`StackRows::each`] from
@@ -146,8 +146,10 @@ impl<'a, K: Clone + PartialEq + std::hash::Hash + Send + Sync + 'static> Section
                 self.push_move(cx, &payload.grabbed, from, reorder::move_to(from, gap.insert));
             }
         }
-        if let Some((from, forward)) = seen.iter().enumerate().find_map(|(at, section)| section.nudged.map(|forward| (at, forward))) {
-            self.push_move(cx, &seen[from].key, from, reorder::nudge_to(from, seen.len(), forward));
+        if let Some((from, mv)) = seen.iter().enumerate().find_map(|(at, section)| section.nudged.map(|mv| (at, mv)))
+            && let Some(gap) = reorder::key_move(seen.len(), None, &[from], mv.toward_end(Axis::Y), mv.all_the_way)
+        {
+            self.push_move(cx, &seen[from].key, from, reorder::move_to(from, gap.insert));
         }
     }
 

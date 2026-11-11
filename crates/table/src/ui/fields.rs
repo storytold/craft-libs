@@ -302,7 +302,7 @@ impl craft_ui::contract::Outcome for FieldListPaneOutput {
 ///
 /// - The checklist is a `List` whose rows carry a check toggle column (ticked: [`FieldListEdit::Add`], unticked:
 ///   [`FieldListEdit::Remove`]); a row's tooltip lists the field's samples.
-/// - Each area is a `Section` holding a `List` with a reorder rule, so fields move inside an area by drag or Alt+arrow
+/// - Each area is a `Section` holding a `List` with a reorder rule, so fields move inside an area by drag or Cmd+] and [
 ///   and between areas by drag. Dropped onto a field of another area, the moved fields land before it. A row's context
 ///   menu (and the Menu key) has Move to each other area, Move Up, Move Down, for a value field Summarize by and
 ///   Show as, for another field Sort and Group, then Remove Field. Delete removes the lead field. The "Σ Values" row

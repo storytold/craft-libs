@@ -2,9 +2,10 @@
 //! Pure functions over craft-keymap's `Key` and `Mods`, where `cmd` is Ctrl on Windows and Linux and Cmd on
 //! macOS and `ctrl` is the Control key on macOS only.
 
+use crate::flow::Axis;
 use crate::intent::{Granularity, Intent, MoveMods, NavMove};
 use craft_host::target::Os;
-use craft_keymap::{Key, Mods};
+use craft_keymap::{Chord, Key, Mods};
 
 /// What the focused stop is, as far as the table's rows differ.
 #[derive(Clone, Copy, Debug, Default)]
@@ -14,7 +15,7 @@ pub struct KeyRole {
     pub resettable: bool,
     /// A collection: Space is its own intent (`Intent::Space`), which the item step turns into its `SpaceAction`.
     pub space: bool,
-    /// A reorderable collection: Alt+Up and Alt+Down move the lead item.
+    /// A reorderable collection: the stacking keys (`REORDER_KEYS`) move the selected items.
     pub reorderable: bool,
     /// A collection with `CollectionProps.rename`.
     pub rename: bool,
@@ -76,7 +77,7 @@ impl KeyRole {
         self
     }
 
-    /// Alt+Up and Alt+Down move the lead item.
+    /// The stacking keys move the selected items.
     pub const fn reorderable(mut self, on: bool) -> Self {
         self.reorderable = on;
         self
@@ -179,6 +180,35 @@ pub fn split_digits(text: &str) -> (Vec<u8>, String) {
     (digits, text.chars().filter(|letter| !letter.is_ascii_digit()).collect())
 }
 
+/// The stacking keys (Photoshop's Bring Forward and Send Backward): Cmd+] moves the selected items one place toward the
+/// front, Cmd+[ one place toward the back, and with Shift all the way. Shift turns the brackets into curly brackets on
+/// most layouts, so both keys are listed. Cmd is Ctrl off macOS.
+pub const REORDER_KEYS: [Chord; 6] = [
+    Chord::new(Mods::CMD, Key::CloseBracket),
+    Chord::new(Mods::CMD, Key::OpenBracket),
+    Chord::new(Mods { shift: true, ..Mods::CMD }, Key::CloseBracket),
+    Chord::new(Mods { shift: true, ..Mods::CMD }, Key::CloseCurlyBracket),
+    Chord::new(Mods { shift: true, ..Mods::CMD }, Key::OpenBracket),
+    Chord::new(Mods { shift: true, ..Mods::CMD }, Key::OpenCurlyBracket),
+];
+
+/// The `Intent::MoveItem` a stacking key asks for, `None` for any other press.
+pub fn reorder_intent(key: Key, mods: Mods) -> Option<Intent> {
+    let chord = Chord::new(mods, key);
+    if !REORDER_KEYS.contains(&chord) {
+        return None;
+    }
+    let front = matches!(key, Key::CloseBracket | Key::CloseCurlyBracket);
+    Some(Intent::move_item(front, mods.shift))
+}
+
+/// Whether a move toward the front goes toward the end of an order laid out along `axis`. The front of a vertical
+/// order (a list, a stack of layers, a grid) is its start, as the top of a stack; a horizontal order (a strip of tabs)
+/// moves `]` later in reading order.
+pub fn toward_end(front: bool, axis: Axis) -> bool {
+    if axis == Axis::X { front } else { !front }
+}
+
 fn is_arrow(key: Key) -> bool {
     matches!(key, Key::Up | Key::Down | Key::Left | Key::Right)
 }
@@ -194,10 +224,13 @@ pub fn intent(os: Os, key: Key, mods: Mods, role: KeyRole) -> Option<Intent> {
     if role.nudge && is_arrow(key) {
         return None;
     }
-    if !role.reorderable
-        && let Some(fine) = fine_move(key, mods, role)
-    {
+    if let Some(fine) = fine_move(key, mods, role) {
         return Some(fine);
+    }
+    if role.reorderable
+        && let Some(reorder) = reorder_intent(key, mods)
+    {
+        return Some(reorder);
     }
     match key {
         Key::Delete | Key::Backspace if plain && role.resettable => return Some(Intent::Reset),
@@ -208,8 +241,6 @@ pub fn intent(os: Os, key: Key, mods: Mods, role: KeyRole) -> Option<Intent> {
         Key::Enter if plain && role.rename && mac => return Some(Intent::Rename),
         Key::Down if mac && role.rename && only(Mods::CMD) => return Some(Intent::Activate),
         Key::Enter if only(Mods::CMD) => return Some(Intent::SubmitForce),
-        Key::Up if only(Mods::ALT) && role.reorderable => return Some(Intent::move_item(false)),
-        Key::Down if only(Mods::ALT) && role.reorderable => return Some(Intent::move_item(true)),
         Key::Down if only(Mods::ALT) => return Some(Intent::Open),
         Key::Up if only(Mods::ALT) => return Some(Intent::Close),
         Key::PageUp if !mac && only(Mods::CMD) => return Some(Intent::switch_page(false)),

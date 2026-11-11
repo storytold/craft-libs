@@ -247,31 +247,40 @@ pub(super) fn rename_commits_and_cancels_once(subject: &Subject) -> Result<(), S
     Ok(())
 }
 
-/// Alt+Down on the lead, for a reorderable collection: one end event and no cancel.
+/// A stacking key on the first row, for a reorderable collection: one end event and no cancel. Cmd+[ moves the row
+/// toward the back, the end of a vertical order; a horizontal order (a strip) moves it later with Cmd+].
 pub(super) fn keyboard_reorder_ends_once(subject: &Subject) -> Result<(), String> {
     if !is_items(subject) {
         return Ok(());
     }
-    for story in &subject.stories {
-        let Some((mut fixture, _, shown)) = with_rows(story, 2) else { continue };
-        row_click::click(&mut fixture, &shown[0]);
-        fixture.take_outputs();
-        fixture.key(Key::ArrowDown, Modifiers::ALT);
-        fixture.settle();
-        let kinds = events(&mut fixture);
-        let reorders: Vec<EditKind> = kinds
+    let reorders = |kinds: &[CollectionKind]| -> Vec<EditKind> {
+        kinds
             .iter()
             .filter_map(|kind| match kind {
                 CollectionKind::Reorder(edit) => Some(*edit),
                 _ => None,
             })
-            .collect();
-        if reorders.is_empty() {
+            .collect()
+    };
+    for story in &subject.stories {
+        let Some((mut fixture, _, shown)) = with_rows(story, 2) else { continue };
+        row_click::click(&mut fixture, &shown[0]);
+        fixture.take_outputs();
+        let mut moved = Vec::new();
+        for key in [Key::OpenBracket, Key::CloseBracket] {
+            fixture.key(key, Modifiers::COMMAND);
+            fixture.settle();
+            moved = reorders(&events(&mut fixture));
+            if !moved.is_empty() {
+                break;
+            }
+        }
+        if moved.is_empty() {
             continue;
         }
-        let ends = reorders.iter().filter(|edit| matches!(edit, EditKind::Commit | EditKind::Set)).count();
-        if ends != 1 || reorders.contains(&EditKind::Cancel) {
-            return Err(format!("{}: Alt+Down gave the reorder events {reorders:?}", story.name));
+        let ends = moved.iter().filter(|edit| matches!(edit, EditKind::Commit | EditKind::Set)).count();
+        if ends != 1 || moved.contains(&EditKind::Cancel) {
+            return Err(format!("{}: a stacking key gave the reorder events {moved:?}", story.name));
         }
     }
     Ok(())

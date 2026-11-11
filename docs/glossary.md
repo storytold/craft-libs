@@ -132,7 +132,7 @@ One row per name in the author table (Overview) and per `pub` item a component a
 | `Input` | How input reaches a component | craft-behavior | 1.1 |
 | `Insets` | Start, end, top and bottom distances, mirrored by `Flow` | craft-behavior | 6.2 |
 | `Intent` | A key, AccessKit action or typed text turned into meaning | craft-behavior | 9.2 |
-| `Intent::MoveItem` | Moves the lead item of a reorderable collection one place | craft-behavior | 9.2, 17.3 |
+| `Intent::MoveItem` | A stacking key (Cmd+] or Cmd+[, Shift to the ends) on a reorderable collection: moves its selected items | craft-behavior | 9.2, 17.3 |
 | `Intent::Open` | Opens a `Trigger::Hold` or dropdown opener | craft-behavior | 9.2, 15.5 |
 | `Intents` | The owned copy of the intents routed to one id this pass, read with `cx.intents()` and its `take_*` calls | `craft_ui::runtime::keys` | 9.2 |
 | `Internal` | A token only craft-ui can build, taken by the derive-written accessors | `craft_ui::contract` | 1.1 |

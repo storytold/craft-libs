@@ -180,11 +180,14 @@ pub enum Intent {
         /// To the next page.
         forward: bool,
     },
-    /// Move the lead of a reorderable collection.
+    /// Move the selected items of a reorderable collection (the stacking keys, `keys::reorder_intent`).
     #[non_exhaustive]
     MoveItem {
-        /// Toward the end.
-        forward: bool,
+        /// Toward the front (`]`): the start of a vertical order, the reading end of a horizontal one
+        /// (`keys::toward_end`).
+        front: bool,
+        /// All the way to the front or back, not one place.
+        all_the_way: bool,
     },
     /// Open a `Trigger::Hold` or dropdown opener.
     Open,
@@ -205,9 +208,9 @@ impl Intent {
         Intent::SwitchPage { forward }
     }
 
-    /// `MoveItem` toward the end when `forward`.
-    pub const fn move_item(forward: bool) -> Intent {
-        Intent::MoveItem { forward }
+    /// `MoveItem` toward the front when `front`, all the way when `all_the_way`.
+    pub const fn move_item(front: bool, all_the_way: bool) -> Intent {
+        Intent::MoveItem { front, all_the_way }
     }
 
     /// Whether `self` and `other` are the same kind of intent, whatever their data.

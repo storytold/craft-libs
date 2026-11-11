@@ -329,7 +329,7 @@ impl Default for Session {
 ///   action opens Keyboard Shortcuts and Color; on a set, Save Set….
 /// - **Keys**: the rows are one Tab stop: arrows move, Left and Right close and open, Enter plays
 ///   an action or toggles a set, Space toggles the include cell, F2 renames, Delete deletes the
-///   selection (not an action while recording), Alt+Up and Alt+Down move the row. The footer
+///   selection (not an action while recording), Cmd/Ctrl+] and [ move the row, Shift to the ends. The footer
 ///   buttons are Tab stops after the list. Edits are refused while [`ActionsHost::playing`].
 /// - **Button Mode**: each action is a button in its colour, set names between; a click plays it
 ///   once. Button Mode is off while recording.

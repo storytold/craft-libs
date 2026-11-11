@@ -112,7 +112,7 @@ pub enum LayersEvent<K> {
     Properties(LayerPropertyEdit),
     /// The filter bar's edit, for a filter binding that does not write through.
     Filter(EditEvent<LayerFilter>),
-    /// A drop of rows (a drag, Alt+Up and Down, or a stacking command): one `Set`, one undo step.
+    /// A drop of rows (a drag, a stacking key in the list, or a stacking command): one `Set`, one undo step.
     Drop(EditEvent<LayerDrop<K>>),
     /// A press on a footer button.
     Footer(LayersFooterAction),

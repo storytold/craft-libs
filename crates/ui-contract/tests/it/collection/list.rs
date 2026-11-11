@@ -165,6 +165,45 @@ fn a_list_with_one_tab_stop_moves_its_lead_and_selects() {
     assert!(seen.selections().len() >= 3);
 }
 
+/// The stacking keys move the selected rows as a block: Cmd+] one place toward the top, Shift+Cmd+[ to the bottom.
+/// Alt+Down is no reorder key.
+#[trial]
+fn stacking_keys_move_the_selected_rows() {
+    let words = Words::flat(&labels());
+    let seen = Seen::default();
+    let selection = RefCell::new(Selection::<usize>::default());
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        let mut held = selection.borrow().clone();
+        let list = List::new(SelectMode::Multi).reorder().selection(Bind::bound(&mut held));
+        show_words(ui, list, &words, &seen);
+        *selection.borrow_mut() = held;
+    };
+    frames.idle(2, &mut show);
+    focus_list(&mut frames, &seen, &mut show);
+    press(&mut frames, Key::ArrowDown, Modifiers::NONE, &mut show);
+    press(&mut frames, Key::ArrowDown, Modifiers::NONE, &mut show);
+    press(&mut frames, Key::ArrowDown, Modifiers::NONE, &mut show);
+    press(&mut frames, Key::ArrowDown, Modifiers::SHIFT, &mut show);
+    let moves = |seen: &Seen| -> Vec<(Vec<usize>, usize)> {
+        let events: Vec<_> = seen.events.borrow_mut().drain(..).collect();
+        events
+            .iter()
+            .filter_map(|event| match event {
+                CollectionEvent::Reorder(edit) => edit.value().map(|mv| (mv.keys.clone(), mv.to)),
+                _ => None,
+            })
+            .collect()
+    };
+    moves(&seen);
+    press(&mut frames, Key::ArrowDown, Modifiers::ALT, &mut show);
+    assert_eq!(moves(&seen), Vec::new(), "Alt+Down moves nothing");
+    press(&mut frames, Key::CloseBracket, Modifiers::COMMAND, &mut show);
+    assert_eq!(moves(&seen), vec![(vec![2, 3], 1)], "Cmd+] moves both selected rows one place up");
+    press(&mut frames, Key::OpenBracket, Modifiers::COMMAND | Modifiers::SHIFT, &mut show);
+    assert_eq!(moves(&seen), vec![(vec![2, 3], 4)], "Shift+Cmd+[ moves them to the bottom");
+}
+
 /// A million rows: the last row places and hits exactly through the runtime.
 #[trial]
 fn a_million_row_layout_places_and_hits_the_last_row_exactly() {

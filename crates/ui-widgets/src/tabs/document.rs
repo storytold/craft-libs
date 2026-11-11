@@ -129,7 +129,7 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
         self
     }
 
-    /// Tabs reorder by drag and by Alt+Left and Alt+Right.
+    /// Tabs reorder by drag and by Cmd+] and Cmd+[ (Ctrl off macOS; Shift to the ends).
     pub fn reorderable(mut self, on: bool) -> Self {
         self.reorderable = on;
         self

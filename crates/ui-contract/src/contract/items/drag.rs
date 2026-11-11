@@ -529,23 +529,42 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
     }
 
-    /// Alt+arrow on row `at`: the row moves one place, and with `into_groups` in a tree it enters or leaves a group.
-    pub(super) fn nudge_reorder(&mut self, cx: &mut Cx<'_, C>, props: &CollectionProps, at: usize, forward: bool) {
+    /// A stacking key on the lead row `at`: the selection moves when the lead is in it, else the lead, as a row drag
+    /// takes them (`reorder::key_move`).
+    pub(super) fn key_reorder(&mut self, cx: &mut Cx<'_, C>, props: &CollectionProps, at: usize, mv: reorder::ItemMove) {
         let groups = props.reorder.is_some_and(|rule| rule.into_groups);
         let outline = Outline::new(self.source);
-        let (to, parent) = if groups {
-            let Some(nudge) = reorder::nudge_in_tree(&outline, at, forward) else { return };
-            (nudge.to, nudge.parent.map(|row| self.source.key(row)))
-        } else {
-            (reorder::nudge_to(at, self.source.len(), forward), None)
-        };
-        let held = if groups { reorder::parent_of(&outline, at).map(|row| self.source.key(row)) } else { None };
-        if to == at && parent == held {
+        let tree = groups.then_some(&outline as &dyn craft_behavior::NavOutline);
+        let mut places: Vec<usize> = if self.holds(at) { self.placed().rows() } else { vec![at] };
+        places.sort_unstable();
+        // A selected row inside another selected row moves with it.
+        if groups {
+            let all = places.clone();
+            places.retain(|&row| {
+                let mut held = reorder::parent_of(&outline, row);
+                while let Some(up) = held {
+                    if all.contains(&up) {
+                        return false;
+                    }
+                    held = reorder::parent_of(&outline, up);
+                }
+                true
+            });
+        }
+        let toward_end = mv.toward_end(self.overflow);
+        let Some(gap) = reorder::key_move(self.source.len(), tree, &places, toward_end, mv.all_the_way) else { return };
+        let Some(&from) = places.first() else { return };
+        let to = reorder::move_all_to(&places, gap.insert);
+        let parent = gap.parent.map(|row| self.source.key(row));
+        let held = if groups { reorder::parent_of(&outline, from).map(|row| self.source.key(row)) } else { None };
+        let together = places.iter().enumerate().all(|(n, &place)| place == from + n);
+        if to == from && together && parent == held {
             return;
         }
+        let keys: Vec<C::Key> = places.iter().map(|&place| self.source.key(place)).collect();
         let key = self.source.key(at);
-        let before = ReorderMove::new(key.clone(), vec![key.clone()], at, false).in_group(held);
-        let after = ReorderMove::new(key.clone(), vec![key], to, false).in_group(parent);
+        let before = ReorderMove::new(key.clone(), keys.clone(), from, false).in_group(held);
+        let after = ReorderMove::new(key, keys, to, false).in_group(parent);
         self.events.push(CollectionEvent::Reorder(EditEvent::set(Mixed::Same(before), after, cx.core.label_arc(), None)));
     }
 

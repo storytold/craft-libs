@@ -246,7 +246,8 @@ impl<K: Send + Sync + 'static> WindowDropTarget<ListDrag<K>> for TearOff {
 }
 
 /// A strip of tabs: one Tab stop, arrows move the lead (and the selection with it), a click selects, Enter and a
-/// double click activate, Alt+Left and Alt+Right (or a drag) reorder, the menu key asks for the tab's context menu.
+/// double click activate, Cmd/Ctrl+] and [ (or a drag) move the tab later and earlier, Shift to the ends, the menu key
+/// asks for the tab's context menu.
 ///
 /// The `kind` picks the rules: document and text tabs keep whole titles and send the rest to an overflow menu of
 /// every tab; panel tabs shrink before they overflow and the menu lists the hidden ones. The shown tab is always

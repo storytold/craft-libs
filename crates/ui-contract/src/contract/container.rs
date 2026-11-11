@@ -186,8 +186,8 @@ pub enum DragBand {
     None,
     /// Moves the container.
     Move,
-    /// Reorders the container among its siblings. The header's band takes the drag (the `REORDER_BAND` part), and
-    /// Alt+Up and Alt+Down on the container give `Intent::MoveItem` instead of closing or opening it.
+    /// Reorders the container among its siblings. The header's band takes the drag (the `REORDER_BAND` part), and the
+    /// stacking keys (`keys::REORDER_KEYS`) anywhere in the container give `Intent::MoveItem`.
     Reorder,
 }
 

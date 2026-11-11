@@ -205,15 +205,15 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
     }
 
-    /// Alt+arrow moves the lead's row; the rename command starts an edit of its name.
+    /// The stacking keys move the selection (or the lead's row); the rename command starts an edit of its name.
     pub(super) fn reorder_and_rename(&mut self, comp: &C, cx: &mut Cx<'_, C>, props: &CollectionProps, lead_at: Option<usize>) {
-        if let Some(forward) = crate::contract::reorder::take_move_item(&mut cx.core.intents)
+        if let Some(mv) = crate::contract::reorder::take_move_item(&mut cx.core.intents)
             && props.reorder.is_some()
             && let Some(at) = lead_at
             && !self.source.section_stop(at)
             && comp.can_drag(&self.source.key(at))
         {
-            self.nudge_reorder(cx, props, at, forward);
+            self.key_reorder(cx, props, at, mv);
         }
         if props.rename
             && cx.core.intents.take(Intent::Rename)
