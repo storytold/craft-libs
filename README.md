@@ -31,6 +31,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-pdf`](crates/pdf/README.md): independently optional PDF parsing, interpretation, rasterization and guarded authoring. Apps retain layout, fonts, editing and export policy; writer-only consumers do not enable the shared reader.
 
 - [`craft-atomic`](crates/atomic/README.md): Crash-safe atomic file writing and replacement with same-directory staging, directory fsync, Apple `F_FULLFSYNC` fallback, transient lock backoff, and fault injection for the Craft suite.
+- [`craft-cfb`](crates/cfb/README.md): clean-room Compound File Binary ([MS-CFB], OLE structured
+  storage) reader and writer: the container of legacy Office files, Outlook messages, encrypted
+  OOXML packages and AAF. Bounded on hostile input; what the streams hold stays with each format.
 - [`craft-cms`](crates/cms/README.md): pure-Rust ICC v2/v4 colour management: profile parsing
   and writing, transforms, rendering intents, black point compensation, soft proofing, gamut
   checks, 3D LUTs and built-in profiles (sRGB, Display P3, synthetic coated CMYK and others).
@@ -85,6 +88,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   every field type, the IFD chain, SubIFDs and Exif/GPS/Interop pointer IFDs, maker-note IFDs
   (Canon, Nikon, Sony, Fujifilm, Olympus, Panasonic, Pentax), strip and tile layout. Bounded and
   panic-free on hostile input. Pixel decompression stays with the callers.
+- [`craft-metafile`](crates/metafile/README.md): Windows metafiles, from DeckCraft, WordCraft and
+  VectorCraft: a WMF, EMF and EMF+ reader into a neutral picture (paths with line styles, pattern
+  fills, bitmaps, text, clip regions and clip paths) and, behind `write`, EMF and WMF writers.
+  Bounded and panic-free on hostile input. Mapping the picture onto a document stays in each app.
 - [`craft-jpeg`](crates/jpeg/README.md): clean-room decoder for 12-bit and arithmetic-coded
   JPEG (T.81 SOF0/SOF1 at 12 bits, SOF9, SOF10), from PhotoCraft, and a frame probe for routing.
   Metadata stays in each app.
@@ -103,6 +110,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   (app menu, Window, Help, system-key clashes), a platform backend trait, and key equivalents
   fed back to egui as the input egui-winit would have made. Commands and their enabled state
   stay in each app.
+- [`craft-mesh`](crates/mesh/README.md): 3D mesh file formats behind one neutral model (meshes
+  of polygons with per-corner indices, materials, a node hierarchy): STL, OBJ with MTL, PLY and
+  glTF 2.0 / GLB, one feature each. Readers are bounded by `Limits`, never open a file themselves
+  and never panic. Carved from EffectCraft, SolidCraft, TextureCraft and MaterialCraft.
 - [`craft-mime`](crates/mime/README.md): Internet messages and MIME, read and written: RFC 5322
   header fields, MIME parts and multiparts, encoded-words, RFC 2231 parameters, base64 and
   quoted-printable, character sets, address lists, dates, mbox files and the `multipart/related`

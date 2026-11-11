@@ -24,6 +24,7 @@ bytemuck = "1"
 kurbo = "0.13"
 thiserror = "2"
 craft-atomic = { path = "crates/atomic" }
+craft-cfb = { path = "crates/cfb" }
 craft-cms = { path = "crates/cms" }
 craft-crw = { path = "crates/crw" }
 craft-dialogs = { path = "crates/dialogs" }
@@ -35,6 +36,7 @@ craft-font-catalog = { path = "crates/font-catalog" }
 craft-font-manager = { path = "crates/font-manager" }
 craft-font-store = { path = "crates/font-store" }
 craft-gcode = { path = "crates/gcode" }
+craft-mesh = { path = "crates/mesh" }
 craft-heif = { path = "crates/heif" }
 craft-fonts-build = { path = "crates/fonts-build" }
 craft-i18n = { path = "crates/i18n" }
@@ -46,6 +48,7 @@ craft-media = { path = "crates/media", default-features = false }
 craft-media-testkit = { path = "crates/media-testkit" }
 craft-mime = { path = "crates/mime" }
 craft-menu = { path = "crates/menu" }
+craft-metafile = { path = "crates/metafile" }
 craft-pcraft-format = { path = "crates/pcraft-format" }
 craft-prepress = { path = "crates/prepress" }
 craft-print = { path = "crates/print" }
