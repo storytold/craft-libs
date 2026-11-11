@@ -53,10 +53,11 @@ One module and one Cargo feature per maker or container family. All are on by de
 | `dng` | Adobe DNG | Uncompressed at 1 to 16 bits (packed MSB-first, or 8/16-bit in file byte order), lossless JPEG (all seven predictors, 1 to 4 components, point transform, restart intervals), lossy JPEG (compression 34892, 8-bit baseline tiles or strips), Deflate with predictors 1, 2 and the floating-point predictors (16, 24 and 32-bit floats), strips and tiles, planar or interleaved, CFA of any period up to 16 × 16 (Bayer, X-Trans) and LinearRaw with 1, 3 or 4 samples, DNG 1.7 row and column interleave, reduced-resolution LinearRaw copies (`decode_reduced`), semantic masks, CinemaDNG frame tags. Writing: uncompressed, lossless JPEG tiles, Deflate tiles (integer, half and single floats) |
 | `jxl` | JPEG XL DNG (DNG 1.7, compression 52546) | Lossless and lossy tiles through `jxl-oxide`; implies `dng` |
 | `crw` | Canon CRW (CIFF) | Decoded by [`craft-crw`](../crw/README.md), the one CRW decoder, and returned through this crate's types |
+| `hasselblad` | Hasselblad 3FR and FFF, and other CFA TIFFs in the DNG layout without a DNG version tag (`RawFormat::CfaTiff`) | Uncompressed and Hasselblad's lossless JPEG (predictor selection value 8); RGGB from the sensor origin when the file states no `CFAPattern`; an FFF's colour matrix from the 3FR header it embeds; the 8-bit RGB preview handed on as a baseline TIFF. Implies `dng` |
 
 Not decoded: GoPro VC-5 DNG (GPR), CFA with more than three colours, non-rectangular CFA layouts.
 `probe` names every container it can tell apart whatever the features (CR2, CR3, NEF, NRW, ARW,
-RAF, ORF, RW2, PEF, SRW, MRW, X3F, DNG-layout CFA TIFF such as 3FR/FFF, other TIFF-based raws);
+RAF, ORF, RW2, PEF, SRW, MRW, X3F, other TIFF-based raws);
 their decoders are still in the apps and move here one maker family at a time.
 `RawFormat::is_supported` says what this build decodes.
 
@@ -92,6 +93,7 @@ the three supported was kept:
 | PhotoCraft, FilmCraft | A lossy tile's JPEG must cover the part of its tile inside the image | a smaller JPEG left the rest of the tile black |
 | FilmCraft | CinemaDNG `FrameRate`, `TimeCodes` and `ReelName` (`RawImage::cinema`), read and written | not read |
 | craft-crw | A big-endian (`MM`) CIFF header is a CRW | `probe` knew only `II` |
+| PhotoCraft | Hasselblad: four `BlackLevel` values without `BlackLevelRepeatDim` are one per site of the 2 × 2 CFA (files that are not DNGs only) | the first value was used for every site |
 
 Left as LightCraft has it, with the reason:
 
@@ -101,6 +103,11 @@ Left as LightCraft has it, with the reason:
 - An edge tile's lossless or lossy JPEG smaller than the nominal tile is accepted when it covers
   the rows inside the image. PhotoCraft and FilmCraft refuse any size mismatch; LightCraft's
   tolerance is for writers that encode edge tiles at their visible size.
+- A Hasselblad-layout file without `AsShotNeutral` is not claimed (`OtherTiff`, preview only):
+  nothing in it says how to read its colour. PhotoCraft decodes any Hasselblad CFA IFD and measures
+  a missing white level from the samples, which is develop-side work. PhotoCraft refuses the
+  lossless-JPEG files; LightCraft's selection-value-8 decoder reads them. Both measured the same
+  CFA phase (red at the sensor origin) on different bodies (H4D-40, X2D II 100C).
 - Lossy JPEG is accepted for CFA data (one grey component) as in PhotoCraft; FilmCraft refuses it
   because DNG 1.4 allows the coding for LinearRaw only.
 
