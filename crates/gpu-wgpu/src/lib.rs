@@ -232,13 +232,13 @@ impl WgpuContext {
             // second, successful adapter query would report the adapter's advertised limits as
             // if they came from a granted device -- the exact thing probe_caps's own doc comment
             // says caps() must never do for a context with no device.
-            return Self {
+            Self {
                 caps: probe_fallback("wgpu", "no-device"),
                 worker_kind,
                 backing: Backing::Staging(Vec::new()),
                 next_request: 0,
                 ready: Vec::new(),
-            };
+            }
         }
         #[cfg(not(all(not(target_arch = "wasm32"), feature = "adapter-probe")))]
         Self { caps: probe_caps(), worker_kind, backing: Backing::Staging(Vec::new()), next_request: 0, ready: Vec::new() }
