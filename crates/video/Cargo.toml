@@ -59,3 +59,11 @@ required-features = ["vp8"]
 [[test]]
 name = "prores"
 required-features = ["prores"]
+
+[[test]]
+name = "hevc"
+required-features = ["hevc"]
+
+[[test]]
+name = "av1"
+required-features = ["av1"]
