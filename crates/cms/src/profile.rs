@@ -184,6 +184,8 @@ pub struct Profile {
 impl Profile {
     /// Parses ICC profile bytes.
     pub fn parse(bytes: &[u8]) -> Result<Profile, CmsError> {
+        CURVE_SAMPLES_LEFT.with(|left| left.set(MAX_CURVE_SAMPLES));
+        CLUT_VALUES_LEFT.with(|left| left.set(MAX_PROFILE_CLUT_VALUES));
         let mut p = parse_profile(bytes)?;
         p.bytes = Some(Arc::new(bytes.to_vec()));
         Ok(p)
@@ -577,6 +579,39 @@ fn parse_profile(bytes: &[u8]) -> Result<Profile, CmsError> {
     Ok(p)
 }
 
+/// Sampled-curve entries one profile may decode in all (64 MB of `f32`). Tags and curve groups can
+/// point at the same encoded bytes, and each reference decodes its own table.
+const MAX_CURVE_SAMPLES: usize = 16 << 20;
+
+/// CLUT values one profile may decode in all (128 MB of `f32`): the twelve LUT tags can alias
+/// one table, and each reference decodes its own copy.
+const MAX_PROFILE_CLUT_VALUES: usize = 32 << 20;
+
+thread_local! {
+    /// What is left of [`MAX_CURVE_SAMPLES`] for the profile being parsed on this thread.
+    static CURVE_SAMPLES_LEFT: std::cell::Cell<usize> = const { std::cell::Cell::new(MAX_CURVE_SAMPLES) };
+    /// What is left of [`MAX_PROFILE_CLUT_VALUES`] for the profile being parsed on this thread.
+    static CLUT_VALUES_LEFT: std::cell::Cell<usize> = const { std::cell::Cell::new(MAX_PROFILE_CLUT_VALUES) };
+}
+
+/// Charges `n` decoded curve samples to the profile being parsed.
+fn charge_curve_samples(n: usize) -> Result<(), CmsError> {
+    CURVE_SAMPLES_LEFT.with(|left| {
+        let rest = left.get().checked_sub(n).ok_or_else(|| CmsError::Invalid("the profile's curves hold too many samples".into()))?;
+        left.set(rest);
+        Ok(())
+    })
+}
+
+/// Charges `n` decoded CLUT values to the profile being parsed.
+fn charge_clut_values(n: usize) -> Result<(), CmsError> {
+    CLUT_VALUES_LEFT.with(|left| {
+        let rest = left.get().checked_sub(n).ok_or_else(|| CmsError::Invalid("the profile's lookup tables hold too many values".into()))?;
+        left.set(rest);
+        Ok(())
+    })
+}
+
 /// Parses a `curv` or `para` element; returns the curve and the element's byte length
 /// (unpadded).
 fn parse_curve(d: &[u8]) -> Result<(Curve, usize), CmsError> {
@@ -596,6 +631,7 @@ fn parse_curve(d: &[u8]) -> Result<(Curve, usize), CmsError> {
                 1 => Ok((Curve::Gamma(r.u16(12)? as f64 / 256.0), len)),
                 _ => {
                     let s = r.slice(12, n * 2)?;
+                    charge_curve_samples(n)?;
                     let t = s.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]]) as f32 / 65535.0).collect();
                     Ok((Curve::Table(t), len))
                 }
@@ -672,6 +708,7 @@ fn parse_lut(d: &[u8], a2b: bool) -> Result<Lut, CmsError> {
                 return Err(CmsError::Invalid("CLUT too large".into()));
             }
             let total = nodes as usize * o;
+            charge_clut_values(total)?;
             let s = r.slice(off, total * bps)?;
             let data: Vec<f32> = if wide {
                 s.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]]) as f32 / 65535.0).collect()
@@ -722,6 +759,7 @@ fn parse_lut(d: &[u8], a2b: bool) -> Result<Lut, CmsError> {
                     return Err(CmsError::Invalid("CLUT too large".into()));
                 }
                 let total = nodes as usize * cout;
+                charge_clut_values(total)?;
                 let data: Vec<f32> = match prec {
                     1 => r.slice(off + 20, total)?.iter().map(|b| *b as f32 / 255.0).collect(),
                     2 => r.slice(off + 20, total * 2)?.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]]) as f32 / 65535.0).collect(),
@@ -887,5 +925,63 @@ mod tests {
         assert_eq!(eval(&cached(&p3, lab, opts).unwrap()), want);
         // Control: sRGB still gets its own transform after the colliding lookup.
         assert_eq!(eval(&cached(srgb, lab, opts).unwrap()), sr);
+    }
+}
+
+#[cfg(test)]
+mod parse_budget_tests {
+    use super::*;
+
+    #[test]
+    fn aliased_curves_are_charged_for_each_decoded_table() {
+        // One 1M-sample `curv` element referenced seventeen times decodes 17M samples.
+        let mut element = b"curv\0\0\0\0".to_vec();
+        element.extend((1u32 << 20).to_be_bytes());
+        element.extend(std::iter::repeat_n(0u8, 2 << 20));
+        CURVE_SAMPLES_LEFT.with(|left| left.set(MAX_CURVE_SAMPLES));
+        let failed_at = (0..17).find(|_| parse_curve(&element).is_err());
+        assert_eq!(failed_at, Some(16), "sixteen tables fit the budget, the seventeenth does not");
+        // Each profile parse starts with a fresh budget.
+        CURVE_SAMPLES_LEFT.with(|left| left.set(MAX_CURVE_SAMPLES));
+        assert!(parse_curve(&element).is_ok());
+    }
+
+    /// Three parses of one encoded element: each decodes its own copy, so the third passes the
+    /// allowance (the table itself is within the per-table limit).
+    fn assert_third_copy_refused(element: &[u8]) {
+        CLUT_VALUES_LEFT.with(|left| left.set(MAX_PROFILE_CLUT_VALUES));
+        assert!(parse_lut(element, true).is_ok());
+        assert!(parse_lut(element, true).is_ok());
+        assert!(parse_lut(element, true).is_err(), "the third decoded copy passes the profile's allowance");
+        CLUT_VALUES_LEFT.with(|left| left.set(MAX_PROFILE_CLUT_VALUES));
+        assert!(parse_lut(element, true).is_ok());
+    }
+
+    #[test]
+    fn aliased_mab_cluts_are_charged_for_each_decoded_table() {
+        // mAB 3 -> 1: B curve at 32, A curves at 44, a 255^3 x 1 8-bit CLUT at 80.
+        let mut e = b"mAB \0\0\0\0".to_vec();
+        e.extend([3, 1, 0, 0]);
+        for off in [32u32, 0, 0, 80, 44] {
+            e.extend(off.to_be_bytes());
+        }
+        for _ in 0..4 {
+            e.extend(b"curv\0\0\0\0\0\0\0\0");
+        }
+        e.extend([255, 255, 255]);
+        e.resize(80 + 16, 0);
+        e.extend([1, 0, 0, 0]);
+        e.extend(std::iter::repeat_n(0u8, 255 * 255 * 255));
+        assert_third_copy_refused(&e);
+    }
+
+    #[test]
+    fn aliased_mft1_cluts_are_charged_for_each_decoded_table() {
+        // mft1 3 -> 1 with a 250^3 x 1 CLUT: input tables, CLUT, output table.
+        let mut e = b"mft1\0\0\0\0".to_vec();
+        e.extend([3, 1, 250, 0]);
+        e.resize(48, 0);
+        e.extend(std::iter::repeat_n(0u8, 3 * 256 + 250usize.pow(3) + 256));
+        assert_third_copy_refused(&e);
     }
 }
