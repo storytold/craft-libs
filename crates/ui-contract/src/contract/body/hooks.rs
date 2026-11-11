@@ -518,7 +518,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
     ) -> Option<std::rc::Rc<dyn Any>> {
         let props = Arc::clone(&self.props);
         let header = props.header?;
-        let parts = comp.header_parts(cx);
+        let parts = layout_memory::boundary(cx.ui.ctx(), true, || comp.header_parts(cx));
         if parts == crate::contract::HeaderParts::NONE {
             return None;
         }

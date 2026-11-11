@@ -250,10 +250,12 @@ impl<'b> BodyHooks<'b> {
         bcx.close_requested()
     }
 
-    /// The room the container's own header parts take this pass (`Container::header_parts`).
+    /// The room the container's own header parts take this pass (`Container::header_parts`). The faces it measures
+    /// are a question about the parts, not content of the body around: no transcript keeps or checks them.
     pub(super) fn header_parts<C: Container>(comp: &C, ui: &Ui, env: &Env, cx: &crate::contract::Cx<'_, C>) -> HeaderParts {
         let input = crate::contract::steps::MeasureIn { ui, env, proposal: craft_behavior::Proposal::Ideal, room: None };
-        comp.header_parts(&crate::contract::steps::measure_cx::<C>(&input, cx.style, cx.core.resolved, cx.shown.as_deref()))
+        let measure = crate::contract::steps::measure_cx::<C>(&input, cx.style, cx.core.resolved, cx.shown.as_deref());
+        crate::runtime::layout_memory::boundary(ui.ctx(), true, || comp.header_parts(&measure))
     }
 
     /// The header's line inside its inset, less the slots of the container's own header parts at its two edges: the

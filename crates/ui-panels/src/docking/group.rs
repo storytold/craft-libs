@@ -312,9 +312,10 @@ impl<P: Clone + Hash + Send + Sync + 'static> Component for DockGroup<'_, P> {
         let sense = if self.movable { Sense::CLICK | Sense::DRAG | Sense::FOCUS } else { Sense::CLICK | Sense::FOCUS };
         let _ = cx.header_part(HeaderEdge::End, GRIP, band).sense(sense).focusable();
         if self.menu_button() {
-            let size = cx.face(Self::menu_face(words.panel_menu.clone()));
-            let end = rest.take_end(size.x).0;
-            let button = Rect::from_min_size(egui::Pos2::new(end.left(), slot.top()), Vec2::new(end.width(), size.y.min(slot.height())));
+            // An icon button is square: its side is the slot's room past the band and the gap.
+            let side = (slot.width() - cx.tokens.size.handle.band_outer - cx.tokens.space.gap.item).max(0.0);
+            let end = rest.take_end(side).0;
+            let button = Rect::from_min_size(egui::Pos2::new(end.left(), slot.top()), Vec2::new(end.width(), side.min(slot.height())));
             let _ = cx
                 .header_part(HeaderEdge::End, MENU, button)
                 .sense(Sense::CLICK | Sense::FOCUS)
