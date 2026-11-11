@@ -128,6 +128,13 @@ impl From<ac3::Error> for AudioError {
     }
 }
 
+#[cfg(any(feature = "ac3-encode", feature = "eac3-encode"))]
+impl From<ac3::encoder::Error> for AudioError {
+    fn from(e: ac3::encoder::Error) -> Self {
+        AudioError::Encode(e.to_string())
+    }
+}
+
 #[cfg(feature = "mpa-decode")]
 impl From<mpa::Error> for AudioError {
     fn from(e: mpa::Error) -> Self {

@@ -379,3 +379,10 @@ fn surround_compatibility_downmix_retains_correlated_signal_headroom() -> Result
     assert!(left.iter().all(|v| v.abs() < 1.05));
     Ok(())
 }
+
+#[test]
+fn encoder_errors_convert_to_audio_errors() {
+    let bad = Config { codec: Codec::Ac3, sample_rate: 22_050, bitrate_kbps: 192, mode: CodingMode::Stereo, lfe: false };
+    let made: crate::Result<Encoder> = Encoder::new(bad).map_err(Into::into);
+    assert!(matches!(made, Err(crate::AudioError::Encode(m)) if m.contains("sample rate")));
+}
