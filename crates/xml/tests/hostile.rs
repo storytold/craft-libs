@@ -19,18 +19,6 @@ fn text_len(e: &El) -> usize {
 }
 
 #[test]
-fn the_defaults_are_the_documented_ones() {
-    assert_eq!(
-        Limits::default(),
-        Limits { max_input: 256 * 1024 * 1024, max_depth: 256, max_nodes: 2_000_000, max_attrs: 1024, max_attrs_total: 4_000_000 }
-    );
-    for e in [Error::TooLarge(1), Error::TooDeep(1), Error::TooManyNodes(1), Error::TooManyAttrs(1), Error::TooManyAttrsTotal(1)] {
-        assert!(e.is_limit(), "{e}");
-    }
-    assert!(!Error::NoRoot.is_limit() && !Error::Doctype.is_limit());
-}
-
-#[test]
 fn a_depth_bomb_is_refused_at_the_limit() {
     let limits = Limits { max_depth: 8, ..Limits::DEFAULT };
     let nested = |n: usize| format!("{}{}", "<a>".repeat(n), "</a>".repeat(n));
@@ -105,16 +93,6 @@ fn an_attribute_flood_is_refused_at_the_limit() {
     assert_eq!(canonical.parse(spread(2).as_bytes()).map(|r| r.name), Ok("w:r".to_string()));
     assert_eq!(canonical.parse(spread(3).as_bytes()), Err(Error::TooManyAttrs(16)));
     assert!(Options::default().with_limits(limits).parse(spread(3).as_bytes()).is_ok(), "names as written resolve nothing");
-}
-
-#[test]
-fn input_over_the_size_limit_is_refused_before_it_is_read() {
-    let opts = Options::default().with_limits(Limits { max_input: 1000, ..Limits::DEFAULT });
-    let doc = |len: usize| format!("<a>{}</a>", "x".repeat(len - 7));
-    assert!(opts.parse(doc(1000).as_bytes()).is_ok());
-    assert_eq!(opts.parse(doc(1001).as_bytes()), Err(Error::TooLarge(1000)));
-    assert_eq!(opts.parse_streaming(doc(1001).as_bytes(), &[], |_| Ok::<(), Error>(())), Err(Error::TooLarge(1000)));
-    assert!(opts.first_start(doc(1001).as_bytes(), "a").is_none());
 }
 
 /// The "billion laughs": entities declared in a DTD are never expanded, whatever the options.
@@ -307,29 +285,6 @@ fn mismatched_tags_are_repaired_or_refused() {
     assert_eq!(root.to_xml(), "<a><b>x</b>y</a>");
     // Nothing after the root element is read by a lenient parse, however broken.
     assert_eq!(parse(b"<a/><<<\xff&&&").unwrap().name, "a");
-}
-
-#[test]
-fn markup_that_is_not_xml_is_an_error() {
-    for bytes in [
-        &b""[..],
-        b" ",
-        b"text",
-        b"<",
-        b"<a",
-        b"<a b='1",
-        b"<!-- open",
-        b"<![CDATA[x",
-        b"<?pi",
-        b"<!DOCTYPE a [",
-        b"\x00\x01\x02",
-        b"<?xml version='1.0'?>",
-    ] {
-        for opts in all_options() {
-            assert!(opts.parse(bytes).is_err(), "{:?}", String::from_utf8_lossy(bytes));
-            assert!(opts.first_start(bytes, "a").is_none() || bytes.starts_with(b"<a "));
-        }
-    }
 }
 
 /// Attributes are the one thing a node count does not see: 1,025 elements of 1,024 attributes

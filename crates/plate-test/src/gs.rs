@@ -88,33 +88,3 @@ fn work_dir(label: &str) -> Result<tempfile::TempDir, Error> {
     builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700));
     builder.tempdir().map_err(|e| gs_error(&std::env::temp_dir(), e))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{plate_name, work_dir};
-
-    #[test]
-    fn names_plates_from_tiffsep_files() {
-        assert_eq!(plate_name("p1(Cyan).tif"), Some("Cyan"));
-        assert_eq!(plate_name("p1(PANTONE 871 C).tif"), Some("PANTONE 871 C"));
-        assert_eq!(plate_name("p1.tif"), None);
-        assert_eq!(plate_name("p2(Cyan).tif"), None);
-    }
-
-    #[test]
-    fn work_dirs_are_fresh_and_private() {
-        let (a, b) = (work_dir("same label").unwrap(), work_dir("same label").unwrap());
-        assert_ne!(a.path(), b.path());
-        assert_eq!(std::fs::read_dir(a.path()).unwrap().count(), 0);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            let mode = std::fs::metadata(a.path()).unwrap().permissions().mode();
-            assert_eq!(mode & 0o077, 0);
-            assert_ne!(mode & 0o200, 0, "owner must be able to write");
-        }
-        let path = a.path().to_path_buf();
-        drop(a);
-        assert!(!path.exists());
-    }
-}

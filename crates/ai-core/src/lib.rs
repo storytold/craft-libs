@@ -68,3 +68,10 @@ pub use request::Request;
 pub use role::{Binding, Role};
 pub use secret::SecretString;
 pub use store::StoreFile;
+
+#[cfg(test)]
+extern crate self as craft_ai_core;
+
+#[cfg(test)]
+#[path = "../tests/main.rs"]
+mod integration;

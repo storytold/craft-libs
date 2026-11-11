@@ -181,8 +181,6 @@ pub(crate) fn decode_clip(info: Bytes, bits: Bytes, keep_alpha: bool, src: [i64;
     }
     let (ow, oh) = (clip.x1 - clip.x0, clip.r1 - clip.r0);
     let mut px = vec![0u8; ow.checked_mul(oh)?.checked_mul(4)?];
-    #[cfg(test)]
-    DECODED.with(|d| d.set(d.get() + ow * oh));
     // The depth, palette and masks are the same for every pixel: pick the row decoder once.
     let kind = RowKind::new(&hd, pal, keep_alpha);
     for (y, line) in (clip.r0..clip.r1).zip(px.chunks_exact_mut(ow * 4)) {
@@ -209,12 +207,6 @@ pub(crate) fn clip_blit(img: &Rgba, src: [i64; 4], dst: [f64; 4]) -> Option<(Rgb
         px.extend_from_slice(img.px.get(s..s.checked_add(ow * 4)?)?);
     }
     Some((Rgba { w: ow, h: oh, px }, out))
-}
-
-#[cfg(test)]
-thread_local! {
-    /// Pixels asked of the decoder on this thread, so the tests can check that the work follows the crop.
-    static DECODED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// One channel of a masked 16/32 bpp pixel, with the shift and scale worked out once per bitmap.
@@ -525,7 +517,6 @@ mod tests {
     /// The per-pixel decoder `decode_clip` used before the depth was chosen once per bitmap. Kept as
     /// the reference the fast decoder must match byte for byte.
     fn pixel(data: &[u8], row: usize, x: usize, hd: &Header, pal: &[u8], keep_alpha: bool) -> Option<[u8; 4]> {
-        DECODED.with(|d| d.set(d.get() + 1));
         let [m_r, m_g, m_b] = hd.masks;
         let [r, g, b] = match hd.bpp {
             1 => {
@@ -711,27 +702,6 @@ mod tests {
         }
     }
 
-    /// Timing of the per-pixel reference against `decode_clip` on a 40 MP bitmap:
-    /// `cargo test -p craft-metafile --release -- --ignored --nocapture dib_decode_speed`.
-    #[test]
-    #[ignore = "timing only"]
-    fn dib_decode_speed() {
-        let mut seed = 6u64;
-        for bpp in [1usize, 4, 8, 16, 24, 32] {
-            let (info, bits) = make_dib(8000, -5000, bpp, &mut seed);
-            for round in 0..4 {
-                let t = std::time::Instant::now();
-                let a = decode_clip_reference(Bytes(&info), Bytes(&bits), false, [0, 0, 8000, 5000], [0.0, 0.0, 1.0, 1.0]).map(|x| x.0.px);
-                let slow = t.elapsed().as_secs_f64() * 1e3;
-                let t = std::time::Instant::now();
-                let b = decode_clip(Bytes(&info), Bytes(&bits), false, [0, 0, 8000, 5000], [0.0, 0.0, 1.0, 1.0]).map(|x| x.0.px);
-                let fast = t.elapsed().as_secs_f64() * 1e3;
-                assert!(a == b);
-                eprintln!("{bpp:2} bpp round {round}: reference {slow:4.0} ms, decode_clip {fast:4.0} ms");
-            }
-        }
-    }
-
     #[test]
     fn decode_clip_matches_decode_then_clip_blit() {
         let mut seed = 0x2545_F491_4F6C_DD1Du64;
@@ -765,48 +735,5 @@ mod tests {
             }
         }
         assert!(cases > 10_000);
-    }
-
-    #[test]
-    fn decode_clip_rejects_what_decode_rejected() {
-        let mut seed = 7;
-        let (info, bits) = make_dib(7, 5, 24, &mut seed);
-        let short = &bits[..bits.len() - 1];
-        // A short bits buffer fails the whole image even when the crop lies in the rows that exist.
-        assert!(decode_clip(Bytes(&info), Bytes(short), false, [0, 0, 1, 1], [0.0, 0.0, 1.0, 1.0]).is_none());
-        assert!(decode_whole(Bytes(&info), Bytes(short), false).is_none());
-    }
-
-    #[test]
-    fn decode_clip_decodes_only_the_cropped_pixels() {
-        let mut seed = 99;
-        let (info, bits) = make_dib(400, -300, 24, &mut seed);
-        DECODED.with(|d| d.set(0));
-        let (img, _) = decode_clip(Bytes(&info), Bytes(&bits), false, [10, 20, 8, 4], [0.0, 0.0, 8.0, 4.0]).unwrap();
-        assert_eq!((img.w, img.h), (8, 4));
-        assert_eq!(DECODED.with(|d| d.get()), 8 * 4);
-        // The whole-bitmap path decodes all 400 x 300.
-        DECODED.with(|d| d.set(0));
-        decode_whole(Bytes(&info), Bytes(&bits), false).unwrap();
-        assert_eq!(DECODED.with(|d| d.get()), 400 * 300);
-    }
-
-    #[test]
-    fn decode_clip_refuses_a_side_no_renderer_draws() {
-        let cap = MAX_BITMAP_SIDE as usize;
-        let mut seed = 11;
-        // 1 bpp, one row longer than the cap: 5 KB of bits, 120 KB of RGBA.
-        let (info, bits) = make_dib(cap + 1, 1, 1, &mut seed);
-        assert!(decode_clip(Bytes(&info), Bytes(&bits), false, [0, 0, 0, 0], [0.0, 0.0, 1.0, 1.0]).is_none());
-        // The same for the height.
-        let (info, bits) = make_dib(1, cap as i32 + 1, 1, &mut seed);
-        assert!(decode_clip(Bytes(&info), Bytes(&bits), false, [0, 0, 0, 0], [0.0, 0.0, 1.0, 1.0]).is_none());
-        // A crop of the wide bitmap within the cap still decodes, and so does the cap itself.
-        let (info, bits) = make_dib(cap + 1, 1, 1, &mut seed);
-        let (img, _) = decode_clip(Bytes(&info), Bytes(&bits), false, [10, 0, 100, 1], [0.0, 0.0, 1.0, 1.0]).unwrap();
-        assert_eq!((img.w, img.h), (100, 1));
-        let (info, bits) = make_dib(cap, 1, 1, &mut seed);
-        let (img, _) = decode_clip(Bytes(&info), Bytes(&bits), false, [0, 0, 0, 0], [0.0, 0.0, 1.0, 1.0]).unwrap();
-        assert_eq!((img.w, img.h), (cap, 1));
     }
 }

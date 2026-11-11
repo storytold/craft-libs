@@ -45,12 +45,6 @@ fn md5(data: &[u8]) -> String {
 }
 
 #[test]
-fn md5_matches_rfc_1321() {
-    assert_eq!(md5(b""), "d41d8cd98f00b204e9800998ecf8427e");
-    assert_eq!(md5(b"The quick brown fox jumps over the lazy dog"), "9e107d9d372bb6826bd81d3542a419d6");
-}
-
-#[test]
 fn libvpx_test_vectors() {
     let dir = std::env::var_os("VP8_TEST_VECTORS")
         .map(std::path::PathBuf::from)

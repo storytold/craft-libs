@@ -49,6 +49,7 @@ impl From<io::Error> for Error {
     }
 }
 
+/// Result alias using the demuxer [`Error`].
 pub type Result<T> = std::result::Result<T, Error>;
 
 pub(crate) fn invalid<T>(msg: impl Into<String>) -> Result<T> {

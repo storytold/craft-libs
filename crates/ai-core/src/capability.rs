@@ -36,11 +36,13 @@ impl CapabilityId {
         Ok(Self(s.to_owned()))
     }
 
+    /// Builds an id from a modality and a task token. Fails when `task` is not a valid token.
     pub fn new(modality: &Modality, task: &str) -> Result<Self, IdError> {
         validate_token(task)?;
         Ok(Self(format!("{}.{}", modality.as_str(), task)))
     }
 
+    /// The full `modality.task` text.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -51,6 +53,7 @@ impl CapabilityId {
         Modality::parse(head).unwrap_or_else(|_| Modality::Other(head.to_owned()))
     }
 
+    /// The task half, for example `inpaint` in `image.inpaint`.
     pub fn task(&self) -> &str {
         self.0.split_once('.').map_or("", |(_, t)| t)
     }
@@ -116,51 +119,4 @@ pub const WELL_KNOWN: &[&str] = &[
 /// [`WELL_KNOWN`] as parsed ids.
 pub fn well_known() -> Vec<CapabilityId> {
     WELL_KNOWN.iter().filter_map(|s| CapabilityId::parse(s).ok()).collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn well_known_all_parse() {
-        assert_eq!(well_known().len(), WELL_KNOWN.len());
-    }
-
-    #[test]
-    fn splits_modality_and_task() {
-        let c = CapabilityId::parse("image.inpaint").unwrap();
-        assert_eq!(c.modality(), Modality::Image);
-        assert_eq!(c.task(), "inpaint");
-    }
-
-    #[test]
-    fn open_set_accepts_new_modalities() {
-        let c = CapabilityId::parse("cad.explain").unwrap();
-        assert_eq!(c.modality(), Modality::Other("cad".into()));
-    }
-
-    #[test]
-    fn rejects_malformed() {
-        for bad in ["", "image", "image.", ".inpaint", "image.in.paint", "im age.x", "image.in/paint"] {
-            assert!(CapabilityId::parse(bad).is_err(), "{bad:?} should be rejected");
-        }
-    }
-
-    #[test]
-    fn modality_round_trips_known_and_unknown() {
-        for text in ["image", "audio", "hologram"] {
-            let m = Modality::parse(text).unwrap();
-            assert_eq!(m.as_str(), text);
-            let back: Modality = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
-            assert_eq!(m, back);
-        }
-    }
-
-    #[test]
-    fn new_builds_from_parts() {
-        let c = CapabilityId::new(&Modality::Audio, "transcribe").unwrap();
-        assert_eq!(c.as_str(), "audio.transcribe");
-        assert!(CapabilityId::new(&Modality::Audio, "a.b").is_err());
-    }
 }

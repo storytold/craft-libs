@@ -70,7 +70,7 @@ first frame header to label the stream.
   12-bit coefficient domain is ¼ of the orthonormal DCT, as Table 14's 13-bit IDCT input range
   for 12-bit samples implies) and 1 otherwise.
 - Robustness: every offset and size is validated, run lengths past coefficient 63 are rejected,
-  and corrupted or truncated streams return `Err` without panicking ([`roundtrip.rs`](../../tests/dnx/roundtrip.rs)).
+  and corrupted or truncated streams return `Err` without panicking ([`fuzz_hostile.rs`](../../tests/dnx/fuzz_hostile.rs)).
 
 ### Where we follow ffmpeg rather than the letter of the standard
 

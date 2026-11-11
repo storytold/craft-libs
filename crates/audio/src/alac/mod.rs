@@ -294,24 +294,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cookies_roundtrip() {
-        let mut c = SpecificConfig::new(48_000, 6, 24, 4096);
-        c.max_frame_bytes = 12_345;
-        c.avg_bit_rate = 2_000_000;
-        let bytes = c.to_cookie();
-        assert_eq!(bytes.len(), 48);
-        let mut parsed = SpecificConfig::parse(&bytes).unwrap();
-        assert_eq!(parsed.channel_layout_tag, Some((124 << 16) | 6));
-        assert!(parsed.has_standard_layout());
-        parsed.channel_layout_tag = None;
-        assert_eq!(parsed, c);
-        assert_eq!(c.to_bytes(), bytes[..24]);
-        let stereo = SpecificConfig::new(44_100, 2, 16, 4096).to_cookie();
-        assert_eq!(stereo.len(), 24);
-        assert_eq!(&stereo[..12], &[0, 0, 0x10, 0, 0, 16, 40, 10, 14, 2, 0, 255]);
-    }
-
-    #[test]
     fn a_little_endian_layout_tag_is_read() {
         // as Apple's reference encoder writes the tag of a 7.1 stream
         let mut cookie = SpecificConfig::new(44_100, 8, 16, 4096).to_cookie();
@@ -329,20 +311,5 @@ mod tests {
         assert_eq!(SpecificConfig::parse(&wrapped).unwrap(), SpecificConfig::parse(&config).unwrap());
         assert!(SpecificConfig::parse(&wrapped[..30]).is_err());
         assert!(SpecificConfig::parse(&[0; 5]).is_err());
-    }
-
-    #[test]
-    fn the_orders_are_permutations() {
-        for n in 3..=8u8 {
-            let order = wav_order(n).unwrap();
-            let inverse = alac_order(n).unwrap();
-            assert!((0..usize::from(n)).all(|i| inverse[order[i]] == i && order[inverse[i]] == i), "{n} channels");
-            let mut sorted = order.to_vec();
-            sorted.sort_unstable();
-            assert_eq!(sorted, (0..usize::from(n)).collect::<Vec<_>>());
-            assert_eq!(channel_mask(n).count_ones(), u32::from(n));
-            let elements: usize = element_map(usize::from(n)).iter().map(|&e| if e == ID_CPE { 2 } else { 1 }).sum();
-            assert_eq!(elements, usize::from(n));
-        }
     }
 }

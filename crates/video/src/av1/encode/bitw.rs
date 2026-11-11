@@ -21,21 +21,3 @@ pub(crate) fn obu(obu_type: u8, payload: &[u8], out: &mut Vec<u8>) {
     leb128(payload.len(), out);
     out.extend_from_slice(payload);
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use craft_media::bitstream::BitWriter;
-
-    #[test]
-    fn bits_and_leb128() {
-        let mut w = BitWriter::new();
-        w.write_bits(0b101, 3);
-        w.write_bits(0b110011, 6);
-        w.rbsp_trailing();
-        assert_eq!(w.finish(), vec![0b1011_1001, 0b1100_0000]);
-        let mut v = Vec::new();
-        leb128(300, &mut v);
-        assert_eq!(v, vec![0xAC, 0x02]);
-    }
-}

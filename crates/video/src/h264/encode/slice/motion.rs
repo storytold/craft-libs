@@ -399,17 +399,3 @@ impl<'a, 'b, P: Pixel> SliceEnc<'a, 'b, P> {
         ci
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn p16_search_starts_include_skip_zero_and_colocated_vectors() {
-        let seed = Mv::new(4, 8);
-        let neighbour = Mv::new(12, 16);
-        let candidates = [Mv::new(20, 24), Mv::ZERO, Mv::new(-4, -8)];
-        let (starts, nstarts) = search_starts(seed, neighbour, &candidates);
-        assert_eq!(&starts[..nstarts], &[seed, neighbour, candidates[0], candidates[1], candidates[2]]);
-    }
-}

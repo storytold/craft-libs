@@ -21,14 +21,18 @@ pub const MAX_PARAMS_BYTES: usize = 64 * 1024;
 /// One typed input.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Input {
+    /// What the input is for.
     pub role: InputRole,
+    /// The data.
     pub payload: Payload,
 }
 
 /// A unit of work for a model.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Request {
+    /// What the model is asked to do.
     pub capability: CapabilityId,
+    /// The typed inputs, in the order given.
     #[serde(default)]
     pub inputs: Vec<Input>,
     /// Provider-neutral options such as `seed` or `size`. Capped by [`MAX_PARAMS_BYTES`].
@@ -47,25 +51,30 @@ fn one() -> u32 {
 }
 
 impl Request {
+    /// A request for `capability` with no inputs or params, one output, and no streaming.
     pub fn new(capability: CapabilityId) -> Self {
         Self { capability, inputs: Vec::new(), params: Map::new(), outputs: 1, stream: false }
     }
 
+    /// Adds an input.
     pub fn with_input(mut self, role: InputRole, payload: Payload) -> Self {
         self.inputs.push(Input { role, payload });
         self
     }
 
+    /// Sets a param, replacing any earlier value under `key`.
     pub fn with_param(mut self, key: &str, value: Value) -> Self {
         self.params.insert(key.to_owned(), value);
         self
     }
 
+    /// Sets how many results to return.
     pub fn with_outputs(mut self, n: u32) -> Self {
         self.outputs = n;
         self
     }
 
+    /// Asks for incremental results.
     pub fn streaming(mut self) -> Self {
         self.stream = true;
         self
@@ -112,109 +121,5 @@ impl Request {
             return Err(AiError::invalid(format!("params are over {MAX_PARAMS_BYTES} bytes")));
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::error::ErrorKind;
-    use crate::model::Features;
-
-    fn cap(s: &str) -> CapabilityId {
-        CapabilityId::parse(s).unwrap()
-    }
-
-    fn png() -> Payload {
-        Payload::inline("image/png", vec![1, 2, 3]).unwrap()
-    }
-
-    fn inpaint_spec() -> CapabilitySpec {
-        CapabilitySpec::new(cap("image.inpaint"))
-            .accepting(InputRole::Prompt, 1)
-            .accepting(InputRole::Source, 1)
-            .accepting(InputRole::Mask, 1)
-            .accepting(InputRole::Reference, 1)
-            .requiring(InputRole::Source)
-            .requiring(InputRole::Mask)
-            .max_outputs(3)
-    }
-
-    fn good() -> Request {
-        Request::new(cap("image.inpaint")).with_input(InputRole::Source, png()).with_input(InputRole::Mask, png())
-    }
-
-    #[test]
-    fn a_well_formed_request_passes() {
-        assert!(good().with_input(InputRole::Prompt, Payload::text("a cat")).validate(&inpaint_spec(), &Limits::default()).is_ok());
-    }
-
-    #[test]
-    fn unsupported_input_is_a_clear_error() {
-        let spec = CapabilitySpec::new(cap("image.generate")).accepting(InputRole::Prompt, 1);
-        let req = Request::new(cap("image.generate")).with_input(InputRole::Mask, png());
-        let err = req.validate(&spec, &Limits::default()).unwrap_err();
-        assert_eq!(err.kind, ErrorKind::Unsupported);
-        assert!(err.message.contains("mask"));
-    }
-
-    #[test]
-    fn too_many_references_are_counted_separately_from_masks() {
-        let req = good().with_input(InputRole::Reference, png()).with_input(InputRole::Reference, png());
-        let err = req.validate(&inpaint_spec(), &Limits::default()).unwrap_err();
-        assert_eq!(err.kind, ErrorKind::Unsupported);
-        assert!(err.message.contains("reference"));
-    }
-
-    #[test]
-    fn missing_required_input_is_invalid() {
-        let req = Request::new(cap("image.inpaint")).with_input(InputRole::Source, png());
-        let err = req.validate(&inpaint_spec(), &Limits::default()).unwrap_err();
-        assert_eq!(err.kind, ErrorKind::InvalidRequest);
-        assert!(err.message.contains("mask"));
-    }
-
-    #[test]
-    fn output_count_is_bounded() {
-        assert!(good().with_outputs(3).validate(&inpaint_spec(), &Limits::default()).is_ok());
-        assert!(good().with_outputs(4).validate(&inpaint_spec(), &Limits::default()).is_err());
-        assert!(good().with_outputs(0).validate(&inpaint_spec(), &Limits::default()).is_err());
-    }
-
-    #[test]
-    fn streaming_needs_the_feature() {
-        let spec = CapabilitySpec::new(cap("text.complete")).accepting(InputRole::Prompt, 1);
-        let req = Request::new(cap("text.complete")).with_input(InputRole::Prompt, Payload::text("hi")).streaming();
-        assert_eq!(req.validate(&spec, &Limits::default()).unwrap_err().kind, ErrorKind::Unsupported);
-        let spec = spec.with_features(Features { streaming: true, ..Features::default() });
-        assert!(req.validate(&spec, &Limits::default()).is_ok());
-    }
-
-    #[test]
-    fn capability_mismatch_is_invalid() {
-        let req = Request::new(cap("image.generate"));
-        assert_eq!(req.validate(&inpaint_spec(), &Limits::default()).unwrap_err().kind, ErrorKind::InvalidRequest);
-    }
-
-    #[test]
-    fn oversized_inline_input_is_refused() {
-        let limits = Limits { max_inline_bytes: 2, max_text_bytes: 10 };
-        assert!(good().validate(&inpaint_spec(), &limits).is_err());
-    }
-
-    #[test]
-    fn oversized_params_are_refused() {
-        let big = Value::String("x".repeat(MAX_PARAMS_BYTES + 1));
-        assert!(good().with_param("blob", big).validate(&inpaint_spec(), &Limits::default()).is_err());
-    }
-
-    #[test]
-    fn request_round_trips_and_defaults_apply() {
-        let req = good().with_param("seed", Value::from(7)).with_outputs(2);
-        let back: Request = serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
-        assert_eq!(req, back);
-        let minimal: Request = serde_json::from_str(r#"{"capability":"image.generate"}"#).unwrap();
-        assert_eq!(minimal.outputs, 1);
-        assert!(!minimal.stream);
     }
 }

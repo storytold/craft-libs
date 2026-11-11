@@ -21,6 +21,7 @@
 
 pub mod builtin;
 pub mod clut;
+pub mod convert;
 pub mod curve;
 pub mod gamut;
 mod gpu_matrix_shaper;
@@ -48,16 +49,22 @@ pub use write::profile_id;
 /// ICC rendering intent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum Intent {
+    #[allow(missing_docs)]
     Perceptual = 0,
     #[default]
+    #[allow(missing_docs)]
     RelativeColorimetric = 1,
+    #[allow(missing_docs)]
     Saturation = 2,
+    #[allow(missing_docs)]
     AbsoluteColorimetric = 3,
 }
 
 impl Intent {
+    /// All four intents, in ICC numeric order.
     pub const ALL: [Intent; 4] = [Intent::Perceptual, Intent::RelativeColorimetric, Intent::Saturation, Intent::AbsoluteColorimetric];
 
+    /// Maps the ICC intent number (0 to 3) to an intent; any other value gives `None`.
     pub fn from_u32(v: u32) -> Option<Intent> {
         Some(match v {
             0 => Intent::Perceptual,
@@ -81,6 +88,8 @@ impl Intent {
         })
     }
 
+    /// Stable lowercase name (`perceptual`, `relative`, `saturation`, `absolute`) that
+    /// [`Intent::parse`] accepts back.
     pub fn id(self) -> &'static str {
         match self {
             Intent::Perceptual => "perceptual",
@@ -94,10 +103,13 @@ impl Intent {
 /// Errors from parsing profiles, building transforms, or arguments that do not fit an operation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CmsError {
+    /// The data ends before a structure it announces.
     Truncated,
     /// Missing `acsp` signature: not an ICC profile.
     BadSignature,
+    /// The profile is malformed; the message says where.
     Invalid(String),
+    /// The profile is valid but uses a feature this crate does not implement.
     Unsupported(String),
     /// A caller argument does not fit the operation: a pixel stride below the channel count, a
     /// buffer that is not whole pixels or is too short, a slice shorter than the channel count,
@@ -127,3 +139,10 @@ pub(crate) fn invalid_arg(m: impl Into<String>) -> CmsError {
 pub(crate) fn check_len(what: &str, len: usize, n: usize) -> Result<(), CmsError> {
     if len < n { Err(invalid_arg(format!("{what} has {len} values, {n} needed"))) } else { Ok(()) }
 }
+
+#[cfg(test)]
+extern crate self as craft_cms;
+
+#[cfg(test)]
+#[path = "../tests/main.rs"]
+mod integration;

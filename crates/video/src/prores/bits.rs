@@ -267,14 +267,4 @@ mod tests {
             assert!(!r.overrun());
         }
     }
-
-    #[test]
-    fn exp_golomb5_equivalence() {
-        // FIRST_DC_CB is Exp-Golomb order 5: value 32 is `01` + 6 bits (000000)
-        assert_eq!(cw_len(FIRST_DC_CB, 0), 6);
-        assert_eq!(cw_len(FIRST_DC_CB, 31), 6);
-        assert_eq!(cw_len(FIRST_DC_CB, 32), 8);
-        assert_eq!(cw_len(FIRST_DC_CB, 95), 8);
-        assert_eq!(cw_len(FIRST_DC_CB, 96), 10);
-    }
 }

@@ -109,24 +109,6 @@ fn reopened_text(bytes: &[u8]) -> TextDevice {
     device
 }
 
-#[cfg_attr(not(craft_pdf_unicode_fixtures), ignore = "requires hash-verified external fonts and craft_pdf_unicode_fixtures cfg")]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-fn variable_coordinates_change_embedded_outlines_and_preserve_real_text() {
-    let [_, _, thai] = fixture_fonts();
-    let text = "ภาษาไทย";
-    let default = reopened_text(&mapped_document(thai, text, None));
-    let empty = reopened_text(&mapped_document(thai, text, Some(&[])));
-    let light = reopened_text(&mapped_document(thai, text, Some(&[(*b"wght", 100.0)])));
-    let bold = reopened_text(&mapped_document(thai, text, Some(&[(*b"wght", 900.0)])));
-    for device in [&default, &empty, &light, &bold] {
-        assert_eq!(device.text, text);
-        assert_eq!(device.visible_glyphs, text.chars().count());
-    }
-    assert_eq!(default.outlines, empty.outlines, "empty coordinates preserve the default instance");
-    assert_ne!(light.outlines, bold.outlines, "weight coordinates must affect the embedded glyph outlines");
-}
-
 fn fixture_fonts() -> [&'static [u8]; 3] {
     #[cfg(craft_pdf_unicode_fixtures)]
     {

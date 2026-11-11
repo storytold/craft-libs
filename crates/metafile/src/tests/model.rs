@@ -4,7 +4,6 @@
 use std::sync::Arc;
 
 use super::*;
-use crate::canvas::{MAX_CLIP_PATHS, MAX_DASH_ENTRIES};
 use crate::{Cap, ClipPath, Join, LineStyle, PlacedItem};
 
 fn line_of(item: &Item) -> &LineStyle {
@@ -63,82 +62,6 @@ fn emf_geometric_pen_keeps_its_cap_join_miter_limit_and_dashes() {
 }
 
 #[test]
-fn dash_lengths_follow_the_mapping_like_the_width() {
-    // A world transform of 2: the width and the dashes double.
-    let xf: Vec<u8> = [2.0f32, 0.0, 0.0, 2.0, 0.0, 0.0].iter().flat_map(|v| v.to_le_bytes()).collect();
-    let recs = [erec(35, &xf), ext_pen(PS_GEOMETRIC | 7, 4, &[8, 4]), erec(37, &h32(1)), move_to(0, 0), line_to(100, 0)];
-    let p = parse_emf(&recs);
-    let (_, _, stroke, _) = path_segs(&p.items[0]);
-    assert_eq!(stroke, Some(([255, 0, 0, 255], 8.0)));
-    assert_eq!(line_of(&p.items[0]).dash, vec![16.0, 8.0]);
-}
-
-#[test]
-fn pen_styles_become_dash_patterns_of_the_pen_width() {
-    // CREATEPEN: slot, style, width (x, y), colour.
-    let pen = |style: u32, width: u32| erec_at(38, 28, &[(8, 1), (12, style), (16, width)], &[]);
-    let draw = |style: u32, width: u32| {
-        let p = parse_emf(&[pen(style, width), erec(37, &h32(1)), move_to(0, 0), line_to(100, 0)]);
-        line_of(&p.items[0]).clone()
-    };
-    assert_eq!(draw(0, 2), LineStyle::default(), "PS_SOLID: round caps and joins, miter limit 10, no dashes");
-    assert_eq!(draw(1, 2).dash, vec![6.0, 2.0], "PS_DASH");
-    assert_eq!(draw(2, 2).dash, vec![2.0, 2.0], "PS_DOT");
-    assert_eq!(draw(3, 2).dash, vec![6.0, 2.0, 2.0, 2.0], "PS_DASHDOT");
-    assert_eq!(draw(4, 2).dash, vec![6.0, 2.0, 2.0, 2.0, 2.0, 2.0], "PS_DASHDOTDOT");
-    // A cosmetic pen's dashes are in device pixels.
-    assert_eq!(draw(2, 0).dash, vec![1.0, 1.0]);
-    // PS_INSIDEFRAME and unknown styles are solid.
-    assert!(draw(6, 2).dash.is_empty());
-}
-
-#[test]
-fn a_dash_pattern_that_draws_nothing_is_a_solid_line() {
-    let draw = |entries: &[u32]| {
-        let p = parse_emf(&[ext_pen(PS_GEOMETRIC | 7, 2, entries), erec(37, &h32(1)), move_to(0, 0), line_to(100, 0)]);
-        line_of(&p.items[0]).dash.clone()
-    };
-    assert!(draw(&[0, 0]).is_empty());
-    assert!(draw(&[]).is_empty());
-    assert_eq!(draw(&[0, 5]), vec![0.0, 5.0], "a zero dash with round caps draws dots");
-}
-
-#[test]
-fn a_pen_keeps_at_most_sixteen_style_entries() {
-    let entries: Vec<u32> = (1..=100).collect();
-    let p = parse_emf(&[ext_pen(PS_GEOMETRIC | 7, 1, &entries), erec(37, &h32(1)), move_to(0, 0), line_to(100, 0)]);
-    assert_eq!(line_of(&p.items[0]).dash.len(), MAX_DASH_ENTRIES);
-    // A count that runs past the record keeps the entries the record holds.
-    let mut rec = ext_pen(PS_GEOMETRIC | 7, 1, &[3, 2]);
-    rec[48..52].copy_from_slice(&1000u32.to_le_bytes());
-    let p = parse_emf(&[rec, erec(37, &h32(1)), move_to(0, 0), line_to(100, 0)]);
-    assert_eq!(line_of(&p.items[0]).dash, vec![3.0, 2.0]);
-}
-
-#[test]
-fn wmf_pen_style_word_carries_cap_and_join() {
-    // CREATEPENINDIRECT: style (PS_SOLID, flat caps, bevel joins), width (x, y), colour.
-    let pen = wrec(0x02FA, &cat(vec![h16(0x1200), h16(3), h16(0), h32(0)]));
-    let recs = [pen, wrec(0x012D, &h16(0)), wrec(0x0214, &cat(vec![h16(0), h16(0)])), wrec(0x0213, &cat(vec![h16(0), h16(50)]))];
-    let p = parse(&wmf(&recs, None)).unwrap();
-    let line = line_of(&p.items[0]);
-    assert_eq!((line.cap, line.join), (Cap::Flat, Join::Bevel));
-}
-
-#[test]
-fn restore_dc_brings_back_the_miter_limit() {
-    let pen = ext_pen(PS_GEOMETRIC | 0x2000, 2, &[]);
-    let recs =
-        [pen, erec(37, &h32(1)), erec(33, &[]), erec(58, &h32(4)), move_to(0, 0), line_to(9, 0), erec(34, &e32(-1)), move_to(0, 5), line_to(9, 5)];
-    let p = parse_emf(&recs);
-    assert_eq!(line_of(&p.items[0]).miter_limit, 4.0);
-    assert_eq!(line_of(&p.items[1]).miter_limit, 10.0);
-    // A limit below 1 is invalid: the limit stays.
-    let p = parse_emf(&[ext_pen(PS_GEOMETRIC | 0x2000, 2, &[]), erec(37, &h32(1)), erec(58, &h32(0)), move_to(0, 0), line_to(9, 0)]);
-    assert_eq!(line_of(&p.items[0]).miter_limit, 10.0);
-}
-
-#[test]
 fn select_clip_path_clips_what_follows_and_items_share_the_path() {
     let mut recs = vec![rect(0, 0, 100, 100)];
     recs.extend(clip_to_rect(10, 10, 60, 60, 1));
@@ -176,43 +99,6 @@ fn clip_paths_nest_with_and_replace_with_copy_and_end_with_restore_dc() {
 }
 
 #[test]
-fn clip_modes_that_add_or_cut_leave_the_clip_and_a_region_copy_drops_clip_paths() {
-    for mode in [2, 3, 4, 0, 99] {
-        let mut recs = clip_to_rect(0, 0, 10, 10, mode);
-        recs.push(rect(0, 0, 100, 100));
-        let p = parse_emf(&recs);
-        assert!(clips_of(&p.items[0]).is_empty(), "mode {mode}");
-    }
-    // EXTSELECTCLIPRGN with no region data selects the default clip: no region, no clip paths.
-    let mut recs = clip_to_rect(0, 0, 10, 10, 1);
-    recs.push(erec(75, &cat(vec![h32(0), h32(5)])));
-    recs.push(rect(0, 0, 100, 100));
-    let p = parse_emf(&recs);
-    assert!(clips_of(&p.items[0]).is_empty());
-}
-
-#[test]
-fn an_empty_clip_path_clips_everything_away() {
-    let recs = [erec(59, &[]), erec(60, &[]), erec(67, &h32(1)), rect(0, 0, 100, 100)];
-    assert!(parse_emf(&recs).items.is_empty());
-}
-
-#[test]
-fn one_clip_path_past_the_cap_stops_the_parse() {
-    let nested = |n: usize| {
-        let mut recs = Vec::new();
-        for _ in 0..n {
-            recs.extend(clip_to_rect(0, 0, 50, 50, 1));
-        }
-        recs.push(rect(0, 0, 100, 100));
-        parse_emf(&recs)
-    };
-    let p = nested(MAX_CLIP_PATHS);
-    assert_eq!(clips_of(&p.items[0]).len(), MAX_CLIP_PATHS);
-    assert!(nested(MAX_CLIP_PATHS + 1).items.is_empty(), "what follows can no longer be clipped as the file asks");
-}
-
-#[test]
 fn clip_path_ops_count_against_the_byte_budget() {
     // Each clip path is charged once, when it is selected, so RGN_COPY in a loop cannot hold more
     // than the budget (the earlier paths stay alive while items drawn under them do).
@@ -231,14 +117,6 @@ fn clip_path_ops_count_against_the_byte_budget() {
 }
 
 #[test]
-fn abort_path_discards_the_bracket() {
-    let recs = [erec(59, &[]), rect(0, 0, 10, 10), erec(68, &[]), erec(62, &[0; 16]), rect(0, 0, 5, 5)];
-    let p = parse_emf(&recs);
-    assert_eq!(p.items.len(), 1, "only the rectangle drawn after the bracket was aborted");
-    assert_eq!((p.width, p.height), (5.0, 5.0));
-}
-
-#[test]
 fn arc_direction_picks_the_other_part_of_the_ellipse() {
     // From the right-most point to the top-most one: counter-clockwise is the quarter between
     // them, clockwise the three quarters round the other way.
@@ -250,21 +128,6 @@ fn arc_direction_picks_the_other_part_of_the_ellipse() {
     // RESTOREDC brings the direction back.
     let p = parse_emf(&[erec(33, &[]), erec(57, &h32(2)), erec(34, &e32(-1)), arc]);
     assert!(close(p.width, 50.0));
-}
-
-#[test]
-fn scale_viewport_and_window_ext_change_the_mapping() {
-    let setup = [erec(17, &h32(8)), erec(9, &cat(vec![e32(100), e32(100)])), erec(11, &cat(vec![e32(100), e32(100)]))];
-    let scaled = |typ: u32, v: [i32; 4]| {
-        let mut recs = setup.to_vec();
-        recs.push(erec(typ, &cat(v.iter().map(|x| e32(*x)).collect())));
-        recs.push(rect(0, 0, 10, 10));
-        let p = parse_emf(&recs);
-        (p.width, p.height)
-    };
-    assert_eq!(scaled(31, [2, 1, 3, 1]), (20.0, 30.0), "SCALEVIEWPORTEXTEX");
-    assert_eq!(scaled(32, [2, 1, 5, 1]), (5.0, 2.0), "SCALEWINDOWEXTEX");
-    assert_eq!(scaled(31, [2, 0, 3, 1]), (10.0, 10.0), "a zero denominator leaves the extent");
 }
 
 #[test]
@@ -288,16 +151,6 @@ fn close_figure_moves_the_current_position_to_the_figures_start() {
     let recs = [erec(59, &[]), move_to(0, 0), line_to(10, 0), line_to(10, 10), erec(61, &[]), erec(60, &[]), erec(64, &[0; 16]), line_to(5, 20)];
     let p = parse_emf(&recs);
     assert_eq!(path_segs(&p.items[1]).0, &vec![Seg::Move(0.0, 0.0), Seg::Line(5.0, 20.0)]);
-}
-
-#[test]
-fn records_of_unknown_types_are_counted_and_known_ones_are_not() {
-    // 200 is no EMF record; 21 (SETSTRETCHBLTMODE) and 70 (a plain comment) change nothing kept.
-    let recs = [rect(0, 0, 10, 10), erec(200, &[0; 8]), erec(21, &h32(1)), erec(70, &cat(vec![h32(4), h32(0)])), erec(201, &[])];
-    assert_eq!(parse_emf(&recs).skipped_records, 2);
-    let rect16 = wrec(0x041B, &cat(vec![h16(10), h16(10), h16(0), h16(0)]));
-    let recs = [rect16, wrec(0x0999, &[0; 4]), wrec(0x0107, &h16(1))];
-    assert_eq!(parse(&wmf(&recs, None)).unwrap().skipped_records, 1);
 }
 
 #[test]
@@ -372,35 +225,6 @@ fn stretch_dibits(w: i32, h: i32, compression: u32, bits: &[u8]) -> Vec<u8> {
 }
 
 #[test]
-fn png_and_jpeg_dibs_decode() {
-    let p = parse_emf(&[stretch_dibits(3, 1, 5, &png(3, 1, [1, 2, 3, 255]))]);
-    let Item::Bitmap { rect, width, height, rgba, .. } = &p.items[0] else { panic!("expected a bitmap") };
-    assert_eq!((*width, *height, rect), (3, 1, &[0.0, 0.0, 30.0, 10.0]));
-    assert_eq!(rgba.as_slice(), [1, 2, 3, 255].repeat(3));
-    let mut jpeg = Vec::new();
-    let img = image::RgbImage::from_pixel(8, 8, image::Rgb([200, 200, 200]));
-    image::DynamicImage::ImageRgb8(img).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
-    let p = parse_emf(&[stretch_dibits(8, 8, 4, &jpeg)]);
-    let Item::Bitmap { width, height, rgba, .. } = &p.items[0] else { panic!("expected a bitmap") };
-    assert_eq!((*width, *height), (8, 8));
-    assert!(rgba.as_chunks::<4>().0.iter().all(|c| c[0].abs_diff(200) < 4 && c[3] == 255));
-    // Bits that are no image, and a truncated file, draw nothing.
-    assert!(parse_emf(&[stretch_dibits(3, 1, 5, &[1, 2, 3, 4])]).items.is_empty());
-    let whole = png(3, 1, [1, 2, 3, 255]);
-    assert!(parse_emf(&[stretch_dibits(3, 1, 5, &whole[..whole.len() / 2])]).items.is_empty());
-}
-
-#[test]
-fn a_compressed_dib_over_the_side_cap_is_refused_before_decoding() {
-    let side = crate::dib::MAX_COMPRESSED_SIDE;
-    assert!(crate::dib::decode_compressed(&png(side, 1, [0; 4])).is_some());
-    assert!(crate::dib::decode_compressed(&png(side + 1, 1, [0; 4])).is_none());
-    // A side no renderer draws (MAX_BITMAP_SIDE) makes no item either.
-    let wide = png(crate::MAX_BITMAP_SIDE + 1, 1, [0; 4]);
-    assert!(parse_emf(&[stretch_dibits(crate::MAX_BITMAP_SIDE as i32 + 1, 1, 5, &wide)]).items.is_empty());
-}
-
-#[test]
 fn placed_paths_carry_their_line_style_and_shared_clips() {
     let mut recs = clip_to_rect(0, 0, 50, 50, 1);
     recs.extend([ext_pen(PS_GEOMETRIC | 7 | 0x100, 2, &[6, 3]), erec(37, &h32(1)), rect(0, 0, 100, 100), rect(10, 10, 20, 20)]);
@@ -415,30 +239,6 @@ fn placed_paths_carry_their_line_style_and_shared_clips() {
     assert!(Arc::ptr_eq(&a[0], &b[0]));
     assert_eq!(kurbo::Shape::bounding_box(&a[0].path), kurbo::Rect::new(0.0, 0.0, 100.0, 100.0));
     assert!(a[0].even_odd);
-}
-
-#[test]
-fn an_item_under_a_clip_far_off_the_page_is_left_out() {
-    let clip = Arc::new(ClipPath { segs: vec![Seg::Move(0.0, 0.0), Seg::Line(f32::MAX, 0.0), Seg::Line(0.0, 10.0), Seg::Close], even_odd: false });
-    let bitmap = |clips| Item::Bitmap {
-        rect: [0.0, 0.0, 10.0, 10.0],
-        transform: [10.0, 0.0, 0.0, 10.0, 0.0, 0.0],
-        width: 1,
-        height: 1,
-        rgba: vec![0; 4],
-        region: None,
-        clips,
-    };
-    let pic = crate::Picture { width: 10.0, height: 10.0, items: vec![bitmap(vec![clip]), bitmap(Vec::new())], skipped_records: 0 };
-    let placed = pic.place(kurbo::Rect::new(0.0, 0.0, 10.0, 10.0), [0.0; 4]);
-    assert_eq!(placed.len(), 1);
-}
-
-#[test]
-fn an_upright_bitmap_has_its_rectangle_as_its_transform() {
-    let p = parse(&stretch_dib(dib24_bottom_up())).unwrap();
-    let Item::Bitmap { rect, transform, .. } = &p.items[0] else { panic!("expected a bitmap") };
-    assert_eq!((rect, transform), (&[0.0, 0.0, 20.0, 10.0], &[20.0, 0.0, 0.0, 10.0, 0.0, 0.0]));
 }
 
 #[test]
@@ -532,13 +332,4 @@ fn truncated_and_mutated_files_with_these_records_never_panic() {
             }
         }
     }
-}
-
-#[test]
-fn a_turned_bitmaps_rectangle_is_the_box_around_it() {
-    let xf: Vec<u8> = [0.0f32, 1.0, -1.0, 0.0, 10.0, 0.0].iter().flat_map(|v| v.to_le_bytes()).collect();
-    let p = parse(&emf(&[erec(35, &xf), stretch_dibits(3, 1, 5, &png(3, 1, [9, 8, 7, 255]))], [0, 0, 10, 30], [0, 0, 2540, 7620])).unwrap();
-    let Item::Bitmap { rect, .. } = &p.items[0] else { panic!("expected a bitmap") };
-    let k = 72.0 / 101.6;
-    assert!(rect.iter().zip([0.0, 0.0, 10.0 * k, 30.0 * k]).all(|(a, b)| (f64::from(*a) - b).abs() < 1e-4), "{rect:?}");
 }

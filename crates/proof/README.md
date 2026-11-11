@@ -56,9 +56,7 @@ The word lists and patterns live in [craft-i18n](https://github.com/storytold/cr
   grammar and the Hunspell languages work as before.
 - `CRAFT_I18N_REQUIRED=1` (releases) makes a missing directory or file an error.
 
-Tests that pin results of the data run only when every file the build embeds is there (`craft_proof_data`);
-`src/no_data.rs` runs every public entry point when none is (`craft_proof_no_data`). A partial
-data folder runs neither set.
+Tests that pin results of the data run only when every file the build embeds is there (`craft_proof_data`).
 
 - By default every carry-over locale is embedded: English, the German, Polish, Portuguese and
   Italian patterns and our own word supplements (`*-extra.txt`, MIT), as before Language packs.

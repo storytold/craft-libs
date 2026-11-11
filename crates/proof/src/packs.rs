@@ -182,10 +182,6 @@ pub fn licence_texts() -> Vec<(String, String)> {
     out
 }
 
-/// Licence bytes read so far (tests check the cap holds while reading, not only after).
-#[cfg(test)]
-pub(crate) static LICENCE_BYTES_READ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
 /// Most bytes of pack licence text [`licence_texts`] reads in all.
 const MAX_LICENCE_TOTAL: u64 = 16 << 20;
 
@@ -407,8 +403,6 @@ fn licence_files(pack: &Path, left: &mut u64) -> Vec<(String, String)> {
             }
             let bytes = read_capped(&path, size.min(MAX_LICENCE)).ok()?;
             *left = left.saturating_sub(bytes.len() as u64);
-            #[cfg(test)]
-            LICENCE_BYTES_READ.fetch_add(bytes.len() as u64, std::sync::atomic::Ordering::Relaxed);
             Some((n, String::from_utf8_lossy(&bytes).into_owned()))
         })
         .collect()
@@ -614,12 +608,6 @@ fn remember_patterns(s: &mut State, lang: ProofLang, found: Option<Arc<Patterns>
     s.hyphenation_bytes = s.hyphenation_bytes.saturating_add(bytes);
 }
 
-/// How many languages' pack patterns are remembered now.
-#[cfg(test)]
-pub(crate) fn hyphenation_lookups() -> usize {
-    read().hyphenation.len()
-}
-
 /// A pack's `hyphenation.pat` (UTF-8 TeX or plain Liang patterns, at most the dictionary cap).
 fn load_patterns(path: &Path) -> Result<Patterns, String> {
     let bytes = read_capped(path, crate::hunspell::MAX_FILE)?;
@@ -634,67 +622,6 @@ fn load_patterns(path: &Path) -> Result<Patterns, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Review follow-up (craft-libs#485): the remembered pack patterns have a memory budget, not
-    /// only a count, so 256 languages of large patterns can't each stay in memory.
-    #[test]
-    fn remembered_patterns_keep_to_a_memory_budget() {
-        let mut s = State { dir: None, scan: None, hyphenation: BTreeMap::new(), hyphenation_bytes: 0, hyphenation_errors: Vec::new(), changes: 0 };
-        let p = Arc::new(Patterns::parse("hy3ph he2n hena4 hen5at 1na n2at 1tio 2io o2n"));
-        let bytes = pattern_bytes(&p);
-        assert_eq!(bytes, 9 * BYTES_PER_PATTERN);
-        let lang = |t: &str| ProofLang::from_tag(Some(t));
-        let budget = bytes * 2;
-        remember_patterns(&mut s, lang("nl"), Some(p.clone()), bytes, budget);
-        remember_patterns(&mut s, lang("fr"), Some(p.clone()), bytes, budget);
-        remember_patterns(&mut s, lang("sv"), None, 0, budget);
-        assert_eq!((s.hyphenation.len(), s.hyphenation_bytes), (3, budget), "a language with no patterns takes no room");
-        remember_patterns(&mut s, lang("da"), Some(p.clone()), bytes, budget);
-        assert_eq!((s.hyphenation.len(), s.hyphenation_bytes), (1, bytes), "over the budget: the others are forgotten");
-        assert!(s.hyphenation.contains_key(&lang("da")));
-        remember_patterns(&mut s, lang("fi"), Some(p.clone()), budget * 4, budget);
-        assert_eq!((s.hyphenation.len(), s.hyphenation_bytes), (1, budget * 4), "patterns over the whole budget are kept alone");
-        forget(&mut s);
-        assert_eq!((s.hyphenation.len(), s.hyphenation_bytes), (0, 0));
-    }
-
-    /// Review of #485: a pack's name loses bidirectional and other format characters.
-    #[test]
-    fn pack_names_are_plain_text() {
-        let t = "locale = \"nl\"\nlicence = \"MIT\"\nname = \"Neder\\u202elands\\u200b\\u2066 \\u0007\"\n";
-        assert_eq!(parse_pack_toml(t).unwrap().name.as_deref(), Some("Nederlands"));
-        let t = "locale = \"nl\"\nlicence = \"MIT\"\nname = \"\\u202e\\u200f\"\n";
-        assert_eq!(parse_pack_toml(t).unwrap().name, None, "nothing left: the locale is shown");
-        let t = "locale = \"nl\"\nlicence = \"MIT\\u202e LPG\"\n";
-        assert_eq!(parse_pack_toml(t).unwrap().licence, "MIT LPG");
-        let t = "locale = \"nl\"\nlicence = \"\\u200f\"\n";
-        assert!(parse_pack_toml(t).is_err(), "no licence left");
-    }
-
-    #[test]
-    fn locales_are_lowercase_tags() {
-        for ok in ["nl", "pt-br", "sr-latn", "es-419", "de-1996", "ca-valencia"] {
-            assert!(is_locale(ok), "{ok}");
-        }
-        for bad in ["", "NL", "pt_BR", "..", "a/b", "-nl", "nl-", "nl--x", "abcdefghi", "x\u{0}", "é", &"a-".repeat(20)] {
-            assert!(!is_locale(bad), "{bad:?}");
-        }
-    }
-
-    #[test]
-    fn dictionary_names_map_to_pack_locales() {
-        assert_eq!(locales_for(&["pt_BR", "pt-BR", "pt"]), ["pt-br", "pt"]);
-        assert_eq!(region_locales(&["pt_BR", "pt-BR", "pt"]), ["pt-br"]);
-        assert_eq!(region_locales(&["en_US", "en-US", "en", "en_GB"]), ["en-us"]);
-        assert_eq!(region_locales(&["sr_Cyrl", "sr-Cyrl"]), ["sr-cyrl", "sr"]);
-        assert_eq!(region_locales(&["nl"]), ["nl"]);
-        assert_eq!(region_locales(&["sr_Latn", "sr-Latn"]), ["sr-latn"]);
-        assert!(region_locales(&[]).is_empty());
-        assert_eq!(locales_for(&["es_419", "es"]), ["es-419", "es"]);
-        assert_eq!(locales_for(&["ca_ES_valencia", "ca_ES", "ca"]), ["ca-es-valencia", "ca-valencia", "ca-es", "ca"]);
-        assert_eq!(locales_for(&["ca_ES", "ca"]), ["ca-es", "ca"]);
-        assert_eq!(locales_for(&["../x", "a b"]), Vec::<String>::new());
-    }
 
     #[test]
     fn pack_toml_paths_stay_inside_the_pack() {
@@ -718,40 +645,5 @@ mod tests {
         }
         let deep = format!("locale = \"nl\"\nlicence = \"MIT\"\nx = {}{}\n", "[".repeat(40), "]".repeat(40));
         assert!(parse_pack_toml(&deep).is_err());
-    }
-
-    /// Review of #485: our own word supplements (`ru-extra.txt`, MIT) stay embedded in every
-    /// build, the English-only one too.
-    #[test]
-    fn our_supplements_are_always_embedded() {
-        if cfg!(craft_proof_data) {
-            assert!(!crate::data::EXTRA_RU.is_empty(), "ru-extra.txt is embedded");
-        }
-    }
-
-    /// #5208 review: until Language packs are published, the default build embeds the
-    /// carry-over locales (de, pl, pt, it patterns, ru-extra); `CRAFT_PROOF_EMBED=en` is the
-    /// English-only build (CP4.4's default once language-packs-1 is pinned).
-    #[test]
-    fn the_default_build_embeds_the_carry_over_locales() {
-        let embed = option_env!("CRAFT_PROOF_EMBED").unwrap_or_default().trim().to_ascii_lowercase();
-        let named: Vec<&str> = if embed.is_empty() { vec!["de", "pl", "pt", "it", "ru"] } else { embed.split(',').map(str::trim).collect() };
-        for l in embedded_locales() {
-            assert!(l.starts_with("en-") || *l == "ru" || named.iter().any(|e| e == l || *e == "all"), "{l} is embedded");
-        }
-        if cfg!(craft_proof_data) && embed.is_empty() {
-            for l in ["de", "pl", "pt", "it"] {
-                assert!(embedded_locales().contains(&l), "{l} is embedded by default");
-            }
-        }
-    }
-
-    /// One Moby entry, and the supplement's own licence.
-    #[test]
-    fn built_in_notices_name_the_real_sources() {
-        let texts = licence_texts();
-        assert_eq!(texts.iter().filter(|(t, _)| t.contains("Moby")).count(), 1, "{texts:?}");
-        assert!(texts.iter().any(|(t, x)| t.contains("en-extra.txt") && x.contains("MIT OR Apache-2.0")));
-        assert!(!texts.iter().any(|(t, _)| t.contains("core")), "the core list is gone");
     }
 }

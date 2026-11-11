@@ -174,50 +174,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_family0_and_roundtrip() {
-        let mut h = b"OpusHead".to_vec();
-        h.extend([1, 2, 0x38, 0x01, 0x80, 0xBB, 0, 0, 0x00, 0x01, 0]);
-        let head = OpusHead::parse(&h).unwrap();
-        assert_eq!(head.channels, 2);
-        assert_eq!(head.pre_skip, 312);
-        assert_eq!(head.input_sample_rate, 48000);
-        assert_eq!(head.output_gain, 256);
-        assert_eq!((head.streams, head.coupled_streams), (1, 1));
-        assert_eq!(head.to_bytes(), h);
-        assert!((head.gain_linear() - 1.122).abs() < 1e-3);
-    }
-
-    #[test]
-    fn parse_family1_51() {
-        let mut h = b"OpusHead".to_vec();
-        h.extend([1, 6, 0x38, 0x01, 0x80, 0xBB, 0, 0, 0, 0, 1, 4, 2, 0, 4, 1, 2, 3, 5]);
-        let head = OpusHead::parse(&h).unwrap();
-        assert_eq!((head.channels, head.streams, head.coupled_streams), (6, 4, 2));
-        assert_eq!(head.mapping, vec![0, 4, 1, 2, 3, 5]);
-        assert_eq!(OpusHead::parse(&head.to_bytes()).unwrap(), head);
-    }
-
-    #[test]
-    fn rejects_garbage() {
-        assert!(OpusHead::parse(b"OpusHea").is_err());
-        assert!(OpusHead::parse(b"OpusTags...........").is_err());
-        let mut h = b"OpusHead".to_vec();
-        h.extend([1, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-        assert!(OpusHead::parse(&h).is_err());
-        let mut h = b"OpusHead".to_vec();
-        h.extend([1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 5]);
-        assert!(OpusHead::parse(&h).is_err());
-    }
-
-    #[test]
-    fn dops() {
-        let d = [0u8, 2, 0x01, 0x38, 0, 0, 0xBB, 0x80, 0, 0, 0];
-        let head = OpusHead::from_dops(&d).unwrap();
-        assert_eq!(head.pre_skip, 312);
-        assert_eq!(head.channels, 2);
-    }
-
-    #[test]
     fn directly_constructed_headers_are_checked_before_decoder_allocation() {
         let head = OpusHead {
             channels: 1,

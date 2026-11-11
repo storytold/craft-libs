@@ -254,27 +254,6 @@ mod tests {
     }
 
     #[test]
-    fn a_line_is_a_whole_program() {
-        assert_eq!(
-            program(Settings::default(), &[(0.0, 0.0), (10.0, 0.0)], false),
-            "; test\nG21 ; millimetres\nG90 ; absolute coordinates\nG17 ; XY plane\nM4 S0 ; laser off until the first cut\n\
-             G0 X0.0000 Y0.0000\nM4 S500\nG1 X10.0000 Y0.0000 F1000\nM5\nM5 ; tool off\nG0 X0 Y0 ; return to origin\n"
-        );
-    }
-
-    #[test]
-    fn closed_loops_return_to_start_and_a_point_is_a_dot() {
-        let g = program(Settings::default(), &[(1.0, 2.0), (10.0, 2.0), (10.0, 10.0)], true);
-        assert!(g.contains("G1 X10.0000 Y10.0000 F1000\nG1 X1.0000 Y2.0000 F1000\nM5\n"), "{g}");
-        // Closed or not, a dot is the same in-and-out move.
-        for closed in [false, true] {
-            let dot = program(Settings::default(), &[(5.0, 5.0)], closed);
-            assert!(dot.contains("G0 X5.0000 Y5.0000\nM4 S500\nG1 X5.0010 Y5.0000 F1000\nG1 X5.0000 Y5.0000 F1000\nM5\n"), "{dot}");
-        }
-        assert!(!program(Settings::default(), &[], true).contains("G1 "));
-    }
-
-    #[test]
     fn rapids_never_run_with_the_beam_on() {
         let settings = Settings { passes: 3, mode: LaserMode::Constant, ..Settings::default() };
         let mut w = Writer::new(settings, "test").unwrap();
@@ -310,28 +289,14 @@ mod tests {
     }
 
     #[test]
-    fn bad_settings_powers_and_vertices_are_errors() {
-        for feed in [0.0, -1.0, f64::NAN, f64::INFINITY] {
-            assert!(matches!(Writer::new(Settings { feed_mm_per_min: feed, ..Settings::default() }, ""), Err(Error::Settings(_))));
-        }
-        for passes in [0, MAX_PASSES + 1] {
-            assert!(matches!(Settings { passes, ..Settings::default() }.validate(), Err(Error::Settings(_))));
-        }
-        assert_eq!(check_power("engrave power", 1001), Err(Error::Settings("engrave power 1001 is outside the 0–1000 range".into())));
-        let mut w = Writer::new(Settings::default(), "").unwrap();
-        assert!(matches!(w.contour(&[(0.0, 0.0), (1.0, 1.0)], false, MAX_POWER + 1), Err(Error::Settings(_))));
-        assert_eq!(w.contour(&[(0.0, 0.0), (f64::NAN, 1.0)], false, 500), Err(Error::NotFinite));
-        // Nothing of a refused contour is written, not even its travel move.
-        assert!(!w.finish().contains("G0 X0.0000"));
-    }
-
-    #[test]
     fn grbl_real_time_bytes_never_reach_the_program() {
         let mut w = Writer::new(Settings::default(), "stop! now? ~ café").unwrap();
-        w.comment("\u{18}reset");
+        w.comment("\u{18}reset\nM3 S1000\r\nG1 X9");
         let g = w.finish();
         assert!(g.starts_with("; stop_ now_ _ caf_\n"), "{g}");
         assert!(g.is_ascii() && !g.contains(['!', '?', '~', '\u{18}']), "{g}");
+        // A line break in a comment would start a line the machine runs as a command.
+        assert!(g.lines().all(|l| !l.starts_with("M3")), "{g}");
     }
 
     #[test]
@@ -340,15 +305,6 @@ mod tests {
         assert!(program(slow, &[(0.0, 0.0), (1.0, 0.0)], false).contains(" F0.25\n"));
         assert!(program(Settings::default(), &[(0.0, 0.0), (1.0, 0.0)], false).contains(" F1000\n"));
         assert!(matches!(Writer::new(Settings { feed_mm_per_min: 0.0004, ..Settings::default() }, ""), Err(Error::Settings(_))));
-    }
-
-    #[test]
-    fn a_line_break_in_a_comment_cannot_start_a_command() {
-        let mut w = Writer::new(Settings::default(), "banner").unwrap();
-        w.comment("layer x\nM3 S1000\r\nG1 X9");
-        let g = w.finish();
-        assert!(g.contains("; layer x M3 S1000  G1 X9\n"), "{g}");
-        assert!(g.lines().all(|l| !l.starts_with("M3")));
     }
 
     #[test]
@@ -381,12 +337,5 @@ mod tests {
         w.contour(&[(0.0, 0.0), (2.0, 0.0)], false, 1).unwrap();
         let g = w.finish();
         assert!(g.contains("G1 X1.0000 Y0.0000 F1000\n") && g.contains("G1 X2.0000 Y0.0000 F300\n"), "{g}");
-    }
-
-    #[test]
-    fn laser_modes_parse_their_spellings() {
-        assert_eq!(LaserMode::parse(" M3 "), Some(LaserMode::Constant));
-        assert_eq!(LaserMode::parse("Dynamic"), Some(LaserMode::Dynamic));
-        assert_eq!(LaserMode::parse("m5"), None);
     }
 }

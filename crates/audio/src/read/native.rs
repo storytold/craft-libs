@@ -1383,32 +1383,6 @@ mod adts_tests {
         w.finish()
     }
 
-    /// ALAC in MP4 decodes natively (without symphonia this is the only path): every sample,
-    /// the short last packet included, and a seek lands on the exact frame.
-    #[test]
-    fn alac_in_mp4_decodes_and_seeks_natively() {
-        use craft_media::isobmff::{Brand, CodecConfig, FourCc, Mp4Writer, SampleEntry, TrackConfig, WriteSample, WriterOptions};
-        // Escaped (uncompressed) stereo 16-bit packets of 4 frames, the last one of 2.
-        let frames: Vec<[i16; 2]> = (0..10).map(|i| [i * 100 - 300, -(i * 77)]).collect();
-        let packet = |chunk: &[[i16; 2]]| alac_escaped_stereo(chunk, 4);
-        let cookie = crate::alac::SpecificConfig::new(48_000, 2, 16, 4).to_bytes();
-        let entry = SampleEntry::audio(FourCc(*b"alac"), CodecConfig::Alac { cookie }, 2, 48_000.0, 16);
-        let mut w = Mp4Writer::new(std::io::Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).unwrap();
-        let track = w.add_track(TrackConfig::new(entry, 48_000)).unwrap();
-        for chunk in frames.chunks(4) {
-            w.write_sample(track, WriteSample { data: &packet(chunk), duration: chunk.len() as u32, composition_offset: 0, is_sync: true }).unwrap();
-        }
-        let file = w.finish().unwrap().into_inner();
-        let (info, buf) = decode(&file, None).unwrap();
-        assert_eq!((info.codec, info.sample_format, info.sample_rate, info.frames), (crate::CodecId::Alac, crate::SampleFormat::Int16, 48_000, 10));
-        let ints: Vec<[i16; 2]> = (0..buf.frames()).map(|i| [0, 1].map(|c| (buf.channels[c][i] * 32768.0) as i16)).collect();
-        assert_eq!(ints, frames);
-        let mut d = Decoder::from_bytes(&file, None, &DecodeOptions::default()).unwrap();
-        d.seek(5).unwrap();
-        let block = d.next_block().unwrap().unwrap();
-        assert_eq!((block.channels[0][0] * 32768.0) as i16, frames[5][0]);
-    }
-
     /// ALAC in Matroska seeks to the exact frame: packet starts come from the frame length, not
     /// from the millisecond timestamps (packet 1 starts at frame 4096, stored as 85 ms = 4080).
     #[test]

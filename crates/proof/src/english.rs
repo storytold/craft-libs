@@ -554,104 +554,6 @@ fn list_suggest(word: &str, max: usize) -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// Review follow-up: only `-ize` is swapped for `-ise`, never `-yze` for `-yse` (Oxford
-    /// spelling has `analyse`), so `reanalyze`, `breathalyzer`, `paralyzingly` stay American.
-    #[test]
-    fn ise_spelling_swaps_ize_only() {
-        assert_eq!(ise_spelling("organize").as_deref(), Some("organise"));
-        assert_eq!(ise_spelling("Realizations").as_deref(), Some("Realisations"));
-        assert_eq!(ise_spelling("ORGANIZING").as_deref(), Some("ORGANISING"));
-        for w in ["reanalyze", "reanalyzed", "breathalyze", "breathalyzer", "paralyzingly", "catalyze", "Analyzer", "ANALYZE"] {
-            assert_eq!(ise_spelling(w), None, "{w}");
-        }
-    }
-
-    /// English never elides: a missing apostrophe ranks after the one-letter fixes (`neer` → `near`
-    /// before `ne'er`), which only [`TUNING`]'s `elision: false` gives.
-    #[test]
-    fn english_ranks_a_missing_apostrophe_after_one_letter_fixes() {
-        let d = AffixDict::from_hunspell("SET UTF-8\nTRY aenr\nWORDCHARS '\n", "3\nne'er\ner\nnear\n", &[]).unwrap();
-        let s = crate::affix_suggest::suggest_in(&d, "neer", 4, &TUNING);
-        assert_eq!(s.first().map(String::as_str), Some("near"), "{s:?}");
-        assert!(s.contains(&"ne'er".to_string()), "{s:?}");
-    }
-
-    #[test]
-    fn built_in_list_is_the_whole_moby_list() {
-        let d = words();
-        assert!(d.len() > 150_000, "{}", d.len());
-        assert!(d.iter().all(|(w, m)| m == 0 && !w.is_empty() && w.chars().all(|c| !c.is_uppercase())));
-        assert!(WORDS.len() < 400 * 1024, "{} bytes", WORDS.len());
-        let extra: Vec<&str> = EXTRA.lines().filter(|l| !l.is_empty() && !l.starts_with('#')).collect();
-        assert!(extra.len() > 100 && extra.windows(2).all(|p| p[0] < p[1]), "the supplement is sorted");
-    }
-
-    /// The built-in list knows right words, the rare and the modern ones included, and marks
-    /// every word it doesn't know (craft-libs#482 review: the old core list let any unknown word
-    /// through unless it was a near miss of a common one, and marked right words that were).
-    #[test]
-    fn built_in_list_marks_unknown_words_only() {
-        for w in [
-            "the",
-            "The",
-            "houses",
-            "running",
-            "looked",
-            "happily",
-            "kindness",
-            "Received",
-            "well-known",
-            "photosynthesis",
-            "fiber",
-            "theater",
-            "organize",
-            "budget",
-            "phone",
-            "people's",
-            "wont",
-            "cant",
-            // WordCraft's supplement.
-            "login",
-            "blog",
-            "email",
-            "emails",
-        ] {
-            assert!(list_correct(w), "{w} is not marked");
-        }
-        for w in ["teh", "Teh", "abd", "ur", "recieved", "definately", "seperate", "ocurred", "becuase", "peopel", "beautifull", "zxqv", "Jarndycey"]
-        {
-            assert!(!list_correct(w), "{w} is marked");
-        }
-        assert!(!list_correct("well-knwon"), "each part of a compound is checked");
-    }
-
-    #[test]
-    fn built_in_list_suggests_one_edit_away() {
-        assert_eq!(list_suggest("becuase", 3).first().map(String::as_str), Some("because"));
-        assert_eq!(list_suggest("Becuase", 3).first().map(String::as_str), Some("Because"));
-        assert_eq!(list_suggest("hte", 3).first().map(String::as_str), Some("the"));
-        assert_eq!(list_suggest("recieve", 3).first().map(String::as_str), Some("receive"));
-        assert_eq!(list_suggest("wprd", 3).first().map(String::as_str), Some("word"), "a neighbouring key");
-        assert!(list_suggest("é", 5).iter().all(|s| s.chars().count() > 1 || s == "a" || s == "i"), "{:?}", list_suggest("é", 5));
-        assert!(list_suggest("x", 5).iter().all(|s| s.chars().count() > 1 || s == "a" || s == "i"), "{:?}", list_suggest("x", 5));
-        assert!(!neighbour_keys('q', 's') && neighbour_keys('q', 'a') && neighbour_keys('o', 'p') && !neighbour_keys('é', 'e'));
-        assert!(list_suggest("definately", 5).contains(&"definitely".to_string()));
-        assert!(list_suggest("", 5).is_empty() && list_suggest("becuase", 0).is_empty());
-        assert!(list_suggest(&"a".repeat(MAX_SUGGEST_CHARS + 1), 5).is_empty());
-    }
-
-    /// Suggestions look words up rather than scanning the list: the longest word is still quick.
-    #[test]
-    fn built_in_list_suggestions_are_bounded() {
-        let _ = words();
-        let word: String = "qwertyuiopasdfghjklzxcvbnm".chars().cycle().take(MAX_SUGGEST_CHARS).collect();
-        let start = std::time::Instant::now();
-        for _ in 0..10 {
-            let _ = list_suggest(&word, 5);
-        }
-        assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
-    }
-
     /// The lookup order (README): a dictionaries-folder English comes before SCOWL, SCOWL before
     /// the built-in list; each English looks for its own dictionary only, and with SCOWL embedded
     /// the system locations aren't searched. (Checked here without touching the process-wide
@@ -702,31 +604,6 @@ mod tests {
         for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa] {
             assert_eq!(own_names(lang), names(lang));
         }
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Without SCOWL, every en_AU source comes before any en_GB one (a dictionaries folder's, an
-    /// installed pack's, the system's): a user's en_GB doesn't outrank a system en_AU.
-    #[test]
-    fn australian_english_reads_every_en_au_before_any_en_gb() {
-        let dir = std::env::temp_dir().join(format!("wc-proof-en-au-order-{}", std::process::id()));
-        for sub in ["user", "system"] {
-            std::fs::create_dir_all(dir.join(sub)).unwrap();
-        }
-        let write = |sub: &str, name: &str| {
-            std::fs::write(dir.join(sub).join(format!("{name}.aff")), "SET UTF-8\n").unwrap();
-            std::fs::write(dir.join(sub).join(format!("{name}.dic")), "1\nzzyzx\n").unwrap();
-        };
-        write("user", "en_GB");
-        write("system", "en_AU");
-        let (user, system) = (vec![dir.join("user")], vec![dir.join("system")]);
-        let find = |n: &[&str]| crate::hunspell::ordered(n, &user, &[], &system, &[]);
-        let stems = |v: Vec<(PathBuf, PathBuf)>| -> Vec<String> {
-            v.iter().filter_map(|(_, d)| d.file_stem().map(|s| s.to_string_lossy().into_owned())).collect()
-        };
-        assert_eq!(stems(exact_candidates(ProofLang::EnAu, find)), ["en_AU", "en_GB"]);
-        assert_eq!(stems(exact_candidates(ProofLang::EnGb, find)), ["en_GB"]);
-        assert_eq!(stems(exact_candidates(ProofLang::En, find)), Vec::<String>::new());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

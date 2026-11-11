@@ -1320,64 +1320,6 @@ fn jobs_stride_c(mbw: usize) -> usize {
 mod tests {
     use super::*;
 
-    #[test]
-    fn avcc_and_codec_params_roundtrip() {
-        let cfg = EncoderConfig::new(320, 240, 30, 1);
-        let enc = Encoder::new(cfg).unwrap();
-        let params = enc.codec_params();
-        assert_eq!(params.codec, CodecId::H264);
-        assert_eq!(params.tag, Some(*b"avc1"));
-        assert_eq!((params.width, params.height), (Some(320), Some(240)));
-        let parsed = craft_media::isobmff::AvcConfig::parse(&params.extradata).unwrap();
-        assert_eq!(parsed.length_size, 4);
-        assert_eq!(parsed.sps.len(), 1);
-        assert_eq!(parsed.pps.len(), 1);
-        assert_eq!(parsed.to_bytes(), params.extradata);
-    }
-
-    #[test]
-    fn invalid_dimensions_report_the_upper_limit() {
-        let error = Encoder::new(EncoderConfig::new(16386, 2, 30, 1)).err().unwrap();
-        assert!(error.to_string().contains("16384x16384"));
-    }
-
-    #[test]
-    fn non_finite_crf_is_rejected() {
-        let mut cfg = EncoderConfig::new(16, 16, 30, 1);
-        cfg.rate = RateControl::Crf(f32::NAN);
-        assert!(matches!(Encoder::new(cfg), Err(Error::InvalidConfig(message)) if message == "CRF must be finite"));
-    }
-
-    #[test]
-    fn vbr_requires_a_positive_maximum_at_least_the_target() {
-        for (target_kbps, max_kbps) in [(1000, 0), (1000, 999)] {
-            let mut cfg = EncoderConfig::new(16, 16, 30, 1);
-            cfg.rate = RateControl::Vbr { target_kbps, max_kbps };
-            assert!(matches!(Encoder::new(cfg), Err(Error::InvalidConfig(_))));
-        }
-    }
-
-    #[test]
-    fn second_pass_rejects_a_different_frame_rate() {
-        let stats = PassStats { frames: vec![FrameStat { slice_type: nal::SliceType::I, qscale: 1.0, bits: 100, cplx: 1.0 }], fps: 24.0 };
-        let mut cfg = EncoderConfig::new(16, 16, 48, 1);
-        cfg.rate = RateControl::Cbr { kbps: 100 };
-        cfg.pass = Pass::Second(stats);
-        assert!(matches!(Encoder::new(cfg), Err(Error::InvalidConfig(message)) if message.contains("frame rate")));
-    }
-
-    #[cfg(not(feature = "threads"))]
-    #[test]
-    fn automatic_slicing_is_serial_without_threads() {
-        let enc = Encoder::new(EncoderConfig::new(320, 240, 30, 1)).unwrap();
-        assert_eq!(core!(&enc.core, c => c.slices), 1);
-
-        let mut cfg = EncoderConfig::new(320, 240, 30, 1);
-        cfg.slices = 4;
-        let enc = Encoder::new(cfg).unwrap();
-        assert_eq!(core!(&enc.core, c => c.slices), 4, "explicit slice counts remain supported");
-    }
-
     fn grey(w: usize, h: usize) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
         (vec![128; w * h], vec![128; w * h / 4], vec![128; w * h / 4])
     }

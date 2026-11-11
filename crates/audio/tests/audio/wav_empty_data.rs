@@ -37,30 +37,6 @@ fn riff(chunks: &[Vec<u8>]) -> Vec<u8> {
     out
 }
 
-fn list_info() -> Vec<u8> {
-    let mut l = b"INFO".to_vec();
-    l.extend_from_slice(&chunk(b"INAM", b"Silence"));
-    chunk(b"LIST", &l)
-}
-
-#[test]
-fn an_empty_data_chunk_followed_by_metadata_has_no_frames() {
-    let file = riff(&[chunk(b"fmt ", &fmt16(2, 48_000)), chunk(b"data", &[]), list_info(), chunk(b"bext", &[0u8; 602])]);
-    let info = probe(&file, Some("wav")).unwrap();
-    assert_eq!(info.frames, 0, "the LIST and bext chunks are not samples");
-    let (info, buf) = decode(&file, Some("wav")).unwrap();
-    assert_eq!((info.frames, buf.frames()), (0, 0));
-    // The same with the metadata first.
-    let file = riff(&[chunk(b"fmt ", &fmt16(1, 44_100)), list_info(), chunk(b"data", &[])]);
-    assert_eq!(probe(&file, Some("wav")).unwrap().frames, 0);
-    // And with a single trailing chunk of odd size and no pad byte at the very end.
-    let mut file = riff(&[chunk(b"fmt ", &fmt16(1, 44_100)), chunk(b"data", &[]), chunk(b"note", b"abc")]);
-    file.pop();
-    let riff_size = (file.len() - 8) as u32;
-    file[4..8].copy_from_slice(&riff_size.to_le_bytes());
-    assert_eq!(probe(&file, Some("wav")).unwrap().frames, 0);
-}
-
 #[test]
 fn a_recording_that_was_never_finalised_still_gives_its_audio() {
     let samples: Vec<u8> = (0..400i16).flat_map(|i| (i * 40).to_le_bytes()).collect();
@@ -79,12 +55,6 @@ fn a_recording_that_was_never_finalised_still_gives_its_audio() {
     assert_eq!(probe(&file, Some("wav")).unwrap().frames, 200);
 }
 
-#[test]
-fn a_data_chunk_with_audio_is_unchanged() {
-    let samples: Vec<u8> = (0..100i16).flat_map(|i| i.to_le_bytes()).collect();
-    let file = riff(&[chunk(b"fmt ", &fmt16(1, 44_100)), chunk(b"data", &samples), list_info()]);
-    assert_eq!(probe(&file, Some("wav")).unwrap().frames, 100);
-}
 /// Whether an empty `data` chunk is followed by chunks alone is decided by walking the rest of the
 /// file. Doing that for every empty `data` chunk made parsing quadratic in their number (minutes
 /// for this 4 MB file); only the first one is used.

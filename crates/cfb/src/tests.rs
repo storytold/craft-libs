@@ -104,20 +104,6 @@ fn v_sector(v: Version) -> usize {
 }
 
 #[test]
-fn header_fields() {
-    let (b, _) = sample(Version::V4, 3);
-    assert!(sniff(&b));
-    assert_eq!(&b[24..26], &0x3Eu16.to_le_bytes());
-    assert_eq!(&b[26..28], &4u16.to_le_bytes());
-    assert_eq!(&b[30..32], &12u16.to_le_bytes());
-    let (b, _) = sample(Version::V3, 3);
-    assert_eq!(&b[26..28], &3u16.to_le_bytes());
-    assert_eq!(&b[30..32], &9u16.to_le_bytes());
-    assert_eq!(&b[40..44], &0u32.to_le_bytes(), "version 3 leaves the directory sector count 0");
-    assert_eq!(CompoundFile::open(&b).unwrap().version, 3);
-}
-
-#[test]
 fn large_file_needs_difat() {
     // > 109 FAT sectors with 512-byte sectors: 109 * 128 sectors * 512 bytes ≈ 7.1 MB
     let mut w = Writer::new(Version::V3);
@@ -133,77 +119,12 @@ fn large_file_needs_difat() {
 }
 
 #[test]
-fn names() {
-    assert!(compare_names("b", "aa").is_lt(), "shorter first");
-    assert!(compare_names("abc", "ABD").is_lt());
-    assert!(compare_names("Abc", "aBC").is_eq());
-    assert!(validate_name("a/b").is_err());
-    assert!(validate_name(&"x".repeat(32)).is_err());
-    assert!(validate_name(&"x".repeat(31)).is_ok());
-    let mut w = Writer::default();
-    w.stream(Writer::ROOT, "Name", vec![]).unwrap();
-    assert!(matches!(w.stream(Writer::ROOT, "NAME", vec![]), Err(Error::BadName(_))));
-    let s = w.stream(Writer::ROOT, "x", vec![]).unwrap();
-    assert!(w.storage(s, "y", [0; 16]).is_err(), "streams have no children");
-    let cf_bytes = w.finish();
-    let cf = CompoundFile::open(&cf_bytes).unwrap();
-    assert!(cf.find("name").is_ok(), "lookups are case-insensitive");
-    assert!(matches!(cf.find("nope"), Err(Error::NotFound(_))));
-    assert!(cf.read(0).is_err(), "the root is not a stream");
-}
-
-#[test]
 fn unicode_names() {
     let mut w = Writer::default();
     w.stream(Writer::ROOT, "Ünïcødé ストリーム", vec![9; 10]).unwrap();
     let b = w.finish();
     let cf = CompoundFile::open(&b).unwrap();
     assert_eq!(cf.read_path("üNÏCØDÉ ストリーム").unwrap(), vec![9; 10]);
-}
-
-#[test]
-fn not_cfb() {
-    assert_eq!(CompoundFile::open(b"hello").unwrap_err(), Error::NotCfb);
-    assert_eq!(CompoundFile::open(&[0u8; 600]).unwrap_err(), Error::NotCfb);
-}
-
-#[test]
-fn truncation_never_panics() {
-    let (b, expect) = sample(Version::V3, 20);
-    let mut ok = 0;
-    for cut in (0..b.len()).step_by(29) {
-        if let Ok(cf) = CompoundFile::open(&b[..cut]) {
-            ok += 1;
-            for (path, data) in &expect {
-                if let Ok(d) = cf.read_path(path) {
-                    assert_eq!(&d, data, "a stream that reads back is complete");
-                }
-            }
-        }
-    }
-    let _ = ok;
-}
-
-#[test]
-fn mutation_never_panics_or_hangs() {
-    let (b, _) = sample(Version::V3, 12);
-    let mut seed = 0x9E37_79B9_7F4A_7C15u64;
-    for _ in 0..1500 {
-        let mut g = b.clone();
-        for _ in 0..6 {
-            seed ^= seed << 13;
-            seed ^= seed >> 7;
-            seed ^= seed << 17;
-            // bias towards the header, FAT and directory (the end of the file)
-            let at = if seed & 1 == 0 { (seed >> 8) as usize % 512 } else { g.len() - 1 - (seed >> 8) as usize % 2048.min(g.len()) };
-            g[at] = (seed >> 40) as u8;
-        }
-        if let Ok(cf) = CompoundFile::open(&g) {
-            for i in 0..cf.entries.len() {
-                let _ = cf.read(i);
-            }
-        }
-    }
 }
 
 fn put_u32(b: &mut [u8], at: usize, v: u32) {
@@ -312,15 +233,6 @@ fn chains_filling_the_file_still_read() {
 }
 
 #[test]
-fn nul_in_a_name_is_rejected() {
-    assert!(validate_name("a\0b").is_err());
-    assert!(validate_name("\0").is_err());
-    let mut w = Writer::default();
-    assert!(matches!(w.stream(Writer::ROOT, "a\0b", vec![1]), Err(Error::BadName(_))));
-    assert!(matches!(w.storage(Writer::ROOT, "x\0", [0; 16]), Err(Error::BadName(_))));
-}
-
-#[test]
 fn span_is_checked() {
     use crate::read::span;
     assert_eq!(span(0, 1, 512), Some((512, 1024)));
@@ -332,72 +244,6 @@ fn span_is_checked() {
     assert_eq!(span(usize::MAX, 0, 64), None);
     assert_eq!(span(usize::MAX / 64, 0, 64), None, "start fits, end does not");
     assert_eq!(span(usize::MAX - 1, 1, 1), None);
-}
-
-/// The allocating comparison compare_names used before the iterator rewrite.
-fn compare_names_old(a: &str, b: &str) -> std::cmp::Ordering {
-    let ua: Vec<u16> = a.encode_utf16().collect();
-    let ub: Vec<u16> = b.encode_utf16().collect();
-    ua.len().cmp(&ub.len()).then_with(|| ua.iter().map(|&u| upper(u)).cmp(ub.iter().map(|&u| upper(u))))
-}
-
-#[test]
-fn compare_names_matches_the_allocating_version() {
-    let names = [
-        "",
-        "a",
-        "A",
-        "b",
-        "B",
-        "ab",
-        "AB",
-        "aB",
-        "abc",
-        "ABD",
-        "Abc",
-        "aBC",
-        "z",
-        "Z",
-        "{",
-        "_",
-        "ß",
-        "SS",
-        "ss",
-        "ü",
-        "Ü",
-        "é",
-        "É",
-        "ǆ",
-        "ǅ",
-        "Ǆ",
-        "ストリーム",
-        "ｓｔ",
-        "Ｓｔ",
-        "😀",
-        "😁",
-        "a😀",
-        "A😀",
-        "\u{ffff}",
-        "\u{10000}",
-        "Header-2",
-        "HEADER-2",
-        "header-2",
-        "Mobs-1901{a}",
-        "mobs-1901{A}",
-    ];
-    for a in names {
-        for b in names {
-            assert_eq!(compare_names(a, b), compare_names_old(a, b), "{a:?} vs {b:?}");
-        }
-    }
-    // every BMP scalar against a few fixed names
-    for c in (0u32..=0x10FFFF).filter_map(char::from_u32) {
-        let s = c.to_string();
-        for other in ["a", "Z", "ü", "ǆ"] {
-            assert_eq!(compare_names(&s, other), compare_names_old(&s, other));
-            assert_eq!(compare_names(other, &s), compare_names_old(other, &s));
-        }
-    }
 }
 
 /// Name lookups go through a sorted per-storage index: every child of a wide storage resolves

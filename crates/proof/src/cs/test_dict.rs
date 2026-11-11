@@ -53,8 +53,3 @@ si
 to
 zqzakázané/F
 ";
-
-pub fn install() {
-    crate::hold_dictionary_tests();
-    super::install_dictionary(AFF, DIC).unwrap();
-}

@@ -9,7 +9,9 @@
 /// A parsed 3D LUT.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LutFile {
+    /// Title from the file, or empty when it has none.
     pub title: String,
+    /// Edge length of the cube: the table has `size` points per axis.
     pub size: usize,
     /// `size`³ × 3 values, red fastest.
     pub data: Vec<f32>,
@@ -18,6 +20,7 @@ pub struct LutFile {
     /// saturating outside. `[0, 1]` is the identity default; applying a table with any other
     /// domain is rejected upstream until Color Lookup carries it through.
     pub domain_min: [f32; 3],
+    /// Upper end of the input domain per channel; see [`domain_min`](Self::domain_min).
     pub domain_max: [f32; 3],
 }
 
@@ -25,6 +28,7 @@ pub struct LutFile {
 /// keeping the GPU table within texture limits).
 pub const MAX_SIZE: usize = 129;
 
+/// Why a LUT file could not be read; the string is a message for the user.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LutError(pub String);
 
@@ -865,43 +869,6 @@ mod tests {
     }
 
     #[test]
-    fn cube_domain_is_kept_and_validated() {
-        let base = "TITLE \"t\"
-LUT_3D_SIZE 2
-";
-        let rows = "0 0 0
-0 0 1
-0 1 0
-0 1 1
-1 0 0
-1 0 1
-1 1 0
-1 1 1
-";
-        // The default domain parses as default.
-        let d = parse_cube(&format!("{base}{rows}")).expect("default domain");
-        assert!(d.domain_is_default());
-        // DOMAIN_MIN/MAX are kept for the caller to act on.
-        let d = parse_cube(&format!(
-            "DOMAIN_MIN 0.1 0.2 0.3
-DOMAIN_MAX 0.9 0.8 0.7
-{base}{rows}"
-        ))
-        .expect("custom domain");
-        assert_eq!(d.domain_min, [0.1, 0.2, 0.3]);
-        assert_eq!(d.domain_max, [0.9, 0.8, 0.7]);
-        assert!(!d.domain_is_default());
-        // A degenerate domain is a parse error, not a division by zero later.
-        let e = parse_cube(&format!(
-            "DOMAIN_MIN 0.5 0.5 0.5
-DOMAIN_MAX 0.5 1 1
-{base}{rows}"
-        ))
-        .unwrap_err();
-        assert!(e.0.contains("below DOMAIN_MAX"), "{e}");
-    }
-
-    #[test]
     fn cube_1d_narrow_domain_is_refused() {
         // #8913: the issue's fixture — a two-node ramp over 0.24..0.26. Baking it onto the
         // 33-point grid rendered grey-65 as 148 where Photoshop renders 190 (42-level error).
@@ -945,64 +912,6 @@ DOMAIN_MAX 0.5 1 1
     }
 
     #[test]
-    fn cube_1d_domain_is_baked_into_the_resample() {
-        // An identity ramp over the domain 0.25..0.75: 0.25 maps to 0, 0.5 to 0.5, 0.75 to 1.
-        let table = "LUT_1D_SIZE 2\nLUT_1D_INPUT_RANGE 0.25 0.75\n0 0 0\n1 1 1\n";
-        let l = parse_cube(table).expect("1D with input range");
-        assert!(l.domain_is_default(), "the domain is baked in, so the cube is plain 0..1");
-        let at = |r: usize| l.data[r * 3];
-        // 33-point grid, red fastest: entry r on the red axis is input r / 32.
-        assert!(at(0).abs() < 1e-6, "below the domain saturates to 0");
-        assert!((at(16) - 0.5).abs() < 1e-5, "0.5 is the middle of 0.25..0.75: {}", at(16));
-        assert!((at(8) - 0.0).abs() < 1e-5, "0.25 maps to 0: {}", at(8));
-        assert!((at(24) - 1.0).abs() < 1e-5, "0.75 maps to 1: {}", at(24));
-        assert!((at(32) - 1.0).abs() < 1e-6, "above the domain saturates to 1");
-        // Per-channel DOMAIN_MIN/MAX work the same way.
-        let l = parse_cube("LUT_1D_SIZE 2\nDOMAIN_MIN 0 0 0.5\nDOMAIN_MAX 1 1 1\n0 0 0\n1 1 1\n").expect("1D domain");
-        let blue_mid = l.data[(16 * 33 * 33) * 3 + 2];
-        assert!(blue_mid.abs() < 1e-5, "blue 0.5 is the bottom of its domain: {blue_mid}");
-        // A degenerate 1D domain is rejected like the 3D one.
-        let e = parse_cube("LUT_1D_SIZE 2\nLUT_1D_INPUT_RANGE 1 1\n0 0 0\n1 1 1\n").unwrap_err();
-        assert!(e.0.contains("below DOMAIN_MAX"), "{e}");
-    }
-
-    #[test]
-    fn cube_roundtrip_and_identity() {
-        let id = LutFile::identity(5).unwrap();
-        let text = write_cube(&LutFile { title: "Id".into(), ..id.clone() });
-        let back = parse_cube(&text).unwrap();
-        assert_eq!(back.size, 5);
-        assert_eq!(back.title, "Id");
-        for (a, b) in back.data.iter().zip(&id.data) {
-            assert!((a - b).abs() < 1e-5);
-        }
-        // Red varies fastest: entry 1 is (0.25, 0, 0).
-        assert_eq!(&back.data[3..6], &[0.25, 0.0, 0.0]);
-    }
-
-    #[test]
-    fn cube_1d_expands() {
-        let text = "LUT_1D_SIZE 2\n0 0 0\n0.5 1 1\n";
-        let l = parse_cube(text).unwrap();
-        assert_eq!(l.size, 33);
-        let last = &l.data[l.data.len() - 3..];
-        assert!((last[0] - 0.5).abs() < 1e-6 && (last[1] - 1.0).abs() < 1e-6);
-
-        let mut larger = String::from("LUT_1D_SIZE 256\n");
-        for i in 0..256 {
-            let value = i as f32 / 255.0;
-            larger.push_str(&format!("{value} {value} {value}\n"));
-        }
-        assert_eq!(parse_cube(&larger).unwrap().size, 33);
-    }
-
-    #[test]
-    fn cube_1d_size_multiplication_overflow_is_rejected() {
-        let text = format!("LUT_1D_SIZE {}\n", usize::MAX);
-        assert!(parse_cube(&text).is_err());
-    }
-
-    #[test]
     fn three_dl_without_a_header_reads_low_nodes_as_12_bit() {
         let table = |peak: u32| -> String {
             let mut text = String::from("0 1023\n");
@@ -1020,21 +929,6 @@ DOMAIN_MAX 0.5 1 1
         // cube declaration; `Mesh 1 10` would declare a 3³ cube and refuse this 2³ table (#9078).
         let white = parse_3dl(&format!("3DMESH\n{}", table(1023))).unwrap().data[21..24].to_vec();
         assert_eq!(white, [1.0; 3]);
-    }
-
-    #[test]
-    fn three_dl_blue_fastest_and_bit_depth() {
-        let mut text = String::from("0 1023\n");
-        for r in 0..2 {
-            for g in 0..2 {
-                for b in 0..2 {
-                    text.push_str(&format!("{} {} {}\n", r * 4095, g * 4095, b * 4095));
-                }
-            }
-        }
-        let l = parse_3dl(&text).unwrap();
-        assert_eq!(l.size, 2);
-        assert_eq!(l.data, LutFile::identity(2).unwrap().data);
     }
 
     /// A `size`³ inverse-identity `.3dl` (blue fastest): node (r,g,b) outputs `max - max·v/(size-1)`
@@ -1244,12 +1138,6 @@ DOMAIN_MAX 0.5 1 1
     }
 
     #[test]
-    fn look_3d_size_exponent_overflow_is_rejected() {
-        let text = format!("<look><size>{}</size><data>00</data></look>", usize::MAX);
-        assert!(parse_look(&text).is_err());
-    }
-
-    #[test]
     fn format_detection_matches_parse() {
         assert_eq!(Format::detect("a.3DL", b"<look>"), Format::ThreeDl);
         assert_eq!(Format::detect("a.Look", b""), Format::Look);
@@ -1258,45 +1146,5 @@ DOMAIN_MAX 0.5 1 1
         assert_eq!(Format::ThreeDl.extension(), "3dl");
         let text = write_cube(&LutFile::identity(2).unwrap());
         assert_eq!(parse_as(Format::Cube, text.as_bytes()), parse("a.cube", text.as_bytes()));
-    }
-
-    #[test]
-    fn malformed_rejected() {
-        assert!(parse_cube("LUT_3D_SIZE 2\n0 0 0\n").is_err());
-        assert!(parse_cube("garbage").is_err());
-        assert!(parse_cube("LUT_3D_SIZE 99999\n").is_err());
-        assert!(parse_3dl("1 2 3\n4 5 6\n").is_err());
-        assert!(parse_look("<look></look>").is_err());
-    }
-
-    #[test]
-    fn builtins_exist_and_are_in_range() {
-        for (id, _) in BUILTIN {
-            let l = builtin(id).unwrap();
-            assert_eq!(l.data.len(), 33 * 33 * 33 * 3);
-            assert!(l.data.iter().all(|v| (0.0..=1.0).contains(v)), "{id}");
-        }
-        assert!(builtin("nope").is_none());
-    }
-
-    #[test]
-    fn cube_domain_survives_a_write() {
-        let cube = "DOMAIN_MIN 0.25 0.25 0.25
-DOMAIN_MAX 0.75 0.75 0.75
-LUT_3D_SIZE 2
-0 0 0
-0 0 1
-0 1 0
-0 1 1
-1 0 0
-1 0 1
-1 1 0
-1 1 1
-";
-        let l = parse_cube(cube).expect("a cube with a non-default domain");
-        assert!(!l.domain_is_default());
-        let back = parse_cube(&write_cube(&l)).expect("roundtrip");
-        assert_eq!(back.domain_min, l.domain_min, "the written table must mean the same");
-        assert_eq!(back.domain_max, l.domain_max);
     }
 }

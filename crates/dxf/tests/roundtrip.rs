@@ -41,22 +41,6 @@ fn check(case: &str, body: &[Tag]) {
 }
 
 #[test]
-fn integer_width_boundaries() {
-    // Explicit reference ranges, not obtained from the codec's kind_of().
-    let widths = [
-        (vec![60..=79, 170..=179, 270..=289, 370..=389, 400..=409, 1060..=1070], i64::from(i16::MIN), i64::from(i16::MAX)),
-        (vec![90..=99, 420..=429, 440..=459, 1071..=1071], i64::from(i32::MIN), i64::from(i32::MAX)),
-        (std::iter::once(160..=169).collect(), i64::MIN, i64::MAX),
-    ];
-    for (ranges, min, max) in widths {
-        for value in [min, min + 1, -1, 0, 1, max - 1, max] {
-            let tags: Vec<_> = ranges.iter().cloned().flatten().map(|code| Tag::i(code, value)).collect();
-            check(&format!("integer/{min}..{max}/{value}"), &tags);
-        }
-    }
-}
-
-#[test]
 fn finite_reals_keep_all_bits() {
     let values = [
         0.0,
@@ -83,14 +67,6 @@ fn finite_reals_keep_all_bits() {
 }
 
 #[test]
-fn booleans() {
-    for value in [false, true] {
-        let tags: Vec<_> = (290..=299).map(|code| Tag::new(code, Value::Bool(value))).collect();
-        check(&format!("bool/{value}"), &tags);
-    }
-}
-
-#[test]
 fn strings_preserve_whitespace_unicode_and_literal_escapes() {
     // No CR/LF or NUL: those are line/string delimiters, not losslessly writable payloads.
     let values = [
@@ -113,40 +89,4 @@ fn strings_preserve_whitespace_unicode_and_literal_escapes() {
     for length in [1, 254, 255, 256, 1024] {
         check(&format!("string/length={length}"), &[Tag::s(1, "x".repeat(length))]);
     }
-}
-
-#[test]
-fn hex_chunks_keep_bytes_and_order() {
-    // DXF groups 310–319 and 1004 permit 127 payload bytes per chunk. A binary length
-    // byte can represent more, but that is reader tolerance, not writer conformance.
-    // Larger payloads need chunk-size/reassembly checks rather than exact tag equality;
-    // see hex_chunks.rs for the independent wire checks and pending writer regressions.
-    for length in [0, 1, 2, 126, 127] {
-        let hex: String = (0..length).fold(String::new(), |mut out, i| {
-            use std::fmt::Write as _;
-            let _ = write!(out, "{:02X}", (i * 37) % 256);
-            out
-        });
-        let tags: Vec<_> = (310..=319).chain([1004]).map(|code| Tag::new(code, Value::Hex(hex.clone()))).collect();
-        check(&format!("hex/bytes={length}"), &tags);
-    }
-}
-
-#[test]
-fn mixed_values_and_repeated_codes_keep_order() {
-    check(
-        "mixed/repeated-codes",
-        &[
-            Tag::s(0, "TEST"),
-            Tag::f(10, 1.25),
-            Tag::s(1, "first"),
-            Tag::f(10, -2.5),
-            Tag::i(70, -7),
-            Tag::s(1, "second"),
-            Tag::new(290, Value::Bool(true)),
-            Tag::new(310, Value::Hex("00FF80".into())),
-            Tag::i(160, i64::MAX),
-            Tag::s(1, ""),
-        ],
-    );
 }

@@ -40,10 +40,13 @@ pub struct Preset {
     pub key: &'static str,
     /// What the button says.
     pub name: &'static str,
+    /// Adapter name the preset selects.
     pub provider: &'static str,
     /// Empty for "type your own".
     pub endpoint: &'static str,
+    /// Billing the preset assumes.
     pub billing: Billing,
+    /// Whether the form asks for a key.
     pub needs_key: bool,
     /// One line about it, shown under the name.
     pub note: &'static str,
@@ -182,9 +185,13 @@ fn preset_models(preset: &Preset) -> Vec<ModelInfo> {
 /// Which box a problem belongs to, so a form can mark it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Field {
+    #[allow(missing_docs)]
     Label,
+    #[allow(missing_docs)]
     Provider,
+    #[allow(missing_docs)]
     Address,
+    #[allow(missing_docs)]
     Key,
     /// The name of the header that carries the key.
     KeyHeader,
@@ -193,7 +200,9 @@ pub enum Field {
 /// Why a draft was refused. The message is safe to show.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DraftError {
+    /// The box the problem belongs to.
     pub field: Field,
+    /// What to tell the user.
     pub message: String,
 }
 
@@ -216,6 +225,7 @@ impl std::error::Error for DraftError {}
 pub enum KeyChange {
     /// Leave whatever is saved.
     Keep,
+    /// Save this key, replacing any saved one.
     Set(SecretString),
     /// The connection no longer uses a key; remove the saved one.
     Clear,
@@ -224,7 +234,9 @@ pub enum KeyChange {
 /// A checked connection and what to do with its key.
 #[derive(Clone, Debug)]
 pub struct Prepared {
+    /// The validated connection to save.
     pub connection: Connection,
+    /// What to do with the stored key.
     pub key: KeyChange,
 }
 
@@ -233,17 +245,23 @@ pub struct Prepared {
 pub struct ConnectionDraft {
     /// `Some` when editing an existing connection.
     pub editing: Option<ConnectionId>,
+    #[allow(missing_docs)]
     pub label: String,
+    #[allow(missing_docs)]
     pub provider: String,
+    #[allow(missing_docs)]
     pub endpoint: String,
+    #[allow(missing_docs)]
     pub billing: Billing,
+    /// Whether the connection authenticates with a key.
     pub uses_key: bool,
     /// Text typed into the key box. Empty while editing means "keep the saved key". It is a plain
-    /// string only because a text box needs one; [`Debug`] never prints it and [`prepare`]
+    /// string only because a text box needs one; [`Debug`] never prints it and [`Self::prepare`]
     /// (Self::prepare) turns it into a [`SecretString`].
     pub key: String,
     /// Header that carries the key; empty sends it as `Authorization: Bearer`.
     pub key_header: String,
+    /// Whether the connection is offered for use.
     pub enabled: bool,
     /// Models carried onto the saved connection. Assigning here declares them by hand and records
     /// no address, so they survive any address change; models a test found go through
@@ -329,7 +347,7 @@ impl ConnectionDraft {
     /// A test is not instant and the address stays editable while it runs, so its answer can
     /// arrive after the address has changed, or after a later test at the new address has already
     /// answered. Recording it then would file one endpoint's models under another, which is what
-    /// [`models_fit`](Self::models_fit) exists to prevent. An answer is therefore taken only while
+    /// `models_fit` exists to prevent. An answer is therefore taken only while
     /// the field still holds the address it was asked of, and a late one is dropped. Returns
     /// whether the models were taken, so a caller can say "this result is out of date".
     ///

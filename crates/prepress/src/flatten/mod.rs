@@ -44,18 +44,26 @@ pub struct DisplayList {
 /// A painted element.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
+    #[allow(missing_docs)]
     Fill(FillItem),
+    #[allow(missing_docs)]
     Text(TextItem),
+    #[allow(missing_docs)]
     Image(ImageItem),
+    #[allow(missing_docs)]
     Group(GroupItem),
 }
 
 /// A filled path.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FillItem {
+    /// The outline.
     pub path: BezPath,
+    #[allow(missing_docs)]
     pub rule: FillRule,
+    #[allow(missing_docs)]
     pub paint: Paint,
+    #[allow(missing_docs)]
     pub overprint: Overprint,
 }
 
@@ -70,13 +78,16 @@ pub struct TextItem {
     pub size: f32,
     /// Text space to page space. Text space is y up, as in a PDF text matrix.
     pub transform: Affine,
+    /// The glyphs of the run, in order.
     pub glyphs: Vec<PlacedGlyph>,
     /// The Unicode text of the run, when the source had it; [`PlacedGlyph::text`] indexes it.
     pub text: Option<String>,
     /// The glyphs' filled outlines in page space. Always present: the flattener's geometry for
     /// the run, and what is drawn when `font` is `None`.
     pub outlines: BezPath,
+    #[allow(missing_docs)]
     pub paint: Paint,
+    #[allow(missing_docs)]
     pub overprint: Overprint,
 }
 
@@ -97,6 +108,7 @@ pub type FontBytes = Arc<dyn AsRef<[u8]> + Send + Sync>;
 /// An OpenType (TrueType or CFF outlines) font that krilla can embed.
 #[derive(Clone)]
 pub struct TextFont {
+    /// The font file bytes (OpenType).
     pub data: FontBytes,
     /// The face index in a font collection; 0 for a single font.
     pub index: u32,
@@ -124,6 +136,7 @@ impl PartialEq for TextFont {
 /// A sampled image, 8 bits per component, rows top to bottom.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImageItem {
+    /// The color space of `samples`.
     pub space: ImageSpace,
     /// Width and height in samples.
     pub size: (u32, u32),
@@ -133,6 +146,7 @@ pub struct ImageItem {
     pub transform: Affine,
     /// Alpha, one byte per sample, at `size`.
     pub smask: Option<Arc<[u8]>>,
+    #[allow(missing_docs)]
     pub overprint: Overprint,
     /// The source's JPEG (DCTDecode) data, when `samples` are its decoding and the writer can
     /// write it as it is: [`ImageSpace::Gray`] or [`ImageSpace::Cmyk`], no `smask`.
@@ -142,8 +156,11 @@ pub struct ImageItem {
 /// The components of an [`ImageItem`]'s samples.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ImageSpace {
+    #[allow(missing_docs)]
     Gray,
+    #[allow(missing_docs)]
     Rgb,
+    #[allow(missing_docs)]
     Cmyk,
     /// Tints of these inks, 255 = 100% ink, in this order.
     Inks(Vec<InkId>),
@@ -152,23 +169,31 @@ pub enum ImageSpace {
 /// A transparency group, or a plain clip when it is opaque, Normal and unmasked.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GroupItem {
+    /// Group opacity, 0.0 (clear) to 1.0 (opaque).
     pub opacity: f32,
+    /// How the group composites onto its backdrop.
     pub blend: BlendMode,
+    /// Whether the group is isolated (PDF `/I`).
     pub isolated: bool,
+    /// Whether the group is a knockout group (PDF `/K`).
     pub knockout: bool,
     /// Nonzero clip in page space.
     pub clip: Option<BezPath>,
+    /// The soft mask applied to the group, if any.
     pub mask: Option<Box<Mask>>,
     /// The Unicode text the children show, for content drawn as items that is text in the
     /// source, such as a colored Type 3 glyph.
     pub actual_text: Option<String>,
+    /// The items in the group, in painting order.
     pub children: Vec<Item>,
 }
 
 /// A soft mask (ISO 32000-2 §11.6.5).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Mask {
+    /// Whether the mask follows the group's alpha or luminosity.
     pub kind: MaskKind,
+    /// The group whose rendering supplies the mask values.
     pub group: GroupItem,
     /// The luminosity mask's backdrop (`/BC`), what the group composites over; `None` for an
     /// alpha mask.
@@ -181,18 +206,23 @@ pub struct Mask {
 /// Which value of the mask group masks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MaskKind {
+    /// The mask value is the group's alpha.
     Alpha,
+    /// The mask value is the group's luminosity.
     Luminosity,
 }
 
 /// What an item paints with.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Paint {
+    #[allow(missing_docs)]
     Solid(InkColor),
     /// Stops are offsets `0.0..=1.0` in increasing order. Function-based and mesh shadings
     /// arrive as images.
     Gradient {
+        #[allow(missing_docs)]
         stops: Vec<(f32, InkColor)>,
+        #[allow(missing_docs)]
         geometry: GradientGeometry,
     },
 }
@@ -200,11 +230,37 @@ pub enum Paint {
 /// Where a gradient runs, in gradient space.
 #[derive(Clone, Debug, PartialEq)]
 pub enum GradientGeometry {
-    Axial { start: Point, end: Point, extend: [bool; 2], transform: Affine },
-    Radial { start: Point, start_radius: f64, end: Point, end_radius: f64, extend: [bool; 2], transform: Affine },
+    /// A linear gradient from `start` to `end`.
+    Axial {
+        /// The point where the first stop sits.
+        start: Point,
+        /// The point where the last stop sits.
+        end: Point,
+        /// Whether the colors extend before `start` and after `end`.
+        extend: [bool; 2],
+        /// Gradient space to page space.
+        transform: Affine,
+    },
+    /// A radial gradient between the circle at `start` and the circle at `end`.
+    Radial {
+        /// Center of the start circle.
+        start: Point,
+        /// Radius of the start circle.
+        start_radius: f64,
+        /// Center of the end circle.
+        end: Point,
+        /// Radius of the end circle.
+        end_radius: f64,
+        /// Whether the colors extend beyond the start and end circles.
+        extend: [bool; 2],
+        /// Gradient space to page space.
+        transform: Affine,
+    },
 }
 
 /// PDF blend modes (ISO 32000-2 §11.3.5).
+// The variants are the PDF blend mode names.
+#[allow(missing_docs)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BlendMode {
     #[default]

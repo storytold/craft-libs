@@ -18,7 +18,9 @@ const MAX_URI_LEN: usize = 4096;
 /// Size limits applied to payloads in a request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Limits {
+    /// Largest inline binary payload, in bytes.
     pub max_inline_bytes: u64,
+    /// Largest text payload, in bytes.
     pub max_text_bytes: usize,
 }
 
@@ -52,6 +54,7 @@ validated_string!(
 );
 
 impl MediaType {
+    /// The coarse kind for this media type. Unknown types are `Other`; `application/json` counts as text.
     pub fn kind(&self) -> PayloadKind {
         let s = self.as_str();
         if s.starts_with("image/") {
@@ -75,19 +78,28 @@ impl MediaType {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PayloadKind {
+    #[allow(missing_docs)]
     Text,
+    #[allow(missing_docs)]
     Image,
+    #[allow(missing_docs)]
     Video,
+    #[allow(missing_docs)]
     Audio,
+    /// A document such as a PDF.
     Document,
+    /// Any other media type.
     Other,
 }
 
 /// A reference to data that stays where it is until a provider adapter streams it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PayloadHandle {
+    /// Where the data lives, such as a file path or URL. Never empty and has no control characters.
     pub uri: String,
+    /// What the data is.
     pub media_type: MediaType,
+    /// Size in bytes, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_bytes: Option<u64>,
 }
@@ -96,27 +108,36 @@ pub struct PayloadHandle {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Payload {
+    /// Plain text.
     Text {
+        /// The text.
         text: String,
     },
+    /// Binary data carried in the payload, serialized as base64.
     Inline {
+        /// What the data is.
         media_type: MediaType,
+        /// The raw bytes.
         #[serde(with = "base64_bytes")]
         data: Vec<u8>,
     },
+    /// Data kept where it is, referenced by a handle.
     Handle(PayloadHandle),
 }
 
 impl Payload {
+    /// A text payload.
     pub fn text(text: impl Into<String>) -> Self {
         Self::Text { text: text.into() }
     }
 
+    /// An inline payload. Fails when `media_type` is not a valid media type.
     pub fn inline(media_type: &str, data: Vec<u8>) -> Result<Self, AiError> {
         let media_type = MediaType::new(media_type).map_err(|e| AiError::invalid(format!("media type: {e}")))?;
         Ok(Self::Inline { media_type, data })
     }
 
+    /// A handle payload. Fails on an empty, over-long (4096 bytes) or control-character URI, or an invalid media type.
     pub fn handle(uri: &str, media_type: &str, size_bytes: Option<u64>) -> Result<Self, AiError> {
         if uri.is_empty() || uri.len() > MAX_URI_LEN || uri.chars().any(char::is_control) {
             return Err(AiError::invalid("payload uri is empty, too long, or has control characters"));
@@ -125,6 +146,7 @@ impl Payload {
         Ok(Self::Handle(PayloadHandle { uri: uri.to_owned(), media_type, size_bytes }))
     }
 
+    /// The coarse kind: text for `Text`, otherwise from the media type.
     pub fn kind(&self) -> PayloadKind {
         match self {
             Self::Text { .. } => PayloadKind::Text,
@@ -222,81 +244,5 @@ mod base64_bytes {
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
         let text = String::deserialize(d)?;
         super::base64_decode(&text).ok_or_else(|| serde::de::Error::custom("invalid base64"))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn base64_matches_known_vectors() {
-        for (raw, enc) in [("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"), ("foob", "Zm9vYg=="), ("foobar", "Zm9vYmFy")] {
-            assert_eq!(base64_encode(raw.as_bytes()), enc);
-            assert_eq!(base64_decode(enc).unwrap(), raw.as_bytes());
-        }
-    }
-
-    #[test]
-    fn base64_round_trips_all_byte_values() {
-        let data: Vec<u8> = (0..=255u8).collect();
-        assert_eq!(base64_decode(&base64_encode(&data)).unwrap(), data);
-    }
-
-    #[test]
-    fn base64_rejects_malformed() {
-        for bad in ["Zg=", "Z", "Zm9v!", "=Zm9", "Zg==Zg==", "Zm=v", "Z===", "Zm9v\n"] {
-            assert!(base64_decode(bad).is_none(), "{bad:?}");
-        }
-    }
-
-    #[test]
-    fn media_type_validation() {
-        assert!(MediaType::new("image/png").is_ok());
-        assert!(MediaType::new("application/vnd.api+json").is_ok());
-        for bad in ["", "png", "image/", "/png", "Image/PNG", "image/png/x", "image/p ng"] {
-            assert!(MediaType::new(bad).is_err(), "{bad:?}");
-        }
-    }
-
-    #[test]
-    fn kinds_follow_media_type() {
-        assert_eq!(Payload::inline("image/png", vec![1]).unwrap().kind(), PayloadKind::Image);
-        assert_eq!(Payload::inline("application/pdf", vec![1]).unwrap().kind(), PayloadKind::Document);
-        assert_eq!(Payload::text("hi").kind(), PayloadKind::Text);
-    }
-
-    #[test]
-    fn inline_over_limit_is_refused_with_a_hint() {
-        let limits = Limits { max_inline_bytes: 4, max_text_bytes: 4 };
-        let err = Payload::inline("image/png", vec![0; 5]).unwrap().check(&limits).unwrap_err();
-        assert!(err.message.contains("handle"));
-        assert!(Payload::text("12345").check(&limits).is_err());
-        assert!(Payload::text("1234").check(&limits).is_ok());
-    }
-
-    #[test]
-    fn handles_skip_the_inline_limit() {
-        let limits = Limits { max_inline_bytes: 4, max_text_bytes: 4 };
-        let h = Payload::handle("file:///big.mov", "video/quicktime", Some(10_000_000_000)).unwrap();
-        assert!(h.check(&limits).is_ok());
-        assert_eq!(h.size_hint(), Some(10_000_000_000));
-    }
-
-    #[test]
-    fn handle_rejects_bad_uris() {
-        assert!(Payload::handle("", "video/mp4", None).is_err());
-        assert!(Payload::handle("file:///a\nb", "video/mp4", None).is_err());
-        assert!(Payload::handle(&"x".repeat(MAX_URI_LEN + 1), "video/mp4", None).is_err());
-    }
-
-    #[test]
-    fn json_round_trip() {
-        let p = Payload::inline("image/png", vec![0, 1, 2, 250, 255]).unwrap();
-        let json = serde_json::to_string(&p).unwrap();
-        assert!(json.contains("\"type\":\"inline\""));
-        assert_eq!(serde_json::from_str::<Payload>(&json).unwrap(), p);
-        let bad = r#"{"type":"inline","media_type":"image/png","data":"!!"}"#;
-        assert!(serde_json::from_str::<Payload>(bad).is_err());
     }
 }

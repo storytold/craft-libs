@@ -150,7 +150,7 @@ left out of the published crate, as only the tests read it.
 Regenerate the profiles with
 
 ```sh
-CRAFT_CMS_REGEN_PROFILES=1 cargo test -p craft-cms --release --test regen --test fogra39
+CRAFT_CMS_REGEN_PROFILES=1 cargo test -p craft-cms --release -- integration::regen integration::fogra39
 ```
 
 Use your printer's profile for production print.

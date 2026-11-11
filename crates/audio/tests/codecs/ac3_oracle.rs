@@ -133,8 +133,8 @@ const SPECS: &[Spec] = &[
 ];
 
 fn make(ff: &Path, s: &Spec) -> Option<PathBuf> {
-    let out = crate::testkit::fixtures_dir("ac3").join(format!("{}.{}", s.name, s.codec));
-    crate::testkit::fixtures::generate(&out, |tmp| {
+    let out = crate::integration::codecs::testkit::fixtures_dir("ac3").join(format!("{}.{}", s.name, s.codec));
+    crate::integration::codecs::testkit::fixtures::generate(&out, |tmp| {
         let st = Command::new(ff)
             .args(["-hide_banner", "-v", "error", "-y", "-f", "lavfi", "-i", s.input, "-t", "1"])
             .args(["-c:a", s.codec])
@@ -257,10 +257,10 @@ fn damaged_eac3_frames_never_panic() {
 #[test]
 #[ignore]
 fn generate_fixtures() {
-    let Some(ff) = crate::testkit::ffmpeg_or_skip("ac3 fixtures") else { return };
+    let Some(ff) = crate::integration::codecs::testkit::ffmpeg_or_skip("ac3 fixtures") else { return };
     for s in SPECS {
-        let out = crate::testkit::fixtures_dir("ac3").join(format!("{}.{}", s.name, s.codec));
-        crate::testkit::fixtures::generate_and_report(&format!("ac3/{}", s.name), &[out], || make(&ff, s));
+        let out = crate::integration::codecs::testkit::fixtures_dir("ac3").join(format!("{}.{}", s.name, s.codec));
+        crate::integration::codecs::testkit::fixtures::generate_and_report(&format!("ac3/{}", s.name), &[out], || make(&ff, s));
     }
 }
 

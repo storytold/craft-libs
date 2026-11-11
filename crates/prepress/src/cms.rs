@@ -21,10 +21,14 @@ pub struct CmsConversion {
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum ProfileError {
+    /// The profile bytes could not be parsed; the message says why.
     #[error("the profile could not be read: {0}")]
     Unreadable(String),
+    /// The profile describes a colour space other than CMYK.
     #[error("the profile is not CMYK")]
     NotCmyk,
+    /// The profile lacks the tables that convert from the profile connection space to ink
+    /// values.
     #[error("the profile has no PCS-to-device (BToA) tables")]
     NoPcsToDevice,
 }

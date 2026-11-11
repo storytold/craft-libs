@@ -367,21 +367,6 @@ mod tests {
         PackLocale::new(t).unwrap()
     }
 
-    /// Review follow-up (craft-libs#485): a full list of locales with no dictionary forgets its
-    /// oldest one, not all of them, so a document in more languages doesn't look every one up again.
-    #[test]
-    fn missing_locales_forget_the_oldest_first() {
-        let tag = |i: usize| l(&format!("q{}{}", (b'a' + (i / 26 % 26) as u8) as char, (b'a' + (i % 26) as u8) as char));
-        let mut missing = Vec::new();
-        for i in 0..MAX_MISSING + 10 {
-            remember_missing(&mut missing, tag(i));
-            assert!(missing.len() <= MAX_MISSING);
-        }
-        assert_eq!(missing.len(), MAX_MISSING);
-        assert!(!missing.contains(&tag(0)) && !missing.contains(&tag(9)), "the oldest went first");
-        assert!(missing.contains(&tag(10)) && missing.contains(&tag(MAX_MISSING + 9)), "the rest stay");
-    }
-
     /// Review follow-up (craft-libs#485): a panic inside a check (caught by the app) doesn't leave
     /// this thread's dictionaries pinned past the budget for good.
     #[test]
@@ -395,27 +380,6 @@ mod tests {
             assert!(CHECK_FROM.with(Cell::get).is_some(), "an inner check doesn't end the outer one");
         });
         assert_eq!(CHECK_FROM.with(Cell::get), None);
-    }
-
-    /// Review follow-up (craft-libs#485): a word with no letter in the dictionary's scripts is
-    /// in another script (a Cyrillic word in a Dutch run); a word in its script is always checked,
-    /// even with letters no dictionary word uses (CodeRabbit on #496: `zzzz`).
-    #[test]
-    fn words_in_another_script_are_not_the_dictionarys() {
-        let nl = AffixDict::from_hunspell("SET UTF-8\n", "3\nhuis\nkat\nÉén\n", &[]).unwrap();
-        let latin = scripts(&nl);
-        assert_eq!(latin.len(), 1);
-        for w in ["привет", "Привет", "αβγ", "שלום", "日本"] {
-            assert!(other_script(w, &latin), "{w}");
-        }
-        for w in ["huus", "kät", "huisп", "ÉÉN", "zzzz", "qxqw", "ŋʒ"] {
-            assert!(!other_script(w, &latin), "{w}");
-        }
-        assert!(!other_script("привет", &[]), "no scripts: every word is checked");
-        let ru = AffixDict::from_hunspell("SET UTF-8\n", "1\nдом\n", &[]).unwrap();
-        assert!(!other_script("щщщ", &scripts(&ru)) && other_script("dom", &scripts(&ru)));
-        assert_ne!(script_of('ა'), script_of('a'));
-        assert_eq!(script_of('ă'), script_of('Ạ'));
     }
 
     #[test]

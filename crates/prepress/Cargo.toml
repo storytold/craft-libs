@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "craft-prepress"
 description = "Prepress for the Craft apps: ink model, per-ink plates rendered from a PDF, coverage, ink limits and composite preview"
 version.workspace = true

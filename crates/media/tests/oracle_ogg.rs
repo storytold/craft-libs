@@ -1,7 +1,7 @@
 //! Oracle tests: compare the Ogg demuxer's streams, packet bytes and Opus timing with ffprobe on
 //! ffmpeg-generated fixtures (skipped when ffmpeg/ffprobe are not installed).
 
-mod common;
+use super::common;
 
 use craft_media::ogg::{self, Codec, OggFile, OpusTiming};
 use serde_json::Value;
@@ -19,19 +19,7 @@ fn music(rate: u32, layout: &str, seconds: &str) -> Vec<String> {
 }
 
 /// Every fixture `fixture` knows (for `generate_fixtures`).
-const ALL_FIXTURES: &[&str] = &[
-    "opus_stereo.opus",
-    "opus_mono16k_2_5ms.opus",
-    "opus_60ms_odd_length.opus",
-    "opus_51.opus",
-    "opus_10ms.opus",
-    "opus_small_pages.opus",
-    "vorbis_stereo.ogg",
-    "flac.oga",
-    "theora_vorbis.ogv",
-    "grouped.ogg",
-    "chained_opus.opus",
-];
+const ALL_FIXTURES: &[&str] = &["grouped.ogg", "chained_opus.opus"];
 
 /// Fixture name → ffmpeg arguments (after `-y -v error`, before the output path). `None` for a
 /// fixture made from others.
@@ -39,20 +27,6 @@ fn spec(name: &str) -> Option<Vec<String>> {
     let cat = |parts: &[Vec<String>]| parts.concat();
     let s = |a: &[&str]| a.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     Some(match name {
-        "opus_stereo.opus" => cat(&[music(48000, "stereo", "3"), s(&["-c:a", "libopus", "-b:a", "128k"])]),
-        "opus_mono16k_2_5ms.opus" => cat(&[music(16000, "mono", "1"), s(&["-c:a", "libopus", "-frame_duration", "2.5"])]),
-        "opus_60ms_odd_length.opus" => cat(&[music(48000, "stereo", "3.217"), s(&["-c:a", "libopus", "-frame_duration", "60"])]),
-        "opus_51.opus" => cat(&[music(48000, "5.1", "2"), s(&["-c:a", "libopus", "-mapping_family", "1"])]),
-        // one page, shorter than the pre-skip
-        "opus_10ms.opus" => cat(&[music(48000, "stereo", "0.01"), s(&["-c:a", "libopus"])]),
-        "opus_small_pages.opus" => cat(&[music(48000, "stereo", "2"), s(&["-c:a", "libopus", "-page_duration", "20000"])]),
-        "vorbis_stereo.ogg" => cat(&[music(44100, "stereo", "3"), s(&["-c:a", "libvorbis", "-q:a", "5"])]),
-        "flac.oga" => cat(&[music(44100, "stereo", "3"), s(&["-c:a", "flac", "-sample_fmt", "s16"])]),
-        "theora_vorbis.ogv" => cat(&[
-            s(&["-f", "lavfi", "-i", "testsrc2=s=320x240:r=25:d=2"]),
-            music(48000, "stereo", "2"),
-            s(&["-c:v", "libtheora", "-q:v", "6", "-c:a", "libvorbis"]),
-        ]),
         // grouped (multiplexed) streams: two Opus and a Vorbis
         "grouped.ogg" => cat(&[
             music(48000, "stereo", "2"),
@@ -208,80 +182,6 @@ fn assert_opus_timing_matches(name: &str, file: &OggFile, s: usize, json: &Value
     let playable: i64 = theirs.iter().map(|p| p.duration.unwrap()).sum::<i64>() - theirs[0].skip;
     assert_eq!(timing.total, playable, "{context}: total");
     eprintln!("{context}: timing of {} packets matches, {} samples", theirs.len(), timing.total);
-}
-
-/// A file of one Opus stream: its packets and its timing.
-fn opus(name: &str) -> Option<OggFile> {
-    let (bytes, file, json) = run(name)?;
-    assert_eq!(file.streams.len(), 1, "{name}: {:?}", file.warnings);
-    assert!(file.warnings.is_empty(), "{name}: {:?}", file.warnings);
-    assert_eq!(file.streams[0].codec, Codec::Opus);
-    assert_stream_matches(name, &file, &bytes, &all(&file, 0), &json, 0);
-    assert_opus_timing_matches(name, &file, 0, &json, 0);
-    Some(file)
-}
-
-#[test]
-fn opus_stereo() {
-    let Some(file) = opus("opus_stereo.opus") else { return };
-    assert!(file.streams[0].saw_eos);
-}
-
-#[test]
-fn opus_mono_16_khz_with_2_5_ms_frames() {
-    opus("opus_mono16k_2_5ms.opus");
-}
-
-#[test]
-fn opus_60_ms_frames_with_an_odd_length() {
-    opus("opus_60ms_odd_length.opus");
-}
-
-#[test]
-fn opus_5_1_mapping_family_1() {
-    let Some(file) = opus("opus_51.opus") else { return };
-    assert_eq!(file.streams[0].codec_params().channels, Some(6));
-}
-
-#[test]
-fn opus_shorter_than_the_pre_skip() {
-    opus("opus_10ms.opus");
-}
-
-#[test]
-fn opus_with_a_page_per_packet() {
-    let Some(file) = opus("opus_small_pages.opus") else { return };
-    assert!(file.streams[0].pages as usize >= file.streams[0].packets.len());
-}
-
-#[test]
-fn vorbis_stereo() {
-    let Some((bytes, file, json)) = run("vorbis_stereo.ogg") else { return };
-    assert!(file.warnings.is_empty(), "{:?}", file.warnings);
-    assert_eq!(file.streams[0].headers.len(), 3);
-    assert_stream_matches("vorbis_stereo.ogg", &file, &bytes, &all(&file, 0), &json, 0);
-}
-
-#[test]
-fn flac_in_ogg() {
-    let Some((bytes, file, json)) = run("flac.oga") else { return };
-    assert!(file.warnings.is_empty(), "{:?}", file.warnings);
-    assert_eq!(file.streams[0].codec, Codec::Flac);
-    assert!(file.streams[0].codec_params().extradata.starts_with(b"fLaC"));
-    assert_stream_matches("flac.oga", &file, &bytes, &all(&file, 0), &json, 0);
-}
-
-#[test]
-fn theora_and_vorbis() {
-    let Some((bytes, file, json)) = run("theora_vorbis.ogv") else { return };
-    assert!(file.warnings.is_empty(), "{:?}", file.warnings);
-    assert_eq!(file.streams.len(), 2);
-    for s in 0..2 {
-        assert_stream_matches("theora_vorbis.ogv", &file, &bytes, &all(&file, s), &json, s);
-    }
-    let video = file.stream_of(Codec::Theora).unwrap();
-    let params = file.streams[video].codec_params();
-    assert_eq!((params.width, params.height), (Some(320), Some(240)));
 }
 
 /// Multiplexed streams: each is read on its own, in ffmpeg's order.

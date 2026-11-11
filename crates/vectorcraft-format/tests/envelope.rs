@@ -1,8 +1,10 @@
+//! Integration tests of craft-vectorcraft-format: envelope.
+
 use std::io::Write;
 
 use craft_vectorcraft_format::{
-    BLOB_MAGIC, Contents, EXTENSION, Entries, Error, File, Head, INLINE_MAX, Image, LEGACY_EXTENSION, MAX_ENTRY, ReadError, Tail, VERSION, base64,
-    check, entry, is_compressed, json_part, marker_at, sniff, split_tail,
+    BLOB_MAGIC, Contents, EXTENSION, Entries, Error, File, Head, INLINE_MAX, Image, LEGACY_EXTENSION, MAX_ENTRY, ReadError, Tail, VERSION,
+    is_compressed, json_part, sniff, split_tail,
 };
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
@@ -60,38 +62,6 @@ fn full_file(pdf: &[u8]) -> (File<Doc>, Tail<'_>) {
 }
 
 #[test]
-fn a_version_4_file_with_members_after_the_json_is_written_as_the_app_writes_it() {
-    let pdf = pdf();
-    let (file, tail) = full_file(&pdf);
-    let mut expected = br#"{"format":"vectorcraft","version":4,"generator":"VectorCraft 0.17.0","preview":{"mime":"image/png","data":"iVBORw0KGgo="},"pdf":{"mime":"application/pdf","blob":[0,8192]},"document":{"layers":[{"name":"Layer 1"}]},"images":{"k":{"mime":"image/png","data":"AQID+g=="}}}"#.to_vec();
-    expected.extend(b"\n\0VCBLOBS\0");
-    expected.extend(&pdf);
-    assert_eq!(written(&file, &tail, false), expected);
-    assert_eq!(tail.len(), INLINE_MAX as u64);
-    assert_eq!(tail.parts().len(), 1);
-}
-
-#[test]
-fn a_pretty_file_without_optional_members_is_written_as_the_app_writes_it() {
-    let mut file = File::new(doc());
-    file.generator = Some("VectorCraft 0.17.0".into());
-    let expected = r#"{
-  "format": "vectorcraft",
-  "version": 4,
-  "generator": "VectorCraft 0.17.0",
-  "document": {
-    "layers": [
-      {
-        "name": "Layer 1"
-      }
-    ]
-  },
-  "images": {}
-}"#;
-    assert_eq!(String::from_utf8(written(&file, &Tail::new(VERSION), true)).unwrap(), expected);
-}
-
-#[test]
 fn a_version_2_file_keeps_large_entries_inline_under_the_former_name() {
     let pdf = pdf();
     let mut tail = Tail::new(2);
@@ -132,29 +102,6 @@ fn a_written_file_reads_back_with_its_entries() {
         let skipped = File::<IgnoredAny>::read(json).unwrap();
         assert_eq!(skipped.generator.as_deref(), Some("VectorCraft 0.17.0"));
     }
-}
-
-#[test]
-fn a_linked_image_preview_is_marked_proxy() {
-    let mut tail = Tail::new(VERSION);
-    let image = tail.image("image/png", PNG, true);
-    assert_eq!(serde_json::to_string(&image).unwrap(), r#"{"mime":"image/png","data":"iVBORw0KGgo=","proxy":true}"#);
-    let back: Image = serde_json::from_str(r#"{"mime":"image/png","data":"iVBORw0KGgo=","proxy":true}"#).unwrap();
-    assert_eq!(back, image);
-}
-
-#[test]
-fn entries_outside_the_data_or_with_bad_base64_give_none() {
-    let tail = b"abcd";
-    assert_eq!(entry(tail, [1, 3]), Some(&b"bcd"[..]));
-    assert_eq!(entry(tail, [1, 4]), None);
-    assert_eq!(entry(tail, [u64::MAX, 1]), None);
-    assert_eq!(entry(tail, [1, u64::MAX]), None);
-    assert_eq!(blob([2, 8]).bytes(tail), None);
-    let mut bad = Image::default();
-    bad.data = "QU*D".into();
-    assert_eq!(bad.bytes(tail), None);
-    assert!(Image::default().is_empty());
 }
 
 #[test]
@@ -212,47 +159,6 @@ fn entries_copy_at_most_the_data_after_the_json_in_all() {
 }
 
 #[test]
-fn optional_members_of_the_wrong_shape_read_as_none() {
-    let json = br#"{"format":"vectorcraft","version":4,"generator":7,"preview":"x","pdf":{"blob":"y"},"document":{"layers":[]}}"#;
-    let file = File::<Doc>::read(json).unwrap();
-    assert_eq!((file.generator, file.preview, file.pdf), (None, None, None));
-    let skipped = File::<IgnoredAny>::read(json).unwrap();
-    assert!(skipped.preview.is_none());
-    let head: Head = serde_json::from_slice(json).unwrap();
-    assert_eq!(head, Head::default());
-    let good = br#"{"preview":{"mime":"image/png","data":"iVBORw0KGgo="},"pdf":null}"#;
-    let head: Head = serde_json::from_slice(good).unwrap();
-    assert_eq!(head.preview, Some(Image::inline("image/png", PNG)));
-    assert!(head.pdf.is_none());
-}
-
-#[test]
-fn contents_read_the_document_images_and_profiles_without_the_preview_and_pdf() {
-    let big = vec![b'%'; 64 << 10];
-    let mut file = File::new(doc());
-    file.version = 2;
-    file.generator = Some("VectorCraft 0.17.0".into());
-    file.preview = Some(Image::inline("image/png", &big));
-    file.pdf = Some(Image::inline("application/pdf", &big));
-    file.profiles.insert("Gray".into(), Image::inline(craft_vectorcraft_format::ICC_MIME, &[4, 5]));
-    file.images.insert("k".into(), Image::inline("image/png", PNG));
-    for json in [serde_json::to_vec(&file).unwrap(), serde_json::to_vec_pretty(&file).unwrap()] {
-        let contents = Contents::<Doc>::read(&json).unwrap();
-        let Contents { format, version, profiles, document, images, .. } = contents.clone();
-        assert_eq!((format, version, profiles, document, images), (file.format.clone(), 2, file.profiles.clone(), doc(), file.images.clone()));
-        assert!(contents.is_legacy() == file.is_legacy());
-    }
-    // Members of the wrong shape are skipped as `File` reads them as `None`; a missing document
-    // is refused as in `File`.
-    let odd = br#"{"format":"vectorcraft","version":4,"generator":7,"preview":"x","pdf":{"blob":"y"},"document":{"layers":[]},"z":[1]}"#;
-    let contents = Contents::<Doc>::read(odd).unwrap();
-    assert!(contents.document.layers.is_empty() && contents.images.is_empty());
-    let no_document = br#"{"format":"vectorcraft","version":4}"#;
-    assert!(File::<Doc>::read(no_document).is_err());
-    assert!(Contents::<Doc>::read(no_document).is_err());
-}
-
-#[test]
 fn contents_read_pdf_preference_while_skipping_the_payload() {
     for (members, expected) in [
         ("", false),
@@ -280,22 +186,6 @@ fn contents_read_pdf_preference_while_skipping_the_payload() {
 }
 
 #[test]
-fn pdf_preference_read_is_opt_in_and_preserves_envelope_validation() {
-    let invalid = br#"{"format":"vectorcraft","version":4,"document":{"layers":[]},"pdfCompatible":"invalid"}"#;
-    assert!(Contents::<Doc>::read(invalid).is_ok());
-    assert!(File::<Doc>::read(invalid).is_ok());
-    assert!(Contents::<Doc>::read_with_pdf_preference(invalid).is_err());
-    for json in [
-        br#"{"format":"other","version":4,"document":{"layers":[]}}"#.as_slice(),
-        br#"{"format":"vectorcraft","version":999,"document":{"layers":[]}}"#.as_slice(),
-        br#"{"format":"vectorcraft","version":4}"#.as_slice(),
-        br#"{"format":"vectorcraft","version":4,"version":4,"document":{"layers":[]}}"#.as_slice(),
-    ] {
-        assert_eq!(Contents::<Doc>::read(json).unwrap_err().to_string(), Contents::<Doc>::read_with_pdf_preference(json).unwrap_err().to_string());
-    }
-}
-
-#[test]
 fn reading_refuses_another_format_and_a_newer_version() {
     let newer = br#"{"format":"vectorcraft","version":5,"document":0}"#;
     let other = br#"{"format":"other","version":1,"document":0}"#;
@@ -314,43 +204,6 @@ fn reading_refuses_another_format_and_a_newer_version() {
     let bad = br#"{"format":"vectorcraft","version":5,"document":7}"#;
     assert!(matches!(Contents::<Doc>::read(bad), Err(ReadError::Json(_))));
     assert!(Contents::<Doc>::read(b"\"x\"").is_err_and(|e| e.to_string().contains("expected struct File")));
-}
-
-#[test]
-fn file_and_contents_read_a_repeated_generator_preview_or_pdf_and_refuse_other_repeated_members() {
-    // VectorCraft opens a file whose generator, preview or PDF is repeated, and refuses one whose
-    // format, version, document, images or profiles are. `File` keeps the last value, as
-    // serde_json reads a repeated key into a `Value`.
-    let png = r#"{"mime":"image/png","data":"iVBORw0KGgo="}"#;
-    let pdf = r#"{"mime":"application/pdf","data":"JQ=="}"#;
-    let file = |extra: &str| format!(r#"{{"format":"vectorcraft","version":4,{extra}"document":{{"layers":[]}},"images":{{}}}}"#);
-    let value = |json: &str, key: &str| serde_json::from_str::<serde_json::Value>(json).unwrap()[key].clone();
-    for extra in [
-        r#""generator":"a","generator":"b","#.to_string(),
-        format!(r#""preview":{png},"preview":{png},"#),
-        format!(r#""pdf":null,"pdf":{pdf},"#),
-        format!(r#""pdf":{pdf},"pdf":"x","#),
-        format!(r#""generator":"a","preview":{png},"generator":7,"preview":"x","pdf":1,"pdf":{pdf},"#),
-        r#""generator":7,"preview":"x","pdf":1,"generator":7,"preview":"x","pdf":1,"#.to_string(),
-    ] {
-        let json = file(&extra);
-        let contents = Contents::<Doc>::read(json.as_bytes()).unwrap_or_else(|e| panic!("{extra}: {e}"));
-        assert!(contents.document.layers.is_empty(), "{extra}");
-        let read = File::<Doc>::read(json.as_bytes()).unwrap_or_else(|e| panic!("{extra}: {e}"));
-        let last = |key: &str| value(&json, key);
-        assert_eq!(read.generator, last("generator").as_str().map(String::from), "{extra}");
-        assert_eq!(read.preview, serde_json::from_value(last("preview")).ok(), "{extra}");
-        assert_eq!(read.pdf, serde_json::from_value(last("pdf")).ok(), "{extra}");
-    }
-    let read = File::<Doc>::read(file(r#""generator":"a","generator":"b","#).as_bytes()).unwrap();
-    assert_eq!(read.generator.as_deref(), Some("b"));
-    for extra in
-        [r#""format":"vectorcraft","#, r#""version":4,"#, r#""document":{"layers":[]},"#, r#""images":{},"#, r#""profiles":{},"profiles":{},"#]
-    {
-        let json = file(extra);
-        assert!(File::<Doc>::read(json.as_bytes()).is_err_and(|e| e.to_string().starts_with("duplicate field")), "{extra}");
-        assert!(Contents::<Doc>::read(json.as_bytes()).is_err_and(|e| e.to_string().starts_with("duplicate field")), "{extra}");
-    }
 }
 
 #[test]
@@ -379,15 +232,6 @@ fn an_array_holds_format_version_document_images_and_profiles_in_that_order() {
 }
 
 #[test]
-fn a_files_tail_follows_its_version() {
-    let mut file = File::new(doc());
-    let pdf = pdf();
-    assert_eq!(file.tail().image("application/pdf", &pdf, false).blob, Some([0, pdf.len() as u64]));
-    file.version = 2;
-    assert!(file.tail().image("application/pdf", &pdf, false).blob.is_none());
-}
-
-#[test]
 fn the_json_is_split_only_at_a_marker_right_after_it() {
     let with = |json: &[u8], rest: &[u8]| {
         let mut f = json.to_vec();
@@ -407,39 +251,6 @@ fn the_json_is_split_only_at_a_marker_right_after_it() {
     assert_eq!(split_tail(b"{}"), (&b"{}"[..], empty));
     let bad = with(b"{", b"x");
     assert_eq!(split_tail(&bad), (bad.as_slice(), empty));
-}
-
-#[test]
-fn the_marker_is_found_where_the_writer_puts_it_in_the_first_bytes() {
-    let mut file = br#"{"a":[1]}"#.to_vec();
-    file.extend(BLOB_MAGIC);
-    file.extend(b"\0rest");
-    // The first bytes up to the end of the marker are enough.
-    assert_eq!(marker_at(&file), Some(9));
-    assert_eq!(marker_at(&file[..9 + BLOB_MAGIC.len()]), Some(9));
-    assert_eq!(marker_at(&file[..9 + BLOB_MAGIC.len() - 1]), None);
-    assert_eq!(split_tail(&file), (&file[..9], &b"\0rest"[..]));
-    for json in [&b"\"s\""[..], b"[]"] {
-        let mut f = json.to_vec();
-        f.extend(BLOB_MAGIC);
-        assert_eq!(marker_at(&f), Some(json.len()), "{json:?}");
-    }
-    // After a number, after a space, without its newline or with a NUL before it, the marker is
-    // not where the writer puts it.
-    for f in [&b"1\n\0VCBLOBS\0"[..], b"{} \n\0VCBLOBS\0", b"{}\0VCBLOBS\0", b"{}\0\n\0VCBLOBS\0", b"\n\0VCBLOBS\0", b"{}"] {
-        assert_eq!(marker_at(f), None, "{:?}", String::from_utf8_lossy(f));
-    }
-}
-
-#[test]
-fn check_refuses_other_formats_and_newer_versions() {
-    assert_eq!(check(EXTENSION, VERSION), Ok(()));
-    assert_eq!(check(LEGACY_EXTENSION, 1), Ok(()));
-    assert_eq!(check("other", 1), Err(Error::Format("other".into())));
-    assert_eq!(check(EXTENSION, VERSION + 1), Err(Error::TooNew(VERSION + 1)));
-    assert!(File::<Doc>::read(br#"{"format":"vectorcraft","version":4}"#).is_err());
-    let minimal = File::<Doc>::read(br#"{"format":"vectorcraft","version":4,"document":{"layers":[]}}"#).unwrap();
-    assert!(minimal.images.is_empty() && minimal.generator.is_none());
 }
 
 #[test]
@@ -479,10 +290,4 @@ fn sniff_needs_a_vectorcraft_format_member() {
     ] {
         assert!(!sniff(no), "{:?}", String::from_utf8_lossy(no));
     }
-}
-
-#[test]
-fn base64_is_the_encoding_of_data_members() {
-    assert_eq!(base64::encode(PNG), "iVBORw0KGgo=");
-    assert_eq!(base64::decode("AQID+g==").unwrap(), [1, 2, 3, 250]);
 }

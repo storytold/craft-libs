@@ -669,19 +669,6 @@ mod tests {
         assert_eq!(second_unit_offset(&first, &data).unwrap(), second_offset);
     }
 
-    #[test]
-    fn field_order_follows_the_first_coding_unit() {
-        assert_eq!(field_interlace(FieldCode::Field1), Interlace::TopFieldFirst);
-        assert_eq!(field_interlace(FieldCode::Field2), Interlace::BottomFieldFirst);
-    }
-
-    #[test]
-    fn decoded_plane_memory_budget_is_configurable() {
-        let large_frame_samples = 231usize * 1024 * 1024;
-        assert!(check_decoded_plane_budget(large_frame_samples, DEFAULT_MAX_DECODED_PLANE_BYTES).is_err());
-        assert!(check_decoded_plane_budget(large_frame_samples, 512 * 1024 * 1024).is_ok());
-    }
-
     /// One 16x16 macroblock with every sample of the three planes set to `v`.
     fn unit(v: [u16; 3], ycbcr: bool) -> CodedPlanes {
         CodedPlanes {
@@ -707,19 +694,5 @@ mod tests {
         unify_field_color(&mut top, &mut bottom, false).unwrap();
         assert!(!top.ycbcr && !bottom.ycbcr);
         assert!(bottom.planes[1].iter().all(|&s| s.abs_diff(100) <= 1));
-    }
-
-    #[test]
-    fn matching_field_representations_are_left_alone() {
-        let (mut top, mut bottom) = (unit([100, 128, 128], true), unit([90, 128, 128], true));
-        unify_field_color(&mut top, &mut bottom, false).unwrap();
-        assert!(top.ycbcr && bottom.ycbcr);
-        assert_eq!(top.planes[1][0], 128);
-    }
-
-    #[test]
-    fn mixed_fields_with_out_of_band_color_volume_are_rejected() {
-        let (mut top, mut bottom) = (unit([100, 128, 128], true), unit([100, 100, 100], false));
-        assert!(unify_field_color(&mut top, &mut bottom, true).is_err());
     }
 }

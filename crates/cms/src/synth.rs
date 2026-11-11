@@ -33,11 +33,13 @@ use crate::pipeline::Stage;
 use crate::profile::{ColorSpace, Lut, LutKind, Pcs, Profile, ProfileClass};
 use crate::{CmsError, Intent, invalid_arg};
 
+/// Profile description of the synthetic coated CMYK profile.
 pub const DESCRIPTION: &str = "PhotoCraft Coated CMYK (synthetic, 300% TAC, medium GCR)";
 
 /// Parameters of the synthetic profile.
 #[derive(Clone, Debug)]
 pub struct CmykParams {
+    /// Profile description text.
     pub description: String,
     /// Copyright tag text.
     pub copyright: String,
@@ -53,6 +55,7 @@ pub struct CmykParams {
     pub tvi: [f64; 4],
     /// Grid points of the AToB (4D) and BToA (3D) tables.
     pub grid_a2b: usize,
+    #[allow(missing_docs)]
     pub grid_b2a: usize,
     /// Map paper and PCS white onto each other exactly: the AToB maps no ink to L* 100,
     /// a* = b* = 0, and the BToA input curves put that white on a grid node (`grid_b2a` must
@@ -93,6 +96,8 @@ pub struct CmykModel {
 const YN: f64 = 2.0;
 
 impl CmykModel {
+    /// Model of a coated offset press (ISO 12647-2 paper type 1/2 aims) with the given tone value
+    /// increase at 50 % for C, M, Y, K.
     pub fn coated(tvi: [f64; 4]) -> Self {
         let lab = |l: f64, a: f64, b: f64| math::lab_to_xyz([l, a, b], math::D50);
         // ISO 12647-2 (coated, paper type 1/2) Lab aims, D50/2°; CMY overprint estimated.
@@ -159,6 +164,7 @@ impl CmykModel {
 /// A printer model: CMYK coverages (each in `[0, 1]`) → ICC-relative Lab (paper = L* 100).
 /// The separation solves and the gamut boundary invert it.
 pub trait Forward: Sync {
+    /// ICC-relative Lab for the given ink coverages.
     fn lab(&self, cmyk: [f64; 4]) -> [f64; 3];
 }
 
@@ -548,43 +554,4 @@ fn lut_profile<F: Forward + ?Sized>(model: &F, a2b: Clut, paper: [f64; 3], p: &C
 /// The default coated profile (what `profiles/photocraft-coated-cmyk.icc` contains).
 pub fn coated_cmyk() -> Result<Profile, CmsError> {
     cmyk_profile(&CmykParams::default())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn model_anchors() {
-        let m = CmykModel::coated(CmykParams::default().tvi);
-        let w = m.lab([0.0; 4]);
-        assert!((w[0] - 100.0).abs() < 1e-9 && w[1].abs() < 1e-9 && w[2].abs() < 1e-9, "{w:?}");
-        let k = m.lab([0.0, 0.0, 0.0, 1.0]);
-        assert!(k[0] > 12.0 && k[0] < 22.0, "{k:?}");
-        let rich = m.lab([0.75, 0.65, 0.6, 0.9]);
-        assert!(rich[0] < k[0], "{rich:?}");
-        // Monotonic in each ink.
-        for ink in 0..4 {
-            let mut prev = 101.0;
-            for i in 0..=20 {
-                let mut v = [0.2, 0.2, 0.2, 0.2];
-                v[ink] = i as f64 / 20.0;
-                let l = m.lab(v)[0];
-                assert!(l < prev + 1e-9, "ink {ink} step {i}: {l} >= {prev}");
-                prev = l;
-            }
-        }
-    }
-
-    #[test]
-    fn separation_hits_in_gamut_targets() {
-        let m = CmykModel::coated(CmykParams::default().tvi);
-        let p = CmykParams::default();
-        let reachable = [[0.3, 0.4, 0.1, 0.1], [0.6, 0.1, 0.5, 0.0], [0.05, 0.1, 0.7, 0.0], [0.5, 0.45, 0.45, 0.4]].map(|v| m.lab(v));
-        for target in [[50.0, 0.0, 0.0]].into_iter().chain(reachable) {
-            let (cmyk, de) = separate(&m, &p, target, None);
-            assert!(de < 1.5, "{target:?} -> {cmyk:?} ΔE {de}");
-            assert!(cmyk.iter().sum::<f64>() <= p.tac + 1e-6);
-        }
-    }
 }

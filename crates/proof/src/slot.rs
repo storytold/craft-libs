@@ -183,36 +183,3 @@ impl<D: Dictionary> DictSlot<D> {
         !self.get().is_empty()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    static SLOT: DictSlot<AffixDict> = DictSlot::new(&["zz_SLOT_TEST"], "Test");
-
-    #[test]
-    fn an_installed_dictionary_has_no_file_until_reloaded() {
-        assert!(!SLOT.has_dictionary(), "nothing installed under this name");
-        assert!(SLOT.install("FLAG bogus\n", "1\nkot\n").is_err(), "unsupported files are refused");
-        assert!(!SLOT.has_dictionary(), "a refused install keeps the current one");
-        SLOT.install("", "1\nkot\n").unwrap();
-        assert!(SLOT.has_dictionary() && SLOT.get().check("kot"));
-        assert_eq!(SLOT.installed_path(), None);
-        SLOT.reload();
-        assert!(!SLOT.has_dictionary(), "reloaded from disk, where there is none");
-        assert_eq!(SLOT.name(), "zz_SLOT_TEST");
-    }
-
-    /// A load that started before a dictionaries-folder change is not kept after its reload.
-    #[test]
-    fn a_load_from_before_a_reload_is_not_kept() {
-        let slot: DictSlot<AffixDict> = DictSlot::new(&["zz_SLOT_RELOAD_TEST"], "Test");
-        let before = slot.read().reloads;
-        slot.reload();
-        let _ = slot.keep(before, Arc::new(AffixDict::default()));
-        assert!(slot.read().dict.is_none(), "the next check loads from the new folder");
-        let now = slot.read().reloads;
-        let _ = slot.keep(now, Arc::new(AffixDict::default()));
-        assert!(slot.read().dict.is_some(), "a load since the reload is kept");
-    }
-}

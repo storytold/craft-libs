@@ -284,21 +284,9 @@ fn scaled_reference_downscale() {
 }
 
 #[test]
-fn splice_same_size_control() {
-    let Some(f) = scaled_splice("same", 352, 288, &[]) else { return };
-    check("syn_same", &f);
-}
-
-#[test]
 fn scaled_reference_upscale() {
     let Some(f) = scaled_splice("up", 480, 400, &[]) else { return };
     check("syn_scaled_up", &f);
-}
-
-#[test]
-fn scaled_reference_odd_sizes() {
-    let Some(f) = scaled_splice("odd", 301, 199, &[]) else { return };
-    check("syn_scaled_odd", &f);
 }
 
 fn build_superframe(frames: &[Vec<u8>]) -> Vec<u8> {

@@ -479,17 +479,9 @@ impl Default for EncodeOptions {
     }
 }
 
-// An encoder refusing its settings is an encode error, not damaged input.
-#[cfg(all(test, feature = "aac-encode"))]
-mod tests {
-    use super::*;
+#[cfg(test)]
+extern crate self as craft_audio;
 
-    #[test]
-    fn aac_encoder_settings_are_encode_errors() {
-        let e = match aac::Encoder::new(aac::EncoderConfig::cbr(44_000, 2, 128_000)) {
-            Err(e) => AudioError::from(e),
-            Ok(_) => panic!("44 kHz is not an AAC rate"),
-        };
-        assert!(matches!(e, AudioError::Encode(_)), "{e}");
-    }
-}
+#[cfg(test)]
+#[path = "../tests/main.rs"]
+mod integration;

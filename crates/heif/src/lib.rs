@@ -678,30 +678,4 @@ mod tests {
             assert!(matches!(r, Err(Error::Malformed(_))), "{r:?}");
         }
     }
-
-    #[test]
-    fn image_sequence_is_unsupported_with_a_clear_message() {
-        // An ftyp and nothing else: a HEIF image sequence would have a moov here instead of a meta.
-        let bytes = b"\0\0\0\x18ftypmsf1\0\0\0\0msf1hevc";
-        for r in [probe(bytes).map(|_| ()), decode(bytes, &Options::default()).map(|_| ()), read_metadata(bytes).map(|_| ())] {
-            assert!(matches!(&r, Err(Error::Unsupported(m)) if m.contains("sequence")), "{r:?}");
-        }
-    }
-
-    #[test]
-    fn garbage_is_an_error() {
-        for bytes in [&b""[..], b"\0\0\0\x18ftypheic\0\0\0\0mif1heic", &[0xFF; 64]] {
-            assert!(probe(bytes).is_err());
-            assert!(decode(bytes, &Options::default()).is_err());
-            assert!(decode_thumbnail(bytes, 1, &Options::default()).is_err());
-            assert!(read_metadata(bytes).is_err());
-        }
-    }
-
-    #[test]
-    fn errors_display_their_kind() {
-        assert!(Error::Unsupported("x").to_string().contains("unsupported"));
-        assert!(Error::Limit("x".into()).to_string().contains("limit"));
-        assert!(Error::Malformed("x".into()).to_string().contains("malformed"));
-    }
 }

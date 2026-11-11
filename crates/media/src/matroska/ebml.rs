@@ -12,11 +12,14 @@ pub fn vint_len(b: u8) -> Option<usize> {
 /// Element data size: known, or "unknown" (all value bits set).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Size {
+    /// A known size in bytes.
     Known(u64),
+    /// The all-ones "unknown size" marker (live or streamed output).
     Unknown,
 }
 
 impl Size {
+    /// The size in bytes, or `None` when unknown.
     pub fn known(self) -> Option<u64> {
         match self {
             Size::Known(n) => Some(n),
@@ -138,10 +141,13 @@ pub fn string(data: &[u8]) -> String {
 /// One element inside an in-memory master element.
 #[derive(Clone, Copy, Debug)]
 pub struct Elem<'a> {
+    /// EBML element ID, marker bits included.
     pub id: u32,
     /// Offset of the element header, relative to the start of the parent's data.
     pub offset: usize,
+    /// Length in bytes of the element header (ID plus size field).
     pub header_len: usize,
+    /// The element's payload bytes.
     pub data: &'a [u8],
     /// The size field was "unknown" (data runs to the end of the parent).
     pub unknown_size: bool,
@@ -160,6 +166,7 @@ pub struct Children<'a> {
 }
 
 impl<'a> Children<'a> {
+    /// Iterate the child elements of `data`, the payload of a master element.
     pub fn new(data: &'a [u8]) -> Self {
         Self { data, pos: 0, damaged: false }
     }
@@ -239,13 +246,18 @@ pub fn verify_crc(master_data: &[u8]) -> Option<bool> {
 /// Block lacing mode (flags bits 1–2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lacing {
+    /// No lacing: the block holds one frame.
     None,
+    /// Xiph lacing: frame sizes coded as runs of 255-valued bytes.
     Xiph,
+    /// Fixed-size lacing: all frames have equal size.
     FixedSize,
+    /// EBML lacing: first size as a VINT, later sizes as signed VINT deltas.
     Ebml,
 }
 
 impl Lacing {
+    /// Decode the lacing mode from a block's flags byte.
     pub fn from_flags(flags: u8) -> Lacing {
         match (flags >> 1) & 3 {
             0 => Lacing::None,
@@ -318,159 +330,4 @@ pub fn parse_lacing(lacing: Lacing, data: &[u8]) -> Result<Vec<(usize, usize)>> 
         pos += s;
     }
     Ok(out)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn vint_roundtrip() {
-        for &v in &[0u64, 1, 126, 127, 128, 16382, 16383, 16384, 1 << 20, (1 << 56) - 2] {
-            let mut b = Vec::new();
-            write_size(&mut b, v, 1);
-            let (s, l) = read_size(&b).unwrap();
-            assert_eq!(s, Size::Known(v), "value {v}");
-            assert_eq!(l, b.len());
-        }
-        // 127 needs 2 bytes because 0xFF is "unknown"
-        let mut b = Vec::new();
-        write_size(&mut b, 127, 1);
-        assert_eq!(b, [0x40, 0x7F]);
-        // padded length
-        let mut b = Vec::new();
-        write_size(&mut b, 5, 8);
-        assert_eq!(b, [1, 0, 0, 0, 0, 0, 0, 5]);
-        assert_eq!(read_size(&b).unwrap(), (Size::Known(5), 8));
-    }
-
-    #[test]
-    fn vint_unknown_and_invalid() {
-        assert_eq!(read_size(&[0xFF]).unwrap(), (Size::Unknown, 1));
-        assert_eq!(read_size(&[0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]).unwrap(), (Size::Unknown, 8));
-        for l in 1..=8 {
-            let mut b = Vec::new();
-            write_unknown_size(&mut b, l);
-            assert_eq!(read_size(&b).unwrap(), (Size::Unknown, l));
-        }
-        assert!(read_size(&[0x00, 1, 2]).is_none());
-        assert!(read_size(&[0x40]).is_none()); // truncated
-        assert_eq!(read_vint(&[0x81]).unwrap(), (1, 1, false));
-        assert_eq!(read_vint(&[0x10, 0x00, 0x00, 0x01]).unwrap(), (1, 4, false));
-    }
-
-    #[test]
-    fn ids() {
-        assert_eq!(read_id(&[0x1A, 0x45, 0xDF, 0xA3, 0x99]).unwrap(), (crate::matroska::ids::EBML, 4));
-        assert_eq!(read_id(&[0xA3]).unwrap(), (0xA3, 1));
-        assert_eq!(read_id(&[0x42, 0x86]).unwrap(), (0x4286, 2));
-        assert!(read_id(&[0xFF]).is_none()); // reserved
-        assert_eq!(read_id(&[0x80]).unwrap(), (0x80, 1)); // ChapterDisplay
-        assert!(read_id(&[0x40, 0x00]).is_none()); // zero value
-        assert!(read_id(&[0x08, 0, 0, 0, 1]).is_none()); // 5-byte ID
-        for id in [0xA3u32, 0x4286, 0x2AD7B1, 0x1F43B675] {
-            let mut b = Vec::new();
-            write_id(&mut b, id);
-            assert_eq!(read_id(&b).unwrap(), (id, b.len()));
-        }
-    }
-
-    #[test]
-    fn signed_vint() {
-        assert_eq!(read_svint(&[0xBF]).unwrap(), (0, 1)); // 63 - 63
-        assert_eq!(read_svint(&[0x80]).unwrap(), (-63, 1));
-        assert_eq!(read_svint(&[0xC0]).unwrap(), (1, 1));
-        assert_eq!(read_svint(&[0x5F, 0xFF]).unwrap(), (0, 2));
-        assert_eq!(read_svint(&[0x60, 0x00]).unwrap(), (1, 2));
-    }
-
-    #[test]
-    fn values() {
-        assert_eq!(uint(&[]), 0);
-        assert_eq!(uint(&[1, 0]), 256);
-        assert_eq!(int(&[0xFF]), -1);
-        assert_eq!(int(&[0xFF, 0xFE]), -2);
-        assert_eq!(int(&[0x7F]), 127);
-        assert_eq!(float(&1.5f32.to_be_bytes()), 1.5);
-        assert_eq!(float(&2.25f64.to_be_bytes()), 2.25);
-        assert_eq!(string(b"abc\0\0"), "abc");
-    }
-
-    #[test]
-    fn crc() {
-        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
-        let payload = [0x42u8, 0x86, 0x81, 0x01];
-        let mut m = vec![0xBF, 0x84];
-        m.extend_from_slice(&crc32(&payload).to_le_bytes());
-        m.extend_from_slice(&payload);
-        assert_eq!(verify_crc(&m), Some(true));
-        m[7] ^= 1;
-        assert_eq!(verify_crc(&m), Some(false));
-        assert_eq!(verify_crc(&payload), None);
-    }
-
-    #[test]
-    fn children_iter() {
-        // two elements, then one whose size overruns
-        let d = [0x42, 0x86, 0x81, 0x01, 0xEC, 0x82, 0, 0, 0xA3, 0x85, 1, 2];
-        let v: Vec<_> = Children::new(&d).collect();
-        assert_eq!(v.len(), 3);
-        assert_eq!(v[0].id, 0x4286);
-        assert_eq!(v[0].data, &[1]);
-        assert_eq!(v[1].id, 0xEC);
-        assert_eq!(v[2].data, &[1, 2]);
-        assert!(v[2].truncated);
-        let mut it = Children::new(&[0x00, 0x01]);
-        assert!(it.next().is_none());
-        assert!(it.damaged());
-    }
-
-    fn frames<'a>(d: &'a [u8], f: &[(usize, usize)]) -> Vec<&'a [u8]> {
-        f.iter().map(|&(o, l)| &d[o..o + l]).collect()
-    }
-
-    #[test]
-    fn lacing_xiph() {
-        // 3 frames: 300, 2, rest(3)
-        let mut d = vec![2u8, 255, 45, 2];
-        d.extend(std::iter::repeat_n(7u8, 300));
-        d.extend_from_slice(&[1, 2]);
-        d.extend_from_slice(&[3, 4, 5]);
-        let f = parse_lacing(Lacing::Xiph, &d).unwrap();
-        assert_eq!(f.iter().map(|x| x.1).collect::<Vec<_>>(), [300, 2, 3]);
-        assert_eq!(frames(&d, &f)[2], &[3, 4, 5]);
-        // exact multiple of 255 needs a terminating 0
-        let mut d = vec![1u8, 255, 0];
-        d.extend(std::iter::repeat_n(1u8, 255));
-        d.push(9);
-        let f = parse_lacing(Lacing::Xiph, &d).unwrap();
-        assert_eq!(f.iter().map(|x| x.1).collect::<Vec<_>>(), [255, 1]);
-        assert!(parse_lacing(Lacing::Xiph, &[1, 200, 1]).is_err());
-    }
-
-    #[test]
-    fn lacing_ebml() {
-        // 4 frames: 5, 3 (delta -2), 4 (delta +1), rest 2
-        let mut d = vec![3u8, 0x85, 0xBF - 2, 0xBF + 1];
-        d.extend_from_slice(&[1; 5]);
-        d.extend_from_slice(&[2; 3]);
-        d.extend_from_slice(&[3; 4]);
-        d.extend_from_slice(&[4; 2]);
-        let f = parse_lacing(Lacing::Ebml, &d).unwrap();
-        assert_eq!(f.iter().map(|x| x.1).collect::<Vec<_>>(), [5, 3, 4, 2]);
-        assert_eq!(frames(&d, &f), [&[1u8; 5][..], &[2; 3], &[3; 4], &[4; 2]]);
-        assert!(parse_lacing(Lacing::Ebml, &[1, 0x90]).is_err());
-    }
-
-    #[test]
-    fn lacing_fixed_and_none() {
-        let d = [2u8, 1, 1, 2, 2, 3, 3];
-        let f = parse_lacing(Lacing::FixedSize, &d).unwrap();
-        assert_eq!(frames(&d, &f), [&[1u8, 1][..], &[2, 2], &[3, 3]]);
-        assert!(parse_lacing(Lacing::FixedSize, &[2, 1, 1]).is_err());
-        assert_eq!(parse_lacing(Lacing::None, &[9, 9]).unwrap(), [(0, 2)]);
-        assert_eq!(Lacing::from_flags(0x80 | 0x06), Lacing::Ebml);
-        assert_eq!(Lacing::from_flags(0x02), Lacing::Xiph);
-        assert_eq!(Lacing::from_flags(0x04), Lacing::FixedSize);
-    }
 }

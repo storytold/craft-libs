@@ -1,0 +1,287 @@
+[package]
+autotests = false
+name = "craft"
+description = "The craft libraries in one dependency: one feature per crate, `ui` for their egui side"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-host = { workspace = true }
+craft-i18n = { workspace = true }
+craft-theme = { workspace = true }
+egui = { workspace = true, optional = true }
+toml = { version = "1.1", default-features = false, features = ["std", "parse", "serde"] }
+craft-ai-core = { workspace = true, optional = true }
+craft-atomic = { workspace = true, optional = true }
+craft-audio = { workspace = true, optional = true }
+craft-automation = { workspace = true, optional = true }
+craft-browse = { workspace = true, optional = true }
+craft-cms = { workspace = true, optional = true }
+craft-color = { workspace = true, optional = true }
+craft-crw = { workspace = true, optional = true }
+craft-dialogs = { workspace = true, optional = true }
+craft-doc = { workspace = true, optional = true }
+craft-docpath = { workspace = true, optional = true }
+craft-draw = { workspace = true, optional = true }
+craft-ecproj-format = { workspace = true, optional = true }
+craft-font-catalog = { workspace = true, optional = true }
+craft-font-manager = { workspace = true, optional = true }
+craft-font-store = { workspace = true, optional = true }
+craft-imaging = { workspace = true, optional = true }
+craft-jpeg = { workspace = true, optional = true }
+craft-keymap = { workspace = true, optional = true }
+craft-layers = { workspace = true, optional = true }
+craft-media = { workspace = true, optional = true }
+craft-menu = { workspace = true, optional = true }
+craft-pcraft-format = { workspace = true, optional = true }
+craft-pdf = { workspace = true, optional = true }
+craft-platform = { workspace = true, optional = true }
+craft-prepress = { workspace = true, optional = true }
+craft-pages = { workspace = true, optional = true }
+craft-print = { workspace = true, optional = true }
+craft-proof = { workspace = true, optional = true }
+craft-quit = { workspace = true, optional = true }
+craft-settings = { workspace = true, optional = true }
+craft-review = { workspace = true, optional = true }
+craft-table = { workspace = true, optional = true }
+craft-text = { workspace = true, optional = true }
+craft-timeline = { workspace = true, optional = true }
+craft-theme-store = { workspace = true, optional = true }
+craft-update = { workspace = true, optional = true }
+craft-vectorcraft-format = { workspace = true, optional = true }
+craft-web-api = { workspace = true, optional = true }
+craft-web-host = { workspace = true, optional = true }
+craft-window = { workspace = true, optional = true }
+craft-ui = { workspace = true, optional = true }
+
+[features]
+ui = [
+    "dep:craft-ui",
+    "dep:egui",
+    "craft-automation?/ui",
+    "craft-browse?/ui",
+    "craft-color?/ui",
+    "craft-dialogs?/ui",
+    "craft-draw?/ui",
+    "craft-font-manager?/ui",
+    "craft-host/ui",
+    "craft-imaging?/ui",
+    "craft-pages?/ui",
+    "craft-print?/ui",
+    "craft-quit?/ui",
+    "craft-review?/ui",
+    "craft-table?/ui",
+    "craft-text?/ui",
+    "craft-theme-store?/ui",
+    "craft-timeline?/ui",
+    "craft-update?/ui",
+    "craft-window?/ui",
+]
+screen-testing = [
+    "ui",
+    "craft-ui/testing",
+    "craft-automation?/screen-testing",
+    "craft-browse?/screen-testing",
+    "craft-color?/screen-testing",
+    "craft-dialogs?/screen-testing",
+    "craft-draw?/screen-testing",
+    "craft-font-manager?/screen-testing",
+    "craft-imaging?/screen-testing",
+    "craft-layers?/screen-testing",
+    "craft-menu?/screen-testing",
+    "craft-pages?/screen-testing",
+    "craft-print?/screen-testing",
+    "craft-review?/screen-testing",
+    "craft-table?/screen-testing",
+    "craft-text?/screen-testing",
+    "craft-theme-store?/screen-testing",
+    "craft-timeline?/screen-testing",
+    "craft-update?/screen-testing",
+]
+ai-core = ["dep:craft-ai-core"]
+
+atomic = ["dep:craft-atomic"]
+
+audio = ["dep:craft-audio"]
+audio-decode = ["audio", "craft-audio/decode"]
+audio-decode-native = ["audio", "craft-audio/decode-native"]
+audio-encode = ["audio", "craft-audio/encode"]
+audio-flac-encode = ["audio", "craft-audio/flac-encode"]
+audio-lossless-encode = ["audio", "craft-audio/lossless-encode"]
+audio-pcm-encode = ["audio", "craft-audio/pcm-encode"]
+audio-peaks = ["audio", "craft-audio/peaks"]
+audio-serde = ["audio", "craft-audio/serde"]
+audio-symphonia = ["audio", "craft-audio/symphonia"]
+
+automation = ["dep:craft-automation", "keymap"]
+
+browse = ["dep:craft-browse"]
+
+cms = ["dep:craft-cms"]
+
+color = ["dep:craft-color", "keymap", "settings", "window", "platform"]
+
+crw = ["dep:craft-crw"]
+
+dialogs = ["dep:craft-dialogs"] # native only: rfd's folder picker and file paths
+
+doc = ["dep:craft-doc"]
+doc-pcraft-pixels = ["doc", "craft-doc/pcraft-pixels"]
+
+docpath = ["dep:craft-docpath"]
+
+draw = ["dep:craft-draw", "keymap", "color", "settings"]
+
+ecproj-format = ["dep:craft-ecproj-format"]
+
+font-catalog = ["dep:craft-font-catalog"]
+font-catalog-system = ["font-catalog", "craft-font-catalog/system"]
+
+font-manager = ["dep:craft-font-manager"] # native only: needs craft-font-store's store and network client
+
+font-store = ["dep:craft-font-store"]
+font-store-bundled-index = ["font-store", "craft-font-store/bundled-index"]
+
+i18n-collate = ["craft-i18n/collate"]
+
+imaging = ["dep:craft-imaging", "keymap"]
+
+jpeg = ["dep:craft-jpeg"]
+
+keymap = ["dep:craft-keymap"]
+keymap-egui = ["keymap", "craft-keymap/egui"]
+
+layers = ["dep:craft-layers"]
+
+media = ["dep:craft-media"]
+media-bitstream = ["media", "craft-media/bitstream"]
+media-isobmff = ["media", "craft-media/isobmff"]
+media-matroska = ["media", "craft-media/matroska"]
+media-ogg = ["media", "craft-media/ogg"]
+media-serde = ["media", "craft-media/serde"]
+
+menu = ["dep:craft-menu"]
+
+pages = ["dep:craft-pages"]
+
+pcraft-format = ["dep:craft-pcraft-format"]
+
+pdf = ["dep:craft-pdf"]
+pdf-interpret = ["pdf", "craft-pdf/interpret"]
+pdf-raster = ["pdf", "craft-pdf/raster"]
+pdf-read = ["pdf", "craft-pdf/read"]
+pdf-write = ["pdf", "craft-pdf/write"]
+pdf-write-pdf = ["pdf", "craft-pdf/write-pdf"]
+pdf-write-simple-text = ["pdf", "craft-pdf/write-simple-text"]
+
+platform = ["dep:craft-platform"]
+platform-appearance = ["platform", "craft-platform/appearance"]
+platform-browser = ["platform", "craft-platform/browser"]
+platform-clipboard = ["platform", "craft-platform/clipboard"]
+platform-pointer = ["platform", "craft-platform/pointer"]
+platform-screen = ["platform", "craft-platform/screen"]
+platform-usage = ["platform", "craft-platform/usage"]
+
+prepress = ["dep:craft-prepress"]
+prepress-flatten = ["prepress", "craft-prepress/flatten"]
+
+print = ["dep:craft-print"]
+
+proof = ["dep:craft-proof"]
+
+quit = ["dep:craft-quit"]
+
+review = ["dep:craft-review", "keymap"]
+
+settings = ["dep:craft-settings"]
+
+table = ["dep:craft-table", "keymap"]
+
+text = ["dep:craft-text"]
+text-afrikaans = ["text", "craft-text/afrikaans"]
+text-albanian = ["text", "craft-text/albanian"]
+text-all-languages = ["text", "craft-text/all-languages"]
+text-assamese = ["text", "craft-text/assamese"]
+text-belarusian = ["text", "craft-text/belarusian"]
+text-bengali = ["text", "craft-text/bengali"]
+text-bidi = ["text", "craft-text/bidi"]
+text-bulgarian = ["text", "craft-text/bulgarian"]
+text-burmese = ["text", "craft-text/burmese"]
+text-catalan = ["text", "craft-text/catalan"]
+text-croatian = ["text", "craft-text/croatian"]
+text-czech = ["text", "craft-text/czech"]
+text-danish = ["text", "craft-text/danish"]
+text-dutch = ["text", "craft-text/dutch"]
+text-estonian = ["text", "craft-text/estonian"]
+text-find = ["text", "craft-text/find"]
+text-finnish = ["text", "craft-text/finnish"]
+text-font-picker = ["text", "craft-text/font-picker"]
+text-french = ["text", "craft-text/french"]
+text-galician = ["text", "craft-text/galician"]
+text-generator = ["text", "craft-text/generator"]
+text-georgian = ["text", "craft-text/georgian"]
+text-german = ["text", "craft-text/german"]
+text-greek = ["text", "craft-text/greek"]
+text-gujarati = ["text", "craft-text/gujarati"]
+text-hindi = ["text", "craft-text/hindi"]
+text-hungarian = ["text", "craft-text/hungarian"]
+text-hyphen = ["text", "craft-text/hyphen"]
+text-icelandic = ["text", "craft-text/icelandic"]
+text-italian = ["text", "craft-text/italian"]
+text-kannada = ["text", "craft-text/kannada"]
+text-khmer = ["text", "craft-text/khmer"]
+text-kurmanji = ["text", "craft-text/kurmanji"]
+text-lao = ["text", "craft-text/lao"]
+text-latin = ["text", "craft-text/latin"]
+text-lithuanian = ["text", "craft-text/lithuanian"]
+text-lstm = ["text", "craft-text/lstm"]
+text-malayalam = ["text", "craft-text/malayalam"]
+text-marathi = ["text", "craft-text/marathi"]
+text-mongolian = ["text", "craft-text/mongolian"]
+text-norwegian = ["text", "craft-text/norwegian"]
+text-oriya = ["text", "craft-text/oriya"]
+text-panjabi = ["text", "craft-text/panjabi"]
+text-polish = ["text", "craft-text/polish"]
+text-portuguese = ["text", "craft-text/portuguese"]
+text-russian = ["text", "craft-text/russian"]
+text-sanskrit = ["text", "craft-text/sanskrit"]
+text-segment = ["text", "craft-text/segment"]
+text-serbian = ["text", "craft-text/serbian"]
+text-slovak-gpl = ["text", "craft-text/slovak-gpl"]
+text-slovenian = ["text", "craft-text/slovenian"]
+text-spanish = ["text", "craft-text/spanish"]
+text-spell = ["text", "craft-text/spell"]
+text-swedish = ["text", "craft-text/swedish"]
+text-tamil = ["text", "craft-text/tamil"]
+text-telugu = ["text", "craft-text/telugu"]
+text-thai = ["text", "craft-text/thai"]
+text-turkish = ["text", "craft-text/turkish"]
+text-turkmen = ["text", "craft-text/turkmen"]
+text-ukrainian = ["text", "craft-text/ukrainian"]
+
+theme-store = ["dep:craft-theme-store"]
+
+timeline = ["dep:craft-timeline", "keymap"]
+
+ui-app = ["ui", "craft-ui/app"]
+ui-color_fonts = ["ui", "craft-ui/color_fonts"]
+ui-snapshot = ["ui", "craft-ui/snapshot"]
+ui-system_fonts = ["ui", "craft-ui/system_fonts"]
+ui-testing = ["ui", "craft-ui/testing"]
+
+update = ["dep:craft-update"] # native only: downloads and installs through getrandom without wasm support
+
+vectorcraft-format = ["dep:craft-vectorcraft-format"]
+
+web-api = ["dep:craft-web-api"]
+
+web-host = ["dep:craft-web-host"]
+
+window = ["dep:craft-window"]
+window-appkit = ["window", "craft-window/appkit"]

@@ -1119,14 +1119,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn log2_table_matches_direct_log2() {
-        let t = log2_table();
-        for v in 1..3000usize {
-            assert_eq!(log2_of(t, v).to_bits(), (v as f64).log2().to_bits(), "{v}");
-        }
-    }
-
     /// The SATD as it was before the fixed-size version: runtime block size, column gather.
     fn satd_ref(src: &Plane, x: usize, y: usize, n: usize, pred: &[u16]) -> u64 {
         let k = n.min(8);

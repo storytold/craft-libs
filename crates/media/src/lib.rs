@@ -37,3 +37,10 @@ pub mod source;
 
 pub use id::{CodecId, CodecParams, Container, PcmFormat, xiph_lace};
 pub use source::{ByteSource, ReadSeekSource};
+
+#[cfg(test)]
+extern crate self as craft_media;
+
+#[cfg(test)]
+#[path = "../tests/main.rs"]
+mod integration;

@@ -17,11 +17,14 @@ use craft_audio::opus::StreamDecoder;
 /// The RFC 8251 vectors, or `None` after printing `SKIPPED` (a failure with
 /// `CRAFT_MEDIA_REQUIRE_ORACLES=1`). `scripts/fetch-opus-vectors.sh` fetches them.
 fn vectors_dir() -> Option<PathBuf> {
-    let d = crate::common::fixture_subdir("opus").join("vectors");
+    let d = crate::integration::codecs::common::fixture_subdir("opus").join("vectors");
     if d.join("testvector01.bit").exists() {
         return Some(d);
     }
-    crate::common::skip(&format!("the Opus RFC 8251 vectors are not in {} (scripts/fetch-opus-vectors.sh fetches them)", d.display()))
+    crate::integration::codecs::common::skip(&format!(
+        "the Opus RFC 8251 vectors are not in {} (scripts/fetch-opus-vectors.sh fetches them)",
+        d.display()
+    ))
 }
 
 fn read_bit(path: &PathBuf) -> Vec<(Vec<u8>, u32)> {
@@ -126,40 +129,5 @@ fn quality_metric_calibration() {
         let q = common::opus_quality(reference, &noisy, 2, 48000);
         eprintln!("white noise at {snr} dB SNR: quality {q:.1}");
         assert!(q > lo && q < hi, "{snr} dB -> {q}");
-    }
-}
-
-/// Diagnostic (`VEC=n cargo test ... -- --ignored`): per-second SNR/quality with packet modes.
-#[test]
-#[ignore]
-fn vector_diag() {
-    let Some(dir) = vectors_dir() else {
-        return;
-    };
-    let v: usize = std::env::var("VEC").ok().and_then(|s| s.parse().ok()).unwrap_or(2);
-    let name = format!("testvector{v:02}");
-    let packets = read_bit(&dir.join(format!("{name}.bit")));
-    let mut dec = StreamDecoder::new(48000, 2).unwrap();
-    let mut out = Vec::new();
-    let mut lines = Vec::new();
-    for (pkt, _) in &packets {
-        let start = out.len() / 2;
-        if pkt.is_empty() {
-            dec.decode_interleaved(None, &mut out).unwrap();
-            lines.push((start, "LOST".to_string()));
-        } else {
-            let p = craft_audio::opus::Packet::parse(pkt).unwrap();
-            dec.decode_interleaved(Some(pkt), &mut out).unwrap();
-            lines.push((start, format!("{:?} {:?} st{} n{}", p.toc.mode, p.toc.bandwidth, p.toc.stereo as u8, p.frames.len())));
-        }
-    }
-    let reference = read_pcm(&dir.join(format!("{name}.dec")));
-    let sec = 48000 * 2;
-    for s in 0..reference.len() / sec {
-        let r = &reference[s * sec..(s + 1) * sec];
-        let o = &out[s * sec..(s + 1) * sec];
-        let mut kinds: Vec<&String> = lines.iter().filter(|(st, _)| *st >= s * 48000 && *st < (s + 1) * 48000).map(|(_, c)| c).collect();
-        kinds.dedup();
-        eprintln!("{s:3}s snr {:6.1} q {:6.1} {:?}", common::snr_db(r, o), common::opus_quality(r, o, 2, 48000), kinds);
     }
 }

@@ -93,22 +93,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dictionary_lookup_accepts_indonesian_file_names() {
-        let dir = std::env::temp_dir().join(format!("wordcraft-id-aliases-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        for name in ["id_ID", "id-ID", "id", "in_ID"] {
-            std::fs::write(dir.join(format!("{name}.aff")), test_dict::AFF).unwrap();
-            std::fs::write(dir.join(format!("{name}.dic")), test_dict::DIC).unwrap();
-            let (aff, dic) = crate::hunspell::find_in(&dir, NAMES).unwrap();
-            let d = crate::hunspell::load(&aff, &dic).unwrap();
-            assert!(is_correct_with(&d, "rumah"));
-            std::fs::remove_file(aff).unwrap();
-            std::fs::remove_file(dic).unwrap();
-        }
-        std::fs::remove_dir(dir).unwrap();
-    }
-
-    #[test]
     fn indonesian_words_affixes_case_and_hyphens() {
         test_dict::install();
         let d = dictionary();
@@ -139,87 +123,5 @@ mod tests {
         for w in ["rumha", "makanann", "skolah", "jakarta", "kupu", "anak-anka", "mAkan", "bukunya-xyz"] {
             assert!(!is_correct(w), "{w}");
         }
-    }
-
-    /// Review follow-up (craft-libs#485's cased-letter rule): a part in a caseless script is no
-    /// abbreviation, so `buku-日本` is checked part by part; a part in capitals or without letters
-    /// still is one (`KTP-nya`, `COVID-19` with numbers checked).
-    #[test]
-    fn caseless_parts_are_not_abbreviations() {
-        test_dict::install();
-        let d = dictionary();
-        let defaults = crate::Options::default();
-        assert!(!check(&d, "buku-日本", &defaults) && !check(&d, "buku-ไทย", &defaults));
-        let numbers = crate::Options { ignore_numbers: false, ..defaults };
-        assert!(check(&d, "KTP-nya", &defaults) && check(&d, "buku-19", &numbers));
-    }
-
-    #[test]
-    fn forbidden_words_are_rejected_in_every_case() {
-        test_dict::install();
-        for w in ["zqterlarang", "Zqterlarang", "ZQTERLARANG"] {
-            assert!(!is_correct(w), "{w}");
-        }
-    }
-
-    #[test]
-    fn missing_dictionary_and_ignored_inputs_are_quiet() {
-        let empty = AffixDict::default();
-        assert!(is_correct_with(&empty, "rumha"));
-        assert!(install_dictionary("FLAG bogus\n", "1\nrumah\n").is_err());
-        let d = AffixDict::from_hunspell(test_dict::AFF, test_dict::DIC, &[]).unwrap();
-        for w in ["", "a", "2026", "RI", "ke-2", "日本語", "-", "--"] {
-            assert!(is_correct_with(&d, w), "{w}");
-        }
-    }
-
-    #[test]
-    fn user_dictionary_applies() {
-        test_dict::install();
-        assert!(!is_correct("zqkatasendiri"));
-        crate::add_word("Zqkatasendiri");
-        assert!(is_correct("zqkatasendiri"));
-    }
-
-    #[test]
-    fn indonesian_dispatch_messages_options_and_mixed_spans() {
-        // English results depend on the dictionaries other tests install.
-        crate::hold_dictionary_tests();
-        test_dict::install();
-        assert!(crate::has_dictionary(Some("id-ID")));
-        assert!(crate::is_correct_for("rumah", Some("ind")));
-        let text = "Rumah sekolha";
-        let issues = crate::check_text(text, &[(0..text.len(), crate::ProofLang::Id)]);
-        assert_eq!(issues.len(), 1, "{issues:?}");
-        assert_eq!(&text[issues[0].start..issues[0].end], "sekolha");
-        assert_eq!(issues[0].message, "Kemungkinan salah eja");
-        assert_eq!(issues[0].lang, crate::ProofLang::Id);
-        assert!(crate::suggest_in("sekolha", 8, crate::ProofLang::Id).contains(&"sekolah".into()));
-        let text = "Rumah this is is wrong";
-        let issues = crate::check_text(text, &[(0..5, crate::ProofLang::Id), (6..text.len(), crate::ProofLang::En)]);
-        assert!(issues.iter().any(|i| i.lang == crate::ProofLang::En && i.message.starts_with("Repeated word")));
-        assert!(issues.iter().all(|i| i.start >= 6));
-        let opts = crate::Options { ignore_uppercase: false, ..Default::default() };
-        assert!(!crate::is_correct_in_with("ZQTERLARANG", crate::ProofLang::Id, &opts));
-    }
-
-    /// With Ignore words in UPPERCASE or Ignore words that contain numbers off, Indonesian checks
-    /// those words against the dictionary instead of accepting them.
-    #[test]
-    fn proofing_options_reach_the_indonesian_check() {
-        test_dict::install();
-        let lang = crate::ProofLang::Id;
-        let defaults = crate::Options::default();
-        let check_caps = crate::Options { ignore_uppercase: false, ..defaults };
-        let check_digits = crate::Options { ignore_numbers: false, ..defaults };
-        assert!(crate::is_correct_in_with("RUMHA", lang, &defaults), "short capitals are acronyms by default");
-        assert!(!crate::is_correct_in_with("RUMHA", lang, &check_caps));
-        assert!(crate::is_correct_in_with("RUMAH", lang, &check_caps));
-        assert!(crate::is_correct_in_with("RUMHA-nya", lang, &defaults));
-        assert!(!crate::is_correct_in_with("RUMHA-nya", lang, &check_caps), "a part in capitals is checked too");
-        assert!(crate::is_correct_in_with("rumha2", lang, &defaults));
-        assert!(!crate::is_correct_in_with("rumha2", lang, &check_digits));
-        assert!(crate::is_correct_in_with("2026", lang, &check_digits), "numbers alone stay correct");
-        assert!(is_correct("RUMHA"), "direct checks keep the defaults");
     }
 }

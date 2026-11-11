@@ -1,6 +1,6 @@
 //! Cancellation is observed inside reads, with no timing or worker-thread scheduling assumptions.
 
-mod common;
+use super::common;
 
 use std::cell::Cell;
 
@@ -40,24 +40,6 @@ fn cancellation_interrupts_detection_before_an_unrecognized_result() {
             assert_eq!(read(bytes, &Limits::default(), &cancel), Err(Error::Cancelled), "detection case {case}, polls {}", polls.get());
             assert_eq!(polls.get(), threshold);
         }
-    }
-}
-
-#[test]
-fn reads_honor_an_initial_request_even_for_unrecognized_input() {
-    for read in READS {
-        assert_eq!(read(b"not a document", &Limits::default(), &|| true), Err(Error::Cancelled));
-    }
-}
-
-#[test]
-fn uncanceled_reads_preserve_results_and_errors() {
-    let vc = vectorcraft_json(4, "");
-    for file in [vc.as_bytes().to_vec(), gzip(vc.as_bytes()), pcraft(&png(1, 1, 0), &png(2, 2, 0)), ecproj(2).into_bytes(), vec![1]] {
-        let limits = Limits::default();
-        assert_eq!(info_with_cancel(&file, &limits, &|| false), info(&file, &limits));
-        assert_eq!(renditions_with_cancel(&file, &limits, &|| false), renditions(&file, &limits));
-        assert_eq!(outline_with_cancel(&file, &limits, &|| false), outline(&file, &limits));
     }
 }
 
@@ -118,6 +100,8 @@ fn controlled_reads_keep_limit_and_malformed_input_errors() {
         json.as_bytes()[..json.len() - 1].to_vec(),
         vectorcraft_json(99, "").into_bytes(),
         pcraft(&png(1, 1, 0), &png(2, 2, 0)),
+        ecproj(2).into_bytes(),
+        vec![1],
     ];
     for file in files {
         let mut bounds = vec![Limits::default(); 6];
@@ -132,21 +116,4 @@ fn controlled_reads_keep_limit_and_malformed_input_errors() {
             assert_eq!(outline_with_cancel(&file, &limits, &|| false), outline(&file, &limits));
         }
     }
-}
-
-#[test]
-fn controlled_full_composites_preserve_provenance_and_selected_reads() {
-    let full = png(4, 3, 30);
-    let manifest = pcraft_manifest(1, "[]", r#", "full_composite":"composite/full.png", "composite":"composite/preview.png""#);
-    let file = zip(&[store("manifest.json", manifest.as_bytes()), store("composite/full.png", &full)]);
-    let limits = Limits::default();
-    let selected = craft_doc::rendition(&file, craft_doc::RenditionKind::Composite, &limits).unwrap().unwrap();
-    let controlled = renditions_with_cancel(&file, &limits, &|| false).unwrap();
-    assert_eq!(controlled, vec![selected]);
-    assert_eq!(controlled[0].bytes, full);
-    assert!(controlled[0].is_full_composite);
-    assert_eq!(renditions_with_cancel(&file, &limits, &|| true), Err(Error::Cancelled));
-
-    let missing_full = zip(&[store("manifest.json", manifest.as_bytes()), store("composite/preview.png", &full)]);
-    assert!(matches!(renditions_with_cancel(&missing_full, &limits, &|| false), Err(Error::Malformed(_))));
 }

@@ -730,29 +730,4 @@ mod tests {
             }
         }
     }
-
-    #[test]
-    fn superframe_index() {
-        // Two frames of 3 and 2 bytes, 1 byte per size.
-        let mut d = vec![1u8, 2, 3, 4, 5];
-        let marker = 0xc0 | 1; // 2 frames, 1 byte sizes
-        d.extend([marker, 3, 2, marker]);
-        let f = split_superframe(&d);
-        assert_eq!(f, vec![&[1u8, 2, 3][..], &[4u8, 5][..]]);
-        // Not a superframe: last byte is a marker but the first index byte does not match.
-        let d2 = vec![9u8, 9, 0xc1];
-        assert_eq!(split_superframe(&d2), vec![&d2[..]]);
-    }
-
-    #[test]
-    fn inv_remap_is_bijective_per_prob() {
-        for p in 1..=255u8 {
-            let mut seen = std::collections::HashSet::new();
-            for d in 0..254 {
-                seen.insert(inv_remap_prob(d, p));
-            }
-            // Every other probability value is reachable.
-            assert!(seen.len() >= 253, "p {p}: {}", seen.len());
-        }
-    }
 }

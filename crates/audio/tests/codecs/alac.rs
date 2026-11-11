@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn dir() -> PathBuf {
-    crate::testkit::fixtures_dir("alac")
+    crate::integration::codecs::testkit::fixtures_dir("alac")
 }
 
 /// The ffmpeg channel layout ALAC uses for `channels`.
@@ -103,7 +103,7 @@ fn our_decode(bytes: &[u8], bits: u32) -> Vec<Vec<i32>> {
 
 #[test]
 fn ffmpeg_alac_decodes_exactly() {
-    let Some(ff) = crate::testkit::ffmpeg_or_skip("alac oracle") else { return };
+    let Some(ff) = crate::integration::codecs::testkit::ffmpeg_or_skip("alac oracle") else { return };
     for (channels, bits) in [(1, 16), (2, 16), (2, 24), (3, 16), (4, 16), (5, 24), (6, 24), (7, 16), (8, 16)] {
         let wav = input(channels, bits, 12_345);
         let name = format!("ffmpeg_{channels}ch_{bits}");
@@ -128,7 +128,7 @@ fn ffmpeg_alac_decodes_exactly() {
 /// frames ("not yet implemented"), which the noise in the input produces; Apple's decoder does.
 #[test]
 fn ffmpeg_decodes_our_alac_exactly() {
-    let Some(ff) = crate::testkit::ffmpeg_or_skip("alac oracle") else { return };
+    let Some(ff) = crate::integration::codecs::testkit::ffmpeg_or_skip("alac oracle") else { return };
     for (channels, bits, frame) in [
         (1, 16, 4096),
         (2, 16, 4096),

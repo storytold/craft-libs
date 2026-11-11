@@ -218,32 +218,6 @@ pub fn is_foreign(lower: &str, lang: ProofLang) -> bool {
 mod tests {
     use super::*;
 
-    #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
-    #[test]
-    fn every_line_parses() {
-        let lines = VARIANTS.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).count();
-        assert_eq!(pairs().len(), lines, "a malformed line in en-variants.txt");
-        assert!(pairs().len() > 250);
-    }
-
-    #[test]
-    fn suffixes_follow_the_pattern() {
-        assert_eq!(add("centre", "ing"), "centring");
-        assert_eq!(add("centre", "ed"), "centred");
-        assert_eq!(add("center", "ed"), "centered");
-        assert_eq!(add("organise", "ation"), "organisation");
-        assert_eq!(add("cosy", "er"), "cosier");
-        assert_eq!(add("cosy", "s"), "cosies");
-        assert_eq!(add("armoury", "s"), "armouries");
-        assert_eq!(add("analyse", "s"), "analyses");
-        assert_eq!(add("colour", "ful"), "colourful");
-        assert_eq!(add("", "s"), "s");
-        assert_eq!(suffixes("color", "colour").len(), 10);
-        assert_eq!(suffixes("center", "centre"), ["s", "ed", "ing"]);
-        assert!(suffixes("organize", "organise").contains(&"ation"));
-        assert_eq!(suffixes("program", "programme"), ["s"], "no -ed: programmed is American too");
-    }
-
     #[test]
     fn no_form_is_both_flagged_and_accepted() {
         for lang in [ProofLang::En, ProofLang::EnCa, ProofLang::EnGb] {

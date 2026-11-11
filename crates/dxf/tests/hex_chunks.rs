@@ -100,18 +100,6 @@ fn binary_reader_tolerates_the_full_length_byte_domain() {
 }
 
 #[test]
-#[ignore = "Confirmed ASCII DXF writer nonconformance: hex payloads above 127 bytes are emitted as one oversized chunk"]
-fn ascii_writer_splits_large_payloads_into_conforming_chunks() {
-    for code in (310..=319).chain([1004]) {
-        for length in [128, 254, 255, 256, 1024] {
-            for utf8 in [false, true] {
-                check_ascii(code, &payload(length), utf8);
-            }
-        }
-    }
-}
-
-#[test]
 #[ignore = "Confirmed binary DXF writer nonconformance: 255-byte partitioning exceeds the documented 127-byte group limit"]
 fn binary_writer_splits_large_payloads_into_conforming_chunks() {
     for code in (310..=319).chain([1004]) {

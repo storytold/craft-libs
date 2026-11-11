@@ -8,35 +8,77 @@
 #[derive(Clone, Debug, PartialEq)]
 pub enum Codec {
     /// `V_MPEG4/ISO/AVC`; payload is an `AVCDecoderConfigurationRecord` (avcC).
-    Avc { avcc: Vec<u8> },
+    Avc {
+        #[allow(missing_docs)]
+        avcc: Vec<u8>,
+    },
     /// `V_MPEGH/ISO/HEVC`; payload is an `HEVCDecoderConfigurationRecord` (hvcC).
-    Hevc { hvcc: Vec<u8> },
+    Hevc {
+        #[allow(missing_docs)]
+        hvcc: Vec<u8>,
+    },
     /// `V_VP8`.
     Vp8,
     /// `V_VP9`; `CodecPrivate` (optional) holds VP9 codec feature metadata.
-    Vp9 { private: Vec<u8> },
+    Vp9 {
+        #[allow(missing_docs)]
+        private: Vec<u8>,
+    },
     /// `V_AV1`; payload is an `AV1CodecConfigurationRecord` (av1C).
-    Av1 { av1c: Vec<u8> },
+    Av1 {
+        #[allow(missing_docs)]
+        av1c: Vec<u8>,
+    },
     /// `V_APV`; payload is an `APVDecoderConfigurationRecord` (apvC), if present.
-    Apv { apvc: Vec<u8> },
+    Apv {
+        #[allow(missing_docs)]
+        apvc: Vec<u8>,
+    },
     /// `V_PRORES`; `fourcc` from `CodecPrivate` (e.g. `apcn`), if present.
-    ProRes { fourcc: Option<[u8; 4]> },
+    ProRes {
+        #[allow(missing_docs)]
+        fourcc: Option<[u8; 4]>,
+    },
     /// `V_MJPEG`, or `V_MS/VFW/FOURCC` with an `MJPG` compression FourCC.
     Mjpeg,
     /// `V_MS/VFW/FOURCC` with any other FourCC; `bitmap_info_header` is the whole `CodecPrivate`.
-    VfwFourcc { fourcc: [u8; 4], bitmap_info_header: Vec<u8> },
+    VfwFourcc {
+        #[allow(missing_docs)]
+        fourcc: [u8; 4],
+        #[allow(missing_docs)]
+        bitmap_info_header: Vec<u8>,
+    },
     /// `A_AAC` (and the legacy `A_AAC/MPEG{2,4}/<profile>` IDs); `asc` is the
     /// `AudioSpecificConfig` (synthesized for legacy IDs without `CodecPrivate`).
-    Aac { asc: Vec<u8> },
+    Aac {
+        #[allow(missing_docs)]
+        asc: Vec<u8>,
+    },
     /// `A_OPUS`; `head` is the `OpusHead` identification header.
-    Opus { head: Vec<u8> },
+    Opus {
+        #[allow(missing_docs)]
+        head: Vec<u8>,
+    },
     /// `A_VORBIS`; the three Vorbis headers (identification, comment, setup), split from the
     /// Xiph-laced `CodecPrivate`.
-    Vorbis { headers: Vec<Vec<u8>> },
+    Vorbis {
+        #[allow(missing_docs)]
+        headers: Vec<Vec<u8>>,
+    },
     /// `A_FLAC`; `private` is `fLaC` + metadata blocks (STREAMINFO first).
-    Flac { private: Vec<u8> },
+    Flac {
+        #[allow(missing_docs)]
+        private: Vec<u8>,
+    },
     /// `A_PCM/INT/LIT`, `A_PCM/INT/BIG`, `A_PCM/FLOAT/IEEE`. Bit depth comes from the Audio element.
-    Pcm { float: bool, big_endian: bool, bits: u16 },
+    Pcm {
+        #[allow(missing_docs)]
+        float: bool,
+        #[allow(missing_docs)]
+        big_endian: bool,
+        #[allow(missing_docs)]
+        bits: u16,
+    },
     /// `A_AC3`.
     Ac3,
     /// `A_EAC3`.
@@ -52,7 +94,12 @@ pub enum Codec {
     /// `S_TEXT/WEBVTT`, or WebM's `D_WEBVTT/{SUBTITLES,CAPTIONS,DESCRIPTIONS,METADATA}`.
     WebVtt,
     /// `S_TEXT/ASS` / `S_TEXT/SSA`; `header` is the script header from `CodecPrivate`.
-    Ass { header: Vec<u8>, ssa: bool },
+    Ass {
+        #[allow(missing_docs)]
+        header: Vec<u8>,
+        #[allow(missing_docs)]
+        ssa: bool,
+    },
     /// Any other CodecID (kept verbatim along with `Track::codec_private`).
     Other(String),
 }
@@ -199,38 +246,5 @@ pub(crate) fn map_codec(id: &str, private: &[u8], audio: Option<&crate::matroska
             Codec::Aac { asc: synth_asc(object_type, rate, out_rate, ch, sbr) }
         }
         _ => Codec::Other(id.to_string()),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn mapping() {
-        assert_eq!(map_codec("V_MPEG4/ISO/AVC", &[1, 2], None), Codec::Avc { avcc: vec![1, 2] });
-        assert_eq!(map_codec("V_APV", &[1, 2, 3], None), Codec::Apv { apvc: vec![1, 2, 3] });
-        assert_eq!(map_codec("V_APV", &[], None).name(), "apv");
-        assert_eq!(map_codec("V_PRORES", b"apcn", None), Codec::ProRes { fourcc: Some(*b"apcn") });
-        let mut bih = vec![0u8; 40];
-        bih[16..20].copy_from_slice(b"MJPG");
-        assert_eq!(map_codec("V_MS/VFW/FOURCC", &bih, None), Codec::Mjpeg);
-        bih[16..20].copy_from_slice(b"FFV1");
-        assert!(matches!(map_codec("V_MS/VFW/FOURCC", &bih, None), Codec::VfwFourcc { fourcc, .. } if &fourcc == b"FFV1"));
-        let a = crate::matroska::AudioInfo { sampling_frequency: 44100.0, channels: 2, bit_depth: Some(24), output_sampling_frequency: None };
-        assert_eq!(map_codec("A_PCM/INT/LIT", &[], Some(&a)).name(), "pcm_s24le");
-        assert_eq!(map_codec("A_PCM/FLOAT/IEEE", &[], Some(&a)), Codec::Pcm { float: true, big_endian: false, bits: 24 });
-        // legacy AAC LC 44.1k stereo → 0x12 0x10
-        assert_eq!(map_codec("A_AAC/MPEG4/LC", &[], Some(&a)), Codec::Aac { asc: vec![0x12, 0x10] });
-        assert_eq!(map_codec("S_TEXT/UTF8", &[], None).name(), "subrip");
-        assert_eq!(map_codec("X_WHATEVER", &[], None), Codec::Other("X_WHATEVER".into()));
-    }
-
-    #[test]
-    fn xiph_split() {
-        let mut p = vec![2u8, 3, 2];
-        p.extend_from_slice(&[1, 1, 1, 2, 2, 3, 3, 3, 3]);
-        let h = split_xiph(&p);
-        assert_eq!(h, vec![vec![1, 1, 1], vec![2, 2], vec![3, 3, 3, 3]]);
     }
 }

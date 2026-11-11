@@ -5,14 +5,23 @@ use crate::matroska::codec::Codec;
 /// Track type (`TrackType`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrackKind {
+    /// `TrackType` 1.
     Video,
+    /// `TrackType` 2.
     Audio,
+    /// `TrackType` 3 (combined audio and video).
     Complex,
+    /// `TrackType` 0x10.
     Logo,
+    /// `TrackType` 0x11.
     Subtitle,
+    /// `TrackType` 0x12.
     Buttons,
+    /// `TrackType` 0x20.
     Control,
+    /// `TrackType` 0x21.
     Metadata,
+    /// Any other `TrackType` value.
     Other(u8),
 }
 
@@ -38,8 +47,11 @@ impl TrackKind {
 pub struct MasteringMetadata {
     /// Red, green, blue primaries as (x, y).
     pub primaries: [(f64, f64); 3],
+    /// White point as CIE 1931 (x, y).
     pub white_point: (f64, f64),
+    /// Maximum luminance in cd/m².
     pub luminance_max: f64,
+    /// Minimum luminance in cd/m².
     pub luminance_min: f64,
 }
 
@@ -48,12 +60,19 @@ pub struct MasteringMetadata {
 pub struct Color {
     /// `MatrixCoefficients` (H.273; 2 = unspecified).
     pub matrix_coefficients: Option<u64>,
+    /// `BitsPerChannel`.
     pub bits_per_channel: Option<u64>,
+    /// `ChromaSubsamplingHorz`: chroma pixels removed horizontally (1 for 4:2:0 and 4:2:2).
     pub chroma_subsampling_horz: Option<u64>,
+    /// `ChromaSubsamplingVert`: chroma pixels removed vertically (1 for 4:2:0).
     pub chroma_subsampling_vert: Option<u64>,
+    /// `CbSubsamplingHorz`: extra horizontal subsampling of the Cb channel.
     pub cb_subsampling_horz: Option<u64>,
+    /// `CbSubsamplingVert`: extra vertical subsampling of the Cb channel.
     pub cb_subsampling_vert: Option<u64>,
+    /// `ChromaSitingHorz` value, as read.
     pub chroma_siting_horz: Option<u64>,
+    /// `ChromaSitingVert` value, as read.
     pub chroma_siting_vert: Option<u64>,
     /// `Range`: 0 unspecified, 1 broadcast (limited), 2 full, 3 defined by matrix/transfer.
     pub range: Option<u64>,
@@ -65,6 +84,7 @@ pub struct Color {
     pub max_cll: Option<u64>,
     /// Maximum frame-average light level (cd/m²).
     pub max_fall: Option<u64>,
+    /// `MasteringMetadata`, if present.
     pub mastering: Option<MasteringMetadata>,
 }
 
@@ -78,11 +98,16 @@ impl Color {
 /// `Video` element.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct VideoInfo {
+    /// `PixelWidth` in pixels.
     pub pixel_width: u32,
+    /// `PixelHeight` in pixels.
     pub pixel_height: u32,
-    /// `DisplayWidth`/`DisplayHeight`, in `display_unit` (0 = pixels, 3 = display aspect ratio).
+    /// `DisplayWidth`, in `display_unit`.
     pub display_width: Option<u32>,
+    /// `DisplayHeight`, in `display_unit`.
     pub display_height: Option<u32>,
+    /// `DisplayUnit` value, as read. `pixel_aspect` uses the display size only for 0 (pixels) and 3
+    /// (display aspect ratio).
     pub display_unit: u64,
     /// Crop (top, bottom, left, right) in pixels.
     pub crop: (u32, u32, u32, u32),
@@ -90,12 +115,15 @@ pub struct VideoInfo {
     pub flag_interlaced: u64,
     /// `FieldOrder` (0 progressive, 1 tff, 2 undetermined, 6 bff, 9/14 interleaved).
     pub field_order: Option<u64>,
+    /// `StereoMode` (0 mono; other values as in RFC 9559).
     pub stereo_mode: Option<u64>,
     /// `AlphaMode`: 1 if BlockAdditions carry alpha.
     pub alpha_mode: u64,
     /// `ColourSpace` FourCC (uncompressed video).
     pub color_space: Option<[u8; 4]>,
+    /// `Colour` element, if present.
     pub color: Option<Color>,
+    /// `Projection` element, if present.
     pub projection: Option<Projection>,
 }
 
@@ -153,7 +181,9 @@ pub struct AudioInfo {
     pub sampling_frequency: f64,
     /// `OutputSamplingFrequency` (e.g. SBR output rate).
     pub output_sampling_frequency: Option<f64>,
+    /// `Channels`.
     pub channels: u64,
+    /// `BitDepth` in bits per sample, if present.
     pub bit_depth: Option<u64>,
 }
 
@@ -167,12 +197,28 @@ impl Default for AudioInfo {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ContentEncoding {
     /// `ContentCompAlgo` 3: the given bytes were stripped from the start of every frame.
-    HeaderStripping { bytes: Vec<u8>, scope: u64 },
+    HeaderStripping {
+        /// The stripped bytes.
+        bytes: Vec<u8>,
+        /// `ContentEncodingScope` bit mask, default 1. Bit 1 applies the encoding to frames and bit 2 to
+        /// `CodecPrivate`; other bits are kept but not interpreted.
+        scope: u64,
+    },
     /// Other compression (0 zlib, 1 bzlib, 2 lzo1x): not supported for reading frame data.
     /// `algo` is `u64::MAX` for a chain of more encodings than a reader checks.
-    Compression { algo: u64, settings: Vec<u8>, scope: u64 },
+    Compression {
+        /// `ContentCompAlgo` value.
+        algo: u64,
+        /// `ContentCompSettings` bytes.
+        settings: Vec<u8>,
+        /// `ContentEncodingScope` bit mask; bit 1 means frames are affected.
+        scope: u64,
+    },
     /// Encryption (not supported for reading frame data).
-    Encryption { scope: u64 },
+    Encryption {
+        /// `ContentEncodingScope` bit mask; bit 1 means frames are affected.
+        scope: u64,
+    },
 }
 
 /// One entry of a track's sample (frame) table.
@@ -186,6 +232,7 @@ pub struct Sample {
     pub pts: i64,
     /// Duration in timebase ticks (from `BlockDuration` or `DefaultDuration`), 0 if unknown.
     pub duration: u64,
+    #[allow(missing_docs)]
     pub keyframe: bool,
     /// Index of the owning cluster in [`crate::matroska::MkvFile::clusters`].
     pub cluster: u32,
@@ -202,30 +249,47 @@ pub struct Sample {
 /// A Matroska track (`TrackEntry`) plus, once indexed, its sample table.
 #[derive(Clone, Debug)]
 pub struct Track {
+    /// `TrackNumber`, the value blocks use to refer to the track.
     pub number: u64,
+    /// `TrackUID`.
     pub uid: u64,
+    /// `TrackType`, as a decoded kind.
     pub kind: TrackKind,
+    /// `FlagEnabled`.
     pub enabled: bool,
+    /// `FlagDefault`.
     pub default: bool,
+    /// `FlagForced`.
     pub forced: bool,
+    /// `FlagHearingImpaired`.
     pub hearing_impaired: bool,
+    /// `FlagLacing`: whether blocks of this track may be laced.
     pub lacing: bool,
     /// `DefaultDuration` in nanoseconds.
     pub default_duration_ns: Option<u64>,
+    /// `Name`.
     pub name: String,
     /// `Language` (ISO 639-2, default `eng`).
     pub language: String,
+    /// `LanguageBCP47`, if present.
     pub language_bcp47: Option<String>,
+    /// `CodecID`.
     pub codec_id: String,
+    /// Raw `CodecPrivate` bytes.
     pub codec_private: Vec<u8>,
+    /// `CodecName`.
     pub codec_name: String,
+    /// Codec decoded from `codec_id` and `codec_private`.
     pub codec: Codec,
     /// `CodecDelay` in nanoseconds.
     pub codec_delay_ns: u64,
     /// `SeekPreRoll` in nanoseconds.
     pub seek_pre_roll_ns: u64,
+    /// `Video` settings; `Some` for video tracks.
     pub video: Option<VideoInfo>,
+    /// `Audio` settings; `Some` for audio tracks.
     pub audio: Option<AudioInfo>,
+    /// `ContentEncodings`, in decoding order.
     pub encodings: Vec<ContentEncoding>,
     /// Timebase numerator/denominator in seconds: `TimestampScale / 1e9`, reduced.
     pub timebase: (u64, u64),
@@ -379,89 +443,5 @@ impl Track {
             Err(0) => 0,
             Err(i) => self.sync[i - 1] as usize,
         }
-    }
-}
-
-#[cfg(test)]
-mod rotation_tests {
-    use super::{Projection, VideoInfo};
-
-    fn with_roll(projection_type: u64, yaw: f64, pitch: f64, roll: f64) -> VideoInfo {
-        VideoInfo { projection: Some(Projection { projection_type, yaw, pitch, roll }), ..Default::default() }
-    }
-
-    #[test]
-    fn display_rotation_maps_rectangular_roll_to_clockwise_quarter_turns() {
-        assert_eq!(VideoInfo::default().display_rotation(), Some(0), "no Projection: as stored");
-        // ProjectionPoseRoll is counter-clockwise: -90 is a quarter turn clockwise
-        for (roll, turns) in [(0.0, 0), (-90.0, 1), (180.0, 2), (-180.0, 2), (90.0, 3), (-270.0, 3), (270.0, 1), (360.0, 0)] {
-            assert_eq!(with_roll(0, 0.0, 0.0, roll).display_rotation(), Some(turns), "roll {roll}");
-        }
-    }
-
-    #[test]
-    fn display_rotation_leaves_non_rectangular_flipped_and_odd_angles_alone() {
-        assert_eq!(with_roll(1, 0.0, 0.0, -90.0).display_rotation(), None, "equirectangular");
-        assert_eq!(with_roll(0, 180.0, 0.0, 0.0).display_rotation(), None, "yaw flip");
-        assert_eq!(with_roll(0, 0.0, 180.0, 0.0).display_rotation(), None, "pitch flip");
-        assert_eq!(with_roll(0, 0.0, 0.0, 45.0).display_rotation(), None, "not a quarter turn");
-        assert_eq!(with_roll(0, 0.0, 0.0, f64::NAN).display_rotation(), None, "malformed angle");
-    }
-}
-
-#[cfg(test)]
-mod aspect_overflow_tests {
-    use super::VideoInfo;
-
-    #[test]
-    fn hostile_crop_sums_do_not_overflow() {
-        let video = VideoInfo {
-            pixel_width: 640,
-            pixel_height: 480,
-            display_width: Some(640),
-            display_height: Some(480),
-            crop: (u32::MAX, 1, u32::MAX, 1),
-            ..Default::default()
-        };
-        assert_eq!(video.pixel_aspect(), (1, 1));
-    }
-
-    #[test]
-    fn ordinary_pixel_aspect_is_unchanged() {
-        let video = VideoInfo { pixel_width: 1920, pixel_height: 1080, display_width: Some(1440), display_height: Some(1080), ..Default::default() };
-        assert_eq!(video.pixel_aspect(), (3, 4));
-    }
-}
-
-#[cfg(test)]
-mod codec_params_tests {
-    use crate::CodecId;
-    use crate::matroska::mux::{MkvWriter, MuxOptions, TrackSpec};
-    use crate::matroska::{Demuxer, TrackKind};
-
-    #[test]
-    fn alac_dnx_and_opus_match_mp4() {
-        let cookie: Vec<u8> = (0..24).collect();
-        let mut alac = TrackSpec::new(TrackKind::Audio, "A_ALAC");
-        alac.codec_private = cookie.clone();
-        alac.audio = Some((44_100.0, 2, Some(16)));
-        let mut bih = vec![0u8; 40];
-        bih[16..20].copy_from_slice(b"AVdn");
-        let mut dnx = TrackSpec::new(TrackKind::Video, "V_MS/VFW/FOURCC");
-        dnx.codec_private = bih;
-        dnx.video_size = Some((1920, 1080));
-        let mut opus = TrackSpec::new(TrackKind::Audio, "A_OPUS");
-        opus.codec_private = [b"OpusHead".as_slice(), &[1, 2, 0x38, 0x01, 0x44, 0xAC, 0, 0, 0, 0, 0]].concat();
-        opus.audio = Some((44_100.0, 2, None)); // the input rate, as some muxers write it
-        let mut m = MkvWriter::new(std::io::Cursor::new(Vec::new()), vec![alac, dnx, opus], MuxOptions::default()).unwrap();
-        for t in 0..3 {
-            m.write_frame(t, 0, true, &[0; 4], None).unwrap();
-        }
-        let bytes = m.finish().unwrap().into_inner();
-        let d = Demuxer::from_slice(&bytes).unwrap();
-        let p: Vec<_> = d.tracks().iter().map(|t| t.codec_params()).collect();
-        assert_eq!((p[0].codec, p[0].extradata.as_slice()), (CodecId::Alac, cookie.as_slice()));
-        assert_eq!((p[1].codec, p[1].tag), (CodecId::Dnxhd, Some(*b"AVdn")));
-        assert_eq!((p[2].codec, p[2].sample_rate, p[2].channels), (CodecId::Opus, Some(48_000), Some(2)));
     }
 }

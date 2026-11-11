@@ -101,7 +101,7 @@ fn check_packets(packets: &[Packet], config: Config, label: &str) -> Vec<u8> {
 fn external_decode(ffmpeg: &Path, config: Config, label: &str, stream: &[u8], decoded_samples: usize) -> Vec<f32> {
     let channels = config.channels();
     let format = if config.codec == Codec::Ac3 { "ac3" } else { "eac3" };
-    let path = crate::testkit::fixtures_dir("ac3-encoder-oracle").join(format!(
+    let path = crate::integration::codecs::testkit::fixtures_dir("ac3-encoder-oracle").join(format!(
         "{}-{:?}-lfe{}-{}-{}.{}",
         std::process::id(),
         config.mode,

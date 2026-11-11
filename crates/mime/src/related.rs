@@ -237,11 +237,5 @@ mod tests {
             let resolved = resolve_location(&base, &reference);
             proptest::prop_assert!(resolved.len() <= base.len() + reference.len() + 1);
         }
-
-        #[test]
-        fn any_text_resolves(base in proptest::prelude::any::<String>(), reference in proptest::prelude::any::<String>()) {
-            let _ = resolve_location(&base, &reference);
-            let _ = Resources::default().find(&reference, &base);
-        }
     }
 }

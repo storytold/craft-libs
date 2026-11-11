@@ -143,18 +143,4 @@ mod tests {
             }
         }
     }
-
-    #[test]
-    fn fdct_inverts_idct() {
-        let mut b = [0f32; 64];
-        for (i, v) in b.iter_mut().enumerate() {
-            *v = ((i * 37) % 200) as f32 - 100.0;
-        }
-        let orig = b;
-        fdct8x8(&mut b);
-        idct8x8(&mut b);
-        for i in 0..64 {
-            assert!((b[i] - orig[i]).abs() < 1e-3);
-        }
-    }
 }

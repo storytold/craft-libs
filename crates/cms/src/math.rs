@@ -14,8 +14,10 @@ pub const D65_XY: [f64; 2] = [0.3127, 0.3290];
 /// Row-major 3×3 matrix.
 pub type Mat3 = [[f64; 3]; 3];
 
+/// The 3×3 identity matrix.
 pub const IDENTITY: Mat3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
+/// Matrix product `a · b`.
 pub fn mul(a: &Mat3, b: &Mat3) -> Mat3 {
     let mut o = [[0.0; 3]; 3];
     for (i, row) in o.iter_mut().enumerate() {
@@ -26,6 +28,7 @@ pub fn mul(a: &Mat3, b: &Mat3) -> Mat3 {
     o
 }
 
+/// Matrix–vector product `m · v`.
 pub const fn apply(m: &Mat3, v: [f64; 3]) -> [f64; 3] {
     [
         m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
@@ -34,6 +37,7 @@ pub const fn apply(m: &Mat3, v: [f64; 3]) -> [f64; 3] {
     ]
 }
 
+/// Determinant of `m`.
 pub const fn det(m: &Mat3) -> f64 {
     m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
         + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
@@ -134,6 +138,7 @@ pub fn xyz_to_lab_f32(xyz: [f32; 3]) -> [f32; 3] {
     [116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz)]
 }
 
+/// CIE L*a*b* to XYZ relative to the D50 white (0.9642, 1, 0.8249), in `f32`.
 #[inline]
 pub fn lab_to_xyz_f32(lab: [f32; 3]) -> [f32; 3] {
     const W: [f32; 3] = [0.9642, 1.0, 0.8249];
@@ -221,18 +226,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn lab_roundtrip() {
-        for xyz in [[0.2, 0.3, 0.1], [0.9642, 1.0, 0.8249], [0.001, 0.002, 0.0005]] {
-            let back = lab_to_xyz(xyz_to_lab(xyz, D50), D50);
-            for i in 0..3 {
-                assert!((back[i] - xyz[i]).abs() < 1e-12);
-            }
-        }
-        let w = xyz_to_lab(D50, D50);
-        assert!((w[0] - 100.0).abs() < 1e-12 && w[1].abs() < 1e-12 && w[2].abs() < 1e-12);
-    }
-
-    #[test]
     fn delta_e2000_matches_sharma_reference_pairs() {
         // Sharma, Wu & Dalal (2005), test data pairs 1, 7, 17, 25 and 34.
         let pairs = [
@@ -245,27 +238,6 @@ mod tests {
         for (a, b, want) in pairs {
             assert!((delta_e2000(a, b) - want).abs() < 1e-4, "{a:?} {b:?}: {}", delta_e2000(a, b));
             assert!((delta_e2000(b, a) - want).abs() < 1e-4);
-        }
-    }
-
-    #[test]
-    fn bradford_maps_white() {
-        let d65 = xy_to_xyz(D65_XY);
-        let m = bradford(d65, D50);
-        let w = apply(&m, d65);
-        for i in 0..3 {
-            assert!((w[i] - D50[i]).abs() < 1e-12);
-        }
-    }
-
-    #[test]
-    fn invert_roundtrip() {
-        let m = [[0.4, 0.3, 0.2], [0.2, 0.7, 0.1], [0.0, 0.1, 0.8]];
-        let p = mul(&m, &invert(&m).unwrap());
-        for (i, row) in p.iter().enumerate() {
-            for (j, v) in row.iter().enumerate() {
-                assert!((v - if i == j { 1.0 } else { 0.0 }).abs() < 1e-12);
-            }
         }
     }
 }

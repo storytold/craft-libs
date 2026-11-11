@@ -22,8 +22,11 @@ use crate::matroska::track::{Color, TrackKind};
 /// ends where the timestamps stop advancing by that duration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LacingMode {
+    /// No lacing: one frame per block.
     None,
+    /// Xiph lacing.
     Xiph,
+    /// EBML lacing.
     Ebml,
     /// Fixed-size lacing when consecutive frames have equal sizes, otherwise EBML lacing.
     FixedOrEbml,
@@ -32,11 +35,17 @@ pub enum LacingMode {
 /// Track description for [`MkvWriter`].
 #[derive(Clone, Debug)]
 pub struct TrackSpec {
+    /// Track type; selects the video or audio settings written.
     pub kind: TrackKind,
+    /// Matroska `CodecID` string, e.g. `A_OPUS`.
     pub codec_id: String,
+    /// Bytes of `CodecPrivate` (empty to omit).
     pub codec_private: Vec<u8>,
+    /// `DefaultDuration` in nanoseconds per frame; required for audio lacing.
     pub default_duration_ns: Option<u64>,
+    /// `Language` element value (ISO 639-2 code); omitted when `None`.
     pub language: Option<String>,
+    /// `Name` element value; omitted when `None`.
     pub name: Option<String>,
     /// Pixel width/height for video tracks.
     pub video_size: Option<(u32, u32)>,
@@ -46,11 +55,14 @@ pub struct TrackSpec {
     pub color: Option<Color>,
     /// (sampling frequency, channels, bit depth) for audio tracks.
     pub audio: Option<(f64, u64, Option<u64>)>,
+    /// `CodecDelay` in nanoseconds.
     pub codec_delay_ns: u64,
+    /// `SeekPreRoll` in nanoseconds.
     pub seek_pre_roll_ns: u64,
 }
 
 impl TrackSpec {
+    /// Create a spec with the given kind and `CodecID`; all other fields take empty or zero defaults.
     pub fn new(kind: TrackKind, codec_id: impl Into<String>) -> Self {
         Self {
             kind,
@@ -77,11 +89,14 @@ pub struct MuxOptions {
     pub timestamp_scale: u64,
     /// Start a new cluster at the next video keyframe (or any frame without video) after this long.
     pub cluster_duration_ns: u64,
+    /// Lacing mode applied to audio tracks.
     pub lacing: LacingMode,
     /// Maximum frames per laced block. Matroska allows 1 to 256; [`MkvWriter::new`] clamps
     /// other values into that range.
     pub max_lace_frames: usize,
+    /// Segment `Title`; omitted when `None`.
     pub title: Option<String>,
+    /// `WritingApp` string recorded in the Segment `Info`.
     pub writing_app: String,
 }
 
@@ -204,6 +219,9 @@ pub struct MkvWriter<W: Write + Seek> {
 }
 
 impl<W: Write + Seek> MkvWriter<W> {
+    /// Write the EBML header and Segment start to `w` and return a writer for `tracks`.
+    ///
+    /// Fails when `tracks` is empty or `opts.timestamp_scale` is zero.
     pub fn new(mut w: W, tracks: Vec<TrackSpec>, mut opts: MuxOptions) -> Result<Self> {
         if tracks.is_empty() || opts.timestamp_scale == 0 {
             return Err(Error::Invalid("muxer needs at least one track and a non-zero timestamp scale".into()));
@@ -536,85 +554,6 @@ mod tests {
     use crate::matroska::{Demuxer, TrackKind};
     use std::io::Cursor;
 
-    fn roundtrip(lacing: LacingMode) {
-        let mut v = TrackSpec::new(TrackKind::Video, "V_MJPEG");
-        v.video_size = Some((16, 16));
-        v.default_duration_ns = Some(40_000_000);
-        let mut a = TrackSpec::new(TrackKind::Audio, "A_PCM/INT/LIT");
-        a.audio = Some((48000.0, 1, Some(16)));
-        a.default_duration_ns = Some(10_000_000);
-        let mut s = TrackSpec::new(TrackKind::Subtitle, "S_TEXT/UTF8");
-        s.language = Some("fre".into());
-        let opts = MuxOptions { lacing, ..Default::default() };
-        let mut m = MkvWriter::new(Cursor::new(Vec::new()), vec![v, a, s], opts).unwrap();
-        let mut expect = Vec::new();
-        for i in 0..50i64 {
-            let vf = vec![i as u8; 100 + i as usize];
-            m.write_frame(0, i * 40_000_000, i % 10 == 0, &vf, None).unwrap();
-            expect.push((0usize, i * 40, vf, i % 10 == 0));
-            for k in 0..4 {
-                let n = if lacing == LacingMode::FixedOrEbml { 960 } else { 900 + (i as usize * 7 + k * 13) % 300 };
-                let af = vec![(i * 4 + k as i64) as u8; n];
-                let t = i * 40 + k as i64 * 10;
-                m.write_frame(1, t * 1_000_000, true, &af, None).unwrap();
-                expect.push((1, t, af, true));
-            }
-            if i % 20 == 5 {
-                m.write_frame(2, i * 40_000_000, true, b"hello", Some(500_000_000)).unwrap();
-                expect.push((2, i * 40, b"hello".to_vec(), true));
-            }
-        }
-        let bytes = m.finish().unwrap().into_inner();
-        let mut d = Demuxer::from_slice(&bytes).unwrap();
-        assert!(d.file().warnings.is_empty(), "{:?}", d.file().warnings);
-        assert_eq!(d.tracks()[2].language, "fre");
-        assert!(!d.file().cues.is_empty());
-        assert_eq!(d.duration_ns(), Some(2_300_000_000));
-        let got: Vec<_> = d.by_ref().map(|p| p.unwrap()).collect();
-        assert_eq!(got.len(), expect.len());
-        for (g, e) in got.iter().zip(&expect) {
-            assert_eq!((g.track, g.pts, &g.data, g.keyframe), (e.0, e.1, &e.2, e.3));
-        }
-        let sub = got.iter().find(|p| p.track == 2).unwrap();
-        assert_eq!(sub.duration, 500);
-        // the index agrees with the packet stream
-        let f = d.file();
-        for (ti, t) in f.tracks.iter().enumerate() {
-            let pk: Vec<_> = got.iter().filter(|p| p.track == ti).collect();
-            assert_eq!(t.samples.len(), pk.len());
-            for (i, p) in pk.iter().enumerate() {
-                assert_eq!(f.read_sample(&bytes[..], ti, i).unwrap(), p.data);
-                assert_eq!(t.samples[i].pts, p.pts);
-            }
-        }
-        // seeking
-        let sp = d.seek(0, 1_230_000_000).unwrap();
-        assert_eq!(sp.pts, 1200);
-        let p = d.next_packet().unwrap().unwrap();
-        assert_eq!((p.track, p.pts, p.keyframe), (0, 1200, true));
-        let sp = d.seek(1, 1_235_000_000).unwrap();
-        assert_eq!(sp.pts, 1230);
-        let p = d.next_packet().unwrap().unwrap();
-        assert_eq!((p.track, p.pts), (1, 1230));
-    }
-
-    #[test]
-    fn roundtrip_unlaced() {
-        roundtrip(LacingMode::None);
-    }
-    #[test]
-    fn roundtrip_xiph() {
-        roundtrip(LacingMode::Xiph);
-    }
-    #[test]
-    fn roundtrip_ebml() {
-        roundtrip(LacingMode::Ebml);
-    }
-    #[test]
-    fn roundtrip_fixed() {
-        roundtrip(LacingMode::FixedOrEbml);
-    }
-
     /// Laced frames get their timestamps from the block's and DefaultDuration, so a gap in the
     /// input must end the lace, and a track without DefaultDuration must not lace at all.
     #[test]
@@ -635,26 +574,6 @@ mod tests {
         let bytes = m.finish().unwrap().into_inner();
         let got: Vec<_> = Demuxer::from_slice(&bytes).unwrap().map(|p| p.unwrap()).map(|p| (p.track, p.pts, p.lace)).collect();
         assert_eq!(got, [(0, 0, 0), (0, 100, 0), (0, 110, 1), (0, 120, 2), (0, 200, 0), (1, 300, 0), (1, 310, 0)]);
-    }
-
-    #[test]
-    fn lace_size_is_clamped_to_256_frames() {
-        let mut a = TrackSpec::new(TrackKind::Audio, "A_PCM/INT/LIT");
-        a.audio = Some((48000.0, 1, Some(16)));
-        a.default_duration_ns = Some(1_000_000);
-        for lacing in [LacingMode::Xiph, LacingMode::Ebml, LacingMode::FixedOrEbml] {
-            let opts = MuxOptions { lacing, max_lace_frames: 300, ..Default::default() };
-            let mut m = MkvWriter::new(Cursor::new(Vec::new()), vec![a.clone()], opts).unwrap();
-            for i in 0..300i64 {
-                m.write_frame(0, i * 1_000_000, true, &[i as u8; 4], None).unwrap();
-            }
-            let bytes = m.finish().unwrap().into_inner();
-            let d = Demuxer::from_slice(&bytes).unwrap();
-            assert!(d.file().warnings.is_empty(), "{:?}", d.file().warnings);
-            let got: Vec<_> = d.map(|p| p.unwrap()).map(|p| (p.pts, p.lace, p.data)).collect();
-            let want: Vec<_> = (0..300i64).map(|i| (i, (i % 256) as u16, vec![i as u8; 4])).collect();
-            assert_eq!(got, want);
-        }
     }
 
     /// A video track's `Colour` element reads back as it was given, and is absent when not set.
@@ -693,34 +612,5 @@ mod tests {
             ..pq
         };
         assert_eq!(write(Some(full.clone())), Some(full));
-    }
-
-    #[test]
-    fn block_duration_rounds_to_the_nearest_tick() {
-        let mut v = TrackSpec::new(TrackKind::Video, "V_MJPEG");
-        v.video_size = Some((16, 16));
-        let mut m = MkvWriter::new(Cursor::new(Vec::new()), vec![v], MuxOptions::default()).unwrap();
-        m.write_frame(0, 0, true, &[0; 4], Some(41_700_000)).unwrap();
-        let bytes = m.finish().unwrap().into_inner();
-        assert_eq!(Demuxer::from_slice(&bytes).unwrap().next_packet().unwrap().unwrap().duration, 42);
-    }
-
-    #[test]
-    fn audio_only_files_cue_each_track_once_per_cluster() {
-        let mut a = TrackSpec::new(TrackKind::Audio, "A_PCM/INT/LIT");
-        a.audio = Some((48000.0, 1, Some(16)));
-        let opts = MuxOptions { cluster_duration_ns: 1, lacing: LacingMode::None, ..Default::default() };
-        let mut m = MkvWriter::new(Cursor::new(Vec::new()), vec![a.clone(), a], opts).unwrap();
-        for i in 0..4i64 {
-            m.write_frame(0, i * 10, true, &[1; 4], None).unwrap();
-            m.write_frame(1, i * 10, true, &[2; 4], None).unwrap();
-            m.write_frame(0, i * 10 + 1, true, &[3; 4], None).unwrap();
-        }
-        // Clusters hold [t0, t1] then [t0] at each step: one cue per track per cluster.
-        let mut seen: Vec<(u64, u64)> = m.cues.iter().map(|c| (c.1, c.2)).collect();
-        assert_eq!(seen.len(), 12, "{:?}", m.cues);
-        seen.sort_unstable();
-        seen.dedup();
-        assert_eq!(seen.len(), 12, "{:?}", m.cues);
     }
 }

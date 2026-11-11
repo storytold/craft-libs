@@ -1,3 +1,5 @@
+use super::arith::*;
+use super::idct::UpsampleStep;
 use super::*;
 
 /// The test image decoded by `zune-jpeg`, as interleaved 8-bit samples, and its size.
@@ -10,13 +12,6 @@ fn zune_decode(bytes: &[u8]) -> (Vec<u8>, (u32, u32)) {
 
 fn decode_default(bytes: &[u8]) -> Result<Decoded, Error> {
     decode(bytes, &Limits::default(), None)
-}
-
-fn u16_samples(img: &Decoded) -> &[u16] {
-    match &img.samples {
-        Samples::U16(v) => v,
-        Samples::U8(_) => panic!("8-bit samples"),
-    }
 }
 
 // --- A test-only arithmetic encoder (T.81 D.1, F.1.4 and G.1.3), mirroring the decoder ---
@@ -467,66 +462,10 @@ fn arith_stream(precision: u8, bw: usize, bh: usize, blocks: &[[i32; 64]], scans
     .encode()
 }
 
-fn decoded_blocks(stream: &[u8]) -> Vec<[i32; 64]> {
-    let (mut frame, _, damaged) = decode_coefficients(stream, &Limits::default()).unwrap();
-    assert!(!damaged);
-    std::mem::take(&mut frame.comps[0].coefs)
-}
-
-#[test]
-fn arithmetic_sequential_round_trips_coefficients() {
-    for (precision, big, ri) in [(8u8, 1000, 0usize), (12, 16000, 0), (8, 300, 1), (12, 3000, 5)] {
-        let blocks = coefficients(12, u32::from(precision) * 7 + ri as u32, big);
-        let stream = arith_stream(precision, 4, 3, &blocks, &[(0, 63, 0, 0)], ri);
-        assert_eq!(decoded_blocks(&stream), blocks, "P={precision} ri={ri}");
-    }
-}
-
-#[test]
-fn arithmetic_progressive_round_trips_coefficients() {
-    let blocks = coefficients(6, 99, 2000);
-    let scans = [(0, 0, 0, 1), (1, 5, 0, 2), (6, 63, 0, 1), (1, 5, 2, 1), (0, 0, 1, 0), (1, 5, 1, 0), (6, 63, 1, 0)];
-    for ri in [0, 2] {
-        let stream = arith_stream(8, 3, 2, &blocks, &scans, ri);
-        assert_eq!(decoded_blocks(&stream), blocks, "ri={ri}");
-    }
-}
-
 /// Every component's coefficients, and whether the stream was damaged.
 fn decoded_components(stream: &[u8]) -> (Vec<Vec<[i32; 64]>>, bool) {
     let (frame, _, damaged) = decode_coefficients(stream, &Limits::default()).unwrap();
     (frame.comps.into_iter().map(|c| c.coefs).collect(), damaged)
-}
-
-/// Non-default DC conditioning (L, U) and AC Kx from a DAC segment round-trip, and the decoder
-/// applies them: the same data read with the default conditioning comes out different.
-#[test]
-fn arithmetic_conditioning_from_dac_round_trips() {
-    let blocks = coefficients(12, 21, 1000);
-    for (l, u, kx) in [(2, 4, 2), (1, 1, 20), (0, 0, 1), (3, 7, 63), (5, 15, 40)] {
-        let cond = Cond { l, u, kx };
-        for progressive in [false, true] {
-            let bands: &[(usize, usize, u8, u8)] = if progressive { &[(0, 0, 0, 0), (1, 63, 0, 0)] } else { &[(0, 63, 0, 0)] };
-            let stream = TestFrame {
-                precision: 8,
-                progressive,
-                width: 32,
-                height: 24,
-                comps: vec![TestComp { id: 1, h: 1, v: 1, tq: 0, blocks: blocks.clone() }],
-                cond: [cond, DEFAULT_COND, DEFAULT_COND, DEFAULT_COND],
-                ri: 0,
-                scans: bands.iter().map(|&band| TestScan { comps: vec![0], band, before: Vec::new() }).collect(),
-            }
-            .encode();
-            assert_eq!(decoded_blocks(&stream), blocks, "L={l} U={u} Kx={kx} progressive={progressive}");
-            let dac = stream.windows(2).position(|p| p == [0xFF, 0xCC]).unwrap();
-            let len = usize::from(u16::from_be_bytes([stream[dac + 2], stream[dac + 3]]));
-            let mut without = stream.clone();
-            without.drain(dac..dac + 2 + len);
-            let differs = decode_coefficients(&without, &Limits::default()).map_or(true, |(f, _, _)| f.comps[0].coefs != blocks);
-            assert!(differs, "L={l} U={u} Kx={kx} progressive={progressive}: DAC ignored");
-        }
-    }
 }
 
 /// Interleaved scans of a subsampled frame (2×2 luma, two 1×1 chroma components sharing
@@ -591,19 +530,6 @@ fn quantization_tables_are_latched_at_the_first_scan() {
     assert!(px.chunks(3).all(|p| p == [138, 148, 168]), "{:?}", &px[..3]);
 }
 
-#[test]
-fn arithmetic_twelve_bit_flat_block_is_sixteen_bit() {
-    // DC only: sample = DC / 8 + 2048 with a quantizer of 1; 1000 → 2173.
-    let mut blk = [0i32; 64];
-    blk[0] = 1000;
-    let stream = arith_stream(12, 1, 1, &[blk], &[(0, 63, 0, 0)], 0);
-    assert_eq!(frame(&stream), Some(FrameKind { marker: 0xC9, precision: 12 }));
-    let img = decode_default(&stream).unwrap();
-    assert_eq!((img.width, img.height, img.components), (8, 8, 1));
-    let want = (2173.0f32 * 65535.0 / 4095.0).round() as u16;
-    assert!(u16_samples(&img).iter().all(|&v| v.abs_diff(want) <= 1));
-}
-
 /// A 12-bit SOF1 stream built by hand: one 8×8 gray block with only a DC coefficient. The DC
 /// table has one code (`0`, category 13), the AC table one (`0`, end of block).
 fn twelve_bit_huffman_block() -> Vec<u8> {
@@ -625,32 +551,6 @@ fn twelve_bit_huffman_block() -> Vec<u8> {
     s.extend(word.to_be_bytes());
     s.extend([0xFF, 0xD9]);
     s
-}
-
-#[test]
-fn twelve_bit_huffman_block_decodes_to_sixteen_bit() {
-    let stream = twelve_bit_huffman_block();
-    assert_eq!(frame(&stream), Some(FrameKind { marker: 0xC1, precision: 12 }));
-    let img = decode_default(&stream).unwrap();
-    assert_eq!((img.width, img.height), (8, 8));
-    let want = (3000.0f32 * 65535.0 / 4095.0).round() as u16;
-    let px = u16_samples(&img);
-    assert!(px.iter().all(|&v| v.abs_diff(want) <= 1), "{:?} vs {want}", &px[..4]);
-}
-
-/// APPn segments before the frame (here an APP13 `8BIM` block right after SOI) are skipped by
-/// the probe and the decoder alike; reading them is the caller's job.
-#[test]
-fn twelve_bit_jpeg_with_photoshop_resources_decodes() {
-    let resources = b"8BIM\x04\x04\0\0\0\0\0\0".to_vec();
-    let mut app13 = b"Photoshop 3.0\0".to_vec();
-    app13.extend_from_slice(&resources);
-    let stream = twelve_bit_huffman_block();
-    let mut with = stream[..2].to_vec();
-    segment(&mut with, 0xED, &app13);
-    with.extend_from_slice(&stream[2..]);
-    assert_eq!(frame(&with), frame(&stream));
-    assert_eq!(decode_default(&with).unwrap(), decode_default(&stream).unwrap());
 }
 
 /// Where the entropy-coded data of the last scan starts.
@@ -688,45 +588,6 @@ fn huffman_scan_out_of_data_is_not_clean() {
     assert!(decode(&cut, &Limits::default(), None).unwrap().damaged);
 }
 
-/// Arithmetic data that runs to the end of the file, or loses a restart marker, is reported
-/// damaged, and the blocks before the cut are kept. Data cut short before EOI with no restart
-/// interval reads as dropped trailing zeros and can't be detected.
-#[test]
-fn arithmetic_scan_out_of_data_is_damaged() {
-    let blocks = coefficients(64, 11, 500);
-    for ri in [0, 2] {
-        let full = arith_stream(8, 8, 8, &blocks, &[(0, 63, 0, 0)], ri);
-        assert_eq!(decoded_blocks(&full), blocks, "ri={ri}");
-        let data = last_scan_data(&full);
-        let end = full.len() - 2;
-        for cut in [data + (end - data) / 2, data + 1] {
-            let mut s = full[..cut].to_vec();
-            if s.last() == Some(&0xFF) {
-                s.pop();
-            }
-            for eoi in [false, true] {
-                if eoi && ri == 0 {
-                    continue;
-                }
-                let mut s = s.clone();
-                if eoi {
-                    s.extend([0xFF, 0xD9]);
-                }
-                // With one byte of data the first MCU fails, which is an error, not damage.
-                match decode_coefficients(&s, &Limits::default()) {
-                    Ok((frame, _, damaged)) => {
-                        assert!(damaged, "ri={ri} eoi={eoi} cut at {}", cut - data);
-                        if cut > data + 1 {
-                            assert_eq!(frame.comps[0].coefs[0], blocks[0], "ri={ri} eoi={eoi}");
-                        }
-                    }
-                    Err(_) => assert_eq!(cut, data + 1, "ri={ri} eoi={eoi}"),
-                }
-            }
-        }
-    }
-}
-
 /// A baseline file from `jpeg-encoder`, relabeled SOF1, decodes like zune decodes the original.
 #[test]
 fn extended_huffman_matches_zune_on_baseline_data() {
@@ -760,55 +621,6 @@ fn extended_huffman_matches_zune_on_baseline_data() {
 }
 
 #[test]
-fn malformed_streams_return_errors_not_panics() {
-    let blocks = coefficients(6, 5, 500);
-    let mut streams = vec![
-        arith_stream(12, 3, 2, &blocks, &[(0, 63, 0, 0)], 2),
-        arith_stream(8, 3, 2, &blocks, &[(0, 0, 0, 1), (1, 63, 0, 0), (0, 0, 1, 0)], 0),
-        twelve_bit_huffman_block(),
-    ];
-    // Header damage: zero sizes, bad component counts, sampling factors and tables, bad DAC.
-    let base = arith_stream(8, 1, 1, &blocks[..1], &[(0, 63, 0, 0)], 0);
-    let sof = base.windows(2).position(|p| p == [0xFF, 0xC9]).unwrap();
-    for (offset, value) in [(4, 16u8), (6, 0), (8, 0), (9, 7), (10, 9), (11, 0x50), (12, 9)] {
-        let mut s = base.clone();
-        s[sof + offset] = value;
-        assert!(decode_default(&s).is_err(), "SOF byte {offset} = {value}");
-        streams.push(s);
-    }
-    let mut dac = base.clone();
-    dac.splice(2..2, [0xFF, 0xCC, 0, 4, 0x00, 0x13]);
-    assert!(decode_default(&dac).is_err());
-    streams.push(dac);
-    for s in &streams {
-        for cut in 0..s.len() {
-            let _ = decode_default(&s[..cut]);
-        }
-        for i in 2..s.len() {
-            for v in [0x00, 0xFF, 0x5A] {
-                let mut t = s.clone();
-                t[i] = v;
-                let _ = decode_default(&t);
-            }
-        }
-    }
-    assert!(decode_default(&streams[0][..40]).is_err());
-}
-
-/// Scans past the block budget (`SCAN_PASSES` passes over a one-block frame) aren't decoded:
-/// the image keeps what the earlier scans decoded and is reported damaged.
-#[test]
-fn scans_past_the_block_budget_are_not_decoded() {
-    let blocks = coefficients(1, 3, 500);
-    for (count, damaged) in [(SCAN_PASSES, false), (SCAN_PASSES + 1, true)] {
-        let stream = arith_stream(8, 1, 1, &blocks, &vec![(0, 0, 0, 0); count], 0);
-        let (frame, _, d) = decode_coefficients(&stream, &Limits::default()).unwrap();
-        assert_eq!(d, damaged, "{count} scans");
-        assert_eq!(frame.comps[0].coefs[0][0], blocks[0][0], "{count} scans");
-    }
-}
-
-#[test]
 fn limits_are_checked_before_allocating() {
     let mut s = vec![0xFF, 0xD8];
     segment(&mut s, 0xC9, &[8, 0xFF, 0xFF, 0xFF, 0xFF, 3, 1, 0x44, 0, 2, 0x11, 0, 3, 0x11, 0]);
@@ -822,13 +634,4 @@ fn limits_are_checked_before_allocating() {
         let limits = Limits { max_alloc, ..Limits::default() };
         assert_eq!(decode(&stream, &limits, None).is_ok(), ok, "max_alloc {max_alloc}");
     }
-}
-
-#[test]
-fn frame_reports_the_marker_and_precision() {
-    let kind = |marker, precision| Some(FrameKind { marker, precision });
-    assert_eq!(frame(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]), kind(0xC0, 8));
-    assert_eq!(frame(&[0xFF, 0xD8, 0xFF, 0xC9, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]), kind(0xC9, 8));
-    assert_eq!(frame(&[0xFF, 0xD8, 0xFF, 0xC1, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0]), kind(0xC1, 12));
-    assert_eq!(frame(&[0xFF, 0xD8]), None);
 }

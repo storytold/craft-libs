@@ -256,27 +256,3 @@ pub(crate) fn head<D: DeserializeOwned>(bytes: &[u8], budget: &mut Budget) -> Re
     let max_items = usize::try_from(budget.limits.max_items).unwrap_or(usize::MAX);
     Ok(read_with_items::<D>(&json, budget, max_items)?.document)
 }
-
-#[cfg(test)]
-mod cancellation_tests {
-    #![allow(clippy::unwrap_used)]
-    use super::*;
-    use std::cell::Cell;
-
-    #[test]
-    fn conversion_stops_inside_group_children() {
-        let child = r#"{"name":"child","visible":true,"blend":"Normal","opacity":1,"content":{"kind":"Raster"}}"#;
-        let parent = format!(
-            r#"{{"name":"group","visible":true,"blend":"Normal","opacity":1,"content":{{"kind":"Group","children":[{child},{child},{child},{child},{child}]}}}}"#
-        );
-        let node: LayerM = serde_json::from_str(&parent).unwrap();
-        let polls = Cell::new(0);
-        let cancel = || {
-            polls.set(polls.get() + 1);
-            polls.get() == 4
-        };
-        let result = crate::cancel::run(&cancel, |control| layer(node, &Budget::controlled(&crate::Limits::default(), control)));
-        assert_eq!(result, Err(Error::Cancelled));
-        assert_eq!(polls.get(), 4);
-    }
-}

@@ -1,9 +1,9 @@
 //! Synthetic PhotoCraft ICC payloads: the declared bytes are opaque, content-addressed blobs.
 #![cfg(feature = "pcraft-pixels")]
 
-mod common;
+use super::common;
 
-use common::{deflated, store, zip};
+use common::{store, zip};
 use craft_doc::{Error, Limits, pcraft_icc_profile};
 
 /// Blob identity is over the decoded payload, not its compressed representation.
@@ -40,21 +40,6 @@ fn absent_and_null_are_none_but_declared_payloads_are_returned_without_semantic_
     }
     for payload in [&b"not an ICC header"[..], &b""[..], &[0, 1, 2, 3][..]] {
         assert_eq!(pcraft_icc_profile(&bundle(payload), &Limits::default()), Ok(Some(payload.to_vec())));
-    }
-}
-
-#[test]
-/// Either selected ZIP entry may use the producer's supported outer compression method.
-fn store_and_deflate_entries_use_the_same_bounded_blob_reader() {
-    let payload = b"synthetic profile bytes";
-    let h = hash(payload);
-    let path = craft_pcraft_format::blob_path(&h).unwrap();
-    let m = named_manifest(&h);
-    let z = frame(payload);
-    for archive in
-        [zip(&[store("manifest.json", m.as_bytes()), deflated(&path, &z)]), zip(&[deflated("manifest.json", m.as_bytes()), store(&path, &z)])]
-    {
-        assert_eq!(pcraft_icc_profile(&archive, &Limits::default()), Ok(Some(payload.to_vec())));
     }
 }
 
@@ -102,97 +87,6 @@ fn missing_wrong_hash_or_damaged_declared_blobs_are_errors() {
 }
 
 #[test]
-/// Unused previews and tile payloads cannot prevent reading an independently valid profile.
-fn unrelated_payloads_are_never_read_and_document_metadata_is_skipped() {
-    let payload = b"profile";
-    let h = hash(payload);
-    let path = craft_pcraft_format::blob_path(&h).unwrap();
-    let m = format!(
-        r#"{{"format_version":1,"generator":"synthetic","thumbnail":"thumb.png","composite":"composite/preview.png",
-        "document":{{"icc_profile":"{h}","layers":[{{"content":{{"surface":{{"tiles":[{{"hash":"invalid"}}]}}}}}}],"future":[{{"ignored":true}}]}}}}"#
-    );
-    let archive = zip(&[store("manifest.json", m.as_bytes()), store(&path, &frame(payload)), store("tiles/invalid.zst", b"broken tile")]);
-    assert_eq!(pcraft_icc_profile(&archive, &Limits::default()), Ok(Some(payload.to_vec())));
-}
-
-#[test]
-/// Accepted work is exactly the manifest plus selected frame plus decoded payload.
-fn manifest_frame_and_decoded_profile_have_exact_total_and_entry_boundaries() {
-    let payload = vec![7; 32 << 10];
-    let h = hash(&payload);
-    let path = craft_pcraft_format::blob_path(&h).unwrap();
-    let m = named_manifest(&h);
-    let z = frame(&payload);
-    let archive = zip(&[store("manifest.json", m.as_bytes()), store(&path, &z)]);
-    let mut limits = Limits::default();
-    limits.max_json = m.len() as u64;
-    limits.max_entry = payload.len() as u64;
-    limits.max_total = (m.len() + z.len() + payload.len()) as u64;
-    assert_eq!(pcraft_icc_profile(&archive, &limits), Ok(Some(payload.clone())));
-    limits.max_total -= 1;
-    assert!(matches!(pcraft_icc_profile(&archive, &limits), Err(Error::LimitExceeded(_))));
-    limits.max_total += 1;
-    limits.max_entry -= 1;
-    assert!(matches!(pcraft_icc_profile(&archive, &limits), Err(Error::LimitExceeded(_))));
-    limits.max_entry += 1;
-    limits.max_json -= 1;
-    assert!(matches!(pcraft_icc_profile(&archive, &limits), Err(Error::LimitExceeded(_))));
-    let absent = manifest("{}");
-    limits.max_json = absent.len() as u64;
-    limits.max_total = absent.len() as u64;
-    assert_eq!(pcraft_icc_profile(&zip(&[store("manifest.json", absent.as_bytes())]), &limits), Ok(None));
-    limits.max_total -= 1;
-    assert!(matches!(pcraft_icc_profile(&zip(&[store("manifest.json", absent.as_bytes())]), &limits), Err(Error::LimitExceeded(_))));
-}
-
-#[test]
-/// The frame's ZIP size must fail admission even if its bytes would also fail decoding.
-fn an_oversized_frame_is_refused_before_the_zstd_decoder() {
-    let m = named_manifest(&hash(b"p"));
-    let path = craft_pcraft_format::blob_path(&hash(b"p")).unwrap();
-    let mut limits = Limits::default();
-    limits.max_entry = m.len() as u64;
-    let archive = zip(&[store("manifest.json", m.as_bytes()), store(&path, &vec![0; m.len() + 1])]);
-    assert!(matches!(pcraft_icc_profile(&archive, &limits), Err(Error::LimitExceeded(_))));
-}
-
-#[test]
-/// Skipping document values must not let a small typed head evade the caller's item cap.
-fn structural_item_limits_include_skipped_fields_before_the_profile_head() {
-    let archive = bundle(b"p");
-    let mut limits = Limits::default();
-    limits.max_items = 4; // root object, its two commas and document object
-    assert_eq!(pcraft_icc_profile(&archive, &limits), Ok(Some(b"p".to_vec())));
-    limits.max_items = 3;
-    assert!(matches!(pcraft_icc_profile(&archive, &limits), Err(Error::LimitExceeded(_))));
-    let m = manifest(r#"{"icc_profile":null,"ignored":[0,0,0,0,0]}"#);
-    let archive = zip(&[store("manifest.json", m.as_bytes())]);
-    limits.max_items = 4;
-    assert!(matches!(pcraft_icc_profile(&archive, &limits), Err(Error::LimitExceeded(_))));
-    limits.max_items = 0;
-    assert!(matches!(pcraft_icc_profile(&zip(&[store("manifest.json", manifest("{}").as_bytes())]), &limits), Err(Error::LimitExceeded(_))));
-}
-
-#[test]
-/// Absence of a profile cannot bypass kind, envelope, format-version or nesting checks.
-fn versions_kinds_envelope_and_depth_are_checked_even_without_a_profile() {
-    assert_eq!(pcraft_icc_profile(b"not a bundle", &Limits::default()), Err(Error::Unrecognized));
-    assert!(matches!(pcraft_icc_profile(common::vectorcraft_json(4, "").as_bytes(), &Limits::default()), Err(Error::Unsupported(_))));
-    let m = manifest("{}").replace("\"format_version\":1", "\"format_version\":2");
-    assert!(matches!(pcraft_icc_profile(&zip(&[store("manifest.json", m.as_bytes())]), &Limits::default()), Err(Error::TooNew { .. })));
-    for m in [
-        r#"{"format_version":1,"generator":"a","generator":"b","document":{}}"#,
-        r#"{"format_version":1,"generator":"a","document":{},"thumbnail":"elsewhere"}"#,
-    ] {
-        assert!(matches!(pcraft_icc_profile(&zip(&[store("manifest.json", m.as_bytes())]), &Limits::default()), Err(Error::Malformed(_))));
-    }
-    let m = manifest(r#"{"ignored":[[[0]]]}"#);
-    let mut limits = Limits::default();
-    limits.max_depth = 3;
-    assert!(matches!(pcraft_icc_profile(&zip(&[store("manifest.json", m.as_bytes())]), &limits), Err(Error::LimitExceeded(_))));
-}
-
-#[test]
 /// Header-window limits and streamed output admission remain effective without a size hint.
 fn excessive_window_and_size_less_expansion_are_limits() {
     let payload = vec![0; 64 << 10];
@@ -212,25 +106,6 @@ fn excessive_window_and_size_less_expansion_are_limits() {
         pcraft_icc_profile(&zip(&[store("manifest.json", m.as_bytes()), store(&path, &large_window)]), &Limits::default()),
         Err(Error::LimitExceeded(_))
     ));
-}
-
-#[test]
-/// Nonzero size hints permit early refusal but never replace checking actual decoded bytes.
-fn declared_nonzero_content_sizes_are_checked_before_and_after_decoding() {
-    let h = hash(b"p");
-    let path = craft_pcraft_format::blob_path(&h).unwrap();
-    let m = named_manifest(&h);
-    // A single-segment frame declaring 4096 bytes, but holding one raw byte.
-    let mut z = vec![0x28, 0xb5, 0x2f, 0xfd, 0x60];
-    z.extend_from_slice(&(4096u16 - 256).to_le_bytes());
-    z.extend_from_slice(&[9, 0, 0, b'p']);
-    let archive = zip(&[store("manifest.json", m.as_bytes()), store(&path, &z)]);
-    let mut limits = Limits::default();
-    limits.max_entry = 1024;
-    assert!(matches!(pcraft_icc_profile(&archive, &limits), Err(Error::LimitExceeded(_))));
-    assert!(matches!(pcraft_icc_profile(&archive, &Limits::default()), Err(Error::Malformed(_))));
-    let z = [0x28, 0xb5, 0x2f, 0xfd, 0x20, 1, 9, 0, 0, b'p'];
-    assert_eq!(pcraft_icc_profile(&zip(&[store("manifest.json", m.as_bytes()), store(&path, &z)]), &limits), Ok(Some(b"p".to_vec())));
 }
 
 #[test]

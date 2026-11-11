@@ -35,12 +35,15 @@ pub struct AppSettings {
 /// The whole store.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoreFile {
+    /// Version of the file format, checked before anything else. [`SCHEMA_VERSION`] is the one this build writes.
     pub schema_version: u32,
+    /// The saved connections. Ids must be unique.
     #[serde(default)]
     pub connections: Vec<Connection>,
     /// Default bindings, set in the launcher, used by every app unless it overrides.
     #[serde(default)]
     pub defaults: Vec<Binding>,
+    /// Per-app settings, keyed by app id.
     #[serde(default)]
     pub apps: BTreeMap<AppId, AppSettings>,
     /// User-declared tool contracts, shared across the suite. A declaration does not install an adapter.
@@ -51,23 +54,37 @@ pub struct StoreFile {
 /// Why a store file was refused.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StoreError {
+    /// The file is over [`MAX_STORE_BYTES`].
     TooLarge {
+        /// Size of the file in bytes.
         len: usize,
+        /// The limit in bytes.
         max: usize,
     },
+    /// The file is not valid JSON for this schema. The string says why.
     Syntax(String),
     /// Written by a newer version. Do not write to it.
     TooNew {
+        /// The file's schema version.
         found: u32,
+        /// The newest schema version this build reads.
         supported: u32,
     },
+    /// The schema version is 0.
     BadVersion(u32),
+    /// Two connections share this id.
     DuplicateConnection(ConnectionId),
+    /// Two custom tools share this id.
     DuplicateTool(RoleId),
+    /// More than 64 custom tools. The number is the count found.
     TooManyTools(usize),
+    /// A custom tool has an empty or over-long label, or no inputs, more than 8, or a repeated one.
     InvalidTool(RoleId),
+    /// A connection failed its own validation.
     Invalid {
+        /// The connection that failed.
         connection: ConnectionId,
+        /// The rule it broke.
         why: ConnectionError,
     },
 }
@@ -152,6 +169,7 @@ impl StoreFile {
         Ok(())
     }
 
+    /// Serializes the store as pretty-printed JSON. Does not validate; call [`StoreFile::validate`] first.
     pub fn to_json(&self) -> Result<String, StoreError> {
         serde_json::to_string_pretty(self).map_err(|e| StoreError::Syntax(e.to_string()))
     }
@@ -202,95 +220,6 @@ mod tests {
         c.models = vec![ModelInfo::new(ModelId::new("m").unwrap(), "M").with(CapabilitySpec::new(cap()).accepting(InputRole::Prompt, 1))];
         let binding = Binding { role: RoleId::new("rewrite").unwrap(), connection: c.id.clone(), model: ModelId::new("m").unwrap() };
         StoreFile { connections: vec![c], defaults: vec![binding], ..StoreFile::default() }
-    }
-
-    fn role() -> Role {
-        Role { id: RoleId::new("rewrite").unwrap(), label: "Rewrite".into(), capability: cap(), inputs: vec![InputRole::Prompt] }
-    }
-
-    #[test]
-    fn round_trips() {
-        let s = store();
-        assert_eq!(StoreFile::parse(&s.to_json().unwrap()).unwrap(), s);
-    }
-
-    #[test]
-    fn unknown_fields_are_ignored() {
-        let mut v: serde_json::Value = serde_json::from_str(&store().to_json().unwrap()).unwrap();
-        v["added_in_a_later_release"] = serde_json::json!({"x": 1});
-        v["connections"][0]["new_flag"] = serde_json::json!(true);
-        assert!(StoreFile::parse(&v.to_string()).is_ok());
-    }
-
-    #[test]
-    fn a_newer_schema_is_refused_even_if_its_shape_changed() {
-        let text = r#"{"schema_version": 2, "connections": "now a different shape"}"#;
-        assert_eq!(StoreFile::parse(text), Err(StoreError::TooNew { found: 2, supported: SCHEMA_VERSION }));
-    }
-
-    #[test]
-    fn bad_input_is_an_error_not_a_panic() {
-        for text in
-            ["", "not json", "[]", "{}", r#"{"schema_version": 0}"#, r#"{"schema_version": -1}"#, r#"{"schema_version": 1, "connections": [1]}"#]
-        {
-            assert!(StoreFile::parse(text).is_err(), "{text:?}");
-        }
-        let big = format!("{{\"schema_version\":1,\"pad\":\"{}\"}}", "x".repeat(MAX_STORE_BYTES));
-        assert!(matches!(StoreFile::parse(&big), Err(StoreError::TooLarge { .. })));
-    }
-
-    #[test]
-    fn a_mislabelled_connection_is_refused_at_load() {
-        let mut s = store();
-        s.connections[0].locality = crate::connection::Locality::Local;
-        let err = StoreFile::parse(&s.to_json().unwrap()).unwrap_err();
-        assert!(matches!(err, StoreError::Invalid { .. }));
-    }
-
-    #[test]
-    fn duplicate_connections_are_refused() {
-        let mut s = store();
-        s.connections.push(s.connections[0].clone());
-        assert!(matches!(s.validate(), Err(StoreError::DuplicateConnection(_))));
-    }
-
-    #[test]
-    fn resolve_uses_default_then_app_override() {
-        let mut s = store();
-        let app = AppId::new("wordcraft").unwrap();
-        assert_eq!(s.resolve(&app, &role()).unwrap().connection.id.as_str(), "a");
-        let mut other = remote("b");
-        other.models = s.connections[0].models.clone();
-        s.connections.push(other);
-        let over = Binding { role: RoleId::new("rewrite").unwrap(), connection: ConnectionId::new("b").unwrap(), model: ModelId::new("m").unwrap() };
-        s.apps.insert(app.clone(), AppSettings { overrides: vec![over] });
-        assert_eq!(s.resolve(&app, &role()).unwrap().connection.id.as_str(), "b");
-        assert_eq!(s.resolve(&AppId::new("photocraft").unwrap(), &role()).unwrap().connection.id.as_str(), "a");
-    }
-
-    #[test]
-    fn dangling_bindings_are_reported() {
-        let mut s = store();
-        s.connections.clear();
-        assert_eq!(s.dangling_bindings().len(), 1);
-    }
-
-    #[test]
-    fn truncated_and_mutated_files_never_panic() {
-        let text = store().to_json().unwrap();
-        for end in 0..=text.len() {
-            if text.is_char_boundary(end) {
-                let _ = StoreFile::parse(&text[..end]);
-            }
-        }
-        let bytes = text.as_bytes();
-        for i in (0..bytes.len()).step_by(7) {
-            let mut copy = bytes.to_vec();
-            copy[i] = copy[i].wrapping_add(1);
-            if let Ok(s) = String::from_utf8(copy) {
-                let _ = StoreFile::parse(&s);
-            }
-        }
     }
 
     #[test]

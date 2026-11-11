@@ -30,34 +30,3 @@ pub fn suggest(word: &str, max: usize) -> Vec<String> {
 pub fn suggest_in(d: &AffixDict, word: &str, max: usize) -> Vec<String> {
     crate::affix_suggest::suggest_in(d, word, max, &TUNING)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn nosuggest_stems_and_forms_are_never_offered() {
-        crate::affix::tests::assert_nosuggest_is_honoured(suggest_in);
-    }
-    /// A dictionary without MAP lines still gets the Croatian diacritic groups: `kuca` → `kuća`
-    /// first, before a typo that costs more (`kuha`).
-    #[test]
-    fn diacritics_without_map_lines() {
-        let d = AffixDict::from_hunspell("", "2\nkuća\nkuha\n", &[]).unwrap();
-        assert_eq!(suggest_in(&d, "kuca", 1), ["kuća"]);
-    }
-    #[test]
-    fn croatian_suggestions() {
-        crate::hr::test_dict::install();
-        for (wrong, right) in [("kuca", "kuća"), ("racunalo", "računalo"), ("covjek", "čovjek"), ("rijec", "riječ"), ("skolla", "škola")] {
-            let result = suggest(wrong, 10);
-            assert!(result.iter().any(|s| s == right), "{wrong} -> {result:?}, expected {right}");
-        }
-    }
-    #[test]
-    fn bounded() {
-        crate::hr::test_dict::install();
-        assert!(suggest("", 5).is_empty());
-        assert!(suggest("kuca", 0).is_empty());
-        assert!(suggest(&"a".repeat(41), 5).is_empty());
-    }
-}

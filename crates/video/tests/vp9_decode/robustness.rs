@@ -53,19 +53,6 @@ fn corrupted_streams_do_not_panic() {
 }
 
 #[test]
-fn truncated_frames_do_not_panic() {
-    let f = common::fixture("default_good");
-    let Some((ivf, _)) = common::ensure(f) else { return };
-    let data = std::fs::read(ivf).unwrap();
-    let frames: Vec<Vec<u8>> = common::ivf_frames(&data).into_iter().map(|f| f.to_vec()).collect();
-    for cut in [1usize, 2, 3, 5, 8, 13, 21, 40, 100, 400] {
-        let d: Vec<Vec<u8>> = frames.iter().map(|f| f[..cut.min(f.len())].to_vec()).collect();
-        decode_all(&d, 1);
-        decode_all(&d, 3);
-    }
-}
-
-#[test]
 fn garbage_input_is_rejected_gracefully() {
     let mut seed = 42u64;
     for len in [0usize, 1, 2, 5, 30, 100, 5000] {
@@ -89,28 +76,13 @@ fn garbage_input_is_rejected_gracefully() {
     assert!(dec.decode(&[0x86, 0, 0, 0, 0], 0).is_err());
 }
 
-/// Huge declared frame sizes must not allocate absurd amounts or panic.
-#[test]
-fn oversized_frame_is_rejected() {
-    // Key frame header: marker 2, profile 0, show_existing 0, key, show, no error res,
-    // sync, color (4 bits), width-1 = 0xffff, height-1 = 0xffff.
-    let bits = "10".to_string() + "00" + "0" + "0" + "1" + "0" + "010010011000001101000010" + "0000" + &"1".repeat(32);
-    let mut v = vec![0u8; bits.len().div_ceil(8) + 8];
-    for (i, c) in bits.chars().enumerate() {
-        if c == '1' {
-            v[i / 8] |= 0x80 >> (i % 8);
-        }
-    }
-    let mut dec = Decoder::new();
-    assert!(dec.decode(&v, 0).is_err());
-}
-
 /// A key frame whose picture store would not fit the decoder's memory budget is refused before
 /// anything is allocated for it.
 #[test]
 fn frame_over_the_memory_budget_is_rejected() {
-    // The header of `oversized_frame_is_rejected` with width-1 = height-1 = 63, then the rest of
-    // the uncompressed header as zeros (28 bits) and header_size_in_bytes = 1.
+    // Key frame header: marker 2, profile 0, show_existing 0, key, show, no error res, sync,
+    // color (4 bits), width-1 = height-1 = 63, then the rest of the uncompressed header as zeros
+    // (28 bits) and header_size_in_bytes = 1.
     let size = "0000000000111111";
     let bits =
         "10".to_string() + "00" + "0" + "0" + "1" + "0" + "010010011000001101000010" + "0000" + size + size + &"0".repeat(28) + "0000000000000001";

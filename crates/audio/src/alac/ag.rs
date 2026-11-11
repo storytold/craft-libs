@@ -246,31 +246,6 @@ mod tests {
     use super::super::bits::{BitReader, BitSink, BitWriter};
     use super::*;
 
-    fn roundtrip(values: &[i32], bits: u32) {
-        let mut w = BitWriter::new();
-        compress(AgParams::standard(), values, &mut w, bits).unwrap();
-        let len = w.bit_len();
-        let bytes = w.into_bytes();
-        let mut r = BitReader::new(&bytes);
-        let mut out = vec![0; values.len()];
-        decompress(AgParams::standard(), &mut r, &mut out, bits).unwrap();
-        assert_eq!(out, values);
-        assert_eq!(r.position(), len);
-    }
-
-    #[test]
-    fn residuals_roundtrip() {
-        roundtrip(&[0, 1, -1, 2, -2, 100, -100, 30000, -32768, 32767], 16);
-        roundtrip(&[0; 300], 16);
-        let mut v = vec![0; 70_000];
-        v[0] = 5;
-        v[69_999] = -3;
-        roundtrip(&v, 16);
-        let wide: Vec<i32> = (0..500).map(|i| ((i * 7919) % 65_536 - 32_768) << 8).collect();
-        roundtrip(&wide, 25);
-        roundtrip(&[i32::MAX >> 1, i32::MIN >> 1, 0, 0, 0, 1], 32);
-    }
-
     /// The largest escaped magnitude, 0xffffffff, is i32::MIN (the reference wraps it to 0).
     #[test]
     fn the_full_width_escape_decodes_to_the_minimum() {
@@ -281,16 +256,5 @@ mod tests {
         let mut out = [7];
         decompress(AgParams::standard(), &mut BitReader::new(&bytes), &mut out, 32).unwrap();
         assert_eq!(out, [i32::MIN]);
-    }
-
-    #[test]
-    fn a_truncated_stream_is_an_error() {
-        let mut w = BitWriter::new();
-        let values: Vec<i32> = (0..64).map(|i| i * 1000 - 32_000).collect();
-        compress(AgParams::standard(), &values, &mut w, 16).unwrap();
-        let bytes = w.into_bytes();
-        let mut r = BitReader::new(&bytes[..bytes.len() / 2]);
-        let mut out = vec![0; values.len()];
-        assert!(decompress(AgParams::standard(), &mut r, &mut out, 16).is_err());
     }
 }

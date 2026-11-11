@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 use craft_audio::mp3::{Config, DELAY, Encoder, StereoMode};
 
 fn fixtures() -> PathBuf {
-    crate::testkit::fixtures_dir("mp3enc")
+    crate::integration::codecs::testkit::fixtures_dir("mp3enc")
 }
 
 fn chords(rate: u32, n: usize, detune: f32) -> Vec<f32> {
@@ -117,7 +117,7 @@ fn run(ff: &Path, c: &Case) -> f64 {
     let frames = dec[0].len() / frame_samples;
     let nominal = c.kbps as f64 * 1000.0 / 8.0 * (frames * frame_samples) as f64 / c.rate as f64;
     assert!((bytes.len() as f64 / nominal - 1.0).abs() < 0.01, "{}: {} bytes vs {nominal}", c.name, bytes.len());
-    if let Some(probe) = crate::testkit::oracle::find_tool("ffprobe") {
+    if let Some(probe) = crate::integration::codecs::testkit::oracle::find_tool("ffprobe") {
         let out = Command::new(probe)
             .args(["-v", "error", "-show_entries", "stream=codec_name,sample_rate,channels:format=duration", "-of", "default=nw=1"])
             .arg(&path)

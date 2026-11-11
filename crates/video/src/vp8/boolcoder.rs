@@ -218,17 +218,13 @@ mod tests {
 
     #[test]
     fn reads_zeros_past_the_end() {
+        // the decoder's initial lookahead past a short input is not an overrun
+        assert!(!BoolDecoder::new(&[0xAA]).overrun());
         let mut d = BoolDecoder::new(&[]);
         assert!(!d.overrun());
         for _ in 0..1000 {
             assert!(!d.read_bool(128));
         }
         assert!(d.overrun());
-    }
-
-    #[test]
-    fn overrun_is_not_set_by_initial_lookahead_padding() {
-        let d = BoolDecoder::new(&[0xAA]);
-        assert!(!d.overrun());
     }
 }

@@ -123,37 +123,6 @@ fn known(d: &AffixDict, w: &str) -> bool {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_dictionary_loads() {
-        test_dict::install();
-        let d = dictionary();
-        assert!(has_dictionary());
-        assert!(d.len() > 50, "{}", d.len());
-        assert!(d.rule_count() >= 4, "the test dictionary's affix rules");
-        assert!(!d.rep().is_empty() && !d.map().is_empty() && !d.try_chars().is_empty());
-    }
-
-    #[test]
-    fn swiss_dictionary_files_are_found() {
-        // it_CH is searched too, so Swiss users with only it_CH installed get Italian spelling.
-        let dir = std::env::temp_dir().join(format!("wc-it-ch-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&dir);
-        std::fs::write(dir.join("it_CH.aff"), test_dict::AFF).expect("aff");
-        std::fs::write(dir.join("it_CH.dic"), test_dict::DIC).expect("dic");
-        let found = crate::hunspell::find_in(&dir, NAMES);
-        let ok = found.as_ref().is_some_and(|(a, d)| a.ends_with("it_CH.aff") && d.ends_with("it_CH.dic"));
-        assert!(ok, "{found:?}");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// craft-libs#487 review: a hyphenated dictionary entry is a word even when its parts aren't.
-    #[test]
-    fn a_hyphenated_entry_is_looked_up_whole() {
-        let d = AffixDict::from_hunspell("SET UTF-8\n", "1\ntic-tac\n", &[]).unwrap();
-        assert!(is_correct_with(&d, "tic-tac"));
-        assert!(!is_correct_with(&d, "tic-tacc"));
-    }
-
     /// craft-libs#496 review: an elision inside a hyphenated word (`l'ex-amico`) is read per part.
     #[test]
     fn an_elision_in_a_hyphenated_part_is_read() {
@@ -162,77 +131,5 @@ mod tests {
             assert!(is_correct_with(&d, w), "{w}");
         }
         assert!(!is_correct_with(&d, "l'exx-amico"));
-    }
-
-    #[test]
-    fn without_a_dictionary_nothing_is_flagged() {
-        let none = AffixDict::default();
-        for w in ["caffè", "perché", "xqzv", ""] {
-            assert!(is_correct_with(&none, w), "{w}");
-        }
-        assert!(install_dictionary("FLAG bogus\n", "1\nkot\n").is_err(), "unsupported files are refused");
-    }
-
-    #[test]
-    fn italian_words_are_correct() {
-        test_dict::install();
-        for w in [
-            "casa", "case", "libro", "libri", "città", "caffè", "perché", "più", "può", "parlare", "parla", "parlano", "rifare", "bello", "belli",
-            "nuovo", "bianco", "Roma", "Milano", "l'amico", "un'idea", "L'amico", "RAI", "2026", "e", "non",
-        ] {
-            assert!(is_correct(w), "{w}");
-        }
-    }
-
-    #[test]
-    fn elisions_and_truncations_are_correct() {
-        test_dict::install();
-        for w in ["dov'è", "Com'è", "cos'è", "anch'io", "senz'acqua", "tutt'uno", "quand'è", "nessun'amica", "n'ha", "po'", "po", "mo'"] {
-            assert!(is_correct(w), "{w}");
-        }
-    }
-
-    #[test]
-    fn misspellings_are_flagged() {
-        test_dict::install();
-        for w in ["caffé", "perche", "lbiro", "parlre", "amicaa", "citta", "quelo", "dov'lbiro", "xyz'casa"] {
-            assert!(!is_correct(w), "{w}");
-        }
-    }
-
-    #[test]
-    fn grammar_owned_forms_are_not_marked_twice() {
-        test_dict::install();
-        // `pò` and `qual'è` are reported by the grammar rules, with the fix; spelling stays quiet.
-        for w in ["pò", "Pò", "qual'è", "Qual’era"] {
-            assert!(is_correct(w), "{w}");
-            assert!(!grammar::check(w).is_empty(), "{w}: grammar reports it");
-        }
-    }
-
-    #[test]
-    fn user_dictionary_applies() {
-        test_dict::install();
-        assert!(!is_correct("zxqitalianaparola"));
-        crate::add_word("Zxqitalianaparola");
-        assert!(is_correct("zxqitalianaparola"));
-    }
-
-    /// With Ignore words in UPPERCASE or Ignore words that contain numbers off, Italian checks
-    /// those words against the dictionary instead of accepting them.
-    #[test]
-    fn proofing_options_reach_the_italian_check() {
-        test_dict::install();
-        let lang = crate::ProofLang::It;
-        let defaults = crate::Options::default();
-        let check_caps = crate::Options { ignore_uppercase: false, ..defaults };
-        let check_digits = crate::Options { ignore_numbers: false, ..defaults };
-        assert!(crate::is_correct_in_with("LIBRRO", lang, &defaults), "short capitals are acronyms by default");
-        assert!(!crate::is_correct_in_with("LIBRRO", lang, &check_caps));
-        assert!(crate::is_correct_in_with("LIBRO", lang, &check_caps));
-        assert!(crate::is_correct_in_with("librro2", lang, &defaults));
-        assert!(!crate::is_correct_in_with("librro2", lang, &check_digits));
-        assert!(crate::is_correct_in_with("2026", lang, &check_digits), "numbers alone stay correct");
-        assert!(is_correct("LIBRRO"), "direct checks keep the defaults");
     }
 }

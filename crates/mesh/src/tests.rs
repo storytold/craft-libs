@@ -46,18 +46,6 @@ pub(crate) fn tri_mesh() -> Mesh {
 }
 
 #[test]
-fn part_faces_and_fans() {
-    let quad = Part { face_sizes: vec![4, 3], corners: (0..7).map(Corner::at).collect(), ..Part::default() };
-    assert_eq!(quad.faces().map(<[Corner]>::len).collect::<Vec<_>>(), [4, 3]);
-    assert_eq!(quad.triangle_count(), 3);
-    let tris: Vec<[u32; 3]> = quad.triangles().map(|t| t.map(|c| c.position)).collect();
-    assert_eq!(tris, [[0, 1, 2], [0, 2, 3], [4, 5, 6]]);
-    // Sizes that overrun the corners stop the iteration instead of panicking.
-    let short = Part { face_sizes: vec![3, 9], corners: (0..5).map(Corner::at).collect(), ..Part::default() };
-    assert_eq!(short.faces().count(), 1);
-}
-
-#[test]
 fn validate_catches_what_writers_cannot_take() {
     let mut m = tri_mesh();
     m.validate().unwrap();
@@ -126,45 +114,4 @@ fn transforms() {
     mirror[0] = -1.0;
     assert_eq!(transform_normal(&mirror, [1.0, 0.0, 0.0]).map(|x| x.round()), [-1.0, 0.0, 0.0]);
     assert_eq!(transform_normal(&[0.0; 16], [0.0, 0.0, 1.0]), [0.0, 0.0, 1.0]);
-}
-
-fn chain(len: usize) -> Scene {
-    let mut s = Scene::from_meshes(vec![tri_mesh()], vec![]);
-    s.nodes = (0..len)
-        .map(|i| Node { children: if i + 1 < len { vec![i + 1] } else { vec![] }, mesh: (i + 1 == len).then_some(0), ..Node::default() })
-        .collect();
-    s.roots = vec![0];
-    s
-}
-
-#[test]
-fn instances_walk_the_hierarchy_within_limits() {
-    let mut s = chain(3);
-    s.nodes[0].transform[12] = 1.0;
-    s.nodes[2].transform[13] = 2.0;
-    let placed = s.instances(&Limits::default()).unwrap();
-    assert_eq!(placed.len(), 1);
-    assert_eq!(transform_point(&placed[0].1, [0.0; 3]), [1.0, 2.0, 0.0]);
-    // Limit: depth.
-    let limits = Limits { max_depth: 4, ..Limits::default() };
-    assert!(chain(5).instances(&limits).is_ok());
-    assert!(matches!(chain(6).instances(&limits), Err(Error::TooLarge(_))));
-    // Limit: visits. A cycle ends there too.
-    let limits = Limits { max_nodes: 5, max_depth: usize::MAX, ..Limits::default() };
-    assert!(chain(5).instances(&limits).is_ok());
-    assert!(matches!(chain(6).instances(&limits), Err(Error::TooLarge(_))));
-    let mut cycle = chain(2);
-    cycle.nodes[1].children = vec![0];
-    assert!(matches!(cycle.instances(&Limits::default()), Err(Error::TooLarge(_))));
-    // A child that does not exist is an error, not a panic.
-    let mut missing = chain(1);
-    missing.nodes[0].children = vec![9];
-    assert!(matches!(missing.instances(&Limits::default()), Err(Error::Malformed(_))));
-}
-
-#[test]
-fn srgb_round_trips() {
-    for c in [0.0f32, 0.002, 0.2, 0.5, 1.0] {
-        assert!((linear_to_srgb(srgb_to_linear(c)) - c).abs() < 1e-6);
-    }
 }

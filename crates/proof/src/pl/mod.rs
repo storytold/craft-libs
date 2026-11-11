@@ -100,26 +100,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_dictionary_loads() {
-        test_dict::install();
-        let d = dictionary();
-        assert!(has_dictionary());
-        assert!(d.len() > 50, "{}", d.len());
-        assert_eq!(d.rule_count(), 5, "the test dictionary's affix rules");
-        assert!(!d.rep().is_empty() && !d.map().is_empty() && !d.try_chars().is_empty());
-    }
-
-    #[test]
-    fn without_a_dictionary_nothing_is_flagged_and_nothing_suggested() {
-        let none = AffixDict::default();
-        for w in ["żeka", "kturzy", "xqzv", ""] {
-            assert!(is_correct_with(&none, w), "{w}");
-        }
-        assert!(suggest::suggest_in(&none, "żeka", 5).is_empty());
-        assert!(install_dictionary("FLAG bogus\n", "1\nkot\n").is_err(), "unsupported files are refused");
-    }
-
-    #[test]
     fn polish_words_are_correct() {
         test_dict::install();
         for w in [
@@ -155,39 +135,5 @@ mod tests {
         ] {
             assert!(is_correct(w), "{w}");
         }
-    }
-
-    #[test]
-    fn misspellings_are_flagged() {
-        test_dict::install();
-        for w in ["żeka", "kturzy", "napewno", "wogóle", "zolw", "chuśtawka", "bżoza", "warszawa", "niewiem", "pszyjaciel", "Kennedy'xyz"] {
-            assert!(!is_correct(w), "{w}");
-        }
-    }
-
-    #[test]
-    fn user_dictionary_applies() {
-        test_dict::install();
-        assert!(!is_correct("zxqpolskisłowo"));
-        crate::add_word("Zxqpolskisłowo");
-        assert!(is_correct("zxqpolskisłowo"));
-    }
-
-    /// With Ignore words in UPPERCASE or Ignore words that contain numbers off, Polish checks
-    /// those words against the dictionary instead of accepting them.
-    #[test]
-    fn proofing_options_reach_the_polish_check() {
-        test_dict::install();
-        let lang = crate::ProofLang::Pl;
-        let defaults = crate::Options::default();
-        let check_caps = crate::Options { ignore_uppercase: false, ..defaults };
-        let check_digits = crate::Options { ignore_numbers: false, ..defaults };
-        assert!(crate::is_correct_in_with("ŻEKA", lang, &defaults), "short capitals are acronyms by default");
-        assert!(!crate::is_correct_in_with("ŻEKA", lang, &check_caps));
-        assert!(crate::is_correct_in_with("RZEKA", lang, &check_caps));
-        assert!(crate::is_correct_in_with("żeka2", lang, &defaults));
-        assert!(!crate::is_correct_in_with("żeka2", lang, &check_digits));
-        assert!(crate::is_correct_in_with("2026", lang, &check_digits), "numbers alone stay correct");
-        assert!(is_correct("ŻEKA"), "direct checks keep the defaults");
     }
 }

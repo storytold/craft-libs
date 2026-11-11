@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "craft-vectorcraft-format"
 description = "The envelope of VectorCraft's .vectorcraft file: its members, version, embedded images and the data after the JSON, with the document as a type parameter."
 version.workspace = true

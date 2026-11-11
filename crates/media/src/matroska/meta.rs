@@ -45,11 +45,15 @@ pub struct SegmentInfo {
     pub timestamp_scale: u64,
     /// `Duration` in timestamp ticks (float), if present.
     pub duration: Option<f64>,
+    /// `Title`, if present.
     pub title: Option<String>,
+    /// `MuxingApp` string.
     pub muxing_app: String,
+    /// `WritingApp` string.
     pub writing_app: String,
     /// `DateUTC`: nanoseconds since 2001-01-01T00:00:00 UTC.
     pub date_utc: Option<i64>,
+    /// `SegmentUUID`, if present.
     pub segment_uuid: Option<[u8; 16]>,
 }
 
@@ -70,19 +74,24 @@ impl Default for SegmentInfo {
 /// One `SeekHead` entry: level-1 element ID and its position relative to the Segment data start.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SeekEntry {
+    /// Element ID of the referenced level-1 element.
     pub id: u32,
+    /// Position of the element, relative to the Segment data start.
     pub position: u64,
 }
 
 /// One `CueTrackPositions` of a `CuePoint`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CuePosition {
+    /// `CueTrack`: the `TrackNumber` the cue applies to.
     pub track: u64,
     /// Cluster position relative to the Segment data start.
     pub cluster_position: u64,
     /// Block position relative to the Cluster data start.
     pub relative_position: Option<u64>,
+    /// `CueBlockNumber`: 1-based block index within the Cluster, if present.
     pub block_number: Option<u64>,
+    /// `CueDuration` in timestamp ticks, if present.
     pub duration: Option<u64>,
 }
 
@@ -91,6 +100,7 @@ pub struct CuePosition {
 pub struct CuePoint {
     /// In timestamp ticks.
     pub time: u64,
+    /// Positions for this time, one per track.
     pub positions: Vec<CuePosition>,
 }
 
@@ -110,22 +120,34 @@ pub struct ClusterInfo {
 /// One `ChapterDisplay`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ChapterDisplay {
+    /// `ChapString`: the chapter title text.
     pub string: String,
+    /// `ChapLanguage` codes (Matroska language codes).
     pub languages: Vec<String>,
+    /// `ChapLanguageBCP47` tags.
     pub languages_bcp47: Vec<String>,
+    /// `ChapCountry` codes.
     pub countries: Vec<String>,
 }
 
 /// `ChapterAtom` (possibly nested).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Chapter {
+    /// `ChapterUID`.
     pub uid: u64,
+    /// `ChapterStringUID`, if present.
     pub string_uid: Option<String>,
+    /// `ChapterTimeStart` in nanoseconds.
     pub start_ns: u64,
+    /// `ChapterTimeEnd` in nanoseconds, if present.
     pub end_ns: Option<u64>,
+    /// `ChapterFlagHidden`.
     pub hidden: bool,
+    /// `ChapterFlagEnabled`.
     pub enabled: bool,
+    /// The chapter's display strings, one per language.
     pub displays: Vec<ChapterDisplay>,
+    /// Nested sub-chapters.
     pub children: Vec<Chapter>,
 }
 
@@ -139,21 +161,32 @@ impl Chapter {
 /// `EditionEntry`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Edition {
+    /// `EditionUID`, if present.
     pub uid: Option<u64>,
+    /// `EditionFlagHidden`.
     pub hidden: bool,
+    /// `EditionFlagDefault`.
     pub default: bool,
+    /// `EditionFlagOrdered`.
     pub ordered: bool,
+    /// Top-level chapters of the edition.
     pub chapters: Vec<Chapter>,
 }
 
 /// `Targets` of a `Tag`. Empty UID lists mean "the whole segment".
 #[derive(Clone, Debug, PartialEq)]
 pub struct TagTargets {
+    /// `TargetTypeValue` (default 50, the "album/movie" level).
     pub type_value: u64,
+    /// `TargetType`: the name of the level, if present.
     pub type_name: Option<String>,
+    /// `TagTrackUID` values the tag applies to.
     pub track_uids: Vec<u64>,
+    /// `TagEditionUID` values the tag applies to.
     pub edition_uids: Vec<u64>,
+    /// `TagChapterUID` values the tag applies to.
     pub chapter_uids: Vec<u64>,
+    /// `TagAttachmentUID` values the tag applies to.
     pub attachment_uids: Vec<u64>,
 }
 
@@ -173,29 +206,43 @@ impl Default for TagTargets {
 /// `SimpleTag` (possibly nested).
 #[derive(Clone, Debug, PartialEq)]
 pub struct SimpleTag {
+    /// `TagName`.
     pub name: String,
+    /// `TagLanguage`.
     pub language: String,
+    /// `TagDefault`.
     pub default: bool,
+    /// `TagString` value, if the tag holds text.
     pub string: Option<String>,
+    /// `TagBinary` value, if the tag holds bytes.
     pub binary: Option<Vec<u8>>,
+    /// Nested simple tags.
     pub children: Vec<SimpleTag>,
 }
 
 /// `Tag`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Tag {
+    /// What the tag applies to.
     pub targets: TagTargets,
+    /// The tag's `SimpleTag` entries.
     pub simple: Vec<SimpleTag>,
 }
 
 /// `AttachedFile` (listed only; the payload is located by `data_offset`/`data_size`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Attachment {
+    /// `FileUID`.
     pub uid: u64,
+    /// `FileName`.
     pub name: String,
+    /// `FileMediaType`: the MIME type.
     pub media_type: String,
+    /// `FileDescription`, if present.
     pub description: Option<String>,
+    /// Absolute offset of the file data.
     pub data_offset: u64,
+    /// Size of the file data in bytes.
     pub data_size: u64,
 }
 
@@ -594,25 +641,6 @@ mod metadata_depth_tests {
     use super::*;
     use crate::matroska::mux::{el, el_uint};
 
-    fn header_stripping(bytes: &[u8]) -> Vec<ContentEncoding> {
-        let mut comp = Vec::new();
-        el_uint(&mut comp, CONTENT_COMP_ALGO, 3);
-        el(&mut comp, CONTENT_COMP_SETTINGS, bytes);
-        let mut enc = Vec::new();
-        el(&mut enc, CONTENT_COMPRESSION, &comp);
-        let mut encs = Vec::new();
-        el(&mut encs, CONTENT_ENCODING, &enc);
-        parse_encodings(&encs)
-    }
-
-    #[test]
-    fn a_long_stripped_header_is_not_put_in_front_of_frames() {
-        let kept = header_stripping(&[7; MAX_STRIPPED_HEADER]);
-        assert!(matches!(&kept[..], [ContentEncoding::HeaderStripping { bytes, .. }] if bytes.len() == MAX_STRIPPED_HEADER));
-        let refused = header_stripping(&[7; MAX_STRIPPED_HEADER + 1]);
-        assert!(matches!(&refused[..], [ContentEncoding::Compression { algo: 3, .. }]), "{refused:?}");
-    }
-
     fn track_with_private(private: &[u8], strips: &[(&[u8], u64)]) -> Track {
         let mut encs = Vec::new();
         for &(bytes, scope) in strips {
@@ -637,46 +665,9 @@ mod metadata_depth_tests {
     }
 
     #[test]
-    fn a_long_encoding_chain_is_not_rechecked_for_every_frame() {
-        let strip: (&[u8], u64) = (b"", 2);
-        let most = track_with_private(b"private", &[strip; MAX_CONTENT_ENCODINGS]);
-        assert_eq!(most.encodings.len(), MAX_CONTENT_ENCODINGS);
-        assert!(most.frames_readable());
-        let many = track_with_private(b"private", &vec![strip; 10_000]);
-        assert!(matches!(&many.encodings[..], [ContentEncoding::Compression { scope: 1, .. }]), "{:?}", many.encodings.len());
-        assert!(!many.frames_readable());
-        assert_eq!(many.codec_private, b"private");
-    }
-
-    #[test]
     fn codec_private_stripped_headers_are_restored_in_reverse_order() {
         let strips: [(&[u8], u64); 4] = [(b"first", 2), (b"", 2), (b"second", 2), (b"frame", 1)];
         assert_eq!(track_with_private(b"private", &strips).codec_private, b"secondfirstprivate");
         assert_eq!(track_with_private(b"private", &[(b"frame", 1)]).codec_private, b"private");
-    }
-
-    #[test]
-    fn deeply_nested_chapters_stop_at_depth_limit() {
-        // Unknown-size elements make every pair the sole child of the previous ChapterAtom.
-        let data = [0xB6, 0xFF].repeat(100_000);
-        let chapter = parse_chapter(&data, 0);
-        let mut current = &chapter;
-        for _ in 0..MAX_META_DEPTH {
-            assert_eq!(current.children.len(), 1);
-            current = &current.children[0];
-        }
-        assert!(current.children.is_empty());
-    }
-
-    #[test]
-    fn deeply_nested_simple_tags_stop_at_depth_limit() {
-        let data = [0x67, 0xC8, 0xFF].repeat(100_000);
-        let tag = parse_simple_tag(&data, 0);
-        let mut current = &tag;
-        for _ in 0..MAX_META_DEPTH {
-            assert_eq!(current.children.len(), 1);
-            current = &current.children[0];
-        }
-        assert!(current.children.is_empty());
     }
 }

@@ -9,9 +9,11 @@ use std::fmt;
 pub struct FourCc(pub [u8; 4]);
 
 impl FourCc {
+    /// Builds a code from its four bytes, usable in `const` context.
     pub const fn new(b: &[u8; 4]) -> Self {
         FourCc(*b)
     }
+    /// The code as a big-endian `u32`, the form used on the wire.
     pub fn as_u32(self) -> u32 {
         u32::from_be_bytes(self.0)
     }

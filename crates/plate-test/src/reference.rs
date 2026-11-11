@@ -53,6 +53,7 @@ impl<'a> Context<'a> {
 /// A written scene.
 #[derive(Debug)]
 pub struct Output {
+    /// The PDF file bytes.
     pub pdf: Vec<u8>,
     /// What was left out, e.g. text without a font.
     pub notes: Vec<String>,

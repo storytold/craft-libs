@@ -3,6 +3,7 @@ use std::io;
 /// Errors produced by the demuxer and muxer.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// Reading or writing the underlying stream failed.
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),
     /// A box or structure ended before all required fields were read.
@@ -31,6 +32,7 @@ pub enum Error {
     Mux(String),
 }
 
+/// Result type for the demuxer and muxer, with [`Error`] as the error.
 pub type Result<T> = std::result::Result<T, Error>;
 
 pub(crate) fn invalid<T>(msg: impl Into<String>) -> Result<T> {

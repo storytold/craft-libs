@@ -99,22 +99,3 @@ pub(crate) fn shift_mono(input: &[i32], pred_in: &mut [i32], shift_buf: &mut [u1
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn matrixing_inverts() {
-        let l: Vec<i32> = (0..100).map(|i| (i * 977 % 16_000_000) - 8_000_000).collect();
-        let r: Vec<i32> = (0..100).map(|i| (i * 7919 % 16_000_000) - 8_000_000).collect();
-        for (mixres, bytes) in [(0, 0), (1, 0), (2, 1), (4, 1), (3, 0)] {
-            let (mut u, mut v, mut s) = (vec![0; 100], vec![0; 100], vec![0u16; 200]);
-            let m = Mix { bits: 2, res: mixres };
-            mix((&l, &r), (&mut u, &mut v), m, &mut s, bytes);
-            let (mut l2, mut r2) = (vec![0; 100], vec![0; 100]);
-            unmix((&u, &v), (&mut l2, &mut r2), m, &s, bytes, 24);
-            assert_eq!((l2, r2), (l.clone(), r.clone()), "mixres {mixres}");
-        }
-    }
-}

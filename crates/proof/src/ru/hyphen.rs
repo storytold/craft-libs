@@ -99,36 +99,4 @@ mod tests {
         assert_eq!(h("декоративная"), "де-ко-ра-тив-ная");
         assert_eq!(h("штукатурка"), "шту-ка-тур-ка");
     }
-
-    #[test]
-    fn short_words_and_other_scripts_stay_whole() {
-        for w in ["дом", "ёж", "оса", "iPhone", "дом2", ""] {
-            let c: Vec<char> = w.chars().collect();
-            assert!(points(&c).is_empty(), "{w}");
-        }
-    }
-
-    #[test]
-    fn no_line_starts_with_a_sign_or_ends_with_one_letter() {
-        for w in ["объявление", "подъезд", "семья", "вьюга", "майонез", "яйцо", "ауди", "аорта", "оазис", "ёлочка"]
-        {
-            let c: Vec<char> = w.chars().collect();
-            for p in points(&c) {
-                assert!(p >= 2 && c.len() - p >= 2, "{w}: {p}");
-                assert!(c.get(p).is_some_and(|&x| !sticks_left(x)), "{w}: {p}");
-                assert!(c.get(..p).is_some_and(|l| l.iter().any(|&x| is_vowel(x))), "{w}: {p}");
-                assert!(c.get(p..).is_some_and(|r| r.iter().any(|&x| is_vowel(x))), "{w}: {p}");
-            }
-        }
-    }
-
-    proptest::proptest! {
-        #[test]
-        fn never_panics(s in "[а-яё]{0,30}") {
-            let c: Vec<char> = s.chars().collect();
-            for p in points(&c) {
-                proptest::prop_assert!(p >= 2 && p + 2 <= c.len());
-            }
-        }
-    }
 }

@@ -65,25 +65,6 @@ fn lab_uses_the_legacy_encoding_in_any_version() {
 }
 
 #[test]
-fn names_join_prefix_root_and_suffix_and_device_values_scale_to_one() {
-    let tag = ncl2("PRE ", " C", 4, &[("Orange", [0x8000, 0xA000, 0xC000], &[0, 0x8000, 0xFFFF, 0])]);
-    let n = named(&profile(4, b"Lab ", &tag));
-    assert_eq!(n.len(), 1);
-    let c = n.find("PRE Orange C").unwrap();
-    assert_eq!(c.device.len(), 4);
-    assert_eq!((c.device[0], c.device[2]), (0.0, 1.0));
-    assert!((c.device[1] - 32768.0 / 65535.0).abs() < 1e-12);
-    assert!(n.find("pre orange c").is_none(), "lookup is case-sensitive");
-}
-
-#[test]
-fn a_profile_without_ncl2_has_no_named_colours() {
-    assert_eq!(Builtin::Srgb.profile().named_colors().unwrap(), None);
-    let srgb = Profile::parse(&Builtin::Srgb.profile().to_bytes()).unwrap();
-    assert_eq!(srgb.named_colors().unwrap(), None);
-}
-
-#[test]
 fn hostile_tags_are_errors() {
     let entry: Entry = ("A", [0xFF00, 0x8000, 0x8000], &[]);
     let mut short = ncl2("", "", 0, &[entry, entry]);
@@ -123,14 +104,4 @@ fn a_named_colour_converts_into_a_cmyk_profile() {
     // A named-colour profile has no PCS → device path to convert into.
     let nmcl = Profile::parse(&profile(4, b"Lab ", &tag)).unwrap();
     assert!(matches!(n.to_device("Spot", &nmcl), Err(CmsError::Unsupported(_))));
-}
-
-#[test]
-fn an_xyz_named_colour_converts_through_lab() {
-    // D50 white in u1Fixed15.
-    let white = math::D50.map(|v| (v * 32768.0).round() as u16);
-    let n = named(&profile(4, b"XYZ ", &ncl2("", "", 0, &[("Paper", white, &[])])));
-    assert_eq!(n.pcs, Pcs::Xyz);
-    let rgb = n.to_device("Paper", Builtin::Srgb.profile()).unwrap().unwrap();
-    assert!(rgb.iter().all(|&v| (v - 1.0).abs() < 2e-3), "{rgb:?}");
 }

@@ -18,7 +18,9 @@ use crate::request::Request;
 /// How a mock job ends.
 #[derive(Clone, Debug)]
 pub enum Outcome {
+    /// Finish successfully with these outputs.
     Succeed(Vec<Output>),
+    /// Finish in the `Failed` state with this error.
     Fail(AiError),
 }
 
@@ -29,6 +31,7 @@ pub struct Script {
     pub running_polls: u32,
     /// One text delta is emitted per poll until these run out.
     pub text_chunks: Vec<String>,
+    /// How the job ends once the running polls and text chunks are done.
     pub outcome: Outcome,
 }
 
@@ -61,6 +64,7 @@ pub struct MockProvider {
 }
 
 impl MockProvider {
+    /// Builds a provider that offers `models` and runs every job by `script`.
     pub fn new(models: Vec<ModelInfo>, script: Script) -> Self {
         Self { models, script, limits: Limits::default(), state: Mutex::new(State::default()) }
     }

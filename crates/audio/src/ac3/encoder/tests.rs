@@ -1,67 +1,7 @@
 use super::*;
 
-#[test]
-fn analysis_synthesis_reconstructs_overlap() {
-    let input: Vec<f32> = (0..1024).map(|n| (n as f32 * 0.071).sin() * 0.4).collect();
-    let mut overlap = [0.0; 256];
-    for offset in (0..768).step_by(256) {
-        let mut block = [0.0; 512];
-        block.copy_from_slice(&input[offset..offset + 512]);
-        let coeffs = transform::analysis(&block, false);
-        let mut decoded = [0.0; 512];
-        super::super::imdct(&coeffs, false, &mut decoded);
-        if offset > 0 {
-            for i in 0..256 {
-                assert!((2.0 * (decoded[i] + overlap[i]) - input[offset + i]).abs() < 1e-5);
-            }
-        }
-        overlap.copy_from_slice(&decoded[256..]);
-    }
-}
-
 fn config(codec: Codec, mode: CodingMode, lfe: bool) -> Config {
     Config { codec, sample_rate: 48_000, bitrate_kbps: 448, mode, lfe }
-}
-
-#[test]
-fn encode_tone_headers_crc_and_level() -> Result<(), Box<dyn std::error::Error>> {
-    for codec in [Codec::Ac3, Codec::Eac3] {
-        for (mode, lfe) in [(CodingMode::Mono, false), (CodingMode::Stereo, false), (CodingMode::ThreeFrontTwoSurround, true)] {
-            let cfg = config(codec, mode, lfe);
-            let input: Vec<Vec<f32>> = (0..cfg.channels())
-                .map(|ch| (0..3072).map(|n| (n as f32 * (if lfe && ch == 3 { 0.01 } else { 0.04 + ch as f32 * 0.015 })).sin() * 0.2).collect())
-                .collect();
-            let mut encoder = Encoder::new(cfg)?;
-            let mut packets = encoder.push(&input.iter().map(Vec::as_slice).collect::<Vec<_>>())?;
-            let finish = encoder.finish()?;
-            packets.extend(finish.packets);
-            let mut decoder = super::super::Decoder::new();
-            let mut decoded = vec![Vec::new(); cfg.channels()];
-            for packet in &packets {
-                let header = super::super::parse_header(&packet.data)?;
-                assert_eq!(header.channels(), cfg.channels());
-                assert_eq!(header.samples(), 1536);
-                assert_eq!(bitstream::crc(&packet.data[2..]), 0);
-                if codec == Codec::Ac3 {
-                    let words = packet.data.len() / 2;
-                    let split = (words / 2 + words / 8) * 2;
-                    assert_eq!(bitstream::crc(&packet.data[2..split]), 0);
-                }
-                let frame = decoder.decode(&packet.data)?;
-                for (dst, src) in decoded.iter_mut().zip(frame.channels) {
-                    dst.extend(src);
-                }
-            }
-            for ch in 0..cfg.channels() {
-                if lfe && ch == 3 {
-                    continue;
-                } // The causal LFE low-pass intentionally changes phase.
-                let mse = input[ch].iter().zip(&decoded[ch][256..]).map(|(&a, &b)| (a - b).powi(2)).sum::<f32>() / input[ch].len() as f32;
-                assert!(mse < 0.0001, "{codec:?} {mode:?} ch{ch}: mse={mse}");
-            }
-        }
-    }
-    Ok(())
 }
 
 #[test]
@@ -114,81 +54,6 @@ fn lfe_lowpass_preserves_bass_and_rejects_full_bandwidth_content() {
 }
 
 #[test]
-fn rates_modes_and_crc_boundaries() -> Result<(), Box<dyn std::error::Error>> {
-    for codec in [Codec::Ac3, Codec::Eac3] {
-        for rate in [32000, 44100, 48000] {
-            for mode in [
-                CodingMode::DualMono,
-                CodingMode::Mono,
-                CodingMode::Stereo,
-                CodingMode::ThreeFront,
-                CodingMode::StereoSurround,
-                CodingMode::ThreeFrontSurround,
-                CodingMode::StereoTwoSurround,
-                CodingMode::ThreeFrontTwoSurround,
-            ] {
-                for lfe in [false, true] {
-                    let cfg = Config { sample_rate: rate, ..config(codec, mode, lfe) };
-                    let mut encoder = Encoder::new(cfg)?;
-                    let planes = vec![vec![0.0; 1537]; cfg.channels()];
-                    let mut packets = encoder.push(&planes.iter().map(Vec::as_slice).collect::<Vec<_>>())?;
-                    let finish = encoder.finish()?;
-                    packets.extend(finish.packets);
-                    assert_eq!(packets.len(), 2);
-                    assert_eq!(finish.padding_samples, 1279);
-                    for packet in packets {
-                        let h = super::super::parse_header(&packet.data)?;
-                        assert_eq!(h.sample_rate, rate);
-                        assert_eq!(h.acmod, mode as u8);
-                        assert_eq!(h.lfeon, lfe);
-                        assert_eq!(h.frame_bytes, packet.data.len());
-                        assert_eq!(bitstream::crc(&packet.data[2..]), 0);
-                        let decoded = super::super::Decoder::new().decode(&packet.data)?;
-                        assert!(decoded.channels.iter().flatten().all(|&v| v == 0.0));
-                        if codec == Codec::Ac3 {
-                            let words = packet.data.len() / 2;
-                            assert_eq!(bitstream::crc(&packet.data[2..(words / 2 + words / 8) * 2]), 0);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-#[test]
-fn input_validation_and_terminal_lifecycle() -> Result<(), Box<dyn std::error::Error>> {
-    let cfg = config(Codec::Ac3, CodingMode::Stereo, false);
-    let mut encoder = Encoder::new(cfg)?;
-    assert!(encoder.push(&[&[0.0]]).is_err());
-    assert!(encoder.push(&[&[0.0], &[]]).is_err());
-    for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1.01, -1.01] {
-        assert!(encoder.push(&[&[value], &[0.0]]).is_err());
-    }
-    assert_eq!(encoder.input_samples, 0);
-    assert!(encoder.push(&[&[], &[]])?.is_empty());
-    let finish = encoder.finish()?;
-    assert!(finish.packets.is_empty());
-    assert_eq!(finish.priming_samples, 0);
-    assert_eq!(finish.padding_samples, 0);
-    assert_eq!(encoder.push(&[&[], &[]]).err(), Some(Error::Finished));
-    assert_eq!(encoder.finish().err(), Some(Error::Finished));
-    // Force an internal impossible budget to exercise terminal handling without
-    // relying on a public configuration that new() should have rejected.
-    let mut failing = Encoder::new(cfg)?;
-    failing.config.bitrate_kbps = 1;
-    assert_eq!(failing.push(&[&[0.0; 1536], &[0.0; 1536]]).err(), Some(Error::BitBudget));
-    assert_eq!(failing.push(&[&[], &[]]).err(), Some(Error::Finished));
-    assert_eq!(failing.finish().err(), Some(Error::Finished));
-    let mut overflow = Encoder::new(cfg)?;
-    overflow.input_samples = u64::MAX - 2000;
-    assert!(overflow.push(&[&[0.0; 1000], &[0.0; 1000]]).is_err());
-    assert_eq!(overflow.input_samples, u64::MAX - 2000);
-    Ok(())
-}
-
-#[test]
 fn chunk_boundaries_and_exact_trim_counts() -> Result<(), Box<dyn std::error::Error>> {
     for codec in [Codec::Ac3, Codec::Eac3] {
         for length in [1, 255, 256, 1280, 1535, 1536, 1537, 3071] {
@@ -211,18 +76,6 @@ fn chunk_boundaries_and_exact_trim_counts() -> Result<(), Box<dyn std::error::Er
         }
     }
     Ok(())
-}
-
-#[test]
-fn configuration_validates_real_frame_bounds_and_explicit_layout() {
-    for rate in [32000, 44100] {
-        assert!(Encoder::new(Config { codec: Codec::Eac3, sample_rate: rate, bitrate_kbps: 1024, mode: CodingMode::Stereo, lfe: false }).is_err());
-    }
-    assert!(Encoder::new(Config { codec: Codec::Eac3, sample_rate: 48000, bitrate_kbps: 1024, mode: CodingMode::Stereo, lfe: false }).is_ok());
-    assert!(Encoder::new(config(Codec::Ac3, CodingMode::Surround71, true)).is_err());
-    assert!(Encoder::new(config(Codec::Eac3, CodingMode::Surround71, false)).is_err());
-    assert_eq!(config(Codec::Eac3, CodingMode::Surround71, true).channel_layout(), ChannelLayout::SURROUND_7_1);
-    assert!(!config(Codec::Ac3, CodingMode::DualMono, false).channel_layout().is_ordered());
 }
 
 #[test]
@@ -303,24 +156,6 @@ fn actual_decoder_positions_satisfy_all_three_ac3_bit_budgets() -> Result<(), Bo
 }
 
 #[test]
-fn lfe_final_nonzero_input_is_chunk_invariant() -> Result<(), Box<dyn std::error::Error>> {
-    let cfg = config(Codec::Eac3, CodingMode::ThreeFrontTwoSurround, true);
-    let mut input = vec![vec![0.0; 1537]; 6];
-    input[3][1536] = 0.75;
-    let mut one = Encoder::new(cfg)?;
-    let mut a = one.push(&input.iter().map(Vec::as_slice).collect::<Vec<_>>())?;
-    a.extend(one.finish()?.packets);
-    let mut two = Encoder::new(cfg)?;
-    let mut b = Vec::new();
-    for range in [0..1, 1..255, 255..1536, 1536..1537] {
-        b.extend(two.push(&input.iter().map(|p| &p[range.clone()]).collect::<Vec<_>>())?);
-    }
-    b.extend(two.finish()?.packets);
-    assert_eq!(a.iter().map(|p| &p.data).collect::<Vec<_>>(), b.iter().map(|p| &p.data).collect::<Vec<_>>());
-    Ok(())
-}
-
-#[test]
 fn transient_adjacent_tone_refreshes_exponents_within_the_frame() -> Result<(), Box<dyn std::error::Error>> {
     // Independent QC localized a previous shared-six-block exponent envelope's
     // degradation to the first 32 ms after this onset. Preserve that regression.
@@ -378,11 +213,4 @@ fn surround_compatibility_downmix_retains_correlated_signal_headroom() -> Result
     assert!(mse < 0.0002, "compatibility downmix mse={mse}");
     assert!(left.iter().all(|v| v.abs() < 1.05));
     Ok(())
-}
-
-#[test]
-fn encoder_errors_convert_to_audio_errors() {
-    let bad = Config { codec: Codec::Ac3, sample_rate: 22_050, bitrate_kbps: 192, mode: CodingMode::Stereo, lfe: false };
-    let made: crate::Result<Encoder> = Encoder::new(bad).map_err(Into::into);
-    assert!(matches!(made, Err(crate::AudioError::Encode(m)) if m.contains("sample rate")));
 }

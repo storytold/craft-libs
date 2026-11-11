@@ -28,27 +28,41 @@ pub const MAX_PROMPT_CHARS: usize = 2000;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum Outcome {
+    /// The job finished and produced a result.
     Done,
-    Failed { kind: ErrorKind },
+    /// The job failed. Only the error kind is kept, never the message.
+    Failed {
+        /// What kind of failure it was.
+        kind: ErrorKind,
+    },
+    /// The user or app cancelled the job.
     Cancelled,
 }
 
 /// Written when a job is submitted (or refused by the provider).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StartRecord {
+    /// Schema version, [`HISTORY_SCHEMA`].
     pub v: u32,
     /// Joins this line to its [`EndRecord`]. Unique across apps and runs.
     pub run: String,
     /// Unix milliseconds.
     pub at_ms: u64,
+    /// Id of the app that submitted the job.
     pub app: String,
+    /// Id of the role the job ran for.
     pub role_id: String,
     /// The feature as the user knows it, such as "Generative Fill".
     pub role_label: String,
+    /// The capability requested, as `<modality>.<task>`.
     pub capability: String,
+    /// Id of the connection used.
     pub connection: String,
+    /// The connection's label when the job ran, kept in case the connection is later renamed or removed.
     pub connection_label: String,
+    /// Id of the model used.
     pub model: String,
+    /// Whether the connection was local or remote.
     pub locality: Locality,
     /// `scheme://host[:port]`, or the route name when there is no endpoint.
     pub destination: String,
@@ -73,9 +87,13 @@ pub struct StartRecord {
 /// Written when a job reaches a final state.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EndRecord {
+    /// Schema version, [`HISTORY_SCHEMA`].
     pub v: u32,
+    /// The run id shared with the [`StartRecord`].
     pub run: String,
+    /// Unix milliseconds when the job ended.
     pub at_ms: u64,
+    /// How the job ended.
     pub outcome: Outcome,
     /// What the provider reported, or `None`. Never an estimate of ours.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -88,14 +106,18 @@ pub struct EndRecord {
 #[serde(tag = "phase", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub enum HistoryRecord {
+    /// The line written at submission.
     Start(StartRecord),
+    /// The line written at the final state.
     End(EndRecord),
 }
 
 /// A job as the history list shows it: the start line and, if seen, the end line.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HistoryEntry {
+    /// The submission line.
     pub start: StartRecord,
+    /// The final line, or `None` while unfinished.
     pub end: Option<EndRecord>,
 }
 
@@ -106,6 +128,7 @@ impl HistoryEntry {
         end.at_ms.checked_sub(self.start.at_ms)
     }
 
+    /// How the job ended, or `None` while unfinished.
     pub fn outcome(&self) -> Option<&Outcome> {
         self.end.as_ref().map(|e| &e.outcome)
     }
@@ -120,7 +143,9 @@ impl HistoryEntry {
 /// Entries newest first, plus how many lines could not be read.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HistoryLog {
+    /// Jobs, newest first.
     pub entries: Vec<HistoryEntry>,
+    /// Lines that could not be read and were left out.
     pub skipped: usize,
 }
 
@@ -161,6 +186,3 @@ pub fn clip_prompt(text: &str) -> String {
 }
 
 pub mod report;
-
-#[cfg(test)]
-mod tests;

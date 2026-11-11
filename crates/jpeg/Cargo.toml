@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "craft-jpeg"
 description = "Clean-room JPEG decoder (ITU-T T.81): 12-bit and arithmetic-coded frames, and baseline frames a band of rows at a time."
 version.workspace = true

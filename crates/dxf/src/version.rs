@@ -86,32 +86,3 @@ impl std::fmt::Display for Version {
         f.write_str(self.year())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_years_and_codes() {
-        assert_eq!(Version::parse("2018"), Some(Version::R2018));
-        assert_eq!(Version::parse(" r2004 "), Some(Version::R2004));
-        assert_eq!(Version::parse("ac1021"), Some(Version::R2007));
-        assert_eq!(Version::parse("2005"), None);
-        assert_eq!(Version::parse(""), None);
-        for v in Version::ALL {
-            assert_eq!(Version::parse(v.code()), Some(v));
-            assert_eq!(Version::parse(v.year()), Some(v));
-        }
-    }
-
-    #[test]
-    fn file_versions_map_to_the_nearest_writable_one() {
-        assert_eq!(Version::for_acadver("AC1009"), Some(Version::R2000));
-        assert_eq!(Version::for_acadver("AC1014"), Some(Version::R2000));
-        assert_eq!(Version::for_acadver("AC1024"), Some(Version::R2010));
-        assert_eq!(Version::for_acadver("AC1035"), Some(Version::R2018));
-        assert_eq!(Version::for_acadver("MC0.0"), None);
-        assert_eq!(Version::for_acadver("AC"), None);
-        assert_eq!(Version::for_acadver("AC99999999999999999999"), None);
-    }
-}

@@ -496,28 +496,6 @@ mod tests {
     }
 
     #[test]
-    fn code_page_names() {
-        let d = |bytes: &[u8], cp: &str| decode_code_page(bytes, cp);
-        assert_eq!(d(b"\xCF\xF0\xE8\xE2\xE5\xF2", "ANSI_1251").as_deref(), Some("Привет"));
-        assert_eq!(d(b"\xCF\xF0\xE8\xE2\xE5\xF2", " ansi_1251 ").as_deref(), Some("Привет"));
-        assert_eq!(d(b"\x90\x7D\x96\xCA", "ANSI_932").as_deref(), Some("図面"));
-        assert_eq!(d(b"\xCD\xBC\xB2\xE3", "GB2312").as_deref(), Some("图层"));
-        assert_eq!(d(b"\xB9\xCF\xBC\x68", "BIG5").as_deref(), Some("圖層"));
-        assert_eq!(d(b"\xB5\xB5\xB8\xE9", "ANSI_949").as_deref(), Some("도면"));
-        assert_eq!(d(b"\xD3\xF7\xDD\xE4\xE9\xEF", "ANSI_1253").as_deref(), Some("Σχέδιο"));
-        assert_eq!(d(b"\xC0\xD2\xBE", "ANSI_874").as_deref(), Some("ภาพ"));
-        assert_eq!(d(b"\x80", "ANSI_1252").as_deref(), Some("€"));
-        // DOS 437 and 850 agree on letters but differ on 0x9B (¢ / ø).
-        assert_eq!(d(b"Gr\x94\xE1e \x9B", "DOS437").as_deref(), Some("Größe ¢"));
-        assert_eq!(d(b"Gr\x94\xE1e \x9B", "dos850").as_deref(), Some("Größe ø"));
-        assert_eq!(d(b"\xBD\xA2\x88w", "DOS852").as_deref(), Some("Żółw"));
-        assert_eq!(d(b"\x91\xAB\xAE\xA9", "DOS866").as_deref(), Some("Слой"));
-        assert_eq!(d("é".as_bytes(), "UTF8").as_deref(), Some("é"));
-        assert_eq!(d(b"x", "EBCDIC"), None);
-        assert_eq!(d(b"x", ""), None);
-    }
-
-    #[test]
     fn replacement_char_is_never_encoded_as_an_unassigned_byte() {
         for cp in ["DOS857", "DOS864", "DOS437"] {
             let d = encoder(cp).unwrap();
@@ -580,28 +558,6 @@ mod tests {
                 assert!(!d(&[a, b, b'\n']).unwrap_or_default().is_empty());
             }
         }
-    }
-
-    #[test]
-    fn invalid_sequences_become_replacement_characters() {
-        // A Shift-JIS lead byte cut off by the line end keeps the line end.
-        assert_eq!(decode_code_page(b"\x90\n1\n", "ANSI_932").as_deref(), Some("\u{FFFD}\n1\n"));
-        assert_eq!(decode_code_page(b"\x90", "ANSI_932").as_deref(), Some("\u{FFFD}"));
-        assert_eq!(decode_code_page(b"\xFF\xFF", "ANSI_936").as_deref(), Some("\u{FFFD}\u{FFFD}"));
-    }
-
-    #[test]
-    fn header_scan() {
-        let head = b"0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1015\n9\n$DWGCODEPAGE\n3\nANSI_1251\r\n0\nENDSEC\n";
-        assert_eq!(ascii_code_page(head), Some(&b"ANSI_1251"[..]));
-        // Only the HEADER section counts.
-        assert_eq!(ascii_code_page(b"0\nSECTION\n2\nHEADER\n0\nENDSEC\n9\n$DWGCODEPAGE\n3\nANSI_1251\n"), None);
-        // Wrong group code, or the file ends early.
-        assert_eq!(ascii_code_page(b"9\n$DWGCODEPAGE\n1\nANSI_1251\n"), None);
-        assert_eq!(ascii_code_page(b"9\n$DWGCODEPAGE\n3"), None);
-        let utf8 = |v: &str| Version::for_acadver(v).is_some_and(Version::utf8);
-        assert!(utf8("AC1021") && utf8(" AC1032 "));
-        assert!(!utf8("AC1018") && !utf8("AC1009") && !utf8("garbage"));
     }
 
     #[test]

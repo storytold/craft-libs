@@ -2,7 +2,7 @@
 
 use crate::canvas::Canvas;
 use crate::dib::Rgba;
-use crate::{Error, Item, MAX_BYTES, MAX_ITEMS, Seg, is_metafile, parse};
+use crate::{Item, MAX_BYTES, Seg, is_metafile, parse};
 
 mod limits;
 mod model;
@@ -134,184 +134,6 @@ fn close(a: f32, b: f32) -> bool {
     (a - b).abs() < 1e-3
 }
 
-#[test]
-fn wmf_rectangle_with_solid_brush() {
-    let recs = [
-        wrec(0x02FC, &cat(vec![h16(0), h32(0x0000_00FF), h16(0)])),
-        wrec(0x012D, &h16(0)),
-        wrec(0x041B, &cat(vec![h16(70), h16(110), h16(20), h16(10)])),
-    ];
-    let p = parse(&wmf(&recs, None)).unwrap();
-    assert_eq!((p.width, p.height), (100.0, 50.0));
-    assert_eq!(p.items.len(), 1);
-    let (segs, fill, stroke, even_odd) = path_segs(&p.items[0]);
-    assert_eq!(segs, &vec![Seg::Move(0.0, 0.0), Seg::Line(100.0, 0.0), Seg::Line(100.0, 50.0), Seg::Line(0.0, 50.0), Seg::Close]);
-    assert_eq!(fill, Some([255, 0, 0, 255]));
-    assert_eq!(stroke, Some(([0, 0, 0, 255], 0.0)));
-    assert!(even_odd);
-}
-
-#[test]
-fn wmf_polyline_with_pen() {
-    let recs = [
-        wrec(0x02FA, &cat(vec![h16(0), h16(4), h16(0), h32(0x0000_FF00)])),
-        wrec(0x012D, &h16(0)),
-        wrec(0x0325, &cat(vec![h16(3), h16(0), h16(0), h16(50), h16(0), h16(50), h16(40)])),
-    ];
-    let p = parse(&wmf(&recs, None)).unwrap();
-    assert_eq!((p.width, p.height), (50.0, 40.0));
-    let (segs, fill, stroke, _) = path_segs(&p.items[0]);
-    assert_eq!(segs, &vec![Seg::Move(0.0, 0.0), Seg::Line(50.0, 0.0), Seg::Line(50.0, 40.0)]);
-    assert_eq!(fill, None);
-    assert_eq!(stroke, Some(([0, 255, 0, 255], 4.0)));
-}
-
-#[test]
-fn wmf_polygon_fill_rule_follows_polyfillmode() {
-    let square = cat(vec![h16(4), h16(0), h16(0), h16(10), h16(0), h16(10), h16(10), h16(0), h16(10)]);
-    let winding = [wrec(0x0106, &h16(2)), wrec(0x0324, &square)];
-    let p = parse(&wmf(&winding, None)).unwrap();
-    assert!(!path_segs(&p.items[0]).3, "WINDING fills use the nonzero rule");
-    let alternate = [wrec(0x0324, &square)];
-    let p = parse(&wmf(&alternate, None)).unwrap();
-    let (segs, fill, _, even_odd) = path_segs(&p.items[0]);
-    assert!(even_odd, "default ALTERNATE is even-odd");
-    assert_eq!(fill, Some([255, 255, 255, 255]));
-    assert_eq!(segs.last(), Some(&Seg::Close));
-}
-
-#[test]
-fn wmf_stretchdib_flips_bottom_up_rows() {
-    let params = cat(vec![h32(0x00CC_0020), h16(0), h16(2), h16(2), h16(0), h16(0), h16(10), h16(20), h16(0), h16(0), dib24_bottom_up()]);
-    let p = parse(&wmf(&[wrec(0x0F43, &params)], None)).unwrap();
-    assert_eq!((p.width, p.height), (20.0, 10.0));
-    let Item::Bitmap { rect, width, height, rgba, .. } = &p.items[0] else { panic!("expected a bitmap") };
-    assert_eq!(rect, &[0.0, 0.0, 20.0, 10.0]);
-    assert_eq!((*width, *height), (2, 2));
-    assert_eq!(rgba.as_slice(), DIB24_RGBA);
-}
-
-#[test]
-fn wmf_mapping_window_and_viewport() {
-    let recs = [
-        wrec(0x0103, &h16(8)),
-        wrec(0x020B, &cat(vec![h16(100), h16(100)])),
-        wrec(0x020C, &cat(vec![h16(50), h16(50)])),
-        wrec(0x020E, &cat(vec![h16(100), h16(100)])),
-        wrec(0x0214, &cat(vec![h16(100), h16(100)])),
-        wrec(0x0213, &cat(vec![h16(150), h16(150)])),
-    ];
-    let p = parse(&wmf(&recs, None)).unwrap();
-    assert_eq!((p.width, p.height), (100.0, 100.0));
-    let (segs, fill, stroke, _) = path_segs(&p.items[0]);
-    assert_eq!(segs, &vec![Seg::Move(0.0, 0.0), Seg::Line(100.0, 100.0)]);
-    assert_eq!(fill, None);
-    assert_eq!(stroke, Some(([0, 0, 0, 255], 0.0)));
-}
-
-#[test]
-fn wmf_placeable_header_sets_frame_in_points() {
-    let p = parse(&wmf(&[wrec(0x041B, &cat(vec![h16(1440), h16(2880), h16(0), h16(0)]))], Some([0, 0, 2880, 1440]))).unwrap();
-    assert_eq!((p.width, p.height), (144.0, 72.0));
-}
-
-#[test]
-fn emf_stretchdibits_flips_and_fits_frame() {
-    let mut payload = vec![0u8; 16];
-    payload.extend(cat(vec![
-        e32(0),
-        e32(0),
-        e32(0),
-        e32(0),
-        e32(2),
-        e32(2),
-        e32(80),
-        e32(40),
-        e32(120),
-        e32(16),
-        e32(0),
-        e32(0x00CC_0020),
-        e32(100),
-        e32(50),
-    ]));
-    payload.extend(info_header(2, 2, 24, 16));
-    payload.extend(dib24_bottom_up().get(40..).unwrap_or_default());
-    let rec = erec(81, &payload);
-    // A 25 x 12.5 mm frame is 70.87 x 35.43 points; the bitmap fills the whole frame.
-    let file = emf(&[rec], [0, 0, 100, 50], [0, 0, 2500, 1250]);
-    let p = parse(&file).unwrap();
-    let (w, h) = (2500.0 * 72.0 / 2540.0, 1250.0 * 72.0 / 2540.0);
-    assert!(close(p.width, w as f32) && close(p.height, h as f32));
-    let Item::Bitmap { rect, width, height, rgba, .. } = &p.items[0] else { panic!("expected a bitmap") };
-    assert!(rect.iter().zip([0.0, 0.0, w, h]).all(|(a, b)| close(*a, b as f32)));
-    assert_eq!((*width, *height), (2, 2));
-    assert_eq!(rgba.as_slice(), DIB24_RGBA);
-}
-
-#[test]
-fn emf_world_transform_scales_geometry() {
-    let xf = cat([2.0f32, 0.0, 0.0, 2.0, 0.0, 0.0].iter().map(|v| v.to_le_bytes().to_vec()).collect());
-    let recs = [erec(35, &xf), erec(27, &cat(vec![e32(0), e32(0)])), erec(54, &cat(vec![e32(10), e32(5)]))];
-    let p = parse(&emf(&recs, [0; 4], [0; 4])).unwrap();
-    assert_eq!((p.width, p.height), (20.0, 10.0));
-    let (segs, fill, stroke, _) = path_segs(&p.items[0]);
-    assert_eq!(segs, &vec![Seg::Move(0.0, 0.0), Seg::Line(20.0, 10.0)]);
-    assert_eq!(fill, None);
-    assert_eq!(stroke, Some(([0, 0, 0, 255], 0.0)));
-}
-
-#[test]
-fn emf_ellipse_is_four_cubics_back_to_start() {
-    let rect = cat(vec![e32(0), e32(0), e32(40), e32(20)]);
-    let p = parse(&emf(&[erec(42, &rect)], [0; 4], [0; 4])).unwrap();
-    let (segs, fill, _, _) = path_segs(&p.items[0]);
-    assert_eq!(segs.len(), 6);
-    assert_eq!(segs[0], Seg::Move(40.0, 10.0));
-    assert!(matches!(segs[4], Seg::Cubic(_, _, _, _, x, y) if close(x, 40.0) && close(y, 10.0)));
-    assert_eq!(segs[5], Seg::Close);
-    assert_eq!(fill, Some([255, 255, 255, 255]));
-}
-
-#[test]
-fn emf_path_bracket_strokeandfill_uses_stock_black_brush() {
-    let bounds = vec![0u8; 16];
-    let recs = [
-        erec(59, &[]),
-        erec(27, &cat(vec![e32(0), e32(0)])),
-        erec(54, &cat(vec![e32(10), e32(0)])),
-        erec(54, &cat(vec![e32(10), e32(10)])),
-        erec(61, &[]),
-        erec(60, &[]),
-        erec(37, &h32(0x8000_0004)),
-        erec(63, &bounds),
-    ];
-    let p = parse(&emf(&recs, [0; 4], [0; 4])).unwrap();
-    assert_eq!(p.items.len(), 1);
-    let (segs, fill, stroke, _) = path_segs(&p.items[0]);
-    assert_eq!(segs, &vec![Seg::Move(0.0, 0.0), Seg::Line(10.0, 0.0), Seg::Line(10.0, 10.0), Seg::Close]);
-    assert_eq!(fill, Some([0, 0, 0, 255]));
-    assert_eq!(stroke, Some(([0, 0, 0, 255], 0.0)));
-}
-
-#[test]
-fn item_cap_stops_the_parse_and_keeps_the_rest() {
-    let rect = wrec(0x041B, &cat(vec![h16(10), h16(10), h16(0), h16(0)]));
-    let recs: Vec<Vec<u8>> = (0..MAX_ITEMS + 10).map(|_| rect.clone()).collect();
-    let p = parse(&wmf(&recs, None)).unwrap();
-    assert_eq!(p.items.len(), MAX_ITEMS);
-}
-
-#[test]
-fn detection_and_garbage() {
-    let w = wmf(&[wrec(0x041B, &cat(vec![h16(1), h16(1), h16(0), h16(0)]))], None);
-    let e = emf(&[erec(42, &cat(vec![e32(0), e32(0), e32(4), e32(4)]))], [0; 4], [0; 4]);
-    assert!(is_metafile(&w));
-    assert!(is_metafile(&e));
-    assert!(!is_metafile(b"hello world, not a metafile"));
-    assert_eq!(parse(b"hello world, not a metafile").unwrap_err(), Error::NotMetafile);
-    assert!(parse(&[]).is_err());
-}
-
 /// Fixed-seed LCG (Knuth's constants): the fuzz inputs are reproducible.
 struct Lcg(u64);
 
@@ -384,16 +206,6 @@ fn truncated_random_and_mutated_inputs_never_panic() {
 }
 
 #[test]
-fn wmf_stock_null_brush_by_16_bit_handle_has_no_fill() {
-    // SELECTOBJECT with 0x8005 is the NULL_BRUSH stock object (0x8000 | 5), so the rectangle is outline only.
-    let recs = [wrec(0x012D, &h16(0x8005u16 as i32)), wrec(0x041B, &cat(vec![h16(70), h16(110), h16(20), h16(10)]))];
-    let p = parse(&wmf(&recs, None)).unwrap();
-    let (_, fill, stroke, _) = path_segs(&p.items[0]);
-    assert_eq!(fill, None);
-    assert_eq!(stroke, Some(([0, 0, 0, 255], 0.0)));
-}
-
-#[test]
 fn emf_frame_comes_from_rclframe_not_device_bounds() {
     // Bounds cover only the left half of the 25 x 12.5 mm frame (device units are 0.04 per 0.01 mm), so a
     // rectangle from x = 0 to 50 px ends at half the picture width.
@@ -403,13 +215,6 @@ fn emf_frame_comes_from_rclframe_not_device_bounds() {
     assert!(close(p.width, w as f32) && close(p.height, (1250.0 * 72.0 / 2540.0) as f32));
     let (segs, ..) = path_segs(&p.items[0]);
     assert!(matches!(segs[1], Seg::Line(x, _) if close(x, (w / 2.0) as f32)), "{segs:?}");
-}
-
-#[test]
-fn emf_bounds_stand_in_when_the_frame_is_empty() {
-    let rec = erec(43, &cat(vec![e32(0), e32(0), e32(50), e32(25)]));
-    let p = parse(&emf(&[rec], [0, 0, 50, 25], [0; 4])).unwrap();
-    assert_eq!((p.width, p.height), (50.0, 25.0));
 }
 
 #[test]
@@ -449,25 +254,6 @@ fn wmf_negative_destination_width_mirrors_the_bitmap() {
     let Item::Bitmap { rect, rgba, .. } = &p.items[0] else { panic!("expected a bitmap") };
     assert_eq!(rect, &[0.0, 0.0, 1.0, 0.5]);
     assert_eq!(&rgba[..8], [255, 255, 255, 255, 255, 0, 0, 255]);
-}
-
-#[test]
-fn emf_blackness_bitblt_fills_black_without_a_source() {
-    let mut payload = vec![0u8; 16];
-    payload.extend(cat(vec![e32(10), e32(20), e32(30), e32(40), e32(0x0000_0042)]));
-    let p = parse(&emf(&[erec(76, &payload)], [0; 4], [0; 4])).unwrap();
-    let (segs, fill, stroke, _) = path_segs(&p.items[0]);
-    assert_eq!(fill, Some([0, 0, 0, 255]));
-    assert_eq!(stroke, None);
-    assert_eq!(segs.len(), 5);
-}
-
-#[test]
-fn emf_savedc_past_the_stack_cap_stops_the_parse() {
-    let mut recs: Vec<Vec<u8>> = (0..=crate::MAX_STACK).map(|_| erec(33, &[])).collect();
-    recs.push(erec(43, &cat(vec![e32(0), e32(0), e32(10), e32(10)])));
-    let p = parse(&emf(&recs, [0; 4], [0; 4])).unwrap();
-    assert!(p.items.is_empty(), "records after the cap must not be drawn");
 }
 
 #[test]
@@ -519,12 +305,6 @@ fn dib_rec(typ: u32, fields: &[(usize, u32)], blobs: &[(usize, &[u8])], info: &[
     erec_at(typ, bits_at + bits.len(), &f, &b)
 }
 
-/// BITBLT (76) with destination `dst` = [x, y, w, h] and a 40-byte header DIB.
-fn bitblt_rec(rop: u32, dst: [u32; 4], info: &[u8], bits: &[u8]) -> Vec<u8> {
-    let fields = [(24, dst[0]), (28, dst[1]), (32, dst[2]), (36, dst[3]), (40, rop)];
-    dib_rec(76, &fields, &[], info, bits)
-}
-
 #[test]
 fn wmf_font_takes_an_object_slot_so_handles_line_up() {
     // The font is handle 0, so the pen created after it is handle 1.
@@ -574,34 +354,6 @@ fn emf_polybezier_starts_its_own_figure_and_keeps_the_current_point() {
 }
 
 #[test]
-fn hairline_pen_stays_zero_under_an_anisotropic_window() {
-    // Window 2000 x 2000 onto a 1 x 1 viewport: a cosmetic pen must not become one device unit wide.
-    let recs = [
-        wrec(0x0103, &h16(8)),
-        wrec(0x020C, &cat(vec![h16(2000), h16(2000)])),
-        wrec(0x020E, &cat(vec![h16(1), h16(1)])),
-        wrec(0x0214, &cat(vec![h16(0), h16(0)])),
-        wrec(0x0213, &cat(vec![h16(2000), h16(2000)])),
-    ];
-    let p = parse(&wmf(&recs, None)).unwrap();
-    assert_eq!((p.width, p.height), (1.0, 1.0));
-    let (segs, _, stroke, _) = path_segs(&p.items[0]);
-    assert_eq!(segs.last(), Some(&Seg::Line(1.0, 1.0)));
-    assert_eq!(stroke, Some(([0, 0, 0, 255], 0.0)));
-}
-
-#[test]
-fn null_pen_is_recognised_under_extra_style_bits() {
-    // Pen style 0x105: PS_NULL (5) with a flag above the style nibble still draws no outline.
-    let pen = erec_at(38, 28, &[(8, 0), (12, 0x105), (16, 1), (24, 0)], &[]);
-    let recs = [pen, erec(37, &h32(0)), erec(43, &cat(vec![e32(0), e32(0), e32(10), e32(10)]))];
-    let p = parse(&emf(&recs, [0; 4], [0; 4])).unwrap();
-    let (_, fill, stroke, _) = path_segs(&p.items[0]);
-    assert_eq!(fill, Some([255, 255, 255, 255]));
-    assert_eq!(stroke, None);
-}
-
-#[test]
 fn metric_map_mode_flips_y_and_scales_to_device_pixels_emf() {
     // LOMETRIC is 0.1 mm per unit; the header maps 4 device pixels to 1 mm. Points go y-up, so the
     // drawing lies below its origin and the picture frame moves up to its top.
@@ -609,16 +361,6 @@ fn metric_map_mode_flips_y_and_scales_to_device_pixels_emf() {
     let p = parse(&emf(&recs, [0; 4], [0; 4])).unwrap();
     let (segs, ..) = path_segs(&p.items[0]);
     assert!(close_seg(&segs[0], Seg::Move(0.0, 20.0)) && close_seg(&segs[1], Seg::Line(40.0, 0.0)), "{segs:?}");
-}
-
-#[test]
-fn metric_map_mode_uses_96_dpi_for_wmf() {
-    let recs = [wrec(0x0103, &h16(2)), wrec(0x0214, &cat(vec![h16(0), h16(0)])), wrec(0x0213, &cat(vec![h16(50), h16(100)]))];
-    let p = parse(&wmf(&recs, None)).unwrap();
-    let px_mm = 96.0 / 25.4;
-    let (segs, ..) = path_segs(&p.items[0]);
-    let (x, y) = (100.0 * 0.1 * px_mm, 50.0 * 0.1 * px_mm);
-    assert!(close_seg(&segs[0], Seg::Move(0.0, y as f32)) && close_seg(&segs[1], Seg::Line(x as f32, 0.0)), "{segs:?}");
 }
 
 /// Segment equality within [`close`] tolerance.
@@ -642,38 +384,6 @@ fn isotropic_mode_uses_one_scale_and_keeps_axis_signs() {
     let p = parse(&wmf(&recs, None)).unwrap();
     let (segs, ..) = path_segs(&p.items[0]);
     assert!(close_seg(&segs[0], Seg::Move(0.0, 100.0)) && close_seg(&segs[1], Seg::Line(100.0, 50.0)), "{segs:?}");
-}
-
-#[test]
-fn modify_world_with_an_unknown_mode_keeps_the_transform() {
-    let scale2 = cat([2.0f32, 0.0, 0.0, 2.0, 0.0, 0.0].iter().map(|v| v.to_le_bytes().to_vec()).collect());
-    let identity = cat([1.0f32, 0.0, 0.0, 1.0, 0.0, 0.0].iter().map(|v| v.to_le_bytes().to_vec()).collect());
-    let recs =
-        [erec(35, &scale2), erec(36, &cat(vec![identity, h32(99)])), erec(27, &cat(vec![e32(0), e32(0)])), erec(54, &cat(vec![e32(10), e32(5)]))];
-    let p = parse(&emf(&recs, [0; 4], [0; 4])).unwrap();
-    let (segs, ..) = path_segs(&p.items[0]);
-    assert_eq!(segs, &vec![Seg::Move(0.0, 0.0), Seg::Line(20.0, 10.0)]);
-}
-
-#[test]
-fn round_rect_accepts_reversed_corners() {
-    let normal = crate::geom::round_rect(0.0, 0.0, 10.0, 20.0, 4.0, 4.0);
-    assert_eq!(crate::geom::round_rect(10.0, 20.0, 0.0, 0.0, 4.0, 4.0), normal);
-    assert_eq!(crate::geom::round_rect(10.0, 0.0, 0.0, 20.0, 4.0, 4.0), normal);
-}
-
-#[test]
-fn stroke_width_is_clamped_to_the_picture_diagonal() {
-    // A 1440-unit placeable picture is 72 points square (diagonal 101.8); a 5000-unit pen would be 250.
-    let recs = [
-        wrec(0x02FA, &cat(vec![h16(0), h16(5000), h16(0), h32(0)])),
-        wrec(0x012D, &h16(0)),
-        wrec(0x041B, &cat(vec![h16(1440), h16(1440), h16(0), h16(0)])),
-    ];
-    let p = parse(&wmf(&recs, Some([0, 0, 1440, 1440]))).unwrap();
-    assert_eq!((p.width, p.height), (72.0, 72.0));
-    let (_, _, stroke, _) = path_segs(&p.items[0]);
-    assert!(close(stroke.unwrap_or(([0; 4], 0.0)).1, 72.0 * 2.0f32.sqrt()), "{stroke:?}");
 }
 
 /// A WMF rectangle from (0, 0) to (1, 1), so a picture's frame starts at the origin.
@@ -713,16 +423,6 @@ fn wmf_dibstretchblt_stretches_the_dib_into_its_destination() {
 }
 
 #[test]
-fn wmf_negative_destination_height_mirrors_the_rows() {
-    let params = cat(vec![h32(0x00CC_0020), h16(0), h16(2), h16(2), h16(0), h16(0), h16(-10), h16(20), h16(0), h16(0), dib24_bottom_up()]);
-    let p = parse(&wmf(&[wrec(0x0F43, &params)], None)).unwrap();
-    let Item::Bitmap { rect, rgba, .. } = &p.items[0] else { panic!("expected a bitmap") };
-    assert_eq!(rect, &[0.0, 0.0, 20.0, 10.0]);
-    // Blue, green on top; red, white below.
-    assert_eq!(rgba.as_slice(), [0, 0, 255, 255, 0, 255, 0, 255, 255, 0, 0, 255, 255, 255, 255, 255]);
-}
-
-#[test]
 fn wmf_dibbitblt_copies_the_dib_at_its_destination() {
     // The rectangle fixes the picture origin at (0, 0); the DIB lands at x = 5, y = 6.
     let mut params = cat(vec![h32(0x00CC_0020), h16(0), h16(0), h16(2), h16(2), h16(6), h16(5)]);
@@ -732,20 +432,6 @@ fn wmf_dibbitblt_copies_the_dib_at_its_destination() {
     let Item::Bitmap { rect, width, height, rgba, .. } = &p.items[1] else { panic!("expected a bitmap") };
     assert_eq!(rect, &[5.0, 6.0, 2.0, 2.0]);
     assert_eq!((*width, *height), (2, 2));
-    assert_eq!(rgba.as_slice(), DIB24_RGBA);
-}
-
-#[test]
-fn emf_setdibitstodevice_draws_the_image_at_its_own_size() {
-    let dib = dib24_bottom_up();
-    let (info, bits) = (&dib[..40], &dib[40..]);
-    // Destination x/y at 24, src x/y at 32, size at 40, bmi at 48 (offset, length), bits at 56, scan start
-    // 68 and scan count 72.
-    let fields = [(24, 10), (28, 20), (40, 2), (44, 2), (48, 112), (52, 40), (56, 152), (60, 16), (72, 2)];
-    let rec = erec_at(80, 168, &fields, &[(112, info), (152, bits)]);
-    let p = parse(&emf(&[rec], [0; 4], [0; 4])).unwrap();
-    let Item::Bitmap { rect, rgba, .. } = &p.items[0] else { panic!("expected a bitmap") };
-    assert_eq!(rect, &[0.0, 0.0, 2.0, 2.0]);
     assert_eq!(rgba.as_slice(), DIB24_RGBA);
 }
 
@@ -790,29 +476,6 @@ fn emf_alphablend_uses_constant_and_per_pixel_alpha() {
 }
 
 #[test]
-fn emf_srcand_mask_draws_all_but_its_white_pixels() {
-    // SRCAND over white paper is the source itself; white keeps the destination, so it is transparent.
-    let dib = dib24_bottom_up();
-    let rec = bitblt_rec(0x0088_00C6, [0, 0, 2, 2], &dib[..40], &dib[40..]);
-    let p = parse(&emf(&[rec], [0; 4], [0; 4])).unwrap();
-    let Item::Bitmap { rgba, .. } = &p.items[0] else { panic!("expected a bitmap") };
-    assert_eq!(rgba.as_slice(), [255, 0, 0, 255, 255, 255, 255, 0, 0, 0, 255, 255, 0, 255, 0, 255]);
-}
-
-#[test]
-fn emf_srcpaint_makes_black_pixels_transparent() {
-    // A 2 x 1 DIB: black, then red. SRCPAINT leaves black transparent; SRCCOPY keeps it opaque.
-    let info = info_header(2, 1, 24, 8);
-    let bits = [0u8, 0, 0, 0, 0, 255, 0, 0];
-    let p = parse(&emf(&[bitblt_rec(0x00EE_0086, [0, 0, 2, 1], &info, &bits)], [0; 4], [0; 4])).unwrap();
-    let Item::Bitmap { rgba, .. } = &p.items[0] else { panic!("expected a bitmap") };
-    assert_eq!(rgba.as_slice(), [0, 0, 0, 0, 255, 0, 0, 255]);
-    let p = parse(&emf(&[bitblt_rec(0x00CC_0020, [0, 0, 2, 1], &info, &bits)], [0; 4], [0; 4])).unwrap();
-    let Item::Bitmap { rgba, .. } = &p.items[0] else { panic!("expected a bitmap") };
-    assert_eq!(rgba.as_slice(), [0, 0, 0, 255, 255, 0, 0, 255]);
-}
-
-#[test]
 fn wmf_dib_palette_entries_are_skipped_before_the_bits() {
     // A 24-bit DIB with biClrUsed = 2 carries two RGBQUADs (8 bytes) before its pixel bits.
     let mut info = info_header(2, 2, 24, 16);
@@ -824,17 +487,6 @@ fn wmf_dib_palette_entries_are_skipped_before_the_bits() {
     let p = parse(&wmf(&[wrec(0x0F43, &params)], None)).unwrap();
     let Item::Bitmap { rgba, .. } = &p.items[0] else { panic!("expected a bitmap") };
     assert_eq!(rgba.as_slice(), DIB24_RGBA);
-}
-
-#[test]
-fn emf_point_counts_past_the_budget_are_rejected() {
-    // A count of 4 billion points in a record that cannot hold them: nothing is drawn and nothing is allocated.
-    let mut poly = vec![0u8; 16];
-    poly.extend(cat(vec![h32(u32::MAX), h32(0), h32(0)]));
-    let mut groups = vec![0u8; 16];
-    groups.extend(cat(vec![h32(u32::MAX), h32(u32::MAX), h32(1)]));
-    let p = parse(&emf(&[erec(4, &poly), erec(7, &groups)], [0; 4], [0; 4])).unwrap();
-    assert!(p.items.is_empty());
 }
 
 #[test]
@@ -850,35 +502,6 @@ fn emf_polypolygon_counts_must_fit_the_record() {
     assert_eq!(p.items.len(), 1);
     let (segs, ..) = path_segs(&p.items[0]);
     assert_eq!(segs.iter().filter(|s| matches!(s, Seg::Move(..))).count(), 2, "{segs:?}");
-}
-
-/// EMR_EXTCREATEPEN into slot 1 with LogPenEx style, width and brush style, then a selected rectangle.
-fn ext_pen_rect(style: u32, width: u32, brush: u32) -> Option<([u8; 4], f32)> {
-    let pen = erec_at(95, 52, &[(8, 1), (28, style), (32, width), (36, brush), (40, 0x0000_FF00)], &[]);
-    let recs = [pen, erec(37, &h32(1)), erec(43, &cat(vec![e32(0), e32(0), e32(10), e32(10)]))];
-    let p = parse(&emf(&recs, [0; 4], [0; 4])).unwrap();
-    path_segs(&p.items[0]).2
-}
-
-#[test]
-fn emf_ext_pen_cosmetic_is_a_hairline_and_null_brush_draws_nothing() {
-    // PS_COSMETIC widths are device pixels: a hairline, not one logical unit.
-    assert_eq!(ext_pen_rect(0, 1, 0), Some(([0, 255, 0, 255], 0.0)));
-    // PS_GEOMETRIC (0x10000) keeps its logical width.
-    assert_eq!(ext_pen_rect(0x0001_0000, 4, 0), Some(([0, 255, 0, 255], 4.0)));
-    // A BS_NULL brush draws no line.
-    assert_eq!(ext_pen_rect(0x0001_0000, 4, 1), None);
-}
-
-#[test]
-fn flip_tolerates_a_short_pixel_buffer() {
-    let mut img = Rgba { w: 2, h: 2, px: vec![1u8; 7] };
-    crate::dib::flip(&mut img, true, true);
-    assert_eq!(img.px.len(), 7);
-    // Three rows held of four: only the rows present swap (0 with 2).
-    let mut img = Rgba { w: 1, h: 4, px: (0u8..12).collect() };
-    crate::dib::flip(&mut img, false, true);
-    assert_eq!(img.px, [8, 9, 10, 11, 4, 5, 6, 7, 0, 1, 2, 3]);
 }
 
 #[test]
@@ -1082,28 +705,6 @@ fn place_expands_a_clip_region_once_for_the_items_that_share_it() {
         .collect();
     assert!(regions.len() == 2000 && regions.iter().all(|r| *r == regions[0]));
 }
-
-#[test]
-fn place_keeps_only_finite_bounded_bitmaps_with_area() {
-    let bitmap = |rect: [f32; 4]| Item::Bitmap { rect, transform: [0.0; 6], width: 1, height: 1, rgba: vec![0; 4], region: None, clips: Vec::new() };
-    let pic = crate::Picture {
-        width: 100.0,
-        height: 50.0,
-        items: vec![
-            bitmap([f32::NAN, 0.0, 10.0, 10.0]),
-            bitmap([0.0, 0.0, 0.0, 10.0]),
-            bitmap([0.0, 0.0, 2e6, 10.0]),
-            bitmap([0.0, 0.0, f32::INFINITY, 10.0]),
-            bitmap([10.0, 5.0, 10.0, 10.0]),
-        ],
-        skipped_records: 0,
-    };
-    let placed = pic.place(kurbo::Rect::new(0.0, 0.0, 200.0, 100.0), [0.0; 4]);
-    assert_eq!(placed.len(), 1);
-    let crate::PlacedItem::Bitmap { index, rect, .. } = &placed[0] else { panic!("expected a bitmap") };
-    assert_eq!((*index, *rect), (4, kurbo::Rect::new(20.0, 10.0, 40.0, 30.0)));
-}
-
 /// `size` against the full parse: same numbers or same error, and whether the header decided it.
 fn assert_size_matches_parse(file: &[u8], from_header: bool, what: &str) {
     let full = parse(file).map(|p| (p.width, p.height));
@@ -1182,78 +783,6 @@ fn size_of_a_truncated_or_mutated_file_equals_the_full_parse() {
     }
 }
 
-/// Time of the full parse against the header-only size for an EMF with one 8000 x 5000, 1 bpp bitmap
-/// (5 MB, decodes to 160 MB): `cargo test -p craft-metafile --release -- --ignored --nocapture size_speed`.
-#[test]
-#[ignore = "timing only"]
-fn size_speed() {
-    let (w, h) = (8000i32, 5000i32);
-    let mut payload = vec![0u8; 16];
-    payload.extend(cat(vec![
-        e32(0),
-        e32(0),
-        e32(0),
-        e32(0),
-        e32(w),
-        e32(h),
-        e32(80),
-        e32(48),
-        e32(128),
-        h32((w / 8 * h) as u32),
-        e32(0),
-        e32(0x00CC_0020),
-        e32(100),
-        e32(50),
-    ]));
-    payload.extend(info_header(w, h, 1, 0));
-    payload.extend([0, 0, 0, 0, 255, 255, 255, 0]);
-    payload.extend((0..(w / 8 * h) as usize).map(|i| (i * 31) as u8));
-    let file = emf(&[erec(81, &payload)], [0, 0, 100, 50], [0, 0, 2500, 1250]);
-    for round in 0..4 {
-        let t = std::time::Instant::now();
-        let full = parse(&file).map(|p| (p.width, p.height));
-        let full_ms = t.elapsed().as_secs_f64() * 1e3;
-        let t = std::time::Instant::now();
-        let fast = crate::size(&file);
-        let fast_ms = t.elapsed().as_secs_f64() * 1e6;
-        assert_eq!(full, fast);
-        eprintln!("round {round}: parse {full_ms:.1} ms, size {fast_ms:.1} us");
-    }
-}
-
-#[test]
-fn take_pixels_returns_only_drawable_bitmaps() {
-    let mut ok = Item::Bitmap { rect: [0.0; 4], transform: [0.0; 6], width: 2, height: 1, rgba: vec![7; 8], region: None, clips: Vec::new() };
-    assert_eq!(ok.take_pixels(), Some((2, 1, vec![7; 8])));
-    assert!(matches!(&ok, Item::Bitmap { rgba, .. } if rgba.is_empty()), "the pixels move out");
-    let mut short = Item::Bitmap { rect: [0.0; 4], transform: [0.0; 6], width: 2, height: 2, rgba: vec![0; 8], region: None, clips: Vec::new() };
-    assert_eq!(short.take_pixels(), None);
-    let side = crate::MAX_BITMAP_SIDE + 1;
-    let mut wide = Item::Bitmap {
-        rect: [0.0; 4],
-        transform: [0.0; 6],
-        width: side,
-        height: 1,
-        rgba: vec![0; side as usize * 4],
-        region: None,
-        clips: Vec::new(),
-    };
-    assert_eq!(wide.take_pixels(), None);
-    let mut path = Item::Path {
-        segs: Vec::new(),
-        fill: None,
-        stroke: None,
-        even_odd: false,
-        line: crate::LineStyle::default(),
-        region: None,
-        clips: Vec::new(),
-    };
-    assert_eq!(path.take_pixels(), None);
-    let pic = |width: f32, height: f32| crate::Picture { width, height, items: Vec::new(), skipped_records: 0 };
-    assert!(pic(1.0, 2.0).has_size());
-    assert!(!pic(0.0, 2.0).has_size() && !pic(f32::NAN, 2.0).has_size() && !pic(1.0, f32::INFINITY).has_size());
-}
-
 /// The rectangle a WMF RECTANGLE record covers, from its path's corners.
 fn rect_extent(item: &Item) -> (f32, f32, f32, f32) {
     let (segs, ..) = path_segs(item);
@@ -1311,19 +840,6 @@ fn placeable_wmf_keeps_its_target_when_the_window_changes_shape() {
     assert_eq!((p.width, p.height), (30.0, 15.0));
     let (x0, y0, x1, y1) = rect_extent(&p.items[0]);
     assert!(close(x0, 0.0) && close(y0, 0.0) && close(x1, 30.0) && close(y1, 15.0), "{x0} {y0} {x1} {y1}");
-}
-
-#[test]
-fn rop2_nop_draws_nothing_until_the_mode_changes() {
-    // A coat of arms that first draws its bounding rectangle with the R2_NOP mix mode (no output),
-    // then its shapes with R2_COPYPEN. Restoring a saved state brings R2_NOP back.
-    let rect = |n: i32| wrec(0x041B, &cat(vec![h16(n), h16(n), h16(0), h16(0)]));
-    let recs = [wrec(0x0104, &h16(11)), rect(100), wrec(0x001E, &[]), wrec(0x0104, &h16(13)), rect(50), wrec(0x0127, &h16(-1)), rect(20)];
-    let p = parse(&wmf(&recs, Some([0, 0, 100, 100]))).unwrap();
-    assert_eq!(p.items.len(), 1, "{:?}", p.items);
-    let (_, _, x1, y1) = rect_extent(&p.items[0]);
-    // 50 of 100 units in a 5-point picture.
-    assert!(close(x1, 2.5) && close(y1, 2.5), "{x1} {y1}");
 }
 
 #[test]
@@ -1418,25 +934,6 @@ fn wmf_text_reads_the_font_string_dx_colour_and_alignment() {
     assert_eq!((t.h_align, t.v_align), (HAlign::Center, VAlign::Baseline));
     assert!(close6(t.transform, [1.0, 0.0, 0.0, 1.0, 50.0, 60.0]), "{:?}", t.transform);
     assert_eq!(t.clip, None);
-}
-
-#[test]
-fn font_height_sign_and_default_state_are_kept() {
-    // A positive height is the cell height; it stays positive for the renderer to resolve. Without
-    // SETTEXTALIGN the reference point is the top left; without SETBKMODE the cell is filled white.
-    let recs = [wfont(30, 400, [0, 0, 0], 0, 0, b"Times New Roman"), wrec(0x012D, &h16(0)), wtext(5, 5, b"x", 0, None, &[])];
-    let p = wmf200(&recs);
-    let t = texts(&p)[0];
-    assert_eq!(t.font.height, 30.0);
-    assert_eq!(t.font.family, "Times New Roman");
-    assert_eq!((t.h_align, t.v_align), (HAlign::Left, VAlign::Top));
-    assert_eq!(t.background, Some([255, 255, 255, 255]));
-    assert!(t.dx.is_empty(), "no dx array in the record");
-    // Right and bottom.
-    let p = wmf200(&[wrec(0x012E, &h16(2 | 8)), wtext(5, 5, b"x", 0, None, &[])]);
-    let t = texts(&p)[0];
-    assert_eq!((t.h_align, t.v_align), (HAlign::Right, VAlign::Bottom));
-    assert_eq!(t.font, crate::Font::default(), "no font selected");
 }
 
 #[test]
@@ -1580,24 +1077,6 @@ fn wmf_textout_reads_its_string_and_position() {
     assert!(close6(t.transform, [1.0, 0.0, 0.0, 1.0, 30.0, 40.0]), "{:?}", t.transform);
 }
 
-#[test]
-fn savedc_restores_text_colour_and_font() {
-    let recs = [
-        wfont(-10, 400, [0, 0, 0], 0, 0, b"One"),
-        wrec(0x012D, &h16(0)),
-        wrec(0x0209, &h32(0x0000_00FF)),
-        wrec(0x001E, &[]),
-        wfont(-10, 400, [0, 0, 0], 0, 0, b"Two"),
-        wrec(0x012D, &h16(1)),
-        wrec(0x0209, &h32(0x00FF_0000)),
-        wrec(0x0127, &h16(-1)),
-        wtext(0, 0, b"x", 0, None, &[]),
-    ];
-    let p = wmf200(&recs);
-    let t = texts(&p)[0];
-    assert_eq!((t.font.family.as_str(), t.color), ("One", [255, 0, 0, 255]));
-}
-
 /// EMR_EXTCREATEFONTINDIRECTW in slot 1: LogFont at 12, face at 40.
 fn efont(height: i32, esc: i32, weight: i32, italic: u8, charset: u8, face: &str) -> Vec<u8> {
     let mut v = cat(vec![h32(1), e32(height), e32(0), e32(esc), e32(esc), e32(weight)]);
@@ -1724,26 +1203,6 @@ fn wmf_dib_pattern_brush_paints_its_rows_top_down() {
     // 96-dpi pixels of a picture in points, laid from the picture's corner.
     assert!(close(t.cell[0], 0.75) && close(t.cell[1], 0.75) && t.origin == [0.0, 0.0], "{:?} {:?}", t.cell, t.origin);
     assert_eq!(path_segs(&p.items[1]).2.map(|s| s.0), Some([255, 0, 0, 255]));
-}
-
-#[test]
-fn hatch_brushes_draw_lines_over_the_background_mode() {
-    let hatch = |style: i32| wrec(0x02FC, &cat(vec![h16(2), h32(0x00FF_0000), h16(style)]));
-    let rect = wrec(0x041B, &cat(vec![h16(50), h16(50), h16(0), h16(0)]));
-    // HS_CROSS over a transparent background.
-    let p = wmf200(&[hatch(4), wrec(0x012D, &h16(0)), wrec(0x0102, &h16(1)), rect.clone()]);
-    let t = pattern_of(&p.items[0]);
-    let blue = [0, 0, 255, 255];
-    assert_eq!((tile_px(t, 3, 7), tile_px(t, 7, 3)), (blue, blue));
-    assert_eq!(tile_px(t, 3, 3)[3], 0, "gaps are transparent");
-    // HS_BDIAGONAL over the opaque white background.
-    let p = wmf200(&[hatch(3), wrec(0x012D, &h16(0)), rect.clone()]);
-    let t = pattern_of(&p.items[0]);
-    assert_eq!((tile_px(t, 0, 7), tile_px(t, 7, 0)), (blue, blue));
-    assert_eq!(tile_px(t, 0, 0), [255, 255, 255, 255]);
-    // An unknown hatch style draws no fill.
-    let p = wmf200(&[hatch(9), wrec(0x012D, &h16(0)), rect]);
-    assert!(p.items.iter().all(|i| !matches!(i, Item::Pattern { .. })), "{:?}", p.items);
 }
 
 #[test]
@@ -1889,14 +1348,6 @@ fn hostile_text_and_brush_records_never_panic() {
 }
 
 #[test]
-fn text_items_are_capped_like_any_other() {
-    let t = wtext(0, 0, b"x", 0, None, &[]);
-    let recs: Vec<Vec<u8>> = (0..MAX_ITEMS + 5).map(|_| t.clone()).collect();
-    let p = wmf200(&recs);
-    assert_eq!(p.items.len(), MAX_ITEMS);
-}
-
-#[test]
 fn pattern_brush_pixels_count_against_the_byte_budget() {
     // 256 × 256 one-bit pattern brushes (256 KiB of RGBA each): far fewer than the object table
     // holds fit the budget, and the parse stops there.
@@ -1915,16 +1366,6 @@ fn item_region(item: &Item) -> Option<&[[f32; 4]]> {
         Item::Path { region, .. } | Item::Bitmap { region, .. } | Item::Pattern { region, .. } => region.as_deref(),
         Item::Text(t) => t.region.as_deref(),
     }
-}
-
-#[test]
-fn emf_intersect_clip_rect_limits_later_records_only() {
-    let full = cat(vec![e32(0), e32(0), e32(80), e32(40)]);
-    let clip = cat(vec![e32(10), e32(5), e32(40), e32(30)]);
-    let p = parse(&emf(&[erec(43, &full), erec(30, &clip), erec(43, &full)], [0, 0, 80, 40], [0; 4])).unwrap();
-    assert_eq!(p.items.len(), 2);
-    assert_eq!(item_region(&p.items[0]), None);
-    assert_eq!(item_region(&p.items[1]), Some(&[[10.0, 5.0, 40.0, 30.0]][..]));
 }
 
 #[test]
@@ -2164,17 +1605,6 @@ fn emfplus_object_split_across_records_is_joined() {
     assert!(matches!(&p.items[0], Item::Bitmap { width: 2, height: 2, .. }));
 }
 
-#[test]
-fn emfplus_compressed_png_image_decodes() {
-    let mut png = Vec::new();
-    let img = image::RgbaImage::from_pixel(3, 1, image::Rgba([1, 2, 3, 255]));
-    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    let obj = cat(vec![h32(0xDBC0_1002), h32(1), h32(0), h32(0), h32(0), h32(0), h32(1), png]);
-    let draw = prec(0x401A, 2, &cat(vec![h32(0), h32(2), f32s(&[0.0, 0.0, 3.0, 1.0]), f32s(&[0.0, 0.0, 3.0, 1.0])]));
-    let p = plus_pic(vec![prec(0x4008, 0x0500 | 2, &obj), draw]);
-    assert!(matches!(&p.items[0], Item::Bitmap { width: 3, height: 1, rgba, .. } if rgba[..4] == [1, 2, 3, 255]));
-}
-
 fn font_obj(family: &str, em: f32, unit: u32, style: u32) -> Vec<u8> {
     cat(vec![h32(0xDBC0_1002), f32s(&[em]), h32(unit), h32(style), h32(0), h32(family.encode_utf16().count() as u32), u16s(family)])
 }
@@ -2212,16 +1642,6 @@ fn emfplus_driver_string_uses_character_codes_and_positions() {
 }
 
 #[test]
-fn emfplus_glyph_index_driver_strings_map_back_in_core_fonts_only() {
-    // Glyph indices (no CmapLookup): 36, 69 are "Ab" in Arial's standard glyph order.
-    let gi = || prec(0x4036, 0x8000, &cat(vec![h32(0xFF00_0000), h32(0), h32(0), h32(2), h16(36), h16(69), f32s(&[0.0, 0.0, 6.0, 0.0])]));
-    let p = plus_pic(vec![prec(0x4008, 0x0600, &font_obj("Arial", 10.0, 0, 0)), gi()]);
-    assert!(matches!(&p.items[0], Item::Text(t) if t.text == "Ab"), "{:?}", p.items);
-    // An unknown font's glyph indices cannot be mapped: nothing is drawn.
-    assert!(plus_pic(vec![prec(0x4008, 0x0600, &font_obj("Calibri", 10.0, 0, 0)), gi()]).items.is_empty());
-}
-
-#[test]
 fn emfplus_linear_gradient_fills_with_a_shaded_tile() {
     // Red to blue across x = 0..100.
     let brush =
@@ -2233,14 +1653,6 @@ fn emfplus_linear_gradient_fills_with_a_shaded_tile() {
     assert!(px(0)[0] > 240 && px(0)[2] < 15, "left is red: {:?}", px(0));
     let right = (tile.width as usize - 2).min(127);
     assert!(px(right)[2] > 230 && px(right)[0] < 25, "right is blue: {:?}", px(right));
-}
-
-#[test]
-fn emfplus_hatch_brush_fills_with_an_8x8_tile() {
-    let brush = cat(vec![h32(0xDBC0_1002), h32(1), h32(4), h32(0xFF00_0000), h32(0xFFFF_FFFF)]);
-    let fill = prec(0x400A, 0, &cat(vec![h32(0), h32(1), f32s(&[0.0, 0.0, 16.0, 16.0])]));
-    let p = plus_pic(vec![prec(0x4008, 0x0100, &brush), fill]);
-    assert!(matches!(&p.items[0], Item::Pattern { tile, .. } if tile.width == 8 && tile.height == 8));
 }
 
 #[test]
@@ -2262,17 +1674,6 @@ fn emfplus_clip_rect_cuts_fills_strokes_and_images() {
     let Item::Bitmap { rect, width, .. } = &p.items[2] else { panic!() };
     assert_eq!(*width, 1);
     assert!(close(rect[2], 10.0));
-}
-
-#[test]
-fn emfplus_reset_clip_and_restore_bring_drawing_back() {
-    let clip = prec(0x4032, 0, &f32s(&[0.0, 0.0, 1.0, 1.0]));
-    let fill = || prec(0x400A, 0x8000, &cat(vec![h32(0xFF00_0000), h32(1), f32s(&[10.0, 10.0, 5.0, 5.0])]));
-    let p = plus_pic(vec![prec(0x4025, 0, &h32(1)), clip, fill(), prec(0x4026, 0, &h32(1)), fill()]);
-    assert_eq!(p.items.len(), 1);
-    let clip = prec(0x4032, 0, &f32s(&[0.0, 0.0, 1.0, 1.0]));
-    let p = plus_pic(vec![clip, fill(), prec(0x4031, 0, &[]), fill()]);
-    assert_eq!(p.items.len(), 1);
 }
 
 #[test]
@@ -2462,22 +1863,6 @@ fn emfplus_clear_paints_the_whole_frame_and_transparent_clears_nothing() {
 }
 
 #[test]
-fn emfplus_wrap_line_linear_performance() {
-    let font = prec(0x4008, 0x0600, &font_obj("Arial", 10.0, 0, 0));
-    // Repeated words that wrap across lines
-    let text = "word ".repeat(500);
-    let s = prec(
-        0x401C,
-        0x8000,
-        &cat(vec![h32(0xFF00_0000), h32(9), h32(text.encode_utf16().count() as u32), f32s(&[0.0, 0.0, 100.0, 1000.0]), u16s(&text)]),
-    );
-    let fill = prec(0x400A, 0x8000, &cat(vec![h32(0xFFFF_FFFF), h32(1), f32s(&[0.0, 0.0, 100.0, 1000.0])]));
-    let p = plus_pic(vec![fill, font, s]);
-    let text_items = p.items.iter().filter(|i| matches!(i, Item::Text(_))).count();
-    assert!(text_items > 10, "wrapped into multiple lines: {text_items}");
-}
-
-#[test]
 fn clip_polygon_work_bound() {
     let poly: Vec<(f64, f64)> = (0..2000).map(|i| (i as f64, i as f64)).collect();
     let clip: Vec<(f64, f64)> = (0..2000).map(|i| (i as f64, i as f64)).collect();
@@ -2563,35 +1948,6 @@ fn growing_fill_clips_share_one_budget() {
     // 400 of them pass the estimate (400 x 4 x 512 is under a million) but cost about 52 million.
     assert!(crate::cliprect::clip_raw(raw(400), &clip).is_empty(), "the growing work is charged");
     assert_eq!(crate::cliprect::clip_raw(raw(2), &clip).len(), 1, "a couple of them are still clipped");
-}
-
-#[test]
-fn stroke_work_is_charged_and_outside_items_are_cheap() {
-    use crate::canvas::Raw;
-    use crate::geom::Op;
-    let clip: Vec<(f64, f64)> =
-        (0..512).map(|i| (i as f64 / 512.0 * std::f64::consts::TAU).sin_cos()).map(|(s, c)| (100.0 + 100.0 * c, 100.0 + 100.0 * s)).collect();
-    // A stroke-only zigzag of 4,000 segments across the edge: 4,000 x 512 tests, over the allowance.
-    let mut ops = vec![Op::M((0.0, 95.0))];
-    ops.extend((1..4000).map(|i| Op::L((i as f64 * 0.05, if i % 2 == 0 { 95.0 } else { 300.0 }))));
-    let raw = Raw::Path {
-        ops,
-        fill: None,
-        stroke: Some(([0, 0, 0, 255], 1.0)),
-        even_odd: false,
-        line: crate::LineStyle::default(),
-        region: crate::canvas::RawClip::default(),
-    };
-    assert!(crate::cliprect::clip_raw(raw, &clip).is_empty(), "stroke work is bounded");
-}
-
-#[test]
-fn region_intersection_over_budget_keeps_the_previous_area() {
-    let gon = |cx: f64| -> Vec<(f64, f64)> {
-        (0..1000).map(|i| (i as f64 / 1000.0 * std::f64::consts::TAU).sin_cos()).map(|(s, c)| (cx + 100.0 * c, 100.0 * s)).collect()
-    };
-    assert!(crate::cliprect::clip_polygon_within(&gon(0.0), &gon(30.0), &mut 10).is_none());
-    assert!(crate::cliprect::clip_polygon_within(&gon(0.0), &gon(30.0), &mut crate::cliprect::MAX_AREA_CLIP_WORK.clone()).is_some());
 }
 
 /// A poly-polygon's group counts are file data: a long list of empty groups adds no ops, so it

@@ -20,7 +20,9 @@ use crate::isobmff::bytes::{BoxBuf, Cur};
 /// when writing, [`crate::isobmff::Mp4File::timescale`] when reading), `title` UTF-8.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Chapter {
+    /// Start of the chapter, in the movie timescale.
     pub start: u64,
+    /// The chapter's title.
     pub title: String,
 }
 
@@ -171,69 +173,4 @@ fn decode_title(t: &[u8]) -> Option<String> {
     }
     // trailing atoms (`encd`, `styl` …) are not part of the text
     Some(String::from_utf8_lossy(t).into_owned())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn ch(start: u64, title: &str) -> Chapter {
-        Chapter { start, title: title.into() }
-    }
-
-    #[test]
-    fn normalize_sorts_dedups_drops_and_caps() {
-        let v = normalize_chapters(&[ch(500, "b"), ch(0, "a"), ch(500, "dup"), ch(2000, "past end"), ch(1999, "\tend\n")], Some(2000));
-        assert_eq!(v, vec![ch(0, "a"), ch(500, "b"), ch(1999, "end")]);
-        let many: Vec<Chapter> = (0..1000).map(|i| ch(i, "x")).collect();
-        assert_eq!(normalize_chapters(&many, None).len(), MAX_CHAPTERS);
-        let long = "é".repeat(300);
-        let t = &normalize_chapters(&[ch(0, &long)], None)[0].title;
-        assert!(t.len() <= MAX_CHAPTER_TITLE_BYTES && t.chars().all(|c| c == 'é'));
-        assert!(normalize_chapters(&[ch(0, "a")], Some(0)).is_empty());
-    }
-
-    #[test]
-    fn chpl_roundtrip() {
-        let chapters = vec![ch(0, "Intro"), ch(1500, "Teil 2 — ü"), ch(u64::MAX, "far")];
-        let mut b = BoxBuf::new();
-        write_chpl(&mut b, &chapters, 1000);
-        // box header (8) + version/flags (4) + reserved (4) + count (1)
-        assert_eq!(&b.buf[4..8], b"chpl");
-        assert_eq!(b.buf[8], 1);
-        assert_eq!(b.buf[16], 3);
-        assert_eq!(u64::from_be_bytes(b.buf[17..25].try_into().unwrap()), 0);
-        assert_eq!(u64::from_be_bytes(b.buf[31..39].try_into().unwrap()), 15_000_000);
-        let back = parse_chpl(&b.buf[8..], 1000);
-        assert_eq!(back[..2], chapters[..2]);
-        assert_eq!(back.len(), 3);
-    }
-
-    #[test]
-    fn chpl_parse_survives_garbage() {
-        let mut b = BoxBuf::new();
-        write_chpl(&mut b, &[ch(0, "a"), ch(10, "bb")], 1000);
-        let p = b.buf[8..].to_vec();
-        for cut in 0..p.len() {
-            let _ = parse_chpl(&p[..cut], 1000);
-        }
-        let mut lying = p.clone();
-        lying[8] = 255; // count says 255
-        assert_eq!(parse_chpl(&lying, 1000).len(), 2);
-        assert!(parse_chpl(&p, 0).iter().all(|c| c.start == 0));
-    }
-
-    #[test]
-    fn text_sample_roundtrip() {
-        let s = text_sample("Kapitel “1”");
-        assert_eq!(parse_text_sample(&s).as_deref(), Some("Kapitel “1”"));
-        assert_eq!(&s[s.len() - 12..s.len() - 4], &[0, 0, 0, 12, b'e', b'n', b'c', b'd']);
-        assert_eq!(parse_text_sample(&[0, 4, 0xFE, 0xFF, 0, b'A']).as_deref(), Some("A"));
-        assert_eq!(parse_text_sample(&[0, 9, b'a']), None);
-        assert_eq!(parse_text_sample(&[]), None);
-        // The start of a longer sample: what it holds of the title, and no further than the title.
-        assert_eq!(parse_text_sample_prefix(&[0, 9, b'a']).as_deref(), Some("a"));
-        assert_eq!(parse_text_sample_prefix(&[0, 1, b'a', b'b']).as_deref(), Some("a"));
-        assert_eq!(parse_text_sample_prefix(&[0]), None);
-    }
 }

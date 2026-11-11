@@ -182,14 +182,14 @@ const ENCODED: &[Encoded] = &[
 ];
 
 fn tool(name: &str) -> Option<PathBuf> {
-    crate::testkit::oracle::find_tool(name)
+    crate::integration::codecs::testkit::oracle::find_tool(name)
 }
 
 fn make_encoded(ff: &Path, s: &Encoded) -> Option<PathBuf> {
-    let out = crate::testkit::fixtures_dir("mpa").join(format!("{}.mp2", s.name));
+    let out = crate::integration::codecs::testkit::fixtures_dir("mpa").join(format!("{}.mp2", s.name));
     if s.twolame {
         let twolame = tool("twolame")?;
-        return crate::testkit::fixtures::generate(&out, |tmp| {
+        return crate::integration::codecs::testkit::fixtures::generate(&out, |tmp| {
             let wav = tmp.with_extension("wav");
             let made = Command::new(ff)
                 .args([
@@ -215,7 +215,7 @@ fn make_encoded(ff: &Path, s: &Encoded) -> Option<PathBuf> {
             made
         });
     }
-    crate::testkit::fixtures::generate(&out, |tmp| {
+    crate::integration::codecs::testkit::fixtures::generate(&out, |tmp| {
         Command::new(ff)
             .args(["-hide_banner", "-v", "error", "-y", "-f", "lavfi", "-i", s.input, "-t", "1", "-c:a", "mp2"])
             .args(s.enc)
@@ -523,8 +523,8 @@ const SYNTHETIC: &[(&str, u8, bool, u8, u8, u8, u8)] = &[
 fn synthetic_streams_match_ffmpeg() {
     let ff = require_ffmpeg!();
     for (k, &(name, layer, lsf, br, sr, mode, ext)) in SYNTHETIC.iter().enumerate() {
-        let out = crate::testkit::fixtures_dir("mpa").join(format!("{name}.mp{layer}"));
-        let f = crate::testkit::fixtures::generate(&out, |tmp| {
+        let out = crate::integration::codecs::testkit::fixtures_dir("mpa").join(format!("{name}.mp{layer}"));
+        let f = crate::integration::codecs::testkit::fixtures::generate(&out, |tmp| {
             let mut rng = Rng(0x9E37_79B9 ^ k as u32);
             let h = header(lsf, layer, br, sr, mode, ext);
             let data: Vec<u8> = (0..40).flat_map(|_| if layer == 1 { random_layer1(&mut rng, h) } else { random_layer2(&mut rng, h) }).collect();
@@ -578,9 +578,9 @@ fn damaged_frames_never_panic() {
 #[test]
 #[ignore]
 fn generate_fixtures() {
-    let Some(ff) = crate::testkit::ffmpeg_or_skip("mpa fixtures") else { return };
+    let Some(ff) = crate::integration::codecs::testkit::ffmpeg_or_skip("mpa fixtures") else { return };
     for s in ENCODED {
-        let out = crate::testkit::fixtures_dir("mpa").join(format!("{}.mp2", s.name));
-        crate::testkit::fixtures::generate_and_report(&format!("mpa/{}", s.name), &[out], || make_encoded(&ff, s));
+        let out = crate::integration::codecs::testkit::fixtures_dir("mpa").join(format!("{}.mp2", s.name));
+        crate::integration::codecs::testkit::fixtures::generate_and_report(&format!("mpa/{}", s.name), &[out], || make_encoded(&ff, s));
     }
 }

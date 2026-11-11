@@ -110,14 +110,6 @@ mod tests {
     }
 
     #[test]
-    fn a_spot_appearance_runs_from_paper_to_its_solid() {
-        const GOLD: [u8; 3] = [212, 175, 55];
-        let ramp = super::appearance(crate::Alternate::Lab(srgb8_to_lab(GOLD).unwrap()), &CmsConversion::fogra39()).unwrap();
-        assert_eq!(ramp.len(), 256);
-        assert!(near(&ramp[0], [255, 255, 255], 1) && near(&ramp[255], GOLD, 2), "{:?} {:?}", ramp[0], ramp[255]);
-    }
-
-    #[test]
     fn a_black_and_gold_composite_multiplies_gold_over_black() {
         const GOLD: [u8; 3] = [212, 175, 55];
         let lab = srgb8_to_lab(GOLD).unwrap();
@@ -141,15 +133,5 @@ mod tests {
         assert!(near(&no_black[6..9], GOLD, 2));
         let no_gold = p.composite(&[true, true, true, true, false], &cms);
         assert_eq!(&no_gold[6..9], black);
-    }
-
-    #[test]
-    fn plates_too_large_to_hold_give_empty_results() {
-        let p = crate::Plates { width: u32::MAX, height: u32::MAX, ..synthetic(0, 0, [50.0, 0.0, 0.0], Default::default()) };
-        assert!(p.composite(&[], &CmsConversion::fogra39()).is_empty());
-        assert!(p.tac(&[]).is_empty());
-        assert_eq!(p.stats(&[]).max_total_at, None);
-        assert!(p.above(10.0, &[]).regions().is_empty());
-        assert_eq!(p.tint(crate::InkId::process(crate::Process::Black), u32::MAX - 1, u32::MAX - 1), None);
     }
 }

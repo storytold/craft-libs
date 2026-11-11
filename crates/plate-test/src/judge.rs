@@ -14,10 +14,13 @@ use crate::tiff::Plate;
 /// Below this much ink on the glyph plate a text region counts as empty.
 const TEXT_MIN_INK: f32 = 20.0;
 
+/// Outcome of judging one sample point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Verdict {
+    #[allow(missing_docs)]
     Pass,
+    #[allow(missing_docs)]
     Fail,
     /// Measured, not judged.
     Info,
@@ -25,15 +28,22 @@ pub enum Verdict {
     Skipped,
 }
 
+/// The measurement and verdict for one [`SamplePoint`].
 #[derive(Debug, Clone, Serialize)]
 pub struct PointResult {
+    #[allow(missing_docs)]
     pub at: [f32; 2],
+    #[allow(missing_docs)]
     pub kind: PointKind,
+    #[allow(missing_docs)]
     pub note: Option<String>,
+    /// Expected ink per plate name.
     pub expected: BTreeMap<String, Level>,
+    /// Allowed difference in ink percentage points.
     pub tol: f32,
     /// Ink percentage per plate, rounded to 0.1; every expected and every separated plate.
     pub measured: BTreeMap<String, f32>,
+    #[allow(missing_docs)]
     pub verdict: Verdict,
     /// Plates outside tolerance.
     pub off: Vec<String>,
@@ -41,6 +51,7 @@ pub struct PointResult {
     pub how: Option<String>,
 }
 
+/// The result of judging every sample point of one scene against its separated plates.
 #[derive(Debug, Clone, Serialize)]
 pub struct Judgement {
     /// The plates the separation produced.
@@ -49,18 +60,22 @@ pub struct Judgement {
     pub missing_plates: Vec<String>,
     /// Plates the separation produced that the scene doesn't expect.
     pub extra_plates: Vec<String>,
+    #[allow(missing_docs)]
     pub points: Vec<PointResult>,
 }
 
 impl Judgement {
+    /// `true` when no expected plate is missing, no unexpected plate was produced and no point failed.
     pub fn passed(&self) -> bool {
         self.missing_plates.is_empty() && self.extra_plates.is_empty() && self.failed_points() == 0
     }
 
+    /// Number of points with a [`Verdict::Fail`] verdict.
     pub fn failed_points(&self) -> usize {
         self.points.iter().filter(|p| p.verdict == Verdict::Fail).count()
     }
 
+    /// Number of points that were judged: passed or failed, not info or skipped.
     pub fn judged_points(&self) -> usize {
         self.points.iter().filter(|p| matches!(p.verdict, Verdict::Pass | Verdict::Fail)).count()
     }
@@ -262,17 +277,6 @@ mod tests {
     }"#;
 
     #[test]
-    fn passes_a_matching_separation() {
-        let judgement = judge(&scene(SCENE), &plates(true, None), 72.0, true);
-        let verdicts: Vec<Verdict> = judgement.points.iter().map(|p| p.verdict).collect();
-        assert_eq!(verdicts, [Verdict::Pass, Verdict::Pass, Verdict::Info, Verdict::Pass], "{judgement:#?}");
-        assert!(judgement.passed());
-        assert_eq!(judgement.points[0].measured["Gold"], 50.2);
-        assert_eq!(judgement.points[1].how.as_deref(), Some("200 glyph pixels on Black"));
-        assert_eq!(judgement.plates, ["Cyan", "Magenta", "Yellow", "Black", "Gold"]);
-    }
-
-    #[test]
     fn fails_wrong_ink_and_wrong_plates() {
         let mut knocked = plates(false, Some("Orange"));
         knocked.insert("Cyan".to_owned(), plate(|x, _| if x >= 30 { 0 } else { 255 }));
@@ -288,29 +292,10 @@ mod tests {
     }
 
     #[test]
-    fn text_points_need_the_glyph() {
-        let mut no_text = plates(true, None);
-        no_text.insert("Black".to_owned(), plate(|_, _| 0));
-        let judgement = judge(&scene(SCENE), &no_text, 72.0, true);
-        assert_eq!(judgement.points[1].verdict, Verdict::Fail);
-        assert_eq!(judgement.points[1].how.as_deref(), Some("text not found on the Black plate"));
-        let skipped = judge(&scene(SCENE), &no_text, 72.0, false);
-        assert_eq!(skipped.points[1].verdict, Verdict::Skipped);
-        assert_eq!(skipped.failed_points(), 0);
-    }
-
-    #[test]
     fn a_huge_text_region_samples_only_the_plate() {
         let region = r#"{"at": [15, 20], "kind": "text", "region": [-3e38, -3e38, 3.4e38, 3.4e38], "inks": {"Black": 100}, "tol": 2}"#;
         let huge = scene(&SCENE.replacen(r#"{"at": [45, 20], "inks": {"Cyan": 100, "Gold": 50}, "tol": 2}"#, region, 1));
         let judgement = judge(&huge, &plates(true, None), 72.0, true);
         assert_eq!(judgement.points[0].how.as_deref(), Some("200 glyph pixels on Black"), "{judgement:#?}");
-    }
-
-    #[test]
-    fn medians() {
-        assert_eq!(median(&mut []), None);
-        assert_eq!(median(&mut [3.0, 1.0, 2.0]), Some(2.0));
-        assert_eq!(median(&mut [4.0, 1.0, 2.0, 3.0]), Some(2.5));
     }
 }

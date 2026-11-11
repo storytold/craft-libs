@@ -7,7 +7,7 @@
 //! ffprobe must describe the new file as it does the source, and ffmpeg must decode the same
 //! pictures and sound from it.
 
-mod common;
+use super::common;
 
 use craft_media::CodecId;
 use craft_media::mxf::{

@@ -13,10 +13,13 @@ use std::sync::{
 
 /// Hard bounds on output allocation. These do not bound every backend scratch allocation.
 pub const MAX_SIDE: u32 = 8192;
+/// Largest output area in pixels. Together with [`MAX_SIDE`] it bounds the output buffer.
 pub const MAX_PIXELS: u64 = 64_000_000;
 
+/// Geometry and colour options for one render.
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
+    /// Device pixels per page unit (x, y). Both must be finite and above 0.
     pub scale: [f32; 2],
     /// Explicit device-pixel viewport. When absent the scaled page size is floored, with
     /// at least one pixel per side. Callers that need edge coverage can supply a rounded-up size.
@@ -37,8 +40,10 @@ impl Default for Options {
     }
 }
 
+/// Warnings the backend reported during a render.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Diagnostics {
+    /// An image could not be decoded and is missing from the output.
     pub image_decode_failed: bool,
     /// Reserved by the backend, which currently does not emit this warning.
     pub unsupported_font: bool,
@@ -47,24 +52,32 @@ pub struct Diagnostics {
 }
 
 impl Diagnostics {
+    /// `true` when no warning was reported.
     pub fn is_empty(self) -> bool {
         !self.image_decode_failed && !self.unsupported_font && !self.content_truncated
     }
 }
 
+/// Why a render failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     #[error("PDF page has an empty or non-finite crop box")]
+    #[allow(missing_docs)]
     InvalidPage,
     #[error("PDF raster scale or viewport offset is invalid")]
+    #[allow(missing_docs)]
     InvalidOptions,
     #[error("PDF raster exceeds the output size limit")]
+    #[allow(missing_docs)]
     OutputLimit,
     #[error("PDF raster buffer length does not match its dimensions")]
+    #[allow(missing_docs)]
     BufferLength,
     #[error("PDF raster buffer could not be allocated")]
+    #[allow(missing_docs)]
     Allocation,
     #[error("PDF rendering was cancelled")]
+    #[allow(missing_docs)]
     Cancelled,
     /// After this error callers must discard the document parser and render cache.
     #[error("PDF renderer failed internally")]
@@ -155,20 +168,29 @@ pub fn render_into<'a>(
 /// Pixel-word aligned premultiplied RGBA8 output; no GUI or image encoding dependency.
 #[derive(Debug)]
 pub struct Raster {
+    /// Width in device pixels.
     pub width: u32,
+    /// Height in device pixels.
     pub height: u32,
     words: Vec<u32>,
+    /// Warnings reported while rendering.
     pub diagnostics: Diagnostics,
 }
 impl Raster {
+    /// The pixels as RGBA8 bytes, row by row, `width * height * 4` long.
     pub fn bytes(&self) -> &[u8] {
         bytemuck::cast_slice(&self.words)
     }
+    /// Consumes the raster and returns the pixels as one `u32` per pixel (the RGBA8 bytes in memory
+    /// order).
     pub fn into_words(self) -> Vec<u32> {
         self.words
     }
 }
 
+/// Renders `page` into a newly allocated raster.
+///
+/// Fails with the same errors as [`render_into`] except [`Error::BufferLength`].
 pub fn render<'a>(page: &'a Page<'a>, cache: &RenderCache<'a>, settings: &InterpreterSettings, options: &Options) -> Result<Raster, Error> {
     let [width, height] = dimensions(page, options)?;
     let count = usize::try_from(u64::from(width) * u64::from(height)).map_err(|_| Error::OutputLimit)?;

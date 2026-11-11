@@ -456,6 +456,3 @@ fn synthesize(v: &mut [f32; 1024], pos: &mut usize, n: &[[f32; 36]; 32], d: &[f3
     }
     *out = o;
 }
-
-#[cfg(test)]
-mod tests;

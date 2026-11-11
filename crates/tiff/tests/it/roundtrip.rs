@@ -1,6 +1,6 @@
 use craft_tiff::image::{Layout, chunk_bytes};
 use craft_tiff::writer::{rational, srational};
-use craft_tiff::{ByteOrder, FieldType, IfdBuilder, ImageData, ParseOptions, Tiff, TiffError, TiffWriter, Value, parse_ifd_at, tags};
+use craft_tiff::{ByteOrder, IfdBuilder, ImageData, ParseOptions, Tiff, TiffWriter, Value, parse_ifd_at, tags};
 use proptest::prelude::*;
 
 const ORDERS: [ByteOrder; 2] = [ByteOrder::Little, ByteOrder::Big];
@@ -53,30 +53,6 @@ fn all_field_types_roundtrip_every_variant() {
             }
         }
     }
-}
-
-#[test]
-fn accessors() {
-    let mut ifd = IfdBuilder::new();
-    ifd.set(1, Value::Rational(vec![(28, 10), (0, 0)]));
-    ifd.set(2, Value::Short(vec![5, 6]));
-    ifd.set(3, Value::SLong(vec![-3]));
-    ifd.set(4, Value::Ascii("Canon  ".into()));
-    ifd.set(5, Value::Byte(b"<x:xmpmeta/>\0junk".to_vec()));
-    let bytes = TiffWriter::default().write(&[ifd]).unwrap();
-    let t = Tiff::parse(&bytes).unwrap();
-    let i = &t.ifds[0];
-    assert_eq!(i.f64(1), Some(2.8));
-    assert_eq!(i.f64s(1).unwrap(), vec![2.8, 0.0]);
-    assert_eq!(i.u32(2), Some(5));
-    assert_eq!(i.u64s(2).unwrap(), vec![5, 6]);
-    assert_eq!(i.u32(3), None);
-    assert_eq!(i.i64(3), Some(-3));
-    assert_eq!(i.string(4).as_deref(), Some("Canon"));
-    assert_eq!(i.string(5).as_deref(), Some("<x:xmpmeta/>"));
-    assert_eq!(i.get(4).unwrap().field_type(), FieldType::Ascii);
-    assert!(i.u32(999).is_none());
-    assert_eq!(t.find(2).map(|e| e.tag), Some(2));
 }
 
 #[test]
@@ -204,33 +180,6 @@ fn tiles_layout_and_bytes() {
 }
 
 #[test]
-fn missing_byte_counts_are_inferred() {
-    let mut ifd = IfdBuilder::new();
-    ifd.set(tags::IMAGE_WIDTH, Value::Long(vec![4]));
-    ifd.set(tags::IMAGE_LENGTH, Value::Long(vec![2]));
-    ifd.set_image(ImageData::Strips { rows_per_strip: 1, strips: vec![vec![1; 4], vec![2; 4]] });
-    let bytes = TiffWriter::default().write(&[ifd]).unwrap();
-    let t = Tiff::parse(&bytes).unwrap();
-    let mut info = t.ifds[0].image().unwrap();
-    info.byte_counts.clear();
-    let c = info.chunks(bytes.len() as u64);
-    assert_eq!(c[0].len, 4);
-    assert_eq!(&chunk_bytes(&bytes, &c[0]).unwrap()[..4], &[1; 4]);
-    assert!(c[1].len >= 4);
-}
-
-#[test]
-fn bad_headers() {
-    assert_eq!(Tiff::parse(b""), Err(TiffError::NotTiff));
-    assert_eq!(Tiff::parse(b"XX*\0\0\0\0\0"), Err(TiffError::NotTiff));
-    assert_eq!(Tiff::parse(b"II\x2b\0\x04\0\0\0"), Err(TiffError::NotTiff));
-    assert!(Tiff::parse(b"II*\0").is_err());
-    assert!(Tiff::parse(b"II*\0\x08\0\0\0").is_err());
-    assert!(Tiff::parse(b"II*\0\x08\0\0\0\0\0").is_err());
-    assert!(Tiff::sniff(b"MM\0*\0\0\0\x08").is_some());
-}
-
-#[test]
 fn ifd_loops_are_detected() {
     // IFD0 at 8 whose next pointer points back to itself, and whose SubIFDs point to itself too.
     let mut b = b"II*\0\x08\0\0\0".to_vec();
@@ -288,28 +237,6 @@ fn value_budget_limits_allocation() {
     assert_eq!(t.ifds[0].entries.len(), 10);
     let t = Tiff::parse(&file).unwrap();
     assert_eq!(t.ifds[0].entries.len(), 50);
-}
-
-#[test]
-fn parse_ifd_with_base() {
-    // an IFD blob embedded at 100 whose offsets are relative to 100
-    let mut blob = Vec::new();
-    let o = ByteOrder::Big;
-    o.put_u16(&mut blob, 1);
-    o.put_u16(&mut blob, 5);
-    o.put_u16(&mut blob, 4);
-    o.put_u32(&mut blob, 3);
-    o.put_u32(&mut blob, 18);
-    o.put_u32(&mut blob, 0);
-    for v in [10u32, 20, 30] {
-        o.put_u32(&mut blob, v);
-    }
-    let mut data = vec![0u8; 100];
-    data.extend(blob);
-    let (ifd, next) = parse_ifd_at(&data, 100, o, 100, false, &ParseOptions::default()).unwrap();
-    assert_eq!(next, 0);
-    assert_eq!(ifd.u64s(5).unwrap(), vec![10, 20, 30]);
-    assert_eq!(ifd.get(5).unwrap().offset, 118);
 }
 
 #[test]
@@ -381,16 +308,6 @@ proptest! {
         if let Ok(t) = Tiff::parse(data) {
             exercise(&t, data);
         }
-    }
-
-    #[test]
-    fn random_short_arrays_roundtrip(v in proptest::collection::vec(any::<u16>(), 1..300), big in any::<bool>(), le in any::<bool>()) {
-        let order = if le { ByteOrder::Little } else { ByteOrder::Big };
-        let ifd = IfdBuilder::new().with(500, Value::Short(v.clone())).with(501, Value::Double(v.iter().map(|&x| x as f64 / 3.0).collect()));
-        let bytes = TiffWriter::new(order, big).write(&[ifd]).unwrap();
-        let t = Tiff::parse(&bytes).unwrap();
-        prop_assert_eq!(t.ifds[0].value(500), Some(&Value::Short(v.clone())));
-        prop_assert_eq!(t.ifds[0].f64s(501).unwrap().len(), v.len());
     }
 }
 

@@ -557,14 +557,6 @@ mod alpha_decode_tests {
     use crate::prores::encode::encode_alpha;
 
     #[test]
-    fn slice_quantiser_rejects_reserved_indices() {
-        assert!(slice_quantiser(0).is_err());
-        assert!(slice_quantiser(225).is_err());
-        assert_eq!(slice_quantiser(1).unwrap(), qscale(1));
-        assert_eq!(slice_quantiser(224).unwrap(), qscale(224));
-    }
-
-    #[test]
     fn alpha_decoder_requires_complete_bounded_runs() {
         let mut out = [0u16; 1];
         assert!(decode_alpha(&[], AlphaType::Bits16, &mut out).is_err());

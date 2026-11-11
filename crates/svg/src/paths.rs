@@ -1691,23 +1691,6 @@ mod tests {
     }
 
     #[test]
-    fn a_fragment_is_read_in_millimetres_and_groups_are_walked() {
-        let got = read(r#"<svg><g class="x"><path d="M 0 0 L 5 0 L 5 5 Z"/></g></svg>"#);
-        assert_eq!(got.shapes.len(), 1);
-        assert_eq!(got.shapes[0].path.to_svg(), "M0,0 L5,0 L5,5 Z");
-        // The unit kind reads the same paths.
-        assert_eq!(import::<()>("<path d=\"M 0 0 L 5 0 L 5 5 Z\"/>", "p.svg").unwrap().shapes[0].path.to_svg(), "M0,0 L5,0 L5,5 Z");
-    }
-
-    #[test]
-    fn errors_name_the_file_and_the_problem() {
-        fails("<path></path>", "d attribute");
-        fails("<path d=\"M 0 0 Q\"/>", "");
-        fails("<g transform=\"scale(nope)\"><path d=\"M0 0 L1 0 Z\"/></g>", "transform");
-        fails("<svg><g></svg>", "invalid XML");
-    }
-
-    #[test]
     fn reads_all_common_basic_shapes() {
         let got = read(
             r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
@@ -1826,15 +1809,6 @@ mod tests {
     }
 
     #[test]
-    fn an_unpainted_element_is_left_out_only_for_a_kind_that_asks() {
-        let svg = |kind: &str| format!(r#"<svg><rect data-kind="{kind}" stroke="none" fill="none" width="2" height="2"/></svg>"#);
-        assert_eq!(read(&svg("cut")).shapes.len(), 0);
-        assert_eq!(read(&svg("engrave")).shapes.len(), 1);
-        // Only one of the two set to none still draws.
-        assert_eq!(read(r#"<svg><line fill="none" x1="0" y1="0" x2="1" y2="1"/></svg>"#).shapes.len(), 1);
-    }
-
-    #[test]
     fn the_css_cascade_follows_specificity_importance_and_the_kinds_own_property() {
         let got = read(
             r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
@@ -1858,11 +1832,6 @@ mod tests {
         assert_eq!(bounds(&got, 0).x0, 3.0);
         // A property the kind doesn't list is not followed: `()` ignores `data-kind` entirely.
         assert_eq!(import::<()>(r#"<svg><path style="data-kind:engrave" d="M0 0L1 1"/></svg>"#, "p.svg").unwrap().shapes.len(), 1);
-    }
-
-    #[test]
-    fn an_oversized_stylesheet_is_an_error() {
-        fails(&format!("<svg><style>{}</style></svg>", " ".repeat(MAX_CSS_BYTES + 1)), "");
     }
 
     #[test]
@@ -2017,20 +1986,6 @@ mod tests {
             assert!(warnings.contains(needle), "{needle}: {warnings}");
         }
         assert_eq!(got.warnings.len(), 5, "{warnings}");
-    }
-
-    #[test]
-    fn warnings_are_capped_and_the_rest_counted() {
-        let svg = format!("<svg>{}</svg>", (0..200).map(|i| format!("<text id=\"t{i}\">x</text>")).collect::<String>());
-        let mut got = read(&svg);
-        assert_eq!((got.warnings.len(), got.dropped_warnings), (MAX_SVG_WARNINGS, 136));
-        // A caller's own warnings go through the same bound, and repeats are kept once.
-        push_warning(&mut got.warnings, &mut got.dropped_warnings, "mine".into());
-        assert_eq!((got.warnings.len(), got.dropped_warnings), (MAX_SVG_WARNINGS, 137));
-        let (mut few, mut dropped) = (Vec::new(), 0);
-        push_warning(&mut few, &mut dropped, "once".into());
-        push_warning(&mut few, &mut dropped, "once".into());
-        assert_eq!((few.len(), dropped), (1, 0));
     }
 
     #[test]

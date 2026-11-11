@@ -1,26 +1,10 @@
 //! Escaping, serialising, the writer, and what a round trip keeps.
 
-use craft_xml::{El, Local, Node, Options, Writer, esc, esc_attr, is_name, is_xml_char, parse, push_esc_attr};
+use craft_xml::{El, Node, Options, Writer, is_xml_char, parse};
 
 /// Reads keeping everything the tree can hold.
 fn full() -> Options<'static> {
     Options { cdata: true, pis: true, comments: true, ..Options::default() }
-}
-
-#[test]
-fn escaping_text_and_attributes() {
-    assert_eq!(esc("a & b < c > d \"q\" 'r'"), "a &amp; b &lt; c &gt; d \"q\" 'r'");
-    assert_eq!(esc("tab\tlf\ncr\r]]>"), "tab\tlf\ncr&#13;]]&gt;");
-    assert_eq!(esc_attr("a & b < c > d \"q\" 'r'"), "a &amp; b &lt; c &gt; d &quot;q&quot; 'r'");
-    assert_eq!(esc_attr("tab\tlf\ncr\r"), "tab&#9;lf&#10;cr&#13;");
-    // Characters XML 1.0 cannot carry, even as references, are dropped.
-    let forbidden = "a\u{0}\u{1}\u{8}\u{B}\u{C}\u{E}\u{1F}\u{FFFE}\u{FFFF}b";
-    assert_eq!((esc(forbidden), esc_attr(forbidden)), ("ab".to_string(), "ab".to_string()));
-    assert_eq!(esc("\u{7F}\u{85}é日😀\u{FFFD}"), "\u{7F}\u{85}é日😀\u{FFFD}");
-    let mut s = String::from("k=");
-    push_esc_attr(&mut s, "\"");
-    assert_eq!(s, "k=&quot;");
-    assert!(is_xml_char('\t') && is_xml_char('\u{10FFFF}') && !is_xml_char('\u{0}') && !is_xml_char('\u{FFFE}'));
 }
 
 #[test]
@@ -34,16 +18,6 @@ fn every_character_survives_a_round_trip_or_is_dropped() {
     let mut w = Writer::new();
     w.tag("a").attr("v", &all).text(&all);
     assert_eq!(parse(w.finish().as_bytes()).unwrap(), back);
-}
-
-#[test]
-fn names() {
-    for good in ["a", "A1", "_x", "w:p", ":odd", "a-b.c", "é", "日本", "a\u{B7}"] {
-        assert!(is_name(good), "{good}");
-    }
-    for bad in ["", "1a", "-a", ".a", "a b", "a>", "a=\"", "?:x", "a/", "<a", "a\u{0}", "\u{B7}a", "a\n"] {
-        assert!(!is_name(bad), "{bad:?}");
-    }
 }
 
 /// A name from outside cannot become markup: the element or attribute is left out.
@@ -88,19 +62,6 @@ fn compact_round_trip_keeps_what_the_tree_holds() {
 }
 
 #[test]
-fn what_a_round_trip_does_not_keep() {
-    let doc = "<?xml version='1.0'?>\n<!DOCTYPE a>\n<?before x?>\n<!-- before -->\n<a  b = '1'\n c=\"&#x32;\"><b></b><![CDATA[c]]>&#100;<!-- gone --><?gone too?>\r\n</a>\n<!-- after -->";
-    let tree = parse(doc.as_bytes()).unwrap();
-    // The declaration, the DOCTYPE and everything outside the root are not part of the tree.
-    // Inside it: quoting and spacing in tags, how a character was written, `<b></b>` against
-    // `<b/>`, CDATA sections as sections, comments and processing instructions (unless the
-    // options keep them) and a literal CR are not kept.
-    assert_eq!(tree.to_xml(), "<a b=\"1\" c=\"2\"><b/>cd\n</a>");
-    let kept = full().parse(doc.as_bytes()).unwrap();
-    assert_eq!(kept.to_xml(), "<a b=\"1\" c=\"2\"><b/><![CDATA[c]]>d<!-- gone --><?gone too?>\n</a>");
-}
-
-#[test]
 fn pretty_output() {
     let tree = parse(b"<a x='1'><b><c/><d>text</d><e>mixed <f/> content</e></b><g/><h> </h></a>").unwrap();
     let pretty = tree.to_xml_pretty("  ");
@@ -117,47 +78,6 @@ fn pretty_output() {
 }
 
 #[test]
-fn builder_and_accessors() {
-    let mut root = El::new("root").with_attr("id", 7).with_child(El::new("p:item").with_attr("n", "1").with_text("one")).with_text("tail");
-    root.push(El::new("q:item").with_node(Node::CData("two".into())));
-    root.push(Node::Comment("c".into()));
-    assert_eq!(root.to_xml(), "<root id=\"7\"><p:item n=\"1\">one</p:item>tail<q:item><![CDATA[two]]></q:item><!--c--></root>");
-    assert_eq!(root.children(Local("item")).count(), 2);
-    assert_eq!(root.children("p:item").count(), 1);
-    assert_eq!(root.child_text(Local("item")).as_deref(), Some("one"));
-    assert_eq!(root.child("q:item").map(|e| e.text().into_owned()).as_deref(), Some("two"), "CDATA is character data");
-    assert_eq!((root.text().as_ref(), root.deep_text().as_str()), ("tail", "onetailtwo"));
-    assert_eq!(root.path(&[Local("item")]).and_then(|e| e.attr("n")), Some("1"));
-    assert_eq!(root.path::<&str>(&[]).map(|e| e.name.as_str()), Some("root"));
-    let name = String::from("p:item");
-    assert!(root.child(&name).is_some());
-}
-
-#[test]
-fn writer_compact() {
-    let mut w = Writer::new();
-    w.open("a", &[("k", "v\"")]);
-    w.open("b", &[]);
-    w.text("t & u");
-    w.cdata("x]]>y");
-    w.close();
-    w.pi("p", "d");
-    w.tree(&El::new("c").with_text("<"));
-    w.raw("<raw/>");
-    assert_eq!(w.as_str(), "<a k=\"v&quot;\"><b>t &amp; u<![CDATA[x]]]]><![CDATA[>y]]></b><?p d?><c>&lt;</c><raw/>");
-    w.close();
-    w.close();
-    w.close();
-    assert_eq!(w.finish(), "<a k=\"v&quot;\"><b>t &amp; u<![CDATA[x]]]]><![CDATA[>y]]></b><?p d?><c>&lt;</c><raw/></a>");
-    assert_eq!(Writer::document().into_bytes(), craft_xml::DECL_STANDALONE.as_bytes());
-    let mut plain = Writer::new();
-    plain.decl(false);
-    plain.doctype("not a name");
-    plain.pi("xml", "x");
-    assert_eq!(plain.finish(), craft_xml::DECL);
-}
-
-#[test]
 fn writer_closes_names_in_order_and_what_is_left_open() {
     let mut w = Writer::new();
     for name in ["a", "w:body", "日本", "d"] {
@@ -166,12 +86,4 @@ fn writer_closes_names_in_order_and_what_is_left_open() {
     w.close();
     w.empty("e", &[]);
     assert_eq!(w.finish(), "<a><w:body><日本><d></d><e/></日本></w:body></a>");
-}
-
-#[test]
-fn writer_pretty_nests_a_tree_at_the_current_depth() {
-    let mut w = Writer::pretty("  ");
-    w.open("a", &[]);
-    w.tree(&El::new("b").with_child(El::new("c")));
-    assert_eq!(w.finish(), "<a>\n  <b>\n    <c/>\n  </b>\n</a>\n");
 }

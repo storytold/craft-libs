@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "craft-pdf"
 description = "Shared PDF reading, rendering and optional writing for Craft apps"
 version.workspace = true
@@ -29,6 +30,7 @@ hayro = { workspace = true, optional = true }
 bytemuck = { workspace = true, optional = true }
 krilla = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
+serde = { workspace = true }
 # The filter chain (`filters`). flate2 with zlib-rs, the backend the chain's Flate prices were measured on.
 craft-stream-codecs = { workspace = true, optional = true }
 flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"], optional = true }

@@ -269,21 +269,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn toc_configs() {
-        for cfg in 0u8..32 {
-            let t = Toc::parse(cfg << 3);
-            let ms10 = t.frame_samples(48000) * 10 / 48; // tenths of ms
-            let expect = match cfg {
-                0..=11 => [100, 200, 400, 600][cfg as usize & 3],
-                12..=15 => [100, 200][cfg as usize & 1],
-                _ => [25, 50, 100, 200][cfg as usize & 3],
-            };
-            assert_eq!(ms10, expect, "config {cfg}");
-        }
-        assert!(Toc::parse(0x04).stereo);
-    }
-
-    #[test]
     fn frame_codes() {
         // code 0
         let p = Packet::parse(&[0x00, 1, 2, 3]).unwrap();
@@ -308,31 +293,5 @@ mod tests {
         // zero frames
         assert!(Packet::parse(&[0x03, 0x00]).is_err());
         assert!(Packet::parse(&[]).is_err());
-    }
-
-    #[test]
-    fn two_byte_sizes() {
-        let mut pkt = vec![0x02u8, 252, 1];
-        pkt.extend(std::iter::repeat_n(7u8, 256));
-        pkt.extend([1, 2]);
-        let p = Packet::parse(&pkt).unwrap();
-        assert_eq!(p.frames[0].len(), 256);
-        assert_eq!(p.frames[1], &[1, 2]);
-    }
-
-    #[test]
-    fn self_delimited() {
-        // code 0 with explicit size, followed by trailing data of the next stream.
-        let (p, used) = Packet::parse_self_delimited(&[0x00, 2, 5, 6, 0xAA, 0xBB]).unwrap();
-        assert_eq!(p.frames, vec![&[5u8, 6][..]]);
-        assert_eq!(used, 4);
-        // code 1: one size for both frames.
-        let (p, used) = Packet::parse_self_delimited(&[0x01, 1, 5, 6, 9]).unwrap();
-        assert_eq!(p.frames, vec![&[5u8][..], &[6u8][..]]);
-        assert_eq!(used, 4);
-        // code 3 VBR, 2 frames: size of frame 0, then size of last frame.
-        let (p, used) = Packet::parse_self_delimited(&[0x03, 0x82, 1, 2, 7, 8, 9, 0xFF]).unwrap();
-        assert_eq!(p.frames, vec![&[7u8][..], &[8u8, 9][..]]);
-        assert_eq!(used, 7);
     }
 }

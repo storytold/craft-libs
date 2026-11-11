@@ -127,12 +127,3 @@ fn mutated_matroska_files_never_panic() {
         mutate_all(f, 0x4D4B_0000 + i as u64, 2000);
     }
 }
-
-#[test]
-fn matroska_truncations_never_panic() {
-    for f in synthetic_files().iter().take(1) {
-        for n in 0..f.len() {
-            exercise(&f[..n]);
-        }
-    }
-}

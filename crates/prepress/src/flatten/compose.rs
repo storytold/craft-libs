@@ -55,6 +55,7 @@ pub struct Flattened {
     pub items: Vec<Item>,
     /// Areas left for rasterizing, each disjoint from every item but those it paints before.
     pub complex: Vec<ComplexRegion>,
+    /// What the flattening did.
     pub report: FlattenReport,
 }
 
@@ -95,11 +96,13 @@ pub struct FlattenReport {
 pub struct ComplexGroup {
     /// Indices into [`DisplayList::items`].
     pub items: Vec<usize>,
+    /// Why the group went to the rasterizer.
     pub reason: ComplexReason,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
+/// Why a group or region is rasterized instead of flattened.
 pub enum ComplexReason {
     /// The region sweep failed ([`GeomError::Degenerate`]).
     Degenerate,
@@ -115,10 +118,13 @@ pub const MAX_GROUP_SEGMENTS: usize = 200_000;
 
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
 #[non_exhaustive]
+/// Why [`flatten`] failed.
 pub enum FlattenError {
     #[error("a color names ink {0:?}, which is not in the list's ink set")]
+    #[allow(missing_docs)]
     UnknownInk(InkId),
     #[error(transparent)]
+    #[allow(missing_docs)]
     Geometry(#[from] GeomError),
 }
 
@@ -878,13 +884,10 @@ fn unit(v: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use kurbo::{Affine, Point};
+    use kurbo::Point;
 
     use super::*;
-    use crate::flatten::{GradientGeometry, GroupItem, PlacedGlyph, TextFont, TextItem};
-    use crate::ink::{Alternate, Ink, Spot};
+    use crate::flatten::GroupItem;
 
     const C: InkId = InkId::process(Process::Cyan);
     const M: InkId = InkId::process(Process::Magenta);
@@ -925,44 +928,6 @@ mod tests {
     }
 
     #[test]
-    fn half_black_over_cyan_composites_per_ink() {
-        let l = list(
-            InkSet::new(),
-            vec![
-                solid(Rect::new(0.0, 0.0, 100.0, 100.0), &[(C, 1.0)]),
-                Item::Group(group(0.5, BlendMode::Normal, vec![solid(Rect::new(50.0, 0.0, 150.0, 100.0), &[(K, 1.0)])])),
-            ],
-        );
-        let f = flat(&l);
-        assert_eq!(at(&f, 75.0, 50.0, &[C, M, Y, K]).1, [0.5, 0.0, 0.0, 0.5]);
-        assert_eq!(at(&f, 25.0, 50.0, &[C, K]).1, [1.0, 0.0]);
-        assert_eq!(at(&f, 125.0, 50.0, &[C, K]).1, [0.0, 0.5]);
-        assert_eq!((f.report.kept, f.report.flattened, f.report.regions, f.report.fills), (0, 2, 3, 3));
-        assert!(f.complex.is_empty());
-    }
-
-    #[test]
-    fn multiply_adds_spot_inks_and_non_separable_modes_are_normal_on_spots() {
-        let mut inks = InkSet::new();
-        let spot = |name: &str| Ink::Spot(Spot { name: name.into(), alternate: Alternate::Cmyk([0.0, 0.3, 1.0, 0.0]), solidity: None });
-        let gold = inks.add(spot("Gold")).unwrap();
-        let silver = inks.add(spot("Silver")).unwrap();
-        let scene = |blend| {
-            list(
-                inks.clone(),
-                vec![
-                    solid(Rect::new(0.0, 0.0, 100.0, 100.0), &[(gold, 0.5)]),
-                    Item::Group(group(1.0, blend, vec![solid(Rect::new(50.0, 0.0, 150.0, 100.0), &[(gold, 0.4), (silver, 0.6)])])),
-                ],
-            )
-        };
-        let f = flat(&scene(BlendMode::Multiply));
-        assert_eq!(at(&f, 75.0, 50.0, &[gold, silver, K]).1, [0.7, 0.6, 0.0]);
-        let f = flat(&scene(BlendMode::Hue));
-        assert_eq!(at(&f, 75.0, 50.0, &[gold, silver, K]).1, [0.4, 0.6, 0.0]);
-    }
-
-    #[test]
     fn overprint_keeps_the_inks_a_paint_leaves_out() {
         let op = Overprint { fill: true, ..Overprint::default() };
         let opm = Overprint { nonzero: true, ..op };
@@ -985,82 +950,12 @@ mod tests {
     }
 
     #[test]
-    fn knockout_group_replaces_what_is_under_the_top_element() {
-        let scene = |knockout| {
-            let half_magenta = Item::Group(group(0.5, BlendMode::Normal, vec![solid(Rect::new(50.0, 0.0, 150.0, 100.0), &[(M, 1.0)])]));
-            let g =
-                GroupItem { knockout, ..group(1.0, BlendMode::Normal, vec![solid(Rect::new(0.0, 0.0, 100.0, 100.0), &[(C, 1.0)]), half_magenta]) };
-            list(InkSet::new(), vec![Item::Group(g)])
-        };
-        assert_eq!(at(&flat(&scene(true)), 75.0, 50.0, &[C, M]).1, [0.0, 0.5]);
-        assert_eq!(at(&flat(&scene(false)), 75.0, 50.0, &[C, M]).1, [0.5, 0.5]);
-    }
-
-    #[test]
     fn knockout_group_shows_its_backdrop_under_a_later_element() {
         let half_yellow = Item::Group(group(0.5, BlendMode::Normal, vec![solid(Rect::new(0.0, 0.0, 100.0, 100.0), &[(Y, 1.0)])]));
         let g =
             GroupItem { knockout: true, ..group(1.0, BlendMode::Normal, vec![solid(Rect::new(0.0, 0.0, 100.0, 100.0), &[(M, 1.0)]), half_yellow]) };
         let l = list(InkSet::new(), vec![solid(Rect::new(0.0, 0.0, 100.0, 100.0), &[(C, 1.0)]), Item::Group(g)]);
         assert_eq!(at(&flat(&l), 50.0, 50.0, &[C, M, Y]).1, [0.5, 0.0, 0.5]);
-    }
-
-    #[test]
-    fn knockout_reaches_elements_inside_a_clip() {
-        // A form's bounding box arrives as a clip around the knockout group's elements.
-        let half_magenta = Item::Group(group(0.5, BlendMode::Normal, vec![solid(Rect::new(50.0, 0.0, 150.0, 100.0), &[(M, 1.0)])]));
-        let clip = GroupItem {
-            clip: Some(Rect::new(0.0, 0.0, 150.0, 100.0).to_path(0.1)),
-            ..group(1.0, BlendMode::Normal, vec![solid(Rect::new(0.0, 0.0, 100.0, 100.0), &[(C, 1.0)]), half_magenta])
-        };
-        let g = GroupItem { knockout: true, ..group(1.0, BlendMode::Normal, vec![Item::Group(clip)]) };
-        assert_eq!(at(&flat(&list(InkSet::new(), vec![Item::Group(g)])), 75.0, 50.0, &[C, M]).1, [0.0, 0.5]);
-    }
-
-    #[test]
-    fn isolated_group_blends_without_the_backdrop() {
-        let scene = |isolated| {
-            let multiply = Item::Group(group(1.0, BlendMode::Multiply, vec![solid(Rect::new(50.0, 0.0, 150.0, 100.0), &[(M, 1.0)])]));
-            let outer = GroupItem { isolated, ..group(1.0, BlendMode::Normal, vec![multiply]) };
-            list(InkSet::new(), vec![solid(Rect::new(0.0, 0.0, 100.0, 100.0), &[(C, 1.0)]), Item::Group(outer)])
-        };
-        assert_eq!(at(&flat(&scene(false)), 75.0, 50.0, &[C, M]).1, [1.0, 1.0]);
-        assert_eq!(at(&flat(&scene(true)), 75.0, 50.0, &[C, M]).1, [0.0, 1.0]);
-    }
-
-    #[test]
-    fn opaque_items_away_from_transparency_and_above_it_stay_as_they_are() {
-        let font = Arc::new(TextFont { data: Arc::new(vec![0_u8; 8]), index: 0, key: 7 });
-        let text = |x: f64| {
-            Item::Text(TextItem {
-                font: Some(font.clone()),
-                size: 12.0,
-                transform: Affine::translate((x, 50.0)),
-                glyphs: vec![PlacedGlyph { id: 3, origin: Point::ZERO, text: 0..1 }],
-                text: Some("A".into()),
-                outlines: Rect::new(x, 40.0, x + 8.0, 50.0).to_path(0.1),
-                paint: Paint::Solid(InkColor::Tints(vec![(K, 1.0)])),
-                overprint: Overprint { fill: true, ..Overprint::default() },
-            })
-        };
-        let far = solid(Rect::new(300.0, 300.0, 400.0, 400.0), &[(M, 1.0)]);
-        let l = list(
-            InkSet::new(),
-            vec![
-                far.clone(),
-                text(500.0),
-                solid(Rect::new(0.0, 0.0, 100.0, 100.0), &[(C, 1.0)]),
-                Item::Group(group(0.5, BlendMode::Normal, vec![solid(Rect::new(50.0, 0.0, 150.0, 100.0), &[(K, 1.0)])])),
-                text(60.0),
-            ],
-        );
-        let f = flat(&l);
-        assert_eq!(f.items[0], far);
-        assert_eq!(f.items[1], l.items[1]);
-        assert_eq!(f.items.last(), Some(&l.items[4]), "text above the transparency, painted last");
-        let Some(Item::Text(t)) = f.items.last() else { panic!() };
-        assert!(Arc::ptr_eq(t.font.as_ref().unwrap(), &font));
-        assert_eq!((f.report.kept, f.report.flattened, f.report.fills), (3, 2, 3));
     }
 
     #[test]
@@ -1088,25 +983,6 @@ mod tests {
         assert_eq!((f.report.kept, f.report.flattened), (0, 3));
         assert_eq!(at(&f, 20.0, 15.0, &[Y, K]).1, [0.0, 1.0]);
         assert_eq!(at(&f, 45.0, 15.0, &[Y, K]).1, [1.0, 0.0]);
-    }
-
-    #[test]
-    fn art_hidden_under_an_opaque_fill_does_not_cut_it() {
-        // K bars under a cyan fill, one where a half magenta overlaps it: three looks, three fills.
-        let half_magenta = Item::Group(group(0.5, BlendMode::Normal, vec![solid(Rect::new(50.0, 0.0, 150.0, 100.0), &[(M, 1.0)])]));
-        let l = list(
-            InkSet::new(),
-            vec![
-                solid(Rect::new(10.0, 10.0, 20.0, 90.0), &[(K, 1.0)]),
-                solid(Rect::new(60.0, 10.0, 70.0, 90.0), &[(K, 1.0)]),
-                solid(Rect::new(0.0, 0.0, 100.0, 100.0), &[(C, 1.0)]),
-                half_magenta,
-            ],
-        );
-        let f = flat(&l);
-        assert_eq!(f.report.fills, 3, "{:?}", f.items);
-        assert_eq!(at(&f, 15.0, 50.0, &[C, K]).1, [1.0, 0.0]);
-        assert_eq!(at(&f, 65.0, 50.0, &[C, M, K]).1, [0.5, 0.5, 0.0]);
     }
 
     #[test]
@@ -1146,75 +1022,5 @@ mod tests {
         });
         let l = list(InkSet::new(), vec![Item::Group(group(0.5, BlendMode::Normal, vec![crowded]))]);
         assert!(flatten(&l, &FlattenOptions::default()).is_err());
-    }
-
-    #[test]
-    fn kept_isolated_and_knockout_groups_come_back_plain() {
-        // A placed page: an isolated group of opaque art, away from any transparency.
-        let inner = GroupItem { knockout: true, ..group(1.0, BlendMode::Normal, vec![solid(Rect::new(0.0, 0.0, 10.0, 10.0), &[(C, 1.0)])]) };
-        let placed = GroupItem { isolated: true, ..group(1.0, BlendMode::Normal, vec![Item::Group(inner)]) };
-        let f = flat(&list(InkSet::new(), vec![Item::Group(placed)]));
-        let Some(Item::Group(g)) = f.items.first() else { panic!("{:?}", f.items) };
-        let Some(Item::Group(inner)) = g.children.first() else { panic!("{g:?}") };
-        assert!(!g.isolated && !inner.knockout);
-    }
-
-    #[test]
-    fn gradients_and_crowded_groups_go_to_complex() {
-        let gradient = Item::Fill(FillItem {
-            path: Rect::new(50.0, 0.0, 150.0, 100.0).to_path(0.1),
-            rule: FillRule::NonZero,
-            paint: Paint::Gradient {
-                stops: vec![(0.0, InkColor::Tints(vec![(C, 0.0)])), (1.0, InkColor::Tints(vec![(C, 1.0)]))],
-                geometry: GradientGeometry::Axial {
-                    start: Point::new(50.0, 0.0),
-                    end: Point::new(150.0, 0.0),
-                    extend: [true; 2],
-                    transform: Affine::IDENTITY,
-                },
-            },
-            overprint: Overprint::default(),
-        });
-        let l = list(
-            InkSet::new(),
-            vec![
-                solid(Rect::new(0.0, 0.0, 100.0, 100.0), &[(M, 1.0)]),
-                Item::Group(group(0.5, BlendMode::Normal, vec![gradient])),
-                solid(Rect::new(140.0, 0.0, 200.0, 100.0), &[(Y, 1.0)]),
-            ],
-        );
-        let f = flat(&l);
-        assert_eq!(f.report.complex_regions, 1, "touching regions merge: {:?}", f.complex);
-        let both = f.complex.iter().find(|c| c.path.winding(Point::new(75.0, 50.0)) != 0).unwrap();
-        assert_eq!(both.items, [0, 1]);
-        assert_eq!(both.at, f.items.len() - 1, "before the yellow kept on top");
-        assert_eq!(at(&f, 25.0, 50.0, &[M]).1, [1.0]);
-
-        let f = flatten(&l, &FlattenOptions { max_regions: 2, ..FlattenOptions::default() }).unwrap();
-        assert_eq!(f.report.complex_groups, [ComplexGroup { items: vec![0, 1], reason: ComplexReason::TooManyRegions(3) }]);
-        assert_eq!((f.complex.len(), f.items.len()), (1, 1));
-    }
-
-    #[test]
-    fn flattened_fills_keep_the_actual_text_they_show() {
-        let tagged = GroupItem {
-            actual_text: Some("fi".into()),
-            ..group(1.0, BlendMode::Normal, vec![solid(Rect::new(0.0, 0.0, 100.0, 100.0), &[(C, 1.0)])])
-        };
-        let veil = group(0.5, BlendMode::Normal, vec![solid(Rect::new(50.0, 0.0, 150.0, 100.0), &[(K, 1.0)])]);
-        let f = flat(&list(InkSet::new(), vec![Item::Group(tagged), Item::Group(veil)]));
-        let groups: Vec<&GroupItem> = f
-            .items
-            .iter()
-            .filter_map(|i| match i {
-                Item::Group(g) => Some(g),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(groups.len(), 1, "{:?}", f.items);
-        assert_eq!(groups[0].actual_text.as_deref(), Some("fi"));
-        assert_eq!(groups[0].children.len(), 2, "the cyan alone and under the veil");
-        assert_eq!((f.items.len(), f.report.fills), (2, 3));
-        assert!(!is_transparent(&f.items[1]));
     }
 }

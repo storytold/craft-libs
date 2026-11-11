@@ -44,54 +44,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn spanish_suggestions_use_runtime_tables_and_case() {
-        crate::es::test_dict::install();
-        for lang in [ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy] {
-            for (word, want) in [
-                ("tambien", "también"),
-                ("cancion", "canción"),
-                ("Cancion", "Canción"),
-                ("mexico", "México"),
-                ("nino", "niño"),
-                ("pinguino", "pingüino"),
-                ("prueva", "prueba"),
-                ("corector", "corrector"),
-                ("estoes", "esto es"),
-            ] {
-                assert!(suggest(word, 8, lang).contains(&want.into()), "{lang:?} {word}: {:?}", suggest(word, 8, lang));
-            }
-        }
-        // The first suggestion for a missing accent is the accented word.
-        assert_eq!(suggest("tambien", 4, ProofLang::Es).first().map(String::as_str), Some("también"));
-    }
-
-    #[test]
     fn uruguayan_vos_forms_get_their_accent_back_first() {
         crate::es::test_dict::install();
         for (word, want) in [("veni", "vení"), ("tenes", "tenés"), ("Veni", "Vení"), ("TENES", "TENÉS"), ("queres", "querés")] {
             assert_eq!(suggest(word, 4, ProofLang::EsUy).first().map(String::as_str), Some(want), "{word}");
             assert!(!suggest(word, 8, ProofLang::Es419).contains(&want.into()), "{word}: no vos forms outside Uruguay");
         }
-    }
-
-    #[test]
-    fn suggestions_stay_bounded_and_skip_forbidden_words() {
-        crate::es::test_dict::install();
-        for lang in [ProofLang::Es, ProofLang::EsUy] {
-            for w in ["", "dos palabras", &"a".repeat(41)] {
-                assert!(suggest(w, 4, lang).is_empty(), "{w}");
-            }
-            assert!(suggest("prueva", 0, lang).is_empty());
-            assert!(suggest("veni", 0, lang).is_empty());
-            assert!(suggest_in(&AffixDict::default(), "veni", 4, lang).is_empty());
-            assert!(suggest("prueba", 4, lang).len() <= 4);
-            assert!(!suggest("prueba", 4, lang).contains(&"prueba".into()));
-            assert!(!suggest("zqprohibda", 8, lang).contains(&"zqprohibida".into()));
-        }
-    }
-
-    #[test]
-    fn nosuggest_stems_and_forms_are_never_offered() {
-        crate::affix::tests::assert_nosuggest_is_honoured(|d, w, max| suggest_in(d, w, max, ProofLang::Es));
     }
 }

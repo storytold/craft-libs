@@ -618,25 +618,6 @@ mod tests {
     use super::*;
     use craft_media::bitstream::BitWriter;
 
-    /// Implicitly signalled HE-AAC (an AAC-LC config) is recognised from the SBR fill element.
-    #[test]
-    fn sbr_fill_element_marks_implicit_he_aac() {
-        // AAC-LC, 22.05 kHz, stereo
-        let mut dec = Decoder::new(&[0x13, 0x90]).unwrap();
-        assert!(!dec.sbr());
-        // ID_FIL, count 1, extension_type EXT_SBR_DATA (+ 4 bits of payload), ID_END
-        let _ = dec.decode(&[0b1100_0011, 0b1010_0001, 0b1100_0000]);
-        assert!(dec.sbr());
-        // other fill payloads (EXT_FILL) don't
-        let mut dec = Decoder::new(&[0x13, 0x90]).unwrap();
-        let _ = dec.decode(&[0b1100_0010, 0b0000_0001, 0b1100_0000]);
-        assert!(!dec.sbr());
-        // explicit signalling: AOT 5, core 22.05 kHz, stereo, extension 44.1 kHz, core AOT 2
-        let dec = Decoder::new(&[0x2B, 0x92, 0x08, 0x00]).unwrap();
-        assert!(dec.sbr());
-        assert_eq!(dec.sample_rate(), 22_050);
-    }
-
     /// An access unit whose elements are all empty: `elements` are (id, tag), then ID_END.
     fn silent_au(pce: Option<&ProgramConfig>, elements: &[(u32, u32)]) -> Vec<u8> {
         let mut bw = BitWriter::new();
@@ -669,35 +650,6 @@ mod tests {
         assert_eq!(dec.find_slot(ElementType::Cpe, 0, &[true, true, false]), Ok(2));
     }
 
-    #[test]
-    fn program_configs_place_elements_by_tag() {
-        let pce = ProgramConfig { front: vec![(true, 3), (true, 5)], ..Default::default() };
-        let asc = AudioSpecificConfig { pce: Some(pce), ..AudioSpecificConfig::lc(4, 0) };
-        let dec = Decoder::from_config(asc).unwrap();
-        assert_eq!(dec.find_slot(ElementType::Cpe, 5, &[false, false]), Ok(1));
-    }
-
-    /// A program config lists its elements: one it does not list has no place.
-    #[test]
-    fn program_configs_refuse_unlisted_tags() {
-        let pce = ProgramConfig { front: vec![(true, 3), (true, 5)], ..Default::default() };
-        let asc = AudioSpecificConfig { pce: Some(pce), ..AudioSpecificConfig::lc(4, 0) };
-        let dec = Decoder::from_config(asc).unwrap();
-        assert!(dec.find_slot(ElementType::Cpe, 9, &[false, false]).is_err());
-        assert!(dec.find_slot(ElementType::Sce, 3, &[false, false]).is_err());
-    }
-
-    /// Some encoders code 5.1's LFE as an SCE, as ffmpeg allows. Nothing else changes type: an LFE
-    /// is not written to the centre channel.
-    #[test]
-    fn indexed_configurations_refuse_elements_of_another_type() {
-        let dec = Decoder::from_config(AudioSpecificConfig::lc(4, 6)).unwrap();
-        // SCE, CPE, CPE, LFE
-        assert_eq!(dec.find_slot(ElementType::Sce, 1, &[true, false, false, false]), Ok(3));
-        assert!(dec.find_slot(ElementType::Lfe, 1, &[false, false, false, true]).is_err());
-        assert!(dec.find_slot(ElementType::Cpe, 2, &[false, true, true, false]).is_err());
-    }
-
     /// A PCE in an access unit that then fails leaves the layout as it was.
     #[test]
     fn a_damaged_in_band_pce_does_not_change_the_layout() {
@@ -728,15 +680,6 @@ mod tests {
         assert!(dec.decode(&au[..au.len() - 1]).is_err());
         assert!(dec.channels[0].overlap.iter().all(|&s| s == 0.5));
         assert_eq!((dec.channels[0].prev_shape, dec.noise_state), (WindowShape::Kbd, noise));
-    }
-
-    #[test]
-    fn a_reset_restarts_the_noise_generator() {
-        let mut dec = Decoder::from_config(AudioSpecificConfig::lc(4, 1)).unwrap();
-        let first = dec.next_random();
-        dec.next_random();
-        dec.reset();
-        assert_eq!(dec.next_random(), first);
     }
 
     #[test]

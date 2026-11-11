@@ -5,7 +5,7 @@
 //!   package manager or LibreOffice; it is not bundled). Without it Turkish text gets no spelling
 //!   marks. Capitalized stems are proper nouns (`Ankara`); foreign names inflected with an apostrophe
 //!   are accepted (`WordCraft'ta`), and the user dictionary applies as in English.
-//! - **Suggestions** tuned for Turkish ([`suggest`]): ASCII-diacritic restoration (`turkce` -> `Türkçe`),
+//! - **Suggestions** tuned for Turkish ([`mod@suggest`]): ASCII-diacritic restoration (`turkce` -> `Türkçe`),
 //!   common confusions (`yalnış` -> `yanlış`), detached particles (`geldimi` -> `geldi mi`), and typos.
 //! - **Grammar** ([`grammar`]): high-precision rules (reduplications, comma around conjunctions,
 //!   sentence start with abbreviations).
@@ -105,67 +105,4 @@ fn check(d: &TrDict, word: &str, opts: &crate::Options) -> bool {
     }
 
     false
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn without_dictionary_everything_is_correct() {
-        let empty = TrDict::default();
-        assert!(is_correct_with(&empty, "herhangi"));
-        assert!(is_correct_with(&empty, "xyzabc"));
-    }
-
-    #[test]
-    fn apostrophe_and_compounds_are_handled() {
-        let empty = TrDict::default();
-        assert!(is_correct_with(&empty, "Ankara'da"));
-        assert!(is_correct_with(&empty, "açık-mavi"));
-    }
-
-    #[test]
-    fn installed_dictionary_checks_words() {
-        test_dict::install();
-        assert!(is_correct("kitap"));
-        assert!(is_correct("kitaplar"));
-        assert!(is_correct("evde"));
-        assert!(is_correct("olacaklardan"));
-        assert!(is_correct("sonra"));
-        assert!(!is_correct("sorna"));
-        assert!(!is_correct("kitapppp"));
-        assert!(!is_correct("evdekişşş"));
-
-        // Test user dictionary
-        assert!(!is_correct("benimbilmedigimkelime"));
-        crate::add_word("benimbilmedigimkelime");
-        assert!(is_correct("benimbilmedigimkelime"));
-    }
-
-    /// With Ignore words that contain numbers off, Turkish checks words with digits against the
-    /// dictionary instead of accepting them, hyphen parts included.
-    #[test]
-    fn proofing_options_reach_the_turkish_check() {
-        test_dict::install();
-        let lang = crate::ProofLang::Tr;
-        let defaults = crate::Options::default();
-        let check_digits = crate::Options { ignore_numbers: false, ..defaults };
-        assert!(crate::is_correct_in_with("kitapp2", lang, &defaults));
-        assert!(!crate::is_correct_in_with("kitapp2", lang, &check_digits));
-        assert!(!crate::is_correct_in_with("ev-kitapp2", lang, &check_digits));
-        assert!(crate::is_correct_in_with("2026", lang, &check_digits), "numbers alone stay correct");
-        assert!(is_correct("kitapp2"), "direct checks keep the defaults");
-    }
-
-    /// Ignore words in UPPERCASE reaches Turkish's own entry points too, so `NATO` and `TBMM` are
-    /// right by default and checked when the option is off (craft-libs#495 review).
-    #[test]
-    fn turkish_ignores_capitals_unless_told_otherwise() {
-        test_dict::install();
-        let check_caps = crate::Options { ignore_uppercase: false, ..crate::Options::default() };
-        assert!(is_correct("TBMMX") && is_correct_with_options("TBMMX", &crate::Options::default()));
-        assert!(!is_correct_with_options("TBMMX", &check_caps));
-        assert!(is_correct_with_options("KİTAP", &check_caps), "a word in Turkish capitals is still looked up");
-    }
 }

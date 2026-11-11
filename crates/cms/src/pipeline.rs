@@ -18,23 +18,32 @@ pub enum Stage {
     InvCurves(Vec<Curve>),
     /// `out[r] = Σ m[r][c]·in[c] + offset[r]`, `rows × cols`.
     Matrix {
+        #[allow(missing_docs)]
         rows: usize,
+        #[allow(missing_docs)]
         cols: usize,
+        /// Row-major matrix entries, `rows * cols` values.
         m: Vec<f64>,
+        /// Offsets added to each output channel, `rows` values.
         offset: Vec<f64>,
     },
+    #[allow(missing_docs)]
     Clut(Clut),
     /// Float CIE Lab (L 0–100) → XYZ (D50, Y = 1).
     LabToXyz,
+    #[allow(missing_docs)]
     XyzToLab,
     /// ICC v4 / 8-bit Lab encoding (normalised) → float Lab, and back.
     DecodeLabV4,
+    #[allow(missing_docs)]
     EncodeLabV4,
     /// ICC v2 legacy 16-bit Lab encoding (used by `lut16Type`) → float Lab, and back.
     DecodeLabV2,
+    #[allow(missing_docs)]
     EncodeLabV2,
     /// u1Fixed15 XYZ encoding (normalised over 0..=0xFFFF) → XYZ, and back.
     DecodeXyz,
+    #[allow(missing_docs)]
     EncodeXyz,
     /// Clamp every channel to `[0, 1]`.
     Clamp01,
@@ -73,6 +82,7 @@ impl Stage {
         Ok(())
     }
 
+    /// A 3×3 matrix stage with no offset.
     pub fn matrix3(m: &math::Mat3) -> Stage {
         Stage::Matrix { rows: 3, cols: 3, m: m.iter().flatten().copied().collect(), offset: vec![0.0; 3] }
     }
@@ -202,12 +212,15 @@ impl Pipeline {
         Ok(p)
     }
 
+    /// Number of channels the pipeline reads.
     pub fn inputs(&self) -> usize {
         self.inputs
     }
+    /// Number of channels the pipeline writes.
     pub fn outputs(&self) -> usize {
         self.outputs
     }
+    /// The stages in execution order.
     pub fn stages(&self) -> &[Stage] {
         &self.stages
     }

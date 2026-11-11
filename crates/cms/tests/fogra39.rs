@@ -2,7 +2,7 @@
 //! (`tests/data/FOGRA39.txt`), conversions to sRGB against reference values, and its generator:
 //!
 //! ```sh
-//! CRAFT_CMS_REGEN_PROFILES=1 cargo test -p craft-cms --release --test fogra39
+//! CRAFT_CMS_REGEN_PROFILES=1 cargo test -p craft-cms --release -- integration::fogra39
 //! ```
 //!
 //! The generator fits a Yule–Nielsen modified Neugebauer model (free 16 overprints, per-ink
@@ -13,7 +13,7 @@
 
 use craft_cms::math::{self, delta_e2000};
 use craft_cms::synth::{self, CmykParams, Forward};
-use craft_cms::{Builtin, Intent, Profile, Transform};
+use craft_cms::{Builtin, Intent, Transform};
 
 const DATA: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/FOGRA39.txt");
 const PROFILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/profiles/craft-coated-fogra39.icc");
@@ -77,16 +77,6 @@ fn stats(p: &[Patch], lab_of: impl Fn([f64; 4]) -> [f64; 3]) -> Stats {
     let p95 = de[(de.len() * 95).div_ceil(100) - 1].0;
     let (max, worst) = de[de.len() - 1];
     Stats { mean, p95, max, worst }
-}
-
-/// Relative Lab through a profile's colorimetric AToB.
-fn profile_lab(profile: &Profile) -> impl Fn([f64; 4]) -> [f64; 3] {
-    let t = Transform::new(profile, Builtin::LabD50.profile(), Intent::RelativeColorimetric, false).unwrap();
-    move |c| {
-        let mut o = [0.0f32; 3];
-        t.eval(&c.map(|v| v as f32), &mut o).unwrap();
-        [o[0] as f64 * 100.0, o[1] as f64 * 255.0 - 128.0, o[2] as f64 * 255.0 - 128.0]
-    }
 }
 
 // --- Fit ------------------------------------------------------------------------------------
@@ -354,179 +344,6 @@ fn regen_coated_fogra39() {
     let bytes = profile.to_bytes();
     std::fs::write(PROFILE, &*bytes).unwrap();
     eprintln!("wrote {} bytes in {:?}", bytes.len(), t.elapsed());
-}
-
-fn fogra39() -> &'static Profile {
-    let p = Builtin::CoatedFogra39.profile();
-    assert_eq!(p.description, Builtin::CoatedFogra39.description(), "the shipped profile parses");
-    p
-}
-
-#[test]
-fn fit_predicts_held_out_patches() {
-    // Fit to 90 % of the patches, then compare the model with the other 10 %. The 16 solid
-    // overprints stay in the fit, which starts from them.
-    let all = patches();
-    let held = |i: usize, p: &Patch| i % 10 == 3 && !p.cmyk.iter().all(|v| *v == 0.0 || *v == 1.0);
-    let train: Vec<Patch> = all.iter().enumerate().filter(|(i, p)| !held(*i, p)).map(|(_, p)| p.clone()).collect();
-    let test: Vec<Patch> = all.iter().enumerate().filter(|(i, p)| held(*i, p)).map(|(_, p)| p.clone()).collect();
-    let f = fitted(&train);
-    let w = paper(&all);
-    let mut de: Vec<f64> = test.iter().map(|p| delta_e2000(f.lab(p.cmyk), relative(math::lab_to_xyz(p.lab, math::D50), w))).collect();
-    de.sort_by(f64::total_cmp);
-    let mean = de.iter().sum::<f64>() / de.len() as f64;
-    eprintln!("hold-out ({} patches): mean ΔE00 {mean:.2} p95 {:.2} max {:.2}", de.len(), de[de.len() * 95 / 100], de[de.len() - 1]);
-    assert!(mean <= 0.2, "hold-out mean {mean}");
-}
-
-#[test]
-fn model_profiles_refuse_bad_parameters() {
-    let paper = math::lab_to_xyz([95.0, 0.0, -2.0], math::D50);
-    for (a2b, b2a) in [(0, 21), (1, 21), (11, 0), (11, 1)] {
-        let params = CmykParams { grid_a2b: a2b, grid_b2a: b2a, ..CmykParams::default() };
-        assert!(synth::cmyk_profile_from_model(&Flat, paper, &params).is_err(), "{a2b} {b2a}");
-    }
-    let small = CmykParams { grid_a2b: 2, grid_b2a: 2, ..CmykParams::default() };
-    assert!(synth::cmyk_profile_from_model(&Flat, [0.0, 1.0, 1.0], &small).is_err());
-    assert!(synth::cmyk_profile_from_model(&Flat, [f64::NAN, 1.0, 1.0], &small).is_err());
-    assert!(synth::cmyk_profile_from_model(&Flat, paper, &small).is_ok());
-}
-
-/// Paper white everywhere.
-struct Flat;
-
-impl Forward for Flat {
-    fn lab(&self, _: [f64; 4]) -> [f64; 3] {
-        [100.0, 0.0, 0.0]
-    }
-}
-
-#[test]
-fn fits_the_fogra39_data() {
-    let p = patches();
-    let s = stats(&p, profile_lab(fogra39()));
-    eprintln!("Coated FOGRA39 builtin: mean ΔE00 {:.2} p95 {:.2} max {:.2} at {:?}", s.mean, s.p95, s.max, s.worst);
-    assert!(s.mean <= 0.15 && s.p95 <= 0.35 && s.max <= 0.8, "mean {} p95 {} max {}", s.mean, s.p95, s.max);
-    let s = stats(&p, profile_lab(Builtin::CoatedCmyk.profile()));
-    eprintln!("Photocraft coated builtin: mean ΔE00 {:.2} p95 {:.2} max {:.2} at {:?}", s.mean, s.p95, s.max, s.worst);
-}
-
-#[test]
-fn darkens_with_every_ink() {
-    let lab = profile_lab(fogra39());
-    for base in [[0.0; 4], [0.2, 0.2, 0.2, 0.0], [0.6, 0.4, 0.4, 0.2], [0.0, 0.5, 1.0, 0.0], [0.8, 0.7, 0.7, 0.5]] {
-        for ink in 0..4 {
-            let mut prev = f64::INFINITY;
-            for i in 0..=40 {
-                let mut v = base;
-                v[ink] = i as f64 / 40.0;
-                let l = lab(v)[0];
-                assert!(l < prev + 0.2, "{base:?} ink {ink} at {}: L* {l} after {prev}", v[ink]);
-                prev = l;
-            }
-        }
-    }
-}
-
-#[test]
-fn in_gamut_lab_round_trips() {
-    let profile = fogra39();
-    let lab = Builtin::LabD50.profile();
-    let to_cmyk = Transform::new(lab, profile, Intent::RelativeColorimetric, false).unwrap();
-    let to_lab = profile_lab(profile);
-    // Targets: the profile's own colours of the patches inside the gamut (no solid ink, well
-    // within the 330 % ink limit). Gamut-edge colours with black (e.g. C100 K100) come back
-    // up to ~7 ΔE00 off, as with the Photocraft profile: black generation fixes K before the
-    // CMY solve.
-    let mut de: Vec<f64> = patches()
-        .iter()
-        .filter(|p| p.cmyk.iter().all(|v| *v <= 0.85) && p.cmyk.iter().sum::<f64>() <= 2.8)
-        .map(|p| {
-            let target = to_lab(p.cmyk);
-            let enc = [(target[0] / 100.0) as f32, ((target[1] + 128.0) / 255.0) as f32, ((target[2] + 128.0) / 255.0) as f32];
-            let mut c = [0.0f32; 4];
-            to_cmyk.eval(&enc, &mut c).unwrap();
-            assert!(c.iter().map(|v| *v as f64).sum::<f64>() <= 3.3 + 0.02, "{target:?} -> {c:?}");
-            delta_e2000(to_lab(c.map(f64::from)), target)
-        })
-        .collect();
-    de.sort_by(f64::total_cmp);
-    let mean = de.iter().sum::<f64>() / de.len() as f64;
-    let (p95, max) = (de[de.len() * 95 / 100], de[de.len() - 1]);
-    eprintln!("Lab → CMYK → Lab over {} colours: mean ΔE00 {mean:.2} p95 {p95:.2} max {max:.2}", de.len());
-    assert!(mean < 0.5 && p95 < 1.5 && max < 3.0, "mean {mean} p95 {p95} max {max}");
-}
-
-/// Reference sRGB values for CMYK in Coated FOGRA39 (relative colorimetric with black point
-/// compensation).
-const REFERENCE_SRGB: [([f64; 4], [u8; 3]); 15] = [
-    ([0.0, 0.5, 1.0, 0.0], [243, 146, 0]),
-    ([0.0, 0.6, 1.0, 0.0], [239, 125, 0]),
-    ([1.0, 0.0, 0.0, 0.0], [0, 159, 227]),
-    ([0.0, 1.0, 0.0, 0.0], [229, 0, 125]),
-    ([0.0, 0.0, 1.0, 0.0], [255, 237, 0]),
-    ([0.0, 0.0, 0.0, 1.0], [29, 29, 27]),
-    ([1.0, 1.0, 0.0, 0.0], [49, 39, 131]),
-    ([0.0, 1.0, 1.0, 0.0], [227, 6, 19]),
-    // Reported DesignCraft orange: shown as 245,144,25 by the uncalibrated formula.
-    ([0.0, 0.41, 0.9, 0.04], [239, 161, 35]),
-    // Grey, rich black, tint, skin tone, green and a near-neutral.
-    ([0.0, 0.0, 0.0, 0.5], [157, 157, 156]),
-    ([0.6, 0.4, 0.4, 1.0], [2, 10, 10]),
-    ([0.1, 0.05, 0.0, 0.0], [233, 238, 249]),
-    ([0.05, 0.3, 0.4, 0.0], [241, 192, 157]),
-    ([1.0, 0.0, 1.0, 0.0], [0, 150, 64]),
-    ([0.4, 0.3, 0.3, 0.1], [157, 158, 159]),
-];
-
-fn to_srgb(profile: &Profile) -> impl Fn([f64; 4]) -> [u8; 3] {
-    let t = Transform::new(profile, Builtin::Srgb.profile(), Intent::RelativeColorimetric, true).unwrap();
-    move |c| {
-        let mut o = [0.0f32; 3];
-        t.eval(&c.map(|v| v as f32), &mut o).unwrap();
-        o.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
-    }
-}
-
-fn srgb_lab(rgb: [u8; 3]) -> [f64; 3] {
-    let t = Transform::new(Builtin::Srgb.profile(), Builtin::LabD50.profile(), Intent::RelativeColorimetric, false).unwrap();
-    let mut o = [0.0f32; 3];
-    t.eval(&rgb.map(|v| v as f32 / 255.0), &mut o).unwrap();
-    [o[0] as f64 * 100.0, o[1] as f64 * 255.0 - 128.0, o[2] as f64 * 255.0 - 128.0]
-}
-
-#[test]
-fn matches_reference_srgb_values() {
-    let ours = to_srgb(fogra39());
-    let photocraft = to_srgb(Builtin::CoatedCmyk.profile());
-    let mut worst = 0.0f64;
-    for (cmyk, want) in REFERENCE_SRGB {
-        let (got, pc) = (ours(cmyk), photocraft(cmyk));
-        let de = delta_e2000(srgb_lab(got), srgb_lab(want));
-        let de_pc = delta_e2000(srgb_lab(pc), srgb_lab(want));
-        eprintln!("{cmyk:?}: reference {want:?} | FOGRA39 {got:?} ΔE00 {de:.2} | Photocraft {pc:?} ΔE00 {de_pc:.2}");
-        worst = worst.max(de);
-    }
-    assert!(worst <= 1.0, "worst ΔE00 {worst}");
-}
-
-#[test]
-fn builtins_by_document_profile_name() {
-    for b in Builtin::ALL {
-        assert_eq!(Builtin::from_profile_name(b.description()), Some(b), "{b:?}");
-        assert_eq!(Builtin::stand_in_for(b.description()), Some(b), "{b:?}");
-    }
-    assert_eq!(Builtin::from_profile_name(" srgb iec61966-2.1 "), Some(Builtin::Srgb));
-    assert_eq!(Builtin::from_profile_name("coated fogra39 (FITTED, craft-cms)"), Some(Builtin::CoatedFogra39));
-    for name in FOGRA39_STAND_IN_NAMES.into_iter().chain(["coated  FOGRA39 (iso 12647-2:2004)", "iso coated v2(eci)"]) {
-        assert_eq!(Builtin::from_profile_name(name), None, "{name}");
-        assert_eq!(Builtin::stand_in_for(name), Some(Builtin::CoatedFogra39), "{name}");
-    }
-    // The built-in separates to up to 330 % total ink, more than this profile allows.
-    for name in ["ISO Coated v2 300% (ECI)", "iso coated  V2 300 % (eci)", "U.S. Web Coated (SWOP) v2", "Coated FOGRA51 (PSO)", "PSO Coated v3", ""] {
-        assert_eq!(Builtin::from_profile_name(name), None, "{name}");
-        assert_eq!(Builtin::stand_in_for(name), None, "{name}");
-    }
 }
 
 /// Names [`Builtin::stand_in_for`] maps to [`Builtin::CoatedFogra39`] (all 330 % profiles).

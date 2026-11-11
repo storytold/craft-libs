@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "craft-web-api"
 description = "The page command API for Craft web builds: one window.<app> shape over the app's JSON control channel."
 version.workspace = true

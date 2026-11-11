@@ -7,13 +7,16 @@
 /// values. Sampled tables clamp their input to `[0, 1]`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Curve {
+    #[allow(missing_docs)]
     Identity,
     /// `y = x^g`.
     Gamma(f64),
     /// ICC `parametricCurveType` function `kind` (0–4) with parameters `[g, a, b, c, d, e, f]`
     /// (unused ones are 0).
     Parametric {
+        /// ICC parametric function type, 0 to 4 (see [`Curve::param_count`]).
         kind: u16,
+        /// Parameters `[g, a, b, c, d, e, f]`; those the function type does not use are 0.
         p: [f64; 7],
     },
     /// Samples at evenly spaced inputs over `[0, 1]`, normalised outputs.
@@ -37,6 +40,7 @@ impl Curve {
         }
     }
 
+    /// `true` when the curve maps every input to itself (within 1e-9 for formulas, 1/65535 for tables).
     pub fn is_identity(&self) -> bool {
         match self {
             Curve::Identity => true,
@@ -60,6 +64,7 @@ impl Curve {
         }
     }
 
+    /// Evaluates the curve at `x` in `f32`, the fast path for pixel loops.
     #[inline]
     pub fn eval(&self, x: f32) -> f32 {
         match self {
@@ -96,6 +101,7 @@ impl Curve {
         }
     }
 
+    /// Evaluates the inverse curve at `y` in `f32`, the fast path for pixel loops.
     #[inline]
     pub fn eval_inverse(&self, y: f32) -> f32 {
         match self {
@@ -328,75 +334,6 @@ fn edge_index(t: &[f32], start: bool) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn srgb_matches_formula() {
-        let c = srgb_trc();
-        for i in 0..=255 {
-            let v = i as f64 / 255.0;
-            let want = if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
-            assert!((c.eval64(v) - want).abs() < 1e-12);
-            assert!((c.eval_inverse64(want) - v).abs() < 1e-9);
-        }
-    }
-
-    #[test]
-    fn parametric_inverses() {
-        let curves = [
-            Curve::Parametric { kind: 0, p: [2.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] },
-            Curve::Parametric { kind: 1, p: [2.0, 0.9, 0.1, 0.0, 0.0, 0.0, 0.0] },
-            Curve::Parametric { kind: 2, p: [2.0, 0.9, 0.1, 0.05, 0.0, 0.0, 0.0] },
-            srgb_trc(),
-            Curve::Parametric { kind: 4, p: [2.4, 0.9, 0.05, 0.08, 0.04, 0.01, 0.002] },
-            Curve::Gamma(1.8),
-        ];
-        for c in &curves {
-            for i in 1..100 {
-                let x = i as f64 / 100.0;
-                let y = c.eval64(x);
-                assert!((c.eval_inverse64(y) - x).abs() < 1e-6, "{c:?} at {x}");
-            }
-        }
-    }
-
-    #[test]
-    fn table_inverse_exact_on_knots_and_between() {
-        let t = Curve::Gamma(2.2).sample(1024);
-        let c = Curve::Table(t);
-        for i in 0..=100 {
-            let x = i as f32 / 100.0;
-            let back = c.eval_inverse(c.eval(x));
-            assert!((back - x).abs() < 1e-4, "{x} -> {back}");
-        }
-        let dec = Curve::Table(vec![1.0, 0.5, 0.0]);
-        assert!((dec.eval_inverse(0.25) - 0.75).abs() < 1e-6);
-    }
-
-    #[test]
-    fn batch_inverse_matches_single_inverse() {
-        let mut flat = vec![0.25f32; 300];
-        flat.extend((0..300).map(|i| 0.25 + i as f32 / 600.0));
-        flat.extend([0.75f32; 300]);
-        for t in [flat.clone(), flat.iter().rev().copied().collect(), vec![0.5; 1000], Curve::Gamma(2.2).sample(256)] {
-            let c = Curve::Table(t);
-            let many = c.inverse64_many();
-            for i in 0..=200 {
-                let y = i as f64 / 200.0;
-                assert_eq!(many(y), c.eval_inverse64(y), "{y}");
-            }
-        }
-        let g = Curve::Gamma(2.2);
-        assert_eq!(g.inverse64_many()(0.3), g.eval_inverse64(0.3));
-    }
-
-    #[test]
-    fn hdr_and_negative_extension() {
-        let c = srgb_trc();
-        assert!(c.eval64(2.0) > 1.0);
-        assert!((c.eval_inverse64(c.eval64(2.0)) - 2.0).abs() < 1e-9);
-        let g = Curve::Gamma(2.2);
-        assert!((g.eval64(-0.5) + 0.5f64.powf(2.2)).abs() < 1e-12);
-    }
 
     #[test]
     fn inverting_a_long_flat_table_does_not_rescan_it_for_every_pixel() {

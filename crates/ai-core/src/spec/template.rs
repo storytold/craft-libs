@@ -9,8 +9,11 @@ use serde_json::Value;
 /// A value a template may name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Slot {
+    /// The user's prompt text.
     Prompt,
+    /// The model id.
     Model,
+    /// The job id a submit call returned. Only calls after the submit may use it.
     JobId,
 }
 
@@ -28,8 +31,11 @@ impl Slot {
 /// The values for one call. A slot left `None` cannot be used by that call.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Values<'a> {
+    /// Text for `{prompt}`.
     pub prompt: Option<&'a str>,
+    /// Text for `{model}`.
     pub model: Option<&'a str>,
+    /// Text for `{job_id}`.
     pub job_id: Option<&'a str>,
 }
 

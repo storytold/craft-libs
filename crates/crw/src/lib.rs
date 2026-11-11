@@ -105,13 +105,18 @@ impl Cfa {
 /// A rectangle in sensor pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Rect {
+    /// Left edge, in sensor pixels from the sensor's origin.
     pub x: usize,
+    /// Top edge, in sensor pixels from the sensor's origin.
     pub y: usize,
+    /// Width in sensor pixels.
     pub width: usize,
+    /// Height in sensor pixels.
     pub height: usize,
 }
 
 impl Rect {
+    /// A rectangle from its left edge, top edge, width and height.
     pub const fn new(x: usize, y: usize, width: usize, height: usize) -> Self {
         Self { x, y, width, height }
     }
@@ -125,6 +130,7 @@ impl Rect {
 /// level through [`BlackLevel::at`] rather than pairing the two by index.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BlackLevel {
+    /// The four levels, row-major, in sensor sample units.
     pub values: [f32; 4],
 }
 
@@ -176,6 +182,7 @@ pub struct Header {
 /// A decoded CRW.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Image {
+    /// The file's parsed header.
     pub header: Header,
     /// `width × height` sensor samples, row-major, `bits` deep (10 or 12), black not subtracted.
     pub samples: Vec<u16>,
@@ -775,3 +782,10 @@ impl Chains {
         }
     }
 }
+
+#[cfg(test)]
+extern crate self as craft_crw;
+
+#[cfg(test)]
+#[path = "../tests/main.rs"]
+mod integration;

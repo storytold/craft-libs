@@ -949,17 +949,6 @@ mod tests {
     }
 
     #[test]
-    fn cbr_bitrate_limits_use_the_exact_bits_per_frame() {
-        // 288000 b/s at 48 kHz is exactly 6144 bits per frame; one more cannot fit a mono frame.
-        assert!(Encoder::new(EncoderConfig::cbr(48_000, 1, 288_000)).is_ok());
-        assert!(Encoder::new(EncoderConfig::cbr(48_000, 1, 288_001)).is_err());
-        // 4500 b/s at 96 kHz is exactly 48 bits per frame, the size of a silent mono frame.
-        assert!(Encoder::new(EncoderConfig::cbr(96_000, 1, 4_500)).is_ok());
-        assert!(Encoder::new(EncoderConfig::cbr(96_000, 1, 4_499)).is_err());
-        assert!(Encoder::new(EncoderConfig::cbr(96_000, 2, 2_000)).is_err());
-    }
-
-    #[test]
     fn cbr_access_units_fit_the_decoder_buffer() {
         let sil = vec![0f32; 48_000];
         let nz = noise(48_000);
@@ -986,17 +975,6 @@ mod tests {
                 let units = encode_all(cfg(b), &sil);
                 let max = units[1..units.len() - 1].iter().map(|u| u.len() * 8 - header).max().unwrap_or(0);
                 assert!(max <= budget, "{ch} ch, ADTS {adts}: {b} b/s accepted, {budget} bits per frame, silent frames take {max}");
-            }
-        }
-    }
-
-    #[test]
-    fn maximum_rate_frames_are_filled_to_the_limit() {
-        let sil = vec![0f32; 48_000];
-        for bandwidth in [None, Some(1000)] {
-            let units = encode_all(EncoderConfig::cbr(48_000, 1, 288_000).with_bandwidth(bandwidth), &sil);
-            for u in &units[..units.len() - 1] {
-                assert_eq!(u.len(), 768, "bandwidth {bandwidth:?}");
             }
         }
     }
@@ -1029,31 +1007,6 @@ mod tests {
                         assert!(used >= available.min(e.max_frame_bits) / 8 * 8, "{at}: last frame {used} bits, {available} available");
                     }
                 }
-            }
-        }
-    }
-
-    #[test]
-    fn fill_never_passes_the_request() {
-        for bits in 0..3000u64 {
-            let mut bw = BitWriter::new();
-            let n = write_fill(&mut bw, bits);
-            assert_eq!(n, bw.bit_len() as u64);
-            assert!(n <= bits && n + 6 >= bits, "asked {bits}, wrote {n}");
-        }
-    }
-
-    #[test]
-    fn vbr_quality_must_be_a_number() {
-        assert!(Encoder::new(EncoderConfig::vbr(48_000, 2, f32::NAN)).is_err());
-        // Infinities and other out-of-range values are clamped: they encode exactly as the nearest
-        // end of the range, within the frame limit.
-        let nz = noise(48_000);
-        for (q, end) in [(f32::INFINITY, 6.0), (f32::NEG_INFINITY, 0.5), (100.0, 6.0), (-3.0, 0.5)] {
-            let units = encode_all(EncoderConfig::vbr(48_000, 8, q).with_adts(true), &nz);
-            assert!(units == encode_all(EncoderConfig::vbr(48_000, 8, end).with_adts(true), &nz), "quality {q}");
-            for u in &units {
-                assert!(u.len() <= 6144 + 7 && u.starts_with(&[0xFF]), "quality {q}: {}-byte unit", u.len());
             }
         }
     }

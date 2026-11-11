@@ -55,15 +55,6 @@ fn cube_with_its_material_library() {
 }
 
 #[test]
-fn a_library_that_is_not_supplied_leaves_named_defaults() {
-    let s = parse(CUBE.as_bytes()).unwrap();
-    assert_eq!(s.external, ["cube.mtl"]);
-    assert_eq!(s.warnings.len(), 1);
-    assert_eq!(s.materials.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["Red", "Gold"]);
-    assert_eq!(s.materials[0].base_color, [0.8, 0.8, 0.8, 1.0]);
-}
-
-#[test]
 fn library_names_with_spaces_several_names_and_foreign_paths() {
     let src = |lib: &str| format!("mtllib {lib}\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl Red\nf 1 2 3\n");
     for (lib, supplied) in [("my materials.mtl", "my materials.mtl"), ("a.mtl b.mtl", "b.mtl"), ("C:\\models\\cube.mtl", "cube.mtl")] {

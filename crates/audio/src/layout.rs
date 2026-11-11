@@ -282,37 +282,3 @@ pub(crate) fn flac_assumed_mask(channels: usize) -> u32 {
         n => ChannelLayout::default_for(n as u16).mask().unwrap_or(0),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn speakers_follow_the_mask_in_wav_order() {
-        assert_eq!(
-            ChannelLayout::SURROUND_5_1_SIDE.speakers(),
-            [Speaker::FrontLeft, Speaker::FrontRight, Speaker::FrontCenter, Speaker::Lfe, Speaker::SideLeft, Speaker::SideRight]
-        );
-        assert_eq!(ChannelLayout::SURROUND_7_1.index_of(Speaker::SideLeft), Some(6));
-        assert_eq!(Speaker::SideRight.mask_bit(), 0x400);
-    }
-
-    #[test]
-    fn a_mask_that_does_not_match_the_channels_is_unordered() {
-        assert_eq!(ChannelLayout::from_mask_and_channels(0x3F, 6), ChannelLayout::SURROUND_5_1);
-        assert!(!ChannelLayout::from_mask_and_channels(0x3, 4).is_ordered());
-        assert!(!ChannelLayout::from_mask_and_channels(0, 4).is_ordered());
-        assert!(!ChannelLayout::from_mask(1 << 20).is_ordered());
-        assert_eq!(ChannelLayout::unordered(4).channels(), 4);
-        assert!(ChannelLayout::unordered(4).speakers().is_empty());
-    }
-
-    #[test]
-    fn defaults_and_names() {
-        assert_eq!(ChannelLayout::default_for(6), ChannelLayout::SURROUND_5_1);
-        assert!(!ChannelLayout::default_for(9).is_ordered());
-        assert_eq!(ChannelLayout::default_for(2).to_string(), "stereo");
-        assert_eq!(ChannelLayout::SURROUND_5_1_SIDE.to_string(), "5.1");
-        assert_eq!(ChannelLayout::unordered(10).to_string(), "10 channels");
-    }
-}

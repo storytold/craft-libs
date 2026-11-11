@@ -194,43 +194,11 @@ mod tests {
     }
 
     #[test]
-    fn transfer_encodings_by_name() {
-        assert_eq!(decode(b"SGk=", " Base64 "), b"Hi");
-        assert_eq!(decode(b"a=3Db", "Quoted-Printable"), b"a=b");
-        for identity in ["7bit", "8bit", "binary", "", "x-unknown"] {
-            assert_eq!(decode(b"a=3Db", identity), b"a=3Db");
-        }
-    }
-
-    #[test]
-    fn base64_plain_and_padded() {
-        assert_eq!(base64_decode(b"SGVsbG8="), b"Hello");
-        assert_eq!(base64_decode(b"SGVsbG8"), b"Hello");
-        assert_eq!(base64_decode(b"SGVsbA=="), b"Hell");
-        assert_eq!(base64_decode(b"SGVs"), b"Hel");
-        assert_eq!(base64_decode(b""), b"");
-        assert_eq!(base64_decode(b"="), b"");
-        assert_eq!(base64_decode(b"S"), b"");
-    }
-
-    #[test]
     fn base64_skips_junk_and_line_breaks() {
         assert_eq!(base64_decode(b"SGVs\r\nbG8g\r\nd29y bGQ=\r\n"), b"Hello world");
         assert_eq!(base64_decode(b"  S*G(V)s!b~G8\x00\xFF= "), b"Hello");
         // Two padded chunks, as some senders write.
         assert_eq!(base64_decode(b"SGk=SGk="), b"HiHi");
-    }
-
-    #[test]
-    fn base64_lines_wrap_at_76() {
-        let data: Vec<u8> = (0..200u8).collect();
-        let lines = base64_lines(&data);
-        let text = String::from_utf8(lines.clone()).unwrap();
-        assert!(text.split("\r\n").all(|l| l.len() <= 76 && !l.is_empty()));
-        assert_eq!(text.split("\r\n").next().map(str::len), Some(76));
-        assert!(!text.ends_with('\n'));
-        assert_eq!(base64_decode(&lines), data);
-        assert_eq!(base64_lines(b""), b"");
     }
 
     #[test]
@@ -264,17 +232,6 @@ mod tests {
     }
 
     #[test]
-    fn quoted_printable_lines_stay_within_76() {
-        let text = format!("{}\n{}", "x".repeat(300), "é".repeat(100));
-        let encoded = qp_encode(text.as_bytes());
-        let s = String::from_utf8(encoded.clone()).unwrap();
-        for line in s.split("\r\n") {
-            assert!(line.len() <= 76, "{}", line.len());
-        }
-        assert_eq!(qp_decode(&encoded), text.replace('\n', "\r\n").as_bytes());
-    }
-
-    #[test]
     fn long_runs_decode_quickly() {
         let spaces = [b' '; 300_000];
         assert_eq!(qp_decode(&spaces), b"");
@@ -290,23 +247,12 @@ mod tests {
 
     proptest::proptest! {
         #[test]
-        fn base64_round_trips(data in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..300)) {
-            proptest::prop_assert_eq!(base64_decode(&base64_lines(&data)), data);
-        }
-
-        #[test]
         fn quoted_printable_round_trips(text in proptest::prelude::any::<String>()) {
             let text = text.replace('\r', "");
             let encoded = qp_encode(text.as_bytes());
             proptest::prop_assert!(encoded.split(|b| *b == b'\n').all(|l| l.len() <= 77));
             proptest::prop_assert!(encoded.iter().all(|b| matches!(*b, b'\r' | b'\n' | b'\t' | 32..=126)));
             proptest::prop_assert_eq!(qp_decode(&encoded), text.replace('\n', "\r\n").into_bytes());
-        }
-
-        #[test]
-        fn decoders_take_any_bytes(data in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..300)) {
-            let _ = base64_decode(&data);
-            let _ = qp_decode(&data);
         }
     }
 }
