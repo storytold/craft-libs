@@ -11,4 +11,4 @@ mod words;
 
 pub use commands::AppCommand;
 pub use editor::EditorMock;
-pub use model::{ColorPair, Document, Layer, LayerId, MarqueeDrag, MockState, Panel, Tool, ToolKey};
+pub use model::{ColorPair, Document, Layer, LayerId, LayerMove, MarqueeDrag, MockState, Panel, Tool, ToolKey};

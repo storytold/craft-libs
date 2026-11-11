@@ -77,7 +77,7 @@ impl MoveValue {
 /// A Move-tool drag in progress: the press, whether ⌥ was held at it, and the last locked
 /// offset. The tool keeps it between events and drops it after [`release`](Self::release) or on
 /// cancel.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MoveGesture {
     start: Point,
     directions: Directions,
@@ -117,6 +117,11 @@ impl MoveGesture {
     /// The value of the last [`follow`](Self::follow): the offset and whether it copies.
     pub fn value(&self) -> MoveValue {
         self.value
+    }
+
+    /// The direction ⇧ holds the offset to, as the last locked offset; `None` while the move is free.
+    pub fn locked(&self) -> Option<Vec2> {
+        self.locked
     }
 
     /// The value at `at`, updating the remembered lock; `copy` stays on once on.

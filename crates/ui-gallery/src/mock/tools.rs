@@ -1,7 +1,8 @@
 //! The canvas tools of the mock: what the window keeps across passes in its root container, the Move tool and the
 //! rectangular Marquee.
 
-use super::model::{Document, MarqueeDrag};
+use super::model::{Document, LayerMove, MarqueeDrag};
+use craft_behavior::geometry::{ConstrainStyle, Directions, MoveGesture, MoveValue};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
 use craft_behavior::{CancelReason, Cursor, CursorIcon};
 use craft_ui::canvas::{CanvasTool, HandTool, Momentary, NavigationOptions, ToolAction, ToolContext, ToolKey, ToolPath, ToolPointer, ZoomTool};
@@ -24,24 +25,57 @@ impl Default for Tools {
     }
 }
 
-/// The Move tool: it takes no press of its own (the guides over the canvas take theirs) and its command form is
-/// moving the current layer.
+/// The Move tool: a drag moves the current layer, Shift holds the move to `directions`, and Alt held at the press
+/// moves a copy. The guides over the canvas take their own presses. Its command form is moving the current layer.
 #[derive(Debug, craft_ui::contract::Pattern)]
 #[pattern(tool)]
-pub(super) struct MoveTool;
+pub(super) struct MoveTool<'a> {
+    document: &'a mut Document,
+    directions: Directions,
+}
 
-impl CanvasTool for MoveTool {
-    fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
-        ToolAction::Ignored
+impl<'a> MoveTool<'a> {
+    pub(super) fn new(document: &'a mut Document, directions: Directions) -> Self {
+        MoveTool { document, directions }
+    }
+}
+
+impl CanvasTool for MoveTool<'_> {
+    fn press(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) -> ToolAction {
+        let (Some(space), Some(layer)) = (cx.space(), self.document.current_layer().filter(|layer| layer.visible)) else {
+            return ToolAction::Ignored;
+        };
+        let style = ConstrainStyle::new(f64::from(cx.slop), f64::from(cx.slop));
+        let gesture = MoveGesture::press(&style, space.view.to_doc(pointer.pos), pointer.mods, self.directions);
+        self.document.moving = Some(LayerMove { layer: layer.id, from: layer.bounds, gesture });
+        ToolAction::Claimed
     }
 
-    fn drag(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+    fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        let (Some(space), Some(moving)) = (cx.space(), self.document.moving.as_mut()) else { return };
+        let Some(value) = moving.gesture.follow(space.view.to_doc(pointer.pos), pointer.mods, space.view.zoom) else { return };
+        let (layer, from) = (moving.layer, moving.from);
+        self.document.show_move(layer, from, value);
+        cx.readout(vec![(Label::from("X"), format!("{:.0}", value.delta.x)), (Label::from("Y"), format!("{:.0}", value.delta.y))]);
+    }
 
-    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+    fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        let (Some(space), Some(moving)) = (cx.space(), self.document.moving.take()) else { return };
+        let value = moving.gesture.release(space.view.to_doc(pointer.pos), pointer.mods, space.view.zoom);
+        self.document.end_move(moving.layer, moving.from, value);
+    }
 
-    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {
+        if let Some(moving) = self.document.moving.take() {
+            self.document.show_move(moving.layer, moving.from, MoveValue::default());
+        }
+    }
 
     fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn cursor(&self, _: &ToolContext<'_>) -> Cursor {
+        Cursor::System(CursorIcon::Move)
+    }
 
     fn command_form(&self) -> ToolPath {
         ToolPath::Command("the Move Layer command")

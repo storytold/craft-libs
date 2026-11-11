@@ -1,6 +1,7 @@
 //! What the mock editor reads and edits: a tool, a layer list, a canvas view, a document title and a dirty flag.
 
 use craft_behavior::dock::{Column, DockEdge, Group, Layout, Node, SplitSize, Workspace};
+use craft_behavior::geometry::{MoveGesture, MoveValue};
 use craft_behavior::kurbo::Rect as DocRect;
 use craft_behavior::kurbo::{Point, Size};
 use craft_behavior::{Axis, PixelSize};
@@ -207,6 +208,18 @@ impl MarqueeDrag {
     }
 }
 
+/// A layer being moved with the Move tool: the layer, its bounds at the press, and the drag.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct LayerMove {
+    /// The moved layer.
+    pub layer: LayerId,
+    /// The layer's bounds at the press.
+    pub from: PixelRect,
+    /// The drag, with its Shift lock and Alt copy.
+    pub gesture: MoveGesture,
+}
+
 /// The open document.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -235,6 +248,8 @@ pub struct Document {
     pub marquee: Option<DocRect>,
     /// The marquee being dragged out.
     pub dragging: Option<MarqueeDrag>,
+    /// The layer being moved.
+    pub moving: Option<LayerMove>,
     /// Whether the rulers show.
     pub rulers: bool,
     /// The number the next layer gets as its identity.
@@ -264,6 +279,7 @@ impl Default for Document {
             guide: None,
             marquee: None,
             dragging: None,
+            moving: None,
             rulers: true,
             next_layer: 3,
         }
@@ -326,6 +342,34 @@ impl Document {
         self.selected = Selection::single(layer.id);
         self.layers.insert(at, layer);
         self.dirty = true;
+    }
+
+    /// Shows the layer `id` moved from `from` by `value`'s offset, rounded to whole pixels.
+    pub fn show_move(&mut self, id: LayerId, from: PixelRect, value: MoveValue) {
+        let (dx, dy) = (value.delta.x.round() as i32, value.delta.y.round() as i32);
+        if let Some(layer) = self.layers.iter_mut().find(|layer| layer.id == id) {
+            layer.bounds = PixelRect::new(from.x0 + dx, from.y0 + dy, from.x1 + dx, from.y1 + dy);
+        }
+    }
+
+    /// Ends the move of the layer `id` from `from` at `value`: the layer stays where it was moved, or with `copy` a
+    /// copy above it takes the moved place, becomes the current layer and the layer goes back. A move that changed
+    /// something marks the document changed.
+    pub fn end_move(&mut self, id: LayerId, from: PixelRect, value: MoveValue) {
+        self.show_move(id, from, value);
+        if !value.changed() {
+            return;
+        }
+        self.dirty = true;
+        let Some(at) = self.layers.iter().position(|layer| layer.id == id).filter(|_| value.copy) else { return };
+        let number = self.next_layer;
+        self.next_layer += 1;
+        let mut copy = self.layers[at].clone();
+        copy.id = LayerId(number);
+        copy.name = format!("{} copy", copy.name);
+        self.layers[at].bounds = from;
+        self.selected = Selection::single(copy.id);
+        self.layers.insert(at, copy);
     }
 
     /// Shows or hides the layer `id`, which marks the document changed.

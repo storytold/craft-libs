@@ -39,11 +39,15 @@ pub mod dialog {
     pub use craft_ui_panels::dialog::*;
 }
 
-/// The fixture, the suite runner and the story helpers, with the canvas helpers: `ToolFixture`, `tool_story` and
-/// `canvas_story`.
+/// The fixture, the suite runner and the story helpers, with the canvas helpers: `ToolFixture`, the live tool story
+/// host (`tool_story`) and `canvas_story`.
 #[cfg(feature = "testing")]
 pub mod testing {
-    pub use crate::canvas::testing::{canvas_story, tool_fixture, tool_fixture::ToolFixture, tool_story::tool_story};
+    pub use crate::canvas::testing::{
+        canvas_story, tool_fixture,
+        tool_fixture::ToolFixture,
+        tool_story::{StoryHost, ToolRun, ToolStory, tool_story},
+    };
     pub use craft_ui_panels::testing::*;
 
     crate::testing_registered!();

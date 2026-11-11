@@ -1,49 +1,72 @@
-//! Stories of the selection tools: one per tool, on a canvas over the mock picture, run by `ToolHost::run` as an app
-//! does. The events each tool reports are applied to a story selection (a rectangle in the hard coverage a marquee or
-//! outline gives), which the selection overlay shows. The first press inside the selection drags it.
+//! Stories of the selection tools: one per tool, run live on a canvas over the mock picture by the tool story host,
+//! as an app runs them. The events each tool reports are applied to the story selection: the shapes the tools
+//! committed, combined in order by their operations (so Shift adds and Alt subtracts) and moved by the selection
+//! drags, which the selection overlay shows. It starts as a rectangle round the picture's house, so the first press
+//! inside it drags it. The Magnetic Lasso's tracer follows the house's outline where its contrast is strong enough.
 
-use craft_behavior::EditEvent;
-use craft_behavior::kurbo::{Point, Rect, Size};
-use craft_ui::canvas::{Canvas, CanvasOutput, RasterSource as _, ToolHost};
-use craft_ui::contract::ShowContainer as _;
+use craft_behavior::geometry::{Constraint, SelectionOperation};
+use craft_behavior::kurbo::{Point, Rect, Vec2};
+use craft_behavior::{CanvasView, EditEvent};
+use craft_ui::canvas::RasterSource as _;
 use craft_ui::runtime::env::Env;
-use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
+use craft_ui::testing::{Drive, StoryData, StoryHost, StoryOutput, ToolStory, story, tool_story};
 use egui::Ui;
-use std::sync::{Arc, Mutex};
 
 use super::{
-    EdgeSearch, EdgeTracer, LassoTool, MagneticLassoTool, MarqueeKind, MarqueeTool, PolygonLassoTool, SelectEvent, SelectToolPass, SelectionProbe,
-    SelectionShape,
+    EdgeSearch, EdgeTracer, LassoTool, MagneticLassoTool, MarqueeKind, MarqueeTool, PolygonLassoTool, SelectEvent, SelectPhase, SelectToolPass,
+    SelectionProbe, SelectionShape,
 };
 use crate::trace::{MaskRect, MaskSource};
-use crate::ui::mock_image::{MockImage, StoryView};
+use crate::ui::mock_image::MockImage;
 use crate::ui::selection::SelectionOverlay;
 
 craft_ui::words! {
-    /// The captions of the selection tool stories.
+    /// The captions and the status line of the selection tool stories.
     #[non_exhaustive]
     pub(crate) struct SelectToolStoryWords {
         /// The name of the selection overlay.
         selection: "selectToolStory.selection" = "Selection";
+        /// The status line under the picture: the tool's phase and the last event it reported.
+        status: template "selectToolStory.status" = "{phase}. Last event: {event}.";
+        /// Nothing under way.
+        idle: "selectToolStory.idle" = "Idle";
+        /// A marquee being dragged.
+        marquee: "selectToolStory.marquee" = "Dragging a marquee";
+        /// An outline being drawn.
+        outline: "selectToolStory.outline" = "Drawing an outline";
+        /// The selection being dragged.
+        dragging: "selectToolStory.dragging" = "Dragging the selection";
+        /// No event so far.
+        no_event: "selectToolStory.noEvent" = "none yet";
+        /// A shape was selected.
+        selected: "selectToolStory.selected" = "Selected";
+        /// A click deselected.
+        deselected: "selectToolStory.deselected" = "Deselected";
+        /// The selection was dragged.
+        dragged: "selectToolStory.dragged" = "Dragged the selection";
     }
 }
 
-/// A tool a story runs, with the events it reports.
-trait Shown: Send + 'static {
-    fn run(&mut self, ui: &Ui, canvas: &CanvasOutput, probe: &dyn SelectionProbe);
+/// A selection tool a story runs: its pass for the host, its events and its phase.
+trait Shown: 'static {
+    fn run(&mut self, host: &StoryHost<'_>, probe: &dyn SelectionProbe);
     fn take(&mut self) -> Vec<SelectEvent>;
+    fn phase(&self) -> SelectPhase;
 }
 
 macro_rules! shown {
     ($tool:ty $(, $param:ident: $bound:path)?) => {
-        impl$(<$param: $bound + Send + 'static>)? Shown for $tool {
-            fn run(&mut self, ui: &Ui, canvas: &CanvasOutput, probe: &dyn SelectionProbe) {
-                let mut pass = SelectToolPass::new(self, probe);
-                let _ = ToolHost::new().run(ui, canvas, &mut pass);
+        impl$(<$param: $bound + 'static>)? Shown for $tool {
+            fn run(&mut self, host: &StoryHost<'_>, probe: &dyn SelectionProbe) {
+                let _ = host.run(&mut SelectToolPass::new(self, probe));
             }
 
             fn take(&mut self) -> Vec<SelectEvent> {
                 self.take_events()
+            }
+
+            fn phase(&self) -> SelectPhase {
+                <$tool>::phase(self)
             }
         }
     };
@@ -54,62 +77,146 @@ shown!(LassoTool);
 shown!(PolygonLassoTool);
 shown!(MagneticLassoTool<T>, T: EdgeTracer);
 
-/// A tool held across the passes of a story; clones share it.
-struct Held(Arc<Mutex<Box<dyn Shown>>>);
-
-impl Clone for Held {
-    fn clone(&self) -> Self {
-        Held(Arc::clone(&self.0))
-    }
+/// What a story keeps of its tool: the tool and the kind of the last event it reported.
+struct Kept<T> {
+    tool: T,
+    last: Option<Last>,
 }
 
-impl PartialEq for Held {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
+/// The kind of event the status line names.
+#[derive(Clone, Copy, Debug)]
+enum Last {
+    Selected,
+    Deselected,
+    Dragged,
 }
 
-/// The story's selection: a rectangle, or nothing.
+/// The story selection: shapes combined in order by their operations, then moved by `offset`. It is the tools'
+/// [`SelectionProbe`] and the overlay's [`MaskSource`].
 #[derive(Clone, Debug, PartialEq)]
-struct Selection(Option<Rect>);
-
-/// The selection as the probe and the overlay's mask see it.
-struct RectMask {
-    rect: Option<Rect>,
+struct Selection {
     size: [u32; 2],
+    parts: Vec<(SelectionOperation, SelectionShape)>,
+    offset: Vec2,
+    revision: u64,
 }
 
-impl RectMask {
-    fn pixels(&self) -> Option<MaskRect> {
-        self.rect.map(|rect| MaskRect::new(rect.x0.floor() as i32, rect.y0.floor() as i32, rect.x1.ceil() as i32, rect.y1.ceil() as i32))
+impl Selection {
+    /// A rectangle round the picture's house.
+    fn house(image: &MockImage) -> Self {
+        let b = image.subject_bounds();
+        let rect = Rect::new(f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1));
+        let size = image.size();
+        Selection {
+            size: [size.width, size.height],
+            parts: vec![(SelectionOperation::New, SelectionShape::Rectangle(rect))],
+            offset: Vec2::ZERO,
+            revision: 1,
+        }
+    }
+
+    /// Applies what a tool reported, as an app does; returns the kind of the last event.
+    fn apply(&mut self, events: Vec<SelectEvent>) -> Option<Last> {
+        let mut last = None;
+        for event in events {
+            match event {
+                SelectEvent::Commit { shape, operation } => {
+                    if operation == SelectionOperation::New {
+                        self.parts.clear();
+                        self.offset = Vec2::ZERO;
+                    }
+                    self.parts.push((operation, shape));
+                    last = Some(Last::Selected);
+                }
+                SelectEvent::Deselect => {
+                    self.parts.clear();
+                    self.offset = Vec2::ZERO;
+                    last = Some(Last::Deselected);
+                }
+                SelectEvent::DragSelection(EditEvent::Commit { after, .. }) => {
+                    self.offset += Vec2::new(f64::from(after.delta[0]), f64::from(after.delta[1]));
+                    last = Some(Last::Dragged);
+                }
+                SelectEvent::DragSelection(_) => continue,
+            }
+            self.revision += 1;
+        }
+        last
+    }
+
+    /// The coverage at the document point `p`: 0 or 1, the hard coverage a marquee or an outline gives.
+    fn coverage(&self, p: Point) -> f32 {
+        let p = p - self.offset;
+        self.parts.iter().fold(0.0, |acc, (operation, shape)| {
+            let c = f32::from(inside(shape, p));
+            match operation {
+                SelectionOperation::Add => acc.max(c),
+                SelectionOperation::Subtract => acc * (1.0 - c),
+                SelectionOperation::Intersect => acc.min(c),
+                _ => c,
+            }
+        })
     }
 }
 
-impl MaskSource for RectMask {
+/// Whether `p` is inside `shape`: an outline by the even-odd rule.
+fn inside(shape: &SelectionShape, p: Point) -> bool {
+    match shape {
+        SelectionShape::Rectangle(r) => r.x0 <= p.x && p.x < r.x1 && r.y0 <= p.y && p.y < r.y1,
+        SelectionShape::Ellipse(r) => {
+            let (c, rx, ry) = (r.center(), r.width() / 2.0, r.height() / 2.0);
+            rx > 0.0 && ry > 0.0 && ((p.x - c.x) / rx).powi(2) + ((p.y - c.y) / ry).powi(2) <= 1.0
+        }
+        SelectionShape::Polygon(points) => {
+            let mut inside = false;
+            for (i, a) in points.iter().enumerate() {
+                let b = points[(i + 1) % points.len()];
+                if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
+                    inside = !inside;
+                }
+            }
+            inside
+        }
+    }
+}
+
+/// The document rectangle `shape` covers.
+fn bounds(shape: &SelectionShape) -> Rect {
+    match shape {
+        SelectionShape::Rectangle(r) | SelectionShape::Ellipse(r) => *r,
+        SelectionShape::Polygon(points) => {
+            let first = points.first().copied().unwrap_or(Point::ZERO);
+            points.iter().fold(Rect::from_points(first, first), |rect, &p| rect.union_pt(p))
+        }
+    }
+}
+
+impl MaskSource for Selection {
     fn size(&self) -> [u32; 2] {
         self.size
     }
 
     fn revision(&self) -> u64 {
-        self.rect.map_or(0, |rect| {
-            rect.x0.to_bits() ^ rect.y0.to_bits().rotate_left(16) ^ rect.x1.to_bits().rotate_left(32) ^ rect.y1.to_bits().rotate_left(48)
-        })
+        self.revision
     }
 
     fn content_bounds(&self) -> MaskRect {
-        self.pixels().unwrap_or(MaskRect::new(0, 0, 0, 0))
+        let grown = self.parts.iter().filter(|(operation, _)| !matches!(operation, SelectionOperation::Subtract | SelectionOperation::Intersect));
+        match grown.map(|(_, shape)| bounds(shape) + self.offset).reduce(|a, b| a.union(b)) {
+            Some(r) => MaskRect::new(r.x0.floor() as i32, r.y0.floor() as i32, r.x1.ceil() as i32, r.y1.ceil() as i32),
+            None => MaskRect::new(0, 0, 0, 0),
+        }
     }
 
     fn read_row(&self, y: i32, x0: i32, step: u32, out: &mut [f32]) {
-        let bounds = self.content_bounds();
         for (index, value) in out.iter_mut().enumerate() {
-            let x = x0 + i32::try_from(index as u32 * step).unwrap_or(i32::MAX);
-            *value = if (bounds.x0..bounds.x1).contains(&x) && (bounds.y0..bounds.y1).contains(&y) { 1.0 } else { 0.0 };
+            let x = f64::from(x0) + (index as f64) * f64::from(step);
+            *value = self.coverage(Point::new(x + 0.5, f64::from(y) + 0.5));
         }
     }
 }
 
-impl SelectionProbe for RectMask {
+impl SelectionProbe for Selection {
     fn document(&self) -> u64 {
         1
     }
@@ -119,84 +226,160 @@ impl SelectionProbe for RectMask {
     }
 
     fn has_selection(&self) -> bool {
-        self.rect.is_some()
+        !self.parts.is_empty()
     }
 
     fn inside_selection(&self, at: Point) -> bool {
-        self.rect.is_some_and(|rect| rect.contains(at))
+        self.coverage(at) > 0.0
     }
 }
 
-/// Edges at the picture's house: the tracer snaps to the selection's rectangle where it is near.
-struct Edges;
-
-impl EdgeTracer for Edges {
-    fn snap(&mut self, _: Point, _: EdgeSearch) -> Option<Point> {
-        None
-    }
-
-    fn trace(&mut self, from: Point, to: Point, _: &[Point], _: EdgeSearch) -> Vec<Point> {
-        vec![from, to]
-    }
+/// An [`EdgeTracer`] over the picture: the edges are the house's outline, and an edge counts where the brightness
+/// across it differs by at least the search's contrast.
+struct PictureEdges {
+    image: MockImage,
 }
 
-/// Applies what the tool reported to the story selection.
-fn apply(selection: &mut Selection, events: Vec<SelectEvent>) {
-    for event in events {
-        match event {
-            SelectEvent::Commit { shape: SelectionShape::Rectangle(rect) | SelectionShape::Ellipse(rect), .. } => selection.0 = Some(rect),
-            SelectEvent::Commit { shape: SelectionShape::Polygon(points), .. } => {
-                let first = points.first().copied().unwrap_or_default();
-                selection.0 = Some(points.iter().fold(Rect::from_points(first, first), |rect, &p| rect.union_pt(p)));
-            }
-            SelectEvent::Deselect => selection.0 = None,
-            SelectEvent::DragSelection(EditEvent::Commit { after, .. }) => {
-                let delta = (f64::from(after.delta[0]), f64::from(after.delta[1]));
-                selection.0 = selection.0.map(|rect| rect + craft_behavior::kurbo::Vec2::new(delta.0, delta.1));
-            }
-            SelectEvent::DragSelection(_) => {}
+impl PictureEdges {
+    /// How far either side of the outline the brightness is compared, as a share of the picture's width.
+    const PROBE: f64 = 0.002;
+
+    fn luma(&self, p: Point) -> f64 {
+        let [r, g, b, _] = self.image.pixel(p.x, p.y);
+        (0.299 * f64::from(r) + 0.587 * f64::from(g) + 0.114 * f64::from(b)) / 255.0
+    }
+
+    /// The outline's unit normal at `p`, pointing out of the house.
+    fn normal(&self, p: Point) -> Vec2 {
+        let d = |dx: f64, dy: f64| self.image.subject_distance(p.x + dx, p.y + dy);
+        let g = Vec2::new(d(1.0, 0.0) - d(-1.0, 0.0), d(0.0, 1.0) - d(0.0, -1.0));
+        if g.hypot() > 0.0 { g / g.hypot() } else { Vec2::new(0.0, -1.0) }
+    }
+
+    /// The point of the outline nearest `p`; `None` beyond the search's width or where the edge is weaker than its
+    /// contrast.
+    fn edge_near(&self, p: Point, search: EdgeSearch) -> Option<Point> {
+        let mut q = p;
+        for _ in 0..4 {
+            q -= self.normal(q) * self.image.subject_distance(q.x, q.y);
         }
+        let reach = Self::PROBE * f64::from(self.image.size().width);
+        let n = self.normal(q);
+        let contrast = (self.luma(q + n * reach) - self.luma(q - n * reach)).abs();
+        ((q - p).hypot() <= search.width && contrast >= search.contrast).then_some(q)
     }
 }
 
-/// Runs the tool `name` on a canvas over the mock picture, with the story selection drawn by the overlay.
-fn on_canvas(ui: &mut Ui, data: &mut StoryData, name: &'static str, init: fn() -> Box<dyn Shown>) -> StoryOutput {
-    let held = data.value(name, Held(Arc::new(Mutex::new(init())))).clone();
-    let selection = data.value("selection", Selection(Some(Rect::new(200.0, 150.0, 600.0, 450.0))));
-    let image = MockImage::default();
-    let size = image.size();
-    let room = craft_ui::testing::stage(ui);
-    let view = StoryView::Fit.of(room, size, ui.pixels_per_point());
-    let words = Env::of(ui).words::<SelectToolStoryWords>();
-    let mask = RectMask { rect: selection.0, size: [size.width, size.height] };
-    let document = Size::new(f64::from(size.width), f64::from(size.height));
-    let shown = Canvas::new("Document").document(document).view(view).show_at(ui, room, |ui, body| {
-        craft_ui::testing::canvas_story::show_document(ui, body.rect, &image);
-        SelectionOverlay::new(words.selection.clone(), &mask).show_at(ui, body.rect);
-    });
-    if let Ok(mut tool) = held.0.lock() {
-        tool.run(ui, &shown.output, &mask);
-        apply(selection, tool.take());
+impl EdgeTracer for PictureEdges {
+    fn snap(&mut self, at: Point, search: EdgeSearch) -> Option<Point> {
+        self.edge_near(at, search)
     }
-    StoryOutput::default()
+
+    fn trace(&mut self, from: Point, to: Point, _: &[Point], search: EdgeSearch) -> Vec<Point> {
+        // Walks the straight line a pixel at a time and pulls each sample onto the edge.
+        let steps = from.distance(to).ceil().max(1.0) as usize;
+        let mut path = vec![from];
+        for i in 1..steps {
+            let sample = from.lerp(to, i as f64 / steps as f64);
+            let point = self.edge_near(sample, search).unwrap_or(sample);
+            if path.last().is_none_or(|last| last.distance(point) >= 1.0) {
+                path.push(point);
+            }
+        }
+        path.push(to);
+        path
+    }
+}
+
+/// The status line: the tool's phase and the last event.
+fn status(words: &SelectToolStoryWords, phase: SelectPhase, last: Option<Last>) -> String {
+    let phase = match phase {
+        SelectPhase::Marquee { .. } => &words.marquee,
+        SelectPhase::Outline { .. } => &words.outline,
+        SelectPhase::Dragging(_) => &words.dragging,
+        _ => &words.idle,
+    };
+    let event = match last {
+        None => &words.no_event,
+        Some(Last::Selected) => &words.selected,
+        Some(Last::Deselected) => &words.deselected,
+        Some(Last::Dragged) => &words.dragged,
+    };
+    craft_i18n::fmt(words.status.as_str(), &[("phase", phase.as_str()), ("event", event.as_str())])
+}
+
+/// Runs the tool `init` makes, set up each pass by `options`, live over the mock picture, with the story selection
+/// drawn by the overlay.
+fn on_canvas<T: Shown>(ui: &mut Ui, data: &mut StoryData, init: impl FnOnce() -> T, options: impl FnOnce(&mut T)) -> StoryOutput {
+    let image = MockImage::default();
+    let words = Env::of(ui).words::<SelectToolStoryWords>();
+    let overlay = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, _: &mut Kept<T>, selection: &Selection| {
+        let _ = SelectionOverlay::new(words.selection.clone(), selection).show_at(ui, at);
+    };
+    let story = ToolStory::new("Document", &image).fit();
+    tool_story(
+        ui,
+        data,
+        story,
+        || Kept { tool: init(), last: None },
+        Selection::house(&image),
+        overlay,
+        |run| {
+            options(&mut run.tool.tool);
+            run.tool.tool.run(&run.host, &*run.document);
+            if let Some(last) = run.document.apply(run.tool.tool.take()) {
+                run.tool.last = Some(last);
+            }
+            StoryOutput::default().readout(status(&words, run.tool.tool.phase(), run.tool.last))
+        },
+    )
 }
 
 #[story(SelectionOverlay<'static>, covers = [], drive = Drive::Never)]
 fn marquee(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    on_canvas(ui, data, "marquee", || Box::new(MarqueeTool::new(MarqueeKind::Rectangle)))
+    let kinds = [
+        ("Rectangular", MarqueeKind::Rectangle),
+        ("Elliptical", MarqueeKind::Ellipse),
+        ("Single Row", MarqueeKind::SingleRow),
+        ("Single Column", MarqueeKind::SingleColumn),
+    ];
+    let kind = *data.choice("kind", MarqueeKind::Rectangle, &kinds);
+    let styles = [("Normal", Constraint::Free), ("Fixed Ratio", Constraint::Ratio(4.0, 3.0)), ("Fixed Size", Constraint::Size(400.0, 300.0))];
+    let style = *data.choice("style", Constraint::Free, &styles);
+    on_canvas(
+        ui,
+        data,
+        || MarqueeTool::new(kind),
+        |tool| {
+            tool.kind(kind).constraint(style);
+        },
+    )
 }
 
 #[story(SelectionOverlay<'static>, covers = [], drive = Drive::Never)]
 fn lasso(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    on_canvas(ui, data, "lasso", || Box::new(LassoTool::new()))
+    on_canvas(ui, data, LassoTool::new, |_| {})
 }
 
 #[story(SelectionOverlay<'static>, covers = [], drive = Drive::Never)]
 fn polygonal_lasso(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    on_canvas(ui, data, "polygon", || Box::new(PolygonLassoTool::new()))
+    on_canvas(ui, data, PolygonLassoTool::new, |_| {})
 }
 
 #[story(SelectionOverlay<'static>, covers = [], drive = Drive::Never)]
 fn magnetic_lasso(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    on_canvas(ui, data, "magnetic", || Box::new(MagneticLassoTool::new(Edges)))
+    let width = *data.ranged("width", 10.0_f32, 1.0..=256.0);
+    let contrast = *data.ranged("contrast", 10.0_f32, 1.0..=100.0);
+    let frequency = *data.ranged("frequency", 57.0_f32, 0.0..=100.0);
+    on_canvas(
+        ui,
+        data,
+        || MagneticLassoTool::new(PictureEdges { image: MockImage::default() }),
+        |tool| {
+            let settings = tool.settings_mut();
+            settings.width = width;
+            settings.contrast = contrast;
+            settings.frequency = frequency;
+        },
+    )
 }

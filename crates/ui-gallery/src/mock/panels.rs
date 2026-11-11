@@ -4,6 +4,7 @@ use super::model::{Document, Layer, Panel, Tool};
 use super::tools::{MarqueeTool, MoveTool, Tools};
 use super::words::MockWords;
 use craft_behavior::dock::Permissions;
+use craft_behavior::geometry::Directions;
 use craft_behavior::kurbo::Rect as DocRect;
 use craft_behavior::{ColumnKey, ColumnWidth, PixelSize, RulerUnits, Ticks, keyed};
 use craft_ui::canvas::{
@@ -115,6 +116,14 @@ fn ruler_text(kind: UnitKind) -> RulerText {
     RulerText::new(RulerUnits::new(per_doc, Ticks::decimal(kind == UnitKind::Pixels)), kind)
 }
 
+/// The visible layers of a document of `size` pixels, bottom first, at the canvas rect `at`.
+pub(super) fn show_layers(ui: &mut Ui, at: egui::Rect, layers: &[Layer], size: PixelSize) {
+    for layer in layers.iter().rev().filter(|layer| layer.visible) {
+        let source = LayerFill { layer, size };
+        let _ = RasterDisplay::new(layer.name.clone(), &source).show_at(ui, at);
+    }
+}
+
 /// A layer as the raster display reads it: its colour over its bounds, transparent elsewhere.
 struct LayerFill<'a> {
     layer: &'a Layer,
@@ -170,10 +179,7 @@ fn canvas(ui: &mut Ui, document: &mut Document, tool: Tool, tools: &mut Tools) {
         let Document { layers, guides, guide, marquee, zero, units: unit, .. } = &mut *document;
         Canvas::new("Document").view(view).document(page.size()).show_rulers(show_rulers).rulers(units, units, *zero).show(ui, |ui, body| {
             let _ = Pasteboard::new("Pasteboard", &pages).show_at(ui, body.rect);
-            for layer in layers.iter().rev().filter(|layer| layer.visible) {
-                let source = LayerFill { layer, size: pixels };
-                let _ = RasterDisplay::new(layer.name.clone(), &source).show_at(ui, body.rect);
-            }
+            show_layers(ui, body.rect, layers, pixels);
             if let Some(rect) = *marquee {
                 let _ = Marquee::rect("Selection", rect).show_at(ui, body.rect);
             }
@@ -206,7 +212,7 @@ fn canvas(ui: &mut Ui, document: &mut Document, tool: Tool, tools: &mut Tools) {
     let reported = match tool {
         Tool::Hand => host.run(ui, &shown.output, &mut tools.hand),
         Tool::Zoom => host.run(ui, &shown.output, &mut tools.zoom),
-        Tool::Move => host.run(ui, &shown.output, &mut MoveTool),
+        Tool::Move => host.run(ui, &shown.output, &mut MoveTool::new(document, Directions::Four)),
         Tool::Marquee => host.run(ui, &shown.output, &mut MarqueeTool::new(document)),
         Tool::Brush | Tool::Pencil | Tool::Eraser | Tool::Stamp => host.run(ui, &shown.output, &mut NoTool),
     };

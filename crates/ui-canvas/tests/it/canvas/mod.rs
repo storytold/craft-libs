@@ -16,4 +16,6 @@ mod tool;
 
 mod tool_keys;
 
+mod tool_story;
+
 mod tools;
