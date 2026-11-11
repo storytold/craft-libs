@@ -145,7 +145,7 @@ impl TryFrom<RawLayout> for ChannelLayout {
 }
 
 /// A channel count as the API holds it, saturating at `u16::MAX`.
-#[cfg(any(feature = "aac-decode", feature = "pcm-encode"))]
+#[cfg(any(feature = "aac-decode", feature = "opus-decode", feature = "pcm-encode"))]
 pub(crate) fn count(n: usize) -> u16 {
     u16::try_from(n).unwrap_or(u16::MAX)
 }

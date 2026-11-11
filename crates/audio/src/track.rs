@@ -4,6 +4,8 @@
 
 #[cfg(feature = "aac-decode")]
 use crate::aac;
+#[cfg(feature = "opus-decode")]
+use crate::opus;
 use crate::pcm::{PcmKind, deinterleave};
 use crate::{AudioBuffer, AudioError, ChannelLayout, CodecId, CodecParams, Result, SampleFormat};
 
@@ -20,6 +22,11 @@ enum Inner {
         /// The format ADTS packets must keep, when their headers gave the configuration.
         adts_format: Option<AdtsFormat>,
     },
+    #[cfg(feature = "opus-decode")]
+    Opus {
+        dec: Box<opus::Decoder>,
+        order: Option<&'static [usize]>,
+    },
     Pcm {
         kind: PcmKind,
         channels: usize,
@@ -31,9 +38,9 @@ enum Inner {
 ///
 /// It takes the track's [`CodecParams`] (from `isobmff::Track::codec_params`,
 /// `matroska::Track::codec_params`, `ogg::Stream::codec_params`, or built by hand for another
-/// container) and decodes AAC (LC; HE-AAC as its upsampled LC core) and PCM.
-/// Container timing (AAC priming, end trimming) is the caller's: every decoded sample is
-/// returned.
+/// container) and decodes AAC (LC; HE-AAC as its upsampled LC core), Opus and PCM.
+/// Container timing (AAC priming, Opus pre-skip, end trimming) is the caller's: every decoded
+/// sample is returned.
 ///
 /// ```no_run
 /// # fn demo(params: &craft_audio::CodecParams, packets: &[Vec<u8>]) -> craft_audio::Result<()> {
@@ -79,15 +86,19 @@ impl TrackDecoder {
     ///
     /// Streams without codec configuration are accepted where the packets carry it: AAC with
     /// empty `extradata` takes its configuration from the ADTS headers of the lookahead (MPEG-TS,
-    /// raw `.aac`), the one most of them share, and ADTS headers are stripped from every packet. Other missing configuration is
-    /// [`AudioError::Malformed`].
+    /// raw `.aac`), the one most of them share, and ADTS headers are stripped from every packet;
+    /// Opus with empty `extradata` and 1 or 2 `channels` (RTP, MPEG-TS) needs no `OpusHead`. Other
+    /// missing configuration is [`AudioError::Malformed`].
     ///
-    /// Codecs without a native packet decoder yet are [`AudioError::Unsupported`];
-    /// `craft_audio::decode` decodes MP3, FLAC, ALAC and Vorbis through symphonia when the
+    /// Codecs without a native packet decoder yet (MP3, FLAC, ALAC, Vorbis) are
+    /// [`AudioError::Unsupported`]; `craft_audio::decode` decodes them through symphonia when the
     /// `symphonia` feature is on.
     pub fn new(params: &CodecParams, lookahead: &[&[u8]]) -> Result<TrackDecoder> {
         let rate = params.sample_rate.unwrap_or(0);
         let channels = usize::from(params.channels.unwrap_or(0));
+        // Only AAC reads the lookahead; Opus needs none.
+        #[cfg(not(feature = "aac-decode"))]
+        let _ = lookahead;
         let (inner, codec, sample_rate, layout, sample_format) = match params.codec {
             #[cfg(feature = "aac-decode")]
             CodecId::Aac | CodecId::HeAac => {
@@ -120,6 +131,22 @@ impl TrackDecoder {
                 let layout = aac_layout(cfg, dec.channels());
                 let order = layout.is_ordered().then(|| aac::wav_order(cfg)).flatten();
                 (Inner::Aac { dec: Box::new(dec), up, order, adts_format }, codec, out, layout, SampleFormat::Compressed)
+            }
+            #[cfg(feature = "opus-decode")]
+            CodecId::Opus => {
+                // Opus over RTP or in MPEG-TS has no OpusHead: mono and stereo need none (RFC 7845
+                // mapping family 0), so one is made from the channel count.
+                let head = match (params.extradata.is_empty(), channels) {
+                    (false, _) => opus::OpusHead::parse(&params.extradata)?,
+                    (true, 1 | 2) => opus::OpusHead::parse(&default_opus_head(channels as u8, rate))?,
+                    (true, _) => {
+                        return Err(AudioError::Malformed("Opus track without an OpusHead (extradata) needs 1 or 2 channels".into()));
+                    }
+                };
+                let layout = opus_layout(&head);
+                let order = if head.mapping_family == 1 { opus::wav_order(head.channels) } else { None };
+                let dec = opus::Decoder::from_head(head, 48_000)?;
+                (Inner::Opus { dec: Box::new(dec), order }, CodecId::Opus, 48_000, layout, SampleFormat::Compressed)
             }
             CodecId::Pcm => {
                 let pcm = params.pcm.ok_or_else(|| AudioError::Malformed("PCM track without a sample format".into()))?;
@@ -190,6 +217,11 @@ impl TrackDecoder {
                 }
                 reorder(out, *order)
             }
+            #[cfg(feature = "opus-decode")]
+            Inner::Opus { dec, order } => {
+                let out = dec.decode(Some(packet))?;
+                reorder(out, *order)
+            }
             Inner::Pcm { kind, channels } => {
                 let frames = (packet.len() / (kind.bytes() * *channels).max(1)) as u64;
                 deinterleave(packet, *kind, *channels, frames)?
@@ -205,14 +237,23 @@ impl TrackDecoder {
     }
 
     /// What stands in for a lost or undecodable packet (`packet` when its bytes are at hand):
-    /// silence as long as the packet would have been (from its frame
-    /// header, the codec's frame length, or the last packet). Empty when the length is unknown.
+    /// Opus's loss concealment, or silence, as long as the packet would have been (from its TOC or
+    /// frame header, the codec's frame length, or the last packet). Empty when the length is
+    /// unknown.
     /// Fails with [`AudioError::TooLarge`](crate::AudioError::TooLarge) when that silence would pass
     /// the decode limit (2^30 samples, as [`decode`](Self::decode) has) or cannot be allocated,
     /// rather than return less than the packet's length.
     pub fn conceal(&mut self, packet: Option<&[u8]>) -> Result<AudioBuffer> {
         let data = packet.unwrap_or_default();
         let frames = match &mut self.inner {
+            #[cfg(feature = "opus-decode")]
+            Inner::Opus { dec, order } => {
+                let order = *order;
+                if let Ok(out) = dec.conceal(packet) {
+                    return Ok(AudioBuffer { sample_rate: self.sample_rate, channels: reorder(out, order) });
+                }
+                None
+            }
             #[cfg(feature = "aac-decode")]
             Inner::Aac { up, .. } => {
                 let per_unit = aac::FRAME_LEN * if up.is_some() { 2 } else { 1 };
@@ -232,27 +273,31 @@ impl TrackDecoder {
 
     /// The frames every packet decodes to, for codecs whose packets all have one length: AAC
     /// (1024, 2048 for HE-AAC; a packet of several ADTS frames decodes to that many times this);
-    /// `None` for PCM.
+    /// `None` for Opus and PCM.
     pub fn frames_per_packet(&self) -> Option<usize> {
         match &self.inner {
             #[cfg(feature = "aac-decode")]
             Inner::Aac { up, .. } => Some(aac::FRAME_LEN * if up.is_some() { 2 } else { 1 }),
+            #[cfg(feature = "opus-decode")]
+            Inner::Opus { .. } => None,
             Inner::Pcm { .. } => None,
         }
     }
 
     /// Frames to decode before a seek target and drop, so the decoder has settled when the target
-    /// is reached: two AAC frames, none for PCM.
+    /// is reached: two AAC frames, 80 ms of Opus (RFC 7845 §4.6), none for PCM.
     pub fn preroll(&self) -> usize {
         match &self.inner {
             #[cfg(feature = "aac-decode")]
             Inner::Aac { up, .. } => 2 * aac::FRAME_LEN * if up.is_some() { 2 } else { 1 },
+            #[cfg(feature = "opus-decode")]
+            Inner::Opus { .. } => 3840,
             Inner::Pcm { .. } => 0,
         }
     }
 
     /// Forget the decoder state, for a seek: the next packet decodes as if it were the first
-    /// (codecs with overlap, such as AAC, need [`TrackDecoder::preroll`] frames to
+    /// (codecs with overlap, such as AAC and Opus, need [`TrackDecoder::preroll`] frames to
     /// settle).
     pub fn reset(&mut self) {
         // the packet before a seek says nothing about the length of a packet lost after it
@@ -265,6 +310,8 @@ impl TrackDecoder {
                     up.reset();
                 }
             }
+            #[cfg(feature = "opus-decode")]
+            Inner::Opus { dec, .. } => dec.reset(),
             Inner::Pcm { .. } => {}
         }
     }
@@ -273,6 +320,7 @@ impl TrackDecoder {
 fn unsupported(codec: CodecId) -> AudioError {
     let feature = match codec {
         CodecId::Aac | CodecId::HeAac => Some("aac-decode"),
+        CodecId::Opus => Some("opus-decode"),
         _ => None,
     };
     match feature {
@@ -287,7 +335,7 @@ fn unsupported(codec: CodecId) -> AudioError {
 
 /// `channels` reordered by `order` (output channel → decoded channel); unchanged when the counts
 /// differ.
-#[cfg(feature = "aac-decode")]
+#[cfg(any(feature = "aac-decode", feature = "opus-decode"))]
 fn reorder(mut channels: Vec<Vec<f32>>, order: Option<&[usize]>) -> Vec<Vec<f32>> {
     match order {
         Some(order) if order.len() == channels.len() => order.iter().map(|&c| channels.get_mut(c).map(std::mem::take).unwrap_or_default()).collect(),
@@ -386,6 +434,16 @@ fn adts_units(frames: Vec<(aac::AdtsHeader, &[u8])>, format: Option<AdtsFormat>)
     Ok(frames.into_iter().map(|(_, unit)| unit).collect())
 }
 
+/// A mapping-family-0 `OpusHead` (RFC 7845 §5.1) for `channels` (1 or 2) and no pre-skip.
+#[cfg(feature = "opus-decode")]
+fn default_opus_head(channels: u8, input_rate: u32) -> Vec<u8> {
+    let mut h = b"OpusHead".to_vec();
+    h.extend_from_slice(&[1, channels, 0, 0]);
+    h.extend_from_slice(&(if input_rate > 0 { input_rate } else { 48_000 }).to_le_bytes());
+    h.extend_from_slice(&[0, 0, 0]);
+    h
+}
+
 /// The sample layout and stored format of PCM samples, `None` for a depth we do not read.
 pub(crate) fn pcm_kind(bits: u16, float: bool, big_endian: bool, unsigned: bool) -> Option<(PcmKind, SampleFormat)> {
     let bytes = usize::from(bits.div_ceil(8));
@@ -422,6 +480,23 @@ pub(crate) fn aac_layout(channel_config: u8, channels: usize) -> ChannelLayout {
     }
 }
 
+#[cfg(feature = "opus-decode")]
+/// The speakers of an Opus stream (RFC 7845 §5.1.1): Vorbis order for mapping family 1, reordered
+/// to WAV order by [`opus::wav_order`]; other families have no speaker assignment.
+pub(crate) fn opus_layout(head: &opus::OpusHead) -> ChannelLayout {
+    match (head.mapping_family, head.channels) {
+        (0 | 1, 1) => ChannelLayout::MONO,
+        (0 | 1, 2) => ChannelLayout::STEREO,
+        (1, 3) => ChannelLayout::SURROUND_3_0,
+        (1, 4) => ChannelLayout::QUAD,
+        (1, 5) => ChannelLayout::SURROUND_5_0,
+        (1, 6) => ChannelLayout::SURROUND_5_1,
+        (1, 7) => ChannelLayout::SURROUND_6_1,
+        (1, 8) => ChannelLayout::SURROUND_7_1,
+        (_, n) => ChannelLayout::unordered(crate::layout::count(n)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -441,6 +516,26 @@ mod tests {
         // silence past the decode limit is an error, not shorter silence
         dec.last_frames = usize::try_from(crate::pcm::MAX_DECODE_SAMPLES / 2 + 1).unwrap();
         assert!(matches!(dec.conceal(None), Err(AudioError::TooLarge(_))));
+    }
+
+    #[cfg(feature = "opus-decode")]
+    #[test]
+    fn opus_conceals_a_damaged_packet_at_its_own_length() {
+        let params = CodecParams::new(CodecId::Opus).with_sample_rate(48_000).with_channels(2);
+        let mut dec = TrackDecoder::new(&params, &[]).unwrap();
+        // CELT fullband, 20 ms (config 31); SILK narrowband, 60 ms (config 3); CELT, 10 ms (config 30).
+        let celt_20ms = [31 << 3, 0xFF, 0xFE, 0x01];
+        let silk_60ms = [3 << 3, 0x12, 0x34];
+        let celt_10ms = [30 << 3, 0x12, 0x34];
+        assert_eq!(dec.decode(&celt_20ms).unwrap().frames(), 960);
+        assert_eq!(dec.conceal(Some(&silk_60ms)).unwrap().frames(), 2880);
+        // A packet lost whole is as long as the last one.
+        assert_eq!(dec.conceal(None).unwrap().frames(), 2880);
+        // The first packet after a reset has no last packet to go by.
+        dec.reset();
+        assert_eq!(dec.conceal(Some(&celt_10ms)).unwrap().frames(), 480);
+        // Bytes whose framing does not parse fall back to the last length.
+        assert_eq!(dec.conceal(Some(&[(31 << 3) | 3])).unwrap().frames(), 480);
     }
 
     /// One ADTS frame (stereo, 48 kHz, or channel configuration 0 with a PCE) of silence.
@@ -714,12 +809,12 @@ mod tests {
 
     #[test]
     fn codecs_without_a_packet_decoder_are_unsupported() {
-        for codec in [CodecId::Flac, CodecId::Vorbis, CodecId::Alac, CodecId::Mp3, CodecId::Opus, CodecId::H264] {
+        for codec in [CodecId::Flac, CodecId::Vorbis, CodecId::Alac, CodecId::Mp3, CodecId::H264] {
             assert!(matches!(TrackDecoder::new(&CodecParams::new(codec), &[]), Err(AudioError::Unsupported(_))), "{codec:?}");
         }
         // A codec whose feature is off names the feature.
-        #[cfg(not(feature = "aac-decode"))]
-        assert!(matches!(TrackDecoder::new(&CodecParams::new(CodecId::Aac), &[]), Err(AudioError::Unsupported(m)) if m.contains("aac-decode")));
+        #[cfg(not(feature = "opus-decode"))]
+        assert!(matches!(TrackDecoder::new(&CodecParams::new(CodecId::Opus), &[]), Err(AudioError::Unsupported(m)) if m.contains("opus-decode")));
         // PCM needs its sample format.
         assert!(TrackDecoder::new(&CodecParams::new(CodecId::Pcm).with_channels(2).with_sample_rate(48_000), &[]).is_err());
     }

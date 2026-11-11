@@ -8,4 +8,7 @@ use craft_media_testkit as common;
 mod testkit;
 
 mod aac;
+mod concealment;
+mod opus;
 mod routing_oracle;
+mod track_decoder;
