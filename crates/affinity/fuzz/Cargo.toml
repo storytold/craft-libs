@@ -25,5 +25,7 @@ test = false
 doc = false
 bench = false
 
+# Its own workspace: cargo-fuzz needs nightly and sanitizer flags, so this crate stays out of the
+# main one.
 [workspace]
 members = ["."]

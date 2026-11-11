@@ -7,5 +7,5 @@ use libfuzzer_sys::fuzz_target;
 fuzz_target!(|stream: &[u8]| {
     let _ = craft_affinity::stream::parse(stream);
     let file = craft_affinity::synth::container(&[("doc.dat", stream, craft_affinity::synth::Method::Stored)], None);
-    let _ = craft_affinity::read(&file, craft_affinity::Limits { max_entry: 16 << 20, max_total: 64 << 20 });
+    let _ = craft_affinity::read(&file, craft_affinity::Limits { max_entry: 16 << 20, max_total: 64 << 20, max_pixel_bytes: 256 << 20 });
 });

@@ -15,8 +15,6 @@ pub(crate) use bounds::rect;
 pub use bounds::{kind_bounds, nodes_bounds};
 pub(crate) use read::Reader;
 pub use read::read;
-#[cfg(test)]
-pub(crate) use read::read_within;
 
 /// Affine map `x' = a·x + c·y + e`, `y' = b·x + d·y + f` (kurbo's coefficient order).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -314,6 +312,20 @@ pub enum Pixels {
     Cmyka8(Vec<u8>),
     /// The original file a placed image was made from (PNG, JPEG…), as embedded.
     Encoded(Vec<u8>),
+}
+
+impl Pixels {
+    /// [`Pixels::Cmyka8`] samples as straight RGBA8 by the profile-free formula
+    /// `(1 - ink)(1 - black)`, for a caller without colour management. With the document's
+    /// profile ([`Document::cmyk_profile`]) convert the inks through it instead.
+    pub fn cmyka8_to_rgba8(cmyka: &[u8]) -> Vec<u8> {
+        let convert = |[c, m, y, k, a]: &[u8; 5]| {
+            let w = 255 - u16::from(*k);
+            let ch = |v: u8| ((u16::from(255 - v) * w + 127) / 255) as u8;
+            [ch(*c), ch(*m), ch(*y), *a]
+        };
+        cmyka.as_chunks::<5>().0.iter().flat_map(convert).collect()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -254,9 +254,9 @@ mod archive {
         broken[90] ^= 0x55;
         let mut a = Archive::open(&broken, Limits::default()).unwrap();
         assert!(a.read("doc.dat").is_err());
-        let mut a = Archive::open(&file, Limits { max_entry: d.len() - 1, max_total: usize::MAX }).unwrap();
+        let mut a = Archive::open(&file, Limits { max_entry: d.len() - 1, max_total: usize::MAX, ..Limits::default() }).unwrap();
         assert!(matches!(a.read("doc.dat"), Err(Error::Limit(_))));
-        let mut a = Archive::open(&file, Limits { max_entry: usize::MAX, max_total: d.len() + 1 }).unwrap();
+        let mut a = Archive::open(&file, Limits { max_entry: usize::MAX, max_total: d.len() + 1, ..Limits::default() }).unwrap();
         a.read("doc.dat").unwrap();
         assert!(matches!(a.read("doc.dat"), Err(Error::Limit(_))));
     }
@@ -274,7 +274,7 @@ mod archive {
         assert_eq!(a.read("doc.dat").unwrap_err(), first);
         assert_eq!(a.extracted(), d.len());
         // A budget that only covers one attempt is not exceeded by asking again.
-        let mut a = Archive::open(&broken, Limits { max_entry: usize::MAX, max_total: d.len() }).unwrap();
+        let mut a = Archive::open(&broken, Limits { max_entry: usize::MAX, max_total: d.len(), ..Limits::default() }).unwrap();
         assert!(a.read("doc.dat").is_err());
         assert_eq!(a.read("doc.dat").unwrap_err(), first);
     }
@@ -404,5 +404,87 @@ mod archive {
             }
             let _ = stream::parse(&s);
         }
+    }
+}
+
+/// The table-based plane conversion against the per-pixel `f64` conversion it replaced, and the
+/// CMYK helper against the same formula in floating point.
+mod raster_identity {
+    use crate::model::Pixels;
+    use crate::raster::interleave;
+
+    /// Deterministic filler (xorshift).
+    fn bytes(n: usize, mut x: u64) -> Vec<u8> {
+        (0..n)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                (x >> 24) as u8
+            })
+            .collect()
+    }
+
+    fn reference(planes: &[Vec<u8>], channels: usize, bps: usize, n: usize) -> Vec<u8> {
+        let sample = |p: &Vec<u8>, i: usize| -> f64 {
+            if bps == 2 {
+                f64::from(u16::from_le_bytes([p.get(2 * i).copied().unwrap_or(0), p.get(2 * i + 1).copied().unwrap_or(0)])) / 65535.0
+            } else {
+                f64::from(p.get(i).copied().unwrap_or(0)) / 255.0
+            }
+        };
+        let mut rgba = vec![0u8; n * 4];
+        for (i, px) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            let v: Vec<f64> = planes.iter().map(|p| sample(p, i)).collect();
+            let (r, g, b, a) = if channels == 1 {
+                (v[0], v[0], v[0], 1.0)
+            } else if channels == 5 {
+                let k = 1.0 - v[3];
+                ((1.0 - v[0]) * k, (1.0 - v[1]) * k, (1.0 - v[2]) * k, v[4])
+            } else {
+                (v[0], v[1], v[2], v[3])
+            };
+            px.copy_from_slice(&[r, g, b, a].map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8));
+        }
+        rgba
+    }
+
+    #[test]
+    fn eight_bit_samples_round_trip() {
+        let ramp: Vec<u8> = (0..=255).collect();
+        let planes = vec![ramp.clone(), ramp.iter().rev().copied().collect(), ramp.clone(), ramp.iter().rev().copied().collect()];
+        assert_eq!(interleave(&planes, 4, 1, 256), reference(&planes, 4, 1, 256));
+        assert_eq!(interleave(&planes[..1], 1, 1, 256), reference(&planes[..1], 1, 1, 256));
+    }
+
+    #[test]
+    fn sixteen_bit_samples_are_exhaustive() {
+        let all: Vec<u8> = (0..=u16::MAX).flat_map(u16::to_le_bytes).collect();
+        let rot = |k: usize| -> Vec<u8> { (0..=u16::MAX).flat_map(|v| v.wrapping_add((k * 4099) as u16).to_le_bytes()).collect() };
+        let planes = vec![all, rot(1), rot(2), rot(3)];
+        assert_eq!(interleave(&planes, 4, 2, 65536), reference(&planes, 4, 2, 65536));
+        assert_eq!(interleave(&planes[..1], 1, 2, 65536), reference(&planes[..1], 1, 2, 65536));
+    }
+
+    #[test]
+    fn random_planes_match_for_every_format() {
+        for (channels, bps) in [(1, 1), (1, 2), (4, 1), (4, 2)] {
+            let n = 5000;
+            let planes: Vec<Vec<u8>> = (0..channels).map(|c| bytes(n * bps, 1 + c as u64)).collect();
+            assert_eq!(interleave(&planes, channels, bps, n), reference(&planes, channels, bps, n), "{channels}x{bps}");
+        }
+    }
+
+    #[test]
+    fn cmyk_to_rgba_is_exhaustive_over_colour_and_black() {
+        // Every (ink, black) pair in each of the c, m and y positions; alpha is arbitrary.
+        let n = 256 * 256;
+        let k: Vec<u8> = (0..n).map(|i| (i >> 8) as u8).collect();
+        let c: Vec<u8> = (0..n).map(|i| i as u8).collect();
+        let m: Vec<u8> = (0..n).map(|i| (i as u8).wrapping_mul(7).wrapping_add(3)).collect();
+        let y: Vec<u8> = (0..n).map(|i| (i as u8).wrapping_mul(13).wrapping_add(250)).collect();
+        let planes = vec![c, m, y, k, bytes(n, 9)];
+        let cmyka: Vec<u8> = (0..n).flat_map(|i| planes.iter().map(move |p| p[i])).collect();
+        assert_eq!(Pixels::cmyka8_to_rgba8(&cmyka), reference(&planes, 5, 1, n));
     }
 }

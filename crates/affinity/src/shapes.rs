@@ -12,6 +12,8 @@ const KAPPA: f64 = 0.552_284_749_830_793_4;
 const MAX_SIDES: i64 = 10_000;
 
 /// The last value of a tag: a shape changed from one kind to another keeps a stale first block.
+/// Indexed: a shared shape is read again for every occurrence, and rescanning a large field
+/// list each time multiplied into work far beyond the file's size.
 fn last<'a>(r: &'a Reader, id: ObjId, tag: &[u8; 4]) -> Option<&'a Value> {
     r.s.object(id)?.get_last(Tag::of(tag))
 }
@@ -42,7 +44,7 @@ fn polygon(pts: impl IntoIterator<Item = Point>) -> Option<SubPath> {
 }
 
 /// Outline of `shape` (a `Shpe` object) in the node box `b` = (x0, y0, x1, y1).
-pub(crate) fn shape(r: &mut Reader, shape: ObjId, b: [f64; 4], world: Affine) -> Option<Path> {
+pub(crate) fn shape(r: &mut Reader, shape: ObjId, b: [f64; 4], world: Affine) -> Option<(Path, bool)> {
     let [x0, y0, x1, y1] = b;
     let (w, h) = (x1 - x0, y1 - y0);
     let (cx, cy, rx, ry) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0, w / 2.0, h / 2.0);
@@ -50,7 +52,8 @@ pub(crate) fn shape(r: &mut Reader, shape: ObjId, b: [f64; 4], world: Affine) ->
     let class = r.s.class(shape)?;
     let sub = match &class.0.to_be_bytes() {
         b"ShNR" | b"ShRR" => {
-            // Only the four corners' entries can matter: longer arrays are read no further.
+            // Only the four corners are read: a longer array is not scanned or copied, which
+            // would otherwise repeat for every occurrence of a shared shape.
             let types: Vec<Option<u16>> = match last(r, shape, b"CTyp") {
                 Some(Value::Array(a)) => a.iter().take(4).map(|t| if let Value::Enum { id, .. } = t { Some(*id) } else { None }).collect(),
                 _ => Vec::new(),
@@ -155,12 +158,209 @@ pub(crate) fn shape(r: &mut Reader, shape: ObjId, b: [f64; 4], world: Affine) ->
             let (l, rr) = (num(r, shape, b"PosL").unwrap_or(0.25), num(r, shape, b"PosR").unwrap_or(0.75));
             polygon([pt(x0 + l * w, y0), pt(x0 + rr * w, y0), pt(x1, y1), pt(x0, y1)])?
         }
+        b"ShCl" => cloud(cx, cy, rx, ry, sides(r, shape, b"Bubl", 12.0)),
+        b"ShHt" => heart(b),
+        b"ShCg" => cog(r, shape, cx, cy, rx, ry),
+        b"ShCR" => callout_rect(r, shape, b, false),
+        b"ShCE" => callout_ellipse(r, shape, cx, cy, rx, ry),
+        b"ShDA" => arrow(r, shape, b),
+        b"ShDS" => double_star(r, shape, cx, cy, rx, ry),
+        b"ShTr" => tear(r, shape, b),
+        b"ShCr" => crescent(cx, cy, rx, ry),
+        b"ShpD" => polygon([pt(cx, y0), pt(x1, cy), pt(cx, y1), pt(x0, cy)])?,
+        b"ShSg" => segment(r, shape, cx, cy, rx, ry),
         _ => {
-            r.warn("cloud, heart, cog, callout, arrow, tear and other special shapes (imported as their bounding ellipse)");
+            r.warn("an unrecognized parametric shape (imported as its bounding ellipse)");
             ellipse(cx, cy, rx, ry)
         }
     };
-    Some(Path { subpaths: vec![sub] })
+    let mut path = Path { subpaths: vec![sub] };
+    if class == Tag::of(b"ShCg") {
+        let hole = num(r, shape, b"Hole").unwrap_or(0.3).clamp(0.0, 0.9);
+        if hole > 0.0 {
+            path.subpaths.push(ellipse(cx, cy, rx * hole, ry * hole));
+        }
+        return Some((path, true));
+    }
+    Some((path, false))
+}
+
+fn cloud(cx: f64, cy: f64, rx: f64, ry: f64, bubbles: usize) -> SubPath {
+    let n = bubbles.clamp(3, 128) * 4;
+    let points: Vec<Point> = (0..n)
+        .map(|i| {
+            let a = TAU * i as f64 / n as f64 - FRAC_PI_2;
+            let lobe = (0.5 - 0.5 * (TAU * i as f64 / 4.0).cos()).powi(2);
+            let radius = 0.78 + 0.22 * lobe;
+            pt(cx + rx * radius * a.cos(), cy + ry * radius * a.sin())
+        })
+        .collect();
+    let segments = (0..n)
+        .map(|i| {
+            let p0 = points[(i + n - 1) % n];
+            let p1 = points[i];
+            let p2 = points[(i + 1) % n];
+            let p3 = points[(i + 2) % n];
+            [pt(p1.x + (p2.x - p0.x) / 6.0, p1.y + (p2.y - p0.y) / 6.0), pt(p2.x - (p3.x - p1.x) / 6.0, p2.y - (p3.y - p1.y) / 6.0), p2]
+        })
+        .collect();
+    SubPath { start: points[0], segments, closed: true }
+}
+
+fn heart([x0, y0, x1, y1]: [f64; 4]) -> SubPath {
+    let (w, h) = (x1 - x0, y1 - y0);
+    let p = |x: f64, y: f64| pt(x0 + x * w, y0 + y * h);
+    let start = p(0.5, 0.92);
+    let segments = vec![
+        [p(0.38, 0.85), p(0.04, 0.67), p(0.04, 0.37)],
+        [p(0.04, 0.02), p(0.39, 0.00), p(0.5, 0.27)],
+        [p(0.61, 0.00), p(0.96, 0.02), p(0.96, 0.37)],
+        [p(0.96, 0.67), p(0.62, 0.85), start],
+    ];
+    SubPath { start, segments, closed: true }
+}
+
+fn cog(r: &Reader, shape: ObjId, cx: f64, cy: f64, rx: f64, ry: f64) -> SubPath {
+    let teeth = sides(r, shape, b"Teth", 12.0);
+    let tooth = num(r, shape, b"TtSz").unwrap_or(0.3).clamp(0.05, 0.9);
+    let notch = num(r, shape, b"NtSz").unwrap_or(0.45).clamp(0.05, 0.95);
+    let tip = 1.0;
+    let root = (1.0 - 0.2 * tooth - 0.08 * notch).clamp(0.55, 0.95);
+    let mut pts = Vec::with_capacity(teeth * 4);
+    for i in 0..teeth {
+        let base = TAU * i as f64 / teeth as f64 - FRAC_PI_2;
+        for (offset, radius) in [(-0.5, root), (-0.32, tip), (0.32, tip), (0.5, root)] {
+            let a = base + offset * TAU / teeth as f64;
+            pts.push(pt(cx + rx * radius * a.cos(), cy + ry * radius * a.sin()));
+        }
+    }
+    polygon(pts).unwrap_or_else(|| rectangle_sub(cx - rx, cy - ry, cx + rx, cy + ry))
+}
+
+fn callout_rect(r: &Reader, shape: ObjId, [x0, y0, x1, y1]: [f64; 4], _ellipse: bool) -> SubPath {
+    let (w, h) = (x1 - x0, y1 - y0);
+    let tail_h = num(r, shape, b"TlHg").unwrap_or(0.2).clamp(0.0, 0.8) * h;
+    let tail_w = num(r, shape, b"TlWd").unwrap_or(0.1).clamp(0.02, 0.8) * w;
+    let tip_x = x0 + num(r, shape, b"TlRP").unwrap_or(0.5).clamp(0.0, 1.0) * w;
+    let base_x = x0 + num(r, shape, b"TlEP").unwrap_or(0.4).clamp(0.0, 1.0) * w;
+    let a = (base_x - tail_w / 2.0).clamp(x0, x1);
+    let c = (base_x + tail_w / 2.0).clamp(x0, x1);
+    let body_bottom = y1 - tail_h;
+    let radius = (w.min(body_bottom - y0) * 0.12).max(0.0);
+    // The three contours overlap inside the fill; no internal edge is visible in a filled shape.
+    // Join the tail to the rounded body in one closed outline to avoid a seam in stroked shapes.
+    let start = pt(x0 + radius, y0);
+    let segments = vec![
+        [pt(x1 - radius, y0), pt(x1 - radius, y0), pt(x1 - radius, y0)],
+        [pt(x1 - (1.0 - KAPPA) * radius, y0), pt(x1, y0 + (1.0 - KAPPA) * radius), pt(x1, y0 + radius)],
+        [pt(x1, body_bottom - radius), pt(x1, body_bottom - radius), pt(x1, body_bottom - radius)],
+        [pt(x1, body_bottom), pt(x1, body_bottom), pt(x1 - radius, body_bottom)],
+        [pt(c + radius * 0.2, body_bottom), pt(tip_x, y1 - tail_h * 0.15), pt(tip_x, y1)],
+        [pt(tip_x, y1), pt(tip_x, y1), pt(tip_x, y1)],
+        [pt(tip_x, y1 - tail_h * 0.15), pt(a - radius * 0.2, body_bottom), pt(a, body_bottom)],
+        [pt(x0 + radius, body_bottom), pt(x0, body_bottom), pt(x0, body_bottom - radius)],
+        [pt(x0, y0 + radius), pt(x0, y0 + radius), pt(x0, y0 + radius)],
+        [pt(x0, y0 + (1.0 - KAPPA) * radius), pt(x0 + (1.0 - KAPPA) * radius, y0), start],
+    ];
+    SubPath { start, segments, closed: true }
+}
+
+fn callout_ellipse(r: &Reader, shape: ObjId, cx: f64, cy: f64, rx: f64, ry: f64) -> SubPath {
+    let tail_h = num(r, shape, b"TlHg").unwrap_or(0.2).clamp(0.0, 0.8);
+    let pos = num(r, shape, b"TlEP").unwrap_or(0.25).clamp(0.0, 1.0);
+    let angle = num(r, shape, b"TlAn").unwrap_or(0.0);
+    let a0 = pos * TAU - angle;
+    let a1 = a0 + 0.35;
+    let start = pt(cx + rx * a1.cos(), cy + ry * a1.sin());
+    let end = pt(cx + rx * a0.cos(), cy + ry * a0.sin());
+    let tip = pt(cx + rx * (a0 + 0.18).cos() * 1.08, cy + ry * (a0 + 0.18).sin() * (1.0 + tail_h));
+    // A single ellipse-like outline with a short triangular tail at its lower edge.
+    let mut segments = Vec::new();
+    arc(cx, cy, rx, ry, a1, a0 + TAU, &mut segments);
+    segments.push([end, end, tip]);
+    segments.push([tip, tip, start]);
+    SubPath { start, segments, closed: true }
+}
+
+fn arrow(r: &Reader, shape: ObjId, [x0, y0, x1, y1]: [f64; 4]) -> SubPath {
+    let h = y1 - y0;
+    let thick = num(r, shape, b"Thck").unwrap_or(0.35).clamp(0.05, 0.9) * h;
+    let shaft = (y0 + y1 - thick) / 2.0;
+    let lower = shaft + thick;
+    let head_start = x1 - h * 0.45;
+    polygon([
+        pt(x0, shaft),
+        pt(head_start, shaft),
+        pt(head_start, y0),
+        pt(x1, (y0 + y1) / 2.0),
+        pt(head_start, y1),
+        pt(head_start, lower),
+        pt(x0, lower),
+    ])
+    .unwrap_or_else(|| rectangle_sub(x0, shaft, x1, lower))
+}
+
+fn double_star(r: &Reader, shape: ObjId, cx: f64, cy: f64, rx: f64, ry: f64) -> SubPath {
+    let n = sides(r, shape, b"Pnts", 6.0).saturating_mul(2).clamp(8, 64);
+    let inner = num(r, shape, b"IRad").unwrap_or(0.6).clamp(0.05, 0.95);
+    let outer = num(r, shape, b"PRad").unwrap_or(0.9).clamp(0.2, 1.0);
+    polygon((0..2 * n).map(|i| {
+        let a = -FRAC_PI_2 + PI * i as f64 / n as f64;
+        let radius = if i % 2 == 0 { outer } else { outer * inner };
+        pt(cx + rx * radius * a.cos(), cy + ry * radius * a.sin())
+    }))
+    .unwrap_or_else(|| rectangle_sub(cx - rx, cy - ry, cx + rx, cy + ry))
+}
+
+fn tear(r: &Reader, shape: ObjId, [x0, y0, x1, y1]: [f64; 4]) -> SubPath {
+    let (w, h) = (x1 - x0, y1 - y0);
+    let bulge = num(r, shape, b"Ball").unwrap_or(0.25).clamp(0.0, 0.5);
+    let bend = num(r, shape, b"Bend").unwrap_or(0.0).clamp(-0.5, 0.5);
+    let top = pt((x0 + x1) / 2.0, y0);
+    let bottom = pt((x0 + x1) / 2.0 + bend * w * 0.25, y1);
+    let segments = vec![
+        [pt(x0 + w * 0.25, y0 + h * 0.42), pt(x0 + w * (0.5 - bulge), y1 - h * 0.03), bottom],
+        [pt(x1 - w * (0.5 - bulge), y1 - h * 0.03), pt(x1 - w * 0.25, y0 + h * 0.42), top],
+    ];
+    SubPath { start: top, segments, closed: true }
+}
+
+fn crescent(cx: f64, cy: f64, rx: f64, ry: f64) -> SubPath {
+    let start = pt(cx, cy - ry);
+    let mut segments = Vec::new();
+    arc(cx, cy, rx, ry, -FRAC_PI_2, -3.0 * FRAC_PI_2, &mut segments);
+    // The inner arc returns from the lower tip to the upper tip, leaving a crescent open to the right.
+    let ix = cx + rx * 0.72;
+    let irx = rx * 0.86;
+    let iry = ry * 0.82;
+    let from = pt(ix, cy + iry);
+    segments.push([from, from, from]);
+    let mut inner = Vec::new();
+    arc(ix, cy, irx, iry, FRAC_PI_2, -FRAC_PI_2, &mut inner);
+    segments.extend(inner);
+    SubPath { start, segments, closed: true }
+}
+
+fn segment(r: &Reader, shape: ObjId, cx: f64, cy: f64, rx: f64, ry: f64) -> SubPath {
+    // Keep hostile but finite angles in a small range before constructing arc controls.
+    let angle = num(r, shape, b"Angl").unwrap_or(0.0).rem_euclid(TAU);
+    let p0 = num(r, shape, b"Pos0").unwrap_or(0.25).clamp(0.0, 1.0);
+    let p1 = num(r, shape, b"Pos1").unwrap_or(0.75).clamp(0.0, 1.0);
+    let a0 = angle + (p0 - 0.5) * TAU;
+    let mut a1 = angle + (p1 - 0.5) * TAU;
+    while a1 < a0 {
+        a1 += TAU;
+    }
+    let mut segments = Vec::new();
+    arc(cx, cy, rx, ry, a0, a1.min(a0 + TAU), &mut segments);
+    let start = pt(cx + rx * a0.cos(), cy + ry * a0.sin());
+    let end = pt(cx + rx * a1.cos(), cy + ry * a1.sin());
+    segments.push([end, end, start]);
+    SubPath { start, segments, closed: true }
+}
+
+fn rectangle_sub(x0: f64, y0: f64, x1: f64, y1: f64) -> SubPath {
+    rectangle(x0, y0, x1, y1)
 }
 
 pub(crate) fn rectangle(x0: f64, y0: f64, x1: f64, y1: f64) -> SubPath {

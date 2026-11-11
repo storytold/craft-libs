@@ -1,6 +1,6 @@
 //! Reader for native Affinity documents (`.af`, and `.afdesign`/`.afphoto`/`.afpub` from
 //! Affinity 1 and 2): the archive container, the tagged object stream in `doc.dat`, and the
-//! subset of the document model VectorCraft imports.
+//! part of the document model the crate README lists, as a neutral [`Document`].
 //!
 //! Layouts follow the MIT-licensed afread reference and were checked against public documents
 //! saved by Affinity 1.x to 3.x (container versions 8 to 12); see the crate README for provenance

@@ -85,6 +85,10 @@ fn outline_inner(r: &mut Reader, id: ObjId, class: Tag, world: Affine, budget: &
             // matches add and subtract operands in every public sample; a true union of overlapping
             // added operands would differ.
             let mut path = Path::default();
+            // Every operand slot (null ones too) is charged before the list is scanned.
+            if r.budget.spend(s.array_len(id, b"Chld").unwrap_or(0)).is_err() {
+                budget.fail(r, "compound outlines exceeding the geometry work limit")?;
+            }
             for c in s.objs(id, b"Chld") {
                 let local = s.floats::<6>(c, b"Xfrm").map(Affine::from_xfrm).unwrap_or(Affine::IDENTITY);
                 let class = s.class(c)?;
@@ -122,9 +126,9 @@ fn outline_inner(r: &mut Reader, id: ObjId, class: Tag, world: Affine, budget: &
                 }
             };
             let b = s.floats::<4>(box_owner, b"ShpB")?;
-            let path = crate::shapes::shape(r, shape, b, world)?;
+            let (path, even_odd) = crate::shapes::shape(r, shape, b, world)?;
             budget.path(r, &path)?;
-            Some((path, false))
+            Some((path, even_odd))
         }
     }
 }

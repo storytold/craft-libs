@@ -253,20 +253,42 @@ fn decode_within(r: &mut Reader, bitmap: ObjId, crop: (u32, u32, u32, u32), worl
         }
         return Ok(Some(Image { width: w, height: h, pixels: Pixels::Cmyka8(cmyka), transform }));
     }
+    Ok(Some(Image { width: w, height: h, pixels: Pixels::Rgba8(interleave(&planes, channels, bps, n)), transform }))
+}
+
+/// Interleave the decoded grey or RGBA planes (`n` samples of `bps` bytes each) into RGBA8.
+/// An 8-bit sample is copied; a 16-bit one goes through a table of `round(v / 65535 × 255)`
+/// for all 65536 values, not through an `f64` for each pixel.
+pub(crate) fn interleave(planes: &[Vec<u8>], channels: usize, bps: usize, n: usize) -> Vec<u8> {
     let mut rgba = vec![0u8; n * 4];
-    let sample = |p: &Vec<u8>, i: usize| -> f64 {
-        if bps == 2 {
-            f64::from(u16::from_le_bytes([p.get(2 * i).copied().unwrap_or(0), p.get(2 * i + 1).copied().unwrap_or(0)])) / 65535.0
-        } else {
-            f64::from(p.get(i).copied().unwrap_or(0)) / 255.0
+    let out = rgba.as_chunks_mut::<4>().0.iter_mut();
+    let p = |c: usize| planes.get(c).map_or(&[][..], Vec::as_slice);
+    match (channels, bps) {
+        (1, 1) => {
+            for (o, &v) in out.zip(p(0)) {
+                *o = [v, v, v, 255];
+            }
         }
-    };
-    for (i, px) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-        let v: Vec<f64> = planes.iter().map(|p| sample(p, i)).collect();
-        let (r2, g, b, a) = if channels == 1 { (v[0], v[0], v[0], 1.0) } else { (v[0], v[1], v[2], v[3]) };
-        px.copy_from_slice(&[r2, g, b, a].map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8));
+        (_, 1) => {
+            for ((((o, &r), &g), &b), &a) in out.zip(p(0)).zip(p(1)).zip(p(2)).zip(p(3)) {
+                *o = [r, g, b, a];
+            }
+        }
+        (_, _) => {
+            let lut: Vec<u8> = (0..=u16::MAX).map(|v| (f64::from(v) / 65535.0 * 255.0).round() as u8).collect();
+            let s16 = |c: usize| p(c).as_chunks::<2>().0.iter().map(|b| lut.get(usize::from(u16::from_le_bytes(*b))).copied().unwrap_or(0));
+            if channels == 1 {
+                for (o, g) in out.zip(s16(0)) {
+                    *o = [g, g, g, 255];
+                }
+            } else {
+                for ((((o, r), g), b), a) in out.zip(s16(0)).zip(s16(1)).zip(s16(2)).zip(s16(3)) {
+                    *o = [r, g, b, a];
+                }
+            }
+        }
     }
-    Ok(Some(Image { width: w, height: h, pixels: Pixels::Rgba8(rgba), transform }))
+    rgba
 }
 
 /// The original image file: entry `c/N` is a stream whose root (`Blck`) holds it as `Data`.
@@ -366,7 +388,7 @@ fn plane(
     let CachedPixels { tiles: cache, source } = cache;
     let s = r.s;
     let (tw, th, states) = grid(s, bitmap, c, bps);
-    let tiles = s.objs(bitmap, &tag(b"Idx", c));
+    let tiles = r.objs(bitmap, &tag(b"Idx", c));
     let at = Crop { bps, x0: x0 as usize, y0: y0 as usize, w: w as usize, h: h as usize, step: step.max(1) as usize };
     let row = at.w.div_ceil(at.step) * bps;
     let mut out = vec![0u8; row * at.h.div_ceil(at.step)];
@@ -627,8 +649,9 @@ mod tests {
     #[test]
     fn pixel_layers_share_one_allowance_for_the_whole_document() {
         let file = flat_layers(5, 16);
-        let layers = |pixels: u64| {
-            let doc = crate::model::read_within(&file, crate::Limits::default(), pixels).unwrap();
+        let layers = |pixels: usize| {
+            let limits = crate::Limits { max_pixel_bytes: pixels * 4, ..crate::Limits::default() };
+            let doc = crate::read(&file, limits).unwrap();
             let n = doc.spreads[0].nodes.iter().filter(|n| matches!(n.kind, Kind::Image(_))).count();
             (n, doc.warnings)
         };

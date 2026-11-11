@@ -13,8 +13,8 @@ pub(super) const MAX_TREE_DEPTH: usize = 128;
 /// Total layer nodes imported.
 const MAX_NODES: usize = 500_000;
 
-/// Pixels decoded from pixel layers over a whole document (2 GB as RGBA). The archive's limits
-/// count the bytes extracted from it, and a layer of one flat colour needs none (#1704).
+/// Pixels of pixel layers a reader starts with; [`read`] sets what [`Limits::max_pixel_bytes`]
+/// allows (this many by default: 2 GiB as RGBA).
 const MAX_LAYER_PIXELS: u64 = 512 << 20;
 
 /// Embedded documents inside embedded documents are followed this deep.
@@ -44,7 +44,7 @@ const MAX_DOCUMENT_NAME_CHARS: usize = 16 << 20;
 pub(crate) struct Budget {
     /// Layer nodes ([`MAX_NODES`] in all).
     pub(crate) nodes: usize,
-    /// Pixels the pixel layers may decode ([`MAX_LAYER_PIXELS`] in all).
+    /// Pixels the pixel layers may decode ([`Limits::max_pixel_bytes`] as RGBA in all).
     pub(crate) pixels: u64,
     /// Characters of stories ([`MAX_DOCUMENT_CHARS`] in all).
     pub(crate) chars: usize,
@@ -78,11 +78,7 @@ impl Budget {
 
 /// Read a document: archive, `doc.dat` and the model.
 pub fn read(bytes: &[u8], limits: Limits) -> Result<Document, Error> {
-    read_within(bytes, limits, MAX_LAYER_PIXELS)
-}
-
-/// [`read`], its pixel layers holding at most `pixels` pixels together.
-pub(crate) fn read_within(bytes: &[u8], limits: Limits, pixels: u64) -> Result<Document, Error> {
+    let pixels = u64::try_from(limits.max_pixel_bytes / 4).unwrap_or(u64::MAX);
     read_at(bytes, limits, &mut Budget { pixels, ..Budget::FULL }, Affine::IDENTITY, 0).document
 }
 
@@ -155,6 +151,18 @@ impl<'s, 'a, 'b> Reader<'s, 'a, 'b> {
         }
     }
 
+    /// The objects of an array field (nulls skipped). Its raw slots, null ones included, are
+    /// charged to the document's work first: a shared object's arrays are scanned again on every
+    /// visit, and a long array of nulls yields nothing a node or segment limit would count. Past
+    /// the work left, the array is not scanned: a warning, and no objects.
+    pub(crate) fn objs(&mut self, id: ObjId, tag: &[u8; 4]) -> Vec<ObjId> {
+        if self.budget.spend(self.s.array_len(id, tag).unwrap_or(0)).is_err() {
+            self.warn("lists beyond the work one document may take (left out)");
+            return Vec::new();
+        }
+        self.s.objs(id, tag)
+    }
+
     pub(crate) fn warn(&mut self, what: impl Into<String>) {
         *self.warnings.entry(what.into()).or_default() += 1;
     }
@@ -211,6 +219,8 @@ impl<'s, 'a, 'b> Reader<'s, 'a, 'b> {
             self.warn("an unknown kind of page");
             return Ok(None);
         }
+        // The page list is scanned whole (null slots too) every time the spread is listed.
+        self.budget.spend(s.obj(spread, b"SpMd").and_then(|md| s.array_len(md, b"PagR")).unwrap_or(0))?;
         let pages = pages(s, spread);
         self.budget.spend(pages.len() + 1)?;
         let default_size = s.floats::<2>(doc, b"DfSz").filter(|[w, h]| *w > 0.0 && *h > 0.0).map(|[w, h]| Rect { x0: 0.0, y0: 0.0, x1: w, y1: h });
@@ -235,9 +245,10 @@ impl<'s, 'a, 'b> Reader<'s, 'a, 'b> {
         let s = self.s;
         let mut out = Vec::new();
         let mut mask = None;
+        // Invisible masks, skipped children and null slots cost no node, so the visit is charged
+        // here, by the raw slots, before the list is scanned.
+        self.budget.spend(s.array_len(parent, b"Chld").unwrap_or(0))?;
         let kids = s.objs(parent, b"Chld");
-        // Invisible masks and skipped children cost no node, so the visit is charged here.
-        self.budget.spend(kids.len())?;
         for c in kids {
             if s.is(c, b"MRst") {
                 // A mask layer inside a group or layer masks that container.
@@ -361,7 +372,7 @@ impl<'s, 'a, 'b> Reader<'s, 'a, 'b> {
             },
             b"MPIN" => {
                 // `SLnk` links the instance with the master spread it shows.
-                let linked = s.obj(id, b"SLnk").map(|l| s.objs(l, b"ILOb")).unwrap_or_default();
+                let linked = s.obj(id, b"SLnk").map(|l| self.objs(l, b"ILOb")).unwrap_or_default();
                 let master = linked.iter().find_map(|o| self.master_ids.iter().position(|m| m == o));
                 let at = |t: &[u8; 4], default: usize| s.int(id, t).and_then(|v| usize::try_from(v).ok()).unwrap_or(default).min(4096);
                 match master {
@@ -417,7 +428,7 @@ impl<'s, 'a, 'b> Reader<'s, 'a, 'b> {
     fn effects(&mut self, id: ObjId, world: Affine, bounds: Option<Rect>) -> Vec<Effect> {
         let s = self.s;
         let mut out = Vec::new();
-        for e in s.objs(id, b"FiEf").into_iter().take(64) {
+        for e in self.objs(id, b"FiEf").into_iter().take(64) {
             if s.bool(e, b"Enab") == Some(false) {
                 continue;
             }
@@ -478,7 +489,7 @@ impl<'s, 'a, 'b> Reader<'s, 'a, 'b> {
                 _ => self.warn("layer effects of other kinds (left out)"),
             }
         }
-        for a in s.objs(id, b"AdCh") {
+        for a in self.objs(id, b"AdCh") {
             if let Some(effect) = self.attached_recolor(a) {
                 out.push(effect);
             }
@@ -522,6 +533,7 @@ impl<'s, 'a, 'b> Reader<'s, 'a, 'b> {
     /// an attached mask layer is a pixel mask. Adjustments attached the same way are reported.
     fn attached_masks(&mut self, id: ObjId, world: Affine, over: Option<Rect>) -> Result<(Option<Path>, Option<Image>), Error> {
         let s = self.s;
+        self.budget.spend(s.array_len(id, b"AdCh").unwrap_or(0))?;
         let attached = s.objs(id, b"AdCh");
         let mut mask: Option<Path> = None;
         let mut pixels: Option<Image> = None;

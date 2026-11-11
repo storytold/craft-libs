@@ -33,11 +33,16 @@ pub struct Limits {
     pub max_entry: usize,
     /// Total bytes extracted over the whole import.
     pub max_total: usize,
+    /// Bytes of decoded pixels the pixel layers of one import may hold together, counted as RGBA
+    /// (4 bytes a pixel). The entry limits bound what is extracted, not what the layers made of
+    /// it cost: a layer of one flat colour needs no entry at all. A layer that alone is over 64
+    /// megapixels is read at a lower resolution; layers past this allowance are left out and said.
+    pub max_pixel_bytes: usize,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { max_entry: 256 << 20, max_total: 1 << 30 }
+        Self { max_entry: 256 << 20, max_total: 1 << 30, max_pixel_bytes: 2 << 30 }
     }
 }
 
@@ -290,7 +295,7 @@ impl<'a> Archive<'a> {
     /// Extract an entry by name: decompress, undo the byte predictor and verify the CRC.
     /// What is left of the limits for documents embedded in this one.
     pub(crate) fn remaining(&self) -> Limits {
-        Limits { max_entry: self.limits.max_entry, max_total: self.limits.max_total.saturating_sub(self.extracted) }
+        Limits { max_total: self.limits.max_total.saturating_sub(self.extracted), ..self.limits }
     }
 
     /// Count `n` bytes extracted elsewhere (from embedded documents) against this import.

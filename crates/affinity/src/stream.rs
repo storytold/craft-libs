@@ -55,6 +55,16 @@ pub enum Value {
     Array(Vec<Value>),
 }
 
+impl Value {
+    /// Slot count of an array (null slots included); `None` for a scalar.
+    pub fn array_len(&self) -> Option<usize> {
+        match self {
+            Value::Array(a) => Some(a.len()),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Root,

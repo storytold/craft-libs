@@ -20,6 +20,12 @@ impl Stream {
         self.class(id) == Some(Tag::of(class))
     }
 
+    /// The raw slot count of an object's array field (null slots included), for charging a scan
+    /// before nulls are filtered out. `None` when the field is not an array.
+    pub fn array_len(&self, id: ObjId, tag: &[u8; 4]) -> Option<usize> {
+        self.field(id, tag)?.array_len()
+    }
+
     /// A child object (shared, linked or inline); `None` for null or missing.
     pub fn obj(&self, id: ObjId, tag: &[u8; 4]) -> Option<ObjId> {
         match self.field(id, tag)? {

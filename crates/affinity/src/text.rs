@@ -28,7 +28,8 @@ pub(crate) fn read(r: &mut Reader, id: ObjId, world: Affine) -> Option<Text> {
         _ => bounds.x0,
     };
     if !artistic {
-        if s.objs(frame, b"ColW").len() > 1 || matches!(s.field(frame, b"ColW"), Some(Value::Array(a)) if a.len() > 1) {
+        // The raw slot count is at least the number of objects among them.
+        if s.array_len(frame, b"ColW").is_some_and(|n| n > 1) {
             r.warn("text frames with several columns (imported as one column)");
         }
         if s.class(id) == Some(crate::stream::Tag::of(b"TxtC")) {
@@ -77,7 +78,7 @@ pub(crate) fn table(r: &mut Reader, id: ObjId, world: Affine) -> Option<Table> {
         return None;
     };
     r.budget.cells = left;
-    let cell_objs = s.obj(tabl, b"Cell").map(|c| s.objs(c, b"Cell")).unwrap_or_default();
+    let cell_objs = s.obj(tabl, b"Cell").map(|c| r.objs(c, b"Cell")).unwrap_or_default();
     // Formatting that doesn't match the grid would land on the wrong cells (and merging them,
     // move text between cells): only text then.
     let cell_objs = if cell_objs.len() == count {
@@ -126,7 +127,7 @@ pub(crate) fn table(r: &mut Reader, id: ObjId, world: Affine) -> Option<Table> {
         r.warn("table text beyond its last cell (left out)");
     }
     let mut edges = |tag: &[u8; 4], expected: usize| -> Vec<Option<crate::paint::Stroke>> {
-        let objs = s.obj(tabl, tag).map(|e| s.objs(e, b"Edge")).unwrap_or_default();
+        let objs = s.obj(tabl, tag).map(|e| r.objs(e, b"Edge")).unwrap_or_default();
         if objs.len() != expected {
             r.warn("tables whose lines don't match their grid (lines left out)");
             return Vec::new();
@@ -142,7 +143,7 @@ pub(crate) fn table(r: &mut Reader, id: ObjId, world: Affine) -> Option<Table> {
     let horizontal = edges(b"REdg", ncols * (nrows + 1));
     if let Some(format) = s.obj(tabl, b"TFmt") {
         let filled =
-            s.objs(format, b"Clls").into_iter().filter_map(|c| s.obj(c, b"Fill")).any(|f| s.obj(f, b"FDeF").is_some_and(|d| !s.is(d, b"FilN")));
+            r.objs(format, b"Clls").into_iter().filter_map(|c| s.obj(c, b"Fill")).any(|f| s.obj(f, b"FDeF").is_some_and(|d| !s.is(d, b"FilN")));
         if filled {
             r.warn("table cell fills (left out)");
         }
@@ -160,11 +161,14 @@ pub(crate) fn story_runs(r: &mut Reader, story: ObjId, world: Affine) -> (Vec<Te
     let mut total = 0usize;
     let mut placeholders = false;
     let mut attribute_budget = Some(MAX_ATTRIBUTE_BYTES);
-    for block in s.objs(story, b"Blok") {
-        // Shared blocks and run lists are visited once per link, so every visit is charged, empty or not.
-        let paragraph_runs = s.obj(block, b"PAtt").map(|p| s.objs(p, b"Runs")).unwrap_or_default();
-        let attribute_runs = s.obj(block, b"GAtt").map(|g| s.objs(g, b"Runs")).unwrap_or_default();
-        if r.budget.spend(1 + paragraph_runs.len() + attribute_runs.len()).is_err() {
+    for block in r.objs(story, b"Blok") {
+        // Shared blocks and run lists are visited once per link, so every visit is charged, empty
+        // or not, by the raw slots of the lists (null ones too) before they are scanned.
+        let slots = |tag: &[u8; 4]| s.obj(block, tag).and_then(|o| s.array_len(o, b"Runs")).unwrap_or(0);
+        let charged = r.budget.spend(1 + slots(b"PAtt") + slots(b"GAtt"));
+        let paragraph_runs = if charged.is_ok() { s.obj(block, b"PAtt").map(|p| s.objs(p, b"Runs")).unwrap_or_default() } else { Vec::new() };
+        let attribute_runs = if charged.is_ok() { s.obj(block, b"GAtt").map(|g| s.objs(g, b"Runs")).unwrap_or_default() } else { Vec::new() };
+        if charged.is_err() {
             r.warn("text beyond the work one document may hold (truncated)");
             break;
         }
@@ -181,14 +185,14 @@ pub(crate) fn story_runs(r: &mut Reader, story: ObjId, world: Affine) -> (Vec<Te
             None => {
                 // Inline objects (page numbers, anchors, cell ends) each take one index before
                 // the segment text.
-                let segments = s.objs(glyphs, b"Mixd");
+                let segments = r.objs(glyphs, b"Mixd");
                 if segments.is_empty() {
                     r.warn("a text block without readable characters (left out)");
                     continue;
                 }
                 let mut v = Vec::new();
                 for seg in segments {
-                    for inline in s.objs(seg, b"Glys") {
+                    for inline in r.objs(seg, b"Glys") {
                         if v.len() > budget {
                             break;
                         }
