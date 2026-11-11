@@ -27,6 +27,10 @@ use crate::{AudioBuffer, AudioError, AudioInfo, ChannelLayout, CodecId, Containe
 /// takes its frame length from the file (encoders use 4096).
 const MAX_PACKET_FRAMES: u64 = 1 << 20;
 
+/// The most frames of silence one block holds where a FLAC lost frames; a longer loss is several
+/// blocks.
+const GAP_BLOCK_FRAMES: u64 = 1 << 16;
+
 /// How far [`first_marker`] looks for the first format marker: the same 1 MiB a default symphonia
 /// probe scans.
 const MAX_PREFIX_SCAN: usize = 1 << 20;
@@ -362,6 +366,22 @@ fn precheck(b: &[u8], start: usize, detected: Option<Container>) -> Result<Prech
     }
 }
 
+/// `block` without the frames still to drop after a seek landed before its target; `None` when
+/// that is all of it.
+fn after_seek(discard: &mut u64, mut block: AudioBuffer) -> Option<AudioBuffer> {
+    if *discard > 0 {
+        let drop = (*discard as usize).min(block.frames());
+        for c in &mut block.channels {
+            c.drain(..drop);
+        }
+        *discard -= drop as u64;
+        if block.frames() == 0 {
+            return None;
+        }
+    }
+    Some(block)
+}
+
 /// Skip leading ID3v2 tags, run the container size preflight, then probe with symphonia; a zero-frame FLAC found by
 /// the preflight comes back as [`Opened::Empty`] without probing. A size-checked container is refused when probing
 /// selects a different reader or one that was never checked, so incidental payload magic cannot bypass those limits.
@@ -571,6 +591,13 @@ pub(crate) struct Symph {
     last_frames: usize,
     /// Frames still to drop after a seek landed before its target.
     discard: u64,
+    /// A FLAC file: the frame the next packet starts at when none was lost. The FLAC demuxer drops
+    /// a frame whose checksum fails and resyncs on the next one, so a later timestamp is audio that
+    /// was lost.
+    flac_next: Option<u64>,
+    /// Frames of silence still to return for lost FLAC frames, then the block decoded after them.
+    gap: u64,
+    held: Option<Vec<Vec<f32>>>,
     ended: bool,
     interleaved: Vec<f32>,
 }
@@ -597,6 +624,9 @@ impl Symph {
                         errors: 0,
                         last_frames: 0,
                         discard: 0,
+                        flac_next: None,
+                        gap: 0,
+                        held: None,
                         ended: true,
                         interleaved: Vec::new(),
                     });
@@ -620,6 +650,9 @@ impl Symph {
             }
             let decoder = symphonia::default::get_codecs().make_audio_decoder(&params, &decoder_options()).map_err(map_err)?;
             let frames_known = info.frames > 0 && info.channels > 0;
+            // Native FLAC timestamps count frames from 0.
+            let counts_frames = t.time_base.is_none_or(|tb| tb.numer.get() == 1 && tb.denom.get() == info.sample_rate);
+            let flac_next = (info.container == Container::Flac && info.codec == CodecId::Flac && counts_frames).then_some(0);
             Ok(Symph {
                 time_base: t.time_base,
                 reader: Some(reader),
@@ -631,6 +664,9 @@ impl Symph {
                 errors: 0,
                 last_frames: 0,
                 discard: 0,
+                flac_next,
+                gap: 0,
+                held: None,
                 ended: false,
                 interleaved: Vec::new(),
             })
@@ -658,6 +694,20 @@ impl Symph {
     fn next_block_inner(&mut self) -> Result<Option<AudioBuffer>> {
         let (Some(reader), Some(decoder)) = (self.reader.as_mut(), self.decoder.as_mut()) else { return Ok(None) };
         loop {
+            // Silence for lost FLAC frames comes first, then the block that was decoded after them.
+            let pending = if self.gap > 0 {
+                let n = self.gap.min(GAP_BLOCK_FRAMES);
+                self.gap -= n;
+                Some(crate::pcm::silence(usize::from(self.info.channels), n as usize)?)
+            } else {
+                self.held.take()
+            };
+            if let Some(block) = pending {
+                match after_seek(&mut self.discard, AudioBuffer { sample_rate: self.info.sample_rate, channels: block }) {
+                    Some(block) => return Ok(Some(block)),
+                    None => continue,
+                }
+            }
             if self.ended {
                 if self.info.channels == 0 {
                     return Err(AudioError::Malformed("stream contains no audio".into()));
@@ -682,6 +732,18 @@ impl Symph {
             };
             if packet.track_id != self.track_id {
                 continue;
+            }
+            if let Some(next) = self.flac_next {
+                let pts = u64::try_from(packet.pts.get()).unwrap_or(0);
+                let lost = pts.saturating_sub(next);
+                // Never past the declared length. Without one, a jump longer than any packet is
+                // not believed.
+                let room = if self.frames_known { self.info.frames.saturating_sub(next) } else { MAX_PACKET_FRAMES };
+                if lost > 0 && lost <= room && self.info.channels > 0 {
+                    self.gap = lost;
+                    self.info.damaged += 1;
+                }
+                self.flac_next = Some(pts.saturating_add(packet.dur.get()));
             }
             let block = match decoder.decode(&packet) {
                 Ok(decoded) => {
@@ -744,18 +806,13 @@ impl Symph {
                 }
                 Err(e) => return Err(map_err(e)),
             };
-            let mut block = AudioBuffer { sample_rate: self.info.sample_rate, channels: block };
-            if self.discard > 0 {
-                let drop = (self.discard as usize).min(block.frames());
-                for c in &mut block.channels {
-                    c.drain(..drop);
-                }
-                self.discard -= drop as u64;
-                if block.frames() == 0 {
-                    continue;
-                }
+            if self.gap > 0 {
+                self.held = Some(block);
+                continue;
             }
-            return Ok(Some(block));
+            if let Some(block) = after_seek(&mut self.discard, AudioBuffer { sample_rate: self.info.sample_rate, channels: block }) {
+                return Ok(Some(block));
+            }
         }
     }
 
@@ -791,8 +848,13 @@ impl Symph {
             decoder.reset();
             // the packet before the seek says nothing about the length of one lost after it
             self.last_frames = 0;
+            self.gap = 0;
+            self.held = None;
             let actual = u64::try_from(seeked.actual_ts.get()).unwrap_or(0);
             let actual = u64::try_from(u128::from(actual) * u128::from(numer) * u128::from(rate) / u128::from(denom)).unwrap_or(u64::MAX);
+            // A seek into lost frames lands on the next one that survived: the stream is where the
+            // seek says, and that packet's later timestamp is the rest of the loss.
+            self.flac_next = self.flac_next.map(|_| actual);
             self.discard = frame.saturating_sub(actual);
             self.ended = false;
             Ok(frame)
