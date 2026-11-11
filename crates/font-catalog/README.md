@@ -72,7 +72,7 @@ Each face (`FaceInfo`) has its family and style, legacy family and style, family
 
 ## One enumeration for the UI and documents
 
-With the `system` feature, `system::collection()` returns the process's fontique `Collection`: the system's fonts and the font store's. The catalog lists its files, and craft-ui's font fallback can query the same collection instead of building its own, so the system's fonts are enumerated once per process. A rescan builds a new collection; `system::generation()` tells holders of an older clone to take a new one.
+With the `system` feature, `system::collection()` returns the process's fontique `Collection`: the system's fonts and the font store's. The catalog lists its files, and craft-ui's font fallback (its `system_fonts` feature) queries the same collection, so the system's fonts are enumerated once per process. A rescan builds a new collection; `system::generation()` tells holders of an older clone to take a new one. It doesn't wait for a rescan in progress, so a UI thread can check it every frame. `system::on_change(callback)` runs a callback after every build, on the thread that built it.
 
 ## Try it
 

@@ -1,21 +1,23 @@
-//! The installed fonts, indexed once with fontique for every locale. The lookup is
-//! egui_system_font_provider 0.37's, whose provider builds its own index per locale.
+//! The installed fonts, indexed with fontique for every locale: craft-font-catalog's collection of
+//! the system's fonts and the Craft font store's, indexed again when the catalog rescans them. The
+//! lookup is egui_system_font_provider 0.37's, whose provider builds its own index per locale.
 
 use std::sync::{Arc, LazyLock};
 
+use craft_font_catalog::system;
 use egui::{FallbackRequest, FontData, FontFamily, FontInsert, FontPriority, FontProvider, InsertFontFamily};
-use fontique::{
-    Collection, CollectionOptions, FallbackKey, GenericFamily, Language, QueryFamily, QueryFont, QueryStatus, Script, SourceCache, SourceCacheOptions,
-};
+use fontique::{Collection, FallbackKey, GenericFamily, Language, QueryFamily, QueryFont, QueryStatus, Script, SourceCache, SourceCacheOptions};
 
-use super::system::{FontIndex, Lookup, Shared};
+use super::system::{FontIndex, Lookup, Shared, Source};
 
 pub(super) struct Index {
     collection: Collection,
     source_cache: SourceCache,
+    /// The catalog's [`system::generation`] of `collection`.
+    generation: u64,
 }
 
-static INDEX: Shared<Index> = Shared::new(build);
+static INDEX: Shared<Index> = Shared::new(build, Source { generation: system::generation, on_change: system::on_change });
 
 #[cfg(test)]
 pub(super) static BUILDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -23,10 +25,12 @@ pub(super) static BUILDS: std::sync::atomic::AtomicUsize = std::sync::atomic::At
 fn build() -> Index {
     #[cfg(test)]
     BUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    Index {
-        collection: Collection::new(CollectionOptions { shared: false, system_fonts: true }),
-        source_cache: SourceCache::new(SourceCacheOptions::default()),
-    }
+    // The first call enumerates the fonts if no one has yet. The generation read after it is
+    // then no newer than the collection taken next: a rescan in between costs one more rebuild,
+    // not a missed one.
+    system::collection();
+    let generation = system::generation();
+    Index { collection: system::collection(), source_cache: SourceCache::new(SourceCacheOptions::default()), generation }
 }
 
 /// A provider over the shared index that prefers `locale`'s fonts. With `wait`, a lookup before the
@@ -46,7 +50,7 @@ pub(super) fn locale_language(locale: &str) -> Option<Language> {
 }
 
 /// Start building the index in the background. `ctx` reloads its fonts once it is built if a
-/// lookup found nothing meanwhile.
+/// lookup found nothing meanwhile, and again after each rebuild for a catalog rescan.
 pub(super) fn start(ctx: &egui::Context) {
     INDEX.start(Some(ctx));
 }
@@ -54,10 +58,14 @@ pub(super) fn start(ctx: &egui::Context) {
 impl FontIndex for Index {
     type Locale = Option<Language>;
 
+    fn generation(&self) -> u64 {
+        self.generation
+    }
+
     fn font_for(&mut self, request: &FallbackRequest<'_>, locale: &Option<Language>) -> Option<FontInsert> {
         let FallbackRequest { cluster, family } = request;
         let base_char = cluster.chars().next()?;
-        let Self { collection, source_cache } = self;
+        let Self { collection, source_cache, .. } = self;
         let generic = match family {
             FontFamily::Monospace => GenericFamily::Monospace,
             FontFamily::Proportional | FontFamily::Name(_) => GenericFamily::SansSerif,

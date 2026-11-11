@@ -23,6 +23,8 @@ skrifa = { version = "0.44", default-features = false, features = ["std"] }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Screenshot and input tests of an app's screens (the screen-testing feature).
 egui_kittest = { version = "0.37", features = ["snapshot", "wgpu"], optional = true }
+# The installed fonts the UI falls back to: the system's and the Craft font store's.
+craft-font-catalog = { workspace = true, features = ["system"], optional = true }
 # The versions egui_system_font_provider 0.37 uses.
 fontique = { version = "0.11.1", default-features = false, features = ["system", "fontconfig-dlopen"], optional = true }
 unicode-script = { version = "0.5.8", optional = true }
@@ -48,7 +50,7 @@ native-windows = []
 # Draw colour glyphs (COLR, sbix, CBDT), e.g. colour emoji.
 color_fonts = ["epaint/color_fonts"]
 # Find installed fonts for characters the app's faces lack (desktop only).
-system_fonts = ["dep:fontique", "dep:unicode-script"]
+system_fonts = ["dep:craft-font-catalog", "dep:fontique", "dep:unicode-script"]
 # `docking::testing`: a headless driver for application docking tests.
 testing = []
 # craft_ui::testing: per-language screenshot tests and IME smoke tests with egui_kittest
