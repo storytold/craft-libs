@@ -44,6 +44,7 @@ craft-audio = { path = "crates/audio" }
 # No default features, so craft-audio's `encode` builds craft-media without `isobmff`.
 craft-media = { path = "crates/media", default-features = false }
 craft-media-testkit = { path = "crates/media-testkit" }
+craft-mime = { path = "crates/mime" }
 craft-menu = { path = "crates/menu" }
 craft-pcraft-format = { path = "crates/pcraft-format" }
 craft-prepress = { path = "crates/prepress" }
@@ -68,6 +69,8 @@ rayon = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 proptest = "1"
+# Character sets of the WHATWG Encoding Standard (craft-mime). (Apache-2.0 OR MIT) AND BSD-3-Clause.
+encoding_rs = "0.8"
 # All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 
