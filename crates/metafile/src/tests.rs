@@ -999,6 +999,68 @@ fn the_narrowest_crop_on_the_largest_frame_keeps_its_content() {
 }
 
 #[test]
+fn place_counts_the_items_own_clip_region_before_keeping_it() {
+    // A path of 499,998 elements nearly fills the 500,000 budget; a second item whose new clip
+    // region adds elements goes past it and is left out, whatever kind of item it is.
+    let mut segs = vec![Seg::Move(0.0, 0.0)];
+    segs.extend((0..499_997).map(|i| Seg::Line(1.0 + (i % 50) as f32, 1.0)));
+    let path = |segs: Vec<Seg>, region: Option<Vec<[f32; 4]>>| Item::Path {
+        segs,
+        fill: None,
+        stroke: None,
+        line: crate::LineStyle::default(),
+        even_odd: false,
+        region,
+        clips: Vec::new(),
+    };
+    let region = || Some(vec![[0.0, 0.0, 50.0, 25.0], [10.0, 10.0, 20.0, 20.0]]);
+    let frame = kurbo::Rect::new(0.0, 0.0, 100.0, 50.0);
+    let placed = |second: Item| {
+        let pic = crate::Picture { width: 100.0, height: 50.0, items: vec![path(segs.clone(), None), second], skipped_records: 0 };
+        pic.place(frame, [0.0; 4]).len()
+    };
+    let small = vec![Seg::Move(0.0, 0.0), Seg::Line(1.0, 1.0)];
+    assert_eq!(placed(path(small.clone(), None)), 2, "without a region the second path fits");
+    assert_eq!(placed(path(small, region())), 1);
+    let bitmap = Item::Bitmap {
+        rect: [0.0, 0.0, 10.0, 10.0],
+        transform: [10.0, 0.0, 0.0, 10.0, 0.0, 0.0],
+        width: 1,
+        height: 1,
+        rgba: vec![0; 4],
+        region: region(),
+        clips: Vec::new(),
+    };
+    assert_eq!(placed(bitmap), 1);
+}
+
+#[test]
+fn place_expands_a_clip_region_once_for_the_items_that_share_it() {
+    // 2,000 items under one 64-rectangle region: 320 region elements, not 640,000.
+    let region: Vec<[f32; 4]> = (0..64).map(|i| [i as f32, 0.0, i as f32 + 0.5, 10.0]).collect();
+    let item = || Item::Path {
+        segs: vec![Seg::Move(0.0, 0.0), Seg::Line(1.0, 1.0)],
+        fill: None,
+        stroke: None,
+        line: crate::LineStyle::default(),
+        even_odd: false,
+        region: Some(region.clone()),
+        clips: Vec::new(),
+    };
+    let pic = crate::Picture { width: 100.0, height: 50.0, items: (0..2000).map(|_| item()).collect(), skipped_records: 0 };
+    let placed = pic.place(kurbo::Rect::new(0.0, 0.0, 100.0, 50.0), [0.0; 4]);
+    assert_eq!(placed.len(), 2000);
+    let regions: Vec<_> = placed
+        .iter()
+        .filter_map(|p| match p {
+            crate::PlacedItem::Path { region: Some(r), .. } => Some(std::sync::Arc::as_ptr(r)),
+            _ => None,
+        })
+        .collect();
+    assert!(regions.len() == 2000 && regions.iter().all(|r| *r == regions[0]));
+}
+
+#[test]
 fn place_keeps_only_finite_bounded_bitmaps_with_area() {
     let bitmap = |rect: [f32; 4]| Item::Bitmap { rect, transform: [0.0; 6], width: 1, height: 1, rgba: vec![0; 4], region: None, clips: Vec::new() };
     let pic = crate::Picture {
@@ -2432,4 +2494,25 @@ fn empty_poly_groups_reserve_nothing() {
     // Counts past the points are cut short, and the size still matches.
     let ops = crate::geom::subpaths(&pts, &[2, 5, 4], false);
     assert_eq!((ops.len(), ops.capacity()), (3, 3));
+}
+
+#[test]
+fn full_canvas_does_not_sample_gradient_tiles() {
+    let mut cv = Canvas::new();
+    let big = || Rgba { w: 1, h: 1, px: vec![0u8; MAX_BYTES / 2] };
+    for _ in 0..3 {
+        cv.bitmap([0.0, 0.0, 1.0, 1.0], big());
+    }
+    assert!(cv.full());
+    cv.shade_shape(&crate::geom::rect(0.0, 0.0, 10.0, 10.0), &|_| panic!("sampled a full canvas"));
+    assert_eq!(cv.items.len(), 2);
+}
+
+#[test]
+fn canvas_budget_counts_bytes_held_elsewhere() {
+    let mut cv = Canvas::new();
+    cv.hold(MAX_BYTES - 100);
+    cv.bitmap([0.0, 0.0, 1.0, 1.0], Rgba { w: 1, h: 1, px: vec![0u8; 200] });
+    assert!(cv.full());
+    assert!(cv.items.is_empty());
 }

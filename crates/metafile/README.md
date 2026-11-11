@@ -121,7 +121,7 @@ it never panics and never allocates from an unchecked count. Each limit has a te
 | Limit | Value | Past it |
 |---|---|---|
 | Items in a picture | 200,000 | The parse stops. |
-| Bytes of path points and pixels kept (pattern brushes and clip paths included) | 256 MiB | The parse stops. |
+| Bytes of path points and pixels kept (pattern brushes, clip paths, EMF+ objects with the nested pictures they hold, and EMF+ clips included) | 256 MiB | The parse stops; an EMF+ object past it is not stored. |
 | Points in one path bracket; points in one record | 2,000,000 | The bracket stops growing; the record is left out. |
 | Object table slots | 4,096 | The object is not stored. |
 | `SAVEDC` depth | 1,024 | The parse stops. |
@@ -142,8 +142,9 @@ it never panics and never allocates from an unchecked count. Each limit has a te
 | Nested metafiles | 3 levels | The inner picture is not read. |
 | Clipping work per item, and per clip area | 1,000,000 and 4,000,000 steps | The item is left out; the clip keeps its previous area. |
 | Masking a bitmap to a clip that is not a rectangle | 5,000,000 point tests | The bitmap is left out. |
-| Placed path elements (`Picture::place`) | 500,000 | Placing stops. |
+| Placed path elements, clip regions included (`Picture::place`) | 500,000 | Placing stops. |
 | Placed coordinates (`Picture::place`) | ±1,000,000 | The item is left out. |
+| Placed pen width (`Picture::place`) | Twice the diagonal of the frame and the path together | The width is held there. |
 | Writers: dashes cut from one stroke | 100,000 | The stroke is written solid. |
 | Writers: segments from one curve | about 4,096 | The tolerance is raised. |
 

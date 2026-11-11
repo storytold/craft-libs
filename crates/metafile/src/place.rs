@@ -99,22 +99,24 @@ impl Picture {
         let k = (c[0].abs() + c[3].abs()) / 2.0;
         let mut out = Vec::with_capacity(self.items.len());
         let mut total_elements = 0usize;
-        let mut cached_region: Option<(*const [f32; 4], usize, PlacedRegion)> = None;
+        // The last region placed: consecutive items under the same clip share one placed path.
+        // Each region expanded counts against the element budget like the paths do.
+        let region_elements = std::cell::Cell::new(0usize);
+        let mut cached_region: Option<(Option<Vec<[f32; 4]>>, PlacedRegion)> = None;
         let mut get_region = |reg: &Option<Vec<[f32; 4]>>| -> PlacedRegion {
-            let (ptr, len) = match reg {
-                None => (std::ptr::null(), 0),
-                Some(v) => (v.as_ptr(), v.len()),
-            };
-            if let Some((c_ptr, c_len, ref res)) = cached_region
-                && c_ptr == ptr
-                && c_len == len
+            if let Some((key, res)) = &cached_region
+                && key == reg
             {
                 return res.clone();
             }
             let res = placed_region(&tf, reg);
-            cached_region = Some((ptr, len, res.clone()));
+            let n = res.as_ref().and_then(Option::as_ref).map_or(0, |p| p.elements().len());
+            region_elements.set(region_elements.get().saturating_add(n));
+            cached_region = Some((reg.clone(), res.clone()));
             res
         };
+        // Whether the paths and regions placed so far are past the budget.
+        let over = |paths: usize| paths.saturating_add(region_elements.get()) > MAX_PLACED_ELEMENTS;
 
         // Clip paths by address: the picture holds them for the whole call. None is a clip that is
         // not finite or reaches past the coordinate limit; what it clips is left out.
@@ -138,13 +140,17 @@ impl Picture {
         };
 
         for (index, item) in self.items.iter().enumerate() {
-            if total_elements >= MAX_PLACED_ELEMENTS {
+            if total_elements.saturating_add(region_elements.get()) >= MAX_PLACED_ELEMENTS {
                 break;
             }
             match item {
                 Item::Path { segs, fill, stroke, line, even_odd, region, clips } => {
                     let path = tf * bez_path(segs);
                     let Some(region) = get_region(region) else { continue };
+                    // This item's own region is expanded by now: it counts before the item is kept.
+                    if over(total_elements) {
+                        break;
+                    }
                     let Some(clips) = get_clips(clips) else { continue };
                     let line = LineStyle { dash: line.dash.iter().map(|d| (f64::from(*d) * k) as f32).collect(), ..line.clone() };
                     let bounds = path.bounding_box();
@@ -162,6 +168,10 @@ impl Picture {
                 Item::Pattern { segs, even_odd, tile: t, region, clips } => {
                     let path = tf * bez_path(segs);
                     let Some(region) = get_region(region) else { continue };
+                    // This item's own region is expanded by now: it counts before the item is kept.
+                    if over(total_elements) {
+                        break;
+                    }
                     let Some(clips) = get_clips(clips) else { continue };
                     let tile = tf
                         * Affine::translate((f64::from(t.origin[0]), f64::from(t.origin[1])))
@@ -175,6 +185,10 @@ impl Picture {
                 Item::Text(t) => {
                     let transform = tf * Affine::new(t.transform);
                     let Some(region) = get_region(&t.region) else { continue };
+                    // This item's own region is expanded by now: it counts before the item is kept.
+                    if over(total_elements) {
+                        break;
+                    }
                     let Some(clips) = get_clips(&t.clips) else { continue };
                     let clip =
                         t.clip.map(|[x0, y0, x1, y1]| tf.transform_rect_bbox(Rect::new(f64::from(x0), f64::from(y0), f64::from(x1), f64::from(y1))));
@@ -188,6 +202,10 @@ impl Picture {
                     let (x0, y0) = (f64::from(*x), f64::from(*y));
                     let rect = tf.transform_rect_bbox(Rect::new(x0, y0, x0 + f64::from(*w), y0 + f64::from(*h)));
                     let Some(region) = get_region(region) else { continue };
+                    // This item's own region is expanded by now: it counts before the item is kept.
+                    if over(total_elements) {
+                        break;
+                    }
                     let Some(clips) = get_clips(clips) else { continue };
                     let transform = tf * Affine::new(*transform);
                     let finite = transform.as_coeffs().iter().all(|v| v.is_finite() && v.abs() <= MAX_COORD);
