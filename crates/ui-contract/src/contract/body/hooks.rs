@@ -751,7 +751,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 claims: false,
                 trailing: Vec2::ZERO,
             };
-            body_rect = label::run(ui, env, &input).control;
+            body_rect = label::run(ui, env, &input, None).control;
             label_input = Some(input);
         }
         let label_extra = label_extra_of(regions.body, body_rect);

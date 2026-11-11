@@ -95,7 +95,7 @@ impl LeafPlaced {
     }
 }
 
-/// The label step for one leaf child: measures the child's narrowest width, runs the step in `row`, shows the
+/// The label step for one leaf child: measures the child's narrowest width, runs the step in `row` with the
 /// `trailing` content inside the label and returns the rect left for the child. The caller shows the child there and
 /// then calls `LeafPlaced::finish`.
 pub(crate) fn leaf<C: Show>(ui: &mut Ui, env: &Env, at: &LeafLabel<'_>, child: &mut C, trailing: Option<Trailing<'_>>) -> LeafPlaced {
@@ -120,17 +120,14 @@ pub(crate) fn leaf<C: Show>(ui: &mut Ui, env: &Env, at: &LeafLabel<'_>, child: &
         claims: C::LABELLED_AFTER,
         trailing: trailing.as_ref().map_or(Vec2::ZERO, |trailing| trailing.size),
     };
-    let placed = run(ui, env, &input);
-    // The content shows before the control, so a control that claims the label lies over it and takes its presses.
-    if let Some(trailing) = trailing {
-        (trailing.show)(ui, placed.trailing);
-    }
+    let placed = run(ui, env, &input, trailing);
     LeafPlaced { control: placed.control, label: placed.label, scope }
 }
 
-/// Runs the label step in `ui`: shows the label, opens the label scope and returns where the label and the control
-/// sit. The caller closes the scope with `scope::finish` after the control ran.
-pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>) -> Placed {
+/// Runs the label step in `ui`: shows the label and the `trailing` content inside it (`input.trailing` is its size),
+/// opens the label scope and returns where the label and the control sit. The caller closes the scope with
+/// `scope::finish` after the control ran.
+pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>, trailing: Option<Trailing<'_>>) -> Placed {
     let ctx = ui.ctx().clone();
     let rtl = env.direction.is_rtl();
     let tokens = &env.tokens;
@@ -184,6 +181,11 @@ pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>) -> Placed {
     Env::restore(&ctx, installed);
     if let Some(fact) = reset.filter(|_| shown.double_click || shown.dot_click) {
         keys::route_whole_reset(&ctx, fact.control);
+    }
+    // The content belongs to the label, not to the controls it names, so it shows before the scope opens. It also
+    // shows before the control, so a control that claims the label lies over it and takes its presses.
+    if let Some(trailing) = trailing {
+        (trailing.show)(ui, placed.trailing);
     }
     let label =
         field_label(env, input, label_id_for_scope, placed.label).with_press(shown.press).with_hover(shown.hovered).activated(shown.activated);
