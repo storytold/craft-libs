@@ -62,6 +62,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-docpath`](crates/docpath/src/lib.rs): decides whether a path or `file:` URL stored in a
   document may be opened. Paths stored in documents are followed only when they are local or on the
   document's own network share; other network paths, device paths and non-file URLs are refused.
+- [`craft-dpx`](crates/dpx/src/lib.rs): DPX (SMPTE ST 268) and Kodak Cineon frames, from PhotoCraft,
+  FilmCraft and EffectCraft: header fields and code values at 8, 10, 12 and 16 bits in both byte
+  orders, filled and packed, RGB, RGBA, ABGR, luma and Y'CbCr descriptors, and a writer for both
+  formats. Bounded on hostile input. Colour conversion and orientation stay in each app.
 - [`craft-drawingml`](crates/drawingml/README.md): the DrawingML that PPTX, DOCX and XLSX share:
   EMU units and `a:xfrm`, colours with theme slots and colour transforms, preset shape outlines
   (`a:prstGeom`), custom geometry with guide formulas (`a:custGeom`) and preset text warps
@@ -120,6 +124,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   Hasselblad 3FR/FFF, Minolta MRW, Epson ERF, Mamiya MEF, Kodak DCS, Pentax PEF, Samsung SRW and Canon CRW (through
   `craft-crw`) so far; demosaicing and everything after stay with the develop
   pipeline.
+- [`craft-tga`](crates/tga/src/lib.rs): Truevision Targa, from FilmCraft (reader) and PhotoCraft
+  (writer): true-colour, grayscale and colour-mapped pictures, raw or run-length encoded, any
+  origin, to RGBA8, and a run-length writer whose packets end with their scan line. Bounded on
+  hostile input.
 - [`craft-idml`](crates/idml/README.md): IDML (InDesign Markup Language) packages: the ZIP container read with bounded part sizes and lenient part names, `designmap.xml` with its includes in place, the `<Properties>` form on craft-xml elements, value codecs and the package writer; and InDesign Tagged Text, read and written.
 - [`craft-timeline`](crates/timeline/README.md): editorial timeline interchange: exact media time and SMPTE timecode, import/export reports, media path and `file://` URL handling, Avid Log Exchange (ALE) and CMX 3600 EDL documents, format detection. From FilmCraft.
 - [`craft-tiff`](crates/tiff/README.md): TIFF and BigTIFF IFD reader and writer, from LightCraft:
@@ -140,6 +148,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-jpeg`](crates/jpeg/README.md): clean-room decoder for 12-bit and arithmetic-coded
   JPEG (T.81 SOF0/SOF1 at 12 bits, SOF9, SOF10), from PhotoCraft, and a frame probe for routing.
   Metadata stays in each app.
+- [`craft-raster-codecs`](crates/raster-codecs/README.md): small raster formats, one module each,
+  from PhotoCraft: DDS (BC1 to BC3, read and write), DICOM, FITS (read and write), IFF/ILBM (read
+  and write), PCX, PNM/PAM/PFM (read and write) and XPM, into one flat image type. Bounded and
+  panic-free on hostile input. Colour, orientation and the document mapping stay in each app.
 - [`craft-kiwi`](crates/kiwi/README.md): clean-room decoder and encoder for the kiwi binary schema
   format (the encoding inside `.fig` files): a schema of enums, structs and messages, and messages
   decoded with it into a tree keyed by field name. Bounded on hostile input. Carved from FigCraft.

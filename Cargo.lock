@@ -922,6 +922,13 @@ name = "craft-docpath"
 version = "0.1.0"
 
 [[package]]
+name = "craft-dpx"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-drawingml"
 version = "0.1.0"
 dependencies = [
@@ -1341,6 +1348,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-raster-codecs"
+version = "0.1.0"
+dependencies = [
+ "rayon",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-raw"
 version = "0.1.0"
 dependencies = [
@@ -1426,6 +1441,13 @@ dependencies = [
  "unicode-general-category",
  "unicode-linebreak",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "craft-tga"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
 ]
 
 [[package]]

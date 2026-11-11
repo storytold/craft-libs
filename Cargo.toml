@@ -37,6 +37,7 @@ craft-drawingml = { path = "crates/drawingml" }
 craft-eps = { path = "crates/eps" }
 craft-doc = { path = "crates/doc" }
 craft-docpath = { path = "crates/docpath" }
+craft-dpx = { path = "crates/dpx" }
 craft-ecproj-format = { path = "crates/ecproj-format" }
 craft-font-catalog = { path = "crates/font-catalog" }
 craft-font-manager = { path = "crates/font-manager" }
@@ -69,6 +70,7 @@ craft-plotter = { path = "crates/plotter" }
 craft-prepress = { path = "crates/prepress" }
 craft-print = { path = "crates/print" }
 craft-proof = { path = "crates/proof" }
+craft-raster-codecs = { path = "crates/raster-codecs" }
 craft-psd = { path = "crates/psd" }
 craft-quit = { path = "crates/quit" }
 craft-rtf = { path = "crates/rtf" }
@@ -79,6 +81,7 @@ craft-silhouette-studio = { path = "crates/silhouette-studio" }
 craft-svg = { path = "crates/svg" }
 craft-svg-paths = { path = "crates/svg-paths" }
 craft-text = { path = "crates/text" }
+craft-tga = { path = "crates/tga" }
 craft-timeline = { path = "crates/timeline" }
 craft-tiff = { path = "crates/tiff" }
 craft-ui = { path = "crates/ui" }
