@@ -125,6 +125,7 @@ pub(crate) fn color_data(ifd0: &Ifd, raw: &Ifd, order: ByteOrder) -> ColorData {
         // DNG 1.7 BaselineSharpness (IFD 0 or the enhanced IFD); implausible values are ignored
         baseline_sharpness: get(t::BASELINE_SHARPNESS).and_then(|v| v.first().copied()).filter(|v| v.is_finite() && *v > 0.0 && *v <= 16.0),
         profile: profile_look(ifd0, raw, order),
+        kelvin_presets: None,
     }
 }
 
@@ -333,6 +334,13 @@ fn decode_ifd(bytes: &[u8], tiff: &Tiff, pixels: &Ifd, main: &Ifd, mode: Mode, f
     // (a FLOAT / DOUBLE tag can hold NaN or infinity: such a level reads as 0, in its place)
     let level = |v: f64| Some(v as f32).filter(|v| v.is_finite()).unwrap_or(0.0);
     let mut values: Vec<f32> = levels(t::BLACK_LEVEL).f64s(t::BLACK_LEVEL).unwrap_or_default().into_iter().map(level).collect();
+    // A TIFF that is not a DNG may state four black levels without `BlackLevelRepeatDim`: one per site of its 2 × 2
+    // CFA, row-major (PhotoCraft's reading of Hasselblad files). In a DNG the count has to match the repeat.
+    let (br, bc) = if format != RawFormat::Dng && cpp == 1 && values.len() == 4 && !levels(t::BLACK_LEVEL).contains(t::BLACK_LEVEL_REPEAT_DIM) {
+        (2, 2)
+    } else {
+        (br, bc)
+    };
     if values.len() != br * bc * cpp {
         values = vec![values.first().copied().unwrap_or(0.0)];
     }

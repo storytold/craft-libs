@@ -38,6 +38,8 @@ pub enum Container {
     Ac3,
     /// AVI (RIFF), including OpenDML.
     Avi,
+    /// MXF (SMPTE ST 377-1): OP1a, OP-Atom.
+    Mxf,
 }
 
 impl Container {
@@ -57,6 +59,7 @@ impl Container {
             Container::MpegAudio => "MPEG audio",
             Container::Ac3 => "AC-3",
             Container::Avi => "AVI",
+            Container::Mxf => "MXF",
         }
     }
 }

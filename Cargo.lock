@@ -795,12 +795,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-aep"
+version = "0.1.0"
+
+[[package]]
+name = "craft-affinity"
+version = "0.1.0"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "image",
+ "proptest",
+ "ruzstd",
+ "sha2",
+]
+
+[[package]]
 name = "craft-ai-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "craft-assuan"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -826,6 +850,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-captions"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "proptest",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-cfb"
 version = "0.1.0"
 
@@ -846,6 +879,13 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-csv"
+version = "0.1.0"
+dependencies = [
  "thiserror 2.0.21",
 ]
 
@@ -882,6 +922,22 @@ name = "craft-docpath"
 version = "0.1.0"
 
 [[package]]
+name = "craft-dpx"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-drawingml"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "kurbo 0.13.1",
+ "serde",
+]
+
+[[package]]
 name = "craft-dxf"
 version = "0.1.0"
 dependencies = [
@@ -897,6 +953,32 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-eps"
+version = "0.1.0"
+
+[[package]]
+name = "craft-epub"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "flate2",
+ "thiserror 2.0.21",
+ "zip",
+]
+
+[[package]]
+name = "craft-fig"
+version = "0.1.0"
+dependencies = [
+ "craft-kiwi",
+ "flate2",
+ "ruzstd",
+ "serde_json",
+ "thiserror 2.0.21",
+ "zip",
 ]
 
 [[package]]
@@ -965,7 +1047,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-gainmap"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-gcode"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-hdr"
 version = "0.1.0"
 dependencies = [
  "thiserror 2.0.21",
@@ -1003,6 +1099,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-idml"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "flate2",
+ "thiserror 2.0.21",
+ "zip",
+]
+
+[[package]]
 name = "craft-jpeg"
 version = "0.1.0"
 dependencies = [
@@ -1028,9 +1134,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-kiwi"
+version = "0.1.0"
+
+[[package]]
+name = "craft-lottie"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-media"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "craft-media-testkit",
  "proptest",
  "serde",
@@ -1058,6 +1177,9 @@ dependencies = [
 name = "craft-mesh"
 version = "0.1.0"
 dependencies = [
+ "craft-opc",
+ "craft-xml",
+ "miniz_oxide 0.9.1",
  "serde_json",
 ]
 
@@ -1072,12 +1194,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-midi"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-mime"
 version = "0.1.0"
 dependencies = [
  "chrono",
  "encoding_rs",
  "proptest",
+]
+
+[[package]]
+name = "craft-opc"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "flate2",
+ "log",
+ "thiserror 2.0.21",
+ "zip",
 ]
 
 [[package]]
@@ -1103,6 +1246,16 @@ dependencies = [
  "thiserror 2.0.21",
  "ttf-parser",
  "wasm-bindgen-test",
+]
+
+[[package]]
+name = "craft-penpot"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "serde_json",
+ "thiserror 2.0.21",
+ "zip",
 ]
 
 [[package]]
@@ -1133,6 +1286,14 @@ dependencies = [
  "wasm-bindgen-test",
  "web-sys",
  "zbus",
+]
+
+[[package]]
+name = "craft-plotter"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1173,6 +1334,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-psd"
+version = "0.1.0"
+dependencies = [
+ "craft-psd",
+ "encoding_rs",
+ "flate2",
+ "proptest",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-quit"
 version = "0.1.0"
 dependencies = [
@@ -1181,6 +1354,14 @@ dependencies = [
  "muda",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
+]
+
+[[package]]
+name = "craft-raster-codecs"
+version = "0.1.0"
+dependencies = [
+ "rayon",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1203,6 +1384,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-rtf"
+version = "0.1.0"
+dependencies = [
+ "encoding_rs",
+]
+
+[[package]]
 name = "craft-settings"
 version = "0.1.0"
 dependencies = [
@@ -1222,13 +1410,32 @@ dependencies = [
 ]
 
 [[package]]
-name = "craft-svg-paths"
+name = "craft-sketch"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "serde_json",
+ "thiserror 2.0.21",
+ "zip",
+]
+
+[[package]]
+name = "craft-svg"
 version = "0.1.0"
 dependencies = [
  "craft-xml",
+ "flate2",
  "kurbo 0.13.1",
  "roxmltree 0.21.2",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-svg-paths"
+version = "0.1.0"
+dependencies = [
+ "craft-svg",
+ "kurbo 0.13.1",
 ]
 
 [[package]]
@@ -1246,12 +1453,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-tga"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-tiff"
 version = "0.1.0"
 dependencies = [
  "proptest",
  "serde",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-timeline"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
 ]
 
 [[package]]
@@ -1321,6 +1543,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-vectordrawable"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "kurbo 0.13.1",
+]
+
+[[package]]
 name = "craft-video"
 version = "0.1.0"
 dependencies = [
@@ -1366,6 +1596,14 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/winprint.rs?rev=64e7afd4d1483512385012c340ecaaaf0f3beb7f#64e7afd4d1483512385012c340ecaaaf0f3beb7f"
 dependencies = [
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "craft-xls"
+version = "0.1.0"
+dependencies = [
+ "craft-cfb",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3002,6 +3240,7 @@ dependencies = [
  "byteorder-lite",
  "color_quant",
  "gif",
+ "image-webp",
  "moxcms",
  "num-traits",
  "png 0.18.1",

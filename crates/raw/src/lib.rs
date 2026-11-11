@@ -25,6 +25,14 @@
 //! | `dng` | Adobe DNG: uncompressed (any depth, packed), lossless JPEG, lossy JPEG, Deflate (integer and floating point), strips and tiles, CFA and LinearRaw, DNG 1.7 interleaved storage; reading and writing |
 //! | `jxl` | JPEG XL compressed DNG (DNG 1.7, compression 52546) through `jxl-oxide`; implies `dng` |
 //! | `crw` | Canon CRW (CIFF), decoded by `craft-crw` and returned through this crate's types |
+//! | `cr2` | Canon CR2: the sliced lossless-JPEG mosaic, and sRAW / mRAW (subsampled YCbCr) as linear RGB |
+//! | `mrw` | Minolta / Konica Minolta MRW: 12-bit packed and 16-bit word mosaics in the `\0MRM` block container |
+//! | `erf` | Epson ERF (R-D1 family): 12-bit samples in 16-byte blocks |
+//! | `mef` | Mamiya MEF (ZD): uncompressed 12-bit packed |
+//! | `kodak` | Kodak DCS520C TIFF: two-component lossless JPEG with a response curve |
+//! | `pef` | Pentax PEF: uncompressed (packed or 16-bit words) and Pentax's Huffman coding (compression 65535) |
+//! | `srw` | Samsung SRW: the uncompressed variants (compression 32769 words, 32770 at 12 bits packed) |
+//! | `hasselblad` | Hasselblad 3FR and FFF (and other CFA TIFFs in the DNG layout without a DNG version): uncompressed and Hasselblad's lossless JPEG; implies `dng` |
 //!
 //! [`probe`] names every container it can tell apart whatever the features; [`RawFormat::is_supported`] says
 //! whether this build decodes one.
@@ -42,22 +50,44 @@
 //! and from observation of files. No other raw decoder's source was consulted; see `README.md`.
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "cr2")]
+mod cr2;
 #[cfg(feature = "crw")]
 mod crw;
 #[cfg(feature = "dng")]
 mod dng;
 #[cfg(feature = "dng")]
 pub mod dngwrite;
+#[cfg(feature = "erf")]
+mod erf;
 pub mod gaintable;
+#[cfg(feature = "hasselblad")]
+mod hasselblad;
+// (the Huffman difference decoder Pentax, Nikon, Panasonic and Sony codings share)
+#[allow(dead_code)]
+mod huffman;
 #[cfg(feature = "jxl")]
 mod jxl;
+pub mod kelvin;
+#[cfg(feature = "kodak")]
+mod kodak;
 pub mod ljpeg;
+#[cfg(feature = "mef")]
+mod mef;
+#[cfg(feature = "mrw")]
+mod mrw;
 pub mod opcodes;
+#[cfg(feature = "pef")]
+mod pef;
 mod preview;
 pub mod profile;
 #[cfg(feature = "dng")]
 pub mod semantic;
 // (the TIFF pixel plumbing every TIFF-based maker shares; DNG is its only user so far)
+#[allow(dead_code)] // each maker uses some of these helpers; which are live depends on the features
+mod shared;
+#[cfg(feature = "srw")]
+mod srw;
 #[cfg_attr(not(feature = "dng"), allow(dead_code))]
 mod tiffraw;
 #[cfg_attr(not(feature = "dng"), allow(dead_code))]
@@ -290,7 +320,16 @@ impl RawFormat {
     /// Whether [`decode`] reads this container in this build (possibly not every compression inside it): the
     /// format's decoder is in the crate and its Cargo feature is on.
     pub fn is_supported(self) -> bool {
-        (self == RawFormat::Dng && cfg!(feature = "dng")) || (self == RawFormat::Crw && cfg!(feature = "crw"))
+        (self == RawFormat::Dng && cfg!(feature = "dng"))
+            || (self == RawFormat::Crw && cfg!(feature = "crw"))
+            || (self == RawFormat::CfaTiff && cfg!(feature = "hasselblad"))
+            || (self == RawFormat::KodakDcs && cfg!(feature = "kodak"))
+            || (self == RawFormat::Mrw && cfg!(feature = "mrw"))
+            || (self == RawFormat::Erf && cfg!(feature = "erf"))
+            || (self == RawFormat::Mef && cfg!(feature = "mef"))
+            || (self == RawFormat::Cr2 && cfg!(feature = "cr2"))
+            || (self == RawFormat::Pef && cfg!(feature = "pef"))
+            || (self == RawFormat::Srw && cfg!(feature = "srw"))
     }
 }
 
@@ -364,6 +403,18 @@ pub fn probe(bytes: &[u8]) -> Option<RawFormat> {
     }
     if make.starts_with("SAMSUNG") && samsung_raw {
         return Some(RawFormat::Srw);
+    }
+    #[cfg(feature = "erf")]
+    if erf::raw_ifd(&t, bytes.len()).is_some() {
+        return Some(RawFormat::Erf);
+    }
+    #[cfg(feature = "mef")]
+    if mef::raw_ifd(&t, bytes.len()).is_some() {
+        return Some(RawFormat::Mef);
+    }
+    #[cfg(feature = "kodak")]
+    if kodak::raw_ifd(&t, bytes).is_some() {
+        return Some(RawFormat::KodakDcs);
     }
     #[cfg(feature = "dng")]
     if dng::is_plain_cfa_tiff(&t, bytes) {
@@ -549,6 +600,22 @@ fn decode_in(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawImage> {
         RawFormat::Dng => dng::decode(bytes, mode, limits),
         #[cfg(feature = "crw")]
         RawFormat::Crw => crw::decode(bytes, mode, limits),
+        #[cfg(feature = "hasselblad")]
+        RawFormat::CfaTiff => hasselblad::decode(bytes, mode, limits),
+        #[cfg(feature = "kodak")]
+        RawFormat::KodakDcs => kodak::decode(bytes, mode, limits),
+        #[cfg(feature = "mrw")]
+        RawFormat::Mrw => mrw::decode(bytes, mode, limits),
+        #[cfg(feature = "erf")]
+        RawFormat::Erf => erf::decode(bytes, mode, limits),
+        #[cfg(feature = "mef")]
+        RawFormat::Mef => mef::decode(bytes, mode, limits),
+        #[cfg(feature = "cr2")]
+        RawFormat::Cr2 => cr2::decode(bytes, mode, limits),
+        #[cfg(feature = "pef")]
+        RawFormat::Pef => pef::decode(bytes, mode, limits),
+        #[cfg(feature = "srw")]
+        RawFormat::Srw => srw::decode(bytes, mode, limits),
         RawFormat::OtherTiff => Err(RawError::Unsupported(other_tiff_reason(bytes))),
         other => Err(RawError::Unsupported(format!("{other:?} files are not decoded by this build"))),
     }
@@ -788,6 +855,10 @@ pub struct ColorData {
     /// `ProfileGainTableMap*`, as data: the develop pipeline applies them, and a DNG export writes them back.
     #[serde(default)]
     pub profile: profile::ProfileLook,
+    /// The camera's white-balance presets at stated temperatures (Canon CR2), which give a raw without colour
+    /// matrices a Kelvin scale ([`kelvin`]). Not a DNG tag: the DNG writer does not write it.
+    #[serde(default)]
+    pub kelvin_presets: Option<kelvin::KelvinPresets>,
 }
 
 /// A decoded raw image.

@@ -20,4 +20,8 @@ jobs:
     uses: storytold/craft-common-actions/.github/workflows/sonarcloud.yml@main
     with:
       pdf-test-fonts: true
+      # The codec and format code behind features that are off by default. Without these the
+      # coverage build never compiles it, and new code there reads as untested.
+      cargo-features: >-
+        craft-video/dnx,craft-video/vp8,craft-video/prores,craft-video/h264,craft-video/hevc,craft-video/vp9,craft-video/av1,craft-video/threads,craft-audio/decode,craft-audio/encode,craft-audio/peaks,craft-audio/rayon,craft-audio/serde,craft-media/matroska,craft-media/ogg,craft-media/bitstream,craft-media/serde,craft-mesh/stl,craft-mesh/obj,craft-mesh/ply,craft-mesh/gltf,craft-metafile/write
     secrets: inherit
