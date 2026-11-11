@@ -30,6 +30,11 @@ Buffers are checked once per call, before any pixel is written.
 
 * `Transform::proof(src, proof, display, intent, bpc, simulate_paper)`: soft-proof chain.
 * `GamutCheck::new(src, proof, ΔE)`: out-of-gamut test (gamut warning).
+  Uses ΔE76 and the supplied threshold; `gamut::DEFAULT_THRESHOLD` is a constant of 4.0.
+  Opt into CIEDE2000 with
+  `GamutCheck::with_metric(src, proof, gamut::Metric::De2000, threshold)`;
+  `delta_e` and the threshold use the selected metric's units. Both metrics use the same
+  grid sizes and interpolation, so values between grid nodes are approximate.
 * `Lut3d::from_transform(&t, 33)?.to_rgba16f_bytes()`: display transform as a 3D texture.
 * `transform::cached(src, dst, opts)`: process-wide transform cache.
 * `lutfile::parse(name, bytes)` / `lutfile::write_cube(&lut)`: `.cube`, `.3dl` and `.look` LUT
