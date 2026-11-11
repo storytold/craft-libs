@@ -256,7 +256,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         Vec2::new(width, height)
     }
 
-    fn geometry(&mut self, _: &C, content: Rect, rtl: bool) -> Option<Rc<dyn std::any::Any>> {
+    fn geometry(&mut self, _: &C, _: &crate::contract::MeasureCx<'_, C>, (_, content): (Rect, Rect), rtl: bool) -> Option<Rc<dyn std::any::Any>> {
         let view = self.below_header(content);
         let offset = ScrollPos { x: self.offset_x, y: self.offset.clamp(0.0, self.max_offset(view.height())) };
         let mut layout = self.layout.take()?;

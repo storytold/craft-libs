@@ -191,6 +191,43 @@ pub enum DragBand {
     Reorder,
 }
 
+/// The room a container's own parts take on its header's line (`Container::header_parts`): a width at the start edge
+/// and one at the end edge. The header's children take the rest of the line.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct HeaderParts {
+    /// The width at the start edge.
+    pub start: f32,
+    /// The width at the end edge.
+    pub end: f32,
+}
+
+impl HeaderParts {
+    /// No room for parts.
+    pub const NONE: HeaderParts = HeaderParts { start: 0.0, end: 0.0 };
+
+    /// `width` at the start edge.
+    pub const fn start(mut self, width: f32) -> Self {
+        self.start = width;
+        self
+    }
+
+    /// `width` at the end edge.
+    pub const fn end(mut self, width: f32) -> Self {
+        self.end = width;
+        self
+    }
+}
+
+/// An edge of a header's line, where a container's own header parts sit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeaderEdge {
+    /// The start edge: the parts there come before the header's children, in Tab order too.
+    Start,
+    /// The end edge: the parts there come after the header's children, in Tab order too.
+    End,
+}
+
 /// A header region, filled by `Container::header`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]

@@ -22,7 +22,7 @@ use crate::list::{DropTest, RowTest, SourceTest};
 use crate::menu::Menu;
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx};
-use craft_behavior::{HitLevel, HitPriority, IconId, ItemLayout, ItemSource, Metrics, NavShape, PartKey, ScrollPos, Selection, Sense};
+use craft_behavior::{HitLevel, HitPriority, IconId, ItemLayout, ItemSource, Metrics, NavShape, PartKey, PressPhase, ScrollPos, Selection, Sense};
 use egui::{Id, Pos2, Rect, Response, Vec2};
 use std::cell::RefCell;
 use std::hash::Hash;
@@ -62,9 +62,11 @@ pub struct TabStripOutput<K> {
     /// The rect of each shown tab, in screen space, in the order the source lists them: where a drop between two
     /// tabs resolves its insertion index.
     pub tab_rects: Vec<(K, Rect)>,
-    /// The part of the strip's row that no tab and no overflow button takes, in screen space; its width is 0 when the
-    /// tabs fill the row. A host makes it a handle of its own, such as the grip a dock group is dragged by.
-    pub empty: Rect,
+    /// A drag started this pass on the strip's empty room, the part of its row no tab and no overflow button takes.
+    /// A host makes the room a handle of its own, such as the room a dock group is dragged by.
+    pub empty_drag: bool,
+    /// The second press of a double click went down on the strip's empty room this pass.
+    pub empty_double: bool,
 }
 
 impl<K> Outcome for TabStripOutput<K> {
@@ -291,6 +293,8 @@ pub struct TabStrip<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + '
     more: Option<Rect>,
     picked: Option<K>,
     torn: Option<TornOff<K>>,
+    empty_drag: bool,
+    empty_double: bool,
 }
 
 impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStrip<'a, K> {
@@ -313,6 +317,8 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
             more: None,
             picked: None,
             torn: None,
+            empty_drag: false,
+            empty_double: false,
         }
         .label(label)
     }
@@ -327,6 +333,18 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
 
     fn report(&self) -> Report {
         self.report.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    /// The part of the row no tab and no overflow button takes, in screen space.
+    fn empty_room(&self, content: Rect, rtl: bool) -> Rect {
+        let report = self.report();
+        let rest = craft_behavior::Flow::new(content, rtl).take_start(report.tabs_end).1;
+        let rest = match (report.overflow > 0.0, self.kind.overflow_place()) {
+            (false, _) => rest,
+            (true, OverflowPlace::StripEnd) => rest.take_end(report.overflow).1,
+            (true, OverflowPlace::AfterTabs) => rest.take_start(report.overflow).1,
+        };
+        rest.rect()
     }
 
     /// The shown tabs' rects in screen space, mirrored under right-to-left.
@@ -376,8 +394,20 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
             .pointer_only("Alt+Down opens the overflow menu");
     }
 
-    /// A drag of this strip's tabs that no target takes is a tear-off.
+    /// A drag or a double click that starts on the empty room is reported; a drag of this strip's tabs that no target
+    /// takes is a tear-off.
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        let press = *cx.press();
+        let origin = match press.phase {
+            PressPhase::Down { start, .. } | PressPhase::DragStart { start, .. } => Some(start.origin),
+            _ => None,
+        };
+        if let Some(origin) = origin
+            && self.empty_room(cx.core.content_rect, cx.flow.is_rtl()).contains(origin)
+        {
+            self.empty_drag = matches!(press.phase, PressPhase::DragStart { .. });
+            self.empty_double = press.double_pressed();
+        }
         if !self.tear_off {
             return;
         }
@@ -427,15 +457,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
 
     fn finish(self, mut cx: Cx<'_, Self>) -> TabStripOutput<K> {
         let tab_rects = self.tab_rects(&cx);
-        let report = self.report();
-        let rest = craft_behavior::Flow::new(cx.core.content_rect, cx.flow.is_rtl()).take_start(report.tabs_end).1;
-        let rest = match (report.overflow > 0.0, self.kind.overflow_place()) {
-            (false, _) => rest,
-            (true, OverflowPlace::StripEnd) => rest.take_end(report.overflow).1,
-            (true, OverflowPlace::AfterTabs) => rest.take_start(report.overflow).1,
-        };
-        let empty = rest.rect();
-        let TabStrip { picked, torn, .. } = self;
+        let TabStrip { picked, torn, empty_drag, empty_double, .. } = self;
         let mut response = cx.collection_response();
         let (mut closed, mut menu) = (Vec::new(), None);
         let mut kept = Vec::with_capacity(response.events.len());
@@ -447,7 +469,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
             }
         }
         response.events = kept;
-        TabStripOutput { response, closed, menu, picked, torn_off: torn, tab_rects, empty }
+        TabStripOutput { response, closed, menu, picked, torn_off: torn, tab_rects, empty_drag, empty_double }
     }
 }
 

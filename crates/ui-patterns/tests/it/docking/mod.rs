@@ -6,6 +6,7 @@ use craft_ui::testing::style::{tokens, with_cx};
 
 mod render;
 
+mod panel_menu;
 mod runs;
 
 mod split;

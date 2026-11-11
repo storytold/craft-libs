@@ -60,7 +60,9 @@ pub(crate) fn body_group(id: Id) -> Id {
     sub(id, "body_roving")
 }
 
-pub(crate) fn register_stops(input: &StopsIn<'_>) {
+/// Registers the stops, and returns those of the header parts at the end edge, which the body step registers after
+/// the header's children.
+pub(crate) fn register_stops(input: &StopsIn<'_>) -> Vec<Stop> {
     let ctx = input.ctx;
     debug_assert!(input.parts.rovings.len() <= 1, "a component declares one roving group; a second would be dropped");
     let row_parts = if input.item { input.row } else { None };
@@ -80,6 +82,7 @@ pub(crate) fn register_stops(input: &StopsIn<'_>) {
     if input.focusable {
         focus::register_stop(ctx, if let Some(group) = input.group.or(input.row) { own().in_group(group) } else { own() });
     }
+    let mut after_header = Vec::new();
     for (decl, extras) in &input.parts.decls {
         if extras.focusable && input.parts_focus {
             let stop = own().part(PartRef { key: decl.key, index: decl.index });
@@ -87,9 +90,15 @@ pub(crate) fn register_stops(input: &StopsIn<'_>) {
             let stop = if extras.default_stop { stop.default_stop() } else { stop };
             // A part group that joined the body's roving group has its parts registered there.
             let joined = group.and_then(|parts| focus::registration::part_group(ctx, parts));
-            focus::register_stop(ctx, if let Some(group) = row_parts.or(joined).or(group).or(input.row) { stop.in_group(group) } else { stop });
+            let stop = if let Some(group) = row_parts.or(joined).or(group).or(input.row) { stop.in_group(group) } else { stop };
+            if extras.after_header {
+                after_header.push(stop);
+            } else {
+                focus::register_stop(ctx, stop);
+            }
         }
     }
+    after_header
 }
 
 /// Whether the component is a focus stop: an enabled one, or a disabled one whose tooltip has a `disabled_text`, which

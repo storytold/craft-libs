@@ -245,6 +245,7 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
         let id = self.cx.core.id;
         let last = self.cx.core.memory.shown::<steps::Shown<ValueOf<C>>>(id).state.last_state;
         let measure = steps::measure_cx::<C>(input, self.cx.style, self.cx.core.resolved, self.cx.shown.as_deref());
+        let geometry = self.hooks.geometry(self.comp, &measure, (rect, content_rect), rtl);
         let mut pcx = PartsCx {
             content_rect,
             flow,
@@ -254,7 +255,7 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
             text: &mut parts.text,
             last_state: last,
             measure,
-            items: self.hooks.geometry(self.comp, content_rect, rtl),
+            items: geometry,
         };
         self.comp.parts(rect, &mut pcx);
         self.hooks.parts(self.comp, rect, &mut pcx);

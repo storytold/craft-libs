@@ -89,6 +89,8 @@ pub(crate) struct PartExtras {
     pub default_stop: bool,
     pub nudges: bool,
     pub toggles: Option<crate::contract::overlay::ToggleDecl>,
+    /// A header part at the end edge: its stop registers after the header's children.
+    pub after_header: bool,
 }
 
 impl PartBuilder<'_> {
@@ -252,8 +254,29 @@ pub struct PartsCx<'a, C: Component> {
     pub(crate) text: &'a mut crate::contract::text::TextStep,
     pub(crate) last_state: (bool, bool),
     pub(crate) measure: MeasureCx<'a, C>,
-    /// A collection's rows as the item step places them this pass.
+    /// What the shape laid out before `parts`: a collection's rows as the item step places them this pass, a
+    /// container's header slots.
     pub(crate) items: Option<std::rc::Rc<dyn std::any::Any>>,
+}
+
+impl<C: crate::contract::Container> PartsCx<'_, C> {
+    /// The slot at `edge` of the header's line that `Container::header_parts` keeps for the container's own parts;
+    /// `None` when it keeps none there.
+    pub fn header_slot(&self, edge: crate::contract::HeaderEdge) -> Option<Rect> {
+        let slots = self.items.as_ref()?.downcast_ref::<crate::contract::body::HeaderSlots>()?;
+        match edge {
+            crate::contract::HeaderEdge::Start => slots.start,
+            crate::contract::HeaderEdge::End => slots.end,
+        }
+    }
+
+    /// Declares a part in the header slot at `edge`. Its stop sits where the part sits: at the start edge before the
+    /// header's children, at the end edge after them.
+    pub fn header_part(&mut self, edge: crate::contract::HeaderEdge, part: impl Into<PartRef>, shape: impl Into<HitShape>) -> PartBuilder<'_> {
+        let builder = self.part(part, shape);
+        builder.declared.after_header = edge == crate::contract::HeaderEdge::End;
+        builder
+    }
 }
 
 impl<C: crate::contract::Collection> PartsCx<'_, C> {

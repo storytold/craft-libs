@@ -27,6 +27,7 @@ mod window;
 pub(crate) use open::unshown;
 pub(crate) use placement::shown_placement;
 #[doc(hidden)]
+pub(crate) use regions::HeaderSlots;
 pub use regions::pad_of;
 #[doc(hidden)]
 pub use reorder::REORDER_BAND;

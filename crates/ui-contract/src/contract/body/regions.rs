@@ -2,7 +2,7 @@
 
 use super::BodyHooks;
 use crate::contract::cx::BodyCx;
-use crate::contract::{Container, ContainerProps, FooterPlace, Gap, LeastWidth, Pad, PaneEdge, Sizing};
+use crate::contract::{Container, ContainerProps, FooterPlace, Gap, HeaderParts, LeastWidth, Pad, PaneEdge, Sizing};
 use crate::layout::ColumnGroup;
 use crate::primitives::Rule;
 use crate::runtime::access::{self};
@@ -12,6 +12,13 @@ use crate::runtime::memory::sub;
 use crate::runtime::overlay::CloseReason;
 use crate::style::{RuleKind, UiTokens, rule_look};
 use egui::{Align, Id, Layout, Pos2, Rect, Ui, UiBuilder, Vec2};
+
+/// The slots of a container's own header parts at the edges of the header's line (`Container::header_parts`).
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct HeaderSlots {
+    pub start: Option<Rect>,
+    pub end: Option<Rect>,
+}
 
 /// Whether the footer sits in the end region: it asks to, and the container has one.
 pub(super) fn footer_in_end(props: &ContainerProps) -> bool {
@@ -192,12 +199,13 @@ impl<'b> BodyHooks<'b> {
         bcx: &mut BodyCx<'_>,
         frame: &RegionFrame<'_>,
         header: Rect,
-        trailing: bool,
-        inset: f32,
+        (trailing, inset, parts): (bool, f32, HeaderParts),
     ) -> Option<CloseReason> {
         let ctx = ui.ctx().clone();
         let (id, rtl) = (frame.id, frame.rtl);
-        let mut header_rect = header.shrink2(Vec2::new(inset, 0.0));
+        let (line, _) = self.header_line(header, inset, parts, rtl);
+        let mut header_rect = line;
+        let header = line;
         let mut controls = Vec2::ZERO;
         if trailing {
             // The controls keep their call order (first at the start of their box); the box sits at the end edge.
@@ -236,9 +244,34 @@ impl<'b> BodyHooks<'b> {
             took.x += controls.x + self.region_gap;
         }
         took.y = took.y.max(controls.y);
-        took.x += 2.0 * inset;
+        let slot = |width: f32| if width > 0.0 { width + self.region_gap } else { 0.0 };
+        took.x += 2.0 * inset + slot(parts.start) + slot(parts.end);
         self.header_size = Some(took);
         bcx.close_requested()
+    }
+
+    /// The room the container's own header parts take this pass (`Container::header_parts`).
+    pub(super) fn header_parts<C: Container>(comp: &C, ui: &Ui, env: &Env, cx: &crate::contract::Cx<'_, C>) -> HeaderParts {
+        let input = crate::contract::steps::MeasureIn { ui, env, proposal: craft_behavior::Proposal::Ideal, room: None };
+        comp.header_parts(&crate::contract::steps::measure_cx::<C>(&input, cx.style, cx.core.resolved, cx.shown.as_deref()))
+    }
+
+    /// The header's line inside its inset, less the slots of the container's own header parts at its two edges: the
+    /// rect the header's children get, and the slots.
+    pub(super) fn header_line(&self, header: Rect, inset: f32, parts: HeaderParts, rtl: bool) -> (Rect, HeaderSlots) {
+        let mut flow = craft_behavior::Flow::new(header.shrink2(Vec2::new(inset, 0.0)), rtl);
+        let mut slots = HeaderSlots::default();
+        if parts.start > 0.0 {
+            let (slot, rest) = flow.take_start(parts.start);
+            slots.start = Some(slot);
+            flow = rest.take_start(self.region_gap).1;
+        }
+        if parts.end > 0.0 {
+            let (slot, rest) = flow.take_end(parts.end);
+            slots.end = Some(slot);
+            flow = rest.take_end(self.region_gap).1;
+        }
+        (flow.rect(), slots)
     }
 
     /// The end region: its content runs in reading order, so its roving order is its order on the line; the region

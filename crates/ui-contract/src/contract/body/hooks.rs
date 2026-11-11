@@ -508,6 +508,27 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         matches!(comp.props(Internal::new()).layout, layout::BodyLayout::Row { wrap: false, .. })
     }
 
+    /// The slots of the container's own header parts this pass, for `PartsCx::header_slot`.
+    fn geometry(
+        &mut self,
+        comp: &C,
+        cx: &crate::contract::MeasureCx<'_, C>,
+        (rect, content): (Rect, Rect),
+        rtl: bool,
+    ) -> Option<std::rc::Rc<dyn Any>> {
+        let props = Arc::clone(&self.props);
+        let header = props.header?;
+        let parts = comp.header_parts(cx);
+        if parts == crate::contract::HeaderParts::NONE {
+            return None;
+        }
+        let tokens = cx.tokens;
+        let inner = content.shrink(pad_of(tokens, props.pad));
+        let regions = self.regions(&props, inner, pad_of(tokens, props.pad), self.room_size(rect, inner), rtl, self.measured_sizes());
+        let (_, slots) = self.header_line(regions.header, pad_of(tokens, header.inset), parts, rtl);
+        Some(std::rc::Rc::new(slots))
+    }
+
     fn parts(&mut self, _comp: &mut C, rect: Rect, pcx: &mut PartsCx<'_, C>) {
         let props = Arc::clone(&self.props);
         let ctx = pcx.ui.ctx().clone();
@@ -645,13 +666,19 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let field_message = if props.label.is_some() { scope::last_message(&ctx, id) } else { None };
         // B1 header
         if props.header.is_some() {
+            let header_parts = Self::header_parts(comp, ui, env, cx);
+            // The stops of the parts at the header's end edge come after the header's children.
+            let after_header = std::mem::take(&mut cx.core.header_stops);
             let mut bcx = BodyCx::new(body_id, env_view, resolved, regions.header, &mut *cx.core.memory, &mut open, gate.as_mut())
                 .with_gate_mixed(gate_mixed)
                 .with_field_message(field_message.clone())
                 .with_owner(owner);
             let trailing = props.header.is_some_and(|header| header.trailing);
             let inset = props.header.map_or(0.0, |header| pad_of(&env.tokens, header.inset));
-            close = close.or(self.header_region(comp, ui, &mut bcx, &frame, regions.header, trailing, inset));
+            close = close.or(self.header_region(comp, ui, &mut bcx, &frame, regions.header, (trailing, inset, header_parts)));
+            for stop in after_header {
+                crate::runtime::focus::register_stop(&ctx, stop);
+            }
         }
         let animated = props.collapse.is_some_and(|collapse| collapse.animated);
         let is_open = open || (animated && self.presence.visible);

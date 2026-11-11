@@ -214,8 +214,15 @@ pub(crate) trait ShapeHooks<C: Component> {
         0.0
     }
 
-    /// The rows this pass places, for `PartsCx::rect_of`; computed before the component's `parts` runs.
-    fn geometry(&mut self, _comp: &C, _content: Rect, _rtl: bool) -> Option<std::rc::Rc<dyn std::any::Any>> {
+    /// What the shape lays out before the component's `parts` runs, from its rect and content rect: a collection's
+    /// rows this pass, for `PartsCx::rect_of`; a container's header slots, for `PartsCx::header_slot`.
+    fn geometry(
+        &mut self,
+        _comp: &C,
+        _cx: &crate::contract::MeasureCx<'_, C>,
+        _rects: (Rect, Rect),
+        _rtl: bool,
+    ) -> Option<std::rc::Rc<dyn std::any::Any>> {
         None
     }
 
@@ -348,6 +355,7 @@ fn blank_core<'a>(
         claims: Vec::new(),
         reveal: None,
         member_tip: None,
+        header_stops: Vec::new(),
         press_cancel: None,
         scroll_moves: Vec::new(),
         value_parts: Default::default(),
@@ -657,7 +665,7 @@ fn stops_step(at: StopsStep<'_>, e: &mut dyn ErasedPass<'_>, facts: &TypeFacts, 
     // A bound component that keeps the arrows reads them as value steps; a text value sets `steps_value` in its text options.
     let arrows = keys.keep == crate::runtime::focus::KeepKeys::BlockArrows;
     let value = role.value || keys.value || (bound && !role.nudge && !text && arrows);
-    steps::register_stops(&StopsIn {
+    e.core().header_stops = steps::register_stops(&StopsIn {
         ctx,
         id,
         holder: holder_widget.unwrap_or_else(|| member.map_or(id, |arena| arena.0)),

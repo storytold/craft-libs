@@ -57,8 +57,8 @@ pub use container::InBar;
 #[doc(hidden)]
 pub use container::InMenu;
 pub use container::{
-    Collapse, ContainerProps, DragBand, EndRegion, FooterPlace, FooterRegion, Gap, HeaderRegion, LeastWidth, Mount, Notch, POPUP_PAD, Pad, PaneEdge,
-    Scroll, ScrollAnchor, ScrollAxes, ShellPane, Sizing, ThemeScope,
+    Collapse, ContainerProps, DragBand, EndRegion, FooterPlace, FooterRegion, Gap, HeaderEdge, HeaderParts, HeaderRegion, LeastWidth, Mount, Notch,
+    POPUP_PAD, Pad, PaneEdge, Scroll, ScrollAnchor, ScrollAxes, ShellPane, Sizing, ThemeScope,
 };
 pub use craft_ui_macros::{CommandSet, Component, Pattern, Props, register_contract};
 #[doc(hidden)]
@@ -438,6 +438,13 @@ pub trait Container: Component + HasProps + Meta<Shape = shape::Body> {
 
     /// Fills the header region the body step laid out.
     fn header(&mut self, _ui: &mut Ui, _cx: &mut BodyCx<'_>) {}
+
+    /// The room the container's own parts take at the edges of its header's line (a menu button, a drag band). The
+    /// header's children take the rest; `parts` declares the parts in `PartsCx::header_slot` with
+    /// `PartsCx::header_part`.
+    fn header_parts(&self, _cx: &MeasureCx<'_, Self>) -> HeaderParts {
+        HeaderParts::NONE
+    }
 
     /// Fills the header's trailing region.
     fn controls(&mut self, _ui: &mut Ui, _cx: &mut BodyCx<'_>) {}

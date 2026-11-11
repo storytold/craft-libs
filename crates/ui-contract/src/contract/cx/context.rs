@@ -126,6 +126,9 @@ pub struct CxCore<'a> {
     pub(crate) reveal: Option<Rect>,
     /// The tooltip of the collection member the pointer rests on, which the item step leaves for step 16.
     pub(crate) member_tip: Option<crate::contract::tooltip::MemberTip>,
+    /// The stops of the container's header parts at the end edge, which the body step registers after the header's
+    /// children.
+    pub(crate) header_stops: Vec<crate::runtime::focus::Stop>,
     pub(crate) press_cancel: Option<PressCancel>,
     /// The visible range each scroll part moved to this pass, from step 8's results.
     pub(crate) scroll_moves: Vec<ScrollMove>,
