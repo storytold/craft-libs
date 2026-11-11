@@ -826,6 +826,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-cfb"
+version = "0.1.0"
+
+[[package]]
 name = "craft-cms"
 version = "0.1.0"
 dependencies = [
@@ -1055,6 +1059,15 @@ name = "craft-mesh"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+]
+
+[[package]]
+name = "craft-mime"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "encoding_rs",
+ "proptest",
 ]
 
 [[package]]
@@ -1323,6 +1336,14 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/winprint.rs?rev=64e7afd4d1483512385012c340ecaaaf0f3beb7f#64e7afd4d1483512385012c340ecaaaf0f3beb7f"
 dependencies = [
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "craft-xml"
+version = "0.1.0"
+dependencies = [
+ "quick-xml 0.41.0",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
