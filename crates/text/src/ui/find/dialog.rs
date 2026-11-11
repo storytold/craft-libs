@@ -205,7 +205,7 @@ impl FindReplaceDialog {
         self.request.take()
     }
 
-    /// The status line under the buttons.
+    /// The status line under the options, the last line of the body.
     pub fn set_message(&mut self, message: impl Into<String>) {
         self.message = message.into();
     }
@@ -313,9 +313,6 @@ impl StackDialog for FindReplaceDialog {
                     }
                 }
 
-                if !message.is_empty() {
-                    Text::new(message.clone()).show(ui);
-                }
                 let check = |ui: &mut Ui, label: &Label, value: &mut bool, enabled: bool| {
                     Checkbox::new(Bind::bound(value)).label(label.clone()).enabled(enabled).show(ui);
                 };
@@ -348,6 +345,9 @@ impl StackDialog for FindReplaceDialog {
                     picked_code = Some((field, code.to_owned()));
                 }
             });
+            if !message.is_empty() {
+                Text::new(message.clone()).show(ui);
+            }
         });
 
         self.query = query;
