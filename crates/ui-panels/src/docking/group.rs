@@ -117,7 +117,7 @@ impl<P: Clone + Send + Sync + 'static> Component for GroupGrip<P> {
 /// The band at the header's end the group is dragged by.
 const GRIP: PartKey = PartKey::new("grip");
 /// The panel menu button at the header's end edge.
-const MENU: PartKey = PartKey::new("panel_menu");
+pub(super) const MENU: PartKey = PartKey::new("panel_menu");
 
 type HeaderHookFn<'a> = Box<dyn FnMut(&mut Ui, &mut BodyCx<'_>) + 'a>;
 

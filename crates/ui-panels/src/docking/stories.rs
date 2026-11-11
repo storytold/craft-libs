@@ -1,12 +1,14 @@
 //! Stories of the docking family.
 
 use super::SplitFramesCx as _;
+use super::group::MENU;
 use super::stack::{StackSection, StackSections};
 use super::tree::FrameRules;
-use super::{DockGroup, DockPanels, DragUnit, GroupGrip, HANDLE, PanelKey, PanelSpec, PanelTitle, SplitArea, Splitter, WindowMenuRows};
+use super::{DockCommands, DockGroup, DockPanels, DragUnit, GroupGrip, HANDLE, PanelKey, PanelSpec, PanelTitle, SplitArea, Splitter, WindowMenuRows};
 use crate::contract::SizeLimits;
 use crate::contract::{Bind, BodyCx, Props as _, Show as _, ShowContainer as _, Validity};
-use crate::menu::Menu;
+use crate::menu::{Menu, PanelRow};
+use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::dock::{Layout, Node, SplitSize};
@@ -83,6 +85,21 @@ fn a_dock_of_one_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn two_panels(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let panels = titles(&[LAYERS, CHANNELS]);
     DockGroup::new(LAYERS, &panels, panels[0].key).show(ui, |_, _| ()).output.into()
+}
+
+/// A click on the panel menu button opens the group's panel menu.
+fn open_panel_menu(fixture: &mut Fixture) {
+    if let Some(button) = fixture.root_id().and_then(|id| fixture.part(id, MENU)) {
+        fixture.click(&button);
+        fixture.settle();
+    }
+}
+
+#[story(DockGroup<'static, usize>, covers = [Open], drive = Drive::Custom(open_panel_menu))]
+fn panel_menu(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let panels = titles(&[LAYERS, CHANNELS]);
+    let rows = [DockCommands::FloatPanel, DockCommands::FloatGroup].map(|command| PanelRow::Command(CommandRef::from(command))).to_vec();
+    DockGroup::new(LAYERS, &panels, panels[0].key).menu(rows).show(ui, |_, _| ()).output.into()
 }
 
 #[story(GroupGrip<usize>, covers = [Default])]
