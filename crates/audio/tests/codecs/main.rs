@@ -8,4 +8,11 @@ use craft_media_testkit as common;
 mod testkit;
 
 mod aac;
+mod ac3_encoder_oracle;
+mod ac3_oracle;
+mod alac;
+mod concealment;
+mod mpa_oracle;
+mod opus;
 mod routing_oracle;
+mod track_decoder;

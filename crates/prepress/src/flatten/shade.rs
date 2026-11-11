@@ -173,10 +173,16 @@ fn set(comps: &mut [f32], covered: &mut [bool], n: usize, i: usize, c: &[f32]) {
     covered[i] = true;
 }
 
-/// The pixel grid covering `area` at `scale`: its size, or `None` when empty.
+/// The most pixels [`pixel_size`] allows: twice `MAX_RASTER_PIXELS`, as `limit_scale` bounds the
+/// area before rounding and rounding adds a row and a column at most. A thinner area rounds to
+/// one pixel across and would otherwise let the other side grow without bound.
+const MAX_GRID_PIXELS: f64 = 2.0 * 16_777_216.0;
+
+/// The pixel grid covering `area` at `scale`: its size, or `None` when empty or past
+/// [`MAX_GRID_PIXELS`].
 pub(super) fn pixel_size(area: Rect, scale: f64) -> Option<(usize, usize)> {
     let (w, h) = ((area.width() * scale).ceil(), (area.height() * scale).ceil());
-    (w.is_finite() && h.is_finite() && w >= 1.0 && h >= 1.0).then_some((w as usize, h as usize))
+    (w.is_finite() && h.is_finite() && w >= 1.0 && h >= 1.0 && w * h <= MAX_GRID_PIXELS).then_some((w as usize, h as usize))
 }
 
 /// Mesh triangles drawn into component buffers, later triangles over earlier ones.
