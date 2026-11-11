@@ -922,6 +922,13 @@ name = "craft-docpath"
 version = "0.1.0"
 
 [[package]]
+name = "craft-dpx"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-drawingml"
 version = "0.1.0"
 dependencies = [
@@ -947,6 +954,10 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
 ]
+
+[[package]]
+name = "craft-eps"
+version = "0.1.0"
 
 [[package]]
 name = "craft-epub"
@@ -1050,6 +1061,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-hdr"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-heif"
 version = "0.1.0"
 dependencies = [
@@ -1120,6 +1138,16 @@ name = "craft-kiwi"
 version = "0.1.0"
 
 [[package]]
+name = "craft-kra"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "flate2",
+ "thiserror 2.0.21",
+ "zip",
+]
+
+[[package]]
 name = "craft-lottie"
 version = "0.1.0"
 dependencies = [
@@ -1159,6 +1187,8 @@ dependencies = [
 name = "craft-mesh"
 version = "0.1.0"
 dependencies = [
+ "craft-opc",
+ "craft-xml",
  "miniz_oxide 0.9.1",
  "serde_json",
 ]
@@ -1337,6 +1367,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-raster-codecs"
+version = "0.1.0"
+dependencies = [
+ "rayon",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-raw"
 version = "0.1.0"
 dependencies = [
@@ -1434,6 +1472,13 @@ dependencies = [
  "unicode-general-category",
  "unicode-linebreak",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "craft-tga"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
 ]
 
 [[package]]
