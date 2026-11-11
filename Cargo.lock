@@ -1236,6 +1236,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-cloud"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-cloud-local"
+version = "0.1.0"
+dependencies = [
+ "craft-cloud",
+ "craft-ui",
+ "egui",
+ "tempfile",
+]
+
+[[package]]
 name = "craft-cms"
 version = "0.1.0"
 dependencies = [
@@ -2264,6 +2282,7 @@ dependencies = [
 name = "craft-ui"
 version = "0.1.0"
 dependencies = [
+ "craft-cloud",
  "craft-fonts-build",
  "craft-i18n",
  "eframe",
