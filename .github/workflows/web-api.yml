@@ -11,6 +11,12 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
+  # run (main, manual) gets a group of its own, so it is neither cancelled nor replaced while queued.
+  group: web-api-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   web-api:
     # One OS: the crate is platform-independent JSON handling plus wasm32; no platform code.
@@ -19,6 +25,10 @@ jobs:
     env:
       CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -26,11 +36,19 @@ jobs:
         with:
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
-      - name: Install the matching WASM test runner
+      - name: Read the wasm-bindgen version from Cargo.lock
+        id: wasm-bindgen
         shell: bash
         run: |
           runner_version=$(python3 -c 'import tomllib; d=tomllib.load(open("Cargo.lock", "rb")); print(next(p["version"] for p in d["package"] if p["name"] == "wasm-bindgen"))')
-          cargo install wasm-bindgen-cli --version "$runner_version" --locked
+          echo "version=$runner_version" >> "$GITHUB_OUTPUT"
+      - name: Install the matching WASM test runner
+        # A prebuilt, checksum-verified binary instead of building it from source on every run.
+        # A version the pinned action does not list yet falls back to `cargo install --locked`.
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+        with:
+          tool: wasm-bindgen@${{ steps.wasm-bindgen.outputs.version }}
+          fallback: cargo-install
       - run: cargo fmt --check
       - run: cargo clippy -p craft-web-api --all-targets --locked -- -D warnings
       - run: cargo clippy -p craft-web-api --all-targets --locked --target wasm32-unknown-unknown -- -D warnings
