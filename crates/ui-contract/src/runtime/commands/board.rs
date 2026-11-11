@@ -230,8 +230,16 @@ impl Board {
         let last = key.and_then(|key| self.last.get(&key));
         let state = this.or(last);
         let flags = resolve_flags(this.map(CommandState::flags), last.map(CommandState::flags));
-        let reached = declaring.is_some() || (!app && instance.is_some_and(|id| self.inside_modal.contains(&id)));
-        let modal = !(dialog_open && !reached && matches!(rule, Some(ModalRule::Blocked | ModalRule::Declared)));
+        let reached = declaring.is_some() || instance.is_some_and(|id| self.inside_modal.contains(&id));
+        let modal = !dialog_open
+            || match rule {
+                None | Some(ModalRule::Always) => true,
+                // A modeless dialog that owns the keys has no modal root to reach into. The canvas a modal layer
+                // holds open is the one instance outside it that its view commands reach.
+                Some(ModalRule::InDialogs) => app || !self.modal_open || reached || instance.is_some_and(|id| Some(id) == self.held_open),
+                // `Blocked` and `Declared`.
+                Some(_) => reached,
+            };
         let live = app || instance.is_some_and(|id| self.is_live(ctx, id));
         let chord =
             self.keymap.as_ref().and_then(|cache| cache.keymap.bindings(command).into_iter().find(|b| !b.trigger.double).map(|b| b.trigger.chord));

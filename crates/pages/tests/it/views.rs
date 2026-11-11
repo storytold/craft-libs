@@ -167,3 +167,38 @@ fn zoom_in_zooms_a_focused_view_with_animated_zoom() {
     fixture.settle();
     assert!(state.borrow().zoom > before, "Zoom In zooms: {before} -> {}", state.borrow().zoom);
 }
+
+#[trial]
+fn zoom_keys_under_an_open_preview_leave_the_view_alone() {
+    let state = Rc::new(RefCell::new(PageViewState::default()));
+    let open = Rc::new(RefCell::new(false));
+    let (kept, opened) = (Rc::clone(&state), Rc::clone(&open));
+    let pages = DemoPages::new(3);
+    let mut at = 0_usize;
+    let mut fixture = Fixture::new(move |ui| {
+        let mut now = kept.borrow().clone();
+        PageView::new("Pages", &pages, &mut now, PAPER).options(LayoutOptions::ACROBAT).show(ui, |_, _| ());
+        *kept.borrow_mut() = now;
+        if *opened.borrow() {
+            PagePreview::new(&pages, &[0, 1, 2], &mut at, PAPER).show(ui);
+        }
+    });
+    fixture.room(vec2(900.0, 600.0));
+    fixture.settle();
+    focus_canvas(&mut fixture);
+    *open.borrow_mut() = true;
+    fixture.settle();
+    let before = state.borrow().zoom;
+    for (key, modifiers) in [
+        (Key::Equals, Modifiers::COMMAND),
+        (Key::Plus, Modifiers::COMMAND),
+        (Key::Minus, Modifiers::COMMAND),
+        (Key::Num0, Modifiers::COMMAND),
+        (Key::Plus, Modifiers::NONE),
+        (Key::Minus, Modifiers::NONE),
+    ] {
+        fixture.key(key, modifiers);
+        fixture.settle();
+        assert_eq!(state.borrow().zoom, before, "{key:?} with {modifiers:?} under the preview");
+    }
+}

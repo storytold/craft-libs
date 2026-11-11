@@ -35,7 +35,8 @@ pub enum ModalRule {
     /// Does not fire while a dialog is open.
     #[default]
     Blocked,
-    /// Fires from within a dialog and while none is open.
+    /// Fires from within a dialog and while none is open. While a modal layer is open, it reaches only an instance
+    /// inside the top modal layer, or the canvas that layer holds open.
     InDialogs,
     /// Fires whatever is open.
     Always,
