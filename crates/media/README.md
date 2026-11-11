@@ -412,6 +412,9 @@ after `cluster_duration_ns`), BlockGroups for frames whose duration differs from
 `default_duration_ns`, optional audio lacing (Xiph, EBML, fixed-size; for tracks with a
 `default_duration_ns`, at most 256 frames, ending at a timestamp gap), and Cues (video keyframes,
 or the first frame of each track per cluster). `MuxOptions::doc_type` = `"webm"` writes WebM.
+`TrackSpec::color` writes a video track's `Colour` element (matrix, range, transfer, primaries,
+chroma layout, light levels and mastering metadata: the fields that are set), which is where a WebM
+file says it is Rec. 2020, P3, PQ or HLG.
 CodecPrivate is fixed when the writer is created, so a codec whose configuration arrives with the
 first frame (AV1 from `rav1e`) creates the writer after that frame.
 
