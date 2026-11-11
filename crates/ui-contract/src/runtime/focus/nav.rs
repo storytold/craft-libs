@@ -392,11 +392,17 @@ impl State {
         {
             return Some(owner);
         }
-        let order: Vec<StopKey> = self.last_stops.iter().filter(|rec| rec.scope == gone.scope).map(|rec| rec.stop.key()).collect();
+        // Press-only stops (selectable text) are outside the Tab order, so focus never falls to them either.
+        let order: Vec<StopKey> = self
+            .last_stops
+            .iter()
+            .filter(|rec| rec.scope == gone.scope && (rec.stop.key() == key || !rec.stop.press_only))
+            .map(|rec| rec.stop.key())
+            .collect();
         let registered = |candidate: &StopKey| self.stops.iter().any(|rec| rec.stop.key() == *candidate);
         match after_removal(&order, &key, registered) {
             Some(next) => self.stops.iter().find(|rec| rec.stop.key() == *next).cloned(),
-            None => self.stops.iter().find(|rec| rec.scope == gone.scope).cloned(),
+            None => self.stops.iter().find(|rec| rec.scope == gone.scope && !rec.stop.press_only).cloned(),
         }
     }
 
