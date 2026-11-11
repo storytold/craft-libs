@@ -26,6 +26,8 @@ thiserror = "2"
 craft-atomic = { path = "crates/atomic" }
 craft-cfb = { path = "crates/cfb" }
 craft-cms = { path = "crates/cms" }
+craft-command = { path = "crates/command" }
+craft-command-derive = { path = "crates/command-derive" }
 craft-crw = { path = "crates/crw" }
 craft-dialogs = { path = "crates/dialogs" }
 craft-dxf = { path = "crates/dxf" }
@@ -40,6 +42,7 @@ craft-mesh = { path = "crates/mesh" }
 craft-heif = { path = "crates/heif" }
 craft-fonts-build = { path = "crates/fonts-build" }
 craft-i18n = { path = "crates/i18n" }
+craft-ipc = { path = "crates/ipc" }
 craft-jpeg = { path = "crates/jpeg" }
 craft-keymap = { path = "crates/keymap" }
 craft-audio = { path = "crates/audio" }
@@ -49,6 +52,9 @@ craft-media-testkit = { path = "crates/media-testkit" }
 craft-mime = { path = "crates/mime" }
 craft-menu = { path = "crates/menu" }
 craft-metafile = { path = "crates/metafile" }
+craft-plugin-abi = { path = "crates/plugin-abi" }
+craft-plugin-sdk = { path = "crates/plugin-sdk" }
+craft-plugin-sdk-macros = { path = "crates/plugin-sdk-macros" }
 craft-pcraft-format = { path = "crates/pcraft-format" }
 craft-prepress = { path = "crates/prepress" }
 craft-print = { path = "crates/print" }

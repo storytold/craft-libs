@@ -1,0 +1,38 @@
+name: Command
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/command/**", "crates/command-derive/**", "Cargo.toml", "Cargo.lock", ".github/workflows/command.yml"]
+  pull_request:
+    paths: ["crates/command/**", "crates/command-derive/**", "Cargo.toml", "Cargo.lock", ".github/workflows/command.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: command-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    timeout-minutes: 10
+    name: Command lint, tests, WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-command
+      - run: cargo fmt -p craft-command -p craft-command-derive --check
+      - run: cargo clippy -p craft-command -p craft-command-derive --all-targets --all-features --locked -- -D warnings
+      - run: cargo test -p craft-command -p craft-command-derive --all-features --locked
+      - run: cargo bench -p craft-command --no-run --locked
+      - run: cargo check -p craft-command --all-features --locked --target wasm32-unknown-unknown

@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "craft://schemas/link/instance-record/1",
+  "title": "Craft Link instance record",
+  "description": "Written by each running Craft app to <runtime_dir>/craft/<app>-<pid>.json (mode 0600). See PROTOCOL.md.",
+  "type": "object",
+  "required": ["v", "app", "app_version", "pid", "instance", "endpoint", "token", "started", "protocol", "docs"],
+  "additionalProperties": true,
+  "properties": {
+    "v": { "const": 1 },
+    "app": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,31}$" },
+    "app_version": { "type": "string" },
+    "pid": { "type": "integer", "minimum": 1 },
+    "instance": { "type": "string", "format": "uuid" },
+    "endpoint": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "path"],
+          "properties": { "kind": { "const": "unix" }, "path": { "type": "string", "maxLength": 100 } }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "name"],
+          "properties": { "kind": { "const": "pipe" }, "name": { "type": "string", "pattern": "^craft-" } }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "port"],
+          "properties": { "kind": { "const": "tcp" }, "port": { "type": "integer", "minimum": 1, "maximum": 65535 } }
+        }
+      ]
+    },
+    "token": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "started": { "type": "integer", "description": "unix seconds" },
+    "protocol": {
+      "type": "object",
+      "required": ["link"],
+      "properties": {
+        "link": { "type": "integer", "minimum": 1 },
+        "commands_schema": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "caps": {
+      "type": "array",
+      "description": "Roles and optional verbs this app offers. Merged into the link.hello caps (link-protocol.md section 3). 'hub' marks a hub peer, 'assets' marks an app that answers link.resolve and asset.describe on the connection thread. Absent means none.",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{0,63}$" }
+    },
+    "docs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["doc_id", "title"],
+        "properties": {
+          "doc_id": { "type": "string" },
+          "title": { "type": "string" },
+          "path": { "type": "string" }
+        }
+      }
+    }
+  }
+}

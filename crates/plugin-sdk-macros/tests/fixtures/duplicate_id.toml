@@ -1,0 +1,12 @@
+id = "org.example.t"
+name = "T"
+version = "1.0.0"
+
+[[contributions]]
+kind = "command"
+id = "a"
+handler = "a"
+[[contributions]]
+kind = "command"
+id = "a"
+handler = "a"

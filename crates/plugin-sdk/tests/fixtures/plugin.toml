@@ -1,0 +1,59 @@
+id = "org.example.fixture"
+name = "Fixture"
+version = "1.2.3"
+
+[requires]
+ops = ["host.log", "state.get", "state.put"]
+
+[permissions]
+required = ["state.local"]
+
+[[contributions]]
+kind = "command"
+id = "echo"
+label = "Echo"
+handler = "echo"
+
+[[contributions]]
+kind = "command"
+id = "fail"
+handler = "fail"
+
+[[contributions]]
+kind = "menu"
+id = "menu-item"
+label = "Menu item"
+handler = "echo"
+
+[[contributions]]
+kind = "hook"
+id = "gate"
+phase = "before"
+match = ["clip.*"]
+handler = "gate"
+
+[[contributions]]
+kind = "hook"
+id = "watcher"
+phase = "after"
+handler = "watcher"
+
+[[contributions]]
+kind = "panel"
+id = "side"
+title = "Side"
+dock = "right"
+handler = "side"
+
+[[contributions]]
+kind = "effect"
+id = "halve"
+handler = "halve"
+
+[contributions.params.amount]
+type = "number"
+default = 0.5
+
+[[contributions]]
+kind = "gizmo"
+id = "from-the-future"
