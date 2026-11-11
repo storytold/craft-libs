@@ -80,6 +80,9 @@ pub struct TextOptions {
     pub mixed: bool,
     /// The text sits in the middle of the part instead of at its start (numbers).
     pub centred: bool,
+    /// A plain Left or Right with the whole text selected starts from the end of the text, not from the selection's
+    /// start: a field whose last digits are what the user edits (a timecode's frames).
+    pub arrows_from_end: bool,
 }
 
 impl Default for TextOptions {
@@ -104,6 +107,7 @@ impl Default for TextOptions {
             submits: false,
             mixed: false,
             centred: false,
+            arrows_from_end: false,
         }
     }
 }

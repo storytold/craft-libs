@@ -181,8 +181,8 @@ impl Outcome for TimecodeFieldOutput {
 
 /// A time as text: Premiere's timecode field.
 ///
-/// - Click (or Tab) to type: the text is selected; Enter or a click away commits through [`parse_time`] relative to
-///   the current value; Esc cancels. A time that does not parse commits nothing and is reported on
+/// - Click (or Tab) to type: the text is selected, and Left or Right on it start from its last digit; Enter or a click
+///   away commits through [`parse_time`] relative to the current value; Esc cancels. A time that does not parse commits nothing and is reported on
 ///   [`TimecodeFieldOutput::error`].
 /// - A drag on the field while it is not in edit, or on its side label, scrubs one frame per point, Shift ten, as a
 ///   gesture of `EditEvent<Tick>`s; a click without a drag edits, and in edit a drag selects text.
@@ -208,6 +208,7 @@ impl<'a> TimecodeField<'a> {
         options.select_on_focus = true;
         options.submits = true;
         options.steps_value = true;
+        options.arrows_from_end = true;
         TimecodeField { common: Common::new(), value, format, min: Tick::ZERO, options }.label(label)
     }
 

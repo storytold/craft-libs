@@ -271,6 +271,16 @@ pub(crate) fn select(ctx: &Context, id: Id, anchor: usize, caret: usize) {
     text_edit::select(ctx, id, anchor, caret);
 }
 
+/// `TextOptions::arrows_from_end`: before the widget reads a plain Left or Right, a selection of the whole text
+/// collapses to its end.
+fn arrows_from_end(ctx: &Context, widget: Id, len: usize) {
+    let arrow = ctx.input(|input| input.modifiers.is_none() && (input.key_pressed(egui::Key::ArrowLeft) || input.key_pressed(egui::Key::ArrowRight)));
+    let whole = selection(ctx, widget).is_some_and(|(caret, anchor)| caret.min(anchor) == 0 && caret.max(anchor) == len);
+    if arrow && len > 0 && whole {
+        select(ctx, widget, len, len);
+    }
+}
+
 /// The modifiers held in this pass, which are the Enter press's.
 fn held_mods(ctx: &Context) -> Mods {
     let os = crate::runtime::windows::os_of(ctx);
@@ -305,6 +315,9 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         display.insert_str(at, &p.text);
         at..at + p.text.len()
     });
+    if input.focused && input.options.arrows_from_end {
+        arrows_from_end(ctx, widget, base.chars().count());
+    }
     let separated = input.focused && !input.read_only && state.preedit.is_none() && egui_input::take_separator(ctx, input.options.commit_on);
     let filter = egui_focus::event_filter(input.keys.keep, false);
     let edit = text_edit::Edit {

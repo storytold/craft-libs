@@ -1,10 +1,11 @@
-//! The timecode field: a drag scrubs a field that is not in edit.
+//! The timecode field: a drag scrubs a field that is not in edit, and the arrows on the selected text start from its
+//! end.
 
 use craft_timeline::ui::TimecodeField;
 use craft_timeline::{FrameRate, Tick, TimeFormat};
 use craft_ui::contract::{Bind, Role, Show as _};
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, trial};
-use egui::{Ui, Vec2};
+use egui::{Key, Modifiers, Ui, Vec2};
 
 /// One and a half seconds: "00:00:01:15" at 30 frames per second.
 fn start() -> Tick {
@@ -32,4 +33,18 @@ fn a_drag_on_a_timecode_field_moves_the_time() {
     fixture.drag(&target, Vec2::new(20.0, 0.0));
     fixture.settle();
     assert!(time(&mut fixture) > start(), "a drag to the right moved the time on");
+}
+
+#[trial]
+fn left_on_the_selected_timecode_starts_from_its_last_digit() {
+    let mut fixture = fixture();
+    let target = fixture.by_role(Role::SPIN_BUTTON).first().copied().expect("the field");
+    fixture.click(&target);
+    fixture.settle();
+    fixture.key(Key::ArrowLeft, Modifiers::NONE);
+    fixture.key(Key::Backspace, Modifiers::NONE);
+    fixture.key(Key::Enter, Modifiers::NONE);
+    fixture.settle();
+    let edited = time(&mut fixture);
+    assert!(edited != start() && edited > Tick::from_seconds_f64(1.0), "Backspace took a digit of the frames, not nothing at the start");
 }
