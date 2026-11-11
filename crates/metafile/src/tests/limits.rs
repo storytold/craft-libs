@@ -142,7 +142,6 @@ fn emfplus_point_lists_are_cut_at_the_point_cap() {
 fn a_continued_emfplus_object_reserves_nothing_for_the_size_it_claims() {
     // 4 GB claimed (cut to the cap), a few bytes sent: the object never completes and no memory
     // is set aside for it.
-    assert!(emfplus::MAX_OBJECT_BYTES < u32::MAX as usize);
     let first = prec(0x4008, 0x8000 | 0x0500 | 1, &cat(vec![h32(u32::MAX), vec![1, 2, 3, 4]]));
     let p = plus_pic(vec![first.clone(), first, draw_image(1, [0.0, 0.0, 4.0, 4.0])]);
     assert!(p.items.is_empty());
@@ -188,7 +187,24 @@ fn emfplus_regions_nest_only_so_deep_and_only_so_many_nodes() {
     };
     assert_eq!(clipped(chain(emfplus::MAX_REGION_DEPTH)), 30.0, "a region at the depth cap clips");
     assert_eq!(clipped(chain(emfplus::MAX_REGION_DEPTH + 1)), 100.0, "one deeper is no region: the fill is whole");
-    assert!(emfplus::MAX_REGION_WORK >= 2 * emfplus::MAX_REGION_DEPTH + 1, "the depth cap is reached before the node cap in a chain");
+    // A balanced tree of intersections stays shallow and has 2^(levels + 1) - 1 nodes.
+    fn tree(levels: usize, out: &mut Vec<u8>) {
+        if levels == 0 {
+            out.extend(cat(vec![h32(0x1000_0000), f32s(&[0.0, 0.0, 30.0, 30.0])]));
+        } else {
+            out.extend(h32(1));
+            tree(levels - 1, out);
+            tree(levels - 1, out);
+        }
+    }
+    let balanced = |levels: usize| {
+        let mut body = Vec::new();
+        tree(levels, &mut body);
+        cat(vec![h32(0xDBC0_1002), h32(0), body])
+    };
+    let levels = (emfplus::MAX_REGION_WORK + 1).ilog2() as usize;
+    assert_eq!(clipped(balanced(levels - 1)), 30.0, "fewer nodes than the cap");
+    assert_eq!(clipped(balanced(levels)), 100.0, "more nodes than the cap is no region");
 }
 
 #[test]

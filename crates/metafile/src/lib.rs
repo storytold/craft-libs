@@ -149,7 +149,7 @@ pub enum Item {
         /// The unit square (the whole bitmap, y down) to picture space as affine coefficients
         /// `[a, b, c, d, e, f]` (`x' = a·x + c·y + e`, `y' = b·x + d·y + f`, kurbo's order). For an
         /// upright bitmap this is `rect` again (`[w, 0, 0, h, x, y]`); under a world transform that
-        /// turns or skews the bitmap it carries the turn, and `rect` only spans two of its corners.
+        /// turns or skews the bitmap it carries the turn, and `rect` is the box around the turned bitmap.
         transform: [f64; 6],
         width: u32,
         height: u32,

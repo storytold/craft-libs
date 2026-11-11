@@ -23,7 +23,7 @@ device or logical units otherwise) and `items` in paint order, in `0..width` by 
 |---|---|
 | `Item::Path` | Segments (`Seg`: move, line, cubic, close), a fill colour, a stroke colour and width (0 is a hairline), the stroke's `LineStyle` (cap, join, miter limit, dashes), the fill rule. |
 | `Item::Pattern` | A path filled with a repeating RGBA `Tile`: hatch and bitmap brushes, EMF+ gradients and textures. Fills with the same brush share one tile. |
-| `Item::Bitmap` | RGBA8 pixels (straight alpha, rows top-down), the rectangle they fill and a `transform` that also holds a turn or a skew. |
+| `Item::Bitmap` | RGBA8 pixels (straight alpha, rows top-down), the rectangle they fill and a `transform` that also holds a turn or a skew (then the rectangle is the box around it). |
 | `Item::Text` | The string, the font the file asks for (family, height, weight, italic, underline, strike, character set), per-character advances, colours, alignment and a transform from text space. |
 
 Every item carries the clip it was drawn under: `region` (the GDI clip region as rectangles) and

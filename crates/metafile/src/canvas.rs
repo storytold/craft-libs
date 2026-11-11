@@ -299,7 +299,7 @@ pub(crate) enum Raw {
     Pattern { ops: Vec<Op>, even_odd: bool, tile: Arc<RawTile>, region: RawClip },
     /// `xf` maps the unit square onto the bitmap's place: `[a, b, c, d, e, f]` with
     /// `x' = a·x + c·y + e`, `y' = b·x + d·y + f`. `rect` is `[x, y, w, h]` of the same place when
-    /// the mapping neither turns nor skews it.
+    /// the mapping neither turns nor skews it, and the box around it when it does.
     Bitmap { rect: [f64; 4], xf: [f64; 6], img: Rgba, region: RawClip },
     /// Text whose transform and clip are in device units.
     Text { text: Box<Text>, region: RawClip },
@@ -1256,6 +1256,12 @@ impl Canvas {
         } else {
             [ux.0 - a.0, ux.1 - a.1, uy.0 - a.0, uy.1 - a.1, a.0, a.1]
         };
+        // A turned bitmap's rectangle is the box around its four corners.
+        let xs = [a.0, b.0, ux.0, uy.0];
+        let ys = [a.1, b.1, ux.1, uy.1];
+        let (x0, x1) = (xs.iter().copied().fold(f64::INFINITY, f64::min), xs.iter().copied().fold(f64::NEG_INFINITY, f64::max));
+        let (y0, y1) = (ys.iter().copied().fold(f64::INFINITY, f64::min), ys.iter().copied().fold(f64::NEG_INFINITY, f64::max));
+        let dev = if xf[1] == 0.0 && xf[2] == 0.0 { dev } else { [x0, y0, x1 - x0, y1 - y0] };
         self.push(Raw::Bitmap { rect: dev, xf, img, region: RawClip::default() });
     }
 }

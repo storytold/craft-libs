@@ -533,3 +533,12 @@ fn truncated_and_mutated_files_with_these_records_never_panic() {
         }
     }
 }
+
+#[test]
+fn a_turned_bitmaps_rectangle_is_the_box_around_it() {
+    let xf: Vec<u8> = [0.0f32, 1.0, -1.0, 0.0, 10.0, 0.0].iter().flat_map(|v| v.to_le_bytes()).collect();
+    let p = parse(&emf(&[erec(35, &xf), stretch_dibits(3, 1, 5, &png(3, 1, [9, 8, 7, 255]))], [0, 0, 10, 30], [0, 0, 2540, 7620])).unwrap();
+    let Item::Bitmap { rect, .. } = &p.items[0] else { panic!("expected a bitmap") };
+    let k = 72.0 / 101.6;
+    assert!(rect.iter().zip([0.0, 0.0, 10.0 * k, 30.0 * k]).all(|(a, b)| (f64::from(*a) - b).abs() < 1e-4), "{rect:?}");
+}
