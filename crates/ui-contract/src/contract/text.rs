@@ -1,15 +1,22 @@
 //! The text part of the pipeline (18.2): `PartsCx::text` registers the part with its typing run, and step 8b runs the
 //! text adapter, then the typing run over what the adapter recorded, and applies the run's events through `Cx`.
+//!
+//! Selection parts are read-only text with no typing run, any number per component: `PartsCx::selectable_text`
+//! declares one and its press-only stop, step 8b gives the focused one Select All and Copy, and
+//! `PaintUi::selectable_text` shows it, so it paints in the state's colours.
 
 use super::cx::{Cx, PartsCx, RecordedText, gesture_key};
 use super::{Component, Edit as _, Focus as _, Overlays as _, ValueOf};
 use crate::primitives::text_adapter::{self as adapter, End, TextState};
-use crate::primitives::{TextKey, TextOptions, TextOutcome};
+use crate::primitives::{TextKey, TextOptions, TextOutcome, TextRun, Wrap};
 use crate::runtime::access::text as text_access;
+use crate::runtime::focus::{EditSet, KeepKeys, KeyUse};
 use crate::runtime::keys;
 use crate::runtime::memory::sub;
 use crate::runtime::motion::Animate as _;
-use craft_behavior::{CancelReason, Caret, Codec, EditRun, Ended, EscapeRule, Escaped, Gesture, NotAValue, PartKey, Typed, TypingRun};
+use craft_behavior::{
+    CancelReason, Caret, Codec, EditCommand, EditRun, Ended, EscapeRule, Escaped, Gesture, NotAValue, PartKey, PartRef, Typed, TypingRun,
+};
 use craft_keymap::Mods;
 use egui::{Rect, Ui};
 use std::any::Any;
@@ -32,6 +39,40 @@ pub(crate) struct TextStep {
     pub commit_now: bool,
     pub decl: Option<TextDecl>,
     pub editor: Option<super::editor::EditorDecl>,
+    pub selections: Vec<SelectDecl>,
+}
+
+/// A selection part as `PartsCx::selectable_text` declared it.
+pub(crate) struct SelectDecl {
+    pub part: PartRef,
+    pub text: String,
+    /// The text wraps: the arrows move the caret between lines.
+    pub multiline: bool,
+}
+
+impl SelectDecl {
+    /// The keys a focused selection part keeps: a read-only text's, with Select All and Copy its only edit commands.
+    pub(crate) fn keys(&self) -> KeyUse {
+        let keys = KeyUse::of(crate::contract::Input::Text).with_edits(EditSet::NONE.with(EditCommand::SelectAll).with(EditCommand::Copy));
+        if self.multiline { keys.with_keep(KeepKeys::BlockArrows) } else { keys }
+    }
+}
+
+/// The egui text widget of the selection part `part` of component `id`, which holds key focus.
+pub(crate) fn selection_id(id: egui::Id, part: PartRef) -> egui::Id {
+    sub(id, ("selection", part.key, part.index))
+}
+
+/// Step 8b for selection parts: the focused one takes this pass's Select All and Copy.
+pub(crate) fn run_selections(core: &mut super::cx::CxCore<'_>, selections: &[SelectDecl]) {
+    let ctx = core.ctx.clone();
+    let Some(focused) = selections.iter().find(|decl| crate::runtime::egui::focus::has_focus(&ctx, selection_id(core.id, decl.part))) else {
+        return;
+    };
+    let widget = selection_id(core.id, focused.part);
+    while let Some(command) = core.intents.take_edit() {
+        adapter::select_or_copy(&ctx, widget, &focused.text, command);
+    }
 }
 
 pub(crate) struct TextDecl {
@@ -188,6 +229,17 @@ fn resolver<K: Codec + Clone + 'static>(codec: K, options: &TextOptions, rect: R
 }
 
 impl<C: Component> PartsCx<'_, C> {
+    /// Declares `run` as a selection part: read-only text that a press focuses, drag and double click select and Copy
+    /// copies, and that Tab and F6 pass over. `paint` shows it with `PaintUi::selectable_text` and the same run in
+    /// the state's colours. Its text is the component's own: it has no node of its own, so the component's node
+    /// names it. An elided run cannot be one, since the selection counts the characters shown.
+    pub fn selectable_text(&mut self, part: impl Into<PartRef>, run: &TextRun<'_>) {
+        debug_assert!(!matches!(run.wrap, Wrap::Elide | Wrap::ElidePath | Wrap::Clamp(_)), "a selection part shows its whole text");
+        let part = part.into();
+        debug_assert!(self.text.selections.iter().all(|decl| decl.part != part), "selection part {part:?} declared twice");
+        self.text.selections.push(SelectDecl { part, text: run.full_text(), multiline: run.wrap == Wrap::Wrap });
+    }
+
     /// Registers the component's one text part (`INPUT = Input::Text`).
     pub fn text<K: Codec + Clone + 'static>(&mut self, key: TextKey<K::Value>, rect: Rect, codec: &K, value: &K::Value, options: &TextOptions) {
         debug_assert!(self.text.decl.is_none(), "a component registers one text part");

@@ -87,7 +87,7 @@ impl PropertiesTab {
                     let (name, text) = (label.clone(), text.clone());
                     Param::custom(format!("properties.{at}.{row}"), label.clone(), move |ui, _, _| {
                         let shown = Env::of(ui).view().resolve(&text);
-                        SelectableText::new(name.clone(), shown.as_str()).multiline().show(ui).response
+                        SelectableText::new(name.clone(), shown.as_str()).multiline().show(ui)
                     })
                 }
                 PropertyRow::Field(param) => (**param).clone(),

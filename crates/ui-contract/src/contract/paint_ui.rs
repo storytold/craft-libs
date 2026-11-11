@@ -6,10 +6,11 @@ use super::label::{self, LeafLabel};
 use super::run::{self, FaceSource, ShowAt};
 use super::{ContentPainter, Cx, Show, TipFn};
 use crate::primitives::sensing::PartResults;
-use crate::primitives::{ContentPainterCx, Draw, DrawEnv, PaintRecord};
+use crate::primitives::{ContentPainterCx, Draw, DrawEnv, PaintRecord, TextRun, Wrap};
 use crate::runtime::access;
-use crate::runtime::egui::{alloc, child};
+use crate::runtime::egui::{alloc, child, focus as egui_focus, text_edit};
 use crate::runtime::env::{Env, Label};
+use crate::runtime::focus::KeepKeys;
 use crate::runtime::layout_memory;
 use crate::runtime::memory::sub;
 use crate::style::{Flags, Ink, Stateful, StyleColor, StyleCx};
@@ -43,6 +44,8 @@ pub struct PaintUi<'a> {
     /// The composite's resolved enabled state and size, which the children it builds inherit.
     pub(crate) enabled: bool,
     pub(crate) size: ControlSize,
+    /// The selection parts step 7 declared.
+    pub(crate) selections: &'a [PartRef],
     /// The children's `Ui`, built on the first child under `sub(id, "children")`.
     pub(crate) kids: Option<Ui>,
 }
@@ -52,6 +55,59 @@ impl PaintUi<'_> {
     pub fn draw(&self) -> Draw<'_> {
         Draw::new(self.ui.painter(), self.record, DrawEnv { tokens: &self.env.tokens, direction: self.env.direction, ink: self.ink })
             .text_direction(self.env.text_direction)
+    }
+
+    /// Shows the selection part `part` (`PartsCx::selectable_text`): `run` in `rect`, painted as `Draw::text`
+    /// paints it, with the selection behind its characters; a line wider than `rect` is cut at its edge. A part step 7 did not declare (a face, an inert
+    /// component) paints as plain text.
+    pub fn selectable_text(&mut self, part: impl Into<PartRef>, rect: Rect, run: &TextRun<'_>) {
+        let part = part.into();
+        if !self.selections.contains(&part) {
+            self.draw().text(rect, run);
+            return;
+        }
+        let (layout, at) = self.draw().place_text(rect, run);
+        self.record.borrow_mut().baseline.get_or_insert(at.y + layout.first_baseline);
+        let ctx = self.ui.ctx().clone();
+        let widget = super::text::selection_id(self.id, part);
+        let multiline = run.wrap == Wrap::Wrap;
+        let keep = if multiline { KeepKeys::BlockArrows } else { KeepKeys::InlineArrows };
+        let mut shown = layout.full.clone();
+        // A line longer than its room is cut at the room's edge, as a field's is.
+        let mut cut = (layout.size().x > rect.width()).then(|| {
+            let mut cut = alloc::child(self.ui, egui::UiBuilder::new().max_rect(rect));
+            cut.set_clip_rect(rect.intersect(cut.clip_rect()));
+            cut
+        });
+        text_edit::show(
+            cut.as_mut().unwrap_or(&mut *self.ui),
+            text_edit::Edit {
+                id: widget,
+                rect: layout.galley.rect.translate(at.to_vec2()),
+                text: &mut shown,
+                read_only: true,
+                enabled: self.enabled,
+                focusable: self.enabled,
+                pointer: true,
+                multiline,
+                password: false,
+                hint: None,
+                mono: false,
+                role: run.role,
+                ink: crate::style::ink_color(&self.env.tokens, self.ink),
+                filter: egui_focus::event_filter(keep, false),
+                char_limit: None,
+                preedit: None,
+                rtl: false,
+                centred: false,
+                caret_visible: false,
+                underline: 0.0,
+                galley: Some(layout.galley.clone()),
+            },
+        );
+        if crate::runtime::egui::access::enabled(&ctx, widget) {
+            crate::runtime::egui::access::fold_widget(&ctx, widget, self.id);
+        }
     }
 
     /// The content-paint API for painting `part`: as [`draw`](Self::draw), and when the part was declared

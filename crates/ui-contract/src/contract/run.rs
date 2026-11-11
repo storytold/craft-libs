@@ -370,6 +370,7 @@ fn blank_core<'a>(
         visible_rows: 0..0,
         gestures: Default::default(),
         texts: None,
+        selections: Vec::new(),
         surface_slot: None,
         editor: None,
         editor_inputs: Vec::new(),
@@ -549,6 +550,7 @@ pub(super) fn paint_ui<'a>(ui: &'a mut Ui, env: &'a Env, core: &'a CxCore<'_>, s
         flags: core.state.flags & HOST_FLAGS,
         enabled: core.resolved.enabled,
         size: core.resolved.size,
+        selections: &core.selections,
         kids: None,
     }
 }
@@ -926,6 +928,10 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     } else if holder_widget.is_some() {
         let keys = text_keys.unwrap_or_else(|| e.keys());
         e.editor(ui, &mut parts.text, keys);
+    }
+    if !parts.text.selections.is_empty() {
+        super::text::run_selections(e.core(), &parts.text.selections);
+        e.core().selections = parts.text.selections.iter().map(|decl| decl.part).collect();
     }
     // 9 update
     p.trace.mark(Step::Update);

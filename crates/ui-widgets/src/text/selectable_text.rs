@@ -3,86 +3,103 @@
 #[cfg(feature = "testing")]
 mod stories;
 
-use super::text_part;
-use crate::contract::{Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, PartsCx, Props as _, Role};
-use crate::primitives::{TextOptions, TextRun};
+use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, PartsCx, Props as _, Role, Styled as _};
+use crate::primitives::{Span, TextRun, Wrap};
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, StyleCx};
-use craft_behavior::{Insets, Metrics, PlainText, Sense};
-use egui::{Rect, Vec2};
+use crate::style::{ComponentStyle, StyleCx, TextLook, TypeRole};
+use craft_behavior::{Insets, Metrics, PartKey, Sense};
+use craft_theme::{Stateful, States};
+use egui::{Rect, Response, Vec2};
 
-/// The style of selectable text: padding from the control metrics, no surface.
+/// The selection part that shows the text.
+const TEXT: PartKey = PartKey::new("text");
+
+/// The style of selectable text: padding from the control metrics, no surface, the body role in the normal text
+/// colour.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct SelectableStyle {
     #[style(metrics)]
     metrics: Metrics,
+    #[style(text)]
+    text: TextLook,
 }
 
-/// Read-only text the user can focus, select and copy.
+/// Read-only text the user focuses with a press to select and copy, which Tab passes over. Its node is a label named
+/// by `label`, with the text as its value.
 #[derive(crate::contract::Component)]
-#[component(exempt(case = "state:Mixed", reason = "Read-only text has no mixed state."))]
-#[component(exempt(case = "state:Invalid", reason = "Read-only text has no value a check can refuse."))]
-#[component(exempt(case = "values", reason = "Read-only text has no value a drive can change."))]
-pub struct SelectableText<'a> {
+pub struct SelectableText {
     #[common]
     common: Common,
-    value: Bind<'a, String>,
-    options: TextOptions,
+    text: String,
+    wrap: Wrap,
+    mono: bool,
 }
 
-impl SelectableText<'_> {
+impl SelectableText {
     /// Selectable `text` named `label`.
     pub fn new(label: impl Into<Label>, text: &str) -> Self {
-        SelectableText { common: Common::new(), value: Bind::given(text.to_owned()), options: TextOptions::default() }.label(label).read_only(true)
+        SelectableText { common: Common::new(), text: text.to_owned(), wrap: Wrap::Line, mono: false }.label(label)
     }
 
     /// The text wraps over several lines.
     #[must_use]
     pub fn multiline(mut self) -> Self {
-        self.options.lines = Some(usize::MAX);
+        self.wrap = Wrap::Wrap;
         self
     }
 
     /// Monospace text.
     #[must_use]
     pub fn mono(mut self) -> Self {
-        self.options.mono = true;
+        self.mono = true;
         self
+    }
+
+    fn run(&self, role: TypeRole) -> TextRun<'_> {
+        let span = if self.mono { Span::new(self.text.as_str()).mono() } else { Span::new(self.text.as_str()) };
+        TextRun::spans(vec![span]).role(role).wrap(self.wrap)
     }
 }
 
-impl Component for SelectableText<'_> {
-    const ROLE: Role = Role::TEXT_INPUT;
-    const INPUT: crate::contract::Input = crate::contract::Input::Text;
+impl Component for SelectableText {
+    const ROLE: Role = Role::LABEL;
+    const INPUT: crate::contract::Input = crate::contract::Input::Display;
+    const OVERLAYS: bool = false;
     type Style = SelectableStyle;
-    type Output = EditResponse<String>;
+    type Output = Response;
 
     fn style(cx: &StyleCx<'_>, _: SelectableTextStyleKey) -> SelectableStyle {
-        SelectableStyle { metrics: Metrics::new().padding(Insets::horizontal(cx.control().pad_x)) }
-    }
-
-    fn sense(&self) -> Sense {
-        Sense::CLICK | Sense::FOCUS | Sense::TAKE_FOCUS
-    }
-
-    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        let text = cx.value().map_or("", String::as_str);
-        let run = TextRun::new(text);
-        cx.layout(&if self.options.multiline() { run.wrap(crate::primitives::Wrap::Line) } else { run }).size()
-    }
-
-    fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
-        if let Some(value) = cx.value() {
-            cx.text(text_part::<String>(), cx.content_rect, &PlainText, value, &self.options);
+        let text = &cx.tokens.color.text;
+        let color = cx.color(text.normal);
+        let off = States::new(color, color, color, cx.color(text.disabled));
+        SelectableStyle {
+            metrics: Metrics::new().padding(Insets::horizontal(cx.control().pad_x)),
+            text: TextLook::new(TypeRole::Body, Stateful::new(color).off(off)),
         }
     }
 
-    fn bind(&mut self) -> Option<BindMut<'_, String>> {
-        Some(self.value.reborrow())
+    fn sense(&self) -> Sense {
+        Sense::HOVER
     }
 
-    fn finish(self, cx: Cx<'_, Self>) -> EditResponse<String> {
-        cx.edit_response()
+    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        cx.layout(&self.run(cx.style.text.role)).size()
+    }
+
+    fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
+        cx.selectable_text(TEXT, &self.run(cx.style.text.role));
+    }
+
+    fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
+        access.value(self.text.clone());
+    }
+
+    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        ui.selectable_text(TEXT, cx.content_rect, &self.run(cx.style.text.role).color(cx.resolve(&cx.style.text.color)));
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
     }
 }

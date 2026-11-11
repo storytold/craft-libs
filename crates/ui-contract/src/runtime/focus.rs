@@ -452,6 +452,12 @@ pub(crate) fn focused_stop(ctx: &Context) -> Option<StopKey> {
     })
 }
 
+/// The egui widgets that hold focus for last pass's press-only stops, which only a press reaches, in stop order.
+#[cfg(feature = "testing")]
+pub(crate) fn press_only_roots(ctx: &Context) -> Vec<Id> {
+    with(ctx, |state| state.last_stops.iter().filter(|rec| rec.stop.press_only).map(|rec| rec.stop.root).collect())
+}
+
 /// The stop this pass's press takes focus for. The end hook moves focus there, after a layer the press opens has
 /// recorded its opener.
 pub(crate) fn pressed_stop(ctx: &Context) -> Option<StopKey> {

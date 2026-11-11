@@ -96,6 +96,9 @@ const ACTION: PartKey = PartKey::new("action");
 const DISMISS: PartKey = PartKey::new("dismiss");
 /// The title's band; the centred layout names it as a heading.
 const TITLE: PartKey = PartKey::new("title");
+/// The title's text and the message's: selection parts.
+const TITLE_TEXT: PartKey = PartKey::new("title_text");
+const MESSAGE: PartKey = PartKey::new("message");
 /// The heading level of the centred title: the empty state's top-level heading.
 const TITLE_LEVEL: usize = 1;
 const DISMISS_ICON: &str = "close";
@@ -137,7 +140,7 @@ const READING_WIDTH: f32 = 460.0;
 /// A message in a tone. The tone picks the icon and the colours; the neutral tone reads muted and has no icon. The
 /// message is the label; a title above it is optional. Actions read as links (as buttons in the centred layout) and
 /// are reported in the output; with `dismiss` a close button is the last part. With `announce` set, the first show is
-/// announced once.
+/// announced once. The title and message wrap and can be selected and copied; Tab passes over them.
 #[derive(crate::contract::Component, crate::contract::Props)]
 pub struct Notice<'a> {
     #[common]
@@ -444,6 +447,13 @@ impl Component for Notice<'_> {
         {
             cx.part(TITLE, title).sense(Sense::HOVER);
         }
+        if let Some(title) = texts.title.as_deref().filter(|_| placed.title.is_some()) {
+            cx.selectable_text(TITLE_TEXT, &self.run(title, cx.style.title.role));
+        }
+        if placed.message.is_some() {
+            let role = if self.title.is_some() { cx.style.detail.role } else { cx.style.message.role };
+            cx.selectable_text(MESSAGE, &self.run(texts.message, role));
+        }
         let default = self.actions.iter().rposition(|action| action.default);
         for (at, rect) in placed.actions.iter().enumerate() {
             let part = cx.part(ACTION.at(at as u64), *rect).sense(Sense::CLICK | Sense::FOCUS).focusable();
@@ -524,21 +534,20 @@ impl Component for Notice<'_> {
         if placed.dismiss.is_some() {
             ui.face(DISMISS, IconButton::new(IconId::new(DISMISS_ICON)).label(words.dismiss.clone()));
         }
-        let draw = ui.draw();
         if let (Some(rect), Some(mut spec)) = (placed.icon, self.icon_spec()) {
             if spec.color.is_none() {
                 spec.color = Some(cx.resolve(&cx.style.icon.color));
             }
-            draw.icon(rect, &spec);
+            ui.draw().icon(rect, &spec);
         }
         if let (Some(rect), Some(title)) = (placed.title, self.title.as_ref()) {
             let run = self.run(cx.env.resolve(title).as_str(), cx.style.title.role);
-            draw.text(rect, &run.color(cx.resolve(&cx.style.title.color)));
+            ui.selectable_text(TITLE_TEXT, rect, &run.color(cx.resolve(&cx.style.title.color)));
         }
         let look = if self.title.is_some() { &cx.style.detail } else { &cx.style.message };
         if let Some(message) = placed.message {
             let run = self.run(cx.resolved.label, look.role);
-            draw.text(message, &run.color(cx.resolve(&look.color)));
+            ui.selectable_text(MESSAGE, message, &run.color(cx.resolve(&look.color)));
         }
     }
 

@@ -98,14 +98,20 @@ pub(super) fn variant_name(plan: Plan, variant: usize) -> &'static str {
     }
 }
 
-/// Tab once; when that focuses nothing and the shown component is read-only text, which Tab passes over, a press on
-/// it, from which it takes focus.
-pub(super) fn tab_or_press(fixture: &mut Fixture, text: bool) {
+/// Tab once; when that focuses nothing, a press on the first stop that only a press reaches (read-only text), which
+/// Tab passes over.
+pub(super) fn tab_or_press(fixture: &mut Fixture) {
     fixture.key(Key::Tab, Modifiers::NONE);
-    let root = root_target(fixture);
-    if text && fixture.focused().is_none() && fixture.tree().data_of(root.node).is_some_and(|node| node.is_read_only()) {
-        fixture.click(&root);
+    if fixture.focused().is_none() {
+        press_only_stop(fixture);
     }
+}
+
+/// Presses the first stop that only a press reaches; `false` when there is none.
+fn press_only_stop(fixture: &mut Fixture) -> bool {
+    let Some(rect) = fixture.press_only_stops().first().copied() else { return false };
+    fixture.click_at(rect.center());
+    true
 }
 
 /// The node of the shown component, or the whole shown area when it has none.
@@ -197,8 +203,9 @@ fn pick(fixture: &mut Fixture, row: usize, by_click: bool) {
 }
 
 /// Presses Tab until the focus is inside the subject (its root or a descendant), for at most one cycle of the stops.
-/// A story whose first stops belong to something else (an editor inside a canvas) still gets its text. Read-only
-/// text, which Tab passes over, gets a press instead. `false` when neither reaches the subject.
+/// A story whose first stops belong to something else (an editor inside a canvas) still gets its text. A subject that
+/// only a press reaches (read-only text), which Tab passes over, gets a press instead. `false` when neither reaches
+/// the subject.
 ///
 /// The focus is inside when the focus service's stop is the subject's component or AccessKit's focused node lies in
 /// the subject's node subtree.
@@ -217,14 +224,7 @@ pub(super) fn focus_subject(fixture: &mut Fixture) -> bool {
         }
         let at = (stop, focused);
         if seen.contains(&at) {
-            let read_only =
-                |fixture: &Fixture| root.as_ref().is_some_and(|root| fixture.tree().data_of(root.node).is_some_and(|node| node.is_read_only()));
-            if !read_only(fixture) {
-                return false;
-            }
-            let target = root_target(fixture);
-            fixture.click(&target);
-            return fixture.focused_stop().is_some_and(|(id, _)| id == root_id);
+            return press_only_stop(fixture) && fixture.focused_stop().is_some_and(|(id, _)| id == root_id);
         }
         seen.push(at);
         fixture.key(Key::Tab, Modifiers::NONE);

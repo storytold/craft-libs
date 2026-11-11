@@ -82,6 +82,14 @@ pub(crate) fn register_stops(input: &StopsIn<'_>) -> Vec<Stop> {
     if input.focusable {
         focus::register_stop(ctx, if let Some(group) = input.group.or(input.row) { own().in_group(group) } else { own() });
     }
+    // A selection part is a press-only stop in no group: neither Tab nor the arrows reach it.
+    if input.parts_focus {
+        for decl in &input.parts.text.selections {
+            let widget = crate::contract::text::selection_id(input.id, decl.part);
+            let stop = Stop::new(input.id, decl.keys()).part(decl.part).root(widget).in_body(input.body).press_only();
+            focus::register_stop(ctx, stop);
+        }
+    }
     let mut after_header = Vec::new();
     for (decl, extras) in &input.parts.decls {
         if extras.focusable && input.parts_focus {

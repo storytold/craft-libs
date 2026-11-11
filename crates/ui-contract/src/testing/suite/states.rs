@@ -129,7 +129,7 @@ fn focusable_stories_are_tab_reachable(subject: &Subject) -> Result<(), String> 
             continue;
         }
         let mut fixture = super::drive::input_fixture(story);
-        super::drive::tab_or_press(&mut fixture, matches!(subject.probe.input, craft_behavior::Input::Text | craft_behavior::Input::Editor));
+        super::drive::tab_or_press(&mut fixture);
         if fixture.focused().is_none() {
             return Err(format!("{}: neither Tab nor a press on read-only text reached anything", story.name));
         }

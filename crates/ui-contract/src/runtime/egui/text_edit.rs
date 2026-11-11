@@ -37,6 +37,9 @@ pub(crate) struct Edit<'a> {
     pub caret_visible: bool,
     /// The width of the preedit underline.
     pub underline: f32,
+    /// The text laid out already, as a run is painted: the widget shows this galley, which never scrolls, so the text
+    /// is not clipped to `rect`.
+    pub galley: Option<std::sync::Arc<egui::Galley>>,
 }
 
 /// What the widget did in one pass.
@@ -82,6 +85,7 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         centred,
         caret_visible,
         underline,
+        galley,
     } = edit;
     // The same font and optical size as a label of the same role: one text path.
     let env = crate::runtime::env::Env::of(ui);
@@ -94,6 +98,9 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
     let had_focus = ui.memory(|memory| memory.has_focus(id));
     let entered = had_focus && ui.input(|input| input.key_pressed(egui::Key::Enter));
     let mut layouter = |ui: &Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
+        if let Some(galley) = &galley {
+            return galley.clone();
+        }
         // egui masks only in its own layouter: a custom one lays out what it is given, so the dots are made here. The
         // preedit range counts bytes of the real text, so a masked field shows no preedit underline.
         let masked;
@@ -129,7 +136,9 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
     let output = {
         let ui = &mut super::alloc::child(ui, egui::UiBuilder::new().max_rect(rect));
         // The text shows only inside the text part, however wide the line is.
-        ui.set_clip_rect(rect.intersect(ui.clip_rect()));
+        if galley.is_none() {
+            ui.set_clip_rect(rect.intersect(ui.clip_rect()));
+        }
         if !enabled && !focusable {
             super::style::disable_without_fade(ui);
         }
@@ -154,7 +163,10 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
                     .event_filter(filter)
                     .return_key(if multiline { Some(egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::Enter)) } else { None })
                     .layouter(&mut layouter)
+                    // A laid-out galley sits at the rect's corner, as a painted run does: egui's own row height
+                    // (its default font's) would otherwise centre it lower.
                     .align(match (centred, rtl) {
+                        _ if galley.is_some() => egui::Align2::LEFT_TOP,
                         (true, _) => egui::Align2::CENTER_CENTER,
                         (false, true) => egui::Align2::RIGHT_CENTER,
                         (false, false) => egui::Align2::LEFT_CENTER,

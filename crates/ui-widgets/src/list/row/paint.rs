@@ -2,7 +2,8 @@
 
 use super::ListRow;
 use super::placement::Placed;
-use super::show::{TOGGLE, TRAILING};
+use super::show::{TEXT_CELL, TOGGLE, TRAILING};
+use super::style::ListRowStyle;
 use super::thumb::{RowThumb, target_at};
 use super::trailing::{TrailingFace, TrailingItem, trailing_run};
 use crate::buttons::IconButton;
@@ -154,20 +155,33 @@ impl ListRow<'_> {
 
 impl ListRow<'_> {
     /// The text cells, inset and centred on the row's height, each aligned as its column says.
-    pub(super) fn paint_cells(&self, draw: &Draw<'_>, cx: &Cx<'_, Self>, placed: &Placed) {
+    /// The text cell `at` as a run in its column's look, without its colour.
+    pub(super) fn cell_run(&self, style: &ListRowStyle, at: usize) -> TextRun<'_> {
+        let text = &self.texts[at];
+        let (align, numeric) = self.align_of(&text.column);
+        let mut span = Span::new(text.text.as_str());
+        span.tabular = numeric;
+        let run = TextRun::spans(vec![span]).role(self.cell_look(style, &text.column).role).align(align);
+        if text.wrap { run.wrap(Wrap::Wrap) } else { run.elide() }
+    }
+
+    /// Whether the text cell `at` is a selection part: wrapped text in a column `cell_selectable` names.
+    pub(super) fn cell_selects(&self, at: usize) -> bool {
+        let text = &self.texts[at];
+        text.wrap && self.selectable.contains(&text.column)
+    }
+
+    pub(super) fn paint_cells(&self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, placed: &Placed) {
         let sizes = &cx.style.sizes;
         let rtl = cx.env.direction().is_rtl();
-        for (at, _, cell) in &placed.texts {
+        for (at, position, cell) in &placed.texts {
             let text = &self.texts[*at];
-            let (align, numeric) = self.align_of(&text.column);
+            let (align, _) = self.align_of(&text.column);
             let look = self.cell_look(cx.style, &text.column);
             let cell = Rect::from_x_y_ranges(cell.x_range(), cx.rect.y_range());
             let room = Flow::new(cell, rtl).span(sizes.cell_inset, sizes.cell_room(cell.width()));
-            let mut span = Span::new(text.text.as_str());
-            span.tabular = numeric;
-            let run = TextRun::spans(vec![span]).role(look.role).color(cx.resolve(&look.color)).align(align);
-            let run = if text.wrap { run.wrap(Wrap::Wrap) } else { run.elide() };
-            let layout = draw.layout(&run, room.width());
+            let run = self.cell_run(cx.style, *at).color(cx.resolve(&look.color));
+            let layout = ui.draw().layout(&run, room.width());
             let top =
                 if text.wrap { room.top() + ((room.height() - layout.size().y) / 2.0).max(0.0) } else { room.center().y - sizes.label_line / 2.0 };
             let free = (room.width() - layout.size().x).max(0.0);
@@ -177,7 +191,11 @@ impl ListRow<'_> {
                 HAlign::End => free,
             };
             let x = if rtl { room.right() - layout.size().x - inset } else { room.left() + inset };
-            draw.galley(Pos2::new(x, top), &layout);
+            if self.cell_selects(*at) {
+                ui.selectable_text(TEXT_CELL.at(*position as u64), Rect::from_min_size(Pos2::new(x, top), layout.size()), &run);
+            } else {
+                ui.draw().galley(Pos2::new(x, top), &layout);
+            }
         }
     }
 }

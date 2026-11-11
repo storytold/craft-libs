@@ -200,12 +200,18 @@ impl<'a> Draw<'a> {
     /// vertically in a taller `rect`, so a label in a control or a row sits at the same place whatever the room; a
     /// wrapped run starts at the top. Records the elision and the first baseline.
     pub fn text(&self, rect: Rect, run: &TextRun<'_>) -> TextLayout {
+        let (layout, at) = self.place_text(rect, run);
+        self.galley(at, &layout);
+        layout
+    }
+
+    /// `run` laid out in `rect`'s width, and where `text` paints it.
+    pub(crate) fn place_text(&self, rect: Rect, run: &TextRun<'_>) -> (TextLayout, Pos2) {
         let layout = run.layout(self.painter.ctx(), &self.text_env(), rect.width());
         let at_end = self.text_direction == Direction::Rtl && !run.ltr;
         let x = if at_end { rect.right() - layout.size().x } else { rect.left() };
         let spare = if layout.galley.rows.len() <= 1 { (rect.height() - layout.size().y).max(0.0) } else { 0.0 };
-        self.galley(Pos2::new(x, rect.top() + spare / 2.0), &layout);
-        layout
+        (layout, Pos2::new(x, rect.top() + spare / 2.0))
     }
 
     /// Paints a one-line `run` as `text` does, with the middle of its lowercase letters (the x-height) on the middle

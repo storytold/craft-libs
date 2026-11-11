@@ -27,7 +27,7 @@ use craft_theme::{Rgba, RowStyle, Stateful, TypeRole};
 use egui::{CornerRadius, Pos2, Rect, Vec2};
 
 pub(super) const TOGGLE: PartKey = PartKey::new("toggle");
-const TEXT_CELL: PartKey = PartKey::new("text-cell");
+pub(super) const TEXT_CELL: PartKey = PartKey::new("text-cell");
 const TOGGLE_CELL: PartKey = PartKey::new("toggle-cell");
 const LABEL_CELL: PartKey = PartKey::new("label-cell");
 const DISCLOSURE: PartKey = PartKey::new("disclosure");
@@ -193,6 +193,11 @@ impl Component for ListRow<'_> {
                 Some(tip) => part.tooltip(tip),
                 None => part,
             };
+        }
+        for (at, position, _) in &placed.texts {
+            if self.cell_selects(*at) {
+                cx.selectable_text(TEXT_CELL.at(*position as u64), &self.cell_run(cx.style, *at));
+            }
         }
         if let Some(disclosure) = placed.disclosure {
             let words = cx.words::<ListWords>();
@@ -450,7 +455,7 @@ impl Component for ListRow<'_> {
         if let Some(fraction) = self.progress {
             ui.face(PROGRESS, Progress::new(fraction));
         }
-        self.paint_cells(&ui.draw(), cx, &placed);
+        self.paint_cells(ui, cx, &placed);
         self.paint_trailing(ui, cx, &placed);
     }
 

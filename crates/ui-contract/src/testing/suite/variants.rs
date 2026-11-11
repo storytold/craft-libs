@@ -105,7 +105,7 @@ fn read_only_changes_nothing(subject: &Subject) -> Result<(), String> {
         }
         let before = fixture.data().snapshot();
         fixture.take_outputs();
-        tab_or_press(&mut fixture, is_text(subject));
+        tab_or_press(&mut fixture);
         if focusable && fixture.focused().is_none() {
             return Err(format!("{}: a read-only story cannot take focus", story.name));
         }

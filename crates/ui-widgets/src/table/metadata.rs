@@ -270,7 +270,8 @@ impl<'a> MetadataTable<'a> {
                         .cells(icx.cells())
                         .striped(icx.row.striped)
                         .cell_muted(NAME)
-                        .cell_lines(VALUE, row.value.clone());
+                        .cell_lines(VALUE, row.value.clone())
+                        .cell_selectable(VALUE);
                     if checks {
                         line.toggle(ToggleCell::check(SHOW, ToggleState::of(source.toggled(icx.at, &SHOW)), words.show_field.clone()))
                     } else {

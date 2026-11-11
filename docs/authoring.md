@@ -111,6 +111,8 @@ A component is shown through a parent's `show`, never by allocating a rect itsel
 
 `cx.part(KEY, rect)` registers a part. `ui.face(KEY, Other::new())` paints another component as the look of a part, so a composite reuses the look of the component it wears. A part that only a pointer reaches states why keyboard users do not need it: `.pointer_only("Enter activates the component")`.
 
+Read-only text the user can select and copy is a selection part: `parts` declares the run with `cx.selectable_text(KEY, &run)`, and `paint` shows it with `ui.selectable_text(KEY, rect, &run)` in place of `draw().text`, with the same run in the state's colours. A press focuses it; drag and double click select; Select All and Copy work; Tab, F6 and the arrows pass over it. A component may declare any number. The text has no node of its own, so the component's node carries it. A notice's title and message, a metadata table's values (`ListRow::cell_selectable`) and `SelectableText` are selection parts.
+
 ### Values
 
 A value component's `Output` is `EditResponse<T>`. It binds with `Bind<T>` and reports through `cx.propose`, `cx.commit` and `cx.adopt`; each gesture ends in one `EditEvent::Commit`. Components with `Input::Editor` own their caret through `ImeSurface`.

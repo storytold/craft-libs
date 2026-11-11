@@ -92,7 +92,7 @@ fn through_in(menu: &mut NativeMenu, frames: &mut Frames, events: Vec<egui::Even
 fn selected_text(frames: &mut Frames) -> impl FnMut(&mut egui::Ui) + use<> {
     let rect = Rc::new(Cell::new(egui::Rect::NOTHING));
     let shown = rect.clone();
-    let mut show = move |ui: &mut egui::Ui| shown.set(SelectableText::new("Note", "read me").id_salt("note").show(ui).response.rect);
+    let mut show = move |ui: &mut egui::Ui| shown.set(SelectableText::new("Note", "read me").id_salt("note").show(ui).rect);
     frames.idle(3, &mut show);
     click(frames, rect.get().center(), &mut show);
     frames.frame(vec![key_press(Key::A, Modifiers::COMMAND)], &mut show);

@@ -158,6 +158,8 @@ pub struct CxCore<'a> {
     pub(crate) gestures: crate::contract::collection::Gestures,
     /// The text part's result of this pass, from step 8b.
     pub(crate) texts: Option<(PartKey, Box<dyn TextResult>)>,
+    /// The selection parts step 7 declared, which `PaintUi::selectable_text` shows.
+    pub(crate) selections: Vec<craft_behavior::PartRef>,
     /// Where the text part reserved the surface in the painter, so the field's surface paints beneath its text.
     pub(crate) surface_slot: Option<egui::layers::ShapeIdx>,
     /// The editor part as step 8b set it up.

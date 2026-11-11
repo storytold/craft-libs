@@ -612,6 +612,13 @@ impl Fixture {
         crate::runtime::focus::focused_stop(&self.frames.ctx)
     }
 
+    /// Where the stops that only a press reaches sit (read-only text, selection parts), in stop order: the bounds of
+    /// the egui widget that holds each one's focus.
+    pub fn press_only_stops(&self) -> Vec<Rect> {
+        let ctx = &self.frames.ctx;
+        crate::runtime::focus::press_only_roots(ctx).into_iter().filter_map(|root| ctx.read_response(root).map(|response| response.rect)).collect()
+    }
+
     /// The key role of the stop that holds focus: which key rows it takes (type-ahead, rename, reorder).
     pub fn focused_role(&self) -> Option<craft_behavior::KeyRole> {
         crate::runtime::focus::focused_rec(&self.frames.ctx).map(|rec| rec.stop.role)

@@ -632,6 +632,7 @@ pub(crate) fn paint_face<C: Show>(ui: &mut Ui, env: &Env, source: &super::FaceSo
             flags: crate::style::Flags::empty(),
             enabled: step1.enabled && source.enabled,
             size: step1.size,
+            selections: &[],
             kids: None,
         };
         face.paint(&mut pui, &cx);

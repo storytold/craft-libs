@@ -215,16 +215,14 @@ fn apply(input: &mut AdapterIn<'_>, state: &mut TextState, text: &mut String, wi
             continue;
         }
         match command {
-            EditCommand::SelectAll => text_edit::select(ctx, widget, 0, text.chars().count()),
-            EditCommand::Copy | EditCommand::Cut => {
+            EditCommand::SelectAll | EditCommand::Copy => select_or_copy(ctx, widget, text, command),
+            EditCommand::Cut => {
                 let (a, b) = selection(text);
                 if a != b {
                     let (lo, hi) = (a.min(b), a.max(b));
                     clipboard::copy_text(ctx, text[byte_of(text, lo)..byte_of(text, hi)].to_owned());
-                    if command == EditCommand::Cut {
-                        replace_selection(ctx, widget, text, (lo, hi), "");
-                        changed = true;
-                    }
+                    replace_selection(ctx, widget, text, (lo, hi), "");
+                    changed = true;
                 }
             }
             EditCommand::Paste => {
@@ -248,6 +246,19 @@ fn apply(input: &mut AdapterIn<'_>, state: &mut TextState, text: &mut String, wi
         }
     }
     changed
+}
+
+/// Select All or Copy on the text widget `widget` showing `text`: the edit commands read-only text takes.
+pub(crate) fn select_or_copy(ctx: &Context, widget: Id, text: &str, command: EditCommand) {
+    match command {
+        EditCommand::SelectAll => text_edit::select(ctx, widget, 0, text.chars().count()),
+        EditCommand::Copy => {
+            let Some((a, b)) = text_edit::selection(ctx, widget).filter(|(a, b)| a != b) else { return };
+            let (lo, hi) = (a.min(b), a.max(b));
+            clipboard::copy_text(ctx, text[byte_of(text, lo)..byte_of(text, hi)].to_owned());
+        }
+        _ => {}
+    }
 }
 
 /// The selection of the text widget `id` as character indices, `(caret, anchor)`.
@@ -317,6 +328,7 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         centred: input.options.centred,
         caret_visible: input.caret_visible,
         underline: input.underline,
+        galley: None,
     };
     let shown = text_edit::show(input.ui, edit);
     // egui's own IME output is dropped: the engine writes the pass's.

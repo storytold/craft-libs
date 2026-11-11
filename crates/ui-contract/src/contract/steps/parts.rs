@@ -13,9 +13,14 @@ pub(crate) struct PartsStep {
     pub text: crate::contract::text::TextStep,
 }
 
-/// Whether step 7 declared no parts, no roving group, no scroll part and no text or editor part.
+/// Whether step 7 declared no parts, no roving group, no scroll part and no text, editor or selection part.
 pub(crate) fn declares_none(parts: &PartsStep) -> bool {
-    parts.decls.is_empty() && parts.rovings.is_empty() && parts.scrolls.is_empty() && parts.text.decl.is_none() && parts.text.editor.is_none()
+    parts.decls.is_empty()
+        && parts.rovings.is_empty()
+        && parts.scrolls.is_empty()
+        && parts.text.decl.is_none()
+        && parts.text.editor.is_none()
+        && parts.text.selections.is_empty()
 }
 
 /// Step 7's finding (22.4): a part that senses `CLICK` or `DRAG` is focusable, declares its keyboard path, or names

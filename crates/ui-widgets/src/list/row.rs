@@ -178,6 +178,8 @@ pub struct ListRow<'a> {
     pub(super) aligns: Vec<(ColumnKey, HAlign, bool)>,
     /// The columns that read in the muted look.
     pub(super) muted: Vec<ColumnKey>,
+    /// The columns whose wrapped text can be selected and copied.
+    pub(super) selectable: Vec<ColumnKey>,
     /// The toggle columns of the collection, from the item facts it records for the row: none of them holds the
     /// label, whether or not this row has a cell in it.
     pub(super) toggle_columns: Vec<ColumnKey>,
@@ -253,6 +255,7 @@ impl<'a> ListRow<'a> {
             cells: Vec::new(),
             aligns: Vec::new(),
             muted: Vec::new(),
+            selectable: Vec::new(),
             toggle_columns: Vec::new(),
             toggle_keys: Vec::new(),
             toggles: Vec::new(),
@@ -313,6 +316,14 @@ impl<'a> ListRow<'a> {
     #[must_use]
     pub fn cell_muted(mut self, column: ColumnKey) -> Self {
         self.muted.push(column);
+        self
+    }
+
+    /// The wrapped text of the column `column` (`cell_lines`) can be selected and copied: a press on it focuses the
+    /// text instead of acting on the row, and Tab passes over it.
+    #[must_use]
+    pub fn cell_selectable(mut self, column: ColumnKey) -> Self {
+        self.selectable.push(column);
         self
     }
 
