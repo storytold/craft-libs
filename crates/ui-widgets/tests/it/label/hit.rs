@@ -99,3 +99,19 @@ fn a_long_label_after_its_box_wraps_with_the_box_on_its_first_line() {
     assert!(painted.rect.right() <= 160.0, "the label stays inside its room");
     assert!(mark.center().y < painted.rect.center().y && mark.top() < painted.rect.top() + mark.height(), "the box sits on the first line");
 }
+
+#[trial]
+fn the_pointer_over_a_check_box_or_its_label_is_a_pointing_hand_unless_it_is_disabled() {
+    for enabled in [true, false] {
+        let mut frames = Frames::new();
+        let mut show = |ui: &mut Ui| {
+            in_region(ui, REGION, |ui| Checkbox::new(Bind::given(false)).label("Snap to grid").enabled(enabled).show(ui));
+        };
+        frames.frame(vec![], &mut show);
+        let label = text_rect(&frames, "Snap to grid");
+        frames.frame(vec![moved(label.center())], &mut show);
+        frames.frame(vec![], &mut show);
+        let expected = if enabled { egui::CursorIcon::PointingHand } else { egui::CursorIcon::Default };
+        assert_eq!(frames.cursor_icon(), expected, "the cursor over the label (enabled: {enabled})");
+    }
+}

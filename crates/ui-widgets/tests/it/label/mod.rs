@@ -55,6 +55,7 @@ fn a_wrapped_scrub_keeps_its_value_continuous() {
         frames.frame(events, |ui| show(ui, value));
     };
     step(&mut frames, &mut value, vec![moved(from)], from);
+    assert_eq!(frames.cursor_icon(), egui::CursorIcon::ResizeHorizontal, "a label that scrubs shows the resize cursor under the pointer");
     step(&mut frames, &mut value, vec![press(from)], from);
     step(&mut frames, &mut value, vec![moved(from + Vec2::new(20.0, 0.0))], from + Vec2::new(20.0, 0.0));
     let edge = Pos2::new(EDGE_X, from.y);

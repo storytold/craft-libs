@@ -39,6 +39,7 @@ pub(super) struct LabelStyle {
 pub(super) struct LabelOutput {
     response: Response,
     pub(super) press: PressState,
+    pub(super) hovered: bool,
     pub(super) double_click: bool,
     pub(super) dot_click: bool,
     pub(super) activated: bool,
@@ -339,6 +340,7 @@ impl Component for LabelLeaf {
         LabelOutput {
             response: cx.core.response.clone(),
             press: cx.core.press,
+            hovered: cx.core.response.hovered(),
             double_click: self.double_click,
             dot_click: self.dot_click,
             activated: self.activated,

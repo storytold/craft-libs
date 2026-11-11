@@ -3,7 +3,7 @@
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Pointer as _, Role, Styled as _};
 use crate::primitives::{StrokeWidth, TextLayout, TextRun, Wrap};
 use crate::style::{ComponentStyle, FocusLook, Stateful, StyleCx, TextLook, TypeRole};
-use craft_behavior::{CursorIcon, CursorPriority, Flow, Metrics, PointerButton, PressPhase, Sense};
+use craft_behavior::{Flow, Metrics, PointerButton, PressPhase, Sense};
 use craft_theme::variant::Tone;
 use craft_theme::{Contrast, States};
 use egui::{Pos2, Response, Vec2};
@@ -97,9 +97,6 @@ impl Component for Link {
             && (cx.activation().is_some() || middle_click)
         {
             cx.open_url(url, middle_click);
-        }
-        if cx.hit() {
-            cx.cursor(CursorIcon::PointingHand, CursorPriority::Part);
         }
     }
 

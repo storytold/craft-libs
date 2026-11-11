@@ -14,7 +14,7 @@ use crate::runtime::env::Label;
 use crate::runtime::focus::{ActivateKeys, KeyUse};
 use crate::style::{ComponentStyle, FocusLook, IconLook, Stateful, StyleCx, TypeRole};
 use craft_behavior::fit::{FitItem, FitKeep, fit_items};
-use craft_behavior::{Axis, Flow, IconId, Metrics, NavShape, PartKey, PartRef, Roving, Sense, Value};
+use craft_behavior::{Axis, CursorIcon, Flow, IconId, Metrics, NavShape, PartKey, PartRef, Roving, Sense, Value};
 use egui::{Rect, Response, Vec2};
 
 #[cfg(feature = "testing")]
@@ -257,7 +257,7 @@ impl<K: Value + 'static> Component for BreadcrumbBar<'_, K> {
                 }
             } else {
                 let tip = if cut { self.crumbs[at].label().clone() } else { self.whole.clone() };
-                part.sense(Sense::CLICK | Sense::FOCUS).focusable().state_layer().tooltip(tip);
+                part.sense(Sense::CLICK | Sense::FOCUS).focusable().state_layer().cursor(CursorIcon::PointingHand).tooltip(tip);
             }
         }
         self.laid = laid;

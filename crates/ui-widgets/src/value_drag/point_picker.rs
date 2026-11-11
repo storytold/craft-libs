@@ -12,8 +12,8 @@ use crate::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
 use crate::style::{ComponentStyle, FocusLook, StyleCx};
 use craft_behavior::nav::{LARGE_STEPS, STEP_SHARE, StepResult, ValueAxes, ValueSteps, snap_to_step, step_value};
 use craft_behavior::{
-    AccessAction, Axis, HitLevel, HitPriority, Metrics, Mixed, MoveMods, NavMove, PartKey, PressPhase, PressState, Sense, ValueDrag, Wheel,
-    decimals_for_step, wheel_step,
+    AccessAction, Axis, CursorIcon, HitLevel, HitPriority, Metrics, Mixed, MoveMods, NavMove, PartKey, PressPhase, PressState, Sense, ValueDrag,
+    Wheel, decimals_for_step, wheel_step,
 };
 use craft_keymap::Mods;
 use egui::{Pos2, Rect, Vec2, pos2};
@@ -280,7 +280,11 @@ impl Component for PointPicker<'_> {
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let placed = self.placed(cx.value().unwrap_or(&ALL_MIXED));
         let thumb = Rect::from_center_size(self.position(placed, self.plot(rect)), Vec2::splat(cx.style.hit));
-        cx.part(Self::WELL, rect).sense(Sense::CLICK | Sense::DRAG | Sense::TAKE_FOCUS).value_part().pointer_only("the arrow keys move the point");
+        cx.part(Self::WELL, rect)
+            .sense(Sense::CLICK | Sense::DRAG | Sense::TAKE_FOCUS)
+            .value_part()
+            .cursor(CursorIcon::Crosshair)
+            .pointer_only("the arrow keys move the point");
         cx.part(THUMB, thumb)
             .sense(Sense::DRAG | Sense::TAKE_FOCUS)
             .priority(HitPriority::new(HitLevel::Handle, 0))

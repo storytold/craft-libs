@@ -76,6 +76,21 @@ impl Role {
             _ => Role::STATUS,
         }
     }
+
+    /// The cursor over an enabled component of this role: the pointing hand over a link and over a control that picks
+    /// or flips a value on a click (a check box, radio button, switch or colour well); none for the rest.
+    pub const fn hover_cursor(self) -> Option<craft_behavior::CursorIcon> {
+        match self {
+            Role::Node(
+                accesskit::Role::Link
+                | accesskit::Role::CheckBox
+                | accesskit::Role::RadioButton
+                | accesskit::Role::Switch
+                | accesskit::Role::ColorWell,
+            ) => Some(craft_behavior::CursorIcon::PointingHand),
+            _ => None,
+        }
+    }
 }
 
 /// How a node or sub-node is named.

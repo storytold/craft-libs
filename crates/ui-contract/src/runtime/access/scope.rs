@@ -35,6 +35,8 @@ pub struct FieldLabel {
     pub rect: Rect,
     /// The label's press this pass, for a control that scrubs by its label.
     pub press: PressState,
+    /// The pointer is over the label this pass.
+    pub hovered: bool,
     /// The label's text.
     pub text: String,
     /// Whether it names or describes the controls.
@@ -48,7 +50,16 @@ pub struct FieldLabel {
 impl FieldLabel {
     /// A label of `text` at `rect`, the node `id`.
     pub fn new(id: Id, rect: Rect, text: impl Into<String>) -> Self {
-        FieldLabel { id, rect, press: PressState::IDLE, text: text.into(), role: FieldLabelRole::Names, detail: None, activated: false }
+        FieldLabel {
+            id,
+            rect,
+            press: PressState::IDLE,
+            hovered: false,
+            text: text.into(),
+            role: FieldLabelRole::Names,
+            detail: None,
+            activated: false,
+        }
     }
 
     /// Whether the label names or describes the controls.
@@ -76,6 +87,13 @@ impl FieldLabel {
     #[must_use]
     pub fn with_press(mut self, press: PressState) -> Self {
         self.press = press;
+        self
+    }
+
+    /// Whether the pointer is over the label this pass.
+    #[must_use]
+    pub fn with_hover(mut self, hovered: bool) -> Self {
+        self.hovered = hovered;
         self
     }
 

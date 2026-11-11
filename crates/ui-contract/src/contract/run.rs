@@ -850,7 +850,10 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     }
     let session = member.filter(|_| e.keys().session);
     let core = e.core();
-    core.part_cursors = sensing::hovered_cursor(decls, &results).into_iter().collect();
+    // A hovered part's declared cursor, else the role's over the root's own shape.
+    let own_hovered = enabled && response.hovered() && !results.values().any(|result| result.hovered);
+    core.part_cursors =
+        sensing::hovered_cursor(decls, &results).or_else(|| facts.role.hover_cursor().filter(|_| own_hovered).map(Into::into)).into_iter().collect();
     core.rect = rect;
     core.content_rect = content_rect;
     core.flow = flow;

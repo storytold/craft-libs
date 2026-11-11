@@ -185,7 +185,8 @@ pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>) -> Placed {
     if let Some(fact) = reset.filter(|_| shown.double_click || shown.dot_click) {
         keys::route_whole_reset(&ctx, fact.control);
     }
-    let label = field_label(env, input, label_id_for_scope, placed.label).with_press(shown.press).activated(shown.activated);
+    let label =
+        field_label(env, input, label_id_for_scope, placed.label).with_press(shown.press).with_hover(shown.hovered).activated(shown.activated);
     scope::begin(&ctx, input.scope, input.owner, scope::Kind::Label(label));
     if input.claims {
         scope::offer_claim(&ctx, unslotted.rect());

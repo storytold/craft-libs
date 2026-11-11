@@ -10,7 +10,7 @@ use crate::contract::{
 use crate::primitives::{Checker, ContentPainterCx, Draw, PaintShape, StrokeWidth};
 use crate::runtime::requests::ColorRequest;
 use crate::style::{ComponentStyle, DataColor, Flags, FocusLook, State, StateMix, StateSet, StyleColor, StyleCx, UiTokens, resolve_style};
-use craft_behavior::{CursorIcon, CursorPriority, Metrics, Mixed, Sense, Value};
+use craft_behavior::{Metrics, Mixed, Sense, Value};
 use craft_theme::{Rgba, Srgba, Stateful, States, over};
 use egui::{Color32, CornerRadius, Rect, Response, Vec2, pos2};
 
@@ -225,9 +225,6 @@ impl<T: Value + 'static> Component for Swatch<T> {
             self.checked = group.is(value);
         }
         self.activation = cx.activation().filter(|_| cx.resolved.enabled);
-        if cx.resolved.enabled && cx.hit() {
-            cx.cursor(CursorIcon::PointingHand, CursorPriority::Part);
-        }
     }
 
     fn flags(&self) -> Flags {

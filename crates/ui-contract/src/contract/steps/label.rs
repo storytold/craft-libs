@@ -1,4 +1,4 @@
-//! Step 9's side-label part: activation by the label and the label scrub.
+//! Step 9's side-label part: the label scrub.
 
 use crate::contract::{Component, Cx};
 use crate::runtime::access::scope;
@@ -59,8 +59,14 @@ pub(crate) fn scrub_by_label<C: Component>(comp: &C, cx: &mut Cx<'_, C>) {
         }
         return;
     }
-    if !scrub.on_field && scope::field_label(&cx.core.ctx).is_some() {
+    let label = (!scrub.on_field).then(|| scope::field_label(&cx.core.ctx)).flatten();
+    if label.is_some() {
         scope::register_scrub(&cx.core.ctx);
+    }
+    // The scrub's source shows the horizontal resize cursor under the pointer.
+    let source_hovered = if scrub.on_field { cx.core.response.hovered() } else { label.is_some_and(|label| label.hovered) };
+    if source_hovered {
+        crate::runtime::cursor::request(&cx.core.ctx, Cursor::System(craft_behavior::CursorIcon::ResizeHorizontal), CursorPriority::Part);
     }
     let Some(press) = scrub_press(comp, cx) else { return };
     let start_id = sub(cx.core.id, "scrub_start");
