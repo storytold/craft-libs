@@ -101,6 +101,13 @@ impl Tag {
     pub fn str(&self) -> String {
         self.value.as_str()
     }
+    /// The value when it is text, without a copy.
+    pub fn str_ref(&self) -> Option<&str> {
+        match &self.value {
+            Value::Str(s) | Value::Hex(s) => Some(s),
+            _ => None,
+        }
+    }
     pub fn f64(&self) -> f64 {
         self.value.as_f64()
     }
@@ -759,18 +766,32 @@ pub struct Section {
 
 /// Split a tag stream into sections.
 pub fn sections(tags: &[Tag]) -> Vec<Section> {
+    section_slices(tags).into_iter().map(|s| Section { name: s.name.to_string(), tags: s.tags.to_vec() }).collect()
+}
+
+/// A section borrowed from the tag stream it was split from: [`Section`] without the copy.
+#[derive(Clone, Copy, Debug)]
+pub struct SectionRef<'a> {
+    pub name: &'a str,
+    pub tags: &'a [Tag],
+}
+
+/// [`sections`] without copying the tags: each section is a slice of `tags`. A large file's tags
+/// take gigabytes (40 bytes a tag, 25 million tags in a 0.5 GB DXF), so a reader that holds the
+/// stream while it reads the sections should take them this way.
+pub fn section_slices(tags: &[Tag]) -> Vec<SectionRef<'_>> {
+    let is = |t: &Tag, word: &str| t.code == 0 && t.str_ref().is_some_and(|s| s.trim_end() == word);
     let mut out = Vec::new();
     let mut i = 0;
     while i < tags.len() {
-        let is_sec = tags.get(i).is_some_and(|t| t.code == 0 && t.str().trim_end() == "SECTION");
-        if is_sec {
-            let name = tags.get(i + 1).filter(|t| t.code == 2).map(|t| t.str().trim_end().to_string()).unwrap_or_default();
+        if tags.get(i).is_some_and(|t| is(t, "SECTION")) {
+            let name = tags.get(i + 1).filter(|t| t.code == 2).and_then(Tag::str_ref).unwrap_or_default().trim_end();
             let start = i + 2;
             let mut j = start;
-            while j < tags.len() && !(tags.get(j).is_some_and(|t| t.code == 0 && t.str().trim_end() == "ENDSEC")) {
+            while j < tags.len() && !tags.get(j).is_some_and(|t| is(t, "ENDSEC")) {
                 j += 1;
             }
-            out.push(Section { name, tags: tags.get(start..j).unwrap_or(&[]).to_vec() });
+            out.push(SectionRef { name, tags: tags.get(start..j).unwrap_or(&[]) });
             i = j + 1;
         } else {
             i += 1;
@@ -781,15 +802,20 @@ pub fn sections(tags: &[Tag]) -> Vec<Section> {
 
 /// Split a run of tags into records starting at each code-0 tag: (type, tags after the 0).
 pub fn records(tags: &[Tag]) -> Vec<(String, Vec<Tag>)> {
-    let mut out: Vec<(String, Vec<Tag>)> = Vec::new();
-    for t in tags {
-        if t.code == 0 {
-            out.push((t.str(), Vec::new()));
-        } else if let Some(last) = out.last_mut() {
-            last.1.push(t.clone());
-        }
-    }
-    out
+    record_slices(tags).into_iter().map(|(kind, tags)| (kind, tags.to_vec())).collect()
+}
+
+/// [`records`] without copying the tags: each record's tags are a slice of `tags`.
+pub fn record_slices(tags: &[Tag]) -> Vec<(String, &[Tag])> {
+    let starts: Vec<usize> = tags.iter().enumerate().filter(|(_, t)| t.code == 0).map(|(i, _)| i).collect();
+    starts
+        .iter()
+        .enumerate()
+        .map(|(n, &i)| {
+            let end = starts.get(n + 1).copied().unwrap_or(tags.len());
+            (tags.get(i).map(Tag::str).unwrap_or_default(), tags.get(i + 1..end).unwrap_or(&[]))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -925,6 +951,28 @@ mod tests {
         let mut cut = BINARY_SENTINEL.to_vec();
         cut.extend_from_slice(&[0, b'S', 0, 255, 0x10]);
         assert!(parse(&cut).is_err());
+    }
+
+    #[test]
+    fn borrowed_sections_and_records_match_the_copies() {
+        let text = "999\nstray\n  0\nSECTION\n  2\nHEADER\n  9\n$ACADVER\n  1\nAC1015\n  0\nENDSEC\n  0\nSECTION\n  2\nENTITIES\n  5\n1A\n  0\nLINE\n  8\n0\n 10\n1.5\n  0\nCIRCLE\n 40\n2.0\n  0\nENDSEC\n  0\nEOF\n";
+        let tags = parse(text.as_bytes()).unwrap();
+        let (copies, slices) = (sections(&tags), section_slices(&tags));
+        assert_eq!(slices.iter().map(|s| s.name).collect::<Vec<_>>(), ["HEADER", "ENTITIES"]);
+        assert_eq!(copies.len(), slices.len());
+        for (c, s) in copies.iter().zip(&slices) {
+            assert_eq!(c.name, s.name);
+            assert_eq!(c.tags.as_slice(), s.tags);
+            let (rc, rs) = (records(&c.tags), record_slices(s.tags));
+            assert_eq!(rc.len(), rs.len());
+            for ((kc, tc), (ks, ts)) in rc.iter().zip(&rs) {
+                assert_eq!((kc, tc.as_slice()), (ks, *ts));
+            }
+        }
+        // Tags before the first record start none, as in `records`.
+        assert_eq!(record_slices(slices[1].tags).iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(), ["LINE", "CIRCLE"]);
+        assert_eq!(slices[1].tags[0].str_ref(), Some("1A"));
+        assert_eq!(Tag::f(10, 1.5).str_ref(), None);
     }
 
     #[test]
