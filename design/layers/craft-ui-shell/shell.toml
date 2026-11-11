@@ -1,0 +1,13 @@
+config_version = 1
+
+[[module]]
+path = "shell"
+layer = 7
+
+[[module]]
+path = "shell::app"
+layer = 7
+
+[[module]]
+path = "shell::title_bar"
+layer = 7

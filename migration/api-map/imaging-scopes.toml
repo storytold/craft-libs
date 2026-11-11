@@ -1,0 +1,68 @@
+# API map of the "Imaging: scopes, blend keys" family: old path to new path and setter renames.
+
+family = "Imaging: scopes, blend keys"
+new_module = "craft_imaging::ui"
+
+[[type]]
+name = "ScopePanel"
+old = "craft_imaging::ui::scopes::ScopePanel"
+new = "craft_imaging::ui::scopes::ScopePanel"
+status = "same"
+
+[[type]]
+name = "ScopePanelLabels"
+old = "craft_imaging::ui::scopes::ScopePanelLabels"
+new = ""
+status = "removed"
+
+[[type]]
+name = "ScopeWords"
+old = ""
+new = "craft_imaging::ui::scopes::ScopeWords"
+status = "replaced"
+note = "the words! set that replaces ScopePanelLabels; the menu rows are the labels of ScopeCommand"
+
+[[type]]
+name = "ScopeCommand"
+old = ""
+new = "craft_imaging::ui::scopes::ScopeCommand"
+status = "replaced"
+note = "the panel menu, the scope menu and the U and O keys as one command set in the panel.scopes scope"
+
+[[type]]
+name = "ScopePanelStyle"
+old = "craft_imaging::ui::scopes::ScopePanelStyle"
+new = ""
+status = "removed"
+
+[[type]]
+name = "ClippingOverlay"
+old = "craft_imaging::ui::scopes::ClippingOverlay"
+new = "craft_imaging::ui::scopes::ClippingOverlay"
+status = "same"
+
+[[type]]
+name = "VectorscopePlot"
+old = "craft_imaging::ui::scopes::VectorscopePlot"
+new = "craft_imaging::ui::scopes::VectorscopePlot"
+status = "same"
+
+[[type]]
+name = "BlendKeys"
+old = "craft_imaging::ui::blend_keys::BlendKeys"
+new = "craft_imaging::ui::blend_keys::BlendKeys"
+status = "same"
+
+[[type]]
+name = "BlendShortcut"
+old = "craft_imaging::ui::blend_keys::BlendShortcut"
+new = "craft_imaging::ui::blend_keys::BlendShortcut"
+status = "same"
+
+[[type]]
+name = "BlendStep"
+old = ""
+new = "craft_imaging::ui::blend_keys::BlendStep"
+status = "replaced"
+note = "Shift+= and Shift+- as a command set"
+

@@ -1,0 +1,22 @@
+config_version = 1
+
+[[exception]]
+name = "selectable-text-mixed"
+kind = "probe"
+rule = "probe/exempt/state:Mixed"
+path = "crates/ui-widgets/src/text/selectable_text.rs"
+reason = "Read-only text has no mixed state."
+
+[[exception]]
+name = "selectable-text-invalid"
+kind = "probe"
+rule = "probe/exempt/state:Invalid"
+path = "crates/ui-widgets/src/text/selectable_text.rs"
+reason = "Read-only text has no value a check can refuse."
+
+[[exception]]
+name = "selectable-text-values"
+kind = "probe"
+rule = "probe/exempt/values"
+path = "crates/ui-widgets/src/text/selectable_text.rs"
+reason = "Read-only text has no value a drive can change."

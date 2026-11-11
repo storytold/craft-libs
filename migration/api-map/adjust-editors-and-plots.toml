@@ -1,0 +1,710 @@
+# API map of the "Adjust editors and plots" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Adjust editors and plots"
+new_module = ""
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "CurveEditor"
+old = "craft_ui::composites::curve_editor::CurveEditor"
+new = "craft_imaging::ui::curve::CurveEditor"
+status = "moved"
+note = "A pattern over a `Bind<Curve>`: the graph, the host's rows (`between(CurveRows)`), the Input and Output fields, the Corner check box and the hint. `show(ui)` returns `CurveEditorOutput { edit: EditResponse<Curve>, selected }`. The selection comes back in the output; a host that keeps it passes `selected(Option<usize>)`. The editor clears it when `channel` changes."
+
+[[type]]
+name = "CurvePreview"
+old = "craft_ui::composites::curve_editor::CurvePreview"
+new = "craft_imaging::ui::curve::CurvePreview"
+status = "moved"
+note = "A read-only leaf: `CurvePreview::new(label, &curve)` with `levels`, `color` and `sampler`; the size comes from the theme, not from a `Vec2`."
+
+[[type]]
+name = "Curve"
+old = "craft_ui::composites::curve::Curve"
+new = "craft_imaging::ui::curve::Curve"
+status = "moved"
+note = "The value, unchanged."
+
+[[type]]
+name = "CurveRules"
+old = "craft_ui::composites::curve::CurveRules"
+new = "craft_imaging::ui::curve::CurveRules"
+status = "moved"
+note = "The point rules, unchanged."
+
+[[type]]
+name = "CurveChannel"
+old = "craft_ui::composites::curve_editor::CurveChannel"
+new = "craft_imaging::ui::curve::CurveChannel"
+status = "moved"
+note = "`CurveChannel::new(label, ChannelColor)`; the label is a `Label`."
+
+[[type]]
+name = "CurveEditorState"
+old = "craft_ui::composites::curve_editor::CurveEditorState"
+new = ""
+status = "removed"
+note = "The geometry is the graph's; tests read the point nodes of the AccessKit tree."
+
+[[type]]
+name = "CurveStyle"
+old = "craft_ui::composites::curve_editor::CurveStyle"
+new = ""
+status = "removed"
+note = "`CurveGraphStyle` is built from the theme."
+
+[[type]]
+name = "CurveLabels"
+old = "craft_ui::composites::curve_editor::CurveLabels"
+new = ""
+status = "removed"
+
+[[type]]
+name = "CurveWords"
+old = ""
+new = "craft_imaging::ui::curve::CurveWords"
+status = "replaced"
+note = "A `words!` set; the `{channel}`, `{i}`, `{n}`, `{x}` and `{y}` templates are `fill` calls."
+
+[[type]]
+name = "Sampler"
+old = "craft_ui::composites::curve_editor::Sampler"
+new = ""
+status = "removed"
+
+[[type]]
+name = "CurveSampler"
+old = ""
+new = "craft_imaging::ui::curve::CurveSampler"
+status = "replaced"
+note = "A named closure prop: `sampler(|points| ..)` or `CurveSampler::monotone(levels)`."
+
+[[type]]
+name = "gradient"
+old = "craft_ui::composites::curve_editor::gradient"
+new = ""
+status = "removed"
+
+[[type]]
+name = "ToneRamp"
+old = ""
+new = "craft_imaging::ui::curve::ToneRamp"
+status = "replaced"
+note = "`ToneRamp::new(&stops)` (`.vertical()`) paints through the content painter's ramp painter."
+
+[[type]]
+name = "fill"
+old = "craft_ui::composites::curve_editor::fill"
+new = ""
+status = "removed"
+
+[[type]]
+name = "take_exact"
+old = "craft_ui::composites::curve_editor::take_exact"
+new = ""
+status = "removed"
+
+[[type]]
+name = "COMPONENTS"
+old = "craft_ui::composites::curve_editor::COMPONENTS"
+new = ""
+status = "removed"
+
+[[type]]
+name = "Histogram"
+old = "craft_ui::composites::histogram::Histogram"
+new = ""
+status = "pending"
+
+[[type]]
+name = "BrightnessContrastEditor"
+old = "craft_imaging::ui::adjust::BrightnessContrastEditor"
+new = "craft_imaging::ui::adjust::BrightnessContrastEditor"
+status = "same"
+note = "A pattern over a `Bind<BrightnessContrast>` named by its label; `show(ui)` returns `EditResponse<BrightnessContrast>`. One slider drag, step key, typed number or reset is one gesture of the whole value."
+
+[[type]]
+name = "ThresholdEditor"
+old = "craft_imaging::ui::adjust::ThresholdEditor"
+new = "craft_imaging::ui::adjust::ThresholdEditor"
+status = "same"
+note = "A pattern over a `Bind<f64>` named by its label; `show(ui)` returns `EditResponse<f64>`. One slider drag, step key, typed number or reset is one gesture of the whole value."
+
+[[type]]
+name = "ColorBalanceEditor"
+old = "craft_imaging::ui::adjust::ColorBalanceEditor"
+new = "craft_imaging::ui::adjust::ColorBalanceEditor"
+status = "same"
+note = "A pattern over a `Bind<ColorBalance>` named by its label; `show(ui)` returns `ColorBalanceOutput { edit, tone }`. One slider drag, step key, typed number or reset is one gesture of the whole value."
+
+[[type]]
+name = "PhotoFilterEditor"
+old = "craft_imaging::ui::adjust::PhotoFilterEditor"
+new = "craft_imaging::ui::adjust::PhotoFilterEditor"
+status = "same"
+note = "A pattern over a `Bind<PhotoFilter>` named by its label; `show(ui)` returns `PhotoFilterOutput { edit, pick_color }`. One slider drag, step key, typed number or reset is one gesture of the whole value."
+
+[[type]]
+name = "HueSaturationEditor"
+old = "craft_imaging::ui::adjust::HueSaturationEditor"
+new = "craft_imaging::ui::adjust::HueSaturationEditor"
+status = "same"
+note = "A pattern over a `Bind<HueSaturation>` named by its label; `show(ui)` returns `HueSaturationOutput { edit, shown_range }`. One slider drag, step key, typed number or reset is one gesture of the whole value."
+
+[[type]]
+name = "BlackWhiteEditor"
+old = "craft_imaging::ui::adjust::BlackWhiteEditor"
+new = "craft_imaging::ui::adjust::BlackWhiteEditor"
+status = "same"
+note = "A pattern over a `Bind<BlackWhite>` named by its label; `show(ui)` returns `BlackWhiteOutput { edit, pick_color, auto }`. One slider drag, step key, typed number or reset is one gesture of the whole value."
+
+[[type]]
+name = "ChannelMixerEditor"
+old = "craft_imaging::ui::adjust::ChannelMixerEditor"
+new = "craft_imaging::ui::adjust::ChannelMixerEditor"
+status = "same"
+note = "A pattern over a `Bind<ChannelMixer>` named by its label; `show(ui)` returns `EditResponse<ChannelMixer>`. One slider drag, step key, typed number or reset is one gesture of the whole value."
+
+[[type]]
+name = "SelectiveColorEditor"
+old = "craft_imaging::ui::adjust::SelectiveColorEditor"
+new = "craft_imaging::ui::adjust::SelectiveColorEditor"
+status = "same"
+note = "A pattern over a `Bind<SelectiveColor>` named by its label; `show(ui)` returns `SelectiveColorOutput { edit, shown_range }`. One slider drag, step key, typed number or reset is one gesture of the whole value."
+
+[[type]]
+name = "AdjustSliders"
+old = "craft_imaging::ui::adjust::AdjustSliders"
+new = "craft_imaging::ui::adjust::AdjustSliders"
+status = "same"
+note = "A pattern over a `Bind<Vec<f64>>` named by its label; one `Field` over a `SliderField` per row, in a `FieldGroup`. `show(ui)` returns `EditResponse<Vec<f64>>`."
+
+[[type]]
+name = "AdjustField"
+old = "craft_imaging::ui::adjust::AdjustField"
+new = "craft_imaging::ui::adjust::AdjustField"
+status = "same"
+note = "`unit` is `unit_kind(UnitKind)` and `decimals` is `step(f64)`; `label` is a `Label`; `round` keeps the places of the step. The presets read `AdjustWords`."
+
+[[type]]
+name = "AdjustTrack"
+old = "craft_imaging::ui::adjust::AdjustTrack"
+new = "craft_imaging::ui::adjust::AdjustTrack"
+status = "same"
+note = "`Colors` takes `Vec<DataColor>` (image data), drawn as a `ToneRamp` track face while dynamic color sliders are on."
+
+[[type]]
+name = "AdjustSession"
+old = "craft_imaging::ui::adjust::AdjustSession"
+new = "craft_imaging::ui::adjust::AdjustSession"
+status = "same"
+note = "Pure data, unchanged."
+
+[[type]]
+name = "PhotoFilterOutput"
+old = "craft_imaging::ui::adjust::PhotoFilterOutput"
+new = "craft_imaging::ui::adjust::PhotoFilterOutput"
+status = "same"
+note = "`pick_color` is the `Swatch` output with `.picker(key)`: a `runtime::requests::ColorRequest`."
+
+[[type]]
+name = "BlackWhiteOutput"
+old = "craft_imaging::ui::adjust::BlackWhiteOutput"
+new = "craft_imaging::ui::adjust::BlackWhiteOutput"
+status = "same"
+note = "Gains `auto`: the Auto button was pressed. `pick_color` is the `Swatch` output with `.picker(key)`."
+
+[[type]]
+name = "AdjustLabels"
+old = "craft_imaging::ui::adjust::AdjustLabels"
+new = ""
+status = "removed"
+note = "Replaced by `AdjustWords`, a `words!` set with the same keys and English texts."
+
+[[type]]
+name = "AdjustStyle"
+old = "craft_imaging::ui::adjust::AdjustStyle"
+new = ""
+status = "removed"
+note = "Each editor sizes from its content with named semantic sizes; image tones are data in the crate (`style::tones`)."
+
+[[type]]
+name = "AdjustWords"
+old = ""
+new = ""
+status = "replaced"
+note = "Was `AdjustLabels`."
+
+[[type]]
+name = "LevelsEditor"
+old = "craft_imaging::ui::adjust::levels_editor::LevelsEditor"
+new = "craft_imaging::ui::adjust::LevelsEditor"
+status = "moved"
+note = "A component over `Bind<Levels>`: the histogram, the input thumb row, three fields, the output bar and thumb row, two fields. `show(ui)` returns `LevelsEditorOutput { edit: EditResponse<Levels>, clipping }`."
+
+[[type]]
+name = "LevelsEditorOutput"
+old = ""
+new = "craft_imaging::ui::adjust::LevelsEditorOutput"
+status = "replaced"
+note = "The editor's output: the edit and which input end an Alt drag moves (`LevelsEditor::clipping(ctx, id)` is gone)."
+
+[[type]]
+name = "LevelsStyle"
+old = "craft_imaging::ui::adjust::levels_editor::LevelsStyle"
+new = ""
+status = "removed"
+note = "Sizes and colours come from the theme: the component's own `LevelsEditorStyle`; `LevelsEditor::style` and the 13 fields go."
+
+[[type]]
+name = "LevelsEditorStyle"
+old = ""
+new = "craft_imaging::ui::adjust::LevelsEditorStyle"
+status = "replaced"
+note = "The editor's style, built from tokens by `ComponentStyle`."
+
+[[type]]
+name = "LevelsLabels"
+old = "craft_imaging::ui::adjust::levels_editor::LevelsLabels"
+new = ""
+status = "removed"
+note = "Replaced by `LevelsWords`."
+
+[[type]]
+name = "LevelsWords"
+old = ""
+new = "craft_imaging::ui::adjust::LevelsWords"
+status = "replaced"
+note = "The editor's words (`words!`)."
+
+[[type]]
+name = "LevelsPanel"
+old = "craft_imaging::ui::adjust::levels_panel::LevelsPanel"
+new = "craft_imaging::ui::adjust::LevelsPanel"
+status = "moved"
+note = "A pattern over `Bind<Vec<Levels>>` (one value per channel). `show(ui)` returns `LevelsPanelOutput { response, edit: Option<EditEvent<Vec<Levels>>>, channel, picker, clipping }`; the shown channel is the pattern's own state (`shown_channel(ctx, id)` is gone)."
+
+[[type]]
+name = "TonePickerRow"
+old = "craft_imaging::ui::adjust::tone::TonePickerRow"
+new = "craft_imaging::ui::adjust::TonePickerRow"
+status = "moved"
+note = "A pattern over `Bind<Option<TonePicker>>`; `canvas(Id)` names the document canvas the armed picker samples through the sampler of the modal layer (`Sampler::arm_sampler`)."
+
+[[type]]
+name = "TonePickerResponse"
+old = "craft_imaging::ui::adjust::tone::TonePickerResponse"
+new = ""
+status = "removed"
+note = "Replaced by `TonePickerRowOutput`."
+
+[[type]]
+name = "TonePickerRowOutput"
+old = ""
+new = "craft_imaging::ui::adjust::TonePickerRowOutput"
+status = "replaced"
+note = "`{ response, change: Option<Option<TonePicker>> }`."
+
+[[type]]
+name = "TonePickTool"
+old = "craft_imaging::ui::adjust::tone::TonePickTool"
+new = "craft_imaging::ui::adjust::TonePickTool"
+status = "moved"
+note = "A `CanvasTool`; the cursor is a `PaintedCursor::Tool` with the pipette and its hotspot; the command form is the dialog's own point picker."
+
+[[type]]
+name = "CurvesPanel"
+old = "craft_imaging::ui::adjust::curves_panel::CurvesPanel"
+new = "craft_imaging::ui::adjust::CurvesPanel"
+status = "moved"
+note = "A pattern over `Bind<ToneCurves>`. `show(ui)` returns `CurvesPanelOutput { response, edit: Option<EditEvent<ToneCurves>>, channel, mode, picker, selected }`; the selected point is the panel's state and `select(index)` sets it."
+
+[[type]]
+name = "AdjustContext"
+old = "craft_imaging::ui::adjust::context::AdjustContext"
+new = "craft_imaging::ui::adjust::AdjustContext"
+status = "moved"
+note = "`wheel()` is removed: a focused control takes the wheel."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+[[setter]]
+type = "CurveEditor"
+old = "new(id_salt, label, &curve, numbers)"
+new = "new(label, Bind<Curve>)"
+note = "The id comes from the call site; the numbers come from the env."
+
+[[setter]]
+type = "CurveEditor"
+old = "selected(ctx, id) / select(ctx, id, index)"
+new = "selected(Option<usize>) and CurveEditorOutput::selected"
+note = "View state of the host, passed in and read back."
+
+[[setter]]
+type = "CurveEditor"
+old = "side, outer_width, labels, policy, enabled, id_in, state, style"
+new = ""
+note = "Removed: the size comes from the control size, the words from the env, the policy from the binding, enabled from the common props."
+
+[[setter]]
+type = "CurveEditor"
+old = "between(impl FnOnce(&mut Ui))"
+new = "between(CurveRows)"
+note = "`CurveRows::new(|ui, cx| ..)` runs inside the editor's body."
+
+[[setter]]
+type = "CurvePreview"
+old = "new(&curve, size, label)"
+new = "new(label, &curve)"
+note = "The size comes from the theme."
+# craft-imaging adjust editors (track img-adjust-b): the slider-based editors, the slider table and the session.
+
+[[setter]]
+type = "BrightnessContrastEditor"
+old = "new(id_salt, &value, numbers)"
+new = "new(label, Bind<V>)"
+
+[[setter]]
+type = "BrightnessContrastEditor"
+old = "policy(EditPolicy)"
+new = ""
+note = "Removed: the binding's policy decides when a write-through source is written."
+
+[[setter]]
+type = "BrightnessContrastEditor"
+old = "labels(AdjustLabels)"
+new = ""
+note = "Removed: words come from the environment."
+
+[[setter]]
+type = "BrightnessContrastEditor"
+old = "enabled(bool)"
+new = ""
+note = "Removed: disable the enclosing scope."
+
+[[setter]]
+type = "ThresholdEditor"
+old = "new(id_salt, &value, numbers)"
+new = "new(label, Bind<V>)"
+
+[[setter]]
+type = "ThresholdEditor"
+old = "policy(EditPolicy)"
+new = ""
+note = "Removed: the binding's policy decides when a write-through source is written."
+
+[[setter]]
+type = "ThresholdEditor"
+old = "labels(AdjustLabels)"
+new = ""
+note = "Removed: words come from the environment."
+
+[[setter]]
+type = "ThresholdEditor"
+old = "enabled(bool)"
+new = ""
+note = "Removed: disable the enclosing scope."
+
+[[setter]]
+type = "ColorBalanceEditor"
+old = "new(id_salt, &value, numbers)"
+new = "new(label, Bind<V>)"
+
+[[setter]]
+type = "ColorBalanceEditor"
+old = "policy(EditPolicy)"
+new = ""
+note = "Removed: the binding's policy decides when a write-through source is written."
+
+[[setter]]
+type = "ColorBalanceEditor"
+old = "labels(AdjustLabels)"
+new = ""
+note = "Removed: words come from the environment."
+
+[[setter]]
+type = "ColorBalanceEditor"
+old = "enabled(bool)"
+new = ""
+note = "Removed: disable the enclosing scope."
+
+[[setter]]
+type = "PhotoFilterEditor"
+old = "new(id_salt, &value, numbers)"
+new = "new(label, Bind<V>)"
+
+[[setter]]
+type = "PhotoFilterEditor"
+old = "policy(EditPolicy)"
+new = ""
+note = "Removed: the binding's policy decides when a write-through source is written."
+
+[[setter]]
+type = "PhotoFilterEditor"
+old = "labels(AdjustLabels)"
+new = ""
+note = "Removed: words come from the environment."
+
+[[setter]]
+type = "PhotoFilterEditor"
+old = "enabled(bool)"
+new = ""
+note = "Removed: disable the enclosing scope."
+
+[[setter]]
+type = "HueSaturationEditor"
+old = "new(id_salt, &value, numbers)"
+new = "new(label, Bind<V>)"
+
+[[setter]]
+type = "HueSaturationEditor"
+old = "policy(EditPolicy)"
+new = ""
+note = "Removed: the binding's policy decides when a write-through source is written."
+
+[[setter]]
+type = "HueSaturationEditor"
+old = "labels(AdjustLabels)"
+new = ""
+note = "Removed: words come from the environment."
+
+[[setter]]
+type = "HueSaturationEditor"
+old = "enabled(bool)"
+new = ""
+note = "Removed: disable the enclosing scope."
+
+[[setter]]
+type = "BlackWhiteEditor"
+old = "new(id_salt, &value, numbers)"
+new = "new(label, Bind<V>)"
+
+[[setter]]
+type = "BlackWhiteEditor"
+old = "policy(EditPolicy)"
+new = ""
+note = "Removed: the binding's policy decides when a write-through source is written."
+
+[[setter]]
+type = "BlackWhiteEditor"
+old = "labels(AdjustLabels)"
+new = ""
+note = "Removed: words come from the environment."
+
+[[setter]]
+type = "BlackWhiteEditor"
+old = "enabled(bool)"
+new = ""
+note = "Removed: disable the enclosing scope."
+
+[[setter]]
+type = "ChannelMixerEditor"
+old = "new(id_salt, &value, numbers)"
+new = "new(label, Bind<V>)"
+
+[[setter]]
+type = "ChannelMixerEditor"
+old = "policy(EditPolicy)"
+new = ""
+note = "Removed: the binding's policy decides when a write-through source is written."
+
+[[setter]]
+type = "ChannelMixerEditor"
+old = "labels(AdjustLabels)"
+new = ""
+note = "Removed: words come from the environment."
+
+[[setter]]
+type = "ChannelMixerEditor"
+old = "enabled(bool)"
+new = ""
+note = "Removed: disable the enclosing scope."
+
+[[setter]]
+type = "SelectiveColorEditor"
+old = "new(id_salt, &value, numbers)"
+new = "new(label, Bind<V>)"
+
+[[setter]]
+type = "SelectiveColorEditor"
+old = "policy(EditPolicy)"
+new = ""
+note = "Removed: the binding's policy decides when a write-through source is written."
+
+[[setter]]
+type = "SelectiveColorEditor"
+old = "labels(AdjustLabels)"
+new = ""
+note = "Removed: words come from the environment."
+
+[[setter]]
+type = "SelectiveColorEditor"
+old = "enabled(bool)"
+new = ""
+note = "Removed: disable the enclosing scope."
+
+[[setter]]
+type = "AdjustSliders"
+old = "new(id_salt, fields, values, numbers)"
+new = "new(label, fields, Bind<Vec<f64>>)"
+
+[[setter]]
+type = "AdjustSliders"
+old = "policy(EditPolicy)"
+new = ""
+note = "Removed."
+
+[[setter]]
+type = "AdjustSliders"
+old = "enabled(bool)"
+new = ""
+note = "Removed."
+
+[[setter]]
+type = "ThresholdEditor"
+old = "new(id_salt, level, numbers).histogram(&[u32; 256])"
+new = "new(label, Bind<f64>).histogram(&HistogramData)"
+
+[[setter]]
+type = "ColorBalanceEditor"
+old = "id_in(ui, id_salt)"
+new = ""
+note = "Removed: the tone is the editor's memory."
+
+[[setter]]
+type = "ColorBalanceEditor"
+old = "tone(ctx, id)"
+new = "ColorBalanceOutput::tone"
+note = "The tone shown after the pass."
+
+[[setter]]
+type = "ColorBalanceEditor"
+old = "reset_tone(ctx, id)"
+new = "tone(ColorBalanceTone::Midtones)"
+note = "The host that resets shows Midtones again."
+
+[[setter]]
+type = "HueSaturationEditor"
+old = "id_in(ui, id_salt)"
+new = ""
+note = "Removed."
+
+[[setter]]
+type = "HueSaturationEditor"
+old = "shown_range(ctx, id)"
+new = "HueSaturationOutput::shown_range"
+note = "The range shown after the pass; `range(Option<usize>)` is the host-kept form."
+
+[[setter]]
+type = "SelectiveColorEditor"
+old = "id_in(ui, id_salt)"
+new = ""
+note = "Removed."
+
+[[setter]]
+type = "SelectiveColorEditor"
+old = "shown_range(ctx, id)"
+new = "SelectiveColorOutput::shown_range"
+
+[[setter]]
+type = "AdjustField"
+old = "unit(Unit)"
+new = "unit_kind(UnitKind)"
+
+[[setter]]
+type = "AdjustField"
+old = "decimals(usize)"
+new = "step(f64)"
+note = "A field's step gives its places."
+
+[[setter]]
+type = "AdjustField"
+old = "vibrance(labels, units)"
+new = "vibrance(words)"
+
+[[setter]]
+type = "LevelsEditor"
+old = "new(id_salt, label, &levels, numbers)"
+new = "new(label, Bind<Levels>)"
+note = "The id salt is the shown id; the numbers come from the env."
+
+[[setter]]
+type = "LevelsEditor"
+old = "width(f32) / labels(..) / policy(..) / enabled(bool) / id_in(ui, salt) / style(tokens) / decimals(usize)"
+new = ""
+note = "Removed: the editor takes the room offered, its words are `LevelsWords`, the policy is the binding's, the decimals follow the step."
+
+[[setter]]
+type = "LevelsEditor"
+old = "clipping(ctx, id)"
+new = "LevelsEditorOutput::clipping"
+note = "Read from the output of the pass."
+
+[[setter]]
+type = "LevelsPanel"
+old = "new(id_salt, &[Levels], channels, numbers)"
+new = "new(label, Bind<Vec<Levels>>, channels)"
+note = ""
+
+[[setter]]
+type = "LevelsPanel"
+old = "picker(armed) / pickers(bool) / pickers_unavailable(bool)"
+new = "pickers(Bind<Option<TonePicker>>) / pickers_unavailable()"
+note = "The picker row shows when the binding is given."
+
+[[setter]]
+type = "LevelsPanel"
+old = "shown_channel(ctx, id) / id_in(ui, salt)"
+new = "LevelsPanelOutput::channel"
+note = ""
+
+[[setter]]
+type = "CurvesPanel"
+old = "new(id_salt, &ToneCurves, channels, numbers)"
+new = "new(label, Bind<ToneCurves>, channels)"
+note = ""
+
+[[setter]]
+type = "CurvesPanel"
+old = "select_point(ctx, id, index) / shown_channel(ctx, id)"
+new = "select(index) / CurvesPanelOutput::selected, ::channel"
+note = ""
+
+[[setter]]
+type = "CurvesPanel"
+old = "sampler(&Sampler)"
+new = "sampler(Fn(&[[f32; 2]]) -> Vec<f32>)"
+note = "The host's interpolation as a closure; `add_point_from_sample` takes the same closure by reference."
+
+[[setter]]
+type = "TonePickerRow"
+old = "new(id_salt, armed)"
+new = "new(Bind<Option<TonePicker>>)"
+note = ""
+
+[[setter]]
+type = "TonePickerRow"
+old = "enabled(picker, bool) / unavailable(bool) / labels(..)"
+new = "enabled_picker(picker, bool) / unavailable()"
+note = ""
+
+[[setter]]
+type = "TonePicker"
+old = "label(&AdjustLabels)"
+new = "label(&AdjustWords)"
+note = ""
+
+[[setter]]
+type = "ToneChannel"
+old = "label(&AdjustLabels) -> &str"
+new = "label(&AdjustWords) -> Label"
+note = ""
+
+[[setter]]
+type = "AdjustContext"
+old = "wheel()"
+new = ""
+note = "Removed."
+

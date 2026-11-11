@@ -1,0 +1,321 @@
+# API map of the "Preferences" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Preferences"
+new_module = "craft_ui::patterns::preferences"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "PreferencesWindow"
+old = "craft_ui::preferences::window::PreferencesWindow"
+new = "craft_ui::patterns::preferences::PreferencesWindow"
+status = "moved"
+note = "A pattern on `Dialog` (modeless, in a viewport, `collection_body`; OK goes through `close_guard`, Apply is a `stays_open` footer button): `PreferencesWindow::new(Bind<PreferencesState>)` and `show(self, ui, host)`; the host keeps the `Bind`, the window opens at the title from `PreferencesWords` unless `title` is set."
+
+[[type]]
+name = "PreferencesBody"
+old = "craft_ui::preferences::body::PreferencesBody"
+new = ""
+status = "removed"
+note = "The body is the window's own; the window is the one code path for the OS window and the embedded dialog."
+
+[[type]]
+name = "PreferencesStyle"
+old = "craft_ui::preferences::body::PreferencesStyle"
+new = ""
+status = "removed"
+note = "Sizes come from the controls and the theme; no widths are set."
+
+[[type]]
+name = "PreferencesState"
+old = "craft_ui::preferences::state::PreferencesState"
+new = "craft_ui::patterns::preferences::PreferencesState"
+status = "moved"
+note = "`#[non_exhaustive]`, with `selected`, `search` and `error`; the host owns it and binds it to the window (`PreferencesBody::state` and `set_state` are replaced by the binding)."
+
+[[type]]
+name = "Remember"
+old = "craft_ui::preferences::window::Remember"
+new = ""
+status = "removed"
+note = "Replaced by `PreferencesWindow::remember(SaveKey)`; the dialog keeps its place and size."
+
+[[type]]
+name = "DEFAULT_SIZE"
+old = "craft_ui::preferences::window::DEFAULT_SIZE"
+new = ""
+status = "removed"
+note = "The window opens at the size of its content, capped by the dialog preset, and keeps the size the user leaves it at."
+
+[[type]]
+name = "MIN_SIZE"
+old = "craft_ui::preferences::window::MIN_SIZE"
+new = ""
+status = "removed"
+note = "The dialog preset sets the least size."
+
+[[type]]
+name = "HexField"
+old = ""
+new = "craft_ui::text::HexField"
+status = "replaced"
+note = "Replaces the preferences hex row and craft-color's `HexField`: `TextField<HexCodec>` over a `craft_theme::Rgba`, built with `HexField::hex(label, Bind<Rgba>)`."
+
+[[type]]
+name = "HexCodec"
+old = ""
+new = "craft_ui::text::HexCodec"
+status = "replaced"
+note = "The codec of `HexField`: `#rrggbb` with or without the hash, three-digit shorthand, either case, and `#rrggbbaa`."
+
+[[type]]
+name = "PrefValue"
+old = "craft_ui::preferences::model::PrefValue"
+new = "craft_ui::patterns::preferences::PrefValue"
+status = "moved"
+note = "`#[non_exhaustive]`."
+
+[[type]]
+name = "PageSpec"
+old = "craft_ui::preferences::model::PageSpec"
+new = "craft_ui::patterns::preferences::PageSpec"
+status = "moved"
+note = "`#[non_exhaustive]`: built with `PageSpec::new`, `PageSpec::custom`, `footnote`, `keywords` as before; no `PartialEq`."
+
+[[type]]
+name = "Columns"
+old = "craft_ui::preferences::model::Columns"
+new = "craft_ui::patterns::preferences::Columns"
+status = "moved"
+note = "`#[non_exhaustive]`."
+
+[[type]]
+name = "GroupSpec"
+old = "craft_ui::preferences::model::GroupSpec"
+new = "craft_ui::patterns::preferences::GroupSpec"
+status = "moved"
+note = "`#[non_exhaustive]`: built with `GroupSpec::new` and `checks`; no `PartialEq`."
+
+[[type]]
+name = "RowSpec"
+old = "craft_ui::preferences::model::RowSpec"
+new = "craft_ui::patterns::preferences::RowSpec"
+status = "moved"
+note = "`#[non_exhaustive]`: built with `RowSpec::new` and the setters `keywords`, `help`, `visible`, `enabled`, `step` as before; no `PartialEq`."
+
+[[type]]
+name = "RowKind"
+old = "craft_ui::preferences::model::RowKind"
+new = "craft_ui::patterns::preferences::RowKind"
+status = "moved"
+note = "The struct-like variants are `#[non_exhaustive]` (match with `..`) and are built with `RowKind::choice`, `RowKind::int`, `RowKind::float` and `counting(UnitKind)`. `Choice.options` is `Vec<Entry<&str>>` in place of `Vec<(&str, &str)>`; `Int` and `Float` carry `unit: Option<UnitKind>` in place of `Option<&str>`; no `PartialEq`."
+
+[[type]]
+name = "Closed"
+old = "craft_ui::preferences::model::Closed"
+new = "craft_ui::patterns::preferences::Closed"
+status = "moved"
+note = "`#[non_exhaustive]`."
+
+[[type]]
+name = "PreferencesOutput"
+old = "craft_ui::preferences::model::PreferencesOutput"
+new = "craft_ui::patterns::preferences::PreferencesOutput"
+status = "moved"
+note = "Holds the window's `response` and implements `Outcome`; build with `PreferencesOutput::new(response)`; no `Default` or `PartialEq`."
+
+[[type]]
+name = "PreferencesTexts"
+old = "craft_ui::preferences::model::PreferencesTexts"
+new = ""
+status = "removed"
+note = "Replaced by `PreferencesWords` (a `words!` set read with `Env::words`); OK and Cancel are `CommonWords`."
+
+[[type]]
+name = "PreferencesWords"
+old = ""
+new = "craft_ui::patterns::preferences::PreferencesWords"
+status = "replaced"
+note = "Replaces `PreferencesTexts`: ids `preferences.*` in place of `pref.*`; no `ok` and `cancel` fields (`CommonWords`)."
+
+[[type]]
+name = "PreferencesModel"
+old = "craft_ui::preferences::model_trait::PreferencesModel"
+new = "craft_ui::patterns::preferences::PreferencesModel"
+status = "moved"
+note = "Same methods; `custom_row` and `custom_page` keep `&mut Ui`."
+
+[[type]]
+name = "Listed"
+old = "craft_ui::preferences::search::Listed"
+new = "craft_ui::patterns::preferences::Listed"
+status = "moved"
+note = "`#[non_exhaustive]`."
+
+[[type]]
+name = "StandardPage"
+old = "craft_ui::preferences::document::StandardPage"
+new = "craft_ui::patterns::preferences::StandardPage"
+status = "moved"
+note = "`#[non_exhaustive]`."
+
+[[type]]
+name = "PageInfo"
+old = "craft_ui::preferences::document::PageInfo"
+new = "craft_ui::patterns::preferences::PageInfo"
+status = "moved"
+note = "`#[non_exhaustive]`; built with `PageInfo::new`."
+
+[[type]]
+name = "SettingRule"
+old = "craft_ui::preferences::document::SettingRule"
+new = "craft_ui::patterns::preferences::SettingRule"
+status = "moved"
+note = "`#[non_exhaustive]`."
+
+[[type]]
+name = "RuleKind"
+old = "craft_ui::preferences::document::RuleKind"
+new = "craft_ui::patterns::preferences::RuleKind"
+status = "moved"
+note = "`#[non_exhaustive]`; `Int` and `Float` carry `unit: Option<UnitKind>` in place of `Option<String>`."
+
+[[type]]
+name = "CustomSettings"
+old = "craft_ui::preferences::document::CustomSettings"
+new = "craft_ui::patterns::preferences::CustomSettings"
+status = "moved"
+note = "Same methods."
+
+[[type]]
+name = "SettingsDocument"
+old = "craft_ui::preferences::document::SettingsDocument"
+new = "craft_ui::patterns::preferences::SettingsDocument"
+status = "moved"
+note = "`custom_part` is removed (use `custom_mut`); `os(Os)` sets the system `linux_only` rules compare with."
+
+[[type]]
+name = "SettingsDraft"
+old = "craft_ui::preferences::document::SettingsDraft"
+new = "craft_ui::patterns::preferences::SettingsDraft"
+status = "moved"
+
+[[type]]
+name = "SettingsDocumentLabels"
+old = "craft_ui::preferences::document::SettingsDocumentLabels"
+new = ""
+status = "removed"
+note = "Replaced by `SettingsDocumentWords`."
+
+[[type]]
+name = "SettingsDocumentWords"
+old = ""
+new = "craft_ui::patterns::preferences::SettingsDocumentWords"
+status = "replaced"
+note = "Replaces `SettingsDocumentLabels`: `restart` is a `Label`, `invalid` a `WordTemplate` filled with `fill`."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+
+[[setter]]
+type = "PreferencesWindow"
+old = "new(id_salt)"
+new = "new(Bind<PreferencesState>)"
+note = "The remembered page, search and error are the host's `PreferencesState`."
+
+[[setter]]
+type = "PreferencesWindow"
+old = "embedded(bool)"
+new = "embedded()"
+note = "A flag: the window draws as a dialog layer even where OS windows exist."
+
+[[setter]]
+type = "PreferencesWindow"
+old = "platform(Platform)"
+new = ""
+note = "Removed: the footer follows the scope's operating system."
+
+[[setter]]
+type = "PreferencesWindow"
+old = "remember(Remember)"
+new = "remember(SaveKey)"
+note = "The dialog saves its place and size under the key."
+
+[[setter]]
+type = "PreferencesWindow"
+old = "builder(Fn(ViewportBuilder) -> ViewportBuilder)"
+new = ""
+note = "Removed: the viewport mount builds the window; the frame decision belongs to the runtime's windows."
+
+[[call]]
+old = "PreferencesWindow::blocks_main(ctx)"
+new = ""
+note = "Removed: the window is modeless; an app that blocks its main window while preferences are open does so with its own state and `PreferencesModel::nested_open`."
+
+[[call]]
+old = "PreferencesWindow::refuse_close(ctx)"
+new = ""
+note = "Removed: a quit request is the app's to answer."
+
+[[setter]]
+type = "SettingRule"
+old = "unit(impl Into<String>)"
+new = "counting(UnitKind)"
+note = "The unit is a kind whose spelling comes from `Units` in the user's language, in place of literal text."
+
+[[setter]]
+type = "RowKind"
+old = "RowKind::Int { value, range, unit }"
+new = "RowKind::int(value, range).counting(kind)"
+note = "Struct-like variants are `#[non_exhaustive]`; the unit is a `UnitKind`."
+
+[[setter]]
+type = "RowKind"
+old = "RowKind::Float { value, range, decimals, unit }"
+new = "RowKind::float(value, range, decimals).counting(kind)"
+note = "Struct-like variants are `#[non_exhaustive]`; the unit is a `UnitKind`."
+
+[[setter]]
+type = "RowKind"
+old = "RowKind::Choice { value, options: Vec<(&str, &str)> }"
+new = "RowKind::choice(value, options: Vec<Entry<&str>>)"
+note = "Each option is an `Entry` whose value is the id."
+
+[[setter]]
+type = "SettingsDocument"
+old = "custom_part()"
+new = "custom_mut()"
+note = "The two returned the same reference."
+
+# Functions of the search rule and the key labeller.
+
+[[call]]
+old = "craft_ui::preferences::matches(query, label, keywords, key)"
+new = "craft_ui::patterns::preferences::matches(&matcher, label, keywords, key)"
+note = "The query is a `craft_i18n::matcher::Matcher` built with `Matcher::new(&env.folder(), query)`; case and accents are ignored in the scope's language."
+
+[[call]]
+old = "craft_ui::preferences::row_matches(query, row)"
+new = "craft_ui::patterns::preferences::row_matches(&matcher, row)"
+note = "Takes the shared matcher in place of the query text."
+
+[[call]]
+old = "craft_ui::preferences::list_pages(pages, query)"
+new = "craft_ui::patterns::preferences::list_pages(pages, &matcher)"
+note = "Takes the shared matcher in place of the query text."
+
+[[call]]
+old = "craft_ui::preferences::row_shown(query, listed, row)"
+new = "craft_ui::patterns::preferences::row_shown(&matcher, listed, row)"
+note = "Takes the shared matcher in place of the query text."
+
+[[call]]
+old = "craft_ui::preferences::shown_position(listed, pages, selected)"
+new = "craft_ui::patterns::preferences::shown_position(listed, pages, selected)"
+note = "Path only; the function is unchanged."
+
+[[call]]
+old = "craft_ui::preferences::setting_label(key)"
+new = "craft_ui::patterns::preferences::setting_label(key)"
+note = "Path only; the function is unchanged."

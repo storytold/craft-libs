@@ -1,0 +1,100 @@
+# API changes that are not tied to one family: calls every migrated caller meets.
+# The codemods read this file beside the family files.
+# A `[[call]]` entry's `old` and `new` are Rust expressions (`_` stands for any expression); `new` is empty for a removed call.
+
+[[call]]
+old = "|ui| { .. }"
+new = "|ui, cx| { .. }"
+note = "Body and item closures take the context as a second argument."
+
+[[call]]
+old = "Tokens::of(ui)"
+new = ""
+note = "Removed: a component reads tokens through its style function."
+
+[[call]]
+old = "Host::of(ui)"
+new = "cx.env.host()"
+note = "The host is read from the env view of the context; the result is an Option."
+
+[[call]]
+old = "craft_ui::docking::DropTarget"
+new = "craft_ui::docking::DockDrop"
+note = "The app-built struct is renamed."
+
+[[call]]
+old = "_.label(_)"
+new = "Props::label(_, label)"
+note = "A component's own label setter is the Props setter that writes Common.label; containers hold only its kind and layout."
+
+[[call]]
+old = "shell.menu"
+new = "shell.menu()"
+note = "craft_host::ShellInfo's public field `menu` is the method `ShellInfo::menu()`, derived from the caps and the root window's chrome; `set_chrome` no longer stores a menu."
+
+[[token]]
+old = "space.pad.panel"
+new = ""
+note = "Waits for cut-over; see the cut-over list."
+
+[[token]]
+old = "space.pad.dialog"
+new = ""
+note = "Waits for cut-over."
+
+[[token]]
+old = "pad.bar"
+new = ""
+note = "Waits for cut-over."
+
+[[token]]
+old = "radius.popup"
+new = ""
+note = "Waits for cut-over."
+
+[[token]]
+old = "radius.panel"
+new = ""
+note = "Waits for cut-over."
+
+[[type]]
+name = "Tone"
+old = "craft_theme::Tone"
+new = "craft_theme::variant::Tone"
+status = "moved"
+
+[[call]]
+old = "DatePicker::new(id, label, value).today(date)"
+new = "RootEnv::today(date)"
+note = "Read back with `Env::today()`. The host gives today's `CalendarDate` in its time zone; the runtime reads no wall clock."
+
+[[setter]]
+type = "PartBuilder"
+old = "PartBuilder::disabled(disabled)"
+new = "PartBuilder::inactive(inactive)"
+note = "The flag is renamed. An inactive part paints with the Disabled state (through `Cx::part_state`, and `PaintUi::draw_part` draws its data fill and stroke with the theme's disabled fill) but keeps sensing, and its access node stays enabled."
+
+[[call]]
+old = "part.disabled"
+new = "part.inactive"
+note = "`PartResult.disabled` is `PartResult.inactive` (`PartResult` is `#[non_exhaustive]`; read the field, do not build one)."
+
+[[call]]
+old = "cx.part_state(part)"
+new = "cx.part_state(part)"
+note = "New and public: `Cx::part_state(&self, part: PartRef) -> StateSet` is the state a part paints with, so a component reads it for the text it draws over the part (a hand-built `State::Disabled` for an inactive part goes)."
+
+[[call]]
+old = "ModalRule::Declared"
+new = "ModalRule::Declared"
+note = "`craft_keymap::ModalRule::Declared` is new (the enum is `#[non_exhaustive]`): a variant for a command that reaches only an instance inside the top modal that declares it (`cx.publish(command, state)` in the dialog's body); `#[command_set(modal = \"declared\")]`. The edit commands use it, so Undo resolves disabled in a dialog that publishes none. Apps do not pick it for a command that a modal should block outright (`Blocked`)."
+
+[[call]]
+old = "env.direction()"
+new = "env.text_direction()"
+note = "`EnvView::text_direction()` is the paragraph direction of text (the interface's, unchanged inside an `ltr_axis` container); `direction()` stays the flow direction of layout, arrows and roving. Text and its alignment read `text_direction`."
+
+[[call]]
+old = "commands::take_for_instance(ctx, instance, from_ref)"
+new = "commands::take_for_instance(ctx, instance, app, from_ref)"
+note = "Crate-internal: the signature is `take_for_instance(ctx: &Context, instance: Option<Id>, app: bool, from_ref: fn(&CommandRef) -> Option<S>)`; `app` is true for an app-scope command set, which takes from the frame's output."

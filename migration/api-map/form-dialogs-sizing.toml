@@ -1,0 +1,335 @@
+# API map of the "Form dialogs 2: sizing" family: Image Size and Canvas Size.
+
+family = "Form dialogs 2: sizing"
+new_module = "craft_ui::patterns::form_dialogs"
+
+[[type]]
+name = "ImageSizeDialog"
+old = "craft_ui::dialog::sizing::ImageSizeDialog"
+new = ""
+status = "removed"
+note = "Replaced by `ImageSize`, a pattern: `ImageSize::new(Bind<ImageSizeValues>).show(ui) -> ImageSizeOutput { response, closed, result: Option<ImageSizeResult> }`. Without a host the app shows it each pass while its open state is on (`opened(Bind<bool>)`) and reads `result` the pass OK closes it; a `DialogHost` owns it as `HostedImageSize`. The values are the binding the app passes (`ImageSizeValues::new(PixelSize)` with the opening setters), so `fields`, `fields_mut`, the `chosen_*` readers, the `set_*` methods and `confirm` are gone."
+
+[[type]]
+name = "CanvasSizeDialog"
+old = "craft_ui::dialog::sizing::CanvasSizeDialog"
+new = ""
+status = "removed"
+note = "Replaced by `CanvasSize`, a pattern: `CanvasSize::new(Bind<CanvasSizeValues>).show(ui) -> CanvasSizeOutput { response, closed, result: Option<CanvasSizeResult> }`; see `ImageSizeDialog` for what the pattern form drops."
+
+[[type]]
+name = "ImageSize"
+old = ""
+new = "craft_ui::patterns::form_dialogs::ImageSize"
+status = "replaced"
+note = "Image Size on `FormDialog<ImageSizeValues>`: width, height and resolution as `UnitSelect` rows over one `LinkedSize`, the chain as `link_toggle`, Resample with a method `Select`, Scale Styles, and `Text` readouts of the file size and dimensions. Alt turns Cancel into Reset; OK is refused for an empty size or one over `MAX_DOCUMENT_SIDE`; with Resample off the pixel fields are disabled."
+
+[[type]]
+name = "HostedImageSize"
+old = ""
+new = "craft_ui::patterns::form_dialogs::HostedImageSize"
+status = "replaced"
+note = "The `StackDialog` form of `ImageSize`: `HostedImageSize::new(values: ImageSizeValues, build)` with `build` making the `ImageSize` over the host-owned values (`|values| ImageSize::new(values)`), `values()`, `Result = ImageSizeResult`, key `sizing.imageSize`. The app opens it on its `DialogHost` with the values of its document and takes the result with `host.take::<HostedImageSize>()`."
+
+[[type]]
+name = "CanvasSize"
+old = ""
+new = "craft_ui::patterns::form_dialogs::CanvasSize"
+status = "replaced"
+note = "Canvas Size on `FormDialog<CanvasSizeValues>`: current size readouts, width and height (no chain), the Relative box, a `ReferencePoint` anchor with growth arrows and the canvas extension `Select`."
+
+[[type]]
+name = "ImageSizeValues"
+old = ""
+new = "craft_ui::patterns::form_dialogs::ImageSizeValues"
+status = "replaced"
+note = "What Image Size edits: `new(PixelSize)` with the opening setters `pixels_per_inch`, `points_per_inch`, `unit`, `resolution_unit`, `resampling`, `method` and `scale_styles`. The app builds it when it opens the dialog and keeps it in the binding."
+
+[[type]]
+name = "CanvasSizeValues"
+old = ""
+new = "craft_ui::patterns::form_dialogs::CanvasSizeValues"
+status = "replaced"
+note = "What Canvas Size edits: `new(PixelSize)` with the opening setters `pixels_per_inch`, `points_per_inch`, `unit`, `relative`, `anchor`, `extension` and `has_background`."
+
+[[type]]
+name = "ImageSizeOutput"
+old = ""
+new = "craft_ui::patterns::form_dialogs::ImageSizeOutput"
+status = "replaced"
+note = "`SizingOutput<ImageSizeResult>`: `response`, `closed: Option<CloseReason>` and `result: Option<ImageSizeResult>`."
+
+[[type]]
+name = "CanvasSizeOutput"
+old = ""
+new = "craft_ui::patterns::form_dialogs::CanvasSizeOutput"
+status = "replaced"
+note = "`SizingOutput<CanvasSizeResult>`: `response`, `closed: Option<CloseReason>` and `result: Option<CanvasSizeResult>`."
+
+[[type]]
+name = "SizingOutput"
+old = ""
+new = "craft_ui::patterns::form_dialogs::SizingOutput"
+status = "replaced"
+note = "The output of both size dialogs, generic over the result."
+
+[[type]]
+name = "ImageSizeResult"
+old = "craft_ui::dialog::sizing::ImageSizeResult"
+new = "craft_ui::patterns::form_dialogs::ImageSizeResult"
+status = "moved"
+note = "`size: PixelSize` (`craft_behavior::PixelSize`, no resolution), `pixels_per_inch: f64`, `unit` and `resolution_unit: UnitKind`, `resample: Option<Resample>` (`None` is Resample off; the legacy `Resample::None` variant is gone) and `scale_styles`."
+
+[[type]]
+name = "CanvasSizeResult"
+old = "craft_ui::dialog::sizing::CanvasSizeResult"
+new = "craft_ui::patterns::form_dialogs::CanvasSizeResult"
+status = "moved"
+note = "`size: PixelSize`, `unit: UnitKind`, `relative`, `anchor: Anchor9` (was `Anchor`) and `extension: CanvasExtension`."
+
+[[type]]
+name = "Resample"
+old = "craft_ui::dialog::sizing::Resample"
+new = "craft_ui::patterns::form_dialogs::Resample"
+status = "moved"
+note = "The eight methods of the list; the `None` variant is Resample off and is `ImageSizeValues::resampling(false)` and `ImageSizeResult::resample == None`. `Resample::ALL` and `Resample::entries(&SizingWords, &[Resample]) -> Vec<Entry<Resample>>` build the list."
+
+[[type]]
+name = "CanvasExtension"
+old = "craft_ui::dialog::sizing::CanvasExtension"
+new = "craft_ui::patterns::form_dialogs::CanvasExtension"
+status = "moved"
+note = "Same variants; `label(&SizingWords)` and `entries(&SizingWords, &CanvasExtension, has_background)` build the list entries."
+
+[[type]]
+name = "SizingWords"
+old = ""
+new = "craft_ui::patterns::form_dialogs::SizingWords"
+status = "replaced"
+note = "The words of both dialogs (`sizing.*` ids), without the unit, anchor-cell and trailing-colon words: the units are `UnitKind` spellings and the anchor cells are `ReferencePoint`'s."
+
+[[type]]
+name = "SizingLabels"
+old = "craft_ui::dialog::sizing::SizingLabels"
+new = ""
+status = "removed"
+note = "Replaced by `SizingWords`."
+
+[[type]]
+name = "Readout"
+old = "craft_ui::dialog::sizing::Readout"
+new = ""
+status = "removed"
+note = "The hand-painted readout is `Text` rows in a `Field` each, with `Units::file_size` and `Units::pixels`; a new size over the limit shows in `Tone::Bad`."
+
+[[type]]
+name = "human_bytes"
+old = "craft_ui::dialog::sizing::human_bytes"
+new = ""
+status = "removed"
+note = "Use `Env::units().file_size(bytes)`."
+
+[[type]]
+name = "file_size"
+old = "craft_ui::dialog::sizing::file_size"
+new = ""
+status = "removed"
+note = "A file size is `units.file_size(width * height * bytes_per_pixel)`; `ImageSize::bytes_per_pixel` and `CanvasSize::bytes_per_pixel` set the factor."
+
+[[type]]
+name = "SizeUnit"
+old = "craft_ui::dialog::sizing::SizeUnit"
+new = ""
+status = "removed"
+note = "`craft_ui::runtime::env::UnitKind` (`Pixels`, `Percent`, `Inches`, `Centimetres`, `Millimetres`, `Points`, `Picas`)."
+
+[[type]]
+name = "ResolutionUnit"
+old = "craft_ui::dialog::sizing::ResolutionUnit"
+new = ""
+status = "removed"
+note = "`UnitKind::PixelsPerInch` and `UnitKind::PixelsPerCentimetre`."
+
+[[setter]]
+type = "ImageSizeDialog"
+old = "ImageSizeDialog::new(PixelSize)"
+new = "ImageSizeValues::new(PixelSize)"
+
+[[setter]]
+type = "ImageSizeDialog"
+old = "labels(SizingLabels)"
+new = ""
+note = "Words come from the installed `SizingWords`."
+
+[[setter]]
+type = "ImageSizeDialog"
+old = "unit(SizeUnit)"
+new = "ImageSizeValues::unit(UnitKind)"
+
+[[setter]]
+type = "ImageSizeDialog"
+old = "resolution_unit(ResolutionUnit)"
+new = "ImageSizeValues::resolution_unit(UnitKind)"
+
+[[setter]]
+type = "ImageSizeDialog"
+old = "resample_methods(&[Resample])"
+new = "ImageSize::methods(Vec<Resample>)"
+note = "An empty list offers all eight."
+
+[[setter]]
+type = "ImageSizeDialog"
+old = "resample(Resample)"
+new = "ImageSizeValues::method(Resample)"
+note = "`Resample::None` is `ImageSizeValues::resampling(false)`."
+
+[[setter]]
+type = "ImageSizeDialog"
+old = "bytes_per_pixel(f64)"
+new = "ImageSize::bytes_per_pixel(f64)"
+
+[[setter]]
+type = "ImageSizeDialog"
+old = "points_per_inch(f64)"
+new = "ImageSizeValues::points_per_inch(f64)"
+
+[[setter]]
+type = "ImageSizeDialog"
+old = "set_width(f64)"
+new = ""
+note = "The values are the `ImageSizeValues` binding; build them with `ImageSizeValues::new(size)` and the opening setters."
+
+[[setter]]
+type = "ImageSizeDialog"
+old = "set_height(f64)"
+new = ""
+
+[[setter]]
+type = "ImageSizeDialog"
+old = "set_resolution(f64)"
+new = "ImageSizeValues::pixels_per_inch(f64)"
+note = "The opening resolution."
+
+[[setter]]
+type = "ImageSizeDialog"
+old = "set_unit(SizeUnit)"
+new = "ImageSizeValues::unit(UnitKind)"
+
+[[setter]]
+type = "ImageSizeDialog"
+old = "set_resolution_unit(ResolutionUnit)"
+new = "ImageSizeValues::resolution_unit(UnitKind)"
+
+[[setter]]
+type = "ImageSizeDialog"
+old = "set_resample(Resample)"
+new = "ImageSizeValues::method(Resample)"
+
+[[setter]]
+type = "ImageSizeDialog"
+old = "set_scale_styles(bool)"
+new = "ImageSizeValues::scale_styles(bool)"
+
+[[setter]]
+type = "ImageSizeDialog"
+old = "chosen_resample()"
+new = "ImageSizeResult::resample"
+
+[[setter]]
+type = "ImageSizeDialog"
+old = "chosen_scale_styles()"
+new = "ImageSizeResult::scale_styles"
+
+[[setter]]
+type = "ImageSizeDialog"
+old = "fields() / fields_mut()"
+new = ""
+note = "The linked size is inside `ImageSizeValues`; `LinkedSize` is for dialogs that build their own rows."
+
+[[setter]]
+type = "CanvasSizeDialog"
+old = "CanvasSizeDialog::new(PixelSize)"
+new = "CanvasSizeValues::new(PixelSize)"
+
+[[setter]]
+type = "CanvasSizeDialog"
+old = "labels(SizingLabels)"
+new = ""
+note = "Words come from the installed `SizingWords`."
+
+[[setter]]
+type = "CanvasSizeDialog"
+old = "unit(SizeUnit)"
+new = "CanvasSizeValues::unit(UnitKind)"
+
+[[setter]]
+type = "CanvasSizeDialog"
+old = "set_unit(SizeUnit)"
+new = "CanvasSizeValues::unit(UnitKind)"
+
+[[setter]]
+type = "CanvasSizeDialog"
+old = "set_relative(bool)"
+new = "CanvasSizeValues::relative(bool)"
+
+[[setter]]
+type = "CanvasSizeDialog"
+old = "set_anchor(Anchor)"
+new = "CanvasSizeValues::anchor(Anchor9)"
+
+[[setter]]
+type = "CanvasSizeDialog"
+old = "set_extension(CanvasExtension)"
+new = "CanvasSizeValues::extension(CanvasExtension)"
+
+[[setter]]
+type = "CanvasSizeDialog"
+old = "extension(CanvasExtension)"
+new = "CanvasSizeValues::extension(CanvasExtension)"
+
+[[setter]]
+type = "CanvasSizeDialog"
+old = "has_background(bool)"
+new = "CanvasSizeValues::has_background(bool)"
+
+[[setter]]
+type = "CanvasSizeDialog"
+old = "bytes_per_pixel(f64)"
+new = "CanvasSize::bytes_per_pixel(f64)"
+
+[[setter]]
+type = "CanvasSizeDialog"
+old = "points_per_inch(f64)"
+new = "CanvasSizeValues::points_per_inch(f64)"
+
+[[setter]]
+type = "CanvasSizeDialog"
+old = "set_width(f64)"
+new = ""
+note = "The values are the `CanvasSizeValues` binding."
+
+[[setter]]
+type = "CanvasSizeDialog"
+old = "set_height(f64)"
+new = ""
+
+[[setter]]
+type = "CanvasSizeDialog"
+old = "chosen_anchor()"
+new = "CanvasSizeResult::anchor"
+
+[[setter]]
+type = "CanvasSizeDialog"
+old = "chosen_extension()"
+new = "CanvasSizeResult::extension"
+
+[[setter]]
+type = "CanvasSizeDialog"
+old = "chosen_relative()"
+new = "CanvasSizeResult::relative"
+
+[[setter]]
+type = "CanvasSizeDialog"
+old = "fields() / fields_mut()"
+new = ""
+note = "The linked size is inside `CanvasSizeValues`."

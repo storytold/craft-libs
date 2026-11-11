@@ -1,0 +1,176 @@
+# API map of the "Imaging selection tools" family: old path to new path and setter renames.
+
+family = "Imaging selection tools"
+new_module = "craft_imaging::ui::select"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "MarqueeTool"
+old = "craft_imaging::ui::select::MarqueeTool"
+new = "craft_imaging::ui::select::MarqueeTool"
+status = "same"
+
+[[type]]
+name = "MarqueeKind"
+old = "craft_imaging::ui::select::MarqueeKind"
+new = "craft_imaging::ui::select::MarqueeKind"
+status = "same"
+
+[[type]]
+name = "LassoTool"
+old = "craft_imaging::ui::select::LassoTool"
+new = "craft_imaging::ui::select::LassoTool"
+status = "same"
+
+[[type]]
+name = "PolygonLassoTool"
+old = "craft_imaging::ui::select::PolygonLassoTool"
+new = "craft_imaging::ui::select::PolygonLassoTool"
+status = "same"
+
+[[type]]
+name = "MagneticLassoTool"
+old = "craft_imaging::ui::select::MagneticLassoTool"
+new = "craft_imaging::ui::select::MagneticLassoTool"
+status = "same"
+
+[[type]]
+name = "MagneticSettings"
+old = "craft_imaging::ui::select::MagneticSettings"
+new = "craft_imaging::ui::select::MagneticSettings"
+status = "same"
+
+[[type]]
+name = "EdgeTracer"
+old = "craft_imaging::ui::select::EdgeTracer"
+new = "craft_imaging::ui::select::EdgeTracer"
+status = "same"
+
+[[type]]
+name = "EdgeSearch"
+old = "craft_imaging::ui::select::EdgeSearch"
+new = "craft_imaging::ui::select::EdgeSearch"
+status = "same"
+
+[[type]]
+name = "SelectEvent"
+old = "craft_imaging::ui::select::SelectEvent"
+new = "craft_imaging::ui::select::SelectEvent"
+status = "same"
+
+[[type]]
+name = "SelectPhase"
+old = "craft_imaging::ui::select::SelectPhase"
+new = "craft_imaging::ui::select::SelectPhase"
+status = "same"
+
+[[type]]
+name = "SelectionShape"
+old = "craft_imaging::ui::select::SelectionShape"
+new = "craft_imaging::ui::select::SelectionShape"
+status = "same"
+
+[[type]]
+name = "SelectionDrag"
+old = "craft_imaging::ui::select::SelectionDrag"
+new = "craft_imaging::ui::select::SelectionDrag"
+status = "same"
+
+[[type]]
+name = "DragKind"
+old = "craft_imaging::ui::select::DragKind"
+new = "craft_imaging::ui::select::DragKind"
+status = "same"
+
+[[type]]
+name = "SelectionProbe"
+old = "craft_imaging::ui::select::SelectionProbe"
+new = "craft_imaging::ui::select::SelectionProbe"
+status = "same"
+
+[[type]]
+name = "SelectToolPass"
+old = "craft_imaging::ui::select::SelectToolPass"
+new = "craft_imaging::ui::select::SelectToolPass"
+status = "same"
+
+[[type]]
+name = "InsideDrag"
+old = "craft_imaging::ui::select::InsideDrag"
+new = "craft_imaging::ui::select::InsideDrag"
+status = "same"
+
+[[type]]
+name = "PressRule"
+old = "craft_imaging::ui::select::PressRule"
+new = "craft_imaging::ui::select::PressRule"
+status = "same"
+
+[[type]]
+name = "SelectLabels"
+old = "craft_imaging::ui::select::SelectLabels"
+new = ""
+status = "replaced"
+note = "SelectWords: the words come from the env (`ToolContext::words`); the tools take no labels setter."
+
+[[type]]
+name = "SelectToolStyle"
+old = "craft_imaging::ui::select::SelectToolStyle"
+new = ""
+status = "removed"
+note = "The tools paint from the theme's overlay colours and named sizes; there is no tool style."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+[[setter]]
+type = "MarqueeTool"
+old = "labels(SelectLabels)"
+new = ""
+note = "Removed: the words come from the env."
+
+[[setter]]
+type = "LassoTool"
+old = "labels(SelectLabels)"
+new = ""
+note = "Removed: the words come from the env."
+
+[[setter]]
+type = "PolygonLassoTool"
+old = "labels(SelectLabels)"
+new = ""
+note = "Removed: the words come from the env."
+
+[[setter]]
+type = "MagneticLassoTool"
+old = "labels(SelectLabels)"
+new = ""
+note = "Removed: the words come from the env."
+
+[[setter]]
+type = "SelectionProbe"
+old = "size() -> [u32; 2]"
+new = "size() -> craft_behavior::PixelSize"
+
+[[setter]]
+type = "InsideDrag"
+old = "begin(&ConstrainStyle, DragKind, Point, Modifiers)"
+new = "begin(&ConstrainStyle, DragKind, Point, Mods, GestureId, Arc<str>)"
+note = "The id and the undo step's name come from the caller; the Begin event carries the zero delta as its value before."
+
+[[setter]]
+type = "InsideDrag"
+old = "cancel()"
+new = "cancel(CancelReason)"
+
+[[setter]]
+type = "PressRule"
+old = "drag_kind(.., Modifiers, ..)"
+new = "drag_kind(.., Mods, ..)"
+note = "Mods from craft_keymap; cursor_over returns craft_behavior::Cursor."
+
+[[setter]]
+type = "SelectEvent"
+old = "DragSelection(EditEvent<SelectionDrag>) with Commit.changed"
+new = "DragSelection(EditEvent<SelectionDrag>)"
+note = "EditEvent::Commit has no changed flag: a delta of [0, 0] is no change."

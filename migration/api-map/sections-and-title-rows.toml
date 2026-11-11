@@ -1,0 +1,149 @@
+# API map of the "Sections and title rows" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Sections and title rows"
+new_module = "craft_ui::sections"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "SectionHeader"
+old = "craft_ui::composites::section_header::SectionHeader"
+new = ""
+status = "replaced"
+note = "`craft_ui::sections::Section`, a container: `SectionHeader::new(salt, title).open(&mut open).show(ui, body)` is `Section::new(title).open(Bind::bound(&mut open)).id_salt(salt).show(ui, |ui, _| body(ui))`. Without a binding the open state is a session slot, kept across runs with `.remember(SaveKey)`; `collapsible(false)` is `Section::fixed(title)`. The header is a `TitleRow` with a disclosure lead and a rule under it; the hairline above the row is gone."
+
+[[type]]
+name = "SectionStyle"
+old = "craft_ui::composites::section_header::SectionStyle"
+new = "craft_ui::sections::SectionStyle"
+status = "moved"
+note = "A `ComponentStyle` struct with the container's metrics only; the row height, chevron and title looks belong to `TitleRowStyle`. `SectionHeader::style(tokens, ppp)` is gone."
+
+[[type]]
+name = "GroupBox"
+old = "craft_ui::composites::group_box::GroupBox"
+new = "craft_ui::sections::GroupBox"
+status = "moved"
+note = "A container: `GroupBox::new(title).checkbox(&mut on).show(ui, body)` is `GroupBox::new(title, Some(Bind::bound(&mut on))).show(ui, |ui, _| body(ui))`; no gate is `None`. `fill(bool)` stays and the box fills by default. `GroupBox::style` and `GroupBox::gap` are gone: the frame is the container's surface and the gap between boxes is the parent stack's."
+
+[[type]]
+name = "GroupBoxStyle"
+old = "craft_ui::composites::group_box::GroupBoxStyle"
+new = "craft_ui::sections::GroupBoxStyle"
+status = "moved"
+note = "A `ComponentStyle` struct with metrics only; the edge, radius and padding come from `SurfaceKind::Frame` and `Pad::Regular`."
+
+[[type]]
+name = "PanelHeader"
+old = "craft_ui::composites::panel_header::PanelHeader"
+new = ""
+status = "replaced"
+note = "A `TitleRow` with `HeaderStrength::Strong` and `actions([HeaderAction::Menu, HeaderAction::Float, HeaderAction::Close])`, filled into a `Panel` header (the panels family). The header drag the caller read from the response is the container's `DragBand::Move`."
+
+[[type]]
+name = "PanelHeaderStyle"
+old = "craft_ui::composites::panel_header::PanelHeaderStyle"
+new = ""
+status = "replaced"
+note = "`TitleRowStyle`: height and type role come from `HeaderStrength`."
+
+[[type]]
+name = "PanelHeaderResponse"
+old = "craft_ui::composites::panel_header::PanelHeaderResponse"
+new = ""
+status = "replaced"
+note = "`TitleOutput { edit, action, menu_rect }`: the action part taken is `action: Option<HeaderAction>` and `menu_rect: Option<Rect>` is the `HeaderAction::Menu` part's rect, to hang a menu under the button; a drag of the header is the container's `DragBand`, not a response flag."
+
+[[type]]
+name = "InspectorHeader"
+old = "craft_ui::patterns::inspector::InspectorHeader"
+new = ""
+status = "replaced"
+note = "`TitleRow::new(name).icon(IconSpec::svg(..)).subtitle(kind)`. The row drops the subtitle, instead of eliding the name, when both do not fit; `title_only(name)` is a `TitleRow` with no icon."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+
+[[setter]]
+type = "SectionHeader"
+old = "new(id_salt, title)"
+new = "Section::new(title, open: Bind<bool>)"
+note = "The id salt is `.id_salt(salt)`; the title is the label."
+
+[[setter]]
+type = "SectionHeader"
+old = "open(&mut bool)"
+new = "Section::new(title, Bind::bound(&mut bool))"
+note = "The open state is the constructor's binding."
+
+[[setter]]
+type = "SectionHeader"
+old = "collapsible(false)"
+new = "Section::fixed(title)"
+
+[[setter]]
+type = "SectionHeader"
+old = "drag(true)"
+new = "Section::reorder(true)"
+note = "The header's `DragBand::Reorder`; the host reads the reorder from the container, not from `drag_started` on a response."
+
+[[setter]]
+type = "SectionHeader"
+old = "controls(closure)"
+new = "Section::actions([HeaderAction::Menu])"
+note = "Trailing controls are the `HeaderAction` parts; a section count or info button is not a title row part."
+
+[[setter]]
+type = "SectionHeader"
+old = "caption(true)"
+new = ""
+note = "A caption title is `HeaderStrength::Caption`; a section header has the section strength."
+
+[[setter]]
+type = "SectionHeader"
+old = "show_row(ui, rect)"
+new = ""
+note = "A pinned copy of a header is a `TitleRow` shown at the rect with `show_at`."
+
+[[setter]]
+type = "GroupBox"
+old = "new(title)"
+new = "new(title, gate: Option<Bind<bool>>)"
+
+[[setter]]
+type = "GroupBox"
+old = "checkbox(&mut bool)"
+new = "new(title, Some(Bind::bound(&mut bool)))"
+
+[[setter]]
+type = "PanelHeader"
+old = "menu(bool), float(bool), close(bool)"
+new = "TitleRow::actions([HeaderAction::Menu, HeaderAction::Float, HeaderAction::Close])"
+
+[[setter]]
+type = "PanelHeader"
+old = "menu_label(..), float_label(..), close_label(..)"
+new = ""
+note = "The action labels are `SectionWords` entries (`menu`, `float`, `close`), translated by the word-set."
+
+[[setter]]
+type = "PanelHeader"
+old = "show(ui, add_actions)"
+new = ""
+note = "No closure of free controls: the actions are `HeaderAction` parts."
+
+[[setter]]
+type = "InspectorHeader"
+old = "new(icon, name)"
+new = "TitleRow::new(name).icon(IconSpec::svg(..))"
+
+[[setter]]
+type = "InspectorHeader"
+old = "title_only(name)"
+new = "TitleRow::new(name)"
+
+[[setter]]
+type = "InspectorHeader"
+old = "kind(kind)"
+new = "TitleRow::subtitle(kind)"

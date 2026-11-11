@@ -1,0 +1,226 @@
+# API map of the "Brush, stroke and fill UI" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Brush, stroke and fill UI"
+new_module = "craft_draw::ui"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+# One entry per renamed, removed or reshaped setter or constructor.
+# [[setter]]
+# type = ""
+# old = ""
+# new = ""
+
+# draw-stroke-fill
+
+[[type]]
+name = "StrokeEditor"
+old = "craft_draw::ui::StrokeEditor"
+new = "craft_draw::ui::stroke::StrokeEditor"
+status = "moved"
+note = "A pattern: `new(label, Bind<StrokeStyle>)` replaces `new(id_salt, &value, &numbers)`; output `StrokeEditorOutput`. `labels`, `look` and `style(tokens)` are removed: words are `StrokeWords`, sizes come from each control."
+
+[[type]]
+name = "StrokeEditorResponse"
+old = "craft_draw::ui::StrokeEditorResponse"
+new = ""
+status = "removed"
+note = "`response`, `event`, `field` and `choice` as before; the event is the new `EditEvent<StrokeStyle>`."
+
+[[type]]
+name = "StrokeEditorOutput"
+old = ""
+new = "craft_draw::ui::stroke::StrokeEditorOutput"
+status = "replaced"
+note = "`response`, `event`, `field` and `choice` as before; the event is the new `EditEvent<StrokeStyle>`."
+
+[[type]]
+name = "StrokeEditorStyle"
+old = "craft_draw::ui::StrokeEditorStyle"
+new = ""
+status = "removed"
+note = "Component styles: the controls size themselves, the sample ink is the painter's."
+
+[[type]]
+name = "StrokeLabels"
+old = "craft_draw::ui::StrokeLabels"
+new = ""
+status = "removed"
+note = "Word ids unchanged (`words!`)."
+
+[[type]]
+name = "StrokeWords"
+old = ""
+new = "craft_draw::ui::stroke::StrokeWords"
+status = "replaced"
+note = "Word ids unchanged (`words!`)."
+
+[[type]]
+name = "StrokeButton"
+old = "craft_draw::ui::StrokeButton"
+new = "craft_draw::ui::stroke::StrokeButton"
+status = "moved"
+note = "A leaf: `new(label, Bind<StrokeStyle>, open: Bind<bool>)`, `show(ui)` replaces `show(ui, &mut open)`; `open` follows the popover. `enabled(bool)` for a stroke that is off is `stroked(bool)`."
+
+[[type]]
+name = "StrokeButtonResponse"
+old = "craft_draw::ui::StrokeButtonResponse"
+new = ""
+status = "removed"
+note = "The output is `EditResponse<StrokeStyle>`."
+
+[[type]]
+name = "StrokePreview"
+old = "craft_draw::ui::StrokePreview"
+new = "craft_draw::ui::stroke::StrokePreview"
+status = "moved"
+note = "A helper: `new(value, width)` has no colour (the ink comes from the painter); `shapes(rect)` gives `Vec<PaintShape>`; `paint(&ContentPainterCx, rect)` fills them."
+
+[[type]]
+name = "StrokeChoiceRow"
+old = "craft_draw::ui::StrokeChoiceRow"
+new = "craft_draw::ui::stroke::StrokeChoiceRow"
+status = "moved"
+note = "`new(id, label, choices)`, `selected(Mixed<&str>)`; `paint(ChoicePainter)` takes a `ContentPainterCx`."
+
+[[type]]
+name = "StrokeSections"
+old = "craft_draw::ui::StrokeSections"
+new = "craft_draw::ui::stroke::StrokeSections"
+status = "moved"
+
+[[type]]
+name = "StrokeMixed"
+old = "craft_draw::ui::StrokeMixed"
+new = "craft_draw::ui::stroke::StrokeMixed"
+status = "moved"
+note = "Non-exhaustive: set fields on `StrokeMixed::default()`."
+
+[[type]]
+name = "StrokeField"
+old = "craft_draw::ui::StrokeField"
+new = "craft_draw::ui::stroke::StrokeField"
+status = "moved"
+
+[[type]]
+name = "StrokeChoice"
+old = "craft_draw::ui::StrokeChoice"
+new = "craft_draw::ui::stroke::StrokeChoice"
+status = "moved"
+
+[[type]]
+name = "PictureFillEditor"
+old = "craft_draw::ui::PictureFillEditor"
+new = "craft_draw::ui::picture_fill::PictureFillEditor"
+status = "moved"
+note = "A pattern: `new(label, Bind<PictureFill>)` replaces `new(id_salt, &fill)`; Insert… files a path request in the output."
+
+[[type]]
+name = "PictureFill"
+old = "craft_draw::ui::PictureFill"
+new = "craft_draw::ui::picture_fill::PictureFill"
+status = "moved"
+
+[[type]]
+name = "PictureMode"
+old = "craft_draw::ui::PictureMode"
+new = "craft_draw::ui::picture_fill::PictureMode"
+status = "moved"
+note = "The `Stretch` and `Tile` variants are `#[non_exhaustive]`: build them with `PictureMode::stretch(offsets)` and `PictureMode::tile(offset, scale, alignment, mirror)`; their patterns take `..`."
+
+[[type]]
+name = "PictureFillEvent"
+old = "craft_draw::ui::PictureFillEvent"
+new = ""
+status = "removed"
+note = "`PictureFillOutput.event` and `PictureFillOutput.requests` (the host answers the path request `PICTURE_FILL_KEY`, reads and stores the picture, and sets `PictureFill::source`)."
+
+[[type]]
+name = "PictureFillLabels"
+old = "craft_draw::ui::PictureFillLabels"
+new = ""
+status = "removed"
+note = "Word ids unchanged (`words!`)."
+
+[[type]]
+name = "PictureFillWords"
+old = ""
+new = "craft_draw::ui::picture_fill::PictureFillWords"
+status = "replaced"
+note = "Word ids unchanged (`words!`)."
+
+[[setter]]
+type = "StrokeEditor"
+old = "new(id_salt, &value, &numbers)"
+new = "new(label, Bind<StrokeStyle>)"
+
+[[setter]]
+type = "StrokeEditor"
+old = "labels(StrokeLabels)"
+new = ""
+note = "Words are `StrokeWords`."
+
+[[setter]]
+type = "StrokeEditor"
+old = "look(StrokeEditorStyle)"
+new = ""
+note = "Removed with the component style."
+
+[[setter]]
+type = "StrokeButton"
+old = "new(id_salt, &value, &numbers)"
+new = "new(label, Bind<StrokeStyle>, Bind<bool>)"
+
+[[setter]]
+type = "StrokeButton"
+old = "show(ui, &mut open)"
+new = "show(ui)"
+note = "The open state is the `open` binding."
+
+[[setter]]
+type = "StrokeButton"
+old = "enabled(bool)"
+new = "stroked(bool)"
+note = "Whether the shape has a stroke; the control's own enabled state is `Props::enabled`."
+
+[[setter]]
+type = "StrokeButton"
+old = "labels(StrokeLabels)"
+new = ""
+note = "Words are `StrokeWords`."
+
+[[setter]]
+type = "StrokeButton"
+old = "look(StrokeEditorStyle)"
+new = ""
+note = "Removed with the component style."
+
+[[setter]]
+type = "StrokePreview"
+old = "new(value, width, color)"
+new = "new(value, width)"
+note = "The ink comes from the painter."
+
+[[setter]]
+type = "StrokeChoiceRow"
+old = "paint(Fn(&Painter, Rect, &StrokeChoice))"
+new = "paint(ChoicePainter)"
+note = "`ChoicePainter::new(Fn(&ContentPainterCx, Rect, &StrokeChoice))`."
+
+[[setter]]
+type = "StrokeChoiceRow"
+old = "selected(MixedValue<&str>)"
+new = "selected(Mixed<&str>)"
+
+[[setter]]
+type = "PictureFillEditor"
+old = "new(id_salt, &fill)"
+new = "new(label, Bind<PictureFill>)"
+
+[[setter]]
+type = "PictureFillEditor"
+old = "labels(PictureFillLabels)"
+new = ""
+note = "Words are `PictureFillWords`."

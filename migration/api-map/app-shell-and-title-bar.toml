@@ -1,0 +1,760 @@
+# API map of the "App shell and title bar" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "App shell and title bar"
+new_module = "craft_ui::shell"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "AppShell"
+old = "craft_ui::shell::AppShell"
+new = "craft_ui::shell::AppShell"
+status = "same"
+note = "A pattern, `AppShell<'a, S>`: slots and the body are closures taking `(&mut Ui, &mut BodyCx, &mut S)`, each slot is a container on `Mount::Pane`, and `show(ui, &mut S)` returns `AppShellOutput`; `S = ()` for an app with no shared state. `AppShell::embedded(WindowKey)` shows a shell inside a region of another window: its screen modes act in its region and never on the OS window."
+
+[[type]]
+name = "CanvasShell"
+old = "craft_ui::shell::CanvasShell"
+new = ""
+status = "removed"
+note = "Deleted; its job is `craft_ui::shell::AppShell` with the canvas slot setters `title_bar_if(visible, f)`, `options_bar(visible, f)`, `tools(visible, f)` and `status(visible, f)`; the other setters are `AppShell`'s own. The slot keys are `craft_ui::shell::slots`."
+
+[[type]]
+name = "StartScreen"
+old = "craft_ui::shell::StartScreen"
+new = "craft_ui::shell::StartScreen"
+status = "same"
+note = "A `Pattern`: `StartScreen::new(Bind<RecentView>, Bind<RecentSort>, &[RecentFile], &Collator)`, `show(self, ui) -> StartOutput` (actions in `StartOutput.actions`)."
+
+[[type]]
+name = "TitleBar"
+old = "craft_ui::title_bar::TitleBar"
+new = "craft_ui::shell::TitleBar"
+status = "replaced"
+note = "A container on a chrome surface in the title slot: its body is the leading content, `trailing(f)` the content before the end's captions, `show_titled(ui, Title, leading, trailing)` adds the title between them. The free bar is its move band (the body step moves the window); the frame comes from `WindowHost::frame()` (`frame(Frame)` overrides it for a story). Output `TitleBarOutput`. The docking `TitleBar` of `craft_ui::docking::chrome` goes to the floating frame track."
+
+[[type]]
+name = "ViewportWindow"
+old = "craft_ui::viewport::ViewportWindow"
+new = "craft_ui::shell::ViewportWindow"
+status = "moved"
+note = "A `Pattern` over `Dialog::viewport()`: `ViewportWindow::new(title).app_modal(bool).overlay(FnOnce(Overlay) -> Overlay).remember(SaveKey).show(ui, body) -> ViewportWindowOutput`. It has no viewport id and no builder: the dialog identifies and places the window."
+
+[[type]]
+name = "ShellCx"
+old = "craft_ui::shell::ShellCx"
+new = "craft_ui::runtime::env::ShellCx"
+status = "moved"
+note = "Read through `BodyCx::shell() -> Option<ShellCx>`, which returns a clone; built with `ShellCx::new`, `detached` or the `with_*` builders."
+
+[[type]]
+name = "Slot"
+old = "craft_ui::shell::Slot"
+new = "craft_ui::shell::Slot"
+status = "same"
+note = "Sizes are `SlotSize` names; the label is a `Label`; `frame` is gone."
+
+[[type]]
+name = "SlotKey"
+old = "craft_ui::shell::SlotKey"
+new = "craft_ui::runtime::env::SlotKey"
+status = "moved"
+
+[[type]]
+name = "WindowKey"
+old = "craft_ui::shell::WindowKey"
+new = "craft_ui::runtime::env::WindowKey"
+status = "moved"
+
+[[type]]
+name = "BodyMode"
+old = "craft_ui::shell::BodyMode"
+new = "craft_ui::runtime::env::BodyMode"
+status = "moved"
+
+[[type]]
+name = "Edge"
+old = "craft_ui::shell::Edge"
+new = ""
+status = "replaced"
+note = "`craft_ui::contract::PaneEdge` (`Center`, `Start`, `End`, `Top`, `Bottom`); the shell adds no second edge type."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+# [[setter]]
+# type = ""
+# old = ""
+# new = ""
+
+# Window edge zones, the drag strip and the caption record (winhost cleanup).
+
+[[type]]
+name = "CaptionRegions"
+old = "craft_ui::title_bar::CaptionRegions"
+new = "craft_ui::shell::CaptionRegions"
+status = "replaced"
+note = "A trait with `button`, `drag` and `native_hit_test` methods becomes the record `CaptionRegions { buttons, edges, moves }` that `WindowHost::caption_regions(viewport)` derives from the window's exclusive parts: a bar tags its parts with `PartBuilder::exclusive(WindowHit::Caption(button))` or `WindowHit::Move`, and publishes nothing."
+
+[[type]]
+name = "Caption"
+old = "craft_ui::title_bar::Caption"
+new = "craft_ui::shell::Caption"
+status = "moved"
+
+[[type]]
+name = "resize_zones_only"
+old = "craft_ui::title_bar::resize_zones_only"
+new = ""
+status = "replaced"
+note = "The edge zones are the body step's resize grips of a container in an OS window; there is no separate call."
+
+[[type]]
+name = "release_after_os_resize"
+old = "craft_ui::title_bar::release_after_os_resize"
+new = ""
+status = "replaced"
+note = "The runtime ends a press the operating system took over; an app installs no raw-input hook for it."
+
+[[setter]]
+type = "Slot"
+old = "height(f32)"
+new = "size(SlotSize)"
+note = "A size is a named theme size: `SlotSize::TitleBar`, `TabBar`, `StatusBar`, `OptionsBar`, `OptionsBarNarrow`, `RailWidth` (per column; `Slot::columns(n)` says how many rail columns)."
+
+[[setter]]
+type = "Slot"
+old = "width(f32)"
+new = "size(SlotSize)"
+note = "A size is a named theme size: `SlotSize::RailWidth` for a rail."
+
+[[setter]]
+type = "Slot"
+old = "size(f32)"
+new = "size(SlotSize)"
+note = "No point sizes: the slot takes a named theme size."
+
+[[setter]]
+type = "Slot"
+old = "frame(Frame)"
+new = ""
+note = "removed: the slot's container paints its own surface."
+
+[[setter]]
+type = "ShellCx"
+old = "canvas(CanvasId)"
+new = ""
+note = "removed: the key stage asks the focused component's `KeyUse` whether Tab toggles the chrome, so a canvas registers nothing."
+
+# App shell, canvas preset, screen modes and reveal (shell-a).
+
+[[type]]
+name = "ShellOutput"
+old = "craft_ui::shell::ShellOutput"
+new = ""
+status = "removed"
+note = "`craft_ui::shell::AppShellOutput { response, regions: ShellRegions, revealed, panels_hidden, screen_mode }`; the body closure returns nothing."
+
+[[type]]
+name = "AppShellOutput"
+old = ""
+new = "craft_ui::shell::AppShellOutput"
+status = "replaced"
+note = "Replaces `ShellOutput`; the body rect and the slot rects are `regions`."
+
+[[type]]
+name = "ScreenMode"
+old = "craft_ui::shell::ScreenMode"
+new = "craft_ui::shell::ScreenMode"
+status = "same"
+note = "Held in the `screen_mode` binding of the shell; `command_id`, `from_command_id` and `menu_entries` are gone: the modes are `ScreenModeCommands` and the View menu lists those commands."
+
+[[type]]
+name = "ScreenModeCommands"
+old = ""
+new = "craft_ui::shell::ScreenModeCommands"
+status = "replaced"
+note = "Replaces `ScreenMode::command_id`, `CYCLE_COMMAND` and `ScreenModeLabels`: the window-scope commands `screenMode.standard`, `.full_screen_with_menu_bar` (alias `.fullScreenWithMenuBar`), `.full_screen` (alias `.fullScreen`), `.cycle` (F) and `.cycle_back` (Shift+F)."
+
+[[type]]
+name = "ScreenModeLabels"
+old = "craft_ui::shell::ScreenModeLabels"
+new = ""
+status = "removed"
+note = "The command labels of `ScreenModeCommands`."
+
+[[type]]
+name = "full_screen_commands"
+old = "craft_ui::shell::full_screen_commands"
+new = ""
+status = "removed"
+note = "The shell carries out a screen-mode change itself, in the pass it is made, with `WindowAction::SetFullscreen` and `SetMaximized` through `WindowHost::act`; on Windows a maximized window is restored first and maximized again after it leaves full screen."
+
+[[type]]
+name = "CYCLE_COMMAND"
+old = "craft_ui::shell::CYCLE_COMMAND"
+new = ""
+status = "removed"
+note = "`ScreenModeCommands::Cycle`."
+
+[[type]]
+name = "CanvasLabels"
+old = "craft_ui::shell::CanvasLabels"
+new = ""
+status = "removed"
+note = "The region names are words of the shell (`ShellWords`); a slot takes its own name with `Slot::label`."
+
+[[type]]
+name = "ShellWords"
+old = ""
+new = "craft_ui::shell::ShellWords"
+status = "replaced"
+note = "The one word set of the shell family. Replaces `CanvasLabels`: the names of the shell's regions (ids `appShell.*`); the start screen's words, replacing `StartLabels` (ids `startScreen.*`); and the caption buttons' names and tooltips (ids `captionButton.minimize`, `maximize`, `restore` and `close`; `window.*` before)."
+
+[[type]]
+name = "CanvasOutput"
+old = "craft_ui::shell::CanvasOutput"
+new = ""
+status = "removed"
+note = "`craft_ui::shell::CanvasPanelOutput { response, rail, tabs, document }`."
+
+[[type]]
+name = "CanvasPanelOutput"
+old = ""
+new = "craft_ui::shell::CanvasPanelOutput"
+status = "replaced"
+note = "Replaces `CanvasOutput`."
+
+[[type]]
+name = "PanelOptions"
+old = "craft_ui::shell::PanelOptions"
+new = ""
+status = "removed"
+note = "`craft_ui::shell::CanvasPanel`: `rail(label, f)`, `tabs(f)` and `opening(bool)`; the rail and tabs are filled with `rails::PanelRail` and `tabs::DocumentTabs`."
+
+[[type]]
+name = "CanvasPanel"
+old = ""
+new = "craft_ui::shell::CanvasPanel"
+status = "replaced"
+note = "Replaces `ShellCx::canvas_panel` and `canvas_panel_with` with `PanelOptions`."
+
+[[type]]
+name = "PanelRail"
+old = "craft_ui::shell::PanelRail"
+new = ""
+status = "removed"
+note = "The shell's own rail configuration; use `craft_ui::rails::PanelRail` inside `CanvasPanel::rail`."
+
+[[type]]
+name = "tab_toggles_chrome"
+old = "craft_ui::shell::tab_toggles_chrome"
+new = ""
+status = "removed"
+note = "The key stage decides it (`RootEnv.tab_toggles_chrome` and the canvas marker `KeyUse::chrome_key`)."
+
+[[type]]
+name = "take_tab_toggle"
+old = "craft_ui::shell::take_tab_toggle"
+new = ""
+status = "removed"
+note = "No raw-input hook and no app plumbing: the key stage records the toggle and the window's `AppShell` takes it in the same pass."
+
+[[type]]
+name = "chrome_toggles"
+old = ""
+new = ""
+status = "removed"
+note = "The shell takes its window's toggles from the frame state; menu and palette fires of the chrome commands reach the focused window's shell in the next pass."
+
+[[setter]]
+type = "AppShell"
+old = "title(Slot, f)"
+new = "title(Slot, f) or title_bar(f)"
+note = "The closures take `(&mut Ui, &mut BodyCx, &mut S)`."
+
+[[setter]]
+type = "AppShell"
+old = "body_mode(BodyMode)"
+new = "screen_mode(Bind<ScreenMode>)"
+note = "The body mode follows the screen mode; a window that hides its chrome has `ScreenMode::FullScreen`."
+
+[[setter]]
+type = "AppShell"
+old = "backdrop(Option<Color32>)"
+new = ""
+note = "The body paints the theme's canvas surface, and the scrim in body-only mode."
+
+[[setter]]
+type = "AppShell"
+old = "show(ui, body)"
+new = "body(f).show(ui, &mut S)"
+note = "The body closure is set with `body`; the shell data is `BodyCx::shell()`."
+
+[[setter]]
+type = "AppShell"
+old = "toggle_reveal(ctx, window)"
+new = ""
+note = "The shell takes its window's Tab toggles itself; `clear_reveal` and `reveal_active` are gone (a screen-mode change ends a reveal)."
+
+[[setter]]
+type = "AppShell"
+old = "labels(CanvasLabels)"
+new = ""
+note = "The regions are named by `ShellWords`."
+
+[[setter]]
+type = "AppShell"
+old = "options(bool, f)"
+new = "options_bar(bool, f)"
+note = "Renamed: a method named `options` trips the egui-behaviour lint."
+
+# Start screen and app windows.
+
+[[type]]
+name = "RecentFile"
+old = "craft_ui::shell::RecentFile"
+new = "craft_ui::shell::RecentFile"
+status = "same"
+note = "`#[non_exhaustive]`: `RecentFile::new(path, name)` then set `opened`, `created` and `thumbnail`. `thumbnail` is an `Option<Revision>` of the picture stored under `ThumbKey::Recent(path)`, not an `egui::TextureId`."
+
+[[type]]
+name = "Template"
+old = "craft_ui::shell::Template"
+new = "craft_ui::shell::Template"
+status = "same"
+note = "`#[non_exhaustive]`: `Template::new(id, name, detail)` then set `thumbnail`, an `Option<Revision>` of the picture stored under `ThumbKey::Template(id)`."
+
+[[type]]
+name = "RecentView"
+old = "craft_ui::shell::RecentView"
+new = "craft_ui::shell::RecentView"
+status = "same"
+note = "`#[non_exhaustive]`; the app owns it as a `Bind<RecentView>`."
+
+[[type]]
+name = "RecentSort"
+old = "craft_ui::shell::RecentSort"
+new = "craft_ui::shell::RecentSort"
+status = "same"
+note = "`#[non_exhaustive]`; the app owns it as a `Bind<RecentSort>`."
+
+[[type]]
+name = "StartAction"
+old = "craft_ui::shell::StartAction"
+new = "craft_ui::shell::StartAction"
+status = "same"
+note = "`ViewChanged` is gone: the view and sort are the app's bindings, written when the user changes them."
+
+[[type]]
+name = "sort_recent"
+old = "craft_ui::shell::sort_recent"
+new = "craft_ui::shell::sort_recent"
+status = "same"
+
+[[type]]
+name = "StartLabels"
+old = "craft_ui::shell::StartLabels"
+new = ""
+status = "removed"
+note = "Replaced by `ShellWords`, the installed word set; the screen takes no labels."
+
+[[type]]
+name = "ThumbKey"
+old = ""
+new = "craft_ui::shell::ThumbKey"
+status = "replaced"
+note = "The texture-store key of a start screen picture (a recent file's path or a template's id); replaces the `egui::TextureId` fields."
+
+[[type]]
+name = "StartOutput"
+old = ""
+new = "craft_ui::shell::StartOutput"
+status = "replaced"
+note = "`show` returns it in place of `Vec<StartAction>`: `output.actions`."
+
+[[type]]
+name = "StartRecentCommands"
+old = ""
+new = "craft_ui::shell::StartRecentCommands"
+status = "replaced"
+note = "The recent files' context menu rows as commands (Open, Remove from Recent, Clear Recent Files, Show in Folder)."
+
+[[type]]
+name = "StartPinnedCommands"
+old = ""
+new = "craft_ui::shell::StartPinnedCommands"
+status = "replaced"
+note = "The pinned folders' context menu rows as commands (Open, Unpin)."
+
+[[type]]
+name = "ViewportWindowOutput"
+old = ""
+new = "craft_ui::shell::ViewportWindowOutput"
+status = "replaced"
+note = "Replaces `ViewportResponse`: `close_requested` is the close reason when the window asked to close."
+
+[[type]]
+name = "Hosting"
+old = "craft_ui::viewport::Hosting"
+new = ""
+status = "removed"
+note = "The dialog chooses an OS window or its fallback layer; the body does not learn which."
+
+[[type]]
+name = "ViewportResponse"
+old = "craft_ui::viewport::ViewportResponse"
+new = ""
+status = "removed"
+note = "Replaced by `ViewportWindowOutput`."
+
+[[setter]]
+type = "StartScreen"
+old = "new(id_salt)"
+new = "new(Bind<RecentView>, Bind<RecentSort>, &[RecentFile], &Collator)"
+note = "The screen's identity comes from its place; the view, sort, files and collator are constructor arguments."
+
+[[setter]]
+type = "StartScreen"
+old = "recent(&[RecentFile])"
+new = "new(.., &[RecentFile], ..)"
+note = "The files are a constructor argument."
+
+[[setter]]
+type = "StartScreen"
+old = "view(RecentView, RecentSort)"
+new = "new(Bind<RecentView>, Bind<RecentSort>, ..)"
+note = "The view and sort are bindings the app owns; a change is written through them."
+
+[[setter]]
+type = "StartScreen"
+old = "labels(StartLabels)"
+new = ""
+note = "removed: the words are the installed `ShellWords`."
+
+[[setter]]
+type = "StartScreen"
+old = "id_salt(impl AsIdSalt)"
+new = ""
+note = "removed: the screen is a pattern identified by its place."
+
+[[setter]]
+type = "StartScreen"
+old = "show(&mut Ui) -> Vec<StartAction>"
+new = "show(self, &mut Ui) -> StartOutput"
+note = "The actions are `StartOutput.actions`."
+
+[[setter]]
+type = "ViewportWindow"
+old = "new(ViewportId, ViewportBuilder)"
+new = "new(title)"
+note = "The title is the constructor argument. The builder's inner and minimum sizes and the opening position go on the fallback layer through `overlay`: `.overlay(|overlay| overlay.size_limits(SizeLimits::new(min, max)).placed(rect))`; the layer starts as the resizable dialog layer."
+
+[[setter]]
+type = "ViewportWindow"
+old = "title(impl Into<String>)"
+new = "new(title)"
+
+[[setter]]
+type = "ViewportWindow"
+old = "app_modal(bool /*scrim*/)"
+new = "app_modal(bool)"
+note = "On by default; `app_modal(false)` is a tool window. The backdrop is the dialog's."
+
+[[setter]]
+type = "ViewportWindow"
+old = "embedded(bool)"
+new = ""
+note = "removed: where OS windows are unavailable the fallback layer is the embedded window."
+
+[[setter]]
+type = "ViewportWindow"
+old = "show(&Context, FnMut(&mut Ui, Hosting)) -> ViewportResponse"
+new = "show(self, &mut Ui, FnMut(&mut Ui, &mut BodyCx)) -> ViewportWindowOutput"
+
+# Caption buttons and the caption icon theme (titlebar-b).
+
+[[type]]
+name = "CaptionButtons"
+old = "craft_ui::title_bar::CaptionButtons"
+new = ""
+status = "removed"
+note = "`CaptionButton`: one leaf per caption, shown by the title bar, which sends the window command of the click. The slot layout is `CaptionPlan`."
+
+[[type]]
+name = "CaptionButton"
+old = ""
+new = "craft_ui::shell::CaptionButton"
+status = "replaced"
+note = "`CaptionButton::new(Caption, CaptionFamily)` with `maximized(bool)`, `outermost(CaptionEnd)` and `icons(&CaptionIcons)`; the window's active state comes from the environment, and the labels are the `ShellWords` caption words."
+
+[[type]]
+name = "caption_buttons"
+old = "craft_ui::title_bar::caption_buttons"
+new = ""
+status = "removed"
+note = "Show a `CaptionButton` per caption of a `CaptionPlan`."
+
+[[type]]
+name = "caption_id"
+old = "craft_ui::title_bar::caption_id"
+new = ""
+status = "removed"
+note = "A button's id comes from the component's own id; tests find it by its `WindowHit::Caption` part in `WindowHost::caption_regions`."
+
+[[type]]
+name = "CaptionLabels"
+old = "craft_ui::title_bar::CaptionLabels"
+new = ""
+status = "removed"
+note = "Replaced by the caption words of `ShellWords`."
+
+[[type]]
+name = "CaptionIcon"
+old = "craft_ui::title_bar::CaptionIcon"
+new = "craft_ui::shell::CaptionIcon"
+status = "moved"
+
+[[type]]
+name = "CaptionIcons"
+old = "craft_ui::title_bar::CaptionIcons"
+new = "craft_ui::shell::CaptionIcons"
+status = "moved"
+note = "The fields are readers `theme()` and `generation()`; `CaptionIcons::new(theme, generation, render)`, `from_files` and `from_theme(name, bases, &dyn ThemeFiles)` build one."
+
+[[type]]
+name = "RenderIconFn"
+old = "craft_ui::title_bar::RenderIconFn"
+new = "craft_ui::shell::RenderIconFn"
+status = "moved"
+note = "The mask is a shared slice, `CaptionMask`."
+
+[[type]]
+name = "CaptionIconCache"
+old = "craft_ui::title_bar::CaptionIconCache"
+new = ""
+status = "removed"
+note = "The textures come from `primitives::TextureCache`; the background load of a theme is a platform service that answers `ThemeFiles` and builds `CaptionIcons`."
+
+[[type]]
+name = "caption_icon_theme"
+old = "craft_ui::title_bar::caption_icon_theme"
+new = "craft_ui::shell::caption_icon_theme"
+status = "moved"
+
+[[type]]
+name = "CaptionFamily"
+old = "craft_ui::title_bar::CaptionFamily"
+new = "craft_ui::shell::CaptionFamily"
+status = "moved"
+note = "Re-exported from `craft_window::policy`."
+
+[[type]]
+name = "Captions"
+old = "craft_ui::title_bar::Captions"
+new = "craft_ui::shell::Captions"
+status = "moved"
+note = "Re-exported from `craft_window::policy`."
+
+[[type]]
+name = "Frame"
+old = "craft_ui::title_bar::Frame"
+new = "craft_ui::shell::Frame"
+status = "moved"
+note = "Re-exported from `craft_window::policy`."
+
+[[type]]
+name = "MacInset"
+old = "craft_ui::title_bar::MacInset"
+new = "craft_ui::shell::MacInset"
+status = "moved"
+note = "Re-exported from `craft_window::policy`."
+
+[[type]]
+name = "WINDOWS_BUTTON_WIDTH"
+old = "craft_ui::title_bar::WINDOWS_BUTTON_WIDTH"
+new = ""
+status = "removed"
+note = "Crate-private: the Windows family's caption metrics; an app reads the width from `CaptionPlan::place`."
+
+[[setter]]
+type = "CaptionButton"
+old = "CaptionButtons::new(&Captions, &TitleBarStyle)"
+new = "CaptionButton::new(Caption, CaptionFamily)"
+note = "One button per caption; the family comes from the `Captions`, the look from the theme."
+
+[[setter]]
+type = "CaptionButton"
+old = "window(impl Hash)"
+new = ""
+note = "removed: the component's id salt (`id_salt`) names the window's buttons."
+
+[[setter]]
+type = "CaptionButton"
+old = "labels(&CaptionLabels)"
+new = ""
+note = "removed: the labels are the `ShellWords` caption words of the scope, translated with the catalog."
+
+[[setter]]
+type = "CaptionButton"
+old = "icons(Option<&CaptionIcons>)"
+new = "icons(&CaptionIcons)"
+note = "`None` is the call left out."
+
+[[setter]]
+type = "CaptionButton"
+old = "show(ui, bar)"
+new = "show_at(ui, slot.rect)"
+note = "The title bar shows each button at its `CaptionSlot::rect` and reads the click from the response."
+
+# Title bar: the bar, its title and its output (titlebar-a).
+
+[[type]]
+name = "BarSlots"
+old = "craft_ui::title_bar::BarSlots"
+new = ""
+status = "removed"
+note = "The bar's rects are the container's regions: the start end is the header, the leading content the body, the trailing content and the end's captions the end region. A body reads its room with `BodyCx::rect`."
+
+[[type]]
+name = "TitleBarResponse"
+old = "craft_ui::title_bar::TitleBarResponse"
+new = ""
+status = "removed"
+note = "Replaced by `TitleBarOutput { response, caption_clicked, close_requested }`."
+
+[[type]]
+name = "TitleBarOutput"
+old = ""
+new = "craft_ui::shell::TitleBarOutput"
+status = "replaced"
+note = "Replaces the legacy `TitleBarResponse`: `TitleBarOutput { response, caption_clicked, close_requested }`."
+
+[[type]]
+name = "LeadingEnd"
+old = "craft_ui::title_bar::LeadingEnd"
+new = ""
+status = "removed"
+note = "The caption groups sit at the physical ends the window's `Captions` layout names; a right-to-left window mirrors the Windows layout and keeps the Linux layouts as set. The bar needs no end argument."
+
+[[type]]
+name = "Title"
+old = "craft_ui::title_bar::Title"
+new = "craft_ui::shell::Title"
+status = "moved"
+note = "`Title::new(text)` and `Title::unsaved(text)`; the unsaved mark is an asterisk after the text and the description `titleBar.unsaved`. `Title::span(centre, free, width)` is the placement rule."
+
+[[type]]
+name = "TitleBarStyle"
+old = "craft_ui::title_bar::TitleBarStyle"
+new = "craft_ui::shell::TitleBarStyle"
+status = "replaced"
+note = "The 24-field `from_tokens` style is the component style: the bar's height is `SlotSize::TitleBar`, the caption colours and metrics are `CaptionButton`'s, the rule is one device pixel (`RuleKind::Divider`), the gaps are the body's row gap."
+
+[[type]]
+name = "ModalRects"
+old = "craft_ui::title_bar::ModalRects"
+new = ""
+status = "replaced"
+note = "No app step: a modal `Dialog` keeps the window draggable by the drag areas it covers. While it is the top layer it puts a `ModalDragStrip` (crate-private) on an `Overlay::modal_chrome(rect)` layer over each drag area of the window's last pass that its cover hides, less the caption buttons and the dialog itself; the layer's move band moves the window (`Overlay::moves_window`), and a double click on it acts as on the title bar (`runtime::windows::double_click_action`)."
+
+[[type]]
+name = "WindowState"
+old = "craft_ui::title_bar::WindowState"
+new = ""
+status = "removed"
+note = "The window's state is read from the window (`WindowFacts.state`); `TitleBar::maximized(bool)` overrides it for a story."
+
+[[setter]]
+type = "TitleBar"
+old = "new(&Frame)"
+new = "new()"
+note = "The frame is the running window's (`WindowHost::frame()`); `frame(Frame)` overrides it."
+
+[[setter]]
+type = "TitleBar"
+old = "style(TitleBarStyle)"
+new = ""
+note = "removed: the style comes from the theme."
+
+[[setter]]
+type = "TitleBar"
+old = "id_salt(impl Hash)"
+new = "id_salt(impl Hash)"
+
+[[setter]]
+type = "TitleBar"
+old = "labels(&CaptionLabels)"
+new = ""
+note = "removed: the caption words are `ShellWords`."
+
+[[setter]]
+type = "TitleBar"
+old = "icons(Option<&CaptionIcons>)"
+new = "icons(&CaptionIcons)"
+
+[[setter]]
+type = "TitleBar"
+old = "regions(&mut dyn CaptionRegions)"
+new = ""
+note = "removed: the buttons and the move band are exclusive parts that `WindowHost::caption_regions` reads."
+
+[[setter]]
+type = "TitleBar"
+old = "native_hit_test(bool)"
+new = ""
+note = "removed: the platform's hit test reads `WindowHost::caption_regions`; the body step leaves move and resize to the platform where it answers."
+
+[[setter]]
+type = "TitleBar"
+old = "title(&str)"
+new = "show_titled(ui, Title, leading, trailing)"
+
+[[setter]]
+type = "TitleBar"
+old = "title_when_native(bool)"
+new = "title_when_native()"
+
+[[setter]]
+type = "TitleBar"
+old = "preview(WindowState)"
+new = "maximized(bool)"
+note = "`frame(Frame)` previews a frame mode; there is no active-state preview: the caption colours follow the window's focus."
+
+[[setter]]
+type = "TitleBar"
+old = "background(Color32)"
+new = ""
+note = "removed: the surface is the chrome surface of the theme."
+
+[[setter]]
+type = "TitleBar"
+old = "separator(bool)"
+new = ""
+note = "removed: the bar always draws its one-device-pixel rule."
+
+[[setter]]
+type = "TitleBar"
+old = "show(ui, f)"
+new = "show(ui, body)"
+note = "`ShowContainer::show`: the body is the leading content."
+
+[[setter]]
+type = "TitleBar"
+old = "show_titled(ui, leading, trailing)"
+new = "show_titled(ui, Title, leading, trailing)"
+
+[[setter]]
+type = "TitleBar"
+old = "modal_drag_overlay(ctx, rects)"
+new = ""
+note = "replaced: a modal `Dialog` keeps the bar draggable itself; see ModalRects."
+
+# Stage-3 cleanup, fshell.
+
+[[type]]
+name = "WindowDialogs"
+old = ""
+new = "craft_ui::shell::WindowDialogs"
+status = "replaced"
+note = "The handle to the window's `DialogHost` that `BodyCx::dialogs()` returns (`with(|host| ..)`); the `AppShell` of the window runs the host after its body."

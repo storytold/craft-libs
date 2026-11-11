@@ -1,0 +1,564 @@
+# API map of the "Form dialogs" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Form dialogs"
+new_module = "craft_ui::patterns::form_dialogs"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "ParamDialog"
+old = "craft_ui::dialog::params::ParamDialog"
+new = "craft_ui::patterns::form_dialogs::ParamDialog"
+status = "moved"
+note = "A pattern: `ParamDialog::new(key, title, params)` with `show(ui) -> ParamDialogOutput { response, closed, result, rows, values, preview_on }`. A `DialogHost` owns it as `HostedParamDialog`, whose `build` closure makes the dialog over the host's values each pass."
+
+[[type]]
+name = "HostedParamDialog"
+old = ""
+new = "craft_ui::patterns::form_dialogs::HostedParamDialog"
+status = "replaced"
+note = "The `StackDialog` form of `ParamDialog`: `HostedParamDialog::new(key, fields, |fields| ParamDialog::new(..).values(Bind::bound(fields)))`, or `HostedParamDialog::command(..)` for a command form, with `fields`, `fields_mut`, `pick_color`, `pick_path`, `pick_eyedropper`, `answer_color`, `answer_path`, `answer_eyedropper` and `cancel_requests` (over an embedded `HostRequests`)."
+
+[[type]]
+name = "CommandForm"
+old = "craft_ui::dialog::command_form::CommandForm"
+new = ""
+status = "replaced"
+note = "Replaced by the constructor `ParamDialog::command(key, title, params)`: a `ParamDialog` with no `preview` and no `remember` key, with every option of `ParamDialog` (`values`, `opened`, `ok_enabled`, `ok_reason`, `ok_label`, `cancel_label`, `closable`, `outer_gesture`, `footer_extra`, `below`). Hosted, `HostedParamDialog::command(key, fields, build)`."
+
+[[type]]
+name = "ParamLayout"
+old = "craft_ui::dialog::params::ParamLayout"
+new = "craft_ui::patterns::form_dialogs::ParamLayout"
+status = "moved"
+note = "Variants are `Beside` (was `SideColumn`) and `Below` (was `BottomFooter` and `Stacked`); OK and Cancel are always the dialog's footer (`cancel_label`, `alt_resets`, `outer_gesture`, `collection_body` and `shaped(|dialog| ..)` shape it), and the Preview check box and zoom row sit over the pane."
+
+[[type]]
+name = "ParamResult"
+old = "craft_ui::dialog::params::ParamResult"
+new = "craft_ui::patterns::form_dialogs::ParamResult"
+status = "moved"
+note = "`key` and `fields` are public fields (`#[non_exhaustive]`); `remember(&self, ui)` stores the values under the dialog's `SaveKey`."
+
+[[type]]
+name = "PreviewPane"
+old = ""
+new = "craft_ui::patterns::form_dialogs::PreviewPane"
+status = "replaced"
+note = "The preview panes of `ParamDialog` and Save for Web: `PreviewPane::new(label, texture: SizedTexture, view: &PreviewView)` shows the picture; `PreviewPane::state(label, PreviewState, view)` is the second constructor; `.click_centres(bool)` is a builder (fit and the zoom range belong to the `PreviewView`). `show(ui) -> PreviewOutput { response, view: Option<PreviewView>, shown: PreviewView }` reports the next view after a pan, a zoom or a double click (which returns to fit) and the view drawn; a caller keeps `view.unwrap_or(shown)`. The pane declares AccessKit's scroll actions on the axes it pans on (`Access::pans`) and takes the wheel's scroll only on those axes (`Sense::WHEEL_X`, `WHEEL_Y`), always the zoom (`Sense::WHEEL_ZOOM`)."
+
+[[type]]
+name = "PreviewView"
+old = ""
+new = "craft_ui::patterns::form_dialogs::PreviewView"
+status = "replaced"
+note = "The one value a caller keeps per preview pane and passes to `PreviewPane` and `PreviewZoom`, both of which report the next one: `PreviewView { transform: CanvasTransform, fit: bool, range: RangeInclusive<f32> }`, built by `PreviewView::new(transform)` or `PreviewView::fitting()` and `.zoom_range(range)`."
+
+[[type]]
+name = "PreviewState"
+old = ""
+new = "craft_ui::patterns::form_dialogs::PreviewState"
+status = "replaced"
+note = "What a `PreviewPane` shows: `Pending(Option<f32>)` (the checker well with a progress line), `Ready(SizedTexture)` and `Failed(Label)` (a message line). The host encodes the preview; the dialog only shows these three."
+
+[[type]]
+name = "HostRequests"
+old = ""
+new = "craft_ui::patterns::form_dialogs::HostRequests"
+status = "replaced"
+note = "The colour, path and eyedropper requests of hosted rows, kept until the host takes them: `absorb(&mut ParamRowsOutput)`, `request_color(ColorRequest)`, `request_path(PathRequest)`, `request_eyedropper(EyedropperRequest)`, `take_color`, `take_path`, `take_eyedropper`, `cancel`. `HostedParamDialog` embeds it."
+
+[[type]]
+name = "ResetFooter"
+old = ""
+new = "craft_ui::patterns::form_dialogs::ResetFooter"
+status = "replaced"
+note = "The footer whose Cancel turns into Reset while Alt is held, shared by `ParamDialog` and other dialogs: `ResetFooter::new(ui, cancel_label, alt_resets)`, `buttons(accept, changed) -> [FooterButton; 2]` for `Dialog::buttons` (Reset is role `Other` and stays open), and `pick(DialogOutput::picked) -> Option<ResetPick>`. The restore of the values is `ParamDialog`'s own; a `LinkedSize` dialog resets through `LinkedSize::reset`."
+
+[[type]]
+name = "ResetPick"
+old = ""
+new = "craft_ui::patterns::form_dialogs::ResetPick"
+status = "replaced"
+note = "What `ResetFooter::pick` answers with: `Accept`, `Reset` or `Cancel`."
+
+[[type]]
+name = "PreviewZoom"
+old = ""
+new = "craft_ui::patterns::form_dialogs::PreviewZoom"
+status = "replaced"
+note = "The zoom-out and zoom-in buttons with the zoom percentage over the same `PreviewView` as `PreviewPane`: `PreviewZoom::new(&view)`; the buttons stay inside the view's zoom range and `show(ui)` reports `PreviewZoomOutput { response, view: Option<PreviewView> }`."
+
+
+# Parameter model and rows (form-dialogs-a).
+[[type]]
+name = "Param"
+old = "craft_ui::dialog::params::Param"
+new = "craft_ui::patterns::form_dialogs::Param"
+status = "moved"
+note = "`label`, `hint` and `tooltip` are `Label`s (a word or a string) in place of English strings the dialog translated; `unit` is a `UnitKind`; the struct is `#[non_exhaustive]`, so build it with `Param::new`."
+
+[[type]]
+name = "ParamKind"
+old = "craft_ui::dialog::params::ParamKind"
+new = "craft_ui::patterns::form_dialogs::ParamKind"
+status = "moved"
+note = "Struct-like variants are `#[non_exhaustive]`: build a kind with `ParamKind::range`, `int`, `number`, `bool`, `choice`, `angle`, `color`, `grid`, `point`, `channel`, `text` or `optional_number`. `Choice` options are `(String, Label)`."
+
+[[type]]
+name = "NumberUnit"
+old = "craft_ui::dialog::params::NumberUnit"
+new = "craft_ui::patterns::form_dialogs::NumberUnit"
+status = "moved"
+note = "`label` is a `Label`; build with `NumberUnit::new(id, kind, label, factor)`: `kind` is the `UnitKind` the number is read and shown in (`PixelsPerInch`, `PixelsPerCentimetre`), unique within a row."
+
+[[type]]
+name = "PathKind"
+old = "craft_ui::dialog::params::PathKind"
+new = "craft_ui::runtime::requests::PathKind"
+status = "moved"
+
+[[type]]
+name = "PathFilter"
+old = ""
+new = "craft_ui::runtime::requests::PathFilter"
+status = "replaced"
+note = "Moved with `PathRequest` to the host-services layer (`runtime::requests`); `IMAGE_EXTENSIONS` (the picture extensions a file dialog offers) sits beside `PathKind`."
+
+[[type]]
+name = "HostAnswer"
+old = ""
+new = "craft_ui::runtime::requests::HostAnswer"
+status = "replaced"
+note = "What the host answered to a colour, path or eyedropper request; defined with the requests in `runtime::requests`, and `HostRequests` (still in `patterns::form_dialogs`) keeps them."
+
+[[type]]
+name = "PathRequest"
+old = "craft_ui::dialog::params::PathRequest"
+new = "craft_ui::runtime::requests::PathRequest"
+status = "moved"
+note = "`#[non_exhaustive]`: build with `PathRequest::new(key, kind)`."
+
+[[type]]
+name = "EyedropperRequest"
+old = "craft_ui::dialog::params::EyedropperRequest"
+new = "craft_ui::runtime::requests::EyedropperRequest"
+status = "moved"
+note = "`#[non_exhaustive]`: build with `EyedropperRequest::new(key)`; it names the key the host answers and has no `armed` field (the sampler registration owns that)."
+
+[[type]]
+name = "CustomRow"
+old = "craft_ui::dialog::params::CustomRow"
+new = "craft_ui::patterns::form_dialogs::CustomRow"
+status = "moved"
+note = "The draw closure takes `&mut CustomContext` in place of `&CustomContext`."
+
+[[type]]
+name = "CustomContext"
+old = "craft_ui::dialog::params::CustomContext"
+new = "craft_ui::patterns::form_dialogs::CustomContext"
+status = "moved"
+note = "`pick_color(&mut self, key)` records the request, which comes back as `ParamRowsOutput::pick_color`; it no longer goes through egui temp data."
+
+[[type]]
+name = "ParamRowsResponse"
+old = "craft_ui::dialog::params::ParamRowsResponse"
+new = ""
+status = "removed"
+note = "Replaced by `ParamRowsOutput { response, changed, values, pick_color, path, eyedropper }`; `color` is `pick_color`."
+
+[[type]]
+name = "ParamRowsOutput"
+old = ""
+new = "craft_ui::patterns::form_dialogs::ParamRowsOutput"
+status = "replaced"
+note = "The output of `ParamRows::show`, in place of `ParamRowsResponse`; `values` holds the values after the pass for a binding that does not write through."
+
+[[type]]
+name = "ParamRows"
+old = "craft_ui::dialog::params::ParamRows"
+new = "craft_ui::patterns::form_dialogs::ParamRows"
+status = "moved"
+note = "A pattern on `FieldGroup`: `ParamRows::new(label, &params, Bind<DialogFields>)` in place of `new(id_salt, &params)` with `show(ui, &mut fields)`; `show(ui)` returns `ParamRowsOutput`. A `Param::section` opens a `Section` whose body is the rows up to the next section. `.read_only(true)` shows the values and refuses edits."
+
+[[type]]
+name = "DialogFields"
+old = "craft_ui::dialog::fields::DialogFields"
+new = "craft_ui::patterns::form_dialogs::DialogFields"
+status = "moved"
+
+[[type]]
+name = "FieldValue"
+old = "craft_ui::dialog::fields::FieldValue"
+new = "craft_ui::patterns::form_dialogs::FieldValue"
+status = "moved"
+
+[[type]]
+name = "ColorRequest"
+old = "craft_ui::dialog::color_request::ColorRequest"
+new = "craft_ui::runtime::requests::ColorRequest"
+status = "moved"
+note = "`title` is an `Option<Label>`; `#[non_exhaustive]`, build with `ColorRequest::new(key, color)`."
+
+# Functions the L4 properties dialog calls.
+[[call]]
+old = "translated(ctx, text)"
+new = ""
+note = "Removed: a row's label, hint, tooltip and option labels are `Label`s, so an app passes a word (`Label::from(word)`) where it passed English text for the dialog to translate."
+
+[[call]]
+old = "encode(component)"
+new = "craft_ui::patterns::form_dialogs::encode(component)"
+note = "Moved unchanged: an sRGB component in 0 to 1 as a byte."
+
+[[call]]
+old = "open_fields(ctx, id, &params, &mut fields)"
+new = "craft_ui::patterns::form_dialogs::open_fields(&params, &mut fields)"
+note = "Fills the defaults and takes the opening snapshot; the first-field focus is the dialog's `Initial::First`, so it takes no context or id."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+# Param builders.
+[[setter]]
+type = "Param"
+old = "Param::new(key, label: impl Into<String>, kind)"
+new = "Param::new(key, label: impl Into<Label>, kind)"
+
+[[setter]]
+type = "Param"
+old = "Param::number(key, label: impl Into<String>, default, step, decimals)"
+new = "Param::number(key, label: impl Into<Label>, default, step, decimals)"
+
+[[setter]]
+type = "Param"
+old = "bounds(lo, hi)"
+new = "bounds(lo, hi)"
+note = "Unchanged."
+
+[[setter]]
+type = "Param"
+old = "Param::custom(key, label, draw: Fn(&mut Ui, &mut DialogFields, &CustomContext) -> Response)"
+new = "Param::custom(key, label: impl Into<Label>, draw: Fn(&mut Ui, &mut DialogFields, &mut CustomContext) -> Response)"
+
+[[setter]]
+type = "Param"
+old = "Param::section(label: impl Into<String>)"
+new = "Param::section(label: impl Into<Label>)"
+note = "Shows as a `Section` over the rows that follow it, not a heading over a hairline."
+
+[[setter]]
+type = "Param"
+old = "Param::number_with_units(key, label: impl Into<String>, base, step, decimals, units)"
+new = "Param::number_with_units(key, label: impl Into<Label>, base, step, decimals, units)"
+
+[[setter]]
+type = "Param"
+old = "default_unit(id)"
+new = "default_unit(id)"
+note = "Unchanged."
+
+[[setter]]
+type = "Param"
+old = "visible_when(key, value)"
+new = "visible_when(key, value)"
+note = "Unchanged."
+
+[[setter]]
+type = "Param"
+old = "enabled_when(key, value)"
+new = "enabled_when(key, value)"
+note = "Unchanged."
+
+[[setter]]
+type = "Param"
+old = "browse(kind)"
+new = "browse(kind)"
+note = "Unchanged; the press comes back as `ParamRowsOutput::path`."
+
+[[setter]]
+type = "Param"
+old = "hint(text: impl Into<String>)"
+new = "hint(text: impl Into<Label>)"
+
+[[setter]]
+type = "Param"
+old = "tooltip(text: impl Into<String>)"
+new = "tooltip(text: impl Into<Label>)"
+
+[[setter]]
+type = "Param"
+old = "decimals(places)"
+new = "decimals(places)"
+note = "Unchanged."
+
+[[setter]]
+type = "Param"
+old = "randomize()"
+new = "randomize()"
+note = "Unchanged; the button draws from the sequence of `ParamRows::seed`."
+
+[[setter]]
+type = "Param"
+old = "eyedropper()"
+new = "eyedropper()"
+note = "Unchanged; the press comes back as `ParamRowsOutput::eyedropper`."
+
+[[setter]]
+type = "Param"
+old = "armed(armed)"
+new = "armed(armed)"
+note = "Unchanged."
+
+[[setter]]
+type = "Param"
+old = "full_width()"
+new = "full_width()"
+note = "Unchanged."
+
+[[setter]]
+type = "Param"
+old = "not_remembered()"
+new = "not_remembered()"
+note = "Unchanged."
+
+[[setter]]
+type = "Param"
+old = "unit(unit: Unit)"
+new = "unit(unit: UnitKind)"
+note = "`craft_ui::runtime::env::UnitKind` in place of a localized `Unit` template."
+
+[[setter]]
+type = "ParamRows"
+old = "preview(image: SizedTexture)"
+new = ""
+note = "The preview pane belongs to `ParamDialog` (form-dialogs-b); the rows take no image."
+
+[[setter]]
+type = "ParamRows"
+old = "ParamRows::show(ui, &mut fields)"
+new = "ParamRows::new(label, &params, Bind::bound(&mut fields)).show(ui)"
+
+# ParamDialog and CommandForm (form-dialogs-b).
+
+[[setter]]
+type = "ParamDialog"
+old = "ParamDialog::new(key, title: impl Into<String>, params: Vec<Param>)"
+new = "ParamDialog::new(key, title: impl Into<Label>, params: impl Into<Cow<[Param]>>)"
+
+[[setter]]
+type = "ParamDialog"
+old = "instance(id)"
+new = ""
+note = "Removed: a hosted dialog is named with `HostedParamDialog::instance`; a shown one is told apart by its key."
+
+[[setter]]
+type = "ParamDialog"
+old = "values(DialogFields)"
+new = "values(Bind<DialogFields>)"
+note = "Without a binding the dialog keeps its values between passes; the opening snapshot is taken on the first pass."
+
+[[setter]]
+type = "ParamDialog"
+old = "remember(key: impl Into<String>)"
+new = "remember(SaveKey)"
+note = "Opens with the saved values; `ParamResult::remember(ui)` stores them after the command succeeds."
+
+[[setter]]
+type = "ParamDialog"
+old = "ok_enabled(bool)"
+new = "ok_enabled(bool)"
+note = "Unchanged; `set_ok_enabled` is gone, the next pass passes the value."
+
+[[setter]]
+type = "ParamDialog"
+old = "set_ok_enabled(bool)"
+new = ""
+note = "Removed: the dialog is built each pass, so `ok_enabled` takes the current value."
+
+[[setter]]
+type = "ParamDialog"
+old = "reset_to(DialogFields)"
+new = "reset_to(DialogFields)"
+note = "Unchanged; `set_reset_to` is gone for the same reason."
+
+[[setter]]
+type = "ParamDialog"
+old = "set_reset_to(DialogFields)"
+new = ""
+note = "Removed: pass `reset_to` each pass."
+
+[[setter]]
+type = "ParamDialog"
+old = "history(bool)"
+new = ""
+note = "Removed: dialog-local history is none; a form dialog uses the app history (pilot P4)."
+
+[[setter]]
+type = "ParamDialog"
+old = "close_label(Option<String>)"
+new = "closable(bool)"
+note = "The close action is named by the dialog title row; `closable(false)` removes it."
+
+[[setter]]
+type = "ParamDialog"
+old = "footer_extra(FnMut(&mut Ui) + Send + 'static)"
+new = "footer_extra(FnMut(&mut Ui) + 'a)"
+
+[[setter]]
+type = "ParamDialog"
+old = "preview(bool)"
+new = "preview(SizedTexture)"
+note = "The picture the pane shows; a dialog without one has no Preview check box. `set_preview_image` is the next pass's `preview`, `preview_on()` is `ParamDialogOutput::preview_on`."
+
+[[setter]]
+type = "ParamDialog"
+old = "set_preview(bool)"
+new = ""
+note = "Removed: the Preview check box is the user's."
+
+[[setter]]
+type = "ParamDialog"
+old = "comparing()"
+new = ""
+note = "Removed: hold-to-compare is not ported."
+
+[[setter]]
+type = "ParamDialog"
+old = "layout(ParamLayout)"
+new = "layout(ParamLayout)"
+
+[[setter]]
+type = "ParamDialog"
+old = "width(Width)"
+new = ""
+note = "Removed: the dialog sizes to its rows and pane."
+
+[[setter]]
+type = "ParamDialog"
+old = "below(Fn(&mut Ui, &DialogFields) + Send + 'static)"
+new = "below(Fn(&mut Ui, &DialogFields) + 'a)"
+
+[[setter]]
+type = "ParamDialog"
+old = "fields() / fields_mut()"
+new = "HostedParamDialog::fields() / fields_mut()"
+note = "A shown dialog reports `ParamDialogOutput::values`."
+
+[[setter]]
+type = "ParamDialog"
+old = "pick_color() / pick_path() / pick_eyedropper()"
+new = "ParamDialogOutput::rows (`pick_color`, `path`, `eyedropper`) / HostedParamDialog::pick_color() / pick_path() / pick_eyedropper()"
+
+[[setter]]
+type = "ParamDialog"
+old = "set_color(key, Srgba)"
+new = "craft_ui::patterns::form_dialogs::set_color_field(&params, &mut fields, key, color)"
+
+[[setter]]
+type = "ParamDialog"
+old = "rows(&mut Form)"
+new = "ParamRows::new(label, &params, Bind<DialogFields>).show(ui)"
+
+[[setter]]
+type = "ParamDialog"
+old = "ParamDialog::show(ctx, stack)"
+new = "ParamDialog::show(ui) -> ParamDialogOutput"
+note = "`HostedParamDialog` keeps the `StackDialog::show(ui, stack)` form."
+
+[[setter]]
+type = "ParamDialog"
+old = "CommandForm::new(key, title: impl Into<String>, params: Vec<Param>)"
+new = "ParamDialog::command(key, title: impl Into<Label>, params: impl Into<Cow<[Param]>>)"
+
+[[setter]]
+type = "ParamDialog"
+old = "values(DialogFields)"
+new = "values(Bind<DialogFields>)"
+note = "The values are a binding; without one the form keeps its own between passes."
+
+[[setter]]
+type = "ParamDialog"
+old = "set_ok_enabled(bool)"
+new = "ok_enabled(bool)"
+note = "The app passes the state each pass; there is no setter on an open form."
+
+[[setter]]
+type = "ParamDialog"
+old = "history(bool)"
+new = "outer_gesture(bool)"
+
+[[setter]]
+type = "ParamDialog"
+old = "close_label(Option<String>)"
+new = "closable(bool)"
+note = "The close action's name is the common word; `None` becomes `closable(false)`."
+
+[[setter]]
+type = "ParamDialog"
+old = "below(impl Fn(&mut Ui, &DialogFields))"
+new = "below(impl Fn(&mut Ui, &DialogFields))"
+
+[[setter]]
+type = "ParamDialog"
+old = "footer_extra(impl FnMut(&mut Ui))"
+new = "footer_extra(impl FnMut(&mut Ui))"
+
+[[setter]]
+type = "ParamDialog"
+old = "ok_label(impl Into<String>)"
+new = "ok_label(Label)"
+
+[[setter]]
+type = "ParamDialog"
+old = "body(Body)"
+new = ""
+note = "Removed: the dialog sizes to its rows."
+
+[[setter]]
+type = "ParamDialog"
+old = "width(Width)"
+new = ""
+note = "Removed: the dialog sizes to its rows."
+
+
+# Size model and reference point (contract-sizing).
+[[type]]
+name = "LinkedSizeFields"
+old = "craft_ui::dialog::LinkedSizeFields"
+new = ""
+status = "replaced"
+note = "Replaced by `craft_ui::patterns::form_dialogs::LinkedSize`, the pure model with no rows: `new(PixelSize)`, `opening_resolution`, `points_per_inch`, `chain`, `lock`, `resampling`, `relative`, `set_unit(UnitKind)`, `set_resolution_unit(UnitKind)`, `width`, `height`, `resolution`, `set_width`, `set_height`, `set_resolution`, `pixels`. The dialogs show each field as a `UnitSelect` row over those values; Save for Web and New Document use the same model instead of their own copies. `SizeUnit` and `ResolutionUnit` are `UnitKind` (`Pixels`, `Percent`, `Points`, `Picas`, `Inches`, `Centimetres`, `Millimetres`; `PixelsPerInch`, `PixelsPerCentimetre`), and `PixelSize` is `craft_behavior::PixelSize` and has no `pixels_per_inch` field: the resolution is `LinkedSize::pixels_per_inch()`."
+
+[[type]]
+name = "Anchor"
+old = "craft_ui::dialog::Anchor"
+new = ""
+status = "replaced"
+note = "Replaced by `craft_ui::pickers::Anchor9` (`craft_behavior::Anchor9`), the one nine-point type; `Center` is `Centre`, and `cell()` is the same with `from_cell(column, row)` and `uv()` added. `Default` is gone: name the point."
+
+[[type]]
+name = "AnchorGrid"
+old = "craft_ui::dialog::AnchorGrid"
+new = ""
+status = "replaced"
+note = "Replaced by `craft_ui::pickers::ReferencePoint::new(label, Bind<Anchor9>).growth((width_change, height_change))`; the grid keeps its keys (one Tab stop, arrows move the focus and stop at the edges, Space or Enter picks) and its growth arrows, and `arrows(false)` is leaving out `growth`."
+
+[[setter]]
+type = "AnchorGrid"
+old = "AnchorGrid::new(&mut Anchor, delta)"
+new = "ReferencePoint::new(label, Bind::bound(&mut Anchor9)).growth(delta)"
+
+[[setter]]
+type = "AnchorGrid"
+old = "arrows(bool)"
+new = ""
+note = "Removed: a picker without `growth` shows no arrows."
+
+# Pixel size and the size rules (l4c-forms).
+[[type]]
+name = "PixelSize"
+old = "craft_ui::dialog::PixelSize"
+new = "craft_behavior::PixelSize"
+status = "replaced"
+note = "Whole pixels, `PixelSize::new(width, height)`; the resolution is not part of it (`LinkedSize::pixels_per_inch()`). `resize_from_scale` and `resize_from_side` of `craft_ui::patterns::form_dialogs` take and return it."

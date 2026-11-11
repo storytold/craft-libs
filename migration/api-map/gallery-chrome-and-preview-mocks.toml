@@ -1,0 +1,259 @@
+# API map of the "Gallery chrome and preview mocks" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Gallery chrome and preview mocks"
+new_module = "craft_ui_gallery"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "Browser"
+old = "craft_ui_gallery_legacy::browser::Browser"
+new = ""
+status = "removed"
+note = "Split into `TokenBrowser` (filters and the grouped token list) and `TokenDetail` (facts, contrast pairs, ramp). The \"Used by\" column and the hand-painted divider are not ported; the host places the two panels in its split."
+
+[[type]]
+name = "TokenBrowser"
+old = ""
+new = "craft_ui_gallery::theme::TokenBrowser"
+status = "replaced"
+note = "A pattern over `&Explained` and a `Bind<Option<Pick>>`: a `List` tree of groups with `RowThumb` chips whose selection follows the bound pick and whose selecting or activating a row writes it. `.reveal(&Pick)` opens the pick's group and scrolls its row into view in the pass it is given."
+
+[[type]]
+name = "TokenDetail"
+old = ""
+new = "craft_ui_gallery::theme::TokenDetail"
+status = "replaced"
+note = "A pattern over `&Explained` and `.pick(&Pick)`: facts, contrast pairs and ramp as read-only `List`s in `Section`s."
+
+[[type]]
+name = "Problems"
+old = "craft_ui_gallery_legacy::problems::Problems"
+new = "craft_ui_gallery::theme::Problems"
+status = "moved"
+note = "A pattern over `&ContrastReport`, `&Explained` and the `ThemeSubject`; a `FindingsList` and `FindingsSummary`. Standard contrast lists warnings, High contrast errors. The report cache moved to `ThemeWorkspace`."
+
+[[type]]
+name = "AppLayer"
+old = "craft_ui_gallery_legacy::app_layer::AppLayer"
+new = ""
+status = "removed"
+note = "Replaced by `AppLayerEditor` over a `Bind<AppSizes>`; the layer itself lives in `ThemeWorkspace::sizes()`, edited through `ThemeWorkspace::edit_sizes`. Dropped files are not read here: the host passes a dropped file's bytes through `parse_sizes`."
+
+[[type]]
+name = "AppLayerEditor"
+old = ""
+new = "craft_ui_gallery::theme::AppLayerEditor"
+status = "replaced"
+note = "A pattern over a `Bind<AppSizes>` and the `Explained` sizes: the override editor of a picked size and the sizes.json text with Load, Export and Clear; edits write to the binding, and `show` returns whether one did. Export writes the text to the field instead of the clipboard."
+
+[[type]]
+name = "Inspector"
+old = "craft_ui_gallery_legacy::inspector::Inspector"
+new = ""
+status = "removed"
+note = "Not ported: layer 8 cannot reach `AccessTree`, the library keeps no padding or hit-area records and offers no previous-frame tree to an app."
+
+[[type]]
+name = "Picker"
+old = "craft_ui_gallery_legacy::gallery::pick::Picker"
+new = ""
+status = "removed"
+note = "Not ported: it needs the \"which token painted this shape\" source that `usage` recorded, which the new library has not."
+
+[[type]]
+name = "ThemeWorkspace"
+old = ""
+new = "craft_ui_gallery::theme::ThemeWorkspace"
+status = "replaced"
+note = "The shared state of the panels: the app layer, the picked row and the cached explanation and contrast report (the caches `Browser` and `Problems` kept)."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+# [[setter]]
+# type = ""
+# old = ""
+# new = ""
+
+[[type]]
+name = "Gallery"
+old = "craft_ui_gallery_legacy::Gallery"
+new = "craft_ui_gallery::chrome::Gallery"
+status = "moved"
+note = "The root of the viewer window, a `ShellApp`: `Gallery::open()` reads the gallery's config.toml and shows the registered stories. The eframe `App` with its storage is gone; settings go through craft_settings, which the shell's `ShellApp::tick` saves on the store's own debounce and retry clock."
+
+[[type]]
+name = "Appearance"
+old = "craft_ui_gallery_legacy::Appearance"
+new = ""
+status = "removed"
+note = "Replaced by `craft_ui::runtime::env::RootEnv`; the viewer keeps a `RootEnv` (see its entry)."
+
+[[type]]
+name = "RootEnv"
+old = ""
+new = "craft_ui::runtime::env::RootEnv"
+status = "replaced"
+note = "Replaces the legacy gallery `Appearance`. The viewer keeps a `RootEnv` (mode, contrast, text size, density, motion, scale and `theme`) and a `viewer::CellFilter` for the direction and control size the cells show. `RootEnv::appearance()` returns the `craft_theme::Appearance` of the root. The interface and mono faces, icon set and language have no home in `RootEnv`."
+
+[[type]]
+name = "PanelId"
+old = "craft_ui_gallery_legacy::layout::PanelId"
+new = ""
+status = "removed"
+note = "The viewer has four panels in the dock layout, named by `viewer::GalleryPanel::{Components, Stories, Facts, Record}`."
+
+[[type]]
+name = "GalleryWorkspace"
+old = "craft_ui_gallery_legacy::layout::GalleryWorkspace"
+new = ""
+status = "removed"
+note = "Replaced by `craft_ui_gallery::viewer::Workspace` (see its entry)."
+
+[[type]]
+name = "Workspace"
+old = ""
+new = "craft_ui_gallery::viewer::Workspace"
+status = "replaced"
+note = "Replaces the legacy `GalleryWorkspace`. The viewer has a `viewer::Workspace` switch: Stories (the four story panels) and Theme (the theme panels, laid out by `viewer::theme_layout`)."
+
+[[type]]
+name = "PreviewView"
+old = "craft_ui_gallery_legacy::layout::PreviewView"
+new = ""
+status = "removed"
+note = "The story panel shows the selected component's stories in a direction by control size grid."
+
+[[type]]
+name = "VariantAxis"
+old = "craft_ui_gallery_legacy::layout::VariantAxis"
+new = ""
+status = "removed"
+note = "The Variants axes theme, mode and contrast are the options bar's choices; a per-cell override of them needs `Overrides` to carry mode and contrast."
+
+[[type]]
+name = "AppPreview"
+old = "craft_ui_gallery_legacy::preview::AppPreview"
+new = ""
+status = "removed"
+note = "Replaced by `EditorMock`: the shell composition by hand is `AppShell` with the canvas slot setters, `TitleBar`, `ToolRail`, `DockArea` and `CanvasPanel`."
+
+[[type]]
+name = "ShellView"
+old = "craft_ui_gallery_legacy::preview::ShellView"
+new = ""
+status = "removed"
+note = "The slot flags and the screen mode are the shell's own: the screen-mode commands (F) reach every mode, so the story needs no slot arguments."
+
+[[type]]
+name = "stories"
+old = "craft_ui_gallery_legacy::preview::stories"
+new = ""
+status = "removed"
+note = "One story of `EditorMock` (`editor_window`) replaces the editor story and the four Canvas shell stories; right to left is the viewer's direction axis."
+
+[[type]]
+name = "EditorMock"
+old = ""
+new = "craft_ui_gallery::mock::EditorMock"
+status = "replaced"
+note = "A pattern over a `&mut MockState`: the mock editor window. `show(ui)` returns the `AppShellOutput`."
+
+[[type]]
+name = "Mock"
+old = "craft_ui_gallery_legacy::preview::model::Mock"
+new = ""
+status = "removed"
+note = "Replaced by `craft_ui_gallery::mock::MockState`."
+
+[[type]]
+name = "MockState"
+old = ""
+new = "craft_ui_gallery::mock::MockState"
+status = "replaced"
+note = "Replaces the legacy `Mock`. Shrunk to the dock workspace, the document (title, dirty flag, size, layers by id, the layer selection, view, ruler zero and unit, guides, the marquee selection, rulers), the current tool, the last-used tools, the status bar item, the colour pair and the maximized panel. Dialogs live on the window's dialog host, not in the state."
+
+[[type]]
+name = "layers"
+old = "craft_ui_gallery_legacy::preview::panels::layers"
+new = ""
+status = "removed"
+note = "The panel pages Layers, Properties, Swatches, Channels, History and Adjustments are deleted as pages. The dock shows the layer list (a `Table` with a name and a visibility column) and the Navigator panel; each other panel is a story of its family component."
+
+[[type]]
+name = "Doc"
+old = "craft_ui_gallery_legacy::preview::model::Doc"
+new = ""
+status = "removed"
+note = "Replaced by the mock's `Document`."
+
+[[type]]
+name = "Document"
+old = ""
+new = "craft_ui_gallery::mock::Document"
+status = "replaced"
+note = "The open document of the mock: title, dirty flag, size, layers (top first), the layer selection whose lead is the current layer, the canvas view (a never-shown view opens fitted; the canvas sets its rect), ruler zero and unit, guides, the Marquee selection and drag, and the rulers flag, which the canvas's `show_rulers` follows. `resize(PixelSize)` applies the Image Size answer."
+
+[[type]]
+name = "Layer"
+old = "craft_ui_gallery_legacy::preview::model::Layer"
+new = "craft_ui_gallery::mock::Layer"
+status = "replaced"
+note = "A layer with a stable `LayerId`, a name, a visibility flag, a colour and the page bounds it fills; the layer table keys its rows by the id."
+
+[[type]]
+name = "LayerId"
+old = ""
+new = "craft_ui_gallery::mock::LayerId"
+status = "replaced"
+note = "The stable identity of a layer."
+
+[[type]]
+name = "MarqueeDrag"
+old = ""
+new = "craft_ui_gallery::mock::MarqueeDrag"
+status = "replaced"
+note = "The rectangle the Marquee tool is dragging out: the press point and the pointer point, in document units."
+
+[[type]]
+name = "Panel"
+old = ""
+new = "craft_ui_gallery::mock::Panel"
+status = "replaced"
+note = "The dock panels of the mock: Canvas (protected), Navigator and Layers. `Panel::ALL` is the Window menu's order."
+
+[[type]]
+name = "Tool"
+old = "craft_ui_gallery_legacy::preview::model::Tool"
+new = "craft_ui_gallery::mock::Tool"
+status = "replaced"
+note = "The mock's tools as a `CommandSet` of kind `tool`: each carries its default chord (V, M, E, S, H, Z); Brush and Pencil share the Brush slot and are picked with `ToolKey`. `Tool::slots()` is the rail's data and `Tool::pick` goes through `canvas::tool_pick`. The status bar takes `CommandRef::from(tool)` for its label."
+
+[[type]]
+name = "ToolKey"
+old = ""
+new = "craft_ui_gallery::mock::ToolKey"
+status = "replaced"
+note = "The keys that are no tool: B picks and Shift+B cycles the Brush slot, X swaps and D resets the colour pair."
+
+[[type]]
+name = "AppCommand"
+old = ""
+new = "craft_ui_gallery::mock::AppCommand"
+status = "replaced"
+note = "The app commands of the menus (File, Image, Layer, Filter, View > Rulers, Window): rows are `MenuItem::command` and the window body takes them with `take_command`."
+
+[[type]]
+name = "Colors"
+old = "craft_ui_gallery_legacy::preview::model::Colors"
+new = ""
+status = "removed"
+note = "Replaced by the mock's `ColorPair`."
+
+[[type]]
+name = "ColorPair"
+old = ""
+new = "craft_ui_gallery::mock::ColorPair"
+status = "replaced"
+note = "The foreground and background colours, as 24-bit values; `swap` and `reset`."

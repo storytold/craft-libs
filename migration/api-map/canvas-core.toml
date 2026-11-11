@@ -1,0 +1,1274 @@
+# API map of the "Canvas core" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Canvas core"
+new_module = "craft_ui::canvas"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "ToolHost"
+old = "craft_ui::canvas::tool_host::ToolHost"
+new = "craft_ui::canvas::ToolHost"
+status = "moved"
+note = "`ToolHost::new().run(ui, &canvas_output, &mut tool)` after `Canvas::show`; `ToolHost::new(CanvasId)`, `snap(..)` (the snap is `Canvas::snap`), `document(..)`, `pen(..)`, `navigation(..)` and `keys(..)` are gone. The host reads the canvas's space from `CanvasOutput::space` (no `capture_values`), keys its state by the canvas's id (`CanvasOutput::response.id`) and paints the tool's readout in `run`. `inject`, `cancel` and `in_gesture` take that canvas id (an `egui::Id`) in place of a `CanvasId`; `cancel` returns whether a gesture was cancelled. `enabled(false)` leaves the open press spent. `ToolHost::sample` and `snap_tolerance` are gone: a tool maps points through `CanvasSpace` and holds its own snap targets."
+
+[[type]]
+name = "CanvasTool"
+old = "craft_ui::canvas::tool_host::CanvasTool"
+new = "craft_ui::canvas::CanvasTool"
+status = "moved"
+note = "The trait keeps `press`, `drag`, `release`, `hover`, `cancel`, `key`, `paint`, `cursor`, `takes`, `autoscrolls` and `each_pass`, and adds `command_form() -> ToolPath` and `claims() -> ToolClaims` (the keys the tool takes in its state at the end of the pass: the plain keys with `ToolClaims::keyboard`, the deletes with `ToolClaims::deletes`; unclaimed deletes are the app's). Pointers are screen points (`ToolPointer::pos`); `paint` takes `&Draw`; `cursor` returns `craft_behavior::Cursor`. `parts`, `picked`, `pick`, `node`, `snap_gesture` and `button` are gone: a tool made of parts is a canvas control, a tool holds its snap targets, and `takes` decides the button."
+
+[[type]]
+name = "ToolPointer"
+old = "craft_ui::canvas::tool_host::ToolPointer"
+new = "craft_ui::canvas::ToolPointer"
+status = "moved"
+note = "Screen position only (`pos`): `doc`, `raw`, `snapped` and `screen` are gone; `modifiers` is `mods: Mods`; the pen reading is `sample: PointerSample` (radians); `button` and `clicks` stay; `time` is the time of the pass that took the sample (the press keeps its press time)."
+
+[[type]]
+name = "ToolKey"
+old = "craft_ui::canvas::tool_host::ToolKey"
+new = "craft_ui::canvas::ToolKey"
+status = "moved"
+note = "An enum of the intents the canvas holds (`Nudge`, `Delete`, `Submit`, `Cancel`) and the plain keys a tool claimed with `ToolClaims::keyboard` (`Kept(Chord)`); `Delete` arrives only while the tool claims `ToolClaims::deletes`; the raw `key`, `modifiers`, `pressed` and `repeat` fields are gone."
+
+[[type]]
+name = "ToolContext"
+old = "craft_ui::canvas::tool_host::ToolContext"
+new = "craft_ui::canvas::ToolContext"
+status = "moved"
+note = "`pointer`, `mods` (was `modifiers`), `rect` and `time`; `space() -> Option<CanvasSpace>` is the canvas's view; `held(Key) -> bool` says whether a key is down; `caps_lock() -> bool` is the platform's Caps Lock toggle (`craft_window::caps_lock`, read once per pass); `reach() -> f32` is the one reach source for tool handles and hit tests (the theme's `size.hit.target`); `readout(rows)` and `request_repaint()` stay; `keep_keys()` is `CanvasTool::claims` returning `ToolClaims::NONE.keyboard().deletes()`; `marching_ants(points, closed)` paints ants that march on the pass clock (the phase argument is gone). `canvas_id`, `view`, `canvas`, `snap`, `snap_tolerance`, `tokens`, `numbers`, `direction`, `parts_focused`, `set_view` and `set_cursor` are gone."
+
+[[type]]
+name = "ToolAction"
+old = "craft_ui::canvas::tool_host::ToolAction"
+new = "craft_ui::canvas::ToolAction"
+status = "moved"
+note = "The variants are unchanged."
+
+[[type]]
+name = "ToolHostResponse"
+old = "craft_ui::canvas::tool_host::ToolHostResponse"
+new = "craft_ui::canvas::ToolHostResponse"
+status = "moved"
+note = "`gesture` is `Option<GesturePhase>`; `scrolled_by` is gone: `past_edge` reports the pointer past the canvas edge; `cursor` is `Option<Cursor>`; `readout` is new data for automation (the host paints it); `id` is gone. `view: Option<CanvasView>` is the one view the app copies: the tool's (inside the document with Overscroll off), else the canvas's own (`CanvasOutput::view`). A tool's eased zoom runs in the canvas's own zoom ease; there is no `ease` field and no app-side `ZoomAnimation`."
+
+[[type]]
+name = "ToolInput"
+old = "craft_ui::canvas::tool_host::ToolInput"
+new = "craft_ui::canvas::ToolInput"
+status = "moved"
+note = "Positions are screen points (`pos`), the pen reading is `sample: PointerSample`, and `modifiers` is `mods: Mods`."
+
+[[type]]
+name = "ToolGesture"
+old = "craft_ui::canvas::tool_host::ToolGesture"
+new = ""
+status = "removed"
+note = "Replaced by `craft_behavior::GesturePhase` (`Begin`, `Update`, `Commit`, `Cancel`)."
+
+[[type]]
+name = "ToolParts"
+old = "craft_ui::canvas::tool_host::ToolParts"
+new = ""
+status = "removed"
+note = "A tool made of keyboard parts is a canvas control with focusable parts."
+
+[[type]]
+name = "ToolNode"
+old = "craft_ui::canvas::tool_host::ToolNode"
+new = ""
+status = "removed"
+note = "A tool's accessible description is a canvas control's part or node."
+
+[[type]]
+name = "PickStep"
+old = ""
+new = "craft_ui::canvas::PickStep"
+status = "replaced"
+note = "`ToolRail::pick_by_key` letter cycling is `tool_pick(tools, slot, current, &last_used, PickStep::Last | PickStep::Next, enabled)`: the app binds a pick command to the letter and a cycle command to Shift with the letter."
+
+[[type]]
+name = "ToolReadout"
+old = ""
+new = "craft_ui::canvas::ToolReadout"
+status = "replaced"
+note = "The values a tool hands to `ToolContext::readout`, reported in `ToolHostResponse::readout` for the canvas readout overlay."
+
+[[type]]
+name = "Rulers"
+old = "craft_ui::canvas::rulers::Rulers"
+new = "craft_ui::canvas::Rulers"
+status = "moved"
+note = "A canvas control: `Rulers::new(label, Bind::bound(&mut zero))` shown with `show_at(ui, body.rect)` inside the `Canvas` body, over a `Canvas::view` that publishes the units and the zero point with `Canvas::rulers(x, y, zero)` (the guides, the measures and the rulers read them from `CanvasSpace`). The strips and the corner are parts at handle priority, so a drag from a strip reaches the rulers and not the canvas tool. The output is `RulersOutput`."
+
+[[type]]
+name = "RulerStyle"
+old = "craft_ui::canvas::rulers::RulerStyle"
+new = ""
+status = "removed"
+note = "`RulersStyle` is the component style; it comes from the tokens and is not built by callers."
+
+[[type]]
+name = "RulersStyle"
+old = ""
+new = "craft_ui::canvas::RulersStyle"
+status = "replaced"
+note = "The style type of `Rulers`; callers do not build it."
+
+[[type]]
+name = "RulersResponse"
+old = "craft_ui::canvas::rulers::RulersResponse"
+new = ""
+status = "removed"
+note = "`RulersOutput` replaces it: `origin` is `zero: EditResponse<Point>`, `reset_origin` is gone (a reset is an edit of `zero`), `id` is gone (the zero point is a `Bind`, and the host commands are `RulerCommands`), `context` and `unit_picked` stay."
+
+[[type]]
+name = "RulersOutput"
+old = ""
+new = "craft_ui::canvas::RulersOutput"
+status = "replaced"
+note = "`RulersOutput { zero: EditResponse<Point>, guide: Option<GuideDrag>, unit_picked: Option<UnitKind>, context: Option<RulerPart> }` with `content_rect()`. The corner's double click and the menu's Reset Zero Point write the origin through the zero bind (one edit in `zero`); there is no `reset_zero` field. `guide` is the guide a drag from a strip is placing in this pass; the app forwards it to the guides control."
+
+[[type]]
+name = "RulerPart"
+old = "craft_ui::canvas::rulers::RulerPart"
+new = "craft_ui::canvas::RulerPart"
+status = "moved"
+note = "Now `#[non_exhaustive]`."
+
+[[type]]
+name = "RulerNames"
+old = "craft_ui::canvas::rulers::RulerNames"
+new = ""
+status = "removed"
+note = "The accessible names are words (`rulers.horizontal`, `rulers.vertical`, `rulers.origin`); a host translates them with its word sets."
+
+[[type]]
+name = "RulerTick"
+old = "craft_ui::canvas::rulers::RulerTick"
+new = "craft_ui::canvas::RulerTick"
+status = "moved"
+note = "`RulerTick { value, rank: primitives::TickRank, step }`: the label text is written at paint time from `RulerText::tick_label`, and the rank is Major at a labelled step, Mid halfway between labels in an even subdivision, Minor otherwise (`primitives::ticks` draws the length by rank; the mid length is the token `size.ruler.tick.mid`)."
+
+[[type]]
+name = "TickRule"
+old = "craft_ui::canvas::rulers::TickRule"
+new = "craft_ui::canvas::TickRule"
+status = "moved"
+note = "Now `#[non_exhaustive]`; `Rulers::ticks(&RulerUnits, TickRule, zoom, values)` takes no style."
+
+[[type]]
+name = "INCH_SIXTEENTHS"
+old = "craft_ui::canvas::rulers::INCH_SIXTEENTHS"
+new = "craft_ui::canvas::INCH_SIXTEENTHS"
+status = "moved"
+
+[[type]]
+name = "INCH_EIGHTHS"
+old = "craft_ui::canvas::rulers::INCH_EIGHTHS"
+new = "craft_ui::canvas::INCH_EIGHTHS"
+status = "moved"
+
+[[type]]
+name = "unit_entries"
+old = "craft_ui::canvas::rulers::unit_entries"
+new = ""
+status = "removed"
+note = "The units menu is built inside `Rulers` over an `Entry<UnitKind>` list; pass the kinds with `Rulers::units(&[UnitKind])`."
+
+[[type]]
+name = "RulerCommands"
+old = ""
+new = "craft_ui::canvas::RulerCommands"
+status = "replaced"
+note = "The unit choice and Reset Zero Point as app commands (`canvasRulers.unit_pixels`, `canvasRulers.reset_zero`, ...); the menu rows and a menu bar offer the same actions."
+
+[[type]]
+name = "RulerMargins"
+old = ""
+new = "craft_ui::canvas::RulerMargins"
+status = "replaced"
+note = "The margin bands of the two strips, `RulerMargins::new(horizontal, vertical)`, set with `Rulers::margins`."
+
+[[type]]
+name = "Snap"
+old = ""
+new = "craft_ui::canvas::Snap"
+status = "replaced"
+note = "The canvas's snapping of a coordinate the pointer sets, given once with `Canvas::snap(Snap::new(|axis, value, mods| ..))`. The canvas publishes it to its body (`canvas_snap(env)`), so the rulers' zero point and the guides read it, and hands it to the tool host through `CanvasOutput`, so `ToolContext::snap` reads it. `Rulers::snap`, `Guides::snap` and `ToolHost::snap` are gone. The closure is `Send + Sync + 'static`."
+
+[[type]]
+name = "CanvasScrollbars"
+old = "craft_ui::canvas::scrollbars::CanvasScrollbars"
+new = "craft_ui::canvas::CanvasScrollbars"
+status = "moved"
+note = "A canvas control: `CanvasScrollbars::new(label, Bind::bound(&mut view), document)` shown with `show_at(ui, view_rect)` inside the `Canvas` body. The thumb drag and the page press run in the pipeline (`PartsCx::scroll`); the output is `CanvasScrollbarsOutput`."
+
+[[type]]
+name = "ScrollbarStyle"
+old = "craft_ui::canvas::scrollbars::ScrollbarStyle"
+new = ""
+status = "removed"
+note = "`ScrollbarsStyle` is the component style; it comes from the tokens and is not built by callers."
+
+[[type]]
+name = "ScrollbarsStyle"
+old = ""
+new = "craft_ui::canvas::ScrollbarsStyle"
+status = "replaced"
+note = "The style type of `CanvasScrollbars`; callers do not build it."
+
+[[type]]
+name = "ScrollbarNames"
+old = "craft_ui::canvas::scrollbars::ScrollbarNames"
+new = ""
+status = "removed"
+note = "The accessible names are words (`canvasScrollbars.horizontal`, `canvasScrollbars.vertical`)."
+
+[[type]]
+name = "ScrollbarsResponse"
+old = "craft_ui::canvas::scrollbars::ScrollbarsResponse"
+new = ""
+status = "removed"
+note = "`CanvasScrollbarsOutput` replaces it: `changed` is read from `view.event`, `over` stays."
+
+[[type]]
+name = "CanvasScrollbarsOutput"
+old = ""
+new = "craft_ui::canvas::CanvasScrollbarsOutput"
+status = "replaced"
+note = "`CanvasScrollbarsOutput { view: EditResponse<CanvasView>, over: bool }`."
+
+[[type]]
+name = "Navigator"
+old = "craft_ui::canvas::navigator::preview::Navigator"
+new = "craft_ui::canvas::Navigator"
+status = "moved"
+note = "The legacy widget showed the preview box over the zoom row: that is the pattern `craft_ui::patterns::canvas::NavigatorPanel::new(label, Bind::bound(&mut view), document).preview(..).navigation(..).proxy(..).enabled(..).show(ui)`, one bound view, one Tab sequence and one output (`NavigatorPanelOutput { response, view: Option<EditEvent<CanvasView>> }`). The row's Zoom In and Zoom Out are the active canvas's view commands, so the canvas reports their view; under Animated Zoom the canvas eases to it, and a preview zoom eases on the same canvas. The box alone is the component `Navigator::new(label, Bind::bound(&mut view), document)`; the row alone is `NavigatorZoomRow`."
+
+[[type]]
+name = "NavigatorOutput"
+old = "craft_ui::canvas::navigator::preview::NavigatorOutput"
+new = "craft_ui::canvas::NavigatorOutput"
+status = "moved"
+note = "`view` (the `EditResponse<CanvasView>`): a zoom writes its target into the bound view; under Animated Zoom the canvas the view commands reach eases to it."
+
+[[type]]
+name = "NavigatorPreview"
+old = "craft_ui::canvas::navigator::preview::NavigatorPreview"
+new = "craft_ui::canvas::NavigatorPreview"
+status = "moved"
+note = "`Texture(CachedTexture)`, `Paint(NavigatorPaint)` or `None`."
+
+[[type]]
+name = "NavigatorPaint"
+old = "craft_ui::canvas::navigator::preview::NavigatorPaint"
+new = "craft_ui::canvas::NavigatorPaint"
+status = "moved"
+note = "`NavigatorPaint::new(|painter: &ContentPainterCx, rect| ..)`."
+
+[[type]]
+name = "NavigatorSettings"
+old = "craft_ui::canvas::navigator::options::NavigatorSettings"
+new = "craft_ui::canvas::NavigatorSettings"
+status = "moved"
+note = "Plain data the app persists; `NavigatorSettings::new(options)`; the type is `#[non_exhaustive]`."
+
+[[type]]
+name = "NavigatorOptions"
+old = "craft_ui::canvas::navigator::options::NavigatorOptions"
+new = "craft_ui::canvas::NavigatorOptions"
+status = "moved"
+note = "`NavigatorOptions::new(proxy_color)`; the type is `#[non_exhaustive]`."
+
+[[type]]
+name = "ProxyColor"
+old = "craft_ui::canvas::navigator::options::ProxyColor"
+new = "craft_ui::canvas::ProxyColor"
+status = "moved"
+note = "the colour names are the words of `NavigatorOptionsDialog` (`NavigatorOptionsWords`), so `label` is gone; `color()` takes no tokens and gives an `Srgba`; `ProxyColor::custom(Srgba)` makes the Custom colour of a picker's answer."
+
+[[type]]
+name = "NavigatorOptionsDialog"
+old = "craft_ui::canvas::navigator::options::NavigatorOptionsDialog"
+new = "craft_ui::patterns::form_dialogs::NavigatorOptionsDialog"
+status = "moved"
+note = "A pattern over `FormDialog<NavigatorOptions>`: `NavigatorOptionsDialog::new(Bind::bound(&mut options)).answers(host.take_answers()).show(ui)`; `initial`, `options`, `pick_color`, `set_color` and `cancel_color` are `Bind`, `NavigatorOptionsDialogOutput::requests` (`HostRequests::take_color`, `answer_color`, `cancel`) and `answers`."
+
+[[type]]
+name = "NavigatorOptionsDialogOutput"
+old = ""
+new = "craft_ui::patterns::form_dialogs::NavigatorOptionsDialogOutput"
+status = "replaced"
+note = "`response`, `closed`, `accepted` (the options the pass the dialog closed as OK), `value` and `requests`."
+
+[[type]]
+name = "NavigatorOptionsWords"
+old = ""
+new = "craft_ui::patterns::form_dialogs::NavigatorOptionsWords"
+status = "replaced"
+note = "The dialog's own words (`navigatorOptionsDialog.*`, the colour names included); they were rows of `CanvasWords`. The Custom… request key `NAVIGATOR_PROXY_COLOR_KEY` is exported from `patterns::form_dialogs` beside the dialog, no longer from `canvas`."
+
+[[type]]
+name = "NavigatorZoomRow"
+old = ""
+new = "craft_ui::canvas::NavigatorZoomRow"
+status = "replaced"
+note = "The legacy zoom row (`navigator::zoom_row`): percent `NumberField`, Zoom Out and Zoom In as `IconButton::command(icon, ViewCommands::ZoomOut / ZoomIn)` and a logarithmic `Slider` as children of a `Row`. `NavigatorZoomRow::new(Bind::bound(&mut view), document).show(ui)`. The buttons are the active canvas's view commands: the canvas (`Canvas::view(..).document(..).navigation(..)`) steps its view, eases to it under Animated Zoom, and reports it in `CanvasOutput::view` (and `ToolHostResponse::view`)."
+
+[[type]]
+name = "NavigatorZoomRowOutput"
+old = ""
+new = "craft_ui::canvas::NavigatorZoomRowOutput"
+status = "replaced"
+note = "`response` and `view` (the pass's `EditEvent<CanvasView>` from the field or the slider). A Zoom In or Zoom Out step and its ease are the canvas's: `CanvasOutput::view`."
+
+[[type]]
+name = "NavigatorCommands"
+old = ""
+new = "craft_ui::canvas::NavigatorCommands"
+status = "replaced"
+note = "The panel menu's Panel Options row is the command `canvasNavigator.options`."
+
+[[type]]
+name = "NavigatorPanel"
+old = "craft_ui::canvas::navigator::menu::NavigatorPanel"
+new = ""
+status = "removed"
+note = "The panel menu row is the command `canvasNavigator.options` (`NavigatorCommands::Options`); the dock lists it."
+
+[[type]]
+name = "NavigatorMenuAction"
+old = "craft_ui::canvas::navigator::menu::NavigatorMenuAction"
+new = ""
+status = "removed"
+note = "The app handles the command `canvasNavigator.options` and opens `NavigatorOptionsDialog`."
+
+[[type]]
+name = "NavigatorLabels"
+old = "craft_ui::canvas::navigator::labels::NavigatorLabels"
+new = ""
+status = "removed"
+note = "The words are rows of `CanvasWords`."
+
+[[type]]
+name = "NavigatorStyle"
+old = "craft_ui::canvas::navigator::style::NavigatorStyle"
+new = "craft_ui::canvas::NavigatorStyle"
+status = "moved"
+note = "The Navigator's component style, read from the tokens: the inset round the document and the proxy's corners. The proxy line and halo are the content kit's outline (`ContentPainterCx::outline_in`)."
+
+[[type]]
+name = "preview_rect"
+old = "craft_ui::canvas::navigator::proxy::preview_rect"
+new = "craft_ui::canvas::preview_rect"
+status = "moved"
+
+[[type]]
+name = "proxy_quad"
+old = "craft_ui::canvas::navigator::proxy::proxy_quad"
+new = "craft_ui::canvas::proxy_quad"
+status = "moved"
+
+[[type]]
+name = "zoom_to_document_rect"
+old = "craft_ui::canvas::navigator::proxy::zoom_to_document_rect"
+new = "craft_ui::canvas::zoom_to_document_rect"
+status = "moved"
+
+[[type]]
+name = "view_center_for"
+old = "craft_ui::canvas::navigator::proxy::view_center_for"
+new = "craft_ui::canvas::view_center_for"
+status = "moved"
+
+[[type]]
+name = "CanvasView"
+old = "craft_ui::canvas::view::CanvasView"
+new = "craft_behavior::CanvasView"
+status = "moved"
+
+[[type]]
+name = "ZoomLadder"
+old = "craft_ui::canvas::zoom::ZoomLadder"
+new = "craft_behavior::ZoomLadder"
+status = "moved"
+
+[[type]]
+name = "ViewHistory"
+old = "craft_ui::canvas::view_history::ViewHistory"
+new = "craft_behavior::ViewHistory"
+status = "moved"
+
+[[type]]
+name = "ViewPlace"
+old = "craft_ui::canvas::view_history::ViewPlace"
+new = "craft_behavior::ViewPlace"
+status = "moved"
+
+[[type]]
+name = "RulerUnits"
+old = "craft_ui::canvas::units::RulerUnits"
+new = "craft_behavior::RulerUnits"
+status = "replaced"
+note = "The tick maths is craft_behavior::RulerUnits; the text of a distance or tick is craft_ui::canvas::RulerText over Env::units. The legacy numbers and unit fields are gone."
+
+[[type]]
+name = "Guide"
+old = "craft_ui::canvas::guides::Guide"
+new = "craft_ui::canvas::Guide"
+status = "replaced"
+note = "key is a GuideKey, the orientation is `along: craft_behavior::Axis` (the axis the guide runs along: `Axis::X` for a horizontal guide), span is Option<(f64, f64)> and color an Option<craft_theme::Rgba>."
+
+[[type]]
+name = "TextureCache"
+old = "craft_ui::canvas::textures::TextureCache"
+new = ""
+status = "removed"
+note = "The legacy keyed texture cache is `craft_ui::primitives::TextureStore<K>`; `craft_ui::primitives::TextureCache` is the icon path and keeps its own name. `TextureCacheOptions` is `TextureStoreOptions` (`thumbnails()`, `pages()`, `frames()`; `.filter(..)`, `.budget(..)`, `TextureBudget::new(max_bytes, max_entries)`). `Revision(n)` is `Revision::new(n)`. The store methods take the `Context` (`state`, `put`, `put_region`, `get_or_put`, `put_empty`, `put_failure`, `forget`, `retain`, `clear`, `statistics`); `put_failure` takes a `LoadFailure` instead of a message; `CachedTexture::size` is a `craft_behavior::PixelSize` and `sized()` gives the `SizedTexture` of `PreviewPane`."
+
+[[type]]
+name = "TextureStore"
+old = ""
+new = "craft_ui::primitives::TextureStore"
+status = "replaced"
+note = "Replaces the legacy keyed `canvas::textures::TextureCache<K>`; see that entry. Its state lives in runtime memory of the context under the salt."
+
+[[type]]
+name = "TextureLoader"
+old = "craft_ui::canvas::textures::TextureLoader"
+new = "craft_ui::primitives::TextureLoader"
+status = "moved"
+note = "Same methods (`in_context`, `cache`, `request`, `ask`, `submit`, `shutdown`) over `TextureStore`. `LoaderOptions::new().store(..).lanes(..).jobs(..)` replaces the struct literal; `LoadFailure` is stored in the state and worded at run time with `LoadFailure::text(&cx.words::<TextureWords>())`; the `LoadFailureLabels` words are `TextureWords`."
+
+[[type]]
+name = "RasterSource"
+old = "craft_ui::canvas::raster::RasterSource"
+new = "craft_ui::canvas::RasterSource"
+status = "moved"
+note = "Same methods plus the required `damage(&self, since: Revision) -> Option<PixelRect>` (what changed since the revision the display shows; `None` reads everything), with `size() -> craft_behavior::PixelSize` and `revision() -> craft_ui::primitives::Revision` (`Revision::new(n)`) in place of `[u32; 2]` and `u64`; `read(region, factor, out)` is unchanged; `PixelRect` moved with it to `craft_ui::canvas::PixelRect`, built with `PixelRect::new` (`#[non_exhaustive]`). `PixelRect::visible(&CanvasView, size)` is not here: canvas-raster-a writes it over the new `CanvasView`."
+
+[[type]]
+name = "PixelRect"
+old = "craft_ui::canvas::raster::PixelRect"
+new = "craft_ui::canvas::PixelRect"
+status = "moved"
+note = "See `RasterSource`. `PixelRect::of_size` takes a `PixelSize`."
+
+[[type]]
+name = "ToolCursor"
+old = "craft_ui::canvas::cursor::ToolCursor"
+new = ""
+status = "removed"
+note = "Replaced by `PaintedCursor`."
+
+[[type]]
+name = "PaintedCursor"
+old = ""
+new = "craft_behavior::PaintedCursor"
+status = "replaced"
+note = "A cursor request is data: `cx.cursor(PaintedCursor::..)` through the cursor service, painted by the overlay host on the ghost layer. `ToolCursor::Circle/Crosshair/Outline/Hand/Zoom/Tool/Badged` are `PaintedCursor::circle/Crosshair/outline/Hand/zoom/tool/badged`; `turn_cursor`, `distort_cursor` and `skew_cursor` are `PaintedCursor::turn(toward)`, `distort(dir)` and `skew(dir)` with screen directions (no `CanvasView` or `PointerInk`). The crosshair and the brush outline are painted, not uploaded as OS bitmaps. `CursorOptions` and `CursorHost` are gone; an app decides which cursor to request."
+
+[[type]]
+name = "Readout"
+old = "craft_ui::canvas::readout::Readout"
+new = ""
+status = "removed"
+note = "Replaced by `readout`."
+
+[[type]]
+name = "readout"
+old = ""
+new = "craft_ui::canvas::readout"
+status = "replaced"
+note = "A function called each pass of a gesture: `canvas::readout(cx, pointer, &[(Label, String)])` paints the rows beside the pointer on the ghost layer. `Readout::new`, `ReadoutStyle` and `ReadoutLayout` are gone; the look comes from the tokens."
+
+[[type]]
+name = "Ants"
+old = "craft_ui::canvas::marquee::ants::Ants"
+new = ""
+status = "removed"
+note = "Replaced by `marching_ants`."
+
+[[type]]
+name = "marching_ants"
+old = ""
+new = "craft_ui::primitives::marching_ants"
+status = "replaced"
+note = "The one pixel-aligned painter: `marching_ants(tokens, points, closed, phase, clip, pixels_per_point)`, or `ContentPainterCx::marching_ants`. `phase` is in points along the path; `Ants::new(ppp, time, ..)` and `draw` are gone."
+
+# canvas-pasteboard-a: Pasteboard, SplitViews, ToolPill and the crisp-edge rules.
+
+[[type]]
+name = "Pasteboard"
+old = "craft_ui::canvas::pasteboard::Pasteboard"
+new = "craft_ui::canvas::Pasteboard"
+status = "moved"
+note = "A canvas control: `Pasteboard::new(label, &pages).color(..).border(..).show_at(ui, body.rect)` inside the `Canvas` body, which must be given a view (`Canvas::view`); the view and interface scale come from `canvas_space`, so `show(ui, &view)` is gone. `Pasteboard::quads` and `Pasteboard::page_at` stay pure associated functions over `craft_behavior::kurbo` geometry. The output is `PasteboardOutput`; `context_at` is a secondary release on the pasteboard away from pages and names (the Menu key is the app's pasteboard menu command). The drop shadow is an offset fill without blur."
+
+[[type]]
+name = "PasteboardColor"
+old = "craft_ui::canvas::pasteboard::PasteboardColor"
+new = "craft_ui::canvas::PasteboardColor"
+status = "moved"
+note = "`#[non_exhaustive]`; `Custom` holds a `craft_ui::style::DataColor` and `fill()` returns `Option<DataColor>`."
+
+[[type]]
+name = "PageBorder"
+old = "craft_ui::canvas::pasteboard::PageBorder"
+new = "craft_ui::canvas::PageBorder"
+status = "moved"
+note = "`#[non_exhaustive]`."
+
+[[type]]
+name = "PageFrame"
+old = "craft_ui::canvas::pasteboard::PageFrame"
+new = "craft_ui::canvas::PageFrame"
+status = "moved"
+note = "`rect` is `craft_behavior::kurbo::Rect`; `fill` is `Option<DataColor>` (`fill(DataColor)`); the struct is `#[non_exhaustive]`, built with `PageFrame::new(rect)`."
+
+[[type]]
+name = "PasteboardStyle"
+old = "craft_ui::canvas::pasteboard::PasteboardStyle"
+new = "craft_ui::canvas::PasteboardStyle"
+status = "replaced"
+note = "The type's `ComponentStyle`, resolved from tokens in `style`; `Pasteboard::style(tokens, color)` is gone."
+
+[[type]]
+name = "PasteboardResponse"
+old = "craft_ui::canvas::pasteboard::PasteboardResponse"
+new = ""
+status = "removed"
+note = "Replaced by `PasteboardOutput { response, name_clicked, context_at }`."
+
+[[type]]
+name = "PasteboardOutput"
+old = ""
+new = "craft_ui::canvas::PasteboardOutput"
+status = "replaced"
+note = "Replaces `PasteboardResponse`; `context_at` is a `craft_behavior::kurbo::Point`."
+
+[[type]]
+name = "SplitViews"
+old = "craft_ui::canvas::split::SplitViews"
+new = "craft_ui::canvas::SplitViews"
+status = "moved"
+note = "A container: `SplitViews::new(label, layout, Bind::bound(&mut split_at)).active(n).show(ui, |ui, body| ..)`; the body shows one view per pane at `layout.rects(split_at, body.rect)`, in `layout.draw_order(first)` for `first(n)`. The dividers move with the pointer and the arrow keys through the bound `SplitAt`; the pane gap is gone. `follow` is unchanged."
+
+[[type]]
+name = "SplitLayout"
+old = "craft_ui::canvas::split::SplitLayout"
+new = "craft_ui::canvas::SplitLayout"
+status = "moved"
+note = "`#[non_exhaustive]`; `rects(at: SplitAt, full)` replaces `rects(gap, full)`; `reading_order()` and `draw_order(first)` are new."
+
+[[type]]
+name = "SplitPane"
+old = "craft_ui::canvas::split::SplitPane"
+new = "craft_ui::canvas::SplitPane"
+status = "moved"
+note = "`#[non_exhaustive]`, built with `SplitPane::new(view, linked)`."
+
+[[type]]
+name = "SplitResponse"
+old = "craft_ui::canvas::split::SplitResponse"
+new = ""
+status = "removed"
+note = "Replaced by `SplitViewsOutput { edit, activated }`."
+
+[[type]]
+name = "SplitViewsOutput"
+old = ""
+new = "craft_ui::canvas::SplitViewsOutput"
+status = "replaced"
+note = "Replaces `SplitResponse`; `edit` carries the divider edits and the response."
+
+[[type]]
+name = "SplitAt"
+old = ""
+new = "craft_ui::canvas::SplitAt"
+status = "replaced"
+note = "New: where the dividers lie, as fractions of the area. Replaces the fixed pane gap."
+
+[[type]]
+name = "SplitLabels"
+old = "craft_ui::canvas::split::SplitLabels"
+new = ""
+status = "removed"
+note = "Words: `SplitWords` (`splitViews.view`, `splitViews.resize`)."
+
+[[type]]
+name = "ToolPill"
+old = "craft_ui::canvas::tool_pill::ToolPill"
+new = ""
+status = "removed"
+note = "No caller in craft-libs or the app checkouts; not built."
+
+[[type]]
+name = "PillPlace"
+old = "craft_ui::canvas::tool_pill::PillPlace"
+new = ""
+status = "removed"
+note = "No caller; see `ToolPill`."
+
+[[type]]
+name = "ToolPillResponse"
+old = "craft_ui::canvas::tool_pill::ToolPillResponse"
+new = ""
+status = "removed"
+note = "No caller; see `ToolPill`."
+
+[[type]]
+name = "ToolPillLabels"
+old = "craft_ui::canvas::tool_pill::ToolPillLabels"
+new = ""
+status = "removed"
+note = "No caller; see `ToolPill`."
+
+[[type]]
+name = "crisp"
+old = "craft_ui::canvas::crisp::crisp"
+new = ""
+status = "removed"
+note = "Lines on whole device pixels are `craft_ui::primitives::Rule::shapes(look, from, to, pixels_per_point)`; `Draw::rule` and the kit's `grid_lines` use it."
+
+[[type]]
+name = "crisp_shape"
+old = "craft_ui::canvas::crisp::crisp_shape"
+new = ""
+status = "removed"
+note = "See `crisp`."
+
+[[type]]
+name = "CanvasId"
+old = "craft_ui::canvas::canvas_id::CanvasId"
+new = ""
+status = "removed"
+note = "The canvas's id is `Props::id` and `CanvasOutput::response.id`."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+# [[setter]]
+# type = ""
+# old = ""
+# new = ""
+
+# canvas-pasteboard-a setters.
+[[setter]]
+type = "Pasteboard"
+old = "color(PasteboardColor)"
+new = "color(PasteboardColor)"
+
+[[setter]]
+type = "Pasteboard"
+old = "border(PageBorder)"
+new = "border(PageBorder)"
+
+[[setter]]
+type = "Pasteboard"
+old = "canvas(CanvasId)"
+new = ""
+note = "The Menu key is the app's pasteboard menu command; `context_at` reports the pointer."
+
+[[setter]]
+type = "Pasteboard"
+old = "show(ui, &view)"
+new = "show_at(ui, body.rect)"
+note = "Inside a `Canvas` body that has a view."
+
+[[setter]]
+type = "SplitViews"
+old = "labels(SplitLabels)"
+new = ""
+note = "Words: `SplitWords`."
+
+[[setter]]
+type = "SplitViews"
+old = "active(usize)"
+new = "active(usize)"
+
+[[setter]]
+type = "SplitViews"
+old = "first(usize)"
+new = "SplitLayout::draw_order(first)"
+note = "The body shows the panes; the caller walks `draw_order`."
+
+[[setter]]
+type = "SplitViews"
+old = "show(ui, rect, |ui, pane, rect| ..)"
+new = "show(ui, |ui, body| ..)"
+note = "The pane rects are `layout.rects(split_at, body.rect)`."
+
+# Raster display and thumbnails.
+[[type]]
+name = "RasterDisplay"
+old = "craft_ui::canvas::raster::RasterDisplay"
+new = "craft_ui::canvas::RasterDisplay"
+status = "moved"
+note = "A canvas control: `RasterDisplay::new(label, &source).checkerboard(Checker::new()).show_at(ui, body.rect)` inside a `Canvas` given a view; the view and the interface scale come from the canvas (`canvas_space`), so `show(ui, &view, &source)` is gone. Outside a canvas, or in one without a view, it draws nothing."
+
+[[type]]
+name = "RasterResponse"
+old = "craft_ui::canvas::raster::RasterResponse"
+new = ""
+status = "removed"
+note = "Replaced by `RasterDisplayOutput`: `read` and `detail` stay; `id` is gone with the egui-memory calls that took it, and `response` is the display's response."
+
+[[type]]
+name = "RasterDisplayOutput"
+old = ""
+new = "craft_ui::canvas::RasterDisplayOutput"
+status = "replaced"
+note = "The output of `RasterDisplay`: `response`, `read: Option<PixelRect>`, `detail: Option<DetailPlan>`."
+
+[[type]]
+name = "DetailPlan"
+old = "craft_ui::canvas::textures::limits::DetailPlan"
+new = "craft_ui::canvas::DetailPlan"
+status = "moved"
+note = "`DetailPlan::of(size: PixelSize, side, device_zoom, visible)` is pure as before; `DetailPlan::in_view(&view, size, side, pixels_per_point)` reads the visible pixels and the device zoom of a `CanvasView`, as `PixelRect::visible` did."
+
+[[type]]
+name = "Checkerboard"
+old = "craft_ui::canvas::raster::Checkerboard"
+new = ""
+status = "removed"
+note = "The transparency grid is `craft_ui::primitives::Checker` (size and two colours, each unset one the theme's: the `size.checker` token and the `overlay.checker_*` tokens), which `RasterDisplay::checkerboard(Checker)` takes and `kit::checker` draws by default; `ThumbPaint::checker(true)` draws the default."
+
+[[type]]
+name = "CheckerSize"
+old = "craft_ui::canvas::raster::CheckerSize"
+new = ""
+status = "removed"
+note = "See `Checkerboard`."
+
+[[type]]
+name = "CheckerColors"
+old = "craft_ui::canvas::raster::CheckerColors"
+new = ""
+status = "removed"
+note = "See `Checkerboard`."
+
+[[type]]
+name = "Thumbnails"
+old = "craft_ui::canvas::textures::thumb::Thumbnails"
+new = "craft_ui::primitives::textures::Thumbnails"
+status = "moved"
+note = "`Thumbnails::in_context(ctx, salt, options)` takes any `Hash + Debug` salt. `paint` takes the `&ContentPainterCx` a `ListRow::thumb` or `Tile::thumb` painter receives. `retain` takes the `Context`. `paint_placeholder` and `style` are gone: `paint` with `TextureState::Missing` draws the placeholder from tokens."
+
+[[type]]
+name = "ThumbSource"
+old = "craft_ui::canvas::textures::thumb::ThumbSource"
+new = "craft_ui::primitives::textures::ThumbSource"
+status = "moved"
+note = "Same methods; `revision` returns `craft_ui::primitives::Revision`."
+
+[[type]]
+name = "ThumbRequest"
+old = "craft_ui::canvas::textures::thumb::ThumbRequest"
+new = "craft_ui::primitives::textures::ThumbRequest"
+status = "moved"
+note = "`for_cell` and `region` keep their meaning; the struct is `#[non_exhaustive]`."
+
+[[type]]
+name = "ThumbRender"
+old = "craft_ui::canvas::textures::thumb::ThumbRender"
+new = "craft_ui::primitives::textures::ThumbRender"
+status = "moved"
+
+[[type]]
+name = "ThumbJob"
+old = "craft_ui::canvas::textures::thumb::ThumbJob"
+new = "craft_ui::primitives::textures::ThumbJob"
+status = "moved"
+
+[[type]]
+name = "ThumbPaint"
+old = "craft_ui::canvas::textures::thumb::ThumbPaint"
+new = "craft_ui::primitives::textures::ThumbPaint"
+status = "moved"
+note = "`tint` is a `DataColor` (`DataColor::new(Color32::from_gray(200))`), not a `Color32`."
+
+[[type]]
+name = "ThumbFit"
+old = "craft_ui::canvas::textures::thumb::ThumbFit"
+new = "craft_ui::primitives::textures::ThumbFit"
+status = "moved"
+
+[[type]]
+name = "ThumbnailOptions"
+old = "craft_ui::canvas::textures::thumb::ThumbnailOptions"
+new = "craft_ui::primitives::textures::ThumbnailOptions"
+status = "moved"
+note = "`ThumbnailOptions::new().max_side(..).store(..).lanes(..).jobs(..).renders_per_pass(..)` replaces the struct literal; `cache` is `store: TextureStoreOptions`."
+
+[[type]]
+name = "ThumbnailStyle"
+old = "craft_ui::canvas::textures::style::ThumbnailStyle"
+new = ""
+status = "removed"
+note = "`Thumbnails::paint` reads the sunken surface, the transparency grid and the warning icon from tokens."
+
+[[type]]
+name = "FakeThumbSource"
+old = "craft_ui::canvas::textures::thumb::FakeThumbSource"
+new = "craft_ui::primitives::textures::FakeThumbSource"
+status = "moved"
+note = "Behind the `testing` feature."
+
+[[type]]
+name = "thumb_image"
+old = "craft_ui::canvas::textures::thumb::thumb_image"
+new = "craft_ui::primitives::textures::thumb_image"
+status = "moved"
+note = "`frame_size` is a `craft_behavior::PixelSize`."
+
+[[type]]
+name = "fit_rect"
+old = "craft_ui::canvas::textures::thumb::fit_rect"
+new = "craft_ui::primitives::textures::fit_rect"
+status = "moved"
+
+[[setter]]
+type = "RasterDisplay"
+old = "new(id_salt)"
+new = "new(label, &source)"
+note = "The id comes from the label and the place in the tree; the source is a prop of construction."
+
+[[setter]]
+type = "RasterDisplay"
+old = "checkerboard(Checkerboard)"
+new = "checkerboard(Checker)"
+note = "`Checker::new().size(points).colors(light, dark)`; an empty `Checker::new()` is the theme's grid."
+
+[[setter]]
+type = "RasterDisplay"
+old = "show(ui, &view, &source)"
+new = "show_at(ui, body.rect)"
+note = "Inside a `Canvas` given a view."
+
+[[setter]]
+type = "RasterDisplay"
+old = "damage(ctx, id, region)"
+new = "RasterSource::damage(since)"
+note = "The source answers with the region changed since the revision the display shows; the display has no damage prop."
+
+[[setter]]
+type = "RasterDisplay"
+old = "forget(ctx, id)"
+new = ""
+note = "Gone: the textures are in `TextureStore`s under the display's id and leave by budget; a document of size zero drops them."
+
+[[setter]]
+type = "Thumbnails"
+old = "paint(painter, rect, &state, &paint)"
+new = "paint(&content_painter, rect, &state, &paint)"
+
+[[setter]]
+type = "Thumbnails"
+old = "paint_placeholder(painter, rect)"
+new = "paint(&content_painter, rect, &TextureState::Missing, &paint)"
+
+[[setter]]
+type = "Thumbnails"
+old = "retain(keep)"
+new = "retain(ctx, keep)"
+
+# canvas-navigate-a: navigation input, the view tools, momentary tools and zoom motion.
+
+[[type]]
+name = "NavigationOptions"
+old = "craft_ui::canvas::navigate::NavigationOptions"
+new = "craft_ui::canvas::NavigationOptions"
+status = "moved"
+note = "Plain data, `#[non_exhaustive]`: build it with `NavigationOptions::default()` and assign the fields. The fields and their defaults are unchanged."
+
+[[type]]
+name = "WheelNavigation"
+old = "craft_ui::canvas::navigate::WheelNavigation"
+new = "craft_ui::canvas::WheelNavigation"
+status = "moved"
+note = "A value that keeps the unfinished part of a ladder-step notch: `WheelNavigation::default()`, then `read(&mut self, &Wheel, &NavigationOptions)` or `classify(&mut self, WheelInput, &NavigationOptions)`. `Canvas` reads its wheel share with it and applies it to the view it reports (there is no `CanvasOutput::wheel` or `pan`); `read(ctx, response, prefs)`, `read_page`, `classify_page`, `settle`, `configure` and `fold_legacy_pinch` are gone (the wheel service owns the device reads and the modifier mapping). `apply(view, action, pointer, size, pixels_per_point)` no longer takes the options or clamps: with Overscroll off the canvas clamps with `CanvasScrollbars::clamp`."
+
+[[type]]
+name = "WheelAction"
+old = "craft_ui::canvas::navigate::WheelAction"
+new = "craft_ui::canvas::WheelAction"
+status = "moved"
+note = "Same variants (`Zoom`, `SnapZoom`, `Pan`)."
+
+[[type]]
+name = "WheelInput"
+old = "craft_ui::canvas::navigate::WheelInput"
+new = "craft_ui::canvas::WheelInput"
+status = "moved"
+note = "Built with `WheelInput::of(&Wheel)`; fields `scroll`, `zoom`, `mods`, `notch`. The smoothed and raw scroll pair, `alt` and `shift` are gone: the modifiers are `mods`."
+
+[[type]]
+name = "PageKey"
+old = "craft_ui::canvas::navigate::PageKey"
+new = "craft_ui::canvas::PageKey"
+status = "moved"
+note = "`PageKey::of(NavMove, MoveMods, canvas: Vec2)` reads the move a focused canvas takes (`Intents::take_move`) instead of an egui key; `handle`, `handle_where` and `apply(view, size, overscroll)` become `apply(view, size)` (the caller clamps)."
+
+[[type]]
+name = "FlickPan"
+old = "craft_ui::canvas::navigate::FlickPan"
+new = "craft_ui::canvas::FlickPan"
+status = "moved"
+note = "A value the Hand tool or the app keeps: `drag(now, delta)`, `release(now, enabled)`, `advance(now) -> Option<Vec2>`, `gliding()`, `stop()`. It holds no egui memory; `frame`, `advance_view` and the `CanvasId` key are gone."
+
+[[type]]
+name = "TouchpadGlide"
+old = "craft_ui::canvas::navigate::TouchpadGlide"
+new = "craft_ui::canvas::TouchpadGlide"
+status = "moved"
+note = "`TouchpadGlide::new(enabled)` (the app decides the platform) and `read(&Wheel, now, glide)`; it reads the wheel share, not egui events. `default()` is gone."
+
+[[type]]
+name = "Autoscroll"
+old = "craft_ui::canvas::navigate::Autoscroll"
+new = "craft_ui::canvas::Autoscroll"
+status = "moved"
+note = "`edge_step` and `scroll` are unchanged; the app runs them from `ToolHostResponse::past_edge`."
+
+[[type]]
+name = "RotateView"
+old = "craft_ui::canvas::navigate::RotateView"
+new = "craft_ui::canvas::RotateView"
+status = "replaced"
+note = "`RotateView` is now the compass, a canvas control: `RotateView::new(label, Bind<f64>, flip_x)` shown with `show_at(ui, RotateView::compass_rect(ui, canvas))` while `RotateView::visible(rotation)`; it returns `RotateViewOutput`. The drag maths (`begin`, `drag`, `wrap_deg`, `snap_deg`, `screen_delta`) is `ViewTurn`. `trackpad_delta` is gone (the wheel share carries no twist)."
+
+[[type]]
+name = "ViewTurn"
+old = ""
+new = "craft_ui::canvas::ViewTurn"
+status = "replaced"
+note = "The Rotate View drag maths that was `RotateView::{begin, drag, wrap_deg, snap_deg, screen_delta}`."
+
+[[type]]
+name = "CompassResponse"
+old = "craft_ui::canvas::navigate::CompassResponse"
+new = ""
+status = "removed"
+note = "Replaced by `RotateViewOutput { rotation: EditResponse<f64>, reset: bool }`."
+
+[[type]]
+name = "RotateViewOutput"
+old = ""
+new = "craft_ui::canvas::RotateViewOutput"
+status = "replaced"
+note = "The compass' output: the angle's edits and whether a double click reset it."
+
+[[type]]
+name = "HandTool"
+old = "craft_ui::canvas::navigate::HandTool"
+new = "craft_ui::canvas::HandTool"
+status = "moved"
+note = "`HandTool::new(options)` (the document size is gone). The tool sets the view with `ToolContext::set_view`; the app copies `ToolHostResponse::view`. `stop_glide()` ends a glide the app's clamp stopped."
+
+[[type]]
+name = "ZoomTool"
+old = "craft_ui::canvas::navigate::ZoomTool"
+new = "craft_ui::canvas::ZoomTool"
+status = "moved"
+note = "`ZoomTool::new(options)` (the document size is the canvas's: `CanvasSpace::document()`, from `Canvas::document`; a canvas given no document gives the tool none and it does nothing). A click's change is eased (`ToolContext::ease_view`, reported as `ToolHostResponse::ease`) under Animated Zoom."
+
+[[type]]
+name = "RotateViewTool"
+old = "craft_ui::canvas::navigate::RotateViewTool"
+new = "craft_ui::canvas::RotateViewTool"
+status = "moved"
+note = "Sets the view with `ToolContext::set_view`."
+
+[[type]]
+name = "ViewCommands"
+old = ""
+new = "craft_ui::canvas::ViewCommands"
+status = "replaced"
+note = "The `canvasView.*` commands, scoped to `canvasView` (Zoom In Cmd+= or Cmd++, Zoom Out Cmd+-, Fit on Screen Cmd+0, Fill Screen, 100% Cmd+1, Rotate View clockwise and counterclockwise, Reset Rotation) with `apply(view, size, pixels_per_point)`."
+
+[[type]]
+name = "NavigationLabels"
+old = "craft_ui::canvas::navigate::NavigationLabels"
+new = ""
+status = "removed"
+note = "Words: `CanvasWords::rotate_compass` (`rotateView.compass`). Go Back and Go Forward belong to the navigator."
+
+[[type]]
+name = "MomentaryKeys"
+old = "craft_ui::canvas::momentary::MomentaryKeys"
+new = ""
+status = "removed"
+note = "Replaced by the `MomentaryCommands` set (`Kind::Momentary`) and `Momentary`."
+
+[[type]]
+name = "MomentaryCommands"
+old = ""
+new = "craft_ui::canvas::MomentaryCommands"
+status = "replaced"
+note = "`canvasMomentary.hand`, `canvasMomentary.zoom_in` and `canvasMomentary.zoom_out`, bound to Space, Cmd+Space and Alt+Space. Scoped to `canvasView` like `ViewCommands`; `ToolHost::run` takes them for its canvas."
+
+[[type]]
+name = "Momentary"
+old = ""
+new = "craft_ui::canvas::Momentary"
+status = "replaced"
+note = "The momentary tools and the one in effect, kept by the app: `Momentary::new(options)` (the Zoom tool reads the document size from the canvas's space), `fired(MomentaryCommands, FirePhase)`, and `ToolHost::momentary(&mut Momentary)`, which feeds the set the `MomentaryCommands`s fired for its canvas (the set is scoped to `canvasView`; the app plumbs nothing) and runs the Hand or Zoom tool in place of the selected tool while a key is held. `tool(mods, in_gesture) -> Option<MomentaryTool>` tells which is in effect."
+
+[[type]]
+name = "MomentaryTool"
+old = "craft_ui::canvas::momentary::MomentaryTool"
+new = "craft_ui::canvas::MomentaryTool"
+status = "moved"
+note = "Same variants; `command_id` is gone (the command is `MomentaryCommands`)."
+
+[[type]]
+name = "SpringTool"
+old = "craft_ui::canvas::momentary::SpringTool"
+new = ""
+status = "removed"
+note = "Not ported: no caller in craft-libs or the apps. A tool letter held for a moment would be a `Kind::Momentary` command of the app's own."
+
+[[type]]
+name = "ZoomAnimation"
+old = "craft_ui::canvas::zoom::ZoomAnimation"
+new = "craft_ui::canvas::ZoomAnimation"
+status = "moved"
+note = "The ease `Canvas` keeps under its id and shows itself: its zoom commands, a tool's `ToolContext::ease_view` and a Navigator zoom all reach that one ease, and no app keeps one. It holds no clock: the canvas drives `Animate::anim(\"zoom\", animation.target(), spec::MOVE)` and passes the progress to `shown`. `begin(&from, anchor, progress)` (from the view drawn last while one runs), `shown(&target, progress)`, `running()`, `stop()`."
+
+[[type]]
+name = "HoldZoom"
+old = "craft_ui::canvas::zoom::HoldZoom"
+new = "craft_ui::canvas::HoldZoom"
+status = "moved"
+note = "`advance` takes the document size and pixels per point as before; `waiting(time)` is new."
+
+[[type]]
+name = "ZoomDrag"
+old = "craft_ui::canvas::zoom::ZoomDrag"
+new = "craft_ui::canvas::ZoomDrag"
+status = "moved"
+note = "`paint` is gone (the Zoom tool paints the rectangle); `is_click(pointer)` is new."
+
+[[type]]
+name = "turn_cursor"
+old = "craft_ui::canvas::turn::turn_cursor"
+new = ""
+status = "removed"
+note = "`PaintedCursor::turn(toward)`."
+
+[[type]]
+name = "distort_cursor"
+old = "craft_ui::canvas::turn::distort_cursor"
+new = ""
+status = "removed"
+note = "`PaintedCursor::distort(dir)`."
+
+[[type]]
+name = "skew_cursor"
+old = "craft_ui::canvas::turn::skew_cursor"
+new = ""
+status = "removed"
+note = "`PaintedCursor::skew(dir)`."
+
+[[type]]
+name = "selection_cursor"
+old = "craft_ui::canvas::turn::selection_cursor"
+new = ""
+status = "removed"
+note = "`PaintedCursor::Badged` through `PaintedCursor::badged(base, badge)`."
+
+[[setter]]
+type = "WheelNavigation"
+old = "read(ctx, canvas, prefs)"
+new = "read(&mut self, &Wheel, &NavigationOptions)"
+
+[[setter]]
+type = "HandTool"
+old = "new(size, prefs)"
+new = "new(options)"
+
+[[setter]]
+type = "ZoomTool"
+old = "new(size, prefs)"
+new = "new(options)"
+
+[[setter]]
+type = "RotateView"
+old = "compass_with(ui, view, tokens, labels)"
+new = "new(label, Bind<f64>, flip_x)"
+
+
+[[setter]]
+type = "Rulers"
+old = "Rulers::new(id_salt, x, y, names)"
+new = "Rulers::new(label, x, y, Bind::bound(&mut zero))"
+note = "`x` and `y` are `&RulerText` (units with their `UnitKind`); the zero point is the bound value, so the `zero(Point)` setter is gone."
+
+[[setter]]
+type = "Rulers"
+old = "margins(horizontal, vertical)"
+new = "margins(RulerMargins::new(horizontal, vertical))"
+
+[[setter]]
+type = "Rulers"
+old = "snap(|Orientation, f64, Modifiers| ..)"
+new = "snap(|Axis, f64, Mods| ..)"
+note = "The axis is the one a guide at the coordinate would run along: the x coordinate is `Axis::Y`."
+
+[[setter]]
+type = "Rulers"
+old = "units_menu(units, current)"
+new = "units(&[UnitKind])"
+note = "The checked unit is the top ruler's `RulerText::kind`."
+
+[[setter]]
+type = "Rulers"
+old = "policy(EditPolicy)"
+new = ""
+note = "Removed: the zero point is a `Bind` and its gesture is the pipeline's."
+
+[[setter]]
+type = "Rulers"
+old = "show(ui, full, view, guides)"
+new = "show_at(ui, body.rect)"
+note = "Inside the `Canvas` body; the view comes from `Canvas::view`. The guides are forwarded from `RulerOutput::guide`."
+
+[[setter]]
+type = "Rulers"
+old = "reset_zero(ctx, id)"
+new = "RulerCommands::ResetZero"
+note = "The app handles the command and puts the zero point back (`Point::ZERO`); the rulers' own corner double click and menu row write the same zero through the `Rulers::new` zero bind."
+
+[[setter]]
+type = "Rulers"
+old = "set_zero(ctx, id, point)"
+new = ""
+note = "Removed: the app writes the bound zero point."
+
+[[setter]]
+type = "Rulers"
+old = "ticks(units, rule, style, zoom, values)"
+new = "ticks(units, rule, zoom, values)"
+
+[[setter]]
+type = "CanvasScrollbars"
+old = "CanvasScrollbars::new(id_salt, names)"
+new = "CanvasScrollbars::new(label, Bind::bound(&mut view), document)"
+
+[[setter]]
+type = "CanvasScrollbars"
+old = "show(ui, &mut view, doc)"
+new = "show_at(ui, view_rect)"
+note = "Inside the `Canvas` body."
+
+# l4d-space
+[[type]]
+name = "CanvasRulers"
+old = ""
+new = "craft_ui::canvas::CanvasRulers"
+status = "replaced"
+note = "The units and the zero point a canvas measures its document in: `x` and `y` (`RulerText`) and `zero`. `Canvas::rulers(x, y, zero)` publishes them; `CanvasSpace::rulers()` reads them (pixels from the origin when the canvas publishes none) and `CanvasRulers::across(along)` gives the ruler and zero for a guide running along an axis."
+
+[[type]]
+name = "BackgroundPress"
+old = ""
+new = "craft_ui::canvas::BackgroundPress"
+status = "replaced"
+note = "The presses on the canvas background in a pass, read with `CanvasSpace::background()`: `pressed` (a button went down) and `context` (a secondary click's position). `canvas::context_click(&PressState)` is the one reading of a secondary click."
+
+# canvas-navigator-a setters.
+[[setter]]
+type = "NavigatorZoomRow"
+old = "zoom_row(ui, &mut view, size, numbers, labels, style, control, animated_zoom)"
+new = "NavigatorZoomRow::new(Bind::bound(&mut view), document).show(ui)"
+note = "The row's words come from `CanvasWords`; the field takes the percent unit's decimals. `animated_zoom` goes to the canvas (`Canvas::navigation`), which eases the Zoom In and Zoom Out the row's buttons fire."
+
+[[setter]]
+type = "NavigatorOptionsDialog"
+old = "initial(options)"
+new = "new(Bind::bound(&mut options))"
+
+[[setter]]
+type = "NavigatorOptionsDialog"
+old = "pick_color()"
+new = "show(ui).requests.take_color()"
+
+[[setter]]
+type = "NavigatorOptionsDialog"
+old = "set_color(key, color)"
+new = "answers(requests.take_answers()) after requests.answer_color(key, color)"
+
+[[setter]]
+type = "NavigatorOptionsDialog"
+old = "cancel_color()"
+new = "requests.cancel_color()"
+
+# l4e-navprev: the legacy Navigator's setters.
+[[setter]]
+type = "Navigator"
+old = "new(id_salt, size, numbers)"
+new = "new(label, Bind::bound(&mut view), size)"
+note = "The label names the AccessKit group; the view is bound here, not passed to `show`. Numbers come from the env's locale."
+
+[[setter]]
+type = "Navigator"
+old = "settings(&mut settings)"
+new = "proxy(settings.options.proxy_color)"
+note = "The Navigator reads only the proxy colour. Panel Options is the app command `NavigatorCommands::Options`, which opens `NavigatorOptionsDialog` and writes the settings."
+
+[[setter]]
+type = "Navigator"
+old = "labels(NavigatorLabels)"
+new = ""
+note = "Removed: the scroll-bar names are `CanvasWords` (`navigator_horizontal`, `navigator_vertical`), translated by the catalog; the group's name is the label of `new`."
+
+[[setter]]
+type = "Navigator"
+old = "size(ControlSize)"
+new = "size(ControlSize)"
+
+[[setter]]
+type = "Navigator"
+old = "enabled(bool)"
+new = "enabled(bool)"
+
+[[setter]]
+type = "Navigator"
+old = "navigation(&NavigationOptions)"
+new = "navigation(NavigationOptions)"
+
+[[setter]]
+type = "Navigator"
+old = "show(ui, &mut view)"
+new = "show(ui)"
+note = "Returns `NavigatorOutput`: the view's `EditResponse` and, under Animated Zoom, `ease`, how the change to the target eases. The legacy widget with its zoom row is `NavigatorPanel::show(ui)`, which returns `NavigatorPanelOutput`."
+# End of l4e-navprev.
+
+# l4f-fscope
+[[type]]
+name = "NoTool"
+old = ""
+new = "craft_ui::canvas::NoTool"
+status = "replaced"
+note = "The tool of a canvas that has none: it takes no press, paints nothing, and its `command_form` is `ToolPath::Freehand`. `Canvas::new(label)` takes no `ToolPath`: the background part declares one fixed pointer-only reason that names the running tool's command form, and `CanvasTool::command_form` stays the one owner of the fact."
+
+# l4z-canvas
+[[type]]
+name = "frame_step"
+old = ""
+new = "craft_ui::canvas::frame_step"
+status = "replaced"
+note = "`frame_step(dt: f64) -> f64`: the one step Hand glides, held Zoom presses and autoscroll integrate over, capped at `FRAME_STEP_MAX` (0.1 s). Replaces `FlickPan`'s, `Autoscroll::MAX_DT` and `HoldZoom::MAX_DT`, which never shipped."
+
+[[type]]
+name = "FRAME_STEP_MAX"
+old = ""
+new = "craft_ui::canvas::FRAME_STEP_MAX"
+status = "replaced"
+note = "The longest frame step of canvas motion, in seconds."
+# End of l4z-canvas.

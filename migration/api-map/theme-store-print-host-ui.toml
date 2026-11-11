@@ -1,0 +1,193 @@
+# API map of the "theme-store, print, host UI" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "theme-store, print, host UI"
+new_module = "craft_theme_store::ui"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "AppearancePage"
+old = "craft_theme_store::ui::AppearancePage"
+new = "craft_theme_store::ui::AppearancePage"
+status = "same"
+note = "A pattern on `FieldGroup`: `AppearancePage::new(&client, Bind<SelectionChange>)` with `favorites`, `text_size` and `system_dark` as props; `show(ui) -> AppearancePageOutput`. The rows are `Field`s over `Select`s and two `RadioGroup`s of `ThemeChip`s."
+
+[[type]]
+name = "AppearancePageResponse"
+old = "craft_theme_store::ui::AppearancePageResponse"
+new = ""
+status = "removed"
+note = "Replaced by `AppearancePageOutput { response, changed, favorite_toggled }`."
+
+[[type]]
+name = "AppearancePageOutput"
+old = ""
+new = "craft_theme_store::ui::AppearancePageOutput"
+status = "replaced"
+note = "The old response with the page's `response` added."
+
+[[type]]
+name = "AppearanceLabels"
+old = "craft_theme_store::ui::AppearanceLabels"
+new = ""
+status = "removed"
+note = "Replaced by `AppearanceWords`. The word ids move from `appearance.*` to `appearancePage.*`; the texts are unchanged."
+
+[[type]]
+name = "AppearanceWords"
+old = ""
+new = "craft_theme_store::ui::AppearanceWords"
+status = "replaced"
+note = "The words of the appearance page (`appearancePage.*`), read with `Env::of(ui).words::<AppearanceWords>()`."
+
+[[type]]
+name = "ThemeChip"
+old = "craft_theme_store::ui::ThemeChip"
+new = "craft_theme_store::ui::ThemeChip"
+status = "same"
+note = "A leaf component and a member of the `RadioGroup<Option<ThemeId>>` it is shown in; `ThemeChip::new(theme, dark)` with `favorite(bool)`. The group picks it and moves between chips; `selected` is gone."
+
+[[type]]
+name = "ThemeChipResponse"
+old = "craft_theme_store::ui::ThemeChipResponse"
+new = ""
+status = "removed"
+note = "Replaced by `ThemeChipOutput { response, favorite_clicked }`. A context menu hangs from `response` with `Menu::context`."
+
+[[type]]
+name = "ThemeChipOutput"
+old = ""
+new = "craft_theme_store::ui::ThemeChipOutput"
+status = "replaced"
+note = "The chip's response and whether its star was clicked."
+
+[[type]]
+name = "ThemeChipStyle"
+old = ""
+new = "craft_theme_store::ui::ThemeChipStyle"
+status = "replaced"
+note = "The look of the chip, read from the tokens."
+
+[[type]]
+name = "Printer"
+old = "craft_print::ui::Printer"
+new = "craft_print::ui::Printer"
+status = "same"
+note = "`#[non_exhaustive]`: `Printer::new(name)`, `label(..)` and `is_default(..)`."
+
+[[type]]
+name = "Duplex"
+old = "craft_print::ui::Duplex"
+new = "craft_print::ui::Duplex"
+status = "same"
+note = "`#[non_exhaustive]`."
+
+[[type]]
+name = "Settings"
+old = "craft_print::ui::Settings"
+new = "craft_print::ui::Settings"
+status = "same"
+note = "`#[non_exhaustive]`: start from `Settings::default()` and set the fields."
+
+[[type]]
+name = "Discover"
+old = "craft_print::ui::Discover"
+new = "craft_print::ui::Discover"
+status = "same"
+
+[[type]]
+name = "Submission"
+old = "craft_print::ui::Submission"
+new = "craft_print::ui::Submission"
+status = "same"
+
+[[type]]
+name = "Submit"
+old = "craft_print::ui::Submit"
+new = "craft_print::ui::Submit"
+status = "same"
+
+[[type]]
+name = "Feedback"
+old = "craft_print::ui::Feedback"
+new = "craft_print::ui::Feedback"
+status = "same"
+note = "`#[non_exhaustive]`."
+
+[[type]]
+name = "State"
+old = "craft_print::ui::State"
+new = "craft_print::ui::State"
+status = "same"
+note = "`#[non_exhaustive]`. `show(ui, id, discover, labels)` is `run(ui, discover) -> PrintPanelOutput`; `poll`, `refresh`, `begin`, `ready`, `busy` and `discovering` are unchanged."
+
+[[type]]
+name = "PrintLabels"
+old = "craft_print::ui::PrintLabels"
+new = ""
+status = "removed"
+note = "The panel reads `PrintWords`."
+
+[[type]]
+name = "Labels"
+old = "craft_print::ui::Labels"
+new = ""
+status = "removed"
+note = "The deprecated alias of `PrintLabels` goes with it."
+
+[[type]]
+name = "PrintTexts"
+old = "craft_print::ui::PrintTexts"
+new = ""
+status = "removed"
+note = "Replaced by `PrintWords`. The word ids move from `print.*` to `printPanel.*`; `printPanel.title` is new."
+
+[[type]]
+name = "PrintWords"
+old = ""
+new = "craft_print::ui::PrintWords"
+status = "replaced"
+note = "The words of the print panel (`printPanel.*`)."
+
+[[type]]
+name = "PrintPanel"
+old = ""
+new = "craft_print::ui::PrintPanel"
+status = "replaced"
+note = "A pattern on `FieldGroup`: `PrintPanel::new(Bind<Settings>, &[Printer])` with `discovering(bool)` and `busy(bool)`; `State::run` shows it. The 32 to 230 width clamp is gone: the panel sizes from its content."
+
+[[type]]
+name = "PrintPanelOutput"
+old = ""
+new = "craft_print::ui::PrintPanelOutput"
+status = "replaced"
+note = "`{ response, refresh }`; `refresh` is the Refresh button pressed this pass."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+
+[[setter]]
+type = "AppearancePage"
+old = "AppearancePage::new(id_salt, client, draft: &mut SelectionChange)"
+new = "AppearancePage::new(client, draft: Bind<SelectionChange>)"
+note = "The draft is a bind; the page writes the picks into it."
+
+[[setter]]
+type = "AppearancePage"
+old = "show(..) read ui.ctx().system_theme()"
+new = "system_dark(bool)"
+note = "The row marked Active when the mode follows the system: the page cannot read the system's mode itself, so the caller passes it."
+
+[[setter]]
+type = "ThemeChip"
+old = "selected(bool)"
+new = ""
+note = "Removed: the radio group marks the chosen chip."
+
+# Calls the codemods rewrite.
+
+[[call]]
+old = "craft_host::Host::of(ui)"
+new = "cx.env.host()"
+note = "`EnvView::host()` gives the host as an Option; `BodyCx::env` and `Cx::env` hold the view."

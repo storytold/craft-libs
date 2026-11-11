@@ -1,0 +1,94 @@
+# API map of the "Imaging layer style parts" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Imaging layer style parts"
+new_module = "craft_imaging::ui::layer_style"
+
+[[type]]
+name = "BlendIfBar"
+old = "craft_imaging::ui::layer_style::BlendIfBar"
+new = "craft_imaging::ui::layer_style::BlendIfBar"
+status = "replaced"
+note = "A pattern over a `ThumbRow` of four thumbs: `BlendIfBar::new(label, Bind<BlendIfRange>)` returns `EditResponse<BlendIfRange>`. A drag stops at the other pair; the legacy bar pushed it. The bar mirrors with the row."
+
+[[type]]
+name = "BlendIfBarLabels"
+old = "craft_imaging::ui::layer_style::BlendIfBarLabels"
+new = ""
+status = "removed"
+
+[[type]]
+name = "BlendIfWords"
+old = ""
+new = "craft_imaging::ui::layer_style::BlendIfWords"
+status = "replaced"
+note = "The same ids (`blendIf.*`) as a `words!` set."
+
+[[type]]
+name = "BlendIfBarStyle"
+old = "craft_imaging::ui::layer_style::BlendIfBarStyle"
+new = ""
+status = "removed"
+note = "Sizes come from `ThumbRow`."
+
+[[type]]
+name = "ContourField"
+old = "craft_imaging::ui::layer_style::ContourField"
+new = "craft_imaging::ui::layer_style::ContourField"
+status = "replaced"
+note = "A pattern over `PresetPicker<ContourKey>`: `ContourField::new(label, Bind<Contour>, &rows, Bind<PresetState<ContourKey>>)` with `user(&[Contour])` and `anti_alias(Bind<Option<bool>>)`; the rows come from `contour_rows`."
+
+[[type]]
+name = "ContourFieldResponse"
+old = "craft_imaging::ui::layer_style::ContourFieldResponse"
+new = ""
+status = "removed"
+
+[[type]]
+name = "ContourFieldOutput"
+old = ""
+new = "craft_imaging::ui::layer_style::ContourFieldOutput"
+status = "replaced"
+note = "`edit`, `anti_alias`, `edit_contour` and `action`."
+
+[[type]]
+name = "ContourFieldLabels"
+old = "craft_imaging::ui::layer_style::ContourFieldLabels"
+new = ""
+status = "removed"
+
+[[type]]
+name = "ContourWords"
+old = ""
+new = "craft_imaging::ui::layer_style::ContourWords"
+status = "replaced"
+note = "The ids move from `contourField.*` to `contour.*`."
+
+[[type]]
+name = "ContourFieldStyle"
+old = "craft_imaging::ui::layer_style::ContourFieldStyle"
+new = ""
+status = "removed"
+note = "Sizes come from the picker and the curve preview."
+
+[[type]]
+name = "ContourAction"
+old = "craft_imaging::ui::layer_style::ContourAction"
+new = "craft_imaging::ui::layer_style::ContourAction"
+status = "same"
+note = "Unchanged. Replace has no trigger in the new picker; Load and Save come from the Contour Editor."
+
+[[type]]
+name = "ContourRequest"
+old = "craft_imaging::ui::layer_style::ContourRequest"
+new = "craft_imaging::ui::layer_style::ContourRequest"
+status = "same"
+note = "Unchanged."
+
+[[type]]
+name = "ContourEditorDialog"
+old = "craft_imaging::ui::layer_style::ContourEditorDialog"
+new = "craft_imaging::ui::layer_style::ContourEditorDialog"
+status = "same"
+note = "Still a `StackDialog` with `show(ui, stack)`; built on `FormDialog` and the curve editor. `labels` is gone: the words are the scope's."
+

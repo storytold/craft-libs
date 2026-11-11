@@ -1,0 +1,525 @@
+# API map of the "Dropdown pickers" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Dropdown pickers"
+new_module = "craft_ui::pickers"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "Select"
+old = "craft_ui::controls::select::Select"
+new = "craft_ui::pickers::Select"
+status = "moved"
+note = "A `Component` shown with `Show::show`; the output is `EditResponse<T>`. `Select::new(label, Bind<T>, &[Entry<T>])`: the options are `Entry` values (`Entry::new(value, label).icon(..).enabled(..)`, `Entry::separator()`), and the value comes back from the binding, never an index. The popup is `List::options` on `Overlay::dropdown()` and focus stays on the field."
+
+[[type]]
+name = "SelectOption"
+old = "craft_ui::controls::select::SelectOption"
+new = ""
+status = "replaced"
+note = "Use `craft_ui::contract::Entry<T>`: `Entry::new(value, label)`."
+
+[[type]]
+name = "SelectStyle"
+old = "craft_ui::controls::select::SelectStyle"
+new = "craft_ui::pickers::SelectStyle"
+status = "moved"
+note = "A `ComponentStyle` built from the tokens; the legacy `SelectStyle::style(tokens, size)` and its public fields are gone."
+
+[[type]]
+name = "SelectText"
+old = "craft_ui::controls::preview_select::SelectText"
+new = ""
+status = "removed"
+note = "Not ported. A select shows its face text always; a preview-only select needs a thumb painter (`Select::decorate`) and a face without text, which the contract does not offer yet."
+
+[[type]]
+name = "LineStyle"
+old = "craft_ui::controls::preview_select::LineStyle"
+new = ""
+status = "removed"
+note = "A stroke-style value of the host's own: show its preview in a row with `Select::decorate` and `ListRow::thumb`."
+
+[[type]]
+name = "LineWeights"
+old = "craft_ui::controls::preview_select::LineWeights"
+new = ""
+status = "removed"
+note = "Goes with `LineStyle`: the host's thumb painter owns the weights."
+
+[[type]]
+name = "paint_line_style"
+old = "craft_ui::controls::preview_select::paint_line_style"
+new = ""
+status = "removed"
+note = "The host paints a line preview inside the thumb painter of `Select::decorate`."
+
+[[type]]
+name = "Shortcut"
+old = "craft_ui::controls::option_list::Shortcut"
+new = ""
+status = "removed"
+note = "The option-list row helpers (`paint_row`, `Shortcut`, `Leading`) are the option look of `ListRow::option()`; a shortcut text is `ListRow::trailing(..)` from `Select::decorate`."
+
+[[type]]
+name = "ComboBox"
+old = "craft_ui::controls::combo_box::ComboBox"
+new = "craft_ui::pickers::ComboBox"
+status = "moved"
+note = "`ComboBox::new(label, Bind::bound(&mut text), &options)` with `options: &[Entry<String>]` in place of `new(id_salt, label, &text).options(..)`; output `EditResponse<String>`. The text is the value; filtering, the list and its keys are the component's own. The deprecated `craft_ui::combo::ComboBox` (the egui fork, `show_ui`, `show_index` and the other `show_*` entry points) has no counterpart: a list of fixed choices is `Select`, a text field with options is this `ComboBox`."
+
+[[type]]
+name = "TreePicker"
+old = "craft_ui::controls::tree_picker::TreePicker"
+new = "craft_ui::pickers::TreePicker"
+status = "moved"
+note = "`TreePicker::new(label, Bind::bound(&mut album), &entries)`; the value is `Option<K>` in a `Bind`, output `EditResponse<Option<K>>`. The closed field is a `SelectFace`. The popup has no search field: the list's type-ahead jumps to a visible row, and `tree_search` and `tree_path` go."
+
+[[type]]
+name = "Autocomplete"
+old = "craft_ui::controls::autocomplete::Autocomplete"
+new = ""
+status = "replaced"
+note = "`TextField::complete(completer)`: the text adapter owns the popup, the list keys, Tab and Escape. A `Suggestion` is a `Completion` (label, text to insert); `take_keys` and `AutocompleteKeys` go. A completion list anchored to something that is not a text field has no counterpart."
+
+[[type]]
+name = "DatePicker"
+old = "craft_ui::controls::date::DatePicker"
+new = "craft_ui::pickers::DatePicker"
+status = "moved"
+note = "A `Component` shown with `Show::show`: a text part (typed dates through `DateCodec`) and a calendar button that opens a popover. The output is `EditResponse<Option<PickedDate>>`; the value comes from the binding."
+
+[[type]]
+name = "IconPicker"
+old = "craft_ui::controls::icon_picker::IconPicker"
+new = "craft_ui::pickers::IconPicker"
+status = "moved"
+note = "A pattern over `TextField::search` and `TileGrid`, shown with its own `show(ui) -> IconPickerOutput<K>`. `IconPicker::new(label, Bind<Option<K>>, &[IconPickerGroup<K>])`; each item names its icon."
+
+[[type]]
+name = "ComboState"
+old = "craft_ui::controls::combo_box::ComboState"
+new = ""
+status = "removed"
+note = "Internal state of the legacy combo box (open flag, typing run, restore text). The text adapter keeps the typing run and the dropdown keeps the open state."
+
+[[type]]
+name = "Matches"
+old = "craft_ui::controls::combo_box::Matches"
+new = ""
+status = "removed"
+note = "Internal to the legacy combo box. `ComboBox` applies the same rule itself: options starting with the typed text first, then those containing it, ignoring case and surrounding spaces."
+
+[[type]]
+name = "Menu"
+old = "craft_ui::combo::Menu"
+new = ""
+status = "removed"
+note = "The deprecated egui-fork popup menu (`show_ui`, `show_rows_with_header` and the other `show_*` entry points). A value menu is `Menu::entries`; a value picker is `Select` or `ComboBox`."
+
+[[type]]
+name = "TreeEntry"
+old = "craft_ui::controls::tree_picker::TreeEntry"
+new = "craft_ui::pickers::TreeEntry"
+status = "moved"
+note = "Built with `TreeEntry::new(key, name)` or `TreeEntry::folder(key, name)` (names are `impl Into<Label>`), then `within(parent_key)`, `blocked_by(reason)` (a `Label`) and `with_icon(icon)`, in place of the public fields `key`, `name`, `parent`, `folder`, `blocked` and `icon`."
+
+[[type]]
+name = "TreePickerStyle"
+old = "craft_ui::controls::tree_picker::TreePickerStyle"
+new = "craft_ui::pickers::TreePickerStyle"
+status = "moved"
+note = "Read-only style struct built from the theme; the select style, row style, list height and popup width fields go. The popup is as wide as the field at least and takes at most half the viewport width and 40 percent of its height."
+
+[[type]]
+name = "TreePickerLabels"
+old = "craft_ui::controls::tree_picker::TreePickerLabels"
+new = ""
+status = "replaced"
+note = "Words of the library word sets (`treePicker.placeholder`; the path separator is `common.pathSeparator`); a placeholder of the app is `TreePicker::placeholder`."
+
+[[type]]
+name = "AutocompleteResponse"
+old = "craft_ui::controls::autocomplete::AutocompleteResponse"
+new = ""
+status = "replaced"
+note = "The text field's `EditResponse` reports the accepted text as the value; there is no accepted index or dismissed flag."
+
+[[type]]
+name = "AutocompleteKeys"
+old = "craft_ui::controls::autocomplete::AutocompleteKeys"
+new = ""
+status = "removed"
+note = "The host forwards the list keys from the text part to the completion list; no caller takes them."
+
+[[type]]
+name = "AutocompleteStyle"
+old = "craft_ui::controls::autocomplete::AutocompleteStyle"
+new = ""
+status = "removed"
+note = "The completion list is a `List::options` on the dropdown preset and takes its look from the theme."
+
+[[type]]
+name = "Suggestion"
+old = "craft_ui::controls::autocomplete::Suggestion"
+new = ""
+status = "replaced"
+note = "`craft_ui::primitives::Completion` carries the label and the text to insert; the mark and description lines have no counterpart."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+
+[[setter]]
+type = "Select"
+old = "new(id_salt, label, value: &mut T)"
+new = "new(label, Bind<T>, &[Entry<T>])"
+note = "The id comes from `Props::id_salt`; the value is a `Bind`."
+
+[[setter]]
+type = "Select"
+old = "option(value, text)"
+new = "Entry::new(value, text)"
+note = "In the slice given to `Select::new`."
+
+[[setter]]
+type = "Select"
+old = "option_icon(value, icon, text)"
+new = "Entry::new(value, text).icon(icon)"
+
+[[setter]]
+type = "Select"
+old = "option_enabled(bool)"
+new = "Entry::enabled(bool)"
+
+[[setter]]
+type = "Select"
+old = "option_closed_text(text)"
+new = ""
+note = "Not ported: the closed box shows the entry's label."
+
+[[setter]]
+type = "Select"
+old = "option_tooltip(text)"
+new = ""
+note = "Not ported: the contract has no tooltip on an option row."
+
+[[setter]]
+type = "Select"
+old = "option_shortcut(Kbd)"
+new = "decorate(|value, row| row.trailing(text))"
+note = "The shortcut is the row's trailing text."
+
+[[setter]]
+type = "Select"
+old = "separator()"
+new = "Entry::separator()"
+
+[[setter]]
+type = "Select"
+old = "group(text)"
+new = ""
+note = "Not ported: `Entry` has no group heading."
+
+[[setter]]
+type = "Select"
+old = "rows(count, value, text)"
+new = ""
+note = "Not ported: a long generated list has no source type yet; build the `Entry` slice."
+
+[[setter]]
+type = "Select"
+old = "searchable(label, clear_label)"
+new = "searchable()"
+note = "A flag; the field's name and clear label are built-in words."
+
+[[setter]]
+type = "Select"
+old = "header_menu(label, entries, picked)"
+new = ""
+note = "Not ported yet: it waits for `Menu`."
+
+[[setter]]
+type = "Select"
+old = "wheel_steps(bool)"
+new = ""
+note = "Removed: the wheel steps the pick while the field is focused or armed."
+
+[[setter]]
+type = "Select"
+old = "width(f32)"
+new = ""
+note = "Removed: the field is as wide as its widest entry and the popup is as wide as its widest row."
+
+[[setter]]
+type = "Select"
+old = "fit(bool)"
+new = ""
+note = "Removed: the width is always the widest entry."
+
+[[setter]]
+type = "Select"
+old = "row_content(Vec2, paint)"
+new = "decorate(|value, row| row.thumb(ThumbSize::Small, paint))"
+note = "The thumbnail is sized by a token step, not a point size. The closed box does not show it."
+
+[[setter]]
+type = "Select"
+old = "text_shown(SelectText)"
+new = ""
+note = "Not ported."
+
+[[setter]]
+type = "Select"
+old = "highlighted(&mut Option<T>)"
+new = ""
+note = "Not ported: a hover preview needs the hovered row, which the list reports only as a lead move."
+
+[[setter]]
+type = "Select"
+old = "placeholder(text)"
+new = "placeholder(impl Into<Label>)"
+
+[[setter]]
+type = "Select"
+old = "size(ControlSize)"
+new = "size(ControlSize)"
+
+[[setter]]
+type = "Select"
+old = "policy(EditPolicy)"
+new = "Bind::policy(EditPolicy)"
+
+[[setter]]
+type = "Select"
+old = "enabled(bool)"
+new = "enabled(bool)"
+
+[[setter]]
+type = "ComboBox"
+old = "new(id_salt, label, &str)"
+new = "new(label, Bind<String>, &[Entry<String>])"
+
+[[setter]]
+type = "ComboBox"
+old = "option(text), options(texts)"
+new = "new(.., &[Entry::new(text.to_owned(), text)])"
+note = "The options are the third argument of `new`: an `Entry<String>` whose value is the text put in the field."
+
+[[setter]]
+type = "ComboBox"
+old = "placeholder(String)"
+new = "placeholder(impl Into<Label>)"
+
+[[setter]]
+type = "ComboBox"
+old = "size(ControlSize), enabled(bool)"
+new = "size(ControlSize), enabled(bool)"
+note = "Props setters."
+
+[[setter]]
+type = "ComboBox"
+old = "policy(EditPolicy)"
+new = ""
+note = "Removed: a typing run is the binding's gesture; the text part commits on Enter or when focus leaves."
+
+[[setter]]
+type = "ComboBox"
+old = "keep_focus(bool)"
+new = ""
+note = "Removed: the text adapter's Enter submits and keeps the focus; a pick keeps it too."
+
+[[setter]]
+type = "TreePicker"
+old = "new(id_salt, label, &mut Option<K>, &[TreeEntry<K>])"
+new = "new(label, Bind<Option<K>>, &[TreeEntry<K>])"
+
+[[setter]]
+type = "TreePicker"
+old = "placeholder(String), size(ControlSize), enabled(bool)"
+new = "placeholder(impl Into<Label>), size(ControlSize), enabled(bool)"
+
+[[setter]]
+type = "TreePicker"
+old = "labels(TreePickerLabels), style(tokens, size)"
+new = ""
+note = "Removed: words come from the library word sets and the style from the theme."
+
+[[setter]]
+type = "SelectFace"
+old = "PickerField::ThumbnailAndName(PickerThumb)"
+new = "thumb(ThumbAspect, paint)"
+note = "The closed box shows the thumbnail before the name. The thumbnail's height is `size.thumb.sm`; its aspect is `ThumbAspect::SQUARE` for `PickerThumb::Square` and the host's wide aspect for `Wide`."
+
+[[setter]]
+type = "SelectFace"
+old = "PickerField::Thumbnail(PickerThumb)"
+new = "thumb(ThumbAspect, paint).name(false)"
+note = "The thumbnail alone; the name stays the face's accessible name."
+
+[[type]]
+name = "DatePrecision"
+old = "craft_ui::controls::date::DatePrecision"
+new = "craft_ui::pickers::DatePrecision"
+status = "moved"
+note = "Now `#[non_exhaustive]`; `DatePrecision::ALL` is unchanged."
+
+[[type]]
+name = "PickedDate"
+old = "craft_ui::controls::date::PickedDate"
+new = "craft_ui::pickers::PickedDate"
+status = "moved"
+note = "The constructors, `parse`, `iso`, `precision`, `first_day`, `last_day`, `calendar_date`, `from_calendar_date` and `in_bounds` are unchanged; the fields are read-only outside the crate."
+
+[[type]]
+name = "month_grid"
+old = "craft_ui::controls::date::month_grid"
+new = "craft_ui::pickers::month_grid"
+status = "moved"
+note = "A pure function, unchanged."
+
+[[type]]
+name = "local_month_grid"
+old = "craft_ui::controls::date::local_month_grid"
+new = "craft_ui::pickers::local_month_grid"
+status = "moved"
+note = "A pure function, unchanged."
+
+[[type]]
+name = "DatePickerStyle"
+old = "craft_ui::controls::date::DatePickerStyle"
+new = ""
+status = "removed"
+note = "A `ComponentStyle` built from the tokens: the field look of `DatePicker` and `CalendarStyle` for the page. The legacy `DatePicker::style(tokens, size)` and its public fields are gone."
+
+[[type]]
+name = "DatePickerLabels"
+old = "craft_ui::controls::date::DatePickerLabels"
+new = ""
+status = "removed"
+note = "The words are rows of `PickerWords` (`datePicker.*`); override them through the scope words."
+
+[[type]]
+name = "DateCodec"
+old = ""
+new = "craft_ui::pickers::DateCodec"
+status = "replaced"
+note = "The codec of the text part: ISO text at every precision, the region short date at day precision, bounded by the picker offers and bounds."
+
+[[type]]
+name = "Calendar"
+old = ""
+new = "craft_ui::pickers::Calendar"
+status = "replaced"
+note = "The page of the popover (days, months or years with previous and next buttons), a leaf with its own stories. The host keeps its `CalendarView` and applies `CalendarOutput::moved`. Its cells are one roving group over a wrapped grid (role `GRID`, cells `GRID_CELL`); a move past the grid's rows, Page Up and Page Down change the page (`CalendarView::crossed`); previous, next and the title are pointer parts whose keyboard paths are Page Up, Page Down and Ctrl+Up."
+
+[[type]]
+name = "IconPickerItem"
+old = "craft_ui::controls::icon_picker::IconPickerItem"
+new = "craft_ui::pickers::IconPickerItem"
+status = "moved"
+note = "`IconPickerItem::new(key, label)` and the `keywords` setter replace the struct literal."
+
+[[type]]
+name = "IconPickerGroup"
+old = "craft_ui::controls::icon_picker::IconPickerGroup"
+new = "craft_ui::pickers::IconPickerGroup"
+status = "moved"
+note = "`IconPickerGroup::new(name, items)` replaces the struct literal."
+
+[[type]]
+name = "IconPickerOutput"
+old = "craft_ui::controls::icon_picker::IconPickerOutput"
+new = "craft_ui::pickers::IconPickerOutput"
+status = "moved"
+note = "`picked: Option<K>` as before; `response` is the grid's response and `search_changed` reports an edit of the search text."
+
+[[type]]
+name = "IconPickerStyle"
+old = "craft_ui::controls::icon_picker::IconPickerStyle"
+new = ""
+status = "removed"
+note = "The look comes from `TextField::search` and `TileGrid`; the legacy `IconPicker::style(tokens)` is gone."
+
+[[type]]
+name = "IconPickerLabels"
+old = "craft_ui::controls::icon_picker::IconPickerLabels"
+new = ""
+status = "removed"
+note = "The words are rows of `PickerWords` (`iconPicker.*`)."
+
+[[type]]
+name = "icon_matches"
+old = "craft_ui::controls::icon_picker::icon_matches"
+new = ""
+status = "removed"
+note = "The search matches the cell label and keywords with `craft_i18n::matcher::Matcher` on the scope folder."
+
+[[setter]]
+type = "DatePicker"
+old = "new(id_salt, label, value: &mut Option<PickedDate>)"
+new = "new(label, Bind<Option<PickedDate>>)"
+note = "The id comes from `Props::id_salt`; the value is a `Bind`."
+
+[[setter]]
+type = "DatePicker"
+old = "labels(DatePickerLabels)"
+new = ""
+note = "Words come from the scope (`PickerWords`)."
+
+[[setter]]
+type = "DatePicker"
+old = "precisions(&[DatePrecision])"
+new = "precisions(&[DatePrecision])"
+
+[[setter]]
+type = "DatePicker"
+old = "min(Option<PickedDate>)"
+new = "min(PickedDate)"
+note = "Leave it unset for no minimum."
+
+[[setter]]
+type = "DatePicker"
+old = "max(Option<PickedDate>)"
+new = "max(PickedDate)"
+note = "Leave it unset for no maximum."
+
+[[setter]]
+type = "DatePicker"
+old = "today(PickedDate)"
+new = "today(PickedDate)"
+
+[[setter]]
+type = "DatePicker"
+old = "size(ControlSize)"
+new = ""
+note = "The ambient control size of the scope applies."
+
+[[setter]]
+type = "DatePicker"
+old = "enabled(bool)"
+new = "Props::enabled(bool)"
+
+[[setter]]
+type = "IconPicker"
+old = "new(id_salt, label, groups, paint)"
+new = "new(label, Bind<Option<K>>, &[IconPickerGroup<K>])"
+note = "The id comes from `Props::id_salt`; the value is a `Bind`; the painter is the `paint` setter."
+
+[[setter]]
+type = "IconPicker"
+old = "paint: Fn(&Painter, Rect, &K, Color32)"
+new = "paint(Fn(&ContentPainterCx, Rect, &K))"
+note = "The host reads its own ink; the picker passes no colour."
+
+[[setter]]
+type = "IconPicker"
+old = "max_height(f32)"
+new = ""
+note = "The grid fills the room the host gives the picker and scrolls inside it."
+
+[[setter]]
+type = "IconPicker"
+old = "labels(IconPickerLabels)"
+new = ""
+note = "Words come from the scope (`PickerWords`)."

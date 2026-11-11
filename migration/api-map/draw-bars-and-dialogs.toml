@@ -1,0 +1,2010 @@
+# API map of the "draw bars and dialogs" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "draw bars and dialogs"
+new_module = "craft_draw::ui"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "ReferencePoint"
+old = "craft_ui::canvas::ReferencePoint"
+new = "craft_ui::pickers::ReferencePoint"
+status = "moved"
+note = "The 3 by 3 picker, now `ReferencePoint::new(label, Bind<Anchor9>)` with output `EditResponse<Anchor9>`, over the one `craft_ui::pickers::Anchor9` (`craft_behavior::Anchor9`; `Center` is `Centre`). It has the look of PhotoCraft's Canvas Size picker; the options-bar size is `.compact()`."
+
+[[type]]
+name = "RefSize"
+old = "craft_ui::canvas::RefSize"
+new = ""
+status = "replaced"
+note = "`Compact` is `.compact()`; `Large` is the default."
+
+
+# One entry per renamed, removed or reshaped setter or constructor.
+# [[setter]]
+# type = ""
+# old = ""
+# new = ""
+[[setter]]
+type = "ReferencePoint"
+old = "ReferencePoint::new(id_salt, Option<Anchor9>)"
+new = "ReferencePoint::new(label, Bind<Anchor9>)"
+note = "The picker always has a point; a mixed binding checks none. The pick comes back in the output's event."
+
+[[setter]]
+type = "ReferencePoint"
+old = "growth(i8, i8)"
+new = "growth((f64, f64))"
+note = "The change in width and height; only the signs decide the arrows."
+
+[[setter]]
+type = "ReferencePoint"
+old = "size(RefSize)"
+new = "compact()"
+note = "`RefSize::Compact` is `.compact()`; `RefSize::Large` is the default and needs no call."
+
+[[setter]]
+type = "ReferencePoint"
+old = "names([String; 9])"
+new = ""
+note = "The nine names are the picker family's words (`PickerWords`)."
+
+# draw-brush: the Brush Settings panel and the Brush Preset picker.
+
+[[type]]
+name = "ShapePanel"
+old = "craft_draw::ui::shape::ShapePanel"
+new = "craft_draw::ui::shape::ShapePanel"
+status = "replaced"
+note = "A `Pattern`: `ShapePanel::new(label, &LiveShape, &ShapeAppearance, pixels_per_inch)` (the document resolution is required; the `pixels_per_inch` setter is gone), `show(ui)`; sections are `Section`s, rows are `Field`s."
+
+[[type]]
+name = "ShapePanelOutput"
+old = "craft_draw::ui::shape::ShapePanelOutput"
+new = "craft_draw::ui::shape::ShapePanelOutput"
+status = "replaced"
+note = "Adds `screen_pick`, a chip's eyedropper press; the host answers through `ShapePanel::sampled`. The events are `craft_behavior::EditEvent<ShapeChange>`."
+
+[[type]]
+name = "ShapeBar"
+old = "craft_draw::ui::shape::ShapeBar"
+new = "craft_draw::ui::shape::ShapeBar"
+status = "replaced"
+note = "A `Pattern` shown as children of a `Bar` (`BarKind::Options`): `ShapeBar::new(kind, &settings, &appearance, pixels_per_inch)` (the document resolution is required; the `pixels_per_inch` setter is gone), `show(ui)`."
+
+[[type]]
+name = "ShapeBarOutput"
+old = "craft_draw::ui::shape::ShapeBarOutput"
+new = "craft_draw::ui::shape::ShapeBarOutput"
+status = "replaced"
+note = "The output of `ShapeBar::show`, not a sink passed in with `output`."
+
+[[type]]
+name = "ShapeLabels"
+old = "craft_draw::ui::shape::ShapeLabels"
+new = ""
+status = "removed"
+note = "A `words!` set; `stroke_style` is new."
+
+[[type]]
+name = "ShapeWords"
+old = ""
+new = "craft_draw::ui::shape::ShapeWords"
+status = "replaced"
+note = "A `words!` set; `stroke_style` is new."
+
+[[type]]
+name = "LiveShape"
+old = "craft_draw::ui::shape::LiveShape"
+new = "craft_draw::ui::shape::LiveShape"
+status = "same"
+
+[[type]]
+name = "ShapeAppearance"
+old = "craft_draw::ui::shape::ShapeAppearance"
+new = "craft_draw::ui::shape::ShapeAppearance"
+status = "same"
+
+[[type]]
+name = "ShapeChange"
+old = "craft_draw::ui::shape::ShapeChange"
+new = "craft_draw::ui::shape::ShapeChange"
+status = "same"
+
+[[type]]
+name = "ShapePaint"
+old = "craft_draw::ui::shape::ShapePaint"
+new = "craft_draw::ui::shape::ShapePaint"
+status = "same"
+
+[[type]]
+name = "ShapeToolSettings"
+old = "craft_draw::ui::shape::ShapeToolSettings"
+new = "craft_draw::ui::shape::ShapeToolSettings"
+status = "same"
+
+[[type]]
+name = "PatternFillEditor"
+old = "craft_draw::ui::pattern::PatternFillEditor"
+new = "craft_draw::ui::pattern::PatternFillEditor"
+status = "replaced"
+note = "A `Pattern`: `PatternFillEditor::new(label, Bind<PatternFillOptions>, &[PatternSwatch])`, output `PatternFillOutput { response, event }`; the preset picker and browser are `PresetPicker` and `PresetBrowser` over the same rows."
+
+[[type]]
+name = "PatternFillDialog"
+old = "craft_draw::ui::pattern::PatternFillDialog"
+new = "craft_draw::ui::pattern::PatternFillDialog"
+status = "same"
+note = "A `StackDialog` over a `FormDialog<PatternFillOptions>`; `show` takes `&mut Ui` and the `DialogStack`."
+
+[[type]]
+name = "PatternFillLabels"
+old = "craft_draw::ui::pattern::PatternFillLabels"
+new = ""
+status = "removed"
+note = "A `words!` set."
+
+[[type]]
+name = "PatternWords"
+old = ""
+new = "craft_draw::ui::pattern::PatternWords"
+status = "replaced"
+note = "A `words!` set."
+
+[[type]]
+name = "PatternSwatch"
+old = "craft_draw::ui::pattern::PatternSwatch"
+new = "craft_draw::ui::pattern::PatternSwatch"
+status = "same"
+
+[[type]]
+name = "PatternColors"
+old = "craft_draw::ui::pattern::PatternColors"
+new = "craft_draw::ui::pattern::PatternColors"
+status = "same"
+
+[[type]]
+name = "PatternFillOptions"
+old = "craft_draw::ui::pattern::PatternFillOptions"
+new = "craft_draw::ui::pattern::PatternFillOptions"
+status = "same"
+
+[[setter]]
+type = "ShapePanel"
+old = "ShapePanel::new(id_salt, &LiveShape, &ShapeAppearance)"
+new = "ShapePanel::new(label, &LiveShape, &ShapeAppearance)"
+
+[[setter]]
+type = "ShapePanel"
+old = "stroke_open(&mut bool)"
+new = "stroke_open(Bind<bool>)"
+
+[[setter]]
+type = "ShapePanel"
+old = "chips(closure)"
+new = "chips(closure)"
+note = "Stored as a `ChipSetup`; the closure decorates each `PaintChip` (`gradient_editor`, `pattern_editor`, `picture_editor`)."
+
+[[setter]]
+type = "ShapePanel"
+old = "labels(ShapeLabels)"
+new = "(removed)"
+note = "Words come from the env."
+
+[[setter]]
+type = "ShapePanel"
+old = "(none)"
+new = "sampled(Option<(ShapePaint, Srgba)>)"
+note = "The host's answer to `ShapePanelOutput::screen_pick`."
+
+[[setter]]
+type = "ShapeBar"
+old = "ShapeBar::new(id_salt, kind, &settings, &appearance)"
+new = "ShapeBar::new(kind, &settings, &appearance)"
+
+[[setter]]
+type = "ShapeBar"
+old = "add_to(&mut OptionsBarSlots)"
+new = "show(ui)"
+note = "Call it inside a `Bar`'s body."
+
+[[setter]]
+type = "ShapeBar"
+old = "output(&mut ShapeBarOutput)"
+new = "(removed)"
+note = "`show` returns the output."
+
+[[setter]]
+type = "ShapeBar"
+old = "stroke_open(&mut bool)"
+new = "stroke_open(Bind<bool>)"
+
+[[setter]]
+type = "ShapePanel"
+old = "(none)"
+new = "pixels_per_inch(f64)"
+note = "The document's pixels per inch, which sizes a length typed in inches or points; 72 by default."
+
+[[setter]]
+type = "ShapeBar"
+old = "(none)"
+new = "pixels_per_inch(f64)"
+note = "As `ShapePanel::pixels_per_inch`; 72 by default."
+
+[[setter]]
+type = "StrokePreview"
+old = "ink(Color32)"
+new = "(removed)"
+note = "`paint` applies the stroke's opacity; the ink comes from the painter."
+
+[[setter]]
+type = "PatternFillEditor"
+old = "PatternFillEditor::new(id_salt, &PatternFillOptions, &[PatternSwatch])"
+new = "PatternFillEditor::new(label, Bind<PatternFillOptions>, &[PatternSwatch])"
+
+[[setter]]
+type = "PatternFillEditor"
+old = "thumbnails(Fn(&Painter, Rect, &PatternSwatch))"
+new = "thumbnails(Fn(&ContentPainterCx, Rect, &PatternSwatch) + Send + Sync)"
+note = "Painted through the content painter."
+
+[[setter]]
+type = "PatternFillEditor"
+old = "labels(PatternFillLabels)"
+new = "(removed)"
+note = "Words come from the env."
+
+[[setter]]
+type = "PatternFillDialog"
+old = "thumbnails(Fn(&Painter, Rect, &PatternSwatch))"
+new = "thumbnails(Fn(&ContentPainterCx, Rect, &PatternSwatch) + Send + Sync)"
+
+[[setter]]
+type = "PatternFillDialog"
+old = "show(ctx, stack)"
+new = "show(ui, stack)"
+
+[[setter]]
+type = "PatternFillDialog"
+old = "labels(PatternFillLabels)"
+new = "(removed)"
+note = "Words come from the env."
+# draw-connector
+
+[[type]]
+name = "ConnectorBar"
+old = "craft_draw::ui::connector::ConnectorBar"
+new = "craft_draw::ui::connector::ConnectorBar"
+status = "same"
+note = "A pattern shown as a child of the host's options `Bar`: `ConnectorBar::new(Mixed<Routing>, Mixed<ConnectorLine>).caps(start, end).show(ui)`; `add_to` is gone."
+
+[[setter]]
+type = "ConnectorBar"
+old = "add_to(slots)"
+new = "show(ui)"
+note = "Shown in the host's `Bar`."
+
+[[type]]
+name = "ConnectorBarOutput"
+old = "craft_draw::ui::connector::ConnectorBarOutput"
+new = "craft_draw::ui::connector::ConnectorBarOutput"
+status = "same"
+note = "Gains `response`; is no longer `Default` or `PartialEq`."
+
+[[type]]
+name = "ConnectorBarLabels"
+old = "craft_draw::ui::connector::ConnectorBarLabels"
+new = ""
+status = "removed"
+note = "Words are `ConnectorBarWords`."
+
+[[type]]
+name = "ConnectorBarWords"
+old = ""
+new = "craft_draw::ui::connector::ConnectorBarWords"
+status = "replaced"
+note = "Words are `ConnectorBarWords`."
+
+[[type]]
+name = "ConnectorLine"
+old = "craft_draw::ui::connector::ConnectorLine"
+new = "craft_draw::ui::connector::ConnectorLine"
+status = "same"
+
+[[type]]
+name = "CreateShapeDialog"
+old = "craft_draw::ui::shape_drag::CreateShapeDialog"
+new = "craft_draw::ui::shape_drag::CreateShapeDialog"
+status = "same"
+note = "Still a `StackDialog`, now over `FormDialog`."
+
+[[type]]
+name = "CreateShapeOptions"
+old = "craft_draw::ui::shape_drag::CreateShapeOptions"
+new = "craft_draw::ui::shape_drag::CreateShapeOptions"
+status = "same"
+note = "`units` takes `GuideUnits` (its `ruler` is a `UnitKind`)."
+
+[[type]]
+name = "CreatedShape"
+old = "craft_draw::ui::shape_drag::CreatedShape"
+new = "craft_draw::ui::shape_drag::CreatedShape"
+status = "same"
+
+[[type]]
+name = "CreateShapeLabels"
+old = "craft_draw::ui::shape_drag::CreateShapeLabels"
+new = ""
+status = "removed"
+note = "Words are `CreateShapeWords`."
+
+[[type]]
+name = "CreateShapeWords"
+old = ""
+new = "craft_draw::ui::shape_drag::CreateShapeWords"
+status = "replaced"
+note = "Words are `CreateShapeWords`."
+
+# draw-gradient-a: the gradient stop bar, its stops, ramp and swatch.
+[[type]]
+name = "GradientEditor"
+old = "craft_draw::ui::GradientEditor"
+new = "craft_draw::ui::gradient::GradientEditor"
+status = "replaced"
+note = "A pattern: `GradientEditor::new(label, Bind<GradientStops>).show(ui)` with output `GradientEditorOutput`. The selection is the host's `selected` binding or the editor's own."
+
+[[type]]
+name = "GradientEditorResponse"
+old = "craft_draw::ui::GradientEditorResponse"
+new = ""
+status = "removed"
+note = "`edit` folds the bar's and the fields' events; `color_requested` carries a `StopColor`; the eyedropper request is `screen_pick`."
+
+[[type]]
+name = "GradientEditorOutput"
+old = ""
+new = "craft_draw::ui::gradient::GradientEditorOutput"
+status = "replaced"
+note = "`edit` folds the bar's and the fields' events; `color_requested` carries a `StopColor`; the eyedropper request is `screen_pick`."
+
+[[type]]
+name = "GradientEditorStyle"
+old = "craft_draw::ui::GradientEditorStyle"
+new = ""
+status = "removed"
+note = "The bar's look is a `ComponentStyle` of the bar."
+
+[[type]]
+name = "GradientLabels"
+old = "craft_draw::ui::GradientLabels"
+new = ""
+status = "removed"
+note = "A `words!` set with count rows for the stop counts."
+
+[[type]]
+name = "GradientWords"
+old = ""
+new = "craft_draw::ui::gradient::GradientWords"
+status = "replaced"
+note = "A `words!` set with count rows for the stop counts."
+
+[[type]]
+name = "StopRef"
+old = "craft_draw::ui::gradient::StopRef"
+new = "craft_draw::ui::gradient::StopRef"
+status = "same"
+note = "Moved to `value.rs`; `#[non_exhaustive]`."
+
+[[type]]
+name = "StopDrop"
+old = "craft_draw::ui::gradient::StopDrop"
+new = "craft_draw::ui::gradient::StopDrop"
+status = "same"
+note = "The payload type is carried with it in `dropped`."
+
+[[type]]
+name = "GradientRamp"
+old = "craft_draw::ui::gradient::GradientRamp"
+new = "craft_draw::ui::gradient::GradientRamp"
+status = "same"
+note = "`paint(cx, rect, colors)` over the kit's ramp painter."
+
+[[type]]
+name = "GradientRampStyle"
+old = "craft_draw::ui::gradient::GradientRampStyle"
+new = ""
+status = "removed"
+note = "The checker comes from the kit."
+
+[[type]]
+name = "GradientSwatch"
+old = "craft_draw::ui::gradient::GradientSwatch"
+new = "craft_draw::ui::gradient::GradientSwatch"
+status = "replaced"
+note = "`GradientSwatch::new(label, &stops)`; output `GradientSwatchOutput { response, clicked }`."
+
+[[type]]
+name = "GradientStops"
+old = "craft_draw::ui::gradient::GradientStops"
+new = "craft_draw::ui::gradient::GradientStops"
+status = "same"
+note = "`#[non_exhaustive]` with constructors."
+
+[[type]]
+name = "ColorStop"
+old = "craft_draw::ui::gradient::ColorStop"
+new = "craft_draw::ui::gradient::ColorStop"
+status = "same"
+note = "`#[non_exhaustive]` with constructors."
+
+[[type]]
+name = "OpacityStop"
+old = "craft_draw::ui::gradient::OpacityStop"
+new = "craft_draw::ui::gradient::OpacityStop"
+status = "same"
+note = "`#[non_exhaustive]` with constructors."
+
+[[type]]
+name = "StopRow"
+old = "craft_draw::ui::gradient::StopRow"
+new = "craft_draw::ui::gradient::StopRow"
+status = "same"
+note = "`#[non_exhaustive]` with constructors."
+
+[[type]]
+name = "StopRows"
+old = "craft_draw::ui::gradient::StopRows"
+new = "craft_draw::ui::gradient::StopRows"
+status = "same"
+note = "`#[non_exhaustive]` with constructors."
+
+[[type]]
+name = "StopRules"
+old = "craft_draw::ui::gradient::StopRules"
+new = "craft_draw::ui::gradient::StopRules"
+status = "same"
+note = "`#[non_exhaustive]` with constructors."
+
+[[type]]
+name = "Sampler"
+old = "craft_draw::ui::gradient::Sampler"
+new = "craft_draw::ui::gradient::Sampler"
+status = "same"
+note = "`#[non_exhaustive]` with constructors."
+
+[[type]]
+name = "default_sampler"
+old = "craft_draw::ui::gradient::default_sampler"
+new = "craft_draw::ui::gradient::default_sampler"
+status = "same"
+
+[[type]]
+name = "StopColor"
+old = ""
+new = "craft_draw::ui::gradient::StopColor"
+status = "pending"
+note = "New: the colour stop whose colour the host is asked to edit, with its `ColorRequest`."
+
+[[setter]]
+type = "GradientEditor"
+old = "new(id_salt, label, &stops, &numbers)"
+new = "new(label, Bind<GradientStops>)"
+note = "The id salt and the numbers go; the binding carries the stops."
+
+[[setter]]
+type = "GradientEditor"
+old = "select(ctx, id, ..) / selected(ctx, id) / id_in"
+new = "selected(Bind<Option<StopRef>>)"
+note = "One selection, owned by the host."
+
+[[setter]]
+type = "GradientEditor"
+old = "style / policy / labels / enabled"
+new = ""
+note = "Style is the component's; the policy is on the `Bind`; the words are `GradientWords`; `enabled` is kept."
+
+[[setter]]
+type = "GradientEditor"
+old = "stops(min, max) / rows / midpoint_range"
+new = "rules(StopRules)"
+note = "One rules value."
+
+[[setter]]
+type = "GradientEditor"
+old = "color_picker(setup)"
+new = "picker(setup)"
+
+[[setter]]
+type = "GradientSwatch"
+old = "width / size / enabled"
+new = "fill()"
+note = "The swatch takes the width the layout offers."
+
+[[setter]]
+type = "GradientSwatch"
+old = "has_popup(bool)"
+new = "has_popup()"
+
+# gradient-b: the palette and the Gradient Map
+
+[[type]]
+name = "GradientPalette"
+old = "craft_draw::ui::GradientPalette"
+new = "craft_draw::ui::gradient::GradientPalette"
+status = "replaced"
+note = "A pattern over `PresetBrowser`: `new(label, groups, Bind<PresetState<GradientRef>>)`, output `GradientPaletteOutput { picked }`."
+
+[[type]]
+name = "PaletteLayout"
+old = "craft_draw::ui::PaletteLayout"
+new = ""
+status = "removed"
+note = "`PresetView::{Grid, List}` in the bound `PresetState`."
+
+[[type]]
+name = "GradientGroup"
+old = "craft_draw::ui::GradientGroup"
+new = "craft_draw::ui::gradient::GradientGroup"
+status = "moved"
+note = "`#[non_exhaustive]`; `GradientGroup::new(name, items)`."
+
+[[type]]
+name = "GradientItem"
+old = "craft_draw::ui::GradientItem"
+new = "craft_draw::ui::gradient::GradientItem"
+status = "moved"
+note = "`#[non_exhaustive]`; `GradientItem::new(name, stops)`."
+
+[[type]]
+name = "GradientRef"
+old = "craft_draw::ui::GradientRef"
+new = "craft_draw::ui::gradient::GradientRef"
+status = "moved"
+note = "The browser's key. `#[non_exhaustive]`; `GradientRef::item(group, item)` builds the `Item` variant, whose pattern takes `..`."
+
+[[type]]
+name = "GradientMap"
+old = "craft_draw::ui::GradientMap"
+new = "craft_draw::ui::gradient::GradientMap"
+status = "moved"
+note = "`#[non_exhaustive]`; `GradientMap::new(stops, reverse, dither)`."
+
+[[type]]
+name = "GradientMapEditor"
+old = "craft_draw::ui::GradientMapEditor"
+new = "craft_draw::ui::gradient::GradientMapEditor"
+status = "replaced"
+note = "`new(label, &GradientMap)`; output `GradientMapOutput { event, color_requested, import }`."
+
+[[type]]
+name = "GradientMapLabels"
+old = "craft_draw::ui::GradientMapLabels"
+new = ""
+status = "removed"
+note = "A `words!` set."
+
+[[type]]
+name = "GradientMapWords"
+old = ""
+new = "craft_draw::ui::gradient::GradientMapWords"
+status = "replaced"
+note = "A `words!` set."
+
+[[type]]
+name = "GradientMapOutput"
+old = "craft_draw::ui::GradientMapOutput"
+new = "craft_draw::ui::gradient::GradientMapOutput"
+status = "replaced"
+note = "`pick_color` is `color_requested: Option<StopColor>`; `import_presets` is `import`."
+
+# draw-pen-b: Path Options
+[[type]]
+name = "PathOptionsPopover"
+old = "craft_draw::ui::pen::PathOptionsPopover"
+new = "craft_draw::ui::pen::PathOptionsPopover"
+status = "same"
+note = "A pattern: `new(label, Bind<PathOptionsSettings>)`, `default_color`, `show(ui, &mut open)`."
+
+[[type]]
+name = "PathOptionsPopoverResponse"
+old = "craft_draw::ui::pen::PathOptionsPopoverResponse"
+new = ""
+status = "removed"
+note = "The output is `PathOptionsOutput { response, edit, pick_color }`."
+
+[[type]]
+name = "PathOptionsOutput"
+old = ""
+new = "craft_draw::ui::pen::PathOptionsOutput"
+status = "replaced"
+note = "Replaces `PathOptionsPopoverResponse`; `edit` is `Option<EditEvent<PathOptionsSettings>>`."
+
+[[type]]
+name = "PathOptionsLabels"
+old = "craft_draw::ui::pen::PathOptionsLabels"
+new = ""
+status = "removed"
+note = "The words are `PathOptionsWords`."
+
+[[type]]
+name = "PathOptionsWords"
+old = ""
+new = "craft_draw::ui::pen::PathOptionsWords"
+status = "replaced"
+note = "The `words!` set of the popover."
+
+[[type]]
+name = "PathOptionsSettings"
+old = "craft_draw::ui::pen::PathOptionsSettings"
+new = "craft_draw::ui::pen::PathOptionsSettings"
+status = "same"
+note = "The serde shape is unchanged; the thickness is in pixels."
+
+[[type]]
+name = "PathMode"
+old = "craft_draw::ui::pen::PathMode"
+new = "craft_draw::ui::pen::PathMode"
+status = "same"
+note = "`resolve` takes `craft_keymap::Mods` in place of `egui::Modifiers`."
+
+[[type]]
+name = "PathTool"
+old = "craft_draw::ui::pen::PathTool"
+new = "craft_draw::ui::pen::PathTool"
+status = "same"
+
+[[type]]
+name = "PenMode"
+old = "craft_draw::ui::pen::PenMode"
+new = "craft_draw::ui::pen::PenMode"
+status = "same"
+
+[[setter]]
+type = "PathOptionsPopover"
+old = "new(id_salt, &settings)"
+new = "new(label, Bind<PathOptionsSettings>)"
+note = "The `ColorRequest` comes from the swatch as `pick_color`."
+
+[[setter]]
+type = "PathOptionsPopover"
+old = "labels(PathOptionsLabels)"
+new = ""
+note = "Words come from the env."
+# draw-crop-b: the Crop tool, its session and the Perspective Crop quad.
+
+[[type]]
+name = "CropTool"
+old = "craft_draw::ui::crop::CropTool"
+new = "craft_draw::ui::crop::CropTool"
+status = "same"
+
+[[type]]
+name = "CropToolPass"
+old = "craft_draw::ui::crop::CropToolPass"
+new = "craft_draw::ui::crop::CropToolPass"
+status = "same"
+
+[[type]]
+name = "CropSession"
+old = "craft_draw::ui::crop::CropSession"
+new = "craft_draw::ui::crop::CropSession"
+status = "same"
+
+[[type]]
+name = "CropDocument"
+old = "craft_draw::ui::crop::CropDocument"
+new = "craft_draw::ui::crop::CropDocument"
+status = "same"
+note = "`CropDocument::new(key, size, resolution)` takes the resolution; the `points_per_inch` field and setter are gone (points per inch is the environment's: the host passes `&Env::of(ui).units()` to `CropTool::{apply, leave, refit}`, `CropCommit::new` and `CropSettings::{target, ratio_value}`; inside the tool pass it reads `cx.units()`; `CropInput::new` is unchanged)."
+
+[[type]]
+name = "CropDocKey"
+old = "craft_draw::ui::crop::CropDocKey"
+new = "craft_draw::ui::crop::CropDocKey"
+status = "same"
+note = "`#[non_exhaustive]`; `CropDocKey::new(id)`."
+
+[[type]]
+name = "CropKept"
+old = "craft_draw::ui::crop::CropKept"
+new = "craft_draw::ui::crop::CropKept"
+status = "same"
+
+[[type]]
+name = "CropStep"
+old = "craft_draw::ui::crop::CropStep"
+new = "craft_draw::ui::crop::CropStep"
+status = "same"
+
+[[type]]
+name = "LeaveFrame"
+old = "craft_draw::ui::crop::LeaveFrame"
+new = "craft_draw::ui::crop::LeaveFrame"
+status = "same"
+
+[[type]]
+name = "StraightenState"
+old = "craft_draw::ui::crop::StraightenState"
+new = "craft_draw::ui::crop::StraightenState"
+status = "same"
+
+[[type]]
+name = "CropCommit"
+old = "craft_draw::ui::crop::CropCommit"
+new = "craft_draw::ui::crop::CropCommit"
+status = "same"
+
+[[type]]
+name = "CropEvent"
+old = "craft_draw::ui::crop::CropEvent"
+new = "craft_draw::ui::crop::CropEvent"
+status = "same"
+
+[[type]]
+name = "CropOutput"
+old = "craft_draw::ui::crop::CropOutput"
+new = "craft_draw::ui::crop::CropOutput"
+status = "same"
+
+[[type]]
+name = "CropInput"
+old = "craft_draw::ui::crop::CropInput"
+new = "craft_draw::ui::crop::CropInput"
+status = "same"
+
+[[type]]
+name = "PerspectiveCropQuad"
+old = "craft_draw::ui::crop::PerspectiveCropQuad"
+new = "craft_draw::ui::crop::PerspectiveCropQuad"
+status = "same"
+
+[[type]]
+name = "PerspectiveQuad"
+old = "craft_draw::ui::crop::PerspectiveQuad"
+new = "craft_draw::ui::crop::PerspectiveQuad"
+status = "same"
+
+[[type]]
+name = "PerspectiveCropResponse"
+old = "craft_draw::ui::crop::PerspectiveCropResponse"
+new = ""
+status = "removed"
+note = "`edit` is an `EditResponse<PerspectiveQuad>`; `apply`, `discard` and `picked` stay; `id`, `committable`, `hovered`, `claimed`, `dragging` and `placing` go (the arena owns the press; `PerspectiveCropTool::placing` has the clicks)."
+
+[[type]]
+name = "PerspectiveCropOutput"
+old = ""
+new = "craft_draw::ui::crop::PerspectiveCropOutput"
+status = "replaced"
+note = "`edit` is an `EditResponse<PerspectiveQuad>`; `apply`, `discard` and `picked` stay; `id`, `committable`, `hovered`, `claimed`, `dragging` and `placing` go (the arena owns the press; `PerspectiveCropTool::placing` has the clicks)."
+
+[[type]]
+name = "PerspectiveCropNames"
+old = "craft_draw::ui::crop::PerspectiveCropNames"
+new = ""
+status = "removed"
+note = "The names are `CropWords` rows, read from the env."
+
+[[type]]
+name = "PerspectiveCropStyle"
+old = "craft_draw::ui::crop::PerspectiveCropStyle"
+new = "craft_draw::ui::crop::PerspectiveCropStyle"
+status = "replaced"
+note = "A `ComponentStyle` built from `overlay.line`, `overlay.halo` and `Tone::Bad`; no setters."
+
+[[type]]
+name = "CropBarStyle"
+old = "craft_draw::ui::crop::CropBarStyle"
+new = ""
+status = "removed"
+note = "No style of its own: the fields take their widths from the field layout and the menus size from their content."
+
+[[type]]
+name = "PerspectiveHit"
+old = "craft_draw::ui::crop::PerspectiveHit"
+new = ""
+status = "removed"
+note = "The corners and the inside are parts in the canvas arena."
+
+[[type]]
+name = "PerspectiveCropTool"
+old = ""
+new = "craft_draw::ui::crop::PerspectiveCropTool"
+status = "replaced"
+note = "The background presses of Perspective Crop: a box drag or four clicks make the quad."
+
+[[type]]
+name = "CropWords"
+old = ""
+new = "craft_draw::ui::crop::CropWords"
+status = "replaced"
+note = "The words of the Crop and Perspective Crop tools."
+
+[[type]]
+name = "crop_to_form"
+old = ""
+new = "craft_draw::ui::crop::crop_to_form"
+status = "replaced"
+note = "The Crop To... command form."
+
+[[type]]
+name = "perspective_to_form"
+old = ""
+new = "craft_draw::ui::crop::perspective_to_form"
+status = "replaced"
+note = "The Perspective Crop To... command form."
+
+[[setter]]
+type = "CropInput"
+old = "units(&RulerUnits, &RulerUnits)"
+new = ""
+note = "The readout and the parts' values read the canvas's rulers."
+
+[[setter]]
+type = "CropInput"
+old = "names(CropNames)"
+new = ""
+note = "The names are `CropWords`."
+
+[[setter]]
+type = "CropInput"
+old = "readout(CropLabels)"
+new = ""
+note = "The readout words are the overlay's."
+
+[[setter]]
+type = "CropInput"
+old = "canvas_colour(Color32)"
+new = ""
+note = "The overlay reads the canvas colour token."
+
+[[setter]]
+type = "CropInput"
+old = "snap(closure)"
+new = "snap(&SnapTargets)"
+note = "The overlay snaps; the tool snaps nothing itself."
+
+[[setter]]
+type = "CropInput"
+old = "CropInput::new(settings, document)"
+new = "CropInput::new(ctx, settings, document)"
+note = "`ctx` mints the ids of the gestures the arrow-key nudges open (`runtime::edit::next_gesture_id`)."
+
+[[setter]]
+type = "CropTool"
+old = "refit(settings, document, units, editing)"
+new = "refit(settings, document, editing)"
+note = "Lengths are stored values, so no `units`; `Set` events carry no id, so no `ctx`. `crop_to(frame)` takes none either; `apply`, `leave`, `CropCommit::new`, `ratio_value` and `target` drop `units`."
+
+[[setter]]
+type = "CropSession"
+old = "set(frame, keep_default, label) / nudge(frame, label)"
+new = "set(ctx, frame, keep_default, label) / nudge(ctx, frame, label)"
+note = "The session mints no ids of its own."
+
+[[setter]]
+type = "CropTool"
+old = "undo(&CanvasView) -> Option<CanvasView>"
+new = "undo() -> bool"
+note = "The next pass turns the image-mode view with the frame."
+
+[[setter]]
+type = "CropTool"
+old = "refit(&CanvasView, ..) -> Option<(CropEvent, CanvasView)>"
+new = "refit(..) -> Option<CropEvent>"
+note = "The next pass turns the image-mode view with the frame."
+
+[[setter]]
+type = "CropTool"
+old = "apply(.., Option<CanvasView>)"
+new = "apply(..)"
+note = "The tool keeps the view the last pass saw."
+
+[[setter]]
+type = "CropTool"
+old = "applied(bool) -> Option<CanvasView>"
+new = "applied(bool)"
+note = "A refused commit's view goes to the host on the next pass."
+
+[[setter]]
+type = "CanvasTool"
+old = "parts / picked / pick"
+new = ""
+note = "The overlay's roving group owns the keyboard parts."
+
+[[setter]]
+type = "PerspectiveCropQuad"
+old = "new(id_salt, &state, names)"
+new = "new(label, Bind<PerspectiveQuad>)"
+note = "The value is a binding; the label names the group."
+
+[[setter]]
+type = "PerspectiveCropQuad"
+old = "show(ui, canvas, view)"
+new = "show_at(ui, canvas_rect)"
+note = "A canvas control is shown in the canvas body."
+
+[[setter]]
+type = "PerspectiveCropQuad"
+old = "focus(ctx, id) / clear(ctx, id)"
+new = ""
+note = "The arena owns focus; `PerspectiveCropTool::clear` drops the quad and the clicks."
+
+[[setter]]
+type = "PerspectiveCropQuad"
+old = "units / value / policy / tolerance"
+new = ""
+note = "Reach comes from tokens; the binding carries the policy."
+
+[[type]]
+name = "CropBar"
+old = "craft_draw::ui::crop::CropBar"
+new = "craft_draw::ui::crop::CropBar"
+status = "same"
+
+[[type]]
+name = "CropBarOutput"
+old = "craft_draw::ui::crop::CropBarOutput"
+new = "craft_draw::ui::crop::CropBarOutput"
+status = "same"
+
+[[type]]
+name = "CropRatioChange"
+old = "craft_draw::ui::crop::CropRatioChange"
+new = "craft_draw::ui::crop::CropRatioChange"
+status = "same"
+
+[[type]]
+name = "CropOverlayMenu"
+old = "craft_draw::ui::crop::CropOverlayMenu"
+new = "craft_draw::ui::crop::CropOverlayMenu"
+status = "same"
+
+[[type]]
+name = "CropOptionsMenu"
+old = "craft_draw::ui::crop::CropOptionsMenu"
+new = "craft_draw::ui::crop::CropOptionsMenu"
+status = "same"
+
+[[type]]
+name = "CropSettings"
+old = "craft_draw::ui::crop::CropSettings"
+new = "craft_draw::ui::crop::CropSettings"
+status = "same"
+
+[[type]]
+name = "CropSizeFields"
+old = "craft_draw::ui::crop::CropSizeFields"
+new = "craft_draw::ui::crop::CropSizeFields"
+status = "same"
+note = "`width` and `height` are `Option<CropLength>`, not text; the settings' old string form is not read back."
+
+[[type]]
+name = "CropLength"
+old = ""
+new = "craft_draw::ui::crop::CropLength"
+status = "replaced"
+note = "`#[non_exhaustive]`: `CropLength::new(value, unit)`. A crop W or H with the unit it was entered in; `CropSizePreset::width` and `height` are `CropLength` too."
+
+[[type]]
+name = "CropRatio"
+old = "craft_draw::ui::crop::CropRatio"
+new = "craft_draw::ui::crop::CropRatio"
+status = "same"
+note = "The `Sides` variant is `#[non_exhaustive]`: build it with `CropRatio::sides(width, height)`; its pattern takes `..`."
+
+[[type]]
+name = "CropFill"
+old = "craft_draw::ui::crop::CropFill"
+new = "craft_draw::ui::crop::CropFill"
+status = "same"
+
+[[type]]
+name = "CropTarget"
+old = "craft_draw::ui::crop::CropTarget"
+new = "craft_draw::ui::crop::CropTarget"
+status = "same"
+
+[[type]]
+name = "CropSizePreset"
+old = "craft_draw::ui::crop::CropSizePreset"
+new = "craft_draw::ui::crop::CropSizePreset"
+status = "same"
+
+[[type]]
+name = "CropUserPreset"
+old = "craft_draw::ui::crop::CropUserPreset"
+new = "craft_draw::ui::crop::CropUserPreset"
+status = "same"
+
+[[type]]
+name = "CropPresetChoice"
+old = "craft_draw::ui::crop::CropPresetChoice"
+new = "craft_draw::ui::crop::CropPresetChoice"
+status = "same"
+
+[[type]]
+name = "ResolutionUnit"
+old = "craft_draw::ui::crop::ResolutionUnit"
+new = "craft_draw::ui::crop::ResolutionUnit"
+status = "same"
+
+[[type]]
+name = "RulerTool"
+old = "craft_draw::ui::measure::RulerTool"
+new = "craft_draw::ui::measure::RulerTool"
+status = "same"
+
+[[type]]
+name = "RulerPass"
+old = "craft_draw::ui::measure::RulerPass"
+new = "craft_draw::ui::measure::RulerPass"
+status = "same"
+
+[[type]]
+name = "RulerBar"
+old = "craft_draw::ui::measure::RulerBar"
+new = "craft_draw::ui::measure::RulerBar"
+status = "same"
+
+[[type]]
+name = "RulerBarOutput"
+old = "craft_draw::ui::measure::RulerBarOutput"
+new = "craft_draw::ui::measure::RulerBarOutput"
+status = "same"
+
+[[type]]
+name = "RulerLine"
+old = "craft_draw::ui::measure::RulerLine"
+new = "craft_draw::ui::measure::RulerLine"
+status = "same"
+
+[[type]]
+name = "RulerPart"
+old = "craft_draw::ui::measure::RulerPart"
+new = "craft_draw::ui::measure::RulerPart"
+status = "same"
+
+[[type]]
+name = "RulerReading"
+old = "craft_draw::ui::measure::RulerReading"
+new = "craft_draw::ui::measure::RulerReading"
+status = "same"
+
+[[type]]
+name = "box_distances"
+old = "craft_draw::ui::measure::box_distances"
+new = "craft_draw::ui::measure::box_distances"
+status = "same"
+
+[[type]]
+name = "CropOptionsMenuResponse"
+old = "craft_draw::ui::crop::CropOptionsMenuResponse"
+new = ""
+status = "replaced"
+note = "`CropOptionsMenuOutput { response, pick_color, changed }`."
+
+[[type]]
+name = "RulerInput"
+old = "craft_draw::ui::measure::RulerInput"
+new = ""
+status = "removed"
+note = "`RulerTool::pass(line)` takes the line; the units come from the canvas space."
+
+[[type]]
+name = "CropBarLabels"
+old = "craft_draw::ui::crop::CropBarLabels"
+new = ""
+status = "removed"
+note = "`CropBarWords`, a `words!` set with the same ids (`cropBar.*`)."
+
+[[type]]
+name = "RulerBarLabels"
+old = "craft_draw::ui::measure::RulerBarLabels"
+new = ""
+status = "removed"
+note = "`RulerWords`, a `words!` set with the same ids (`rulerBar.*`)."
+
+[[type]]
+name = "RulerToolLabels"
+old = "craft_draw::ui::measure::RulerToolLabels"
+new = ""
+status = "removed"
+note = "`RulerWords`, a `words!` set with the same ids (`rulerTool.*`)."
+
+[[type]]
+name = "MeasureStyle"
+old = "craft_draw::ui::measure::MeasureStyle"
+new = ""
+status = "removed"
+note = "The handles are `HandleLook` in `RulerOverlayStyle`; the line is `LineGuideStyle` of `StraightLinePreview`; the readout gap is the `Field` layout gap."
+
+[[type]]
+name = "CropOptionsMenuOutput"
+old = ""
+new = "craft_draw::ui::crop::CropOptionsMenuOutput"
+status = "replaced"
+note = "Replaces `CropOptionsMenuResponse`."
+
+[[type]]
+name = "CropOverlayMenuOutput"
+old = ""
+new = "craft_draw::ui::crop::CropOverlayMenuOutput"
+status = "replaced"
+note = "The overlay menu output: `response` and `changed`."
+
+[[type]]
+name = "RATIO_STEP"
+old = ""
+new = "craft_draw::ui::crop::RATIO_STEP"
+status = "replaced"
+note = "What one arrow press on a ratio field adds to its side; `pub` so trials assert with it."
+
+[[type]]
+name = "LENGTH_MIN"
+old = ""
+new = "craft_draw::ui::crop::LENGTH_MIN"
+status = "replaced"
+note = "The smallest length a W or H field keeps, in its own unit; the field's range starts there."
+
+[[type]]
+name = "CropBarWords"
+old = ""
+new = "craft_draw::ui::crop::CropBarWords"
+status = "replaced"
+note = "Replaces `CropBarLabels`."
+
+[[type]]
+name = "RulerOverlay"
+old = ""
+new = "craft_draw::ui::measure::RulerOverlay"
+status = "replaced"
+note = "The Ruler line end handles as a canvas control over `Bind<Option<RulerLine>>`; the hit testing and keyboard parts of the legacy tool (`ToolParts`) moved here."
+
+[[type]]
+name = "RulerWords"
+old = ""
+new = "craft_draw::ui::measure::RulerWords"
+status = "replaced"
+note = "Replaces `RulerBarLabels` and `RulerToolLabels`."
+
+[[type]]
+name = "ruler_line_form"
+old = ""
+new = "craft_draw::ui::measure::ruler_line_form"
+status = "replaced"
+note = "The Ruler Line... command form, a `ParamDialog::command` of Start and End points."
+
+[[setter]]
+type = "CropBar"
+old = "CropBar::new(id_salt, settings)"
+new = "CropBar::new(settings, document)"
+note = "The document is a required argument; Original Ratio and Front Image are disabled when its size is empty."
+
+[[setter]]
+type = "CropBar"
+old = "CropBar::labels(..)"
+new = ""
+note = "Words are `CropBarWords` from the scope."
+
+[[setter]]
+type = "CropBar"
+old = "CropBar::output(&mut ..)"
+new = ""
+note = "`show(ui)` returns `CropBarOutput`."
+
+[[setter]]
+type = "CropBar"
+old = "CropBar::options_open(&mut bool)"
+new = ""
+note = "The gear popover keeps its open state itself."
+
+[[setter]]
+type = "CropBar"
+old = "CropBar::add_to(slots)"
+new = ""
+note = "`show(ui)` inside the app Bar body; the commit and cancel buttons are `Bar::commit_cancel`."
+
+[[setter]]
+type = "CropBar"
+old = "CropBar::document(..)"
+new = ""
+note = "The second argument of `CropBar::new`."
+
+[[setter]]
+type = "CropOverlayMenu"
+old = "CropOverlayMenu::new(id_salt, settings)"
+new = "CropOverlayMenu::new(settings)"
+
+[[setter]]
+type = "CropOptionsMenu"
+old = "CropOptionsMenu::new(id_salt, shield)"
+new = "CropOptionsMenu::new(settings)"
+note = "The popover also holds Delete Cropped Pixels and Fill."
+
+[[setter]]
+type = "CropOptionsMenu"
+old = "CropOptionsMenu::show(ui, &mut open)"
+new = "CropOptionsMenu::show(ui)"
+note = "The open state is kept by the popover."
+
+[[setter]]
+type = "CropSettings"
+old = "CropSettings::preset_name(labels)"
+new = "CropSettings::preset_name(words, units)"
+
+[[setter]]
+type = "RulerBar"
+old = "RulerBar::new(line, &mut bool)"
+new = "RulerBar::new(line, Bind<bool>)"
+
+[[setter]]
+type = "RulerBar"
+old = "RulerBar::scale(factor)"
+new = "RulerBar::factor(factor)"
+
+[[setter]]
+type = "RulerBar"
+old = "RulerBar::units(x, y)"
+new = "RulerBar::rulers(CanvasRulers)"
+note = "The bar sits outside the canvas, so the app passes `CanvasSpace::rulers()`."
+
+[[setter]]
+type = "RulerBar"
+old = "RulerBar::labels(..)"
+new = ""
+note = "Words are `RulerWords` from the scope."
+
+[[setter]]
+type = "RulerBar"
+old = "RulerBar::output(&mut ..)"
+new = ""
+note = "`show(ui)` returns `RulerBarOutput`."
+
+[[setter]]
+type = "RulerBar"
+old = "RulerBar::add_to(slots)"
+new = "RulerBar::show(ui)"
+
+[[setter]]
+type = "RulerTool"
+old = "RulerTool::labels(..)"
+new = ""
+note = "Words are `RulerWords` from the scope."
+
+[[setter]]
+type = "RulerTool"
+old = "RulerTool::pass(RulerInput)"
+new = "RulerTool::pass(line)"
+note = "Key edits are `Set` events, which carry no id; a drag uses the host's gesture id."
+
+[[setter]]
+type = "RulerInput"
+old = "RulerInput::units(x, y)"
+new = ""
+note = "The overlay reads the rulers of the canvas space."
+
+[[setter]]
+type = "box_distances"
+old = "box_distances(a, b, label: Fn(f64, Orientation))"
+new = "box_distances(a, b, label: Fn(f64, Axis))"
+note = "`Axis::X` for a distance along x."
+
+[[type]]
+name = "TransformSession"
+old = "craft_draw::ui::transform::TransformSession"
+new = "craft_draw::ui::transform::TransformSession"
+status = "same"
+note = "Plain data as before; undo goes through `EditHistory`. `menu(&TransformMenuWords)` returns `Vec<Entry<TransformChoice>>`. The warp type `W` is `Send + Sync + 'static`."
+
+[[type]]
+name = "TransformEdit"
+old = "craft_draw::ui::transform::TransformEdit"
+new = "craft_draw::ui::transform::TransformEdit"
+status = "same"
+
+[[type]]
+name = "TransformRequest"
+old = "craft_draw::ui::transform::TransformRequest"
+new = "craft_draw::ui::transform::TransformRequest"
+status = "same"
+
+[[type]]
+name = "TransformResult"
+old = "craft_draw::ui::transform::TransformResult"
+new = "craft_draw::ui::transform::TransformResult"
+status = "same"
+
+[[type]]
+name = "TransformPhase"
+old = "craft_draw::ui::transform::TransformPhase"
+new = "craft_draw::ui::transform::TransformPhase"
+status = "same"
+
+[[type]]
+name = "TransformPreset"
+old = "craft_draw::ui::transform::TransformPreset"
+new = "craft_draw::ui::transform::TransformPreset"
+status = "same"
+
+[[type]]
+name = "Interpolation"
+old = "craft_draw::ui::transform::Interpolation"
+new = "craft_draw::ui::transform::Interpolation"
+status = "same"
+
+[[type]]
+name = "TransformChoice"
+old = "craft_draw::ui::transform::TransformChoice"
+new = "craft_draw::ui::transform::TransformChoice"
+status = "same"
+
+[[type]]
+name = "TransformWarp"
+old = "craft_draw::ui::transform::TransformWarp"
+new = "craft_draw::ui::transform::TransformWarp"
+status = "same"
+
+[[type]]
+name = "TransformSettings"
+old = "craft_draw::ui::transform::TransformSettings"
+new = "craft_draw::ui::transform::TransformSettings"
+status = "same"
+note = "`size_unit` is `Option<UnitKind>`; saved preferences that spell it `Pixels`, `Percent`, `Inches`, `Centimetres`, `Millimetres`, `Points` or `Picas` still load."
+
+[[type]]
+name = "TransformMenuWords"
+old = ""
+new = "craft_draw::ui::transform::TransformMenuWords"
+status = "replaced"
+note = "Replaces `TransformMenuLabels` with the same word ids."
+
+[[type]]
+name = "TransformMenuLabels"
+old = "craft_draw::ui::transform::TransformMenuLabels"
+new = ""
+status = "removed"
+note = "Use `TransformMenuWords`."
+
+[[setter]]
+type = "TransformSession"
+old = "menu(&TransformMenuLabels) -> Vec<MenuEntry<TransformChoice>>"
+new = "menu(&TransformMenuWords) -> Vec<Entry<TransformChoice>>"
+
+[[setter]]
+type = "TransformSettings"
+old = "size_unit: Option<LengthUnit>"
+new = "size_unit: Option<UnitKind>"
+
+[[type]]
+name = "TransformFields"
+old = "craft_draw::ui::TransformFields"
+new = "craft_draw::ui::TransformFields"
+status = "same"
+note = "A pattern over `Bind<TransformRow>` and the aspect link `Bind<bool>`: `TransformFields::new(label, row, start, linked)` shown with `show(ui)`; `.bar()` is the options-bar form (was `show_bar`). Output `TransformFieldsOutput { response, event, unit_picked, linked, interpolation }`. Each field is a `NumberField` whose caption scrubs it; typed text reads through the field codec and the env units."
+
+[[type]]
+name = "TransformFieldsOutput"
+old = ""
+new = ""
+status = "replaced"
+note = "Replaced by the type of this entry."
+
+[[type]]
+name = "TransformFieldLabels"
+old = "craft_draw::ui::TransformFieldLabels"
+new = ""
+status = "removed"
+note = "A `words!` set with the same ids; the unit texts come from `Units::symbol`."
+
+[[type]]
+name = "TransformFieldWords"
+old = ""
+new = "craft_draw::ui::TransformFieldWords"
+status = "replaced"
+note = "A `words!` set with the same ids; the unit texts come from `Units::symbol`."
+
+[[type]]
+name = "FieldLabel"
+old = "craft_draw::ui::FieldLabel"
+new = ""
+status = "removed"
+note = "The glyph and name are two words of `TransformFieldWords`."
+
+[[type]]
+name = "ParseContext"
+old = "craft_draw::ui::ParseContext"
+new = ""
+status = "removed"
+note = "Typed text reads through the field codec: `Units::document_reader` converts pixel and length units and reads a percentage against the box side before the transform."
+
+[[type]]
+name = "TransformField"
+old = "craft_draw::ui::TransformField"
+new = "craft_draw::ui::TransformField"
+status = "same"
+
+[[type]]
+name = "TransformRow"
+old = "craft_draw::ui::TransformRow"
+new = "craft_draw::ui::TransformRow"
+status = "same"
+note = "Constructed with `TransformRow::new(state, skew_v)`; the type is `#[non_exhaustive]`."
+
+[[type]]
+name = "BarGroups"
+old = "craft_draw::ui::BarGroups"
+new = "craft_draw::ui::BarGroups"
+status = "same"
+note = "`#[non_exhaustive]`: start from `BarGroups::ALL` and clear fields."
+
+[[type]]
+name = "SizeUnit"
+old = "craft_draw::ui::SizeUnit"
+new = "craft_draw::ui::SizeUnit"
+status = "same"
+note = "`Length { x, y }` holds `RulerText` (the unit kind and the document units per ruler unit) instead of `RulerUnits`."
+
+[[type]]
+name = "TransformBar"
+old = "craft_draw::ui::TransformBar"
+new = "craft_draw::ui::TransformBar"
+status = "same"
+note = "A pattern with its own options `Bar` and the phase commit and cancel buttons: `TransformBar::new(label, &session, Bind<TransformSettings>)`, shown with `show(ui)`; `add_to(slots)` and `output(&mut ..)` are `show` and its returned `TransformBarOutput`."
+
+[[type]]
+name = "TransformBarOutput"
+old = "craft_draw::ui::TransformBarOutput"
+new = "craft_draw::ui::TransformBarOutput"
+status = "same"
+note = "Returned by `show`; the fields are `response, edits, apply, discard, reset_warp, unit_picked` (was `size_unit: Option<LengthUnit>`)."
+
+[[type]]
+name = "TransformBarLabels"
+old = "craft_draw::ui::TransformBarLabels"
+new = ""
+status = "removed"
+note = "Renamed `TransformBarWords`."
+
+[[type]]
+name = "TransformBarWords"
+old = ""
+new = "craft_draw::ui::TransformBarWords"
+status = "replaced"
+note = "Replaces `TransformBarLabels`."
+
+[[type]]
+name = "BarSlot"
+old = ""
+new = ""
+status = "replaced"
+note = "A named closure for the bar groups `warp_fields` and `extra`."
+
+[[type]]
+name = "SymmetryMenu"
+old = "craft_draw::ui::SymmetryMenu"
+new = "craft_draw::ui::SymmetryMenu"
+status = "same"
+note = "A pattern: `SymmetryMenu::new(label, &choice).paths(..).can_transform(..)`; an `IconButton` that opens a `Menu` on a press."
+
+[[type]]
+name = "SymmetryMenuResponse"
+old = "craft_draw::ui::SymmetryMenuResponse"
+new = ""
+status = "removed"
+note = "Renamed `SymmetryMenuOutput`."
+
+[[type]]
+name = "SymmetryMenuOutput"
+old = ""
+new = "craft_draw::ui::SymmetryMenuOutput"
+status = "replaced"
+note = "Replaces `SymmetryMenuResponse`."
+
+[[type]]
+name = "SymmetryLabels"
+old = "craft_draw::ui::SymmetryLabels"
+new = ""
+status = "removed"
+note = "A `words!` set with the same ids."
+
+[[type]]
+name = "SymmetryWords"
+old = ""
+new = "craft_draw::ui::SymmetryWords"
+status = "replaced"
+note = "A `words!` set with the same ids."
+
+[[setter]]
+type = "TransformFields"
+old = "parser(Fn(TransformField, &str, ParseContext) -> Option<f64>)"
+new = ""
+note = "Removed: typed text reads through the field codec."
+
+[[setter]]
+type = "TransformFields"
+old = "units(&RulerUnits, &RulerUnits)"
+new = "units(RulerText, RulerText)"
+note = "The ruler units as the canvas publishes them."
+
+[[setter]]
+type = "TransformFields"
+old = "size_menu(&[MenuEntry<usize>], &mut Option<usize>)"
+new = "size_units(&[Entry<UnitKind>])"
+note = "The pick is `TransformFieldsOutput::unit_picked`."
+
+[[setter]]
+type = "TransformFields"
+old = "interpolation(caption, &mut String, options)"
+new = "interpolation(Bind<Interpolation>)"
+note = "The choice is `TransformFieldsOutput::interpolation`."
+
+[[setter]]
+type = "TransformFields"
+old = "linked(&mut bool)"
+new = "TransformFields::new(label, row, start, linked: Bind<bool>)"
+note = "The link is a `new` argument."
+
+[[setter]]
+type = "TransformFields"
+old = "show_bar(ui)"
+new = "bar().show(ui)"
+
+[[setter]]
+type = "TransformBar"
+old = "unit_context(UnitContext)"
+new = "units(RulerText, RulerText) and size_units(&[Entry<UnitKind>])"
+note = "The document resolution comes from the ruler units."
+
+[[setter]]
+type = "TransformBar"
+old = "warp_fields(impl FnOnce(&mut Ui))"
+new = "warp_fields(BarSlot)"
+
+[[type]]
+name = "SliceBar"
+old = "craft_draw::ui::slice::SliceBar"
+new = "craft_draw::ui::slice::SliceBar"
+status = "same"
+note = "A pattern shown as children of the app options `Bar`: `SliceBar::new(mode, &mut SliceToolSettings)`, `size_units(unit, units, pixels_per_inch, document)`, `show(ui)`. The buttons are `BarItem`s of `SliceCommand`; `selected`, `locked`, `no_document`, `output` and `labels` go."
+
+[[type]]
+name = "SliceBarOutput"
+old = "craft_draw::ui::slice::SliceBarOutput"
+new = "craft_draw::ui::slice::SliceBarOutput"
+status = "same"
+note = "`{ response, settings_changed, unit_picked: Option<UnitKind> }`; an `Outcome`. The `command` field goes: commands run through the command system."
+
+[[type]]
+name = "SliceCommand"
+old = "craft_draw::ui::slice::SliceCommand"
+new = "craft_draw::ui::slice::SliceCommand"
+status = "same"
+note = "A `CommandSet` with ids `draw.slice.*`; `HideAuto(bool)` leaves the enum (a check box bound to `SliceToolSettings::hide_auto`); `SliceCommand::enabled(selected, locked, has_document)` is the app command state."
+
+[[type]]
+name = "SliceOptionsDialog"
+old = "craft_draw::ui::slice::SliceOptionsDialog"
+new = "craft_draw::ui::slice::SliceOptionsDialog"
+status = "same"
+note = "A `StackDialog` over a `FormDialog`; `pick_color()` returns `patterns::form_dialogs::ColorRequest` (the background swatch uses `Swatch::picker`); `labels` goes."
+
+[[type]]
+name = "DivideSlicesDialog"
+old = "craft_draw::ui::slice::DivideSlicesDialog"
+new = "craft_draw::ui::slice::DivideSlicesDialog"
+status = "same"
+note = "A `StackDialog` over a `FormDialog` with a `FieldGroup`; `labels` goes."
+
+[[type]]
+name = "ArtboardBar"
+old = "craft_draw::ui::artboard::ArtboardBar"
+new = "craft_draw::ui::artboard::ArtboardBar"
+status = "same"
+note = "A pattern shown as children of the app options `Bar`: `ArtboardBar::new(selected, presets)`, `show(ui)`. Add New Artboard is a `BarItem` of `ArtboardCommand`; `id_salt`, `labels` and `output` go."
+
+[[type]]
+name = "ArtboardBarOutput"
+old = "craft_draw::ui::artboard::ArtboardBarOutput"
+new = "craft_draw::ui::artboard::ArtboardBarOutput"
+status = "same"
+note = "`{ response, size: Option<EditEvent<Size>> }`; an `Outcome`. `add_new` goes: the command runs through the command system."
+
+[[type]]
+name = "ArtboardProperties"
+old = "craft_draw::ui::artboard::ArtboardProperties"
+new = "craft_draw::ui::artboard::ArtboardProperties"
+status = "same"
+note = "A pattern: `ArtboardProperties::new(board, presets)`, `show(ui)`; the section is a `Section` over a `FieldGroup`; `id_salt` and `labels` go."
+
+[[type]]
+name = "ArtboardPropertiesOutput"
+old = "craft_draw::ui::artboard::ArtboardPropertiesOutput"
+new = "craft_draw::ui::artboard::ArtboardPropertiesOutput"
+status = "same"
+note = "`{ response, rect, background, pick_color: Option<ColorRequest> }`; an `Outcome`."
+
+[[type]]
+name = "ArtboardCommand"
+old = ""
+new = "craft_draw::ui::artboard::ArtboardCommand"
+status = "replaced"
+note = "New: a `CommandSet` (`draw.artboard.*`) with Add New Artboard."
+
+[[type]]
+name = "SliceLabels"
+old = "craft_draw::ui::slice::SliceLabels"
+new = ""
+status = "removed"
+note = "Replaced by the `words!` set `SliceWords`."
+
+[[type]]
+name = "SliceWords"
+old = ""
+new = "craft_draw::ui::slice::SliceWords"
+status = "replaced"
+note = "The words of the Slice tools; replaces `SliceLabels`."
+
+[[type]]
+name = "SliceToolLabels"
+old = "craft_draw::ui::slice::SliceToolLabels"
+new = ""
+status = "removed"
+note = "Replaced by the `words!` set `SliceToolWords`."
+
+[[type]]
+name = "SliceToolWords"
+old = ""
+new = "craft_draw::ui::slice::SliceToolWords"
+status = "replaced"
+note = "The words of the Slice tools; replaces `SliceToolLabels`."
+
+[[type]]
+name = "ArtboardLabels"
+old = "craft_draw::ui::artboard::ArtboardLabels"
+new = ""
+status = "removed"
+note = "Replaced by the `words!` set `ArtboardWords`."
+
+[[type]]
+name = "ArtboardWords"
+old = ""
+new = "craft_draw::ui::artboard::ArtboardWords"
+status = "replaced"
+note = "The words of the Artboard tool; replaces `ArtboardLabels`."
+
+[[type]]
+name = "ArtboardToolLabels"
+old = "craft_draw::ui::artboard::ArtboardToolLabels"
+new = ""
+status = "removed"
+note = "Replaced by the `words!` set `ArtboardToolWords`."
+
+[[type]]
+name = "ArtboardToolWords"
+old = ""
+new = "craft_draw::ui::artboard::ArtboardToolWords"
+status = "replaced"
+note = "The words of the Artboard tool; replaces `ArtboardToolLabels`."
+
+[[setter]]
+type = "SliceBar"
+old = "SliceBar::new(id_salt, mode, &SliceToolSettings)"
+new = "SliceBar::new(mode, &mut SliceToolSettings)"
+note = "The bar writes the Style, Width, Height and Hide Auto Slices through the settings it is given."
+
+[[setter]]
+type = "SliceBar"
+old = "add_to(slots)"
+new = "show(ui)"
+note = "The members are shown inside the app `Bar`."
+
+[[setter]]
+type = "SliceBar"
+old = "size_units(LengthUnit, &[LengthUnit], UnitContext, UnitContext)"
+new = "size_units(UnitKind, &[Entry<UnitKind>], f64, PixelSize)"
+note = "`pixels_per_inch` and the document size replace the two `UnitContext`s."
+
+[[setter]]
+type = "ArtboardBar"
+old = "ArtboardBar::new(id_salt, selected, presets)"
+new = "ArtboardBar::new(selected, presets)"
+note = "No id salt."
+
+[[setter]]
+type = "ArtboardBar"
+old = "add_to(slots)"
+new = "show(ui)"
+note = "The members are shown inside the app `Bar`."
+
+[[setter]]
+type = "ArtboardProperties"
+old = "ArtboardProperties::new(id_salt, board, presets)"
+new = "ArtboardProperties::new(board, presets)"
+note = "No id salt."
+
+[[type]]
+name = "BrushSettingsPanel"
+old = "craft_draw::ui::brush_settings::BrushSettingsPanel"
+new = "craft_draw::ui::brush_settings::BrushSettingsPanel"
+status = "same"
+note = "Shown with `show(ui, |ui, cx, key| ..)`; the pane closure also gets the body context. `new(label, sections, Bind<K>)` replaces `new(id_salt)` with `sections(..)` and `selected(..)`."
+
+[[type]]
+name = "BrushSettingsPanelOutput"
+old = "craft_draw::ui::brush_settings::BrushSettingsPanelOutput"
+new = "craft_draw::ui::brush_settings::BrushSettingsPanelOutput"
+status = "same"
+note = "`sections`, `action` and `body` as before."
+
+[[type]]
+name = "BrushPanelAction"
+old = "craft_draw::ui::brush_settings::BrushPanelAction"
+new = "craft_draw::ui::brush_settings::BrushPanelAction"
+status = "same"
+
+[[type]]
+name = "BrushSectionList"
+old = "craft_draw::ui::brush_settings::BrushSectionList"
+new = "craft_draw::ui::brush_settings::BrushSectionList"
+status = "same"
+note = "`new(label, sections, Bind<K>)`; the shown pane is a binding."
+
+[[type]]
+name = "BrushSectionListResponse"
+old = "craft_draw::ui::brush_settings::BrushSectionListResponse"
+new = ""
+status = "removed"
+note = "Renamed `BrushSectionListOutput { response, events }`."
+
+[[type]]
+name = "BrushSectionListOutput"
+old = ""
+new = "craft_draw::ui::brush_settings::BrushSectionListOutput"
+status = "replaced"
+note = "Renamed `BrushSectionListOutput { response, events }`."
+
+[[type]]
+name = "BrushStrokeStrip"
+old = "craft_draw::ui::brush_settings::BrushStrokeStrip"
+new = "craft_draw::ui::brush_settings::BrushStrokeStrip"
+status = "same"
+note = "`new(label, revision, StripImage)`; a leaf shown with `show(ui)`."
+
+[[type]]
+name = "BrushSizeField"
+old = "craft_draw::ui::brush_settings::BrushSizeField"
+new = "craft_draw::ui::brush_settings::BrushSizeField"
+status = "same"
+note = "`new(label, Bind<f64>, max)`; the output is `BrushSizeOutput { response, edit: Option<EditResponse<f64>> }`."
+
+[[type]]
+name = "TipEllipse"
+old = "craft_draw::ui::brush_settings::TipEllipse"
+new = "craft_draw::ui::brush_settings::TipEllipse"
+status = "same"
+note = "`new(label, Bind<TipAngle>)`; the output is `EditResponse<TipAngle>`."
+
+[[type]]
+name = "TipEllipseGrab"
+old = "craft_draw::ui::brush_settings::TipEllipseGrab"
+new = "craft_draw::ui::brush_settings::TipEllipseGrab"
+status = "same"
+
+[[type]]
+name = "DynamicControlRow"
+old = "craft_draw::ui::brush_settings::DynamicControlRow"
+new = "craft_draw::ui::brush_settings::DynamicControlRow"
+status = "same"
+note = "`new(controls, Bind<C>, Bind<f64>)` for the control and the Fade steps; `curve(open, shaped)` stays."
+
+[[type]]
+name = "DynamicControlRowResponse"
+old = "craft_draw::ui::brush_settings::DynamicControlRowResponse"
+new = ""
+status = "removed"
+note = "Renamed `DynamicControlRowOutput { response, curve_toggled }`; the control and the Fade steps are bindings."
+
+[[type]]
+name = "DynamicControlRowOutput"
+old = ""
+new = "craft_draw::ui::brush_settings::DynamicControlRowOutput"
+status = "replaced"
+note = "Renamed `DynamicControlRowOutput { response, curve_toggled }`; the control and the Fade steps are bindings."
+
+[[type]]
+name = "BrushSettingsStyle"
+old = "craft_draw::ui::brush_settings::BrushSettingsStyle"
+new = ""
+status = "removed"
+note = "Each component has its own `ComponentStyle` from tokens."
+
+[[type]]
+name = "TipEllipseStyle"
+old = "craft_draw::ui::brush_settings::TipEllipseStyle"
+new = "craft_draw::ui::brush_settings::TipEllipseStyle"
+status = "same"
+note = "A `ComponentStyle` built from tokens; the fields are private."
+
+[[type]]
+name = "BrushSettingsLabels"
+old = "craft_draw::ui::brush_settings::BrushSettingsLabels"
+new = ""
+status = "removed"
+note = "The words set `BrushSettingsWords` (`words!`)."
+
+[[type]]
+name = "BrushSettingsWords"
+old = ""
+new = "craft_draw::ui::brush_settings::BrushSettingsWords"
+status = "replaced"
+note = "The words set `BrushSettingsWords` (`words!`)."
+
+[[type]]
+name = "BrushPresetPicker"
+old = "craft_draw::ui::brush_presets::BrushPresetPicker"
+new = "craft_draw::ui::brush_presets::BrushPresetPicker"
+status = "same"
+note = "`new(label, Bind<Option<K>>, rows, Bind<BrushPickerState<K>>, values)` and `show(ui)`; the closed field opens the popover."
+
+[[type]]
+name = "BrushPresetPickerOutput"
+old = "craft_draw::ui::brush_presets::BrushPresetPickerOutput"
+new = "craft_draw::ui::brush_presets::BrushPresetPickerOutput"
+status = "same"
+note = "`{ response, edit, diameter, hardness, picks, settings }`."
+
+[[type]]
+name = "BrushPickerState"
+old = "craft_draw::ui::brush_presets::BrushPickerState"
+new = "craft_draw::ui::brush_presets::BrushPickerState"
+status = "same"
+note = "Holds the browser's `PresetState` and the parts."
+
+[[type]]
+name = "BrushPresetChip"
+old = "craft_draw::ui::brush_presets::BrushPresetChip"
+new = "craft_draw::ui::brush_presets::BrushPresetChip"
+status = "replaced"
+note = "The closed field of `PresetPicker` (`PickerField::ThumbnailAndName`, the size as `display_name`)."
+
+[[type]]
+name = "BrushPresetChipResponse"
+old = "craft_draw::ui::brush_presets::BrushPresetChipResponse"
+new = ""
+status = "removed"
+note = "The picker's field reports through `BrushPresetPickerOutput::edit`."
+
+[[type]]
+name = "BrushPresetChipStyle"
+old = "craft_draw::ui::brush_presets::BrushPresetChipStyle"
+new = ""
+status = "removed"
+note = "`ComponentStyle` of `PresetPicker`."
+
+[[type]]
+name = "BrushPresetCards"
+old = "craft_draw::ui::brush_presets::BrushPresetCards"
+new = "craft_draw::ui::brush_presets::BrushPresetCards"
+status = "replaced"
+note = "`PresetBrowser` inside the picker, with `PresetState`."
+
+[[type]]
+name = "BrushCardLayout"
+old = "craft_draw::ui::brush_presets::BrushCardLayout"
+new = "craft_draw::ui::brush_presets::BrushCardLayout"
+status = "replaced"
+note = "The browser lays tiles and rows out."
+
+[[type]]
+name = "BrushCardsState"
+old = "craft_draw::ui::brush_presets::BrushCardsState"
+new = "craft_draw::ui::brush_presets::BrushCardsState"
+status = "replaced"
+note = "`BrushPickerState` with `PresetState`."
+
+[[type]]
+name = "BrushCardStyle"
+old = "craft_draw::ui::brush_presets::BrushCardStyle"
+new = ""
+status = "removed"
+note = "The browser's tiles and rows carry the look."
+
+[[type]]
+name = "BrushPickerStyle"
+old = "craft_draw::ui::brush_presets::BrushPickerStyle"
+new = ""
+status = "removed"
+note = "`PresetPicker`'s own style."
+
+[[type]]
+name = "BrushPickerLabels"
+old = "craft_draw::ui::brush_presets::BrushPickerLabels"
+new = ""
+status = "removed"
+note = "The words set `BrushPresetWords`."
+
+[[type]]
+name = "BrushPresetWords"
+old = ""
+new = "craft_draw::ui::brush_presets::BrushPresetWords"
+status = "replaced"
+note = "The words set `BrushPresetWords`."
+
+[[type]]
+name = "BrushCardLabels"
+old = "craft_draw::ui::brush_presets::BrushCardLabels"
+new = ""
+status = "removed"
+note = "`BrushPresetWords::preset_size` names a row."
+
+[[type]]
+name = "BrushCardPart"
+old = "craft_draw::ui::brush_presets::BrushCardPart"
+new = "craft_draw::ui::brush_presets::BrushCardPart"
+status = "same"
+
+[[type]]
+name = "BrushCardParts"
+old = "craft_draw::ui::brush_presets::BrushCardParts"
+new = "craft_draw::ui::brush_presets::BrushCardParts"
+status = "same"
+
+[[type]]
+name = "BrushPickerSettings"
+old = "craft_draw::ui::brush_presets::BrushPickerSettings"
+new = "craft_draw::ui::brush_presets::BrushPickerSettings"
+status = "same"
+
+[[type]]
+name = "BrushPickerValues"
+old = "craft_draw::ui::brush_presets::BrushPickerValues"
+new = "craft_draw::ui::brush_presets::BrushPickerValues"
+status = "same"
+note = "Built with `BrushPickerValues::new(diameter, hardness)`."
+
+[[type]]
+name = "BrushPick"
+old = "craft_draw::ui::brush_presets::BrushPick"
+new = "craft_draw::ui::brush_presets::BrushPick"
+status = "same"
+note = "`Select(K)` and `Activate(K)` replace `List(PresetEvent::Select|Activate)`; `Rename(K)` is new."
+
+[[setter]]
+type = "BrushPresetPicker"
+old = "BrushPresetPicker::new(id_salt, anchor, state, rows) and show(ui, open)"
+new = "BrushPresetPicker::new(label, current, rows, state, values) and show(ui)"
+note = "The field opens the popover; `max_diameter`, `import` stay as setters."
+
+[[setter]]
+type = "BrushPresetCards"
+old = "BrushPresetCards::row(key, name, depth, diameter, labels, numbers)"
+new = "brush_row(key, name, depth, diameter, parts, env, paint)"
+note = "A free function in `brush_presets`; `BrushRowPaint::new(tip, stroke)` holds the engine's painters."
+
+[[setter]]
+type = "TipEllipse"
+old = "TipEllipse::new(id_salt, value) and labels(..)"
+new = "TipEllipse::new(label, Bind<TipAngle>)"
+note = "The label names it; the value is a binding."
+
+[[setter]]
+type = "BrushSizeField"
+old = "BrushSizeField::new(id_salt, label, diameter, max) and labels(..)"
+new = "BrushSizeField::new(label, Bind<f64>, max)"
+note = "The value is a binding."
+
+[[setter]]
+type = "BrushStrokeStrip"
+old = "BrushStrokeStrip::new(id_salt, revision).show(ui, make)"
+new = "BrushStrokeStrip::new(label, revision, StripImage).show(ui)"
+note = "`StripImage::new(Fn([usize; 2]) -> ColorImage)`."
+
+
+[[setter]]
+type = "GradientEditor"
+old = "selected(Bind<Option<StopRef>>)"
+new = "shared_selection(Bind<Option<StopRef>>)"
+note = "Renamed with the overlay's: the host's selection shared with the canvas gradient line."

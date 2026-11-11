@@ -1,0 +1,137 @@
+# API map of the "Form dialogs 2: about" family: old path to new path and setter renames.
+
+family = "Form dialogs 2: about"
+new_module = "craft_ui::patterns::form_dialogs"
+
+[[type]]
+name = "AboutDialog"
+old = "craft_ui::dialog::about::AboutDialog"
+new = "craft_ui::patterns::form_dialogs::AboutDialog"
+status = "moved"
+note = "A pattern: `AboutDialog::new(&info, &credits)` with `show(ui) -> AboutOutput { response, closed, link }`. It is no `StackDialog`: the app shows it each pass while it is open (`opened(Bind<bool>)`) and stops on `closed`. The tab, name mode and sort order are kept in the dialog's container."
+
+[[type]]
+name = "AboutLink"
+old = "craft_ui::dialog::about::AboutLink"
+new = "craft_ui::patterns::form_dialogs::AboutLink"
+status = "moved"
+note = "Built with `AboutLink::new(label, url)`; the fields are read-only."
+
+[[type]]
+name = "AboutInfo"
+old = "craft_ui::dialog::about::AboutInfo"
+new = "craft_ui::patterns::form_dialogs::AboutInfo"
+status = "moved"
+note = "Built with `AboutInfo::new(app_name, blurb, version)` and `community`, `links`, `built_with`."
+
+[[type]]
+name = "Credits"
+old = "craft_ui::dialog::about::Credits"
+new = "craft_ui::patterns::form_dialogs::Credits"
+status = "moved"
+note = "Built with `Credits::new(contributors, models, total_commits)`; `share_total()` replaces the private `share_total(&Credits)`."
+
+[[type]]
+name = "Contributor"
+old = "craft_ui::dialog::about::Contributor"
+new = "craft_ui::patterns::form_dialogs::Contributor"
+status = "moved"
+note = "Built with `Contributor::new(login)` and `display_name`, `real_name`, `counts(prs, commits)`, `lines(added, deleted)`, `binary(added, deleted)`, `active(first, last)`. `summary(&Context)` is gone: the dialog writes the tooltip from its words."
+
+[[type]]
+name = "ModelCredit"
+old = "craft_ui::dialog::about::ModelCredit"
+new = "craft_ui::patterns::form_dialogs::ModelCredit"
+status = "moved"
+note = "Built with `ModelCredit::new(company, model, version)` and `work(commits, lines_added, lines_deleted)`."
+
+[[type]]
+name = "ContributorSort"
+old = "craft_ui::dialog::about::ContributorSort"
+new = "craft_ui::patterns::form_dialogs::ContributorSort"
+status = "moved"
+note = "`ALL` and `default_ascending` are unchanged; `label(&AboutLabels)` is gone (the dialog reads its `AboutWords`)."
+
+[[type]]
+name = "NameMode"
+old = "craft_ui::dialog::about::NameMode"
+new = "craft_ui::patterns::form_dialogs::NameMode"
+status = "moved"
+
+[[type]]
+name = "CommitShare"
+old = "craft_ui::dialog::about::CommitShare"
+new = "craft_ui::patterns::form_dialogs::CommitShare"
+status = "moved"
+
+[[type]]
+name = "AboutTab"
+old = "craft_ui::dialog::about::AboutTab"
+new = "craft_ui::patterns::form_dialogs::AboutTab"
+status = "moved"
+note = "The opening tab is `AboutDialog::tab(AboutTab)`; the shown tab is kept by the dialog, so `current_tab` and `set_tab` are gone."
+
+[[type]]
+name = "AboutLabels"
+old = "craft_ui::dialog::about::AboutLabels"
+new = ""
+status = "removed"
+note = "Replaced by `AboutWords`, with ids `aboutDialog.*` and counted words for pull requests and commits."
+
+[[type]]
+name = "AboutWords"
+old = ""
+new = "craft_ui::patterns::form_dialogs::AboutWords"
+status = "replaced"
+note = "The words of the About dialog (`words!`); OK is `CommonWords`."
+
+[[type]]
+name = "AboutOutput"
+old = ""
+new = "craft_ui::patterns::form_dialogs::AboutOutput"
+status = "replaced"
+note = "`AboutOutput { response, closed, link }`: `link` is `AboutDialog::take_link()` of the legacy dialog, reported in the pass of the click."
+
+[[type]]
+name = "sorted_contributors"
+old = "craft_ui::dialog::about::sorted_contributors"
+new = ""
+status = "removed"
+note = "Crate-private: the dialog applies the rule itself; no app calls it."
+
+[[type]]
+name = "commit_share"
+old = "craft_ui::dialog::about::commit_share"
+new = ""
+status = "removed"
+note = "Crate-private: the dialog applies the rule itself; no app calls it."
+
+[[setter]]
+type = "AboutDialog"
+old = "AboutDialog::new(info: AboutInfo, credits: Credits)"
+new = "AboutDialog::new(info: &AboutInfo, credits: &Credits)"
+note = "The app owns the data and lends it for the pass."
+
+[[setter]]
+type = "AboutDialog"
+old = "tab(AboutTab)"
+new = "tab(AboutTab)"
+note = "Sets the tab the dialog opens on."
+
+[[setter]]
+type = "AboutDialog"
+old = "take_link()"
+new = "AboutOutput.link"
+note = "The clicked URL comes back in the output of the pass that clicked it."
+
+[[setter]]
+type = "AboutDialog"
+old = "current_tab()"
+new = ""
+note = "The tab is kept inside the dialog."
+
+[[setter]]
+type = "AboutDialog"
+old = "set_tab(AboutTab)"
+new = "tab(AboutTab)"
+note = "Only at opening."

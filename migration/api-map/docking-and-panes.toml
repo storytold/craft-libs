@@ -1,0 +1,1422 @@
+# API map of the "Docking and panes" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Docking and panes"
+new_module = "craft_ui::docking"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "DockArea"
+old = "craft_ui::docking::surface::DockArea"
+new = "craft_ui::patterns::dock::DockArea"
+status = "moved"
+note = "A pattern: `DockArea::new(label, Bind<Workspace<P>>, &mut dyn DockPanels<P>, DockConfig)` and `show(ui) -> DockAreaOutput<P>` (legacy `DockArea::new(id)` and `show(ui, layout, ..)`); the root's id comes from the label under the parent's id and, inside an `AppShell`, the window's key. The area applies its actions to a bound workspace itself, with `DockPanels::permissions` (narrowed by `locked`); no apply loop in the app. `DockArea::read_only(label, &Layout<P>, ..)` shows a layout that is not edited."
+
+[[type]]
+name = "FloatingFrame"
+old = "craft_ui::docking::chrome::FloatingFrame"
+new = ""
+status = "removed"
+note = "Replaced by `craft_ui::docking::FloatingGroup`: a container on a layer (or an OS window with `native`) whose rect the caller owns. The eight edge handles are the body step's grips, the title bar is a `TitleRow`, auto height follows the caller's rect."
+
+[[type]]
+name = "TitleBar"
+old = "craft_ui::docking::chrome::TitleBar"
+# `craft_ui::title_bar::TitleBar` is the window's title bar (title-bar tracks).
+new = ""
+status = "removed"
+note = "The docking title bar is the `TitleRow` of `FloatingGroup` and of dock groups, with `HeaderAction::{Menu, Float, Close}`."
+
+[[type]]
+name = "PaneHost"
+old = "craft_ui::panes::PaneHost"
+new = ""
+status = "removed"
+note = "Replaced by `craft_ui::patterns::dock::PaneArea`: docked panes are shell panes on the area's edges, floating panes are `FloatingGroup` frames, and `show` takes the closure that fills what the docked panes leave."
+
+[[type]]
+name = "ResizeHandle"
+old = "craft_ui::layout::resize::ResizeHandle"
+new = ""
+status = "removed"
+note = "A docked pane's size comes from `PaneState::size` through the shell pane's extent; a floating pane's edges are the body step's grips."
+
+[[type]]
+name = "resize_edges"
+old = "craft_ui::docking::render::native::resize_edges"
+new = ""
+status = "replaced"
+note = "Internal band of a native dock window; the float frame on `Mount::Viewport` resizes the window through its body-step grips."
+
+[[type]]
+name = "resize_bands"
+old = "craft_ui::docking::render::native::resize_bands"
+new = ""
+status = "replaced"
+note = "Internal; the eight zones are the float frame's body-step grips."
+
+[[type]]
+name = "PanelLimits"
+old = "craft_ui::docking::PanelLimits"
+new = ""
+status = "removed"
+note = "Replaced by `craft_ui::contract::SizeLimits`, the one size-limits value that `PanelSpec::limits` and `Overlay::size_limits` take: `SizeLimits::new(min, max)`, `at_least` or `at_most`; the fields `min` and `max: Option<Vec2>` stay public; `valid` is public and the 1,000,000 bound is `SizeLimits::BOUND`."
+
+# Final fix pass (l4z-body): one size-limits value.
+[[type]]
+name = "SizeLimits"
+old = ""
+new = "craft_ui::contract::SizeLimits"
+status = "replaced"
+note = "The smallest size and an optional largest, in points: a dock panel's body limits (`PanelSpec::limits`) and a layer's resize limits (`Overlay::size_limits(limits)`). `around(extra)` gives the limits of a frame around such a size. It replaces `craft_ui::docking::PanelLimits`."
+
+[[type]]
+name = "DockHeights"
+old = "craft_ui::docking::DockHeights"
+new = "craft_ui::docking::DockHeights"
+status = "same"
+note = "`valid` is public; the builders are `const`."
+
+[[type]]
+name = "DockConfig"
+old = "craft_ui::docking::DockConfig"
+new = "craft_ui::docking::DockConfig"
+status = "same"
+note = "Behaviour fields only, with a builder per field. The label fields are `DockWords`; the band, zone, cascade-inset and float sizes are `DockSizes`, resolved from the theme by `DockSizes::style(cx)` in the dock's component style; `right_to_left` is the env's direction; `panel_menu` and `min_tab_width` are gone (panel rows come from `DockPanels::panel_rows`, tabs fit by the strip's kind). `Sides` is `DockSides`."
+
+[[type]]
+name = "Sides"
+old = "craft_ui::docking::Sides"
+new = ""
+status = "replaced"
+note = "`DockSides { start, end, top, bottom }`: the horizontal pair follows the reading direction."
+
+[[type]]
+name = "DockEvent"
+old = "craft_ui::docking::DockEvent"
+new = "craft_ui::docking::DockEvent"
+status = "same"
+note = "`PanelCommand { panel, command }` carries the `DockCommands` only the host carries out (Move Panel To and Move Group To ask for a destination); the menu rows are commands and run in the group's scope. Adds `ColumnPlaced { anchor, rect }` (the anchor is a panel of the column's first group) and `FloatPlaced { panel, rect }`."
+
+[[type]]
+name = "FloatSpace"
+old = "craft_ui::docking::FloatSpace"
+new = "craft_ui::docking::FloatSpace"
+status = "same"
+note = "`FloatSpace::new(area, &DockSizes)` takes the default float size, the cascade inset and the title row height from the sizes; the lookups `panel`, `group`, `column` and `place` are public; `place` returns a `Rect`."
+
+[[type]]
+name = "HidePanels"
+old = "craft_ui::docking::HidePanels"
+new = "craft_ui::docking::HidePanels"
+status = "same"
+
+[[type]]
+name = "WindowKind"
+old = "craft_ui::docking::WindowKind"
+new = ""
+status = "replaced"
+note = "`craft_host::target::WindowKind`: `Palette` is `Tool` and `Normal` is `Document`. `PanelSpec::window_kind` holds it."
+
+[[type]]
+name = "DockContent"
+old = "craft_ui::docking::DockContent"
+new = ""
+status = "replaced"
+note = "`DockPanels<P>`: `spec(&P) -> PanelSpec` carries the label, icon, limits, heights, float size, native and window-kind policy; `body`, `group_view(panels, active, ui, at: GroupAt, cx) -> Option<f32>` (was `custom_group(panels, active, floating)`; it shows or measures the group and returns its height when it takes it), `group_header(panels, active, ui, cx)` and `panel_rows` stay hooks; a group is named by one of its panels. Permissions are the dock model's, read through `DockPanels::permissions`."
+
+[[type]]
+name = "ZoneRule"
+old = "craft_ui::docking::ZoneRule"
+new = "craft_ui::docking::ZoneRule"
+status = "same"
+note = "`Depth` or `Fraction`; `zones(body, &DockSizes, rtl)` gives non-overlapping rects by `craft_behavior::dock::zones`, with `Start` on the right under right-to-left."
+
+[[type]]
+name = "DropTarget"
+old = "craft_ui::docking::DropTarget"
+new = ""
+status = "replaced"
+note = "`DockTargets::register(ctx, dock, spot, rect)` registers `DockSpot`s (a group is named by an anchor panel) with hit rects for one dock; `DockTargets::resolve(ctx, dock, at)` resolves a pointer against the previous pass to `(DockSpot<P>, Rect)` (the rect the mark applies to; `register_in` gives it, `register` uses the hit rect), only inside the dock's `DropTarget::accept`; `DockSpot::mark(rect, rtl)` gives the `DropMark` (dock-drop-a adds the model step)."
+
+# Dock model (dock-model-a): moved UI-free into craft-behavior, serde shapes unchanged.
+
+[[type]]
+name = "Layout"
+old = "craft_ui::docking::model::Layout"
+new = "craft_behavior::dock::Layout"
+status = "moved"
+
+[[type]]
+name = "Node"
+old = "craft_ui::docking::model::Node"
+new = "craft_behavior::dock::Node"
+status = "moved"
+
+[[type]]
+name = "Floating"
+old = "craft_ui::docking::model::Floating"
+new = "craft_behavior::dock::Floating"
+status = "moved"
+
+[[type]]
+name = "Placement"
+old = "craft_ui::docking::model::Placement"
+new = ""
+status = "removed"
+note = "Renamed `DockPlacement`: `craft_behavior::overlay::Placement` is another type."
+
+[[type]]
+name = "DockPlacement"
+old = ""
+new = "craft_behavior::dock::DockPlacement"
+status = "replaced"
+note = "Where a panel goes relative to an anchor panel (`Tab`, `Split`, `SplitSized`, `Group`, `Column`, `Edge`)."
+
+[[type]]
+name = "Location"
+old = "craft_ui::docking::model::Location"
+new = "craft_behavior::dock::Location"
+status = "moved"
+
+[[type]]
+name = "Permissions"
+old = "craft_ui::docking::model::Permissions"
+new = "craft_behavior::dock::Permissions"
+status = "moved"
+
+[[type]]
+name = "DockError"
+old = "craft_ui::docking::model::DockError"
+new = "craft_behavior::dock::DockError"
+status = "moved"
+
+[[type]]
+name = "Action"
+old = "craft_ui::docking::model::Action"
+new = "craft_behavior::dock::Action"
+status = "moved"
+
+[[type]]
+name = "StackEntry"
+old = "craft_ui::docking::model::StackEntry"
+new = "craft_behavior::dock::StackEntry"
+status = "moved"
+
+[[type]]
+name = "Zone"
+old = "craft_ui::docking::model::Zone"
+new = ""
+status = "removed"
+note = "Replaced by `DockSide`."
+
+[[type]]
+name = "DockSide"
+old = ""
+new = "craft_behavior::DockSide"
+status = "replaced"
+note = "`DockSide` in reading order: `Left` is `Start` and `Right` is `End`; saved layouts and actions with `Left`/`Right` load through serde aliases. `DockPlacement::for_zone` loses its `right_to_left` argument."
+
+[[type]]
+name = "Monitor"
+old = "craft_ui::docking::model::Monitor"
+new = "craft_behavior::Monitor"
+status = "moved"
+note = "The one desktop monitor type of saved data, in `craft_behavior::monitor`."
+
+[[type]]
+name = "Group"
+old = "craft_ui::docking::dock_model::Group"
+new = "craft_behavior::dock::Group"
+status = "moved"
+
+[[type]]
+name = "Column"
+old = "craft_ui::docking::dock_model::Column"
+new = "craft_behavior::dock::Column"
+status = "moved"
+note = "`Column::new(groups)` carries no width and `Column::width` is `Option<f32>`: `None` lays out at the theme's `size.dock.column` (`DockSizes::column`), a user resize writes `Some`, and `Column::with_width(width)` sets a width. Saves with a number still load."
+
+[[type]]
+name = "Side"
+old = "craft_ui::docking::dock_model::Side"
+new = ""
+status = "removed"
+note = "Replaced by `DockEdge`."
+
+[[type]]
+name = "DockEdge"
+old = ""
+new = "craft_behavior::dock::DockEdge"
+status = "replaced"
+note = "Renamed: `overlay::Side` is another type. A dock's window edge, `Start` or `End`."
+
+[[type]]
+name = "Place"
+old = "craft_ui::docking::dock_model::Place"
+new = ""
+status = "removed"
+note = "Replaced by `PanelPlace`. The pane `craft_ui::panes::Place` is replaced by `craft_ui::patterns::dock::PanePlace`."
+
+[[type]]
+name = "PanelPlace"
+old = ""
+new = "craft_behavior::dock::PanelPlace"
+status = "replaced"
+note = "Renamed: `contract::overlay::Place` is another type."
+
+[[type]]
+name = "Target"
+old = "craft_ui::docking::dock_model::Target"
+new = "craft_behavior::dock::Target"
+status = "moved"
+
+[[type]]
+name = "GroupLocation"
+old = "craft_ui::docking::dock_model::GroupLocation"
+new = "craft_behavior::dock::GroupLocation"
+status = "moved"
+
+[[type]]
+name = "ColumnLocation"
+old = "craft_ui::docking::dock_model::ColumnLocation"
+new = "craft_behavior::dock::ColumnLocation"
+status = "moved"
+
+[[type]]
+name = "PanelState"
+old = "craft_ui::docking::dock_model::PanelState"
+new = "craft_behavior::dock::PanelState"
+status = "moved"
+
+[[type]]
+name = "MAX_DEPTH"
+old = "craft_ui::docking::model::MAX_DEPTH"
+new = "craft_behavior::dock::MAX_DEPTH"
+status = "moved"
+note = "A constant."
+
+[[type]]
+name = "MAX_PANELS"
+old = "craft_ui::docking::model::MAX_PANELS"
+new = "craft_behavior::dock::MAX_PANELS"
+status = "moved"
+note = "A constant."
+
+[[type]]
+name = "SplitAxis"
+old = "craft_ui::layout::SplitAxis"
+new = ""
+status = "removed"
+note = "Replaced by `Axis`."
+
+[[type]]
+name = "Axis"
+old = ""
+new = "craft_behavior::Axis"
+status = "replaced"
+note = "`Horizontal` is `X` and `Vertical` is `Y`; saved layouts with the old names load through serde aliases. The split tree is in reading order: the first child is the start (or top) child."
+
+[[type]]
+name = "SplitSize"
+old = "craft_ui::layout::SplitSize"
+new = "craft_behavior::dock::SplitSize"
+status = "moved"
+
+# Literals of types that are now `#[non_exhaustive]`.
+
+# Dock transactions, workspaces, arrangements, document windows, placement (dock-model-b).
+
+[[type]]
+name = "Workspace"
+old = "craft_ui::docking::Workspace"
+new = "craft_behavior::dock::Workspace"
+status = "moved"
+
+[[type]]
+name = "WorkspaceSet"
+old = "craft_ui::docking::workspaces::WorkspaceSet"
+new = "craft_behavior::dock::WorkspaceSet"
+status = "moved"
+note = "Data only: `menu_entries` and `WorkspaceLabels` are not part of the set; the dock commands build the rows."
+
+[[type]]
+name = "NamedWorkspace"
+old = "craft_ui::docking::workspaces::NamedWorkspace"
+new = "craft_behavior::dock::NamedWorkspace"
+status = "moved"
+
+[[type]]
+name = "WorkspaceChrome"
+old = "craft_ui::docking::workspaces::WorkspaceChrome"
+new = "craft_behavior::dock::WorkspaceChrome"
+status = "moved"
+
+[[type]]
+name = "WorkspaceCommand"
+old = "craft_ui::docking::workspaces::WorkspaceCommand"
+new = ""
+status = "removed"
+note = "Replaced by `craft_ui::docking::WorkspaceCommands`: the switcher's rows fire the commands, and the host runs each with `run_workspace`; a workspace pick is `WorkspaceSwitcherOutput::switched`."
+
+[[type]]
+name = "WorkspaceError"
+old = "craft_ui::docking::workspaces::WorkspaceError"
+new = "craft_behavior::dock::WorkspaceError"
+status = "moved"
+
+[[type]]
+name = "Arrangement"
+old = "craft_ui::docking::arrange::Arrangement"
+new = "craft_behavior::dock::Arrangement"
+status = "moved"
+note = "Data only: `menu_entries`, `ArrangeLabels` and the command ids are not part of the type; the `ArrangeCommands` set builds the rows and owns the ids."
+
+[[type]]
+name = "arrange_rects"
+old = "craft_ui::docking::arrange::arrange_rects"
+new = "craft_behavior::dock::arrange_rects"
+status = "moved"
+
+[[type]]
+name = "cascade_rects"
+old = "craft_ui::docking::arrange::cascade_rects"
+new = "craft_behavior::placement::cascade_rects"
+status = "moved"
+
+[[type]]
+name = "DocumentGroup"
+old = "craft_ui::docking::windows::DocumentGroup"
+new = "craft_behavior::dock::DocumentGroup"
+status = "moved"
+
+[[type]]
+name = "DocumentWindows"
+old = "craft_ui::docking::windows::DocumentWindows"
+new = "craft_behavior::dock::DocumentWindows"
+status = "moved"
+
+[[setter]]
+type = "Layout"
+old = "Layout { root, floating }"
+new = "Layout::new(root, floating)"
+
+[[setter]]
+type = "Node"
+old = "Node::Tabs { panels, active }"
+new = "Node::tabs(panels, active)"
+
+[[setter]]
+type = "Node"
+old = "Node::Split { axis, size, first: Box::new(first), second: Box::new(second) }"
+new = "Node::split(axis, size, first, second)"
+
+[[setter]]
+type = "Floating"
+old = "Floating { ..Floating::single(..) } with fields set"
+new = "Floating::single(panels, active, rect); then assign `native`, `monitor`, `monitor_size` or `minimized` on the value"
+
+[[setter]]
+type = "StackEntry"
+old = "StackEntry { panel, open, height }"
+new = "StackEntry::new(panel); then assign `open` and `height`"
+
+[[setter]]
+type = "Monitor"
+old = "Monitor { name, rect: [x, y, w, h], scale }"
+new = "Monitor::new(name, rect, scale), with `rect` an `emath::Rect`; the saved shape stays `[x, y, width, height]`"
+
+[[setter]]
+type = "Permissions"
+old = "Permissions { movable, floatable, closable, accepts_tabs, accepts_splits }"
+new = "Permissions::ALL.movable(..).floatable(..).closable(..).accepts_tabs(..).accepts_splits(..)"
+
+[[setter]]
+type = "Permissions"
+old = "Permissions { accepts_splits: true, ..Permissions::PROTECTED }"
+new = "Permissions::PROTECTED.accepts_splits(true)"
+
+[[setter]]
+type = "Location"
+old = "Location { floating, anchor, placement, size, stack, sibling, group }"
+new = "Location::new(anchor, placement); then assign the other fields"
+
+[[setter]]
+type = "GroupLocation"
+old = "GroupLocation { minimized, height, column }"
+new = "GroupLocation::new(minimized, height, column)"
+
+[[setter]]
+type = "ColumnLocation"
+old = "ColumnLocation { side, width, iconic, iconic_width }"
+new = "ColumnLocation::new(side, width, iconic, iconic_width)"
+
+[[setter]]
+type = "Group"
+old = "Group { panels, active, minimized, height }"
+new = "Group::new(panels, active); then assign `minimized` and `height`"
+
+[[setter]]
+type = "Column"
+old = "Column { groups, width, iconic, iconic_width }"
+new = "Column::new(groups, width); then assign `iconic` and `iconic_width`"
+
+[[setter]]
+type = "Floating"
+old = "Floating::single(panels, active, [x, y, w, h])"
+new = "Floating::single(panels, active, Rect)"
+
+[[setter]]
+type = "Action"
+old = "Action::Float { panel, rect: [x, y, w, h] }"
+new = "Action::float(panel, Rect)"
+
+[[setter]]
+type = "Action"
+old = "Action::MoveFloating { panel, rect: [x, y, w, h] }"
+new = "Action::move_floating(panel, Rect)"
+
+[[setter]]
+type = "Action"
+old = "Action::SetNative { panel, rect: Some([x, y, w, h]) }"
+new = "Action::set_native(panel, Some(Rect))"
+
+[[setter]]
+type = "Target"
+old = "Target::Float { rect: [x, y, w, h] }"
+new = "Target::float(Rect)"
+
+[[setter]]
+type = "Workspace"
+old = "Workspace { version, layout, hidden, saved, locked }"
+new = "Workspace::new(layout); then assign `hidden`, `saved` or `locked`"
+
+[[setter]]
+type = "NamedWorkspace"
+old = "NamedWorkspace { id, name, layout, chrome, keeps_shortcuts, keeps_menus }"
+new = "NamedWorkspace::new(id, name, layout); then assign `chrome`, `keeps_shortcuts` or `keeps_menus`"
+
+[[setter]]
+type = "WorkspaceSet"
+old = "WorkspaceSet { builtin, saved, current, locked, edited }"
+new = "WorkspaceSet::new(builtin); then assign `saved`, `locked` or `edited`"
+
+[[setter]]
+type = "DocumentGroup"
+old = "DocumentGroup { id, documents, shown }"
+new = "DocumentGroup::new(id, documents); then assign `shown`"
+
+[[setter]]
+type = "DocumentWindows"
+old = "DocumentWindows::default() with `docked` and `floating` set"
+new = "DocumentWindows::default(); then assign `docked` and `floating`"
+
+[[setter]]
+type = "Arrangement"
+old = "Arrangement::menu_entries(&ArrangeLabels, documents, groups, floating)"
+new = "Arrangement::enabled(documents, groups, floating) per command; the dock commands build the rows"
+
+[[setter]]
+type = "Arrangement"
+old = "Arrangement::command_id(self)"
+new = "the id of the `ArrangeCommands` command whose `arrangement()` it is; the command set owns the ids"
+
+[[setter]]
+type = "Arrangement"
+old = "Arrangement::from_command_id(id)"
+new = "`ArrangeCommands::from_ref(&command)`, then `arrangement()`"
+
+[[setter]]
+type = "WorkspaceSet"
+old = "WorkspaceSet::menu_entries(&WorkspaceLabels)"
+new = "the `builtin`, `saved` and `current` fields and `WorkspaceCommands`; the dock commands build the rows"
+
+# fw-asks-h (dock): the divider functions are public.
+[[type]]
+name = "Divider"
+old = ""
+new = "craft_ui::docking::divider::Divider"
+status = "replaced"
+note = "A divider as its container lays it out: `Divider::new(axis, at, span, (lo, hi), reach)`. A component with dividers of its own (`ColumnBar`, `MarginHandles`) builds one per divider and passes it to `divider::{declare, pointer, keys, describe}`."
+
+[[type]]
+name = "Drag"
+old = ""
+new = "craft_ui::docking::divider::Drag"
+status = "replaced"
+note = "What the pointer did to a divider this pass (`divider::pointer`): `Start`, `To(coordinate in reading order)`, `Release`."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+# [[setter]]
+# type = ""
+# old = ""
+# new = ""
+
+[[setter]]
+type = "FloatingFrame"
+old = "new(id, rect)"
+new = "Overlay::placed(rect) on the frame container's Mount::Layer overlay"
+
+[[setter]]
+type = "FloatingFrame"
+old = "bounds(rect)"
+new = "Overlay::bounds(rect)"
+
+[[setter]]
+type = "FloatingFrame"
+old = "limits(PanelLimits { min, max })"
+new = "Overlay::size_limits(SizeLimits::new(min, max))"
+
+[[setter]]
+type = "FloatingFrame"
+old = "opacity(f32)"
+new = "Overlay::opacity(f32)"
+
+[[setter]]
+type = "FrameResponse"
+old = "resized, resize_started"
+new = "Container::placement_changed(&PlacementChange): phase Begin starts a resize, rect is the rect it asks for"
+
+# dock-render-a: the rendering types of the split tree and its groups.
+[[type]]
+name = "SplitArea"
+old = ""
+new = "craft_ui::docking::SplitArea"
+status = "replaced"
+note = "Legacy renders the split tree inside `DockArea` (private `render` types). `SplitArea` shows a `Layout`'s docked tree; its body reads this pass's group rects with `BodyCx::group_frames::<P>()` (anchor and rect), and a divider drag writes the sizes `tree::drag_sizes` returns, in each split's own mode. Its sizes come from `DockSizes::style`; `FrameRules::new(limits)` takes none."
+
+[[type]]
+name = "DockGroup"
+old = ""
+new = "craft_ui::docking::DockGroup"
+status = "replaced"
+note = "Legacy draws a tab group inside `DockArea` (private `render::group`). `DockGroup` is a container whose header is a collapse arrow, a `GroupGrip`, a `TabStrip` and the panel menu button; it is named by an anchor panel and registers its drop spots with `DockTargets`."
+
+[[type]]
+name = "GroupGrip"
+old = ""
+new = "craft_ui::docking::GroupGrip"
+status = "replaced"
+note = "The legacy drag bar of a tab group; a double click minimizes the group and a drag starts through `start_group_drag` with a `DragUnit`, carrying a `GroupDrag`."
+
+[[type]]
+name = "section_heights"
+old = ""
+new = "craft_ui::docking::stack::section_heights"
+status = "replaced"
+note = "The legacy accordion section sizing in `render::dock` and `render::mod` (private); a closed section is its title row, open ones share the rest."
+
+# dock-columns-a: dock columns, iconic columns and flyouts.
+[[type]]
+name = "open_flyout"
+old = "craft_ui::docking::open_flyout"
+new = ""
+status = "replaced"
+note = "The open flyout is the `Bind<Option<P>>` of `IconicColumn::new`; the host opens a panel by writing it, and `IconicColumnOutput::edit` carries the user's changes."
+
+[[type]]
+name = "close_flyout"
+old = "craft_ui::docking::close_flyout"
+new = ""
+status = "replaced"
+note = "A flyout closes by Escape, a press outside, a drag that begins on the column, or its icon; the column writes `None` to the open bind."
+
+[[type]]
+name = "flyout"
+old = "craft_ui::docking::flyout"
+new = ""
+status = "replaced"
+note = "The open flyout is the column's `Bind<Option<P>>`; the host keeps the panel shown."
+
+[[type]]
+name = "DockColumn"
+old = ""
+new = "craft_ui::docking::DockColumn"
+status = "replaced"
+note = "A column of a side dock: the column bar over the stacked groups. Replaces the hand-rolled column bar, collapse button and group stacking of the dock renderer."
+
+[[type]]
+name = "IconicColumn"
+old = ""
+new = "craft_ui::docking::IconicColumn"
+status = "replaced"
+note = "A column collapsed to icons with the flyouts its icons open. Replaces the hand-rolled icon cell, icon grip and Auto-Collapse check box (a checked row of the column menu)."
+
+[[type]]
+name = "Flyout"
+old = ""
+new = "craft_ui::docking::Flyout"
+status = "replaced"
+note = "The popup beside an iconic column, built on `Overlay::popover` and hung from the icon's part."
+
+# Drop resolution (dock-drop-a).
+
+[[type]]
+name = "DropProposal"
+old = "craft_ui::docking::DropProposal"
+new = ""
+status = "replaced"
+note = "`DockDropped<P> { action: Action<P>, mark: DropMark }`: the model action a drop makes and the mark the ghost paints."
+
+[[type]]
+name = "DockDropped"
+old = ""
+new = "craft_ui::docking::DockDropped"
+status = "replaced"
+note = "Replaces `DropProposal`."
+
+[[type]]
+name = "resolve_drop"
+old = "craft_ui::docking::resolve_drop"
+new = "craft_ui::docking::resolve_drop"
+status = "same"
+note = "`resolve_drop(ctx, dock, &Layout<P>, at, &impl DockDrag<P>, &permissions) -> Option<Action<P>>` reads the dock's `DockTargets` and returns the model action; it runs inside the dock's `DropTarget::accept`."
+
+[[type]]
+name = "resolve_drop_by"
+old = "craft_ui::docking::resolve_drop_by"
+new = ""
+status = "removed"
+note = "`resolve_drop` takes the permissions as a closure."
+
+[[type]]
+name = "DockDropTarget"
+old = ""
+new = "craft_ui::docking::DockDropTarget"
+status = "replaced"
+note = "`DropTarget<PanelDrag>` and `DropTarget<GroupDrag<P>>` for one dock; replaces the legacy `DropTarget` geometry and `resolve_drop`'s hit testing."
+
+[[type]]
+name = "tab_insertion_marker"
+old = "craft_ui::docking::tab_insertion_marker"
+new = ""
+status = "removed"
+note = "Group rendering registers `DockSpot::tab(anchor, index)` over the strip gap; `DockSpot::mark` gives the insertion line."
+
+[[type]]
+name = "zone_rect"
+old = "craft_ui::docking::zone_rect"
+new = ""
+status = "removed"
+note = "`ZoneRule::zones(body, &DockSizes, rtl)` gives the rects; `DockSpot::mark` gives the highlight."
+
+[[type]]
+name = "zone_shape"
+old = "craft_ui::docking::zone_shape"
+new = ""
+status = "removed"
+note = "Zones are rects; there are no polygon zones."
+
+[[type]]
+name = "drop_zone"
+old = "craft_ui::docking::drop_zone"
+new = ""
+status = "removed"
+note = "`ZoneRule::zones` and `DockTargets::resolve`."
+
+[[type]]
+name = "body_zone"
+old = "craft_ui::docking::body_zone"
+new = ""
+status = "removed"
+note = "`ZoneRule::zones` and `DockTargets::resolve`."
+
+[[type]]
+name = "SIDE_EDGE_ZONE_DEPTH"
+old = "craft_ui::docking::SIDE_EDGE_ZONE_DEPTH"
+new = ""
+status = "removed"
+note = "`DockSizes::zone_depth`, from the rail width token."
+
+# Floating frames (float-frame-a).
+
+[[type]]
+name = "FloatingGroup"
+old = ""
+new = "craft_ui::docking::FloatingGroup"
+status = "replaced"
+note = "`FloatingGroup::new(title, rect)` then `show_group(ui, body)`; `menu(f)` gives the rows the Menu action opens. The output reports `placed` (each gesture step, with the rect the caller keeps), `action` and `minimized_toggled`."
+
+[[type]]
+name = "ChromeStyle"
+old = "craft_ui::docking::chrome::ChromeStyle"
+new = ""
+status = "removed"
+note = "The frame's surface, stroke, shadow and title row come from the theme through the container and `TitleRow`."
+
+[[setter]]
+type = "FloatingFrame"
+old = "new(id, rect)"
+new = "FloatingGroup::new(title, rect)"
+
+[[setter]]
+type = "FloatingFrame"
+old = "resizable(bool)"
+new = "FloatingGroup::minimized(bool)"
+
+[[setter]]
+type = "FloatingFrame"
+old = "reserve_top_resize_band(bool)"
+new = ""
+
+[[setter]]
+type = "FloatingFrame"
+old = "resize_axes([bool; 2])"
+new = ""
+
+[[setter]]
+type = "FloatingFrame"
+old = "resize_label(&str)"
+new = ""
+
+[[setter]]
+type = "FloatingFrame"
+old = "auto_height(bool)"
+new = ""
+
+[[setter]]
+type = "FloatingFrame"
+old = "request(Option<Rect>)"
+new = "FloatingGroup::new(title, rect)"
+
+[[setter]]
+type = "FloatingFrame"
+old = "dock_into(Option<Id>)"
+new = "FloatingGroupOutput::released_at"
+
+# Reorderable sections (sidebar-sections-a).
+[[type]]
+name = "ReorderableSections"
+old = "craft_ui::panes::sections::ReorderableSections"
+new = "craft_ui::sections::ReorderableSections"
+status = "moved"
+note = "A pattern over `SectionStack`: `new(label, Bind<SectionLayout>, &[SectionSpec])` then `show(ui, body)`. The reorder is the stack's header band; the section menu is `SectionCommands` rows."
+
+[[type]]
+name = "SectionsOutput"
+old = "craft_ui::panes::sections::SectionsOutput"
+new = ""
+status = "removed"
+note = "Replaced by `ReorderableSectionsOutput`; the header buttons' responses are not reported."
+
+[[type]]
+name = "ReorderableSectionsOutput"
+old = ""
+new = "craft_ui::sections::ReorderableSectionsOutput"
+status = "replaced"
+note = "Replaces `SectionsOutput`: `response` and `events`."
+
+[[type]]
+name = "SectionKey"
+old = "craft_ui::panes::sections::SectionKey"
+new = "craft_ui::sections::SectionKey"
+status = "moved"
+note = "The trait with `ALL`, `id` and `from_id` is a newtype over the saved id, `SectionKey::new(id)`; the registered keys are the `SectionSpec` list and `SectionLayout::reconcile`."
+
+[[type]]
+name = "SectionState"
+old = "craft_ui::panes::sections::SectionState"
+new = "craft_ui::sections::SectionState"
+status = "moved"
+note = "No type parameter; `section` is `key`; `pinned` is added."
+
+[[type]]
+name = "SectionLayout"
+old = "craft_ui::panes::sections::SectionLayout"
+new = "craft_ui::sections::SectionLayout"
+status = "moved"
+note = "No type parameter. A saved layout is reconciled with the registered keys by `reconcile`; `Default` is the empty layout and `SectionLayout::new(keys)` the usual one. Pinned sections stay above the others."
+
+[[type]]
+name = "SectionEvent"
+old = "craft_ui::panes::sections::SectionEvent"
+new = "craft_ui::sections::SectionEvent"
+status = "moved"
+note = "No type parameter, owned keys; `Unfolded` is `Folded { folded: false }`; `Pinned` and `Unpinned` are added; `Button` and `Reset` are gone."
+
+[[type]]
+name = "SectionInfo"
+old = "craft_ui::panes::sections::SectionInfo"
+new = ""
+status = "removed"
+note = "Replaced by `SectionSpec` (key and title); counts, empty hints and availability belong to the body the app shows."
+
+[[type]]
+name = "SectionSpec"
+old = ""
+new = "craft_ui::sections::SectionSpec"
+status = "replaced"
+note = "Replaces `SectionInfo`: `SectionSpec::new(key, title)`."
+
+[[type]]
+name = "SectionButton"
+old = "craft_ui::panes::sections::SectionButton"
+new = ""
+status = "removed"
+note = "A header button is a control the app puts in the section body or in the header through `Section::controls`; the section menu button is the pattern's own."
+
+[[type]]
+name = "SectionsLabels"
+old = "craft_ui::panes::sections::SectionsLabels"
+new = ""
+status = "removed"
+note = "Replaced by `ReorderableWords` (menu name, move announcement); the menu rows are `SectionCommands` labels."
+
+[[type]]
+name = "ReorderableWords"
+old = ""
+new = "craft_ui::sections::ReorderableWords"
+status = "replaced"
+note = "Replaces `SectionsLabels`."
+
+[[type]]
+name = "SectionCommands"
+old = ""
+new = "craft_ui::sections::SectionCommands"
+status = "replaced"
+note = "New: Hide, Fold, Unfold, Pin, Unpin, MoveUp and MoveDown on the focused section; the legacy section menu rows run these."
+
+[[setter]]
+type = "ReorderableSections"
+old = "new(id_salt, &layout)"
+new = "new(label, Bind::bound(&mut layout), &specs)"
+
+[[setter]]
+type = "ReorderableSections"
+old = "show(ui, &sections, body)"
+new = "show(ui, body)"
+note = "`body` takes `(ui, &SectionKey, &mut BodyCx)` and runs for each open section."
+
+[[setter]]
+type = "ReorderableSections"
+old = "label(text)"
+new = "new(label, ..)"
+
+[[setter]]
+type = "ReorderableSections"
+old = "show_counts(bool)"
+new = ""
+note = "Not ported: the app shows a count in the section body or header controls."
+
+[[setter]]
+type = "ReorderableSections"
+old = "labels(SectionsLabels)"
+new = ""
+note = "Not ported: words come from `ReorderableWords` in the env."
+
+[[setter]]
+type = "ReorderableSections"
+old = "menu(layout, sections, on, labels)"
+new = "SectionCommands"
+note = "The menu rows are commands; a host menu runs them with `commands::fire`."
+
+[[setter]]
+type = "SectionLayout"
+old = "from_states(states)"
+new = "from_states(states)"
+
+[[setter]]
+type = "SectionLayout"
+old = "set_hidden(section, bool)"
+new = "set_hidden(&key, bool) -> bool"
+
+[[setter]]
+type = "SectionLayout"
+old = "set_folded(section, bool)"
+new = "set_folded(&key, bool) -> bool"
+
+[[setter]]
+type = "SectionLayout"
+old = "move_before(section, Option<S>)"
+new = "move_before(&key, Option<&SectionKey>)"
+
+[[setter]]
+type = "SectionLayout"
+old = "move_by(section, up, to_end)"
+new = "move_by(&key, up, to_end)"
+
+[[setter]]
+type = "SectionLayout"
+old = "is_default()"
+new = "SectionLayout::new(keys)"
+note = "Not ported: a host compares with `SectionLayout::new(keys)`."
+
+[[setter]]
+type = "SectionEvent"
+old = "Moved { section, before }"
+new = "Moved { key, before }"
+
+[[setter]]
+type = "SectionEvent"
+old = "Folded { section, folded }"
+new = "Folded { key, folded }"
+
+[[setter]]
+type = "SectionInfo"
+old = "SectionInfo::new(section, title)"
+new = "SectionSpec::new(key, title)"
+
+# split (wave-1 cleanup): one divider, one docking size set.
+[[type]]
+name = "SplitAreaOutput"
+old = ""
+new = "craft_ui::docking::SplitAreaOutput"
+status = "replaced"
+note = "The output of `SplitArea`: the layout's resize edits."
+
+# dock-commands-a: command sets over the dock model, the workspace switcher, the words.
+[[type]]
+name = "DockCommand"
+old = "craft_ui::docking::DockCommand"
+new = ""
+status = "removed"
+note = "The serde command protocol is gone; the dock commands are the `DockCommands` set."
+
+[[type]]
+name = "DockCommands"
+old = ""
+new = "craft_ui::docking::DockCommands"
+status = "replaced"
+note = "Replaces the serde `DockCommand` protocol. `DockCommands` is a fieldless `CommandSet` (prefix `dock`, scope `dockGroup`): `DockArea` gives each `DockGroup` the scope, publishes `dock_states` there and runs `actions` and `move_actions` for the command that reaches the group, so a menu row, a key and the palette run the same code. A host with its own dock calls the functions with the panel; `Fixture` replaces the JSON control driver."
+
+[[type]]
+name = "UiDock"
+old = "craft_ui::docking::UiDock"
+new = ""
+status = "removed"
+note = "Part of the JSON protocol. `ui.dock` actions are `Workspace::apply_all` calls."
+
+[[type]]
+name = "DockOperation"
+old = "craft_ui::docking::DockOperation"
+new = ""
+status = "removed"
+note = "Part of the JSON protocol; use the `Action` constructors of `craft_behavior::dock::Action`."
+
+[[type]]
+name = "ZoneName"
+old = "craft_ui::docking::ZoneName"
+new = ""
+status = "removed"
+note = "Zones are `craft_behavior::DockSide`; a command destination is `craft_ui::docking::DockTo`."
+
+[[type]]
+name = "ArrangeCommands"
+old = ""
+new = "craft_ui::docking::ArrangeCommands"
+status = "replaced"
+note = "The Window > Arrange commands (prefix `arrange`), one per `Arrangement`; `arrange` runs one on `DocumentWindows`."
+
+[[type]]
+name = "WorkspaceCommands"
+old = ""
+new = "craft_ui::docking::WorkspaceCommands"
+status = "replaced"
+note = "The Window > Workspace commands Reset, New, Delete and Lock (prefix `workspace`), app scope: the switcher's rows and the Window menu fire them, and the host runs each with `run_workspace`."
+
+[[type]]
+name = "WorkspaceSwitcher"
+old = "craft_ui::docking::workspaces::WorkspaceSwitcher"
+new = "craft_ui::patterns::dock::WorkspaceSwitcher"
+status = "moved"
+note = "Built from `WorkspaceSwitcher::new(&set)`; `id_salt` and `labels` are gone (the words are `DockWords`)."
+
+[[type]]
+name = "WorkspaceSwitcherResponse"
+old = "craft_ui::docking::workspaces::WorkspaceSwitcherResponse"
+new = ""
+status = "removed"
+note = "Replaced by `craft_ui::patterns::dock::WorkspaceSwitcherOutput { response, switched }`."
+
+[[type]]
+name = "WorkspaceSwitcherOutput"
+old = ""
+new = "craft_ui::patterns::dock::WorkspaceSwitcherOutput"
+status = "replaced"
+note = "`switched` is the picked workspace id. A command row fires its `WorkspaceCommands` command and is not reported."
+
+[[type]]
+name = "ArrangeLabels"
+old = "craft_ui::docking::arrange::ArrangeLabels"
+new = ""
+status = "removed"
+note = "The labels are the labels of `ArrangeCommands`."
+
+[[type]]
+name = "WorkspaceLabels"
+old = "craft_ui::docking::workspaces::WorkspaceLabels"
+new = ""
+status = "removed"
+note = "The labels are the labels of `WorkspaceCommands`; the select's name and the menu's name are `DockWords::{choose_workspace, workspace_menu}`."
+
+[[setter]]
+type = "WorkspaceSwitcher"
+old = "WorkspaceSwitcher::new(id_salt, set)"
+new = "WorkspaceSwitcher::new(set)"
+
+[[setter]]
+type = "WorkspaceSwitcher"
+old = "labels(labels)"
+new = ""
+
+
+# dock-area-a: the area pattern, its output, its style and the hide prune.
+[[type]]
+name = "DockAreaOutput"
+old = ""
+new = "craft_ui::patterns::dock::DockAreaOutput"
+status = "replaced"
+note = "Replaces the legacy `DockOutput`: `actions` (the actions the workspace took; a refused one is left out, and a given workspace is never written), `events`, `focused` (the shown panel of the group that holds key focus), `picked` (the panel whose tab was clicked or picked this pass), `error`, `edit` (a divider's size edit, or the applied actions as one edit, as an edit of the workspace), `float_space` and `response`; forwarded input and files are the runtime's."
+
+[[type]]
+name = "DockOutput"
+old = "craft_ui::docking::surface::DockOutput"
+new = ""
+status = "removed"
+note = "Replaced by `craft_ui::patterns::dock::DockAreaOutput`."
+
+[[type]]
+name = "InvalidGeometry"
+old = ""
+new = "craft_ui::patterns::dock::InvalidGeometry"
+status = "replaced"
+note = "The error value of a workspace that fails `Workspace::validate`; the area draws nothing for it."
+
+[[type]]
+name = "DockRootStyle"
+old = ""
+new = "craft_ui::docking::DockRootStyle"
+status = "replaced"
+note = "The one component style behind `DockStyle`, `DockLook`, `DockSpec` and `DockWith`: the docking sizes, from tokens, which the body of a `DockArea` or `PaneArea` reads through `BodyCx::style`."
+
+[[type]]
+name = "DockStyle"
+old = "craft_ui::docking::surface::DockStyle"
+new = ""
+status = "removed"
+note = "Replaced by `craft_ui::docking::DockRootStyle` (sizes) and `DockConfig` (behaviour)."
+
+[[type]]
+name = "DockLook"
+old = "craft_ui::docking::look::DockLook"
+new = ""
+status = "removed"
+note = "Colours, surfaces and shapes belong to the parts the area assembles; the theme's semantic tokens set them."
+
+[[type]]
+name = "DockSpec"
+old = "craft_ui::docking::look::DockSpec"
+new = ""
+status = "removed"
+note = "Replaced by `DockRootStyle`."
+
+[[type]]
+name = "DockWith"
+old = "craft_ui::docking::look::DockWith"
+new = ""
+status = "removed"
+note = "Replaced by `DockRootStyle`."
+
+[[setter]]
+type = "DockArea"
+old = "hide_panels(HidePanels)"
+new = "hide(HidePanels)"
+
+[[setter]]
+type = "DockArea"
+old = "maximized(Option<P>)"
+new = "maximized(Option<P>)"
+
+[[setter]]
+type = "DockArea"
+old = "auto_collapse_iconic(bool)"
+new = "auto_collapse()"
+
+[[setter]]
+type = "DockArea"
+old = "locked(bool)"
+new = "locked()"
+
+[[setter]]
+type = "DockArea"
+old = "float_bounds(Rect)"
+new = ""
+note = "The area's float bounds are the shell's window region (`ShellCx::float_bounds`)."
+
+[[setter]]
+type = "DockArea"
+old = "native_windows(bool)"
+new = "DockConfig::native_windows(bool)"
+note = "A dock's floating windows open native where `DockConfig::native_windows` is on, `WindowHost::viewports_available` and every panel's `PanelSpec::allow_native`; `DockArea` and `FloatingGroup` do the window work."
+
+[[setter]]
+type = "DockArea"
+old = "monitors(Vec<Monitor>)"
+new = ""
+note = "Monitors come from `WindowHost::monitors(window_scale)`, in desktop points as `craft_behavior::Monitor`."
+
+[[setter]]
+type = "DockArea"
+old = "input_blocked(bool)"
+new = ""
+note = "The runtime blocks input behind modal layers."
+
+[[setter]]
+type = "DockArea"
+old = "native_input_hook(hook)"
+new = ""
+note = "Forwarded input is the runtime's."
+
+[[setter]]
+type = "DockArea"
+old = "raise_panel(P)"
+new = ""
+note = "A picked tab is `Action::activate`; windows raise with their layer."
+
+[[setter]]
+type = "DockArea"
+old = "blocked_rects(&[Rect])"
+new = ""
+note = "Layers above the area block it by the drag session's layer test."
+
+
+# native-a: native dock windows and drags across windows.
+[[type]]
+name = "WindowSystem"
+old = "craft_ui::docking::render::native::WindowSystem"
+new = ""
+status = "removed"
+note = "The OS window work is the viewport mount's and `runtime::windows::WindowHost`; the policy is `craft_ui::docking::native::{allowed, spec_for, opening, restore, reported, raise}`."
+
+[[type]]
+name = "NativeInput"
+old = "craft_ui::docking::render::native::NativeInput"
+new = ""
+status = "removed"
+note = "Keys, clipboard and IME reach the focused viewport through the runtime's input hook; there is no forwarding plugin."
+
+[[type]]
+name = "WindowFiles"
+old = "craft_ui::docking::WindowFiles"
+new = ""
+status = "removed"
+note = "Files dragged over a window are the drag session's `OsFiles` payload, taken by a drop target in that window."
+
+[[type]]
+name = "typing_window"
+old = "craft_ui::docking::typing_window"
+new = ""
+status = "removed"
+note = "Each viewport's input goes to that viewport; no routing function."
+
+[[type]]
+name = "send_keys"
+old = "craft_ui::docking::send_keys"
+new = ""
+status = "removed"
+note = "Each viewport's input goes to that viewport; no routing function."
+
+[[type]]
+name = "route_app_drag"
+old = "craft_ui::docking::route_app_drag"
+new = ""
+status = "removed"
+note = "Every drag runs in the drag session, which maps the desktop pointer into the window under it and decides which window takes the drop; `DockArea` raises the window that takes a drop from another window."
+
+[[type]]
+name = "native"
+old = ""
+new = "craft_ui::docking::native"
+status = "replaced"
+note = "Placement policy for a floating group in an OS window: `spec_for(&[PanelSpec]) -> WindowSpec`, `restore(&Floating<P>, NativeSpace) -> Option<Rect>` and `space_of(ctx, &Floating<P>, &[Monitor], bar) -> NativeSpace`. `DockArea` opens, records and raises the windows itself (`DockConfig::native_windows`)."
+
+
+# panes-a: the task panes.
+[[type]]
+name = "PaneArea"
+old = ""
+new = "craft_ui::patterns::dock::PaneArea"
+status = "replaced"
+note = "Replaces `PaneHost`."
+
+[[type]]
+name = "PaneContent"
+old = "craft_ui::panes::PaneContent"
+new = "craft_ui::patterns::dock::PaneContent"
+status = "moved"
+note = "`title`, `default_state`, `size_range`, `movable`, `closable` and `title_bar` are the fields of `PaneSpec` returned by `spec`; `body` and `menu` take the `BodyCx`; `state` returns the app's kept state."
+
+[[type]]
+name = "PaneSpec"
+old = ""
+new = "craft_ui::patterns::dock::PaneSpec"
+status = "replaced"
+note = "The data half of `PaneContent`."
+
+[[type]]
+name = "PaneRequest"
+old = "craft_ui::panes::PaneRequest"
+new = "craft_ui::patterns::dock::PaneRequest"
+status = "moved"
+note = "`Resize(pane, extent)` arrives once, when the drag of a docked pane's inner edge ends; `PaneState::apply` sets `PaneState::size` from it. `FloatRect` carries a `Rect`. `Minimize(pane, bool)` sets `PaneState::minimized`."
+
+[[type]]
+name = "PaneOutput"
+old = "craft_ui::panes::PaneOutput"
+new = ""
+status = "removed"
+note = "Replaced by `PaneAreaOutput`; `to_document` is the shell's F6 order."
+
+[[type]]
+name = "PaneAreaOutput"
+old = ""
+new = "craft_ui::patterns::dock::PaneAreaOutput"
+status = "replaced"
+note = "Replaces `PaneOutput`."
+
+[[type]]
+name = "PaneState"
+old = "craft_ui::panes::PaneState"
+new = "craft_ui::patterns::dock::PaneState"
+status = "moved"
+note = "`float_rect` is a `Rect`; `place` is a `PanePlace`."
+
+[[type]]
+name = "SidePolicy"
+old = "craft_ui::panes::SidePolicy"
+new = "craft_ui::patterns::dock::SidePolicy"
+status = "moved"
+
+[[type]]
+name = "Edge"
+old = "craft_ui::panes::Edge"
+new = ""
+status = "removed"
+note = "Replaced by `craft_ui::contract::PaneEdge` (`Start`, `End`, `Bottom`, `Top`)."
+
+[[type]]
+name = "PanePlace"
+old = ""
+new = "craft_ui::patterns::dock::PanePlace"
+status = "replaced"
+note = "Replaces `craft_ui::panes::Place`."
+
+[[type]]
+name = "PaneLabels"
+old = "craft_ui::panes::PaneLabels"
+new = ""
+status = "removed"
+note = "The menu rows are the commands of `PaneCommands`; the menu name is the `DockWords` row `paneArea.menu`."
+
+[[type]]
+name = "PaneCommands"
+old = ""
+new = "craft_ui::patterns::dock::PaneCommands"
+status = "replaced"
+note = "The pane menu's Move to Start, Move to End, Move to Top, Move to Bottom, Float and Close as commands."
+
+# l4e-dflags: DockConfig fields with no behaviour behind them.
+
+[[setter]]
+type = "DockConfig"
+old = "float_hint"
+new = ""
+note = "No drag hint: Ctrl/Cmd held at the release floats the drop, as in Photoshop, which shows no hint."
+
+[[setter]]
+type = "DockConfig"
+old = "command_press_floats"
+new = ""
+note = "Only Ctrl/Cmd held at the release floats the drop, as in Photoshop."
+
+[[setter]]
+type = "DockConfig"
+old = "panel_menu_button"
+new = ""
+note = "Every group that has menu rows ends its header with the panel menu button, as in Photoshop and PhotoCraft."
+
+[[setter]]
+type = "DockConfig"
+old = "wheel_selects_tabs"
+new = ""
+note = "The wheel does not switch tabs, as in Photoshop."
+
+[[setter]]
+type = "DockConfig"
+old = "middle_click_closes_tabs"
+new = ""
+note = "The tab kind decides: with `tab_close_buttons` a group's tabs are document tabs, which close on a middle click; panel tabs do not."
+
+[[type]]
+name = "GroupId"
+old = "craft_behavior::dock::GroupId"
+new = ""
+status = "removed"
+note = "Deleted with the anchor-panel model: a dock group is named by an anchor panel in it (`DockSpot<P>`, `GroupDrag<P>`), and a layout is `Layout<P>` over the app's own panel type `P`."
+
+[[type]]
+name = "DockTree"
+old = "craft_behavior::dock::DockTree"
+new = ""
+status = "removed"
+note = "Deleted with the anchor-panel model: a dock group is named by an anchor panel in it (`DockSpot<P>`, `GroupDrag<P>`), and a layout is `Layout<P>` over the app's own panel type `P`."
+
+[[type]]
+name = "Split"
+old = "craft_behavior::dock::Split"
+new = ""
+status = "removed"
+note = "Deleted with the anchor-panel model: a dock group is named by an anchor panel in it (`DockSpot<P>`, `GroupDrag<P>`), and a layout is `Layout<P>` over the app's own panel type `P`."
+
+[[type]]
+name = "DockHandle"
+old = "craft_behavior::dock::DockHandle"
+new = ""
+status = "removed"
+note = "Deleted with the anchor-panel model: a dock group is named by an anchor panel in it (`DockSpot<P>`, `GroupDrag<P>`), and a layout is `Layout<P>` over the app's own panel type `P`."
+
+# Final fix pass, task dock.
+
+[[type]]
+name = "WindowMenuRows"
+old = ""
+new = "craft_ui::docking::WindowMenuRows"
+status = "replaced"
+note = "The Window menu's check rows over a layout: `WindowMenuRows::new(&Layout<P>, &dyn DockPanels<P>, &[P]).show(ui) -> WindowMenuRowsOutput<P> { action: Option<Action<P>> }`. Replaces a menu's hand-written panel rows."
+
+[[type]]
+name = "WindowMenuRowsOutput"
+old = ""
+new = "craft_ui::docking::WindowMenuRowsOutput"
+status = "replaced"
+note = "What `WindowMenuRows::show` reports: the action the picked row asks for."
+
+[[type]]
+name = "StackSections"
+old = ""
+new = "craft_ui::docking::stack::StackSections"
+status = "replaced"
+note = "The sections of an accordion with the dividers between the open ones; their drags come back as `StackSectionsOutput::resized`, which `DockArea` sends as `Action::ResizeStack`."
+
+[[type]]
+name = "StackSectionsOutput"
+old = ""
+new = "craft_ui::docking::stack::StackSectionsOutput"
+status = "replaced"
+note = "What `StackSections` reports."
+
+[[type]]
+name = "StackSectionsStyle"
+old = ""
+new = "craft_ui::docking::stack::StackSectionsStyle"
+status = "replaced"
+note = "The style of `StackSections`."
+
+# fw-asks-h (dock): the theme scope takes a mode only.
+[[setter]]
+type = "ThemeScope"
+old = "new(tokens)"
+new = ""
+note = "Removed: it left the token inputs of the outer scope in place, so a nested `ThemeScope::mode` resolved from the wrong inputs. No caller existed. `ThemeScope::mode(mode)` is the scope constructor."

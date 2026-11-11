@@ -1,0 +1,458 @@
+# API map of the "Rails" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Rails"
+new_module = "craft_ui::rails"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "PanelRail"
+old = "craft_ui::patterns::rail::panel_rail::PanelRail"
+new = "craft_ui::rails::PanelRail"
+status = "moved"
+note = "A container: `PanelRail::new(label, &panels)` takes `RailTool`s (a panel key and its toggle command) and `show_rail(ui, footer)` shows it and returns `PanelRailOutput`. The shell's config `craft_ui::shell::canvas::PanelRail` (the `PanelRail<'a>` in `shell/canvas.rs`) maps onto this type in L4. `craft_ui::panes::rail::Rail` is replaced by it."
+
+[[type]]
+name = "ToolRail"
+old = "craft_ui::patterns::rail::tool::ToolRail"
+new = "craft_ui::rails::ToolRail"
+status = "moved"
+note = "A container: `ToolRail::new(label, &slots, &current, &last_used)` takes the data, and `show_rail(ui, footer)` shows it and returns `ToolRailOutput` (`response` and `dropped` are new). The surface is the chrome surface and the column toggle is the header. `pick_by_key` is not ported: tool commands carry their chords in the keymap."
+
+[[type]]
+name = "FlyoutButton"
+old = "craft_ui::patterns::rail::flyout::FlyoutButton"
+new = "craft_ui::rails::FlyoutButton"
+status = "moved"
+note = "A leaf: `FlyoutButton::new(&tools, &shown)` over `RailTool`s, whose commands give label, icon, chord and state. Output `FlyoutOutput { response, select, double_clicked, opened, dropped }`."
+
+[[type]]
+name = "ToolbarDrawer"
+old = "craft_ui::patterns::toolbar_drawer::ToolbarDrawer"
+new = "craft_ui::rails::ToolbarDrawer"
+status = "moved"
+note = "A pattern: `ToolbarDrawer::new(rail_rect, &groups, &toolbar, rail_out.dropped).opens(Side).show(ui)`; the output holds `edits`, `select` and `closed`. One list over all groups with a heading row per group; a press outside the drawer and the rail closes it."
+
+[[type]]
+name = "Rail"
+old = "craft_ui::panes::rail::Rail"
+new = ""
+status = "replaced"
+note = "`craft_ui::rails::PanelRail`; the legacy `Rail` was deprecated in its favour."
+
+[[type]]
+name = "FlyoutItem"
+old = "craft_ui::patterns::rail::flyout::FlyoutItem"
+new = ""
+status = "removed"
+note = "A flyout row is the tool's command: use `RailTool::new(id, command)`."
+
+[[type]]
+name = "FlyoutStyle"
+old = "craft_ui::patterns::rail::flyout::FlyoutStyle"
+new = ""
+status = "removed"
+note = "The button is an `IconButton` face; its look comes from the theme."
+
+[[type]]
+name = "FlyoutResponse"
+old = "craft_ui::patterns::rail::flyout::FlyoutResponse"
+new = ""
+status = "removed"
+note = "Replaced by `FlyoutOutput`: `chosen` and `clicked` are `select`, `open` is `opened`."
+
+[[type]]
+name = "FlyoutOutput"
+old = ""
+new = "craft_ui::rails::FlyoutOutput"
+status = "replaced"
+note = "Replaces `FlyoutResponse`."
+
+[[type]]
+name = "RailTool"
+old = "craft_ui::patterns::rail::tool::RailTool"
+new = "craft_ui::rails::RailTool"
+status = "moved"
+note = "A tool is a command: `RailTool::new(id, command)` replaces the public fields `icon`, `label`, `shortcut` and `enabled`."
+
+[[type]]
+name = "ToolSlot"
+old = "craft_ui::patterns::rail::tool::ToolSlot"
+new = "craft_ui::rails::ToolSlot"
+status = "moved"
+note = "`ToolSlot::ending_group(id, tools)` replaces `ToolSlot::new(..).group_end(true)`."
+
+[[type]]
+name = "LastUsed"
+old = "craft_ui::patterns::rail::tool::LastUsed"
+new = "craft_ui::rails::LastUsed"
+status = "moved"
+note = "The rail reads `&LastUsed` and reports the changed memory in `ToolRailOutput::last_used`."
+
+[[type]]
+name = "SlotId"
+old = "craft_ui::patterns::rail::tool::SlotId"
+new = "craft_ui::rails::SlotId"
+status = "moved"
+
+[[type]]
+name = "RailFooter"
+old = "craft_ui::patterns::rail::tool::RailFooter"
+new = "craft_ui::rails::RailFooter"
+status = "moved"
+
+[[type]]
+name = "RailMetrics"
+old = "craft_ui::patterns::rail::tool::RailMetrics"
+new = ""
+status = "removed"
+note = "The rail sizes from its content and the control size; there is no metrics reader."
+
+[[type]]
+name = "ToolRailOutput"
+old = "craft_ui::patterns::rail::tool::ToolRailOutput"
+new = "craft_ui::rails::ToolRailOutput"
+status = "moved"
+note = "`rect` is `response.rect`; `dropped` and `last_used` are new."
+
+[[type]]
+name = "visible_slots"
+old = "craft_ui::patterns::rail::tool::visible_slots"
+new = "craft_ui::rails::visible_slots"
+status = "moved"
+
+[[type]]
+name = "shown_tool"
+old = "craft_ui::patterns::rail::tool::shown_tool"
+new = "craft_ui::rails::shown_tool"
+status = "moved"
+note = "Takes an `enabled` predicate for the tool's command state."
+
+[[type]]
+name = "ToolDrag"
+old = ""
+new = "craft_ui::rails::ToolDrag"
+status = "replaced"
+note = "The payload of the drag session; replaces the egui `DragAndDrop` payload of the same name."
+
+[[type]]
+name = "DropAt"
+old = ""
+new = "craft_ui::rails::DropAt"
+status = "replaced"
+note = "Replaces `craft_ui::patterns::toolbar_drawer::DropAt`; build it with `DropAt::new_slot` and `DropAt::into_slot`."
+
+[[type]]
+name = "PanelRailItem"
+old = "craft_ui::patterns::rail::panel_rail::PanelRailItem"
+new = ""
+status = "removed"
+note = "A panel is `RailTool::new(key, command)` with a toggle command: label, icon and chord come from the command, `checked` is the open state, `marked` and `hint` are the content marker."
+
+[[type]]
+name = "PanelRailRequest"
+old = "craft_ui::patterns::rail::panel_rail::PanelRailRequest"
+new = "craft_ui::rails::PanelRailRequest"
+status = "moved"
+
+[[type]]
+name = "PanelRailOutput"
+old = "craft_ui::patterns::rail::panel_rail::PanelRailOutput"
+new = "craft_ui::rails::PanelRailOutput"
+status = "moved"
+note = "`focused`, `responses` and `rect` are not reported: focus is the roving group's, each icon's response is its button's, and the rect is `response.rect`."
+
+[[type]]
+name = "PanelRailStyle"
+old = "craft_ui::patterns::rail::panel_rail::PanelRailStyle"
+new = "craft_ui::rails::PanelRailStyle"
+status = "moved"
+note = "Opaque: the look comes from the theme."
+
+[[type]]
+name = "DrawerGroup"
+old = "craft_ui::patterns::toolbar_drawer::DrawerGroup"
+new = "craft_ui::rails::DrawerGroup"
+status = "moved"
+note = "`DrawerGroup::new(label, tools)`; the label is a `Label`."
+
+[[type]]
+name = "ToolbarEdit"
+old = "craft_ui::patterns::toolbar_drawer::ToolbarEdit"
+new = "craft_ui::rails::ToolbarEdit"
+status = "moved"
+
+[[type]]
+name = "ToolbarDrawerOutput"
+old = "craft_ui::patterns::toolbar_drawer::ToolbarDrawerOutput"
+new = "craft_ui::rails::ToolbarDrawerOutput"
+status = "moved"
+note = "`response` is new."
+
+[[type]]
+name = "ToolbarDrawerLabels"
+old = "craft_ui::patterns::toolbar_drawer::ToolbarDrawerLabels"
+new = ""
+status = "removed"
+note = "The words are `RailWords`."
+
+[[type]]
+name = "apply_toolbar_edit"
+old = "craft_ui::patterns::toolbar_drawer::apply_toolbar_edit"
+new = "craft_ui::rails::apply_toolbar_edit"
+status = "moved"
+
+[[type]]
+name = "RailItem"
+old = "craft_ui::panes::rail::RailItem"
+new = ""
+status = "removed"
+note = "A panel is `RailTool::new(key, command)`; see `PanelRail`."
+
+[[type]]
+name = "RailRequest"
+old = "craft_ui::panes::rail::RailRequest"
+new = ""
+status = "removed"
+note = "`PanelRailRequest`."
+
+[[type]]
+name = "RailOutput"
+old = "craft_ui::panes::rail::RailOutput"
+new = ""
+status = "removed"
+note = "`PanelRailOutput`."
+
+[[type]]
+name = "RAIL_WIDTH"
+old = "craft_ui::panes::rail::RAIL_WIDTH"
+new = ""
+status = "removed"
+note = "Sizes come from content and the control size."
+
+[[type]]
+name = "RAIL_BUTTON"
+old = "craft_ui::panes::rail::RAIL_BUTTON"
+new = ""
+status = "removed"
+note = "Sizes come from content and the control size."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+# [[setter]]
+# type = ""
+# old = ""
+# new = ""
+
+[[setter]]
+type = "ToolRail"
+old = "new(id_salt)"
+new = "new(label, slots, current, last_used)"
+
+[[setter]]
+type = "ToolRail"
+old = "edge(Edge)"
+new = "edge(PaneEdge)"
+
+[[setter]]
+type = "ToolRail"
+old = "columns(usize)"
+new = "columns(NonZeroU8)"
+
+[[setter]]
+type = "ToolRail"
+old = "column_toggle(impl Into<String>)"
+new = "column_toggle(impl Into<Label>)"
+
+[[setter]]
+type = "ToolRail"
+old = "edit_toolbar(impl Into<String>)"
+new = "edit_toolbar(impl Into<Label>)"
+
+[[setter]]
+type = "ToolRail"
+old = "editing(bool)"
+new = "editing()"
+
+[[setter]]
+type = "ToolRail"
+old = "label(impl Into<String>)"
+new = "new(label, ..)"
+
+[[setter]]
+type = "ToolRail"
+old = "scroll_bar_label(impl Into<String>)"
+new = ""
+note = "The scroll region is named by the family's scroll bar words."
+
+[[setter]]
+type = "ToolRail"
+old = "pick_by_key(bool)"
+new = ""
+note = "Not ported: the keymap dispatches each tool command's chord."
+
+[[setter]]
+type = "ToolRail"
+old = "show(ui, slots, current, last_used, footer)"
+new = "show_rail(ui, footer)"
+
+[[setter]]
+type = "FlyoutButton"
+old = "new(id_salt, icon, label)"
+new = "new(tools, shown)"
+
+[[setter]]
+type = "FlyoutButton"
+old = "items(&[FlyoutItem<T>])"
+new = "new(&[RailTool<T>], ..)"
+
+[[setter]]
+type = "FlyoutButton"
+old = "current(&T)"
+new = "new(.., &T)"
+
+[[setter]]
+type = "FlyoutButton"
+old = "selected(bool)"
+new = "selected(bool)"
+
+[[setter]]
+type = "FlyoutButton"
+old = "enabled(bool)"
+new = "enabled(bool)"
+
+[[setter]]
+type = "FlyoutButton"
+old = "hold_selects(bool)"
+new = "hold_selects(bool)"
+
+[[setter]]
+type = "FlyoutButton"
+old = "shortcut(impl Into<String>)"
+new = ""
+note = "The tool's command gives the chord."
+
+[[setter]]
+type = "FlyoutButton"
+old = "show(ui)"
+new = "show(ui)"
+
+[[setter]]
+type = "PanelRail"
+old = "new(id_salt)"
+new = "new(label, panels)"
+
+[[setter]]
+type = "PanelRail"
+old = "edge(Edge)"
+new = ""
+note = "The rail sits where the shell mounts it."
+
+[[setter]]
+type = "PanelRail"
+old = "label(impl Into<String>)"
+new = "new(label, ..)"
+
+[[setter]]
+type = "PanelRail"
+old = "scroll_bar_label(impl Into<String>)"
+new = ""
+note = "The scroll region is named by the family's scroll bar words."
+
+[[setter]]
+type = "PanelRail"
+old = "item_id(ui, panel)"
+new = ""
+note = "Each icon is found by its accessible name."
+
+[[setter]]
+type = "PanelRail"
+old = "show(ui, items, open, foot)"
+new = "show_rail(ui, footer)"
+note = "The open panels are the checked state of each panel's command."
+
+[[setter]]
+type = "Rail"
+old = "new(id)"
+new = "PanelRail::new(label, panels)"
+
+[[setter]]
+type = "Rail"
+old = "edge(Edge)"
+new = ""
+
+[[setter]]
+type = "Rail"
+old = "rtl(bool)"
+new = ""
+note = "The rail follows the reading direction."
+
+[[setter]]
+type = "Rail"
+old = "width(f32)"
+new = ""
+note = "Sizes come from content."
+
+[[setter]]
+type = "Rail"
+old = "button_size(f32)"
+new = ""
+note = "Sizes come from the control size."
+
+[[setter]]
+type = "Rail"
+old = "frame(Frame)"
+new = ""
+note = "The surface is the chrome surface."
+
+[[setter]]
+type = "ToolbarDrawer"
+old = "new(id_salt)"
+new = "new(rail, groups, toolbar, dropped)"
+
+[[setter]]
+type = "ToolbarDrawer"
+old = "rail(id_salt)"
+new = ""
+note = "The rail's rect is passed to `new`."
+
+[[setter]]
+type = "ToolbarDrawer"
+old = "labels(ToolbarDrawerLabels)"
+new = ""
+note = "The words are `RailWords`."
+
+[[setter]]
+type = "ToolbarDrawer"
+old = "show(ui, rail, groups, toolbar)"
+new = "show(ui)"
+note = "`rail`, `groups` and `toolbar` are `new` arguments, and so is the drop the rail took (`ToolRailOutput::dropped`)."
+
+[[setter]]
+type = "DrawerGroup"
+old = "label: String"
+new = "label: Label"
+
+[[setter]]
+type = "PanelRailItem"
+old = "new(panel, icon, label)"
+new = "RailTool::new(panel, command)"
+
+[[setter]]
+type = "PanelRailItem"
+old = "marker(bool)"
+new = ""
+note = "The command's `marked` state."
+
+[[setter]]
+type = "PanelRailItem"
+old = "marker_label(impl Into<String>)"
+new = ""
+note = "The command's `hint`."
+
+[[setter]]
+type = "PanelRailItem"
+old = "enabled(bool)"
+new = ""
+note = "The command's enabled state."

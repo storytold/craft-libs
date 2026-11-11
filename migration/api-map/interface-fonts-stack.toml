@@ -1,0 +1,201 @@
+# API map of the "Interface fonts: stack" family: the font stack every app installs (`UiFonts`, `Stack`), its coverage checks
+# and the served faces. The sources (faces, providers, system fonts, on-demand faces) are the "Interface fonts: sources" family.
+
+family = "Interface fonts: stack"
+new_module = "craft_ui::fonts"
+
+[[type]]
+name = "UiFonts"
+old = "craft_ui::fonts::UiFonts"
+new = "craft_ui::fonts::UiFonts"
+status = "same"
+
+[[type]]
+name = "Stack"
+old = "craft_ui::fonts::Stack"
+new = "craft_ui::fonts::Stack"
+status = "same"
+
+[[type]]
+name = "Family"
+old = "craft_ui::fonts::Family"
+new = "craft_ui::fonts::Family"
+status = "same"
+
+[[type]]
+name = "Emoji"
+old = "craft_ui::fonts::Emoji"
+new = "craft_ui::fonts::Emoji"
+status = "same"
+
+[[type]]
+name = "CjkRows"
+old = "craft_ui::fonts::CjkRows"
+new = "craft_ui::fonts::CjkRows"
+status = "same"
+
+[[type]]
+name = "SystemFonts"
+old = "craft_ui::fonts::SystemFonts"
+new = "craft_ui::fonts::SystemFonts"
+status = "same"
+
+[[type]]
+name = "LanguageScripts"
+old = "craft_ui::fonts::LanguageScripts"
+new = "craft_ui::fonts::LanguageScripts"
+status = "same"
+
+[[type]]
+name = "I18nScripts"
+old = "craft_ui::fonts::I18nScripts"
+new = "craft_ui::fonts::I18nScripts"
+status = "same"
+
+[[type]]
+name = "SEMIBOLD"
+old = "craft_ui::fonts::SEMIBOLD"
+new = "craft_ui::fonts::SEMIBOLD"
+status = "same"
+
+[[type]]
+name = "Sample"
+old = "craft_ui::fonts::Sample"
+new = "craft_ui::fonts::Sample"
+status = "same"
+
+[[type]]
+name = "Missing"
+old = "craft_ui::fonts::Missing"
+new = "craft_ui::fonts::Missing"
+status = "same"
+
+[[type]]
+name = "missing_glyphs"
+old = "craft_ui::fonts::missing_glyphs"
+new = "craft_ui::fonts::missing_glyphs"
+status = "same"
+
+[[type]]
+name = "assert_covers"
+old = "craft_ui::fonts::assert_covers"
+new = "craft_ui::fonts::assert_covers"
+status = "same"
+
+[[type]]
+name = "assert_covers_with_system"
+old = "craft_ui::fonts::assert_covers_with_system"
+new = "craft_ui::fonts::assert_covers_with_system"
+status = "same"
+
+[[type]]
+name = "loading"
+old = "craft_ui::fonts::loading"
+new = "craft_ui::fonts::loading"
+status = "same"
+
+[[type]]
+name = "CraftFace"
+old = "craft_ui::fonts::CraftFace"
+new = ""
+status = "replaced"
+note = "`craft_ui::fonts::EmbeddedFace`, re-exported from craft-fonts-build; same fields. `covers`, `region` and `style_rank` are private to the stack."
+
+[[type]]
+name = "EmbeddedFace"
+old = ""
+new = "craft_ui::fonts::EmbeddedFace"
+status = "replaced"
+note = "Replaces `CraftFace`: the craft-fonts face an app embeds, re-exported from craft-fonts-build."
+
+[[type]]
+name = "ServedFace"
+old = "craft_ui::fonts::ServedFace"
+new = "craft_ui::fonts::ServedFace"
+status = "replaced"
+note = "The craft-fonts-build type, re-exported; the legacy copy is gone. It has no `PartialEq`; compare `name()`."
+
+[[type]]
+name = "FontFetcher"
+old = ""
+new = "craft_ui::fonts::FontFetcher"
+status = "replaced"
+note = "What fetches served faces, given with `UiFonts::fetcher`. The legacy stack fetched with its own browser code on the web; craft-ui holds no browser calls, so the web host supplies the fetcher."
+
+[[setter]]
+type = "UiFonts"
+old = "craft_faces(&[CraftFace])"
+new = "craft_faces(&[EmbeddedFace])"
+note = "`craft_fonts_build::EmbeddedFace`, the type apps already embed."
+
+[[setter]]
+type = "UiFonts"
+old = "app_face(&str, FontData, &[FontFamily])"
+new = "app_face(&str, FontData, &[FontRef])"
+note = "Families are `FontRef`: `FontRef::proportional()`, `FontRef::monospace()` or `FontRef::named(name)`."
+
+[[setter]]
+type = "UiFonts"
+old = "egui_face(&str, &[FontFamily])"
+new = "egui_face(&str, &[FontRef])"
+note = "Families are `FontRef`."
+
+[[setter]]
+type = "Stack"
+old = "chain(&FontFamily)"
+new = "chain(&FontRef)"
+note = "The family is a `FontRef`."
+
+[[setter]]
+type = "Stack"
+old = "insert(&FontFamily, usize, &str, FontData)"
+new = "insert(&FontRef, usize, &str, FontData)"
+note = "The family is a `FontRef`."
+
+[[setter]]
+type = "Stack"
+old = "downloads_for(&FontFamily, char)"
+new = "downloads_for(&FontRef, char)"
+note = "The family is a `FontRef`."
+
+[[setter]]
+type = "Stack"
+old = "weights()"
+new = "weights()"
+note = "Returns `&[(FontRef, u16)]`."
+
+[[setter]]
+type = "missing_glyphs"
+old = "missing_glyphs(&Stack, &FontFamily, samples, bool)"
+new = "missing_glyphs(&Stack, &FontRef, samples, bool)"
+note = "The family is a `FontRef`."
+
+[[setter]]
+type = "Sample"
+old = "Sample { language, key, text }"
+new = "Sample::new(language, key, text)"
+note = "The struct is non-exhaustive, so apps build it with `new`."
+
+[[setter]]
+type = "Stack"
+old = "fit_interact_size(&mut Style)"
+new = ""
+note = "Removed: a control's height comes from the measured line height of the face that leads the stack, through the style builder, so no widget height is adjusted at install."
+
+[[setter]]
+type = "Stack"
+old = "fonts(bool)"
+new = ""
+note = "Removed: coverage checks use `missing_glyphs` and `covers_language`."
+
+[[setter]]
+type = "Stack"
+old = "definitions"
+new = ""
+note = "Private field: edit with `insert`, `replace` and `remove`."
+
+[[setter]]
+type = "Stack"
+old = "after_system"
+new = ""
+note = "Private field: edit with `insert`, `replace` and `remove`."

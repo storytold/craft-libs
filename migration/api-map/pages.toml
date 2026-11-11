@@ -1,0 +1,346 @@
+# API map of the "Pages" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Pages"
+new_module = "craft_pages::ui"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "PageView"
+old = "craft_pages::ui::view::PageView"
+new = "craft_pages::ui::view::PageView"
+status = "same"
+note = "`new(id_salt, source, &mut state)` becomes `new(label, source, Bind<PageViewState>)`; `show(ui)` becomes `show(ui, |ui, body| ..)` (or `show_at(ui, rect, ..)`) and the closure shows the canvas controls with `show_at(ui, body.rect)`. `name` is the label; `style` is gone (the spacing is `PageMetrics`' style); `navigation` takes the user's `NavigationOptions`; `access` takes the describer. A pattern over `Canvas`."
+
+[[type]]
+name = "PageViewResponse"
+old = "craft_pages::ui::view::PageViewResponse"
+new = ""
+status = "removed"
+note = "Replaced by `PageViewOutput`."
+
+[[type]]
+name = "PageViewOutput"
+old = ""
+new = "craft_pages::ui::view::PageViewOutput"
+status = "replaced"
+note = "`response` and `canvas_id` go: the canvas is `PageViewOutput::canvas` (a `CanvasOutput`), and the app runs `ToolHost::run` over it, then `PageViewOutput::adopt(&mut state, &view)` with the view the host reports (replaces `take_change`). `pasteboard` is an `Option<PasteboardOutput>`."
+
+[[type]]
+name = "PageViewState"
+old = "craft_pages::ui::view::PageViewState"
+new = "craft_pages::ui::view::PageViewState"
+status = "same"
+note = "The private memory is gone: it lives in the view's body memory."
+
+[[type]]
+name = "PageSource"
+old = "craft_pages::ui::view::PageSource"
+new = "craft_pages::ui::view::PageSource"
+status = "same"
+
+[[type]]
+name = "PlacedPage"
+old = "craft_pages::ui::view::PlacedPage"
+new = "craft_pages::ui::view::PlacedPage"
+status = "same"
+
+[[type]]
+name = "PageBody"
+old = "craft_pages::ui::view::PageBody"
+new = "craft_pages::ui::view::PageBody"
+status = "same"
+note = "New: what the page view hands the app's canvas controls (`rect`, `pages`, `view`)."
+
+[[type]]
+name = "PageViewStyle"
+old = "craft_pages::ui::style::PageViewStyle"
+new = ""
+status = "removed"
+note = "The spacing is the style of the page view's `PageMetrics` leaf; the paper colour is `view::DEFAULT_PAPER`, document data."
+
+[[type]]
+name = "SyncedViews"
+old = "craft_pages::ui::sync_views::SyncedViews"
+new = "craft_pages::ui::sync_views::SyncedViews"
+status = "same"
+note = "`new(id_salt, &mut state)` becomes `new(label, &mut state)`; the closure gets the half's rect and `show_at`s its `PageView`; the lead changes on a press (the split views' `activated`), not on hover. The divider position is `SyncedViewsState::at`."
+
+[[type]]
+name = "SyncedViewsState"
+old = "craft_pages::ui::sync_views::SyncedViewsState"
+new = "craft_pages::ui::sync_views::SyncedViewsState"
+status = "same"
+
+[[type]]
+name = "Lead"
+old = "craft_pages::ui::sync_views::Lead"
+new = "craft_pages::ui::sync_views::Lead"
+status = "same"
+
+[[type]]
+name = "SyncedViewsOutput"
+old = "craft_pages::ui::sync_views::SyncedViewsOutput"
+new = "craft_pages::ui::sync_views::SyncedViewsOutput"
+status = "same"
+note = "New: the pair's output (`edit`, `views`), replacing the pair of responses."
+
+[[type]]
+name = "PageGrids"
+old = "craft_pages::ui::grid::PageGrids"
+new = "craft_pages::ui::grid::PageGrids"
+status = "same"
+note = "A paint-only canvas control: `new(placed, grids, zoom, colors)` and `show_at(ui, body.rect)` in the page view's body, replacing `new(view, state, pages, colors).paint(painter)`. `PageGrid` has an `index` into the placed pages; the colours are `DataColor`."
+
+[[type]]
+name = "PageGridColors"
+old = "craft_pages::ui::grid::PageGridColors"
+new = "craft_pages::ui::grid::PageGridColors"
+status = "same"
+note = "Fields are `DataColor`; `PageGrids::style()` is `PageGridColors::default()`."
+
+[[type]]
+name = "PageGrid"
+old = "craft_pages::ui::grid::PageGrid"
+new = "craft_pages::ui::grid::PageGrid"
+status = "same"
+note = "New field `index`."
+
+[[type]]
+name = "PagePreview"
+old = "craft_pages::ui::preview::PagePreview"
+new = "craft_pages::ui::preview::PagePreview"
+status = "same"
+note = "`new(id_salt, source, pages, &mut at)` becomes `new(source, pages, &mut at, paper)` (the paper is a `DataColor` the caller gives and shows under a page whose picture is loading); `show(ctx)` becomes `show(ui)` on a modal `Dialog`; `opened` and `labels` go (the dialog moves the focus; the words are `PagePreviewWords`)."
+
+[[type]]
+name = "PagePreviewResponse"
+old = "craft_pages::ui::preview::PagePreviewResponse"
+new = ""
+status = "removed"
+note = "Replaced by `PagePreviewOutput`."
+
+[[type]]
+name = "PagePreviewOutput"
+old = ""
+new = "craft_pages::ui::preview::PagePreviewOutput"
+status = "replaced"
+note = "`stepped` and `closed` as before, plus the dialog's `response`."
+
+[[type]]
+name = "PagePreviewLabels"
+old = "craft_pages::ui::preview::PagePreviewLabels"
+new = ""
+status = "removed"
+note = "Replaced by `PagePreviewWords`."
+
+[[type]]
+name = "PagePreviewWords"
+old = ""
+new = "craft_pages::ui::preview::PagePreviewWords"
+status = "replaced"
+note = "`craft_ui::words!`; `page_of` is a template word filled with `p` and `n`; there is no close word (the dialog's close action)."
+
+[[type]]
+name = "PageThumbnails"
+old = "craft_pages::ui::thumbnails::PageThumbnails"
+new = "craft_pages::ui::thumbnails::PageThumbnails"
+status = "same"
+note = "`new(id_salt, source, picked, current)` becomes `new(label, source, picked, current, paper)` (the paper is a `DataColor` the caller gives); `size` takes `&mut f64`; `caption_place`, `sections`, `marks`, `new_page_row` as before (the row is a `Button` under the grid); `style` and `id_in` go; `labels` goes. The current page is the grid's `current`."
+
+[[type]]
+name = "PageThumbnailsOutput"
+old = "craft_pages::ui::thumbnails::PageThumbnailsOutput"
+new = "craft_pages::ui::thumbnails::PageThumbnailsOutput"
+status = "same"
+note = "`drop_target` and `file_gap` go: a file drop is `ThumbnailEvent::FilesDropped`."
+
+[[type]]
+name = "ThumbnailEvent"
+old = "craft_pages::ui::thumbnails::ThumbnailEvent"
+new = "craft_pages::ui::thumbnails::ThumbnailEvent"
+status = "same"
+note = "`Reorder` carries `EditEvent<ReorderMove<usize>>`; `SectionMenu` has `at` in place of `anchor` and `pointer`; new `FilesDropped`."
+
+[[type]]
+name = "ThumbnailLabels"
+old = "craft_pages::ui::thumbnails::ThumbnailLabels"
+new = ""
+status = "removed"
+note = "The count row is `ThumbnailWords::count`."
+
+[[type]]
+name = "ThumbnailWords"
+old = ""
+new = "craft_pages::ui::thumbnails::ThumbnailWords"
+status = "replaced"
+note = "`craft_ui::words!`; adds `size` and the `count` row that replaces `PAGES`."
+
+[[type]]
+name = "PAGES"
+old = "craft_pages::ui::thumbnails::PAGES"
+new = ""
+status = "removed"
+note = "The count row is `ThumbnailWords::count`."
+
+[[type]]
+name = "THUMBNAIL_ZOOM"
+old = "craft_pages::ui::thumbnails::THUMBNAIL_ZOOM"
+new = "craft_pages::ui::thumbnails::THUMBNAIL_ZOOM"
+status = "same"
+note = "`TileZoom::bounded(0.5, 1.5, 0.25, 1.0)`."
+
+[[type]]
+name = "moved_page"
+old = "craft_pages::ui::thumbnails::moved_page"
+new = "craft_pages::ui::thumbnails::moved_page"
+status = "same"
+note = "Takes the grid's `ReorderMove` (`keys`, `to`) in place of `Move`."
+
+[[type]]
+name = "ThumbnailSection"
+old = "craft_pages::ui::thumbnails::ThumbnailSection"
+new = "craft_pages::ui::thumbnails::ThumbnailSection"
+status = "same"
+
+[[type]]
+name = "ThumbnailMarks"
+old = "craft_pages::ui::thumbnails::ThumbnailMarks"
+new = "craft_pages::ui::thumbnails::ThumbnailMarks"
+status = "same"
+
+[[type]]
+name = "PageThumbnailsStyle"
+old = "craft_pages::ui::style::PageThumbnailsStyle"
+new = ""
+status = "removed"
+note = "The thumbnail size is the grid's `TileZoom` and its medium thumbnail token."
+
+[[type]]
+name = "PageList"
+old = "craft_pages::ui::list::PageList"
+new = "craft_pages::ui::list::PageList"
+status = "same"
+note = "`new(id_salt, rows, &mut picked, active)` becomes `new(label, rows, &mut picked, active)`; a pattern over `Table` with an eye and a lock column and a `FooterBar` (New, Duplicate, Delete); `start_rename`, `id_in` and `labels` go."
+
+[[type]]
+name = "PageListRow"
+old = "craft_pages::ui::list::PageListRow"
+new = "craft_pages::ui::list::PageListRow"
+status = "same"
+note = "New field `hidden`."
+
+[[type]]
+name = "PageListEvent"
+old = "craft_pages::ui::list::PageListEvent"
+new = "craft_pages::ui::list::PageListEvent"
+status = "same"
+note = "`Lock` is `Toggle`, carrying a `craft_ui::contract::SweepStep<usize>` (the cell names its column, visibility or lock; the eye column gives `ShowOnly` on an Alt press); `Fit` goes (the row number is no longer a separate target); `Reorder` carries `EditEvent<ReorderMove<usize>>`."
+
+[[type]]
+name = "PageListOutput"
+old = "craft_pages::ui::list::PageListOutput"
+new = "craft_pages::ui::list::PageListOutput"
+status = "same"
+
+[[type]]
+name = "PageListLabels"
+old = "craft_pages::ui::list::PageListLabels"
+new = ""
+status = "removed"
+note = "Replaced by `PageListWords`."
+
+[[type]]
+name = "PageListWords"
+old = ""
+new = "craft_pages::ui::list::PageListWords"
+status = "replaced"
+note = "`craft_ui::words!`."
+
+[[type]]
+name = "DEFAULT_PAPER"
+old = "craft_pages::ui::style::DEFAULT_PAPER"
+new = ""
+status = "removed"
+note = "The paper is document data: `PageView::new`, `HeaderFooterZones::new` and `TextFrameMarks::new` take it as a `DataColor`."
+
+[[type]]
+name = "DEFAULT_INK"
+old = "craft_pages::ui::style::DEFAULT_INK"
+new = ""
+status = "removed"
+note = "The ink is document data: `HeaderFooterZones::new` takes it as a `DataColor`."
+
+[[setter]]
+type = "PageView"
+old = "name"
+new = "PageView::new(label, ..)"
+note = "The label names the canvas."
+
+[[setter]]
+type = "PageView"
+old = "paper"
+new = "PageView::new(label, source, state, paper)"
+note = "The paper colour of the pages is a `DataColor` the caller gives."
+
+[[setter]]
+type = "HeaderFooterZones"
+old = "paper"
+new = "HeaderFooterZones::new(label, placed, bands, paper, ink)"
+note = "Paper and ink are `DataColor`s the caller gives; no theme default."
+
+[[setter]]
+type = "TextFrameMarks"
+old = "paper"
+new = "TextFrameMarks::new(label, view, frames, color, paper)"
+note = "The port fill is a `DataColor` the caller gives; no theme default."
+
+[[setter]]
+type = "PageView"
+old = "style"
+new = ""
+note = "Removed: the spacing comes from the style."
+
+[[setter]]
+type = "PagePreview"
+old = "opened"
+new = ""
+note = "Removed: the dialog moves the focus in and back."
+
+[[setter]]
+type = "PageThumbnails"
+old = "labels"
+new = ""
+note = "Removed: the words are `ThumbnailWords`."
+
+[[setter]]
+type = "ReadingView"
+old = "paper"
+new = "ReadingView::new(label, source, state, paper)"
+note = "The paper is a `DataColor` the caller gives; it shows under each page while its picture loads."
+
+[[setter]]
+type = "PageThumbnails"
+old = "new(label, source, picked, current)"
+new = "PageThumbnails::new(label, source, picked, current, paper)"
+note = "The paper is a `DataColor` the caller gives; it shows under each page while its picture loads."
+
+[[setter]]
+type = "TextSelectTool"
+old = "right_to_left"
+new = ""
+note = "Removed: the tool reads the interface direction from its `ToolContext`."
+
+[[setter]]
+type = "ReadingMetrics"
+old = "ReadingMetrics::new(column_gap, nav_bar)"
+new = "ReadingMetrics::new(column_gap, nav_bar, measure)"
+note = "The columns' target and least width are a `ReadingMeasure` of the body text, which the caller measures with the pass's layout."
+
+[[setter]]
+type = "ReadingMetrics"
+old = "ReadingMetrics::of(tokens)"
+new = "ReadingMetrics::of(tokens, measure)"
+note = "As `new`: the column widths come from the `ReadingMeasure` given."

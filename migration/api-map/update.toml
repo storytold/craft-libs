@@ -1,0 +1,108 @@
+# API map of the "Update dialogs" family: the update prompt, the check dialog and the updater that feeds them.
+
+family = "Update dialogs"
+new_module = "craft_update::stack_dialogs"
+
+[[type]]
+name = "StartupPrompt"
+old = "craft_update::dialog::StartupPrompt"
+new = ""
+status = "removed"
+note = "`UpdatePromptDialog` is the one prompt: `Updater::show` puts it on the app's `DialogHost` at `StartupStage::Update`. The app runs `DialogHost::run(ui)`; the hand-painted card, its backdrop and its accent-filled buttons are gone."
+
+[[type]]
+name = "StartupPromptResponse"
+old = "craft_update::dialog::StartupPromptResponse"
+new = ""
+status = "removed"
+note = "`UpdateChoice` is the prompt's result (`UpdateAndRestart`, `Download`, `Later`); `Updater::show` maps it to an `Action`."
+
+[[type]]
+name = "CheckResultDialog"
+old = "craft_update::dialog::CheckResultDialog"
+new = ""
+status = "removed"
+note = "`UpdateCheckDialog` on the `DialogHost` is the one result dialog. The app opens it with `DialogHost::open`, feeds it `set_status` each pass and takes a `CheckChoice`."
+
+[[type]]
+name = "CheckResultResponse"
+old = "craft_update::dialog::CheckResultResponse"
+new = ""
+status = "removed"
+note = "`CheckChoice` is the result: `Close`, `CheckNow`, `CheckAgain`, `Update`, `Download`."
+
+[[type]]
+name = "UpdateLabels"
+old = "craft_update::stack_dialogs::UpdateLabels"
+new = ""
+status = "removed"
+note = "`UpdateWords` replaces it."
+
+[[type]]
+name = "UpdateWords"
+old = ""
+new = "craft_update::stack_dialogs::UpdateWords"
+status = "replaced"
+note = "A `craft_ui::words!` set read with `Env::of(ui).words::<UpdateWords>()`; its ids are `updateDialog.<name>` (were `update.<name>`). The version, up-to-date, available and developer lines are templates (`fill`)."
+
+[[type]]
+name = "UpdatePromptDialog"
+old = "craft_update::stack_dialogs::UpdatePromptDialog"
+new = "craft_update::stack_dialogs::UpdatePromptDialog"
+status = "same"
+note = "Shown on `Dialog::prompt`; its `StackDialog::show` takes a `&mut Ui`. Its id is `updateDialog.prompt` (was `update-prompt`). Added `withdraw`. A link to the release page shows only for a safe web link."
+
+[[type]]
+name = "UpdateCheckDialog"
+old = "craft_update::stack_dialogs::UpdateCheckDialog"
+new = "craft_update::stack_dialogs::UpdateCheckDialog"
+status = "same"
+note = "Shown on `Dialog::prompt`; its id is `updateDialog.check` (was `update-check`). A host answer given with `DialogHost::confirm_by_id` before the first draw assumes an install that cannot update itself unless `with_self_updating` says otherwise."
+
+[[type]]
+name = "CheckChoice"
+old = "craft_update::stack_dialogs::CheckChoice"
+new = "craft_update::stack_dialogs::CheckChoice"
+status = "same"
+note = "`ReleaseNotes` is gone: Release Notes is a `Link` in the dialog's body that opens a safe page and leaves the dialog open."
+
+[[type]]
+name = "Updater"
+old = "craft_update::updater::Updater"
+new = "craft_update::updater::Updater"
+status = "same"
+note = "The updater holds its prompt as data and puts it on the app's `DialogHost`; only `tick` keeps a `&Context`, to ask for the next pass while a worker runs."
+
+[[setter]]
+type = "Updater"
+old = "show(ctx)"
+new = "run(&mut DialogHost, can_start) -> Action"
+note = "Enqueues the prompt at `StartupStage::Update` when one is due, feeds the open one the install's progress and maps its `UpdateChoice` to an `Action`. Call it before `DialogHost::run`."
+
+[[setter]]
+type = "Updater"
+old = "show_if(ctx, can_start)"
+new = "run(&mut DialogHost, can_start) -> Action"
+note = "`run` takes `can_start`; `show` is a contract entry-point name, so the updater's method is `run` like `DialogHost::run`."
+
+[[setter]]
+type = "Updater"
+old = "check_at_start(ctx)"
+new = "check_at_start()"
+note = "The worker no longer asks for a repaint; `tick` polls."
+
+[[setter]]
+type = "Updater"
+old = "check_now(ctx)"
+new = "check_now()"
+
+[[setter]]
+type = "Updater"
+old = "request_install(ctx, can_start)"
+new = "request_install(can_start)"
+
+[[setter]]
+type = "Updater"
+old = "tick(ctx)"
+new = "tick(ctx)"
+note = "Unchanged signature; it asks for the next pass every 0.1 s while a check or install runs, through `runtime::frame::request_repaint_after`."

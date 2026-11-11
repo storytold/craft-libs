@@ -1,0 +1,807 @@
+# API map of the "Dialog shells" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Dialog shells"
+new_module = "craft_ui::dialog"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "Dialog"
+old = "craft_ui::dialog::dialog::Dialog"
+new = "craft_ui::dialog::Dialog"
+status = "replaced"
+note = "A container: `Dialog::new(title).opened(Bind::bound(&mut open)).show(ui, |ui, cx| ..)`. It takes no `Context`, `DialogState` or fields; the open state is a binding and the body edits the app's values directly."
+
+[[type]]
+name = "DialogFrame"
+old = "craft_ui::dialog::frame::DialogFrame"
+new = "craft_ui::dialog::DialogFrame"
+status = "replaced"
+note = "A container in the parent's flow: `DialogFrame::new(title).show(ui, |ui, cx| ..)`. `DialogFrameResponse` is gone: the output is a `Response`."
+
+[[type]]
+name = "FullWindowDialog"
+old = "craft_ui::dialog::full_window::FullWindowDialog"
+new = "craft_ui::dialog::FullWindowDialog"
+status = "replaced"
+note = "A container on `Mount::FullWindow`: `FullWindowDialog::new(title).opened(..).show(ui, |ui, cx| ..)`. `FullWindowFx` is gone: footer buttons are the footer closure's content."
+
+[[type]]
+name = "DialogHost"
+old = "craft_ui::dialog::dialog_host::DialogHost"
+new = "craft_ui::dialog::DialogHost"
+status = "moved"
+note = "`show(ctx)` is `run(ui)`; a `StackDialog::show` takes `&mut Ui` and its dialog is a container shown from it."
+
+[[type]]
+name = "StackDialog"
+old = "craft_ui::dialog::dialog_host::StackDialog"
+new = "craft_ui::dialog::StackDialog"
+status = "moved"
+note = "`show(&mut self, ctx: &Context, stack)` is `show(&mut self, ui: &mut Ui, stack)`."
+
+[[type]]
+name = "DialogResult"
+old = "craft_ui::dialog::dialog_host::DialogResult"
+new = "craft_ui::dialog::DialogResult"
+status = "moved"
+
+[[type]]
+name = "StartupStage"
+old = "craft_ui::dialog::dialog_host::StartupStage"
+new = "craft_ui::dialog::StartupStage"
+status = "moved"
+
+[[type]]
+name = "DialogStack"
+old = "craft_ui::dialog::stack::DialogStack"
+new = "craft_ui::dialog::DialogStack"
+status = "moved"
+note = "Routing only: the overlay host makes the top modal layer the one that takes input, so `Dialog::stack` and the whole-dialog disable are gone."
+
+[[type]]
+name = "dialog_id"
+old = "craft_ui::dialog::stack::dialog_id"
+new = "craft_ui::dialog::dialog_id"
+status = "moved"
+
+[[type]]
+name = "DialogId"
+old = "craft_ui::dialog::stack::DialogId"
+new = "craft_ui::dialog::DialogId"
+status = "moved"
+
+[[type]]
+name = "BlockingOverlay"
+old = "craft_ui::dialog::blocking::BlockingOverlay"
+new = "craft_ui::dialog::BlockingOverlay"
+status = "replaced"
+note = "A container: `BlockingOverlay::new(name).card(true).show(ui, |ui, cx| ..)` while the work lasts. `show(ctx) -> bool` (cancelled) becomes the open binding turning false."
+
+[[type]]
+name = "Outcome"
+old = "craft_ui::dialog::Outcome"
+new = ""
+status = "removed"
+note = "`Dialog::on_close(|why| ..)` reports how the dialog closed as a `CloseReason`: `Escape` is the cancel, `Enter` the OK of `close_on_enter(true)`, and a footer button calls `FooterCx::request_close_as(why)` (`Activated` for OK, `Requested` for Cancel). The close action reports `Requested`."
+
+[[type]]
+name = "DialogResponse"
+old = "craft_ui::dialog::DialogResponse"
+new = ""
+status = "removed"
+note = "The open binding and the footer closure replace `outcome`, `closed`, `opened`, `active` and `alternate`; `initial_focus`, `outer` and `history` are not reported."
+
+[[type]]
+name = "DialogState"
+old = "craft_ui::dialog::DialogState"
+new = ""
+status = "removed"
+note = "The open binding is the state; the container saves placement and size under its `SaveKey`."
+
+[[type]]
+name = "Backdrop"
+old = "craft_ui::dialog::Backdrop"
+new = "craft_ui::runtime::overlay::Backdrop"
+status = "moved"
+note = "`Backdrop::None` stays the transparent backdrop. A `Dialog` defaults to `Backdrop::Scrim`; call `.backdrop(Backdrop::None)` for the old look."
+
+[[type]]
+name = "InitialFocus"
+old = "craft_ui::dialog::InitialFocus"
+new = ""
+status = "replaced"
+note = "Auto and FirstField are `Initial::First`, DefaultButton is `Initial::Default`, Field(id) is `Initial::Key(name)`, None is `Initial::Keep`."
+
+[[type]]
+name = "EnterRule"
+old = "craft_ui::dialog::EnterRule"
+new = "craft_ui::runtime::focus::EnterRule"
+status = "replaced"
+note = "`Default` is `Submit`, `Body` is `Pass`."
+
+[[type]]
+name = "KeyInput"
+old = "craft_ui::dialog::KeyInput"
+new = ""
+status = "removed"
+note = "`resolve_keys` is the focus scope's Escape and Enter rules."
+
+[[type]]
+name = "resolve_keys"
+old = "craft_ui::dialog::resolve_keys"
+new = ""
+status = "removed"
+note = "The focus scope and `CancelRule` decide Escape; see `KeyInput`."
+
+[[type]]
+name = "Width"
+old = "craft_ui::dialog::Width"
+new = ""
+status = "removed"
+note = "A dialog sizes from its content, capped at a share of the window; there are no width classes."
+
+[[type]]
+name = "Body"
+old = "craft_ui::dialog::Body"
+new = ""
+status = "removed"
+note = "The body scrolls when the window is smaller than the content."
+
+[[type]]
+name = "Resize"
+old = "craft_ui::dialog::Resize"
+new = ""
+status = "removed"
+note = "`Dialog::resizable(bool)` adds the grips; the saved size is the user's."
+
+[[type]]
+name = "ResizeMax"
+old = "craft_ui::dialog::ResizeMax"
+new = ""
+status = "removed"
+note = "See `Resize`."
+
+[[type]]
+name = "remembered_size"
+old = "craft_ui::dialog::remembered_size"
+new = ""
+status = "removed"
+note = "The container saves and restores its own size."
+
+[[type]]
+name = "scroll_height"
+old = "craft_ui::dialog::scroll_height"
+new = ""
+status = "removed"
+note = "The body step sizes the scroll region."
+
+[[type]]
+name = "PlaceKey"
+old = "craft_ui::dialog::PlaceKey"
+new = ""
+status = "replaced"
+note = "`Dialog::remember(SaveKey::new(\"app.name\"))`."
+
+[[type]]
+name = "keep_on_screen"
+old = "craft_ui::dialog::keep_on_screen"
+new = ""
+status = "removed"
+note = "The overlay host keeps a placed layer in the window."
+
+[[type]]
+name = "next_pin"
+old = "craft_ui::dialog::next_pin"
+new = ""
+status = "removed"
+note = "See `keep_on_screen`."
+
+[[type]]
+name = "any_modal"
+old = "craft_ui::dialog::any_modal"
+new = ""
+status = "replaced"
+note = "`any_open(ctx, OpenFilter::Modal)`."
+
+[[type]]
+name = "focus_inside"
+old = "craft_ui::dialog::focus_inside"
+new = ""
+status = "removed"
+note = "The focus scope records whether focus is inside a layer."
+
+[[type]]
+name = "DialogFrameResponse"
+old = "craft_ui::dialog::DialogFrameResponse"
+new = ""
+status = "removed"
+note = "The frame's output is a `Response`."
+
+[[type]]
+name = "DialogFrameStyle"
+old = "craft_ui::dialog::DialogFrameStyle"
+new = "craft_ui::dialog::DialogFrameStyle"
+status = "replaced"
+note = "A component style with the container's metrics; the look comes from the dialog surface and tokens."
+
+[[type]]
+name = "FullWindowFx"
+old = "craft_ui::dialog::FullWindowFx"
+new = ""
+status = "replaced"
+note = "The footer closure's context."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+
+[[setter]]
+type = "Dialog"
+old = "Dialog::new(id, title)"
+new = "Dialog::new(title)"
+note = "The id is the component's `id_salt` (`Props::id_salt`) when two dialogs share a title."
+
+[[setter]]
+type = "Dialog"
+old = "Dialog::with_id(id, title)"
+new = "Dialog::new(title).id_salt(id)"
+
+[[setter]]
+type = "Dialog"
+old = "show(ctx, &mut state, &mut fields, |ui, fields| ..)"
+new = "opened(Bind::bound(&mut open)).show(ui, |ui, cx| ..)"
+note = "The body edits the app's values by closure capture."
+
+[[setter]]
+type = "Dialog"
+old = "show_with_below(..)"
+new = "footer(|ui, fx| ..)"
+note = "Moved: the footer region does not scroll, and its closure shows anything above the buttons (a preview under the parameters, a note), so the content `show_with_below` took goes at the start of the footer closure."
+
+[[setter]]
+type = "Dialog"
+old = "modeless()"
+new = "modeless()"
+note = "A tool window in its own OS window (the preferences window): `modeless().viewport()`; where windows are unavailable it shows on the modeless layer."
+
+[[setter]]
+type = "Dialog"
+old = "backdrop(Backdrop)"
+new = "backdrop(Backdrop)"
+note = "Default is `Scrim`."
+
+[[setter]]
+type = "Dialog"
+old = "width(Width)"
+new = ""
+note = "Removed."
+
+[[setter]]
+type = "Dialog"
+old = "body(Body)"
+new = ""
+note = "Removed."
+
+[[setter]]
+type = "Dialog"
+old = "resizable(Resize)"
+new = "resizable(bool)"
+
+[[setter]]
+type = "Dialog"
+old = "remember_size(bool)"
+new = "remember(SaveKey)"
+note = "Placement and size are saved together."
+
+[[setter]]
+type = "Dialog"
+old = "place_key(PlaceKey)"
+new = "remember(SaveKey)"
+
+[[setter]]
+type = "Dialog"
+old = "center_over(Rect)"
+new = ""
+note = "Removed: the dialog centres in the window or opens at `first_place`."
+
+[[setter]]
+type = "Dialog"
+old = "first_place(|ctx| Option<Vec2>)"
+new = "first_place(Pos2)"
+note = "A screen position, not an offset from the window's corner."
+
+[[setter]]
+type = "Dialog"
+old = "footer(Footer)"
+new = "footer(|ui, fx| ..)"
+note = "The closure fills a `FooterBar`; buttons come from the buttons family."
+
+[[setter]]
+type = "Dialog"
+old = "close_label(Option<String>)"
+new = "closable(bool)"
+note = "The close action's name comes from the section words."
+
+[[setter]]
+type = "Dialog"
+old = "outer_gesture(bool)"
+new = "outer_gesture(bool)"
+
+[[setter]]
+type = "Dialog"
+old = "initial_focus(InitialFocus)"
+new = "initial_focus(Initial)"
+
+[[setter]]
+type = "Dialog"
+old = "roomy(bool)"
+new = "roomy(bool)"
+
+[[setter]]
+type = "Dialog"
+old = "history(bool)"
+new = ""
+note = "Not ported: the container contract has no hook for the body's edit events."
+
+[[setter]]
+type = "Dialog"
+old = "stack(&DialogStack)"
+new = ""
+note = "Removed: modal layers stack in the overlay host."
+
+[[setter]]
+type = "FullWindowDialog"
+old = "new(id)"
+new = "new(title)"
+note = "The title is required; `title(..)` is gone."
+
+[[setter]]
+type = "FullWindowDialog"
+old = "title_actions(|ui| ..)"
+new = "actions([HeaderAction])"
+note = "Close, Menu and Float only."
+
+[[setter]]
+type = "FullWindowDialog"
+old = "rect(Rect)"
+new = ""
+note = "Removed: the dialog covers the window."
+
+[[setter]]
+type = "FullWindowDialog"
+old = "enter(EnterRule)"
+new = "enter(EnterRule)"
+note = "New `EnterRule`."
+
+[[setter]]
+type = "FullWindowDialog"
+old = "labels(DialogLabels)"
+new = ""
+note = "Removed: words come from the word sets."
+
+[[setter]]
+type = "BlockingOverlay"
+old = "new(id)"
+new = "new(name)"
+note = "The name is the accessible name."
+
+[[setter]]
+type = "BlockingOverlay"
+old = "name(..) and message(..)"
+new = "new(name) and the body closure"
+note = "The message text and spinner are the body's."
+
+[[setter]]
+type = "BlockingOverlay"
+old = "cancel(label)"
+new = "cancellable(bool)"
+note = "Escape only; a cancel button is the body's."
+
+[[setter]]
+type = "BlockingOverlay"
+old = "scrim(bool)"
+new = "scrim(bool)"
+
+[[setter]]
+type = "BlockingOverlay"
+old = "cursor(CursorIcon)"
+new = "cursor(CursorIcon)"
+
+[[setter]]
+type = "DialogHost"
+old = "show(ctx)"
+new = "run(ui)"
+
+[[call]]
+old = "craft_ui::dialog::InitialFocus"
+new = "craft_ui::runtime::focus::Initial"
+note = "Type `InitialFocus` is replaced; the type entry above has the details."
+
+[[call]]
+old = "craft_ui::dialog::PlaceKey"
+new = "craft_ui::contract::SaveKey"
+note = "Type `PlaceKey` is replaced; the type entry above has the details."
+
+[[call]]
+old = "craft_ui::dialog::any_modal"
+new = "craft_ui::runtime::overlay::any_open"
+note = "Type `any_modal` is replaced; the type entry above has the details."
+
+[[call]]
+old = "craft_ui::dialog::FullWindowFx"
+new = "craft_ui::dialog::FooterCx"
+note = "Type `FullWindowFx` is replaced; the type entry above has the details."
+
+# Prompts: one entry per public type and per renamed, removed or reshaped setter.
+
+[[type]]
+name = "Prompt"
+old = "craft_ui::dialog::prompt::Prompt"
+new = "craft_ui::dialog::Prompt"
+status = "replaced"
+note = "A pattern on `Dialog::prompt`: `Prompt::new(title, message).answers([FooterButton::new(label, DialogRole::Accept).letter('Y'), ..]).opened(Bind::bound(&mut open)).show(ui)`. It takes no `Context`, id or stack; the output is `PromptOutput { response, closed, picked }` with the answer as an index in the order given."
+
+[[type]]
+name = "StandardPrompt"
+old = "craft_ui::dialog::prompts::StandardPrompt"
+new = "craft_ui::dialog::StandardPrompt"
+status = "replaced"
+note = "Still a `StackDialog` on the host. App texts are `Label`s the scope's catalog translates, so `arg` is gone; the \"Don't show again\" choice is reported in `PromptAnswer::skip` and the app stores it (craft-ui has no craft-settings dependency)."
+
+[[type]]
+name = "PromptKind"
+old = "craft_ui::dialog::prompts::PromptKind"
+new = "craft_ui::dialog::PromptKind"
+status = "moved"
+
+[[type]]
+name = "PromptChoice"
+old = "craft_ui::dialog::prompts::PromptChoice"
+new = "craft_ui::dialog::PromptChoice"
+status = "moved"
+
+[[type]]
+name = "PromptAnswer"
+old = "craft_ui::dialog::prompts::PromptAnswer"
+new = "craft_ui::dialog::PromptAnswer"
+status = "moved"
+note = "Adds `skip`: the box was ticked with a Proceed answer."
+
+[[type]]
+name = "PromptLabels"
+old = "craft_ui::dialog::prompts::PromptLabels"
+new = "craft_ui::dialog::PromptLabels"
+status = "replaced"
+note = "A `words!` set with ids `prompt.camelCase` (`prompt.confirmDelete.title` is `prompt.confirmDeleteTitle`); `of_ctx` is `Env::words::<PromptLabels>()`. It also holds the shared `cancel` and `ok` words."
+
+[[type]]
+name = "Alert"
+old = "craft_ui::dialog::alert::Alert"
+new = "craft_ui::dialog::Alert"
+status = "replaced"
+note = "A pattern: `Alert::new(title, message).opened(Bind::bound(&mut open)).show(ui)`; `PromptOutput::picked` is `Some(0)` the pass it closes. It takes no id or stack."
+
+[[type]]
+name = "UnsavedChangesDialog"
+old = "craft_ui::dialog::unsaved::UnsavedChangesDialog"
+new = "craft_ui::dialog::UnsavedChangesDialog"
+status = "replaced"
+note = "The same `StackDialog`; it is a configuration of `Prompt` and `show` takes `&mut Ui`."
+
+[[type]]
+name = "UnsavedAnswer"
+old = "craft_ui::dialog::unsaved::UnsavedAnswer"
+new = "craft_ui::dialog::UnsavedAnswer"
+status = "moved"
+
+[[type]]
+name = "UnsavedLabels"
+old = "craft_ui::dialog::unsaved::UnsavedLabels"
+new = "craft_ui::dialog::UnsavedLabels"
+status = "replaced"
+note = "A `words!` set; read it with `Env::words::<UnsavedLabels>()` instead of `of_ctx`."
+
+[[type]]
+name = "RecoveryDialog"
+old = "craft_ui::dialog::recovery::RecoveryDialog"
+new = "craft_ui::dialog::RecoveryDialog"
+status = "replaced"
+note = "The same `StackDialog`, on `Prompt`; `show` takes `&mut Ui`. Escape and the close action are `DialogResult::Cancel`."
+
+[[type]]
+name = "RecoveredDocument"
+old = "craft_ui::dialog::recovery::RecoveredDocument"
+new = "craft_ui::dialog::RecoveredDocument"
+status = "replaced"
+note = "Built with `RecoveredDocument::new(key, name, age: Duration)` and `.blocked(reason)`; `saved: SystemTime` is `age`, how long before the listing the copy was autosaved. The blocked reason shows as a warning line under the message."
+
+[[type]]
+name = "RecoveryAnswer"
+old = "craft_ui::dialog::recovery::RecoveryAnswer"
+new = "craft_ui::dialog::RecoveryAnswer"
+status = "moved"
+
+[[type]]
+name = "RecoveryLabels"
+old = "craft_ui::dialog::recovery::RecoveryLabels"
+new = "craft_ui::dialog::RecoveryLabels"
+status = "replaced"
+note = "A `words!` set; it holds its own minute, hour and day count words until `localized::relative_age` has a home in the new crate."
+
+[[type]]
+name = "accelerator_labels"
+old = "craft_ui::dialog::prompt::accelerator_labels"
+new = "craft_ui::dialog::accelerator_labels"
+status = "replaced"
+note = "`accelerator_labels(&[(label, Option<char>)], os: Os) -> Vec<String>`: letters are `char`s and the platform is `craft_host::target::Os`."
+
+[[type]]
+name = "FooterButtons"
+old = "craft_ui::dialog::buttons::FooterButtons"
+new = ""
+status = "removed"
+note = "`Dialog::buttons([FooterButton..])` and `FooterBar::buttons`; the footer places the buttons in the platform's order."
+
+[[type]]
+name = "FooterButtonsResponse"
+old = "craft_ui::dialog::buttons::FooterButtonsResponse"
+new = ""
+status = "removed"
+note = "`DialogOutput::picked` is the index of the clicked button."
+
+[[type]]
+name = "FooterButton"
+old = "craft_ui::dialog::buttons::FooterButton"
+new = "craft_ui::sections::FooterButton"
+status = "replaced"
+note = "`FooterButton::new(label, DialogRole)`, with `.letter(char)` and `.enabled(bool)`; `min_width` is gone."
+
+[[type]]
+name = "ButtonRole"
+old = "craft_ui::dialog::buttons::ButtonRole"
+new = ""
+status = "replaced"
+note = "`craft_ui::sections::DialogRole`: Default is `Accept`, Alternate is `Other`, Cancel is `Cancel`; `Destructive` is new."
+
+[[type]]
+name = "Clicked"
+old = "craft_ui::dialog::buttons::Clicked"
+new = ""
+status = "removed"
+note = "`DialogOutput::picked` (an index) and `DialogOutput::closed`."
+
+[[type]]
+name = "Platform"
+old = "craft_ui::dialog::buttons::Platform"
+new = ""
+status = "replaced"
+note = "`craft_host::target::Os`; `Platform::of(ctx)` is `runtime::windows::os_of`."
+
+[[type]]
+name = "order"
+old = "craft_ui::dialog::buttons::order"
+new = ""
+status = "removed"
+note = "The footer orders its buttons by role for the platform."
+
+[[type]]
+name = "Footer"
+old = "craft_ui::dialog::footer::Footer"
+new = ""
+status = "removed"
+note = "`Dialog::buttons(..)` and `Dialog::footer(|ui, fx| ..)`; the standard OK and Cancel rows are the app's `FooterButton`s."
+
+[[type]]
+name = "FooterFx"
+old = "craft_ui::dialog::footer::FooterFx"
+new = ""
+status = "removed"
+note = "`FooterCx`, the footer closure's context."
+
+[[type]]
+name = "DialogLabels"
+old = "craft_ui::dialog::footer::DialogLabels"
+new = ""
+status = "removed"
+note = "The shared words are `PromptLabels::cancel` and `PromptLabels::ok`."
+
+[[type]]
+name = "Reset"
+old = "craft_ui::dialog::footer::Reset"
+new = ""
+status = "removed"
+note = "Not ported: a reset button is the form dialogs' footer content."
+
+[[setter]]
+type = "Prompt"
+old = "new(id, title, message)"
+new = "new(title, message)"
+
+[[setter]]
+type = "Prompt"
+old = "answer(ButtonRole, label, Option<Key>)"
+new = "answers([FooterButton::new(label, DialogRole).letter(char)])"
+note = "The answers come as `FooterButton`s in one call; a role may repeat."
+
+[[setter]]
+type = "Prompt"
+old = "escape(ButtonRole)"
+new = "escape(DialogRole)"
+
+[[setter]]
+type = "Prompt"
+old = "stack(&DialogStack)"
+new = ""
+note = "Removed: modal layers stack in the overlay host."
+
+[[setter]]
+type = "Prompt"
+old = "below(|ui| ..)"
+new = "extras(|ui| ..)"
+
+[[setter]]
+type = "Prompt"
+old = "disable(ButtonRole)"
+new = "answers([FooterButton::new(..).enabled(false)]) and enter(false)"
+note = "A disabled answer takes no click or letter; `enter(false)` stops Enter giving the Accept answer."
+
+[[setter]]
+type = "Prompt"
+old = "tone(Tone, String)"
+new = "tone(Tone, impl Into<Label>)"
+
+[[setter]]
+type = "Prompt"
+old = "lines(impl IntoIterator<Item = impl Into<String>>)"
+new = "lines(impl IntoIterator<Item = Label>)"
+note = "One text each, in the dialog's own scroll."
+
+[[setter]]
+type = "Prompt"
+old = "details(label, text)"
+new = "details(label, text)"
+note = "Labels, not strings."
+
+[[setter]]
+type = "Prompt"
+old = "show(ctx) -> Option<ButtonRole>"
+new = "opened(Bind::bound(&mut open)).show(ui) -> PromptOutput"
+note = "`picked` is the answer's index in the order given."
+
+[[setter]]
+type = "Prompt"
+old = "id()"
+new = ""
+note = "Removed."
+
+[[setter]]
+type = "StandardPrompt"
+old = "arg(name, value)"
+new = ""
+note = "Removed: the app fills its own placeholders before it passes a `Label`."
+
+[[setter]]
+type = "StandardPrompt"
+old = "noun(one, other)"
+new = "noun(Count)"
+note = "A `craft_i18n::Count` with `{n}`."
+
+[[setter]]
+type = "StandardPrompt"
+old = "dont_show_again(key)"
+new = "dont_show_again()"
+note = "The app stores the choice from `PromptAnswer::skip`."
+
+[[setter]]
+type = "StandardPrompt"
+old = "skipped(ctx, key)"
+new = ""
+note = "Removed: the app reads its own stored choice."
+
+[[setter]]
+type = "StandardPrompt"
+old = "button(PromptChoice, impl Into<String>, Option<Key>)"
+new = "button(PromptChoice, impl Into<Label>, Option<char>)"
+
+[[setter]]
+type = "StandardPrompt"
+old = "title(..), message(..), paragraph(..), details(..), tone(..), warnings(..)"
+new = "title(..), message(..), paragraph(..), details(..), tone(..), warnings(..)"
+note = "Texts are `Label`s; `warnings` takes `Label`s."
+
+[[setter]]
+type = "Alert"
+old = "new(id, title, message)"
+new = "new(title, message)"
+
+[[setter]]
+type = "Alert"
+old = "ok_label(String)"
+new = "ok_label(impl Into<Label>)"
+
+[[setter]]
+type = "Alert"
+old = "stack(&DialogStack)"
+new = ""
+note = "Removed."
+
+[[setter]]
+type = "Alert"
+old = "show(ctx) -> bool"
+new = "opened(Bind::bound(&mut open)).show(ui) -> PromptOutput"
+note = "`picked == Some(0)` the pass it closes."
+
+[[setter]]
+type = "RecoveredDocument"
+old = "saved: SystemTime"
+new = "age: Duration"
+note = "How long before the listing the copy was autosaved."
+
+[[setter]]
+type = "FooterButton"
+old = "new(role, label)"
+new = "new(label, role)"
+note = "The label comes first."
+
+[[setter]]
+type = "FooterButton"
+old = "min_width(f32)"
+new = ""
+note = "Removed: buttons size from their content."
+
+[[setter]]
+type = "Dialog"
+old = "Footer::ok_stays_open(bool)"
+new = "close_guard(FnMut(usize, &mut BodyCx) -> bool)"
+note = "The host refuses a button's close by returning `false` for its index (`Cancel` is never offered); the guard gets the dialog's body context to read and write its kept state. The dialog stays open and `DialogOutput::picked` still reports the pick. It replaces holding OK open and closing by hand."
+
+[[setter]]
+type = "FullWindowDialog"
+old = "Footer::ok_stays_open(bool)"
+new = "close_guard(FnMut(usize, &mut BodyCx) -> bool)"
+note = "As `Dialog::close_guard`."
+
+[[setter]]
+type = "FooterButton"
+old = "FooterButton::new(ButtonRole::Apply, label)"
+new = "FooterButton::new(label, DialogRole::Other).stays_open(true)"
+note = "An Apply button: the pick is reported and the dialog stays open. `Cancel` always closes."
+
+# Outer gesture (l4f-edit)
+
+[[type]]
+name = "OuterGesture"
+old = "craft_ui::edit::OuterGesture"
+new = ""
+status = "removed"
+note = "The dialog opens and ends its outer gesture itself: `Dialog::outer_gesture(true)` (or `FullWindowDialog`). The app reads the steps as `OuterEdit` through `GestureHost::handle_output`."
+
+[[type]]
+name = "OuterEdit"
+old = ""
+new = "craft_ui::runtime::frame::OuterEdit"
+status = "replaced"
+note = "The untyped steps of a dialog's outer gesture (`Begin`, `Commit`, `Cancel`) in `FrameOutput::outer_edits`. `GestureHost::handle_output` applies them: one undo step per dialog, named by its title."
+
+[[call]]
+old = "host.begin_outer(ctx, doc, outer)"
+new = ""
+note = "`GestureHost::handle_output(&frame_output, doc)` opens the outer gesture from `FrameOutput::outer_edits` when the dialog opens."
+
+[[call]]
+old = "host.commit(doc, outer.id())"
+new = ""
+note = "The dialog's OK commits its outer gesture; `GestureHost::handle_output` applies the `OuterEdit::Commit`."
+
+[[call]]
+old = "host.cancel(doc, outer.id())"
+new = ""
+note = "Cancel, Escape, the close action and the app closing the dialog cancel its outer gesture; `GestureHost::handle_output` applies the `OuterEdit::Cancel`."
+
+[[call]]
+old = "edit::scope(ui, add_contents)"
+new = ""
+note = "The fields of a dialog with `outer_gesture(true)` report their own events; the app's `GestureHost` folds them into the dialog's step."
+
+# End of outer gesture (l4f-edit)

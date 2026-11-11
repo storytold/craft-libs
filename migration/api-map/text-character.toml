@@ -1,0 +1,206 @@
+# API map of the "Text character and paragraph" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Text character and paragraph"
+new_module = "craft_text::ui::character"
+
+[[type]]
+name = "CharacterControls"
+old = "craft_text::ui::character::CharacterControls"
+new = "craft_text::ui::character::CharacterControls"
+status = "same"
+note = "A craft-ui pattern. `CharacterControls::new(label, &values, &families, &styles)` replaces `new(id_salt, ..)`; shown with `show(ui)`. The controls are fields in a grid with marks for labels; toggles are icon toggle buttons; the colour well is a `Swatch`."
+
+[[type]]
+name = "CharacterControlsResponse"
+old = "craft_text::ui::character::CharacterControlsResponse"
+new = ""
+status = "removed"
+note = "Replaced by `CharacterControlsOutput`."
+
+[[type]]
+name = "CharacterControlsOutput"
+old = ""
+new = "craft_text::ui::character::CharacterControlsOutput"
+status = "replaced"
+note = "Replaces `CharacterControlsResponse`. `edits` keeps its meaning; `pick_color` is `requests: HostRequests` (take it with `take_color()`); `preview_family` is unchanged."
+
+[[type]]
+name = "CharacterLabels"
+old = "craft_text::ui::character::CharacterLabels"
+new = ""
+status = "removed"
+note = "Replaced by `CharacterWords`."
+
+[[type]]
+name = "CharacterWords"
+old = ""
+new = "craft_text::ui::character::CharacterWords"
+status = "replaced"
+note = "Replaces `CharacterLabels`. Words of the scope. The unit suffixes (`points`, `pixels`, `millimeters`) and the preset chevron names are gone: the unit's symbol and the field's own words are used."
+
+[[type]]
+name = "CharacterValues"
+old = "craft_text::ui::character::CharacterValues"
+new = "craft_text::ui::character::CharacterValues"
+status = "same"
+note = "`color` is `Option<craft_theme::Rgba>`, not `Option<egui::Color32>`. The struct is `#[non_exhaustive]`: build it from `CharacterValues::default()` and set its fields (`let mut v = CharacterValues::default(); v.field = ..`)."
+
+[[type]]
+name = "CharacterChange"
+old = "craft_text::ui::character::CharacterChange"
+new = "craft_text::ui::character::CharacterChange"
+status = "same"
+note = "Non-exhaustive; `OpenType` is a non-exhaustive variant."
+
+[[type]]
+name = "Leading"
+old = "craft_text::ui::character::Leading"
+new = "craft_text::ui::character::Leading"
+status = "same"
+note = "Non-exhaustive. The variant `Points(f32)` is `Fixed(f32)`, the leading in document points (the representation of `CharacterValues::size`)."
+
+[[type]]
+name = "Kerning"
+old = "craft_text::ui::character::Kerning"
+new = "craft_text::ui::character::Kerning"
+status = "same"
+note = "Non-exhaustive. The field is a `NumberField::named` over `NamedOr` of the names Metrics and Optical: it shows the name or the number, the menu checks the name it holds, and typing a name's word picks it."
+
+[[type]]
+name = "ParagraphControls"
+old = "craft_text::ui::character::ParagraphControls"
+new = "craft_text::ui::character::ParagraphControls"
+status = "same"
+note = "A craft-ui pattern. `ParagraphControls::new(label, &values)`; alignment and direction are `Segmented` rows with icons."
+
+[[type]]
+name = "ParagraphControlsResponse"
+old = "craft_text::ui::character::ParagraphControlsResponse"
+new = ""
+status = "removed"
+note = "Replaced by `ParagraphControlsOutput`."
+
+[[type]]
+name = "ParagraphControlsOutput"
+old = ""
+new = "craft_text::ui::character::ParagraphControlsOutput"
+status = "replaced"
+note = "Replaces `ParagraphControlsResponse`. `edits` keeps its meaning; `response` is added."
+
+[[type]]
+name = "ParagraphLabels"
+old = "craft_text::ui::character::ParagraphLabels"
+new = ""
+status = "removed"
+note = "Replaced by `ParagraphWords`."
+
+[[type]]
+name = "ParagraphWords"
+old = ""
+new = "craft_text::ui::character::ParagraphWords"
+status = "replaced"
+note = "Replaces `ParagraphLabels`. Words of the scope."
+
+[[type]]
+name = "ParagraphDialog"
+old = "craft_text::ui::character::ParagraphDialog"
+new = "craft_text::ui::character::ParagraphDialog"
+status = "same"
+note = "A pattern on `Dialog` kept on the dialog stack (`StackDialog`). `unit` takes a `DocUnit`; `labels(..)` is gone."
+
+[[type]]
+name = "ParagraphDialogLabels"
+old = "craft_text::ui::character::ParagraphDialogLabels"
+new = ""
+status = "removed"
+note = "Replaced by `ParagraphDialogWords`."
+
+[[type]]
+name = "ParagraphDialogWords"
+old = ""
+new = "craft_text::ui::character::ParagraphDialogWords"
+status = "replaced"
+note = "Replaces `ParagraphDialogLabels`. Words of the scope; `out_of_range` is a template word."
+
+[[type]]
+name = "ParagraphAnswer"
+old = "craft_text::ui::character::ParagraphAnswer"
+new = "craft_text::ui::character::ParagraphAnswer"
+status = "same"
+note = "Non-exhaustive."
+
+[[type]]
+name = "ParagraphFormat"
+old = "craft_text::ui::character::ParagraphFormat"
+new = "craft_text::ui::character::ParagraphFormat"
+status = "same"
+note = "The struct is `#[non_exhaustive]`: build it from `ParagraphFormat::default()` and set its fields (`let mut v = ParagraphFormat::default(); v.field = ..`)."
+
+[[type]]
+name = "ParagraphPreview"
+old = ""
+new = "craft_text::ui::character::ParagraphPreview"
+status = "replaced"
+note = "New in the migration. The dialog's sample paragraphs as a craft-ui component: `ParagraphPreview::new(label, &format, sample)`; its lines are painted on a sunken well."
+
+[[setter]]
+type = "CharacterControls"
+old = "unit(LengthUnit, UnitContext)"
+new = "unit(DocUnit)"
+note = "`DocUnit::new(kind, pixels_per_inch)`."
+
+[[setter]]
+type = "CharacterControls"
+old = "labels(CharacterLabels)"
+new = ""
+note = "Words come from the scope."
+
+[[setter]]
+type = "CharacterControls"
+old = "font_picker(&Arc<Catalog>, &mut FontPickerSettings, &mut FontFilters)"
+new = "font_picker(&Arc<Catalog>, Bind<FontPickerSettings>, Bind<FontFilters>)"
+note = "Behind feature `font-picker`. The picker records a pick as recent itself."
+
+[[setter]]
+type = "CharacterControls"
+old = "id_salt (first argument of new)"
+new = "label (first argument of new)"
+note = "The label names the controls' group."
+
+[[setter]]
+type = "ParagraphControls"
+old = "unit(LengthUnit, UnitContext)"
+new = "unit(DocUnit)"
+note = "`DocUnit::new(kind, pixels_per_inch)`."
+
+[[setter]]
+type = "ParagraphControls"
+old = "labels(ParagraphLabels)"
+new = ""
+note = "Words come from the scope."
+
+[[setter]]
+type = "ParagraphControls"
+old = "id_salt (first argument of new)"
+new = "label (first argument of new)"
+note = "The label names the controls' group."
+
+[[setter]]
+type = "ParagraphDialog"
+old = "unit(LengthUnit)"
+new = "unit(DocUnit)"
+note = "`DocUnit::new(kind, pixels_per_inch)`."
+
+[[setter]]
+type = "ParagraphDialog"
+old = "labels(ParagraphDialogLabels)"
+new = ""
+note = "Words come from the scope."
+
+[[type]]
+name = "ParagraphValues"
+old = "craft_text::ui::character::ParagraphValues"
+new = "craft_text::ui::character::ParagraphValues"
+status = "same"
+note = "The struct is `#[non_exhaustive]`: build it from `ParagraphValues::default()` and set its fields (`let mut v = ParagraphValues::default(); v.field = ..`)."

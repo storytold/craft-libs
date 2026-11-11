@@ -1,0 +1,1383 @@
+# API map of the "draw canvas controls" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "draw canvas controls"
+new_module = "craft_draw::ui"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "CropFrame"
+old = ""
+new = ""
+status = "pending"
+
+[[type]]
+name = "PenDraft"
+old = "craft_draw::ui::pen::PenDraft"
+new = ""
+status = "removed"
+note = "The draft is the canvas tool `PenTool`: the host shows it with `ToolHost::run` and drains `PenTool::take_events`."
+
+[[type]]
+name = "GradientOverlay"
+old = "craft_draw::ui::GradientOverlay"
+new = "craft_draw::ui::gradient::GradientOverlay"
+status = "replaced"
+note = "A canvas control: `new(label, Bind<LineGradient>)` over the canvas's view, snap and arena. The host-driven `hit`, `press`, `track`, `release`, `double_click`, `paint` and `paint_focus` are gone: the arena gives a press on a part to the overlay."
+
+[[type]]
+name = "STOP_STEP"
+old = ""
+new = "craft_draw::ui::gradient::stops::STOP_STEP"
+status = "replaced"
+note = "New documented const: the share of the bar or line one Left or Right press moves a stop or midpoint."
+
+[[type]]
+name = "STOP_STEP_FAR"
+old = ""
+new = "craft_draw::ui::gradient::stops::STOP_STEP_FAR"
+status = "replaced"
+note = "New documented const: the share one Shift+arrow press moves a stop or midpoint."
+
+
+# One entry per renamed, removed or reshaped setter or constructor.
+# [[setter]]
+# type = ""
+# old = ""
+# new = ""
+
+# craft_behavior::geometry (contract-geometry)
+[[type]]
+name = "Anchor9"
+old = "craft_ui::canvas::quad::Anchor9"
+new = "craft_behavior::Anchor9"
+status = "moved"
+
+[[type]]
+name = "BoxState"
+old = "craft_ui::canvas::quad::BoxState"
+new = "craft_behavior::geometry::quad::BoxState"
+status = "moved"
+
+[[type]]
+name = "BoxPart"
+old = "craft_ui::canvas::quad::BoxPart"
+new = "craft_behavior::geometry::quad::BoxPart"
+status = "moved"
+
+[[type]]
+name = "BoxRules"
+old = "craft_ui::canvas::quad::BoxRules"
+new = "craft_behavior::geometry::quad::BoxRules"
+status = "moved"
+
+[[type]]
+name = "BoxDrag"
+old = "craft_ui::canvas::quad::BoxDrag"
+new = "craft_behavior::geometry::quad::BoxDrag"
+status = "moved"
+
+[[type]]
+name = "TransformMode"
+old = "craft_ui::canvas::quad::TransformMode"
+new = "craft_behavior::geometry::quad::TransformMode"
+status = "moved"
+
+[[type]]
+name = "SnapTargets"
+old = "craft_ui::canvas::SnapTargets"
+new = "craft_behavior::geometry::snap::SnapTargets"
+status = "moved"
+
+[[type]]
+name = "SnapKind"
+old = "craft_ui::canvas::SnapKind"
+new = "craft_behavior::geometry::snap::SnapKind"
+status = "moved"
+
+[[type]]
+name = "OutlineDraft"
+old = "craft_ui::canvas::draft::OutlineDraft"
+new = "craft_behavior::geometry::draft::OutlineDraft"
+status = "moved"
+
+[[type]]
+name = "DraftKind"
+old = "craft_ui::canvas::draft::DraftKind"
+new = "craft_behavior::geometry::draft::DraftKind"
+status = "moved"
+
+[[type]]
+name = "drag"
+old = "craft_ui::canvas::quad::drag"
+new = "craft_behavior::geometry::quad::drag"
+status = "moved"
+
+[[setter]]
+type = "Anchor9"
+old = "Anchor9::Center"
+new = "Anchor9::Centre"
+
+[[setter]]
+type = "DraftReach"
+old = "of(&tokens)"
+new = "new(close, same_point), the caller passes the hit tokens' target and slop"
+
+[[setter]]
+type = "BoxRules"
+old = "drag_modifiers(part, modifiers) and drag_kind(part, modifiers)"
+new = "drag_modifiers(part, mods) and drag_kind(part, mods)"
+
+# draw-transform-a
+
+[[type]]
+name = "ConstrainStyle"
+old = "craft_ui::behavior::move_gesture::ConstrainStyle"
+new = "craft_behavior::geometry::ConstrainStyle"
+status = "moved"
+
+[[type]]
+name = "MoveValue"
+old = "craft_ui::behavior::move_gesture::MoveValue"
+new = "craft_behavior::geometry::MoveValue"
+status = "moved"
+
+[[type]]
+name = "MoveGesture"
+old = "craft_ui::behavior::move_gesture::MoveGesture"
+new = "craft_behavior::geometry::MoveGesture"
+status = "moved"
+
+[[type]]
+name = "StrokeLock"
+old = "craft_ui::behavior::move_gesture::StrokeLock"
+new = "craft_behavior::geometry::StrokeLock"
+status = "moved"
+
+[[type]]
+name = "snap_ray"
+old = "craft_ui::behavior::move_gesture::snap_ray"
+new = ""
+status = "removed"
+note = "a point moved onto the nearest 45-degree ray from `origin` is `origin + craft_behavior::geometry::lock_direction(p - origin, None, Directions::Eight)`; the angle rounding is `craft_behavior::geometry::round_to_direction`"
+
+[[type]]
+name = "snap_direction"
+old = "craft_ui::behavior::move_gesture::snap_direction"
+new = ""
+status = "removed"
+note = "the unit direction is `lock_direction(p - origin, None, Directions::Eight)` divided by its length; a step other than 45 degrees has no caller"
+
+[[setter]]
+type = "MoveGesture"
+old = "begin(style, start, modifiers, directions)"
+new = "press(style, start, mods, directions), returning the gesture only: the tool makes its own begin event"
+
+[[setter]]
+type = "MoveGesture"
+old = "drag(at, modifiers, zoom)"
+new = "follow(at, mods, zoom), returning Option<MoveValue>: the tool makes its own update event"
+
+[[setter]]
+type = "MoveGesture"
+old = "end(at, modifiers, zoom)"
+new = "release(at, mods, zoom), returning MoveValue: the tool makes its own commit event with changed = value.changed()"
+
+[[setter]]
+type = "MoveGesture"
+old = "cancel()"
+new = "removed: CanvasTool::cancel owns the cancel and restores the tool's mark; the gesture is dropped"
+
+[[setter]]
+type = "ConstrainStyle"
+old = "of(&tokens)"
+new = "new(copy_reach, stroke_lock), a tool passes ToolContext.slop for both"
+
+# draw-slice-artboard
+
+[[type]]
+name = "AddBesideHandles"
+old = "craft_draw::ui::add_beside::AddBesideHandles"
+new = "craft_draw::ui::add_beside::AddBesideHandles"
+status = "replaced"
+note = "A canvas control (`#[component(canvas_control)]`) shown with `show_at(ui, canvas_rect)` inside a `Canvas`; its buttons are parts in the canvas arena, so a press on one reaches the control before the tool. The tool stops hit-testing and painting the buttons and takes `AddBesideOutput::added`."
+
+[[type]]
+name = "AddBesideResponse"
+old = "craft_draw::ui::add_beside::AddBesideResponse"
+new = ""
+status = "removed"
+note = "`clicked` is `added`; `focused` is gone (the focus is the arena's)."
+
+[[type]]
+name = "AddBesideOutput"
+old = ""
+new = "craft_draw::ui::add_beside::AddBesideOutput"
+status = "replaced"
+note = "`clicked` is `added`; `focused` is gone (the focus is the arena's)."
+
+[[type]]
+name = "AddBesideStyle"
+old = "craft_draw::ui::add_beside::AddBesideStyle"
+new = ""
+status = "removed"
+note = "A `ComponentStyle` of the control; read no values from it."
+
+[[type]]
+name = "AddBesideLabels"
+old = "craft_draw::ui::add_beside::AddBesideLabels"
+new = ""
+status = "removed"
+note = "A `words!` set."
+
+[[type]]
+name = "AddBesideWords"
+old = ""
+new = "craft_draw::ui::add_beside::AddBesideWords"
+status = "replaced"
+note = "A `words!` set."
+
+[[type]]
+name = "AddSide"
+old = "craft_draw::ui::add_beside::AddSide"
+new = "craft_draw::ui::add_beside::AddSide"
+status = "same"
+
+[[setter]]
+type = "AddBesideHandles"
+old = "AddBesideHandles::new(id_salt, Rect)"
+new = "AddBesideHandles::new(label, DocRect)"
+note = "The label names the group (\"Add beside\", or the host's word for what it adds)."
+
+[[setter]]
+type = "AddBesideHandles"
+old = "hidden(bool)"
+new = "hidden()"
+note = "A flag prop: call it under an `if`."
+
+[[setter]]
+type = "AddBesideHandles"
+old = "connecting(bool)"
+new = "connecting()"
+note = "A flag prop."
+
+[[setter]]
+type = "AddBesideHandles"
+old = "clear_of(&[egui::Rect])"
+new = "clear_of(&[egui::Rect])"
+note = "Unchanged."
+
+[[setter]]
+type = "AddBesideHandles"
+old = "at(view, style, pos)"
+new = "(removed)"
+note = "Hit-testing is the arena's."
+
+[[setter]]
+type = "AddBesideHandles"
+old = "paint(painter, view, style)"
+new = "(removed)"
+note = "The control paints its buttons."
+
+[[setter]]
+type = "AddBesideHandles"
+old = "buttons(view, style)"
+new = "add_beside_places(view, object, offset)"
+note = "The pure placement of the four buttons, for a tool's ghost."
+
+[[setter]]
+type = "AddBesideHandles"
+old = "style(tokens)"
+new = "(removed)"
+note = "The style is the control's `ComponentStyle`."
+
+[[setter]]
+type = "AddBesideHandles"
+old = "ghost(closure)"
+new = "(removed)"
+note = "The tool draws its ghost for `AddBesideOutput::hovered`."
+
+[[setter]]
+type = "AddBesideHandles"
+old = "labels(AddBesideLabels)"
+new = "(removed)"
+note = "Words come from the env."
+
+[[setter]]
+type = "AddBesideHandles"
+old = "show(ui, view)"
+new = "show_at(ui, canvas_rect)"
+note = "The view comes from the canvas."
+# draw-connector
+
+[[type]]
+name = "ConnectorTool"
+old = "craft_draw::ui::connector::ConnectorTool"
+new = "craft_draw::ui::connector::ConnectorTool"
+status = "same"
+note = "A `CanvasTool` that draws new connectors and shows the hover sites; its events are `Draw(EditEvent<ConnectorDraft>)` (a drag that ends on its start object is cancelled as `Dismissed`, a refused release as `Refused`). The selected connector's ends and bends are `ConnectorHandles`."
+
+[[setter]]
+type = "ConnectorTool"
+old = "selected(Option<&ConnectorItem>)"
+new = ""
+note = "Removed: the selected connector is the value of `ConnectorHandles`."
+
+[[setter]]
+type = "ConnectorTool"
+old = "connected(Option<Rect>)"
+new = ""
+note = "Removed: the host shows `AddBesideHandles` over the selected object."
+
+[[setter]]
+type = "ConnectorTool"
+old = "labels(ConnectorToolLabels)"
+new = ""
+note = "Removed: the words are `ConnectorWords`."
+
+[[type]]
+name = "ConnectorHandles"
+old = ""
+new = "craft_draw::ui::connector::ConnectorHandles"
+status = "replaced"
+note = "The ends and bends of a selected connector as a canvas control: `ConnectorHandles::new(label, Bind<ConnectorItem>, &[ConnectionTarget])`, shown with `show_at(ui, body.rect)`. Output `ConnectorHandlesOutput { edit, event }`."
+
+[[type]]
+name = "ConnectorOverlay"
+old = "craft_draw::ui::connector::ConnectorOverlay"
+new = ""
+status = "removed"
+note = "The route and handles are painted by `ConnectorHandles`, the sites and the draft by `ConnectorTool`; there is no separate painter."
+
+[[type]]
+name = "ConnectorToolLabels"
+old = "craft_draw::ui::connector::ConnectorToolLabels"
+new = ""
+status = "removed"
+note = "Words are `ConnectorWords`."
+
+[[type]]
+name = "ConnectorWords"
+old = ""
+new = "craft_draw::ui::connector::ConnectorWords"
+status = "replaced"
+note = "Words are `ConnectorWords`."
+
+[[type]]
+name = "ConnectorStyle"
+old = "craft_draw::ui::connector::ConnectorStyle"
+new = ""
+status = "removed"
+note = "The look comes from the theme in `paint` and in the handles' component style."
+
+[[type]]
+name = "ShapeDragTool"
+old = "craft_draw::ui::shape_drag::ShapeDragTool"
+new = "craft_draw::ui::shape_drag::ShapeDragTool"
+status = "same"
+note = "A `CanvasTool`; `ShapeDragEvent::Click` carries `mods: Mods`; a drag under 1 px is cancelled as `Dismissed`."
+
+[[type]]
+name = "ShapeDragToolLabels"
+old = "craft_draw::ui::shape_drag::ShapeDragToolLabels"
+new = ""
+status = "removed"
+note = "Words are `ShapeDragWords`."
+
+[[type]]
+name = "ShapeDragWords"
+old = ""
+new = "craft_draw::ui::shape_drag::ShapeDragWords"
+status = "replaced"
+note = "Words are `ShapeDragWords`."
+
+[[type]]
+name = "ShapeDragStyle"
+old = "craft_draw::ui::shape_drag::ShapeDragStyle"
+new = ""
+status = "removed"
+note = "The outline is painted in the theme's overlay colours; the press slop is the canvas's."
+
+# gradient-b: the gradient line and its overlay
+[[type]]
+name = "GradientOverlayResponse"
+old = "craft_draw::ui::GradientOverlayResponse"
+new = ""
+status = "removed"
+note = "`event` is `edit: EditResponse<LineGradient>`; `color_requested` is a `StopColor`; `claimed` is gone (the arena decides)."
+
+[[type]]
+name = "GradientOverlayOutput"
+old = ""
+new = "craft_draw::ui::gradient::GradientOverlayOutput"
+status = "replaced"
+note = "`event` is `edit: EditResponse<LineGradient>`; `color_requested` is a `StopColor`; `claimed` is gone (the arena decides)."
+
+[[type]]
+name = "GradientLineNames"
+old = "craft_draw::ui::GradientLineNames"
+new = ""
+status = "removed"
+note = "A `words!` set."
+
+[[type]]
+name = "GradientLineWords"
+old = ""
+new = "craft_draw::ui::gradient::GradientLineWords"
+status = "replaced"
+note = "A `words!` set."
+
+[[type]]
+name = "GradientLineStyle"
+old = "craft_draw::ui::GradientLineStyle"
+new = ""
+status = "removed"
+note = "A `ComponentStyle`."
+
+[[type]]
+name = "GradientOverlayStyle"
+old = ""
+new = "craft_draw::ui::gradient::GradientOverlayStyle"
+status = "replaced"
+note = "A `ComponentStyle`."
+
+[[type]]
+name = "LineCursor"
+old = "craft_draw::ui::LineCursor"
+new = ""
+status = "removed"
+note = "Cursors are per part (`cursor`, `drag_cursor`)."
+
+[[type]]
+name = "LinePress"
+old = "craft_draw::ui::LinePress"
+new = ""
+status = "removed"
+note = "The press is the arena's."
+
+[[type]]
+name = "LineTrack"
+old = "craft_draw::ui::LineTrack"
+new = ""
+status = "removed"
+note = "The drag is the overlay's gesture."
+
+[[type]]
+name = "LineRelease"
+old = "craft_draw::ui::LineRelease"
+new = ""
+status = "removed"
+note = "The release commits the gesture or adds a stop."
+
+[[type]]
+name = "TaggedStop"
+old = "craft_draw::ui::TaggedStop"
+new = ""
+status = "removed"
+note = "The shared `selected` binding and `StopColor.tag` carry the tag."
+
+[[type]]
+name = "ColorRequest"
+old = "craft_draw::ui::ColorRequest"
+new = ""
+status = "removed"
+note = "`StopColor` carries `craft_ui::runtime::requests::ColorRequest`."
+
+[[type]]
+name = "GradientLine"
+old = "craft_draw::ui::GradientLine"
+new = "craft_draw::ui::gradient::GradientLine"
+status = "moved"
+note = "`#[non_exhaustive]`; `GradientLine::new(start, end)`."
+
+[[type]]
+name = "LineGradient"
+old = "craft_draw::ui::LineGradient"
+new = "craft_draw::ui::gradient::LineGradient"
+status = "moved"
+note = "`#[non_exhaustive]`; `LineGradient::new(line, stops)`."
+
+[[type]]
+name = "LinePart"
+old = "craft_draw::ui::LinePart"
+new = "craft_draw::ui::gradient::LinePart"
+status = "moved"
+note = "`#[non_exhaustive]`: match with a wildcard arm."
+
+[[type]]
+name = "GradientExtent"
+old = "craft_draw::ui::GradientExtent"
+new = "craft_draw::ui::gradient::GradientExtent"
+status = "moved"
+note = "`#[non_exhaustive]`: match with a wildcard arm."
+
+[[setter]]
+type = "GradientOverlay"
+old = "new(id_salt, &line, &stops, names)"
+new = "new(label, Bind<LineGradient>)"
+
+[[setter]]
+type = "GradientOverlay"
+old = "snap(closure)"
+new = ""
+note = "The canvas's `Snap` snaps the ends and the line."
+
+[[setter]]
+type = "GradientOverlay"
+old = "cursor(closure)"
+new = ""
+note = "Cursors are per part."
+
+[[setter]]
+type = "GradientOverlay"
+old = "policy(EditPolicy)"
+new = ""
+note = "The policy is the `Bind`'s."
+
+[[setter]]
+type = "GradientOverlay"
+old = "labels(GradientLabels)"
+new = ""
+note = "Words come from the environment."
+
+[[setter]]
+type = "GradientOverlay"
+old = "numbers(&LocaleNumbers)"
+new = ""
+note = "Numbers come from the environment."
+
+[[setter]]
+type = "GradientOverlay"
+old = "units(x, y)"
+new = ""
+note = "The canvas's rulers give the units."
+
+[[setter]]
+type = "GradientOverlay"
+old = "selection_of(editor_id)"
+new = "selected(Bind<Option<StopRef>>)"
+note = "One shared selection binding."
+
+[[setter]]
+type = "GradientOverlay"
+old = "value(text)"
+new = "value_text(label)"
+
+[[setter]]
+type = "GradientOverlay"
+old = "editable(bool)"
+new = ""
+note = "Read-only is `Common`'s."
+
+[[setter]]
+type = "GradientOverlay"
+old = "rules(StopRules)"
+new = "rules(StopRules)"
+note = "The rows are `rules.rows`."
+# craft_draw::ui::pen::bezier (draw-pen-a)
+
+[[type]]
+name = "BezierOverlay"
+old = "craft_draw::ui::BezierOverlay"
+new = "craft_draw::ui::BezierOverlay"
+status = "same"
+note = "A canvas control: `BezierOverlay::new(label, Bind<Vec<EditPath>>, &PathSelection)` shown with `show_at(ui, body.rect)` in a `Canvas` body that has a view. The value is the paths: a drag proposes them with the edit applied and Escape restores the start; `BezierOutput::change` carries the gesture's `PathEdit`. The parts are in the canvas's arena, so there is no `claimed` flag."
+
+[[type]]
+name = "BezierResponse"
+old = "craft_draw::ui::BezierResponse"
+new = ""
+status = "removed"
+note = "`BezierOutput`: `edit` (an `EditResponse<Vec<EditPath>>`) replaces `event` and `id`; `change` carries the `PathEdit`; `context` carries the screen position; `claimed` is gone (a press on a part never reaches the tool)."
+
+[[type]]
+name = "BezierOutput"
+old = ""
+new = "craft_draw::ui::BezierOutput"
+status = "replaced"
+note = "Replaces `BezierResponse`."
+
+[[type]]
+name = "BezierNames"
+old = "craft_draw::ui::BezierNames"
+new = ""
+status = "removed"
+note = "`BezierWords`, a `craft_ui::words!` set read from the env."
+
+[[type]]
+name = "BezierWords"
+old = ""
+new = "craft_draw::ui::BezierWords"
+status = "replaced"
+note = "Replaces `BezierNames`: the in and out handle names, the marquee name and the template \"Anchor {i} of {n}\"; the group is named by the overlay's label."
+
+[[type]]
+name = "BezierStyle"
+old = "craft_ui::style::bezier::BezierStyle"
+new = "craft_draw::ui::BezierStyle"
+status = "moved"
+note = "A `ComponentStyle` built from the theme in `Component::style`; there is no `BezierOverlay::style(&tokens)` and no `look` setter."
+
+[[type]]
+name = "BezierTool"
+old = "craft_draw::ui::BezierTool"
+new = "craft_draw::ui::BezierTool"
+status = "same"
+note = "`Show` is now `Anchors`."
+
+[[type]]
+name = "HandlesShown"
+old = "craft_draw::ui::HandlesShown"
+new = "craft_draw::ui::HandlesShown"
+status = "same"
+
+[[type]]
+name = "AnchorsShown"
+old = "craft_draw::ui::AnchorsShown"
+new = "craft_draw::ui::AnchorsShown"
+status = "same"
+
+[[type]]
+name = "SegmentMark"
+old = "craft_draw::ui::SegmentMark"
+new = "craft_draw::ui::SegmentMark"
+status = "same"
+
+[[type]]
+name = "HitMark"
+old = "craft_draw::ui::HitMark"
+new = "craft_draw::ui::HitMark"
+status = "same"
+note = "`HitMark::new(path, hit)` is kept; the preview is drawn by the overlay and by the pen tool through the crate-private `paint_mark`."
+
+[[type]]
+name = "BezierHit"
+old = "craft_draw::ui::BezierHit"
+new = "craft_draw::ui::BezierHit"
+status = "same"
+
+[[type]]
+name = "EditPath"
+old = "craft_draw::ui::EditPath"
+new = "craft_draw::ui::EditPath"
+status = "same"
+note = "`color` is an `Option<craft_theme::Srgba>`."
+
+[[type]]
+name = "EditSubpath"
+old = "craft_draw::ui::EditSubpath"
+new = "craft_draw::ui::EditSubpath"
+status = "same"
+
+[[type]]
+name = "Knot"
+old = "craft_draw::ui::Knot"
+new = "craft_draw::ui::Knot"
+status = "same"
+
+[[type]]
+name = "KnotRef"
+old = "craft_draw::ui::KnotRef"
+new = "craft_draw::ui::KnotRef"
+status = "same"
+
+[[type]]
+name = "HandleSide"
+old = "craft_draw::ui::HandleSide"
+new = "craft_draw::ui::HandleSide"
+status = "same"
+
+[[type]]
+name = "PathEdit"
+old = "craft_draw::ui::PathEdit"
+new = "craft_draw::ui::PathEdit"
+status = "same"
+note = "`apply_all(&mut [EditPath])` joins `apply(&mut EditPath)`."
+
+[[type]]
+name = "PathSelection"
+old = "craft_draw::ui::PathSelection"
+new = "craft_draw::ui::PathSelection"
+status = "same"
+
+[[type]]
+name = "MAX_ANCHORS"
+old = "craft_draw::ui::MAX_ANCHORS"
+new = "craft_draw::ui::MAX_ANCHORS"
+status = "same"
+
+[[setter]]
+type = "BezierOverlay"
+old = "new(id_salt, paths, selection, x, y, names)"
+new = "new(label, Bind<Vec<EditPath>>, &PathSelection); the units and zero point come from the canvas's rulers, the names from `BezierWords`"
+
+[[setter]]
+type = "BezierOverlay"
+old = "show(ui, canvas, view)"
+new = "show_at(ui, body.rect) inside a `Canvas` body that has a view"
+
+[[setter]]
+type = "BezierOverlay"
+old = "look(style)"
+new = "removed: the style is the theme's `BezierStyle`"
+
+[[setter]]
+type = "BezierOverlay"
+old = "zero(point), units(x, y)"
+new = "removed: `Canvas::rulers`"
+
+[[setter]]
+type = "BezierOverlay"
+old = "steps(step, big_step)"
+new = "removed: the arrow distances are `craft_ui::canvas::{NUDGE, NUDGE_FAR}`"
+
+[[setter]]
+type = "BezierOverlay"
+old = "snap(closure)"
+new = "removed: a dragged point snaps through the canvas's `Snap`"
+
+[[setter]]
+type = "BezierOverlay"
+old = "cursor(closure)"
+new = "removed: the pointer over a part is the part's cursor"
+
+[[setter]]
+type = "BezierOverlay"
+old = "modifiers(mods)"
+new = "removed: the modifiers are the press's"
+
+[[setter]]
+type = "BezierOverlay"
+old = "highlight(hit)"
+new = "removed: the overlay marks what a press would take under the pointer, and the hovered part has its hover look"
+
+[[setter]]
+type = "BezierOverlay"
+old = "policy(policy)"
+new = "removed: the gesture is the pipeline's `begin`, `propose` and `commit`"
+
+[[setter]]
+type = "BezierOverlay"
+old = "hit_test(paths, selection, handles, view, at, reach)"
+new = "same: a pure associated function (the view is `craft_behavior::CanvasView`)"
+
+[[setter]]
+type = "BezierOverlay"
+old = "tool(tool), handles(handles), segment_mark(mark), anchors(anchors), path_options(options)"
+new = "same"
+# draw-pen-b: the Pen tool and the corner widgets
+
+[[type]]
+name = "PenTool"
+old = ""
+new = "craft_draw::ui::pen::PenTool"
+status = "replaced"
+note = "The pen draft as a `CanvasTool`; setters `draft`, `mode`, `sensing`, `auto_add_delete`, `path_options`, `ends`, `remove_last`; `take_events` returns `PenEvent`s."
+
+[[type]]
+name = "PenResponse"
+old = "craft_draw::ui::pen::PenResponse"
+new = ""
+status = "removed"
+note = "The tool reports `PenEvent::{Edit, Finished, Resumed}` through `take_events`; `closes` is `PenTool::closes`, and `claimed` goes (the tool host owns the press)."
+
+[[type]]
+name = "PenEvent"
+old = ""
+new = "craft_draw::ui::pen::PenEvent"
+status = "replaced"
+note = "Replaces the fields of `PenResponse`: `event` is `Edit`, `finished` is `Finished`, `resumed` is `Resumed`."
+
+[[type]]
+name = "PenNames"
+old = "craft_draw::ui::pen::PenNames"
+new = ""
+status = "removed"
+note = "The words are `PenWords`, read from the env."
+
+[[type]]
+name = "PenWords"
+old = ""
+new = "craft_draw::ui::pen::PenWords"
+status = "replaced"
+note = "The `words!` set of the pen: group, anchor template, undo step name."
+
+[[type]]
+name = "PenStyle"
+old = "craft_draw::ui::pen::PenStyle"
+new = "craft_draw::ui::pen::PenStyle"
+status = "same"
+note = "Built from a `StyleCx` in a paint call with `PenStyle::of`; the sizes are the theme handle look and dash tokens."
+
+[[type]]
+name = "CornerWidgets"
+old = "craft_draw::ui::corner::CornerWidgets"
+new = "craft_draw::ui::corner::CornerWidgets"
+status = "same"
+note = "A canvas control over `Bind<Vec<CornerTarget>>`; `new(label, targets)`."
+
+[[type]]
+name = "CornerWidgetsResponse"
+old = "craft_draw::ui::corner::CornerWidgetsResponse"
+new = ""
+status = "removed"
+note = "The output is `CornerWidgetsOutput { edit, change, cycle_kind, activate }`."
+
+[[type]]
+name = "CornerWidgetsOutput"
+old = ""
+new = "craft_draw::ui::corner::CornerWidgetsOutput"
+status = "replaced"
+note = "The edit of the bound targets, the `CornerEdit` operation, the corner to cycle and the corner to activate."
+
+[[type]]
+name = "CornerWidgetsLabels"
+old = "craft_draw::ui::corner::CornerWidgetsLabels"
+new = ""
+status = "removed"
+note = "The words are `CornerWords`."
+
+[[type]]
+name = "CornerWords"
+old = ""
+new = "craft_draw::ui::corner::CornerWords"
+status = "replaced"
+note = "The `words!` set of the corner widgets."
+
+[[type]]
+name = "CornerStyle"
+old = "craft_draw::ui::corner::CornerStyle"
+new = "craft_draw::ui::corner::CornerStyle"
+status = "same"
+note = "A `ComponentStyle` of `CornerWidgets` with private fields; `look` is gone."
+
+[[setter]]
+type = "PenTool"
+old = "PenDraft::new(id_salt, draft, names)"
+new = "PenTool::new()"
+note = "The tool keeps the draft; `draft(Option<&EditSubpath>)` hands in a resumed path only."
+
+[[setter]]
+type = "PenTool"
+old = "units(x, y) / zero(point)"
+new = ""
+note = "The anchors read the units and zero from `ToolContext::space()?.rulers()`."
+
+[[setter]]
+type = "PenTool"
+old = "look(PenStyle)"
+new = ""
+note = "The look is built from the theme in the paint call."
+
+[[setter]]
+type = "PenTool"
+old = "remove_last(bool)"
+new = "remove_last() -> bool"
+note = "Called by the host when Undo runs, not set each pass; false while a press is held."
+
+[[setter]]
+type = "PenTool"
+old = "sensing(bool)"
+new = "sensing(bool)"
+note = "Also kept: `takes` is false while Cmd is held."
+
+[[setter]]
+type = "CornerWidgets"
+old = "new(id_salt, targets, units)"
+new = "new(label, Bind<Vec<CornerTarget>>)"
+note = "The units come from the canvas rulers; the edit is the bound value and the `CornerEdit` operation is reported as `change`."
+
+[[setter]]
+type = "CornerWidgets"
+old = "kinds(bool)"
+new = "kinds(bool)"
+note = "A prop; `cycle_kind` reports the corner only."
+
+[[setter]]
+type = "CornerWidgets"
+old = "steps(step, big_step)"
+new = ""
+note = "The arrow steps are the canvas nudge distances (1 and, with Shift, 10)."
+
+[[setter]]
+type = "CornerWidgets"
+old = "labels(CornerWidgetsLabels)"
+new = ""
+note = "Words come from the env."
+
+[[setter]]
+type = "CornerWidgets"
+old = "look(CornerStyle)"
+new = ""
+note = "The style is the component style."
+
+[[setter]]
+type = "CornerWidgets"
+old = "policy(EditPolicy)"
+new = ""
+note = "The bound value carries the policy."
+# draw-crop-a
+
+[[type]]
+name = "CropResponse"
+old = "craft_draw::ui::CropResponse"
+new = ""
+status = "removed"
+note = "Renamed `CropOverlayOutput`."
+
+[[type]]
+name = "CropOverlayOutput"
+old = ""
+new = "craft_ui::canvas::CropOverlayOutput"
+status = "replaced"
+note = "Replaces `CropResponse`."
+
+[[type]]
+name = "CropBox"
+old = "craft_draw::ui::CropBox"
+new = "craft_behavior::geometry::CropBox"
+status = "moved"
+
+[[type]]
+name = "CropGuide"
+old = "craft_draw::ui::CropGuide"
+new = "craft_behavior::geometry::CropGuide"
+status = "moved"
+
+[[type]]
+name = "GuideShow"
+old = "craft_draw::ui::GuideShow"
+new = "craft_behavior::geometry::GuideShow"
+status = "moved"
+
+[[type]]
+name = "hit_rect"
+old = "craft_draw::ui::hit_rect"
+new = "craft_behavior::geometry::hit_rect"
+status = "moved"
+
+[[type]]
+name = "CropShield"
+old = "craft_draw::ui::CropShield"
+new = "craft_ui::canvas::CropShield"
+status = "moved"
+
+[[type]]
+name = "ShieldColor"
+old = "craft_draw::ui::ShieldColor"
+new = "craft_ui::canvas::ShieldColor"
+status = "moved"
+
+[[type]]
+name = "CropStyle"
+old = "craft_draw::ui::CropStyle"
+new = ""
+status = "removed"
+note = "the overlay's craft_ui::canvas::CropStyle is a ComponentStyle"
+
+[[type]]
+name = "CropNames"
+old = "craft_draw::ui::CropNames"
+new = ""
+status = "removed"
+note = "craft_ui::canvas::CanvasWords rows cropOverlay.group, cropOverlay.whole, cropOverlay.topLeft ... cropOverlay.leftEdge (old ids crop.group ... crop.leftEdge)"
+
+[[type]]
+name = "CropLabels"
+old = "craft_draw::ui::CropLabels"
+new = ""
+status = "removed"
+note = "CanvasWords rows canvas.cropWidth, canvas.cropHeight, canvas.cropAngle"
+
+[[type]]
+name = "CropPress"
+old = "craft_draw::ui::CropPress"
+new = ""
+status = "removed"
+note = "one path: the overlay's parts and its output"
+
+[[type]]
+name = "CropPressKind"
+old = "craft_draw::ui::CropPressKind"
+new = ""
+status = "removed"
+note = "one path: the overlay's parts and its output"
+
+[[type]]
+name = "CropTrack"
+old = "craft_draw::ui::CropTrack"
+new = ""
+status = "removed"
+note = "one path: the overlay's parts and its output"
+
+[[type]]
+name = "CropRelease"
+old = "craft_draw::ui::CropRelease"
+new = ""
+status = "removed"
+note = "one path: the overlay's parts and its output"
+
+[[type]]
+name = "CropKeyAction"
+old = "craft_draw::ui::CropKeyAction"
+new = ""
+status = "removed"
+note = "one path: the overlay's parts and its output"
+
+[[type]]
+name = "CropReadout"
+old = "craft_draw::ui::CropReadout"
+new = ""
+status = "removed"
+note = "one path: the overlay's parts and its output"
+
+[[type]]
+name = "Polyline"
+old = "craft_draw::ui::Polyline"
+new = ""
+status = "removed"
+note = "one path: the overlay's parts and its output"
+
+[[setter]]
+type = "CropFrame"
+old = "new(id_salt, &state, names)"
+new = "CropOverlay::new(label, Bind<CropBox>)"
+
+[[setter]]
+type = "CropFrame"
+old = "units(x, y)"
+new = "removed: the canvas's rulers"
+
+[[setter]]
+type = "CropFrame"
+old = "modifiers(..)"
+new = "removed: the press carries the modifiers"
+
+[[setter]]
+type = "CropFrame"
+old = "policy(..)"
+new = "removed: Bind and the pipeline"
+
+[[setter]]
+type = "CropFrame"
+old = "value(..)"
+new = "removed: the group value comes from the rulers"
+
+[[setter]]
+type = "CropFrame"
+old = "readout(labels)"
+new = "removed: always shown with the words"
+
+[[setter]]
+type = "CropFrame"
+old = "snap(closure)"
+new = "snap(&SnapTargets)"
+
+[[setter]]
+type = "CropFrame"
+old = "show(ui, canvas, view)"
+new = "show_at(ui, canvas_rect)"
+
+[[setter]]
+type = "CropFrame"
+old = "focus(ctx, id)"
+new = "removed"
+
+[[setter]]
+type = "CropOverlay"
+old = "new(label, Bind<Rect>)"
+new = "new(label, Bind<CropBox>)"
+
+[[type]]
+name = "TransformBox"
+old = "craft_draw::ui::TransformBox"
+new = "craft_draw::ui::TransformBox"
+status = "same"
+note = "A canvas control (`#[component(canvas_control)]`): `TransformBox::new(label, Bind<BoxState>, start, skew_v)` shown with `show_at(ui, body.rect)` inside a `Canvas`; its parts are in the canvas arena, so there is no host-driven `press`, `track`, `release`, `hit` or `double_click`, no `focus(ctx, id)` and no `Claim`. Output `TransformBoxOutput { edit, apply, discard, picked, hovered }`."
+
+[[type]]
+name = "RotateZone"
+old = "craft_draw::ui::RotateZone"
+new = "craft_draw::ui::RotateZone"
+status = "same"
+
+[[type]]
+name = "TransformBoxOutput"
+old = ""
+new = "craft_draw::ui::TransformBoxOutput"
+status = "replaced"
+note = "Replaces `TransformBoxResponse`: the gesture is `edit: EditResponse<BoxState>`; `id` and `claimed` are gone (the pipeline's ids and the arena's press winner)."
+
+[[type]]
+name = "TransformBoxResponse"
+old = "craft_draw::ui::TransformBoxResponse"
+new = ""
+status = "removed"
+note = "Use `TransformBoxOutput`."
+
+[[type]]
+name = "TransformBoxWords"
+old = ""
+new = "craft_draw::ui::TransformBoxWords"
+status = "replaced"
+note = "Replaces `TransformNames` and `TransformLabels`; the word ids are unchanged. The `{n}%` and `{n}°` units of the readout are the env's `UnitKind::Percent` and `UnitKind::Degrees`."
+
+[[type]]
+name = "TransformNames"
+old = "craft_draw::ui::TransformNames"
+new = ""
+status = "removed"
+note = "Use `TransformBoxWords`."
+
+[[type]]
+name = "TransformLabels"
+old = "craft_draw::ui::TransformLabels"
+new = ""
+status = "removed"
+note = "Use `TransformBoxWords`."
+
+[[type]]
+name = "TransformBoxStyle"
+old = ""
+new = "craft_draw::ui::TransformBoxStyle"
+status = "replaced"
+note = "Replaces `TransformStyle`: a `ComponentStyle` built from `StyleCx::handle()` and the overlay tokens; sizes are named multiples of the hit target."
+
+[[type]]
+name = "TransformStyle"
+old = "craft_draw::ui::TransformStyle"
+new = ""
+status = "removed"
+note = "Use `TransformBoxStyle`."
+
+[[type]]
+name = "BoxPress"
+old = "craft_draw::ui::BoxPress"
+new = ""
+status = "removed"
+note = "The pointer is the pipeline's: the box's parts take the presses."
+
+[[type]]
+name = "BoxTrack"
+old = "craft_draw::ui::BoxTrack"
+new = ""
+status = "removed"
+note = "The pointer is the pipeline's: a drag is `begin`, `propose` and `commit` on the box's gesture."
+
+[[type]]
+name = "BoxRelease"
+old = "craft_draw::ui::BoxRelease"
+new = ""
+status = "removed"
+note = "The pointer is the pipeline's: a release commits the gesture, and a click outside is `TransformBoxOutput::apply`."
+
+[[type]]
+name = "paint_pivot"
+old = "craft_draw::ui::paint_pivot"
+new = ""
+status = "removed"
+note = "The box paints its own reference point; no host paints one."
+
+[[type]]
+name = "TransformOverlay"
+old = "craft_draw::ui::transform::TransformOverlay"
+new = "craft_draw::ui::transform::TransformOverlay"
+status = "same"
+note = "A pattern: `TransformOverlay::new(label, &session, &settings)`, shown with `show_at(ui, body.rect)` inside a `Canvas`; `.rules`, `.pixel_grid`, `.snap(Option<&SnapTargets>)` and `.mods(Option<Mods>)` replace the closure and modifier setters. It shows the mode menu on a secondary click."
+
+[[type]]
+name = "TransformOverlayOutput"
+old = ""
+new = "craft_draw::ui::transform::TransformOverlayOutput"
+status = "replaced"
+note = "Replaces `TransformOverlayResponse`: `edits`, `apply`, `discard`, `picked`."
+
+[[type]]
+name = "TransformOverlayResponse"
+old = "craft_draw::ui::transform::TransformOverlayResponse"
+new = ""
+status = "removed"
+note = "Use `TransformOverlayOutput`."
+
+[[type]]
+name = "TransformTool"
+old = ""
+new = "craft_draw::ui::transform::TransformTool"
+status = "replaced"
+note = "The `CanvasTool` the host runs while a session is open, so Free Transform's keys (arrows, Enter, Escape) work while the canvas has the keyboard and the box does not. `take_edits()` gives the edits and the apply and discard requests."
+
+[[setter]]
+type = "TransformBox"
+old = "units(x, y)"
+new = ""
+note = "Removed: the canvas publishes its rulers (`Canvas::rulers`); the box reads them with `canvas_space`."
+
+[[setter]]
+type = "TransformBox"
+old = "readout(labels)"
+new = ""
+note = "Removed: the readout shows during every drag, with `TransformBoxWords`."
+
+[[setter]]
+type = "TransformBox"
+old = "value(text)"
+new = "Common::label"
+note = "The group's name is the label; each part is a node valued by its point."
+
+[[setter]]
+type = "TransformBox"
+old = "policy(EditPolicy)"
+new = "Bind::policy"
+
+[[setter]]
+type = "TransformBox"
+old = "modifiers(Modifiers)"
+new = "mods(Mods)"
+
+[[setter]]
+type = "TransformBox"
+old = "snap(closure)"
+new = "snap(&SnapTargets)"
+
+[[setter]]
+type = "TransformBox"
+old = "start(rect, skew_v)"
+new = "TransformBox::new(label, state, start, skew_v)"
+
+[[setter]]
+type = "TransformBox"
+old = "TransformBox::new(id_salt, &BoxState, TransformNames)"
+new = "TransformBox::new(label, Bind<BoxState>, start, skew_v)"
+
+[[setter]]
+type = "TransformBox"
+old = "show(ui, &canvas, &view)"
+new = "show_at(ui, body.rect)"
+
+[[setter]]
+type = "TransformOverlay"
+old = "TransformOverlay::new(id_salt, &session)"
+new = "TransformOverlay::new(label, &session, &settings)"
+
+[[setter]]
+type = "TransformOverlay"
+old = "units(x, y), readout(labels), names(names), policy(policy), settings(settings)"
+new = ""
+note = "Removed: the canvas rulers, the words and the binding's policy replace them; the settings are an argument of `new`."
+
+[[setter]]
+type = "TransformOverlay"
+old = "show(ui, &canvas, &view)"
+new = "show_at(ui, body.rect)"
+
+[[type]]
+name = "SymmetryOverlay"
+old = "craft_draw::ui::SymmetryOverlay"
+new = "craft_draw::ui::SymmetryOverlay"
+status = "same"
+note = "A paint-only canvas control: `SymmetryOverlay::new(label, &symmetry, page).editing(bool)` shown with `show_at(ui, body.rect)`. The guides take the overlay line colour; the marks take `StyleCx::handle()`."
+
+[[type]]
+name = "SymmetryHandles"
+old = ""
+new = ""
+status = "replaced"
+note = "A canvas control over `Bind<Symmetry>` with two parts in one group: the centre and the rotation handle. Replaces the parts of `SymmetryTransformPass`."
+
+[[type]]
+name = "SymmetryTool"
+old = ""
+new = ""
+status = "replaced"
+note = "The `CanvasTool` of an open session: Nudge moves the centre, Submit commits, Cancel discards."
+
+[[type]]
+name = "SymmetryTransformPass"
+old = "craft_draw::ui::SymmetryTransformPass"
+new = ""
+status = "removed"
+note = "Replaced by `SymmetryHandles` (pointer and part keys) and `SymmetryTool` (the keys of the canvas)."
+
+[[type]]
+name = "SymmetryInput"
+old = "craft_draw::ui::SymmetryInput"
+new = ""
+status = "removed"
+note = "`valid` is the second argument of `SymmetryTool::new(session, valid)`."
+
+[[type]]
+name = "SymmetryStyle"
+old = "craft_draw::ui::SymmetryStyle"
+new = ""
+status = "removed"
+note = "Every size and colour comes from the style hooks."
+
+[[type]]
+name = "SymmetryTransform"
+old = "craft_draw::ui::SymmetryTransform"
+new = "craft_draw::ui::SymmetryTransform"
+status = "same"
+note = "Keeps `begin`, `original`, `preview`, `commit` and `discard`; `apply(&EditEvent<Symmetry>)` takes the edits of the handles; `pass` and `labels` go."
+
+[[type]]
+name = "SliceOverlay"
+old = "craft_draw::ui::slice::SliceOverlay"
+new = "craft_draw::ui::slice::SliceOverlay"
+status = "same"
+note = "A canvas control: `SliceOverlay::new(label, &[SliceItem])` with props `selected_slice`, `pick`, `color`, `numbers`, `hide_auto`, `locked`, `rules`, shown with `show_at(ui, canvas_rect)`; output `SliceOverlayOutput { response, events }`. In Select mode the slices and the selected user slice handles are parts; the tool gets only the background presses. `paint(painter, view, style, numbers)` goes."
+
+[[type]]
+name = "ArtboardOverlay"
+old = ""
+new = "craft_draw::ui::artboard::ArtboardOverlay"
+status = "replaced"
+note = "New: the controls half of the legacy `ArtboardTool` (board bodies and the active board handles as parts). `ArtboardOverlay::new(label, &[ArtboardItem], &[usize])`, prop `rules`; output `ArtboardOverlayOutput { response, events, dragging }`."
+
+[[type]]
+name = "SliceTool"
+old = "craft_draw::ui::slice::SliceTool"
+new = "craft_draw::ui::slice::SliceTool"
+status = "same"
+note = "Background half only: draws a new slice and clears the selection. Setters unchanged except `color`, `numbers`, `hide_auto` and `labels` go (the control and `SliceToolSettings::hide_auto` own them). The pointer snaps by the canvas snapping. Events carry `Mods` and the new `EditEvent`."
+
+[[type]]
+name = "ArtboardTool"
+old = "craft_draw::ui::artboard::ArtboardTool"
+new = "craft_draw::ui::artboard::ArtboardTool"
+status = "same"
+note = "Background half only: draws a board, the marquee and `FitObject` of the second rule set, Esc `Leave`. `add_beside(side, copy)` turns the answer of the plus buttons into `AddBeside`. `labels` goes."
+
+[[type]]
+name = "SliceStyle"
+old = "craft_draw::ui::slice::SliceStyle"
+new = ""
+status = "removed"
+note = "The look is the `ComponentStyle` of `SliceOverlay`."
+
+[[type]]
+name = "ArtboardStyle"
+old = "craft_draw::ui::artboard::ArtboardStyle"
+new = ""
+status = "removed"
+note = "The look is the `ComponentStyle` of `ArtboardOverlay`."
+
+[[setter]]
+type = "SliceTool"
+old = "SliceTool::style(tokens)"
+new = ""
+note = "The look is the overlay style hook."
+
+[[setter]]
+type = "ArtboardTool"
+old = "ArtboardTool::style(tokens)"
+new = ""
+note = "The look is the overlay style hook."
+
+
+[[setter]]
+type = "GradientOverlay"
+old = "selected(Bind<Option<StopRef>>)"
+new = "shared_selection(Bind<Option<StopRef>>)"
+note = "Renamed: `selected` is the `Props` setter of the selected state."

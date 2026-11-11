@@ -1,0 +1,5 @@
+config_version = 1
+
+[[module]]
+path = "patterns::preferences"
+layer = 6

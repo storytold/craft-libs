@@ -1,0 +1,276 @@
+# API map of the "Form dialogs 3: full-window parts" family: old path to new path and setter renames.
+
+family = "Form dialogs 3: full-window parts"
+new_module = "craft_ui::dialog"
+
+[[type]]
+name = "FullWindowSide"
+old = "craft_ui::dialog::full_window::FullWindowSide"
+new = "craft_ui::dialog::FullWindowSide"
+status = "replaced"
+note = "A container shown in `FullWindowDialog::sides(|ui, cx| ..)`: `FullWindowSide::new(title).show(ui, |ui, cx| ..)`. It takes no id, `FullWindowFx` or `FullWindowStyle`; it sizes from its content, the name is the title, and it has no footer of its own (the dialog's buttons sit in the dialog's footer, placed by `FullWindowDialog::side_footer`)."
+
+[[type]]
+name = "SideWidth"
+old = "craft_ui::dialog::full_window::SideWidth"
+new = ""
+status = "removed"
+note = "A side column sizes from its content; there are no side-width tokens."
+
+[[type]]
+name = "SideFooter"
+old = "craft_ui::dialog::full_window::SideFooter"
+new = "craft_ui::dialog::SideFooter"
+status = "replaced"
+note = "Where the dialog's footer sits among the side columns: `FullWindowDialog::side_footer(SideFooter::bottom().leading(|ui| ..))` or `SideFooter::top()`. The buttons are the dialog's (`FullWindowDialog::buttons`), and the pick is `DialogOutput::picked`."
+
+[[type]]
+name = "FullWindowSideOutput"
+old = "craft_ui::dialog::full_window::FullWindowSideOutput"
+new = "craft_ui::dialog::FullWindowSideOutput"
+status = "replaced"
+note = "`response`; the pick is the dialog's `DialogOutput::picked`, and the footer's `FooterButtonsResponse` is gone."
+
+[[type]]
+name = "FullWindowZoomBar"
+old = "craft_ui::dialog::full_window::FullWindowZoomBar"
+new = "craft_ui::dialog::FullWindowZoomBar"
+status = "replaced"
+note = "A pattern: `FullWindowZoomBar::new(Bind<FullWindowView>).progress(..).note(..).show(ui)` writes the next view through the binding. Its Zoom In and Zoom Out buttons are the `ViewCommands` zoom commands, taken from the dialog's command scope."
+
+[[type]]
+name = "FullWindowZoomBarResponse"
+old = "craft_ui::dialog::full_window::FullWindowZoomBarResponse"
+new = ""
+status = "removed"
+note = "Replaced by `FullWindowZoomBarOutput { response }`; the bar writes the view through its `Bind`."
+
+[[type]]
+name = "FullWindowTitle"
+old = "craft_ui::dialog::full_window::FullWindowTitle"
+new = "craft_ui::dialog::FullWindowTitle"
+status = "replaced"
+note = "A pattern: `FullWindowTitle::new(name).subject(..).zoom(..)`; `label(&env)` is the dialog's title and `show(ui)` draws it. `text(ctx)` and `labels(..)` are gone."
+
+[[type]]
+name = "FullWindowView"
+old = "craft_ui::dialog::full_window::FullWindowView"
+new = "craft_ui::dialog::FullWindowView"
+status = "replaced"
+note = "Plain `Copy` data over `CanvasView`: `new()`, `settled(rect, size, ppp)`, `took(view)`, `apply(ViewCommands)`, `set_device_zoom(f64)`, `can_step(dir)`, `zoom_percent()`. The zoom maths are `craft_behavior::canvas::zoom`."
+
+[[type]]
+name = "FullWindowZoom"
+old = "craft_ui::dialog::full_window::FullWindowZoom"
+new = ""
+status = "removed"
+note = "Replaced by the zoom variants of `craft_ui::canvas::ViewCommands` (`ZoomIn`, `ZoomOut`, `FitOnScreen`, `ActualPixels`)."
+
+[[type]]
+name = "FullWindowCanvas"
+old = "craft_ui::dialog::full_window::FullWindowCanvas"
+new = "craft_ui::dialog::FullWindowCanvas"
+status = "replaced"
+note = "A pattern over `Canvas`, `RasterDisplay` and `ToolHost`: `FullWindowCanvas::new(&view, &source).checkerboard(..).overlay(..).tool(&mut tool).momentary(&mut momentary).controls(..).show(ui)`. The output reports the next view in `view` and the settled one in `shown`."
+
+[[type]]
+name = "FullWindowCanvasOutput"
+old = "craft_ui::dialog::full_window::FullWindowCanvasOutput"
+new = "craft_ui::dialog::FullWindowCanvasOutput"
+status = "replaced"
+note = "`response`, `view`, `shown`, `hover` and `tool: ToolHostResponse` (gesture, took_key, cursor)."
+
+[[type]]
+name = "RasterOverlay"
+old = "craft_ui::dialog::full_window::RasterOverlay"
+new = "craft_ui::dialog::RasterOverlay"
+status = "replaced"
+note = "`RasterOverlay::new(&source).tint(color)`; the source covers the image at one texel per pixel (the texel factor is gone: a reduced overlay answers `read` from its reduced copy)."
+
+[[type]]
+name = "PreviewStatus"
+old = "craft_ui::dialog::full_window::PreviewStatus"
+new = ""
+status = "removed"
+note = "Replaced by `Pending` (`Remember::pending`) and `FullWindowStatus::of(&pending)`; a stale result is cancelled by the job's key, so no ticket is kept."
+
+[[type]]
+name = "PreviewTicket"
+old = "craft_ui::dialog::full_window::PreviewTicket"
+new = ""
+status = "removed"
+note = "Replaced by the job key of `Remember::pending`."
+
+[[type]]
+name = "FullWindowLabels"
+old = "craft_ui::dialog::full_window::FullWindowLabels"
+new = ""
+status = "removed"
+note = "Replaced by the `DialogWords` rows `fullWindowTitle.*`, `fullWindowCanvas.name`, `fullWindowZoomBar.*` (the Zoom In and Zoom Out labels come from `ViewCommands`) and `fullWindowStatus.*`."
+
+[[type]]
+name = "FullWindowStyle"
+old = "craft_ui::dialog::full_window::FullWindowStyle"
+new = ""
+status = "removed"
+note = "Sizes and colours come from the theme through each type's style; no component-named tokens."
+
+[[type]]
+name = "FullWindowStatus"
+old = ""
+new = "craft_ui::dialog::FullWindowStatus"
+status = "replaced"
+note = "The progress or error line of a preview over a `Pending`; it replaces `PreviewStatus::show`."
+
+[[type]]
+name = "FullWindowZoomBarOutput"
+old = ""
+new = "craft_ui::dialog::FullWindowZoomBarOutput"
+status = "replaced"
+note = "What the zoom bar reports: `response`."
+
+[[type]]
+name = "FullWindowTitleOutput"
+old = ""
+new = "craft_ui::dialog::FullWindowTitleOutput"
+status = "replaced"
+note = "What the title reports: `response`."
+
+[[type]]
+name = "FullWindowStatusOutput"
+old = ""
+new = "craft_ui::dialog::FullWindowStatusOutput"
+status = "replaced"
+note = "What the status line reports: `response`."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+
+[[setter]]
+type = "FullWindowSide"
+old = "FullWindowSide::new(id_salt)"
+new = "FullWindowSide::new(title)"
+note = "The title is the label and the accessible name; `header(title)` and `name(..)` are gone. Two columns of one dialog take different titles."
+
+[[setter]]
+type = "FullWindowSide"
+old = "scrolls(false)"
+new = "unscrolled()"
+
+[[setter]]
+type = "FullWindowSide"
+old = "show(ui, fx, body)"
+new = "show(ui, |ui, cx| body)"
+note = "The footer buttons are the dialog's `buttons(..)`, placed among the side columns by `FullWindowDialog::side_footer(SideFooter)`; `FullWindowFx` is gone."
+
+[[setter]]
+type = "SideFooter"
+old = "SideFooter::bottom(Vec<FooterButton>)"
+new = "SideFooter::bottom()"
+note = "The buttons go to `FullWindowDialog::buttons(..)`; `top(buttons)` is `top()` the same way."
+
+[[setter]]
+type = "FullWindowSide"
+old = "width(SideWidth)"
+new = ""
+note = "Removed: the column sizes from its content."
+
+[[setter]]
+type = "FullWindowSide"
+old = "footer(SideFooter)"
+new = "FullWindowDialog::side_footer(SideFooter)"
+note = "The footer is the dialog's; the columns go in `FullWindowDialog::sides(|ui, cx| ..)`."
+
+[[setter]]
+type = "FullWindowZoomBar"
+old = "FullWindowZoomBar::new(id_salt, &mut view)"
+new = "FullWindowZoomBar::new(Bind::bound(&mut view))"
+note = "The bar writes the next view through the binding."
+
+[[setter]]
+type = "FullWindowZoomBar"
+old = "note(impl Into<String>)"
+new = "note(impl Into<Label>)"
+
+[[setter]]
+type = "FullWindowZoomBar"
+old = "labels(FullWindowLabels)"
+new = ""
+
+[[setter]]
+type = "FullWindowTitle"
+old = "text(ctx)"
+new = "label(&env)"
+note = "`Env::of(ui)` is the env."
+
+[[setter]]
+type = "FullWindowTitle"
+old = "labels(FullWindowLabels)"
+new = ""
+
+[[setter]]
+type = "FullWindowView"
+old = "canvas_view(rect, size, margin, ppp)"
+new = "settled(rect, size, ppp)"
+note = "Returns the settled view; the fit margin is the caller's (`craft_behavior::canvas::zoom::fit_up_to` takes it; the view passes 0, so the image fits the well edge to edge)."
+
+[[setter]]
+type = "FullWindowView"
+old = "take(&view, ppp)"
+new = "took(view)"
+
+[[setter]]
+type = "FullWindowView"
+old = "step(dir)"
+new = "apply(ViewCommands::ZoomIn)"
+
+[[setter]]
+type = "FullWindowView"
+old = "reset_fit()"
+new = "apply(ViewCommands::FitOnScreen)"
+
+[[setter]]
+type = "FullWindowView"
+old = "set_zoom(zoom)"
+new = "set_device_zoom(zoom)"
+
+[[setter]]
+type = "FullWindowCanvas"
+old = "FullWindowCanvas::new(id_salt, &mut view)"
+new = "FullWindowCanvas::new(&view, &source)"
+note = "The source is a constructor argument; `source(..)` is gone. The tool's keyboard path is the tool's `command_form`."
+
+[[setter]]
+type = "FullWindowCanvas"
+old = "painter(paint)"
+new = "controls(show)"
+note = "Marks are canvas controls shown with `show_at` inside the canvas."
+
+[[setter]]
+type = "FullWindowCanvas"
+old = "zoom_keys(keys)"
+new = ""
+note = "`FullWindowDialog` is an instance of the `ViewCommands` scope and the zoom bar applies the fired command to its bound view."
+
+[[setter]]
+type = "FullWindowCanvas"
+old = "labels(FullWindowLabels)"
+new = ""
+note = "The canvas's name is `fullWindowCanvas.name`."
+
+[[setter]]
+type = "FullWindowCanvas"
+old = "canvas_id(ui, id_salt)"
+new = ""
+note = "`ToolHost::{inject, cancel}` take the canvas response id from `FullWindowCanvasOutput::response`."
+
+[[setter]]
+type = "FullWindowCanvas"
+old = "checkerboard(Checkerboard)"
+new = "checkerboard(Checker)"
+
+[[setter]]
+type = "RasterOverlay"
+old = "RasterOverlay::new(source, texel)"
+new = "RasterOverlay::new(source)"
+note = "The texel factor is gone."
+

@@ -1,0 +1,21 @@
+# API map of the "Browse: free bin" family: old path to new path and setter renames.
+
+family = "Browse: free bin"
+new_module = "craft_browse::ui::freebin"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "FreeformCard"
+old = "craft_browse::ui::bin::freeform::FreeformCard"
+new = "craft_browse::ui::freebin::FreeformCard"
+status = "moved"
+note = "Built with FreeformCard::new(key, pos) and .in_stack(id); the fields are read as before."
+
+[[type]]
+name = "FreeBin"
+old = ""
+new = "craft_browse::ui::freebin::FreeBin"
+status = "replaced"
+note = "Replaces the Freeform view's drawing: a free-layout collection of tiles, shown with ShowCollection::show_items."

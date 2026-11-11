@@ -1,0 +1,178 @@
+# API map of the "imaging canvas controls" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "imaging canvas controls"
+new_module = ""
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "WarpGrid"
+old = ""
+new = ""
+status = "pending"
+
+[[type]]
+name = "PinWarp"
+old = ""
+new = ""
+status = "pending"
+
+[[type]]
+name = "PerspectiveWarp"
+old = ""
+new = ""
+status = "pending"
+
+[[type]]
+name = "SelectionOverlay"
+old = ""
+new = ""
+status = "pending"
+
+# One entry per renamed, removed or reshaped setter or constructor.
+# [[setter]]
+# type = ""
+# old = ""
+# new = ""
+
+# craft_behavior::geometry (contract-geometry)
+[[type]]
+name = "Anchor9"
+old = "craft_ui::canvas::quad::Anchor9"
+new = "craft_behavior::Anchor9"
+status = "moved"
+
+[[type]]
+name = "SnapTargets"
+old = "craft_ui::canvas::SnapTargets"
+new = "craft_behavior::geometry::snap::SnapTargets"
+status = "moved"
+
+[[type]]
+name = "SnapOptions"
+old = "craft_ui::canvas::SnapOptions"
+new = "craft_behavior::geometry::snap::SnapOptions"
+status = "moved"
+
+[[type]]
+name = "SnapGesture"
+old = "craft_ui::canvas::SnapGesture"
+new = "craft_behavior::geometry::snap::SnapGesture"
+status = "moved"
+
+[[type]]
+name = "OutlineDraft"
+old = "craft_ui::canvas::draft::OutlineDraft"
+new = "craft_behavior::geometry::draft::OutlineDraft"
+status = "moved"
+
+[[type]]
+name = "DraftKind"
+old = "craft_ui::canvas::draft::DraftKind"
+new = "craft_behavior::geometry::draft::DraftKind"
+status = "moved"
+
+[[type]]
+name = "DraftEvent"
+old = "craft_ui::canvas::draft::DraftEvent"
+new = "craft_behavior::geometry::draft::DraftEvent"
+status = "moved"
+
+[[type]]
+name = "SelectionOperation"
+old = "craft_ui::canvas::SelectionOperation"
+new = "craft_behavior::geometry::selection_op::SelectionOperation"
+status = "moved"
+
+[[type]]
+name = "MarqueeRect"
+old = "craft_ui::canvas::marquee::MarqueeRect"
+new = "craft_behavior::geometry::marquee::MarqueeRect"
+status = "moved"
+
+[[type]]
+name = "Constraint"
+old = "craft_ui::canvas::marquee::Constraint"
+new = "craft_behavior::geometry::marquee::Constraint"
+status = "moved"
+
+[[type]]
+name = "MarqueeGesture"
+old = "craft_ui::canvas::marquee::MarqueeGesture"
+new = "craft_behavior::geometry::marquee::MarqueeGesture"
+status = "moved"
+
+[[type]]
+name = "fixed_size_pixels"
+old = "craft_ui::canvas::fixed_size_pixels"
+new = "craft_behavior::geometry::marquee::fixed_size_pixels"
+status = "moved"
+
+[[type]]
+name = "marquee_pixels"
+old = "craft_ui::canvas::marquee_pixels"
+new = "craft_behavior::geometry::marquee::marquee_pixels"
+status = "moved"
+
+[[type]]
+name = "square_pixels"
+old = "craft_ui::canvas::square_pixels"
+new = "craft_behavior::geometry::marquee::square_pixels"
+status = "moved"
+
+[[setter]]
+type = "SelectionOperation"
+old = "from_modifiers(modifiers)"
+new = "from_mods(mods)"
+
+[[setter]]
+type = "SelectionOperation"
+old = "resolve(bar, modifiers, has_selection)"
+new = "resolve(bar, mods, has_selection)"
+
+[[setter]]
+type = "SelectionOperation"
+old = "badge() -> SelectionBadge"
+new = "badge() -> Option<CursorBadge>"
+
+[[setter]]
+type = "SelectionOperation"
+old = "label(&words)"
+new = "a words entry of the canvas controls (the legacy SelectionOperationLabels)"
+
+[[setter]]
+type = "DraftReach"
+old = "of(&tokens)"
+new = "new(close, same_point), the caller passes the hit tokens' target and slop"
+
+[[setter]]
+type = "DraftPoint"
+old = "new(at, modifiers, zoom) and the field modifiers"
+new = "new(at, mods, zoom) and the field mods"
+
+[[setter]]
+type = "OutlineDraft"
+old = "modifiers_changed(modifiers)"
+new = "mods_changed(mods)"
+
+[[setter]]
+type = "MarqueeGesture"
+old = "press(screen, at, modifiers)"
+new = "press(screen, at, mods)"
+
+[[setter]]
+type = "MarqueeGesture"
+old = "press_modifiers()"
+new = "press_mods()"
+
+[[setter]]
+type = "MarqueeGesture"
+old = "follow(screen, modifiers)"
+new = "follow(screen, mods)"
+
+[[setter]]
+type = "Constraint"
+old = "serde Serialize and Deserialize"
+new = "serde Serialize and Deserialize, camelCase (unchanged)"

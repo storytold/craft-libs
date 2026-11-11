@@ -1,0 +1,287 @@
+# API map of the "Form dialogs 3: export" family (Export As, the format options, the output path row).
+
+family = "Form dialogs 3: export"
+new_module = "craft_ui::patterns::form_dialogs"
+
+[[type]]
+name = "ExportAsDialog"
+old = "craft_ui::dialog::export::ExportAsDialog"
+new = "craft_ui::patterns::form_dialogs::ExportAsDialog"
+status = "moved"
+note = "A pattern over `FormDialog<ExportOptions>`: `ExportAsDialog::new(file_name, PixelSize, Bind<ExportOptions>)` with `formats`, `opened`, `defaults`, `preview`, `answers` and `saving`; `show(ui) -> ExportAsOutput`. The dialog is not a `StackDialog` and keeps no picker ticket: Export files a save request (file name and format filter) in `ExportAsOutput::requests`, the app opens its file dialog and answers with the path through `answers`, which closes the dialog with the result. The bind holds the settings (`initial` is the bind's value)."
+
+[[type]]
+name = "ExportAsOutput"
+old = ""
+new = "craft_ui::patterns::form_dialogs::ExportAsOutput"
+status = "replaced"
+note = "`{ response, closed, result: Option<ExportAsResult>, wanted_preview: Option<PreviewRequest<ExportOptions>>, requests: HostRequests }`. `wanted_preview` replaces `ExportAsDialog::wanted_preview`; the save request carries the file name and format."
+
+[[type]]
+name = "ExportFormat"
+old = "craft_ui::dialog::export::ExportFormat"
+new = "craft_ui::patterns::form_dialogs::ExportFormat"
+status = "moved"
+note = "Built with `ExportFormat::new(id, name)` and the setters `quality`, `lossless`, `transparency`, `bits` and `max_side`; `standard()` is unchanged."
+
+[[type]]
+name = "ExportSize"
+old = "craft_ui::dialog::export::ExportSize"
+new = "craft_ui::patterns::form_dialogs::ExportSize"
+status = "moved"
+note = "`Pixels` is built with `ExportSize::pixels(width, height)`."
+
+[[type]]
+name = "ExportMetadata"
+old = "craft_ui::dialog::export::ExportMetadata"
+new = "craft_ui::patterns::form_dialogs::ExportMetadata"
+status = "moved"
+
+[[type]]
+name = "ExportProfile"
+old = "craft_ui::dialog::export::ExportProfile"
+new = "craft_ui::patterns::form_dialogs::ExportProfile"
+status = "moved"
+
+[[type]]
+name = "ExportOptions"
+old = "craft_ui::dialog::export::ExportOptions"
+new = "craft_ui::patterns::form_dialogs::ExportOptions"
+status = "moved"
+note = "The `resample` field is the sizing dialogs' `Resample`, shown as a Resample row. `fitted(formats, PixelSize)` is the legacy private `fit`; `output_size(PixelSize)` is the legacy private `output_size`."
+
+[[type]]
+name = "SizeEstimate"
+old = "craft_ui::dialog::export::SizeEstimate"
+new = "craft_ui::patterns::form_dialogs::SizeEstimate"
+status = "moved"
+
+[[type]]
+name = "ExportFormatDefaults"
+old = "craft_ui::dialog::export::ExportFormatDefaults"
+new = "craft_ui::patterns::form_dialogs::ExportFormatDefaults"
+status = "moved"
+note = "Built with `ExportFormatDefaults::default()` and the setters `jpeg_quality`, `webp_quality` and `webp_lossless`."
+
+[[type]]
+name = "ExportPreview"
+old = "craft_ui::dialog::export::ExportPreview"
+new = "craft_ui::patterns::form_dialogs::ExportPreview"
+status = "moved"
+note = "`ExportPreview::new(revision, PreviewState)` with `.estimate(SizeEstimate)`; the texture is a `PreviewState` (`Pending`, `Ready`, `Failed`). The app gives it back every pass with `ExportAsDialog::preview` instead of `set_preview`; an exact size is the same revision with `SizeEstimate::Exact` (was `set_exact_estimate`)."
+
+[[type]]
+name = "ExportAsResult"
+old = "craft_ui::dialog::export::ExportAsResult"
+new = "craft_ui::patterns::form_dialogs::ExportAsResult"
+status = "moved"
+note = "`size: PixelSize` replaces `width` and `height`."
+
+[[type]]
+name = "ExportAsLabels"
+old = "craft_ui::dialog::export::ExportAsLabels"
+new = ""
+status = "removed"
+note = "Replaced by `ExportWords`."
+
+[[type]]
+name = "ExportWords"
+old = ""
+new = "craft_ui::patterns::form_dialogs::ExportWords"
+status = "replaced"
+note = "The words of Export As (`export.*` ids)."
+
+[[type]]
+name = "JpegOptionsDialog"
+old = "craft_ui::dialog::export::JpegOptionsDialog"
+new = ""
+status = "removed"
+note = "Replaced by `FormatOptionsDialog::new(ExportOptionsKind::Jpeg)`; JPEG, TIFF, Targa and DDS options are one form over four parameter lists."
+
+[[type]]
+name = "TiffOptionsDialog"
+old = "craft_ui::dialog::export::TiffOptionsDialog"
+new = ""
+status = "removed"
+note = "Replaced by `FormatOptionsDialog::new(ExportOptionsKind::Tiff)`."
+
+[[type]]
+name = "TargaOptionsDialog"
+old = "craft_ui::dialog::export::TargaOptionsDialog"
+new = ""
+status = "removed"
+note = "Replaced by `FormatOptionsDialog::new(ExportOptionsKind::Targa)`; `initial(FormatOptions::Targa(TargaOptions::new(bits)))` is the old `new(bits)`."
+
+[[type]]
+name = "DdsOptionsDialog"
+old = "craft_ui::dialog::export::DdsOptionsDialog"
+new = ""
+status = "removed"
+note = "Replaced by `FormatOptionsDialog::new(ExportOptionsKind::Dds)`."
+
+[[type]]
+name = "FormatOptionsDialog"
+old = ""
+new = "craft_ui::patterns::form_dialogs::FormatOptionsDialog"
+status = "replaced"
+note = "A pattern over `ParamDialog`: `FormatOptionsDialog::new(ExportOptionsKind)` with `opened` and `initial(FormatOptions)` (the old `own_quality` and constructor arguments); `show(ui) -> FormatOptionsOutput { response, closed, result: Option<FormatOptions> }`."
+
+[[type]]
+name = "ExportOptionsKind"
+old = ""
+new = "craft_ui::patterns::form_dialogs::ExportOptionsKind"
+status = "replaced"
+note = "`Jpeg`, `Tiff`, `Targa` and `Dds`."
+
+[[type]]
+name = "FormatOptions"
+old = ""
+new = "craft_ui::patterns::form_dialogs::FormatOptions"
+status = "replaced"
+note = "The options of one format: `Jpeg(JpegOptions)`, `Tiff(TiffOptions)`, `Targa(TargaOptions)` or `Dds(DdsOptions)`; the result of `FormatOptionsDialog`."
+
+[[type]]
+name = "FormatOptionsOutput"
+old = ""
+new = "craft_ui::patterns::form_dialogs::FormatOptionsOutput"
+status = "replaced"
+note = "`{ response, closed, result }`."
+
+[[type]]
+name = "JpegFormat"
+old = "craft_ui::dialog::export::JpegFormat"
+new = "craft_ui::patterns::form_dialogs::JpegFormat"
+status = "moved"
+
+[[type]]
+name = "JpegOptions"
+old = "craft_ui::dialog::export::JpegOptions"
+new = "craft_ui::patterns::form_dialogs::JpegOptions"
+status = "moved"
+note = "Built with `JpegOptions::new(quality)`."
+
+[[type]]
+name = "TiffOptions"
+old = "craft_ui::dialog::export::TiffOptions"
+new = "craft_ui::patterns::form_dialogs::TiffOptions"
+status = "moved"
+
+[[type]]
+name = "TargaOptions"
+old = "craft_ui::dialog::export::TargaOptions"
+new = "craft_ui::patterns::form_dialogs::TargaOptions"
+status = "moved"
+note = "Built with `TargaOptions::new(bits)`."
+
+[[type]]
+name = "DdsCompression"
+old = "craft_ui::dialog::export::DdsCompression"
+new = "craft_ui::patterns::form_dialogs::DdsCompression"
+status = "moved"
+
+[[type]]
+name = "DdsOptions"
+old = "craft_ui::dialog::export::DdsOptions"
+new = "craft_ui::patterns::form_dialogs::DdsOptions"
+status = "moved"
+
+[[type]]
+name = "FormatOptionsLabels"
+old = "craft_ui::dialog::export::FormatOptionsLabels"
+new = ""
+status = "removed"
+note = "Replaced by `FormatOptionsWords`."
+
+[[type]]
+name = "FormatOptionsWords"
+old = ""
+new = "craft_ui::patterns::form_dialogs::FormatOptionsWords"
+status = "replaced"
+note = "The words of the format options (`formatOptions.*` ids, unchanged)."
+
+[[type]]
+name = "JpegPreset"
+old = ""
+new = "craft_ui::patterns::form_dialogs::JpegPreset"
+status = "replaced"
+note = "`Low`, `Medium`, `High` and `Maximum`; `jpeg_quality_preset(quality)` says which one a quality falls in and `quality()` the value a preset sets."
+
+[[type]]
+name = "OutputPathRow"
+old = "craft_ui::dialog::export::OutputPathRow"
+new = "craft_ui::patterns::form_dialogs::OutputPathRow"
+status = "moved"
+note = "A pattern: `OutputPathRow::new(Bind<String>)` with `templates(Vec<(String, Label)>)`, `kind`, `key` and `label`; `show(ui) -> OutputPathOutput`. The path is a text field with a Browse button (the old file-name link with Alt-click editing), and Browse files a `PathRequest` in the output instead of queueing a picker ticket."
+
+[[type]]
+name = "OutputPathLabels"
+old = "craft_ui::dialog::export::OutputPathLabels"
+new = ""
+status = "removed"
+note = "Replaced by `OutputPathWords`."
+
+[[type]]
+name = "OutputPathWords"
+old = ""
+new = "craft_ui::patterns::form_dialogs::OutputPathWords"
+status = "replaced"
+note = "The words of the output path row (`outputPath.*` ids)."
+
+[[type]]
+name = "OutputPathResponse"
+old = "craft_ui::dialog::export::OutputPathResponse"
+new = ""
+status = "removed"
+note = "Replaced by `OutputPathOutput { response, edit: Option<EditEvent<String>>, browse: Option<PathRequest> }`; `browsing` (a pick ticket) is the request."
+
+[[type]]
+name = "OutputPathOutput"
+old = ""
+new = "craft_ui::patterns::form_dialogs::OutputPathOutput"
+status = "replaced"
+note = "`{ response, edit, browse }`."
+
+[[call]]
+old = "craft_ui::dialog::export::export_file_name(name, fallback)"
+new = ""
+note = "Crate-private: the dialog applies the rule itself; no app calls it."
+
+[[call]]
+old = "craft_ui::dialog::export::numbered_paths(first, names, exists)"
+new = ""
+note = "Removed: no dialog or app used it."
+
+[[call]]
+old = "craft_ui::dialog::export::jpeg_quality_percent(quality)"
+new = "craft_ui::patterns::form_dialogs::jpeg_quality_percent(quality)"
+note = "Moved unchanged."
+
+[[call]]
+old = "craft_ui::dialog::export::jpeg_quality_label(quality, &labels)"
+new = ""
+note = "Crate-private: the dialog applies the rule itself; no app calls it."
+
+[[call]]
+old = "craft_ui::dialog::export::resize_from_scale(source, scale)"
+new = "craft_ui::patterns::form_dialogs::resize_from_scale(source, scale)"
+note = "Moved to the size model; `source` and the result are `PixelSize`."
+
+[[call]]
+old = "craft_ui::dialog::export::resize_from_side(source, width, height, lock, edited_width)"
+new = "craft_ui::patterns::form_dialogs::resize_from_side(source, width, height, lock, edited_width)"
+note = "Moved to the size model; `source` and the result's size are `PixelSize`."
+
+[[call]]
+old = "ExportAsDialog::wanted_preview()"
+new = ""
+note = "Removed: the pass's `ExportAsOutput::wanted_preview` carries the revision and settings."
+
+[[call]]
+old = "ExportAsDialog::set_preview(preview)"
+new = ""
+note = "Removed: give the answer with `ExportAsDialog::preview(ExportPreview)` each pass."
+
+[[call]]
+old = "ExportAsDialog::set_exact_estimate(revision, bytes)"
+new = ""
+note = "Removed: give an `ExportPreview` of the same revision with `SizeEstimate::Exact`."

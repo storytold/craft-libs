@@ -1,0 +1,142 @@
+# API map of the "Form dialogs 2: option" family: the list manager, the password dialog and the report dialog.
+
+family = "Form dialogs 2: option"
+new_module = "craft_ui::patterns::form_dialogs"
+
+[[type]]
+name = "HostedCommandForm"
+old = ""
+new = ""
+status = "replaced"
+note = "Replaced by the constructor `HostedParamDialog::command(key, fields, |fields| ParamDialog::command(..).values(Bind::bound(fields)))`, with `fields`, `fields_mut`, `pick_color`, `pick_path`, `pick_eyedropper`, `answer_color`, `answer_path`, `answer_eyedropper` and `cancel_requests`."
+
+[[type]]
+name = "ListManagerDialog"
+old = "craft_ui::dialog::list_manager::ListManagerDialog"
+new = ""
+status = "removed"
+note = "Replaced by `ListManager`, a `Pattern` on `Dialog`: `ListManager::new(title, name_label, entries, actions).show(ui)`; the actions are the footer's buttons and the answer is `ListManagerOutput.choice`."
+
+[[type]]
+name = "ListManager"
+old = ""
+new = "craft_ui::patterns::form_dialogs::ListManager"
+status = "replaced"
+note = "Replaces `ListManagerDialog`. `searchable`, `name`, `empty` and `note` are setters; `set_entries` and `take_action` are gone: the app passes the entries each pass and reads `choice` in the pass of the press."
+
+[[type]]
+name = "ListManagerEntry"
+old = "craft_ui::dialog::list_manager::ListManagerEntry"
+new = "craft_ui::patterns::form_dialogs::ListManagerEntry"
+status = "moved"
+note = "Built with `ListManagerEntry::new(id, name)` and `detail`, `description`, `kind`; `detail` and `description` are `Label`s."
+
+[[type]]
+name = "ListManagerAction"
+old = "craft_ui::dialog::list_manager::ListManagerAction"
+new = "craft_ui::patterns::form_dialogs::ListManagerAction"
+status = "moved"
+note = "`label` is a `Label`; the standard actions take `&ListManagerWords`; `tooltip` is `reason` (shown while the button is disabled)."
+
+[[type]]
+name = "ListManagerChoice"
+old = "craft_ui::dialog::list_manager::ListManagerChoice"
+new = "craft_ui::patterns::form_dialogs::ListManagerChoice"
+status = "moved"
+
+[[type]]
+name = "ActionEnabled"
+old = "craft_ui::dialog::list_manager::ActionEnabled"
+new = "craft_ui::patterns::form_dialogs::ActionEnabled"
+status = "moved"
+
+[[type]]
+name = "PasswordDialog"
+old = "craft_ui::dialog::password::PasswordDialog"
+new = "craft_ui::patterns::form_dialogs::PasswordDialog"
+status = "moved"
+note = "A `Pattern` shown with `show(ui)`: `PasswordDialog::new(PasswordPurpose::open(name)).tag(id).error(label).show(ui)`; the answer is `PasswordOutput.answer`."
+
+[[type]]
+name = "PasswordPurpose"
+old = "craft_ui::dialog::password::PasswordPurpose"
+new = "craft_ui::patterns::form_dialogs::PasswordPurpose"
+status = "moved"
+note = "`PasswordPurpose::open(name)` and `PasswordPurpose::permissions(name)` replace `PasswordDialog::open` and `PasswordDialog::permissions`."
+
+[[type]]
+name = "PasswordAnswer"
+old = "craft_ui::dialog::password::PasswordAnswer"
+new = "craft_ui::patterns::form_dialogs::PasswordAnswer"
+status = "moved"
+
+[[type]]
+name = "Secret"
+old = "craft_ui::dialog::password::Secret"
+new = "craft_ui::patterns::form_dialogs::Secret"
+status = "moved"
+
+[[type]]
+name = "PasswordStrength"
+old = "craft_ui::dialog::password::PasswordStrength"
+new = "craft_ui::patterns::form_dialogs::PasswordStrength"
+status = "moved"
+
+[[type]]
+name = "password_strength"
+old = "craft_ui::dialog::password::password_strength"
+new = ""
+status = "removed"
+note = "Crate-private: the dialog applies the rule itself; no app calls it."
+
+[[type]]
+name = "ReportDialog"
+old = "craft_ui::dialog::report::ReportDialog"
+new = "craft_ui::patterns::form_dialogs::ReportDialog"
+status = "moved"
+note = "A `Pattern` shown with `show(ui)`: `ReportDialog::new(title, summary, notes).show(ui)`; the Copy button's text comes back in `ReportOutput.copied`, and `as_text` takes the `Env`."
+
+[[type]]
+name = "ReportNote"
+old = "craft_ui::dialog::report::ReportNote"
+new = "craft_ui::patterns::form_dialogs::ReportNote"
+status = "moved"
+note = "`tone` is a `craft_theme::variant::Tone`; `text` is a `Label`."
+
+[[type]]
+name = "NoteTone"
+old = "craft_ui::dialog::report::NoteTone"
+new = ""
+status = "removed"
+note = "Use `craft_theme::variant::Tone` (`Info`, `Warn`, `Bad`)."
+
+[[setter]]
+type = "ListManager"
+old = "ListManagerDialog::new(key, title, name_label)"
+new = "ListManager::new(title, name_label, entries, actions)"
+
+[[setter]]
+type = "ListManager"
+old = "empty_text(impl Into<String>)"
+new = "empty(Label)"
+
+[[setter]]
+type = "ListManager"
+old = "name(impl Into<String>)"
+new = "name(impl Into<String>)"
+
+[[setter]]
+type = "PasswordDialog"
+old = "error(impl Into<String>)"
+new = "error(Label)"
+
+[[setter]]
+type = "ReportDialog"
+old = "ReportDialog::new(key, title, summary, notes)"
+new = "ReportDialog::new(title, summary, notes)"
+
+[[setter]]
+type = "ReportDialog"
+old = "width(Width)"
+new = ""
+note = "Removed: the dialog sizes to its content."

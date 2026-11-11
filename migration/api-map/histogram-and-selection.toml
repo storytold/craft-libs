@@ -1,0 +1,302 @@
+# API map of the "Imaging: histogram, mask views, selection overlay" family: old path to new path and setter renames.
+# Filled in by the img-hist track; the codemods and the app scan read it.
+
+family = "Imaging: histogram, mask views, selection overlay"
+new_module = "craft_imaging::ui"
+
+[[type]]
+name = "Histogram"
+old = "craft_ui::composites::histogram::Histogram"
+new = "craft_imaging::ui::histogram::Histogram"
+status = "moved"
+
+[[type]]
+name = "HistogramData"
+old = "craft_ui::composites::histogram::HistogramData"
+new = "craft_imaging::ui::histogram::HistogramData"
+status = "moved"
+
+[[type]]
+name = "HistogramLook"
+old = "craft_ui::composites::histogram::HistogramLook"
+new = "craft_imaging::ui::histogram::HistogramLook"
+status = "moved"
+
+[[type]]
+name = "HistogramScale"
+old = "craft_ui::composites::histogram::HistogramScale"
+new = "craft_imaging::ui::histogram::HistogramScale"
+status = "moved"
+
+[[type]]
+name = "ChannelColor"
+old = "craft_ui::composites::histogram::ChannelColor"
+new = "craft_imaging::ui::histogram::ChannelColor"
+status = "moved"
+
+[[type]]
+name = "BinCount"
+old = "craft_ui::composites::histogram::BinCount"
+new = "craft_imaging::ui::histogram::BinCount"
+status = "moved"
+
+[[type]]
+name = "HistogramStyle"
+old = "craft_ui::composites::histogram::HistogramStyle"
+new = ""
+status = "removed"
+note = "The colours are `HistogramInks` and `PlotFrame`, read in a style hook; the plot has its own component style."
+
+[[type]]
+name = "HistogramResponse"
+old = "craft_ui::composites::histogram::HistogramResponse"
+new = ""
+status = "removed"
+note = "`HistogramOutput`: `selection` is an `EditResponse<Option<LevelRange>>`, `clicked` is `refresh`."
+
+[[type]]
+name = "HistogramOutput"
+old = ""
+new = "craft_imaging::ui::histogram::HistogramOutput"
+status = "replaced"
+note = "The output of `Histogram`, replacing `HistogramResponse`."
+
+[[type]]
+name = "HistogramInks"
+old = ""
+new = "craft_imaging::ui::histogram::HistogramInks"
+status = "replaced"
+note = "The colours of the bars, from `HistogramStyle::tones`, `inks`, `ribbons`, `backdrop` and `scope`."
+
+[[type]]
+name = "PlotFrame"
+old = ""
+new = "craft_imaging::ui::histogram::PlotFrame"
+status = "replaced"
+note = "The one plot frame, from `HistogramStyle::fill` and `border`."
+
+[[type]]
+name = "LevelRange"
+old = ""
+new = "craft_imaging::ui::histogram::LevelRange"
+status = "replaced"
+note = "The selection value, in place of `RangeInclusive<f32>`."
+
+[[type]]
+name = "PlotHeight"
+old = ""
+new = "craft_imaging::ui::histogram::PlotHeight"
+status = "replaced"
+note = "The plot height, in place of `height(f32)`."
+
+[[type]]
+name = "StaleMark"
+old = ""
+new = "craft_imaging::ui::histogram::StaleMark"
+status = "replaced"
+note = "The stale mark, in place of `stale(bool)`, `stale_label` and `on_stale_click`."
+
+[[type]]
+name = "MaskViewControls"
+old = "craft_imaging::ui::mask_view::MaskViewControls"
+new = "craft_imaging::ui::mask_view::MaskViewControls"
+status = "same"
+note = "A pattern: `new(state)` has no id salt and `show(ui)` returns `MaskViewControlsOutput`."
+
+[[type]]
+name = "MaskViewKeys"
+old = "craft_imaging::ui::mask_view::MaskViewKeys"
+new = "craft_imaging::ui::mask_view::MaskViewKeys"
+status = "same"
+note = "A command set. `MaskViewKeys::read(ui, state)` is `MaskViewState::run(command, phase)` on each fired command; `MaskViewMode::key` is the command of `MaskViewMode::command`."
+
+[[type]]
+name = "MaskViewResponse"
+old = "craft_imaging::ui::mask_view::MaskViewResponse"
+new = ""
+status = "removed"
+note = "`MaskViewControlsOutput`."
+
+[[type]]
+name = "MaskViewControlsOutput"
+old = ""
+new = "craft_imaging::ui::mask_view::MaskViewControlsOutput"
+status = "replaced"
+note = "The output of `MaskViewControls`, replacing `MaskViewResponse`."
+
+[[type]]
+name = "MaskViewLabels"
+old = "craft_imaging::ui::mask_view::MaskViewLabels"
+new = ""
+status = "removed"
+note = "`MaskViewWords`."
+
+[[type]]
+name = "MaskViewWords"
+old = ""
+new = "craft_imaging::ui::mask_view::MaskViewWords"
+status = "replaced"
+note = "The word set of the mask views, replacing `MaskViewLabels`."
+
+[[type]]
+name = "SelectionOverlay"
+old = "craft_imaging::ui::selection::SelectionOverlay"
+new = "craft_imaging::ui::selection::SelectionOverlay"
+status = "same"
+note = "A pattern shown with `show_at(ui, canvas_rect)` inside a canvas."
+
+[[type]]
+name = "OutlineSource"
+old = "craft_imaging::ui::selection::OutlineSource"
+new = "craft_imaging::ui::selection::OutlineSource"
+status = "same"
+
+[[type]]
+name = "SelectionOverlayResponse"
+old = "craft_imaging::ui::selection::SelectionOverlayResponse"
+new = ""
+status = "removed"
+note = "`SelectionOverlayOutput`; its `id` is gone."
+
+[[type]]
+name = "SelectionOverlayOutput"
+old = ""
+new = "craft_imaging::ui::selection::SelectionOverlayOutput"
+status = "replaced"
+note = "The output of `SelectionOverlay`, replacing `SelectionOverlayResponse`."
+
+[[type]]
+name = "SelectionOverlayLabels"
+old = "craft_imaging::ui::selection::SelectionOverlayLabels"
+new = ""
+status = "removed"
+note = "`SelectionWords`."
+
+[[type]]
+name = "SelectionWords"
+old = ""
+new = "craft_imaging::ui::selection::SelectionWords"
+status = "replaced"
+note = "The word set of the selection overlay, replacing `SelectionOverlayLabels`."
+
+[[type]]
+name = "PointMap"
+old = ""
+new = "craft_imaging::ui::selection::PointMap"
+status = "replaced"
+note = "The named closure of `SelectionOverlay::mapped`."
+
+[[setter]]
+type = "Histogram"
+old = "new(id_salt, label)"
+new = "new(label, &data)"
+
+[[setter]]
+type = "Histogram"
+old = "tone(bins, channel) / rgb(channels) / channels(inks) / data(data)"
+new = "the data argument of `new`: `HistogramData::tone`, `rgb`, `channels`"
+
+[[setter]]
+type = "Histogram"
+old = "scale(scale)"
+new = "HistogramData::scale(scale)"
+
+[[setter]]
+type = "Histogram"
+old = "height(f32)"
+new = "height(PlotHeight)"
+
+[[setter]]
+type = "Histogram"
+old = "selection(Option<RangeInclusive<f32>>)"
+new = "selection(Bind<Option<LevelRange>>)"
+
+[[setter]]
+type = "Histogram"
+old = "selection_labels(start, end)"
+new = "the words `histogram.selectionStart` and `histogram.selectionEnd` of `HistogramWords`"
+
+[[setter]]
+type = "Histogram"
+old = "stale(bool) / stale_label(label) / on_stale_click(label)"
+new = "stale(StaleMark::Mark(label)) or stale(StaleMark::Button(label))"
+
+[[setter]]
+type = "Histogram"
+old = "interactive(bool)"
+new = "removed: the tone zones are `scopes::ToneZones` over the plot"
+
+[[setter]]
+type = "Histogram"
+old = "markers(&[(f32, String)])"
+new = "markers(&[(f32, Label)])"
+
+[[setter]]
+type = "Histogram"
+old = "outline(bins, channel)"
+new = "outline(&HistogramData)"
+
+[[setter]]
+type = "Histogram"
+old = "paint(painter, rect, data, look, tokens)"
+new = "paint_bins(painter, rect, data, look, inks)"
+
+[[setter]]
+type = "Histogram"
+old = "style(tokens)"
+new = "removed: `HistogramInks::new(cx)` and `PlotFrame::new(cx)` in a style hook"
+
+[[setter]]
+type = "ChannelColor"
+old = "color(&UiTokens)"
+new = "tone(&StyleCx)"
+
+[[setter]]
+type = "ChannelColor"
+old = "curve(&UiTokens)"
+new = "curve(&StyleCx)"
+
+[[setter]]
+type = "ChannelColor"
+old = "bar(&UiTokens)"
+new = "bar(&StyleCx)"
+
+[[setter]]
+type = "MaskViewControls"
+old = "new(id_salt, state)"
+new = "new(state)"
+
+[[setter]]
+type = "MaskViewControls"
+old = "labels(labels)"
+new = "the words of `MaskViewWords`"
+
+[[setter]]
+type = "SelectionOverlay"
+old = "new(id_salt, source)"
+new = "new(label, source)"
+
+[[setter]]
+type = "SelectionOverlay"
+old = "show(ui, canvas, view)"
+new = "show_at(ui, canvas_rect)"
+
+[[setter]]
+type = "SelectionOverlay"
+old = "value_in(numbers, unit)"
+new = "unit(UnitKind)"
+
+[[setter]]
+type = "SelectionOverlay"
+old = "preview(mode, look)"
+new = "preview(mode) and quick_mask(look)"
+
+[[setter]]
+type = "SelectionOverlay"
+old = "mapped(&dyn Fn(Point) -> Point)"
+new = "mapped(impl Fn(Point) -> Point)"
+
+[[setter]]
+type = "SelectionOverlay"
+old = "labels(labels)"
+new = "the words of `SelectionWords`"

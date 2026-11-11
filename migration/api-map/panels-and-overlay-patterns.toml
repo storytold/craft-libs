@@ -1,0 +1,254 @@
+# API map of the "Panels and overlay patterns" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Panels and overlay patterns"
+new_module = "craft_ui::patterns::panels"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "Panel"
+old = "craft_ui::patterns::panel::Panel"
+new = "craft_ui::sections::Panel"
+status = "moved"
+note = "A container (layer 5) shown with `Panel::new(title).show(ui, |ui, cx| ..)`; `new` takes the title, not an id salt (`Props::id_salt` salts the id). The body closure is `FnMut(&mut Ui, &mut BodyCx)`. Header, vertical scroll and the panel surface are built in; the panel fills the room offered."
+
+[[type]]
+name = "PanelStyle"
+old = "craft_ui::patterns::panel::PanelStyle"
+new = "craft_ui::sections::PanelStyle"
+status = "moved"
+note = "Read-only style struct; `Panel::style(tokens, ppp)` and `Panel::footer_height` are gone: the surface, padding and footer height come from the theme."
+
+[[type]]
+name = "PanelOutput"
+old = "craft_ui::patterns::panel::PanelOutput"
+new = "craft_ui::sections::PanelOutput"
+status = "moved"
+note = "`PanelOutput<R>` with the body's value becomes `PanelOutput { response, action, closed }`; the body's value is `Inner::inner` of the `show` result (`shown.inner`, `shown.output`)."
+
+[[type]]
+name = "Inspector"
+old = "craft_ui::patterns::inspector::Inspector"
+new = "craft_ui::patterns::panels::Inspector"
+status = "moved"
+note = "A pattern on `Panel`: `Inspector::new(label).target(key).header(name).icon(icon).kind(kind).show(ui, |ui, cx| ..)`; no target shows the empty notice. The output is `PanelOutput`."
+
+[[type]]
+name = "InspectorHeader"
+old = "craft_ui::patterns::inspector::InspectorHeader"
+new = ""
+status = "removed"
+note = "Replaced by `TitleRow` with an icon and a subtitle, which `Inspector` builds from `header`, `icon` and `kind`."
+
+[[type]]
+name = "InspectorStyle"
+old = "craft_ui::patterns::inspector::InspectorStyle"
+new = ""
+status = "removed"
+note = "The header's look is `TitleRowStyle`; `Inspector::style` is gone."
+
+[[type]]
+name = "CommandPalette"
+old = "craft_ui::patterns::command_palette::CommandPalette"
+new = "craft_ui::patterns::panels::CommandPalette"
+status = "moved"
+note = "A pattern on a modal `Popover`: `CommandPalette::new(label, &entries, open).recents(Bind<Vec<CommandRef>>).show(ui) -> PaletteOutput`. It no longer shows on `&Context`; the app runs `PaletteOutput::picked`. The list is the body of a `Stack` under the search field and above the key hint (`PanelWords::palette_hint`), so it scrolls inside the capped box; Escape clears the query before it closes the box."
+
+[[type]]
+name = "Tour"
+old = "craft_ui::patterns::tour::Tour"
+new = "craft_ui::patterns::panels::Tour"
+status = "moved"
+note = "A pattern on a modal `Popover` with a scrim hole: `Tour::new(label, &steps, index).show(ui) -> TourOutput`. It no longer shows on `&Context`; the step index is a `Bind<usize>`."
+
+[[type]]
+name = "CommandPaletteStyle"
+old = "craft_ui::patterns::command_palette::CommandPaletteStyle"
+new = ""
+status = "removed"
+note = "The box is a `Popover` on `Overlay::modal()`; its surface, padding and row height come from the theme."
+
+[[type]]
+name = "PaletteLabels"
+old = "craft_ui::patterns::command_palette::PaletteLabels"
+new = ""
+status = "removed"
+note = "Words: `PanelWords` (`commandPalette.*`)."
+
+[[type]]
+name = "PaletteEntry"
+old = "craft_ui::behavior::PaletteEntry"
+new = ""
+status = "removed"
+note = "Replaced by `HelpEntry`."
+
+[[type]]
+name = "CommandSearch"
+old = "craft_ui::behavior::CommandSearch"
+new = ""
+status = "removed"
+note = "Replaced by `menu::search::search_order`, which the palette and the Help menu share."
+
+[[type]]
+name = "Match"
+old = "craft_ui::behavior::Match"
+new = ""
+status = "removed"
+note = "`search_order` returns the entries' positions, best first."
+
+[[type]]
+name = "PaletteOutput"
+old = ""
+new = "craft_ui::patterns::panels::PaletteOutput"
+status = "replaced"
+note = "`show` returned the picked entry; the output holds `picked: Option<CommandRef>`, `closed` and the response."
+
+[[type]]
+name = "TourStep"
+old = "craft_ui::patterns::tour::TourStep"
+new = "craft_ui::patterns::panels::TourStep"
+status = "moved"
+note = "`TourStep::new(title, text).target(rect)`; the id field is gone (steps are positions)."
+
+[[type]]
+name = "TourEvent"
+old = "craft_ui::patterns::tour::TourEvent"
+new = "craft_ui::patterns::panels::TourEvent"
+status = "moved"
+note = "`Next`, `Back`, `Finished`, `Skipped` as before."
+
+[[type]]
+name = "TourLabels"
+old = "craft_ui::patterns::tour::TourLabels"
+new = ""
+status = "removed"
+note = "Words: `PanelWords` (`tour.*`)."
+
+[[type]]
+name = "TourOutput"
+old = ""
+new = "craft_ui::patterns::panels::TourOutput"
+status = "replaced"
+note = "`show` returned `Option<TourEvent>`; the output holds `event`."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+[[setter]]
+type = "Panel"
+old = "new(id_salt)"
+new = "new(title)"
+note = "The title is the constructor's argument; the id comes from the scope (`id_salt(..)` to salt it)."
+
+[[setter]]
+type = "Panel"
+old = "title(String)"
+new = "new(title)"
+
+[[setter]]
+type = "Panel"
+old = "scroll(bool)"
+new = ""
+note = "The body always scrolls vertically."
+
+[[setter]]
+type = "Panel"
+old = "fill(bool)"
+new = ""
+note = "The panel always fills the room offered."
+
+[[setter]]
+type = "Panel"
+old = "footer(FnOnce(&mut Ui))"
+new = "footer(FnMut(&mut Ui, &mut BodyCx))"
+note = "The closure fills a `FooterBar` body under the body."
+
+[[setter]]
+type = "Panel"
+old = "footer_label(String)"
+new = ""
+note = "The footer bar names itself from the section words."
+
+[[setter]]
+type = "Panel"
+old = "scroll_bar_label(String)"
+new = ""
+note = "The scroll bar's name comes from the theme words."
+
+[[setter]]
+type = "Inspector"
+old = "new(id_salt)"
+new = "new(label)"
+
+[[setter]]
+type = "Inspector"
+old = "target(impl AsIdSalt)"
+new = "target(impl AsIdSalt)"
+
+[[setter]]
+type = "Inspector"
+old = "header(InspectorHeader::new(icon, name).kind(kind))"
+new = "header(name).icon(IconSpec).kind(kind)"
+
+[[setter]]
+type = "Inspector"
+old = "title_only(name)"
+new = "header(name)"
+
+[[setter]]
+type = "Inspector"
+old = "empty(String)"
+new = "empty(impl Into<Label>)"
+
+[[setter]]
+type = "Inspector"
+old = "show_empty(bool)"
+new = ""
+note = "No `target(..)` shows the empty notice."
+
+[[setter]]
+type = "Inspector"
+old = "scroll_bar_label(String)"
+new = ""
+note = "The scroll bar's name comes from the theme words."
+
+[[setter]]
+type = "CommandPalette"
+old = "new(id, &[PaletteEntry<T>])"
+new = "new(label, &[HelpEntry], open: Bind<bool>)"
+note = "The open state is a binding; `show(ctx, &mut open)` is `show(ui)`."
+
+[[setter]]
+type = "CommandPalette"
+old = "labels(PaletteLabels)"
+new = ""
+note = "Words: `PanelWords`."
+
+[[setter]]
+type = "CommandPalette"
+old = "recents(&mut Vec<T>)"
+new = "recents(Bind<Vec<CommandRef>>)"
+note = "The palette puts a picked command first (`CommandPalette::remember` is the rule); a given value only reads."
+
+[[setter]]
+type = "CommandPalette"
+old = "style(tokens)"
+new = ""
+note = "The theme styles the box."
+
+[[setter]]
+type = "Tour"
+old = "new(id_salt)"
+new = "new(label, &[TourStep], index: Bind<usize>)"
+
+[[setter]]
+type = "Tour"
+old = "labels(TourLabels)"
+new = ""
+note = "Words: `PanelWords`."
+
+[[setter]]
+type = "Tour"
+old = "show(ctx, steps, index)"
+new = "show(ui)"
+note = "Returns `TourOutput { event }`; Next and Back also write the index binding."

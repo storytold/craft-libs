@@ -1,0 +1,158 @@
+# API map of "Form dialogs 3: PDF export": old path to new path and setter renames.
+# Written by the export-b track; the codemods and the app scan read it.
+
+family = "Form dialogs 3: PDF export"
+new_module = "craft_ui::patterns::form_dialogs"
+
+[[type]]
+name = "PdfExportDialog"
+old = "craft_ui::dialog::export::pdf::PdfExportDialog"
+new = "craft_ui::patterns::form_dialogs::PdfExportDialog"
+status = "moved"
+note = "A pattern on `FormDialog<PdfSettings>`: `PdfExportDialog::new(app, Bind<PdfSettings>)` with `show(ui) -> PdfExportOutput`. The preset row is a `NamedPresetRow` over the built-in and saved presets; the settings live in the binding instead of the dialog; the app asks for the file after `PdfExportOutput.result`."
+
+[[type]]
+name = "PdfArtboards"
+old = "craft_ui::dialog::export::pdf::PdfArtboards"
+new = "craft_ui::patterns::form_dialogs::PdfArtboards"
+status = "moved"
+note = "Unchanged variants `All` and `Range(String)`."
+
+[[type]]
+name = "PdfExportResult"
+old = "craft_ui::dialog::export::pdf::PdfExportResult"
+new = "craft_ui::patterns::form_dialogs::PdfExportResult"
+status = "moved"
+note = "`options` and `artboards`; the `path` field is gone because the app opens the save picker after OK."
+
+[[type]]
+name = "PdfExportLabels"
+old = "craft_ui::dialog::export::pdf::PdfExportLabels"
+new = ""
+status = "removed"
+note = "Replaced by `PdfExportWords`, a `words!` struct with ids `pdfExportDialog.<name>`; the check, warning and range wordings are its methods `error_text`, `warning_text` and `range_error_text`."
+
+[[type]]
+name = "PdfExportWords"
+old = ""
+new = "craft_ui::patterns::form_dialogs::PdfExportWords"
+status = "replaced"
+note = "The words of the dialog: ids `pdfExportDialog.<name>`, templates for the checks and warnings."
+
+[[type]]
+name = "PasswordSwitches"
+old = "craft_ui::dialog::export::pdf::PasswordSwitches"
+new = ""
+status = "removed"
+note = "The two \"require a password\" check boxes are state the dialog keeps in its own slot."
+
+[[type]]
+name = "RangeError"
+old = "craft_ui::dialog::export::pdf::RangeError"
+new = "craft_ui::patterns::form_dialogs::RangeError"
+status = "moved"
+note = "Public now; the same four variants."
+
+[[type]]
+name = "check_range"
+old = "craft_ui::dialog::export::pdf::check_range"
+new = ""
+status = "removed"
+note = "Crate-private: the dialog applies the rule itself; no app calls it."
+
+[[type]]
+name = "PdfExportOutput"
+old = ""
+new = "craft_ui::patterns::form_dialogs::PdfExportOutput"
+status = "replaced"
+note = "`{ response, closed, result: Option<PdfExportResult>, settings, presets: Vec<PdfPresetEvent> }`, implementing `Outcome`."
+
+[[type]]
+name = "PdfPresetEvent"
+old = ""
+new = "craft_ui::patterns::form_dialogs::PdfPresetEvent"
+status = "replaced"
+note = "`Saved(PdfPreset)`, `Renamed { from, to }`, `Deleted(String)`: what the legacy `take_preset` and the preset manager did, reported for the app to store."
+
+[[type]]
+name = "PdfSection"
+old = ""
+new = "craft_ui::patterns::form_dialogs::PdfSection"
+status = "replaced"
+note = "The seven sections of the page list (General, Compression, Marks, Output, Advanced, Security, Summary)."
+
+[[setter]]
+type = "PdfExportDialog"
+old = "new(app, file_name)"
+new = "new(app, settings: Bind<PdfSettings>)"
+note = "The file name belongs to the app's save picker; the settings are the binding."
+
+[[setter]]
+type = "PdfExportDialog"
+old = "initial(settings: PdfSettings)"
+new = "new(app, Bind::bound(&mut settings))"
+note = "The bound value is the dialog's settings."
+
+[[setter]]
+type = "PdfExportDialog"
+old = "preset(name: impl Into<String>)"
+new = "preset(name: impl Into<String>)"
+note = "Unchanged."
+
+[[setter]]
+type = "PdfExportDialog"
+old = "saved_presets(presets: Vec<PdfPreset>)"
+new = "saved_presets(presets: &[PdfPreset])"
+
+[[setter]]
+type = "PdfExportDialog"
+old = "flattener_presets(names: Vec<String>)"
+new = "flattener_presets(names: &[String])"
+
+[[setter]]
+type = "PdfExportDialog"
+old = "profiles(names: Vec<String>, catalog: Arc<dyn ProfileCatalog + Send + Sync>)"
+new = "profiles(names: &[String]) and catalog(&dyn ProfileCatalog)"
+note = "Two setters."
+
+[[setter]]
+type = "PdfExportDialog"
+old = "color_mode(mode: ColorMode)"
+new = "color_mode(mode: ColorMode)"
+note = "Unchanged."
+
+[[setter]]
+type = "PdfExportDialog"
+old = "length_unit(unit: LengthUnit)"
+new = "length_unit(unit: UnitKind)"
+note = "`UnitKind` replaces the legacy `LengthUnit`; kinds that are not lengths show points."
+
+[[setter]]
+type = "PdfExportDialog"
+old = "document_bleed(bleed: [f64; 4])"
+new = "document_bleed(bleed: [f64; 4])"
+note = "Unchanged."
+
+[[setter]]
+type = "PdfExportDialog"
+old = "artboards(artboards: PdfArtboards)"
+new = "artboards(artboards: PdfArtboards)"
+note = "Unchanged."
+
+[[setter]]
+type = "PdfExportDialog"
+old = "artboard_count(count: usize)"
+new = "artboard_count(count: usize)"
+note = "Takes an `Option<usize>` field; the setter takes the count."
+
+[[setter]]
+type = "PdfExportDialog"
+old = "settings()"
+new = "the Bind passed to new"
+note = "Read the bound value, or `PdfExportOutput.settings` for a binding that does not write through."
+
+[[setter]]
+type = "PdfExportDialog"
+old = "take_preset()"
+new = "PdfExportOutput.presets"
+note = "Events: `Saved`, `Renamed`, `Deleted`."

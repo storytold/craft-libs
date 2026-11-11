@@ -1,0 +1,5 @@
+# API map of the "Keymap UI: view" family: the Keyboard Shortcuts dialog's table model and body.
+# Both modules are crate-private in craft-menu; apps saw only the dialog (keymap-ui.toml).
+
+family = "Keymap UI: view"
+new_module = "craft_menu::shortcuts"

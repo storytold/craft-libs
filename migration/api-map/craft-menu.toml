@@ -1,0 +1,113 @@
+# API map of the "Menus (craft-menu)" family: the in-window bar, context rows and help entries.
+
+family = "Menus (craft-menu)"
+new_module = "craft_menu"
+
+[[type]]
+name = "MenuBarUi"
+old = "craft_menu::MenuBarUi"
+new = "craft_menu::MenuBarUi"
+status = "same"
+
+[[type]]
+name = "MenuBarOutput"
+old = "craft_menu::MenuBarOutput"
+new = "craft_menu::MenuBarOutput"
+status = "same"
+note = "The `commands` field is gone: a choice is a `Fired` with `FireSource::Menu` in `FrameOutput.fired`."
+
+[[type]]
+name = "BarStyle"
+old = "craft_menu::BarStyle"
+new = ""
+status = "removed"
+note = "The bar's look comes from the theme."
+
+[[type]]
+name = "CommandContextMenu"
+old = "craft_menu::CommandContextMenu"
+new = ""
+status = "removed"
+note = "Show `Menu::context(label, &response)` and call `craft_menu::context::rows(ui, &nodes)` in its body."
+
+[[type]]
+name = "rows"
+old = ""
+new = "craft_menu::context::rows"
+status = "replaced"
+note = "Replaces `CommandContextMenu`: shows model rows as command rows inside a menu body."
+
+[[type]]
+name = "is_open"
+old = "craft_menu::bar::is_open"
+new = ""
+status = "removed"
+note = "Not re-exported: call `craft_ui::menu::bar::is_open`."
+
+[[type]]
+name = "is_focused"
+old = "craft_menu::bar::is_focused"
+new = ""
+status = "removed"
+note = "Not re-exported: call `craft_ui::menu::bar::is_focused`."
+
+[[type]]
+name = "leave_for_shortcut"
+old = "craft_menu::bar::leave_for_shortcut"
+new = ""
+status = "removed"
+note = "The runtime's menu-bar keys decide who gets F10 and Alt."
+
+[[type]]
+name = "WORDS"
+old = "craft_menu::WORDS"
+new = ""
+status = "removed"
+note = "Words register themselves."
+
+[[type]]
+name = "NAVIGATION_COMMANDS"
+old = "craft_menu::NAVIGATION_COMMANDS"
+new = "craft_menu::NAVIGATION_COMMANDS"
+status = "same"
+
+[[setter]]
+type = "MenuBarUi"
+old = "gate(Gate)"
+new = ""
+note = "A `CommandGate` in `FrameInput.commands` forbids commands; the bar's rows read it."
+
+[[setter]]
+type = "MenuBarUi"
+old = "modal_rules(&ModalRules)"
+new = ""
+note = "`ModalRule` on the command definitions."
+
+[[setter]]
+type = "MenuBarUi"
+old = "label(&dyn Fn(&'static str) -> String)"
+new = ""
+note = "The bar's words are `MenuWords`."
+
+[[setter]]
+type = "MenuBarUi"
+old = "style(BarStyle)"
+new = ""
+note = "The bar's look comes from the theme."
+
+[[setter]]
+type = "MenuBarUi"
+old = "shrink_to_fit(f32)"
+new = ""
+note = "The bar fits itself to its room and moves titles that do not fit into an overflow menu."
+
+[[setter]]
+type = "MenuBarUi"
+old = "id(Id)"
+new = ""
+note = "Use `Props::id_salt` on the bar's parent scope."
+
+[[call]]
+old = "MenuBar::palette_entries(&keymap, target, &options, english, os)"
+new = "MenuBar::help_entries(target, &options, english)"
+note = "Returns `craft_ui::menu::HelpEntry`; chords and enabled state come from the commands, so the keymap and operating system arguments go."

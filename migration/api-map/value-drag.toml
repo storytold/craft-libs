@@ -1,0 +1,546 @@
+# API map of the "Value drag" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Value drag"
+new_module = "craft_ui::value_drag"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "Slider"
+old = "craft_ui::controls::slider::Slider"
+new = "craft_ui::value_drag::Slider"
+status = "moved"
+note = "A `Component`: `Slider::new(Bind::bound(&mut value), 0.0..=100.0).label(\"Opacity\").show(ui)`; the id salt, the label (`Common.label`), `size`, `enabled` and the reset value (the binding's) are the common props. The output is `EditResponse<f64>`. `Slider::style(tokens, size)` is gone; the style is `SliderStyle`. The wheel steps a slider only while it is focused or armed (the horizontal share always), so `wheel`, `wheel_unfocused` and `wheel_step` go; the step is `step` for arrows and wheel alike."
+
+[[type]]
+name = "RangeSlider"
+old = "craft_ui::controls::range_slider::RangeSlider"
+new = "craft_ui::value_drag::RangeSlider"
+status = "moved"
+note = "A `Component` over `Bind<(f64, f64)>`, lower end first; the label names the pair and the thumbs are named `<label>, Minimum` and `<label>, Maximum`. The output is `EditResponse<(f64, f64)>`. `labels`, `id_salt` and `width` go with the common props and content sizing."
+
+[[type]]
+name = "SliderScale"
+old = "craft_ui::controls::slider::SliderScale"
+new = "craft_ui::value_drag::SliderScale"
+status = "moved"
+note = "`Linear`, `Log` and `Power(f32)` (the exponent was `f64`). A scale that does not fit the range debug-asserts and stays linear. Both sliders take it with `.scale(..)`."
+
+[[type]]
+name = "SliderStyle"
+old = "craft_ui::controls::slider::SliderStyle"
+new = "craft_ui::value_drag::SliderStyle"
+status = "replaced"
+note = "Read-only style struct of the new component, built from tokens by `ComponentStyle`; the 17 style fields and `with_style` go. The track and fill look is shared with `RangeSlider` and `ThumbRow` (`value_drag::track`)."
+
+[[type]]
+name = "SliderThumb"
+old = "craft_ui::controls::slider::SliderThumb"
+new = "craft_ui::value_drag::SliderThumb"
+status = "moved"
+note = "`Round` and `Triangle`, a prop of `Slider`: `.thumb(SliderThumb::Triangle)`."
+
+[[type]]
+name = "Scale"
+old = "craft_ui::controls::slider::Scale"
+new = ""
+status = "removed"
+note = "Scale maths is private to the sliders. A caller that maps positions to values for its own control uses `ValueDrag::absolute` over `0.0..=1.0` and its own mapping, or a `Slider` with `scale(..)`."
+
+[[type]]
+name = "KEY_FILTER"
+old = "craft_ui::controls::slider::KEY_FILTER"
+new = ""
+status = "removed"
+note = "Key use is the component's `KEYS`: `KeyUse::of(Input::Pointer).with_keep(KeepKeys::BlockArrows).with_activate(ActivateKeys::Neither)`."
+
+[[type]]
+name = "pointer"
+old = "craft_ui::controls::slider::pointer"
+new = ""
+status = "removed"
+note = "A press is `cx.part(key).press`, read in `update` with `ValueDrag::value(start, &press, rtl)`."
+
+[[type]]
+name = "tap"
+old = "craft_ui::controls::slider::tap"
+new = ""
+status = "removed"
+note = "A tap is `PressPhase::Release { click: true, .. }` on a part with `Sense::CLICK`; `ValueDrag::value` gives its value."
+
+[[type]]
+name = "PressTurn"
+old = "craft_ui::controls::slider::PressTurn"
+new = ""
+status = "removed"
+note = "Presses take their turn from the pipeline; a composite that reports several values adopts its children's edits with `cx.adopt`."
+
+[[type]]
+name = "press_turn"
+old = "craft_ui::controls::slider::press_turn"
+new = ""
+status = "removed"
+note = "See `PressTurn`: the edit order is the pipeline's, not a control's."
+
+[[type]]
+name = "Sensing"
+old = "craft_ui::controls::slider::Sensing"
+new = ""
+status = "removed"
+note = "Disabled and read-only are applied by the pipeline; hover and drag state are `cx.part(key)` results; a falling thumb steps with `craft_behavior::nav::step_value`, whose `Forward` follows the reading direction."
+
+[[type]]
+name = "stepped"
+old = "craft_ui::controls::slider::stepped"
+new = ""
+status = "removed"
+note = "Keys are `cx.intents().take_move()` mapped by `craft_behavior::nav::step_value`; the wheel is `cx.take_wheel()`; AccessKit steps are `take_set_value`."
+
+[[type]]
+name = "apply"
+old = "craft_ui::controls::slider::apply"
+new = ""
+status = "removed"
+note = "`ScalarOp` is applied by the component's `update` with `cx.set`; see `stepped`."
+
+[[type]]
+name = "with_values"
+old = "craft_ui::controls::slider::with_values"
+new = ""
+status = "removed"
+note = "Stories keep their values in `StoryData::value(key, initial)`; a host example keeps them in its own state."
+
+[[type]]
+name = "AngleDial"
+old = "craft_ui::controls::angle_dial::AngleDial"
+new = "craft_ui::value_drag::AngleDial"
+status = "moved"
+note = "A leaf `Component` over `Bind<f64>` shown with `Show::show`; the output is `EditResponse<f64>`. The degree field is no longer drawn by the dial: show a `NumberField` bound to the same value beside it. `AngleDial::style(tokens)` and `AngleDialStyle`'s public fields are gone."
+
+[[type]]
+name = "PointPicker"
+old = "craft_ui::controls::point_picker::PointPicker"
+new = "craft_ui::value_drag::PointPicker"
+status = "moved"
+note = "A leaf `Component` over `Bind<[f64; 2]>`; the output is `EditResponse<[f64; 2]>`. The X and Y fields are no longer drawn by the picker: show two `NumberField`s over the same value. `PointPicker::style(tokens)` is gone."
+
+[[type]]
+name = "ThumbRow"
+old = "craft_ui::controls::thumb_row::ThumbRow"
+new = "craft_ui::value_drag::ThumbRow"
+status = "moved"
+note = "A `Component` over `Bind<[f64; N]>` returning `EditResponse<[f64; N]>`; thumbs, step, wrap and anchor are props."
+
+[[type]]
+name = "AngleOrientation"
+old = "craft_ui::controls::angle_dial::AngleOrientation"
+new = "craft_ui::value_drag::AngleOrientation"
+status = "moved"
+note = "Same two variants; the enum is `#[non_exhaustive]`."
+
+[[type]]
+name = "Pointing"
+old = "craft_ui::controls::angle_dial::Pointing"
+new = ""
+status = "removed"
+note = "Private pointer-to-angle maths of the dial; no public type."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+
+[[type]]
+name = "ThumbRowStyle"
+old = "craft_ui::controls::thumb_row::ThumbRowStyle"
+new = "craft_ui::value_drag::ThumbRowStyle"
+status = "replaced"
+note = "A `ComponentStyle` built from tokens; apps no longer build one and pass it to `show`."
+
+[[type]]
+name = "ThumbRowLabels"
+old = "craft_ui::controls::thumb_row::ThumbRowLabels"
+new = ""
+status = "removed"
+note = "The half names are `ValueDragWords::thumb_low` and `thumb_high` of the words system."
+
+[[type]]
+name = "ThumbRowOutput"
+old = "craft_ui::controls::thumb_row::ThumbRowOutput"
+new = "craft_ui::value_drag::ThumbRowOutput"
+status = "moved"
+note = "`ThumbRowOutput { edit: EditResponse<[Mixed<f64>; N]>, held: Option<ThumbHold> }`. `edit.shown` is the bound value; `held` names the thumb being dragged and the modifiers held (Alt on a `Thumb::alt_reports` thumb); `dragged` and `ops` have no counterpart (the row applies its operations itself)."
+
+[[type]]
+name = "ThumbHold"
+old = ""
+new = "craft_ui::value_drag::ThumbHold"
+status = "replaced"
+note = "The drag in progress: `thumb` index and the `Mods` held. Read from the row's own drag memory."
+
+[[type]]
+name = "Thumb"
+old = "craft_ui::controls::thumb_row::Thumb"
+new = "craft_ui::value_drag::Thumb"
+status = "moved"
+note = "Built with `Thumb::new(label)` and `.face(DataColor)`; passed through `ThumbRow::thumbs`. New: `.alt_reports()`: Alt on this thumb is reported in `ThumbRowOutput::held` and is not the fine scale (a levels black or white point, where Alt shows clipping)."
+
+[[type]]
+name = "Order"
+old = "craft_ui::controls::thumb_row::Order"
+new = "craft_ui::value_drag::Order"
+status = "moved"
+note = "`Order::between(below, above, gap)` replaces the struct-like variant constructor."
+
+[[type]]
+name = "Follow"
+old = "craft_ui::controls::thumb_row::Follow"
+new = "craft_ui::value_drag::Follow"
+status = "moved"
+note = "`Follow::new(at, value_at)`."
+
+[[type]]
+name = "RowRules"
+old = "craft_ui::controls::thumb_row::RowRules"
+new = "craft_ui::value_drag::RowRules"
+status = "moved"
+note = "Borrows the row's thumbs; get it from `ThumbRow::rules()`. `placed` and `apply` stay."
+
+[[type]]
+name = "RowOp"
+old = "craft_ui::controls::thumb_row::RowOp"
+new = "craft_ui::value_drag::RowOp"
+status = "moved"
+note = "`RowOp::new(thumb, ThumbOp)`; `ThumbOp` is `Move(NavMove, MoveMods)` or `Set(f64)` and replaces `ScalarOp`."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+# [[setter]]
+# type = ""
+# old = ""
+# new = ""
+
+# One entry per renamed, removed or reshaped setter or constructor.
+
+[[type]]
+name = "TrackFace"
+old = ""
+new = "craft_ui::value_drag::TrackFace"
+status = "replaced"
+note = "New: `TrackFace::new(component)` wraps a component that is shown as the look of the groove; pass it to `Slider::track_face` or `RangeSlider::track_face`."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+
+[[setter]]
+type = "Slider"
+old = "new(id_salt, label, value, range)"
+new = "new(Bind<f64>, RangeInclusive<f64>)"
+note = "The id salt is the shown id; the label is `.label(..)`; the value is `Bind::bound(&mut value)`; the range is `f64`."
+
+[[setter]]
+type = "Slider"
+old = "step(impl Into<f64>)"
+new = "step(f64)"
+note = "Also the stops a drag or a key snaps to, and the wheel's step."
+
+[[setter]]
+type = "Slider"
+old = "scale(SliderScale)"
+new = "scale(SliderScale)"
+
+[[setter]]
+type = "Slider"
+old = "policy(EditPolicy)"
+new = ""
+note = "The binding decides when edits apply: `Bind::bound` applies each update; `Bind::given` with the output's events applies on commit."
+
+[[setter]]
+type = "Slider"
+old = "size(ControlSize)"
+new = "size(ControlSize)"
+
+[[setter]]
+type = "Slider"
+old = "enabled(bool)"
+new = "enabled(bool)"
+
+[[setter]]
+type = "Slider"
+old = "default_value(impl Into<f64>)"
+new = ""
+note = "The reset value is the binding's: `Bind::bound(..).reset(value)`."
+
+[[setter]]
+type = "Slider"
+old = "wheel(bool)"
+new = ""
+note = "A slider takes the wheel while focused or armed, and the horizontal share always (core 8.6)."
+
+[[setter]]
+type = "Slider"
+old = "wheel_unfocused(bool)"
+new = ""
+note = "See `wheel(bool)`."
+
+[[setter]]
+type = "Slider"
+old = "wheel_step(f64)"
+new = "step(f64)"
+note = "The wheel moves one step, as an arrow key does."
+
+[[setter]]
+type = "Slider"
+old = "value_text(impl Into<String>)"
+new = "value_text(impl Into<Label>)"
+note = "Sets the text assistive technology reads in place of the number; the legacy setter never painted it."
+
+[[setter]]
+type = "Slider"
+old = "part(bool)"
+new = ""
+note = "A composite adopts its children's edits with `cx.adopt`."
+
+[[setter]]
+type = "Slider"
+old = "width(f32)"
+new = ""
+note = "A slider's length is content (eight icon sides) or the width its container gives it."
+
+[[setter]]
+type = "Slider"
+old = "track_colors(impl IntoIterator<Item = impl Into<Srgba>>)"
+new = "track_face(TrackFace)"
+note = "The colour picker shows a gradient component as the groove with `TrackFace::new(..)`; a face replaces the fill."
+
+[[setter]]
+type = "Slider"
+old = "fill(bool)"
+new = "fill(bool)"
+note = "A prop, on by default."
+
+[[setter]]
+type = "Slider"
+old = "marks(&[f64])"
+new = "marks(&[f64])"
+note = "Marks are snap targets within half a thumb of the pointer and are drawn under the track."
+
+[[setter]]
+type = "Slider"
+old = "marks_labelled(impl IntoIterator<Item = (f64, impl Into<String>)>)"
+new = "marks_labelled(impl IntoIterator<Item = (f64, impl Into<Label>)>)"
+note = "Captions are drawn under the marks and add one caption line to the height."
+
+[[setter]]
+type = "Slider"
+old = "ticks(usize)"
+new = "ticks(usize)"
+note = "A prop: count + 1 evenly spaced ticks under the track, no snapping."
+
+[[setter]]
+type = "Slider"
+old = "thumb(SliderThumb)"
+new = "thumb(SliderThumb)"
+note = "A prop."
+
+[[setter]]
+type = "RangeSlider"
+old = "new(id_salt, (label_from, label_to), value, range)"
+new = "new(Bind<(f64, f64)>, RangeInclusive<f64>)"
+note = "One label for the pair, `.label(..)`; the thumbs add \"Minimum\" and \"Maximum\" to it."
+
+[[setter]]
+type = "RangeSlider"
+old = "step(f64)"
+new = "step(f64)"
+
+[[setter]]
+type = "RangeSlider"
+old = "width(f32)"
+new = ""
+note = "The length is content or the container's width."
+
+[[setter]]
+type = "RangeSlider"
+old = "policy(EditPolicy)"
+new = ""
+note = "See `Slider::policy`."
+
+[[setter]]
+type = "RangeSlider"
+old = "size(ControlSize)"
+new = "size(ControlSize)"
+
+[[setter]]
+type = "RangeSlider"
+old = "enabled(bool)"
+new = "enabled(bool)"
+
+[[setter]]
+type = "AngleDial"
+old = "AngleDial::new(id_salt, label, value, numbers)"
+new = "AngleDial::new(Bind::bound(&mut value)).label(label)"
+note = "The id salt and the numbers writer are no longer arguments; the scope's `Format` writes numbers."
+
+[[setter]]
+type = "AngleDial"
+old = "range(RangeInclusive<f64>)"
+new = "range(RangeInclusive<f64>)"
+note = "Same; bounds that are not finite give the default turn."
+
+[[setter]]
+type = "AngleDial"
+old = "wrap(bool)"
+new = "wrap(bool)"
+note = "Same."
+
+[[setter]]
+type = "AngleDial"
+old = "step(f64)"
+new = "step(f64)"
+note = "Same."
+
+[[setter]]
+type = "AngleDial"
+old = "orientation(AngleOrientation)"
+new = "orientation(AngleOrientation)"
+note = "Same."
+
+[[setter]]
+type = "AngleDial"
+old = "policy(EditPolicy)"
+new = "Bind::policy(EditPolicy)"
+note = "The write policy is the binding's."
+
+[[setter]]
+type = "AngleDial"
+old = "size(ControlSize)"
+new = "size(ControlSize)"
+note = "A common setter; the dial's diameter follows the control height."
+
+[[setter]]
+type = "AngleDial"
+old = "enabled(bool)"
+new = "enabled(bool)"
+note = "A common setter."
+
+[[setter]]
+type = "AngleDial"
+old = "field(bool)"
+new = ""
+note = "Removed: the dial draws no field. Show a `NumberField` beside it for the degrees."
+
+[[setter]]
+type = "PointPicker"
+old = "PointPicker::new(id_salt, label, value, image)"
+new = "PointPicker::new(Bind::bound(&mut value), x_range, y_range).label(label)"
+note = "The image is painted by `backdrop(|painter, plot| ..)` with `aspect(width / height)` to fit it in the well."
+
+[[setter]]
+type = "PointPicker"
+old = "range(RangeInclusive<f64>, Unit)"
+new = "PointPicker::new(value, x_range, y_range)"
+note = "Each axis has its range; the unit belongs to the `NumberField`s."
+
+[[setter]]
+type = "PointPicker"
+old = "decimals(usize)"
+new = "step(f64)"
+note = "The point snaps to the step; without one it is continuous."
+
+[[setter]]
+type = "PointPicker"
+old = "policy(EditPolicy)"
+new = "Bind::policy(EditPolicy)"
+note = "The write policy is the binding's."
+
+[[setter]]
+type = "PointPicker"
+old = "enabled(bool)"
+new = "enabled(bool)"
+note = "A common setter."
+
+[[setter]]
+type = "ThumbRow"
+old = "new(id_salt, [f64; N], &RangeInclusive<f64>, Option<f64>, [Thumb; N])"
+new = "new(Bind<[f64; N]>, RangeInclusive<f64>).step(f64).thumbs([Thumb; N])"
+note = "The id comes from `id_salt` of `Props`; the value is a binding."
+
+[[setter]]
+type = "ThumbRow"
+old = "wrap(f64)"
+new = "wrap(bool)"
+note = "The period is the length of the range."
+
+[[setter]]
+type = "ThumbRow"
+old = "wrap_from(f64, usize, f64)"
+new = "anchor(Anchor::new(usize, f64))"
+note = "Implies `wrap(true)`."
+
+[[setter]]
+type = "ThumbRow"
+old = "width(f32)"
+new = ""
+note = "The row takes the width its parent gives it."
+
+[[setter]]
+type = "ThumbRow"
+old = "policy(EditPolicy)"
+new = ""
+note = "The edit policy belongs to the binding."
+
+[[setter]]
+type = "ThumbRow"
+old = "enabled(bool)"
+new = "enabled(bool)"
+note = "From `Props`."
+
+[[setter]]
+type = "ThumbRow"
+old = "part(bool)"
+new = ""
+note = "A composite binds the same array; there is no edit order to take turns in."
+
+[[setter]]
+type = "ThumbRow"
+old = "row_rules()"
+new = "rules()"
+
+[[setter]]
+type = "ThumbRow"
+old = "ThumbRow::rules(&RangeInclusive<f64>, Option<f64>, &[Thumb; N])"
+new = "ThumbRow::rules(&self)"
+note = "Built from a row value."
+
+[[setter]]
+type = "Thumb"
+old = "Thumb::new(label, Color32)"
+new = "Thumb::new(label).face(DataColor)"
+
+[[setter]]
+type = "Thumb"
+old = "default_value(f64)"
+new = ""
+note = "A reset restores the binding's reset value (`Bind::reset`) for the whole row; a thumb has no default of its own."
+
+[[setter]]
+type = "RangeSlider"
+old = "marks(&[f64])"
+new = "marks(&[f64])"
+note = "New on the range slider; a thumb near a mark snaps to it."
+
+[[setter]]
+type = "RangeSlider"
+old = "marks_labelled(..)"
+new = "marks_labelled(impl IntoIterator<Item = (f64, impl Into<Label>)>)"
+note = "New on the range slider."
+
+[[setter]]
+type = "RangeSlider"
+old = "ticks(usize)"
+new = "ticks(usize)"
+note = "New on the range slider."
+
+[[setter]]
+type = "RangeSlider"
+old = "track_face(TrackFace)"
+new = "track_face(TrackFace)"
+note = "New on the range slider."

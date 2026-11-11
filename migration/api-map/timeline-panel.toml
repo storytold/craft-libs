@@ -1,0 +1,141 @@
+# API map of the "Timeline: panel" family: the Timeline panel, its time view and its track stack.
+
+family = "Timeline: panel"
+new_module = "craft_timeline::ui"
+
+[[type]]
+name = "Timeline"
+old = "craft_timeline::ui::panel::Timeline"
+new = "craft_timeline::ui::Timeline"
+status = "moved"
+note = "A `Pattern`: `Timeline::new(label, &mut model)` with `show(ui)`; `follow(mode, playing)` stays."
+
+[[type]]
+name = "TimelineEdit"
+old = "craft_timeline::ui::panel::TimelineEdit"
+new = "craft_timeline::ui::TimelineEdit"
+status = "moved"
+note = "`WorkArea` carries `EditEvent<Option<TimeRange>>`; gestures are the new `EditEvent` shapes."
+
+[[type]]
+name = "TimelineOutput"
+old = "craft_timeline::ui::panel::TimelineOutput"
+new = "craft_timeline::ui::TimelineOutput"
+status = "moved"
+note = "`response`, `edits` and `toolbar`; `row_at_pointer` and `time_area` are gone (a drop target is a `DropTarget` on the stack)."
+
+[[type]]
+name = "TimelineToolbar"
+old = "craft_timeline::ui::panel::TimelineToolbar"
+new = "craft_timeline::ui::TimelineToolbar"
+status = "moved"
+note = "The toggles are `EditResponse<bool>`."
+
+[[type]]
+name = "TrackSwitch"
+old = "craft_timeline::ui::panel::TrackSwitch"
+new = "craft_timeline::ui::TrackSwitch"
+status = "moved"
+
+[[type]]
+name = "TimelineLabels"
+old = "craft_timeline::ui::panel::TimelineLabels"
+new = ""
+status = "removed"
+note = "Words are `TimelineWords`, read with `cx.words::<TimelineWords>()`."
+
+[[type]]
+name = "TrackHeader"
+old = "craft_timeline::ui::panel::TrackHeader"
+new = ""
+status = "removed"
+note = "The header is the header cells of a `TrackRow`."
+
+[[type]]
+name = "TrackHeaderOutput"
+old = "craft_timeline::ui::panel::TrackHeaderOutput"
+new = ""
+status = "removed"
+note = "A row reports a `TrackEvent`; switches are the collection's `Toggle` events."
+
+[[type]]
+name = "HeaderExtra"
+old = "craft_timeline::ui::panel::HeaderExtra"
+new = ""
+status = "removed"
+note = "An app adds header content as extra columns."
+
+[[type]]
+name = "TimelineStyle"
+old = "craft_timeline::ui::style::TimelineStyle"
+new = ""
+status = "removed"
+note = "Each component builds its own style from tokens; `TrackSizes` holds the track and header sizes."
+
+[[type]]
+name = "TimelineView"
+old = ""
+new = "craft_timeline::ui::TimelineView"
+status = "replaced"
+note = "The container that binds the `TimeView` and publishes the `TimeAxis`."
+
+[[type]]
+name = "TimeAxis"
+old = ""
+new = "craft_timeline::ui::TimeAxis"
+status = "replaced"
+note = "The one time mapping, read with `time_axis(&env)`."
+
+[[type]]
+name = "TrackStack"
+old = ""
+new = "craft_timeline::ui::TrackStack"
+status = "replaced"
+note = "One collection of the tracks of a pane."
+
+[[type]]
+name = "TrackRow"
+old = ""
+new = "craft_timeline::ui::TrackRow"
+status = "replaced"
+note = "One track: header cells and the lane's clip parts."
+
+[[type]]
+name = "TimelineWords"
+old = ""
+new = "craft_timeline::ui::TimelineWords"
+status = "replaced"
+note = "The panel's words, keeping the `timeline.*` ids of `TimelineLabels`."
+
+[[setter]]
+type = "Timeline"
+old = "palette(&LabelPalette)"
+note = "removed: the palette is the `LabelPalette` env value."
+
+[[setter]]
+type = "Timeline"
+old = "labels(TimelineLabels)"
+note = "removed: words are `TimelineWords`."
+
+[[setter]]
+type = "Timeline"
+old = "header_width(f32)"
+new = "header_width(f32)"
+note = "The name column's width; the headers' extent adds the strip and the switch columns."
+
+[[setter]]
+type = "Timeline"
+old = "content(FnMut(&Painter, Rect, &ClipInfo))"
+new = "content(Fn(&ContentPainterCx, Rect, &ClipInfo))"
+note = "A named closure prop, `ClipContent`."
+
+[[setter]]
+type = "Timeline"
+old = "header_extra(FnMut(&mut Ui, &TrackInfo))"
+note = "removed: extra header content is an extra column."
+
+[[setter]]
+type = "Timeline"
+old = "new(id_salt, &mut model)"
+new = "new(label, &mut model)"
+note = "The label names the time area."

@@ -1,0 +1,249 @@
+# API map of the "Display and status" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Display and status"
+new_module = "craft_ui::display"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "Badge"
+old = "craft_ui::controls::badge::Badge"
+new = "craft_ui::display::Badge"
+status = "moved"
+note = "A `Component` shown with `Show::show`: `ui.add(Badge::new(..))` becomes `Badge::new(..).show(ui)`. The tone and the fill style are one `Variant`: `Variant::look(Emphasis::Soft, Tone::Good)` or `Emphasis::Solid`; Neutral soft is the default."
+
+[[type]]
+name = "BadgeTone"
+old = "craft_theme::BadgeTone"
+new = ""
+status = "replaced"
+note = "Neutral, Accent, Good, Warn, Bad and Info are the `Tone`s of the same names in `Variant::look(emphasis, tone)`."
+
+[[type]]
+name = "BadgeStyle"
+old = "craft_theme::BadgeStyle"
+new = "craft_ui::display::BadgeStyle"
+status = "moved"
+note = "The enum Soft and Solid is `Emphasis::Soft` and `Emphasis::Solid` in `Variant::look(emphasis, tone)`; `craft_ui::display::BadgeStyle` is the read-only style struct of a badge."
+
+[[type]]
+name = "Kbd"
+old = "craft_ui::controls::kbd::Kbd"
+new = "craft_ui::display::Kbd"
+status = "moved"
+note = "A `Component` shown with `Show::show`. The chord is text written by `craft_keymap::Chord::display(platform)`, or the chord of a bound command: `Kbd::command(command)`. There is no `KeyboardShortcut` or `OperatingSystem` input, no `Kbd::parts`, `text`, `text_in` or `spoken`."
+
+[[type]]
+name = "Progress"
+old = "craft_ui::controls::progress::Progress"
+new = "craft_ui::display::Progress"
+status = "moved"
+note = "A `Component` shown with `Show::show`. The accessible name is `.label(..)`; the percentage AccessKit announces is written from the scope's number format. The bar's length is the control height times five; no `width` setter."
+
+[[type]]
+name = "Spinner"
+old = "craft_ui::controls::spinner::Spinner"
+new = "craft_ui::display::Spinner"
+status = "moved"
+note = "A `Component` shown with `Show::show`, or as the face of a part with `ui.face(part, Spinner::new())`. The size is the control size (`.size(ControlSize)`), the colour the variant's text colour; `Content` and `IconSize` are gone."
+
+[[type]]
+name = "SectionLabel"
+old = "craft_ui::composites::section_label::SectionLabel"
+new = ""
+status = "replaced"
+note = "`SectionLabel::new(text).show(ui)` is `Section::fixed(text).strength(HeaderStrength::Caption)`: a caption title in the faint shade."
+
+[[type]]
+name = "Text"
+old = "craft_ui::primitives::text::Text"
+new = "craft_ui::display::Text"
+status = "moved"
+note = "A `Component` shown with `Show::show`. Text is not selectable and takes no focus; `craft_ui::text::SelectableText` is the focusable form. `Text::spans(&[DocRun])` takes the styled spans of `DocText` (font, size, colour, bold, italic, underline, strikethrough, indent) in place of a label's text."
+
+[[type]]
+name = "Icon"
+old = "craft_ui::primitives::icon::Icon"
+new = "craft_ui::display::Icon"
+status = "moved"
+note = "`Icon::new(IconSpec::svg(IconId::new(name)))` in place of `Icon::new(icons::Icon::Name)`. The size is the control size; the ink is `IconSpec::ink`. Decorative unless `.label(..)` names it."
+
+[[type]]
+name = "Divider"
+old = "craft_ui::primitives::divider::Divider"
+new = "craft_ui::display::Divider"
+status = "moved"
+note = "A `Component` shown with `Show::show`; `horizontal()` and `vertical()` are unchanged. Content paint draws a rule with `Draw::rule(RuleKind::Divider, from, to)`."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+
+[[setter]]
+type = "Badge"
+old = "tone(BadgeTone)"
+new = "variant(Variant::look(Emphasis, Tone))"
+
+[[setter]]
+type = "Badge"
+old = "style(BadgeStyle)"
+new = "variant(Variant::look(Emphasis, Tone))"
+note = "Soft and Solid are the emphasis of the variant, set with the tone."
+
+[[setter]]
+type = "Badge"
+old = "new(text: impl Into<String>)"
+new = "new(label: impl Into<Label>)"
+
+[[setter]]
+type = "Badge"
+old = "count(n: u32)"
+new = "count(n: u32)"
+
+[[setter]]
+type = "Badge"
+old = "look(tokens, tone, style)"
+new = ""
+note = "Removed: the look is `BadgeStyle`, read through the style layer."
+
+[[setter]]
+type = "Kbd"
+old = "new(&KeyboardShortcut)"
+new = "new(chord: impl Into<Label>) or command(command)"
+note = "Write the text with `craft_keymap::Chord::display(platform)`, or bind the command and the chord follows the keymap."
+
+[[setter]]
+type = "Kbd"
+old = "keys(&[\"Shift\", \"Click\"])"
+new = "new(\"Shift+Click\")"
+
+[[setter]]
+type = "Kbd"
+old = "keycaps(bool)"
+new = "keycap(bool)"
+note = "One raised box around the whole chord, not one per key."
+
+[[setter]]
+type = "Kbd"
+old = "content(Content)"
+new = ""
+note = "Removed: the chord is in the muted text colour."
+
+[[setter]]
+type = "Kbd"
+old = "os(OperatingSystem)"
+new = ""
+note = "Removed: the chord follows the shell's OS. Text for another platform is `Chord::display(platform)`."
+
+[[setter]]
+type = "Progress"
+old = "indeterminate()"
+new = "indeterminate()"
+
+[[setter]]
+type = "Progress"
+old = "label(impl Into<String>)"
+new = "label(impl Into<Label>)"
+
+[[setter]]
+type = "Progress"
+old = "value_text(impl Into<String>)"
+new = ""
+note = "Removed: the announced percentage is written from the scope's number format."
+
+[[setter]]
+type = "Progress"
+old = "width(f32)"
+new = ""
+note = "Removed: no size prop in points. A bar of another length sits in a `Grid` column or a body that sets the width."
+
+[[setter]]
+type = "Progress"
+old = "style(tokens) and shapes(..)"
+new = ""
+note = "Removed: the look is `ProgressStyle`, painted through `Draw`."
+
+[[setter]]
+type = "Spinner"
+old = "size(IconSize)"
+new = "size(ControlSize)"
+
+[[setter]]
+type = "Spinner"
+old = "content(Content)"
+new = "variant(Variant)"
+note = "The colour is the variant's text colour; the spinner accepts the button variants."
+
+[[setter]]
+type = "Spinner"
+old = "label(impl Into<String>)"
+new = "label(impl Into<Label>)"
+
+[[setter]]
+type = "Spinner"
+old = "Spinner::paint(ui, rect, color)"
+new = "ui.face(part, Spinner::new())"
+note = "Removed: a component that shows a busy mark declares a part for it and paints `Spinner` as that part's face. `Spinner::points` and `Spinner::style` go with it."
+
+[[setter]]
+type = "Text"
+old = "content(Content)"
+new = "shade(Shade)"
+note = "`Content::Normal`, `Muted` and `Faint` are `Shade::Normal`, `Muted` and `Faint`; the other contents are the colours of the component the text sits in."
+
+[[setter]]
+type = "Text"
+old = "role(TypeRole)"
+new = "role(TypeRole)"
+
+[[setter]]
+type = "Text"
+old = "truncate(), elide(ElideAt), elide_path()"
+new = "elide(Elide::End) or elide(Elide::Path)"
+note = "Middle and start elision are not offered."
+
+[[setter]]
+type = "Text"
+old = "italic(), max_width(f32)"
+new = ""
+note = "Removed: no size prop in points; a wrapped line breaks at the room the parent offers."
+
+[[setter]]
+type = "Text"
+old = "Text::format(tokens, role, content)"
+new = ""
+note = "Removed: text paints through `TextRun` and `Draw::text`."
+
+[[setter]]
+type = "Icon"
+old = "size(IconSize)"
+new = "size(ControlSize)"
+
+[[setter]]
+type = "Icon"
+old = "content(Content)"
+new = "IconSpec::ink(Ink)"
+
+[[setter]]
+type = "Icon"
+old = "label(impl Into<String>)"
+new = "label(impl Into<Label>)"
+
+[[setter]]
+type = "Divider"
+old = "follow_content()"
+new = ""
+note = "Removed: a divider measures from the room the parent offers."
+
+[[setter]]
+type = "Divider"
+old = "Divider::paint(painter, from, to, tokens)"
+new = "Draw::rule(RuleKind::Divider, from, to)"
+note = "Removed: content paint draws the line through `Draw::rule`, which snaps it to the pixel grid. `Divider::style` goes with it."
+
+[[type]]
+name = "Picture"
+old = ""
+new = "craft_ui::display::Picture"
+status = "replaced"
+note = "A display leaf over `TextureStore`: `Picture::new(label, key, &|| ColorImage)` with `.revision(Revision)`, `.aspect(ThumbAspect)` and `.extent(PictureSize::Icon | PictureSize::Thumb(ThumbSize))`. Legacy `icon_texture`-style decoders that turned bytes into a texture and drew it with `ui.image` build the `ColorImage` in the closure and show a `Picture`; the image is made once per key and revision."

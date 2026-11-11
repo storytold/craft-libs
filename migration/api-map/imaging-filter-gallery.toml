@@ -1,0 +1,150 @@
+# API map of "imaging: Filter Gallery": old path to new path and setter renames.
+
+family = "imaging: Filter Gallery"
+new_module = "craft_imaging::ui::filter_gallery"
+
+[[type]]
+name = "FilterGalleryWorkspace"
+old = "craft_imaging::ui::filter_gallery::FilterGalleryWorkspace"
+new = "craft_imaging::ui::filter_gallery::FilterGalleryWorkspace"
+status = "replaced"
+note = "A pattern held by the app: `show(ui, catalog, thumbs, thumb_source, source)` with a `FilterGallerySource`; `step(craft_behavior::Step)`. `preview_ready`, `preview_progress`, `preview_failed` and `set_note` are removed: the preview is a `Pending` job the dialog body keeps, and the zoom bar shows its progress and its time."
+
+[[type]]
+name = "FilterGalleryOpen"
+old = "craft_imaging::ui::filter_gallery::FilterGalleryOpen"
+new = "craft_imaging::ui::filter_gallery::FilterGalleryOpen"
+status = "same"
+
+[[type]]
+name = "FilterGalleryEvent"
+old = "craft_imaging::ui::filter_gallery::FilterGalleryEvent"
+new = "craft_imaging::ui::filter_gallery::FilterGalleryEvent"
+status = "same"
+
+[[type]]
+name = "FilterGalleryOutput"
+old = "craft_imaging::ui::filter_gallery::FilterGalleryOutput"
+new = "craft_imaging::ui::filter_gallery::FilterGalleryOutput"
+status = "replaced"
+note = "`preview_wanted`, `outcome` and `rect` are removed: the preview is requested through `FilterGallerySource::render`, and the dialog's result is `dialog: DialogOutput` (`accepted()` for OK)."
+
+[[type]]
+name = "FilterGallerySession"
+old = "craft_imaging::ui::filter_gallery::FilterGallerySession"
+new = "craft_imaging::ui::filter_gallery::FilterGallerySession"
+status = "same"
+
+[[type]]
+name = "EffectLayer"
+old = "craft_imaging::ui::filter_gallery::EffectLayer"
+new = "craft_imaging::ui::filter_gallery::EffectLayer"
+status = "same"
+
+[[type]]
+name = "EffectChange"
+old = "craft_imaging::ui::filter_gallery::EffectChange"
+new = "craft_imaging::ui::filter_gallery::EffectChange"
+status = "same"
+
+[[type]]
+name = "FilterCatalog"
+old = "craft_imaging::ui::filter_gallery::FilterCatalog"
+new = "craft_imaging::ui::filter_gallery::FilterCatalog"
+status = "same"
+
+[[type]]
+name = "FilterCategory"
+old = "craft_imaging::ui::filter_gallery::FilterCategory"
+new = "craft_imaging::ui::filter_gallery::FilterCategory"
+status = "same"
+
+[[type]]
+name = "GalleryFilter"
+old = "craft_imaging::ui::filter_gallery::GalleryFilter"
+new = "craft_imaging::ui::filter_gallery::GalleryFilter"
+status = "same"
+
+[[type]]
+name = "GalleryThumb"
+old = "craft_imaging::ui::filter_gallery::GalleryThumb"
+new = "craft_imaging::ui::filter_gallery::GalleryThumb"
+status = "same"
+
+[[type]]
+name = "FilterTree"
+old = "craft_imaging::ui::filter_gallery::FilterTree"
+new = "craft_imaging::ui::filter_gallery::FilterTree"
+status = "replaced"
+note = "A pattern over `Section` and `TileGrid`: `FilterTree::new(&index, selected, thumbs, source).show(ui)`; the folders' open state is remembered under a `SaveKey` per category."
+
+[[type]]
+name = "FilterTreeResponse"
+old = "craft_imaging::ui::filter_gallery::FilterTreeResponse"
+new = ""
+status = "removed"
+note = "Replaced by `FilterTreeOutput { response, picked }`."
+
+[[type]]
+name = "EffectStack"
+old = "craft_imaging::ui::filter_gallery::EffectStack"
+new = "craft_imaging::ui::filter_gallery::EffectStack"
+status = "replaced"
+note = "A pattern over `List` with an eye toggle column, `ReorderRule` and a `FooterBar::actions` footer: `EffectStack::new(effects, selected, &index).show(ui)`."
+
+[[type]]
+name = "EffectStackResponse"
+old = "craft_imaging::ui::filter_gallery::EffectStackResponse"
+new = ""
+status = "removed"
+note = "Replaced by `EffectStackOutput { response, selected, change }`."
+
+[[type]]
+name = "EffectParameters"
+old = "craft_imaging::ui::filter_gallery::EffectParameters"
+new = "craft_imaging::ui::filter_gallery::EffectParameters"
+status = "replaced"
+note = "A pattern over `Select` and `ParamRows`: `EffectParameters::new(at, effect, &index).show(ui)`."
+
+[[type]]
+name = "EffectParametersResponse"
+old = "craft_imaging::ui::filter_gallery::EffectParametersResponse"
+new = ""
+status = "removed"
+note = "Replaced by `EffectParametersOutput { response, change, pick_color }`; `dragging` is gone."
+
+[[type]]
+name = "FilterGalleryStyle"
+old = "craft_imaging::ui::filter_gallery::FilterGalleryStyle"
+new = ""
+status = "removed"
+note = "The thumbnail shape and the stack's height come from `Tile`, `TileGrid` and `List`."
+
+[[type]]
+name = "FilterGalleryLabels"
+old = "craft_imaging::ui::filter_gallery::FilterGalleryLabels"
+new = ""
+status = "removed"
+note = "Replaced by `FilterGalleryWords`."
+
+[[type]]
+name = "FilterGalleryWords"
+old = ""
+new = "craft_imaging::ui::filter_gallery::FilterGalleryWords"
+status = "replaced"
+note = "The words of the workspace (`words!`, ids `filterGallery.*` unchanged, plus `filterGallery.previewMs`)."
+
+[[type]]
+name = "FilterGallerySource"
+old = ""
+new = "craft_imaging::ui::filter_gallery::FilterGallerySource"
+status = "replaced"
+note = "The app's picture and its preview job: `preview()` is the raster the canvas shows, `render(effects, visible, zoom)` the job that renders it. It replaces the `preview: &dyn RasterSource` argument and `PreviewTicket`."
+
+[[type]]
+name = "FilterIndex"
+old = ""
+new = "craft_imaging::ui::filter_gallery::FilterIndex"
+status = "replaced"
+note = "The catalog read once a pass: folders, filters, labels and the select's entries. It replaces the `labels_of` closures."
+

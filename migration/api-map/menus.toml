@@ -1,0 +1,248 @@
+# API map of the "Menus" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Menus"
+new_module = "craft_ui::menu"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "MenuBar"
+old = "craft_ui::menu::bar::MenuBar"
+new = "craft_ui::menu::MenuBar"
+status = "moved"
+note = "A component with a part per title. `MenuBar::new(label, Vec<MenuTitle>)`; each `MenuTitle::new(label, |ui| rows)` is the menu body the caller writes, replacing the `MenuItem::submenu` tree. The command run is no longer returned: command rows run through the command system."
+
+[[type]]
+name = "PressMenu"
+old = "craft_ui::menu::press::PressMenu"
+new = ""
+status = "replaced"
+note = "A `Menu` shown after its opener: `Menu::new(label, Bind::bound(&mut open)).opened_by(&button).show(ui, |ui, _| ..)`. The caller opens it on the opener's press or click; the held-focus and Escape logic is the overlay host's. `PressMenu::new(entries).show(ui, &button)` over value entries is `Menu::pick(ui, &entries)` with `Entry<T>`; the result is `MenuPick { picked, closed, .. }`. `size`, `min_width`, `scroll_labels` and `keyboard_owner` have no counterpart: the menu sizes to its rows, scrolls itself and returns focus to its opener."
+
+[[type]]
+name = "ContextMenu"
+old = "craft_ui::menu::context::ContextMenu"
+new = ""
+status = "replaced"
+note = "`Menu::context(label, &response, Bind::bound(&mut open))`, shown with the rows as its body; the caller sets `open` from the context request (`CollectionEvent::ContextMenu`, `Intent::ContextMenu`). It hangs from the pointer. `open_at` and `own_gestures` have no counterpart: the menu opens at the pointer, and gestures are the context-request routing's."
+
+[[type]]
+name = "Menu"
+old = "craft_ui::menu::popup::Menu"
+new = "craft_ui::menu::Menu"
+status = "moved"
+note = "A container on a menu layer holding `MenuItem` and `Divider` rows as its body; `Menu::new(label, Bind<bool>)`, `.opened_by(&Response, Trigger)` (called again for each further opener; `.anchor(Anchor)` sets where the opener named last hangs it), `Menu::context`, `Menu::submenu_row(ui, label, body) -> MenuItemOutput` (the one way to show a submenu row inside a menu body), `Menu::submenu(label, &row_response, Bind<bool>)`, `Menu::inline(label)` for the rows of a control that owns its popup, `Menu::pick(ui, &[Entry<T>])` for a value menu. Output `MenuOutput { response, closed }`. The deprecated `craft_ui::combo::Menu` is removed: use `Menu` or `Select`."
+
+[[type]]
+name = "MenuItem"
+old = "craft_ui::menu::item::MenuItem"
+new = "craft_ui::menu::MenuItem"
+status = "moved"
+note = "A leaf row shown in a `Menu` body: `MenuItem::new(label)`, `MenuItem::command(command)`, `MenuItem::submenu(label)`. The legacy `MenuItem::new(label, command)` carried the app command value: the row now reports `MenuItemOutput.ran` and the caller acts, or a command row fires through the command queue. `Menu` items nest as `Menu::submenu` shown after the `MenuItem::submenu` row, opened when `MenuItemOutput.opens_submenu` is true."
+
+[[type]]
+name = "MenuEntry"
+old = "craft_ui::menu::item::MenuEntry"
+new = ""
+status = "replaced"
+note = "`MenuEntry::Item` is a `MenuItem` row and `MenuEntry::Separator` is `Divider::horizontal()`; a list of value entries is `&[Entry<T>]` (`craft_ui::contract::Entry`) shown with `Menu::pick`."
+
+[[type]]
+name = "ItemKind"
+old = "craft_ui::menu::item::ItemKind"
+new = ""
+status = "replaced"
+note = "Check and radio rows are `MenuItem::check(bool)` and `MenuItem::radio(bool)`; a plain row sets neither."
+
+[[type]]
+name = "MenuResponse"
+old = "craft_ui::menu::popup::MenuResponse"
+new = ""
+status = "replaced"
+note = "`MenuOutput { response, closed }`, or `MenuPick<T> { response, closed, picked }` from `Menu::pick`; a row's own result is `MenuItemOutput { response, ran, opens_submenu }`."
+
+[[type]]
+name = "MenuStyle"
+old = "craft_ui::menu::row::MenuStyle"
+new = "craft_ui::menu::MenuStyle"
+status = "replaced"
+note = "Read-only style structs: `MenuStyle` for the container, `MenuItemStyle` for a row; `MenuStyle::style(tokens, size)` is gone."
+
+[[type]]
+name = "OpenAt"
+old = "craft_ui::menu::context::OpenAt"
+new = ""
+status = "removed"
+note = "A context menu hangs from the pointer: `Menu::context`."
+
+[[type]]
+name = "any_open"
+old = "craft_ui::menu::popup::any_open"
+new = ""
+status = "replaced"
+note = "`craft_ui::contract::overlay::any_open(ctx, OpenFilter)` asks the layer stack."
+
+[[type]]
+name = "facts_id"
+old = "craft_ui::menu::facts::facts_id"
+new = ""
+status = "removed"
+note = "Menu facts are read from the AccessKit tree and the story output, not from a stored id."
+
+[[type]]
+name = "mnemonics"
+old = "craft_ui::menu::mnemonic::mnemonics"
+new = ""
+status = "replaced"
+note = "Mnemonics follow the keyboard: the letters underline while the keyboard drives a menu, never on macOS. The assignment is `craft_keymap::mnemonic::assign`."
+
+[[type]]
+name = "set_mnemonics"
+old = "craft_ui::menu::mnemonic::set_mnemonics"
+new = ""
+status = "removed"
+note = "The underline is shown by the menu itself; there is no app switch."
+
+[[type]]
+name = "EditMenu"
+old = "craft_ui::behavior::edit_menu::EditMenu"
+new = "craft_ui::menu::EditMenu"
+status = "replaced"
+note = "A pattern: `EditMenu::show(ui)` shows `MenuItem::command` rows over `EditCommands` in the body of the text control's `Menu::context`. `install`, `labels`, `labels_of`, `before_text_edit` and `after_text_edit` are removed: labels come from the commands, and the text adapter applies the commands. The Delete row has no command."
+
+[[type]]
+name = "PanelMenu"
+old = "craft_ui::docking::panel_menu::PanelMenu"
+new = "craft_ui::menu::PanelMenu"
+status = "replaced"
+note = "A pattern over owned rows: `PanelMenu::new(host: Vec<PanelRow>, group: Vec<PanelRow>)`, `show(ui) -> PanelMenuOutput` in the body of a `Menu`. `group_entries` is removed: the dock's rows are `PanelRow::Command` rows of `craft_ui::docking::DockCommands`, and `GroupItem` keeps only the rows a command cannot name (Move Panel To targets, the column rows). Host rows are `PanelRow::Command(CommandRef)`. `show_context` and `menu_under` are removed: the caller opens the `Menu`."
+
+[[type]]
+name = "MenuBarLabels"
+old = "craft_ui::menu::bar::MenuBarLabels"
+new = ""
+status = "removed"
+note = "Replaced by the word set `craft_ui::menu::MenuBarWords`, read from the scope's words; `more`, `all`, `search` and `no_matches` remain, `clear` and the scroll labels belong to the controls that show them."
+
+[[type]]
+name = "MenuBarResponse"
+old = "craft_ui::menu::bar::MenuBarResponse"
+new = ""
+status = "removed"
+note = "Replaced by `craft_ui::menu::MenuBarOutput`: `response`, `open` and `titles` remain; `chosen` and `focused` are removed (command rows run themselves; `bar::is_focused` reads the focus)."
+
+[[type]]
+name = "is_open"
+old = "craft_ui::menu::bar::is_open"
+new = "craft_ui::menu::bar::is_open"
+status = "same"
+note = "Takes the `egui::Context`; true while a menu of a bar is open."
+
+[[type]]
+name = "is_focused"
+old = "craft_ui::menu::bar::is_focused"
+new = "craft_ui::menu::bar::is_focused"
+status = "same"
+
+[[type]]
+name = "leave_for_shortcut"
+old = "craft_ui::menu::bar::leave_for_shortcut"
+new = ""
+status = "removed"
+note = "The bar's titles hold real focus, so a command shortcut runs while they do, as for every focused component."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+[[type]]
+name = "HelpEntry"
+old = ""
+new = "craft_ui::menu::search::HelpEntry"
+status = "pending"
+
+[[type]]
+name = "search_order"
+old = ""
+new = "craft_ui::menu::search::search_order"
+status = "pending"
+
+[[setter]]
+type = "MenuItem"
+old = "shortcut(Kbd)"
+new = "shortcut(impl Into<Label>)"
+note = "Shortcut text; a command row shows its chord."
+
+[[setter]]
+type = "MenuItem"
+old = "check(bool)"
+new = "check(bool)"
+note = "Same call; the row reserves the mark column and the caller flips the value when the row runs."
+
+[[setter]]
+type = "MenuItem"
+old = "english(impl Into<String>)"
+new = ""
+note = "Removed: a label without an ASCII letter shows the level's assigned letter in parentheses after it."
+
+[[setter]]
+type = "MenuItem"
+old = "keep_open(bool)"
+new = ""
+note = "Not built: the contract has no way to run a row without closing the menu chain (see the track report)."
+
+[[setter]]
+type = "MenuItem"
+old = "tooltip(impl Into<String>)"
+new = "tooltip(..)"
+note = "`Props::tooltip` takes a `TooltipSpec`."
+
+[[setter]]
+type = "MenuItem"
+old = "accessible_name(impl Into<String>)"
+new = ""
+note = "The label is the name; a longer description is `Props::description`."
+
+# [[setter]]
+# type = ""
+# old = ""
+# new = ""
+
+[[setter]]
+type = "MenuBar"
+old = "MenuBar::new(&[MenuItem<T>])"
+new = "MenuBar::new(label, Vec<MenuTitle>)"
+
+[[setter]]
+type = "MenuBar"
+old = "shrink_to_fit(f32)"
+new = ""
+
+[[setter]]
+type = "MenuBar"
+old = "help_search(usize)"
+new = "help(MenuHelp::new(usize, &[HelpEntry]))"
+
+[[setter]]
+type = "MenuBar"
+old = "keyboard(bool)"
+new = "keyboard(bool)"
+
+[[setter]]
+type = "MenuBar"
+old = "text_editing(bool)"
+new = ""
+
+[[setter]]
+type = "MenuBar"
+old = "labels(&MenuBarLabels)"
+new = ""
+
+[[setter]]
+type = "MenuBar"
+old = "size(ControlSize)"
+new = ""
+
+[[setter]]
+type = "MenuBar"
+old = "id(Id)"
+new = ""

@@ -1,0 +1,116 @@
+# API map of the "imaging: Liquify" family: the Liquify workspace, its panel, canvas tool, keys and words.
+
+family = "imaging: Liquify"
+new_module = "craft_imaging::ui::liquify"
+
+[[type]]
+name = "LiquifyWorkspace"
+old = "craft_imaging::ui::liquify::LiquifyWorkspace"
+new = "craft_imaging::ui::liquify::LiquifyWorkspace"
+status = "replaced"
+note = "A pattern the app holds: `show(ui, source)` takes a `Ui` (was a `Context`) and reports `closed: Option<DialogRole>` (was `outcome`), `response` (was `rect`) and `cursor`; `zoom(FullWindowZoomKeys)` queues the app's fired zoom command; `step(craft_behavior::Step)` is the app's Undo and Redo. The view, the strip's memory and the stroke in progress live in the dialog body."
+
+[[type]]
+name = "LiquifyPanel"
+old = "craft_imaging::ui::liquify::LiquifyPanel"
+new = "craft_imaging::ui::liquify::LiquifyPanel"
+status = "replaced"
+note = "A pattern over `Bind<LiquifySettings>`: `LiquifyPanel::new(Bind::bound(&mut settings)).layers(&layers).show(ui)`; it takes no id salt and no labels."
+
+[[type]]
+name = "LiquifyPanelOutput"
+old = "craft_imaging::ui::liquify::LiquifyPanelOutput"
+new = "craft_imaging::ui::liquify::LiquifyPanelOutput"
+status = "replaced"
+note = "Gains an `Outcome` impl; `edit` is an `craft_behavior::EditEvent<LiquifySettings>`."
+
+[[type]]
+name = "LiquifyKeys"
+old = "craft_imaging::ui::liquify::LiquifyKeys"
+new = ""
+status = "removed"
+note = "Replaced by the command set `LiquifyCommands`, taken in the dialog's scope."
+
+[[type]]
+name = "LiquifyLabels"
+old = "craft_imaging::ui::liquify::LiquifyLabels"
+new = ""
+status = "removed"
+
+[[type]]
+name = "LiquifyWords"
+old = ""
+new = "craft_imaging::ui::liquify::LiquifyWords"
+status = "replaced"
+note = "`words!` rows under the same `liquify.*` ids; the tool names are the labels of `LiquifyCommands`, and OK and Cancel are the footer's shared words."
+
+[[type]]
+name = "LiquifyStyle"
+old = "craft_imaging::ui::liquify::LiquifyStyle"
+new = ""
+status = "removed"
+note = "The lasso colours come from `LassoLine`'s style; the mask tint is the data constant `FREEZE_MASK_TINT`."
+
+[[type]]
+name = "LiquifyCanvas"
+old = "craft_imaging::ui::liquify::LiquifyCanvas"
+new = ""
+status = "removed"
+note = "The tool state lives in the dialog body's session slot; `LiquifyCanvas::tool` still builds the tool for a pass."
+
+[[type]]
+name = "LiquifyCanvasTool"
+old = "craft_imaging::ui::liquify::LiquifyCanvasTool"
+new = "craft_imaging::ui::liquify::LiquifyCanvasTool"
+status = "replaced"
+note = "Implements the new `CanvasTool` (screen `ToolPointer` with `Mods`, `ToolContext::space`, `command_form`); it paints nothing itself."
+
+[[type]]
+name = "LiquifyEvent"
+old = "craft_imaging::ui::liquify::LiquifyEvent"
+new = "craft_imaging::ui::liquify::LiquifyEvent"
+status = "replaced"
+note = "`Stroke` carries a `StrokeEvent` (`Begin`, `Update`, `Commit` with the stroke, `Cancel` with the reason) in place of `EditEvent<LiquifyStroke>`."
+
+[[type]]
+name = "LiquifyOutput"
+old = "craft_imaging::ui::liquify::LiquifyOutput"
+new = "craft_imaging::ui::liquify::LiquifyOutput"
+status = "replaced"
+note = "`closed: Option<DialogRole>` replaces `outcome`, `response` replaces `rect`, and `cursor` is new."
+
+[[type]]
+name = "LiquifyOpen"
+old = "craft_imaging::ui::liquify::LiquifyOpen"
+new = "craft_imaging::ui::liquify::LiquifyOpen"
+status = "replaced"
+note = "`checkerboard` is a `primitives::Checker` and `cursor_options` a `BrushCursorOptions`."
+
+[[type]]
+name = "LiquifyMesh"
+old = "craft_imaging::ui::liquify::LiquifyMesh"
+new = "craft_imaging::ui::liquify::LiquifyMesh"
+status = "replaced"
+note = "`edges()` returns document-space `[Point; 2]` pairs for `MeshLines`; it takes no view."
+
+[[type]]
+name = "BackdropLayering"
+old = "craft_imaging::ui::liquify::BackdropLayering"
+new = "craft_imaging::ui::liquify::BackdropLayering"
+status = "replaced"
+note = "The tints are opacities (`u8`) in place of `Color32`."
+
+[[type]]
+name = "StrokeRecorder"
+old = "craft_imaging::ui::liquify::StrokeRecorder"
+new = "craft_imaging::ui::liquify::StrokeRecorder"
+status = "replaced"
+note = "Returns `StrokeEvent`s and takes `alt: bool` in place of egui `Modifiers`."
+
+[[type]]
+name = "LiquifySource"
+old = "craft_imaging::ui::liquify::LiquifySource"
+new = "craft_imaging::ui::liquify::LiquifySource"
+status = "replaced"
+note = "`image()` is `picture()` (a structure lint rejects a method named `image`); the images are `RasterSource`s of the new contract."
+

@@ -1,0 +1,341 @@
+# API map of the "Bars" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Bars"
+new_module = "craft_ui::bars"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "Toolbar"
+old = "craft_ui::patterns::toolbar::Toolbar"
+new = ""
+status = "replaced"
+note = "`Bar::new(label, BarKind::Tool)` with a `BarItems` child in its body: `BarItems::new(items)`, one `BarItem::new(command)` per old `ToolbarItem`, `.section(n)` for the group index. Items are commands, so labels, icons, shortcuts, enabled and toggle state come from the command and the output has no `clicked`: the app handles the command. A vertical strip is `Bar::vertical()` with `BarItems::axis(Axis::Y)`; overflow is automatic (`Toolbar::overflow` is gone)."
+
+[[type]]
+name = "OptionsBar"
+old = "craft_ui::patterns::options_bar::OptionsBar"
+new = ""
+status = "replaced"
+note = "`Bar::new(label, BarKind::Options)`; the body holds the cells in reading order. `OptionsBarSlots` is gone: leading, body and trailing are layout in the body. Several rows are `.rows(n)` with one `Row` per row; the commit and cancel buttons are `.commit_cancel(commit, cancel)`."
+
+[[type]]
+name = "StatusBar"
+old = "craft_ui::patterns::status_bar::StatusBar"
+new = ""
+status = "replaced"
+note = "`Bar::new(label, BarKind::Status)`; the body holds the fields in reading order. `StatusBarSlots` is gone: leading and trailing are layout in the body."
+
+[[type]]
+name = "StatusReadout"
+old = "craft_ui::patterns::status_readout::StatusReadout"
+new = "craft_ui::bars::StatusReadout"
+status = "moved"
+note = "A `Pattern` shown inside the body of a status `Bar` with `StatusReadout::new(view: Bind<CanvasView>, document: Size, item, &values).show(ui)`; `StatusReadout::new(id_salt)` and `show(ui, zoom, item, values)` are gone. The field shows the device percent of the bound view and writes a typed or scrubbed zoom into it about its centre, inside the document's zoom range. The output is `StatusReadoutOutput { response, zoom: Option<Response>, view: Option<EditEvent<CanvasView>>, item }`. `StatusReadoutLabels` is `StatusReadoutWords`; `labels(..)` is gone (words come from the scope)."
+
+[[type]]
+name = "AlignBar"
+old = "craft_ui::patterns::align::AlignBar"
+new = "craft_ui::bars::AlignBar"
+status = "moved"
+note = "A `Pattern` shown inside the body of a `Bar` with `AlignBar::new().show_in(ui, cx)`; `AlignBar::new(id_salt)`, `labels(..)` and `show(ui)` are gone. The output is `AlignBarOutput { picked, more }`. `AlignLabels` is `AlignWords`. `AlignBar::style` is gone."
+
+[[type]]
+name = "PanelFooter"
+old = "craft_ui::composites::panel_footer::PanelFooter"
+new = ""
+status = "replaced"
+note = "`FooterBar::actions([FooterAction::new(icon, label), ..]).show_footer(ui)` shows the buttons as square icon buttons under the footer region rule. `show_footer` returns `FooterOutput { picked, dropped, responses }`; `show_content` still returns the clicked index. `PanelFooter::show`, `button`, `pressed_button`, `drop_button`, `menu_button`, `drop_target`, `reserved_height` and `style` are gone; the footer region draws the rule and sizes itself."
+
+[[type]]
+name = "BreadcrumbBar"
+old = "craft_ui::controls::breadcrumb::BreadcrumbBar"
+new = "craft_ui::bars::BreadcrumbBar"
+status = "moved"
+note = "A `Component` over `&[Entry<K>]` shown with `Show::show`; `BreadcrumbBar::new(id_salt, &[Crumb<K>])` becomes `BreadcrumbBar::new(label, &[Entry<K>])`. The output is `BreadcrumbOutput { response, picked }`; `opened` is `picked`. `path_crumbs` returns `Vec<Entry<String>>`. `Crumb` is `Entry`; `BreadcrumbLabels` is `BreadcrumbWords`; `labels(..)` and `BreadcrumbBar::style` are gone."
+
+[[type]]
+name = "ToolbarItem"
+old = "craft_ui::patterns::toolbar::ToolbarItem"
+new = ""
+status = "replaced"
+note = "`ToolbarItem::new(icon, label)` is `craft_ui::bars::BarItem::new(command)`: the command carries label, icon, shortcut and enabled state. `.toggle(&mut bool)` is a toggle command whose checked state the app publishes; `.shortcut(..)` is the command's binding."
+
+[[type]]
+name = "ToolbarStyle"
+old = "craft_ui::patterns::toolbar::ToolbarStyle"
+new = ""
+status = "removed"
+note = "`BarItemsStyle` and `BarStyle` are component styles; sizes come from `ControlSize` and the theme. `Toolbar::style(tokens)` is gone."
+
+[[type]]
+name = "OptionsBarStyle"
+old = "craft_ui::patterns::options_bar::OptionsBarStyle"
+new = ""
+status = "removed"
+note = "`BarStyle`; `OptionsBar::height_of` is gone: a bar is as tall as its tallest member plus the control padding."
+
+[[type]]
+name = "StatusBarStyle"
+old = "craft_ui::patterns::status_bar::StatusBarStyle"
+new = ""
+status = "removed"
+note = "`BarStyle`; `StatusBar::style(tokens)` is gone."
+
+[[type]]
+name = "ToolbarResponse"
+old = "craft_ui::patterns::toolbar::ToolbarResponse"
+new = ""
+status = "removed"
+note = "`BarItems` returns a `Response` and fires the item's command; the app takes the command. `items` (per-item responses) has no replacement."
+
+[[type]]
+name = "CommitCancel"
+old = "craft_ui::patterns::options_bar::CommitCancel"
+new = ""
+status = "replaced"
+note = "`BarOutput { committed, cancelled }` from a bar built with `Bar::commit_cancel(commit, cancel)`."
+
+[[type]]
+name = "StatusProgress"
+old = "craft_ui::patterns::status_bar::StatusProgress"
+new = ""
+status = "replaced"
+note = "A `Progress` (`Progress::new(fraction)` or `Progress::indeterminate()`) with a `Text` percent and a cancel `IconButton`, in the bar's body."
+
+[[type]]
+name = "StatusProgressOutput"
+old = "craft_ui::patterns::status_bar::StatusProgressOutput"
+new = ""
+status = "replaced"
+note = "The cancel `IconButton`'s response: `clicked(&response)`."
+
+[[type]]
+name = "UnitCellResponse"
+old = "craft_ui::patterns::options_cell::UnitCellResponse"
+new = ""
+status = "replaced"
+note = "The `NumberField`'s `EditResponse` inside a `Field`; the unit is `NumberField::unit_kind(UnitKind)`."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+[[type]]
+name = "fit_items"
+old = ""
+new = "craft_behavior::fit::fit_items"
+status = "pending"
+
+[[type]]
+name = "FitItem"
+old = ""
+new = "craft_behavior::fit::FitItem"
+status = "pending"
+
+[[type]]
+name = "FitKeep"
+old = ""
+new = "craft_behavior::fit::FitKeep"
+status = "pending"
+
+[[type]]
+name = "Fit"
+old = ""
+new = "craft_behavior::fit::Fit"
+status = "pending"
+
+[[setter]]
+type = "Toolbar"
+old = "new(id_salt, orientation)"
+new = "Bar::new(label, BarKind::Tool)"
+
+[[setter]]
+type = "Toolbar"
+old = "group(items)"
+new = "BarItem::section(n) on each item"
+
+[[setter]]
+type = "Toolbar"
+old = "selected(Some((group, item)))"
+new = "a checked state published for the item's command"
+
+[[setter]]
+type = "Toolbar"
+old = "overflow(true)"
+new = "automatic: BarItems overflows into a menu"
+
+[[setter]]
+type = "Toolbar"
+old = "button_size(side)"
+new = "ControlSize on the bar's scope"
+
+[[setter]]
+type = "OptionsBar"
+old = "cell(ui, caption, width, add)"
+new = "Field::new(caption).layout(FieldLayout::Caption(width))"
+
+[[setter]]
+type = "OptionsBar"
+old = "number_cell(ui, caption, width, field)"
+new = "Field::new(caption).layout(FieldLayout::Caption(width)) around a NumberField"
+
+[[setter]]
+type = "OptionsBar"
+old = "percent_cell(ui, id_salt, caption, value, numbers)"
+new = "Field around NumberField::unit_kind(UnitKind::Percent)"
+
+[[setter]]
+type = "OptionsBar"
+old = "unit_cell(..)"
+new = "Field around NumberField::unit_kind(kind)"
+
+[[setter]]
+type = "OptionsBar"
+old = "commit_cancel(ui, commit, cancel)"
+new = "Bar::commit_cancel(commit, cancel)"
+
+[[setter]]
+type = "OptionsBar"
+old = "divider(ui)"
+new = "Divider::vertical()"
+
+[[setter]]
+type = "OptionsBar"
+old = "narrow(true)"
+new = "Bar::rows(n) with one Row per row"
+
+[[setter]]
+type = "StatusBar"
+old = "message(ui, text, error)"
+new = "Text in a body with ContainerProps.live"
+
+[[setter]]
+type = "StatusBar"
+old = "progress(ui, progress)"
+new = "Progress with a cancel IconButton"
+
+[[setter]]
+type = "StatusBar"
+old = "separator(ui)"
+new = "Divider::vertical()"
+
+
+# [[setter]]
+# type = ""
+# old = ""
+# new = ""
+
+[[type]]
+name = "StatusValues"
+old = "craft_ui::patterns::status_readout::StatusValues"
+new = "craft_ui::bars::StatusValues"
+status = "moved"
+note = "`current_tool` is `Option<CommandRef>` (the readout shows the command's label) and `document_dimensions` is `Option<PixelSize>` (shown through `Units`); neither is app-formatted text."
+
+[[type]]
+name = "StatusReadoutOutput"
+old = "craft_ui::patterns::status_readout::StatusReadoutOutput"
+new = "craft_ui::bars::StatusReadoutOutput"
+status = "moved"
+note = "`zoom` is the zoom field's `Response`; the zoom edit is `view: Option<EditEvent<CanvasView>>`."
+
+[[type]]
+name = "AlignBarResponse"
+old = "craft_ui::patterns::align::AlignBarResponse"
+new = ""
+status = "replaced"
+note = "`AlignBarOutput { picked, more }`; `response` is `more`, the menu button response."
+
+[[type]]
+name = "AlignStyle"
+old = "craft_ui::patterns::align::AlignStyle"
+new = ""
+status = "removed"
+note = "Sizes come from `ControlSize` and the bar; the bar has no style struct to read."
+
+[[type]]
+name = "FooterAction"
+old = "craft_ui::composites::panel_footer::FooterAction"
+new = "craft_ui::sections::FooterAction"
+status = "moved"
+note = "`FooterAction::new(id, icon, label)` is `FooterAction::new(icon, label)`; the id is the index in the order given. `enabled(bool)` is kept; `accepts_drops(bool)` is `accepts_drops::<P>(fn(&P) -> bool)`, and the drop comes back in `FooterOutput::dropped`."
+
+[[type]]
+name = "PanelFooterStyle"
+old = "craft_ui::composites::panel_footer::PanelFooterStyle"
+new = ""
+status = "removed"
+note = "The footer region draws its rule and takes its height from the footer bar."
+
+[[type]]
+name = "BreadcrumbBarResponse"
+old = "craft_ui::controls::breadcrumb::BreadcrumbBarResponse"
+new = ""
+status = "replaced"
+note = "`BreadcrumbOutput { response, picked }`; `opened` is `picked`."
+
+[[type]]
+name = "BreadcrumbStyle"
+old = "craft_ui::controls::breadcrumb::BreadcrumbStyle"
+new = ""
+status = "replaced"
+note = "`BreadcrumbBarStyle`: sizes and colours come from the component style; there is no `BreadcrumbBar::style(tokens)`."
+
+[[type]]
+name = "Crumb"
+old = "craft_ui::controls::breadcrumb::Crumb"
+new = ""
+status = "replaced"
+note = "`Crumb { label, key }` is `craft_ui::contract::Entry::new(key, label)`."
+
+[[setter]]
+type = "StatusReadout"
+old = "tooltip(StatusItem, impl Into<String>)"
+new = "tooltip(StatusItem, impl Into<Label>)"
+
+[[setter]]
+type = "FooterAction"
+old = "accepts_drops(bool)"
+new = "accepts_drops::<P>(fn(&P) -> bool)"
+
+[[type]]
+name = "ConstraintFields"
+old = "craft_ui::canvas::marquee::fields::ConstraintFields"
+new = "craft_ui::bars::ConstraintFields"
+status = "replaced"
+note = "`ConstraintFields::new(Bind::bound(&mut constraint))` inside a `Bar` body (`BarKind::Options`); `id_salt` is the Props id_salt; `.enabled(bool)` as before; `.size_units(unit, units, pixels_per_inch, document)` takes `Entry<UnitKind>` rows, one `UnitContext` becomes `pixels_per_inch` and the document `PixelSize`; `.labels(..)` is gone (the words are in `BarWords`)."
+
+[[type]]
+name = "ConstraintFieldsLabels"
+old = "craft_ui::canvas::marquee::fields::ConstraintFieldsLabels"
+new = ""
+status = "removed"
+note = "the rows constraint_style, constraint_normal, constraint_fixed_ratio, constraint_fixed_size, constraint_width, constraint_height and constraint_swap are in `BarWords`"
+
+[[type]]
+name = "BarWords"
+old = ""
+new = "craft_ui::bars::BarWords"
+status = "replaced"
+note = "the bars' words, with the ConstraintFields rows constraint_style, constraint_normal, constraint_fixed_ratio, constraint_fixed_size, constraint_width, constraint_height and constraint_swap; read with `env.words::<BarWords>()`"
+
+[[type]]
+name = "ConstraintFieldsOutput"
+old = "craft_ui::canvas::marquee::fields::ConstraintFieldsOutput"
+new = "craft_ui::bars::ConstraintFieldsOutput"
+status = "replaced"
+note = "`event: Option<EditEvent<Constraint>>` is the binding plus `changed: bool`; `unit_picked` is `Option<UnitKind>`; `response` is new"
+
+[[type]]
+name = "LengthUnit"
+old = "craft_ui::localized::units::LengthUnit"
+new = ""
+status = "removed"
+note = "`UnitKind` replaces it in `ConstraintFields::size_units`"
+
+[[type]]
+name = "UnitKind"
+old = ""
+new = "craft_ui::runtime::env::UnitKind"
+status = "replaced"
+note = "the unit of a number or length: pixels, percent, the absolute lengths, degrees and the rest; `ConstraintFields::size_units` takes it"

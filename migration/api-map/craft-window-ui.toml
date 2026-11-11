@@ -1,0 +1,96 @@
+# API map of the "craft-window UI" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "craft-window UI"
+new_module = "craft_ui::shell"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "Os"
+old = "craft_window::policy::Os"
+new = "craft_host::target::Os"
+status = "replaced"
+note = "craft_window::policy re-exports craft_host's Os; the browser is Runtime::Web, no longer Os::Web."
+
+[[type]]
+name = "DocumentWindow"
+old = ""
+new = "craft_ui::shell::DocumentWindow"
+status = "replaced"
+note = "craft_window::Viewports::show plus a container per document: one DocumentWindow for each entry of the WindowList, on Mount::Viewport with WindowSpec::document(). `in_list(&mut WindowList<T>, WindowId)` makes the window the list's active one when it gains OS focus (the old `WindowEvent::Focused`); `overlay(FnOnce(Overlay) -> Overlay)` changes the fallback layer; `remember(SaveKey::named(..))` keeps a placement for each document."
+
+[[type]]
+name = "Viewports"
+old = "craft_window::Viewports"
+new = ""
+status = "removed"
+note = "Mount::Viewport; the document window is craft_ui::shell::DocumentWindow."
+
+[[type]]
+name = "WindowEvent"
+old = "craft_window::WindowEvent"
+new = ""
+status = "removed"
+note = "Mount::Viewport: DocumentWindowOutput::close_requested (an `Option<CloseReason>`; the window stays while the app shows it), ::focused and ::focus_gained (`WindowEvent::Focused`; `DocumentWindow::in_list` acts on it)."
+
+[[type]]
+name = "WindowList"
+old = "craft_window::WindowList"
+new = "craft_window::WindowList"
+status = "same"
+note = "Stays in craft-window; one DocumentWindow is shown for each entry."
+
+[[type]]
+name = "WindowMenu"
+old = "craft_window::WindowMenu"
+new = "craft_window::WindowMenu"
+status = "same"
+note = "Stays in craft-window."
+
+[[type]]
+name = "empty_area"
+old = "craft_window::title_bar::empty_area"
+new = ""
+status = "removed"
+note = "The body step's Move header band."
+
+[[type]]
+name = "cascade"
+old = "craft_window::cascade"
+new = "craft_behavior::placement::cascade"
+status = "moved"
+note = "On `Rect`s of egui's type and a `Vec2` size: `cascade(previous, size, bounds, step) -> Rect`. The craft-window function stays for ui-legacy's viewport manager until cut-over."
+
+[[type]]
+name = "monitor_of"
+old = "craft_window::monitor_of"
+new = "craft_behavior::placement::monitor_of"
+status = "moved"
+note = "`monitor_of(&[Monitor], Rect) -> Option<&Monitor>`: the monitor showing most of the window, else the nearest. The craft-window function stays for ui-legacy's viewport manager until cut-over."
+
+[[type]]
+name = "CASCADE_STEP"
+old = "craft_window::CASCADE_STEP"
+new = ""
+status = "removed"
+note = "The step is the token `size.window.cascade`, reported as `DocumentWindowOutput::cascade` and read by `DockSizes::style`. The constant stays for ui-legacy's viewport manager until cut-over."
+
+[[type]]
+name = "fit_window"
+old = "craft_window::desktop::fit_window"
+new = ""
+status = "removed"
+note = "`shell::app::run` fits the root window once through `WindowHost::act(ViewportId::ROOT, WindowAction::SetMaximized(true))`."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+# [[setter]]
+# type = ""
+# old = ""
+# new = ""
+
+[[call]]
+old = "policy::decide(os, backend, &desktop, pref, env)"
+new = "policy::decide(os, runtime, backend, &desktop, kind, pref, env)"
+note = "The decision is per window kind and per runtime; a tool window gets captions with no buttons."

@@ -1,0 +1,215 @@
+# API map of the "Timeline: lanes and markers" family: old path to new path and setter renames.
+
+family = "Timeline: lanes and markers"
+new_module = "craft_timeline::ui"
+
+[[type]]
+name = "ClipLane"
+old = "craft_timeline::ui::clips::ClipLane"
+new = "craft_timeline::ui::clips::ClipLane"
+status = "same"
+note = "The lane helper of `TrackRow`: `ClipLane::new(clips)` with `tool`, `no_modifier_trims`, `snap`, `locked`, `selection`, `track_label`, `content`; `parts`, `update`, `paint` and `access` take the row's context, the `TimeAxis` and a `ClipLook`. Its drags are the host's gesture of `ClipEdit`; clicks, opens and menus come back as `ClipLaneEvents`."
+
+[[type]]
+name = "ClipLaneResponse"
+old = "craft_timeline::ui::clips::ClipLaneResponse"
+new = ""
+status = "removed"
+note = "Lane helper of `TrackRow`; events through `ClipLaneEvents` and the row's `ClipEdit` gesture."
+
+[[type]]
+name = "ClipPainter"
+old = "craft_timeline::ui::clips::ClipPainter"
+new = ""
+status = "removed"
+note = "`ClipContent`: a named closure over the content-paint kit."
+
+[[type]]
+name = "TimelineTool"
+old = "craft_timeline::ui::clips::TimelineTool"
+new = "craft_timeline::ui::clips::TimelineTool"
+status = "same"
+
+[[type]]
+name = "ThumbnailMode"
+old = "craft_timeline::ui::clips::ThumbnailMode"
+new = "craft_timeline::ui::clips::ThumbnailMode"
+status = "same"
+
+[[type]]
+name = "thumbnail_tiles"
+old = "craft_timeline::ui::clips::thumbnail_tiles"
+new = "craft_timeline::ui::clips::thumbnail_tiles"
+status = "same"
+
+[[type]]
+name = "KeyframeLane"
+old = "craft_timeline::ui::keyframes::KeyframeLane"
+new = "craft_timeline::ui::keyframes::KeyframeLane"
+status = "same"
+note = "A leaf: `new(label, keys, &Selection)` with `playhead` and `bounds`; the `view` and `rate` arguments are the `TimeAxis` of the enclosing `TimelineView`. The key drag comes back as an `EditEvent<Tick>` (the delta) in the output, not as a value; the selection comes back as `SelectionChange`s."
+
+[[type]]
+name = "KeyframeLaneResponse"
+old = "craft_timeline::ui::keyframes::KeyframeLaneResponse"
+new = ""
+status = "removed"
+note = "Renamed `KeyframeLaneOutput`."
+
+[[type]]
+name = "KeyframeLaneOutput"
+old = ""
+new = "craft_timeline::ui::keyframes::KeyframeLaneOutput"
+status = "replaced"
+note = "`KeyframeLaneOutput { response, delta: Option<EditEvent<Tick>>, select, double_clicked, context, delete }`; the value is `NoValue`."
+
+[[type]]
+name = "KeyframeNavigator"
+old = "craft_timeline::ui::keyframes::KeyframeNavigator"
+new = "craft_timeline::ui::keyframes::KeyframeNavigator"
+status = "same"
+note = "A pattern of three `IconButton`s: `new(label, has_previous, has_next, at_key)`."
+
+[[type]]
+name = "KeyframeNavigatorOutput"
+old = "craft_timeline::ui::keyframes::KeyframeNavigatorOutput"
+new = "craft_timeline::ui::keyframes::KeyframeNavigatorOutput"
+status = "same"
+note = "Adds the navigator's `response`."
+
+[[type]]
+name = "AnimationToggle"
+old = "craft_timeline::ui::keyframes::AnimationToggle"
+new = "craft_timeline::ui::keyframes::AnimationToggle"
+status = "same"
+note = "A pattern over `ToggleButton`: `new(Bind<bool>)` with `label`; `show` returns `EditResponse<bool>`."
+
+[[type]]
+name = "KeyframeId"
+old = "craft_timeline::ui::keyframes::KeyframeId"
+new = "craft_timeline::ui::keyframes::KeyframeId"
+status = "same"
+
+[[type]]
+name = "KeyframeInterpolation"
+old = "craft_timeline::ui::keyframes::KeyframeInterpolation"
+new = "craft_timeline::ui::keyframes::KeyframeInterpolation"
+status = "same"
+note = "`#[non_exhaustive]`."
+
+[[type]]
+name = "KeyframeMark"
+old = "craft_timeline::ui::keyframes::KeyframeMark"
+new = "craft_timeline::ui::keyframes::KeyframeMark"
+status = "same"
+note = "`#[non_exhaustive]`; built with `KeyframeMark::new`."
+
+[[type]]
+name = "paint_keyframe"
+old = "craft_timeline::ui::keyframes::paint_keyframe"
+new = ""
+status = "removed"
+note = "`keyframe_icon` and the part's face."
+
+[[type]]
+name = "KeyframeLabels"
+old = "craft_timeline::ui::keyframes::KeyframeLabels"
+new = ""
+status = "removed"
+note = "`KeyframeWords`, a words struct."
+
+[[type]]
+name = "MarkerStrip"
+old = "craft_timeline::ui::markers::MarkerStrip"
+new = "craft_timeline::ui::markers::MarkerStrip"
+status = "same"
+note = "A leaf: `new(label, markers)` with `snap` and `bin`; the `view` argument is the `TimeAxis`, `palette` and `labels` are gone. The drag comes back as an `EditEvent<MarkerSpan>` in the output, not as a value."
+
+[[type]]
+name = "MarkerStripResponse"
+old = "craft_timeline::ui::markers::MarkerStripResponse"
+new = ""
+status = "removed"
+note = "Renamed `MarkerStripOutput`."
+
+[[type]]
+name = "MarkerStripOutput"
+old = ""
+new = "craft_timeline::ui::markers::MarkerStripOutput"
+status = "replaced"
+note = "`MarkerStripOutput { response, span: Option<EditEvent<MarkerSpan>>, edits, context }`; the value is `NoValue`."
+
+[[type]]
+name = "MarkerEdit"
+old = "craft_timeline::ui::markers::MarkerEdit"
+new = "craft_timeline::ui::markers::MarkerEdit"
+status = "same"
+note = "`Move` and `SetDuration` are the strip's `MarkerSpan` gesture; `Delete`, `Open` and `Add` stay."
+
+[[type]]
+name = "MARKER_POINT"
+old = "craft_timeline::ui::markers::MARKER_POINT"
+new = "craft_timeline::ui::markers::MARKER_POINT"
+status = "same"
+
+[[type]]
+name = "MarkerDialog"
+old = "craft_timeline::ui::markers::MarkerDialog"
+new = "craft_timeline::ui::markers::MarkerDialog"
+status = "same"
+note = "`MarkerDialog::new(&marker, format)`; `palette` and `labels` are gone: the label colours come from `LabelPalette` and their names from `TimelineWords`."
+
+[[type]]
+name = "MarkerDialogAction"
+old = "craft_timeline::ui::markers::MarkerDialogAction"
+new = "craft_timeline::ui::markers::MarkerDialogAction"
+status = "same"
+
+[[type]]
+name = "MarkerDialogResult"
+old = "craft_timeline::ui::markers::MarkerDialogResult"
+new = "craft_timeline::ui::markers::MarkerDialogResult"
+status = "same"
+note = "`#[non_exhaustive]`."
+
+[[type]]
+name = "MarkerDraft"
+old = "craft_timeline::ui::markers::MarkerDraft"
+new = "craft_timeline::ui::markers::MarkerDraft"
+status = "same"
+note = "`#[non_exhaustive]`; `Default`."
+
+[[type]]
+name = "MarkerStripLabels"
+old = "craft_timeline::ui::markers::MarkerStripLabels"
+new = ""
+status = "removed"
+note = "`MarkerWords`, a words struct."
+
+[[type]]
+name = "MarkerDialogLabels"
+old = "craft_timeline::ui::markers::MarkerDialogLabels"
+new = ""
+status = "removed"
+note = "`MarkerWords`, a words struct."
+
+[[type]]
+name = "TimelineOverview"
+old = "craft_timeline::ui::overview::TimelineOverview"
+new = "craft_timeline::ui::overview::TimelineOverview"
+status = "same"
+note = "A leaf: `new(label, runs, Bind<TimeView>, end)` with `shown_width` and `playhead`; the box width is `shown_width`."
+
+[[type]]
+name = "OverviewRun"
+old = "craft_timeline::ui::overview::OverviewRun"
+new = "craft_timeline::ui::overview::OverviewRun"
+status = "same"
+note = "`#[non_exhaustive]`; the rect is relative to the overview's top-left corner."
+
+[[type]]
+name = "overview_runs"
+old = "craft_timeline::ui::overview::overview_runs"
+new = "craft_timeline::ui::overview::overview_runs"
+status = "same"
+note = "Takes the overview's size in place of the outer rect and tokens."

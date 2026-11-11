@@ -1,0 +1,81 @@
+# API map of the "imaging: Adaptive Wide Angle" family: old path to new path and setter renames.
+
+family = "imaging: Adaptive Wide Angle"
+new_module = "craft_imaging::ui::wide_angle"
+
+[[type]]
+name = "WideAngleWorkspace"
+old = "craft_imaging::ui::wide_angle::WideAngleWorkspace"
+new = "craft_imaging::ui::wide_angle::WideAngleWorkspace"
+status = "replaced"
+note = "`show(ui, geometry, source)` takes the `Ui` and returns the output with `closed` (OK is `CloseReason::Activated` or `Enter`); `step(step)` queues for the next `show`. `preview_ready` and `preview_failed` are removed: the result is the job `WideAngleSource::preview_job` returns, read as `Pending<PreviewDone, String>`."
+
+[[type]]
+name = "WideAngleOutput"
+old = "craft_imaging::ui::wide_angle::WideAngleOutput"
+new = "craft_imaging::ui::wide_angle::WideAngleOutput"
+status = "replaced"
+note = "`preview_wanted` and `outcome` are removed; `closed` and `accepted()` say how the dialog closed, `timing` is the finished job's."
+
+[[type]]
+name = "WideAngleSource"
+old = "craft_imaging::ui::wide_angle::WideAngleSource"
+new = "craft_imaging::ui::wide_angle::WideAngleSource"
+status = "replaced"
+note = "Gains `preview_job(&self, session) -> Job<PreviewDone, String>`."
+
+[[type]]
+name = "WideAnglePanel"
+old = "craft_imaging::ui::wide_angle::WideAnglePanel"
+new = "craft_imaging::ui::wide_angle::WideAnglePanel"
+status = "replaced"
+note = "A pattern over `&WideAngleSession` and `Bind<bool>`: `WideAnglePanel::new(&session, Bind::bound(&mut preview)).show(ui)`; it takes no id and no labels."
+
+[[type]]
+name = "WideAnglePanelOutput"
+old = "craft_imaging::ui::wide_angle::WideAnglePanelOutput"
+new = "craft_imaging::ui::wide_angle::WideAnglePanelOutput"
+status = "replaced"
+note = "Gains `add`: the Add button was pressed."
+
+[[type]]
+name = "ConstraintTool"
+old = "craft_imaging::ui::wide_angle::ConstraintTool"
+new = "craft_imaging::ui::wide_angle::ConstraintTool"
+status = "replaced"
+note = "A `CanvasTool` that draws a constraint by dragging; the lines on the canvas and their keyboard parts are `ConstraintLines`."
+
+[[type]]
+name = "ConstraintToolPass"
+old = "craft_imaging::ui::wide_angle::ConstraintToolPass"
+new = ""
+status = "removed"
+note = "Its pass is `ConstraintTool` itself, shown through `FullWindowCanvas::tool`; its parts and paint are `ConstraintLines`."
+
+[[type]]
+name = "WideAngleStyle"
+old = "craft_imaging::ui::wide_angle::WideAngleStyle"
+new = ""
+status = "removed"
+note = "The marks' look is the style of `ConstraintLines`."
+
+[[type]]
+name = "WideAngleLabels"
+old = "craft_imaging::ui::wide_angle::WideAngleLabels"
+new = ""
+status = "removed"
+
+[[type]]
+name = "WideAngleWords"
+old = ""
+new = "craft_imaging::ui::wide_angle::WideAngleWords"
+status = "replaced"
+note = "The words are `WideAngleWords` (`words!`); `constraints` is a count word."
+
+[[type]]
+name = "ConstraintLines"
+old = ""
+new = "craft_imaging::ui::wide_angle::ConstraintLines"
+status = "replaced"
+note = "New: the constraints as a canvas control with one focusable part each."
+

@@ -1,0 +1,250 @@
+# API map of the "Form rows" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Form rows"
+new_module = "craft_ui::form"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "Field"
+old = "craft_ui::composites::field::Field"
+new = "craft_ui::form::Field"
+status = "moved"
+note = "A container shown with `ShowContainer::show(ui, |ui, cx| control)`; the body holds one control and the closure returns the control's own output (no `FieldControl`, no `invalid` argument). The label is the constructor argument and `Common.label`; `layout`, `side` and `help` are its setters. The output is `Response`."
+
+[[type]]
+name = "FieldGroup"
+old = "craft_ui::composites::field::FieldGroup"
+new = "craft_ui::form::FieldGroup"
+status = "moved"
+note = "A container named by its label and shown with `ShowContainer::show(ui, |ui, cx| ..)`; the old `id_salt` argument is gone (the id comes from the call site). Every `Field` in the body shares one label column."
+
+[[type]]
+name = "PropertyRow"
+old = "craft_ui::composites::property_row::PropertyRow"
+new = ""
+status = "replaced"
+note = "A `Field` configuration; `craft_ui::dialog::properties::PropertyRow` is the same row type. A glyph label is `Field::side(SideLabel::new().kind(LabelKind::Hidden).icon(icon))` with the word as the field's label, which still names the control; `scrubs()` is `SideLabel::scrub(true)`; `redundant()` is `SideLabel::role(FieldLabelRole::Describes)`; `size(ControlSize)` is the ambient control size."
+
+[[type]]
+name = "PropertyPair"
+old = "craft_ui::composites::property_row::PropertyPair"
+new = ""
+status = "replaced"
+note = "Two `Field`s in a `Row`, or `LinkedFields` where the two values link. `reserve_link_slot` and `show_linked` go with `LinkedFields`."
+
+[[type]]
+name = "PropertyGroup"
+old = "craft_ui::composites::property_row::PropertyGroup"
+new = ""
+status = "replaced"
+note = "`FieldGroup`: its `Field`s share one label column. `glyph_width` and `word_width` go; the column is as wide as the widest label."
+
+[[type]]
+name = "FormGrid"
+old = "craft_ui::composites::form_grid::FormGrid"
+new = ""
+status = "replaced"
+note = "`FieldGroup` with one `Field` per row. `Form::row` is `Field::new(label)`, `Form::unlabelled` is a `Field` with a hidden label, `Form::value` is a `Field` over `Text`, `Form::linked` is `LinkedFields`, `Form::space` is the group's gap."
+
+[[type]]
+name = "FieldStyle"
+old = "craft_ui::composites::field::FieldStyle"
+new = ""
+status = "replaced"
+note = "`FieldRowStyle` holds no values; the help line and the label step take their looks from the theme."
+
+[[type]]
+name = "FieldControl"
+old = "craft_ui::composites::field::FieldControl"
+new = ""
+status = "removed"
+note = "The body closure returns the control's own output; the control reads its own validity."
+
+[[type]]
+name = "Form"
+old = "craft_ui::composites::form_grid::Form"
+new = ""
+status = "replaced"
+note = "The row helper of `FormGrid`; its rows are `Field`s in a `FieldGroup`."
+
+[[type]]
+name = "PropertyStyle"
+old = "craft_ui::composites::property_row::PropertyStyle"
+new = ""
+status = "removed"
+note = "A `Field` takes its looks from the theme."
+
+[[type]]
+name = "FormStyle"
+old = "craft_ui::composites::form_grid::FormStyle"
+new = ""
+status = "removed"
+note = "A `Field` takes its looks from the theme."
+
+[[type]]
+name = "SliderRow"
+old = "craft_ui::composites::slider_row::SliderRow"
+new = ""
+status = "removed"
+note = "Replaced by `SliderField` (`craft_ui::form::SliderField`); see its entry."
+
+[[type]]
+name = "SliderField"
+old = ""
+new = "craft_ui::form::SliderField"
+status = "replaced"
+note = "`SliderField::new(label, Bind::bound(&mut value), range)` inside a `Field`: the slider and the number field share one row and one value. The caption is the `Field`'s label, which names both children and scrubs the number field. The value is a binding, not a `&LocaleNumbers` and a copied value; the label is the accessible name."
+
+[[type]]
+name = "SliderRowResponse"
+old = "craft_ui::composites::slider_row::SliderRowResponse"
+new = ""
+status = "removed"
+note = "Replaced by the `EditResponse<f64>` that `SliderField` returns: one edit stream for the slider and the number field. `edits()` and `submitted()` are gone; the binding takes the edits."
+
+[[type]]
+name = "SliderRowStyle"
+old = "craft_ui::composites::slider_row::SliderRowStyle"
+new = ""
+status = "removed"
+note = "Replaced by `SliderFieldStyle` (`craft_ui::form::SliderFieldStyle`); see its entry."
+
+[[type]]
+name = "SliderFieldStyle"
+old = ""
+new = "craft_ui::form::SliderFieldStyle"
+status = "replaced"
+note = "The style is built from tokens (`size.length.short` for the number field, the control gap) and has no public fields; `caption_role` and `caption` belong to the `Field`'s label."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+# [[setter]]
+# type = ""
+# old = ""
+# new = ""
+
+[[setter]]
+type = "Field"
+old = "above()"
+new = "layout(FieldLayout::Above)"
+
+[[setter]]
+type = "Field"
+old = "help(impl Into<String>)"
+new = "help(Help::Text(Label))"
+
+[[setter]]
+type = "Field"
+old = "help_status(StatusKind)"
+new = "help(Help::Status(Tone, Label))"
+note = "`Tone` is `craft_theme::variant::Tone`."
+
+[[setter]]
+type = "Field"
+old = "error(Option<impl Into<String>>)"
+new = ""
+note = "Error text comes from the control's binding check (`Bind::check`)."
+
+[[setter]]
+type = "Field"
+old = "label_align(LabelAlign)"
+new = ""
+note = "The label column's alignment follows the reading direction."
+
+[[setter]]
+type = "Field"
+old = "unlabelled()"
+new = "side(SideLabel::new().kind(LabelKind::Hidden))"
+note = "The field's label still names the control."
+
+[[setter]]
+type = "Field"
+old = "show(ui, |ui, invalid| control)"
+new = "show(ui, |ui, cx| control)"
+
+[[setter]]
+type = "SliderRow"
+old = "SliderRow::new(id_salt, label, value, range, numbers)"
+new = "SliderField::new(label, Bind<f64>, range)"
+note = "the id salt, the locale numbers and the copied value are gone; the label is the accessible name."
+
+[[setter]]
+type = "SliderRow"
+old = "unit(Unit)"
+new = "unit_kind(UnitKind)"
+note = "a unit kind in place of a unit pattern."
+
+[[setter]]
+type = "SliderRow"
+old = "decimals(usize)"
+new = "step(f64)"
+note = "the places follow the step (`decimals_for_step`)."
+
+[[setter]]
+type = "SliderRow"
+old = "step(f64)"
+new = "step(f64)"
+note = "a step that is not finite and positive is ignored."
+
+[[setter]]
+type = "SliderRow"
+old = "curve(f64)"
+new = "scale(SliderScale::Power(f32))"
+note = "the scale is a prop; `SliderScale::Log` is also available."
+
+[[setter]]
+type = "SliderRow"
+old = "wheel_step(f64)"
+new = "wheel_step(f64)"
+note = "the slider's wheel notch."
+
+[[setter]]
+type = "SliderRow"
+old = "default_value(f64)"
+new = "Bind::reset(f64)"
+note = "the reset value belongs to the binding."
+
+[[setter]]
+type = "SliderRow"
+old = "policy(EditPolicy)"
+new = "Bind::policy(EditPolicy)"
+note = "the edit policy belongs to the binding."
+
+[[setter]]
+type = "SliderRow"
+old = "size(ControlSize)"
+new = "size(ControlSize)"
+note = "from the common props."
+
+[[setter]]
+type = "SliderRow"
+old = "enabled(bool)"
+new = "enabled(bool)"
+note = "from the common props."
+
+[[setter]]
+type = "SliderRow"
+old = "track_colors(stops)"
+new = "removed"
+note = "a gradient track is a `TrackFace` on `Slider`; `SliderField` has no setter for it."
+
+[[setter]]
+type = "SliderRow"
+old = "fill(bool)"
+new = "removed"
+note = "the slider always draws its fill."
+
+[[setter]]
+type = "SliderRow"
+old = "field_width(f32)"
+new = "removed"
+note = "the number field is `size.length.short` wide in every row."
+
+[[setter]]
+type = "SliderRow"
+old = "wheel(bool)"
+new = "removed"
+note = "the slider takes the wheel when focused; the unfocused wheel is not offered."
+

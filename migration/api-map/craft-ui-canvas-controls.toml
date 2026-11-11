@@ -1,0 +1,993 @@
+# API map of the "craft-ui canvas controls" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "craft-ui canvas controls"
+new_module = "craft_ui::canvas_controls"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "Guides"
+old = "craft_ui::canvas::guides::Guides"
+new = "craft_ui::canvas_controls::Guides"
+status = "moved"
+note = "A canvas control: `Guides::new(label, Bind<Vec<Guide>>)` shown with `show_at(ui, body.rect)` in a `Canvas` body that has a view; the guides are parts in the canvas's arena, so there is no `claimed` or `hovered` flag."
+
+[[type]]
+name = "SelectionFrame"
+old = "craft_ui::canvas::selection::frame::SelectionFrame"
+new = "craft_ui::canvas_controls::SelectionFrame"
+status = "pending"
+
+[[type]]
+name = "GripSet"
+old = "craft_ui::canvas::selection::grips::GripSet"
+new = "craft_ui::canvas_controls::GripSet"
+status = "pending"
+
+[[type]]
+name = "Marquee"
+old = "craft_ui::canvas::marquee::Marquee"
+new = "craft_ui::canvas_controls::Marquee"
+status = "moved"
+
+# One entry per renamed, removed or reshaped setter or constructor.
+# [[setter]]
+# type = ""
+# old = ""
+# new = ""
+
+# craft_behavior::geometry (contract-geometry)
+[[type]]
+name = "Anchor9"
+old = "craft_ui::canvas::quad::Anchor9"
+new = "craft_behavior::Anchor9"
+status = "moved"
+
+[[type]]
+name = "BoxState"
+old = "craft_ui::canvas::quad::BoxState"
+new = "craft_behavior::geometry::quad::BoxState"
+status = "moved"
+
+[[type]]
+name = "BoxPart"
+old = "craft_ui::canvas::quad::BoxPart"
+new = "craft_behavior::geometry::quad::BoxPart"
+status = "moved"
+
+[[type]]
+name = "BoxAllow"
+old = "craft_ui::canvas::quad::BoxAllow"
+new = "craft_behavior::geometry::quad::BoxAllow"
+status = "moved"
+
+[[type]]
+name = "BoxRules"
+old = "craft_ui::canvas::quad::BoxRules"
+new = "craft_behavior::geometry::quad::BoxRules"
+status = "moved"
+
+[[type]]
+name = "BoxDrag"
+old = "craft_ui::canvas::quad::BoxDrag"
+new = "craft_behavior::geometry::quad::BoxDrag"
+status = "moved"
+
+[[type]]
+name = "TransformMode"
+old = "craft_ui::canvas::quad::TransformMode"
+new = "craft_behavior::geometry::quad::TransformMode"
+status = "moved"
+
+[[type]]
+name = "ScaleRule"
+old = "craft_ui::canvas::quad::ScaleRule"
+new = "craft_behavior::geometry::quad::ScaleRule"
+status = "moved"
+
+[[type]]
+name = "Parts"
+old = "craft_ui::canvas::quad::Parts"
+new = "craft_behavior::geometry::quad::Parts"
+status = "moved"
+
+[[type]]
+name = "Homography"
+old = "craft_ui::canvas::quad::Homography"
+new = "craft_behavior::geometry::quad::Homography"
+status = "moved"
+
+[[type]]
+name = "Directions"
+old = "craft_ui::behavior::move_gesture::Directions"
+new = "craft_behavior::geometry::lock::Directions"
+status = "moved"
+
+[[type]]
+name = "SnapTargets"
+old = "craft_ui::canvas::SnapTargets"
+new = "craft_behavior::geometry::snap::SnapTargets"
+status = "moved"
+
+[[type]]
+name = "SnapTarget"
+old = "craft_ui::canvas::SnapTarget"
+new = "craft_behavior::geometry::snap::SnapTarget"
+status = "moved"
+
+[[type]]
+name = "SnapKind"
+old = "craft_ui::canvas::SnapKind"
+new = "craft_behavior::geometry::snap::SnapKind"
+status = "moved"
+
+[[type]]
+name = "SnapLine"
+old = "craft_ui::canvas::SnapLine"
+new = "craft_behavior::geometry::snap::SnapLine"
+status = "moved"
+
+[[type]]
+name = "SnapOptions"
+old = "craft_ui::canvas::SnapOptions"
+new = "craft_behavior::geometry::snap::SnapOptions"
+status = "moved"
+
+[[type]]
+name = "SnapGesture"
+old = "craft_ui::canvas::SnapGesture"
+new = "craft_behavior::geometry::snap::SnapGesture"
+status = "moved"
+
+[[type]]
+name = "OutlineDraft"
+old = "craft_ui::canvas::draft::OutlineDraft"
+new = "craft_behavior::geometry::draft::OutlineDraft"
+status = "moved"
+
+[[type]]
+name = "DraftKind"
+old = "craft_ui::canvas::draft::DraftKind"
+new = "craft_behavior::geometry::draft::DraftKind"
+status = "moved"
+
+[[type]]
+name = "DraftEvent"
+old = "craft_ui::canvas::draft::DraftEvent"
+new = "craft_behavior::geometry::draft::DraftEvent"
+status = "moved"
+
+[[type]]
+name = "DraftPoint"
+old = "craft_ui::canvas::draft::DraftPoint"
+new = "craft_behavior::geometry::draft::DraftPoint"
+status = "moved"
+
+[[type]]
+name = "DraftReach"
+old = "craft_ui::canvas::draft::DraftReach"
+new = "craft_behavior::geometry::draft::DraftReach"
+status = "moved"
+
+[[type]]
+name = "SelectionOperation"
+old = "craft_ui::canvas::SelectionOperation"
+new = "craft_behavior::geometry::selection_op::SelectionOperation"
+status = "moved"
+
+[[type]]
+name = "MarqueeRect"
+old = "craft_ui::canvas::marquee::MarqueeRect"
+new = "craft_behavior::geometry::marquee::MarqueeRect"
+status = "moved"
+
+[[type]]
+name = "Constraint"
+old = "craft_ui::canvas::marquee::Constraint"
+new = "craft_behavior::geometry::marquee::Constraint"
+status = "moved"
+
+[[type]]
+name = "MarqueeGesture"
+old = "craft_ui::canvas::marquee::MarqueeGesture"
+new = "craft_behavior::geometry::marquee::MarqueeGesture"
+status = "moved"
+
+[[type]]
+name = "drag"
+old = "craft_ui::canvas::quad::drag"
+new = "craft_behavior::geometry::quad::drag"
+status = "moved"
+
+[[type]]
+name = "lock_direction"
+old = "craft_ui::behavior::move_gesture::lock_direction"
+new = "craft_behavior::geometry::lock::lock_direction"
+status = "moved"
+
+[[type]]
+name = "point_in_polygon"
+old = "craft_ui::canvas::geom::point_in_polygon"
+new = "craft_behavior::geometry::geom::point_in_polygon"
+status = "moved"
+
+[[type]]
+name = "clip_segment"
+old = "craft_ui::canvas::geom::clip_segment"
+new = "craft_behavior::geometry::geom::clip_segment"
+status = "moved"
+
+[[type]]
+name = "angle_deg"
+old = "craft_ui::canvas::geom::angle_deg"
+new = "craft_behavior::geometry::geom::angle_deg"
+status = "moved"
+
+[[type]]
+name = "project_clipped"
+old = "craft_ui::canvas::geom::project_clipped"
+new = "craft_behavior::geometry::geom::project_clipped"
+status = "moved"
+
+[[type]]
+name = "fixed_size_pixels"
+old = "craft_ui::canvas::fixed_size_pixels"
+new = "craft_behavior::geometry::marquee::fixed_size_pixels"
+status = "moved"
+
+[[type]]
+name = "marquee_pixels"
+old = "craft_ui::canvas::marquee_pixels"
+new = "craft_behavior::geometry::marquee::marquee_pixels"
+status = "moved"
+
+[[type]]
+name = "square_pixels"
+old = "craft_ui::canvas::square_pixels"
+new = "craft_behavior::geometry::marquee::square_pixels"
+status = "moved"
+
+[[type]]
+name = "snap_union"
+old = "craft_ui::canvas::snap_union"
+new = ""
+status = "removed"
+note = "The function is `craft_behavior::geometry::snap::union`."
+
+[[type]]
+name = "union"
+old = ""
+new = "craft_behavior::geometry::snap::union"
+status = "replaced"
+note = "Legacy `craft_ui::canvas::snap_union`: the bounding rectangle of some rectangles, `None` for none."
+
+[[setter]]
+type = "Anchor9"
+old = "Anchor9::Center"
+new = "Anchor9::Centre"
+
+[[setter]]
+type = "SelectionOperation"
+old = "from_modifiers(modifiers)"
+new = "from_mods(mods)"
+
+[[setter]]
+type = "SelectionOperation"
+old = "resolve(bar, modifiers, has_selection)"
+new = "resolve(bar, mods, has_selection)"
+
+[[setter]]
+type = "SelectionOperation"
+old = "badge() -> SelectionBadge"
+new = "badge() -> Option<CursorBadge>"
+
+[[setter]]
+type = "SelectionOperation"
+old = "label(&words)"
+new = "a words entry of the canvas controls (the legacy SelectionOperationLabels)"
+
+[[setter]]
+type = "DraftReach"
+old = "of(&tokens)"
+new = "new(close, same_point), the caller passes the hit tokens' target and slop"
+
+[[setter]]
+type = "DraftPoint"
+old = "new(at, modifiers, zoom) and the field modifiers"
+new = "new(at, mods, zoom) and the field mods"
+
+[[setter]]
+type = "OutlineDraft"
+old = "modifiers_changed(modifiers)"
+new = "mods_changed(mods)"
+
+[[setter]]
+type = "MarqueeGesture"
+old = "press(screen, at, modifiers)"
+new = "press(screen, at, mods)"
+
+[[setter]]
+type = "MarqueeGesture"
+old = "press_modifiers()"
+new = "press_mods()"
+
+[[setter]]
+type = "MarqueeGesture"
+old = "follow(screen, modifiers)"
+new = "follow(screen, mods)"
+
+[[setter]]
+type = "Constraint"
+old = "serde Serialize and Deserialize"
+new = "none yet in craft-behavior"
+
+[[setter]]
+type = "SnapLine"
+old = "impl From<SnapLine> for SmartLine"
+new = "SmartLine::from_snap(line) in the canvas controls"
+
+[[setter]]
+type = "BoxRules"
+old = "drag_modifiers(part, modifiers) and drag_kind(part, modifiers)"
+new = "drag_modifiers(part, mods) and drag_kind(part, mods)"
+
+[[setter]]
+type = "SnapTarget"
+old = "vertical: bool (field and the first argument of new)"
+new = "along: craft_behavior::Axis: the axis the line runs along, so a vertical line is Axis::Y and snaps x"
+
+[[setter]]
+type = "SnapLine"
+old = "vertical: bool"
+new = "along: craft_behavior::Axis, as SnapTarget::along"
+
+[[setter]]
+type = "SnapGesture"
+old = "Axis { vertical: bool } and SnapGesture::axis(vertical)"
+new = "Axis { along: craft_behavior::Axis } and SnapGesture::axis(along)"
+
+[[setter]]
+type = "SnapTargets"
+old = "nearest(vertical, value, tolerance), snap_axis(vertical, value, tolerance) and the guides argument of with_document as (bool, f64)"
+new = "the same with along: craft_behavior::Axis, and (Axis, f64) for the guides"
+
+# canvas-controls-a: Guides and SmartGuides
+[[type]]
+name = "GuideLine"
+old = "craft_ui::canvas::guides::GuideLine"
+new = "craft_ui::canvas::GuideLine"
+status = "moved"
+
+[[type]]
+name = "GuidePlace"
+old = "craft_ui::canvas::guides::GuidePlace"
+new = ""
+status = "removed"
+note = "A guide drag is `Vec<Guide>` edit events of `GuidesOutput::edit`; a guide dragged out of a ruler is `craft_ui::canvas::GuideDrag`. A removed guide is a vector without it."
+
+[[type]]
+name = "GuidesResponse"
+old = "craft_ui::canvas::guides::GuidesResponse"
+new = ""
+status = "removed"
+note = "Replaced by `GuidesOutput`."
+
+[[type]]
+name = "GuidesOutput"
+old = ""
+new = "craft_ui::canvas_controls::GuidesOutput"
+status = "replaced"
+note = "Legacy `GuidesResponse`: `edit: EditResponse<Vec<Guide>>` replaces `event`; `select`, `clicked` (with `craft_keymap::Mods` and a document point), `double_clicked` and `context` carry over with `GuideKey`; `id`, `claimed` and `hovered` are gone because a press on a guide never reaches the tool."
+
+[[type]]
+name = "GuideNames"
+old = "craft_ui::canvas::guides::GuideNames"
+new = ""
+status = "removed"
+note = "The accessible names are the words of `CanvasControlWords`."
+
+[[type]]
+name = "CanvasControlWords"
+old = ""
+new = "craft_ui::canvas_controls::CanvasControlWords"
+status = "replaced"
+note = "The one word set of the canvas controls. Legacy `GuideNames`: the vertical and horizontal guide names and the X and Y readout labels (ids `guides.*`); the marquee shape names and bounds template (`marquee.*`); and the row labels of the brush resize readout, replacing BrushResizeLabels (ids `brushResize.diameter`, `hardness`, `opacity`, `density`)."
+
+[[type]]
+name = "Orientation"
+old = "craft_ui::canvas::guides::Orientation"
+new = ""
+status = "removed"
+note = "`Guide::along: craft_behavior::Axis` is the axis the guide runs along: a vertical guide is `Axis::Y`, a horizontal one `Axis::X`. `flipped`, `across` and `position` are `craft_behavior::geometry::{across_axis, motion_across, coordinate_across}`."
+
+[[type]]
+name = "GuideStyle"
+old = "craft_ui::style::guide::GuideStyle"
+new = "craft_ui::canvas_controls::GuideStyle"
+status = "replaced"
+note = "A component style built from the tokens in `Guides`' style hook; its fields are private. `Guides::style(&tokens)` is gone."
+
+[[type]]
+name = "GuideCommands"
+old = ""
+new = "craft_ui::canvas_controls::GuideCommands"
+status = "replaced"
+note = "App commands `canvasGuides.{new, clear, delete, lock, unlock}` and `GuideCommands::apply(&mut Vec<Guide>, selected)`. Legacy `Guides::request_delete` is `GuideCommands::Delete`."
+
+[[type]]
+name = "GuideHost"
+old = "craft_ui::canvas::guides::GuideHost"
+new = ""
+status = "removed"
+note = "A story helper of the legacy module."
+
+[[type]]
+name = "SmartGuides"
+old = "craft_ui::canvas::guides::SmartGuides"
+new = "craft_ui::canvas_controls::SmartGuides"
+status = "moved"
+note = "A canvas control with no parts, shown with `show_at(ui, body.rect)` in a `Canvas` body that has a view."
+
+[[type]]
+name = "SmartLine"
+old = "craft_ui::canvas::guides::SmartLine"
+new = "craft_ui::canvas_controls::SmartLine"
+status = "moved"
+note = "`#[non_exhaustive]`: built with `SmartLine::new(a, b)` and `.dashed()`."
+
+[[type]]
+name = "Measure"
+old = "craft_ui::canvas::guides::Measure"
+new = "craft_ui::canvas_controls::Measure"
+status = "moved"
+note = "`#[non_exhaustive]`: built with `Measure::new(a, b)`, which labels the distance in the canvas's ruler units; `.labelled(text)` gives the app's text."
+
+[[setter]]
+type = "Guides"
+old = "new(id_salt, &guides, &x_units, &y_units, names)"
+new = "new(label, Bind<Vec<Guide>>); the units and the zero point come from the canvas (`Canvas::rulers(x, y, zero)`)"
+
+[[setter]]
+type = "Guides"
+old = "modifiers(modifiers)"
+new = ""
+note = "The modifiers held come from the press of the guide's part."
+
+[[setter]]
+type = "Guides"
+old = "selected(Option<u64>)"
+new = "selected_guide(GuideKey)"
+
+[[setter]]
+type = "Guides"
+old = "snap(Fn(Orientation, f64, Modifiers) -> f64)"
+new = "snap(Fn(craft_behavior::Axis, f64, craft_keymap::Mods) -> f64)"
+
+[[setter]]
+type = "Guides"
+old = "readout(x, y)"
+new = ""
+note = "A dragged guide always shows its position; the labels are `CanvasControlWords::{x, y}`."
+
+[[setter]]
+type = "Guides"
+old = "steps(step, big_step)"
+new = "step(f64) and big_step(f64)"
+
+[[setter]]
+type = "Guides"
+old = "policy(EditPolicy)"
+new = ""
+note = "The edit policy belongs to the `Bind`."
+
+[[setter]]
+type = "Guides"
+old = "drag_from_ruler(ctx, guides, orientation)"
+new = "pending(GuideDrag), set only while a ruler drag runs, fed by `RulersOutput::guide`; show the Rulers before the Guides"
+
+[[setter]]
+type = "Guides"
+old = "request_delete(ctx, guides)"
+new = "the command GuideCommands::Delete, run with GuideCommands::apply"
+
+[[setter]]
+type = "Guides"
+old = "active_id(ctx)"
+new = ""
+note = "Commands route through the command registry."
+
+[[setter]]
+type = "Guides"
+old = "show(ui, canvas, view)"
+new = "show_at(ui, body.rect) in the body of a Canvas that has a view"
+
+[[setter]]
+type = "Guides"
+old = "style(&tokens)"
+new = ""
+note = "The style is built by the component's style hook."
+
+[[setter]]
+type = "SmartGuides"
+old = "color(Color32)"
+new = "color(DataColor)"
+
+# canvas-controls-b: marquee, outlines, line preview, grids
+
+[[type]]
+name = "MarqueeLook"
+old = "craft_ui::canvas::marquee::MarqueeLook"
+new = "craft_ui::canvas_controls::MarqueeLook"
+status = "moved"
+
+[[type]]
+name = "MarqueeStyle"
+old = "craft_ui::canvas::marquee::MarqueeStyle"
+new = "craft_ui::canvas_controls::MarqueeStyle"
+status = "moved"
+note = "The fields are now the component style: the ants' dash, march speed and repaint tick belong to the kit, and the click slop to the tool."
+
+[[type]]
+name = "MarqueeShape"
+old = ""
+new = "craft_ui::canvas_controls::MarqueeShape"
+status = "replaced"
+note = "New public name for the legacy private `Outline` enum: the shape a Marquee outlines."
+
+[[type]]
+name = "MarqueeDrag"
+old = "craft_ui::canvas::marquee::MarqueeDrag"
+new = ""
+status = "removed"
+note = "Replaced by the tool's press, drag and release under ToolHost."
+
+[[type]]
+name = "MarqueeResponse"
+old = "craft_ui::canvas::marquee::MarqueeResponse"
+new = ""
+status = "removed"
+note = "Replaced by the tool's press, drag and release under ToolHost."
+
+[[type]]
+name = "HoverOutline"
+old = "craft_ui::canvas::hover::HoverOutline"
+new = "craft_ui::canvas_controls::HoverOutline"
+status = "moved"
+
+[[type]]
+name = "HoverShape"
+old = "craft_ui::canvas::hover::HoverShape"
+new = "craft_ui::canvas_controls::HoverShape"
+status = "moved"
+
+[[type]]
+name = "HoverMask"
+old = "craft_ui::canvas::hover::HoverMask"
+new = "craft_ui::canvas_controls::HoverMask"
+status = "moved"
+
+[[type]]
+name = "HoverStyle"
+old = "craft_ui::canvas::hover::HoverStyle"
+new = ""
+status = "removed"
+note = "Replaced by the component style `OutlineStyle`; the debounce and busy timing belong to HoverLookup."
+
+[[type]]
+name = "OutlineStyle"
+old = ""
+new = "craft_ui::canvas_controls::OutlineStyle"
+status = "replaced"
+note = "The style of HoverOutline and SelectionOutline."
+
+[[type]]
+name = "SelectionOutline"
+old = "craft_ui::canvas::selection::outline::SelectionOutline"
+new = "craft_ui::canvas_controls::SelectionOutline"
+status = "moved"
+
+[[type]]
+name = "SelectionOutlineLook"
+old = "craft_ui::canvas::selection::outline::SelectionOutlineLook"
+new = "craft_ui::canvas_controls::SelectionOutlineLook"
+status = "moved"
+
+[[type]]
+name = "range_bands"
+old = "craft_ui::canvas::selection::bands::range_bands"
+new = "craft_ui::canvas_controls::range_bands"
+status = "moved"
+
+[[type]]
+name = "rect_around"
+old = "craft_ui::canvas::selection::bands::rect_around"
+new = "craft_ui::canvas_controls::rect_around"
+status = "moved"
+
+[[type]]
+name = "StraightLinePreview"
+old = "craft_ui::canvas::straight_line::StraightLinePreview"
+new = "craft_ui::canvas_controls::StraightLinePreview"
+status = "moved"
+
+[[type]]
+name = "LineGuideStyle"
+old = "craft_ui::canvas::straight_line::LineGuideStyle"
+new = "craft_ui::canvas_controls::LineGuideStyle"
+status = "moved"
+
+[[type]]
+name = "CanvasGrid"
+old = "craft_ui::canvas::grid::CanvasGrid"
+new = "craft_ui::canvas_controls::CanvasGrid"
+status = "moved"
+
+[[type]]
+name = "GridStyle"
+old = "craft_ui::canvas::grid::GridStyle"
+new = "craft_ui::canvas_controls::GridStyle"
+status = "moved"
+
+[[type]]
+name = "GridLine"
+old = "craft_ui::canvas::grid::GridLine"
+new = "craft_ui::canvas_controls::GridLine"
+status = "moved"
+
+[[type]]
+name = "GridLines"
+old = ""
+new = "craft_ui::canvas_controls::GridLines"
+status = "replaced"
+note = "The lines a grid draws, public for hosts that snap to them; legacy GridLines was crate-private. `CanvasGrid::lines(&space)` returns them; the type is `craft_ui::primitives::GridLines`, which `kit::grid_lines` paints."
+
+[[type]]
+name = "PixelGrid"
+old = "craft_ui::canvas::pixel_grid::PixelGrid"
+new = "craft_ui::canvas_controls::PixelGrid"
+status = "moved"
+
+[[type]]
+name = "GridSegment"
+old = "craft_ui::canvas::pixel_grid::GridSegment"
+new = "craft_ui::canvas_controls::GridSegment"
+status = "moved"
+
+[[setter]]
+type = "Marquee"
+old = "rect(rect, label)"
+new = "rect(label, rect)"
+
+[[setter]]
+type = "Marquee"
+old = "ellipse(rect, label)"
+new = "ellipse(label, rect)"
+
+[[setter]]
+type = "Marquee"
+old = "polygon(points, label)"
+new = "polygon(label, points)"
+
+[[setter]]
+type = "Marquee"
+old = "polyline(points, label)"
+new = "polyline(label, points)"
+
+[[setter]]
+type = "Marquee"
+old = "segments(segments, label)"
+new = "segments(label, segments)"
+
+[[setter]]
+type = "Marquee"
+old = "look(MarqueeLook)"
+new = "look(MarqueeLook)"
+note = "`MarqueeLook::Contrast(DataColor)` is the legacy `Contrast(Color32)`."
+
+[[setter]]
+type = "Marquee"
+old = "value(text)"
+new = "value(label)"
+
+[[setter]]
+type = "Marquee"
+old = "bounds_value(numbers, unit)"
+new = "the default value: the bounds written with the env's Units"
+
+[[setter]]
+type = "Marquee"
+old = "id_salt(salt)"
+new = "none: the component id names the control"
+
+[[setter]]
+type = "Marquee"
+old = "show(ui, canvas, view)"
+new = "show_at(ui, canvas_rect); the view is the canvas body's CanvasSpace"
+
+[[setter]]
+type = "Marquee"
+old = "paint(painter, view, look, time) and paint_screen(painter, clip, look, time)"
+new = "none: the control paints through a content painter at the canvas rect"
+
+[[setter]]
+type = "Marquee"
+old = "style(tokens)"
+new = "the component style MarqueeStyle"
+
+[[setter]]
+type = "HoverOutline"
+old = "new(id_salt, shape)"
+new = "new(label, shape)"
+
+[[setter]]
+type = "HoverOutline"
+old = "color(Color32)"
+new = "color(DataColor)"
+
+[[setter]]
+type = "SmartGuides"
+old = "bounds(kurbo::Rect)"
+new = "bounds(craft_behavior::kurbo::Rect)"
+
+[[setter]]
+type = "SmartGuides"
+old = "show(ui, view)"
+new = "show_at(ui, body.rect) in the body of a Canvas that has a view"
+
+[[setter]]
+type = "HoverOutline"
+old = "show(ui, view)"
+new = "show_at(ui, canvas_rect)"
+
+[[setter]]
+type = "SelectionOutline"
+old = "solid(paths) and dashed(paths)"
+new = "solid(label, paths) and dashed(label, paths)"
+
+[[setter]]
+type = "SelectionOutline"
+old = "color(Color32)"
+new = "color(DataColor)"
+
+[[setter]]
+type = "SelectionOutline"
+old = "paint(painter, view)"
+new = "show_at(ui, canvas_rect)"
+
+[[setter]]
+type = "StraightLinePreview"
+old = "new(from, to)"
+new = "new(label, from, to)"
+
+[[setter]]
+type = "StraightLinePreview"
+old = "paint(painter, view, style)"
+new = "show_at(ui, canvas_rect)"
+
+[[setter]]
+type = "CanvasGrid"
+old = "new(id)"
+new = "new(label)"
+
+[[setter]]
+type = "CanvasGrid"
+old = "color(Option<Color32>)"
+new = "color(DataColor)"
+
+[[setter]]
+type = "CanvasGrid"
+old = "min_zoom(Option<f64>) in points per unit"
+new = "min_zoom(f64) in device zoom (1 is 100 percent)"
+
+[[setter]]
+type = "CanvasGrid"
+old = "show(ui, view)"
+new = "show_at(ui, canvas_rect)"
+
+[[setter]]
+type = "CanvasGrid"
+old = "lines(view, style)"
+new = "lines(space)"
+
+[[setter]]
+type = "PixelGrid"
+old = "show(ctx, canvas, painter, view, source)"
+new = "PixelGrid::new(label, source).show_at(ui, canvas_rect)"
+
+[[setter]]
+type = "PixelGrid"
+old = "MIN_ZOOM, STRENGTH, LIGHT_SCALE, REGION_SNAP, MAX_SEGMENTS"
+new = "the same associated constants"
+
+# Brush overlays (canvas-controls-c): craft_ui::canvas_controls::brush
+[[type]]
+name = "BrushCursor"
+old = "craft_ui::canvas::brush::BrushCursor"
+new = "craft_ui::canvas_controls::brush::BrushCursor"
+status = "moved"
+
+[[type]]
+name = "BrushTip"
+old = "craft_ui::canvas::brush::BrushTip"
+new = "craft_ui::canvas_controls::brush::BrushTip"
+status = "moved"
+
+[[type]]
+name = "BrushTipOutline"
+old = "craft_ui::canvas::brush::BrushTipOutline"
+new = "craft_ui::canvas_controls::brush::BrushTipOutline"
+status = "moved"
+
+[[type]]
+name = "TipRings"
+old = "craft_ui::canvas::brush::TipRings"
+new = "craft_ui::canvas_controls::brush::TipRings"
+status = "moved"
+
+[[type]]
+name = "TipPose"
+old = "craft_ui::canvas::brush::TipPose"
+new = "craft_ui::canvas_controls::brush::TipPose"
+status = "moved"
+
+[[type]]
+name = "TipFalloff"
+old = "craft_ui::canvas::brush::TipFalloff"
+new = "craft_ui::canvas_controls::brush::TipFalloff"
+status = "moved"
+
+[[type]]
+name = "BrushResize"
+old = "craft_ui::canvas::brush::BrushResize"
+new = "craft_ui::canvas_controls::brush::BrushResize"
+status = "moved"
+
+[[type]]
+name = "BrushDimensions"
+old = "craft_ui::canvas::brush::BrushDimensions"
+new = "craft_ui::canvas_controls::brush::BrushDimensions"
+status = "moved"
+
+[[type]]
+name = "BrushLevel"
+old = "craft_ui::canvas::brush::BrushLevel"
+new = "craft_ui::canvas_controls::brush::BrushLevel"
+status = "moved"
+
+[[type]]
+name = "BrushResizeOptions"
+old = "craft_ui::canvas::brush::BrushResizeOptions"
+new = "craft_ui::canvas_controls::brush::BrushResizeOptions"
+status = "moved"
+
+[[type]]
+name = "PaintingCursor"
+old = "craft_ui::canvas::PaintingCursor"
+new = "craft_ui::canvas_controls::brush::PaintingCursor"
+status = "moved"
+
+[[type]]
+name = "BrushResizeLabels"
+old = "craft_ui::canvas::brush::BrushResizeLabels"
+new = ""
+status = "removed"
+note = "The readout's row labels are words: `craft_ui::canvas_controls::CanvasControlWords`."
+
+[[type]]
+name = "BrushStyle"
+old = "craft_ui::canvas::brush::BrushStyle"
+new = ""
+status = "removed"
+note = "The cursor sizes, the preview tint and the resize travel are gone as one value: the painters read their colours from tokens in their ComponentStyle (FalloffPreviewStyle), the crosshair reach is the token size.hit.target, read by BrushCursor::cursor through ToolContext::reach, and the travel is BrushResizeOptions::travel (default RESIZE_TRAVEL)."
+
+[[type]]
+name = "BrushCursorOptions"
+old = ""
+new = "craft_ui::canvas_controls::brush::BrushCursorOptions"
+status = "replaced"
+note = "The user's cursor preferences a brush cursor reads (painting cursor, Show Only Crosshair While Painting, Caps Lock precise); replaces the brush part of the legacy CursorOptions."
+
+[[type]]
+name = "ResizeStep"
+old = ""
+new = "craft_ui::canvas_controls::brush::ResizeStep"
+status = "replaced"
+note = "A resize step { phase: GesturePhase, dimensions, changed }; replaces EditEvent<BrushDimensions>."
+
+[[type]]
+name = "FalloffPreview"
+old = ""
+new = "craft_ui::canvas_controls::brush::FalloffPreview"
+status = "replaced"
+note = "The canvas control that shows a TipFalloff and the brush circle; replaces TipFalloff::paint and BrushResize::paint."
+
+[[type]]
+name = "TipCell"
+old = ""
+new = "craft_ui::canvas_controls::brush::TipCell"
+status = "replaced"
+note = "The canvas control that shows an aliased tip's pixel cell; replaces BrushCursor::paint_pixels."
+
+[[type]]
+name = "CursorBitmap"
+old = ""
+new = "craft_ui::canvas_controls::brush::CursorBitmap"
+status = "replaced"
+note = "The image of a painted circle, crosshair or outline for a window's own cursor, rendered from a CursorBitmapSpec; replaces the private cursor/bitmap.rs of the legacy cursor host."
+
+[[setter]]
+type = "BrushTip"
+old = "the struct literal BrushTip { diameter, outline }"
+new = "BrushTip::new(diameter, outline)"
+
+[[setter]]
+type = "BrushTipOutline"
+old = "the struct-like variants Round { .. }, Traced { .. } and Pixels { .. } as literals"
+new = "BrushTipOutline::round(normal_radius, full_radius), traced(normal, full) and pixels(cell, round)"
+
+[[setter]]
+type = "TipPose"
+old = "the struct literal TipPose { x_axis, y_axis }"
+new = "TipPose::new(x_axis, y_axis)"
+
+[[setter]]
+type = "BrushCursor"
+old = "icon(Icon)"
+new = "icon(craft_behavior::IconId)"
+
+[[setter]]
+type = "BrushCursor"
+old = "cursor(style, prefs, view, caps_lock) -> ToolCursor"
+new = "cursor(cx: &ToolContext, options, view) -> craft_behavior::Cursor; the crosshair reach is cx.reach() and Caps Lock is cx.caps_lock"
+
+[[setter]]
+type = "BrushCursor"
+old = "paint_pixels(painter, view, style)"
+new = "tip_cell() -> Option<TipCell> shown at the canvas rect with show_at; pixel_cell(view, pixels_per_point) -> Option<egui::Rect> is the snapped cell"
+
+[[setter]]
+type = "BrushCursor"
+old = "the Caps Lock and centre mark on circles and outlines"
+new = "centre(on) applies to an aliased tip only (crosshair instead of a hidden pointer): PaintedCursor::Circle and Outline carry no centre mark; badge(..) rides on the Standard icon and the crosshair only"
+
+[[setter]]
+type = "BrushResize"
+old = "chord(egui::PointerButton, egui::Modifiers) and takes(..)"
+new = "chord(craft_behavior::PointerButton, craft_keymap::Mods) and takes(..); the primary-button chord is Control and Alt (the Control key, not Command)"
+
+[[setter]]
+type = "BrushResize"
+old = "begin(view, at, start, options) -> Option<EditEvent<BrushDimensions>>"
+new = "begin(view, at, start, options) -> Option<ResizeStep>"
+
+[[setter]]
+type = "BrushResize"
+old = "track(view, at, modifiers) and finish(view, at, modifiers) -> Option<EditEvent<BrushDimensions>>"
+new = "track(view, at) and finish(view, at) -> Option<ResizeStep>"
+
+[[setter]]
+type = "BrushResize"
+old = "cancel() -> Option<EditEvent<BrushDimensions>>"
+new = "cancel() -> Option<ResizeStep> carrying the start values"
+
+[[setter]]
+type = "BrushResize"
+old = "paint(painter, view, style, falloff)"
+new = "preview(&falloff) -> Option<FalloffPreview> shown at the canvas rect with show_at"
+
+[[setter]]
+type = "BrushResize"
+old = "readout(units, labels) -> Option<Readout>"
+new = "readout_rows(units, words: &CanvasControlWords) -> Vec<(Label, String)> for ToolContext::readout"
+
+[[setter]]
+type = "BrushResizeOptions"
+old = "new(style, max_diameter) and tint(Color32)"
+new = "new(max_diameter), travel(points) and tint(DataColor)"
+
+[[setter]]
+type = "TipFalloff"
+old = "paint(painter, centre, zoom, tint)"
+new = "FalloffPreview::new(&falloff, centre, ring_radius) shown at the canvas rect, with tint(DataColor)"

@@ -1,0 +1,712 @@
+# API map of the "imaging workspaces" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "imaging workspaces"
+new_module = ""
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+
+# img-select-mask
+
+[[type]]
+name = "EditMode"
+old = "craft_imaging::ui::select_mask::EditMode"
+new = "craft_imaging::ui::select_mask::EditMode"
+status = "same"
+
+[[type]]
+name = "ObjectTarget"
+old = "craft_imaging::ui::select_mask::ObjectTarget"
+new = "craft_imaging::ui::select_mask::ObjectTarget"
+status = "same"
+
+[[type]]
+name = "RefineStroke"
+old = "craft_imaging::ui::select_mask::RefineStroke"
+new = "craft_imaging::ui::select_mask::RefineStroke"
+status = "same"
+
+[[type]]
+name = "SelectMaskEdit"
+old = "craft_imaging::ui::select_mask::SelectMaskEdit"
+new = "craft_imaging::ui::select_mask::SelectMaskEdit"
+status = "same"
+
+[[type]]
+name = "round_point"
+old = "craft_imaging::ui::select_mask::round_point"
+new = "craft_imaging::ui::select_mask::round_point"
+status = "same"
+
+[[type]]
+name = "LimitRefused"
+old = "craft_imaging::ui::select_mask::LimitRefused"
+new = "craft_imaging::ui::select_mask::LimitRefused"
+status = "same"
+
+[[type]]
+name = "OutputTo"
+old = "craft_imaging::ui::select_mask::OutputTo"
+new = "craft_imaging::ui::select_mask::OutputTo"
+status = "same"
+
+[[type]]
+name = "RefineSettings"
+old = "craft_imaging::ui::select_mask::RefineSettings"
+new = "craft_imaging::ui::select_mask::RefineSettings"
+status = "same"
+
+[[type]]
+name = "SelectMaskCommand"
+old = "craft_imaging::ui::select_mask::SelectMaskCommand"
+new = "craft_imaging::ui::select_mask::SelectMaskCommand"
+status = "same"
+
+[[type]]
+name = "SelectMaskLimits"
+old = "craft_imaging::ui::select_mask::SelectMaskLimits"
+new = "craft_imaging::ui::select_mask::SelectMaskLimits"
+status = "same"
+
+[[type]]
+name = "SelectMaskSession"
+old = "craft_imaging::ui::select_mask::SelectMaskSession"
+new = "craft_imaging::ui::select_mask::SelectMaskSession"
+status = "same"
+
+[[type]]
+name = "SelectMaskSettings"
+old = "craft_imaging::ui::select_mask::SelectMaskSettings"
+new = "craft_imaging::ui::select_mask::SelectMaskSettings"
+status = "same"
+
+[[type]]
+name = "BrushSizes"
+old = "craft_imaging::ui::select_mask::BrushSizes"
+new = "craft_imaging::ui::select_mask::BrushSizes"
+status = "same"
+
+[[type]]
+name = "SelectMaskTool"
+old = "craft_imaging::ui::select_mask::SelectMaskTool"
+new = "craft_imaging::ui::select_mask::SelectMaskTool"
+status = "same"
+
+[[type]]
+name = "SelectMaskToolOptions"
+old = "craft_imaging::ui::select_mask::SelectMaskToolOptions"
+new = "craft_imaging::ui::select_mask::SelectMaskToolOptions"
+status = "same"
+
+[[type]]
+name = "SelectMaskCanvas"
+old = "craft_imaging::ui::select_mask::SelectMaskCanvas"
+new = "craft_imaging::ui::select_mask::SelectMaskCanvas"
+status = "same"
+
+[[type]]
+name = "OVERLAY_COLOR_KEY"
+old = "craft_imaging::ui::fill::OVERLAY_COLOR_KEY"
+new = "craft_imaging::ui::fill::OVERLAY_COLOR_KEY"
+status = "same"
+
+[[type]]
+name = "SelectMaskSource"
+old = "craft_imaging::ui::select_mask::SelectMaskSource"
+new = "craft_imaging::ui::select_mask::SelectMaskSource"
+status = "replaced"
+note = "Gains `preview_job(&self, &SelectMaskPreviewRequest) -> Job<PreviewDone, String>`: the workspace starts it once per request through the dialog's pending store. `view`, `image` and `ants` stay."
+
+[[type]]
+name = "SelectMaskOpen"
+old = "craft_imaging::ui::select_mask::SelectMaskOpen"
+new = "craft_imaging::ui::select_mask::SelectMaskOpen"
+status = "replaced"
+note = "`checkerboard` is a `craft_ui::primitives::Checker`; `cursor_options` is an `Option<BrushCursorOptions>`; the fields `navigation`, `checkerboard` and `cursor_options` keep their builders."
+
+[[type]]
+name = "SelectMaskEvent"
+old = "craft_imaging::ui::select_mask::SelectMaskEvent"
+new = "craft_imaging::ui::select_mask::SelectMaskEvent"
+status = "replaced"
+note = "`Edit` and `Refine` carry an `EditPhase<T>` (Begin, Update, Commit, Cancel, Set) in place of the legacy `EditEvent<T>` with modifiers: the new `EditEvent` has no slot for a value at Begin."
+
+[[type]]
+name = "SelectMaskOutput"
+old = "craft_imaging::ui::select_mask::SelectMaskOutput"
+new = "craft_imaging::ui::select_mask::SelectMaskOutput"
+status = "replaced"
+note = "`closed: Option<DialogRole>` replaces `outcome`; `response` replaces `rect`; `preview_wanted` is gone (the workspace asks for the preview itself through `preview_job`)."
+
+[[type]]
+name = "SelectMaskWorkspace"
+old = "craft_imaging::ui::select_mask::SelectMaskWorkspace"
+new = "craft_imaging::ui::select_mask::SelectMaskWorkspace"
+status = "replaced"
+note = "`show(ui, source)` takes a `Ui` (was a `Context`). `navigation`, `checkerboard`, `cursor_options` and `set_color` stay as setters; `mask_view(MaskViewKeys, FirePhase)` is the app's forward; `step(Step)` is the app's Undo and Redo."
+
+[[type]]
+name = "SelectMaskBar"
+old = "craft_imaging::ui::select_mask::SelectMaskBar"
+new = "craft_imaging::ui::select_mask::SelectMaskBar"
+status = "replaced"
+note = "A pattern: `SelectMaskBar::new(tool, &mut options).show(ui)`; it takes no id salt and no labels."
+
+[[type]]
+name = "SelectMaskBarOutput"
+old = "craft_imaging::ui::select_mask::SelectMaskBarOutput"
+new = "craft_imaging::ui::select_mask::SelectMaskBarOutput"
+status = "replaced"
+note = "Gains an `Outcome` impl; `edit` is a `craft_behavior::EditEvent<SelectMaskToolOptions>`."
+
+[[type]]
+name = "SelectMaskPanel"
+old = "craft_imaging::ui::select_mask::SelectMaskPanel"
+new = "craft_imaging::ui::select_mask::SelectMaskPanel"
+status = "replaced"
+note = "A pattern: `SelectMaskPanel::new(&mut settings, &mut refine, &mut view).error(msg).show(ui)`; it takes no id salt and no labels."
+
+[[type]]
+name = "SelectMaskPanelOutput"
+old = "craft_imaging::ui::select_mask::SelectMaskPanelOutput"
+new = "craft_imaging::ui::select_mask::SelectMaskPanelOutput"
+status = "replaced"
+note = "Gains an `Outcome` impl; `edit` is a `craft_behavior::EditEvent<RefineSettings>`; `pick_color` is a `craft_ui::runtime::requests::ColorRequest`."
+
+[[type]]
+name = "SelectMaskCanvasTool"
+old = "craft_imaging::ui::select_mask::SelectMaskCanvasTool"
+new = "craft_imaging::ui::select_mask::SelectMaskCanvasTool"
+status = "replaced"
+note = "A `CanvasTool` over the new `ToolContext`: the document point comes from the canvas space, the keys are `ToolKey::{Submit, Cancel, Delete}`, the stroke trail and outlines are painted with `Draw` and the marching ants, and the resize preview is a canvas control the workspace shows."
+
+[[type]]
+name = "SelectMaskLabels"
+old = "craft_imaging::ui::select_mask::SelectMaskLabels"
+new = ""
+status = "removed"
+
+[[type]]
+name = "SelectMaskWords"
+old = ""
+new = "craft_imaging::ui::select_mask::SelectMaskWords"
+status = "replaced"
+note = "`words!` rows under the same `selectMask.*` ids; the tool names are the labels of `SelectMaskCommands`; the counted limit words are `count` rows (`limit_edits`, `limit_edit_points`, `limit_strokes`, `limit_stroke_points`) and `LimitRefused::message` takes an `Env`."
+
+[[type]]
+name = "SelectMaskStyle"
+old = "craft_imaging::ui::select_mask::SelectMaskStyle"
+new = ""
+status = "removed"
+note = "The reach sizes are named constants of the tool and the trail colour is the accent token at a share, read from the paint call's style context."
+
+[[type]]
+name = "SelectMaskCommands"
+old = ""
+new = "craft_imaging::ui::select_mask::SelectMaskCommands"
+status = "replaced"
+note = "New command set (prefix `selectMask`, scope `selectMask`): the tool letters and the brush size keys, taken in the dialog's scope."
+
+[[type]]
+name = "EditPhase"
+old = ""
+new = "craft_imaging::ui::select_mask::EditPhase"
+status = "replaced"
+note = "New: the lifecycle of a tool edit or stroke in `SelectMaskEvent`."
+
+[[type]]
+name = "SelectMaskPreviewRequest"
+old = ""
+new = "craft_imaging::ui::select_mask::SelectMaskPreviewRequest"
+status = "replaced"
+note = "New: what `SelectMaskSource::preview_job` is asked for."
+
+[[type]]
+name = "ContentAwareFillWorkspace"
+old = "craft_imaging::ui::fill::ContentAwareFillWorkspace"
+new = "craft_imaging::ui::fill::ContentAwareFillWorkspace"
+status = "same"
+
+[[type]]
+name = "FillBar"
+old = "craft_imaging::ui::fill::FillBar"
+new = "craft_imaging::ui::fill::FillBar"
+status = "same"
+
+[[type]]
+name = "FillBarOutput"
+old = "craft_imaging::ui::fill::FillBarOutput"
+new = "craft_imaging::ui::fill::FillBarOutput"
+status = "same"
+
+[[type]]
+name = "FillPanel"
+old = "craft_imaging::ui::fill::FillPanel"
+new = "craft_imaging::ui::fill::FillPanel"
+status = "same"
+
+[[type]]
+name = "FillPanelOutput"
+old = "craft_imaging::ui::fill::FillPanelOutput"
+new = "craft_imaging::ui::fill::FillPanelOutput"
+status = "same"
+
+[[type]]
+name = "FillPreviewPane"
+old = "craft_imaging::ui::fill::FillPreviewPane"
+new = "craft_imaging::ui::fill::FillPreviewPane"
+status = "same"
+
+[[type]]
+name = "FillOverlay"
+old = "craft_imaging::ui::fill::FillOverlay"
+new = "craft_imaging::ui::fill::FillOverlay"
+status = "same"
+
+[[type]]
+name = "SamplingPlane"
+old = "craft_imaging::ui::fill::SamplingPlane"
+new = "craft_imaging::ui::fill::SamplingPlane"
+status = "same"
+
+[[type]]
+name = "FillAreaEdit"
+old = "craft_imaging::ui::fill::FillAreaEdit"
+new = "craft_imaging::ui::fill::FillAreaEdit"
+status = "same"
+
+[[type]]
+name = "FillCanvas"
+old = "craft_imaging::ui::fill::FillCanvas"
+new = "craft_imaging::ui::fill::FillCanvas"
+status = "same"
+
+[[type]]
+name = "FillCanvasTool"
+old = "craft_imaging::ui::fill::FillCanvasTool"
+new = "craft_imaging::ui::fill::FillCanvasTool"
+status = "same"
+
+[[type]]
+name = "FillTool"
+old = "craft_imaging::ui::fill::FillTool"
+new = "craft_imaging::ui::fill::FillTool"
+status = "same"
+
+[[type]]
+name = "FillToolOptions"
+old = "craft_imaging::ui::fill::FillToolOptions"
+new = "craft_imaging::ui::fill::FillToolOptions"
+status = "same"
+
+[[type]]
+name = "FillSession"
+old = "craft_imaging::ui::fill::FillSession"
+new = "craft_imaging::ui::fill::FillSession"
+status = "same"
+
+[[type]]
+name = "FillSettings"
+old = "craft_imaging::ui::fill::FillSettings"
+new = "craft_imaging::ui::fill::FillSettings"
+status = "same"
+
+[[type]]
+name = "FillCommand"
+old = "craft_imaging::ui::fill::FillCommand"
+new = "craft_imaging::ui::fill::FillCommand"
+status = "same"
+
+[[type]]
+name = "FillLimits"
+old = "craft_imaging::ui::fill::FillLimits"
+new = "craft_imaging::ui::fill::FillLimits"
+status = "same"
+
+[[type]]
+name = "FillLimit"
+old = "craft_imaging::ui::fill::FillLimit"
+new = "craft_imaging::ui::fill::FillLimit"
+status = "same"
+
+[[type]]
+name = "FillReset"
+old = "craft_imaging::ui::fill::FillReset"
+new = "craft_imaging::ui::fill::FillReset"
+status = "same"
+
+[[type]]
+name = "SamplingMode"
+old = "craft_imaging::ui::fill::SamplingMode"
+new = "craft_imaging::ui::fill::SamplingMode"
+status = "same"
+
+[[type]]
+name = "SamplingStroke"
+old = "craft_imaging::ui::fill::SamplingStroke"
+new = "craft_imaging::ui::fill::SamplingStroke"
+status = "same"
+
+[[type]]
+name = "ColorAdaptation"
+old = "craft_imaging::ui::fill::ColorAdaptation"
+new = "craft_imaging::ui::fill::ColorAdaptation"
+status = "same"
+
+[[type]]
+name = "RotationAdaptation"
+old = "craft_imaging::ui::fill::RotationAdaptation"
+new = "craft_imaging::ui::fill::RotationAdaptation"
+status = "same"
+
+[[type]]
+name = "FillOutputTo"
+old = "craft_imaging::ui::fill::FillOutputTo"
+new = "craft_imaging::ui::fill::FillOutputTo"
+status = "same"
+
+[[type]]
+name = "FillSource"
+old = "craft_imaging::ui::fill::FillSource"
+new = "craft_imaging::ui::fill::FillSource"
+status = "same"
+
+[[type]]
+name = "FillOpen"
+old = "craft_imaging::ui::fill::FillOpen"
+new = "craft_imaging::ui::fill::FillOpen"
+status = "same"
+
+[[type]]
+name = "FillEvent"
+old = "craft_imaging::ui::fill::FillEvent"
+new = "craft_imaging::ui::fill::FillEvent"
+status = "same"
+
+[[type]]
+name = "FillOutput"
+old = "craft_imaging::ui::fill::FillOutput"
+new = "craft_imaging::ui::fill::FillOutput"
+status = "same"
+
+[[type]]
+name = "FillLabels"
+old = "craft_imaging::ui::fill::FillLabels"
+new = ""
+status = "removed"
+
+[[type]]
+name = "FillWords"
+old = ""
+new = "craft_imaging::ui::fill::FillWords"
+status = "replaced"
+note = "The words of the workspace; replaces FillLabels."
+
+[[type]]
+name = "FillCommands"
+old = ""
+new = "craft_imaging::ui::fill::FillCommands"
+status = "replaced"
+note = "The keys of the workspace (tool letters, brush size, tint), one command scope."
+
+[[type]]
+name = "FillStrokeEvent"
+old = ""
+new = "craft_imaging::ui::fill::FillStrokeEvent"
+status = "replaced"
+note = "The Sampling Brush stroke events; replaces EditEvent<SamplingStroke> in FillEvent::Stroke."
+
+[[type]]
+name = "FillPreviewRequest"
+old = ""
+new = "craft_imaging::ui::fill::FillPreviewRequest"
+status = "replaced"
+note = "What FillSource::preview_job fills with."
+
+[[type]]
+name = "PreviewFraming"
+old = ""
+new = "craft_imaging::ui::fill::PreviewFraming"
+status = "replaced"
+note = "The preview pane view framing state."
+
+[[type]]
+name = "VanishingPointWorkspace"
+old = "craft_imaging::ui::vanishing_point::VanishingPointWorkspace"
+new = "craft_imaging::ui::vanishing_point::VanishingPointWorkspace"
+status = "replaced"
+note = "A pattern the app holds: `show(ui, scene, source)` takes a `Ui` (was a `Context`) and reports `closed: Option<DialogRole>` (was `outcome`) and `response` (was `rect`); `step(craft_behavior::Step)` is the app's Undo and Redo, `momentary(..)` the app's fired Hand and Zoom commands; the preview is `VanishingPointSource::preview_job` (no ticket, no `preview_ready`, no `preview_failed`). The view and the strip's memory live in the dialog body."
+
+[[type]]
+name = "VanishingPointEditor"
+old = "craft_imaging::ui::vanishing_point::VanishingPointEditor"
+new = "craft_imaging::ui::vanishing_point::VanishingPointEditor"
+status = "replaced"
+note = "`pass(ctx, session, settings, scene, source)` returns a `VanishingPointPass` whose `tool()` is the canvas tool and `planes()` the canvas control; `delete_selected(session, scene, step)` takes the history step's name; `cancel(session, reason)` ends a drag (the host cancels only the tool's presses); `add_plane(session, scene, corners, step)` adds a plane from four typed corners; `labels`, `cursor_options` and `style` are gone."
+
+[[type]]
+name = "VanishingPointPass"
+old = "craft_imaging::ui::vanishing_point::VanishingPointPass"
+new = "craft_imaging::ui::vanishing_point::VanishingPointPass"
+status = "replaced"
+note = "No longer the `CanvasTool`: `tool()` gives the `VanishingPointTool` and `planes()` the `VanishingPlanes` control; both share the pass."
+
+[[type]]
+name = "VanishingPointBar"
+old = "craft_imaging::ui::vanishing_point::VanishingPointBar"
+new = "craft_imaging::ui::vanishing_point::VanishingPointBar"
+status = "replaced"
+note = "A pattern over `&VanishingPointSettings`: `VanishingPointBar::new(tool, &settings, paste, has_clip).has_strokes(..).show(ui)`; it takes no id salt and no labels and edits nothing in place."
+
+[[type]]
+name = "VanishingPointBarOutput"
+old = "craft_imaging::ui::vanishing_point::VanishingPointBarOutput"
+new = "craft_imaging::ui::vanishing_point::VanishingPointBarOutput"
+status = "replaced"
+note = "`edit` is an `EditEvent<VanishingPointSettings>` and `paste_width` an `EditEvent<f64>` (was `paste: Option<PasteImage>`); gains an `Outcome` impl."
+
+[[type]]
+name = "VanishingPointLabels"
+old = "craft_imaging::ui::vanishing_point::VanishingPointLabels"
+new = ""
+status = "removed"
+note = "Replaced by `VanishingPointWords`; the tools' names are the labels of `VanishingPointCommands`."
+
+[[type]]
+name = "VanishingPointStyle"
+old = "craft_imaging::ui::vanishing_point::VanishingPointStyle"
+new = "craft_imaging::ui::vanishing_point::VanishingPointStyle"
+status = "replaced"
+note = "A `ComponentStyle` of the planes control built from `StyleCx`; it has no public fields and no `of(tokens)`."
+
+[[type]]
+name = "VanishingPointSource"
+old = "craft_imaging::ui::vanishing_point::VanishingPointSource"
+new = "craft_imaging::ui::vanishing_point::VanishingPointSource"
+status = "replaced"
+note = "`paste()` returns `Option<&dyn RasterSource>` (was a `SizedTexture`); gains `preview_job`."
+
+[[type]]
+name = "VanishingPointOpen"
+old = "craft_imaging::ui::vanishing_point::VanishingPointOpen"
+new = "craft_imaging::ui::vanishing_point::VanishingPointOpen"
+status = "replaced"
+note = "Loses `cursor_options`; `checkerboard` is a `craft_ui::primitives::Checker` and `navigation` stays."
+
+[[type]]
+name = "VanishingPointOutput"
+old = "craft_imaging::ui::vanishing_point::VanishingPointOutput"
+new = "craft_imaging::ui::vanishing_point::VanishingPointOutput"
+status = "replaced"
+note = "`closed` replaces `outcome`, `response` replaces `rect`; `preview_wanted` is gone (the workspace starts the preview job itself)."
+
+[[type]]
+name = "VanishingPointStripTool"
+old = "craft_imaging::ui::vanishing_point::VanishingPointStripTool"
+new = "craft_imaging::ui::vanishing_point::VanishingPointStripTool"
+status = "same"
+
+[[type]]
+name = "VanishingPointEvent"
+old = "craft_imaging::ui::vanishing_point::VanishingPointEvent"
+new = "craft_imaging::ui::vanishing_point::VanishingPointEvent"
+status = "same"
+
+[[type]]
+name = "paint_editor"
+old = "craft_imaging::ui::vanishing_point::paint_editor"
+new = ""
+status = "removed"
+note = "The planes control paints itself (`VanishingPointPass::planes`)."
+
+[[type]]
+name = "VanishingPointSession"
+old = "craft_imaging::ui::vanishing_point::VanishingPointSession"
+new = "craft_imaging::ui::vanishing_point::VanishingPointSession"
+status = "same"
+
+[[type]]
+name = "VanishingPointSettings"
+old = "craft_imaging::ui::vanishing_point::VanishingPointSettings"
+new = "craft_imaging::ui::vanishing_point::VanishingPointSettings"
+status = "same"
+
+[[type]]
+name = "StampSettings"
+old = "craft_imaging::ui::vanishing_point::StampSettings"
+new = "craft_imaging::ui::vanishing_point::StampSettings"
+status = "same"
+
+[[type]]
+name = "StampStroke"
+old = "craft_imaging::ui::vanishing_point::StampStroke"
+new = "craft_imaging::ui::vanishing_point::StampStroke"
+status = "same"
+
+[[type]]
+name = "StampLimits"
+old = "craft_imaging::ui::vanishing_point::StampLimits"
+new = "craft_imaging::ui::vanishing_point::StampLimits"
+status = "same"
+
+[[type]]
+name = "PasteImage"
+old = "craft_imaging::ui::vanishing_point::PasteImage"
+new = "craft_imaging::ui::vanishing_point::PasteImage"
+status = "same"
+
+[[type]]
+name = "PlaneEdit"
+old = "craft_imaging::ui::vanishing_point::PlaneEdit"
+new = "craft_imaging::ui::vanishing_point::PlaneEdit"
+status = "same"
+
+[[type]]
+name = "VanishingTool"
+old = "craft_imaging::ui::vanishing_point::VanishingTool"
+new = "craft_imaging::ui::vanishing_point::VanishingTool"
+status = "same"
+
+[[type]]
+name = "VanishingScene"
+old = "craft_imaging::ui::vanishing_point::VanishingScene"
+new = "craft_imaging::ui::vanishing_point::VanishingScene"
+status = "same"
+
+[[type]]
+name = "VanishingPlane"
+old = "craft_imaging::ui::vanishing_point::VanishingPlane"
+new = "craft_imaging::ui::vanishing_point::VanishingPlane"
+status = "same"
+
+[[type]]
+name = "TornPlane"
+old = "craft_imaging::ui::vanishing_point::TornPlane"
+new = "craft_imaging::ui::vanishing_point::TornPlane"
+status = "same"
+
+[[type]]
+name = "PlaneCheck"
+old = "craft_imaging::ui::vanishing_point::PlaneCheck"
+new = "craft_imaging::ui::vanishing_point::PlaneCheck"
+status = "same"
+
+[[type]]
+name = "PlaneEdge"
+old = "craft_imaging::ui::vanishing_point::PlaneEdge"
+new = "craft_imaging::ui::vanishing_point::PlaneEdge"
+status = "same"
+
+# One entry per renamed, removed or reshaped setter or constructor.
+
+[[setter]]
+type = "SelectMaskOpen"
+old = "checkerboard(Checkerboard)"
+new = "checkerboard(craft_ui::primitives::Checker)"
+
+[[setter]]
+type = "SelectMaskOpen"
+old = "cursor_options(CursorOptions)"
+new = "cursor_options(BrushCursorOptions)"
+
+[[setter]]
+type = "SelectMaskWorkspace"
+old = "cursor_options(&mut self, CursorOptions) -> &mut Self"
+new = "cursor_options(&mut self, BrushCursorOptions)"
+
+[[setter]]
+type = "SelectMaskWorkspace"
+old = "preview_ready(PreviewTicket)"
+new = ""
+
+[[setter]]
+type = "SelectMaskWorkspace"
+old = "preview_failed(PreviewTicket, String)"
+new = ""
+
+[[setter]]
+type = "ContentAwareFillWorkspace"
+old = "show(ctx, source)"
+new = "show(ui, source)"
+note = "Shown in a Ui; the output has closed: Option<DialogRole> and apply: bool in place of outcome."
+
+[[setter]]
+type = "ContentAwareFillWorkspace"
+old = "navigation(options)"
+new = "navigation(options)"
+note = "Unchanged name; NavigationOptions is craft_ui::canvas::NavigationOptions."
+
+[[setter]]
+type = "ContentAwareFillWorkspace"
+old = "checkerboard(checkerboard)"
+new = "checkerboard(checker)"
+note = "Checker replaces Checkerboard."
+
+[[setter]]
+type = "ContentAwareFillWorkspace"
+old = "cursor_options(options)"
+new = "cursor_options(options)"
+note = "BrushCursorOptions replaces CursorOptions."
+
+[[setter]]
+type = "ContentAwareFillWorkspace"
+old = "preview_ready(ticket)"
+new = ""
+note = "Removed: the preview job is a Pending the workspace polls; the source gives FillSource::preview_job."
+
+[[setter]]
+type = "ContentAwareFillWorkspace"
+old = "preview_failed(ticket, message)"
+new = ""
+note = "Removed: a failed job shows through FullWindowStatus."
+
+[[setter]]
+type = "FillOutput"
+old = "preview_wanted"
+new = ""
+note = "Replaced by FillSource::preview_job."
+
+[[setter]]
+type = "FillOutput"
+old = "outcome"
+new = "closed, apply"
+note = "closed: Option<DialogRole> (Accept, Cancel) and apply: bool."
+
+[[setter]]
+type = "FillCanvas"
+old = "cursor_options(options)"
+new = ""
+note = "Removed: the workspace passes the cursor options to the tool."
+
+[[setter]]
+type = "ContentAwareFillWorkspace"
+old = "step(step)"
+new = "step(step)"
+note = "Step is craft_behavior::edit_history::Step; with a stroke open the step waits for the next pass."
+
+[[setter]]
+type = "ContentAwareFillWorkspace"
+old = "zoom(keys)"
+new = ""
+note = "Removed: the zoom chords are the ViewCommand scope of the dialog."
+
+[[setter]]
+type = "VanishingPointWorkspace"
+old = "labels"
+new = ""
+note = "The words are the installed ones (`VanishingPointWords`)."
+
+[[setter]]
+type = "VanishingPointWorkspace"
+old = "style"
+new = ""
+note = "The style is the planes control's, from the theme."
+
+[[setter]]
+type = "VanishingPointOpen"
+old = "cursor_options"
+new = ""
+note = "The cursor service holds the user's cursor options."
+

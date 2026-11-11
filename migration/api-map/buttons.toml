@@ -1,0 +1,229 @@
+# API map of the "Buttons" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Buttons"
+new_module = "craft_ui::buttons"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "Button"
+old = "craft_ui::controls::button::Button"
+new = "craft_ui::buttons::Button"
+status = "moved"
+note = "A `Component` shown with `Show::show`; `ui.add(Button::new(..))` becomes `Button::new(..).show(ui)`. The output is `ButtonOutput`: it dereferences to the `Response` and carries `clicks`, the press count of the activating click. `ButtonStyle` is a new struct: `Button::style(tokens, variant, size)` is gone."
+
+[[type]]
+name = "ButtonVariant"
+old = "craft_theme::ButtonVariant"
+new = ""
+status = "replaced"
+note = "Primary, Secondary, Ghost and Danger are `Variant::PRIMARY`, `SECONDARY`, `GHOST` and `DANGER`."
+
+[[type]]
+name = "ButtonTone"
+old = "craft_ui::controls::button::ButtonTone"
+new = ""
+status = "replaced"
+note = "`ButtonTone::Accent` is `Variant::look(Emphasis::Outline, Tone::Accent)`: the label and icon take the accent colour and the edge takes the accent border."
+
+[[type]]
+name = "IconButton"
+old = "craft_ui::controls::icon_button::IconButton"
+new = "craft_ui::buttons::IconButton"
+status = "moved"
+note = "A `Component`; `new(icon)` then `.label(name)`. The icon is an `IconId`. A toggling icon button is `ToggleButton::new(label, bind).icon(..).icon_only()`; `selected(on)` is the `Props::selected` setter."
+
+[[type]]
+name = "IconSource"
+old = "craft_ui::controls::icon_button::IconSource"
+new = ""
+status = "removed"
+note = "Library icons are `IconId`s of the catalog; an app image has no counterpart (add the SVG to the catalog)."
+
+[[type]]
+name = "IconButtonStyle"
+old = "craft_ui::controls::icon_button::IconButtonStyle"
+new = "craft_ui::buttons::IconButtonStyle"
+status = "replaced"
+note = "Read-only style struct; `with_style` goes. A rail's look is the `craft_ui.rail` custom variant."
+
+[[type]]
+name = "ToggleButton"
+old = "craft_ui::controls::toggle_button::ToggleButton"
+new = "craft_ui::buttons::ToggleButton"
+status = "moved"
+note = "`ToggleButton::new(label, Bind::bound(&mut on))` in place of `new(label, &mut on)`; output `EditResponse<bool>`."
+
+[[type]]
+name = "SplitButton"
+old = "craft_ui::controls::split_button::SplitButton"
+new = "craft_ui::buttons::SplitButton"
+status = "moved"
+note = "`new(label, &[Entry<T>])`; the id salt is `.id_salt(..)`. `show(ui)` returns `SplitOutput<T>`: `response.clicked()` runs the action (was `main.clicked()`) and `chosen` is the picked entry (was `menu.chosen`). `MenuEntry<T>` becomes `craft_ui::contract::Entry<T>`."
+
+[[type]]
+name = "Link"
+old = "craft_ui::controls::link::Link"
+new = "craft_ui::buttons::Link"
+status = "moved"
+note = "A `Component`; the caller reads `clicked()`. Opening the URL is `Cx::open_url`."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+
+[[setter]]
+type = "Button"
+old = "variant(ButtonVariant)"
+new = "variant(Variant)"
+
+[[setter]]
+type = "Button"
+old = "tone(ButtonTone::Accent)"
+new = "variant(Variant::look(Emphasis::Outline, Tone::Accent))"
+
+[[setter]]
+type = "Button"
+old = "size(ControlSize)"
+new = "size(ControlSize)"
+
+[[setter]]
+type = "Button"
+old = "icon(Icon)"
+new = "icon(IconId)"
+
+[[setter]]
+type = "Button"
+old = "trailing_icon(Icon)"
+new = "trailing_icon(IconId)"
+
+[[setter]]
+type = "Button"
+old = "min_width(f32), natural_width(ui)"
+new = ""
+note = "Removed: no size prop in points. Buttons of a shared width sit in a `Grid` column; `Show::measure_in` gives the natural size."
+
+[[setter]]
+type = "Button"
+old = "id_salt(..)"
+new = "id_salt(..)"
+
+[[setter]]
+type = "IconButton"
+old = "new(icon, label)"
+new = "new(icon).label(label)"
+
+[[setter]]
+type = "IconButton"
+old = "toggle(&mut on) and when_on(icon, label)"
+new = "ToggleButton::new(label, Bind::bound(&mut on)).icon(off_icon).on_icon(on_icon).icon_only()"
+note = "The accessible name stays the label in both states."
+
+[[setter]]
+type = "IconButton"
+old = "selected(bool)"
+new = "selected(bool)"
+
+[[setter]]
+type = "IconButton"
+old = "tone(Tone)"
+new = "variant(Variant::look(Emphasis::Ghost, tone))"
+note = "Accepted tones: accent, info, good, warn and bad. The glyph reads in the ink of the surface, not in the tone's colour (see the misfit report)."
+
+[[setter]]
+type = "IconButton"
+old = "show_tooltip(bool), shortcut(..)"
+new = "tooltip(..)"
+note = "No default tooltip: an icon-only button gets `.tooltip(label)`. The shortcut shown is the bound command's chord (`IconButton::command`)."
+
+[[setter]]
+type = "IconButton"
+old = "icon_size(f32), side(f32)"
+new = ""
+note = "Removed: no size prop in points. The size class sets the side and the glyph."
+
+[[setter]]
+type = "IconButton"
+old = "with_id(Id)"
+new = "id(Id)"
+
+[[setter]]
+type = "IconButton"
+old = "with_style(IconButtonStyle)"
+new = "variant(RAIL)"
+note = "A custom variant for `IconButtonStyleKey`, declared by the rail family."
+
+[[setter]]
+type = "IconButton"
+old = "show_at(ui, rect)"
+new = "Show::show_at(ui, rect)"
+
+[[setter]]
+type = "IconButton"
+old = "focusable(bool)"
+new = "focusable(bool)"
+
+[[setter]]
+type = "IconButton"
+old = "badge(color)"
+new = "badge(color)"
+
+[[setter]]
+type = "ToggleButton"
+old = "new(label, &mut bool)"
+new = "new(label, Bind<bool>)"
+
+[[setter]]
+type = "ToggleButton"
+old = "role(TypeRole)"
+new = "role(TypeRole)"
+
+[[setter]]
+type = "ToggleButton"
+old = "icon(Icon), trailing_icon(Icon)"
+new = "icon(IconId), trailing_icon(IconId)"
+
+[[setter]]
+type = "SplitButton"
+old = "new(id_salt, label, entries)"
+new = "new(label, &[Entry<T>]).id_salt(id_salt)"
+
+[[setter]]
+type = "SplitButton"
+old = "arrow_label(..)"
+new = "arrow_label(..)"
+
+[[setter]]
+type = "SplitButton"
+old = "icon(Icon)"
+new = "icon(IconId)"
+
+[[setter]]
+type = "SplitButton"
+old = "variant(ButtonVariant)"
+new = "variant(Variant)"
+
+[[setter]]
+type = "Link"
+old = "url(..)"
+new = "url(..)"
+
+[[setter]]
+type = "Link"
+old = "role(TypeRole)"
+new = "role(TypeRole)"
+
+[[call]]
+old = "craft_theme::ButtonVariant"
+new = "craft_theme::Variant"
+note = "Type `ButtonVariant` is replaced; the type entry above has the details."
+
+[[call]]
+old = "craft_ui::controls::button::ButtonTone"
+new = "craft_theme::Variant"
+note = "Type `ButtonTone` is replaced; the type entry above has the details."
+
+[[call]]
+old = "IconButton::new(label, size, &style).show(ui, paint_icon)"
+new = ""
+note = "The deprecated legacy `buttons::IconButton` (app-supplied colours and painting) has no counterpart. Call sites use `IconButton::new(icon).label(label)` with a catalog icon and a theme variant; a custom painter is an app component."

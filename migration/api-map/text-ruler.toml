@@ -1,0 +1,197 @@
+# API map of the "Text ruler and tab dialogs" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Text ruler and tab dialogs"
+new_module = "craft_text::ui"
+
+[[type]]
+name = "TextRuler"
+old = "craft_text::ui::ruler::TextRuler"
+new = "craft_text::ui::ruler::TextRuler"
+status = "same"
+note = "A craft-ui component. `TextRuler::new(label, Bind<RulerValues>, width)` replaces `new(id_salt, &values, width)`; it is shown with `show(ui)` or `show_at(ui, rect)` and the output is `TextRulerOutput`. `unit` takes `DocUnit`; `kind` takes the selector's current kind and the clicked kind comes back in `TextRulerOutput::kind`; the selector sits inside the rect at the start edge. `labels(..)` is gone (words come from the scope)."
+
+[[type]]
+name = "TextRulerResponse"
+old = "craft_text::ui::ruler::TextRulerResponse"
+new = ""
+status = "removed"
+note = "Replaced by `TextRulerOutput`."
+
+[[type]]
+name = "TextRulerOutput"
+old = ""
+new = "craft_text::ui::ruler::TextRulerOutput"
+status = "replaced"
+note = "Replaces `TextRulerResponse`. `edit` is `EditResponse<RulerValues>` (Begin, Update, Commit, Cancel, Set); `selected` is `picked`; `column` is a `ColumnDrag` with its gesture phase; `response` is `edit.response`."
+
+[[type]]
+name = "TextRulerLabels"
+old = "craft_text::ui::ruler::TextRulerLabels"
+new = ""
+status = "removed"
+note = "Replaced by `TextRulerWords`."
+
+[[type]]
+name = "TextRulerWords"
+old = ""
+new = "craft_text::ui::ruler::TextRulerWords"
+status = "replaced"
+note = "Replaces `TextRulerLabels`. Words of the scope; the drag tooltip is the pointer readout."
+
+[[type]]
+name = "RulerValues"
+old = "craft_text::ui::ruler::RulerValues"
+new = "craft_text::ui::ruler::RulerValues"
+status = "same"
+note = "The struct is `#[non_exhaustive]`: build it from `RulerValues::default()` and set its fields (`let mut v = RulerValues::default(); v.field = ..`)."
+
+[[type]]
+name = "TabStop"
+old = "craft_text::ui::ruler::TabStop"
+new = "craft_text::ui::ruler::TabStop"
+status = "same"
+note = "The struct is `#[non_exhaustive]`: build it with `TabStop::new(position, align, leader)`."
+
+[[type]]
+name = "TabAlign"
+old = "craft_text::ui::ruler::TabAlign"
+new = "craft_text::ui::ruler::TabAlign"
+status = "same"
+
+[[type]]
+name = "TabLeader"
+old = "craft_text::ui::ruler::TabLeader"
+new = "craft_text::ui::ruler::TabLeader"
+status = "same"
+
+[[type]]
+name = "ColumnBorder"
+old = "craft_text::ui::ruler::ColumnBorder"
+new = "craft_text::ui::ruler::ColumnBorder"
+status = "same"
+note = "The struct is `#[non_exhaustive]`: build it with `ColumnBorder::new(index, position)`."
+
+[[type]]
+name = "TabStopsDialog"
+old = "craft_text::ui::tabs_dialog::TabStopsDialog"
+new = "craft_text::ui::tabs_dialog::TabStopsDialog"
+status = "same"
+note = "A pattern on `Dialog`; the stops are a `Table` with the selected stop's fields under it (in-place cell editing is replaced by those fields). `unit` takes `DocUnit`; `labels(..)` is gone."
+
+[[type]]
+name = "TabStopsLabels"
+old = "craft_text::ui::tabs_dialog::TabStopsLabels"
+new = ""
+status = "removed"
+note = "Replaced by `TabStopsWords`."
+
+[[type]]
+name = "TabStopsWords"
+old = ""
+new = "craft_text::ui::tabs_dialog::TabStopsWords"
+status = "replaced"
+note = "Replaces `TabStopsLabels`."
+
+[[type]]
+name = "TabStopsResult"
+old = "craft_text::ui::tabs_dialog::TabStopsResult"
+new = "craft_text::ui::tabs_dialog::TabStopsResult"
+status = "same"
+note = "The struct is `#[non_exhaustive]`: build it from `TabStopsResult::default()` and set its fields (`let mut v = TabStopsResult::default(); v.field = ..`)."
+
+[[type]]
+name = "TextColumnsDialog"
+old = "craft_text::ui::columns::TextColumnsDialog"
+new = "craft_text::ui::columns::TextColumnsDialog"
+status = "same"
+note = "A pattern on `Dialog`. `unit` takes `DocUnit`; `labels(..)` is gone."
+
+[[type]]
+name = "TextColumnsLabels"
+old = "craft_text::ui::columns::TextColumnsLabels"
+new = ""
+status = "removed"
+note = "Replaced by `TextColumnsWords`."
+
+[[type]]
+name = "TextColumnsWords"
+old = ""
+new = "craft_text::ui::columns::TextColumnsWords"
+status = "replaced"
+note = "Replaces `TextColumnsLabels`."
+
+[[type]]
+name = "TextColumns"
+old = "craft_text::ui::columns::TextColumns"
+new = "craft_text::ui::columns::TextColumns"
+status = "same"
+note = "The struct is `#[non_exhaustive]`: build it from `TextColumns::default()` and set its fields (`let mut v = TextColumns::default(); v.field = ..`)."
+
+[[type]]
+name = "ColumnsApply"
+old = "craft_text::ui::columns::ColumnsApply"
+new = "craft_text::ui::columns::ColumnsApply"
+status = "same"
+
+[[type]]
+name = "ColumnsPreset"
+old = "craft_text::ui::columns::ColumnsPreset"
+new = "craft_text::ui::columns::ColumnsPreset"
+status = "same"
+
+[[type]]
+name = "ColumnsChoice"
+old = "craft_text::ui::columns::ColumnsChoice"
+new = "craft_text::ui::columns::ColumnsChoice"
+status = "same"
+
+[[type]]
+name = "LengthUnit"
+old = "craft_ui::localized::units::LengthUnit"
+new = ""
+status = "removed"
+note = "Replaced by `DocUnit`."
+
+[[type]]
+name = "DocUnit"
+old = ""
+new = "craft_text::ui::DocUnit"
+status = "replaced"
+note = "Replaces `LengthUnit`. `DocUnit::new(UnitKind, pixels_per_inch)` or `DocUnit::points()`; lengths stay in points."
+
+[[call]]
+old = "columns_menu(current, &labels)"
+new = "columns_menu(current, &words)"
+note = "Returns `Vec<Entry<ColumnsChoice>>` for `Menu::pick`; the words come from `env.words::<TextColumnsWords>()`."
+
+[[setter]]
+type = "TextRuler"
+old = "kind(&mut TabAlign)"
+new = "kind(TabAlign)"
+note = "The clicked kind is `TextRulerOutput::kind`; the app stores it."
+
+[[setter]]
+type = "TextRuler"
+old = "labels(TextRulerLabels)"
+new = ""
+note = "Words come from the scope."
+
+[[setter]]
+type = "TabStopsDialog"
+old = "labels(TabStopsLabels)"
+new = ""
+note = "Words come from the scope."
+
+[[setter]]
+type = "TextColumnsDialog"
+old = "labels(TextColumnsLabels)"
+new = ""
+note = "Words come from the scope."
+
+[[type]]
+name = "PreviewPlan"
+old = "craft_text::ui::columns::PreviewPlan"
+new = "craft_text::ui::columns::PreviewPlan"
+status = "same"
+note = "The struct is `#[non_exhaustive]`: `preview_plan` builds it; read its fields."

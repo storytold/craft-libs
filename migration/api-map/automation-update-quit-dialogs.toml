@@ -1,0 +1,499 @@
+# API map of the "Automation, update, quit, dialogs" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Automation, update, quit, dialogs"
+new_module = "craft_dialogs::ui"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "FileListPicker"
+old = "craft_dialogs::ui::FileListPicker"
+new = "craft_dialogs::ui::FileListPicker"
+status = "same"
+note = "A pattern over one `List<usize>`: `FileListPicker::new(label, Bind<FileList>)` with `request`, `folder_mode`, `open_files`, `folder_files` and `info` as props. `show(ui) -> FileListPickerOutput`. The ticket of Browse is kept in the picker's container; Delete and Backspace remove the selected file and Alt+Up and Alt+Down move it (the list's contract keys). Folder mode is the same list over the folder's files with no selection. The buttons sit under the list, not beside it."
+
+[[type]]
+name = "FileList"
+old = "craft_dialogs::ui::FileList"
+new = "craft_dialogs::ui::FileList"
+status = "same"
+note = "`#[non_exhaustive]`: build it with `FileList::default()` and set the fields. `problem` takes `&FileListWords`."
+
+[[type]]
+name = "FileListMode"
+old = "craft_dialogs::ui::FileListMode"
+new = "craft_dialogs::ui::FileListMode"
+status = "same"
+note = "`#[non_exhaustive]`."
+
+[[type]]
+name = "FileListPickerResponse"
+old = "craft_dialogs::ui::FileListPickerResponse"
+new = ""
+status = "removed"
+note = "Replaced by `FileListPickerOutput { response, changed, browsing }`."
+
+[[type]]
+name = "FileListPickerOutput"
+old = ""
+new = "craft_dialogs::ui::FileListPickerOutput"
+status = "replaced"
+note = "`{ response, changed, browsing: Option<PickId> }`; the old response had no `response` field."
+
+[[type]]
+name = "FileListLabels"
+old = "craft_dialogs::ui::FileListLabels"
+new = ""
+status = "removed"
+note = "Replaced by `FileListWords`. The word ids move from `fileList.*` to `fileListPicker.*`; the text is unchanged."
+
+[[type]]
+name = "FileListWords"
+old = ""
+new = "craft_dialogs::ui::FileListWords"
+status = "replaced"
+note = "The words of the file list picker (`fileListPicker.*`), read with `Env::of(ui).words::<FileListWords>()`."
+
+[[type]]
+name = "PathField"
+old = "craft_dialogs::ui::PathField"
+new = "craft_dialogs::ui::PathField"
+status = "same"
+note = "A pattern over `OutputPathRow`: `PathField::new(label, Bind<String>, PickRequest)` with `must_exist(bool)`. `show(ui) -> PathFieldOutput`. The Browse button reads `OutputPathRow`'s word (`outputPath.browse`, \"Choose File…\"). \"Not found\" is a `Validity::Warn` message of the row, not red text under the field."
+
+[[type]]
+name = "PathFieldResponse"
+old = "craft_dialogs::ui::PathFieldResponse"
+new = ""
+status = "removed"
+note = "Replaced by `PathFieldOutput { response, edit: Option<EditEvent<String>>, browsing }`."
+
+[[type]]
+name = "PathFieldOutput"
+old = ""
+new = "craft_dialogs::ui::PathFieldOutput"
+status = "replaced"
+note = "The typed path is a commit and the picker's answer a set; both are written into the bound path."
+
+[[type]]
+name = "PathFieldLabels"
+old = "craft_dialogs::ui::PathFieldLabels"
+new = ""
+status = "removed"
+note = "Replaced by `PathFieldWords` (`pathField.notFound`). `pathField.browse` is gone: the Browse button reads `outputPath.browse`."
+
+[[type]]
+name = "PathFieldWords"
+old = ""
+new = "craft_dialogs::ui::PathFieldWords"
+status = "replaced"
+note = "`not_found` (`pathField.notFound`)."
+
+[[type]]
+name = "ReplaceLabels"
+old = "craft_dialogs::ui::ReplaceLabels"
+new = ""
+status = "removed"
+note = "Replaced by `ReplacePromptWords`; the ids `fileService.*` are unchanged. `words()` still gives the `ReplaceWords` for `FilePanels::replace_words`."
+
+[[type]]
+name = "ReplacePromptWords"
+old = ""
+new = "craft_dialogs::ui::ReplacePromptWords"
+status = "replaced"
+note = "`title`, `question` (a template with `{name}`), `replace` and `cancel`."
+
+[[type]]
+name = "UnavailableLabels"
+old = "craft_dialogs::ui::UnavailableLabels"
+new = ""
+status = "removed"
+note = "Replaced by `UnavailableWords`; the id `fileService.unavailable` is unchanged."
+
+[[type]]
+name = "UnavailableWords"
+old = ""
+new = "craft_dialogs::ui::UnavailableWords"
+status = "replaced"
+note = "`sentence(cause)` replaces `UnavailableLabels::message(cause)`."
+
+[[type]]
+name = "CaptureSlot"
+old = "craft_ui::capture::CaptureSlot"
+new = ""
+status = "removed"
+note = "`WindowHost::screenshot(viewport, max_image_bytes)` issues the command and returns the slot; the slot is `ScreenshotSlot`."
+
+[[type]]
+name = "CaptureError"
+old = "craft_ui::capture::CaptureError"
+new = ""
+status = "removed"
+note = "`ScreenshotError`, same variants."
+
+[[type]]
+name = "ScreenshotSlot"
+old = ""
+new = "craft_ui::runtime::windows::ScreenshotSlot"
+status = "replaced"
+note = "Made by `WindowHost::screenshot`; `take` and `cancel` as the legacy slot."
+
+[[type]]
+name = "ScreenshotError"
+old = ""
+new = "craft_ui::runtime::windows::ScreenshotError"
+status = "replaced"
+note = "Returned by `ScreenshotSlot::take`."
+
+[[type]]
+name = "ScreenshotFacts"
+old = ""
+new = "craft_ui::runtime::windows::ScreenshotFacts"
+status = "replaced"
+note = "Returned by `WindowHost::screenshot_facts`; replaces the egui reads of `CaptureGeometry::current`."
+
+[[type]]
+name = "events"
+old = "craft_ui::testing::events"
+new = ""
+status = "removed"
+note = "The `WindowHost::inject_move`, `inject_click`, `inject_key` and `inject_text` calls build and queue the events."
+
+# automation
+
+[[type]]
+name = "ActionsPanel"
+old = "craft_automation::ui::actions::ActionsPanel"
+new = "craft_automation::ui::actions::ActionsPanel"
+status = "same"
+note = "A pattern on a `Stack` (body: the `List` in tree mode, Button Mode's buttons or a centred `Notice`; footer: `FooterBar`). `new(state, list)` takes no id salt and `show(ui)` returns `ActionsPanelOutput`, an `Outcome`. The pending context menu lives in the stack's root slot. `start_rename(action)` and `host(..)` stay."
+
+[[type]]
+name = "ActionsPanelOutput"
+old = "craft_automation::ui::actions::ActionsPanelOutput"
+new = "craft_automation::ui::actions::ActionsPanelOutput"
+status = "same"
+note = "`response`, `events` and `settings_changed`; an `Outcome`."
+
+[[type]]
+name = "ActionsPanelState"
+old = "craft_automation::ui::actions::ActionsPanelState"
+new = "craft_automation::ui::actions::ActionsPanelState"
+status = "same"
+note = "Same fields: `settings`, `selected`, `expanded`."
+
+[[type]]
+name = "ActionsSettings"
+old = "craft_automation::ui::actions::ActionsSettings"
+new = "craft_automation::ui::actions::ActionsSettings"
+status = "same"
+note = "Same persisted section."
+
+[[type]]
+name = "ActionsEvent"
+old = "craft_automation::ui::actions::ActionsEvent"
+new = "craft_automation::ui::actions::ActionsEvent"
+status = "same"
+note = "`Reorder` carries an `ActionMove { row, place }` (the place computed by the panel) in place of the list's `EditEvent<Move>`; `Toggle` carries a `craft_ui::contract::SweepStep<ActionSelection>` (the step to apply; its cell's `column` is a `ColumnKey`, `INCLUDE_COLUMN` or `DIALOG_COLUMN`, in place of an index); the include column gives `ShowOnly` on an Alt press."
+
+[[type]]
+name = "ActionsHost"
+old = "craft_automation::ui::actions::ActionsHost"
+new = "craft_automation::ui::actions::ActionsHost"
+status = "same"
+note = "Same trait."
+
+[[type]]
+name = "ActionPlace"
+old = "craft_automation::ui::actions::ActionPlace"
+new = "craft_automation::ui::actions::ActionPlace"
+status = "same"
+note = "`ActionPlace::of(list, move)` is gone: the panel reports the place in `ActionsEvent::Reorder`. The enum is `#[non_exhaustive]`."
+
+[[type]]
+name = "ActionMove"
+old = ""
+new = "craft_automation::ui::actions::ActionMove"
+status = "replaced"
+note = "A moved row and its `ActionPlace`; replaces the list's `Move<ActionSelection>` in `ActionsEvent::Reorder`."
+
+[[type]]
+name = "ActionSelection"
+old = "craft_automation::ui::actions::ActionSelection"
+new = "craft_automation::ui::actions::ActionSelection"
+status = "same"
+note = "Same enum; also the list's key."
+
+[[type]]
+name = "ShortcutChoice"
+old = "craft_automation::ui::actions::ShortcutChoice"
+new = "craft_automation::ui::actions::ShortcutChoice"
+status = "same"
+note = "Same struct."
+
+[[type]]
+name = "ActionsMenuAction"
+old = "craft_automation::ui::actions::ActionsMenuAction"
+new = "craft_automation::ui::actions::ActionsMenuAction"
+status = "same"
+note = "Returned by `ActionsPanelCommands::run`."
+
+[[type]]
+name = "ActionsPanelCommands"
+old = ""
+new = "craft_automation::ui::actions::ActionsPanelCommands"
+status = "replaced"
+note = "The panel menu's rows as a `CommandSet` (prefix `actionsPanel`): `state(panel, list, recording)` gives the app's command input its `CommandState` and `run(panel, list, recording)` replaces `ActionsPanel::run_command`. `panel_rows()` replaces `ActionsPanel::panel_menu`."
+
+[[type]]
+name = "ActionsLabels"
+old = "craft_automation::ui::actions::ActionsLabels"
+new = ""
+status = "removed"
+note = "Replaced by the `words!` set `ActionsWords` (ids kept); the count words `STEPS`, `ACTIONS` and `COUNTS` are its `steps` and `action_count` rows."
+
+[[type]]
+name = "ActionsWords"
+old = ""
+new = "craft_automation::ui::actions::ActionsWords"
+status = "replaced"
+note = "The panel's words as a `words!` set; read with `Env::words::<ActionsWords>()`."
+
+[[type]]
+name = "ActionsPanelStyle"
+old = "craft_automation::ui::actions::ActionsPanelStyle"
+new = ""
+status = "removed"
+note = "The rows take the `ListRow` look; Button Mode's buttons take their fill from `LabelColor::fill` through `Button::tint`; the recording dot is a trailing icon of the row."
+
+[[type]]
+name = "DEFAULT_FILLS"
+old = "craft_automation::ui::actions::DEFAULT_FILLS"
+new = ""
+status = "removed"
+note = "Button Mode fills are `LabelColor::fill` of the action's colour."
+
+[[type]]
+name = "SyntheticInput"
+old = "craft_automation::synthetic::SyntheticInput"
+new = ""
+status = "removed"
+note = "The injected-input queue is the window host's: `WindowHost::inject_move`, `inject_click`, `inject_key` and `inject_text`; `Click::inject` and `KeyPress::inject` queue a validated request, and `ControlChannel::poll_input` answers the waiters."
+
+[[type]]
+name = "Injected"
+old = "craft_automation::synthetic::Injected"
+new = ""
+status = "removed"
+note = "The host reports a withdrawn queue with `WindowHost::take_injected_withdrawn` and an idle one with `injected_idle`."
+
+[[type]]
+name = "send_command"
+old = "craft_automation::screenshot::send_command"
+new = ""
+status = "removed"
+note = "`Captures::issue` takes the `WindowHost` and calls `WindowHost::screenshot`."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+
+[[setter]]
+type = "PathField"
+old = "PathField::new(id_salt, label, value: &str, request)"
+new = "PathField::new(label, value: Bind<String>, request)"
+note = "The pattern writes the typed or picked path into the bind. The id comes from the container, not from a salt."
+
+[[setter]]
+type = "PathField"
+old = "width(f32)"
+new = ""
+note = "Removed: the field takes its size from its content."
+
+[[setter]]
+type = "PathField"
+old = "enabled(bool)"
+new = ""
+note = "Removed: a pattern has no `Common`; show the field under a disabled scope."
+
+[[setter]]
+type = "FileListPicker"
+old = "FileListPicker::new(id_salt, list: &mut FileList)"
+new = "FileListPicker::new(label, list: Bind<FileList>)"
+note = "The label names the list for assistive technology."
+
+[[setter]]
+type = "FileListPicker"
+old = "info(Option<InfoLine>)"
+new = "info(InfoLine)"
+note = "The line is given, or the prop is left out."
+
+# automation
+
+[[setter]]
+type = "ActionsPanel"
+old = "ActionsPanel::new(id_salt, state, list)"
+new = "ActionsPanel::new(state, list)"
+
+[[setter]]
+type = "ActionsPanel"
+old = "labels(ActionsLabels)"
+new = ""
+note = "Removed: words."
+
+[[setter]]
+type = "ActionsPanel"
+old = "enabled(bool)"
+new = ""
+note = "Removed: a pattern has no `Common`; show it under a disabled scope."
+
+[[setter]]
+type = "ActionsPanel"
+old = "ActionsPanel::style(&UiTokens)"
+new = ""
+note = "Removed: the look is the rows' and the footer's."
+
+[[setter]]
+type = "ActionsPanel"
+old = "ActionsPanel::panel_menu(ctx, state, list, recording)"
+new = "panel_rows()"
+note = "The rows are commands; their state is `ActionsPanelCommands::state`."
+
+[[setter]]
+type = "ActionsPanel"
+old = "ActionsPanel::run_command(state, command, list, recording)"
+new = "ActionsPanelCommands::run(self, state, list, recording)"
+
+[[setter]]
+type = "Captures"
+old = "Captures::issue(ctx, now, document, send)"
+new = "Captures::issue(host: &WindowHost, now, document)"
+note = "The slot comes from `WindowHost::screenshot`; there is no callback to send."
+
+[[setter]]
+type = "CaptureGeometry"
+old = "CaptureGeometry::current(ctx, document)"
+new = "CaptureGeometry::from_facts(host.screenshot_facts(), document)"
+
+[[setter]]
+type = "ControlChannel"
+old = "ControlChannel::cancel_input(input: &mut SyntheticInput, reason)"
+new = "ControlChannel::cancel_input(host: &WindowHost, reason)"
+
+[[setter]]
+type = "KeyPress"
+old = "KeyPress { key: egui::Key, modifiers: egui::Modifiers }"
+new = "KeyPress { key: craft_keymap::Key, mods: craft_keymap::Mods }"
+
+[[setter]]
+type = "Click"
+old = "Click { button: egui::PointerButton, .. }"
+new = "Click { button: craft_behavior::PointerButton, .. }"
+
+[[setter]]
+type = "server"
+old = "server::start(port, token, ctx: egui::Context)"
+new = "server::start(port, token, host: WindowHost)"
+note = "The server wakes the root window with `WindowHost::repaint_in`."
+
+[[setter]]
+type = "ActionsEvent"
+old = "ActionsEvent::Play { action, from } (struct literal)"
+new = "ActionsEvent::play(action, from)"
+note = "Struct-like variants are `#[non_exhaustive]`: build them with `play`, `begin_recording`, `rename`, `set_color`, `assign_shortcut` and `save`, and match them with `..`."
+
+[[setter]]
+type = "ActionPlace"
+old = "ActionPlace::Action { index, set } (struct literal)"
+new = "ActionPlace::action(index, set)"
+note = "The struct-like variants are `#[non_exhaustive]`: `ActionPlace::action` and `ActionPlace::step` build them; match with `..`."
+
+[[setter]]
+type = "ActionMove"
+old = "ActionMove { row, place } (struct literal)"
+new = ""
+note = "`#[non_exhaustive]`: the panel builds it; read `row` and `place`, and match with `..`."
+
+[[setter]]
+type = "ActionsSettings"
+old = "ActionsSettings { button_mode, collapsed_sets } (struct literal)"
+new = "ActionsSettings::new(button_mode, collapsed_sets)"
+note = "`#[non_exhaustive]`; the fields stay public and persisted."
+
+[[setter]]
+type = "ActionsPanelState"
+old = "ActionsPanelState { .. } (struct literal)"
+new = "ActionsPanelState::default()"
+note = "`#[non_exhaustive]`: start from `default()` and set the public fields."
+
+[[setter]]
+type = "ActionSelection"
+old = "match on ActionSelection"
+new = "match on ActionSelection with a `_` arm"
+note = "`#[non_exhaustive]`."
+
+[[setter]]
+type = "ShortcutChoice"
+old = "ShortcutChoice { key, shift, command } (struct literal)"
+new = "ShortcutChoice::new(key, shift, command)"
+note = "`#[non_exhaustive]`."
+
+[[setter]]
+type = "FakeActionsHost"
+old = "FakeActionsHost { command_prefix, .. } (struct literal)"
+new = "FakeActionsHost::prefixed(prefix)"
+note = "`#[non_exhaustive]`: `default()` plus field writes, or `prefixed`."
+
+[[setter]]
+type = "ControlRequest"
+old = "ControlRequest { .. } (struct literal)"
+new = "ControlRequest::new(method, params)"
+note = "`#[non_exhaustive]`; `deadline` stays a public field."
+
+[[setter]]
+type = "Reply"
+old = "Reply::Screenshot { token, path } (struct literal)"
+new = "Reply::screenshot(token, path)"
+note = "`Reply` and its `Screenshot` variant are `#[non_exhaustive]`."
+
+[[setter]]
+type = "ControlChannel"
+old = "ControlChannel { .. } (struct literal)"
+new = "ControlChannel::new(rx)"
+note = "`#[non_exhaustive]`."
+
+[[setter]]
+type = "DocumentId"
+old = "DocumentId { generation, revision } (struct literal)"
+new = "DocumentId::new(generation, revision)"
+note = "`#[non_exhaustive]`."
+
+[[setter]]
+type = "CaptureGeometry"
+old = "CaptureGeometry { .. } (struct literal)"
+new = "CaptureGeometry::new(size_points, max_texture_side)"
+note = "`#[non_exhaustive]`: `from_facts` builds it from the window's facts; `new` gives an unzoomed visible viewport at one pixel per point."
+
+[[setter]]
+type = "Finished"
+old = "Finished { token, path, reply, result } (struct literal)"
+new = "Finished::new(token, path, reply, result)"
+note = "`#[non_exhaustive]`."
+
+[[setter]]
+type = "Click"
+old = "Click { at, button, count } (struct literal)"
+new = "Click::from_params(params)"
+note = "`#[non_exhaustive]`."
+
+[[setter]]
+type = "KeyPress"
+old = "KeyPress { key, mods } (struct literal)"
+new = "KeyPress::from_params(params)"
+note = "`#[non_exhaustive]`."
+
+[[setter]]
+type = "Params"
+old = "Params::modifiers(flags) -> egui::Modifiers"
+new = "Params::modifiers(flags) -> craft_keymap::Mods"
+note = "The modifiers as the platform sees them (`Mods::effective`): off the Mac `ctrl` folds into `cmd`."
