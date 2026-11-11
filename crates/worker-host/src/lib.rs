@@ -7,4 +7,4 @@ mod protocol;
 #[cfg(test)]
 mod tests;
 
-pub use protocol::{HostMessage, PendingFlushEntry, WorkerMessage};
+pub use protocol::{FlushAckResult, HostMessage, PendingFlushEntry, WorkerMessage};

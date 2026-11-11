@@ -15,10 +15,10 @@ pub use craft_gpu::{DeviceCaps, GpuContext, GpuFault, GpuJob, GpuJobOutcome, Gpu
 pub use craft_gpu_null::NullContext;
 pub use craft_gpu_providers::{NoopProvider, register_all, register_all_into};
 pub use craft_tier_store::{DefaultTierPolicy, HydrationGuard, KeyClass, MirrorStore, PendingWrite, StoreKey, TierPolicy, VersionedMirror};
-pub use craft_worker_host::{HostMessage, PendingFlushEntry, WorkerMessage};
+pub use craft_worker_host::{FlushAckResult, HostMessage, PendingFlushEntry, WorkerMessage};
 
 #[cfg(feature = "cloud-delegate")]
-pub use cloud::{CloudFetchDelegate, CloudFetchFault, hydrate_whole_file_fallback};
+pub use cloud::{ChargedBytes, CloudFetchDelegate, CloudFetchFault, hydrate_whole_file_fallback};
 #[cfg(feature = "cloud-delegate")]
 pub use craft_tier_store::CloudBlobRef;
 

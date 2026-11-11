@@ -62,7 +62,7 @@ fn host_storage_put_and_flush_json_shape() {
 fn storage_flushed_pending_export_json() {
     let msg = WorkerMessage::StorageFlushed {
         pending_count: 1,
-        pending: Some(vec![crate::PendingFlushEntry { key: "config/a".into(), bytes: vec![1, 2], revision: 3 }]),
+        pending: Some(vec![crate::PendingFlushEntry { key: "config/a".into(), bytes: vec![1, 2], deleted: false, revision: 3 }]),
     };
     let json = serde_json::to_string(&msg).expect("serialize");
     assert!(json.contains(r#""pending_count":1"#));
@@ -70,6 +70,40 @@ fn storage_flushed_pending_export_json() {
     assert!(json.contains(r#""revision":3"#));
     let back: WorkerMessage = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(msg, back);
+}
+
+#[test]
+fn storage_delete_json_shape() {
+    let msg = HostMessage::StorageDelete { key: "files/old".into() };
+    let json = serde_json::to_string(&msg).expect("serialize StorageDelete");
+    assert_eq!(json, r#"{"type":"storage_delete","key":"files/old"}"#);
+    let back: HostMessage = serde_json::from_str(&json).expect("deserialize StorageDelete");
+    assert_eq!(msg, back);
+}
+
+#[test]
+fn storage_flush_ack_json_shape() {
+    let msg = HostMessage::StorageFlushAck {
+        results: vec![
+            crate::FlushAckResult { key: "config/a".into(), revision: 3, persisted: true },
+            crate::FlushAckResult { key: "config/b".into(), revision: 1, persisted: false },
+        ],
+    };
+    let json = serde_json::to_string(&msg).expect("serialize StorageFlushAck");
+    let back: HostMessage = serde_json::from_str(&json).expect("deserialize StorageFlushAck");
+    assert_eq!(msg, back);
+    assert!(json.contains(r#""type":"storage_flush_ack""#));
+    assert!(json.contains(r#""persisted":true"#));
+    assert!(json.contains(r#""persisted":false"#));
+}
+
+#[test]
+fn pending_flush_entry_deleted_defaults_false_when_absent_from_json() {
+    // A host built before the `deleted` field existed sends JSON without it; deserializing must
+    // not fail, and must treat the entry as a normal write, never as an accidental tombstone.
+    let json = r#"{"key":"config/a","bytes":[1,2],"revision":1}"#;
+    let entry: crate::PendingFlushEntry = serde_json::from_str(json).expect("deserialize legacy PendingFlushEntry");
+    assert!(!entry.deleted);
 }
 
 #[test]
