@@ -24,7 +24,9 @@ craft = { workspace = true, features = ["ui", "color", "draw", "imaging", "keyma
 
 The `[features]` table in `Cargo.toml` is written by `tests/features.rs` from the member crates' manifests. After changing a member's features or adding a crate, run `UPDATE_FACADE=1 cargo test -p craft -- integration::features` and commit the result. A comment on a feature line marks a crate that does not build for `wasm32-unknown-unknown`.
 
-Not in the facade, because they are tools or test harnesses: `craft-ui-gallery`, `craft-ui-macros` (reached through `craft-ui`), `craft-fonts-build` (a build-script helper), `craft-design-lint`, `craft-plate-test`.
+Reached through other crates, not named in the facade: the six library crates (`craft-ui-contract` to `craft-ui-shell`), `craft-ui-macros` and `craft-behavior` through `craft-ui`, and `craft-win32` through `craft-window`.
+
+Not in the facade, because they are tools or test harnesses: `craft-ui-gallery`, `story-render`, `craft-ui-bench`, `craft-ui-test-kit`, `craft-fonts-build` (a build-script helper), `craft-design-lint`, `craft-plate-test`, `craft-media-testkit`.
 
 ## Family dependencies
 

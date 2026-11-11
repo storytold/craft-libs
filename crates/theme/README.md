@@ -5,7 +5,7 @@ it, with an appearance (mode, contrast, size, text size), into tokens that apps 
 own styles.
 
 Pure data and functions: no egui, no I/O, no threads, and it builds for wasm. Theme files on
-disk, the suite folder and change watching belong to `craft-theme-store`; `craft_ui::theme`
+disk, the suite folder and change watching belong to `craft-theme-store`; `craft_ui::style`
 converts tokens for egui. [docs/suite-themes.md](../../docs/suite-themes.md) is the reference for
 theme authors and app developers.
 
