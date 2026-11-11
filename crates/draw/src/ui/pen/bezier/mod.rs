@@ -17,7 +17,7 @@ use craft_behavior::{
     Axis, CanvasView, EditCommand, Granularity, HitLevel, HitPriority, HitShape, Intent, NavMove, NavShape, PartKey, PartRef, PointerButton,
     PressPhase, PressStart, Roving, Sense,
 };
-use craft_keymap::Mods;
+use craft_keymap::{Chord, Key, Mods};
 use craft_theme::Srgba;
 use craft_ui::canvas::{CanvasSpace, NUDGE, NUDGE_FAR, Snap, canvas_snap, canvas_space, context_click};
 use craft_ui::canvas_controls::{Marquee, MarqueeLook, path_runs};
@@ -42,6 +42,9 @@ pub use style::BezierStyle;
 pub use words::BezierWords;
 
 use super::PathOptionsSettings;
+
+/// Insert on a picked anchor adds one halfway along the segment leaving it.
+const INSERT: Chord = Chord::plain(Key::Insert);
 
 /// Above this many anchors in the paths shown, the overlay draws outlines only and declares no part (no anchor in
 /// the AccessKit tree either) (VectorCraft's `OVERLAY_MAX_ANCHORS`).
@@ -331,7 +334,8 @@ struct Scene {
 ///   followed by its shown handles, in then out), Home and End the first and last; picking an anchor selects it alone.
 ///   ⇧ Page Down and ⇧ Page Up add the next and previous anchor; ⌘A selects every anchor of the path. The arrows move
 ///   the selected anchors or the picked handle (⌥ alone); Delete and Backspace report
-///   [`delete`](BezierOutput::delete); Escape deselects.
+///   [`delete`](BezierOutput::delete), Insert [`insert`](BezierOutput::insert) halfway along the segment leaving the
+///   picked anchor; Escape deselects.
 /// - The anchor tools ([`BezierTool::AddAnchor`], [`BezierTool::DeleteAnchor`], [`BezierTool::AutoAddDelete`]) and
 ///   [`BezierTool::Curvature`] take only a press that hits what they edit, and draw the [`HitMark`] of what a press
 ///   would take under the pointer. [`segment_mark`](Self::segment_mark), [`anchors`](Self::anchors) and
@@ -759,7 +763,7 @@ impl<'a> BezierOverlay<'a> {
         }
     }
 
-    /// The keys of the focused overlay: picking parts, select all, nudges, Delete, Enter and Escape.
+    /// The keys of the focused overlay: picking parts, select all, nudges, Insert, Delete, Enter and Escape.
     fn run_keys(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, scene: &Scene, paths: &[EditPath]) {
         let keyboard: Vec<&Item> = scene.items.iter().filter(|item| item.kind != Kind::Segment).collect();
         let active = cx.active_part();
@@ -840,6 +844,12 @@ impl<'a> BezierOverlay<'a> {
             && let Some(Item { kind: Kind::Anchor, key, knot, .. }) = current
         {
             self.set(cx, paths, PathEdit::ToggleCurvature { path: *key, knot: *knot });
+        }
+        if cx.take_claimed(INSERT)
+            && let Some(Item { kind: Kind::Anchor, key, knot, .. }) = current
+            && Self::path(paths, *key).and_then(|path| path.subpaths.get(knot.subpath)).is_some_and(|sp| sp.segment_ends(knot.knot).is_some())
+        {
+            self.report.insert = Some((*key, *knot, 0.5));
         }
         let forward = cx.intents().take_exact(&Intent::delete(true, Granularity::Unit));
         let backward = cx.intents().take_exact(&Intent::delete(false, Granularity::Unit));
@@ -927,7 +937,8 @@ pub struct BezierOutput {
     pub change: Option<PathEdit>,
     /// The selection the overlay asks for.
     pub select: Option<PathSelection>,
-    /// Insert: add an anchor to the segment leaving a knot of a path, at `t` (PhotoCraft's Add Anchor Point).
+    /// Add an anchor to the segment leaving a knot of a path, at `t` (PhotoCraft's Add Anchor Point): a click of an
+    /// anchor tool on a segment, or Insert on a picked anchor (`t` 0.5).
     pub insert: Option<(u64, KnotRef, f64)>,
     /// Delete or Backspace: remove these anchors of a path (Delete Anchor Point).
     pub delete: Option<(u64, Vec<KnotRef>)>,
@@ -953,8 +964,13 @@ impl Outcome for BezierOutput {
 impl Component for BezierOverlay<'_> {
     const ROLE: Role = Role::GROUP;
     const OVERLAYS: bool = false;
-    const KEYS: KeyUse =
-        KeyUse::CANVAS.with_moves().with_deletes().with_submits().with_chrome_key(false).with_edits(EditSet::NONE.with(EditCommand::SelectAll));
+    const KEYS: KeyUse = KeyUse::CANVAS
+        .with_moves()
+        .with_deletes()
+        .with_submits()
+        .with_chrome_key(false)
+        .with_edits(EditSet::NONE.with(EditCommand::SelectAll))
+        .with_claims(&[INSERT]);
     type Style = BezierStyle;
     type Output = BezierOutput;
 

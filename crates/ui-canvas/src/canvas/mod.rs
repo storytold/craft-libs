@@ -102,7 +102,7 @@ use crate::runtime::motion::{Animate as _, spec};
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
 use craft_behavior::{
-    CanvasTransform, CanvasView, EditEvent, HitLevel, HitPriority, Metrics, Mixed, PartKey, PointerButton, PressPhase, PressState, Sense,
+    CanvasTransform, CanvasView, EditEvent, HitLevel, HitPriority, Intent, Metrics, Mixed, PartKey, PointerButton, PressPhase, PressState, Sense,
 };
 use egui::{Pos2, Rect, Response, Vec2};
 use zoom_motion::{Steer, ViewMotion};
@@ -196,6 +196,8 @@ pub struct Canvas<'a> {
     snap: Option<Snap>,
     /// The view of this pass, after the canvas folded in its input.
     settled: Option<Settled>,
+    /// The Menu key or Shift+F10 reached the focused canvas this pass.
+    context_key: bool,
 }
 
 /// A canvas's view in one pass.
@@ -223,6 +225,7 @@ impl<'a> Canvas<'a> {
             rulers: None,
             snap: None,
             settled: None,
+            context_key: false,
         }
         .label(label)
         .ltr_axis()
@@ -338,9 +341,11 @@ impl<'a> Canvas<'a> {
         self
     }
 
-    fn space(&self, pixels_per_point: f32, background: BackgroundPress) -> Option<CanvasSpace> {
+    fn space(&self, id: egui::Id, pixels_per_point: f32, background: BackgroundPress) -> Option<CanvasSpace> {
         let view = self.settled.map(|settled| settled.shown).or(self.given);
-        view.map(|view| CanvasSpace::new(view, pixels_per_point).with_document(self.document).with_rulers(self.rulers).with_background(background))
+        view.map(|view| {
+            CanvasSpace::new(view, pixels_per_point).with_document(self.document).with_rulers(self.rulers).with_background(background).with_canvas(id)
+        })
     }
 
     /// The press on the background part as the canvas reports it, and the pan of a middle-button drag: a middle press
@@ -427,6 +432,8 @@ impl Component for Canvas<'_> {
 
     /// The view of this pass, kept for the body and `finish`.
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        // Left untaken: the canvas's generic context request is recorded as for a secondary click.
+        self.context_key = cx.intents().untaken(&Intent::ContextMenu);
         // The canvas is no value component: it reads and writes its view's binding itself, as a container does.
         self.given = self.view.as_mut().and_then(|view| view.reborrow().read(cx)).and_then(|held| held.same().copied());
         self.settled = if self.view.is_some() {
@@ -448,7 +455,7 @@ impl Component for Canvas<'_> {
 
     /// The canvas's [`CanvasSpace`] for its body; a canvas without a view hides an outer canvas's.
     fn content_env(&self, cx: &Cx<'_, Self>, values: &mut crate::runtime::env::AppValues) {
-        space::publish(values, self.space(cx.env.scale().0, BackgroundPress::of(&Self::background_press(cx).0)));
+        space::publish(values, self.space(cx.response.id, cx.env.scale().0, BackgroundPress::of(&Self::background_press(cx).0, self.context_key)));
         snap::publish(values, self.snap.clone());
     }
 
@@ -463,7 +470,7 @@ impl Component for Canvas<'_> {
 
     fn finish(self, cx: Cx<'_, Self>) -> CanvasOutput {
         let press = Self::background_press(&cx).0;
-        let space = self.space(cx.env.scale().0, BackgroundPress::of(&press));
+        let space = self.space(cx.response.id, cx.env.scale().0, BackgroundPress::of(&press, self.context_key));
         let view = self.settled.map(|settled| settled.target).filter(|target| Some(*target) != self.given);
         CanvasOutput { response: cx.response.clone(), press, space, view, snap: self.snap, document: self.document, navigation: self.navigation }
     }

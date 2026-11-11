@@ -16,6 +16,7 @@ use crate::contract::{
 use crate::primitives::{Dashes, FocusKind, FocusRing, PaintShape, Rule, StrokeWidth};
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
+use crate::runtime::keys;
 use crate::style::{ComponentStyle, Flags, FocusLook, RuleLook, StyleColor, StyleCx};
 use craft_behavior::geometry::{coordinate_across, motion_across};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
@@ -23,7 +24,7 @@ use craft_behavior::{
     Axis, CancelReason, GesturePhase, Granularity, HitLevel, HitPriority, HitShape, Intent, Metrics, NavMove, NavShape, PartKey, PointerButton,
     PressPhase, Roving, Sense, resize_cursor,
 };
-use craft_keymap::Mods;
+use craft_keymap::{Chord, Key, Mods};
 use craft_theme::Rgba;
 use egui::{Color32, Pos2, Rect, Response, Vec2};
 
@@ -105,6 +106,9 @@ struct Report {
 }
 
 /// The key of the guide a ruler drag is creating, kept for the length of the drag.
+/// The deletes the guides hold on the focused canvas while a guide is selected.
+const CANVAS_DELETES: [Chord; 2] = [Chord::plain(Key::Delete), Chord::plain(Key::Backspace)];
+
 #[derive(Clone, Default)]
 struct PendingKey(Option<GuideKey>);
 
@@ -117,7 +121,8 @@ struct PendingKey(Option<GuideKey>);
 ///   modifiers (Ctrl turns snapping off).
 /// - The guides are one Tab stop. Page Up and Page Down select the previous or next guide (vertical guides left to
 ///   right, then horizontal ones top to bottom), the arrow keys nudge the selected one across its axis (Shift moves
-///   it by the large step) and Delete or Backspace removes it.
+///   it by the large step) and Delete or Backspace removes it. With the canvas focused, Delete or Backspace removes
+///   the selected guide unless it is locked, before the canvas's tool and the app's shortcuts.
 /// - A press on a guide selects it, so [`GuidesOutput::select`] reports the key. A press on the canvas background
 ///   (one that reaches the canvas's tool) clears the selection, reported as `Some(None)`.
 /// - The units, the zero point and the ruler a guide is placed in come from the canvas
@@ -310,6 +315,28 @@ impl<'a> Guides<'a> {
         }
     }
 
+    /// Delete and Backspace on the focused canvas remove the selected unlocked guide: the guides hold them from the
+    /// canvas's tool and the app's shortcuts (Edit > Clear) while such a guide is selected.
+    fn run_canvas_delete(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, guides: &[Guide]) {
+        let Some(canvas) = space.canvas() else { return };
+        if !self.selected.is_some_and(|key| guides.iter().any(|guide| guide.key == key && !guide.locked)) {
+            return;
+        }
+        let mut delete = false;
+        for chord in CANVAS_DELETES {
+            delete |= keys::take_claimed(&cx.ctx, canvas, chord);
+            keys::claim(&cx.ctx, canvas, chord);
+        }
+        let mut next = guides.to_vec();
+        if delete
+            && self.report.select.is_none()
+            && let Some(select) = GuideCommands::Delete.apply(&mut next, self.selected)
+        {
+            cx.set(next);
+            self.report.select = Some(select);
+        }
+    }
+
     /// The keys of the focused guide: selection follows the focus, the arrows nudge, Delete removes.
     fn run_keys(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, guides: &[Guide]) {
         let focused = cx.active_part().filter(|part| part.key == GUIDE).and_then(|part| part.index);
@@ -454,6 +481,7 @@ impl Component for Guides<'_> {
         if self.interactive {
             self.run_pointer(cx, &space, &guides);
             self.run_keys(cx, &space, &guides);
+            self.run_canvas_delete(cx, &space, &guides);
             if space.background().pressed && self.selected.is_some() && self.report.select.is_none() {
                 self.report.select = Some(None);
             }

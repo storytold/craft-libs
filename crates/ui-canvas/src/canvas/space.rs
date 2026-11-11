@@ -25,13 +25,15 @@ pub struct CanvasSpace {
     document: Option<Size>,
     rulers: Option<CanvasRulers>,
     background: BackgroundPress,
+    /// The canvas's id, under which its controls claim keys on the focused canvas.
+    canvas: Option<egui::Id>,
 }
 
 impl CanvasSpace {
     /// The space of `view` at `pixels_per_point` device pixels per point, with no rulers published and no press on
     /// the background.
     pub fn new(view: CanvasView, pixels_per_point: f32) -> Self {
-        Self { view, pixels_per_point, document: None, rulers: None, background: BackgroundPress::default() }
+        Self { view, pixels_per_point, document: None, rulers: None, background: BackgroundPress::default(), canvas: None }
     }
 
     /// This space with the size of the document the canvas shows, in document units: the one size the zoom ladder's
@@ -54,6 +56,18 @@ impl CanvasSpace {
     pub fn with_background(mut self, background: BackgroundPress) -> Self {
         self.background = background;
         self
+    }
+
+    /// This space published by the canvas `id`.
+    #[must_use]
+    pub(crate) fn with_canvas(mut self, id: egui::Id) -> Self {
+        self.canvas = Some(id);
+        self
+    }
+
+    /// The id of the canvas that published this space, for a control that claims keys on the focused canvas.
+    pub(crate) fn canvas(&self) -> Option<egui::Id> {
+        self.canvas
     }
 
     /// The size of the document, in document units, as given to [`Canvas::document`](super::Canvas::document).
@@ -125,12 +139,16 @@ pub struct BackgroundPress {
     /// Where the secondary button was released on the background without a drag: a control that offers a
     /// canvas menu opens it there.
     pub context: Option<Pos2>,
+    /// The Menu key or Shift+F10 asked the focused canvas for its menu (the canvas leaves the request untaken): a
+    /// control that offers a canvas menu opens it at the view's centre.
+    pub context_key: bool,
 }
 
 impl BackgroundPress {
-    /// What `press`, the press on the background part after the middle button's pan is taken out, reports.
-    pub(super) fn of(press: &PressState) -> Self {
-        Self { pressed: matches!(press.phase, PressPhase::Down { .. }), context: context_click(press) }
+    /// What `press`, the press on the background part after the middle button's pan is taken out, and the canvas's
+    /// keyed menu request report.
+    pub(super) fn of(press: &PressState, context_key: bool) -> Self {
+        Self { pressed: matches!(press.phase, PressPhase::Down { .. }), context: context_click(press), context_key }
     }
 }
 

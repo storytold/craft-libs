@@ -4,13 +4,14 @@
 use super::{ArtboardEvent, ArtboardItem, ArtboardRules, ArtboardToolWords, Boards, KeyAct, key_events, label, resized};
 use crate::geometry::artboard::drawn_rect;
 use crate::geometry::slice::HANDLES;
+use crate::ui::add_beside::AddSide;
 use crate::ui::slice::{Run, cancel_reason, handle_point, snapped_move, whole};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2 as DocVec};
 use craft_behavior::{
     Axis, CursorIcon, GestureId, HitLevel, HitPriority, HitShape, Intent, Metrics, NavShape, PartKey, PointerButton, PressPhase, Roving, Sense,
     resize_cursor,
 };
-use craft_keymap::Mods;
+use craft_keymap::{Chord, Key, Mods};
 use craft_ui::canvas::{CanvasSpace, Snap, canvas_snap, canvas_space};
 use craft_ui::contract::{
     Access, Common, Component, Cx, Focus as _, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role,
@@ -21,6 +22,9 @@ use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::KeyUse;
 use craft_ui::style::{ComponentStyle, Flags, HandleLook, StyleCx};
 use egui::{CornerRadius, Pos2, Rect, Response, Vec2};
+
+/// Insert on a focused board adds one beside it, on the right.
+const INSERT: Chord = Chord::plain(Key::Insert);
 
 /// The part of one board: `BOARD.at(index)`.
 const BOARD: PartKey = PartKey::new("board");
@@ -90,7 +94,8 @@ impl Held {
 ///   copy, a double click reports `OpenOptions`.
 /// - The boards, then the active board's handles, are one Tab stop. On a focused part the arrows move the selected
 ///   boards by the rules' step (Shift ten times), Alt and the arrows resize from the end edges, Delete reports `Delete`,
-///   Enter `OpenOptions`.
+///   Enter `OpenOptions`, Insert `AddBeside` on the right of the picked board (the active one while a handle is
+///   picked).
 /// - Cursors: the move arrow over a board, [`resize_cursor`] over the handles.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(canvas_control)]
@@ -303,6 +308,12 @@ impl<'a> ArtboardOverlay<'a> {
         for act in acts {
             self.events.extend(key_events(&boards, &self.rules, act, &words));
         }
+        let picked = if part.key == BOARD { part.index.map(|i| i as usize) } else { boards.active() };
+        if cx.take_claimed(INSERT)
+            && let Some(index) = picked.filter(|&i| i < self.items.len())
+        {
+            self.events.push(ArtboardEvent::AddBeside { index, side: AddSide::Right, copy: false });
+        }
     }
 }
 
@@ -326,7 +337,7 @@ fn resize_to(view: &craft_behavior::CanvasView, rect: DocRect, handle: [i8; 2], 
 impl Component for ArtboardOverlay<'_> {
     const ROLE: Role = Role::GROUP;
     const OVERLAYS: bool = false;
-    const KEYS: KeyUse = KeyUse::CANVAS.with_moves().with_deletes().with_chrome_key(false);
+    const KEYS: KeyUse = KeyUse::CANVAS.with_moves().with_deletes().with_chrome_key(false).with_claims(&[INSERT]);
     type Style = ArtboardOverlayStyle;
     type Output = ArtboardOverlayOutput;
 

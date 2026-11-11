@@ -141,7 +141,8 @@ pub struct PasteboardOutput {
     /// A page name was clicked: the index of its frame. The app selects the artboard or page.
     pub name_clicked: Option<usize>,
     /// The secondary button was released on the canvas background outside every page and name (a press no canvas
-    /// control claimed), at this document point: the app opens its pasteboard menu there.
+    /// control claimed), at this document point, or the Menu key or Shift+F10 reached the focused canvas (at the
+    /// view's centre): the app opens its pasteboard menu there.
     pub context_at: Option<Point>,
 }
 
@@ -311,11 +312,14 @@ impl Component for Pasteboard<'_> {
                 self.name_clicked = Some(at);
             }
         }
-        if let Some(pos) = space.background().context {
+        let background = space.background();
+        if let Some(pos) = background.context {
             let doc = space.view.to_doc(pos);
             if Self::page_at(self.pages, doc).is_none() {
                 self.context_at = Some(doc);
             }
+        } else if background.context_key {
+            self.context_at = Some(space.view.center);
         }
     }
 
