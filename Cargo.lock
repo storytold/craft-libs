@@ -1546,6 +1546,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-webp"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-window"
 version = "0.1.0"
 dependencies = [
