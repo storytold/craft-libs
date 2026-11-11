@@ -250,7 +250,10 @@ fn value_text(group: &str, tag: u16, v: &Value) -> String {
             // exposure time as a fraction of a second
             let (n, d) = a[0];
             let s = n as f64 / d as f64;
-            if s >= 1.0 || n == 0 { format!("{} s", rational(n as f64, d as f64)) } else { format!("1/{} s", (1.0 / s).round()) }
+            match crate::format_exposure_time(s) {
+                Some(text) => format!("{text} s"),
+                None => format!("{} s", rational(n as f64, d as f64)),
+            }
         }
         Value::Rational(a) if tag == 0x829d && group != "GPS" && a.len() == 1 => format!("f/{}", rational(a[0].0 as f64, a[0].1 as f64)),
         Value::Rational(a) if tag == 0x920a && group != "GPS" && a.len() == 1 => format!("{} mm", rational(a[0].0 as f64, a[0].1 as f64)),
@@ -380,6 +383,28 @@ pub fn file_tag_rows(bytes: &[u8]) -> Vec<TagRow> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn exposure_rows_do_not_round_third_stop_times() {
+        for (n, d, expected) in [
+            (3, 10, "0.3 s"),
+            (4, 10, "0.4 s"),
+            (6, 10, "0.6 s"),
+            (8, 10, "0.8 s"),
+            (13, 10, "1.3 s"),
+            (16, 10, "1.6 s"),
+            (25, 10, "2.5 s"),
+            (32, 10, "3.2 s"),
+            (5, 8, "0.625 s"),
+            (1, 3, "1/3 s"),
+            (10, 28, "0.3571 s"),
+            (1, 250, "1/250 s"),
+            (1, 8000, "1/8000 s"),
+            (30, 1, "30 s"),
+        ] {
+            assert_eq!(value_text("EXIF", 0x829a, &Value::Rational(vec![(n, d)])), expected);
+        }
+    }
+
     use super::*;
 
     #[test]

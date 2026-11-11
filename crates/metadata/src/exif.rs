@@ -1105,4 +1105,14 @@ mod write_tests {
             assert!((1.0 / got - den).abs() < 0.5, "1/{den} s came back as 1/{}", 1.0 / got);
         }
     }
+
+    #[test]
+    fn written_shutter_speeds_show_as_the_same_reciprocal() {
+        // the exact time is what export writes, and it reads back as the text shown
+        for (t, want) in [(1.0 / 3.0, "1/3"), (1.0 / 250.0, "1/250"), (1.0 / 12_800.0, "1/12800"), (0.3, "0.3"), (1.0 / 2.8, "0.3571")] {
+            let back = read_exif(&write_exif(&Metadata { exposure_time: Some(t), ..Default::default() }));
+            let got = back.exposure_time.unwrap();
+            assert_eq!(crate::format_exposure_time(got).as_deref(), Some(want), "{t} came back as {got}");
+        }
+    }
 }
