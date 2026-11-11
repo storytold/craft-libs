@@ -1163,6 +1163,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-gpu"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-gpu-null"
+version = "0.1.0"
+dependencies = [
+ "craft-gpu",
+]
+
+[[package]]
+name = "craft-gpu-providers"
+version = "0.1.0"
+dependencies = [
+ "craft-gpu",
+ "craft-gpu-null",
+]
+
+[[package]]
+name = "craft-gpu-wgpu"
+version = "0.1.0"
+dependencies = [
+ "craft-gpu",
+ "craft-gpu-providers",
+ "pollster 0.4.0",
+ "wgpu",
+]
+
+[[package]]
 name = "craft-hdr"
 version = "0.1.0"
 dependencies = [
