@@ -1055,6 +1055,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-mesh"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "craft-metafile"
 version = "0.1.0"
 dependencies = [
