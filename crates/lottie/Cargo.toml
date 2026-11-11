@@ -1,0 +1,15 @@
+[package]
+name = "craft-lottie"
+description = "Lottie (Bodymovin) JSON, the wire layer: the document header, animated properties and their keyframes, ease tangents, bezier paths, gradients, value coercions and embedded image data URIs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde_json = { workspace = true }
+thiserror = { workspace = true }
