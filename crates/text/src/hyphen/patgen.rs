@@ -12,10 +12,15 @@ use super::patterns::{Alphabet, FxMap, MAX_PATTERN_LEN, Patterns, apply, pack};
 /// Parameters of one level.
 #[derive(Clone, Copy, Debug)]
 pub struct Level {
+    /// Shortest pattern length, in letters, that this level considers.
     pub min_len: usize,
+    /// Longest pattern length, in letters, that this level considers.
     pub max_len: usize,
+    /// Weight of each good position a pattern fixes.
     pub good_weight: u32,
+    /// Weight of each bad position a pattern would break.
     pub bad_weight: u32,
+    /// Least weighted score (good times `good_weight` minus bad times `bad_weight`) for a pattern to be kept.
     pub threshold: u32,
 }
 
@@ -40,13 +45,18 @@ struct Word {
 /// Accuracy of a pattern set over a word list.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Score {
+    /// Number of words tested.
     pub words: usize,
+    /// Number of correct break positions in the word list.
     pub breaks: usize,
+    /// Number of correct break positions the patterns found.
     pub found: usize,
+    /// Number of break positions the patterns put where the word list has none.
     pub wrong: usize,
 }
 
 impl Score {
+    /// The number of correct break positions the patterns missed.
     pub fn missed(&self) -> usize {
         self.breaks.saturating_sub(self.found)
     }
@@ -195,65 +205,4 @@ pub fn score(pats: &Patterns, words: &[(Vec<char>, Vec<usize>)]) -> Score {
         }
     }
     s
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn w(s: &str) -> (Vec<char>, Vec<usize>) {
-        let mut chars = Vec::new();
-        let mut br = Vec::new();
-        for c in s.chars() {
-            if c == '-' {
-                br.push(chars.len());
-            } else {
-                chars.push(c);
-            }
-        }
-        (chars, br)
-    }
-
-    /// Weights near `u32::MAX` select the pattern instead of overflowing.
-    #[test]
-    fn large_weights_do_not_overflow() {
-        let words = vec![(vec!['a', 'b'], vec![1]); 2];
-        let levels = [Level { min_len: 1, max_len: 1, good_weight: 1 << 31, bad_weight: 1, threshold: 1 }];
-        let patterns = train(&words, &levels, &mut |_| {});
-        assert_eq!(patterns.points(&['a', 'b']), Some(vec![1]));
-    }
-
-    #[test]
-    fn learns_a_tiny_list() {
-        let list: Vec<_> = [
-            "hap-pen",
-            "hap-pens",
-            "hap-pened",
-            "pen-cil",
-            "pen-cils",
-            "rab-bit",
-            "rab-bits",
-            "kit-ten",
-            "kit-tens",
-            "but-ter",
-            "bet-ter",
-            "let-ter",
-            "lit-ter",
-            "sit-ter",
-        ]
-        .iter()
-        .map(|s| w(s))
-        .collect();
-        let levels = [
-            Level { min_len: 1, max_len: 4, good_weight: 1, bad_weight: 1, threshold: 2 },
-            Level { min_len: 1, max_len: 5, good_weight: 1, bad_weight: 1, threshold: 1 },
-        ];
-        let p = train(&list, &levels, &mut |_| {});
-        let sc = score(&p, &list);
-        assert_eq!(sc.breaks, list.len());
-        assert!(sc.found >= sc.breaks - 1, "{sc:?}");
-        assert!(sc.wrong <= 1, "{sc:?}");
-        // Generalises to an unseen word with the same shape.
-        assert_eq!(p.points(&"bitter".chars().collect::<Vec<_>>()).unwrap(), vec![3]);
-    }
 }

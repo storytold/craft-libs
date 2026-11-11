@@ -1,7 +1,7 @@
 //! The update flow of an egui app in one place: a check at start or on request, the startup prompt,
 //! and the self-update worker. An app creates one [`Updater`], calls [`Updater::tick`] and
-//! [`Updater::show`] each frame, and acts on the [`Action`] it returns, so every app gets the same
-//! handling of failures, dropped workers, repaints and quitting.
+//! [`Updater::run`] each frame before it runs its `DialogHost`, and acts on the [`Action`] it returns,
+//! so every app gets the same handling of failures, dropped workers, repaints and quitting.
 //!
 //! An app the launcher keeps on another version (see [`crate::pins`]) offers nothing itself: the
 //! check reads the shared choice first, and a requested check reports [`Status::Managed`] while
@@ -14,12 +14,14 @@
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, SendError, Sender, TryRecvError, channel};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
 
-use crate::dialog::{StartupPrompt, StartupPromptResponse};
+use craft_ui::dialog::{DialogHost, StartupStage, dialog_id};
+use craft_ui::runtime::frame::request_repaint_after;
+
 use crate::pins::{Choice, Pins};
 use crate::release::Release;
 use crate::self_update::{Outcome, Restart};
+use crate::stack_dialogs::{UpdateChoice, UpdatePromptDialog};
 use crate::translate::{Note, Translate, english};
 use crate::{App, Http, Paths, Platform, Stop, check_for_update, self_update};
 
@@ -30,6 +32,7 @@ pub type CheckSource = Arc<dyn Fn() -> Result<Option<Release>, String> + Send + 
 /// What a requested check came to, for a window that answers Help ▸ Check for Updates, and what
 /// the last update came to, at the first start after it.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Status {
     /// Nothing to report.
     Idle,
@@ -59,9 +62,11 @@ pub enum Status {
 pub const READY_TEXT: &str =
     if cfg!(windows) { "Update ready. Close {app} to install it." } else { "The update is installed. Close {app} to finish; it restarts by itself." };
 
-/// What the app should do after [`Updater::show`].
+/// What the app should do after [`Updater::run`].
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Action {
+    /// Nothing for the app to do this frame.
     None,
     /// Open this page in the browser.
     OpenUrl(String),
@@ -77,6 +82,41 @@ pub enum Action {
 }
 
 type Checked = Result<Option<Release>, String>;
+
+/// The seconds between passes while a check or an installation runs; the poll is what picks up a finished worker.
+const POLL_SECONDS: f64 = 0.1;
+
+/// The line under the prompt's text: the installer's own words, or one of the updater's, translated each pass.
+#[derive(Debug)]
+enum Message {
+    Installer(String),
+    Note(Note),
+}
+
+/// The update prompt the updater holds for the app's dialog host.
+#[derive(Debug)]
+struct Offer {
+    release: Release,
+    /// The prompt is on the host's startup queue or open.
+    shown: bool,
+    message: Option<Message>,
+    /// The update is ready and waits for the app to close: the main button reads Restart to
+    /// Update.
+    ready: bool,
+}
+
+impl Offer {
+    fn new(release: Release) -> Self {
+        Self { release, shown: false, message: None, ready: false }
+    }
+
+    fn text(&self, translate: Translate) -> Option<String> {
+        self.message.as_ref().map(|message| match message {
+            Message::Installer(text) => text.clone(),
+            Message::Note(note) => note.translated(translate),
+        })
+    }
+}
 
 /// Why an installation failed: the installer's own words, shown as they are, or the updater's,
 /// shown in the interface language.
@@ -127,6 +167,8 @@ impl From<&str> for Failure {
     }
 }
 
+/// One app's update flow: the check, the startup prompt and the self-update worker. See the
+/// module docs.
 pub struct Updater {
     app: &'static App,
     version: String,
@@ -137,13 +179,18 @@ pub struct Updater {
     started: bool,
     check: Option<Receiver<Checked>>,
     install: Option<(Receiver<Result<Restart, Failure>>, Release)>,
-    prompt: Option<StartupPrompt>,
+    prompt: Option<Offer>,
+    /// A prompt the updater dropped is still on the host; it is withdrawn when it shows.
+    stale: bool,
+    /// The newest release a check found or the app offered; [`Updater::request_install`] works
+    /// from it after the prompt closed.
+    known: Option<Release>,
     /// A finished installation waiting for the app to exit: what still has to start then, and
     /// the release it installs.
     restart: Option<(Restart, Release)>,
     /// An update is ready and waits for the app to exit; nothing starts a second one.
     installed: bool,
-    /// [`Self::show_if`] returns [`Action::Close`] at its next frame that may close: once when an
+    /// [`Self::run`] returns [`Action::Close`] at its next pass that may close: once when an
     /// installation finishes, and again for each [`Self::restart_to_update`].
     close_wanted: bool,
     /// The folders that hold the outcome records ([`self_update::take_outcome`]) in place of the
@@ -165,6 +212,7 @@ pub struct Updater {
 }
 
 impl Updater {
+    /// An updater for `app`, running `version`.
     pub fn new(app: &'static App, version: impl Into<String>) -> Self {
         let version = version.into();
         let version = self_update::current_version(app, &version).map_or(version, |v| v.to_string());
@@ -178,6 +226,8 @@ impl Updater {
             check: None,
             install: None,
             prompt: None,
+            stale: false,
+            known: None,
             restart: None,
             installed: false,
             close_wanted: false,
@@ -190,36 +240,35 @@ impl Updater {
         }
     }
 
-    /// Words the startup prompt and the messages it shows with `translate`, in the app's
-    /// interface language ([`crate::translate`]). Errors from the network stay as they came.
+    /// Words the messages under the startup prompt with `translate`, in the app's interface language
+    /// ([`crate::translate`]). Errors from the network stay as they came. The prompt's own words come from the
+    /// app's `UpdateWords`.
     #[must_use]
     pub fn with_translator(mut self, translate: Translate) -> Self {
         self.translate = translate;
-        // A prompt already open (an offer made before) speaks the new language from its next draw.
-        if let Some(prompt) = &mut self.prompt {
-            prompt.translate = translate;
-        }
         self
-    }
-
-    /// The startup prompt for `release`, in the interface language.
-    fn prompt_for(&self, release: Release) -> StartupPrompt {
-        StartupPrompt::new(self.app, release, self.version.clone()).with_translator(self.translate)
     }
 
     /// Opens the prompt offering `release`. A failed update offered again says why the last
     /// attempt failed, once.
     fn open_offer(&mut self, release: Release) {
-        let mut prompt = self.prompt_for(release);
+        let mut offer = Offer::new(release);
         if let Some(reason) = self.failed_reason.take() {
-            prompt.set_note(Note::new("The update could not be installed: {reason}", &[("reason", &reason)]));
+            offer.message = Some(Message::Note(failed_note(&reason)));
         }
-        self.prompt = Some(prompt);
+        self.prompt = Some(offer);
     }
 
-    /// [`READY_TEXT`], translated when the prompt draws.
+    /// [`READY_TEXT`], translated when the prompt shows it.
     fn installed_note(&self) -> Note {
         Note::new(READY_TEXT, &[("app", self.app.name)])
+    }
+
+    /// Drops the prompt; one already on the host is withdrawn on a later [`Updater::run`].
+    fn drop_prompt(&mut self) {
+        if self.prompt.take().is_some_and(|offer| offer.shown) {
+            self.stale = true;
+        }
     }
 
     /// Replaces the network with `source` (tests).
@@ -281,7 +330,7 @@ impl Updater {
             // A prompt opened before the pin would still install the stable release. One that is
             // installing or finished stays: `tick` reports through it.
             if self.install.is_none() && !self.installed {
-                self.prompt = None;
+                self.drop_prompt();
             }
         }
         self.managed.is_some()
@@ -289,26 +338,26 @@ impl Updater {
 
     /// The check at start, once. Later calls do nothing. It first reads what the last update came
     /// to, once: [`Self::status`] is then [`Status::Updated`] or [`Status::InstallFailed`], and
-    /// the app shows its [`CheckResultDialog`](crate::dialog::CheckResultDialog) while the status
-    /// is not [`Status::Idle`]. The check itself stays quiet unless it finds a release.
-    pub fn check_at_start(&mut self, ctx: &egui::Context) {
+    /// the app shows its [`UpdateCheckDialog`](crate::stack_dialogs::UpdateCheckDialog) while the
+    /// status is not [`Status::Idle`]. The check itself stays quiet unless it finds a release.
+    pub fn check_at_start(&mut self) {
         if !std::mem::replace(&mut self.started, true) {
             self.read_outcome();
-            self.begin(ctx, false);
+            self.begin(false);
         }
     }
 
     /// Help ▸ Check for Updates: a check whose outcome [`Self::status`] reports. A check already
     /// running becomes a requested one. While an update installs or waits for the app to close,
     /// nothing starts and the status says so ([`Status::Installing`], [`Status::Ready`]).
-    pub fn check_now(&mut self, ctx: &egui::Context) {
+    pub fn check_now(&mut self) {
         self.started = true;
-        self.begin(ctx, true);
+        self.begin(true);
     }
 
-    /// Asks the app to close so that a ready update installs: the next [`Self::show_if`] that may
-    /// close returns [`Action::Close`]. Restart to Update calls it after the user canceled an
-    /// earlier close. No close is asked for while no update is ready.
+    /// Asks the app to close so that a ready update installs: the next [`Self::run`] (or
+    /// [`Self::take_close`]) that may close returns [`Action::Close`]. Restart to Update calls it
+    /// after the user canceled an earlier close. No close is asked for while no update is ready.
     pub fn restart_to_update(&mut self) {
         self.close_wanted = true;
     }
@@ -317,12 +366,15 @@ impl Updater {
     /// prompt says why it failed, like the one a check opens. Opening the prompt sets
     /// [`Self::status`] to [`Status::Idle`].
     pub fn offer(&mut self, release: Release) {
+        self.known = Some(release.clone());
         if self.install.is_none() && !self.installed && !self.read_choice() {
+            self.drop_prompt();
             self.open_offer(release);
             self.status = Status::Idle;
         }
     }
 
+    /// What the last requested check came to.
     pub fn status(&self) -> &Status {
         &self.status
     }
@@ -334,12 +386,24 @@ impl Updater {
         self.status = Status::Idle;
     }
 
+    /// Whether an installation is running.
+    pub fn is_installing(&self) -> bool {
+        self.install.is_some()
+    }
+
+    /// The prompt's status line in the interface language: the installer's error, or one of the
+    /// updater's own notes ("Save or close your open work first"). `None` when there is none or
+    /// no prompt is open.
+    pub fn status_message(&self) -> Option<String> {
+        self.prompt.as_ref().and_then(|offer| offer.text(self.translate))
+    }
+
     /// Whether the startup prompt is showing.
     pub fn prompt_open(&self) -> bool {
         self.prompt.is_some()
     }
 
-    fn begin(&mut self, ctx: &egui::Context, requested: bool) {
+    fn begin(&mut self, requested: bool) {
         if self.install.is_some() || self.installed {
             if requested {
                 self.status = self.pending_status();
@@ -359,7 +423,7 @@ impl Updater {
             return;
         }
         let (tx, rx) = channel();
-        let (source, app, version, ctx) = (self.source.clone(), self.app, self.version.clone(), ctx.clone());
+        let (source, app, version) = (self.source.clone(), self.app, self.version.clone());
         let spawned = std::thread::Builder::new().name("update-check".into()).spawn(move || {
             let ask = || match source {
                 Some(ask) => ask(),
@@ -368,7 +432,6 @@ impl Updater {
             let answer =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(ask)).unwrap_or_else(|_| Err("the update check failed unexpectedly".into()));
             let _ = tx.send(answer);
-            ctx.request_repaint();
         });
         match spawned {
             Ok(_) => self.check = Some(rx),
@@ -392,10 +455,9 @@ impl Updater {
             self.installed = false;
             self.close_wanted = false;
             match &mut self.prompt {
-                Some(prompt) => {
-                    prompt.is_installing = false;
-                    prompt.is_ready = false;
-                    prompt.set_note(Note::new("The update could not be installed: {reason}", &[("reason", &reason)]));
+                Some(offer) => {
+                    offer.ready = false;
+                    offer.message = Some(Message::Note(failed_note(&reason)));
                 }
                 // The next prompt that offers the update says why.
                 None => self.failed_reason = Some(reason.clone()),
@@ -435,12 +497,13 @@ impl Updater {
         }
         match answer {
             Ok(Some(release)) => {
+                self.known = Some(release.clone());
                 match &mut self.prompt {
                     None => self.open_offer(release),
                     // A prompt the app opened before (`offer`) says why the last update failed.
-                    Some(prompt) => {
+                    Some(offer) => {
                         if let Some(reason) = self.failed_reason.take() {
-                            prompt.set_note(Note::new("The update could not be installed: {reason}", &[("reason", &reason)]));
+                            offer.message = Some(Message::Note(failed_note(&reason)));
                         }
                     }
                 }
@@ -457,8 +520,8 @@ impl Updater {
         }
     }
 
-    /// Picks up a finished check or installation. Call once per frame, before [`Self::show`]. It
-    /// keeps the UI awake while either is running.
+    /// Picks up a finished check or installation. Call once per frame, before [`Self::run`]. It
+    /// asks for the next pass every [`POLL_SECONDS`] while either is running.
     pub fn tick(&mut self, ctx: &egui::Context) {
         if let Some(rx) = &self.check {
             match rx.try_recv() {
@@ -466,7 +529,7 @@ impl Updater {
                     self.check = None;
                     self.finish_check(answer);
                 }
-                Err(TryRecvError::Empty) => ctx.request_repaint_after(Duration::from_millis(100)),
+                Err(TryRecvError::Empty) => request_repaint_after(ctx, POLL_SECONDS),
                 Err(TryRecvError::Disconnected) => {
                     self.check = None;
                     self.finish_check(Err("the update check stopped unexpectedly".into()));
@@ -477,7 +540,7 @@ impl Updater {
             let outcome = match rx.try_recv() {
                 Ok(outcome) => Some(outcome),
                 Err(TryRecvError::Empty) => {
-                    ctx.request_repaint_after(Duration::from_millis(100));
+                    request_repaint_after(ctx, POLL_SECONDS);
                     None
                 }
                 Err(TryRecvError::Disconnected) => Some(Err(Failure::dropped())),
@@ -490,10 +553,9 @@ impl Updater {
                         self.restart = release.map(|release| (restart, release));
                         self.close_wanted = true;
                         let note = self.installed_note();
-                        if let Some(prompt) = &mut self.prompt {
-                            prompt.is_installing = false;
-                            prompt.is_ready = true;
-                            prompt.set_note(note);
+                        if let Some(offer) = &mut self.prompt {
+                            offer.ready = true;
+                            offer.message = Some(Message::Note(note));
                         }
                         if matches!(self.status, Status::Installing) {
                             self.status = Status::Ready;
@@ -512,14 +574,13 @@ impl Updater {
                         if self.prompt.is_none()
                             && let Some(release) = release
                         {
-                            self.prompt = Some(self.prompt_for(release));
+                            self.prompt = Some(Offer::new(release));
                         }
-                        if let Some(prompt) = &mut self.prompt {
-                            prompt.is_installing = false;
-                            match failure {
-                                Failure::Installer(e) => prompt.set_message(e),
-                                Failure::Updater(note) => prompt.set_note(note),
-                            }
+                        if let Some(offer) = &mut self.prompt {
+                            offer.message = Some(match failure {
+                                Failure::Installer(e) => Message::Installer(e),
+                                Failure::Updater(note) => Message::Note(note),
+                            });
                         }
                     }
                 }
@@ -527,37 +588,80 @@ impl Updater {
         }
     }
 
-    /// Draws the startup prompt and starts what it asks for.
-    pub fn show(&mut self, ctx: &egui::Context) -> Action {
-        self.show_if(ctx, true)
+    /// Whether the app should close now so a ready update installs, without showing the startup
+    /// prompt (a host that shows the progress in its own dialog calls this instead of
+    /// [`run`](Self::run)). True once per finished install and once per
+    /// [`restart_to_update`](Self::restart_to_update), and only with `can_start` true: while the
+    /// app holds unsaved work the close waits and is asked again. The close is only asked for:
+    /// the helper, which waits just a minute for the app to exit, starts at the exit itself
+    /// ([`start_pending_update`](Self::start_pending_update)), so a close the user cancels leaves
+    /// the update ready.
+    pub fn take_close(&mut self, can_start: bool) -> bool {
+        can_start && self.restart.is_some() && std::mem::take(&mut self.close_wanted)
     }
 
-    /// Like [`Self::show`], but an installation only starts, and a ready update only asks the app
-    /// to close, when `can_start` is true. An app passes `false` while it holds unsaved work.
-    pub fn show_if(&mut self, ctx: &egui::Context, can_start: bool) -> Action {
+    /// Puts the startup prompt on `dialogs` at [`StartupStage::Update`] when one is due, feeds the open one the
+    /// install's progress, and starts what the user chose. An installation only starts, and a ready update only
+    /// asks the app to close, when `can_start` is true: an app passes `false` while it holds unsaved work. The app
+    /// calls this before `DialogHost::run`.
+    pub fn run(&mut self, dialogs: &mut DialogHost, can_start: bool) -> Action {
         // The close waits for the app to hold no unsaved work: the user may have edited while the
-        // update installed. It is only asked for: the helper, which waits just a minute for the
-        // app to exit, starts at the exit itself (`start_pending_update`), so a close the user
-        // cancels leaves the update ready.
-        if can_start && self.restart.is_some() && std::mem::take(&mut self.close_wanted) {
+        // update installed.
+        if self.take_close(can_start) {
             return Action::Close;
         }
-        let Some(prompt) = &mut self.prompt else { return Action::None };
-        match prompt.show(ctx) {
-            StartupPromptResponse::Pending => Action::None,
-            StartupPromptResponse::UpdateAndRestart => {
-                self.request_install(ctx, can_start);
-                Action::None
+        // Update and Restart leaves the prompt open to show the progress; the pick comes through the dialog.
+        if self.prompt.is_some() && dialogs.get_mut_by_id::<UpdatePromptDialog>(prompt_id()).is_some_and(UpdatePromptDialog::take_update_request) {
+            self.request_install(can_start);
+        }
+        let mut result = dialogs.take::<UpdatePromptDialog>();
+        if self.stale {
+            if let Some(dialog) = dialogs.get_mut_by_id::<UpdatePromptDialog>(prompt_id()) {
+                dialog.withdraw();
             }
-            StartupPromptResponse::Download => {
-                let action = download_action(self.app, &prompt.release);
-                self.prompt = None;
-                action
+            self.stale = result.is_none() && self.stale;
+            result = None;
+        }
+        let mut action = Action::None;
+        if let (Some(result), Some(offer)) = (result, &mut self.prompt) {
+            offer.shown = false;
+            match result.ok().unwrap_or(UpdateChoice::Later) {
+                UpdateChoice::UpdateAndRestart => {
+                    self.request_install(can_start);
+                }
+                UpdateChoice::Download => {
+                    action = download_action(self.app, &offer.release);
+                    self.prompt = None;
+                }
+                UpdateChoice::Later => {
+                    // An installation carries on and reports through `tick`.
+                    self.prompt = None;
+                }
             }
-            StartupPromptResponse::Later => {
-                // An installation carries on and reports through `tick`.
-                self.prompt = None;
-                Action::None
+        }
+        self.sync(dialogs);
+        action
+    }
+
+    /// Enqueues the prompt when it is not on the host, else shows it the install's progress.
+    fn sync(&mut self, dialogs: &mut DialogHost) {
+        let Some(offer) = &self.prompt else { return };
+        let (installing, message) = (self.install.is_some(), offer.text(self.translate));
+        if offer.shown {
+            if let Some(dialog) = dialogs.get_mut_by_id::<UpdatePromptDialog>(prompt_id()) {
+                dialog.set_installing(installing);
+                dialog.set_ready(offer.ready);
+                dialog.set_status(message);
+            }
+        } else if !self.stale {
+            let self_updating = self_update::is_self_updating(self.app) && self_update::release_installs(self.app, &offer.release);
+            let mut dialog = UpdatePromptDialog::new(offer.release.clone(), self.version.clone(), self_updating);
+            dialog.set_installing(installing);
+            dialog.set_ready(offer.ready);
+            dialog.set_status(message);
+            dialogs.enqueue(StartupStage::Update, dialog);
+            if let Some(offer) = &mut self.prompt {
+                offer.shown = true;
             }
         }
     }
@@ -601,53 +705,68 @@ impl Updater {
         }
     }
 
-    fn request_install(&mut self, ctx: &egui::Context, can_start: bool) {
-        if can_start {
-            self.start_install(ctx);
-        } else if let Some(prompt) = &mut self.prompt {
-            prompt.set_note(Note::new("Save or close your open work first; the update restarts the app.", &[]));
+    /// Starts installing the newest release the updater knows of, as the prompt's Update and
+    /// Restart does: the one a check found or [`offer`](Self::offer) was given, whether or not
+    /// the prompt is still open (a closed one is made again to hold the progress). Returns false
+    /// when it knows of no release (or the launcher manages the version), and then nothing
+    /// happens. With `can_start` false (the app holds unsaved work) nothing starts and
+    /// [`status_message`](Self::status_message) asks the user to save first. Progress and failures
+    /// show through [`is_installing`](Self::is_installing) and `status_message`, and a finished
+    /// install ends in [`Action::Close`] from [`run`](Self::run).
+    pub fn request_install(&mut self, can_start: bool) -> bool {
+        if self.prompt.is_none()
+            && let Some(release) = self.known.clone()
+            && !self.read_choice()
+        {
+            self.prompt = Some(Offer::new(release));
         }
+        if self.prompt.is_none() {
+            return false;
+        }
+        if can_start {
+            self.start_install();
+        } else if let Some(offer) = &mut self.prompt {
+            offer.message = Some(Message::Note(Note::new("Save or close your open work first; the update restarts the app.", &[])));
+        }
+        true
     }
 
-    fn start_install(&mut self, ctx: &egui::Context) {
+    fn start_install(&mut self) {
         // The launcher may have pinned the app while the prompt was open; that closes it.
         if self.install.is_none() && !self.installed && self.read_choice() {
             return;
         }
         let installed_note = self.installed_note();
         let paths = self.outcome_paths();
-        let Some(prompt) = &mut self.prompt else { return };
+        let Some(offer) = &mut self.prompt else { return };
         if self.installed {
             // Restart to update: the app is asked to close again.
-            prompt.set_note(installed_note);
+            offer.ready = true;
+            offer.message = Some(Message::Note(installed_note));
             if self.restart.is_some() {
                 self.close_wanted = true;
             }
             return;
         }
         let Some(installed) = self_update::current(self.app) else {
-            prompt.set_note(Note::new("Cannot auto-update this installation type. Please download manually.", &[]));
-            prompt.is_installing = false;
+            offer.message = Some(Message::Note(Note::new("Cannot auto-update this installation type. Please download manually.", &[])));
             return;
         };
-        prompt.is_installing = true;
-        prompt.clear_message();
+        offer.message = None;
         self.failed_reason = None;
         let (tx, rx) = channel();
-        let (app, version, ctx, release) = (self.app, self.version.clone(), ctx.clone(), prompt.release.clone());
+        let (app, version, release) = (self.app, self.version.clone(), offer.release.clone());
         let worker_release = release.clone();
         let exiting = handoff(&mut self.exiting);
         let spawned = std::thread::Builder::new().name("self-update".into()).spawn(move || {
             let run = || install(app, &installed, worker_release, &version).map_err(Failure::Installer);
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)).unwrap_or_else(|_| Err(Failure::panicked()));
             deliver(app, &tx, &exiting, paths.as_ref(), outcome);
-            ctx.request_repaint();
         });
         match spawned {
             Ok(_) => self.install = Some((rx, release)),
             Err(e) => {
-                prompt.is_installing = false;
-                prompt.set_note(Note::new("Couldn't start the update ({error})", &[("error", &e.to_string())]));
+                offer.message = Some(Message::Note(Note::new("Couldn't start the update ({error})", &[("error", &e.to_string())])));
             }
         }
     }
@@ -691,6 +810,33 @@ fn deliver(app: &App, tx: &Sender<Result<Restart, Failure>>, exiting: &Mutex<boo
     }
 }
 
+/// "The update could not be installed: …", for a prompt that offers a failed update again.
+fn failed_note(reason: &str) -> Note {
+    Note::new("The update could not be installed: {reason}", &[("reason", reason)])
+}
+
+/// The id of the update prompt on the host.
+fn prompt_id() -> craft_ui::dialog::DialogId {
+    dialog_id("updateDialog.prompt")
+}
+
+#[cfg(feature = "screen-testing")]
+impl Updater {
+    /// Waits for the running check's answer on its channel (its thread always sends one, or ends
+    /// and closes the channel), then hands it to `tick` as a pass would (tests).
+    pub fn settle_for_tests(&mut self, ctx: &egui::Context) {
+        let Some(rx) = self.check.take() else { return };
+        let (tx, answer) = channel();
+        if let Ok(checked) = rx.recv() {
+            let _ = tx.send(checked);
+        }
+        // Without an answer `tx` is dropped here, and `tick` sees a check that stopped.
+        drop(tx);
+        self.check = Some(answer);
+        self.tick(ctx);
+    }
+}
+
 fn install(app: &'static App, installed: &self_update::Install, mut release: Release, version: &str) -> Result<Restart, String> {
     let http = Http::new(&format!("{}/Update", app.name)).map_err(|e| format!("could not initialize HTTP: {e}"))?;
     if release.assets.is_empty()
@@ -707,7 +853,7 @@ fn install(app: &'static App, installed: &self_update::Install, mut release: Rel
 /// `Release` from its own feed or cache, so the link isn't always one GitHub's parser checked).
 /// A link that fails the check falls back to the app's releases page: the prompt has closed, so
 /// Download must still open something.
-fn download_action(app: &App, release: &Release) -> Action {
+pub fn download_action(app: &App, release: &Release) -> Action {
     let safe = crate::release::safe_web_link;
     if safe(&release.html_url) {
         return Action::OpenUrl(release.html_url.clone());
@@ -717,923 +863,4 @@ fn download_action(app: &App, release: &Release) -> Action {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::suite::PHOTOCRAFT;
-
-    /// An updater that never reads the real version-choice file.
-    fn updater(answer: Checked) -> Updater {
-        Updater::new(&PHOTOCRAFT, "0.1.0").with_source(Arc::new(move || answer.clone())).with_pins_path(no_pins())
-    }
-
-    pub(super) fn no_pins() -> PathBuf {
-        std::env::temp_dir().join("craft-update-tests-no-such-dir").join("versions.json")
-    }
-
-    /// Waits for the running check's answer on its channel (its thread always sends one, or ends
-    /// and closes the channel), then hands it to `tick` as a frame would.
-    pub(super) fn settle(updater: &mut Updater, ctx: &egui::Context) {
-        let Some(rx) = updater.check.take() else { return };
-        let (tx, answer) = channel();
-        if let Ok(checked) = rx.recv() {
-            assert!(tx.send(checked).is_ok());
-        }
-        // Without an answer `tx` is dropped here, and `tick` sees a check that stopped.
-        drop(tx);
-        updater.check = Some(answer);
-        updater.tick(ctx);
-        assert!(updater.check.is_none(), "the check has reported");
-    }
-
-    /// #391: Download opens only a safe web link, whoever built the `Release`.
-    #[test]
-    fn download_opens_only_a_safe_release_page() {
-        let with = |url: &str| Release { html_url: url.into(), ..newer() };
-        let page = "https://github.com/storytold/photocraft/releases/tag/v9.0.0";
-        assert_eq!(download_action(&PHOTOCRAFT, &with(page)), Action::OpenUrl(page.into()));
-        let releases = Action::OpenUrl(PHOTOCRAFT.releases_url());
-        for bad in [
-            "",
-            "http://github.com/x",
-            "file:///C:/Windows/system32/calc.exe",
-            "javascript:alert(1)",
-            "https://evil.example/a|calc",
-            "https://user@evil.example/",
-            "https://x.example/a b",
-            "https://github.com/storytold/photocraft/releases/tag/v9&calc",
-        ] {
-            assert_eq!(download_action(&PHOTOCRAFT, &with(bad)), releases, "{bad:?}");
-        }
-    }
-
-    /// #391: the fallback passes the check for every app, so Download always opens a page.
-    #[test]
-    fn every_releases_page_is_a_safe_web_link() {
-        for app in crate::suite::SUITE.iter().chain([&crate::suite::LAUNCHER]) {
-            assert!(crate::release::safe_web_link(&app.releases_url()), "{}", app.id);
-        }
-        let broken = App::new("x", "X", "x", "a|b/c");
-        assert_eq!(download_action(&broken, &Release { html_url: "javascript:x".into(), ..newer() }), Action::None);
-    }
-
-    pub(super) fn newer() -> Release {
-        Release { tag: "v9.0.0".into(), version: crate::version::parse("9.0.0"), ..Release::default() }
-    }
-
-    // Child processes isolate environment overrides from parallel tests without unsafe set_var.
-    #[test]
-    fn pretend_versions_trigger_startup_prompts_for_every_app() {
-        const CHILD: &str = "CRAFT_UPDATE_PRETEND_TEST_APP";
-        if let Ok(id) = std::env::var(CHILD) {
-            let app = crate::suite::by_id(&id).unwrap();
-            let mut u = Updater::new(app, "99.0.0").with_pins_path(no_pins());
-            assert_eq!(u.version, "0.0.1", "{} ignored its pretend version", app.id);
-            let version = u.version.clone();
-            let repo = app.repo;
-            u = u.with_source(Arc::new(move || {
-                crate::offered_release(r#"[{"tag_name":"v1.0.0","name":"Test release","draft":false,"prerelease":false}]"#, repo, &version)
-            }));
-            let ctx = egui::Context::default();
-            u.check_at_start(&ctx);
-            settle(&mut u, &ctx);
-            assert!(u.prompt_open(), "{} did not offer the newer release", app.id);
-            // The explicit test override also applies to the pre-existing installation guard.
-            // No assets means the installer stops before any network request or file replacement.
-            let dir = tempfile::tempdir().unwrap();
-            let error = self_update::update(
-                app,
-                &self_update::Install::AppImage(dir.path().join("test.AppImage")),
-                &newer(),
-                Platform { os: crate::Os::Linux, arch: crate::Arch::X64 },
-                &Http::new(crate::TEST_AGENT).unwrap(),
-                &Paths::under(dir.path()),
-                &Stop::default(),
-                &mut |_| {},
-                &|| Ok(()),
-                Some("99.0.0"),
-            )
-            .unwrap_err();
-            assert!(error.contains("has no"), "{}: {error}", app.id);
-            return;
-        }
-        for app in &crate::suite::SUITE {
-            let status = std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", "updater::tests::pretend_versions_trigger_startup_prompts_for_every_app", "--nocapture"])
-                .env(CHILD, app.id)
-                .env(format!("{}_PRETEND_VERSION", app.id.to_uppercase()), "0.0.1")
-                .env_remove(self_update::PRETEND_VAR)
-                .status()
-                .unwrap();
-            assert!(status.success(), "{} pretend-version regression failed", app.id);
-        }
-    }
-
-    #[test]
-    fn a_requested_check_reports_an_up_to_date_app() {
-        let (ctx, mut u) = (egui::Context::default(), updater(Ok(None)));
-        u.check_now(&ctx);
-        assert_eq!(u.status(), &Status::Checking);
-        settle(&mut u, &ctx);
-        assert_eq!(u.status(), &Status::UpToDate);
-        u.dismiss_status();
-        assert_eq!(u.status(), &Status::Idle);
-    }
-
-    #[test]
-    fn dismissing_a_running_check_keeps_it_quiet() {
-        let (ctx, mut u) = (egui::Context::default(), updater(Ok(None)));
-        u.check_now(&ctx);
-        u.dismiss_status();
-        settle(&mut u, &ctx);
-        assert_eq!(u.status(), &Status::Idle);
-    }
-
-    #[test]
-    fn a_requested_check_reports_a_failure_but_the_startup_check_stays_quiet() {
-        let ctx = egui::Context::default();
-        let mut u = updater(Err("offline".into()));
-        u.check_now(&ctx);
-        settle(&mut u, &ctx);
-        assert_eq!(u.status(), &Status::Failed("offline".into()));
-
-        let mut u = updater(Err("offline".into()));
-        u.check_at_start(&ctx);
-        settle(&mut u, &ctx);
-        assert_eq!(u.status(), &Status::Idle);
-    }
-
-    #[test]
-    fn a_newer_release_opens_the_prompt_and_later_closes_it() {
-        let (ctx, mut u) = (egui::Context::default(), updater(Ok(Some(newer()))));
-        u.check_at_start(&ctx);
-        settle(&mut u, &ctx);
-        assert!(u.prompt_open());
-        assert_eq!(u.status(), &Status::Idle);
-        u.prompt = None;
-        assert!(!u.prompt_open());
-    }
-
-    #[test]
-    fn the_startup_check_runs_once() {
-        let (ctx, mut u) = (egui::Context::default(), updater(Ok(None)));
-        u.check_at_start(&ctx);
-        settle(&mut u, &ctx);
-        u.check_at_start(&ctx);
-        assert!(u.check.is_none());
-    }
-
-    #[test]
-    fn a_request_during_the_startup_check_is_not_lost() {
-        let (ctx, mut u) = (egui::Context::default(), updater(Ok(None)));
-        u.check_at_start(&ctx);
-        u.check_now(&ctx);
-        settle(&mut u, &ctx);
-        assert_eq!(u.status(), &Status::UpToDate);
-    }
-
-    #[test]
-    fn a_panicking_check_is_an_error_not_a_hang() {
-        let ctx = egui::Context::default();
-        let mut u = Updater::new(&PHOTOCRAFT, "0.1.0").with_source(Arc::new(|| std::panic::panic_any("boom"))).with_pins_path(no_pins());
-        u.check_now(&ctx);
-        settle(&mut u, &ctx);
-        assert!(matches!(u.status(), Status::Failed(_)));
-        assert!(u.check.is_none());
-    }
-
-    #[test]
-    fn a_failed_install_returns_to_the_prompt_even_after_it_was_dismissed() {
-        let ctx = egui::Context::default();
-        let mut u = updater(Ok(None));
-        let (tx, rx) = channel();
-        u.install = Some((rx, newer()));
-        assert!(tx.send(Err("disk full".into())).is_ok());
-        u.tick(&ctx);
-        let prompt = u.prompt.as_ref().map(|p| (p.is_installing, p.status_message.clone()));
-        assert_eq!(prompt, Some((false, Some("disk full".into()))));
-        assert!(u.install.is_none());
-    }
-
-    #[test]
-    fn a_dropped_install_worker_is_an_error() {
-        let ctx = egui::Context::default();
-        let mut u = updater(Ok(None));
-        let (tx, rx) = channel::<Result<Restart, Failure>>();
-        u.install = Some((rx, newer()));
-        drop(tx);
-        u.tick(&ctx);
-        assert!(u.prompt.as_ref().is_some_and(|p| p.message().is_some()));
-    }
-
-    /// A translator given after the prompt opened reaches it too.
-    #[test]
-    fn a_translator_given_later_reaches_the_open_prompt() {
-        fn shout(text: &str, args: &[(&str, &str)]) -> String {
-            crate::translate::fill(&text.to_uppercase(), args)
-        }
-        let ctx = egui::Context::default();
-        let mut u = updater(Ok(None));
-        u.offer(newer());
-        u.request_install(&ctx, false);
-        let mut u = u.with_translator(shout);
-        let message = |u: &Updater| u.prompt.as_ref().and_then(StartupPrompt::message).unwrap_or_default();
-        assert!(message(&u).starts_with("SAVE OR CLOSE"), "{}", message(&u));
-        // And the prompts it opens later.
-        u.prompt = None;
-        u.offer(newer());
-        u.request_install(&ctx, false);
-        assert!(message(&u).starts_with("SAVE OR CLOSE"), "{}", message(&u));
-    }
-
-    /// The updater's own failures (a dropped or panicking worker) are in the interface language;
-    /// the installer's are shown as they came.
-    #[test]
-    fn the_updaters_own_failures_are_translated_and_the_installers_are_not() {
-        fn shout(text: &str, args: &[(&str, &str)]) -> String {
-            crate::translate::fill(&text.to_uppercase(), args)
-        }
-        let ctx = egui::Context::default();
-        let message = |u: &Updater| u.prompt.as_ref().and_then(StartupPrompt::message).unwrap_or_default();
-        for (failure, want) in [
-            (Some(Failure::panicked()), "THE UPDATE FAILED UNEXPECTEDLY."),
-            (None, "THE UPDATE STOPPED UNEXPECTEDLY."),
-            (Some("disk full".into()), "disk full"),
-        ] {
-            let mut u = updater(Ok(None)).with_translator(shout);
-            let (tx, rx) = channel();
-            u.install = Some((rx, newer()));
-            match failure {
-                Some(f) => assert!(tx.send(Err(f)).is_ok()),
-                None => drop(tx),
-            }
-            u.tick(&ctx);
-            assert_eq!(message(&u), want);
-        }
-    }
-
-    #[test]
-    fn nothing_starts_once_an_update_is_installed() {
-        let ctx = egui::Context::default();
-        let mut u = updater(Ok(Some(newer())));
-        let (tx, rx) = channel();
-        u.install = Some((rx, newer()));
-        assert!(tx.send(Ok(Restart::scheduled())).is_ok());
-        u.tick(&ctx);
-        assert_eq!(u.show(&ctx), Action::Close);
-        u.prompt = None;
-        u.check_now(&ctx);
-        assert!(u.check.is_none(), "no check after an install");
-        u.offer(newer());
-        assert!(!u.prompt_open(), "no second offer after an install");
-    }
-
-    #[test]
-    fn an_install_waits_while_the_app_holds_unsaved_work() {
-        let ctx = egui::Context::default();
-        let mut u = updater(Ok(None));
-        u.offer(newer());
-        u.request_install(&ctx, false);
-        assert!(u.install.is_none(), "nothing is scheduled while there is unsaved work");
-        assert!(u.prompt.as_ref().is_some_and(|p| !p.is_installing && p.message().is_some()));
-    }
-
-    /// The updater's own messages follow the interface language while the prompt shows them:
-    /// they are translated when it draws, not when they are set.
-    #[test]
-    fn the_prompts_own_messages_follow_a_language_change() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        static FRENCH: AtomicBool = AtomicBool::new(false);
-        fn translate(text: &str, args: &[(&str, &str)]) -> String {
-            let text = if FRENCH.load(Ordering::Relaxed) { format!("FR {text}") } else { text.to_owned() };
-            crate::translate::fill(&text, args)
-        }
-        let ctx = egui::Context::default();
-        let mut u = updater(Ok(None)).with_translator(translate);
-        u.offer(newer());
-        u.request_install(&ctx, false);
-        let message = |u: &Updater| u.prompt.as_ref().and_then(StartupPrompt::message).unwrap_or_default();
-        assert!(message(&u).starts_with("Save or close"), "{}", message(&u));
-        FRENCH.store(true, Ordering::Relaxed);
-        assert!(message(&u).starts_with("FR Save or close"), "{}", message(&u));
-        // A ready update names the app, in the language of the moment.
-        let (tx, rx) = channel();
-        u.install = Some((rx, newer()));
-        assert!(tx.send(Ok(Restart::scheduled())).is_ok());
-        u.tick(&ctx);
-        let ready = crate::translate::fill(READY_TEXT, &[("app", "PhotoCraft")]);
-        assert_eq!(message(&u), format!("FR {ready}"));
-        FRENCH.store(false, Ordering::Relaxed);
-        assert_eq!(message(&u), ready);
-    }
-
-    /// On Windows the update installs after the app exits, so a finished preparation says it is
-    /// ready, never that it is installed.
-    #[test]
-    fn a_prepared_update_says_when_it_installs() {
-        if cfg!(windows) {
-            assert_eq!(READY_TEXT, "Update ready. Close {app} to install it.");
-        } else {
-            assert!(READY_TEXT.starts_with("The update is installed."), "{READY_TEXT}");
-        }
-        let ctx = egui::Context::default();
-        let mut u = updater(Ok(None));
-        u.offer(newer());
-        let (tx, rx) = channel();
-        u.install = Some((rx, newer()));
-        assert!(tx.send(Ok(Restart::scheduled())).is_ok());
-        u.tick(&ctx);
-        let prompt = u.prompt.as_ref().map(|p| (p.is_installing, p.is_ready, p.message()));
-        assert_eq!(prompt, Some((false, true, Some(crate::translate::fill(READY_TEXT, &[("app", "PhotoCraft")])))));
-    }
-
-    /// One frame with the updater's prompt drawn.
-    fn frame(u: &mut Updater, ctx: &egui::Context, can_start: bool) -> Action {
-        let mut action = Action::None;
-        ctx.run_ui(egui::RawInput::default(), |ui| action = u.show_if(ui.ctx(), can_start)).textures_delta.clear();
-        action
-    }
-
-    #[test]
-    fn a_finished_install_keeps_asking_to_close_until_the_app_can() {
-        let ctx = egui::Context::default();
-        let mut u = updater(Ok(None));
-        u.offer(newer());
-        let (tx, rx) = channel();
-        u.install = Some((rx, newer()));
-        assert!(tx.send(Ok(Restart::scheduled())).is_ok());
-        u.tick(&ctx);
-        assert_eq!(frame(&mut u, &ctx, false), Action::None, "unsaved work holds the close back");
-        assert_eq!(frame(&mut u, &ctx, true), Action::Close);
-        assert_eq!(frame(&mut u, &ctx, true), Action::None);
-    }
-
-    #[test]
-    fn a_finished_install_asks_the_app_to_close_once() {
-        let ctx = egui::Context::default();
-        let mut u = updater(Ok(None));
-        let (tx, rx) = channel();
-        u.install = Some((rx, newer()));
-        assert!(tx.send(Ok(Restart::scheduled())).is_ok());
-        u.tick(&ctx);
-        assert_eq!(u.show(&ctx), Action::Close);
-        assert_eq!(u.show(&ctx), Action::None);
-    }
-
-    /// A finished installation that still has to start its helper asks the app to close only
-    /// when it may, and starts the helper only at the exit, once.
-    #[test]
-    fn the_helper_starts_once_when_the_app_exits() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        let ctx = egui::Context::default();
-        let mut u = updater(Ok(None));
-        u.offer(newer());
-        let starts = Arc::new(AtomicUsize::new(0));
-        let counter = Arc::clone(&starts);
-        let (tx, rx) = channel();
-        u.install = Some((rx, newer()));
-        let restart = Restart::later(move || {
-            counter.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        });
-        assert!(tx.send(Ok(restart)).is_ok());
-        u.tick(&ctx);
-        assert_eq!(starts.load(Ordering::SeqCst), 0, "the helper waits for the close");
-        assert_eq!(frame(&mut u, &ctx, false), Action::None);
-        assert_eq!(starts.load(Ordering::SeqCst), 0, "unsaved work holds the helper back");
-        assert_eq!(frame(&mut u, &ctx, true), Action::Close);
-        assert_eq!(starts.load(Ordering::SeqCst), 0, "a close is a request; the helper waits for the exit");
-        assert_eq!(frame(&mut u, &ctx, true), Action::None);
-        u.start_pending_update();
-        assert_eq!(starts.load(Ordering::SeqCst), 1);
-        u.start_pending_update();
-        drop(u);
-        assert_eq!(starts.load(Ordering::SeqCst), 1, "the helper starts once");
-    }
-
-    /// A close the user cancels starts no helper and keeps the update ready: a requested check
-    /// says so, and Restart to Update asks for the close again, from the result window or from
-    /// the prompt.
-    #[test]
-    fn a_canceled_close_keeps_the_update_ready() {
-        use std::sync::atomic::Ordering;
-        let ctx = egui::Context::default();
-        let mut u = updater(Ok(None));
-        u.offer(newer());
-        let (starts, restart) = counted_restart();
-        let (tx, rx) = channel();
-        u.install = Some((rx, newer()));
-        assert!(tx.send(Ok(restart)).is_ok());
-        u.tick(&ctx);
-        assert_eq!(frame(&mut u, &ctx, true), Action::Close);
-        // The app's close was canceled: it keeps running and drawing.
-        for _ in 0..3 {
-            assert_eq!(frame(&mut u, &ctx, true), Action::None, "a canceled close is not asked for again by itself");
-        }
-        assert_eq!(starts.load(Ordering::SeqCst), 0, "no helper starts while the app runs");
-        u.check_now(&ctx);
-        assert_eq!(u.status(), &Status::Ready);
-        assert!(u.check.is_none(), "no check runs while an update is ready");
-        assert!(u.prompt.as_ref().is_some_and(|p| p.is_ready), "the prompt offers Restart to Update");
-
-        u.restart_to_update();
-        assert_eq!(frame(&mut u, &ctx, false), Action::None, "unsaved work still holds the close back");
-        assert_eq!(frame(&mut u, &ctx, true), Action::Close);
-        assert_eq!(frame(&mut u, &ctx, true), Action::None);
-        // The prompt's button does the same.
-        u.request_install(&ctx, true);
-        assert_eq!(frame(&mut u, &ctx, true), Action::Close);
-        assert_eq!(starts.load(Ordering::SeqCst), 0);
-
-        drop(u);
-        assert_eq!(starts.load(Ordering::SeqCst), 1, "the exit starts the helper once");
-    }
-
-    /// Restart to Update does nothing when no update is ready.
-    #[test]
-    fn restart_to_update_needs_a_ready_update() {
-        let ctx = egui::Context::default();
-        let mut u = updater(Ok(None));
-        u.restart_to_update();
-        assert_eq!(frame(&mut u, &ctx, true), Action::None);
-    }
-
-    /// A counter and a helper that adds one to it each time it starts.
-    fn counted_restart() -> (Arc<std::sync::atomic::AtomicUsize>, Restart) {
-        let starts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let counter = Arc::clone(&starts);
-        let restart = Restart::later(move || {
-            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
-        });
-        (starts, restart)
-    }
-
-    /// An app that exits without [`Action::Close`] still starts the waiting helper, once, when
-    /// the updater is dropped.
-    #[test]
-    fn dropping_the_updater_starts_a_waiting_helper_once() {
-        use std::sync::atomic::Ordering;
-        let ctx = egui::Context::default();
-        let mut u = updater(Ok(None));
-        let (starts, restart) = counted_restart();
-        let (tx, rx) = channel();
-        u.install = Some((rx, newer()));
-        assert!(tx.send(Ok(restart)).is_ok());
-        u.tick(&ctx);
-        assert_eq!(frame(&mut u, &ctx, false), Action::None, "unsaved work holds the close back");
-        assert_eq!(starts.load(Ordering::SeqCst), 0);
-        drop(u);
-        assert_eq!(starts.load(Ordering::SeqCst), 1);
-
-        // Picked up from the worker without a `tick` first.
-        let mut u = updater(Ok(None));
-        let (starts, restart) = counted_restart();
-        let (tx, rx) = channel();
-        u.install = Some((rx, newer()));
-        assert!(tx.send(Ok(restart)).is_ok());
-        u.start_pending_update();
-        assert_eq!(starts.load(Ordering::SeqCst), 1);
-        u.start_pending_update();
-        drop(u);
-        assert_eq!(starts.load(Ordering::SeqCst), 1, "the helper starts once");
-    }
-
-    /// An installation that finishes after the updater was dropped starts its helper once; one
-    /// the updater receives waits for the close.
-    #[test]
-    fn an_install_finishing_after_the_updater_is_dropped_starts_its_helper() {
-        use std::sync::atomic::Ordering;
-        let mut u = updater(Ok(None));
-        let exiting = Arc::clone(&u.exiting);
-        let (starts, restart) = counted_restart();
-        let (tx, rx) = channel();
-        u.install = Some((rx, newer()));
-        drop(u);
-        assert_eq!(starts.load(Ordering::SeqCst), 0);
-        deliver(&crate::suite::LAUNCHER, &tx, &exiting, None, Ok(restart));
-        assert_eq!(starts.load(Ordering::SeqCst), 1);
-
-        // Sent while the drop has read the channel but not yet released the receiver.
-        let (starts, restart) = counted_restart();
-        let (tx, _rx) = channel();
-        deliver(&crate::suite::LAUNCHER, &tx, &Mutex::new(true), None, Ok(restart));
-        assert_eq!(starts.load(Ordering::SeqCst), 1, "a receiver about to be dropped is not sent to");
-
-        let (starts, restart) = counted_restart();
-        let (tx, rx) = channel();
-        deliver(&crate::suite::LAUNCHER, &tx, &Mutex::new(false), None, Ok(restart));
-        assert_eq!(starts.load(Ordering::SeqCst), 0, "the updater starts it at the close");
-        assert!(rx.try_recv().is_ok_and(|outcome| outcome.is_ok()));
-    }
-
-    /// An installation still running when the app calls `start_pending_update` in `on_exit`, and
-    /// that finishes before the updater is dropped, starts its helper once; the worker's end is
-    /// not then recorded as a failure.
-    #[test]
-    fn an_install_finishing_after_start_pending_update_starts_its_helper_once() {
-        use std::sync::atomic::Ordering;
-        let ctx = egui::Context::default();
-        let (_dir, paths, mut u) = with_records("0.1.0");
-        let exiting = Arc::clone(&u.exiting);
-        let (starts, restart) = counted_restart();
-        let (tx, rx) = channel();
-        u.install = Some((rx, newer()));
-        u.start_pending_update();
-        assert_eq!(starts.load(Ordering::SeqCst), 0, "nothing has finished yet");
-        deliver(&PHOTOCRAFT, &tx, &exiting, Some(&paths), Ok(restart));
-        drop(tx);
-        assert_eq!(starts.load(Ordering::SeqCst), 1, "the worker starts the helper itself");
-        drop(u);
-        assert_eq!(starts.load(Ordering::SeqCst), 1, "the helper starts once");
-        let mut next = reading(&paths, "0.1.0");
-        start_answered(&mut next, &ctx, Ok(None));
-        assert_eq!(next.status(), &Status::Idle, "a helper that started is not a failure");
-    }
-
-    /// A failed installation picked up at exit leaves nothing installed and nothing waiting.
-    #[test]
-    fn a_failed_install_picked_up_at_exit_leaves_nothing_waiting() {
-        let mut u = updater(Ok(None));
-        let (tx, rx) = channel::<Result<Restart, Failure>>();
-        u.install = Some((rx, newer()));
-        assert!(tx.send(Err("couldn't download the update".into())).is_ok());
-        u.start_pending_update();
-        assert!(u.install.is_none(), "the finished job is cleared");
-        assert!(!u.installed);
-        assert!(u.restart.is_none());
-    }
-
-    /// After [`Action::Close`], the app's exit (the updater dropped) starts the helper once.
-    #[test]
-    fn the_exit_after_a_close_starts_the_helper_once() {
-        use std::sync::atomic::Ordering;
-        let ctx = egui::Context::default();
-        let mut u = updater(Ok(None));
-        let (starts, restart) = counted_restart();
-        let (tx, rx) = channel();
-        u.install = Some((rx, newer()));
-        assert!(tx.send(Ok(restart)).is_ok());
-        u.tick(&ctx);
-        assert_eq!(frame(&mut u, &ctx, true), Action::Close);
-        assert_eq!(frame(&mut u, &ctx, true), Action::None, "the close is asked for once");
-        assert_eq!(starts.load(Ordering::SeqCst), 0);
-        drop(u);
-        assert_eq!(starts.load(Ordering::SeqCst), 1);
-    }
-
-    /// Outcome records in a fresh folder, and an updater reading them that runs `version`.
-    fn with_records(version: &str) -> (tempfile::TempDir, Paths, Updater) {
-        let dir = tempfile::tempdir().unwrap();
-        let paths = Paths::under(dir.path());
-        let u = reading(&paths, version);
-        (dir, paths, u)
-    }
-
-    /// An updater running `version` that reads the outcome records under `paths`.
-    fn reading(paths: &Paths, version: &str) -> Updater {
-        Updater::new(&PHOTOCRAFT, version).with_source(Arc::new(|| Ok(None))).with_pins_path(no_pins()).with_paths(paths.clone())
-    }
-
-    /// The check at start, answered with `answer` without waiting on its thread.
-    fn start_answered(u: &mut Updater, ctx: &egui::Context, answer: Checked) {
-        u.check_at_start(ctx);
-        let (tx, rx) = channel();
-        u.check = Some(rx);
-        assert!(tx.send(answer).is_ok());
-        u.tick(ctx);
-    }
-
-    /// A helper that can't start at the exit is recorded, and the next start says why, once.
-    #[test]
-    fn a_helper_that_cannot_start_at_the_exit_is_reported_at_the_next_start() {
-        let ctx = egui::Context::default();
-        let (_dir, paths, mut u) = with_records("0.1.0");
-        let (tx, rx) = channel();
-        u.install = Some((rx, newer()));
-        assert!(tx.send(Ok(Restart::later(|| Err("couldn't schedule the update (denied)".into())))).is_ok());
-        u.tick(&ctx);
-        assert_eq!(frame(&mut u, &ctx, true), Action::Close);
-        drop(u);
-
-        let mut next = reading(&paths, "0.1.0");
-        start_answered(&mut next, &ctx, Ok(None));
-        assert_eq!(next.status(), &Status::InstallFailed("couldn't schedule the update (denied)".into()));
-        let mut later = reading(&paths, "0.1.0");
-        start_answered(&mut later, &ctx, Ok(None));
-        assert_eq!(later.status(), &Status::Idle, "a failure is reported once");
-    }
-
-    /// The first start after a helper failure shows the reason once, and the quiet check at start
-    /// does not replace it. A failure wins over a stale record of a finished update.
-    #[test]
-    fn a_recorded_failure_is_shown_once_at_the_next_start() {
-        let ctx = egui::Context::default();
-        let (_dir, paths, mut u) = with_records("0.1.0");
-        self_update::record_failure(&paths, "the Windows Installer stopped with error 1603");
-        crate::paths::write_atomic(&paths.data.join("self-update-done.txt"), b"v0.1.0").unwrap();
-        start_answered(&mut u, &ctx, Ok(None));
-        assert_eq!(u.status(), &Status::InstallFailed("the Windows Installer stopped with error 1603".into()));
-        u.dismiss_status();
-        assert_eq!(u.status(), &Status::Idle);
-
-        let mut next = reading(&paths, "0.1.0");
-        start_answered(&mut next, &ctx, Ok(None));
-        assert_eq!(next.status(), &Status::Idle, "neither record is read twice");
-    }
-
-    /// A failed update that the check at start offers again says in its prompt why it failed.
-    #[test]
-    fn a_failed_update_offered_again_says_why_it_failed() {
-        let ctx = egui::Context::default();
-        let (_dir, paths, mut u) = with_records("0.1.0");
-        self_update::record_failure(&paths, "disk full");
-        start_answered(&mut u, &ctx, Ok(Some(newer())));
-        assert_eq!(u.status(), &Status::Idle, "the prompt carries the reason");
-        assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message).as_deref(), Some("The update could not be installed: disk full"));
-    }
-
-    /// Check Again after a failed update, with the failure already dismissed, still says in the
-    /// prompt that offers the update why it failed, and only that prompt does.
-    #[test]
-    fn check_again_after_a_failed_update_says_why_it_failed() {
-        let ctx = egui::Context::default();
-        let (_dir, paths, mut u) = with_records("0.1.0");
-        self_update::record_failure(&paths, "disk full");
-        start_answered(&mut u, &ctx, Ok(None));
-        assert_eq!(u.status(), &Status::InstallFailed("disk full".into()));
-        u.dismiss_status();
-        u.check_now(&ctx);
-        assert_eq!(u.status(), &Status::Checking);
-        let (tx, rx) = channel();
-        u.check = Some(rx);
-        assert!(tx.send(Ok(Some(newer()))).is_ok());
-        u.tick(&ctx);
-        assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message).as_deref(), Some("The update could not be installed: disk full"));
-
-        u.prompt = None;
-        u.check_now(&ctx);
-        let (tx, rx) = channel();
-        u.check = Some(rx);
-        assert!(tx.send(Ok(Some(newer()))).is_ok());
-        u.tick(&ctx);
-        assert!(u.prompt.is_some());
-        assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message), None, "the reason is shown once");
-    }
-
-    /// The new version's first start says it was updated, once, and only when the finished
-    /// update installed the version running now.
-    #[test]
-    fn a_finished_update_is_announced_once_by_the_version_it_installed() {
-        let ctx = egui::Context::default();
-        let (_dir, paths, mut u) = with_records("0.2.0");
-        crate::paths::write_atomic(&paths.data.join("self-update-done.txt"), b"v0.2.0").unwrap();
-        start_answered(&mut u, &ctx, Ok(None));
-        assert_eq!(u.status(), &Status::Updated("0.2.0".into()));
-        let mut next = reading(&paths, "0.2.0");
-        start_answered(&mut next, &ctx, Ok(None));
-        assert_eq!(next.status(), &Status::Idle, "announced once");
-
-        // The old version started again (the update didn't take): no claim, and the record goes.
-        crate::paths::write_atomic(&paths.data.join("self-update-done.txt"), b"v0.3.0").unwrap();
-        let mut old = reading(&paths, "0.2.0");
-        start_answered(&mut old, &ctx, Ok(None));
-        assert_eq!(old.status(), &Status::Idle);
-        assert!(!paths.data.join("self-update-done.txt").exists());
-    }
-
-    /// A requested check while an update downloads says it is installing, and while it waits for
-    /// the close says it is ready, after dismissal and on repeated clicks too, and starts nothing.
-    #[test]
-    fn a_requested_check_during_an_update_says_where_it_is() {
-        let ctx = egui::Context::default();
-        let mut u = updater(Ok(Some(newer())));
-        u.offer(newer());
-        let (tx, rx) = channel();
-        u.install = Some((rx, newer()));
-        for _ in 0..2 {
-            u.check_now(&ctx);
-            assert_eq!(u.status(), &Status::Installing);
-            assert!(u.check.is_none(), "no check starts");
-        }
-        u.dismiss_status();
-        u.check_now(&ctx);
-        assert_eq!(u.status(), &Status::Installing, "asked again after dismissal");
-        assert!(tx.send(Ok(Restart::scheduled())).is_ok());
-        u.tick(&ctx);
-        assert_eq!(u.status(), &Status::Ready, "the open window follows the update");
-        u.dismiss_status();
-        for _ in 0..2 {
-            u.check_now(&ctx);
-            assert_eq!(u.status(), &Status::Ready);
-            assert!(u.check.is_none() && u.install.is_none(), "nothing starts");
-        }
-    }
-
-    /// A requested check that answers after an installation started reports the installation,
-    /// not its own answer, whether the update is still installing or already waits for the close.
-    #[test]
-    fn a_check_answering_during_an_update_reports_the_update() {
-        let ctx = egui::Context::default();
-        for answer in [Ok(None), Err("offline".to_owned()), Ok(Some(newer()))] {
-            let mut u = updater(Ok(None));
-            u.offer(newer());
-            u.check_now(&ctx);
-            assert_eq!(u.status(), &Status::Checking);
-            let (check_tx, check_rx) = channel();
-            u.check = Some(check_rx);
-            let (tx, rx) = channel();
-            u.install = Some((rx, newer()));
-            assert!(check_tx.send(answer.clone()).is_ok());
-            u.tick(&ctx);
-            assert_eq!(u.status(), &Status::Installing, "a check answering {answer:?} while installing");
-            assert!(tx.send(Ok(Restart::scheduled())).is_ok());
-            u.tick(&ctx);
-            assert_eq!(u.status(), &Status::Ready, "after {answer:?}");
-
-            let mut u = updater(Ok(None));
-            u.offer(newer());
-            u.check_now(&ctx);
-            let (check_tx, check_rx) = channel();
-            u.check = Some(check_rx);
-            let (tx, rx) = channel();
-            u.install = Some((rx, newer()));
-            assert!(tx.send(Ok(Restart::scheduled())).is_ok());
-            u.tick(&ctx);
-            assert!(u.check.is_some(), "the check is still running");
-            assert!(check_tx.send(answer.clone()).is_ok());
-            u.tick(&ctx);
-            assert_eq!(u.status(), &Status::Ready, "a check answering {answer:?} after the install finished");
-        }
-    }
-
-    /// A failed installation closes a result window showing it; the prompt says why.
-    #[test]
-    fn a_failed_install_ends_the_installing_status() {
-        let ctx = egui::Context::default();
-        let mut u = updater(Ok(None));
-        let (tx, rx) = channel();
-        u.install = Some((rx, newer()));
-        u.check_now(&ctx);
-        assert_eq!(u.status(), &Status::Installing);
-        assert!(tx.send(Err("disk full".into())).is_ok());
-        u.tick(&ctx);
-        assert_eq!(u.status(), &Status::Idle);
-        assert_eq!(u.prompt.as_ref().and_then(|p| p.status_message.clone()).as_deref(), Some("disk full"));
-    }
-
-    /// A helper that started while the app kept running and then failed is found by the next
-    /// requested check, which offers the update again.
-    #[test]
-    fn a_requested_check_finds_a_helper_failure_while_the_app_still_runs() {
-        let ctx = egui::Context::default();
-        let (_dir, paths, mut u) = with_records("0.1.0");
-        u.offer(newer());
-        let (tx, rx) = channel();
-        u.install = Some((rx, newer()));
-        assert!(tx.send(Ok(Restart::scheduled())).is_ok());
-        u.tick(&ctx);
-        u.start_pending_update();
-        u.check_now(&ctx);
-        assert_eq!(u.status(), &Status::Ready, "the helper is still waiting");
-        assert!(u.prompt.as_ref().is_some_and(|p| p.is_ready), "the prompt offers Restart to Update");
-        self_update::record_failure(&paths, "ArtCraft Launcher is still running");
-        u.check_now(&ctx);
-        assert_eq!(u.status(), &Status::InstallFailed("ArtCraft Launcher is still running".into()));
-        assert!(!u.installed, "the update is on offer again");
-        let prompt = u.prompt.as_ref().map(|p| (p.is_installing, p.is_ready, p.message()));
-        let reason = "The update could not be installed: ArtCraft Launcher is still running".to_owned();
-        assert_eq!(prompt, Some((false, false, Some(reason))), "the prompt no longer offers Restart to Update");
-        assert!(!u.close_wanted, "no close is asked for");
-        assert_eq!(frame(&mut u, &ctx, true), Action::None);
-        u.check_now(&ctx);
-        assert_eq!(u.status(), &Status::Checking, "Check Again runs a check");
-        // The prompt showed the reason: a later prompt does not repeat it.
-        u.prompt = None;
-        let (tx, rx) = channel();
-        u.check = Some(rx);
-        assert!(tx.send(Ok(Some(newer()))).is_ok());
-        u.tick(&ctx);
-        assert!(u.prompt.is_some());
-        assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message), None, "the reason is shown once");
-    }
-
-    /// A retry after a helper failed while the app kept running reports through `tick` and waits
-    /// for the exit, like the first installation, instead of starting its helper at once.
-    #[test]
-    fn a_retry_after_a_helper_failure_while_the_app_runs_waits_for_the_exit() {
-        use std::sync::atomic::Ordering;
-        let ctx = egui::Context::default();
-        let (_dir, paths, mut u) = with_records("0.1.0");
-        u.offer(newer());
-        let (tx, rx) = channel();
-        u.install = Some((rx, newer()));
-        assert!(tx.send(Ok(Restart::scheduled())).is_ok());
-        u.tick(&ctx);
-        u.start_pending_update();
-        self_update::record_failure(&paths, "ArtCraft Launcher is still running");
-        u.check_now(&ctx);
-        assert_eq!(u.status(), &Status::InstallFailed("ArtCraft Launcher is still running".into()));
-
-        // The retry's worker, as `start_install` starts it.
-        let exiting = handoff(&mut u.exiting);
-        let (starts, restart) = counted_restart();
-        let (tx, rx) = channel();
-        u.install = Some((rx, newer()));
-        deliver(&PHOTOCRAFT, &tx, &exiting, Some(&paths), Ok(restart));
-        assert_eq!(starts.load(Ordering::SeqCst), 0, "the helper waits for the exit");
-        u.tick(&ctx);
-        assert!(u.installed && u.restart.is_some(), "tick picks up the retry");
-        assert_eq!(frame(&mut u, &ctx, true), Action::Close);
-        drop(u);
-        assert_eq!(starts.load(Ordering::SeqCst), 1, "the exit starts the helper once");
-        let mut next = reading(&paths, "0.1.0");
-        start_answered(&mut next, &ctx, Ok(None));
-        assert_eq!(next.status(), &Status::Idle, "the retry is not recorded as a failure");
-    }
-
-    /// A release the app offers itself after a failed update says in its prompt why it failed,
-    /// once.
-    #[test]
-    fn an_offer_after_a_failed_update_says_why_it_failed() {
-        let ctx = egui::Context::default();
-        let (_dir, paths, mut u) = with_records("0.1.0");
-        self_update::record_failure(&paths, "disk full");
-        start_answered(&mut u, &ctx, Ok(None));
-        assert_eq!(u.status(), &Status::InstallFailed("disk full".into()));
-        u.offer(newer());
-        assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message).as_deref(), Some("The update could not be installed: disk full"));
-        assert_eq!(u.status(), &Status::Idle, "the prompt carries the reason");
-        u.prompt = None;
-        u.offer(newer());
-        assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message), None, "the reason is shown once");
-    }
-
-    /// An offer the app made before the check at start keeps its prompt; when the check finds the
-    /// release too, that prompt says why the last update failed, once.
-    #[test]
-    fn an_offer_before_the_check_at_start_says_why_the_last_update_failed() {
-        let ctx = egui::Context::default();
-        let (_dir, paths, mut u) = with_records("0.1.0");
-        self_update::record_failure(&paths, "disk full");
-        u.offer(newer());
-        assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message), None, "the failure is not read before the check at start");
-        start_answered(&mut u, &ctx, Ok(Some(newer())));
-        assert_eq!(u.status(), &Status::Idle, "the prompt carries the reason");
-        assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message).as_deref(), Some("The update could not be installed: disk full"));
-        u.prompt = None;
-        u.offer(newer());
-        assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message), None, "the reason is shown once");
-    }
-
-    /// An installation that finishes after the updater was dropped and whose helper cannot start,
-    /// or that failed, is recorded, and the next start says why.
-    #[test]
-    fn an_install_failing_after_the_updater_is_dropped_is_reported_at_the_next_start() {
-        let ctx = egui::Context::default();
-        let failures: [(Result<Restart, Failure>, &str); 3] = [
-            (Ok(Restart::later(|| Err("couldn't schedule the update (denied)".into()))), "couldn't schedule the update (denied)"),
-            (Err("couldn't download the update".into()), "couldn't download the update"),
-            (Err(Failure::panicked()), "The update failed unexpectedly."),
-        ];
-        for (outcome, want) in failures {
-            let (_dir, paths, mut u) = with_records("0.1.0");
-            let exiting = Arc::clone(&u.exiting);
-            let (tx, rx) = channel();
-            u.install = Some((rx, newer()));
-            drop(u);
-            deliver(&PHOTOCRAFT, &tx, &exiting, Some(&paths), outcome);
-            let mut next = reading(&paths, "0.1.0");
-            start_answered(&mut next, &ctx, Ok(None));
-            assert_eq!(next.status(), &Status::InstallFailed(want.into()), "{want}");
-        }
-    }
-
-    /// A failed installation picked up at the exit is recorded, and the next start says why.
-    #[test]
-    fn a_failed_install_picked_up_at_exit_is_reported_at_the_next_start() {
-        let ctx = egui::Context::default();
-        for (failure, want) in [(Failure::from("disk full"), "disk full"), (Failure::dropped(), "The update stopped unexpectedly.")] {
-            let (_dir, paths, mut u) = with_records("0.1.0");
-            let (tx, rx) = channel::<Result<Restart, Failure>>();
-            u.install = Some((rx, newer()));
-            assert!(tx.send(Err(failure)).is_ok());
-            drop(u);
-            let mut next = reading(&paths, "0.1.0");
-            start_answered(&mut next, &ctx, Ok(None));
-            assert_eq!(next.status(), &Status::InstallFailed(want.into()), "{want}");
-        }
-        // A worker that ended without sending anything.
-        let (_dir, paths, mut u) = with_records("0.1.0");
-        let (tx, rx) = channel::<Result<Restart, Failure>>();
-        u.install = Some((rx, newer()));
-        drop(tx);
-        drop(u);
-        let mut next = reading(&paths, "0.1.0");
-        start_answered(&mut next, &ctx, Ok(None));
-        assert_eq!(next.status(), &Status::InstallFailed("The update stopped unexpectedly.".into()));
-    }
-}
-
-#[cfg(test)]
-#[path = "updater_pin_tests.rs"]
-mod pin_tests;
+mod tests;

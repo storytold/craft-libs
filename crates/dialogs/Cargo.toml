@@ -6,14 +6,28 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+autotests = false
+
+[lib]
+# The lib's test target is the crate's one test executable: its trials and, with `screen-testing`, the
+# screen tests in tests/it.
+harness = false
 
 # Versions the apps already pin (rfd 0.17.2, raw-window-handle 0.6.2), so adopting the crate adds
 # nothing new to their Cargo.lock. rfd without its `wayland` feature, which links libwayland-client
 # through pkg-config unless winit's `dlopen` is in the build too; the apps' own rfd keeps it on.
 [dependencies]
+craft-atomic = { workspace = true }
+craft-host = { workspace = true }
+craft-i18n = { workspace = true }
+craft-platform = { workspace = true }
+craft-behavior = { workspace = true, optional = true }
+craft-ui = { workspace = true, optional = true }
+egui = { workspace = true, optional = true }
 raw-window-handle = "0.6.2"
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
 
+# The file-dialog probe asks the session bus whether the desktop portal offers a file chooser.
 # The free-standing Open and Folder panel (`beginWithCompletionHandler:`). rfd and winit already
 # use these.
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -21,6 +35,24 @@ block2 = "0.6.2"
 objc2 = { version = "0.6.4", default-features = false, features = ["std"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSApplication", "NSOpenPanel", "NSPanel", "NSResponder", "NSSavePanel", "NSView", "NSWindow"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSString", "NSURL"] }
+
+# The Linux Save panel asks the desktop portal itself, which reports the file type picked. The
+# versions craft-platform already builds (zbus with async-io and blocking-api), so adopting the
+# crate adds nothing new to the apps' Cargo.lock.
+[target.'cfg(target_os = "linux")'.dependencies]
+futures-lite = "2"
+log = "0.4"
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+
+[features]
+default = []
+# `craft_dialogs::ui`: `PathField` and the other egui parts of the file service.
+ui = ["dep:craft-behavior", "dep:craft-ui", "dep:egui"]
+# The stories and the integration binary of the file service's UI parts.
+screen-testing = ["ui", "craft-ui/testing"]
+
+[dev-dependencies]
+craft-ui = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

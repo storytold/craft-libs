@@ -1,27 +1,41 @@
 [package]
 name = "craft-menu"
-description = "A Craft app's menus: layouts for macOS, Windows, Linux and the web, shortcuts from craft-keymap, a macOS backend, and key equivalents fed back to egui."
+description = "A Craft app's menus: layouts for macOS, Windows, Linux and the web, shortcuts from craft-keymap, a macOS backend (in craft-window), and key equivalents fed back to egui."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
-[dependencies]
-craft-keymap = { workspace = true, features = ["egui"] }
-craft-quit = { workspace = true, features = ["egui"] }
-egui = { workspace = true }
+[lib]
+# Every test lives in the `it` integration binary, so `cargo test` builds the library once.
+test = false
 
-# Already in the apps' Cargo.lock: muda through craft-quit's `menu` feature, objc2 and objc2-app-kit
-# through eframe.
-[target.'cfg(target_os = "macos")'.dependencies]
-muda = { version = "0.21.2", default-features = false }
-objc2 = { version = "0.6.4", default-features = false, features = ["std"] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder"] }
+[dependencies]
+craft-behavior = { workspace = true }
+craft-host = { workspace = true }
+craft-i18n = { workspace = true, features = ["collate"] }
+craft-keymap = { workspace = true, features = ["egui"] }
+craft-quit = { workspace = true, features = ["ui"] }
+craft-theme = { workspace = true }
+craft-ui = { workspace = true }
+craft-window = { workspace = true, features = ["appkit"] }
+egui = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[features]
+screen-testing = ["craft-ui/testing"]
 
 [dev-dependencies]
-# `default_fonts` so that the bar's tests lay out text.
-egui = { workspace = true, features = ["default_fonts"] }
+# `default_fonts` so that the shortcuts dialog and native menu tests lay out text.
+egui = { workspace = true }
+
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+harness = false
+required-features = ["screen-testing"]
 
 [lints]
 workspace = true

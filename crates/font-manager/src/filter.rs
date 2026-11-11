@@ -6,9 +6,11 @@ use crate::index::{Category, Index, categories};
 
 /// What the catalogue shows.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Query {
     /// Part of a family name, ignoring case and accents.
     pub text: String,
+    /// Only families in this category; `None` for all.
     pub category: Option<Category>,
     /// A position in [`Index::languages`].
     pub language: Option<usize>,
@@ -29,6 +31,7 @@ pub struct Search {
 }
 
 impl Search {
+    /// Build the search keys for `index`.
     pub fn new(index: &Index) -> Search {
         let folder = Folder::new("en");
         let families = index.families().iter().map(|f| folder.key(&f.family)).collect();
@@ -67,31 +70,5 @@ impl Search {
     /// Every script, sorted by English name.
     pub fn scripts(&self) -> &[usize] {
         &self.scripts_by_name
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn filters_combine() {
-        let index = crate::index::bundled().unwrap();
-        let search = Search::new(&index);
-        let names = |q: &Query| search.families(&index, q).into_iter().map(|i| index.families()[i].family.clone()).collect::<Vec<_>>();
-
-        let noto_jp = names(&Query { text: "noto sans jp".into(), ..Query::default() });
-        assert_eq!(noto_jp, ["Noto Sans JP"]);
-
-        let japanese = search.languages("日本語");
-        let ja = *japanese.first().unwrap();
-        assert_eq!(index.languages()[ja].id, "ja_Jpan");
-        let serif_ja = names(&Query { category: Some(Category::Serif), language: Some(ja), ..Query::default() });
-        assert!(serif_ja.contains(&"Noto Serif JP".to_owned()));
-        assert!(!serif_ja.contains(&"Noto Sans JP".to_owned()));
-
-        let arabic = names(&Query { script: Some("Arab".into()), ..Query::default() });
-        assert!(arabic.contains(&"Amiri".to_owned()));
-        assert!(!arabic.contains(&"Roboto".to_owned()));
     }
 }

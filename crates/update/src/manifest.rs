@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 /// One app the launcher installed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Record {
+    /// Version label of the installed copy.
     pub version: String,
+    /// Package format that was installed.
     pub kind: PackageKind,
     /// The `.app`, the exe, the AppImage, or the folder of an unpacked tarball.
     pub path: PathBuf,
@@ -23,16 +25,20 @@ pub struct Record {
     pub needs_root: bool,
 }
 
+/// All records, keyed by app id. Stored as JSON in the launcher's data folder.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Manifest {
+    #[allow(missing_docs)]
     pub apps: BTreeMap<String, Record>,
 }
 
 impl Manifest {
+    /// Reads the manifest at `path`. A missing or unreadable file gives an empty manifest.
     pub fn load(path: &Path) -> Self {
         std::fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
     }
 
+    /// Writes the manifest to `path` atomically.
     pub fn save(&self, path: &Path) -> Result<(), String> {
         let bytes = serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?;
         crate::paths::write_atomic(path, &bytes)
@@ -42,8 +48,9 @@ impl Manifest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use craft_ui::testing::trial;
 
-    #[test]
+    #[trial]
     fn round_trips_and_survives_garbage() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("installed.json");

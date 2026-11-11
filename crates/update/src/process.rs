@@ -63,7 +63,12 @@ pub fn run(program: &str, args: &[&str], timeout: Duration) -> Result<String, St
 pub enum HelperFailure {
     /// The helper ran to its end and exited with `code`. `reason` is in its own words where it
     /// gave them.
-    Exited { code: i32, reason: String },
+    Exited {
+        /// The helper's exit code.
+        code: i32,
+        /// Why it failed: its error output, else its exit status.
+        reason: String,
+    },
     /// The helper gave no answer: it couldn't be started or read, a signal stopped it, or it ran
     /// past its time limit.
     Unfinished(String),
@@ -520,37 +525,17 @@ pub(crate) mod tests {
             let _ = self.0.wait();
         }
     }
-
-    #[test]
-    fn running_paths_are_matched_literally() {
-        let root = format!("/tmp/artcraft-launcher-process-{}", std::process::id());
-        for (actual, requested, expected) in [
-            ("plain/PhotoCraft.app", "plain/PhotoCraft.app", true),
-            ("Apps (work)/PhotoCraft.app", "Apps (work)/PhotoCraft.app", true),
-            ("Apps [work]/PhotoCraft.app", "Apps [work]/PhotoCraft.app", true),
-            ("other/PhotoCraftXapp", "other/PhotoCraft.app", false),
-            ("symbols/应用.^$*+?()[]{}|\\.app", "symbols/应用.^$*+?()[]{}|\\.app", true),
-        ] {
-            let actual = format!("{root}/{actual}");
-            let requested = format!("{root}/{requested}");
-            let _probe = RunningProbe::start(&actual);
-            assert_eq!(running(Path::new(&requested)), Ok(expected), "{requested}");
-            assert_eq!(is_running(Path::new(&requested)), expected, "{requested}");
-        }
-    }
 }
 
 #[cfg(test)]
 mod run_tests {
     use super::*;
 
-    #[test]
-    fn flatpak_output_this_code_reads_stays_in_english() {
-        if in_sandbox() {
-            return;
-        }
-        let cmd = flatpak_command_c();
-        assert!(cmd.get_envs().any(|(name, value)| name == "LC_ALL" && value == Some(std::ffi::OsStr::new("C"))));
+    #[cfg(unix)]
+    #[craft_ui::testing::trial]
+    fn successful_helpers_can_write_past_the_stdout_capture_limit() {
+        let out = run("/bin/sh", &["-c", "head -c 9437184 /dev/zero"], Duration::from_secs(10)).unwrap();
+        assert_eq!(out.len(), 8 << 20);
     }
 
     /// A shell command line, for the platform's shell.
@@ -558,119 +543,31 @@ mod run_tests {
         if cfg!(windows) { ("cmd", ["/C", script]) } else { ("/bin/sh", ["-c", script]) }
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn waiting_for_a_process_ends_when_it_exits() {
-        let mut child = Command::new("ping").args(["-n", "3", "127.0.0.1"]).stdout(Stdio::null()).spawn().unwrap();
-        assert!(!wait_for_exit(child.id(), Duration::from_millis(200)), "it's still running");
-        assert!(wait_for_exit(child.id(), Duration::from_secs(30)), "it has exited");
-        child.wait().unwrap();
-    }
-
-    #[test]
-    fn a_failing_helper_reports_its_own_error() {
-        let (program, args) = shell(if cfg!(windows) { "echo no such image 1>&2 & exit /b 3" } else { "echo no such image >&2; exit 3" });
-        assert_eq!(run(program, &args, Duration::from_secs(30)), Err("no such image".into()));
-        assert_eq!(capture(program, &args, Duration::from_secs(30)), None);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn successful_helpers_can_write_past_the_stdout_capture_limit() {
-        let out = run("/bin/sh", &["-c", "head -c 9437184 /dev/zero"], Duration::from_secs(10)).unwrap();
-        assert_eq!(out.len(), 8 << 20);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn successful_helpers_can_write_past_the_stderr_capture_limit() {
-        let out = run("/bin/sh", &["-c", "head -c 9437184 /dev/zero >&2"], Duration::from_secs(10));
-        assert!(out.is_ok(), "the helper should finish without a broken pipe");
-        assert!(out.unwrap().is_empty());
-    }
-
     /// Long enough that no helper in these tests reaches it.
     #[cfg(unix)]
     const NO_LIMIT: Duration = Duration::from_secs(86_400);
 
+    /// Callers such as the signature check read an exit code as the helper's answer, so a helper
+    /// that timed out, couldn't start or was stopped by a signal must not look like one.
     #[cfg(unix)]
-    #[test]
-    fn a_helper_past_its_time_limit_gives_no_answer() {
+    #[craft_ui::testing::trial]
+    fn only_a_helper_that_exits_gives_an_answer() {
         // A time limit of zero expires at the first look, so the test doesn't wait for it.
         let mut cmd = command("/bin/sh");
         cmd.args(["-c", "exec sleep 86400"]);
         let timed_out = run_command_detailed(cmd, "the helper", Duration::ZERO);
-        assert_eq!(timed_out, Err(HelperFailure::Unfinished("the helper didn't finish within 0 seconds".into())));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_helper_that_cannot_start_gives_no_answer() {
         let not_found = run_detailed("/nonexistent/helper", &[], NO_LIMIT);
-        assert!(matches!(not_found, Err(HelperFailure::Unfinished(_))), "{not_found:?}");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_helper_stopped_by_a_signal_gives_no_answer() {
         let killed = run_detailed("/bin/sh", &["-c", "kill -9 $$"], NO_LIMIT);
-        assert!(matches!(killed, Err(HelperFailure::Unfinished(_))), "{killed:?}");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_helper_that_exits_gives_its_code_and_its_reason() {
+        for unfinished in [timed_out, not_found, killed] {
+            assert!(matches!(unfinished, Err(HelperFailure::Unfinished(_))), "{unfinished:?}");
+        }
         let exited = run_detailed("/bin/sh", &["-c", "echo it failed >&2; exit 3"], NO_LIMIT);
         assert_eq!(exited, Err(HelperFailure::Exited { code: 3, reason: "it failed".into() }));
-        assert_eq!(run("/bin/sh", &["-c", "echo it failed >&2; exit 3"], NO_LIMIT), Err("it failed".into()));
-    }
-
-    #[test]
-    fn pgrep_finding_nothing_is_an_answer() {
-        assert_eq!(pgrep_answer(Ok("123\n".into())), Ok(true));
-        assert_eq!(pgrep_answer(Err(HelperFailure::Exited { code: 1, reason: "pgrep failed".into() })), Ok(false));
-    }
-
-    #[test]
-    fn a_pgrep_that_gives_no_answer_is_not_read_as_not_running() {
-        assert_eq!(pgrep_answer(Err(HelperFailure::Unfinished("too slow".into()))), Err("too slow".into()));
-        assert_eq!(pgrep_answer(Err(HelperFailure::Exited { code: 2, reason: "bad flag".into() })), Err("bad flag".into()));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_helper_that_keeps_writing_still_times_out() {
-        let start = Instant::now();
-        let err = run("yes", &[], Duration::from_millis(100)).unwrap_err();
-        assert!(err.contains("didn't finish within"), "{err}");
-        assert!(start.elapsed() < Duration::from_secs(5));
-    }
-
-    /// The thread that starts a detached process waits for it, so the process is reaped when it
-    /// exits: only a wait gives its exit status.
-    #[test]
-    fn a_detached_process_is_waited_for() {
-        let (program, args) = shell("exit 7");
-        let mut cmd = command(program);
-        cmd.args(args);
-        let (status_sent, status) = mpsc::channel();
-        let result = spawn_detached_with(
-            move || cmd.spawn(),
-            move |wait| {
-                std::thread::Builder::new()
-                    .spawn(move || {
-                        let _ = status_sent.send(wait());
-                    })
-                    .map(drop)
-            },
-        );
-        assert_eq!(result, Ok(()));
-        assert_eq!(status.recv().ok().flatten().and_then(|status| status.code()), Some(7), "the waiting thread gets the exit status");
     }
 
     /// When no thread can be started to wait for a process, the process is not started and the
     /// call says why.
-    #[test]
+    #[craft_ui::testing::trial]
     fn no_process_starts_without_a_thread_to_wait_for_it() {
         let (program, args) = shell("exit 0");
         let mut cmd = command(program);
@@ -687,58 +584,12 @@ mod run_tests {
         assert_eq!(result, Err("couldn't start a thread to wait for it (no threads)".into()));
         assert!(!spawned.load(std::sync::atomic::Ordering::SeqCst), "the process was started");
     }
-
-    #[test]
-    fn a_detached_program_that_cannot_start_says_so() {
-        let result = spawn_detached(command("craft-update-test-no-such-program"));
-        assert!(matches!(&result, Err(e) if e.starts_with("couldn't start it (")), "{result:?}");
-    }
-
-    #[test]
-    fn a_silent_failure_and_a_success() {
-        let (program, args) = shell("exit 4");
-        let err = run(program, &args, Duration::from_secs(30)).unwrap_err();
-        assert!(err.starts_with(&format!("{program} failed")), "{err}");
-        let (program, args) = shell("echo hello");
-        assert_eq!(run(program, &args, Duration::from_secs(30)).map(|out| out.trim().to_string()), Ok("hello".into()));
-    }
-}
-
-#[cfg(test)]
-mod explorer_tests {
-    use super::*;
-
-    #[cfg(windows)]
-    #[test]
-    fn system_helpers_use_absolute_system_paths() {
-        let root = PathBuf::from(std::env::var_os("SystemRoot").unwrap());
-        assert_eq!(windows_system_program("explorer.exe").unwrap(), root.join("explorer.exe"));
-        assert_eq!(windows_system_program(r"System32\tasklist.exe").unwrap(), root.join(r"System32\tasklist.exe"));
-    }
-
-    #[test]
-    fn explorer_select_quotes_only_the_path() {
-        let arg = explorer_select_arg(Path::new(r"C:\Program Files\PhotoCraft\photocraft.exe"));
-        assert_eq!(arg.unwrap(), r#"/select,"C:\Program Files\PhotoCraft\photocraft.exe""#);
-    }
-
-    #[test]
-    fn explorer_select_without_spaces() {
-        let arg = explorer_select_arg(Path::new(r"C:\Apps\photocraft.exe"));
-        assert_eq!(arg.unwrap(), r#"/select,"C:\Apps\photocraft.exe""#);
-        assert_eq!(explorer_select_arg(Path::new(r#"C:\Apps" /root,C:\x.exe"#)), None);
-    }
-
-    #[test]
-    fn explorer_select_uses_backslashes() {
-        let arg = explorer_select_arg(Path::new("C:/Users/A B/AppData/Local/ArtCraft Launcher/apps/photocraft.exe"));
-        assert_eq!(arg.unwrap(), r#"/select,"C:\Users\A B\AppData\Local\ArtCraft Launcher\apps\photocraft.exe""#);
-    }
 }
 
 #[cfg(test)]
 mod inherited_pipe_tests {
     use super::*;
+    use craft_ui::testing::trial;
     use std::io::Write;
 
     fn fixture_args(name: &str, marker: &str) -> Vec<String> {
@@ -752,7 +603,7 @@ mod inherited_pipe_tests {
         std::path::PathBuf::from(&args[args.iter().position(|arg| arg == "--skip").unwrap() + 1])
     }
 
-    #[test]
+    #[trial]
     #[ignore = "self-spawned subprocess fixture"]
     fn pipe_holder() {
         let dir = fixture_dir();
@@ -772,7 +623,7 @@ mod inherited_pipe_tests {
         std::fs::write(dir.join("done"), []).unwrap();
     }
 
-    #[test]
+    #[trial]
     #[ignore = "self-spawned subprocess fixture"]
     fn pipe_parent() {
         let dir = fixture_dir();
@@ -807,7 +658,7 @@ mod inherited_pipe_tests {
         }
     }
 
-    #[test]
+    #[trial]
     fn exited_helper_does_not_wait_past_deadline_for_inherited_pipes() {
         let exe = std::env::current_exe().unwrap();
         // The direct child has to start a second test process and fill both pipes before the

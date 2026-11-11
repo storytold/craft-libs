@@ -6,8 +6,23 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "System PDF print spooler for the Craft apps: CUPS and Windows"
+autotests = false
+
+[lib]
+# The lib's test target is the crate's one test executable: its trials and, with `screen-testing`, the
+# screen tests in tests/it.
+harness = false
+
+[features]
+default = []
+# The printer and job settings widgets (`craft_print::ui`).
+ui = ["dep:craft-ui", "dep:egui"]
+# The stories and the integration binary of the print panel.
+screen-testing = ["ui", "craft-ui/testing"]
 
 [dependencies]
+craft-ui = { workspace = true, optional = true }
+egui = { workspace = true, optional = true }
 # Safe API; Win32 calls are isolated in this maintained MIT OR Apache-2.0 dependency.
 # Keep the public rgb re-export at main's GDI revision: a different Git rev gives
 # downstream GDI values a different Rust type identity even when the code is unchanged.
@@ -46,6 +61,7 @@ roxmltree = "0.21"
 miniz_oxide = "0.9"
 
 [dev-dependencies]
+craft-ui = { workspace = true, features = ["testing"] }
 tempfile = "3"
 roxmltree = "0.21"
 miniz_oxide = "0.9"

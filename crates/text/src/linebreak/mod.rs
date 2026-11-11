@@ -58,7 +58,9 @@ pub enum Kind {
 /// Tier-0 stretch and shrink that a line gains at one of its ends (see [`Item::edge`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Edge {
+    /// Stretch gained at the line end, in the item's width unit.
     pub stretch: f64,
+    /// Shrink gained at the line end, in the item's width unit.
     pub shrink: f64,
 }
 
@@ -70,6 +72,7 @@ pub struct Edge {
 /// constructors, so code written this way keeps compiling.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Item {
+    #[allow(missing_docs)]
     pub kind: Kind,
     /// Natural width (boxes, glue), or the width a line broken here gains (penalties: a hyphen).
     pub width: f64,
@@ -328,7 +331,10 @@ pub fn overlong(items: &[Item], measure: f64) -> Vec<Range<usize>> {
 #[non_exhaustive]
 pub enum Method {
     /// The [`knuth_plass`] pass at `tolerances[pass]`.
-    KnuthPlass { pass: usize },
+    KnuthPlass {
+        /// Index of the pass, into the tolerances given.
+        pass: usize,
+    },
     /// [`greedy`], because every Knuth–Plass pass failed or there were none.
     Greedy,
 }
@@ -337,6 +343,7 @@ pub enum Method {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Breaks {
+    /// The lines, in order.
     pub lines: Vec<Line>,
     /// The breaker that produced `lines`.
     pub method: Method,

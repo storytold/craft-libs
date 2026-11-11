@@ -1,0 +1,39 @@
+[package]
+name = "craft-table"
+description = "Spreadsheet widgets for Craft apps: the cell grid, outline bands, field lists, conditions, charts, slicers, reference picking, selection statistics, error tags and filter buttons."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lib]
+# Every test lives in the `it` integration binary, so `cargo test` builds the library once.
+test = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# The table widgets (`craft_table::ui`).
+ui = ["dep:craft-ui", "dep:craft-behavior", "dep:craft-keymap", "dep:craft-theme", "dep:egui"]
+# The widgets' stories and trials (`tests/it`).
+screen-testing = ["ui", "craft-ui/testing"]
+
+[dependencies]
+craft-behavior = { workspace = true, optional = true }
+craft-keymap = { workspace = true, optional = true }
+craft-theme = { workspace = true, optional = true }
+craft-ui = { workspace = true, optional = true }
+egui = { workspace = true, optional = true }
+
+[dev-dependencies]
+craft-table = { path = ".", features = ["screen-testing"] }
+egui = { workspace = true }
+
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+harness = false
+required-features = ["screen-testing"]

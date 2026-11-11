@@ -1,0 +1,42 @@
+[package]
+name = "craft-browse"
+description = "Browsing for Craft apps: places and folder listings, linked files, file thumbnails, and (`ui`) the tile grid, media bin, places tree, compare tile and relink."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+autotests = false
+
+[lib]
+# The lib's test target is the crate's one test executable: its trials and, with `screen-testing`, the
+# screen tests in tests/it.
+harness = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# The browsing widgets (`craft_browse::ui`) and `FileThumbSource`.
+ui = ["dep:craft-behavior", "dep:craft-ui", "dep:egui", "dep:kurbo"]
+# The widgets' stories and trials (`tests/it`).
+screen-testing = ["ui", "craft-ui/testing"]
+
+[dependencies]
+craft-behavior = { workspace = true, optional = true }
+craft-docpath = { workspace = true }
+craft-host = { workspace = true }
+craft-i18n = { workspace = true }
+craft-platform = { workspace = true }
+craft-settings = { workspace = true }
+craft-theme = { workspace = true }
+craft-ui = { workspace = true, optional = true }
+egui = { workspace = true, optional = true }
+kurbo = { workspace = true, optional = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+craft-ui = { workspace = true, features = ["testing"] }
+egui = { workspace = true }
+tempfile = "3"

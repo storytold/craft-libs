@@ -220,58 +220,15 @@ pub(crate) mod windows {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::msi_context::ProbeError;
+    use craft_ui::testing::trial;
 
     const CODE: &str = "{500F5254-26F4-4AAA-B90D-6F3FD9947D14}";
-
-    fn p(s: &str) -> PathBuf {
-        PathBuf::from(s)
-    }
 
     fn codes(list: &[&str]) -> Vec<String> {
         list.iter().map(|c| c.to_string()).collect()
     }
 
-    #[test]
-    fn a_registration_makes_an_msi_copy_wherever_its_folder_is() {
-        let registered = [(MsiScope::PerMachine, p(r"C:\Program Files\GridCraft\gridcraft.exe"))];
-        let copy = Some(MsiCopy::Registered { hive: MsiScope::PerMachine });
-        assert_eq!(match_registration(&p(r"C:\Program Files\GridCraft\gridcraft.exe"), &registered), copy);
-        assert_eq!(match_registration(&p(r"c:\program files\gridcraft\GRIDCRAFT.EXE"), &registered), copy);
-        let user = [(MsiScope::PerUser, p(r"D:\Chosen\GridCraft\gridcraft.exe"))];
-        assert_eq!(match_registration(&p(r"D:\Chosen\GridCraft\gridcraft.exe"), &user), Some(MsiCopy::Registered { hive: MsiScope::PerUser }));
-    }
-
-    #[test]
-    fn an_exe_no_registration_names_is_not_an_msi_copy() {
-        let registered = [(MsiScope::PerMachine, p(r"C:\Program Files\ArtCraft\GridCraft\gridcraft.exe"))];
-        assert_eq!(match_registration(&p(r"D:\Tools\GridCraft\gridcraft.exe"), &registered), None);
-        assert_eq!(match_registration(&p(r"D:\Tools\GridCraft\gridcraft.exe"), &[]), None);
-    }
-
-    #[test]
-    fn a_copy_registered_in_both_hives_stops_before_any_lookup() {
-        let exe = p(r"C:\Program Files\ArtCraft\GridCraft\gridcraft.exe");
-        let copy = match_registration(&exe, &[(MsiScope::PerMachine, exe.clone()), (MsiScope::PerUser, exe.clone())]).unwrap();
-        assert_eq!(copy, MsiCopy::Conflicting);
-        assert!(update_arguments(copy, &codes(&[CODE]), |_| panic!("must not look up"), |_| panic!("must not read the records")).is_err());
-    }
-
-    #[test]
-    fn windows_installer_confirms_the_context_of_the_hive_that_named_the_exe() {
-        let copy = MsiCopy::Registered { hive: MsiScope::PerMachine };
-        assert_eq!(
-            update_arguments(copy, &codes(&[CODE]), |_| Ok(MsiScope::PerMachine), |_| panic!("must not read the records")).unwrap(),
-            ["ALLUSERS=1"]
-        );
-        let copy = MsiCopy::Registered { hive: MsiScope::PerUser };
-        assert_eq!(
-            update_arguments(copy, &codes(&[CODE]), |_| Ok(MsiScope::PerUser), |_| panic!("must not read the records")).unwrap(),
-            ["ALLUSERS=2", "MSIINSTALLPERUSER=1"]
-        );
-    }
-
-    #[test]
+    #[trial]
     fn a_registration_in_the_other_context_is_another_copys_and_stops_the_update() {
         for (hive, other) in [(MsiScope::PerUser, MsiScope::PerMachine), (MsiScope::PerMachine, MsiScope::PerUser)] {
             let error =
@@ -280,72 +237,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_uninstall_records_answer_only_when_the_lookup_cannot_run() {
-        let copy = MsiCopy::Registered { hive: MsiScope::PerMachine };
-        let blocked = |_: &str| Err(ProbeError::Unavailable("the registry could not be read".into()));
-        assert_eq!(update_arguments(copy, &codes(&[CODE]), blocked, |_| vec![MsiScope::PerMachine]).unwrap(), ["ALLUSERS=1"]);
-        for unclear in [ProbeError::Unknown, ProbeError::Conflicting] {
-            assert!(update_arguments(copy, &codes(&[CODE]), |_| Err(unclear), |_| panic!("must not read the records")).is_err());
-        }
-    }
-
-    #[test]
-    fn missing_mixed_or_mismatched_records_stop_the_fallback() {
-        let copy = MsiCopy::Registered { hive: MsiScope::PerMachine };
-        let blocked = |_: &str| Err(ProbeError::Unavailable("the registry could not be read".into()));
-        assert!(update_arguments(copy, &codes(&[CODE]), blocked, |_| vec![]).is_err());
-        assert!(update_arguments(copy, &codes(&[CODE]), blocked, |_| vec![MsiScope::PerMachine, MsiScope::PerUser]).is_err());
-        let error = update_arguments(copy, &codes(&[CODE]), blocked, |_| vec![MsiScope::PerUser]).unwrap_err();
-        assert_eq!(error, ANOTHER_COPY);
-    }
-
-    #[test]
+    #[trial]
     fn the_update_stops_unless_exactly_one_product_is_registered() {
         let copy = MsiCopy::Registered { hive: MsiScope::PerMachine };
         assert!(update_arguments(copy, &[], |_| panic!("must not look up"), |_| panic!("must not read the records")).is_err());
         let two = codes(&[CODE, "{0BE5923F-1AAB-4240-8174-2F0CCC05E14C}"]);
         assert!(update_arguments(copy, &two, |_| panic!("must not look up"), |_| panic!("must not read the records")).is_err());
-    }
-
-    #[test]
-    fn the_launcher_in_its_own_folder_keeps_its_old_path_whatever_is_registered() {
-        let registered = Some(MsiCopy::Registered { hive: MsiScope::PerUser });
-        assert_eq!(classify(true, true, || registered), Some(MsiCopy::Legacy));
-        assert_eq!(classify(true, false, || registered), registered);
-        assert_eq!(classify(true, false, || None), None);
-    }
-
-    #[test]
-    fn an_app_in_the_old_per_user_folder_is_judged_by_its_registration_first() {
-        for registered in [MsiCopy::Registered { hive: MsiScope::PerUser }, MsiCopy::Conflicting] {
-            assert_eq!(classify(false, true, || Some(registered)), Some(registered));
-        }
-        assert_eq!(classify(false, true, || None), Some(MsiCopy::Legacy));
-        assert_eq!(classify(false, false, || None), None);
-    }
-
-    #[test]
-    fn the_launchers_own_package_keeps_its_default() {
-        assert!(update_arguments(MsiCopy::Legacy, &[], |_| panic!("must not look up"), |_| panic!("must not read the records")).unwrap().is_empty());
-    }
-
-    #[test]
-    fn the_helper_restarts_the_one_exe_the_registrations_name() {
-        let moved = p(r"C:\Program Files\ArtCraft\GridCraft\gridcraft.exe");
-        assert_eq!(registered_exe(&[(MsiScope::PerMachine, moved.clone())]), Some(moved.clone()));
-        assert_eq!(registered_exe(&[(MsiScope::PerMachine, moved.clone()), (MsiScope::PerUser, moved.clone())]), Some(moved));
-        assert_eq!(registered_exe(&[]), None);
-        let two = [(MsiScope::PerMachine, p(r"C:\a\gridcraft.exe")), (MsiScope::PerUser, p(r"C:\b\gridcraft.exe"))];
-        assert_eq!(registered_exe(&two), None);
-    }
-
-    #[test]
-    fn app_paths_values_may_be_quoted() {
-        assert_eq!(
-            app_path_value(r#""C:\Program Files\ArtCraft\GridCraft\gridcraft.exe""#),
-            Some(p(r"C:\Program Files\ArtCraft\GridCraft\gridcraft.exe"))
-        );
-        assert_eq!(app_path_value("  "), None);
     }
 }

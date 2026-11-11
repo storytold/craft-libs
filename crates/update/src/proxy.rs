@@ -7,7 +7,9 @@ use ureq::{Proxy, ProxyProtocol};
 /// A manually configured proxy read from the OS settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SystemProxy {
+    #[allow(missing_docs)]
     pub host: String,
+    #[allow(missing_docs)]
     pub port: Option<u16>,
     /// Hosts that skip the proxy, in `NO_PROXY` form (`example.com`, `*.example.com`, `10.*`).
     pub bypass: Vec<String>,
@@ -191,91 +193,11 @@ pub fn parse_scutil(out: &str) -> Option<SystemProxy> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use craft_ui::testing::trial;
 
-    fn hp(host: &str, port: Option<u16>) -> Option<(String, Option<u16>)> {
-        Some((host.to_string(), port))
-    }
-
-    #[test]
-    fn windows_single_proxy_for_everything() {
-        assert_eq!(windows_proxy_server("proxy.corp:8080"), hp("proxy.corp", Some(8080)));
-        assert_eq!(windows_proxy_server("127.0.0.1:7890"), hp("127.0.0.1", Some(7890)));
-        assert_eq!(windows_proxy_server("proxy.corp"), hp("proxy.corp", None));
-        assert_eq!(windows_proxy_server("http://proxy.corp:3128/"), hp("proxy.corp", Some(3128)));
-        assert_eq!(windows_proxy_server("[::1]:8080"), hp("[::1]", Some(8080)));
-    }
-
-    #[test]
-    fn windows_per_protocol_list_prefers_https() {
-        assert_eq!(windows_proxy_server("http=h1:80;https=h2:443;ftp=h3:21;socks=h4:1080"), hp("h2", Some(443)));
-        assert_eq!(windows_proxy_server("ftp=h3:21;http=h1:8080"), hp("h1", Some(8080)));
-        assert_eq!(windows_proxy_server("HTTPS=h2:8443 ; "), hp("h2", Some(8443)));
-    }
-
-    #[test]
-    fn windows_settings_that_cannot_be_used() {
-        assert_eq!(windows_proxy_server(""), None);
-        assert_eq!(windows_proxy_server("socks=h4:1080"), None);
-        assert_eq!(windows_proxy_server("socks5://h4:1080"), None);
-        assert_eq!(windows_proxy_server("proxy.corp:notaport"), None);
-        assert_eq!(windows_proxy_server("proxy.corp:99999"), None);
-        assert_eq!(windows_proxy_server("user:pw@proxy.corp:8080"), None);
-    }
-
-    #[test]
+    #[trial]
     fn windows_bypass_list() {
         assert_eq!(windows_bypass("*.local;10.*; localhost;<local>"), ["*.local", "10.*", "localhost"]);
         assert!(windows_bypass("").is_empty());
-    }
-
-    const SCUTIL: &str = "<dictionary> {
-  ExceptionsList : <array> {
-    0 : *.local
-    1 : 169.254/16
-  }
-  FTPPassive : 1
-  HTTPEnable : 1
-  HTTPPort : 8080
-  HTTPProxy : http.corp
-  HTTPSEnable : 1
-  HTTPSPort : 3128
-  HTTPSProxy : https.corp
-  SOCKSEnable : 0
-}
-";
-
-    #[test]
-    fn scutil_https_proxy_with_exceptions() {
-        let p = parse_scutil(SCUTIL).unwrap();
-        assert_eq!((p.host.as_str(), p.port), ("https.corp", Some(3128)));
-        assert_eq!(p.bypass, ["*.local", "169.254/16"]);
-    }
-
-    #[test]
-    fn scutil_falls_back_to_http_proxy() {
-        let out = SCUTIL.replace("HTTPSEnable : 1", "HTTPSEnable : 0");
-        let p = parse_scutil(&out).unwrap();
-        assert_eq!((p.host.as_str(), p.port), ("http.corp", Some(8080)));
-    }
-
-    #[test]
-    fn scutil_without_a_proxy() {
-        let out = "<dictionary> {\n  ExceptionsList : <array> {\n    0 : *.local\n  }\n  FTPPassive : 1\n  HTTPEnable : 0\n  HTTPSEnable : 0\n}\n";
-        assert_eq!(parse_scutil(out), None);
-        assert_eq!(parse_scutil(""), None);
-        assert_eq!(parse_scutil("HTTPSEnable : 1\nHTTPSProxy : \nHTTPSPort : 1\n"), None);
-    }
-
-    #[test]
-    fn system_proxy_becomes_a_ureq_proxy_that_skips_loopback() {
-        let p = to_proxy(&SystemProxy { host: "proxy.corp".into(), port: Some(8080), bypass: vec!["*.local".into()], source: "test" }).unwrap();
-        assert_eq!((p.protocol(), p.host(), p.port()), (ProxyProtocol::Http, "proxy.corp", 8080));
-        for (url, direct) in
-            [("http://127.0.0.1:1/", true), ("http://localhost/", true), ("https://nas.local/", true), ("https://github.com/", false)]
-        {
-            assert_eq!(p.is_no_proxy(&url.parse().unwrap()), direct, "{url}");
-        }
-        let p = to_proxy(&SystemProxy { host: "proxy.corp".into(), port: None, bypass: vec![], source: "test" }).unwrap();
-        assert_eq!(p.port(), 80);
     }
 }

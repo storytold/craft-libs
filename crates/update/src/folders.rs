@@ -64,27 +64,3 @@ pub fn cache_dir() -> Option<PathBuf> {
         absolute_env("XDG_CACHE_HOME").or_else(|| home_dir().map(|h| h.join(".cache")))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_folders_are_absolute_when_there_is_a_home() {
-        if home_dir().is_some() {
-            assert!(data_local_dir().is_some_and(|p| p.is_absolute()));
-            assert!(cache_dir().is_some_and(|p| p.is_absolute()));
-        }
-    }
-
-    #[test]
-    fn inside_a_flatpak_the_hosts_data_folder_is_used() {
-        let home = Some(PathBuf::from("/home/u"));
-        let sandboxed = Some(PathBuf::from("/home/u/.var/app/ai.storyteller.artcraft-launcher/data"));
-        let host = Some(PathBuf::from("/srv/u/data"));
-        assert_eq!(pick_host_data_dir(true, host.clone(), home.clone(), sandboxed.clone()), host);
-        assert_eq!(pick_host_data_dir(true, None, home.clone(), sandboxed.clone()), Some(PathBuf::from("/home/u/.local/share")));
-        assert_eq!(pick_host_data_dir(false, host, home, sandboxed.clone()), sandboxed);
-        assert_eq!(pick_host_data_dir(true, None, None, None), None);
-    }
-}

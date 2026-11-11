@@ -51,9 +51,13 @@ impl Patterns {
 /// Hyphenation limits from the paragraph's Hyphenation settings.
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
+    /// Shortest word that is hyphenated, in characters.
     pub min_word: usize,
+    /// Fewest characters before the first hyphen.
     pub after_first: usize,
+    /// Fewest characters after the last hyphen.
     pub before_last: usize,
+    /// Whether capitalized words may be hyphenated.
     pub capitalized: bool,
 }
 
@@ -222,9 +226,13 @@ fn locale_language<'a>(words: &[&'a str]) -> Option<(&'a str, Option<&'a str>)> 
 /// Where a word's break points came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {
+    /// A word, or a stem of it, found in the dictionary.
     Dictionary,
+    /// Matched by the hyphenation patterns.
     Patterns,
+    /// Guessed by the rule-based fallback.
     Heuristic,
+    /// The word has no break points.
     None,
 }
 

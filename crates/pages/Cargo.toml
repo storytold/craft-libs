@@ -1,0 +1,39 @@
+[package]
+name = "craft-pages"
+description = "Pages for the Craft document apps: page geometry, page setup, page ranges and numbering; with `ui`, the page view, thumbnails, page setup dialog, rulers' margin handles, header and footer zones and document tables."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+autotests = false
+
+[lib]
+# The lib's test target is the crate's one test executable: its trials and, with `screen-testing`, the
+# screen tests in tests/it.
+harness = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# The page widgets (`craft_pages::ui`), on craft-ui.
+ui = ["dep:craft-behavior", "dep:craft-ui", "dep:craft-theme", "dep:egui"]
+# The stories and the integration tests (`tests/it`).
+screen-testing = ["ui", "craft-ui/testing"]
+
+[dependencies]
+# `numbering` formats page numbers with craft-text's list number styles.
+craft-text = { workspace = true, default-features = false }
+kurbo = { workspace = true }
+serde = { workspace = true }
+craft-behavior = { workspace = true, optional = true }
+craft-ui = { workspace = true, optional = true }
+craft-theme = { workspace = true, optional = true }
+egui = { workspace = true, optional = true }
+
+[dev-dependencies]
+craft-ui = { workspace = true, features = ["testing"] }
+egui = { workspace = true }
+craft-i18n = { workspace = true }

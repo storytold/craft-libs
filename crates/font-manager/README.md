@@ -11,7 +11,13 @@ Fonts tab; the standalone app
 | `index` | always | The pinned built-in indexes (Google Fonts and Noto) compiled into [`craft-font-store`](../font-store/README.md) (`bundled`), each family's source (`source_label`: its name and whether it is curated), and the categories |
 | `installed` | always | The installed fonts [`craft-font-catalog`](../font-catalog/README.md) sees, grouped by family and source |
 | `store` | always | `Installer`, what the interface needs from the font store: the download consent, install, remove, downloads for a preview, the indexes (`indexes`, `fetch_indexes`) and the sources the user added (`user_sources`, `add_user_source`, `remove_user_source`). `SuiteStore` is craft-font-store's store, `FakeStore` a stand-in for tests, `NoStore` one for when the store folder is unknown |
-| `FontsPanel` | `egui` | The whole interface as one egui panel |
+| `FontsPanel` | `ui` | The whole interface as one egui panel |
+| `glyphs` | `ui` | `GlyphsPanel`: the character grid of a face with categories, zoom and Recently Used; the app supplies the glyphs through `GlyphSource`. Sizes are the `glyphs.*` tokens |
+| `missing` | `ui` | `document_fonts`, `missing_font_warnings` and `MissingFontsDialog`: which fonts a document names are not installed, and a replacement for each |
+| `axes` | `ui` | `read_axes`, `read_named_instances` and `AxisSliders`: a variable face's axes as sliders with a Style list of its named instances |
+| `picker` | `ui` | `FontPicker`: the family field with its list (stars, recents, class and feature filters, similar fonts, previews) |
+
+The stories (`patterns/font-picker/*`, `patterns/glyphs-panel/panel`, `patterns/missing-fonts-dialog/dialog`, `composites/axis-sliders/sliders`) use the two faces egui ships.
 
 ## The panel
 
@@ -38,10 +44,15 @@ The layout follows Adobe Fonts' and Google Fonts' browse pages.
   added, adding one, and Update sources.
 
 `FontsPanel` fills the `Ui` it is given and has no window, menu or interface fonts of its own; the
-host's `Look` gives it the host's colours and font families. The faces it draws samples in are egui
-font families of its own, added a few per frame and taken out again past 64, without touching the
-host's fonts. Right-to-left interfaces mirror through `craft_ui::direction`; sample text keeps its
-own direction.
+craft-ui's theme gives it the colours and interface fonts. The faces it draws samples in come from
+craft-ui's document-face registry, which loads them a few per pass and evicts the ones off screen,
+without touching the host's fonts. Right-to-left interfaces mirror through the layout; sample text
+keeps its own direction.
+
+The panel follows the `craft_host::Host` installed in the egui context (`Host::builder(..).install(ctx)`):
+its strings and numbers are in `host.lang()` each frame (English without a Host, or when the panel
+has no catalog for the language), its settings section is `fonts_panel`, and installs, removals and
+previews run through `host.jobs()`, one at a time in request order (without a Host, on craft-host's default job service: a thread per runner, inline on wasm32).
 
 ```rust
 let catalog = Arc::clone(Catalog::global());
@@ -51,8 +62,12 @@ let installer: Arc<dyn Installer> = match SuiteStore::for_user(Arc::clone(&catal
     None => Arc::new(NoStore),
 };
 let index = installer.indexes().map_err(|e| e.to_string());
-let options = Options { catalog, installer, index, runner: Runner::Thread };
-let mut panel = FontsPanel::new(options, Settings::default());
+// once, at startup: settings, jobs and language of the app
+Host::builder(AppInfo { id: "myapp", name: "My App", version: env!("CARGO_PKG_VERSION") })
+    .settings(sections)
+    .install(ctx);
+let options = Options { catalog, installer, index };
+let mut panel = FontsPanel::new(options);
 // each frame
 panel.ui(ui);
 ```
@@ -60,13 +75,12 @@ panel.ui(ui);
 | Call | Use |
 |---|---|
 | `set_look(look)` | The host's palettes (dark and light) and font families, and whether labels are set in capitals |
-| `settings()`, `settings_mut()` | What the host saves: the sample text, preset and size, and whether the downloads note was closed (`serde`) |
+| `settings()` | The panel's `FontsPanelSettings`: the sample text, preset and size, and whether the downloads note was closed. The panel reads them from the Host's `fonts_panel` section on its first frame and writes the section when they change; without a Host they stay in memory |
 | `downloads_allowed()`, `set_downloads_allowed(on)` | The download consent, for a host's settings page. It is the font store's own setting, shared by every Craft app |
 | `show_downloads_switch(false)` | For a host with the switch in its own settings |
 | `sources_ui(ui)` | The font sources, for a host's settings page |
 | `set_index(index)` | The indexes, after the host fetched them |
-| `set_language(tag)` | The interface language, the host's own; English when its catalog isn't embedded |
-| `install_interface_fonts(ctx, craft_faces)` | For a host without interface fonts of its own (the standalone app): craft-ui's font stack for the panel's language, craft-fonts' faces the app embeds with craft-fonts-build, and the interface direction |
+| `install_interface_fonts(ctx, craft_faces)` | For a host without interface fonts of its own (the standalone app): craft-ui's font stack for the language of the Host installed in `ctx`, craft-fonts' faces the app embeds with craft-fonts-build, and the interface direction |
 
 ## Network use
 
@@ -85,11 +99,7 @@ craft-i18n; style and weight names, licence names and product names stay in Engl
 ## Testing
 
 ```sh
-cargo test -p craft-font-manager --all-features
-CRAFT_FONT_MANAGER_SNAPSHOTS=<dir> cargo test -p craft-font-manager --features egui --test flows screenshots -- --test-threads=1
+cargo test -p craft-font-manager --features screen-testing --test it
 ```
 
-`tests/flows.rs` drives the panel with `egui_kittest` against a small index, a font folder made per
-test and `FakeStore`. They install egui's Hack and Ubuntu Light faces into temporary folders. With
-`CRAFT_FONT_MANAGER_GOOGLE_FONTS=<google/fonts checkout>`, the fake store also "downloads" the
-index's files from the checkout, so screenshots show real previews.
+`tests/it` runs the panel's trials against a small index, a font folder made per test and `FakeStore`. They install egui's Hack and Ubuntu Light faces into temporary folders.

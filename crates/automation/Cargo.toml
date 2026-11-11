@@ -1,0 +1,48 @@
+[package]
+name = "craft-automation"
+description = "Drive a running Craft app from tests, agents and the CLI (control channel, screenshot queue, frame profiler and frame trace; native only), and recorded actions with the Actions panel (every target)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+autotests = false
+
+[lib]
+# The lib's test target is the crate's one test executable: its trials and, with `screen-testing`, the
+# screen tests in tests/it.
+harness = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# The egui parts: the Actions panel, the control channel's server side (screenshots, synthetic
+# input) and `ui` stories. Without it the crate has no egui: `ControlOptions`, `ControlClient`,
+# `Params` and the recorded actions' model and files.
+ui = ["dep:craft-behavior", "dep:craft-keymap", "dep:craft-ui", "dep:egui"]
+# The Actions panel's stories and mock, and the integration binary `tests/it`.
+screen-testing = ["ui", "craft-ui/testing"]
+
+[dependencies]
+craft-behavior = { workspace = true, optional = true }
+craft-keymap = { workspace = true, optional = true }
+craft-theme = { workspace = true }
+craft-ui = { workspace = true, optional = true }
+egui = { workspace = true, optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# The control channel, its server and client, screenshots, the profiler and the trace.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+base64 = "0.22"
+craft-platform = { workspace = true }
+getrandom = "0.3"
+log = "0.4"
+png = "0.17"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+craft-ui = { workspace = true, features = ["testing"] }
+egui = { workspace = true }

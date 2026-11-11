@@ -5,6 +5,30 @@ Native file and message dialogs that never block the event loop. A request is qu
 end of the frame on the main thread, and answered on a later frame. No egui dependency: the parent
 is any `raw-window-handle` 0.6 window, and the app passes a closure that wakes its event loop.
 
+## egui parts (feature `ui`)
+
+`craft_dialogs::ui` holds the egui widgets over `host.files()`: `PathField` (a path text field with a
+Browse button) and `FileListPicker` with `FileList` (Photoshop's Load Files into Stack list:
+Files or Folder mode, Browse…, Remove, Add Open Files, Sort By Name; a 300 × 160 list box and
+120-wide buttons from the `file_list.*` tokens).
+
+## Save flow
+
+`craft_dialogs::save` is File › Save and Save As with their guards, on the file service's pickers and
+craft-platform's `FileWatch`. It has no egui dependency: `SaveFlow::start` takes a `SaveDocument`
+and a `SaveTarget` (`InPlace`, `As`, `Copy`) and answers a `SaveStep` the app acts on: `Picking`,
+`AskChangedOnDisk`, `Write`, `Cancelled` or `Busy` (one save runs at a time per flow). The app
+serializes and writes, then reports with `written` (which records the new file version unless the
+target is a copy) or `failed`.
+
+- A document without a file, Save As, and an email attachment's temporary copy (`is_mail_temp_copy`)
+  open the save picker in the document's folder (`save_dialog_folder`) with the document's name
+  and the extension suggested.
+- A save onto an existing file that changed on disk since it was opened or last saved asks first.
+  The app answers with `replace`, `save_elsewhere` (the picker again, keeping both files) or
+  `cancel`. The check also runs when a picked path is the document's own file, for every target.
+- Messages are `PlatformText` constants (`SAVE_FAILED`, `SAVE_IN_PROGRESS`, `SAVED`).
+
 ## Why blocking dialogs crash
 
 On macOS a blocking `rfd::FileDialog` or `rfd::MessageDialog` runs AppKit's modal loop
@@ -49,7 +73,7 @@ In an eframe app:
 ```rust
 // Once, at startup.
 let ctx = cc.egui_ctx.clone();
-let dialogs = Dialogs::new(Arc::new(move || ctx.request_repaint()));
+let dialogs = Dialogs::new(Wake::new(move || ctx.request_repaint()));
 
 // A command that needs a file.
 self.dialogs.ask(FileDialog::open().filter("PDF", &["pdf"]), Then::Open);

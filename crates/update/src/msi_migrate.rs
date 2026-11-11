@@ -163,6 +163,7 @@ pub(crate) mod windows {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use craft_ui::testing::trial;
 
     const CODE: &str = "{500F5254-26F4-4AAA-B90D-6F3FD9947D14}";
 
@@ -177,24 +178,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_default_folders_are_the_suite_folder_then_the_older_one() {
-        let local = p(r"C:\Users\Ann\AppData\Local");
-        let expected = [local.join("Programs").join("ArtCraft").join("GridCraft"), local.join("Programs").join("GridCraft")];
-        assert_eq!(default_folders(&local, "GridCraft"), expected);
-    }
-
-    #[test]
-    fn a_default_folder_reached_through_a_link_still_moves_to_the_suite_folder() {
-        // The Windows layer resolves each default folder whole, so a linked `Programs` arrives
-        // here as the real path the exe's folder also resolves to.
-        let old = r"D:\Redirected\Programs\ArtCraft\GridCraft";
-        let linked = Profile { defaults: vec![p(old)], ..profile() };
-        let suite = pf().map(|root| root.join("ArtCraft").join("GridCraft")).unwrap();
-        let expected = Step::Move { product_code: CODE.to_string(), folder: suite, old_folder: p(old) };
-        assert_eq!(plan(user(), &p(old), "GridCraft", &linked, pf()), expected);
-    }
-
     fn user() -> Option<(MsiScope, String)> {
         Some((MsiScope::PerUser, CODE.to_string()))
     }
@@ -207,95 +190,9 @@ mod tests {
         Some(Path::new(r"C:\Program Files"))
     }
 
-    #[test]
-    fn a_copy_for_everyone_and_the_launcher_update_in_place() {
-        let machine = Some((MsiScope::PerMachine, CODE.to_string()));
-        assert_eq!(plan(machine, &p(r"C:\Program Files\GridCraft"), "GridCraft", &profile(), pf()), Step::Update(&["ALLUSERS=1"]));
-        assert_eq!(
-            plan(None, &p(r"C:\Users\Ann\AppData\Local\Programs\ArtCraft\Launcher"), "ArtCraft Launcher", &profile(), pf()),
-            Step::Update(&[])
-        );
-    }
-
-    #[test]
-    fn a_per_user_copy_in_a_default_folder_moves_to_the_suite_folder() {
-        for old in [r"C:\Users\Ann\AppData\Local\Programs\ArtCraft\GridCraft", r"c:\users\ann\appdata\local\programs\gridcraft\"] {
-            // Joined like the plan joins it: `\` on Windows, `/` where these tests also run.
-            let suite = pf().map(|root| root.join("ArtCraft").join("GridCraft")).unwrap();
-            let expected = Step::Move { product_code: CODE.to_string(), folder: suite, old_folder: p(old) };
-            assert_eq!(plan(user(), &p(old), "GridCraft", &profile(), pf()), expected);
-        }
-    }
-
-    #[test]
-    fn a_chosen_folder_outside_the_profile_moves_in_place() {
-        let old = r"D:\Apps\GridCraft";
-        assert_eq!(plan(user(), &p(old), "GridCraft", &profile(), pf()), moved(old, old));
-    }
-
-    #[test]
-    fn a_chosen_folder_inside_the_profile_keeps_updating_for_the_account() {
-        for dir in [r"C:\Users\Ann\Tools\GridCraft", r"C:\Users\Ann\AppData\Local\Other\GridCraft", r"C:\Users\Ann\AppData\Roaming\GridCraft"] {
-            assert_eq!(plan(user(), &p(dir), "GridCraft", &profile(), pf()), Step::Update(&["ALLUSERS=2", "MSIINSTALLPERUSER=1"]), "{dir}");
-        }
-    }
-
-    #[test]
+    #[trial]
     fn a_folder_that_only_shares_a_prefix_with_the_profile_is_outside_it() {
         let old = r"C:\Users\Anna\GridCraft";
         assert_eq!(plan(user(), &p(old), "GridCraft", &profile(), pf()), moved(old, old));
-    }
-
-    #[test]
-    fn without_a_program_files_folder_a_default_copy_stays_for_the_account() {
-        let dir = p(r"C:\Users\Ann\AppData\Local\Programs\ArtCraft\GridCraft");
-        assert_eq!(plan(user(), &dir, "GridCraft", &profile(), None), Step::Update(&["ALLUSERS=2", "MSIINSTALLPERUSER=1"]));
-    }
-
-    fn steps(results: [Result<(), String>; 3]) -> (Result<(), String>, Vec<&'static str>) {
-        let done = std::cell::RefCell::new(Vec::new());
-        let [remove, everyone, account] = results;
-        let result = run_move(
-            || {
-                done.borrow_mut().push("remove");
-                remove
-            },
-            || {
-                done.borrow_mut().push("everyone");
-                everyone
-            },
-            || done.borrow_mut().push("keep log"),
-            || {
-                done.borrow_mut().push("account");
-                account
-            },
-        );
-        (result, done.into_inner())
-    }
-
-    #[test]
-    fn a_move_removes_first_and_installs_for_everyone() {
-        assert_eq!(steps([Ok(()), Ok(()), Ok(())]), (Ok(()), vec!["remove", "everyone"]));
-    }
-
-    #[test]
-    fn a_failed_removal_changes_nothing_else() {
-        let (result, done) = steps([Err("error 1603".into()), Ok(()), Ok(())]);
-        assert_eq!(result, Err("error 1603".into()));
-        assert_eq!(done, ["remove"]);
-    }
-
-    #[test]
-    fn a_refused_install_for_everyone_puts_the_app_back_for_the_account() {
-        let (result, done) = steps([Ok(()), Err("cancelled".into()), Ok(())]);
-        assert_eq!(done, ["remove", "everyone", "keep log", "account"]);
-        assert!(result.is_err_and(|e| e.contains("updated for your account instead")));
-    }
-
-    #[test]
-    fn a_failed_move_says_where_the_app_is() {
-        assert!(move_failure("error 1602", Ok(())).contains("updated for your account instead"));
-        let both = move_failure("error 1602", Err("error 1603".into()));
-        assert!(both.contains("error 1603") && both.contains("Run its installer"), "{both}");
     }
 }

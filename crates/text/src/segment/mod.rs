@@ -52,6 +52,7 @@ pub enum Kinsoku {
 /// How [`line_breaks`] adjusts UAX #14.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Options {
+    /// How strictly East Asian line-start and line-end rules apply.
     pub kinsoku: Kinsoku,
     /// Set Korean word by word (KLREQ): no break between two Hangul letters or Han ideographs
     /// (hanja), only at spaces and punctuation. For Korean-language text only, since Han
@@ -73,6 +74,7 @@ impl Options {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct Break {
+    /// Byte offset in the text where the next line starts.
     pub offset: usize,
     /// The line must end here (after a newline or another hard break, and at the end of the text).
     pub mandatory: bool,

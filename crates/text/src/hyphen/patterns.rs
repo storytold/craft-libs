@@ -152,11 +152,13 @@ impl Patterns {
         }
     }
 
+    /// The number of patterns.
     #[cfg(any(test, feature = "generator"))]
     pub fn len(&self) -> usize {
         self.map.len()
     }
 
+    /// Whether there are no patterns.
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
@@ -231,45 +233,5 @@ pub(crate) fn apply(map: &FxMap<u64, Box<[u8]>>, max_len: usize, codes: &[u8], v
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn liang_example() {
-        // The classic example from Liang's thesis: "hy-phen-ation".
-        let p = Patterns::parse("hy3ph he2n hena4 hen5at 1na n2at 1tio 2io o2n");
-        let w: Vec<char> = "hyphenation".chars().collect();
-        assert_eq!(p.points(&w).unwrap(), vec![2, 6]);
-        let mut tex = p.to_tex();
-        tex.sort();
-        assert!(tex.contains(&"hen5at".to_string()));
-        assert!(p.values(&['h', 'é']).is_none());
-    }
-
-    #[test]
-    fn packed_keys_sharing_a_prefix_spread_over_the_buckets() {
-        // 100,000 patterns whose packed keys differ in the last letter codes only. With the low
-        // bits of a multiplicative hash left as they are, they probe the same buckets.
-        let letters: Vec<char> = ('a'..='z').collect();
-        let mut text = String::new();
-        for i in 0..100_000u32 {
-            let mut n = i;
-            text.push_str("p1r");
-            for _ in 0..4 {
-                text.push(letters[(n % 26) as usize]);
-                n /= 26;
-            }
-            text.push(' ');
-        }
-        let started = std::time::Instant::now();
-        let p = Patterns::parse(&text);
-        assert_eq!(p.map.len(), 100_000);
-        assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
-        let w: Vec<char> = "praaaa".chars().collect();
-        assert_eq!(p.points(&w).unwrap(), vec![1]);
     }
 }

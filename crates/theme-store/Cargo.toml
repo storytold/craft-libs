@@ -1,0 +1,40 @@
+[package]
+name = "craft-theme-store"
+description = "The Craft suite's theme files, machine-local theme library and shared suite selection, with a lock/revision protocol for concurrent apps. egui only behind the `ui` feature (the appearance page)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+autotests = false
+
+[lib]
+# The lib's test target is the crate's one test executable: its trials and, with `screen-testing`, the
+# screen tests in tests/it.
+harness = false
+
+[features]
+default = []
+# `craft_theme_store::ui`: the Preferences appearance page and its theme chips.
+ui = ["dep:craft-behavior", "dep:craft-ui", "dep:egui"]
+# The stories and the integration binary of the appearance page.
+screen-testing = ["ui", "craft-ui/testing"]
+
+[dependencies]
+craft-theme = { workspace = true }
+craft-behavior = { workspace = true, optional = true }
+craft-ui = { workspace = true, optional = true }
+egui = { workspace = true, optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-atomic = { workspace = true }
+dirs = "7"
+
+[dev-dependencies]
+craft-ui = { workspace = true, features = ["testing"] }
+tempfile = "3"
+
+[lints]
+workspace = true

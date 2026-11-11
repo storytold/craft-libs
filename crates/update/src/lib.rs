@@ -1,4 +1,4 @@
-//! Release checking, downloading, installing and self-updating for the Craft App Suite and ArtCraft Launcher.
+//! Native only (it downloads and installs through ureq): release checking, downloading, installing and self-updating for the Craft App Suite and ArtCraft Launcher.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -32,9 +32,9 @@ pub mod time;
 pub mod translate;
 pub mod version;
 
-#[cfg(feature = "egui")]
-pub mod dialog;
-#[cfg(feature = "egui")]
+#[cfg(feature = "ui")]
+pub mod stack_dialogs;
+#[cfg(feature = "ui")]
 pub mod updater;
 
 pub use app::App;
@@ -48,8 +48,11 @@ pub use suite::SUITE;
 pub use time::parse_rfc3339;
 pub use version::{Version, is_newer, parse as parse_version};
 
-#[cfg(feature = "egui")]
-pub use dialog::{CheckResultDialog, CheckResultResponse, StartupPrompt, StartupPromptResponse};
+#[cfg(feature = "screen-testing")]
+/// The registrations of this package for the integration binary.
+pub mod testing {
+    craft_ui::testing_registered!();
+}
 
 /// Checks for an update against GitHub releases for the given app.
 pub fn check_for_update(app: &App, http: &Http, current_version: &str) -> Result<Option<Release>, String> {
@@ -82,28 +85,15 @@ fn offered_release(json: &str, repo: &str, current_version: &str) -> Result<Opti
 pub(crate) const TEST_AGENT: &str = "ArtCraft-Launcher-Test/0.0";
 
 #[cfg(test)]
-mod offer_tests {
-    use super::offered_release;
+extern crate self as craft_update;
+#[cfg(test)]
+#[path = "../tests/https_only.rs"]
+mod https_only;
+#[cfg(all(test, feature = "screen-testing"))]
+#[path = "../tests/it/main.rs"]
+mod integration;
 
-    const REPO: &str = "storytold/photocraft";
-    const LIST: &str = r#"[{"tag_name":"v0.17.0","prerelease":false,"draft":false,"assets":[]},
-        {"tag_name":"v0.16.4","prerelease":false,"draft":false,"assets":[]}]"#;
-
-    fn offered(running: &str) -> Option<String> {
-        offered_release(LIST, REPO, running).unwrap().map(|release| release.tag)
-    }
-
-    #[test]
-    fn a_build_from_main_is_not_offered_the_release_it_already_contains() {
-        assert_eq!(offered("0.17.0-integration.20261029.f5b3f123"), None);
-        assert_eq!(offered("0.16.5-dev"), Some("v0.17.0".into()));
-    }
-
-    #[test]
-    fn releases_and_release_candidates_are_offered_as_before() {
-        assert_eq!(offered("0.17.0-rc.2"), Some("v0.17.0".into()));
-        assert_eq!(offered("0.16.4"), Some("v0.17.0".into()));
-        assert_eq!(offered("0.17.0"), None);
-        assert_eq!(offered("not a version"), None);
-    }
+#[cfg(test)]
+fn main() {
+    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::registered_in(env!("CARGO_PKG_NAME")));
 }

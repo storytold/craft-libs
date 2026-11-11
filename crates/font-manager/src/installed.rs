@@ -5,14 +5,18 @@ use craft_font_catalog::{FaceInfo, Source};
 /// One family from one source: a family installed on the system and in the font store is two
 /// entries, since only the store's can be removed.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct InstalledFamily {
+    /// The family name.
     pub name: String,
+    /// Where this copy of the family is installed.
     pub source: Source,
     /// Upright before italic, then by weight and width.
     pub faces: Vec<FaceInfo>,
 }
 
 impl InstalledFamily {
+    /// Whether the user can remove it: only copies in the font store can be.
     pub fn removable(&self) -> bool {
         self.source == Source::Store
     }

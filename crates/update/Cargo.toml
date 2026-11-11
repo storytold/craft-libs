@@ -6,20 +6,30 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+autotests = false
+
+[lib]
+# The lib's test target is the crate's one test executable: its trials and, with `screen-testing`, the
+# screen tests in tests/it.
+harness = false
 
 [lints]
 workspace = true
 
 [features]
 default = []
-egui = ["dep:egui", "dep:image"]
-local-mirror = []
-# tests/dialog_screenshots.rs: renders the dialogs to PNG with egui_kittest's wgpu renderer.
-snapshot = ["egui", "egui_kittest/wgpu"]
+ui = ["dep:egui", "dep:image", "dep:craft-ui", "dep:craft-host", "dep:craft-theme"]
+# The dialog stories, the updater's test seams and the integration binary `tests/it`.
+screen-testing = ["ui", "craft-ui/testing"]
 
 [dependencies]
 egui = { workspace = true, optional = true }
-# Decodes the app icon the startup prompt shows (`App::icon_png`); PNG only.
+craft-ui = { workspace = true, optional = true }
+# `Tone` for the dialogs' notices.
+craft-theme = { workspace = true, optional = true }
+# `Host::app`: the name the update dialogs show.
+craft-host = { workspace = true, features = ["ui"], optional = true }
+# Decodes the app icon the update dialogs show (`App::icon_png`); PNG only.
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -32,10 +42,8 @@ chrono = { workspace = true }
 semver = { version = "1", features = ["serde"] }
 
 [dev-dependencies]
+craft-ui = { workspace = true, features = ["testing"] }
 flate2 = "1"
-egui_kittest = "0.37"
-# egui's own Hack and Ubuntu Light for the screenshots (egui is built without default fonts).
-epaint_default_fonts = "0.37"
 
 [target.'cfg(unix)'.dependencies]
 flate2 = "1"

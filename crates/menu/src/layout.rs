@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use craft_host::target::{Os, Runtime};
 use craft_keymap::{Chord, CommandRef, Key, Mods};
 
 use crate::model::{Builtin, Item, ItemRole, Menu, MenuBar, MenuRole, Node, Platforms, Standard, tidy};
@@ -19,9 +20,13 @@ const CMD_COMMA: Chord = Chord::new(Mods::CMD, Key::Comma);
 
 /// The platform a layout is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Target {
+    #[allow(missing_docs)]
     Mac,
+    #[allow(missing_docs)]
     Windows,
+    #[allow(missing_docs)]
     Linux,
     /// A browser, on any operating system.
     Web,
@@ -31,14 +36,11 @@ impl Target {
     /// The platform this build runs on: `wasm32` builds are [`Target::Web`], and operating
     /// systems other than macOS and Windows are [`Target::Linux`].
     pub const fn current() -> Target {
-        if cfg!(target_arch = "wasm32") {
-            Target::Web
-        } else if cfg!(target_os = "macos") {
-            Target::Mac
-        } else if cfg!(target_os = "windows") {
-            Target::Windows
-        } else {
-            Target::Linux
+        match (Runtime::current(), Os::current()) {
+            (Runtime::Web, _) => Target::Web,
+            (_, Os::Mac) => Target::Mac,
+            (_, Os::Windows) => Target::Windows,
+            _ => Target::Linux,
         }
     }
 
@@ -55,6 +57,7 @@ impl Target {
 
 /// The app's name, its translations of the labels the layout writes itself, and its shortcuts
 /// that no menu item shows.
+#[non_exhaustive]
 pub struct LayoutOptions<'a> {
     /// Shown in the About, Hide and Quit items.
     pub app_name: &'a str,
@@ -75,6 +78,13 @@ impl<'a> LayoutOptions<'a> {
         LayoutOptions { app_name, label: &english, extra_shortcuts: &[] }
     }
 
+    /// Set the app's translation of the labels a layout writes; see [`LayoutOptions::label`].
+    pub fn label(mut self, label: &'a dyn Fn(&'static str) -> String) -> LayoutOptions<'a> {
+        self.label = label;
+        self
+    }
+
+    /// Set the shortcuts the app binds outside its menus; see [`LayoutOptions::extra_shortcuts`].
     pub fn extra_shortcuts(mut self, shortcuts: &'a [(Chord, CommandRef)]) -> LayoutOptions<'a> {
         self.extra_shortcuts = shortcuts;
         self
@@ -95,7 +105,9 @@ fn english(s: &'static str) -> String {
 
 /// A system or browser shortcut the app also uses for one of its commands.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Clash {
+    /// The shortcut the app binds.
     pub shortcut: Chord,
     /// What macOS or the browser uses it for.
     pub system: &'static str,
@@ -105,9 +117,13 @@ pub struct Clash {
     pub resolution: &'static str,
 }
 
+/// A laid-out menu bar and the shortcut clashes found.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Layout {
+    /// The menus to show.
     pub bar: MenuBar,
+    /// App shortcuts that collide with system ones.
     pub clashes: Vec<Clash>,
 }
 
@@ -257,7 +273,7 @@ pub fn mac_layout(bar: &MenuBar, options: &LayoutOptions) -> Layout {
 /// - Settings goes last in Edit, as `Preferences…` (an item) or `Preferences` (a submenu);
 /// - Quit goes last in File, as `Exit` on Windows and `Quit` elsewhere: the app's item tagged
 ///   [`ItemRole::Quit`], or [`Builtin::Quit`];
-/// - the open documents go last in Window, as radio items.
+/// - the open documents go last in Window, as check items.
 ///
 /// The layout creates the File, Edit, Help and Window menus these need, and adds no Services,
 /// Hide or Minimize items. Language and Appearance stay where the app put them, and items keep
@@ -371,10 +387,10 @@ fn shown_on(bar: &MenuBar, target: Target) -> MenuBar {
     MenuBar { menus, documents: bar.documents.clone() }
 }
 
-/// The listed documents as radio items, the one in front selected, after a separator.
+/// The listed documents as check items, the one in front checked, after a separator.
 fn document_items(bar: &MenuBar) -> Vec<Node> {
     let items: Vec<Node> =
-        bar.documents.iter().filter(|d| !d.hidden).map(|d| Item::new(d.command.clone(), d.label.clone()).radio(d.active).into()).collect();
+        bar.documents.iter().filter(|d| !d.hidden).map(|d| Item::new(d.command.clone(), d.label.clone()).check(d.active).into()).collect();
     if items.is_empty() {
         return items;
     }

@@ -92,6 +92,24 @@ fn show_file<W: HasWindowHandle + HasDisplayHandle>(d: FileDialog, parent: Optio
             let picked = dialog.pick_folder();
             Box::pin(async move { one(picked.await) })
         }
+        // On Linux the portal's own dialog, which reports the file type picked; rfd if the portal
+        // can't show it.
+        #[cfg(target_os = "linux")]
+        Kind::Save => {
+            let parent_id = crate::portal::parent_id(parent.and_then(|p| p.window_handle().ok()).map(|h| h.as_raw()));
+            let request = crate::portal::SaveRequest::new(&d, parent_id);
+            Box::pin(async move {
+                match crate::portal::save_as(request) {
+                    Ok(Some(path)) => Answer::Paths(vec![path]),
+                    Ok(None) => Answer::Cancelled,
+                    Err(e) => {
+                        log::info!("portal save dialog unavailable ({e}), using rfd");
+                        one(dialog.save_file().await)
+                    }
+                }
+            })
+        }
+        #[cfg(not(target_os = "linux"))]
         Kind::Save => {
             let picked = dialog.save_file();
             Box::pin(async move { one(picked.await) })

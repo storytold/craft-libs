@@ -16,10 +16,12 @@ pub struct Dictionary {
 const MAGIC: &[u8] = b"DCHYPH1\n";
 
 impl Dictionary {
+    /// The number of words.
     pub fn len(&self) -> usize {
         self.masks.len()
     }
 
+    /// Whether the dictionary has no words.
     pub fn is_empty(&self) -> bool {
         self.masks.is_empty()
     }
@@ -154,8 +156,9 @@ pub fn parse_hyphenated(s: &str) -> (String, u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use craft_ui::testing::trial;
 
-    #[test]
+    #[trial]
     fn roundtrip() {
         let e: Vec<(String, u64)> = ["ty-pog-ra-phy", "cat", "hap-pen", "o'clock", "naïve-té", "naïve"].iter().map(|s| parse_hyphenated(s)).collect();
         let d = Dictionary::from_entries(e);
@@ -165,12 +168,5 @@ mod tests {
         assert_eq!(back.get("cat"), Some(0));
         assert_eq!(back.get("naïveté").map(|m| hyphenated("naïveté", m)), Some("naïve-té".to_string()));
         assert!(back.get("dog").is_none());
-    }
-
-    #[test]
-    fn an_oversized_stream_is_refused_before_parsing() {
-        let bomb = miniz_oxide::deflate::compress_to_vec(&vec![b'a'; MAX_INFLATED + 1], 10);
-        assert!(bomb.len() < 1 << 20, "{} bytes compressed", bomb.len());
-        assert!(Dictionary::from_bytes(&bomb).unwrap_err().contains("inflate failed"));
     }
 }

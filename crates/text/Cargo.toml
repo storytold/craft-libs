@@ -6,6 +6,12 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Text processing below the Craft composer: hyphenation with a bundled US English dictionary and patterns, other languages through hypher"
+autotests = false
+
+[lib]
+# The lib's test target is the crate's one test executable: its trials and, with `screen-testing`, the
+# screen tests in tests/it.
+harness = false
 
 [lints]
 workspace = true
@@ -19,22 +25,49 @@ unicode-segmentation = { version = "1.13", optional = true }
 icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"], optional = true }
 unicode-bidi = { version = "0.3.18", optional = true }
 unicode-bidi-mirroring = { version = "0.4.0", optional = true }
+# `ui`: the canvas text editor, style and character panels and the spelling dialog, on craft-ui.
+egui = { workspace = true, optional = true }
+craft-ui = { workspace = true, optional = true }
+craft-behavior = { workspace = true, optional = true }
+craft-theme = { workspace = true, optional = true }
+craft-host = { workspace = true, features = ["ui"], optional = true }
+serde = { workspace = true }
+# `find`: Word's wildcards and regular expressions compile to regex's linear-time engine.
+regex = { version = "1.13", optional = true }
+# The refusal of a regular expression, as a kind the UI words itself (regex reports only text).
+regex-syntax = { version = "0.8", optional = true }
+# `font-picker`: the character controls open craft-font-manager's picker instead of a plain list.
+craft-font-manager = { workspace = true, optional = true }
 
 [dev-dependencies]
 unicode-segmentation = "1.13"
+craft-ui = { workspace = true, features = ["testing"] }
 
 [[example]]
 name = "hyphgen"
 required-features = ["generator"]
 
 [features]
-default = ["hyphen", "bidi", "segment", "linebreak"]
+default = ["hyphen", "bidi", "segment"]
 # Hyphenation points; English (bundled dictionary and patterns) needs no further feature.
 hyphen = ["dep:hypher", "dep:miniz_oxide", "dep:unicode-general-category"]
 # Bidirectional text: embedding levels, line reordering and mirroring (UAX #9).
 bidi = ["dep:unicode-bidi", "dep:unicode-bidi-mirroring"]
-# Line breaking on a box/glue/penalty model (Knuth–Plass, greedy, balanced); no dependencies.
-linebreak = []
+# Find and replace (`find`, and `ui::find` with `ui`): Acrobat's, PowerPoint's and Word's
+# matcher. Pulls regex (Word's wildcards and expressions compile to it); apps without a text
+# search leave it off.
+find = ["dep:regex", "dep:regex-syntax"]
+# Spelling: a bundled English word list (SCOWL, deflated) with suggestions; user words from the app.
+spell = ["dep:miniz_oxide"]
+# The egui parts: `ui::editor` (canvas text editor on craft-ui's IME composer), `ui::style_panel`,
+# `ui::character` and `ui::spelling`.
+ui = ["dep:egui", "dep:craft-behavior", "dep:craft-ui", "dep:craft-theme", "dep:craft-host", "spell"]
+# `ui::character` shows craft-font-manager's font picker (stars, recents, previews, filters)
+# instead of a plain family list. Pulls the bundled font indexes; apps that only want the panels
+# leave it off.
+# The screen tests and the stories: the integration binary `it` and the stories registered in craft-ui's registry.
+screen-testing = ["ui", "craft-ui/testing"]
+font-picker = ["ui", "dep:craft-font-manager", "craft-font-manager/ui"]
 # The dictionary writer (`hyphen::dict`) and pattern trainer (`hyphen::patgen`) used by
 # examples/hyphgen.rs.
 generator = ["hyphen"]

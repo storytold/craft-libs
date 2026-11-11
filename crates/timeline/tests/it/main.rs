@@ -1,6 +1,5 @@
-//! Integration tests, built as one test binary: each file is a module.
+//! The screen tests of craft-timeline, folded into the lib's test target.
 
-mod fcp7;
-mod fcpxml;
-mod otio;
-mod support;
+mod features;
+mod lanes;
+mod panel;

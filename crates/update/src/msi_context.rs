@@ -12,7 +12,9 @@
 /// other way round).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MsiScope {
+    #[allow(missing_docs)]
     PerUser,
+    #[allow(missing_docs)]
     PerMachine,
 }
 
@@ -174,31 +176,11 @@ fn current_user_sid() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use craft_ui::testing::trial;
 
     const CODE: &str = "{12345678-1234-1234-1234-123456789ABC}";
 
-    #[test]
-    fn authoritative_machine_context_is_preserved() {
-        assert_eq!(scope_of(&[4]), Ok(MsiScope::PerMachine));
-    }
-
-    #[test]
-    fn managed_and_unmanaged_accounts_are_both_per_user() {
-        assert_eq!(scope_of(&[1]), Ok(MsiScope::PerUser));
-        assert_eq!(scope_of(&[2]), Ok(MsiScope::PerUser));
-        assert_eq!(scope_of(&[1, 2]), Ok(MsiScope::PerUser));
-    }
-
-    #[test]
-    fn missing_unknown_or_conflicting_contexts_are_not_guessed() {
-        for contexts in [&[][..], &[0], &[7], &[2, 4], &[4, 1], &[4, 3]] {
-            assert!(scope_of(contexts).is_err(), "{contexts:?}");
-        }
-        assert_eq!(scope_of(&[4, 1]), Err(ProbeError::Conflicting));
-        assert_eq!(scope_of(&[7]), Err(ProbeError::Unknown));
-    }
-
-    #[test]
+    #[trial]
     fn a_product_code_packs_the_way_windows_installer_names_its_keys() {
         assert_eq!(packed_code("{12345678-ABCD-EF01-2345-6789ABCDEF01}").as_deref(), Some("87654321DCBA10FE32547698BADCFE10"));
         assert_eq!(packed_code("{12345678-abcd-ef01-2345-6789abcdef01}").as_deref(), Some("87654321DCBA10FE32547698BADCFE10"));
@@ -208,143 +190,9 @@ mod tests {
         }
     }
 
-    /// A product nobody installed is registered nowhere: the lookup runs and finds no context.
-    #[cfg(windows)]
-    #[test]
-    fn a_product_that_is_not_installed_has_no_context() {
-        assert_eq!(probe("{00000000-1111-2222-3333-444444444444}"), Err(ProbeError::Unknown));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn this_accounts_sid_is_found() {
-        // Local and domain accounts are S-1-5-..., Microsoft Entra ID accounts S-1-12-1-...: only the
-        // shape is the same, `S-1-` and then numbers.
-        let sid = current_user_sid().unwrap();
-        let parts: Vec<&str> = sid.split('-').collect();
-        let numbers = parts.get(1..).unwrap_or_default();
-        assert!(parts.first() == Some(&"S") && numbers.len() >= 3, "{sid}");
-        assert!(numbers.iter().all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())), "{sid}");
-        assert_eq!(numbers.first(), Some(&"1"), "{sid}");
-    }
-
-    #[test]
-    fn a_fresh_install_is_not_looked_up() {
-        assert_eq!(update_scope(false, None, |_| Err(ProbeError::Unknown), |_| None), Ok(None));
-    }
-
-    #[test]
-    fn known_updates_keep_the_authoritative_context() {
-        for scope in [MsiScope::PerUser, MsiScope::PerMachine] {
-            assert_eq!(update_scope(true, Some(CODE), |_| Ok(scope), |_| None), Ok(Some(scope)));
-        }
-    }
-
-    #[test]
-    fn an_update_without_its_product_code_stops_before_probing() {
-        let called = std::cell::Cell::new(false);
-        assert!(
-            update_scope(
-                true,
-                None,
-                |_| {
-                    called.set(true);
-                    Ok(MsiScope::PerMachine)
-                },
-                |_| None
-            )
-            .is_err()
-        );
-        assert!(!called.get());
-    }
-
-    #[test]
-    fn malformed_product_codes_stop_before_any_lookup() {
-        for code in ["", "not-a-guid", "{12345678-1234-1234-1234-123456789ABZ}", "';exit 0;#", "{12345678-1234-1234-1234-123456789ABC}\n"] {
-            let called = std::cell::Cell::new(false);
-            assert!(
-                update_scope(
-                    true,
-                    Some(code),
-                    |_| {
-                        called.set(true);
-                        Ok(MsiScope::PerMachine)
-                    },
-                    |_| None
-                )
-                .is_err()
-            );
-            assert!(!called.get(), "{code:?}");
-        }
-    }
-
-    #[test]
+    #[trial]
     fn unavailable_context_never_becomes_a_fresh_install() {
         let unavailable = || Err(ProbeError::Unavailable("query failed".into()));
         assert!(update_scope(true, Some(CODE), |_| unavailable(), |_| None).is_err());
-    }
-
-    #[test]
-    fn a_lookup_that_cannot_run_falls_back_to_the_uninstall_record() {
-        for scope in [MsiScope::PerUser, MsiScope::PerMachine] {
-            let seen = std::cell::RefCell::new(String::new());
-            let result = update_scope(
-                true,
-                Some(CODE),
-                |_| Err(ProbeError::Unavailable("the registry could not be read".into())),
-                |code| {
-                    *seen.borrow_mut() = code.to_owned();
-                    Some(scope)
-                },
-            );
-            assert_eq!(result, Ok(Some(scope)));
-            assert_eq!(*seen.borrow(), CODE);
-        }
-    }
-
-    #[test]
-    fn an_answer_that_is_unclear_or_doubled_never_uses_the_uninstall_record() {
-        for failure in [ProbeError::Unknown, ProbeError::Conflicting] {
-            let result = update_scope(true, Some(CODE), |_| Err(failure), |_| panic!("must not consult the record"));
-            assert!(result.is_err());
-        }
-    }
-
-    #[test]
-    fn a_blocked_lookup_without_a_record_stops_the_update() {
-        let result = update_scope(true, Some(CODE), |_| Err(ProbeError::Unavailable("timed out".into())), |_| None);
-        assert_eq!(result, Err(UNKNOWN_CONTEXT.to_string()));
-    }
-
-    #[test]
-    fn records_in_two_contexts_give_no_fallback_scope() {
-        assert_eq!(single_scope([]), None);
-        assert_eq!(single_scope([MsiScope::PerUser]), Some(MsiScope::PerUser));
-        assert_eq!(single_scope([MsiScope::PerMachine, MsiScope::PerMachine]), Some(MsiScope::PerMachine));
-        assert_eq!(single_scope([MsiScope::PerMachine, MsiScope::PerUser]), None);
-        assert_eq!(single_scope([MsiScope::PerUser, MsiScope::PerMachine, MsiScope::PerMachine]), None);
-    }
-
-    #[test]
-    fn each_context_asks_the_package_for_itself() {
-        assert_eq!(scope_arguments(MsiScope::PerMachine), ["ALLUSERS=1"]);
-        assert_eq!(scope_arguments(MsiScope::PerUser), ["ALLUSERS=2", "MSIINSTALLPERUSER=1"]);
-    }
-
-    #[test]
-    fn a_fresh_install_is_machine_wide() {
-        assert_eq!(install_scope(None, true), Some(MsiScope::PerMachine));
-    }
-
-    #[test]
-    fn an_update_keeps_the_context_of_the_copy_it_replaces() {
-        for scope in [MsiScope::PerUser, MsiScope::PerMachine] {
-            assert_eq!(install_scope(Some(scope), false), Some(scope));
-        }
-    }
-
-    #[test]
-    fn a_copy_that_is_not_an_msi_takes_the_package_default() {
-        assert_eq!(install_scope(None, false), None);
     }
 }

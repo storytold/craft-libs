@@ -184,3 +184,23 @@ with `ICM_DONE_OUTSIDEDC`, reapplied after `StartPage`; driver-managed RGB uses 
 Vendor driver automatic color correction remains a driver setting and requires qualification.
 Other platforms return `rgb::PrintError::Unsupported`. The Windows PDF backend and its existing
 completion dependency pin are independent of this additional MIT OR Apache-2.0 API.
+
+## Print settings and feedback (`ui` feature)
+
+`craft_print::ui::State` holds the transient printer selection, copies, duplex and grayscale settings,
+plus discovery and submission receivers. Hosts supply `Discover` and `Submit` workers; neither
+the state nor the controls invokes an OS spooler or generates PDF content. Apps map `Settings`
+to ``Job`` and own the Print action, page selection, preview and export behavior.
+
+`State::show` takes a stable `egui::Id` and app-localized `Labels`. It draws the settings only;
+apps render typed `Feedback` using their own translations. `poll` requests occasional repaints
+while work is pending. Refresh disables submission until the new printer list arrives, preserves
+a still-present selection, and otherwise chooses the system default or first available printer.
+An empty or failed discovery cannot leave a stale printer ready to submit.
+
+`ready` is false while a job is pending. `begin` refuses replacing an active job receiver;
+dropping a receiver does not cancel a native job. Apps must test readiness before invoking the
+host submit callback and keep active work alive when closing a window. Queue-default duplex is
+represented by `None`, independently of explicit one-sided, long-edge or short-edge choices.
+Receipts and backend errors remain unmodified data for the app to display. These controls work
+on WASM too; browser PDF printing remains an app-owned service.

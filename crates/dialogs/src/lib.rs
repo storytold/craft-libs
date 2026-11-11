@@ -1,6 +1,6 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-//! Native file and message dialogs that never block the event loop.
+//! Native only (rfd does not build for the web): file and message dialogs that never block the event loop.
 //!
 //! A blocking `rfd::FileDialog` or `rfd::MessageDialog` runs AppKit's modal loop
 //! (`-[NSSavePanel runModal]`) inside winit's event handler on macOS. An event that arrives while
@@ -20,6 +20,21 @@
 
 mod filter;
 mod native;
+#[cfg(target_os = "linux")]
+mod portal;
+mod probe;
+pub mod save;
+#[cfg(test)]
+mod save_tests;
+pub mod service;
+#[cfg(feature = "ui")]
+pub mod ui;
+
+/// The registrations of this crate's UI types, for its integration binary.
+#[cfg(feature = "screen-testing")]
+pub mod testing {
+    craft_ui::testing_registered!();
+}
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -30,7 +45,6 @@ mod tests;
 use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -39,7 +53,7 @@ pub use filter::Filter;
 
 /// Wakes the app's event loop so it runs a frame (`ctx.request_repaint()` in an egui app). Called
 /// from any thread when a dialog has answered or stopped.
-pub type Wake = Arc<dyn Fn() + Send + Sync>;
+pub use craft_host::Wake;
 
 /// Answers every request instead of a native dialog (tests and automation).
 pub type Override = Box<dyn FnMut(&Request) -> Answer>;
@@ -48,7 +62,10 @@ pub type Override = Box<dyn FnMut(&Request) -> Answer>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     /// Choose existing files: one, or several when `multiple`.
-    Open { multiple: bool },
+    Open {
+        /// Whether the user may choose more than one file.
+        multiple: bool,
+    },
     /// Choose one folder.
     Folder,
     /// Choose where to write a file.
@@ -58,6 +75,7 @@ pub enum Kind {
 /// A file dialog request.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileDialog {
+    /// Which dialog to show.
     pub kind: Kind,
     /// The dialog's title, or its message line on macOS, where panels have no title bar.
     pub title: Option<String>,
@@ -95,6 +113,7 @@ impl FileDialog {
         Self::new(Kind::Save)
     }
 
+    /// Sets the dialog's title (its message line on macOS).
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
         self
@@ -106,11 +125,13 @@ impl FileDialog {
         self
     }
 
+    /// Sets the folder the dialog opens in.
     pub fn directory(mut self, directory: impl Into<PathBuf>) -> Self {
         self.directory = Some(directory.into());
         self
     }
 
+    /// Sets the file name a Save dialog suggests.
     pub fn file_name(mut self, file_name: impl Into<String>) -> Self {
         self.file_name = Some(file_name.into());
         self
@@ -120,9 +141,12 @@ impl FileDialog {
 /// The icon a message box shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MessageLevel {
+    /// An informational icon.
     #[default]
     Info,
+    /// A warning icon.
     Warning,
+    /// An error icon.
     Error,
 }
 
@@ -130,39 +154,57 @@ pub enum MessageLevel {
 /// plain variant they replace.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum MessageButtons {
+    /// One OK button.
     #[default]
     Ok,
+    /// OK and Cancel.
     OkCancel,
+    /// Yes and No.
     YesNo,
+    /// Yes, No and Cancel.
     YesNoCancel,
+    /// One button with this label.
     OkCustom(String),
+    /// Two buttons with these labels, in the order of OK and Cancel.
     OkCancelCustom(String, String),
+    /// Three buttons with these labels, in the order of Yes, No and Cancel.
     YesNoCancelCustom(String, String, String),
 }
 
 /// The button a message box was closed with. A custom button answers with its label.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MessageResult {
+    /// OK.
     Ok,
+    /// Cancel.
     Cancel,
+    /// Yes.
     Yes,
+    /// No.
     No,
+    /// A custom button, by its label.
     Custom(String),
 }
 
 /// A message box request.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Message {
+    /// The icon.
     pub level: MessageLevel,
+    /// The box's title.
     pub title: String,
+    /// The body text.
     pub description: String,
+    /// The buttons offered.
     pub buttons: MessageButtons,
 }
 
 /// What [`Dialogs`] was asked to show, as an [`Override`] sees it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Request {
+    /// A file dialog.
     File(FileDialog),
+    /// A message box.
     Message(Message),
 }
 
@@ -204,7 +246,7 @@ impl Drop for Reply {
     fn drop(&mut self) {
         // The sender goes first, so the woken app sees either the answer or the disconnect.
         self.tx = None;
-        (self.wake)();
+        self.wake.wake();
     }
 }
 
@@ -237,6 +279,7 @@ pub struct Dialogs<T> {
 }
 
 impl<T> Dialogs<T> {
+    /// A dialog queue that calls `wake` when an answer arrives.
     pub fn new(wake: Wake) -> Self {
         Self { wake, queue: VecDeque::new(), open: None, answers: Vec::new(), show: Show::Native }
     }
@@ -257,7 +300,7 @@ impl<T> Dialogs<T> {
             self.raise();
         }
         self.queue.push_back((request, then));
-        (self.wake)();
+        self.wake.wake();
     }
 
     /// Shows the next queued request unless a dialog is open. Call it on the main thread at the end
@@ -344,4 +387,15 @@ impl<T> Dialogs<T> {
 
 fn panic_text(panic: &(dyn std::any::Any + Send)) -> Option<&str> {
     panic.downcast_ref::<&str>().copied().or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+}
+
+#[cfg(all(test, feature = "screen-testing"))]
+extern crate self as craft_dialogs;
+#[cfg(all(test, feature = "screen-testing"))]
+#[path = "../tests/it/main.rs"]
+mod integration;
+
+#[cfg(test)]
+fn main() {
+    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::registered_in(env!("CARGO_PKG_NAME")));
 }

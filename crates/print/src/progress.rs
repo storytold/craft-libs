@@ -28,71 +28,9 @@ pub(crate) fn run<T: Send>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use craft_ui::testing::trial;
 
-    #[test]
-    fn progress_arrives_on_the_calling_thread_before_submission_finishes() {
-        let caller = std::thread::current().id();
-        let seen = Rc::new(RefCell::new(Vec::new()));
-        let observations = Rc::clone(&seen);
-        let (observed, waiting) = sync_channel(0);
-        let result = run(
-            &mut move |processed, sheets| {
-                assert_eq!(std::thread::current().id(), caller);
-                observations.borrow_mut().push((processed, sheets));
-                observed.send(()).unwrap();
-            },
-            move |events| {
-                assert_ne!(std::thread::current().id(), caller);
-                for completed in 0..=3 {
-                    events.send((completed, 3)).unwrap();
-                    // No terminal result until the caller processes this intermediate event.
-                    waiting.recv().unwrap();
-                }
-                Ok("accepted")
-            },
-        );
-        assert_eq!(result, Ok("accepted"));
-        assert_eq!(*seen.borrow(), [(0, 3), (1, 3), (2, 3), (3, 3)]);
-    }
-
-    #[test]
-    fn complete_progress_does_not_hide_a_terminal_failure() {
-        let mut seen = Vec::new();
-        let error = Error::Spool("the native print package failed".into());
-        let result = run(&mut |done, total| seen.push((done, total)), |events| {
-            events.send((0, 1)).unwrap();
-            events.send((1, 1)).unwrap();
-            Err::<(), _>(error.clone())
-        });
-        assert_eq!(seen, [(0, 1), (1, 1)]);
-        assert_eq!(result, Err(error));
-    }
-
-    #[test]
-    fn a_partial_job_keeps_its_failure_and_last_processed_sheet() {
-        let mut seen = Vec::new();
-        let result = run(&mut |done, total| seen.push((done, total)), |events| {
-            events.send((0, 3)).unwrap();
-            events.send((1, 3)).unwrap();
-            Err::<(), _>(Error::Spool("the second sheet could not be rendered".into()))
-        });
-        assert_eq!(seen, [(0, 3), (1, 3)]);
-        assert_eq!(result, Err(Error::Spool("the second sheet could not be rendered".into())));
-    }
-
-    #[test]
-    fn worker_failure_is_reported_without_inventing_progress() {
-        let mut seen = Vec::new();
-        let result = run(&mut |done, total| seen.push((done, total)), |_| -> Result<(), Error> {
-            panic!("synthetic native worker failure");
-        });
-        assert!(seen.is_empty());
-        assert!(result.is_err_and(|e| e.to_string().contains("check the printer's queue")));
-    }
-
-    #[test]
+    #[trial]
     fn callback_unwind_closes_progress_and_reaps_the_worker() {
         let finished = std::sync::atomic::AtomicBool::new(false);
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

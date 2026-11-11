@@ -4,14 +4,14 @@ A Craft app's menus, laid out for macOS, Windows, Linux and the web. The app sup
 tree and runs its commands; this crate lays the menus out the way each platform's apps do, takes
 shortcuts from craft-keymap, drives a platform `Backend`, and turns the menu's key
 equivalents back into the input egui would have had without it. It depends on egui,
-[`craft-keymap`](../keymap/src/lib.rs) (commands and chords) and [`craft-quit`](../quit/src/lib.rs),
-and on no app. Everything but the macOS backend
-(`craft_menu::mac`, built on muda) is platform-free and also builds for `wasm32`. The layout and driver come from PhotoCraft's `native_menu.rs`, the egui bar from its `menu_nav.rs` and in-window menu bar.
+[`craft-keymap`](../keymap/src/lib.rs) (commands and chords), [`craft-quit`](../quit/src/lib.rs) and
+[`craft-window`](../window/src/lib.rs) (`native_menu`, the AppKit menu bar), and on no app. The whole crate is
+platform-free: `craft_menu::mac` installs nothing off macOS. The in-window bar (`MenuBarUi`) shows the menus as `craft_ui::menu::MenuBar` command rows.
 
 ## The menus
 
 Build a `MenuBar` directly, or from the flat rows an in-window bar draws (`from_items`, with
-`Row { path, command, label, shortcut, enabled, kind }`, `---` for a separator). Give each menu
+`Row::new(path, command, label)` with `.shortcut(..)`, `Row::separator(path)`). Give each menu
 its role (`MenuRole::{App, File, Edit, View, Window, Help, Other}`), then tag what macOS puts in
 fixed places:
 
@@ -32,7 +32,8 @@ Each item runs a `craft_keymap::CommandRef`, and a click reports it. A command t
 parameter carries it in the `CommandRef`:
 `CommandRef::with_params("file.open_recent", json!({"index": 3}))`. Items built directly use
 `Item::new(command, label)` with `.shortcut(chord)`, `.enabled(..)`, `.check(..)` or
-`.radio(..)` (the item's `ItemKind`), `.role(..)` and `.platforms(..)`; submenus use
+`.radio(..)` (the item's `ItemKind`), `.role(..)`, `.platforms(..)`, `.tint(colour)` and
+`.tooltip(text)` (both for the in-window bar only; the native macOS menu ignores them); submenus use
 `Node::submenu(label, children)`, with `.role(..)` for a tagged one. A shortcut is a
 `craft_keymap::Chord`: `cmd` is ⌘ and `ctrl` the Control key. macOS shows radio items as check
 items. The app's open documents go in `MenuBar::documents` (`Document::new(command, name)`,
@@ -78,7 +79,7 @@ it resolved:
   app lists them: `LayoutOptions::new("PhotoCraft").extra_shortcuts(&[(chord, command), ..])`.
 
 The labels the layouts write (`About {app}`, `Preferences…`, `Exit`, `Window`, `Minimize`, …)
-are English. To translate them, pass `LayoutOptions { label, ..LayoutOptions::new(app_name) }`,
+are English. To translate them, pass `LayoutOptions::new(app_name).label(label)`,
 where `label` maps an English label such as `"Quit {app}"` to the app's translation; the crate
 substitutes `{app}`.
 
@@ -88,7 +89,7 @@ substitutes `{app}`.
 `craft_keymap::Keymap`, the user's overrides included: the first single-press binding, one in
 the command's home scope first. A command the keymap knows but binds to nothing loses its
 shortcut; an item whose command the keymap doesn't know keeps its own. Items of toggle commands
-(`Bindable::toggle`) become check items, keeping their checked state; radio items stay radio
+(`CommandDef::toggle`) become check items, keeping their checked state; radio items stay radio
 items.
 
 Each frame, `apply_state(&mut bar, |command| ItemState { enabled, checked })` sets enabled and
@@ -96,66 +97,75 @@ checked from the app's state. `checked: Some(..)` makes a plain item a check ite
 clears a radio item; `None` leaves the kind as it is. The built-in items and the open documents
 are left alone. Both run on the app's bar, before the layout.
 
-## Windows, Linux and web: the egui bar
+## Keyboard Shortcuts dialog
 
-`MenuBarUi` draws a laid-out bar with egui, in a top panel, and returns the commands chosen that
-frame:
+`craft_menu::shortcuts` holds the Keyboard Shortcuts dialog: a table of the command catalog with
+recording, conflicts, undo, named sets, import review and a summary, over a `craft_keymap::Keymap`
+and optionally `Profiles`. It edits the keymap in place, so the menus show new keys at once, and
+Cancel restores the keymap as it was when the dialog opened.
 
-```rust
-let laid_out = craft_menu::layout(&menu_bar, Target::current(), &LayoutOptions::new("PhotoCraft")).bar;
-egui::Panel::top("menu-bar").show(ui, |ui| {
-    let gate = Gate { modal: dialog_open, recording_shortcut, text_editing: ui.ctx().text_edit_focused() };
-    for command in MenuBarUi::new(&laid_out).gate(gate).label(&tr).show(ui) {
-        app.run(&command);
+```rust,ignore
+use craft_menu::shortcuts::{DialogState, Outcome, ShortcutsDialog};
+
+// "Keyboard Shortcuts…" opens it.
+self.shortcuts = Some(DialogState::new());
+
+// Every pass while it is open:
+if let Some(state) = &mut self.shortcuts {
+    let dialog = ShortcutsDialog::new(&mut self.keymap).options(&self.shortcut_options);
+    match dialog.show(ui, state).outcome {
+        Some(Outcome::Ok) => self.save_settings(),
+        Some(Outcome::Changed) => self.rebuild_menus(),
+        _ => {}
     }
-});
+    if !state.is_open() {
+        self.shortcuts = None;
+    }
+}
 ```
 
-- **Mouse:** a press on a title opens its menu and releasing over an item runs it; a click on
-  the title again, Esc or a click outside closes it. While a menu is open, moving onto another
-  title opens that one. Submenus open on hover and stay open while the pointer heads for them
-  across other rows. A menu taller than the window scrolls, with the wheel or by resting on the
-  ▲ and ▼ arrows.
-- **Keys, while a menu is open:** ↑ and ↓ move the highlight, → opens a submenu or the next
-  menu, ← closes the submenu or opens the previous menu, ↩ and Space run the item, Esc closes.
-  `craft_menu::bar::is_open(ctx)` tells the app's shortcut handling to wait meanwhile.
-- **Keyboard access (Windows, Linux, web):** a tap on Alt alone, or F10, puts the keyboard on
-  the bar: the first title is lit, ← and → move along the titles, ↓, ↩ and Space open the lit
-  menu, Esc, a second tap or a click leaves. Alt+letter opens the menu with that mnemonic, and
-  in an open menu a letter runs the row with that mnemonic or opens its submenu. Mnemonics are
-  underlined while Alt is held, while the bar has the keyboard, and in a menu opened from the
-  keyboard. Each menu level assigns them from the labels as shown, so translated: unique within
-  the level, the first unused letter, word starts first; `.mnemonics(&[("View", 'W'),
-  ("file.open", 'P')])` names preferred letters by title as shown or by command id. A label
-  without an ASCII letter or digit shows its English label's letter after it, "文件(F)", before a
-  trailing ellipsis ("開く(O)…"), when `.english(&hook)` returns that English label for the
-  `Labeled::Command` or `Labeled::Title`; without one it has no mnemonic. While the bar has the keyboard the app's shortcuts wait, as
-  for an open menu (`craft_menu::bar::is_focused(ctx)`); call
-  `craft_menu::bar::leave_for_shortcut(ctx)` before them so that a command shortcut (Ctrl+S,
-  F7) leaves the bar and runs. While a dialog is open or a shortcut is being recorded (`Gate`),
-  Alt, F10 and the letters leave the bar alone. While a text field has the keys, a tap on Alt
-  still focuses the bar, as on Windows, but a letter without Alt goes on to the field (and takes
-  the keyboard off the bar) unless a menu is open. On `Target::Mac`, and on `Target::Web` in a
-  browser on a Mac (`ctx.os()`), the bar has no mnemonics and Alt does nothing: Option is a typing
-  key there.
-- **Items:** disabled items, and the items the `Gate` forbids (`Gate::allows`), are greyed and
-  never run. Check items show ✓, the selected radio item a dot, and the shortcut column shows
-  every shortcut, the display-only ones too, in the target's names (⌘ glyphs on `Target::Mac`,
-  Ctrl names on Windows and Linux, the browser's system's names on the web; `.target(..)` to
-  choose).
-- **Narrow windows:** the menus that don't fit move into a trailing `⋯` menu; when not even the
-  first fits, one `Menu` title holds them all. `.label(&tr)` translates `⋯`, `Menu` and the
-  scroll arrows' names, with the same hook as `LayoutOptions::label`. The bar fills its row;
-  `.shrink_to_fit(max_width)` makes it take only the width its titles need, up to `max_width`,
-  so other controls can share the row, and the menus past that overflow.
-- **Quit:** without an app Quit item, the Windows and Linux layouts add `Builtin::Quit`
-  (`craft_quit::QUIT_MENU_ID`). The bar runs it itself through `craft_quit::on_menu_event`,
-  which asks the window to close so the unsaved-changes check runs, and doesn't return it; the
-  same goes for `Builtin::Minimize`.
-- **Accessibility:** AccessKit sees a menu bar of menu items, the open menus, check and radio
-  items with their state, disabled items, and each item's shortcut and mnemonic (`access_key`).
-- **Style:** `BarStyle::from_style(ui.style())` by default; `.style(..)` sets title padding and
-  color, the menu width, separator room and the check and radio marks.
+The module documentation lists every `Outcome`, `Options` and the words (`ShortcutWords`) the
+app translates. The dialog never opens a file dialog or touches the file system. Enable
+`screen-testing` for the stories and the `it` trials.
+
+## Windows, Linux and web: the in-window bar
+
+`MenuBarUi` draws a laid-out bar in a top panel and returns the titles' rect (`MenuBarOutput`).
+Each item is a command row: its enabled state, check mark and chord follow the command in the
+runtime's command state and keymap, and a choice is a `Fired` with `FireSource::Menu` in the
+frame's output. `.help_search(true)` starts the Help menu with a search field over every command
+(`MenuBar::help_entries`):
+
+```rust
+let laid_out = craft_menu::layout(&menu_bar, Target::current(), &LayoutOptions::new("Sample")).bar;
+egui::Panel::top("menu-bar").show(ui, |ui| {
+    MenuBarUi::new(&laid_out).keyboard(!dialog_open).help_search(true).show(ui);
+});
+// The commands chosen arrive in `FrameOutput.fired`.
+```
+
+- **Mouse and keys inside the menus** are `craft_ui::menu::MenuBar`'s. `craft_ui::menu::any_open(ctx)`
+  is true while any menu is open; `craft_ui::menu::bar::is_open(ctx)` and `is_focused(ctx)` answer
+  for the bar alone.
+- **Keyboard access (Windows, Linux, web):** F10 or a tap on Alt puts the keyboard on the bar, and
+  Alt with a letter opens the menu with that mnemonic. A Mac, also in a browser, has no mnemonics
+  and leaves Alt alone; F10 still reaches the in-window bar of a browser. `.keyboard(false)`
+  turns the bar's keys off (a modal dialog or the shortcut recorder has them); on `Target::Mac`
+  they are off unless set. `.mnemonics(&[("View", 'W'), ("file.open", 'P')])` names preferred
+  letters by title as shown or by command id. A label without an ASCII letter or digit shows its
+  English label's letter after it, "文件(F)", before a trailing ellipsis ("開く(O)…"), when
+  `.english(&hook)` returns that English label for the `Labeled::Command` or `Labeled::Title`.
+- **Items:** a command the runtime's gate forbids, or whose state is disabled, is greyed and never
+  fires. A submenu whose items are all disabled is greyed. The shortcut column shows the command's
+  chord, else the item's own shortcut, in the shell's names (⌘ glyphs on a Mac). `.target(..)`
+  chooses the platform that names the keys of a web build.
+- **Tint and tooltip:** an item's tint is the swatch icon of its row, its tooltip the row's tooltip.
+- **Context menus:** `Menu::context(label, &response).show(ui, |ui, _| craft_menu::context::rows(ui, &nodes))`
+  shows model rows as command rows.
+- **Quit and Minimize:** without an app Quit item, the Windows and Linux layouts add
+  `Builtin::Quit` (`craft_quit::QUIT_MENU_ID`). The bar runs it itself as a close request of the
+  root window through the runtime, so the app's close decision runs, and fires nothing; the same
+  goes for `Builtin::Minimize`.
 
 ## macOS
 
@@ -175,13 +185,10 @@ Hide Others, Show All and Quit, where Quit asks the app first.
 craft_menu::mac::install_app_menu(&cc.egui_ctx, "WordCraft")?;
 ```
 
-craft-menu owns muda's menu event handler. muda keeps the first one set per process, so the
+craft-menu owns the process's menu event handler (muda keeps the first one set, in craft-window), so the
 crate sets it once and both `mac::install` and `mac::install_app_menu` use it; a later
 `mac::install` replaces the minimal app menu, and a second `mac::install` returns `None`.
-`craft_quit::install_app_menu` is deprecated in favor of `mac::install_app_menu`: it sets its own
-handler, so an app calls it or craft-menu's installers, never both. Called first, it leaves
-craft-menu's menus without events; called after, it replaces their menu bar. Quit is
-never AppKit's predefined Quit: it is the app's item tagged `ItemRole::Quit`, or the item with
+Quit is never AppKit's predefined Quit: it is the app's item tagged `ItemRole::Quit`, or the item with
 `craft_quit::QUIT_MENU_ID`, which runs `craft_quit::on_menu_event` (the window is asked to close,
 so the app's unsaved-changes prompt runs). Each menu event wakes egui, so a chosen item runs at
 once rather than with the next input event.
@@ -210,8 +217,8 @@ until the menu closes. A rebuild that fails keeps the menus as they were.
 
 ## Per frame
 
-Key equivalents stay with egui: the backend reports them as `Event::Key`, and `raw_input` feeds
-each one to egui as egui-winit would have, so the app's own key handling (text fields, dialogs,
+Key equivalents stay with egui: the backend reports them as `Event::Key`, and `poll` hands
+each one to the window host's input filter, which puts it into the next frame's input as egui-winit would have, so the app's own key handling (text fields, dialogs,
 tool-specific undo) runs as without a native menu. ⌘C, ⌘X and ⌘V become egui's Copy, Cut and
 Paste (`ClipboardKeys::Egui`, the default), so text fields copy and paste; an app that runs its
 clipboard commands from the keys itself sets `menu.clipboard_keys(ClipboardKeys::Raw)` to get
@@ -228,8 +235,7 @@ The app tells the menu what may run with a `Gate`, every frame (`set_gate`):
 
 Each frame, in this order:
 
-1. `raw_input`, before egui reads the input (`eframe::App::raw_input_hook`). It uses the gate
-   from the last `set_gate`.
+1. `poll`. It uses the gate from the last `set_gate`.
 2. `set_gate`, with the app's state for this frame.
 3. `take_clicks`, and run the commands it returns: the clicks since the last frame that the gate
    allows now. Minimize and Quit are already handled.
@@ -237,18 +243,15 @@ Each frame, in this order:
    arrived, and re-syncs them in place when the gate changed.
 
 ```rust
-// eframe::App::raw_input_hook, before egui reads the input:
-if let Some(menu) = &mut self.native_menu {
-    menu.raw_input(raw_input);
-}
-
 // In the frame:
 if let Some(menu) = &mut self.native_menu {
-    menu.set_gate(Gate {
-        modal: self.dialog.is_some(),
-        recording_shortcut: self.shortcut_editor.is_recording(),
-        text_editing: ctx.wants_keyboard_input(),
-    });
+    menu.poll(ctx);
+    menu.set_gate(
+        Gate::default()
+            .modal(self.dialog.is_some())
+            .recording_shortcut(self.shortcut_editor.is_recording())
+            .text_editing(ctx.wants_keyboard_input()),
+    );
     for command in menu.take_clicks(ctx) {
         self.run_command(ctx, &command);
     }

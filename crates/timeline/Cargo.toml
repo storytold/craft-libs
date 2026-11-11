@@ -1,32 +1,45 @@
 [package]
 name = "craft-timeline"
-description = "Editorial timeline interchange: exact media time and SMPTE timecode, import/export reports, Avid Log Exchange (ALE) and CMX 3600 EDL documents."
+description = "Timelines for Craft apps: exact media time, frame rates, timecode, the playback clock, frame cache and frame server; the ruler, tracks, clips, keyframes, graph editor, transport and render queue."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+autotests = false
+
+[lib]
+# The lib's test target is the crate's one test executable: its trials and, with `screen-testing`, the
+# screen tests in tests/it.
+harness = false
 
 [lints]
 workspace = true
 
 [features]
-# Serialize and Deserialize for the time, report and document types.
-serde = ["dep:serde"]
-# Final Cut Pro 7 XML (`fcp7`), read with craft-xml's bounded parser.
+default = []
+# The timeline widgets (`craft_timeline::ui`).
+ui = ["dep:craft-behavior", "dep:craft-keymap", "dep:craft-theme", "dep:craft-ui", "dep:egui"]
+# The stories and the integration tests (`tests/it`).
+screen-testing = ["ui", "craft-ui/testing"]
+# Final Cut Pro 7 XML and FCPXML (`interchange` formats), read with craft-xml's bounded parser.
 xml = ["dep:craft-xml"]
-# OpenTimelineIO JSON (`otio`), with serde_json.
+# OpenTimelineIO JSON, with serde_json.
 otio = ["dep:serde_json"]
 
 [dependencies]
-serde = { workspace = true, optional = true }
+craft-behavior = { workspace = true, optional = true }
+craft-keymap = { workspace = true, optional = true }
+craft-theme = { workspace = true, optional = true }
+craft-ui = { workspace = true, optional = true }
 craft-xml = { workspace = true, optional = true }
+egui = { workspace = true, optional = true }
+serde = { workspace = true }
 serde_json = { workspace = true, optional = true }
+web-time = "1.1"
 
 [dev-dependencies]
+craft-ui = { workspace = true, features = ["testing"] }
+egui = { workspace = true }
 proptest = { workspace = true }
 serde_json = { workspace = true }
-
-[[test]]
-name = "it"
-required-features = ["xml", "otio"]

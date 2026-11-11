@@ -10,6 +10,10 @@
 //! glyph, is left to the shaper.
 //!
 //! Levels are `u8` embedding levels: even runs left to right, odd runs right to left.
+//!
+//! For interface text that an app hands to egui (layer names in its own rows),
+//! [`is_rtl_paragraph`] gives a name's direction and [`elide`] cuts a right-to-left name at its
+//! logical end.
 
 use std::ops::Range;
 
@@ -32,7 +36,9 @@ pub enum Direction {
 /// it is treated as strongly left to right or right to left.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Override {
+    /// Byte range in the paragraph text.
     pub range: Range<usize>,
+    /// Whether the range is right to left (true) or left to right (false).
     pub rtl: bool,
 }
 
@@ -42,6 +48,7 @@ pub struct Override {
 pub struct Run {
     /// Byte range in the paragraph text, in logical order.
     pub range: Range<usize>,
+    /// Embedding level: even is left to right, odd is right to left.
     pub level: u8,
 }
 
@@ -134,6 +141,7 @@ impl<'t> Paragraph<'t> {
         Self { text, levels, paragraphs }
     }
 
+    /// The paragraph text the levels belong to.
     pub fn text(&self) -> &'t str {
         self.text
     }
@@ -170,6 +178,7 @@ impl<'t> Paragraph<'t> {
         &self.levels
     }
 
+    /// Consumes the resolution and returns the level of each byte of the text.
     pub fn into_levels(self) -> Vec<u8> {
         self.levels
     }
@@ -299,6 +308,48 @@ pub fn visual_order(levels: &[u8]) -> Vec<usize> {
 /// need a mirrored glyph from the font instead.
 pub fn mirror(c: char) -> Option<char> {
     unicode_bidi_mirroring::get_mirrored(c)
+}
+
+/// Whether `text` reads right to left as a paragraph: its first strong character is Hebrew,
+/// Arabic or another right-to-left script (rule P2 without embeddings). Text with no strong
+/// character reads left to right.
+pub fn is_rtl_paragraph(text: &str) -> bool {
+    text.chars()
+        .find_map(|c| match bidi_class(c) {
+            BidiClass::L => Some(false),
+            BidiClass::R | BidiClass::AL => Some(true),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
+/// A right-to-left `text` (by [`is_rtl_paragraph`]) cut at its logical end with "…" where it
+/// doesn't fit, for a name the app draws itself (PhotoCraft's layer rows,
+/// `panels/layer_row_ui.rs:132`). craft-ui's own rows can't call it: craft-text's `ui` feature
+/// depends on craft-ui. The start of the name stays and the "…" follows
+/// it in logical order, so egui draws it at the left, the end of a right-to-left line. `fits`
+/// measures a candidate. `None` when `text` fits as it is, or reads left to right: the caller
+/// elides that at its right end as usual. When nothing fits, the result is "…" alone.
+pub fn elide(text: &str, fits: impl Fn(&str) -> bool) -> Option<String> {
+    if !is_rtl_paragraph(text) || fits(text) {
+        return None;
+    }
+    // The longest logical prefix (whole characters) that fits with "…" after it.
+    let ends: Vec<usize> = text.char_indices().map(|(i, _)| i).skip(1).chain(std::iter::once(text.len())).collect();
+    let cut = |n: usize| -> String {
+        let end = if n == 0 { 0 } else { ends.get(n - 1).copied().unwrap_or(text.len()) };
+        format!("{}…", text.get(..end).unwrap_or_default().trim_end())
+    };
+    let (mut lo, mut hi) = (0usize, ends.len());
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if fits(&cut(mid)) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    Some(cut(lo))
 }
 
 /// Does anything in the text need the full algorithm (strong right-to-left characters, Arabic

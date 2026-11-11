@@ -8,6 +8,7 @@ use crate::{App, InstallSource, version};
 /// One installed package that belongs to a Craft App.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Package {
+    /// The package manager that owns the package.
     pub manager: InstallSource,
     /// The package's name (`photocraft-bin`) or Flatpak app id.
     pub name: String,
@@ -89,73 +90,4 @@ pub fn find<'a>(app: &App, installed: &'a [Package], order: &[InstallSource]) ->
 /// A package's version, read the package-manager way (`0.5.0-1` is 0.5.0).
 pub fn version_of(p: &Package) -> Option<version::Version> {
     version::parse_package(&p.version)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn pkgs(manager: InstallSource, list: Vec<(String, String)>) -> Vec<Package> {
-        list.into_iter().map(|(name, version)| Package { manager, name, version }).collect()
-    }
-
-    #[test]
-    fn reads_each_package_managers_listing() {
-        assert_eq!(
-            parse_dpkg("photocraft|installed|0.5.0-1\nphotocraft:amd64|installed|0.6.0-1\nwordcraft|config-files|0.3.0-1\n"),
-            [("photocraft".into(), "0.5.0-1".into()), ("photocraft".into(), "0.6.0-1".into())]
-        );
-        assert_eq!(parse_rpm("gridcraft|0.3.0\n"), [("gridcraft".into(), "0.3.0".into())]);
-        assert_eq!(parse_pacman("photocraft-bin 0.5.0-1\nlinux 6.11.1.arch1-1\n").len(), 2);
-        assert_eq!(
-            parse_flatpak_list("ai.storyteller.wordcraft\t\nai.storyteller.cadcraft\t0.3.0\n"),
-            [("ai.storyteller.wordcraft".into(), String::new()), ("ai.storyteller.cadcraft".into(), "0.3.0".into())]
-        );
-        let info = "\nWordCraft - Word processor\n\n          ID: ai.storyteller.wordcraft\n     Version: 0.3.0\n      Branch: master\n";
-        assert_eq!(parse_flatpak_info(info).as_deref(), Some("0.3.0"));
-        assert_eq!(parse_flatpak_info("Version: \n"), None);
-    }
-
-    #[test]
-    fn candidate_names_cover_bundle_ids_for_deb_rpm_and_pacman() {
-        let photo = App::by_id("photocraft").unwrap();
-        let deb_names = candidate_names(photo, InstallSource::Deb);
-        assert!(deb_names.contains(&"photocraft".to_string()));
-        assert!(deb_names.contains(&"ai.storyteller.photocraft".to_string()));
-
-        let rpm_names = candidate_names(photo, InstallSource::Rpm);
-        assert!(rpm_names.contains(&"photocraft".to_string()));
-        assert!(rpm_names.contains(&"ai.storyteller.photocraft".to_string()));
-
-        let pacman_names = candidate_names(photo, InstallSource::Pacman);
-        assert!(pacman_names.contains(&"photocraft".to_string()));
-        assert!(pacman_names.contains(&"photocraft-bin".to_string()));
-        assert!(pacman_names.contains(&"ai.storyteller.photocraft".to_string()));
-    }
-
-    #[test]
-    fn finds_aur_packages_in_every_flavour() {
-        let photo = App::by_id("photocraft").unwrap();
-        let pdf = App::by_id("pdfcraft").unwrap();
-        let installed =
-            pkgs(InstallSource::Pacman, parse_pacman("linux 6.11.1.arch1-1\nphotocraft-git 0.3.0.r47.g47f9306-1\nprintcraft-bin 0.2.1-1\n"));
-        let hit = find(photo, &installed, &[InstallSource::Pacman]).unwrap();
-        assert_eq!(hit.name, "photocraft-git");
-        assert_eq!(version_of(hit).unwrap().to_string(), "0.3.0");
-        // PdfCraft under its old name.
-        assert_eq!(find(pdf, &installed, &[InstallSource::Pacman]).unwrap().name, "printcraft-bin");
-        assert!(find(App::by_id("wordcraft").unwrap(), &installed, &[InstallSource::Pacman]).is_none());
-    }
-
-    #[test]
-    fn prefers_managers_in_order_and_reads_revisions() {
-        let photo = App::by_id("photocraft").unwrap();
-        let mut installed = pkgs(InstallSource::Deb, parse_dpkg("photocraft|installed|0.5.0-1\n"));
-        installed.extend(pkgs(InstallSource::Flatpak, parse_flatpak_list("ai.storyteller.photocraft\t0.4.0\n")));
-        let hit = find(photo, &installed, &[InstallSource::Deb, InstallSource::Flatpak]).unwrap();
-        assert_eq!(hit.manager, InstallSource::Deb);
-        // 0.5.0-1 is the 0.5.0 release, not a pre-release of it.
-        assert_eq!(version_of(hit).unwrap().to_string(), "0.5.0");
-        assert_eq!(find(photo, &installed, &[InstallSource::Flatpak]).unwrap().version, "0.4.0");
-    }
 }

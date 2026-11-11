@@ -7,10 +7,17 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
+[lib]
+# Every test lives in the `it` integration binary, so `cargo test` builds the library once.
+test = false
+
 [features]
 default = []
-# `FontsPanel`: the whole interface as one egui panel.
-egui = ["dep:egui", "dep:craft-ui", "dep:serde", "dep:log"]
+# `FontsPanel`: the whole interface as one egui panel, with the picker, the Glyphs panel, the axis sliders and the
+# Missing Fonts dialog.
+ui = ["dep:craft-behavior", "dep:craft-theme", "dep:egui", "dep:craft-ui", "dep:craft-host", "dep:serde", "dep:log", "dep:skrifa"]
+# The widgets' stories and trials (`tests/it`).
+screen-testing = ["ui", "craft-ui/testing", "dep:epaint_default_fonts"]
 
 [dependencies]
 craft-font-catalog = { workspace = true }
@@ -19,23 +26,28 @@ craft-i18n = { workspace = true }
 craft-font-store = { workspace = true, features = ["bundled-index"] }
 # egui's default faces lead the interface font stack.
 egui = { workspace = true, features = ["default_fonts"], optional = true }
+# The story's installed faces.
+epaint_default_fonts = { version = "0.37", optional = true }
 # A host that wants installed fonts for characters its interface faces lack (language names in
 # their own scripts in the language filter) enables craft-ui's `system_fonts` itself.
 craft-ui = { workspace = true, optional = true }
+# The Host: settings section, jobs and interface language.
+craft-host = { workspace = true, optional = true }
+craft-behavior = { workspace = true, optional = true }
+craft-theme = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 log = { version = "0.4", optional = true }
+# Variation axes and named instances of a face (`axes`).
+skrifa = { version = "0.44", default-features = false, features = ["std"], optional = true }
 
 [dev-dependencies]
-egui_kittest = { version = "0.37", features = ["wgpu", "snapshot"] }
-# Real fonts for the fake font store to install: egui's own Hack and Ubuntu Light.
-epaint_default_fonts = "0.37"
-image = { version = "0.25", default-features = false, features = ["png"] }
-# The system's fonts for the Japanese and Arabic screenshots.
-egui_system_font_provider = "0.37"
+craft-font-manager = { path = ".", features = ["screen-testing"] }
 
 [[test]]
-name = "flows"
-required-features = ["egui"]
+name = "it"
+path = "tests/it/main.rs"
+harness = false
+required-features = ["screen-testing"]
 
 [lints]
 workspace = true

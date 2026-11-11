@@ -11,11 +11,14 @@ use crate::release::Release;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InstallLocations {
+    /// Parent folder for apps without an entry in `per_app`.
     pub root: Option<String>,
+    /// Parent folder per app id.
     pub per_app: BTreeMap<String, String>,
 }
 
 impl InstallLocations {
+    /// The parent folder for `app`: its own entry, else the root, else `None`.
     pub fn folder(&self, app: &str) -> Option<&str> {
         self.per_app.get(app).map(String::as_str).or(self.root.as_deref())
     }
@@ -24,6 +27,7 @@ impl InstallLocations {
 /// The answer to "what's the latest release of this app?".
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LatestRelease {
+    #[allow(missing_docs)]
     Found(Release),
     /// The repo exists but has no published release.
     None,
@@ -34,21 +38,28 @@ pub enum LatestRelease {
 /// What a running job is doing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JobPhase {
+    /// Bytes are arriving.
     Downloading {
+        /// Bytes of the file on disk so far.
         done: u64,
+        /// Size of the whole file in bytes.
         total: u64,
     },
     /// The connection dropped; trying again shortly, from where it stopped.
     Reconnecting {
+        /// Bytes of the file on disk so far.
         done: u64,
+        /// Size of the whole file in bytes.
         total: u64,
     },
+    #[allow(missing_docs)]
     Verifying,
     /// The system's installer, or the macOS signature check, is busy with another app; this one
     /// goes next.
     Waiting,
     /// Waiting on the OS installer (MSI) or copying files.
     Installing,
+    #[allow(missing_docs)]
     Removing,
 }
 
@@ -74,6 +85,7 @@ pub enum Source {
 }
 
 impl Source {
+    /// The name shown to the user.
     pub fn label(self) -> &'static str {
         match self {
             Self::Feed => "ArtCraft",

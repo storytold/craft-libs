@@ -2,154 +2,203 @@
 //! added (never curated, and flagged when their file changed since it was added), adding one,
 //! and downloading them all again.
 
-use craft_ui::direction;
-use egui::{RichText, Ui, vec2};
+#[cfg(feature = "screen-testing")]
+mod stories;
+
+use std::sync::Arc;
+
+use craft_host::Host;
+use craft_theme::variant::{Emphasis, Tone};
+use craft_ui::buttons::Button;
+use craft_ui::contract::{Bind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, clicked};
+use craft_ui::display::{Badge, Shade, Spinner, Text};
+use craft_ui::layout_components::{Row, Stack};
+use craft_ui::notices::Notice;
+use craft_ui::runtime::env::Env;
+use craft_ui::sections::Section;
+use craft_ui::style::{TypeRole, Variant};
+use craft_ui::text::TextField;
+use egui::{Response, Ui};
 
 use crate::panel::app::FontsPanel;
-use crate::panel::i18n::{fmt, tl, tn};
-use crate::panel::widgets::{self, Skin};
 
-impl FontsPanel {
-    /// Draws the font sources into `ui`, in the panel's look: a host shows it in its settings.
-    pub fn sources_ui(&mut self, ui: &mut Ui) {
-        let ctx = ui.ctx().clone();
-        let s = Skin { p: self.look.palette(&ctx), look: self.look.clone() };
-        self.poll_sources();
-        let index = self.index();
-        let user = self.installer.user_sources();
-        let now = ui.input(|i| i.time);
-        let allowed = self.allowed(now);
-        let mut remove = None;
+/// The address shown in the empty add-source field.
+const ADDRESS_EXAMPLE: &str = "https://example.org/fonts/index.json";
+/// What the store reports for a user source whose index has not been fetched yet: shown quietly, not as a failure.
+const NOT_DOWNLOADED: &str = "not downloaded yet";
 
-        ui.spacing_mut().item_spacing.y = 6.0;
-        let width = ui.available_width();
-        egui::Frame::new().stroke(s.hairline()).corner_radius(s.look.corner).show(ui, |ui| {
-            ui.set_width(width);
-            ui.spacing_mut().item_spacing.y = 0.0;
-            let builtin = index.iter().flat_map(|i| i.sources().iter()).filter(|src| src.user_url.is_none());
-            let mut first = true;
-            for src in builtin {
-                row(ui, &s, &mut first, |ui| {
-                    ui.label(RichText::new(&src.name).color(s.p.ink_strong));
-                    widgets::label(ui, &s, &tn(src.families as u64, "{n} family", "{n} families"), s.p.faint);
-                });
-            }
-            for added in &user {
-                let source = index.iter().flat_map(|i| i.sources().iter()).find(|src| src.user_url.as_deref() == Some(added.url.as_str()));
-                let problem = index.iter().flat_map(|i| i.problems().iter()).find(|p| p.source == added.url);
-                row(ui, &s, &mut first, |ui| {
-                    ui.allocate_ui_with_layout(vec2(ui.available_width(), s.h() - 6.0), direction::row(ui), |ui| {
-                        ui.spacing_mut().item_spacing.x = 8.0;
-                        ui.label(RichText::new(source.map_or(added.url.as_str(), |src| src.name.as_str())).color(s.p.ink_strong));
-                        ui.with_layout(direction::trailing(ui), |ui| {
-                            let button = widgets::button(ui, &s, tl!("Remove"), widgets::Kind::Danger, 28.0, 0.0);
-                            widgets::name(ui, &button, &fmt("Remove {source}", &[("source", &added.url)]));
-                            if button.clicked() {
-                                remove = Some(added.url.clone());
-                            }
-                        });
-                    });
-                    ui.allocate_ui_with_layout(vec2(ui.available_width(), 24.0), direction::row(ui), |ui| {
-                        ui.spacing_mut().item_spacing.x = 6.0;
-                        widgets::badge(ui, &s, tl!("Not curated"), s.p.warn, false);
-                        if source.is_some_and(|src| src.changed) {
-                            widgets::badge(ui, &s, tl!("Changed since added"), s.p.bad, true).on_hover_text(tl!(
-                                "The index at this address isn't the one first downloaded from it. Check the source before installing from it."
-                            ));
-                        }
-                    });
-                    ui.label(RichText::new(&added.url).size(12.0).color(s.p.muted));
-                    match (source, problem) {
-                        (_, Some(p)) => {
-                            ui.label(RichText::new(&p.error).size(12.0).color(if p.error == "not downloaded yet" { s.p.faint } else { s.p.bad }));
-                        }
-                        (Some(src), None) => {
-                            widgets::label(ui, &s, &tn(src.families as u64, "{n} family", "{n} families"), s.p.faint);
-                        }
-                        (None, None) => {}
-                    }
-                });
-            }
-        });
-
-        ui.add_space(8.0);
-        widgets::label(ui, &s, tl!("Add a source"), s.p.faint);
-        let mut add = false;
-        ui.allocate_ui_with_layout(vec2(width, s.h()), direction::row(ui), |ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            let button_w = s.button_galley(ui, tl!("Add"), s.p.ink).size().x + 28.0;
-            let field = widgets::field(
-                ui,
-                &s,
-                &mut self.source_url,
-                "https://example.org/fonts/index.json",
-                tl!("Index address"),
-                ui.available_width() - button_w - 8.0,
-                false,
-            );
-            let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            let enabled = !self.source_url.trim().is_empty();
-            let clicked = ui.add_enabled_ui(enabled, |ui| widgets::button(ui, &s, tl!("Add"), widgets::Kind::Secondary, s.h(), 0.0)).inner.clicked();
-            add = enabled && (clicked || enter);
-        });
-        let warning =
-            tl!("A source you add isn't reviewed: add only indexes you trust. Every font is still checked against its index before it is used.");
-        ui.add(egui::Label::new(RichText::new(warning).size(12.0).color(s.p.muted)).wrap());
-
-        ui.add_space(4.0);
-        ui.allocate_ui_with_layout(vec2(width, s.h()), direction::row(ui), |ui| {
-            ui.spacing_mut().item_spacing.x = 10.0;
-            if self.fetching_sources() {
-                ui.add(egui::Spinner::new().size(16.0).color(s.p.muted));
-                ui.label(RichText::new(tl!("Downloading the sources…")).color(s.p.muted));
-            } else {
-                let update =
-                    ui.add_enabled_ui(allowed, |ui| widgets::button(ui, &s, tl!("Update sources"), widgets::Kind::Secondary, s.h(), 0.0)).inner;
-                if !allowed {
-                    widgets::label(ui, &s, tl!("Allow downloads to update"), s.p.faint);
-                }
-                if update.clicked() {
-                    self.fetch_sources(&ctx);
-                }
-            }
-        });
-        if let Some((error, text)) = &self.source_message {
-            ui.add(egui::Label::new(RichText::new(text).size(12.0).color(if *error { s.p.bad } else { s.p.muted })).wrap());
-        }
-
-        if add {
-            let url = self.source_url.trim().to_owned();
-            match self.installer.add_user_source(&url) {
-                Ok(()) => {
-                    self.source_url.clear();
-                    self.source_message = (!allowed).then(|| (false, tl!("Added. It downloads once downloads are allowed.").to_owned()));
-                    self.reload_index();
-                    self.fetch_sources(&ctx);
-                }
-                Err(e) => self.source_message = Some((true, fmt("The source couldn't be added: {error}", &[("error", &e.0)]))),
-            }
-        }
-        if let Some(url) = remove {
-            match self.installer.remove_user_source(&url) {
-                Ok(()) => {
-                    self.source_message = None;
-                    self.reload_index();
-                }
-                Err(e) => self.source_message = Some((true, fmt("The source couldn't be removed: {error}", &[("error", &e.0)]))),
-            }
-        }
+craft_ui::words! {
+    /// The font sources' words, English by default.
+    #[non_exhaustive]
+    pub struct FontSourcesWords {
+        title: "fontSources.title" = "Font sources";
+        /// `{n}` families.
+        families: count "fontSources.families" = "{n} family" | "{n} families";
+        remove: "fontSources.remove" = "Remove";
+        /// `{source}`.
+        remove_source: template "fontSources.removeSource" = "Remove {source}";
+        not_curated: "fontSources.notCurated" = "Not curated";
+        changed: "fontSources.changed" = "Changed since added";
+        changed_note: "fontSources.changedNote" = "The index at this address isn't the one first downloaded from it. Check the source before installing from it.";
+        add_a_source: "fontSources.addASource" = "Add a source";
+        add: "fontSources.add" = "Add";
+        index_address: "fontSources.indexAddress" = "Index address";
+        add_warning: "fontSources.addWarning" = "A source you add isn't reviewed: add only indexes you trust. Every font is still checked against its index before it is used.";
+        downloading: "fontSources.downloading" = "Downloading the sources…";
+        update: "fontSources.update" = "Update sources";
+        allow_to_update: "fontSources.allowToUpdate" = "Allow downloads to update";
+        added: "fontSources.added" = "Added. It downloads once downloads are allowed.";
+        /// `{error}`.
+        couldnt_add: template "fontSources.couldntAdd" = "The source couldn't be added: {error}";
+        /// `{error}`.
+        couldnt_remove: template "fontSources.couldntRemove" = "The source couldn't be removed: {error}";
     }
 }
 
-/// One source in the list: a hairline above every one but the first.
-fn row(ui: &mut Ui, s: &Skin, first: &mut bool, add: impl FnOnce(&mut Ui)) {
-    if !std::mem::take(first) {
-        let y = ui.cursor().top();
-        ui.painter().hline(ui.max_rect().x_range(), y, s.hairline());
+/// What the font sources report.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct FontSourcesOutput {
+    /// The section's response.
+    pub response: Response,
+}
+
+impl Outcome for FontSourcesOutput {
+    type Value = NoValue;
+
+    fn response(&self) -> &Response {
+        &self.response
     }
-    egui::Frame::new().inner_margin(egui::Margin::symmetric(14, 10)).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.spacing_mut().item_spacing.y = 3.0;
-        ui.with_layout(direction::column(ui), add);
-    });
+}
+
+/// The font sources of `panel`: the built-in ones and the user's, a field to add one, and Update. A host shows it in
+/// its settings.
+#[derive(craft_ui::contract::Pattern, craft_ui::contract::Props)]
+pub struct FontSources<'a> {
+    panel: &'a mut FontsPanel,
+}
+
+impl<'a> FontSources<'a> {
+    /// The sources of `panel`.
+    pub fn new(panel: &'a mut FontsPanel) -> Self {
+        FontSources { panel }
+    }
+
+    /// Shows the sources; adding, removing and updating act on the panel in this pass.
+    pub fn show(self, ui: &mut Ui) -> FontSourcesOutput {
+        let FontSources { panel } = self;
+        let env = Env::of(ui);
+        let words = env.words::<FontSourcesWords>();
+        let host: Option<Arc<Host>> = env.view().host().cloned();
+        panel.poll_sources();
+        let index = panel.index();
+        let user = panel.installer.user_sources();
+        let allowed = panel.allowed();
+        let fetching = panel.fetching_sources();
+        let message = panel.source_message.clone();
+        let mut url = std::mem::take(&mut panel.source_url);
+        let (mut add, mut update, mut remove) = (false, false, None);
+        let families = |n: usize| words.families.text(n as u64, &env.format().integer(n as u64));
+        let sources = || index.iter().flat_map(|i| i.sources().iter());
+
+        let shown = Section::new(words.title.clone()).show(ui, |ui, _| {
+            Stack::new().show(ui, |ui, _| {
+                for src in sources().filter(|src| src.user_url.is_none()) {
+                    Row::new().show(ui, |ui, _| {
+                        Text::new(src.name.clone()).show(ui);
+                        Text::new(families(src.families)).shade(Shade::Faint).show(ui);
+                    });
+                }
+                for added in &user {
+                    let source = sources().find(|src| src.user_url.as_deref() == Some(added.url.as_str()));
+                    let problem = index.iter().flat_map(|i| i.problems().iter()).find(|p| p.source == added.url);
+                    Stack::new().show(ui, |ui, _| {
+                        Row::new().show(ui, |ui, _| {
+                            Text::new(source.map_or(added.url.clone(), |src| src.name.clone())).show(ui);
+                            let button = Button::new(words.remove.clone())
+                                .description(words.remove_source.fill(&[("source", &added.url)]))
+                                .variant(Variant::DANGER)
+                                .show(ui);
+                            if clicked(&button) {
+                                remove = Some(added.url.clone());
+                            }
+                        });
+                        Row::new().show(ui, |ui, _| {
+                            Badge::new(words.not_curated.clone()).variant(Variant::look(Emphasis::Soft, Tone::Warn)).show(ui);
+                            if source.is_some_and(|src| src.changed) {
+                                Badge::new(words.changed.clone())
+                                    .variant(Variant::look(Emphasis::Soft, Tone::Bad))
+                                    .tooltip(words.changed_note.clone())
+                                    .show(ui);
+                            }
+                        });
+                        Text::new(added.url.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+                        match (source, problem) {
+                            (_, Some(p)) if p.error == NOT_DOWNLOADED => {
+                                Text::new(p.error.clone()).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
+                            }
+                            (_, Some(p)) => {
+                                Text::new(p.error.clone()).role(TypeRole::Caption).tone(Tone::Bad).show(ui);
+                            }
+                            (Some(src), None) => {
+                                Text::new(families(src.families)).shade(Shade::Faint).show(ui);
+                            }
+                            (None, None) => {}
+                        }
+                    });
+                }
+
+                Text::new(words.add_a_source.clone()).shade(Shade::Faint).show(ui);
+                Row::new().show(ui, |ui, _| {
+                    let field = TextField::new(words.index_address.clone(), Bind::bound(&mut url)).placeholder(ADDRESS_EXAMPLE).submits().show(ui);
+                    let ready = !url.trim().is_empty();
+                    let button = Button::new(words.add.clone()).enabled(ready).show(ui);
+                    add = ready && (field.submitted || clicked(&button));
+                });
+                Text::new(words.add_warning.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+
+                Row::new().show(ui, |ui, _| {
+                    if fetching {
+                        Spinner::new().show(ui);
+                        Text::new(words.downloading.clone()).shade(Shade::Muted).show(ui);
+                    } else {
+                        update = clicked(&Button::new(words.update.clone()).enabled(allowed).show(ui));
+                        if !allowed {
+                            Text::new(words.allow_to_update.clone()).shade(Shade::Faint).show(ui);
+                        }
+                    }
+                });
+                if let Some((error, text)) = &message {
+                    Notice::new(if *error { Tone::Bad } else { Tone::Info }, text.clone()).show(ui);
+                }
+            });
+        });
+
+        panel.source_url = url;
+        if update {
+            panel.fetch_sources(host.as_ref());
+        }
+        if add {
+            let url = panel.source_url.trim().to_owned();
+            match panel.installer.add_user_source(&url) {
+                Ok(()) => {
+                    panel.source_url.clear();
+                    panel.source_message = (!allowed).then(|| (false, env.view().resolve(&words.added).as_str().to_owned()));
+                    panel.reload_index();
+                    panel.fetch_sources(host.as_ref());
+                }
+                Err(e) => panel.source_message = Some((true, words.couldnt_add.fill(&[("error", &e.0)]))),
+            }
+        }
+        if let Some(url) = remove {
+            match panel.installer.remove_user_source(&url) {
+                Ok(()) => {
+                    panel.source_message = None;
+                    panel.reload_index();
+                }
+                Err(e) => panel.source_message = Some((true, words.couldnt_remove.fill(&[("error", &e.0)]))),
+            }
+        }
+        FontSourcesOutput { response: shown.output.response }
+    }
 }

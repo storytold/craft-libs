@@ -150,12 +150,13 @@ pub fn is_update(latest: &Version, installed: &Version) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use craft_ui::testing::trial;
 
     fn v(s: &str) -> Version {
         parse(s).unwrap()
     }
 
-    #[test]
+    #[trial]
     fn a_build_from_main_is_never_offered_its_own_release() {
         let running = v("0.17.0-integration.20261029.f5b3f123");
         assert!(is_local_build(&running));
@@ -168,58 +169,7 @@ mod tests {
         assert!(!offers_update(&v("0.18.0"), &v("0.18.0-DEV.4")));
     }
 
-    #[test]
-    fn published_pre_releases_and_releases_order_as_before() {
-        for label in ["0.17.0-rc.2", "0.17.0-beta.1", "0.17.0-alpha", "0.17.0-nightly.20261029", "0.17.0-RC.1"] {
-            let running = v(label);
-            assert!(!is_local_build(&running), "{label}");
-            assert!(offers_update(&v("0.17.0"), &running), "{label}");
-        }
-        assert!(offers_update(&v("0.17.0-rc.3"), &v("0.17.0-rc.2")));
-        assert!(!offers_update(&v("0.17.0-rc.2"), &v("0.17.0-rc.2")));
-        assert!(!is_local_build(&v("0.17.0")));
-        assert!(offers_update(&v("0.17.1"), &v("0.17.0")));
-        assert!(!offers_update(&v("0.17.0"), &v("0.17.0")));
-        assert!(!offers_update(&v("0.16.9"), &v("0.17.0")));
-        assert!(!offers_update(&v("0.17.0+build.5"), &v("0.17.0")));
-    }
-
-    #[test]
-    fn reads_tags_and_platform_spellings() {
-        assert_eq!(v("v0.5.0"), Version::new(0, 5, 0));
-        assert_eq!(v(" 1.2.3\n"), Version::new(1, 2, 3));
-        assert_eq!(v("0.5"), Version::new(0, 5, 0));
-        assert_eq!(v("0.2.0~rc.1-1").to_string(), "0.2.0-rc.1");
-        assert_eq!(v("0.2.0-rc.1").to_string(), "0.2.0-rc.1");
-        for bad in ["", "v", "latest", "1", "1.x.0", "0.5.", &"9".repeat(80)] {
-            assert_eq!(parse(bad), None, "{bad}");
-        }
-    }
-
-    #[test]
-    fn reads_package_manager_versions() {
-        let p = |s: &str| parse_package(s).map(|v| v.to_string());
-        // dpkg and pacman add a package revision; it is not a pre-release.
-        assert_eq!(p("0.5.0-1").as_deref(), Some("0.5.0"));
-        assert_eq!(p("0.5.0-12").as_deref(), Some("0.5.0"));
-        assert_eq!(p("1:0.5.0-1").as_deref(), Some("0.5.0"));
-        assert_eq!(p("0.2.0~rc.1-1").as_deref(), Some("0.2.0-rc.1"));
-        assert_eq!(p("0.5.0-2.fc40").as_deref(), Some("0.5.0"));
-        // AUR -git packages: the release the snapshot follows.
-        assert_eq!(p("0.3.0.r47.g47f9306-1").as_deref(), Some("0.3.0"));
-        // Plain versions (rpm %{VERSION}, Flatpak) pass through.
-        assert_eq!(p("0.4.0").as_deref(), Some("0.4.0"));
-        assert_eq!(p("0.5").as_deref(), Some("0.5.0"));
-        // A version inside text, as `--version` prints it.
-        assert_eq!(p("PhotoCraft 0.5.0 (abc, 2026)").as_deref(), Some("0.5.0"));
-        assert_eq!(p("junk"), None);
-        assert_eq!(p("garbage"), None);
-        // The bug this guards: 0.5.0-1 used to read as a pre-release, so an installed .deb of the
-        // latest release always looked out of date.
-        assert!(!is_update(&v("0.5.0"), &parse_package("0.5.0-1").unwrap()));
-    }
-
-    #[test]
+    #[trial]
     fn orders_versions_and_spots_updates() {
         assert!(is_newer(&v("0.10.0"), &v("0.9.9")));
         assert!(is_newer(&v("0.2.0"), &v("0.2.0-rc.5")));

@@ -9,20 +9,26 @@
 //! its [`ItemKind`] makes it plain, a check item or a radio item. [`layout`]
 //! arranges them the way the platform's apps do, and [`NativeMenu`] hands the result to a platform
 //! [`Backend`] and brings its events back. This part is pure and platform-free, so it is tested
-//! everywhere and builds for the web; only the backend, `mac` (macOS only, built on muda), touches
-//! AppKit. Its `mac::install` builds the menu bar and returns the [`NativeMenu`].
+//! everywhere and builds for the web; only the backend touches AppKit, in `craft_window::native_menu`.
+//! `mac::install` builds the menu bar through it and returns the [`NativeMenu`] (`None` off macOS).
 //!
 //! **Layouts.** [`layout`] takes a [`Target`] ([`Target::current`] for this build) and calls
 //! [`mac_layout`], [`desktop_layout`] (Windows and Linux) or [`web_layout`]. Each first drops the
 //! items and submenus whose [`Platforms`] leave the target out, and every one lists
-//! [`MenuBar::documents`] (but the hidden ones) last in the Window menu, as radio items with the
-//! active document selected. On Windows and Linux About goes last in Help, Settings last in Edit
+//! [`MenuBar::documents`] (but the hidden ones) last in the Window menu, as check items with the
+//! active document checked. On Windows and Linux About goes last in Help, Settings last in Edit
 //! as Preferences, and Quit last in File, as Exit on Windows; the web layout has no Quit and takes
 //! the browser's own shortcuts (Ctrl+W, Ctrl+T, …) off the items, reporting each as a [`Clash`].
 //! A layout adds the menus it needs when the app has none. A submenu left empty goes; a dynamic
 //! list with nothing in it shows the disabled placeholder item the app supplies.
 //!
-//! **Keymap.** [`apply_keymap`] sets the items' shortcuts from the app's
+//! **In-window bar.** [`MenuBarUi`] shows a laid-out [`MenuBar`] in the window, and [`context::rows`] shows model
+//! rows in any menu body (a context menu's included). Each item is a command row: its enabled state, check mark
+//! and chord follow the command in the runtime's command state and keymap, and a choice is a fired command with
+//! `FireSource::Menu`. [`MenuBar::help_entries`] lists the bar's commands for the Help menu's search and the
+//! command palette.
+//!
+//! **Keymap.** For the native menu, [`apply_keymap`] sets the items' shortcuts from the app's
 //! [`craft_keymap::Keymap`], user overrides included, and makes toggle commands check items;
 //! [`apply_state`] sets enabled and checked per frame from an [`ItemState`] the app returns for
 //! each command. Both run on the app's bar, before the layout.
@@ -50,7 +56,7 @@
 //! **Keys stay with egui.** AppKit runs a menu's key equivalents before the window sees the key,
 //! which would skip the app's own key rules (a focused text field keeps ⌘C, ⌘V and ⌘Z, dialogs
 //! are modal, a tool may have its own ⌘Z). So the backend reports a key equivalent as
-//! [`Event::Key`], and [`NativeMenu::raw_input`] feeds it to egui as the input egui-winit would
+//! [`Event::Key`], and [`NativeMenu::poll`] hands it to the window host's input filter, which feeds it to egui as the input egui-winit would
 //! have made of it: a key press, or for ⌘C, ⌘X and ⌘V egui's copy, cut and paste events
 //! ([`ClipboardKeys`]). The shortcut runs through the app's key handling as without a native
 //! menu. A click is [`Event::Click`], and [`NativeMenu::take_clicks`] returns its command for the app
@@ -61,40 +67,53 @@
 //! while text has the keys, and a Mac app's menu commands (⌘S, ⌘N) run while typing. Only
 //! shortcuts with ⌘ or ⌃ become key equivalents; tool keys (`B`, `⇧B`, `F5`) stay with the app.
 //!
-//! What may run from the menus is the app's [`Gate`], set every frame ([`NativeMenu::set_gate`]):
+//! What may run from the native menu is the app's [`Gate`], set every frame ([`NativeMenu::set_gate`]):
 //! while a modal dialog is open or a shortcut is being recorded, the app's items are greyed (but
 //! the text fields' own Undo, Copy, …) and their clicks dropped, also clicks that arrived before
 //! the gate closed. While a shortcut is
 //! recorded, key equivalents reach egui as plain key presses.
 //!
-//! craft-menu owns muda's one menu event handler: `mac::install` (a full menu bar) and
+//! craft-menu owns the process's one menu event handler: `mac::install` (a full menu bar) and
 //! `mac::install_app_menu` (a minimal app menu, for apps without a [`MenuBar`]) both use it.
 //! [`NativeMenu::on_command`] sees each allowed click as it arrives, also while egui is idle.
 //!
-//! Per frame: [`NativeMenu::raw_input`] before egui reads the input (`eframe::App::raw_input_hook`),
-//! then [`NativeMenu::set_gate`], [`NativeMenu::take_clicks`] and run the commands, then
+//! Per frame: [`NativeMenu::poll`], then [`NativeMenu::set_gate`], [`NativeMenu::take_clicks`] and run the commands, then
 //! [`NativeMenu::sync_with`], which lays the menus out again only when the app's state changed
 //! (or [`NativeMenu::sync`], which compares a layout built every frame).
-//! [`NativeMenu::raw_input`] also keeps a click or Escape that closes an open native menu away
+//! The input filter also keeps a click or Escape that closes an open native menu away
 //! from egui.
 
 pub mod bar;
+pub mod context;
+mod documents;
 mod driver;
+mod help;
 mod keymap;
+mod language;
 mod layout;
+mod modal;
 mod model;
+mod palette;
 
-#[cfg(target_os = "macos")]
 pub mod mac;
 
-pub use bar::{BarStyle, Labeled, MenuBarUi};
+pub mod shortcuts;
+
+pub use bar::{EnglishHook, Labeled, MenuBarOutput, MenuBarUi};
 pub use craft_keymap::{Chord, CommandRef};
+pub use documents::DOCUMENT_COMMAND_PREFIX;
 pub use driver::{Backend, ClipboardKeys, CommandHook, Dispatch, Event, Gate, NativeMenu, had_input};
+pub use help::{HelpCommand, HelpLabels, HelpLink, HelpMenu};
 pub use keymap::{ItemState, apply_keymap, apply_state};
+pub use language::{LANGUAGE_COMMAND, LanguageChoice, LanguageLabels, LanguageMenu, LanguageRow};
 pub use layout::{Clash, Layout, LayoutOptions, Target, desktop_layout, layout, mac_layout, web_layout};
+pub use modal::{ModalRules, NAVIGATION_COMMANDS, PendingRule};
 pub use model::{
     Builtin, Document, Item, ItemKind, ItemRole, Menu, MenuBar, MenuRole, Node, Platforms, Row, Standard, from_items, structure_key, tidy, window_key,
 };
 
-#[cfg(test)]
-mod tests;
+#[cfg(feature = "screen-testing")]
+/// The stories and words this crate registers, for the story tests.
+pub mod testing {
+    craft_ui::testing_registered!();
+}
