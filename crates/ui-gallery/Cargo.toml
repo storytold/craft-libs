@@ -1,0 +1,109 @@
+[package]
+name = "craft-ui-gallery"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Story viewer over craft-ui's registered stories"
+publish = false
+autotests = false
+default-run = "craft-ui-gallery"
+
+[lib]
+path = "src/lib.rs"
+# Every test lives in the `it` integration binary.
+test = false
+
+[[bin]]
+name = "craft-ui-gallery"
+path = "src/main.rs"
+test = false
+
+[[bin]]
+name = "components-index"
+path = "src/bin/components-index.rs"
+test = false
+
+[[bin]]
+name = "contract-api"
+path = "src/bin/contract-api.rs"
+test = false
+
+# The component sheet's renderer: every story to a PNG, offscreen (desktop only).
+[features]
+# One feature per domain crate whose stories the viewer links; `apps` is all of them and the default. A build
+# that needs one crate's stories only (the story renderer) turns the default off and names the crate.
+default = ["apps"]
+apps = ["automation", "browse", "color", "draw", "imaging", "layers", "menu", "pages", "print", "review", "table", "text", "theme-store", "timeline", "dialogs", "font-manager", "update"]
+automation = ["dep:craft-automation"]
+browse = ["dep:craft-browse"]
+color = ["dep:craft-color"]
+draw = ["dep:craft-draw"]
+imaging = ["dep:craft-imaging"]
+layers = ["dep:craft-layers"]
+menu = ["dep:craft-menu"]
+pages = ["dep:craft-pages"]
+print = ["dep:craft-print"]
+review = ["dep:craft-review"]
+table = ["dep:craft-table"]
+text = ["dep:craft-text"]
+theme-store = ["dep:craft-theme-store"]
+timeline = ["dep:craft-timeline"]
+dialogs = ["dep:craft-dialogs"]
+font-manager = ["dep:craft-font-manager"]
+update = ["dep:craft-update"]
+
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+harness = false
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-ui = { workspace = true, features = ["app", "testing"] }
+craft-i18n = { workspace = true }
+craft-theme = { workspace = true }
+craft-window = { workspace = true }
+egui = { workspace = true }
+eframe = { version = "0.37", default-features = false }
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
+
+# The viewer's saved settings and its panel layout.
+craft-behavior = { workspace = true }
+craft-settings = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+web-time = "1.1"
+
+# The domain crates' stories, registered under each crate's `screen-testing`.
+craft-automation = { workspace = true, features = ["screen-testing"], optional = true }
+craft-browse = { workspace = true, features = ["screen-testing"], optional = true }
+craft-color = { workspace = true, features = ["screen-testing"], optional = true }
+craft-draw = { workspace = true, features = ["screen-testing"], optional = true }
+craft-imaging = { workspace = true, features = ["screen-testing"], optional = true }
+craft-layers = { workspace = true, features = ["screen-testing"], optional = true }
+craft-menu = { workspace = true, features = ["screen-testing"], optional = true }
+craft-pages = { workspace = true, features = ["screen-testing"], optional = true }
+craft-print = { workspace = true, features = ["screen-testing"], optional = true }
+craft-review = { workspace = true, features = ["screen-testing"], optional = true }
+craft-table = { workspace = true, features = ["screen-testing"], optional = true }
+craft-text = { workspace = true, features = ["screen-testing"], optional = true }
+craft-theme-store = { workspace = true, features = ["screen-testing"], optional = true }
+craft-timeline = { workspace = true, features = ["screen-testing"], optional = true }
+
+# Native only: these crates do not build for the web, so their stories are not in the web gallery.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-dialogs = { workspace = true, features = ["screen-testing"], optional = true }
+craft-font-manager = { workspace = true, features = ["screen-testing"], optional = true }
+craft-update = { workspace = true, features = ["screen-testing"], optional = true }
+# The component sheet crops and writes its images.
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = "0.4"
+
+[dev-dependencies]

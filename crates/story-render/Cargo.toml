@@ -1,0 +1,48 @@
+[package]
+name = "story-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Renders a component's stories to PNG files, offscreen, linking only the crates its features name"
+autotests = false
+
+[[bin]]
+name = "story-render"
+path = "src/main.rs"
+test = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# One feature per domain crate whose stories can be rendered: each links that crate (through the viewer's feature of
+# the same name) and nothing else above the framework. `apps` links them all, like the gallery.
+apps = ["craft-ui-gallery/apps"]
+automation = ["craft-ui-gallery/automation"]
+browse = ["craft-ui-gallery/browse"]
+color = ["craft-ui-gallery/color"]
+draw = ["craft-ui-gallery/draw"]
+imaging = ["craft-ui-gallery/imaging"]
+layers = ["craft-ui-gallery/layers"]
+menu = ["craft-ui-gallery/menu"]
+pages = ["craft-ui-gallery/pages"]
+print = ["craft-ui-gallery/print"]
+review = ["craft-ui-gallery/review"]
+table = ["craft-ui-gallery/table"]
+text = ["craft-ui-gallery/text"]
+theme-store = ["craft-ui-gallery/theme-store"]
+timeline = ["craft-ui-gallery/timeline"]
+dialogs = ["craft-ui-gallery/dialogs"]
+font-manager = ["craft-ui-gallery/font-manager"]
+update = ["craft-ui-gallery/update"]
+
+[dependencies]
+# The same framework features as the gallery, so the framework builds once for the gallery, the tests and this bin.
+craft-ui = { workspace = true, features = ["app", "testing", "snapshot"] }
+craft-ui-gallery = { path = "../ui-gallery", default-features = false }
+egui = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png"] }
