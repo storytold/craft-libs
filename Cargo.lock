@@ -1203,13 +1203,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "craft-svg-paths"
+name = "craft-svg"
 version = "0.1.0"
 dependencies = [
  "craft-xml",
+ "flate2",
  "kurbo 0.13.1",
  "roxmltree 0.21.2",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-svg-paths"
+version = "0.1.0"
+dependencies = [
+ "craft-svg",
+ "kurbo 0.13.1",
 ]
 
 [[package]]

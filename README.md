@@ -134,10 +134,14 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 
 - [`craft-settings`](crates/settings/README.md): `config.toml` settings storage for every app: platform folders, portable mode and overrides, atomic saves while running, backup, damaged-file recovery and schema migrations. Policy in [docs/settings-storage.md](docs/settings-storage.md).
 - [`craft-silhouette-studio`](crates/silhouette-studio/src/lib.rs): bounded, fail-closed reader for Silhouette Studio `.studio` and `.studio3` documents: outlines, line colours and page size in millimetres. Protected designs are refused.
-- [`craft-svg-paths`](crates/svg-paths/src/lib.rs): SVG geometry reader: shapes,
-  transforms, `<use>`/`<symbol>` instances and the CSS cascade as Bézier paths in millimetres, each
-  tagged by the caller; a CSS colour parser (`color`); and a small SVG writer (`write`: elements with
-  escaping, path data, numbers). Not the shared SVG model.
+- [`craft-svg`](crates/svg/src/lib.rs): SVG. `sniff` recognises SVG and SVGZ data; `svgz` unpacks
+  SVGZ within a byte limit, decodes UTF-8, UTF-16 and ISO 8859-1, and compresses; `guard` bounds
+  element nesting and entity expansion before any XML reader sees the text; `paths` reads geometry
+  (shapes, transforms, `<use>`/`<symbol>` instances and the CSS cascade as Bézier paths in
+  millimetres, each tagged by the caller); `color` parses CSS colours; `write` writes documents
+  (elements with escaping, path data, numbers).
+- [`craft-svg-paths`](crates/svg-paths/src/lib.rs): the former name of `craft-svg`'s `paths`,
+  `color` and `write`; re-exports them for existing users.
 - [`craft-text`](crates/text/README.md): text processing below the composer. Its `hyphen` module finds
   hyphenation points, with a bundled US English dictionary and patterns and optional hypher patterns
   for 47 more languages (one cargo feature each).
