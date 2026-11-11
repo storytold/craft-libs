@@ -27,6 +27,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 
 - [`craft-platform`](crates/platform/README.md): optional native dialog lifecycle, Linux/BSD desktop appearance observation and browser download ownership; application policy stays in the apps.
 
+- [`craft-aep`](crates/aep/README.md): After Effects projects: the `.aep` (RIFX) and `.aepx`
+  container as a lossless chunk tree that writes back byte for byte, and a typed, read-only view
+  of compositions, layers, properties, keyframes, effects, masks, shapes, text and footage.
+  Clean room, from EffectCraft. Mapping onto an app's document stays in the app.
 - [`craft-ai-core`](crates/ai-core/README.md): the data model and contract for AI in the Craft Apps (connections, models, tools, requests, jobs, consent, history, route spec). Pure, no I/O, wasm-safe. Contract in [docs/ai-shared-layer.md](docs/ai-shared-layer.md).
 - [`craft-pdf`](crates/pdf/README.md): independently optional PDF parsing, interpretation, rasterization and guarded authoring. Apps retain layout, fonts, editing and export policy; writer-only consumers do not enable the shared reader.
 
