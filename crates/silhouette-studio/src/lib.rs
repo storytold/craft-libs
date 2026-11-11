@@ -246,18 +246,21 @@ fn path_at(d: &[u8], at: usize, limit: usize, budget: &std::cell::Cell<usize>) -
     let count = usize::try_from(u32_at(d, outer.start)?).ok()?.checked_add(1)?;
     let mut contours = Vec::new();
     let mut p = outer.start + 4;
+    // Points one outline may still hold: no record keeps more than `MAX_POINTS` nodes in memory.
+    let mut room = MAX_POINTS;
     while p < outer.end {
         if contours.len() >= count {
             return None;
         }
-        let (contour, end) = contour_at(d, p, outer.end, budget)?;
+        let (contour, end) = contour_at(d, p, outer.end, room, budget)?;
+        room -= contour.nodes.len();
         contours.push(contour);
         p = end;
     }
     (p == outer.end && contours.len() == count).then_some(PathRecord { contours, end: outer.end })
 }
 
-fn contour_at(d: &[u8], at: usize, limit: usize, budget: &std::cell::Cell<usize>) -> Option<(Contour, usize)> {
+fn contour_at(d: &[u8], at: usize, limit: usize, room: usize, budget: &std::cell::Cell<usize>) -> Option<(Contour, usize)> {
     let end = at.checked_add(usize::try_from(u32_at(d, at)?).ok()?)?;
     let closed = match *d.get(at + 4)? {
         0 => false,
@@ -270,7 +273,7 @@ fn contour_at(d: &[u8], at: usize, limit: usize, budget: &std::cell::Cell<usize>
         return None;
     }
     // Checked before allocating. Zero marks the budget spent: every later candidate fails.
-    let left = budget.get().checked_sub(count);
+    let left = if count > room { None } else { budget.get().checked_sub(count) };
     budget.set(left.unwrap_or(0));
     left?;
     let mut nodes = Vec::with_capacity(count);
@@ -545,6 +548,19 @@ mod tests {
         assert_eq!(period.len(), 20);
         let file = v2_records((304.8, 304.8), &[period.repeat(100_000)]);
         assert!(matches!(import(&file), Err(Error::Malformed(what)) if what.contains("looks like outlines")));
+    }
+
+    /// One contour claiming more nodes than `MAX_POINTS`, with the bytes to back the claim.
+    #[test]
+    fn a_contour_past_the_point_limit_is_refused_before_its_nodes_are_read() {
+        let n = MAX_POINTS as u32 + 1;
+        let mut outer = 0u32.to_le_bytes().to_vec();
+        outer.extend_from_slice(&(9 + 10 * n).to_le_bytes());
+        outer.push(1);
+        outer.extend_from_slice(&(n - 1).to_le_bytes());
+        outer.resize(outer.len() + 10 * n as usize, 0);
+        let file = v2_records((304.8, 304.8), &[block(&outer)]);
+        assert!(matches!(import(&file), Err(Error::Malformed(_))));
     }
 
     #[test]
