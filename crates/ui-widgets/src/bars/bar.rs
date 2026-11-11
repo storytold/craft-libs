@@ -4,8 +4,9 @@ use super::words::BarWords;
 use crate::buttons::IconButton;
 use crate::contract::{
     Access, BodyCx, BodyLayout, Common, Component, Container, ContainerProps, Cx, EndRegion, Gap, InBar, NoValue, Outcome, Pad, Politeness,
-    Props as _, Role, Scroll, Show as _, Sizing, WordSetCx as _,
+    Props as _, Role, Scroll, Show as _, ShowContainer as _, Sizing, WordSetCx as _,
 };
+use crate::layout_components::Row;
 use crate::runtime::access::Name;
 use crate::runtime::commands::{CommandSet as _, Commands as _};
 use crate::runtime::env::Label;
@@ -202,14 +203,18 @@ impl Component for Bar<'_> {
 }
 
 impl Container for Bar<'_> {
-    /// The cancel button and the commit button, then the trailing group.
+    /// The cancel button and the commit button, then the trailing group, on one row as the body's members are, so a
+    /// rule in the group is as tall as the row.
     fn end(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
-        if let Some((commit, cancel)) = &self.commit_cancel {
-            IconButton::command(IconId::new("ban"), BarCommands::Cancel).label(cancel.clone()).show(ui);
-            IconButton::command(IconId::new("check"), BarCommands::Commit).label(commit.clone()).show(ui);
-        }
-        if let Some(group) = &mut self.trailing {
-            group(ui);
-        }
+        let (commit_cancel, trailing) = (&self.commit_cancel, &mut self.trailing);
+        Row::new().show(ui, |ui, _| {
+            if let Some((commit, cancel)) = commit_cancel {
+                IconButton::command(IconId::new("ban"), BarCommands::Cancel).label(cancel.clone()).show(ui);
+                IconButton::command(IconId::new("check"), BarCommands::Commit).label(commit.clone()).show(ui);
+            }
+            if let Some(group) = trailing {
+                group(ui);
+            }
+        });
     }
 }

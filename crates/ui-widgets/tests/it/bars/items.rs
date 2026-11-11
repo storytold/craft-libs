@@ -1,7 +1,7 @@
 //! `BarItems`: a strip too short for its items moves whole groups into "More"; the every-item menu lists them all.
 
 use craft_ui::bars::{BarItem, BarItems, MoreMenu};
-use craft_ui::contract::{Props as _, Role, Show as _};
+use craft_ui::contract::{Role, Show as _};
 use craft_ui::runtime::commands::EditCommands;
 use craft_ui::testing::{Fixture, trial};
 use egui::Vec2;
