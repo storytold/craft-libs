@@ -1,8 +1,69 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-//! ZIP archives from untrusted files.
+//! ZIP archives from untrusted files, read within limits and written.
+//!
+//! The `zip` crate does the decoding. This crate is what every reader of a ZIP-based format
+//! otherwise writes again around it:
+//!
+//! - [`Archive::open`] refuses an archive that declares more entries than the caller allows
+//!   before `zip` parses them ([`check_entry_count`]), and tells whether two entries share a name.
+//! - [`Archive::read`] reads an entry within a per-entry limit and the archive's total
+//!   [`Budget`], counting the bytes that really arrive, not the size the archive declares.
+//! - [`Writer`] writes stored and deflated entries, ZIP64 where an entry needs it, with the same
+//!   timestamp on every entry so equal input gives equal bytes.
+//! - [`preflight`] is a stricter check of the whole end-record and central-directory structure
+//!   on the raw bytes, for a caller that wants nothing ambiguous to reach a ZIP reader at all.
+//!
+//! Every limit is the caller's number. Entry-name rules (which names are safe, which spellings
+//! are one part) stay with the format that knows them.
 
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeExamples;
+
+mod archive;
+mod guard;
 pub mod preflight;
+mod write;
+
+pub use archive::{Archive, Limits};
+pub use guard::check_entry_count;
+#[cfg(any(test, feature = "test-support"))]
+pub use guard::zip64_entry_count_sample;
+pub use write::{Compression, Writer};
+
+/// Why an archive was not read or not written.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Error {
+    /// The bytes are not a ZIP archive the `zip` crate can index.
+    #[error("not a ZIP archive: {0}")]
+    NotZip(String),
+    /// The archive declares more entries than [`Limits::max_entries`].
+    #[error("the archive declares {declared} entries, more than {limit}")]
+    TooManyEntries { declared: u64, limit: u64 },
+    /// More end of central directory records than an archive can have.
+    #[error("more than {0} end of central directory records")]
+    TooManyEndRecords(usize),
+    /// An entry declares, or expands to, more than the limit given for it.
+    #[error("{name} is larger than {limit} bytes")]
+    EntryTooLarge { name: String, limit: u64 },
+    /// The entries read so far have used up [`Limits::max_total_bytes`].
+    #[error("{name} does not fit in what is left of the {limit} bytes the archive may expand to")]
+    BudgetSpent { name: String, limit: u64 },
+    /// An entry could not be decoded (a failed checksum, an unknown method, encryption).
+    #[error("{name}: {msg}")]
+    Entry { name: String, msg: String },
+    /// The archive could not be written.
+    #[error("the ZIP archive could not be written: {0}")]
+    Write(String),
+}
+
+impl Error {
+    /// Was a limit exceeded (as opposed to the archive being broken)?
+    pub fn is_limit(&self) -> bool {
+        matches!(self, Error::TooManyEntries { .. } | Error::TooManyEndRecords(_) | Error::EntryTooLarge { .. } | Error::BudgetSpent { .. })
+    }
+}
 
 use std::fmt;
 

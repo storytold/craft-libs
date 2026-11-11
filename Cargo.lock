@@ -1580,6 +1580,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-zip"
+version = "0.1.0"
+dependencies = [
+ "craft-zip",
+ "flate2",
+ "thiserror 2.0.21",
+ "zip",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
