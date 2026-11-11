@@ -1,19 +1,19 @@
 //! Tile coding: partitions, intra blocks (key frames) and inter blocks (motion search, mode
-//! decision, motion vector prediction, residual), recorded as symbols (see [`crate::vp9::probs`]).
+//! decision, motion vector prediction, residual), recorded as symbols (see [`crate::vp9::encode::probs`]).
 //!
 //! Mode info, motion vector candidate lists and contexts follow the decoding process of the
 //! VP9 specification (6.4, 6.4.x `find_mv_refs` / `find_best_ref_mvs`) for the subset of the
 //! syntax this encoder emits: 8×8 and 16×16 blocks, single LAST references, no
 //! `UsePrevFrameMvs` (inter frames are error resilient), no high-precision vectors.
 
-use crate::vp9::mc::{Mv, PhasePlanes, RefPlane, clamp_for_plane, predict};
-use crate::vp9::probs::{self, P, Writer, cost, tree_cost};
-use crate::vp9::tables::{
+use crate::vp9::encode::mc::{Mv, PhasePlanes, RefPlane, clamp_for_plane, predict};
+use crate::vp9::encode::probs::{self, P, Writer, cost, tree_cost};
+use crate::vp9::encode::tables::{
     COEFBAND_4X4, COL_SCAN_4X4, COUNTER_TO_CONTEXT, DEFAULT_SCAN_4X4, ENERGY_CLASS, KF_PARTITION_PROBS, KF_UV_MODE_PROBS, KF_Y_MODE_PROBS,
     MODE_2_COUNTER, MV_REF_8X8, MV_REF_16X16, ROW_SCAN_4X4,
 };
-use crate::vp9::transform::{ADST_ADST, ADST_DCT, DCT_ADST, DCT_DCT, Quant};
-use crate::vp9::{BLOCK_8X8, BLOCK_16X16, Mi, Plane};
+use crate::vp9::encode::transform::{ADST_ADST, ADST_DCT, DCT_ADST, DCT_DCT, Quant};
+use crate::vp9::encode::{BLOCK_8X8, BLOCK_16X16, Mi, Plane};
 
 pub const DC_PRED: u8 = 0;
 pub const V_PRED: u8 = 1;
