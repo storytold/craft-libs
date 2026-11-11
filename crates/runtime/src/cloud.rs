@@ -68,7 +68,7 @@ impl std::error::Error for CloudFetchFault {}
 /// RFC-0023 required fix 4 calls for: without it, a whole-file fallback has no idea how big the
 /// blob is until the bytes are already in memory.
 pub fn hydrate_whole_file_fallback<P: TierPolicy>(
-    mirror: &mut MirrorStore<P>,
+    mirror: &MirrorStore<P>,
     blob: &CloudBlobRef,
     delegate: &dyn CloudFetchDelegate,
 ) -> Result<Vec<u8>, CloudFetchFault> {
@@ -119,10 +119,10 @@ mod tests {
     /// discover the blob was too big was to already be holding its bytes in memory.
     #[test]
     fn a_blob_larger_than_the_remaining_budget_is_refused_before_any_read() {
-        let mut mirror = MirrorStore::new(DefaultTierPolicy, 100);
+        let mirror = MirrorStore::new(DefaultTierPolicy, 100);
         let delegate = FixedSizeDelegate { size: 101, whole_file_calls: std::cell::Cell::new(0) };
 
-        let result = hydrate_whole_file_fallback(&mut mirror, &blob(), &delegate);
+        let result = hydrate_whole_file_fallback(&mirror, &blob(), &delegate);
 
         assert_eq!(result, Err(CloudFetchFault::BudgetExceeded { blob_bytes: 101, remaining_budget: 100 }));
         assert_eq!(delegate.whole_file_calls.get(), 0, "fetch_whole must never be called once stat_size shows it would not fit");
@@ -132,10 +132,10 @@ mod tests {
     /// A blob that fits the remaining budget proceeds to the actual read.
     #[test]
     fn a_blob_that_fits_the_remaining_budget_proceeds() {
-        let mut mirror = MirrorStore::new(DefaultTierPolicy, 100);
+        let mirror = MirrorStore::new(DefaultTierPolicy, 100);
         let delegate = FixedSizeDelegate { size: 40, whole_file_calls: std::cell::Cell::new(0) };
 
-        let result = hydrate_whole_file_fallback(&mut mirror, &blob(), &delegate);
+        let result = hydrate_whole_file_fallback(&mirror, &blob(), &delegate);
 
         assert_eq!(result, Ok(vec![0u8; 40]));
         assert_eq!(delegate.whole_file_calls.get(), 1);
@@ -146,10 +146,10 @@ mod tests {
     /// exceed", not "would reach").
     #[test]
     fn a_blob_sized_exactly_at_the_remaining_budget_fits() {
-        let mut mirror = MirrorStore::new(DefaultTierPolicy, 100);
+        let mirror = MirrorStore::new(DefaultTierPolicy, 100);
         let delegate = FixedSizeDelegate { size: 100, whole_file_calls: std::cell::Cell::new(0) };
 
-        let result = hydrate_whole_file_fallback(&mut mirror, &blob(), &delegate);
+        let result = hydrate_whole_file_fallback(&mirror, &blob(), &delegate);
 
         assert_eq!(result, Ok(vec![0u8; 100]));
         assert_eq!(delegate.whole_file_calls.get(), 1);
@@ -169,8 +169,8 @@ mod tests {
             }
         }
 
-        let mut mirror = MirrorStore::new(DefaultTierPolicy, 100);
-        let result = hydrate_whole_file_fallback(&mut mirror, &blob(), &UnknownSizeDelegate);
+        let mirror = MirrorStore::new(DefaultTierPolicy, 100);
+        let result = hydrate_whole_file_fallback(&mirror, &blob(), &UnknownSizeDelegate);
 
         assert_eq!(result, Err(CloudFetchFault::SizeUnknown));
     }

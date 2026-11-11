@@ -294,7 +294,7 @@ fn over_budget_trips_on_the_combined_total_not_either_pool_alone() {
 /// how large it is.
 #[test]
 fn inflight_range_hydration_bytes_count_against_the_budget() {
-    let mut store = MirrorStore::new(DefaultTierPolicy, 100);
+    let store = MirrorStore::new(DefaultTierPolicy, 100);
     assert!(!store.over_budget());
     let guard = store.begin_range_hydration(150);
     assert!(
