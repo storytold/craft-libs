@@ -85,7 +85,7 @@ impl Lists<'_> {
     }
 
     /// The Tab entries among the stops `keep` takes: a roving group once, at its arrival member; a collection's row
-    /// groups none; another stop when Tab moves over all controls or it holds text.
+    /// groups none; another stop when Tab moves over all controls or it holds text, unless only a press reaches it.
     fn entries(&self, keep: impl Fn(&StopRec) -> bool, all_controls: bool) -> Vec<Entry> {
         let mut seen = HashSet::new();
         let mut out = Vec::new();
@@ -97,7 +97,7 @@ impl Lists<'_> {
                         out.push(Entry::Group(group.id, arrival));
                     }
                 }
-                None if all_controls || rec.stop.text => out.push(Entry::Stop(rec.clone())),
+                None if !rec.stop.press_only && (all_controls || rec.stop.text) => out.push(Entry::Stop(rec.clone())),
                 None => {}
             }
         }

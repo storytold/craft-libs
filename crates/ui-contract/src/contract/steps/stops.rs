@@ -21,6 +21,8 @@ pub(crate) struct StopsIn<'a> {
     pub parts_focus: bool,
     /// The component's one stop is a text part, whose egui widget holds focus.
     pub text: bool,
+    /// The text part is read-only: focus reaches it from a press only.
+    pub press_only: bool,
     pub keys: focus::KeyUse,
     pub role: KeyRole,
     pub rtl: bool,
@@ -72,6 +74,7 @@ pub(crate) fn register_stops(input: &StopsIn<'_>) {
     let own = || {
         let stop = Stop::new(input.id, input.keys).root(input.holder).role(input.role).in_body(input.body);
         let stop = if input.default_stop { stop.default_stop() } else { stop };
+        let stop = if input.press_only { stop.press_only() } else { stop };
         if input.text { stop.text() } else { stop }
     };
     if input.focusable {

@@ -98,6 +98,16 @@ pub(super) fn variant_name(plan: Plan, variant: usize) -> &'static str {
     }
 }
 
+/// Tab once; when that focuses nothing and the shown component is read-only text, which Tab passes over, a press on
+/// it, from which it takes focus.
+pub(super) fn tab_or_press(fixture: &mut Fixture, text: bool) {
+    fixture.key(Key::Tab, Modifiers::NONE);
+    let root = root_target(fixture);
+    if text && fixture.focused().is_none() && fixture.tree().data_of(root.node).is_some_and(|node| node.is_read_only()) {
+        fixture.click(&root);
+    }
+}
+
 /// The node of the shown component, or the whole shown area when it has none.
 pub(super) fn root_target(fixture: &Fixture) -> Target {
     fixture.root_id().and_then(|id| fixture.node_of(id)).unwrap_or(Target { node: NodeKey::of(Id::NULL), rect: fixture.shown() })
@@ -187,8 +197,8 @@ fn pick(fixture: &mut Fixture, row: usize, by_click: bool) {
 }
 
 /// Presses Tab until the focus is inside the subject (its root or a descendant), for at most one cycle of the stops.
-/// A story whose first stops belong to something else (an editor inside a canvas) still gets its text. `false` when
-/// the cycle ends without the subject: a subject Tab cannot reach still fails.
+/// A story whose first stops belong to something else (an editor inside a canvas) still gets its text. Read-only
+/// text, which Tab passes over, gets a press instead. `false` when neither reaches the subject.
 ///
 /// The focus is inside when the focus service's stop is the subject's component or AccessKit's focused node lies in
 /// the subject's node subtree.
@@ -207,7 +217,14 @@ pub(super) fn focus_subject(fixture: &mut Fixture) -> bool {
         }
         let at = (stop, focused);
         if seen.contains(&at) {
-            return false;
+            let read_only =
+                |fixture: &Fixture| root.as_ref().is_some_and(|root| fixture.tree().data_of(root.node).is_some_and(|node| node.is_read_only()));
+            if !read_only(fixture) {
+                return false;
+            }
+            let target = root_target(fixture);
+            fixture.click(&target);
+            return fixture.focused_stop().is_some_and(|(id, _)| id == root_id);
         }
         seen.push(at);
         fixture.key(Key::Tab, Modifiers::NONE);

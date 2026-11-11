@@ -8,7 +8,6 @@ use crate::testing::bypass;
 use crate::testing::fixture::Fixture;
 use crate::testing::story::Required;
 use craft_behavior::Input;
-use egui::{Key, Modifiers};
 
 pub(super) const CASES: &[Case] = &[
     Case::new("required-states", ANY, every_required_state_has_a_story),
@@ -130,9 +129,9 @@ fn focusable_stories_are_tab_reachable(subject: &Subject) -> Result<(), String> 
             continue;
         }
         let mut fixture = super::drive::input_fixture(story);
-        fixture.key(Key::Tab, Modifiers::NONE);
+        super::drive::tab_or_press(&mut fixture, matches!(subject.probe.input, craft_behavior::Input::Text | craft_behavior::Input::Editor));
         if fixture.focused().is_none() {
-            return Err(format!("{}: Tab reached nothing", story.name));
+            return Err(format!("{}: neither Tab nor a press on read-only text reached anything", story.name));
         }
     }
     Ok(())

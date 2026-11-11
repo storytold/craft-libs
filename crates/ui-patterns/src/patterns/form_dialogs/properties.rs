@@ -10,6 +10,7 @@ use crate::runtime::overlay::CloseReason;
 use crate::runtime::words::CommonWords;
 use crate::sections::{DialogRole, FooterButton};
 use crate::tabs::{Tab, TabKind, TabStrip};
+use crate::text::SelectableText;
 use craft_behavior::{DisplayOrder, ItemSource, SelectionChange};
 use egui::{Response, Ui};
 use std::borrow::Cow;
@@ -22,7 +23,7 @@ mod stories;
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum PropertyRow {
-    /// A label and its text: read-only.
+    /// A label and its text: read-only text the user selects and copies.
     #[non_exhaustive]
     Value {
         /// The row's label.
@@ -83,8 +84,11 @@ impl PropertiesTab {
             .enumerate()
             .map(|(row, entry)| match entry {
                 PropertyRow::Value { label, text } => {
-                    let text = text.clone();
-                    Param::custom(format!("properties.{at}.{row}"), label.clone(), move |ui, _, _| Text::new(text.clone()).show(ui))
+                    let (name, text) = (label.clone(), text.clone());
+                    Param::custom(format!("properties.{at}.{row}"), label.clone(), move |ui, _, _| {
+                        let shown = Env::of(ui).view().resolve(&text);
+                        SelectableText::new(name.clone(), shown.as_str()).multiline().show(ui).response
+                    })
                 }
                 PropertyRow::Field(param) => (**param).clone(),
                 PropertyRow::Heading(label) => Param::section(label.clone()),

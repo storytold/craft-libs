@@ -23,6 +23,9 @@ pub struct Stop {
     pub role: KeyRole,
     /// The stop is a text or editor part, which holds a draft.
     pub text: bool,
+    /// Focus reaches the stop from a press only; Tab and F6 pass over it. Read-only text is such a stop: the user
+    /// focuses it to select and copy.
+    pub press_only: bool,
     /// The stop is its scope's default (`Initial::Default`).
     pub default: bool,
     /// The name `Initial::Key` matches.
@@ -36,7 +39,19 @@ pub struct Stop {
 impl Stop {
     /// A stop of component `id` with `keys`, its own egui root.
     pub fn new(id: Id, keys: KeyUse) -> Stop {
-        Stop { id, part: None, root: id, keys, role: KeyRole::new(), text: false, default: false, name: None, group: None, body: None }
+        Stop {
+            id,
+            part: None,
+            root: id,
+            keys,
+            role: KeyRole::new(),
+            text: false,
+            press_only: false,
+            default: false,
+            name: None,
+            group: None,
+            body: None,
+        }
     }
 
     /// A stop on a part of the component.
@@ -60,6 +75,12 @@ impl Stop {
     /// Marks the stop as a text part.
     pub fn text(mut self) -> Self {
         self.text = true;
+        self
+    }
+
+    /// Marks the stop as one that focus reaches from a press only.
+    pub fn press_only(mut self) -> Self {
+        self.press_only = true;
         self
     }
 

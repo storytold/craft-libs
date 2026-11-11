@@ -345,6 +345,11 @@ impl Fixture {
         self.frames.texts()
     }
 
+    /// The texts the latest frame put on the clipboard.
+    pub fn copied(&self) -> &[String] {
+        self.frames.copied()
+    }
+
     /// The visual bounds of the shapes the latest frame painted.
     pub fn shape_bounds(&self) -> &[Rect] {
         self.frames.shape_bounds()

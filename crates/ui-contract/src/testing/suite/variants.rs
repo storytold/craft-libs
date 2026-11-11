@@ -1,7 +1,7 @@
 //! The variants the runner makes of every story, so authors write none of them: disabled, read-only, right-to-left,
 //! each motion mode and a language change.
 
-use super::drive::{cancels, for_input, root_target, run, variants};
+use super::drive::{cancels, for_input, root_target, run, tab_or_press, variants};
 use super::{ANY, Case, Subject};
 use crate::contract::Role;
 use crate::runtime::egui::access::{AccessTree, Declared, NodeKey};
@@ -79,8 +79,8 @@ fn is_text(subject: &Subject) -> bool {
     matches!(subject.probe.input, Input::Text | Input::Editor)
 }
 
-/// A read-only component keeps focus, changes no value, takes no typed text or deletion
-/// and reports read-only.
+/// A read-only component keeps focus (from Tab, or from a press for read-only text, which Tab passes over), changes
+/// no value, takes no typed text or deletion and reports read-only.
 fn read_only_changes_nothing(subject: &Subject) -> Result<(), String> {
     if !(subject.probe.carries_value() || is_text(subject)) {
         return Ok(());
@@ -105,7 +105,7 @@ fn read_only_changes_nothing(subject: &Subject) -> Result<(), String> {
         }
         let before = fixture.data().snapshot();
         fixture.take_outputs();
-        fixture.key(Key::Tab, Modifiers::NONE);
+        tab_or_press(&mut fixture, is_text(subject));
         if focusable && fixture.focused().is_none() {
             return Err(format!("{}: a read-only story cannot take focus", story.name));
         }
