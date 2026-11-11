@@ -8,7 +8,7 @@ no `unsafe`, builds for `wasm32-unknown-unknown`).
 - **Profiles:** Main (8-bit) and Main 10 (10-bit), 4:2:0, Main tier. `general_level_idc` is taken
   from the config or chosen as the lowest level whose MaxLumaPs, MaxLumaSr (and, in bitrate mode,
   MaxBR) fit (Table A.8).
-- **Parameter sets:** VPS, SPS (with VUI: BT.709 colour description, `video_full_range_flag`,
+- **Parameter sets:** VPS, SPS (with VUI: the configured colour description, BT.709 by default, `video_full_range_flag`,
   timing info from the frame rate) and PPS, as raw NAL units (`Encoder::parameter_sets`) and as an
   `hvcC` record (ISO/IEC 14496-15 §8.3.3.1, `lengthSizeMinusOne` 3, complete VPS / SPS / PPS
   arrays, `Encoder::hvcc`).
