@@ -42,7 +42,8 @@ Cryptomatte, EXtractoR, IDentifier and Puppet meshes), masks and bezier paths wi
 layer groups, text documents (paragraph and style runs, box, justification, tracking, faux styles,
 caps, leading), markers with duration, strings and cue data, cameras and lights with their
 options, track mattes, project settings and the working space's name, the version that saved the
-file, footage (stills, audio, image sequences), solids and precomp links. Every accessor returns
+file, footage (stills, audio, image sequences, the layer of a Photoshop file an item shows), solids
+and precomp links. Every accessor returns
 `Option` or an empty list on damaged data and never panics. Which fields are verified, which are
 not decoded, and how it was found is in [`docs/aep-format.md`](docs/aep-format.md).
 
