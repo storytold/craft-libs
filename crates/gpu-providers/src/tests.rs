@@ -38,10 +38,23 @@ fn gpu_providers_cargo_has_no_app_deps() {
     for line in manifest.lines() {
         let t = line.trim();
         assert!(
-            !(t.starts_with("effectcraft") || t.starts_with("filmcraft") || t.contains("effectcraft-") || t.contains("filmcraft-")),
+            !(t.starts_with("effectcraft")
+                || t.starts_with("filmcraft")
+                || t.contains("effectcraft-")
+                || t.contains("filmcraft-")
+                || t.contains("-engine =")
+                || t.contains("-engine.")
+                || t.contains("-engine\"")),
             "forbidden app dependency line: {t}"
         );
     }
+}
+
+#[test]
+fn empty_param_prefix_and_needle_are_refused_not_a_panic() {
+    let params = GpuJobParams(b"w:3,h:2".to_vec());
+    assert_eq!(crate::params::parse_u32(&params, b""), None);
+    assert!(!crate::params::params_contain(&params, b""));
 }
 
 #[test]
