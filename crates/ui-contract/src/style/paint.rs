@@ -107,8 +107,8 @@ pub(crate) fn handle_look(tokens: &UiTokens) -> HandleLook {
 pub enum ScrollBarKind {
     /// Over the content at its end edge: a clear track that tints under the pointer, a thumb as thick as the track.
     Overlay,
-    /// Beside the view along its bottom and right, as a document window's bars: a solid chrome track with a divider on
-    /// the side facing the view, and a thumb inset from the track's edges.
+    /// Beside the view along its bottom and right, as a document window's bars: a solid chrome track with an edge rule
+    /// on the side facing the view, and a thumb inset from the track's edges.
     Docked,
 }
 
@@ -153,7 +153,7 @@ pub(crate) fn scroll_bar_look(tokens: &UiTokens, kind: ScrollBarKind) -> ScrollB
             let hover = style_color(c.state.hover);
             (Stateful::new(clear).off(craft_theme::States::new(clear, hover, hover, clear)), 0.0, None)
         }
-        ScrollBarKind::Docked => (Stateful::new(style_color(c.surface.chrome)), tokens.space.gap.tight, Some(rule_look(tokens, RuleKind::Divider))),
+        ScrollBarKind::Docked => (Stateful::new(style_color(c.surface.chrome)), tokens.space.gap.tight, Some(rule_look(tokens, RuleKind::Edge))),
     };
     ScrollBarLook { kind, track, thumb, thickness: tokens.size.handle.sm, min_thumb: min_thumb(tokens), inset, edge, fade: tokens.size.scroll_fade }
 }
