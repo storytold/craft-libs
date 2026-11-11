@@ -14,7 +14,7 @@
 //! `map_Kd`, `map_Ke`, `map_Bump`/`bump`/`norm` name base colour, emissive and normal images.
 //! An image is only named ([`Image::uri`]); reading and decoding it is the caller's.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 use crate::{
@@ -176,6 +176,8 @@ struct Reader<'a> {
     objects: Vec<Object>,
     scene: Scene,
     material_ids: HashMap<String, usize>,
+    /// The `mtllib` names already read: exporters repeat the line for every object.
+    libraries: HashSet<String>,
     material: Option<usize>,
     group: String,
     smoothing: u32,
@@ -250,7 +252,9 @@ impl Reader<'_> {
     }
 
     fn library(&mut self, name: &str, resolve: Resolver) -> Result<()> {
-        if name.is_empty() {
+        // A library named again is already read: reading it again would add its materials and
+        // images a second time and count its bytes against the limit once per line.
+        if name.is_empty() || !self.libraries.insert(name.to_string()) {
             return Ok(());
         }
         if self.scene.external.len() >= self.limits.max_materials {
@@ -444,6 +448,7 @@ pub fn read(bytes: &[u8], limits: &Limits, resolve: Resolver) -> Result<Scene> {
         objects: vec![],
         scene: Scene::default(),
         material_ids: HashMap::new(),
+        libraries: HashSet::new(),
         material: None,
         group: String::new(),
         smoothing: 0,

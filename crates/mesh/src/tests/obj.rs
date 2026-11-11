@@ -299,3 +299,21 @@ fn map_options_are_passed_over_by_their_argument_counts() {
     // a lone token is the name, whatever it looks like
     assert_eq!(name(materials[1].emissive_texture).as_deref(), Some("-bm"));
 }
+
+#[test]
+fn a_library_named_again_is_read_once() {
+    // Exporters repeat `mtllib` for every object. Each repeat used to read the library again:
+    // its materials and images twice, and its bytes counted against the limit once per line.
+    let mtl = "newmtl Red\nKd 1 0 0\nmap_Kd red.png\n";
+    let src = "mtllib m.mtl\no a\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl Red\nf 1 2 3\nmtllib m.mtl\no b\nusemtl Red\nf 1 2 3\nmtllib m.mtl\n";
+    let mut asked = 0;
+    let limits = Limits { max_data_bytes: mtl.len() * 2, ..Limits::default() };
+    let s = read(src.as_bytes(), &limits, &mut |_| {
+        asked += 1;
+        Some(mtl.as_bytes().to_vec())
+    })
+    .unwrap();
+    assert_eq!(asked, 1);
+    assert_eq!((s.materials.len(), s.images.len()), (1, 1));
+    assert_eq!(s.external, ["m.mtl", "red.png"]);
+}
