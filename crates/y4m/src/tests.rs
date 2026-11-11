@@ -204,3 +204,17 @@ fn damaged_and_hostile_files_never_panic() {
         }
     }
 }
+
+/// A header parameter that starts with a multi-byte character is skipped like any unknown tag
+/// (splitting it at byte 1 would cut the character in two).
+#[test]
+fn multibyte_header_param_is_ignored() {
+    let mut data = "YUV4MPEG2 W2 H2 éX\nFRAME\n".as_bytes().to_vec();
+    data.extend([0u8; 6]);
+    let s = open(&data).unwrap();
+    assert_eq!((s.header.width, s.header.height, s.frames.len()), (2, 2, 1));
+    // Bytes that are not UTF-8 at all are skipped the same way.
+    let mut data = b"YUV4MPEG2 W2 H2 \xFF\xFEX\nFRAME\n".to_vec();
+    data.extend([0u8; 6]);
+    assert!(open(&data).is_ok());
+}
