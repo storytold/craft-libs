@@ -199,7 +199,8 @@ fn read_preview(bytes: &[u8], tiff: &Tiff) -> Option<Preview> {
         return None;
     }
     let n = w.checked_mul(h)?.checked_mul(3)?;
-    if n == 0 || n > 1 << 24 {
+    // uncompressed 16-bit samples: more than the whole file holds is refused before the buffer is reserved
+    if n == 0 || n > 1 << 24 || n * 2 > bytes.len() {
         return None;
     }
     let mut raw: Vec<u8> = Vec::with_capacity(n * 2);
@@ -473,6 +474,31 @@ mod tests {
         let with = crate::decode(&sraw_file(stream_422(), [1, 4, 4], 4, Some([900; 12]))).unwrap();
         let without = crate::decode(&sraw_file(stream_422(), [1, 4, 4], 4, None)).unwrap();
         assert_eq!(with.data, without.data);
+    }
+
+    /// storytold/lightcraft#2561: IFD2's 16-bit RGB preview is read when its samples fit in the file, and refused before its buffer is
+    /// reserved when they cannot: 64 × 2000 pixels (768000 bytes) whose one-row strips all point at the same bytes of
+    /// a file a few tens of KiB long.
+    #[test]
+    fn a_preview_larger_than_the_file_is_refused() {
+        let bytes = sraw_file(stream_422(), [1, 4, 4], 4, Some([900; 12]));
+        let p = read_preview(&bytes, &Tiff::parse(&bytes).unwrap()).expect("a 2 x 2 preview that fits");
+        assert_eq!((p.width, p.height, p.rgb), (2, 2, vec![900; 12]));
+        let (w, rows) = (64u32, 2000u32);
+        let mut ifd2 = IfdBuilder::new();
+        ifd2.set(t::COMPRESSION, Value::Short(vec![1]));
+        ifd2.set(t::PHOTOMETRIC, Value::Short(vec![2]));
+        ifd2.set(t::IMAGE_WIDTH, Value::Long(vec![w]));
+        ifd2.set(t::IMAGE_LENGTH, Value::Long(vec![rows]));
+        ifd2.set(t::BITS_PER_SAMPLE, Value::Short(vec![16, 16, 16]));
+        ifd2.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![3]));
+        ifd2.set(t::ROWS_PER_STRIP, Value::Long(vec![1]));
+        ifd2.set(t::STRIP_OFFSETS, Value::Long(vec![0; rows as usize]));
+        ifd2.set(t::STRIP_BYTE_COUNTS, Value::Long(vec![w * 6; rows as usize]));
+        let one = || IfdBuilder::new().with(1, Value::Short(vec![0]));
+        let big = TiffWriter::new(ByteOrder::Little, false).write(&[one(), one(), ifd2]).unwrap();
+        assert!(big.len() > (w * 6) as usize && big.len() < (w * rows * 6) as usize, "{} bytes", big.len());
+        assert!(read_preview(&big, &Tiff::parse(&big).unwrap()).is_none());
     }
 
     #[test]
