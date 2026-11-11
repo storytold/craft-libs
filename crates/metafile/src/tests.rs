@@ -914,6 +914,36 @@ fn place_fits_the_frame_scales_strokes_and_drops_far_paths() {
     assert_eq!(stroke.map(|s| s.1), Some(8.0));
 }
 
+#[test]
+fn a_huge_pen_is_held_to_what_covers_the_frame() {
+    // A pen of 1e30 units on a short path: round caps that wide took a renderer forever to
+    // flatten. Past twice the distance across the frame and the path it covers no more.
+    let width = |w: f32| {
+        let pic = crate::Picture {
+            width: 100.0,
+            height: 50.0,
+            items: vec![Item::Path {
+                segs: vec![Seg::Move(0.0, 0.0), Seg::Line(10.0, 0.0)],
+                fill: None,
+                stroke: Some(([0, 0, 0, 255], w)),
+                line: crate::LineStyle::default(),
+                even_odd: true,
+                region: None,
+                clips: Vec::new(),
+            }],
+            skipped_records: 0,
+        };
+        match pic.place(kurbo::Rect::new(0.0, 0.0, 200.0, 100.0), [0.0; 4]).first() {
+            Some(crate::PlacedItem::Path { stroke, .. }) => stroke.map(|s| s.1),
+            _ => None,
+        }
+    };
+    let cap = 2.0 * 200f64.hypot(100.0);
+    assert_eq!(width(1e30), Some(cap));
+    assert_eq!(width(f32::MAX), Some(cap));
+    assert_eq!(width(4.0), Some(8.0), "an ordinary pen is untouched");
+}
+
 /// #1899: a crop keeps what the file says down to a sliver (a header's bar is 2.7% of a page-sized
 /// metafile), and junk sides give a finite part of the source with some area.
 #[test]

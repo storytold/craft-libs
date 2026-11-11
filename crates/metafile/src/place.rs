@@ -147,9 +147,15 @@ impl Picture {
                     let Some(region) = get_region(region) else { continue };
                     let Some(clips) = get_clips(clips) else { continue };
                     let line = LineStyle { dash: line.dash.iter().map(|d| (f64::from(*d) * k) as f32).collect(), ..line.clone() };
-                    if in_range(path.bounding_box()) && line.dash.iter().all(|d| d.is_finite()) {
+                    let bounds = path.bounding_box();
+                    if in_range(bounds) && line.dash.iter().all(|d| d.is_finite()) {
                         total_elements = total_elements.saturating_add(path.elements().len());
-                        let stroke = stroke.map(|(c, w)| (c, f64::from(w) * k));
+                        // A pen wider than twice the distance across the frame and the path
+                        // already covers the whole frame: wider adds nothing the frame shows, only
+                        // work for the renderer flattening its round caps (the width is file data).
+                        let u = bounds.union(r);
+                        let widest = 2.0 * u.width().hypot(u.height());
+                        let stroke = stroke.map(|(c, w)| (c, (f64::from(w) * k).min(widest)));
                         out.push(PlacedItem::Path { path, fill: *fill, stroke, line, even_odd: *even_odd, region, clips });
                     }
                 }
