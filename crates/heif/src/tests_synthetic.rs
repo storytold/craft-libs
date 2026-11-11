@@ -140,6 +140,20 @@ fn alpha_comes_from_its_auxiliary_image() {
 }
 
 #[test]
+fn an_alpha_grid_decodes_and_its_tile_references_share_the_visit_budget() {
+    let alpha = |x: u32, _: u32| (x * 4) as u16;
+    // a 2 × 2 alpha grid naming one tile four times: a valid file
+    let d = decoded(&Spec { alpha: Some(&alpha), alpha_tile_repeats: 2, ..Spec::new(64, 64, &grey) });
+    assert!(d.has_alpha);
+    assert_eq!((d.data[10 * 4 + 3], d.data[42 * 4 + 3]), (40 * 257, 40 * 257));
+    // 70 × 70 references to that tile: each would be rebuilt and decoded, so it is refused first
+    let bytes = build(&Spec { alpha: Some(&alpha), alpha_tile_repeats: 70, ..Spec::new(32, 32, &grey) });
+    for r in [probe(&bytes).map(|_| ()), decode(&bytes, &Options::default()).map(|_| ())] {
+        assert!(matches!(&r, Err(Error::Limit(m)) if m.contains("extent reads")), "{r:?}");
+    }
+}
+
+#[test]
 fn limits_are_checked_before_decoding() {
     let bytes = build(&Spec::new(96, 64, &grey));
     let r = decode(&bytes, &Options { max_pixels: 96 * 64 - 1, ..Default::default() });

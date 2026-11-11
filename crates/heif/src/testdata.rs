@@ -47,11 +47,25 @@ pub struct Spec<'a> {
     pub thumbnail: Option<Sampler<'a>>,
     /// Auxiliary images of these types the decoder must ignore (HDR gain map, depth…).
     pub ignored_aux: Vec<&'static str>,
+    /// When nonzero, the alpha image is instead a grid of `n` × `n` references to one alpha tile
+    /// (a hostile file: the same stored picture rebuilt for every reference).
+    pub alpha_tile_repeats: u8,
 }
 
 impl<'a> Spec<'a> {
     pub fn new(width: u32, height: u32, sample: Sampler<'a>) -> Spec<'a> {
-        Spec { width, height, bit_depth: 8, sample, props: Vec::new(), exif: None, alpha: None, thumbnail: None, ignored_aux: Vec::new() }
+        Spec {
+            width,
+            height,
+            bit_depth: 8,
+            sample,
+            props: Vec::new(),
+            exif: None,
+            alpha: None,
+            thumbnail: None,
+            ignored_aux: Vec::new(),
+            alpha_tile_repeats: 0,
+        }
     }
 }
 
@@ -524,7 +538,20 @@ pub fn build(spec: &Spec<'_>) -> Vec<u8> {
         }
         f.refs.push((b"auxl", id, vec![primary]));
     };
-    if let Some(alpha) = spec.alpha {
+    if let (Some(alpha), n @ 1..) = (spec.alpha, spec.alpha_tile_repeats) {
+        let tile = f.image(TILE, TILE, bd, true, &|x, y| [alpha(x, y), 0, 0]);
+        if let Some(it) = f.items.iter_mut().find(|i| i.id == tile) {
+            it.hidden = true;
+        }
+        let side = u32::from(n) * TILE;
+        let mut g = vec![0u8, 0, n - 1, n - 1];
+        g.extend_from_slice(&(side as u16).to_be_bytes());
+        g.extend_from_slice(&(side as u16).to_be_bytes());
+        let auxc = f.prop(full_box(b"auxC", 0, b"urn:mpeg:hevc:2015:auxid:1\0"));
+        let id = f.add(b"grid", g, vec![(auxc, true)]);
+        f.refs.push((b"dimg", id, vec![tile; usize::from(n) * usize::from(n)]));
+        f.refs.push((b"auxl", id, vec![primary]));
+    } else if let Some(alpha) = spec.alpha {
         aux(&mut f, "urn:mpeg:hevc:2015:auxid:1", &|x, y| [alpha(x, y), 0, 0]);
     }
     for urn in &spec.ignored_aux {
