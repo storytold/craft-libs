@@ -18,8 +18,12 @@
 struct ReadmeExamples;
 
 mod read;
+mod text;
+mod write;
 
 pub use read::{Epub, Item, Limits, Package, SpineItem, dir_of, parse_container, parse_package, resolve};
+pub use text::{contents_title, urn_uuid, valid_language_tag, w3cdtf};
+pub use write::{Book, Layout, MAX_RESOURCES, MAX_TITLE_CHARS, Metadata, Nav, NavItem, NavKind, Resource, write, xhtml};
 
 /// The content of the first, stored `mimetype` entry.
 pub const MIMETYPE: &str = "application/epub+zip";

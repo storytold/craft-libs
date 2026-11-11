@@ -62,6 +62,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-ecproj-format`](crates/ecproj-format/README.md): the envelope of EffectCraft `.ecproj`
   project files: `savedBy`, the schema version and its check, and the file object with the
   project and its saved view as type parameters. The project model stays in EffectCraft.
+- [`craft-epub`](crates/epub/README.md): EPUB packages: the OCF ZIP container, the package document (metadata, manifest, spine) and the navigation document, written as EPUB 3 (reflowable and fixed layout) and read (EPUB 2 and 3) with bounded entry sizes. Content documents are the caller's.
 - [`craft-font-catalog`](crates/font-catalog/README.md): the installed fonts on every platform
   (font folders, fontconfig and Flatpak host folders, CoreText, DirectWrite, the font store),
   lookup by family, style, localized, legacy, full and PostScript names, family loads shared
