@@ -35,8 +35,8 @@ pub struct SectionOutput {
     pub response: Response,
     /// The header action part taken this pass.
     pub action: Option<HeaderAction>,
-    /// The header band was press-dragged past the drag threshold this pass.
-    pub grabbed: bool,
+    /// The header band was press-dragged past the drag threshold this pass: the section's title, for the drag badge.
+    pub grabbed: Option<Label>,
     /// A stacking key was pressed with focus in the section.
     pub nudged: Option<reorder::ItemMove>,
 }
@@ -196,7 +196,8 @@ impl Component for Section<'_> {
         let grabbed = cx
             .core
             .part_if_declared(REORDER_BAND)
-            .is_some_and(|band| matches!(band.press.phase, PressPhase::DragStart { start, .. } if start.button == PointerButton::Primary));
+            .is_some_and(|band| matches!(band.press.phase, PressPhase::DragStart { start, .. } if start.button == PointerButton::Primary))
+            .then(|| cx.label());
         SectionOutput { response: cx.response.clone(), action: self.taken, grabbed, nudged: self.nudged }
     }
 }

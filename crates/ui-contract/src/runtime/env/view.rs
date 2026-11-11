@@ -8,7 +8,7 @@ use super::{ItemFacts, Scoped};
 use crate::runtime::commands::CommandChain;
 use craft_host::Host;
 use craft_host::target::ShellInfo;
-use craft_i18n::{AgeStyle, Direction, WordSet};
+use craft_i18n::{AgeStyle, Counted, Direction, WordSet};
 use craft_i18n::{CalendarDate, DateFormat, Format};
 use craft_theme::Mode;
 use egui::Id;
@@ -133,6 +133,11 @@ impl<'a> EnvView<'a> {
     /// How long ago `seconds` was, in the scope's language and digits: "Just now", "3 minutes ago", "Yesterday".
     pub fn relative_age(&self, seconds: u64, style: AgeStyle) -> String {
         craft_i18n::relative_age(&self.scoped.words, &self.scoped.format, seconds, style)
+    }
+
+    /// `n` things by the count word `count`, in the scope's language and digits: "1 page", "3 pages".
+    pub fn counted(&self, count: Counted, n: u64) -> String {
+        self.scoped.words.counted(count, n, &self.scoped.format.integer(n))
     }
 
     /// `label` with a `Word` replaced by its text in the scope's language: what domain code that draws a `Label`

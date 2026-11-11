@@ -9,6 +9,7 @@ use crate::contract::{
     ReorderMove, Role, Sizing,
 };
 use crate::runtime::access::SetPosition;
+use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{Axis, EditEvent, Metrics, Mixed, Sense};
 use egui::{Pos2, Rect, Response, Ui};
@@ -67,7 +68,8 @@ impl<K> Outcome for SectionStackOutput<K> {
 struct Seen<K> {
     key: K,
     rect: Rect,
-    grabbed: bool,
+    /// The title of a section whose header was grabbed this pass.
+    grabbed: Option<Label>,
     nudged: Option<reorder::ItemMove>,
 }
 
@@ -131,9 +133,8 @@ impl<'a, K: Clone + PartialEq + std::hash::Hash + Send + Sync + 'static> Section
     /// Starts a drag from a grabbed header, takes a drop over the sections and turns a nudge into a move.
     fn drive(&mut self, seen: &[Seen<K>], cx: &mut Cx<'_, Self>) {
         let id = cx.core.id;
-        if let Some(grabbed) = seen.iter().find(|section| section.grabbed) {
-            let key = grabbed.key.clone();
-            cx.start_drag(ListDrag::new(id, vec![key.clone()], key), DragPreview::None);
+        if let Some((key, title)) = seen.iter().find_map(|section| section.grabbed.clone().map(|title| (section.key.clone(), title))) {
+            cx.start_drag(ListDrag::new(id, vec![key.clone()], key), DragPreview::Badge(title));
         }
         if let Some((payload, at)) = cx.dragging::<ListDrag<K>>()
             && payload.list == id

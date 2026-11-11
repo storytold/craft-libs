@@ -368,10 +368,11 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let id = cx.core.id;
         let key = self.source.key(at);
         let keys: Vec<C::Key> = if self.holds(at) { self.selected_keys(&self.selection) } else { vec![key.clone()] };
-        let preview = if keys.len() > 1 {
-            DragPreview::Badge(Label::from(keys.len().to_string()))
-        } else {
-            self.source.text(at).map_or(DragPreview::None, |text| DragPreview::Badge(Label::from(text.into_owned())))
+        let count = keys.len() as u64;
+        let preview = match props.drag_count {
+            Some(word) => DragPreview::Badge(Label::from(cx.env.counted(word, count))),
+            None if count > 1 => DragPreview::Badge(Label::from(count.to_string())),
+            None => self.source.text(at).map_or(DragPreview::None, |text| DragPreview::Badge(Label::from(text.into_owned()))),
         };
         let drag = ListDrag::new(id, keys, key.clone());
         match props.drag_payload.as_ref().and_then(|map| map.of(&drag)) {

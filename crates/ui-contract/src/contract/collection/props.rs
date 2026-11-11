@@ -2,7 +2,7 @@
 
 use super::columns::{ColumnSort, ColumnSpec};
 use super::events::ListDrag;
-use crate::runtime::env::Label;
+use crate::runtime::env::{Counted, Label};
 use craft_behavior::{Axis, ColumnKey};
 use std::any::Any;
 use std::sync::Arc;
@@ -182,6 +182,9 @@ pub struct CollectionProps {
     /// Maps a row drag to the payload that other drop targets take (8.4). A map starts row drags by itself, with or
     /// without a reorder rule.
     pub drag_payload: Option<DragPayload>,
+    /// The count word the drag badge shows for the dragged items, one item included ("1 page", "3 pages"); `None`
+    /// shows the number of items for several and the item's text for one.
+    pub drag_count: Option<Counted>,
     /// The collection takes the full height of its rows and owns no scroll, so it can sit inside a scrolling page:
     /// every row is built, the wheel and the keys that move past an end act on the page's scroll owner, and moving
     /// the lead scrolls the page to keep the row in view. For short collections only; a long one keeps its own
@@ -268,6 +271,7 @@ impl CollectionProps {
             marquee: false,
             deletable: false,
             drag_payload: None,
+            drag_count: None,
             natural_height: false,
             overflow: Axis::Y,
             pages: false,
@@ -294,6 +298,13 @@ impl CollectionProps {
     #[must_use]
     pub fn drag_payload<K: 'static, P: Send + Sync + 'static>(mut self, map: impl Fn(&ListDrag<K>) -> Option<P> + Send + Sync + 'static) -> Self {
         self.drag_payload = Some(DragPayload::new(map));
+        self
+    }
+
+    /// The drag badge reads `count` for the number of dragged items.
+    #[must_use]
+    pub const fn drag_count(mut self, count: Counted) -> Self {
+        self.drag_count = Some(count);
         self
     }
 

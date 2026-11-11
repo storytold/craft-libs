@@ -304,7 +304,7 @@ impl<'a> PageThumbnails<'a> {
             grid = grid.collapsible();
         }
         if editable {
-            grid = grid.reorder(ReorderRule::new()).takes_files(true).deletable(true);
+            grid = grid.reorder(ReorderRule::new()).drag_count(words.count.counted()).takes_files(true).deletable(true);
         }
         let ctx = ui.ctx().clone();
         let thumbnails = Thumbnails::<usize>::in_context(&ctx, "page-thumbnails", ThumbnailOptions::new());
