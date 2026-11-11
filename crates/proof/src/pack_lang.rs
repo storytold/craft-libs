@@ -297,11 +297,7 @@ fn load(locale: PackLocale) -> (Arc<AffixDict>, Option<PathBuf>, u64) {
     let refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let key = names.first().map_or("", String::as_str);
     let Some((aff, dic)) = crate::hunspell::find(&refs) else {
-        let packs = crate::packs::embedded(&names, |p| !p.aff.is_empty() && !p.dic.is_empty());
-        if packs.is_empty() {
-            crate::hunspell::clear_load_error(key);
-        }
-        return embedded_dictionary(&packs, key).unwrap_or_else(|| (Arc::default(), None, 0));
+        return embedded_dictionary(crate::data::PACKS, &names, key).unwrap_or_else(|| (Arc::default(), None, 0));
     };
     let size = |p: &std::path::Path| std::fs::metadata(p).map_or(0, |m| m.len());
     let bytes = size(&aff).saturating_add(size(&dic)).saturating_mul(BYTES_PER_FILE_BYTE).max(1);
@@ -315,7 +311,11 @@ fn load(locale: PackLocale) -> (Arc<AffixDict>, Option<PathBuf>, u64) {
 }
 
 /// Select an embedded dictionary with regional-to-language fallback.
-fn embedded_dictionary(packs: &[&crate::packs::EmbeddedPack], key: &str) -> Option<(Arc<AffixDict>, Option<PathBuf>, u64)> {
+fn embedded_dictionary(table: &[crate::packs::EmbeddedPack], names: &[String], key: &str) -> Option<(Arc<AffixDict>, Option<PathBuf>, u64)> {
+    let packs = crate::packs::embedded_in(table, names, |pack| !pack.dic.is_empty());
+    if packs.is_empty() {
+        crate::hunspell::clear_load_error(key);
+    }
     for pack in packs {
         let read = crate::hunspell::decode(pack.aff, pack.dic)
             .and_then(|(a, d)| AffixDict::from_hunspell(&a, &d, &[]))
@@ -387,6 +387,18 @@ mod tests {
         PackLocale::new(t).unwrap()
     }
 
+    /// An embedded word list can be loaded without affix rules.
+    #[test]
+    fn embedded_spelling_accepts_a_word_list_with_empty_affixes() {
+        crate::hold_dictionary_tests();
+        let packs = [
+            crate::packs::EmbeddedPack { locale: "hu-hu", aff: b"SET UTF-8\n", dic: b"", patterns: "", nonstandard: "" },
+            crate::packs::EmbeddedPack { locale: "hu", aff: b"", dic: b"1\nplainword\n", patterns: "", nonstandard: "" },
+        ];
+        let (dictionary, _, _) = embedded_dictionary(&packs, &names(l("hu-HU")), "test-embedded-empty-affixes").unwrap();
+        assert!(dictionary.check("plainword") && !dictionary.check("wrongword"));
+    }
+
     /// Regression: malformed embedded regional spelling falls back to generic.
     #[test]
     fn malformed_embedded_regional_spelling_falls_back_to_generic() {
@@ -395,7 +407,7 @@ mod tests {
             crate::packs::EmbeddedPack { locale: "hu-hu", aff: b"SET UTF-8\n\xff", dic: b"1\nword\n", patterns: "", nonstandard: "" },
             crate::packs::EmbeddedPack { locale: "hu", aff: b"SET UTF-8\n", dic: b"1\nword\n", patterns: "", nonstandard: "" },
         ];
-        let (dictionary, _, _) = embedded_dictionary(&[&packs[0], &packs[1]], "test-embedded-fallback").unwrap();
+        let (dictionary, _, _) = embedded_dictionary(&packs, &names(l("hu-HU")), "test-embedded-fallback").unwrap();
         assert!(dictionary.check("word"));
     }
     /// A wordless regional dictionary falls back without suppressing spelling or suggestions.
@@ -407,9 +419,10 @@ mod tests {
             crate::packs::EmbeddedPack { locale: "hu", aff: b"SET UTF-8\n", dic: b"1\nword\n", patterns: "", nonstandard: "" },
         ];
         let key = "test-empty-regional-fallback";
-        assert!(embedded_dictionary(&[&packs[0]], key).is_none());
+        let names = names(l("hu-HU"));
+        assert!(embedded_dictionary(&packs[..1], &names, key).is_none());
         assert!(crate::hunspell::load_error(key).unwrap().1.contains("no words"));
-        let (dictionary, file, bytes) = embedded_dictionary(&[&packs[0], &packs[1]], key).unwrap();
+        let (dictionary, file, bytes) = embedded_dictionary(&packs, &names, key).unwrap();
         assert!(dictionary.check("word") && !dictionary.check("wrongword"));
         assert!(file.is_none());
         assert_eq!(bytes, ((packs[1].aff.len() + packs[1].dic.len()) as u64) * BYTES_PER_FILE_BYTE);

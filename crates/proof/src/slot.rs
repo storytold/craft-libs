@@ -317,9 +317,8 @@ mod tests {
     #[test]
     fn builtin_failed_native_load_tries_embedded_and_preserves_failure_diagnostics() {
         crate::hold_dictionary_tests();
-        let root = std::env::temp_dir().join(format!("craft-proof-native-embedded-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
-        let (aff, dic) = (root.join("pl_PL.aff"), root.join("pl_PL.dic"));
+        let root = tempfile::Builder::new().prefix("craft-proof-native-embedded-").tempdir().unwrap();
+        let (aff, dic) = (root.path().join("pl_PL.aff"), root.path().join("pl_PL.dic"));
         std::fs::write(&dic, "1\nnativeword\n").unwrap();
         let packs = [crate::packs::EmbeddedPack { locale: "pl", aff: b"", dic: b"1\nembeddedword\n", patterns: "", nonstandard: "" }];
         let slot: DictSlot<AffixDict> = DictSlot::new(&["pl_PL", "pl"], "Test");
@@ -342,16 +341,14 @@ mod tests {
         let loaded = slot.load_from(Some((aff, dic)), &packs);
         assert!(loaded.check("nativeword") && !loaded.check("embeddedword"));
         assert!(crate::hunspell::load_error(slot.name()).is_none());
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// A parsed-empty native dictionary cannot disable a usable embedded dictionary.
     #[test]
     fn builtin_empty_native_dictionary_uses_embedded_and_reports_original_source() {
         crate::hold_dictionary_tests();
-        let root = std::env::temp_dir().join(format!("craft-proof-empty-native-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
-        let (aff, dic) = (root.join("pl_PL.aff"), root.join("pl_PL.dic"));
+        let root = tempfile::Builder::new().prefix("craft-proof-empty-native-").tempdir().unwrap();
+        let (aff, dic) = (root.path().join("pl_PL.aff"), root.path().join("pl_PL.dic"));
         std::fs::write(&aff, "SET UTF-8\n").unwrap();
         std::fs::write(&dic, "0\n").unwrap();
         let slot: DictSlot<AffixDict> = DictSlot::new(&["pl_PL", "pl"], "Test");
@@ -365,7 +362,6 @@ mod tests {
         let _ = slot.keep(0, Arc::new(dictionary));
         assert!(slot.has_dictionary());
         crate::hunspell::clear_load_error(slot.name());
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// A load that started before a dictionaries-folder change is not kept after its reload.
