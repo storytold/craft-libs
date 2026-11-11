@@ -853,6 +853,7 @@ dependencies = [
 name = "craft-captions"
 version = "0.1.0"
 dependencies = [
+ "craft-timeline",
  "craft-xml",
  "proptest",
  "thiserror 2.0.21",
