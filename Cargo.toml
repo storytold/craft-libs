@@ -92,6 +92,7 @@ craft-timeline = { path = "crates/timeline" }
 craft-tiff = { path = "crates/tiff" }
 craft-ui = { path = "crates/ui" }
 craft-update = { path = "crates/update" }
+craft-vcard = { path = "crates/vcard" }
 craft-vectorcraft-format = { path = "crates/vectorcraft-format" }
 craft-vectordrawable = { path = "crates/vectordrawable" }
 craft-xls = { path = "crates/xls" }
