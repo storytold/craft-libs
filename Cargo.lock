@@ -1116,6 +1116,8 @@ dependencies = [
 name = "craft-mesh"
 version = "0.1.0"
 dependencies = [
+ "craft-opc",
+ "craft-xml",
  "serde_json",
 ]
 

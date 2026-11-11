@@ -9,8 +9,9 @@ a `Scene` into bytes. One Cargo feature per format, all on by default.
 | `obj` | Wavefront OBJ with MTL | yes | OBJ and MTL | none |
 | `ply` | PLY, ASCII and both binary byte orders | yes | no (no app writes PLY) | none |
 | `gltf` | glTF 2.0 (`.gltf`) and GLB | yes | GLB | `serde_json` |
+| `threemf` | 3MF, core and materials extension | yes | no | `craft-opc`, `craft-xml` |
 
-FBX, USD, Alembic, COLLADA and 3MF are not here yet.
+FBX, USD, Alembic and COLLADA are not here yet.
 
 ## The neutral model
 
@@ -78,6 +79,16 @@ cameras; `KHR_lights_punctual`. Primitives of a mesh that name the same accessor
 vertices. `write_glb` writes nodes, meshes (positions, normals, UV sets, colours), materials and
 images.
 
+**3MF.** The package is opened with `craft-opc` and the model part found through its `3dmodel`
+relationship; `threemf::read_model_part` reads a model part's XML on its own. Mesh objects,
+component objects and build items with their transforms (every build item a root node, every
+component a child node, an object placed several times one mesh), the unit (`Model::unit`; the
+scene is not scaled), base materials, colour groups (a position per vertex and colour, since
+colours are per position here), texture coordinate groups (a UV pool indexed per corner) and
+their textures (the package part's bytes as `Image::data`, tile styles as wrap modes). Not read:
+components in another model part (the production extension), composite materials,
+multi-properties, slices and beam lattices; the first three are named in a warning.
+
 Not read: sparse accessors and required geometry extensions (Draco, meshopt) are
 `Error::Unsupported`; points, lines, morph targets, tangents and other extensions are passed over.
 Not written: skins, animations, cameras, lights, and `.gltf` with separate files.
@@ -91,19 +102,19 @@ mutations of every byte of good files.
 
 | Limit | Default | Applies to |
 |---|---|---|
-| `max_vertices` | 20 000 000 | entries per attribute pool (OBJ: each of `v`, `vt`, `vn`, counting unused ones; glTF: vertices over all meshes) |
+| `max_vertices` | 20 000 000 | entries per attribute pool (OBJ: each of `v`, `vt`, `vn`, counting unused ones; glTF: vertices over all meshes; 3MF: vertices, colours and texture coordinates of the file together) |
 | `max_triangles` | 20 000 000 | triangles after fanning polygons, strips and fans |
 | `max_face_corners` | 4096 | corners of one face; PLY list lengths |
-| `max_meshes` | 100 000 | OBJ objects, glTF meshes |
+| `max_meshes` | 100 000 | OBJ objects, glTF meshes, 3MF objects |
 | `max_parts` | 100 000 | groups, material runs, glTF primitives |
-| `max_materials` | 100 000 | materials; images; OBJ material libraries |
-| `max_nodes` | 100 000 | nodes, and node visits when the hierarchy is walked (ends cycles) |
-| `max_depth` | 64 | node nesting |
-| `max_data_bytes` | 1 GiB | buffers and material libraries taken from the resolver; embedded image bytes; skin and animation values; the binary chunk `write_glb` builds |
+| `max_materials` | 100 000 | materials; images; OBJ material libraries; 3MF base materials and textures together |
+| `max_nodes` | 100 000 | nodes, and node visits when the hierarchy is walked (ends cycles); 3MF placed objects, build items and components |
+| `max_depth` | 64 | node nesting; 3MF component nesting (ends cycles) |
+| `max_data_bytes` | 1 GiB | buffers and material libraries taken from the resolver; embedded image bytes; skin and animation values; the binary chunk `write_glb` builds; what a 3MF package inflates to, and its textures |
 | `max_extras` | 10 000 | skins, animations, cameras, lights, buffers (each); channels of one animation |
 
 Fixed bounds: a PLY header of 1 MiB, 64 elements and 256 properties per element; 2^24 components
-for glTF accessors without a buffer view, over the whole file.
+for glTF accessors without a buffer view, over the whole file; 10 000 parts in a 3MF package.
 
 **External files.** No reader opens a file. A reader that needs another file to parse (an OBJ
 material library, a glTF buffer) asks the caller's `Resolver` for it by the name the file writes;
