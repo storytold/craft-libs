@@ -4,7 +4,7 @@
 Usage:
     curl -L -o h265.pdf 'https://www.itu.int/rec/dologin_pub.asp?lang=e&id=T-REC-H.265-202108-S!!PDF-E&type=items'
     pdftotext -layout h265.pdf h265.txt
-    python3 extract_tables.py h265.txt > ../src/spec_tables.rs
+    python3 hevc_extract_tables.py h265.txt > ../src/hevc/decode/spec_tables.rs
 
 Only the specification text is read. Extracted: CABAC initValue tables (Tables 9-5..9-35) arranged per
 initType following Table 9-4, default scaling lists (Table 7-6), intraPredAngle / invAngle (Tables 8-5,

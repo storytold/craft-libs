@@ -243,7 +243,7 @@ fn parse_vui(r: &mut BitReader, max_sub_layers_minus1: u32) -> Result<Vui> {
 /// Scaling list data (7.3.4) with prediction resolved: lists in up-right diagonal coefficient order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScalingList {
-    /// [sizeId][matrixId][i]; sizeId 0 uses 16 entries.
+    /// `[sizeId][matrixId][i]`; sizeId 0 uses 16 entries.
     pub lists: [[[u8; 64]; 6]; 4],
     /// scaling_list_dc_coef for sizeId 2, 3.
     pub dc: [[u8; 6]; 2],
@@ -311,7 +311,7 @@ impl ScalingList {
         Ok(sl)
     }
 
-    /// ScalingFactor for sizeId (log2 size = sizeId + 2) and matrixId as a row-major [y][x] matrix
+    /// ScalingFactor for sizeId (log2 size = sizeId + 2) and matrixId as a row-major `[y][x]` matrix
     /// (7-44..7-48).
     pub fn factor(&self, size_id: usize, matrix_id: usize) -> Vec<u8> {
         let n = 4usize << size_id;
@@ -736,7 +736,11 @@ impl Pps {
         let num_ref_idx_l0_default = r.read_ue_plus(1)?;
         let num_ref_idx_l1_default = r.read_ue_plus(1)?;
         ensure!(num_ref_idx_l0_default <= 15 && num_ref_idx_l1_default <= 15, "num_ref_idx_default_active out of range");
-        let init_qp = 26 + r.read_se()?;
+        // init_qp_minus26 is −(26 + QpBdOffsetY) ..= 25. Bit depth is not known here (no SPS), so the
+        // widest legal window is 16-bit (QpBdOffsetY = 48). Reject before adding 26.
+        let init_qp_minus26 = r.read_se()?;
+        ensure!((-74..=25).contains(&init_qp_minus26), "init_qp_minus26 out of range");
+        let init_qp = 26 + init_qp_minus26;
         let constrained_intra_pred = r.read_flag()?;
         let transform_skip = r.read_flag()?;
         let cu_qp_delta_enabled = r.read_flag()?;
@@ -958,6 +962,10 @@ mod tests {
         assert!(err.to_string().contains("decoded-frame budget"));
     }
     fn pps_bits(num_ref_idx: u32, tiles: u32) -> Vec<u8> {
+        pps_bits_qp(num_ref_idx, tiles, 0)
+    }
+
+    fn pps_bits_qp(num_ref_idx: u32, tiles: u32, init_qp_minus26: i32) -> Vec<u8> {
         let mut w = craft_media::bitstream::BitWriter::new();
         w.write_ue(0); // pps id
         w.write_ue(0); // sps id
@@ -968,7 +976,7 @@ mod tests {
         w.write_bit(false); // cabac_init_present
         w.write_ue(num_ref_idx);
         w.write_ue(num_ref_idx);
-        w.write_se(0); // init_qp
+        w.write_se(init_qp_minus26);
         w.write_bit(false); // constrained intra
         w.write_bit(false); // transform skip
         w.write_bit(false); // cu_qp_delta
@@ -989,6 +997,17 @@ mod tests {
         w.write_bits(0, 2); // slice header extension, pps extension
         w.rbsp_trailing();
         w.finish()
+    }
+
+    #[test]
+    fn init_qp_is_checked_before_adding_26() {
+        let pps = |qp| Pps::parse(&pps_bits_qp(0, 0, qp));
+        assert_eq!(pps(0).unwrap().init_qp, 26);
+        assert_eq!(pps(25).unwrap().init_qp, 51);
+        assert_eq!(pps(-74).unwrap().init_qp, -48);
+        assert!(pps(26).is_err());
+        assert!(pps(-75).is_err());
+        assert!(pps(i32::MAX).is_err());
     }
 
     #[test]

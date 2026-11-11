@@ -132,7 +132,7 @@ fn compare_detects_mismatch() {
     assert!(err.contains("plane V"), "{err}");
 }
 
-/// Pre-generate every fixture and its reference decode (`cargo xtask fixtures`).
+/// Pre-generate every fixture and its reference decode .
 #[test]
 #[ignore]
 fn generate_fixtures() {

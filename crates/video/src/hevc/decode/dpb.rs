@@ -2,7 +2,7 @@
 //! reference generation (8.3.3), reference picture lists (8.3.4) and output / bumping (C.5.2).
 //!
 //! The buffer only does bookkeeping on picture headers; what a picture is (`F`: the software
-//! decoder's [`crate::hevc::decode::picture::FrameRef`], a hardware decoder's surface) is up to the decoder, so
+//! decoder's `FrameRef`, a hardware decoder's surface) is up to the decoder, so
 //! hardware decoders driven by the same headers (VA-API) share this logic and output order.
 
 use crate::hevc::decode::error::{Result, ensure};

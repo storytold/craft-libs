@@ -1,5 +1,5 @@
 //! Decode speed (ignored by default; run with
-//! `cargo test --release -p filmcraft-hevc --test it perf:: -- --ignored --nocapture`).
+//! `cargo test --release -p craft-video --features hevc-decode,threads --test hevc_decode perf:: -- --ignored --nocapture`).
 
 use crate::common;
 

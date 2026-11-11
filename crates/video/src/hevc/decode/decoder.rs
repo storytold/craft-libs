@@ -98,6 +98,8 @@ pub struct Decoder {
     pool: Option<rayon::ThreadPool>,
     in_flight: VecDeque<FrameRef>,
     max_in_flight: usize,
+    /// Bytes the picture store may take ([`crate::budget`]).
+    memory_budget: u64,
     draft: bool,
 }
 
@@ -154,6 +156,7 @@ impl Decoder {
             pool,
             in_flight: VecDeque::new(),
             max_in_flight: threads.max(1) + 2,
+            memory_budget: crate::budget::DECODE_MEMORY_BUDGET,
             draft: false,
         }
     }
@@ -169,22 +172,37 @@ impl Decoder {
     pub fn configure_hvcc(&mut self, hvcc: &[u8]) -> Result<()> {
         ensure!(hvcc.len() >= 23, "hvcC too short");
         ensure!(hvcc[0] == 1, "unsupported hvcC version {}", hvcc[0]);
-        self.nal_length_size = Some((hvcc[21] & 3) as usize + 1);
         let num_arrays = hvcc[22] as usize;
-        let mut pos = 23;
-        for _ in 0..num_arrays {
-            ensure!(pos + 3 <= hvcc.len(), "hvcC truncated");
-            let n = u16::from_be_bytes([hvcc[pos + 1], hvcc[pos + 2]]) as usize;
-            pos += 3;
-            for _ in 0..n {
-                ensure!(pos + 2 <= hvcc.len(), "hvcC truncated");
-                let len = u16::from_be_bytes([hvcc[pos], hvcc[pos + 1]]) as usize;
-                pos += 2;
-                ensure!(pos + len <= hvcc.len(), "hvcC truncated");
-                self.handle_nal(&hvcc[pos..pos + len], 0)?;
-                pos += len;
+        // Two passes: the first checks every array, so a record that carries anything but
+        // parameter sets and SEI (a picture slice, say) is refused before any NAL is handled.
+        for pass in 0..2 {
+            let mut pos = 23;
+            for _ in 0..num_arrays {
+                ensure!(pos <= hvcc.len() && hvcc.len() - pos >= 3, "hvcC truncated");
+                let array_type = hvcc[pos] & 0x3f;
+                let n = u16::from_be_bytes([hvcc[pos + 1], hvcc[pos + 2]]) as usize;
+                pos += 3;
+                for _ in 0..n {
+                    ensure!(pos <= hvcc.len() && hvcc.len() - pos >= 2, "hvcC truncated");
+                    let len = u16::from_be_bytes([hvcc[pos], hvcc[pos + 1]]) as usize;
+                    pos += 2;
+                    ensure!(len <= hvcc.len() - pos, "hvcC truncated");
+                    let nal = &hvcc[pos..pos + len];
+                    if pass == 0 {
+                        let header = NalHeader::parse(nal)?;
+                        ensure!(
+                            [nal_type::VPS, nal_type::SPS, nal_type::PPS, nal_type::PREFIX_SEI, nal_type::SUFFIX_SEI].contains(&array_type),
+                            "hvcC array has unsupported NAL type {array_type}"
+                        );
+                        ensure!(header.nal_type == array_type, "hvcC array type {array_type} disagrees with NAL header type {}", header.nal_type);
+                    } else {
+                        self.handle_nal(nal, 0)?;
+                    }
+                    pos += len;
+                }
             }
         }
+        self.nal_length_size = Some((hvcc[21] & 3) as usize + 1);
         Ok(())
     }
 
@@ -409,7 +427,34 @@ impl Decoder {
         Ok(())
     }
 
+    /// Cap the bytes of decoded pictures (current, references, in flight) this decoder may hold.
+    pub fn set_memory_budget(&mut self, bytes: u64) {
+        self.memory_budget = bytes;
+    }
+
+    /// Refuse an SPS whose pictures would not fit the memory budget, before anything is allocated.
+    fn check_budget(&self, sps: &Sps) -> Result<()> {
+        let chroma = sps.chroma_array_type();
+        let shape = crate::budget::PictureShape {
+            width: u64::from(sps.width),
+            height: u64::from(sps.height),
+            shift_x: u32::from(sps.sub_width_c() == 2),
+            shift_y: u32::from(sps.sub_height_c() == 2),
+            chroma_planes: if chroma == 0 { 0 } else { 2 },
+            bytes_per_sample: 2,
+        };
+        let pictures = u64::from(sps.max_dec_pic_buffering) + 1 + self.max_in_flight as u64;
+        ensure!(
+            shape.fits(pictures, self.memory_budget),
+            "{}x{} pictures with {pictures} in the decoder exceed the memory budget",
+            sps.width,
+            sps.height
+        );
+        Ok(())
+    }
+
     fn start_picture(&mut self, sh: &SliceHeader, sps: &Arc<Sps>, pps: &Arc<Pps>, pts: i64) -> Result<()> {
+        self.check_budget(sps)?;
         ensure!(sh.first_slice_segment_in_pic && !sh.dependent, "invalid first slice segment");
         self.call_pictures += 1;
         ensure!(self.call_pictures <= MAX_PICTURES_PER_CALL, "too many pictures in one chunk");
@@ -560,9 +605,10 @@ fn run_job(job: PicJob, shared: &Shared) {
 
 fn run_job_as<S: Sample>(job: PicJob, shared: &Shared) {
     let PicJob { frame, sps, pps, layout, scaling, slices, draft } = job;
-    let mut pic = PicState::<S>::new(frame.clone(), sps, pps, layout, scaling);
-    pic.draft = draft;
+    // The picture state is set up inside the guard too: a panic there must not escape the job.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut pic = PicState::<S>::new(frame.clone(), sps, pps, layout, scaling);
+        pic.draft = draft;
         let mut first_err = None;
         for s in &slices {
             if let Err(e) = SliceDecoder::decode(&mut pic, s) {
@@ -570,19 +616,19 @@ fn run_job_as<S: Sample>(job: PicJob, shared: &Shared) {
             }
         }
         crate::hevc::decode::filter::finish(&mut pic);
-        first_err
+        (pic, first_err)
     }));
-    let err = match result {
-        Ok(e) => e,
+    let (pic, err) = match result {
+        Ok((pic, err)) => (Some(pic), err),
         Err(_) => {
             // make sure readers never block on this frame
             frame.publish_gray();
-            Some(Error::Invalid("internal error while decoding a picture".into()))
+            (None, Some(Error::Invalid("internal error while decoding a picture".into())))
         }
     };
     if let Ok(mut s) = shared.stats.lock() {
         s.pictures += 1;
-        let [intra, skip, inter] = block_counts(&pic.blk);
+        let [intra, skip, inter] = pic.as_ref().map_or([0; 3], |pic| block_counts(&pic.blk));
         s.intra_4x4_blocks += intra;
         s.skip_4x4_blocks += skip;
         s.inter_4x4_blocks += inter;
@@ -857,5 +903,32 @@ mod tests {
         }
         assert_eq!(block_counts(&blk), want);
         assert_eq!(block_counts(&[]), [0; 3]);
+    }
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::Decoder;
+
+    #[test]
+    fn hvcc_skips_prefix_and_suffix_sei_arrays() {
+        let mut config = vec![0; 23];
+        config[0] = 1;
+        config[22] = 2;
+        config.extend_from_slice(&[39, 0, 1, 0, 2, 0x4e, 0x01]);
+        config.extend_from_slice(&[40, 0, 1, 0, 2, 0x50, 0x01]);
+
+        let decoder = Decoder::from_hvcc(&config);
+        assert!(decoder.is_ok());
+    }
+
+    #[test]
+    fn hvcc_array_type_must_match_its_nal_headers() {
+        let mut config = vec![0; 23];
+        config[0] = 1;
+        config[22] = 1;
+        // An array announced as VPS (32) holding a NAL whose header says SPS (33).
+        config.extend_from_slice(&[32, 0, 1, 0, 2, 0x42, 0x01]);
+        assert!(Decoder::from_hvcc(&config).is_err());
     }
 }

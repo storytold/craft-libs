@@ -1,5 +1,5 @@
 //! Decode an Annex-B H.265 file to raw planar YUV (yuv420p or yuv420p10le):
-//! `cargo run --release -p filmcraft-hevc --example hevcdec -- in.hevc out.yuv`
+//! `cargo run --release -p craft-video --features hevc-decode,threads --example hevc_hevcdec -- in.hevc out.yuv`
 
 use craft_video::hevc::decode::Decoder;
 

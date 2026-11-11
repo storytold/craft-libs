@@ -1,15 +1,15 @@
-# filmcraft-hevc
+# H.265 / HEVC decoder (`craft_video::hevc::decode`, feature `hevc-decode`)
 
 Clean-room, pure-Rust (no `unsafe`) H.265 / HEVC decoder, implemented from the public ITU-T
-Rec. H.265 (08/2021, ISO/IEC 23008-2) specification. It is an L0 crate: it depends only on
-`filmcraft-bitstream`, `thiserror`, and optionally `rayon` (default feature `threads`), and builds
+Rec. H.265 (08/2021, ISO/IEC 23008-2) specification. It depends only on
+`craft_media::bitstream`, `thiserror`, and optionally `rayon` (feature `threads`), and builds
 for `wasm32-unknown-unknown`.
 
 All syntax tables (the CABAC `initValue` tables arranged per `initType` following Table 9-4, default
 scaling lists, `intraPredAngle` / `invAngle`, the chroma QP table, the deblocking beta'/tC' table,
 the luma / chroma interpolation filter taps and the 32x32 DCT matrix) were extracted from the
-specification text by [`tools/extract_tables.py`](tools/extract_tables.py) (it only reads the text
-of the ITU-T PDF, see the script header); the output is `src/spec_tables.rs`. Scan orders are
+specification text by [`tools/hevc_extract_tables.py`](../../../tools/hevc_extract_tables.py) (it only reads the text
+of the ITU-T PDF, see the script header); the output is `spec_tables.rs`. Scan orders are
 derived by the algorithms of 6.5.3-6.5.5. No code was taken or ported from FFmpeg, libde265, x265 or
 the HM reference software; ffmpeg / libx265 / VideoToolbox are only used as external test oracles
 and fixture generators.
@@ -37,7 +37,7 @@ and fixture generators.
 ## API
 
 ```rust
-use filmcraft_hevc::{Decoder, Plane};
+use craft_video::hevc::decode::{Decoder, Plane};
 
 let mut dec = Decoder::new(); // or Decoder::with_threads(n), Decoder::from_hvcc(&hvcc)?
 for (pts, access_unit) in access_units {
@@ -59,7 +59,7 @@ WPP, weighted prediction, TMVP, SAO, block kinds...).
 
 ### Architecture
 
-Same design as `filmcraft-h264`: the calling thread parses parameter sets and slice headers and does
+Same design as the H.264 decoder: the calling thread parses parameter sets and slice headers and does
 POC / RPS / DPB bookkeeping; the CTU layer of each picture runs as a job (rayon pool). A job
 reconstructs into private planes, deblocks CTB row r once row r+1 is decoded, applies SAO to row r
 once row r+1 is deblocked, and publishes final rows (samples + 16x16 compressed motion for TMVP)
@@ -74,8 +74,7 @@ for the active picture format. This backing is created only when a reference is 
 on geometry or plane-depth changes, and released on flush. Jobs still reading an older format keep
 its rows alive. Each backing retains the full coded picture dimensions.
 
-Draft mode (`Decoder::set_draft(true)`; FilmCraft enables it with Settings ▸ Playback ▸ Draft
-decoding while the Program monitor plays at 1/2 or 1/4): sub-layer non-reference pictures
+Draft mode (`Decoder::set_draft(true)`, meant for playback at reduced resolution): sub-layer non-reference pictures
 (TRAIL_N, RASL_N, ...) of the highest temporal sub-layer — no later picture predicts from them,
 and TMVP reads only reference pictures — skip deblocking and SAO and are flagged
 `Picture::draft`; every other picture is unchanged. libx265's non-reference B pictures are such
@@ -85,15 +84,26 @@ Modules: `params` (VPS/SPS/PPS/tile layout), `slice` (NAL + slice header), `dpb`
 bumping), `cabac`, `slicedec` (CTU syntax + reconstruction), `mvpred` (merge / AMVP / TMVP),
 `intra`, `inter`, `transform`, `filter` (deblocking, SAO, row publication).
 
+## Memory and configuration records
+
+A picture is refused when the pictures the decoder would hold at its size (the DPB, the current
+picture and those in flight, at two bytes a sample) do not fit `Decoder::set_memory_budget`
+(`craft_video::budget::DECODE_MEMORY_BUDGET` by default: 4 GiB, 1 GiB on 32-bit targets); the
+per-picture size cap applies as well.
+
+`configure_hvcc` checks every array of the record before it handles any NAL unit: arrays may hold
+VPS, SPS, PPS and prefix / suffix SEI, and each NAL header must agree with its array's type. A
+record that carries a picture slice is an error and starts no picture.
+
 ## Tests
 
-`cargo test -p filmcraft-hevc` (fixtures are generated on first use into `target/fixtures/hevc/`
+`cargo test -p craft-video --features hevc-decode,threads` (fixtures are generated on first use into `target/fixtures/hevc/`
 with ffmpeg; tests print a message and skip when ffmpeg is absent).
 
 - Unit tests: CABAC engine round trip against an encoder model and context initialisation, scan
   orders, DCT matrix properties, QpC, intra predictors, transform DC / bounded-region shortcuts,
   MV scaling.
-- Synthetic streams (`src/synth_tests.rs`): a small CABAC encoder writes streams with what libx265
+- Synthetic streams (`synth_tests.rs`): a small CABAC encoder writes streams with what libx265
   never produces — tiles (uniform and explicit spacing, loop filter across tiles on / off), PCM
   (with and without in-loop filtering), multiple slices, dependent slice segments (starting inside
   and at the start of a tile), long-term reference pictures, reference list modification. Expected
@@ -140,12 +150,12 @@ libx265 unless noted (x265 enables WPP by default, so most streams carry entry p
 | vt_main / vt_main10 | 640x360 | Apple VideoToolbox (hevc_videotoolbox), macOS only |
 | synthetic (7 streams) | 96x64 | tiles, PCM, slices, dependent segments, LTR, list modification |
 
-`cargo test -p filmcraft-hevc --test it conformance::coverage_report -- --ignored --nocapture` prints the
+`cargo test -p craft-video --features hevc-decode,threads --test hevc_decode conformance::coverage_report -- --ignored --nocapture` prints the
 decoder statistics per fixture.
 
 ## Performance
 
-`cargo test --release -p filmcraft-hevc --test it perf:: -- --ignored --nocapture` (bit-exactness is
+`cargo test --release -p craft-video --features hevc-decode,threads --test hevc_decode perf:: -- --ignored --nocapture` (bit-exactness is
 verified first). Apple M4 Pro (14 cores), measured while the machine was heavily shared (load
 average 50-100), so these are lower bounds:
 
@@ -155,7 +165,7 @@ average 50-100), so these are lower bounds:
 | 2160p Main 10, x265 fast CRF 26, 20 frames | ~20 fps | ~95 fps |
 
 No intrinsics: the hot loops are written to auto-vectorise. M4.8
-profiling (`cargo xtask bench`, macOS `sample`) found the inverse transform at over half of the
+profiling (FilmCraft's `cargo xtask bench`, macOS `sample`) found the inverse transform at over half of the
 decoder's CPU time: it evaluated the full matrix product with strided table reads. It now sums
 contiguous basis rows scaled by the non-zero coefficients only, with the block size a compile-time
 constant so the loops vectorise (exact integer sums, so bit-exact; `transform::tests` checks it
@@ -163,12 +173,12 @@ against the direct product on random sparse and dense blocks). SAO edge offset h
 loop for samples whose neighbours are inside the CTB. Together: ~60 % less CPU per frame
 (1080p 78 → 33 ms, 2160p 320 → 129 ms of CPU per frame through the media stack, alternating A/B), see
 [docs/performance.md](../../docs/performance.md).
-`cargo run --release -p filmcraft-hevc --example hevcdec -- in.hevc out.yuv` decodes a file
+`cargo run --release -p craft-video --features hevc-decode,threads --example hevc_hevcdec -- in.hevc out.yuv` decodes a file
 (`HEVC_THREADS=n`, `HEVC_LOOPS=k`, `HEVC_DRAFT=1`).
 
 M4.10 (2026-10-03), CPU cycles per frame counted by the kernel (`/usr/bin/time -l`, all threads
 summed; mean of two interleaved base / after rounds at load average 190-320) on the
-`cargo xtask bench` decode clips (x265 preset fast, CRF 22, testsrc2 + grain), bit-exact:
+FilmCraft's `cargo xtask bench` decode clips (x265 preset fast, CRF 22, testsrc2 + grain), bit-exact:
 
 | stream | threads | Mcycles / frame before | after | after, draft mode |
 |---|---|---|---|---|

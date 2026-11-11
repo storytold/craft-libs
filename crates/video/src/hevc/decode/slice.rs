@@ -393,7 +393,7 @@ fn parse_inter_slice_params(r: &mut BitReader, sh: &mut SliceHeader, pps: &Pps, 
 /// Slice QP delta, chroma QP offsets and deblocking / in-loop filter controls.
 fn parse_qp_and_loop_filter(r: &mut BitReader, sh: &mut SliceHeader, pps: &Pps, sps: &Sps) -> Result<()> {
     sh.qp_delta = r.read_se()?;
-    let qp = pps.init_qp + sh.qp_delta;
+    let Some(qp) = pps.init_qp.checked_add(sh.qp_delta) else { return invalid("SliceQpY out of range") };
     let qp_bd = 6 * (sps.bit_depth_luma as i32 - 8);
     ensure!((-qp_bd..=51).contains(&qp), "SliceQpY {qp} out of range");
     if pps.slice_chroma_qp_offsets_present {
@@ -452,7 +452,9 @@ fn parse_pwt(r: &mut BitReader, sh: &SliceHeader, sps: &Sps) -> Result<PredWeigh
     ensure!(t.luma_log2_denom <= 7, "luma_log2_weight_denom out of range");
     let chroma = sps.chroma_array_type() != 0;
     if chroma {
-        let d = t.luma_log2_denom as i32 + r.read_se()?;
+        let delta = r.read_se()?;
+        ensure!((-7..=7).contains(&delta), "delta_chroma_log2_weight_denom out of range");
+        let d = t.luma_log2_denom as i32 + delta;
         ensure!((0..=7).contains(&d), "ChromaLog2WeightDenom out of range");
         t.chroma_log2_denom = d as u32;
     }
@@ -590,13 +592,13 @@ mod entry_point_tests {
     }
 
     /// An IDR slice header with one entry point of `offset_minus1` (32-bit field).
-    fn idr_slice(offset_minus1: u32) -> Vec<u8> {
+    fn idr_slice_qp(offset_minus1: u32, qp_delta: i32) -> Vec<u8> {
         let mut w = BitWriter::new();
         w.write_bit(true); // first_slice_segment_in_pic_flag
         w.write_bit(false); // no_output_of_prior_pics_flag
         w.write_ue(0); // pps id
         w.write_ue(2); // I slice
-        w.write_se(0); // slice_qp_delta
+        w.write_se(qp_delta); // slice_qp_delta
         w.write_ue(1); // num_entry_point_offsets
         w.write_ue(31); // offset_len_minus1
         w.write_bits(offset_minus1, 32);
@@ -605,10 +607,40 @@ mod entry_point_tests {
     }
 
     fn parse_slice(offset_minus1: u32) -> Result<SliceHeader> {
+        parse_slice_qp(offset_minus1, 0)
+    }
+
+    fn parse_slice_qp(offset_minus1: u32, qp_delta: i32) -> Result<SliceHeader> {
         let sps = std::sync::Arc::new(Sps::parse(&sps_bytes())?);
         let pps = std::sync::Arc::new(Pps::parse(&pps_bytes())?);
         let nal = NalHeader { nal_type: nal_type::IDR_W_RADL, layer_id: 0, temporal_id: 0 };
-        SliceHeader::parse(&idr_slice(offset_minus1), nal, |_| Ok((pps, sps)), None).map(|(sh, _, _)| sh)
+        SliceHeader::parse(&idr_slice_qp(offset_minus1, qp_delta), nal, |_| Ok((pps, sps)), None).map(|(sh, _, _)| sh)
+    }
+
+    #[test]
+    fn a_slice_qp_delta_that_overflows_slice_qp_is_an_error() {
+        assert_eq!(parse_slice_qp(7, 25).unwrap().qp_delta, 25);
+        assert!(parse_slice_qp(7, 26).is_err());
+        assert!(parse_slice_qp(7, i32::MAX).is_err());
+        assert!(parse_slice_qp(7, -i32::MAX).is_err());
+    }
+
+    #[test]
+    fn a_chroma_weight_denominator_delta_out_of_range_is_an_error() {
+        let sps = Sps::parse(&sps_bytes()).unwrap();
+        let sh = parse_slice(7).unwrap();
+        let pwt = |delta: i32| {
+            let mut w = BitWriter::new();
+            w.write_ue(7); // luma_log2_weight_denom
+            w.write_se(delta); // delta_chroma_log2_weight_denom
+            w.rbsp_trailing();
+            let b = w.finish();
+            parse_pwt(&mut BitReader::new(&b), &sh, &sps).map(|t| t.chroma_log2_denom)
+        };
+        assert_eq!(pwt(-7).unwrap(), 0);
+        assert!(pwt(1).is_err());
+        assert!(pwt(i32::MAX).is_err());
+        assert!(pwt(-i32::MAX).is_err());
     }
 
     #[test]
