@@ -14,8 +14,8 @@ use crate::matroska::meta::{
     Attachment, ClusterInfo, CuePoint, Edition, SeekEntry, SegmentInfo, Tag, parse_chapters, parse_cues, parse_info, parse_seekhead, parse_tags,
     parse_tracks,
 };
-use crate::matroska::source::{ByteSource, ReadSeekSource};
 use crate::matroska::track::{Sample, Track, TrackKind, gcd};
+use crate::source::{ByteSource, ReadSeekSource};
 
 const WIN: usize = 64 * 1024;
 /// Upper bound for level-1 metadata elements read into memory (Info, Tracks, Cues, Tags…).

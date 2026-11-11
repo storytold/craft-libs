@@ -116,8 +116,11 @@ pub struct FloatingFrame<'a> {
     bounds: Option<Rect>,
     limits: PanelLimits,
     resizable: bool,
+    resize_axes: [bool; 2],
+    resize_edges: [bool; 4],
     resize_label: &'a str,
     opacity: f32,
+    reserve_top_resize_band: bool,
 }
 
 /// What a [`FloatingFrame`] did this frame.
@@ -137,7 +140,18 @@ pub struct FrameResponse<R> {
 
 impl<'a> FloatingFrame<'a> {
     pub fn new(id: Id, rect: Rect) -> Self {
-        Self { id, rect, bounds: None, limits: PanelLimits::default(), resizable: true, resize_label: "Resize window", opacity: 1.0 }
+        Self {
+            id,
+            rect,
+            bounds: None,
+            limits: PanelLimits::default(),
+            resizable: true,
+            resize_axes: [true, true],
+            resize_edges: [true; 4],
+            resize_label: "Resize window",
+            opacity: 1.0,
+            reserve_top_resize_band: true,
+        }
     }
 
     /// The frame stays inside `bounds`; the default is the viewport's content rect.
@@ -147,14 +161,34 @@ impl<'a> FloatingFrame<'a> {
     }
 
     /// Size limits of a resize, top resize band included. The frame itself is drawn at the
-    /// given rect.
+    /// given rect. Minimums are capped by the bounds when the viewport cannot fit them.
     pub fn limits(mut self, limits: PanelLimits) -> Self {
         self.limits = limits;
         self
     }
 
+    /// Reserve a separate top resize gutter; disable when contents already supply a header.
+    /// Hosts supplying their own header also supply its minimum size through [`Self::limits`].
+    pub fn reserve_top_resize_band(mut self, reserve: bool) -> Self {
+        self.reserve_top_resize_band = reserve;
+        self
+    }
+
     pub fn resizable(mut self, resizable: bool) -> Self {
         self.resizable = resizable;
+        self
+    }
+
+    /// Restrict the stock edge handles when a host owns resizing on one axis.
+    pub fn resize_axes(mut self, axes: [bool; 2]) -> Self {
+        self.resize_axes = axes;
+        self
+    }
+
+    /// Enable the left, right, top and bottom edges. A corner requires both its edges.
+    /// Hosts anchored to a dock can expose only the edges facing away from it.
+    pub fn resize_edges(mut self, edges: [bool; 4]) -> Self {
+        self.resize_edges = edges;
         self
     }
 
@@ -192,8 +226,11 @@ impl<'a> FloatingFrame<'a> {
             ui.set_min_size(rect.size());
             ui.allocate_rect(rect, Sense::hover());
             ui.painter().rect_filled(rect, 0.0, style.background);
-            let contents =
-                if self.resizable { Rect::from_min_max(pos2(rect.left(), (rect.top() + RESIZE_BAND).min(rect.bottom())), rect.max) } else { rect };
+            let contents = if self.resizable && self.reserve_top_resize_band {
+                Rect::from_min_max(pos2(rect.left(), (rect.top() + RESIZE_BAND).min(rect.bottom())), rect.max)
+            } else {
+                rect
+            };
             let inner = add_contents(ui, contents);
             ui.painter().rect_stroke(rect, 0.0, style.stroke, StrokeKind::Outside);
             let (resized, resize_started, handles) = if self.resizable { self.handles(ui, rect, bounds, style) } else { (None, None, Vec::new()) };
@@ -215,9 +252,27 @@ impl<'a> FloatingFrame<'a> {
         let mut resized = None;
         let mut started = None;
         let mut responses = Vec::new();
-        let limits = PanelLimits { min: self.limits.min.max(vec2(40.0, RESIZE_BAND + TITLE_HEIGHT + 20.0)).min(self.limits.max), ..self.limits };
+        // Only stock chrome needs its title-bar minimum. Host-owned headers use the host's
+        // limits; retain a nonempty floor that cannot exceed an already-constrained rect.
+        let chrome_min = if self.reserve_top_resize_band { vec2(40.0, RESIZE_BAND + TITLE_HEIGHT + 20.0) } else { Vec2::splat(1.0).min(rect.size()) };
+        // Bounds may force one axis below its minimum; do not let that block the other axis.
+        let limits = PanelLimits { min: self.limits.min.max(chrome_min).min(self.limits.max).min(bounds.size()), ..self.limits };
         let canceled = ui.input(|input| input.key_pressed(Key::Escape)) || crate::focus::lost(ui.ctx());
-        for (name, handle, direction) in handles(rect) {
+        for (name, mut handle, mut direction) in handles(rect) {
+            if (direction.x < 0.0 && !self.resize_edges[0])
+                || (direction.x > 0.0 && !self.resize_edges[1])
+                || (direction.y < 0.0 && !self.resize_edges[2])
+                || (direction.y > 0.0 && !self.resize_edges[3])
+            {
+                continue;
+            }
+            if !self.reserve_top_resize_band && direction.y < 0.0 {
+                handle.max.y = (rect.top() + ui.ctx().pixels_per_point().recip()).min(rect.bottom());
+            }
+            direction = vec2(if self.resize_axes[0] { direction.x } else { 0.0 }, if self.resize_axes[1] { direction.y } else { 0.0 });
+            if direction == egui::Vec2::ZERO {
+                continue;
+            }
             if !super::targets::usable(handle) {
                 continue;
             }
@@ -485,4 +540,95 @@ pub fn live_move(ctx: &Context, bar: &Response, rect: Rect, bounds: Rect) -> Opt
     // The drag ended without a release on this bar (the bar was not shown).
     forget();
     None
+}
+
+#[cfg(test)]
+mod compatibility_tests {
+    use super::*;
+
+    /// Viewport clipping may force one stock-chrome axis below its normal minimum.
+    /// The other axis still resizes while keeping feasible host/chrome limits and its anchor.
+    #[test]
+    fn constrained_stock_frames_keep_the_other_axis_resizable() {
+        use egui::{Event, PointerButton, RawInput};
+        for (size, handle, delta, stock_minimum, host_minimum) in [
+            (vec2(30.0, 300.0), "resize-bottom", vec2(0.0, 20.0), vec2(30.0, 38.0), vec2(30.0, 90.0)),
+            (vec2(300.0, 30.0), "resize-right", vec2(20.0, 0.0), vec2(40.0, 30.0), vec2(80.0, 30.0)),
+        ] {
+            for (minimum, expected_minimum) in [(vec2(20.0, 20.0), stock_minimum), (vec2(80.0, 90.0), host_minimum)] {
+                let ctx = Context::default();
+                let id = Id::unique("constrained-stock-frame");
+                let bounds = Rect::from_min_size(Pos2::ZERO, size);
+                let mut rect = Rect::from_min_size(pos2(10.0, 10.0), vec2(100.0, 100.0));
+                let mut time = 0.0;
+                let mut frame = |events| {
+                    time += 1.0 / 60.0;
+                    let input = RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(300.0, 300.0))),
+                        events,
+                        time: Some(time),
+                        ..Default::default()
+                    };
+                    let mut next = rect;
+                    let mut output = ctx.run_ui(input, |ui| {
+                        let shown = FloatingFrame::new(id, rect).bounds(bounds).limits(PanelLimits { min: minimum, max: Vec2::splat(500.0) }).show(
+                            ui.ctx(),
+                            &ChromeStyle::from_ui(ui),
+                            |_, _| {},
+                        );
+                        next = shown.resized.unwrap_or(shown.rect);
+                    });
+                    output.textures_delta.clear();
+                    rect = next;
+                    next
+                };
+                let drag = |frame: &mut dyn FnMut(Vec<Event>) -> Rect, from, to| {
+                    let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Default::default() };
+                    frame(vec![Event::PointerMoved(from), button(from, true)]);
+                    frame(vec![Event::PointerMoved(to)]);
+                    frame(vec![button(to, false)]);
+                    frame(vec![])
+                };
+                frame(vec![]);
+                let before = frame(vec![]);
+                let from = ctx.read_response(id.with(handle)).unwrap().rect.center();
+                let grown = drag(&mut frame, from, from + delta);
+                assert_eq!(grown.size(), before.size() + delta, "bounds={size:?}, minimum={minimum:?}");
+                assert_eq!(grown.min, before.min);
+                let from = ctx.read_response(id.with(handle)).unwrap().rect.center();
+                let small = drag(&mut frame, from, from - delta * 100.0);
+                assert_eq!(small.size(), expected_minimum);
+                assert_eq!(small.min, before.min);
+                let from = ctx.read_response(id.with(handle)).unwrap().rect.center();
+                let large = drag(&mut frame, from, from + delta * 100.0);
+                assert!(bounds.contains_rect(large));
+                assert_eq!(large.min, before.min);
+            }
+        }
+    }
+
+    #[test]
+    fn defaults_preserve_pre_host_hook_frame_geometry() {
+        let rect = Rect::from_min_size(pos2(100.0, 100.0), vec2(300.0, 200.0));
+        let frame = FloatingFrame::new(Id::unique("defaults"), rect);
+        assert_eq!(frame.resize_axes, [true, true]);
+        assert!(frame.reserve_top_resize_band);
+        assert!(frame.resizable);
+        // Literal pre-PR hit rectangles: preserve these rather than silently enlarging them.
+        let expected = [
+            [388.0, 288.0, 400.0, 300.0],
+            [100.0, 112.0, 104.0, 288.0],
+            [396.0, 112.0, 400.0, 288.0],
+            [112.0, 296.0, 388.0, 300.0],
+            [100.0, 288.0, 112.0, 300.0],
+            [112.0, 100.0, 388.0, 104.0],
+            [100.0, 100.0, 112.0, 104.0],
+            [388.0, 100.0, 400.0, 104.0],
+        ];
+        for ((_, hit, _), [x0, y0, x1, y1]) in handles(rect).into_iter().zip(expected) {
+            assert_eq!(hit, Rect::from_min_max(pos2(x0, y0), pos2(x1, y1)));
+            // Audit result: legacy targets do NOT meet a 24-by-24 logical-pixel target.
+            assert!(hit.width() < 24.0 || hit.height() < 24.0);
+        }
+    }
 }

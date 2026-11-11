@@ -3,6 +3,7 @@
 `craft-ui` provides small egui components with application-supplied styles. `icons` prepares
 embedded SVG catalogs; `buttons` paints accessible icon buttons; `tabs` handles tab fitting and
 interaction; `layout` provides toolbar fitting, split geometry and resize handles; `theme` shares widget-state styling.
+`layout::Section` groups dialog or inspector settings in caller-styled frames with optional headings.
 `docking` supplies transactional panel moves and an optional docking surface.
 `printing` supplies printer/job controls and asynchronous feedback used by WordCraft and GridCraft.
 `fonts` installs the UI font stack, the same fallback order in every app.
@@ -10,6 +11,84 @@ interaction; `layout` provides toolbar fitting, split geometry and resize handle
 The current delivery covers nine creative apps (DesignCraft, VectorCraft, PhotoCraft, FilmCraft, EffectCraft, CADCraft, PDFCraft, LightCraft and SoundCraft); prior basic and office adapters are separate. The [suite audit](../../docs/ui-components-audit.md#adoption-and-acceptance)
 records their scope and acceptance limits. Assets (font files included), complete themes, localization
 and command handling remain in each application. No icons, fonts or application engines are bundled.
+
+## Host-owned docking chrome
+
+Iconic flyouts resize from their canvas-side edge, bottom and shared corner, keeping
+the edge against the icon column anchored. Resizing saves the group's `height`
+and `flyout_width`, so workspaces retain independent sizes for each group.
+An explicit height overrides content fitting; untouched heights continue to fit
+content, including after a width-only drag. Layout locks and float bounds apply.
+
+`DockContent` can replace an iconic column or a complete tab group without a
+second layout tree. `column_rect` reports the fitted column before painting;
+`owns_iconic_column`/`iconic_column` and `custom_group` suppress the corresponding
+stock chrome, body and input when the host takes ownership. Docked custom groups
+also skip stock body top/bottom drop bands; column-edge targets remain available.
+These hooks are also
+forwarded by `show_customized`'s label/permissions/limits adapter.
+
+`resize_handle_style` and `split_separator` let the host paint one seam while
+retaining stock resize input. `owns_floating_width` delegates horizontal floating
+frame-edge handles to the host; internal dividers and vertical handles remain available.
+`owns_floating_split_width` separately delegates internal horizontal dividers when
+the host supplies their replacement input. Presentation-only
+`group_collapsed` does not change the selected tab in the shared model.
+
+All ownership hooks default to false/no-op. `DockStyle::dock_gap` defaults to
+`None`, preserving the ordinary split gap; setting it affects side-dock seams
+only. `FloatingFrame::resize_axes` defaults to both axes and preserves an enabled
+axis at corners when the other is disabled. A host with its own title bar can
+disable the separate top gutter through `reserve_top_resize_band(false)`.
+
+Compatibility and target-size audit: before these hooks, resizable frames already
+reserved a 4 pt top band. That remains the default; `false` is the new host opt-out.
+The unchanged stock edge hit bands are 4 pt thick; corners are at most 12 pt.
+They do **not** meet a 24-by-24 logical-pixel target at 1x. This PR preserves
+those hit rectangles and does not claim accessibility compliance. Focused
+resize handles also support arrow keys (8 pt steps). Enlarging pointer targets
+needs separate overlap, title-bar and viewport-edge acceptance checks.
+
+`chrome::compatibility_tests::defaults_preserve_pre_host_hook_frame_geometry`
+locks down the pre-hook hit rectangles/defaults. `host_hooks_tests` exercises all
+four axis settings with actual corner and side pointer drags, minimum/maximum
+sizes, the viewport edge, and top-gutter opt-out geometry.
+
+Exhaustive `DockStyle` struct literals need `dock_gap: None`; constructors such
+as `from_ui` and `from_visuals` supply the compatible default.
+
+## Dialog and inspector sections
+
+`layout::Section` groups related settings without owning a window, theme or commands. Pass a
+localized heading and a frame built from the application's tokens. Typography stays in the supplied
+`WidgetText`; contents keep normal egui focus, clipping and parent disabled state.
+
+```rust
+use craft_ui::layout::Section;
+use egui::{CornerRadius, Frame, Margin, RichText};
+
+fn display_settings(ui: &mut egui::Ui, show_grid: &mut bool) {
+    let frame = Frame::new()
+        .fill(ui.visuals().window_fill.lerp_to_gamma(ui.visuals().text_color(), 0.04))
+        .stroke(ui.visuals().window_stroke)
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(Margin::symmetric(10, 8));
+    Section::new(frame).heading(RichText::new("Display").strong()).show(ui, |ui| {
+        ui.checkbox(show_grid, "Show grid");
+    });
+}
+```
+
+The default fills available width; `.fill_width(false)` wraps the contents. An empty heading adds
+no row or heading gap. The heading remains above the contents even in a horizontal parent.
+The helper neither indents controls nor adds exterior spacing: compose those
+in the caller's layout. Reusing the same frame for nested sections preserves its fill. A translucent fill
+blends again in each nested section; the component does not change global visuals. Invalid floating-point decoration becomes zero and
+large heading gaps/strokes are capped at 64 logical points; forced widths are capped at one million.
+
+This small framing boundary comes from [WordCraft #4038](https://github.com/storytold/wordcraft/pull/4038)
+and is also suitable for GridCraft/DeckCraft dialogs and creative-app inspectors. Consumer adoption
+is separate; application-specific dialog behavior remains in each app.
 
 ## SVG catalogs
 
