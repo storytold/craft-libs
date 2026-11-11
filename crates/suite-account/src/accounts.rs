@@ -46,6 +46,35 @@ pub struct Account {
     pub generation: u32,
 }
 
+/// What is left behind when an account is removed: the generation it reached, so a re-add or a
+/// stale write can never land before it.
+///
+/// RFC-0025's "Cross-app lifecycle guarantees" (point 2): generations are monotonic across removal
+/// and re-add. Without this, a removed-and-re-added account restarted at generation 0, so a stale
+/// refresh from before the removal passed the generation check against the new session and
+/// replaced its token; a refresh racing a removal could even put a keychain entry back after the
+/// removal deleted it. See [`Located::Tombstoned`] and [`crate::Store::update_token`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Tombstone {
+    pub id: String,
+    /// The generation the account reached, bumped once more by the removal itself. A write
+    /// against any generation at or before this one is stale.
+    pub generation: u32,
+}
+
+/// Where [`Accounts::locate`] found (or didn't find) an id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Located<'a> {
+    /// A row is on the list.
+    Active(&'a Account),
+    /// No row, but a tombstone: the account was removed and holds this generation. A write against
+    /// it is stale, never [`crate::Error::Unknown`]; see [`crate::Store::update_token`].
+    Tombstoned(u32),
+    /// Neither. This handle has never been on this list.
+    Unknown,
+}
+
 /// The whole file.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -54,17 +83,38 @@ pub struct Accounts {
     pub accounts: Vec<Account>,
     /// The account an application should use when it has no reason to prefer another.
     pub active: Option<String>,
+    /// Removed accounts, holding the generation they reached. See [`Tombstone`].
+    pub tombstones: Vec<Tombstone>,
 }
 
 impl Default for Accounts {
     fn default() -> Accounts {
-        Accounts { format: FORMAT, accounts: Vec::new(), active: None }
+        Accounts { format: FORMAT, accounts: Vec::new(), active: None, tombstones: Vec::new() }
     }
 }
 
 impl Accounts {
     pub fn get(&self, id: &str) -> Option<&Account> {
         self.accounts.iter().find(|a| a.id == id)
+    }
+
+    /// The generation a tombstone for `id` holds, when there is one.
+    pub fn tombstone_generation(&self, id: &str) -> Option<u32> {
+        self.tombstones.iter().find(|t| t.id == id).map(|t| t.generation)
+    }
+
+    /// Finds `id` as an active row, a tombstone, or neither. The one lookup
+    /// [`crate::Store::update_token`] needs to answer a write with the right error: a stale
+    /// generation against a row that is still there, a stale generation against one that was
+    /// removed, or a handle that was never on this list at all.
+    pub fn locate(&self, id: &str) -> Located<'_> {
+        match self.get(id) {
+            Some(account) => Located::Active(account),
+            None => match self.tombstone_generation(id) {
+                Some(generation) => Located::Tombstoned(generation),
+                None => Located::Unknown,
+            },
+        }
     }
 
     /// The active account, when one is named and still on the list.
@@ -76,7 +126,11 @@ impl Accounts {
     }
 
     /// Adds or replaces an account. The account then becomes the active one.
+    ///
+    /// Clears any tombstone for this id: the account is current again, so nothing should still
+    /// answer a write against it with "removed".
     pub fn put(&mut self, account: Account) {
+        self.tombstones.retain(|t| t.id != account.id);
         self.active = Some(account.id.clone());
         match self.accounts.iter_mut().find(|a| a.id == account.id) {
             Some(existing) => *existing = account,
@@ -84,17 +138,17 @@ impl Accounts {
         }
     }
 
-    /// Drops an account. Whoever is left over, if anybody, becomes active.
-    ///
-    /// TODO(RFC-0025 lifecycle guarantee 2): the row's generation goes with it, so a refresh that
-    /// started before this removal and lands after it today sees [`crate::Error::Unknown`] rather
-    /// than a generation mismatch. Both already refuse the write; a tombstone that keeps the
-    /// bumped generation around for a bounded window, so that case reports precisely why, is the
-    /// follow-up the RFC names rather than something this extraction lands.
-    pub fn remove(&mut self, id: &str) {
+    /// Drops an account and leaves a tombstone holding its generation, bumped once more by the
+    /// removal itself (RFC-0025 lifecycle guarantee 2). Whoever is left over, if anybody, becomes
+    /// active.
+    pub fn remove_with_tombstone(&mut self, id: &str, generation: u32) {
         self.accounts.retain(|a| a.id != id);
         if self.active.as_deref() == Some(id) {
             self.active = self.accounts.first().map(|a| a.id.clone());
+        }
+        match self.tombstones.iter_mut().find(|t| t.id == id) {
+            Some(existing) => existing.generation = generation + 1,
+            None => self.tombstones.push(Tombstone { id: id.to_owned(), generation: generation + 1 }),
         }
     }
 }

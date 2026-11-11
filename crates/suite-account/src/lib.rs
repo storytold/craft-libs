@@ -29,6 +29,43 @@
 //!
 //! An application upgrading from its own session file calls [`migrate::adopt`] once at startup.
 //!
+//! ## Concurrent mutations and partial-failure recovery
+//!
+//! Several apps run at once against one account list and one keychain (RFC-0025's "Cross-app
+//! lifecycle guarantees"). Every mutation of the accounts file ([`Store::sign_in`],
+//! [`Store::update_token`], [`Store::discard`], [`Store::set_active`], [`Store::touch`]) therefore
+//! reads, changes and writes it under one OS-level file lock ([`lock::with_lock`]), never an
+//! unlocked read-modify-write. A pure read ([`Store::accounts`], [`Store::shared`]) does not take
+//! the lock; [`accounts::write`] already replaces the file through a temporary file and a rename,
+//! so a reader never sees a half-written file, only one write older than the latest.
+//!
+//! The lock never wraps a keychain call. A keychain write or removal happens either entirely
+//! before the lock is taken or, for [`Store::discard`], inside the same lock hold as the list
+//! write it belongs with, but a locked section is never held across a call into the keychain that
+//! another `Store` in this process could itself be waiting on; that would deadlock two `Store`s
+//! over one folder in a single process the same way two applications would be.
+//!
+//! Each operation's ordering is chosen so a crash, or another process winning a race, leaves a
+//! state the next reader detects and repairs rather than a silent mismatch (guarantee 1):
+//!
+//! * [`Store::sign_in`] writes the keychain token first, the list second. A crash in between
+//!   leaves one keychain entry nothing on the list points at yet. Harmless: the account's handle
+//!   is a digest of the deployment and the subject, so the next sign-in for the same account
+//!   overwrites that same entry rather than minting a new one.
+//! * [`Store::discard`] removes the keychain entry and writes the list's tombstone under the same
+//!   lock hold. A crash between them leaves a row on the list with no entry behind it; `shared()`
+//!   already reads that as nobody signed in, and the next sign-in for that account tidies the row
+//!   up.
+//! * [`Store::update_token`] checks the account's generation once before touching the keychain
+//!   (so an already-stale caller never overwrites a newer token), writes the keychain token, then
+//!   re-checks the generation under the lock before committing the bump. A crash between the
+//!   keychain write and that commit leaves the list one generation behind a keychain token that is
+//!   already the newer one; the next successful `update_token` against that same, still-current
+//!   generation simply writes through it again. A re-check that instead finds the account gone
+//!   (removed and tombstoned in the window the keychain write opened) removes the token it just
+//!   wrote, under the same lock, before returning [`Error::StaleGeneration`]; see "Cross-app
+//!   lifecycle guarantees" point 2.
+//!
 //! ```no_run
 //! # fn main() -> Result<(), craft_suite_account::Error> {
 //! use craft_suite_account::{Shared, Store};
@@ -50,6 +87,7 @@
 
 pub mod accounts;
 mod error;
+mod lock;
 pub mod migrate;
 pub mod paths;
 mod secret;
@@ -169,7 +207,9 @@ impl<S: TokenStore> Store<S> {
         }
     }
 
-    /// Records a sign-in: the token into the keychain, then the account onto the list.
+    /// Records a sign-in: the token into the keychain, then the account onto the list, the latter
+    /// as one locked read-change-write (see the module docs, "Concurrent mutations and
+    /// partial-failure recovery").
     ///
     /// The token goes first. A failed list write then leaves the previous state intact and one
     /// unreferenced keychain entry. The next sign-in for the same account overwrites that entry,
@@ -181,87 +221,144 @@ impl<S: TokenStore> Store<S> {
         let service = accounts::normalise(&new.service);
         let id = accounts::handle(&service, &new.user);
         self.tokens.put(&id, token).map_err(Error::Keychain)?;
-        let mut list = accounts::read(&path)?;
-        let existing = list.get(&id);
-        let added = existing.map_or(now, |a| a.added);
-        // A fresh generation, same as a removal would leave behind: a write made against the
-        // generation this account held a moment ago is now stale. See [`Account::generation`].
-        let generation = existing.map_or(0, |a| a.generation + 1);
-        let account = Account {
-            id,
-            service,
-            user: new.user.clone(),
-            display: new.display.clone(),
-            email: new.email.clone(),
-            added,
-            last_used: now,
-            generation,
-        };
-        list.put(account.clone());
-        accounts::write(&path, &list)?;
-        Ok(account)
+        lock::with_lock(&path, || {
+            let mut list = accounts::read(&path)?;
+            let existing = list.get(&id).cloned();
+            let added = existing.as_ref().map_or(now, |a| a.added);
+            // A fresh generation, continuing past whatever this handle last reached, whether that
+            // was an active row (a sign-in replacing it) or a tombstone (a removal, per RFC-0025
+            // lifecycle guarantee 2: generations are monotonic across removal and re-add, never
+            // restarting at 0). Either way a write made against the generation this handle held a
+            // moment ago is now stale. See [`Account::generation`].
+            let generation = match &existing {
+                Some(account) => account.generation + 1,
+                None => list.tombstone_generation(&id).map_or(0, |generation| generation + 1),
+            };
+            let account = Account {
+                id: id.clone(),
+                service: service.clone(),
+                user: new.user.clone(),
+                display: new.display.clone(),
+                email: new.email.clone(),
+                added,
+                last_used: now,
+                generation,
+            };
+            list.put(account.clone());
+            accounts::write(&path, &list)?;
+            Ok(account)
+        })
     }
 
     /// Writes a refreshed token back, honouring the account's generation.
     ///
     /// `expected_generation` is the generation the caller last read the account at. A sign-in or a
     /// removal bumps the generation (see [`Account::generation`]); a refresh that was already in
-    /// flight when one of those landed is then refused here rather than silently overwriting
-    /// something newer, per RFC-0025's "Cross-app lifecycle guarantees" (point 2: removal wins over
-    /// refresh). An account that is gone outright, because it was removed, is [`Error::Unknown`]
-    /// rather than [`Error::StaleGeneration`]; see the TODO on [`Accounts::remove`] for why that
-    /// distinction is not sharper yet.
+    /// flight when one of those landed is then refused rather than silently overwriting something
+    /// newer, per RFC-0025's "Cross-app lifecycle guarantees" (point 2: removal wins over refresh).
+    /// An account that was removed answers [`Error::StaleGeneration`] holding the tombstone's
+    /// generation, never [`Error::Unknown`] and never a silent recreation; only a handle that has
+    /// never been on this list at all is `Unknown`. See [`accounts::Accounts::locate`].
+    ///
+    /// Checked twice. The first check, before the keychain is touched at all, refuses an already
+    /// stale caller outright: nothing it does from here can overwrite a newer session's token. The
+    /// second, under the accounts lock after the keychain write, catches a removal (or another
+    /// sign-in) that landed in the window that keychain write just opened; see the module docs
+    /// ("Concurrent mutations and partial-failure recovery") for why that window is not itself
+    /// covered by the lock. When the second check finds the account gone, the token the first write
+    /// just placed belongs to nobody now; it is removed again, under the same lock as the
+    /// tombstone check, so that race can never resurrect either the row or the keychain entry.
     pub fn update_token(&self, id: &str, expected_generation: u32, token: &Secret, now: i64) -> Result<Account, Error> {
         self.usable()?;
         let path = self.path().ok_or(Error::Isolated)?;
-        let mut list = accounts::read(&path)?;
-        let current = list.get(id).ok_or_else(|| Error::Unknown(id.to_owned()))?.generation;
-        if current != expected_generation {
-            return Err(Error::StaleGeneration { id: id.to_owned(), expected: expected_generation, current });
+
+        match accounts::read(&path)?.locate(id) {
+            accounts::Located::Active(account) if account.generation == expected_generation => {}
+            accounts::Located::Active(account) => {
+                return Err(Error::StaleGeneration { id: id.to_owned(), expected: expected_generation, current: account.generation });
+            }
+            accounts::Located::Tombstoned(current) => {
+                return Err(Error::StaleGeneration { id: id.to_owned(), expected: expected_generation, current });
+            }
+            accounts::Located::Unknown => return Err(Error::Unknown(id.to_owned())),
         }
+
         self.tokens.put(id, token).map_err(Error::Keychain)?;
-        let account = list.accounts.iter_mut().find(|a| a.id == id).ok_or_else(|| Error::Unknown(id.to_owned()))?;
-        account.generation += 1;
-        account.last_used = now;
-        let updated = account.clone();
-        accounts::write(&path, &list)?;
-        Ok(updated)
+
+        lock::with_lock(&path, || {
+            let mut list = accounts::read(&path)?;
+            match list.locate(id) {
+                accounts::Located::Active(account) if account.generation == expected_generation => {
+                    let mut updated = account.clone();
+                    updated.generation += 1;
+                    updated.last_used = now;
+                    list.put(updated.clone());
+                    accounts::write(&path, &list)?;
+                    Ok(updated)
+                }
+                accounts::Located::Active(account) => {
+                    Err(Error::StaleGeneration { id: id.to_owned(), expected: expected_generation, current: account.generation })
+                }
+                accounts::Located::Tombstoned(current) => {
+                    let _ = self.tokens.remove(id);
+                    Err(Error::StaleGeneration { id: id.to_owned(), expected: expected_generation, current })
+                }
+                accounts::Located::Unknown => {
+                    let _ = self.tokens.remove(id);
+                    Err(Error::Unknown(id.to_owned()))
+                }
+            }
+        })
     }
 
     /// Makes an account the current one.
     pub fn set_active(&self, id: &str) -> Result<(), Error> {
         let path = self.path().ok_or(Error::Isolated)?;
-        let mut list = accounts::read(&path)?;
-        if list.get(id).is_none() {
-            return Err(Error::Unknown(id.to_owned()));
-        }
-        list.active = Some(id.to_owned());
-        accounts::write(&path, &list)
+        lock::with_lock(&path, || {
+            let mut list = accounts::read(&path)?;
+            if list.get(id).is_none() {
+                return Err(Error::Unknown(id.to_owned()));
+            }
+            list.active = Some(id.to_owned());
+            accounts::write(&path, &list)
+        })
     }
 
     /// Records that an application used the account, for a list that can show the most recent one.
     pub fn touch(&self, id: &str, now: i64) -> Result<(), Error> {
         let path = self.path().ok_or(Error::Isolated)?;
-        let mut list = accounts::read(&path)?;
-        let Some(account) = list.accounts.iter_mut().find(|a| a.id == id) else {
-            return Err(Error::Unknown(id.to_owned()));
-        };
-        account.last_used = now;
-        accounts::write(&path, &list)
+        lock::with_lock(&path, || {
+            let mut list = accounts::read(&path)?;
+            let Some(account) = list.accounts.iter_mut().find(|a| a.id == id) else {
+                return Err(Error::Unknown(id.to_owned()));
+            };
+            account.last_used = now;
+            accounts::write(&path, &list)
+        })
     }
 
-    /// Clears an account here: the keychain entry, then the row.
+    /// Clears an account here: the keychain entry and the row's tombstone, under one lock hold.
     ///
     /// This is the local half of a sign-out only. Ending the session at the deployment, so every
     /// machine the person left one on drops it too, is a distinct call on the provider adapter; a
     /// consumer that wants both makes that call first, while the token can still be read, and then
     /// calls this. See the module documentation and RFC-0025's "Cross-app lifecycle guarantees".
+    ///
+    /// The keychain removal happens inside the same lock hold as the list write, not before it: a
+    /// refresh racing this discard (see [`Store::update_token`]'s second check) must never be able
+    /// to land its own keychain write back in between this call's keychain removal and its list
+    /// write and so put the entry right back.
     pub fn discard(&self, id: &str) -> Result<(), Error> {
         let path = self.path().ok_or(Error::Isolated)?;
-        self.forget(id)?;
-        let mut list = accounts::read(&path)?;
-        list.remove(id);
-        accounts::write(&path, &list)
+        lock::with_lock(&path, || {
+            let mut list = accounts::read(&path)?;
+            if let Some(account) = list.get(id).cloned() {
+                self.tokens.remove(id).map_err(Error::Keychain)?;
+                list.remove_with_tombstone(id, account.generation);
+                accounts::write(&path, &list)?;
+            }
+            Ok(())
+        })
     }
 
     /// Clears the keychain entry for an account, leaving the list alone.
