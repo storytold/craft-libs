@@ -8,7 +8,7 @@
 //! instance limits, and cyclic references, are errors.
 //!
 //! Import only, and geometry only: this is not the shared SVG model of craft-libs#789. Depends on
-//! no other Craft crate. Moved from StencilCraft's `stencilcraft-svg`.
+//! no other Craft crate.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -1164,7 +1164,7 @@ mod tests {
     use super::*;
     use kurbo::Shape as _;
 
-    /// A cutter's two kinds, set by `data-kind` or by class, as StencilCraft tags shapes.
+    /// A cutter's two kinds, set by `data-kind` or by class.
     #[derive(Debug, Clone, Copy, Default, PartialEq)]
     enum Tag {
         #[default]
