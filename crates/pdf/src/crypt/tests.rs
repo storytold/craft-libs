@@ -463,3 +463,33 @@ fn r2_create_sets_every_bit_revision_2_reserves() {
         assert_eq!(new(alg, "user", "owner", 0x14).dict().p, -3884, "{alg:?}");
     }
 }
+
+#[test]
+fn attachments_only_encrypts_embedded_files_and_nothing_else() {
+    let params = |algorithm| NewEncryption {
+        algorithm,
+        user_password: "user",
+        owner_password: "owner",
+        permissions: -4,
+        encrypt_metadata: true,
+        seed: [7; 32],
+    };
+    for alg in [Algorithm::Aes128, Algorithm::Aes256] {
+        let h = create_attachments_only(&params(alg), ID).unwrap();
+        let d = h.dict().clone();
+        assert_eq!((d.stm_f.as_slice(), d.str_f.as_slice(), d.ef_f.as_slice()), (&b"Identity"[..], &b"Identity"[..], &b"StdCF"[..]), "{alg:?}");
+        assert!(!h.encrypts_strings(), "{alg:?}");
+        assert!(!h.decrypts(StreamKind::Normal) && h.decrypts(StreamKind::EmbeddedFile), "{alg:?}");
+        assert_eq!(h.encrypt_string(3, 0, b"plain"), b"plain", "{alg:?}");
+        assert_eq!(h.encrypt_stream(3, 0, b"page content", StreamKind::Normal), b"page content", "{alg:?}");
+        let stored = h.encrypt_stream(4, 0, b"attachment", StreamKind::EmbeddedFile);
+        assert_ne!(stored, b"attachment", "{alg:?}");
+        // The file a reader opens: the same dictionary, the user password.
+        let reader = SecurityHandler::open(d, ID, Some("user")).unwrap();
+        assert_eq!(reader.decrypt_stream(4, 0, &stored, StreamKind::EmbeddedFile), b"attachment", "{alg:?}");
+        assert_eq!(reader.decrypt_stream(3, 0, b"page content", StreamKind::Normal), b"page content", "{alg:?}");
+    }
+    for alg in [Algorithm::Rc4_40, Algorithm::Rc4_128] {
+        assert!(matches!(create_attachments_only(&params(alg), ID), Err(CryptError::Unsupported(_))), "{alg:?}");
+    }
+}
