@@ -35,7 +35,7 @@ log = "0.4"
 # ticket (winprint.rs#12, storytold/pdfcraft#3823), and reads whitespace-padded integers in
 # PrintCapabilities (winprint.rs#3, storytold/pdfcraft#2430). Pinned to an immutable revision;
 # review before bumping.
-winprint = { git = "https://github.com/storytold/winprint.rs", rev = "72e674dd02c07d8d40872887b5df176a8ab01ce5", default-features = false }
+winprint = { git = "https://github.com/storytold/winprint.rs", rev = "bc06a7c48b768eb27a828c7986f6d2868b245ee0", default-features = false }
 # GetDefaultPrinter (MIT).
 winsafe = { version = "0.0.29", default-features = false, features = ["winspool"] }
 # The job file's private folder.
