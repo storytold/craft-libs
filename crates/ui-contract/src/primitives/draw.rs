@@ -349,6 +349,16 @@ impl<'a> Draw<'a> {
         }
     }
 
+    /// Paints `checker` over `rect` with corners `radius`, a light cell at the rect's top left. A `Draw` for an
+    /// inactive part fills the rect with the theme's disabled fill instead, as `data_fill` does.
+    pub fn checker(&self, checker: &super::Checker, rect: Rect, radius: CornerRadius) {
+        if self.inactive {
+            self.data_fill(&PaintShape::Rect(rect, radius), DataColor::new(Color32::TRANSPARENT));
+        } else {
+            self.painter.add(checker.shape(self.painter.ctx(), self.env.tokens, super::CheckerArea::Rect(rect, radius), rect.min));
+        }
+    }
+
     fn data_color(&self, color: DataColor) -> Color32 {
         if self.inactive { crate::style::rgba_color(self.env.tokens.color.state.disabled_fill) } else { color.0 }
     }

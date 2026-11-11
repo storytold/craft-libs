@@ -112,3 +112,15 @@ fn a_pass_the_display_skipped_loses_no_damage() {
     let both = first.union(&second);
     assert!(!reads.is_empty() && reads.iter().all(|read| *read == (both, 1)), "the display reads both changes: {reads:?}");
 }
+
+#[trial]
+fn the_checkerboard_paints_the_same_shapes_at_any_area() {
+    let shapes = |document: Rc<Document>, zoom: f64| {
+        let mut rig = rig(document, zoom);
+        rig.frame();
+        rig.fixture.shape_bounds().len()
+    };
+    let small = shapes(Document::new(40, 30), 1.0);
+    let large = shapes(Document::new(400, 300), 4.0);
+    assert_eq!(small, large, "a checkerboard over the whole canvas paints as many shapes as one over a corner of it");
+}

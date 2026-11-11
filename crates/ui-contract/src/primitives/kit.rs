@@ -6,9 +6,14 @@ use super::content::ContentPainterCx;
 use super::draw::{Dashes, PaintShape, StrokeWidth};
 use super::rule::{Rule, RuleKind};
 use super::surface::Surface;
+use super::textures::{TextureCache, UNTINTED};
 use crate::style::{Corners, DataColor, RuleLook, SurfaceKind, UiTokens, ink_color, rgba_color, rule_look, surface_style};
 use craft_behavior::{Axis, CanvasView, kurbo};
-use egui::{Color32, Mesh, Pos2, Rect, Shape, Stroke, Vec2, pos2, vec2};
+use egui::epaint::{RectShape, Vertex};
+use egui::{
+    Color32, ColorImage, Context, CornerRadius, Mesh, Pos2, Rect, Shape, Stroke, TextureFilter, TextureId, TextureOptions, TextureWrapMode, Vec2,
+    pos2, vec2,
+};
 use std::f32::consts::TAU;
 
 /// Which edge of a rect a tick row sits on, and so which way its marks point.
@@ -89,35 +94,48 @@ impl Checker {
         self
     }
 
-    /// The checkerboard over `rect`, drawn where `clip` shows it: the light colour fills it and the dark cells sit
-    /// on top, from the rect's top-left corner.
-    pub fn shapes(&self, tokens: &UiTokens, rect: Rect, clip: Rect) -> Vec<Shape> {
-        let visible = rect.intersect(clip);
-        if visible.width() <= 0.0 || visible.height() <= 0.0 {
-            return Vec::new();
-        }
+    /// The checkerboard over `area` as one textured shape: square cells of the light and dark colours, a light cell
+    /// with its top-left corner at `origin`. A painter's clip cuts it.
+    pub fn shape(&self, ctx: &Context, tokens: &UiTokens, area: CheckerArea, origin: Pos2) -> Shape {
         let side = self.size.unwrap_or(tokens.size.checker).max(f32::EPSILON);
         let light = self.light.map_or_else(|| rgba_color(tokens.color.overlay.checker_light), |color| color.0);
         let dark = self.dark.map_or_else(|| rgba_color(tokens.color.overlay.checker_dark), |color| color.0);
-        let mut shapes = vec![Shape::rect_filled(visible, 0.0, light)];
-        let cells = |from: f32, to: f32, origin: f32| {
-            let at = |edge: f32, round: fn(f32) -> f32| round((edge - origin) / side).max(0.0) as usize;
-            at(from, f32::floor)..at(to, f32::ceil)
-        };
-        for row in cells(visible.top(), visible.bottom(), rect.top()) {
-            for column in cells(visible.left(), visible.right(), rect.left()).filter(|column| (column + row) % 2 == 0) {
-                let min = rect.min + vec2(column as f32 * side, row as f32 * side);
-                let cell = Rect::from_min_size(min, Vec2::splat(side)).intersect(visible);
-                shapes.push(Shape::rect_filled(cell, 0.0, dark));
+        let texture = checker_texture(ctx, light, dark);
+        // One texel per cell; the texture repeats every two cells.
+        let uv = |p: Pos2| ((p - origin) / (2.0 * side)).to_pos2();
+        match area {
+            CheckerArea::Rect(rect, radius) => {
+                Shape::Rect(RectShape::filled(rect, radius, UNTINTED).with_texture(texture, Rect::from_min_max(uv(rect.min), uv(rect.max))))
+            }
+            CheckerArea::Quad(corners) => {
+                let mut mesh = Mesh::with_texture(texture);
+                mesh.vertices.extend(corners.iter().map(|&pos| Vertex { pos, uv: uv(pos), color: UNTINTED }));
+                mesh.indices.extend([0, 1, 2, 0, 2, 3]);
+                Shape::mesh(mesh)
             }
         }
-        shapes
     }
 }
 
-/// The theme's transparency checkerboard over `rect`, drawn where `clip` shows it, with cells of `size.checker`.
-pub fn checker(tokens: &UiTokens, rect: Rect, clip: Rect) -> Vec<Shape> {
-    Checker::new().shapes(tokens, rect, clip)
+/// Where a [`Checker`] paints.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CheckerArea {
+    /// A rect with these corners.
+    Rect(Rect, CornerRadius),
+    /// A convex quad, its corners in order around it (a turned document).
+    Quad([Pos2; 4]),
+}
+
+/// The 2 x 2 texture of the checkerboard's two colours (light at the top left and bottom right), repeating, sampled
+/// without blending so each texel stays one sharp cell.
+fn checker_texture(ctx: &Context, light: Color32, dark: Color32) -> TextureId {
+    let options = TextureOptions {
+        magnification: TextureFilter::Nearest,
+        minification: TextureFilter::Nearest,
+        wrap_mode: TextureWrapMode::Repeat,
+        mipmap_mode: None,
+    };
+    TextureCache::texture_with(ctx, ("craft-ui-checker", light, dark), options, || ColorImage::new([2, 2], vec![light, dark, dark, light]))
 }
 
 /// A colour ramp over `rect`: the strip shades from stop to stop along `axis` (`Axis::X` runs left to right, `Axis::Y`
@@ -601,9 +619,9 @@ impl ContentPainterCx<'_> {
         crate::runtime::egui::textures::paint(&self.painter, texture, rect, uv, super::textures::UNTINTED, UiTokens::corner(radius));
     }
 
-    /// Paints the transparency checkerboard over `rect`.
+    /// Paints the theme's transparency checkerboard over `rect`.
     pub fn checker(&self, rect: Rect) {
-        self.painter.extend(checker(self.tokens, rect, self.painter.clip_rect()));
+        self.checker_with(&Checker::new(), rect);
     }
 
     /// Paints a colour ramp over `rect` along `axis`; see [`ramp`].
@@ -636,7 +654,7 @@ impl ContentPainterCx<'_> {
 
     /// Paints the checkerboard `checker` over `rect`.
     pub fn checker_with(&self, checker: &Checker, rect: Rect) {
-        self.painter.extend(checker.shapes(self.tokens, rect, self.painter.clip_rect()));
+        self.painter.add(checker.shape(self.painter.ctx(), self.tokens, CheckerArea::Rect(rect, CornerRadius::ZERO), rect.min));
     }
 
     /// Paints tick marks on one edge of `rect`.

@@ -12,7 +12,7 @@ use crate::runtime::requests::ColorRequest;
 use crate::style::{ComponentStyle, DataColor, Flags, FocusLook, State, StateMix, StateSet, StyleColor, StyleCx, UiTokens, resolve_style};
 use craft_behavior::{CursorIcon, CursorPriority, Metrics, Mixed, Sense, Value};
 use craft_theme::{Rgba, Srgba, Stateful, States, over};
-use egui::{Color32, CornerRadius, Rect, Response, Shape, Vec2, pos2};
+use egui::{Color32, CornerRadius, Rect, Response, Vec2, pos2};
 
 #[cfg(feature = "testing")]
 mod stories;
@@ -247,7 +247,7 @@ impl<T: Value + 'static> Component for Swatch<T> {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        paint_face(&ui.draw(), &ui.env.tokens, cx.rect, cx.style, cx.state(), self.color);
+        paint_face(&ui.draw(), cx.rect, cx.style, cx.state(), self.color);
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> SwatchOutput {
@@ -259,7 +259,7 @@ impl<T: Value + 'static> Component for Swatch<T> {
 
 /// The one swatch face painter: the well of `color` in `well` (a checkerboard behind a translucent colour, the dash
 /// of a mixed one), then the outline ring and the selection ring, in `state`.
-fn paint_face(draw: &Draw<'_>, tokens: &UiTokens, well: Rect, style: &SwatchStyle, state: &StateSet, color: Mixed<Srgba>) {
+fn paint_face(draw: &Draw<'_>, well: Rect, style: &SwatchStyle, state: &StateSet, color: Mixed<Srgba>) {
     let shape = PaintShape::Rect(well, style.radius);
     match color.same() {
         None => {
@@ -273,11 +273,7 @@ fn paint_face(draw: &Draw<'_>, tokens: &UiTokens, well: Rect, style: &SwatchStyl
         }
         Some(color) => {
             if color.a < 1.0 {
-                for cell in rounded(Checker::new().shapes(tokens, well, well), well, style.radius) {
-                    if let Shape::Rect(cell) = cell {
-                        draw.data_fill(&PaintShape::Rect(cell.rect, cell.corner_radius), DataColor::new(cell.fill));
-                    }
-                }
+                draw.checker(&Checker::new(), well, style.radius);
             }
             draw.data_fill(&shape, DataColor::new(Color32::from(*color)));
         }
@@ -315,22 +311,6 @@ impl SwatchFace {
         let style = resolve_style(&scope, key, cx.painter.ctx(), Swatch::<()>::style);
         let (flags, on) = if self.selected { (Flags::SELECTED, 1.0) } else { (Flags::empty(), 0.0) };
         let state = StateSet::new(State::Rest, flags, StateMix::new(0.0, 0.0, on));
-        cx.with_draw(|draw| paint_face(draw, scope.tokens, rect, &style, &state, self.color));
+        cx.with_draw(|draw| paint_face(draw, rect, &style, &state, self.color));
     }
-}
-
-/// `shapes` of a checkerboard over `well` with the corners of `radius` where a cell meets a corner of the well.
-fn rounded(mut shapes: Vec<Shape>, well: Rect, radius: CornerRadius) -> Vec<Shape> {
-    for shape in &mut shapes {
-        if let Shape::Rect(cell) = shape {
-            let round = |touches: bool, r: u8| if touches { r } else { 0 };
-            cell.corner_radius = CornerRadius {
-                nw: round(cell.rect.min == well.min, radius.nw),
-                ne: round(cell.rect.right_top() == well.right_top(), radius.ne),
-                sw: round(cell.rect.left_bottom() == well.left_bottom(), radius.sw),
-                se: round(cell.rect.max == well.max, radius.se),
-            };
-        }
-    }
-    shapes
 }

@@ -69,9 +69,16 @@ impl TextureCache {
     /// different key. Keys of different types never meet. A component asks again in every frame it paints the
     /// texture; a texture nobody asks for while the cache is over `CAPACITY` is freed.
     pub fn texture<K: Hash + 'static>(ctx: &Context, key: K, image: impl FnOnce() -> ColorImage) -> TextureId {
+        Self::texture_with(ctx, key, TextureOptions::LINEAR, image)
+    }
+
+    /// The texture for `key` sampled with `options` (a repeating pattern, nearest filtering); see [`Self::texture`].
+    /// The options are part of the key.
+    pub fn texture_with<K: Hash + 'static>(ctx: &Context, key: K, options: TextureOptions, image: impl FnOnce() -> ColorImage) -> TextureId {
         let mut hasher = DefaultHasher::new();
         TypeId::of::<K>().hash(&mut hasher);
         key.hash(&mut hasher);
+        options.hash(&mut hasher);
         let hash = hasher.finish();
         let frame = pass::root_frame_nr(ctx);
         let known = memory::with(ctx, |loaded: &mut Loaded| {
@@ -84,7 +91,7 @@ impl TextureCache {
             return id;
         }
         // The image is built and uploaded outside the service lock: neither calls back into the cache.
-        let handle = textures::load(ctx, format!("craft_ui/{hash:016x}"), image(), TextureOptions::LINEAR);
+        let handle = textures::load(ctx, format!("craft_ui/{hash:016x}"), image(), options);
         memory::with(ctx, |loaded: &mut Loaded| {
             let id = loaded.handles.entry(hash).or_insert(Entry { handle, used: frame }).handle.id();
             loaded.evict(frame);

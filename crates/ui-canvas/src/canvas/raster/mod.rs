@@ -18,7 +18,9 @@ pub use detail::{DetailPlan, snap_to_texels};
 use super::{PixelRect, RasterSource, canvas_space};
 use crate::contract::{Access, Common, Component, Cx, NoValue, Outcome, PaintUi, Props as _, Role};
 use crate::primitives::textures::UNTINTED;
-use crate::primitives::{CachedTexture, Checker, Revision, TextureState, TextureStore, TextureStoreOptions, texture_factor, texture_side};
+use crate::primitives::{
+    CachedTexture, Checker, CheckerArea, Revision, TextureState, TextureStore, TextureStoreOptions, texture_factor, texture_side,
+};
 use crate::runtime::env::Label;
 use crate::runtime::memory::Remember as _;
 use crate::style::{ComponentStyle, StyleCx};
@@ -27,7 +29,7 @@ use craft_behavior::kurbo::{Point as Point64, Rect as Rect64};
 use craft_behavior::{CanvasView, Metrics, PixelSize};
 use detail::{texel_extent, texel_origin};
 use egui::epaint::{Mesh, Vertex};
-use egui::{Color32, ColorImage, Context, Id, Pos2, Rect, Response, Shape, Stroke, TextureFilter, TextureOptions, pos2};
+use egui::{Color32, ColorImage, Context, Id, Response, Shape, TextureFilter, TextureOptions, pos2};
 use std::collections::HashMap;
 
 /// The style of a raster display: it has no look of its own.
@@ -271,14 +273,7 @@ impl Component for RasterDisplay<'_> {
         let painter = ui.content_painter(cx);
         let corners = shown.view.quad(Rect64::new(0.0, 0.0, f64::from(shown.size.width), f64::from(shown.size.height)));
         if let Some(checker) = &self.checkerboard {
-            let around = Rect::from_points(&corners);
-            for shape in checker.shapes(&ui.env.tokens, shown.view.rect, around) {
-                if shown.view.axis_aligned() {
-                    painter.painter.add(shape);
-                } else if let Some(cell) = clipped_cell(&shape, &corners) {
-                    painter.painter.add(cell);
-                }
-            }
+            painter.painter.add(checker.shape(painter.painter.ctx(), &ui.env.tokens, CheckerArea::Quad(corners), shown.view.rect.min));
         }
         let (texture, factor) = shown.base;
         if let Some(mapping) = &self.mapping {
@@ -344,40 +339,4 @@ fn mapped_mesh(view: &CanvasView, texture: CachedTexture, factor: u32, size: Pix
         }
     }
     Shape::mesh(mesh)
-}
-
-/// The filled rect `shape` (a transparency grid cell) cut to the convex quad `corners`, or `None` when it is not a
-/// filled rect or lies outside the quad.
-fn clipped_cell(shape: &Shape, corners: &[Pos2; 4]) -> Option<Shape> {
-    let Shape::Rect(cell) = shape else { return None };
-    let rect = cell.rect;
-    let polygon = clip_to_convex(&[rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom()], corners);
-    (polygon.len() >= 3).then(|| Shape::convex_polygon(polygon, cell.fill, Stroke::NONE))
-}
-
-/// `subject` cut to the convex polygon `clip` (Sutherland-Hodgman), either winding.
-fn clip_to_convex(subject: &[Pos2], clip: &[Pos2; 4]) -> Vec<Pos2> {
-    let cross = |a: Pos2, b: Pos2, p: Pos2| (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
-    let winding = cross(clip[0], clip[1], clip[2]).signum();
-    let mut polygon = subject.to_vec();
-    for edge in 0..clip.len() {
-        let (a, b) = (clip[edge], clip[(edge + 1) % clip.len()]);
-        let inside = |p: Pos2| cross(a, b, p) * winding >= 0.0;
-        let input = std::mem::take(&mut polygon);
-        for (at, current) in input.iter().enumerate() {
-            let previous = input[(at + input.len() - 1) % input.len()];
-            if inside(*current) != inside(previous) {
-                let (from, to) = (cross(a, b, previous), cross(a, b, *current));
-                let t = from / (from - to);
-                polygon.push(previous + (*current - previous) * t);
-            }
-            if inside(*current) {
-                polygon.push(*current);
-            }
-        }
-        if polygon.is_empty() {
-            break;
-        }
-    }
-    polygon
 }
