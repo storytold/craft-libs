@@ -19,6 +19,8 @@ workspace = true
 dnx = []
 # VP8 (RFC 6386): decoder.
 vp8 = []
+# MPEG-2 video (ITU-T H.262) and MPEG-1 video (ISO/IEC 11172-2): decoder.
+mpeg2 = []
 # Apple ProRes (SMPTE RDD 36): decoder and encoder.
 prores = ["craft-media/bitstream"]
 # H.264 / AVC (ITU-T H.264): encoder.
@@ -75,6 +77,10 @@ required-features = ["vp9-decode"]
 [[example]]
 name = "vp9_vp9dec"
 required-features = ["vp9-decode"]
+
+[[test]]
+name = "mpeg2"
+required-features = ["mpeg2"]
 
 [[test]]
 name = "prores"
