@@ -234,6 +234,9 @@ pub struct ItemFacts {
     /// The collection's toggle columns, shown or not: a row's label never takes one of them.
     #[doc(hidden)]
     pub toggles: Vec<craft_behavior::ColumnKey>,
+    /// The keys of the toggle columns that have one (`ToggleColumn::key`), which their cells show in the tooltip.
+    #[doc(hidden)]
+    pub toggle_keys: Vec<(craft_behavior::ColumnKey, craft_keymap::Chord)>,
 }
 
 impl Scoped {

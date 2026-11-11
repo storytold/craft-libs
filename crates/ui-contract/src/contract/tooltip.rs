@@ -85,9 +85,14 @@ fn text_of(core: &super::CxCore<'_>, shows_label: bool) -> Option<String> {
     };
     let platform = crate::runtime::windows::os_of(&core.ctx);
     Some(match core.command.as_deref().and_then(|command| command.chord.as_ref()) {
-        Some(chord) => format!("{base} ({})", chord.display(platform)),
+        Some(chord) => with_chord(&base, chord, platform),
         None => base,
     })
+}
+
+/// A tooltip's text followed by the chord that does the same, as every tooltip shows a key: "Hide Layers (⌘,)".
+pub fn with_chord(base: &str, chord: &craft_keymap::Chord, os: craft_keymap::Platform) -> String {
+    format!("{base} ({})", chord.display(os))
 }
 
 /// The tooltip of a member of a collection's run (`Collection::MEMBERS`) the pointer rests on: shown by the

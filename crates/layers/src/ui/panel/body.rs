@@ -44,9 +44,8 @@ pub(super) fn show_body<T: LayerTree>(
     let reveal_key =
         reveal.target.clone().filter(|id| order.iter().any(|key| matches!(key, LayerRowKey::Layer(k) if k == id))).map(LayerRowKey::Layer);
 
-    let mut columns = vec![
-        ColumnSpec::new(EYE, Label::Empty, ColumnWidth::Controls(1.0)).kind(ColumnKind::Toggle(ToggleColumn::sweepable())).icon(IconId::new("eye")),
-    ];
+    let eye = cx.visibility_key.map_or(ToggleColumn::sweepable(), |key| ToggleColumn::sweepable().key(key));
+    let mut columns = vec![ColumnSpec::new(EYE, Label::Empty, ColumnWidth::Controls(1.0)).kind(ColumnKind::Toggle(eye)).icon(IconId::new("eye"))];
     if cx.lock_column {
         columns.push(
             ColumnSpec::new(LOCK, Label::Empty, ColumnWidth::Controls(1.0))

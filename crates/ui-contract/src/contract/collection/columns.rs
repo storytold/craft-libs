@@ -2,6 +2,7 @@
 
 use crate::runtime::env::Label;
 use craft_behavior::{ColumnKey, ColumnWidth};
+use craft_keymap::Chord;
 
 /// A toggle column: its cells flip by click, and a drag across them sweeps one value over all of them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -11,17 +12,27 @@ pub struct ToggleColumn {
     pub sweepable: bool,
     /// Turning a cell on turns every other cell of the column off (solo).
     pub exclusive: bool,
+    /// A chord that flips the column on the selected rows (or the lead's row) while the collection has focus, as one
+    /// gesture: the app's command for it where it has one (PhotoCraft's Hide Layers on the eye column).
+    pub key: Option<Chord>,
 }
 
 impl ToggleColumn {
     /// A sweepable toggle column (eye, lock, mute).
     pub const fn sweepable() -> Self {
-        ToggleColumn { sweepable: true, exclusive: false }
+        ToggleColumn { sweepable: true, exclusive: false, key: None }
     }
 
     /// An exclusive toggle column: one cell is on at a time, and a drag does not sweep.
     pub const fn exclusive() -> Self {
-        ToggleColumn { sweepable: false, exclusive: true }
+        ToggleColumn { sweepable: false, exclusive: true, key: None }
+    }
+
+    /// The column with `chord` as its key.
+    #[must_use]
+    pub const fn key(mut self, chord: Chord) -> Self {
+        self.key = Some(chord);
+        self
     }
 }
 

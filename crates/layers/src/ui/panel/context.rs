@@ -34,4 +34,6 @@ pub(super) struct PanelContext<'a, T: LayerTree> {
     pub(super) words: &'a LayersPanelWords,
     pub(super) list_words: &'a ListWords,
     pub(super) lock_column: bool,
+    /// The app's key that flips the selected layers' eyes.
+    pub(super) visibility_key: Option<craft_keymap::Chord>,
 }

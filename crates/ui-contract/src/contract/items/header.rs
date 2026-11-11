@@ -201,6 +201,11 @@ impl Header {
         })
     }
 
+    /// The toggle columns that have a key, with the key.
+    pub(super) fn toggle_keys(&self) -> Vec<(ColumnKey, craft_keymap::Chord)> {
+        self.toggle_columns().filter_map(|(column, toggle)| Some((column, toggle.key?))).collect()
+    }
+
     /// The name of the cell of toggle column `key` in the row `item` and whether it shows the mixed state: the name the
     /// row's cell gave (`put_toggle_names`), else the column's header text, else its icon's name, resolved in `env`.
     /// `None` when the row recorded its toggle cells and has none in this column: the collection reports no node there.

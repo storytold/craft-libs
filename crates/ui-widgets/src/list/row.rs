@@ -181,6 +181,8 @@ pub struct ListRow<'a> {
     /// The toggle columns of the collection, from the item facts it records for the row: none of them holds the
     /// label, whether or not this row has a cell in it.
     pub(super) toggle_columns: Vec<ColumnKey>,
+    /// The keys of those toggle columns that have one, from the same facts: their cells show the key in the tooltip.
+    pub(super) toggle_keys: Vec<(ColumnKey, craft_keymap::Chord)>,
     pub(super) toggles: Vec<ToggleCell>,
     pub(super) texts: Vec<TextCell>,
     /// An icon before the label. A thumbnail takes its place.
@@ -252,6 +254,7 @@ impl<'a> ListRow<'a> {
             aligns: Vec::new(),
             muted: Vec::new(),
             toggle_columns: Vec::new(),
+            toggle_keys: Vec::new(),
             toggles: Vec::new(),
             texts: Vec::new(),
             icon: None,

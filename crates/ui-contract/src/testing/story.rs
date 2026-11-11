@@ -533,6 +533,7 @@ where
         position: crate::runtime::access::SetPosition::new(0).of(1),
         columns: Vec::new(),
         toggles: Vec::new(),
+        toggle_keys: Vec::new(),
     };
     let installed = crate::runtime::env::Env::install_for(
         ui,

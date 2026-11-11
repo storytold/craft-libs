@@ -376,7 +376,7 @@ impl Component for BarItems {
             if display_of(&present[index]) == ItemDisplay::Icon {
                 let resolved = &present[index].resolved;
                 part.tooltip(match &resolved.chord {
-                    Some(chord) => Label::from(format!("{} ({})", resolved.label, chord.display(os))),
+                    Some(chord) => Label::from(crate::contract::tooltip::with_chord(&resolved.label, chord, os)),
                     None => Label::Shared(resolved.label.clone()),
                 });
             }

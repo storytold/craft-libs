@@ -28,6 +28,9 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             node.name = access::Name::Text(name);
             node.flags.set(crate::style::Flags::CHECKED, self.source.toggled(at, &column));
             node.flags.set(crate::style::Flags::MIXED, mixed);
+            if let Some(chord) = toggle.key {
+                node.shortcut(chord.display(crate::runtime::windows::os_of(ctx)));
+            }
             let decl = access::SubDecl {
                 owner: id,
                 component: "",

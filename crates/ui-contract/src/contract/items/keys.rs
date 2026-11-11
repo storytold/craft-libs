@@ -2,11 +2,13 @@
 
 use super::rows;
 use super::{ItemsHooks, Placement, Typing};
-use crate::contract::collection::{CollectionEvent, CollectionProps, ContextMenuRequest, LeadSource, OpenChange, SelectMode, SpaceAction};
+use crate::contract::collection::{
+    CollectionEvent, CollectionProps, ContextMenuRequest, LeadSource, OpenChange, SelectMode, SpaceAction, ToggleColumn,
+};
 use crate::contract::{Collection, Cx};
 use crate::runtime::frame;
 use crate::runtime::memory::sub;
-use craft_behavior::{Granularity, Intent, ItemLayout, MoveMods, NavMove, NavState, NavStep, Outline, SelectionChange, TypeAhead, nav};
+use craft_behavior::{ColumnKey, Granularity, Intent, ItemLayout, MoveMods, NavMove, NavState, NavStep, Outline, SelectionChange, TypeAhead, nav};
 
 impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// The pass's moves: lead, selection, expand and collapse.
@@ -127,7 +129,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         true
     }
 
-    /// Space, Ctrl+Space and activation at the lead.
+    /// Space, Ctrl+Space, the toggle columns' keys and activation at the lead.
     pub(super) fn intent_actions(&mut self, comp: &C, cx: &mut Cx<'_, C>, props: &CollectionProps, lead_at: Option<usize>, header_held: bool) {
         if !header_held
             && cx.core.intents.take(Intent::Space)
@@ -141,6 +143,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         {
             self.pick(comp, row, false, true);
         }
+        self.column_keys(cx, lead_at.filter(|_| !header_held));
         // The pass's `update_inputs` turned an `Activate` intent into the keyed activation.
         let activated = cx.core.intents.take(Intent::Activate) || cx.core.activation.is_some_and(|activation| activation.by_key);
         if activated
@@ -197,10 +200,28 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
     }
 
-    /// Flips the first enabled toggle cell of row `row`; when the row is selected, the same cell of every selected row
-    /// follows to the value the row took, as a sweep would.
+    /// The keys of the toggle columns, claimed while the collection has focus: each flips its column at the lead.
+    fn column_keys(&mut self, cx: &mut Cx<'_, C>, lead_at: Option<usize>) {
+        let keyed: Vec<_> = self.header.toggle_columns().filter_map(|(column, toggle)| Some((toggle.key?, column, toggle))).collect();
+        for (chord, column, toggle) in keyed {
+            crate::contract::Focus::claim(cx, chord);
+            while crate::runtime::keys::take_claimed(&cx.core.ctx, cx.core.id, chord) {
+                if let Some(row) = lead_at.filter(|&row| self.source.toggle_enabled(row, &column)) {
+                    self.toggle_column(cx, row, column.clone(), toggle);
+                }
+            }
+        }
+    }
+
+    /// Flips the first enabled toggle cell of row `row`.
     fn toggle_by_key(&mut self, cx: &mut Cx<'_, C>, row: usize) {
         let Some((column, toggle)) = self.header.toggle_columns().find(|(column, _)| self.source.toggle_enabled(row, column)) else { return };
+        self.toggle_column(cx, row, column, toggle);
+    }
+
+    /// Flips the cell of `column` in row `row`; when the row is selected, the same cell of every selected row follows
+    /// to the value the row took, as a sweep would.
+    fn toggle_column(&mut self, cx: &mut Cx<'_, C>, row: usize, column: ColumnKey, toggle: ToggleColumn) {
         let selected = self.holds(row);
         let others: Vec<usize> =
             if selected && !toggle.exclusive { self.placed().rows().into_iter().filter(|&at| at != row).collect() } else { Vec::new() };

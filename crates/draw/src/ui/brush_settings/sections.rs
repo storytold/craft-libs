@@ -1,6 +1,7 @@
 //! The Brush Settings section list ([`BrushSectionList`]).
 
 use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, IconId, ItemSource, Mixed, Selection, SelectionChange, Value};
+use craft_keymap::{Chord, Key, Mods};
 use craft_ui::contract::{
     ActivateOn, Bind, CollectionEvent, ColumnKind, ColumnSpec, Outcome, Remember as _, SelectMode, ShowCollection as _, ShowContainer as _, Sizing,
     SpaceAction, SweepApply, SweepStep, ToggleColumn, ToggleEdit,
@@ -222,8 +223,8 @@ impl<K: Clone + Eq> ItemSource<Slot<K>> for Rows<'_, K> {
 /// - **Pointer.** A click on a pane row reports `Select` and, if its box is clear, `Enable { on: true }`; the box
 ///   toggles only the flag; the lock toggles only the lock; a click on a switch row toggles it (`Switch`).
 /// - **Keys.** One Tab stop. The list's own keys (Up, Down, Home, End, Page Up and Page Down) move the lead; onto a
-///   pane row it also reports `Select`. Space toggles the lead's box or switch; Enter selects a pane row and turns
-///   it on.
+///   pane row it also reports `Select`. Space toggles the lead's box or switch, Shift+Space its lock; Enter selects a
+///   pane row and turns it on.
 /// - **Selection.** `shown` is the pane shown; a switch row or the link row never takes the selection.
 /// - **AccessKit.** A table named by the label; a pane row's box is a check box "Enable {name}", its lock a button
 ///   named "Lock: {name}"; a switch row has one check box.
@@ -262,7 +263,9 @@ impl<'a, K: Value + Eq + Hash> BrushSectionList<'a, K> {
             vec![
                 ColumnSpec::new(CHECK, Label::Empty, ColumnWidth::Controls(1.0)).kind(toggle),
                 ColumnSpec::new(NAME, Label::Empty, ColumnWidth::Content),
-                ColumnSpec::new(LOCK, Label::Empty, ColumnWidth::Controls(1.0)).kind(toggle).icon(IconId::new("lock")),
+                ColumnSpec::new(LOCK, Label::Empty, ColumnWidth::Controls(1.0))
+                    .kind(ColumnKind::Toggle(ToggleColumn::default().key(Chord::new(Mods::SHIFT, Key::Space))))
+                    .icon(IconId::new("lock")),
             ]
         };
         let shown_stack = Stack::new().show(ui, |ui, cx| {

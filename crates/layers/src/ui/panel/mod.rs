@@ -137,7 +137,8 @@ impl<Id> Default for Session<Id> {
 ///
 /// - **Keys**: the rows are one Tab stop (the list's keys: arrows, Home, End and Page with Shift;
 ///   Cmd/Ctrl moves the lead alone; Left and Right close and open a group, Alt for every group;
-///   Cmd/Ctrl+] and [ move the selected layers, Shift to the ends; Enter activates; F2 renames). The panel's
+///   Cmd/Ctrl+] and [ move the selected layers, Shift to the ends; Enter activates; F2 renames; the app's
+///   [`visibility_key`](Self::visibility_key) flips the selected layers' eyes). The panel's
 ///   commands ([`LayersPanelCommands`]) are the app's: the stacking keys and the effects keys.
 /// - **Pointer**: clicks select (Cmd/Ctrl toggles, Shift extends, the empty space clears), the eye
 ///   and lock columns sweep, Alt-click on an eye shows only that layer, the eye's right-click opens
@@ -153,6 +154,7 @@ pub struct LayersPanel<'a, T: LayerTree> {
     thumbnails: Option<ThumbHost<'a, T::Id>>,
     filter: Option<Bind<'a, LayerFilter>>,
     lock_column: bool,
+    visibility_key: Option<craft_keymap::Chord>,
     blend_rows: bool,
     filter_bar: bool,
     row_menu: Option<Box<RowMenu<'a, T::Id>>>,
@@ -188,6 +190,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
             thumbnails: None,
             filter: None,
             lock_column: false,
+            visibility_key: None,
             blend_rows: true,
             filter_bar: true,
             row_menu: None,
@@ -221,6 +224,13 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
     /// [`LayerColumn::Lock`].
     pub fn lock_column(mut self, lock_column: bool) -> Self {
         self.lock_column = lock_column;
+        self
+    }
+
+    /// The app's key that flips the eyes of the selected layers as one gesture while the rows have focus (PhotoCraft's
+    /// Cmd+, for Hide Layers), shown in the eye's tooltip.
+    pub fn visibility_key(mut self, key: craft_keymap::Chord) -> Self {
+        self.visibility_key = Some(key);
         self
     }
 
@@ -262,7 +272,8 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
     /// Draws the panel over the available rect: the filter bar and [`BlendRows`] in the header, the
     /// rows, the footer. Events are reported in that order.
     pub fn show(self, ui: &mut Ui) -> LayersOutput<T::Id> {
-        let LayersPanel { tree, settings, thumbnails, mut filter, lock_column, blend_rows, filter_bar, row_menu, reveal, rename } = self;
+        let LayersPanel { tree, settings, thumbnails, mut filter, lock_column, visibility_key, blend_rows, filter_bar, row_menu, reveal, rename } =
+            self;
         let env = Env::of(ui);
         let words = env.words::<LayersPanelWords>();
         let list_words = env.words::<ListWords>();
@@ -278,6 +289,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
             words: &words,
             list_words: &list_words,
             lock_column,
+            visibility_key,
         };
         let events = RefCell::new(Vec::new());
         let current = RefCell::new(LayerFilter::default());

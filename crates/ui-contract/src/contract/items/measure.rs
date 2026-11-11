@@ -105,8 +105,14 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             };
             let item = (self.item)(&key, &mut icx);
             let mut item = Props::id(comp.dress(item, &RowState::default()), item_id);
-            let facts =
-                ItemFacts { item: item_id, flags: crate::style::Flags::empty(), position, columns: columns.clone(), toggles: toggles.clone() };
+            let facts = ItemFacts {
+                item: item_id,
+                flags: crate::style::Flags::empty(),
+                position,
+                columns: columns.clone(),
+                toggles: toggles.clone(),
+                toggle_keys: Vec::new(),
+            };
             let installed = Env::install_for(
                 ui,
                 env.derive_local(|scoped| {

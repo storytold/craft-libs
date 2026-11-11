@@ -7,8 +7,8 @@ use craft_ui::contract::{
     CollectionEvent, CollectionProps, CollectionResponse, ColumnEvent, ColumnKind, ColumnSpec, Props as _, ShowCollection as _, ToggleColumn,
 };
 use craft_ui::testing::layout::in_region;
-use craft_ui::testing::{Frames, pointer, trial};
-use egui::{Pos2, Rect, Ui, Vec2};
+use craft_ui::testing::{Frames, input, pointer, trial};
+use egui::{Key, Modifiers, Pos2, Rect, Ui, Vec2};
 use std::cell::RefCell;
 
 const ORIGIN: Pos2 = Pos2::new(10.0, 10.0);
@@ -163,4 +163,54 @@ fn a_keyed_slice_reports_toggle_presses_and_sweeps_by_key() {
             assert_eq!(scene.toggles(), vec![(11, true), (12, true)], "the sweep reports the rows' keys");
         }
     }
+}
+
+/// A toggle column's key flips that column on every selected row as one gesture, while Space keeps flipping the first
+/// toggle column.
+#[trial]
+fn a_toggle_column_key_flips_the_column_on_the_selected_rows() {
+    const SOLO: ColumnKey = ColumnKey::new("solo");
+    let rows: Vec<(usize, bool)> = vec![(10, false), (11, false), (12, false)];
+    let props = || {
+        CollectionProps::new().select(craft_ui::contract::SelectMode::Multi).space(craft_ui::contract::SpaceAction::ToggleCell).columns(vec![
+            ColumnSpec::new(NAME, "Name", ColumnWidth::Fixed(COL)),
+            ColumnSpec::new(SOLO, "Solo", ColumnWidth::Fixed(COL)).kind(ColumnKind::Toggle(ToggleColumn::sweepable())),
+            ColumnSpec::new(MUTE, "Mute", ColumnWidth::Fixed(COL)).kind(ColumnKind::Toggle(
+                ToggleColumn::sweepable().key(craft_keymap::Chord::new(craft_keymap::Mods::SHIFT, craft_keymap::Key::Space)),
+            )),
+        ])
+    };
+    let scene = Scene::default();
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        let source = keyed(&rows, |row| row.0).with_toggled(|row, column| *column == MUTE && row.1);
+        show_table(ui, props(), &source, &scene);
+    };
+    frames.idle(3, &mut show);
+    let name = |key: usize| Pos2::new(ORIGIN.x + COL / 2.0, scene.row(key).center().y);
+    pointer::click(&mut frames, name(11), &mut show);
+    let mut press = |key: Key, mods: Modifiers| {
+        frames.frame(vec![input::key_press(key, mods)], &mut show);
+        frames.frame(vec![craft_ui::testing::focus::key_release(key, mods)], &mut show);
+    };
+    press(Key::ArrowDown, Modifiers::SHIFT);
+    scene.events.borrow_mut().clear();
+    press(Key::Space, Modifiers::SHIFT);
+    let columns = |scene: &Scene| -> Vec<(usize, ColumnKey)> {
+        scene
+            .events
+            .borrow()
+            .iter()
+            .filter_map(
+                |event| if let CollectionEvent::Toggle(edit) = event { edit.value().map(|toggle| (toggle.key, toggle.column.clone())) } else { None },
+            )
+            .collect()
+    };
+    let mut flipped = columns(&scene);
+    flipped.sort_unstable_by_key(|(key, _)| *key);
+    flipped.dedup();
+    assert_eq!(flipped, vec![(11, MUTE), (12, MUTE)], "Shift+Space flips Mute on both selected rows");
+    scene.events.borrow_mut().clear();
+    press(Key::Space, Modifiers::NONE);
+    assert!(columns(&scene).iter().all(|(_, column)| *column == SOLO) && !columns(&scene).is_empty(), "Space flips the first toggle column");
 }

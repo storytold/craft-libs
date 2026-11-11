@@ -30,7 +30,9 @@ fn with_readout(data: &mut StoryData, shown: LayersOutput<u32>) -> StoryOutput {
 #[story(LayersPanel<'static, FakeLayers>, covers = [Default], drive = Drive::Never)]
 fn layers_panel_tree(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let tree = selected();
-    let shown = LayersPanel::new(&tree).show(ui);
+    // PhotoCraft's Hide Layers key, which the app hands the panel.
+    let hide_layers = craft_keymap::Chord::new(craft_keymap::Mods::CMD, craft_keymap::Key::Comma);
+    let shown = LayersPanel::new(&tree).visibility_key(hide_layers).show(ui);
     with_readout(data, shown)
 }
 

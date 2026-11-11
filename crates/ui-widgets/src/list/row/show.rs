@@ -176,9 +176,21 @@ impl Component for ListRow<'_> {
             } else {
                 *cell
             };
+            let key = self.toggle_keys.iter().find(|(column, _)| *column == toggle.column).map(|(_, chord)| *chord);
+            let tip = match (&toggle.tooltip, key) {
+                (Some(tip), None) => Some(tip.clone()),
+                (tip, Some(chord)) => {
+                    let base = match tip {
+                        Some(tip) => cx.env.resolve(tip).as_str().to_owned(),
+                        None => named(toggle.name_pattern(&cx.words::<ListWords>()), cx.resolved.label),
+                    };
+                    Some(Label::from(crate::contract::tooltip::with_chord(&base, &chord, crate::runtime::windows::os_of(cx.ui.ctx()))))
+                }
+                (None, None) => None,
+            };
             let part = cx.part(TOGGLE.at(*at as u64), shape).flags(flags);
-            let _ = match &toggle.tooltip {
-                Some(tip) => part.tooltip(tip.clone()),
+            let _ = match tip {
+                Some(tip) => part.tooltip(tip),
                 None => part,
             };
         }

@@ -530,8 +530,14 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                             base_env.derive_local(|scoped| {
                                 scoped.item = Some(item_id);
                                 scoped.row = Some(row_group);
-                                scoped.item_facts =
-                                    Some(Arc::new(ItemFacts { item: item_id, flags, position, columns: column_keys, toggles: toggle_keys }));
+                                scoped.item_facts = Some(Arc::new(ItemFacts {
+                                    item: item_id,
+                                    flags,
+                                    position,
+                                    columns: column_keys,
+                                    toggles: toggle_keys,
+                                    toggle_keys: self.header.toggle_keys(),
+                                }));
                             }),
                         );
                         Some((row_ui, installed))
