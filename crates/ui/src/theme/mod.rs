@@ -5,6 +5,8 @@
 
 use egui::{Color32, CornerRadius, Stroke, style::Widgets};
 
+pub mod shadow;
+
 /// Background colors for egui's five widget interaction states.
 ///
 /// These are rendering inputs, not a theme schema: applications construct them from their own
