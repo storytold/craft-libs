@@ -1055,6 +1055,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-metafile"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "kurbo 0.13.1",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-mime"
 version = "0.1.0"
 dependencies = [
@@ -2960,6 +2969,8 @@ dependencies = [
  "moxcms",
  "num-traits",
  "png 0.18.1",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
