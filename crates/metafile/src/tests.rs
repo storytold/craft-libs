@@ -958,8 +958,31 @@ fn crop_window_keeps_a_sliver_and_stays_finite() {
     assert!(top.y.abs() < 1e-3 && (bottom.y - 27.44).abs() < 1e-3, "{top:?} {bottom:?}");
     for c in [[f32::NAN, f32::INFINITY, -1.0, 2.0], [0.9; 4], [1.0, 1.0, 0.0, 0.0], [f32::MAX, f32::MIN, f32::NEG_INFINITY, 0.5]] {
         let [x, y, w, h] = crate::crop_window(c);
-        assert!([x, y, w, h].iter().all(|v| v.is_finite()) && w > 0.0 && h > 0.0 && x + w <= 1.0 + 1e-9 && y + h <= 1.0 + 1e-9, "{c:?}");
+        assert!([x, y, w, h].iter().all(|v| v.is_finite()) && w > 0.0 && h > 0.0, "{c:?}");
+        // Only a negative side (padding) lets the window reach past the source.
+        if c.iter().all(|v| v.is_nan() || *v >= 0.0) {
+            assert!(x >= 0.0 && y >= 0.0 && x + w <= 1.0 + 1e-9 && y + h <= 1.0 + 1e-9, "{c:?}");
+        }
     }
+}
+
+/// A negative side pads the source: the window starts before the source or ends past it and is
+/// larger than it, so the picture keeps its proportions instead of being stretched over the frame.
+#[test]
+fn crop_window_with_negative_sides_pads_the_source() {
+    let [x, y, w, h] = crate::crop_window([-0.25, -0.5, 0.0, 0.0]);
+    assert!((x + 0.25).abs() < 1e-6 && (y + 0.5).abs() < 1e-6 && (w - 1.25).abs() < 1e-6 && (h - 1.5).abs() < 1e-6, "{x} {y} {w} {h}");
+    // A picture fitted whole into a taller frame: half its height added above and below.
+    let [x, y, w, h] = crate::crop_window([0.0, -0.5, 0.0, -0.5]);
+    assert!(x == 0.0 && w == 1.0 && y == -0.5 && h == 2.0, "{y} {h}");
+    // Padding stops at a hundred times the source a side, so the window stays finite.
+    let [x, _, w, _] = crate::crop_window([f32::MIN, 0.0, -1e9, 0.0]);
+    assert!(x == -100.0 && w == 201.0, "{x} {w}");
+    // The source sits in the middle half of the frame.
+    let pic = crate::Picture { width: 100.0, height: 50.0, items: Vec::new(), skipped_records: 0 };
+    let tf = pic.fit(kurbo::Rect::new(0.0, 0.0, 100.0, 100.0), [0.0, -0.5, 0.0, -0.5]).unwrap();
+    let (top, bottom) = (tf * kurbo::Point::new(0.0, 0.0), tf * kurbo::Point::new(100.0, 50.0));
+    assert!((top.y - 25.0).abs() < 1e-9 && (bottom.y - 75.0).abs() < 1e-9 && (bottom.x - 100.0).abs() < 1e-9, "{top:?} {bottom:?}");
 }
 
 /// The narrowest crop on the largest frame layout makes (4000 pt, far down a 22-inch page) still

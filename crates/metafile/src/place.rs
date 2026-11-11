@@ -13,6 +13,8 @@ use crate::{ClipPath, Item, LineStyle, Picture, Seg};
 pub const MAX_BITMAP_SIDE: u32 = 30_000;
 /// Placed coordinates past this (target units) are far off any page; such items are left out.
 const MAX_COORD: f64 = 1e6;
+/// The most a crop side pads the source: a hundred times its size.
+const MIN_CROP: f32 = -100.0;
 /// Smallest placed bitmap side (target units), so the stretch onto it is never singular.
 const MIN_BITMAP_SIDE: f64 = 1e-6;
 /// Maximum aggregate path elements retained in placed output.
@@ -25,10 +27,13 @@ const MIN_VISIBLE: f64 = 0.005;
 
 /// The part of a picture's source that `crop` (left, top, right, bottom fractions of the source)
 /// keeps, as fractions of the source: [left, top, width, height], bitmap or metafile alike. Each
-/// side is taken as 0–1 (junk as 0). When the two sides of an axis leave less than 0.5% of it,
-/// the left (top) side stands and 0.5% shows.
+/// side is taken as 0–1 (junk as 0). A negative side pads the source instead of cutting it (down
+/// to -100), as a negative `a:srcRect` side does in Office files and a picture fitted whole into
+/// a frame of another shape needs: the window then starts before the source or ends past it.
+/// When the two sides of an axis leave less than 0.5% of it, the left (top) side stands and 0.5%
+/// shows.
 pub fn crop_window(crop: [f32; 4]) -> [f64; 4] {
-    let [l, t, r, b] = crop.map(|v| if v.is_finite() { f64::from(v.clamp(0.0, 1.0)) } else { 0.0 });
+    let [l, t, r, b] = crop.map(|v| if v.is_finite() { f64::from(v.clamp(MIN_CROP, 1.0)) } else { 0.0 });
     let axis = |lo: f64, hi: f64| {
         let lo = lo.min(1.0 - MIN_VISIBLE);
         (lo, (1.0 - lo - hi).max(MIN_VISIBLE))

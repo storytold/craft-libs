@@ -7,7 +7,8 @@ Windows metafiles for the Craft apps: one reader for WMF, EMF and EMF+, and writ
 - `size(bytes)` gives the picture's size from the header alone when the header decides it.
 - `sniff(bytes) -> Option<Kind>` and `is_metafile(bytes)` recognise the formats.
 - `Picture::fit` and `Picture::place` fit a picture (with crop fractions) into a rectangle for
-  callers that draw it; `crop_window` is the crop rule they share with bitmaps.
+  callers that draw it; `crop_window` is the crop rule they share with bitmaps (a negative crop
+  side pads the picture).
 - `write::emf` and `write::wmf` (feature `write`) write a list of drawing operations.
 
 The crate depends on `kurbo`, `thiserror` and `image` (PNG, JPEG, GIF, TIFF and BMP decoders, for
