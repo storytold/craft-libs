@@ -183,9 +183,10 @@ enum Inner<'a> {
 /// A file's audio, decoded block by block: the streaming counterpart of [`decode`], with seeking
 /// and track choice.
 ///
-/// Native formats (WAV, AIFF, AAC, MP1/MP2 and PCM in MP4/MOV and Matroska/WebM, and raw ADTS and
-/// MPEG audio streams) read their sample data from the source packet by packet. The container's
-/// packet index is held in memory (tens of bytes per packet), and opening a Matroska file or a raw
+/// Native formats (WAV, AIFF, AAC, Opus, AC-3/E-AC-3, MP1/MP2 and PCM in MP4/MOV, Matroska/WebM and
+/// Ogg, and raw ADTS, AC-3 and MPEG audio streams) read their sample data from the source packet by
+/// packet. The container's packet index is held in memory (tens of bytes per packet), and opening
+/// an Ogg or Matroska file or a raw
 /// stream reads through the whole file to build it; WAV and AIFF need no index. Formats symphonia
 /// decodes (MP3, FLAC, ALAC, Vorbis, CAF, ADPCM, A-law, µ-law) read the whole source into memory
 /// first; their decoded audio still streams.

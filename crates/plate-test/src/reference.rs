@@ -26,7 +26,7 @@ use krilla::surface::Surface;
 use krilla::text::{Font, TextDirection};
 
 use crate::Error;
-use crate::scene::{Blend, GroupCs, ImageSource, Kind, MAX_NESTING, MaskKind, Named, Object, Paint, Scene, Stroke};
+use crate::scene::{Blend, GroupCs, ImageSource, Kind, MAX_IMAGE_PX, MAX_NESTING, MaskKind, Named, Object, Paint, Scene, Stroke};
 
 /// The font used for text objects, from `scripts/fetch-pdf-test-fonts.py`.
 pub const FONT_FILE: &str = "Inter-Regular.ttf";
@@ -413,6 +413,10 @@ impl Resolver<'_, '_> {
 
     fn image(&self, source: &ImageSource, [x0, y0, w, h]: [f32; 4]) -> Result<Image, Error> {
         let [px, py] = source.px;
+        // The writer takes scenes that skipped `Scene::validate`, so the pixel cap is enforced here too.
+        if !(1..=MAX_IMAGE_PX).contains(&px) || !(1..=MAX_IMAGE_PX).contains(&py) {
+            return Err(self.bad(&format!("image px must be 1–{MAX_IMAGE_PX}")));
+        }
         let (width, height) = (px as usize, py as usize);
         let image = if let Some(radius) = source.feather {
             let mut data = Vec::with_capacity(width * height);
