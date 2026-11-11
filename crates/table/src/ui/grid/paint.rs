@@ -3,7 +3,7 @@
 
 use craft_behavior::{CursorIcon, HitLevel, HitPriority, Metrics, PartKey, ScrollPos, Sense, TextPos};
 use craft_ui::contract::{Access, Cx, Focus as _, Name, PaintUi, PartsCx, Remember as _, Role, Styled as _};
-use craft_ui::primitives::{Dashes, Draw, EditorLine, EditorPurpose, EditorRun, EditorState, HAlign, PaintShape, StrokeWidth, TextRun};
+use craft_ui::primitives::{Dashes, Draw, EditorLine, EditorPurpose, EditorRun, EditorState, HAlign, PaintShape, RuleKind, StrokeWidth, TextRun};
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::motion::Animate as _;
 use craft_ui::style::{Flags, Stateful, StyleCx, TypeRole};
@@ -51,8 +51,7 @@ pub(super) fn style(cx: &StyleCx<'_>, key: CellGridStyleKey) -> CellGridStyle {
         background: cx.color(c.surface.background),
         header: Stateful::new(cx.color(c.surface.chrome)).when(Flags::SELECTED, cx.color(c.state.selected)),
         header_text: Stateful::new(cx.color(c.text.muted)).when(Flags::SELECTED, cx.color(c.text.on_selected)),
-        gridline: cx.color(c.line.divider),
-        header_line: cx.color(c.line.border),
+        freeze_line: cx.color(c.line.border),
         accent: cx.color(c.accent.solid),
         preview: cx.color(c.text.muted),
         selection: cx.color(c.state.text_selection),
@@ -297,13 +296,13 @@ impl CellGrid<'_> {
             let (cells, split) = (geometry.cells(), geometry.split());
             if frozen_columns > 0 {
                 let x = geometry.mirror_x(split.x);
-                draw.stroke(&PaintShape::Path(vec![Pos2::new(x, cells.top()), Pos2::new(x, cells.bottom())]), StrokeWidth::Medium, style.header_line);
+                draw.stroke(&PaintShape::Path(vec![Pos2::new(x, cells.top()), Pos2::new(x, cells.bottom())]), StrokeWidth::Medium, style.freeze_line);
             }
             if frozen_rows > 0 {
                 draw.stroke(
                     &PaintShape::Path(vec![Pos2::new(cells.left(), split.y), Pos2::new(cells.right(), split.y)]),
                     StrokeWidth::Medium,
-                    style.header_line,
+                    style.freeze_line,
                 );
             }
             if self.headings {
@@ -334,7 +333,7 @@ impl CellGrid<'_> {
         }
         let marks = Marks::of(selection, geometry.rows().count(), geometry.columns().count());
         let rtl = geometry.mirror_x(0.0) > 0.0;
-        let line = |from: Pos2, to: Pos2| draw.stroke(&PaintShape::Path(vec![from, to]), StrokeWidth::Hairline, style.header_line);
+        let line = |from: Pos2, to: Pos2| draw.rule(RuleKind::Edge, from, to);
         let look = |part: craft_behavior::PartRef| (cx.resolve_part(part, &style.header), cx.resolve_part(part, &style.header_text));
         for &column in &frame.columns {
             let at = Self::column_header(geometry, column);

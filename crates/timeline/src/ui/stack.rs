@@ -21,7 +21,7 @@ use craft_ui::contract::{
     ItemKeys, ItemOutput, MeasureCx, Name, Outcome, PaintUi, PartsCx, Pointer as _, Props, Remember as _, Role, Scroll, ScrollAnchor, SelectMode,
     Sizing, Styled as _, ToggleColumn, WordSetCx as _,
 };
-use craft_ui::primitives::{IconSpec, PaintShape, StrokeWidth};
+use craft_ui::primitives::{IconSpec, PaintShape, RuleKind};
 use craft_ui::runtime::commands::FireSource;
 use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, DataColor, IconLook, Stateful, StyleColor, StyleCx, SurfaceLook, TextLook, TypeRole, UiTokens};
@@ -398,8 +398,6 @@ pub struct TrackRowStyle {
     /// A switch while off.
     #[style(icon)]
     off: IconLook,
-    /// The line under the header.
-    divider: StyleColor,
     /// The colour strip while the track has no label and the pointer is over it.
     hover: StyleColor,
     /// Between the strip and the name, and the indent of one level of depth.
@@ -471,7 +469,6 @@ impl Component for TrackRow<'_> {
             name: TextLook::new(TypeRole::Caption, Stateful::new(cx.color(color.text.normal))),
             on: IconLook::new(cx.control().icon, Stateful::new(cx.color(color.text.normal))),
             off: IconLook::new(cx.control().icon, Stateful::new(cx.color(color.text.faint))),
-            divider: cx.color(color.line.divider),
             hover: cx.color(color.state.hover),
             pad: cx.tokens.space.pad.regular,
             edge: cx.tokens.size.hit.target / 2.0,
@@ -609,8 +606,8 @@ impl Component for TrackRow<'_> {
         } else if let Some(strip) = self.cell(&STRIP).filter(|_| cx.part(LABEL).hovered) {
             draw.fill(&PaintShape::Rect(strip, CornerRadius::ZERO), style.hover);
         }
-        let divider = [Pos2::new(headers.left(), headers.bottom()), Pos2::new(headers.right(), headers.bottom())];
-        draw.stroke(&PaintShape::Path(divider.to_vec()), StrokeWidth::Hairline, style.divider);
+        let y = headers.bottom() - draw.rule_width(RuleKind::Divider) / 2.0;
+        draw.rule(RuleKind::Divider, Pos2::new(headers.left(), y), Pos2::new(headers.right(), y));
         if let Some(cell) = self.cell(&NAME) {
             let indent = f32::from(self.track.depth) * style.pad;
             let flow = craft_behavior::Flow::new(cell, rtl);

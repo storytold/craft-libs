@@ -118,8 +118,8 @@ pub struct CellGridStyle {
     pub(crate) background: StyleColor,
     pub(crate) header: Stateful<StyleColor>,
     pub(crate) header_text: Stateful<StyleColor>,
-    pub(crate) gridline: StyleColor,
-    pub(crate) header_line: StyleColor,
+    /// The line along the frozen panes' edge.
+    pub(crate) freeze_line: StyleColor,
     pub(crate) accent: StyleColor,
     pub(crate) preview: StyleColor,
     pub(crate) selection: StyleColor,

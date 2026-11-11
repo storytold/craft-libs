@@ -2,7 +2,7 @@
 
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Pointer as _, Role, Styled as _};
 use crate::primitives::{StrokeWidth, TextLayout, TextRun, Wrap};
-use crate::style::{ComponentStyle, FocusLook, Stateful, StyleCx, TextLook, TypeRole};
+use crate::style::{ComponentStyle, FocusLook, RuleLook, RuleWidth, Stateful, StyleCx, TextLook, TypeRole};
 use craft_behavior::{Flow, Metrics, PointerButton, PressPhase, Sense};
 use craft_theme::variant::Tone;
 use craft_theme::{Contrast, States};
@@ -120,7 +120,7 @@ impl Component for Link {
         draw.galley(Pos2::new(line.left(), top), &layout);
         // The stroke's top edge sits on the line box's bottom, so the whole stroke lies below every descender.
         let y = top + line_bottom(&layout).unwrap_or(layout.size().y) + underline / 2.0;
-        draw.line_snapped(cx.style.underline, color.egui(), Pos2::new(line.left(), y), Pos2::new(line.right(), y));
+        draw.rule_with(&RuleLook { color: color.egui(), width: RuleWidth::Points(underline) }, Pos2::new(line.left(), y), Pos2::new(line.right(), y));
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> Response {

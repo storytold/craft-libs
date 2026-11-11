@@ -6,9 +6,9 @@ use crate::contract::{
     ShowContainer as _, Styled as _, WordSetCx as _,
 };
 use crate::menu::{self, Menu};
-use crate::primitives::{IconSpec, PaintShape, StrokeWidth};
+use crate::primitives::{IconSpec, PaintShape};
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, Corners, FocusLook, IconLook, Stateful, StyleColor, StyleCx, SurfaceLook, TextLook};
+use crate::style::{ComponentStyle, Corners, FocusLook, IconLook, RuleLook, RuleWidth, Stateful, StyleColor, StyleCx, SurfaceLook, TextLook};
 use craft_behavior::{Flow, HitLevel, HitPriority, Metrics, NavMove, PartKey, Sense, Value};
 use craft_theme::{
     States, Variant,
@@ -43,6 +43,7 @@ pub struct SplitButtonStyle {
     chevron: Stateful<StyleColor>,
     /// The line between the parts, in the variant's edge colour.
     divider: Stateful<StyleColor>,
+    divider_width: RuleWidth,
     /// The divider's gap from the top and bottom edges.
     divider_inset: f32,
     radius: CornerRadius,
@@ -121,6 +122,7 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
             part_fill: Stateful::new(clear).off(States::new(clear, fill.hover, fill.pressed, clear)),
             chevron,
             divider,
+            divider_width: RuleWidth::Points(cx.tokens.stroke.thin),
             divider_inset: cx.tokens.space.gap.inline,
             radius: parts.radius,
         }
@@ -201,13 +203,9 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
         let chevron = Rect::from_center_size(arrow.center(), Vec2::splat(side));
         draw.icon(chevron, &crate::controls::disclosure::DisclosureGlyph::menu_button().color(cx.resolve(&cx.style.chevron)));
         let x = if rtl { arrow.right() } else { arrow.left() };
-        let x = draw.pixel_centre(x);
         let inset = cx.style.divider_inset;
-        draw.stroke(
-            &PaintShape::Path(vec![Pos2::new(x, cx.rect.top() + inset), Pos2::new(x, cx.rect.bottom() - inset)]),
-            StrokeWidth::Thin,
-            cx.resolve(&cx.style.divider),
-        );
+        let divider = RuleLook { color: cx.resolve(&cx.style.divider).egui(), width: cx.style.divider_width };
+        draw.rule_with(&divider, Pos2::new(x, cx.rect.top() + inset), Pos2::new(x, cx.rect.bottom() - inset));
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> SplitOutput<T> {

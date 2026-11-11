@@ -289,13 +289,6 @@ impl<'a> Draw<'a> {
         self.painter.extend(super::ResetMark::shapes(look, center, differs));
     }
 
-    /// `v` moved to the centre of the physical pixel it lies in: a line one physical pixel wide placed there fills that
-    /// pixel, and on a pixel edge it would split into two paler ones.
-    pub fn pixel_centre(&self, v: f32) -> f32 {
-        let ppp = self.painter.pixels_per_point();
-        ((v * ppp).floor() + 0.5) / ppp
-    }
-
     /// Paints the line of `kind` from `from` to `to`.
     pub fn rule(&self, kind: RuleKind, from: Pos2, to: Pos2) {
         let look = rule_look(self.env.tokens, kind);
@@ -320,11 +313,10 @@ impl<'a> Draw<'a> {
         rule_look(self.env.tokens, kind).width.points(self.painter.pixels_per_point())
     }
 
-    /// Paints a line of theme width `width` and `color` from `from` to `to`, snapped to physical pixels as `rule` is.
-    #[doc(hidden)]
-    pub fn line_snapped(&self, width: StrokeWidth, color: Color32, from: Pos2, to: Pos2) {
-        let look = crate::style::RuleLook { color, width: crate::style::RuleWidth::Points(self.width(width)) };
-        self.painter.extend(super::rule::Rule::shapes(&look, from, to, self.painter.pixels_per_point()));
+    /// Paints the line `look` from `from` to `to`, snapped to physical pixels as `rule` is: a rule in a component's own
+    /// colour or width.
+    pub fn rule_with(&self, look: &crate::style::RuleLook, from: Pos2, to: Pos2) {
+        self.painter.extend(super::rule::Rule::shapes(look, from, to, self.painter.pixels_per_point()));
     }
 
     /// Paints a surface of `kind` (tracks, plot wells).

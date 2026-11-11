@@ -5,7 +5,7 @@ use craft_theme::{Stateful, TypeRole};
 use craft_ui::contract::{
     Access, Common, Component, Cx, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Props as _, Role, Styled as _, WordSetCx as _,
 };
-use craft_ui::primitives::{PaintShape, StrokeWidth, TextRun};
+use craft_ui::primitives::{PaintShape, RuleKind, StrokeWidth, TextRun};
 use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, FocusLook, StyleColor, StyleCx, TextLook};
 use egui::{CornerRadius, Pos2, Rect, Response, Vec2, pos2, vec2};
@@ -180,7 +180,6 @@ pub struct OutlineBandStyle {
     hit: f32,
     radius: CornerRadius,
     background: StyleColor,
-    edge: StyleColor,
     button: StyleColor,
     ink: StyleColor,
 }
@@ -274,7 +273,6 @@ impl Component for OutlineBand<'_> {
             hit: size.hit.slop,
             radius: CornerRadius::same(tokens.shape.radius.sm.round() as u8),
             background: cx.color(colors.surface.background),
-            edge: cx.color(colors.line.border),
             button: cx.color(colors.surface.chrome),
             ink,
         }
@@ -345,13 +343,15 @@ impl Component for OutlineBand<'_> {
                 draw.fill(&PaintShape::Rect(geometry.mirror_rect(band), CornerRadius::ZERO), style.background);
             }
         }
+        let half = draw.rule_width(RuleKind::Edge) / 2.0;
+        let edge = |a: Pos2, b: Pos2| draw.rule(RuleKind::Edge, geometry.mirror_pos(a), geometry.mirror_pos(b));
         if frame.row_band.width() > 0.0 {
             let band = frame.row_band;
-            draw.stroke(&line(pos2(band.right(), band.top()), pos2(band.right(), band.bottom())), StrokeWidth::Hairline, style.edge);
+            edge(pos2(band.right() - half, band.top()), pos2(band.right() - half, band.bottom()));
         }
         if frame.column_band.height() > 0.0 {
             let band = frame.column_band;
-            draw.stroke(&line(pos2(band.left(), band.bottom()), pos2(band.right(), band.bottom())), StrokeWidth::Hairline, style.edge);
+            edge(pos2(band.left(), band.bottom() - half), pos2(band.right(), band.bottom() - half));
         }
         for bracket in &self.laid.brackets {
             draw.stroke(&line(bracket.line[0], bracket.line[1]), StrokeWidth::Thin, style.ink);
