@@ -15,12 +15,12 @@ Every cargo command runs through a job-pool launcher when it is on the
 PATH, else plain cargo. CARGO_TARGET_DIR defaults to <worktree>-target when that directory exists beside the worktree.
 
 Why one feature set: cargo builds a crate once per distinct feature set, and everything above it again. The gallery
-turns on craft-ui's `app`, the story renderer `snapshot`, the tests `testing` and the domain crates' `screen-testing`;
-a command that leaves one of them off builds a second variant of the framework (minutes) and the dependants above it.
-The canonical set for a crate is its own test feature (`screen-testing`, else `testing`) plus, for every crate that
-depends on the framework, craft-ui's `app`, `testing` and `snapshot` (or craft-ui-contract's `testing` and `snapshot`
-and craft-ui-shell's `app` for the framework crates themselves). Builds that take other features (CI's
-`--all-features`, wasm checks) belong on GitHub. docs/development.md has the whole picture.
+turns on craft-ui's `app`, the tests `testing` (which includes the snapshot renderer) and the domain crates'
+`screen-testing`; a command that leaves one of them off builds a second variant of the framework (minutes) and the
+dependants above it. The canonical set for a crate is its own test feature (`screen-testing`, else `testing`) plus,
+for every crate that depends on the framework, craft-ui's `app` and `testing` (craft-ui-shell's `app` for the facade
+and the shell). Builds that take other features (CI's `--all-features`, wasm checks) belong on GitHub.
+docs/development.md has the whole picture.
 
 Guards: `--all-features`, `--bins` and workspace-wide builds are refused with the reason; after every command, a new
 feature variant of a framework crate in the target directory is named, with its feature set; `cl doctor` (also run
@@ -36,19 +36,15 @@ import sys
 
 FRAMEWORK = ["craft-ui-contract", "craft-ui-widgets", "craft-ui-panels", "craft-ui-canvas", "craft-ui-patterns", "craft-ui-shell", "craft-ui"]
 ANCHORS = {
-    # package -> the features of its framework dependencies that every local build keeps on
-    "craft-ui": ["craft-ui-contract/snapshot", "craft-ui-shell/app"],
-    "craft-ui-shell": ["app", "craft-ui-contract/snapshot"],
-    "craft-ui-patterns": ["craft-ui-contract/snapshot"],
-    "craft-ui-canvas": ["craft-ui-contract/snapshot"],
-    "craft-ui-panels": ["craft-ui-contract/snapshot"],
-    "craft-ui-widgets": ["craft-ui-contract/snapshot"],
-    "craft-ui-contract": ["snapshot"],
-    "craft-ui-test-kit": ["craft-ui-contract/snapshot"],
-    "craft-ui-gallery": ["apps", "craft-ui/snapshot"],
+    # package -> the features of its framework dependencies that every local build keeps on. A feature can only be
+    # named for a direct dependency (`craft-ui-shell/app` from the facade, not `craft-ui-contract/...` from panels), so
+    # the runtime's test kit is one feature, `testing`, that every crate's own `testing` reaches.
+    "craft-ui": ["craft-ui-shell/app"],
+    "craft-ui-shell": ["app"],
+    "craft-ui-gallery": ["apps"],
     "story-render": [],
 }
-FACADE_ANCHORS = ["craft-ui/app", "craft-ui/testing", "craft-ui/snapshot"]
+FACADE_ANCHORS = ["craft-ui/app", "craft-ui/testing"]
 # Domain crates the story renderer can link, by the crate's short name.
 RENDER_FEATURES = {
     "automation", "browse", "color", "draw", "imaging", "layers", "menu", "pages", "print", "review", "table", "text",
@@ -69,6 +65,8 @@ PINS = [
      "craft-ui-macros must ask proc-macro2 for span-locations, or a build with design-lint in it changes the shared proc-macro2 and rebuilds the framework"),
     ("crates/ui-contract/Cargo.toml", r'^craft-window = \{[^\n]*features = \[[^\]]*"ui"',
      "craft-ui-contract must depend on craft-window with ui, or the shell's app flips craft-window under the whole framework"),
+    ("crates/ui-contract/Cargo.toml", r'^testing = \[[^\]]*"snapshot"',
+     "craft-ui-contract's testing must include snapshot, or crates above widgets cannot ask the runtime for the renderer and build a second variant"),
 ]
 
 
@@ -129,6 +127,19 @@ def doctor(top, packages, quiet=False):
             if d["name"] == "egui" and d["kind"] == "dev" and d["features"]:
                 problems.append(f"{manifest}: the egui dev-dependency asks for {d['features']}; a feature on a dev-dependency "
                                 "line changes egui under the framework between a crate's tests and its render")
+    # Every crate's canonical set must resolve: a plain feature of the crate, or `dep/feature` with `dep` a direct
+    # dependency (workspace members: a feature it defines), else cargo refuses the command.
+    for p in packages.values():
+        direct = {d["name"]: d for d in p["dependencies"]}
+        for feature in canonical(packages, p["name"])[1]:
+            if "/" in feature:
+                dep, feat = feature.split("/", 1)
+                if dep not in direct:
+                    problems.append(f"{p['name']}: canonical feature {feature} names {dep}, which is not a direct dependency")
+                elif dep in packages and feat not in packages[dep]["features"] and not any(d["name"] == feat and d["optional"] for d in packages[dep]["dependencies"]):
+                    problems.append(f"{p['name']}: canonical feature {feature}: {dep} has no feature {feat}")
+            elif feature not in p["features"]:
+                problems.append(f"{p['name']}: canonical feature {feature} is not a feature of the crate")
     gallery = packages.get("craft-ui-gallery")
     if gallery:
         for d in gallery["dependencies"]:

@@ -16,10 +16,12 @@ workspace = true
 
 [features]
 default = []
-# `craft_ui::testing`: the fixture and suite runner.
-testing = ["dep:libtest-mimic"]
+# `craft_ui::testing`: the fixture and suite runner, with the snapshot renderer. One feature for all of the test kit,
+# so every test build of every crate asks the runtime for the same thing and builds it once; a crate that depends on
+# the runtime through another framework crate cannot name the runtime's features on the command line.
+testing = ["dep:libtest-mimic", "snapshot"]
 # `craft_ui::testing::snapshot`: stories rendered to images offscreen (desktop only).
-snapshot = ["testing", "dep:egui_kittest", "dep:image"]
+snapshot = ["dep:egui_kittest", "dep:image"]
 # Draw colour glyphs (COLR, sbix, CBDT), e.g. colour emoji.
 color_fonts = ["dep:epaint", "epaint/color_fonts"]
 # Find installed fonts for characters the app's faces lack (desktop only).
