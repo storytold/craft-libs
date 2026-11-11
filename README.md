@@ -149,8 +149,8 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   fed back to egui as the input egui-winit would have made. Commands and their enabled state
   stay in each app.
 - [`craft-mesh`](crates/mesh/README.md): 3D mesh file formats behind one neutral model (meshes
-  of polygons with per-corner indices, materials, a node hierarchy): STL, OBJ with MTL, PLY and
-  glTF 2.0 / GLB, one feature each. Readers are bounded by `Limits`, never open a file themselves
+  of polygons with per-corner indices, materials, a node hierarchy): STL, OBJ with MTL, PLY,
+  glTF 2.0 / GLB and FBX, one feature each. Readers are bounded by `Limits`, never open a file themselves
   and never panic. Carved from EffectCraft, SolidCraft, TextureCraft and MaterialCraft.
 - [`craft-midi`](crates/midi/README.md): Standard MIDI Files: a bounded reader for formats 0, 1 and
   2 and a format-1 writer, over a neutral model of notes and channel events in ticks at 960 per
