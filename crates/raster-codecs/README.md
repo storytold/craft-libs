@@ -16,7 +16,7 @@ craft-raster-codecs = { git = "https://github.com/storytold/craft-libs", rev = "
 | `dicom` | DICOM Part 10, uncompressed transfer syntaxes: MONOCHROME1/2, RGB, YBR_FULL, 8 and 16 bits | yes | no |
 | `fits` | FITS primary HDU or first `IMAGE` extension, every `BITPIX`, `BSCALE`/`BZERO`, header cards as text | yes | gray or RGB; 8-bit, 16-bit, float |
 | `iff` | IFF ILBM (1 to 8 planes with a palette, 24 planes, mask plane or transparent colour) and PBM, stored or ByteRun1; HAM and EHB are refused | yes | 24-plane ILBM with an optional mask plane |
-| `pcx` | ZSoft PCX: RLE scanlines, 16 and 256-colour palettes, 8-bit three-plane RGB | yes | no |
+| `pcx` | ZSoft PCX: RLE scanlines, 16 and 256-colour palettes, 8-bit three-plane RGB and four-plane RGBA; a `dimensions` probe | yes | no |
 | `pnm` | Netpbm: PBM, PGM, PPM (plain and raw, 8 and 16 bits), PAM, PFM | yes | PGM, PPM, PAM, PFM |
 | `xpm` | X PixMap: XPM3 and XPM2, X11 colour names | yes | no |
 

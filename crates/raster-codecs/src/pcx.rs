@@ -1,5 +1,5 @@
 //! ZSoft PCX (Paintbrush) reader: strictly bounded scanline RLE, 16/256-colour
-//! palettes and 8-bit three-plane RGB. Read-only: modern saves should use PNG.
+//! palettes, 8-bit three-plane RGB and four-plane RGBA. Read-only: modern saves should use PNG.
 
 use crate::{ChannelLayout, CodecError, Image, Limits, SampleType};
 
@@ -15,7 +15,7 @@ fn le16(b: &[u8], i: usize) -> u16 {
 /// PCX lacks a strong magic number. Require plausible complete header fields before
 /// identifying it, rather than classifying every file starting with 0x0a as PCX.
 pub fn looks_like_pcx(b: &[u8]) -> bool {
-    if b.len() < HEADER || b[0] != 0x0a || !matches!(b[1], 0 | 2 | 3 | 5) || b[2] != 1 {
+    if b.len() < HEADER || b[0] != 0x0a || !matches!(b[1], 0 | 2..=5) || b[2] != 1 {
         return false;
     }
     let bits = b[3];
@@ -27,7 +27,7 @@ pub fn looks_like_pcx(b: &[u8]) -> bool {
     }
     let width = u32::from(x1 - x0) + 1;
     let min_stride = (width * u32::from(bits)).div_ceil(8);
-    stride >= min_stride && stride > 0 && (bits != 8 || matches!(planes, 1 | 3)) && (bits == 8 || u32::from(bits) * u32::from(planes) <= 4)
+    stride >= min_stride && stride > 0 && (bits != 8 || matches!(planes, 1 | 3 | 4)) && (bits == 8 || u32::from(bits) * u32::from(planes) <= 4)
 }
 
 /// Read one compressed scanline, including all planes. RLE packets never cross a scanline.
@@ -53,15 +53,20 @@ fn read_row(b: &[u8], pos: &mut usize, out: &mut [u8]) -> Result<(), CodecError>
     Ok(())
 }
 
+/// The pixel size a PCX header declares, without decoding; `None` when [`looks_like_pcx`] is false.
+pub fn dimensions(b: &[u8]) -> Option<(u32, u32)> {
+    looks_like_pcx(b).then(|| (u32::from(le16(b, 8) - le16(b, 4)) + 1, u32::from(le16(b, 10) - le16(b, 6)) + 1))
+}
+
+/// Decodes to 8-bit RGB, or RGBA for four 8-bit planes (red, green, blue, alpha).
 pub fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
-    if !looks_like_pcx(b) {
-        return Err(bad("invalid PCX header or unsupported pixel layout"));
-    }
-    let (w, h) = (u32::from(le16(b, 8) - le16(b, 4)) + 1, u32::from(le16(b, 10) - le16(b, 6)) + 1);
-    limits.check(w, h, ChannelLayout::Rgb, SampleType::U8)?;
+    let (w, h) = dimensions(b).ok_or_else(|| bad("invalid PCX header or unsupported pixel layout"))?;
     let (bits, planes, stride) = (usize::from(b[3]), usize::from(b[65]), usize::from(le16(b, 66)));
+    let layout = if bits == 8 && planes == 4 { ChannelLayout::Rgba } else { ChannelLayout::Rgb };
+    let ch = layout.channels();
+    limits.check(w, h, layout, SampleType::U8)?;
     let row_len = stride.checked_mul(planes).ok_or_else(|| bad("row size overflow"))?;
-    let total = (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(3)).ok_or_else(|| bad("pixel size overflow"))?;
+    let total = (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(ch)).ok_or_else(|| bad("pixel size overflow"))?;
     // The last 769 bytes are the optional VGA palette for 8-bit indexed images.
     let vga = bits == 8 && planes == 1 && b.len() >= HEADER + 769 && b[b.len() - 769] == 0x0c;
     if bits == 8 && planes == 1 && !vga && le16(b, 68) != 2 {
@@ -98,7 +103,11 @@ pub fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     for y in 0..h as usize {
         read_row(&b[..image_end], &mut p, &mut row)?;
         for x in 0..width {
-            let rgb = if bits == 8 && planes == 3 {
+            let at = (y * width + x) * ch;
+            let rgb = if bits == 8 && planes >= 3 {
+                if planes == 4 {
+                    pixels[at + 3] = row[3 * stride + x];
+                }
                 [row[x], row[stride + x], row[2 * stride + x]]
             } else {
                 let index = if bits == 8 {
@@ -123,10 +132,10 @@ pub fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
                     [b[o], b[o + 1], b[o + 2]]
                 }
             };
-            pixels[(y * width + x) * 3..(y * width + x + 1) * 3].copy_from_slice(&rgb);
+            pixels[at..at + 3].copy_from_slice(&rgb);
         }
     }
-    let mut image = Image::from_u8(w, h, ChannelLayout::Rgb, pixels)?;
+    let mut image = Image::from_u8(w, h, layout, pixels)?;
     let (xdpi, ydpi) = (le16(b, 12), le16(b, 14));
     if xdpi > 0 && ydpi > 0 {
         image.dpi = Some((f32::from(xdpi), f32::from(ydpi)));

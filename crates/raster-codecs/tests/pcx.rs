@@ -150,3 +150,27 @@ fn pcx_header_declaring_gigabytes_needs_a_plausible_file_size() {
         other => panic!("expected a too-short refusal, got {:?}", other.map(|i| (i.width(), i.height()))),
     }
 }
+
+/// Four 8-bit planes are red, green, blue and alpha.
+#[test]
+fn decodes_four_8_bit_planes_as_rgba() {
+    let mut b = header(8, 4, 2, 1, 2);
+    rle_row(&mut b, &[10, 40, 20, 50, 30, 60, 255, 0]);
+    assert_eq!(pcx::dimensions(&b), Some((2, 1)));
+    let im = decode(&b).unwrap();
+    assert_eq!((im.layout(), im.data()), (ChannelLayout::Rgba, &[10, 20, 30, 255, 40, 50, 60, 0][..]));
+    // Two 8-bit planes are still not a PCX layout.
+    b[65] = 2;
+    assert!(!pcx::looks_like_pcx(&b) && pcx::dimensions(&b).is_none() && decode(&b).is_err());
+}
+
+/// Version 4 (PC Paintbrush for Windows) files read like version 5.
+#[test]
+fn version_4_headers_are_pcx() {
+    let mut b = header(8, 3, 1, 1, 2);
+    rle_row(&mut b, &[1, 0, 2, 0, 3, 0]);
+    b[1] = 4;
+    assert_eq!(decode(&b).unwrap().data(), &[1, 2, 3]);
+    b[1] = 6;
+    assert!(decode(&b).is_err());
+}
