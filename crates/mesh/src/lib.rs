@@ -1,7 +1,7 @@
 //! 3D mesh file formats behind one neutral model.
 //!
 //! Each format is a module behind a Cargo feature of the same name: [`stl`], [`obj`] (with MTL),
-//! [`ply`] and [`gltf`] (glTF 2.0 and GLB). A reader turns bytes into a [`Scene`]; a writer turns
+//! [`ply`], [`gltf`] (glTF 2.0 and GLB) and [`fbx`]. A reader turns bytes into a [`Scene`]; a writer turns
 //! a [`Scene`] into bytes. Mapping a [`Scene`] onto an application's own mesh, body or document
 //! types is the caller's business, as are computing missing normals, tangents and UVs, welding,
 //! unit scaling and turning a file's up axis.
@@ -28,8 +28,10 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 // The helpers the formats share are not all used by every subset of them.
-#![cfg_attr(not(all(feature = "stl", feature = "obj", feature = "ply", feature = "gltf")), allow(dead_code, unused_imports))]
+#![cfg_attr(not(all(feature = "stl", feature = "obj", feature = "ply", feature = "gltf", feature = "fbx")), allow(dead_code, unused_imports))]
 
+#[cfg(feature = "fbx")]
+pub mod fbx;
 #[cfg(feature = "gltf")]
 pub mod gltf;
 #[cfg(feature = "obj")]
@@ -689,6 +691,33 @@ pub fn srgb_to_linear(c: f32) -> f32 {
 /// Linear component to sRGB-encoded.
 pub fn linear_to_srgb(c: f32) -> f32 {
     if c <= 0.003_130_8 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
+}
+
+/// Decode standard or URL-safe base64 (with or without padding; whitespace ignored).
+pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(s.len() / 4 * 3 + 3);
+    let mut acc = 0u32;
+    let mut bits = 0;
+    for c in s.bytes() {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' | b'-' => 62,
+            b'/' | b'_' => 63,
+            b'=' => break,
+            b' ' | b'\n' | b'\r' | b'\t' => continue,
+            _ => return None,
+        };
+        acc = (acc << 6) | u32::from(v);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
 }
 
 /// Warnings that would repeat are counted and reported once.

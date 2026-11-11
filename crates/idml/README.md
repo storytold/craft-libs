@@ -1,0 +1,113 @@
+# craft-idml
+
+IDML (InDesign Markup Language) packages, and InDesign Tagged Text. No `unsafe`.
+
+An IDML package is a ZIP whose first entry is an uncompressed `mimetype`, followed by
+`designmap.xml` (the root `Document` element, which includes the other parts) and the
+`Resources/`, `MasterSpreads/`, `Spreads/` and `Stories/` parts.
+
+Implemented clean-room from the public IDML File Format Specification and from inspecting IDML
+packages exported from synthetic documents.
+
+This crate is the layer between the bytes and IDML's own element tree. What the elements mean
+(spreads, page items, stories, styles, swatches) is not modelled here yet: a caller walks the
+tree and maps it onto its own document.
+
+## Reading
+
+```rust
+# fn main() -> craft_idml::Result<()> {
+# let bytes: Vec<u8> = Vec::new();
+# if bytes.is_empty() { return Ok(()); }
+use craft_idml::{Local, Props};
+
+let mut package = craft_idml::Package::open(&bytes)?;
+let doc = package.document()?;          // designmap.xml with its includes in place
+for story in doc.top.iter().filter(|e| e.name == "Story") {
+    for range in story.find_all(Local("CharacterStyleRange")) {
+        let size = range.num("PointSize");          // attribute or <Properties> child
+        let font = range.value("AppliedFont").and_then(|f| craft_idml::value::font_family(&f));
+    }
+}
+for line in &doc.warnings { /* a part designmap.xml lists and the package lacks */ }
+# Ok(()) }
+```
+
+- `Package::part` finds a part by its exact name, then leniently: writers differ in
+  percent-encoding, case, path separators and a leading `./` or `/`.
+- `Package::document` refuses a package whose `mimetype` says something else, that has no
+  `designmap.xml`, or whose root is not `Document`. An included part that is missing is a
+  warning; one that cannot be read is an error.
+- Elements are `craft_xml::El`, names as written (`idPkg:Story`), text exact. Processing
+  instructions inside elements are kept (`<?ACE 18?>` is how InDesign writes special
+  characters). Parts are read strictly: one that is cut off is an error, not half a part.
+- `Props` reads a property in either spelling: an attribute, or a child of `<Properties>`.
+
+### Limits
+
+| `Limits` field | Default | Past it |
+|---|---|---|
+| `max_entries` | 100,000 | `Error::TooManyEntries` |
+| `max_part_bytes` | 512 MiB | `Error::TooLarge` |
+| `max_total_bytes` (all parts read from one package) | 2 GiB | `Error::TooLarge` |
+| `xml.max_depth` | 256 | `Error::Part` |
+| `xml.max_nodes`, `xml.max_attrs_total` (one part) | 8,000,000 and 32,000,000 | `Error::Part` |
+
+Sizes are checked against what a part really expands to, not what the archive declares.
+
+## Writing
+
+```rust
+use craft_idml::{El, part_root, part_xml, designmap_xml, write_package, prop, with_props};
+
+let range = with_props(El::new("CharacterStyleRange").with_attr("PointSize", "9"), vec![prop("Leading", "unit", "14")]);
+let story = part_root("Story").with_child(El::new("Story").with_attr("Self", "u1").with_child(range));
+let designmap = El::new("Document")
+    .with_attr("xmlns:idPkg", craft_idml::PACKAGING_NS)
+    .with_attr("DOMVersion", craft_idml::DOM_VERSION)
+    .with_child(El::new("idPkg:Story").with_attr("src", "Stories/Story_u1.xml"));
+let bytes = write_package(&[
+    ("META-INF/container.xml", craft_idml::CONTAINER_XML.as_bytes().to_vec()),
+    ("designmap.xml", designmap_xml(&designmap)),
+    ("Stories/Story_u1.xml", part_xml(&story)),
+])?;
+assert!(craft_idml::is_idml(&bytes));
+# Ok::<(), craft_idml::Error>(())
+```
+
+Parts are written with an element that has only element children one child per line, and any
+other element on one line, so story text is never changed by indentation.
+
+## Values
+
+`craft_idml::value`: `num` and `point_str` (numbers as IDML writes them), `nums`, `matrix`,
+`point`, `tint`, `escape_id` / `unescape_id` / `uid` (`Self` ids), `style_name_in` /
+`style_name_out` / `style_self` (style groups and built-in names), `font_family`
+(`AppliedFont`), `xmp_value` (dates in `META-INF/metadata.xml`), `base64_encode` /
+`base64_decode` (embedded `Contents`), `uri_to_path` / `path_to_uri` (link URIs).
+
+## Tagged Text
+
+`craft_idml::tagged` reads and writes InDesign Tagged Text: plain text with `<Tag:value>` markup.
+
+```rust
+use craft_idml::tagged;
+
+let file = b"<ASCII-WIN>\r\n<Version:8>\r\n<ParaStyle:Body>A <CharStyle:Em>word<CharStyle:>";
+assert!(tagged::is_tagged(file));
+let text = tagged::parse(file);
+assert_eq!(text.paragraphs[0].style, "Body");
+assert_eq!(text.paragraphs[0].runs[1].format.style.as_deref(), Some("Em"));
+assert_eq!(tagged::parse(tagged::write(&text.paragraphs).as_bytes()).paragraphs, text.paragraphs);
+```
+
+Paragraph styles, character styles, font family, font style and size are kept; other tags are
+counted (`skipped_tags`) and skipped. ASCII, UTF-8 and UTF-16 (by byte-order mark) are read;
+ASCII is written, other characters as `<0xXXXX>` UTF-16 code units. Style and font names are cut
+to `MAX_NAME_CHARS` (256). Every input reads as something.
+
+## Where it came from
+
+DesignCraft's `crates/idml` (the package reader and writer, the `<Properties>` accessors, the
+value codecs) and `crates/textimport/src/tagged.rs`. DesignCraft's own XML tree is replaced by
+craft-xml.

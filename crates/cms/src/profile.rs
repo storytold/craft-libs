@@ -991,6 +991,25 @@ mod tests {
         assert_eq!(parse_text(&d), "");
     }
 
+    #[test]
+    fn mab_offsets_near_the_end_of_the_address_space_are_errors() {
+        // Offsets are file-controlled u32s: element reads must be checked slices, never `off + k`.
+        for tag in [b"mAB ", b"mBA "] {
+            for off in [u32::MAX, u32::MAX - 3, u32::MAX - 19, u32::MAX - 47] {
+                for (ob, om, omc, oc, oa) in [(off, 0, 0, 0, 0), (32, off, 32, 0, 0), (32, 32, 32, off, 32), (32, 0, 0, 32, off)] {
+                    let mut e = tag.to_vec();
+                    e.extend([0u8; 4]);
+                    e.extend([3, 3, 0, 0]);
+                    for v in [ob, om, omc, oc, oa] {
+                        e.extend(v.to_be_bytes());
+                    }
+                    e.resize(256, 0);
+                    assert!(parse_lut(&e, true).is_err() || parse_lut(&e, false).is_err());
+                }
+            }
+        }
+    }
+
     /// `p` with the content hash of `other`: the hash is a fixed-key 64-bit SipHash, so a
     /// crafted profile can have another's (#8613). Setting it stands in for finding one.
     fn with_hash_of(p: &Profile, other: &Profile) -> Profile {
