@@ -89,6 +89,23 @@ The optional PDF writer bundles four CC0 ICC profiles by Clinton Ingram. See ATT
 
 Source provenance
 
+crates/raw (craft-raw) is moved from LightCraft, with behaviour ported from two other readers:
+- LightCraft, crates/raw (src/lib.rs, dng.rs, dngwrite.rs, tiffraw.rs, unpack.rs, ljpeg.rs, jxl.rs,
+  opcodes.rs, profile.rs, gaintable.rs, semantic.rs, preview.rs, vendor/crw.rs, vendor/hasselblad.rs,
+  vendor.rs (shared level helpers), vendor/mrw.rs, vendor/erf.rs, vendor/mef.rs, vendor/kodak.rs, vendor/pef.rs,
+  vendor/srw.rs, tests/it/vendor_robust.rs and their tests) and crates/meta/src/mrw.rs (the MRW block container),
+  revision 5ff567a4a2e067bef1b6bce152c11e7f727ccbaf.
+  https://github.com/storytold/lightcraft
+  Copyright (c) 2026 ArtCraft Team and the LightCraft contributors.
+- PhotoCraft, crates/raw/src/dng.rs, hasselblad.rs and tests/it/dng.rs (default-crop defaults,
+  white-level fallbacks, the 8-bit rule for lossy JPEG, Hasselblad's per-site black levels),
+  revision c1b22bdaae2a1359ba3d164eca4d4b0c7378b547.
+  https://github.com/storytold/photocraft
+  Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors.
+- FilmCraft, crates/dng/src/lib.rs (the CinemaDNG frame tags and time code), revision
+  4bec22bd03bd1d995c9cf72e02a284f96d3d72cd.
+  https://github.com/storytold/filmcraft
+  Copyright (c) 2026 ArtCraft Team and the FilmCraft contributors.
 The SVG icon preparation in crates/ui is adapted from:
 - PhotoCraft, crates/ui-egui/src/icons.rs, revision e7a83ca342cdff568254f85f442b9cc8afb08066.
   https://github.com/storytold/photocraft
@@ -252,3 +269,10 @@ Its white-level plateau estimate (saturation_plateau) is LightCraft's vendor::wh
 same revision. The CRW compression was derived clean-room from CC0 sample files and the
 maintainer's own photographs by black-box comparison with a reference decoder's command-line
 output; no raw-decoder source was consulted (crates/crw/clean-room/sources.md).
+
+crates/audio/src/alac/ (the ALAC decoder and encoder) is ported from Apple's ALAC reference
+implementation, https://github.com/macosforge/alac at c38887c5c5e64a4b31108733bd79ca9b2496d987
+(codec/), Copyright (c) 2011 Apple Inc., licensed under the Apache License, Version 2.0
+(LICENSE-APACHE). The files are modified: translated to Rust, with bounds checks on hostile input,
+wrapping integer arithmetic, the unrolled predictor and per-width matrix routines folded into one,
+and the average bit rate filled in. Those files are Apache-2.0 only.

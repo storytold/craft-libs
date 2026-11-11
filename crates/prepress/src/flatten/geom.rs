@@ -113,8 +113,24 @@ pub fn regions_with(shapes: &[Shape], clips: &[ClipPath], sliver: f64) -> Result
     Ok(Arrangement::new(shapes, clips, sliver)?.regions())
 }
 
+/// The finiteness check [`regions_with`] makes: every point of every shape path and of every clip
+/// path a shape names. For callers that skip the arrangement but must still reject bad input.
+pub fn check_finite(shapes: &[Shape], clips: &[ClipPath]) -> Result<(), GeomError> {
+    let used = shapes.iter().flat_map(|s| &s.clips).filter_map(|&c| clips.get(c)).map(|c| &c.path);
+    eps_for(shapes.iter().map(|s| &s.path).chain(used)).map(|_| ())
+}
+
+/// Box comparisons [`overlap_groups`] makes before it folds the boxes still open into one group:
+/// many boxes sharing a horizontal span would otherwise cost one comparison per pair.
+const MAX_OVERLAP_COMPARISONS: usize = 4_000_000;
+
 /// Indices of `bounds` grouped by overlap, transitively, each group in index order. Touching boxes
 /// overlap; NaN boxes overlap nothing.
+///
+/// Past [`MAX_OVERLAP_COMPARISONS`] the boxes still open at the sweep line are folded into one
+/// group under their joint box. Those groups are larger than the overlaps require, which is safe
+/// (a group only says which items are cut into regions together) and bounded by
+/// [`FlattenOptions::max_regions`](super::FlattenOptions::max_regions).
 pub fn overlap_groups(bounds: &[Rect]) -> Vec<Vec<usize>> {
     fn find(p: &mut [usize], mut i: usize) -> usize {
         while p[i] != i {
@@ -128,8 +144,10 @@ pub fn overlap_groups(bounds: &[Rect]) -> Vec<Vec<usize>> {
     order.sort_by(|a, b| a.1.x0.total_cmp(&b.1.x0));
     // Sweep left to right, comparing each box with those still open at its left edge.
     let mut open: Vec<(usize, Rect)> = Vec::new();
+    let mut comparisons = 0_usize;
     for (i, b) in order {
         open.retain(|(_, o)| o.x1 >= b.x0);
+        comparisons += open.len();
         for (j, o) in &open {
             if o.y0 <= b.y1 && b.y0 <= o.y1 {
                 let (a, c) = (find(&mut parent, i), find(&mut parent, *j));
@@ -137,6 +155,15 @@ pub fn overlap_groups(bounds: &[Rect]) -> Vec<Vec<usize>> {
             }
         }
         open.push((i, b));
+        if comparisons > MAX_OVERLAP_COMPARISONS && open.len() > 1 {
+            let (first, joint) = open[0];
+            let joint = open[1..].iter().fold(joint, |j, (k, o)| {
+                let (a, c) = (find(&mut parent, first), find(&mut parent, *k));
+                parent[a.max(c)] = a.min(c);
+                j.union(*o)
+            });
+            open = vec![(first, joint)];
+        }
     }
     let mut groups: Vec<Vec<usize>> = Vec::new();
     let mut slot: Vec<Option<usize>> = vec![None; bounds.len()];
@@ -157,6 +184,9 @@ pub fn overlap_groups(bounds: &[Rect]) -> Vec<Vec<usize>> {
 /// other item paints as it is. Groups are transitive so that an opaque item keeps its place in
 /// paint order above or below everything it overlaps.
 pub fn transparent_groups(bounds: &[Rect], transparent: &[bool]) -> Vec<Vec<usize>> {
+    if !transparent.iter().any(|t| *t) {
+        return Vec::new();
+    }
     let mut groups = overlap_groups(bounds);
     groups.retain(|g| g.iter().any(|&i| transparent.get(i).copied().unwrap_or(false)));
     groups
@@ -611,11 +641,41 @@ fn tol_at(p: Point) -> f64 {
     1e-6 * (1.0 + p.x.abs().max(p.y.abs()))
 }
 
+fn coord(p: Point, axis: usize) -> f64 {
+    if axis == 0 { p.x } else { p.y }
+}
+
+/// Arrange `points` as an implicit k-d tree: the median of each slice, by x and then y in turn, is
+/// its root, with the lesser points before it and the greater after.
+fn kd_build(points: &mut [Point], axis: usize) {
+    if points.len() < 2 {
+        return;
+    }
+    let mid = points.len() / 2;
+    points.select_nth_unstable_by(mid, |a, b| coord(*a, axis).total_cmp(&coord(*b, axis)));
+    let (before, after) = points.split_at_mut(mid);
+    kd_build(before, 1 - axis);
+    kd_build(&mut after[1..], 1 - axis);
+}
+
+/// Whether a point of the tree `points` (made by [`kd_build`] from `axis`) lies in the box `lo..=hi`.
+/// A box this small meets a few branches however many points share an x.
+fn kd_any(points: &[Point], axis: usize, lo: Point, hi: Point) -> bool {
+    let mid = points.len() / 2;
+    let Some(&q) = points.get(mid) else { return false };
+    if q.x >= lo.x && q.x <= hi.x && q.y >= lo.y && q.y <= hi.y {
+        return true;
+    }
+    let c = coord(q, axis);
+    (coord(lo, axis) <= c && kd_any(&points[..mid], 1 - axis, lo, hi)) || (coord(hi, axis) >= c && kd_any(&points[mid + 1..], 1 - axis, lo, hi))
+}
+
 /// Output cleanup: the inputs' on-curve points (joints there stay), and their curves, to rebuild
 /// split pieces exactly.
 struct Tidy {
     sliver: f64,
-    /// Sorted by x.
+    /// The finite points as an implicit k-d tree (see [`kd_build`]), so a lookup doesn't scan the
+    /// many points that share an x.
     keep: Vec<Point>,
     /// Input curves with slightly inflated bounds.
     curves: Vec<(Rect, CubicBez)>,
@@ -638,7 +698,8 @@ impl Tidy {
                 }
             }
         }
-        keep.sort_by(|a, b| a.x.total_cmp(&b.x));
+        keep.retain(|p| p.is_finite());
+        kd_build(&mut keep, 0);
         let mut by_x: Vec<usize> = (0..curves.len()).collect();
         by_x.sort_by(|&i, &j| curves[i].0.x0.total_cmp(&curves[j].0.x0));
         let max_width = curves.iter().map(|(r, _)| r.width()).fold(0.0, f64::max);
@@ -647,8 +708,7 @@ impl Tidy {
 
     fn is_kept(&self, p: Point) -> bool {
         let tol = tol_at(p);
-        let lo = self.keep.partition_point(|q| q.x < p.x - tol);
-        self.keep[lo..].iter().take_while(|q| q.x <= p.x + tol).any(|q| (q.y - p.y).abs() <= tol)
+        kd_any(&self.keep, 0, Point::new(p.x - tol, p.y - tol), Point::new(p.x + tol, p.y + tol))
     }
 
     /// The input curves whose bounds hold both `a` and `b`.
@@ -760,18 +820,41 @@ fn tidy_segments(segs: Vec<Seg>, tidy: &Tidy) -> Vec<Seg> {
     if let Some(k) = (0..n).find(|&i| !mergeable(&segs[(i + n - 1) % n], &segs[i])) {
         segs.rotate_left(k);
     }
+    // Where the run of mergeable joints that starts at each segment ends, found once.
+    let mut run_end = vec![n; n];
+    for i in (0..n).rev() {
+        run_end[i] = if i + 1 < n && mergeable(&segs[i], &segs[i + 1]) { run_end[i + 1] } else { i + 1 };
+    }
     let mut out: Vec<Seg> = Vec::with_capacity(n);
     let mut i = 0;
     while i < n {
         let mut cur = segs[i];
         let mut j = i + 1;
-        while j < n && mergeable(&segs[j - 1], &segs[j]) {
-            match join(&segs[i..=j], tidy) {
-                Some(m) => {
-                    cur = m;
-                    j += 1;
+        let end = run_end[i];
+        // A run is validated whole, once (its pieces split one line or curve). Only when it doesn't
+        // join is the longest prefix that does looked for, by halving, instead of re-checking the
+        // whole run for every piece added: that was quadratic in a long collinear run.
+        if end > j {
+            if let Some(m) = join(&segs[i..end], tidy) {
+                cur = m;
+                j = end;
+            } else {
+                let (mut ok, mut bad) = (i, end - 1);
+                let mut best = None;
+                while bad - ok > 1 {
+                    let mid = ok + (bad - ok) / 2;
+                    match join(&segs[i..=mid], tidy) {
+                        Some(m) => {
+                            ok = mid;
+                            best = Some(m);
+                        }
+                        None => bad = mid,
+                    }
                 }
-                None => break,
+                if let Some(m) = best {
+                    cur = m;
+                    j = ok + 1;
+                }
             }
         }
         out.push(cur);
@@ -780,8 +863,16 @@ fn tidy_segments(segs: Vec<Seg>, tidy: &Tidy) -> Vec<Seg> {
     out
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many times `join` ran on this thread, for the tests that bound the work.
+    static JOINS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `run` as one segment, when its pieces lie on one line or one input curve.
 fn join(run: &[Seg], tidy: &Tidy) -> Option<Seg> {
+    #[cfg(test)]
+    JOINS.with(|joins| joins.set(joins.get() + 1));
     let (first, last) = (run.first()?.c, run.last()?.c);
     let (a, b) = (first.p0, last.p3);
     let tol = tol_at(Point::new(a.x.abs().max(b.x.abs()), a.y.abs().max(b.y.abs())));
@@ -986,6 +1077,14 @@ mod tests {
         assert!(transparent_groups(&bounds, &[false; 5]).is_empty());
     }
 
+    #[test]
+    fn stacked_boxes_fold_into_one_group_past_the_comparison_budget() {
+        // Boxes one above the other, all sharing x 0–10: each stays open for every later one.
+        let stack = |n: usize| -> Vec<Rect> { (0..n).map(|i| Rect::new(0.0, 2.0 * i as f64, 10.0, 2.0 * i as f64 + 1.0)).collect() };
+        assert_eq!(overlap_groups(&stack(2_000)).len(), 2_000, "2 million comparisons: compared one by one");
+        assert_eq!(overlap_groups(&stack(4_000)).len(), 1, "8 million comparisons: folded");
+    }
+
     /// About 1,000 rectangles on a letter page. Run with `--ignored --nocapture`.
     #[test]
     #[ignore]
@@ -1012,5 +1111,81 @@ mod tests {
         let sum: f64 = r.iter().map(|r| r.area).sum();
         // Less the slivers left out.
         assert!(sum <= union * (1.0 + 1e-9) && sum > union * (1.0 - 1e-4), "{sum} vs {union}");
+    }
+
+    /// Many anchors sharing an x (and some within tolerance of it): the k-d lookup answers as a scan of
+    /// every anchor does.
+    #[test]
+    fn is_kept_agrees_with_a_scan_when_many_anchors_share_an_x() {
+        let mut seed: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut paths = Vec::new();
+        for k in 0..3000 {
+            let x = [5.0, 5.0 + 3e-7, 100.0][k % 3];
+            let mut bp = BezPath::new();
+            bp.move_to((x, next() * 1000.0));
+            bp.line_to((x + 1.0, next() * 1000.0));
+            paths.push(bp);
+        }
+        let tidy = Tidy::keeping(DEFAULT_SLIVER, &paths);
+        let anchors: Vec<Point> = paths.iter().flat_map(|p| p.segments().map(|s| to_seg(s).c.p0)).collect();
+        let (mut kept, mut not_kept) = (0, 0);
+        for k in 0..4000 {
+            let a = anchors[k % anchors.len()];
+            let p = match k % 4 {
+                0 => a,
+                1 => Point::new(a.x + 5e-7, a.y + 5e-7),
+                2 => Point::new(a.x, a.y + 1e-3),
+                _ => Point::new(next() * 120.0, next() * 1000.0),
+            };
+            let tol = tol_at(p);
+            let scan = anchors.iter().any(|q| (q.x - p.x).abs() <= tol && (q.y - p.y).abs() <= tol);
+            assert_eq!(tidy.is_kept(p), scan, "{p:?}");
+            if scan { kept += 1 } else { not_kept += 1 }
+        }
+        assert!(kept > 1000 && not_kept > 1000, "{kept} {not_kept}");
+        assert!(!Tidy::keeping(DEFAULT_SLIVER, &Vec::<BezPath>::new()).is_kept(Point::new(0.0, 0.0)));
+    }
+
+    /// A contour with a 20,000-piece collinear side is joined by validating the run once, not once per
+    /// piece (some 200,000,000 piece checks).
+    #[test]
+    fn a_long_collinear_run_is_validated_once() {
+        let n = 20_000;
+        let tidy = Tidy::keeping(DEFAULT_SLIVER, &Vec::<BezPath>::new());
+        let mut segs: Vec<Seg> = (0..n).map(|i| Seg::line(Point::new(i as f64, 0.0), Point::new(i as f64 + 1.0, 0.0))).collect();
+        segs.push(Seg::line(Point::new(n as f64, 0.0), Point::new(0.0, 1.0)));
+        segs.push(Seg::line(Point::new(0.0, 1.0), Point::new(0.0, 0.0)));
+        let before = JOINS.with(std::cell::Cell::get);
+        let out = tidy_segments(segs, &tidy);
+        let joins = JOINS.with(std::cell::Cell::get) - before;
+        assert_eq!(out.len(), 3);
+        assert!(joins <= 4, "{joins} joins");
+        assert_eq!((out[0].c.p0, out[0].c.p3), (Point::new(0.0, 0.0), Point::new(n as f64, 0.0)));
+    }
+
+    /// A run that bends partway still joins its longest straight part, in a few validations.
+    #[test]
+    fn a_run_that_bends_joins_its_longest_prefix() {
+        let n = 5000;
+        let tidy = Tidy::keeping(DEFAULT_SLIVER, &Vec::<BezPath>::new());
+        let mut segs: Vec<Seg> = (0..n).map(|i| Seg::line(Point::new(i as f64, 0.0), Point::new(i as f64 + 1.0, 0.0))).collect();
+        // A last piece that leaves the line by 0.01 (inside the tangent test, outside the join's tolerance).
+        segs.push(Seg::line(Point::new(n as f64, 0.0), Point::new(n as f64 + 100.0, 1.0)));
+        segs.push(Seg::line(Point::new(n as f64 + 100.0, 1.0), Point::new(0.0, 5.0)));
+        let before = JOINS.with(std::cell::Cell::get);
+        let out = tidy_segments(segs, &tidy);
+        let joins = JOINS.with(std::cell::Cell::get) - before;
+        assert!(out.len() <= 4 && joins < 200, "{} pieces, {joins} joins", out.len());
+        assert!(
+            out.iter().any(|s| s.c.p0 == Point::new(0.0, 0.0) && s.c.p3.x >= n as f64 - 1.0),
+            "{:?}",
+            out.iter().map(|s| (s.c.p0, s.c.p3)).collect::<Vec<_>>()
+        );
     }
 }
