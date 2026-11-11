@@ -82,6 +82,9 @@ pub(super) struct BodyHooks<'b> {
     /// The offset this pass shows, as step 4 left it: what decides which out-of-view children run, in a measuring
     /// run (which lays the content out from offset zero) as in the real run.
     view_offset: ScrollPos,
+    /// The scroll position named by content, kept with an offset the framework holds (`ScrollState`).
+    anchor: Option<crate::runtime::lazy::Anchor>,
+    anchor_at_read: Option<crate::runtime::lazy::Anchor>,
     scroll_bound: bool,
     moved: bool,
     last: BodyView,
@@ -142,6 +145,8 @@ impl<'b> BodyHooks<'b> {
             offset: ScrollPos::default(),
             offset_at_read: ScrollPos::default(),
             view_offset: ScrollPos::default(),
+            anchor: None,
+            anchor_at_read: None,
             scroll_bound: false,
             moved: false,
             last: BodyView::default(),

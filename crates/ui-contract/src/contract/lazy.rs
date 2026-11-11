@@ -12,30 +12,34 @@ use std::hash::Hash;
 
 /// A child of a scroll area that runs only while it is in view. Out of view its content does not run: it takes the
 /// extent it had in the last pass that showed it, at any room, and its stops from that pass keep their place in Tab
-/// order. It runs when it was never shown, when it meets the view, while one of the stops of its last run holds
-/// keyboard focus or is the target of a focus request, and when `keep` asks. Content that was never shown has no
-/// stops to find: a child an app focuses or scrolls to before it was ever in view needs `keep`. Outside a scroll
-/// area it always runs.
+/// order. A child no pass showed yet takes its estimate: that long along the axes the area scrolls and nothing across
+/// them, as a collection places the rows it never built by its item layout's estimate. It runs when that extent
+/// meets the view, while one of the stops of its last run holds keyboard focus or is the target of a focus request,
+/// and when `keep` asks. Content that was never shown has no stops to find: Tab reaches it once it was shown, and a
+/// child an app focuses or scrolls to before it was ever in view needs `keep`. Outside a scroll area it always runs.
 ///
 /// It is a child in flow of its body. In a `Grid` or spread `Row` body it holds one cell: its content is the one child
 /// in flow that takes the cell, and out of view it takes the cell at its remembered extent, so the cell's row counts
 /// it.
 ///
 /// The key names the child among every `Lazy` of its scroll area, nested containers included. The idiom is
-/// `Lazy::new(key).show(ui, |ui| ..)` around each large child (a card, a section of a panel) in the scroll body.
+/// `Lazy::new(key, estimate).show(ui, |ui| ..)` around each large child (a card, a section of a panel) in the scroll
+/// body.
 #[must_use]
 pub struct Lazy {
     key: u64,
+    estimate: f32,
     keep: bool,
 }
 
 impl Lazy {
-    /// The child keyed `key` in its scroll area.
-    pub fn new(key: impl Hash) -> Lazy {
+    /// The child keyed `key` in its scroll area. `estimate` is how long it is along the axes the area scrolls, an
+    /// app's guess from what it knows without running the child; the child's real extent replaces it once it ran.
+    pub fn new(key: impl Hash, estimate: f32) -> Lazy {
         use std::hash::Hasher;
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         key.hash(&mut hasher);
-        Lazy { key: hasher.finish(), keep: false }
+        Lazy { key: hasher.finish(), estimate, keep: false }
     }
 
     /// Runs the child out of view too, while `keep` holds: the target of a scroll the app asks for.
@@ -64,11 +68,13 @@ impl Lazy {
                 let x = if rtl { available.max.x - size.x } else { available.min.x };
                 Rect::from_min_size(Pos2::new(x, available.min.y), size)
             };
-            if let Decision::Skip(size) = lazy::decide(&ctx, id, &view, at, sizing, self.keep) {
-                take_in_flow(ui, size);
+            let estimate = view.estimate(self.estimate);
+            if let Decision::Skip(size) = lazy::decide(&ctx, id, &view, at, sizing, self.keep, estimate) {
+                let (took, _) = take_in_flow(ui, size);
                 if real {
                     layout_memory::backstop(&ctx, id, size);
                     lazy::replay(&ctx, id);
+                    lazy::place(&ctx, &view, id, took);
                 }
                 return None;
             }
@@ -83,8 +89,11 @@ impl Lazy {
             layout_memory::backstop(&ctx, id, rect.size());
         }
         alloc::advance_past(ui, rect);
-        if view.is_some() {
-            lazy::shown(&ctx, id, rect.size(), sizing, real.then(|| focus::transcript(&ctx, mark)));
+        if let Some(view) = view {
+            lazy::shown(&ctx, view.owner, id, rect.size(), sizing, real.then(|| focus::transcript(&ctx, mark)));
+            if real {
+                lazy::place(&ctx, &view, id, rect);
+            }
         }
         Some(out)
     }

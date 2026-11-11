@@ -65,6 +65,8 @@ pub fn section_part<K: std::hash::Hash>(key: &K) -> craft_behavior::PartRef {
 struct Scrolled {
     y: f64,
     x: f64,
+    /// The same position named by content: the offset follows it while the heights of rows before its row change.
+    anchor: Option<crate::runtime::lazy::Anchor>,
 }
 
 #[derive(Clone, Default)]
@@ -152,6 +154,9 @@ pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
     offset_at_read: f64,
     offset_x: f64,
     offset_x_at_read: f64,
+    /// The scroll position named by content, kept with an offset the framework holds (`Scrolled`).
+    anchor: Option<crate::runtime::lazy::Anchor>,
+    anchor_at_read: Option<crate::runtime::lazy::Anchor>,
     last: View,
     lead: Lead<C::Key>,
     renaming: Renaming<C::Key>,
@@ -206,6 +211,8 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             offset_at_read: 0.0,
             offset_x: 0.0,
             offset_x_at_read: 0.0,
+            anchor: None,
+            anchor_at_read: None,
             last: View::default(),
             lead: Lead::default(),
             renaming: Renaming::default(),

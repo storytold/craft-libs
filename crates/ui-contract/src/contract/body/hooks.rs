@@ -8,7 +8,7 @@ use super::regions::{
     shared_line,
 };
 use super::reorder::REORDER_BAND;
-use super::scroll::{Jumps, ScrollState, jump_frame, overflow_inset, scroll_of};
+use super::scroll::{Jumps, ScrollState, follow_anchor, jump_frame, overflow_inset, scroll_of};
 use super::window::{WindowMode, os_window, window_instance};
 use super::{BodyHooks, BodyView};
 use crate::contract::cx::{BodyCx, BodyOwner};
@@ -177,9 +177,11 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             },
             None => {
                 let state = stage.session::<ScrollState>(sub(id, "scroll"));
+                self.anchor = state.anchor;
                 ScrollPos { x: state.offset.0, y: state.offset.1 }
             }
         };
+        self.anchor_at_read = self.anchor;
         self.offset = held;
         self.offset_at_read = held;
         let rtl = env.direction.is_rtl();
@@ -765,7 +767,17 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                             if scroll.horizontal_on() { (shown.x - off.x) as f32 * if rtl { -1.0 } else { 1.0 } } else { 0.0 },
                             if scroll.vertical_on() { (shown.y - off.y) as f32 } else { 0.0 },
                         );
-                        let view = crate::runtime::lazy::View { owner: id, rect: seen.translate(shift) };
+                        let view = crate::runtime::lazy::View {
+                            owner: id,
+                            rect: seen.translate(shift),
+                            content: max,
+                            axes: (scroll.horizontal_on(), scroll.vertical_on()),
+                            rtl,
+                            anchor: self.anchor.map(|anchor| anchor.child),
+                        };
+                        if real {
+                            crate::runtime::lazy::begin(&ctx, id);
+                        }
                         let region_env = Env::install_for(&region_ui, body_env.derive_local(|scoped| scoped.lazy = Some(view)));
                         layout::run_body(&mut region_ui, layout_id, layout, gap, |ui| {
                             shared_labels(ui, id, label_column, room.x, &mut group_extent, |ui| body(ui, bcx))
@@ -773,6 +785,14 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                         Env::restore(&ctx, region_env);
                         let extent = region_ui.min_rect().size();
                         if real {
+                            let keeps = !self.scroll_bound && !self.follows_end;
+                            follow_anchor(
+                                &ctx,
+                                (id, scroll, keeps),
+                                (extent, seen.size()),
+                                (&mut self.offset, self.offset_at_read),
+                                &mut self.anchor,
+                            );
                             crate::runtime::egui::widgets::note_scroll_region(&ctx, region_ui.clip_rect(), region_ui.min_rect().intersect(max));
                         }
                         self.extent = Some(extent);
@@ -965,7 +985,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             comp.closed(self.reason.take().unwrap_or(CloseReason::Requested));
         }
         self.write_open(comp, cx);
-        if self.offset != self.offset_at_read {
+        if self.offset != self.offset_at_read || self.anchor != self.anchor_at_read {
             match comp.scroll() {
                 Some(mut bind) => {
                     let (label, doc_key) = (cx.core.label_arc(), cx.core.resolved.doc_key);
@@ -974,9 +994,11 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 None => {
                     let state = cx.core.memory.session::<ScrollState>(sub(cx.core.id, "scroll"));
                     state.offset = (self.offset.x, self.offset.y);
+                    state.anchor = self.anchor;
                 }
             }
             self.offset_at_read = self.offset;
+            self.anchor_at_read = self.anchor;
         }
     }
 

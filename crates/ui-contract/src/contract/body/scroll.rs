@@ -9,6 +9,7 @@ use crate::primitives::{HiddenContent, ScrollBar};
 use crate::runtime::egui::pass;
 use crate::runtime::egui::{memory as store, repaint, sizing};
 use crate::runtime::env::Env;
+use crate::runtime::lazy;
 use crate::style::{SurfaceKind, UiTokens, scroll_bar_look, surface_style};
 use craft_behavior::{Axis, PartKey, ScrollPos, ScrollSpan};
 use egui::{Context, Id, Pos2, Rect, Ui, Vec2};
@@ -23,6 +24,8 @@ pub(super) struct ScrollState {
     pub(super) offset: (f64, f64),
     /// A bottom-anchored region follows the end while nothing moved it away.
     pub(super) follow_end: Option<bool>,
+    /// The same position named by content: the offset follows it while extents before its child change.
+    pub(super) anchor: Option<crate::runtime::lazy::Anchor>,
 }
 
 /// The offsets `scroll_input` moved scroll bodies to, with the frame that queued each, for step 4 of each body's next
@@ -52,6 +55,32 @@ pub(super) fn scroll_of(props: &ContainerProps) -> Option<Scroll> {
         return None;
     }
     props.scroll.or_else(|| overlay_of(props).filter(|overlay| overlay.body_scroll).map(|_| Scroll::vertical()))
+}
+
+/// After the real run of the scroll body `id` laid out content of `extent` behind a view of `view`: the anchor rule
+/// (`lazy::follow`) moves the offset, and the pass runs again at it. A body that `keeps` no anchor (its offset is bound
+/// to the app, or it follows its end) has none.
+pub(super) fn follow_anchor(
+    ctx: &Context,
+    (id, scroll, keeps): (Id, Scroll, bool),
+    (extent, view): (Vec2, Vec2),
+    (offset, read): (&mut ScrollPos, ScrollPos),
+    anchor: &mut Option<lazy::Anchor>,
+) {
+    let placed = lazy::placed(ctx, id);
+    if !keeps {
+        *anchor = None;
+        return;
+    }
+    let short = |x: f64| x as f32;
+    let moved = Vec2::new(short(offset.x - read.x), short(offset.y - read.y));
+    let back = Vec2::new(short(offset.x), short(offset.y));
+    let ahead = (extent - view) - back;
+    if let Some(shift) = lazy::follow(anchor, &placed, moved, view, (back, ahead), (scroll.horizontal_on(), scroll.vertical_on())) {
+        offset.x += f64::from(shift.x);
+        offset.y += f64::from(shift.y);
+        sizing::request_discard(ctx, sizing::Rerun::Layout);
+    }
 }
 
 /// One axis of a scroll region: its track and its span.

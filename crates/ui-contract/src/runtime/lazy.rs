@@ -1,13 +1,19 @@
 //! Out-of-view content: inside a scroll area, a child that is out of view does not run; it keeps what it last
 //! showed: the extent it had in the last pass that showed it, at whatever room the scroll area has now, and the
-//! stops it registered there, in their place in Tab order. This is the one previous-pass state of the run model,
-//! kept for every user in one store: `contract::Lazy` children and the rows of a collection.
+//! stops it registered there, in their place in Tab order. A child no pass showed yet takes the estimate its user
+//! gives (a `Lazy`'s argument, a collection's item layout). The kept extents are the one previous-pass state of the
+//! run model, kept for every user in one store: `contract::Lazy` children and the rows of a collection. A scroll area
+//! that does not run keeps its children's entries; one that runs drops the entries it did not reach.
+//!
+//! The store also hands a scroll area, for the run that lays its content out, where its children start: the child
+//! its scroll position names (`Anchor`) and the first child at or after the view's start, so the area keeps the
+//! content in view in place when extents before it change.
 
 use crate::runtime::egui::pass;
 use crate::runtime::focus::{self, Transcript};
 use crate::runtime::frame::PerViewport;
 use egui::{Context, Id, Rect, Vec2};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// The view of the innermost scroll area, as the run that lays its content out sees it: the rect the pass shows,
@@ -17,6 +23,58 @@ pub(crate) struct View {
     /// The scroll area; children's entries are kept under it.
     pub(crate) owner: Id,
     pub(crate) rect: Rect,
+    /// The content's rect in this run: offset zero is its start edge (the right edge in a right-to-left flow).
+    pub(crate) content: Rect,
+    /// The axes the area scrolls along (x, y).
+    pub(crate) axes: (bool, bool),
+    pub(crate) rtl: bool,
+    /// The child the area's scroll position names.
+    pub(crate) anchor: Option<Id>,
+}
+
+impl View {
+    /// How far `rect` starts from the content's start edge, along each axis.
+    pub(crate) fn start_of(&self, rect: Rect) -> Vec2 {
+        let x = if self.rtl { self.content.max.x - rect.max.x } else { rect.min.x - self.content.min.x };
+        Vec2::new(x, rect.min.y - self.content.min.y)
+    }
+
+    /// The extent a child no pass showed yet takes when it is `along` long on the axes the area scrolls along. Across
+    /// them it takes nothing: its content gives its width there once it ran, so a guess never widens the content.
+    pub(crate) fn estimate(&self, along: f32) -> Vec2 {
+        Vec2::new(if self.axes.0 { along } else { 0.0 }, if self.axes.1 { along } else { 0.0 })
+    }
+}
+
+/// A scroll position named by content: the child `child` starts `at` from the view's start edge. The scroll area
+/// keeps it with its offset (same memory, same lifetime) and derives the offset from it while the child is laid out
+/// where the view can show it, so extents that change before the child do not move what is in view.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Anchor {
+    pub(crate) child: Id,
+    pub(crate) at: Vec2,
+}
+
+/// Where the children of a scroll area started in the real run that laid its content out, from the view's start.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Placed {
+    /// The place and extent of the child the area's anchor names, when the run reached it.
+    pub(crate) anchor: Option<(Vec2, Vec2)>,
+    /// The first child, in flow order, that starts at or after the view's start, and its place.
+    pub(crate) first: Option<(Id, Vec2)>,
+}
+
+impl Placed {
+    /// Notes that the child `id` took a place `at` from the view's start and is `extent` long, in a view whose area
+    /// scrolls along `axes` and names `anchor`.
+    pub(crate) fn note(&mut self, (anchor, axes): (Option<Id>, (bool, bool)), id: Id, at: Vec2, extent: Vec2) {
+        if anchor == Some(id) {
+            self.anchor = Some((at, extent));
+        }
+        if self.first.is_none() && (!axes.0 || at.x >= 0.0) && (!axes.1 || at.y >= 0.0) {
+            self.first = Some((id, at));
+        }
+    }
 }
 
 /// What a child of a scroll area does this pass.
@@ -29,6 +87,8 @@ pub(crate) enum Decision {
 
 #[derive(Clone, Default)]
 struct Entry {
+    /// The scroll area the child is kept under.
+    owner: Option<Id>,
     /// The extent of the last measuring run and of the last real run that showed the child. A run that skips the
     /// child takes the extent of its own kind: a content-sized scroll area is offered another room in its measuring
     /// run than in its real run, so each kind places the child as it last laid it out. Out of view the child keeps
@@ -47,57 +107,73 @@ struct Entry {
 #[derive(Default)]
 struct Store {
     entries: HashMap<Id, Entry>,
+    /// The last frame each scroll area reached one of its children in.
+    reached: HashMap<Id, u64>,
+    /// What the real run that lays a scroll area's content out found, by area, from `begin` to `placed`.
+    placed: HashMap<Id, Placed>,
     /// The frame the entries were last pruned in.
     pruned: u64,
+}
+
+impl Store {
+    /// The entry of the child `id` of the scroll area `owner`, touched in `frame`.
+    fn touch(&mut self, owner: Id, id: Id, frame: u64) -> &mut Entry {
+        self.reached.insert(owner, frame);
+        let entry = self.entries.entry(id).or_default();
+        entry.owner = Some(owner);
+        entry.touched = frame;
+        entry
+    }
 }
 
 fn with<R>(ctx: &Context, f: impl FnOnce(&mut Store, u64, u64) -> R) -> R {
     let viewport = pass::current_viewport(ctx);
     let (pass_nr, frame) = (pass::pass_nr(ctx, viewport), pass::frame_nr(ctx, viewport));
     PerViewport::<Store>::with(ctx, viewport, |store| {
-        // A child no pass reached in the last frame is gone from its scroll area.
+        // A child its scroll area did not reach in a frame the area ran is gone from it. An area that did not run
+        // (a tab switched away) keeps its children: their extents place the content its kept offset shows.
         if store.pruned != frame {
             store.pruned = frame;
-            store.entries.retain(|_, entry| entry.touched + 1 >= frame);
+            let reached = &store.reached;
+            store
+                .entries
+                .retain(|_, entry| entry.touched + 1 >= frame || entry.owner.and_then(|owner| reached.get(&owner)).is_none_or(|ran| ran + 1 < frame));
+            let owners: HashSet<Id> = store.entries.values().filter_map(|entry| entry.owner).collect();
+            store.reached.retain(|owner, _| owners.contains(owner));
         }
         f(store, pass_nr, frame)
     })
 }
 
-/// Decides whether the child `id`, whose content starts at `at` in this run, runs this pass. It runs when no run
-/// showed it yet, when its extent placed at `at` meets the view, when one of its stops holds focus or is the target
-/// of a focus request, or when `keep` asks for it. The first run of a pass decides; every later run of the pass gets the same answer, so a measuring
-/// run and the real run lay out the same children.
-pub(crate) fn decide(ctx: &Context, id: Id, view: &View, at: impl FnOnce(Vec2) -> Rect, sizing: bool, keep: bool) -> Decision {
+/// Decides whether the child `id`, whose content starts at `at` in this run, runs this pass. It runs when its extent
+/// placed at `at` meets the view, when one of its stops holds focus or is the target of a focus request, or when
+/// `keep` asks for it. Its extent is the one a run showed it at, else `estimate`. The first run of a pass decides;
+/// every later run of the pass gets the same answer, so a measuring run and the real run lay out the same children.
+pub(crate) fn decide(ctx: &Context, id: Id, view: &View, at: impl FnOnce(Vec2) -> Rect, sizing: bool, keep: bool, estimate: Vec2) -> Decision {
     let targets = crate::runtime::focus::targets(ctx);
     with(ctx, |store, pass_nr, frame| {
-        let entry = store.entries.entry(id).or_default();
-        entry.touched = frame;
+        let entry = store.touch(view.owner, id, frame);
         let kind = usize::from(!sizing);
         // A child the other kind of run showed last takes that run's extent.
-        let size = entry.sizes[kind].or(entry.sizes[1 - kind]);
+        let size = entry.sizes[kind].or(entry.sizes[1 - kind]).unwrap_or(estimate);
         let skip = match entry.decided {
             Some((decided_in, skip)) if decided_in == pass_nr => skip,
             _ => {
                 let focus = entry.focus.stop_ids().any(|stop| targets.contains(&Some(stop)));
-                let skip = size.is_some_and(|size| !keep && !focus && !at(size).intersects(view.rect));
+                let skip = !keep && !focus && !at(size).intersects(view.rect);
                 entry.decided = Some((pass_nr, skip));
                 skip
             }
         };
-        match size {
-            Some(size) if skip => Decision::Skip(size),
-            _ => Decision::Run,
-        }
+        if skip { Decision::Skip(size) } else { Decision::Run }
     })
 }
 
 /// Records what a run that showed the child `id` found: its extent in a run of this kind and, from a real run, what
 /// it registered with the focus service.
-pub(crate) fn shown(ctx: &Context, id: Id, size: Vec2, sizing: bool, registered: Option<Transcript>) {
+pub(crate) fn shown(ctx: &Context, owner: Id, id: Id, size: Vec2, sizing: bool, registered: Option<Transcript>) {
     with(ctx, |store, _, frame| {
-        let entry = store.entries.entry(id).or_default();
-        entry.touched = frame;
+        let entry = store.touch(owner, id, frame);
         entry.sizes[usize::from(!sizing)] = Some(size);
         if let Some(registered) = registered {
             entry.focus = Arc::new(registered);
@@ -114,16 +190,17 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
     }
 }
 
-/// Records the extent of a collection row that was built this pass. The collection places the rows it does not
-/// build by it (its item layout answers for rows it never built).
-pub(crate) fn remember(ctx: &Context, id: Id, size: Vec2) {
-    shown(ctx, id, size, false, None);
+/// Records the extent of a row of the collection `owner` that was built this pass. The collection places the rows it
+/// does not build by it (its item layout answers for rows it never built).
+pub(crate) fn remember(ctx: &Context, owner: Id, id: Id, size: Vec2) {
+    shown(ctx, owner, id, size, false, None);
 }
 
-/// Runs `f` with a reader of the extents rows had in the last pass that built them, for a collection that reads
-/// many entries at once.
-pub(crate) fn reading<R>(ctx: &Context, f: impl FnOnce(&dyn Fn(Id) -> Option<Vec2>) -> R) -> R {
+/// Runs `f` with a reader of the extents the rows of the collection `owner` had in the last pass that built them, for
+/// a collection that reads many entries at once.
+pub(crate) fn reading<R>(ctx: &Context, owner: Id, f: impl FnOnce(&dyn Fn(Id) -> Option<Vec2>) -> R) -> R {
     with(ctx, |store, _, frame| {
+        store.reached.insert(owner, frame);
         let store = std::cell::RefCell::new(store);
         f(&|id| {
             let mut store = store.borrow_mut();
@@ -132,4 +209,62 @@ pub(crate) fn reading<R>(ctx: &Context, f: impl FnOnce(&dyn Fn(Id) -> Option<Vec
             entry.sizes[1].or(entry.sizes[0])
         })
     })
+}
+
+/// Starts the real run that lays out the content of the scroll area `owner`: the children it places report to it.
+pub(crate) fn begin(ctx: &Context, owner: Id) {
+    with(ctx, |store, _, _| {
+        store.placed.insert(owner, Placed::default());
+    });
+}
+
+/// Reports, in the real run that lays out the content of `view`'s area, that the child `id` took `rect`, run or not.
+pub(crate) fn place(ctx: &Context, view: &View, id: Id, rect: Rect) {
+    let at = view.start_of(rect) - view.start_of(view.rect);
+    with(ctx, |store, _, _| {
+        if let Some(placed) = store.placed.get_mut(&view.owner) {
+            placed.note((view.anchor, view.axes), id, at, rect.size());
+        }
+    });
+}
+
+/// What the children of the area `owner` reported since `begin`.
+pub(crate) fn placed(ctx: &Context, owner: Id) -> Placed {
+    with(ctx, |store, _, _| store.placed.remove(&owner).unwrap_or_default())
+}
+
+/// How far the offset an anchor gives may differ from the offset shown before the anchor moves it: less than half a
+/// pixel is the rounding of the starts it compares.
+const ANCHOR_SLACK: f32 = 0.5;
+
+/// The anchor rule, after the real run of a scroll area reported `placed`. `moved` is how far the offset moved since
+/// the anchor was named (a move takes the anchor's place in the view with it), `view` the view's size, and `room` how
+/// far the offset can go back and ahead. While the anchor's child shows in the view, the shift that puts it back at its
+/// place is returned when there is one: the area moves by it, keeps the anchor and runs the pass again, so extents that
+/// changed before the child do not move what is in view. Otherwise the anchor becomes the first child at or after the
+/// view's start. Places are relative to the view, so the rule holds at any offset.
+pub(crate) fn follow(
+    anchor: &mut Option<Anchor>,
+    placed: &Placed,
+    moved: Vec2,
+    view: Vec2,
+    (back, ahead): (Vec2, Vec2),
+    axes: (bool, bool),
+) -> Option<Vec2> {
+    if let Some(named) = anchor.as_mut() {
+        named.at -= moved;
+        let shows = |at: f32, extent: f32, view: f32| at < view && at + extent.max(0.0) >= 0.0;
+        if let Some((at, extent)) = placed.anchor
+            && (!axes.0 || shows(named.at.x, extent.x, view.x))
+            && (!axes.1 || shows(named.at.y, extent.y, view.y))
+        {
+            let shift = (at - named.at).clamp(-back.max(Vec2::ZERO), ahead.max(Vec2::ZERO));
+            let shift = Vec2::new(if axes.0 { shift.x } else { 0.0 }, if axes.1 { shift.y } else { 0.0 });
+            if shift.abs().max_elem() > ANCHOR_SLACK {
+                return Some(shift);
+            }
+        }
+    }
+    *anchor = placed.first.map(|(child, at)| Anchor { child, at });
+    None
 }

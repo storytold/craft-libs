@@ -17,6 +17,9 @@ use craft_ui_test_kit::contract::PlainStyle;
 use egui::{Id, Key, Modifiers, Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 
+/// Places that differ by less are the same place: the rounding of the layout.
+const SAME: f32 = 0.5;
+
 const ORIGIN: Pos2 = Pos2::new(10.0, 10.0);
 const VIEW: Vec2 = Vec2::new(300.0, 200.0);
 const CELL_W: f32 = 50.0;
@@ -388,4 +391,50 @@ fn a_selected_lead_that_leaves_the_source_moves_the_selection_to_the_new_lead() 
     let leads: Vec<usize> =
         events.borrow().iter().filter_map(|event| if let CollectionEvent::LeadMoved { key, .. } = event { Some(*key) } else { None }).collect();
     assert_eq!(leads.last(), Some(&13));
+}
+
+/// 17.3, I1: the lead row above the view grows (an auto row it measures taller): the rows in view stay where they
+/// were, in the frame it grows, and the frame after runs no extra pass. Guards the collection's scroll anchor: its
+/// position follows the first row at or after the view's start.
+#[trial]
+fn rows_in_view_stay_when_a_row_above_them_changes_height() {
+    let (log, source) = (Log::new(), Count(60));
+    let tall = Cell::new(None);
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+            let list = Probe::new(SelectMode::Single).auto().id_salt("list");
+            log.take(list.show_items(ui, &source, &mut |key, _| ProbeRow::new(*key, log).tall_when(tall.get() == Some(*key))));
+        });
+    };
+    frames.idle(3, &mut show);
+    pointer::click(&mut frames, ORIGIN + Vec2::new(5.0, ROW_H * 2.5), &mut show);
+    assert_eq!(log.leads().last(), Some(&2), "the press made row 2 the lead");
+    let over = ORIGIN + VIEW / 2.0;
+    for _ in 0..4 {
+        frames.frame(vec![pointer::moved(over)], &mut show);
+        frames.frame(vec![pointer::wheel(-VIEW.y)], &mut show);
+    }
+    frames.idle(2, &mut show);
+    let view = Rect::from_min_size(ORIGIN, VIEW);
+    let in_view =
+        |rects: &[(usize, Rect)]| -> Vec<(usize, Rect)> { rects.iter().copied().filter(|(key, rect)| *key != 2 && rect.intersects(view)).collect() };
+    log.rects.borrow_mut().clear();
+    let idle = frames.frame(vec![], &mut show);
+    let before = in_view(&log.rects.borrow());
+    assert!(log.rect(2).max.y < view.min.y, "the lead row is above the view");
+    assert!(!before.is_empty(), "rows show in the view");
+    tall.set(Some(2));
+    log.rects.borrow_mut().clear();
+    let grown = frames.frame(vec![], &mut show);
+    assert!(log.rect(2).height() > ROW_H, "the lead row grew");
+    let after = in_view(&log.rects.borrow());
+    for (key, rect) in &before {
+        let now =
+            after.iter().rev().find(|(shown, _)| shown == key).map(|(_, rect)| *rect).unwrap_or_else(|| panic!("row {key} in view was built again"));
+        assert!((now.min - rect.min).length() <= SAME, "row {key} in view stayed: {now:?}, then {rect:?}");
+    }
+    let next = frames.frame(vec![], &mut show);
+    assert!(grown > idle, "the frame the row grew in ran the pass again at the anchored offset");
+    assert_eq!(next, idle, "an idle frame after it runs no extra pass");
 }

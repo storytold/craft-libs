@@ -379,6 +379,7 @@ pub trait Component: Meta + Sized {
 
     /// The scroll offset's owner when the app drives scrolling; `None` keeps it in session memory. The app restores a
     /// scroll position, or keeps the content under the pointer fixed across a zoom, by writing it.
+    /// A bound offset stays the app's plain offset: it does not follow content whose extents change before the view.
     fn scroll(&mut self) -> Option<BindMut<'_, ScrollPos>> {
         None
     }

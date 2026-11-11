@@ -5,7 +5,7 @@ use craft_ui::runtime::access::Role;
 use craft_ui::shell::app::ShellApp;
 use craft_ui::testing::{Fixture, pointer, trial};
 use craft_ui_gallery::chrome::{Gallery, Persisted};
-use craft_ui_gallery::viewer::{Catalog, GallerySettings};
+use craft_ui_gallery::viewer::{Catalog, GallerySettings, by_level};
 use egui::Vec2;
 
 fn gallery_at(level: &str) -> Gallery {
@@ -21,14 +21,24 @@ fn gallery_filtered(level: &str, filter: &str) -> Gallery {
     Gallery::new(Catalog::linked(), Persisted::new(store, &report))
 }
 
-/// Every level opens in the Overview and runs all its cards.
+/// Every level opens in the Overview and its first show runs the cards in view: their headers are in the access
+/// tree, and no card below the window ran. Guards that a card no pass showed yet is placed by its estimate.
 #[trial]
-fn every_level_of_the_overview_runs_its_cards() {
+fn each_level_of_the_overview_first_runs_the_cards_in_view() {
     for level in ["Primitives", "Controls", "Composites", "Patterns", "Shells"] {
         let mut gallery = gallery_at(level);
         let mut fixture = Fixture::new(move |ui| gallery.ui(ui));
         fixture.room(Vec2::new(1400.0, 900.0)).settle();
-        assert!(fixture.by_label("Open").is_some(), "{level} has cards");
+        let window = fixture.shown();
+        let opens: Vec<_> = fixture.by_role(Role::BUTTON).into_iter().filter(|button| fixture.tree().name_of(button.node) == Some("Open")).collect();
+        assert!(!opens.is_empty(), "{level} runs the cards in view");
+        for open in &opens {
+            assert!(open.rect.top() < window.bottom(), "{level} ran a card below the window: its Open at {:?}", open.rect);
+        }
+        let listed = by_level(&Catalog::linked(), "").into_iter().find(|(at, _)| at.title() == level).map_or(0, |(_, cards)| cards.len());
+        if level == "Controls" {
+            assert!(opens.len() < listed, "{level} ran fewer cards than it lists: {} of {listed}", opens.len());
+        }
     }
 }
 

@@ -22,6 +22,12 @@ use egui::{Align, Ui};
 /// story drawn in less is no longer what the apps show.
 const CARD_MIN_WIDTH: f32 = 290.0;
 
+/// A card's height before it ran, for the cards out of view (`Lazy`'s estimate): its header band, and a story row
+/// as tall as a story of one control under its caption. Cards in view run, so the guess only places the cards past
+/// them until those scroll in.
+const HEADER_GUESS: f32 = 48.0;
+const STORY_ROW_GUESS: f32 = 120.0;
+
 const ONE: &[ColumnWidth] = &[ColumnWidth::fill(1.0)];
 const TWO: &[ColumnWidth] = &[ColumnWidth::fill(1.0); 2];
 
@@ -63,6 +69,17 @@ pub(super) struct Spec {
     pub look: Look,
     /// Whether the card gates its story's wheel takers (`Card::gated`).
     pub gated: bool,
+}
+
+impl Spec {
+    /// The card's height before it ran, from its story rows: one per story, or per row of columns.
+    fn estimate(&self) -> f32 {
+        let per_row = match self.layout {
+            StoryLayout::Columns(most) => usize::from(most.max(1)),
+            _ => 1,
+        };
+        HEADER_GUESS + self.stories.len().div_ceil(per_row) as f32 * STORY_ROW_GUESS
+    }
 }
 
 /// What the cards of a pass reported, by card.
@@ -117,7 +134,7 @@ pub(super) fn grid(
                     let target = *p.scroll_to == Some(spec.type_name);
                     // Keyed by the card alone: a change of the column count regroups the rows, and the cards out of
                     // view keep their extents.
-                    Lazy::new((generation, spec.key.as_str())).keep(target).show(ui, |ui| {
+                    Lazy::new((generation, spec.key.as_str()), spec.estimate()).keep(target).show(ui, |ui| {
                         let stories: Vec<CardStory<'_>> =
                             spec.stories.iter().map(|story| CardStory::new(story.index, story.story, &story.caption)).collect();
                         // Each card is its own id scope: a story's `id_salt` and auto ids must not meet another card's.

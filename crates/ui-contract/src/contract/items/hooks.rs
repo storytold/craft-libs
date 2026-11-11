@@ -15,7 +15,7 @@ use crate::runtime::access::{self, Role, SetPosition};
 use crate::runtime::egui::{alloc, areas, child, response};
 use crate::runtime::env::{AppValues, ArenaId, Env, ItemFacts};
 use crate::runtime::memory::{MemoryStage, sub};
-use crate::runtime::{focus, keys, layout_memory, overlay, wheel};
+use crate::runtime::{focus, keys, layout_memory, lazy, overlay, wheel};
 use crate::style::{ComponentStyle as _, StyleCx, SurfaceKind, scroll_bar_look, surface_style};
 use craft_behavior::{
     Axis, CancelReason, EditEvent, Intent, ItemLayout, Mixed, Proposal, ScrollPos, ScrollSpan, SelectionModel, Sense, WheelRoom, WheelTaker,
@@ -111,12 +111,14 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         self.last = stage.recall::<View>(sub(id, "view"));
         let scrolled = match comp.scroll() {
             Some(bind) => match bind.get() {
-                Some(Mixed::Same(pos)) => Scrolled { y: pos.y, x: pos.x },
+                Some(Mixed::Same(pos)) => Scrolled { y: pos.y, x: pos.x, anchor: None },
                 _ => Scrolled::default(),
             },
             None => stage.session::<Scrolled>(sub(id, "scroll")).clone(),
         };
         (self.offset, self.offset_x) = if self.scrolls { (scrolled.y, scrolled.x) } else { (0.0, 0.0) };
+        self.anchor = scrolled.anchor.filter(|_| self.scrolls);
+        self.anchor_at_read = self.anchor;
         self.offset_at_read = self.offset;
         self.offset_x_at_read = self.offset_x;
         let view = self.last.view.map_or(0.0, |view| view[3] - view[1]);
@@ -190,9 +192,9 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             layout.set_columns(&if self.content_sized(comp) { self.header.columns_measured(width, widest) } else { self.header.columns(width) });
         }
         let ctx = ui.ctx();
-        rows::measured_heights(ctx, |height| layout.measured(&|at| height(rows::measured_id(id, &self.source.key(at)))));
+        rows::measured_heights(ctx, id, |height| layout.measured(&|at| height(rows::measured_id(id, &self.source.key(at)))));
         if layout.auto_widths() {
-            rows::measured_widths(ctx, |width| {
+            rows::measured_widths(ctx, id, |width| {
                 for at in 0..self.source.len() {
                     if let Some((ideal, min)) = width(rows::measured_width_id(id, &self.source.key(at))) {
                         layout.set_width(at, ideal, min);
@@ -518,7 +520,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 item = Props::id(item, item_id);
                 if layout.is_auto(at) {
                     let measured = item.measure_in(&row_ui, Proposal::Width(row.width())).y;
-                    rows::record_measure(&ctx, rows::measured_id(id, &key), Vec2::new(row.width(), measured));
+                    rows::record_measure(&ctx, id, rows::measured_id(id, &key), Vec2::new(row.width(), measured));
                     if measured != row.height() {
                         Arc::make_mut(&mut layout).set_height(at, measured);
                         row = self.screen(&layout, rect, at, offset, rtl);
@@ -527,7 +529,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 if layout.auto_widths() {
                     let ideal = item.measure_in(&row_ui, Proposal::Ideal).x;
                     let min = item.measure_in(&row_ui, Proposal::Min).x;
-                    rows::record_measure(&ctx, rows::measured_width_id(id, &key), Vec2::new(ideal, min));
+                    rows::record_measure(&ctx, id, rows::measured_width_id(id, &key), Vec2::new(ideal, min));
                     Arc::make_mut(&mut layout).set_width(at, ideal, min);
                     row = self.screen(&layout, rect, at, offset, rtl);
                 }
@@ -635,6 +637,9 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         cx.core.grid = crate::contract::GridPlace::grid(len, columns.len());
         let size = layout.content_size();
         self.content = Vec2::new(size.x as f32, size.y as f32);
+        if self.scrolls && !ui.is_sizing_pass() && !crate::runtime::measure::active(&ctx) {
+            self.follow_anchor(comp, (&ctx, id), &layout, rect.size());
+        }
         if self.ended_rename {
             self.renaming = Renaming::default();
             if self.refocus {
@@ -694,7 +699,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let id = cx.core.id;
         // A collection's focus move reveals through its lead (`page_reveal`), never the collection's whole rect.
         crate::runtime::focus::take_reveal_of(&cx.core.ctx, id);
-        if self.scrolls && (self.offset != self.offset_at_read || self.offset_x != self.offset_x_at_read) {
+        if self.scrolls && (self.offset != self.offset_at_read || self.offset_x != self.offset_x_at_read || self.anchor != self.anchor_at_read) {
             match comp.scroll() {
                 Some(mut bind) => {
                     let (label, doc_key) = (cx.core.label_arc(), cx.core.resolved.doc_key);
@@ -704,7 +709,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 }
                 None => {
                     let scrolled = cx.core.memory.session::<Scrolled>(sub(id, "scroll"));
-                    (scrolled.y, scrolled.x) = (self.offset, self.offset_x);
+                    (scrolled.y, scrolled.x, scrolled.anchor) = (self.offset, self.offset_x, self.anchor);
                 }
             }
         }
@@ -723,5 +728,33 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
     fn record(&mut self, stage: &mut MemoryStage, _: &Context, id: Id) {
         let view = stage.shown::<View>(sub(id, "view"));
         view.extent = self.content.y;
+    }
+}
+
+impl<C: Collection> ItemsHooks<'_, '_, C> {
+    /// After the rows of the real run were built in a view of `view` (its size), at the offset the run read: the anchor
+    /// rule (`lazy::follow`) moves the offset by how far a change of the heights of rows before the anchor's row
+    /// moved it, and the pass runs again. A bound offset is the app's and keeps no anchor.
+    fn follow_anchor(&mut self, comp: &mut C, (ctx, id): (&Context, Id), layout: &C::ItemLayout, view: Vec2) {
+        if comp.scroll().is_some() {
+            self.anchor = None;
+            return;
+        }
+        let offset = ScrollPos { x: self.offset_x, y: self.offset };
+        let named = self.anchor.map(|anchor| anchor.child);
+        let mut placed = lazy::Placed::default();
+        // Frozen rows and section rows can stay put while the rows scroll: only a row that scrolls names the position.
+        let first = layout.first_navigable();
+        for at in self.visible.clone().filter(|&at| at >= first && layout.shown(at) && !self.source.section_stop(at)) {
+            let row = layout.rect(at, offset);
+            let item = sub(id, ("key", key_hash(&self.source.key(at))));
+            placed.note((named, (false, true)), item, Vec2::new(0.0, row.min.y), row.size());
+        }
+        let moved = Vec2::new(0.0, (self.offset - self.offset_at_read) as f32);
+        let room = (Vec2::new(0.0, self.offset as f32), Vec2::new(0.0, (self.max_offset(view.y) - self.offset) as f32));
+        if let Some(shift) = lazy::follow(&mut self.anchor, &placed, moved, view, room, (false, true)) {
+            self.offset += f64::from(shift.y);
+            crate::runtime::egui::sizing::request_discard(ctx, crate::runtime::egui::sizing::Rerun::Layout);
+        }
     }
 }
