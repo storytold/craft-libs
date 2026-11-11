@@ -14,3 +14,6 @@ workspace = true
 craft-xml = { workspace = true }
 kurbo = { workspace = true }
 serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
