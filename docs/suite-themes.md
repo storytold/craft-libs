@@ -21,7 +21,7 @@ derived.
    data and caption colours, plus shape, size, space, motion and type tokens.
 3. **Component tokens**: the slider thumb's width and height (`slider.thumb_width`,
    `slider.thumb_height`). Every other component computes its look from the semantic tokens, in
-   its style in `craft-ui`.
+   its style in the UI library crates.
 
 `resolve(theme, appearance, app)` builds the tokens for one appearance: mode (light, dark),
 contrast (standard, high), size (compact, comfortable), text size (small, default, large and

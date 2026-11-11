@@ -1,6 +1,6 @@
 # Dialogs
 
-`craft_ui::dialog` holds the dialog shells, the prompts, and the host that runs an app's dialogs and keeps their answers.
+`craft_ui::dialog` holds the dialog shells, the prompts, and the host that runs an app's dialogs and keeps their answers. craft-ui-panels defines it; craft-ui-canvas adds `FullWindowDialog` and its parts, and the `craft-ui` facade re-exports that combined module.
 
 | Type | Is |
 | --- | --- |
@@ -13,7 +13,7 @@
 | `DialogHost` | Runs the open dialogs of a window and keeps their results. |
 | `DialogStack` | Which open modal dialog takes the input. |
 
-Form dialogs (`ParamDialog`, image size, properties, new document and others) build on these in `craft_ui::patterns::form_dialogs`.
+Form dialogs (`ParamDialog`, image size, properties, new document and others) build on these in `craft_ui::patterns::form_dialogs` (craft-ui-patterns).
 
 ## Dialog
 

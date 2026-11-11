@@ -4,9 +4,9 @@ Docking has three layers:
 
 | Layer | Holds |
 | --- | --- |
-| `craft_behavior::dock` | The model: `Workspace`, `Layout`, `Node`, `Action`, `Permissions`, `WorkspaceSet`. No egui; this is the saved data. |
-| `craft_ui::docking` | The parts: `SplitArea`, `DockGroup`, `DockColumn`, `IconicColumn`, `Flyout`, `FloatingGroup`, `DockRoot`, `Splitter`; drop resolution; the dock commands. |
-| `craft_ui::patterns::dock` | The patterns an app shows: `DockArea` over a workspace, `PaneArea` for task panes, `WorkspaceSwitcher`. |
+| `craft_behavior::dock` (craft-behavior) | The model: `Workspace`, `Layout`, `Node`, `Action`, `Permissions`, `WorkspaceSet`. No egui; this is the saved data. |
+| `craft_ui::docking` (craft-ui-panels) | The parts: `SplitArea`, `DockGroup`, `DockColumn`, `IconicColumn`, `Flyout`, `FloatingGroup`, `DockRoot`, `Splitter`; drop resolution; the dock commands. |
+| `craft_ui::patterns::dock` (craft-ui-patterns) | The patterns an app shows: `DockArea` over a workspace, `PaneArea` for task panes, `WorkspaceSwitcher`. |
 
 An app with dockable panels shows a `DockArea`. The parts are for patterns that need one piece, such as a two-body split.
 
