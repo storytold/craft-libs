@@ -1306,6 +1306,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-sketch"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "serde_json",
+ "thiserror 2.0.21",
+ "zip",
+]
+
+[[package]]
 name = "craft-svg"
 version = "0.1.0"
 dependencies = [

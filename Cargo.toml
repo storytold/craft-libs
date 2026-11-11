@@ -63,6 +63,7 @@ craft-proof = { path = "crates/proof" }
 craft-psd = { path = "crates/psd" }
 craft-quit = { path = "crates/quit" }
 craft-raw = { path = "crates/raw" }
+craft-sketch = { path = "crates/sketch" }
 craft-settings = { path = "crates/settings" }
 craft-silhouette-studio = { path = "crates/silhouette-studio" }
 craft-svg = { path = "crates/svg" }
