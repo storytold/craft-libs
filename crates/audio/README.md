@@ -304,6 +304,10 @@ match craft_audio::decode(&bytes, None) {
   1 ms) unless the last block has `DiscardPadding`.
 - E-AC-3: 7.1 programs decode as their 5.1 core. Adaptive hybrid transform and enhanced coupling
   return `Unsupported`.
+- E-AC-3 with syncframes of fewer than six blocks: a seek decodes from the start of the stream,
+  because such syncframes may reuse exponents from any syncframe before them. In Matroska, a seek
+  finds its packet by position (as the first packet's length times its index) unless the first
+  eight packets differ in length; packets that start to differ later are placed wrongly.
 - AC-3: not bit-exact. Zero-bit mantissas are filled with decoder-specific dither (A/52 §7.3.4),
   so white noise matches ffmpeg at only 27 dB (AC-3) and 48 dB (E-AC-3) SNR.
 - A FLAC layout that decoders would not assume for the channel count depends on its

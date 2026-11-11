@@ -1151,3 +1151,21 @@ mod adts_tests {
         assert!(matches!(opened, Err(AudioError::Io(_))), "{:?}", opened.err());
     }
 }
+
+#[cfg(all(test, feature = "ac3-decode"))]
+mod ac3_tests {
+    use crate::ac3::tests::single_block_eac3;
+    use crate::{DecodeOptions, Decoder};
+
+    /// One-block E-AC-3 syncframes may reuse exponents sent long before a seek target.
+    #[test]
+    fn a_seek_in_one_block_e_ac3_keeps_exponents_sent_before_the_preroll() {
+        // Exponents in the first syncframe only, reused by the 19 after it (256 frames each).
+        let file = [single_block_eac3(true), single_block_eac3(false).repeat(19)].concat();
+        let mut dec = Decoder::open(file, Some("ac3"), &DecodeOptions::default()).unwrap();
+        assert_eq!(dec.seek(3000).unwrap(), 3000);
+        let block = dec.next_block().unwrap().unwrap();
+        let peak = block.channels[0].iter().fold(0f32, |m, v| m.max(v.abs()));
+        assert!(peak > 1e-5, "the target decodes with the first syncframe's exponents, not as silence");
+    }
+}

@@ -22,9 +22,9 @@ enum Inner {
         /// The format ADTS packets must keep, when their headers gave the configuration.
         adts_format: Option<AdtsFormat>,
     },
-    /// The decoder, and the frames the track's first packet holds (0 when unknown).
+    /// The decoder, and what the packets read so far say of the track's packets.
     #[cfg(feature = "ac3-decode")]
-    Ac3(Box<ac3::Decoder>, usize),
+    Ac3(Box<ac3::Decoder>, Ac3Packets),
     Pcm {
         kind: PcmKind,
         channels: usize,
@@ -135,10 +135,10 @@ impl TrackDecoder {
             CodecId::Ac3 | CodecId::Eac3 => match ac3::parse_header(first) {
                 Ok(h) => {
                     let codec = if h.is_eac3() { CodecId::Eac3 } else { CodecId::Ac3 };
-                    (Inner::Ac3(Box::default(), ac3_packet_frames(first)), codec, h.sample_rate, ac3_layout(&h), SampleFormat::Compressed)
+                    (Inner::Ac3(Box::default(), Ac3Packets::of(lookahead)), codec, h.sample_rate, ac3_layout(&h), SampleFormat::Compressed)
                 }
                 Err(_) => (
-                    Inner::Ac3(Box::default(), 0),
+                    Inner::Ac3(Box::default(), Ac3Packets::default()),
                     params.codec,
                     rate,
                     ChannelLayout::unordered(crate::layout::count(channels)),
@@ -217,7 +217,7 @@ impl TrackDecoder {
                 reorder(out, *order)
             }
             #[cfg(feature = "ac3-decode")]
-            Inner::Ac3(d, _) => {
+            Inner::Ac3(d, shape) => {
                 let mut out: Vec<Vec<f32>> = Vec::new();
                 let mut p = 0;
                 while let Some(rest) = packet.get(p..).filter(|r| !r.is_empty()) {
@@ -227,6 +227,7 @@ impl TrackDecoder {
                         Err(_) => break,
                     };
                     p += f.header.frame_bytes.max(1);
+                    shape.short |= f.header.is_primary() && f.header.samples() < AC3_FRAME_SAMPLES;
                     if !f.channels.is_empty() {
                         if self.last_frames == 0 {
                             self.sample_rate = f.header.sample_rate;
@@ -235,6 +236,8 @@ impl TrackDecoder {
                         append(&mut out, f.channels)?;
                     }
                 }
+                let frames = out.first().map_or(0, Vec::len);
+                shape.varies |= frames > 0 && shape.first > 0 && frames != shape.first;
                 out
             }
             Inner::Pcm { kind, channels } => {
@@ -282,14 +285,17 @@ impl TrackDecoder {
     /// The frames every packet decodes to, for codecs whose packets all have one length: AAC
     /// (1024, 2048 for HE-AAC; a packet of several ADTS frames decodes to that many times this) and
     /// AC-3 / E-AC-3 (the frames of the last decoded packet, else of the first packet's primary
-    /// syncframes, else 1536); `None` for PCM.
+    /// syncframes, else 1536); `None` for PCM, and for AC-3 / E-AC-3 whose packets read so far
+    /// differ in length.
     pub fn frames_per_packet(&self) -> Option<usize> {
         match &self.inner {
             #[cfg(feature = "aac-decode")]
             Inner::Aac { up, .. } => Some(aac::FRAME_LEN * if up.is_some() { 2 } else { 1 }),
             #[cfg(feature = "ac3-decode")]
-            Inner::Ac3(_, first) => Some(match (self.last_frames, *first) {
-                (0, 0) => 1536,
+            Inner::Ac3(_, shape) if shape.varies => None,
+            #[cfg(feature = "ac3-decode")]
+            Inner::Ac3(_, shape) => Some(match (self.last_frames, shape.first) {
+                (0, 0) => AC3_FRAME_SAMPLES,
                 (0, n) | (n, _) => n,
             }),
             Inner::Pcm { .. } => None,
@@ -298,13 +304,16 @@ impl TrackDecoder {
 
     /// Frames to decode before a seek target and drop, so the decoder has settled when the target
     /// is reached: two AAC frames, one AC-3 frame (its filter bank overlaps one frame), none for
-    /// PCM.
+    /// PCM. E-AC-3 syncframes of fewer than six blocks may reuse exponents from any syncframe
+    /// before them, so once one has been read the stream decodes from its start (`usize::MAX`).
     pub fn preroll(&self) -> usize {
         match &self.inner {
             #[cfg(feature = "aac-decode")]
             Inner::Aac { up, .. } => 2 * aac::FRAME_LEN * if up.is_some() { 2 } else { 1 },
             #[cfg(feature = "ac3-decode")]
-            Inner::Ac3(..) => 1536,
+            Inner::Ac3(_, shape) if shape.short => usize::MAX,
+            #[cfg(feature = "ac3-decode")]
+            Inner::Ac3(..) => AC3_FRAME_SAMPLES,
             Inner::Pcm { .. } => 0,
         }
     }
@@ -384,20 +393,49 @@ pub(crate) fn adts_stream_header(headers: &[aac::AdtsHeader]) -> Option<aac::Adt
     headers.iter().rev().max_by_key(|h| headers.iter().filter(|o| adts_format_of(o) == adts_format_of(h)).count()).copied()
 }
 
+/// The frames of a six-block (AC-3 or E-AC-3) syncframe.
+#[cfg(feature = "ac3-decode")]
+const AC3_FRAME_SAMPLES: usize = 1536;
+
+/// What the AC-3 / E-AC-3 packets read so far say of the track's packets.
+#[cfg(feature = "ac3-decode")]
+#[derive(Clone, Copy, Debug, Default)]
+struct Ac3Packets {
+    /// The frames the first packet's primary syncframes hold (0 when unknown).
+    first: usize,
+    /// Packets have decoded to different lengths: a packet's index does not give its position.
+    varies: bool,
+    /// A primary syncframe of fewer than six blocks (E-AC-3), whose exponents may come from any
+    /// syncframe before it.
+    short: bool,
+}
+
+#[cfg(feature = "ac3-decode")]
+impl Ac3Packets {
+    fn of(lookahead: &[&[u8]]) -> Ac3Packets {
+        let lengths: Vec<usize> = lookahead.iter().map(|p| ac3_packet_frames(p)).filter(|&n| n > 0).collect();
+        let short = lookahead.iter().any(|p| ac3_syncframes(p).any(|h| h.is_primary() && h.samples() < AC3_FRAME_SAMPLES));
+        Ac3Packets { first: lookahead.first().map_or(0, |p| ac3_packet_frames(p)), varies: lengths.windows(2).any(|w| w[0] != w[1]), short }
+    }
+}
+
+/// The headers of the syncframes `packet` holds, up to the first that does not parse.
+#[cfg(feature = "ac3-decode")]
+fn ac3_syncframes(packet: &[u8]) -> impl Iterator<Item = ac3::Header> + '_ {
+    let mut p = 0;
+    std::iter::from_fn(move || {
+        let h = ac3::parse_header(packet.get(p..)?).ok()?;
+        p += h.frame_bytes.max(1);
+        Some(h)
+    })
+}
+
 /// The frames an AC-3 / E-AC-3 packet decodes to: those of every primary syncframe in it (an MP4
 /// or Matroska packet may hold several, as E-AC-3 frames of fewer than six blocks are grouped),
 /// up to the first that does not parse. 0 when none does.
 #[cfg(feature = "ac3-decode")]
 fn ac3_packet_frames(packet: &[u8]) -> usize {
-    let mut frames = 0;
-    let mut p = 0;
-    while let Some(h) = packet.get(p..).and_then(|rest| ac3::parse_header(rest).ok()) {
-        if h.is_primary() {
-            frames += h.samples();
-        }
-        p += h.frame_bytes.max(1);
-    }
-    frames
+    ac3_syncframes(packet).filter(ac3::Header::is_primary).map(|h| h.samples()).sum()
 }
 
 /// The ADTS frames `packet` holds, 0 when it is not ADTS-framed.
@@ -824,6 +862,25 @@ mod tests {
         dec.reset();
         assert_eq!(dec.conceal(Some(&six)).unwrap().channels[0].len(), 1536);
         assert_eq!(dec.conceal(Some(&one)).unwrap().channels[0].len(), 256);
+    }
+
+    #[cfg(feature = "ac3-decode")]
+    #[test]
+    fn e_ac3_packets_of_different_lengths_or_short_syncframes_are_not_indexed() {
+        use crate::ac3::tests::single_block_eac3;
+        let params = CodecParams::new(CodecId::Eac3);
+        let one = single_block_eac3(true);
+        let two = [single_block_eac3(true), single_block_eac3(false)].concat();
+        // Packets of 256 and 512 frames: a packet's index does not give its position.
+        let dec = TrackDecoder::new(&params, &[&one, &one, &two]).unwrap();
+        assert_eq!(dec.frames_per_packet(), None);
+        // Known only once decoded: from then on too.
+        let mut dec = TrackDecoder::new(&params, &[&one]).unwrap();
+        assert_eq!(dec.frames_per_packet(), Some(256));
+        dec.decode(&two).unwrap();
+        assert_eq!(dec.frames_per_packet(), None);
+        // One-block syncframes may reuse exponents from any syncframe before them.
+        assert_eq!(TrackDecoder::new(&params, &[&one]).unwrap().preroll(), usize::MAX);
     }
 
     #[test]
