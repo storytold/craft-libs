@@ -1,10 +1,10 @@
 # Writing a component
 
-A component is a Rust type on the contract in `craft_ui::contract`. It supplies its own parts and look; the library runs one show pipeline for it: id, style, sizing, focus, pointer sensing, state, value binding, commands, popups, accessibility, mirroring and the shared test cases. Nothing in a component calls egui's behavioural APIs.
+A component is a Rust type on the contract in `craft_ui::contract` (crate `craft-ui-contract`). It supplies its own parts and look; the library runs one show pipeline for it: id, style, sizing, focus, pointer sensing, state, value binding, commands, popups, accessibility, mirroring and the shared test cases. Nothing in a component calls egui's behavioural APIs.
 
 ## File layout
 
-One file per component in its family module: `<family>/<component>.rs`, for example `choice/radio.rs`. The file holds the type, its style, its words (`words!`) and a `stories` submodule:
+One file per component in its family module: `<family>/<component>.rs`, for example `choice/radio.rs` in `crates/ui-widgets`. A library component goes in the lowest library crate of its layer: controls and composites in craft-ui-widgets, sections, dialogs, docking and rails in craft-ui-panels, anything on a `Canvas` in craft-ui-canvas, assemblies of components in craft-ui-patterns ([craft-framework.md 3.2](craft-framework.md#32-the-ui-library-crates)). The file holds the type, its style, its words (`words!`) and a `stories` submodule:
 
 ```rust
 #[cfg(feature = "testing")]
@@ -19,28 +19,41 @@ mod stories {
 }
 ```
 
-Tests that need more than the shared cases go in `crates/ui/tests/it/<family>/` as `#[craft_ui::testing::trial]` functions.
+Tests that need more than the shared cases go in the crate's integration binary, `tests/it/<family>/` (for example `crates/ui-widgets/tests/it/pickers/`), as `#[craft_ui::testing::trial]` functions. A check that needs every library crate linked (the components index, the API map) goes in the facade's binary, `crates/ui/tests/it`.
 
 A family trial drives frames through `Fixture` (`Fixture::new` or `Fixture::story`, then `click`, `drag`, `key`, `by_label`, `part` and the other helpers), the kit's one frame driver. It writes no click or drag helper of its own.
 
 ## A new crate with components
 
-A crate that holds contract types has its own `testing` feature, enables it on itself, and runs the suite from one integration binary:
+A crate outside the library that holds contract types (a family crate) runs its suite and trials from one test executable, its library's test target, with `screen-testing` turning on its stories. `crates/color` is the model:
 
 ```toml
+[lib]
+harness = false
+
 [features]
-testing = ["craft-ui/testing"]
+ui = ["dep:craft-ui", "dep:egui"]
+screen-testing = ["ui", "craft-ui/testing"]
 
 [dev-dependencies]
-my-crate = { path = ".", features = ["testing"] }
-
-[[test]]
-name = "it"
-path = "tests/it/main.rs"
-harness = false
+craft-ui = { workspace = true, features = ["testing"] }
 ```
 
-The crate's `testing` module calls `craft_ui::testing_registered!()` once, which writes `registered()` for the package. The binary's `main` collects the `#[trial]` functions and adds `suite::trials(env!("CARGO_PKG_NAME"), &my_crate::testing::registered())`, as `crates/ui/tests/it/main.rs` does. The derive writes registrations and stories only under `feature = "testing"`, so release builds carry none.
+```rust
+// src/lib.rs
+#[cfg(all(test, feature = "screen-testing"))]
+extern crate self as craft_color;
+#[cfg(all(test, feature = "screen-testing"))]
+#[path = "../tests/it/main.rs"]
+mod integration;
+
+#[cfg(test)]
+fn main() {
+    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::registered_in(env!("CARGO_PKG_NAME")));
+}
+```
+
+`craft_ui::testing::run` runs the `#[trial]` functions of the executable and the suite's shared cases over the types the package's library crate registers. The library's own crates each have an integration binary instead (`tests/it/main.rs` with `harness = false`), whose `main` makes the same call with the crate's `testing::registered()`, which `craft_ui::testing_registered!()` writes. The derive writes registrations and stories only under `feature = "testing"`, so release builds carry none. `cl test <crate>` builds and runs the executable with the feature set every build shares ([development.md](development.md)).
 
 ## Shapes
 
@@ -124,7 +137,7 @@ A component reads only semantic tokens. It has no tokens of its own and no unnam
 
 ## Stories
 
-A story shows one registered type in one state. `#[story(Type, covers = [..])]` registers it. The probe of the type lists the states it must show:
+A story shows one registered type in one state. `#[story(Type, covers = [..])]` registers it. `title = ".."` is the caption a viewer shows over the story (by default one made from its name), and `group = ".."` puts it in a named group with the type's other stories that name it, in declaration order: the gallery shows a group in one card, each story under its caption. The probe of the type lists the states it must show:
 
 | Type has | Required stories |
 |---|---|
@@ -134,7 +147,7 @@ A story shows one registered type in one state. `#[story(Type, covers = [..])]` 
 | `#[component(overlay)]` | `Open` |
 | items | `Empty`, `One`, `Many` |
 
-A value a story edits comes from `StoryData::value(name, init)`. The suite fails when a required state has no story. `Drive::Auto` picks how the suite changes the value; a story names another drive (`Drive::Drag(Grip::part(HANDLE.at(i)).toward(vec2(1.0, 1.0)))`, `Drive::Pick { row }`, `Drive::Custom(f)`) only when the default does not fit; a drag of a part of the subject is a `Drive::Drag`, which also gets the run cancelled by Escape, never a `Drive::Custom`. The runner makes the disabled, read-only, right-to-left and narrow-room variants of each story itself, so a story shows only the type in its state. The cases the runner runs are the `Case::new` entries in `crates/ui/src/testing/suite.rs` and its `suite/` modules: required states, shows, access, tab, values, mixed, activation, text size, motion, language, text input, and the container and collection cases for the shapes that have them.
+A value a story edits comes from `StoryData::value(name, init)`. The suite fails when a required state has no story. `Drive::Auto` picks how the suite changes the value; a story names another drive (`Drive::Drag(Grip::part(HANDLE.at(i)).toward(vec2(1.0, 1.0)))`, `Drive::Pick { row }`, `Drive::Custom(f)`) only when the default does not fit; a drag of a part of the subject is a `Drive::Drag`, which also gets the run cancelled by Escape, never a `Drive::Custom`. The runner makes the disabled, read-only, right-to-left and narrow-room variants of each story itself, so a story shows only the type in its state. The cases the runner runs are the `Case::new` entries in `crates/ui-contract/src/testing/suite.rs` and its `suite/` modules: required states, shows, access, tab, values, mixed, activation, text size, motion, language, text input, and the container and collection cases for the shapes that have them.
 
 Suite rules:
 
@@ -150,10 +163,11 @@ Each exemption is an entry of kind `probe` in `design/exceptions/<crate>/<family
 
 ## Seeing and checking the result
 
-- `cargo run -p craft-ui-gallery` shows every registered story in both directions and both control sizes, in light or dark, with a filter.
-- `cargo test -p craft-ui --features testing --test it` runs the shared cases and the trials.
-- `cargo run -p craft-design-lint -- structure` checks the layer map, imports, exceptions and clones; `check` reports the source rules.
-- `cargo run -p craft-ui-gallery --bin components-index` rewrites `docs/components-index.md`, the list of what exists. Read it before writing a type, to avoid a second copy of one that exists.
+- `cl render <crate> <Component>` writes the component's stories to PNG files, without building the gallery.
+- `cl build gallery` builds the gallery, which shows every registered story in both directions and both control sizes, in light or dark, with a filter.
+- `cl test <crate>` runs the shared cases and the trials of one crate; `cl test <crate> -- <filter>` runs some of them.
+- `cl cargo run -p craft-design-lint -- structure` checks the layer map, imports, exceptions and clones; `check` reports the source rules.
+- `cl cargo run -p craft-ui-gallery --bin components-index` rewrites `docs/components-index.md`, the list of what exists. Read it before writing a type, to avoid a second copy of one that exists.
 
 ## Decisions an author meets
 
