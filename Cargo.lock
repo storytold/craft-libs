@@ -1050,6 +1050,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-gif"
+version = "0.1.0"
+dependencies = [
+ "image",
+]
+
+[[package]]
 name = "craft-heif"
 version = "0.1.0"
 dependencies = [

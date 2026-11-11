@@ -101,6 +101,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   millimetres to `G0`/`G1` moves with laser power and feed, for cutting lasers and plotters, as a
   commented file or as bare lines for streaming. Its `grbl` module has the real-time command bytes
   and the status and acknowledgement parsers.
+- [`craft-gif`](crates/gif/src/lib.rs): GIF block reader, from PhotoCraft: the logical screen,
+  every frame's position, delay, disposal and transparent colour, the loop count and the first
+  frame's colour table, without decompressing pixels. Tells an animation from a still and whether
+  a file can hold the picture it declares before a decoder runs.
 - [`craft-heif`](crates/heif/README.md): optional HEIF/HEIC still-image decoder, from LightCraft:
   heic-rs reads the container and HEVC pictures, and this crate converts to 16-bit RGB to match
   libheif (VUI range and matrix, chroma upsampling, `imir`, ICC on grid tiles). Also orientation,
