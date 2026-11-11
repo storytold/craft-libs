@@ -62,6 +62,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-docpath`](crates/docpath/src/lib.rs): decides whether a path or `file:` URL stored in a
   document may be opened. Paths stored in documents are followed only when they are local or on the
   document's own network share; other network paths, device paths and non-file URLs are refused.
+- [`craft-dpx`](crates/dpx/src/lib.rs): DPX (SMPTE ST 268) and Kodak Cineon frames, from PhotoCraft,
+  FilmCraft and EffectCraft: header fields and code values at 8, 10, 12 and 16 bits in both byte
+  orders, filled and packed, RGB, RGBA, ABGR, luma and Y'CbCr descriptors, and a writer for both
+  formats. Bounded on hostile input. Colour conversion and orientation stay in each app.
 - [`craft-drawingml`](crates/drawingml/README.md): the DrawingML that PPTX, DOCX and XLSX share:
   EMU units and `a:xfrm`, colours with theme slots and colour transforms, preset shape outlines
   (`a:prstGeom`), custom geometry with guide formulas (`a:custGeom`) and preset text warps
