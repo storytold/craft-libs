@@ -696,3 +696,34 @@ fn crc_update_continues_across_any_split() {
         assert_eq!(crc32_update(crc32_bitwise(0, a), b), whole, "cut {cut} (reference head)");
     }
 }
+
+#[test]
+fn read_packet_checks_its_ranges_against_the_source_before_allocating() {
+    let f = opus_file(10, 312, 500);
+    let o = open(&f[..]).unwrap();
+    let s = o.stream_of(Codec::Opus).unwrap();
+    // The last packet lies past the end of a source cut short: an error, not a read of missing bytes.
+    let short = &f[..f.len() / 2];
+    assert!(matches!(o.read_packet(short, s, 9), Err(Error::Invalid(_))));
+}
+
+#[test]
+fn opus_timing_includes_packets_after_the_last_known_granule() {
+    let f = opus_file(6, 312, 0);
+    let o = open(&f[..]).unwrap();
+    let mut stream = o.streams[0].clone();
+    // Missing granules on complete-packet pages are non-conforming. The recovery fallback still
+    // assigns their packet positions; the total must include the same samples.
+    stream.packets.last_mut().unwrap().granule = None;
+    let timing = OpusTiming::of(&stream, 312);
+    assert_eq!(timing.starts, vec![-312, 648, 1608, 2568, 3528, 4488]);
+    assert_eq!(timing.total, 6 * 960 - 312);
+
+    // With no usable granule, every complete packet still contributes its TOC duration.
+    for packet in &mut stream.packets {
+        packet.granule = None;
+    }
+    let timing = OpusTiming::of(&stream, 312);
+    assert_eq!(timing.starts, vec![-312, 648, 1608, 2568, 3528, 4488]);
+    assert_eq!(timing.total, 6 * 960 - 312);
+}

@@ -136,7 +136,8 @@ another size limit. The default is `DEFAULT_MAX_SAMPLES`, 2^30 samples (4 GiB of
 result. An app that opens files it did not write passes a limit it can hold (for example
 `DEFAULT_MAX_SAMPLES / 8`, or its longest supported clip), or streams with `Decoder`, which has no
 limit because it keeps nothing. `tracks_of` lists the tracks of a file read from a `ByteSource`;
-`detect_container` names a file's container from its first bytes.
+`detect_container` names a file's container from its first bytes. `DECODE_EXTENSIONS` lists the
+file extensions of the formats `decode` reads, for a file picker's filter.
 
 ### Stream and seek
 
@@ -228,7 +229,8 @@ enc.finish()?;
 `EncodeOptions::default()` is 24-bit WAV. `with_bwf` adds a BWF `bext` chunk and
 `with_force_rf64` writes RF64 below 4 GiB; both apply to WAV only. `encode_format_for("aiff")`
 maps an extension to an `EncodeFormat`, and `ENCODE_EXTENSIONS` lists the extensions the enabled
-features can write. `write` refuses a block without one slice per channel, or with a slice
+features can write. `EncodeFormat::ALL` lists the formats; `extension()` is the extension a new
+file gets and `mime_type()` its media type. `write` refuses a block without one slice per channel, or with a slice
 shorter than `frames`, and writes nothing. After a write fails for another reason, every later
 `write` and `finish` returns an error.
 
@@ -567,6 +569,10 @@ The codec modules' public items keep their names, so apps can re-export them
 - `AudioInfo` has `container`, `codec`, `layout` and `damaged` instead of SoundCraft's `format`.
   `detect_container` replaces `detect_format`. `probe` reports the layout instead of
   `wav_channel_mask`.
+- SoundCraft's `FileFormat` tables are `DECODE_EXTENSIONS` (was `readable_extensions`),
+  `ENCODE_EXTENSIONS` and `encode_format_for` (was `from_write_extension`), and
+  `EncodeFormat::ALL`, `extension()` and `mime_type()` (were `WRITE`, `default_extension` and
+  `mime_type`). `aifc` is a writable name here.
 - `EncodeOptions` is built with `EncodeOptions::new(format)` and `with_*` methods. It carries the
   speaker layout and RF64, which replace `encode_with_layout`, `encode_wav_rf64` and
   `FileEncoder::new`'s layout argument. `BwfInfo` and `aac::EncoderConfig` are built the same way
