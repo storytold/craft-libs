@@ -1,0 +1,32 @@
+[package]
+name = "craft-openpgp"
+description = "OpenPGP for mail: PGP/MIME and cleartext Digital signatures checked, attached Public keys and Autocrypt headers read, a secret key file inspected; no I/O of its own."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# rPGP: the OpenPGP packets and the cryptography (MIT OR Apache-2.0). Pinned: every size cap in
+# this crate was written against this version's parser.
+pgp = { version = "=0.21.0", default-features = false }
+thiserror = { workspace = true }
+# rPGP's generation of RustCrypto digests (MIT OR Apache-2.0).
+sha2 = { version = "0.10", default-features = false }
+sha3 = { version = "0.10", default-features = false }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Random numbers in the browser, which rPGP's dependencies ask for even when it only checks.
+pgp = { version = "=0.21.0", default-features = false, features = ["wasm"] }
+
+[dev-dependencies]
+proptest = { workspace = true }
+# Keys and signatures made in the tests, from a seed: the random numbers rPGP 0.21 takes.
+rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+sha1 = { version = "0.10", default-features = false }
+ed25519-dalek = { version = "2", default-features = false }
+rsa = { version = "0.9", default-features = false }

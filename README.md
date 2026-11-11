@@ -132,6 +132,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   header fields, MIME parts and multiparts, encoded-words, RFC 2231 parameters, base64 and
   quoted-printable, character sets, address lists, dates, mbox files and the `multipart/related`
   lookups of MHT web archives. What a message means (body, attachments, flags) stays in each app.
+- [`craft-openpgp`](crates/openpgp/README.md): OpenPGP as mail carries it: PGP/MIME and cleartext
+  Digital signatures checked, attached Public keys and `Autocrypt:` headers read, a secret key
+  file inspected without using it. Built on rPGP; no I/O, and every size and count is capped.
 - [`craft-pcraft-format`](crates/pcraft-format/README.md): the envelope of PhotoCraft's `.pcraft`
   bundle: `Manifest<D>` with the document as a type parameter, `TileRef`, the entry paths, the
   manifest decode limits and the migration runner. The document model stays in PhotoCraft.
