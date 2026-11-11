@@ -51,6 +51,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-docpath`](crates/docpath/src/lib.rs): decides whether a path or `file:` URL stored in a
   document may be opened. Paths stored in documents are followed only when they are local or on the
   document's own network share; other network paths, device paths and non-file URLs are refused.
+- [`craft-dpx`](crates/dpx/src/lib.rs): DPX (SMPTE ST 268) and Kodak Cineon frames, from PhotoCraft,
+  FilmCraft and EffectCraft: header fields and code values at 8, 10, 12 and 16 bits in both byte
+  orders, filled and packed, RGB, RGBA, ABGR, luma and Y'CbCr descriptors, and a writer for both
+  formats. Bounded on hostile input. Colour conversion and orientation stay in each app.
 - [`craft-dxf`](crates/dxf/src/lib.rs): DXF tag reader and writer, from CADCraft: ASCII and
   binary DXF as (group code, value) tags, split into sections and entities, with pre-2007 code
   pages and version detection, and written back. Bounded on hostile input. Mapping tags to a
