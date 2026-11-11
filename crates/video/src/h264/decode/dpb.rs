@@ -2,7 +2,7 @@
 //! ordering / bumping (C.4).
 //!
 //! The buffer only does bookkeeping on picture headers; what a picture is (`F`: the software
-//! decoder's [`crate::h264::decode::picture::FrameRef`], a hardware decoder's surface) is up to the decoder, so
+//! decoder's `FrameRef`, a hardware decoder's surface) is up to the decoder, so
 //! hardware decoders driven by the same headers (VA-API) share this logic and output order.
 
 use crate::h264::decode::error::{Result, ensure};

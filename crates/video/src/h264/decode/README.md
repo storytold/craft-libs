@@ -85,13 +85,25 @@ engine decodes a context-coded bin without branching on its outcome.
 
 ### Draft mode
 
-`Decoder::set_draft(true)` (reduced-resolution playback only; FilmCraft enables it with Settings ▸
-Playback ▸ Draft decoding while the Program monitor plays at 1/2 or 1/4 resolution) skips the
+`Decoder::set_draft(true)` (reduced-resolution playback only) skips the
 deblocking filter (8.7) of non-reference pictures (`nal_ref_idc` 0). No picture is predicted from
 a non-reference picture, and deblocking never changes the motion data that direct prediction
 reads, so every other picture is unchanged; the skipped pictures are flagged `Picture::draft` and
 the media stack never hands them to a paused monitor, a render or an export. On the 4K fixture
 below it saves ~9 % of the decoding work (the B-pyramid's non-reference half of the B pictures).
+
+## Memory and configuration records
+
+A picture is refused when the pictures the decoder would hold do not fit
+`Decoder::set_memory_budget` (`craft_video::budget::DECODE_MEMORY_BUDGET` by default: 4 GiB,
+1 GiB on 32-bit targets): the DPB (the larger of its slots at the new size and what it holds
+now), the picture being decoded, and what is in flight or waiting in the output queue. Pictures
+already held count at their own size, and a buffer shared by the DPB and the queue counts once.
+The per-picture size cap applies as well.
+
+`configure_avcc` checks every entry of the record before it handles any: the first list holds
+SPS NAL units and the second PPS NAL units. A record that carries a picture slice is an error and
+starts no picture.
 
 ## Tests
 
