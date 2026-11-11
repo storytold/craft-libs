@@ -30,7 +30,8 @@ Buffers are checked once per call, before any pixel is written.
 
 * `Transform::proof(src, proof, display, intent, bpc, simulate_paper)`: soft-proof chain.
 * `GamutCheck::new(src, proof, ΔE)`: out-of-gamut test (gamut warning).
-* `Lut3d::from_transform(&t, 33)?.to_rgba16f_bytes()`: display transform as a 3D texture.
+* `Lut3d::from_transform(&t, 33)?.to_rgba16f_bytes()`: display transform as a 3D texture;
+  `Lut3d::from_fn(size, f)` samples any RGB function.
 * `Transform::gpu_matrix_shaper()`: accurate RGB input curves + matrix + output curves for
   display shaders. Float tables retain near-black detail; unsupported chains return `None`
   for the 3D LUT fallback. No GPU dependency is required by this crate.
