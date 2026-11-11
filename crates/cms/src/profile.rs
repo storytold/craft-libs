@@ -687,24 +687,28 @@ fn parse_lut(d: &[u8], a2b: bool) -> Result<Lut, CmsError> {
                 return Err(CmsError::Invalid("bad lutAB dimensions".into()));
             }
             let (ob, om, omc, oc, oa) = (r.u32(12)? as usize, r.u32(16)? as usize, r.u32(20)? as usize, r.u32(24)? as usize, r.u32(28)? as usize);
+            // Offsets come straight from the file: each element is cut out with one checked slice
+            // and read with local offsets, so no `off + k` can wrap (wasm32, overflow checks off).
             let matrix = |off: usize| -> Result<Stage, CmsError> {
+                let e = Reader { b: r.slice(off, 48)? };
                 let mut m = vec![0.0; 9];
                 for (k, v) in m.iter_mut().enumerate() {
-                    *v = r.s15f16(off + k * 4)?;
+                    *v = e.s15f16(k * 4)?;
                 }
-                let offset = vec![r.s15f16(off + 36)?, r.s15f16(off + 40)?, r.s15f16(off + 44)?];
+                let offset = vec![e.s15f16(36)?, e.s15f16(40)?, e.s15f16(44)?];
                 Ok(Stage::Matrix { rows: 3, cols: 3, m, offset })
             };
             let clut = |off: usize, cin: usize, cout: usize| -> Result<Stage, CmsError> {
+                let h = Reader { b: r.slice(off, 20)? };
                 let mut grid = Vec::with_capacity(cin);
                 for k in 0..cin {
-                    let g = r.u8(off + k)? as usize;
+                    let g = h.u8(k)? as usize;
                     if g < 1 {
                         return Err(CmsError::Invalid("zero grid points".into()));
                     }
                     grid.push(g);
                 }
-                let prec = r.u8(off + 16)? as usize;
+                let prec = h.u8(16)? as usize;
                 let nodes: u128 = grid.iter().map(|g| *g as u128).product();
                 if nodes * cout as u128 > MAX_CLUT_VALUES as u128 {
                     return Err(CmsError::Invalid("CLUT too large".into()));
@@ -834,5 +838,24 @@ mod tests {
         d.extend_from_slice(&(u32::MAX - 20).to_be_bytes());
         d.extend_from_slice(&[0u8; 12]);
         assert!(parse_text(&d).is_empty());
+    }
+
+    #[test]
+    fn mab_offsets_near_the_end_of_the_address_space_are_errors() {
+        // Offsets are file-controlled u32s: element reads must be checked slices, never `off + k`.
+        for tag in [b"mAB ", b"mBA "] {
+            for off in [u32::MAX, u32::MAX - 3, u32::MAX - 19, u32::MAX - 47] {
+                for (ob, om, omc, oc, oa) in [(off, 0, 0, 0, 0), (32, off, 32, 0, 0), (32, 32, 32, off, 32), (32, 0, 0, 32, off)] {
+                    let mut e = tag.to_vec();
+                    e.extend([0u8; 4]);
+                    e.extend([3, 3, 0, 0]);
+                    for v in [ob, om, omc, oc, oa] {
+                        e.extend(v.to_be_bytes());
+                    }
+                    e.resize(256, 0);
+                    assert!(parse_lut(&e, true).is_err() || parse_lut(&e, false).is_err());
+                }
+            }
+        }
     }
 }
