@@ -39,8 +39,32 @@ function partitionFor(appId) {
   return partition;
 }
 
+// Writes a port sends before its own `init` arrives have no app id yet. Buffering them in the
+// shared '' partition (keyed only by app id, same as every uninitialized port) would let two
+// different not-yet-initialized ports collide on that one bucket; worse, a later `init` selects
+// the real app partition for all of that port's further storage_flush calls, leaving the
+// pre-init writes stranded in '' where nothing flushes them again. Each port gets its own
+// pre-init buffer instead; `init` merges it into the port's app partition once the app id is
+// known (see the `init` case below), then drops the buffer.
+const preInitBuffers = new WeakMap();
+
+function preInitBufferFor(port) {
+  let buffer = preInitBuffers.get(port);
+  if (!buffer) {
+    buffer = new Map();
+    preInitBuffers.set(port, buffer);
+  }
+  return buffer;
+}
+
 function portAppId(port) {
   return typeof port.craftAppId === 'string' ? port.craftAppId : UNINITIALIZED_APP_ID;
+}
+
+/** The Map a port's storage_put / storage_delete / storage_flush should act on right now: its
+ * app partition once `init` has recorded an app id, or its own pre-init buffer before that. */
+function activeBufferFor(port) {
+  return typeof port.craftAppId === 'string' ? partitionFor(port.craftAppId) : preInitBufferFor(port);
 }
 
 const STUB_CAPS = {
@@ -55,17 +79,31 @@ function postError(port, message) {
   port.postMessage({ type: 'error', message: String(message) });
 }
 
-// Batch ids a tab asked to cancel. A `gpu_jobs` dispatch still has no way to abort
-// craftRuntimeHandleGpuBatch mid-flight (the hook is a single async call with no abort signal),
-// but a cancelled batch's completion must never reach the tab as if it finished normally.
-// Cleared once consumed (either suppressed or the batch never arrives), so this never grows
-// unbounded across a long worker lifetime.
-const cancelledBatches = new Set();
+// Batch ids a tab asked to cancel, scoped per requesting port: a WeakMap<port, Set<batchId>>
+// rather than one shared Set. Two different ports can independently choose the same batch_id
+// (nothing makes it globally unique), and a shared Set let a cancellation from one port consume
+// the entry and suppress a completely different port's completion. A `gpu_jobs` dispatch still
+// has no way to abort craftRuntimeHandleGpuBatch mid-flight (the hook is a single async call
+// with no abort signal), but a cancelled batch's completion must never reach the REQUESTING
+// tab as if it finished normally, and must never touch any OTHER tab's batch. Each port's own
+// Set entry is cleared once consumed (either suppressed or the batch never arrives), so this
+// never grows unbounded across a long worker lifetime.
+const cancelledBatchesByPort = new WeakMap();
+
+function cancelledBatchesFor(port) {
+  let set = cancelledBatchesByPort.get(port);
+  if (!set) {
+    set = new Set();
+    cancelledBatchesByPort.set(port, set);
+  }
+  return set;
+}
 
 async function dispatchGpuJobs(port, data) {
   const batchId = data.batch_id;
   const jobs = Array.isArray(data.jobs) ? data.jobs : [];
   const hook = globalThis.craftRuntimeHandleGpuBatch;
+  const cancelledBatches = cancelledBatchesFor(port);
 
   if (typeof hook !== 'function') {
     // No runtime hook installed: there is no way to tell an uninitialized runtime from
@@ -123,8 +161,12 @@ function enqueueFlush(task) {
   return result;
 }
 
-async function runStorageFlush(port, appId) {
-  const partition = partitionFor(appId);
+async function runStorageFlush(port) {
+  // Resolved fresh here, not captured at dispatch time: a flush enqueued before `init` runs
+  // only once its turn comes up in the chain, by which point `init` may already have migrated
+  // this port's pre-init buffer into its app partition (see the `init` case below).
+  const partition = activeBufferFor(port);
+  const appId = portAppId(port);
   // Snapshot the entries currently queued, by reference (not a copy). Do NOT remove them from
   // the partition yet: that only happens below, once a hook call confirms a key's exact
   // revision was actually written. Until then, a storage_put/storage_delete for one of these
@@ -177,8 +219,7 @@ async function runStorageFlush(port, appId) {
 }
 
 function dispatchStorageFlush(port, _data) {
-  const appId = portAppId(port);
-  void enqueueFlush(() => runStorageFlush(port, appId));
+  void enqueueFlush(() => runStorageFlush(port));
 }
 
 function handleHostMessage(port, data) {
@@ -194,9 +235,30 @@ function handleHostMessage(port, data) {
       // one worker process), and two ports belonging to different apps must never be able to
       // read or namespace each other's pending writes.
       if (typeof data.app_id === 'string' && data.app_id.length > 0) {
+        const preInit = preInitBuffers.get(port);
         port.craftAppId = data.app_id;
         // Back-compat: some hooks/tests still read a single shared app id directly.
         globalThis.craftAppId = data.app_id;
+        if (preInit && preInit.size > 0) {
+          // Merge any writes this port sent before this `init` landed into its real app
+          // partition: without this, they are stranded in a buffer no later storage_flush from
+          // this (now-initialized) port ever looks at again.
+          const partition = partitionFor(data.app_id);
+          for (const [key, entry] of preInit) {
+            const existing = partition.get(key);
+            if (existing) {
+              // The app partition already has a write for this key (e.g. from another,
+              // already-initialized port for the same app): treat the pre-init entry as the
+              // latest write for it, the same way a fresh storage_put would.
+              existing.bytes = entry.bytes;
+              existing.deleted = entry.deleted;
+              existing.revision += 1;
+            } else {
+              partition.set(key, entry);
+            }
+          }
+          preInitBuffers.delete(port);
+        }
       }
       // If the caller transferred a compiled WebAssembly.Module (structured-cloned),
       // forward it to craftRuntimeReceiveWasmModule so the runtime can instantiate
@@ -218,7 +280,7 @@ function handleHostMessage(port, data) {
       if (!data.key) {
         return;
       }
-      const partition = partitionFor(portAppId(port));
+      const partition = activeBufferFor(port);
       const key = String(data.key);
       const existing = partition.get(key);
       if (existing) {
@@ -237,7 +299,7 @@ function handleHostMessage(port, data) {
       if (!data.key) {
         return;
       }
-      const partition = partitionFor(portAppId(port));
+      const partition = activeBufferFor(port);
       const key = String(data.key);
       const existing = partition.get(key);
       if (existing) {
@@ -257,7 +319,7 @@ function handleHostMessage(port, data) {
       return;
     case 'cancel':
       if (typeof data.batch_id !== 'undefined') {
-        cancelledBatches.add(data.batch_id);
+        cancelledBatchesFor(port).add(data.batch_id);
       }
       return;
     default:

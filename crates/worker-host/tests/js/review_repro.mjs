@@ -69,6 +69,10 @@ class FakeDir {
   constructor() {
     this.dirs = new Map();
     this.files = new Map();
+    // Set by a test to force removeEntry to fail with something other than "not found" (a
+    // revoked permission, quota, IO -- anything that must reject the flush rather than be
+    // swallowed as "already deleted").
+    this.removeEntryError = null;
   }
   async getDirectoryHandle(name, opts) {
     if (typeof name !== 'string' || name.length === 0 || name.includes('/')) {
@@ -91,6 +95,9 @@ class FakeDir {
     return this.files.get(name);
   }
   async removeEntry(name) {
+    if (this.removeEntryError) {
+      throw this.removeEntryError;
+    }
     if (!this.files.delete(name) && !this.dirs.delete(name)) {
       throw new Error('NotFoundError');
     }
@@ -333,6 +340,54 @@ test('multi-app isolation: two app ids on one worker never share a pending parti
   assert.deepEqual(byApp['app-b'], ['config/x'], `app-b's flush must not see app-a's entry: ${JSON.stringify(seen)}`);
 });
 
+// CodeRabbit finding on routing.js:221: a storage_put sent before a port's own init lands in
+// the '' (uninitialized) partition. Before the fix, a later storage_flush from that same,
+// now-initialized port selected the real app partition instead, so the pre-init write was
+// stranded in '' with nothing ever flushing it again.
+test('a storage_put sent before init is not lost once init arrives', async () => {
+  const seen = [];
+  const ctx = bootRouting({
+    flushHook: async ({ pending, app_id }) => {
+      seen.push({ app_id, keys: pending.map((p) => p.key) });
+      return { pending_count: pending.length };
+    },
+  });
+  const p = makePort();
+  ctx.handleHostMessage(p.port, { type: 'storage_put', key: 'config/early', bytes: [1] });
+  ctx.handleHostMessage(p.port, { type: 'init', app_id: 'app-a' });
+  ctx.handleHostMessage(p.port, { type: 'storage_flush' });
+  await tick();
+
+  assert.equal(seen.length, 1, `the pre-init write must still be flushed once init arrives: ${JSON.stringify(seen)}`);
+  assert.equal(seen[0].app_id, 'app-a');
+  assert.deepEqual(seen[0].keys, ['config/early']);
+});
+
+// Two different, not-yet-initialized ports buffer their pre-init writes independently: one
+// port's early write must not leak into whichever app the OTHER port initializes as.
+test('pre-init writes from two different ports never cross into the wrong app on init', async () => {
+  const seen = [];
+  const ctx = bootRouting({
+    flushHook: async ({ pending, app_id }) => {
+      seen.push({ app_id, keys: pending.map((p) => p.key) });
+      return { pending_count: pending.length };
+    },
+  });
+  const a = makePort();
+  const b = makePort();
+  ctx.handleHostMessage(a.port, { type: 'storage_put', key: 'config/from-a', bytes: [1] });
+  ctx.handleHostMessage(b.port, { type: 'storage_put', key: 'config/from-b', bytes: [2] });
+  ctx.handleHostMessage(a.port, { type: 'init', app_id: 'app-a' });
+  ctx.handleHostMessage(b.port, { type: 'init', app_id: 'app-b' });
+  ctx.handleHostMessage(a.port, { type: 'storage_flush' });
+  ctx.handleHostMessage(b.port, { type: 'storage_flush' });
+  await tick();
+
+  const byApp = Object.fromEntries(seen.map((s) => [s.app_id, s.keys]));
+  assert.deepEqual(byApp['app-a'], ['config/from-a']);
+  assert.deepEqual(byApp['app-b'], ['config/from-b']);
+});
+
 test('missing craftRuntimeHandleGpuBatch reports error, never a fabricated gpu_batch_done', async () => {
   const ctx = bootRouting();
   const p = makePort();
@@ -439,6 +494,36 @@ test('cancel suppresses gpu_batch_done for that batch even though the hook alrea
   assert.equal(p.posted.length, 0, `a cancelled batch must never post gpu_batch_done: ${JSON.stringify(p.posted)}`);
 });
 
+// CodeRabbit finding on routing.js:63: cancellation was tracked in one Set shared by every
+// port, keyed only by batch_id. Nothing makes batch_id globally unique, so a cancellation from
+// one port could consume the shared entry and suppress a different port's completion for what
+// is, to that port, an unrelated batch.
+test('cancel is scoped to the requesting port: a batch_id collision on another port is not suppressed', async () => {
+  const resolvers = [];
+  const ctx = bootRouting({
+    gpuHook: () =>
+      new Promise((resolve) => {
+        resolvers.push(resolve);
+      }),
+  });
+  const a = makePort();
+  const b = makePort();
+  // Both ports happen to pick the same batch_id; nothing in the protocol makes it unique.
+  ctx.handleHostMessage(a.port, { type: 'gpu_jobs', batch_id: 9, jobs: [{ provider_id: 'x', params: [], inputs: [], outputs: [] }] });
+  ctx.handleHostMessage(b.port, { type: 'gpu_jobs', batch_id: 9, jobs: [{ provider_id: 'x', params: [], inputs: [], outputs: [] }] });
+  await tick();
+  assert.equal(resolvers.length, 2);
+
+  ctx.handleHostMessage(a.port, { type: 'cancel', batch_id: 9 }); // A cancels its OWN batch 9
+  resolvers[0]([{ outputs: [], data: null }]);
+  resolvers[1]([{ outputs: [], data: null }]);
+  await tick();
+
+  assert.equal(a.posted.length, 0, 'A cancelled its own batch: no completion must reach it');
+  assert.equal(b.posted.length, 1, `B never cancelled anything: its completion for the same batch_id must still arrive, got ${JSON.stringify(b.posted)}`);
+  assert.equal(b.posted[0].type, 'gpu_batch_done');
+});
+
 test('sanitizeAppSegment: distinct app ids never collapse to the same OPFS root segment', async () => {
   const ctx = {};
   ctx.globalThis = ctx;
@@ -467,6 +552,25 @@ test('OPFS: deleting a key that was never written is a no-op, not an error', asy
   const { ctx } = bootOpfs({ appId: 'collabphoto' });
   const result = await ctx.craftRuntimeFlushPending({ pending: [{ key: 'docs/never-existed.bin', bytes: [], deleted: true }], app_id: 'collabphoto' });
   assert.equal(result.pending_count, 1);
+});
+
+// CodeRabbit finding on opfs-flush.js:105: removeEntry's catch (and the parent-directory catch
+// above it) used to swallow every error, not just "not found". A real failure -- a revoked
+// permission, quota, IO -- was treated as a successful delete: the flush hook returned
+// pending_count confirming it, the router dropped the tombstone, and the file stayed on disk.
+test('OPFS: a removeEntry failure other than not-found rejects the flush and leaves the file', async () => {
+  const { ctx, root } = bootOpfs({ appId: 'collabphoto' });
+  await ctx.craftRuntimeFlushPending({ pending: [{ key: 'docs/a.bin', bytes: [1, 2, 3], deleted: false }], app_id: 'collabphoto' });
+  const docsDir = root.dirs.get('collabphoto').dirs.get('store').dirs.get('v1').dirs.get('docs');
+  assert.ok(docsDir.files.has('a.bin'), 'the file must exist before the delete attempt');
+
+  docsDir.removeEntryError = new Error('QuotaExceededError: cannot modify this entry right now');
+  await assert.rejects(
+    () => ctx.craftRuntimeFlushPending({ pending: [{ key: 'docs/a.bin', bytes: [], deleted: true }], app_id: 'collabphoto' }),
+    /QuotaExceededError/,
+    'a non-not-found removeEntry failure must reject the flush, not be swallowed as a successful delete',
+  );
+  assert.ok(docsDir.files.has('a.bin'), 'the file must still exist: the delete never actually succeeded');
 });
 
 // --- fs-access-host.js: bounded cold-file reads, honest flush acknowledgment ------------------

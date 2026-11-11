@@ -30,13 +30,20 @@ globalThis.craftRuntimeFlushPending = async (data) => {
 };
 ```
 
-If `craftRuntimeHandleGpuBatch` is unset, the stub completes `gpu_jobs` with empty outcomes.
+If `craftRuntimeHandleGpuBatch` is unset, `gpu_jobs` replies with an `error` message instead of
+running any job. An integrator must not treat a missing GPU hook as completed work: no stub
+outcomes are fabricated.
 If `craftRuntimeFlushPending` is unset, or it throws or rejects, `storage_flush` replies with an
 `error` message and leaves every pending write queued for the next flush attempt; it never
 reports `storage_flushed` for data that was not actually persisted. A hook that resolves with a
 `pending_count` lower than the number of entries it was given confirms only that many (oldest
 queued first); the rest stay queued and are retried on the next flush.
 Loading `opfs-flush.js` from the worker bootstrap installs a default flush hook.
+
+`gpu_batch_done`'s `results` field carries one tagged entry per job, in input order: `{ status:
+"done", outcome }` or `{ status: "failed", message }` (mirrors `craft_worker_host::GpuJobResult`).
+The JS reference hook itself still answers a whole batch in one call, so every entry it produces
+is `"done"`; a hook that throws fails the whole batch through the `error` message instead.
 
 ## WebAssembly.Module sharing
 

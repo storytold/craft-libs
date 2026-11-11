@@ -84,9 +84,24 @@ async function writeWarmKey(root, key, bytes, appId) {
   await writable.close();
 }
 
+/** True for the specific "it is not there" failure (a real `NotFoundError` DOMException in the
+ * browser; the string the test doubles throw for the same condition). Any other error -- a
+ * revoked permission, a locked file, quota, IO -- must not be treated as "already deleted". */
+function isNotFoundError(err) {
+  if (!err) {
+    return false;
+  }
+  if (err.name === 'NotFoundError') {
+    return true;
+  }
+  return typeof err.message === 'string' && err.message.includes('NotFoundError');
+}
+
 /** Remove a previously-persisted key's file. Missing already (never written, or already
  * removed by an earlier retry) counts as success: the end state -- no file -- is what a delete
- * wants either way. */
+ * wants either way. Any OTHER failure must reject: swallowing it here would let the flush hook
+ * report the delete as persisted and the caller would drop the tombstone, while the real file
+ * (and whatever actually went wrong) stays on disk. */
 async function removeWarmKey(root, key, appId) {
   const segments = keyToSegments(key, appId);
   const fileName = segments[segments.length - 1];
@@ -94,13 +109,19 @@ async function removeWarmKey(root, key, appId) {
   for (let i = 0; i < segments.length - 1; i += 1) {
     try {
       dir = await dir.getDirectoryHandle(segments[i]);
-    } catch {
-      return;
+    } catch (err) {
+      if (isNotFoundError(err)) {
+        return; // a missing parent directory means the file was never written: already absent.
+      }
+      throw err;
     }
   }
   try {
     await dir.removeEntry(fileName);
-  } catch {
+  } catch (err) {
+    if (!isNotFoundError(err)) {
+      throw err;
+    }
     // Already absent: nothing to do.
   }
 }
