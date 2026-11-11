@@ -1,0 +1,153 @@
+{
+ "packages": [
+  {
+   "name": "craft-theme",
+   "features": {},
+   "dependencies": [],
+   "targets": [
+    {
+     "kind": [
+      "lib"
+     ],
+     "src_path": "crates/theme/src/lib.rs"
+    }
+   ]
+  },
+  {
+   "name": "craft-host",
+   "features": {},
+   "dependencies": [
+    {
+     "name": "craft-theme",
+     "kind": null,
+     "optional": false
+    }
+   ],
+   "targets": [
+    {
+     "kind": [
+      "lib"
+     ],
+     "src_path": "crates/host/src/lib.rs"
+    }
+   ]
+  },
+  {
+   "name": "craft-behavior",
+   "features": {},
+   "dependencies": [
+    {
+     "name": "craft-theme",
+     "kind": null,
+     "optional": false
+    },
+    {
+     "name": "emath",
+     "kind": null,
+     "optional": false
+    },
+    {
+     "name": "accesskit",
+     "kind": null,
+     "optional": false
+    }
+   ],
+   "targets": [
+    {
+     "kind": [
+      "lib"
+     ],
+     "src_path": "crates/behavior/src/lib.rs"
+    }
+   ]
+  },
+  {
+   "name": "craft-window",
+   "features": {},
+   "dependencies": [
+    {
+     "name": "craft-host",
+     "kind": null,
+     "optional": false
+    },
+    {
+     "name": "egui",
+     "kind": null,
+     "optional": false
+    }
+   ],
+   "targets": [
+    {
+     "kind": [
+      "lib"
+     ],
+     "src_path": "crates/window/src/lib.rs"
+    }
+   ]
+  },
+  {
+   "name": "craft-ui",
+   "features": {
+    "testing": [
+     "dep:egui_kittest"
+    ],
+    "egui_kittest": [
+     "dep:egui_kittest"
+    ]
+   },
+   "dependencies": [
+    {
+     "name": "craft-behavior",
+     "kind": null,
+     "optional": false
+    },
+    {
+     "name": "craft-theme",
+     "kind": null,
+     "optional": false
+    },
+    {
+     "name": "egui",
+     "kind": null,
+     "optional": false
+    },
+    {
+     "name": "egui_kittest",
+     "kind": null,
+     "optional": true
+    }
+   ],
+   "targets": [
+    {
+     "kind": [
+      "lib"
+     ],
+     "src_path": "crates/ui/src/lib.rs"
+    }
+   ]
+  },
+  {
+   "name": "craft-domain",
+   "features": {
+    "testing": [
+     "craft-ui/testing"
+    ]
+   },
+   "dependencies": [
+    {
+     "name": "craft-ui",
+     "kind": null,
+     "optional": false
+    }
+   ],
+   "targets": [
+    {
+     "kind": [
+      "lib"
+     ],
+     "src_path": "crates/domain/src/lib.rs"
+    }
+   ]
+  }
+ ]
+}

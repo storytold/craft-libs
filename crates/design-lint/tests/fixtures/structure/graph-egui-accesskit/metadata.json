@@ -1,0 +1,28 @@
+{
+ "packages": [
+  {
+   "name": "craft-theme",
+   "features": {},
+   "dependencies": [
+    {
+     "name": "emath",
+     "kind": null,
+     "optional": false
+    },
+    {
+     "name": "accesskit",
+     "kind": null,
+     "optional": false
+    }
+   ],
+   "targets": [
+    {
+     "kind": [
+      "lib"
+     ],
+     "src_path": "crates/theme/src/lib.rs"
+    }
+   ]
+  }
+ ]
+}

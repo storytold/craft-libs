@@ -1,0 +1,8 @@
+config_version = 1
+
+[[exception]]
+name = "face-stories"
+kind = "probe"
+rule = "probe/exempt/stories"
+path = "crates/ui/src/lib.rs"
+reason = "the face is shown by its host"

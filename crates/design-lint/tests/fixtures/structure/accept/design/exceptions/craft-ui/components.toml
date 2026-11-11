@@ -1,0 +1,8 @@
+config_version = 1
+
+[[exception]]
+name = "legacy-allocate"
+kind = "marker"
+rule = "contract/allocate"
+path = "crates/ui/src/buttons.rs"
+reason = "legacy allocation until the cut-over"

@@ -1,0 +1,26 @@
+[package]
+autotests = false
+name = "craft-design-lint"
+description = "Design-system lint for Craft apps: the clippy.toml template that blocks stock egui widgets and raw colour constructors, and the check that an app's clippy.toml carries it."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+syn = { version = "2", features = ["full", "visit", "visit-mut"] }
+toml = { version = "1.1", default-features = false, features = ["std", "parse", "serde"] }
+toml_edit = "0.25"
+
+[lints]
+workspace = true
+
+[[test]]
+name = "workspace"
+path = "tests/workspace.rs"

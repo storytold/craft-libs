@@ -1,0 +1,31 @@
+{
+ "packages": [
+  {
+   "name": "craft-ui",
+   "features": {
+    "testing": [
+     "dep:egui_kittest"
+    ],
+    "egui_kittest": [
+     "dep:egui_kittest"
+    ],
+    "fast": []
+   },
+   "dependencies": [
+    {
+     "name": "egui_kittest",
+     "kind": null,
+     "optional": true
+    }
+   ],
+   "targets": [
+    {
+     "kind": [
+      "lib"
+     ],
+     "src_path": "crates/ui/src/lib.rs"
+    }
+   ]
+  }
+ ]
+}

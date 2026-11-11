@@ -1,0 +1,6 @@
+config_version = 1
+
+[[module]]
+path = "testing"
+layer = 2
+outside = true

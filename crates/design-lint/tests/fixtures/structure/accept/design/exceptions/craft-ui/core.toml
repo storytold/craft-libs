@@ -1,0 +1,8 @@
+config_version = 1
+
+[[exception]]
+name = "adapter-expect"
+kind = "expect"
+rule = "clippy::disallowed_methods"
+path = "crates/ui/src/runtime.rs"
+reason = "the adapter calls egui"
