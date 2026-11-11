@@ -228,8 +228,9 @@ impl Component for TitleBar<'_> {
 
     /// The hairline along the bottom edge, over the content.
     fn paint_over(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        let y = cx.rect.bottom() - cx.style.rule / 2.0;
-        ui.draw().rule(RuleKind::Divider, pos2(cx.rect.left(), y), pos2(cx.rect.right(), y));
+        let draw = ui.draw();
+        let y = cx.rect.bottom() - draw.rule_width(RuleKind::Divider) / 2.0;
+        draw.rule(RuleKind::Divider, pos2(cx.rect.left(), y), pos2(cx.rect.right(), y));
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> TitleBarOutput {

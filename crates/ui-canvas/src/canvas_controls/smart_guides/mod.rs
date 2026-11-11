@@ -8,7 +8,7 @@ use crate::canvas::{CanvasRulers, canvas_space};
 use crate::contract::{Common, Component, Cx, MeasureCx, PaintUi, Role};
 use crate::primitives::{Dashes, PaintShape, Rule, StrokeWidth, TextRun};
 use crate::runtime::env::Units;
-use crate::style::{ComponentStyle, DataColor, RuleLook, StyleColor, StyleCx, TypeRole, UiTokens};
+use crate::style::{ComponentStyle, DataColor, RuleLook, RuleWidth, StyleColor, StyleCx, TypeRole, UiTokens};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
 use craft_behavior::{Metrics, Sense};
 use craft_theme::{Rgba, contrast_ratio};
@@ -176,7 +176,7 @@ impl Component for SmartGuides<'_> {
         let fill = self.color.map_or(style.smart.egui(), |color| color.0);
         let painter = ui.content_painter(cx);
         let ppp = painter.pixels_per_point();
-        let line = RuleLook { color: fill, width: style.width };
+        let line = RuleLook { color: fill, width: RuleWidth::Points(style.width) };
         if let Some(bounds) = self.bounds {
             let corners = view.quad(bounds).to_vec();
             ui.draw().stroke(&PaintShape::Polygon(corners), StrokeWidth::Thin, style.bounds);

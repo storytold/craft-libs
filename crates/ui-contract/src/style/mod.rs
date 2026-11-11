@@ -24,7 +24,7 @@ pub use key::{EnvKey, Ink, StyleKey};
 pub(crate) use look::StyleView;
 pub use look::{ComponentStyle, Corners, DataColor, FocusLook, IconLook, StyleColor, SurfaceKind, SurfaceLook, TextLook, TrackLook};
 pub(crate) use paint::scroll_bar_look;
-pub use paint::{HandleLook, ResetMarkLook, RuleKind, RuleLook, ScrollBarLook};
+pub use paint::{HandleLook, ResetMarkLook, RuleKind, RuleLook, RuleWidth, ScrollBarLook};
 pub use replacements::{DuplicateStyle, StyleReplacements};
 pub use state::StateSet;
 pub use surface::{SurfaceEdge, SurfaceStyle};

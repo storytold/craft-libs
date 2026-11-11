@@ -7,7 +7,7 @@ use super::draw::{Dashes, PaintShape, StrokeWidth};
 use super::rule::{Rule, RuleKind};
 use super::surface::Surface;
 use super::textures::{TextureCache, UNTINTED};
-use crate::style::{Corners, DataColor, RuleLook, SurfaceKind, UiTokens, ink_color, rgba_color, rule_look, surface_style};
+use crate::style::{Corners, DataColor, RuleLook, RuleWidth, SurfaceKind, UiTokens, ink_color, rgba_color, rule_look, surface_style};
 use craft_behavior::{Axis, CanvasView, kurbo};
 use egui::epaint::{RectShape, Vertex};
 use egui::{
@@ -332,7 +332,7 @@ impl GridInk {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct GridLook {
     color: Color32,
-    width: f32,
+    width: RuleWidth,
     dash: f32,
     gap: f32,
 }
@@ -367,7 +367,7 @@ pub fn grid_lines_with(look: &GridLook, grid: &GridLines, ink: &GridInk, pixels_
         for (a, b) in ends {
             match ink.stroke {
                 GridStroke::Solid => shapes.extend(Rule::shapes(&RuleLook { color, width: look.width }, a, b, pixels_per_point)),
-                GridStroke::Dashed => shapes.extend(dashed(&[a, b], Dashes::new(look.dash, look.gap), look.width, color)),
+                GridStroke::Dashed => shapes.extend(dashed(&[a, b], Dashes::new(look.dash, look.gap), look.width.points(pixels_per_point), color)),
                 GridStroke::Dots => shapes.extend(Shape::dotted_line(&[a, b], color, look.gap, DOT_RADIUS)),
             }
         }
@@ -378,7 +378,7 @@ pub fn grid_lines_with(look: &GridLook, grid: &GridLines, ink: &GridInk, pixels_
 /// The tick marks of `ticks` on one edge of `rect` that `clip` shows, `stroke.thin` lines of `text.faint`: minor ones
 /// `gap.tight` long, mid ones `size.ruler.tick.mid`, major ones across the whole depth of `rect`, beside their labels.
 pub fn ticks(tokens: &UiTokens, rect: Rect, edge: TickEdge, ticks: &[Tick], clip: Rect, pixels_per_point: f32) -> Vec<Shape> {
-    let look = RuleLook { color: rgba_color(tokens.color.text.faint), width: tokens.stroke.thin };
+    let look = RuleLook { color: rgba_color(tokens.color.text.faint), width: RuleWidth::Points(tokens.stroke.thin) };
     let depth = match edge {
         TickEdge::Bottom | TickEdge::Top => rect.height(),
         TickEdge::Left | TickEdge::Right => rect.width(),

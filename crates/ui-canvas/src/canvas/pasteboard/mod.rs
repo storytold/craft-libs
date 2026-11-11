@@ -9,7 +9,7 @@ use super::space::canvas_space;
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Props as _, Role};
 use crate::primitives::{PaintShape, Rule, StrokeWidth, TextRun};
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, DataColor, RuleLook, StyleColor, StyleCx, TypeRole};
+use crate::style::{ComponentStyle, DataColor, RuleLook, RuleWidth, StyleColor, StyleCx, TypeRole};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
 use craft_behavior::{CanvasView, HitLevel, HitPriority, Metrics, PartKey, Sense};
 use craft_theme::Rgba;
@@ -339,7 +339,7 @@ impl Component for Pasteboard<'_> {
         let edge = |quad: &[Pos2; 4], color: StyleColor| {
             if aligned {
                 let rect = bounds(quad);
-                let look = RuleLook { color: color.egui(), width: style.edge };
+                let look = RuleLook { color: color.egui(), width: RuleWidth::Points(style.edge) };
                 let corners = [rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom()];
                 for (from, to) in corners.into_iter().zip(corners.into_iter().cycle().skip(1)) {
                     edges.painter.extend(Rule::shapes(&look, from, to, edges.pixels_per_point()));

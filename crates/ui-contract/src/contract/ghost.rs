@@ -46,7 +46,7 @@ fn paint_pointer(ctx: &Context, env: &Env, painter: &egui::Painter) {
         thin: env.tokens.stroke.thin,
     };
     let ink = crate::style::ink_color(&env.tokens, Ink::OnDark);
-    let edge = crate::style::rule_look(&env.tokens, RuleKind::Edge).width;
+    let edge = env.tokens.stroke.thin;
     match &cursor {
         PaintedCursor::Outline { rings, .. } => pointers::outline(&pen, rings),
         PaintedCursor::Circle { radius, .. } => pointers::circle(&pen, *radius, edge, ink),

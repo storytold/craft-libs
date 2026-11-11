@@ -126,7 +126,7 @@ impl RegionFrame<'_> {
 pub(super) fn paint_edge_rule(ui: &mut Ui, props: &ContainerProps, env: &Env, rect: Rect) {
     let Some(edge) = env.pane_edge.filter(|_| props.edge_rule) else { return };
     let rule = rule_look(&env.tokens, RuleKind::Divider);
-    let half = rule.width / 2.0;
+    let half = rule.width.points(ui.ctx().pixels_per_point()) / 2.0;
     let rtl = env.direction.is_rtl();
     let (from, to) = match edge {
         PaneEdge::Start if rtl => (Pos2::new(rect.min.x + half, rect.min.y), Pos2::new(rect.min.x + half, rect.max.y)),

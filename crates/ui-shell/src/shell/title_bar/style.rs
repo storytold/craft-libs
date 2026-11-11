@@ -5,7 +5,6 @@
 //! family metrics and colours (`caption.*`), and the title is a `Text`. Nothing else of the legacy bar style has a
 //! token: the corner size belongs to the window's grips, the gaps to the body's row gap.
 
-use crate::primitives::RuleKind;
 use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::Metrics;
 
@@ -15,13 +14,11 @@ use craft_behavior::Metrics;
 pub struct TitleBarStyle {
     #[style(metrics)]
     metrics: Metrics,
-    /// The width of the rule along the bottom edge: one device pixel.
-    pub(super) rule: f32,
 }
 
 impl TitleBarStyle {
     /// The style at `cx`.
-    pub(super) fn of(cx: &StyleCx<'_>) -> TitleBarStyle {
-        TitleBarStyle { metrics: Metrics::new(), rule: cx.rule(RuleKind::Divider).width }
+    pub(super) fn of(_: &StyleCx<'_>) -> TitleBarStyle {
+        TitleBarStyle { metrics: Metrics::new() }
     }
 }

@@ -17,7 +17,7 @@ use crate::primitives::{Dashes, FocusKind, FocusRing, PaintShape, Rule, StrokeWi
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
 use crate::runtime::keys;
-use crate::style::{ComponentStyle, Flags, FocusLook, RuleLook, StyleColor, StyleCx};
+use crate::style::{ComponentStyle, Flags, FocusLook, RuleLook, RuleWidth, StyleColor, StyleCx};
 use craft_behavior::geometry::{coordinate_across, motion_across};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
 use craft_behavior::{
@@ -497,7 +497,7 @@ impl Component for Guides<'_> {
             let Some([a, b]) = place::segment(&space.view, guide.along, guide.position, guide.span, cx.rect) else { continue };
             let color = if self.selected == Some(guide.key) { style.selected.egui() } else { guide.color.map_or(style.line.egui(), data_color) };
             match guide.line {
-                GuideLine::Solid => painter.painter.extend(Rule::shapes(&RuleLook { color, width: style.width }, a, b, ppp)),
+                GuideLine::Solid => painter.painter.extend(Rule::shapes(&RuleLook { color, width: RuleWidth::Points(style.width) }, a, b, ppp)),
                 GuideLine::Dashed => painter.dashed(&[a, b], Dashes::new(style.dash, style.gap), StrokeWidth::Thin, color),
                 GuideLine::Dots => painter.dashed(&[a, b], Dashes::new(style.width, style.gap), StrokeWidth::Thin, color),
             }

@@ -1,7 +1,7 @@
 //! `Divider`: a separator line one physical pixel wide, horizontal or vertical.
 use crate::contract::{Common, Component, Cx, InBar, InMenu, MeasureCx, PaintUi, Role};
 use crate::primitives::RuleKind;
-use crate::style::{ComponentStyle, StyleCx};
+use crate::style::{ComponentStyle, RuleWidth, StyleCx};
 use craft_behavior::{Metrics, Sense};
 use egui::{Response, Vec2};
 
@@ -15,7 +15,7 @@ pub struct DividerStyle {
     #[style(metrics)]
     metrics: Metrics,
     /// The line's width.
-    width: f32,
+    width: RuleWidth,
     /// The width of the box a vertical line sits in inside a bar, the line centred: `space.gap.item`.
     slot: f32,
     /// The least length of a line, vertical or horizontal: one control height.
@@ -74,11 +74,12 @@ impl Component for Divider {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        let width = cx.style.width.points(cx.ui.ctx().pixels_per_point());
         match self.axis {
-            Axis::Horizontal if cx.env.get::<InMenu>().0 => Vec2::new(cx.style.length, cx.style.width + 2.0 * cx.style.separator_pad),
-            Axis::Horizontal => Vec2::new(cx.style.length, cx.style.width),
-            Axis::Vertical if cx.env.get::<InBar>().0 => Vec2::new(cx.style.slot.max(cx.style.width), cx.style.length),
-            Axis::Vertical => Vec2::new(cx.style.width, cx.style.length),
+            Axis::Horizontal if cx.env.get::<InMenu>().0 => Vec2::new(cx.style.length, width + 2.0 * cx.style.separator_pad),
+            Axis::Horizontal => Vec2::new(cx.style.length, width),
+            Axis::Vertical if cx.env.get::<InBar>().0 => Vec2::new(cx.style.slot.max(width), cx.style.length),
+            Axis::Vertical => Vec2::new(width, cx.style.length),
         }
     }
 

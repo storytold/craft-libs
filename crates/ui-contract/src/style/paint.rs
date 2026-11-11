@@ -21,8 +21,34 @@ fn style_color(c: Rgba) -> StyleColor {
 pub struct RuleLook {
     /// The colour.
     pub color: Color32,
-    /// The width in points.
-    pub width: f32,
+    /// The width.
+    pub width: RuleWidth,
+}
+
+/// The width of a rule.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub enum RuleWidth {
+    /// One physical pixel at every scale.
+    #[default]
+    Hairline,
+    /// A width in points, rounded to whole physical pixels and never thinner than one.
+    Points(f32),
+}
+
+impl RuleWidth {
+    /// The width in whole physical pixels on a display of `pixels_per_point`.
+    pub fn pixels(self, pixels_per_point: f32) -> f32 {
+        match self {
+            RuleWidth::Hairline => 1.0,
+            RuleWidth::Points(width) => (width * pixels_per_point).round().max(1.0),
+        }
+    }
+
+    /// The width in points on a display of `pixels_per_point`.
+    pub fn points(self, pixels_per_point: f32) -> f32 {
+        self.pixels(pixels_per_point) / pixels_per_point.max(f32::EPSILON)
+    }
 }
 
 /// Which rule a look is for.
@@ -41,12 +67,12 @@ pub enum RuleKind {
 
 pub(crate) fn rule_look(tokens: &UiTokens, kind: RuleKind) -> RuleLook {
     let c = &tokens.color;
-    let thin = tokens.stroke.thin;
+    let hairline = RuleWidth::Hairline;
     match kind {
-        RuleKind::Divider => RuleLook { color: color(c.line.divider), width: thin },
-        RuleKind::Edge => RuleLook { color: color(c.line.border), width: thin },
-        RuleKind::Grid => RuleLook { color: color(c.overlay.grid), width: thin },
-        RuleKind::DropMark => RuleLook { color: color(c.accent.solid), width: tokens.stroke.thick },
+        RuleKind::Divider => RuleLook { color: color(c.line.divider), width: hairline },
+        RuleKind::Edge => RuleLook { color: color(c.line.border), width: hairline },
+        RuleKind::Grid => RuleLook { color: color(c.overlay.grid), width: hairline },
+        RuleKind::DropMark => RuleLook { color: color(c.accent.solid), width: RuleWidth::Points(tokens.stroke.thick) },
     }
 }
 

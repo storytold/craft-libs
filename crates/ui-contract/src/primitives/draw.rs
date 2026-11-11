@@ -302,10 +302,15 @@ impl<'a> Draw<'a> {
         self.painter.extend(super::rule::Rule::shapes(&look, from, to, self.painter.pixels_per_point()));
     }
 
+    /// The width in points of the line `rule` paints for `kind`.
+    pub fn rule_width(&self, kind: RuleKind) -> f32 {
+        rule_look(self.env.tokens, kind).width.points(self.painter.pixels_per_point())
+    }
+
     /// Paints a line of theme width `width` and `color` from `from` to `to`, snapped to physical pixels as `rule` is.
     #[doc(hidden)]
     pub fn line_snapped(&self, width: StrokeWidth, color: Color32, from: Pos2, to: Pos2) {
-        let look = crate::style::RuleLook { color, width: self.width(width) };
+        let look = crate::style::RuleLook { color, width: crate::style::RuleWidth::Points(self.width(width)) };
         self.painter.extend(super::rule::Rule::shapes(&look, from, to, self.painter.pixels_per_point()));
     }
 
