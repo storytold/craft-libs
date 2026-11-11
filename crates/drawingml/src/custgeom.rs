@@ -36,6 +36,14 @@ impl Default for CustomPath {
 
 const DEG: f64 = 60_000.0;
 
+/// Distinct path coordinate spaces whose guides are evaluated for one custom geometry; paths in
+/// further spaces are left out.
+const MAX_SPACES: usize = 16;
+
+/// Guide-name bytes all cached spaces may hold between them; the first space counts towards it but is always kept.
+/// Every space copies the names, which the XML limits bound only once.
+const MAX_SPACE_NAME_BYTES: usize = 4 << 20;
+
 /// Guide variables for one shape.
 pub struct Guides {
     vars: HashMap<String, f64>,
@@ -86,6 +94,10 @@ impl Guides {
         set("5cd8", 13_500_000.0);
         set("7cd8", 18_900_000.0);
         Guides { vars: v }
+    }
+    /// Bytes of the guide names held.
+    fn name_bytes(&self) -> usize {
+        self.vars.keys().map(String::len).sum()
     }
     pub fn get(&self, name: &str) -> f64 {
         let name = name.trim();
@@ -172,14 +184,36 @@ fn pt(g: &Guides, e: &El) -> (f64, f64) {
 pub fn read_cust_geom(cg: &El, w_emu: f64, h_emu: f64) -> Vec<CustomPath> {
     let mut out = vec![];
     let Some(pl) = cg.child(Local("pathLst")) else { return out };
+    let mut spaces: HashMap<(u64, u64), Guides> = HashMap::new();
+    let mut name_bytes = 0usize;
+    let mut budget_full = false;
+    // The cap on cached spaces saves guide evaluation: a geometry without guides has none to save.
+    let guided = ["avLst", "gdLst"].iter().any(|n| cg.child(Local(n)).is_some_and(|l| l.children(Local("gd")).next().is_some()));
     for p in pl.children(Local("path")).take(1000) {
         let pw = p.attr_f64("w").unwrap_or(0.0);
         let ph = p.attr_f64("h").unwrap_or(0.0);
         // Guides are evaluated in the path's own space when it has one.
         let (gw, gh) = if pw > 0.0 || ph > 0.0 { (pw, ph) } else { (w_emu, h_emu) };
-        let mut g = Guides::new(gw, gh);
-        g.eval_list(cg.child(Local("avLst")));
-        g.eval_list(cg.child(Local("gdLst")));
+        // The guide lists are evaluated once per coordinate space, not once per path.
+        let key = (gw.to_bits(), gh.to_bits());
+        if !spaces.contains_key(&key) {
+            if guided && (budget_full || spaces.len() >= MAX_SPACES) {
+                continue;
+            }
+            let mut g = Guides::new(gw, gh);
+            g.eval_list(cg.child(Local("avLst")));
+            g.eval_list(cg.child(Local("gdLst")));
+            // The first space is always kept; later ones only while the cache stays within budget.
+            let bytes = g.name_bytes();
+            if guided && !spaces.is_empty() && name_bytes.saturating_add(bytes) > MAX_SPACE_NAME_BYTES {
+                // Every space holds the same names, so no later space fits either.
+                budget_full = true;
+                continue;
+            }
+            name_bytes = name_bytes.saturating_add(bytes);
+            spaces.insert(key, g);
+        }
+        let Some(g) = spaces.get(&key) else { continue };
         let mut d = String::new();
         let mut cur = (0.0, 0.0);
         let mut start = (0.0, 0.0);
@@ -187,7 +221,7 @@ pub fn read_cust_geom(cg: &El, w_emu: f64, h_emu: f64) -> Vec<CustomPath> {
             match c.local() {
                 "moveTo" => {
                     if let Some(q) = c.child(Local("pt")) {
-                        cur = pt(&g, q);
+                        cur = pt(g, q);
                         start = cur;
                         d.push_str("M ");
                         num(&mut d, cur.0);
@@ -198,7 +232,7 @@ pub fn read_cust_geom(cg: &El, w_emu: f64, h_emu: f64) -> Vec<CustomPath> {
                 }
                 "lnTo" => {
                     if let Some(q) = c.child(Local("pt")) {
-                        cur = pt(&g, q);
+                        cur = pt(g, q);
                         d.push_str("L ");
                         num(&mut d, cur.0);
                         d.push(' ');
@@ -207,7 +241,7 @@ pub fn read_cust_geom(cg: &El, w_emu: f64, h_emu: f64) -> Vec<CustomPath> {
                     }
                 }
                 "cubicBezTo" => {
-                    let pts: Vec<(f64, f64)> = c.children(Local("pt")).map(|q| pt(&g, q)).collect();
+                    let pts: Vec<(f64, f64)> = c.children(Local("pt")).map(|q| pt(g, q)).collect();
                     if let [a, b, e] = pts.as_slice() {
                         d.push_str("C ");
                         for (x, y) in [a, b, e] {
@@ -220,7 +254,7 @@ pub fn read_cust_geom(cg: &El, w_emu: f64, h_emu: f64) -> Vec<CustomPath> {
                     }
                 }
                 "quadBezTo" => {
-                    let pts: Vec<(f64, f64)> = c.children(Local("pt")).map(|q| pt(&g, q)).collect();
+                    let pts: Vec<(f64, f64)> = c.children(Local("pt")).map(|q| pt(g, q)).collect();
                     if let [a, e] = pts.as_slice() {
                         d.push_str("Q ");
                         for (x, y) in [a, e] {
@@ -487,6 +521,44 @@ mod tests {
         assert_eq!(paths[1].fill, FillMode::None);
         assert!(!paths[1].stroke);
         assert_eq!(paths[1].d, "M 1 1 Q 2 2 3 1");
+    }
+
+    #[test]
+    fn paths_share_guides_and_distinct_spaces_are_capped() {
+        let path = |w: usize| format!(r#"<a:path w="{w}" h="10"><a:moveTo><a:pt x="mid" y="1"/></a:moveTo></a:path>"#);
+        let paths: String = (1..=40).map(|i| path(10 * i)).collect();
+        let x = format!(
+            r#"<a:custGeom xmlns:a="x"><a:gdLst><a:gd name="mid" fmla="*/ w 1 2"/></a:gdLst><a:pathLst>{paths}{}</a:pathLst></a:custGeom>"#,
+            path(10)
+        );
+        let d = parse(x.as_bytes()).unwrap();
+        let out = read_cust_geom(&d, 1.0, 1.0);
+        assert_eq!(out.len(), MAX_SPACES + 1, "16 spaces plus the repeat of the first");
+        assert!(out[0].d.starts_with("M 5 1"), "{}", out[0].d);
+        assert!(out[MAX_SPACES].d.starts_with("M 5 1"), "{}", out[MAX_SPACES].d);
+    }
+
+    #[test]
+    fn guide_name_bytes_across_spaces_are_budgeted() {
+        let name = "n".repeat(3 << 20);
+        let path = |w: usize| format!(r#"<a:path w="{w}" h="10"><a:moveTo><a:pt x="{name}" y="1"/></a:moveTo></a:path>"#);
+        let x = format!(
+            r#"<a:custGeom xmlns:a="x"><a:gdLst><a:gd name="{name}" fmla="*/ w 1 2"/></a:gdLst><a:pathLst>{}{}{}</a:pathLst></a:custGeom>"#,
+            path(10),
+            path(20),
+            path(10)
+        );
+        let d = parse(x.as_bytes()).unwrap();
+        let out = read_cust_geom(&d, 1.0, 1.0);
+        assert_eq!(out.len(), 2, "the second 3 MiB space is over budget and left out; the first space's repeat stays");
+    }
+
+    #[test]
+    fn guide_free_geometries_are_not_capped_by_space() {
+        let paths: String = (1..=40).map(|i| format!(r#"<a:path w="{}" h="10"><a:moveTo><a:pt x="1" y="1"/></a:moveTo></a:path>"#, 10 * i)).collect();
+        let x = format!(r#"<a:custGeom xmlns:a="x"><a:avLst/><a:gdLst/><a:pathLst>{paths}</a:pathLst></a:custGeom>"#);
+        let d = parse(x.as_bytes()).unwrap();
+        assert_eq!(read_cust_geom(&d, 1.0, 1.0).len(), 40);
     }
 
     #[test]
