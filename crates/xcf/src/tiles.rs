@@ -47,6 +47,11 @@ pub(crate) fn rle_decode(input: &[u8], bpp: usize, pixels: usize) -> Result<Vec<
             if plane.len() + run > pixels {
                 return Err(invalid("an RLE run crosses the end of its tile"));
             }
+            // A long run of length 0 consumes input without producing output: a tile of them
+            // (reachable from many tile pointers) is work the pixel budget never charges.
+            if run == 0 {
+                return Err(invalid("an RLE run has no length"));
+            }
             if verbatim {
                 let data = input.get(pos..pos + run).ok_or_else(short)?;
                 pos += run;

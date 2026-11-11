@@ -1083,3 +1083,11 @@ fn a_user_unit_property_is_measured_not_trusted() {
         assert_eq!(read_all(&bytes), Ok(16));
     }
 }
+
+#[test]
+fn an_rle_run_of_zero_length_is_an_error() {
+    // Long runs (op 127 / 128) carry a 16-bit length; zero consumes input without producing output.
+    assert!(rle_decode(&[127, 0, 0, 5, 3, 0, 9], 1, 4).is_err());
+    assert!(rle_decode(&[128, 0, 0, 3, 0, 9], 1, 4).is_err());
+    assert_eq!(rle_decode(&[127, 0, 4, 9], 1, 4).unwrap(), [9, 9, 9, 9]);
+}
