@@ -38,4 +38,9 @@ jobs:
           components: rustfmt, clippy
       - run: cargo fmt --check
       - run: cargo clippy -p craft-docpath --all-targets --locked -- -D warnings
+      - name: Docs (links and missing docs)
+        if: runner.os == 'Linux'
+        run: cargo doc -p craft-docpath --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
       - run: cargo test -p craft-docpath --locked -- --nocapture

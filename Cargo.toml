@@ -15,6 +15,7 @@ repository = "https://github.com/storytold/craft-libs"
 craft-platform = { path = "crates/platform" }
 craft-aep = { path = "crates/aep" }
 craft-affinity = { path = "crates/affinity" }
+craft-win32 = { path = "crates/win32" }
 craft-ai-core = { path = "crates/ai-core" }
 craft-pdf = { path = "crates/pdf", version = "=0.1.0" }
 craft-pdn = { path = "crates/pdn" }
@@ -27,6 +28,7 @@ bytemuck = "1"
 kurbo = "0.13"
 thiserror = "2"
 craft-aaf = { path = "crates/aaf" }
+craft-behavior = { path = "crates/behavior" }
 craft-atomic = { path = "crates/atomic" }
 craft-captions = { path = "crates/captions" }
 craft-cfb = { path = "crates/cfb" }
@@ -36,6 +38,11 @@ craft-crs = { path = "crates/crs" }
 craft-crw = { path = "crates/crw" }
 craft-csv = { path = "crates/csv" }
 craft-dav = { path = "crates/dav" }
+craft-automation = { path = "crates/automation" }
+craft-browse = { path = "crates/browse" }
+craft = { path = "crates/craft" }
+craft-color = { path = "crates/color" }
+craft-design-lint = { path = "crates/design-lint" }
 craft-dialogs = { path = "crates/dialogs" }
 craft-doc-binary = { path = "crates/doc-binary" }
 craft-docx = { path = "crates/docx" }
@@ -45,6 +52,7 @@ craft-eps = { path = "crates/eps" }
 craft-doc = { path = "crates/doc" }
 craft-docpath = { path = "crates/docpath" }
 craft-dpx = { path = "crates/dpx" }
+craft-draw = { path = "crates/draw" }
 craft-ecproj-format = { path = "crates/ecproj-format" }
 craft-figma-rest = { path = "crates/figma-rest" }
 craft-exr = { path = "crates/exr" }
@@ -61,15 +69,18 @@ craft-html = { path = "crates/html" }
 craft-heif = { path = "crates/heif" }
 craft-fig = { path = "crates/fig" }
 craft-fonts-build = { path = "crates/fonts-build" }
+craft-host = { path = "crates/host" }
 craft-i18n = { path = "crates/i18n" }
 craft-idml = { path = "crates/idml" }
 craft-jmap = { path = "crates/jmap" }
 craft-ical = { path = "crates/ical" }
+craft-imaging = { path = "crates/imaging" }
 craft-jpeg = { path = "crates/jpeg" }
 craft-kiwi = { path = "crates/kiwi" }
 craft-keymap = { path = "crates/keymap" }
 craft-assuan = { path = "crates/assuan" }
 craft-kra = { path = "crates/kra" }
+craft-layers = { path = "crates/layers" }
 craft-audio = { path = "crates/audio" }
 # No default features, so craft-audio's `encode` builds craft-media without `isobmff`.
 craft-latex = { path = "crates/latex" }
@@ -94,6 +105,7 @@ craft-penpot = { path = "crates/penpot" }
 craft-pcraft-format = { path = "crates/pcraft-format" }
 craft-plotter = { path = "crates/plotter" }
 craft-prepress = { path = "crates/prepress" }
+craft-pages = { path = "crates/pages" }
 craft-print = { path = "crates/print" }
 craft-proof = { path = "crates/proof" }
 craft-raster-codecs = { path = "crates/raster-codecs" }
@@ -104,6 +116,7 @@ craft-rtf = { path = "crates/rtf" }
 craft-raw = { path = "crates/raw" }
 craft-sheet = { path = "crates/sheet" }
 craft-sketch = { path = "crates/sketch" }
+craft-review = { path = "crates/review" }
 craft-settings = { path = "crates/settings" }
 craft-silhouette-studio = { path = "crates/silhouette-studio" }
 craft-svg = { path = "crates/svg" }
@@ -114,7 +127,18 @@ craft-tga = { path = "crates/tga" }
 craft-timeline = { path = "crates/timeline" }
 craft-tiff = { path = "crates/tiff" }
 craft-metadata = { path = "crates/metadata" }
+craft-table = { path = "crates/table" }
+craft-theme = { path = "crates/theme" }
+craft-theme-store = { path = "crates/theme-store" }
 craft-ui = { path = "crates/ui" }
+craft-ui-canvas = { path = "crates/ui-canvas" }
+craft-ui-contract = { path = "crates/ui-contract" }
+craft-ui-panels = { path = "crates/ui-panels" }
+craft-ui-patterns = { path = "crates/ui-patterns" }
+craft-ui-shell = { path = "crates/ui-shell" }
+craft-ui-test-kit = { path = "crates/ui-test-kit" }
+craft-ui-widgets = { path = "crates/ui-widgets" }
+craft-ui-macros = { path = "crates/ui-macros" }
 craft-update = { path = "crates/update" }
 craft-vcard = { path = "crates/vcard" }
 craft-vectorcraft-format = { path = "crates/vectorcraft-format" }
@@ -131,11 +155,15 @@ craft-ews = { path = "crates/ews" }
 craft-video = { path = "crates/video" }
 craft-web-api = { path = "crates/web-api" }
 craft-window = { path = "crates/window" }
+# egui's colour types alone, for crates that convert to and from them without egui.
+ecolor = { version = "0.37", default-features = false }
 craft-web-host = { path = "crates/web-host" }
 craft-webp = { path = "crates/webp" }
 egui = { version = "0.37", default-features = false }
+bitflags = "2"
 md5 = { package = "md-5", version = "0.10", default-features = false }
 rayon = "1"
+smallvec = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 proptest = "1"
@@ -146,6 +174,9 @@ chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+# Every public item has a doc comment; a self-evident field or variant carries
+# `#[allow(missing_docs)]` instead.
+missing_docs = "warn"
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(craft_pdf_unicode_fixtures)"] }
 
 [workspace.lints.clippy]
@@ -165,20 +196,20 @@ hayro-jbig2 = { path = "vendor/hayro-jbig2" }
 hayro-cmap = { path = "vendor/hayro-cmap" }
 hayro-postscript = { path = "vendor/hayro-postscript" }
 linesweeper = { path = "vendor/linesweeper" }
-ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-emath = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-epaint = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui-winit = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_glow = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_extras = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+ecolor = { git = "https://github.com/aiongg/egui.git", rev = "4b93a86c52348eb53e883c9b6b9f59c573608e07" }
+emath = { git = "https://github.com/aiongg/egui.git", rev = "4b93a86c52348eb53e883c9b6b9f59c573608e07" }
+epaint = { git = "https://github.com/aiongg/egui.git", rev = "4b93a86c52348eb53e883c9b6b9f59c573608e07" }
+epaint_default_fonts = { git = "https://github.com/aiongg/egui.git", rev = "4b93a86c52348eb53e883c9b6b9f59c573608e07" }
+egui = { git = "https://github.com/aiongg/egui.git", rev = "4b93a86c52348eb53e883c9b6b9f59c573608e07" }
+egui-winit = { git = "https://github.com/aiongg/egui.git", rev = "4b93a86c52348eb53e883c9b6b9f59c573608e07" }
+egui-wgpu = { git = "https://github.com/aiongg/egui.git", rev = "4b93a86c52348eb53e883c9b6b9f59c573608e07" }
+egui_glow = { git = "https://github.com/aiongg/egui.git", rev = "4b93a86c52348eb53e883c9b6b9f59c573608e07" }
+egui_extras = { git = "https://github.com/aiongg/egui.git", rev = "4b93a86c52348eb53e883c9b6b9f59c573608e07" }
+egui_kittest = { git = "https://github.com/aiongg/egui.git", rev = "4b93a86c52348eb53e883c9b6b9f59c573608e07" }
+egui_system_font_provider = { git = "https://github.com/aiongg/egui.git", rev = "4b93a86c52348eb53e883c9b6b9f59c573608e07" }
+eframe = { git = "https://github.com/aiongg/egui.git", rev = "4b93a86c52348eb53e883c9b6b9f59c573608e07" }
+egui_demo_lib = { git = "https://github.com/aiongg/egui.git", rev = "4b93a86c52348eb53e883c9b6b9f59c573608e07" }
+egui_inspection = { git = "https://github.com/aiongg/egui.git", rev = "4b93a86c52348eb53e883c9b6b9f59c573608e07" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
 
 # symphonia's FLAC decoder restores LPC samples as `residual + (prediction as i32)`. In a valid
@@ -196,3 +227,46 @@ opt-level = 3
 # 2 MiB stack of a test thread. The apps this reader came from build their crates at this level.
 [profile.dev.package.craft-affinity]
 opt-level = 1
+# Dev and test builds never run LTO: with `lto = false` (cargo's default) rustc runs thin-local LTO across every
+# optimised crate's 256 codegen units on each rebuild, which multiplied the incremental rebuild of the framework
+# crates. Off, a one-line edit re-optimises only the changed units.
+[profile.dev]
+lto = "off"
+
+# Dependencies (egui, rendering, text shaping, syn) run optimised in dev and test builds, so
+# screen tests, design-lint and the debug gallery run at a usable speed. They build once per
+# target dir; the workspace's own crates stay unoptimised and incremental.
+[profile.dev.package."*"]
+opt-level = 2
+
+# The workspace crates whose code runs in every screen-test frame (the framework runtime, the theme's colour maths
+# and the behaviour cores), and craft-proof, whose tests parse and check whole dictionaries, build at opt-level 1:
+# unoptimised, they made the test binaries several times slower. The crates above the runtime (widgets, panels,
+# canvas, patterns, shell) stay at opt-level 0: their code is a few percent of a frame, and at opt-level 0 a one-line
+# edit rebuilds in seconds instead of the better part of a minute.
+[profile.dev.package.craft-ui-contract]
+opt-level = 1
+[profile.dev.package.craft-theme]
+opt-level = 1
+[profile.dev.package.craft-behavior]
+opt-level = 1
+[profile.dev.package.craft-proof]
+opt-level = 1
+
+# The gallery on the Mac: optimised like release, but the workspace's crates build in many small
+# units, incrementally, so a change to craft-ui rebuilds in minutes. Dependencies keep release
+# settings and build once in target/gallery. `cargo run --profile gallery -p craft-ui-gallery`.
+[profile.gallery]
+inherits = "release"
+incremental = true
+codegen-units = 256
+opt-level = 1
+
+# The workspace's own crates build at opt-level 1 in the gallery profile: rustc shares generic instantiations across
+# crates at opt-level 0, 1, s and z only, so at 1 a change in a framework crate no longer makes every dependant
+# re-generate its own copies of that crate's generics and inlined functions (a one-line edit rebuilt the gallery in
+# 25 s at opt-level 1 and 69–84 s at 3). `package."*"` matches the dependencies only: they keep release optimisation,
+# so this changes nothing in their settings.
+[profile.gallery.package."*"]
+codegen-units = 16
+opt-level = 3

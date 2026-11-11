@@ -26,18 +26,19 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 ## Libraries
 
 - [`craft-platform`](crates/platform/README.md): optional native dialog lifecycle, Linux/BSD desktop appearance observation and browser download ownership; application policy stays in the apps.
-
 - [`craft-aep`](crates/aep/README.md): After Effects projects: the `.aep` (RIFX) and `.aepx`
   container as a lossless chunk tree that writes back byte for byte, and a typed, read-only view
   of compositions, layers, properties, keyframes, effects, masks, shapes, text and footage.
   Clean room, from EffectCraft. Mapping onto an app's document stays in the app.
+
 - [`craft-ai-core`](crates/ai-core/README.md): the data model and contract for AI in the Craft Apps (connections, models, tools, requests, jobs, consent, history, route spec). Pure, no I/O, wasm-safe. Contract in [docs/ai-shared-layer.md](docs/ai-shared-layer.md).
 - [`craft-pdf`](crates/pdf/README.md): independently optional PDF parsing, interpretation, rasterization and guarded authoring. Apps retain layout, fonts, editing and export policy; writer-only consumers do not enable the shared reader.
-
 - [`craft-pdn`](crates/pdn/README.md): Paint.NET documents (`.pdn`, PDN3), read: the layer list, blend modes and chunked gzip pixel blocks, with a data-only MS-NRBF (.NET binary serialization) reader. From PhotoCraft.
 - [`craft-aaf`](crates/aaf/README.md): clean-room AAF (Edit Protocol, structured storage) and OMF Interchange 2.0 (Bento) readers and writers over one mob-style composition model with exact times, clip gain, markers, nested compositions and embedded PCM essence. From FilmCraft.
 - [`craft-assuan`](crates/assuan/README.md): the Assuan protocol and gpg-agent's operations (key lookup, signing a digest, decrypting a session key) over any `Read + Write` stream, with a bounded canonical S-expression reader. No sockets; everything the agent sends is capped.
 - [`craft-affinity`](crates/affinity/README.md): bounded reader for native Affinity documents (`.af`, `.afdesign`, `.afphoto`, `.afpub`): archive, object stream and a neutral document model with layers, artboards, vectors, text, tables, images and masks. Read only; mapping onto an app's document stays in the app.
+
+- [`craft-automation`](crates/automation/README.md): drive a running app from tests, agents and the CLI: control channel, screenshot queue, frame profiler and trace (native only); recorded actions, their playback and the Actions panel (every target).
 - [`craft-atomic`](crates/atomic/README.md): Crash-safe atomic file writing and replacement with same-directory staging, directory fsync, Apple `F_FULLFSYNC` fallback, transient lock backoff, and fault injection for the Craft suite.
 - [`craft-captions`](crates/captions/README.md): caption and subtitle files behind one neutral
   model (cues with exact tick times): SubRip, WebVTT, Scenarist SCC, MacCaption MCC, EBU STL and
@@ -49,11 +50,17 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-dav`](crates/dav/README.md): WebDAV multistatus documents (RFC 4918) with the CalDAV and
   CardDAV namespaces, from MailCraft: read fail-closed into a bounded `craft-xml` tree with fixed
   prefixes, and the successful properties of each response. No I/O.
+- [`craft-browse`](crates/browse/README.md): browsing: standard folders, volumes and lazy folder
+  listings, linked-file statuses kept current, file thumbnails decoded by the app in jobs, and
+  (`ui` feature) the tile grid, media bin, places tree, compare tile, links list and relink dialog.
 - [`craft-cms`](crates/cms/README.md): pure-Rust ICC v2/v4 colour management: profile parsing
   and writing, transforms, rendering intents, black point compensation, soft proofing, gamut
   checks, 3D LUTs and built-in profiles (sRGB, Display P3, synthetic coated CMYK and others).
 - [`craft-crs`](crates/crs/README.md): Adobe Camera Raw settings (the `crs:` namespace of an XMP packet or `.xmp` sidecar, read through craft-metadata): the settings by name, numbers, tone curve points, local corrections and the crop, read and written. From PhotoCraft.
 - [`craft-codepage`](crates/codepage/README.md): legacy 8-bit code pages, one table each: the single-byte Windows pages, Mac OS Roman and fifteen DOS pages, keyed by Windows code page number, with the RTF/Word font charsets. craft-rtf, craft-dxf and craft-mime decode through it.
+- [`craft-color`](crates/color/README.md): colour picker, wells, swatch tables, ramps and the hex
+  field; the Color Picker dialog, droppers, eyedropper, samplers, screen picker, Color and Swatches
+  panels (`ui` feature); swatch files, the display transform and harmonies.
 - [`craft-crw`](crates/crw/README.md): clean-room Canon CRW (CIFF) raw decoder, from LightCraft:
   the heap container, the entropy coding derived by black-box analysis (frozen code tables), sensor
   black and white levels and as-shot white balance. The complete derivation record (plan, sources
@@ -71,6 +78,8 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-docpath`](crates/docpath/src/lib.rs): decides whether a path or `file:` URL stored in a
   document may be opened. Paths stored in documents are followed only when they are local or on the
   document's own network share; other network paths, device paths and non-file URLs are refused.
+  `links` keeps a document's linked files: their status, the identity check, folder remaps and
+  folder searches.
 - [`craft-dpx`](crates/dpx/src/lib.rs): DPX (SMPTE ST 268) and Kodak Cineon frames, from PhotoCraft,
   FilmCraft and EffectCraft: header fields and code values at 8, 10, 12 and 16 bits in both byte
   orders, filled and packed, RGB, RGBA, ABGR, luma and Y'CbCr descriptors, and a writer for both
@@ -86,6 +95,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-docx`](crates/docx/README.md): DOCX (WordprocessingML) read and written on `craft-wordmodel`, with
   Word XML (Flat OPC) and Word 2003 XML, password-protected packages and Restrict Editing hashes.
   WordCraft's DOCX crate on `craft-opc`, `craft-xml` and `craft-offcrypto`.
+- [`craft-draw`](crates/draw/README.md): vector and shape tools; the gradient editor and
+  on-canvas gradient overlay, the pen and path overlays, the crop frame and perspective crop, and the
+  free transform box and fields (`ui` feature).
 - [`craft-dxf`](crates/dxf/src/lib.rs): DXF tag reader and writer, from CADCraft: ASCII and
   binary DXF as (group code, value) tags, split into sections and entities, with pre-2007 code
   pages and version detection, and written back; and `model`, the drawing above the tags (header
@@ -112,13 +124,16 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   manifests and rank channels. The optional `decode` feature adds bounded part listing, flat
   decoding (scan lines, tiles, every compression of the `exr` crate) and writing.
 - [`craft-flow`](crates/flow/README.md): the flow model every text format maps to (paragraphs with a kind, lists and formatted spans; tables; pictures, fields, notes, equations), converted to and from a craft-wordmodel `Document`.
+- [`craft-imaging`](crates/imaging/README.md): raster image editing; the scope counting (every
+  target) and, with the `ui` feature, the warp grid, the levels editor, the Channels panel and the
+  scope panel with its clipping overlay.
 - [`craft-font-catalog`](crates/font-catalog/README.md): the installed fonts on every platform
   (font folders, fontconfig and Flatpak host folders, CoreText, DirectWrite, the font store),
   lookup by family, style, localized, legacy, full and PostScript names, family loads shared
   between threads, and rescans when fonts are installed or removed.
 - [`craft-font-manager`](crates/font-manager/README.md): Craft Font Manager as a library: search
   and filters over the Google Fonts index, installed fonts by family, the font store interface,
-  and (`egui` feature) `FontsPanel`, the whole interface as one panel for the launcher's Fonts tab
+  and (`ui` feature) `FontsPanel`, the whole interface as one panel for the launcher's Fonts tab
   and the standalone app.
 - [`craft-font-store`](crates/font-store/README.md): the suite's font store: the pinned Google
   Fonts and Noto indexes plus indexes the user adds (never curated), exact lookup by family and
@@ -172,11 +187,6 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   CCITT Group 3 and 4 decoding and Group 4 encoding, JBIG2 decoding and lossless encoding. Every
   decoder is bounded and returns its partial output on damage. From PdfCraft; a PDF filter chain
   is built on it in `craft-pdf`.
-- [`craft-timeline`](crates/timeline/README.md): editorial timeline interchange: exact media time and SMPTE timecode, import/export reports, media path and `file://` URL handling, Avid Log Exchange (ALE) and CMX 3600 EDL documents, format detection. From FilmCraft.
-- [`craft-metadata`](crates/metadata/README.md): photo metadata, from LightCraft: EXIF (read and write,
-  maker-note lens and focus point, every tag by name), IPTC-IIM, XMP packets (read, write, and a merge
-  that keeps what another program wrote), GPX track logs, and the blocks that carry them in JPEG, PNG,
-  WebP, TIFF-based, RAF and CR3 files. One `Metadata` model for all of them. Built on `craft-tiff`.
 - [`craft-tiff`](crates/tiff/README.md): TIFF and BigTIFF IFD reader and writer, from LightCraft:
   every field type, the IFD chain, SubIFDs and Exif/GPS/Interop pointer IFDs, maker-note IFDs
   (Canon, Nikon, Sony, Fujifilm, Olympus, Panasonic, Pentax), strip and tile layout. Bounded and
@@ -210,6 +220,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   scopes, conflicts, user overrides stored through craft-settings and import of other
   applications' shortcut sets. Command catalogs, file readers and the shortcut editor UI stay
   in each app.
+- [`craft-layers`](crates/layers/README.md): the Layers panel over the app's `LayerTree`: rows
+  with thumbnails and masks, blend, opacity, lock and fill rows, the filter bar, Layers Panel
+  Options, drag and drop, and events the app applies with its own commands and undo. UI-only.
 - [`craft-audio`](crates/audio/README.md): audio file I/O and codecs (WAV, AIFF, FLAC, AAC, Opus,
   AC-3/E-AC-3, MP1/MP2, MP3 encoding), streaming and seeking, and packet decoding for any demuxer. See its
   README for formats and features.
@@ -251,6 +264,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-opc`](crates/opc/README.md): Open Packaging Conventions, the ZIP container of DOCX, XLSX and PPTX
   files: bounded readers (every part up front, or on demand), part names, relationships, content
   types and a deterministic package writer. What the parts hold stays with each format's crate.
+- [`craft-pages`](crates/pages/README.md): pages for the document apps: page layout and fit modes,
+  paper sizes and page setup, page ranges and numbering; with `ui`, the page view, thumbnails, Page
+  Setup, margin handles, header and footer zones, text selection, reading view, page list and
+  document tables. The document, its layout and rendering stay in each app.
 - [`craft-pcraft-format`](crates/pcraft-format/README.md): the envelope of PhotoCraft's `.pcraft`
   bundle: `Manifest<D>` with the document as a type parameter, `TileRef`, the entry paths, the
   manifest decode limits and the migration runner. The document model stays in PhotoCraft.
@@ -271,7 +288,6 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   craft-i18n's `language-data/`, embedded at build time from `CRAFT_I18N_DIR`: English and the
   carry-over locales by default, the set `CRAFT_PROOF_EMBED` names otherwise (`en` for English
   only); other languages come from installed Language packs.
-
 - [`craft-pst`](crates/pst/README.md): Outlook personal folders files (`.pst`, [MS-PST]) read over any
   `Read + Seek`, from MailCraft: the node database, property and table contexts, folders, messages,
   recipients, attachments, attached messages and named properties, ANSI and Unicode, encoded or not,
@@ -280,11 +296,15 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 
 - [`craft-quit`](crates/quit/src/lib.rs): native macOS quit, egui close handling and an optional
   app menu. Unsaved-document decisions and save prompts stay in each app.
-
 - [`craft-rtf`](crates/rtf/README.md): Rich Text Format: a tokenizer, text decoding in the file's code pages
   (`\uN`, `\'hh`, single-byte and East Asian multibyte pages), escaping and dates, and a reader and writer
   for a small neutral model (paragraphs, character formatting, outline levels, tables).
-- [`craft-settings`](crates/settings/README.md): `config.toml` settings storage for every app: platform folders, portable mode and overrides, atomic saves while running, backup, damaged-file recovery and schema migrations. Policy in [docs/settings-storage.md](docs/settings-storage.md).
+
+- [`craft-review`](crates/review/README.md): review: the comments panel, comment pins, thread
+  popover and composer, Acrobat's annotation tool, the signature pad, version history and the
+  revisions panel, presence, voting, cursor chat and join over the app's own transport (`ui`
+  feature).
+- [`craft-settings`](crates/settings/README.md): `config.toml` settings storage for every app: platform folders, portable mode and overrides, atomic saves while running, backup, damaged-file recovery and schema migrations, plus remembered dialog options and preset folders (also on wasm32). Policy in [docs/settings-storage.md](docs/settings-storage.md).
 - [`craft-sheet`](crates/sheet/README.md): spreadsheet vocabulary shared by `craft-xls`, `craft-xlsx` and `craft-ods`: cell positions and A1 text, cell values and error values, sheet-name quoting, Excel's built-in number formats and indexed colour palette. Not a file format; no dependencies.
 - [`craft-sf2`](crates/sf2/README.md): SoundFont 2 (`.sf2`) reader: the sample pool and, per preset, the key and velocity regions a note sounds, with tuning, loop points, pan, level and volume envelope resolved from the preset and instrument zones. Bounded on hostile input. From LoopCraft.
 - [`craft-silhouette-studio`](crates/silhouette-studio/src/lib.rs): bounded, fail-closed reader for Silhouette Studio `.studio` and `.studio3` documents: outlines, line colours and page size in millimetres. Protected designs are refused.
@@ -300,16 +320,33 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   check for drawing a tree with resvg. Apps take usvg from here, not as their own dependency.
 - [`craft-svg-paths`](crates/svg-paths/src/lib.rs): the former name of `craft-svg`'s `paths`,
   `color` and `write`; re-exports them for existing users.
+- [`craft-table`](crates/table/README.md): spreadsheet widgets: the cell grid with Excel's
+  keys, outline bands, the PivotTable field list, the condition builder, chart painting, slicers,
+  reference picking, selection statistics, error tags and filter buttons (`ui` feature).
 - [`craft-text`](crates/text/README.md): text processing below the composer. Its `hyphen` module finds
   hyphenation points, with a bundled US English dictionary and patterns and optional hypher patterns
-  for 47 more languages (one cargo feature each).
-- [`craft-ui`](crates/ui/README.md): SVG catalogs, icon buttons, tabs, pane controls, transactional docking, print settings and theme helpers for egui frontends;
-  assets, themes, localization and command handling stay in each app. Requires Rust 1.95 or later.
+  for 47 more languages (one cargo feature each). With `ui`, the canvas text editor, Character and
+  Paragraph controls, text style panels and Check Spelling dialog, and the paged-text controls
+  (ruler, Tabs, Paragraph, Columns and Hyperlink dialogs, notes editor, find); `spell` and `find`
+  (regex) are features.
+- [`craft-timeline`](crates/timeline/README.md): timelines: exact media time, frame rates,
+  timecode, the playback clock, a frame cache and frame server (egui-free); the timeline panel,
+  ruler, clips, keyframe lanes, graph editor, transport, timecode fields, preview, overview and
+  render queue (`ui` feature).
+- [`craft-metadata`](crates/metadata/README.md): photo metadata, from LightCraft: EXIF (read and write,
+  maker-note lens and focus point, every tag by name), IPTC-IIM, XMP packets (read, write, and a merge
+  that keeps what another program wrote), GPX track logs, and the blocks that carry them in JPEG, PNG,
+  WebP, TIFF-based, RAF and CR3 files. One `Metadata` model for all of them. Built on `craft-tiff`.
+- `craft-ui`: the UI library on egui: runtime, style, fonts, primitives, the component contract, layout,
+  components (docking, dialogs, canvas, lists, text, menus and more), patterns and the shell. Assets, themes, localization and commands
+  stay in each app. Design and architecture in [docs/craft-framework.md](docs/craft-framework.md).
+  Requires Rust 1.95 or later.
 - [`craft-vcard`](crates/vcard/README.md): vCard contacts, from MailCraft: vCard 2.1, 3.0 and 4.0 read
   (legacy character sets, quoted-printable, labels and Apple label groups, `KEY` certificates and
   OpenPGP public keys), vCard 3.0 written. Bounded and panic-free on hostile input. The mapping onto
   an app's contact type stays in each app.
-
+- `craft-ui-macros`: the derives and macros of `craft-ui` (`Component`, `Props`, `ComponentStyle`, `Pattern`,
+  `CommandSet`, words, stories and trials); use them through `craft-ui`.
 - [`craft-vectorcraft-format`](crates/vectorcraft-format/README.md): the envelope of VectorCraft's
   `.vectorcraft` file: its members, versions, embedded images and the data after the JSON, with the
   document as a type parameter. The document and its migrations stay in VectorCraft.
@@ -338,12 +375,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-xcf`](crates/xcf/README.md): GIMP XCF images (`.xcf`, `.xcf.gz`), read: header, properties, parasites, layers with their item paths, channels, and tiled pixels (uncompressed, RLE, zlib) at every precision, under a caller's byte budget. From PhotoCraft.
 - [`craft-xml`](crates/xml/README.md): bounded XML for hostile input: an owned element tree with limits on size, depth, nodes and attributes, streaming of repeated elements, namespace handling (as written, by local name, or canonical prefixes by URI), escaping and a writer. No DTDs and no entity expansion.
 - [`craft-zip`](crates/zip/README.md): ZIP archives from untrusted files: an entry-count check before the archive is indexed (ZIP64 included), entry reads within per-entry and total budgets that count real bytes, duplicate-name detection, a strict structure preflight, and a deterministic stored/deflate writer. The shared ZIP layer for the package formats.
-- [Shared UI component audit](docs/ui-components-audit.md): source inventory, extraction priorities
-  and compatibility boundaries across the Craft suite.
-- [Theme infrastructure](docs/theme-infrastructure.md): eight-app comparison and the small shared
-  widget-state styling boundary.
-- [Panel docking](docs/ui-docking.md): validated panel moves, floating groups, workspace adapters
-  and an optional egui docking surface.
+- [Docking](docs/ui-docking.md): the dock model, `DockArea`, `SplitArea` and `PaneArea`.
+- [Dialogs](docs/ui-dialogs.md): `Dialog`, `DialogHost`, the dialog stack and the standard prompts.
+- [Craft framework](docs/craft-framework.md): the design, installation, architecture, design system, foundations, components, accessibility, tests, and the migration and landing plan
+- [Development workflow](docs/development.md): the `cl` commands, the one fixed feature set, what not to run locally, the profiles, the job pool and what a new worktree's first build costs
 
 ## License and credits
 

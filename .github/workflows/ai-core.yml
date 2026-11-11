@@ -39,6 +39,11 @@ jobs:
           targets: wasm32-unknown-unknown
       - run: cargo fmt --check
       - run: cargo clippy -p craft-ai-core --all-targets --locked -- -D warnings
+      - name: Docs (links and missing docs)
+        if: runner.os == 'Linux'
+        run: cargo doc -p craft-ai-core --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
       - run: cargo test -p craft-ai-core --locked
       # The model promises to compile for the web.
       - run: cargo check -p craft-ai-core --target wasm32-unknown-unknown --locked

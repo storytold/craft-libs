@@ -53,6 +53,12 @@ craft-proof Language data, embedded at build time from craft-i18n's language-dat
   OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
   POSSIBILITY OF SUCH DAMAGE.
 crates/text/assets/hyphen/en-us.pat: CC0-1.0, trained from en-us.dic by DesignCraft's trainer.
+crates/text/assets/spell/en-us-scowl-50.txt.deflate: SCOWL (Spell Checker Oriented Word Lists)
+  2020.12.07, size 50, American English, Copyright 2000-2018 by Kevin Atkinson, http://wordlist.aspell.net/.
+  Permission to use, copy, modify, distribute and sell these word lists is granted without fee
+  provided the copyright and permission notice appears in all copies; the full notice, with the
+  notices of the lists SCOWL draws on, is in crates/text/assets/spell/LICENSE-SCOWL.txt and must
+  ship with any application that enables craft-text's `spell` feature.
 Hyphenation patterns for other languages, embedded through the hypher crate only when the
   matching craft-text feature is enabled (none are by default). They come from hyph-utf8,
   https://github.com/hyphenation/tex-hyphen, as packaged in https://github.com/typst/hypher

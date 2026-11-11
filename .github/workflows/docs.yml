@@ -1,0 +1,33 @@
+name: Docs
+
+# Builds the documentation of every workspace crate with warnings as errors, so a public item
+# without a doc comment or a broken doc link fails, including crates no other workflow covers.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/docs.yml']
+  pull_request:
+    paths: ['crates/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/docs.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    timeout-minutes: 30
+    name: Workspace docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The token isn't needed after checkout; cargo runs build scripts and proc macros from
+          # dependencies, so don't leave it in .git/config for that third-party code to read.
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Docs (links and missing docs)
+        run: cargo doc --workspace --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings

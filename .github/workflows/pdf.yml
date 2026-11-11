@@ -54,6 +54,11 @@ jobs:
           echo "CRAFT_PDF_TEST_FONT_DIR=$RUNNER_TEMP/craft-pdf-test-fonts" >> "$GITHUB_ENV"
       - run: cargo fmt --check
       - run: cargo clippy -p craft-pdf --all-targets --all-features --locked -- -D warnings
+      - name: Docs (links and missing docs)
+        if: runner.os == 'Linux'
+        run: cargo doc -p craft-pdf --all-features --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
       - run: cargo test -p craft-pdf --all-features --locked
       - run: cargo test --manifest-path crates/pdf/read-only-contract/Cargo.toml --locked
   backends:

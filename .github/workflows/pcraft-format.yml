@@ -41,5 +41,10 @@ jobs:
           targets: wasm32-unknown-unknown
       - run: cargo fmt --check
       - run: cargo clippy -p craft-pcraft-format --all-targets --locked -- -D warnings
+      - name: Docs (links and missing docs)
+        if: runner.os == 'Linux'
+        run: cargo doc -p craft-pcraft-format --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
       - run: cargo test -p craft-pcraft-format --locked -- --nocapture
       - run: cargo check -p craft-pcraft-format --locked --target wasm32-unknown-unknown

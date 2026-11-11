@@ -3,9 +3,9 @@ name: Shared UI
 on:
   push:
     branches: [main]
-    paths: ["crates/ui/**", "crates/i18n/**", "Cargo.toml", "Cargo.lock", ".github/workflows/ui.yml"]
+    paths: ["crates/ui/**", "crates/ui-contract/**", "crates/ui-widgets/**", "crates/ui-panels/**", "crates/ui-canvas/**", "crates/ui-patterns/**", "crates/ui-shell/**", "crates/ui-macros/**", "crates/i18n/**", "Cargo.toml", "Cargo.lock", ".github/workflows/ui.yml"]
   pull_request:
-    paths: ["crates/ui/**", "crates/i18n/**", "Cargo.toml", "Cargo.lock", ".github/workflows/ui.yml"]
+    paths: ["crates/ui/**", "crates/ui-contract/**", "crates/ui-widgets/**", "crates/ui-panels/**", "crates/ui-canvas/**", "crates/ui-patterns/**", "crates/ui-shell/**", "crates/ui-macros/**", "crates/i18n/**", "Cargo.toml", "Cargo.lock", ".github/workflows/ui.yml"]
   workflow_dispatch:
 
 permissions:
@@ -49,10 +49,15 @@ jobs:
           key: craft-ui
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt --check
-      - run: cargo clippy -p craft-ui --all-targets --locked -- -D warnings
-      - run: cargo clippy -p craft-ui --all-targets --all-features --locked -- -D warnings
-      - run: cargo test -p craft-ui --locked
-      - run: cargo test -p craft-ui --all-features --locked
+      - run: cargo clippy -p craft-ui -p craft-ui-contract -p craft-ui-widgets -p craft-ui-panels -p craft-ui-canvas -p craft-ui-patterns -p craft-ui-shell --all-targets --locked -- -D warnings
+      - run: cargo clippy -p craft-ui -p craft-ui-contract -p craft-ui-widgets -p craft-ui-panels -p craft-ui-canvas -p craft-ui-patterns -p craft-ui-shell --all-targets --all-features --locked -- -D warnings
+      - name: Docs (links and missing docs)
+        if: runner.os == 'Linux'
+        run: cargo doc -p craft-ui -p craft-ui-contract -p craft-ui-widgets -p craft-ui-panels -p craft-ui-canvas -p craft-ui-patterns -p craft-ui-shell --all-features --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - run: cargo test -p craft-ui -p craft-ui-contract -p craft-ui-widgets -p craft-ui-panels -p craft-ui-canvas -p craft-ui-patterns -p craft-ui-shell --locked
+      - run: cargo test -p craft-ui -p craft-ui-contract -p craft-ui-widgets -p craft-ui-panels -p craft-ui-canvas -p craft-ui-patterns -p craft-ui-shell --all-features --locked
   wasm:
     timeout-minutes: 15
     name: UI WASM

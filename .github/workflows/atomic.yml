@@ -41,6 +41,11 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y acl
       - run: cargo fmt --check
       - run: cargo clippy -p craft-atomic -p craft-settings --all-targets --locked -- -D warnings
+      - name: Docs (links and missing docs)
+        if: runner.os == 'Linux'
+        run: cargo doc -p craft-atomic -p craft-settings --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
       - run: cargo test -p craft-atomic -p craft-settings --locked -- --nocapture
       - name: Check inherited Linux ACLs
         if: runner.os == 'Linux'

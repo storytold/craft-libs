@@ -45,6 +45,10 @@ jobs:
       - run: cargo fmt -p craft-web-host --check
       - run: cargo clippy -p craft-web-host --all-targets --locked -- -D warnings
       - run: cargo clippy -p craft-web-host --all-targets --locked --target wasm32-unknown-unknown -- -D warnings
+      - name: Docs (links and missing docs)
+        run: cargo doc -p craft-web-host --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
       - run: cargo test -p craft-web-host --locked
       - name: Read the wasm-bindgen version from Cargo.lock
         id: wasm-bindgen

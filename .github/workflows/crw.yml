@@ -45,6 +45,11 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt -p craft-crw --check
       - run: cargo clippy -p craft-crw --all-targets --locked -- -D warnings
+      - name: Docs (links and missing docs)
+        if: runner.os == 'Linux'
+        run: cargo doc -p craft-crw --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
       - run: cargo test -p craft-crw --locked
 
   wasm:
@@ -95,7 +100,7 @@ jobs:
           key: crw-samples-${{ hashFiles('crates/crw/tests/samples.json') }}
       - name: Fetch the pinned CC0 sample files (raw.pixls.us)
         run: python scripts/fetch-crw-samples.py "$RUNNER_TEMP/crw-samples"
-      - run: cargo test -p craft-crw --release --locked --test samples -- --nocapture
+      - run: cargo test -p craft-crw --release --locked --lib -- integration::samples --nocapture
         env:
           CRAFT_CRW_SAMPLES: ${{ runner.temp }}/crw-samples
           CRAFT_CRW_REQUIRE_SAMPLES: "1"

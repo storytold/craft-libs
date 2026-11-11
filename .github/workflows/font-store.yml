@@ -39,6 +39,11 @@ jobs:
           targets: wasm32-unknown-unknown
       - run: cargo fmt --check
       - run: cargo clippy -p craft-font-store --all-targets --locked -- -D warnings
+      - name: Docs (links and missing docs)
+        if: runner.os == 'Linux'
+        run: cargo doc -p craft-font-store --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
       - run: cargo test -p craft-font-store --locked
       - run: cargo clippy -p craft-font-catalog --all-targets --locked -- -D warnings
       - run: cargo test -p craft-font-catalog --locked

@@ -49,6 +49,10 @@ jobs:
       - run: cargo clippy -p craft-media --all-targets --locked --all-features -- -D warnings
       - run: cargo clippy -p craft-media-testkit --all-targets --locked -- -D warnings
       - run: cargo clippy -p craft-media --all-targets --locked --no-default-features --features serde -- -D warnings
+      - name: Docs (links and missing docs)
+        run: cargo doc -p craft-media -p craft-media-testkit --all-features --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
       - run: cargo check -p craft-media --all-features --locked --target wasm32-unknown-unknown
   test:
     timeout-minutes: 15

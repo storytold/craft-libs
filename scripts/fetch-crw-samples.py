@@ -3,7 +3,7 @@
 
 The manifest is crates/crw/tests/samples.json (name, raw.pixls.us URL, SHA-256, licence). Files
 already present with the right hash are kept. Then run the tests with
-`CRAFT_CRW_SAMPLES=<destination> cargo test -p craft-crw --release --test samples`.
+`CRAFT_CRW_SAMPLES=<destination> cargo test -p craft-crw --release -- integration::samples`.
 """
 
 import argparse

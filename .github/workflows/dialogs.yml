@@ -39,4 +39,8 @@ jobs:
           targets: aarch64-apple-darwin
       - run: cargo clippy -p craft-dialogs --all-targets --locked -- -D warnings
       - run: cargo clippy -p craft-dialogs --target aarch64-apple-darwin --locked -- -D warnings
+      - name: Docs (links and missing docs)
+        run: cargo doc -p craft-dialogs --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
       - run: cargo test -p craft-dialogs --locked

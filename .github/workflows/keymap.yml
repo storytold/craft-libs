@@ -3,9 +3,9 @@ name: Keymap
 on:
   push:
     branches: [main]
-    paths: ["crates/keymap/**", "crates/settings/**", "crates/ui/**", "crates/i18n/**", "Cargo.toml", "Cargo.lock", ".github/workflows/keymap.yml"]
+    paths: ["crates/keymap/**", "crates/settings/**", "crates/ui/**", "crates/ui-contract/**", "crates/ui-widgets/**", "crates/ui-panels/**", "crates/ui-canvas/**", "crates/ui-patterns/**", "crates/ui-shell/**", "crates/i18n/**", "Cargo.toml", "Cargo.lock", ".github/workflows/keymap.yml"]
   pull_request:
-    paths: ["crates/keymap/**", "crates/settings/**", "crates/ui/**", "crates/i18n/**", "Cargo.toml", "Cargo.lock", ".github/workflows/keymap.yml"]
+    paths: ["crates/keymap/**", "crates/settings/**", "crates/ui/**", "crates/ui-contract/**", "crates/ui-widgets/**", "crates/ui-panels/**", "crates/ui-canvas/**", "crates/ui-patterns/**", "crates/ui-shell/**", "crates/i18n/**", "Cargo.toml", "Cargo.lock", ".github/workflows/keymap.yml"]
   workflow_dispatch:
 
 permissions:
@@ -50,9 +50,13 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt -p craft-keymap --check
       - run: cargo clippy -p craft-keymap --all-targets --no-default-features --locked -- -D warnings
-      # `snapshot` covers `ui` and `egui` and compiles the dialog screenshots, which need a GPU
+      # `screen-testing` covers `ui` and compiles the dialog screenshots, which need a GPU
       # to run, so the test steps leave them out.
-      - run: cargo clippy -p craft-keymap --all-targets --features snapshot --locked -- -D warnings
+      - run: cargo clippy -p craft-keymap --all-targets --features screen-testing --locked -- -D warnings
+      - name: Docs (links and missing docs)
+        run: cargo doc -p craft-keymap --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
       # Doctests run once, in the `ui` step.
       - name: Test core
         run: cargo test -p craft-keymap --no-default-features --lib --tests --locked

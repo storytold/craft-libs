@@ -41,8 +41,13 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
       - run: cargo fmt --check
-      # Default (no egui) and the egui feature both build and lint cleanly.
+      # Default (no egui) and the ui feature both build and lint cleanly.
       - run: cargo clippy -p craft-update --all-targets --locked -- -D warnings
-      - run: cargo clippy -p craft-update --all-targets --locked --features egui -- -D warnings
+      - run: cargo clippy -p craft-update --all-targets --locked --features ui -- -D warnings
+      - name: Docs (links and missing docs)
+        if: runner.os == 'Linux'
+        run: cargo doc -p craft-update --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
       - run: cargo test -p craft-update --locked -- --nocapture
-      - run: cargo test -p craft-update --locked --features egui -- --nocapture
+      - run: cargo test -p craft-update --locked --features ui -- --nocapture
