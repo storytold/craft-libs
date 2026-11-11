@@ -1,0 +1,20 @@
+[package]
+name = "craft-penpot"
+description = "Clean-room reader and writer for the Penpot 2.x export container (.penpot, penpot/export-files version 1): the ZIP archive, its manifest, the per-file, per-page and per-shape JSON members and media objects, with bounded reads."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# `deflate-flate2` with flate2's default miniz_oxide backend, as craft-update pins it (zip's own
+# `deflate` feature would switch a whole app's flate2 to zlib-rs). A shared bounded ZIP reader is
+# planned (#126); until it lands this crate reads through `zip` directly.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }

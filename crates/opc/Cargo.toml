@@ -1,0 +1,27 @@
+[package]
+name = "craft-opc"
+description = "Open Packaging Conventions (ECMA-376 Part 2): the ZIP container of DOCX, XLSX and PPTX files, with bounded reads, part names, relationships and content types, and a package writer."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# `zip64_entry_count_sample`, the regression input for a reader's own entry-count test.
+test-support = []
+
+[dependencies]
+craft-xml = { workspace = true }
+log = "0.4"
+thiserror = { workspace = true }
+# `deflate-flate2` with flate2's miniz_oxide backend (chosen below), as in craft-update: zip's own
+# `deflate` feature would switch a whole app's flate2 to zlib-rs.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
+[dev-dependencies]
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }

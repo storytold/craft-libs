@@ -1,0 +1,19 @@
+[package]
+name = "craft-svg"
+description = "SVG: sniffing, SVGZ and text encodings, pre-parse limits, a geometry reader (Bézier paths in millimetres), CSS colours and a writer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-xml = { workspace = true }
+# SVGZ (gzip), pure-Rust backend.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+kurbo = { workspace = true }
+roxmltree = "0.21.2"
+thiserror = { workspace = true }
