@@ -1,0 +1,15 @@
+[package]
+name = "craft-rtf"
+description = "Rich Text Format: a tokenizer, text decoding in the file's code pages, and a reader and writer for a small neutral model (paragraphs, character formatting, outline levels, tables)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The East Asian multibyte code pages (932, 936, 949, 950).
+encoding_rs = { workspace = true }

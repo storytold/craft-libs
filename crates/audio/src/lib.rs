@@ -8,34 +8,75 @@
 //! `wasm32-unknown-unknown`.
 //!
 //! - [`decode`], [`probe`], [`Decoder`] (streaming, seekable), [`tracks`], [`detect_container`]
-//!   (feature `decode`): WAV and AIFF are read natively; PCM in MP4/MOV and Matroska/WebM goes
-//!   through craft-media's demuxers and [`TrackDecoder`]; everything else (AAC, MP1/MP2/MP3,
-//!   FLAC, ALAC, Vorbis, CAF, ADPCM, A-law, µ-law) through `symphonia`, which is to be replaced
-//!   by native decoders. Feature `decode-native` is the same without symphonia.
-//! - [`TrackDecoder`] (feature `decode-native`): one track's packets from any demuxer to planar
+//!   (feature `decode`): WAV and AIFF are read natively; AAC, ALAC, Opus, AC-3/E-AC-3, MP1/MP2 and
+//!   PCM in MP4/MOV, Matroska/WebM, Ogg or raw streams go through craft-media's demuxers and
+//!   [`TrackDecoder`]; everything else (MP3, FLAC, Vorbis, CAF, ADPCM, A-law, µ-law) through
+//!   `symphonia`, which is to be replaced by native decoders. Feature `decode-native` is the
+//!   same without symphonia.
+//! - [`TrackDecoder`] (any decoder feature): one track's packets from any demuxer to planar
 //!   `f32` in WAV channel order.
 //! - [`encode`], [`FileEncoder`]: WAV/BWF/RF64 and AIFF/AIFF-C (feature `pcm-encode`, which also
 //!   gives [`wav_float_header`]) and FLAC (feature `flac-encode`), whole-buffer or incremental into
-//!   any `Write + Seek`. Feature `lossless-encode` turns on both; feature `encode` is
-//!   the same as `lossless-encode`.
+//!   any `Write + Seek`. Feature `lossless-encode` turns on both; feature `encode` turns on
+//!   `lossless-encode` and every codec's encoder.
 //! - [`peaks`] (feature `peaks`): min/max/RMS pyramid for waveform drawing.
+//! - Codec modules for packet-level use, each with its own features: [`aac`] (`aac-decode`,
+//!   `aac-encode`), [`alac`] (`alac-decode`, `alac-encode`), [`opus`] (`opus-decode`), [`ac3`]
+//!   (`ac3-decode`), [`mpa`] (`mpa-decode`), [`mp3`] (`mp3-encode`: the Layer III encoder),
+//!   [`flac`] (`flac-encode`: the packet encoder).
 //!
 //! The shared types below build with no features.
 
+#[cfg(any(feature = "aac-decode", feature = "aac-encode"))]
+pub mod aac;
+#[cfg(any(feature = "ac3-decode", feature = "ac3-encode", feature = "eac3-encode"))]
+pub mod ac3;
+#[cfg(any(feature = "alac-decode", feature = "alac-encode"))]
+pub mod alac;
 mod buffer;
 mod layout;
-#[cfg(feature = "decode-native")]
+#[cfg(feature = "mp3-encode")]
+pub mod mp3;
+#[cfg(feature = "mpa-decode")]
+pub mod mpa;
+#[cfg(feature = "opus-decode")]
+pub mod opus;
+#[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
 mod pcm;
 #[cfg(feature = "peaks")]
 pub mod peaks;
 #[cfg(feature = "decode-native")]
 mod read;
-#[cfg(feature = "decode-native")]
+#[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
 mod track;
 #[cfg(any(feature = "decode-native", feature = "pcm-encode"))]
 mod wav;
 #[cfg(any(feature = "pcm-encode", feature = "flac-encode"))]
 mod write;
+
+/// The FLAC packet encoder (RFC 9639), for a caller that muxes FLAC itself (into MP4, Matroska or
+/// its own `.flac` writer): planar integer samples in, frames out, and the STREAMINFO to patch in
+/// at the end. [`FileEncoder`] and [`encode`] write whole `.flac` files from `f32` instead.
+///
+/// ```
+/// use craft_audio::flac::{Encoder, EncoderConfig, STREAMINFO_OFFSET};
+///
+/// let left: Vec<i32> = (0..48_000).map(|i| ((i as f64 * 0.05).sin() * 20_000.0) as i32).collect();
+/// let right = left.clone();
+/// let mut enc = Encoder::new(EncoderConfig::new(48_000, 2, 16))?;
+/// let mut file = enc.header(&[]);
+/// file.extend(enc.encode(&[&left, &right])?);
+/// file.extend(enc.finish());
+/// let at = STREAMINFO_OFFSET as usize;
+/// file[at..at + 34].copy_from_slice(&enc.streaminfo());
+/// assert_eq!(&file[..4], b"fLaC");
+/// assert!(file.len() < 48_000 * 2 * 2 / 2); // well under half of 16-bit PCM
+/// # Ok::<(), craft_audio::flac::Error>(())
+/// ```
+#[cfg(feature = "flac-encode")]
+pub mod flac {
+    pub use crate::write::flac::encoder::{Encoder, EncoderConfig, Error, STREAMINFO_OFFSET};
+}
 
 pub use buffer::AudioBuffer;
 /// The craft-media this crate is built with, for its containers: using it rather than a separate
@@ -46,8 +87,11 @@ pub use layout::{ChannelLayout, Speaker};
 #[cfg(feature = "decode-native")]
 pub use read::SharedSource;
 #[cfg(feature = "decode-native")]
-pub use read::{DEFAULT_MAX_SAMPLES, DecodeOptions, Decoder, TrackInfo, decode, decode_with, detect_container, probe, probe_with, tracks, tracks_of};
-#[cfg(feature = "decode-native")]
+pub use read::{
+    DECODE_EXTENSIONS, DEFAULT_MAX_SAMPLES, DecodeOptions, Decoder, TrackInfo, decode, decode_with, detect_container, probe, probe_with, tracks,
+    tracks_of,
+};
+#[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
 pub use track::{LOOKAHEAD_PACKETS, TrackDecoder};
 #[cfg(feature = "pcm-encode")]
 pub use write::wav_float_header;
@@ -79,6 +123,83 @@ pub enum AudioError {
 /// Result alias for this module.
 pub type Result<T> = std::result::Result<T, AudioError>;
 
+// Codec errors convert into `AudioError`, so code mixing the file API with the codec modules can
+// use `?` throughout: a codec's "unsupported" stays `Unsupported`, anything else in the input is
+// `Malformed`, and an encoder's refusal is `Encode`.
+
+#[cfg(any(feature = "aac-decode", feature = "aac-encode"))]
+impl From<aac::Error> for AudioError {
+    fn from(e: aac::Error) -> Self {
+        match e {
+            aac::Error::Unsupported(_) => AudioError::Unsupported(e.to_string()),
+            aac::Error::InvalidSettings(_) => AudioError::Encode(e.to_string()),
+            _ => AudioError::Malformed(e.to_string()),
+        }
+    }
+}
+
+#[cfg(feature = "opus-decode")]
+impl From<opus::Error> for AudioError {
+    fn from(e: opus::Error) -> Self {
+        match e {
+            opus::Error::Unsupported(_) => AudioError::Unsupported(e.to_string()),
+            _ => AudioError::Malformed(e.to_string()),
+        }
+    }
+}
+
+#[cfg(feature = "ac3-decode")]
+impl From<ac3::Error> for AudioError {
+    fn from(e: ac3::Error) -> Self {
+        match e {
+            ac3::Error::Unsupported(_) => AudioError::Unsupported(e.to_string()),
+            _ => AudioError::Malformed(e.to_string()),
+        }
+    }
+}
+
+#[cfg(any(feature = "ac3-encode", feature = "eac3-encode"))]
+impl From<ac3::encoder::Error> for AudioError {
+    fn from(e: ac3::encoder::Error) -> Self {
+        AudioError::Encode(e.to_string())
+    }
+}
+
+#[cfg(feature = "mp3-encode")]
+impl From<mp3::Error> for AudioError {
+    fn from(e: mp3::Error) -> Self {
+        AudioError::Encode(e.to_string())
+    }
+}
+
+#[cfg(feature = "flac-encode")]
+impl From<flac::Error> for AudioError {
+    fn from(e: flac::Error) -> Self {
+        AudioError::Encode(format!("FLAC: {e}"))
+    }
+}
+
+#[cfg(feature = "mpa-decode")]
+impl From<mpa::Error> for AudioError {
+    fn from(e: mpa::Error) -> Self {
+        match e {
+            mpa::Error::Unsupported(_) => AudioError::Unsupported(e.to_string()),
+            _ => AudioError::Malformed(e.to_string()),
+        }
+    }
+}
+
+#[cfg(any(feature = "alac-decode", feature = "alac-encode"))]
+impl From<alac::Error> for AudioError {
+    fn from(e: alac::Error) -> Self {
+        match e {
+            alac::Error::Unsupported(_) => AudioError::Unsupported(e.to_string()),
+            alac::Error::InvalidInput(_) => AudioError::Encode(e.to_string()),
+            _ => AudioError::Malformed(e.to_string()),
+        }
+    }
+}
+
 /// The file formats [`encode`] writes. Each needs its feature: WAV and AIFF `pcm-encode`, FLAC
 /// `flac-encode`; asking for one that is not built returns [`AudioError::Unsupported`].
 #[non_exhaustive]
@@ -94,6 +215,29 @@ pub enum EncodeFormat {
 }
 
 impl EncodeFormat {
+    /// Every format, in the order menus list them. Whether [`encode`] writes one depends on its
+    /// feature.
+    pub const ALL: &[EncodeFormat] = &[EncodeFormat::Wav, EncodeFormat::Aiff, EncodeFormat::Flac];
+
+    /// The extension a new file of this format gets, lower case and without the dot: `"wav"`,
+    /// `"aif"`, `"flac"`. [`encode_format_for`] maps it back.
+    pub fn extension(self) -> &'static str {
+        match self {
+            EncodeFormat::Wav => "wav",
+            EncodeFormat::Aiff => "aif",
+            EncodeFormat::Flac => "flac",
+        }
+    }
+
+    /// The media type a file of this format is served or downloaded as.
+    pub fn mime_type(self) -> &'static str {
+        match self {
+            EncodeFormat::Wav => "audio/wav",
+            EncodeFormat::Aiff => "audio/aiff",
+            EncodeFormat::Flac => "audio/flac",
+        }
+    }
+
     /// The container this format writes.
     pub fn container(self) -> Container {
         match self {
@@ -203,7 +347,7 @@ pub struct AudioInfo {
     /// Broadcast Wave metadata from a WAV `bext` chunk.
     pub bwf: Option<BwfInfo>,
     /// Packets that were damaged or failed to decode and were replaced by concealment (silence of
-    /// their length), counted as audio is decoded: by [`decode`] for the whole file, and so far by
+    /// their length), and runs of FLAC frames lost to a failed checksum, counted as audio is decoded: by [`decode`] for the whole file, and so far by
     /// a [`Decoder`]. 0 from [`probe`] when it read only headers.
     pub damaged: u64,
 }
@@ -325,5 +469,20 @@ impl Default for EncodeOptions {
     /// 24-bit WAV.
     fn default() -> Self {
         Self::new(EncodeFormat::Wav)
+    }
+}
+
+// An encoder refusing its settings is an encode error, not damaged input.
+#[cfg(all(test, feature = "aac-encode"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn aac_encoder_settings_are_encode_errors() {
+        let e = match aac::Encoder::new(aac::EncoderConfig::cbr(44_000, 2, 128_000)) {
+            Err(e) => AudioError::from(e),
+            Ok(_) => panic!("44 kHz is not an AAC rate"),
+        };
+        assert!(matches!(e, AudioError::Encode(_)), "{e}");
     }
 }
