@@ -247,6 +247,7 @@ pub fn decode(bytes: &[u8], options: &Options) -> Result<Decoded, Error> {
 /// profile) are the primary image's.
 pub fn decode_thumbnail(bytes: &[u8], min_edge: u32, options: &Options) -> Result<Option<Decoded>, Error> {
     guarded(|| {
+        census::cap(bytes)?;
         let ctx = Context::open(bytes).map_err(err)?;
         let primary = ctx.meta.primary;
         let mut best: Option<(u32, u32)> = None;

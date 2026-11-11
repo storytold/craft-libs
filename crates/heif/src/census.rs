@@ -109,6 +109,8 @@ mod tests {
         let bytes = file_with(&ipma);
         let r = crate::probe(&bytes).map(|_| ());
         assert!(matches!(r, Err(Error::Limit(ref m)) if m.contains("associations")), "{r:?}");
+        let r = crate::decode_thumbnail(&bytes, 0, &crate::Options::default()).map(|_| ());
+        assert!(matches!(r, Err(Error::Limit(ref m)) if m.contains("associations")), "thumbnail: {r:?}");
     }
 
     #[test]
