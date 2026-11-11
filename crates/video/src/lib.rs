@@ -11,13 +11,17 @@
 //! | `h264` | [`h264`] | ITU-T H.264 / AVC: encoder |
 //! | `hevc` | [`hevc`] | ITU-T H.265 / HEVC: encoder |
 //! | `vp9` | [`vp9`] | VP9: encoder |
-//! | `av1` | [`av1`] | AV1 (AOMedia Video 1): encoder |
+//! | `av1` | [`av1`] | AV1 (AOMedia Video 1): decoder (`av1-decode`) and encoder (`av1-encode`) |
 //!
 //! No codec is on by default. Feature `threads` spreads the work of the codecs that support it
 //! over rayon worker threads.
 //!
+//! The decoders that keep reference pictures bound them with a memory budget ([`budget`]).
+//!
 //! Containers and bit-level I/O are in `craft-media`; the codecs here share its `bitstream`
 //! module and describe their streams with `craft_media::CodecParams`.
+
+pub mod budget;
 
 #[cfg(feature = "dnx")]
 pub mod dnx;
@@ -37,5 +41,5 @@ pub mod hevc;
 #[cfg(feature = "vp9")]
 pub mod vp9;
 
-#[cfg(feature = "av1")]
+#[cfg(any(feature = "av1-decode", feature = "av1-encode"))]
 pub mod av1;

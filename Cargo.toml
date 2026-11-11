@@ -119,3 +119,7 @@ winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457
 # craft-audio's `decode` need the same override in their own workspace.
 [profile.dev.package.symphonia-bundle-flac]
 overflow-checks = false
+
+# Codec hot loops: the oracle and conformance tests of a debug build take minutes below opt-level 3.
+[profile.dev.package.craft-video]
+opt-level = 3

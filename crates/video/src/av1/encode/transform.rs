@@ -4,7 +4,7 @@
 
 use std::sync::OnceLock;
 
-use crate::av1::tables::{ADST_ADST, ADST_DCT, COS128_LOOKUP, DCT_ADST, DCT_DCT, TRANSFORM_ROW_SHIFT, TX_WIDTH_LOG2};
+use crate::av1::encode::tables::{ADST_ADST, ADST_DCT, COS128_LOOKUP, DCT_ADST, DCT_DCT, TRANSFORM_ROW_SHIFT, TX_WIDTH_LOG2};
 
 #[inline(always)]
 fn round2_64(x: i64, n: u32) -> i32 {
@@ -543,7 +543,7 @@ fn forward_2d_dyn(residual: &[i32], out: &mut [f32], n: usize, tx_type: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::av1::tables::{TX_4X4, TX_8X8, TX_16X16, TX_32X32};
+    use crate::av1::encode::tables::{TX_4X4, TX_8X8, TX_16X16, TX_32X32};
 
     /// forward (float) then the normative inverse reproduces the residual: the forward basis
     /// and scale match the decoder's inverse transforms for every supported size and type.

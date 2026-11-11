@@ -27,8 +27,10 @@ h264 = ["craft-media/isobmff"]
 hevc = ["craft-media/isobmff"]
 # VP9: encoder.
 vp9 = ["craft-media/isobmff"]
-# AV1 (AOMedia Video 1): encoder.
-av1 = ["craft-media/isobmff"]
+# AV1: decoder and encoder; `av1-decode` or `av1-encode` for one of them.
+av1 = ["av1-decode", "av1-encode"]
+av1-decode = []
+av1-encode = ["craft-media/isobmff"]
 # Decode and encode across worker threads (rayon) in the codecs that support it.
 threads = ["dep:rayon"]
 
@@ -55,6 +57,14 @@ required-features = ["vp8"]
 [[example]]
 name = "vp8_vp8dec"
 required-features = ["vp8"]
+
+[[test]]
+name = "av1_decode"
+required-features = ["av1-decode"]
+
+[[example]]
+name = "av1_av1dec"
+required-features = ["av1-decode"]
 
 [[test]]
 name = "prores"

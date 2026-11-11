@@ -3,13 +3,13 @@
 //! processes, so the reconstruction built here is exactly what a decoder produces; the syntax
 //! is written afterwards by `writer.rs`.
 
-use crate::av1::pred::{INTRA_MODES_USED, InterBlock, IntraEdge, Plane, edges, half_planes, predict_inter, predict_intra};
-use crate::av1::tables::{
+use crate::av1::encode::pred::{INTRA_MODES_USED, InterBlock, IntraEdge, Plane, edges, half_planes, predict_inter, predict_intra};
+use crate::av1::encode::tables::{
     AC_QLOOKUP, BLOCK_8X8, BLOCK_64X64, DC_PRED, DC_QLOOKUP, DCT_DCT, DEFAULT_SCAN_4X4, DEFAULT_SCAN_8X8, DEFAULT_SCAN_16X16, DEFAULT_SCAN_32X32,
     MODE_TO_TXFM, NEWMV, NUM_4X4_BLOCKS_WIDE, PARTITION_SPLIT, PARTITION_SUBSIZE, TX_4X4, TX_8X8, TX_16X16, TX_32X32, TX_64X64, TX_SET_DCTONLY,
     TX_SET_INTER_3, TX_SET_INTRA_2, TX_SIZE_SQR_UP, TX_TYPE_IN_SET_INTER, TX_TYPE_IN_SET_INTRA,
 };
-use crate::av1::transform::{forward_2d, inverse_2d};
+use crate::av1::encode::transform::{forward_2d, inverse_2d};
 
 /// Decisions for one coded block.
 #[derive(Clone)]
@@ -40,7 +40,7 @@ pub(crate) struct RefFrame {
     /// The frame's loop filter level.
     pub lf_level: u32,
     /// The CDFs saved at the end of the frame (loaded by the next frame).
-    pub cdfs: Box<crate::av1::cdf::Cdfs>,
+    pub cdfs: Box<crate::av1::encode::cdf::Cdfs>,
 }
 
 pub(crate) struct FrameGeom {
@@ -1017,7 +1017,7 @@ pub(crate) fn scan_for(tx_sz: usize) -> &'static [u16] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::av1::tables::{AC_QLOOKUP, DC_QLOOKUP};
+    use crate::av1::encode::tables::{AC_QLOOKUP, DC_QLOOKUP};
 
     /// The quantiser as it was before the dead-zone threshold and the truncation.
     fn quant_ref(cf: f32, q: f32, rnd: f32) -> i32 {

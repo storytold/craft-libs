@@ -4,11 +4,11 @@
 //! (7.10.2) mirror the decoder exactly, since symbols and coded motion vector differences
 //! depend on them.
 
-use crate::av1::cdf::Cdfs;
-use crate::av1::decide::{FrameGeom, Leaf, Node, intra_uv_tx_type, scan_for, tx_in_set, tx_set, tx_size_for};
-use crate::av1::loopfilter::LfInfo;
-use crate::av1::symbol::SymbolWriter;
-use crate::av1::tables::{
+use crate::av1::encode::cdf::Cdfs;
+use crate::av1::encode::decide::{FrameGeom, Leaf, Node, intra_uv_tx_type, scan_for, tx_in_set, tx_set, tx_size_for};
+use crate::av1::encode::loopfilter::LfInfo;
+use crate::av1::encode::symbol::SymbolWriter;
+use crate::av1::encode::tables::{
     ADST_ADST, ADST_DCT, ALTREF_FRAME, ALTREF2_FRAME, BLOCK_8X8, BLOCK_64X64, BR_CDF_SIZE, BWDREF_FRAME, CLASS0_SIZE, COEFF_BASE_CTX_OFFSET,
     COEFF_BASE_RANGE, D67_PRED, DC_PRED, DCT_ADST, DCT_DCT, DEFAULT_INTRA_FRAME_Y_MODE_CDF, GLOBALMV, GOLDEN_FRAME, INTRA_FRAME, INTRA_MODE_CONTEXT,
     LAST_FRAME, LAST2_FRAME, LAST3_FRAME, MAG_REF_OFFSET_WITH_TX_CLASS, MAX_ANGLE_DELTA, MAX_REF_MV_STACK_SIZE, MI_HEIGHT_LOG2, MI_WIDTH_LOG2,
