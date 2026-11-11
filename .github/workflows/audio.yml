@@ -3,17 +3,20 @@ name: Shared audio
 on:
   push:
     branches: [main]
-    paths: ["crates/audio/**", "crates/media/**", "crates/media-testkit/**", "Cargo.toml", "Cargo.lock", ".github/workflows/audio.yml"]
+    paths: ["crates/audio/**", "crates/media/**", "crates/media-testkit/**", "scripts/fetch-opus-vectors.sh", "Cargo.toml", "Cargo.lock", ".github/workflows/audio.yml"]
   pull_request:
-    paths: ["crates/audio/**", "crates/media/**", "crates/media-testkit/**", "Cargo.toml", "Cargo.lock", ".github/workflows/audio.yml"]
+    paths: ["crates/audio/**", "crates/media/**", "crates/media-testkit/**", "scripts/fetch-opus-vectors.sh", "Cargo.toml", "Cargo.lock", ".github/workflows/audio.yml"]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: shared-audio-${{ github.ref }}
-  cancel-in-progress: true
+  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
+  # run (main, manual) gets its own group: it is never cancelled or replaced while queued, so it
+  # always gets to save the cache.
+  group: shared-audio-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lint:
@@ -31,11 +34,12 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-audio-lint
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt -p craft-audio --check
       # Each feature on its own, so code that needs another feature fails here.
       - name: Clippy, each feature alone
         run: |
-          for f in "" decode decode-native symphonia encode lossless-encode pcm-encode flac-encode peaks aac-decode serde; do
+          for f in "" decode decode-native symphonia encode lossless-encode pcm-encode flac-encode peaks aac-decode aac-encode "aac-encode,rayon" opus-decode ac3-decode mpa-decode serde; do
             echo "::group::features: ${f:-none}"
             cargo clippy -p craft-audio --all-targets --locked --no-default-features ${f:+--features "$f"} -- -D warnings
             echo "::endgroup::"
@@ -67,6 +71,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-audio-msrv
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo +1.95.0 check -p craft-audio -p craft-media --all-features --locked
   features:
     timeout-minutes: 10
@@ -80,13 +85,14 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-audio-features
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test -p craft-audio --no-default-features --features lossless-encode --locked
       - run: cargo test -p craft-audio --no-default-features --features pcm-encode --locked --lib
       - run: cargo test -p craft-audio --no-default-features --features flac-encode --locked --lib
       - run: cargo test -p craft-audio --no-default-features --features decode-native --locked
   test:
     timeout-minutes: 20
-    name: Audio tests with ffmpeg oracles
+    name: Audio tests with ffmpeg oracles and the Opus conformance vectors
     # Pinned for the ffmpeg its apt ships (8.0), so the files the oracle tests write do not change
     # with the runner image.
     runs-on: ubuntu-26.04
@@ -98,23 +104,37 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: craft-audio-test
-      - name: Build tests while installing ffmpeg
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/media-fixtures/opus/vectors
+          # The archive's SHA-256 (scripts/fetch-opus-vectors.sh checks it).
+          key: opus-testvectors-rfc8251-6b26a22f
+      - name: Build tests while installing ffmpeg and fetching the Opus vectors
         run: |
           # The man-db index rebuild after dpkg is slow on hosted runners.
           sudo rm -f /var/lib/man-db/auto-update
           # A mirror can stall for most of the job's time limit, and the next try usually gets a good one.
           install_ffmpeg() {
             for attempt in 1 2 3; do
-              timeout -k 10 180 sudo sh -c 'apt-get update -qq && apt-get install -y -qq --no-install-recommends ffmpeg' && return 0
+              # timeout runs as root, so a stalled apt-get is killed too and frees the dpkg lock.
+              sudo timeout -k 10 180 sh -c 'apt-get update -qq && apt-get install -y -qq --no-install-recommends ffmpeg' && return 0
               echo "apt: attempt $attempt failed with exit code $?"
-              timeout -k 10 60 sudo dpkg --configure -a || true
+              sudo timeout -k 10 60 dpkg --configure -a || true
             done
             return 1
           }
-          install_ffmpeg > "$RUNNER_TEMP/apt.log" 2>&1 &
-          apt=$!
+          # The vectors are fetched after ffmpeg, so the two downloads do not slow each other.
+          {
+            install_ffmpeg > "$RUNNER_TEMP/apt.log" 2>&1 || exit 1
+            scripts/fetch-opus-vectors.sh "$RUNNER_TEMP/media-fixtures/opus/vectors" > "$RUNNER_TEMP/vectors.log" 2>&1 || exit 2
+          } &
+          fetch=$!
           cargo test -p craft-audio --all-features --locked --no-run
-          wait "$apt" || { cat "$RUNNER_TEMP/apt.log"; exit 1; }
+          wait "$fetch" || case $? in
+            1) cat "$RUNNER_TEMP/apt.log"; exit 1 ;;
+            *) cat "$RUNNER_TEMP/vectors.log"; exit 1 ;;
+          esac
           ffmpeg -hide_banner -version | sed -n 1p
       - run: cargo test -p craft-audio --all-features --locked
         env:

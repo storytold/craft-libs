@@ -8,36 +8,43 @@
 //! `wasm32-unknown-unknown`.
 //!
 //! - [`decode`], [`probe`], [`Decoder`] (streaming, seekable), [`tracks`], [`detect_container`]
-//!   (feature `decode`): WAV and AIFF are read natively; AAC, ALAC and PCM in MP4/MOV,
-//!   Matroska/WebM, and AAC in raw ADTS streams, go through craft-media's demuxers and
-//!   [`TrackDecoder`]; everything else (MP1/MP2/MP3, FLAC, Vorbis, CAF, ADPCM, A-law,
-//!   µ-law) through `symphonia`, which is to be replaced by native decoders. Feature
-//!   `decode-native` is the same without symphonia.
+//!   (feature `decode`): WAV and AIFF are read natively; AAC, ALAC, Opus, AC-3/E-AC-3, MP1/MP2 and
+//!   PCM in MP4/MOV, Matroska/WebM, Ogg or raw streams go through craft-media's demuxers and
+//!   [`TrackDecoder`]; everything else (MP3, FLAC, Vorbis, CAF, ADPCM, A-law, µ-law) through
+//!   `symphonia`, which is to be replaced by native decoders. Feature `decode-native` is the
+//!   same without symphonia.
 //! - [`TrackDecoder`] (any decoder feature): one track's packets from any demuxer to planar
 //!   `f32` in WAV channel order.
 //! - [`encode`], [`FileEncoder`]: WAV/BWF/RF64 and AIFF/AIFF-C (feature `pcm-encode`, which also
 //!   gives [`wav_float_header`]) and FLAC (feature `flac-encode`), whole-buffer or incremental into
-//!   any `Write + Seek`. Feature `lossless-encode` turns on both; feature `encode` is
-//!   the same as `lossless-encode`.
+//!   any `Write + Seek`. Feature `lossless-encode` turns on both; feature `encode` turns on
+//!   `lossless-encode` and `aac-encode`.
 //! - [`peaks`] (feature `peaks`): min/max/RMS pyramid for waveform drawing.
-//! - Codec modules for packet-level use, each with its own features: [`aac`] (`aac-decode`),
-//!   [`alac`] (`alac-decode`, `alac-encode`).
+//! - Codec modules for packet-level use, each with its own features: [`aac`] (`aac-decode`,
+//!   `aac-encode`), [`alac`] (`alac-decode`, `alac-encode`), [`opus`] (`opus-decode`), [`ac3`]
+//!   (`ac3-decode`), [`mpa`] (`mpa-decode`).
 //!
 //! The shared types below build with no features.
 
-#[cfg(feature = "aac-decode")]
+#[cfg(any(feature = "aac-decode", feature = "aac-encode"))]
 pub mod aac;
+#[cfg(feature = "ac3-decode")]
+pub mod ac3;
 #[cfg(any(feature = "alac-decode", feature = "alac-encode"))]
 pub mod alac;
 mod buffer;
 mod layout;
-#[cfg(any(feature = "aac-decode", feature = "alac-decode"))]
+#[cfg(feature = "mpa-decode")]
+pub mod mpa;
+#[cfg(feature = "opus-decode")]
+pub mod opus;
+#[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
 mod pcm;
 #[cfg(feature = "peaks")]
 pub mod peaks;
 #[cfg(feature = "decode-native")]
 mod read;
-#[cfg(any(feature = "aac-decode", feature = "alac-decode"))]
+#[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
 mod track;
 #[cfg(any(feature = "decode-native", feature = "pcm-encode"))]
 mod wav;
@@ -54,7 +61,7 @@ pub use layout::{ChannelLayout, Speaker};
 pub use read::SharedSource;
 #[cfg(feature = "decode-native")]
 pub use read::{DEFAULT_MAX_SAMPLES, DecodeOptions, Decoder, TrackInfo, decode, decode_with, detect_container, probe, probe_with, tracks, tracks_of};
-#[cfg(any(feature = "aac-decode", feature = "alac-decode"))]
+#[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
 pub use track::{LOOKAHEAD_PACKETS, TrackDecoder};
 #[cfg(feature = "pcm-encode")]
 pub use write::wav_float_header;
@@ -90,11 +97,42 @@ pub type Result<T> = std::result::Result<T, AudioError>;
 // use `?` throughout: a codec's "unsupported" stays `Unsupported`, anything else in the input is
 // `Malformed`, and an encoder's refusal is `Encode`.
 
-#[cfg(feature = "aac-decode")]
+#[cfg(any(feature = "aac-decode", feature = "aac-encode"))]
 impl From<aac::Error> for AudioError {
     fn from(e: aac::Error) -> Self {
         match e {
             aac::Error::Unsupported(_) => AudioError::Unsupported(e.to_string()),
+            aac::Error::InvalidSettings(_) => AudioError::Encode(e.to_string()),
+            _ => AudioError::Malformed(e.to_string()),
+        }
+    }
+}
+
+#[cfg(feature = "opus-decode")]
+impl From<opus::Error> for AudioError {
+    fn from(e: opus::Error) -> Self {
+        match e {
+            opus::Error::Unsupported(_) => AudioError::Unsupported(e.to_string()),
+            _ => AudioError::Malformed(e.to_string()),
+        }
+    }
+}
+
+#[cfg(feature = "ac3-decode")]
+impl From<ac3::Error> for AudioError {
+    fn from(e: ac3::Error) -> Self {
+        match e {
+            ac3::Error::Unsupported(_) => AudioError::Unsupported(e.to_string()),
+            _ => AudioError::Malformed(e.to_string()),
+        }
+    }
+}
+
+#[cfg(feature = "mpa-decode")]
+impl From<mpa::Error> for AudioError {
+    fn from(e: mpa::Error) -> Self {
+        match e {
+            mpa::Error::Unsupported(_) => AudioError::Unsupported(e.to_string()),
             _ => AudioError::Malformed(e.to_string()),
         }
     }
@@ -357,5 +395,20 @@ impl Default for EncodeOptions {
     /// 24-bit WAV.
     fn default() -> Self {
         Self::new(EncodeFormat::Wav)
+    }
+}
+
+// An encoder refusing its settings is an encode error, not damaged input.
+#[cfg(all(test, feature = "aac-encode"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn aac_encoder_settings_are_encode_errors() {
+        let e = match aac::Encoder::new(aac::EncoderConfig::cbr(44_000, 2, 128_000)) {
+            Err(e) => AudioError::from(e),
+            Ok(_) => panic!("44 kHz is not an AAC rate"),
+        };
+        assert!(matches!(e, AudioError::Encode(_)), "{e}");
     }
 }
