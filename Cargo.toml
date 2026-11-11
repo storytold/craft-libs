@@ -52,6 +52,7 @@ craft-jpeg = { path = "crates/jpeg" }
 craft-kiwi = { path = "crates/kiwi" }
 craft-keymap = { path = "crates/keymap" }
 craft-assuan = { path = "crates/assuan" }
+craft-kra = { path = "crates/kra" }
 craft-audio = { path = "crates/audio" }
 # No default features, so craft-audio's `encode` builds craft-media without `isobmff`.
 craft-media = { path = "crates/media", default-features = false }

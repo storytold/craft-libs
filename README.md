@@ -224,6 +224,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   JSON control channel.
 - [`craft-web-host`](crates/web-host/README.md): the host messages between a Craft app's web build and the page that hosts it (`?host=parent` or `data-host="page"`): one contract and one bridge for every app.
 - [`craft-xls`](crates/xls/README.md): clean-room Excel 97-2003 workbook (`.xls`, BIFF8) reader: worksheets, cell values, formulas as A1 text (shared and array formulas included), cell formats with resolved palette colours, merged cells, column and row records, defined names, print areas and calculation settings, with limits on records, cells and text.
+- [`craft-kra`](crates/kra/README.md): Krita documents (`.kra`, `.krz`), read: the ZIP archive, the `maindoc.xml` node tree as written, and the tiled pixel files with their LZF compression, a tile at a time. From PhotoCraft.
 - [`craft-xml`](crates/xml/README.md): bounded XML for hostile input: an owned element tree with limits on size, depth, nodes and attributes, streaming of repeated elements, namespace handling (as written, by local name, or canonical prefixes by URI), escaping and a writer. No DTDs and no entity expansion.
 - [Shared UI component audit](docs/ui-components-audit.md): source inventory, extraction priorities
   and compatibility boundaries across the Craft suite.
