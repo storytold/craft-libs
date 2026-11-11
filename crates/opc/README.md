@@ -63,7 +63,8 @@ It does not validate the archive; `zip` does.
   one part: the spelling a relationship names is kept, else the first in byte order.
 - `Rels`: `by_id`, `target`, `first(type)`, `all(type)`. A type is matched by its full URI or
   by its last segment, so `first("image")` finds the transitional and the strict spelling
-  (`type_is`). The first relationship of a repeated id wins.
+  (`type_is`). The first relationship of a repeated id wins. A relationship
+  with no id or target, or an empty one, is left out.
 - `Rel::target` is a part name for an internal target and the URL for an external one;
   `target_raw` is what the file wrote. A target is looked up as written, then with `%hh`
   escapes decoded; when the package has the part, `target` is its stored spelling.

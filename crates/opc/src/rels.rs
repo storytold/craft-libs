@@ -71,7 +71,8 @@ impl Rels {
         let dir = dir_of(part);
         let mut rels = Rels::default();
         for r in root.children(Local("Relationship")) {
-            let (Some(id), Some(target)) = (r.attr("Id"), r.attr("Target")) else { continue };
+            // An empty id cannot be referred to, and an empty target names no part.
+            let (Some(id), Some(target)) = (r.attr("Id").filter(|s| !s.is_empty()), r.attr("Target").filter(|s| !s.is_empty())) else { continue };
             let external = r.attr("TargetMode").is_some_and(|m| m.eq_ignore_ascii_case("External"));
             let resolved = if external {
                 target.to_string()
@@ -218,6 +219,15 @@ mod tests {
         let b = rels.first("hyperlink").unwrap();
         assert_eq!((b.target.as_str(), b.external), ("https://example.com/a%20b", true), "an external target is not resolved");
         assert!(Rels::parse(b"<Relationships><Relationship", "a.xml").list.is_empty());
+    }
+
+    #[test]
+    fn a_relationship_with_an_empty_id_or_target_is_left_out() {
+        let x = r#"<Relationships><Relationship Id="" Type="t/pivotCacheDefinition" Target="pivotCache/a.xml"/><Relationship Id="rId1" Type="t/pivotCacheDefinition" Target=""/><Relationship Id="rId2" Type="t/pivotCacheDefinition" Target="pivotCache/b.xml"/></Relationships>"#;
+        let rels = Rels::parse(x.as_bytes(), "xl/workbook.xml");
+        assert_eq!(rels.list.len(), 1);
+        assert!(rels.by_id("").is_none() && rels.by_id("rId1").is_none());
+        assert_eq!(rels.first("pivotCacheDefinition").map(|r| r.target.as_str()), Some("xl/pivotCache/b.xml"));
     }
 
     #[test]
