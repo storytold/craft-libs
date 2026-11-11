@@ -1,14 +1,16 @@
 //! A standalone DXF tag reader and writer.
 //!
 //! DXF is a sequence of (group code, value) pairs. This crate parses ASCII and binary DXF into a
-//! flat list of [`Tag`]s, splits them into sections and entities, and writes tags back. Mapping
-//! tags to a drawing model is left to the caller. Written from Autodesk's published DXF
-//! Reference; depends on no other Craft crate. Moved from CADCraft's `cadcraft-dxf`.
+//! flat list of [`Tag`]s, splits them into sections and entities, and writes tags back. [`model`]
+//! reads the tags as a drawing (header variables, tables, blocks, entities, objects); mapping
+//! that onto an application's own document is left to the caller. Written from Autodesk's
+//! published DXF Reference; depends on no other Craft crate. Moved from CADCraft's `cadcraft-dxf`.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
 use std::io::Write as _;
 
+pub mod model;
 mod version;
 pub use version::Version;
 
