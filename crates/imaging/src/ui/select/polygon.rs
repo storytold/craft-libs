@@ -1,6 +1,6 @@
 //! [`PolygonLassoTool`]: the Polygonal Lasso, click by click.
 
-use craft_behavior::geometry::draft::turn_to_45;
+use craft_behavior::geometry::turn_to_45;
 use craft_behavior::geometry::{DraftKind, DraftPoint, DraftReach, OutlineDraft, SelectionOperation};
 use craft_behavior::{CancelReason, Cursor, PointerButton};
 use craft_keymap::Mods;

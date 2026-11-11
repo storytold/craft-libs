@@ -1,6 +1,7 @@
 //! The Select and Mask canvas tool: the gesture state, the edits it builds and the `CanvasTool` impl.
 
-use craft_behavior::geometry::draft::{DraftEvent, DraftKind, DraftPoint, DraftReach, OutlineDraft, turn_to_45};
+use craft_behavior::geometry::draft::{DraftEvent, DraftKind, DraftPoint, DraftReach, OutlineDraft};
+use craft_behavior::geometry::turn_to_45;
 use craft_behavior::kurbo::Point;
 use craft_behavior::{CancelReason, Cursor, CursorBadge, CursorIcon, GestureId, PaintedCursor, PointerButton};
 use craft_keymap::Mods;

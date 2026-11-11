@@ -2,7 +2,7 @@
 //! drawing or editing gesture reports (N5.03). Coordinates are page units (points, y down), as
 //! the canvas tool host gives them.
 
-use craft_behavior::geometry::draft::turn_to_45;
+use craft_behavior::geometry::turn_to_45;
 use kurbo::{Point, Rect, Vec2};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]

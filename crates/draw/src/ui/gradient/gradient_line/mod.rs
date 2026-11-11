@@ -6,9 +6,8 @@
 //! start (PhotoCraft's `u_of`), and every location read back from a point is turned back the same
 //! way.
 
-use craft_behavior::geometry::draft::turn_to_45;
 use egui::Pos2;
-use kurbo::{Point, Vec2};
+use kurbo::Point;
 
 use crate::ui::gradient::{GradientStops, StopRef, StopRow};
 
@@ -119,16 +118,6 @@ pub fn project(line: &GradientLine, p: Point, reverse: bool) -> (f32, f64) {
     let u = if len_sq > 0.0 { ((p - line.start).dot(d) / len_sq).clamp(0.0, 1.0) } else { 0.0 };
     let nearest = line.start + d * u;
     (along(u as f32, reverse), nearest.distance(p))
-}
-
-/// `moved` turned about `fixed` onto the nearest multiple of 45° counted from `base_deg`, keeping
-/// its distance from `fixed`. Angles are those of the document's axes (y down).
-pub fn snap45(fixed: Point, moved: Point, base_deg: f64) -> Point {
-    let base = Vec2::from_angle(base_deg.to_radians());
-    let turn = |v: Vec2, by: Vec2| Vec2::new(v.x * by.x - v.y * by.y, v.x * by.y + v.y * by.x);
-    let local = turn(moved - fixed, Vec2::new(base.x, -base.y));
-    let snapped = turn(turn_to_45(Point::ORIGIN, local.to_point()).to_vec2(), base);
-    fixed + snapped
 }
 
 /// The location of the midpoint diamond after colour stop `i`: its stop's location plus the

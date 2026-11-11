@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use craft_behavior::geometry::draft::turn_to_45;
+use craft_behavior::geometry::turn_to_45;
 use craft_behavior::{CancelReason, Cursor, CursorIcon, EditEvent, GestureId, Mixed};
 use craft_keymap::{Key, Mods};
 use craft_ui::canvas::{CanvasTool, ToolAccess, ToolAction, ToolContext, ToolKey, ToolPath, ToolPointer};

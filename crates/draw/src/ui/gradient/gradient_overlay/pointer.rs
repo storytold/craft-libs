@@ -1,6 +1,7 @@
 //! The overlay's pointer: the press on a part, the drag of an end, the line, a stop or a midpoint, the click that adds a
 //! stop, double-clicks and secondary clicks.
 
+use craft_behavior::geometry::turn_to_45;
 use craft_behavior::kurbo::Point;
 use craft_behavior::{Axis, CanvasView, PointerButton, PressPhase};
 use craft_keymap::Mods;
@@ -10,7 +11,7 @@ use egui::Pos2;
 
 use super::GradientOverlay;
 use super::parts::{keyboard_order, part_ref, selection_of};
-use crate::ui::gradient::gradient_line::{MIN_MIDPOINT_GAP, project, snap45};
+use crate::ui::gradient::gradient_line::{MIN_MIDPOINT_GAP, project};
 use crate::ui::gradient::stops::{self, round_location};
 use crate::ui::gradient::{GradientLine, LineGradient, LinePart, Sampler, StopRef, StopRow, default_sampler};
 
@@ -154,7 +155,7 @@ impl GradientOverlay<'_> {
                     _ => (base.line.start, &mut out.value.line.end),
                 };
                 let to = view.to_doc(pointer);
-                let to = if mods.shift { snap45(fixed, to, self.angle_base) } else { to };
+                let to = if mods.shift { turn_to_45(fixed, to) } else { to };
                 *moved = snapped(snap, to, mods);
             }
             LinePart::Line => {

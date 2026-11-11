@@ -98,8 +98,7 @@ const TEAR_OFF: f32 = 36.0;
 ///   [`StopRows::Split`] and [`StopRows::ColorOnly`] a stop's disc is opaque; under [`StopRows::Combined`] its colour
 ///   shows its opacity over a backing. Nothing mirrors in a right-to-left interface.
 /// - Pointer: the end, start, nearest stop, nearest midpoint and the line are parts in that priority. A drag begins past
-///   the click slop. An end follows the pointer (Shift: 45 degree steps from [`angle_base`](Self::angle_base) about the
-///   other end), the line moves both ends, a stop moves to the location under the pointer and is torn off, removed when
+///   the click slop. An end follows the pointer (Shift: 45 degree steps about the other end), the line moves both ends, a stop moves to the location under the pointer and is torn off, removed when
 ///   the drag ends there, more than the style's tear-off distance from the line while its row is above `rules.min`, a
 ///   midpoint moves within its segment. Alt drags a copy of a stop with [`alt_copies`](Self::alt_copies). Every update is
 ///   the whole edit of the gradient at the press. Ends and the line snap through the canvas's `Snap`.
@@ -138,9 +137,6 @@ pub struct GradientOverlay<'a> {
     /// Whether an Alt-drag on a stop drags a copy of it; off, Alt is the tool's.
     #[prop(flag)]
     alt_copies: bool,
-    /// The angle in degrees, along the document's axes, that Shift's 45 degree steps of a dragged end start from.
-    #[prop(quantity = "degrees")]
-    angle_base: f64,
     /// Decimals of a stop's location in its accessible value.
     #[prop(quantity = "decimals")]
     location_decimals: u8,
@@ -177,7 +173,6 @@ impl<'a> GradientOverlay<'a> {
             reverse: false,
             extent: GradientExtent::None,
             alt_copies: false,
-            angle_base: 0.0,
             location_decimals: 0,
             shared_selection: None,
             value_text: None,

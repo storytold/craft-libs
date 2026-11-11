@@ -11,7 +11,7 @@ mod style;
 mod tools;
 mod words;
 
-use craft_behavior::geometry::{Directions, SelectionOperation, lock_direction};
+use craft_behavior::geometry::{SelectionOperation, turn_to_45};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2};
 use craft_behavior::{
     Axis, CanvasView, EditCommand, Granularity, HitLevel, HitPriority, HitShape, Intent, NavMove, NavShape, PartKey, PartRef, PointerButton,
@@ -552,7 +552,7 @@ impl<'a> BezierOverlay<'a> {
     /// The edit of a press at `origin` dragged to `pointer`: the whole move from the press.
     fn edit(view: &CanvasView, snap: Option<&Snap>, tool: BezierTool, target: &Target, origin: Pos2, pointer: Pos2, mods: Mods) -> Option<PathEdit> {
         let delta = view.to_doc(pointer) - view.to_doc(origin);
-        let locked = |delta: Vec2| if mods.shift { constrain(Point::ZERO, Point::ZERO + delta).to_vec2() } else { delta };
+        let locked = |delta: Vec2| if mods.shift { turn_to_45(Point::ZERO, Point::ZERO + delta).to_vec2() } else { delta };
         let snapped = |p: Point| match snap {
             Some(snap) => Point::new(snap.apply(Axis::Y, p.x, mods), snap.apply(Axis::X, p.y, mods)),
             None => p,
@@ -914,11 +914,6 @@ fn nudge_vector(view: &CanvasView, direction: egui::Vec2, distance: f64) -> Vec2
     let doc = view.unmap_vec(direction);
     let length = doc.hypot();
     if length > 0.0 { doc / length * distance } else { Vec2::ZERO }
-}
-
-/// `to` turned onto the nearest 45° ray from `from` (PhotoCraft's `Edit::constrain`): its projection there.
-pub(crate) fn constrain(from: Point, to: Point) -> Point {
-    from + lock_direction(to - from, None, Directions::Eight)
 }
 
 fn contains(r: DocRect, p: Point) -> bool {

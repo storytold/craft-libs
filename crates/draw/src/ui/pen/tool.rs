@@ -6,8 +6,8 @@ use std::sync::Arc;
 use super::auto::AutoEdit;
 use super::bezier::{EditSubpath, HandleSide, Knot, KnotRef};
 use super::{PathOptionsSettings, PenMode, PenWords};
-use craft_behavior::geometry::{Directions, lock_direction};
-use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2 as DocVec};
+use craft_behavior::geometry::turn_to_45;
+use craft_behavior::kurbo::{Point, Rect as DocRect};
 use craft_behavior::{CancelReason, CanvasView, Cursor, CursorBadge, EditEvent, GestureId, Mixed, PaintedCursor, PointerButton};
 use craft_keymap::Mods;
 use craft_theme::Rgba;
@@ -366,7 +366,7 @@ impl PenTool {
             Kind::Pull => {
                 let mut p = view.to_doc(pos);
                 if mods.shift && n > 0 {
-                    p = draft.knots[n - 1].anchor + constrain(p - draft.knots[n - 1].anchor);
+                    p = turn_to_45(draft.knots[n - 1].anchor, p);
                 }
                 draft.knots.push(Knot::corner(p));
                 p
@@ -430,19 +430,12 @@ pub(super) fn reach(cx: &ToolContext<'_>) -> f32 {
     cx.slop
 }
 
-/// `offset` turned onto the nearest 45° ray.
-fn constrain(offset: DocVec) -> DocVec {
-    lock_direction(offset, None, Directions::Eight)
-}
-
 /// A pulled knot: its handles follow `to`. A pull and a close drag put the out handle there and the in handle
 /// opposite it, unless ⌥ keeps the in handle where it was; a retracted anchor's handle and a grabbed handle move
 /// alone. ⇧ turns the handle to the nearest 45° ray.
 fn pull(knot: &mut Knot, kind: Kind, to: Point, mods: Mods, in_ctrl: &mut Point) {
-    let mut v = to - knot.anchor;
-    if mods.shift {
-        v = constrain(v);
-    }
+    let to = if mods.shift { turn_to_45(knot.anchor, to) } else { to };
+    let v = to - knot.anchor;
     match kind {
         Kind::Pull | Kind::Close => {
             knot.out_ctrl = knot.anchor + v;
@@ -601,7 +594,7 @@ impl PenTool {
         {
             let mut end = view.to_doc(pointer);
             if cx.mods.shift {
-                end = last.anchor + constrain(end - last.anchor);
+                end = turn_to_45(last.anchor, end);
             }
             draw.dashed(&[view.to_screen(last.anchor), view.to_screen(end)], Dashes::new(look.dash, look.gap), StrokeWidth::Thin, look.line);
         }

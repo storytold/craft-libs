@@ -16,7 +16,7 @@ pub mod snap;
 
 pub use crop::{CropBox, CropGuide, GuideShow, crop_view, crop_view_about, hit_rect, screen_step};
 pub use draft::{DraftEvent, DraftKind, DraftPoint, DraftReach, OutlineDraft};
-pub use lock::{Directions, LOCK_HYSTERESIS_DEGREES, lock_direction, round_to_direction};
+pub use lock::{Directions, LOCK_HYSTERESIS_DEGREES, lock_direction, round_to_direction, turn_to_45};
 pub use marquee::{Constraint, MarqueeGesture, MarqueeRect, fixed_size_pixels, marquee_pixels, square_pixels};
 pub use move_gesture::{ConstrainStyle, MoveGesture, MoveValue, StrokeLock};
 pub use quad::{BoxAllow, BoxDrag, BoxPart, BoxRules, BoxState, Homography, Parts, SKEW_LIMIT, ScaleRule, TransformMode, drag};

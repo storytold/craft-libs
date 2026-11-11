@@ -8,7 +8,7 @@
 use craft_keymap::Mods;
 use kurbo::Point;
 
-use super::lock::{Directions, round_to_direction};
+use super::lock::turn_to_45;
 
 /// Which tool's rules an [`OutlineDraft`] follows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -420,15 +420,4 @@ impl OutlineDraft {
         self.polygonal = false;
         self.alt_from_press = false;
     }
-}
-
-/// `point` turned about `from` to the nearest multiple of 45°, keeping its distance.
-pub fn turn_to_45(from: Point, point: Point) -> Point {
-    let delta = point - from;
-    let length = delta.hypot();
-    if !length.is_finite() || length == 0.0 {
-        return point;
-    }
-    let angle = round_to_direction(delta.y.atan2(delta.x), Directions::Eight);
-    Point::new(from.x + length * angle.cos(), from.y + length * angle.sin())
 }

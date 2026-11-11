@@ -2,7 +2,7 @@
 //! in the canvas's arena, so a press on an end or a bend stays with the handles and one elsewhere
 //! reaches the Connector tool.
 
-use craft_behavior::geometry::draft::turn_to_45;
+use craft_behavior::geometry::turn_to_45;
 use craft_behavior::{Axis, CancelReason, CursorIcon, HitLevel, HitPriority, HitShape, Metrics, NavShape, PartKey, PressPhase, Roving, Sense};
 use craft_keymap::Mods;
 use craft_ui::canvas::{CanvasSpace, NUDGE, NUDGE_FAR, canvas_snap, canvas_space};

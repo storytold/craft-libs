@@ -1,6 +1,6 @@
-//! Direction locking for ⇧ drags: [`Directions`], [`lock_direction`] and [`round_to_direction`].
+//! Direction locking for ⇧ drags: [`Directions`], [`lock_direction`], [`round_to_direction`] and [`turn_to_45`].
 
-use kurbo::Vec2;
+use kurbo::{Point, Vec2};
 
 /// Extra angle in degrees the pointer must pass the half-way line between two directions by
 /// before a locked direction switches, so it doesn't flicker near the diagonal.
@@ -30,10 +30,22 @@ impl Directions {
 
 /// `angle` (radians, 0 = right, document y down) rounded to the nearest of `directions` evenly
 /// spaced directions: the one angle-rounding rule behind [`lock_direction`] (projection) and
-/// [`turn_to_45`](super::draft::turn_to_45) (rotation).
+/// [`turn_to_45`] (rotation).
 pub fn round_to_direction(angle: f64, directions: Directions) -> f64 {
     let step = std::f64::consts::TAU / f64::from(directions.count());
     (angle / step).round() * step
+}
+
+/// `point` turned about `from` to the nearest multiple of 45°, keeping its distance: the one ⇧ rule for a line, a
+/// handle or a segment drawn from a fixed point. `point` itself when it is on `from` or not finite.
+pub fn turn_to_45(from: Point, point: Point) -> Point {
+    let delta = point - from;
+    let length = delta.hypot();
+    if !length.is_finite() || length == 0.0 {
+        return point;
+    }
+    let angle = round_to_direction(delta.atan2(), Directions::Eight);
+    from + Vec2::from_angle(angle) * length
 }
 
 /// `d` locked to the nearest of `directions` evenly spaced directions (0° = right, document y

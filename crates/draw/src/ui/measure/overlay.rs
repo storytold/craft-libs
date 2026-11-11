@@ -3,7 +3,7 @@
 
 use super::model::{RulerLine, RulerPart};
 use super::words::RulerWords;
-use craft_behavior::geometry::{Directions, round_to_direction};
+use craft_behavior::geometry::turn_to_45;
 use craft_behavior::kurbo::{Point, Vec2 as DocVec};
 use craft_behavior::{Granularity, HitLevel, HitPriority, HitShape, Intent, Metrics, NavShape, PartKey, PointerButton, PressPhase, Roving, Sense};
 use craft_ui::canvas::{CanvasSpace, NUDGE, NUDGE_FAR, canvas_space};
@@ -62,22 +62,10 @@ impl<'a> RulerOverlay<'a> {
     }
 }
 
-/// `to` on the nearest 45° ray from `fixed`, at its distance from `fixed` (`to` itself when it is on `fixed` or not
-/// finite). The ruler keeps the pointer's distance; a projection would shorten it.
-pub(super) fn on_ray(fixed: Point, to: Point) -> Point {
-    let offset = to - fixed;
-    let length = offset.hypot();
-    if !length.is_finite() || length == 0.0 {
-        return to;
-    }
-    let angle = round_to_direction(offset.atan2(), Directions::Eight);
-    fixed + DocVec::new(angle.cos(), angle.sin()) * length
-}
-
 /// The line with the grabbed `part` moved to `to`, Shift on 45° rays about the fixed point: the end for the start, the
 /// start for the end and the protractor.
 pub(super) fn moved(line: RulerLine, part: RulerPart, to: Point, shift: bool) -> RulerLine {
-    let constrain = |fixed: Point| if shift { on_ray(fixed, to) } else { to };
+    let constrain = |fixed: Point| if shift { turn_to_45(fixed, to) } else { to };
     let mut line = line;
     match part {
         RulerPart::Start => line.start = constrain(line.end),

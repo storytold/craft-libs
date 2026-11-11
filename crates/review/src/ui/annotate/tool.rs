@@ -1,6 +1,6 @@
 //! The canvas tool: presses, drags, the "New Annotation..." form and the [`CanvasTool`] implementation.
 
-use craft_behavior::geometry::draft::turn_to_45;
+use craft_behavior::geometry::turn_to_45;
 use craft_behavior::{CancelReason, Cursor, CursorIcon, EditEvent, GestureId, Mixed, PointerButton, SelectionChange};
 use craft_keymap::Mods;
 use craft_theme::Srgba;
