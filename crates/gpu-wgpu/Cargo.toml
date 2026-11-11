@@ -29,3 +29,7 @@ native-gles = ["wgpu/gles"]
 
 [dev-dependencies]
 pollster = { workspace = true }
+# Real-backend test (crates/gpu-wgpu/src/tests.rs): dispatches craft-gpu-providers' CPU-stand-in
+# providers against a real WgpuContext, not just craft-gpu-null, per RFC-0022 acceptance
+# requirement 2. Dev-only: no cycle (craft-gpu-providers never depends on craft-gpu-wgpu).
+craft-gpu-providers = { workspace = true }
