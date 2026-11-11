@@ -1829,16 +1829,18 @@ pub mod macos {
     /// left by an install that ended. An install's copy times out after 10 minutes.
     const OLD_STAGING_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
-    /// Removes the staging folders in `dir` whose install of `app` ended partway, with the partial
-    /// copies in them:
+    /// Removes the staging folders in `dir` of installs that ended partway, with the partial copies
+    /// in them:
     ///
     /// - a folder named as [`STAGING`] describes, holding [`STAGING_MARKER`], whose process
-    ///   `ended` says has ended. Without the marker, the folder is removed only when it is empty.
+    ///   `ended` says has ended, whichever app that install was for. Without the marker, the
+    ///   folder is removed only when it is empty.
     /// - a folder named as [`OLD_STAGING`] describes that holds only `<app>.app` and has not
     ///   changed for [`OLD_STAGING_AGE`] before `now`.
     ///
-    /// Folders of this process's installs, other apps' folders and backup folders (one may hold
-    /// the only copy of an app) are left alone. Failures are logged and the install goes on.
+    /// Folders of this process's installs and of installs still running, [`OLD_STAGING`] folders
+    /// of other apps and backup folders (one may hold the only copy of an app) are left alone.
+    /// Failures are logged and the install goes on.
     pub(crate) fn clear_staging(app: &App, dir: &Path, ended: impl Fn(u32) -> bool, now: std::time::SystemTime) {
         let Ok(entries) = std::fs::read_dir(dir) else { return };
         // Read before `ended` runs `ps`, which then lists every process that made one of them.
