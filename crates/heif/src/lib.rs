@@ -268,6 +268,7 @@ pub fn decode(bytes: &[u8], options: &Options) -> Result<Decoded, Error> {
 /// profile) are the primary image's.
 pub fn decode_thumbnail(bytes: &[u8], min_edge: u32, options: &Options) -> Result<Option<Decoded>, Error> {
     guarded(|| {
+        census::cap(bytes)?;
         let ctx = Context::open(bytes).map_err(err)?;
         let primary = ctx.meta.primary;
         let mut best: Option<(u32, u32)> = None;
@@ -318,7 +319,9 @@ pub fn decode_thumbnail(bytes: &[u8], min_edge: u32, options: &Options) -> Resul
             }
         }
         let mut decoded = decode_item(&ctx, id, options, false)?;
-        if decoded.icc.is_none() {
+        // `item_icc` rebuilds the primary grid's descriptor: only when that is within the visit
+        // budget (the thumbnail path never counted it).
+        if decoded.icc.is_none() && item_visits(&ctx, primary, 0, &mut 0).is_ok() {
             decoded.icc = item_icc(&ctx, primary);
         }
         (decoded.exif, decoded.xmp) = metadata(&ctx);
