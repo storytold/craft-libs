@@ -1,4 +1,5 @@
-//! `ResetMark`: the dot the label step shows beside a side label while the value differs from its reset value.
+//! `ResetMark`: the mark the label step shows beside a side label: a dot while the value differs from its reset value,
+//! a ring while it is at it.
 
 use crate::style::ResetMarkLook;
 use egui::{Pos2, Shape};
@@ -7,8 +8,13 @@ use egui::{Pos2, Shape};
 pub struct ResetMark;
 
 impl ResetMark {
-    /// The dot centred on `center`.
-    pub fn shapes(look: &ResetMarkLook, center: Pos2) -> Vec<Shape> {
-        vec![Shape::circle_filled(center, look.diameter / 2.0, look.color.egui())]
+    /// The mark centred on `center`: the dot while the value `differs`, else the ring.
+    pub fn shapes(look: &ResetMarkLook, center: Pos2, differs: bool) -> Vec<Shape> {
+        let radius = look.diameter / 2.0;
+        if differs {
+            vec![Shape::circle_filled(center, radius, look.color.egui())]
+        } else {
+            vec![Shape::circle_stroke(center, radius - look.ring_width / 2.0, egui::Stroke::new(look.ring_width, look.ring.egui()))]
+        }
     }
 }

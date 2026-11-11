@@ -186,7 +186,8 @@ impl Component for LabelLeaf {
     fn parts(&mut self, _rect: Rect, cx: &mut PartsCx<'_, Self>) {
         if self.slot > 0.0 && self.differs {
             let (slot, _) = cx.flow.take_end(self.slot);
-            cx.part(DOT, slot).sense(Sense::CLICK).pointer_only("the Reset command");
+            let tip = cx.env.words::<CommonWords>().reset_to_default.as_str().to_owned();
+            cx.part(DOT, slot).sense(Sense::CLICK).state_layer().tooltip(tip).pointer_only("the Reset command");
         }
     }
 
@@ -245,8 +246,8 @@ impl Component for LabelLeaf {
                 draw.text(centred(detail_flow.rect(), size.y), &run);
             }
         }
-        if self.differs && self.slot > 0.0 {
-            draw.reset_mark(&cx.style.reset, slot.center());
+        if self.slot > 0.0 {
+            draw.reset_mark(&cx.style.reset, slot.center(), self.differs);
         }
     }
 

@@ -278,9 +278,9 @@ impl<'a> Draw<'a> {
         super::icon::paint(self.painter, self.env.tokens, self.env.direction, rect, icon);
     }
 
-    /// Paints the reset dot of `look` centred on `center`.
-    pub fn reset_mark(&self, look: &crate::style::ResetMarkLook, center: Pos2) {
-        self.painter.extend(super::ResetMark::shapes(look, center));
+    /// Paints the reset mark of `look` centred on `center`: the dot while the value `differs`, else the ring.
+    pub fn reset_mark(&self, look: &crate::style::ResetMarkLook, center: Pos2, differs: bool) {
+        self.painter.extend(super::ResetMark::shapes(look, center, differs));
     }
 
     /// `v` moved to the centre of the physical pixel it lies in: a line one physical pixel wide placed there fills that

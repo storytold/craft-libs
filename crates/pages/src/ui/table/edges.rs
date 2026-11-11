@@ -394,11 +394,10 @@ impl Component for EdgePicker<'_> {
         let hovered = cx.hover_pos(SQUARE).and_then(|p| line_at(&lines, &keys, p, cx.style.inset));
         for key in keys {
             let (a, b) = lines[key as usize];
-            let (width, color) = if edges.get(key) || hovered == Some(key) {
-                (StrokeWidth::Thick, cx.resolve(&cx.style.on))
-            } else {
-                (StrokeWidth::Thin, cx.resolve(&cx.style.off))
-            };
+            let (width, color) =
+                if edges.get(key) { (StrokeWidth::Thick, cx.resolve(&cx.style.on)) } else { (StrokeWidth::Thin, cx.resolve(&cx.style.off)) };
+            // The line under the pointer widens in its own colour, so hovering never looks like choosing.
+            let width = if hovered == Some(key) { StrokeWidth::Heavy } else { width };
             draw.stroke(&PaintShape::Path(vec![a, b]), width, color);
         }
     }

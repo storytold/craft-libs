@@ -104,18 +104,34 @@ pub(crate) fn scroll_bar_look(tokens: &UiTokens) -> ScrollBarLook {
     ScrollBarLook { track, thumb, thickness: tokens.size.handle.sm, min_thumb: tokens.size.handle.md * 2.0, fade: tokens.size.scroll_fade }
 }
 
-/// The reset dot's colour and diameter.
+/// The reset dot's colours and diameter.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ResetMarkLook {
-    /// The dot colour.
+    /// The dot colour, while the value differs from its reset value.
     pub color: StyleColor,
+    /// The ring colour, while the value is at its reset value: the slot shows before anything changes.
+    pub ring: StyleColor,
+    /// The ring's line width.
+    pub ring_width: f32,
     /// The dot diameter.
     pub diameter: f32,
 }
 
+/// The state layer: the theme's hover and press fills, clear at rest and while disabled. An opaque state fill takes
+/// the place of the rest fill of a part without a surface of its own.
+pub(crate) fn state_layer_look(tokens: &UiTokens) -> Stateful<StyleColor> {
+    let (clear, state) = (style_color(Rgba::TRANSPARENT), &tokens.color.state);
+    Stateful::new(clear).off(craft_theme::States::new(clear, style_color(state.hover), style_color(state.pressed), clear))
+}
+
 pub(crate) fn reset_mark_look(tokens: &UiTokens) -> ResetMarkLook {
-    ResetMarkLook { color: style_color(tokens.color.accent.solid), diameter: tokens.size.handle.sm / 2.0 }
+    ResetMarkLook {
+        color: style_color(tokens.color.accent.solid),
+        ring: style_color(tokens.color.text.disabled),
+        ring_width: tokens.stroke.thin,
+        diameter: tokens.size.handle.sm / 2.0,
+    }
 }
 
 /// The colour of `ink` in `tokens`.

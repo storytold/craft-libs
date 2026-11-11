@@ -8,6 +8,8 @@ craft_ui::words! {
         cancel: "common.cancel" = "Cancel";
         ok: "common.ok" = "OK";
         dont_show_again: "common.dontShowAgain" = "Don't show again";
+        /// The tooltip of a label's reset dot.
+        reset_to_default: "common.resetToDefault" = "Reset to default";
         /// A caption beside its control; a catalog writes its language's punctuation (French " :").
         caption: template "common.caption" = "{caption}:";
         /// Between the steps of a path (a menu path, a tree picker's selection); a catalog changes it for a
