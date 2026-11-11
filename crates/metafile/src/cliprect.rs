@@ -321,9 +321,13 @@ fn segment(a: P, b: P, clip: &[P], budget: &mut usize) -> Option<Option<(P, P)>>
     Some((t0 <= t1).then_some(((a.0 + d.0 * t0, a.1 + d.1 * t0), (a.0 + d.0 * t1, a.1 + d.1 * t1))))
 }
 
+/// Point-in-polygon tests (pixels times clip corners) spent masking one bitmap to a clip that is
+/// not a rectangle. A bitmap that would take more is left out.
+pub(crate) const MAX_MASK_WORK: usize = 5_000_000;
+
 /// Crops a bitmap drawn into `rect` = `[x, y, w, h]` (device, positive extents) to the clip
 /// polygon's box; pixels outside a non-rectangular polygon turn transparent.
-fn crop(rect: [f64; 4], img: Rgba, clip: &[P]) -> Option<([f64; 4], Rgba)> {
+pub(crate) fn crop(rect: [f64; 4], img: Rgba, clip: &[P]) -> Option<([f64; 4], Rgba)> {
     let [x, y, w, h] = rect;
     let b = [x, y, x + w, y + h];
     if bbox_inside(b, clip) {
@@ -344,7 +348,7 @@ fn crop(rect: [f64; 4], img: Rgba, clip: &[P]) -> Option<([f64; 4], Rgba)> {
     }
     let mask = !is_rect(clip);
     let total_pixels = (x1 - x0).saturating_mul(y1 - y0);
-    if mask && total_pixels.saturating_mul(clip.len()) > 5_000_000 {
+    if mask && total_pixels.saturating_mul(clip.len()) > MAX_MASK_WORK {
         return None;
     }
     let mut px = Vec::with_capacity((x1 - x0) * (y1 - y0) * 4);

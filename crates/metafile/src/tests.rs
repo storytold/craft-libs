@@ -4,6 +4,7 @@ use crate::canvas::Canvas;
 use crate::dib::Rgba;
 use crate::{Error, Item, MAX_BYTES, MAX_ITEMS, Seg, is_metafile, parse};
 
+mod limits;
 mod model;
 mod played;
 
@@ -1067,7 +1068,7 @@ fn size_of_a_truncated_or_mutated_file_equals_the_full_parse() {
 }
 
 /// Time of the full parse against the header-only size for an EMF with one 8000 x 5000, 1 bpp bitmap
-/// (5 MB, decodes to 160 MB): `cargo test -p wordcraft-metafile --release -- --ignored --nocapture size_speed`.
+/// (5 MB, decodes to 160 MB): `cargo test -p craft-metafile --release -- --ignored --nocapture size_speed`.
 #[test]
 #[ignore = "timing only"]
 fn size_speed() {
@@ -2166,7 +2167,7 @@ fn emfplus_nested_metafile_image_draws_its_items_into_the_destination() {
     assert!(segs.contains(&Seg::Line(40.0, 20.0)), "{segs:?}");
 }
 
-/// Curves and a region fill, as an EMF+ only file (also written to `$DECKCRAFT_EMF_OUT` to look at).
+/// Curves and a region fill, as an EMF+ only file (also written to `$CRAFT_METAFILE_EMF_OUT` to look at).
 fn curves_file() -> Vec<u8> {
     let pen = prec(0x4008, 0x0200 | 1, &solid_pen(0xFF20_60C0, 3.0));
     // A closed curve through a diamond's corners, filled orange.
@@ -2189,7 +2190,7 @@ fn curves_file() -> Vec<u8> {
 #[test]
 fn emfplus_cardinal_curves_and_region_fill() {
     let bytes = curves_file();
-    if let Ok(path) = std::env::var("DECKCRAFT_EMF_OUT") {
+    if let Ok(path) = std::env::var("CRAFT_METAFILE_EMF_OUT") {
         let _ = std::fs::write(path, &bytes);
     }
     let p = parse(&bytes).unwrap();

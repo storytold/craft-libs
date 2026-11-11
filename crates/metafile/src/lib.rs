@@ -1,17 +1,20 @@
-//! DeckCraft metafiles (ported from WordCraft's `crates/metafile`): reads Windows Metafiles (WMF)
-//! and Enhanced Metafiles (EMF) into a neutral vector model of filled and stroked paths, pattern
-//! fills, RGBA bitmaps and text strings, in a picture frame with y down.
+//! Windows metafiles: reads Windows Metafiles (WMF), Enhanced Metafiles (EMF) and EMF+ into a
+//! neutral vector model, and (feature `write`) writes EMF and WMF.
+//!
+//! [`parse`] plays a file's records on a model of the device context and returns a [`Picture`]:
+//! filled and stroked paths with their line styles, pattern fills, RGBA bitmaps and text strings,
+//! each with the clip it was drawn under, in a picture frame with y down. Nothing in the model
+//! belongs to an application: mapping it onto a document (or drawing it) is the caller's.
+//! [`Picture::place`] fits a picture into a rectangle for callers that draw it.
 //!
 //! Text stays font-agnostic: a [`Text`] item names the font the file asks for and carries the
-//! string, its advances and alignment; the renderer resolves the font and draws the glyphs.
+//! string, its advances and alignment; the caller resolves the font and draws the glyphs.
 //!
 //! The reader is pure Rust over byte slices (no file system), so it builds for wasm. Every read is
 //! bounds-checked and every count is capped; hostile input yields a shorter picture or an [`Error`],
-//! never a panic.
-//!
-//! Records follow MS-WMF and MS-EMF. Rectangle clip regions (`INTERSECTCLIPRECT`,
-//! `EXCLUDECLIPRECT`, `EXTSELECTCLIPRGN`) limit what later records draw. Records outside the
-//! supported set are skipped silently.
+//! never a panic. Records follow MS-WMF, MS-EMF and MS-EMFPLUS; the README lists the records read
+//! and the limits. Records of a type the reader does not know are counted in
+//! [`Picture::skipped_records`].
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -219,7 +222,7 @@ pub(crate) fn parse_nested(bytes: &[u8]) -> Result<Picture, Error> {
     let (cv, frame) = if emf::is_emf(b) {
         emf::parse(b)?
     } else if wmf::is_wmf(b) {
-        // A WMF converted from an EMF can carry the original in MFCOMMENT escapes; PowerPoint draws
+        // A WMF converted from an EMF can carry the original in MFCOMMENT escapes; Office draws
         // the WMF's own records (its dx rounding shows), so the copy is not used.
         wmf::parse(b)?
     } else {

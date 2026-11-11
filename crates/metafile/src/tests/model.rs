@@ -470,3 +470,66 @@ fn compressed_bitmaps_share_one_decode_budget_per_file() {
     let p = parse_emf(&[stretch_dibits(3, 1, 5, &small)]);
     assert_eq!(p.items.len(), 1);
 }
+
+#[test]
+fn truncated_and_mutated_files_with_these_records_never_panic() {
+    let mut recs = vec![
+        ext_pen(PS_GEOMETRIC | 7 | 0x200 | 0x2000, 4, &[8, 4, 2, 1]),
+        erec(37, &h32(1)),
+        erec(58, &h32(3)),
+        erec(57, &h32(2)),
+        erec(17, &h32(8)),
+        erec(9, &cat(vec![e32(100), e32(100)])),
+        erec(11, &cat(vec![e32(100), e32(100)])),
+        erec(31, &cat(vec![e32(2), e32(1), e32(3), e32(1)])),
+        erec(32, &cat(vec![e32(1), e32(2), e32(1), e32(3)])),
+        erec(33, &[]),
+    ];
+    recs.extend(clip_to_rect(0, 0, 50, 50, 1));
+    recs.extend(clip_to_rect(5, 5, 40, 40, 5));
+    recs.extend([
+        erec(45, &cat(vec![e32(0), e32(0), e32(100), e32(100), e32(100), e32(50), e32(50), e32(0)])),
+        erec(59, &[]),
+        move_to(0, 0),
+        line_to(10, 0),
+        line_to(10, 10),
+        erec(61, &[]),
+        erec(60, &[]),
+        erec(63, &[0; 16]),
+        erec(59, &[]),
+        rect(0, 0, 5, 5),
+        erec(68, &[]),
+        stretch_dibits(3, 1, 5, &png(3, 1, [1, 2, 3, 255])),
+        erec(34, &e32(-1)),
+        erec(200, &[0; 8]),
+    ]);
+    let efile = emf(&recs, [0, 0, 100, 100], [0, 0, 2540, 2540]);
+    let mut core = cat(vec![h32(12), h16(2), h16(2), h16(1), h16(24)]);
+    core.extend(dib24_bottom_up().get(40..).unwrap_or_default());
+    let wfile = stretch_dib(core);
+    assert!(!parse(&efile).unwrap().items.is_empty() && !parse(&wfile).unwrap().items.is_empty());
+    let mut rng = Lcg(0x9E37_79B9_7F4A_7C15);
+    for file in [&efile, &wfile] {
+        for n in 0..=file.len() {
+            let _ = parse(&file[..n]);
+            let _ = crate::size(&file[..n]);
+        }
+        for at in 0..file.len() {
+            for v in [0x00, 0x7F, 0x80, 0xFF] {
+                let mut bad = file.clone();
+                bad[at] = v;
+                let _ = parse(&bad);
+            }
+        }
+        for _ in 0..2000 {
+            let mut bad = file.clone();
+            for _ in 0..6 {
+                let at = rng.rnd() as usize % bad.len();
+                bad[at] = rng.rnd() as u8;
+            }
+            if let Ok(p) = parse(&bad) {
+                let _ = p.place(kurbo::Rect::new(0.0, 0.0, 100.0, 100.0), [0.0; 4]);
+            }
+        }
+    }
+}

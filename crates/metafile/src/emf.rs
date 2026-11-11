@@ -226,12 +226,11 @@ fn record(cv: &mut Canvas, typ: u32, r: Bytes) {
     };
 }
 
-/// Records that change nothing the picture keeps: the header, palettes, the brush origin, mapper
-/// flags, colour adjustment and colour management, stretch mode, meta regions, pixel formats,
-/// layout, comments (EMF+ ones are read before they get here), and the object kinds that only
-/// take a table slot (palettes, colour spaces).
-const IGNORED: &[u32] =
-    &[1, 13, 15, 16, 21, 23, 28, 48, 49, 50, 51, 52, 65, 66, 70, 98, 99, 100, 101, 104, 110, 111, 112, 113, 115, 119, 120, 121, 122];
+/// Records that change nothing the picture keeps: the header, the brush origin, mapper flags,
+/// stretch mode, colour adjustment, palettes, FLATTENPATH, comments (EMF+ ones are read before
+/// they get here), colour management and colour spaces, pixel formats, font linking and text
+/// justification. Every other record the reader does not play is counted as skipped.
+const IGNORED: &[u32] = &[1, 13, 16, 21, 23, 48, 49, 50, 51, 52, 65, 70, 98, 99, 100, 101, 104, 109, 110, 111, 112, 113, 119, 120, 121, 122];
 
 /// EMR_EXTSELECTCLIPRGN: `cbRgnData` bytes of `RGNDATA` (rectangles in logical units) and a region
 /// mode. No region data selects the default clip.

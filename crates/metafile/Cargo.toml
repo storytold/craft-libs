@@ -17,4 +17,5 @@ write = []
 [dependencies]
 kurbo = { workspace = true }
 thiserror = { workspace = true }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# JPEG and PNG bitmaps (BI_JPEG, BI_PNG) and the image files EMF+ carries.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "tiff", "bmp"] }

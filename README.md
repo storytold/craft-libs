@@ -88,6 +88,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   every field type, the IFD chain, SubIFDs and Exif/GPS/Interop pointer IFDs, maker-note IFDs
   (Canon, Nikon, Sony, Fujifilm, Olympus, Panasonic, Pentax), strip and tile layout. Bounded and
   panic-free on hostile input. Pixel decompression stays with the callers.
+- [`craft-metafile`](crates/metafile/README.md): Windows metafiles, from DeckCraft, WordCraft and
+  VectorCraft: a WMF, EMF and EMF+ reader into a neutral picture (paths with line styles, pattern
+  fills, bitmaps, text, clip regions and clip paths) and, behind `write`, EMF and WMF writers.
+  Bounded and panic-free on hostile input. Mapping the picture onto a document stays in each app.
 - [`craft-jpeg`](crates/jpeg/README.md): clean-room decoder for 12-bit and arithmetic-coded
   JPEG (T.81 SOF0/SOF1 at 12 bits, SOF9, SOF10), from PhotoCraft, and a frame probe for routing.
   Metadata stays in each app.

@@ -38,20 +38,20 @@ use crate::{Item, LineStyle, Picture, Seg};
 pub(crate) const EMF_PLUS: u32 = 0x2B46_4D45;
 const IDENTITY: Xform = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
 /// GDI+ allows 64 objects; ids are a byte.
-const MAX_OBJECTS: usize = 64;
-const MAX_STACK: usize = 64;
+pub(crate) const MAX_OBJECTS: usize = 64;
+pub(crate) const MAX_STACK: usize = 64;
 /// Points per path or point list read, as the plain EMF reader caps paths.
-const MAX_POINTS: usize = 100_000;
+pub(crate) const MAX_POINTS: usize = 100_000;
 /// Gradient stops read from a brush.
-const MAX_STOPS: usize = 256;
+pub(crate) const MAX_STOPS: usize = 256;
 /// Characters per string.
-const MAX_CHARS: usize = 32_768;
+pub(crate) const MAX_CHARS: usize = 32_768;
 /// Bytes gathered for one object split across records.
-const MAX_OBJECT_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const MAX_OBJECT_BYTES: usize = 64 * 1024 * 1024;
 /// Nesting depth of region nodes.
-const MAX_REGION_DEPTH: usize = 32;
+pub(crate) const MAX_REGION_DEPTH: usize = 32;
 /// Region nodes and path points parsed together, including nodes in sibling branches.
-const MAX_REGION_WORK: usize = MAX_POINTS;
+pub(crate) const MAX_REGION_WORK: usize = MAX_POINTS;
 
 const TA_RIGHT: u32 = 2;
 const TA_CENTER: u32 = 6;
@@ -183,7 +183,7 @@ thread_local! {
     static NESTING: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 /// Metafile images inside metafile images, at most.
-const MAX_NESTING: usize = 3;
+pub(crate) const MAX_NESTING: usize = 3;
 
 #[derive(Clone)]
 enum Obj {

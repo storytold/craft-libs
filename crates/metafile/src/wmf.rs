@@ -179,11 +179,10 @@ fn record(cv: &mut Canvas, func: u16, r: Bytes) {
     };
 }
 
-/// Records that change nothing the picture keeps: stretch and relative-absolute modes, character
-/// spacing and justification, mapper flags, offsets and scales of the window and viewport (not
-/// applied), palettes, the brush origin and escapes.
-const IGNORED: &[u16] =
-    &[0x0105, 0x0107, 0x0108, 0x020A, 0x020F, 0x0211, 0x0410, 0x0412, 0x0231, 0x0234, 0x0035, 0x0037, 0x0139, 0x0436, 0x0626, 0x0220, 0x0228, 0x0229];
+/// Records that change nothing the picture keeps: relative-absolute and stretch modes, character
+/// spacing and justification, mapper flags, palettes, escapes and the layout. Every other record
+/// the reader does not play is counted as skipped.
+const IGNORED: &[u16] = &[0x0105, 0x0107, 0x0108, 0x020A, 0x0231, 0x0234, 0x0035, 0x0037, 0x0139, 0x0436, 0x0626, 0x0149];
 
 /// A 16-bit WMF handle as a canvas object index: stock objects are `0x8000 | index`, which the
 /// canvas reads with the 32-bit stock flag.
