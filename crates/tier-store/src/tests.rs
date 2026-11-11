@@ -1,6 +1,8 @@
 #![allow(clippy::expect_used)]
 
-use crate::{DefaultTierCoordinator, DefaultTierPolicy, ExternalVolume, MirrorStore, StoreKey, TierCoordinator, VersionedMirror, sanitize_app_segment};
+use crate::{
+    DefaultTierCoordinator, DefaultTierPolicy, ExternalVolume, MirrorStore, StoreKey, TierCoordinator, VersionedMirror, sanitize_app_segment,
+};
 
 #[test]
 fn mirror_round_trip_and_pending_flush() {

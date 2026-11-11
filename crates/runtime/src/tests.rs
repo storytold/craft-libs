@@ -155,7 +155,8 @@ fn a_failed_flush_ack_restores_the_write_with_its_original_bytes() {
     let revision = exported[0].revision;
 
     // The host failed to persist it: ack with persisted: false.
-    runtime.handle_host_message(HostMessage::StorageFlushAck { results: vec![FlushAckResult { key: "config/a".into(), revision, persisted: false }] });
+    runtime
+        .handle_host_message(HostMessage::StorageFlushAck { results: vec![FlushAckResult { key: "config/a".into(), revision, persisted: false }] });
 
     // The write must be queued again, with the real bytes, for the next flush attempt.
     let retried = runtime.handle_host_message(HostMessage::StorageFlush);
@@ -183,7 +184,10 @@ fn a_successful_flush_ack_marks_the_write_saved() {
     runtime.handle_host_message(HostMessage::StorageFlushAck { results: vec![FlushAckResult { key: "config/a".into(), revision, persisted: true }] });
 
     let second = runtime.handle_host_message(HostMessage::StorageFlush);
-    assert!(matches!(second.as_slice(), [WorkerMessage::StorageFlushed { pending_count: 0, .. }]), "a saved write must not be re-exported, got {second:?}");
+    assert!(
+        matches!(second.as_slice(), [WorkerMessage::StorageFlushed { pending_count: 0, .. }]),
+        "a saved write must not be re-exported, got {second:?}"
+    );
 }
 
 /// Before any acknowledgment arrives, the exported write must stay recoverable across an
@@ -206,7 +210,8 @@ fn an_unacknowledged_export_survives_an_intervening_empty_flush() {
 
     // The host now reports the original export failed. It must still be recoverable, with its
     // real bytes, even though a flush happened in between.
-    runtime.handle_host_message(HostMessage::StorageFlushAck { results: vec![FlushAckResult { key: "config/a".into(), revision, persisted: false }] });
+    runtime
+        .handle_host_message(HostMessage::StorageFlushAck { results: vec![FlushAckResult { key: "config/a".into(), revision, persisted: false }] });
     let retried = runtime.handle_host_message(HostMessage::StorageFlush);
     let [WorkerMessage::StorageFlushed { pending_count, pending }] = retried.as_slice() else {
         panic!("expected StorageFlushed, got {retried:?}");

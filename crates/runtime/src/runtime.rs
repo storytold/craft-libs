@@ -265,7 +265,12 @@ impl Runtime {
                 let pending_count = pending.len();
                 let pending_msg = pending
                     .iter()
-                    .map(|write| PendingFlushEntry { key: write.key.0.clone(), bytes: write.bytes.clone(), deleted: write.deleted, revision: write.revision })
+                    .map(|write| PendingFlushEntry {
+                        key: write.key.0.clone(),
+                        bytes: write.bytes.clone(),
+                        deleted: write.deleted,
+                        revision: write.revision,
+                    })
                     .collect();
                 self.exported_pending.extend(pending);
                 vec![WorkerMessage::StorageFlushed { pending_count, pending: Some(pending_msg) }]
