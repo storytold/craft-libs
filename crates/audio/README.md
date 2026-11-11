@@ -31,7 +31,7 @@ No default features. The shared types (`AudioBuffer`, `AudioInfo`, `ChannelLayou
 | `encode` | every encoder: the WAV, AIFF and FLAC file writers, and the AAC, ALAC and AC-3/E-AC-3 packet encoders | `lossless-encode`, `aac-encode`, `alac-encode`, `ac3-encode`, `eac3-encode` |
 | `lossless-encode` | WAV, AIFF and FLAC writing | `pcm-encode`, `flac-encode` |
 | `pcm-encode` | `encode`, `FileEncoder` for WAV and AIFF; `wav_float_header` | none |
-| `flac-encode` | `encode`, `FileEncoder` for FLAC | craft-media `bitstream` |
+| `flac-encode` | `encode`, `FileEncoder` for FLAC; `flac::Encoder`, the packet encoder for callers that mux FLAC themselves | craft-media `bitstream` |
 | `aac-decode`, `aac-encode` | `aac::Decoder`, `aac::Encoder` | craft-media `bitstream` |
 | `alac-decode` | `alac::Decoder` | none |
 | `alac-encode` | `alac::Encoder` | none |

@@ -13,18 +13,30 @@ use super::predict::{Effort, Subframe};
 /// Byte offset of the 34-byte STREAMINFO body in [`Encoder::header`].
 pub const STREAMINFO_OFFSET: u64 = 8;
 
+/// Why the encoder refused a configuration or a block of samples.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
+    /// The configuration is outside what FLAC can code; the text names the field.
     #[error("invalid configuration: {0}")]
     InvalidConfig(&'static str),
+    /// A block had a different number of channels than the configuration.
     #[error("expected {expected} channels, got {got}")]
-    Channels { expected: usize, got: usize },
+    Channels {
+        /// The configured channel count.
+        expected: usize,
+        /// The channels in the block.
+        got: usize,
+    },
+    /// The channels of a block differ in length.
     #[error("channels of unequal length")]
     UnequalChannels,
+    /// A sample is outside the configured sample size.
     #[error("sample {0} does not fit the configured sample size")]
     SampleRange(i32),
 }
 
+/// What to encode and how hard to try.
 #[derive(Clone, Debug)]
 pub struct EncoderConfig {
     /// 1 to 1 048 575 Hz.
@@ -41,11 +53,14 @@ pub struct EncoderConfig {
 }
 
 impl EncoderConfig {
+    /// 4096-sample blocks at level 5.
     pub fn new(sample_rate: u32, channels: u8, bits_per_sample: u8) -> Self {
         EncoderConfig { sample_rate, channels, bits_per_sample, block_size: 4096, level: 5 }
     }
 }
 
+/// The packet encoder: [`Encoder::header`], then frames from [`Encoder::encode`] and
+/// [`Encoder::finish`], then [`Encoder::streaminfo`] over [`STREAMINFO_OFFSET`].
 pub struct Encoder {
     cfg: EncoderConfig,
     effort: Effort,
@@ -61,6 +76,7 @@ pub struct Encoder {
 }
 
 impl Encoder {
+    /// An encoder for `cfg`, or [`Error::InvalidConfig`] when FLAC cannot code it.
     pub fn new(cfg: EncoderConfig) -> Result<Self, Error> {
         if !(1..=8).contains(&cfg.channels) {
             return Err(Error::InvalidConfig("1 to 8 channels"));
@@ -172,6 +188,12 @@ impl Encoder {
             p.drain(..at);
         }
         Ok(out)
+    }
+
+    /// Samples per channel waiting for a full block: the length of the frame [`Encoder::finish`]
+    /// would write.
+    pub fn pending_samples(&self) -> usize {
+        self.pending.first().map_or(0, Vec::len)
     }
 
     /// Encode what is left as a final, shorter frame.
