@@ -152,6 +152,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-vectorcraft-format`](crates/vectorcraft-format/README.md): the envelope of VectorCraft's
   `.vectorcraft` file: its members, versions, embedded images and the data after the JSON, with the
   document as a type parameter. The document and its migrations stay in VectorCraft.
+- [`craft-vectordrawable`](crates/vectordrawable/src/lib.rs): Android Vector Drawable writer: a model of
+  paths, groups, clip outlines, strokes and linear, radial and sweep gradients; the XML as Android
+  Studio formats it; and the mapping of a gradient on any affine frame to what a drawable can say.
+  What a drawable cannot draw is the caller's to bake in or leave out. No reader.
 - [`craft-web-api`](crates/web-api/README.md): the page command API every Craft web build offers its page — one
   `window.<app>` shape (`request`, `execute`, `commands`, `docInspect`, `uiInspect`, `screenshot`) over the app's
   JSON control channel.
