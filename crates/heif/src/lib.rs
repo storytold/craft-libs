@@ -58,12 +58,24 @@ pub struct Options {
     pub max_pixels: u64,
     /// Apply the container's rotation, mirror and crop (`irot`/`imir`/`clap`).
     pub apply_transforms: bool,
+    /// Whose chroma upsampling to match.
+    pub chroma: Chroma,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { max_pixels: 1 << 28, apply_transforms: true }
+        Options { max_pixels: 1 << 28, apply_transforms: true, chroma: Chroma::Libheif }
     }
+}
+
+/// How 4:2:0 and 4:2:2 chroma is brought to full resolution. The two differ only next to sharp
+/// colour edges, where Apple's blends the neighbouring column and, for 4:2:0, the neighbouring row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Chroma {
+    /// libheif: each chroma sample covers its luma block, blended only after an odd `clap` crop.
+    Libheif,
+    /// Apple's decoder (and so Photoshop on macOS): a left-sited bilinear filter.
+    Apple,
 }
 
 /// How the file describes its colour: the code points of ITU-T H.273, from the `colr` `nclx`
@@ -337,7 +349,11 @@ fn decode_item(ctx: &Context<'_>, id: u32, options: &Options, with_alpha: bool) 
         }
         _ => return Err(Error::Limit(format!("the image canvas is {w}x{h}, beyond the {limit}-pixel limit"))),
     }
-    let mode = if options.apply_transforms && orient::odd_crop(w, h, &p.transforms)? { ycc::Upsampling::Bilinear } else { ycc::Upsampling::Nearest };
+    let mode = match options.chroma {
+        Chroma::Apple => ycc::Upsampling::Sited,
+        Chroma::Libheif if options.apply_transforms && orient::odd_crop(w, h, &p.transforms)? => ycc::Upsampling::Bilinear,
+        Chroma::Libheif => ycc::Upsampling::Nearest,
+    };
     let mut data = ycc::to_rgb16(&planes, signal, alpha_id.is_some(), mode)
         .ok_or_else(|| Error::Malformed("the decoded pictures don't cover the image".into()))?;
     if let Some(aux) = alpha_id {
