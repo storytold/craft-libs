@@ -198,3 +198,159 @@ fn too_many_transform_properties_are_refused() {
     let d = decode(&bytes, &Options::default()).unwrap();
     assert_eq!((d.width, d.height), (32, 32));
 }
+
+/// A coded picture holds whole coding blocks, so a camera may code more rows than it shows and
+/// leave the real size to `ispe`: Sony writes 1920 × 1080 as 1920 × 1088 and no SPS conformance
+/// window says so. The padding must not reach the caller, and `decode` must agree with `probe`.
+#[test]
+fn a_picture_coded_larger_than_its_ispe_is_cropped() {
+    let mut bytes = build(&Spec { props: vec![FULL_601], ..Spec::new(32, 32, &grey) });
+    // The single picture's `ispe` declares 32 × 32; make it 32 × 24, leaving the coded picture
+    // (and every other box) alone, exactly as a camera's bottom padding looks.
+    let want: Vec<u8> = b"ispe".iter().copied().chain([0, 0, 0, 0]).chain(32u32.to_be_bytes()).chain(32u32.to_be_bytes()).collect();
+    let at = bytes.windows(want.len()).position(|w| w == want).expect("the 32 x 32 ispe");
+    let height = at + b"ispe".len() + 4 + 4;
+    bytes[height..height + 4].copy_from_slice(&24u32.to_be_bytes());
+
+    let info = probe(&bytes).unwrap();
+    assert_eq!((info.width, info.height), (32, 24));
+    let d = decode(&bytes, &Options::default()).unwrap();
+    assert_eq!((d.width, d.height), (32, 24), "decode must agree with probe");
+    // What survives is the top-left corner, sample for sample.
+    for y in 0..24 {
+        for x in 0..32 {
+            let px = &d.data[((y * 32 + x) * 3) as usize..][..3];
+            assert_eq!(px, [luma(x, y) * 257; 3], "({x}, {y})");
+        }
+    }
+}
+
+/// The width crop is the one that moves samples: `to_declared` compacts each kept row to the left,
+/// where a height-only crop just drops the tail. A portrait file takes this path after `irot`.
+#[test]
+fn a_width_crop_realigns_every_row() {
+    let mut bytes = build(&Spec { props: vec![FULL_601], ..Spec::new(32, 32, &grey) });
+    let want: Vec<u8> = b"ispe".iter().copied().chain([0, 0, 0, 0]).chain(32u32.to_be_bytes()).chain(32u32.to_be_bytes()).collect();
+    let at = bytes.windows(want.len()).position(|w| w == want).expect("the 32 x 32 ispe");
+    let width = at + b"ispe".len() + 4;
+    bytes[width..width + 4].copy_from_slice(&24u32.to_be_bytes());
+
+    let info = probe(&bytes).unwrap();
+    assert_eq!((info.width, info.height), (24, 32));
+    let d = decode(&bytes, &Options::default()).unwrap();
+    assert_eq!((d.width, d.height), (24, 32), "decode must agree with probe");
+    // Every row must have kept its own left-hand samples, not slid along from the next row.
+    for y in 0..32 {
+        for x in 0..24 {
+            let px = &d.data[((y * 24 + x) * 3) as usize..][..3];
+            assert_eq!(px, [luma(x, y) * 257; 3], "({x}, {y})");
+        }
+    }
+}
+
+/// Both edges at once, so the row compaction and the row drop run together.
+#[test]
+fn a_crop_on_both_edges_keeps_the_corner() {
+    let mut bytes = build(&Spec { props: vec![FULL_601], ..Spec::new(32, 32, &grey) });
+    let want: Vec<u8> = b"ispe".iter().copied().chain([0, 0, 0, 0]).chain(32u32.to_be_bytes()).chain(32u32.to_be_bytes()).collect();
+    let at = bytes.windows(want.len()).position(|w| w == want).expect("the 32 x 32 ispe");
+    let width = at + b"ispe".len() + 4;
+    bytes[width..width + 4].copy_from_slice(&20u32.to_be_bytes());
+    bytes[width + 4..width + 8].copy_from_slice(&12u32.to_be_bytes());
+
+    let d = decode(&bytes, &Options::default()).unwrap();
+    assert_eq!((d.width, d.height), (20, 12));
+    for y in 0..12 {
+        for x in 0..20 {
+            let px = &d.data[((y * 20 + x) * 3) as usize..][..3];
+            assert_eq!(px, [luma(x, y) * 257; 3], "({x}, {y})");
+        }
+    }
+}
+
+/// Every `ispe` in a built file, in the order they were written: the primary image's first, then
+/// each auxiliary image's. Each is (offset of its width field, width, height).
+fn ispe_fields(bytes: &[u8]) -> Vec<(usize, u32, u32)> {
+    let mut out = Vec::new();
+    for i in 0..bytes.len().saturating_sub(16) {
+        if &bytes[i..i + 4] == b"ispe" && bytes[i + 4..i + 8] == [0, 0, 0, 0] {
+            let g = |o: usize| u32::from_be_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]);
+            out.push((i + 8, g(i + 8), g(i + 12)));
+        }
+    }
+    out
+}
+
+fn set_ispe(bytes: &mut [u8], at: usize, w: u32, h: u32) {
+    bytes[at..at + 4].copy_from_slice(&w.to_be_bytes());
+    bytes[at + 4..at + 8].copy_from_slice(&h.to_be_bytes());
+}
+
+/// An alpha image is its own coded item, so it may pad its declared size differently from the
+/// picture's. What has to agree is what the two declare; the padding comes off both.
+#[test]
+fn an_alpha_padded_on_its_own_still_lines_up() {
+    let alpha = |x: u32, _: u32| (x * 4) as u16;
+    let mut bytes = build(&Spec { props: vec![FULL_601], alpha: Some(&alpha), ..Spec::new(32, 32, &grey) });
+    // Both items code 32 x 32; declare 32 x 24 for each, as a camera's bottom padding looks.
+    let f = ispe_fields(&bytes);
+    assert_eq!(f.len(), 2, "one ispe for the picture and one for the alpha: {f:?}");
+    for (at, _, _) in f {
+        set_ispe(&mut bytes, at, 32, 24);
+    }
+    let d = decode(&bytes, &Options::default()).unwrap();
+    assert_eq!((d.width, d.height), (32, 24));
+    assert!(d.has_alpha);
+    assert_eq!(d.data.len(), 32 * 24 * 4);
+    // the alpha ramp still sits under the right columns, on the last kept row as on the first
+    for y in [0u32, 23] {
+        for x in [0u32, 10, 31] {
+            let i = ((y * 32 + x) * 4) as usize;
+            assert_eq!(d.data[i + 3], alpha(x, y) * 257, "alpha at ({x}, {y})");
+            assert_eq!(d.data[i..i + 3], [luma(x, y) * 257; 3], "colour at ({x}, {y})");
+        }
+    }
+}
+
+/// Two different declared sizes are two different images, which would need resampling.
+#[test]
+fn an_alpha_declaring_another_size_is_unsupported() {
+    let alpha = |x: u32, _: u32| (x * 4) as u16;
+    let mut bytes = build(&Spec { props: vec![FULL_601], alpha: Some(&alpha), ..Spec::new(32, 32, &grey) });
+    let f = ispe_fields(&bytes);
+    set_ispe(&mut bytes, f[0].0, 32, 24);
+    set_ispe(&mut bytes, f[1].0, 32, 20);
+    let r = decode(&bytes, &Options::default());
+    assert!(matches!(r, Err(Error::Unsupported(m)) if m.contains("alpha")), "{r:?}");
+}
+
+/// The other way round -- a declared size larger than the coded picture -- is a broken file, not
+/// something to pad out.
+#[test]
+fn an_ispe_larger_than_the_coded_picture_is_malformed() {
+    let mut bytes = build(&Spec { props: vec![FULL_601], ..Spec::new(32, 32, &grey) });
+    let want: Vec<u8> = b"ispe".iter().copied().chain([0, 0, 0, 0]).chain(32u32.to_be_bytes()).chain(32u32.to_be_bytes()).collect();
+    let at = bytes.windows(want.len()).position(|w| w == want).expect("the 32 x 32 ispe");
+    let height = at + b"ispe".len() + 4 + 4;
+    bytes[height..height + 4].copy_from_slice(&64u32.to_be_bytes());
+    let r = decode(&bytes, &Options::default());
+    assert!(matches!(r, Err(Error::Malformed(ref m)) if m.contains("declares")), "{r:?}");
+}
+
+/// The crop happens before the container's transforms, which are defined on the declared size:
+/// a quarter turn of a picture coded 32 × 32 but declared 32 × 24 is 24 × 32, not 32 × 32.
+#[test]
+fn the_ispe_crop_precedes_the_transforms() {
+    let mut bytes = build(&Spec { props: vec![FULL_601, Prop::Irot(1)], ..Spec::new(32, 32, &grey) });
+    let want: Vec<u8> = b"ispe".iter().copied().chain([0, 0, 0, 0]).chain(32u32.to_be_bytes()).chain(32u32.to_be_bytes()).collect();
+    let at = bytes.windows(want.len()).position(|w| w == want).expect("the 32 x 32 ispe");
+    let height = at + b"ispe".len() + 4 + 4;
+    bytes[height..height + 4].copy_from_slice(&24u32.to_be_bytes());
+    let d = decode(&bytes, &Options::default()).unwrap();
+    assert_eq!((d.width, d.height), (24, 32));
+    // Counter-clockwise: the right column of the cropped picture becomes the top row.
+    for x in 0..24u32 {
+        let px = &d.data[(x as usize) * 3..][..3];
+        assert_eq!(px, [luma(31, x) * 257; 3], "({x}, 0)");
+    }
+}

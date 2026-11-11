@@ -240,13 +240,22 @@ pub fn to_rgb16(planes: &Planes<'_>, signal: Signal, alpha: bool, mode: Upsampli
 }
 
 /// Writes an alpha picture's luma, full range, into channel 3 of `rgba`.
-pub fn put_alpha(planes: &Planes<'_>, rgba: &mut [u16]) -> Option<()> {
+/// Writes `planes`' luma into the alpha channel of `rgba`, whose rows are `width` pixels wide.
+///
+/// The alpha image may be coded larger than the picture it belongs to, the way a picture can be
+/// coded larger than its `ispe` (see [`crate::orient::to_declared`]); its top-left `width`
+/// columns are the ones that line up, so the rest of each row is skipped rather than shifting
+/// the alpha across the picture.
+pub fn put_alpha(planes: &Planes<'_>, rgba: &mut [u16], width: usize) -> Option<()> {
     let (w, h) = planes.size();
+    if width == 0 || w < width || rgba.len() % (width * 4) != 0 || h < rgba.len() / (width * 4) {
+        return None;
+    }
     let max = ((1u32 << u32::from(planes.bit_depth()).clamp(1, 16)) - 1) as f32;
     let mut luma = vec![0u16; w];
-    for (y, row) in rgba.chunks_exact_mut(w * 4).enumerate().take(h) {
+    for (y, row) in rgba.chunks_exact_mut(width * 4).enumerate().take(h) {
         planes.luma_row(y, &mut luma)?;
-        for (px, &a) in row.as_chunks_mut::<4>().0.iter_mut().zip(&luma) {
+        for (px, &a) in row.as_chunks_mut::<4>().0.iter_mut().zip(&luma[..width]) {
             let v = (f32::from(a) / max).clamp(0.0, 1.0);
             px[3] = (v * 65535.0 + 0.5) as u16;
         }
@@ -340,8 +349,16 @@ mod tests {
         let f = frame(2, 2, 8, ChromaFormat::Yuv420, 128, 128, 128);
         let mut v = to_rgb16(&Planes::Picture(&f), Signal { matrix: 6, full_range: true }, true, Upsampling::Nearest).unwrap();
         assert_eq!(v[3], 65535);
-        put_alpha(&Planes::Picture(&frame(2, 2, 8, ChromaFormat::Monochrome, 51, 0, 0)), &mut v).unwrap();
+        put_alpha(&Planes::Picture(&frame(2, 2, 8, ChromaFormat::Monochrome, 51, 0, 0)), &mut v, 2).unwrap();
         assert_eq!(v[3], 51 * 257);
+        // an alpha coded wider than the picture lines up on its left columns, not across the row
+        let wide = frame(4, 2, 8, ChromaFormat::Monochrome, 0, 0, 0);
+        let mut wide = wide;
+        wide.y = vec![10, 20, 99, 99, 30, 40, 99, 99];
+        put_alpha(&Planes::Picture(&wide), &mut v, 2).unwrap();
+        assert_eq!([v[3], v[7], v[11], v[15]], [10 * 257, 20 * 257, 30 * 257, 40 * 257]);
+        // an alpha narrower than the picture has no such alignment: refused, not stretched
+        assert!(put_alpha(&Planes::Picture(&frame(1, 2, 8, ChromaFormat::Monochrome, 51, 0, 0)), &mut v, 2).is_none());
         let mut short = frame(4, 4, 8, ChromaFormat::Yuv420, 128, 128, 128);
         short.y.truncate(5);
         assert!(to_rgb16(&Planes::Picture(&short), Signal { matrix: 6, full_range: true }, false, Upsampling::Bilinear).is_none());

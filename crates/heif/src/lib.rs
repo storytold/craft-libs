@@ -352,25 +352,39 @@ fn decode_item(ctx: &Context<'_>, id: u32, options: &Options, with_alpha: bool) 
         }
         _ => return Err(Error::Limit(format!("the image canvas is {w}x{h}, beyond the {limit}-pixel limit"))),
     }
+    // The transforms apply to the picture at its declared size, so the `clap` parity that
+    // decides the upsampling is measured there, not on the coded picture.
+    let (dw, dh) = (cw as usize, ch as usize);
     let mode = match options.chroma {
         Chroma::Apple => ycc::Upsampling::Sited,
-        Chroma::Libheif if options.apply_transforms && orient::odd_crop(w, h, &p.transforms)? => ycc::Upsampling::Bilinear,
+        Chroma::Libheif if options.apply_transforms && orient::odd_crop(dw, dh, &p.transforms)? => ycc::Upsampling::Bilinear,
         Chroma::Libheif => ycc::Upsampling::Nearest,
     };
-    let mut data = ycc::to_rgb16(&planes, signal, alpha_id.is_some(), mode)
+    let data = ycc::to_rgb16(&planes, signal, alpha_id.is_some(), mode)
         .ok_or_else(|| Error::Malformed("the decoded pictures don't cover the image".into()))?;
-    if let Some(aux) = alpha_id {
-        let ap = ctx.props(aux).map_err(err)?;
-        let alpha = Coded::decode(ctx, aux, &ap, limit)?;
-        let alpha_planes = alpha.planes()?;
-        if alpha_planes.size() != (w, h) {
-            return Err(Error::Unsupported("an alpha image of a different size than the picture"));
-        }
-        ycc::put_alpha(&alpha_planes, &mut data).ok_or_else(|| Error::Malformed("the alpha image is incomplete".into()))?;
-    }
     let bit_depth = planes.bit_depth();
     let has_alpha = alpha_id.is_some();
     let mut img = orient::Pixels { width: w, height: h, ch: if has_alpha { 4 } else { 3 }, data };
+    // A coded picture is a whole number of coding blocks and may be larger than the image the
+    // container declares (Sony codes 1920 x 1080 as 1920 x 1088 and writes no SPS conformance
+    // window). Crop to `ispe` before the alpha merge and the transforms, both of which are
+    // defined on that size, so decoding agrees with [`probe`] instead of handing back the
+    // encoder's padding.
+    img = orient::to_declared(img, dw, dh)?;
+    if let Some(aux) = alpha_id {
+        let ap = ctx.props(aux).map_err(err)?;
+        // The alpha is a coded item of its own: it declares its own size and may pad it to whole
+        // coding blocks differently from the picture. What has to agree is what the two declare,
+        // not how either is coded; the padding comes off both the same way. Checked before the
+        // alpha is decoded, so a mismatch costs nothing.
+        if ctx.coded_size(aux, &ap).map_err(err)? != (cw, ch) {
+            return Err(Error::Unsupported("an alpha image of a different size than the picture"));
+        }
+        let alpha = Coded::decode(ctx, aux, &ap, limit)?;
+        let alpha_planes = alpha.planes()?;
+        // `put_alpha` refuses a plane that does not cover the declared size.
+        ycc::put_alpha(&alpha_planes, &mut img.data, dw).ok_or_else(|| Error::Malformed("the alpha image is incomplete".into()))?;
+    }
     if options.apply_transforms {
         img = orient::apply(img, &p.transforms)?;
     }
