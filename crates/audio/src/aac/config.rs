@@ -505,6 +505,7 @@ mod tests {
         for sf_index in 13..=15 {
             let asc = AudioSpecificConfig::lc(sf_index, 2);
             assert_eq!(asc.sample_rate, 0);
+            #[cfg(feature = "aac-decode")]
             assert!(crate::aac::Decoder::from_config(asc).is_err());
         }
     }

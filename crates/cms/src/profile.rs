@@ -406,22 +406,22 @@ fn encode_pcs(pcs: Pcs, kind: LutKind) -> Stage {
 
 // ---------------------------------------------------------------- reader
 
-struct Reader<'a> {
-    b: &'a [u8],
+pub(crate) struct Reader<'a> {
+    pub(crate) b: &'a [u8],
 }
 
 impl<'a> Reader<'a> {
-    fn slice(&self, off: usize, len: usize) -> Result<&'a [u8], CmsError> {
+    pub(crate) fn slice(&self, off: usize, len: usize) -> Result<&'a [u8], CmsError> {
         off.checked_add(len).and_then(|end| self.b.get(off..end)).ok_or(CmsError::Truncated)
     }
     fn u8(&self, off: usize) -> Result<u8, CmsError> {
         self.b.get(off).copied().ok_or(CmsError::Truncated)
     }
-    fn u16(&self, off: usize) -> Result<u16, CmsError> {
+    pub(crate) fn u16(&self, off: usize) -> Result<u16, CmsError> {
         let s = self.slice(off, 2)?;
         Ok(u16::from_be_bytes([s[0], s[1]]))
     }
-    fn u32(&self, off: usize) -> Result<u32, CmsError> {
+    pub(crate) fn u32(&self, off: usize) -> Result<u32, CmsError> {
         let s = self.slice(off, 4)?;
         Ok(u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
     }
