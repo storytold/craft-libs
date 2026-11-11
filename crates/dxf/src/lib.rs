@@ -427,6 +427,12 @@ impl<'a> Cur<'a> {
     }
 }
 
+/// Room for `more` tags, with an allocation that can fail: a binary file of empty strings (3 bytes a
+/// tag) can ask for many gigabytes, and a refusal must be an error, not an abort.
+fn reserve_tags(tags: &mut Vec<Tag>, more: usize) -> Result<()> {
+    tags.try_reserve(more).map_err(|_| DxfError::OutOfMemory { tags: tags.len().saturating_add(more) })
+}
+
 /// Binary DXF (R13+: 2-byte group codes).
 pub fn parse_binary(b: &[u8]) -> Result<Vec<Tag>> {
     parse_binary_with_limit(b, max_tags())
@@ -470,6 +476,7 @@ fn parse_binary_pass(b: &[u8], max_tags: usize, text: &mut codepage::BinaryText)
             }
         };
         let eof = code == 0 && matches!(&v, Value::Str(s) if s.trim_end() == "EOF");
+        reserve_tags(&mut tags, 1)?;
         tags.push(Tag { code, value: v });
         if tags.len() > max_tags {
             return Err(DxfError::TooLarge { tags: tags.len(), limit: max_tags });
@@ -913,6 +920,22 @@ mod limit_tests {
         assert_eq!(max_tags_from(Some(" 400_000_000 ")), 400_000_000);
         // Issue #1948: the default must admit a DXF rendition well above 50 million group codes.
         const { assert!(MAX_TAGS >= 100_000_000) };
+    }
+
+    #[test]
+    fn a_refused_reservation_of_binary_tags_is_an_error() {
+        let mut tags = Vec::new();
+        reserve_tags(&mut tags, 1).unwrap();
+        let e = reserve_tags(&mut tags, usize::MAX).unwrap_err();
+        assert!(matches!(e, DxfError::OutOfMemory { tags: usize::MAX }), "{e}");
+        // Ordinary binary files still read: two tags (code 0 "SECTION", code 0 "EOF").
+        let mut b = Vec::new();
+        for text in ["SECTION", "EOF"] {
+            b.extend_from_slice(&0i16.to_le_bytes());
+            b.extend_from_slice(text.as_bytes());
+            b.push(0);
+        }
+        assert_eq!(parse_binary(&b).unwrap().len(), 2);
     }
 
     #[test]
