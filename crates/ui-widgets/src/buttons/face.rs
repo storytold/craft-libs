@@ -97,9 +97,12 @@ pub(super) fn surface(cx: &StyleCx<'_>, parts: &VariantParts) -> SurfaceLook {
 }
 
 /// The surface of a button that shows the on look while on: the variant's surface, with the on plate and edge in
-/// place of its fill and edge while on.
+/// place of its fill and edge while on, and a raised surface drawn pressed in while on.
 pub(super) fn on_surface(cx: &StyleCx<'_>, off: &VariantParts, on: &VariantParts) -> SurfaceLook {
     let mut look = surface(cx, off);
+    if look.kind.is_some() {
+        look = look.kind_on(SurfaceKind::Pressed);
+    }
     look.fill = off.fill.clone().on(on.fill.off);
     look.border = off.edge.clone().map(|edge| edge.on(on.edge.as_ref().map_or(on.fill.off, |edge| edge.off)));
     look

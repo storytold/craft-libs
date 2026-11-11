@@ -219,7 +219,12 @@ impl Component for Segment {
         let ink = Stateful::new(muted).off(States::new(muted, muted, muted, off)).on(States::new(on_selected, on_selected, on_selected, off));
         let control = cx.segment_control();
         SegmentStyle {
-            surface: SurfaceLook::new(fill).radius(UiTokens::corner(cx.tokens.shape.radius.control)).border(edge, cx.tokens.stroke.thin),
+            // The selected segment rises: a bevelled theme draws the raised bevel, a flat one the edge alone.
+            surface: SurfaceLook::new(fill)
+                .kind_on(SurfaceKind::Raised)
+                .radius(UiTokens::corner(cx.tokens.shape.radius.control))
+                .border(edge, cx.tokens.stroke.thin)
+                .border_replaces_edge(),
             metrics: control.metrics(),
             focus: face::focus(cx),
             text: TextLook::new(TypeRole::Label, ink.clone()),
