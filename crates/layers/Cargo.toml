@@ -1,0 +1,40 @@
+[package]
+name = "craft-layers"
+description = "The Layers panel for Craft apps over the app's layer tree: rows, thumbnails, blend and lock rows, the filter bar and the panel options."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lib]
+# Every test lives in the `it` integration binary, so `cargo test` builds the library once.
+test = false
+
+[lints]
+workspace = true
+
+# UI-only: egui and craft-ui are plain dependencies, so there is no `ui` feature.
+[features]
+default = []
+# The stories, `mock` and the integration tests (`tests/it`).
+screen-testing = ["craft-ui/testing"]
+
+[dependencies]
+craft-behavior = { workspace = true }
+craft-i18n = { workspace = true }
+craft-keymap = { workspace = true }
+craft-theme = { workspace = true }
+craft-ui = { workspace = true }
+egui = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+egui = { workspace = true }
+serde_json = { workspace = true }
+
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+harness = false
+required-features = ["screen-testing"]
