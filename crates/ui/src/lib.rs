@@ -21,7 +21,7 @@ pub use craft_ui_widgets::{
     tile_grid, value_drag,
 };
 
-/// `Inspector`, `CommandPalette`, `PreferencesWindow`, `DebugInspector`, `DockArea`, `DockPanels`, `PanelSpec`,
+/// `Inspector`, `CommandPalette`, `PreferencesWindow`, `DockArea`, `DockPanels`, `PanelSpec`,
 /// `NavigatorPanel` and the other patterns.
 pub mod patterns {
     pub use craft_ui_patterns::patterns::*;

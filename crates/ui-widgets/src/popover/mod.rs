@@ -1,4 +1,4 @@
-//! Overlay components: `Popover`, `PopupList`, `Tooltip`, `DragBadge` and `DropVeil`.
+//! Overlay components: `Popover`, `PopupList`, `Tooltip` and `DropVeil`.
 
 mod anchored;
 mod drop_veil;

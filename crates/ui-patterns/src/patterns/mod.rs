@@ -1,4 +1,4 @@
-//! `Inspector`, `CommandPalette`, `PreferencesWindow`, `DebugInspector`, `DockArea`, `DockPanels`, `PanelSpec` and the other patterns.
+//! `Inspector`, `CommandPalette`, `PreferencesWindow`, `DockArea`, `DockPanels`, `PanelSpec` and the other patterns.
 
 pub mod dock;
 pub mod form_dialogs;
