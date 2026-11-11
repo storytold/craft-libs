@@ -4,10 +4,10 @@
 use crate::contract::{Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Input, MeasureCx, PaintUi, Pointer as _, Role, Styled as _};
 use crate::primitives::{PaintShape, StrokeWidth, glyph};
 use crate::runtime::focus::{ActivateKeys, KeyUse};
-use crate::style::{ComponentStyle, Flags, FocusLook, StyleColor, StyleCx, SurfaceKind};
+use crate::style::{ComponentStyle, FocusLook, StyleColor, StyleCx, SurfaceKind, SurfaceLook};
 use craft_behavior::{Metrics, Sense};
-use craft_theme::{Stateful, States, variant::Tone};
-use egui::{CornerRadius, Rect, Vec2};
+use craft_theme::Stateful;
+use egui::{Rect, Vec2};
 
 /// The mixed dash's half-length as a share of the box's side.
 const DASH: f32 = 0.25;
@@ -20,13 +20,10 @@ pub struct CheckboxStyle {
     metrics: Metrics,
     #[style(focus)]
     focus: FocusLook,
-    /// The box fill.
-    fill: Stateful<StyleColor>,
-    /// The box edge.
-    edge: Stateful<StyleColor>,
+    /// The box.
+    well: SurfaceLook,
     /// The check mark and the dash.
     mark: Stateful<StyleColor>,
-    radius: CornerRadius,
     side: f32,
 }
 
@@ -56,18 +53,11 @@ impl Component for Checkbox<'_> {
 
     fn style(cx: &StyleCx<'_>, _: CheckboxStyleKey) -> CheckboxStyle {
         let control = cx.control();
-        let colors = &cx.tokens.color;
-        let solid = cx.color(colors.accent.solid);
-        let disabled = cx.color(colors.text.disabled);
-        let fill = super::well(cx).on(States::new(solid, solid, solid, disabled));
-        let edge = super::outline(cx).on(States::new(solid, solid, solid, disabled)).when(Flags::INVALID, cx.tone(Tone::Bad));
         CheckboxStyle {
             metrics: Metrics::new().min_size(Vec2::new(0.0, control.height)),
             focus: cx.focus_look(),
-            fill,
-            edge,
+            well: super::indicator(cx, cx.surface(SurfaceKind::Well).radius),
             mark: super::mark(cx),
-            radius: cx.surface(SurfaceKind::Well).radius,
             side: control.icon,
         }
     }
@@ -94,9 +84,7 @@ impl Component for Checkbox<'_> {
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let square = Rect::from_center_size(cx.rect.center(), Vec2::splat(cx.style.side));
         let draw = ui.draw();
-        let shape = PaintShape::Rect(square, cx.style.radius);
-        draw.fill(&shape, cx.resolve(&cx.style.fill));
-        draw.stroke(&shape, StrokeWidth::Medium, cx.resolve(&cx.style.edge));
+        draw.surface_look(square, &cx.style.well, cx.state());
         if cx.mixed {
             let c = square.center();
             let half = Vec2::new(cx.style.side * DASH, 0.0);

@@ -314,6 +314,12 @@ impl<'a> Draw<'a> {
         self.painter.extend(Surface::shapes(style, None, rect, Corners::All, self.env.direction, self.painter.pixels_per_point()));
     }
 
+    /// Paints `look` over `rect` in `state`, as the paint step paints a component's surface: a part's own surface (an
+    /// indicator's well) keeps the kind's edge and bevel.
+    pub fn surface_look(&self, rect: Rect, look: &crate::style::SurfaceLook, state: &crate::style::StateSet) {
+        self.painter.extend(surface_look_shapes(self.env.tokens, look, state, rect, self.env.direction, self.painter.pixels_per_point()));
+    }
+
     /// Fills `shape`.
     pub fn fill(&self, shape: &PaintShape, color: StyleColor) {
         self.paint(shape, Some(color.egui()), None);
@@ -401,4 +407,42 @@ pub(super) fn faded_painter(painter: &Painter, share: f32) -> Painter {
     let mut painter = painter.clone();
     painter.multiply_opacity(share);
     painter
+}
+
+/// The shapes of `look` over `rect` in `state`: the kind's surface (its edge and bevel) with the state fill, or the
+/// fill alone without a kind, then the state border.
+pub(crate) fn surface_look_shapes(
+    tokens: &UiTokens,
+    look: &crate::style::SurfaceLook,
+    state: &crate::style::StateSet,
+    rect: Rect,
+    direction: Direction,
+    ppp: f32,
+) -> Vec<egui::Shape> {
+    let fill = state.resolve(&look.fill);
+    let radius = look.corners.apply(look.radius, direction);
+    let mut shapes = match look.kind_in(state) {
+        Some(kind) => {
+            let mut style = surface_style(tokens, kind);
+            // A look that names its own radius (a capsule button) shapes the kind's fill and edge too, so no plate with the kind's corners shows outside it.
+            if look.radius != egui::CornerRadius::ZERO {
+                style.radius = look.radius;
+            }
+            if look.border_replaces_edge && matches!(style.edge, crate::style::SurfaceEdge::Border(_)) {
+                style.edge = crate::style::SurfaceEdge::None;
+            }
+            Surface::shapes(&style, Some(fill.egui()), rect, look.corners, direction, ppp)
+        }
+        None => super::StateLayer::shapes(super::StateLayerKind::Fill, fill, rect, radius, 0.0),
+    };
+    if let Some(border) = &look.border {
+        shapes.extend(super::StateLayer::shapes(super::StateLayerKind::Outline, state.resolve(border), rect, radius, look.border_width));
+    }
+    if let Some(inner) = look.inner.as_ref().map(|inner| state.resolve(inner)).filter(|inner| inner.egui().a() > 0) {
+        let inset = look.border_width;
+        let shrink = |r: u8| (f32::from(r) - inset).max(0.0).round() as u8;
+        let radius = CornerRadius { nw: shrink(radius.nw), ne: shrink(radius.ne), sw: shrink(radius.sw), se: shrink(radius.se) };
+        shapes.extend(super::StateLayer::shapes(super::StateLayerKind::Outline, inner, rect.shrink(inset), radius, look.border_width));
+    }
+    shapes
 }

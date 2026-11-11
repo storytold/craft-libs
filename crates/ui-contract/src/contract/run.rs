@@ -344,6 +344,7 @@ fn blank_core<'a>(
         scroll_moves: Vec::new(),
         value_parts: Default::default(),
         own_reset_parts: Default::default(),
+        state_layer_parts: Default::default(),
         toggles: Vec::new(),
         reset_part: None,
         root_sense: Sense::empty(),
@@ -715,6 +716,7 @@ fn run_in_host<C: Component>(p: &mut Pass<'_, '_, C>, ui: &mut Ui, host_at: Opti
     cx.core.active = cx.core.focus.part.filter(|part| results.contains_key(&(part.key, part.index)));
     cx.core.scroll_moves = super::cx::scroll_moves(&parts.scrolls, &results);
     cx.core.value_parts = declared_with(&parts, |extras| extras.value);
+    cx.core.state_layer_parts = declared_with(&parts, |extras| extras.state_layer);
     cx.core.toggles = parts
         .decls
         .iter()
@@ -823,6 +825,7 @@ fn run_in_host<C: Component>(p: &mut Pass<'_, '_, C>, ui: &mut Ui, host_at: Opti
     let mut values = AppValues::default();
     comp.content_env(cx, &mut values);
     steps::paint_surface(ui, env, cx);
+    steps::paint_part_layers(ui, env, cx);
     // Paint and content stay inside the rect (grown by the type's declared outset), however small the room is.
     let outer_clip = ui.clip_rect();
     let inside = cx.core.rect.expand(C::paint_outset(&env.tokens)).intersect(outer_clip);

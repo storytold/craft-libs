@@ -246,7 +246,7 @@ impl<K: Value + 'static> Component for BreadcrumbBar<'_, K> {
             }
         }
         if let Some(cell) = laid.ellipsis {
-            cx.part(HIDDEN, cell).sense(Sense::CLICK | Sense::FOCUS).focusable().tooltip(self.whole.clone()).toggles("hidden");
+            cx.part(HIDDEN, cell).sense(Sense::CLICK | Sense::FOCUS).focusable().state_layer().tooltip(self.whole.clone()).toggles("hidden");
         }
         for (at, (cell, cut)) in (hidden..total).zip(laid.cells.iter().copied()) {
             let part = cx.part(Self::part(at), cell);
@@ -257,7 +257,7 @@ impl<K: Value + 'static> Component for BreadcrumbBar<'_, K> {
                 }
             } else {
                 let tip = if cut { self.crumbs[at].label().clone() } else { self.whole.clone() };
-                part.sense(Sense::CLICK | Sense::FOCUS).focusable().tooltip(tip);
+                part.sense(Sense::CLICK | Sense::FOCUS).focusable().state_layer().tooltip(tip);
             }
         }
         self.laid = laid;

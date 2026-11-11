@@ -6,12 +6,12 @@ use crate::contract::{
     Bind, BindMut, Common, Component, Container, ContainerProps, Cx, Edit as _, EditResponse, GroupHandle, GroupKind, GroupState, Input, MeasureCx,
     PaintUi, Pointer as _, Props as _, Remember as _, Role, Styled as _, Validity,
 };
-use crate::primitives::{PaintShape, StrokeWidth, glyph};
+use crate::primitives::glyph;
 use crate::runtime::env::EnvValue;
 use crate::runtime::focus::{ActivateKeys, KeyUse};
-use crate::style::{ComponentStyle, Flags, FocusLook, StyleColor, StyleCx};
+use crate::style::{ComponentStyle, Flags, FocusLook, StyleColor, StyleCx, SurfaceLook};
 use craft_behavior::{Metrics, NavShape, Roving, Value};
-use craft_theme::{Stateful, States, variant::Tone};
+use craft_theme::Stateful;
 use egui::{CornerRadius, Rect, Vec2};
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
@@ -147,10 +147,8 @@ pub struct RadioStyle {
     #[style(focus)]
     focus: FocusLook,
     icon: f32,
-    /// The circle's fill.
-    fill: Stateful<StyleColor>,
-    /// The circle's outline.
-    ring: Stateful<StyleColor>,
+    /// The circle.
+    well: SurfaceLook,
     /// The mark inside a selected radio.
     dot: Stateful<StyleColor>,
 }
@@ -184,15 +182,11 @@ impl<T: Value + 'static> Component for Radio<T> {
 
     fn style(cx: &StyleCx<'_>, _: RadioStyleKey<T>) -> RadioStyle {
         let control = cx.control();
-        let colors = &cx.tokens.color;
-        let (solid, bad) = (cx.color(colors.accent.solid), cx.tone(Tone::Bad));
-        let disabled = cx.color(colors.text.disabled);
         RadioStyle {
             metrics: Metrics::new().min_size(Vec2::new(0.0, control.height)),
             focus: cx.focus_look(),
             icon: control.icon,
-            fill: super::well(cx).on(States::new(solid, solid, solid, disabled)),
-            ring: super::outline(cx).on(States::new(solid, solid, solid, disabled)).when(Flags::INVALID, bad),
+            well: super::indicator(cx, CornerRadius::from(control.icon / 2.0)),
             dot: super::mark(cx),
         }
     }
@@ -221,9 +215,7 @@ impl<T: Value + 'static> Component for Radio<T> {
         let center = cx.rect.center();
         let draw = ui.draw();
         // A rectangle with full corner radius strokes inside its bounds, so the ring keeps the cell's width.
-        let circle = PaintShape::Rect(Rect::from_center_size(center, Vec2::splat(cx.style.icon)), CornerRadius::from(cx.style.icon / 2.0));
-        draw.fill(&circle, cx.resolve(&cx.style.fill));
-        draw.stroke(&circle, StrokeWidth::Medium, cx.resolve(&cx.style.ring));
+        draw.surface_look(Rect::from_center_size(center, Vec2::splat(cx.style.icon)), &cx.style.well, cx.state());
         if self.checked {
             draw.fill(&glyph::dot(center, cx.style.icon), cx.resolve(&cx.style.dot));
         }

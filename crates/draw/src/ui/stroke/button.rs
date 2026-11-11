@@ -126,7 +126,7 @@ impl Component for StrokeButton<'_> {
     type Output = EditResponse<StrokeStyle>;
 
     fn style(cx: &StyleCx<'_>, _: StrokeButtonStyleKey) -> StrokeButtonStyle {
-        StrokeButtonStyle { surface: cx.field(), metrics: craft_behavior::Metrics::new(), focus: cx.focus_look() }
+        StrokeButtonStyle { surface: cx.dropdown(), metrics: craft_behavior::Metrics::new(), focus: cx.focus_look() }
     }
 
     fn sense(&self) -> Sense {

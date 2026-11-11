@@ -247,7 +247,7 @@ impl<K: Value + Eq + Hash + 'static> Component for TreePicker<'_, K> {
     type Output = EditResponse<Option<K>>;
 
     fn style(cx: &StyleCx<'_>, _: TreePickerStyleKey<K>) -> TreePickerStyle {
-        TreePickerStyle { surface: cx.field(), metrics: Metrics::new(), focus: cx.focus_look() }
+        TreePickerStyle { surface: cx.dropdown(), metrics: Metrics::new(), focus: cx.focus_look() }
     }
 
     fn sense(&self) -> Sense {

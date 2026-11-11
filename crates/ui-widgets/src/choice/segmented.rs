@@ -10,7 +10,7 @@ use crate::contract::{
 use crate::primitives::IconSpec;
 use crate::runtime::env::Label;
 use crate::runtime::focus::{ActivateKeys, KeyUse};
-use crate::style::{ComponentStyle, Flags, FocusLook, IconLook, StyleCx, SurfaceLook, TextLook, TypeRole, UiTokens};
+use crate::style::{ComponentStyle, Flags, FocusLook, IconLook, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole, UiTokens};
 use craft_behavior::{Flow, Metrics, NavShape, PartKey, PartRef, Roving, Sense, Value};
 use craft_theme::{Rgba, Stateful, States};
 use egui::{Rect, Vec2};
@@ -206,9 +206,9 @@ impl Component for Segment {
     fn style(cx: &StyleCx<'_>, _: SegmentStyleKey) -> SegmentStyle {
         let colors = &cx.tokens.color;
         let c = |rgba| cx.color(rgba);
-        let (clear, hover, selected) = (c(Rgba::TRANSPARENT), c(colors.state.hover), c(colors.state.selected));
+        let (clear, selected, selected_hover) = (c(Rgba::TRANSPARENT), c(colors.state.selected), c(colors.state.selected_hover));
         let disabled = c(colors.state.disabled_fill);
-        let fill = Stateful::new(clear).off(States::new(clear, hover, hover, clear)).on(States::new(selected, selected, selected, disabled));
+        let fill = cx.state_layer().on(States::new(selected, selected_hover, selected_hover, disabled));
         let edge = Stateful::new(c(colors.line.control_edge)).off(States::new(clear, clear, clear, clear)).on(States::new(
             c(colors.line.control_edge),
             c(colors.line.control_edge),

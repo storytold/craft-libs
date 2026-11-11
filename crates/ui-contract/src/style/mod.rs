@@ -35,5 +35,5 @@ pub use cache::resolve_style;
 pub use paint::color as rgba_color;
 #[doc(hidden)]
 pub use paint::ink_color;
-pub(crate) use paint::{rule_look, scrim_color};
+pub(crate) use paint::{rule_look, scrim_color, state_layer_look};
 pub(crate) use surface::surface_style;

@@ -115,10 +115,12 @@ impl DisclosureGlyph {
         if !self.filled && ink == ink_color(tokens, crate::style::Ink::OnPanel) { rgba_color(tokens.color.text.muted) } else { ink }
     }
 
-    /// The colour a disclosure component shows its glyph in at rest.
-    fn resting(cx: &StyleCx<'_>) -> Stateful<crate::style::StyleColor> {
-        let (muted, off) = (cx.color(cx.tokens.color.text.muted), cx.color(cx.tokens.color.text.disabled));
-        Stateful::new(muted).off(States::new(muted, muted, muted, off))
+    /// The colour a disclosure component shows its glyph in: muted at rest, the normal text colour under the pointer and
+    /// while pressed.
+    fn ink(cx: &StyleCx<'_>) -> Stateful<crate::style::StyleColor> {
+        let text = &cx.tokens.color.text;
+        let (muted, normal, off) = (cx.color(text.muted), cx.color(text.normal), cx.color(text.disabled));
+        Stateful::new(muted).off(States::new(muted, normal, normal, off))
     }
 }
 
@@ -188,7 +190,7 @@ impl Component for Disclosure<'_> {
 
     fn style(cx: &StyleCx<'_>, _: DisclosureStyleKey) -> DisclosureStyle {
         let side = cx.control().icon;
-        DisclosureStyle { metrics: Metrics::new().min_size(Vec2::splat(side)), glyph: IconLook::new(side, DisclosureGlyph::resting(cx)) }
+        DisclosureStyle { metrics: Metrics::new().min_size(Vec2::splat(side)), glyph: IconLook::new(side, DisclosureGlyph::ink(cx)) }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {

@@ -304,12 +304,26 @@ impl<'a> StyleCx<'a> {
     }
 
     /// The look of a text or value field: the text well with the failure colour on its edge while its value is
-    /// invalid, which wins over the focus colour.
+    /// invalid. A focused invalid field keeps the focus colour on its edge and draws the failure colour as a line
+    /// inside it.
     pub fn field(&self) -> SurfaceLook {
         let mut look = self.text_well();
+        let bad = self.tone(Tone::Bad);
         if let Some(edge) = &mut look.border {
-            edge.when.insert(0, (Flags::INVALID.into(), self.tone(Tone::Bad)));
+            edge.when.push((Flags::INVALID.into(), bad));
+            let clear = self.color(Rgba::TRANSPARENT);
+            look.inner = Some(Stateful::new(clear).when(Flags::INVALID | Flags::FOCUSED, bad));
         }
+        look
+    }
+
+    /// The look of the closed box of a dropdown picker: the field, filled with the hover fill under the pointer and
+    /// while its list is open.
+    pub fn dropdown(&self) -> SurfaceLook {
+        let mut look = self.field();
+        let hover = self.color(self.tokens.color.state.hover);
+        look.fill.off.hover = hover;
+        look.fill.off.pressed = hover;
         look
     }
 
@@ -326,6 +340,12 @@ impl<'a> StyleCx<'a> {
     /// The look of a scroll bar.
     pub fn scroll_bar(&self) -> ScrollBarLook {
         scroll_bar_look(self.tokens)
+    }
+
+    /// The state layer: the theme's hover and press fills, clear at rest and while disabled. A part declared
+    /// `PartBuilder::state_layer` gets it from the paint step; a look built over it reads it here.
+    pub fn state_layer(&self) -> Stateful<StyleColor> {
+        super::paint::state_layer_look(self.tokens)
     }
 
     /// The look of the reset mark.

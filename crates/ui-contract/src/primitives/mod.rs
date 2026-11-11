@@ -59,6 +59,7 @@ pub use textures::{
 
 #[doc(hidden)]
 pub use draw::DrawEnv;
+pub(crate) use draw::surface_look_shapes;
 #[doc(hidden)]
 pub use record::PaintRecord;
 pub(crate) use record::{Adopted, FaceRecord, face_id};

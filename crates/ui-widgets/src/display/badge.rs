@@ -33,6 +33,7 @@ pub const MAX_COUNT: u32 = 99;
     Variant::look(Emphasis::Solid, Tone::Good),
     Variant::look(Emphasis::Solid, Tone::Warn),
     Variant::look(Emphasis::Solid, Tone::Bad),
+    Variant::look(Emphasis::Outline, Tone::Neutral),
 ])]
 #[non_exhaustive]
 pub struct BadgeStyle {
@@ -46,7 +47,8 @@ pub struct BadgeStyle {
     text: TextLook,
 }
 
-/// A small label in a tone: a soft tint by default, a solid fill with a solid variant. The tone is the variant
+/// A small label in a tone: a soft tint by default, a solid fill with a solid variant, an edge without fill with the
+/// secondary variant (a chip). The tone is the variant
 /// (`Variant::look(Emphasis::Soft, Tone::Good)`); the text always says what the tone means. A count reads `99+`
 /// above `MAX_COUNT`.
 #[derive(crate::contract::Component)]

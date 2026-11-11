@@ -127,12 +127,16 @@ pub struct SurfaceLook {
     pub kind: Option<SurfaceKind>,
     /// The kind while pressed; `None` keeps `kind`.
     pub kind_down: Option<SurfaceKind>,
+    /// The kind while on (selected or checked, not mixed) and not pressed; `None` keeps `kind`.
+    pub kind_on: Option<SurfaceKind>,
     /// The state fill, which replaces the kind's fill.
     pub fill: Stateful<StyleColor>,
     /// The state border.
     pub border: Option<Stateful<StyleColor>>,
     /// The border width.
     pub border_width: f32,
+    /// A line of the border's width just inside the border, which a state can show beside the border's own colour.
+    pub inner: Option<Stateful<StyleColor>>,
     /// The corner radius.
     pub radius: CornerRadius,
     /// Which corners are rounded.
@@ -148,18 +152,23 @@ impl SurfaceLook {
         SurfaceLook {
             kind: None,
             kind_down: None,
+            kind_on: None,
             fill,
             border: None,
             border_width: 0.0,
+            inner: None,
             radius: CornerRadius::ZERO,
             corners: Corners::All,
             border_replaces_edge: false,
         }
     }
 
-    /// The surface kind in `state`: `kind_down` while pressed, else `kind`.
+    /// The surface kind in `state`: `kind_down` while pressed, `kind_on` while on, else `kind`.
     pub fn kind_in(&self, state: &super::StateSet) -> Option<SurfaceKind> {
-        if state.state == craft_theme::State::Pressed { self.kind_down.or(self.kind) } else { self.kind }
+        use craft_theme::Flags;
+        let on = state.flags.intersects(Flags::SELECTED | Flags::CHECKED) && !state.flags.contains(Flags::MIXED);
+        let kind = if on { self.kind_on.or(self.kind) } else { self.kind };
+        if state.state == craft_theme::State::Pressed { self.kind_down.or(kind) } else { kind }
     }
 
     /// Sets the surface kind.
@@ -171,6 +180,12 @@ impl SurfaceLook {
     /// Sets the kind used while pressed.
     pub fn kind_down(mut self, kind: SurfaceKind) -> Self {
         self.kind_down = Some(kind);
+        self
+    }
+
+    /// Sets the kind used while on.
+    pub fn kind_on(mut self, kind: SurfaceKind) -> Self {
+        self.kind_on = Some(kind);
         self
     }
 

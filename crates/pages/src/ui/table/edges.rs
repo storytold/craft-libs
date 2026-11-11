@@ -166,7 +166,7 @@ pub struct EdgePickerStyle {
     inset: f32,
     /// The area inside the lines.
     fill: StyleColor,
-    /// A chosen line, and a line under the pointer.
+    /// A chosen line.
     on: Stateful<StyleColor>,
     /// A line that is not chosen.
     off: Stateful<StyleColor>,
@@ -176,7 +176,7 @@ pub struct EdgePickerStyle {
 ///
 /// - A square with a field border, filled inside the inset; the outer rectangle at the inset and the two inner lines
 ///   through its middle. Chosen lines are thick and in the accent colour, others thin and faint; the line under the
-///   pointer is drawn as chosen (InDesign's proxy).
+///   pointer is drawn heavier in its own colour (InDesign's proxy).
 /// - The pointer picks the nearest line within the inset.
 /// - Click toggles a line. Double-click on a line picks its group alone (an outer line: the four outer lines on, the
 ///   inner off; an inner line the other way round). Triple-click turns all on, or all off when all were on

@@ -131,7 +131,7 @@ impl Component for Rating<'_> {
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let current = self.current(cx.value());
         for (at, cell) in (0..self.max).zip(Self::cells(rect, cx.style.cell, cx.flow.is_rtl(), self.max)) {
-            let part = cx.part(Self::star(at), cell).sense(Sense::CLICK | Sense::FOCUS).focusable();
+            let part = cx.part(Self::star(at), cell).sense(Sense::CLICK | Sense::FOCUS).focusable().state_layer();
             if at + 1 == current {
                 part.flags(Flags::CHECKED).selected();
             }

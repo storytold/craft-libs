@@ -9,7 +9,7 @@ use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, DataColor, FocusLook, IconLook, StyleColor, StyleCx, SurfaceLook, TextLook, TypeRole};
 use craft_behavior::{Metrics, PartKey, PressPhase, Sense};
 use craft_theme::{
-    Rgba, Stateful, States, Variant,
+    Rgba, Stateful, Variant,
     variant::{Emphasis, Tone},
 };
 use egui::{Color32, Rect, Response, Vec2};
@@ -51,7 +51,7 @@ impl ButtonStyle {
             text,
             icon,
             face: FaceLook::of(cx),
-            overlay: overlay(cx),
+            overlay: cx.state_layer(),
         }
     }
 
@@ -63,13 +63,6 @@ impl ButtonStyle {
         style.icon = IconLook::new(cx.control().icon, Stateful::new(ink));
         style
     }
-}
-
-/// The theme's hover and press overlay: clear at rest and while disabled.
-fn overlay(cx: &StyleCx<'_>) -> Stateful<StyleColor> {
-    let state = &cx.tokens.color.state;
-    let clear = cx.color(Rgba::TRANSPARENT);
-    Stateful::new(clear).off(States::new(clear, cx.color(state.hover), cx.color(state.pressed), clear))
 }
 
 /// What a button reports: its response and the click count of this pass's activation.

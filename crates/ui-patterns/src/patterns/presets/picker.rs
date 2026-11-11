@@ -286,7 +286,7 @@ impl<K: Value + Eq + Hash + 'static> Component for PresetPicker<'_, K> {
     type Output = PresetPickerOutput<K>;
 
     fn style(cx: &StyleCx<'_>, _: PresetPickerStyleKey<K>) -> PresetPickerStyle {
-        PresetPickerStyle { surface: cx.field(), metrics: Metrics::new(), focus: cx.focus_look() }
+        PresetPickerStyle { surface: cx.dropdown(), metrics: Metrics::new(), focus: cx.focus_look() }
     }
 
     fn sense(&self) -> Sense {

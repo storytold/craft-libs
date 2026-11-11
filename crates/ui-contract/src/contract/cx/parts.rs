@@ -84,6 +84,7 @@ pub(crate) struct PartExtras {
     pub keyboard_via: Option<PartKey>,
     pub value: bool,
     pub own_reset: bool,
+    pub state_layer: bool,
     pub selected: bool,
     pub default_stop: bool,
     pub nudges: bool,
@@ -176,6 +177,13 @@ impl PartBuilder<'_> {
     /// The part sits above the body or items in the stacking order and is painted by `paint_over`.
     pub fn over(self) -> Self {
         self.decl.over = true;
+        self
+    }
+
+    /// The part's look is the plain state layer: the paint step fills its rect with `StyleCx::state_layer` in the
+    /// part's state, under the component's paint, with control corners.
+    pub fn state_layer(self) -> Self {
+        self.declared.state_layer = true;
         self
     }
 

@@ -138,7 +138,7 @@ impl<T: Value + 'static> Component for Select<'_, T> {
         let off = cx.color(cx.tokens.color.text.disabled);
         let (ink, muted) = (cx.ink(Ink::OnPanel), cx.color(cx.tokens.color.text.faint));
         SelectStyle {
-            surface: cx.field(),
+            surface: cx.dropdown(),
             metrics: Metrics::new(),
             text: TextLook::new(TypeRole::Body, Stateful::new(ink).off(States::new(ink, ink, ink, off))),
             muted: TextLook::new(TypeRole::Body, Stateful::new(muted).off(States::new(muted, muted, muted, off))),

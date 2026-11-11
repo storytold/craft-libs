@@ -129,6 +129,8 @@ pub struct CxCore<'a> {
     pub(crate) value_parts: PartKeys,
     /// The value parts that declared `own_reset`.
     pub(crate) own_reset_parts: PartKeys,
+    /// The parts that declared `state_layer`, which step 13 fills with the state layer.
+    pub(crate) state_layer_parts: PartKeys,
     /// The parts that declared `toggles`, with whether their popup is open as of step 9.
     #[doc(hidden)]
     pub toggles: Vec<Toggle>,
