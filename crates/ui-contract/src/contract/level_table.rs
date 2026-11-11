@@ -1,7 +1,8 @@
 //! How a viewer shows the stories of a type, as the old gallery drew them: the surface of each type that does not sit
 //! on a dock panel (bars on the window chrome, canvas tools and overlays on the document, docks, dialogs and shells on
 //! their own), and the layout of each type whose stories are not stacked. A type added since follows the same
-//! convention.
+//! convention. A type of the craft-ui library is under the library's name, `craft_ui`, whichever of its crates declares
+//! it.
 
 use super::level::StoryLayout::{self, Columns, FormRows};
 use super::level::Surface::{self, Canvas, Chrome, Own};

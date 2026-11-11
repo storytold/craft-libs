@@ -82,7 +82,7 @@ pub use lazy::Lazy;
 pub(crate) use level::kit_module;
 #[doc(hidden)]
 #[cfg(feature = "testing")]
-pub use level::{Catalog, CatalogEntry, Level, StoryLayout, Surface, catalog, story_title};
+pub use level::{Catalog, CatalogEntry, Level, StoryLayout, Surface, catalog, stale_table_rows, story_title};
 pub use looks::Looks;
 pub use overlay::{Overlay, OverlayUi, Overlays, Popup, PopupHandle, SizeLimits, Trigger};
 pub use paint_ui::PaintUi;

@@ -128,7 +128,8 @@ const LIBRARY: &[(&str, Level)] = &[
     ("value_drag", Controls),
 ];
 
-/// The crates of the craft-ui library: the facade and the crates it re-exports, as `module_path!` spells them.
+/// The crates of the craft-ui library: the facade, whose name the tables give every type of the library, and the
+/// crates it re-exports, as `module_path!` spells them.
 const LIBRARY_CRATES: [&str; 8] = [
     "craft_ui",
     "craft_ui_runtime",
@@ -182,10 +183,13 @@ fn surface_of(registration: &Registration) -> Surface {
     SURFACES.iter().find(|row| row.0 == target && row.1 == short).map_or(Surface::Panel, |row| row.2)
 }
 
-/// The crate target and short name of a registered type, as the tables name it.
+/// The crate target and short name of a registered type, as the tables name it: a type of the library under the
+/// library's own name, `craft_ui`, whichever of its crates declares it.
 fn table_key(registration: &Registration) -> (&'static str, &'static str) {
     let path = base_path(parts(registration).1);
-    (registration.crate_target(), path.rsplit("::").next().unwrap_or(path))
+    let target = registration.crate_target();
+    let target = if LIBRARY_CRATES.contains(&target) { LIBRARY_CRATES[0] } else { target };
+    (target, path.rsplit("::").next().unwrap_or(path))
 }
 
 /// The type's path without its type arguments.
@@ -344,16 +348,21 @@ fn linked() -> Vec<&'static Registration> {
     super::registrations().into_iter().filter(|registration| registration.crate_target() == registration.crate_name().replace('-', "_")).collect()
 }
 
-/// Guards against a surface or story layout row whose type is gone, in every crate that has a linked registration, and
-/// against a layout row whose story group is gone.
-#[crate::testing::trial]
-fn surface_table_has_no_stale_row() {
-    let linked = linked();
+/// The rows of the surface and story layout tables whose type is not among `linked`, in every crate that has a type
+/// there, and the layout rows whose story group none of the type's linked stories has. The library's crates are
+/// linked together only above them, so the craft-ui facade's trials run it with every registration of the library.
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub fn stale_table_rows(linked: &[&'static Registration]) -> Vec<String> {
     let named: std::collections::HashSet<(&str, &str)> = linked.iter().map(|registration| table_key(registration)).collect();
-    let crates: std::collections::HashSet<&str> = named.iter().map(|(target, _)| *target).collect();
+    let mut crates: std::collections::HashSet<&str> = named.iter().map(|(target, _)| *target).collect();
+    // The library's rows are checked whenever one of its crates is linked, whatever key its types get.
+    if linked.iter().any(|registration| LIBRARY_CRATES.contains(&registration.crate_target())) {
+        crates.extend(LIBRARY_CRATES);
+    }
     let rows = SURFACES.iter().map(|row| (row.0, row.1)).chain(STORY_LAYOUTS.iter().map(|row| (row.0, row.1)));
-    let stale: Vec<_> = rows.filter(|row| crates.contains(row.0) && !named.contains(row)).collect();
-    assert!(stale.is_empty(), "rows without a registered type: {stale:?}");
+    let mut stale: Vec<String> =
+        rows.filter(|row| crates.contains(row.0) && !named.contains(row)).map(|row| format!("{row:?}: no linked type")).collect();
     // A layout row names a group of the type's linked stories, where the type's stories are linked.
     let keys: std::collections::HashMap<&str, (&str, &str)> =
         linked.iter().map(|registration| (parts(registration).1, table_key(registration))).collect();
@@ -363,12 +372,13 @@ fn surface_table_has_no_stale_row() {
             groups.entry(key).or_default().push(entry.story.group_name(key.1));
         }
     }
-    let stale: Vec<_> = STORY_LAYOUTS
-        .iter()
-        .filter(|row| groups.get(&(row.0, row.1)).is_some_and(|names| !names.iter().any(|name| name == row.2)))
-        .map(|row| (row.0, row.1, row.2))
-        .collect();
-    assert!(stale.is_empty(), "layout rows without a story group: {stale:?}");
+    stale.extend(
+        STORY_LAYOUTS
+            .iter()
+            .filter(|row| groups.get(&(row.0, row.1)).is_some_and(|names| !names.iter().any(|name| name == row.2)))
+            .map(|row| format!("{:?}: no such story group", (row.0, row.1, row.2))),
+    );
+    stale
 }
 
 /// Guards against a registered type that no row places (it would list under no level) and against names a
