@@ -85,3 +85,25 @@ fn a_data_chunk_with_audio_is_unchanged() {
     let file = riff(&[chunk(b"fmt ", &fmt16(1, 44_100)), chunk(b"data", &samples), list_info()]);
     assert_eq!(probe(&file, Some("wav")).unwrap().frames, 100);
 }
+
+/// Every empty `data` chunk used to walk to the end of the file (soundcraft #1000): parsing grew
+/// quadratically with the chunk count. Only the first `data` chunk is used, so it is decided once,
+/// and the walk stops at a cap, which must not turn the remaining chunk headers into samples.
+#[test]
+fn many_empty_data_chunks_parse_quickly_and_are_not_samples() {
+    let mut body = b"WAVE".to_vec();
+    body.extend_from_slice(&chunk(b"fmt ", &fmt16(1, 44_100)));
+    for _ in 0..100_000 {
+        body.extend_from_slice(b"data\0\0\0\0");
+    }
+    for _ in 0..400_000 {
+        body.extend_from_slice(b"junk\0\0\0\0");
+    }
+    let mut file = b"RIFF".to_vec();
+    file.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    file.extend_from_slice(&body);
+    let t = std::time::Instant::now();
+    let info = probe(&file, Some("wav")).unwrap();
+    assert!(t.elapsed() < std::time::Duration::from_secs(5), "parse took {:?}", t.elapsed());
+    assert_eq!(info.frames, 0, "empty chunks are not samples");
+}

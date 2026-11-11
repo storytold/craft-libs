@@ -174,13 +174,20 @@ pub(crate) fn is_wav(b: &[u8]) -> bool {
     matches!(tag(b, 0), Some(t) if &t == b"RIFF" || &t == b"RF64" || &t == b"BW64") && tag(b, 8).is_some_and(|t| &t == b"WAVE")
 }
 
+/// Chunk headers [`only_chunks_follow`] looks at, and [`parse`] visits, before it stops.
+const MAX_CHUNK_SCAN: usize = 100_000;
+
 /// True when everything from `from` to the end of the file is whole RIFF chunks (four printable
 /// ASCII id bytes, a size that fits, the pad byte after an odd size; the last chunk's pad may be
-/// missing): the metadata of a finished file, not samples.
+/// missing): the metadata of a finished file, not samples. After [`MAX_CHUNK_SCAN`] well-formed
+/// chunks it stops and answers true: bytes that parse as headers up to there are not audio.
 fn only_chunks_follow(src: &Src<'_>, from: u64) -> bool {
     let total = src.size();
     let mut pos = from;
-    while pos < total {
+    for _ in 0..MAX_CHUNK_SCAN {
+        if pos >= total {
+            return false;
+        }
         let (Some(id), Some(size)) = (src.tag(pos), src.le_u32(pos + 4)) else { return false };
         if !id.iter().all(|c| (0x20..0x7f).contains(c)) {
             return false;
@@ -196,7 +203,7 @@ fn only_chunks_follow(src: &Src<'_>, from: u64) -> bool {
         }
         pos = next;
     }
-    false
+    true
 }
 
 /// A `data` chunk header as found in the file, for [`data_chunk_len`].
@@ -256,7 +263,7 @@ pub(crate) fn parse(src: &Src<'_>) -> Result<WavParse> {
     let mut chunks = 0usize;
     while let (Some(id), Some(size32)) = (src.tag(pos), src.le_u32(pos + 4)) {
         chunks += 1;
-        if chunks > 100_000 {
+        if chunks > MAX_CHUNK_SCAN {
             break;
         }
         let body = pos + 8;
@@ -271,9 +278,10 @@ pub(crate) fn parse(src: &Src<'_>) -> Result<WavParse> {
             // A size of 0 in a file whose RIFF size is right and that has only chunks after it is an
             // empty data chunk followed by metadata (LIST, bext, …); otherwise it is a recording
             // that was never finalised, and what follows is audio.
-            let len = data_chunk_len(src, DataChunk { body, size32, is_rf64, remaining, declared });
+            // Only the first data chunk is used, so its length is worked out once: doing it for
+            // every empty chunk made a file of many of them quadratic.
             if data.is_none() {
-                data = Some((body, len));
+                data = Some((body, data_chunk_len(src, DataChunk { body, size32, is_rf64, remaining, declared })));
             }
             if declared > remaining {
                 break;
