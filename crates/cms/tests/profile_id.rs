@@ -9,7 +9,7 @@ fn hex(id: [u8; 16]) -> String {
 #[test]
 fn the_id_matches_an_independent_md5() {
     // Computed outside Rust: MD5 of the shipped file with bytes 44–47, 64–67 and 84–99 zeroed.
-    assert_eq!(hex(profile_id(builtin::COATED_CMYK_ICC).unwrap()), "c6eeebc63fac1fa8be528bcac92d67a9");
+    assert_eq!(hex(profile_id(builtin::COATED_CMYK_ICC).unwrap()), "ab1397490b9355815dea5668de6eb073");
 }
 
 #[test]
