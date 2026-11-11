@@ -17,7 +17,7 @@ mod versioned;
 mod tests;
 
 pub use cloud_ref::CloudBlobRef;
-pub use coordinator::{DefaultTierCoordinator, TierCoordinator};
+pub use coordinator::{DefaultTierCoordinator, TierCoordinator, sanitize_app_segment};
 pub use external_volume::ExternalVolume;
 pub use key::StoreKey;
 pub use mirror::{HydrationGuard, MirrorStore, PendingWrite};

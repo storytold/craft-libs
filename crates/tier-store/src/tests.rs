@@ -1,6 +1,6 @@
 #![allow(clippy::expect_used)]
 
-use crate::{DefaultTierCoordinator, DefaultTierPolicy, ExternalVolume, MirrorStore, StoreKey, TierCoordinator, VersionedMirror};
+use crate::{DefaultTierCoordinator, DefaultTierPolicy, ExternalVolume, MirrorStore, StoreKey, TierCoordinator, VersionedMirror, sanitize_app_segment};
 
 #[test]
 fn mirror_round_trip_and_pending_flush() {
@@ -138,6 +138,35 @@ fn external_volume_serde_roundtrip() {
     assert_eq!(back, vol);
 }
 
+/// CodeRabbit finding on versioned.rs:32: a failed flush through `VersionedMirror` had no way to
+/// restore the drained write for retry, because the wrapper exposed no acknowledgment surface at
+/// all. `restore_pending` must bring it back with its real bytes.
+#[test]
+fn versioned_mirror_exposes_restore_pending_for_a_failed_flush() {
+    let mut store = VersionedMirror::new(DefaultTierPolicy, 1024);
+    let key = StoreKey::new("files/doc");
+    store.put(key.clone(), b"v1".to_vec());
+    let batch = store.take_pending();
+    assert!(!store.is_saved(&key));
+
+    // Persistence failed: restore for retry.
+    store.restore_pending(batch);
+    let retried = store.take_pending();
+    assert_eq!(retried.len(), 1);
+    assert_eq!(retried[0].bytes, b"v1");
+}
+
+/// A successful flush acknowledged through `VersionedMirror::ack_saved` marks the key saved.
+#[test]
+fn versioned_mirror_exposes_ack_saved_for_a_successful_flush() {
+    let mut store = VersionedMirror::new(DefaultTierPolicy, 1024);
+    let key = StoreKey::new("files/doc");
+    store.put(key.clone(), b"v1".to_vec());
+    let batch = store.take_pending();
+    store.ack_saved(&batch);
+    assert!(store.is_saved(&key));
+}
+
 #[test]
 fn versioned_mirror_bumps_per_key_version() {
     let mut store = VersionedMirror::new(DefaultTierPolicy, 4096);
@@ -254,6 +283,55 @@ fn a_saved_key_is_dropped_outright_on_eviction_not_retained() {
         saved.retained_bytes(),
         unsaved.retained_bytes()
     );
+}
+
+// --- review_repro: default coordinator warm root vs. the flush hook (PR #662 review) ----------
+
+/// CodeRabbit finding on coordinator.rs:20: for app id "effectcraft", `DefaultTierCoordinator`'s
+/// unparameterized `default()` returned `effectcraft-store/v1`, but `opfs-flush.js`'s flush hook
+/// actually writes under `effectcraft/store/v1`. A reader using the default coordinator for that
+/// app id could never find bytes the hook wrote. `for_app` must match the hook's real layout.
+#[test]
+fn for_app_matches_the_opfs_flush_hooks_warm_root() {
+    let coord = DefaultTierCoordinator::for_app("effectcraft");
+    let key = StoreKey::new("config/prefs.json");
+    assert_eq!(coord.warm_opfs_relative_path(&key), "effectcraft/store/v1/config/prefs.json");
+}
+
+/// The legacy `default()` path is untouched: existing EffectCraft data stays reachable through
+/// it even though a reader should move to `for_app` for the current namespaced layout.
+#[test]
+fn default_coordinator_keeps_the_legacy_unnamespaced_root() {
+    let coord = DefaultTierCoordinator::default();
+    let key = StoreKey::new("config/prefs.json");
+    assert_eq!(coord.warm_opfs_relative_path(&key), "effectcraft-store/v1/config/prefs.json");
+}
+
+// --- review_repro: injective app-id sanitization (PR #662 review) -----------------------------
+
+/// CodeRabbit finding on opfs-flush.js:25: the old lossy normalization (replacing every run of
+/// disallowed characters with a single `-`) sent "collab.photo" and "collab-photo" to the same
+/// segment, so two distinct apps on the same origin would collide in the warm tier. Hex-escaping
+/// every non-safe byte is injective: these must come out different.
+#[test]
+fn sanitize_app_segment_is_injective_for_a_known_prior_collision() {
+    let a = sanitize_app_segment("collab.photo");
+    let b = sanitize_app_segment("collab-photo");
+    assert_ne!(a, b, "collab.photo and collab-photo must not collide on the same OPFS segment");
+}
+
+/// The encoding never produces a segment OPFS rejects: never empty, never exactly `.` or `..`,
+/// and never containing `/` (checked over app ids built from exactly the characters that used to
+/// collapse into one).
+#[test]
+fn sanitize_app_segment_never_produces_a_name_opfs_rejects() {
+    for app_id in ["", ".", "..", "a/b", "a.b", "a-b", "a_b", "!@#$"] {
+        let segment = sanitize_app_segment(app_id);
+        assert!(!segment.is_empty());
+        assert_ne!(segment, ".");
+        assert_ne!(segment, "..");
+        assert!(!segment.contains('/'), "segment for {app_id:?} contained a slash: {segment:?}");
+    }
 }
 
 // --- review_repro: unified byte budget (PR #662 review, RFC-0023 required fix 3) --------------
