@@ -1031,6 +1031,7 @@ dependencies = [
 name = "craft-media"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "craft-media-testkit",
  "proptest",
  "serde",
