@@ -189,7 +189,9 @@ pub fn parse_cube(text: &str) -> Result<LutFile, LutError> {
             }
             k if k.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '+' || c == '.') => {
                 let mut v = vec![k.parse::<f32>().map_err(|_| LutError(format!("bad number in `{line}`")))?];
-                v.extend(it.filter_map(|s| s.parse::<f32>().ok()));
+                for value in it {
+                    v.push(value.parse::<f32>().map_err(|_| LutError(format!("bad number in `{line}`")))?);
+                }
                 if v.len() != 3 {
                     return err(format!("bad data line `{line}`"));
                 }
@@ -555,6 +557,12 @@ pub fn builtin(id: &str) -> Option<LutFile> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cube_rejects_invalid_numeric_fields() {
+        let text = "LUT_3D_SIZE 2\n0.25 nope 0.5 0.75\n0 0 1\n0 1 0\n0 1 1\n1 0 0\n1 0 1\n1 1 0\n1 1 1\n";
+        assert!(parse_cube(text).is_err(), "invalid numeric field must not be ignored");
+    }
 
     #[test]
     fn utf8_bom_is_stripped() {
