@@ -267,12 +267,12 @@ impl Runtime {
     /// app, for the whole worker lifetime, per the documented message flow), this refuses the
     /// change outright. An `Init` repeating the SAME app id is accepted: that is not a change.
     fn handle_init(&mut self, app_id: String) -> Vec<WorkerMessage> {
-        if let Some(existing) = &self.app_id {
-            if existing != &app_id {
-                return vec![WorkerMessage::Error {
-                    message: format!("init: this runtime is already initialized for app {existing:?}; cannot switch to {app_id:?}"),
-                }];
-            }
+        if let Some(existing) = &self.app_id
+            && existing != &app_id
+        {
+            return vec![WorkerMessage::Error {
+                message: format!("init: this runtime is already initialized for app {existing:?}; cannot switch to {app_id:?}"),
+            }];
         }
         self.app_id = Some(app_id);
         vec![WorkerMessage::Ready { caps: self.ctx.caps() }]
