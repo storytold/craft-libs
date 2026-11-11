@@ -1037,6 +1037,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-kiwi"
+version = "0.1.0"
+
+[[package]]
 name = "craft-lottie"
 version = "0.1.0"
 dependencies = [
