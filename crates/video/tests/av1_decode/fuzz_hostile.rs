@@ -37,13 +37,14 @@ fn ivf_frames(data: &[u8]) -> Vec<Vec<u8>> {
     out
 }
 
+// Seeds are 64x64: SVT-AV1 before 3.0 (the Ubuntu runners have 2.3) refuses a source under 64 lines.
 fn make(ff: &std::path::Path, name: &str, args: &str, pix: &str) -> Option<Vec<Vec<u8>>> {
     let out = craft_media_testkit::fixtures_dir("av1").join(format!("{name}.ivf"));
     let p = craft_media_testkit::fixtures::generate(&out, |tmp| {
         let a: Vec<&str> = args.split_whitespace().collect();
         matches!(
             Command::new(ff)
-                .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=64x48:rate=25", "-frames:v", "6", "-pix_fmt", pix])
+                .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=64x64:rate=25", "-frames:v", "6", "-pix_fmt", pix])
                 .args(a)
                 .args(["-f", "ivf"])
                 .arg(tmp)
