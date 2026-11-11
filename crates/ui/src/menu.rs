@@ -104,7 +104,7 @@ pub fn overflow(ui: &mut Ui, items: &[MenuItem], labels: &MenuLabels) -> Option<
     let button = egui::Button::new(RichText::new("\u{2026}").size(15.0)).frame(false);
     let hit = ui.add(button);
     let name = labels.more.clone();
-    hit.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name.as_str()));
+    hit.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name.as_str()));
     let hit = hit.on_hover_text(labels.more.as_str());
     items_of(&hit, items)
 }
@@ -142,7 +142,7 @@ pub fn split(ui: &mut Ui, primary: &str, items: &[MenuItem], labels: &MenuLabels
             let more = ui.add(egui::Button::new("    ").corner_radius(if backwards { outer } else { inner }));
             crate::buttons::chevron(ui, more.rect, ui.visuals().text_color());
             let name = labels.more_for.replace("{action}", &primary.to_lowercase());
-            more.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name.as_str()));
+            more.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name.as_str()));
             let more = more.on_hover_text(name.as_str());
             if let Some(id) = items_of(&more, items) {
                 *hit = Some(SplitHit::Item(id));
@@ -177,7 +177,7 @@ fn items_of(anchor: &Response, items: &[MenuItem]) -> Option<String> {
             // The icon is decoration. The name is the label alone.
             let name = item.label.clone();
             let enabled = item.enabled;
-            row.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, name.as_str()));
+            row.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, name.as_str()));
             if row.clicked() {
                 chosen = Some(item.id.clone());
                 ui.close();
