@@ -2,4 +2,5 @@
 
 mod setup;
 mod text_tables;
+mod thumbnails;
 mod views;

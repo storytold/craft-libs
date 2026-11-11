@@ -25,15 +25,14 @@ mod stories;
 
 use super::view::PageSource;
 use craft_behavior::{EditEvent, IconId, Selection, SelectionChange, keyed};
-use craft_ui::buttons::Button;
 use craft_ui::contract::{
-    Bind, CollectionEvent, ContextMenuRequest, NoValue, Outcome, PendingDrop, ReorderMove, ReorderRule, Show as _, ShowCollection as _, clicked,
+    Bind, CollectionEvent, ContextMenuRequest, NoValue, Outcome, PendingDrop, ReorderMove, ReorderRule, Show as _, ShowCollection as _,
 };
 use craft_ui::list::ThumbAspect;
 use craft_ui::primitives::textures::{Priority, ThumbPaint, ThumbRequest, ThumbnailOptions, Thumbnails};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::style::DataColor;
-use craft_ui::tile_grid::{CaptionPlace, GridEvent, ThumbnailSlider, Tile, TileGrid, TileGroup, TileMark, TileZoom, ZoomStep};
+use craft_ui::tile_grid::{CaptionPlace, GridEvent, TailRow, ThumbnailSlider, Tile, TileGrid, TileGroup, TileMark, TileZoom, ZoomStep};
 use egui::{Pos2, Response, Ui};
 
 /// The thumbnail zoom: 0.5 to 1.5 of the card thumbnail in steps of 0.25, 1 by default (PdfCraft's
@@ -118,7 +117,7 @@ pub enum ThumbnailEvent {
     Delete(Vec<usize>),
     /// A double-click or Enter on a thumbnail (PowerPoint starts the slide show from it).
     Activate(usize),
-    /// A click on the New Slide button ([`PageThumbnails::new_page_row`]).
+    /// A click, Enter or Space on the New Slide row ([`PageThumbnails::new_page_row`]).
     NewPage,
     /// The app's menu for the picked pages is asked for (secondary click, Menu key, Shift+F10). A secondary click on
     /// an unpicked page makes it the picked set first ([`Selection`](Self::Selection)), without going to it.
@@ -257,14 +256,14 @@ impl<'a> PageThumbnails<'a> {
         self
     }
 
-    /// The New Slide button under the grid (DeckCraft).
+    /// The New Slide row after the last thumbnail, a row of the grid (DeckCraft).
     #[must_use]
     pub fn new_page_row(mut self, on: bool) -> Self {
         self.new_page_row = on;
         self
     }
 
-    /// Shows the size row, the grid and the New Slide button. Section headers are the grid's group rows; their
+    /// Shows the size row and the grid with its New Slide row. Section headers are the grid's group rows; their
     /// keys count on from the last page (`count + section`), so a header never shares a key with a page.
     // pdfcraft: crates/ui-egui/src/panels/pages.rs:90 `pages`, :36 `thumbnail_size`, :295 `page_drag`; deckcraft:
     // crates/ui-egui/src/panels/thumbs.rs:116 `list` (sections, number at the left, hidden and animation marks).
@@ -292,6 +291,9 @@ impl<'a> PageThumbnails<'a> {
                 group.detail(words.count.text(section.count as u64, &env.format().integer(section.count as u64)))
             })
             .collect();
+        // The New Slide row's key comes after the pages' and the section headers'.
+        let new_page = count + groups.len();
+        let tail: Vec<TailRow<usize>> = if new_page_row { vec![TailRow::new(new_page, words.new_page.clone())] } else { Vec::new() };
         let aspect = if count == 0 { 1.0 } else { aspect_of(source, 0) };
         let mut grid = TileGrid::<usize>::new(label)
             .selection(Bind::bound(&mut *picked))
@@ -299,12 +301,18 @@ impl<'a> PageThumbnails<'a> {
             .zoom(scale as f32)
             .caption(caption)
             .current(Some(current))
-            .groups(&groups);
+            .groups(&groups)
+            .tail(&tail);
         if !groups.is_empty() {
             grid = grid.collapsible();
         }
         if editable {
-            grid = grid.reorder(ReorderRule::new()).drag_count(words.count.counted()).takes_files(true).deletable(true);
+            grid = grid
+                .reorder(ReorderRule::new())
+                .accepts(move |_, _, insert| insert <= new_page)
+                .drag_count(words.count.counted())
+                .takes_files(true)
+                .deletable(true);
         }
         let ctx = ui.ctx().clone();
         let thumbnails = Thumbnails::<usize>::in_context(&ctx, "page-thumbnails", ThumbnailOptions::new());
@@ -346,6 +354,7 @@ impl<'a> PageThumbnails<'a> {
                 CollectionEvent::Selection(change) => events.push(ThumbnailEvent::Selection(change)),
                 CollectionEvent::LeadMoved { key, .. } if key < count => events.push(ThumbnailEvent::Go(key)),
                 CollectionEvent::Activate(page) if page < count => events.push(ThumbnailEvent::Activate(page)),
+                CollectionEvent::Activate(key) if key == new_page => events.push(ThumbnailEvent::NewPage),
                 CollectionEvent::Delete(pages) => {
                     let pages: Vec<usize> = pages.into_iter().filter(|page| *page < count).collect();
                     if editable && !pages.is_empty() && pages.len() < count {
@@ -362,9 +371,6 @@ impl<'a> PageThumbnails<'a> {
                 }
                 _ => {}
             }
-        }
-        if new_page_row && clicked(&Button::new(words.new_page.clone()).show(ui)) {
-            events.push(ThumbnailEvent::NewPage);
         }
         PageThumbnailsOutput { response: shown.response.response, events, drop_target, file_gap }
     }
