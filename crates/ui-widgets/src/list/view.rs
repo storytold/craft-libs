@@ -25,8 +25,9 @@ pub struct ListStyle {
     metrics: Metrics,
 }
 
-/// A list of rows: one Tab stop, the selection rules of the collection contract, type-ahead on the rows' text,
-/// rename in place, drag to reorder, and the request for the app's context menu.
+/// A list of rows: one Tab stop, the selection rules of the collection contract, type-ahead on the rows' text (off
+/// unless `type_ahead`, so tool keys keep working), rename in place, drag to reorder, and the request for the app's
+/// context menu.
 ///
 /// Rows have the height their `ListRow` measures, or the height the item source's `size_hint` gives. A list of
 /// groups and their children is a tree: rows are indented by their depth in the display order, groups open and
@@ -98,9 +99,9 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> List<'a, K> {
     }
 
     /// The options list of a value picker's popup (completions, number presets, `PopupList`): one selection, a click
-    /// activates, the lead starts on the first row and follows the pointer, and a press leaves the key focus on the
-    /// opener, whose list keys the host forwards while the popup is open. Its rows are `ListRow::option()`. Menus are
-    /// `Menu`s, not option lists.
+    /// activates, the lead starts on the first row and follows the pointer, typed letters move it, and a press leaves
+    /// the key focus on the opener, whose list keys the host forwards while the popup is open. Its rows are
+    /// `ListRow::option()`. Menus are `Menu`s, not option lists.
     pub fn options(label: impl Into<Label>) -> Self {
         Self::new(label)
             .select(SelectMode::Single)
@@ -108,6 +109,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> List<'a, K> {
             .lead_on_open(LeadOnOpen::First)
             .lead_follows_hover(true)
             .focus_on_press(false)
+            .type_ahead(true)
             .sizing(Sizing::Content)
             .listbox()
     }

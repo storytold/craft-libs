@@ -22,8 +22,9 @@ pub struct TableStyle {
     metrics: Metrics,
 }
 
-/// A table: one Tab stop, a header row over the columns, the selection rules of the collection contract, type-ahead
-/// on the rows' text, rename in place, drag to reorder, and the requests for the app's row and header menus.
+/// A table: one Tab stop, a header row over the columns, the selection rules of the collection contract, type-ahead on
+/// the rows' text (with `type_ahead`), rename in place, drag to reorder, and the requests for the app's row and header
+/// menus.
 ///
 /// The app sorts its rows and tells the table the order it used (`sort`); a press on a sortable header reports
 /// `ColumnEvent::Sort` with the next order. A table of groups and their children is a tree: the label column is

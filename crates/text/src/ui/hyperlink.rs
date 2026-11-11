@@ -411,6 +411,7 @@ fn place_list(ui: &mut Ui, given: &Given, form: &mut Form, words: &HyperlinkWord
     let source = keyed(&spots, |spot: &Spot| *spot);
     List::new(words.select_place.clone())
         .select(SelectMode::Single)
+        .type_ahead(true)
         .sizing(Sizing::Content)
         .natural_height(true)
         .selection(Bind::bound(&mut form.place))

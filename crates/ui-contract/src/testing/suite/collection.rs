@@ -174,7 +174,8 @@ pub(super) fn click_selects_one_row(subject: &Subject) -> Result<(), String> {
     Ok(())
 }
 
-/// Typing the first letter of a later row's name moves the lead to the first row that starts with it.
+/// Typing the first letter of a later row's name moves the lead to the first row that starts with it, in a collection
+/// whose key role takes type-ahead (`CollectionProps::type_ahead`).
 pub(super) fn type_ahead_moves_the_lead(subject: &Subject) -> Result<(), String> {
     if !is_items(subject) {
         return Ok(());
@@ -188,6 +189,9 @@ pub(super) fn type_ahead_moves_the_lead(subject: &Subject) -> Result<(), String>
         };
         let Some(letter) = names[target] else { continue };
         row_click::click(&mut fixture, &shown[0]);
+        if !fixture.focused_role().is_some_and(|role| role.type_ahead) {
+            continue;
+        }
         fixture.type_text(&letter.to_string());
         fixture.settle();
         let Some((_, size)) = position_in_set(&fixture, shown[0].node) else { continue };

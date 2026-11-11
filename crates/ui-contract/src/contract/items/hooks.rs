@@ -53,7 +53,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             .reorderable(props.reorder.is_some())
             .pages(props.pages)
             .rename(props.rename)
-            .type_ahead(true)
+            .type_ahead(props.type_ahead)
             .digits(props.digit_keys)
             .space(true)
             .moves(true)

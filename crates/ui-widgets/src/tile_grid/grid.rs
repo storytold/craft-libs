@@ -168,8 +168,9 @@ impl TileGridStyle {
     }
 }
 
-/// A grid of tiles: one Tab stop, the selection rules of the collection contract, type-ahead on the tiles' names,
-/// rename in place, drag to reorder, files dropped from the OS, and the request for the app's context menu.
+/// A grid of tiles: one Tab stop, the selection rules of the collection contract, type-ahead on the tiles' names (with
+/// `type_ahead`), rename in place, drag to reorder, files dropped from the OS, and the request for the app's context
+/// menu.
 ///
 /// The picture side is `zoom` times the thumbnail side (the card thumbnail unless `thumb_size` names one): the factor the app's zoom control holds. A card is the
 /// picture plus what the tile adds around it, whatever the layout. Pictures are `aspect` wide over high; with

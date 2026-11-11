@@ -156,6 +156,9 @@ pub struct CollectionProps {
     pub rows_stamp: Option<u64>,
     /// What Space does.
     pub space: SpaceAction,
+    /// Typed letters move the lead to the next item whose text starts with them. Off: they stay shortcut candidates,
+    /// so single-letter tool keys keep working while a list has focus. On for popup lists and pickers.
+    pub type_ahead: bool,
     /// The header row shows when a column has a header text. Off: the columns lay the rows out and no header row is built.
     pub header: bool,
     /// Typed digits reach the collection's own `update` as `Intent::Digit` (rating keys); other typed text stays
@@ -248,6 +251,7 @@ impl CollectionProps {
             focus_on_press: true,
             rows_stamp: None,
             space: SpaceAction::Activate,
+            type_ahead: false,
             header: true,
             digit_keys: false,
             menu_on_click: false,
@@ -359,6 +363,13 @@ impl CollectionProps {
     #[must_use]
     pub const fn arrows_select(mut self, on: bool) -> Self {
         self.arrows_select = on;
+        self
+    }
+
+    /// Typed letters move the lead (`CollectionProps::type_ahead`).
+    #[must_use]
+    pub const fn type_ahead(mut self, on: bool) -> Self {
+        self.type_ahead = on;
         self
     }
 

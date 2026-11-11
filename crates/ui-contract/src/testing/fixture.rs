@@ -607,6 +607,11 @@ impl Fixture {
         crate::runtime::focus::focused_stop(&self.frames.ctx)
     }
 
+    /// The key role of the stop that holds focus: which key rows it takes (type-ahead, rename, reorder).
+    pub fn focused_role(&self) -> Option<craft_behavior::KeyRole> {
+        crate::runtime::focus::focused_rec(&self.frames.ctx).map(|rec| rec.stop.role)
+    }
+
     /// The id of the widget egui has focused.
     pub fn focused(&self) -> Option<Id> {
         let id = crate::runtime::egui::focus::focused(&self.frames.ctx)?;

@@ -72,6 +72,7 @@ impl<'a> TokenBrowser<'a> {
                 let mut selection = current.as_ref().and_then(|pick| Row::of(pick, explained)).map_or_else(Selection::default, Selection::single);
                 let mut list = List::<Row>::new("Tokens")
                     .select(SelectMode::Single)
+                    .type_ahead(true)
                     .tree(true)
                     .empty("No token matches the filters")
                     .selection(Bind::bound(&mut selection));

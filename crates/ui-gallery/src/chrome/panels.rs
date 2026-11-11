@@ -134,6 +134,7 @@ impl Panels<'_> {
             TextField::search("Filter components", Bind::bound(&mut *filter)).placeholder("Filter components").show(ui);
             let listed = List::<TreeKey>::new("Components")
                 .select(SelectMode::Single)
+                .type_ahead(true)
                 .tree(true)
                 .selection(Bind::bound(&mut *selection))
                 .empty("No component matches the filter")

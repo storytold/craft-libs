@@ -127,7 +127,7 @@ fn a_list_with_one_tab_stop_moves_its_lead_and_selects() {
     let mut frames = Frames::new();
     let mut show = |ui: &mut Ui| {
         let mut held = selection.borrow().clone();
-        let list = List::new(SelectMode::Multi).selection(Bind::bound(&mut held));
+        let list = List::new(SelectMode::Multi).type_ahead().selection(Bind::bound(&mut held));
         show_words(ui, list, &words, &seen);
         *selection.borrow_mut() = held;
     };
@@ -163,6 +163,22 @@ fn a_list_with_one_tab_stop_moves_its_lead_and_selects() {
     press(&mut frames, Key::ArrowDown, Modifiers::NONE, &mut show);
     assert_eq!((selection.borrow().items.clone(), last(&seen)), (vec![2], 2), "a plain arrow replaces the range");
     assert!(seen.selections().len() >= 3);
+}
+
+/// A list without type-ahead leaves typed letters to the app's tool keys: the lead stays where it is.
+#[trial]
+fn a_list_without_type_ahead_leaves_typed_letters_alone() {
+    let words = Words::flat(&labels());
+    let seen = Seen::default();
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| show_words(ui, List::new(SelectMode::Single), &words, &seen);
+    frames.idle(2, &mut show);
+    focus_list(&mut frames, &seen, &mut show);
+    press(&mut frames, Key::ArrowDown, Modifiers::NONE, &mut show);
+    let before = seen.leads();
+    frames.frame(vec![Event::Text("c".into())], &mut show);
+    frames.idle(1, &mut show);
+    assert_eq!(seen.leads(), before, "a typed letter moves no lead");
 }
 
 /// The stacking keys move the selected rows as a block: Cmd+] one place toward the top, Shift+Cmd+[ to the bottom.

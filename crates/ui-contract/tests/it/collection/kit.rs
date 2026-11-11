@@ -185,6 +185,12 @@ impl<'a> List<'a> {
         self
     }
 
+    /// Typed letters move the lead.
+    pub fn type_ahead(mut self) -> Self {
+        self.items = self.items.type_ahead(true);
+        self
+    }
+
     /// Reordering may land inside the groups of a tree.
     pub fn reorder_into_groups(mut self) -> Self {
         self.items = self.items.reorder(craft_ui::contract::ReorderRule::new().into_groups());
