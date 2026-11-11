@@ -826,6 +826,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-cfb"
+version = "0.1.0"
+
+[[package]]
 name = "craft-cms"
 version = "0.1.0"
 dependencies = [
