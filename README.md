@@ -55,6 +55,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-docpath`](crates/docpath/src/lib.rs): decides whether a path or `file:` URL stored in a
   document may be opened. Paths stored in documents are followed only when they are local or on the
   document's own network share; other network paths, device paths and non-file URLs are refused.
+- [`craft-drawingml`](crates/drawingml/README.md): the DrawingML that PPTX, DOCX and XLSX share:
+  EMU units and `a:xfrm`, colours with theme slots and colour transforms, preset shape outlines
+  (`a:prstGeom`), custom geometry with guide formulas (`a:custGeom`) and preset text warps
+  (`a:prstTxWarp`). From DeckCraft. Takes `craft-xml` trees; packages stay with each format.
 - [`craft-dxf`](crates/dxf/src/lib.rs): DXF tag reader and writer, from CADCraft: ASCII and
   binary DXF as (group code, value) tags, split into sections and entities, with pre-2007 code
   pages and version detection, and written back. Bounded on hostile input. Mapping tags to a
