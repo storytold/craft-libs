@@ -26,6 +26,14 @@ pub fn srgb_trc() -> Curve {
 }
 
 impl Curve {
+    /// Heap bytes this curve holds: the samples of a table, nothing for a function.
+    pub fn table_bytes(&self) -> usize {
+        match self {
+            Curve::Table(t) => t.capacity() * std::mem::size_of::<f32>(),
+            _ => 0,
+        }
+    }
+
     /// Number of parameters stored for a parametric function type.
     pub fn param_count(kind: u16) -> usize {
         match kind {
