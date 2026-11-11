@@ -45,12 +45,14 @@ craft-gainmap = { path = "crates/gainmap" }
 craft-gcode = { path = "crates/gcode" }
 craft-mesh = { path = "crates/mesh" }
 craft-heif = { path = "crates/heif" }
+craft-fig = { path = "crates/fig" }
 craft-fonts-build = { path = "crates/fonts-build" }
 craft-i18n = { path = "crates/i18n" }
 craft-idml = { path = "crates/idml" }
 craft-jpeg = { path = "crates/jpeg" }
 craft-kiwi = { path = "crates/kiwi" }
 craft-keymap = { path = "crates/keymap" }
+craft-assuan = { path = "crates/assuan" }
 craft-audio = { path = "crates/audio" }
 # No default features, so craft-audio's `encode` builds craft-media without `isobmff`.
 craft-media = { path = "crates/media", default-features = false }
@@ -67,6 +69,7 @@ craft-plotter = { path = "crates/plotter" }
 craft-prepress = { path = "crates/prepress" }
 craft-print = { path = "crates/print" }
 craft-proof = { path = "crates/proof" }
+craft-raster-codecs = { path = "crates/raster-codecs" }
 craft-psd = { path = "crates/psd" }
 craft-quit = { path = "crates/quit" }
 craft-rtf = { path = "crates/rtf" }
@@ -83,6 +86,7 @@ craft-ui = { path = "crates/ui" }
 craft-update = { path = "crates/update" }
 craft-vectorcraft-format = { path = "crates/vectorcraft-format" }
 craft-vectordrawable = { path = "crates/vectordrawable" }
+craft-xls = { path = "crates/xls" }
 craft-xml = { path = "crates/xml" }
 craft-epub = { path = "crates/epub" }
 craft-video = { path = "crates/video" }

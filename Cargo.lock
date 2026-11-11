@@ -820,6 +820,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-assuan"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-atomic"
 version = "0.1.0"
 dependencies = [
@@ -953,6 +961,18 @@ version = "0.1.0"
 dependencies = [
  "craft-xml",
  "flate2",
+ "thiserror 2.0.21",
+ "zip",
+]
+
+[[package]]
+name = "craft-fig"
+version = "0.1.0"
+dependencies = [
+ "craft-kiwi",
+ "flate2",
+ "ruzstd",
+ "serde_json",
  "thiserror 2.0.21",
  "zip",
 ]
@@ -1324,6 +1344,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-raster-codecs"
+version = "0.1.0"
+dependencies = [
+ "rayon",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-raw"
 version = "0.1.0"
 dependencies = [
@@ -1548,6 +1576,14 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/winprint.rs?rev=64e7afd4d1483512385012c340ecaaaf0f3beb7f#64e7afd4d1483512385012c340ecaaaf0f3beb7f"
 dependencies = [
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "craft-xls"
+version = "0.1.0"
+dependencies = [
+ "craft-cfb",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

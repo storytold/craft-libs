@@ -4,16 +4,18 @@
 //! Read: the default scene's node hierarchy (matrix or translation/rotation/scale), triangle
 //! primitives (`TRIANGLES`, `TRIANGLE_STRIP`, `TRIANGLE_FAN`, indexed or not) with POSITION,
 //! NORMAL, every TEXCOORD_n, COLOR_0, JOINTS_0 and WEIGHTS_0 of any component type the
-//! specification or `KHR_mesh_quantization` allows, strided buffer views, metallic-roughness
-//! materials (factors, the five texture slots with their UV set and wrap modes, alpha modes,
-//! double-sided, `KHR_materials_emissive_strength`, `KHR_materials_unlit`), images (embedded
+//! specification or `KHR_mesh_quantization` allows, strided buffer views, sparse accessors,
+//! metallic-roughness materials (factors, the five texture slots with their UV set and wrap
+//! modes, alpha modes, double-sided, `KHR_materials_emissive_strength`, `KHR_materials_unlit`;
+//! `KHR_materials_pbrSpecularGlossiness` as its diffuse colour and texture with roughness from
+//! the glossiness), textures whose image is only in `EXT_texture_webp`, images (embedded
 //! in a buffer view or a `data:` URI, or named), skins, animations of translation, rotation
 //! and scale, cameras and `KHR_lights_punctual` lights. A glTF mesh becomes one [`Mesh`] whose
 //! pools hold its primitives' vertices one after another (once for primitives that name the
 //! same accessors), and each primitive a [`Part`].
 //!
-//! Not read: sparse accessors and required extensions that change how geometry is stored
-//! (Draco, meshopt) are [`Error::Unsupported`]; points, lines, morph targets, tangents and
+//! Not read: required extensions that change how geometry is stored (Draco, meshopt) are
+//! [`Error::Unsupported`]; points, lines, morph targets, tangents and
 //! other extensions are passed over (skipped primitives are counted in a warning).
 //!
 //! Buffers are needed to read anything, so an external buffer is asked of the resolver (by its
@@ -238,9 +240,6 @@ impl Doc<'_> {
     /// against the bytes that are there before anything is allocated from a count.
     fn rows(&self, a: usize, max: usize, what: &str) -> Result<(Vec<f64>, usize)> {
         let acc = self.accessor(a)?;
-        if acc.get("sparse").is_some() {
-            return Err(Error::Unsupported("glTF: sparse accessors".into()));
-        }
         let n = match acc.get("type").and_then(Value::as_str).unwrap_or("") {
             "SCALAR" => 1,
             "VEC2" => 2,
@@ -266,11 +265,23 @@ impl Doc<'_> {
             return Err(too_large(KIND, format!("{count} {what}, more than the limit allows")));
         }
         let total = count.checked_mul(n).ok_or_else(|| too_large(KIND, "an accessor count is too large"))?;
-        // No buffer view: all zeros.
-        let Some(bv) = idx(acc, "bufferView") else {
-            charge(&self.zero_left, total, "values without a buffer")?;
-            return Ok((vec![0.0; total], n));
+        let mut out = match idx(acc, "bufferView") {
+            // No buffer view: all zeros.
+            None => {
+                charge(&self.zero_left, total, "values without a buffer")?;
+                vec![0.0; total]
+            }
+            Some(bv) => self.dense(acc, bv, (ct, csize, norm), n, count)?,
         };
+        if let Some(sparse) = acc.get("sparse") {
+            self.sparse(sparse, (ct, csize, norm), n, &mut out)?;
+        }
+        Ok((out, n))
+    }
+
+    /// The `count` elements of `n` components an accessor reads from buffer view `bv`.
+    fn dense(&self, acc: &Value, bv: usize, (ct, csize, norm): (usize, usize, bool), n: usize, count: usize) -> Result<Vec<f64>> {
+        let total = count * n;
         let stride = arr(self.j, "bufferViews").get(bv).and_then(|v| idx(v, "byteStride")).filter(|s| *s > 0).unwrap_or(csize * n);
         if stride < csize * n {
             return Err(malformed(KIND, format!("bufferView byteStride {stride} is smaller than its {}-byte elements", csize * n)));
@@ -290,7 +301,34 @@ impl Doc<'_> {
                 *v = i.checked_mul(stride).and_then(|o| data.get(o.checked_add(c * csize)?..)).and_then(|s| scalar(ct, s, norm)).ok_or_else(past)?;
             }
         }
-        Ok((out, n))
+        Ok(out)
+    }
+
+    /// Put a sparse accessor's values over the elements it names. Its indices and values are
+    /// tightly packed in their buffer views; an index past the accessor is an error.
+    fn sparse(&self, sparse: &Value, (ct, csize, norm): (usize, usize, bool), n: usize, out: &mut [f64]) -> Result<()> {
+        let bad = || malformed(KIND, "a sparse accessor reads past its buffer or names an element that is not there");
+        let count = idx(sparse, "count").filter(|k| *k <= out.len() / n).ok_or_else(bad)?;
+        let part = |key: &str| -> Result<(&Value, &[u8])> {
+            let v = sparse.get(key).ok_or_else(bad)?;
+            Ok((v, self.view(idx(v, "bufferView").ok_or_else(bad)?)?.get(idx(v, "byteOffset").unwrap_or(0)..).ok_or_else(bad)?))
+        };
+        let ((indices, index_data), (_, value_data)) = (part("indices")?, part("values")?);
+        let index_type = idx(indices, "componentType").unwrap_or(5125);
+        let index_size = match index_type {
+            5121 => 1,
+            5123 => 2,
+            5125 => 4,
+            t => return Err(malformed(KIND, format!("sparse index componentType {t}"))),
+        };
+        for e in 0..count {
+            let target = index_data.get(e * index_size..).and_then(|s| scalar(index_type, s, false)).ok_or_else(bad)? as usize;
+            let row = target.checked_mul(n).and_then(|at| out.get_mut(at..at.checked_add(n)?)).ok_or_else(bad)?;
+            for (c, v) in row.iter_mut().enumerate() {
+                *v = value_data.get((e * n + c) * csize..).and_then(|s| scalar(ct, s, norm)).ok_or_else(bad)?;
+            }
+        }
+        Ok(())
     }
 
     /// A vertex attribute of `nv` vertices with `n` components in `want`; `None` when the
@@ -517,7 +555,9 @@ fn materials(j: &Value, limits: &Limits, scene: &mut Scene) -> Result<()> {
         let v = v?;
         let texture = arr(j, "textures").get(idx(v, "index")?)?;
         let sampler = idx(texture, "sampler").and_then(|s| arr(j, "samplers").get(s));
-        let image = idx(texture, "source").filter(|i| *i < images)?;
+        // `EXT_texture_webp`: the image when the texture has no fallback `source`.
+        let webp = || texture.get("extensions").and_then(|e| e.get("EXT_texture_webp")).and_then(|e| idx(e, "source"));
+        let image = idx(texture, "source").or_else(webp).filter(|i| *i < images)?;
         Some(TextureRef { image, uv_set: idx(v, "texCoord").unwrap_or(0) as u32, wrap: [wrap(sampler, "wrapS"), wrap(sampler, "wrapT")] })
     };
     for m in list {
@@ -546,6 +586,15 @@ fn materials(j: &Value, limits: &Limits, scene: &mut Scene) -> Result<()> {
             occlusion_strength: m.get("occlusionTexture").map_or(1.0, |n| num(n, "strength", 1.0)) as f32,
             emissive_texture: tref(m.get("emissiveTexture")),
         });
+        // The older specular-glossiness model, as the nearest metallic-roughness material: its
+        // diffuse colour and texture, no metal, and roughness from the glossiness.
+        if let (Some(sg), Some(out)) = (ext.and_then(|e| e.get("KHR_materials_pbrSpecularGlossiness")), scene.materials.last_mut()) {
+            out.base_color = nums(sg, "diffuseFactor", [1.0; 4]).map(|v| v as f32);
+            out.base_color_texture = tref(sg.get("diffuseTexture"));
+            out.metallic = 0.0;
+            out.roughness = (1.0 - num(sg, "glossinessFactor", 1.0)).clamp(0.0, 1.0) as f32;
+            out.metallic_roughness_texture = None;
+        }
     }
     Ok(())
 }
@@ -694,10 +743,17 @@ fn cameras_and_lights(j: &Value, limits: &Limits, scene: &mut Scene) -> Result<(
 /// Required extensions that only change how a file looks (textures, material models) or that
 /// the reader handles: the geometry reads without the others being understood.
 fn check_extensions(j: &Value, scene: &mut Scene) -> Result<()> {
-    const LOOKS: [&str; 5] = ["KHR_texture_transform", "KHR_texture_basisu", "EXT_texture_webp", "MSFT_texture_dds", "KHR_lights_punctual"];
+    const LOOKS: [&str; 4] = ["KHR_texture_transform", "KHR_texture_basisu", "MSFT_texture_dds", "KHR_lights_punctual"];
+    const READ: [&str; 5] = [
+        "KHR_mesh_quantization",
+        "KHR_materials_unlit",
+        "KHR_materials_emissive_strength",
+        "KHR_materials_pbrSpecularGlossiness",
+        "EXT_texture_webp",
+    ];
     for e in arr(j, "extensionsRequired").iter().filter_map(Value::as_str) {
         let short: String = e.chars().take(64).collect();
-        if matches!(e, "KHR_mesh_quantization" | "KHR_materials_unlit" | "KHR_materials_emissive_strength") {
+        if READ.contains(&e) {
             continue;
         }
         if !LOOKS.contains(&e) && !e.starts_with("KHR_materials_") {
