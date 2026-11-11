@@ -33,9 +33,9 @@ impl<'a> EnvView<'a> {
         self.scoped.facts_of(id)
     }
 
-    /// Whether wheel takers in this scope take the wheel only while focused or armed.
-    pub(crate) fn wheel_gated(&self) -> bool {
-        self.scoped.wheel_gated
+    /// How wheel takers in this scope take the wheel.
+    pub(crate) fn wheel(&self) -> super::WheelScope {
+        self.scoped.wheel
     }
 
     /// The innermost scrolling body around the component.

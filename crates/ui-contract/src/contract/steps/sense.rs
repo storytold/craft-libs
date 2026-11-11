@@ -1,19 +1,22 @@
 //! Step 8, sense: part states from the sensing core and the wheel takers.
 
+use crate::runtime::env::WheelScope;
 use crate::runtime::wheel;
 use crate::style::{Flags, StateSet};
 use craft_behavior::Sense;
 use craft_theme::{State, StateMix};
 use egui::{Context, Id, Rect};
 
-/// Registers a wheel taker for next pass's split (8.6) from the wheel bits of `sense` (`WheelTaker::for_sense`); a
-/// value control without them takes the vertical wheel only while focused or armed. Inside a wheel-gated scope
-/// (`Overrides::wheel_gated`) every taker takes the wheel, on every axis, only while focused or armed.
-pub(crate) fn register_wheel(ctx: &Context, id: Id, rect: Rect, sense: Sense, value_control: bool, gated: bool) {
-    if let Some(taker) = craft_behavior::WheelTaker::for_sense(id, rect, sense) {
-        wheel::register(ctx, taker.gated(taker.gated || gated));
-    } else if value_control {
-        wheel::register(ctx, craft_behavior::WheelTaker::new(id, rect).vertical(true).gated(true));
+/// Registers a wheel taker for next pass's split (8.6) from the wheel bits of `sense` (`WheelTaker::for_sense`). A
+/// value control takes the wheel only while focused or armed, on the axes it senses (the vertical one when it senses
+/// none); inside a `WheelScope::Free` scope one that senses the wheel takes it without focus. Inside a
+/// `WheelScope::Gated` scope every taker waits for focus or arming.
+pub(crate) fn register_wheel(ctx: &Context, id: Id, rect: Rect, sense: Sense, value_control: bool, scope: WheelScope) {
+    let sensed = craft_behavior::WheelTaker::for_sense(id, rect, sense);
+    let free = sensed.is_some() && scope == WheelScope::Free;
+    let taker = sensed.or_else(|| value_control.then(|| craft_behavior::WheelTaker::new(id, rect).vertical(true)));
+    if let Some(taker) = taker {
+        wheel::register(ctx, taker.gated(scope == WheelScope::Gated || (value_control && !free)));
     }
 }
 

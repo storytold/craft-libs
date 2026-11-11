@@ -12,9 +12,9 @@ use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 use craft_behavior::{EditEvent, EditEvents, Mixed, Value, decimals_for_step};
-use craft_ui::contract::{Bind, BodyCx, EditResponse, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, BodyCx, EditResponse, Inner, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _};
 use craft_ui::form::{FieldGroup, SliderField};
-use craft_ui::runtime::env::{Env, Label, UnitKind};
+use craft_ui::runtime::env::{Env, Label, UnitKind, WheelScope, with_env};
 use craft_ui::style::DataColor;
 use craft_ui::value_drag::TrackFace;
 use egui::{Response, Ui};
@@ -177,7 +177,7 @@ impl<'a> AdjustSliders<'a> {
     pub fn show(self, ui: &mut Ui) -> EditResponse<Vec<f64>> {
         let AdjustSliders { label, fields, mut values, context } = self;
         let mut edit = None;
-        let shown = FieldGroup::new(label).show(ui, |ui, cx| {
+        let shown = editor_group(ui, label, context, |ui, cx| {
             let held = read(&mut values, cx).unwrap_or_default();
             let now: Vec<f64> = fields.iter().enumerate().map(|(i, f)| f.clamp(held.get(i).copied().unwrap_or(f.default))).collect();
             let mut run = Run::start(&mut values, context, now.clone(), cx.memory::<Memory>().began.clone());
@@ -193,6 +193,18 @@ impl<'a> AdjustSliders<'a> {
         });
         lifted(edit, shown.output)
     }
+}
+
+/// The editor's `FieldGroup` around `body`. In a dialog its sliders take the wheel without focus
+/// (`WheelScope::Free`); in the Properties panel only while focused or armed, so the panel scrolls over them.
+pub(super) fn editor_group<R>(
+    ui: &mut Ui,
+    label: Label,
+    context: AdjustContext,
+    body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
+) -> Inner<Response, R> {
+    let wheel = if context.is_dialog() { WheelScope::Free } else { WheelScope::Plain };
+    with_env(ui, |scope| scope.wheel = Some(wheel), |ui| FieldGroup::new(label).show(ui, body))
 }
 
 /// The value of `bind` a body starts its pass from; `None` while it is mixed.

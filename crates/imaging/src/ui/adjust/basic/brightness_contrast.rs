@@ -1,12 +1,11 @@
 //! Brightness/Contrast: its value and editor.
 
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, EditResponse, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _};
-use craft_ui::form::FieldGroup;
+use craft_ui::contract::{Bind, EditResponse, Pattern, Props as _, Remember as _, Show as _};
 use craft_ui::runtime::env::Label;
 use egui::Ui;
 
-use crate::ui::adjust::sliders::{Run, lifted, read, words};
+use crate::ui::adjust::sliders::{Run, editor_group, lifted, read, words};
 use crate::ui::adjust::{AdjustContext, AdjustField};
 
 /// Contrast's lowest value, and with Use Legacy.
@@ -68,7 +67,7 @@ impl<'a> BrightnessContrastEditor<'a> {
         let BrightnessContrastEditor { label, mut value, context } = self;
         let words = words(ui);
         let mut edit = None;
-        let shown = FieldGroup::new(label).show(ui, |ui, cx| {
+        let shown = editor_group(ui, label, context, |ui, cx| {
             let now = read(&mut value, cx).unwrap_or_default();
             let lowest = if now.legacy { LEGACY_CONTRAST_MIN } else { CONTRAST_MIN };
             let brightness = AdjustField::new("brightness", words.brightness.clone(), -150.0..=150.0, 0.0);

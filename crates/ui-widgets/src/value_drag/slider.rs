@@ -1,7 +1,8 @@
 //! `Slider`: a thumb on a track over an `f64` range. A press on the thumb grabs it and a drag moves it by the pointer's
 //! travel; a press on the track jumps the thumb there; arrows, the wheel and AccessKit step the value; a double click
-//! or the reset intent restores the binding's reset value. The track maps positions to values through a
-//! [`SliderScale`], linear by default.
+//! or the reset intent restores the binding's reset value. The vertical wheel steps it while it is focused or armed, so
+//! a panel scrolls over it; inside a `WheelScope::Free` scope (an adjustment dialog) without focus too. The track maps
+//! positions to values through a [`SliderScale`], linear by default.
 
 use super::track::{self, Along, Fill, MarkInk, MarkSpace, Marks, Pick, Press, Scale, SliderScale, TrackFace, Travel};
 use crate::contract::{
@@ -183,7 +184,7 @@ impl Component for Slider<'_> {
     }
 
     fn sense(&self) -> Sense {
-        Sense::FOCUS | Sense::WHEEL | Sense::WHEEL_X
+        Sense::FOCUS | Sense::WHEEL_Y
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {

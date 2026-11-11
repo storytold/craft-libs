@@ -126,3 +126,63 @@ fn a_leaf_at_a_degenerate_rect_neither_panics_nor_changes_its_value() {
         assert_eq!(*value.borrow(), START, "a slider shown at {rect:?} changed its value");
     }
 }
+
+/// The wheel over a slider in a scrolling panel scrolls the panel while the slider has no focus; it steps the slider
+/// once the slider has focus, or without focus inside a `WheelScope::Free` scope (an adjustment dialog). An outer
+/// `WheelScope::Gated` scope (a card in the Overview) wins over a free one inside it.
+#[trial]
+fn the_wheel_steps_a_slider_when_focused_or_freed_and_otherwise_scrolls_the_panel() {
+    use craft_ui::contract::{ContainerProps, Scroll, ShowContainer as _};
+    use craft_ui::runtime::env::{WheelScope, with_env};
+    use craft_ui::runtime::focus::{FocusTarget, request};
+    use craft_ui::testing::layout::{Block, in_region};
+    use craft_ui_test_kit::body::Slab;
+    use std::cell::Cell;
+
+    /// How far the value and the panel moved after one wheel turn over the slider, shown in the scopes `scopes`
+    /// (outer first) inside the panel.
+    fn turned(scopes: &[WheelScope], focused: bool) -> (f64, f32) {
+        fn nested(ui: &mut Ui, scopes: &[WheelScope], body: &mut dyn FnMut(&mut Ui)) {
+            match scopes.split_first() {
+                Some((scope, inner)) => with_env(ui, |set| set.wheel = Some(*scope), |ui| nested(ui, inner, body)),
+                None => body(ui),
+            }
+        }
+        let value = RefCell::new(START);
+        let (top, slider) = (Cell::new(0.0_f32), Cell::new(None));
+        let mut show = |ui: &mut Ui| {
+            in_region(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(300.0, 200.0)), |ui| {
+                Slab::new(ContainerProps::new().scroll(Scroll::vertical())).id_salt("panel").show(ui, |ui, _| {
+                    top.set(ui.next_widget_position().y);
+                    nested(ui, scopes, &mut |ui| {
+                        let mut value = value.borrow_mut();
+                        let shown = Slider::new(Bind::bound(&mut *value), 0.0..=100.0).label("Opacity").show(ui);
+                        slider.set(Some((shown.response.id, shown.response.rect)));
+                    });
+                    Block::new(Vec2::new(100.0, 1000.0)).show(ui);
+                });
+            });
+        };
+        let mut frames = Frames::new();
+        frames.idle(3, &mut show);
+        let (id, rect) = slider.get().expect("the slider showed");
+        if focused {
+            request(&frames.ctx, FocusTarget::Id(id));
+            frames.idle(2, &mut show);
+        }
+        let (value_before, top_before) = (*value.borrow(), top.get());
+        frames.frame(vec![pointer::moved(rect.center())], &mut show);
+        frames.frame(vec![pointer::wheel(-40.0)], &mut show);
+        frames.idle(2, &mut show);
+        (*value.borrow() - value_before, top_before - top.get())
+    }
+
+    let (value, panel) = turned(&[], false);
+    assert!(value == 0.0 && panel > 0.0, "unfocused: the panel scrolls and the value stays ({value}, {panel})");
+    let (value, panel) = turned(&[], true);
+    assert!(value != 0.0 && panel == 0.0, "focused: the slider steps and the panel stays ({value}, {panel})");
+    let (value, panel) = turned(&[WheelScope::Free], false);
+    assert!(value != 0.0 && panel == 0.0, "free scope: the unfocused slider steps ({value}, {panel})");
+    let (value, panel) = turned(&[WheelScope::Gated, WheelScope::Free], false);
+    assert!(value == 0.0 && panel > 0.0, "a gated scope wins over a free one inside it ({value}, {panel})");
+}

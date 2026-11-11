@@ -83,8 +83,8 @@ pub struct WheelTaker<O> {
     pub vertical: bool,
     /// It takes zoom.
     pub zoom: bool,
-    /// It takes any axis (scroll or zoom) only while focused or armed: a value control without wheel bits, or any
-    /// taker inside a wheel-gated scope.
+    /// It takes any axis (scroll or zoom) only while focused or armed: a value control, unless its scope frees it,
+    /// or any taker inside a gated scope.
     pub gated: bool,
     /// A scroll region (a scrolling body or collection): Shift turns the vertical wheel sideways over it.
     pub scrolls: bool,

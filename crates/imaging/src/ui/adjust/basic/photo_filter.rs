@@ -5,14 +5,14 @@ use craft_ui::choice::{Checkbox, Radio, RadioGroup, Swatch};
 use craft_ui::contract::{
     Bind, EditResponse, Entry, LabelKind, Outcome, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _, SideLabel,
 };
-use craft_ui::form::{Field, FieldGroup};
+use craft_ui::form::Field;
 use craft_ui::layout_components::Row;
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Label, UnitKind};
 use craft_ui::runtime::requests::ColorRequest;
 use egui::Ui;
 
-use crate::ui::adjust::sliders::{Run, lifted, read, words};
+use crate::ui::adjust::sliders::{Run, editor_group, lifted, read, words};
 use crate::ui::adjust::{AdjustContext, AdjustField, AdjustWords};
 
 /// An opaque colour from 8-bit sRGB channels.
@@ -255,7 +255,7 @@ impl<'a> PhotoFilterEditor<'a> {
         let PhotoFilterEditor { label, mut value, context } = self;
         let words = words(ui);
         let mut out = None;
-        let shown = FieldGroup::new(label).show(ui, |ui, cx| {
+        let shown = editor_group(ui, label, context, |ui, cx| {
             let now = read(&mut value, cx).unwrap_or_default();
             let preset = PhotoFilterPreset::of(now.color);
             let use_color = cx.memory::<FilterMemory>().use_color.unwrap_or(preset.is_none());

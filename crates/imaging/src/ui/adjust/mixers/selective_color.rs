@@ -2,13 +2,13 @@
 
 use craft_ui::choice::{Radio, RadioGroup};
 use craft_ui::contract::{Bind, EditResponse, Entry, Outcome, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _};
-use craft_ui::form::{Field, FieldGroup};
+use craft_ui::form::Field;
 use craft_ui::layout_components::Row;
 use craft_ui::runtime::env::{Label, UnitKind};
 use egui::Ui;
 
 use super::Tables;
-use crate::ui::adjust::sliders::{Run, lifted, read, words};
+use crate::ui::adjust::sliders::{Run, editor_group, lifted, read, words};
 use crate::ui::adjust::{AdjustContext, AdjustField};
 
 /// Selective Color's method.
@@ -110,7 +110,7 @@ impl<'a> SelectiveColorEditor<'a> {
         let SelectiveColorEditor { label, mut value, context } = self;
         let words = words(ui);
         let mut out = None;
-        let shown = FieldGroup::new(label).show(ui, |ui, cx| {
+        let shown = editor_group(ui, label, context, |ui, cx| {
             let now = read(&mut value, cx).unwrap_or_default();
             let memory = cx.memory::<SelectiveMemory>().clone();
             let range = memory.range.min(RANGES - 1);

@@ -13,6 +13,7 @@ use crate::contract::{Bind, Collection, Cx, Internal, ItemCx, ItemOutput as _, P
 use crate::primitives::{HiddenContent, ScrollBar};
 use crate::runtime::access::{self, Role, SetPosition};
 use crate::runtime::egui::{alloc, areas, child, response};
+use crate::runtime::env::WheelScope;
 use crate::runtime::env::{AppValues, ArenaId, Env, ItemFacts};
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::{focus, keys, layout_memory, lazy, overlay, wheel};
@@ -295,7 +296,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                     .vertical((vertical && max.y > 0.0) || horizontal)
                     .horizontal(horizontal)
                     .scrolls(true)
-                    .gated(cx.core.env.wheel_gated())
+                    .gated(cx.core.env.wheel() == WheelScope::Gated)
                     .room(WheelRoom::new(offset, max - offset))
                     .zoom(comp.zooms()),
             );

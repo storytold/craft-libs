@@ -4,13 +4,13 @@ use craft_theme::variant::Tone;
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, EditResponse, Entry, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _};
 use craft_ui::display::Text;
-use craft_ui::form::{Field, FieldGroup, Help};
+use craft_ui::form::{Field, Help};
 use craft_ui::runtime::env::{Env, Label, UnitKind, Units};
 use craft_ui::style::TypeRole;
 use egui::Ui;
 
 use super::Tables;
-use crate::ui::adjust::sliders::{Run, lifted, read, words};
+use crate::ui::adjust::sliders::{Run, editor_group, lifted, read, words};
 use crate::ui::adjust::style::{mix, tones};
 use crate::ui::adjust::{AdjustContext, AdjustField, AdjustTrack, AdjustWords};
 
@@ -127,7 +127,7 @@ impl<'a> ChannelMixerEditor<'a> {
         let words = words(ui);
         let units = Env::of(ui).units();
         let mut edit = None;
-        let shown = FieldGroup::new(label.clone()).show(ui, |ui, cx| {
+        let shown = editor_group(ui, label.clone(), context, |ui, cx| {
             let now = read(&mut value, cx).unwrap_or_default();
             let mono = now.gray.is_some();
             // Monochrome has the one output, Gray.

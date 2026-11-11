@@ -40,6 +40,20 @@ impl std::fmt::Debug for ThemeScope {
     }
 }
 
+/// How the wheel takers of a scope take the wheel.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum WheelScope {
+    /// A value control takes the wheel only while focused or armed; every other taker whenever the pointer is over it.
+    #[default]
+    Plain,
+    /// A value control that senses the wheel takes it without focus: the sliders of an adjustment dialog.
+    Free,
+    /// Every taker takes the wheel only while focused or armed: a card in a scrolling overview. Wins over a `Free` set
+    /// inside it, so a scroll of the overview never stops on a story's slider.
+    Gated,
+}
+
 /// Changes to the inherited values for a stretch of code.
 #[derive(Default)]
 #[non_exhaustive]
@@ -50,8 +64,8 @@ pub struct Overrides {
     pub enabled: Option<bool>,
     /// Only `true` has an effect.
     pub read_only: Option<bool>,
-    /// Only `true` has an effect.
-    pub wheel_gated: Option<bool>,
+    /// Has no effect inside a `WheelScope::Gated` scope.
+    pub wheel: Option<WheelScope>,
     /// Can only lower the mode.
     pub motion: Option<MotionMode>,
     /// Also the child `Ui`'s direction and layout.
@@ -83,8 +97,10 @@ impl Overrides {
         if self.read_only == Some(true) {
             scoped.read_only = true;
         }
-        if self.wheel_gated == Some(true) {
-            scoped.wheel_gated = true;
+        if let Some(wheel) = self.wheel
+            && scoped.wheel != WheelScope::Gated
+        {
+            scoped.wheel = wheel;
         }
         if let Some(motion) = self.motion {
             let inherited = scoped.inherited_mut();

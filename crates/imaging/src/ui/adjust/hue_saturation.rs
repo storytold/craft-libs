@@ -9,14 +9,14 @@ use craft_theme::{Hsb, Srgba};
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, EditResponse, Entry, Outcome, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _};
 use craft_ui::display::{Shade, Text};
-use craft_ui::form::{Field, FieldGroup};
+use craft_ui::form::Field;
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Label, UnitKind};
 use craft_ui::style::{DataColor, TypeRole};
 use craft_ui::value_drag::{Anchor, Thumb, ThumbRow, TrackFace};
 use egui::{Color32, Ui};
 
-use super::sliders::{Run, lifted, read, words};
+use super::sliders::{Run, editor_group, lifted, read, words};
 use super::style::tones;
 use super::{AdjustContext, AdjustField, AdjustTrack};
 use crate::ui::curve::ToneRamp;
@@ -295,7 +295,7 @@ impl<'a> HueSaturationEditor<'a> {
         let words = words(ui);
         let units = Env::of(ui).units();
         let mut out = None;
-        let shown = FieldGroup::new(label).show(ui, |ui, cx| {
+        let shown = editor_group(ui, label, context, |ui, cx| {
             let now = read(&mut value, cx).unwrap_or_default();
             let memory = cx.memory::<HueMemory>().clone();
             // Colorize works on the master only.

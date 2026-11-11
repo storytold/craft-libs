@@ -28,14 +28,14 @@ pub struct AdjustContext {
 }
 
 impl AdjustContext {
-    /// An editor in an Image › Adjustments dialog. `dynamic` is Preferences › Interface › Dynamic
-    /// Color Sliders: colour tracks on the colour sliders, the plain track when off.
+    /// An editor in an Image › Adjustments dialog: the wheel over a slider steps it without focus. `dynamic` is
+    /// Preferences › Interface › Dynamic Color Sliders: colour tracks on the colour sliders, the plain track when off.
     pub fn dialog(dynamic: bool) -> Self {
         Self { dialog: true, dynamic_color_sliders: dynamic, gray: false }
     }
 
-    /// An editor in the Properties panel (an adjustment layer). `dynamic` as in
-    /// [`dialog`](Self::dialog).
+    /// An editor in the Properties panel (an adjustment layer): the wheel steps only a focused or armed slider and
+    /// scrolls the panel over the others. `dynamic` as in [`dialog`](Self::dialog).
     pub fn properties(dynamic: bool) -> Self {
         Self { dialog: false, dynamic_color_sliders: dynamic, gray: false }
     }

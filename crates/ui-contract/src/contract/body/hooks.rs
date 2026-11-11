@@ -570,7 +570,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                             .vertical(vertical)
                             .horizontal(horizontal)
                             .scrolls(true)
-                            .gated(crate::runtime::env::Env::of(pcx.ui).wheel_gated)
+                            .gated(crate::runtime::env::Env::of(pcx.ui).wheel == crate::runtime::env::WheelScope::Gated)
                             .notch(notch)
                             .room(WheelRoom::new(positive, negative)),
                     );

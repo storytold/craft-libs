@@ -676,7 +676,7 @@ fn run_in_host<C: Component>(p: &mut Pass<'_, '_, C>, ui: &mut Ui, host_at: Opti
     // A body's wheel share is its scroll taker (body step, step 7); the gate value does not take the wheel. A body root that
     // senses the wheel itself (a canvas) registers like any other component.
     if !inert && (p.hooks.shape() != ShapeKind::Body || own.intersects(Sense::WHEEL | Sense::WHEEL_X)) {
-        steps::register_wheel(&ctx, id, rect, own, comp.bind().is_some(), env.wheel_gated);
+        steps::register_wheel(&ctx, id, rect, own, comp.bind().is_some(), env.wheel);
     }
     // 8 sense
     p.trace.mark(Step::Sense);

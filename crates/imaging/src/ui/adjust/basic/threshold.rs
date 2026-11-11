@@ -1,11 +1,10 @@
 //! Threshold: its editor.
 
-use craft_ui::contract::{Bind, EditResponse, Pattern, Remember as _, Show as _, ShowContainer as _};
-use craft_ui::form::FieldGroup;
+use craft_ui::contract::{Bind, EditResponse, Pattern, Remember as _, Show as _};
 use craft_ui::runtime::env::Label;
 use egui::Ui;
 
-use crate::ui::adjust::sliders::{Run, lifted, read, words};
+use crate::ui::adjust::sliders::{Run, editor_group, lifted, read, words};
 use crate::ui::adjust::{AdjustContext, AdjustField};
 use crate::ui::histogram::{ChannelColor, Histogram, HistogramData};
 
@@ -59,7 +58,7 @@ impl<'a> ThresholdEditor<'a> {
         let ThresholdEditor { label, mut level, histogram, context } = self;
         let words = words(ui);
         let mut edit = None;
-        let shown = FieldGroup::new(label).show(ui, |ui, cx| {
+        let shown = editor_group(ui, label, context, |ui, cx| {
             let now = read(&mut level, cx).unwrap_or(THRESHOLD_DEFAULT).clamp(THRESHOLD_MIN, THRESHOLD_MAX);
             let empty = HistogramData::tone(&[0u32; THRESHOLD_BINS][..], ChannelColor::Neutral);
             let data = histogram.unwrap_or(&empty);

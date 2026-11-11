@@ -394,7 +394,7 @@ impl Host<'_> {
             |env| {
                 env.direction = look.direction;
                 env.size = look.size;
-                env.wheel_gated = Some(gated);
+                env.wheel = gated.then_some(craft_ui::runtime::env::WheelScope::Gated);
             },
             |ui| show(ui, data),
         )

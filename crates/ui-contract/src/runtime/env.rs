@@ -39,7 +39,7 @@ mod view;
 
 pub use app_values::{AppValues, EnvValue, StyleValue};
 use host_words::{host_dates, host_format, host_words};
-pub use overrides::{Overrides, ThemeScope, WordsOverride, with_env};
+pub use overrides::{Overrides, ThemeScope, WheelScope, WordsOverride, with_env};
 pub use root::{ResolvedRoot, RootEnv};
 pub(crate) use tokens::TokenInputs;
 #[cfg(feature = "testing")]
@@ -82,9 +82,8 @@ pub struct Scoped {
     pub enabled: bool,
     /// OR of every scope above.
     pub read_only: bool,
-    /// OR of every scope above: wheel takers inside register gated, taking the wheel only while focused or armed
-    /// (a card in a scrolling overview). A layer opened from inside starts ungated.
-    pub wheel_gated: bool,
+    /// How wheel takers inside take the wheel (`WheelScope`). A layer opened from inside starts plain.
+    pub wheel: WheelScope,
     /// The flow direction: layout order, arrow keys and roving. A container whose axis keeps its order
     /// (`Props::ltr_axis`) sets it to left to right for what is inside.
     pub direction: Direction,
@@ -345,7 +344,7 @@ impl Env {
                 size: ControlSize::Md,
                 enabled: true,
                 read_only: false,
-                wheel_gated: false,
+                wheel: WheelScope::Plain,
                 direction: root.direction,
                 text_direction: root.direction,
                 ids_stable: true,
@@ -411,7 +410,7 @@ impl Env {
             s.roving = None;
             s.transform = None;
             s.scroll_owner = None;
-            s.wheel_gated = false;
+            s.wheel = WheelScope::Plain;
             s.unbounded = (false, false);
             s.lazy = None;
             s.item = None;

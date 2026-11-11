@@ -2,12 +2,12 @@
 
 use craft_ui::choice::{Checkbox, Radio, RadioGroup};
 use craft_ui::contract::{Bind, EditResponse, Outcome, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _};
-use craft_ui::form::{Field, FieldGroup};
+use craft_ui::form::Field;
 use craft_ui::layout_components::Row;
 use craft_ui::runtime::env::Label;
 use egui::Ui;
 
-use crate::ui::adjust::sliders::{Run, lifted, read, words};
+use crate::ui::adjust::sliders::{Run, editor_group, lifted, read, words};
 use crate::ui::adjust::{AdjustContext, AdjustField};
 
 /// The tone Color Balance shows.
@@ -156,7 +156,7 @@ impl<'a> ColorBalanceEditor<'a> {
         let ColorBalanceEditor { label, mut value, tone: host_tone, context } = self;
         let words = words(ui);
         let mut out = None;
-        let shown = FieldGroup::new(label).show(ui, |ui, cx| {
+        let shown = editor_group(ui, label, context, |ui, cx| {
             let now = read(&mut value, cx).unwrap_or_default();
             let tone = host_tone.or(cx.memory::<BalanceMemory>().tone).unwrap_or_default();
             let mut picked = None;

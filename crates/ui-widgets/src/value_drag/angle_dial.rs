@@ -269,7 +269,7 @@ impl Component for AngleDial<'_> {
     }
 
     fn sense(&self) -> Sense {
-        Sense::FOCUS
+        Sense::FOCUS | Sense::WHEEL_X | Sense::WHEEL_Y
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
