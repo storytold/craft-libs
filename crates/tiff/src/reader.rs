@@ -1,7 +1,7 @@
 //! Bounds-checked IFD parsing.
 
 use crate::{ByteOrder, Entry, FieldType, Ifd, Result, Tiff, TiffError, Value, tags};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Limits applied while parsing. The defaults are generous for real files and safe for hostile ones.
 #[derive(Clone, Debug)]
@@ -177,7 +177,9 @@ pub(crate) fn parse(data: &[u8], opts: &ParseOptions) -> Result<Tiff> {
     let mut ctx = Ctx::new(data, order, big, opts);
     let mut ifds = Vec::new();
     let mut off = first;
-    while off != 0 {
+    // the top-level chain stops at an IFD it already holds (a `next` pointer looping back)
+    let mut chain = HashSet::new();
+    while off != 0 && chain.insert(off) {
         match ctx.ifd(off, 0, 0) {
             Ok((ifd, next)) => {
                 ifds.push(ifd);
@@ -210,15 +212,39 @@ struct Ctx<'a> {
     order: ByteOrder,
     big: bool,
     opts: &'a ParseOptions,
-    visited: HashSet<u64>,
+    /// Offsets of the IFDs being parsed (the current path from the root): a child pointing at one of them is a
+    /// cycle.
+    ancestors: Vec<u64>,
+    /// IFDs produced so far, counting every copy of a shared one (bounded by `max_ifds`).
+    visits: usize,
+    /// IFDs already parsed, by (offset, base, depth): a second pointer to one (two `SubIFDs` entries, or an Exif
+    /// pointer shared by two directories) gets a copy instead of being dropped. Keyed by depth too, so a copy has
+    /// exactly the children a fresh parse at that depth would have; a copy is charged the IFDs, entries and value
+    /// bytes of the first parse, so copies stay inside every limit.
+    parsed: HashMap<(u64, u64, usize), Parsed>,
     budget: u64,
     entries_total: usize,
+}
+
+/// What parsing one IFD and its children used up: a copy of it is charged the same.
+#[derive(Clone, Copy)]
+struct Cost {
+    ifds: usize,
+    entries: usize,
+    bytes: u64,
+}
+
+/// An IFD parsed once, kept for later pointers to it.
+struct Parsed {
+    ifd: Ifd,
+    next: u64,
+    cost: Cost,
 }
 
 impl<'a> Ctx<'a> {
     fn new(data: &'a [u8], order: ByteOrder, big: bool, opts: &'a ParseOptions) -> Self {
         let budget = opts.budget_for(data.len());
-        Self { data, order, big, opts, visited: HashSet::new(), budget, entries_total: 0 }
+        Self { data, order, big, opts, ancestors: Vec::new(), visits: 0, parsed: HashMap::new(), budget, entries_total: 0 }
     }
 
     fn read_off(&self, pos: usize) -> Option<u64> {
@@ -230,12 +256,47 @@ impl<'a> Ctx<'a> {
         if depth > self.opts.max_depth {
             return Err(TiffError::Limit("IFD nesting depth"));
         }
-        if self.visited.len() >= self.opts.max_ifds {
-            return Err(TiffError::Limit("IFD count"));
-        }
-        if !self.visited.insert(offset) {
+        if self.ancestors.contains(&offset) {
             return Err(TiffError::Invalid(format!("IFD loop at {offset}")));
         }
+        let key = (offset, base, depth);
+        if let Some(c) = self.parsed.get(&key) {
+            // a copy costs what the first parse did: its IFDs, entries and value bytes
+            let visits = self.visits.saturating_add(c.cost.ifds);
+            if visits > self.opts.max_ifds {
+                return Err(TiffError::Limit("IFD count"));
+            }
+            let entries = self.entries_total.saturating_add(c.cost.entries);
+            if entries > self.opts.max_entries_total {
+                return Err(TiffError::Limit("entry count"));
+            }
+            if c.cost.bytes > self.budget {
+                return Err(TiffError::Limit("value bytes"));
+            }
+            self.visits = visits;
+            self.entries_total = entries;
+            self.budget -= c.cost.bytes;
+            return Ok((c.ifd.clone(), c.next));
+        }
+        if self.visits >= self.opts.max_ifds {
+            return Err(TiffError::Limit("IFD count"));
+        }
+        let (visits0, entries0, budget0) = (self.visits, self.entries_total, self.budget);
+        self.visits = self.visits.saturating_add(1);
+        self.ancestors.push(offset);
+        let r = self.parse_dir(offset, base, depth);
+        self.ancestors.pop();
+        let (ifd, next) = r?;
+        let cost = Cost {
+            ifds: self.visits.saturating_sub(visits0),
+            entries: self.entries_total.saturating_sub(entries0),
+            bytes: budget0.saturating_sub(self.budget),
+        };
+        self.parsed.insert(key, Parsed { ifd: ifd.clone(), next, cost });
+        Ok((ifd, next))
+    }
+
+    fn parse_dir(&mut self, offset: u64, base: u64, depth: usize) -> Result<(Ifd, u64)> {
         let dir = directory_entries(self.data, offset, self.order, self.big, self.opts.max_entries)?;
         // Bound total entries across the whole parse so overlapping IFD tables (SubIFD pointers
         // shifted by one entry) cannot allocate millions of `Entry`s from a small input.
@@ -314,8 +375,10 @@ pub fn decode(o: ByteOrder, typ: FieldType, b: &[u8]) -> Value {
         FieldType::Byte => Value::Byte(b.to_vec()),
         FieldType::Undefined => Value::Undefined(b.to_vec()),
         FieldType::Ascii => {
-            let end = b.iter().position(|&c| c == 0).unwrap_or(b.len());
-            Value::Ascii(String::from_utf8_lossy(&b[..end]).into_owned())
+            // every NUL-separated string is kept (TIFF 6.0 allows several in one field); only the
+            // terminating NULs go
+            let end = b.iter().rposition(|&c| c != 0).map_or(0, |i| i.saturating_add(1));
+            Value::Ascii(String::from_utf8_lossy(b.get(..end).unwrap_or_default()).into_owned())
         }
         FieldType::SByte => Value::SByte(b.iter().map(|&x| x as i8).collect()),
         FieldType::Short => Value::Short(b.as_chunks::<2>().0.iter().map(|c| o.u16(arr(c))).collect()),
@@ -379,6 +442,92 @@ mod tests {
         d.resize(80, 0);
         ifd(&mut d, declared, 0x0100, next);
         d
+    }
+
+    /// A classic little-endian TIFF: IFD0 at 8 with `SubIFDs` = [`a`, `b`] and Exif → `exif`; a one-entry IFD
+    /// (tag 0x0101 = its offset) at 38 and at 56; `IFD0`'s next pointer is `next`.
+    fn shared_children(a: u32, b: u32, exif: u32, next: u32) -> Vec<u8> {
+        let o = ByteOrder::Little;
+        let mut d = b"II*\0\x08\0\0\0".to_vec();
+        o.put_u16(&mut d, 2);
+        // SubIFDs: two LONGs (8 bytes) stored out of line at 74
+        o.put_u16(&mut d, 330);
+        o.put_u16(&mut d, 4);
+        d.extend(2u32.to_le_bytes());
+        d.extend(74u32.to_le_bytes());
+        o.put_u16(&mut d, 34665);
+        o.put_u16(&mut d, 4);
+        d.extend(1u32.to_le_bytes());
+        d.extend(exif.to_le_bytes());
+        d.extend(next.to_le_bytes());
+        for at in [38u32, 56] {
+            d.resize(at as usize, 0);
+            o.put_u16(&mut d, 1);
+            o.put_u16(&mut d, 0x0101);
+            o.put_u16(&mut d, 4);
+            d.extend(1u32.to_le_bytes());
+            d.extend(at.to_le_bytes());
+            d.extend(0u32.to_le_bytes());
+        }
+        d.resize(74, 0);
+        d.extend(a.to_le_bytes());
+        d.extend(b.to_le_bytes());
+        d
+    }
+
+    #[test]
+    fn a_child_ifd_referenced_twice_is_kept_both_times() {
+        let t = Tiff::parse(&shared_children(38, 38, 38, 0)).unwrap();
+        let ifd = &t.ifds[0];
+        assert_eq!(ifd.sub_ifds.len(), 2, "the second SubIFDs pointer to the same IFD used to be dropped");
+        assert!(ifd.sub_ifds.iter().all(|s| s.u64(0x0101) == Some(38)));
+        assert_eq!(ifd.exif.as_ref().and_then(|e| e.u64(0x0101)), Some(38));
+        // distinct children still parse as before
+        let t = Tiff::parse(&shared_children(38, 56, 56, 0)).unwrap();
+        let subs: Vec<_> = t.ifds[0].sub_ifds.iter().map(|s| s.u64(0x0101)).collect();
+        assert_eq!(subs, vec![Some(38), Some(56)]);
+        // a chain IFD that is also a child is parsed in the chain too
+        let t = Tiff::parse(&shared_children(38, 56, 56, 56)).unwrap();
+        assert_eq!(t.ifds.len(), 2);
+        assert_eq!(t.ifds[1].u64(0x0101), Some(56));
+    }
+
+    #[test]
+    fn a_child_pointing_at_its_parent_is_still_a_loop() {
+        let t = Tiff::parse(&shared_children(8, 38, 8, 8)).unwrap();
+        assert_eq!(t.ifds.len(), 1);
+        assert_eq!(t.ifds[0].sub_ifds.len(), 1);
+        assert!(t.ifds[0].exif.is_none());
+    }
+
+    #[test]
+    fn shared_children_count_against_the_ifd_limit() {
+        let opts = ParseOptions { max_ifds: 2, ..Default::default() };
+        let t = Tiff::parse_with(&shared_children(38, 38, 38, 0), &opts).unwrap();
+        assert_eq!(t.ifds[0].sub_ifds.len(), 1);
+        assert!(t.ifds[0].exif.is_none());
+    }
+
+    /// Hostile input: many pointers to one shared IFD must not clone past the entry limit (each child has one
+    /// entry, so three copies need three entries plus the root's two).
+    #[test]
+    fn shared_children_count_against_the_entry_limit() {
+        let opts = ParseOptions { max_entries_total: 4, ..Default::default() };
+        let t = Tiff::parse_with(&shared_children(38, 38, 38, 0), &opts).unwrap();
+        assert_eq!(t.ifds[0].sub_ifds.len(), 2);
+        assert!(t.ifds[0].exif.is_none(), "the third copy would pass the entry limit");
+    }
+
+    #[test]
+    fn ascii_keeps_every_nul_separated_string() {
+        let v = decode(ByteOrder::Little, FieldType::Ascii, b"one\0two\0\0");
+        assert_eq!(v, Value::Ascii("one\0two".into()));
+        assert_eq!(v.as_str().as_deref(), Some("one"));
+        assert_eq!(v.as_strings(), vec!["one".to_string(), "two".to_string()]);
+        assert_eq!(v.as_bytes(), Some(&b"one"[..]), "byte readers see the first string, as before");
+        assert_eq!(decode(ByteOrder::Little, FieldType::Ascii, b"\0\0"), Value::Ascii(String::new()));
+        assert!(decode(ByteOrder::Little, FieldType::Ascii, b"\0\0").as_strings().is_empty());
+        assert_eq!(decode(ByteOrder::Little, FieldType::Ascii, b"abc").as_str().as_deref(), Some("abc"));
     }
 
     #[test]

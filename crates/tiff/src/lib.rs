@@ -174,7 +174,8 @@ impl FieldType {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Value {
     Byte(Vec<u8>),
-    /// ASCII text (bytes up to the first NUL, decoded lossily as UTF-8).
+    /// ASCII text decoded lossily as UTF-8, without the terminating NULs. A field holding several strings keeps
+    /// them NUL-separated ([`Value::as_strings`]).
     Ascii(String),
     Short(Vec<u16>),
     Long(Vec<u32>),
@@ -307,11 +308,11 @@ impl Value {
         }
     }
 
-    /// Text for ASCII values (trimmed of trailing NULs / spaces); `Byte`/`Undefined` are decoded as UTF-8 (lossy)
-    /// up to the first NUL, which covers XMP packets and UCS-less Exif strings.
+    /// Text for ASCII values (the first string, trimmed of trailing spaces); `Byte`/`Undefined` are decoded as
+    /// UTF-8 (lossy) up to the first NUL, which covers XMP packets and UCS-less Exif strings.
     pub fn as_str(&self) -> Option<String> {
         match self {
-            Value::Ascii(s) => Some(s.trim_end_matches([' ', '\0']).to_string()),
+            Value::Ascii(s) => Some(s.split('\0').next().unwrap_or_default().trim_end().to_string()),
             Value::Byte(b) | Value::Undefined(b) => {
                 let end = b.iter().position(|&c| c == 0).unwrap_or(b.len());
                 Some(String::from_utf8_lossy(&b[..end]).trim_end().to_string())
@@ -320,11 +321,20 @@ impl Value {
         }
     }
 
-    /// Raw bytes for `Byte` / `Undefined` / `SByte` / `Ascii`.
+    /// Every NUL-separated string of an ASCII value, each trimmed of trailing spaces (empty ones dropped); other
+    /// types give what [`Self::as_str`] gives.
+    pub fn as_strings(&self) -> Vec<String> {
+        match self {
+            Value::Ascii(s) => s.split('\0').map(|p| p.trim_end().to_string()).filter(|p| !p.is_empty()).collect(),
+            _ => self.as_str().into_iter().filter(|p| !p.is_empty()).collect(),
+        }
+    }
+
+    /// Raw bytes for `Byte` / `Undefined` / `SByte` / `Ascii` (an ASCII value's first string only).
     pub fn as_bytes(&self) -> Option<&[u8]> {
         match self {
             Value::Byte(b) | Value::Undefined(b) => Some(b),
-            Value::Ascii(s) => Some(s.as_bytes()),
+            Value::Ascii(s) => s.as_bytes().split(|&c| c == 0).next(),
             _ => None,
         }
     }
