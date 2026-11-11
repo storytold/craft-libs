@@ -42,6 +42,14 @@ struct WidestRuns {
     runs: Vec<(Id, u32)>,
 }
 
+/// The rows that asked their body units for their least widths, with the pass that counted them.
+#[cfg(feature = "testing")]
+#[derive(Default)]
+struct LeastRuns {
+    pass: u64,
+    runs: Vec<(Id, u32)>,
+}
+
 /// Runs `f` as a measuring run. Nested calls are fine.
 pub fn run<R>(ctx: &Context, f: impl FnOnce() -> R) -> R {
     /// Restores the depth when the run ends, by a panic too: a context used after a caught panic is not measuring.
@@ -191,4 +199,25 @@ pub(crate) fn count_widest(ctx: &Context, id: Id) {
 #[cfg(feature = "testing")]
 pub fn widest_runs(ctx: &Context) -> Vec<(Id, u32)> {
     store::with::<WidestRuns, _>(ctx, |log| log.runs.clone())
+}
+
+/// Counts a sweep of the row `id` that asks its body units for their least widths in this pass.
+#[cfg(feature = "testing")]
+pub(crate) fn count_least(ctx: &Context, id: Id) {
+    let pass = ctx.cumulative_pass_nr();
+    store::with::<LeastRuns, _>(ctx, |log| {
+        if log.pass != pass {
+            *log = LeastRuns { pass, runs: Vec::new() };
+        }
+        match log.runs.iter_mut().find(|(row, _)| *row == id) {
+            Some((_, count)) => *count += 1,
+            None => log.runs.push((id, 1)),
+        }
+    });
+}
+
+/// The rows that asked their body units for their least widths in the last pass that did so, and how many times each.
+#[cfg(feature = "testing")]
+pub fn least_runs(ctx: &Context) -> Vec<(Id, u32)> {
+    store::with::<LeastRuns, _>(ctx, |log| log.runs.clone())
 }

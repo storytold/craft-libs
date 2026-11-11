@@ -131,23 +131,38 @@ pub(crate) fn counting_fills(ui: &Ui, axis: Axis) -> bool {
     measure::active(ui.ctx()) && env.fill_body.is_some_and(|(_, along)| along == axis) && env.fill_share.is_none()
 }
 
-/// What a leaf of a shrinking row reported in the first sweep: its id, the width it took there, the width it asks for
-/// in no room and the least it shrinks to.
+/// What a unit of a shrinking row reported in the first sweep: its id, the width it took there, the width it asks for
+/// in no room and the least it shrinks to. A body unit reports what it took as both; the row asks it for its least
+/// (`Shrink::Least`) only when the row is short.
 struct Reported {
     leaf: Id,
     took: f32,
     ideal: f32,
     least: f32,
+    body: bool,
 }
 
-/// The leaves each `Row` body counting this pass reported, in order, by body id.
+/// The units each `Row` body counting this pass reported, in order, by body id.
 #[derive(Default)]
 pub(crate) struct ShrinkReports(HashMap<Id, Vec<Reported>>);
 
-/// Reports the widths of the leaf `leaf` of the row `row` that counts them.
-pub(crate) fn report_shrink(ctx: &egui::Context, row: Id, leaf: Id, took: f32, ideal: f32, least: f32) {
-    let leaf = Reported { leaf, took, ideal, least: least.min(ideal) };
+/// The least widths the body units of each `Row` body asking for them this pass reported, by row id.
+#[derive(Default)]
+pub(crate) struct LeastReports(HashMap<Id, HashMap<Id, f32>>);
+
+/// Reports the widths of the unit `leaf` of the row `row` that counts them: a leaf's least, or `None` for a body.
+pub(crate) fn report_shrink(ctx: &egui::Context, row: Id, leaf: Id, took: f32, ideal: f32, least: Option<f32>) {
+    let leaf = Reported { leaf, took, ideal, least: least.unwrap_or(ideal).min(ideal), body: least.is_none() };
     pass_state::with::<ShrinkReports, _>(ctx, |reports| reports.0.entry(row).or_default().push(leaf));
+}
+
+/// Reports the least width of the body unit `body` of the row `row` that asks for it.
+pub(crate) fn report_least(ctx: &egui::Context, row: Id, body: Id, least: f32) {
+    pass_state::with::<LeastReports, _>(ctx, |reports| {
+        if let Some(leasts) = reports.0.get_mut(&row) {
+            leasts.insert(body, least);
+        }
+    });
 }
 
 /// The width the shrink step of the row `row` gave its leaf `leaf` in this pass's measuring run.
@@ -174,19 +189,31 @@ fn shrink_widths(leaves: &[Reported], fixed: f32, room: f32) -> Vec<f32> {
 }
 
 /// Runs `body`, the children of the unwrapped `Row` body `id`, in `ui`, the block they are placed in, with the row's
-/// shrink step: a row fits its room by narrowing the leaves that can shrink (elidable text, fields, selects), never
-/// past the least each reports (`Proposal::Min`).
+/// shrink step: a row fits its room by narrowing its units, never past the least each reports. A unit is a leaf that
+/// can shrink (elidable text, fields, selects), whose least is its `Proposal::Min`, or a body that does not fill the
+/// row (a captioned field, a nested row), whose least is what its content takes unbounded with every leaf at its least.
 ///
-/// A measuring run sweeps the children once in a child that takes no room, each leaf reporting its widths, and
-/// records the width `shrink_widths` gives each leaf for the rest of the pass. When a leaf took another width there,
-/// it sweeps them again at those widths. The real run shows each leaf at most at its width. Every sweep runs in a
-/// child of `ui` with its layout, so the children get the same ids in each, and the records a measuring run leaves
-/// are the ones the real run's children read and check.
+/// A measuring run sweeps the children once in a child that takes no room, each unit reporting its widths. When the
+/// units ask for more than the room and a body is among them, it sweeps them again as a probe (`Shrink::Least`) for
+/// the bodies' leasts. It records the width `shrink_widths` gives each unit for the rest of the pass, and when a unit
+/// took another width there, or the row probed, it sweeps them again at those widths. The real run shows each unit at
+/// most at its width. Every sweep runs in a child of `ui` with its layout, so the children get the same ids in each,
+/// and the records a measuring run leaves are the ones the real run's children read and check.
 fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> R {
     let ctx = ui.ctx().clone();
     let layout = *ui.layout();
     let sweep = |ui: &mut Ui, shrink: Shrink, body: &mut dyn FnMut(&mut Ui) -> R| {
-        let installed = Env::install_for(ui, Env::of(ui).derive_local(|scoped| scoped.shrink = Some(shrink)));
+        let installed = Env::install_for(
+            ui,
+            Env::of(ui).derive_local(|scoped| {
+                scoped.shrink = Some(shrink);
+                // The least of a body is what it takes in no room.
+                if matches!(shrink, Shrink::Least(_)) {
+                    scoped.unbounded.0 = true;
+                    scoped.least = true;
+                }
+            }),
+        );
         let inner = body(ui);
         Env::restore(&ctx, installed);
         inner
@@ -195,28 +222,54 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
         return child::block(ui, None, layout, |ui| sweep(ui, Shrink::Apply(id), &mut body)).0;
     }
     let room = shrink_room(ui);
-    let first = crate::contract::keeping_ids(&ctx, || {
-        let mut first = ui.new_child(egui::UiBuilder::new().layout(layout));
-        pass_state::with::<ShrinkReports, _>(&ctx, |reports| reports.0.insert(id, Vec::new()));
-        let inner = sweep(&mut first, Shrink::Count(id), &mut body);
-        let leaves = pass_state::with::<ShrinkReports, _>(&ctx, |reports| reports.0.remove(&id)).unwrap_or_default();
-        let rect = first.min_rect();
-        let fixed = rect.width() - leaves.iter().map(|leaf| leaf.took).sum::<f32>();
-        let widths = if room.is_finite() { shrink_widths(&leaves, fixed, room) } else { leaves.iter().map(|leaf| leaf.ideal).collect() };
+    // Records the width each unit gets, and returns whether one took another width in the first sweep.
+    let settle = |leaves: &[Reported], fixed: f32| {
+        let widths = if room.is_finite() { shrink_widths(leaves, fixed, room) } else { leaves.iter().map(|leaf| leaf.ideal).collect() };
         let mut again = false;
         for (leaf, width) in leaves.iter().zip(widths) {
             layout_memory::emit_record(&ctx, shrink_key(id, leaf.leaf), layout_memory::Measured::new(Vec2::new(room, 0.0), Vec2::new(width, 0.0)));
             // Half a point: less than a pixel shows at any scale the box runs.
             again |= (leaf.took - width).abs() >= 0.5;
         }
-        ((inner, rect, again), again)
+        again
+    };
+    let (inner, rect, mut leaves, fixed, probe, again) = crate::contract::keeping_ids(&ctx, || {
+        let mut first = ui.new_child(egui::UiBuilder::new().layout(layout));
+        pass_state::with::<ShrinkReports, _>(&ctx, |reports| reports.0.insert(id, Vec::new()));
+        let inner = sweep(&mut first, Shrink::Count(id), &mut body);
+        let leaves = pass_state::with::<ShrinkReports, _>(&ctx, |reports| reports.0.remove(&id)).unwrap_or_default();
+        let rect = first.min_rect();
+        let fixed = rect.width() - leaves.iter().map(|leaf| leaf.took).sum::<f32>();
+        let short = fixed + leaves.iter().map(|leaf| leaf.ideal).sum::<f32>() - room >= 0.5;
+        let probe = room.is_finite() && short && leaves.iter().any(|leaf| leaf.body);
+        let again = !probe && settle(&leaves, fixed);
+        ((inner, rect, leaves, fixed, probe, again), probe || again)
     });
-    match first {
-        (_, _, true) => child::block(ui, None, layout, |ui| sweep(ui, Shrink::Apply(id), &mut body)).0,
-        (inner, rect, false) => {
-            ui.advance_cursor_after_rect(rect);
-            inner
+    let again = again || probe;
+    if probe {
+        #[cfg(feature = "testing")]
+        measure::count_least(&ctx, id);
+        pass_state::with::<LeastReports, _>(&ctx, |reports| reports.0.insert(id, HashMap::new()));
+        crate::contract::keeping_ids(&ctx, || {
+            layout_memory::probing(&ctx, || {
+                let mut least = ui.new_child(egui::UiBuilder::new().layout(layout));
+                sweep(&mut least, Shrink::Least(id), &mut body);
+            });
+            ((), true)
+        });
+        let leasts = pass_state::with::<LeastReports, _>(&ctx, |reports| reports.0.remove(&id)).unwrap_or_default();
+        for leaf in leaves.iter_mut().filter(|leaf| leaf.body) {
+            if let Some(least) = leasts.get(&leaf.leaf) {
+                leaf.least = least.min(leaf.ideal);
+            }
         }
+        settle(&leaves, fixed);
+    }
+    if again {
+        child::block(ui, None, layout, |ui| sweep(ui, Shrink::Apply(id), &mut body)).0
+    } else {
+        ui.advance_cursor_after_rect(rect);
+        inner
     }
 }
 
@@ -558,7 +611,14 @@ pub(crate) fn run_body_measured<R>(
     let ctx = ui.ctx().clone();
     let sizing = measure::active(&ctx);
     match layout {
-        BodyLayout::Stack => (run_sharing(ui, env, id, Axis::Y, child::column_layout(rtl), body), None),
+        BodyLayout::Stack => {
+            // Each leaf shows at most the stack's room, never below its least.
+            let env = env.derive_local(|scoped| scoped.shrink = Some(Shrink::Fit));
+            let installed = Env::install_for(ui, env.clone());
+            let inner = run_sharing(ui, &env, id, Axis::Y, child::column_layout(rtl), body);
+            Env::restore(&ctx, installed);
+            (inner, None)
+        }
         BodyLayout::Row { wrap: false, align: RowAlign::SpaceBetween } => {
             let (inner, _) = child::block(ui, None, child::row_layout(rtl, false), |ui| {
                 let flow = Flow::new(ui.available_rect_before_wrap(), rtl);

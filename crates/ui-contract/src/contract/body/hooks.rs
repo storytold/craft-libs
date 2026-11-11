@@ -339,9 +339,12 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         // A container placed at an explicit rect, or mounted on a layer or in a window, is no flow child of that body:
         // it takes its own room, not a share.
         let flows = matches!(at.at, ShowAt::Flow) && self.in_flow(comp);
+        // Along an axis the flow does not bound it fills nothing (`sized`): it measures its content there.
+        let bounded = crate::layout::flow_room(at.ui);
+        let (fills_x, fills_y) = (self.given.0 && bounded.x.is_finite(), self.given.1 && bounded.y.is_finite());
         if flows
             && at.ui.is_sizing_pass()
-            && ((self.given.0 && crate::layout::counting_fills(at.ui, x)) || (self.given.1 && crate::layout::counting_fills(at.ui, y)))
+            && ((fills_x && crate::layout::counting_fills(at.ui, x)) || (fills_y && crate::layout::counting_fills(at.ui, y)))
         {
             return Vec2::ZERO;
         }

@@ -167,6 +167,10 @@ impl<C: Component> Erased for Typed<'_, '_, C> {
         self.hooks.in_flow(self.comp.get_ref())
     }
 
+    fn fills_width(&self) -> bool {
+        self.hooks.fills_width(self.comp.get_ref())
+    }
+
     fn sized(&self, ui: &Ui, id: Id, size: Vec2) -> Vec2 {
         self.hooks.sized(self.comp.get_ref(), ui, id, size)
     }

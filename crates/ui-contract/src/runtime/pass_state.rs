@@ -88,6 +88,7 @@ pass_state! {
         scroll_moves: crate::contract::steps::scroll_owner::ScrollMoves,
         jumps: crate::contract::body::scroll::Jumps,
         shrink_reports: crate::layout::body::ShrinkReports,
+        least_reports: crate::layout::body::LeastReports,
         fill_counts: crate::layout::body::FillCounts,
         cursors: crate::layout::body::Cursors,
         column_groups: crate::layout::column_group::Open,

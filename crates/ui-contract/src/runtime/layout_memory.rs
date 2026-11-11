@@ -159,8 +159,8 @@ impl Scope {
     }
 }
 
-/// What a measuring run has open: a body's transcript, content whose emits no enclosing transcript takes, or a
-/// component's measure call.
+/// What a measuring run has open: a body's transcript, content whose emits no enclosing transcript takes, a probe, or
+/// a component's measure call.
 enum Open {
     /// `inputs`: what the body's content read outside the body.
     Body {
@@ -170,6 +170,8 @@ enum Open {
         inputs: Inputs,
     },
     Boundary,
+    /// A run that asks a question of content and leaves nothing behind (`probing`).
+    Probe,
     /// `inputs`: what the measure read outside its own room.
     Call {
         inputs: Inputs,
@@ -247,6 +249,11 @@ impl Entries {
             Some(Open::Body { leaves, .. }) => Some(leaves),
             _ => None,
         }
+    }
+
+    /// Whether a probe is open (`probing`).
+    fn probing(&self) -> bool {
+        self.measuring.iter().any(|open| matches!(open, Open::Probe))
     }
 
     /// The innermost real-run scope when it checks a kept transcript.
@@ -365,6 +372,9 @@ fn emit(ctx: &Context, id: Id, mut recorded: Recorded) {
     let pass = ctx.cumulative_pass_nr();
     let tolerance = measure_tolerance(crate::runtime::egui::scale::pixels_per_point(ctx));
     with(ctx, &moment, |memory| {
+        if memory.probing() {
+            return;
+        }
         // A measure keys on what it read: the room, and the inputs the innermost open body read so far.
         if let Recorded::Measured(measured) = &mut recorded {
             measured.inputs = memory
@@ -373,7 +383,7 @@ fn emit(ctx: &Context, id: Id, mut recorded: Recorded) {
                 .rev()
                 .find_map(|open| match open {
                     Open::Body { inputs, .. } => Some(fingerprint(inputs)),
-                    Open::Boundary | Open::Call { .. } => None,
+                    Open::Boundary | Open::Probe | Open::Call { .. } => None,
                 })
                 .unwrap_or(0);
         }
@@ -423,6 +433,8 @@ pub(crate) fn read_input(ctx: &Context, from: usize, key: Id, value: f32) -> f32
         if let Some(read) = replayed {
             return *read;
         }
+        // A probe's content reads nothing on behalf of the runs outside it.
+        let from = memory.measuring.iter().rposition(|open| matches!(open, Open::Probe)).map_or(from, |at| from.max(at + 1));
         for open in memory.measuring.iter_mut().skip(from) {
             if let Open::Body { inputs, .. } | Open::Call { inputs } = open {
                 let read = inputs.entry(key).or_insert(value);
@@ -467,8 +479,11 @@ fn fingerprint(inputs: &Inputs) -> u64 {
 /// Makes `contribution` now. A measuring run joins it to the transcript of the innermost body whose run is open; a
 /// real run inside a body a kept transcript serves keeps it to compare with the transcript's.
 pub(crate) fn contribute(ctx: &Context, contribution: Arc<dyn Contribution>) {
-    guard::emitting(|| contribution.apply(ctx));
     let moment = Moment::of(ctx);
+    if with(ctx, &moment, |memory| memory.probing()) {
+        return;
+    }
+    guard::emitting(|| contribution.apply(ctx));
     let measuring = crate::runtime::measure::active(ctx);
     with(ctx, &moment, |memory| {
         if measuring {
@@ -501,6 +516,22 @@ pub(crate) fn boundary<R>(ctx: &Context, stops_changes: bool, f: impl FnOnce() -
             }
         } else {
             memory.scopes.pop();
+        }
+    });
+    out
+}
+
+/// Runs `f`, a measuring run that asks a question of content (the least width of a row's body unit), as a probe: it
+/// reads no record or kept transcript, so every body inside measures its content, and it leaves nothing behind (no
+/// record, text, transcript, contribution or input of a run outside it). The runs of the pass outside it find what
+/// they would without it.
+pub(crate) fn probing<R>(ctx: &Context, f: impl FnOnce() -> R) -> R {
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, |memory| memory.measuring.push(Open::Probe));
+    let out = f();
+    with(ctx, &moment, |memory| {
+        if let Some(at) = memory.measuring.iter().rposition(|open| matches!(open, Open::Probe)) {
+            memory.measuring.remove(at);
         }
     });
     out
@@ -623,7 +654,7 @@ pub(crate) fn backstop(ctx: &Context, id: Id, took: Vec2) {
 pub(crate) fn measured(ctx: &Context, id: Id) -> Option<Measured> {
     let moment = Moment::of(ctx);
     let pass = ctx.cumulative_pass_nr();
-    with(ctx, &moment, |memory| match memory.measured.get(&id).filter(|found| found.pass == pass) {
+    with(ctx, &moment, |memory| match memory.measured.get(&id).filter(|found| found.pass == pass && !memory.probing()) {
         Some(Found { recorded: Recorded::Measured(measured), .. }) => Some(*measured),
         _ => None,
     })
@@ -633,7 +664,7 @@ pub(crate) fn measured(ctx: &Context, id: Id) -> Option<Measured> {
 pub(crate) fn run_found(ctx: &Context, id: Id) -> bool {
     let moment = Moment::of(ctx);
     let pass = ctx.cumulative_pass_nr();
-    with(ctx, &moment, |memory| memory.measured.get(&id).is_some_and(|found| found.pass == pass && found.kept.is_none()))
+    with(ctx, &moment, |memory| !memory.probing() && memory.measured.get(&id).is_some_and(|found| found.pass == pass && found.kept.is_none()))
 }
 
 /// Opens the measuring run of `body`: what it hands forward until `end_measure` becomes its transcript.
@@ -648,6 +679,9 @@ pub(crate) fn end_measure<K: PartialEq + Send + Sync + 'static>(ctx: &Context, b
     with(ctx, &moment, |memory| {
         let Some(at) = memory.measuring.iter().rposition(|open| matches!(open, Open::Body { id, .. } if *id == body)) else { return };
         let Open::Body { items, leaves, .. } = memory.measuring.remove(at) else { return };
+        if memory.probing() {
+            return;
+        }
         let transcript = Arc::new(Transcript { key: Box::new(key), items, leaves, real: Mutex::new(None) });
         memory.served.remove(&body);
         let moved = memory.kept.remove(&body).and_then(|last| last.moved);
@@ -690,6 +724,9 @@ pub(crate) fn kept_serves<K: PartialEq + Send + Sync + 'static>(ctx: &Context, b
         return false;
     }
     let moment = Moment::of(ctx);
+    if with(ctx, &moment, |memory| memory.probing()) {
+        return false;
+    }
     let pass = ctx.cumulative_pass_nr();
     let replay = with(ctx, &moment, |memory| {
         // An enclosing body's transcript gave this body's records already, when the inputs are the ones it ran under
@@ -891,6 +928,7 @@ pub(crate) mod guard {
         ("layout::body::FillCounts", "fill counts: opened and closed by the body's own measuring sweep"),
         ("layout::body::Cursors", "grid and spread cursors: opened and closed by the body's own run"),
         ("layout::body::ShrinkReports", "shrink reports: opened and closed by the row's own first sweep; the widths go through emit_record"),
+        ("layout::body::LeastReports", "least reports: opened and closed by the row's own least sweep; the widths go through emit_record"),
         ("runtime::reads::Runs", "measuring runs of the read record: opened and closed by each run; reads go through contribute"),
         ("contract::steps::id::IdPass", "id registration: a measuring run keeps the ids it uses out of the pass (keeping_ids)"),
         // Read in measuring runs; written by real runs, the frame hooks or the host.

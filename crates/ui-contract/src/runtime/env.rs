@@ -122,9 +122,12 @@ pub struct Scoped {
     /// extents of the other children and the gaps, over the number of children that fill. `None` while the body is
     /// measured, and without a measuring run of this pass.
     pub(crate) fill_share: Option<f32>,
-    /// The shrink step of the unwrapped `Row` body that encloses the scope: its direct leaf children report their
-    /// widths to it, or show in the widths it gave them.
+    /// The shrink step of the unwrapped `Row` or `Stack` body that encloses the scope, as its direct children in flow
+    /// take part in it.
     pub(crate) shrink: Option<Shrink>,
+    /// The scope runs in the least measure of a body (`Shrink::Least`): every leaf in flow takes its least width. It
+    /// holds through the bodies nested inside.
+    pub(crate) least: bool,
     /// The width a body that sizes its width from its content was offered this pass, less its padding: the room its
     /// direct children share across a column or along a row, wider than the body's own band before it measured them.
     pub(crate) offered: Option<f32>,
@@ -202,13 +205,19 @@ impl Deref for Scoped {
     }
 }
 
-/// The shrink step of an unwrapped `Row` body, as its direct leaf children shown in flow see it.
+/// The shrink step of an unwrapped `Row` or a `Stack` body, as its direct children shown in flow see it. In a row
+/// each leaf, and each body that does not fill the row, is a unit the row narrows to fit.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Shrink {
-    /// The first sweep of a measuring run of the row: each leaf reports its widths to the row (`layout::report_shrink`).
+    /// The first sweep of a measuring run of the row: each unit reports its widths to the row (`layout::report_shrink`).
     Count(Id),
-    /// Each leaf shows at most the width the measuring run of the row gave it (`layout::shrink_cap`).
+    /// The sweep of a short row that asks each body unit for its least width (`layout::report_least`): it measures its
+    /// content unbounded along x, every leaf at its least, and leaves no record.
+    Least(Id),
+    /// Each unit shows at most the width the measuring run of the row gave it (`layout::shrink_cap`).
     Apply(Id),
+    /// A `Stack` body: each leaf shows at most the stack's room, never below its least.
+    Fit,
 }
 
 /// What a collection records for one of its items in a pass: the row flags the item folds into its state (step 12)
@@ -361,6 +370,7 @@ impl Env {
                 fill_body: None,
                 fill_share: None,
                 shrink: None,
+                least: false,
                 offered: None,
                 scroll_owner: None,
                 unbounded: (false, false),

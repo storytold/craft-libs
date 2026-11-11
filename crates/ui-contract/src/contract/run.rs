@@ -439,6 +439,8 @@ pub(crate) trait Erased {
     fn read(&mut self, stage: &mut MemoryStage, id: Id, env: &Env);
     fn instance_scope(&self) -> Option<commands::CommandScope>;
     fn in_flow(&self) -> bool;
+    /// Whether the shape fills the width of the room it is shown in (a body not sized from its content).
+    fn fills_width(&self) -> bool;
     fn sized(&self, ui: &Ui, id: Id, size: Vec2) -> Vec2;
     fn arena(&self) -> bool;
     fn extent(&mut self, ui: &Ui, at: ShowAt, id: Id, scx: &StyleCx<'_>) -> Vec2;
@@ -1099,10 +1101,15 @@ pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<T
             Some(crate::layout::flow_room(ui).x).filter(|width| width.is_finite() && !(env.content_column && crate::runtime::measure::active(&ctx)))
         }
     };
-    // A leaf in flow in a row that shrinks its children to fit shows at most the width the row gave it.
-    let shrink = env.shrink.filter(|_| shape == ShapeKind::Leaf && matches!(at, ShowAt::Flow) && t.fills().is_none());
+    // A leaf or body in flow that does not fill takes part in the shrink step of the body around it: in a row that
+    // shrinks its children to fit, a leaf shows at most the width the row gave it, and a body takes that width as its
+    // room (`mount_room`). A body that fills the width of a bounded room takes the room or its share of it (`sized`),
+    // so it is no unit.
+    let in_flow = matches!(at, ShowAt::Flow) && t.fills().is_none();
+    let unit_body = || t.in_flow() && !(t.fills_width() && crate::layout::flow_room(ui).x.is_finite());
+    let shrink = env.shrink.filter(|_| in_flow && (shape == ShapeKind::Leaf || (shape == ShapeKind::Body && unit_body())));
     let cap = match shrink {
-        Some(crate::layout::Shrink::Apply(row)) => crate::layout::shrink_cap(&ctx, row, id),
+        Some(crate::layout::Shrink::Apply(row)) if shape == ShapeKind::Leaf => crate::layout::shrink_cap(&ctx, row, id),
         _ => None,
     };
     let room = match cap {
@@ -1165,15 +1172,37 @@ pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<T
             None => reads::note(&ctx, key, id, measuring, &[ideal]),
         }
     }
+    // In the least measure of a body every leaf in flow takes its least. In a stack a leaf wider than the stack's room
+    // takes the room, down to its least.
+    let leaf_in_flow = shape == ShapeKind::Leaf && in_flow;
+    let least = |t: &mut dyn Erased| ask(t, Proposal::Min, None, Vec2::ZERO).0.x;
+    let cap = match leaf_in_flow && env.least {
+        true => {
+            let least = least(&mut *t);
+            Some(cap.map_or(least, |cap| cap.min(least)))
+        }
+        false => cap,
+    };
+    let fit_room =
+        (leaf_in_flow && shrink == Some(crate::layout::Shrink::Fit)).then(|| crate::layout::flow_room(ui).x).filter(|room| room.is_finite());
+    let cap = match fit_room.filter(|room| size.x > *room) {
+        Some(room) => Some(cap.map_or(room, |cap| cap.min(room)).max(least(&mut *t))),
+        None => cap,
+    };
     // The row gave the leaf no less than its least, so a leaf whose measure does not follow its room still fits.
     let size = cap.map_or(size, |cap| Vec2::new(size.x.min(cap), size.y));
     let measured = size;
     // A component on a layer or in a window of its own takes no room in the parent's flow: the parent neither sizes it
     // nor counts it among the children that share its room. Its host sizes it in its own `Ui`.
     let size = if t.in_flow() { t.sized(ui, id, size) } else { size };
-    if let Some(crate::layout::Shrink::Count(row)) = shrink {
-        let (ideal, least) = (ask(&mut *t, Proposal::Ideal, None, Vec2::ZERO).0.x, ask(&mut *t, Proposal::Min, None, Vec2::ZERO).0.x);
-        crate::layout::report_shrink(&ctx, row, id, size.x, ideal, least);
+    match shrink {
+        Some(crate::layout::Shrink::Count(row)) if shape == ShapeKind::Leaf => {
+            let (ideal, least) = (ask(&mut *t, Proposal::Ideal, None, Vec2::ZERO).0.x, ask(&mut *t, Proposal::Min, None, Vec2::ZERO).0.x);
+            crate::layout::report_shrink(&ctx, row, id, size.x, ideal, Some(least));
+        }
+        Some(crate::layout::Shrink::Count(row)) => crate::layout::report_shrink(&ctx, row, id, size.x, size.x, None),
+        Some(crate::layout::Shrink::Least(row)) if shape == ShapeKind::Body => crate::layout::report_least(&ctx, row, id, size.x),
+        _ => {}
     }
     // A component shown at a rect fills it: the rect is its size, and a leaf that measures nothing (a content
     // painter) still shows there.

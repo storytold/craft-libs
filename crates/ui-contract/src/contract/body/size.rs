@@ -210,7 +210,13 @@ impl<'b> BodyHooks<'b> {
                 (_, ShowAt::Rect(rect)) => rect.size(),
                 (_, ShowAt::Flow) => {
                     let room = crate::layout::flow_room(ui);
-                    let room = Vec2::new(room.x, props.room_height.unwrap_or(room.y));
+                    // A row that shrinks its children to fit gives a body among them a width: it measures and shows
+                    // in that room.
+                    let cap = match Env::of(ui).shrink {
+                        Some(crate::layout::Shrink::Apply(row)) => crate::layout::shrink_cap(ui.ctx(), row, id),
+                        _ => None,
+                    };
+                    let room = Vec2::new(cap.map_or(room.x, |cap| room.x.min(cap)), props.room_height.unwrap_or(room.y));
                     // In a row that wraps, a body too wide for the rest of the line moves to the next one: it measures
                     // in the whole line, so its allocation carries its width and the row can wrap it.
                     let layout = ui.layout();
