@@ -118,7 +118,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   AC-3/E-AC-3, MP1/MP2), streaming and seeking, and packet decoding for any demuxer. See its
   README for formats and features.
 - [`craft-media`](crates/media/README.md): bit-level I/O (`bitstream`), clean-room MP4/MOV
-  (`isobmff`) and Matroska/WebM (`matroska`) demuxers and muxers, Ogg (`ogg`) and AVI (`avi`) demuxers, from
+  (`isobmff`), Matroska/WebM (`matroska`) and MXF (`mxf`) demuxers and muxers, Ogg (`ogg`) and AVI (`avi`) demuxers, from
   FilmCraft, and an ISO BMFF box reader. Containers only; codecs are in `craft-audio`, and
   video codecs will go in a separate crate.
 - [`craft-lottie`](crates/lottie/README.md): Lottie (Bodymovin) JSON, the wire layer: the document
