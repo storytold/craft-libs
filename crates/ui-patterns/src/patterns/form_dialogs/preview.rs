@@ -391,8 +391,8 @@ impl Component for PreviewPane<'_> {
         }
     }
 
-    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
-        Vec2::ZERO
+    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        Vec2::new(cx.picture_width(cx.tokens.size.plot.width, f32::INFINITY), 0.0)
     }
 
     fn sense(&self) -> Sense {

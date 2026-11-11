@@ -5,8 +5,8 @@ use super::channels::{channel_step, finite, primary, settled, spoken};
 use craft_behavior::{HitLevel, HitPriority, HitShape, Metrics, NavMove, PartKey, PressPhase, Sense};
 use craft_theme::{ColorModel, HsbModel, ModelValues};
 use craft_ui::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, Name, Numeric, PaintUi, PartsCx, Pointer as _,
-    Props as _, Remember as _, Role, WordSetCx as _,
+    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Name, Numeric, PaintUi, PartsCx,
+    Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
 };
 use craft_ui::primitives::{PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Label;
@@ -170,6 +170,9 @@ pub struct ColorWheelStyle {
     edge: StyleColor,
     /// The diameter of the knobs.
     knob: f32,
+    /// The least side of the picture, and the most it takes of the width it is given.
+    least: f32,
+    most: f32,
 }
 
 /// The part a press began in, for its whole drag.
@@ -291,7 +294,9 @@ impl Component for ColorWheel<'_> {
     fn style(cx: &StyleCx<'_>, _: ColorWheelStyleKey) -> ColorWheelStyle {
         let tokens = cx.tokens;
         ColorWheelStyle {
-            metrics: Metrics::new().min_size(Vec2::new(tokens.size.plot.width, tokens.size.plot.height)),
+            metrics: Metrics::new(),
+            least: tokens.size.plot.height,
+            most: tokens.size.plot.width,
             focus: cx.focus_look(),
             ring_min: tokens.size.icon.sm,
             ring_max: tokens.size.control.md,
@@ -301,6 +306,11 @@ impl Component for ColorWheel<'_> {
             edge: cx.color(tokens.color.line.control_edge),
             knob: tokens.size.handle.md,
         }
+    }
+
+    /// A band across the width it is given, as tall as the square that fits it: the picture is centred in it.
+    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        Vec2::new(cx.picture_width(cx.style.least, f32::INFINITY), cx.picture_width(cx.style.least, cx.style.most))
     }
 
     fn sense(&self) -> Sense {

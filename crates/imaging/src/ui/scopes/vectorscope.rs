@@ -1,7 +1,7 @@
 //! [`VectorscopePlot`]: graticule, targets and the hover target ([`scope_point`]).
 
 use super::words::ScopeWords;
-use craft_behavior::{Axis, Metrics, Sense};
+use craft_behavior::{Metrics, Sense};
 use craft_ui::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role, WordSetCx as _};
 use craft_ui::fonts::FontRef;
 use craft_ui::primitives::{DocRun, DocText, HAlign, PaintShape, StrokeWidth};
@@ -194,11 +194,7 @@ impl Component for VectorscopePlot<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        Vec2::new(cx.style.height[0], cx.style.height[1])
-    }
-
-    fn fills(&self) -> Option<Axis> {
-        Some(Axis::X)
+        Vec2::new(cx.picture_width(cx.style.height[0], f32::INFINITY), cx.style.height[1])
     }
 
     fn sense(&self) -> Sense {

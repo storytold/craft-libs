@@ -2,7 +2,7 @@
 
 use super::channels::{QUANTIZE_CELLS, channel_range, channel_step, quantized, settled, snapped, spoken};
 use crate::AreaMode;
-use craft_behavior::{Metrics, Mixed, Proposal, Sense};
+use craft_behavior::{Metrics, Mixed, Sense};
 use craft_theme::ModelValues;
 use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, PaintUi, Props as _, Role, WordSetCx as _,
@@ -112,7 +112,7 @@ impl Component for ColorArea<'_> {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let mut picker = self.picker(cx.value(), false);
-        cx.child("picker", &mut picker, Proposal::Ideal)
+        cx.child("picker", &mut picker, cx.proposal)
     }
 
     fn bind(&mut self) -> Option<BindMut<'_, ModelValues>> {

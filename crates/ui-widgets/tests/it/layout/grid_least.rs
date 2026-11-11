@@ -1,12 +1,13 @@
 //! The columns of a grid keep their least: a column whose content takes the room it is offered (wrapping text, a
 //! picture) leaves the others theirs, and a grid whose columns do not fit even at their least lays its cells out one
-//! under another.
+//! under another. A picture takes the width it is given.
 
-use craft_behavior::ColumnWidth;
-use craft_ui::contract::{Show as _, ShowContainer as _};
+use craft_behavior::{ColumnWidth, Mixed};
+use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Grid, Stack};
 use craft_ui::testing::{Frames, shrink_least_runs, trial};
+use craft_ui::value_drag::PointPicker;
 use egui::{Rect, Ui, Vec2};
 use std::cell::Cell;
 
@@ -72,4 +73,18 @@ fn a_grid_whose_columns_do_not_fit_at_their_least_stacks_them() {
     let (first, second, _) = cells(HALVES, room, WORD);
     assert!(second.top() >= first.bottom() - SNAP, "the second cell goes under the first");
     assert!(first.right() <= room + SNAP && second.right() <= room + SNAP, "no cell runs past the room");
+}
+
+#[trial]
+fn a_picture_takes_the_width_it_is_given() {
+    let width = |room: f32| {
+        let seen = Cell::new(0.0);
+        let _ = in_room(room, |ui| {
+            let mut point = [Mixed::Same(0.5), Mixed::Same(0.5)];
+            seen.set(PointPicker::new(Bind::bound(&mut point), 0.0..=1.0, 0.0..=1.0).show(ui).response.rect.width());
+        });
+        seen.get()
+    };
+    let (wide, wider) = (width(500.0), width(700.0));
+    assert!((wide - 500.0).abs() <= SNAP && (wider - 700.0).abs() <= SNAP, "the picture follows its room");
 }

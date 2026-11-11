@@ -4,7 +4,7 @@ use super::model::{Curve, CurveRules, follow_corners};
 use super::ramp::ToneRamp;
 use super::words::CurveWords;
 use crate::ui::histogram::{ChannelColor, HistogramData, HistogramInks, HistogramLook, PlotFrame, paint_bins, paint_frame};
-use craft_behavior::{HitLevel, HitPriority, Input, Metrics, NavMove, PartKey, PointerButton, PressPhase, Proposal, Sense};
+use craft_behavior::{HitLevel, HitPriority, Input, Metrics, NavMove, PartKey, PointerButton, PressPhase, Sense};
 use craft_keymap::{Chord, Key, Mods};
 use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Outcome, PaintUi, PartsCx, Pointer as _,
@@ -513,9 +513,7 @@ impl Component for CurveGraph<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        let CurveGraphStyle { least, most, .. } = *cx.style;
-        let room = cx.column_room().filter(|room| room.is_finite() && cx.proposal != Proposal::Min);
-        Vec2::splat(room.map_or(least, |room| room.clamp(least, most)))
+        Vec2::splat(cx.picture_width(cx.style.least, cx.style.most))
     }
 
     fn sense(&self) -> Sense {

@@ -6,8 +6,8 @@ use super::wheel::{hue_at, hue_direction, vertex};
 use craft_behavior::{AccessAction, CancelReason, HitShape, Metrics, NavMove, PartKey, PressPhase, Sense};
 use craft_theme::{ColorModel, Flags, HsbModel, ModelValues, Resolve as _, Srgba, State, StateMix, Stateful};
 use craft_ui::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, Name, Numeric, Outcome, PaintUi, PartsCx, Pointer as _,
-    Props as _, Remember as _, Role, WordSetCx as _,
+    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Name, Numeric, Outcome, PaintUi, PartsCx,
+    Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
 };
 use craft_ui::primitives::{PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Label;
@@ -84,6 +84,9 @@ pub struct ColorDiscStyle {
     /// A marker's inner ring and the halo round it.
     ring: StyleColor,
     halo: StyleColor,
+    /// The least side of the picture, and the most it takes of the width it is given.
+    least: f32,
+    most: f32,
 }
 
 /// What [`ColorDisc`] returns.
@@ -204,7 +207,9 @@ impl Component for ColorDisc<'_> {
         let tokens = cx.tokens;
         let colors = &tokens.color;
         ColorDiscStyle {
-            metrics: Metrics::new().min_size(Vec2::new(tokens.size.plot.width, tokens.size.plot.height)),
+            metrics: Metrics::new(),
+            least: tokens.size.plot.height,
+            most: tokens.size.plot.width,
             focus: cx.focus_look(),
             inset: tokens.space.pad.regular,
             marker: Stateful::new(tokens.size.handle.sm).when(Flags::SELECTED, tokens.size.handle.md),
@@ -214,6 +219,11 @@ impl Component for ColorDisc<'_> {
             ring: cx.color(colors.overlay.handle_fill),
             halo: cx.color(colors.overlay.halo),
         }
+    }
+
+    /// A band across the width it is given, as tall as the square that fits it: the picture is centred in it.
+    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        Vec2::new(cx.picture_width(cx.style.least, f32::INFINITY), cx.picture_width(cx.style.least, cx.style.most))
     }
 
     fn sense(&self) -> Sense {
