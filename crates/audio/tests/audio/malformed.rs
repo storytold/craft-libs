@@ -305,7 +305,8 @@ fn packets_longer_than_any_codec_uses_are_refused() {
     // read, and nothing is allocated from it. symphonia read it, so SoundCraft refused the file.
     let (_, buf) = decode(&mp4(480, &lpcm(1 << 21), |_, a| a), None).unwrap();
     assert_eq!(buf.frames(), 480);
-    // ALAC still goes to symphonia, behind the same guard.
+    // ALAC: a cookie declaring such packets is refused by the native decoder and then by the
+    // symphonia path's guard.
     assert!(matches!(decode(&mp4(480, &alac(1 << 21), |_, a| a), None), Err(AudioError::Malformed(m)) if m.contains("declares packets")));
 }
 
@@ -320,7 +321,8 @@ fn flac_metadata_fields_beyond_their_block_are_refused() {
     let picture = |data: u32| [&[0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0][..], &[0; 16], &data.to_be_bytes(), &[1, 2, 3]].concat();
     assert_eq!(decode(&with_block(6, &picture(3)), None).unwrap().1.frames(), 300);
     let comment = [&0u32.to_le_bytes()[..], &1u32.to_le_bytes(), &u32::MAX.to_le_bytes()].concat();
-    for f in [with_block(6, &picture(0x7fff_fff0)), with_block(4, &comment)] {
+    let vendor_overflow = [&0x7fff_fff0u32.to_le_bytes()[..], &0u32.to_le_bytes()].concat();
+    for f in [with_block(6, &picture(0x7fff_fff0)), with_block(4, &comment), with_block(4, &vendor_overflow)] {
         assert!(matches!(decode(&f, None), Err(AudioError::Malformed(m)) if m.contains("larger than its block")));
     }
 }
