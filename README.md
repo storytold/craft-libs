@@ -96,6 +96,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   millimetres to `G0`/`G1` moves with laser power and feed, for cutting lasers and plotters, as a
   commented file or as bare lines for streaming. Its `grbl` module has the real-time command bytes
   and the status and acknowledgement parsers.
+- [`craft-hdr`](crates/hdr/src/lib.rs): Radiance HDR (RGBE) picture reader, from FilmCraft: flat,
+  old and new run-length scan lines and all eight axis orders, to linear float RGB. Scan lines are
+  validated before the picture is allocated.
 - [`craft-heif`](crates/heif/README.md): optional HEIF/HEIC still-image decoder, from LightCraft:
   heic-rs reads the container and HEVC pictures, and this crate converts to 16-bit RGB to match
   libheif (VUI range and matrix, chroma upsampling, `imir`, ICC on grid tiles). Also orientation,
