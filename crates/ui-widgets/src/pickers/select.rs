@@ -22,9 +22,12 @@ use crate::runtime::focus::{self, FocusTarget};
 use crate::style::{ComponentStyle, Ink, StyleCx, SurfaceLook, TextLook, TypeRole};
 use crate::text::TextField;
 use craft_behavior::nav::{StepResult, ValueAxes, ValueSteps};
-use craft_behavior::{CancelReason, GesturePhase, HitLevel, HitPriority, IconId, Metrics, NavMove, PartKey, Selection, Sense, Value, wheel_step};
+use craft_behavior::{
+    CancelReason, GesturePhase, HitLevel, HitPriority, IconId, Metrics, NavMove, PartKey, Selection, Sense, TypeAhead, Value, wheel_step,
+};
 use craft_theme::{Stateful, States};
 use egui::{Ui, Vec2};
+use std::borrow::Cow;
 
 #[cfg(feature = "testing")]
 mod stories;
@@ -64,11 +67,12 @@ impl<'a> HeaderMenu<'a> {
     }
 }
 
-/// A field that shows the picked entry and opens a listbox of all of them. A click, Enter, Space or Alt+Down opens the
-/// listbox with the picked entry active; Up, Down, Home, End and type-ahead move through it, Enter or a click picks,
-/// Escape and Alt+Up close it. Closed, the arrow keys, Home, End and the wheel (while the field is focused or armed)
-/// step the pick through the stepped entries ([`Entry::stepped`]); from a value that is none of them, forward lands on
-/// the first and back on the last. The field is as wide as its widest entry, placeholder or mixed word, so it keeps its
+/// A field that shows the picked entry and opens a listbox of all of them. A press, Enter, Space or Alt+Down opens the
+/// listbox with the picked entry active, and typing opens it on the first entry the typed letters begin. The open list
+/// is one gesture: each entry the keys (Up, Down, Page keys, Home, End, type-ahead) make active is proposed as the
+/// value, Enter or a click picks, and Escape, Alt+Up or a press outside close it and put the value back. Closed, the
+/// arrow keys, Home, End and the wheel (while the field is focused or armed) step the pick through the stepped entries
+/// ([`Entry::stepped`]); from a value that is none of them, forward lands on the first and back on the last. The field is as wide as its widest entry, placeholder or mixed word, so it keeps its
 /// width whichever is shown.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(overlay, probe(Select<'static, u8>))]
@@ -86,8 +90,8 @@ pub struct Select<'a, T: Value + 'static> {
     /// Adds the host's content to each entry's row.
     #[prop(func = "Fn(&T, ListRow<'a>) -> ListRow<'a>")]
     decorate: Option<RowDress<'a, T>>,
-    /// The row under the pointer is proposed as the value while the list is open; closing the list without a pick
-    /// restores the value.
+    /// The row under the pointer is proposed as the value while the list is open, as the rows the keys reach are;
+    /// closing the list without a pick restores the value.
     #[prop(flag)]
     preview: bool,
     /// A button in the popup header opens a menu of these rows (a list's own options: sort, view).
@@ -130,7 +134,7 @@ fn step(stops: &[usize], from: Option<usize>, mv: NavMove) -> Option<usize> {
 
 impl<T: Value + 'static> Component for Select<'_, T> {
     const ROLE: Role = Role::COMBO_BOX;
-    const KEYS: crate::runtime::focus::KeyUse = crate::runtime::focus::KeyUse::of(crate::contract::Input::Pointer).with_moves();
+    const KEYS: crate::runtime::focus::KeyUse = crate::runtime::focus::KeyUse::of(crate::contract::Input::Pointer).with_moves().with_type_ahead();
     type Style = SelectStyle;
     type Output = EditResponse<T>;
 
@@ -165,13 +169,13 @@ impl<T: Value + 'static> Component for Select<'_, T> {
             .toggles("list");
     }
 
-    /// Enter and Space toggle the listbox; a press on the face toggles it through the part. While it is closed, the
-    /// arrow keys, Home, End and the wheel step the pick through the stepped entries, and AccessKit sets it. A preview
-    /// that the list closed on without a pick is cancelled.
+    /// Enter and Space toggle the listbox; a press on the face toggles it through the part. While it is closed, typed
+    /// letters open it on the first entry they begin, the arrow keys, Home, End and the wheel step the pick through the
+    /// stepped entries, and AccessKit sets it. A proposal the list closed on without a pick is cancelled.
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let list = cx.popup("list");
         toggle_on_key(cx, list);
-        if self.preview && !list.is_open(cx) && matches!(cx.gesture(), Some(GesturePhase::Begin | GesturePhase::Update)) {
+        if !list.is_open(cx) && matches!(cx.gesture(), Some(GesturePhase::Begin | GesturePhase::Update)) {
             cx.cancel(CancelReason::Dismissed);
         }
         let stops = step_stops(self.entries);
@@ -179,6 +183,16 @@ impl<T: Value + 'static> Component for Select<'_, T> {
             return;
         }
         let held = self.position(cx.value());
+        while let Some(text) = cx.intents().take_text() {
+            let labels: Vec<Label> = self.entries.iter().map(|entry| cx.env.resolve(entry.label())).collect();
+            let typed = text.to_lowercase();
+            let found = TypeAhead::pick(&typed, held, labels.len(), |at| Cow::Borrowed(labels[at].as_str()));
+            if let Some(value) = found.filter(|&at| self.entries[at].is_enabled()).and_then(|at| self.entries[at].value()) {
+                cx.propose(value.clone());
+                list.open(cx);
+                return;
+            }
+        }
         if let Some(at) = cx.intents().take_set_value() {
             let to = (at.round().max(0.0) as usize).min(stops.len() - 1);
             self.pick(cx, stops[to]);
@@ -211,9 +225,9 @@ impl<T: Value + 'static> Component for Select<'_, T> {
         access.numeric(numeric.step(1.0));
     }
 
-    /// The listbox: one option row per entry, a spacer for a separator, the picked entry's row selected. A pick comes
-    /// back from the list as Enter or a click on a row, and goes to the binding as one change. With a preview, the row
-    /// the pointer moves the lead to is proposed first.
+    /// The listbox: one option row per entry, a spacer for a separator, the picked entry's row selected. Each row the
+    /// keys move the lead to is proposed, and with a preview each row the pointer moves it to; a pick comes back from
+    /// the list as Enter or a click on a row and commits.
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
         let popup = cx.popup("list");
         let entries = self.entries;
@@ -268,8 +282,8 @@ impl<T: Value + 'static> Component for Select<'_, T> {
         let mut picked = None;
         for event in events.into_iter().flatten() {
             match event {
-                CollectionEvent::LeadMoved { key, by: LeadSource::Pointer, .. } if self.preview => {
-                    if let Some(value) = entries.get(key).and_then(Entry::value) {
+                CollectionEvent::LeadMoved { key, by, .. } if by == LeadSource::Keys || self.preview => {
+                    if let Some(value) = entries.get(key).and_then(Entry::value).filter(|value| cx.value() != Some(*value)) {
                         cx.propose(value.clone());
                     }
                 }

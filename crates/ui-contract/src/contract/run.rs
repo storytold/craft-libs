@@ -664,6 +664,7 @@ fn stops_step(at: StopsStep<'_>, e: &mut dyn ErasedPass<'_>, facts: &TypeFacts, 
     let text = holder_widget.is_some();
     let keys = text_keys.unwrap_or_else(|| e.keys());
     let role = e.key_role().nudge(keys.nudge);
+    let role = role.type_ahead(role.type_ahead || keys.type_ahead);
     // A bound component that keeps the arrows reads them as value steps; a text value sets `steps_value` in its text options.
     let arrows = keys.keep == crate::runtime::focus::KeepKeys::BlockArrows;
     let value = role.value || keys.value || (bound && !role.nudge && !text && arrows);

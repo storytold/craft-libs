@@ -275,6 +275,9 @@ pub struct KeyUse {
     /// none of its parts has focus it takes the Enter, Escape and arrows routed to its arena root (the canvas) and,
     /// with nothing in the window focused, the window's, before the arena's tool. What it leaves goes on.
     pub session: bool,
+    /// Typed letters reach the component as `Intent::Text` (`take_text`): a closed select that opens its list on the
+    /// first entry they begin.
+    pub type_ahead: bool,
 }
 
 impl KeyUse {
@@ -297,6 +300,7 @@ impl KeyUse {
         submits: false,
         end: EndKey::LastItem,
         session: false,
+        type_ahead: false,
     };
     /// A divider between panes: it takes the arrows as moves of its value, but it is no document and no canvas tool, so
     /// it marks no window as showing a document and takes no nudges.
@@ -333,7 +337,14 @@ impl KeyUse {
             submits: false,
             end: EndKey::LastItem,
             session: false,
+            type_ahead: false,
         }
+    }
+
+    /// The same use taking typed letters as `Intent::Text`.
+    pub const fn with_type_ahead(mut self) -> Self {
+        self.type_ahead = true;
+        self
     }
 
     /// The same use claiming `claims`.
