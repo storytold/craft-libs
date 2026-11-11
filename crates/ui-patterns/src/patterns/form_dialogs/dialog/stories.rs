@@ -14,8 +14,14 @@ const SPEC: &str = r#"{"radius":0.1..1000=1,"method":"spin|zoom","smooth":bool}"
 /// The picture's size in points at zoom 1.
 const PICTURE: [usize; 2] = [360, 240];
 
-fn picture(ui: &Ui) -> SizedTexture {
-    let id = TextureCache::texture(ui.ctx(), "form-dialogs-dialog-story", || ColorImage::filled(PICTURE, Color32::from_rgb(0x8a, 0x6f, 0x4d)));
+/// The filtered picture, or the unfiltered one the pane shows while the Preview box is held to compare.
+fn picture(ui: &Ui, unfiltered: bool) -> SizedTexture {
+    let (key, color) = if unfiltered {
+        ("form-dialogs-dialog-story-unfiltered", Color32::from_rgb(0x4d, 0x6f, 0x8a))
+    } else {
+        ("form-dialogs-dialog-story", Color32::from_rgb(0x8a, 0x6f, 0x4d))
+    };
+    let id = TextureCache::texture(ui.ctx(), key, || ColorImage::filled(PICTURE, color));
     SizedTexture::new(id, Vec2::new(PICTURE[0] as f32, PICTURE[1] as f32))
 }
 
@@ -25,9 +31,12 @@ const LAYOUTS: [(&str, ParamLayout); 2] = [("Beside", ParamLayout::Beside), ("Be
 fn blur_story(ui: &mut Ui, data: &mut StoryData, preview: bool, layout: ParamLayout) -> StoryOutput {
     let preview = *data.value("preview", preview);
     let layout = *data.choice("layout", layout, &LAYOUTS);
+    let comparing = *data.value("comparing", false);
     let dialog = ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).opened(Bind::bound(data.value("open", true))).history(true);
-    let dialog = if preview { dialog.preview(picture(ui)).layout(layout) } else { dialog };
-    dialog.show(ui).into()
+    let dialog = if preview { dialog.preview(picture(ui, comparing)).layout(layout) } else { dialog };
+    let shown = dialog.show(ui);
+    *data.value("comparing", false) = shown.comparing;
+    shown.into()
 }
 
 #[story(ParamDialog<'static>, covers = [], drive = Drive::Never)]

@@ -12,7 +12,7 @@ use super::preview::{PreviewPane, PreviewView, PreviewZoom};
 use super::rows::{ParamRows, ParamRowsOutput};
 
 use crate::choice::Checkbox;
-use crate::contract::{Bind, BodyCx, NoValue, Outcome, Props as _, Remember as _, SaveKey, Show as _, ShowContainer as _};
+use crate::contract::{Bind, BodyCx, NoValue, Outcome, Props as _, Remember as _, SaveKey, Show as _, ShowContainer as _, pressed};
 
 use crate::dialog::{Dialog, DialogId, DialogResult, DialogStack, FooterHooks, StackDialog, dialog_id};
 
@@ -103,8 +103,12 @@ pub struct ParamDialogOutput {
     /// The values after the pass when they differ from the binding's or the dialog opened in this pass: a `values`
     /// binding that does not write through applies them, the opening snapshot included.
     pub values: Option<DialogFields>,
-    /// Whether the Preview check box is on: the host renders the preview while it is.
+    /// Whether the Preview check box is on: the host renders the preview while it is. Holding the box to compare
+    /// leaves it as it was until the release.
     pub preview_on: bool,
+    /// Whether the Preview check box is on and held: the host shows the unfiltered picture in the preview pane while
+    /// it is.
+    pub comparing: bool,
 }
 
 impl Outcome for ParamDialogOutput {
@@ -122,9 +126,10 @@ impl Outcome for ParamDialogOutput {
 ///   Reset, which restores the values from when the dialog opened (or `reset_to`) and keeps the dialog open.
 /// - Values: the `values` binding holds them; without one the dialog keeps its own between passes. The first pass
 ///   fills the parameters' defaults and, with `remember`, the values saved by [`ParamResult::remember`].
-/// - Preview: the host renders from the reported values while `preview_on` and hands the picture to `preview`. Drag
-///   pans the picture, the zoom buttons scale it. A dialog with a preview has its buttons in a column beside the
-///   body, with the Preview check box and the footer extra under them.
+/// - Preview: the host renders from the reported values while `preview_on` and hands the picture to `preview`, the
+///   unfiltered one while `comparing` (the Preview check box held down). Drag pans the picture, the zoom buttons
+///   scale it. A dialog with a preview has its buttons in a column beside the body, with the Preview check box and
+///   the footer extra under them.
 /// - A command form is a dialog with no preview and no remember key.
 #[must_use = "show the dialog with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
@@ -341,17 +346,19 @@ impl<'a> ParamDialog<'a> {
             form = form.opened(open);
         }
         // With a preview the buttons stand beside the body, and the Preview check box and the extras under them.
-        let preview_on = Rc::new(Cell::new(false));
+        let (preview_on, comparing) = (Rc::new(Cell::new(false)), Rc::new(Cell::new(false)));
         if preview.is_some() {
-            let (on, label) = (Rc::clone(&preview_on), words.preview.clone());
+            let (on, held, label) = (Rc::clone(&preview_on), Rc::clone(&comparing), words.preview.clone());
             let mut extra = footer_extra.take();
             let caller = shaped.take();
             form = form.shaped(move |dialog| {
                 let dialog = dialog.side_buttons(true).footer(move |ui, cx| {
                     let mut value = !cx.bar().memory::<PreviewOff>().0;
-                    Checkbox::new(Bind::bound(&mut value)).label(label.clone()).show(ui);
+                    let shown = Checkbox::new(Bind::bound(&mut value)).label(label.clone()).show(ui);
                     cx.bar().memory::<PreviewOff>().0 = !value;
                     on.set(value);
+                    // The box toggles at the release: while it is held it still shows its value.
+                    held.set(value && pressed(&shown.response));
                     if let Some(FooterExtra(extra)) = extra.as_mut() {
                         extra(ui);
                     }
@@ -425,6 +432,7 @@ impl<'a> ParamDialog<'a> {
             rows,
             values: shown.value,
             preview_on: preview.is_some() && preview_on.get(),
+            comparing: preview.is_some() && comparing.get(),
         }
     }
 }

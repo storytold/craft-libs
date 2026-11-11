@@ -62,6 +62,11 @@ pub fn clicked(response: &Response) -> bool {
     crate::runtime::egui::response::clicked(response)
 }
 
+/// Whether a pointer press went down on `response`'s component and is still held.
+pub fn pressed(response: &Response) -> bool {
+    crate::runtime::egui::response::is_pressed(response)
+}
+
 /// The value type of `C`'s output.
 pub type ValueOf<C> = <<C as super::Component>::Output as Outcome>::Value;
 
