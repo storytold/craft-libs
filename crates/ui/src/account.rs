@@ -243,7 +243,7 @@ impl AccountMenu {
                     let label = format!("{}\n{}", one.display, one.service);
                     let row = ui.add(egui::Button::new(label).wrap_mode(egui::TextWrapMode::Extend));
                     let name = one.display.clone();
-                    row.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name.as_str()));
+                    row.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name.as_str()));
                     if row.clicked() {
                         let _ = tx.send(AccountAction::Use(one.id.clone()));
                         ui.close();
@@ -263,7 +263,7 @@ impl AccountMenu {
         let badge = egui::Button::new(RichText::new(account.initial()).strong()).min_size(egui::vec2(26.0, 26.0)).corner_radius(13.0);
         let hit = ui.add(badge);
         let spoken = labels.badge.replace("{name}", &account.display);
-        hit.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, spoken.as_str()));
+        hit.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, spoken.as_str()));
         let hit = hit.on_hover_text(account.display.as_str());
 
         egui::Popup::menu(&hit).show(|ui| {
@@ -321,7 +321,7 @@ impl AccountMenu {
                     let label = format!("{}\n{}", other.display, other.service);
                     let row = ui.add(egui::Button::new(label).wrap_mode(egui::TextWrapMode::Extend));
                     let name = other.display.clone();
-                    row.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name.as_str()));
+                    row.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name.as_str()));
                     if row.clicked() {
                         let _ = tx.send(AccountAction::Use(other.id.clone()));
                         ui.close();
@@ -347,7 +347,7 @@ impl AccountMenu {
 
     /// Draw the badge in a context that has no `Ui` to hand.
     pub fn show_in_ctx(&mut self, ctx: &Context) {
-        egui::Area::new(egui::Id::new("craft-ui/account")).anchor(egui::Align2::RIGHT_TOP, egui::vec2(-8.0, 8.0)).show(ctx, |ui| {
+        egui::Area::new(egui::Id::unique("craft-ui/account")).anchor(egui::Align2::RIGHT_TOP, egui::vec2(-8.0, 8.0)).show(ctx, |ui| {
             self.show(ui);
         });
     }

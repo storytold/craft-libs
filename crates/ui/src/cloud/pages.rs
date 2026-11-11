@@ -469,7 +469,7 @@ pub fn conflict_modal<A: CloudApp>(app: &mut A, ctx: &egui::Context) {
     let mut reload = false;
     let mut copy = false;
     let mut dismiss = false;
-    egui::Modal::new(egui::Id::new("craft-ui/cloud/conflict")).show(ctx, |ui| {
+    egui::Modal::new(egui::Id::unique("craft-ui/cloud/conflict")).show(ctx, |ui| {
         let style = app.style(ui);
         ui.set_width(430.0);
         ui.label(RichText::new(&words.title).font(egui::FontId::new(15.0, style.bold.clone())));

@@ -566,7 +566,7 @@ impl ShareDialog {
 
     /// The recipient field's id, for an application that wants to focus it.
     pub fn query_field_id() -> Id {
-        Id::new(QUERY)
+        Id::unique(QUERY)
     }
 
     /// One frame, as a modal over the window. Call this unconditionally:
@@ -576,7 +576,7 @@ impl ShareDialog {
         if self.open.is_none() {
             return;
         }
-        let modal = egui::Modal::new(Id::new("craft-ui/share")).show(ctx, |ui| {
+        let modal = egui::Modal::new(Id::unique("craft-ui/share")).show(ctx, |ui| {
             ui.set_min_width(440.0);
             ui.set_max_width(560.0);
             self.contents(ui);
@@ -1076,7 +1076,7 @@ fn permission_menu(ui: &mut Ui, sheet: &mut Sheet, labels: &ShareLabels) {
     crate::buttons::chevron(ui, button.rect, ui.visuals().text_color());
     // The padding makes room for the triangle. It is layout, so it must not
     // reach anybody reading the screen aloud.
-    button.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, current));
+    button.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, current));
     egui::Popup::menu(&button).show(|ui| {
         ui.set_min_width(190.0);
         for (value, name, detail) in [
@@ -1277,7 +1277,7 @@ fn access(ui: &mut Ui, sheet: &Sheet, labels: &ShareLabels, weak: Color32, acts:
                     // A glyph is not a name. Left alone this button announces itself
                     // to a screen reader as a wastebasket character, so the word goes
                     // on explicitly.
-                    pressed.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, !busy, hint));
+                    pressed.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, !busy, hint));
                     if pressed.on_hover_text(hint).clicked() {
                         acts.push(Act::Withdraw(share.id.clone()));
                     }
@@ -1322,7 +1322,7 @@ fn chip(ui: &mut Ui, avatars: &HashMap<String, Avatar>, chosen: &Chosen, labels:
     let fill = if response.hovered() { ui.visuals().widgets.hovered.bg_fill } else { ui.visuals().widgets.inactive.bg_fill };
     ui.painter().set(background, egui::Shape::rect_filled(response.rect, CornerRadius::same(AVATAR_RADIUS), fill));
     let label = format!("{} {}", labels.remove, chosen.label);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label.clone()));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label.clone()));
     // The address, where there is one. Two colleagues share a display name
     // often enough that a chip reading "Ann Reed" is not an identity.
     let hint = match &chosen.detail {
@@ -1358,7 +1358,7 @@ fn row(ui: &mut Ui, avatars: &HashMap<String, Avatar>, contact: &Contact, labels
         ui.painter().set(background, egui::Shape::rect_filled(response.rect, CornerRadius::same(4), ui.visuals().widgets.hovered.bg_fill));
     }
     let label = contact.name.clone();
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label.clone()));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label.clone()));
     response
 }
 

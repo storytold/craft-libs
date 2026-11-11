@@ -283,7 +283,7 @@ impl PresenceBar {
                     let more = self.labels.and_more.replace("{count}", &hidden.to_string());
                     let weak = ui.visuals().widgets.inactive.bg_fill;
                     let badge = badge(ui, &format!("+{hidden}"), weak, ui.visuals().text_color());
-                    badge.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, more.as_str()));
+                    badge.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, more.as_str()));
                     badge.on_hover_text(self.peers.iter().skip(self.shown).map(|p| p.display.as_str()).collect::<Vec<_>>().join("\n"));
                 }
                 let ids: Vec<String> = self.peers.iter().map(|p| p.id.clone()).collect();
@@ -292,7 +292,7 @@ impl PresenceBar {
                     let ink = colours.get(at).copied().unwrap_or_else(|| peer.colour());
                     let hit = badge(ui, &peer.initial(), ink, Color32::WHITE);
                     let name = peer.display.clone();
-                    hit.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name.as_str()));
+                    hit.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name.as_str()));
                     let tip = match &peer.at {
                         Some(at) => format!("{}\n{at}", peer.display),
                         None => peer.display.clone(),

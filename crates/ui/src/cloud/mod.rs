@@ -837,7 +837,7 @@ fn entry_row<A: CloudApp>(app: &A, ui: &mut Ui, entry: &Entry, detail: &str, res
     let width = (ui.available_width() - reserve).max(60.0);
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 40.0), Sense::click());
     let label = entry.name.clone();
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
     let p = ui.painter();
     if resp.hovered() {
         p.rect_filled(rect, 4.0, style.hover);
