@@ -34,13 +34,13 @@ flac-encode = ["craft-media/bitstream"]
 aac-decode = ["craft-media/bitstream"]
 aac-encode = ["craft-media/bitstream"]
 opus-decode = []
-ac3-decode = []
+ac3-decode = ["craft-media/bitstream"]
 mpa-decode = ["craft-media/bitstream"]
 # ALAC packet decoder and encoder (`alac`), ported from Apple's reference implementation.
 alac-decode = []
 alac-encode = []
-ac3-encode = []
-eac3-encode = []
+ac3-encode = ["craft-media/bitstream"]
+eac3-encode = ["craft-media/bitstream"]
 # Multi-resolution waveform overviews (`peaks`).
 peaks = []
 # Encode AAC channels in parallel (with `aac-encode`).
