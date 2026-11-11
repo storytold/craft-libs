@@ -1072,11 +1072,14 @@ DOMAIN_MAX 0.5 1 1
     }
 
     #[test]
-    fn look_hex_floats() {
-        let id = LutFile::identity(2).unwrap();
-        let hex: String = id.data.iter().flat_map(|v| v.to_le_bytes()).map(|b| format!("{b:02X}")).collect();
+    fn look_data_is_little_endian_float32() {
+        // Bytes written out by hand rather than by the encoder the parser mirrors, so a wrong byte
+        // order fails: 0.25, 0.5, 1.0 (3E800000, 3F000000, 3F800000 stored low byte first), then zeros.
+        let hex = format!("0000803E 0000003F 0000803F {}", "00000000 ".repeat(21));
         let xml = format!("<?xml version=\"1.0\"?><look><LUT><size>\"2\"</size><data>\"{hex}\"</data></LUT></look>");
-        assert_eq!(parse("a.look", xml.as_bytes()).unwrap().data, id.data);
+        let data = parse("a.look", xml.as_bytes()).unwrap().data;
+        assert_eq!(data[..3], [0.25, 0.5, 1.0]);
+        assert!(data[3..].iter().all(|&v| v == 0.0));
     }
 
     #[test]
