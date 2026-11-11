@@ -93,7 +93,7 @@ impl Spec {
     }
 
     /// The card of this spec, with `stories` from [`Spec::card_stories`], `key` as its id scope and `room` as the
-    /// height a filling story gets.
+    /// most a filling story takes.
     pub fn card<'a>(&'a self, stories: &'a [CardStory<'a>], key: String, room: f32) -> Card<'a> {
         Card {
             key,
@@ -159,7 +159,7 @@ pub(super) fn grid(
     let mut reported = Vec::new();
     let columns = if one_column || ui.available_width() < 2.0 * CARD_MIN_WIDTH { 1 } else { 2 };
     let generation = p.generation;
-    // A story that fills its room gets the view's height, as on the old gallery's tiles.
+    // A story that fills takes its content height, at most the view's, as on the old gallery's tiles.
     let room = ui.available_height();
     Stack::new().fill().scroll(Scroll::vertical()).gap(Gap::CardRow).id_salt(scroll_id).show(ui, |ui, _| {
         reported.clear();

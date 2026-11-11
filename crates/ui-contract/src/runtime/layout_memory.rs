@@ -9,6 +9,9 @@
 //! the calls the transcript holds, at the measuring run's own proposal and room, and compares; a component added,
 //! removed or answering differently drops the kept transcripts of the bodies the real run is inside (up to a boundary)
 //! and asks for the frame's discard pass, so a change shows in its frame.
+//!
+//! A measuring run can run as a draft (`draft`): its caller sees its result before it hands anything forward for good,
+//! and a draft taken back leaves the pass as it found it.
 
 use crate::runtime::egui::sizing;
 use crate::runtime::frame::{self, PerViewport};
@@ -81,7 +84,13 @@ pub(crate) trait Contribution: Send + Sync {
     /// What the contribution reports: its target and kind by id, and its value. A real run's contributions are
     /// compared with the transcript's by these. `None` for a report only a measuring run makes.
     fn report(&self) -> Option<(Id, f32)>;
+
+    /// What takes the contribution back, read before it is made: a [`draft`] that is taken back runs it.
+    fn undo(&self, ctx: &Context) -> TakeBack;
 }
+
+/// Restores what a contribution changed in its aggregator ([`Contribution::undo`]).
+pub(crate) type TakeBack = Box<dyn FnOnce(&Context) + Send + Sync>;
 
 /// What a record holds: a measure, or a text the run found that content outside the body shows (the value text a
 /// viewer shows beside a story). A text is an output of the measuring run as much as its size, so it serves exactly
@@ -153,6 +162,31 @@ struct Kept {
     touched: u64,
 }
 
+/// A measuring run whose hand-forwards can be taken back ([`draft`]), and what restores the pass to how it was before it.
+struct Draft {
+    /// How many entries `measuring` had open when the draft began: the ones below are outside it.
+    floor: usize,
+    /// The innermost transcript outside the draft, by its place in `measuring`, and how many items it held then.
+    items: Option<(usize, usize)>,
+    /// What the run changed, in order; taken back in reverse.
+    undo: Vec<Undo>,
+}
+
+/// One change a draft made outside itself, with what was there before.
+enum Undo {
+    /// The record under the id, before the draft's emit replaced it.
+    Record(Id, Option<Found>),
+    /// The body's kept and served transcripts, before the draft's run of the body replaced them.
+    Kept(Id, Option<Kept>, Option<Arc<Transcript>>),
+    /// The draft added an alias to the body's kept transcript.
+    Alias(Id),
+    /// A component's entry in the transcript open at the place, before the draft added to it.
+    Leaf(usize, Id, Option<Leaf>),
+    /// An input the entry open at the place read, before the draft read it.
+    Input(usize, Id, Option<f32>),
+    Contribution(TakeBack),
+}
+
 impl Scope {
     fn boundary() -> Scope {
         Scope { body: None, boundary: true, served: None, fresh: None, visited: HashSet::new(), fills: HashSet::new(), reported: Vec::new() }
@@ -170,7 +204,7 @@ enum Open {
         inputs: Inputs,
     },
     Boundary,
-    /// A run that asks a question of content and leaves nothing behind (`probing`).
+    /// A run that asks a question of content and reads nothing the pass found outside it (`probing`).
     Probe,
     /// `inputs`: what the measure read outside its own room.
     Call {
@@ -205,6 +239,8 @@ pub(crate) struct Entries {
     /// The kept calls a real run asks again, as the transcript, the component and the call's index, innermost last:
     /// `read_input` gives what they read.
     replaying: Vec<(Arc<Transcript>, Id, usize)>,
+    /// The drafts open, innermost last.
+    drafts: Vec<Draft>,
     ask: bool,
     asked: Option<u64>,
 }
@@ -244,11 +280,98 @@ impl Entries {
         }
     }
 
-    fn leaf(&mut self) -> Option<&mut HashMap<Id, Leaf>> {
-        match self.transcript() {
-            Some(Open::Body { leaves, .. }) => Some(leaves),
-            _ => None,
+    /// Where the innermost open transcript sits in `measuring`.
+    fn transcript_at(&self) -> Option<usize> {
+        self.measuring.iter().rposition(|open| !matches!(open, Open::Call { .. }))
+    }
+
+    /// The component entry `id` of the innermost open body's transcript, to add to: a draft that holds no such body
+    /// notes what it was.
+    fn leaf(&mut self, id: Id) -> Option<&mut Leaf> {
+        let at = self.transcript_at()?;
+        let outside = self.drafts.last().is_some_and(|draft| at < draft.floor);
+        let Open::Body { leaves, .. } = &mut self.measuring[at] else { return None };
+        if outside && let Some(draft) = self.drafts.last_mut() {
+            draft.undo.push(Undo::Leaf(at, id, leaves.get(&id).cloned()));
         }
+        Some(leaves.entry(id).or_default())
+    }
+
+    /// Keeps a draft that ended: its changes stand, and an open draft around it takes them back with its own. The
+    /// outermost one finds the records it replaced from a kept transcript at the same room changed, as each emit
+    /// outside a draft does.
+    fn keep(&mut self, draft: Draft, frame: u64, pass: u64, tolerance: f32) {
+        if let Some(outer) = self.drafts.last_mut() {
+            let floor = outer.floor;
+            outer.undo.extend(draft.undo.into_iter().filter(|undo| match undo {
+                Undo::Leaf(at, ..) | Undo::Input(at, ..) => *at < floor,
+                _ => true,
+            }));
+            return;
+        }
+        let changed: Vec<Id> = draft
+            .undo
+            .iter()
+            .filter_map(|undo| match undo {
+                Undo::Record(id, Some(last)) => kept_differs(last, &self.measured.get(id)?.recorded, pass, tolerance),
+                _ => None,
+            })
+            .collect();
+        for from in changed {
+            self.changed(frame, Some(from));
+        }
+    }
+
+    /// Takes a draft that ended back: the records, kept transcripts and transcript entries are as before it. Returns
+    /// what takes its contributions back, in reverse order, to run outside the memory's lock.
+    fn take_back(&mut self, draft: Draft) -> Vec<TakeBack> {
+        let mut later = Vec::new();
+        for undo in draft.undo.into_iter().rev() {
+            match undo {
+                Undo::Record(id, last) => match last {
+                    Some(found) => drop(self.measured.insert(id, found)),
+                    None => drop(self.measured.remove(&id)),
+                },
+                Undo::Kept(body, kept, served) => {
+                    match kept {
+                        Some(kept) => drop(self.kept.insert(body, kept)),
+                        None => drop(self.kept.remove(&body)),
+                    }
+                    match served {
+                        Some(served) => drop(self.served.insert(body, served)),
+                        None => drop(self.served.remove(&body)),
+                    }
+                }
+                Undo::Alias(body) => {
+                    if let Some(kept) = self.kept.get_mut(&body) {
+                        kept.aliases.pop();
+                    }
+                }
+                Undo::Leaf(at, id, leaf) => {
+                    if let Some(Open::Body { leaves, .. }) = self.measuring.get_mut(at) {
+                        match leaf {
+                            Some(leaf) => drop(leaves.insert(id, leaf)),
+                            None => drop(leaves.remove(&id)),
+                        }
+                    }
+                }
+                Undo::Input(at, key, value) => {
+                    if let Some(Open::Body { inputs, .. } | Open::Call { inputs }) = self.measuring.get_mut(at) {
+                        match value {
+                            Some(value) => drop(inputs.insert(key, value)),
+                            None => drop(inputs.remove(&key)),
+                        }
+                    }
+                }
+                Undo::Contribution(undo) => later.push(undo),
+            }
+        }
+        if let Some((at, len)) = draft.items
+            && let Some(Open::Body { items, .. }) = self.measuring.get_mut(at)
+        {
+            items.truncate(len);
+        }
+        later
     }
 
     /// Whether a probe is open (`probing`).
@@ -374,9 +497,6 @@ fn emit(ctx: &Context, id: Id, mut recorded: Recorded) {
     let pass = ctx.cumulative_pass_nr();
     let tolerance = measure_tolerance(crate::runtime::egui::scale::pixels_per_point(ctx));
     with(ctx, &moment, |memory| {
-        if memory.probing() {
-            return;
-        }
         // A measure keys on what it read: the room, and the inputs the innermost open body read so far.
         if let Recorded::Measured(measured) = &mut recorded {
             measured.inputs = memory
@@ -390,25 +510,34 @@ fn emit(ctx: &Context, id: Id, mut recorded: Recorded) {
                 .unwrap_or(0);
         }
         let last = memory.measured.insert(id, Found { pass, recorded: recorded.clone(), kept: None });
-        if let Some(Found { pass: at, recorded: was, kept: Some(from) }) = last
-            && at == pass
-            && match (&was, &recorded) {
-                (Recorded::Measured(was), Recorded::Measured(now)) => {
-                    was.inputs == now.inputs
-                        && (was.room - now.room).abs().max_elem() <= tolerance
-                        && (was.took - now.took).abs().max_elem() > tolerance
-                }
-                (was, now) => was != now,
-            }
-        {
-            #[cfg(feature = "testing")]
-            if std::env::var_os("CRAFT_UI_TRACE_KEPT").is_some() {
-                eprintln!("layout memory: a run of this pass found {id:?} at {recorded:?}, its kept record said {was:?}");
-            }
+        // A draft finds a change when it is kept, against the record it replaced.
+        if let Some(draft) = memory.drafts.last_mut() {
+            draft.undo.push(Undo::Record(id, last));
+        } else if let Some(from) = last.and_then(|last| kept_differs(&last, &recorded, pass, tolerance)) {
             memory.changed(moment.frame, Some(from));
         }
         memory.push(Item::Record(id, recorded));
     });
+}
+
+/// The body whose kept transcript gave `last` to this pass, when a run of the pass found, at the same room and inputs,
+/// something else (`now`): that transcript changed.
+fn kept_differs(last: &Found, now: &Recorded, pass: u64, tolerance: f32) -> Option<Id> {
+    let Found { pass: at, recorded: was, kept: Some(from) } = last else { return None };
+    let differs = match (was, now) {
+        (Recorded::Measured(was), Recorded::Measured(now)) => {
+            was.inputs == now.inputs && (was.room - now.room).abs().max_elem() <= tolerance && (was.took - now.took).abs().max_elem() > tolerance
+        }
+        (was, now) => was != now,
+    };
+    if *at != pass || !differs {
+        return None;
+    }
+    #[cfg(feature = "testing")]
+    if std::env::var_os("CRAFT_UI_TRACE_KEPT").is_some() {
+        eprintln!("layout memory: a run of this pass found {now:?}, the kept record of {from:?} said {was:?}");
+    }
+    Some(*from)
 }
 
 /// How many bodies and measure calls a measuring run has open: an aggregator opened now hands [`read_input`] this
@@ -435,10 +564,14 @@ pub(crate) fn read_input(ctx: &Context, from: usize, key: Id, value: f32) -> f32
         if let Some(read) = replayed {
             return *read;
         }
-        // A probe's content reads nothing on behalf of the runs outside it.
-        let from = memory.measuring.iter().rposition(|open| matches!(open, Open::Probe)).map_or(from, |at| from.max(at + 1));
-        for open in memory.measuring.iter_mut().skip(from) {
+        let floor = memory.drafts.last().map_or(0, |draft| draft.floor);
+        for (at, open) in memory.measuring.iter_mut().enumerate().skip(from) {
             if let Open::Body { inputs, .. } | Open::Call { inputs } = open {
+                if at < floor
+                    && let Some(draft) = memory.drafts.last_mut()
+                {
+                    draft.undo.push(Undo::Input(at, key, inputs.get(&key).copied()));
+                }
                 let read = inputs.entry(key).or_insert(value);
                 *read = read.max(value);
             }
@@ -482,18 +615,59 @@ fn fingerprint(inputs: &Inputs) -> u64 {
 /// real run inside a body a kept transcript serves keeps it to compare with the transcript's.
 pub(crate) fn contribute(ctx: &Context, contribution: Arc<dyn Contribution>) {
     let moment = Moment::of(ctx);
-    if with(ctx, &moment, |memory| memory.probing()) {
-        return;
-    }
-    guard::emitting(|| contribution.apply(ctx));
     let measuring = crate::runtime::measure::active(ctx);
+    let drafting = measuring && with(ctx, &moment, |memory| !memory.drafts.is_empty());
+    let undo = drafting.then(|| guard::emitting(|| contribution.undo(ctx)));
+    guard::emitting(|| contribution.apply(ctx));
+    #[cfg(feature = "testing")]
+    if measuring {
+        crate::runtime::measure::count_contribution(ctx, 1);
+    }
     with(ctx, &moment, |memory| {
         if measuring {
+            if let (Some(undo), Some(draft)) = (undo, memory.drafts.last_mut()) {
+                draft.undo.push(Undo::Contribution(undo));
+            }
             memory.push(Item::Contribute(contribution));
         } else if let (Some(scope), Some(report)) = (memory.checking(), contribution.report()) {
             scope.reported.push(report);
         }
     });
+}
+
+/// Runs the measuring run `run` as a draft: everything it hands forward (records, kept transcripts, what it adds to the
+/// transcript open around it, contributions) can be taken back. `keep` decides from its result. Kept, the run stands as
+/// if it had run plainly; taken back, the pass is as it was before the run, so a run that follows replaces it (a body
+/// that fills measured at its content height, then laid out at its room) or none does (a run that only asks). Returns
+/// the result and whether it was kept.
+pub(crate) fn draft<R>(ctx: &Context, run: impl FnOnce() -> R, keep: impl FnOnce(&R) -> bool) -> (R, bool) {
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, |memory| {
+        let floor = memory.measuring.len();
+        let items = memory.transcript_at().and_then(|at| match &memory.measuring[at] {
+            Open::Body { items, .. } => Some((at, items.len())),
+            _ => None,
+        });
+        memory.drafts.push(Draft { floor, items, undo: Vec::new() });
+    });
+    let out = run();
+    let kept = keep(&out);
+    let pass = ctx.cumulative_pass_nr();
+    let tolerance = measure_tolerance(crate::runtime::egui::scale::pixels_per_point(ctx));
+    let undo = with(ctx, &moment, |memory| {
+        let draft = memory.drafts.pop()?;
+        if kept {
+            memory.keep(draft, moment.frame, pass, tolerance);
+            return None;
+        }
+        Some(memory.take_back(draft))
+    });
+    for undo in undo.into_iter().flatten() {
+        guard::emitting(|| undo(ctx));
+        #[cfg(feature = "testing")]
+        crate::runtime::measure::count_contribution(ctx, -1);
+    }
+    (out, kept)
 }
 
 /// Runs `f` as content whose emits no enclosing transcript takes, and whose real run no enclosing body checks: a
@@ -524,13 +698,13 @@ pub(crate) fn boundary<R>(ctx: &Context, stops_changes: bool, f: impl FnOnce() -
 }
 
 /// Runs `f`, a measuring run that asks a question of content (the least width of a row's body unit), as a probe: it
-/// reads no record or kept transcript, so every body inside measures its content, and it leaves nothing behind (no
-/// record, text, transcript, contribution or input of a run outside it). The runs of the pass outside it find what
-/// they would without it.
+/// reads no record or kept transcript, so every body inside measures its content, and it runs as a [`draft`] taken
+/// back, so it leaves nothing behind (no record, text, transcript, contribution or input of a run outside it). The runs
+/// of the pass outside it find what they would without it.
 pub(crate) fn probing<R>(ctx: &Context, f: impl FnOnce() -> R) -> R {
     let moment = Moment::of(ctx);
     with(ctx, &moment, |memory| memory.measuring.push(Open::Probe));
-    let out = f();
+    let (out, _) = draft(ctx, f, |_| false);
     with(ctx, &moment, |memory| {
         if let Some(at) = memory.measuring.iter().rposition(|open| matches!(open, Open::Probe)) {
             memory.measuring.remove(at);
@@ -548,8 +722,8 @@ pub(crate) fn leaf_call(ctx: &Context, id: Id, calls: &mut [Call], ask: impl FnM
     let moment = Moment::of(ctx);
     if !real(ctx) {
         with(ctx, &moment, |memory| {
-            if let Some(leaves) = memory.leaf() {
-                let kept = &mut leaves.entry(id).or_default().calls;
+            if let Some(leaf) = memory.leaf(id) {
+                let kept = &mut leaf.calls;
                 for call in calls {
                     if !kept.iter().any(|kept| kept.proposal == call.proposal && kept.room == call.room) {
                         let inputs = std::mem::take(&mut call.inputs);
@@ -613,10 +787,11 @@ pub(crate) fn leaf_fill(ctx: &Context, id: Id, body: Id, axis: Axis) {
     let measuring = !real(ctx);
     let same = with(ctx, &moment, |memory| {
         if measuring {
-            if let Some(Open::Body { id: open, leaves, .. }) = memory.transcript()
+            if let Some(Open::Body { id: open, .. }) = memory.transcript()
                 && *open == body
+                && let Some(leaf) = memory.leaf(id)
             {
-                leaves.entry(id).or_default().fill = Some(axis);
+                leaf.fill = Some(axis);
             }
             return true;
         }
@@ -682,13 +857,14 @@ pub(crate) fn end_measure<K: PartialEq + Send + Sync + 'static>(ctx: &Context, b
     with(ctx, &moment, |memory| {
         let Some(at) = memory.measuring.iter().rposition(|open| matches!(open, Open::Body { id, .. } if *id == body)) else { return };
         let Open::Body { items, leaves, .. } = memory.measuring.remove(at) else { return };
-        if memory.probing() {
-            return;
-        }
         let transcript = Arc::new(Transcript { key: Box::new(key), items, leaves, real: Mutex::new(None) });
-        memory.served.remove(&body);
-        let moved = memory.kept.remove(&body).and_then(|last| last.moved);
+        let served = memory.served.remove(&body);
+        let last = memory.kept.remove(&body);
+        let moved = last.as_ref().and_then(|last| last.moved);
         memory.kept.insert(body, Kept { transcript: transcript.clone(), aliases: Vec::new(), valid: true, moved, touched: moment.frame });
+        if let Some(draft) = memory.drafts.last_mut() {
+            draft.undo.push(Undo::Kept(body, last, served));
+        }
         memory.push(Item::Body(body, transcript));
     });
 }
@@ -705,6 +881,9 @@ pub(crate) fn kept_also_under<K: PartialEq + Send + Sync + 'static>(ctx: &Contex
         let known = kept.transcript.key.downcast_ref::<K>() == Some(&key) || kept.aliases.iter().any(|alias| alias.downcast_ref::<K>() == Some(&key));
         if !known && kept.aliases.len() < 2 {
             kept.aliases.push(Box::new(key));
+            if let Some(draft) = memory.drafts.last_mut() {
+                draft.undo.push(Undo::Alias(body));
+            }
         }
     });
 }
@@ -914,6 +1093,7 @@ pub(crate) fn end_hook(ctx: &Context) {
         memory.measured.clear();
         memory.served.clear();
         memory.measuring.clear();
+        memory.drafts.clear();
         memory.scopes.clear();
         memory.replaying.clear();
         (wanted, ask)

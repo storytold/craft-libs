@@ -122,6 +122,11 @@ impl Contribution for MeasuredRead {
     fn report(&self) -> Option<(Id, f32)> {
         None
     }
+
+    fn undo(&self, ctx: &Context) -> layout_memory::TakeBack {
+        let made = with(ctx, |reads| reads.reads.len());
+        Box::new(move |ctx| with(ctx, |reads| reads.reads.truncate(made)))
+    }
 }
 
 /// The reads of a binding made so far in this pass, as an edit of it by one component sees them.

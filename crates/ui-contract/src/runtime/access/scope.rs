@@ -275,6 +275,20 @@ impl layout_memory::Contribution for ControlMin {
     fn report(&self) -> Option<(Id, f32)> {
         Some((sub(self.container, "control_min"), self.width))
     }
+
+    fn undo(&self, ctx: &Context) -> layout_memory::TakeBack {
+        let container = self.container;
+        let label = move |scope: &&mut Scope| scope.container == container && matches!(scope.kind, Kind::Label(_));
+        let was = pass_state::with::<Stack, _>(ctx, |stack| stack.0.iter_mut().rev().find(label).map(|scope| scope.control_min));
+        Box::new(move |ctx| {
+            let Some(was) = was else { return };
+            pass_state::with::<Stack, _>(ctx, |stack| {
+                if let Some(scope) = stack.0.iter_mut().rev().find(label) {
+                    scope.control_min = was;
+                }
+            });
+        })
+    }
 }
 
 /// The narrowest width the first control of the open label scope of `container` has reported so far; 0 before any.

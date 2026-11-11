@@ -21,6 +21,16 @@ pub(in crate::contract) fn measuring<R>(ctx: &Context, f: impl FnOnce() -> R) ->
     keeping_ids(ctx, || (crate::runtime::measure::run(ctx, f), true))
 }
 
+/// Runs the measuring run `run` as a draft (`layout_memory::draft`) whose `Auto` ordinals go with it: taken back, it leaves
+/// the pass's records, transcripts, contributions and ordinals as it found them, so a run that replaces it gives every
+/// component the id it gave. `keep` decides from the result; returns it and whether it was kept.
+pub(crate) fn draft<R>(ctx: &Context, run: impl FnOnce() -> R, keep: impl FnOnce(&R) -> bool) -> (R, bool) {
+    keeping_ids(ctx, || {
+        let (out, kept) = crate::runtime::layout_memory::draft(ctx, run, keep);
+        ((out, kept), !kept)
+    })
+}
+
 /// Runs `f` and, when it returns `true` beside its result, leaves the `Auto` ordinals as it found them, so what runs
 /// next in the same pass gives every component the id `f`'s run gave it.
 pub(crate) fn keeping_ids<R>(ctx: &Context, f: impl FnOnce() -> (R, bool)) -> R {

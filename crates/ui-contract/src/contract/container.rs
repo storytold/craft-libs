@@ -546,9 +546,10 @@ pub struct ContainerProps {
     pub pad: Pad,
     /// How the size follows the content.
     pub sizing: Sizing,
-    /// The height the body offers its children in flow, in place of the flow's (unbounded in a scrolling body): a
-    /// child that fills the height is given it, any other child takes its content height. A host that shows content
-    /// of either kind at a definite room (a story in a gallery card) sets it.
+    /// The height the body offers its children in flow, in place of the flow's (unbounded in a scrolling body): the
+    /// most a child takes. Every child takes its content height, a child that fills or scrolls at most this height,
+    /// as a scrolling list is as tall as its rows until they outgrow the room. A host that shows content of either
+    /// kind at a definite room (a story in a gallery card) sets it.
     pub room_height: Option<f32>,
     /// How the body lays out its children.
     pub layout: BodyLayout,

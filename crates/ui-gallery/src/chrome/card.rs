@@ -87,8 +87,8 @@ pub struct Card<'a> {
     pub layout: StoryLayout,
     /// The surface the stories sit on.
     pub surface: Surface,
-    /// The height a story that fills is given: the visible height of the view the cards scroll in, as the old
-    /// gallery's tiles gave it.
+    /// The most a story that fills takes, at its content height below that: the visible height of the view the cards
+    /// scroll in, as the old gallery's tiles gave it.
     pub room: f32,
     /// Whether the header has Open.
     pub open: bool,
@@ -242,7 +242,7 @@ pub struct StoryBody {
     pub story: &'static StoryRegistration,
     /// The surface the story sits on.
     pub surface: Surface,
-    /// The height a story that fills is given.
+    /// The most a story that fills takes.
     pub room: f32,
     /// The values the body sets for its story.
     pub look: Look,
@@ -376,7 +376,7 @@ fn close_at_start(state: &mut CardState) {
 struct Host<'a> {
     caption: Option<&'a str>,
     id: Id,
-    /// The height a story that fills is given.
+    /// The most a story that fills takes.
     room: f32,
     look: Look,
     surface: Surface,

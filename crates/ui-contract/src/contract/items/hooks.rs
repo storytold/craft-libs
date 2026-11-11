@@ -169,7 +169,8 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             ShowAt::Flow => crate::layout::flow_room(ui),
         };
         self.room = room;
-        self.from_content = if crate::runtime::measure::active(ui.ctx()) { Env::of(ui).content } else { (false, false) };
+        let content = Env::of(ui).content;
+        self.from_content = (content.0 && crate::runtime::measure::active(ui.ctx()), content.1);
         self.header.measure(scx);
         let bounded = room.x.is_finite();
         let mut widest = 0.0;

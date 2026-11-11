@@ -311,3 +311,26 @@ fn a_card_shows_its_storys_readout_under_the_story_and_follows_it() {
     let (after, _) = readout(&fixture).expect("the readout stays");
     assert!(after.starts_with("Last event: "), "the readout names the click's event: {after}");
 }
+
+/// The height of the Overview card of the component listed as `name` in a window `height` tall.
+fn card_height(name: &str, height: f32) -> f32 {
+    let mut gallery = gallery_filtered(level_of(name), name);
+    let mut fixture = Fixture::new(move |ui| gallery.ui(ui));
+    fixture.room(Vec2::new(1400.0, height)).settle();
+    let card = fixture
+        .by_role(Role::GROUP)
+        .into_iter()
+        .find(|group| fixture.tree().name_of(group.node) == Some(name))
+        .unwrap_or_else(|| panic!("{name}'s card shows"));
+    card.rect.height()
+}
+
+/// A card whose story fills and scrolls is as tall as the story's content while the content fits the room, as the old
+/// gallery's tiles were: a taller window gives the card no empty space. Regression: a list or panel story took the
+/// whole height of the view.
+#[trial]
+fn a_card_of_a_filling_story_is_as_tall_as_its_content() {
+    let (short, tall) = (card_height("LayersPanel", 900.0), card_height("LayersPanel", 1400.0));
+    assert!(short < 900.0, "the card fits the window: {short}");
+    assert!((tall - short).abs() < 1.0, "the card keeps its content's height in a taller window: {short} -> {tall}");
+}

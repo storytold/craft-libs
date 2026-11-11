@@ -3,18 +3,20 @@
 use super::BodyHooks;
 use super::placement::overlay_of;
 use super::regions::{RegionSizes, end_full_height, footer_in_end};
+use super::scroll::scroll_of;
 use crate::contract::run::ShowAt;
 use crate::contract::{ContainerProps, Mount, ShellPane, Sizing};
 use crate::runtime::egui::areas;
 use crate::runtime::env::Env;
 use crate::runtime::layout_memory;
 use crate::runtime::memory::sub;
+use craft_behavior::layout_memory::measure_tolerance;
 use egui::{Context, Id, Rect, Ui, Vec2};
 use std::sync::Arc;
 
 /// The inputs a body's measuring run measures under. A later pass offering the same takes the body's kept
 /// transcript (`layout_memory::kept_serves`); its real run checks that the content is the same.
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 pub(super) struct MeasureKey {
     props: MeasuredProps,
     room: Vec2,
@@ -28,6 +30,7 @@ pub(super) struct MeasureKey {
 }
 
 /// The props a body was measured under, compared on the fields its measure reads.
+#[derive(Clone)]
 struct MeasuredProps(Arc<ContainerProps>);
 
 impl PartialEq for MeasuredProps {
@@ -37,7 +40,7 @@ impl PartialEq for MeasuredProps {
 }
 
 /// What a body's measure reads of its env besides the room.
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 struct EnvFacts {
     style: crate::style::EnvKey,
     words: u64,
@@ -108,6 +111,25 @@ impl<'b> BodyHooks<'b> {
             (ShowAt::Flow, Mount::Inline) => (x && !env.content.0 && !self.held(props, env), y && !env.content.1),
             (ShowAt::Flow, _) => (x, y),
         }
+    }
+
+    /// Whether the container fills a height its parent sizes from its content, in a room of finite height: it takes
+    /// its content height, at most that room. A body that scrolls along the height keeps to the room by scrolling.
+    pub(super) fn capped(&self, props: &ContainerProps, env: &Env, at: ShowAt) -> bool {
+        matches!((at, &props.mount), (ShowAt::Flow, Mount::Inline))
+            && self.sizing(props) == Sizing::Fill
+            && env.content.1
+            && self.room.y.is_finite()
+            && !scroll_of(props).is_some_and(|scroll| scroll.vertical_on())
+    }
+
+    /// Whether a capped container's content is taller than its room, as this pass's measure found it (the record
+    /// `content` its measuring run leaves then): it takes the room and lays its children out as given the height there,
+    /// so the children that fill share it.
+    pub(super) fn over_room(&self, props: &ContainerProps, env: &Env, at: ShowAt, ctx: &Context, id: Id) -> bool {
+        let tolerance = measure_tolerance(crate::runtime::egui::scale::pixels_per_point(ctx));
+        self.capped(props, env, at)
+            && layout_memory::measured(ctx, sub(id, "content")).is_some_and(|content| content.took.y > self.room.y + tolerance)
     }
 
     /// What the regions took together, padding included, from the records a measuring run left in this pass, when they

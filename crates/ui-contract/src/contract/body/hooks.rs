@@ -9,6 +9,7 @@ use super::regions::{
 };
 use super::reorder::REORDER_BAND;
 use super::scroll::{Glide, Jumps, ScrollState, aim_glide, follow_anchor, jump_frame, overflow_inset, scroll_of};
+use super::size::MeasureKey;
 use super::window::{WindowMode, os_window, window_instance};
 use super::{BodyHooks, BodyView};
 use crate::contract::cx::{BodyCx, BodyOwner};
@@ -282,7 +283,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
     fn extent(&mut self, comp: &C, ui: &Ui, at: ShowAt, id: Id, scx: &StyleCx<'_>) -> Vec2 {
         let props = comp.props(Internal::new());
         self.room = self.mount_room(props, ui, id, at);
-        self.given = self.given_axes(props, &Env::of(ui), at);
+        let env = Env::of(ui);
+        self.given = self.given_axes(props, &env, at);
+        self.given.1 |= self.over_room(props, &env, at, ui.ctx(), id);
         let measured = self.measured_body.unwrap_or(Vec2::ZERO);
         let body = if self.presence.visible { Vec2::new(measured.x, measured.y * self.presence.t) } else { Vec2::ZERO };
         let room = self.room.x - 2.0 * pad_of(scx.tokens, props.pad);
@@ -377,56 +380,27 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 if found {
                     layout_memory::kept_also_under(&ctx, id, key);
                 }
+                // A capped body whose content outgrew its room was laid out as given it: the record of its content says so.
+                if self.over_room(&props, at.env, at.at, &ctx, id) {
+                    self.given.1 = true;
+                }
                 took
             }
-            None => {
-                #[cfg(feature = "testing")]
-                crate::runtime::measure::count_body(&ctx, id);
-                layout_memory::begin_measure(&ctx, id);
-                let available = match at.at {
-                    ShowAt::Rect(rect) => rect,
-                    // Not the cursor: in a right-to-left layout it extends to -inf along the line.
-                    ShowAt::Flow => at.ui.available_rect_before_wrap(),
-                };
-                let origin = available.min;
-                // Along an axis with no room limit the content grows away from its start edge: in a right-to-left
-                // layout that edge is the right one, so the measuring rect is as wide as a scrolling region and
-                // ends where the room does, as the real run's region does.
-                let rect = if self.room.x.is_infinite() && at.env.direction.is_rtl() && available.max.x.is_finite() {
-                    Rect::from_min_max(
-                        Pos2::new(available.max.x - crate::contract::MAX_EXTENT, origin.y),
-                        Pos2::new(available.max.x, origin.y + self.room.y),
-                    )
+            // A capped body takes its content height while that fits its room. Taller, the run is taken back and the body
+            // is laid out as given the room, at the footer and header this run measured, so the children that fill share
+            // it; its record of the content height lets later runs of the pass and kept transcripts lay it out the same.
+            None if self.capped(&props, at.env, at.at) => {
+                let fits = self.room.y + tolerance;
+                let (content, kept) = crate::contract::draft(&ctx, || self.measure_run(comp, at, cx, key.clone(), None), |took| took.y <= fits);
+                if kept {
+                    content
                 } else {
-                    Rect::from_min_size(origin, self.room)
-                };
-                cx.core.rect = rect;
-                cx.core.flow = craft_behavior::Flow::new(rect, at.env.direction.is_rtl());
-                cx.core.content_rect = cx.core.flow.inset(cx.style.metrics().padding);
-                let builder = UiBuilder::new().layer_id(measure_layer(&props, id, at.ui)).max_rect(rect).sizing_pass().invisible();
-                // The regions take explicit scope ids under `id`, so every component in them gets the id the real run
-                // gives it and the records it leaves match.
-                let mut measure_ui = Ui::new(ctx.clone(), sub(id, "measure"), builder);
-                let installed = Env::install_for(&measure_ui, at.env.clone());
-                let mut values = AppValues::default();
-                comp.content_env(cx, &mut values);
-                self.content(comp, &mut measure_ui, at.env, cx, &values);
-                Env::restore(&ctx, installed);
-                let record = |key: Id, took: Vec2| layout_memory::emit_record(&ctx, key, layout_memory::Measured::new(self.room, took));
-                record(id, self.body_size.unwrap_or(Vec2::ZERO));
-                for (key, size) in
-                    [("header", self.header_size), ("footer", self.footer_size), ("end", self.end_size), ("controls", self.controls_size)]
-                {
-                    if let Some(size) = size {
-                        record(sub(id, key), size);
-                    }
+                    self.given.1 = true;
+                    self.measured_footer = self.footer_size.unwrap_or(Vec2::ZERO);
+                    self.measure_run(comp, at, cx, key, Some(content))
                 }
-                layout_memory::end_measure(&ctx, id, key);
-                let body = if self.open { self.body_size.unwrap_or(Vec2::ZERO) } else { Vec2::ZERO };
-                let (header, footer, end) =
-                    (self.header_size.unwrap_or(Vec2::ZERO), self.footer_size.unwrap_or(Vec2::ZERO), self.end_size.unwrap_or(Vec2::ZERO));
-                self.regions_size(&props, body, header, footer, end) + pad
             }
+            None => self.measure_run(comp, at, cx, key, None),
         };
         // A layer hung from an opener is at least as wide as the opener its overlay asks for, in the measuring run too,
         // so the rows of a content-sized list inside it are placed at that width.
@@ -1094,5 +1068,66 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             let at_end = self.last.view.map(rect_of).is_some_and(|view| self.offset.y >= f64::from(self.last_extent.1 - view.height()) - 0.5);
             stage.session::<ScrollState>(sub(id, "scroll")).follow_end = Some(at_end);
         }
+    }
+}
+
+impl BodyHooks<'_> {
+    /// The measuring run of the regions in `self.room`, under the inputs `key`: what they took together, padding
+    /// included. `content`: the size the body's content took in the run taken back before this one, recorded with it.
+    fn measure_run<C: Container>(
+        &mut self,
+        comp: &mut C,
+        at: &Measuring<'_, '_>,
+        cx: &mut Cx<'_, C>,
+        key: MeasureKey,
+        content: Option<Vec2>,
+    ) -> Vec2 {
+        let props = Arc::clone(&self.props);
+        let (id, ctx) = (cx.core.id, at.ui.ctx().clone());
+        let pad = Vec2::splat(2.0 * pad_of(at.scx.tokens, props.pad));
+        #[cfg(feature = "testing")]
+        crate::runtime::measure::count_body(&ctx, id);
+        layout_memory::begin_measure(&ctx, id);
+        let available = match at.at {
+            ShowAt::Rect(rect) => rect,
+            // Not the cursor: in a right-to-left layout it extends to -inf along the line.
+            ShowAt::Flow => at.ui.available_rect_before_wrap(),
+        };
+        let origin = available.min;
+        // Along an axis with no room limit the content grows away from its start edge: in a right-to-left
+        // layout that edge is the right one, so the measuring rect is as wide as a scrolling region and
+        // ends where the room does, as the real run's region does.
+        let rect = if self.room.x.is_infinite() && at.env.direction.is_rtl() && available.max.x.is_finite() {
+            Rect::from_min_max(Pos2::new(available.max.x - crate::contract::MAX_EXTENT, origin.y), Pos2::new(available.max.x, origin.y + self.room.y))
+        } else {
+            Rect::from_min_size(origin, self.room)
+        };
+        cx.core.rect = rect;
+        cx.core.flow = craft_behavior::Flow::new(rect, at.env.direction.is_rtl());
+        cx.core.content_rect = cx.core.flow.inset(cx.style.metrics().padding);
+        let builder = UiBuilder::new().layer_id(measure_layer(&props, id, at.ui)).max_rect(rect).sizing_pass().invisible();
+        // The regions take explicit scope ids under `id`, so every component in them gets the id the real run
+        // gives it and the records it leaves match.
+        let mut measure_ui = Ui::new(ctx.clone(), sub(id, "measure"), builder);
+        let installed = Env::install_for(&measure_ui, at.env.clone());
+        let mut values = AppValues::default();
+        comp.content_env(cx, &mut values);
+        <Self as ShapeHooks<C>>::content(self, comp, &mut measure_ui, at.env, cx, &values);
+        Env::restore(&ctx, installed);
+        let record = |key: Id, took: Vec2| layout_memory::emit_record(&ctx, key, layout_memory::Measured::new(self.room, took));
+        record(id, self.body_size.unwrap_or(Vec2::ZERO));
+        for (key, size) in [("header", self.header_size), ("footer", self.footer_size), ("end", self.end_size), ("controls", self.controls_size)] {
+            if let Some(size) = size {
+                record(sub(id, key), size);
+            }
+        }
+        if let Some(content) = content {
+            record(sub(id, "content"), content);
+        }
+        layout_memory::end_measure(&ctx, id, key);
+        let body = if self.open { self.body_size.unwrap_or(Vec2::ZERO) } else { Vec2::ZERO };
+        let (header, footer, end) =
+            (self.header_size.unwrap_or(Vec2::ZERO), self.footer_size.unwrap_or(Vec2::ZERO), self.end_size.unwrap_or(Vec2::ZERO));
+        self.regions_size(&props, body, header, footer, end) + pad
     }
 }

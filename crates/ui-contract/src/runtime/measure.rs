@@ -26,6 +26,14 @@ struct BodyRuns {
     runs: Vec<(Id, u32)>,
 }
 
+/// How many contributions the measuring runs of a pass made that stand, with the pass that counted them.
+#[cfg(feature = "testing")]
+#[derive(Default)]
+struct Contributions {
+    pass: u64,
+    count: i64,
+}
+
 /// The runs of each component type, with the pass that counted them.
 #[cfg(feature = "testing")]
 #[derive(Default)]
@@ -137,6 +145,25 @@ pub(crate) fn count_body(ctx: &Context, id: Id) {
             None => log.runs.push((id, 1)),
         }
     });
+}
+
+/// Counts a contribution a measuring run made in this pass (`delta` 1), or a draft took back (-1).
+#[cfg(feature = "testing")]
+pub(crate) fn count_contribution(ctx: &Context, delta: i64) {
+    let pass = ctx.cumulative_pass_nr();
+    store::with::<Contributions, _>(ctx, |log| {
+        if log.pass != pass {
+            *log = Contributions { pass, count: 0 };
+        }
+        log.count += delta;
+    });
+}
+
+/// How many contributions the measuring runs made that stand, in the last pass whose runs made any: a draft that was
+/// taken back counts none.
+#[cfg(feature = "testing")]
+pub fn contributions(ctx: &Context) -> i64 {
+    store::with::<Contributions, _>(ctx, |log| log.count)
 }
 
 /// The bodies whose contents ran in a measuring run in the last pass, and how many runs each; empty when that pass

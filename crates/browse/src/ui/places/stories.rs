@@ -129,7 +129,9 @@ fn show_places(ui: &mut Ui, data: &mut StoryData, setup: Setup) -> StoryOutput {
     let mut out = None;
     {
         let Demo { cache, .. } = &mut *demo;
-        Stack::new().room_height(380.0).show(ui, |ui, _| {
+        // The old story's tree box: 380 points tall however many rows it holds.
+        let room = craft_ui::testing::stage_fitting(ui, |_| 380.0);
+        Stack::new().fill().show_at(ui, room, |ui, _| {
             let mut tree =
                 PlacesTree::new("Places", &places, &mut *cache).row_menu(|_| vec![Entry::new(String::from("folder.rename"), "Rename Folder…")]);
             if let Some(current) = current.as_deref() {

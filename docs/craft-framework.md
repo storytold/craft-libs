@@ -536,6 +536,8 @@ This section points to the component index. Examples and every state of each com
 
 A content-sized column (a `Stack::new()`, a menu or popover body) holds the children that fill: they never set the column's width, and they are shown across the width it settles on. A leaf declares that it fills with `fills()`; a container declares it with `Sizing`. A host that shows arbitrary components (the gallery, a dialog body) offers them fill width with `fill_width()`, and a story that fills both axes takes its room from `testing::stage`, and a canvas story as tall as its content (a text being edited) from `testing::stage_fitting`.
 
+Along a height its parent sizes from its content, a container that fills takes its content height, at most the room it is offered. Content taller than that room takes the room, and the children that fill share it, so a list scrolls above the bar under it. Inside a scrolling body the room is unbounded; a host offers a finite one with `room_height` (a gallery card offers the view's height).
+
 ### 6.2 Index
 
 [components-index.md](components-index.md) lists every registered component and pattern of the UI library crates with its shape, module and purpose. It is generated from the component registry (`cl cargo run -p craft-ui-gallery --bin components-index`), and the facade's `components_index` trial fails when the file is out of date. [contract-api.md](contract-api.md) lists the public items of the shared modules (`contract`, `runtime`, `style`, `primitives`, `layout`, `layout_components`, `testing`) and of `craft-behavior`.

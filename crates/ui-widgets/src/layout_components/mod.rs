@@ -100,9 +100,9 @@ macro_rules! layout_component {
                 self
             }
 
-            /// Offers the children `height` of room, also inside a scrolling body: a child that fills the height takes
-            /// it, any other child its content height, and the container takes what they took. For a host that shows
-            /// content of either kind at a definite room, such as a story preview.
+            /// Offers the children `height` of room, also inside a scrolling body: every child takes its content
+            /// height, a child that fills or scrolls at most `height`, and the container takes what they took. For a
+            /// host that shows content of either kind at a definite room, such as a story preview.
             pub fn room_height(mut self, height: f32) -> Self {
                 self.props = self.props.room_height(height);
                 self

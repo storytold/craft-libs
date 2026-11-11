@@ -264,7 +264,7 @@ pub struct AppShell<'a, S> {
     window: WindowKey,
     bare: bool,
     embedded: bool,
-    /// An embedded shell as tall as its content, with the room a body that fills is given.
+    /// An embedded shell as tall as its content, with the most a body that fills takes.
     content_room: Option<f32>,
     /// The screen mode. Without a binding the shell keeps it, starting at `Standard`.
     #[prop]
@@ -321,7 +321,7 @@ impl<'a, S> AppShell<'a, S> {
     }
 
     /// An embedded shell as wide as the room of the flow it is shown in and as tall as its body's content and its top
-    /// and bottom slots, from the measure its body keeps while its inputs hold; a body that fills is given `room`.
+    /// and bottom slots, from the measure its body keeps while its inputs hold; a body that fills takes at most `room`.
     /// Shown with [`show`](Self::show), it takes that room in the flow.
     pub fn content_height(self, room: f32) -> Self {
         AppShell { embedded: true, content_room: Some(room), ..self }

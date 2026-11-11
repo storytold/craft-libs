@@ -138,7 +138,8 @@ pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
     previous: Option<Arc<C::ItemLayout>>,
     content: Vec2,
     room: Vec2,
-    /// A measuring run under a body sized from its content: the axes (x, y) the collection takes from its content.
+    /// The axes (x, y) the collection takes from its content under a body sized from its content: the height in every
+    /// run, the width in a measuring run (the real run shows a collection that fills across the column it is held in).
     from_content: (bool, bool),
     scrolls: bool,
     /// The axis the rows overflow along.

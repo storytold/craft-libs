@@ -41,27 +41,49 @@ impl layout_memory::Contribution for Reported {
             Report::Beyond(..) => None,
         }
     }
+
+    fn undo(&self, ctx: &Context) -> layout_memory::TakeBack {
+        let (group, report) = (self.group, self.report.clone());
+        let was = with_group(ctx, group, |widest, beyond| match &report {
+            Report::Width(column, _) => widest.get(column).copied(),
+            Report::Beyond(columns, _) => beyond.get(columns).copied(),
+        });
+        Box::new(move |ctx| {
+            let Some(was) = was else { return };
+            with_group(ctx, group, |widest, beyond| match (&report, was) {
+                (Report::Width(column, _), Some(width)) => drop(widest.insert(column.clone(), width)),
+                (Report::Width(column, _), None) => drop(widest.remove(column)),
+                (Report::Beyond(columns, _), Some(past)) => drop(beyond.insert(columns.clone(), past)),
+                (Report::Beyond(columns, _), None) => drop(beyond.remove(columns)),
+            });
+        })
+    }
 }
 
-/// Adds `report` to the innermost open group `group`; `None` when that group is not open.
-fn add(ctx: &Context, group: Id, report: Report) -> Option<f32> {
+/// Runs `f` on the widths of the innermost open group `group`; `None` when that group is not open.
+fn with_group<R>(ctx: &Context, group: Id, f: impl FnOnce(&mut HashMap<ColumnKey, f32>, &mut HashMap<Vec<ColumnKey>, f32>) -> R) -> Option<R> {
     pass_state::with::<Open, _>(ctx, |open| {
         let (widest, beyond) = open.0.iter_mut().rev().find_map(|frame| match frame {
             Frame::Group { id, widest, beyond, .. } if *id == group => Some((widest, beyond)),
             _ => None,
         })?;
-        Some(match report {
-            Report::Width(column, content) => {
-                let widest = widest.entry(column).or_insert(0.0);
-                *widest = widest.max(content);
-                *widest
-            }
-            Report::Beyond(columns, past) => {
-                let widest = beyond.entry(columns).or_insert(0.0);
-                *widest = widest.max(past);
-                *widest
-            }
-        })
+        Some(f(widest, beyond))
+    })
+}
+
+/// Adds `report` to the innermost open group `group`; `None` when that group is not open.
+fn add(ctx: &Context, group: Id, report: Report) -> Option<f32> {
+    with_group(ctx, group, |widest, beyond| match report {
+        Report::Width(column, content) => {
+            let widest = widest.entry(column).or_insert(0.0);
+            *widest = widest.max(content);
+            *widest
+        }
+        Report::Beyond(columns, past) => {
+            let widest = beyond.entry(columns).or_insert(0.0);
+            *widest = widest.max(past);
+            *widest
+        }
     })
 }
 
