@@ -64,3 +64,25 @@ fn lifetimes_follow_their_owner_until_forgotten() {
         stage.finish();
     });
 }
+
+/// A slot that a stage owned by another component writes back goes with that owner: a popup body's or a
+/// settled body's slots stay while their container is shown, even after the component that made them stops.
+#[trial]
+fn a_slot_written_by_an_owning_stage_goes_with_that_owner() {
+    let mut frames = Frames::new();
+    let (base, container) = (global("made_by", ()), global("kept_by", ()));
+    frames.frame(vec![], |ui| {
+        let mut stage = Stage::open(ui.ctx(), base);
+        *stage.memory::<u32>() += 1;
+        stage.finish();
+    });
+    let mut last = 0;
+    frames.idle(60, |ui| {
+        let mut stage = Stage::open_owned(ui.ctx(), base, container);
+        *stage.memory::<u32>() += 10;
+        last = *stage.memory::<u32>();
+        stage.finish();
+    });
+    dispose_evicted(&frames.ctx);
+    assert_eq!(last % 10, 1, "the slot its maker wrote stayed with the container that keeps showing it");
+}

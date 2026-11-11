@@ -123,10 +123,10 @@ struct Entry {
     value: Box<dyn Any + Send + Sync>,
     write_back: fn(Box<dyn Any + Send + Sync>, &mut Map, Id) -> Option<Removed>,
     remove: Remover,
-    tier: u8,
-    ty: TypeId,
     /// A press entry whose press ended is dropped at write-back instead of kept.
     ended: Option<fn(&(dyn Any + Send + Sync)) -> bool>,
+    /// The slot was in context data when the stage took it: the registry holds its record.
+    recorded: bool,
 }
 
 /// The last registration of an owner: the component id registered at step 3 whose pipeline opened a stage.
@@ -281,6 +281,9 @@ pub struct MemoryStage {
     claimed: RefCell<Vec<Id>>,
     /// A sizing pass or `measure_in`: reads clone from context data, nothing moves, nothing is written back.
     peek_only: bool,
+    /// The stage belongs to another component than its base, so what it writes back is recorded under that owner
+    /// even when the registry holds a record already.
+    retags: bool,
     /// A face's stage: a `Remember` write is a debug assertion, because a face has no state of its own.
     pub(crate) face: bool,
 }
@@ -328,6 +331,7 @@ impl MemoryStage {
             touched: RefCell::new(vec![base]),
             claimed: RefCell::new(Vec::new()),
             peek_only,
+            retags: owner != base,
             face: false,
         }
     }
@@ -389,24 +393,16 @@ impl MemoryStage {
         let at = match self.entries.iter().position(|entry| entry.key == key) {
             Some(at) => at,
             None => {
-                let value: Box<dyn Any + Send + Sync> = if peek {
-                    Box::new(store::peek_clone::<Wrapped<TIER, T>>(ctx, id).unwrap_or_default())
+                let (value, recorded): (Box<dyn Any + Send + Sync>, bool) = if peek {
+                    (Box::new(store::peek_clone::<Wrapped<TIER, T>>(ctx, id).unwrap_or_default()), false)
                 } else {
                     // The box the slot was stored in stays the entry's value.
                     match store::locked(ctx, |data| take_raw::<Wrapped<TIER, T>>(data, id)) {
-                        Some(boxed) if boxed.is::<Wrapped<TIER, T>>() => boxed,
-                        _ => Box::new(Wrapped::<TIER, T>::default()),
+                        Some(boxed) if boxed.is::<Wrapped<TIER, T>>() => (boxed, true),
+                        _ => (Box::new(Wrapped::<TIER, T>::default()), false),
                     }
                 };
-                self.entries.push(Entry {
-                    key,
-                    value,
-                    write_back: write_back::<TIER, T>,
-                    remove: remove_slot::<TIER, T>,
-                    tier: TIER,
-                    ty: TypeId::of::<T>(),
-                    ended: None,
-                });
+                self.entries.push(Entry { key, value, write_back: write_back::<TIER, T>, remove: remove_slot::<TIER, T>, ended: None, recorded });
                 self.entries.len() - 1
             }
         };
@@ -466,48 +462,53 @@ impl MemoryStage {
         }
     }
 
-    /// Step 17, after `finish` returned: every slot goes back to context data and is recorded under its owner.
+    /// Step 17, after `finish` returned: every slot goes back to context data, and the registry gains a record
+    /// for each slot and `Seen` mark it lacks. A slot the stage found in context data is recorded already; a stage
+    /// owned by another component than its base records everything it wrote under that owner.
     #[doc(hidden)]
     pub fn write_back(self) {
         if self.peek_only {
             return;
         }
         let frame = pass::frame_nr(&self.ctx, pass::current_viewport(&self.ctx));
-        let owner = self.owner;
+        let (owner, retags) = (self.owner, self.retags);
         let touched = self.touched.into_inner();
-        let mut ended = Vec::new();
-        Service::<Registry>::run(&self.ctx, |reg| {
-            for base in &touched {
-                reg.slots.insert((*base, SHOWN, TypeId::of::<Seen>()), SlotRecord { owner, remove: take_raw::<Seen> });
-            }
-            for entry in &self.entries {
-                let key = (entry.key.2, entry.tier, entry.ty);
-                if entry.ended.is_some_and(|is_ended| is_ended(&*entry.value)) {
-                    reg.slots.remove(&key);
-                    ended.push(key);
-                } else {
-                    reg.slots.insert(key, SlotRecord { owner, remove: entry.remove });
-                }
-            }
-        });
+        let ctx = self.ctx.clone();
+        let mut ended: Vec<(Id, u8, TypeId)> = Vec::new();
+        let mut record: Vec<((Id, u8, TypeId), Remover)> = Vec::new();
         // One data lock for every slot; the values they replace and the ended presses drop outside it.
         let mut replaced: Vec<Removed> = Vec::new();
-        let ctx = self.ctx.clone();
         let mut dropped: Vec<Box<dyn Any + Send + Sync>> = Vec::new();
         store::locked(&ctx, |data| {
             for entry in self.entries {
                 let (tier, ty, id) = entry.key;
                 // An ended press leaves no entry behind; its value drops outside the lock.
-                if ended.contains(&(id, tier, ty)) {
+                if entry.ended.is_some_and(|is_ended| is_ended(&*entry.value)) {
+                    ended.push((id, tier, ty));
                     dropped.push(entry.value);
                     continue;
+                }
+                if retags || !entry.recorded {
+                    record.push(((id, tier, ty), entry.remove));
                 }
                 replaced.extend((entry.write_back)(entry.value, data, id));
             }
             for base in touched {
-                store::mark_seen(data, base, Seen(frame));
+                if store::mark_seen(data, base, Seen(frame)) || retags {
+                    record.push(((base, SHOWN, TypeId::of::<Seen>()), take_raw::<Seen>));
+                }
             }
         });
+        if !ended.is_empty() || !record.is_empty() {
+            Service::<Registry>::run(&ctx, |reg| {
+                for key in &ended {
+                    reg.slots.remove(key);
+                }
+                for (key, remove) in record {
+                    reg.slots.insert(key, SlotRecord { owner, remove });
+                }
+            });
+        }
         drop(replaced);
         drop(dropped);
     }

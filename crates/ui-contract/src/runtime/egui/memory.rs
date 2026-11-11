@@ -48,11 +48,13 @@ pub(crate) fn peek_copy<T: Any + Copy + Send + Sync>(ctx: &Context, id: Id) -> O
     ctx.data(|data| data.get_temp::<T>(id))
 }
 
-/// Stores `mark` under `id` unless a value of its type is there already.
-pub(crate) fn mark_seen<T: Any + Clone + Send + Sync>(data: &mut Map, id: Id, mark: T) {
-    if data.get_temp::<T>(id).is_none() {
+/// Stores `mark` under `id` unless a value of its type is there already; true when it stored it.
+pub(crate) fn mark_seen<T: Any + Clone + Send + Sync>(data: &mut Map, id: Id, mark: T) -> bool {
+    let absent = data.get_temp::<T>(id).is_none();
+    if absent {
         data.insert_temp(id, mark);
     }
+    absent
 }
 
 /// Puts a taken-out box back under `id`, in the allocation it left in. The value it replaced, if any, is returned
