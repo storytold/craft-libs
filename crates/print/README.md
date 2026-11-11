@@ -15,6 +15,15 @@ opens Windows printer preferences and submits jobs with copies, collation, duple
 
 - **macOS/Linux:** CUPS `lpstat`, `lpoptions` and `lp`. Jobs stream through stdin. Exact-size
   sheets use `fit-to-page=false`; shrink-to-fit uses IPP `print-scaling=auto-fit`.
+- **macOS paper tray:** a job whose options name no `InputSlot` also sends `AP_D_InputSlot=`,
+  the system Print dialog's Paper Feed: Auto Select. Without it CUPS uses the PPD's default
+  tray, and a printer whose default tray is empty holds the job while CUPS reports it completed
+  (storytold/pdfcraft#3752). A tray the job names wins, as does one in the user's `lpoptions`
+  defaults, which `lp` adds to every job. `apply_queue_defaults` puts the same choice in the
+  driver's tray option: `AUTO_SELECT` (an empty keyword, which `lp_args` never sends), labelled
+  "Auto Select", first and as the default unless the user's defaults name another tray. Apps
+  may show their own translation of the label. Other CUPS builds don't know `AP_D_InputSlot`,
+  so Linux jobs are unchanged.
 - **Flatpak:** the Freedesktop runtime has libcups but not `lpstat`/`lp`/`lpoptions`, so the app
   bundles them (the apps' manifests build them from CUPS as a `cups-client` module). What each
   piece is for:
@@ -40,7 +49,8 @@ opens Windows printer preferences and submits jobs with copies, collation, duple
   `GetDefaultPrinter`. `printers` also reads each driver's PrintCapabilities to report two-sided
   support, which can wait on the device (a networked printer in power save); `printer_queues`
   lists the same queues without asking any driver, so a Print dialog's list never waits on a
-  device. A job asks the driver too before it is sent; `submit_cancellable` with a
+  device, and `two_sided(name)` asks the driver of just the printer picked. A job asks the
+  driver too before it is sent; `submit_cancellable` with a
   `Cancel` token lets the app stop a job still waiting on it, and a cancelled job is never
   sent. A job is drawn as vectors by the in-box `Windows.Data.Pdf` with Direct2D
   into the XPS print API (the `winprint` crate), and copies, collation, duplex, colour, paper,
@@ -66,8 +76,12 @@ opens Windows printer preferences and submits jobs with copies, collation, duple
   Parsing caps cumulative cross-reference/object-stream records at 500,000, decoded streams
   at 16 MiB each and 32 MiB per job, and parsed nodes/tokens at 250,000/16 MiB per job and
   32,000/1 MiB per object. Files exceeding these limits return a clear error.
-  Long-edge duplex is `TwoSidedLongEdge` and short-edge `TwoSidedShortEdge`; `duplex: None`
-  leaves duplex out of the ticket. Driver-specific defaults remain in Windows printer
+  Long-edge duplex is `TwoSidedLongEdge` and short-edge `TwoSidedShortEdge`.
+  Explicit bindings use `JobDuplexAllDocumentsContiguously` when it offers the requested standard option,
+  otherwise `DocumentDuplex` when that feature offers that exact binding. Discovery and selection
+  resolve option names against their in-scope namespaces, including the default namespace. Validation accepts either
+  scope and rejects missing, changed or conflicting bindings before submission.
+  `duplex: None` leaves duplex out of the ticket. Driver-specific defaults remain in Windows printer
   preferences (`rundll32 printui.dll`, the one process this crate starts, and only when asked).
 - **Browser/other targets:** discovery is empty and submission reports an unsupported
   platform; callers can offer PDF export instead.

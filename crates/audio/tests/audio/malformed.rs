@@ -114,6 +114,15 @@ fn zero_channels_is_malformed() {
 }
 
 #[test]
+fn aiff_negative_channel_count_is_malformed() {
+    let mut aiff = small(EncodeFormat::Aiff, BitDepth::Int16, 1);
+    let comm = aiff.windows(4).position(|w| w == b"COMM").unwrap();
+    aiff[comm + 8] = 0x80;
+    aiff[comm + 9] = 0;
+    assert!(probe(&aiff, None).is_err());
+}
+
+#[test]
 fn zero_sample_rate_is_malformed() {
     let wav = riff(&[(b"fmt ", fmt(1, 2, 0, 16)), (b"data", vec![0; 16])]);
     assert!(decode(&wav, None).is_err());
@@ -211,6 +220,70 @@ fn caf_sizes_beyond_the_file_are_errors_not_aborts() {
     assert!(matches!(decode(&constant, None), Err(AudioError::Malformed(m)) if m.contains("lists packets")));
 }
 
+/// An EBML element: `id`, then `size` as an 8-byte vint (so any size up to 2^56 − 2 fits, and
+/// `u64::MAX` writes the reserved "unknown size"), then `body`.
+fn ebml(id: &[u8], size: u64, body: &[u8]) -> Vec<u8> {
+    let size = if size == u64::MAX { 0x01FF_FFFF_FFFF_FFFF } else { 0x0100_0000_0000_0000 | size };
+    [id, &size.to_be_bytes(), body].concat()
+}
+
+/// The EBML header of a Matroska file.
+fn ebml_header() -> Vec<u8> {
+    let doc_type = ebml(&[0x42, 0x82], 8, b"matroska");
+    ebml(&[0x1A, 0x45, 0xDF, 0xA3], doc_type.len() as u64, &doc_type)
+}
+
+/// #878: symphonia's Matroska reader takes element sizes from the file. With symphonia 0.5 a size
+/// far beyond the file was allocated up front and aborted the process (no `catch_unwind` can catch
+/// an allocation failure); since 0.6 such reads grow with the data actually read. Keep it that way
+/// for the header, for codec data and for block frames.
+#[test]
+fn matroska_sizes_beyond_the_file_are_errors_not_aborts() {
+    let huge = 1u64 << 47;
+    // The 30-byte file from the report: EBML header and DocType sizes of 2^48 − 1 and 2^47.
+    let reported = [
+        0x1A, 0x45, 0xDF, 0xA3, 0x01, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x42, 0x82, 0x01, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x6D,
+        0x61, 0x74, 0x72, 0x6F, 0x73, 0x6B, 0x61,
+    ];
+    let segment = |body: Vec<u8>| [ebml_header(), ebml(&[0x18, 0x53, 0x80, 0x67], u64::MAX, &body)].concat();
+    let info = [ebml(&[0x2A, 0xD7, 0xB1], 3, &[0x0F, 0x42, 0x40]), ebml(&[0x4D, 0x80], 4, b"test"), ebml(&[0x57, 0x41], 4, b"test")].concat();
+    let info = ebml(&[0x15, 0x49, 0xA9, 0x66], info.len() as u64, &info);
+    // A valid 16-bit PCM track entry's children, followed by `extra`.
+    let pcm = |extra: &[u8]| {
+        let audio = [ebml(&[0xB5], 8, &48_000f64.to_be_bytes()), ebml(&[0x9F], 1, &[1]), ebml(&[0x62, 0x64], 1, &[16])].concat();
+        [
+            ebml(&[0xD7], 1, &[1]),
+            ebml(&[0x73, 0xC5], 1, &[1]),
+            ebml(&[0x83], 1, &[2]),
+            ebml(&[0x86], 13, b"A_PCM/INT/LIT"),
+            ebml(&[0xE1], audio.len() as u64, &audio),
+            extra.to_vec(),
+        ]
+        .concat()
+    };
+    // That track with a CodecPrivate claiming 2^46 bytes, inside parents that claim even more: the
+    // segment is valid up to that read, which runs out of file.
+    let track = ebml(&[0xAE], huge, &pcm(&ebml(&[0x63, 0xA2], huge >> 1, &[0; 16])));
+    let codec_data = segment([info.clone(), ebml(&[0x16, 0x54, 0xAE, 0x6B], huge, &track)].concat());
+    // The plain track, then a cluster whose SimpleBlock claims 2^47 bytes of frame data.
+    let track = pcm(&[]);
+    let track = ebml(&[0xAE], track.len() as u64, &track);
+    let block = ebml(&[0x1F, 0x43, 0xB6, 0x75], u64::MAX, &[ebml(&[0xE7], 1, &[0]), ebml(&[0xA3], huge, &[0x81, 0, 0, 0x80])].concat());
+    let cluster = segment([info, ebml(&[0x16, 0x54, 0xAE, 0x6B], track.len() as u64, &track), block].concat());
+    let out_of_file = |r: Result<_, AudioError>| matches!(r, Err(AudioError::Malformed(m)) if m.contains("end of file"));
+    for hint in [None, Some("mkv"), Some("wav")] {
+        assert!(probe(&reported, hint).is_err(), "{hint:?}");
+        assert!(decode(&reported, hint).is_err(), "{hint:?}");
+        // Refused at the oversized read itself, not by anything before it.
+        assert!(out_of_file(probe(&codec_data, hint).map(|_| ())), "{hint:?}: {:?}", probe(&codec_data, hint).err());
+        assert!(out_of_file(decode(&codec_data, hint).map(|_| ())), "{hint:?}");
+        // The file and its track open, so decoding reaches the block; the block reader stops at the
+        // end of the file, a best-effort read of what is there.
+        assert!(probe(&cluster, hint).is_ok(), "{hint:?}: {:?}", probe(&cluster, hint).err());
+        assert!(decode(&cluster, hint).map_or(0, |(_, b)| b.frames()) < 1_000, "{hint:?}");
+    }
+}
+
 #[test]
 fn well_formed_caf_still_reads() {
     let pcm: Vec<u8> = (0..480i16).flat_map(|i| (i * 50).to_be_bytes()).collect();
@@ -251,7 +324,7 @@ fn mp4(frames: u32, entry: &[u8], swap: impl Fn(&[u8; 4], Vec<u8>) -> Vec<u8>) -
     };
     let ftyp = atom(b"ftyp", b"M4A \0\0\0\0M4A isom");
     let offset = (ftyp.len() + moov(0).len() + 8) as u32;
-    let pcm: Vec<u8> = (0..frames as i16).flat_map(|i| (i * 40).to_le_bytes()).collect();
+    let pcm: Vec<u8> = (0..frames).flat_map(|i| (i as i16).wrapping_mul(40).to_le_bytes()).collect();
     [ftyp, moov(offset), atom(b"mdat", &pcm)].concat()
 }
 
@@ -305,10 +378,12 @@ fn packets_longer_than_any_codec_uses_are_refused() {
     // read, and nothing is allocated from it. symphonia read it, so SoundCraft refused the file.
     let (_, buf) = decode(&mp4(480, &lpcm(1 << 21), |_, a| a), None).unwrap();
     assert_eq!(buf.frames(), 480);
-    // ALAC still goes to symphonia, behind the same guard.
+    // ALAC: a cookie declaring such packets is refused by the native decoder and then by the
+    // symphonia path's guard.
     assert!(matches!(decode(&mp4(480, &alac(1 << 21), |_, a| a), None), Err(AudioError::Malformed(m)) if m.contains("declares packets")));
 }
 
+/// FLAC metadata blocks with field lengths exceeding their block boundary are refused as malformed.
 #[test]
 fn flac_metadata_fields_beyond_their_block_are_refused() {
     let with_block = |kind: u8, body: &[u8]| {
@@ -320,7 +395,8 @@ fn flac_metadata_fields_beyond_their_block_are_refused() {
     let picture = |data: u32| [&[0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0][..], &[0; 16], &data.to_be_bytes(), &[1, 2, 3]].concat();
     assert_eq!(decode(&with_block(6, &picture(3)), None).unwrap().1.frames(), 300);
     let comment = [&0u32.to_le_bytes()[..], &1u32.to_le_bytes(), &u32::MAX.to_le_bytes()].concat();
-    for f in [with_block(6, &picture(0x7fff_fff0)), with_block(4, &comment)] {
+    let vendor_overflow = [&0x7fff_fff0u32.to_le_bytes()[..], &0u32.to_le_bytes()].concat();
+    for f in [with_block(6, &picture(0x7fff_fff0)), with_block(4, &comment), with_block(4, &vendor_overflow)] {
         assert!(matches!(decode(&f, None), Err(AudioError::Malformed(m)) if m.contains("larger than its block")));
     }
 }
@@ -796,4 +872,63 @@ fn damaged_mp4_and_matroska_are_malformed() {
         assert!(matches!(probe(&f, None), Err(AudioError::Malformed(_))));
         assert!(matches!(craft_audio::tracks(&f, None), Err(AudioError::Malformed(_))));
     }
+}
+
+/// MP3 in MP4 is decoded by symphonia (PCM, AAC, ALAC, Opus and AC-3 are native), so it reaches
+/// the checks in `read/mp4.rs`.
+fn mp3_mp4(frames: u32, swap: impl Fn(&[u8; 4], Vec<u8>) -> Vec<u8>) -> Vec<u8> {
+    mp4(frames, &sample_entry(b".mp3", 0, &[], &[]), swap)
+}
+
+/// An `stts` atom of `n` one-sample runs.
+fn one_sample_runs(n: u32) -> Vec<u8> {
+    atom(b"stts", &[&[0; 4][..], &n.to_be_bytes(), &[1u32, 1].map(u32::to_be_bytes).concat().repeat(n as usize)[..]].concat())
+}
+
+/// soundcraft #1332: symphonia scans an audio track's `stts` table from its start for every
+/// packet, so a table of one-sample runs made decoding quadratic. The bound is on that work.
+#[test]
+fn an_audio_timing_table_with_a_run_per_sample_is_bounded() {
+    let frames = 200_000;
+    let hostile = mp3_mp4(frames, |k, a| if k == b"stts" { one_sample_runs(frames) } else { a });
+    let r = decode(&hostile, None);
+    assert!(matches!(&r, Err(AudioError::Malformed(m)) if m.contains("timing table")), "{:?}", r.map(|x| x.0));
+    // a table of many runs over few packets is cheap to scan, so it is not refused for its size
+    let few = mp3_mp4(100, |k, a| if k == b"stts" { one_sample_runs(100_000) } else { a });
+    assert!(!matches!(decode(&few, None), Err(AudioError::Malformed(m)) if m.contains("timing table")));
+}
+
+/// The bound follows the sample entry, as symphonia decodes by it, not the handler.
+#[test]
+fn the_audio_timing_bound_follows_the_sample_entry_not_the_handler() {
+    let video_handler = atom(b"hdlr", &[0u32, 0, u32::from_be_bytes(*b"vide"), 0, 0, 0, 0].map(u32::to_be_bytes).concat());
+    let frames = 200_000;
+    let f = mp3_mp4(frames, |k, a| match k {
+        b"stts" => one_sample_runs(frames),
+        b"hdlr" => video_handler.clone(),
+        _ => a,
+    });
+    assert!(matches!(decode(&f, None), Err(AudioError::Malformed(m)) if m.contains("timing table")));
+}
+
+/// Symphonia keeps the last `stsd` it reads, so the last one decides.
+#[test]
+fn the_last_sample_entry_decides_whether_the_timing_bound_applies() {
+    let video = sample_entry(b"avc1", 0, &[], &[]);
+    let audio_stsd = atom(b"stsd", &[&[0, 0, 0, 0, 0, 0, 0, 1][..], &sample_entry(b".mp3", 0, &[], &[])].concat());
+    let frames = 200_000;
+    let f = mp4(frames, &video, |k, a| if k == b"stts" { [audio_stsd.clone(), one_sample_runs(frames)].concat() } else { a });
+    assert!(matches!(decode(&f, None), Err(AudioError::Malformed(m)) if m.contains("timing table")));
+}
+
+/// soundcraft #1332: frames per packet times channels sizes the decoder's output buffer, and the
+/// frames bound alone left many channels free to multiply it.
+#[test]
+fn a_caf_packet_of_far_too_many_samples_is_refused() {
+    let wide = caf(&[caf_desc(b"ima4", 34, 1 << 20, 18, 16), (b"data", 4, vec![0; 4])]);
+    let r = decode(&wide, None);
+    assert!(matches!(&r, Err(AudioError::Malformed(m)) if m.contains("declares packets")), "{:?}", r.map(|x| x.0));
+    // the same frames in a stereo stream are within the bound
+    let stereo = caf(&[caf_desc(b"ima4", 34, 1 << 20, 2, 16), (b"data", 4, vec![0; 4])]);
+    assert!(!matches!(decode(&stereo, None), Err(AudioError::Malformed(m)) if m.contains("declares packets")));
 }

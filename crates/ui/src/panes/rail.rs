@@ -166,6 +166,9 @@ impl Rail {
                 ui.with_layout(Layout::top_down(Align::Center), foot);
             });
             egui::ScrollArea::vertical()
+                // The footer can leave less than the default 64-point minimum.
+                // Keep the scrolling viewport within the space above it.
+                .min_scrolled_height(0.0)
                 .id_salt(self.id.with("rail-items"))
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
