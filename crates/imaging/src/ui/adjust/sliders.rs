@@ -104,7 +104,10 @@ impl AdjustField {
 
     /// The row's slider over `value`, with its colour track while `context` shows tracks.
     fn slider(&self, value: f64, context: AdjustContext) -> SliderField<'_> {
-        let mut slider = SliderField::new(self.label.clone(), Bind::given(value).reset(self.default), self.range.clone()).step(self.stride());
+        // A wheel notch moves at least 0.01: a notch of 0.0001 across Offset's range would not move the thumb.
+        let mut slider = SliderField::new(self.label.clone(), Bind::given(value).reset(self.default), self.range.clone())
+            .step(self.stride())
+            .wheel_step(self.stride().max(0.01));
         if let Some(kind) = self.unit_kind {
             slider = slider.unit_kind(kind);
         }
