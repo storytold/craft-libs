@@ -258,7 +258,7 @@ fn device_status_surfaces_loss_even_with_nothing_pending() {
 
     use crate::Backing;
 
-    let Some(mut ctx) = real_context_or_skip("device_status_surfaces_loss_even_with_nothing_pending") else {
+    let Some(ctx) = real_context_or_skip("device_status_surfaces_loss_even_with_nothing_pending") else {
         return;
     };
     assert_eq!(ctx.device_status(), Ok(()), "a freshly created device must not already report loss");
