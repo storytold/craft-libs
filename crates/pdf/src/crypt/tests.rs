@@ -287,6 +287,8 @@ fn perms_limits_what_an_edited_p_grants() {
     assert_eq!(SecurityHandler::open(d, ID, Some("user pw")).unwrap_err(), CryptError::WrongPassword);
 }
 
+// Not built for the web: proptest is a dev-dependency of the other targets only.
+#[cfg(not(target_arch = "wasm32"))]
 proptest::proptest! {
     #[test]
     fn malformed_dictionaries_never_panic(o in proptest::collection::vec(proptest::num::u8::ANY, 0..60),
