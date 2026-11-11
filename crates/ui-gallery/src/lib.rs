@@ -3,6 +3,9 @@
 pub mod chrome;
 pub mod viewer;
 
+// The Foundations cards.
+pub mod foundations;
+
 // The theme workspace.
 pub mod theme;
 

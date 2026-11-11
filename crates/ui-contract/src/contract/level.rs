@@ -1,7 +1,8 @@
 //! The catalog of registered types: the level of each, its plain display name, the surface its stories sit on, and
 //! the display title of a story. A viewer lists "Controls › Button › Loading" from these without string surgery.
 //!
-//! The level follows the architectural kind, by the first of these rules that matches: a component with
+//! The level follows the architectural kind, by the first of these rules that matches: a type of one of the
+//! [`FOUNDATION_MODULES`] (a viewer's demos of tokens and mechanisms, not components) is a Foundation; a component with
 //! `canvas_control` is a Primitive; a pattern is a Pattern, except a craft-ui `shell::*` pattern (not
 //! `shell::title_bar`), which is a Shell; a craft-ui component takes the first row of [`LIBRARY`] whose module
 //! prefix holds its module; a component of a family crate is a Control when it is a leaf and a Composite when it
@@ -83,7 +84,10 @@ pub enum StoryLayout {
     FormRows,
 }
 
-use Level::{Composites, Controls, Patterns, Primitives, Shells};
+use Level::{Composites, Controls, Foundations, Patterns, Primitives, Shells};
+
+/// Modules whose registrations are a viewer's demos of the foundations: the theme's tokens and the edit lifecycle.
+const FOUNDATION_MODULES: [&str; 1] = ["craft_ui_gallery::foundations"];
 
 /// Where the craft-ui modules sit: a module prefix and its level. The first row that holds a module wins,
 /// so a row for a module inside a prefix comes before the prefix.
@@ -163,6 +167,9 @@ fn parts(registration: &Registration) -> (&'static str, &'static str, Option<&Pr
 /// The level of `registration`; `None` for a craft-ui component that no row of [`LIBRARY`] holds.
 fn level_of(registration: &Registration) -> Option<Level> {
     let (module, _, probe) = parts(registration);
+    if FOUNDATION_MODULES.iter().any(|prefix| within(module, prefix)) {
+        return Some(Foundations);
+    }
     let inside = library_path(module);
     let Some(probe) = probe else {
         return Some(if inside.is_some_and(|inside| within(inside, "shell") && !within(inside, "shell::title_bar")) { Shells } else { Patterns });
