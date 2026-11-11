@@ -3,8 +3,8 @@
 //! reader for code pages and `\u`.
 
 use craft_rtf::{
-    Block, COLUMN_BREAK, Cell, CharFmt, Document, LINE_BREAK, MAX_COLORS, MAX_FONT_NAME, MAX_FONTS, MAX_GROUPS, NotRtf, PAGE_BREAK, Para, Run, Table,
-    read, write,
+    Align, Block, COLUMN_BREAK, Cell, CharFmt, Document, LINE_BREAK, MAX_COLORS, MAX_FONT_NAME, MAX_FONTS, MAX_GROUPS, NotRtf, PAGE_BREAK, Para, Run,
+    Table, VertAlign, read, write,
 };
 
 fn text(rtf: &[u8]) -> String {
@@ -124,6 +124,12 @@ fn unicode_fallbacks() {
 }
 
 #[test]
+fn nul_is_not_text() {
+    assert_eq!(text(br"{\rtf1 \u0?abc\par a\'00b\par {\b\'00}}"), "abc\nab");
+    assert_eq!(text(b"{\\rtf1 a\0b\\par}\0\0"), "ab");
+}
+
+#[test]
 fn surrogate_pairs() {
     assert_eq!(text(br"{\rtf1\ansi\uc1 A\u-10179?\u-8704?B \u-10174?\u-8265?\u30000?}"), "A\u{1F600}B \u{20BB7}\u{7530}");
     assert_eq!(text(br"{\rtf1 A\u-10179?B\u-8704?C}"), "A\u{FFFD}B\u{FFFD}C", "half a pair is U+FFFD, as in Word");
@@ -218,6 +224,24 @@ fn list_labels_are_not_text_and_keep_the_indent() {
 }
 
 #[test]
+fn alignment_indents_spacing_and_position() {
+    let rtf = br"{\rtf1\pard\qc\li720\ri360\fi-360\sb120\sa240 x\super 2\sub i\nosupersub y\super z\super0 w\par\pard\qr r\par\pard\ql l\par\pard\qj j\par\pard n\par}";
+    let doc = read(rtf).unwrap();
+    let ps: Vec<&Para> = doc.paras().collect();
+    assert_eq!((ps[0].left_indent, ps[0].right_indent, ps[0].first_line_indent, ps[0].space_before, ps[0].space_after), (720, 360, -360, 120, 240));
+    assert_eq!(
+        ps.iter().map(|p| p.align).collect::<Vec<_>>(),
+        [Some(Align::Center), Some(Align::Right), Some(Align::Left), Some(Align::Justified), None]
+    );
+    assert_eq!((ps[4].left_indent, ps[4].space_after), (0, 0), "\\pard resets them");
+    let va = |s: &str| fmt_of(&doc, s).vert_align;
+    assert_eq!(
+        (va("x"), va("2"), va("i"), va("y"), va("z"), va("w")),
+        (VertAlign::Baseline, VertAlign::Superscript, VertAlign::Subscript, VertAlign::Baseline, VertAlign::Superscript, VertAlign::Baseline)
+    );
+}
+
+#[test]
 fn paragraph_properties_end_with_their_group() {
     let got: Vec<i32> = paras(br"{\rtf1 {\li720 a\par}b\par{\pard\li360 c}\par}").iter().map(|p| p.left_indent).collect();
     assert_eq!(got, [720, 0, 0]);
@@ -307,16 +331,23 @@ fn sample() -> Document {
     let cell = |right, paras| Cell { right, paras };
     Document {
         blocks: vec![
-            Block::Para(Para { runs: vec![run("Plan {Q3} \\ 100%", fmt(|c| c.bold = true))], outline_level: Some(0), left_indent: 0 }),
+            Block::Para(Para { runs: vec![run("Plan {Q3} \\ 100%", fmt(|c| c.bold = true))], outline_level: Some(0), ..Para::default() }),
             Block::Para(Para {
                 runs: vec![
                     run(" Grow — fast 😀 ", CharFmt::default()),
                     run("Café\u{A0}résumé", fmt(|c| (c.italic, c.underline, c.half_points) = (true, true, Some(21)))),
                     run("\ttab\nline", fmt(|c| (c.strike, c.color) = (true, Some([255, 0, 128])))),
                     run("123 numbers first", fmt(|c| c.font = Some("Deja;Vu".into()))),
+                    run("2", fmt(|c| c.vert_align = VertAlign::Superscript)),
+                    run("i", fmt(|c| c.vert_align = VertAlign::Subscript)),
                 ],
                 outline_level: Some(8),
                 left_indent: 720,
+                right_indent: 360,
+                first_line_indent: -360,
+                space_before: 120,
+                space_after: 240,
+                align: Some(Align::Justified),
             }),
             Block::Para(Para::default()),
             Block::Table(Table {
@@ -353,7 +384,7 @@ fn the_written_file() {
             Block::Para(Para {
                 runs: vec![Run { text: "Title {1}".into(), fmt: CharFmt { bold: true, half_points: Some(32), ..CharFmt::default() } }],
                 outline_level: Some(0),
-                left_indent: 0,
+                ..Para::default()
             }),
             Block::Para(Para { left_indent: 360, ..para("Body é") }),
             Block::Table(Table { rows: vec![vec![Cell { right: 1440, paras: vec![para("A")] }, Cell { right: 2880, paras: vec![] }], vec![]] }),

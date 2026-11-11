@@ -13,7 +13,7 @@ let doc = Document {
     blocks: vec![Block::Para(Para {
         runs: vec![Run { text: "Plan {Q3} ".into(), fmt: bold }, Run { text: "café 😀".into(), fmt: CharFmt::default() }],
         outline_level: Some(0),
-        left_indent: 0,
+        ..Para::default()
     })],
     pictures_left_out: 0,
 };
@@ -54,8 +54,8 @@ pictures) uses the first two layers and its own interpretation of the control wo
 ## The model
 
 `Document { blocks, pictures_left_out }`, `Block::{Para, Table}`, `Para { runs, outline_level,
-left_indent }`, `Run { text, fmt }`, `CharFmt { bold, italic, underline, strike, half_points,
-color, font }`, `Table { rows: Vec<Vec<Cell>> }`, `Cell { right, paras }`.
+left_indent, right_indent, first_line_indent, space_before, space_after, align }`, `Run { text, fmt }`, `CharFmt { bold, italic, underline, strike,
+vert_align, half_points, color, font }`, `Table { rows: Vec<Vec<Cell>> }`, `Cell { right, paras }`.
 
 In `Run::text`, a tab is `\t`, and `LINE_BREAK` (`\n`), `PAGE_BREAK` (U+000C) and
 `COLUMN_BREAK` (U+000E) are `\line`, `\page` and `\column`. Lengths are in twips and sizes in

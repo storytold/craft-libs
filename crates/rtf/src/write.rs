@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use crate::model::{Block, COLUMN_BREAK, CharFmt, Document, LINE_BREAK, PAGE_BREAK, Para};
+use crate::model::{Align, Block, COLUMN_BREAK, CharFmt, Document, LINE_BREAK, PAGE_BREAK, Para, VertAlign};
 
 /// RTF-escapes text: `\`, `{` and `}` escaped; tab, line, page and column breaks, the
 /// non-breaking space, the soft hyphen and the non-breaking hyphen as their control words;
@@ -82,6 +82,11 @@ impl Tables {
                 w.push_str(word);
             }
         }
+        match f.vert_align {
+            VertAlign::Superscript => w.push_str("\\super"),
+            VertAlign::Subscript => w.push_str("\\sub"),
+            VertAlign::Baseline => {}
+        }
         // Writing to a String never fails.
         if let Some(i) = f.font.as_deref().and_then(|n| self.font(n)).filter(|i| *i > 0) {
             let _ = write!(w, "\\f{i}");
@@ -115,8 +120,19 @@ impl Tables {
         if let Some(l) = p.outline_level.filter(|l| *l <= 8) {
             let _ = write!(o, "\\outlinelevel{l}");
         }
-        if p.left_indent != 0 {
-            let _ = write!(o, "\\li{}", p.left_indent);
+        match p.align {
+            Some(Align::Left) => o.push_str("\\ql"),
+            Some(Align::Center) => o.push_str("\\qc"),
+            Some(Align::Right) => o.push_str("\\qr"),
+            Some(Align::Justified) => o.push_str("\\qj"),
+            None => {}
+        }
+        for (word, twips) in
+            [("li", p.left_indent), ("ri", p.right_indent), ("fi", p.first_line_indent), ("sb", p.space_before), ("sa", p.space_after)]
+        {
+            if twips != 0 {
+                let _ = write!(o, "\\{word}{twips}");
+            }
         }
     }
 }

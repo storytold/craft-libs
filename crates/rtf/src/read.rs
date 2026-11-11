@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::codepage::{MAC_ROMAN_CODE_PAGE, SYMBOL_CODE_PAGE, charset_code_page, is_text_code_page};
 use crate::lex::{Token, Tokens, is_rtf};
-use crate::model::{Block, COLUMN_BREAK, Cell, CharFmt, Document, LINE_BREAK, PAGE_BREAK, Para, Run, Table};
+use crate::model::{Align, Block, COLUMN_BREAK, Cell, CharFmt, Document, LINE_BREAK, PAGE_BREAK, Para, Run, Table, VertAlign};
 use crate::text::TextDecoder;
 
 /// Deepest group nesting followed. Deeper groups are read in the state of the group around
@@ -85,14 +85,14 @@ struct St {
     /// made the default font current again.
     font_set: bool,
     uc: usize,
-    outline_level: Option<u8>,
-    left_indent: i32,
+    /// The paragraph properties in effect; their `runs` stay empty.
+    para: Para,
     in_table: bool,
 }
 
 impl Default for St {
     fn default() -> St {
-        St { dest: Dest::Body, fmt: CharFmt::default(), cp: None, font_set: false, uc: 1, outline_level: None, left_indent: 0, in_table: false }
+        St { dest: Dest::Body, fmt: CharFmt::default(), cp: None, font_set: false, uc: 1, para: Para::default(), in_table: false }
     }
 }
 
@@ -130,7 +130,8 @@ struct Reader {
 ///
 /// Kept: body text in the file's code pages (`\ansicpg`, `\mac`, `\pc`, `\pca`, a font's
 /// `\fcharset` or `\cpg`) and `\uN`; paragraphs (`\par`, `\sect`) with `\outlinelevel` and
-/// `\li`; bold, italic, underline, strikethrough, size, colour and font; tabs, line, page and
+/// `\li`, `\ri`, `\fi`, `\sb`, `\sa` and alignment; bold, italic, underline, strikethrough,
+/// superscript and subscript, size, colour and font; tabs, line, page and
 /// column breaks, the quote, dash and bullet words; tables (`\cellx`, `\cell`, `\row`).
 ///
 /// Left out: headers, footers, footnotes, comments, field instructions (a field's result is
@@ -286,7 +287,12 @@ impl Reader {
         if self.text.is_empty() {
             return;
         }
-        let text = std::mem::take(&mut self.text);
+        let mut text = std::mem::take(&mut self.text);
+        // `\u0` and `\'00` are not text.
+        text.retain(|c| c != '\0');
+        if text.is_empty() {
+            return;
+        }
         match self.para.runs.last_mut() {
             Some(last) if last.fmt == self.st.fmt => last.text.push_str(&text),
             _ => self.para.runs.push(Run { text, fmt: self.st.fmt.clone() }),
@@ -296,9 +302,8 @@ impl Reader {
     fn take_para(&mut self) -> Para {
         self.decoder.finish(&mut self.text);
         self.flush_run();
-        let mut para = std::mem::take(&mut self.para);
-        (para.outline_level, para.left_indent) = (self.st.outline_level, self.st.left_indent);
-        para
+        let runs = std::mem::take(&mut self.para.runs);
+        Para { runs, ..self.st.para.clone() }
     }
 
     /// The rows read so far become a table: something that is not a row follows them.
@@ -428,9 +433,17 @@ impl Reader {
             "trowd" => self.cellx.clear(),
             "cellx" => self.cellx.push(pv),
             "intbl" => self.st.in_table = true,
-            "pard" => (self.st.outline_level, self.st.left_indent, self.st.in_table) = (None, 0, false),
-            "outlinelevel" => self.st.outline_level = u8::try_from(pv).ok().filter(|l| *l <= 8),
-            "li" => self.st.left_indent = pv,
+            "pard" => (self.st.para, self.st.in_table) = (Para::default(), false),
+            "outlinelevel" => self.st.para.outline_level = u8::try_from(pv).ok().filter(|l| *l <= 8),
+            "li" => self.st.para.left_indent = pv,
+            "ri" => self.st.para.right_indent = pv,
+            "fi" => self.st.para.first_line_indent = pv,
+            "sb" => self.st.para.space_before = pv,
+            "sa" => self.st.para.space_after = pv,
+            "ql" => self.st.para.align = Some(Align::Left),
+            "qc" => self.st.para.align = Some(Align::Center),
+            "qr" => self.st.para.align = Some(Align::Right),
+            "qj" => self.st.para.align = Some(Align::Justified),
             "line" => self.ch(LINE_BREAK),
             "tab" => self.ch('\t'),
             "page" => self.ch(PAGE_BREAK),
@@ -449,6 +462,9 @@ impl Reader {
             "ul" => self.restyle(|f| f.underline = on),
             "ulnone" => self.restyle(|f| f.underline = false),
             "strike" => self.restyle(|f| f.strike = on),
+            "super" => self.restyle(|f| f.vert_align = if on { VertAlign::Superscript } else { VertAlign::Baseline }),
+            "sub" => self.restyle(|f| f.vert_align = if on { VertAlign::Subscript } else { VertAlign::Baseline }),
+            "nosupersub" => self.restyle(|f| f.vert_align = VertAlign::Baseline),
             "fs" => self.restyle(|f| f.half_points = u32::try_from(pv).ok().filter(|s| *s > 0)),
             "cf" => {
                 let color = usize::try_from(pv).ok().and_then(|i| self.colors.get(i).copied().flatten());

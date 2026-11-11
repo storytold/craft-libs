@@ -8,8 +8,8 @@
 //!   characters and surrogate pairs. [`esc`] goes the other way. [`dttm_to_iso`],
 //!   [`iso_to_dttm`], [`date_words`] and [`iso_date`] are RTF's two date forms.
 //! - [`read`] and [`write`]: a file to and from a small neutral model ([`Document`]):
-//!   paragraphs with outline level and indent, runs with bold, italic, underline,
-//!   strikethrough, size, colour and font, and tables.
+//!   paragraphs with outline level, alignment, indents and spacing, runs with bold, italic,
+//!   underline, strikethrough, superscript and subscript, size, colour and font, and tables.
 //!
 //! A reader that keeps more than the model holds (styles, lists, fields, notes, pictures) is
 //! built on the first two layers.
@@ -39,7 +39,7 @@ mod write;
 
 pub use date::{date_words, dttm_to_iso, iso_date, iso_to_dttm};
 pub use lex::{Token, Tokens, is_rtf};
-pub use model::{Block, COLUMN_BREAK, Cell, CharFmt, Document, LINE_BREAK, PAGE_BREAK, Para, Run, Table};
+pub use model::{Align, Block, COLUMN_BREAK, Cell, CharFmt, Document, LINE_BREAK, PAGE_BREAK, Para, Run, Table, VertAlign};
 pub use read::{MAX_COLORS, MAX_FONT_NAME, MAX_FONTS, MAX_GROUPS, NotRtf, read};
 pub use text::TextDecoder;
 pub use write::{esc, esc_font, push_esc, write};
