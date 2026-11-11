@@ -2,7 +2,7 @@
 //! the unscaled block inter prediction process (8.5.2.4) with the regular 8-tap filters and
 //! reference samples clamped to the reference frame's visible area.
 
-use crate::vp9::tables::SUBPEL_REGULAR;
+use crate::vp9::encode::tables::SUBPEL_REGULAR;
 
 /// A motion vector in 1/8 luma samples.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
