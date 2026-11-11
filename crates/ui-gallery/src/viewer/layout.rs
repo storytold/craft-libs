@@ -69,10 +69,14 @@ impl PanelId {
         }
     }
 
-    /// Panels move, float and tab freely. Only a component tab closes: any other closed panel would have no way back
-    /// besides Reset layout.
+    /// Panels move, float and tab freely, but for the Overview: it stays where the layout puts it, and the component
+    /// tabs open beside it as tabs. Only a component tab closes: any other closed panel would have no way back besides
+    /// Reset layout.
     pub fn permissions(&self) -> Permissions {
-        Permissions::ALL.closable(matches!(self, PanelId::Component(_)))
+        match self {
+            PanelId::Overview => Permissions::ALL.movable(false).floatable(false).closable(false),
+            _ => Permissions::ALL.closable(matches!(self, PanelId::Component(_))),
+        }
     }
 }
 

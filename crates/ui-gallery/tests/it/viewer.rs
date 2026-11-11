@@ -46,3 +46,26 @@ fn every_linked_crate_registers() {
     let empty: Vec<_> = counts.iter().filter(|(_, count)| *count == 0).collect();
     assert!(empty.is_empty(), "no registrations from {empty:?}");
 }
+
+/// The Overview stays docked and open; a component tab beside it still floats and closes.
+#[trial]
+fn the_overview_is_pinned_and_a_component_tab_is_not() {
+    use craft_behavior::dock::{Action, DockPlacement};
+    let rect = egui::Rect::from_min_size(egui::pos2(40.0, 40.0), egui::vec2(300.0, 200.0));
+    let tab = PanelId::Component("craft_ui::buttons::link::Link");
+    let mut dock = default_for(Workspace::Components);
+    let _ = dock.set_visible(tab, true, Some(PanelId::Overview), false, |panel| panel.permissions());
+    assert!(dock.layout.contains(&tab), "the component tab opens beside the Overview");
+    let refused = [
+        Action::float(PanelId::Overview, rect),
+        Action::close(PanelId::Overview),
+        Action::move_beside(PanelId::Overview, PanelId::Properties, DockPlacement::tab(None)),
+    ];
+    for action in refused {
+        let mut tried = dock.clone();
+        assert!(tried.apply(action.clone(), false, |panel| panel.permissions()).is_err(), "refused: {action:?}");
+    }
+    let mut floated = dock.clone();
+    assert!(floated.apply(Action::float(tab, rect), false, |panel| panel.permissions()).is_ok(), "the component tab floats");
+    assert!(dock.apply(Action::close(tab), false, |panel| panel.permissions()).is_ok(), "the component tab closes");
+}
