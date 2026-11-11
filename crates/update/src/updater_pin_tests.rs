@@ -30,7 +30,7 @@ fn a_pinned_app_is_not_prompted_and_the_network_is_not_asked() {
         assert_eq!(u.status(), &Status::Idle);
         u.check_now(&ctx);
         settle(&mut u, &ctx);
-        assert_eq!(u.status(), &Status::UpToDate, "{track:?}");
+        assert_eq!(u.status(), &Status::Managed, "{track:?}");
         assert_eq!(u.managed(), Some(&Choice::Managed(track.clone())));
         u.offer(newer());
         assert!(!u.prompt_open(), "an offer is held too: {track:?}");
@@ -109,7 +109,7 @@ fn a_check_after_the_pin_closes_a_prompt_opened_before_it() {
     u.check_now(&ctx);
     settle(&mut u, &ctx);
     assert!(!u.prompt_open());
-    assert_eq!(u.status(), &Status::UpToDate);
+    assert_eq!(u.status(), &Status::Managed);
 }
 
 #[test]
@@ -140,7 +140,7 @@ fn a_pin_made_while_the_check_runs_still_holds_its_answer() {
     u.check_now(&ctx);
     settle(&mut u, &ctx);
     assert!(!u.prompt_open());
-    assert_eq!(u.status(), &Status::UpToDate);
+    assert_eq!(u.status(), &Status::Managed);
 }
 
 #[test]
@@ -160,7 +160,7 @@ fn every_answer_after_a_pin_made_mid_check_reports_the_launchers_choice() {
         let mut u = Updater::new(&PHOTOCRAFT, "0.13.0").with_source(source).with_pins_path(&path);
         u.check_now(&ctx);
         settle(&mut u, &ctx);
-        assert_eq!(u.status(), &Status::UpToDate);
+        assert_eq!(u.status(), &Status::Managed);
         assert_eq!(u.managed(), Some(&Choice::Managed(crate::pins::VersionTrack::Nightly)));
     }
 }

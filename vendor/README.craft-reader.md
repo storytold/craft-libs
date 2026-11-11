@@ -235,6 +235,9 @@ precision of the indices; an image without a palette keeps its own. Tests:
 PdfCraft's raster test `a_jp2_palette_keeps_its_colours_whatever_the_index_precision` is not
 ported: the unit tests show the same behavior.
 
+The JPX reader drops an unused `alloc::vec` import; its test macros already use
+`alloc::vec!`. The local source hash records this build-only cleanup.
+
 From [PdfCraft revision 0b670caf4a090e9d83a7f41a84b4cb2144a2d33e](https://github.com/storytold/pdfcraft/tree/0b670caf4a090e9d83a7f41a84b4cb2144a2d33e/vendor),
 unledgered and marked `PdfCraft patch` in the source: hayro-syntax #3438 (issue #3107), with
 its look-ahead bound from 01af6cba3. An inline image without a filter ends at the byte
@@ -321,6 +324,9 @@ products match its vertices (moving the points alone skewed barycentric coordina
 `restore_state` doesn't when the saved-state bound skipped the save; and a resolved JP2
 palette decodes to 8 bits whatever `/BitsPerComponent` the dictionary gives.
 
+`hayro-syntax` compiles `filter::ccitt_max_rows` and its unit tests only with the
+`images` feature, matching `filter::ccitt`.
+
 This remains the patched 0.7 backend. It retains the existing Bradford Lab conversion,
 floating component precision and codec versions, rather than claiming full 0.8
 equivalence. The independent color oracles, backend tests and facade contracts cover
@@ -341,6 +347,18 @@ The snapshot also preserves PdfCraft #1477 (WinAnsi Unicode fallback for TrueTyp
 fonts without Encoding) and #1499 (byte-aligned packed TIFF predictor rows).
 Synthetic tests cover 1/2/4/8-bit RGB rows and rendering, plus embedded TrueType
 text with absent or partial ToUnicode maps and explicit encoding precedence.
+
+## Cooperative opening cancellation
+
+The syntax reader also supports cooperative cancellation scoped to one open operation through
+`Cancellation` and `Pdf::new_with_password_limits_and_cancel`. Checks cover xref searches and
+recovery, object/byte scans, ordinary ASCIIHex/ASCII85/RunLength/LZW/Flate decoding and predictors,
+and initial page-tree construction. A cancellation request stays latched and prevents repair or
+partial success. The operation releases callback captures when it returns, including unwinding;
+deferred reads on a loaded PDF do not poll the completed operation. Existing loading errors and
+constructors, decode limits, and object sizes are preserved. Cryptographic and image-codec calls
+run to completion between checkpoints. Synthetic API and backend tests cover interruption inside
+the supported stages.
 
 ## Craft patches for the flattener
 

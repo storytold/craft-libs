@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 
 /// Random-access, read-only byte source (file, in-memory buffer, web Blob…).
 ///
-/// Implementations serve reads at arbitrary offsets through `&self`. `isobmff::ByteSource` and
-/// `matroska::ByteSource` are this trait.
+/// Implementations serve reads at arbitrary offsets through `&self`. `isobmff::ByteSource`,
+/// `matroska::ByteSource` and `ogg::ByteSource` are this trait.
 pub trait ByteSource {
     /// Total length in bytes.
     fn len(&self) -> u64;
