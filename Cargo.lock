@@ -826,6 +826,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-captions"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "proptest",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-cfb"
 version = "0.1.0"
 
