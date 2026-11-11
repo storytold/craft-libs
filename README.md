@@ -194,6 +194,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   header fields, MIME parts and multiparts, encoded-words, RFC 2231 parameters, base64 and
   quoted-printable, character sets, address lists, dates, mbox files and the `multipart/related`
   lookups of MHT web archives. What a message means (body, attachments, flags) stays in each app.
+- [`craft-offcrypto`](crates/offcrypto/README.md): clean-room Office document cryptography ([MS-OFFCRYPTO]): password-encrypted OOXML packages on `craft-cfb` (agile and standard encryption read, with the integrity check enforced; agile written), unsupported schemes named, and the password hashes of document and sheet protection.
 - [`craft-opc`](crates/opc/README.md): Open Packaging Conventions, the ZIP container of DOCX, XLSX and PPTX
   files: bounded readers (every part up front, or on demand), part names, relationships, content
   types and a deterministic package writer. What the parts hold stays with each format's crate.
