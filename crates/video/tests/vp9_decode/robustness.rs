@@ -104,3 +104,28 @@ fn oversized_frame_is_rejected() {
     let mut dec = Decoder::new();
     assert!(dec.decode(&v, 0).is_err());
 }
+
+/// A key frame whose picture store would not fit the decoder's memory budget is refused before
+/// anything is allocated for it.
+#[test]
+fn frame_over_the_memory_budget_is_rejected() {
+    // The header of `oversized_frame_is_rejected` with width-1 = height-1 = 63, then the rest of
+    // the uncompressed header as zeros (28 bits) and header_size_in_bytes = 1.
+    let size = "0000000000111111";
+    let bits =
+        "10".to_string() + "00" + "0" + "0" + "1" + "0" + "010010011000001101000010" + "0000" + size + size + &"0".repeat(28) + "0000000000000001";
+    let mut v = vec![0u8; bits.len().div_ceil(8) + 8];
+    for (i, c) in bits.chars().enumerate() {
+        if c == '1' {
+            v[i / 8] |= 0x80 >> (i % 8);
+        }
+    }
+    let over_budget = |e: craft_video::vp9::decode::Error| e.to_string().contains("memory budget");
+    // One 64x64 4:2:0 picture is 12288 bytes at two bytes a sample; one thread holds 12 of them.
+    let mut dec = Decoder::with_threads(1);
+    dec.set_memory_budget(12 * 12288 - 1);
+    assert!(dec.decode(&v, 0).is_err_and(over_budget));
+    let mut dec = Decoder::with_threads(1);
+    dec.set_memory_budget(12 * 12288);
+    assert!(!dec.decode(&v, 0).is_err_and(over_budget));
+}

@@ -70,6 +70,8 @@ pub struct Decoder {
     last_size: Option<(u32, u32)>,
     last_show_frame: bool,
     stats: DecodeStats,
+    /// Bytes the picture store may take ([`crate::budget`]).
+    memory_budget: u64,
     threads: usize,
     bufs: Arc<Pools>,
     draft: bool,
@@ -110,6 +112,11 @@ impl Decoder {
         Self::with_threads(default_threads())
     }
 
+    /// Cap the bytes of decoded pictures (references, current, in flight) this decoder may hold.
+    pub fn set_memory_budget(&mut self, bytes: u64) {
+        self.memory_budget = bytes;
+    }
+
     /// A decoder using up to `threads` worker threads (1 = decode on the calling thread, and
     /// every picture is returned by the `decode` call that completes it).
     pub fn with_threads(threads: usize) -> Self {
@@ -128,6 +135,7 @@ impl Decoder {
             last_show_frame: false,
             stats: DecodeStats::default(),
             threads: threads.max(1),
+            memory_budget: crate::budget::DECODE_MEMORY_BUDGET,
             bufs: Arc::default(),
             draft: false,
             pending: VecDeque::new(),
@@ -265,6 +273,13 @@ impl Decoder {
         ensure!(
             u64::from(h.width).checked_mul(u64::from(h.height)).is_some_and(|n| n <= MAX_LUMA_SAMPLES),
             "frame size {}x{} exceeds the decoder memory limit",
+            h.width,
+            h.height
+        );
+        // Eight reference slots, the new frame and those still decoding, on the 64-sample grid.
+        ensure!(
+            store_fits(h.width, h.height, &h.color, 8 + 1 + self.threads + 2, self.memory_budget),
+            "frame size {}x{} exceeds the decoder memory budget",
             h.width,
             h.height
         );
@@ -1034,4 +1049,42 @@ fn picture_of(f: &Frame, pts: i64, draft: bool) -> Picture {
         b.add(f, r, f.band(r));
     }
     b.finish()
+}
+
+/// Whether `pictures` frames of `width` x `height` (on the 64-sample superblock grid) fit in
+/// `budget` bytes.
+fn store_fits(width: u32, height: u32, color: &crate::vp9::decode::header::ColorConfig, pictures: usize, budget: u64) -> bool {
+    let shape = crate::budget::PictureShape {
+        width: u64::from(width).div_ceil(64) * 64,
+        height: u64::from(height).div_ceil(64) * 64,
+        shift_x: u32::from(color.subsampling_x),
+        shift_y: u32::from(color.subsampling_y),
+        chroma_planes: 2,
+        bytes_per_sample: 2,
+    };
+    shape.fits(pictures as u64, budget)
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+    use crate::budget::DECODE_MEMORY_BUDGET;
+
+    fn c420() -> crate::vp9::decode::header::ColorConfig {
+        crate::vp9::decode::header::ColorConfig { subsampling_x: true, subsampling_y: true, ..Default::default() }
+    }
+
+    #[test]
+    fn the_axis_maximum_is_over_budget_and_4k_is_not() {
+        assert!(!store_fits(16384, 16384, &c420(), 8 + 1 + 1 + 2, DECODE_MEMORY_BUDGET));
+        assert!(store_fits(3840, 2160, &c420(), 8 + 1 + 8 + 2, DECODE_MEMORY_BUDGET));
+    }
+
+    #[test]
+    fn exact_budget_boundary_and_reference_count() {
+        let one = (64 * 64 + 2 * 32 * 32) * 2;
+        assert!(store_fits(10, 10, &c420(), 11, 11 * one));
+        assert!(!store_fits(10, 10, &c420(), 11, 11 * one - 1));
+        assert!(!store_fits(10, 10, &c420(), 12, 11 * one));
+    }
 }

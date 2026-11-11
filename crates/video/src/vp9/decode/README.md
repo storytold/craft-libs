@@ -95,6 +95,13 @@ Modules: `header` (6.2 / 6.3, superframes), `boolcoder` (9.2), `probs` (frame co
 inter prediction calls, reconstruction), `intra`, `inter`, `transform`, `loopfilter`, `frame`
 (banded frames, pools), `decoder` (scheduling, post stage).
 
+## Memory
+
+A frame is refused when its luma plane has more than 2^26 samples, or when the pictures the
+decoder would hold at that size (eight reference slots, the new frame and those in flight, at two
+bytes a sample on the 64-sample grid) do not fit `Decoder::set_memory_budget`
+(`craft_video::budget::DECODE_MEMORY_BUDGET` by default: 4 GiB, 1 GiB on 32-bit targets).
+
 ## Tests
 
 `cargo test --release -p craft-video --features vp9-decode,threads`. Fixtures are generated on first use into
