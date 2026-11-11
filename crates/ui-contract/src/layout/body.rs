@@ -194,7 +194,7 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
     if !measure::active(&ctx) {
         return child::block(ui, None, layout, |ui| sweep(ui, Shrink::Apply(id), &mut body)).0;
     }
-    let room = flow_room(ui).x;
+    let room = shrink_room(ui);
     let first = crate::contract::keeping_ids(&ctx, || {
         let mut first = ui.new_child(egui::UiBuilder::new().layout(layout));
         pass_state::with::<ShrinkReports, _>(&ctx, |reports| reports.0.insert(id, Vec::new()));
@@ -217,6 +217,17 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
             ui.advance_cursor_after_rect(rect);
             inner
         }
+    }
+}
+
+/// The width the leaves of a row in `ui` shrink to fit: the row's flow room, except in a body that scrolls along x,
+/// where it is what the view shows from the row's start. There the leaves narrow to their least before the body
+/// scrolls, and the body scrolls only when even their least does not fit.
+fn shrink_room(ui: &Ui) -> f32 {
+    let env = Env::of(ui);
+    match env.lazy.filter(|view| env.unbounded.0 && view.axes.0) {
+        Some(view) => (view.rect.width() - view.start_of(ui.available_rect_before_wrap()).x).max(0.0),
+        None => flow_room(ui).x,
     }
 }
 
