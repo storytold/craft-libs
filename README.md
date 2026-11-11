@@ -121,6 +121,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   quoted-printable, character sets, address lists, dates, mbox files and the `multipart/related`
   lookups of MHT web archives. What a message means (body, attachments, flags) stays in each app.
 - [`craft-plugin-abi`](crates/plugin-abi/README.md): "craft-abi 1" for WebAssembly plugins: the manifest, permission names, host call numbers and the install-time policy gate that checks a package before any guest code runs. No engine. Builds for `wasm32`.
+- [`craft-plugin-host`](crates/plugin-host/README.md): runs craft-abi 1 plugins. The engine layer: an `Engine` trait, a wasmi engine (every target), an optional wasmtime engine (native) and browser engines (wasm32).
 - [`craft-plugin-host`](crates/plugin-host/README.md): runs craft-abi 1 plugins. Engines (wasmi on every target, optional wasmtime on native, browser engines on wasm32), the checks on each host call, install and reload, and the command, hook, panel and format contributions an app receives. Optional features `link` (Craft Link client) and `legacy-v1` (adapters for the v1 plugin ABIs of EffectCraft, PhotoCraft and VectorCraft).
 - [`craft-pcraft-format`](crates/pcraft-format/README.md): the envelope of PhotoCraft's `.pcraft`
   bundle: `Manifest<D>` with the document as a type parameter, `TileRef`, the entry paths, the
