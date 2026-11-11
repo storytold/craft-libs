@@ -515,7 +515,7 @@ fn recovery_cleanup_does_not_follow_a_replaced_parent_symlink() {
 /// The language-packs ancestor must not redirect a committed cleanup outside the store.
 #[cfg(unix)]
 #[test]
-fn residual_cleanup_rejects_a_symlinked_language_packs_ancestor() {
+fn committed_cleanup_rejects_a_symlinked_language_packs_ancestor() {
     let (store, _server, _pin, _) = setup("remove-symlink-packs");
     let outside = temp("remove-symlink-packs-outside");
     std::fs::create_dir_all(outside.join(".removing/11-12")).unwrap();
@@ -536,7 +536,7 @@ fn residual_cleanup_rejects_a_symlinked_language_packs_ancestor() {
 /// A replacement after validation must not redirect recursive deletion to the new target.
 #[cfg(unix)]
 #[test]
-fn residual_cleanup_stays_anchored_after_recovery_parent_replacement() {
+fn committed_cleanup_stays_anchored_after_recovery_parent_replacement() {
     let (store, _server, _pin, _) = setup("remove-parent-race");
     let parent = store.language_packs_dir().join(".removing");
     let moved = store.language_packs_dir().join(".removing-old");
@@ -675,7 +675,7 @@ fn recovery_cleanup_locks_all_windows_ancestors_until_removal_finishes() {
 
 /// A malformed optional receipt must not discard valid receipts or installed-pack metadata.
 #[test]
-fn residual_one_bad_receipt_preserves_valid_metadata_and_cleanup() {
+fn one_bad_receipt_preserves_valid_metadata_and_cleanup() {
     let (store, _server, pin, _) = setup("remove-mixed-receipts");
     let index = store.fetch_pack_index_from(&IndexSource::Pinned(pin), &Cancel::new()).unwrap();
     store.install_pack_from(false, &index, index.pack("nl").unwrap(), &Cancel::new(), &mut |_| {}).unwrap();
@@ -696,7 +696,7 @@ fn residual_one_bad_receipt_preserves_valid_metadata_and_cleanup() {
 
 /// Exclusions do not consume filesystem candidates; hostile iterator input remains bounded.
 #[test]
-fn residual_stage_exclusions_leave_the_filesystem_candidate_budget() {
+fn stage_exclusions_leave_the_filesystem_candidate_budget() {
     let parent = temp("stage-excluded-budget");
     let excluded: Vec<String> = (0..1000).map(|n| format!("0-{n}")).collect();
     let stage = Stage::create_in(&parent, &excluded, excluded.iter().cloned().chain(std::iter::once("0-1000".into())))
