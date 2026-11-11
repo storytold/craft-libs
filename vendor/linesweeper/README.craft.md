@@ -14,6 +14,8 @@ and, for every file kept, the hash in the package (`source_sha256`) and the hash
 - `docs/sweep.typ`: the intersection scan to the left compares each segment with `alpha^(i+1)`
   instead of `alpha^i`. With `alpha^i`, its first pass compared `alpha^i` with itself, and the lemma
   after it is stated for `alpha^(i+1)`.
+- `docs/sweep.typ`: two typos are corrected. "condi0.2tions" reads "conditions", and `q(i+i)` reads
+  `q(i+1)`, the first index for which `q` is false.
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 

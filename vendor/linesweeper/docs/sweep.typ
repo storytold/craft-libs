@@ -555,7 +555,7 @@ height. Note that because the sweep line changes at a discrete set of heights,
 at every important height $y$ we actually have two weakly-ordered sweep line:
 the "old" one from infinitesmally before $y$ height and the "new" one from $y$
 onwards. Because everything is continuous and the weak ordering conditions are
-closed, both the old and new sweep lines satisfy the weak ordering condi0.2tions
+closed, both the old and new sweep lines satisfy the weak ordering conditions
 at $y$.
 
 The algorithm goes like this: at every important height we use
@@ -623,7 +623,7 @@ Let's check that this insertion position is valid: for every $j <= i$ we have
 either $j <= i_-$ or $i_- < j <= i$. In the first case, we already observed
 that $alpha^j_-(y) <= beta(y)$; in the second case, $q(j)$ returned `true` and
 so $alpha^j_-(y) <= beta^j^+ (y)$. In either case, $alpha^j prec.tilde beta$.
-On the other hand, $q(i+i)$ being `false` implies that $alpha^(i+1)_- (y) >=
+On the other hand, $q(i+1)$ being `false` implies that $alpha^(i+1)_- (y) >=
 beta(y)$. This implies that for all $j >= i+1$, $alpha^j_+ (y) >= beta(y)$ and
 so $alpha^j succ.tilde_y beta$.
 

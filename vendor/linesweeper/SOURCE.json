@@ -8,7 +8,8 @@
   "upstream_revision": "824b0791a750f7b27b8edcbb6c6244d0e629875e",
   "upstream_directory": "",
   "local_patches": [
-    "In `docs/sweep.typ`, the intersection scan to the left compares each segment with `alpha^(i+1)`, the segment the lemma after it is stated for, instead of `alpha^i`."
+    "In `docs/sweep.typ`, the intersection scan to the left compares each segment with `alpha^(i+1)`, the segment the lemma after it is stated for, instead of `alpha^i`.",
+    "In `docs/sweep.typ`, the typo \"condi0.2tions\" reads \"conditions\", and `q(i+i)` reads `q(i+1)`, the first index for which `q` is false."
   ],
   "files": [
     { "path": ".cargo_vcs_info.json", "source_sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc", "source_git_blob": null, "sha256": "47fba6a9dbdf445a5c97f783c9be62093035f9d5e5cdc2cf3216ad8259bcd8fc" },
@@ -23,7 +24,7 @@
     { "path": "benches/linebender_logo.rs", "source_sha256": "d10867f43439d37f0e1da5d30eaed9ab3bfbe655ed47212f65dc20ab4db65cb3", "source_git_blob": null, "sha256": "d10867f43439d37f0e1da5d30eaed9ab3bfbe655ed47212f65dc20ab4db65cb3" },
     { "path": "benches/painted_dreams.rs", "source_sha256": "073008db93840d380710e13ed3ae38e08cb823f10c12e5f838dac1ccf37eaecf", "source_git_blob": null, "sha256": "073008db93840d380710e13ed3ae38e08cb823f10c12e5f838dac1ccf37eaecf" },
     { "path": "benches/synthetic.rs", "source_sha256": "7ce59bef2e1c4f28b00cb89feb15bc71ca4b098a8d27e7b02ea699aca9bcc810", "source_git_blob": null, "sha256": "7ce59bef2e1c4f28b00cb89feb15bc71ca4b098a8d27e7b02ea699aca9bcc810" },
-    { "path": "docs/sweep.typ", "source_sha256": "4766082c8672a7bb4356b5581043489c13b4e3fb8931ba3a5f0a473fab0172f3", "source_git_blob": null, "sha256": "571f227f4b43eaba8060c48344e26b639a4fea8787e5c63bd3f826836c5e4806" },
+    { "path": "docs/sweep.typ", "source_sha256": "4766082c8672a7bb4356b5581043489c13b4e3fb8931ba3a5f0a473fab0172f3", "source_git_blob": null, "sha256": "b9bb12076458469869e3e7723598d35ae391307bf22ea312f1b989949e9829a1" },
     { "path": "examples/boolean_op.rs", "source_sha256": "3b38a1ccda7e736cce4b191a3a45ab4824c4c365190e3eb637b2fb39b5996c9f", "source_git_blob": null, "sha256": "3b38a1ccda7e736cce4b191a3a45ab4824c4c365190e3eb637b2fb39b5996c9f" },
     { "path": "examples/bus.rs", "source_sha256": "e206a08be73899f564188052c8ecc15526b54606e52ee2935a64ce6b5723da33", "source_git_blob": null, "sha256": "e206a08be73899f564188052c8ecc15526b54606e52ee2935a64ce6b5723da33" },
     { "path": "examples/curve_metrics.rs", "source_sha256": "0db6a5327fd2119a03a9a66624fea3e04b6bbb519655667ad30487aee6c787d2", "source_git_blob": null, "sha256": "0db6a5327fd2119a03a9a66624fea3e04b6bbb519655667ad30487aee6c787d2" },
