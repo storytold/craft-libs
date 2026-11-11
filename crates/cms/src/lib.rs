@@ -83,6 +83,26 @@ impl Intent {
     }
 }
 
+/// An intent is stored by the name [`Intent::id`] gives it, and read back by
+/// [`Intent::parse`], which also accepts the longer spellings (`relativeColorimetric`,
+/// `relative-colorimetric`) and the ICC numbers as strings. One vocabulary, so a document written
+/// by one app reads in another.
+#[cfg(feature = "serde")]
+impl serde::Serialize for Intent {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.id())
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Intent {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Intent, D::Error> {
+        let name = <std::borrow::Cow<'de, str> as serde::Deserialize>::deserialize(d)?;
+        Intent::parse(&name)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown rendering intent `{name}` (perceptual, relative, saturation, absolute)")))
+    }
+}
+
 /// Errors from parsing profiles, building transforms, or arguments that do not fit an operation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CmsError {
