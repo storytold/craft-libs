@@ -3,7 +3,7 @@
 use craft_gpu::{GpuJob, GpuJobOutcome, GpuJobParams, WorkerKind};
 use craft_tier_store::StoreKey;
 
-use crate::{FlushAckResult, FlushSink, HostMessage, Runtime, WorkerMessage};
+use crate::{FlushAckResult, FlushSink, GpuJobResult, HostMessage, Runtime, WorkerMessage};
 
 #[test]
 fn init_then_gpu_jobs_batch_done() {
@@ -19,11 +19,11 @@ fn init_then_gpu_jobs_batch_done() {
     let jobs = vec![GpuJob { provider_id: "craft.noop".into(), params: GpuJobParams(Vec::new()), inputs: vec![], outputs: vec![] }];
     let done = runtime.handle_host_message(HostMessage::GpuJobs { batch_id: 42, jobs });
     assert_eq!(done.len(), 1);
-    let WorkerMessage::GpuBatchDone { batch_id, outcomes } = &done[0] else {
+    let WorkerMessage::GpuBatchDone { batch_id, results } = &done[0] else {
         panic!("expected GpuBatchDone, got {:?}", done[0]);
     };
     assert_eq!(*batch_id, 42);
-    assert_eq!(outcomes, &[GpuJobOutcome { outputs: vec![], data: None }]);
+    assert_eq!(results, &[GpuJobResult::Done { outcome: GpuJobOutcome { outputs: vec![], data: None } }]);
 }
 
 #[test]
@@ -59,10 +59,13 @@ fn end_to_end_storage_flush_and_echo_gpu() {
     // Exercise echo provider through the same path as SharedWorker GPU batch.
     let jobs = vec![GpuJob { provider_id: "craft.test.echo".into(), params: GpuJobParams(b"pre:".to_vec()), inputs: vec![clip], outputs: vec![] }];
     let done = runtime.handle_host_message(HostMessage::GpuJobs { batch_id: 7, jobs });
-    let WorkerMessage::GpuBatchDone { outcomes, .. } = &done[0] else {
+    let WorkerMessage::GpuBatchDone { results, .. } = &done[0] else {
         panic!("expected GpuBatchDone, got {:?}", done[0]);
     };
-    assert_eq!(outcomes[0].data.as_deref(), Some(b"pre:clip".as_slice()));
+    let GpuJobResult::Done { outcome } = &results[0] else {
+        panic!("expected a done outcome, got {:?}", results[0]);
+    };
+    assert_eq!(outcome.data.as_deref(), Some(b"pre:clip".as_slice()));
 }
 
 #[test]
@@ -218,4 +221,25 @@ fn an_unacknowledged_export_survives_an_intervening_empty_flush() {
     };
     assert_eq!(*pending_count, 1);
     assert_eq!(pending.as_ref().expect("pending export without FlushSink")[0].bytes, b"pending");
+}
+
+/// A batch with a middle failure reports the first and third jobs done and the second failed,
+/// never discarding the two jobs that actually succeeded (PR 663, craft-gpu's per-job
+/// dispatch_batch contract: GpuBatchDone must carry a result per job, in input order).
+#[test]
+fn gpu_batch_with_a_middle_failure_reports_per_job_results() {
+    let mut runtime = Runtime::builder().with_default_providers().null_context().build();
+    let jobs = vec![
+        GpuJob { provider_id: "craft.noop".into(), params: GpuJobParams(Vec::new()), inputs: vec![], outputs: vec![] },
+        GpuJob { provider_id: "craft.does.not.exist".into(), params: GpuJobParams(Vec::new()), inputs: vec![], outputs: vec![] },
+        GpuJob { provider_id: "craft.noop".into(), params: GpuJobParams(Vec::new()), inputs: vec![], outputs: vec![] },
+    ];
+    let done = runtime.handle_host_message(HostMessage::GpuJobs { batch_id: 1, jobs });
+    let [WorkerMessage::GpuBatchDone { results, .. }] = done.as_slice() else {
+        panic!("expected GpuBatchDone, got {done:?}");
+    };
+    assert_eq!(results.len(), 3);
+    assert!(matches!(results[0], GpuJobResult::Done { .. }), "job 1 must report done, got {:?}", results[0]);
+    assert!(matches!(results[1], GpuJobResult::Failed { .. }), "job 2 must report failed, got {:?}", results[1]);
+    assert!(matches!(results[2], GpuJobResult::Done { .. }), "job 3 must report done, got {:?}", results[2]);
 }

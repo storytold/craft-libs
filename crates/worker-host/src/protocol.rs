@@ -60,6 +60,17 @@ pub struct FlushAckResult {
     pub persisted: bool,
 }
 
+/// One [`HostMessage::GpuJobs`] batch entry's outcome, in input order, reported via
+/// [`WorkerMessage::GpuBatchDone`]. Mirrors [`craft_gpu::ProviderRegistry::dispatch_batch`]'s own
+/// per-job contract: a later job's failure never discards an earlier job's successful outcome,
+/// and the tab can keep the done jobs' bytes or handles while retrying only the named failures.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum GpuJobResult {
+    Done { outcome: GpuJobOutcome },
+    Failed { message: String },
+}
+
 /// Worker → tab.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -69,7 +80,7 @@ pub enum WorkerMessage {
     },
     GpuBatchDone {
         batch_id: u64,
-        outcomes: Vec<GpuJobOutcome>,
+        results: Vec<GpuJobResult>,
     },
     StorageFlushed {
         pending_count: usize,

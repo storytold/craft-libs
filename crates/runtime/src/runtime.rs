@@ -2,7 +2,7 @@ use craft_gpu::{GpuContext, GpuFault, ProviderRegistry, WorkerKind};
 use craft_gpu_null::NullContext;
 use craft_gpu_providers::register_all_into;
 use craft_tier_store::{DefaultTierPolicy, MirrorStore, PendingWrite, StoreKey};
-use craft_worker_host::{HostMessage, PendingFlushEntry, WorkerMessage};
+use craft_worker_host::{GpuJobResult, HostMessage, PendingFlushEntry, WorkerMessage};
 
 use crate::dispatch_gpu_jobs;
 use crate::flush::{FlushOutcome, FlushSink};
@@ -229,10 +229,16 @@ impl Runtime {
             }
             HostMessage::StorageFlush => self.handle_storage_flush(),
             HostMessage::StorageFlushAck { results } => self.handle_storage_flush_ack(results),
-            HostMessage::GpuJobs { batch_id, jobs } => match dispatch_gpu_jobs(&self.registry, &mut self.ctx, &jobs) {
-                Ok(outcomes) => vec![WorkerMessage::GpuBatchDone { batch_id, outcomes }],
-                Err(fault) => vec![WorkerMessage::Error { message: fault.to_string() }],
-            },
+            HostMessage::GpuJobs { batch_id, jobs } => {
+                let results = dispatch_gpu_jobs(&self.registry, &mut self.ctx, &jobs)
+                    .into_iter()
+                    .map(|outcome| match outcome {
+                        Ok(outcome) => GpuJobResult::Done { outcome },
+                        Err(fault) => GpuJobResult::Failed { message: fault.to_string() },
+                    })
+                    .collect();
+                vec![WorkerMessage::GpuBatchDone { batch_id, results }]
+            }
             HostMessage::Cancel { .. } => Vec::new(),
         }
     }
