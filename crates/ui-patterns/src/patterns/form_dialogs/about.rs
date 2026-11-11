@@ -16,7 +16,7 @@ use crate::contract::{
     ShowCollection as _, ShowContainer as _, clicked,
 };
 use crate::dialog::{Dialog, DialogOutput};
-use crate::display::{Shade, Text};
+use crate::display::{Divider, Shade, Text};
 use crate::layout::RowAlign;
 use crate::layout_components::{Row, Stack};
 use crate::list::ListRow;
@@ -322,6 +322,7 @@ impl Shown<'_> {
             Row::new().wrap(true).show(ui, |ui, _| {
                 Text::new(words.show.clone()).show(ui);
                 Segmented::new(words.show.clone(), Bind::bound(&mut work.names), &names).show(ui);
+                Divider::vertical().show(ui);
                 Text::new(words.sort.clone()).show(ui);
                 let before = work.sort;
                 Select::new(words.sort.clone(), Bind::bound(&mut work.sort), &sorts).show(ui);

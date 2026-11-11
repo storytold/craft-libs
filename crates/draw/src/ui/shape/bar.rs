@@ -8,6 +8,7 @@ use craft_color::ui::{PaintChip, ScreenPickGesture};
 use craft_theme::Srgba;
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, LabelKind, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing};
+use craft_ui::display::Divider;
 use craft_ui::form::Field;
 use craft_ui::layout_components::Row;
 use craft_ui::runtime::env::Env;
@@ -135,6 +136,7 @@ impl<'a> ShapeBar<'a> {
                 _ => None,
             };
             if let Some((cell, change)) = cell {
+                Divider::vertical().show(ui);
                 let side = SideLabel::new().scrub(true);
                 let event =
                     Field::new(cell.caption.clone()).id_salt(cell.key).side(side).sizing(Sizing::Content).show(ui, |ui, _| cell.show(ui)).inner;

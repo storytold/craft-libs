@@ -5,28 +5,29 @@ use crate::viewer::{
     CONTRASTS, DENSITIES, DIRECTIONS, GalleryCommands, MODES, MOTIONS, Preview, SCALES, TEXT_SIZES, VariantAxis, Viewer, Workspace, theme_entries,
 };
 use craft_behavior::{IconId, Value};
-use craft_ui::bars::{Bar, BarCell, BarKind};
+use craft_ui::bars::{Bar, BarKind};
 use craft_ui::buttons::{IconButton, ToggleButton};
 use craft_ui::choice::Segmented;
-use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Trigger};
+use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Sizing, Trigger};
 use craft_ui::display::Divider;
+use craft_ui::form::Field;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::menu::Menu;
 use craft_ui::pickers::Select;
 use craft_ui::popover::Popover;
 use egui::Ui;
 
-/// A select over `entries` in a cell with its caption.
+/// A select over `entries` in a field with its caption.
 fn pick<T: Value>(ui: &mut Ui, caption: &'static str, value: &mut T, entries: &[Entry<T>]) {
-    BarCell::new(format!("{caption}:")).control(ui, |ui, label| {
-        Select::new(label, Bind::bound(&mut *value), entries).show(ui);
+    Field::new(caption).sizing(Sizing::Content).show(ui, |ui, _| {
+        Select::new(caption, Bind::bound(&mut *value), entries).show(ui);
     });
 }
 
-/// A segmented row over `entries` in a cell with its caption.
+/// A segmented row over `entries` in a field with its caption.
 fn choose<T: Value>(ui: &mut Ui, caption: &'static str, value: &mut T, entries: &[Entry<T>]) {
-    BarCell::new(format!("{caption}:")).control(ui, |ui, label| {
-        Segmented::new(label, Bind::bound(&mut *value), entries).show(ui);
+    Field::new(caption).sizing(Sizing::Content).show(ui, |ui, _| {
+        Segmented::new(caption, Bind::bound(&mut *value), entries).show(ui);
     });
 }
 

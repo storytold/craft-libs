@@ -21,7 +21,7 @@ use craft_theme::Srgba;
 use craft_ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, EditResponse, Entry, Outcome, Pattern, Props as _, Show as _, ShowContainer as _};
-use craft_ui::display::Text;
+use craft_ui::display::{Divider, Shade, Text};
 use craft_ui::form::Field;
 use craft_ui::pickers::Select;
 use craft_ui::primitives::{Draw, PaintShape, StrokeWidth};
@@ -227,7 +227,8 @@ impl<'a> EyedropperBar<'a> {
             Field::new(words.sample.clone()).show(ui, |ui, _| Select::new(words.source.clone(), Bind::bound(&mut options.source), &sources).show(ui));
         let ring = Checkbox::new(Bind::bound(&mut options.show_ring)).label(words.show_ring.clone()).show(ui);
         let key = if env.view().shell().os == Os::Mac { "Option" } else { "Alt" };
-        Text::new(Label::from(words.hint.fill(&[("key", key)]))).show(ui);
+        Divider::vertical().show(ui);
+        Text::new(Label::from(words.hint.fill(&[("key", key)]))).shade(Shade::Faint).show(ui);
         // A parent's sizing pass places a field without running its body: that run reports no edit.
         let (size_response, source_response) = (size.response().clone(), source.response().clone());
         EyedropperBarOutput {

@@ -3,6 +3,7 @@
 use craft_behavior::{IconId, Mixed};
 use craft_ui::choice::Segmented;
 use craft_ui::contract::{Bind, Entry, Outcome, Show as _, ShowContainer as _};
+use craft_ui::display::Divider;
 use craft_ui::layout_components::Row;
 use craft_ui::list::ThumbSize;
 use craft_ui::pickers::Select;
@@ -125,6 +126,7 @@ impl<'a> ConnectorBar<'a> {
             routing_pick = Segmented::new(words.routing.clone(), Bind::given(routing), &routes).show(ui).value().copied();
 
             if let Some((start, end)) = &caps {
+                Divider::vertical().show(ui);
                 for (row, name, slot) in [(start, &words.start, &mut start_cap), (end, &words.end, &mut end_cap)] {
                     let entries: Vec<Entry<String>> = row.choices.iter().map(|c| Entry::new(c.id.clone(), c.label.clone())).collect();
                     let current = match row.selected {
@@ -145,6 +147,7 @@ impl<'a> ConnectorBar<'a> {
                 }
             }
 
+            Divider::vertical().show(ui);
             let mut entries = vec![
                 Entry::new(LinePick::Style(false), words.solid.clone()),
                 Entry::new(LinePick::Style(true), words.dashed.clone()),
