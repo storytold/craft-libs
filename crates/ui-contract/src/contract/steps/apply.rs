@@ -3,10 +3,12 @@
 use super::measure::{MeasureIn, measure};
 use crate::contract::cx::gesture_key;
 use crate::contract::props::Resolved;
+use crate::contract::run::ErasedPass;
 use crate::contract::values::Checked;
 use crate::contract::{Component, Cx, ValueOf};
 use crate::runtime::egui::sizing;
 use crate::runtime::reads::{self, BindKey};
+use crate::style::StyleView;
 use craft_behavior::{Applied, CancelReason, EditEvent, Gesture, Mixed};
 use egui::Vec2;
 use std::sync::Arc;
@@ -144,34 +146,33 @@ pub(crate) fn apply_values<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) -> Va
 /// measuring run; or a shown value whose size the earlier measures of this component took from the old value. A leaf
 /// measures itself again at each room and proposal it was measured at and asks only when a size differs; a body,
 /// whose measure runs its content, asks when any measuring run read the value.
-pub(crate) fn rerun_after_edit<C: Component>(
-    comp: &mut C,
-    cx: &Cx<'_, C>,
+pub(crate) fn rerun_after_edit(
+    p: &mut dyn ErasedPass<'_>,
+    style: &dyn StyleView,
     edit: ValueEdit,
     input: &MeasureIn<'_>,
     resolved: &Resolved<'_>,
     leaf: bool,
 ) {
-    let ctx = &cx.core.ctx;
     if edit.given {
-        sizing::request_discard(ctx, sizing::Rerun::Edit);
+        sizing::request_discard(&p.core_ref().ctx, sizing::Rerun::Edit);
         return;
     }
     let Some(key) = edit.key.filter(|_| edit.written || edit.shown) else { return };
-    let id = cx.core.id;
-    let earlier = reads::earlier(ctx, key, id);
+    let (ctx, id) = (p.core_ref().ctx.clone(), p.core_ref().id);
+    let earlier = reads::earlier(&ctx, key, id);
     if edit.written && earlier.other {
-        return sizing::request_discard(ctx, sizing::Rerun::Edit);
+        return sizing::request_discard(&ctx, sizing::Rerun::Edit);
     }
     let resized = if leaf {
         earlier.samples.iter().any(|sample| {
             let input = MeasureIn { ui: input.ui, env: input.env, proposal: sample.proposal, room: sample.room };
-            measure(comp, &input, cx.style, resolved, cx.shown.as_deref(), Vec2::ZERO).0 != sample.took
+            measure(style, &input, p.measure_content(&input, resolved).0, Vec2::ZERO) != sample.took
         })
     } else {
         earlier.measured
     };
     if resized {
-        sizing::request_discard(ctx, sizing::Rerun::Edit);
+        sizing::request_discard(&ctx, sizing::Rerun::Edit);
     }
 }

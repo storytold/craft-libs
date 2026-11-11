@@ -345,3 +345,35 @@ pub trait ComponentStyle: Clone + PartialEq + Send + Sync + 'static {
     /// The component's layout metrics.
     fn metrics(&self) -> Metrics;
 }
+
+/// The part of a `ComponentStyle` the pipeline reads, as a trait object: the pipeline is compiled once for every
+/// component type, so it holds the style behind this view.
+pub(crate) trait StyleView: Send + Sync {
+    fn surface(&self) -> Option<&SurfaceLook>;
+    fn focus(&self) -> Option<&FocusLook>;
+    fn texts(&self) -> Vec<&TextLook>;
+    fn metrics(&self) -> Metrics;
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+
+impl<S: ComponentStyle> StyleView for S {
+    fn surface(&self) -> Option<&SurfaceLook> {
+        ComponentStyle::surface(self)
+    }
+
+    fn focus(&self) -> Option<&FocusLook> {
+        ComponentStyle::focus(self)
+    }
+
+    fn texts(&self) -> Vec<&TextLook> {
+        ComponentStyle::texts(self)
+    }
+
+    fn metrics(&self) -> Metrics {
+        ComponentStyle::metrics(self)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}

@@ -227,7 +227,8 @@ pub(crate) fn show_leaf_in_flow<C: Show>(mut child: C, ui: &mut Ui) -> C::Output
         return crate::contract::run::show_leaf(child, ui, crate::contract::run::ShowAt::Flow, None);
     }
     let label = std::mem::take(&mut child.common_mut(crate::contract::Internal::new()).label);
-    let id = crate::contract::steps::id::<C>(ui, &child.common(crate::contract::Internal::new()).id, false, true);
+    let facts = crate::contract::run::TypeFacts::of::<C>();
+    let id = crate::contract::steps::id(ui, &child.common(crate::contract::Internal::new()).id, false, true, facts.style_key, facts.name);
     let side = SideLabel::new().layout(FieldLayout::After);
     flow_leaf(ui, id, id, (env.enabled, env.size), label, side, child)
 }

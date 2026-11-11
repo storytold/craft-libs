@@ -1,8 +1,9 @@
 //! Step 16, report: the AccessKit node and its sub-nodes.
 
 use super::stops::takes_focus;
+use crate::contract::Validity;
 use crate::contract::cx::{CxCore, Decls};
-use crate::contract::{Component, Cx, Validity};
+use crate::contract::run::{ErasedPass, TypeFacts};
 use crate::primitives::FaceRecord;
 use crate::runtime::access::{self, Access, FaceFacts, Own, Politeness, Role, SetPosition, SubDecl, SubNode, scope};
 use crate::runtime::commands::{self, ResolvedCommand};
@@ -36,32 +37,26 @@ fn command_facts(command: &ResolvedCommand, platform: craft_keymap::Platform) ->
     (command.hint.as_deref(), command.chord.as_ref().map(|chord| chord.display(platform)))
 }
 
-/// The message of a validity that warns or refuses.
-fn validity_of<'c, C: Component>(cx: &'c Cx<'_, C>) -> Option<&'c Message> {
-    match &cx.validity {
-        Validity::Warn(message) | Validity::Refuse(message) => Some(message),
+/// The message of a validity that warns or refuses, and whether it warns.
+pub(crate) fn validity_of<V>(validity: &Validity<V>) -> Option<(&Message, bool)> {
+    match validity {
+        Validity::Warn(message) => Some((message, true)),
+        Validity::Refuse(message) => Some((message, false)),
         _ => None,
     }
 }
 
-/// The message of a validity that warns or refuses as text; the node's description when the component gives none.
-fn validity_message<C: Component>(cx: &Cx<'_, C>) -> Option<String> {
-    validity_of(cx).map(|message| cx.core.env.resolve(&message.text).as_str().to_owned())
-}
-
 /// Step 16, report: the AccessKit node filled with its sub-nodes, the label-scope patch and the merge, then the
 /// cursor request.
-pub(crate) fn report<C: Component>(comp: &C, cx: &Cx<'_, C>, input: &ReportIn<'_>) {
-    report_access(comp, cx, input);
-    crate::contract::cx::write_cursor(&cx.core);
+pub(crate) fn report(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>) {
+    report_access(p, facts, input);
+    crate::contract::cx::write_cursor(p.core_ref());
 }
 
-fn report_access<C: Component>(comp: &C, cx: &Cx<'_, C>, input: &ReportIn<'_>) {
-    let core = &cx.core;
+fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>) {
+    let core = p.core_ref();
     let (ctx, id) = (&core.ctx, core.id);
-    let mut access = Access::default();
-    comp.access(&mut access, cx);
-    let value_text = comp.value_text(cx);
+    let (mut access, value_text) = p.access();
     if let Some(text) = &value_text {
         match &mut access.numeric {
             Some(numeric) => numeric.text = Some(text.clone()),
@@ -74,12 +69,12 @@ fn report_access<C: Component>(comp: &C, cx: &Cx<'_, C>, input: &ReportIn<'_>) {
             node.expanded = Some(toggle.open);
         }
     }
-    let role = access.role.unwrap_or(C::ROLE);
-    access.access_key = access.access_key.or(cx.core.resolved.access_key);
+    let role = access.role.unwrap_or(facts.role);
+    access.access_key = access.access_key.or(core.resolved.access_key);
     if access.grid == access::GridPlace::default() {
-        access.grid = cx.core.grid;
+        access.grid = core.grid;
     }
-    debug_assert!(access.role.is_none_or(|alt| C::ALT_ROLES.contains(&alt)), "`Access::role` picks one of `ALT_ROLES`");
+    debug_assert!(access.role.is_none_or(|alt| facts.alt_roles.contains(&alt)), "`Access::role` picks one of `ALT_ROLES`");
     let flags = core.state.flags;
     let resolved = core.resolved;
     let platform = commands::platform(ctx);
@@ -88,10 +83,11 @@ fn report_access<C: Component>(comp: &C, cx: &Cx<'_, C>, input: &ReportIn<'_>) {
     for (_, label) in &mut access.custom_actions {
         *label = core.env.resolve(label);
     }
-    let validity = validity_message(cx);
-    if let (Some(message), Some(text)) = (validity_of(cx), &validity) {
-        let tone = message.effective_tone(matches!(cx.validity, Validity::Warn(_)));
-        scope::register_message(ctx, message, tone, text.clone());
+    // The message of a validity that warns or refuses as text; the node's description when the component gives none.
+    let message = p.validity();
+    let validity = message.map(|(message, _)| core.env.resolve(&message.text).as_str().to_owned());
+    if let (Some((message, warns)), Some(text)) = (message, &validity) {
+        scope::register_message(ctx, message, message.effective_tone(warns), text.clone());
     }
     let tooltip_text = resolved.tooltip.map(|tooltip| core.env.resolve(&tooltip.spec().text));
     let tooltip = tooltip_text.as_ref().map(Label::as_str);
@@ -133,7 +129,7 @@ fn report_access<C: Component>(comp: &C, cx: &Cx<'_, C>, input: &ReportIn<'_>) {
     let focusable = takes_focus(resolved) && (input.sense.contains(Sense::FOCUS) || folded.is_some());
     let own = Own {
         id,
-        component: std::any::type_name::<C>(),
+        component: facts.name,
         role,
         rect: core.rect,
         label: resolved.label,
@@ -144,7 +140,7 @@ fn report_access<C: Component>(comp: &C, cx: &Cx<'_, C>, input: &ReportIn<'_>) {
         validity: validity.as_deref(),
         hint,
         shortcut,
-        display: C::INPUT == craft_behavior::Input::Display,
+        display: facts.input == craft_behavior::Input::Display,
         flags,
         enabled: resolved.enabled,
         read_only: resolved.read_only,
@@ -153,7 +149,7 @@ fn report_access<C: Component>(comp: &C, cx: &Cx<'_, C>, input: &ReportIn<'_>) {
         keeps_name: resolved.keeps_name,
         scrolls: input.scrolls,
         access: &access,
-        popups: &if C::OVERLAYS { crate::contract::overlay::popups_shown(ctx, id) } else { Vec::new() },
+        popups: &if facts.overlays { crate::contract::overlay::popups_shown(ctx, id) } else { Vec::new() },
         popups_by_part: crate::contract::overlay::has_toggle_nodes(&core.toggles, &access.nodes),
         ltr_axis: resolved.ltr_axis,
     };
@@ -229,15 +225,14 @@ fn report_sub(core: &CxCore<'_>, input: &ReportIn<'_>, node: &SubNode, face: Opt
 
 /// A node of a component whose size failed the guard: it shows nothing, so it is an unnamed group. The component's own
 /// role would promise what the role rules require (a slider's range, a tab's position) of a node that has none.
-pub(crate) fn report_inert<C: Component>(cx: &Cx<'_, C>) {
-    let (Role::Node(_), Role::Node(role)) = (C::ROLE, Role::GROUP) else { return };
-    let core = &cx.core;
+pub(crate) fn report_inert(core: &CxCore<'_>, facts: &TypeFacts) {
+    let (Role::Node(_), Role::Node(role)) = (facts.role, Role::GROUP) else { return };
     let access = Access { position: core.env.facts_of(core.id).map(|facts| facts.position), ..Access::default() };
     access::report(
         &core.ctx,
         &Own {
             id: core.id,
-            component: std::any::type_name::<C>(),
+            component: facts.name,
             role,
             rect: core.rect,
             label: "",

@@ -1,6 +1,7 @@
 //! Free-standing popups: their open slots and the pass's registry, handles, the `Overlays` trait and hover dwell.
 
 use super::opener::{Opening, Trigger};
+use crate::contract::cx::CxCore;
 use crate::contract::{BindMut, Component, Cx};
 use crate::runtime::access::PopupShown;
 use crate::runtime::egui::areas::{self};
@@ -36,8 +37,8 @@ impl PopupHandle {
         }
     }
 
-    pub(super) fn registered<C: Component>(self, cx: &Cx<'_, C>) {
-        register(&cx.core.ctx, cx.core.id, self.id);
+    pub(super) fn registered(self, core: &CxCore<'_>) {
+        register(&core.ctx, core.id, self.id);
     }
 
     /// The popup's id: its open state's and its entry in the layer stack.
@@ -187,7 +188,7 @@ impl PopupHandle {
     /// Toggles or opens the popup from `trigger` at step 9, as the pass's pending open change.
     pub fn trigger<C: Component>(self, trigger: Trigger, cx: &mut Cx<'_, C>) {
         debug_assert!(C::OVERLAYS, "`{}` hosts a popup but sets `OVERLAYS = false`", std::any::type_name::<C>());
-        self.registered(cx);
+        self.registered(&cx.core);
         let core = &mut cx.core;
         let ctx = core.ctx.clone();
         let resting = core.response.hovered() || core.focus.visible;
@@ -223,21 +224,29 @@ impl PopupHandle {
     /// Queues an open that step 15 writes. For `Trigger::Manual` this and the binding are the only ways it opens.
     pub fn open<C: Component>(self, cx: &mut Cx<'_, C>) {
         debug_assert!(C::OVERLAYS, "`{}` hosts a popup but sets `OVERLAYS = false`", std::any::type_name::<C>());
-        self.registered(cx);
-        queue(&cx.core.ctx, self.id, OpenOp::Open);
+        self.open_in(&cx.core);
+    }
+
+    pub(super) fn open_in(self, core: &CxCore<'_>) {
+        self.registered(core);
+        queue(&core.ctx, self.id, OpenOp::Open);
     }
 
     /// Queues a close; step 15 writes the slot, so this pass still shows the popup open.
     pub fn close<C: Component>(self, cx: &mut Cx<'_, C>) {
         debug_assert!(C::OVERLAYS, "`{}` hosts a popup but sets `OVERLAYS = false`", std::any::type_name::<C>());
-        self.registered(cx);
-        queue(&cx.core.ctx, self.id, OpenOp::Close);
+        self.close_in(&cx.core);
+    }
+
+    pub(super) fn close_in(self, core: &CxCore<'_>) {
+        self.registered(core);
+        queue(&core.ctx, self.id, OpenOp::Close);
     }
 
     /// Whether a toggle, `open` or `close` queued in this pass leaves the popup's open state different from the
     /// state the pass began with. Valid from step 9.
     pub fn changed<C: Component>(self, cx: &mut Cx<'_, C>) -> bool {
-        self.registered(cx);
+        self.registered(&cx.core);
         let began = cx.core.memory.shown::<OpenSlot>(self.id).0;
         open_now(cx.core.memory, self.id) != began
     }
@@ -247,7 +256,7 @@ impl PopupHandle {
     /// open state that differs from the bound value is written to it. A value the bind refuses to take (a given one)
     /// never forces the popup. Returns whether the popup is open in this pass.
     pub fn bind_open<C: Component>(self, cx: &mut Cx<'_, C>, mut open: BindMut<'_, bool>) -> bool {
-        self.registered(cx);
+        self.registered(&cx.core);
         let began = cx.core.memory.shown::<OpenSlot>(self.id).0;
         let seen = cx.core.memory.session::<BoundOpen>(sub(self.id, "bound")).0.unwrap_or(began);
         let held = match open.read(cx) {
@@ -276,8 +285,12 @@ impl PopupHandle {
     /// Whether the popup is open in this pass: valid from step 8, with the changes queued so far applied.
     pub fn is_open<C: Component>(self, cx: &mut Cx<'_, C>) -> bool {
         debug_assert!(C::OVERLAYS, "`{}` hosts a popup but sets `OVERLAYS = false`", std::any::type_name::<C>());
-        self.registered(cx);
-        open_now(cx.core.memory, self.id)
+        self.is_open_in(&mut cx.core)
+    }
+
+    pub(super) fn is_open_in(self, core: &mut CxCore<'_>) -> bool {
+        self.registered(core);
+        open_now(core.memory, self.id)
     }
 }
 

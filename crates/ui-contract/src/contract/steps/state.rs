@@ -1,12 +1,11 @@
 //! Step 12, state: flags, eased state and the reset a control registers with its label.
 
 use super::paint::surface_ink;
-use super::value::Shown;
-use crate::contract::cx::CxCore;
-use crate::contract::{Component, Cx, Validity, ValueOf};
+use crate::contract::run::ErasedPass;
+use crate::contract::{Component, Cx, Validity};
 use crate::runtime::access::scope;
 use crate::runtime::motion::{Drives as _, spec};
-use crate::style::{ComponentStyle, Flags, Ink, StateSet};
+use crate::style::{Flags, Ink, StateSet, StyleView};
 use craft_behavior::Input;
 use craft_theme::{State, StateMix};
 
@@ -21,53 +20,60 @@ pub(crate) fn register_reset<C: Component>(comp: &mut C, cx: &Cx<'_, C>) {
 }
 
 /// The eased hover, press and on values of a component, kept in its `Shown` record; a face shows its targets.
-fn ease<C: Component>(core: &mut CxCore<'_>, targets: [bool; 3]) -> StateMix {
+fn ease(p: &mut dyn ErasedPass<'_>, targets: [bool; 3]) -> StateMix {
     let [hover, press, on] = targets;
-    if core.face_mode {
+    if p.core().face_mode {
         return StateMix::new(f32::from(u8::from(hover)), f32::from(u8::from(press)), f32::from(u8::from(on)));
     }
-    let id = core.id;
-    let mut tweens = core.memory.shown::<Shown<ValueOf<C>>>(id).tweens.take();
-    let [hover, press, on] = core.driver().state_anims(&mut tweens, [hover, press, on], [spec::HOVER, spec::HOVER, spec::CHECK]);
-    core.memory.shown::<Shown<ValueOf<C>>>(id).tweens = tweens;
+    let mut tweens = p.shown_state().tweens.take();
+    let [hover, press, on] = p.core().driver().state_anims(&mut tweens, [hover, press, on], [spec::HOVER, spec::HOVER, spec::CHECK]);
+    p.shown_state().tweens = tweens;
     StateMix::new(hover, press, on)
 }
 
-/// Step 12, state: flags first (OPEN from a popup shown this pass, EXPANDED from the container's own open body; CHECKED from a shown `bool` or a command's checked state, MIXED from a mixed binding), then `state`; animates hover, press and on; the ink of the surface, else `inherited`.
-pub(crate) fn state<C: Component>(comp: &C, cx: &mut Cx<'_, C>, open: bool, expanded: bool, inherited: Ink) {
+/// The flags of step 12 that the component's type knows: its own `flags`, CHECKED from a shown `bool`, MIXED from a
+/// mixed binding and the binding's validity.
+pub(crate) fn value_flags<C: Component>(comp: &C, cx: &Cx<'_, C>) -> Flags {
     let mut flags = comp.flags();
-    if open {
-        flags |= Flags::OPEN;
-    }
-    if expanded {
-        flags |= Flags::EXPANDED;
-    }
-    if cx.core.resolved.read_only {
-        flags |= Flags::READ_ONLY;
-    }
-    if cx.core.resolved.selected == Some(true) {
-        flags |= Flags::SELECTED;
-    }
-    let shown_on = cx.shown.as_deref().and_then(|value| (value as &dyn std::any::Any).downcast_ref::<bool>()).copied();
-    let command_on = cx.core.command.as_deref().and_then(|command| command.checked);
-    if shown_on == Some(true) || command_on == Some(true) {
+    if cx.shown.as_deref().and_then(|value| (value as &dyn std::any::Any).downcast_ref::<bool>()) == Some(&true) {
         flags |= Flags::CHECKED;
-    }
-    if let Some(facts) = cx.core.env.facts_of(cx.core.id) {
-        flags |= facts.flags;
     }
     if cx.mixed {
         flags |= Flags::MIXED;
-    }
-    if cx.core.text_invalid {
-        flags |= Flags::INVALID;
     }
     match &cx.validity {
         Validity::Refuse(_) => flags |= Flags::INVALID,
         Validity::Warn(_) => flags |= Flags::WARN,
         _ => {}
     }
-    let core = &mut cx.core;
+    flags
+}
+
+/// Step 12, state: flags first (`value_flags`, OPEN from a popup shown this pass, EXPANDED from the container's own open body, CHECKED from a command's checked state), then `state`; animates hover, press and on; the ink of the surface, else `inherited`.
+pub(crate) fn state(p: &mut dyn ErasedPass<'_>, style: &dyn StyleView, open: bool, expanded: bool, inherited: Ink) {
+    let mut flags = p.value_flags();
+    let core = p.core();
+    if open {
+        flags |= Flags::OPEN;
+    }
+    if expanded {
+        flags |= Flags::EXPANDED;
+    }
+    if core.resolved.read_only {
+        flags |= Flags::READ_ONLY;
+    }
+    if core.resolved.selected == Some(true) {
+        flags |= Flags::SELECTED;
+    }
+    if core.command.as_deref().and_then(|command| command.checked) == Some(true) {
+        flags |= Flags::CHECKED;
+    }
+    if let Some(facts) = core.env.facts_of(core.id) {
+        flags |= facts.flags;
+    }
+    if core.text_invalid {
+        flags |= Flags::INVALID;
+    }
     core.sync_focus();
     let (hovered, pressed) = (core.response.hovered(), core.press.phase.is_press());
     let (focused, visible) = (core.focus.focused, core.focus.visible);
@@ -77,7 +83,6 @@ pub(crate) fn state<C: Component>(comp: &C, cx: &mut Cx<'_, C>, open: bool, expa
     if visible {
         flags |= Flags::FOCUS_VISIBLE;
     }
-    core.memory.shown::<Shown<ValueOf<C>>>(core.id).last_state = (hovered, visible);
     let state = if !core.resolved.enabled {
         State::Disabled
     } else if pressed || flags.contains(Flags::OPEN) {
@@ -87,8 +92,10 @@ pub(crate) fn state<C: Component>(comp: &C, cx: &mut Cx<'_, C>, open: bool, expa
     } else {
         State::Rest
     };
-    let t = ease::<C>(core, [hovered, pressed, flags.intersects(Flags::ON)]);
+    p.shown_state().last_state = (hovered, visible);
+    let t = ease(p, [hovered, pressed, flags.intersects(Flags::ON)]);
+    let core = p.core();
     core.state = StateSet::new(state, flags, t);
-    core.ink = surface_ink(cx.style.surface(), &core.state, inherited);
+    core.ink = surface_ink(style.surface(), &core.state, inherited);
     core.stated = true;
 }

@@ -71,8 +71,7 @@ fn spec_text(env: &crate::runtime::env::EnvView<'_>, spec: &TooltipSpec, enabled
 /// The text the component's own tooltip shows, or `None` when it has none: the tooltip's text, or its disabled text
 /// while disabled, with the bound command's chord; else the full label when the paint cut it, or its own label when
 /// the component declares it paints no label (`shows_label`).
-fn text_of<C: Component>(cx: &Cx<'_, C>, shows_label: bool) -> Option<String> {
-    let core = &cx.core;
+fn text_of(core: &super::CxCore<'_>, shows_label: bool) -> Option<String> {
     let base = match core.resolved.tooltip.map(|tooltip| tooltip.spec()) {
         Some(spec) => spec_text(&core.env, spec, core.resolved.enabled),
         None => {
@@ -100,8 +99,7 @@ struct PartTip {
 }
 
 /// The part whose tooltip shows: the hovered one with a tooltip, else the keyboard's active part.
-fn part_tip<C: Component>(cx: &Cx<'_, C>, parts: &Decls) -> Option<PartTip> {
-    let core = &cx.core;
+fn part_tip(core: &super::CxCore<'_>, parts: &Decls) -> Option<PartTip> {
     let tip = |decl: &PartDecl, extras: &PartExtras, hovered: bool| {
         let part = PartRef { key: decl.key, index: decl.index };
         let rect = core.results.get(&(part.key, part.index))?.rect;
@@ -119,9 +117,8 @@ fn part_tip<C: Component>(cx: &Cx<'_, C>, parts: &Decls) -> Option<PartTip> {
 
 /// Step 16, after the component's report: advances the component's tooltip timer and shows its tooltip, or the
 /// tooltip of the part the pointer or the keyboard is on.
-pub(crate) fn run<C: Component>(cx: &Cx<'_, C>, input: TipIn<'_>) {
-    let core = &cx.core;
-    let part = part_tip(cx, input.parts);
+pub(crate) fn run(core: &super::CxCore<'_>, input: TipIn<'_>) {
+    let part = part_tip(core, input.parts);
     let keyboard = core.state.flags.contains(Flags::FOCUS_VISIBLE);
     let own_spec = core.resolved.tooltip.map(|tooltip| tooltip.spec().clone());
     let (text, spec, rect, hovered, subject) = match &part {
@@ -132,7 +129,7 @@ pub(crate) fn run<C: Component>(cx: &Cx<'_, C>, input: TipIn<'_>) {
             part.hovered || keyboard,
             Some(part.part),
         ),
-        None => (text_of(cx, input.shows_label), own_spec, core.rect, core.response.hovered() || keyboard, None),
+        None => (text_of(core, input.shows_label), own_spec, core.rect, core.response.hovered() || keyboard, None),
     };
     let call = TipCall {
         ctx: &core.ctx,

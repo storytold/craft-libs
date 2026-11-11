@@ -1,6 +1,6 @@
 //! Step 3, id: the `Auto` ordinals and the ids a pass registers.
 
-use crate::contract::{Component, IdSource};
+use crate::contract::IdSource;
 use crate::runtime::egui::pass;
 use crate::runtime::frame::{PerViewport, Stamped};
 use crate::runtime::inspect;
@@ -53,12 +53,12 @@ pub(crate) fn keeping_ids<R>(ctx: &Context, f: impl FnOnce() -> (R, bool)) -> R 
 ///
 /// `register` is false for `measure_in`, which peeks, and in a sizing pass. `advance` is false only for
 /// `measure_in`: a sizing pass advances the ordinals, so its ids equal those of the pass that follows it.
-pub(crate) fn id<C: Component>(ui: &Ui, source: &IdSource, register: bool, advance: bool) -> Id {
+/// `ty` is the component's style key type and `name` its type name.
+pub(crate) fn id(ui: &Ui, source: &IdSource, register: bool, advance: bool, ty: TypeId, name: &'static str) -> Id {
     let ctx = ui.ctx();
     let viewport = pass::current_viewport(ctx);
     let pass_nr = pass::pass_nr(ctx, viewport);
     let scope = ui.scope_id();
-    let ty = TypeId::of::<C::StyleKey>();
     let id = match source {
         IdSource::Id(id) => *id,
         IdSource::Salt(salt) => scope.with(*salt),
@@ -85,8 +85,8 @@ pub(crate) fn id<C: Component>(ui: &Ui, source: &IdSource, register: bool, advan
         let repeated =
             PerViewport::<Stamped<IdPass>>::with_pass(ctx, viewport, pass_nr, |pass, _| *pass = IdPass::default(), |pass| !pass.seen.insert(id));
         if repeated {
-            log::warn!("{} was shown twice with the id {id:?} in one pass", std::any::type_name::<C>());
-            inspect::finding(ctx, inspect::Finding { rule: "duplicate-id", component: std::any::type_name::<C>(), subject: format!("{id:?}") });
+            log::warn!("{name} was shown twice with the id {id:?} in one pass");
+            inspect::finding(ctx, inspect::Finding { rule: "duplicate-id", component: name, subject: format!("{id:?}") });
         }
     }
     id

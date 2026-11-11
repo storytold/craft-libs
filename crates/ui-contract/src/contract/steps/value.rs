@@ -16,19 +16,25 @@ use std::sync::Arc;
 pub(crate) struct Shown<V> {
     pub copy: Option<Arc<V>>,
     pub drawn: u64,
+    pub state: ShownState,
+}
+
+/// The part of a `Shown` record that does not depend on the value type.
+#[derive(Clone, Default)]
+pub(crate) struct ShownState {
     pub last_state: (bool, bool),
     pub tweens: Option<StateTweens>,
 }
 
 impl<V> Clone for Shown<V> {
     fn clone(&self) -> Self {
-        Shown { copy: self.copy.clone(), drawn: self.drawn, last_state: self.last_state, tweens: self.tweens.clone() }
+        Shown { copy: self.copy.clone(), drawn: self.drawn, state: self.state.clone() }
     }
 }
 
 impl<V> Default for Shown<V> {
     fn default() -> Self {
-        Shown { copy: None, drawn: 0, last_state: (false, false), tweens: None }
+        Shown { copy: None, drawn: 0, state: ShownState::default() }
     }
 }
 

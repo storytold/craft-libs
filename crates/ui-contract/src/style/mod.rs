@@ -21,6 +21,7 @@ pub use craft_ui_macros::{ComponentStyle, TokenGroup};
 pub(crate) use cx::control_metrics;
 pub use cx::{StyleCx, VariantParts};
 pub use key::{EnvKey, Ink, StyleKey};
+pub(crate) use look::StyleView;
 pub use look::{ComponentStyle, Corners, DataColor, FocusLook, IconLook, StyleColor, SurfaceKind, SurfaceLook, TextLook, TrackLook};
 pub(crate) use paint::scroll_bar_look;
 pub use paint::{HandleLook, ResetMarkLook, RuleKind, RuleLook, ScrollBarLook};

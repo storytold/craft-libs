@@ -23,27 +23,27 @@ mod style;
 mod update;
 mod value;
 
-pub(crate) use apply::{apply_values, rerun_after_edit};
-pub(crate) use env::{env, resolved};
-pub(crate) use finish::{before_finish, inert_response, record_size};
+pub(crate) use apply::{ValueEdit, apply_values, rerun_after_edit};
+pub(crate) use env::{env, resolved, variants};
+pub(crate) use finish::{before_finish, inert_response, record_size, value_changed};
 pub(super) use id::measuring;
 pub(crate) use id::{id, keeping_ids};
 pub(crate) use label::{activate_by_label, scrub_by_label};
-pub(crate) use measure::{MeasureIn, guard, measure, measure_cx};
+pub(crate) use measure::{MeasureIn, guard, measure, measure_content, measure_cx};
 pub(crate) use paint::{paint_focus, paint_part_layers, paint_surface, surface_ink};
 pub(crate) use parts::{PartsStep, check_parts, declares_none};
 pub(crate) use place::place;
-pub(crate) use report::{ReportIn, report, report_inert};
+pub(crate) use report::{ReportIn, report, report_inert, validity_of};
 #[cfg(feature = "testing")]
 pub(crate) use scroll_owner::queue_reveal;
 pub(crate) use scroll_owner::{child_reveal, peek_reveal, peek_scroll_moves, queue_child_reveal, take_reveal, take_scroll_moves};
 pub(crate) use sense::{part_state, register_wheel};
 pub(crate) use settle::settle;
-pub(crate) use state::{register_reset, state};
+pub(crate) use state::{register_reset, state, value_flags};
 pub(crate) use stops::{StopsIn, body_group, join_group, member_group, register_stops, takes_focus};
 pub(crate) use style::{style, style_cx};
 pub(crate) use update::{after_update, edit_intents, gesture_gate, key_activation, record_context, takes_activation, update_inputs};
-pub(crate) use value::{Shown, peek_value, value};
+pub(crate) use value::{Shown, ShownState, peek_value, value};
 
 /// The 17 steps of the pipeline, in order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

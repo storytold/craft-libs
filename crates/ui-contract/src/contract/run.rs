@@ -1,31 +1,34 @@
-//! The generic shell of the pipeline (1.6): one `run` calls the 17 steps for every shape. What differs by shape
-//! (the body step, the item step, the size of a body or collection) goes through `ShapeHooks`.
+//! The shell of the pipeline (1.6): one `run` calls the 17 steps for every shape and every component type. What
+//! differs by shape (the body step, the item step, the size of a body or collection) goes through `ShapeHooks`; what
+//! differs by component type goes through `Erased` and `ErasedPass` (`typed`), so the pipeline is compiled once.
 
 use super::cx::PartsCx;
 use super::steps::{self, MeasureIn, PartsStep, ShapeKind, Step, StopsIn, Trace};
-use super::{
-    Activation, BodyCx, Collection, Common, Component, Container, Cx, CxCore, Internal, Meta, OverlayUi, PaintUi, Resolved, Show, TipFn, Validity,
-    ValueOf,
-};
-use super::{Inner, ItemFn};
+use super::{Activation, Common, Component, Cx, CxCore, OverlayUi, PaintUi, Resolved, TipFn, ValueOf};
 use super::{overlay, tooltip};
 use crate::layout::InFlow;
 use crate::primitives::sensing::{self, MemberSpec, RootSpec};
-use crate::primitives::{FaceRecord, PaintRecord, PartResult, face_id};
+use crate::primitives::{PaintRecord, PartResult};
 use crate::runtime::access::{self, Politeness, Role, SetPosition, scope};
+use crate::runtime::commands::ResolvedCommand;
 use crate::runtime::env::{AppValues, Env, EnvView};
-use crate::runtime::layout_memory::Call;
+use crate::runtime::layout_memory::{Call, Inputs};
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::overlay::CloseReason;
-use crate::runtime::reads::{self, Sample};
+use crate::runtime::reads::{self, BindKey, Sample};
 use crate::runtime::{commands, focus, inspect, keys, memory};
-use crate::style::{ComponentStyle as _, Ink, StateSet, StyleCx};
-use craft_behavior::{Flow, Input, ItemSource, KeyRole, NavMove, PartRef, PressState, Proposal, Roving, Sense};
-use craft_theme::ControlSize;
+use crate::style::{Ink, StateSet, StyleCx, StyleView};
+use craft_behavior::{Flow, Input, KeyRole, NavMove, PartRef, PressState, Proposal, Roving, Sense};
+use craft_theme::{ControlSize, Variant};
 use egui::{Context, Id, Pos2, Rect, Response, Ui, Vec2};
+use std::any::TypeId;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+mod typed;
+
+pub(crate) use typed::{measure_container, measure_under, measured_extent, paint_face, show_container, show_container_taking, show_items, show_leaf};
 
 /// Where a component is placed.
 #[derive(Clone, Copy)]
@@ -367,24 +370,168 @@ fn blank_core<'a>(
     }
 }
 
-fn paint_ui<'a, C: Component>(ui: &'a mut Ui, env: &'a Env, cx: &'a Cx<'_, C>) -> PaintUi<'a> {
-    let focus = cx.core.active.map(|part| (part, cx.core.state.flags.contains(crate::style::Flags::FOCUS_VISIBLE)));
+/// What the pipeline reads of a component type's constants.
+#[derive(Clone, Copy)]
+pub(crate) struct TypeFacts {
+    pub name: &'static str,
+    pub role: Role,
+    pub alt_roles: &'static [Role],
+    pub input: Input,
+    pub overlays: bool,
+    pub parts: bool,
+    pub stops: bool,
+    pub canvas_control: bool,
+    pub labelled_after: bool,
+    /// The style key's type, which `Auto` ids are counted per.
+    pub style_key: TypeId,
+}
+
+impl TypeFacts {
+    pub(crate) fn of<C: Component>() -> Self {
+        TypeFacts {
+            name: std::any::type_name::<C>(),
+            role: C::ROLE,
+            alt_roles: C::ALT_ROLES,
+            input: C::INPUT,
+            overlays: C::OVERLAYS,
+            parts: C::PARTS,
+            stops: C::STOPS,
+            canvas_control: C::CANVAS_CONTROL,
+            labelled_after: C::LABELLED_AFTER,
+            style_key: TypeId::of::<C::StyleKey>(),
+        }
+    }
+
+    /// Whether the component's input is a text part or an editor.
+    fn text(&self) -> bool {
+        matches!(self.input, Input::Text | Input::Editor)
+    }
+}
+
+/// A component and its shape's hooks, with the component type erased, as steps 1 to 5, the measuring runs and step 17
+/// reach them. It keeps the typed values (the shown value, the cancels, the style) between the calls.
+pub(crate) trait Erased {
+    fn facts(&self) -> TypeFacts;
+    fn common(&self) -> &Common;
+    /// Moves `Common` out of the component (step 1).
+    fn take_common(&mut self) -> Common;
+    /// The variant asked for (or the style's first) and the variant the type accepts for it.
+    fn variants(&self, asked: Option<Variant>) -> (Variant, Variant);
+    /// Step 2.
+    fn style(&mut self, ctx: &Context, scx: &StyleCx<'_>) -> Arc<dyn StyleView>;
+    /// Step 4: keeps the shown value, and outside a sizing pass the cancels it read. Returns whether the binding is mixed.
+    fn value(&mut self, stage: &mut MemoryStage, id: Id, command: Option<&ResolvedCommand>, sizing: bool) -> bool;
+    /// Step 4 as a measure reads it: a peek. Returns whether the binding is mixed.
+    fn peek_value(&mut self, ctx: &Context, id: Id, command: Option<&ResolvedCommand>) -> bool;
+    fn bind_key(&mut self, id: Id) -> Option<BindKey>;
+    fn fills(&self) -> Option<craft_behavior::Axis>;
+    /// What `C::measure` gives for the shown value.
+    fn measure_content(&mut self, input: &MeasureIn<'_>, resolved: &Resolved<'_>) -> (Vec2, Inputs);
+    fn measured_extent(&mut self, at: &Measuring<'_, '_>, stage: &mut MemoryStage) -> Vec2;
+    fn pass_extent(&mut self, at: &Measuring<'_, '_>) -> Vec2;
+    /// Builds the component's `Cx` over `core` and `style` (what `style` gave), runs `rest` with it, then `finish`.
+    /// `rest` returns whether a real pass ran.
+    fn with_cx<'a>(&mut self, core: CxCore<'a>, style: &'a dyn StyleView, rest: &mut dyn FnMut(&mut dyn ErasedPass<'a>) -> bool);
+
+    fn shape(&self) -> ShapeKind;
+    fn declares_parts(&self) -> bool;
+    fn read(&mut self, stage: &mut MemoryStage, id: Id, env: &Env);
+    fn instance_scope(&self) -> Option<commands::CommandScope>;
+    fn in_flow(&self) -> bool;
+    fn sized(&self, ui: &Ui, id: Id, size: Vec2) -> Vec2;
+    fn arena(&self) -> bool;
+    fn extent(&mut self, ui: &Ui, at: ShowAt, id: Id, scx: &StyleCx<'_>) -> Vec2;
+    fn host(&mut self, at: HostCx<'_>) -> Box<dyn Host>;
+    fn record(&mut self, stage: &mut MemoryStage, ctx: &Context, id: Id);
+}
+
+/// A component, its shape's hooks and its `Cx`, with the component type erased, as steps 6 to 17 reach them.
+pub(crate) trait ErasedPass<'a> {
+    fn core(&mut self) -> &mut CxCore<'a>;
+    fn core_ref(&self) -> &CxCore<'a>;
+    /// The part of the component's `Shown` record that does not depend on its value type.
+    fn shown_state(&mut self) -> &mut steps::ShownState;
+    fn value_text(&self) -> Option<String>;
+    fn keys(&self) -> focus::KeyUse;
+    /// The root's sense: the shape's from the component's own.
+    fn sense(&self) -> Sense;
+    /// The component's own sense.
+    fn comp_sense(&self) -> Sense;
+    /// Whether the component is bound, and whether its binding has a reset value.
+    fn bound(&mut self) -> (bool, bool);
+    fn paint_outset(&self, tokens: &crate::style::UiTokens) -> f32;
+    /// Step 7: the component's parts, then the shape's.
+    fn parts(&mut self, rect: Rect, flow: Flow, content_rect: Rect, parts: &mut PartsStep, input: &MeasureIn<'_>, rtl: bool);
+    /// Step 8b for a text part.
+    fn text(&mut self, ui: &mut Ui, step: &mut super::text::TextStep, keys: focus::KeyUse, rtl: bool, ink: egui::Color32, underline: f32);
+    /// Step 8b for an editor part.
+    fn editor(&mut self, ui: &mut Ui, step: &mut super::text::TextStep, keys: focus::KeyUse);
+    fn gesture_gate(&mut self);
+    fn edit_intents(&mut self);
+    fn scrub_by_label(&mut self);
+    fn update(&mut self);
+    fn overlay(&mut self, overlays: &mut OverlayUi<'_>);
+    fn apply_values(&mut self) -> steps::ValueEdit;
+    fn register_reset(&mut self);
+    fn value_flags(&self) -> crate::style::Flags;
+    fn content_env(&self, values: &mut AppValues);
+    fn paint(&mut self, ui: &mut Ui, env: &Env);
+    fn paint_over(&mut self, ui: &mut Ui, env: &Env);
+    fn settle_values(&mut self) -> steps::ValueEdit;
+    /// The component's access facts and the words for its value.
+    fn access(&self) -> (super::Access, Option<String>);
+    /// The binding's validity message when it warns or refuses, and whether it warns.
+    fn validity(&self) -> Option<(&crate::runtime::env::Message, bool)>;
+    fn shows_label(&self) -> bool;
+    fn activated(&self) -> bool;
+    /// Whether the pass's events moved the value.
+    fn changed(&self) -> bool;
+    fn measure_content(&mut self, input: &MeasureIn<'_>, resolved: &Resolved<'_>) -> (Vec2, Inputs);
+
+    fn shape(&self) -> ShapeKind;
+    fn declares_parts(&self) -> bool;
+    fn in_flow(&self) -> bool;
+    fn regions(&self, id: Id) -> Vec<(Id, Vec2)>;
+    fn focus(&self) -> Option<focus::FocusPolicy>;
+    fn sized(&self, ui: &Ui, id: Id, size: Vec2) -> Vec2;
+    fn fills_width(&self) -> bool;
+    fn on_line(&self) -> bool;
+    fn fills_width_only(&self) -> bool;
+    fn arena(&self) -> bool;
+    fn key_role(&self) -> KeyRole;
+    fn roving(&self) -> Option<Roving>;
+    fn expanded(&self) -> Option<bool>;
+    fn live(&self) -> Option<Politeness>;
+    fn position(&self) -> Option<SetPosition>;
+    fn scrolls(&self) -> (bool, bool);
+    fn overflow(&self) -> f32;
+    fn sensed(&mut self);
+    fn updated(&mut self);
+    fn apply(&mut self);
+    fn content(&mut self, ui: &mut Ui, env: &Env, values: &AppValues);
+    fn settle(&mut self);
+    fn dismissed(&mut self, why: CloseReason);
+}
+
+/// The paint view of a component's pass.
+pub(super) fn paint_ui<'a>(ui: &'a mut Ui, env: &'a Env, core: &'a CxCore<'_>, style: &'a dyn StyleView) -> PaintUi<'a> {
+    let focus = core.active.map(|part| (part, core.state.flags.contains(crate::style::Flags::FOCUS_VISIBLE)));
     PaintUi {
         ui,
         env,
-        ink: cx.core.ink,
-        id: cx.core.id,
-        rect: cx.core.rect,
-        record: &cx.core.paint,
-        results: &cx.core.results,
-        response: &cx.core.response,
-        active: focus.filter(|_| cx.core.state.flags.contains(crate::style::Flags::FOCUSED)),
+        ink: core.ink,
+        id: core.id,
+        rect: core.rect,
+        record: &core.paint,
+        results: &core.results,
+        response: &core.response,
+        active: focus.filter(|_| core.state.flags.contains(crate::style::Flags::FOCUSED)),
         // Only a composite with parts paints faces, so the others skip the look list.
-        text: if cx.core.results.is_empty() { None } else { cx.style.texts().first().map(|text| &text.color) },
-        muted: if cx.core.results.is_empty() { None } else { cx.style.texts().get(1).map(|text| &text.color) },
-        flags: cx.core.state.flags & HOST_FLAGS,
-        enabled: cx.core.resolved.enabled,
-        size: cx.core.resolved.size,
+        text: if core.results.is_empty() { None } else { style.texts().first().map(|text| &text.color) },
+        muted: if core.results.is_empty() { None } else { style.texts().get(1).map(|text| &text.color) },
+        flags: core.state.flags & HOST_FLAGS,
+        enabled: core.resolved.enabled,
+        size: core.resolved.size,
         kids: None,
     }
 }
@@ -394,12 +541,11 @@ fn paint_ui<'a, C: Component>(ui: &'a mut Ui, env: &'a Env, cx: &'a Cx<'_, C>) -
 struct SizeLog(f64);
 
 /// What steps 6 to 16 read and write besides the `Ui` the host gives. Built by steps 1 to 5 in the parent pass.
-struct Pass<'r, 'a, C: Component> {
-    comp: &'r mut C,
-    cx: &'r mut Cx<'a, C>,
-    hooks: &'r mut dyn ShapeHooks<C>,
+struct Pass<'p, 'r, 'a> {
+    p: &'p mut dyn ErasedPass<'a>,
+    facts: &'r TypeFacts,
     env: &'r Env,
-    style: &'r C::Style,
+    style: &'r dyn StyleView,
     resolved: &'r Resolved<'r>,
     trace: Trace<'r>,
     tip: Option<TipFn<'r>>,
@@ -424,9 +570,9 @@ struct Pass<'r, 'a, C: Component> {
 }
 
 /// Steps 6 to 16, in the `Ui` the host gives, inside the component's focus scope.
-fn pass<C: Component>(p: &mut Pass<'_, '_, C>, ui: &mut Ui, host_at: Option<ShowAt>, host_env: Option<&Env>) {
-    let scope = if p.sizing || ui.is_sizing_pass() { None } else { p.hooks.focus(p.comp) };
-    let (ctx, id) = (p.cx.core.ctx.clone(), p.resolved.id);
+fn pass(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, host_env: Option<&Env>) {
+    let scope = if p.sizing || ui.is_sizing_pass() { None } else { p.p.focus() };
+    let (ctx, id) = (p.p.core_ref().ctx.clone(), p.resolved.id);
     if let Some(policy) = scope {
         focus::push_scope(&ctx, id, policy, None);
     }
@@ -444,11 +590,11 @@ fn expand_for_overflow(ui: &mut Ui, at: ShowAt, rect: Rect, overflow: f32, rtl: 
 }
 
 /// What the component senses itself: a disabled one that shows a reason on focus stays a Tab stop and senses nothing else.
-fn own_sense<C: Component>(hooks: &dyn ShapeHooks<C>, comp: &C, resolved: &Resolved, inert: bool) -> Sense {
+fn own_sense(e: &dyn ErasedPass<'_>, resolved: &Resolved, inert: bool) -> Sense {
     match (inert, resolved.enabled) {
         (true, _) => Sense::HOVER,
-        (false, true) => hooks.sense(comp, comp.sense()),
-        (false, false) if steps::takes_focus(resolved) => Sense::HOVER | comp.sense().intersection(Sense::FOCUS),
+        (false, true) => e.sense(),
+        (false, false) if steps::takes_focus(resolved) => Sense::HOVER | e.comp_sense().intersection(Sense::FOCUS),
         (false, false) => Sense::HOVER,
     }
 }
@@ -483,24 +629,25 @@ struct StopsStep<'a> {
 }
 
 /// Registers the focus stops of a component that has any; one that sets `STOPS = false` has none, which a debug build checks.
-fn stops_step<C: Component>(at: StopsStep<'_>, hooks: &dyn ShapeHooks<C>, comp: &mut C, parts: &PartsStep) {
+fn stops_step(at: StopsStep<'_>, e: &mut dyn ErasedPass<'_>, facts: &TypeFacts, parts: &PartsStep) {
     let StopsStep { ctx, id, rtl, env, resolved, inert, holder_widget, member, own, text_keys } = at;
-    let body_roving = hooks.roving(comp);
-    if !C::STOPS && body_roving.is_none() {
+    let body_roving = e.roving();
+    if !facts.stops && body_roving.is_none() {
         debug_assert!(
             !own.contains(Sense::FOCUS) && parts.decls.iter().all(|(_, extras)| !extras.focusable),
             "`{}` sets `STOPS = false` and has a stop",
-            std::any::type_name::<C>()
+            facts.name
         );
         return;
     }
-    let resettable = !matches!(C::INPUT, Input::Text | Input::Editor) && comp.bind().is_some_and(|bind| bind.reset_value().is_some());
+    let (bound, resets) = e.bound();
+    let resettable = !facts.text() && resets;
     let text = holder_widget.is_some();
-    let keys = text_keys.unwrap_or_else(|| comp.keys());
-    let role = hooks.key_role(comp).nudge(keys.nudge);
+    let keys = text_keys.unwrap_or_else(|| e.keys());
+    let role = e.key_role().nudge(keys.nudge);
     // A bound component that keeps the arrows reads them as value steps; a text value sets `steps_value` in its text options.
     let arrows = keys.keep == crate::runtime::focus::KeepKeys::BlockArrows;
-    let value = role.value || keys.value || (comp.bind().is_some() && !role.nudge && !text && arrows);
+    let value = role.value || keys.value || (bound && !role.nudge && !text && arrows);
     steps::register_stops(&StopsIn {
         ctx,
         id,
@@ -567,14 +714,13 @@ fn sense_root(ui: &Ui, member: Option<crate::runtime::env::ArenaId>, spec: RootS
 }
 
 /// Step 6: the rect the root takes in `ui`, and whether it is a fill-width root held at its measured width.
-fn place_root<C: Component>(p: &Pass<'_, '_, C>, ui: &mut Ui, at: ShowAt, env: &Env, size: Vec2, inert: bool, rtl: bool) -> (Rect, bool) {
+fn place_root(p: &Pass<'_, '_, '_>, ui: &mut Ui, at: ShowAt, env: &Env, size: Vec2, inert: bool, rtl: bool) -> (Rect, bool) {
     // In a content-sized column a fill-width child takes its measured width in the flow and shows across the width
     // the column settles on, so it never sets that width.
-    let line = p.hooks.on_line(&*p.comp);
+    let line = p.p.on_line();
     let held = !inert
         && matches!(at, ShowAt::Flow)
-        && ((env.content_column && p.hooks.fills_width(&*p.comp))
-            || (crate::layout::in_grid_content_column(ui) && p.hooks.fills_width_only(&*p.comp)));
+        && ((env.content_column && p.p.fills_width()) || (crate::layout::in_grid_content_column(ui) && p.p.fills_width_only()));
     let rect = if held {
         // The column's settled width, read before the child takes its place in it. A sizing or measuring run has no
         // settled width yet: there the child shows at its own size.
@@ -586,15 +732,15 @@ fn place_root<C: Component>(p: &Pass<'_, '_, C>, ui: &mut Ui, at: ShowAt, env: &
         let across = Vec2::new(size.x.max(flowed.width()).max(column), flowed.height());
         if rtl { Rect::from_min_size(Pos2::new(flowed.max.x - across.x, flowed.min.y), across) } else { Rect::from_min_size(flowed.min, across) }
     } else {
-        let fill = p.hooks.fills_width(&*p.comp) && !p.hooks.fills_width_only(&*p.comp);
+        let fill = p.p.fills_width() && !p.p.fills_width_only();
         steps::place(ui, at, if inert { Vec2::ZERO } else { size }, InFlow { fill, line })
     };
     (rect, held)
 }
 
 /// Creates the component's accessibility node, and its label scope, before any child `Ui` runs.
-fn create_node<C: Component>(ctx: &Context, ui: &Ui, id: Id, member: bool) -> bool {
-    matches!(C::ROLE, Role::Node(_)) && {
+fn create_node(ctx: &Context, ui: &Ui, id: Id, member: bool, role: Role) -> bool {
+    matches!(role, Role::Node(_)) && {
         if member {
             access::register_parent(ctx, id, ui.unique_id());
         }
@@ -608,78 +754,66 @@ fn create_node<C: Component>(ctx: &Context, ui: &Ui, id: Id, member: bool) -> bo
 }
 
 /// Steps 6 to 16 of the pass, run in the `Ui` the host gives.
-fn run_in_host<C: Component>(p: &mut Pass<'_, '_, C>, ui: &mut Ui, host_at: Option<ShowAt>, host_env: Option<&Env>) {
-    let ctx = p.cx.core.ctx.clone();
+fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, host_env: Option<&Env>) {
+    let ctx = p.p.core_ref().ctx.clone();
     let (id, rtl) = (p.resolved.id, p.env.direction.is_rtl());
-    let (env, resolved, inert) = (host_env.unwrap_or(p.env), p.resolved, p.inert);
-    let metrics = p.style.metrics();
+    let (env, resolved, inert, facts, style) = (host_env.unwrap_or(p.env), p.resolved, p.inert, p.facts, p.style);
+    let metrics = style.metrics();
     // 6 place
     let at = host_at.unwrap_or(p.at);
     // A root that fills takes the room of the `Ui` its host runs it in: a pane's or a layer's own, not its parent's.
-    let size = if ui.scope_id() == p.parent { p.size } else { p.hooks.sized(&*p.comp, ui, id, p.measured) };
+    let size = if ui.scope_id() == p.parent { p.size } else { p.p.sized(ui, id, p.measured) };
     let (rect, held) = place_root(p, ui, at, env, size, inert, rtl);
     p.trace.mark(Step::Place);
     // What the content wants past the room counts where the root's width comes from its content: a content-sized
     // root, or a fill-width one held at its measured width. A root that fills the flow keeps to the room it fills.
-    let overflow = if held || !p.hooks.fills_width(&*p.comp) { p.hooks.overflow() } else { 0.0 };
+    let overflow = if held || !p.p.fills_width() { p.p.overflow() } else { 0.0 };
     expand_for_overflow(ui, host_at.unwrap_or(p.at), rect, overflow, rtl);
     // The component sits where the interface puts it; a component whose axis keeps its order flows its content left to right.
-    let rtl = rtl && !p.cx.core.resolved.ltr_axis;
+    let rtl = rtl && !resolved.ltr_axis;
     // A sizing pass of the parent or host `Ui` allocates the size and stops: no parts, no body, and the stage
     // opened at step 3 is written back unchanged.
     if p.sizing || ui.is_sizing_pass() {
         // The output words the value in a measuring run too, so what is measured beside the component holds it.
-        *p.cx.core.value_text.borrow_mut() = p.comp.value_text(p.cx);
+        let text = p.p.value_text();
+        *p.p.core_ref().value_text.borrow_mut() = text;
         return;
     }
     p.real = true;
-    let inspected = p.trace.recording() && inspect::open_element(ui, id, std::any::type_name::<C>());
-    let (comp, cx) = (&mut *p.comp, &mut *p.cx);
+    let inspected = p.trace.recording() && inspect::open_element(ui, id, facts.name);
+    let e = &mut *p.p;
     // 7 parts
     p.trace.mark(Step::Parts);
     let flow = Flow::new(rect, rtl);
+    let content_rect = flow.inset(metrics.padding);
     let mut parts = PartsStep { decls: Default::default(), rovings: Vec::new(), scrolls: Vec::new(), text: super::text::TextStep::default() };
-    if !inert && matches!(C::INPUT, Input::Text | Input::Editor) {
+    if !inert && facts.text() {
         parts.text.commit_now = focus::commit_now(&ctx) == Some(id);
     }
     // A component that declares no parts skips the step; a debug build runs it anyway to check the declaration.
-    let declares_parts = C::PARTS || p.hooks.declares_parts();
+    let declares_parts = facts.parts || e.declares_parts();
     if !inert && (declares_parts || cfg!(debug_assertions)) {
-        let last = cx.core.memory.shown::<steps::Shown<ValueOf<C>>>(id).last_state;
         let input = MeasureIn { ui: &*ui, env, proposal: Proposal::Ideal, room: p.room };
-        let measure = steps::measure_cx::<C>(&input, p.style, resolved, cx.shown.as_deref());
-        let mut pcx = PartsCx {
-            content_rect: flow.inset(metrics.padding),
-            flow,
-            decls: &mut parts.decls,
-            rovings: &mut parts.rovings,
-            scrolls: &mut parts.scrolls,
-            text: &mut parts.text,
-            last_state: last,
-            measure,
-            items: p.hooks.geometry(comp, flow.inset(metrics.padding), rtl),
-        };
-        comp.parts(rect, &mut pcx);
-        p.hooks.parts(comp, rect, &mut pcx);
+        e.parts(rect, flow, content_rect, &mut parts, &input, rtl);
     }
-    if C::CANVAS_CONTROL && p.trace.recording() {
-        inspect::canvas_control(&ctx, std::any::type_name::<C>());
+    if facts.canvas_control && p.trace.recording() {
+        inspect::canvas_control(&ctx, facts.name);
     }
-    debug_assert!(declares_parts || steps::declares_none(&parts), "`{}` sets `PARTS = false` and declares a part", std::any::type_name::<C>());
-    steps::check_parts(&ctx, std::any::type_name::<C>(), &parts);
-    let (holder_widget, text_keys) = text_holder(id, &parts, comp.keys());
-    let own = own_sense(&*p.hooks, comp, resolved, inert);
+    debug_assert!(declares_parts || steps::declares_none(&parts), "`{}` sets `PARTS = false` and declares a part", facts.name);
+    steps::check_parts(&ctx, facts.name, &parts);
+    let (holder_widget, text_keys) = text_holder(id, &parts, e.keys());
+    let own = own_sense(e, resolved, inert);
     // An item never senses the whole row for a press: the collection's root takes the click and the focus (17.2). It
     // does sense the pointer over it, so `PartsCx::hovered` and the state step read the row's hover from the same
     // arena outcome whether the item stands alone or in a collection.
     let own = if env.item == Some(id) { own.difference(Sense::CLICK | Sense::FOCUS) | Sense::HOVER } else { own };
-    let arena = p.hooks.arena(comp);
-    let member = if arena || matches!(C::INPUT, Input::Text | Input::Editor) { None } else { env.arena };
-    stops_step::<C>(StopsStep { ctx: &ctx, id, rtl, env, resolved, inert, holder_widget, member, own, text_keys }, &*p.hooks, comp, &parts);
+    let arena = e.arena();
+    let member = if arena || facts.text() { None } else { env.arena };
+    stops_step(StopsStep { ctx: &ctx, id, rtl, env, resolved, inert, holder_widget, member, own, text_keys }, e, facts, &parts);
     // A body's wheel share is its scroll taker (body step, step 7); the gate value does not take the wheel. A body root that
     // senses the wheel itself (a canvas) registers like any other component.
-    if !inert && (p.hooks.shape() != ShapeKind::Body || own.intersects(Sense::WHEEL | Sense::WHEEL_X)) {
-        steps::register_wheel(&ctx, id, rect, own, comp.bind().is_some(), env.wheel);
+    if !inert && (e.shape() != ShapeKind::Body || own.intersects(Sense::WHEEL | Sense::WHEEL_X)) {
+        steps::register_wheel(&ctx, id, rect, own, e.bound().0, env.wheel);
     }
     // 8 sense
     p.trace.mark(Step::Sense);
@@ -698,48 +832,49 @@ fn run_in_host<C: Component>(p: &mut Pass<'_, '_, C>, ui: &mut Ui, host_at: Opti
     }
     // The node exists before any child `Ui` runs, so the children find their parent (12.2). A member has no egui
     // widget, so it first registers the `Ui` it sits in as its parent.
-    let node = create_node::<C>(&ctx, ui, id, member.is_some());
+    let node = create_node(&ctx, ui, id, member.is_some(), facts.role);
     // A root with no node whose egui widget senses still gets a node from egui, with actions nobody writes.
-    if C::ROLE == Role::None && !root_sense.is_empty() {
+    if facts.role == Role::None && !root_sense.is_empty() {
         access::hide(&ctx, id);
     }
-    cx.core.part_cursors = sensing::hovered_cursor(decls, &results).into_iter().collect();
-    cx.core.rect = rect;
-    cx.core.content_rect = flow.inset(metrics.padding);
-    cx.core.flow = flow;
-    cx.core.visible = rect.intersect(ui.clip_rect());
+    let core = e.core();
+    core.part_cursors = sensing::hovered_cursor(decls, &results).into_iter().collect();
+    core.rect = rect;
+    core.content_rect = content_rect;
+    core.flow = flow;
+    core.visible = rect.intersect(ui.clip_rect());
     // A read-only component takes no activation: the response reports no click either.
     if !steps::takes_activation(resolved) {
         response.flags.remove(egui::response::Flags::CLICKED | egui::response::Flags::FAKE_PRIMARY_CLICKED);
     }
-    cx.core.response = response;
+    core.response = response;
     // The focus service holds last pass's registration: a part that is not in this pass's results is not active.
-    cx.core.focus = focus::facts(&ctx, id);
-    cx.core.active = cx.core.focus.part.filter(|part| results.contains_key(&(part.key, part.index)));
-    cx.core.scroll_moves = super::cx::scroll_moves(&parts.scrolls, &results);
-    cx.core.value_parts = declared_with(&parts, |extras| extras.value);
-    cx.core.state_layer_parts = declared_with(&parts, |extras| extras.state_layer);
-    cx.core.toggles = parts
+    core.focus = focus::facts(&ctx, id);
+    core.active = core.focus.part.filter(|part| results.contains_key(&(part.key, part.index)));
+    core.scroll_moves = super::cx::scroll_moves(&parts.scrolls, &results);
+    core.value_parts = declared_with(&parts, |extras| extras.value);
+    core.state_layer_parts = declared_with(&parts, |extras| extras.state_layer);
+    core.toggles = parts
         .decls
         .iter()
         .filter_map(|(decl, extras)| {
             extras.toggles.map(|toggle| super::cx::Toggle { part: PartRef { key: decl.key, index: decl.index }, decl: toggle, open: false })
         })
         .collect();
-    cx.core.own_reset_parts = declared_with(&parts, |extras| extras.own_reset);
-    cx.core.results = results;
-    cx.core.root_sense = root_sense;
-    cx.core.press = press;
-    cx.core.member_of = member.map(|arena| arena.0);
+    core.own_reset_parts = declared_with(&parts, |extras| extras.own_reset);
+    core.results = results;
+    core.root_sense = root_sense;
+    core.press = press;
+    core.member_of = member.map(|arena| arena.0);
     // A key or AccessKit activation of a member reaches its arena root, which names the member.
     let keyed = member.is_some_and(|arena| keys::activated_member(&ctx, arena.0) == Some(id));
-    cx.core.activation = activation_of(&ctx, ui, rect, resolved, keyed, root_sense, activation);
-    cx.core.activated_member = activated_member.or_else(|| arena.then(|| keys::activated_member(&ctx, id)).flatten());
-    cx.core.intents = keys::intents_of(&ctx, Some(id), rtl);
-    p.hooks.sensed(comp, cx);
+    core.activation = activation_of(&ctx, ui, rect, resolved, keyed, root_sense, activation);
+    core.activated_member = activated_member.or_else(|| arena.then(|| keys::activated_member(&ctx, id)).flatten());
+    core.intents = keys::intents_of(&ctx, Some(id), rtl);
+    e.sensed();
     if inert {
         if node {
-            steps::report_inert(cx);
+            steps::report_inert(e.core_ref(), facts);
         }
         if inspected {
             inspect::close_element(&ctx, id, rect, rect);
@@ -747,50 +882,53 @@ fn run_in_host<C: Component>(p: &mut Pass<'_, '_, C>, ui: &mut Ui, host_at: Opti
         return;
     }
     // The popups the text part and `update` register start over for this pass.
-    if C::OVERLAYS {
+    if facts.overlays {
         overlay::begin_owner(&ctx, id);
     }
     // 8b text part
     if parts.text.decl.is_some() {
         let ink = crate::style::ink_color(&env.tokens, env.ink);
-        super::text::run(cx, ui, &mut parts.text, text_keys.unwrap_or_else(|| comp.keys()), rtl, ink, env.tokens.stroke.thin);
+        let keys = text_keys.unwrap_or_else(|| e.keys());
+        e.text(ui, &mut parts.text, keys, rtl, ink, env.tokens.stroke.thin);
     } else if holder_widget.is_some() {
-        super::editor::run(cx, ui, &mut parts.text, text_keys.unwrap_or_else(|| comp.keys()));
+        let keys = text_keys.unwrap_or_else(|| e.keys());
+        e.editor(ui, &mut parts.text, keys);
     }
     // 9 update
     p.trace.mark(Step::Update);
-    steps::gesture_gate(comp, cx);
-    steps::update_inputs(&mut cx.core);
-    overlay::drive_toggles(cx);
-    steps::edit_intents(comp, cx);
-    steps::scrub_by_label(comp, cx);
-    steps::activate_by_label(cx);
-    comp.update(cx);
+    e.gesture_gate();
+    steps::update_inputs(e.core());
+    overlay::drive_toggles(e.core(), facts.overlays, facts.name);
+    e.edit_intents();
+    e.scrub_by_label();
+    steps::activate_by_label(&ctx, facts.labelled_after);
+    e.update();
     if cfg!(debug_assertions) {
-        let keys = text_keys.unwrap_or_else(|| comp.keys());
+        let keys = text_keys.unwrap_or_else(|| e.keys());
         let held = |mv: NavMove| match keys.keep {
             focus::KeepKeys::BlockArrows => true,
             focus::KeepKeys::InlineArrows => matches!(mv, NavMove::Back | NavMove::Forward),
             _ => false,
         };
         debug_assert!(
-            p.hooks.key_role(comp).moves || keys.moves || cx.core.intents.taken_arrow_moves().iter().all(|mv| held(*mv)),
+            e.key_role().moves || keys.moves || e.core_ref().intents.taken_arrow_moves().iter().all(|mv| held(*mv)),
             "`{}` takes arrow moves with `take_move` that its `KeyUse` neither keeps nor declares as `moves`",
-            std::any::type_name::<C>()
+            facts.name
         );
     }
-    p.hooks.updated(comp, cx);
-    steps::record_context(&cx.core);
+    e.updated();
+    steps::record_context(e.core_ref());
     // The body's group registers after `update`, which may change its rules from what the component knows now.
-    if let Some(roving) = p.hooks.roving(comp) {
+    if let Some(roving) = e.roving() {
+        let core = e.core_ref();
         let group = focus::Group::new(steps::body_group(id), roving).rtl(rtl);
-        let group = match cx.core.roving_lead {
+        let group = match core.roving_lead {
             Some(lead) => group.lead((lead, None)),
             None => group,
         };
         focus::register_group(
             &ctx,
-            match cx.core.roving_arrival {
+            match core.roving_arrival {
                 Some(arrival) => group.selected((arrival, None)),
                 None => group,
             },
@@ -798,57 +936,59 @@ fn run_in_host<C: Component>(p: &mut Pass<'_, '_, C>, ui: &mut Ui, host_at: Opti
     }
     // 10 overlay
     p.trace.mark(Step::Overlay);
-    if C::OVERLAYS {
-        let open = overlay::open_map(&mut *cx.core.memory, id);
-        let parts = cx
-            .core
+    if facts.overlays {
+        let core = e.core();
+        let open = overlay::open_map(&mut *core.memory, id);
+        let parts = core
             .toggles
             .iter()
-            .filter_map(|toggle| cx.core.results.get(&(toggle.part.key, toggle.part.index)).map(|result| (toggle.part, result.rect)))
+            .filter_map(|toggle| core.results.get(&(toggle.part.key, toggle.part.index)).map(|result| (toggle.part, result.rect)))
             .collect();
         let mut overlays = OverlayUi::new(&ctx, overlay::OverlayOwner { id, anchor: rect, parts }, &*ui, resolved, env.clone(), open);
-        comp.overlay(&mut overlays, cx);
+        e.overlay(&mut overlays);
         overlay::apply_closes(&ctx, overlays.closed);
     }
     // What `update` and `overlay` left untaken goes back to the key service.
-    steps::after_update(&mut cx.core);
+    steps::after_update(e.core());
     // 11 apply
     p.trace.mark(Step::Apply);
-    let edit = steps::apply_values(comp, cx);
-    let leaf = p.hooks.shape() == ShapeKind::Leaf;
-    steps::rerun_after_edit(comp, cx, edit, &MeasureIn { ui: &*ui, env: p.env, proposal: Proposal::Ideal, room: p.room }, resolved, leaf);
-    p.hooks.apply(comp, cx);
-    steps::register_reset(comp, cx);
+    let edit = e.apply_values();
+    let leaf = e.shape() == ShapeKind::Leaf;
+    steps::rerun_after_edit(e, style, edit, &MeasureIn { ui: &*ui, env: p.env, proposal: Proposal::Ideal, room: p.room }, resolved, leaf);
+    e.apply();
+    e.register_reset();
     // 12 state
     p.trace.mark(Step::State);
-    steps::state(comp, cx, C::OVERLAYS && overlay::popup_shown(&ctx, id), p.hooks.expanded(comp) == Some(true), env.ink);
-    if cx.core.state.flags.contains(crate::style::Flags::FOCUSED) {
+    let open = facts.overlays && overlay::popup_shown(&ctx, id);
+    let expanded = e.expanded() == Some(true);
+    steps::state(e, style, open, expanded, env.ink);
+    if e.core_ref().state.flags.contains(crate::style::Flags::FOCUSED) {
         commands::note_focus(&ctx, id, &env.commands);
     }
     // 13 paint
     p.trace.mark(Step::Paint);
     let mut values = AppValues::default();
-    comp.content_env(cx, &mut values);
-    steps::paint_surface(ui, env, cx);
-    steps::paint_part_layers(ui, env, cx);
+    e.content_env(&mut values);
+    steps::paint_surface(ui, env, e.core_ref(), style);
+    steps::paint_part_layers(ui, env, e.core_ref());
     // Paint and content stay inside the rect (grown by the type's declared outset), however small the room is.
     let outer_clip = ui.clip_rect();
-    let inside = cx.core.rect.expand(C::paint_outset(&env.tokens)).intersect(outer_clip);
+    let inside = e.core_ref().rect.expand(e.paint_outset(&env.tokens)).intersect(outer_clip);
     ui.set_clip_rect(inside);
-    comp.paint(&mut paint_ui(&mut *ui, env, cx), cx);
+    e.paint(ui, env);
     ui.set_clip_rect(outer_clip);
-    steps::paint_focus(ui, cx);
+    steps::paint_focus(ui, e.core_ref(), style);
     ui.set_clip_rect(inside);
     // 14 content, then `paint_over`
     if p.trace.mark(Step::Content) {
-        if C::ROLE == Role::Merged {
+        if facts.role == Role::Merged {
             scope::begin(&ctx, id, id, scope::Kind::Merge);
         }
         // A real run checks a body's content against the kept transcript its records came from; a collection's rows
         // are its own measure, not the enclosing body's, and a layer's content is not part of its parent's flow.
         let scoped = (!p.sizing && !crate::runtime::measure::active(&ctx))
-            .then(|| match p.hooks.shape() {
-                ShapeKind::Body => Some((Some(id), !p.hooks.in_flow(comp))),
+            .then(|| match e.shape() {
+                ShapeKind::Body => Some((Some(id), !e.in_flow())),
                 ShapeKind::Item => Some((None, true)),
                 _ => None,
             })
@@ -856,59 +996,69 @@ fn run_in_host<C: Component>(p: &mut Pass<'_, '_, C>, ui: &mut Ui, host_at: Opti
         if let Some((body, boundary)) = scoped {
             crate::runtime::layout_memory::open_content(&ctx, body, boundary);
         }
-        p.hooks.content(comp, ui, env, cx, &values);
+        e.content(ui, env, &values);
         if scoped.is_some() {
-            crate::runtime::layout_memory::close_content(&ctx, &p.hooks.regions(id));
+            crate::runtime::layout_memory::close_content(&ctx, &e.regions(id));
         }
     }
     // The `over` parts are placed before `paint_over`, so the children it shows stack above them (8.3).
     ui.set_clip_rect(outer_clip);
     sensing::place_over_widgets(ui, id, member, decls);
     ui.set_clip_rect(inside);
-    comp.paint_over(&mut paint_ui(&mut *ui, env, cx), cx);
+    e.paint_over(ui, env);
     ui.set_clip_rect(outer_clip);
     // 15 settle
     p.trace.mark(Step::Settle);
-    p.hooks.settle(comp, cx);
-    let edit = steps::settle(comp, cx);
-    steps::rerun_after_edit(comp, cx, edit, &MeasureIn { ui: &*ui, env: p.env, proposal: Proposal::Ideal, room: p.room }, resolved, leaf);
+    e.settle();
+    let edit = e.settle_values();
+    steps::rerun_after_edit(e, style, edit, &MeasureIn { ui: &*ui, env: p.env, proposal: Proposal::Ideal, room: p.room }, resolved, leaf);
     // 16 report, then the tooltip.
     p.trace.mark(Step::Report);
     steps::report(
-        comp,
-        cx,
+        e,
+        facts,
         &steps::ReportIn {
             node,
             decls: &parts.decls,
             sense: own,
-            live: p.hooks.live(comp),
-            scrolls: p.hooks.scrolls(comp),
-            expanded: p.hooks.expanded(comp),
-            position: p.hooks.position(comp),
+            live: e.live(),
+            scrolls: e.scrolls(),
+            expanded: e.expanded(),
+            position: e.position(),
             group: steps::member_group(&ctx, env.roving, id),
         },
     );
-    tooltip::run(cx, tooltip::TipIn { ui: &*ui, env, rich: p.tip.take(), parts: &parts.decls, shows_label: comp.shows_label() });
+    let shows_label = e.shows_label();
+    tooltip::run(e.core_ref(), tooltip::TipIn { ui: &*ui, env, rich: p.tip.take(), parts: &parts.decls, shows_label });
     // Activations accumulate across the passes of a viewport mount; step 17 fires the bound command once, with the
     // injected source when there is one.
-    let natural = comp.activated(cx) && resolved.enabled;
-    let injected = cx.core.injected.take().filter(|_| resolved.enabled);
-    if (natural || injected.is_some()) && !cx.core.keep_open {
+    let natural = e.activated() && resolved.enabled;
+    let injected = e.core().injected.take().filter(|_| resolved.enabled);
+    if (natural || injected.is_some()) && !e.core_ref().keep_open {
         crate::runtime::overlay::note_activated(&ctx, id);
     }
     p.activated |= natural || injected.is_some();
     p.injected = p.injected.or(injected);
     if inspected {
-        inspect::close_element(&ctx, id, cx.core.rect, cx.core.content_rect);
+        let core = e.core_ref();
+        inspect::close_element(&ctx, id, core.rect, core.content_rect);
     }
 }
 
-fn run<C: Component>(mut comp: C, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>, hooks: &mut dyn ShapeHooks<C>) -> C::Output {
+/// Step 5's size for `input`: what the component measures plus `extent`, padded and bounded by its style.
+fn measured(t: &mut dyn Erased, input: &MeasureIn<'_>, style: &dyn StyleView, resolved: &Resolved<'_>, extent: Vec2) -> (Vec2, Inputs) {
+    let (content, inputs) = t.measure_content(input, resolved);
+    (steps::measure(style, input, content, extent), inputs)
+}
+
+/// The pipeline: steps 1 to 17 for one component, whatever its type and shape.
+pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<TipFn<'_>>) {
     let ctx = ui.ctx().clone();
-    crate::runtime::measure::count_run::<C>(&ctx);
+    let facts = t.facts();
+    crate::runtime::measure::count_run(&ctx, facts.name);
     // Slots the last end hook evicted drop here, outside every lock and hook.
     memory::dispose_evicted(&ctx);
-    let shape = hooks.shape();
+    let shape = t.shape();
     // Steps 1 to 5 read the sizing flag of the parent `Ui`; steps 6 to 16 read the host `Ui`'s. A sizing pass runs
     // steps 1 to 6 and allocates the size: no id registration, sensing or memory writes.
     // egui's own invisible pass: it allocates and registers nothing, whether or not the framework is measuring.
@@ -917,13 +1067,13 @@ fn run<C: Component>(mut comp: C, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>
     let recording = !sizing && inspect::recording(&ctx);
     // 1 env: `Common` moves out of the component; `Resolved` borrows these locals.
     let env = Env::of(ui);
-    let common: Common = std::mem::take(comp.common_mut(Internal::new()));
-    let step1 = steps::env::<C>(&ctx, &env, &common);
+    let common: Common = t.take_common();
+    let step1 = steps::env(&ctx, &env, &common, t.variants(common.variant));
     // 2 style
     let scx = steps::style_cx(&ctx, &env, &step1);
-    let style = steps::style::<C>(&ctx, &scx, comp.style_key());
+    let style = t.style(&ctx, &scx);
     // 3 id, and the memory stage for it
-    let id = steps::id::<C>(ui, &common.id, !sizing, true);
+    let id = steps::id(ui, &common.id, !sizing, true, facts.style_key, facts.name);
     let trace = Trace::new(&ctx, id, shape, recording);
     if recording {
         inspect::begin(&ctx, id);
@@ -933,14 +1083,11 @@ fn run<C: Component>(mut comp: C, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>
     }
     let mut stage = if sizing { MemoryStage::open_peek(&ctx, id) } else { MemoryStage::open(&ctx, id) };
     let resolved = steps::resolved(id, &step1, &common);
-    // 4 value
-    let value = steps::value(&mut comp, &mut stage, id, step1.command.as_deref());
-    let (shown, mixed) = (value.value, value.mixed);
-    // A sizing pass reads the cancel and ends nothing: its stage is a copy, and the real run reads the cancel again.
-    let cancelled: Vec<_> = value.cancelled.into_iter().filter(|_| !sizing).collect();
-    hooks.read(&mut comp, &mut stage, id, &env);
-    let own_env =
-        hooks.instance_scope(&comp).map(|scope| env.derive_local(|scoped| scoped.inherited_mut().commands = scoped.commands.pushed(scope, id)));
+    // 4 value. A sizing pass reads the cancel and ends nothing: its stage is a copy, and the real run reads the
+    // cancel again.
+    let mixed = t.value(&mut stage, id, step1.command.as_deref(), sizing);
+    t.read(&mut stage, id, &env);
+    let own_env = t.instance_scope().map(|scope| env.derive_local(|scoped| scoped.inherited_mut().commands = scoped.commands.pushed(scope, id)));
     let env = own_env.as_ref().unwrap_or(&env);
     trace.mark(Step::Value);
     // 5 measure
@@ -952,7 +1099,7 @@ fn run<C: Component>(mut comp: C, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>
         }
     };
     // A leaf in flow in a row that shrinks its children to fit shows at most the width the row gave it.
-    let shrink = env.shrink.filter(|_| shape == ShapeKind::Leaf && matches!(at, ShowAt::Flow) && comp.fills().is_none());
+    let shrink = env.shrink.filter(|_| shape == ShapeKind::Leaf && matches!(at, ShowAt::Flow) && t.fills().is_none());
     let cap = match shrink {
         Some(crate::layout::Shrink::Apply(row)) => crate::layout::shrink_cap(&ctx, row, id),
         _ => None,
@@ -963,34 +1110,26 @@ fn run<C: Component>(mut comp: C, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>
     };
     // A body root with parts steps its press machine before its measuring run, so the body reads this pass's part
     // presses in both runs (`BodyCx::part_press`). Step 8 finds the outcome. A member of another arena senses at step 8.
-    if !sizing
-        && shape == ShapeKind::Body
-        && (C::PARTS || hooks.declares_parts())
-        && (hooks.arena(&comp) || matches!(C::INPUT, Input::Text | Input::Editor) || env.arena.is_none())
-    {
+    if !sizing && shape == ShapeKind::Body && (facts.parts || t.declares_parts()) && (t.arena() || facts.text() || env.arena.is_none()) {
         sensing::sense_early(&ctx, id, resolved.enabled);
     }
     // Sizes come from this pass: a sizing pass measures the shape from its content; in a real pass a body or item
     // shape takes what its measuring run found.
-    let (extent, shown) = if sizing {
+    let extent = if sizing || matches!(shape, ShapeKind::Body | ShapeKind::Item) {
         let measuring = Measuring { ui: &*ui, at, width: None, env, scx: &scx, resolved: &resolved, command: step1.command.clone(), mixed };
-        measured_extent(&mut comp, &mut *hooks, &measuring, &mut stage, &style, shown)
-    } else if matches!(shape, ShapeKind::Body | ShapeKind::Item) {
-        let measuring = Measuring { ui: &*ui, at, width: None, env, scx: &scx, resolved: &resolved, command: step1.command.clone(), mixed };
-        (hooks.pass_extent(&mut comp, &measuring, &style, shown.clone()), shown)
+        if sizing { t.measured_extent(&measuring, &mut stage) } else { t.pass_extent(&measuring) }
     } else {
-        (hooks.extent(&comp, ui, at, id, &scx), shown)
+        t.extent(ui, at, id, &scx)
     };
-    let ask = |comp: &mut C, proposal: Proposal, room: Option<f32>, extent: Vec2| {
-        let input = MeasureIn { ui: &*ui, env, proposal, room };
-        steps::measure(comp, &input, &style, &resolved, shown.as_deref(), extent)
+    let ask = |t: &mut dyn Erased, proposal: Proposal, room: Option<f32>, extent: Vec2| {
+        measured(t, &MeasureIn { ui: &*ui, env, proposal, room }, &*style, &resolved, extent)
     };
-    let (size, inputs) = ask(&mut comp, Proposal::Ideal, room, extent);
+    let (size, inputs) = ask(&mut *t, Proposal::Ideal, room, extent);
     let ideal = Call { proposal: Proposal::Ideal, room, inputs, took: size };
     // A control in a label scope reports its narrowest width, in a measuring run too: the real run's label step reads
     // it to decide whether the row fits the label beside it.
     let min = (shape == ShapeKind::Leaf && scope::in_label(&ctx)).then(|| {
-        let (took, inputs) = ask(&mut comp, Proposal::Min, None, Vec2::ZERO);
+        let (took, inputs) = ask(&mut *t, Proposal::Min, None, Vec2::ZERO);
         Call { proposal: Proposal::Min, room: None, inputs, took }
     });
     let min_took = min.as_ref().map(|min| min.took);
@@ -1012,12 +1151,12 @@ fn run<C: Component>(mut comp: C, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>
                 &mut one
             }
         };
-        crate::runtime::layout_memory::leaf_call(&ctx, id, calls, |proposal, room| ask(&mut comp, proposal, room, extent).0);
+        crate::runtime::layout_memory::leaf_call(&ctx, id, calls, |proposal, room| ask(&mut *t, proposal, room, extent).0);
     }
     trace.mark(Step::Measure);
     let min = min_took.inspect(|min| scope::record_control_min(&ctx, min.x));
     // The read record: the binding step 4 read, and the sizes step 5 made from it.
-    if let Some(key) = comp.bind().and_then(|bind| bind.key(id)) {
+    if let Some(key) = t.bind_key(id) {
         let ideal = Sample { proposal: Proposal::Ideal, room, took: size };
         let measuring = sizing || crate::runtime::measure::active(&ctx);
         match min {
@@ -1030,13 +1169,9 @@ fn run<C: Component>(mut comp: C, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>
     let measured = size;
     // A component on a layer or in a window of its own takes no room in the parent's flow: the parent neither sizes it
     // nor counts it among the children that share its room. Its host sizes it in its own `Ui`.
-    let size = if hooks.in_flow(&comp) { hooks.sized(&comp, ui, id, size) } else { size };
+    let size = if t.in_flow() { t.sized(ui, id, size) } else { size };
     if let Some(crate::layout::Shrink::Count(row)) = shrink {
-        let mut width = |proposal| {
-            let input = MeasureIn { ui: &*ui, env, proposal, room: None };
-            steps::measure(&mut comp, &input, &style, &resolved, shown.as_deref(), Vec2::ZERO).0.x
-        };
-        let (ideal, least) = (width(Proposal::Ideal), width(Proposal::Min));
+        let (ideal, least) = (ask(&mut *t, Proposal::Ideal, None, Vec2::ZERO).0.x, ask(&mut *t, Proposal::Min, None, Vec2::ZERO).0.x);
         crate::layout::report_shrink(&ctx, row, id, size.x, ideal, least);
     }
     // A component shown at a rect fills it: the rect is its size, and a leaf that measures nothing (a content
@@ -1050,205 +1185,103 @@ fn run<C: Component>(mut comp: C, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>
         let log = stage.shown::<SizeLog>(sub(id, "size_log"));
         if now - log.0 >= 1.0 || log.0 > now {
             log.0 = now;
-            log::debug!("{} measured the size {size:?} and shows nothing", std::any::type_name::<C>());
+            log::debug!("{} measured the size {size:?} and shows nothing", facts.name);
         }
     }
-    let mut cx = Cx::<C> {
-        core: blank_core(env.view(), &resolved, &mut stage, ctx.clone(), env.ink, steps::inert_response(ui, id), step1.command.clone()),
-        style: &style,
-        shown,
-        mixed,
-        // A cancel step 4 raised over a document that moved is reported, not applied: the app's value stays. One that
-        // carries the value the gesture began with restores it at step 11.
-        applied: if cancelled.iter().any(|event| matches!(event, craft_behavior::EditEvent::Cancel { before: Some(_), .. })) {
-            0
-        } else {
-            cancelled.len()
-        },
-        events: cancelled,
-        validity: Validity::Ok,
-    };
+    let core = blank_core(env.view(), &resolved, &mut stage, ctx.clone(), env.ink, steps::inert_response(ui, id), step1.command.clone());
     // 6 to 16, in the host's `Ui`, once per call of the host.
-    let mut host = hooks.host(&comp, HostCx { ui: &*ui, env, id, label: &step1.label, size });
-    let mut run = Pass {
-        comp: &mut comp,
-        cx: &mut cx,
-        hooks: &mut *hooks,
-        env,
-        style: &*style,
-        resolved: &resolved,
-        trace,
-        tip,
-        at,
-        room,
-        measured,
-        size,
-        parent: ui.scope_id(),
-        inert,
-        sizing,
-        real: false,
-        activated: false,
-        injected: None,
-    };
-    host.run(id, ui, env, &mut |host_ui, host_at, host_env| pass(&mut run, host_ui, host_at, host_env));
-    let (real_pass, activated, injected) = (run.real, run.activated, run.injected);
-    drop(run);
-    // A layer's dismissal is decided after its body so a field inside commits in the press pass; its open state is
-    // written here, after the report (the one write point outside step 15, besides `request_close`).
-    if real_pass && let Some(why) = host.dismissed() {
-        hooks.dismissed(&mut comp, &mut cx, why);
-    }
-    // 17 finish, once: the stage is written back after `finish` returns, so writes made in `finish` are kept.
-    if real_pass {
-        trace.mark(Step::Finish);
-        steps::before_finish(&mut cx, activated, injected);
-        // A control painting text through its faces (a select, a segmented control) reports that baseline too.
-        let baseline = cx.core.paint.borrow().baseline;
-        if let Some(baseline) = baseline {
-            scope::record_baseline(&ctx, baseline - cx.core.rect.top());
-        } else if shape == ShapeKind::Leaf {
-            scope::record_centre(&ctx, cx.core.rect.height() / 2.0);
+    let mut host = t.host(HostCx { ui: &*ui, env, id, label: &step1.label, size });
+    let parent = ui.scope_id();
+    let mut real_pass = false;
+    t.with_cx(core, &*style, &mut |e| {
+        let mut run = Pass {
+            p: &mut *e,
+            facts: &facts,
+            env,
+            style: &*style,
+            resolved: &resolved,
+            trace,
+            tip: tip.take(),
+            at,
+            room,
+            measured,
+            size,
+            parent,
+            inert,
+            sizing,
+            real: false,
+            activated: false,
+            injected: None,
+        };
+        host.run(id, ui, env, &mut |host_ui, host_at, host_env| pass(&mut run, host_ui, host_at, host_env));
+        let (real, activated, injected) = (run.real, run.activated, run.injected);
+        // A layer's dismissal is decided after its body so a field inside commits in the press pass; its open state is
+        // written here, after the report (the one write point outside step 15, besides `request_close`).
+        if real && let Some(why) = host.dismissed() {
+            e.dismissed(why);
         }
-    }
-    let output = comp.finish(cx);
+        // 17 finish, once: the stage is written back after `finish` returns, so writes made in `finish` are kept.
+        if real {
+            trace.mark(Step::Finish);
+            let changed = e.changed();
+            steps::before_finish(e.core(), activated, injected, changed);
+            // A control painting text through its faces (a select, a segmented control) reports that baseline too.
+            let core = e.core_ref();
+            let baseline = core.paint.borrow().baseline;
+            if let Some(baseline) = baseline {
+                scope::record_baseline(&ctx, baseline - core.rect.top());
+            } else if shape == ShapeKind::Leaf {
+                scope::record_centre(&ctx, core.rect.height() / 2.0);
+            }
+        }
+        real_pass = real;
+        real
+    });
     if real_pass {
-        hooks.record(&mut stage, &ctx, id);
+        t.record(&mut stage, &ctx, id);
     }
-    debug_assert!(!real_pass || crate::contract::Outcome::response(&output).id == id, "an output's Response is the component's own");
     if !sizing {
         stage.write_back();
     }
-    output
 }
 
-pub(crate) fn show_leaf<C: Component + Meta<Shape = super::shape::Leaf>>(comp: C, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>) -> C::Output {
-    let scope = comp.common(Internal::new()).command_scope;
-    run(comp, ui, at, tip, &mut LeafHooks { scope })
-}
-
-/// Shows a container at `rect` and takes the rect's room in the flow of `ui`, through the one helper that moves a
-/// parent's flow past a rect, so a sibling shown after it lies past it.
-pub(crate) fn show_container_taking<C: Container, R>(
-    comp: C,
-    ui: &mut Ui,
-    rect: Rect,
-    body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
-) -> Inner<C::Output, R> {
-    let shown = show_container(comp, ui, ShowAt::Rect(rect), body, None);
-    crate::runtime::egui::alloc::advance_past(ui, rect);
-    shown
-}
-
-pub(crate) fn show_container<C: Container, R>(
-    comp: C,
-    ui: &mut Ui,
-    at: ShowAt,
-    mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
-    tip: Option<TipFn<'_>>,
-) -> Inner<C::Output, R> {
-    let mut inner: Option<R> = None;
-    let mut ran = false;
-    let mut call = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
-        // The measuring run and a sizing parent's run are peek stages; only a real run settles.
-        ran |= !cx.memory.is_peek();
-        inner = Some(body(ui, cx));
-    };
-    let ctx = ui.ctx().clone();
-    let props = Arc::new(comp.props(Internal::new()).clone());
-    let output = run(comp, ui, at, tip, &mut super::body::BodyHooks::new(&mut call, props));
-    let id = crate::contract::Outcome::response(&output).id;
-    let settle = ran.then(|| super::settle::SettleAt { ctx, body: sub(id, "body"), owner: id });
-    Inner { output, inner, settle }
-}
-
-pub(crate) fn show_items<'r, C: Collection>(comp: C, ui: &mut Ui, source: &dyn ItemSource<C::Key>, item: &mut ItemFn<'r, C>) -> C::Output {
-    let view = comp.filtered(source, &Env::of(ui));
-    let source = view.as_deref().unwrap_or(source);
-    run(comp, ui, ShowAt::Flow, None, &mut super::items::ItemsHooks::<C>::new(source, item))
-}
-
-/// Measures `comp` as `show` will show it, without allocating: steps 1 to 5 under the id `show` would use next. It
-/// reads memory through a peek, registers no id and applies nothing. `under` is the composite's resolved
-/// `(enabled, size)` when it measures a child it shows with `PaintUi::child`.
-pub(crate) fn measure_under<C: Component>(comp: &mut C, ui: &Ui, id: Option<Id>, proposal: Proposal, under: Option<(bool, ControlSize)>) -> Vec2 {
-    measure_shape(comp, ui, id, proposal, under, &mut LeafHooks { scope: None })
-}
-
-/// Measures a container with `body` as `show` will show it: steps 1 to 5, with the body, header, footer and end
-/// regions run once in an invisible sizing pass under the container's layout.
-pub(crate) fn measure_container<C: Container, R>(
-    comp: &mut C,
-    ui: &Ui,
-    proposal: Proposal,
-    mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
-) -> Vec2 {
-    let mut call = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
-        body(ui, cx);
-    };
-    let props = Arc::new(comp.props(Internal::new()).clone());
-    measure_shape(comp, ui, None, proposal, None, &mut super::body::BodyHooks::new(&mut call, props))
-}
-
-/// A measuring run's extent: the shape's `measured_extent` under a `Cx` that senses nothing and writes only to the
-/// peek `stage`. Returns the shown value back with it.
-pub(super) fn measured_extent<C: Component>(
-    comp: &mut C,
-    hooks: &mut dyn ShapeHooks<C>,
-    at: &Measuring<'_, '_>,
-    stage: &mut MemoryStage,
-    style: &C::Style,
-    shown: Option<Arc<ValueOf<C>>>,
-) -> (Vec2, Option<Arc<ValueOf<C>>>) {
-    let response = steps::inert_response(at.ui, at.resolved.id);
-    let core = blank_core(at.env.view(), at.resolved, stage, at.ui.ctx().clone(), at.env.ink, response, at.command.clone());
-    let mut cx = Cx::<C> { core, style, shown, mixed: at.mixed, events: Vec::new(), applied: 0, validity: Validity::Ok };
-    let ctx = at.ui.ctx();
-    let extent = reads::measuring(ctx, at.resolved.id, || steps::measuring(ctx, || hooks.measured_extent(comp, at, &mut cx)));
-    (extent, cx.shown.take())
-}
-
-fn measure_shape<C: Component>(
-    comp: &mut C,
-    ui: &Ui,
-    id: Option<Id>,
-    proposal: Proposal,
-    under: Option<(bool, ControlSize)>,
-    hooks: &mut dyn ShapeHooks<C>,
-) -> Vec2 {
+/// Measures the component in `t` as `show` will show it, without allocating: steps 1 to 5 under the id `show` would
+/// use next (or `id`). It reads memory through a peek, registers no id and applies nothing. `under` is the
+/// composite's resolved `(enabled, size)` when it measures a child it shows with `PaintUi::child`.
+pub(super) fn measure_shape(t: &mut dyn Erased, ui: &Ui, id: Option<Id>, proposal: Proposal, under: Option<(bool, ControlSize)>) -> Vec2 {
+    let facts = t.facts();
     let env = match under {
         Some((enabled, size)) => super::cx::child_env(&Env::of(ui), enabled, size),
         None => Env::of(ui),
     };
-    let id = id.unwrap_or_else(|| steps::id::<C>(ui, &comp.common(Internal::new()).id, false, false));
-    let common = comp.common(Internal::new()).clone();
-    let step1 = steps::env::<C>(ui.ctx(), &env, &common);
-    let (shown, mixed) = steps::peek_value(comp, ui.ctx(), id, step1.command.as_deref());
+    let id = id.unwrap_or_else(|| steps::id(ui, &t.common().id, false, false, facts.style_key, facts.name));
+    let common = t.common().clone();
+    let step1 = steps::env(ui.ctx(), &env, &common, t.variants(common.variant));
+    let mixed = t.peek_value(ui.ctx(), id, step1.command.as_deref());
     let scx = steps::style_cx(ui.ctx(), &env, &step1);
-    let style = steps::style::<C>(ui.ctx(), &scx, comp.style_key());
+    let style = t.style(ui.ctx(), &scx);
     let resolved = steps::resolved(id, &step1, &common);
     let (at, width) = match proposal {
         Proposal::Width(width) => (ShowAt::Flow, Some(width)),
         Proposal::Size(size) => (ShowAt::Rect(Rect::from_min_size(ui.available_rect_before_wrap().min, size)), None),
         _ => (ShowAt::Flow, None),
     };
+    let leaf = t.shape() == ShapeKind::Leaf;
     // A leaf adds nothing to its own measure, so it opens no stage.
-    let (extent, shown) = if hooks.shape() == ShapeKind::Leaf {
-        (Vec2::ZERO, shown)
+    let extent = if leaf {
+        Vec2::ZERO
     } else {
         let mut stage = MemoryStage::open_peek(ui.ctx(), id);
         let measuring = Measuring { ui, at, width, env: &env, scx: &scx, resolved: &resolved, command: step1.command.clone(), mixed };
-        measured_extent(comp, hooks, &measuring, &mut stage, &style, shown)
+        t.measured_extent(&measuring, &mut stage)
     };
-    let ask = |comp: &mut C, proposal: Proposal| {
-        let input = MeasureIn { ui, env: &env, proposal, room: None };
-        steps::measure(comp, &input, &style, &resolved, shown.as_deref(), extent)
-    };
-    let (took, inputs) = ask(comp, proposal);
-    if hooks.shape() == ShapeKind::Leaf && (!ui.is_sizing_pass() || crate::runtime::measure::active(ui.ctx())) {
+    let ask = |t: &mut dyn Erased, proposal: Proposal| measured(t, &MeasureIn { ui, env: &env, proposal, room: None }, &*style, &resolved, extent);
+    let (took, inputs) = ask(&mut *t, proposal);
+    if leaf && (!ui.is_sizing_pass() || crate::runtime::measure::active(ui.ctx())) {
         let calls = &mut [Call { proposal, room: None, inputs, took }];
-        crate::runtime::layout_memory::leaf_call(ui.ctx(), id, calls, |proposal, _| ask(comp, proposal).0);
+        crate::runtime::layout_memory::leaf_call(ui.ctx(), id, calls, |proposal, _| ask(&mut *t, proposal).0);
     }
-    if let Some(key) = comp.bind().and_then(|bind| bind.key(id)) {
+    if let Some(key) = t.bind_key(id) {
         reads::note(ui.ctx(), key, id, true, &[Sample { proposal, room: None, took }]);
     }
     took
@@ -1275,81 +1308,4 @@ pub(crate) struct FaceSource<'a> {
     pub flags: crate::style::Flags,
     /// Whether the host is enabled: a face of a disabled host paints with the Disabled state.
     pub enabled: bool,
-}
-
-/// A face run is steps 1, 2, 4 (read only), 12 and 13 of the face component, inside the composite's step 13. It
-/// registers no id, senses nothing, opens no memory stage and fires nothing.
-pub(crate) fn paint_face<C: Show>(ui: &mut Ui, source: &FaceSource<'_>, part: PartRef, mut face: C) -> FaceRecord {
-    let ctx = ui.ctx().clone();
-    let env = Env::of(ui);
-    let common = std::mem::take(face.common_mut(Internal::new()));
-    debug_assert!(common.tooltip.is_none(), "a face instance carries no tooltip; use `PartBuilder::tooltip`");
-    let step1 = steps::env::<C>(&ctx, &env, &common);
-    let scx = steps::style_cx(&ctx, &env, &step1);
-    let scx = source.ink.map_or(scx, |ink| scx.hosted(ink, source.muted));
-    let style = steps::style::<C>(&ctx, &scx, face.style_key());
-    let id = face_id(source.id, part);
-    let resolved = steps::resolved(id, &step1, &common);
-    let (shown, mixed) = steps::peek_value(&mut face, &ctx, id, step1.command.as_deref());
-    if let Some(key) = face.bind().and_then(|bind| bind.key(id)) {
-        reads::note(&ctx, key, id, crate::runtime::measure::active(&ctx), &[]);
-    }
-    // A peek that opens no lifetime stage and is dropped without a write-back; a write through it is a debug assertion.
-    let mut stage = MemoryStage::open_peek(&ctx, id);
-    stage.face = true;
-    let rect = source.result.rect;
-    let flow = Flow::new(rect, env.direction.is_rtl());
-    let part_state = steps::part_state(source.result, step1.enabled && source.enabled, source.focus);
-    let mut flags = part_state.flags | face.flags() | source.flags;
-    // A face shows the value the step-6 peek found, as `steps::state` reads it for a component: a checked check box
-    // takes the on look.
-    if (shown.as_deref().map(|value| value as &dyn std::any::Any)).and_then(|value| value.downcast_ref::<bool>()) == Some(&true) {
-        flags |= crate::style::Flags::CHECKED;
-    }
-    if mixed {
-        flags |= crate::style::Flags::MIXED;
-    }
-    let on = f32::from(u8::from(flags.intersects(crate::style::Flags::ON)));
-    let state = StateSet::new(part_state.state, flags, crate::style::StateMix::new(part_state.t.hover, part_state.t.press, on));
-    let mut core = blank_core(env.view(), &resolved, &mut stage, ctx.clone(), env.ink, source.response.clone(), None);
-    core.face_mode = true;
-    core.rect = rect;
-    core.content_rect = flow.inset(style.metrics().padding);
-    core.flow = flow;
-    core.state = state;
-    core.stated = true;
-    core.ink = steps::surface_ink(style.surface(), &state, env.ink);
-    core.visible = rect;
-    let cx = Cx::<C> { core, style: &style, shown, mixed, events: Vec::new(), applied: 0, validity: Validity::Ok };
-    steps::paint_surface(ui, &env, &cx);
-    {
-        let results = HashMap::new();
-        let mut pui = PaintUi {
-            ui: &mut *ui,
-            env: &env,
-            ink: cx.core.ink,
-            id,
-            rect,
-            record: &cx.core.paint,
-            results: &results,
-            response: source.response,
-            active: None,
-            text: None,
-            muted: None,
-            flags: crate::style::Flags::empty(),
-            enabled: step1.enabled && source.enabled,
-            size: step1.size,
-            kids: None,
-        };
-        face.paint(&mut pui, &cx);
-    }
-    let (elided, baseline) = {
-        let paint = cx.core.paint.borrow();
-        (paint.elided.clone(), paint.baseline)
-    };
-    let name = elided.unwrap_or_else(|| step1.label.as_str().to_owned());
-    // The face's own `access` adds its facts; the composite's step 16 fills the part's sub-node from the record.
-    let mut access = super::Access::default();
-    face.access(&mut access, &cx);
-    FaceRecord { part, name, flags, role: C::ROLE, numeric: access.numeric.take(), expanded: access.expanded, enabled: step1.enabled, baseline }
 }

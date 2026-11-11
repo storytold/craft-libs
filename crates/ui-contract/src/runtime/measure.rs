@@ -145,12 +145,10 @@ pub fn body_runs(ctx: &Context) -> Vec<(Id, u32)> {
     store::with::<BodyRuns, _>(ctx, |log| log.runs.clone())
 }
 
-/// Counts a run of a component of type `C` in this pass, measuring or real. Counts nothing without `testing`.
-#[inline]
-pub(crate) fn count_run<C>(ctx: &Context) {
+/// Counts a run of a component of the type `name` in this pass, measuring or real. Counts nothing without `testing`.
+pub(crate) fn count_run(ctx: &Context, name: &'static str) {
     #[cfg(feature = "testing")]
     {
-        let name = std::any::type_name::<C>();
         let pass = ctx.cumulative_pass_nr();
         pass_state::with::<TypeRuns, _>(ctx, |log| {
             if log.pass != pass {
@@ -163,7 +161,7 @@ pub(crate) fn count_run<C>(ctx: &Context) {
         });
     }
     #[cfg(not(feature = "testing"))]
-    let _ = ctx;
+    let _ = (ctx, name);
 }
 
 /// The component types that ran in the last pass, by type name, and how many runs each, measuring runs included;

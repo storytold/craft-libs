@@ -1,7 +1,8 @@
 //! Parts that open and close a popup of their component: declaration, step 9's toggles and their sub-nodes.
 
 use super::popups::{OpenOp, PopupHandle, queue};
-use crate::contract::{Component, Cx, PartBuilder};
+use crate::contract::PartBuilder;
+use crate::contract::cx::CxCore;
 use crate::runtime::focus::{self};
 use craft_behavior::Intent;
 use craft_behavior::PartRef;
@@ -57,13 +58,14 @@ impl PartBuilder<'_> {
 /// is closed), and Alt+Up closes the open ones. Opening one popup of the component closes the others. Each toggle
 /// keeps the popup's open state for the part's `expanded`. A click a toggling part took is not left as the root's
 /// activation.
-pub(crate) fn drive_toggles<C: Component>(cx: &mut Cx<'_, C>) {
-    if cx.core.toggles.is_empty() {
+pub(crate) fn drive_toggles(core: &mut CxCore<'_>, overlays: bool, name: &str) {
+    if core.toggles.is_empty() {
         return;
     }
-    let mut toggles = std::mem::take(&mut cx.core.toggles);
-    let owner = cx.core.id;
-    let active = focus::active_part(&cx.core.ctx, owner);
+    debug_assert!(overlays, "`{name}` hosts a popup but sets `OVERLAYS = false`");
+    let mut toggles = std::mem::take(&mut core.toggles);
+    let owner = core.id;
+    let active = focus::active_part(&core.ctx, owner);
     let mut handled = false;
     let mut opened = None;
     for (at, toggle) in toggles.iter().enumerate() {
@@ -75,16 +77,16 @@ pub(crate) fn drive_toggles<C: Component>(cx: &mut Cx<'_, C>) {
             (request.target == Some(part) || (sole && request.target.is_none()))
                 && matches!(request.action, craft_behavior::AccessAction::Expand | craft_behavior::AccessAction::Collapse)
         };
-        while let Some(request) = cx.core.intents.take_access_where(named) {
+        while let Some(request) = core.intents.take_access_where(named) {
             if request.action == craft_behavior::AccessAction::Expand {
-                popup.open(cx);
+                popup.open_in(core);
                 opened = Some(at);
             } else {
-                popup.close(cx);
+                popup.close_in(core);
             }
             handled = true;
         }
-        let phase = cx.core.results.get(&(part.key, part.index)).map(|result| result.press.phase);
+        let phase = core.results.get(&(part.key, part.index)).map(|result| result.press.phase);
         let on_press = toggle.decl.on_press;
         let by_pointer = match phase {
             Some(phase) if on_press => matches!(phase, craft_behavior::PressPhase::Down { .. }),
@@ -92,57 +94,57 @@ pub(crate) fn drive_toggles<C: Component>(cx: &mut Cx<'_, C>) {
             None => false,
         };
         let clicked = |request: &craft_behavior::AccessRequest| request.target == Some(part) && request.action == craft_behavior::AccessAction::Click;
-        let by_access = cx.core.intents.take_access_where(clicked).is_some();
-        let toggled = by_pointer || by_access || key_activated(cx, active, part);
+        let by_access = core.intents.take_access_where(clicked).is_some();
+        let toggled = by_pointer || by_access || key_activated(core, active, part);
         if toggled {
-            popup.registered(cx);
-            if !popup.is_open(cx) {
+            popup.registered(core);
+            if !popup.is_open_in(core) {
                 opened = Some(at);
             }
-            queue(&cx.core.ctx, popup.id, OpenOp::Toggle);
+            queue(&core.ctx, popup.id, OpenOp::Toggle);
             handled = true;
         }
         // The toggling part took the click, or took its press: the root's pointer activation is not a second toggle.
-        if (toggled || (on_press && phase.is_some_and(|phase| phase.is_click()))) && cx.core.activation.is_some_and(|activation| !activation.by_key) {
-            cx.core.activation = None;
+        if (toggled || (on_press && phase.is_some_and(|phase| phase.is_click()))) && core.activation.is_some_and(|activation| !activation.by_key) {
+            core.activation = None;
         }
     }
     let mut open = Vec::with_capacity(toggles.len());
     for toggle in &toggles {
-        open.push(toggle.handle(owner).is_open(cx));
+        open.push(toggle.handle(owner).is_open_in(core));
     }
     if let Some(keeper) = opened {
         // Opening one popup closes the others.
         for (at, toggle) in toggles.iter().enumerate() {
             if at != keeper && open[at] {
-                toggle.handle(owner).close(cx);
+                toggle.handle(owner).close_in(core);
                 open[at] = false;
             }
         }
     }
     if open.contains(&true) {
-        if cx.core.intents.take(Intent::Close) {
+        if core.intents.take(Intent::Close) {
             for (toggle, _) in toggles.iter().zip(&open).filter(|(_, open)| **open) {
-                toggle.handle(owner).close(cx);
+                toggle.handle(owner).close_in(core);
             }
         }
         // An open popup keeps Alt+Down: nothing opens beside it.
-        cx.core.intents.take(Intent::Open);
-    } else if cx.core.intents.take(Intent::Open) && !handled {
+        core.intents.take(Intent::Open);
+    } else if core.intents.take(Intent::Open) && !handled {
         let target = active.and_then(|part| toggles.iter().find(|toggle| toggle.part == part)).or(toggles.first());
         if let Some(toggle) = target {
-            toggle.handle(owner).open(cx);
+            toggle.handle(owner).open_in(core);
         }
     }
     for toggle in &mut toggles {
-        toggle.open = toggle.handle(owner).is_open(cx);
+        toggle.open = toggle.handle(owner).is_open_in(core);
     }
-    cx.core.toggles = toggles;
+    core.toggles = toggles;
 }
 
 /// Whether a key (Enter or Space) activated `part`, the focused part of the component.
-fn key_activated<C: Component>(cx: &Cx<'_, C>, active: Option<PartRef>, part: PartRef) -> bool {
-    active == Some(part) && cx.core.activation.is_some_and(|activation| activation.by_key)
+fn key_activated(core: &CxCore<'_>, active: Option<PartRef>, part: PartRef) -> bool {
+    active == Some(part) && core.activation.is_some_and(|activation| activation.by_key)
 }
 
 /// Whether `part` is one of the `toggles` parts `toggles` lists with a sub-node in `nodes`: the sub-node reports the

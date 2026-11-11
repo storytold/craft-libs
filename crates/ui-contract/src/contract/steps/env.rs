@@ -21,12 +21,17 @@ pub(crate) struct EnvStep {
     pub command: Option<Arc<ResolvedCommand>>,
 }
 
+/// The variant `asked` for, else the style's first, and the variant `C` accepts for it.
+pub(crate) fn variants<C: Component>(asked: Option<Variant>) -> (Variant, Variant) {
+    let default = <C::Style as ComponentStyle>::VARIANTS.first().copied().unwrap_or(Variant::SECONDARY);
+    let requested = asked.unwrap_or(default);
+    (requested, accepted_variant::<C::StyleKey, C::Style>(requested).variant)
+}
+
 /// Step 1, env: enabled = instance AND scopes AND the bound command's state; read-only = instance OR scopes;
 /// size; variant; label.
-pub(crate) fn env<C: Component>(ctx: &Context, env: &Env, common: &Common) -> EnvStep {
-    let default = <C::Style as ComponentStyle>::VARIANTS.first().copied().unwrap_or(Variant::SECONDARY);
-    let requested = common.variant.unwrap_or(default);
-    let variant = accepted_variant::<C::StyleKey, C::Style>(requested).variant;
+/// `(requested, variant)` comes from `variants`.
+pub(crate) fn env(ctx: &Context, env: &Env, common: &Common, (requested, variant): (Variant, Variant)) -> EnvStep {
     let command = common.command.as_ref().map(|command| Arc::new(commands::resolve_bound(ctx, &env.commands, command)));
     let label = match (&common.label, &command) {
         (Label::Empty, Some(command)) => Label::Shared(command.label.clone()),
