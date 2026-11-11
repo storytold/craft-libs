@@ -820,6 +820,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-assuan"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-atomic"
 version = "0.1.0"
 dependencies = [
@@ -914,6 +922,13 @@ name = "craft-docpath"
 version = "0.1.0"
 
 [[package]]
+name = "craft-dpx"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-drawingml"
 version = "0.1.0"
 dependencies = [
@@ -946,6 +961,18 @@ version = "0.1.0"
 dependencies = [
  "craft-xml",
  "flate2",
+ "thiserror 2.0.21",
+ "zip",
+]
+
+[[package]]
+name = "craft-fig"
+version = "0.1.0"
+dependencies = [
+ "craft-kiwi",
+ "flate2",
+ "ruzstd",
+ "serde_json",
  "thiserror 2.0.21",
  "zip",
 ]
@@ -1314,6 +1341,14 @@ dependencies = [
  "muda",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
+]
+
+[[package]]
+name = "craft-raster-codecs"
+version = "0.1.0"
+dependencies = [
+ "rayon",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

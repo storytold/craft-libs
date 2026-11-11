@@ -65,15 +65,20 @@ free-form geometry are passed over.
 any order; scalar and list properties of every type. From the `vertex` element: `x y z`,
 `nx ny nz`, `s t` / `u v` / `texture_u texture_v`, `red green blue alpha` (also `r g b a` and
 `diffuse_*`), integer colours scaled by their type. From the `face` element: `vertex_indices` or
-`vertex_index`, polygons kept whole. A file without faces is a point cloud (positions, no parts).
+`vertex_index`, polygons kept whole, and a `texcoord` list of a `u v` per corner, which then is
+the UV set instead of the vertices' own. A `comment TextureFile <name>` line gives the mesh a
+material whose base colour texture is that file (named, never opened). A file without faces is a
+point cloud (positions, no parts).
 `ply::parse_header` and `ply::Rows` are public for callers that need every property as a column,
 `edge` elements or thinning.
 
 **glTF and GLB.** The default scene's node tree (matrix or TRS); `TRIANGLES`, `TRIANGLE_STRIP` and
 `TRIANGLE_FAN`, indexed or not; POSITION, NORMAL, every TEXCOORD_n (up to 8), COLOR_0, JOINTS_0,
 WEIGHTS_0 in any component type the specification or `KHR_mesh_quantization` allows; strided
-buffer views; accessors without a buffer view (zeros); materials with their texture slots, UV set
-and sampler wrap modes, `KHR_materials_emissive_strength`, `KHR_materials_unlit`; images embedded
+buffer views; accessors without a buffer view (zeros); sparse accessors; materials with their
+texture slots, UV set and sampler wrap modes, `KHR_materials_emissive_strength`,
+`KHR_materials_unlit`, `KHR_materials_pbrSpecularGlossiness` (diffuse colour and texture, no
+metal, roughness from the glossiness); textures whose image is in `EXT_texture_webp`; images embedded
 in a buffer view or a `data:` URI, or named; skins; translation, rotation and scale animations;
 cameras; `KHR_lights_punctual`. Primitives of a mesh that name the same accessors share their
 vertices. `write_glb` writes nodes, meshes (positions, normals, UV sets, colours), materials and
@@ -93,6 +98,7 @@ FBX 6.x files (a `Model` holds its mesh, `Properties60`, objects connected by na
 geometry, transforms, the hierarchy and materials. Not read: FBX 5 and older, 6.x textures,
 animation, skin deformers, blend shapes, cameras, lights, NURBS.
 
+Not read (glTF): required geometry extensions (Draco, meshopt) are
 Not read (glTF): sparse accessors and required geometry extensions (Draco, meshopt) are
 `Error::Unsupported`; points, lines, morph targets, tangents and other extensions are passed over.
 Not written: skins, animations, cameras, lights, and `.gltf` with separate files.
