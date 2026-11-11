@@ -5,6 +5,7 @@
 use super::dialog::ResetFooter;
 use super::host_requests::HostRequests;
 use crate::contract::{Bind, BodyCx, Remember as _, ShowContainer as _};
+use crate::runtime::commands::Commands as _;
 use crate::runtime::requests::HostAnswer;
 
 use crate::dialog::{Dialog, DialogOutput};
@@ -16,7 +17,8 @@ use crate::runtime::words::CommonWords;
 
 use crate::sections::{DialogRole, FooterButton};
 
-use craft_behavior::{EditEvent, Mixed, Value};
+use craft_behavior::edit_history::EditHistory;
+use craft_behavior::{CancelReason, EditEvent, Mixed, Value};
 
 use egui::{Response, Ui};
 
@@ -29,6 +31,16 @@ use std::sync::Arc;
 
 #[cfg(feature = "testing")]
 mod stories;
+
+/// The dialog's own undo history of its value while it is open: made on the opening pass, stepped by Undo and Redo.
+#[derive(Clone)]
+struct History<V>(Option<EditHistory<V>>);
+
+impl<V> Default for History<V> {
+    fn default() -> Self {
+        History(None)
+    }
+}
 
 /// The values the dialog opened with, taken after the body's first pass.
 #[derive(Clone)]
@@ -115,6 +127,8 @@ type ResetWithFn<'a, V> = Box<dyn Fn(&V, &V) -> V + 'a>;
 /// - Keys: Enter is OK unless the body owns it, Escape cancels. Holding Alt turns Cancel into Reset, which restores
 ///   the value from when the dialog opened (and runs [`on_reset`](FormDialog::on_reset) for what the body keeps).
 /// - The body returns whether the value can be accepted; OK is enabled while it can and `ok_enabled` is true.
+/// - With [`history`](FormDialog::history), Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z step the dialog's own value; a drag or a
+///   typing run is one step.
 #[must_use = "show the dialog with `show`"]
 #[derive(crate::contract::Pattern)]
 #[pattern(probe(FormDialog<'static, bool>))]
@@ -129,6 +143,7 @@ pub struct FormDialog<'a, V: Value + Default> {
     ok_reason: Option<Label>,
     alt_resets: bool,
     outer_gesture: bool,
+    history: bool,
     collection_body: bool,
     closable: bool,
     accept_stays_open: bool,
@@ -155,6 +170,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             ok_reason: None,
             alt_resets: true,
             outer_gesture: false,
+            history: false,
             collection_body: false,
             closable: true,
             accept_stays_open: false,
@@ -212,6 +228,14 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
     /// Whether the dialog holds one outer gesture over its fields, from open to close.
     pub fn outer_gesture(mut self, on: bool) -> Self {
         self.outer_gesture = on;
+        self
+    }
+
+    /// Whether the dialog keeps an undo history of its value while it is open: Undo and Redo step it, after a focused
+    /// text field's own steps. A change becomes a step once no gesture runs in the body, so a drag or a typing run is
+    /// one step. Off by default.
+    pub fn history(mut self, on: bool) -> Self {
+        self.history = on;
         self
     }
 
@@ -292,6 +316,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             ok_reason,
             alt_resets,
             outer_gesture,
+            history,
             collection_body,
             closable,
             accept_stays_open,
@@ -379,7 +404,17 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
                 _ => V::default(),
             };
             let mut values = before.clone();
-            let ok = {
+            let mut steps = (history && !measuring).then(|| std::mem::take(&mut cx.memory::<History<V>>().0).filter(|_| !first)).flatten();
+            if history && !measuring {
+                let can = |steps: &Option<EditHistory<V>>| steps.as_ref().map_or((false, false), |steps| (steps.can_undo(), steps.can_redo()));
+                while let Some(step) = cx.take_step(can(&steps).0, can(&steps).1) {
+                    if let Some(steps) = steps.as_mut() {
+                        crate::runtime::edit::cancel_all(ui.ctx(), CancelReason::UndoDuringGesture);
+                        steps.step(&mut values, step);
+                    }
+                }
+            }
+            let (ok, running) = {
                 let mut requests = requests.borrow_mut();
                 let mut form = FormCx {
                     cx: &mut *cx,
@@ -387,10 +422,19 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
                     answers: if measuring { Vec::new() } else { std::mem::take(&mut answers) },
                     requests: &mut requests,
                 };
-                body(ui, &mut form, &mut values)
+                let ctx = ui.ctx().clone();
+                crate::runtime::edit::watch_gestures(&ctx, || body(ui, &mut form, &mut values))
             };
             if first {
                 cx.memory::<Opened<V>>().0 = Some(values.clone());
+            }
+            if history && !measuring {
+                let mut steps = steps.unwrap_or_else(|| EditHistory::new(&values));
+                // A change becomes a step once the gesture that makes it has ended.
+                if !running {
+                    steps.record(&EditEvent::set(Mixed::Same(before.clone()), values.clone(), name.clone(), None));
+                }
+                cx.memory::<History<V>>().0 = Some(steps);
             }
             let can_accept = ok && ok_enabled;
             accepts.set(can_accept);

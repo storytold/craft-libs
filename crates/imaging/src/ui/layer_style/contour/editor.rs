@@ -124,6 +124,7 @@ impl StackDialog for ContourEditorDialog {
         let sampler = self.sampler.clone();
         let shown = FormDialog::new(words.editor.clone(), Bind::bound(&mut self.draft))
             .outer_gesture(true)
+            .history(true)
             .extra_buttons(extras.iter().map(|(_, label)| FooterButton::new((*label).clone(), DialogRole::Other)))
             .shaped(|dialog| dialog.side_buttons(true))
             .show(ui, |ui, _, draft| {

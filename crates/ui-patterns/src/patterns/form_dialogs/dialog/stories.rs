@@ -25,7 +25,7 @@ const LAYOUTS: [(&str, ParamLayout); 2] = [("Beside", ParamLayout::Beside), ("Be
 fn blur_story(ui: &mut Ui, data: &mut StoryData, preview: bool, layout: ParamLayout) -> StoryOutput {
     let preview = *data.value("preview", preview);
     let layout = *data.choice("layout", layout, &LAYOUTS);
-    let dialog = ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).opened(Bind::bound(data.value("open", true)));
+    let dialog = ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).opened(Bind::bound(data.value("open", true))).history(true);
     let dialog = if preview { dialog.preview(picture(ui)).layout(layout) } else { dialog };
     dialog.show(ui).into()
 }

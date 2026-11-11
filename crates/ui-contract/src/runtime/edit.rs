@@ -28,17 +28,41 @@ pub(crate) fn latest(ctx: &Context) -> (u64, Option<CancelReason>) {
     pass_state::with::<CancelAll, _>(ctx, |all| (all.serial, all.reason))
 }
 
-/// The newest gesture id handed out in this context.
+/// The newest gesture id handed out in this context, and how many times a component has reported its gesture running
+/// at an apply step.
 #[derive(Clone, Copy, Default)]
-pub(crate) struct Gestures(GestureId);
+pub(crate) struct Gestures {
+    newest: GestureId,
+    running: u64,
+}
 
 /// A gesture id no gesture of this context has had: ids grow in the order gestures begin, across components and
 /// across a component's eviction, as `GestureHost` assumes.
 pub fn next_gesture_id(ctx: &Context) -> GestureId {
     pass_state::with::<Gestures, _>(ctx, |gestures| {
-        gestures.0 = gestures.0.next();
-        gestures.0
+        gestures.newest = gestures.newest.next();
+        gestures.newest
     })
+}
+
+/// Notes that a component's gesture runs after its apply step, for [`watch_gestures`].
+pub(crate) fn note_running(ctx: &Context) {
+    if !crate::runtime::measure::active(ctx) {
+        pass_state::with::<Gestures, _>(ctx, |gestures| gestures.running += 1);
+    }
+}
+
+/// Runs `body` and says whether a gesture of a component shown inside it was running after the component's apply
+/// step: a drag or a typing run under way. A container that records its body's edits as undo steps waits for the
+/// gesture to end, so a drag is one step. A measuring run sees none: gestures run in real runs.
+pub fn watch_gestures<R>(ctx: &Context, body: impl FnOnce() -> R) -> (R, bool) {
+    if crate::runtime::measure::active(ctx) {
+        return (body(), false);
+    }
+    let before = pass_state::with::<Gestures, _>(ctx, |gestures| gestures.running);
+    let out = body();
+    let after = pass_state::with::<Gestures, _>(ctx, |gestures| gestures.running);
+    (out, after != before)
 }
 
 /// Notes that the component running gesture `id` was evicted: the gesture ends with `CancelReason::Removed`, which the

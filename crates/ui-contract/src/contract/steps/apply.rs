@@ -107,6 +107,9 @@ pub(crate) fn apply_values<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) -> Va
     };
     let gesture = cx.core.memory.shown::<Gesture<ValueOf<C>>>(slot);
     let (running, watched) = (gesture.is_running().then_some(gesture.id), gesture.watched);
+    if running.is_some() {
+        crate::runtime::edit::note_running(&cx.core.ctx);
+    }
     if gesture.is_running() {
         gesture.emitted = emitted.or(gesture.emitted.take());
         gesture.last_given = given_now.or(gesture.last_given.take());

@@ -159,6 +159,9 @@ pub struct ParamDialog<'a> {
     /// Whether the dialog holds one outer gesture over its fields, from open to close.
     #[prop]
     outer_gesture: bool,
+    /// Whether Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z step the dialog's own values ([`FormDialog::history`]).
+    #[prop]
+    history: bool,
     /// Whether the body is one collection that owns the scroll (a browse list): the dialog's own body scroll is off.
     #[prop]
     collection_body: bool,
@@ -228,6 +231,7 @@ impl<'a> ParamDialog<'a> {
             cancel_label: None,
             alt_resets: true,
             outer_gesture: false,
+            history: false,
             collection_body: false,
             reset_to: None,
             layout: ParamLayout::default(),
@@ -292,6 +296,7 @@ impl<'a> ParamDialog<'a> {
             cancel_label,
             alt_resets,
             outer_gesture,
+            history,
             collection_body,
             reset_to,
             layout,
@@ -312,6 +317,7 @@ impl<'a> ParamDialog<'a> {
             .ok_enabled(ok_enabled)
             .alt_resets(alt_resets)
             .outer_gesture(outer_gesture)
+            .history(history)
             .collection_body(collection_body)
             .closable(closable)
             .answers(answers)
