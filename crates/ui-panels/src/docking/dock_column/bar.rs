@@ -1,18 +1,23 @@
-//! The collapse bar of a dock column and its double-chevron glyph.
+//! The collapse bar of a dock column: the chevron, a part of the column's run that collapses or expands it, and the
+//! band beside it that moves the column and opens its menu.
 
 use crate::buttons::IconButton;
 use crate::buttons::icon_button::IconButtonStyleKey;
 use crate::contract::overlay::Trigger;
-use crate::contract::{BodyCx, Outcome, Props as _, Show as _, ShowContainer as _, WordSetCx as _, clicked};
+use crate::contract::{Access, BodyCx, Name, PaintUi, Props as _, Role, Show as _, ShowContainer as _, WordSetCx as _};
 use crate::docking::group::GroupGrip;
 use crate::docking::{DockWords, PanelSpec};
 use crate::menu::{GroupItem, Menu, MenuWords, PanelMenu, PanelRow};
 use crate::primitives::{Glyph, IconSpec};
 use crate::runtime::env::Label;
+use craft_behavior::PartKey;
 use craft_behavior::dock::{Column, DockEdge};
 use craft_theme::variant::Tone;
 use craft_theme::{ControlSize, CustomVariant, Emphasis, States, Tokens, Variant, VariantLook};
 use egui::{Color32, Pos2, Rect, Ui};
+
+/// The chevron of a column's bar: a click collapses an expanded column to icons and expands an iconic one.
+pub(in crate::docking) const CHEVRON: PartKey = PartKey::new("chevron");
 
 /// What the column bar recorded while the body ran, for the container to read when it finishes.
 #[derive(Default)]
@@ -72,9 +77,38 @@ fn points_right(edge: DockEdge, expanded: bool, rtl: bool) -> bool {
     at_left != expanded
 }
 
-/// Shows the column bar `bar` and its menu: a small chevron button, as high as the bar, at the bar's outer end collapses
-/// an expanded column to icons and expands an iconic one. The rest of the bar is `grip`: a drag moves the column, a
-/// double click collapses or expands it, and a context request opens the column menu. Returns what the user did.
+/// The chevron's slot at the bar's outer end, the window edge the dock is on, as high and wide as the bar is high; and
+/// the band in the rest of the bar.
+pub(in crate::docking) fn bar_slots(bar: Rect, edge: DockEdge, rtl: bool) -> (Rect, Rect) {
+    let side = bar.height().min(bar.width());
+    if (edge == DockEdge::End) != rtl {
+        let split = bar.right() - side;
+        (Rect::from_x_y_ranges(split..=bar.right(), bar.y_range()), Rect::from_x_y_ranges(bar.left()..=split, bar.y_range()))
+    } else {
+        let split = bar.left() + side;
+        (Rect::from_x_y_ranges(bar.left()..=split, bar.y_range()), Rect::from_x_y_ranges(split..=bar.right(), bar.y_range()))
+    }
+}
+
+/// The name of the chevron of an expanded or an iconic column.
+pub(in crate::docking) fn chevron_name(words: &DockWords, expanded: bool) -> Label {
+    Label::from(if expanded { words.collapse_column.as_str() } else { words.expand_column.as_str() }.to_owned())
+}
+
+/// Paints the chevron part: a small ghost button with the double chevron pointing where the column goes.
+pub(in crate::docking) fn paint_chevron(ui: &mut PaintUi<'_>, edge: DockEdge, expanded: bool, rtl: bool, name: Label) {
+    let chevron = DoubleChevron { right: points_right(edge, expanded, rtl), width: ui.env.tokens.stroke.thin };
+    ui.face(CHEVRON, IconButton::new(IconSpec::glyph(&chevron)).size(ControlSize::Sm).variant(Variant::Custom(COLLAPSE)).label(name));
+}
+
+/// The chevron's node.
+pub(in crate::docking) fn describe_chevron(access: &mut Access, name: &Label) {
+    access.node(CHEVRON, Role::BUTTON).name = Name::Text(name.as_str().to_owned());
+}
+
+/// Shows the band of the column bar `bar` and the column menu: a drag on `grip` moves the column, a double click
+/// collapses or expands it, and a context request opens the column menu. The chevron at the bar's outer end is the
+/// column's own part. Returns what the user did.
 pub(in crate::docking) fn show_bar<P: Clone + Send + Sync + 'static>(
     ui: &mut Ui,
     body: &mut BodyCx<'_>,
@@ -87,44 +121,25 @@ pub(in crate::docking) fn show_bar<P: Clone + Send + Sync + 'static>(
     let words = body.words::<DockWords>();
     let menu_words = body.words::<MenuWords>();
     let rtl = crate::runtime::env::Env::of(ui).direction.is_rtl();
-    let toggle = if expanded { words.collapse_column.as_str() } else { words.expand_column.as_str() };
-    // The button sits at the outer end: the window edge the dock is on.
-    let side = bar.height().min(bar.width());
-    let (place, band) = if (edge == DockEdge::End) != rtl {
-        let split = bar.right() - side;
-        (Rect::from_x_y_ranges(split..=bar.right(), bar.y_range()), Rect::from_x_y_ranges(bar.left()..=split, bar.y_range()))
-    } else {
-        let split = bar.left() + side;
-        (Rect::from_x_y_ranges(bar.left()..=split, bar.y_range()), Rect::from_x_y_ranges(split..=bar.right(), bar.y_range()))
-    };
-    let chevron = DoubleChevron { right: points_right(edge, expanded, rtl), width: crate::runtime::env::Env::of(ui).tokens.stroke.thin };
-    let shown = IconButton::new(IconSpec::glyph(&chevron))
-        .size(ControlSize::Sm)
-        .variant(Variant::Custom(COLLAPSE))
-        .label(Label::from(toggle.to_owned()))
-        .show_at(ui, place);
+    let toggle = chevron_name(&words, expanded);
+    let (_, band) = bar_slots(bar, edge, rtl);
     let mut record = BarRecord::default();
-    if clicked(&shown) {
+    if band.width() <= 0.0 {
+        return record;
+    }
+    let held = grip.show_at(ui, band);
+    if held.double_pressed {
         record.iconic = Some(expanded);
     }
-    let opener = if band.width() > 0.0 {
-        let held = grip.show_at(ui, band);
-        if held.double_pressed {
-            record.iconic = Some(expanded);
-        }
-        held.response
-    } else {
-        shown.response().clone()
-    };
     let rows = vec![
-        PanelRow::Item(crate::contract::Entry::new(GroupItem::CollapseToIcons, Label::from(toggle.to_owned()))),
+        PanelRow::Item(crate::contract::Entry::new(GroupItem::CollapseToIcons, toggle)),
         PanelRow::Item(
             crate::contract::Entry::new(GroupItem::AutoCollapse, Label::from(menu_words.panel_auto_collapse.as_str().to_owned()))
                 .checked(auto_collapse),
         ),
     ];
     let picked = Menu::new(Label::from(words.panels.as_str().to_owned()))
-        .opened_by(&opener, Trigger::Context)
+        .opened_by(&held.response, Trigger::Context)
         .show(ui, |ui, _| PanelMenu::new(Vec::new(), rows.clone()).show(ui).picked);
     record.picked = picked.inner.flatten();
     record

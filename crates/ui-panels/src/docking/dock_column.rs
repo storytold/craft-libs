@@ -29,7 +29,8 @@ mod bar;
 mod sizing;
 
 use bar::panel_names;
-pub(super) use bar::{BarRecord, bar_name, show_bar};
+
+pub(super) use bar::{BarRecord, CHEVRON, bar_name, bar_slots, chevron_name, describe_chevron, paint_chevron, show_bar};
 use sizing::group_sizes;
 pub use sizing::{GroupSize, fit_widths, group_heights, stacked, width_bounds};
 
@@ -107,6 +108,8 @@ pub struct DockColumn<'a, P: Value + Hash + 'static> {
     laid: Option<Plan>,
     resized: Vec<(P, f32)>,
     width: Option<f32>,
+    /// The bar's chevron was clicked this pass: the column collapses to icons.
+    collapse: bool,
 }
 
 impl<'a, P: Value + Hash + 'static> DockColumn<'a, P> {
@@ -125,6 +128,7 @@ impl<'a, P: Value + Hash + 'static> DockColumn<'a, P> {
             laid: None,
             resized: Vec::new(),
             width: None,
+            collapse: false,
         }
         .label(label)
     }
@@ -171,7 +175,7 @@ impl<'a, P: Value + Hash + 'static> DockColumn<'a, P> {
             None => self.show(ui, body),
         }
         .output;
-        output.iconic = bar.iconic;
+        output.iconic = bar.iconic.or(output.iconic);
         output.picked = bar.picked;
         output
     }
@@ -293,10 +297,13 @@ impl<P: Value + Hash + 'static> Component for DockColumn<'_, P> {
         Sense::empty()
     }
 
-    /// The bar's drag band under the bar's own controls, and a divider between every two open groups.
+    /// The chevron at the bar's outer end, and a divider between every two open groups.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let sizes = cx.style.sizes;
         let plan = column_plan(self.column, self.spec, rect, &sizes, |_, _| None);
+        let (chevron, _) = bar_slots(plan.bar, self.edge, cx.flow.is_rtl());
+        let name = chevron_name(&cx.words::<DockWords>(), true);
+        let _ = cx.part(CHEVRON, chevron).sense(Sense::CLICK | Sense::FOCUS).focusable().tooltip(name);
         let dividers = plan.dividers(rect, sizes.reach);
         for (key, _, divider) in dividers {
             divider::declare(cx, rect, DIVIDER, key, &divider);
@@ -308,6 +315,7 @@ impl<P: Value + Hash + 'static> Component for DockColumn<'_, P> {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let sizes = cx.style.sizes;
         let (rect, rtl, ctx) = (cx.rect, cx.flow.is_rtl(), cx.core.ctx.clone());
+        self.collapse = cx.part_activated(CHEVRON).is_some();
         let Some(base) = self.laid.take() else { return };
         let mut plan = column_plan(self.column, self.spec, rect, &sizes, |key, divider| divider::pointer(cx, DIVIDER, key, divider));
         let dividers = base.dividers(rect, sizes.reach);
@@ -341,6 +349,7 @@ impl<P: Value + Hash + 'static> Component for DockColumn<'_, P> {
         // Painted here, not as the container's surface, which lies over what `paint` draws.
         ui.draw().surface(cx.rect, SurfaceKind::Panel, Corners::All);
         ui.draw().surface(plan.bar, SurfaceKind::Background, Corners::None);
+        paint_chevron(ui, self.edge, true, cx.flow.is_rtl(), chevron_name(&cx.words::<DockWords>(), true));
     }
 
     /// The column's frame, then the dividers over it.
@@ -365,10 +374,18 @@ impl<P: Value + Hash + 'static> Component for DockColumn<'_, P> {
         }
         let edge = self.edge_divider(cx.rect, &sizes);
         divider::describe(access, EDGE, 0, &edge, words.resize.as_str(), sizes.step);
+        describe_chevron(access, &chevron_name(&words, true));
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> DockColumnOutput<P> {
-        DockColumnOutput { response: cx.response.clone(), placed: cx.rect, iconic: None, picked: None, resized: self.resized, width: self.width }
+        DockColumnOutput {
+            response: cx.response.clone(),
+            placed: cx.rect,
+            iconic: self.collapse.then_some(true),
+            picked: None,
+            resized: self.resized,
+            width: self.width,
+        }
     }
 }
 
