@@ -27,10 +27,10 @@ mod id;
 pub mod isobmff;
 #[cfg(feature = "matroska")]
 pub mod matroska;
-#[cfg(feature = "mxf")]
-pub mod mxf;
 #[cfg(feature = "mpegts")]
 pub mod mpegts;
+#[cfg(feature = "mxf")]
+pub mod mxf;
 #[cfg(feature = "ogg")]
 pub mod ogg;
 pub mod source;
