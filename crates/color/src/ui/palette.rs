@@ -198,9 +198,9 @@ impl<'a> SwatchTable<'a> {
     /// Shows the table.
     pub fn show_all(self, ui: &mut Ui) -> SwatchTableOutput {
         let (swatches, tips) = (self.swatches, self.tips);
-        self.show_items(ui, &SwatchRows::new(swatches), &mut |key, item| {
+        self.show_items(ui, &SwatchRows::new(swatches), &mut |key, _| {
             let (name, color) = &swatches[*key];
-            let cell = Swatch::new(name.clone(), *color).cell().selected(item.row.selected);
+            let cell = Swatch::new(name.clone(), *color).cell();
             if tips { cell.tooltip(name.clone()) } else { cell }
         })
     }
