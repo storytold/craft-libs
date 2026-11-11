@@ -40,6 +40,25 @@ function boot({ missing = [], flushHook } = {}) {
 }
 const tick = () => new Promise((r) => setTimeout(r, 5));
 
+// Boots craft-worker-host-routing.js alone (no SharedWorker/DedicatedWorker wrapper), for tests
+// that need to drive `handleHostMessage` with more than one distinct port object directly --
+// the thing a real SharedWorker's `onconnect` does once per connecting tab.
+function bootRouting({ flushHook, gpuHook } = {}) {
+  const ctx = { console, setTimeout, Promise, Uint8Array, ArrayBuffer, Map, Set, Array };
+  ctx.self = ctx;
+  ctx.globalThis = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(readAsset('craft-worker-host-routing.js'), ctx);
+  if (flushHook) ctx.craftRuntimeFlushPending = flushHook;
+  if (gpuHook) ctx.craftRuntimeHandleGpuBatch = gpuHook;
+  return ctx;
+}
+
+function makePort() {
+  const posted = [];
+  return { port: { postMessage: (m) => posted.push(m) }, posted };
+}
+
 // --- Failure 1: hard-coded, slash-containing OPFS directory -----------------------------------
 
 // Minimal in-memory stand-in for the OPFS directory API, strict about the one rule that matters
@@ -71,6 +90,11 @@ class FakeDir {
     }
     return this.files.get(name);
   }
+  async removeEntry(name) {
+    if (!this.files.delete(name) && !this.dirs.delete(name)) {
+      throw new Error('NotFoundError');
+    }
+  }
 }
 class FakeFile {
   constructor() {
@@ -89,7 +113,7 @@ class FakeFile {
 
 function bootOpfs({ appId } = {}) {
   const root = new FakeDir();
-  const ctx = { console, setTimeout, Uint8Array, ArrayBuffer };
+  const ctx = { console, setTimeout, Uint8Array, ArrayBuffer, TextEncoder };
   ctx.globalThis = ctx;
   ctx.navigator = { storage: { getDirectory: async () => root } };
   if (appId !== undefined) ctx.craftAppId = appId;
@@ -115,9 +139,10 @@ test('OPFS: craftRuntimeFlushPending namespaces under the app id, one segment pe
   assert.equal(result.pending_count, 1);
 
   // No literal app name anywhere, and every segment was created individually (no slash reached
-  // getDirectoryHandle, or FakeDir's own check above would have thrown).
-  assert.deepEqual([...root.dirs.keys()], ['collab-photo']);
-  const appDir = root.dirs.get('collab-photo');
+  // getDirectoryHandle, or FakeDir's own check above would have thrown). The '.' in "collab.photo"
+  // is hex-escaped (injective encoding, review_repro 2), not collapsed to a hyphen.
+  assert.deepEqual([...root.dirs.keys()], ['collab~2ephoto']);
+  const appDir = root.dirs.get('collab~2ephoto');
   assert.deepEqual([...appDir.dirs.keys()], ['store']);
   const storeDir = appDir.dirs.get('store');
   assert.deepEqual([...storeDir.dirs.keys()], ['v1']);
@@ -134,7 +159,7 @@ test('OPFS: two app ids never collide in the same OPFS tree', async () => {
   await b.ctx.craftRuntimeFlushPending({ pending: [{ key: 'config/prefs.json', bytes: [2] }] });
   // Separate roots in this test, but the point is the namespace segment itself: each app gets
   // its own top-level directory name derived from its own app id, never a shared literal.
-  assert.deepEqual([...a.root.dirs.keys()], ['collab-photo']);
+  assert.deepEqual([...a.root.dirs.keys()], ['collab~2ephoto']);
   assert.deepEqual([...b.root.dirs.keys()], ['filmcraft']);
 });
 
@@ -225,36 +250,266 @@ function gatedHook(store) {
   return { hook, calls };
 }
 
-test('M1: two overlapping flushes settle out of order -> the newer bytes win either way', async () => {
+// review_repro 2 (CodeRabbit finding on craft-worker-host-routing.js:155): flushes are now
+// serialized through a single in-flight chain, so these two tests assert the post-fix shape of
+// M1's scenario -- a second flush's hook call never starts until the first has fully settled --
+// instead of the pre-fix "two concurrent hook calls settle out of order" shape, which the fix
+// makes unreachable by construction.
+
+test('M1 (serialized): two sequential flushes settle in order; the second never starts until the first settles', async () => {
   const store = new Map();
   const g = gatedHook(store);
   const w = boot({ missing: ['fs-access-host.js'], flushHook: g.hook });
   w.send({ type: 'storage_put', key: 'doc', bytes: 'v1' });
   w.send({ type: 'storage_flush' });
+  await tick();
+  assert.equal(g.calls.length, 1, 'the first flush must have started its hook call');
+
   w.send({ type: 'storage_put', key: 'doc', bytes: 'v2' });
   w.send({ type: 'storage_flush' });
-  g.calls[1].ok(); // newer flush (v2) finishes first
   await tick();
-  g.calls[0].ok(); // older flush (v1) finishes later
+  assert.equal(g.calls.length, 1, 'the second flush must not start its hook call before the first settles');
+
+  g.calls[0].ok(); // first flush (v1) settles
+  await tick();
+  assert.equal(g.calls.length, 2, 'the second flush must start once the first settles');
+  g.calls[1].ok(); // second flush (v2) settles
   await tick();
   assert.equal(store.get('doc'), 'v2', `latest write was v2 but storage holds ${store.get('doc')}; messages=${JSON.stringify(w.posted)}`);
 });
 
-test('M1: older flush fails after newer succeeded -> stale bytes are never restored over it', async () => {
+test('M1 (serialized): an older queued flush is superseded by newer bytes before its hook call ever starts', async () => {
   const store = new Map();
   const g = gatedHook(store);
   const w = boot({ missing: ['fs-access-host.js'], flushHook: g.hook });
   w.send({ type: 'storage_put', key: 'doc', bytes: 'v1' });
   w.send({ type: 'storage_flush' });
+  await tick();
+
   w.send({ type: 'storage_put', key: 'doc', bytes: 'v2' });
-  w.send({ type: 'storage_flush' });
+  w.send({ type: 'storage_flush' }); // queued behind the first flush's still-outstanding hook call
+  await tick();
+
+  g.calls[0].fail('quota'); // the first flush fails; 'doc' stays queued, already carrying v2's bytes
+  await tick();
+  assert.equal(g.calls.length, 2, 'the second flush must start once the first settles, even by failing');
+  assert.deepEqual(
+    g.calls[1].pending.map((e) => e.bytes),
+    ['v2'],
+    'the second flush must see the current bytes, never the stale snapshot the first flush captured',
+  );
   g.calls[1].ok();
   await tick();
-  g.calls[0].fail('quota');
+  assert.equal(store.get('doc'), 'v2', `v2 was persisted; storage holds ${store.get('doc')}`);
+});
+
+// --- review_repro 2: CodeRabbit findings on PR #662's review (craft-worker-host-routing.js,
+// opfs-flush.js, fs-access-host.js) -------------------------------------------------------------
+
+test('multi-app isolation: two app ids on one worker never share a pending partition or a flush batch', async () => {
+  const seen = [];
+  const ctx = bootRouting({
+    flushHook: async ({ pending, app_id }) => {
+      seen.push({ app_id, keys: pending.map((p) => p.key) });
+      return { pending_count: pending.length };
+    },
+  });
+  const a = makePort();
+  const b = makePort();
+  ctx.handleHostMessage(a.port, { type: 'init', app_id: 'app-a' });
+  ctx.handleHostMessage(b.port, { type: 'init', app_id: 'app-b' });
+  ctx.handleHostMessage(a.port, { type: 'storage_put', key: 'config/x', bytes: [1] });
+  ctx.handleHostMessage(b.port, { type: 'storage_put', key: 'config/x', bytes: [2] });
+  ctx.handleHostMessage(a.port, { type: 'storage_flush' });
+  ctx.handleHostMessage(b.port, { type: 'storage_flush' });
   await tick();
-  w.send({ type: 'storage_flush' }); // next periodic flush
+  assert.equal(seen.length, 2, `both ports must flush their own batch: ${JSON.stringify(seen)}`);
+  const byApp = Object.fromEntries(seen.map((s) => [s.app_id, s.keys]));
+  assert.deepEqual(byApp['app-a'], ['config/x'], `app-a's flush must not see app-b's entry: ${JSON.stringify(seen)}`);
+  assert.deepEqual(byApp['app-b'], ['config/x'], `app-b's flush must not see app-a's entry: ${JSON.stringify(seen)}`);
+});
+
+test('missing craftRuntimeHandleGpuBatch reports error, never a fabricated gpu_batch_done', async () => {
+  const ctx = bootRouting();
+  const p = makePort();
+  ctx.handleHostMessage(p.port, { type: 'gpu_jobs', batch_id: 1, jobs: [{ provider_id: 'x', params: [], inputs: [], outputs: [] }] });
   await tick();
-  g.calls[2]?.ok();
+  assert.equal(p.posted.length, 1);
+  assert.equal(p.posted[0].type, 'error', `a missing hook must never report success: ${JSON.stringify(p.posted)}`);
+});
+
+test('a write that changes mid-flush is not dropped as confirmed by a stale success', async () => {
+  let resolveFirstHook;
+  const ctx = bootRouting({
+    flushHook: ({ pending }) => new Promise((resolve) => {
+      resolveFirstHook = () => resolve({ pending_count: pending.length });
+    }),
+  });
+  const p = makePort();
+  ctx.handleHostMessage(p.port, { type: 'storage_put', key: 'doc', bytes: [1] });
+  ctx.handleHostMessage(p.port, { type: 'storage_flush' }); // captures doc's revision before awaiting the hook
   await tick();
-  assert.equal(store.get('doc'), 'v2', `v2 was persisted; the failed v1 flush must not resurrect stale bytes over it: storage holds ${store.get('doc')}`);
+  // A newer write lands while that flush's hook call is still outstanding.
+  ctx.handleHostMessage(p.port, { type: 'storage_put', key: 'doc', bytes: [2] });
+  resolveFirstHook(); // the stale hook call now reports success for the OLD revision
+  await tick();
+
+  let retriedBytes = null;
+  ctx.craftRuntimeFlushPending = async ({ pending }) => {
+    retriedBytes = pending.map((e) => e.bytes);
+    return { pending_count: pending.length };
+  };
+  ctx.handleHostMessage(p.port, { type: 'storage_flush' });
+  await tick();
+  assert.deepEqual(retriedBytes, [[2]], `the newer bytes must still be queued, not dropped as already confirmed: ${JSON.stringify(retriedBytes)}`);
+});
+
+test('overlapping flushes are serialized: a second hook call never starts until the first settles', async () => {
+  const order = [];
+  let releaseFirst;
+  const ctx = bootRouting({
+    flushHook: async ({ pending }) => {
+      const key = pending[0].key;
+      order.push(`start:${key}`);
+      if (key === 'first') {
+        await new Promise((resolve) => {
+          releaseFirst = resolve;
+        });
+      }
+      order.push(`end:${key}`);
+      return { pending_count: pending.length };
+    },
+  });
+  const p = makePort();
+  ctx.handleHostMessage(p.port, { type: 'storage_put', key: 'first', bytes: [1] });
+  ctx.handleHostMessage(p.port, { type: 'storage_flush' });
+  await tick();
+  ctx.handleHostMessage(p.port, { type: 'storage_put', key: 'second', bytes: [2] });
+  ctx.handleHostMessage(p.port, { type: 'storage_flush' });
+  await tick();
+  assert.deepEqual(order, ['start:first'], `the second flush's hook call must not start before the first settles: ${JSON.stringify(order)}`);
+  releaseFirst();
+  await tick();
+  assert.deepEqual(order, ['start:first', 'end:first', 'start:second', 'end:second']);
+});
+
+test('cancel suppresses gpu_batch_done for that batch even though the hook already ran', async () => {
+  let resolveHook;
+  const ctx = bootRouting({ gpuHook: () => new Promise((resolve) => { resolveHook = () => resolve([{ outputs: [], data: null }]); }) });
+  const p = makePort();
+  ctx.handleHostMessage(p.port, { type: 'gpu_jobs', batch_id: 5, jobs: [{ provider_id: 'x', params: [], inputs: [], outputs: [] }] });
+  await tick();
+  ctx.handleHostMessage(p.port, { type: 'cancel', batch_id: 5 });
+  resolveHook();
+  await tick();
+  assert.equal(p.posted.length, 0, `a cancelled batch must never post gpu_batch_done: ${JSON.stringify(p.posted)}`);
+});
+
+test('sanitizeAppSegment: distinct app ids never collapse to the same OPFS root segment', async () => {
+  const ctx = {};
+  ctx.globalThis = ctx;
+  ctx.TextEncoder = TextEncoder;
+  vm.createContext(ctx);
+  vm.runInContext(readAsset('opfs-flush.js'), ctx);
+  const a = ctx.craftOpfsWarmRootSegments('collab.photo')[0];
+  const b = ctx.craftOpfsWarmRootSegments('collab-photo')[0];
+  assert.notEqual(a, b, `collab.photo and collab-photo must not collapse to the same segment, both were ${JSON.stringify(a)}`);
+  assert.ok(!a.includes('/') && !b.includes('/'));
+});
+
+test('OPFS: storage_delete removes a previously-written file via opfs-flush.js', async () => {
+  const { ctx, root } = bootOpfs({ appId: 'collab-photo' });
+  await ctx.craftRuntimeFlushPending({ pending: [{ key: 'docs/a.bin', bytes: [1, 2, 3], deleted: false }], app_id: 'collab-photo' });
+  const appDir = root.dirs.get('collab-photo');
+  const docsDir = appDir.dirs.get('store').dirs.get('v1').dirs.get('docs');
+  assert.ok(docsDir.files.has('a.bin'), 'the file must exist before the delete');
+
+  const result = await ctx.craftRuntimeFlushPending({ pending: [{ key: 'docs/a.bin', bytes: [], deleted: true }], app_id: 'collab-photo' });
+  assert.equal(result.pending_count, 1);
+  assert.ok(!docsDir.files.has('a.bin'), 'a deleted key must remove its warm-tier file');
+});
+
+test('OPFS: deleting a key that was never written is a no-op, not an error', async () => {
+  const { ctx } = bootOpfs({ appId: 'collab-photo' });
+  const result = await ctx.craftRuntimeFlushPending({ pending: [{ key: 'docs/never-existed.bin', bytes: [], deleted: true }], app_id: 'collab-photo' });
+  assert.equal(result.pending_count, 1);
+});
+
+// --- fs-access-host.js: bounded cold-file reads, honest flush acknowledgment ------------------
+
+function bootFsAccess() {
+  const ctx = { console, Uint8Array, ArrayBuffer };
+  ctx.globalThis = ctx;
+  ctx.FileSystemDirectoryHandle = class {};
+  vm.createContext(ctx);
+  vm.runInContext(readAsset('fs-access-host.js'), ctx);
+  return ctx;
+}
+
+class FakeColdFile {
+  constructor(size) {
+    this.size = size;
+  }
+  async arrayBuffer() {
+    return new ArrayBuffer(this.size);
+  }
+}
+class FakeColdFileHandle {
+  constructor(size) {
+    this.file = new FakeColdFile(size);
+  }
+  async getFile() {
+    return this.file;
+  }
+}
+class FakeColdDir {
+  constructor() {
+    this.files = new Map();
+    this.dirs = new Map();
+  }
+  async getDirectoryHandle(name) {
+    if (!this.dirs.has(name)) this.dirs.set(name, new FakeColdDir());
+    return this.dirs.get(name);
+  }
+  async getFileHandle(name) {
+    if (!this.files.has(name)) throw new Error('NotFoundError');
+    return this.files.get(name);
+  }
+}
+
+// Builds a FakeColdDir tree holding one file at `path` (the segments
+// `fsAccessKeySegments` produces, e.g. ['volumes', 'vol-1', 'files', 'big.bin']).
+function mkColdTreeWithFile(path, size) {
+  const root = new FakeColdDir();
+  let dir = root;
+  for (const segment of path.slice(0, -1)) {
+    const next = new FakeColdDir();
+    dir.dirs.set(segment, next);
+    dir = next;
+  }
+  dir.files.set(path[path.length - 1], new FakeColdFileHandle(size));
+  return root;
+}
+
+test('craftFsAccessReadKey refuses a file over the read budget before allocating it', async () => {
+  const ctx = bootFsAccess();
+  const root = mkColdTreeWithFile(['volumes', 'vol-1', 'files', 'big.bin'], 1024);
+  await assert.rejects(
+    () => ctx.craftFsAccessReadKey(root, 'vol-1', 'files/big.bin', 100),
+    /over the 100-byte read budget/,
+    'a file past the explicit budget must be refused before arrayBuffer() runs',
+  );
+});
+
+test('craftFsAccessReadKey proceeds for a file within the read budget', async () => {
+  const ctx = bootFsAccess();
+  const root = mkColdTreeWithFile(['volumes', 'vol-1', 'files', 'small.bin'], 10);
+  const bytes = await ctx.craftFsAccessReadKey(root, 'vol-1', 'files/small.bin', 100);
+  assert.equal(bytes.length, 10);
+});
+
+test('craftFsAccessFlushPending never acknowledges writes it did not persist (no mounted handle)', async () => {
+  const ctx = bootFsAccess();
+  const result = await ctx.craftFsAccessFlushPending('unmounted-vol', [{ key: 'files/a', bytes: [1, 2, 3] }]);
+  assert.equal(result.pending_count, 0, `nothing was written, so pending_count must be 0, got ${JSON.stringify(result)}`);
 });

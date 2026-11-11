@@ -11,10 +11,18 @@
 //   importScripts('fs-access-host.js');
 //   // Mount a volume from a picked handle:
 //   craftFsAccessMountVolume(volumeHandleId, dirHandle);
-//   // Flush pending cold writes (called by storage_flush for cold-tier keys):
+//   // Flush pending cold writes for that volume (the caller selects which keys are cold and
+//   // calls this directly -- craft-worker-host-routing.js's storage_flush does not call this on
+//   // its own; cold-tier volume selection and flush routing are not wired into that dispatch):
 //   await craftFsAccessFlushPending(volumeHandleId, pending);
 
 const FS_ACCESS_VOLUMES_PREFIX = 'volumes';
+
+// Bytes a single craftFsAccessReadKey call will read before refusing. A user-selected file has
+// no budget check anywhere upstream of this host, so this is the only place that can stop a
+// large media file from being pulled whole into an ArrayBuffer before the caller ever sees its
+// size.
+const DEFAULT_MAX_READ_BYTES = 256 * 1024 * 1024;
 
 // Registry: handle_id -> FileSystemDirectoryHandle.
 const volumeRegistry = new Map();
@@ -89,13 +97,17 @@ async function craftFsAccessWriteKey(rootHandle, volumeHandleId, key, bytes) {
 }
 
 /**
- * Read bytes for a key from an ExternalVolume. Returns null if not found.
+ * Read bytes for a key from an ExternalVolume. Returns null if not found. Refuses (throws)
+ * rather than buffering the whole file when `file.size` exceeds `maxBytes`: a user-selected
+ * file is unbounded, and checking the size before `arrayBuffer()` is the only way to catch an
+ * oversized read before it already happened.
  * @param {FileSystemDirectoryHandle} rootHandle
  * @param {string} volumeHandleId
  * @param {string} key
+ * @param {number} [maxBytes]
  * @returns {Promise<Uint8Array|null>}
  */
-async function craftFsAccessReadKey(rootHandle, volumeHandleId, key) {
+async function craftFsAccessReadKey(rootHandle, volumeHandleId, key, maxBytes = DEFAULT_MAX_READ_BYTES) {
   const segments = fsAccessKeySegments(volumeHandleId, key);
   if (segments.length === 0) {
     return null;
@@ -116,6 +128,9 @@ async function craftFsAccessReadKey(rootHandle, volumeHandleId, key) {
     return null;
   }
   const file = await fileHandle.getFile();
+  if (file.size > maxBytes) {
+    throw new Error(`craft-fs-access: ${key} is ${file.size} bytes, over the ${maxBytes}-byte read budget`);
+  }
   return new Uint8Array(await file.arrayBuffer());
 }
 
@@ -135,7 +150,10 @@ async function craftFsAccessFlushPending(volumeHandleId, pending, rootHandle) {
       : volumeRegistry.get(String(volumeHandleId));
 
   if (!hasFsAccess() || !handle) {
-    return { pending_count: pending.length };
+    // Nothing was written: reporting any of `pending` as confirmed here would let a caller
+    // that removes confirmed entries drop the only queued copy of data that was never actually
+    // persisted. Zero means zero, until the destination is actually available.
+    return { pending_count: 0 };
   }
   for (const entry of pending) {
     if (!entry || typeof entry.key !== 'string') {
