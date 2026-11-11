@@ -38,7 +38,8 @@ pub mod scc;
 pub mod srt;
 pub mod stl;
 mod text;
-pub mod time;
+/// Exact time: `craft-timeline`'s ticks, frame rates and timecode fields.
+pub use craft_timeline::time;
 pub mod ttml;
 pub mod vtt;
 
