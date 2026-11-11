@@ -7142,7 +7142,7 @@ dependencies = [
 [[package]]
 name = "winprint"
 version = "0.2.1"
-source = "git+https://github.com/storytold/winprint.rs?rev=3c978dfcf3d460577fabd87aeea7a84ffdcfb396#3c978dfcf3d460577fabd87aeea7a84ffdcfb396"
+source = "git+https://github.com/storytold/winprint.rs?rev=bc06a7c48b768eb27a828c7986f6d2868b245ee0#bc06a7c48b768eb27a828c7986f6d2868b245ee0"
 dependencies = [
  "flate2",
  "fmt-derive",
