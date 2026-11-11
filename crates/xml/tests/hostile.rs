@@ -450,3 +450,34 @@ fn a_failed_streaming_read_returns_what_it_had() {
     let tiny = Options::default().with_limits(Limits { max_input: 2, ..Limits::DEFAULT });
     assert_eq!(tiny.parse_streaming_partial(b"<a/>", &[], |_| Ok::<(), Error>(())), (None, Some(Error::TooLarge(2))));
 }
+
+/// The pull reader builds no tree, so a strict one has to refuse by itself what the tree reader
+/// refuses: a second root element and character data outside the root. A reader that stopped
+/// believing a damaged file would otherwise take its first element for the whole document.
+#[test]
+fn a_strict_pull_reader_refuses_what_is_outside_the_root() {
+    fn read(opts: Options<'_>, doc: &[u8]) -> Result<usize, Error> {
+        let mut events = opts.events(doc);
+        let mut n = 0;
+        while events.next()?.is_some() {
+            n += 1;
+        }
+        Ok(n)
+    }
+    let strict = Options::default().strict();
+    for (doc, msg) in [
+        (&b"<a/><b/>"[..], "more than one root element"),
+        (b"<a></a><b>", "more than one root element"),
+        (b"<a/>text", "text outside the root element"),
+        (b"text<a/>", "text outside the root element"),
+        (b"<a/><![CDATA[x]]>", "text outside the root element"),
+        (b"<a/>&amp;", "text outside the root element"),
+    ] {
+        let shown = String::from_utf8_lossy(doc);
+        assert!(matches!(read(strict, doc), Err(Error::Syntax { msg: m, .. }) if m == msg), "{shown}");
+        assert_eq!(strict.parse(doc).map(|_| ()).map_err(|e| matches!(e, Error::Syntax { .. })), Err(true), "{shown}");
+        assert!(read(Options::default(), doc).is_ok(), "a lenient read takes {shown}");
+    }
+    // white space, comments and instructions may stand outside the root
+    assert!(read(strict, b"<?xml version='1.0'?>\r\n <!-- c -->\t<a>x</a>\n<?pi?> ").is_ok());
+}

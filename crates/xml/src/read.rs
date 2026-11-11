@@ -354,6 +354,8 @@ pub struct Events<'o, 'i> {
     scope: Vec<(String, String)>,
     /// The end of an empty element, due after its start.
     pending: bool,
+    /// Whether a root element has started.
+    rooted: bool,
     span: Range<usize>,
 }
 
@@ -381,7 +383,7 @@ impl<'o, 'i> Events<'o, 'i> {
         cfg.trim_text_start = false;
         cfg.trim_text_end = false;
         cfg.expand_empty_elements = false;
-        Events { reader, opts, end_names, open: Vec::new(), scope: Vec::new(), pending: false, span: 0..0 }
+        Events { reader, opts, end_names, open: Vec::new(), scope: Vec::new(), pending: false, rooted: false, span: 0..0 }
     }
 
     /// The bytes of the input the last event was read from. Both events of an empty element
@@ -451,8 +453,13 @@ impl<'o, 'i> Events<'o, 'i> {
                 if t.is_empty() {
                     return Ok(None);
                 }
+                // Outside the root element only white space may stand (XML 1.0 [1], [27]).
+                if self.outside_root() && t.iter().any(|b| !matches!(b, b' ' | b'\t' | b'\r' | b'\n')) {
+                    return self.syntax("text outside the root element");
+                }
                 Event::Text(line_ends(self.decode(&t)?))
             }
+            Q::CData(_) | Q::GeneralRef(_) if self.outside_root() => return self.syntax("text outside the root element"),
             Q::CData(t) => Event::CData(line_ends(self.decode(&t)?)),
             Q::GeneralRef(r) => {
                 let name = self.decode(&r)?;
@@ -552,8 +559,17 @@ impl<'o, 'i> Events<'o, 'i> {
         Ok(())
     }
 
+    /// In a strict read: is the reader before or after the root element?
+    fn outside_root(&self) -> bool {
+        self.opts.strict && self.open.is_empty()
+    }
+
     fn start(&mut self, e: &BytesStart<'_>) -> Result<Event, Error> {
         let limits = self.opts.limits;
+        if self.outside_root() && self.rooted {
+            return self.syntax("more than one root element");
+        }
+        self.rooted = true;
         if self.open.len() >= limits.max_depth {
             return Err(Error::TooDeep(limits.max_depth));
         }

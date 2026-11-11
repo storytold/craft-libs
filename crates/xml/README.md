@@ -74,7 +74,7 @@ A lenient read keeps what a damaged document had:
 - a malformed attribute is skipped; bytes that are not UTF-8 become U+FFFD.
 
 A strict read makes each of those an error, and also a second root element and text outside the
-root. Markup the tokenizer cannot read (`<a b='1`, an unterminated comment) is an error either
+root, in the pull reader as in the tree. Markup the tokenizer cannot read (`<a b='1`, an unterminated comment) is an error either
 way. A repeated attribute is kept each time in both.
 
 ### Text
