@@ -411,3 +411,42 @@ fn a_node_count_charges_a_budget_shared_by_several_parts() {
     let short = Options::default().with_limits(Limits { max_nodes: 200, ..Limits::DEFAULT });
     assert_eq!(short.parse(part.as_bytes()), Err(Error::TooManyNodes(200)));
 }
+
+/// A part that cannot be read to its end still gives what came before the failure.
+#[test]
+fn a_failed_streaming_read_returns_what_it_had() {
+    let opts = Options::local().with_limits(Limits { max_nodes: 1000, ..Limits::DEFAULT });
+    let sheet = |row: &str| format!("<worksheet><cols><col min='1'/></cols><sheetData><row r='1'/>{row}</sheetData><mergeCells/></worksheet>");
+    // one row over the node limit
+    let huge = sheet(&format!("<row r='2'>{}</row>", "<c/>".repeat(1001)));
+    let mut rows = Vec::new();
+    let (root, err) = opts.parse_streaming_partial(huge.as_bytes(), &["row"], |r| {
+        rows.push(r.attr_u32("r"));
+        Ok::<(), Error>(())
+    });
+    assert_eq!(err, Some(Error::TooManyNodes(1000)));
+    let root = root.unwrap();
+    assert!(root.child("cols").is_some(), "what was complete before the error is kept");
+    assert!(root.child("mergeCells").is_none(), "nothing after it is");
+    assert_eq!(rows, [Some(1)], "the row that failed is not handed out");
+    assert_eq!(
+        root.child("sheetData").and_then(|d| d.child("row")).and_then(|r| r.attr_u32("r")),
+        Some(2),
+        "it is in the tree, as far as it was read"
+    );
+    // the same input through parse_streaming is the error alone
+    assert_eq!(opts.parse_streaming(huge.as_bytes(), &["row"], |_| Ok::<(), Error>(())), Err(Error::TooManyNodes(1000)));
+    // an error from the callback
+    let (root, err) = opts.parse_streaming_partial(sheet("").as_bytes(), &["row"], |_| Err(Error::NoRoot));
+    assert_eq!((root.map(|r| r.children.len()), err), (Some(2), Some(Error::NoRoot)));
+    // markup the tokenizer cannot read
+    let (root, err) = opts.parse_streaming_partial(b"<worksheet><cols/><sheetData><row b='1", &["row"], |_| Ok::<(), Error>(()));
+    assert!(matches!(err, Some(Error::Syntax { .. })), "{err:?}");
+    assert!(root.is_some_and(|r| r.child("cols").is_some()));
+    // a whole document, and nothing at all
+    let (root, err) = opts.parse_streaming_partial(sheet("").as_bytes(), &["row"], |_| Ok::<(), Error>(()));
+    assert_eq!((root.map(|r| r.children.len()), err), (Some(3), None));
+    assert_eq!(opts.parse_streaming_partial(b"", &[], |_| Ok::<(), Error>(())), (None, Some(Error::NoRoot)));
+    let tiny = Options::default().with_limits(Limits { max_input: 2, ..Limits::DEFAULT });
+    assert_eq!(tiny.parse_streaming_partial(b"<a/>", &[], |_| Ok::<(), Error>(())), (None, Some(Error::TooLarge(2))));
+}

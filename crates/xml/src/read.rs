@@ -244,25 +244,45 @@ impl<'a> Options<'a> {
     /// are gone, so a part of any length can be read; each one is itself held to the limit.
     ///
     /// An error from `each` stops the read and is returned.
-    pub fn parse_streaming<E: From<Error>>(&self, bytes: &[u8], split: &[&str], mut each: impl FnMut(El) -> Result<(), E>) -> Result<El, E> {
+    pub fn parse_streaming<E: From<Error>>(&self, bytes: &[u8], split: &[&str], each: impl FnMut(El) -> Result<(), E>) -> Result<El, E> {
+        match self.parse_streaming_partial(bytes, split, each) {
+            (_, Some(e)) => Err(e),
+            (root, None) => root.ok_or_else(|| Error::NoRoot.into()),
+        }
+    }
+
+    /// [`Options::parse_streaming`] that also returns what it had read when it failed: the
+    /// root with the children that were complete (and not handed out) before the error, and
+    /// the elements still open at that point with what they held. A worksheet whose rows
+    /// cannot all be read still gives its properties and merged cells. `(None, Some(_))` when
+    /// nothing was read; `(Some(_), None)` is a whole document.
+    ///
+    /// The partial tree is not a document: it stops where the error was, and an open element
+    /// named in `split` is attached to it instead of being handed to `each`.
+    pub fn parse_streaming_partial<E: From<Error>>(
+        &self,
+        bytes: &[u8],
+        split: &[&str],
+        mut each: impl FnMut(El) -> Result<(), E>,
+    ) -> (Option<El>, Option<E>) {
         if bytes.len() > self.limits.max_input {
-            return Err(Error::TooLarge(self.limits.max_input).into());
+            return (None, Some(Error::TooLarge(self.limits.max_input).into()));
         }
         let text = to_utf8(bytes);
         let mut events = Events::new(*self, &text, false);
         let mut tree = Builder { opts: self, split, stack: Vec::new(), marks: Vec::new(), kept: 0, attrs: 0, root: None, at: 0 };
-        while let Some(ev) = events.next()? {
-            tree.at = events.span().start;
-            tree.event(ev, &mut each)?;
-            if !self.strict && tree.root.is_some() {
-                break;
+        let mut err = tree.run(&mut events, &mut each).err();
+        // What was open when the read stopped goes into its parent as it is.
+        while let Some(el) = tree.stack.pop() {
+            match tree.stack.last_mut() {
+                Some(parent) => parent.children.push(Node::El(el)),
+                None => tree.root = Some(el),
             }
         }
-        // A lenient read keeps what a truncated document had; a strict one failed above.
-        while let Some(el) = tree.stack.pop() {
-            tree.finish(el, &mut each)?;
+        if tree.root.is_none() && err.is_none() {
+            err = Some(Error::NoRoot.into());
         }
-        tree.root.ok_or_else(|| Error::NoRoot.into())
+        (tree.root, err)
     }
 
     /// The first element that matches, from its start tag alone: its name and attributes, no
@@ -599,6 +619,21 @@ struct Builder<'b, 'o> {
 }
 
 impl Builder<'_, '_> {
+    fn run<E: From<Error>>(&mut self, events: &mut Events<'_, '_>, each: &mut impl FnMut(El) -> Result<(), E>) -> Result<(), E> {
+        while let Some(ev) = events.next()? {
+            self.at = events.span().start;
+            self.event(ev, each)?;
+            if !self.opts.strict && self.root.is_some() {
+                break;
+            }
+        }
+        // A lenient read keeps what a truncated document had; a strict one failed above.
+        while let Some(el) = self.stack.pop() {
+            self.finish(el, each)?;
+        }
+        Ok(())
+    }
+
     fn count(&mut self) -> Result<(), Error> {
         self.kept = self.kept.saturating_add(1);
         if self.kept > self.opts.limits.max_nodes { Err(Error::TooManyNodes(self.opts.limits.max_nodes)) } else { Ok(()) }

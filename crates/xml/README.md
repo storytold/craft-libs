@@ -49,7 +49,9 @@ assert_eq!((rows, sheet.map(|s| s.children.len())), (3, Ok(0)));
 | `max_attrs` | 1024 on one start tag, namespace declarations and malformed ones included; with canonical names, also the declarations in scope at once | `TooManyAttrs` |
 | `max_attrs_total` | 4,000,000 attributes kept in the tree, over all its elements | `TooManyAttrsTotal` |
 
-A limit exceeded is an error, never a panic and never a truncated tree. Elements handed to a
+A limit exceeded is an error, never a panic and never a truncated tree. `parse_streaming_partial`
+returns the error together with what had been read, for a caller that wants the part's other
+children when its rows cannot all be read; that tree is marked as partial by the error beside it. Elements handed to a
 streaming callback leave the node and attribute counts, so a streamed part may be of any length. Text is not
 counted separately: nothing expands, so it is never more than three times the input (the worst
 case is input that is not UTF-8, where each bad byte becomes U+FFFD).
