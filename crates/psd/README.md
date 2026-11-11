@@ -96,6 +96,12 @@ pixels::{samples_u16, samples_f32, u16_to_bytes, f32_to_bytes, unpack_bits, plan
 descriptor::{Descriptor, VersionedDescriptor, Value, Id, Class, ReferenceItem, UnicodeString, ObjectArray}
 Descriptor::from_bytes / to_bytes;  VersionedDescriptor::from_bytes / to_bytes (version 16)
 
+// Text engine data (`EngineData` in `TySh`, and the document's `Txt2`)
+engine_data::parse(&[u8]) -> Result<Value, ParseError>;  write(&Value);  write_bare(&[(String, Value)])
+engine_data::Value::{Dict, Array, String, RawString, Int, Real, Bool, Name}   // RawString is written back as the same bytes
+engine_data::first_style(&Value) -> TextStyle   // font, size, fill, justification, tracking, leading, faux styles, box text
+engine_data::minimal(text, font, size, rgb, justification) -> Vec<u8>
+
 // Builder
 PsdBuilder::new(w, h).color_mode(..).depth(8|16).version(..).compression(..).resolution(dpi).icc_profile(..)
 builder.push_layer(LayerSpec) / begin_group(GroupSpec) / end_group()? / composite(PixelData)
@@ -142,7 +148,7 @@ allocations for padded channels return an error on failure.
 ### Preserved raw, not yet typed (parsers planned for M8)
 
 * Layer effects: `lfx2`, `lrFX`, `lmfx`. The descriptors inside can be parsed on demand with `VersionedDescriptor::from_bytes(&block.data[4..])`.
-* Type layers: `TySh`, `tySh`, and the EngineData inside them.
+* Type layers: `TySh`, `tySh`. The EngineData inside them has a parser and writer (`engine_data`); the blocks themselves are not typed.
 * Smart objects: `SoLd`, `PlLd`, `SoLE`, `lnk2`, `lnkD`, `lnk3`.
 * Vector masks and shapes: `vmsk`, `vsms`, `vogk`, `vscg`.
 * Adjustment and fill layers: `curv`, `levl`, `hue2`, `SoCo`, `GdFl`, `PtFl`, …, plus `Patt`, `Txt2`, `FMsk`, 3D and video blocks.

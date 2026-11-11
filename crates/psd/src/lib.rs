@@ -13,6 +13,7 @@
 //! * [`PsdBuilder`] constructs new files from RGBA/gray/CMYK buffers; the
 //!   caller supplies the merged composite (this crate never composites).
 //! * [`descriptor`] parses and writes ActionDescriptors.
+//! * [`engine_data`] parses and writes the text engine document of type layers.
 //!
 //! Implemented clean-room from Adobe's public "Photoshop File Formats
 //! Specification". Undocumented details that follow MIT-licensed psd-tools
@@ -53,6 +54,7 @@ mod codepage;
 pub mod compression;
 pub mod csh;
 pub mod descriptor;
+pub mod engine_data;
 pub mod error;
 pub mod file;
 pub mod filter_effects;
