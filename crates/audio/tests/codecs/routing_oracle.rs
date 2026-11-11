@@ -1,8 +1,8 @@
 //! `craft_audio::decode` routes each container and codec below to the home-grown demuxers and
 //! decoders, or to symphonia (FLAC): each pair decodes, sample-aligned, to its presentation length
-//! (edit lists, Matroska `CodecDelay` and `DiscardPadding` applied), within an SNR
-//! of ffmpeg's decode; truncated and corrupted copies never panic. Fixtures are written by ffmpeg
-//! (skipped without it).
+//! (edit lists, Matroska `CodecDelay` and `DiscardPadding`, Ogg Opus pre-skip and end trimming
+//! applied), within an SNR of ffmpeg's decode; truncated and corrupted copies never panic. Fixtures
+//! are written by ffmpeg (skipped without it).
 
 use craft_audio::{ChannelLayout, CodecId, Container, decode, probe};
 use std::path::{Path, PathBuf};
@@ -92,6 +92,58 @@ const CASES: &[Case] = &[
         args: &["-c:a", "aac", "-b:a", "128k", "-aac_pns", "0"],
         container: Container::Matroska,
         codec: CodecId::Aac,
+        layout: ChannelLayout::STEREO,
+        channels: 2,
+        frames: Some(240_000),
+        min_snr: 120.0,
+    },
+    Case {
+        name: "opus.opus",
+        surround: false,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "libopus", "-b:a", "128k"],
+        container: Container::Ogg,
+        codec: CodecId::Opus,
+        layout: ChannelLayout::STEREO,
+        channels: 2,
+        frames: Some(240_000),
+        min_snr: 120.0,
+    },
+    Case {
+        name: "opus-5.1.opus",
+        surround: true,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "libopus", "-b:a", "256k", "-mapping_family", "1"],
+        container: Container::Ogg,
+        codec: CodecId::Opus,
+        layout: ChannelLayout::SURROUND_5_1,
+        channels: 6,
+        frames: Some(240_000),
+        min_snr: 120.0,
+    },
+    Case {
+        name: "opus.webm",
+        surround: false,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "libopus", "-b:a", "96k"],
+        container: Container::WebM,
+        codec: CodecId::Opus,
+        layout: ChannelLayout::STEREO,
+        channels: 2,
+        frames: Some(240_000),
+        min_snr: 120.0,
+    },
+    Case {
+        name: "opus.mp4",
+        surround: false,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "libopus", "-b:a", "96k"],
+        container: Container::Mp4,
+        codec: CodecId::Opus,
         layout: ChannelLayout::STEREO,
         channels: 2,
         frames: Some(240_000),
@@ -368,9 +420,12 @@ fn streaming_and_seeking_match_the_whole_file_decode() {
             }
             assert_eq!(after[0].len(), whole.frames() - target, "{}: frames after a seek to {target}", c.name);
             let expected: Vec<Vec<f32>> = whole.channels.iter().map(|ch| ch[target..].to_vec()).collect();
-            // AC-3 / E-AC-3 dither is seeded from each syncframe, and the pre-roll frame restores
-            // the overlap: exact too.
-            assert!(after == expected, "{}: SNR {:.1} dB after a seek to {target}", c.name, snr_planar(&after, &expected));
+            let s = snr_planar(&after, &expected);
+            // Opus rebuilds its predictor state from the pre-roll. The rest are exact, AC-3 / E-AC-3
+            // too: their dither is seeded from each syncframe, and the pre-roll frame restores the
+            // overlap.
+            let bound = if c.codec == CodecId::Opus { c.min_snr.min(25.0) } else { f64::INFINITY };
+            assert!(s >= bound, "{}: SNR {s:.1} dB after a seek to {target}", c.name);
         }
     }
 }
@@ -382,7 +437,7 @@ fn track_decoder_on_demuxed_packets_matches_decode() {
     use craft_audio::TrackDecoder;
     use craft_media::isobmff;
     let ff = require_ffmpeg!();
-    for name in ["aac.m4a", "aac-5.1.m4a", "pcm-s24be.mov"] {
+    for name in ["aac.m4a", "aac-5.1.m4a", "opus.mp4", "pcm-s24be.mov"] {
         let c = CASES.iter().find(|c| c.name == name).unwrap();
         let Some(path) = fixture(&ff, c) else { continue };
         let bytes = std::fs::read(&path).unwrap();
