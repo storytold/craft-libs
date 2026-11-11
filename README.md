@@ -62,14 +62,23 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-docpath`](crates/docpath/src/lib.rs): decides whether a path or `file:` URL stored in a
   document may be opened. Paths stored in documents are followed only when they are local or on the
   document's own network share; other network paths, device paths and non-file URLs are refused.
+- [`craft-dpx`](crates/dpx/src/lib.rs): DPX (SMPTE ST 268) and Kodak Cineon frames, from PhotoCraft,
+  FilmCraft and EffectCraft: header fields and code values at 8, 10, 12 and 16 bits in both byte
+  orders, filled and packed, RGB, RGBA, ABGR, luma and Y'CbCr descriptors, and a writer for both
+  formats. Bounded on hostile input. Colour conversion and orientation stay in each app.
 - [`craft-drawingml`](crates/drawingml/README.md): the DrawingML that PPTX, DOCX and XLSX share:
   EMU units and `a:xfrm`, colours with theme slots and colour transforms, preset shape outlines
   (`a:prstGeom`), custom geometry with guide formulas (`a:custGeom`) and preset text warps
   (`a:prstTxWarp`). From DeckCraft. Takes `craft-xml` trees; packages stay with each format.
+- [`craft-eps`](crates/eps/README.md): Encapsulated PostScript files as a container: the binary
+  preview header (read and write), the DSC header comments and bounding boxes (also `(atend)`),
+  the EPSI preview bitmap, ASCII85 data, and telling EPS, PostScript and Illustrator files
+  (PostScript- or PDF-based) apart. No PostScript interpreter.
 - [`craft-dxf`](crates/dxf/src/lib.rs): DXF tag reader and writer, from CADCraft: ASCII and
   binary DXF as (group code, value) tags, split into sections and entities, with pre-2007 code
-  pages and version detection, and written back. Bounded on hostile input. Mapping tags to a
-  drawing stays in each app.
+  pages and version detection, and written back; and `model`, the drawing above the tags (header
+  variables, tables, blocks, layouts), merged from CADCraft's and VectorCraft's readers. Bounded
+  on hostile input. Mapping the model onto a document stays in each app.
 - [`craft-ecproj-format`](crates/ecproj-format/README.md): the envelope of EffectCraft `.ecproj`
   project files: `savedBy`, the schema version and its check, and the file object with the
   project and its saved view as type parameters. The project model stays in EffectCraft.
@@ -78,6 +87,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   and message, images, and the vector network and geometry blobs. Bounded on hostile input.
   Carved from FigCraft.
 - [`craft-epub`](crates/epub/README.md): EPUB packages: the OCF ZIP container, the package document (metadata, manifest, spine) and the navigation document, written as EPUB 3 (reflowable and fixed layout) and read (EPUB 2 and 3) with bounded entry sizes. Content documents are the caller's.
+- [`craft-exr`](crates/exr/src/lib.rs): OpenEXR pieces shared by PhotoCraft and EffectCraft: layer
+  and channel names, the channels that make a colour picture, and Cryptomatte IDs, metadata keys,
+  manifests and rank channels. Takes names and attribute text; decoding is not part of it yet.
 - [`craft-font-catalog`](crates/font-catalog/README.md): the installed fonts on every platform
   (font folders, fontconfig and Flatpak host folders, CoreText, DirectWrite, the font store),
   lookup by family, style, localized, legacy, full and PostScript names, family loads shared
@@ -101,6 +113,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   millimetres to `G0`/`G1` moves with laser power and feed, for cutting lasers and plotters, as a
   commented file or as bare lines for streaming. Its `grbl` module has the real-time command bytes
   and the status and acknowledgement parsers.
+- [`craft-hdr`](crates/hdr/src/lib.rs): Radiance HDR (RGBE) picture reader, from FilmCraft: flat,
+  old and new run-length scan lines and all eight axis orders, to linear float RGB. Scan lines are
+  validated before the picture is allocated.
 - [`craft-heif`](crates/heif/README.md): optional HEIF/HEIC still-image decoder, from LightCraft:
   heic-rs reads the container and HEVC pictures, and this crate converts to 16-bit RGB to match
   libheif (VUI range and matrix, chroma upsampling, `imir`, ICC on grid tiles). Also orientation,
@@ -113,9 +128,14 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   what PhotoCraft's and FilmCraft's readers added: container parsing and decompression to a neutral
   raw image (samples, CFA, black and white levels, active area, crop, orientation, colour tags,
   opcode lists, embedded previews), one Cargo feature per format. DNG reading and writing,
+  Hasselblad 3FR/FFF, Minolta MRW, Epson ERF, Mamiya MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2 and Canon CRW (through
   Hasselblad 3FR/FFF, Minolta MRW, Epson ERF, Mamiya MEF, Kodak DCS, Pentax PEF, Samsung SRW and Canon CRW (through
   `craft-crw`) so far; demosaicing and everything after stay with the develop
   pipeline.
+- [`craft-tga`](crates/tga/src/lib.rs): Truevision Targa, from FilmCraft (reader) and PhotoCraft
+  (writer): true-colour, grayscale and colour-mapped pictures, raw or run-length encoded, any
+  origin, to RGBA8, and a run-length writer whose packets end with their scan line. Bounded on
+  hostile input.
 - [`craft-idml`](crates/idml/README.md): IDML (InDesign Markup Language) packages: the ZIP container read with bounded part sizes and lenient part names, `designmap.xml` with its includes in place, the `<Properties>` form on craft-xml elements, value codecs and the package writer; and InDesign Tagged Text, read and written.
 - [`craft-timeline`](crates/timeline/README.md): editorial timeline interchange: exact media time and SMPTE timecode, import/export reports, media path and `file://` URL handling, Avid Log Exchange (ALE) and CMX 3600 EDL documents, format detection. From FilmCraft.
 - [`craft-tiff`](crates/tiff/README.md): TIFF and BigTIFF IFD reader and writer, from LightCraft:
@@ -136,6 +156,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-jpeg`](crates/jpeg/README.md): clean-room decoder for 12-bit and arithmetic-coded
   JPEG (T.81 SOF0/SOF1 at 12 bits, SOF9, SOF10), from PhotoCraft, and a frame probe for routing.
   Metadata stays in each app.
+- [`craft-raster-codecs`](crates/raster-codecs/README.md): small raster formats, one module each,
+  from PhotoCraft: DDS (BC1 to BC3, read and write), DICOM, FITS (read and write), IFF/ILBM (read
+  and write), PCX, PNM/PAM/PFM (read and write) and XPM, into one flat image type. Bounded and
+  panic-free on hostile input. Colour, orientation and the document mapping stay in each app.
 - [`craft-kiwi`](crates/kiwi/README.md): clean-room decoder and encoder for the kiwi binary schema
   format (the encoding inside `.fig` files): a schema of enums, structs and messages, and messages
   decoded with it into a tree keyed by field name. Bounded on hostile input. Carved from FigCraft.
@@ -160,6 +184,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   stay in each app.
 - [`craft-mesh`](crates/mesh/README.md): 3D mesh file formats behind one neutral model (meshes
   of polygons with per-corner indices, materials, a node hierarchy): STL, OBJ with MTL, PLY,
+  glTF 2.0 / GLB and 3MF, one feature each. Readers are bounded by `Limits`, never open a file themselves
   glTF 2.0 / GLB and FBX, one feature each. Readers are bounded by `Limits`, never open a file themselves
   and never panic. Carved from EffectCraft, SolidCraft, TextureCraft and MaterialCraft.
 - [`craft-midi`](crates/midi/README.md): Standard MIDI Files: a bounded reader for formats 0, 1 and
@@ -169,6 +194,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   header fields, MIME parts and multiparts, encoded-words, RFC 2231 parameters, base64 and
   quoted-printable, character sets, address lists, dates, mbox files and the `multipart/related`
   lookups of MHT web archives. What a message means (body, attachments, flags) stays in each app.
+- [`craft-offcrypto`](crates/offcrypto/README.md): clean-room Office document cryptography ([MS-OFFCRYPTO]): password-encrypted OOXML packages on `craft-cfb` (agile and standard encryption read, with the integrity check enforced; agile written), unsupported schemes named, and the password hashes of document and sheet protection.
 - [`craft-opc`](crates/opc/README.md): Open Packaging Conventions, the ZIP container of DOCX, XLSX and PPTX
   files: bounded readers (every part up front, or on demand), part names, relationships, content
   types and a deterministic package writer. What the parts hold stays with each format's crate.
@@ -189,6 +215,12 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   craft-i18n's `language-data/`, embedded at build time from `CRAFT_I18N_DIR`: English and the
   carry-over locales by default, the set `CRAFT_PROOF_EMBED` names otherwise (`en` for English
   only); other languages come from installed Language packs.
+
+- [`craft-pst`](crates/pst/README.md): Outlook personal folders files (`.pst`, [MS-PST]) read over any
+  `Read + Seek`, from MailCraft: the node database, property and table contexts, folders, messages,
+  recipients, attachments, attached messages and named properties, ANSI and Unicode, encoded or not,
+  with a password. Salvages damaged files. Bounded and panic-free on hostile input. What an item
+  means stays in each app.
 
 - [`craft-quit`](crates/quit/src/lib.rs): native macOS quit, egui close handling and an optional
   app menu. Unsaved-document decisions and save prompts stay in each app.
@@ -227,6 +259,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-y4m`](crates/y4m/src/lib.rs): YUV4MPEG2 (`.y4m`) reader, from FilmCraft: the stream
   header, colour space layouts at 8 to 16 bits, a frame index built from the `FRAME` lines without
   loading the file, and plane access. Bounded on hostile input.
+- [`craft-kra`](crates/kra/README.md): Krita documents (`.kra`, `.krz`), read: the ZIP archive, the `maindoc.xml` node tree as written, and the tiled pixel files with their LZF compression, a tile at a time. From PhotoCraft.
 - [`craft-xml`](crates/xml/README.md): bounded XML for hostile input: an owned element tree with limits on size, depth, nodes and attributes, streaming of repeated elements, namespace handling (as written, by local name, or canonical prefixes by URI), escaping and a writer. No DTDs and no entity expansion.
 - [Shared UI component audit](docs/ui-components-audit.md): source inventory, extraction priorities
   and compatibility boundaries across the Craft suite.
