@@ -178,7 +178,11 @@ impl Encoder {
     /// (total for all channels; clamped to 6 kb/s per channel – 510 kb/s), choosing the mode
     /// and bandwidth for `application`.
     pub fn with_application(channels: u8, bitrate_bps: u32, application: Application) -> Result<Self, Error> {
-        let c = channels.max(1) as u32;
+        // Checked before the clamp below, whose lower bound passes its upper one from 86 channels.
+        if channels != 1 && channels != 2 {
+            return Err(Error::Channels(channels));
+        }
+        let c = channels as u32;
         let (mode, bandwidth) = choose_mode(application, bitrate_bps.clamp(6_000 * c, 510_000) / c);
         Self::build(channels, bitrate_bps, application, mode, bandwidth)
     }

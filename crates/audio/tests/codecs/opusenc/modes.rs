@@ -235,6 +235,12 @@ fn invalid_mode_bandwidth_is_an_error() {
     assert_eq!(OpusEncoder::with_mode(1, 16_000, Mode::Silk, Bandwidth::Fullband).err(), Some(Error::ModeBandwidth(Mode::Silk, Bandwidth::Fullband)));
     assert_eq!(OpusEncoder::new(3, 128_000).err(), Some(Error::Channels(3)));
     assert_eq!(OpusEncoder::new(0, 128_000).err(), Some(Error::Channels(0)));
+    // From 86 channels the per-channel minimum bitrate passes the 510 kb/s cap.
+    for channels in [86, u8::MAX] {
+        assert_eq!(OpusEncoder::new(channels, 128_000).err(), Some(Error::Channels(channels)));
+        let app = OpusEncoder::with_application(channels, 128_000, Application::Voip).err();
+        assert_eq!(app, Some(Error::Channels(channels)));
+    }
 }
 
 #[test]
