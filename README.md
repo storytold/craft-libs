@@ -53,8 +53,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   document's own network share; other network paths, device paths and non-file URLs are refused.
 - [`craft-dxf`](crates/dxf/src/lib.rs): DXF tag reader and writer, from CADCraft: ASCII and
   binary DXF as (group code, value) tags, split into sections and entities, with pre-2007 code
-  pages and version detection, and written back. Bounded on hostile input. Mapping tags to a
-  drawing stays in each app.
+  pages and version detection, and written back; and `model`, the drawing above the tags (header
+  variables, tables, blocks, layouts), merged from CADCraft's and VectorCraft's readers. Bounded
+  on hostile input. Mapping the model onto a document stays in each app.
 - [`craft-ecproj-format`](crates/ecproj-format/README.md): the envelope of EffectCraft `.ecproj`
   project files: `savedBy`, the schema version and its check, and the file object with the
   project and its saved view as type parameters. The project model stays in EffectCraft.
