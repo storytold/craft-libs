@@ -427,6 +427,31 @@ test('gpu_batch_done wraps the hook outcomes as per-job results, in order', asyn
   );
 });
 
+// CodeRabbit finding on routing.js:313: "docs/a", "/docs/a", then "docs/a" again used to queue
+// two distinct pending entries, even though both map to the same OPFS file (keyToSegments
+// already strips a leading slash). A flush could write the older value last and lose the
+// latest one while still reporting both confirmed.
+test('docs/a and /docs/a coalesce into one pending entry, not two', async () => {
+  const seen = [];
+  const ctx = bootRouting({
+    flushHook: async ({ pending }) => {
+      seen.push(pending.map((p) => ({ key: p.key, bytes: p.bytes })));
+      return { pending_count: pending.length };
+    },
+  });
+  const p = makePort();
+  ctx.handleHostMessage(p.port, { type: 'storage_put', key: 'docs/a', bytes: [1] });
+  ctx.handleHostMessage(p.port, { type: 'storage_put', key: '/docs/a', bytes: [2] });
+  ctx.handleHostMessage(p.port, { type: 'storage_put', key: 'docs/a', bytes: [3] });
+  ctx.handleHostMessage(p.port, { type: 'storage_flush' });
+  await tick();
+
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].length, 1, `docs/a and /docs/a must coalesce into one entry, got ${JSON.stringify(seen[0])}`);
+  assert.equal(seen[0][0].key, 'docs/a');
+  assert.deepEqual(Array.from(seen[0][0].bytes), [3], 'the latest write must be the one that lands, not an earlier spelling');
+});
+
 test('a write that changes mid-flush is not dropped as confirmed by a stale success', async () => {
   let resolveFirstHook;
   const ctx = bootRouting({
@@ -552,6 +577,29 @@ test('OPFS: deleting a key that was never written is a no-op, not an error', asy
   const { ctx } = bootOpfs({ appId: 'collabphoto' });
   const result = await ctx.craftRuntimeFlushPending({ pending: [{ key: 'docs/never-existed.bin', bytes: [], deleted: true }], app_id: 'collabphoto' });
   assert.equal(result.pending_count, 1);
+});
+
+// CodeRabbit finding on opfs-flush.js:146: a malformed entry (e.g. null) used to be silently
+// skipped while pending_count still reported the full batch length, so a caller using the count
+// as an acknowledgment could discard an entry that was never actually written. The whole batch
+// must now reject up front instead, before anything is written, so nothing it covers is ever
+// wrongly reported confirmed.
+test('OPFS: a malformed pending entry rejects the whole batch before writing anything', async () => {
+  const { ctx, root } = bootOpfs({ appId: 'collabphoto' });
+  await assert.rejects(
+    () =>
+      ctx.craftRuntimeFlushPending({
+        pending: [
+          { key: 'docs/a.bin', bytes: [1], deleted: false },
+          null,
+          { key: 'docs/b.bin', bytes: [2], deleted: false },
+        ],
+        app_id: 'collabphoto',
+      }),
+    /malformed pending entry/,
+    'a malformed entry must reject the whole batch, never a partial success',
+  );
+  assert.equal(root.dirs.size, 0, 'nothing must be written when the batch is rejected');
 });
 
 // CodeRabbit finding on opfs-flush.js:105: removeEntry's catch (and the parent-directory catch

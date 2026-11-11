@@ -137,14 +137,20 @@ async function craftRuntimeFlushPending(data) {
   if (pending.length === 0) {
     return { pending_count: 0 };
   }
+  // Reject a malformed entry outright, before writing anything (CodeRabbit finding on
+  // opfs-flush.js:146): the caller trusts pending_count as a PREFIX count ("this many, oldest
+  // first, are confirmed"), so silently skipping one entry in the middle while still reporting
+  // pending.length would let the caller treat an unwritten entry as confirmed and discard it.
+  for (const entry of pending) {
+    if (!entry || typeof entry.key !== 'string') {
+      throw new Error('craft-opfs-flush: malformed pending entry (missing or non-string key)');
+    }
+  }
   if (!hasOpfs()) {
     throw new Error('OPFS is unavailable');
   }
   const root = await navigator.storage.getDirectory();
   for (const entry of pending) {
-    if (!entry || typeof entry.key !== 'string') {
-      continue;
-    }
     if (entry.deleted) {
       await removeWarmKey(root, entry.key, appId);
       continue;

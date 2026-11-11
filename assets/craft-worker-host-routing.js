@@ -61,6 +61,14 @@ function portAppId(port) {
   return typeof port.craftAppId === 'string' ? port.craftAppId : UNINITIALIZED_APP_ID;
 }
 
+/** Strips every leading `/`, matching StoreKey::new (crates/tier-store/src/key.rs) and
+ * keyToSegments (opfs-flush.js). Without this, "docs/a" and "/docs/a" queued as two distinct
+ * pending entries: both map to the same OPFS file, so a flush could write the older value last
+ * and lose the newer one, even though the router itself reported both as confirmed. */
+function normalizeKey(key) {
+  return String(key).replace(/^\/+/, '');
+}
+
 /** The Map a port's storage_put / storage_delete / storage_flush should act on right now: its
  * app partition once `init` has recorded an app id, or its own pre-init buffer before that. */
 function activeBufferFor(port) {
@@ -281,7 +289,7 @@ function handleHostMessage(port, data) {
         return;
       }
       const partition = activeBufferFor(port);
-      const key = String(data.key);
+      const key = normalizeKey(data.key);
       const existing = partition.get(key);
       if (existing) {
         // Mutate the already-queued entry in place, bumping its revision: a flush already
@@ -300,7 +308,7 @@ function handleHostMessage(port, data) {
         return;
       }
       const partition = activeBufferFor(port);
-      const key = String(data.key);
+      const key = normalizeKey(data.key);
       const existing = partition.get(key);
       if (existing) {
         existing.bytes = [];
