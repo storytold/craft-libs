@@ -53,5 +53,9 @@ name = "oracle_mux"
 required-features = ["isobmff"]
 
 [[test]]
+name = "oracle_ogg"
+required-features = ["ogg"]
+
+[[test]]
 name = "roundtrip"
 required-features = ["isobmff"]
