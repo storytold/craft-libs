@@ -120,6 +120,21 @@ fn storage_put_within_budget_still_succeeds() {
     assert_eq!(runtime.store_get(&StoreKey::new("config/small")), Some(vec![0u8; 5]));
 }
 
+/// CodeRabbit finding on runtime.rs:252: the backpressure check used to compare only the
+/// incoming byte count against the remaining budget, missing that `MirrorStore::put` adds BOTH
+/// a resident and a pending copy. A 6-byte write against a 10-byte budget passed the old check
+/// (6 <= 10) but actually left 12 tracked bytes behind, over budget, with no eviction able to
+/// correct a `config/` key. It must be refused now.
+#[test]
+fn storage_put_accounts_for_both_the_resident_and_pending_copy() {
+    let mut runtime = Runtime::builder().null_context().mirror_byte_budget(10).build();
+
+    let reply = runtime.handle_host_message(HostMessage::StoragePut { key: "config/a".into(), bytes: vec![0u8; 6] });
+
+    assert!(matches!(reply.as_slice(), [WorkerMessage::Error { .. }]), "6 resident + 6 pending = 12 bytes must be refused against a 10-byte budget, got {reply:?}");
+    assert_eq!(runtime.store_get(&StoreKey::new("config/a")), None);
+}
+
 /// StorageDelete carries a tombstone through to the exported flush batch (CodeRabbit finding on
 /// worker-host/protocol.rs:17): `MirrorStore::delete` already produces one, but nothing on the
 /// wire could represent it before `PendingFlushEntry::deleted` and `HostMessage::StorageDelete`
@@ -221,6 +236,47 @@ fn an_unacknowledged_export_survives_an_intervening_empty_flush() {
     };
     assert_eq!(*pending_count, 1);
     assert_eq!(pending.as_ref().expect("pending export without FlushSink")[0].bytes, b"pending");
+}
+
+/// CodeRabbit finding on runtime.rs:281: `take_pending` drops a flush batch's bytes from the
+/// mirror's own `pending_bytes` accounting the moment it is exported, so an export sitting
+/// unacknowledged used to cost nothing against the budget. With a 10-byte budget, exporting a
+/// 4-byte `config/a` write (4 resident + 4 exported-but-unacked = 8 tracked) must still be
+/// remembered against a second, unrelated 4-byte write: 8 + 4 (resident) + 4 (pending) = 16,
+/// over budget, even though the mirror's own `pending_bytes` alone would read 0 right now.
+#[test]
+fn an_unacknowledged_export_still_counts_against_the_budget_for_new_writes() {
+    let mut runtime = Runtime::builder().null_context().mirror_byte_budget(10).build();
+    let reply = runtime.handle_host_message(HostMessage::StoragePut { key: "config/a".into(), bytes: vec![0u8; 4] });
+    assert_eq!(reply, Vec::new());
+    runtime.handle_host_message(HostMessage::StorageFlush);
+
+    let reply = runtime.handle_host_message(HostMessage::StoragePut { key: "config/b".into(), bytes: vec![0u8; 4] });
+    assert!(
+        matches!(reply.as_slice(), [WorkerMessage::Error { .. }]),
+        "an unacknowledged export must still count against the budget for a later write, got {reply:?}"
+    );
+    assert_eq!(runtime.store_get(&StoreKey::new("config/b")), None);
+}
+
+/// Once the export is acknowledged, its charge is released. With the 4 exported bytes still
+/// charged, resident (4, permanent: `config/` is never LRU-evicted) + exported (4) + a new
+/// 2-byte write's own two copies (4) would total 12, over a 10-byte budget. Once the export's
+/// charge is released, the same write totals 8 and fits.
+#[test]
+fn releasing_an_acknowledged_export_frees_its_share_of_the_budget() {
+    let mut runtime = Runtime::builder().null_context().mirror_byte_budget(10).build();
+    runtime.handle_host_message(HostMessage::StoragePut { key: "config/a".into(), bytes: vec![0u8; 4] });
+    let flushed = runtime.handle_host_message(HostMessage::StorageFlush);
+    let [WorkerMessage::StorageFlushed { pending, .. }] = flushed.as_slice() else {
+        panic!("expected StorageFlushed, got {flushed:?}");
+    };
+    let revision = pending.as_ref().expect("pending export without FlushSink")[0].revision;
+
+    runtime.handle_host_message(HostMessage::StorageFlushAck { results: vec![FlushAckResult { key: "config/a".into(), revision, persisted: true }] });
+
+    let reply = runtime.handle_host_message(HostMessage::StoragePut { key: "config/b".into(), bytes: vec![0u8; 2] });
+    assert_eq!(reply, Vec::new(), "the acknowledged export's charge must be released, got {reply:?}");
 }
 
 /// A batch with a middle failure reports the first and third jobs done and the second failed,

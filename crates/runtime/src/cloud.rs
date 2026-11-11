@@ -133,14 +133,21 @@ pub fn hydrate_whole_file_fallback<'a, P: TierPolicy>(
     // Reserve the stated size against the budget for the duration of the fetch: the bytes are
     // about to exist in memory even though they have not landed in `mirror` via `put`/`seed` yet.
     // The guard moves into `ChargedBytes` below, so the reservation now outlives this function.
+    //
+    // The fetch ceiling and the accepted-response limit are both `blob_bytes`, matching exactly
+    // what the guard reserves (CodeRabbit finding on cloud.rs:139): passing `remaining_budget`
+    // here instead let a response anywhere between `blob_bytes` and `remaining_budget` through
+    // uncaught, with the guard still only charging `blob_bytes` -- a response of, say, 80 bytes
+    // against a 40-byte stat and a 100-byte remaining budget would have been accepted and
+    // `ChargedBytes` would have under-counted it by 40 bytes.
     let blob_bytes_usize = usize::try_from(blob_bytes).unwrap_or(usize::MAX);
     let guard = mirror.begin_range_hydration(blob_bytes_usize);
-    let bytes = delegate.fetch_whole(blob, remaining_budget)?;
-    if bytes.len() as u64 > remaining_budget {
+    let bytes = delegate.fetch_whole(blob, blob_bytes)?;
+    if bytes.len() as u64 > blob_bytes {
         // The delegate ignored (or could not honor) the max_bytes ceiling: refuse rather than
         // hand an unbounded, uncharged buffer back to the caller. `guard` drops here, releasing
         // the reservation along with the discarded bytes.
-        return Err(CloudFetchFault::OversizedResponse { approved_bytes: remaining_budget, actual_bytes: bytes.len() as u64 });
+        return Err(CloudFetchFault::OversizedResponse { approved_bytes: blob_bytes, actual_bytes: bytes.len() as u64 });
     }
     Ok(ChargedBytes { bytes, _guard: guard })
 }
@@ -213,7 +220,7 @@ mod tests {
         let result = hydrate_whole_file_fallback(&mirror, &blob(), &delegate).expect("blob fits");
         assert_eq!(&*result, vec![0u8; 40].as_slice());
         assert_eq!(delegate.whole_file_calls.get(), 1);
-        assert_eq!(delegate.last_max_bytes.get(), 100, "fetch_whole must receive the approved ceiling");
+        assert_eq!(delegate.last_max_bytes.get(), 40, "fetch_whole's ceiling must be the stat'd size, not the wider remaining budget");
         assert_eq!(mirror.remaining_budget(), 60, "the 40 returned bytes must still be charged while the caller holds them");
 
         drop(result);
@@ -264,7 +271,23 @@ mod tests {
 
         let result = hydrate_whole_file_fallback(&mirror, &blob(), &delegate);
 
-        assert_eq!(result.err(), Some(CloudFetchFault::OversizedResponse { approved_bytes: 100, actual_bytes: 200 }));
+        assert_eq!(result.err(), Some(CloudFetchFault::OversizedResponse { approved_bytes: 40, actual_bytes: 200 }));
         assert!(!mirror.over_budget(), "a refused oversized response must leave no reservation behind");
+    }
+
+    /// CodeRabbit finding on cloud.rs:139: the gap the 200-byte test above does not cover. A
+    /// response larger than `blob_bytes` (40) but still within `remaining_budget` (100) used to
+    /// be accepted outright, while the `ChargedBytes` reservation (sized to `blob_bytes`) still
+    /// only charged 40 of the 80 actual bytes: a silent under-count, not merely a missed refusal.
+    #[test]
+    fn a_response_between_the_stated_size_and_the_remaining_budget_is_still_refused() {
+        let mirror = MirrorStore::new(DefaultTierPolicy, 100);
+        let mut delegate = FixedSizeDelegate::new(40);
+        delegate.actual_bytes = 80;
+
+        let result = hydrate_whole_file_fallback(&mirror, &blob(), &delegate);
+
+        assert_eq!(result.err(), Some(CloudFetchFault::OversizedResponse { approved_bytes: 40, actual_bytes: 80 }));
+        assert!(!mirror.over_budget(), "a refused oversized response must leave no reservation behind, even when it would have fit the wider budget");
     }
 }

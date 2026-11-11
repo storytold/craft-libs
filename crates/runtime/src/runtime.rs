@@ -246,15 +246,21 @@ impl Runtime {
     /// Backpressure, never silent growth (RFC-0023 acceptance requirement 2): refuses a write
     /// that would push the mirror's tracked bytes past its budget instead of letting a
     /// `config/` key (never LRU-evicted) or an unbounded run of puts grow worker memory without
-    /// limit.
+    /// limit. Checks the projected total `put` would actually leave behind (CodeRabbit finding
+    /// on runtime.rs:252): `put` adds both a resident and a pending copy, so a plain
+    /// `bytes.len() > remaining_budget()` check only ever caught half of what a write costs.
     fn handle_storage_put(&mut self, key: String, bytes: Vec<u8>) -> Vec<WorkerMessage> {
-        let remaining = self.mirror.remaining_budget();
-        if bytes.len() > remaining {
+        let store_key = StoreKey::new(key);
+        if self.mirror.would_exceed_budget_after_put(&store_key, bytes.len()) {
             return vec![WorkerMessage::Error {
-                message: format!("storage put: {} bytes would exceed the mirror's byte budget ({remaining} bytes remain)", bytes.len()),
+                message: format!(
+                    "storage put: {} bytes would exceed the mirror's byte budget ({} bytes remain)",
+                    bytes.len(),
+                    self.mirror.remaining_budget()
+                ),
             }];
         }
-        self.mirror.put(StoreKey::new(key), bytes);
+        self.mirror.put(store_key, bytes);
         Vec::new()
     }
 
@@ -278,6 +284,13 @@ impl Runtime {
                         revision: write.revision,
                     })
                     .collect();
+                // CodeRabbit finding on runtime.rs:281: take_pending already dropped these bytes
+                // from the mirror's own pending_bytes accounting, so an export sitting here
+                // unacknowledged used to cost nothing against the budget. Charge it until
+                // handle_storage_flush_ack releases it.
+                for write in &pending {
+                    self.mirror.charge_pending_export(write.bytes.len());
+                }
                 self.exported_pending.extend(pending);
                 vec![WorkerMessage::StorageFlushed { pending_count, pending: Some(pending_msg) }]
             }
@@ -326,6 +339,10 @@ impl Runtime {
                 continue;
             };
             let write = self.exported_pending.remove(pos);
+            // Either way the export is settled: confirmed saved, or handed back to the mirror's
+            // own pending queue (which will count it again through pending_bytes). Release the
+            // exported-pending charge regardless of which branch runs below.
+            self.mirror.release_pending_export(write.bytes.len());
             if result.persisted {
                 self.mirror.ack_saved(std::slice::from_ref(&write));
             } else {
