@@ -1,0 +1,15 @@
+[package]
+name = "craft-blitter-alloc-check"
+version = "0.0.0"
+publish = false
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+
+# Isolated from the root workspace (`unsafe_code = "forbid"`) solely so `#[global_allocator]`
+# can implement `std::alloc::GlobalAlloc` to count heap allocations during blitting.
+[workspace]
+resolver = "3"
+
+[dependencies]
+craft-blitter = { path = ".." }

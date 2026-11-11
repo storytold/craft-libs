@@ -252,3 +252,14 @@ Its white-level plateau estimate (saturation_plateau) is LightCraft's vendor::wh
 same revision. The CRW compression was derived clean-room from CC0 sample files and the
 maintainer's own photographs by black-box comparison with a reference decoder's command-line
 output; no raw-decoder source was consulted (crates/crw/clean-room/sources.md).
+
+The blend-mode kernels and 8-lane SoA span layout in crates/blitter (src/blend.rs, src/float.rs
+and src/simd.rs) are adapted from:
+- PhotoCraft, crates/color/src/blend.rs and normal_lanes in crates/compose/src/psblend.rs,
+  revision b097800e78405aeb2068113988898f991e707eb4.
+  https://github.com/storytold/photocraft
+  Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors.
+  Licensed MIT OR Apache-2.0. PhotoCraft's empirically fitted edge thresholds, Special Eight fill
+  weights and text gamma are excluded; crates/blitter retains only formulas published in the W3C,
+  ISO 32000 / PDF, Khronos, Adobe, Pegtop and Paint.NET specifications cited in
+  crates/blitter/README.md.
