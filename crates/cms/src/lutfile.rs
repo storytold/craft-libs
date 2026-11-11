@@ -213,6 +213,15 @@ pub fn parse_cube(text: &str) -> Result<LutFile, LutError> {
         if rows.len() != expected_rows {
             return err("no LUT_3D_SIZE in .cube file");
         }
+        // #8913: the resample below bakes the curve onto a fixed 33-point grid, so a steep
+        // curve over a narrow domain cannot survive the resample — the baked table silently
+        // shifts colours (measured 42 RGB8 levels for a two-node ramp over 0.24..0.26, where
+        // Photoshop renders the ramp exactly). Rather than proxy the risk by domain width (a
+        // 0.1..0.17 ramp spans two grid cells yet still loses ~28 levels), measure the
+        // resample's actual error against the exact curve and refuse only tables whose baked
+        // output shifts by more than a couple of RGB8 levels. Default-domain tables keep the
+        // existing bake untouched; gentle curves over any domain bake within tolerance and
+        // stay accepted.
         // The 1D table is resampled onto a 0..1 cube anyway, so its input domain
         // (`DOMAIN_MIN`/`MAX`, `LUT_1D_INPUT_RANGE`) is baked into the resample: an input `v`
         // reads the table at `(v - min) / (max - min)`, saturating outside.
@@ -225,6 +234,36 @@ pub fn parse_cube(text: &str) -> Result<LutFile, LutError> {
         };
         let mut l = LutFile::from_fn(&title, 33, |c| [curve(0, c[0]), curve(1, c[1]), curve(2, c[2])])?;
         l.title = title;
+        let non_default = dmin.iter().any(|v| *v != 0.0) || dmax.iter().any(|v| *v != 1.0);
+        if non_default {
+            // Worst baked-vs-exact error per channel, in RGB8 levels: the baked cube is read
+            // by linear interpolation between grid points (red fastest, so channel `ch` sits
+            // at stride 33^ch), while `curve` is what the file actually says.
+            const MAX_BAKE_ERROR: f32 = 2.0 / 255.0;
+            for ch in 0..3 {
+                let stride = [1usize, 33, 33 * 33][ch];
+                let mut worst = 0.0f32;
+                for k in 0..=256 {
+                    let v = k as f32 / 256.0;
+                    let x = v * 32.0;
+                    let i = (x as usize).min(31);
+                    let f = x - i as f32;
+                    let baked = l.data[i * stride * 3 + ch] * (1.0 - f) + l.data[(i + 1).min(32) * stride * 3 + ch] * f;
+                    worst = worst.max((baked - curve(ch, v)).abs());
+                }
+                if worst > MAX_BAKE_ERROR {
+                    return err(format!(
+                        "1D LUT domain on {} is {min}..{max}: the curve changes faster than the 33-point grid can \
+                         hold (baking shifts colours by up to {levels:.0} RGB8 levels); export the look as a 3D LUT \
+                         or widen DOMAIN_MIN/DOMAIN_MAX",
+                        ["red", "green", "blue"][ch],
+                        min = dmin[ch],
+                        max = dmax[ch],
+                        levels = worst * 255.0,
+                    ));
+                }
+            }
+        }
         return l.check();
     }
     err("no LUT_3D_SIZE in .cube file")
@@ -839,6 +878,49 @@ DOMAIN_MAX 0.5 1 1
         ))
         .unwrap_err();
         assert!(e.0.contains("below DOMAIN_MAX"), "{e}");
+    }
+
+    #[test]
+    fn cube_1d_narrow_domain_is_refused() {
+        // #8913: the issue's fixture — a two-node ramp over 0.24..0.26. Baking it onto the
+        // 33-point grid rendered grey-65 as 148 where Photoshop renders 190 (42-level error).
+        // It must now be an actionable parse error rather than a silently wrong table.
+        let e = parse_cube("LUT_1D_SIZE 2\nDOMAIN_MIN 0.24 0.24 0.24\nDOMAIN_MAX 0.26 0.26 0.26\n0 0 0\n1 1 1\n").unwrap_err();
+        assert!(e.0.contains("changes faster than the 33-point grid"), "{e}");
+        // The same domain via LUT_1D_INPUT_RANGE is refused identically.
+        let e = parse_cube("LUT_1D_SIZE 2\nLUT_1D_INPUT_RANGE 0.24 0.26\n0 0 0\n1 1 1\n").unwrap_err();
+        assert!(e.0.contains("changes faster"), "{e}");
+        // A per-channel narrow domain names the offending channel.
+        let e = parse_cube("LUT_1D_SIZE 2\nDOMAIN_MIN 0 0 0.24\nDOMAIN_MAX 1 1 0.26\n0 0 0\n1 1 1\n").unwrap_err();
+        assert!(e.0.contains("blue"), "{e}");
+    }
+
+    #[test]
+    fn cube_1d_wide_domain_still_bakes() {
+        // A steep ramp over 0.1..0.17 spans two grid cells but still loses ~28 RGB8 levels
+        // to the resample, so the measured-error check refuses it even though the old width
+        // check let it through.
+        let e = parse_cube("LUT_1D_SIZE 2\nLUT_1D_INPUT_RANGE 0.1 0.17\n0 0 0\n1 1 1\n").unwrap_err();
+        assert!(e.0.contains("changes faster"), "steep ramp over 0.1..0.17 refused: {e}");
+        // A gentle (here linear) curve over a grid-aligned domain bakes exactly and stays
+        // accepted — the check measures the bake's error, not the domain's width. Value
+        // assertions, not just a successful parse: the baked table must reproduce the curve.
+        // Table row k sits at t = k/32 of the domain 0.25..0.75; the curve y = 0.4 + 0.4t
+        // is gentle (a half-level per grid step), so the bake must reproduce it exactly.
+        let mut table = String::from("LUT_1D_SIZE 33\nLUT_1D_INPUT_RANGE 0.25 0.75\n");
+        for k in 0..33 {
+            let y = 0.4 + 0.4 * (k as f32 / 32.0);
+            table.push_str(&format!("{y} {y} {y}\n"));
+        }
+        let l = parse_cube(&table).expect("gentle curve over a non-default domain still bakes");
+        let at = |r: usize| l.data[r * 3];
+        // Grid entry r is input r/32: 0.5 is the middle of the domain (t=0.5) -> 0.6.
+        assert!((at(16) - 0.6).abs() < 1.0 / 255.0, "baked value at 0.5 tracks the curve: {}", at(16));
+        // Domain top (input 0.75 = grid 24, t=1) -> 0.8.
+        assert!((at(24) - 0.8).abs() < 1.0 / 255.0, "baked value at the domain top tracks the curve: {}", at(24));
+        // Below the domain saturates to the first row.
+        assert!((at(8) - 0.4).abs() < 1.0 / 255.0, "below the domain saturates: {}", at(8));
+        parse_cube("LUT_1D_SIZE 2\n0 0 0\n1 1 1\n").expect("default domain");
     }
 
     #[test]
