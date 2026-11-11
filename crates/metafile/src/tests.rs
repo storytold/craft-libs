@@ -914,6 +914,36 @@ fn place_fits_the_frame_scales_strokes_and_drops_far_paths() {
     assert_eq!(stroke.map(|s| s.1), Some(8.0));
 }
 
+#[test]
+fn a_huge_pen_is_held_to_what_covers_the_frame() {
+    // A pen of 1e30 units on a short path: round caps that wide took a renderer forever to
+    // flatten. Past twice the distance across the frame and the path it covers no more.
+    let width = |w: f32| {
+        let pic = crate::Picture {
+            width: 100.0,
+            height: 50.0,
+            items: vec![Item::Path {
+                segs: vec![Seg::Move(0.0, 0.0), Seg::Line(10.0, 0.0)],
+                fill: None,
+                stroke: Some(([0, 0, 0, 255], w)),
+                line: crate::LineStyle::default(),
+                even_odd: true,
+                region: None,
+                clips: Vec::new(),
+            }],
+            skipped_records: 0,
+        };
+        match pic.place(kurbo::Rect::new(0.0, 0.0, 200.0, 100.0), [0.0; 4]).first() {
+            Some(crate::PlacedItem::Path { stroke, .. }) => stroke.map(|s| s.1),
+            _ => None,
+        }
+    };
+    let cap = 2.0 * 200f64.hypot(100.0);
+    assert_eq!(width(1e30), Some(cap));
+    assert_eq!(width(f32::MAX), Some(cap));
+    assert_eq!(width(4.0), Some(8.0), "an ordinary pen is untouched");
+}
+
 /// #1899: a crop keeps what the file says down to a sliver (a header's bar is 2.7% of a page-sized
 /// metafile), and junk sides give a finite part of the source with some area.
 #[test]
@@ -928,8 +958,31 @@ fn crop_window_keeps_a_sliver_and_stays_finite() {
     assert!(top.y.abs() < 1e-3 && (bottom.y - 27.44).abs() < 1e-3, "{top:?} {bottom:?}");
     for c in [[f32::NAN, f32::INFINITY, -1.0, 2.0], [0.9; 4], [1.0, 1.0, 0.0, 0.0], [f32::MAX, f32::MIN, f32::NEG_INFINITY, 0.5]] {
         let [x, y, w, h] = crate::crop_window(c);
-        assert!([x, y, w, h].iter().all(|v| v.is_finite()) && w > 0.0 && h > 0.0 && x + w <= 1.0 + 1e-9 && y + h <= 1.0 + 1e-9, "{c:?}");
+        assert!([x, y, w, h].iter().all(|v| v.is_finite()) && w > 0.0 && h > 0.0, "{c:?}");
+        // Only a negative side (padding) lets the window reach past the source.
+        if c.iter().all(|v| v.is_nan() || *v >= 0.0) {
+            assert!(x >= 0.0 && y >= 0.0 && x + w <= 1.0 + 1e-9 && y + h <= 1.0 + 1e-9, "{c:?}");
+        }
     }
+}
+
+/// A negative side pads the source: the window starts before the source or ends past it and is
+/// larger than it, so the picture keeps its proportions instead of being stretched over the frame.
+#[test]
+fn crop_window_with_negative_sides_pads_the_source() {
+    let [x, y, w, h] = crate::crop_window([-0.25, -0.5, 0.0, 0.0]);
+    assert!((x + 0.25).abs() < 1e-6 && (y + 0.5).abs() < 1e-6 && (w - 1.25).abs() < 1e-6 && (h - 1.5).abs() < 1e-6, "{x} {y} {w} {h}");
+    // A picture fitted whole into a taller frame: half its height added above and below.
+    let [x, y, w, h] = crate::crop_window([0.0, -0.5, 0.0, -0.5]);
+    assert!(x == 0.0 && w == 1.0 && y == -0.5 && h == 2.0, "{y} {h}");
+    // Padding stops at a hundred times the source a side, so the window stays finite.
+    let [x, _, w, _] = crate::crop_window([f32::MIN, 0.0, -1e9, 0.0]);
+    assert!(x == -100.0 && w == 201.0, "{x} {w}");
+    // The source sits in the middle half of the frame.
+    let pic = crate::Picture { width: 100.0, height: 50.0, items: Vec::new(), skipped_records: 0 };
+    let tf = pic.fit(kurbo::Rect::new(0.0, 0.0, 100.0, 100.0), [0.0, -0.5, 0.0, -0.5]).unwrap();
+    let (top, bottom) = (tf * kurbo::Point::new(0.0, 0.0), tf * kurbo::Point::new(100.0, 50.0));
+    assert!((top.y - 25.0).abs() < 1e-9 && (bottom.y - 75.0).abs() < 1e-9 && (bottom.x - 100.0).abs() < 1e-9, "{top:?} {bottom:?}");
 }
 
 /// The narrowest crop on the largest frame layout makes (4000 pt, far down a 22-inch page) still
@@ -966,6 +1019,68 @@ fn the_narrowest_crop_on_the_largest_frame_keeps_its_content() {
     for crop in [[1.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 1.0], [0.9999, 0.6, 0.5, 0.9999]] {
         assert_eq!(pic.place(frame, crop).len(), 2, "{crop:?}");
     }
+}
+
+#[test]
+fn place_counts_the_items_own_clip_region_before_keeping_it() {
+    // A path of 499,998 elements nearly fills the 500,000 budget; a second item whose new clip
+    // region adds elements goes past it and is left out, whatever kind of item it is.
+    let mut segs = vec![Seg::Move(0.0, 0.0)];
+    segs.extend((0..499_997).map(|i| Seg::Line(1.0 + (i % 50) as f32, 1.0)));
+    let path = |segs: Vec<Seg>, region: Option<Vec<[f32; 4]>>| Item::Path {
+        segs,
+        fill: None,
+        stroke: None,
+        line: crate::LineStyle::default(),
+        even_odd: false,
+        region,
+        clips: Vec::new(),
+    };
+    let region = || Some(vec![[0.0, 0.0, 50.0, 25.0], [10.0, 10.0, 20.0, 20.0]]);
+    let frame = kurbo::Rect::new(0.0, 0.0, 100.0, 50.0);
+    let placed = |second: Item| {
+        let pic = crate::Picture { width: 100.0, height: 50.0, items: vec![path(segs.clone(), None), second], skipped_records: 0 };
+        pic.place(frame, [0.0; 4]).len()
+    };
+    let small = vec![Seg::Move(0.0, 0.0), Seg::Line(1.0, 1.0)];
+    assert_eq!(placed(path(small.clone(), None)), 2, "without a region the second path fits");
+    assert_eq!(placed(path(small, region())), 1);
+    let bitmap = Item::Bitmap {
+        rect: [0.0, 0.0, 10.0, 10.0],
+        transform: [10.0, 0.0, 0.0, 10.0, 0.0, 0.0],
+        width: 1,
+        height: 1,
+        rgba: vec![0; 4],
+        region: region(),
+        clips: Vec::new(),
+    };
+    assert_eq!(placed(bitmap), 1);
+}
+
+#[test]
+fn place_expands_a_clip_region_once_for_the_items_that_share_it() {
+    // 2,000 items under one 64-rectangle region: 320 region elements, not 640,000.
+    let region: Vec<[f32; 4]> = (0..64).map(|i| [i as f32, 0.0, i as f32 + 0.5, 10.0]).collect();
+    let item = || Item::Path {
+        segs: vec![Seg::Move(0.0, 0.0), Seg::Line(1.0, 1.0)],
+        fill: None,
+        stroke: None,
+        line: crate::LineStyle::default(),
+        even_odd: false,
+        region: Some(region.clone()),
+        clips: Vec::new(),
+    };
+    let pic = crate::Picture { width: 100.0, height: 50.0, items: (0..2000).map(|_| item()).collect(), skipped_records: 0 };
+    let placed = pic.place(kurbo::Rect::new(0.0, 0.0, 100.0, 50.0), [0.0; 4]);
+    assert_eq!(placed.len(), 2000);
+    let regions: Vec<_> = placed
+        .iter()
+        .filter_map(|p| match p {
+            crate::PlacedItem::Path { region: Some(r), .. } => Some(std::sync::Arc::as_ptr(r)),
+            _ => None,
+        })
+        .collect();
+    assert!(regions.len() == 2000 && regions.iter().all(|r| *r == regions[0]));
 }
 
 #[test]
@@ -1382,11 +1497,76 @@ fn character_sets_decode_bytes() {
     assert_eq!(one(204, &[0xC0, 0xFF, 0xA8]), "АяЁ");
     assert_eq!(one(2, b"n\xA7"), "\u{F06E}\u{F0A7}", "symbol fonts keep their codes in the private-use area");
     assert_eq!(one(0, &[0x81]), "\u{FFFD}", "an undefined byte");
-    // A double-byte character set: a lead and trail byte become one blank with both advances.
-    let p =
-        wmf200(&[wfont(-10, 400, [0, 0, 0], 128, 0, b"F"), wrec(0x012D, &h16(0)), wtext(0, 0, &[0x41, 0x82, 0xA0, 0x42], 0, None, &[1, 2, 3, 4])]);
-    let t = texts(&p)[0];
-    assert_eq!((t.text.as_str(), t.dx.as_slice()), ("A B", [1.0, 5.0, 4.0].as_slice()));
+    // Hebrew (177): letters, a point, the sheqel sign; an undefined byte.
+    assert_eq!(one(177, &[0xF9, 0xEC, 0xE5, 0xED, b' ', 0xC8, 0xA4]), "שלום \u{05B8}₪");
+    assert_eq!(one(177, &[0xFA, 0xE0, 0xFB]), "תא\u{FFFD}");
+    // Arabic (178): "سلام", an Arabic comma and question mark.
+    assert_eq!(one(178, &[0xD3, 0xE1, 0xC7, 0xE3, 0xA1, 0xBF]), "سلام،؟");
+    // Greek, Turkish, Vietnamese, Baltic and Thai.
+    assert_eq!(one(161, &[0xE1, 0xD9]), "αΩ");
+    assert_eq!(one(162, &[0xD0, 0xFD, 0xFE]), "Ğış");
+    assert_eq!(one(163, &[0xD5, 0xF0]), "Ơđ");
+    assert_eq!(one(186, &[0xE0, 0xFE]), "ąž");
+    assert_eq!(one(222, &[0xA1, 0xE4]), "กไ");
+    // A string is in the font's code page: EF BB BF is three characters, not a byte order mark.
+    assert_eq!(one(0, &[0xEF, 0xBB, 0xBF, 0x41]), "ï»¿A");
+    assert_eq!(one(161, &[0xEF, 0xBB, 0xBF, 0x41]), "ο»ΏA");
+}
+
+#[test]
+fn double_byte_character_sets_decode_pairs_with_both_advances() {
+    let run = |charset: u8, s: &[u8]| {
+        let dx: Vec<i32> = (1..=s.len() as i32).collect();
+        let p = wmf200(&[wfont(-10, 400, [0, 0, 0], charset, 0, b"F"), wrec(0x012D, &h16(0)), wtext(0, 0, s, 0, None, &dx)]);
+        let t = texts(&p)[0];
+        (t.text.clone(), t.dx.clone())
+    };
+    // Shift_JIS: a pair is one character with the sum of its two advances.
+    assert_eq!(run(128, &[0x41, 0x82, 0xA0, 0x42]), ("AあB".into(), vec![1.0, 5.0, 4.0]));
+    // Its half-width katakana are single bytes: 0xA6 is no lead byte and the 'A' after it no trail.
+    assert_eq!(run(128, &[0xA6, 0x41, 0xB1]), ("ｦAｱ".into(), vec![1.0, 2.0, 3.0]));
+    // Big5 A1D0 is the fullwidth hyphen-minus equation editors write for a minus sign.
+    assert_eq!(run(136, &[0xA1, 0xD0]), ("－".into(), vec![3.0]));
+    // UHC and GBK.
+    assert_eq!(run(129, &[0xB0, 0xA1]), ("가".into(), vec![3.0]));
+    assert_eq!(run(134, &[0xB0, 0xA1]), ("啊".into(), vec![3.0]));
+    // 0x7F is never a GBK trail byte: the lead before it is one undefined byte, 0x7F stands
+    // alone and the pair after them decodes.
+    assert_eq!(run(134, &[0xB0, 0x7F, 0xB0, 0xA1]), ("\u{FFFD}\u{7F}啊".into(), vec![1.0, 2.0, 7.0]));
+    // A lead byte at the end of the string is one undefined byte, as is the lead of a pair
+    // inside Big5's ranges that Big5 does not define; the byte after it is read on its own.
+    assert_eq!(run(136, &[0x81]), ("\u{FFFD}".into(), vec![1.0]));
+    assert_eq!(run(136, &[0x81, 0x40]), ("\u{FFFD}@".into(), vec![1.0, 2.0]));
+    // Johab is not decoded: a pair is one blank with both advances.
+    assert_eq!(run(130, &[0x41, 0x88, 0x61, 0x42]), ("A B".into(), vec![1.0, 5.0, 4.0]));
+}
+
+#[test]
+fn a_wmf_face_name_is_read_in_the_fonts_code_page() {
+    // 新細明體 (PMingLiU) in Big5.
+    let p = wmf200(&[
+        wfont(-10, 400, [0, 0, 0], 136, 0, &[0xB7, 0x73, 0xB2, 0xD3, 0xA9, 0xFA, 0xC5, 0xE9]),
+        wrec(0x012D, &h16(0)),
+        wtext(0, 0, b"A", 0, None, &[]),
+    ]);
+    assert_eq!(texts(&p)[0].font.family, "新細明體");
+    // A symbol font's name is plain text, not symbol codes.
+    let p = wmf200(&[wfont(-10, 400, [0, 0, 0], 2, 0, b"Wingdings"), wrec(0x012D, &h16(0)), wtext(0, 0, b"A", 0, None, &[])]);
+    assert_eq!(texts(&p)[0].font.family, "Wingdings");
+}
+
+#[test]
+fn the_symbol_font_under_the_default_character_set_keeps_symbol_codes() {
+    let one = |charset: u8, face: &[u8]| {
+        let p = wmf200(&[wfont(-10, 400, [0, 0, 0], charset, 0, face), wrec(0x012D, &h16(0)), wtext(0, 0, &[0x61, 0xE6], 0, None, &[])]);
+        texts(&p)[0].text.clone()
+    };
+    // Equation editors select "Symbol" with DEFAULT_CHARSET: the bytes are the font's own codes.
+    assert_eq!(one(1, b"Symbol"), "\u{F061}\u{F0E6}");
+    assert_eq!(one(1, b"symbol (PCL6)"), "\u{F061}\u{F0E6}");
+    // Another font under DEFAULT_CHARSET, and Symbol asked for as an ANSI font, are Western text.
+    assert_eq!(one(1, b"Arial"), "aæ");
+    assert_eq!(one(0, b"Symbol"), "aæ");
 }
 
 #[test]
@@ -2402,4 +2582,25 @@ fn empty_poly_groups_reserve_nothing() {
     // Counts past the points are cut short, and the size still matches.
     let ops = crate::geom::subpaths(&pts, &[2, 5, 4], false);
     assert_eq!((ops.len(), ops.capacity()), (3, 3));
+}
+
+#[test]
+fn full_canvas_does_not_sample_gradient_tiles() {
+    let mut cv = Canvas::new();
+    let big = || Rgba { w: 1, h: 1, px: vec![0u8; MAX_BYTES / 2] };
+    for _ in 0..3 {
+        cv.bitmap([0.0, 0.0, 1.0, 1.0], big());
+    }
+    assert!(cv.full());
+    cv.shade_shape(&crate::geom::rect(0.0, 0.0, 10.0, 10.0), &|_| panic!("sampled a full canvas"));
+    assert_eq!(cv.items.len(), 2);
+}
+
+#[test]
+fn canvas_budget_counts_bytes_held_elsewhere() {
+    let mut cv = Canvas::new();
+    cv.hold(MAX_BYTES - 100);
+    cv.bitmap([0.0, 0.0, 1.0, 1.0], Rgba { w: 1, h: 1, px: vec![0u8; 200] });
+    assert!(cv.full());
+    assert!(cv.items.is_empty());
 }
