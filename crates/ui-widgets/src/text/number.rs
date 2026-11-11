@@ -23,7 +23,7 @@ use craft_behavior::{
     Codec, Flow, HitLevel, HitPriority, Metrics, NavMove, NumberCodec, PartKey, PressPhase, Sense, ValueDrag, decimals_for_step, wheel_step,
 };
 use craft_theme::{Stateful, States};
-use egui::{Pos2, Rect, Vec2};
+use egui::{Rect, Vec2};
 use std::borrow::Cow;
 use std::marker::PhantomData;
 use std::ops::RangeInclusive;
@@ -131,7 +131,8 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// as a drag on the slider would.
     track: f32,
     picked: Option<NumberPick>,
-    unit_size: Vec2,
+    /// The unit and the chevrons after the text, measured in measure and parts for paint.
+    trailing: Vec<Adornment>,
 }
 
 impl<'a> NumberField<'a, Option<f64>> {
@@ -183,7 +184,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             scrub: false,
             track: 0.0,
             picked: None,
-            unit_size: Vec2::ZERO,
+            trailing: Vec::new(),
         }
         .label(label)
     }
@@ -279,11 +280,6 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         }
     }
 
-    /// The unit's size, the room it takes and the gap before it.
-    fn unit_extent(&self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        self.unit.as_ref().map_or(Vec2::ZERO, |unit| cx.layout(&TextRun::new(unit.as_str()).role(cx.style.unit.role)).size())
-    }
-
     /// The chevrons after the text, in order, with their parts and accessible names.
     fn chevrons(&self, words: &TextWords) -> Vec<(PartKey, Label)> {
         let mut chevrons = Vec::new();
@@ -296,22 +292,17 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         chevrons
     }
 
-    fn adornments(chevrons: &[(PartKey, Label)]) -> Vec<Adornment> {
-        chevrons.iter().map(|(key, name)| Adornment::button(*key, crate::controls::disclosure::DisclosureGlyph::dropdown(), name.clone())).collect()
+    /// The unit, measured, then the chevrons: what sits after the text.
+    fn after_text(&self, cx: &MeasureCx<'_, Self>, chevrons: &[(PartKey, Label)]) -> Vec<Adornment> {
+        let unit = self.unit.iter().map(|unit| Adornment::text(unit.clone(), cx.style.unit.role).measured(cx));
+        let chevrons =
+            chevrons.iter().map(|(key, name)| Adornment::button(*key, crate::controls::disclosure::DisclosureGlyph::dropdown(), name.clone()));
+        unit.chain(chevrons).collect()
     }
 
-    /// The rect of the text and the chevrons inside `rect`.
-    fn laid_out(style: &NumberStyle, rect: Rect, rtl: bool, chevrons: &[(PartKey, Label)]) -> Placed {
-        place(rect, &style.field, &[], &Self::adornments(chevrons), rtl)
-    }
-
-    /// The text rect and the unit's: the unit sits between the text and the chevrons.
-    fn text_and_unit(&self, text: Rect, rtl: bool) -> (Rect, Option<Rect>) {
-        if self.unit_size.x <= 0.0 {
-            return (text, None);
-        }
-        let (unit, rest) = Flow::new(text, rtl).take_end(self.unit_size.x);
-        (rest.rect(), Some(unit))
+    /// The rect of the text, the unit and the chevrons inside `rect`.
+    fn laid_out(&self, style: &NumberStyle, rect: Rect, rtl: bool) -> Placed {
+        place(rect, &style.field, &[], &self.trailing, rtl)
     }
 }
 impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
@@ -351,26 +342,24 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             let digit = cx.layout(&TextRun::new("0")).size();
             Vec2::new(digit.x + caret, digit.y)
         };
-        self.unit_size = self.unit_extent(cx);
-        let unit = self.unit_size.x;
-        // The chevrons take their own room and the change of the edge inset a button makes.
-        let adornments = reserve(&cx.style.field, &[], &Self::adornments(&self.chevrons(&cx.words::<TextWords>())));
-        let width = text.x + unit + adornments;
+        self.trailing = self.after_text(cx, &self.chevrons(&cx.words::<TextWords>()));
+        // The unit and the chevrons take their own room and the change of the edge inset a button makes.
+        let width = text.x + reserve(&cx.style.field, &[], &self.trailing);
         // A field is one number cell wide, the unit and the chevrons inside it, so a column of fields ends at one edge;
         // it grows only when the room left for the number drops below one digit and the caret.
         let field = cx.style.field.metrics();
         let width = width.max(cx.tokens.size.length.number - field.padding.start - field.padding.end);
-        Vec2::new(width, text.y.max(self.unit_size.y))
+        Vec2::new(width, text.y)
     }
 
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
         self.settle_lengths(&cx.env.units());
-        self.unit_size = self.unit_extent(cx);
         self.track = cx.tokens.size.length.track;
         let rtl = cx.flow.is_rtl();
         let chevrons = self.chevrons(&cx.words::<TextWords>());
-        let placed = Self::laid_out(cx.style, cx.content_rect, rtl, &chevrons);
-        let (text, _) = self.text_and_unit(placed.text, rtl);
+        self.trailing = self.after_text(cx, &chevrons);
+        let placed = self.laid_out(cx.style, cx.content_rect, rtl);
+        let text = placed.text;
         self.options.centred = true;
         self.options.steps_value = self.presets.is_none() && self.popup_slider.is_none();
         let shown = cx.value();
@@ -386,7 +375,8 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         cx.text(text_part::<V>(), text, &self.ruled(&cx.env.units(), shown.is_none(), names), shown.unwrap_or(&blank), &self.options);
         let slider_reason =
             if self.presets.is_some() { "Alt+Down opens the presets list; the slider opens by pointer" } else { "Alt+Down opens the slider" };
-        for ((key, _), at) in chevrons.iter().zip(&placed.trailing) {
+        let chevron_rects = &placed.trailing[placed.trailing.len() - chevrons.len()..];
+        for ((key, _), at) in chevrons.iter().zip(chevron_rects) {
             let reason = if *key == PRESETS { "Alt+Down opens the list" } else { slider_reason };
             let popup = if *key == PRESETS { "presets" } else { "slider" };
             cx.part(*key, *at)
@@ -507,14 +497,13 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let rtl = cx.flow.is_rtl();
         let chevrons = self.chevrons(&cx.words::<TextWords>());
-        let placed = Self::laid_out(cx.style, cx.content_rect, rtl, &chevrons);
-        let (_, unit) = self.text_and_unit(placed.text, rtl);
+        let placed = self.laid_out(cx.style, cx.content_rect, rtl);
         // A mixed value shows the dash alone: a unit beside it would claim a measure the selection does not have.
-        if let (Some(unit), Some(label), Some(_)) = (unit, &self.unit, cx.value().filter(|value| !non_finite(Some(*value)))) {
-            let top = unit.center().y - self.unit_size.y / 2.0;
-            let at = unit;
-            let run = TextRun::new(label.as_str()).role(cx.style.unit.role).color(cx.resolve(&cx.style.unit.color));
-            ui.draw().text(Rect::from_min_size(Pos2::new(at.min.x, top), Vec2::new(at.width(), self.unit_size.y)), &run);
+        if self.unit.is_some()
+            && cx.value().is_some_and(|value| !non_finite(Some(value)))
+            && let (Some(unit), Some(at)) = (self.trailing.first(), placed.trailing.first())
+        {
+            unit.paint(ui, *at, cx.resolve(&cx.style.unit.color));
         }
         for (key, name) in chevrons {
             ui.face(key, IconButton::new(crate::controls::disclosure::DisclosureGlyph::dropdown()).label(name));

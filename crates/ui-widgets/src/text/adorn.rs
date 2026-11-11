@@ -3,59 +3,95 @@
 
 use super::FieldStyle;
 use crate::buttons::IconButton;
-use crate::contract::{PaintUi, Props as _};
-use crate::primitives::IconSpec;
+use crate::contract::{MeasureCx, PaintUi, Props as _};
+use crate::primitives::{IconSpec, TextRun};
 use crate::runtime::env::Label;
-use crate::style::StyleColor;
+use crate::style::{StyleColor, TypeRole};
 use craft_behavior::{Flow, PartKey};
 use craft_theme::ControlSize;
-use egui::{Rect, vec2};
+use egui::{Rect, Vec2, vec2};
 use smallvec::SmallVec;
 
 /// Something a field draws beside its text.
 pub struct Adornment {
-    icon: IconSpec<'static>,
-    button: Option<(PartKey, Label)>,
+    kind: Kind,
+}
+
+enum Kind {
+    Glyph(IconSpec<'static>),
+    Button(PartKey, IconSpec<'static>, Label),
+    /// Text in the line, of `role`; `size` is its measured run, zero until [`Adornment::measured`].
+    Text {
+        label: Label,
+        role: TypeRole,
+        size: Vec2,
+    },
 }
 
 impl Adornment {
     /// A decorative icon of the style's glyph side.
     pub fn glyph(icon: impl Into<IconSpec<'static>>) -> Adornment {
-        Adornment { icon: icon.into(), button: None }
+        Adornment { kind: Kind::Glyph(icon.into()) }
     }
 
     /// An icon button, the part `part` named `name`, of the style's button side.
     pub fn button(part: PartKey, icon: impl Into<IconSpec<'static>>, name: Label) -> Adornment {
-        Adornment { icon: icon.into(), button: Some((part, name)) }
+        Adornment { kind: Kind::Button(part, icon.into(), name) }
     }
 
-    /// The part key of a button; `None` for a glyph.
+    /// Text in the field's line, in `role`: a unit after a number, a fixed `#` before hex digits. It takes the width of
+    /// its run, which the field measures with [`Adornment::measured`] before placing it, and sits against the text
+    /// with no gap between them.
+    pub fn text(label: impl Into<Label>, role: TypeRole) -> Adornment {
+        Adornment { kind: Kind::Text { label: label.into(), role, size: Vec2::ZERO } }
+    }
+
+    /// The adornment with a text adornment's run measured in `cx`; a glyph or a button is returned as it is.
+    pub fn measured<C: crate::contract::Component>(mut self, cx: &MeasureCx<'_, C>) -> Adornment {
+        if let Kind::Text { label, role, size } = &mut self.kind {
+            *size = cx.layout(&TextRun::new(label.as_str()).role(*role)).size();
+        }
+        self
+    }
+
+    /// The part key of a button; `None` for a glyph or text.
     pub fn part(&self) -> Option<PartKey> {
-        self.button.as_ref().map(|(part, _)| *part)
-    }
-
-    /// The side of the square the adornment takes in the line.
-    fn side(&self, style: &FieldStyle) -> f32 {
-        if self.button.is_some() { style.button } else { style.glyph.side }
-    }
-
-    /// The icon, painted in `color` when there is one.
-    fn spec(&self, color: Option<StyleColor>) -> IconSpec<'static> {
-        IconSpec {
-            source: self.icon.source.clone(),
-            ink: self.icon.ink,
-            color: color.or(self.icon.color),
-            mirror: self.icon.mirror,
-            set: self.icon.set,
+        match &self.kind {
+            Kind::Button(part, ..) => Some(*part),
+            _ => None,
         }
     }
 
-    /// Paints the adornment in `rect`, one of `place`'s rects: a glyph in `glyph_color`, a button as an icon button face
-    /// over its part.
-    pub fn paint(&self, ui: &mut PaintUi<'_>, rect: Rect, glyph_color: StyleColor) {
-        match &self.button {
-            None => ui.draw().icon(rect, &self.spec(Some(glyph_color))),
-            Some((part, name)) => ui.face(*part, IconButton::new(self.spec(None)).label(name.clone()).focusable(false).size(ControlSize::Sm)),
+    /// The size the adornment takes in the line: a square for a glyph or a button, the run for text.
+    fn extent(&self, style: &FieldStyle) -> Vec2 {
+        match &self.kind {
+            Kind::Glyph(_) => Vec2::splat(style.glyph.side),
+            Kind::Button(..) => Vec2::splat(style.button),
+            Kind::Text { size, .. } => *size,
+        }
+    }
+
+    /// The gap between the adornment and its neighbour towards the text: none for text, which reads as part of it.
+    fn gap_after(&self, style: &FieldStyle, innermost: bool) -> f32 {
+        if innermost && matches!(self.kind, Kind::Text { .. }) { 0.0 } else { style.metrics.gap }
+    }
+
+    /// The icon, painted in `color` when there is one.
+    fn spec(icon: &IconSpec<'static>, color: Option<StyleColor>) -> IconSpec<'static> {
+        IconSpec { source: icon.source.clone(), ink: icon.ink, color: color.or(icon.color), mirror: icon.mirror, set: icon.set }
+    }
+
+    /// Paints the adornment in `rect`, one of `place`'s rects: a glyph or text in `color`, a button as an icon button
+    /// face over its part.
+    pub fn paint(&self, ui: &mut PaintUi<'_>, rect: Rect, color: StyleColor) {
+        match &self.kind {
+            Kind::Glyph(icon) => ui.draw().icon(rect, &Self::spec(icon, Some(color))),
+            Kind::Button(part, icon, name) => {
+                ui.face(*part, IconButton::new(Self::spec(icon, None)).label(name.clone()).focusable(false).size(ControlSize::Sm))
+            }
+            Kind::Text { label, role, .. } => {
+                ui.draw().text(rect, &TextRun::new(label.as_str()).role(*role).color(color));
+            }
         }
     }
 }
@@ -76,7 +112,7 @@ pub struct Placed {
 /// the button sits in the line's square. A glyph keeps the field's padding.
 fn inset(style: &FieldStyle, first: Option<&Adornment>, padding: f32) -> f32 {
     match first {
-        Some(adornment) if adornment.button.is_some() => ((style.metrics.min_size.y - adornment.side(style)) / 2.0).max(0.0),
+        Some(adornment) if adornment.part().is_some() => ((style.metrics.min_size.y - adornment.extent(style).y) / 2.0).max(0.0),
         _ => padding,
     }
 }
@@ -87,34 +123,39 @@ pub fn reserve(style: &FieldStyle, leading: &[Adornment], trailing: &[Adornment]
     let metrics = style.metrics;
     let edges = inset(style, leading.first(), metrics.padding.start) - metrics.padding.start + inset(style, trailing.last(), metrics.padding.end)
         - metrics.padding.end;
-    edges + leading.iter().chain(trailing).map(|adornment| adornment.side(style) + style.metrics.gap).sum::<f32>()
+    // The adornment next to the text is the last leading one and the first trailing one.
+    let room = |adornments: &[Adornment], innermost: usize| {
+        adornments.iter().enumerate().map(|(at, adornment)| adornment.extent(style).x + adornment.gap_after(style, at == innermost)).sum::<f32>()
+    };
+    edges + room(leading, leading.len().saturating_sub(1)) + room(trailing, 0)
 }
 
 /// Places `leading` from the reading start and `trailing` from the reading end of the field's box (`content`, the
-/// content rect, with the padding added back), each
-/// `style.metrics.gap` from its neighbour and centred on the line, and leaves the rest to the text. A glyph at an
-/// edge sits one padding from it and a button `(line - side) / 2` from it. `trailing` is in reading order: its last
-/// adornment is at the end.
+/// content rect, with the padding added back), each `style.metrics.gap` from its neighbour and centred on the line,
+/// and leaves the rest to the text; a text adornment next to the text sits against it. A glyph or text at an edge
+/// sits one padding from it and a button `(line - side) / 2` from it. `trailing` is in reading order: its last
+/// adornment is at the end. Text adornments are measured first ([`Adornment::measured`]).
 pub fn place(content: Rect, style: &FieldStyle, leading: &[Adornment], trailing: &[Adornment], rtl: bool) -> Placed {
-    let gap = style.metrics.gap;
     let padding = style.metrics.padding;
-    let centred = |cell: Rect, side: f32| Rect::from_center_size(cell.center(), vec2(cell.width(), side));
+    let centred = |cell: Rect, height: f32| Rect::from_center_size(cell.center(), vec2(cell.width(), height));
     let (before, after) = if rtl { (padding.end, padding.start) } else { (padding.start, padding.end) };
     let rect = Rect::from_min_max(content.min - vec2(before, 0.0), content.max + vec2(after, 0.0));
     let mut flow = Flow::new(rect, rtl);
     flow = flow.take_start(inset(style, leading.first(), padding.start)).1;
     flow = flow.take_end(inset(style, trailing.last(), padding.end)).1;
     let mut lead = SmallVec::new();
-    for adornment in leading {
-        let (cell, rest) = flow.take_start(adornment.side(style));
-        lead.push(centred(cell, adornment.side(style)));
-        flow = rest.take_start(gap).1;
+    for (at, adornment) in leading.iter().enumerate() {
+        let extent = adornment.extent(style);
+        let (cell, rest) = flow.take_start(extent.x);
+        lead.push(centred(cell, extent.y));
+        flow = rest.take_start(adornment.gap_after(style, at + 1 == leading.len())).1;
     }
     let mut trail: SmallVec<[Rect; 2]> = SmallVec::new();
-    for adornment in trailing.iter().rev() {
-        let (cell, rest) = flow.take_end(adornment.side(style));
-        trail.push(centred(cell, adornment.side(style)));
-        flow = rest.take_end(gap).1;
+    for (at, adornment) in trailing.iter().enumerate().rev() {
+        let extent = adornment.extent(style);
+        let (cell, rest) = flow.take_end(extent.x);
+        trail.push(centred(cell, extent.y));
+        flow = rest.take_end(adornment.gap_after(style, at == 0)).1;
     }
     trail.reverse();
     Placed { text: flow.rect(), leading: lead, trailing: trail }
