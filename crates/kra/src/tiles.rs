@@ -166,6 +166,9 @@ fn header_value(bytes: &[u8], pos: &mut usize, key: &str, max: usize) -> Result<
     v.parse::<usize>().ok().filter(|v| (1..=max).contains(v)).ok_or_else(|| invalid(format!("tile file: invalid {key} `{v}`")))
 }
 
+/// Tile records reserved before any is read; the table grows as records are found.
+const FIRST_RESERVATION: usize = 1 << 16;
+
 impl<'a> TileFile<'a> {
     /// Reads the header and the tile table. No pixel is decoded.
     pub fn parse(bytes: &'a [u8]) -> Result<TileFile<'a>> {
@@ -187,7 +190,8 @@ impl<'a> TileFile<'a> {
         if count > bytes.len() / 8 + 1 {
             return Err(invalid("tile count exceeds the file size"));
         }
-        let mut tiles = Vec::with_capacity(count);
+        // Not `count` up front: a compressed member can declare far more records than it holds.
+        let mut tiles = Vec::with_capacity(count.min(FIRST_RESERVATION));
         for _ in 0..count {
             let l = line(bytes, &mut pos)?;
             let mut f = l.split(',');
@@ -201,6 +205,10 @@ impl<'a> TileFile<'a> {
             let data =
                 bytes.get(pos..pos.checked_add(len).ok_or_else(|| invalid("tile size overflow"))?).ok_or_else(|| invalid("truncated tile data"))?;
             pos += len;
+            if tiles.len() == tiles.capacity() {
+                // Grow by at most what is still declared, so the vector never overshoots `count`.
+                tiles.try_reserve_exact(tiles.len().max(1).min(count - tiles.len())).map_err(|_| invalid("tile table allocation"))?;
+            }
             tiles.push(Tile { x, y, data });
         }
         Ok(TileFile { width, height, pixel_size, tiles })
@@ -246,5 +254,27 @@ impl<'a> TileFile<'a> {
             f => return Err(invalid(format!("unknown tile compression flag {f}"))),
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A file may declare one record per eight bytes (134 million in a 1 GiB member, 3 GiB of
+    /// records) and hold none of them: the table is reserved as records are read.
+    #[test]
+    fn the_tile_table_is_not_reserved_from_the_declared_count() {
+        let mut bytes = b"VERSION 2\nTILEWIDTH 4\nTILEHEIGHT 4\nPIXELSIZE 1\nDATA 200000\n".to_vec();
+        bytes.resize(8 * 200_000, b' ');
+        assert_eq!(TileFile::parse(&bytes).unwrap_err(), invalid("truncated or malformed tile file header"));
+        // 70 000 real tiles: more than the first reservation, and no more capacity than tiles.
+        let mut bytes = b"VERSION 2\nTILEWIDTH 4\nTILEHEIGHT 4\nPIXELSIZE 1\nDATA 70000\n".to_vec();
+        for i in 0..70_000 {
+            bytes.extend_from_slice(format!("{i},0,LZF,1\n\x07").as_bytes());
+        }
+        let file = TileFile::parse(&bytes).unwrap();
+        assert_eq!((file.tiles.len(), file.tiles.capacity()), (70_000, 70_000));
+        assert!(FIRST_RESERVATION * size_of::<Tile<'_>>() <= 2 << 20);
     }
 }
