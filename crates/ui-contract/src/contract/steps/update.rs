@@ -36,7 +36,7 @@ pub(crate) fn update_inputs(core: &mut CxCore<'_>) {
 
 /// Step 9, before the component: a gesture cancelled under its press is live again once the press is released.
 pub(crate) fn gesture_gate<C: Component>(comp: &C, cx: &mut Cx<'_, C>) {
-    let held = cx.core.press_held() || scrub_press(comp, cx).is_some_and(|press| press.phase.button_down());
+    let held = cx.core.press_held() || scrub_press(comp, cx).is_some_and(|(press, _)| press.phase.button_down());
     let slot = gesture_key(cx.core.id);
     let gesture = cx.core.memory.shown::<Gesture<ValueOf<C>>>(slot);
     if gesture.dead && !held {

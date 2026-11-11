@@ -3,3 +3,4 @@
 mod features;
 mod lanes;
 mod panel;
+mod timecode;

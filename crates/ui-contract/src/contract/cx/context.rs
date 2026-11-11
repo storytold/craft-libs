@@ -168,6 +168,9 @@ pub struct CxCore<'a> {
     pub(crate) editor_inputs: Vec<craft_behavior::EditorInput>,
     /// The text part's draft is not a value of its codec.
     pub(crate) text_invalid: bool,
+    /// The text part takes the pointer this pass: the field is in edit, or the press under way began in edit. A body
+    /// scrub (`Scrub::on_field`) leaves such a press to the text.
+    pub(crate) text_takes_pointer: bool,
     /// The row and column counts of the collection, which the item step records for its node.
     pub(crate) grid: crate::runtime::access::GridPlace,
     /// The text part's completion list is open: Escape belongs to its popup, not to the component's gesture.

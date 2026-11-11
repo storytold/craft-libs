@@ -375,6 +375,7 @@ fn blank_core<'a>(
         editor: None,
         editor_inputs: Vec::new(),
         text_invalid: false,
+        text_takes_pointer: false,
         grid: crate::runtime::access::GridPlace::default(),
         escape_to_list: false,
         text_access: std::cell::RefCell::new(None),

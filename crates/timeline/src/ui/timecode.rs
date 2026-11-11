@@ -184,7 +184,8 @@ impl Outcome for TimecodeFieldOutput {
 /// - Click (or Tab) to type: the text is selected; Enter or a click away commits through [`parse_time`] relative to
 ///   the current value; Esc cancels. A time that does not parse commits nothing and is reported on
 ///   [`TimecodeFieldOutput::error`].
-/// - A drag on the field's side label scrubs one frame per point, Shift ten, as a gesture of `EditEvent<Tick>`s.
+/// - A drag on the field while it is not in edit, or on its side label, scrubs one frame per point, Shift ten, as a
+///   gesture of `EditEvent<Tick>`s; a click without a drag edits, and in edit a drag selects text.
 /// - Never before `min` (the sequence start). One Tab stop; Up and Down step one frame, Shift ten.
 /// - AccessKit: a spin button whose text is the formatted time.
 #[derive(Component, Props)]
@@ -197,8 +198,6 @@ pub struct TimecodeField<'a> {
     #[prop]
     min: Tick,
     options: TextOptions,
-    /// The readout form: large accent text that scrubs under a drag on the field itself.
-    large: bool,
 }
 
 impl<'a> TimecodeField<'a> {
@@ -209,17 +208,15 @@ impl<'a> TimecodeField<'a> {
         options.select_on_focus = true;
         options.submits = true;
         options.steps_value = true;
-        TimecodeField { common: Common::new(), value, format, min: Tick::ZERO, options, large: false }.label(label)
+        TimecodeField { common: Common::new(), value, format, min: Tick::ZERO, options }.label(label)
     }
 
-    /// The large readout: the prominent text role in the accent ink. A drag on the field itself scrubs the time, as a
-    /// drag on the side label does for the plain field.
+    /// The large readout: the prominent text role in the accent ink.
     #[must_use]
     pub fn large(mut self) -> Self {
         self.options.mono = false;
         self.options.role = TypeRole::BodyLarge;
         self.options.ink = Some(Ink::Accent);
-        self.large = true;
         self
     }
 
@@ -246,8 +243,9 @@ impl Component for TimecodeField<'_> {
         FieldStyle::at(cx)
     }
 
+    /// A drag on the body scrubs a field that is not in edit.
     fn sense(&self) -> Sense {
-        if self.large { Sense::CLICK | Sense::DRAG | Sense::FOCUS | Sense::TAKE_FOCUS } else { Sense::CLICK | Sense::FOCUS | Sense::TAKE_FOCUS }
+        Sense::CLICK | Sense::DRAG | Sense::FOCUS | Sense::TAKE_FOCUS
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
@@ -269,13 +267,13 @@ impl Component for TimecodeField<'_> {
         Some(self.value.reborrow())
     }
 
-    /// A drag on the side label moves the time a frame per point.
+    /// A drag on the field while it is not in edit, or on its side label, moves the time a frame per point.
     fn scrub(&self) -> Option<Scrub<Tick>> {
         let (rate, min) = (self.format.rate, self.min);
         let frames = rate.frame_at(min) as f64..=rate.frame_at(Tick::MAX) as f64;
         let drag = ValueDrag::relative(1.0, frames).warp(true).hide_cursor(true).coarse(LARGE_STEPS);
         let scrub = Scrub::new(drag, move |time: &Tick| rate.frame_at(*time) as f64, move |frames: f64| rate.tick_of(frames.round() as i64).max(min));
-        Some(if self.large { scrub.on_field() } else { scrub })
+        Some(scrub.on_field().by_label())
     }
 
     /// Up and Down step the time by a frame, with Shift by ten.

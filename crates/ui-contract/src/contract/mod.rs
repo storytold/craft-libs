@@ -373,7 +373,8 @@ pub trait Component: Meta + Sized {
         proposed == host
     }
 
-    /// Lets a drag on the field's side label change the value; the pipeline runs the gesture (16.3, B2).
+    /// Lets a drag on the scrub's sources (the side label, the body, a part) change the value; the pipeline runs the
+    /// gesture (16.3, B2).
     fn scrub(&self) -> Option<Scrub<ValueOf<Self>>> {
         None
     }

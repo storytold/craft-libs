@@ -86,7 +86,7 @@ impl Component for Dial<'_> {
     fn scrub(&self) -> Option<Scrub<f64>> {
         let drag = ValueDrag::relative(RATE, RANGE);
         let drag = if self.warping { drag.warp(true).hide_cursor(true) } else { drag };
-        Some(Scrub::new(drag, |value| *value, |value| value))
+        Some(Scrub::new(drag, |value| *value, |value| value).by_label())
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {

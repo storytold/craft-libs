@@ -4,7 +4,7 @@ use crate::contract::Tooltip;
 use crate::primitives::IconSpec;
 use crate::runtime::access::scope::FieldLabelRole;
 use crate::runtime::env::{Env, Label};
-use craft_behavior::{ColumnWidth, ValueDrag};
+use craft_behavior::{ColumnWidth, PartRef, ValueDrag};
 use std::sync::Arc;
 
 /// How a side label is shown.
@@ -193,18 +193,27 @@ impl SideLabel {
     }
 }
 
-/// How a drag on the side label (or on the control itself) changes a control's value: the drag maths over the
-/// control's number.
+/// How a drag changes a control's value: the drag maths over the control's number, and the sources a drag starts on
+/// (`by_label`, `on_field`, `part`). A scrub with no source does nothing.
 pub struct Scrub<V> {
     pub(crate) drag: ValueDrag,
+    pub(crate) by_label: bool,
     pub(crate) on_field: bool,
+    pub(crate) parts: Vec<(PartRef, ValueDrag)>,
     pub(crate) read: Arc<dyn Fn(&V) -> f64 + Send + Sync>,
     pub(crate) write: Arc<dyn Fn(f64) -> V + Send + Sync>,
 }
 
 impl<V> Clone for Scrub<V> {
     fn clone(&self) -> Self {
-        Scrub { drag: self.drag.clone(), on_field: self.on_field, read: Arc::clone(&self.read), write: Arc::clone(&self.write) }
+        Scrub {
+            drag: self.drag.clone(),
+            by_label: self.by_label,
+            on_field: self.on_field,
+            parts: self.parts.clone(),
+            read: Arc::clone(&self.read),
+            write: Arc::clone(&self.write),
+        }
     }
 }
 
@@ -212,11 +221,27 @@ impl<V> Scrub<V> {
     /// A scrub by `drag`, reading the number a value holds with `read` and making a value of a number with `write`.
     /// Both may capture the control's decimals and step, so a scrubbed value is rounded the way the control rounds.
     pub fn new(drag: ValueDrag, read: impl Fn(&V) -> f64 + Send + Sync + 'static, write: impl Fn(f64) -> V + Send + Sync + 'static) -> Self {
-        Scrub { drag, on_field: false, read: Arc::new(read), write: Arc::new(write) }
+        Scrub { drag, by_label: false, on_field: false, parts: Vec::new(), read: Arc::new(read), write: Arc::new(write) }
     }
 
-    /// The drag starts on the control itself instead of its side label, for a readout with no label. The control
-    /// must sense a drag.
+    /// A drag on the control's side label scrubs, with or without the focus in the control; the label senses the
+    /// drag from the pass after the control first declared it.
+    #[must_use]
+    pub fn by_label(mut self) -> Self {
+        self.by_label = true;
+        self
+    }
+
+    /// A drag on the part `part` scrubs by `drag`, with or without the focus in the control: a scrub handle, or an
+    /// opener whose drag moves the value as far as its popup's control would.
+    #[must_use]
+    pub fn part(mut self, part: impl Into<PartRef>, drag: ValueDrag) -> Self {
+        self.parts.push((part.into(), drag));
+        self
+    }
+
+    /// A drag on the control's body scrubs while its text part does not take the pointer: a field that is not in
+    /// edit. A click enters edit, and in edit a drag selects text. The control must sense a drag.
     #[must_use]
     pub fn on_field(mut self) -> Self {
         self.on_field = true;

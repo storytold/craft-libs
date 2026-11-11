@@ -1,4 +1,4 @@
-//! Step 9's side-label part: the label scrub.
+//! Step 9's scrub: a drag on the side label, the body or a part changes the value.
 
 use crate::contract::{Component, Cx};
 use crate::runtime::access::scope;
@@ -7,10 +7,18 @@ use crate::runtime::windows::WindowHost;
 use craft_behavior::{CancelReason, Cursor, CursorPriority, DragWarp, GesturePhase, PaintedCursor, ValueDrag};
 use egui::{Pos2, Vec2};
 
-/// The press that carries a scrub: the field's own, or for a scrub by the label, the label's.
-pub(super) fn scrub_press<C: Component>(comp: &C, cx: &Cx<'_, C>) -> Option<craft_behavior::PressState> {
+/// The press that carries a scrub and the drag it scrubs by: a scrub part's, the side label's, or the field's own
+/// while its text part leaves it the pointer.
+pub(super) fn scrub_press<C: Component>(comp: &C, cx: &Cx<'_, C>) -> Option<(craft_behavior::PressState, ValueDrag)> {
     let scrub = comp.scrub()?;
-    if scrub.on_field { Some(cx.core.press) } else { scope::field_label(&cx.core.ctx).map(|label| label.press) }
+    let pressed = |press: &craft_behavior::PressState| press.phase.is_press();
+    let part = scrub.parts.iter().find_map(|(part, drag)| {
+        let press = cx.core.results.get(&(part.key, part.index)).map(|result| result.press)?;
+        pressed(&press).then(|| (press, drag.clone()))
+    });
+    let label = || scrub.by_label.then(|| scope::field_label(&cx.core.ctx)).flatten().map(|label| label.press).filter(pressed);
+    let field = || (scrub.on_field && !cx.core.text_takes_pointer).then_some(cx.core.press).filter(pressed);
+    part.or_else(|| label().or_else(field).map(|press| (press, scrub.drag.clone())))
 }
 
 /// The value a label scrub started from.
@@ -45,9 +53,9 @@ fn scrub_warp<C: Component>(cx: &mut Cx<'_, C>, drag: &ValueDrag, pos: Pos2) -> 
     shift
 }
 
-/// Step 9, before the component: a drag on the side label (or on the component itself, for a scrub that
-/// `Scrub::on_field` declares) scrubs the value of a component that opts in with `Component::scrub`. A label scrub
-/// registers the control with its label scope so the label senses the drag from the next pass on.
+/// Step 9, before the component: a drag on a source of the component's `Component::scrub` (its side label, its body,
+/// a part) scrubs its value. A label scrub registers the control with its label scope so the label senses the drag
+/// from the next pass on.
 pub(crate) fn scrub_by_label<C: Component>(comp: &C, cx: &mut Cx<'_, C>) {
     use crate::contract::cx::Edit as _;
     use craft_behavior::{PressCancel, PressPhase};
@@ -59,30 +67,31 @@ pub(crate) fn scrub_by_label<C: Component>(comp: &C, cx: &mut Cx<'_, C>) {
         }
         return;
     }
-    let label = (!scrub.on_field).then(|| scope::field_label(&cx.core.ctx)).flatten();
+    let label = scrub.by_label.then(|| scope::field_label(&cx.core.ctx)).flatten();
     if label.is_some() {
         scope::register_scrub(&cx.core.ctx);
     }
-    // The scrub's source shows the horizontal resize cursor under the pointer.
-    let source_hovered = if scrub.on_field { cx.core.response.hovered() } else { label.is_some_and(|label| label.hovered) };
-    if source_hovered {
+    // A scrub's source shows the horizontal resize cursor under the pointer.
+    let part_hovered = scrub.parts.iter().any(|(part, _)| cx.core.results.get(&(part.key, part.index)).is_some_and(|result| result.hovered));
+    let field_hovered = scrub.on_field && !cx.core.text_takes_pointer && cx.core.response.hovered();
+    if part_hovered || field_hovered || label.is_some_and(|label| label.hovered) {
         crate::runtime::cursor::request(&cx.core.ctx, Cursor::System(craft_behavior::CursorIcon::ResizeHorizontal), CursorPriority::Part);
     }
-    let Some(press) = scrub_press(comp, cx) else { return };
+    let Some((press, drag)) = scrub_press(comp, cx) else { return };
     let start_id = sub(cx.core.id, "scrub_start");
     let rtl = cx.core.env.direction().is_rtl();
     match press.phase {
         PressPhase::DragStart { .. } => {
             cx.core.memory.shown::<ScrubStart>(start_id).0 = cx.value().map_or(0.0, |value| (scrub.read)(value));
             *cx.core.memory.shown::<ScrubWarp>(sub(cx.core.id, "scrub_warp")) = ScrubWarp::default();
-            hide_scrub_cursor(cx, &scrub.drag);
+            hide_scrub_cursor(cx, &drag);
             cx.begin();
         }
         PressPhase::Drag { pos, .. } => {
-            hide_scrub_cursor(cx, &scrub.drag);
+            hide_scrub_cursor(cx, &drag);
             let start = cx.core.memory.shown::<ScrubStart>(start_id).0;
-            let shift = scrub_warp(cx, &scrub.drag, pos);
-            if let Some(next) = scrub.drag.value_shifted(start, &press, rtl, shift) {
+            let shift = scrub_warp(cx, &drag, pos);
+            if let Some(next) = drag.value_shifted(start, &press, rtl, shift) {
                 cx.propose((scrub.write)(next));
             }
         }

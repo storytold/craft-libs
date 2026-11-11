@@ -370,8 +370,10 @@ pub(crate) fn run<C: Component>(
     let enabled = cx.core.resolved.enabled && decl.options.enabled;
     let focusable = super::steps::takes_focus(cx.core.resolved) && decl.options.enabled;
     // A component that senses a drag on its root scrubs its value by it: the field takes the pointer only once it is
-    // in edit, and a click that enters it puts the caret where it went down.
+    // in edit, a press that begins in edit stays the text's (a drag selects), and a click that enters it puts the
+    // caret where it went down.
     let scrubs = cx.core.root_sense.contains(craft_behavior::Sense::DRAG);
+    let mut in_edit_before = false;
     if scrubs {
         let before = cx.core.memory.shown::<InEditBeforePress>(sub(id, "in_edit_before_press"));
         if cx.core.press.phase.is_drag() {
@@ -383,8 +385,10 @@ pub(crate) fn run<C: Component>(
         } else if !cx.core.press.phase.button_down() {
             before.0 = focused;
         }
+        in_edit_before = before.0;
     }
-    let pointer = !scrubs || (focused && !cx.core.press.phase.is_drag());
+    let pointer = !scrubs || in_edit_before || (focused && !cx.core.press.phase.is_drag());
+    cx.core.text_takes_pointer = pointer;
     let click = match cx.core.press.phase {
         craft_behavior::PressPhase::Release { pos, click: true, .. } if scrubs && focusable => Some(pos),
         _ => None,

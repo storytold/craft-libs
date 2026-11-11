@@ -1,7 +1,8 @@
 //! `NumberField`: a text part over [`NumberCodec`] with a range, a step, a unit, presets and a popup slider.
 //!
 //! Typing, expressions, unit spellings and locale digits are the codec's (`quantity::Reader`); the field adds the
-//! range every written value stays in and the step that arrows, the wheel and the label scrub move by.
+//! range every written value stays in and the step that arrows, the wheel and a scrub move by. A drag on a field that
+//! is not in edit scrubs it; a click enters edit, where a drag selects text.
 
 #[cfg(feature = "testing")]
 mod stories;
@@ -11,14 +12,16 @@ use super::words::TextWords;
 use super::{FieldStyle, text_part};
 use crate::buttons::IconButton;
 use crate::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, Entry, Focus as _, Input, MeasureCx, Numeric, OverlayUi, PaintUi, PartsCx, Pointer as _,
-    Props as _, Role, Scrub, Styled as _, WordSetCx as _,
+    Access, Bind, BindMut, Common, Component, Cx, Edit as _, Entry, Focus as _, Input, MeasureCx, Numeric, OverlayUi, Overlays as _, PaintUi,
+    PartsCx, Pointer as _, Props as _, Role, Scrub, Styled as _, WordSetCx as _,
 };
 use crate::primitives::{TextOptions, TextRun};
 use crate::runtime::env::{Label, LengthUnits, UnitKind, Units};
 use crate::style::{ComponentStyle, StyleCx, SurfaceLook, TextLook, TypeRole};
 use craft_behavior::nav::{LARGE_STEPS, StepResult, ValueAxes, ValueSteps};
-use craft_behavior::{Codec, Flow, HitLevel, HitPriority, Metrics, NavMove, NumberCodec, PartKey, Sense, ValueDrag, decimals_for_step, wheel_step};
+use craft_behavior::{
+    Codec, Flow, HitLevel, HitPriority, Metrics, NavMove, NumberCodec, PartKey, PressPhase, Sense, ValueDrag, decimals_for_step, wheel_step,
+};
 use craft_theme::{Stateful, States};
 use egui::{Pos2, Rect, Vec2};
 use std::borrow::Cow;
@@ -33,7 +36,7 @@ pub use rule::NumberStepper;
 use rule::{Rule, Ruled, key_scale, round_to};
 pub use value::{NamedOr, NumberName, NumberOutput, NumberPick, NumberValue};
 
-/// The step of an arrow press, the wheel and the label scrub when the field sets none.
+/// The step of an arrow press, the wheel and a scrub when the field sets none.
 const DEFAULT_STEP: f64 = 1.0;
 /// The placeholder of a mixed field.
 const BLANK: &str = "\u{2014}";
@@ -86,7 +89,7 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// The range typed, stepped and scrubbed values stay in.
     #[prop]
     range: Option<RangeInclusive<f64>>,
-    /// What one arrow press, one wheel notch and one point of label scrub change; the default is 1.
+    /// What one arrow press, one wheel notch and one point of scrub change; the default is 1.
     #[prop(quantity = "step")]
     step: Option<f64>,
     /// Where an arrow press, a Page key and a wheel notch go from the current value, for values on a ladder (the zoom
@@ -99,7 +102,8 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// The rows of the list a chevron after the field opens; Alt+Down opens it too.
     #[prop]
     presets: Option<&'a [Entry<NumberPick>]>,
-    /// A chevron after the field opens a slider over `range` below it.
+    /// A chevron after the field opens a slider over `range` below it; pressing the chevron and dragging moves the
+    /// value at once, as far as the slider would, and the release closes the slider.
     #[prop]
     popup_slider: Option<RangeInclusive<f64>>,
     /// A typed value goes to the nearest multiple of the step when it commits.
@@ -123,6 +127,9 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     scale: f64,
     options: TextOptions,
     scrub: bool,
+    /// The popup slider's track length, read from the tokens in parts: a drag on its chevron moves the value as far
+    /// as a drag on the slider would.
+    track: f32,
     picked: Option<NumberPick>,
     unit_size: Vec2,
 }
@@ -174,13 +181,14 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             scale: 1.0,
             options: TextOptions::default(),
             scrub: false,
+            track: 0.0,
             picked: None,
             unit_size: Vec2::ZERO,
         }
         .label(label)
     }
 
-    /// A drag on the field's side label scrubs the value.
+    /// A drag on the field's side label scrubs the value too, with or without the focus in the field.
     #[must_use]
     pub fn scrub_by_label(mut self) -> Self {
         self.scrub = true;
@@ -326,8 +334,9 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         }
     }
 
+    /// A drag on the body scrubs a field that is not in edit.
     fn sense(&self) -> Sense {
-        Sense::CLICK | Sense::FOCUS | Sense::TAKE_FOCUS
+        Sense::CLICK | Sense::DRAG | Sense::FOCUS | Sense::TAKE_FOCUS
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
@@ -357,6 +366,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
         self.settle_lengths(&cx.env.units());
         self.unit_size = self.unit_extent(cx);
+        self.track = cx.tokens.size.length.track;
         let rtl = cx.flow.is_rtl();
         let chevrons = self.chevrons(&cx.words::<TextWords>());
         let placed = Self::laid_out(cx.style, cx.content_rect, rtl, &chevrons);
@@ -380,7 +390,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             let reason = if *key == PRESETS { "Alt+Down opens the list" } else { slider_reason };
             let popup = if *key == PRESETS { "presets" } else { "slider" };
             cx.part(*key, *at)
-                .sense(Sense::CLICK | Sense::KEEP_FOCUS)
+                .sense(Sense::CLICK | Sense::DRAG | Sense::KEEP_FOCUS)
                 .priority(HitPriority::new(HitLevel::Handle, 0))
                 .pointer_only(reason)
                 .toggles(popup);
@@ -398,6 +408,8 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         proposed == host || (proposed.named() == host.named() && at_precision(proposed) == at_precision(host))
     }
 
+    /// A drag on the body of a field not in edit, or on its side label with `scrub_by_label`, moves a step a point;
+    /// a drag on the popup slider's chevron moves the value as far as the same drag on the slider.
     fn scrub(&self) -> Option<Scrub<V>> {
         let rule = self.rule();
         let drag = ValueDrag::relative(rule.step, rule.bounds()).warp(true).hide_cursor(true).coarse(LARGE_STEPS).fine(1.0 / LARGE_STEPS);
@@ -405,9 +417,18 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         // here: an Alt drag moves by a share of it.
         let decimals = self.decimals();
         let scale = self.scale;
-        self.scrub.then(|| {
+        let mut scrub =
             Scrub::new(drag, move |value: &V| value.number().unwrap_or(0.0) * scale, move |number| V::of_number(round_to(number, decimals) / scale))
-        })
+                .on_field();
+        if self.scrub {
+            scrub = scrub.by_label();
+        }
+        if let Some(range) = self.popup_slider.as_ref().filter(|_| self.track > 0.0) {
+            let shown = range.start() * scale..=range.end() * scale;
+            let rate = (shown.end() - shown.start()) / f64::from(self.track);
+            scrub = scrub.part(SLIDER, ValueDrag::relative(rate, shown));
+        }
+        Some(scrub)
     }
 
     /// Arrows, Page keys, the wheel and AccessKit Increment and Decrement step the value, AccessKit sets it, and the
@@ -417,6 +438,10 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
     /// fine step. A step starts from the applied value, or from 0 kept in the
     /// range while the field is blank.
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        // A drag from the slider's chevron is one gesture with the slider it opened: its release closes the slider.
+        if cx.part_if_declared(SLIDER).is_some_and(|part| matches!(part.press.phase, PressPhase::Release { click: false, .. })) {
+            cx.popup("slider").close(cx);
+        }
         let rule = self.rule();
         let fine_shows = self.decimals() >= decimals_for_step(rule.step / LARGE_STEPS);
         while let Some((mv, mods)) = cx.intents().take_move() {
