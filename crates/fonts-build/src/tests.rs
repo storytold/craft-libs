@@ -824,3 +824,98 @@ fn manifest_paths_stay_inside_the_checkout() {
     run(Embed::new().serve(&served, "fonts/"), Some(&dir), Some("1")).result.unwrap();
     assert_eq!(std::fs::read(served.join("OFL.txt")).unwrap(), b"licence");
 }
+
+/// A supplier's licence is published as plain text under its own stem, whatever extension it has:
+/// an `.html` licence would be a page on the site's origin.
+#[test]
+fn a_served_licence_is_always_plain_text() {
+    let scratch = Scratch::new("licence-name");
+    let dir = scratch.0.join("craft-fonts");
+    std::fs::create_dir_all(dir.join("fonts/a")).unwrap();
+    std::fs::write(dir.join("fonts/a/a.ttf"), b"a").unwrap();
+    let served = scratch.0.join("served");
+    for (licence, published) in [("LICENSE.html", "LICENSE.txt"), ("COPYING", "COPYING.txt"), ("OFL.txt", "OFL.txt"), ("NOTICE.svg", "NOTICE.txt")] {
+        std::fs::write(dir.join("fonts/a").join(licence), b"<script>alert(1)</script>").unwrap();
+        let line = format!("Sans | Regular | fonts/a/a.ttf | Latn | OFL-1.1 | fonts/a/{licence} | 00 | src\n");
+        std::fs::write(dir.join("fonts/manifest.txt"), line).unwrap();
+        run(Embed::new().serve(&served, "fonts/"), Some(&dir), Some("1")).result.unwrap();
+        assert_eq!(std::fs::read(served.join("a").join(published)).unwrap(), b"<script>alert(1)</script>", "{licence}");
+        if published != licence {
+            assert!(!served.join("a").join(licence).exists(), "{licence} is published under its own name");
+        }
+        std::fs::remove_dir_all(&served).unwrap();
+    }
+}
+
+/// `cargo::rerun-if-changed` is one line: a path with a line break would print a second instruction.
+#[cfg(unix)]
+#[test]
+fn a_path_with_a_line_break_is_refused_before_cargo_is_told_to_watch_it() {
+    let scratch = Scratch::new("line-break");
+    let served = scratch.0.join("served");
+    let dir = scratch.0.join("craft-fonts");
+    std::fs::create_dir_all(dir.join("fonts")).unwrap();
+    std::fs::write(dir.join("fonts/OFL.txt"), b"licence").unwrap();
+    // A font whose name has a carriage return (the manifest is read by lines, so a line feed can't be in it).
+    std::fs::write(dir.join("fonts/a\rcargo::warning=x.ttf"), b"a").unwrap();
+    let line = "Sans | Regular | fonts/a\rcargo::warning=x.ttf | Latn | OFL-1.1 | fonts/OFL.txt | 00 | src\n";
+    std::fs::write(dir.join("fonts/manifest.txt"), line).unwrap();
+    for embed in [Embed::new(), Embed::new().serve(&served, "fonts/")] {
+        let r = run(embed, Some(&dir), Some("1"));
+        assert!(matches!(r.result, Err(Error::LineBreakInPath { .. })), "{:?}", r.result);
+        assert!(r.cargo.iter().all(|line| !line.contains('\r') && !line.contains('\n')), "{:?}", r.cargo);
+        assert!(!r.table.contains("include_bytes!"));
+    }
+    // The same through a checkout directory, and a catalog, whose names are the caller's.
+    let odd = scratch.0.join("odd\rdir");
+    std::fs::create_dir_all(odd.join("fonts")).unwrap();
+    std::fs::write(odd.join("fonts/manifest.txt"), "# no faces\n").unwrap();
+    let r = run(Embed::new(), Some(&odd), None);
+    assert!(r.cargo.iter().all(|line| !line.starts_with("cargo::rerun-if-changed=") || !line.contains('\r')), "{:?}", r.cargo);
+    let r = run(Embed::new().check_text([scratch.0.join("t\rext.ftl")]), Some(&dir), None);
+    assert!(matches!(r.result, Err(Error::LineBreakInPath { .. })), "{:?}", r.result);
+}
+
+/// Reads of the manifest, fonts and licences are bounded and take regular files only. The tests use
+/// small limits: nothing here allocates the hostile size.
+#[test]
+fn reads_are_bounded_and_refuse_what_is_not_a_regular_file() {
+    use crate::embed::read_bounded;
+    let scratch = Scratch::new("bounded");
+    let file = scratch.0.join("f");
+    std::fs::write(&file, b"0123456789").unwrap();
+    assert_eq!(read_bounded(&file, 10).unwrap(), b"0123456789");
+    assert!(read_bounded(&file, 9).unwrap_err().to_string().contains("larger than 9 bytes"));
+    assert!(read_bounded(&scratch.0, 10).is_err(), "a directory");
+    assert!(read_bounded(&scratch.0.join("missing"), 10).is_err());
+    #[cfg(unix)]
+    {
+        // Opening a FIFO with no writer would block for ever.
+        let fifo = scratch.0.join("fifo");
+        if std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|s| s.success()) {
+            assert!(read_bounded(&fifo, 10).unwrap_err().to_string().contains("not a regular file"));
+        }
+    }
+}
+
+/// A manifest past 1 MiB is an error (the real one is a few KiB), and a face that is a directory is
+/// not a file inside the checkout.
+#[test]
+fn an_oversized_manifest_and_a_directory_face_are_errors() {
+    let scratch = Scratch::new("manifest-cap");
+    let dir = scratch.0.join("craft-fonts");
+    std::fs::create_dir_all(dir.join("fonts/a.ttf")).unwrap();
+    std::fs::write(dir.join("fonts/OFL.txt"), b"licence").unwrap();
+    let valid = "Sans | Regular | fonts/a.ttf | Latn | OFL-1.1 | fonts/OFL.txt | 00 | src\n";
+    std::fs::write(dir.join("fonts/manifest.txt"), valid).unwrap();
+    let r = run(Embed::new(), Some(&dir), Some("1"));
+    assert!(matches!(r.result, Err(Error::OutsideCheckout { .. })), "{:?}", r.result);
+
+    let padding = format!("# {}\n", "x".repeat(1 << 20));
+    std::fs::write(dir.join("fonts/manifest.txt"), format!("{padding}{valid}")).unwrap();
+    let r = run(Embed::new(), Some(&dir), Some("1"));
+    assert!(matches!(&r.result, Err(Error::Read { source, .. }) if source.to_string().contains("larger than")), "{:?}", r.result);
+    // Not required: a warning and an empty table, as for any unreadable manifest.
+    let r = run(Embed::new(), Some(&dir), None);
+    assert!(r.result.is_ok() && warnings(&r).iter().any(|w| w.contains("larger than")), "{:?}", r.cargo);
+}
