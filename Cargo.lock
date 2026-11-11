@@ -922,6 +922,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-epub"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "flate2",
+ "thiserror 2.0.21",
+ "zip",
+]
+
+[[package]]
 name = "craft-font-catalog"
 version = "0.1.0"
 dependencies = [
