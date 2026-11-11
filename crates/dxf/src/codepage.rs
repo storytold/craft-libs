@@ -6,14 +6,17 @@
 //! Asian code page) escapes, which [`crate::parse`] decodes after the bytes.
 //!
 //! The Windows, ISO and East Asian code pages are decoded with `encoding_rs`; DOS 437, 850 and
-//! 852 with the tables below (the upper halves of the IBM PC code pages; the lower halves are
-//! ASCII). Decoding never fails: a byte sequence that is invalid in the code page (a truncated
+//! 852 with the tables below and the other DOS pages with those of `dos_tables.rs` (the upper
+//! halves of the IBM PC code pages; the lower halves are ASCII). Decoding never fails: a byte sequence that is invalid in the code page (a truncated
 //! double-byte character, an unassigned byte) becomes U+FFFD and the bytes after it decode
 //! normally, so line ends and the group structure survive.
 
 use std::borrow::Cow;
 
 use encoding_rs::Encoding;
+
+use crate::Version;
+use crate::dos_tables as dos;
 
 /// How the bytes of a code page become text.
 #[derive(Clone, Copy, Debug)]
@@ -22,6 +25,19 @@ pub(crate) enum Decoder {
     Encoding(&'static Encoding),
     /// Single-byte DOS code page: ASCII, then these 128 characters for bytes 0x80–0xFF.
     Table(&'static [char; 128]),
+    /// DOS 864: like [`Decoder::Table`], but byte 0x25 is U+066A ARABIC PERCENT SIGN, not `%`.
+    Dos864,
+}
+
+/// What byte 0x25 of DOS 864 stands for.
+const DOS864_PERCENT: char = '\u{066A}';
+
+impl Decoder {
+    /// True when the ASCII character `c` is not what its byte means in this code page, so a
+    /// writer has to escape it.
+    pub(crate) fn shadows_ascii(self, c: char) -> bool {
+        matches!(self, Decoder::Dos864) && c == '%'
+    }
 }
 
 /// The decoder for a `$DWGCODEPAGE` value (case-insensitive), or `None` when CADCraft doesn't
@@ -52,11 +68,23 @@ pub(crate) fn decoder(code_page: &str) -> Option<Decoder> {
         "ISO8859_6" | "ISO_8859_6" => e::ISO_8859_6,
         "ISO8859_7" | "ISO_8859_7" => e::ISO_8859_7,
         "ISO8859_8" | "ISO_8859_8" => e::ISO_8859_8,
+        "ISO8859_15" | "ISO_8859_15" => e::ISO_8859_15,
         "DOS866" => e::IBM866,
         "MACINTOSH" | "MAC_ROMAN" => e::MACINTOSH,
         "DOS437" => return Some(Decoder::Table(&DOS437)),
         "DOS850" => return Some(Decoder::Table(&DOS850)),
         "DOS852" => return Some(Decoder::Table(&DOS852)),
+        "DOS720" => return Some(Decoder::Table(&dos::DOS720)),
+        "DOS737" => return Some(Decoder::Table(&dos::DOS737)),
+        "DOS775" => return Some(Decoder::Table(&dos::DOS775)),
+        "DOS855" => return Some(Decoder::Table(&dos::DOS855)),
+        "DOS857" => return Some(Decoder::Table(&dos::DOS857)),
+        "DOS860" => return Some(Decoder::Table(&dos::DOS860)),
+        "DOS861" => return Some(Decoder::Table(&dos::DOS861)),
+        "DOS863" => return Some(Decoder::Table(&dos::DOS863)),
+        "DOS864" => return Some(Decoder::Dos864),
+        "DOS865" => return Some(Decoder::Table(&dos::DOS865)),
+        "DOS869" => return Some(Decoder::Table(&dos::DOS869)),
         _ => return None,
     };
     Some(Decoder::Encoding(enc))
@@ -97,9 +125,19 @@ pub(crate) fn encode_char(c: char, d: Decoder, out: &mut Vec<u8>) -> bool {
             }
             out.extend_from_slice(&bytes);
         }
+        // U+FFFD marks unassigned bytes in the tables; it must be escaped, not written as one.
+        Decoder::Table(_) | Decoder::Dos864 if c == '\u{FFFD}' => return false,
         Decoder::Table(t) => {
             let Some(i) = t.iter().position(|&x| x == c).and_then(|i| u8::try_from(i).ok()) else { return false };
             out.push(0x80 | i);
+        }
+        Decoder::Dos864 => {
+            if c == DOS864_PERCENT {
+                out.push(b'%');
+            } else {
+                let Some(i) = dos::DOS864.iter().position(|&x| x == c).and_then(|i| u8::try_from(i).ok()) else { return false };
+                out.push(0x80 | i);
+            }
         }
     }
     true
@@ -113,6 +151,21 @@ pub(crate) fn decode(bytes: &[u8], d: Decoder) -> Cow<'_, str> {
             Err(_) => encoding_rs::WINDOWS_1252.decode_without_bom_handling(bytes).0,
         },
         Decoder::Encoding(e) => e.decode_without_bom_handling(bytes).0,
+        Decoder::Dos864 => {
+            if bytes.is_ascii() && !bytes.contains(&b'%') {
+                return Cow::Borrowed(std::str::from_utf8(bytes).unwrap_or_default());
+            }
+            Cow::Owned(
+                bytes
+                    .iter()
+                    .map(|&b| match b {
+                        b'%' => DOS864_PERCENT,
+                        _ if b.is_ascii() => char::from(b),
+                        _ => dos::DOS864.get(usize::from(b & 0x7F)).copied().unwrap_or('\u{FFFD}'),
+                    })
+                    .collect(),
+            )
+        }
         Decoder::Table(t) => match std::str::from_utf8(bytes) {
             Ok(s) if s.is_ascii() => Cow::Borrowed(s),
             _ => Cow::Owned(
@@ -125,23 +178,28 @@ pub(crate) fn decode(bytes: &[u8], d: Decoder) -> Cow<'_, str> {
     }
 }
 
-/// The `$DWGCODEPAGE` value of an ASCII DXF file: the line two lines after a `$DWGCODEPAGE`
-/// line (the group code `3` between them), looked for in the HEADER section only (the scan stops
-/// at the first `ENDSEC`). Works on the raw bytes, before they are decoded.
-fn ascii_code_page(bytes: &[u8]) -> Option<&[u8]> {
+/// The value of the header variable `name` (group `code` after it) of an ASCII DXF file: looked
+/// for in the HEADER section only (the scan stops at the first `ENDSEC`). Works on the raw bytes,
+/// before they are decoded.
+fn ascii_header_value<'a>(bytes: &'a [u8], name: &[u8], code: &[u8]) -> Option<&'a [u8]> {
     let mut lines = bytes.split(|&b| b == b'\n' || b == b'\r').map(<[u8]>::trim_ascii).filter(|l| !l.is_empty());
     while let Some(line) = lines.next() {
         if line == b"ENDSEC" {
             return None;
         }
-        if line.eq_ignore_ascii_case(b"$DWGCODEPAGE") {
+        if line.eq_ignore_ascii_case(name) {
             return match (lines.next(), lines.next()) {
-                (Some(b"3"), Some(value)) => Some(value),
+                (Some(c), Some(value)) if c == code => Some(value),
                 _ => None,
             };
         }
     }
     None
+}
+
+/// The `$DWGCODEPAGE` value of an ASCII DXF file.
+fn ascii_code_page(bytes: &[u8]) -> Option<&[u8]> {
+    ascii_header_value(bytes, b"$DWGCODEPAGE", b"3")
 }
 
 impl Decoder {
@@ -175,7 +233,10 @@ pub(crate) fn decode_text(bytes: &[u8], d: Decoder) -> Cow<'_, str> {
 /// pairs) can be valid UTF-8 by accident and must not be misread line by line.
 pub(crate) fn decode_ascii_file(bytes: &[u8]) -> Cow<'_, str> {
     if let Ok(s) = std::str::from_utf8(bytes) {
-        return Cow::Borrowed(s);
+        if !s.contains('%') || !is_pre_2007_dos864(bytes) {
+            return Cow::Borrowed(s);
+        }
+        return decode(bytes, Decoder::Dos864);
     }
     let d = match ascii_code_page(bytes) {
         Some(name) => {
@@ -197,6 +258,13 @@ pub(crate) fn decode_ascii_file(bytes: &[u8]) -> Cow<'_, str> {
         out.push_str(&decode_text(line, d));
     }
     Cow::Owned(out)
+}
+
+/// True for an ASCII-only file whose header names `DOS864` and is not R2007+ (which is UTF-8).
+fn is_pre_2007_dos864(bytes: &[u8]) -> bool {
+    bytes.is_ascii()
+        && ascii_code_page(bytes).is_some_and(|n| n.eq_ignore_ascii_case(b"DOS864"))
+        && !ascii_header_value(bytes, b"$ACADVER", b"1").is_some_and(|v| Version::for_acadver(&String::from_utf8_lossy(v)).is_some_and(Version::utf8))
 }
 
 /// The text state of a binary DXF file, learnt from the header as the tags go by: `$ACADVER`
@@ -265,7 +333,7 @@ impl BinaryText {
                     _ => None,
                 }
             }
-            (1, Some(HeaderVar::AcadVer)) => self.utf8 = is_utf8_version(&s),
+            (1, Some(HeaderVar::AcadVer)) => self.utf8 = Version::for_acadver(&s).is_some_and(Version::utf8),
             (3, Some(HeaderVar::CodePage)) => {
                 self.code_page = decoder(&s);
                 if self.code_page.is_none() {
@@ -276,11 +344,6 @@ impl BinaryText {
         }
         s
     }
-}
-
-/// True for an `$ACADVER` of R2007 (AC1021) or later, whose text is UTF-8.
-fn is_utf8_version(acadver: &str) -> bool {
-    acadver.trim().strip_prefix("AC").and_then(|n| n.parse::<u32>().ok()).is_some_and(|n| n >= 1021)
 }
 
 /// The double-byte code page of a `\M+n` escape: 1 Japanese (Shift-JIS), 2 Traditional Chinese
@@ -365,6 +428,47 @@ mod tests {
     }
 
     #[test]
+    fn replacement_char_is_never_encoded_as_an_unassigned_byte() {
+        for cp in ["DOS857", "DOS864", "DOS437"] {
+            let d = encoder(cp).unwrap();
+            let mut out = Vec::new();
+            assert!(!encode_char('\u{FFFD}', d, &mut out), "{cp}");
+            assert!(out.is_empty(), "{cp}");
+        }
+    }
+
+    #[test]
+    fn dos864_percent_is_the_arabic_percent_sign() {
+        // Byte 0x25 is U+066A in CP864 (Python's cp864 agrees); the rest of the low half is ASCII.
+        assert_eq!(decode_code_page(b"50%", "DOS864").as_deref(), Some("50\u{066A}"));
+        assert_eq!(decode_code_page(b"a%\x80%", "dos864").as_deref(), Some("a\u{066A}\u{00B0}\u{066A}"));
+        assert_eq!(decode_code_page(b"50&", "DOS864").as_deref(), Some("50&"));
+        // The other DOS pages keep `%`.
+        assert_eq!(decode_code_page(b"50%", "DOS437").as_deref(), Some("50%"));
+        // Every other low byte of every table is ASCII.
+        for cp in [
+            "DOS437", "DOS850", "DOS852", "DOS720", "DOS737", "DOS775", "DOS855", "DOS857", "DOS860", "DOS861", "DOS863", "DOS864", "DOS865",
+            "DOS869",
+        ] {
+            for b in 0u8..0x80 {
+                if b == 0x25 && cp == "DOS864" {
+                    continue;
+                }
+                assert_eq!(decode_code_page(&[b], cp).as_deref(), Some(char::from(b).to_string().as_str()), "{cp} {b:#x}");
+            }
+        }
+    }
+
+    #[test]
+    fn ascii_only_dos864_file_keeps_the_arabic_percent_sign() {
+        let file = |ver: &str, cp: &str| format!("0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\n{ver}\n9\n$DWGCODEPAGE\n3\n{cp}\n0\nENDSEC\n1\n50%\n");
+        assert!(decode_ascii_file(file("AC1015", "DOS864").as_bytes()).ends_with("50\u{066A}\n"));
+        // Other code pages, and R2007+ files (UTF-8), keep `%`.
+        assert!(decode_ascii_file(file("AC1015", "DOS437").as_bytes()).ends_with("50%\n"));
+        assert!(decode_ascii_file(file("AC1021", "DOS864").as_bytes()).ends_with("50%\n"));
+    }
+
+    #[test]
     fn invalid_sequences_become_replacement_characters() {
         // A Shift-JIS lead byte cut off by the line end keeps the line end.
         assert_eq!(decode_code_page(b"\x90\n1\n", "ANSI_932").as_deref(), Some("\u{FFFD}\n1\n"));
@@ -381,8 +485,9 @@ mod tests {
         // Wrong group code, or the file ends early.
         assert_eq!(ascii_code_page(b"9\n$DWGCODEPAGE\n1\nANSI_1251\n"), None);
         assert_eq!(ascii_code_page(b"9\n$DWGCODEPAGE\n3"), None);
-        assert!(is_utf8_version("AC1021") && is_utf8_version(" AC1032 "));
-        assert!(!is_utf8_version("AC1018") && !is_utf8_version("AC1009") && !is_utf8_version("garbage"));
+        let utf8 = |v: &str| Version::for_acadver(v).is_some_and(Version::utf8);
+        assert!(utf8("AC1021") && utf8(" AC1032 "));
+        assert!(!utf8("AC1018") && !utf8("AC1009") && !utf8("garbage"));
     }
 
     #[test]
