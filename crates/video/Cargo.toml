@@ -17,8 +17,14 @@ workspace = true
 # Every codec feature turns on one codec module; none is on by default.
 # DNxHD / DNxHR (SMPTE ST 2019-1): decoder and encoder.
 dnx = []
+# APV (Advanced Professional Video, RFC 9924): decoder and encoder; `apv-decode` or `apv-encode` for one of them.
+apv = ["apv-decode", "apv-encode"]
+apv-decode = ["craft-media/bitstream"]
+apv-encode = ["craft-media/bitstream"]
 # VP8 (RFC 6386): decoder.
 vp8 = []
+# MPEG-2 video (ITU-T H.262) and MPEG-1 video (ISO/IEC 11172-2): decoder.
+mpeg2 = []
 # Apple ProRes (SMPTE RDD 36): decoder and encoder.
 prores = ["craft-media/bitstream"]
 # H.264 / AVC: decoder and encoder; `h264-decode` or `h264-encode` for one of them.
@@ -33,8 +39,10 @@ hevc-encode = ["craft-media/isobmff"]
 vp9 = ["vp9-decode", "vp9-encode"]
 vp9-decode = ["craft-media/bitstream"]
 vp9-encode = ["craft-media/isobmff"]
-# AV1 (AOMedia Video 1): encoder.
-av1 = ["craft-media/isobmff"]
+# AV1: decoder and encoder; `av1-decode` or `av1-encode` for one of them.
+av1 = ["av1-decode", "av1-encode"]
+av1-decode = []
+av1-encode = ["craft-media/isobmff"]
 # Decode and encode across worker threads (rayon) in the codecs that support it.
 threads = ["dep:rayon"]
 
@@ -51,6 +59,10 @@ name = "dnx"
 required-features = ["dnx"]
 
 [[test]]
+name = "apv"
+required-features = ["apv"]
+
+[[test]]
 name = "vp8"
 required-features = ["vp8"]
 
@@ -61,6 +73,14 @@ required-features = ["vp8"]
 [[example]]
 name = "vp8_vp8dec"
 required-features = ["vp8"]
+
+[[test]]
+name = "av1_decode"
+required-features = ["av1-decode"]
+
+[[example]]
+name = "av1_av1dec"
+required-features = ["av1-decode"]
 
 [[test]]
 name = "h264_decode"
@@ -85,6 +105,10 @@ required-features = ["vp9-decode"]
 [[example]]
 name = "vp9_vp9dec"
 required-features = ["vp9-decode"]
+
+[[test]]
+name = "mpeg2"
+required-features = ["mpeg2"]
 
 [[test]]
 name = "prores"
