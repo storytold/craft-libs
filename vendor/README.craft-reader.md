@@ -417,3 +417,10 @@ a decoder's limit from damage). Not ported from those commits: the page-wide all
 refused-mask handling in `hayro-syntax` and `hayro-interpret` (0ed33990, 4aa732ea, e2464e14), which rest on
 the decoded-image cache of 558ffd7f (a performance change). Tests: those that came with the patches in
 `hayro-jbig2`, and PdfCraft's raster tests adapted in `hayro-jbig2/src/pdfcraft_tests.rs`.
+
+Legacy encryption key length, ported from [PdfCraft #1882](https://github.com/storytold/pdfcraft/pull/1882)
+(commit 344ba9f8, marked `PdfCraft patch` in `hayro-syntax/src/crypto/mod.rs`): an encryption
+dictionary of revision 2–4 whose `/Length` is above 128 bits is refused with `InvalidEncryption`.
+Those revisions take the file key from a 16-byte MD5 hash, so `/V 2 /R 3 /Length 256` sliced past
+the hash and panicked on open. Test:
+`crypto::pdfcraft_password_tests::legacy_key_length_above_128_bits_is_refused_not_a_panic`.

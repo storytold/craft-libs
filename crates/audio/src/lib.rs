@@ -18,11 +18,12 @@
 //! - [`encode`], [`FileEncoder`]: WAV/BWF/RF64 and AIFF/AIFF-C (feature `pcm-encode`, which also
 //!   gives [`wav_float_header`]) and FLAC (feature `flac-encode`), whole-buffer or incremental into
 //!   any `Write + Seek`. Feature `lossless-encode` turns on both; feature `encode` turns on
-//!   `lossless-encode` and `aac-encode`.
+//!   `lossless-encode` and every codec's encoder.
 //! - [`peaks`] (feature `peaks`): min/max/RMS pyramid for waveform drawing.
 //! - Codec modules for packet-level use, each with its own features: [`aac`] (`aac-decode`,
 //!   `aac-encode`), [`alac`] (`alac-decode`, `alac-encode`), [`opus`] (`opus-decode`), [`ac3`]
-//!   (`ac3-decode`), [`mpa`] (`mpa-decode`), [`flac`] (`flac-encode`: the packet encoder).
+//!   (`ac3-decode`), [`mpa`] (`mpa-decode`), [`mp3`] (`mp3-encode`: the Layer III encoder),
+//!   [`flac`] (`flac-encode`: the packet encoder).
 //!
 //! The shared types below build with no features.
 
@@ -34,6 +35,8 @@ pub mod ac3;
 pub mod alac;
 mod buffer;
 mod layout;
+#[cfg(feature = "mp3-encode")]
+pub mod mp3;
 #[cfg(feature = "mpa-decode")]
 pub mod mpa;
 #[cfg(feature = "opus-decode")]
@@ -84,7 +87,10 @@ pub use layout::{ChannelLayout, Speaker};
 #[cfg(feature = "decode-native")]
 pub use read::SharedSource;
 #[cfg(feature = "decode-native")]
-pub use read::{DEFAULT_MAX_SAMPLES, DecodeOptions, Decoder, TrackInfo, decode, decode_with, detect_container, probe, probe_with, tracks, tracks_of};
+pub use read::{
+    DECODE_EXTENSIONS, DEFAULT_MAX_SAMPLES, DecodeOptions, Decoder, TrackInfo, decode, decode_with, detect_container, probe, probe_with, tracks,
+    tracks_of,
+};
 #[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
 pub use track::{LOOKAHEAD_PACKETS, TrackDecoder};
 #[cfg(feature = "pcm-encode")]
@@ -159,6 +165,13 @@ impl From<ac3::encoder::Error> for AudioError {
     }
 }
 
+#[cfg(feature = "mp3-encode")]
+impl From<mp3::Error> for AudioError {
+    fn from(e: mp3::Error) -> Self {
+        AudioError::Encode(e.to_string())
+    }
+}
+
 #[cfg(feature = "flac-encode")]
 impl From<flac::Error> for AudioError {
     fn from(e: flac::Error) -> Self {
@@ -202,6 +215,29 @@ pub enum EncodeFormat {
 }
 
 impl EncodeFormat {
+    /// Every format, in the order menus list them. Whether [`encode`] writes one depends on its
+    /// feature.
+    pub const ALL: &[EncodeFormat] = &[EncodeFormat::Wav, EncodeFormat::Aiff, EncodeFormat::Flac];
+
+    /// The extension a new file of this format gets, lower case and without the dot: `"wav"`,
+    /// `"aif"`, `"flac"`. [`encode_format_for`] maps it back.
+    pub fn extension(self) -> &'static str {
+        match self {
+            EncodeFormat::Wav => "wav",
+            EncodeFormat::Aiff => "aif",
+            EncodeFormat::Flac => "flac",
+        }
+    }
+
+    /// The media type a file of this format is served or downloaded as.
+    pub fn mime_type(self) -> &'static str {
+        match self {
+            EncodeFormat::Wav => "audio/wav",
+            EncodeFormat::Aiff => "audio/aiff",
+            EncodeFormat::Flac => "audio/flac",
+        }
+    }
+
     /// The container this format writes.
     pub fn container(self) -> Container {
         match self {
@@ -311,7 +347,7 @@ pub struct AudioInfo {
     /// Broadcast Wave metadata from a WAV `bext` chunk.
     pub bwf: Option<BwfInfo>,
     /// Packets that were damaged or failed to decode and were replaced by concealment (silence of
-    /// their length), counted as audio is decoded: by [`decode`] for the whole file, and so far by
+    /// their length), and runs of FLAC frames lost to a failed checksum, counted as audio is decoded: by [`decode`] for the whole file, and so far by
     /// a [`Decoder`]. 0 from [`probe`] when it read only headers.
     pub damaged: u64,
 }
