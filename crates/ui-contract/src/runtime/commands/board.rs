@@ -572,9 +572,12 @@ pub(crate) fn binds_scoped(ctx: &Context, chord: &Chord) -> bool {
         let scopes = board.scopes_around(&chain);
         let (panel, outer) = scopes.split_first().map_or((None, &[][..]), |(panel, outer)| (Some(*panel), outer));
         let active = Active { panel, contexts: &[], typing: false };
+        // The lookup also ranks panels that share with the focused one and, with fallthrough, every other panel: only
+        // a command of a scope around the focus counts.
+        let around = |command: &CommandRef| scopes.contains(&board.scope_of(command));
         match keymap.lookup_nested(chord, false, &active, outer) {
-            Lookup::Run(command) => !is_app(board.scope_of(&command)),
-            Lookup::Cycle(commands) => commands.iter().any(|command| !is_app(board.scope_of(command))),
+            Lookup::Run(command) => around(&command),
+            Lookup::Cycle(commands) => commands.iter().any(around),
             _ => false,
         }
     })
