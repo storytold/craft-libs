@@ -3,19 +3,29 @@
 use super::model::RulerPart;
 use super::overlay::POINT;
 use super::{RulerBar, RulerLine, RulerOverlay};
-use craft_behavior::kurbo::Point;
+use craft_behavior::kurbo::{Point, Rect, Size};
 use craft_ui::bars::{Bar, BarKind};
+use craft_ui::canvas::RasterSource as _;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
+use craft_ui::testing::canvas_story::{OUTLINE, StoryDocument, StoryPicture, StoryShape, accent, on_picture, paint_shapes};
 use craft_ui::testing::{Drive, Grip, StoryData, StoryOutput, story};
-use egui::Ui;
+use egui::{Color32, Ui};
 
 fn line() -> RulerLine {
     RulerLine::new(Point::new(220.0, 140.0), Point::new(420.0, 200.0))
 }
 
-/// Shows the overlay over `line` as the only canvas control of a canvas.
+/// The object the ruler measures, centred on the story document.
+const OBJECT: Size = Size::new(220.0, 140.0);
+
+/// Shows the overlay over `line` as the only canvas control of a canvas over the object, filled and outlined in the
+/// accent.
 fn on_canvas(ui: &mut Ui, line: &mut Option<RulerLine>) -> StoryOutput {
-    craft_ui::testing::canvas_story::on_canvas(ui, |ui, at, _| RulerOverlay::new("Ruler", Bind::bound(&mut *line)).show_at(ui, at))
+    let document = StoryDocument::STANDARD;
+    let object = StoryShape::filled(&Rect::from_center_size(document.centre(), OBJECT), accent(ui, 0.25)).outlined(OUTLINE, accent(ui, 1.0));
+    let size = document.size();
+    let picture = StoryPicture::new(size.width, size.height, move |p| paint_shapes(std::slice::from_ref(&object), Color32::TRANSPARENT, p));
+    on_picture(ui, &picture, |ui, at, _| RulerOverlay::new("Ruler", Bind::bound(&mut *line)).show_at(ui, at))
 }
 
 #[story(RulerOverlay<'static>, covers = [Default], drive = Drive::Drag(Grip::part(POINT.at(RulerPart::End.key()))))]

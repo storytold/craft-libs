@@ -2,14 +2,13 @@
 
 use super::RasterDisplay;
 use super::RasterDisplayOutput;
-use crate::canvas::testing::canvas_story::{on_canvas_view, story_view};
-use crate::canvas::{PixelRect, RasterSource};
+use crate::canvas::testing::canvas_story::{StoryPicture, on_canvas_view, story_view};
 use crate::contract::Show as _;
-use crate::primitives::{Checker, Revision};
+use crate::primitives::Checker;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::kurbo::Point;
 use craft_behavior::{CanvasView, PixelSize};
-use egui::{Color32, ColorImage, Rect, Ui};
+use egui::{Color32, Rect, Ui};
 
 /// The document's size in pixels.
 const DOCUMENT: PixelSize = PixelSize::new(640, 400);
@@ -24,34 +23,11 @@ const MAGNIFIED: f64 = 4.0;
 const TURN: f64 = 30.0;
 
 /// A diagonal gradient with a transparent top left quarter, so the checkerboard shows through.
-struct Gradient;
-
-impl RasterSource for Gradient {
-    fn size(&self) -> PixelSize {
-        DOCUMENT
-    }
-
-    fn revision(&self) -> Revision {
-        Revision::new(1)
-    }
-
-    fn damage(&self, _: Revision) -> Option<PixelRect> {
-        Some(PixelRect::default())
-    }
-
-    fn read(&self, region: PixelRect, factor: u32, out: &mut ColorImage) {
-        let [width, height] = out.size;
-        let (full_width, full_height) = (DOCUMENT.width as f32, DOCUMENT.height as f32);
-        for row in 0..height {
-            for column in 0..width {
-                let x = region.x0 as f32 + (column as f32 + 0.5) * factor as f32;
-                let y = region.y0 as f32 + (row as f32 + 0.5) * factor as f32;
-                let seen = x > full_width / 2.0 || y > full_height / 2.0;
-                let level = ((x / full_width + y / full_height) * 127.0) as u8;
-                out.pixels[row * width + column] = if seen { Color32::from_rgb(level, 160, u8::MAX - level) } else { Color32::TRANSPARENT };
-            }
-        }
-    }
+fn gradient_pixel(p: Point) -> Color32 {
+    let (full_width, full_height) = (f64::from(DOCUMENT.width), f64::from(DOCUMENT.height));
+    let seen = p.x > full_width / 2.0 || p.y > full_height / 2.0;
+    let level = ((p.x / full_width + p.y / full_height) * 127.0) as u8;
+    if seen { Color32::from_rgb(level, 160, u8::MAX - level) } else { Color32::TRANSPARENT }
 }
 
 /// The checkerboard cell sizes the stories offer.
@@ -85,8 +61,8 @@ fn checker_of(data: &mut StoryData) -> Option<Checker> {
 
 /// The gradient, filling the canvas, over `checker`.
 fn gradient(ui: &mut Ui, at: Rect, checker: Option<Checker>) -> RasterDisplayOutput {
-    static SOURCE: Gradient = Gradient;
-    let display = RasterDisplay::new("Picture", &SOURCE);
+    let source = StoryPicture::new(DOCUMENT.width, DOCUMENT.height, gradient_pixel);
+    let display = RasterDisplay::new("Picture", &source);
     match checker {
         Some(checker) => display.checkerboard(checker),
         None => display,

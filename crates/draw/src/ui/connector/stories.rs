@@ -1,11 +1,13 @@
 //! Stories of the connector handles and the connector bar.
 
 use craft_behavior::Mixed;
-use craft_behavior::kurbo::Rect;
+use craft_behavior::kurbo::{Point, Rect};
 use craft_ui::bars::{Bar, BarKind};
+use craft_ui::canvas::RasterSource as _;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
+use craft_ui::testing::canvas_story::{OUTLINE, StoryDocument, StoryPicture, StoryShape, accent, on_picture, paint_shapes};
 use craft_ui::testing::{Drive, Grip, StoryData, StoryOutput, story};
-use egui::{Ui, vec2};
+use egui::{Color32, Ui, vec2};
 
 use super::{ConnectionTarget, ConnectorBar, ConnectorEnd, ConnectorHandles, ConnectorItem, ConnectorLine};
 use crate::geometry::connector::{ConnectionSide, Routing};
@@ -22,10 +24,19 @@ fn glued(target: u64, side: ConnectionSide) -> ConnectorEnd {
     ConnectorEnd::Glued { target, side, site: None, at: None }
 }
 
-/// Shows the handles `handles` builds and shows as the only canvas control of a canvas whose view has the document
-/// origin at its top left. The canvas body runs more than once per pass, so `handles` builds them on every run.
-fn on_canvas<R: Into<StoryOutput>>(ui: &mut Ui, mut handles: impl FnMut(&mut Ui, egui::Rect) -> R) -> StoryOutput {
-    craft_ui::testing::canvas_story::on_canvas(ui, |ui, at, _| handles(ui, at))
+/// The story document with `targets` drawn on it as boxes in the accent.
+fn boxes(ui: &Ui, targets: &[ConnectionTarget]) -> StoryPicture<impl Fn(Point) -> Color32 + use<>> {
+    let (fill, line) = (accent(ui, 0.15), accent(ui, 1.0));
+    let shapes: Vec<StoryShape> = targets.iter().map(|target| StoryShape::filled(&target.bounds, fill).outlined(OUTLINE, line)).collect();
+    let size = StoryDocument::STANDARD.size();
+    StoryPicture::new(size.width, size.height, move |p| paint_shapes(&shapes, Color32::TRANSPARENT, p))
+}
+
+/// Shows the handles `handles` builds and shows as the only canvas control of a canvas over `targets`. The canvas body
+/// runs more than once per pass, so `handles` builds them on every run.
+fn on_canvas<R: Into<StoryOutput>>(ui: &mut Ui, targets: &[ConnectionTarget], mut handles: impl FnMut(&mut Ui, egui::Rect) -> R) -> StoryOutput {
+    let picture = boxes(ui, targets);
+    on_picture(ui, &picture, |ui, at, _| handles(ui, at))
 }
 
 #[story(ConnectorHandles<'static>, covers = [Default], drive = Drive::Drag(Grip::part(super::handles::END.at(0)).toward(vec2(0.0, 1.0))))]
@@ -41,7 +52,7 @@ fn connector_glued_at_both_ends(ui: &mut Ui, data: &mut StoryData) -> StoryOutpu
             path: None,
         },
     );
-    on_canvas(ui, |ui, at| ConnectorHandles::new("Connector", Bind::bound(&mut *item), &targets).show_at(ui, at))
+    on_canvas(ui, &targets, |ui, at| ConnectorHandles::new("Connector", Bind::bound(&mut *item), &targets).show_at(ui, at))
 }
 
 fn caps() -> Vec<StrokeChoice> {

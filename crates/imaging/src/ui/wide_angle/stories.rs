@@ -1,19 +1,20 @@
 //! Stories of the Adaptive Wide Angle workspace, its constraint lines and its panel.
 //!
-//! The source is a grey picture and the geometry bows every line outward from the picture's centre, so the curves
-//! show; the corrected preview is a lighter picture whose mapping is the identity.
+//! The source and the corrected preview are the stories' generated picture; the geometry bows every line outward from
+//! the picture's centre, so the curves show, and the corrected preview's mapping is the identity.
 
 use std::time::Duration;
 
 use craft_behavior::PixelSize;
 use craft_behavior::kurbo::Point;
-use craft_ui::canvas::{PixelRect, RasterSource};
+use craft_ui::canvas::RasterSource;
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::dialog::{FullWindowCanvas, FullWindowView};
-use craft_ui::primitives::Revision;
 use craft_ui::runtime::pending::Job;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
-use egui::{Color32, ColorImage, Ui};
+use egui::Ui;
+
+use crate::ui::mock_image::MockImage;
 
 use super::{
     ConstraintLines, ConstraintOrientation, PreviewDone, WideAngleConstraint, WideAngleGeometry, WideAngleOpen, WideAnglePanel, WideAngleSession,
@@ -25,27 +26,6 @@ const IMAGE: PixelSize = PixelSize::new(480, 320);
 
 /// How far a curve bows at its middle, as a share of the line's length.
 const BOW: f64 = 0.06;
-
-/// A flat picture.
-struct Flat(Color32, u64);
-
-impl RasterSource for Flat {
-    fn size(&self) -> PixelSize {
-        IMAGE
-    }
-
-    fn revision(&self) -> Revision {
-        Revision::new(self.1)
-    }
-
-    fn damage(&self, _: Revision) -> Option<PixelRect> {
-        Some(PixelRect::default())
-    }
-
-    fn read(&self, _: PixelRect, _: u32, out: &mut ColorImage) {
-        out.pixels.fill(self.0);
-    }
-}
 
 /// Lines bowed away from the centre; the corrected preview maps every point to itself.
 struct Bowed;
@@ -72,8 +52,8 @@ impl WideAngleGeometry for Bowed {
 
 /// The two pictures.
 struct Pictures {
-    source: Flat,
-    corrected: Flat,
+    source: MockImage,
+    corrected: MockImage,
 }
 
 impl WideAngleSource for Pictures {
@@ -91,7 +71,8 @@ impl WideAngleSource for Pictures {
 }
 
 fn pictures() -> Pictures {
-    Pictures { source: Flat(Color32::from_gray(0x70), 1), corrected: Flat(Color32::from_gray(0x90), 2) }
+    let picture = MockImage::new([IMAGE.width, IMAGE.height]);
+    Pictures { source: picture, corrected: picture }
 }
 
 /// One constraint of each orientation, near the picture's edges where the bow shows.

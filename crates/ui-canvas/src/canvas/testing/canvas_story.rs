@@ -5,9 +5,10 @@
 use crate::canvas::{Canvas, PixelRect, RasterDisplay, RasterSource};
 use crate::contract::{Show as _, ShowContainer as _};
 use crate::primitives::Revision;
+use crate::runtime::env::Env;
 use crate::testing::{StoryOutput, stage};
 use craft_behavior::geometry::quad::Homography;
-use craft_behavior::kurbo::{Point, Rect as DocRect};
+use craft_behavior::kurbo::{Line, ParamCurveNearest as _, PathEl, Point, Rect as DocRect, Shape as KurboShape, flatten};
 use craft_behavior::{CanvasView, PixelSize};
 use egui::{Color32, ColorImage, Rect, Ui};
 
@@ -119,7 +120,18 @@ pub fn story_view(room: Rect, pixels_per_point: f32, centre: Point, percent: f64
 /// at 100 % centred on its middle ([`story_view`]), and returns the control's output. The control gets the canvas's
 /// rect and the view it shows.
 pub fn on_canvas<R: Into<StoryOutput>>(ui: &mut Ui, control: impl FnMut(&mut Ui, Rect, &CanvasView) -> R) -> StoryOutput {
-    on_canvas_view(ui, |room, ppp| StoryDocument::STANDARD.view(room, ppp, 100.0), Some(&StoryDocument::STANDARD), control)
+    on_picture(ui, &StoryDocument::STANDARD, control)
+}
+
+/// The same over `picture`, at 100 % centred on its middle.
+pub fn on_picture<R: Into<StoryOutput>>(
+    ui: &mut Ui,
+    picture: &dyn RasterSource,
+    control: impl FnMut(&mut Ui, Rect, &CanvasView) -> R,
+) -> StoryOutput {
+    let size = picture.size();
+    let centre = Point::new(f64::from(size.width) / 2.0, f64::from(size.height) / 2.0);
+    on_canvas_view(ui, |room, ppp| story_view(room, ppp, centre, 100.0), Some(picture), control)
 }
 
 /// The same over the view `view` makes of the room left in `ui` and its pixels per point, and over `document`
@@ -161,38 +173,154 @@ pub fn show_document(ui: &mut Ui, at: Rect, document: &dyn RasterSource) {
     RasterDisplay::new("", &on_ground(document)).show_at(ui, at);
 }
 
-/// A picture of one colour: a flat layer or page that a story shows on its document with [`show_quad`].
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct FlatPicture(Color32);
+/// A story's picture: `width` by `height` pixels, each the colour `paint` gives for the document point at its centre.
+/// A picture that changes takes a new [`revision`](Self::revision) with each change.
+pub struct StoryPicture<F> {
+    size: PixelSize,
+    revision: Revision,
+    paint: F,
+}
 
-impl FlatPicture {
-    /// A picture of `color`.
-    pub const fn new(color: Color32) -> Self {
-        FlatPicture(color)
+impl<F: Fn(Point) -> Color32> StoryPicture<F> {
+    /// A picture of `width` by `height` pixels painted by `paint`.
+    pub fn new(width: u32, height: u32, paint: F) -> Self {
+        StoryPicture { size: PixelSize::new(width, height), revision: Revision::new(1), paint }
+    }
+
+    /// The same picture at `revision`, which changes whenever what `paint` gives changes.
+    #[must_use]
+    pub fn revision(mut self, revision: u64) -> Self {
+        self.revision = Revision::new(revision);
+        self
     }
 }
 
-impl RasterSource for FlatPicture {
+impl<F: Fn(Point) -> Color32> RasterSource for StoryPicture<F> {
     fn size(&self) -> PixelSize {
-        PixelSize::new(1, 1)
+        self.size
     }
 
     fn revision(&self) -> Revision {
-        Revision::new(1)
+        self.revision
     }
 
-    fn damage(&self, _: Revision) -> Option<PixelRect> {
-        Some(PixelRect::default())
+    fn damage(&self, since: Revision) -> Option<PixelRect> {
+        (since == self.revision).then(PixelRect::default)
     }
 
-    fn read(&self, _: PixelRect, _: u32, out: &mut ColorImage) {
-        out.pixels.fill(self.0);
+    fn read(&self, region: PixelRect, factor: u32, out: &mut ColorImage) {
+        each_pixel(region, factor, out, |p, pixel| *pixel = (self.paint)(p));
     }
+}
+
+/// The outline width of a story's objects, in document pixels.
+pub const OUTLINE: f64 = 2.0;
+
+/// The colour story objects are drawn in: the theme's accent at `strength` (0 to 1) of its opacity.
+pub fn accent(ui: &Ui, strength: f32) -> Color32 {
+    crate::style::rgba_color(Env::of(ui).tokens.color.accent.solid).gamma_multiply(strength)
+}
+
+/// A shape on a story's picture ([`paint_shapes`]), in document pixels: filled, outlined, or both.
+#[derive(Clone, Debug)]
+pub struct StoryShape {
+    /// The edges of the shape's subpaths, each closed for the fill.
+    fill_edges: Vec<Line>,
+    /// The edges the outline follows: an open subpath is not closed.
+    outline_edges: Vec<Line>,
+    fill: Color32,
+    outline: Option<(f64, Color32)>,
+    bounds: DocRect,
+}
+
+impl StoryShape {
+    /// `shape` filled with `fill`.
+    pub fn filled(shape: &impl KurboShape, fill: Color32) -> Self {
+        let (mut fill_edges, mut outline_edges) = (Vec::new(), Vec::new());
+        let (mut first, mut last) = (None, Point::ZERO);
+        let close = |first: &mut Option<Point>, last: Point, fill_edges: &mut Vec<Line>| {
+            if let Some(start) = first.take()
+                && start != last
+            {
+                fill_edges.push(Line::new(last, start));
+            }
+        };
+        flatten(shape.path_elements(TOLERANCE), TOLERANCE, |element| match element {
+            PathEl::MoveTo(p) => {
+                close(&mut first, last, &mut fill_edges);
+                (first, last) = (Some(p), p);
+            }
+            PathEl::LineTo(p) => {
+                let edge = Line::new(last, p);
+                fill_edges.push(edge);
+                outline_edges.push(edge);
+                last = p;
+            }
+            PathEl::ClosePath => {
+                if let Some(start) = first
+                    && start != last
+                {
+                    outline_edges.push(Line::new(last, start));
+                }
+                close(&mut first, last, &mut fill_edges);
+            }
+            PathEl::QuadTo(..) | PathEl::CurveTo(..) => {}
+        });
+        close(&mut first, last, &mut fill_edges);
+        StoryShape { fill_edges, outline_edges, fill, outline: None, bounds: shape.bounding_box() }
+    }
+
+    /// `shape`'s outline alone: `width` document pixels of `color`.
+    pub fn line(shape: &impl KurboShape, width: f64, color: Color32) -> Self {
+        StoryShape::filled(shape, Color32::TRANSPARENT).outlined(width, color)
+    }
+
+    /// The same shape with an outline of `width` document pixels of `color`, centred on its edge.
+    #[must_use]
+    pub fn outlined(mut self, width: f64, color: Color32) -> Self {
+        self.outline = Some((width, color));
+        self
+    }
+
+    /// The shape's colour at `p` over `under`, its edges smoothed over one document pixel.
+    fn over(&self, under: Color32, p: Point) -> Color32 {
+        let reach = self.outline.map_or(0.0, |(width, _)| width / 2.0) + 1.0;
+        if !self.bounds.inflate(reach, reach).contains(p) {
+            return under;
+        }
+        let distance = |edges: &[Line]| edges.iter().map(|edge| edge.nearest(p, 0.0).distance_sq).fold(f64::INFINITY, f64::min).sqrt();
+        let mut color = under;
+        if self.fill.a() > 0 {
+            let crossings = self.fill_edges.iter().filter(|edge| crosses(edge, p)).count();
+            let edge = distance(&self.fill_edges);
+            let signed = if crossings % 2 == 1 { edge } else { -edge };
+            color = color.blend(self.fill.gamma_multiply((0.5 + signed).clamp(0.0, 1.0) as f32));
+        }
+        if let Some((width, line)) = self.outline {
+            let covered = (width / 2.0 + 0.5 - distance(&self.outline_edges)).clamp(0.0, 1.0);
+            color = color.blend(line.gamma_multiply(covered as f32));
+        }
+        color
+    }
+}
+
+/// How closely a story shape's curves are followed, in document pixels.
+const TOLERANCE: f64 = 0.25;
+
+/// Whether a ray from `p` towards +x crosses `edge`.
+fn crosses(edge: &Line, p: Point) -> bool {
+    let (a, b) = (edge.p0, edge.p1);
+    (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x)
+}
+
+/// `shapes` over `under` at the document point `p`, each later shape over the earlier ones.
+pub fn paint_shapes(shapes: &[StoryShape], under: Color32, p: Point) -> Color32 {
+    shapes.iter().fold(under, |color, shape| shape.over(color, p))
 }
 
 /// Shows `picture`, named `label`, filling the document quad `quad` (its corners clockwise from the top left) at the
 /// canvas rect `at`, over the document and under the canvas controls shown after it. A quad with no area shows nothing.
-pub fn show_quad(ui: &mut Ui, at: Rect, label: &'static str, quad: [Point; 4], picture: &FlatPicture) {
+pub fn show_quad(ui: &mut Ui, at: Rect, label: &'static str, quad: [Point; 4], picture: &dyn RasterSource) {
     if let Some(frame) = Homography::unit_to_quad(quad) {
         RasterDisplay::new(label, picture).mapped(frame, 1).show_at(ui, at);
     }
