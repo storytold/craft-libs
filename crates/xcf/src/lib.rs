@@ -19,6 +19,7 @@
 mod tests;
 mod tiles;
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::io::Read;
 
@@ -51,7 +52,7 @@ pub const MAX_LAYERS: usize = 8192;
 pub const MAX_CHANNELS: usize = 1024;
 /// Group nesting [`Image::tree`] builds.
 pub const MAX_DEPTH: usize = 64;
-/// Total copied layer metadata (names and item paths). A single reused record with a large
+/// Total copied layer and channel metadata (names and item paths). A single reused record with a large
 /// name is bounded by [`MAX_STRING`], but repeated layer offsets referencing it must not multiply
 /// into unbounded retained metadata.
 pub const MAX_METADATA_BYTES: usize = 32 << 20;
@@ -557,6 +558,8 @@ pub struct Xcf<'a> {
     c: Cursor<'a>,
     image: Image,
     channels: Vec<usize>,
+    /// What is left of [`MAX_METADATA_BYTES`] after the layers; channel names are charged too.
+    meta_budget: Cell<usize>,
 }
 
 impl<'a> Xcf<'a> {
@@ -639,7 +642,7 @@ impl<'a> Xcf<'a> {
             let layer = layer(c.at(ptr), &image, &mut meta_budget)?;
             image.layers.push(layer);
         }
-        Ok(Xcf { c, image, channels })
+        Ok(Xcf { c, image, channels, meta_budget: Cell::new(meta_budget) })
     }
 
     /// The file's header and structure.
@@ -687,6 +690,8 @@ impl<'a> Xcf<'a> {
         let mut c = self.c.at(ptr);
         let (_w, _h) = (c.u32()?, c.u32()?);
         let name = c.string()?;
+        // As for layers: repeated channel pointers must not retain unbounded copies of one name.
+        self.meta_budget.set(self.meta_budget.get().checked_sub(name.len()).ok_or_else(|| invalid("channel metadata exceeds the budget"))?);
         let selection = props(&mut c)?.iter().any(|p| p.kind == 4);
         let hptr = c.ptr()?;
         // Channels are always one plain sample per pixel, even in indexed images.

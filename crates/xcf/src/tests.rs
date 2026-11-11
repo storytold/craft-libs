@@ -1091,3 +1091,30 @@ fn an_rle_run_of_zero_length_is_an_error() {
     assert!(rle_decode(&[128, 0, 0, 3, 0, 9], 1, 4).is_err());
     assert_eq!(rle_decode(&[127, 0, 4, 9], 1, 4).unwrap(), [9, 9, 9, 9]);
 }
+
+#[test]
+fn channel_names_are_charged_to_the_metadata_budget() {
+    // Channel pointers that all name one channel with a megabyte name: each read copies the name.
+    let mut w = W::new(11);
+    for v in [1, 1, 0, 150] {
+        w.u32(v);
+    }
+    w.end();
+    w.ptr(0);
+    let slots: Vec<usize> = (0..40).map(|_| w.slot()).collect();
+    w.ptr(0);
+    let at = w.out.len();
+    slots.into_iter().for_each(|s| w.patch(s, at));
+    w.u32(1);
+    w.u32(1);
+    w.string(&"n".repeat(MAX_STRING - 1));
+    w.end();
+    let hs = w.slot();
+    let h = hierarchy(&mut w, 1, 1, 1, &[7], Compression::None);
+    w.patch(hs, h);
+    let xcf = open(&w.out).unwrap();
+    let mut budget = MAX_PIXEL_BYTES;
+    let results: Vec<_> = (0..40).map(|i| xcf.channel(i, &mut budget, GO).map(|(c, _)| c.name.len())).collect();
+    assert!(results[..32].iter().all(|r| *r == Ok(MAX_STRING - 1)), "32 copies fit the 32 MiB budget");
+    assert!(results[32..].iter().all(|r| *r == Err(Error::Invalid("channel metadata exceeds the budget".into()))));
+}

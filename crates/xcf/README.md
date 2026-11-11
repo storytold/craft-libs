@@ -35,6 +35,6 @@ presence is reported). There is no writer.
 | Layer effects on one layer | 1024 |
 | Properties in one list | 4096; a payload 64 MiB (`MAX_PAYLOAD`) |
 | A string | 1 MiB (`MAX_STRING`) |
-| Copied layer names and item paths | 32 MiB in all (`MAX_METADATA_BYTES`) |
+| Copied layer and channel names and item paths | 32 MiB in all (`MAX_METADATA_BYTES`) |
 | Group nesting in `Image::tree` | 64 (`MAX_DEPTH`) |
 | A gzipped file, inflated | 1 GiB (`MAX_INFLATED`) |
