@@ -874,6 +874,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-docjoin"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+]
+
+[[package]]
 name = "craft-docpath"
 version = "0.1.0"
 
