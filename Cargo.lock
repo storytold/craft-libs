@@ -1743,6 +1743,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-xcf"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-xls"
 version = "0.1.0"
 dependencies = [
