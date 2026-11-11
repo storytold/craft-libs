@@ -2,7 +2,7 @@
 
 use super::{BlockingOverlay, Dialog};
 use crate::choice::Checkbox;
-use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use crate::contract::{Bind, Props as _, Role, Show as _, ShowContainer as _};
 use crate::runtime::overlay::CloseReason;
 use crate::sections::{DialogRole, FooterButton};
 use crate::testing::input::key_press;
@@ -126,8 +126,14 @@ fn side_buttons_stand_in_one_column_beside_the_body() {
         let key = tree.keys().into_iter().find(|key| tree.name_of(*key) == Some(name));
         key.and_then(|key| tree.bounds_of(key))
     };
+    // The body's top is its check box's cell; its label is centred on the box, below the row's top.
+    let body = tree
+        .keys()
+        .into_iter()
+        .find(|key| tree.role_of(*key) == Some(Role::CHECK_BOX) && tree.name_of(*key) == Some("Snap to the grid"))
+        .and_then(|key| tree.bounds_of(key));
     let [Some(ok), Some(cancel), Some(other), Some(preview), Some(body)] =
-        ["OK", "Cancel", "Add to Swatches", "Preview", "Snap to the grid"].map(rect)
+        [rect("OK"), rect("Cancel"), rect("Add to Swatches"), rect("Preview"), body]
     else {
         panic!("every part is shown");
     };
