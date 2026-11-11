@@ -74,6 +74,7 @@ macro_rules! pass_state {
 pass_state! {
     services {
         frame: crate::runtime::frame::FrameState,
+        measuring: crate::runtime::measure::Measuring,
         registry: crate::runtime::memory::Registry,
         closes: crate::runtime::overlay::Closes,
         scopes: crate::runtime::access::scope::Stack,

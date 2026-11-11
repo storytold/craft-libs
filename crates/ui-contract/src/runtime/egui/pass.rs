@@ -13,7 +13,10 @@ pub(crate) fn pass_nr(ctx: &Context, viewport: ViewportId) -> u64 {
 
 /// The frame number of `viewport`.
 pub(crate) fn frame_nr(ctx: &Context, viewport: ViewportId) -> u64 {
-    ctx.cumulative_frame_nr_for(viewport)
+    match frame::running(ctx) {
+        Some(facts) if facts.viewport == viewport => facts.frame_nr,
+        _ => ctx.cumulative_frame_nr_for(viewport),
+    }
 }
 
 /// The root viewport's frame number: the key of every once-per-frame service, because child viewports'

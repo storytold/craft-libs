@@ -163,10 +163,9 @@ struct Seen(u64);
 /// Registers `owner`'s pass, at step 3: eviction tests only owners. Shown entries of an owner not registered
 /// for 3 passes of the viewport that last showed it and 0.5 s are evicted by `evict`.
 pub(crate) fn register_owner(ctx: &Context, owner: Id) {
-    let viewport = pass::current_viewport(ctx);
-    let (pass_nr, at) = (pass::pass_nr(ctx, viewport), frame::clock(ctx));
+    let facts = frame::facts(ctx);
     pass_state::with::<Registry, _>(ctx, |reg| {
-        reg.owners.insert(owner, OwnerRecord { viewport, pass: pass_nr, at });
+        reg.owners.insert(owner, OwnerRecord { viewport: facts.viewport, pass: facts.pass_nr, at: facts.now });
     });
 }
 

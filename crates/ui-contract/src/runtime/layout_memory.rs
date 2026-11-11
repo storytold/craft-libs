@@ -10,7 +10,7 @@
 //! removed or answering differently drops the kept transcripts of the bodies the real run is inside (up to a boundary)
 //! and asks for the frame's discard pass, so a change shows in its frame.
 
-use crate::runtime::egui::{pass, sizing};
+use crate::runtime::egui::sizing;
 use crate::runtime::frame::{self, PerViewport};
 use craft_behavior::layout_memory::{SizeTween, measure_tolerance, measured_change_asks_for_discard};
 use craft_behavior::{Axis, Proposal};
@@ -265,8 +265,8 @@ struct Moment {
 
 impl Moment {
     fn of(ctx: &Context) -> Moment {
-        let viewport = pass::current_viewport(ctx);
-        Moment { viewport, pass: pass::pass_nr(ctx, viewport), frame: pass::frame_nr(ctx, viewport), now: frame::clock(ctx) }
+        let facts = frame::facts(ctx);
+        Moment { viewport: facts.viewport, pass: facts.pass_nr, frame: facts.frame_nr, now: facts.now }
     }
 }
 

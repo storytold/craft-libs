@@ -3,11 +3,12 @@
 //! delivers nothing the real run then lacks.
 
 use super::egui::memory as store;
+use super::pass_state;
 use egui::{Context, Id};
 
-fn depth_id() -> Id {
-    store::unique("craft-ui measuring run depth")
-}
+/// How many measuring runs enclose the running code of a context.
+#[derive(Default)]
+pub(crate) struct Measuring(u32);
 
 /// The effects skipped in measuring runs, with the pass that logged them.
 #[cfg(any(test, feature = "testing"))]
@@ -47,17 +48,19 @@ pub fn run<R>(ctx: &Context, f: impl FnOnce() -> R) -> R {
     struct Open<'a>(&'a Context, u32);
     impl Drop for Open<'_> {
         fn drop(&mut self) {
-            store::put(self.0, depth_id(), self.1);
+            pass_state::with::<Measuring, _>(self.0, |depth| depth.0 = self.1);
         }
     }
-    let before = depth(ctx);
-    store::put(ctx, depth_id(), before + 1);
+    let before = pass_state::with::<Measuring, _>(ctx, |depth| {
+        depth.0 += 1;
+        depth.0 - 1
+    });
     let _open = Open(ctx, before);
     super::layout_memory::guard::measuring(f)
 }
 
 fn depth(ctx: &Context) -> u32 {
-    store::peek_copy::<u32>(ctx, depth_id()).unwrap_or(0)
+    pass_state::with::<Measuring, _>(ctx, |depth| depth.0)
 }
 
 /// Whether a measuring run is in progress.
@@ -149,7 +152,7 @@ pub(crate) fn count_run<C>(ctx: &Context) {
     {
         let name = std::any::type_name::<C>();
         let pass = ctx.cumulative_pass_nr();
-        crate::runtime::pass_state::with::<TypeRuns, _>(ctx, |log| {
+        pass_state::with::<TypeRuns, _>(ctx, |log| {
             if log.pass != pass {
                 *log = TypeRuns { pass, runs: Vec::new() };
             }
@@ -168,7 +171,7 @@ pub(crate) fn count_run<C>(ctx: &Context) {
 #[cfg(feature = "testing")]
 pub fn last_pass_runs(ctx: &Context) -> Vec<(&'static str, u32)> {
     let last = ctx.cumulative_pass_nr().saturating_sub(1);
-    crate::runtime::pass_state::with::<TypeRuns, _>(ctx, |log| if log.pass == last { log.runs.clone() } else { Vec::new() })
+    pass_state::with::<TypeRuns, _>(ctx, |log| if log.pass == last { log.runs.clone() } else { Vec::new() })
 }
 
 /// Counts a build and measure of the rows of the collection `id` for its widest row in this pass.

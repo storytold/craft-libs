@@ -459,12 +459,13 @@ struct RunningPass {
     facts: PassFacts,
 }
 
-/// What a pass fixes for every step: its viewport, number and time.
+/// What a pass fixes for every step: its viewport, numbers and time.
 #[derive(Clone, Copy)]
 #[doc(hidden)]
 pub struct PassFacts {
     pub viewport: ViewportId,
     pub pass_nr: u64,
+    pub frame_nr: u64,
     /// The pass's time in seconds.
     pub now: f64,
 }
@@ -478,6 +479,15 @@ thread_local! {
 #[doc(hidden)]
 pub fn running(ctx: &Context) -> Option<PassFacts> {
     RUNNING.with(|running| running.borrow().iter().rev().find(|pass| pass.ctx == *ctx).map(|pass| pass.facts))
+}
+
+/// The facts of the innermost running pass of `ctx`, or outside every pass of it, what the context says of its
+/// current viewport.
+pub(crate) fn facts(ctx: &Context) -> PassFacts {
+    running(ctx).unwrap_or_else(|| {
+        let viewport = ctx.viewport_id();
+        PassFacts { viewport, pass_nr: pass::pass_nr(ctx, viewport), frame_nr: pass::frame_nr(ctx, viewport), now: clock(ctx) }
+    })
 }
 
 /// The running pass's time in seconds, read once by the begin hook.
@@ -541,12 +551,12 @@ pub(crate) fn begin_pass(ui: &mut Ui) {
     });
     // H5: read the clock once; the runtime cancelled a captured press since this viewport's last pass.
     let now = pass::now(&ctx);
-    let pass_nr = pass::pass_nr(&ctx, viewport);
+    let (pass_nr, frame_nr) = (pass::pass_nr(&ctx, viewport), ctx.cumulative_frame_nr_for(viewport));
     RUNNING.with(|running| {
         let mut running = running.borrow_mut();
         // A pass of this viewport that never ended (a panic unwound through it) is not still running.
         running.retain(|pass| !(pass.ctx == ctx && pass.facts.viewport == viewport));
-        running.push(RunningPass { ctx: ctx.clone(), facts: PassFacts { viewport, pass_nr, now } });
+        running.push(RunningPass { ctx: ctx.clone(), facts: PassFacts { viewport, pass_nr, frame_nr, now } });
     });
     pass_state::hold(&ctx);
     let cancelled = PerViewport::<ViewportRecord>::with(&ctx, viewport, |record| {
