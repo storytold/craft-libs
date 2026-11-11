@@ -237,8 +237,9 @@ impl TrackDecoder {
     }
 
     /// What stands in for a lost or undecodable packet (`packet` when its bytes are at hand):
-    /// Opus's loss concealment, or silence as long as the packet would have been (from its frame
-    /// header, the codec's frame length, or the last packet). Empty when the length is unknown.
+    /// Opus's loss concealment, or silence, as long as the packet would have been (from its TOC or
+    /// frame header, the codec's frame length, or the last packet). Empty when the length is
+    /// unknown.
     /// Fails with [`AudioError::TooLarge`](crate::AudioError::TooLarge) when that silence would pass
     /// the decode limit (2^30 samples, as [`decode`](Self::decode) has) or cannot be allocated,
     /// rather than return less than the packet's length.
@@ -248,7 +249,7 @@ impl TrackDecoder {
             #[cfg(feature = "opus-decode")]
             Inner::Opus { dec, order } => {
                 let order = *order;
-                if let Ok(out) = dec.decode(None) {
+                if let Ok(out) = dec.conceal(packet) {
                     return Ok(AudioBuffer { sample_rate: self.sample_rate, channels: reorder(out, order) });
                 }
                 None
@@ -515,6 +516,26 @@ mod tests {
         // silence past the decode limit is an error, not shorter silence
         dec.last_frames = usize::try_from(crate::pcm::MAX_DECODE_SAMPLES / 2 + 1).unwrap();
         assert!(matches!(dec.conceal(None), Err(AudioError::TooLarge(_))));
+    }
+
+    #[cfg(feature = "opus-decode")]
+    #[test]
+    fn opus_conceals_a_damaged_packet_at_its_own_length() {
+        let params = CodecParams::new(CodecId::Opus).with_sample_rate(48_000).with_channels(2);
+        let mut dec = TrackDecoder::new(&params, &[]).unwrap();
+        // CELT fullband, 20 ms (config 31); SILK narrowband, 60 ms (config 3); CELT, 10 ms (config 30).
+        let celt_20ms = [31 << 3, 0xFF, 0xFE, 0x01];
+        let silk_60ms = [3 << 3, 0x12, 0x34];
+        let celt_10ms = [30 << 3, 0x12, 0x34];
+        assert_eq!(dec.decode(&celt_20ms).unwrap().frames(), 960);
+        assert_eq!(dec.conceal(Some(&silk_60ms)).unwrap().frames(), 2880);
+        // A packet lost whole is as long as the last one.
+        assert_eq!(dec.conceal(None).unwrap().frames(), 2880);
+        // The first packet after a reset has no last packet to go by.
+        dec.reset();
+        assert_eq!(dec.conceal(Some(&celt_10ms)).unwrap().frames(), 480);
+        // Bytes whose framing does not parse fall back to the last length.
+        assert_eq!(dec.conceal(Some(&[(31 << 3) | 3])).unwrap().frames(), 480);
     }
 
     /// One ADTS frame (stereo, 48 kHz, or channel configuration 0 with a PCE) of silence.

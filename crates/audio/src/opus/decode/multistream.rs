@@ -93,6 +93,24 @@ impl Decoder {
 
     /// Decodes one packet (`None` = lost packet, concealed) into planar channels.
     pub fn decode(&mut self, packet: Option<&[u8]>) -> Result<Vec<Vec<f32>>> {
+        self.decode_or_conceal(packet, None)
+    }
+
+    /// Conceals one lost or undecodable packet. With its bytes at hand and a TOC and framing that
+    /// parse, the concealment is as long as the packet; otherwise as long as the last packet
+    /// (20 ms before any).
+    pub fn conceal(&mut self, packet: Option<&[u8]>) -> Result<Vec<Vec<f32>>> {
+        let dur = packet.and_then(|d| self.packet_duration(d));
+        self.decode_or_conceal(None, dur)
+    }
+
+    /// Samples per channel, at the output rate, in a packet whose framing parses.
+    fn packet_duration(&self, data: &[u8]) -> Option<usize> {
+        let p = if self.streams.len() > 1 { Packet::parse_self_delimited(data).ok()?.0 } else { Packet::parse(data).ok()? };
+        Some(p.toc.frame_samples(self.rate) * p.frames.len()).filter(|&n| n > 0)
+    }
+
+    fn decode_or_conceal(&mut self, packet: Option<&[u8]>, conceal_len: Option<usize>) -> Result<Vec<Vec<f32>>> {
         let n = self.streams.len();
         for b in &mut self.scratch {
             b.clear();
@@ -123,10 +141,10 @@ impl Decoder {
                 }
             }
             _ => {
-                let dur = match self.streams[0].last_packet_duration() {
+                let dur = conceal_len.unwrap_or(match self.streams[0].last_packet_duration() {
                     0 => self.rate as usize / 50,
                     d => d,
-                };
+                });
                 for s in 0..n {
                     self.streams[s].conceal(dur, &mut self.scratch[s])?;
                 }

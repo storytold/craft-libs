@@ -665,7 +665,6 @@ pub struct SilkDecoder {
     internal_rate: u32,
     prev_decode_only_middle: bool,
     ms_pred: [i32; 2],
-    decode_only_middle: bool,
 }
 
 impl SilkDecoder {
@@ -680,7 +679,6 @@ impl SilkDecoder {
             internal_rate: 16000,
             prev_decode_only_middle: false,
             ms_pred: [0; 2],
-            decode_only_middle: false,
         }
     }
 
@@ -780,7 +778,8 @@ impl SilkDecoder {
                 }
             }
         }
-        // Stereo prediction.
+        // Stereo prediction. Each frame starts out coding the side channel, as in libopus.
+        let mut decode_only_middle = false;
         if nci == 2 {
             let fi = self.ch[0].n_frames_decoded;
             let coded = lost == LostFlag::Normal || (lost == LostFlag::Lbrr && self.ch[0].lbrr_flags[fi]);
@@ -789,14 +788,14 @@ impl SilkDecoder {
                     self.ms_pred = stereo_decode_pred(d);
                     let side_inactive =
                         (lost == LostFlag::Normal && !self.ch[1].vad_flags[fi]) || (lost == LostFlag::Lbrr && !self.ch[1].lbrr_flags[fi]);
-                    self.decode_only_middle = if side_inactive { d.icdf(&MID_ONLY, 8) == 1 } else { false };
+                    decode_only_middle = if side_inactive { d.icdf(&MID_ONLY, 8) == 1 } else { false };
                 }
                 _ => {
                     self.ms_pred = self.stereo.pred_prev_q13;
                 }
             }
         }
-        if nci == 2 && !self.decode_only_middle && self.prev_decode_only_middle {
+        if nci == 2 && !decode_only_middle && self.prev_decode_only_middle {
             let c = &mut self.ch[1];
             c.out_buf = [0; OUT_BUF];
             c.s_lpc_q14 = [0; MAX_LPC_ORDER];
@@ -808,7 +807,7 @@ impl SilkDecoder {
         let l = self.ch[0].frame_length;
         let mut buf = [[0i16; MAX_FRAME + 2]; 2];
         let has_side = if lost == LostFlag::Normal {
-            !self.decode_only_middle
+            !decode_only_middle
         } else {
             !self.prev_decode_only_middle || (nci == 2 && lost == LostFlag::Lbrr && self.ch[1].lbrr_flags[self.ch[1].n_frames_decoded])
         };
@@ -866,8 +865,26 @@ impl SilkDecoder {
                 c.last_gain_index = 10;
             }
         } else {
-            self.prev_decode_only_middle = self.decode_only_middle;
+            self.prev_decode_only_middle = decode_only_middle;
         }
         Ok(n_out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_lost_frame_after_a_mid_only_frame_resets_the_side_channel() {
+        let mut d = SilkDecoder::new(48000, 2);
+        d.set_stream(2, 16000);
+        // A first frame sets the internal rate, which resets both channels by itself.
+        d.decode(None, LostFlag::Lost, true, 20, &mut [0.0; 2 * 960]).unwrap();
+        // What a coded mid-only stereo frame leaves behind.
+        d.prev_decode_only_middle = true;
+        d.ch[1].first_frame_after_reset = false;
+        d.decode(None, LostFlag::Lost, true, 20, &mut [0.0; 2 * 960]).unwrap();
+        assert!(d.ch[1].first_frame_after_reset, "a lost frame codes no mid-only flag, so the side channel restarts");
     }
 }

@@ -511,6 +511,9 @@ impl CeltDecoder {
             self.synthesis(&x, n, self.start, eff_end, cc, false, lm, false);
             self.stream_channels = saved_sc;
             self.x = x;
+            // As libopus: after noise, the history holds no pitch to extend until two good frames
+            // in a row have been decoded.
+            self.skip_plc = true;
         } else {
             // Pitch search on the (mono-mixed) history.
             let hist_len = 1024usize;
@@ -677,5 +680,30 @@ mod tests {
         }
         assert_eq!((d.postfilter_period, d.postfilter_period_old), (300, 300));
         assert_eq!(d.plc_pitch % 240, 0, "the lag is a period of the history");
+    }
+
+    #[test]
+    fn noise_concealment_waits_for_two_good_frames_before_pitch_concealment() {
+        // Only the noise-based concealment draws from `rng`, so a changed `rng` tells the paths apart.
+        fn loss_is_noise(d: &mut CeltDecoder) -> bool {
+            let rng = d.rng;
+            d.decode(None, 960, &mut [0.0; 960], false, None).unwrap();
+            d.rng != rng
+        }
+        let good = [0x55u8; 40];
+        let mut d = CeltDecoder::new(48000, 1);
+        for _ in 0..2 {
+            d.decode(Some(&good), 960, &mut [0.0; 960], false, None).unwrap();
+        }
+        for _ in 0..5 {
+            assert!(!loss_is_noise(&mut d), "the first losses extend the pitch");
+        }
+        assert!(loss_is_noise(&mut d), "the sixth loss in a row is noise");
+        d.decode(Some(&good), 960, &mut [0.0; 960], false, None).unwrap();
+        assert!(loss_is_noise(&mut d), "one good frame after noise does not re-enable pitch concealment");
+        for _ in 0..2 {
+            d.decode(Some(&good), 960, &mut [0.0; 960], false, None).unwrap();
+        }
+        assert!(!loss_is_noise(&mut d), "two good frames in a row do");
     }
 }
