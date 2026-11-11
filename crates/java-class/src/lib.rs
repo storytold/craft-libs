@@ -36,3 +36,7 @@ mod java_constant_pool_slots;
 #[cfg(test)]
 #[path="regressions/java_invoke_operands.rs"]
 mod java_invoke_operands;
+
+#[cfg(test)]
+#[path="regressions/java_linkage_references.rs"]
+mod java_linkage_references;
