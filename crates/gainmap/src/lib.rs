@@ -10,6 +10,7 @@
 //!   light, same primaries). Measure it against the base *as written* (decoded from its 8-bit
 //!   codes), so quantisation in the base is handed back by the gain map.
 //! - [`apply`] rebuilds the HDR rendition from a base and its gain map.
+//! - [`apple`] rebuilds the HDR rendition of Apple's legacy single-channel gain maps.
 //! - [`primary_xmp`] and [`primary_iso_marker`] are what the primary image of a gain map file
 //!   carries to say it has one.
 //!
@@ -21,6 +22,9 @@
 //! much headroom the display has between `base_headroom` and `alternate_headroom`.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
+/// Apple's legacy gain maps: a linear gain ratio, not the log2 gain of ISO 21496-1 and Ultra HDR.
+pub mod apple;
 
 /// A size or parameter [`compute`] or [`apply`] cannot work with.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

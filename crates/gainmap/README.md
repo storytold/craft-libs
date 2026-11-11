@@ -16,6 +16,7 @@ craft-gainmap = { git = "https://github.com/storytold/craft-libs", rev = "<commi
 | `compute` | measures a 1 or 3-channel 8-bit gain map from SDR and HDR renditions in linear light |
 | `apply` | rebuilds the HDR rendition from a base and its map, at a weight for the display's headroom |
 | `primary_iso_marker`, `primary_xmp` | what the primary image carries to say the file has a gain map |
+| `apple::apply`, `apple::Metadata` | Apple's legacy single-channel gain maps (a linear ratio, headroom from the maker note) |
 
 ```rust
 use craft_gainmap::{GainMapOptions, apply, compute};

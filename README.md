@@ -76,7 +76,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   of `EmbeddedFace`s. No dependencies; the app picks the faces.
 - [`craft-gainmap`](crates/gainmap/README.md): HDR gain maps, from LightCraft: the ISO 21496-1
   metadata and Adobe `hdrgm` XMP (read and write), measuring a gain map from SDR and HDR
-  renditions, and applying one. Encoding and the container stay in each app.
+  renditions, applying one, and Apple's legacy maps. Encoding and the container stay in each app.
 - [`craft-gcode`](crates/gcode/src/lib.rs): Grbl-style G-code writer: polylines in
   millimetres to `G0`/`G1` moves with laser power and feed, for cutting lasers and plotters.
 - [`craft-heif`](crates/heif/README.md): optional HEIF/HEIC still-image decoder, from LightCraft:
