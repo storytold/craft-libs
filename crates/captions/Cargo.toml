@@ -17,3 +17,5 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+# A second XML reader for the tests: checks of written TTML, and the comparison in tests/it/ttml_xml_views.rs.
+roxmltree = "0.21"
