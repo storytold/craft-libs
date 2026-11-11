@@ -13,7 +13,7 @@
 //! | `h264` | [`h264`] | ITU-T H.264 / AVC: decoder (`h264-decode`) and encoder (`h264-encode`) |
 //! | `hevc` | [`hevc`] | ITU-T H.265 / HEVC: decoder (`hevc-decode`) and encoder (`hevc-encode`) |
 //! | `vp9` | [`vp9`] | VP9: decoder (`vp9-decode`) and encoder (`vp9-encode`) |
-//! | `av1` | [`av1`] | AV1 (AOMedia Video 1): encoder |
+//! | `av1` | [`av1`] | AV1 (AOMedia Video 1): decoder (`av1-decode`) and encoder (`av1-encode`) |
 //!
 //! No codec is on by default. Feature `threads` spreads the work of the codecs that support it
 //! over rayon worker threads.
@@ -49,5 +49,5 @@ pub mod hevc;
 #[cfg(any(feature = "vp9-decode", feature = "vp9-encode"))]
 pub mod vp9;
 
-#[cfg(feature = "av1")]
+#[cfg(any(feature = "av1-decode", feature = "av1-encode"))]
 pub mod av1;

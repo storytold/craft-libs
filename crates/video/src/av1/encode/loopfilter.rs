@@ -2,8 +2,8 @@
 //! references equal a decoder's. Segmentation and loop filter deltas are off and the sharpness
 //! is 0 in the frames this encoder writes.
 
-use crate::av1::pred::Plane;
-use crate::av1::tables::{MAX_LOOP_FILTER, NUM_4X4_BLOCKS_HIGH, NUM_4X4_BLOCKS_WIDE, SUBSAMPLED_SIZE, TX_HEIGHT, TX_WIDTH};
+use crate::av1::encode::pred::Plane;
+use crate::av1::encode::tables::{MAX_LOOP_FILTER, NUM_4X4_BLOCKS_HIGH, NUM_4X4_BLOCKS_WIDE, SUBSAMPLED_SIZE, TX_HEIGHT, TX_WIDTH};
 
 /// Mode info the loop filter reads (per 4x4 luma unit, row stride `mi_cols`), and the
 /// transform size per 4x4 unit of each plane (`LoopfilterTxSizes`, row stride `mi_cols + 32`).

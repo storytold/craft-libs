@@ -2,11 +2,11 @@
 //! modes plus V_PRED / H_PRED without edge filtering, 7.11.3 block inter prediction without
 //! reference scaling) so that the encoder predicts exactly like a decoder.
 
-use crate::av1::tables::{
+use crate::av1::encode::tables::{
     DC_PRED, EIGHTTAP, H_PRED, PAETH_PRED, SM_WEIGHTS_TX_4X4, SM_WEIGHTS_TX_8X8, SM_WEIGHTS_TX_16X16, SM_WEIGHTS_TX_32X32, SMOOTH_H_PRED,
     SMOOTH_PRED, SMOOTH_V_PRED, SUBPEL_FILTERS, V_PRED,
 };
-use crate::av1::transform::round2;
+use crate::av1::encode::transform::round2;
 
 /// A plane buffer (padded to whole superblocks).
 #[derive(Clone)]
