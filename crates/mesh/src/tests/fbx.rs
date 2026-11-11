@@ -250,7 +250,7 @@ fn ascii_scene() {
 fn binary_matches_ascii() {
     let doc = document(ASCII.as_bytes());
     let ascii = parse(ASCII.as_bytes()).unwrap();
-    for (version, compress) in [(7400, false), (7400, true), (7500, true)] {
+    for (version, compress) in [(7400, false), (7400, true), (7500, true), (6100, false)] {
         let bin = write_binary(&doc.records, version, compress);
         assert!(is_binary(&bin));
         let d = document(&bin);
@@ -382,6 +382,8 @@ fn hostile_files_fail_cleanly() {
     assert!(matches!(parse(b"\x00\x01garbage"), Err(Error::Malformed(_))));
     assert!(parse(b"Kaydara FBX Binary  \0\x1a\0").is_err());
     let v5 = "FBXHeaderExtension:  {\n FBXVersion: 5800\n}\nObjects: {\n}\n";
+    hammer(FBX6.as_bytes(), &parse);
+    hammer(&write_binary(&document(FBX6.as_bytes()).records, 6100, false), &parse);
     assert!(matches!(parse(v5.as_bytes()), Err(Error::Unsupported(_))));
     // A scene without meshes is a scene.
     let empty = parse(b"Objects: {\n Model: 1, \"Model::Empty\", \"Null\" {\n }\n}\n").unwrap();
@@ -538,4 +540,90 @@ fn axes_that_are_not_a_turn_are_left_alone() {
     assert_eq!(document(both_on_z.as_bytes()).axes_to_y_up(), crate::IDENTITY);
     let no_settings = document(b"Objects: {\n}\n");
     assert_eq!((no_settings.axes_to_y_up(), no_settings.unit_scale()), (crate::IDENTITY, None));
+}
+
+/// FBX 6.1 as Blender's exporter wrote it: the Model holds the mesh, `Properties60`, objects
+/// named in `Connect` lines, `GlobalSettings` among the objects.
+const FBX6: &str = r#"; FBX 6.1.0 project file
+FBXHeaderExtension:  {
+	FBXHeaderVersion: 1003
+	FBXVersion: 6100
+}
+Objects:  {
+	Model: "Model::Root", "Null" {
+		Properties60:  {
+			Property: "Lcl Scaling", "Lcl Scaling", "A+",2,2,2
+		}
+	}
+	Model: "Model::Tri", "Mesh" {
+		Properties60:  {
+			Property: "Lcl Translation", "Lcl Translation", "A+",0,5,0
+		}
+		Vertices: 0,0,0,1,0,0,0,1,0,1,1,0
+		PolygonVertexIndex: 0,1,-3,1,3,-3
+		LayerElementNormal: 0 {
+			MappingInformationType: "ByVertice"
+			ReferenceInformationType: "IndexToDirect"
+			Normals: 0,0,1
+			NormalIndex: 0,0,0,0
+		}
+		LayerElementMaterial: 0 {
+			MappingInformationType: "ByPolygon"
+			ReferenceInformationType: "IndexToDirect"
+			Materials: 0,1
+		}
+	}
+	Material: "Material::Blue", "" {
+		ShadingModel: "lambert"
+		Properties60:  {
+			Property: "Diffuse", "ColorRGB", "",0,0,1
+		}
+	}
+	Material: "Material::Green", "" {
+		Properties60:  {
+			Property: "DiffuseColor", "ColorRGB", "",0,1,0
+		}
+	}
+	GlobalSettings:  {
+		Version: 1000
+		Properties60:  {
+			Property: "UpAxis", "int", "",2
+			Property: "FrontAxis", "int", "",1
+			Property: "FrontAxisSign", "int", "",-1
+			Property: "UnitScaleFactor", "double", "",100
+		}
+	}
+}
+Connections:  {
+	Connect: "OO", "Model::Root", "Model::Scene"
+	Connect: "OO", "Model::Tri", "Model::Root"
+	Connect: "OO", "Material::Blue", "Model::Tri"
+	Connect: "OO", "Material::Green", "Model::Tri"
+}
+"#;
+
+#[test]
+fn fbx6_model_holds_its_mesh() {
+    let doc = document(FBX6.as_bytes());
+    let text = parse(FBX6.as_bytes()).unwrap();
+    let binary = write_binary(&doc.records, 6100, false);
+    assert_eq!(document(&binary).version, 6100);
+    assert_eq!(parse(&binary).unwrap(), text);
+    for (m, d) in [(&text, &doc), (&parse(&binary).unwrap(), &document(&binary))] {
+        m.validate().unwrap();
+        assert_eq!(m.nodes.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(), ["Root", "Tri"]);
+        assert_eq!((m.roots.as_slice(), m.nodes[0].children.as_slice(), m.nodes[1].mesh), (&[0][..], &[1][..], Some(0)));
+        let mesh = &m.meshes[0];
+        assert_eq!((mesh.positions.len(), mesh.normals.as_slice()), (4, &[[0.0, 0.0, 1.0]][..]));
+        // A part per material slot, in the order the materials connect to the Model.
+        let colors: Vec<[f32; 4]> = mesh.parts.iter().map(|p| m.materials[p.material.unwrap()].base_color).collect();
+        assert_eq!(colors, [[0.0, 0.0, 1.0, 1.0], [0.0, 1.0, 0.0, 1.0]]);
+        assert_eq!(mesh.parts[1].corners, [1, 3, 2].map(|i| Corner { position: i, normal: 0, uv: NONE }));
+        // Translated by 5 inside a parent scaled by 2.
+        let world = m.instances(&Limits::default()).unwrap()[0].1;
+        assert_eq!(transform_point(&world, [1.0, 1.0, 0.0]), [2.0, 12.0, 0.0]);
+        // Z-up, from the settings among the objects.
+        assert_eq!(transform_point(&d.axes_to_y_up(), [1.0, 2.0, 3.0]), [1.0, 3.0, -2.0]);
+        assert_eq!(d.unit_scale(), Some(100.0));
+    }
 }

@@ -9,7 +9,7 @@ a `Scene` into bytes. One Cargo feature per format, all on by default.
 | `obj` | Wavefront OBJ with MTL | yes | OBJ and MTL | none |
 | `ply` | PLY, ASCII and both binary byte orders | yes | no (no app writes PLY) | none |
 | `gltf` | glTF 2.0 (`.gltf`) and GLB | yes | GLB | `serde_json` |
-| `fbx` | FBX 7.x, binary and ASCII | yes | no | `miniz_oxide` |
+| `fbx` | FBX 6.x and 7.x, binary and ASCII | yes | no | `miniz_oxide` |
 
 USD, Alembic, COLLADA and 3MF are not here yet.
 
@@ -89,7 +89,9 @@ metallic-roughness; `Texture`s with embedded `Video` content or file names, for 
 normal and emissive slots. Models that instance one geometry with the same materials share a
 mesh, and textures that end at one image share it. `Document::axes_to_y_up` and
 `Document::unit_scale` give the file's axis system and unit, which the scene does not apply.
-Not read: FBX 6.x and older, animation, skin deformers, blend shapes, cameras, lights, NURBS.
+FBX 6.x files (a `Model` holds its mesh, `Properties60`, objects connected by name) give
+geometry, transforms, the hierarchy and materials. Not read: FBX 5 and older, 6.x textures,
+animation, skin deformers, blend shapes, cameras, lights, NURBS.
 
 Not read (glTF): sparse accessors and required geometry extensions (Draco, meshopt) are
 `Error::Unsupported`; points, lines, morph targets, tangents and other extensions are passed over.

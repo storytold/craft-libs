@@ -1,4 +1,4 @@
-//! FBX 7.x scenes, binary and ASCII.
+//! FBX 6.x and 7.x scenes, binary and ASCII.
 //!
 //! Written from public descriptions of the format (the binary node-record layout, the ASCII
 //! syntax, and the scene objects of the Autodesk FBX SDK documentation): no importer source was
@@ -15,6 +15,9 @@
 //!   and geometric transforms (a child node named `<model> geometry`), `Material` (Lambert/Phong
 //!   mapped onto metallic-roughness), `Texture` and `Video` (embedded or named image files),
 //!   joined by `Connections`.
+//! - **6.x**: a `Model` holds its own mesh, properties are `Properties60`, and `Connect` lines
+//!   name objects by `Class::Name` instead of by id. Geometry, transforms, the hierarchy and
+//!   materials are read; 6.x textures (which connect to Models, not Materials) are not.
 //!
 //! [`read`] gives the [`Scene`]. [`read_document`] gives the record tree itself
 //! ([`Document`]), for callers that need what the scene does not carry;
@@ -36,7 +39,7 @@
 //! name is listed in [`Scene::external`]. The names come from the file: a resolver must not trust
 //! them as paths.
 //!
-//! Not read: FBX 6.x and older, animation stacks, skin deformers, blend shapes, cameras and
+//! Not read: FBX 5 and older, animation stacks, skin deformers, blend shapes, cameras and
 //! lights, NURBS and patches.
 //!
 //! [`Limits::max_data_bytes`] bounds what one file may keep in memory: its parsed values (an
@@ -211,7 +214,7 @@ impl Record {
 /// An FBX file as its tree of records.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Document {
-    /// The file version (7400 is FBX 7.4); 0 when an ASCII file does not say.
+    /// The file version (7400 is FBX 7.4, 6100 is FBX 6.1); 0 when an ASCII file does not say.
     pub version: u32,
     /// The top-level records (`FBXHeaderExtension`, `GlobalSettings`, `Objects`, `Connections`, …).
     pub records: Vec<Record>,
@@ -546,13 +549,14 @@ fn read_ascii(text: &str) -> Result<(u32, Vec<Record>)> {
 // ---------------------------------------------------------------------------------------------
 // Scene
 
-/// An object's properties by name (`Properties70`: `P: name, type, label, flags, values…`).
+/// An object's properties by name (`Properties70`: `P: name, type, label, flags, values…`; 6.x
+/// `Properties60`: `Property: name, type, flags, values…`).
 struct Props<'a>(HashMap<&'a str, &'a Record>);
 
 impl<'a> Props<'a> {
     fn of(record: &'a Record) -> Props<'a> {
         let mut m = HashMap::new();
-        for (block, item) in [("Properties70", "P")] {
+        for (block, item) in [("Properties70", "P"), ("Properties60", "Property")] {
             for e in record.children_named(block).flat_map(|p| p.children_named(item)) {
                 if let Some(name) = e.str_at(0) {
                     m.entry(name).or_insert(e);
@@ -674,7 +678,8 @@ impl Document {
     }
 
     fn settings(&self) -> Option<Props<'_>> {
-        self.top("GlobalSettings").map(Props::of)
+        // 6.x writers put it among the objects.
+        self.top("GlobalSettings").or_else(|| self.top("Objects")?.child("GlobalSettings")).map(Props::of)
     }
 
     /// The turn from the file's axis system (`GlobalSettings`) to +Y up, +Z front, +X right.
@@ -715,9 +720,9 @@ impl Document {
     /// The scene the records describe. `resolve` is asked for texture image files (see the
     /// module documentation).
     pub fn scene(&self, limits: &Limits, resolve: Resolver) -> Result<Scene> {
-        if self.version != 0 && self.version < 7000 {
+        if self.version != 0 && self.version < 6000 {
             return Err(crate::Error::Unsupported(format!(
-                "FBX {}.{} (only FBX 7.x files are read)",
+                "FBX {}.{} (only FBX 6.x and 7.x files are read)",
                 self.version / 1000,
                 self.version % 1000 / 100
             )));
@@ -739,7 +744,7 @@ impl Document {
         // Connections: (child, parent, property) in file order, and the same by parent, so each
         // object finds its children without scanning them all.
         let mut links: Vec<(Key, Key)> = vec![];
-        for e in self.top("Connections").into_iter().flat_map(|c| c.children.iter()).filter(|e| e.name == "C") {
+        for e in self.top("Connections").into_iter().flat_map(|c| c.children.iter()).filter(|e| e.name == "C" || e.name == "Connect") {
             let (Some(child), Some(parent)) = (key(e.props.get(1)), key(e.props.get(2))) else { continue };
             links.push((child, parent));
             b.children.entry(parent).or_default().push((child, e.str_at(3)));
@@ -968,6 +973,10 @@ impl<'a> Build<'a, '_> {
 
     /// The mesh geometry of Model `id`, and what it is shared by.
     fn geometry_of(&self, id: Key<'a>) -> Option<(Key<'a>, &'a Record)> {
+        // 6.x: the Model holds its own mesh.
+        if let Some(model) = self.by_key.get(&id).copied().filter(|o| o.child("Vertices").is_some()) {
+            return Some((id, model));
+        }
         let (gid, _) = self.children_of(id, "Geometry").into_iter().next()?;
         Some((gid, self.by_key.get(&gid).copied()?))
     }
@@ -1070,7 +1079,7 @@ impl<'a> Build<'a, '_> {
         };
         let positions: Vec<[f64; 3]> = vertices.floats().as_chunks::<3>().0.iter().map(|c| c.map(finite)).collect();
         pool("vertices", positions.len())?;
-        let normals = Layer::of(geom, "LayerElementNormal", "Normals", &["NormalsIndex"], 3);
+        let normals = Layer::of(geom, "LayerElementNormal", "Normals", &["NormalsIndex", "NormalIndex"], 3);
         let uvs = Layer::of(geom, "LayerElementUV", "UV", &["UVIndex"], 2);
         let slots = geom.child("LayerElementMaterial").and_then(|e| {
             let mapping = e.child("MappingInformationType").and_then(|m| m.str_at(0)).unwrap_or("AllSame");
