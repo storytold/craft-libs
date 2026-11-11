@@ -922,6 +922,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-eps"
+version = "0.1.0"
+
+[[package]]
 name = "craft-font-catalog"
 version = "0.1.0"
 dependencies = [

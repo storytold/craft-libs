@@ -63,6 +63,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   EMU units and `a:xfrm`, colours with theme slots and colour transforms, preset shape outlines
   (`a:prstGeom`), custom geometry with guide formulas (`a:custGeom`) and preset text warps
   (`a:prstTxWarp`). From DeckCraft. Takes `craft-xml` trees; packages stay with each format.
+- [`craft-eps`](crates/eps/README.md): Encapsulated PostScript files as a container: the binary
+  preview header (read and write), the DSC header comments and bounding boxes (also `(atend)`),
+  the EPSI preview bitmap, ASCII85 data, and telling EPS, PostScript and Illustrator files
+  (PostScript- or PDF-based) apart. No PostScript interpreter.
 - [`craft-dxf`](crates/dxf/src/lib.rs): DXF tag reader and writer, from CADCraft: ASCII and
   binary DXF as (group code, value) tags, split into sections and entities, with pre-2007 code
   pages and version detection, and written back. Bounded on hostile input. Mapping tags to a

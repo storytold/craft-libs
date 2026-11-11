@@ -32,6 +32,7 @@ craft-crw = { path = "crates/crw" }
 craft-dialogs = { path = "crates/dialogs" }
 craft-dxf = { path = "crates/dxf" }
 craft-drawingml = { path = "crates/drawingml" }
+craft-eps = { path = "crates/eps" }
 craft-doc = { path = "crates/doc" }
 craft-docpath = { path = "crates/docpath" }
 craft-ecproj-format = { path = "crates/ecproj-format" }
