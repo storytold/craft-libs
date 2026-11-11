@@ -1,7 +1,7 @@
 //! Stories of the pasteboard.
 
 use super::{NAME, PageBorder, PageFrame, Pasteboard, PasteboardColor};
-use crate::canvas::testing::canvas_story::{on_canvas_view, story_view};
+use crate::canvas::testing::canvas_story::{StoryDocument, on_canvas_view, story_view};
 use crate::contract::Show as _;
 use crate::style::DataColor;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
@@ -48,7 +48,7 @@ fn artboards(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let view = view_values(data, 0.0);
     let border = border_of(data, PageBorder::DropShadow);
     let pages: &[PageFrame] = data.value("pages", boards());
-    on_canvas_view(ui, view, None, |ui, at, _| Pasteboard::new("Pasteboard", pages).border(border).show_at(ui, at))
+    on_canvas_view(ui, view, Some(&StoryDocument::STANDARD), |ui, at, _| Pasteboard::new("Pasteboard", pages).border(border).show_at(ui, at))
 }
 
 #[story(Pasteboard<'static>, covers = [Default], drive = Drive::Never)]
@@ -56,7 +56,9 @@ fn page_with_a_line(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let view = view_values(data, 0.0);
     let border = border_of(data, PageBorder::Line);
     let pages: &[PageFrame] = data.value("pages", vec![PageFrame::new(DocRect::new(60.0, 40.0, 300.0, 220.0))]);
-    on_canvas_view(ui, view, None, |ui, at, _| Pasteboard::new("Pasteboard", pages).color(PasteboardColor::DarkGray).border(border).show_at(ui, at))
+    on_canvas_view(ui, view, Some(&StoryDocument::STANDARD), |ui, at, _| {
+        Pasteboard::new("Pasteboard", pages).color(PasteboardColor::DarkGray).border(border).show_at(ui, at)
+    })
 }
 
 #[story(Pasteboard<'static>, covers = [Default], drive = Drive::Never)]
@@ -64,5 +66,5 @@ fn turned_view(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let view = view_values(data, TURN);
     let border = border_of(data, PageBorder::DropShadow);
     let pages: &[PageFrame] = data.value("pages", boards());
-    on_canvas_view(ui, view, None, |ui, at, _| Pasteboard::new("Pasteboard", pages).border(border).show_at(ui, at))
+    on_canvas_view(ui, view, Some(&StoryDocument::STANDARD), |ui, at, _| Pasteboard::new("Pasteboard", pages).border(border).show_at(ui, at))
 }

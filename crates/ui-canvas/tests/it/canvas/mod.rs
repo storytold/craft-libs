@@ -8,6 +8,8 @@ mod raster;
 
 mod scrollbars;
 
+mod story_canvas;
+
 mod tool;
 
 mod tool_keys;
