@@ -576,7 +576,7 @@ impl Canvas {
 
     /// The character set of the selected font (ANSI without one).
     pub fn font_charset(&self) -> u8 {
-        self.text.font.as_ref().map_or(0, |f| f.font.charset)
+        self.text.font.as_ref().map_or(0, |f| crate::text::text_charset(&f.font))
     }
 
     /// EMF SETWORLDTRANSFORM (`mode` 4) and MODIFYWORLDTRANSFORM (1 identity, 2 left, 3 right, 4 set).

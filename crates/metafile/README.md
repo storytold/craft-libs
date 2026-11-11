@@ -11,8 +11,9 @@ Windows metafiles for the Craft apps: one reader for WMF, EMF and EMF+, and writ
   side pads the picture).
 - `write::emf` and `write::wmf` (feature `write`) write a list of drawing operations.
 
-The crate depends on `kurbo`, `thiserror` and `image` (PNG, JPEG, GIF, TIFF and BMP decoders, for
-the image files that EMF+ and `BI_JPEG`/`BI_PNG` bitmaps carry). It knows no fonts, no file system
+The crate depends on `kurbo`, `thiserror`, `encoding_rs` (the code pages of 8-bit text) and `image`
+(PNG, JPEG, GIF, TIFF and BMP decoders, for the image files that EMF+ and `BI_JPEG`/`BI_PNG`
+bitmaps carry). It knows no fonts, no file system
 and no application.
 
 ## The model
@@ -57,7 +58,7 @@ decoder is where the size, pixel and work limits have to be enforced.
 | Objects | `CREATEPENINDIRECT` (style, cap and join bits), `CREATEBRUSHINDIRECT` (solid, null, hatched), `DIBCREATEPATTERNBRUSH`, `CREATEFONTINDIRECT`, `SELECTOBJECT`, `DELETEOBJECT`, stock objects. `CREATEPALETTE`, `CREATEPATTERNBRUSH` and `CREATEREGION` take their handle slot. |
 | Drawing | `MOVETO`, `LINETO`, `POLYLINE`, `POLYGON`, `POLYPOLYGON`, `RECTANGLE`, `ROUNDRECT`, `ELLIPSE`, `ARC`, `PIE`, `CHORD`, `PATBLT`. |
 | Bitmaps | `STRETCHDIB`, `DIBSTRETCHBLT`, `DIBBITBLT` (with or without a source). |
-| Text | `EXTTEXTOUT` (rectangle, opaque, clipped, dx), `TEXTOUT`; code pages 1250, 1251, 1252, the symbol character set, double-byte lead bytes as blanks. |
+| Text | `EXTTEXTOUT` (rectangle, opaque, clipped, dx), `TEXTOUT`, decoded in the selected font's character set: code pages 1250 to 1258 and 874, Shift_JIS, UHC, GBK and Big5 (a double-byte character takes the advances of both its bytes), and the symbol character set (also the Symbol font under `DEFAULT_CHARSET`), whose codes stay in the private-use area at U+F000. Face names are read in the font's code page. Johab pairs are blanks. |
 | Clipping | `INTERSECTCLIPRECT`, `EXCLUDECLIPRECT`. |
 | Not read | `OFFSETWINDOWORG`, `OFFSETVIEWPORTORG`, `SCALEWINDOWEXT`, `SCALEVIEWPORTEXT`, flood fills, `SETPIXEL`, region records (`FILLREGION`, `FRAMEREGION`, `PAINTREGION`, `INVERTREGION`, `SELECTCLIPREGION`, `OFFSETCLIPRGN`), the device-dependent `BITBLT`, `STRETCHBLT` and `SETDIBTODEV`. They are counted in `skipped_records`. |
 
@@ -72,7 +73,7 @@ decoder is where the size, pixel and work limits have to be enforced.
 | Drawing | `MOVETOEX`, `LINETO`, `POLYLINE(16)`, `POLYLINETO(16)`, `POLYGON(16)`, `POLYBEZIER(16)`, `POLYBEZIERTO(16)`, `POLYPOLYLINE(16)`, `POLYPOLYGON(16)`, `RECTANGLE`, `ROUNDRECT`, `ELLIPSE`, `ARC`, `CHORD`, `PIE`. |
 | Paths | `BEGINPATH`, `ENDPATH`, `CLOSEFIGURE`, `FILLPATH`, `STROKEPATH`, `STROKEANDFILLPATH`, `ABORTPATH`, `SELECTCLIPPATH` (`RGN_AND`, `RGN_COPY`). |
 | Bitmaps | `BITBLT`, `STRETCHBLT`, `STRETCHDIBITS`, `SETDIBITSTODEVICE`, `ALPHABLEND` (constant and per-pixel alpha); source-less raster operations fill with the brush, black or white; `SRCAND`, `SRCPAINT` and `SRCINVERT` are drawn as they look over white. |
-| Text | `EXTTEXTOUTA`, `EXTTEXTOUTW`, `SMALLTEXTOUT`; glyph-index strings are left out. |
+| Text | `EXTTEXTOUTA`, `EXTTEXTOUTW`, `SMALLTEXTOUT`; 8-bit strings are decoded as WMF text is; glyph-index strings are left out. |
 | Clipping | `INTERSECTCLIPRECT`, `EXCLUDECLIPRECT`, `EXTSELECTCLIPRGN` (all five modes, on rectangles), `SELECTCLIPPATH`. |
 | Not read | `ANGLEARC`, `ARCTO`, `POLYDRAW(16)`, `SETPIXELV`, flood fills, region paints, `MASKBLT`, `PLGBLT`, `TRANSPARENTBLT`, `GRADIENTFILL`, `POLYTEXTOUT`, `WIDENPATH`, `SETMETARGN`, `OFFSETCLIPRGN`, `SETLAYOUT`, `SELECTCLIPPATH` with `RGN_OR`, `RGN_XOR` or `RGN_DIFF` (the clip stays as it was). Unknown types are counted in `skipped_records`. |
 

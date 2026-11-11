@@ -1497,11 +1497,76 @@ fn character_sets_decode_bytes() {
     assert_eq!(one(204, &[0xC0, 0xFF, 0xA8]), "АяЁ");
     assert_eq!(one(2, b"n\xA7"), "\u{F06E}\u{F0A7}", "symbol fonts keep their codes in the private-use area");
     assert_eq!(one(0, &[0x81]), "\u{FFFD}", "an undefined byte");
-    // A double-byte character set: a lead and trail byte become one blank with both advances.
-    let p =
-        wmf200(&[wfont(-10, 400, [0, 0, 0], 128, 0, b"F"), wrec(0x012D, &h16(0)), wtext(0, 0, &[0x41, 0x82, 0xA0, 0x42], 0, None, &[1, 2, 3, 4])]);
-    let t = texts(&p)[0];
-    assert_eq!((t.text.as_str(), t.dx.as_slice()), ("A B", [1.0, 5.0, 4.0].as_slice()));
+    // Hebrew (177): letters, a point, the sheqel sign; an undefined byte.
+    assert_eq!(one(177, &[0xF9, 0xEC, 0xE5, 0xED, b' ', 0xC8, 0xA4]), "שלום \u{05B8}₪");
+    assert_eq!(one(177, &[0xFA, 0xE0, 0xFB]), "תא\u{FFFD}");
+    // Arabic (178): "سلام", an Arabic comma and question mark.
+    assert_eq!(one(178, &[0xD3, 0xE1, 0xC7, 0xE3, 0xA1, 0xBF]), "سلام،؟");
+    // Greek, Turkish, Vietnamese, Baltic and Thai.
+    assert_eq!(one(161, &[0xE1, 0xD9]), "αΩ");
+    assert_eq!(one(162, &[0xD0, 0xFD, 0xFE]), "Ğış");
+    assert_eq!(one(163, &[0xD5, 0xF0]), "Ơđ");
+    assert_eq!(one(186, &[0xE0, 0xFE]), "ąž");
+    assert_eq!(one(222, &[0xA1, 0xE4]), "กไ");
+    // A string is in the font's code page: EF BB BF is three characters, not a byte order mark.
+    assert_eq!(one(0, &[0xEF, 0xBB, 0xBF, 0x41]), "ï»¿A");
+    assert_eq!(one(161, &[0xEF, 0xBB, 0xBF, 0x41]), "ο»ΏA");
+}
+
+#[test]
+fn double_byte_character_sets_decode_pairs_with_both_advances() {
+    let run = |charset: u8, s: &[u8]| {
+        let dx: Vec<i32> = (1..=s.len() as i32).collect();
+        let p = wmf200(&[wfont(-10, 400, [0, 0, 0], charset, 0, b"F"), wrec(0x012D, &h16(0)), wtext(0, 0, s, 0, None, &dx)]);
+        let t = texts(&p)[0];
+        (t.text.clone(), t.dx.clone())
+    };
+    // Shift_JIS: a pair is one character with the sum of its two advances.
+    assert_eq!(run(128, &[0x41, 0x82, 0xA0, 0x42]), ("AあB".into(), vec![1.0, 5.0, 4.0]));
+    // Its half-width katakana are single bytes: 0xA6 is no lead byte and the 'A' after it no trail.
+    assert_eq!(run(128, &[0xA6, 0x41, 0xB1]), ("ｦAｱ".into(), vec![1.0, 2.0, 3.0]));
+    // Big5 A1D0 is the fullwidth hyphen-minus equation editors write for a minus sign.
+    assert_eq!(run(136, &[0xA1, 0xD0]), ("－".into(), vec![3.0]));
+    // UHC and GBK.
+    assert_eq!(run(129, &[0xB0, 0xA1]), ("가".into(), vec![3.0]));
+    assert_eq!(run(134, &[0xB0, 0xA1]), ("啊".into(), vec![3.0]));
+    // 0x7F is never a GBK trail byte: the lead before it is one undefined byte, 0x7F stands
+    // alone and the pair after them decodes.
+    assert_eq!(run(134, &[0xB0, 0x7F, 0xB0, 0xA1]), ("\u{FFFD}\u{7F}啊".into(), vec![1.0, 2.0, 7.0]));
+    // A lead byte at the end of the string is one undefined byte, as is the lead of a pair
+    // inside Big5's ranges that Big5 does not define; the byte after it is read on its own.
+    assert_eq!(run(136, &[0x81]), ("\u{FFFD}".into(), vec![1.0]));
+    assert_eq!(run(136, &[0x81, 0x40]), ("\u{FFFD}@".into(), vec![1.0, 2.0]));
+    // Johab is not decoded: a pair is one blank with both advances.
+    assert_eq!(run(130, &[0x41, 0x88, 0x61, 0x42]), ("A B".into(), vec![1.0, 5.0, 4.0]));
+}
+
+#[test]
+fn a_wmf_face_name_is_read_in_the_fonts_code_page() {
+    // 新細明體 (PMingLiU) in Big5.
+    let p = wmf200(&[
+        wfont(-10, 400, [0, 0, 0], 136, 0, &[0xB7, 0x73, 0xB2, 0xD3, 0xA9, 0xFA, 0xC5, 0xE9]),
+        wrec(0x012D, &h16(0)),
+        wtext(0, 0, b"A", 0, None, &[]),
+    ]);
+    assert_eq!(texts(&p)[0].font.family, "新細明體");
+    // A symbol font's name is plain text, not symbol codes.
+    let p = wmf200(&[wfont(-10, 400, [0, 0, 0], 2, 0, b"Wingdings"), wrec(0x012D, &h16(0)), wtext(0, 0, b"A", 0, None, &[])]);
+    assert_eq!(texts(&p)[0].font.family, "Wingdings");
+}
+
+#[test]
+fn the_symbol_font_under_the_default_character_set_keeps_symbol_codes() {
+    let one = |charset: u8, face: &[u8]| {
+        let p = wmf200(&[wfont(-10, 400, [0, 0, 0], charset, 0, face), wrec(0x012D, &h16(0)), wtext(0, 0, &[0x61, 0xE6], 0, None, &[])]);
+        texts(&p)[0].text.clone()
+    };
+    // Equation editors select "Symbol" with DEFAULT_CHARSET: the bytes are the font's own codes.
+    assert_eq!(one(1, b"Symbol"), "\u{F061}\u{F0E6}");
+    assert_eq!(one(1, b"symbol (PCL6)"), "\u{F061}\u{F0E6}");
+    // Another font under DEFAULT_CHARSET, and Symbol asked for as an ANSI font, are Western text.
+    assert_eq!(one(1, b"Arial"), "aæ");
+    assert_eq!(one(0, b"Symbol"), "aæ");
 }
 
 #[test]
