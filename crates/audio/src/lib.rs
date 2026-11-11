@@ -19,6 +19,9 @@
 //!   gives [`wav_float_header`]) and FLAC (feature `flac-encode`), whole-buffer or incremental into
 //!   any `Write + Seek`. Feature `lossless-encode` turns on both; feature `encode` turns on
 //!   `lossless-encode` and every codec's encoder.
+//! - [`wav_pcm`], [`aiff_pcm`] (feature `decode-native`) and [`pcm_wav_file`], [`pcm_wav_header`],
+//!   [`pcm_aiff_file`], [`pcm_aiff_header`] (feature `pcm-encode`): the integer PCM of a WAV or AIFF
+//!   file bit for bit, and minimal files around such PCM, for essence embedded in other containers.
 //! - [`peaks`] (feature `peaks`): min/max/RMS pyramid for waveform drawing.
 //! - Codec modules for packet-level use, each with its own features: [`aac`] (`aac-decode`,
 //!   `aac-encode`), [`alac`] (`alac-decode`, `alac-encode`), [`opus`] (`opus-decode`), [`ac3`]
@@ -91,12 +94,16 @@ pub use read::{
     DECODE_EXTENSIONS, DEFAULT_MAX_SAMPLES, DecodeOptions, Decoder, TrackInfo, decode, decode_with, detect_container, probe, probe_with, tracks,
     tracks_of,
 };
+#[cfg(feature = "decode-native")]
+pub use read::{RawPcm, aiff_pcm, wav_pcm};
 #[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
 pub use track::{LOOKAHEAD_PACKETS, TrackDecoder};
 #[cfg(feature = "pcm-encode")]
 pub use write::wav_float_header;
 #[cfg(any(feature = "pcm-encode", feature = "flac-encode"))]
 pub use write::{ENCODE_EXTENSIONS, FileEncoder, encode, encode_format_for};
+#[cfg(feature = "pcm-encode")]
+pub use write::{pcm_aiff_file, pcm_aiff_header, pcm_wav_file, pcm_wav_header};
 
 /// Errors from probing, decoding and encoding.
 #[non_exhaustive]
