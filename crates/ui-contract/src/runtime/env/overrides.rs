@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 /// Token-changing values for a container's body: the body and everything under it resolve their styles from the
 /// inherited theme in another mode.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct ThemeScope {
     mode: Mode,
 }
@@ -28,8 +28,9 @@ impl ThemeScope {
     /// Puts the scope's tokens into `scoped`.
     pub(crate) fn apply(&self, ctx: &Context, scoped: &mut Scoped) {
         let inputs = TokenInputs { mode: self.mode, ..(*scoped.token_inputs).clone() };
-        scoped.tokens = tokens_for(ctx, &inputs);
-        scoped.token_inputs = Arc::new(inputs);
+        let inherited = scoped.inherited_mut();
+        inherited.tokens = tokens_for(ctx, &inputs);
+        inherited.token_inputs = Arc::new(inputs);
     }
 }
 
@@ -86,18 +87,22 @@ impl Overrides {
             scoped.wheel_gated = true;
         }
         if let Some(motion) = self.motion {
-            scoped.motion.mode = scoped.motion.mode.lowered_by(motion);
+            let inherited = scoped.inherited_mut();
+            inherited.motion.mode = inherited.motion.mode.lowered_by(motion);
         }
         if let Some(direction) = self.direction {
             scoped.direction = direction;
             scoped.text_direction = direction;
         }
         match self.words {
-            Some(WordsOverride::Replace(words)) => scoped.words = words,
-            Some(WordsOverride::Overlay(rows)) => scoped.words = overlaid_words(ctx, &scoped.words, rows),
+            Some(WordsOverride::Replace(words)) => scoped.inherited_mut().words = words,
+            Some(WordsOverride::Overlay(rows)) => {
+                let words = overlaid_words(ctx, &scoped.words, rows);
+                scoped.inherited_mut().words = words;
+            }
             None => {}
         }
-        scoped.values.extend(&self.values);
+        scoped.extend_values(&self.values);
     }
 }
 

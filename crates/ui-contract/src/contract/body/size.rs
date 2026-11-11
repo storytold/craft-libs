@@ -10,12 +10,13 @@ use crate::runtime::env::Env;
 use crate::runtime::layout_memory;
 use crate::runtime::memory::sub;
 use egui::{Context, Id, Rect, Ui, Vec2};
+use std::sync::Arc;
 
 /// The inputs a body's measuring run measures under. A later pass offering the same takes the body's kept
 /// transcript (`layout_memory::kept_serves`); its real run checks that the content is the same.
 #[derive(PartialEq)]
 pub(super) struct MeasureKey {
-    props: u64,
+    props: MeasuredProps,
     room: Vec2,
     given: (bool, bool),
     width: Option<f32>,
@@ -24,6 +25,15 @@ pub(super) struct MeasureKey {
     /// The content extent the view keeps, which decides the scroll bars' inset.
     extent: (f32, f32),
     env: EnvFacts,
+}
+
+/// The props a body was measured under, compared on the fields its measure reads.
+struct MeasuredProps(Arc<ContainerProps>);
+
+impl PartialEq for MeasuredProps {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.measures_like(&other.0)
+    }
 }
 
 /// What a body's measure reads of its env besides the room.
@@ -45,9 +55,9 @@ struct EnvFacts {
 
 impl<'b> BodyHooks<'b> {
     /// The inputs this body's measuring run measures under, once `measured_extent` has its room.
-    pub(super) fn measure_key(&self, props: &ContainerProps, env: &Env, width: Option<f32>) -> MeasureKey {
+    pub(super) fn measure_key(&self, env: &Env, width: Option<f32>) -> MeasureKey {
         MeasureKey {
-            props: props.measure_fingerprint(),
+            props: MeasuredProps(Arc::clone(&self.props)),
             room: self.room,
             given: self.given,
             width,

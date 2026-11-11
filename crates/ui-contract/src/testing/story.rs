@@ -506,8 +506,10 @@ where
         columns: Vec::new(),
         toggles: Vec::new(),
     };
-    let installed =
-        crate::runtime::env::Env::install_for(ui, crate::runtime::env::Env::of(ui).derive_local(|scoped| scoped.item_facts = Some(facts)));
+    let installed = crate::runtime::env::Env::install_for(
+        ui,
+        crate::runtime::env::Env::of(ui).derive_local(|scoped| scoped.item_facts = Some(std::sync::Arc::new(facts))),
+    );
     let shown = row.id(id).show(ui);
     crate::runtime::env::Env::restore(ui.ctx(), installed);
     shown

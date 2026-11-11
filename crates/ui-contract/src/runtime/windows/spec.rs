@@ -41,7 +41,7 @@ impl WindowLevel {
 ///
 /// A chrome or caption layout the spec leaves unset is the installed decision's for the window's kind
 /// (`InstallSpec::frame`); with no decision installed the window has the OS's frame.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct WindowSpec {
     /// What the window is for.

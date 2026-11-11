@@ -31,7 +31,7 @@ pub enum Trigger {
 
 /// A component that opens a free-standing popup, and how. A layer with several openers keeps the first as its
 /// `Overlay.opener`, which keys the layer's open state, and the others in `others`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Opener {
     /// The opener's id.

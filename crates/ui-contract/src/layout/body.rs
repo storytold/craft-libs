@@ -227,9 +227,8 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
 /// what the others and the gaps took with the number that fill. With a child that fills, it sweeps them again: the
 /// others reuse what the first sweep recorded, and each child that fills is measured once, at its equal share of the
 /// rest. The real run gives each the same share from that record.
-fn run_sharing<R>(ui: &mut Ui, id: Id, axis: Axis, layout: egui::Layout, mut body: impl FnMut(&mut Ui) -> R) -> R {
+fn run_sharing<R>(ui: &mut Ui, env: &Env, id: Id, axis: Axis, layout: egui::Layout, mut body: impl FnMut(&mut Ui) -> R) -> R {
     let ctx = ui.ctx().clone();
-    let env = Env::of(ui);
     let given = if axis == Axis::Y { !env.content.1 } else { !env.content.0 };
     if !given {
         return child::block(ui, None, layout, body).0;
@@ -239,7 +238,7 @@ fn run_sharing<R>(ui: &mut Ui, id: Id, axis: Axis, layout: egui::Layout, mut bod
     let sweep = |ui: &mut Ui, share: Option<f32>, body: &mut dyn FnMut(&mut Ui) -> R| {
         let installed = Env::install_for(
             ui,
-            Env::of(ui).derive_local(|scoped| {
+            env.derive_local(|scoped| {
                 scoped.fill_body = Some((id, axis));
                 scoped.fill_share = share;
             }),
@@ -526,8 +525,8 @@ fn found(ctx: &egui::Context, sizing: bool, id: Id, room: Vec2, took: Vec2) {
 /// run found, `SpaceBetween` shares the room its children left there between them, and `Grid` places its cells from
 /// the widest child per column and tallest per row there. Without a measuring run they place as `Start`, spread at
 /// the gap and size columns from the cells as they come.
-pub(crate) fn run_body<R>(ui: &mut Ui, id: Id, layout: &BodyLayout, gap: Vec2, body: impl FnMut(&mut Ui) -> R) -> R {
-    run_body_measured(ui, id, layout, gap, None, body).0
+pub(crate) fn run_body<R>(ui: &mut Ui, env: &Env, id: Id, layout: &BodyLayout, gap: Vec2, body: impl FnMut(&mut Ui) -> R) -> R {
+    run_body_measured(ui, env, id, layout, gap, None, body).0
 }
 
 /// `run_body`, with the width the children take at the gap alone for a `Row` that places its block itself (`End`,
@@ -535,17 +534,18 @@ pub(crate) fn run_body<R>(ui: &mut Ui, id: Id, layout: &BodyLayout, gap: Vec2, b
 /// line the body shares with its container's inline header or end region: an unwrapped `Row` sets its children on it.
 pub(crate) fn run_body_measured<R>(
     ui: &mut Ui,
+    env: &Env,
     id: Id,
     layout: &BodyLayout,
     gap: Vec2,
     shared: Option<f32>,
     mut body: impl FnMut(&mut Ui) -> R,
 ) -> (R, Option<f32>) {
-    let rtl = Env::of(ui).direction.is_rtl();
+    let rtl = env.direction.is_rtl();
     let ctx = ui.ctx().clone();
     let sizing = measure::active(&ctx);
     match layout {
-        BodyLayout::Stack => (run_sharing(ui, id, Axis::Y, child::column_layout(rtl), body), None),
+        BodyLayout::Stack => (run_sharing(ui, env, id, Axis::Y, child::column_layout(rtl), body), None),
         BodyLayout::Row { wrap: false, align: RowAlign::SpaceBetween } => {
             let (inner, _) = child::block(ui, None, child::row_layout(rtl, false), |ui| {
                 let flow = Flow::new(ui.available_rect_before_wrap(), rtl);
@@ -554,7 +554,7 @@ pub(crate) fn run_body_measured<R>(
                 let line = on_line(row_line(&ctx, sizing, id), shared);
                 let installed = Env::install_for(
                     ui,
-                    Env::of(ui).derive_local(|scoped| {
+                    env.derive_local(|scoped| {
                         scoped.grid = Some(id);
                         scoped.row_line = line;
                     }),
@@ -576,7 +576,7 @@ pub(crate) fn run_body_measured<R>(
         BodyLayout::Row { wrap: false, align: RowAlign::Start } => {
             let room = ui.available_rect_before_wrap();
             let line = on_line(row_line(&ctx, sizing, id), shared);
-            let inner = run_sharing(ui, id, Axis::X, child::row_layout(rtl, false), |ui| {
+            let inner = run_sharing(ui, env, id, Axis::X, child::row_layout(rtl, false), |ui| {
                 let installed = Env::install_for(
                     ui,
                     Env::of(ui).derive_local(|scoped| {
@@ -610,7 +610,7 @@ pub(crate) fn run_body_measured<R>(
             let (inner, took) = child::block(ui, rect, child::row_layout(rtl, *wrap), |ui| {
                 let installed = Env::install_for(
                     ui,
-                    Env::of(ui).derive_local(|scoped| {
+                    env.derive_local(|scoped| {
                         scoped.row_room = Some(room.width());
                         scoped.row_line = line;
                     }),
@@ -631,7 +631,7 @@ pub(crate) fn run_body_measured<R>(
             let inner = child::block(ui, None, child::column_layout(rtl), |ui| {
                 let top = ui.available_rect_before_wrap().top();
                 let last = measured_tracks(&ctx, sizing, id, columns.len());
-                let content_run = measure::active(&ctx) && Env::of(ui).content.0;
+                let content_run = measure::active(&ctx) && env.content.0;
                 // A measuring run under a body sized from its content gives each fill column the width its cells
                 // take, as a content column: the room it would share is not the body's to claim.
                 let cursor = if content_run {
@@ -640,7 +640,7 @@ pub(crate) fn run_body_measured<R>(
                     GridCursor::new(Flow::new(ui.available_rect_before_wrap(), rtl), columns, gap, &last)
                 };
                 Service::<Cursors>::run(&ctx, |cursors| cursors.0.insert(id, Cursor::Grid(cursor)));
-                let installed = Env::install_for(ui, Env::of(ui).derive_local(|scoped| scoped.grid = Some(id)));
+                let installed = Env::install_for(ui, env.derive_local(|scoped| scoped.grid = Some(id)));
                 let inner = body(ui);
                 Env::restore(&ctx, installed);
                 // Cells place from last pass's rows, so a measuring run's rows all start at the top: the grid reaches

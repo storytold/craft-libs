@@ -66,42 +66,13 @@ impl Deref for Env {
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct Scoped {
-    /// The resolved tokens of the scope; read in `style` only.
-    #[doc(hidden)]
-    pub tokens: Arc<UiTokens>,
-    /// What the tokens were resolved from (the light or dark mode among them): the app's, until a scope that
-    /// resolves its tokens in another mode sets them.
-    pub(crate) token_inputs: Arc<TokenInputs>,
-    /// The operating system.
-    #[doc(hidden)]
-    pub os: Os,
-    /// Whether the window is active.
-    #[doc(hidden)]
-    pub active: bool,
-    /// The platform and the running viewport's window facts.
-    pub(crate) shell: Arc<ShellInfo>,
-    /// The keyboard layout as the platform reports it and typing has shown it.
-    pub(crate) keyboard: Arc<craft_keymap::Layout>,
+    /// What a scope rarely changes, shared by the scopes below until one changes it (`inherited_mut`).
+    inherited: Arc<Inherited>,
     /// The text and icon ink of the surface the scope sits on, set by a container for its body.
     pub ink: Ink,
     /// The surface the scope's content sits on: the innermost container surface that paints a fill, set by that
     /// container for its body. The window's background at the root and where a layer starts.
     pub(crate) surface: SurfaceKind,
-    /// The built-in text of the scope.
-    #[doc(hidden)]
-    pub words: Arc<Words>,
-    /// How the scope writes numbers: the host's catalog format, else the system region's.
-    pub(crate) format: Arc<Format>,
-    /// How the scope writes dates: the host's catalog format, else the system region's.
-    pub(crate) dates: Arc<DateFormat>,
-    /// Today's date as the host supplied it.
-    pub(crate) today: Option<CalendarDate>,
-    /// `RootEnv::tab_toggles_chrome`.
-    pub(crate) tab_toggles_chrome: bool,
-    /// The line height per point of text of the leading face of the interface stack, as the frame began: control
-    /// heights depend on it, so the key covers it.
-    #[doc(hidden)]
-    pub line_ratio: f32,
     /// The key of everything above that the style cache depends on.
     #[doc(hidden)]
     pub key: EnvKey,
@@ -120,12 +91,8 @@ pub struct Scoped {
     /// The paragraph direction of text: the interface's, which a container that keeps its axis order leaves alone.
     /// The bidi order inside a label follows its script.
     pub text_direction: Direction,
-    /// The motion mode in effect.
-    pub motion: MotionPolicy,
     /// False inside the body of a component with an `Auto` id.
     pub ids_stable: bool,
-    /// Root and viewport only: the pixels per point, read back once per pass.
-    pub scale: Scale,
     /// The innermost arena: components shown under it join it.
     pub arena: Option<ArenaId>,
     /// The roving group of the innermost body with `ContainerProps.roving`: components shown under it put
@@ -176,12 +143,62 @@ pub struct Scoped {
     /// Tab leaves the collection and Forward enters the row (17.5).
     pub(crate) row: Option<Id>,
     /// What the collection's item step recorded for the item it shows this pass.
-    pub(crate) item_facts: Option<ItemFacts>,
+    pub(crate) item_facts: Option<Arc<ItemFacts>>,
+}
+
+/// The values of an env that a scope rarely changes: the resolved tokens, the platform, the language and the app's
+/// values. `Scoped` reads them through `Deref`.
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct Inherited {
+    /// The resolved tokens of the scope; read in `style` only.
+    #[doc(hidden)]
+    pub tokens: Arc<UiTokens>,
+    /// What the tokens were resolved from (the light or dark mode among them): the app's, until a scope that
+    /// resolves its tokens in another mode sets them.
+    pub(crate) token_inputs: Arc<TokenInputs>,
+    /// The operating system.
+    #[doc(hidden)]
+    pub os: Os,
+    /// Whether the window is active.
+    #[doc(hidden)]
+    pub active: bool,
+    /// The platform and the running viewport's window facts.
+    pub(crate) shell: Arc<ShellInfo>,
+    /// The keyboard layout as the platform reports it and typing has shown it.
+    pub(crate) keyboard: Arc<craft_keymap::Layout>,
+    /// The built-in text of the scope.
+    #[doc(hidden)]
+    pub words: Arc<Words>,
+    /// How the scope writes numbers: the host's catalog format, else the system region's.
+    pub(crate) format: Arc<Format>,
+    /// How the scope writes dates: the host's catalog format, else the system region's.
+    pub(crate) dates: Arc<DateFormat>,
+    /// Today's date as the host supplied it.
+    pub(crate) today: Option<CalendarDate>,
+    /// `RootEnv::tab_toggles_chrome`.
+    pub(crate) tab_toggles_chrome: bool,
+    /// The line height per point of text of the leading face of the interface stack, as the frame began: control
+    /// heights depend on it, so the key covers it.
+    #[doc(hidden)]
+    pub line_ratio: f32,
+    /// The motion mode in effect.
+    pub motion: MotionPolicy,
+    /// Root and viewport only: the pixels per point, read back once per pass.
+    pub scale: Scale,
     /// The container instances above that receive scoped commands.
     pub(crate) commands: CommandChain,
     pub(crate) host: Option<Arc<Host>>,
     #[doc(hidden)]
     pub values: AppValues,
+}
+
+impl Deref for Scoped {
+    type Target = Inherited;
+
+    fn deref(&self) -> &Inherited {
+        &self.inherited
+    }
 }
 
 /// The shrink step of an unwrapped `Row` body, as its direct leaf children shown in flow see it.
@@ -230,7 +247,19 @@ impl Scoped {
 
     /// The facts the collection recorded for the item `id`.
     pub(crate) fn facts_of(&self, id: Id) -> Option<&ItemFacts> {
-        self.item_facts.as_ref().filter(|facts| facts.item == id)
+        self.item_facts.as_deref().filter(|facts| facts.item == id)
+    }
+
+    /// The inherited values, to change: shared with no other scope from here on.
+    pub(crate) fn inherited_mut(&mut self) -> &mut Inherited {
+        Arc::make_mut(&mut self.inherited)
+    }
+
+    /// Adds `values` over the scope's app values.
+    pub(crate) fn extend_values(&mut self, values: &AppValues) {
+        if !values.is_empty() {
+            self.inherited_mut().values.extend(values);
+        }
     }
 }
 
@@ -288,16 +317,29 @@ impl Env {
         let shell = Arc::new(windows::shell_of(ctx, pass::current_viewport(ctx)));
         let active = shell.window.active;
         let keyboard = Arc::new(crate::runtime::keys::layout_of(ctx));
+        let key = EnvKey::new(tokens.key(), root.direction, scale, os, active, root.values.style_hash()).with_line(line_ratio);
         Env {
             scoped: Arc::new(Scoped {
-                key: EnvKey::new(tokens.key(), root.direction, scale, os, active, root.values.style_hash()).with_line(line_ratio),
-                line_ratio,
-                tokens,
-                token_inputs: Arc::new(inputs),
-                os,
-                active,
-                shell,
-                keyboard,
+                inherited: Arc::new(Inherited {
+                    line_ratio,
+                    tokens,
+                    token_inputs: Arc::new(inputs),
+                    os,
+                    active,
+                    shell,
+                    keyboard,
+                    motion,
+                    scale,
+                    commands: CommandChain::default(),
+                    words: host_words(ctx, host.as_ref()),
+                    format: host_format(ctx, host.as_ref()),
+                    dates: host_dates(ctx, host.as_ref()),
+                    today: root.today,
+                    tab_toggles_chrome: root.tab_toggles_chrome,
+                    host,
+                    values: root.values.clone(),
+                }),
+                key,
                 ink: Ink::default(),
                 surface: SurfaceKind::Background,
                 size: ControlSize::Md,
@@ -306,9 +348,7 @@ impl Env {
                 wheel_gated: false,
                 direction: root.direction,
                 text_direction: root.direction,
-                motion,
                 ids_stable: true,
-                scale,
                 arena: None,
                 roving: None,
                 transform: None,
@@ -327,14 +367,6 @@ impl Env {
                 item: None,
                 row: None,
                 item_facts: None,
-                commands: CommandChain::default(),
-                words: host_words(ctx, host.as_ref()),
-                format: host_format(ctx, host.as_ref()),
-                dates: host_dates(ctx, host.as_ref()),
-                today: root.today,
-                tab_toggles_chrome: root.tab_toggles_chrome,
-                host,
-                values: root.values.clone(),
             }),
         }
     }
@@ -425,10 +457,11 @@ impl Env {
     /// active state, window facts and OS are the viewport's, everything else stays.
     pub(crate) fn rebase(&self, root: &Env) -> Env {
         self.derive(|s| {
-            s.scale = root.scale;
-            s.active = root.active;
-            s.shell = root.shell.clone();
-            s.os = root.os;
+            let inherited = s.inherited_mut();
+            inherited.scale = root.scale;
+            inherited.active = root.active;
+            inherited.shell = root.shell.clone();
+            inherited.os = root.os;
         })
     }
 

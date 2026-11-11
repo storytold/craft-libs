@@ -112,7 +112,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
                 env.derive_local(|scoped| {
                     scoped.item = Some(item_id);
                     scoped.row = Some(rows::row_group(item_id));
-                    scoped.item_facts = Some(facts);
+                    scoped.item_facts = Some(std::sync::Arc::new(facts));
                 }),
             );
             widest = widest.max(item.measure_in(ui, Proposal::Ideal).x);

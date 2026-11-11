@@ -4,7 +4,7 @@ use craft_behavior::overlay::{Align, Side};
 use egui::{Align2, Pos2, Rect, Vec2};
 
 /// Where an overlay hangs from.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum Anchor {
     /// A rect in the opener's layer space.
@@ -40,7 +40,7 @@ impl FloatPlace {
 }
 
 /// Where an egui layer sits.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum Place {
     /// Hung from an anchor.

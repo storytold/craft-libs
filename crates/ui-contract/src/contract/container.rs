@@ -17,7 +17,7 @@ use egui::Rect;
 pub use crate::runtime::env::ThemeScope;
 
 /// Where a container lives.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub enum Mount {
     /// In the parent's layout.
@@ -607,49 +607,31 @@ impl Default for ContainerProps {
 }
 
 impl ContainerProps {
-    /// A fingerprint of the props a body's measure reads: equal props give equal fingerprints. What it leaves out
-    /// (focus, arena, gates, commands, live region, roving, save key, set position) does not change a size. Glyphs
-    /// show as `Glyph(..)`: an icon is a component of the content, which the content check asks.
-    pub(crate) fn measure_fingerprint(&self) -> u64 {
-        use std::fmt::Write as _;
-        /// FNV-1a over the `Debug` text, without building it: `Debug` writes every `f32` so that it reads back
-        /// exactly.
-        struct Fnv(u64);
-        impl std::fmt::Write for Fnv {
-            fn write_str(&mut self, text: &str) -> std::fmt::Result {
-                for byte in text.bytes() {
-                    self.0 = (self.0 ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
-                }
-                Ok(())
-            }
-        }
-        let mut hash = Fnv(0xcbf2_9ce4_8422_2325);
-        let _ = write!(
-            hash,
-            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
-            self.mount,
-            self.surface,
-            self.pad,
-            self.sizing,
-            self.room_height,
-            self.layout,
-            self.header,
-            self.scroll,
-            self.footer,
-            self.end,
-            self.help,
-            self.collapse,
-            self.body_gap,
-            self.least_width,
-            self.child_size,
-            self.transform,
-            self.theme,
-            self.label,
-            self.outer_edit,
-            self.collection_body,
-        );
-        hash.0
+    /// Whether a body measured under `other` measures the same under these props. What it leaves out (focus, arena,
+    /// gates, commands, live region, roving, save key, set position) does not change a size.
+    pub(crate) fn measures_like(&self, other: &ContainerProps) -> bool {
+        self.mount == other.mount
+            && self.surface == other.surface
+            && self.pad == other.pad
+            && self.sizing == other.sizing
+            && self.room_height == other.room_height
+            && self.layout == other.layout
+            && self.header == other.header
+            && self.scroll == other.scroll
+            && self.footer == other.footer
+            && self.end == other.end
+            && self.help == other.help
+            && self.collapse == other.collapse
+            && self.body_gap == other.body_gap
+            && self.least_width == other.least_width
+            && self.child_size == other.child_size
+            && self.transform == other.transform
+            && self.theme == other.theme
+            && self.label == other.label
+            && self.outer_edit == other.outer_edit
+            && self.collection_body == other.collection_body
     }
+
     /// Props with every field at its default.
     pub const fn new() -> Self {
         ContainerProps {

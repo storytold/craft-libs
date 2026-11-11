@@ -18,8 +18,9 @@ pub fn body(ui: &mut Ui, key: &'static str, layout: &BodyLayout, sizes: &[Vec2])
     let id = sub(ui.scope_id(), key);
     let place = |ui: &mut Ui| sizes.iter().map(|size| place_in_flow(ui, *size)).collect::<Vec<_>>();
     let builder = egui::UiBuilder::new().max_rect(ui.available_rect_before_wrap()).sizing_pass().invisible();
-    crate::runtime::measure::run(&ui.ctx().clone(), || ui.scope_builder(builder, |ui| run_body(ui, id, layout, Vec2::ZERO, place)));
-    run_body(ui, id, layout, Vec2::ZERO, place)
+    let env = crate::runtime::env::Env::of(ui);
+    crate::runtime::measure::run(&ui.ctx().clone(), || ui.scope_builder(builder, |ui| run_body(ui, &env, id, layout, Vec2::ZERO, place)));
+    run_body(ui, &env, id, layout, Vec2::ZERO, place)
 }
 
 /// A block that placed itself from `key`'s entry of last pass and measured `real` this pass. Returns the size

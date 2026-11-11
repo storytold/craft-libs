@@ -127,8 +127,8 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
 
     fn read(&mut self, comp: &mut C, stage: &mut MemoryStage, id: Id, env: &Env) {
         let ctx = stage.ctx().clone();
-        let props = comp.props(Internal::new()).clone();
-        let props = &props;
+        let props = Arc::clone(&self.props);
+        let props = &*props;
         let scroll = scroll_of(props);
         let collapse = props.collapse;
         let save = props.save.clone();
@@ -274,7 +274,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
     /// the room. What the regions took is recorded for the rest of the pass; a record this pass already holds serves
     /// instead when the room still allows it (`reusable`).
     fn measured_extent(&mut self, comp: &mut C, at: &Measuring<'_, '_>, cx: &mut Cx<'_, C>) -> Vec2 {
-        let props = comp.props(Internal::new()).clone();
+        let props = Arc::clone(&self.props);
         // A mount outside the flow takes no room in a parent's sizing pass, so its regions run only when it is
         // measured itself. A pane as tall as its content takes its height in the flow.
         let flows = match &props.mount {
@@ -336,7 +336,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let tolerance = measure_tolerance(crate::runtime::egui::scale::pixels_per_point(&ctx));
         // A record a run of this pass left serves as before; a kept one serves only while the inputs it was measured
         // under hold.
-        let key = self.measure_key(&props, at.env, at.width);
+        let key = self.measure_key(at.env, at.width);
         let reused = (self.reuse || at.ui.is_sizing_pass())
             .then(|| {
                 let found = layout_memory::run_found(&ctx, id);
@@ -412,22 +412,32 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
     /// an enclosing container left when the room still allows it, else a measuring run of its own now. A closed
     /// layer that no longer shows runs none.
     fn pass_extent(&mut self, comp: &mut C, at: &Measuring<'_, '_>, style: &C::Style, shown: Option<Arc<ValueOf<C>>>) -> Vec2 {
-        let props = comp.props(Internal::new()).clone();
+        let props = Arc::clone(&self.props);
         let (ctx, id) = (at.ui.ctx().clone(), at.resolved.id);
         let layer = matches!(props.mount, Mount::Layer(_) | Mount::FullWindow | Mount::Viewport { .. });
         let fading = layer && !self.open && crate::runtime::motion::layer_fading(&ctx, sub(id, "presence"));
         if !layer || self.open || fading {
+            // The measuring run starts from what this run's `read` found: the measuring run of a sizing parent reads
+            // the same state.
             let mut stage = MemoryStage::open_peek(&ctx, id);
-            let mut fresh = BodyHooks::new(&mut *self.body);
-            fresh.read(comp, &mut stage, id, at.env);
-            // A peek stage holds no session scroll state: the measuring run decides by the offset this pass shows.
-            fresh.view_offset = self.view_offset;
-            fresh.open = self.open;
-            fresh.open_at_read = self.open;
-            fresh.presence = self.presence;
-            fresh.open_given = true;
-            fresh.shown_closed = fading;
-            fresh.reuse = true;
+            let mut fresh = BodyHooks {
+                save: self.save.clone(),
+                layer: self.layer,
+                fixed: self.fixed,
+                open_bound: self.open_bound,
+                scroll_bound: self.scroll_bound,
+                last_extent: self.last_extent,
+                anchor: self.anchor,
+                follows_end: self.follows_end,
+                view_offset: self.view_offset,
+                open: self.open,
+                open_at_read: self.open,
+                presence: self.presence,
+                open_given: true,
+                shown_closed: fading,
+                reuse: true,
+                ..BodyHooks::new(&mut *self.body, Arc::clone(&self.props))
+            };
             crate::contract::run::measured_extent(comp, &mut fresh, at, &mut stage, style, shown);
         }
         let took = |key: Id| layout_memory::measured(&ctx, key).map(|measured| measured.took);
@@ -496,8 +506,8 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         matches!(comp.props(Internal::new()).layout, layout::BodyLayout::Row { wrap: false, .. })
     }
 
-    fn parts(&mut self, comp: &mut C, rect: Rect, pcx: &mut PartsCx<'_, C>) {
-        let props = comp.props(Internal::new()).clone();
+    fn parts(&mut self, _comp: &mut C, rect: Rect, pcx: &mut PartsCx<'_, C>) {
+        let props = Arc::clone(&self.props);
         let ctx = pcx.ui.ctx().clone();
         let rtl = pcx.flow.is_rtl();
         let tokens = pcx.tokens;
@@ -597,7 +607,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
     }
 
     fn content(&mut self, comp: &mut C, ui: &mut Ui, env: &Env, cx: &mut Cx<'_, C>, values: &AppValues) {
-        let props = comp.props(Internal::new()).clone();
+        let props = Arc::clone(&self.props);
         let (id, ctx, rect) = (cx.core.id, cx.core.ctx.clone(), cx.core.rect);
         let rtl = env.direction.is_rtl();
         let node = matches!(C::ROLE, Role::Node(_));
@@ -653,15 +663,19 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let enabled = gate.unwrap_or(true);
         // What the body and the end region share: gate, size, roving group and commands. The body adds its arena,
         // transform and scroll owner; the end region lies outside them.
-        let line_env = region_env.derive_local(|scoped| {
-            scoped.enabled &= enabled;
-            if let Some(size) = props.child_size {
-                scoped.size = size;
-            }
-            if props.roving.is_some() {
-                scoped.roving = Some(crate::contract::steps::body_group(id));
-            }
-        });
+        let line_env = if enabled && props.child_size.is_none() && props.roving.is_none() {
+            region_env.clone()
+        } else {
+            region_env.derive_local(|scoped| {
+                scoped.enabled &= enabled;
+                if let Some(size) = props.child_size {
+                    scoped.size = size;
+                }
+                if props.roving.is_some() {
+                    scoped.roving = Some(crate::contract::steps::body_group(id));
+                }
+            })
+        };
         let end_frame = RegionFrame { id, rtl, node, env: &line_env };
         // A footer in the end region is part of a column sized from its content: a fill-width child takes its
         // measured width there and shows across the column, so it never sets the column's width.
@@ -787,8 +801,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                         if lays_out {
                             crate::runtime::lazy::begin(&ctx, id);
                         }
-                        let region_env = Env::install_for(&region_ui, body_env.derive_local(|scoped| scoped.lazy = Some(view)));
-                        layout::run_body(&mut region_ui, layout_id, layout, gap, |ui| {
+                        let view_env = body_env.derive_local(|scoped| scoped.lazy = Some(view));
+                        let region_env = Env::install_for(&region_ui, view_env.clone());
+                        layout::run_body(&mut region_ui, &view_env, layout_id, layout, gap, |ui| {
                             shared_labels(ui, id, label_column, room.x, &mut group_extent, |ui| body(ui, bcx))
                         });
                         Env::restore(&ctx, region_env);
@@ -816,7 +831,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                     }
                     // A row that places its block itself asks for its children's width, not the room it spans.
                     None => {
-                        let (_, natural) = layout::run_body_measured(&mut body_ui, layout_id, layout, gap, line, |ui| {
+                        let (_, natural) = layout::run_body_measured(&mut body_ui, &body_env, layout_id, layout, gap, line, |ui| {
                             shared_labels(ui, id, label_column, room.x, &mut group_extent, |ui| body(ui, bcx))
                         });
                         natural.map(|width| Vec2::new(width, body_ui.min_rect().height()))

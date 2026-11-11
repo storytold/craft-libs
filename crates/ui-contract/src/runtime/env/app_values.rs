@@ -82,11 +82,13 @@ impl AppValues {
         self.entries.map.get(&TypeId::of::<T>()).and_then(|value| value.downcast_ref::<T>()).cloned().unwrap_or_else(T::root)
     }
 
+    /// Whether no value is set.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries.map.is_empty()
+    }
+
     /// Takes every value `other` sets over this set's.
     pub(crate) fn extend(&mut self, other: &AppValues) {
-        if other.entries.map.is_empty() {
-            return;
-        }
         let entries = Arc::make_mut(&mut self.entries);
         for (ty, value) in &other.entries.map {
             entries.map.insert(*ty, Arc::clone(value));

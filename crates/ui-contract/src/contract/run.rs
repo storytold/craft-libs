@@ -927,7 +927,8 @@ fn run<C: Component>(mut comp: C, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>
     // A sizing pass reads the cancel and ends nothing: its stage is a copy, and the real run reads the cancel again.
     let cancelled: Vec<_> = value.cancelled.into_iter().filter(|_| !sizing).collect();
     hooks.read(&mut comp, &mut stage, id, &env);
-    let own_env = hooks.instance_scope(&comp).map(|scope| env.derive_local(|scoped| scoped.commands = scoped.commands.pushed(scope, id)));
+    let own_env =
+        hooks.instance_scope(&comp).map(|scope| env.derive_local(|scoped| scoped.inherited_mut().commands = scoped.commands.pushed(scope, id)));
     let env = own_env.as_ref().unwrap_or(&env);
     trace.mark(Step::Value);
     // 5 measure
@@ -1139,7 +1140,8 @@ pub(crate) fn show_container<C: Container, R>(
         inner = Some(body(ui, cx));
     };
     let ctx = ui.ctx().clone();
-    let output = run(comp, ui, at, tip, &mut super::body::BodyHooks::new(&mut call));
+    let props = Arc::new(comp.props(Internal::new()).clone());
+    let output = run(comp, ui, at, tip, &mut super::body::BodyHooks::new(&mut call, props));
     let id = crate::contract::Outcome::response(&output).id;
     let settle = ran.then(|| super::settle::SettleAt { ctx, body: sub(id, "body"), owner: id });
     Inner { output, inner, settle }
@@ -1169,7 +1171,8 @@ pub(crate) fn measure_container<C: Container, R>(
     let mut call = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
         body(ui, cx);
     };
-    measure_shape(comp, ui, None, proposal, None, &mut super::body::BodyHooks::new(&mut call))
+    let props = Arc::new(comp.props(Internal::new()).clone());
+    measure_shape(comp, ui, None, proposal, None, &mut super::body::BodyHooks::new(&mut call, props))
 }
 
 /// A measuring run's extent: the shape's `measured_extent` under a `Cx` that senses nothing and writes only to the

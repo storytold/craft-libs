@@ -51,9 +51,9 @@ impl BodyHooks<'_> {
         // The container's own `enabled(false)` greys everything inside it, as a scope would.
         scoped.enabled &= cx.core.resolved.enabled;
         if let Some(window) = window {
-            scoped.commands = scoped.commands.pushed(WindowCommand::SCOPE, window);
+            scoped.inherited_mut().commands = scoped.commands.pushed(WindowCommand::SCOPE, window);
         }
-        scoped.values.extend(values);
+        scoped.extend_values(values);
         if cx.core.resolved.ltr_axis {
             scoped.direction = Direction::Ltr;
         }
@@ -66,13 +66,13 @@ impl BodyHooks<'_> {
             scoped.content_column = true;
         }
         if props.header.is_some_and(|header| header.band == DragBand::Reorder) {
-            scoped.commands = scoped.commands.pushed(REORDER_SCOPE, id);
+            scoped.inherited_mut().commands = scoped.commands.pushed(REORDER_SCOPE, id);
         }
         // A host env (a layer's) does not carry the push the container's own context made.
         if let Some(scope) = props.command_scope
             && scoped.commands.innermost(scope.name()) != Some(id)
         {
-            scoped.commands = scoped.commands.pushed(scope, id);
+            scoped.inherited_mut().commands = scoped.commands.pushed(scope, id);
         }
         if let Some(theme) = &props.theme {
             theme.apply(ctx, scoped);

@@ -22,8 +22,9 @@ pub enum Mirror {
     Never,
 }
 
-/// A value glyph: an icon drawn from a value.
-pub trait Glyph {
+/// A value glyph: an icon drawn from a value. It is `Sync` because container props that show one are kept with a
+/// body's measurement in layout memory.
+pub trait Glyph: Sync {
     /// Whether the glyph has a reading direction (an arrow) and so flips under right-to-left.
     fn directional(&self) -> bool {
         false

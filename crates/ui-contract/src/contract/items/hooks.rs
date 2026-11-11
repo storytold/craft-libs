@@ -392,7 +392,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         }
         let child_size = comp.props(Internal::new()).child_size;
         let base_env = env.derive(|scoped| {
-            scoped.values.extend(values);
+            scoped.extend_values(values);
             scoped.arena = Some(ArenaId::new(id));
             scoped.size = child_size.unwrap_or(cx.core.resolved.size);
         });
@@ -514,7 +514,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                     base_env.derive_local(|scoped| {
                         scoped.item = Some(item_id);
                         scoped.row = Some(row_group);
-                        scoped.item_facts = Some(ItemFacts { item: item_id, flags, position, columns: column_keys, toggles: toggle_keys });
+                        scoped.item_facts = Some(Arc::new(ItemFacts { item: item_id, flags, position, columns: column_keys, toggles: toggle_keys }));
                     }),
                 );
                 item = Props::id(item, item_id);
@@ -663,7 +663,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             let mut open = true;
             let builder = UiBuilder::new().max_rect(rect).layout(child::column_layout(rtl)).scope_id(sub(id, "empty"));
             let mut empty_ui = alloc::child(ui, builder);
-            let installed = Env::install_for(&empty_ui, env.derive(|scoped| scoped.values.extend(values)));
+            let installed = Env::install_for(&empty_ui, env.derive(|scoped| scoped.extend_values(values)));
             let (resolved, view) = (cx.core.resolved, cx.core.env);
             let mut bcx = BodyCx::new(sub(id, "body"), view, resolved, rect, &mut *cx.core.memory, &mut open, None);
             comp.empty(&mut empty_ui, &mut bcx);

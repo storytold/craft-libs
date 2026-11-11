@@ -1,6 +1,7 @@
 //! The body step (16.3): the regions of a container (header, body with its scroll region, footer), open and
 //! gate state, scroll offset, move and resize, and the zoomed canvas body.
 
+use super::ContainerProps;
 use super::cx::BodyCx;
 use super::overlay::PlacementChange;
 use crate::runtime::memory::SaveKey;
@@ -9,6 +10,7 @@ use crate::runtime::overlay::CloseReason;
 use crate::runtime::windows::ResizeEdge;
 use craft_behavior::ScrollPos;
 use egui::{Rect, Ui, Vec2};
+use std::sync::Arc;
 
 mod hooks;
 mod inherit;
@@ -39,6 +41,8 @@ struct BodyView {
 
 pub(super) struct BodyHooks<'b> {
     pub(super) body: &'b mut dyn FnMut(&mut Ui, &mut BodyCx<'_>),
+    /// The container's props, cloned once for the run: every hook and the measuring run read this copy.
+    props: Arc<ContainerProps>,
     /// The body's size from this pass's measuring run; `None` inside the measuring run itself.
     measured_body: Option<Vec2>,
     /// The header's size from this pass's measuring run; `None` without a header or inside the measuring run.
@@ -119,9 +123,10 @@ pub(super) struct BodyHooks<'b> {
 }
 
 impl<'b> BodyHooks<'b> {
-    pub(super) fn new(body: &'b mut dyn FnMut(&mut Ui, &mut BodyCx<'_>)) -> Self {
+    pub(super) fn new(body: &'b mut dyn FnMut(&mut Ui, &mut BodyCx<'_>), props: Arc<ContainerProps>) -> Self {
         BodyHooks {
             body,
+            props,
             measured_body: None,
             measured_header: None,
             measured_footer: Vec2::ZERO,
