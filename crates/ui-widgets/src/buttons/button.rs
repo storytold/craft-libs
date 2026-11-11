@@ -149,7 +149,7 @@ impl<'a> Button<'a> {
 
     fn spec<'s>(&'s self, label: &'s str) -> FaceSpec<'s> {
         let label = self.painted.as_ref().map_or(label, Label::as_str);
-        FaceSpec { label, role: None, lead: self.icon.as_ref(), trail: self.trailing_icon.as_ref(), loading: self.loading }
+        FaceSpec { label, role: None, lead: self.icon.as_ref(), trail: self.trailing_icon.as_ref(), loading: self.loading, mnemonic: None }
     }
 }
 

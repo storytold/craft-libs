@@ -185,7 +185,14 @@ impl Segment {
     }
 
     fn spec<'s>(&'s self, label: &'s str) -> FaceSpec<'s> {
-        FaceSpec { label: if self.icon.is_some() { "" } else { label }, role: None, lead: self.icon.as_ref(), trail: None, loading: false }
+        FaceSpec {
+            label: if self.icon.is_some() { "" } else { label },
+            role: None,
+            lead: self.icon.as_ref(),
+            trail: None,
+            loading: false,
+            mnemonic: None,
+        }
     }
 }
 

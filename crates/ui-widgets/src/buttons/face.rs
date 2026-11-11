@@ -40,11 +40,13 @@ pub(crate) struct FaceSpec<'a> {
     /// A spinner takes the place of the leading icon, or of the label when there is no leading icon: the face keeps
     /// the slot empty and the button shows a `Spinner` there.
     pub loading: bool,
+    /// The character of `label` underlined as its mnemonic.
+    pub mnemonic: Option<usize>,
 }
 
 impl FaceSpec<'_> {
     fn run(&self) -> TextRun<'_> {
-        let run = TextRun::new(self.label).elide();
+        let run = TextRun::mnemonic(self.label, self.mnemonic).elide();
         match self.role {
             Some(role) => run.role(role),
             None => run,

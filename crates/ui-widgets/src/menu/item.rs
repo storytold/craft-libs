@@ -7,7 +7,7 @@ use crate::contract::{
 };
 use crate::display::Kbd;
 use crate::list::RowStyleCx as _;
-use crate::primitives::{IconSpec, PaintShape, StrokeWidth, TextLayout, TextRun, glyph};
+use crate::primitives::{IconSpec, StrokeWidth, TextRun, glyph};
 use crate::runtime::access::PopupKind;
 use crate::runtime::commands::{CommandRef, FireSource, ResolvedCommand};
 use crate::runtime::env::Label;
@@ -499,21 +499,13 @@ impl Component for MenuItem<'_> {
             let icon = if icon.color.is_some() { icon } else { icon.color(ink) };
             draw.icon(centred(slot), &icon);
         }
-        let run = TextRun::new(text.as_str()).elide().role(cx.style.text.role).color(cx.resolve(&cx.style.text.color));
+        let mnemonic = if level.keyboard() || cx.modifiers().alt { level.mnemonic_of(cx.id).map(|(_, at)| at) } else { None };
+        let run = TextRun::mnemonic(text.as_str(), mnemonic).elide().role(cx.style.text.role).color(cx.resolve(&cx.style.text.color));
         let layout = draw.layout(&run, placed.label.width());
         let size = layout.size();
         let x = if rtl { placed.label.max.x - size.x } else { placed.label.min.x };
         let y = placed.label.center().y - size.y / 2.0;
         draw.galley(pos2(x, y), &layout);
-        let underlined = level.keyboard() || cx.modifiers().alt;
-        if underlined
-            && let Some((_, at)) = level.mnemonic_of(cx.id)
-            && let Some((from, width)) = glyph_span(&layout, at)
-        {
-            let line = y + size.y;
-            let (from, to) = (x + from, x + from + width);
-            draw.stroke(&PaintShape::Path(vec![pos2(from, line), pos2(to, line)]), StrokeWidth::Thin, cx.resolve(&cx.style.text.color));
-        }
         if let Some(run) = &detail_run {
             let layout = draw.layout(run, f32::INFINITY);
             let size = layout.size();
@@ -560,15 +552,6 @@ impl Component for MenuItem<'_> {
         let frame = cx.response.rect.expand(level.pad()).expand2(egui::vec2(cx.style.submenu_gap, 0.0));
         MenuItemOutput { response: cx.response.clone(), ran: self.ran, opens_submenu: self.opens, submenu_open: self.open, frame, level, id: cx.id }
     }
-}
-
-/// The span of the glyph for character `at` of a single-row layout: its start from the layout's left edge and its
-/// advance. The glyph rects are in display order, so an underline taken from them is right in right-to-left text
-/// too. `None` when the layout cut the character off.
-fn glyph_span(layout: &TextLayout, at: usize) -> Option<(f32, f32)> {
-    let row = layout.galley.rows.first()?;
-    let glyph = row.row.glyphs.get(at)?;
-    Some((row.pos.x + glyph.pos.x, glyph.advance_width))
 }
 
 /// How long the pointer has rested on a row, and whether the row had the focus in the last pass.

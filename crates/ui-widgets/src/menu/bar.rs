@@ -29,7 +29,6 @@ use crate::contract::{
 use crate::display::{Divider, Shade, Text};
 use crate::layout_components::Stack;
 use crate::list::RowStyleCx as _;
-use crate::primitives::{PaintShape, StrokeWidth, TextRun};
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::{EnvView, Label};
 use crate::runtime::focus::{self, FocusTarget};
@@ -41,8 +40,8 @@ use craft_behavior::fit::{FitItem, FitKeep, fit_items};
 use craft_behavior::{Arrows, Axis, Flow, Intent, Metrics, NavMove, NavShape, PartKey, PartRef, Roving, Sense};
 use craft_host::target::MenuPlacement;
 use craft_keymap::mnemonic;
-use craft_theme::{Flags, Stateful};
-use egui::{Context, Pos2, Rect, Response, Ui, Vec2, pos2};
+use craft_theme::Flags;
+use egui::{Context, Pos2, Rect, Response, Ui, Vec2};
 
 const TITLE: PartKey = PartKey::new("title");
 const MORE: PartKey = PartKey::new("more");
@@ -65,23 +64,25 @@ struct TitleFaceStyle {
     face: FaceLook,
 }
 
-/// The face of a menu title: lit while its menu is open or the keyboard is on it.
+/// The face of a menu title: lit while its menu is open or the keyboard is on it, its mnemonic underlined while Alt
+/// is held or the bar has focus.
 #[derive(crate::contract::Component)]
 #[component(sample = TitleFace::sample)]
 struct TitleFace {
     #[common]
     common: Common,
     lit: bool,
+    mnemonic: Option<usize>,
 }
 
 impl TitleFace {
-    fn new(label: impl Into<Label>, lit: bool) -> Self {
-        TitleFace { common: Common::new(), lit }.label(label)
+    fn new(label: impl Into<Label>, lit: bool, mnemonic: Option<usize>) -> Self {
+        TitleFace { common: Common::new(), lit, mnemonic }.label(label)
     }
 
     #[cfg(feature = "testing")]
     fn sample() -> Self {
-        TitleFace::new("Title", false)
+        TitleFace::new("Title", false, None)
     }
 }
 
@@ -111,7 +112,7 @@ impl Component for TitleFace {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        face::measure(cx, &FaceSpec { label: cx.resolved.label, role: None, lead: None, trail: None, loading: false })
+        face::measure(cx, &FaceSpec { label: cx.resolved.label, role: None, lead: None, trail: None, loading: false, mnemonic: None })
     }
 
     fn sense(&self) -> Sense {
@@ -123,7 +124,7 @@ impl Component for TitleFace {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        let spec = FaceSpec { label: cx.resolved.label, role: None, lead: None, trail: None, loading: false };
+        let spec = FaceSpec { label: cx.resolved.label, role: None, lead: None, trail: None, loading: false, mnemonic: self.mnemonic };
         face::paint(ui, cx, (&cx.style.text, &cx.style.icon), &cx.style.face, &spec, cx.content_rect);
     }
 
@@ -132,16 +133,12 @@ impl Component for TitleFace {
     }
 }
 
-/// The style of a menu bar: the titles wear row faces; the bar itself draws the mnemonic underline in the
-/// faces' label role and ink.
+/// The style of a menu bar: the titles wear row faces, which underline their mnemonics.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct MenuBarStyle {
     #[style(metrics)]
     metrics: Metrics,
-    /// The mnemonic underline's ink and the role the underlined run is measured in.
-    #[style(text)]
-    text: TextLook,
 }
 
 /// A menu of the bar: its title and the body that fills the menu when it opens.
@@ -296,8 +293,8 @@ impl<'a> MenuBar<'a> {
         refs.iter().zip(marks).map(|(label, mark)| (mnemonic::marked(label).0, mark)).collect()
     }
 
-    fn face(text: &str, lit: bool) -> TitleFace {
-        TitleFace::new(Label::from(text.to_owned()), lit)
+    fn face(text: &str, lit: bool, mnemonic: Option<usize>) -> TitleFace {
+        TitleFace::new(Label::from(text.to_owned()), lit, mnemonic)
     }
 
     /// The text of the overflow title: "…" beside shown titles, "Menu" when it holds them all.
@@ -308,8 +305,8 @@ impl<'a> MenuBar<'a> {
     /// Each title's width as its face measures, the face height, and the width of the "…" title.
     fn widths(&self, cx: &MeasureCx<'_, Self>) -> (Vec<f32>, f32, f32) {
         let texts = self.texts(&cx.env);
-        let sizes: Vec<Vec2> = texts.iter().map(|(text, _)| cx.face(Self::face(text, false))).collect();
-        let more = cx.face(Self::face(&Self::more_text(&cx.env.words::<MenuWords>(), 1), false));
+        let sizes: Vec<Vec2> = texts.iter().map(|(text, _)| cx.face(Self::face(text, false, None))).collect();
+        let more = cx.face(Self::face(&Self::more_text(&cx.env.words::<MenuWords>(), 1), false, None));
         let height = sizes.iter().map(|size| size.y).fold(more.y, f32::max);
         (sizes.iter().map(|size| size.x).collect(), height, more.x)
     }
@@ -394,20 +391,6 @@ impl<'a> MenuBar<'a> {
             })
             .collect()
     }
-
-    /// The line under the mnemonic letter of the title in `part`, shown while Alt is held.
-    fn underline(ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, part: PartRef, text: &str, at: usize) {
-        let Some(cell) = cx.part_if_declared(part).map(|result| result.rect) else { return };
-        let draw = ui.draw();
-        let role = cx.style.text.role;
-        let size_of = |run: &str| if run.is_empty() { Vec2::ZERO } else { draw.layout(&TextRun::new(run).role(role), f32::INFINITY).size() };
-        let before: String = text.chars().take(at).collect();
-        let letter: String = text.chars().skip(at).take(1).collect();
-        let (whole, before, letter) = (size_of(text), size_of(&before).x, size_of(&letter).x);
-        let line = cell.center().y + whole.y / 2.0;
-        let from = if cx.flow.is_rtl() { cell.center().x + whole.x / 2.0 - before - letter } else { cell.center().x - whole.x / 2.0 + before };
-        draw.stroke(&PaintShape::Path(vec![pos2(from, line), pos2(from + letter, line)]), StrokeWidth::Thin, cx.resolve(&cx.style.text.color));
-    }
 }
 
 impl Component for MenuBar<'_> {
@@ -417,8 +400,7 @@ impl Component for MenuBar<'_> {
     type Output = MenuBarOutput;
 
     fn style(cx: &StyleCx<'_>, _: MenuBarStyleKey) -> MenuBarStyle {
-        let ink = cx.color(cx.tokens.color.text.normal);
-        MenuBarStyle { metrics: Metrics::new(), text: TextLook::new(TypeRole::Label, Stateful::new(ink)) }
+        MenuBarStyle { metrics: Metrics::new() }
     }
 
     /// Every title's width when the room allows it; the bar fills the row, so what is left over is room for the
@@ -629,13 +611,11 @@ impl Component for MenuBar<'_> {
             let open = cx.core.toggles.iter().any(|toggle| toggle.part == part && toggle.open);
             // Under the pointer a title is the active row, as it is while its menu is open or the keyboard is on it.
             let lit = open || cx.hover_pos(part).is_some() || cx.part_state(part).flags.contains(Flags::FOCUS_VISIBLE);
-            ui.face(part, Self::face(&text, lit));
-            if let Open::Title(at) = slot
-                && underlined
-                && let Some((_, index)) = texts[at].1
-            {
-                Self::underline(ui, cx, part, &text, index);
-            }
+            let mnemonic = match slot {
+                Open::Title(at) if underlined => texts[at].1.map(|(_, index)| index),
+                _ => None,
+            };
+            ui.face(part, Self::face(&text, lit, mnemonic));
         }
     }
 

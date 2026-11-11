@@ -58,12 +58,14 @@ pub struct Span<'a> {
     pub shortcut: bool,
     /// A search match highlight.
     pub highlight: bool,
+    /// Underlined in the span's colour, `stroke.thin` wide, along the bottom of the line box.
+    pub underline: bool,
 }
 
 impl<'a> Span<'a> {
     /// A plain span.
     pub fn new(text: impl Into<Cow<'a, str>>) -> Self {
-        Span { text: text.into(), italic: false, tabular: false, mono: false, muted: false, shortcut: false, highlight: false }
+        Span { text: text.into(), italic: false, tabular: false, mono: false, muted: false, shortcut: false, highlight: false, underline: false }
     }
 
     /// Italic.
@@ -99,6 +101,12 @@ impl<'a> Span<'a> {
     /// A match highlight.
     pub fn highlight(mut self) -> Self {
         self.highlight = true;
+        self
+    }
+
+    /// Underlined: a link, or the mnemonic letter of a menu title.
+    pub fn underline(mut self) -> Self {
+        self.underline = true;
         self
     }
 }
@@ -141,6 +149,15 @@ impl<'a> TextRun<'a> {
     /// A run of `spans`.
     pub fn spans(spans: Vec<Span<'a>>) -> Self {
         TextRun { spans, role: TypeRole::Label, color: None, wrap: Wrap::Line, ltr: false, align: HAlign::Start, rotation: 0.0 }
+    }
+
+    /// `text` with its character `at` underlined, as a mnemonic shows while it is in use; all of `text` plain when
+    /// `at` is `None` or past its end.
+    pub fn mnemonic(text: &'a str, at: Option<usize>) -> Self {
+        let Some((start, letter)) = at.and_then(|at| text.char_indices().nth(at)) else { return TextRun::new(text) };
+        let end = start + letter.len_utf8();
+        let spans = [Span::new(&text[..start]), Span::new(&text[start..end]).underline(), Span::new(&text[end..])];
+        TextRun::spans(spans.into_iter().filter(|span| !span.text.is_empty()).collect())
     }
 
     /// Sets the type role.
@@ -284,7 +301,10 @@ impl TextRun<'_> {
                 base
             };
             let background = if span.highlight { to_color(env.tokens.color.state.r#match) } else { Color32::TRANSPARENT };
-            let format = span_format(env.tokens, env.fonts, self.role, span.mono, color, span.italic, background);
+            let mut format = span_format(env.tokens, env.fonts, self.role, span.mono, color, span.italic, background);
+            if span.underline {
+                format.underline = egui::Stroke::new(env.tokens.stroke.thin, color);
+            }
             job.append(text_part, 0.0, format);
         }
         job

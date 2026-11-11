@@ -1,8 +1,8 @@
 //! `Link`: text in the accent colour, always underlined, that reports a click.
 
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Pointer as _, Role, Styled as _};
-use crate::primitives::{StrokeWidth, TextLayout, TextRun, Wrap};
-use crate::style::{ComponentStyle, FocusLook, RuleLook, RuleWidth, Stateful, StyleCx, TextLook, TypeRole};
+use crate::primitives::{Span, TextLayout, TextRun, Wrap};
+use crate::style::{ComponentStyle, FocusLook, Stateful, StyleCx, TextLook, TypeRole};
 use craft_behavior::{Flow, Metrics, PointerButton, PressPhase, Sense};
 use craft_theme::variant::Tone;
 use craft_theme::{Contrast, States};
@@ -19,8 +19,6 @@ pub struct LinkStyle {
     /// The text and underline colour: `accent.solid`, as PhotoCraft's links; `accent.text` at high contrast, which meets the text contrast `accent.solid` does not.
     #[style(text)]
     text: TextLook,
-    /// The underline's width, resolved by `measure` and `paint` alike.
-    underline: StrokeWidth,
 }
 
 /// A link: drawn in the accent colour in a type role (body by default) and underlined, so colour is not its only cue.
@@ -54,7 +52,7 @@ impl Link {
     }
 
     fn run<'a>(&self, label: &'a str) -> TextRun<'a> {
-        TextRun::new(label).role(self.role).wrap(self.wrap)
+        TextRun::spans(vec![Span::new(label).underline()]).role(self.role).wrap(self.wrap)
     }
 }
 
@@ -72,7 +70,6 @@ impl Component for Link {
         LinkStyle {
             metrics: Metrics::new(),
             focus: cx.focus_look(),
-            underline: StrokeWidth::Thin,
             text: TextLook::new(TypeRole::Body, Stateful::new(color).off(States::new(color, color, color, cx.color(colors.text.disabled)))),
         }
     }
@@ -84,8 +81,7 @@ impl Component for Link {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let layout = cx.layout(&self.run(cx.resolved.label));
-        let underline = cx.style.underline.points(cx.tokens, cx.ui.ctx().pixels_per_point());
-        Vec2::new(layout.size().x, reach(&layout, underline))
+        Vec2::new(layout.size().x, painted_height(&layout))
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
@@ -112,15 +108,10 @@ impl Component for Link {
         let run = self.run(cx.resolved.label).color(color);
         let layout = draw.layout(&run, cx.content_rect.width());
         // A single line is centred with its underline in a taller rect, so the underline follows the text.
-        let underline = draw.width(cx.style.underline);
-        let total = reach(&layout, underline);
-        let spare = if layout.galley.rows.len() <= 1 { (cx.content_rect.height() - total).max(0.0) } else { 0.0 };
+        let spare = if layout.galley.rows.len() <= 1 { (cx.content_rect.height() - painted_height(&layout)).max(0.0) } else { 0.0 };
         let top = cx.content_rect.top() + spare / 2.0;
         let line = Flow::new(cx.content_rect, cx.flow.is_rtl()).take_start(layout.size().x).0;
         draw.galley(Pos2::new(line.left(), top), &layout);
-        // The stroke's top edge sits on the line box's bottom, so the whole stroke lies below every descender.
-        let y = top + line_bottom(&layout).unwrap_or(layout.size().y) + underline / 2.0;
-        draw.rule_with(&RuleLook { color: color.egui(), width: RuleWidth::Points(underline) }, Pos2::new(line.left(), y), Pos2::new(line.right(), y));
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> Response {
@@ -128,13 +119,7 @@ impl Component for Link {
     }
 }
 
-/// The bottom of the first line's glyph box, from the top of the layout: the baseline plus the face's descent and
-/// the line's extra leading below the glyphs.
-fn line_bottom(layout: &TextLayout) -> Option<f32> {
-    layout.galley.rows.first().and_then(|placed| placed.row.glyphs.first().map(|glyph| placed.pos.y + glyph.logical_rect().bottom()))
-}
-
-/// The height a link takes: its text, and the underline below the first line's box when that reaches below the text.
-fn reach(layout: &TextLayout, underline: f32) -> f32 {
-    line_bottom(layout).map_or(layout.size().y, |bottom| layout.size().y.max(bottom + underline))
+/// The height a link paints: its text, and the underline where it reaches below the text's box.
+fn painted_height(layout: &TextLayout) -> f32 {
+    layout.size().y.max(layout.galley.mesh_bounds.max.y)
 }

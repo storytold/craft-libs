@@ -99,7 +99,14 @@ impl<'a> ToggleButton<'a> {
 
     fn spec<'s>(&'s self, label: &'s str, on: bool) -> FaceSpec<'s> {
         let lead = if on { self.on_icon.as_ref().or(self.icon.as_ref()) } else { self.icon.as_ref() };
-        FaceSpec { label: if self.icon_only { "" } else { label }, role: self.role, lead, trail: self.trailing_icon.as_ref(), loading: false }
+        FaceSpec {
+            label: if self.icon_only { "" } else { label },
+            role: self.role,
+            lead,
+            trail: self.trailing_icon.as_ref(),
+            loading: false,
+            mnemonic: None,
+        }
     }
 }
 
