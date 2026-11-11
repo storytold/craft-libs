@@ -168,6 +168,6 @@ expires = "cutover-3"             # required for bridge and shim
 
 ```toml
 config_version = 1
-paths = ["crates/ui/src/buttons"]
+paths = ["crates/ui-widgets/src/buttons"]
 duplicated-tokens = 0   # default 0
 ```
