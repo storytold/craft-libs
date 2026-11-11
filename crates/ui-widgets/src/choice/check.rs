@@ -2,14 +2,11 @@
 //! `PaintUi::labelled`'s, or the one `show` runs for a labelled instance); the control draws only the box.
 
 use crate::contract::{Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, PaintUi, Pointer as _, Role, Styled as _};
-use crate::primitives::{PaintShape, StrokeWidth, glyph};
+use crate::primitives::{StrokeWidth, glyph};
 use crate::style::{ComponentStyle, FocusLook, StyleColor, StyleCx, SurfaceKind, SurfaceLook};
 use craft_behavior::{Metrics, Sense};
 use craft_theme::Stateful;
 use egui::{Rect, Vec2};
-
-/// The mixed dash's half-length as a share of the box's side.
-const DASH: f32 = 0.25;
 
 /// The style of a check box.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
@@ -84,9 +81,7 @@ impl Component for Checkbox<'_> {
         let draw = ui.draw();
         draw.surface_look(square, &cx.style.well, cx.state());
         if cx.mixed {
-            let c = square.center();
-            let half = Vec2::new(cx.style.side * DASH, 0.0);
-            draw.stroke(&PaintShape::Path(vec![c - half, c + half]), StrokeWidth::Medium, cx.resolve(&cx.style.mark));
+            draw.stroke(&glyph::dash(square), StrokeWidth::Medium, cx.resolve(&cx.style.mark));
         } else if cx.value().copied().unwrap_or(false) {
             draw.stroke(&glyph::check(square), StrokeWidth::Medium, cx.resolve(&cx.style.mark));
         }

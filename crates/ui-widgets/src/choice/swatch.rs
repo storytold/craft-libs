@@ -7,20 +7,18 @@ use crate::contract::{
     Access, Activation, Common, Component, Cx, GroupHandle, MeasureCx, Meta as _, Outcome, PaintUi, Pointer as _, Props as _, Role, Styled as _,
     WordSetCx as _,
 };
-use crate::primitives::{Checker, ContentPainterCx, Draw, PaintShape, StrokeWidth};
+use crate::primitives::{Checker, ContentPainterCx, Draw, PaintShape, StrokeWidth, glyph};
 use crate::runtime::requests::ColorRequest;
 use crate::style::{ComponentStyle, DataColor, Flags, FocusLook, State, StateMix, StateSet, StyleColor, StyleCx, UiTokens, resolve_style};
 use craft_behavior::{Metrics, Mixed, Sense, Value};
 use craft_theme::{Rgba, Srgba, Stateful, States, over};
-use egui::{Color32, CornerRadius, Rect, Response, Vec2, pos2};
+use egui::{Color32, CornerRadius, Rect, Response, Vec2};
 
 #[cfg(feature = "testing")]
 mod stories;
 
 /// Opacity of the black or white ring that stands out from a well's colour.
 const INNER_EDGE_ALPHA: u8 = 0x80;
-/// The length of the dash on a mixed well, as a share of the well's width.
-const MIXED_DASH_SHARE: f32 = 0.5;
 
 /// The sizes of a swatch at a control size: what a composition that lays out wells reads.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -283,12 +281,7 @@ fn paint_face(draw: &Draw<'_>, well: Rect, style: &SwatchStyle, state: &StateSet
     match color.same() {
         None => {
             draw.fill(&shape, style.mixed_fill);
-            let (center, half) = (well.center(), well.width() * MIXED_DASH_SHARE / 2.0);
-            draw.stroke(
-                &PaintShape::Path(vec![pos2(center.x - half, center.y), pos2(center.x + half, center.y)]),
-                StrokeWidth::Medium,
-                style.mixed_mark,
-            );
+            draw.stroke(&glyph::dash(well), StrokeWidth::Medium, style.mixed_mark);
         }
         Some(color) => {
             if color.a < 1.0 {

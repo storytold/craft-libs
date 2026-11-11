@@ -1,11 +1,14 @@
-//! The marks of choice controls: the check mark and the radio dot. `Checkbox`, `RadioGroup` and `MenuItem` paint
-//! these shapes, so they look alike in a form and in a menu.
+//! The marks of choice controls: the check mark, the mixed dash and the radio dot. `Checkbox`, `Swatch`, `RadioGroup`
+//! and `MenuItem` paint these shapes, so they look alike in a form and in a menu.
 
 use super::PaintShape;
 use egui::{Pos2, Rect, Vec2};
 
 /// The check mark's corner and tip, as shares of the square's side from its top-left.
 const TICK: [(f32, f32); 3] = [(0.22, 0.52), (0.42, 0.72), (0.78, 0.30)];
+
+/// The mixed dash's length, as a share of the mark's width.
+const DASH: f32 = 0.5;
 
 /// The radius of the radio dot, as a share of the mark's side.
 const DOT_RADIUS: f32 = 0.25;
@@ -15,6 +18,13 @@ const DOT_RADIUS: f32 = 0.25;
 pub fn check(square: Rect) -> PaintShape {
     let at = |(x, y): (f32, f32)| -> Pos2 { square.min + Vec2::new(x, y) * square.size() };
     PaintShape::Path(TICK.map(at).to_vec())
+}
+
+/// The dash of a mixed value across the middle of `mark`; stroke it.
+#[doc(hidden)]
+pub fn dash(mark: Rect) -> PaintShape {
+    let half = Vec2::new(mark.width() * DASH / 2.0, 0.0);
+    PaintShape::Path(vec![mark.center() - half, mark.center() + half])
 }
 
 /// The radio dot at `center` in a mark `side` points wide; fill it.
