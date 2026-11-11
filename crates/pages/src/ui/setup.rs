@@ -379,20 +379,10 @@ impl Rows<'_> {
                     }
                 });
                 let sides = MIN_PAGE_SIDE..=MAX_PAGE_SIDE;
-                let width = Length {
-                    key: "width",
-                    label: words.width.clone(),
-                    get: |s| s.width,
-                    set: |s, v| s.set_size(v, s.height),
-                    range: sides.clone(),
-                };
-                let height = Length {
-                    key: "height",
-                    label: words.height.clone(),
-                    get: |s| s.height,
-                    set: |s, v| s.set_size(s.width, v),
-                    range: sides,
-                };
+                let width =
+                    Length { key: "width", label: words.width.clone(), get: |s| s.width, set: |s, v| s.set_size(v, s.height), range: sides.clone() };
+                let height =
+                    Length { key: "height", label: words.height.clone(), get: |s| s.height, set: |s, v| s.set_size(s.width, v), range: sides };
                 let wide = self.length(ui, form, setup, width);
                 self.length(ui, form, setup, height) && wide
             })

@@ -109,7 +109,16 @@ impl TabStopsDialog {
     pub fn new(mut stops: Vec<TabStop>, default_interval: f32) -> Self {
         stops.retain(|stop| stop.position.is_finite());
         stops.truncate(MAX_STOPS);
-        TabStopsDialog { stops, cleared: Vec::new(), default_interval, selected: None, edited: None, unit: DocUnit::default(), draft: None, to_edit: false }
+        TabStopsDialog {
+            stops,
+            cleared: Vec::new(),
+            default_interval,
+            selected: None,
+            edited: None,
+            unit: DocUnit::default(),
+            draft: None,
+            to_edit: false,
+        }
     }
 
     /// Sets the unit the position fields show.

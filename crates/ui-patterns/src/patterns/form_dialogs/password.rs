@@ -1,7 +1,7 @@
 //! `PasswordDialog`: the password for a protected file, a permissions password, or a new password with its strength.
 
 use crate::buttons::ToggleButton;
-use crate::contract::{Bind, NoValue, Outcome, Props as _, clicked, Remember as _, Show as _, ShowContainer as _};
+use crate::contract::{Bind, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _, clicked};
 use crate::dialog::{Dialog, DialogOutput};
 use crate::display::{Icon, Progress, Text};
 use crate::form::{Field, FieldGroup, Help};
