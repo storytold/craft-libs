@@ -325,10 +325,11 @@ fn a_stale_refresh_racing_a_discard_and_re_sign_in_does_not_delete_the_new_sessi
         }
     }
 
+    type SignInHandle = std::thread::JoinHandle<Result<Account, Error>>;
+
     let (landed_tx, landed_rx) = mpsc::sync_channel::<()>(0);
     let (release_tx, release_rx) = mpsc::sync_channel::<()>(0);
-    let handle_slot: std::sync::Arc<std::sync::Mutex<Option<std::thread::JoinHandle<Result<Account, Error>>>>> =
-        std::sync::Arc::new(std::sync::Mutex::new(None));
+    let handle_slot: std::sync::Arc<std::sync::Mutex<Option<SignInHandle>>> = std::sync::Arc::new(std::sync::Mutex::new(None));
 
     let hook_dir = dir.path().to_path_buf();
     let hook_keychain = keychain.clone();
