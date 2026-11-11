@@ -33,7 +33,7 @@ mod app_values;
 mod host_words;
 mod overrides;
 mod root;
-mod tokens;
+pub(crate) mod tokens;
 mod values;
 mod view;
 
@@ -504,7 +504,7 @@ impl Env {
 /// One viewport's env entries by the `Ui` they are installed for, and its root env. The lock is held only to
 /// install or look up an entry or clone an `Arc`.
 #[derive(Default)]
-struct ViewportEnvs {
+pub(crate) struct ViewportEnvs {
     entries: FastMap<Id, Env>,
     root: Option<Env>,
 }

@@ -28,7 +28,7 @@ struct BodyRuns {
 /// The runs of each component type, with the pass that counted them.
 #[cfg(feature = "testing")]
 #[derive(Default)]
-struct TypeRuns {
+pub(crate) struct TypeRuns {
     pass: u64,
     runs: Vec<(&'static str, u32)>,
 }
@@ -149,7 +149,7 @@ pub(crate) fn count_run<C>(ctx: &Context) {
     {
         let name = std::any::type_name::<C>();
         let pass = ctx.cumulative_pass_nr();
-        store::with::<TypeRuns, _>(ctx, |log| {
+        crate::runtime::pass_state::with::<TypeRuns, _>(ctx, |log| {
             if log.pass != pass {
                 *log = TypeRuns { pass, runs: Vec::new() };
             }
@@ -168,7 +168,7 @@ pub(crate) fn count_run<C>(ctx: &Context) {
 #[cfg(feature = "testing")]
 pub fn last_pass_runs(ctx: &Context) -> Vec<(&'static str, u32)> {
     let last = ctx.cumulative_pass_nr().saturating_sub(1);
-    store::with::<TypeRuns, _>(ctx, |log| if log.pass == last { log.runs.clone() } else { Vec::new() })
+    crate::runtime::pass_state::with::<TypeRuns, _>(ctx, |log| if log.pass == last { log.runs.clone() } else { Vec::new() })
 }
 
 /// Counts a build and measure of the rows of the collection `id` for its widest row in this pass.

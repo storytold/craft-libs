@@ -81,7 +81,7 @@ pub struct PassPointer {
 }
 
 #[derive(Default)]
-struct Memory {
+pub(crate) struct Memory {
     last_press: Option<(Pos2, f64, u32)>,
     press_targets: PressTargets,
     /// A cancel a service requested for the running pass.
@@ -103,7 +103,7 @@ struct RootRecord {
 type LayerRecord = HashMap<Layer, HashMap<Id, RootRecord>>;
 
 #[derive(Default)]
-struct Shapes {
+pub(crate) struct Shapes {
     this: LayerRecord,
     last: LayerRecord,
 }

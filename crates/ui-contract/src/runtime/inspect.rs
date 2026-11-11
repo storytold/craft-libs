@@ -1,8 +1,8 @@
 //! Decision records and findings: what each pipeline step did, kept in frames a test fixture drives and while
 //! `FrameInput.inspect` is on.
 
-use crate::runtime::egui::memory::Service;
 use crate::runtime::frame;
+use crate::runtime::pass_state;
 use egui::{Context, Id};
 use std::collections::HashMap;
 
@@ -20,7 +20,7 @@ pub struct Finding {
 }
 
 #[derive(Default)]
-struct Log {
+pub(crate) struct Log {
     steps: HashMap<Id, Vec<&'static str>>,
     findings: Vec<Finding>,
     canvas_controls: Vec<&'static str>,
@@ -42,21 +42,21 @@ fn fixture_frame() -> bool {
 /// Starts the step record of `id` for a new show.
 pub(crate) fn begin(ctx: &Context, id: Id) {
     if recording(ctx) {
-        Service::<Log>::run(ctx, |log| log.steps.insert(id, Vec::new()));
+        pass_state::with::<Log, _>(ctx, |log| log.steps.insert(id, Vec::new()));
     }
 }
 
 /// Records that `step` ran for `id`.
 pub(crate) fn step(ctx: &Context, id: Id, step: &'static str) {
     if recording(ctx) {
-        Service::<Log>::run(ctx, |log| log.steps.entry(id).or_default().push(step));
+        pass_state::with::<Log, _>(ctx, |log| log.steps.entry(id).or_default().push(step));
     }
 }
 
 /// The steps the latest show of `id` ran, in order.
 #[cfg_attr(not(feature = "testing"), expect(dead_code, reason = "read by trials and the debug inspector"))]
 pub(crate) fn steps_of(ctx: &Context, id: Id) -> Vec<&'static str> {
-    Service::<Log>::run(ctx, |log| log.steps.get(&id).cloned().unwrap_or_default())
+    pass_state::with::<Log, _>(ctx, |log| log.steps.get(&id).cloned().unwrap_or_default())
 }
 
 /// Reports a finding.
@@ -64,7 +64,7 @@ pub(crate) fn finding(ctx: &Context, finding: Finding) {
     if !recording(ctx) {
         return;
     }
-    Service::<Log>::run(ctx, |log| {
+    pass_state::with::<Log, _>(ctx, |log| {
         if !log.findings.contains(&finding) {
             log.findings.push(finding);
         }
@@ -74,7 +74,7 @@ pub(crate) fn finding(ctx: &Context, finding: Finding) {
 /// Every finding reported on the context.
 #[cfg_attr(not(feature = "testing"), expect(dead_code, reason = "read by trials and the debug inspector"))]
 pub(crate) fn findings(ctx: &Context) -> Vec<Finding> {
-    Service::<Log>::run(ctx, |log| log.findings.clone())
+    pass_state::with::<Log, _>(ctx, |log| log.findings.clone())
 }
 
 /// Records that the canvas control `type_name` showed in this pass, so the canvas-control cases can check that a
@@ -83,7 +83,7 @@ pub(crate) fn canvas_control(ctx: &Context, type_name: &'static str) {
     if !recording(ctx) {
         return;
     }
-    Service::<Log>::run(ctx, |log| {
+    pass_state::with::<Log, _>(ctx, |log| {
         if !log.canvas_controls.contains(&type_name) {
             log.canvas_controls.push(type_name);
         }
@@ -93,5 +93,5 @@ pub(crate) fn canvas_control(ctx: &Context, type_name: &'static str) {
 /// The canvas-control types that have shown on the context.
 #[cfg_attr(not(feature = "testing"), expect(dead_code, reason = "read by trials and the debug inspector"))]
 pub(crate) fn canvas_controls(ctx: &Context) -> Vec<&'static str> {
-    Service::<Log>::run(ctx, |log| log.canvas_controls.clone())
+    pass_state::with::<Log, _>(ctx, |log| log.canvas_controls.clone())
 }

@@ -1,6 +1,6 @@
 //! The command board: the registry and typed sets, per-frame state, the queue, firing and the gate (spec 11).
 
-mod board;
+pub(crate) mod board;
 mod clipboard;
 mod library;
 mod registry;

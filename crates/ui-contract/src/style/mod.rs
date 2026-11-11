@@ -1,8 +1,8 @@
 //! The style layer: the state set and its resolver, style parts and `ComponentStyle`, tokens (`UiTokens`,
 //! `StyleCx`), the token-group cache and the style cache.
 
-mod cache;
-mod cx;
+pub(crate) mod cache;
+pub(crate) mod cx;
 mod key;
 mod look;
 mod paint;

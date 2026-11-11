@@ -114,8 +114,7 @@ pub(crate) fn interactive(ctx: &Context) -> Vec<Id> {
 }
 
 #[cfg(feature = "testing")]
-mod noted {
-    use crate::runtime::egui::memory;
+pub(crate) mod noted {
     use crate::runtime::egui::pass;
     use egui::{Context, Id};
     use std::collections::HashSet;
@@ -129,19 +128,19 @@ mod noted {
     }
 
     #[derive(Default)]
-    struct Noted {
+    pub(crate) struct Noted {
         stamp: Option<u64>,
         pass: Pass,
     }
 
     /// The root viewport's notes of its latest pass.
     pub(super) fn peek(ctx: &Context) -> (HashSet<Id>, HashSet<u64>) {
-        memory::with(ctx, |noted: &mut Noted| (noted.pass.widgets.clone(), noted.pass.nodes.clone()))
+        crate::runtime::pass_state::with(ctx, |noted: &mut Noted| (noted.pass.widgets.clone(), noted.pass.nodes.clone()))
     }
 
     /// The root viewport's scroll regions of its latest pass.
     pub(super) fn scrolls(ctx: &Context) -> Vec<super::ScrollRegion> {
-        memory::with(ctx, |noted: &mut Noted| noted.pass.scrolls.clone())
+        crate::runtime::pass_state::with(ctx, |noted: &mut Noted| noted.pass.scrolls.clone())
     }
 
     /// Runs `f` on the running pass's notes. Only the root viewport is kept: its pass number stamps the notes, and
@@ -149,7 +148,7 @@ mod noted {
     pub(super) fn with<R>(ctx: &Context, f: impl FnOnce(&mut Pass) -> R) -> R {
         let viewport = pass::current_viewport(ctx);
         let nr = pass::pass_nr(ctx, egui::ViewportId::ROOT);
-        memory::with(ctx, |noted: &mut Noted| {
+        crate::runtime::pass_state::with(ctx, |noted: &mut Noted| {
             if viewport != egui::ViewportId::ROOT {
                 return f(&mut Pass::default());
             }

@@ -5,7 +5,7 @@ use super::Record;
 use super::WindowHost;
 use crate::runtime::egui::input::RawInput;
 use crate::runtime::egui::{pass, scale, widgets};
-use crate::runtime::frame::{PassStep, PerViewport, Stamped};
+use crate::runtime::frame::{PassStep, PerViewport, Stamped, Stored};
 use crate::runtime::pointer;
 use craft_behavior::PartRef;
 use craft_window::Button;
@@ -289,6 +289,8 @@ pub(super) struct Exclusive {
     current: Vec<ExclusivePart>,
     pub(super) done: Option<CaptionRegions>,
 }
+
+impl Stored for Exclusive {}
 
 pub(super) fn with_exclusive<R>(ctx: &Context, viewport: ViewportId, f: impl FnOnce(&mut Exclusive) -> R) -> R {
     PerViewport::<Stamped<Exclusive>>::with_pass(

@@ -6,8 +6,8 @@ use super::paint::{HandleLook, ResetMarkLook, RuleKind, RuleLook, ScrollBarLook,
 use super::surface::{SurfaceStyle, surface_style};
 use super::tokens::UiTokens;
 use crate::fonts::stack_facts;
-use crate::runtime::egui::memory::Service;
 use crate::runtime::env::{AppValues, Scale, StyleValue};
+use crate::runtime::pass_state;
 use craft_behavior::ControlMetrics;
 use craft_host::target::Os;
 use craft_i18n::Direction;
@@ -63,7 +63,7 @@ pub struct VariantParts {
 
 /// Token groups built for a token set, and the type behind each group path.
 #[derive(Default)]
-struct GroupCache {
+pub(crate) struct GroupCache {
     built: HashMap<(TypeId, u64), Arc<dyn Any + Send + Sync>>,
     paths: Vec<(&'static str, TypeId)>,
 }
@@ -352,13 +352,12 @@ impl<'a> StyleCx<'a> {
     /// The token group `G` for this token set: derived from the tokens with the theme's values under `G::PATH` laid
     /// over it, built on the first read and cached by `(TypeId::of::<G>(), UiTokens::key)`.
     pub fn token_group<G: TokenGroup>(&self) -> G {
-        let service = Service::<GroupCache>::of(self.ctx);
         let cache_key = (TypeId::of::<G>(), self.tokens.key());
-        let hit = service.with(|cache| cache.built.get(&cache_key).cloned());
+        let hit = pass_state::with::<GroupCache, _>(self.ctx, |cache| cache.built.get(&cache_key).cloned());
         if let Some(hit) = hit.and_then(|entry| entry.downcast::<G>().ok()) {
             return (*hit).clone();
         }
-        let clash = service.with(|cache| {
+        let clash = pass_state::with::<GroupCache, _>(self.ctx, |cache| {
             let clash = cache.paths.iter().any(|(path, ty)| *path == G::PATH && *ty != TypeId::of::<G>());
             if !clash && !cache.paths.iter().any(|(_, ty)| *ty == TypeId::of::<G>()) {
                 cache.paths.push((G::PATH, TypeId::of::<G>()));
@@ -370,7 +369,7 @@ impl<'a> StyleCx<'a> {
         group.overlay(self.tokens.groups());
         // The clone is app code, so it runs before the service lock is taken.
         let shared: Arc<dyn Any + Send + Sync> = Arc::new(group.clone());
-        service.with(|cache| cache.built.insert(cache_key, shared));
+        pass_state::with::<GroupCache, _>(self.ctx, |cache| cache.built.insert(cache_key, shared));
         group
     }
 }

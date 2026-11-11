@@ -212,7 +212,7 @@ pub struct Presence {
 
 /// What a viewport's animations asked for in the running pass.
 #[derive(Default)]
-struct Wanted {
+pub(crate) struct Wanted {
     unsettled: bool,
     wake: Option<f64>,
 }

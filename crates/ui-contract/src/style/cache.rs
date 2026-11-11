@@ -4,7 +4,7 @@ use super::cx::StyleCx;
 use super::key::{EnvKey, StyleKey};
 use super::look::ComponentStyle;
 use super::replacements::Frozen;
-use crate::runtime::egui::memory::Service;
+use crate::runtime::pass_state;
 use craft_theme::{ControlSize, Variant};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -69,7 +69,7 @@ fn hash_of<K: StyleKey, S: ComponentStyle>(key: &K, env: EnvKey, variant: Varian
 
 /// The cache of one context: buckets by hash, each holding the few entries that share one.
 #[derive(Default)]
-struct StyleCache {
+pub(crate) struct StyleCache {
     buckets: HashMap<u64, Vec<Entry>>,
     fallbacks: HashSet<(TypeId, Variant)>,
 }
@@ -101,15 +101,14 @@ pub fn resolve_style<K: StyleKey, S: ComponentStyle>(
     let accepted = accepted_variant::<K, S>(cx.variant);
     let (env, size) = (cx.key, cx.size);
     let hash = hash_of::<K, S>(&key, env, accepted.variant, size);
-    let service = Service::<StyleCache>::of(ctx);
-    if let Some(hit) = service.with(|cache| cache.get::<K, S>(hash, &key, env, accepted.variant, size)) {
+    if let Some(hit) = pass_state::with::<StyleCache, _>(ctx, |cache| cache.get::<K, S>(hash, &key, env, accepted.variant, size)) {
         return hit;
     }
     let build = Frozen::of::<K, S>(ctx).unwrap_or(default);
     let style = Arc::new(build(&cx.with_variant(accepted.variant), key));
     let entry =
         Entry { ty: TypeId::of::<K>(), style_ty: TypeId::of::<S>(), key: Box::new(key), env, variant: accepted.variant, size, style: style.clone() };
-    service.with(|cache| {
+    pass_state::with::<StyleCache, _>(ctx, |cache| {
         if accepted.fell_back && cache.fallbacks.insert((TypeId::of::<K>(), cx.variant)) {
             log::warn!("{} does not accept the variant {:?}; the default look stands in", std::any::type_name::<K>(), cx.variant);
         }

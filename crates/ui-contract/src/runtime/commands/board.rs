@@ -5,8 +5,8 @@ use super::{
     CommandChain, CommandGate, CommandInput, CommandScope, CommandSet, CommandState, EditCommands, FirePhase, FireSource, Fired, ResolvedCommand,
     registry,
 };
-use crate::runtime::egui::memory::Service;
 use crate::runtime::egui::{pass, repaint};
+use crate::runtime::pass_state;
 use crate::runtime::{focus, keys, sampler};
 use craft_behavior::{EditCommand, pick_instance, resolve_flags};
 use craft_keymap::{Active, Chord, CommandKind, CommandRef, Keymap, Lookup, Matcher, ModalRule, Overrides, Platform, Press, Scopes};
@@ -51,7 +51,7 @@ struct Held {
 }
 
 #[derive(Default)]
-struct Board {
+pub(crate) struct Board {
     registry: Arc<registry::Registry>,
     keymap: Option<KeymapCache>,
     gate: Option<CommandGate>,
@@ -93,7 +93,7 @@ struct Board {
 }
 
 fn with<R>(ctx: &Context, f: impl FnOnce(&mut Board) -> R) -> R {
-    Service::<Board>::run(ctx, f)
+    pass_state::with::<Board, _>(ctx, f)
 }
 
 impl Board {

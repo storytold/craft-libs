@@ -17,7 +17,7 @@ use crate::runtime::egui::areas::{self, Layer};
 use crate::runtime::egui::input::{self as raw_input, KeyEvent, RawInput};
 use crate::runtime::egui::memory::Service;
 use crate::runtime::egui::pass;
-use crate::runtime::frame::PerViewport;
+use crate::runtime::frame::{PerViewport, Stored};
 use crate::runtime::{overlay, pointer};
 use craft_keymap::KeyInput;
 use egui::{Context, Event, Id, PointerButton, Pos2, Rect, ViewportId};
@@ -147,6 +147,8 @@ struct Seen {
     pass: Option<u64>,
     hole: Option<Hole>,
 }
+
+impl Stored for Seen {}
 
 /// The hole of the running viewport's pass, computed once per pass on the first read and read from then on.
 /// `wheel::begin` reads it at the start of every pass.

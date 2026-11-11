@@ -4,10 +4,10 @@ use super::opener::{Opening, Trigger};
 use crate::contract::{BindMut, Component, Cx};
 use crate::runtime::access::PopupShown;
 use crate::runtime::egui::areas::{self};
-use crate::runtime::egui::memory::Service;
 use crate::runtime::frame;
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::overlay::{self, CloseReason};
+use crate::runtime::pass_state;
 use craft_behavior::Intent;
 use craft_behavior::{EditEvent, Mixed};
 use egui::{Context, Id};
@@ -68,7 +68,7 @@ pub(super) enum OpenOp {
 
 /// Popups registered this pass, the open changes waiting for step 15 and the popups shown this pass.
 #[derive(Default)]
-pub(super) struct Popups {
+pub(crate) struct Popups {
     registered: Vec<(Id, Id)>,
     pending: Vec<(Id, OpenOp)>,
     pub(super) shown: Vec<(Id, Id)>,
@@ -80,7 +80,7 @@ pub(super) struct Popups {
 }
 
 pub(super) fn with_popups<R>(ctx: &Context, f: impl FnOnce(&mut Popups) -> R) -> R {
-    Service::<Popups>::run(ctx, f)
+    pass_state::with::<Popups, _>(ctx, f)
 }
 
 /// Step 8b, before the text part runs: the popups `owner` registers are registered again.

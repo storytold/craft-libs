@@ -169,7 +169,7 @@ struct AltTrack {
 }
 
 #[derive(Default)]
-struct Stage {
+pub(crate) struct Stage {
     batch: Batch,
     /// Controls a label click activates, queued by `queue_activate` for the next pass.
     activate: Vec<Id>,

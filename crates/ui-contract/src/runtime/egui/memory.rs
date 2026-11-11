@@ -3,11 +3,9 @@
 use egui::util::IdTypeMap;
 use egui::util::id_type_map::RawKey;
 use egui::{Context, Id};
-use std::any::{Any, TypeId};
-use std::cell::RefCell;
+use std::any::Any;
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 /// Context data: the map the runtime's slots live in.
@@ -142,87 +140,32 @@ impl Hasher for FastHasher {
 /// A `HashMap` over [`FastHasher`].
 pub(crate) type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<FastHasher>>;
 
-/// The service handles of one context, by service type.
-#[derive(Default)]
-struct Handles {
-    /// The context the handles belong to, and its token in its own data.
-    owner: Option<(Context, u64)>,
-    map: FastMap<TypeId, Box<dyn Any>>,
-}
-
+#[cfg(feature = "testing")]
 thread_local! {
-    /// The handles of the context this thread last ran a pass of, kept between passes: a lookup in the context's
-    /// data happens once per service type and context. A read for any other context bypasses it, and a pass
-    /// that ends without its end hook leaves nothing to undo. The handles are dropped when this thread runs a
-    /// pass of another context.
-    static HANDLES: RefCell<Handles> = RefCell::new(Handles::default());
+    static LOOKUPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-/// Identifies the context in its own data, so handles kept for a context whose data was reset are dropped.
-#[derive(Default, Clone)]
-struct ContextToken(u64);
-
-/// Checks the cached handles against `ctx` at the start of a pass.
-pub(crate) fn open_handles(ctx: &Context) {
-    static SLOT: OnceLock<Id> = OnceLock::new();
-    static NEXT: AtomicU64 = AtomicU64::new(1);
-    let slot = *SLOT.get_or_init(|| unique("craft_ui.context_token"));
-    let token = locked(ctx, |data| {
-        let token = data.get_temp_mut_or_default::<ContextToken>(slot);
-        if token.0 == 0 {
-            token.0 = NEXT.fetch_add(1, Ordering::Relaxed);
-        }
-        token.0
-    });
-    HANDLES.with(|handles| {
-        let mut handles = handles.borrow_mut();
-        if !handles.owner.as_ref().is_some_and(|(owner, kept)| owner.ptr_eq(ctx) && *kept == token) {
-            handles.map.clear();
-            handles.owner = Some((ctx.clone(), token));
-        }
-    });
+/// How many service lookups in context data this thread has made: each one takes the data lock. Pass-local
+/// state (`pass_state`) makes none inside a pass.
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub fn service_lookups() -> u64 {
+    LOOKUPS.with(std::cell::Cell::get)
 }
 
 impl<S: Default + Send + 'static> Service<S> {
     /// The context's service of type `S`, created on first use.
     pub(crate) fn of(ctx: &Context) -> Service<S> {
-        let cached = HANDLES.with(|handles| {
-            let handles = handles.borrow();
-            let mine = handles.owner.as_ref().is_some_and(|(owner, _)| owner.ptr_eq(ctx));
-            mine.then(|| handles.map.get(&TypeId::of::<S>())).flatten().and_then(|handle| handle.downcast_ref::<Service<S>>()).cloned()
-        });
-        if let Some(handle) = cached {
-            return handle;
-        }
+        #[cfg(feature = "testing")]
+        LOOKUPS.with(|lookups| lookups.set(lookups.get() + 1));
         static SLOT: OnceLock<Id> = OnceLock::new();
         let slot = *SLOT.get_or_init(|| unique("craft_ui.service"));
-        let handle = locked(ctx, |data| data.get_temp_mut_or_default::<Service<S>>(slot).clone());
-        // A lookup made from inside `with` holds the cache shared, and that one stays uncached.
-        HANDLES.with(|handles| {
-            if let Ok(mut handles) = handles.try_borrow_mut()
-                && handles.owner.as_ref().is_some_and(|(owner, _)| owner.ptr_eq(ctx))
-            {
-                handles.map.insert(TypeId::of::<S>(), Box::new(handle.clone()));
-            }
-        });
-        handle
+        locked(ctx, |data| data.get_temp_mut_or_default::<Service<S>>(slot).clone())
     }
 
-    /// Runs `f` on the context's service of type `S`, created on first use. A cached handle is used in place, with no
-    /// clone of it.
+    /// Runs `f` on the context's service of type `S`, created on first use.
     pub(crate) fn run<R>(ctx: &Context, f: impl FnOnce(&mut S) -> R) -> R {
-        let cached = HANDLES.with(|handles| {
-            let handles = handles.borrow();
-            let mine = handles.owner.as_ref().is_some_and(|(owner, _)| owner.ptr_eq(ctx));
-            match mine.then(|| handles.map.get(&TypeId::of::<S>())).flatten().and_then(|handle| handle.downcast_ref::<Service<S>>()) {
-                Some(handle) => Ok(handle.with(f)),
-                None => Err(f),
-            }
-        });
-        match cached {
-            Ok(out) => out,
-            Err(f) => Self::of(ctx).with(f),
-        }
+        Self::of(ctx).with(f)
     }
 
     /// Runs `f` on the state under the service's lock.

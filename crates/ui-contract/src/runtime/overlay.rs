@@ -5,9 +5,9 @@
 
 use crate::runtime::commands;
 use crate::runtime::egui::areas::{self, Layer, Tier};
-use crate::runtime::egui::memory::Service;
 use crate::runtime::egui::pass;
 use crate::runtime::frame::{PassStep, PerViewport, Stamped};
+use crate::runtime::pass_state;
 use crate::runtime::pointer;
 use craft_behavior::OwnerClass;
 use craft_behavior::overlay::Side;
@@ -198,7 +198,7 @@ impl OpenEntry {
 }
 
 #[derive(Default)]
-struct Pass {
+pub(crate) struct Pass {
     current: Vec<OpenEntry>,
     last: Vec<OpenEntry>,
     /// The layers whose bodies are running, innermost last.
@@ -221,7 +221,7 @@ pub(crate) struct TopModal {
 }
 
 #[derive(Default)]
-struct Persist {
+pub(crate) struct Persist {
     raised: HashMap<Id, u64>,
     counter: u64,
     modal: bool,
@@ -247,7 +247,7 @@ struct Persist {
 /// The closes queued and not yet taken, each with the root frame that queued it and whether it is carried: a carried
 /// close waits for its owner however long the owner does not run.
 #[derive(Default)]
-struct Closes(Vec<(Id, CloseReason, u64, bool)>);
+pub(crate) struct Closes(Vec<(Id, CloseReason, u64, bool)>);
 
 fn with_pass<R>(ctx: &Context, f: impl FnOnce(&mut Pass) -> R) -> R {
     let viewport = pass::current_viewport(ctx);
@@ -290,7 +290,7 @@ pub fn request_close(ctx: &Context, id: Id, why: CloseReason) {
 
 fn push_close(ctx: &Context, id: Id, why: CloseReason, carried: bool) {
     let frame = pass::root_frame_nr(ctx);
-    Service::<Closes>::run(ctx, |closes| {
+    pass_state::with::<Closes, _>(ctx, |closes| {
         if carried {
             closes.0.retain(|(closed, .., kept)| !(*closed == id && *kept));
         }
@@ -301,7 +301,7 @@ fn push_close(ctx: &Context, id: Id, why: CloseReason, carried: bool) {
 
 /// The queued close of `id`, once.
 pub(crate) fn take_close(ctx: &Context, id: Id) -> Option<CloseReason> {
-    Service::<Closes>::run(ctx, |closes| {
+    pass_state::with::<Closes, _>(ctx, |closes| {
         let at = closes.0.iter().position(|(closed, ..)| *closed == id)?;
         let reason = closes.0[at].1;
         closes.0.retain(|(closed, ..)| *closed != id);
@@ -311,7 +311,7 @@ pub(crate) fn take_close(ctx: &Context, id: Id) -> Option<CloseReason> {
 
 /// The queued close of `id`, left queued.
 pub(crate) fn peek_close(ctx: &Context, id: Id) -> Option<CloseReason> {
-    Service::<Closes>::run(ctx, |closes| closes.0.iter().find(|(closed, ..)| *closed == id).map(|entry| entry.1))
+    pass_state::with::<Closes, _>(ctx, |closes| closes.0.iter().find(|(closed, ..)| *closed == id).map(|entry| entry.1))
 }
 
 /// Whether any layer of the running viewport that `filter` counts was shown last frame.
@@ -649,7 +649,7 @@ pub(crate) fn end_pass(ctx: &Context) {
     areas::set_layer_order(ctx, &order);
     // An owner takes a close in the frame after the request at the latest; one nobody took is for a layer that is not shown.
     let now = pass::root_frame_nr(ctx);
-    Service::<Closes>::run(ctx, |closes| closes.0.retain(|(.., queued, carried)| *carried || queued + 1 >= now));
+    pass_state::with::<Closes, _>(ctx, |closes| closes.0.retain(|(.., queued, carried)| *carried || queued + 1 >= now));
     let top_modal = current.iter().rev().find(|entry| entry.blocks_window() && !entry.exiting);
     if let Some(entry) = top_modal.filter(|entry| !entry.window) {
         areas::set_modal_layer(ctx, entry.layer);

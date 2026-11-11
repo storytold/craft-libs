@@ -15,11 +15,12 @@ use crate::primitives::sensing::PartDecl;
 use crate::primitives::{TextRun, Wrap};
 use crate::runtime::access::scope::LabelPatch;
 use crate::runtime::access::{Access, Name};
-use crate::runtime::egui::memory::{self as store, Service};
+use crate::runtime::egui::memory as store;
 use crate::runtime::egui::{areas, pass, repaint};
 use crate::runtime::env::Env;
 use crate::runtime::memory::{self, sub};
 use crate::runtime::motion;
+use crate::runtime::pass_state;
 use crate::runtime::{drag, frame, pointer};
 use crate::style::{ComponentStyle, Flags, StyleColor, StyleCx, SurfaceKind, SurfaceLook};
 use craft_behavior::PartRef;
@@ -43,7 +44,7 @@ struct TipState {
 
 /// When the last tooltip of the context hid.
 #[derive(Default)]
-struct Grace(Option<f64>);
+pub(crate) struct Grace(Option<f64>);
 
 /// What step 16 hands the tooltip: the component's facts and the pass's `Ui`.
 pub(crate) struct TipIn<'a> {
@@ -225,7 +226,7 @@ fn show_tip(call: TipCall<'_>) {
         state.since = None;
     }
     let due = state.since.map(|since| since + if when_now { 0.0 } else { DELAY });
-    let in_grace = Service::<Grace>::run(ctx, |grace| grace.0.is_some_and(|hid| now - hid < GRACE));
+    let in_grace = pass_state::with::<Grace, _>(ctx, |grace| grace.0.is_some_and(|hid| now - hid < GRACE));
     let show = wants && !suppressed && due.is_some_and(|due| now >= due || in_grace);
     if let (Some(due), true, false) = (due, wants, show)
         && !suppressed
@@ -234,7 +235,7 @@ fn show_tip(call: TipCall<'_>) {
         repaint::request_after(ctx, pass::current_viewport(ctx), due - now);
     }
     if state.shown && !show {
-        Service::<Grace>::run(ctx, |grace| grace.0 = Some(now));
+        pass_state::with::<Grace, _>(ctx, |grace| grace.0 = Some(now));
     }
     state.shown = show;
     let tip_id = sub(id, "tip");

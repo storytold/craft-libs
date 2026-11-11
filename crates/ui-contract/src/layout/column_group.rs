@@ -1,8 +1,8 @@
 //! `ColumnGroup`: rows that are not one `Grid` share the widest label per column key.
 
-use crate::runtime::egui::memory::Service;
 use crate::runtime::layout_memory;
 use crate::runtime::memory::sub;
+use crate::runtime::pass_state;
 use craft_behavior::ColumnKey;
 use egui::{Context, Id, Ui, Vec2};
 use std::collections::HashMap;
@@ -45,7 +45,7 @@ impl layout_memory::Contribution for Reported {
 
 /// Adds `report` to the innermost open group `group`; `None` when that group is not open.
 fn add(ctx: &Context, group: Id, report: Report) -> Option<f32> {
-    Service::<Open>::run(ctx, |open| {
+    pass_state::with::<Open, _>(ctx, |open| {
         let (widest, beyond) = open.0.iter_mut().rev().find_map(|frame| match frame {
             Frame::Group { id, widest, beyond, .. } if *id == group => Some((widest, beyond)),
             _ => None,
@@ -78,7 +78,7 @@ fn report(ctx: &Context, group: Id, report: Report) -> Option<f32> {
 
 /// The groups open in this pass, innermost last.
 #[derive(Default)]
-struct Open(Vec<Frame>);
+pub(crate) struct Open(Vec<Frame>);
 
 enum Frame {
     /// A group: rows report their widths and read the widest this pass found. `beyond` is, per run of columns a row
@@ -111,10 +111,10 @@ impl ColumnGroup {
         let ctx = ui.ctx().clone();
         let id = sub(ui.scope_id(), key);
         let depth = layout_memory::depth(&ctx);
-        Service::<Open>::run(&ctx, |open| open.0.push(Frame::Group { id, widest: HashMap::new(), beyond: HashMap::new(), room: None, depth }));
+        pass_state::with::<Open, _>(&ctx, |open| open.0.push(Frame::Group { id, widest: HashMap::new(), beyond: HashMap::new(), room: None, depth }));
         let mut group = ColumnGroup { id, ctx: ctx.clone() };
         let result = rows(ui, &mut group);
-        let Some(Frame::Group { id, widest, beyond, .. }) = Service::<Open>::run(&ctx, |open| open.0.pop()) else { return (result, None) };
+        let Some(Frame::Group { id, widest, beyond, .. }) = pass_state::with::<Open, _>(&ctx, |open| open.0.pop()) else { return (result, None) };
         if !crate::runtime::measure::active(&ctx) {
             return (result, None);
         }
@@ -136,9 +136,9 @@ impl ColumnGroup {
     /// group's body share its widths. A component's own label steps and a nested container's body run in one.
     pub fn barrier<R>(ui: &mut Ui, rows: impl FnOnce(&mut Ui) -> R) -> R {
         let ctx = ui.ctx().clone();
-        Service::<Open>::run(&ctx, |open| open.0.push(Frame::Barrier));
+        pass_state::with::<Open, _>(&ctx, |open| open.0.push(Frame::Barrier));
         let result = rows(ui);
-        Service::<Open>::run(&ctx, |open| open.0.pop());
+        pass_state::with::<Open, _>(&ctx, |open| open.0.pop());
         result
     }
 
@@ -147,7 +147,7 @@ impl ColumnGroup {
     /// needs more than last pass's content widens it instead of stacking.
     pub(crate) fn offer(&mut self, width: f32) {
         let id = self.id;
-        Service::<Open>::run(&self.ctx, |open| {
+        pass_state::with::<Open, _>(&self.ctx, |open| {
             if let Some(Frame::Group { room, .. }) =
                 open.0.iter_mut().rev().find(|frame| matches!(frame, Frame::Group { id: group, .. } if *group == id))
             {
@@ -168,7 +168,7 @@ impl ColumnGroup {
 /// `content`.
 #[doc(hidden)]
 pub fn ambient_width(ctx: &Context, column: &ColumnKey, content: f32) -> Option<f32> {
-    let id = Service::<Open>::run(ctx, |open| match open.0.last() {
+    let id = pass_state::with::<Open, _>(ctx, |open| match open.0.last() {
         Some(Frame::Group { id, .. }) => Some(*id),
         _ => None,
     })?;
@@ -178,7 +178,7 @@ pub fn ambient_width(ctx: &Context, column: &ColumnKey, content: f32) -> Option<
 /// The width the innermost open frame's container was offered, `None` when no group is open or a barrier is, or the
 /// container recorded none.
 pub(crate) fn ambient_room(ctx: &Context) -> Option<f32> {
-    Service::<Open>::run(ctx, |open| match open.0.last() {
+    pass_state::with::<Open, _>(ctx, |open| match open.0.last() {
         Some(Frame::Group { room, .. }) => *room,
         _ => None,
     })
@@ -190,7 +190,7 @@ pub(crate) fn ambient_room(ctx: &Context) -> Option<f32> {
 /// happens where no group is open or a barrier is.
 #[doc(hidden)]
 pub fn report_beyond(ctx: &Context, columns: &[ColumnKey], past: f32) {
-    let group = Service::<Open>::run(ctx, |open| match open.0.last() {
+    let group = pass_state::with::<Open, _>(ctx, |open| match open.0.last() {
         Some(Frame::Group { id, .. }) => Some(*id),
         _ => None,
     });
@@ -204,7 +204,7 @@ fn shared_width(ctx: &Context, group: Id, column: &ColumnKey, content: f32) -> f
     let width = column_width(ctx, group, column).map_or(so_far, |found| found.max(so_far));
     // The rows' measures depend on the width as well as on their room: a sweep that has seen only some of the labels
     // gives a narrower one.
-    let depth = Service::<Open>::run(ctx, |open| {
+    let depth = pass_state::with::<Open, _>(ctx, |open| {
         open.0.iter().rev().find_map(|frame| match frame {
             Frame::Group { id, depth, .. } if *id == group => Some(*depth),
             _ => None,

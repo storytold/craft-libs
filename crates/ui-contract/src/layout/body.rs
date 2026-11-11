@@ -1,12 +1,12 @@
 //! `BodyLayout` and the layout of a body: the physical egui layout, the measured placement of `Row` End and
 //! Center and of each row child on the row's line, and the cursors of `Grid` and of a `Row` that spreads its children.
 
-use crate::runtime::egui::memory::Service;
 use crate::runtime::egui::{alloc, child};
 use crate::runtime::env::{Env, Shrink};
 use crate::runtime::layout_memory;
 use crate::runtime::measure;
 use crate::runtime::memory::sub;
+use crate::runtime::pass_state;
 use craft_behavior::{Axis, ColumnWidth, Flow, GridCursor, GridMeasure};
 use egui::{Id, Rect, Ui, Vec2};
 use std::borrow::Cow;
@@ -86,11 +86,11 @@ impl BodyLayout {
 
 /// The cursors of the `Grid` and spread `Row` bodies running this pass, by body id.
 #[derive(Default)]
-struct Cursors(HashMap<Id, Cursor>);
+pub(crate) struct Cursors(HashMap<Id, Cursor>);
 
 /// The number of children that fill the main axis of each `Stack` or `Row` body measured this pass, by body id.
 #[derive(Default)]
-struct FillCounts(HashMap<Id, u32>);
+pub(crate) struct FillCounts(HashMap<Id, u32>);
 
 /// How a child that fills the main axis of the body it sits in sizes along it.
 pub(crate) enum MainFill {
@@ -111,7 +111,7 @@ pub(crate) fn main_fill(ui: &Ui, id: Id, axis: Axis) -> MainFill {
         return MainFill::Share(share);
     }
     if measure::active(ui.ctx()) {
-        Service::<FillCounts>::of(ui.ctx()).with(|counts| *counts.0.entry(body).or_insert(0) += 1);
+        pass_state::with::<FillCounts, _>(ui.ctx(), |counts| *counts.0.entry(body).or_insert(0) += 1);
         return MainFill::Measuring;
     }
     MainFill::Room
@@ -142,12 +142,12 @@ struct Reported {
 
 /// The leaves each `Row` body counting this pass reported, in order, by body id.
 #[derive(Default)]
-struct ShrinkReports(HashMap<Id, Vec<Reported>>);
+pub(crate) struct ShrinkReports(HashMap<Id, Vec<Reported>>);
 
 /// Reports the widths of the leaf `leaf` of the row `row` that counts them.
 pub(crate) fn report_shrink(ctx: &egui::Context, row: Id, leaf: Id, took: f32, ideal: f32, least: f32) {
     let leaf = Reported { leaf, took, ideal, least: least.min(ideal) };
-    Service::<ShrinkReports>::run(ctx, |reports| reports.0.entry(row).or_default().push(leaf));
+    pass_state::with::<ShrinkReports, _>(ctx, |reports| reports.0.entry(row).or_default().push(leaf));
 }
 
 /// The width the shrink step of the row `row` gave its leaf `leaf` in this pass's measuring run.
@@ -197,9 +197,9 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
     let room = flow_room(ui).x;
     let first = crate::contract::keeping_ids(&ctx, || {
         let mut first = ui.new_child(egui::UiBuilder::new().layout(layout));
-        Service::<ShrinkReports>::run(&ctx, |reports| reports.0.insert(id, Vec::new()));
+        pass_state::with::<ShrinkReports, _>(&ctx, |reports| reports.0.insert(id, Vec::new()));
         let inner = sweep(&mut first, Shrink::Count(id), &mut body);
-        let leaves = Service::<ShrinkReports>::run(&ctx, |reports| reports.0.remove(&id)).unwrap_or_default();
+        let leaves = pass_state::with::<ShrinkReports, _>(&ctx, |reports| reports.0.remove(&id)).unwrap_or_default();
         let rect = first.min_rect();
         let fixed = rect.width() - leaves.iter().map(|leaf| leaf.took).sum::<f32>();
         let widths = if room.is_finite() { shrink_widths(&leaves, fixed, room) } else { leaves.iter().map(|leaf| leaf.ideal).collect() };
@@ -262,9 +262,9 @@ fn run_sharing<R>(ui: &mut Ui, env: &Env, id: Id, axis: Axis, layout: egui::Layo
     let first = crate::contract::keeping_ids(&ctx, || {
         let mut first = ui.new_child(egui::UiBuilder::new().layout(layout));
         let room = along(first.available_rect_before_wrap().size());
-        Service::<FillCounts>::run(&ctx, |counts| counts.0.insert(id, 0));
+        pass_state::with::<FillCounts, _>(&ctx, |counts| counts.0.insert(id, 0));
         let inner = sweep(&mut first, None, &mut body);
-        let fills = Service::<FillCounts>::run(&ctx, |counts| counts.0.remove(&id)).unwrap_or(0);
+        let fills = pass_state::with::<FillCounts, _>(&ctx, |counts| counts.0.remove(&id)).unwrap_or(0);
         let fixed = along(first.min_rect().size());
         layout_memory::emit_record(&ctx, key, layout_memory::Measured::new(Vec2::ZERO, Vec2::new(fixed, fills as f32)));
         let share = (fills > 0 && room.is_finite()).then(|| ((room - fixed) / fills as f32).max(0.0));
@@ -418,7 +418,7 @@ pub(crate) fn take_in_flow(ui: &mut Ui, size: Vec2) -> (Rect, bool) {
 
 /// `take_in_flow`, with `grid` the body of `ui`'s env that places its children itself.
 fn take_in(ui: &mut Ui, grid: Option<Id>, size: Vec2) -> (Rect, bool) {
-    let cell = grid.and_then(|body| Service::<Cursors>::of(ui.ctx()).with(|cursors| cursors.0.get_mut(&body).map(|cursor| cursor.cell(size))));
+    let cell = grid.and_then(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| cursors.0.get_mut(&body).map(|cursor| cursor.cell(size))));
     match cell {
         Some(cell) => {
             alloc::advance_past(ui, cell);
@@ -431,14 +431,14 @@ fn take_in(ui: &mut Ui, grid: Option<Id>, size: Vec2) -> (Rect, bool) {
 /// The region the next child shown in flow in `ui` measures and is placed in: that of the next cell of the `Grid` or
 /// spread `Row` body that encloses `ui` directly, else the rest of `ui`'s layout.
 pub(crate) fn flow_region(ui: &Ui) -> Rect {
-    let cell = Env::of(ui).grid.and_then(|body| Service::<Cursors>::of(ui.ctx()).with(|cursors| cursors.0.get(&body).map(Cursor::region)));
+    let cell = Env::of(ui).grid.and_then(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| cursors.0.get(&body).map(Cursor::region)));
     cell.unwrap_or_else(|| ui.available_rect_before_wrap())
 }
 
 /// The room a child shown in flow in `ui` measures and sizes in: the room of the next cell of the `Grid` or spread
 /// `Row` body that encloses `ui` directly, else the rest of `ui`'s layout.
 pub(crate) fn flow_room(ui: &Ui) -> Vec2 {
-    let cell = Env::of(ui).grid.and_then(|body| Service::<Cursors>::of(ui.ctx()).with(|cursors| cursors.0.get(&body).map(Cursor::room)));
+    let cell = Env::of(ui).grid.and_then(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| cursors.0.get(&body).map(Cursor::room)));
     cell.unwrap_or_else(|| open_room(ui))
 }
 
@@ -459,14 +459,16 @@ fn open_room(ui: &Ui) -> Vec2 {
 /// The room a child that fills its width fills in `ui`: `flow_room`, except that in a `Content` column of a `Grid` it
 /// is the column's width, so the child never measures as the room and pushes the next column out of it.
 pub(crate) fn flow_fill_room(ui: &Ui) -> Vec2 {
-    let cell = Env::of(ui).grid.and_then(|body| Service::<Cursors>::of(ui.ctx()).with(|cursors| cursors.0.get(&body).map(Cursor::fill_room)));
+    let cell = Env::of(ui).grid.and_then(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| cursors.0.get(&body).map(Cursor::fill_room)));
     cell.unwrap_or_else(|| open_room(ui))
 }
 
 /// Whether the next child shown in flow in `ui` goes in a `Content` column of the `Grid` body that encloses `ui`
 /// directly: like a content-sized column, a child that fills its width is placed at its measured width there.
 pub(crate) fn in_grid_content_column(ui: &Ui) -> bool {
-    Env::of(ui).grid.is_some_and(|body| Service::<Cursors>::of(ui.ctx()).with(|cursors| cursors.0.get(&body).is_some_and(Cursor::in_content_column)))
+    Env::of(ui)
+        .grid
+        .is_some_and(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| cursors.0.get(&body).is_some_and(Cursor::in_content_column)))
 }
 
 fn column_id(grid: Id, index: usize) -> Id {
@@ -550,7 +552,7 @@ pub(crate) fn run_body_measured<R>(
             let (inner, _) = child::block(ui, None, child::row_layout(rtl, false), |ui| {
                 let flow = Flow::new(ui.available_rect_before_wrap(), rtl);
                 let spread = Spread::new(flow, gap.x, this_pass(&ctx, sizing, id));
-                Service::<Cursors>::run(&ctx, |cursors| cursors.0.insert(id, Cursor::Spread(spread)));
+                pass_state::with::<Cursors, _>(&ctx, |cursors| cursors.0.insert(id, Cursor::Spread(spread)));
                 let line = on_line(row_line(&ctx, sizing, id), shared);
                 let installed = Env::install_for(
                     ui,
@@ -564,7 +566,7 @@ pub(crate) fn run_body_measured<R>(
                 record_line(ui, sizing, id);
                 inner
             });
-            let measured = match Service::<Cursors>::run(&ctx, |cursors| cursors.0.remove(&id)) {
+            let measured = match pass_state::with::<Cursors, _>(&ctx, |cursors| cursors.0.remove(&id)) {
                 Some(Cursor::Spread(spread)) => Some(spread.measured()),
                 _ => None,
             };
@@ -639,13 +641,13 @@ pub(crate) fn run_body_measured<R>(
                 } else {
                     GridCursor::new(Flow::new(ui.available_rect_before_wrap(), rtl), columns, gap, &last)
                 };
-                Service::<Cursors>::run(&ctx, |cursors| cursors.0.insert(id, Cursor::Grid(cursor)));
+                pass_state::with::<Cursors, _>(&ctx, |cursors| cursors.0.insert(id, Cursor::Grid(cursor)));
                 let installed = Env::install_for(ui, env.derive_local(|scoped| scoped.grid = Some(id)));
                 let inner = body(ui);
                 Env::restore(&ctx, installed);
                 // Cells place from last pass's rows, so a measuring run's rows all start at the top: the grid reaches
                 // as far down as the rows this pass measured, whichever pass it is.
-                let rows = Service::<Cursors>::run(&ctx, |cursors| match cursors.0.get(&id) {
+                let rows = pass_state::with::<Cursors, _>(&ctx, |cursors| match cursors.0.get(&id) {
                     Some(Cursor::Grid(cursor)) => {
                         cursor.measured().rows.iter().sum::<f32>() + gap.y * cursor.measured().rows.len().saturating_sub(1) as f32
                     }
@@ -655,7 +657,7 @@ pub(crate) fn run_body_measured<R>(
                 inner
             })
             .0;
-            if let Some(Cursor::Grid(cursor)) = Service::<Cursors>::run(&ctx, |cursors| cursors.0.remove(&id)) {
+            if let Some(Cursor::Grid(cursor)) = pass_state::with::<Cursors, _>(&ctx, |cursors| cursors.0.remove(&id)) {
                 let measured = cursor.measured();
                 let room = ui.available_rect_before_wrap().size();
                 for (i, width) in measured.columns.iter().enumerate() {

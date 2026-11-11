@@ -7,7 +7,7 @@
 use crate::runtime::access::{self, Politeness};
 use crate::runtime::egui::{pass, repaint};
 use crate::runtime::env::Label;
-use crate::runtime::frame::{self, PerViewport};
+use crate::runtime::frame::{self, PerViewport, Stored};
 use craft_theme::variant::Tone;
 use egui::{Context, ViewportId};
 
@@ -138,6 +138,8 @@ struct Queue {
     /// How toasts ended, until `end` reads them.
     ended: Vec<(ToastId, ToastEnd)>,
 }
+
+impl Stored for Queue {}
 
 fn record(ended: &mut Vec<(ToastId, ToastEnd)>, id: ToastId, end: ToastEnd) {
     ended.push((id, end));

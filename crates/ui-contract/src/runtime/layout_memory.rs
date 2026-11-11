@@ -192,7 +192,7 @@ struct Scope {
 }
 
 #[derive(Default)]
-struct Entries {
+pub(crate) struct Entries {
     entries: HashMap<Id, Entry>,
     measured: HashMap<Id, Found>,
     kept: HashMap<Id, Kept>,
@@ -954,6 +954,7 @@ pub(crate) mod guard {
         ("runtime::egui::fonts::Steps", "fonts plugin begin-pass steps: cache; a step added twice runs once"),
         // Testing logs.
         ("runtime::measure::", "measuring-run counts and the skipped-effect log (testing)"),
+        ("runtime::pass_state::Parked", "pass state between passes: moved into the thread and back, not read"),
         ("testing::style::StyleRecord", "style log (testing)"),
         ("runtime::inspect::Log", "inspection log"),
     ];

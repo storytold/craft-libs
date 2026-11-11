@@ -11,7 +11,7 @@ mod host;
 mod opener;
 mod place;
 mod placement;
-mod popups;
+pub(crate) mod popups;
 mod props;
 mod toggles;
 mod ui;

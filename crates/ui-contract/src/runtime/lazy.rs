@@ -105,7 +105,7 @@ struct Entry {
 }
 
 #[derive(Default)]
-struct Store {
+pub(crate) struct Store {
     entries: HashMap<Id, Entry>,
     /// The last frame each scroll area reached one of its children in.
     reached: HashMap<Id, u64>,

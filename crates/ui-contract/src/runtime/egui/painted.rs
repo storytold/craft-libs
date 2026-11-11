@@ -2,7 +2,7 @@
 //! the `testing` feature record nothing.
 
 #[cfg(feature = "testing")]
-use super::memory::Service;
+use crate::runtime::pass_state;
 use egui::{Context, Galley};
 #[cfg(feature = "testing")]
 use std::collections::HashMap;
@@ -16,7 +16,7 @@ use std::sync::Arc;
 /// title). The log holds the galley, so its address names it for the whole pass.
 #[cfg(feature = "testing")]
 #[derive(Default)]
-struct Elisions {
+pub(crate) struct Elisions {
     pass: u64,
     full: HashMap<usize, (Arc<Galley>, Vec<String>)>,
 }
@@ -30,7 +30,7 @@ fn address(galley: &Arc<Galley>) -> usize {
 #[cfg(feature = "testing")]
 pub(crate) fn note_elided(ctx: &Context, galley: &Arc<Galley>, full: &str) {
     let pass = ctx.cumulative_pass_nr();
-    Service::<Elisions>::of(ctx).with(|log| {
+    pass_state::with::<Elisions, _>(ctx, |log| {
         if log.pass != pass {
             log.pass = pass;
             log.full.clear();
@@ -46,5 +46,5 @@ pub(crate) fn note_elided(_: &Context, _: &Arc<Galley>, _: &str) {}
 /// galley in this pass.
 #[cfg(feature = "testing")]
 pub(crate) fn full_text_of_painted(ctx: &Context, galley: &Arc<Galley>, nth: usize) -> Option<String> {
-    Service::<Elisions>::of(ctx).with(|log| log.full.get(&address(galley)).and_then(|(_, full)| full.get(nth).cloned()))
+    pass_state::with::<Elisions, _>(ctx, |log| log.full.get(&address(galley)).and_then(|(_, full)| full.get(nth).cloned()))
 }

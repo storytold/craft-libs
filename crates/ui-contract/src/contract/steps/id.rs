@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 
 /// The `Auto` ordinals and the ids registered in one pass of one viewport.
 #[derive(Default)]
-struct IdPass {
+pub(crate) struct IdPass {
     next: HashMap<(Id, TypeId), u32>,
     seen: HashSet<Id>,
 }

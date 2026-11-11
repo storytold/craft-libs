@@ -4,11 +4,12 @@
 //! one child's node.
 
 use super::emit;
-use crate::runtime::egui::{access as adapter, memory as store, memory::Service};
+use crate::runtime::egui::{access as adapter, memory as store};
 use crate::runtime::env::Message;
 use crate::runtime::inspect::Finding;
 use crate::runtime::layout_memory;
 use crate::runtime::memory::{self, sub};
+use crate::runtime::pass_state;
 use craft_behavior::PressState;
 use craft_theme::{Flags, variant::Tone};
 use egui::{Context, Id, Rect, Vec2};
@@ -145,11 +146,11 @@ pub(crate) struct ResetFact {
 }
 
 #[derive(Default)]
-struct Stack(Vec<Scope>);
+pub(crate) struct Stack(Vec<Scope>);
 
 /// Opens the scope of `container`; its body shows inside it.
 pub(crate) fn begin(ctx: &Context, container: Id, owner: Id, kind: Kind) {
-    Service::<Stack>::run(ctx, |stack| {
+    pass_state::with::<Stack, _>(ctx, |stack| {
         stack.0.push(Scope {
             container,
             owner,
@@ -169,7 +170,7 @@ pub(crate) fn begin(ctx: &Context, container: Id, owner: Id, kind: Kind) {
 
 /// The innermost label scope's label, read by `cx.field_label()`.
 pub(crate) fn field_label(ctx: &Context) -> Option<FieldLabel> {
-    Service::<Stack>::run(ctx, |stack| {
+    pass_state::with::<Stack, _>(ctx, |stack| {
         stack.0.iter().rev().find_map(|scope| match &scope.kind {
             Kind::Label(label) => Some(label.clone()),
             Kind::Merge => None,
@@ -180,7 +181,7 @@ pub(crate) fn field_label(ctx: &Context) -> Option<FieldLabel> {
 /// Notes that the node component `id` created its node at step 8: the node components that run inside it are
 /// not direct controls of the scope.
 pub(crate) fn enter(ctx: &Context, id: Id) {
-    Service::<Stack>::run(ctx, |stack| {
+    pass_state::with::<Stack, _>(ctx, |stack| {
         if let Some(scope) = stack.0.last_mut() {
             scope.open.push((id, crate::runtime::focus::stop_count(ctx)));
         }
@@ -190,7 +191,7 @@ pub(crate) fn enter(ctx: &Context, id: Id) {
 /// Registers the node `id` with the innermost scope at its step 16, when no other node component of the scope
 /// holds it. Children reach step 16 first, so they find their parent still open.
 pub(crate) fn register(ctx: &Context, mut node: ScopeNode) {
-    let unnamed = Service::<Stack>::run(ctx, |stack| {
+    let unnamed = pass_state::with::<Stack, _>(ctx, |stack| {
         let Some(scope) = stack.0.last_mut() else { return node.unnamed.take() };
         let direct = match scope.open.iter().rposition(|(open, _)| *open == node.id) {
             Some(at) => {
@@ -219,7 +220,7 @@ fn report_unnamed(ctx: &Context, unnamed: Option<Finding>) {
 /// Records the first baseline of a control inside the innermost label scope, measured from the control's top.
 /// The first control to report wins.
 pub(crate) fn record_baseline(ctx: &Context, baseline: f32) {
-    Service::<Stack>::run(ctx, |stack| {
+    pass_state::with::<Stack, _>(ctx, |stack| {
         if let Some(scope) = stack.0.iter_mut().rev().find(|scope| matches!(scope.kind, Kind::Label(_))) {
             scope.baseline.get_or_insert(baseline);
         }
@@ -229,7 +230,7 @@ pub(crate) fn record_baseline(ctx: &Context, baseline: f32) {
 /// Records the centre line of a control that paints no text (a box, a track), measured from its top, in the innermost
 /// label scope; the label centres on it. The first control to report wins.
 pub(crate) fn record_centre(ctx: &Context, centre: f32) {
-    Service::<Stack>::run(ctx, |stack| {
+    pass_state::with::<Stack, _>(ctx, |stack| {
         if let Some(scope) = stack.0.iter_mut().rev().find(|scope| matches!(scope.kind, Kind::Label(_))) {
             scope.centre.get_or_insert(centre);
         }
@@ -238,13 +239,14 @@ pub(crate) fn record_centre(ctx: &Context, centre: f32) {
 
 /// Whether a label scope is open: a control then reports its minimum width.
 pub(crate) fn in_label(ctx: &Context) -> bool {
-    Service::<Stack>::run(ctx, |stack| stack.0.iter().any(|scope| matches!(scope.kind, Kind::Label(_))))
+    pass_state::with::<Stack, _>(ctx, |stack| stack.0.iter().any(|scope| matches!(scope.kind, Kind::Label(_))))
 }
 
 /// Records the narrowest width of a control inside the innermost label scope. The first control to report wins.
 pub(crate) fn record_control_min(ctx: &Context, width: f32) {
-    let container =
-        Service::<Stack>::run(ctx, |stack| stack.0.iter().rev().find(|scope| matches!(scope.kind, Kind::Label(_))).map(|scope| scope.container));
+    let container = pass_state::with::<Stack, _>(ctx, |stack| {
+        stack.0.iter().rev().find(|scope| matches!(scope.kind, Kind::Label(_))).map(|scope| scope.container)
+    });
     if let Some(container) = container {
         layout_memory::contribute(ctx, std::sync::Arc::new(ControlMin { container, width }));
     }
@@ -258,7 +260,7 @@ struct ControlMin {
 
 impl layout_memory::Contribution for ControlMin {
     fn apply(&self, ctx: &Context) {
-        Service::<Stack>::run(ctx, |stack| {
+        pass_state::with::<Stack, _>(ctx, |stack| {
             if let Some(scope) = stack.0.iter_mut().rev().find(|scope| scope.container == self.container && matches!(scope.kind, Kind::Label(_))) {
                 scope.control_min.get_or_insert(self.width);
             }
@@ -272,7 +274,7 @@ impl layout_memory::Contribution for ControlMin {
 
 /// The narrowest width the first control of the open label scope of `container` has reported so far; 0 before any.
 pub(crate) fn open_control_min(ctx: &Context, container: Id) -> f32 {
-    Service::<Stack>::run(ctx, |stack| {
+    pass_state::with::<Stack, _>(ctx, |stack| {
         stack.0.iter().rev().find(|scope| scope.container == container).and_then(|scope| scope.control_min).unwrap_or(0.0)
     })
 }
@@ -285,7 +287,7 @@ pub(crate) fn measured_control_min(ctx: &Context, container: Id) -> f32 {
 
 /// Registers the reset of the control `control` with the innermost label scope.
 pub(crate) fn register_reset(ctx: &Context, control: Id, differs: bool) {
-    Service::<Stack>::run(ctx, |stack| {
+    pass_state::with::<Stack, _>(ctx, |stack| {
         if let Some(scope) = stack.0.iter_mut().rev().find(|scope| matches!(scope.kind, Kind::Label(_))) {
             scope.reset.get_or_insert(ResetFact { control, differs });
         }
@@ -295,7 +297,7 @@ pub(crate) fn register_reset(ctx: &Context, control: Id, differs: bool) {
 /// Registers the validity message of a control with the innermost label scope; `text` is the message resolved.
 /// `tone` is the effective tone of the message. The first message wins.
 pub(crate) fn register_message(ctx: &Context, message: &Message, tone: Tone, text: String) {
-    Service::<Stack>::run(ctx, |stack| {
+    pass_state::with::<Stack, _>(ctx, |stack| {
         if let Some(scope) = stack.0.iter_mut().rev().find(|scope| matches!(scope.kind, Kind::Label(_))) {
             scope.message.get_or_insert_with(|| (message.clone(), tone, text));
         }
@@ -314,7 +316,7 @@ fn message_slot(container: Id) -> Id {
 
 /// Registers that a control of the innermost label scope scrubs by the label, so the label senses a drag.
 pub(crate) fn register_scrub(ctx: &Context) {
-    Service::<Stack>::run(ctx, |stack| {
+    pass_state::with::<Stack, _>(ctx, |stack| {
         if let Some(scope) = stack.0.iter_mut().rev().find(|scope| matches!(scope.kind, Kind::Label(_))) {
             scope.scrub = true;
         }
@@ -323,7 +325,7 @@ pub(crate) fn register_scrub(ctx: &Context) {
 
 /// Registers that a control of the innermost label scope is activated by a click on the label.
 pub(crate) fn register_activates(ctx: &Context) {
-    Service::<Stack>::run(ctx, |stack| {
+    pass_state::with::<Stack, _>(ctx, |stack| {
         if let Some(scope) = stack.0.iter_mut().rev().find(|scope| matches!(scope.kind, Kind::Label(_))) {
             scope.activates = true;
         }
@@ -445,7 +447,8 @@ pub(crate) fn merge_patch(child: &ScopeNode, merged: &Merged) -> MergePatch {
 /// Closes the scope of `container` for a measuring run: it records only the control's narrowest width, as this pass's
 /// measure for the real run's label step.
 pub(crate) fn discard(ctx: &Context, container: Id) {
-    let scope = Service::<Stack>::run(ctx, |stack| stack.0.last().is_some_and(|scope| scope.container == container).then(|| stack.0.pop()).flatten());
+    let scope =
+        pass_state::with::<Stack, _>(ctx, |stack| stack.0.last().is_some_and(|scope| scope.container == container).then(|| stack.0.pop()).flatten());
     if let Some(scope) = scope {
         let took = Vec2::new(scope.control_min.unwrap_or(0.0), 0.0);
         layout_memory::emit_record(ctx, sub(container, "control_min"), layout_memory::Measured::new(Vec2::ZERO, took));
@@ -455,8 +458,9 @@ pub(crate) fn discard(ctx: &Context, container: Id) {
 /// Closes the scope of `container`, if it opened one, and patches the nodes registered in it. `merged` is the
 /// container's own facts, read by a merge scope.
 pub(crate) fn finish(ctx: &Context, container: Id, merged: Option<Merged>) {
-    let scope =
-        Service::<Stack>::run(ctx, |stack| (stack.0.last().is_some_and(|scope| scope.container == container)).then(|| stack.0.pop()).flatten());
+    let scope = pass_state::with::<Stack, _>(ctx, |stack| {
+        (stack.0.last().is_some_and(|scope| scope.container == container)).then(|| stack.0.pop()).flatten()
+    });
     let Some(scope) = scope else { return };
     match scope.kind {
         Kind::Label(label) => {

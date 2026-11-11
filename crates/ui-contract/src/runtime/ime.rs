@@ -3,7 +3,7 @@
 
 use crate::runtime::egui::ime as os;
 use crate::runtime::egui::pass;
-use crate::runtime::frame::PerViewport;
+use crate::runtime::frame::{PerViewport, Stored};
 use craft_behavior::EditorInput;
 use egui::{Context, Event, Id, Key, Rect, ViewportId};
 
@@ -32,6 +32,8 @@ struct Engine {
     /// What the editor that owns the IME reported at its last pass.
     editor: Option<EditorFacts>,
 }
+
+impl Stored for Engine {}
 
 #[derive(Clone, Copy)]
 struct EditorFacts {

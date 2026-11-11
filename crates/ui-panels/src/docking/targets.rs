@@ -6,7 +6,7 @@
 
 use super::{DragUnit, PanelKey, PanelSpec, width_bounds};
 use crate::contract::DropMark;
-use crate::runtime::frame::{self, PassStep, PerViewport, Stamped};
+use crate::runtime::frame::{self, PassStep, PerViewport, Stamped, Stored};
 use crate::style::StyleCx;
 use craft_behavior::dock::{Column, ZoneSize, zones};
 use craft_behavior::{DockSide, Flow};
@@ -303,6 +303,8 @@ struct Pass<P> {
     now: Vec<(Id, DockTargets<P>)>,
     before: Vec<(Id, DockTargets<P>)>,
 }
+
+impl<P: Send + 'static> Stored for Pass<P> {}
 
 impl<P> Default for Pass<P> {
     fn default() -> Self {

@@ -1,7 +1,7 @@
 //! The root token cache: resolved tokens keyed by what they depend on.
 
 use super::root::{ResolvedRoot, RootEnv};
-use crate::runtime::egui::memory::Service;
+use crate::runtime::pass_state;
 use crate::style::UiTokens;
 use craft_theme::{AppSizes, Appearance, Contrast, Mode, SUITE_DEFAULT, Size, TextSize, ThemeDef, ThemeId, builtins, resolve_sized};
 use egui::Context;
@@ -11,24 +11,25 @@ use std::sync::Arc;
 const KEPT_ROOT_TOKENS: usize = 4;
 
 #[derive(Default)]
-struct RootTokenCache {
+pub(crate) struct RootTokenCache {
     entries: Vec<(TokenInputs, Arc<UiTokens>)>,
 }
 
 /// How many root-token entries the context holds.
 #[cfg(feature = "testing")]
 pub(crate) fn root_token_entries(ctx: &Context) -> usize {
-    Service::<RootTokenCache>::run(ctx, |cache| cache.entries.len())
+    pass_state::with::<RootTokenCache, _>(ctx, |cache| cache.entries.len())
 }
 
 /// The tokens `inputs` resolve to, cached by the inputs.
 pub(super) fn tokens_for(ctx: &Context, inputs: &TokenInputs) -> Arc<UiTokens> {
-    let service = Service::<RootTokenCache>::of(ctx);
-    if let Some(hit) = service.with(|cache| cache.entries.iter().find(|(key, _)| key.same(inputs)).map(|(_, tokens)| tokens.clone())) {
+    if let Some(hit) =
+        pass_state::with::<RootTokenCache, _>(ctx, |cache| cache.entries.iter().find(|(key, _)| key.same(inputs)).map(|(_, tokens)| tokens.clone()))
+    {
         return hit;
     }
     let tokens = resolved(inputs);
-    service.with(|cache| {
+    pass_state::with::<RootTokenCache, _>(ctx, |cache| {
         if cache.entries.len() == KEPT_ROOT_TOKENS {
             cache.entries.remove(0);
         }

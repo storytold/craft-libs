@@ -1,12 +1,13 @@
 //! The pass's edit events and edit-command routing: the context-free calls an app makes around edits.
 
-use super::egui::{memory::Service, repaint};
+use super::egui::repaint;
+use crate::runtime::pass_state;
 use craft_behavior::{CancelReason, GestureId};
 use egui::Context;
 
 /// The latest `cancel_all`: a serial that grows with each call, and why.
 #[derive(Clone, Copy, Default)]
-struct CancelAll {
+pub(crate) struct CancelAll {
     serial: u64,
     reason: Option<CancelReason>,
 }
@@ -15,7 +16,7 @@ struct CancelAll {
 /// redo commands call it before they change the document, so a drag ends with `reason` instead of resuming over the
 /// changed value.
 pub fn cancel_all(ctx: &Context, reason: CancelReason) {
-    Service::<CancelAll>::run(ctx, |all| {
+    pass_state::with::<CancelAll, _>(ctx, |all| {
         all.serial += 1;
         all.reason = Some(reason);
     });
@@ -24,17 +25,17 @@ pub fn cancel_all(ctx: &Context, reason: CancelReason) {
 
 /// The serial and reason of the latest `cancel_all`; serial 0 before the first.
 pub(crate) fn latest(ctx: &Context) -> (u64, Option<CancelReason>) {
-    Service::<CancelAll>::run(ctx, |all| (all.serial, all.reason))
+    pass_state::with::<CancelAll, _>(ctx, |all| (all.serial, all.reason))
 }
 
 /// The newest gesture id handed out in this context.
 #[derive(Clone, Copy, Default)]
-struct Gestures(GestureId);
+pub(crate) struct Gestures(GestureId);
 
 /// A gesture id no gesture of this context has had: ids grow in the order gestures begin, across components and
 /// across a component's eviction, as `GestureHost` assumes.
 pub fn next_gesture_id(ctx: &Context) -> GestureId {
-    Service::<Gestures>::run(ctx, |gestures| {
+    pass_state::with::<Gestures, _>(ctx, |gestures| {
         gestures.0 = gestures.0.next();
         gestures.0
     })

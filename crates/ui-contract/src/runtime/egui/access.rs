@@ -10,11 +10,11 @@ mod text;
 mod tree;
 
 #[cfg(feature = "testing")]
+use crate::runtime::pass_state;
 use egui::FullOutput;
 use egui::{Context, Id, ViewportId};
 use std::collections::{HashMap, HashSet};
 
-use super::memory::Service;
 use super::pass;
 
 pub(crate) use node::{NodeAction, NodeSpec, Toggle, write_node};
@@ -94,11 +94,11 @@ impl Emitted {
 /// One store per viewport: every viewport's pass ends with its own `order_children`, and a nested viewport's pass
 /// runs inside its parent's.
 #[derive(Default)]
-struct Reported(HashMap<ViewportId, Emitted>);
+pub(crate) struct Reported(HashMap<ViewportId, Emitted>);
 
 fn with_emitted<R>(ctx: &Context, f: impl FnOnce(&mut Emitted) -> R) -> R {
     let viewport = pass::current_viewport(ctx);
-    Service::<Reported>::run(ctx, |reported| f(reported.0.entry(viewport).or_default()))
+    pass_state::with::<Reported, _>(ctx, |reported| f(reported.0.entry(viewport).or_default()))
 }
 
 /// Makes `parent` the node `id` attaches to. Call it before the node of `id` is created.
@@ -127,7 +127,7 @@ pub(crate) fn note_written(ctx: &Context, id: Id) {
 /// (the active item of a list the field drives).
 pub(crate) fn order_children(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
-    let emitted = Service::<Reported>::run(ctx, |reported| reported.0.remove(&viewport)).unwrap_or_default();
+    let emitted = pass_state::with::<Reported, _>(ctx, |reported| reported.0.remove(&viewport)).unwrap_or_default();
     if !emitted.focus_set
         && let Some(owner) = ctx.memory(|memory| memory.focused()).and_then(|widget| emitted.folded.get(&widget))
     {

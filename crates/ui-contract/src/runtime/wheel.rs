@@ -12,7 +12,7 @@ use craft_behavior::{PointerButton, PointerEvent, Wheel, WheelPhase, WheelTaker,
 use egui::{Context, Id, Pos2, Rect, Vec2};
 
 #[derive(Default)]
-struct State {
+pub(crate) struct State {
     this: Vec<WheelTaker<Id>>,
     last: Vec<WheelTaker<Id>>,
     /// The last-pressed gated control while the pointer has stayed inside it since.

@@ -9,7 +9,7 @@ use egui::{Context, ViewportId};
 
 /// What the frame has announced so far in one viewport.
 #[derive(Default)]
-struct Announced {
+pub(crate) struct Announced {
     frame: u64,
     texts: Vec<(String, Politeness)>,
     /// The announcements of the previous frame, and whether its status text carried the repeat marker.

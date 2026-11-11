@@ -2,8 +2,8 @@
 
 use super::Frames;
 use crate::primitives::{Draw, DrawEnv, PaintRecord};
-use crate::runtime::egui::memory::Service;
 use crate::runtime::env::{AppValues, Scale};
+use crate::runtime::pass_state;
 use crate::style::{ComponentStyle, EnvKey, Ink, StyleCx, StyleKey, UiTokens, resolve_style};
 use craft_host::target::Os;
 use craft_i18n::Direction;
@@ -217,7 +217,7 @@ impl StyleSeen {
 }
 
 #[derive(Default)]
-struct StyleRecord {
+pub(crate) struct StyleRecord {
     seen: Vec<std::sync::Arc<StyleSeen>>,
 }
 
@@ -232,7 +232,7 @@ pub(crate) fn record<C: crate::contract::Component>(ctx: &Context, scx: &crate::
     key.hash(&mut hasher);
     let inputs = hasher.finish();
     let type_name = std::any::type_name::<C>();
-    let known = Service::<StyleRecord>::run(ctx, |record| {
+    let known = pass_state::with::<StyleRecord, _>(ctx, |record| {
         record.seen.iter().any(|seen| {
             seen.type_name == type_name && seen.inputs == inputs && seen.env == scx.key && seen.variant == scx.variant && seen.size == scx.size
         })
@@ -250,10 +250,10 @@ pub(crate) fn record<C: crate::contract::Component>(ctx: &Context, scx: &crate::
         env: scx.key,
         again: std::sync::Arc::new(move |cx| looks_of(&resolve(cx, key))),
     };
-    Service::<StyleRecord>::run(ctx, |record| record.seen.push(std::sync::Arc::new(seen)));
+    pass_state::with::<StyleRecord, _>(ctx, |record| record.seen.push(std::sync::Arc::new(seen)));
 }
 
 /// Every style the pipeline resolved on `ctx` for the component type `type_name`.
 pub(crate) fn styles_of(ctx: &Context, type_name: &str) -> Vec<std::sync::Arc<StyleSeen>> {
-    Service::<StyleRecord>::run(ctx, |record| record.seen.iter().filter(|seen| seen.type_name == type_name).cloned().collect())
+    pass_state::with::<StyleRecord, _>(ctx, |record| record.seen.iter().filter(|seen| seen.type_name == type_name).cloned().collect())
 }

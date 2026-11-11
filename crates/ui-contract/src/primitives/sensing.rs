@@ -219,7 +219,7 @@ struct ArenaState {
 }
 
 #[derive(Default)]
-struct Arenas {
+pub(crate) struct Arenas {
     by_root: HashMap<Id, ArenaState>,
     swept: u64,
     /// The end sweep is registered; the runtime layer below cannot register it at install.

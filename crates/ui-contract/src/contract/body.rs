@@ -20,7 +20,7 @@ mod placement;
 mod presses;
 mod regions;
 mod reorder;
-mod scroll;
+pub(crate) mod scroll;
 mod size;
 mod window;
 

@@ -5,10 +5,10 @@
 
 use crate::runtime::cursor;
 use crate::runtime::egui::input::{self as raw_input, RawInput};
-use crate::runtime::egui::memory::Service;
 use crate::runtime::egui::{pass, viewports};
 use crate::runtime::frame::PerViewport;
 use crate::runtime::overlay;
+use crate::runtime::pass_state;
 use craft_behavior::{Cursor, CursorIcon, CursorPriority};
 use craft_host::target::{Caps, EdgeInsets, ShellInfo, WindowChrome, WindowKind};
 use craft_window::native::NativeWindow;
@@ -56,7 +56,7 @@ const FLUSH_SECONDS: f64 = 1.0;
 
 /// Install-time inputs and the cross-window records of one context.
 #[derive(Default)]
-struct Shared {
+pub(crate) struct Shared {
     /// The opacity requests since the last [`take_sent`], for trials: the platform applies them out of reach.
     #[cfg(feature = "testing")]
     sent: Vec<(ViewportId, WindowAction)>,
@@ -84,7 +84,7 @@ struct Shared {
 
 /// One viewport's window record.
 #[derive(Default)]
-struct Record {
+pub(crate) struct Record {
     facts: Option<viewports::Facts>,
     /// The measured traffic-lights inset, kept until the scale changes or full screen ends.
     lights: craft_window::mac::Cache,
@@ -145,7 +145,7 @@ struct Geometry {
 }
 
 fn shared<R>(ctx: &Context, f: impl FnOnce(&mut Shared) -> R) -> R {
-    Service::<Shared>::run(ctx, f)
+    pass_state::with::<Shared, _>(ctx, f)
 }
 
 /// The opacity requests made since the last call: a trial's window action stream, as the platform applies them where

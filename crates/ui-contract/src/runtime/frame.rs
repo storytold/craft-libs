@@ -2,9 +2,10 @@
 
 use crate::runtime::commands::{self, CommandInput, CommandSet as _, Fired};
 use crate::runtime::egui::input::{self as raw_input, HeldInput, RawInput};
-use crate::runtime::egui::memory::{self as store, Service};
+use crate::runtime::egui::memory as store;
 use crate::runtime::egui::{pass, scale, style};
 use crate::runtime::env::{Env, RootEnv, WindowKey};
+use crate::runtime::pass_state;
 use crate::runtime::{access, cursor, drag, focus, ime, keys, layout_memory, measure, memory, motion, overlay, pointer, toast, wheel, windows};
 use craft_behavior::{DocKey, GestureId};
 use craft_host::Host;
@@ -115,7 +116,7 @@ pub struct FrameOutput {
 
 /// The per-frame and per-context state of the frame loop.
 #[derive(Default)]
-struct FrameState {
+pub(crate) struct FrameState {
     input: Option<FrameInput>,
     /// The pointer tolerances of the app's resolved tokens (`tokens.size.hit`) and the `sizes` they came from:
     /// the input hook writes the slop before any `Env` exists, and the press lifecycle reads the hit target.
@@ -201,12 +202,32 @@ impl<T: Default> PerViewport<T> {
     }
 }
 
-impl<T: Default + Send + 'static> PerViewport<T> {
+/// Where the records of a [`PerViewport`] type live: a context service unless the type is pass-local
+/// (`runtime::pass_state`), which overrides these.
+#[doc(hidden)]
+pub trait Stored: Default + Send + 'static {
+    /// Runs `f` on the records of this type.
+    fn records<R>(ctx: &Context, f: impl FnOnce(&mut PerViewport<Self>) -> R) -> R {
+        store::with::<PerViewport<Self>, R>(ctx, f)
+    }
+
+    /// Runs `f` on the stamped records of this type.
+    fn stamped<R>(ctx: &Context, f: impl FnOnce(&mut PerViewport<Stamped<Self>>) -> R) -> R {
+        store::with::<PerViewport<Stamped<Self>>, R>(ctx, f)
+    }
+}
+
+impl<T: Stored> Stored for Stamped<T> {
+    fn records<R>(ctx: &Context, f: impl FnOnce(&mut PerViewport<Self>) -> R) -> R {
+        T::stamped(ctx, f)
+    }
+}
+
+impl<T: Stored> PerViewport<T> {
     /// Runs `f` on the record of `viewport`, created on first use.
     pub(crate) fn with<R>(ctx: &Context, viewport: ViewportId, f: impl FnOnce(&mut T) -> R) -> R {
-        // The prune registration runs outside the service's lock: it reaches the context.
-        let (registered, out) =
-            store::with::<PerViewport<T>, _>(ctx, |records| (std::mem::replace(&mut records.pruning, true), f(records.record(viewport))));
+        // The prune registration runs outside the records' borrow: it reaches the context.
+        let (registered, out) = T::records(ctx, |records| (std::mem::replace(&mut records.pruning, true), f(records.record(viewport))));
         if !registered {
             Self::register_prune(ctx);
         }
@@ -214,14 +235,14 @@ impl<T: Default + Send + 'static> PerViewport<T> {
     }
 
     fn register_prune(ctx: &Context) {
-        fn prune<T: Default + Send + 'static>(ctx: &Context, live: &[ViewportId]) {
-            Service::<PerViewport<T>>::of(ctx).with(|records| records.records.retain(|(viewport, _)| live.contains(viewport)));
+        fn prune<T: Stored>(ctx: &Context, live: &[ViewportId]) {
+            T::records(ctx, |records| records.records.retain(|(viewport, _)| live.contains(viewport)));
         }
         register_prune(ctx, TypeId::of::<T>(), prune::<T>);
     }
 }
 
-impl<T: Default + Send + 'static> PerViewport<Stamped<T>> {
+impl<T: Stored> PerViewport<Stamped<T>> {
     /// Runs `f` on the record of `viewport` for its pass `pass_nr`; `reset` runs first when the pass changed.
     #[doc(hidden)]
     pub fn with_pass<R>(ctx: &Context, viewport: ViewportId, pass_nr: u64, reset: impl FnOnce(&mut T, PassStep), f: impl FnOnce(&mut T) -> R) -> R {
@@ -237,14 +258,14 @@ impl<T: Default + Send + 'static> PerViewport<Stamped<T>> {
 
 /// Registers the end hook's prune of a service's per-viewport records, once per service type.
 pub(crate) fn register_prune(ctx: &Context, key: TypeId, prune: fn(&Context, &[ViewportId])) {
-    store::with::<FrameState, _>(ctx, |state| {
+    pass_state::with::<FrameState, _>(ctx, |state| {
         state.prunes.entry(key).or_insert(prune);
     });
 }
 
 /// Registers a sweep the end hook runs for the running viewport's pass, once per service type.
 pub(crate) fn register_end_sweep(ctx: &Context, key: TypeId, sweep: fn(&Context)) {
-    store::with::<FrameState, _>(ctx, |state| {
+    pass_state::with::<FrameState, _>(ctx, |state| {
         state.sweeps.entry(key).or_insert(sweep);
     });
 }
@@ -255,7 +276,7 @@ pub fn set_input(ctx: &Context, input: FrameInput) {
     let scale = input.root.scale;
     let commands = input.commands.clone();
     let root_passes = pass::pass_nr(ctx, ViewportId::ROOT);
-    let hooks_ran = store::with::<FrameState, _>(ctx, |state| {
+    let hooks_ran = pass_state::with::<FrameState, _>(ctx, |state| {
         debug_assert!(state.passes_open == 0, "set_input was called during a pass");
         let ran = state.root_passes_hooked == root_passes;
         if !state.hit.as_ref().is_some_and(|(sizes, _)| Arc::ptr_eq(sizes, &input.root.sizes)) {
@@ -298,23 +319,23 @@ fn suite_default_theme() -> &'static ThemeDef {
 
 /// The tolerances of the running frame: the app's, else the default density's.
 fn frame_hit(ctx: &Context) -> HitSizes {
-    store::with::<FrameState, _>(ctx, |state| state.hit.as_ref().map(|(_, hit)| *hit)).unwrap_or_else(|| resolved_hit(&AppSizes::default()))
+    pass_state::with::<FrameState, _>(ctx, |state| state.hit.as_ref().map(|(_, hit)| *hit)).unwrap_or_else(|| resolved_hit(&AppSizes::default()))
 }
 
 /// Called by `install`: the passes the context ran before the plugin existed have no hooks to wait for.
 pub(crate) fn seed_hooked_passes(ctx: &Context) {
     let root_passes = pass::pass_nr(ctx, ViewportId::ROOT);
-    store::with::<FrameState, _>(ctx, |state| state.root_passes_hooked = root_passes);
+    pass_state::with::<FrameState, _>(ctx, |state| state.root_passes_hooked = root_passes);
 }
 
 /// Whether a pass is between its begin and end hooks.
 pub(crate) fn in_pass(ctx: &Context) -> bool {
-    store::with::<FrameState, _>(ctx, |state| state.passes_open > 0)
+    pass_state::with::<FrameState, _>(ctx, |state| state.passes_open > 0)
 }
 
 /// Everything accumulated since the last call, across passes and discarded passes.
 pub fn take_output(ctx: &Context) -> FrameOutput {
-    let mut output = store::with::<FrameState, _>(ctx, |state| std::mem::take(&mut state.output));
+    let mut output = pass_state::with::<FrameState, _>(ctx, |state| std::mem::take(&mut state.output));
     output.fired = commands::take_fired(ctx);
     // The menu, palette and automation fires of the chrome commands reach the app as ordinary fires with no window: the
     // focused window's shell takes them in the next pass. A key fire already wrote its toggle in the key stage.
@@ -332,28 +353,28 @@ pub fn take_output(ctx: &Context) -> FrameOutput {
 
 /// Sets the end hook's ghost-layer painter.
 pub(crate) fn set_frame_layers(ctx: &Context, painter: Option<fn(&Context)>) {
-    store::with::<FrameState, _>(ctx, |state| state.frame_layers = painter);
+    pass_state::with::<FrameState, _>(ctx, |state| state.frame_layers = painter);
 }
 
 /// Whether decision records are kept for the debug inspector.
 pub(crate) fn inspecting(ctx: &Context) -> bool {
-    store::with::<FrameState, _>(ctx, |state| state.input.as_ref().is_some_and(|input| input.inspect))
+    pass_state::with::<FrameState, _>(ctx, |state| state.input.as_ref().is_some_and(|input| input.inspect))
 }
 
 /// Adds a gesture whose component was evicted to the next `FrameOutput`.
 pub(crate) fn note_removed_gesture(ctx: &Context, id: GestureId) {
-    store::with::<FrameState, _>(ctx, |state| state.output.removed_gestures.push(id));
+    pass_state::with::<FrameState, _>(ctx, |state| state.output.removed_gestures.push(id));
 }
 
 /// Adds a step of an outer gesture to the next `FrameOutput`.
 #[doc(hidden)]
 pub fn note_outer_edit(ctx: &Context, edit: OuterEdit) {
-    store::with::<FrameState, _>(ctx, |state| state.output.outer_edits.push(edit));
+    pass_state::with::<FrameState, _>(ctx, |state| state.output.outer_edits.push(edit));
 }
 
 /// Adds text to the next `FrameOutput`'s announcements.
 pub(crate) fn announce(ctx: &Context, text: String) {
-    store::with::<FrameState, _>(ctx, |state| state.output.announcements.push(text));
+    pass_state::with::<FrameState, _>(ctx, |state| state.output.announcements.push(text));
 }
 
 /// Asks for another pass of the viewport the running pass belongs to.
@@ -385,7 +406,7 @@ pub fn discard_pass(ctx: &Context, reason: &'static str) {
 #[doc(hidden)]
 pub fn note_shell(ctx: &Context, viewport: ViewportId, window: &WindowKey, root: Id) {
     let pass = pass::pass_nr(ctx, viewport);
-    store::with::<FrameState, _>(ctx, |state| {
+    pass_state::with::<FrameState, _>(ctx, |state| {
         state.shells.retain(|shell| shell.viewport != viewport || (shell.window != *window && shell.pass + TOGGLE_PASSES > pass));
         state.shells.push(ShellRecord { viewport, window: window.clone(), root, pass });
     });
@@ -395,16 +416,16 @@ pub fn note_shell(ctx: &Context, viewport: ViewportId, window: &WindowKey, root:
 /// focus, or at the first shell that asks when none does.
 pub(crate) fn request_chrome_toggle(ctx: &Context, viewport: ViewportId, toggle: ChromeToggle) {
     queue_toggle(ctx, viewport, toggle);
-    store::with::<FrameState, _>(ctx, |state| state.output.chrome_toggles.push((viewport, toggle)));
+    pass_state::with::<FrameState, _>(ctx, |state| state.output.chrome_toggles.push((viewport, toggle)));
 }
 
 fn queue_toggle(ctx: &Context, viewport: ViewportId, toggle: ChromeToggle) {
     let pass = pass::pass_nr(ctx, viewport);
-    let candidates: Vec<(WindowKey, Id)> = store::with::<FrameState, _>(ctx, |state| {
+    let candidates: Vec<(WindowKey, Id)> = pass_state::with::<FrameState, _>(ctx, |state| {
         state.shells.iter().filter(|shell| shell.viewport == viewport).map(|s| (s.window.clone(), s.root)).collect()
     });
     let window = candidates.into_iter().find(|(_, root)| commands::focus_within(ctx, *root)).map(|(window, _)| window);
-    store::with::<FrameState, _>(ctx, |state| {
+    pass_state::with::<FrameState, _>(ctx, |state| {
         state.toggles.retain(|pending| pending.viewport != viewport || pending.pass + TOGGLE_PASSES > pass);
         state.toggles.push(PendingToggle { viewport, window, toggle, pass });
     });
@@ -414,7 +435,7 @@ fn queue_toggle(ctx: &Context, viewport: ViewportId, toggle: ChromeToggle) {
 /// focus for. A shell calls it once in each pass, so its window toggles in the pass the key went down.
 #[doc(hidden)]
 pub fn take_chrome_toggles(ctx: &Context, viewport: ViewportId, window: &WindowKey) -> Vec<ChromeToggle> {
-    store::with::<FrameState, _>(ctx, |state| {
+    pass_state::with::<FrameState, _>(ctx, |state| {
         let wanted = |pending: &PendingToggle| pending.viewport == viewport && pending.window.as_ref().is_none_or(|aimed| aimed == window);
         measure::take_queued(ctx, &mut state.toggles, wanted).into_iter().map(|pending| pending.toggle).collect()
     })
@@ -427,6 +448,8 @@ struct ViewportRecord {
     press_cancelled: bool,
     now: f64,
 }
+
+impl Stored for ViewportRecord {}
 
 /// What the begin hook read of the running pass; steps read it, none writes it.
 #[derive(Clone)]
@@ -509,7 +532,7 @@ pub(crate) fn begin_pass(ui: &mut Ui) {
     // The pass this hook begins is not on the running stack yet.
     let viewport = ctx.viewport_id();
     let root_pass = (viewport == ViewportId::ROOT).then(|| pass::pass_nr(&ctx, viewport));
-    let frame_input = store::with::<FrameState, _>(&ctx, |state| {
+    let frame_input = pass_state::with::<FrameState, _>(&ctx, |state| {
         state.passes_open += 1;
         if let Some(nr) = root_pass {
             state.root_passes_hooked = nr + 1;
@@ -525,7 +548,7 @@ pub(crate) fn begin_pass(ui: &mut Ui) {
         running.retain(|pass| !(pass.ctx == ctx && pass.facts.viewport == viewport));
         running.push(RunningPass { ctx: ctx.clone(), facts: PassFacts { viewport, pass_nr, now } });
     });
-    store::open_handles(&ctx);
+    pass_state::hold(&ctx);
     let cancelled = PerViewport::<ViewportRecord>::with(&ctx, viewport, |record| {
         record.now = now;
         std::mem::take(&mut record.press_cancelled)
@@ -566,14 +589,14 @@ pub(crate) fn end_pass(ui: &mut Ui) {
     commands::end(&ctx);
     access::end_live_pass(&ctx);
     crate::runtime::egui::access::order_children(&ctx);
-    let painter = store::with::<FrameState, _>(&ctx, |state| state.frame_layers);
+    let painter = pass_state::with::<FrameState, _>(&ctx, |state| state.frame_layers);
     if let Some(paint_frame_layers) = painter {
         paint_frame_layers(&ctx);
     }
     toast::end_pass(&ctx);
     overlay::end_pass(&ctx);
     focus::end(&ctx);
-    let sweeps: Vec<fn(&Context)> = store::with::<FrameState, _>(&ctx, |state| state.sweeps.values().copied().collect());
+    let sweeps: Vec<fn(&Context)> = pass_state::with::<FrameState, _>(&ctx, |state| state.sweeps.values().copied().collect());
     for sweep in sweeps {
         sweep(&ctx);
     }
@@ -584,7 +607,7 @@ pub(crate) fn end_pass(ui: &mut Ui) {
     windows::end(&ctx);
     ime::end_pass(&ctx);
     let live = pass::live_viewports(&ctx);
-    let prunes: Vec<fn(&Context, &[ViewportId])> = store::with::<FrameState, _>(&ctx, |state| {
+    let prunes: Vec<fn(&Context, &[ViewportId])> = pass_state::with::<FrameState, _>(&ctx, |state| {
         state.passes_open = state.passes_open.saturating_sub(1);
         state.prunes.values().copied().collect()
     });
@@ -597,4 +620,5 @@ pub(crate) fn end_pass(ui: &mut Ui) {
             running.remove(at);
         }
     });
+    pass_state::release(&ctx);
 }

@@ -8,7 +8,7 @@ use craft_behavior::{Cursor, CursorIcon, CursorPriority, PaintedCursor};
 use egui::Context;
 
 #[derive(Default)]
-struct State {
+pub(crate) struct State {
     requests: Vec<(Cursor, CursorPriority)>,
     record: Option<Cursor>,
 }

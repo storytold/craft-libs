@@ -44,13 +44,13 @@ struct Read {
 type Samples = SmallVec<[Sample; 2]>;
 
 #[derive(Default)]
-struct Reads {
+pub(crate) struct Reads {
     reads: Vec<Read>,
 }
 
 /// The measuring runs in progress, outermost first: each opened and closed by [`measuring`].
 #[derive(Default)]
-struct Runs(Vec<Id>);
+pub(crate) struct Runs(Vec<Id>);
 
 fn with<R>(ctx: &Context, f: impl FnOnce(&mut Reads) -> R) -> R {
     let viewport = pass::current_viewport(ctx);

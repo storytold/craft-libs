@@ -7,7 +7,7 @@
 mod emit;
 pub(crate) mod fold;
 pub(crate) mod items;
-mod live;
+pub(crate) mod live;
 pub(crate) mod scope;
 pub(crate) mod text;
 

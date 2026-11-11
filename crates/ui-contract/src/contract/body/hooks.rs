@@ -20,12 +20,13 @@ use crate::primitives::Surface;
 use crate::runtime::access::scope;
 use crate::runtime::access::{self, Politeness, Role};
 use crate::runtime::commands;
-use crate::runtime::egui::{alloc, areas, child, memory as store, response, style, viewports};
+use crate::runtime::egui::{alloc, areas, child, response, style, viewports};
 use crate::runtime::env::{AppValues, ArenaId, Env};
 use crate::runtime::focus::FocusPolicy;
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::motion::{Driver, Presence, spec};
 use crate::runtime::overlay::CloseReason;
+use crate::runtime::pass_state;
 use crate::runtime::{keys, layout_memory, pointer, wheel};
 use crate::style::ComponentStyle as _;
 use crate::style::{Corners, StyleCx, SurfaceKind, scroll_bar_look, surface_style};
@@ -190,7 +191,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         // Step 4 applies, in order, the scroll bar and AccessKit moves of the last pass (`scroll_input`), this pass's
         // wheel share and the reveal request queued last pass.
         let frame = jump_frame(&ctx);
-        let jump = store::Service::<Jumps>::run(&ctx, |jumps| {
+        let jump = pass_state::with::<Jumps, _>(&ctx, |jumps| {
             jumps.0.retain(|(.., queued)| queued + 1 >= frame);
             let at = jumps.0.iter().position(|(owner, ..)| *owner == id)?;
             Some(if quiet { jumps.0[at].1 } else { jumps.0.remove(at).1 })

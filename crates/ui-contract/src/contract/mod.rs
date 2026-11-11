@@ -1,6 +1,6 @@
 //! The component traits, context types, `PaintUi`, `Looks`, the pipeline and its step functions, the label, body and item steps, the mount and overlay hosts and `contract::tooltip`.
 
-mod body;
+pub(crate) mod body;
 mod collection;
 mod container;
 mod cx;
@@ -29,7 +29,7 @@ mod run;
 mod sampler;
 mod settle;
 mod shell;
-mod steps;
+pub(crate) mod steps;
 pub(crate) mod text;
 pub mod toast;
 pub mod tooltip;

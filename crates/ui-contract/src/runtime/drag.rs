@@ -3,10 +3,11 @@
 //! next pass, like the press arena's shapes. The ghost layer paints from this data (`contract::ghost`).
 
 use crate::runtime::egui::areas::{self, Layer};
-use crate::runtime::egui::{files, memory::Service, pass, viewports};
+use crate::runtime::egui::{files, pass, viewports};
 use crate::runtime::env::Label;
 use crate::runtime::frame::PerViewport;
 use crate::runtime::overlay::{self, LayerKeys};
+use crate::runtime::pass_state;
 use crate::runtime::windows::{self, WindowHost};
 use crate::runtime::{cursor, frame, pointer};
 use craft_behavior::keys::drop_operation;
@@ -173,7 +174,7 @@ struct Ended {
 }
 
 #[derive(Default)]
-struct Board {
+pub(crate) struct Board {
     session: Option<Session>,
     ended: Option<Ended>,
     /// The sessions started on this context, for tests.
@@ -194,13 +195,13 @@ struct Registration {
 
 /// A viewport's registrations: this pass's, and the target that won last pass.
 #[derive(Default)]
-struct Targets {
+pub(crate) struct Targets {
     this: Vec<Registration>,
     winner: Option<(Id, u32)>,
 }
 
 fn board<R>(ctx: &Context, f: impl FnOnce(&mut Board) -> R) -> R {
-    Service::<Board>::run(ctx, f)
+    pass_state::with::<Board, _>(ctx, f)
 }
 
 /// Starts a session for `source` with `payload`. A running session stays: one per context.
