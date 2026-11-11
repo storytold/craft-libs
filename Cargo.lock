@@ -1065,6 +1065,7 @@ dependencies = [
 name = "craft-metafile"
 version = "0.1.0"
 dependencies = [
+ "encoding_rs",
  "image",
  "kurbo 0.13.1",
  "thiserror 2.0.21",
@@ -1224,6 +1225,7 @@ dependencies = [
 name = "craft-svg-paths"
 version = "0.1.0"
 dependencies = [
+ "craft-xml",
  "kurbo 0.13.1",
  "roxmltree 0.21.2",
  "thiserror 2.0.21",

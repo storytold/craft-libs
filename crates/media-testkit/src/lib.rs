@@ -131,6 +131,25 @@ pub fn fixture_subdir(name: &str) -> PathBuf {
     d
 }
 
+/// A new, empty directory in the system temporary directory that only this call created: made with
+/// `create_dir`, which fails rather than follow a pre-planted name or symlink, so a test can write
+/// fixed file names inside it. The caller removes it.
+#[allow(clippy::panic)]
+pub fn private_dir(tag: &str) -> PathBuf {
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    for _ in 0..100 {
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let d = std::env::temp_dir().join(format!("craft-media-{tag}-{}-{nanos:x}-{n}", std::process::id()));
+        match std::fs::create_dir(&d) {
+            Ok(()) => return d,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => panic!("cannot create {}: {e}", d.display()),
+        }
+    }
+    panic!("no free scratch directory name for {tag}");
+}
+
 /// A temporary sibling of `out` that no other thread or process will pick; the extension is kept
 /// because ffmpeg chooses the muxer from it.
 pub fn temp_path(out: &Path) -> PathBuf {
@@ -271,18 +290,23 @@ mod tests {
 
     #[test]
     fn failed_generator_skips_when_optional() {
-        let out = std::env::temp_dir().join(format!("craft-media-testkit-gen-opt-{}", std::process::id()));
-        let _ = std::fs::remove_file(&out);
+        let dir = private_dir("testkit-gen-opt");
+        let out = dir.join("fixture");
         assert!(fixtures::generate_with(&out, false, |_| false).is_none());
         assert!(!out.exists());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     #[should_panic(expected = "forbids skipping oracle tests")]
     fn failed_generator_fails_when_required() {
-        let out = std::env::temp_dir().join(format!("craft-media-testkit-gen-req-{}", std::process::id()));
-        let _ = std::fs::remove_file(&out);
-        let _ = fixtures::generate_with(&out, true, |_| false);
+        let dir = private_dir("testkit-gen-req");
+        let out = dir.join("fixture");
+        let result = std::panic::catch_unwind(|| fixtures::generate_with(&out, true, |_| false));
+        let _ = std::fs::remove_dir_all(&dir);
+        if let Err(panic) = result {
+            std::panic::resume_unwind(panic);
+        }
     }
 
     #[test]

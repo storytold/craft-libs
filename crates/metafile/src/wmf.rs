@@ -241,8 +241,9 @@ fn font(r: Bytes) -> Option<LogFont> {
     let name = r.0.get(24..).unwrap_or(&[]);
     let name = name.get(..32).unwrap_or(name);
     let name = name.split(|b| *b == 0).next().unwrap_or(&[]);
-    // Face names are plain ASCII in practice; other bytes go through the Western code page.
-    let (family, _) = decode_bytes(name, 0, &[]);
+    // A face name is in the font's own code page (East Asian fonts are often named in their
+    // script); a symbol font's name is not in symbol codes.
+    let (family, _) = decode_bytes(name, if charset == crate::SYMBOL_CHARSET { 0 } else { charset }, &[]);
     Some(LogFont {
         font: Font {
             family: family.trim().to_string(),
