@@ -229,7 +229,13 @@ fn card(frames: &mut Frames, spec: &Spec, options: &Options) -> (Option<Rect>, b
         Stack::new()
             .fill()
             .scroll(Scroll::vertical())
-            .show(ui, |ui, _| Grid::new(ONE).fill_width().show(ui, |ui, _| card.show(ui, cells).rect).inner.flatten())
+            .show(ui, |ui, _| {
+                // The card is the grid's one child, so the grid's rect is the card's.
+                let grid = Grid::new(ONE).fill_width().show(ui, |ui, _| {
+                    card.show(ui, cells);
+                });
+                grid.inner.map(|()| grid.output.rect)
+            })
             .inner
             .flatten()
     };
