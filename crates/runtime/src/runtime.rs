@@ -68,14 +68,14 @@ impl RuntimeBuilder {
         self
     }
 
+    // No `#[cfg(not(feature = "web"))]` fallback here on purpose (CodeRabbit finding on
+    // runtime.rs:79): one used to return `self` unchanged, so a caller that omitted the `web`
+    // feature and called this got a `Null` backend with no diagnostic at all -- build() would
+    // silently construct a `NullContext` for a caller that asked for wgpu. Omitting the method
+    // entirely makes that configuration a compile error instead of a silent downgrade.
     #[cfg(feature = "web")]
     pub fn wgpu_context(mut self) -> Self {
         self.backend = ContextBackend::Wgpu;
-        self
-    }
-
-    #[cfg(not(feature = "web"))]
-    pub fn wgpu_context(self) -> Self {
         self
     }
 
@@ -177,6 +177,24 @@ impl GpuContext for RuntimeContext {
             Self::Wgpu(c) => c.read_buffer(handle),
         }
     }
+
+    fn free_buffer(&mut self, handle: craft_gpu::HandleId) {
+        match self {
+            Self::Null(c) => c.free_buffer(handle),
+            #[cfg(feature = "web")]
+            Self::Wgpu(c) => c.free_buffer(handle),
+        }
+    }
+
+    // Forwarded explicitly, like read_buffer above: the trait's own default is always Ok(()),
+    // which would silently hide WgpuContext's real device-loss status behind this facade.
+    fn device_status(&self) -> Result<(), GpuFault> {
+        match self {
+            Self::Null(c) => c.device_status(),
+            #[cfg(feature = "web")]
+            Self::Wgpu(c) => c.device_status(),
+        }
+    }
 }
 
 /// Worker-side runtime: provider registry + GPU context + host RPC handling.
@@ -218,10 +236,7 @@ impl Runtime {
     /// Handle a single host → worker message; may produce zero or more replies.
     pub fn handle_host_message(&mut self, msg: HostMessage) -> Vec<WorkerMessage> {
         match msg {
-            HostMessage::Init { app_id, capabilities: _ } => {
-                self.app_id = Some(app_id);
-                vec![WorkerMessage::Ready { caps: self.ctx.caps() }]
-            }
+            HostMessage::Init { app_id, capabilities: _ } => self.handle_init(app_id),
             HostMessage::StoragePut { key, bytes } => self.handle_storage_put(key, bytes),
             HostMessage::StorageDelete { key } => {
                 self.mirror.delete(StoreKey::new(key));
@@ -241,6 +256,26 @@ impl Runtime {
             }
             HostMessage::Cancel { .. } => Vec::new(),
         }
+    }
+
+    /// CodeRabbit finding on runtime.rs:222: this `Runtime` holds one `MirrorStore`, with no
+    /// per-app partition inside it (the SharedWorker router partitions at that level instead;
+    /// see `assets/craft-worker-host-routing.js`). Accepting an `Init` for a second, different
+    /// app id on an already-initialized `Runtime` would keep the first app's mirror state
+    /// reachable, and writable, under the new app id. Rather than build an equivalent per-app
+    /// boundary inside `MirrorStore` for a case nothing here is meant to hit (one `Runtime` per
+    /// app, for the whole worker lifetime, per the documented message flow), this refuses the
+    /// change outright. An `Init` repeating the SAME app id is accepted: that is not a change.
+    fn handle_init(&mut self, app_id: String) -> Vec<WorkerMessage> {
+        if let Some(existing) = &self.app_id {
+            if existing != &app_id {
+                return vec![WorkerMessage::Error {
+                    message: format!("init: this runtime is already initialized for app {existing:?}; cannot switch to {app_id:?}"),
+                }];
+            }
+        }
+        self.app_id = Some(app_id);
+        vec![WorkerMessage::Ready { caps: self.ctx.caps() }]
     }
 
     /// Backpressure, never silent growth (RFC-0023 acceptance requirement 2): refuses a write
@@ -376,5 +411,17 @@ mod tests {
         assert_eq!(outcomes.len(), 1, "a's completion must survive b's read_buffer through RuntimeContext");
         assert_eq!(outcomes[0].request, request_a);
         assert_eq!(outcomes[0].result.as_deref(), Ok(b"aa".as_slice()));
+    }
+
+    /// GpuContext's free_buffer and device_status (new on the synced #663 carry) must reach the
+    /// active backend through RuntimeContext, not silently no-op behind the facade.
+    #[test]
+    fn runtime_context_forwards_free_buffer_and_device_status() {
+        let mut ctx = RuntimeContext::Null(NullContext::new(WorkerKind::Main));
+        assert_eq!(ctx.device_status(), Ok(()));
+
+        let handle = ctx.upload_buffer("a", b"aa").expect("upload a");
+        ctx.free_buffer(handle);
+        assert!(matches!(ctx.buffer_len(handle), Err(GpuFault::InvalidJob(_))), "a freed handle must behave as invalid through RuntimeContext");
     }
 }

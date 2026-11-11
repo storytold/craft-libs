@@ -302,3 +302,36 @@ fn gpu_batch_with_a_middle_failure_reports_per_job_results() {
     assert!(matches!(results[1], GpuJobResult::Failed { .. }), "job 2 must report failed, got {:?}", results[1]);
     assert!(matches!(results[2], GpuJobResult::Done { .. }), "job 3 must report done, got {:?}", results[2]);
 }
+
+/// CodeRabbit finding on runtime.rs:222: changing app_id on an already-initialized Runtime must
+/// not keep the first app's mirror state reachable under a different app id. The runtime
+/// refuses the switch outright; the first app's data must still be exactly what it was.
+#[test]
+fn init_with_a_different_app_id_is_refused_and_leaves_existing_storage_intact() {
+    let mut runtime = Runtime::builder().null_context().build();
+    runtime.handle_host_message(HostMessage::Init { app_id: "app-a".into(), capabilities: vec![] });
+    runtime.handle_host_message(HostMessage::StoragePut { key: "config/a".into(), bytes: b"app-a-data".to_vec() });
+
+    let reply = runtime.handle_host_message(HostMessage::Init { app_id: "app-b".into(), capabilities: vec![] });
+
+    assert!(matches!(reply.as_slice(), [WorkerMessage::Error { .. }]), "switching app id on an initialized runtime must be refused, got {reply:?}");
+    assert_eq!(
+        runtime.store_get(&StoreKey::new("config/a")).as_deref(),
+        Some(b"app-a-data".as_slice()),
+        "a refused app switch must not disturb the existing app's storage"
+    );
+}
+
+/// A repeated Init for the SAME app id is not a change, and must still succeed (idempotent).
+#[test]
+fn init_with_the_same_app_id_again_still_succeeds() {
+    let mut runtime = Runtime::builder().null_context().build();
+    assert!(matches!(
+        runtime.handle_host_message(HostMessage::Init { app_id: "app-a".into(), capabilities: vec![] }).as_slice(),
+        [WorkerMessage::Ready { .. }]
+    ));
+    assert!(matches!(
+        runtime.handle_host_message(HostMessage::Init { app_id: "app-a".into(), capabilities: vec![] }).as_slice(),
+        [WorkerMessage::Ready { .. }]
+    ));
+}
