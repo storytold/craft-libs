@@ -116,7 +116,9 @@ let left: &[f32] = &buf.channels[0];
 ```
 
 `decode` returns `TooLarge` above 2³⁰ samples (4 GiB of `f32`). `info.damaged` counts packets
-that were damaged and replaced by silence of their length.
+that were damaged and replaced by silence of their length. A FLAC frame whose checksum fails is
+dropped by the demuxer; the jump in the timestamps shows it, and the lost frames are silence too (one
+count per run of them), so the audio after them stays in place.
 
 ### Choose a track
 

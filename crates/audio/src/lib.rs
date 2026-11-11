@@ -337,7 +337,7 @@ pub struct AudioInfo {
     /// Broadcast Wave metadata from a WAV `bext` chunk.
     pub bwf: Option<BwfInfo>,
     /// Packets that were damaged or failed to decode and were replaced by concealment (silence of
-    /// their length), counted as audio is decoded: by [`decode`] for the whole file, and so far by
+    /// their length), and runs of FLAC frames lost to a failed checksum, counted as audio is decoded: by [`decode`] for the whole file, and so far by
     /// a [`Decoder`]. 0 from [`probe`] when it read only headers.
     pub damaged: u64,
 }
