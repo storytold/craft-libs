@@ -330,23 +330,14 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   (ruler, Tabs, Paragraph, Columns and Hyperlink dialogs, notes editor, find); `spell` and `find`
   (regex) are features.
 - [`craft-timeline`](crates/timeline/README.md): timelines: exact media time, frame rates,
-  timecode, the playback clock, a frame cache and frame server (egui-free); the timeline panel,
+  timecode, the playback clock, a frame cache and frame server, and editorial interchange (ALE,
+  CMX 3600 EDL, Final Cut Pro 7 XML, FCPXML, OpenTimelineIO), all egui-free; the timeline panel,
   ruler, clips, keyframe lanes, graph editor, transport, timecode fields, preview, overview and
   render queue (`ui` feature).
 - [`craft-metadata`](crates/metadata/README.md): photo metadata, from LightCraft: EXIF (read and write,
   maker-note lens and focus point, every tag by name), IPTC-IIM, XMP packets (read, write, and a merge
   that keeps what another program wrote), GPX track logs, and the blocks that carry them in JPEG, PNG,
   WebP, TIFF-based, RAF and CR3 files. One `Metadata` model for all of them. Built on `craft-tiff`.
-- `craft-ui`: the UI library on egui: runtime, style, fonts, primitives, the component contract, layout,
-  components (docking, dialogs, canvas, lists, text, menus and more), patterns and the shell. Assets, themes, localization and commands
-  stay in each app. Design and architecture in [docs/craft-framework.md](docs/craft-framework.md).
-  Requires Rust 1.95 or later.
-- [`craft-vcard`](crates/vcard/README.md): vCard contacts, from MailCraft: vCard 2.1, 3.0 and 4.0 read
-  (legacy character sets, quoted-printable, labels and Apple label groups, `KEY` certificates and
-  OpenPGP public keys), vCard 3.0 written. Bounded and panic-free on hostile input. The mapping onto
-  an app's contact type stays in each app.
-- `craft-ui-macros`: the derives and macros of `craft-ui` (`Component`, `Props`, `ComponentStyle`, `Pattern`,
-  `CommandSet`, words, stories and trials); use them through `craft-ui`.
 - [`craft-vectorcraft-format`](crates/vectorcraft-format/README.md): the envelope of VectorCraft's
   `.vectorcraft` file: its members, versions, embedded images and the data after the JSON, with the
   document as a type parameter. The document and its migrations stay in VectorCraft.
@@ -375,10 +366,47 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-xcf`](crates/xcf/README.md): GIMP XCF images (`.xcf`, `.xcf.gz`), read: header, properties, parasites, layers with their item paths, channels, and tiled pixels (uncompressed, RLE, zlib) at every precision, under a caller's byte budget. From PhotoCraft.
 - [`craft-xml`](crates/xml/README.md): bounded XML for hostile input: an owned element tree with limits on size, depth, nodes and attributes, streaming of repeated elements, namespace handling (as written, by local name, or canonical prefixes by URI), escaping and a writer. No DTDs and no entity expansion.
 - [`craft-zip`](crates/zip/README.md): ZIP archives from untrusted files: an entry-count check before the archive is indexed (ZIP64 included), entry reads within per-entry and total budgets that count real bytes, duplicate-name detection, a strict structure preflight, and a deterministic stored/deflate writer. The shared ZIP layer for the package formats.
+
+## Craft framework
+
+The shared UI layer of the Craft apps: the design system, the UI library on egui, the host convention and the
+feature families above. Assets, localization and commands stay in each app. Requires Rust 1.95 or later. Design and
+architecture: [docs/craft-framework.md](docs/craft-framework.md).
+
+- [`craft`](crates/craft/README.md): the facade: one dependency, one pin and one import root for an app, with a
+  feature per crate.
+- `craft-ui`: the UI library's facade, which re-exports its six crates under one root (`craft_ui::…`):
+  - `craft-ui-contract`: runtime, style, fonts, primitives, the component contract, layout and the test kit;
+  - `craft-ui-widgets`: the components (buttons, choices, fields, lists, menus, pickers, tabs, tables, bars);
+  - `craft-ui-panels`: sections, dialogs, docking and rails;
+  - `craft-ui-canvas`: the canvas, its tools and controls, and the full-window dialogs;
+  - `craft-ui-patterns`: ready-made dialogs, presets, preferences and dock areas;
+  - `craft-ui-shell`: the app shell, the title bar and the eframe entry point.
+- [`craft-vcard`](crates/vcard/README.md): vCard contacts, from MailCraft: vCard 2.1, 3.0 and 4.0 read
+  (legacy character sets, quoted-printable, labels and Apple label groups, `KEY` certificates and
+  OpenPGP public keys), vCard 3.0 written. Bounded and panic-free on hostile input. The mapping onto
+  an app's contact type stays in each app.
+- `craft-ui-macros`: the derives and macros of the library (`Component`, `Props`, `ComponentStyle`, `Pattern`,
+  `CommandSet`, words, stories and trials); use them through `craft-ui`.
+- `craft-behavior`: the behaviour cores with no egui: press lifecycle, value drags, navigation, item layouts, edit
+  events and the dock model.
+- [`craft-theme`](crates/theme/README.md) and [`craft-theme-store`](crates/theme-store/README.md): the token model,
+  the built-in themes and the suite's theme selection ([docs/suite-themes.md](docs/suite-themes.md)).
+- [`craft-host`](crates/host/README.md): the services an app installs once and every feature reads.
+- `craft-win32`: the Win32 calls that need `unsafe`, behind a safe API; the one crate that allows `unsafe`.
+- Tools, not shipped in apps: `craft-ui-gallery` (the story viewer), `story-render` (one component's stories to
+  PNG files), [`craft-design-lint`](crates/design-lint/README.md), `craft-ui-bench`, `craft-ui-test-kit`.
+
+Framework docs:
+
+- [Craft framework](docs/craft-framework.md): the design, installation, architecture, design system, foundations,
+  components, accessibility, tests, and the migration and landing plan.
+- [Development workflow](docs/development.md): the `cl` commands, the one fixed feature set, what not to run
+  locally, CI coverage, the profiles, the job pool and what a new worktree's first build costs.
+- [Writing a component](docs/authoring.md), the [component index](docs/components-index.md), the
+  [contract API](docs/contract-api.md) and the [glossary](docs/glossary.md).
 - [Docking](docs/ui-docking.md): the dock model, `DockArea`, `SplitArea` and `PaneArea`.
 - [Dialogs](docs/ui-dialogs.md): `Dialog`, `DialogHost`, the dialog stack and the standard prompts.
-- [Craft framework](docs/craft-framework.md): the design, installation, architecture, design system, foundations, components, accessibility, tests, and the migration and landing plan
-- [Development workflow](docs/development.md): the `cl` commands, the one fixed feature set, what not to run locally, the profiles, the job pool and what a new worktree's first build costs
 
 ## License and credits
 
