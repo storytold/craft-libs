@@ -5,22 +5,30 @@ use crate::contract::values::reuse_arc;
 use crate::contract::{Component, ValueOf};
 use crate::runtime::commands::{CommandKind, ResolvedCommand};
 use crate::runtime::memory::MemoryStage;
+use crate::runtime::motion::StateTweens;
 use craft_behavior::{CancelReason, EditEvent, Gesture, Mixed, Value};
 use egui::{Context, Id};
 use std::sync::Arc;
 
-/// The shown copy of a component's value, in shown memory.
-pub(crate) struct ShownCopy<V>(pub Option<Arc<V>>);
+/// What a component showed last pass, in one shown slot under its id: the shown copy of its value, the pass its value
+/// step last ran in, the `(hovered, focus_visible)` that `PartsCx::hovered` and `focus_visible` read, and its eased
+/// hover, press and on.
+pub(crate) struct Shown<V> {
+    pub copy: Option<Arc<V>>,
+    pub drawn: u64,
+    pub last_state: (bool, bool),
+    pub tweens: Option<StateTweens>,
+}
 
-impl<V> Clone for ShownCopy<V> {
+impl<V> Clone for Shown<V> {
     fn clone(&self) -> Self {
-        ShownCopy(self.0.clone())
+        Shown { copy: self.copy.clone(), drawn: self.drawn, last_state: self.last_state, tweens: self.tweens.clone() }
     }
 }
 
-impl<V> Default for ShownCopy<V> {
+impl<V> Default for Shown<V> {
     fn default() -> Self {
-        ShownCopy(None)
+        Shown { copy: None, drawn: 0, last_state: (false, false), tweens: None }
     }
 }
 
@@ -47,23 +55,19 @@ fn command_given<V: Value>(command: Option<&ResolvedCommand>) -> Option<V> {
     (&checked as &dyn std::any::Any).downcast_ref::<V>().cloned()
 }
 
-/// The pass a component's value step last ran in.
-#[derive(Clone, Default)]
-struct LastDrawn(u64);
-
 /// Step 4, value: the shown value is the running gesture's proposal, else the binding's value. The one shown copy is
 /// replaced only when the binding differs from it. A gesture ends here when `cancel_all` ran, or when the app changed the
 /// value under it.
 pub(crate) fn value<C: Component>(comp: &mut C, stage: &mut MemoryStage, id: Id, command: Option<&ResolvedCommand>) -> ValueStep<ValueOf<C>> {
     type V<C> = ValueOf<C>;
-    let held = stage.shown::<ShownCopy<V<C>>>(id).0.clone();
+    let held = stage.shown::<Shown<V<C>>>(id).copy.clone();
     let slot = gesture_key(id);
     let (serial, all_reason) = crate::runtime::edit::latest(stage.ctx());
     let mut cancelled = None;
     // A component not drawn for a pass loses its press at the end hook; its running gesture ends here, the first pass it is
     // drawn again.
     let pass_nr = crate::runtime::pointer::pass_of(stage.ctx());
-    let removed = std::mem::replace(&mut stage.shown::<LastDrawn>(slot).0, pass_nr).saturating_add(1) < pass_nr;
+    let removed = std::mem::replace(&mut stage.shown::<Shown<V<C>>>(id).drawn, pass_nr).saturating_add(1) < pass_nr;
     if stage.shown::<Gesture<V<C>>>(slot).is_running() {
         // `(given, value)` of a single-valued binding the app owns.
         let host = comp.bind().and_then(|bind| match bind.get() {
@@ -119,7 +123,7 @@ pub(crate) fn value<C: Component>(comp: &mut C, stage: &mut MemoryStage, id: Id,
         }
         (None, None) => out.value = command_given::<V<C>>(command).map(|value| reuse_arc(&held, &value)),
     }
-    let shown = &mut stage.shown::<ShownCopy<V<C>>>(id).0;
+    let shown = &mut stage.shown::<Shown<V<C>>>(id).copy;
     let same = match (&*shown, &out.value) {
         (Some(a), Some(b)) => Arc::ptr_eq(a, b),
         (None, None) => true,
@@ -135,7 +139,7 @@ pub(crate) fn value<C: Component>(comp: &mut C, stage: &mut MemoryStage, id: Id,
 /// shown memory.
 /// Returns the value and whether the binding is mixed.
 pub(crate) fn peek_value<C: Component>(comp: &mut C, ctx: &Context, id: Id, command: Option<&ResolvedCommand>) -> (Option<Arc<ValueOf<C>>>, bool) {
-    let held = MemoryStage::peek::<ShownCopy<ValueOf<C>>>(ctx, id).0;
+    let held = MemoryStage::peek::<Shown<ValueOf<C>>>(ctx, id).copy;
     let Some(bind) = comp.bind() else {
         let given = command_given::<ValueOf<C>>(command).map(|value| reuse_arc(&held, &value));
         return (given.or(held), false);

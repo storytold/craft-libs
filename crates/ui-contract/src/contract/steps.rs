@@ -39,11 +39,11 @@ pub(crate) use scroll_owner::queue_reveal;
 pub(crate) use scroll_owner::{peek_reveal, peek_scroll_moves, take_reveal, take_scroll_moves};
 pub(crate) use sense::{part_state, register_wheel};
 pub(crate) use settle::settle;
-pub(crate) use state::{LastState, register_reset, state};
+pub(crate) use state::{register_reset, state};
 pub(crate) use stops::{StopsIn, body_group, join_group, member_group, register_stops, takes_focus};
 pub(crate) use style::{style, style_cx};
 pub(crate) use update::{after_update, edit_intents, gesture_gate, key_activation, record_context, takes_activation, update_inputs};
-pub(crate) use value::{peek_value, value};
+pub(crate) use value::{Shown, peek_value, value};
 
 /// The 17 steps of the pipeline, in order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

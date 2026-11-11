@@ -1,10 +1,10 @@
 //! Step 12, state: flags, eased state and the reset a control registers with its label.
 
 use super::paint::surface_ink;
+use super::value::Shown;
 use crate::contract::cx::CxCore;
-use crate::contract::{Component, Cx, Validity};
+use crate::contract::{Component, Cx, Validity, ValueOf};
 use crate::runtime::access::scope;
-use crate::runtime::memory::sub;
 use crate::runtime::motion::{Drives as _, spec};
 use crate::style::{ComponentStyle, Flags, Ink, StateSet};
 use craft_behavior::Input;
@@ -20,18 +20,16 @@ pub(crate) fn register_reset<C: Component>(comp: &mut C, cx: &Cx<'_, C>) {
     scope::register_reset(&cx.core.ctx, cx.core.id, differs);
 }
 
-/// The `(hovered, focus_visible)` a component showed last pass, which `PartsCx::hovered` and `focus_visible` read.
-#[derive(Clone, Copy, Default)]
-pub(crate) struct LastState(pub bool, pub bool);
-
-/// The eased hover, press and on values of a component; a face shows its targets.
-fn ease(core: &CxCore<'_>, targets: [bool; 3]) -> StateMix {
+/// The eased hover, press and on values of a component, kept in its `Shown` record; a face shows its targets.
+fn ease<C: Component>(core: &mut CxCore<'_>, targets: [bool; 3]) -> StateMix {
     let [hover, press, on] = targets;
     if core.face_mode {
         return StateMix::new(f32::from(u8::from(hover)), f32::from(u8::from(press)), f32::from(u8::from(on)));
     }
-    let driver = core.driver();
-    let [hover, press, on] = driver.state_anims([hover, press, on], [spec::HOVER, spec::HOVER, spec::CHECK]);
+    let id = core.id;
+    let mut tweens = core.memory.shown::<Shown<ValueOf<C>>>(id).tweens.take();
+    let [hover, press, on] = core.driver().state_anims(&mut tweens, [hover, press, on], [spec::HOVER, spec::HOVER, spec::CHECK]);
+    core.memory.shown::<Shown<ValueOf<C>>>(id).tweens = tweens;
     StateMix::new(hover, press, on)
 }
 
@@ -79,8 +77,7 @@ pub(crate) fn state<C: Component>(comp: &C, cx: &mut Cx<'_, C>, open: bool, expa
     if visible {
         flags |= Flags::FOCUS_VISIBLE;
     }
-    let id = core.id;
-    *core.memory.shown::<LastState>(sub(id, "last_state")) = LastState(hovered, visible);
+    core.memory.shown::<Shown<ValueOf<C>>>(core.id).last_state = (hovered, visible);
     let state = if !core.resolved.enabled {
         State::Disabled
     } else if pressed || flags.contains(Flags::OPEN) {
@@ -90,7 +87,7 @@ pub(crate) fn state<C: Component>(comp: &C, cx: &mut Cx<'_, C>, open: bool, expa
     } else {
         State::Rest
     };
-    let t = ease(core, [hovered, pressed, flags.intersects(Flags::ON)]);
+    let t = ease::<C>(core, [hovered, pressed, flags.intersects(Flags::ON)]);
     core.state = StateSet::new(state, flags, t);
     core.ink = surface_ink(cx.style.surface(), &core.state, inherited);
     core.stated = true;

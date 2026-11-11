@@ -261,7 +261,7 @@ pub(crate) fn layer_presence(ctx: &Context, base: Id, owner: Id, policy: MotionP
 
 /// The hover, press and on tweens of one component.
 #[derive(Clone)]
-struct StateTweens([Tween<f32>; 3]);
+pub(crate) struct StateTweens([Tween<f32>; 3]);
 
 /// Everything an `Animate` call needs from the context type that makes it.
 pub(crate) struct Driver<'a> {
@@ -270,43 +270,23 @@ pub(crate) struct Driver<'a> {
     pub(crate) policy: MotionPolicy,
 }
 
-/// Whose animation a slot is: a component's own `anim` names, or the pipeline's state mix. The lanes never share
-/// a slot, whatever the names.
-#[derive(Clone, Copy, Debug)]
-enum Lane {
-    Author,
-    Pipeline,
-}
-
 impl Driver<'_> {
-    fn slot(&self, lane: Lane, name: &'static str) -> Id {
-        match lane {
-            Lane::Author => memory::sub(self.base, ("anim", name)),
-            Lane::Pipeline => memory::sub(self.base, ("state-anim", name)),
-        }
+    /// The slot of a component's own `anim` name.
+    fn slot(&self, name: &'static str) -> Id {
+        memory::sub(self.base, ("anim", name))
     }
 
     pub(crate) fn anim<T: Interpolate>(&self, name: &'static str, target: T, spec: MotionSpec) -> T {
-        self.run(Lane::Author, name, target, spec)
+        self.run(name, target, spec)
     }
 
-    /// The pipeline's state values (`hover`, `press`, `on`) in one slot of the pipeline lane: one clock read and one
-    /// context round trip for the three tweens.
-    pub(crate) fn state_anims(&self, targets: [bool; 3], specs: [MotionSpec; 3]) -> [f32; 3] {
+    /// The pipeline's state values (`hover`, `press`, `on`), stepped in `tweens`, which the component's `Shown`
+    /// record keeps; `None` the first pass, which starts at the targets. A sizing pass's stage keeps nothing, so it
+    /// steps a copy.
+    pub(crate) fn state_anims(&self, tweens: &mut Option<StateTweens>, targets: [bool; 3], specs: [MotionSpec; 3]) -> [f32; 3] {
         let ctx = self.stage.ctx();
-        let id = self.slot(Lane::Pipeline, "state");
-        let sizing = self.stage.is_peek();
         let now = frame::clock(ctx);
-        let existing = if sizing { store::peek_clone::<StateTweens>(ctx, id) } else { store::take::<StateTweens>(ctx, id) };
-        let mut tweens = match existing {
-            Some(tweens) => tweens,
-            None => {
-                if !sizing {
-                    memory::adopt::<StateTweens>(ctx, self.stage.owner(), id);
-                }
-                StateTweens(targets.map(|on| Tween::at(f32::from(u8::from(on)))))
-            }
-        };
+        let tweens = tweens.get_or_insert_with(|| StateTweens(targets.map(|on| Tween::at(f32::from(u8::from(on))))));
         let mut shown = [0.0; 3];
         for (at, tween) in tweens.0.iter_mut().enumerate() {
             let target = f32::from(u8::from(targets[at]));
@@ -320,20 +300,17 @@ impl Driver<'_> {
             }
             shown[at] = tween.shown();
         }
-        if !sizing {
-            if tweens.0.iter().any(|tween| !tween.is_settled()) {
-                note_unsettled(ctx);
-            }
-            store::put(ctx, id, tweens);
+        if !self.stage.is_peek() && tweens.0.iter().any(|tween| !tween.is_settled()) {
+            note_unsettled(ctx);
         }
         shown
     }
 
     /// A sizing pass evaluates a copy and stores nothing: it must not retarget a running tween or adopt a slot
     /// for an owner that registers no pass.
-    fn run<T: Interpolate>(&self, lane: Lane, name: &'static str, target: T, spec: MotionSpec) -> T {
+    fn run<T: Interpolate>(&self, name: &'static str, target: T, spec: MotionSpec) -> T {
         let ctx = self.stage.ctx();
-        let id = self.slot(lane, name);
+        let id = self.slot(name);
         let sizing = self.stage.is_peek();
         let now = frame::clock(ctx);
         let existing = if sizing { store::peek_clone::<Tween<T>>(ctx, id) } else { store::take::<Tween<T>>(ctx, id) };
@@ -379,7 +356,7 @@ impl Driver<'_> {
             return;
         }
         let ctx = self.stage.ctx();
-        let id = self.slot(Lane::Author, name);
+        let id = self.slot(name);
         if store::peek_clone::<Tween<T>>(ctx, id).is_none() {
             memory::adopt::<Tween<T>>(ctx, self.stage.owner(), id);
         }

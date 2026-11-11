@@ -641,7 +641,7 @@ fn run_in_host<C: Component>(p: &mut Pass<'_, '_, C>, ui: &mut Ui, host_at: Opti
     // A component that declares no parts skips the step; a debug build runs it anyway to check the declaration.
     let declares_parts = C::PARTS || p.hooks.declares_parts();
     if !inert && (declares_parts || cfg!(debug_assertions)) {
-        let last = *cx.core.memory.shown::<steps::LastState>(sub(id, "last_state"));
+        let last = cx.core.memory.shown::<steps::Shown<ValueOf<C>>>(id).last_state;
         let input = MeasureIn { ui: &*ui, env, proposal: Proposal::Ideal, room: p.room };
         let measure = steps::measure_cx::<C>(&input, p.style, resolved, cx.shown.as_deref());
         let mut pcx = PartsCx {
@@ -651,7 +651,7 @@ fn run_in_host<C: Component>(p: &mut Pass<'_, '_, C>, ui: &mut Ui, host_at: Opti
             rovings: &mut parts.rovings,
             scrolls: &mut parts.scrolls,
             text: &mut parts.text,
-            last_state: (last.0, last.1),
+            last_state: last,
             measure,
             items: p.hooks.geometry(comp, flow.inset(metrics.padding), rtl),
         };
