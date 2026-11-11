@@ -88,6 +88,8 @@ fn esc(s: &str) -> String {
             '>' => o.push_str("&gt;"),
             '"' => o.push_str("&quot;"),
             '\'' => o.push_str("&apos;"),
+            // XML 1.0 forbids these (C0 controls, U+FFFE, U+FFFF), even escaped
+            c if !craft_xml::is_xml_char(c) => {}
             c => o.push(c),
         }
     }
