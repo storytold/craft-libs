@@ -384,6 +384,12 @@ pub(crate) fn verify_job_options(xml: &str, job: &Job, pages: usize, offered: Of
         let duplex_options = [option("JobDuplexAllDocumentsContiguously"), option("DocumentDuplex")];
         let retained = duplex_options.iter().any(Option::is_some) && duplex_options.into_iter().flatten().all(|n| named(n, wanted));
         if !one_sided_only && !retained {
+            // A printer with no duplex feature never had two-sided to drop (storytold/pdfcraft#6959).
+            if duplex != Duplex::Off && offered.duplex == Some(false) {
+                return Err(spool_error(
+                    "this printer can't print two-sided; nothing was sent (choose a printer that can, or set Two-sided to Off or Printer default)",
+                ));
+            }
             return Err(refused("simplex/duplex setting"));
         }
     }
@@ -1017,8 +1023,19 @@ mod tests {
         assert!(verify_job_options(&kept, &one_sided, 3, offered(true)).is_ok());
         // Offered but the ticket lost it: the driver dropped the choice.
         assert!(verify_job_options(&none_kept, &one_sided, 3, offered(true)).is_err());
-        // Two-sided never rests on the missing feature.
-        assert!(verify_job_options(&none_kept, &two_sided, 3, offered(false)).is_err());
+        // Two-sided never rests on the missing feature, and the refusal says the printer can't do
+        // it rather than that the driver dropped it (storytold/pdfcraft#6959).
+        let cant = verify_job_options(&none_kept, &two_sided, 3, offered(false)).unwrap_err().to_string();
+        assert!(cant.contains("can't print two-sided"), "{cant}");
+        let short = Job { duplex: Some(Duplex::ShortEdge), ..Job::default() };
+        let cant = verify_job_options(&none_kept, &short, 3, offered(false)).unwrap_err().to_string();
+        assert!(cant.contains("can't print two-sided"), "{cant}");
+        // A driver that offers two-sided and drops it is still the driver's doing.
+        let dropped = verify_job_options(&none_kept, &two_sided, 3, offered(true)).unwrap_err().to_string();
+        assert!(dropped.contains("did not retain"), "{dropped}");
+        // Unknown capabilities keep the general message.
+        let unknown = verify_job_options(&none_kept, &two_sided, 3, Offered::default()).unwrap_err().to_string();
+        assert!(unknown.contains("did not retain"), "{unknown}");
         // Unknown capabilities stay strict.
         assert!(verify_job_options(&none_kept, &one_sided, 3, Offered::default()).is_err());
         // The other options are still checked on a simplex-only queue.
