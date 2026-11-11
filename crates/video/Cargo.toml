@@ -17,6 +17,10 @@ workspace = true
 # Every codec feature turns on one codec module; none is on by default.
 # DNxHD / DNxHR (SMPTE ST 2019-1): decoder and encoder.
 dnx = []
+# APV (Advanced Professional Video, RFC 9924): decoder and encoder; `apv-decode` or `apv-encode` for one of them.
+apv = ["apv-decode", "apv-encode"]
+apv-decode = ["craft-media/bitstream"]
+apv-encode = ["craft-media/bitstream"]
 # VP8 (RFC 6386): decoder.
 vp8 = []
 # Apple ProRes (SMPTE RDD 36): decoder and encoder.
@@ -49,6 +53,10 @@ craft-media-testkit = { workspace = true }
 [[test]]
 name = "dnx"
 required-features = ["dnx"]
+
+[[test]]
+name = "apv"
+required-features = ["apv"]
 
 [[test]]
 name = "vp8"
@@ -89,3 +97,11 @@ required-features = ["vp9-decode"]
 [[test]]
 name = "prores"
 required-features = ["prores"]
+
+[[test]]
+name = "hevc"
+required-features = ["hevc-encode"]
+
+[[test]]
+name = "av1"
+required-features = ["av1"]
