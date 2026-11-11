@@ -13,7 +13,9 @@ use craft_gpu::{DeviceCaps, GpuContext, GpuFault, HandleId, ReadOutcome, ReadReq
 pub struct NullContext {
     caps: DeviceCaps,
     worker_kind: WorkerKind,
-    buffers: Vec<Vec<u8>>,
+    /// `None` means freed (or never allocated): handles are stable indices into this Vec, so a
+    /// freed slot cannot simply be removed without shifting every later handle's index.
+    buffers: Vec<Option<Vec<u8>>>,
     next_request: u64,
     ready: Vec<ReadOutcome>,
 }
@@ -41,16 +43,16 @@ impl GpuContext for NullContext {
 
     fn upload_buffer(&mut self, _label: &str, bytes: &[u8]) -> Result<HandleId, GpuFault> {
         let id = HandleId(u32::try_from(self.buffers.len()).map_err(|_| GpuFault::Operation("too many buffers".into()))?);
-        self.buffers.push(bytes.to_vec());
+        self.buffers.push(Some(bytes.to_vec()));
         Ok(id)
     }
 
     fn buffer_len(&self, handle: HandleId) -> Result<usize, GpuFault> {
-        self.buffers.get(handle.0 as usize).map(|b| b.len()).ok_or_else(|| GpuFault::InvalidJob("bad handle".into()))
+        self.buffers.get(handle.0 as usize).and_then(Option::as_ref).map(Vec::len).ok_or_else(|| GpuFault::InvalidJob("bad handle".into()))
     }
 
     fn request_read(&mut self, handle: HandleId) -> Result<ReadRequest, GpuFault> {
-        let bytes = self.buffers.get(handle.0 as usize).cloned().ok_or_else(|| GpuFault::InvalidJob("bad handle".into()))?;
+        let bytes = self.buffers.get(handle.0 as usize).and_then(Option::as_ref).cloned().ok_or_else(|| GpuFault::InvalidJob("bad handle".into()))?;
         let request = ReadRequest(self.next_request);
         self.next_request = self.next_request.wrapping_add(1);
         self.ready.push(ReadOutcome { request, handle, result: Ok(bytes) });
@@ -68,14 +70,21 @@ impl GpuContext for NullContext {
             None => Err(GpuFault::Operation("request_read did not resolve synchronously".into())),
         }
     }
+
+    /// Replaces the slot with `None` rather than removing it: handles are stable indices, and
+    /// removing would shift every later handle's index out from under its caller.
+    fn free_buffer(&mut self, handle: HandleId) {
+        if let Some(slot) = self.buffers.get_mut(handle.0 as usize) {
+            *slot = None;
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use craft_gpu::GpuContext;
+    use craft_gpu::{GpuContext, GpuFault, HandleId, WorkerKind};
 
     use super::NullContext;
-    use craft_gpu::WorkerKind;
 
     #[test]
     fn request_read_then_poll_reads_delivers_the_same_bytes_as_read_buffer() {
@@ -115,5 +124,33 @@ mod tests {
         let handle = ctx.upload_buffer("empty", b"").expect("upload empty");
         assert_eq!(ctx.buffer_len(handle).expect("buffer_len"), 0);
         assert_eq!(ctx.read_buffer(handle).expect("read_buffer"), Vec::<u8>::new());
+    }
+
+    /// CodeRabbit finding on gpu-wgpu/src/lib.rs:313: nothing released an uploaded buffer's
+    /// resources, so a backend's buffer table could only ever grow. free_buffer must actually
+    /// reclaim the payload and make the handle behave as invalid afterward, not just forget it
+    /// exists while still holding its bytes.
+    #[test]
+    fn free_buffer_invalidates_the_handle_and_does_not_shift_other_handles() {
+        let mut ctx = NullContext::new(WorkerKind::Main);
+        let a = ctx.upload_buffer("a", b"aa").expect("upload a");
+        let b = ctx.upload_buffer("b", b"bb").expect("upload b");
+
+        ctx.free_buffer(a);
+
+        assert!(matches!(ctx.buffer_len(a), Err(GpuFault::InvalidJob(_))), "a freed handle must behave as invalid");
+        assert_eq!(ctx.buffer_len(b).expect("b must be unaffected by freeing a"), 2);
+        assert_eq!(ctx.read_buffer(b).expect("read_buffer b"), b"bb".to_vec(), "b's own index must not have shifted");
+    }
+
+    /// Freeing a handle twice, or a handle that never existed, is a no-op: callers are not
+    /// expected to track whether they already freed one.
+    #[test]
+    fn free_buffer_is_a_harmless_no_op_when_repeated_or_given_an_unknown_handle() {
+        let mut ctx = NullContext::new(WorkerKind::Main);
+        let a = ctx.upload_buffer("a", b"aa").expect("upload a");
+        ctx.free_buffer(a);
+        ctx.free_buffer(a); // already freed
+        ctx.free_buffer(HandleId(999)); // never existed
     }
 }

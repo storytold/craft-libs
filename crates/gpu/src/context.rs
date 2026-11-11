@@ -75,7 +75,32 @@ pub trait GpuContext {
     /// fault surfaces for callers that are polling rather than issuing buffer calls. A context
     /// that resolves reads synchronously (the null context; native wgpu with no device) may
     /// resolve a request on the very next call after [`request_read`](Self::request_read).
+    ///
+    /// This can only attach a device-lost fault to a read it has something to attach it to: when
+    /// nothing is outstanding, there is no [`ReadOutcome`] to fabricate one onto. A caller whose
+    /// event loop only polls, with no buffer calls and no outstanding read, uses
+    /// [`device_status`](Self::device_status) for that gap.
     fn poll_reads(&mut self) -> Vec<ReadOutcome>;
+
+    /// Device loss observable independent of any specific read or buffer call, covering the gap
+    /// [`poll_reads`](Self::poll_reads) has when nothing is outstanding to attach the fault to.
+    /// The default is `Ok(())`: correct for any backend with no concept of device loss (the null
+    /// context; the staging/no-device path here). A backend that can lose a device overrides
+    /// this to report it.
+    fn device_status(&self) -> Result<(), GpuFault> {
+        Ok(())
+    }
+
+    /// Release a previously uploaded buffer's resources. A no-op, not an error, for a handle
+    /// that is already invalid or was already freed: callers are never required to track
+    /// whether they already freed one. A freed handle behaves as invalid afterward (the same
+    /// fault a never-issued handle would produce) from every other method on this trait.
+    ///
+    /// Without this, a backend's buffer table -- and the memory behind it -- can only ever grow
+    /// for the context's lifetime: every `upload_buffer`, and every output buffer a provider's
+    /// job creates, adds an entry nothing removes. Repeated jobs then retain GPU (or host, for
+    /// the null context) memory long after every caller is done with every handle it created.
+    fn free_buffer(&mut self, handle: HandleId);
 
     /// Blocking convenience for callers that need bytes now, such as the CPU-stand-in providers
     /// in `craft-gpu-providers`. The default drains [`request_read`](Self::request_read) and

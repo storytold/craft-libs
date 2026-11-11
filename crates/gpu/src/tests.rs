@@ -7,7 +7,9 @@ use crate::{
 
 struct MemContext {
     caps: DeviceCaps,
-    buffers: Vec<Vec<u8>>,
+    /// `None` means freed (or never allocated): handles are stable indices, so a freed slot
+    /// cannot simply be removed without shifting every later handle's index.
+    buffers: Vec<Option<Vec<u8>>>,
     next_request: u64,
     ready: Vec<ReadOutcome>,
 }
@@ -23,16 +25,16 @@ impl GpuContext for MemContext {
 
     fn upload_buffer(&mut self, _label: &str, bytes: &[u8]) -> Result<HandleId, GpuFault> {
         let id = HandleId(u32::try_from(self.buffers.len()).map_err(|_| GpuFault::Operation("too many buffers".into()))?);
-        self.buffers.push(bytes.to_vec());
+        self.buffers.push(Some(bytes.to_vec()));
         Ok(id)
     }
 
     fn buffer_len(&self, handle: HandleId) -> Result<usize, GpuFault> {
-        self.buffers.get(handle.0 as usize).map(|b| b.len()).ok_or_else(|| GpuFault::InvalidJob("bad handle".into()))
+        self.buffers.get(handle.0 as usize).and_then(Option::as_ref).map(Vec::len).ok_or_else(|| GpuFault::InvalidJob("bad handle".into()))
     }
 
     fn request_read(&mut self, handle: HandleId) -> Result<ReadRequest, GpuFault> {
-        let bytes = self.buffers.get(handle.0 as usize).cloned().ok_or_else(|| GpuFault::InvalidJob("bad handle".into()))?;
+        let bytes = self.buffers.get(handle.0 as usize).and_then(Option::as_ref).cloned().ok_or_else(|| GpuFault::InvalidJob("bad handle".into()))?;
         let request = ReadRequest(self.next_request);
         self.next_request = self.next_request.wrapping_add(1);
         self.ready.push(ReadOutcome { request, handle, result: Ok(bytes) });
@@ -41,6 +43,12 @@ impl GpuContext for MemContext {
 
     fn poll_reads(&mut self) -> Vec<ReadOutcome> {
         std::mem::take(&mut self.ready)
+    }
+
+    fn free_buffer(&mut self, handle: HandleId) {
+        if let Some(slot) = self.buffers.get_mut(handle.0 as usize) {
+            *slot = None;
+        }
     }
 }
 

@@ -175,6 +175,103 @@ fn staging_read_buffer_keeps_another_outstanding_requests_completion_queued() {
     assert_eq!(outcomes[0].result.as_deref(), Ok(b"aa".as_slice()));
 }
 
+/// CodeRabbit finding on lib.rs:228: if `request_adapter` succeeds but `request_device` fails,
+/// the fallback must be the conservative fixed value, never a second, successful `probe_caps()`
+/// adapter query -- which would report the adapter's advertised limits as if they came from a
+/// granted device, for a context that holds none. Forcing `request_device` itself to fail is
+/// hardware-dependent and not reliably reproducible in CI, so this tests the fallback value
+/// `WgpuContext::new` falls back to directly: it must be the plain, fixed value, never one that
+/// looks like a real probe result.
+#[test]
+fn the_no_device_fallback_caps_are_the_plain_fixed_value_not_a_probe_result() {
+    let caps = crate::probe_fallback("wgpu", "no-device");
+    assert_eq!(caps.backend_name, "wgpu");
+    assert_eq!(caps.device_name, "no-device");
+    assert_eq!(caps, craft_gpu::DeviceCaps { backend_name: "wgpu".into(), device_name: "no-device".into(), ..craft_gpu::DeviceCaps::default() });
+}
+
+/// CodeRabbit finding on lib.rs:299: an allocation failure used to be able to reach wgpu's
+/// default uncaptured-error handler, which panics. An error scope around buffer creation now
+/// converts that into a `GpuFault` instead. A genuine out-of-memory condition is not reliably
+/// reproducible in CI (it depends on how much free VRAM the host actually has), so this is the
+/// regression half: the added error scope must not misfire on an entirely ordinary allocation.
+#[test]
+fn upload_buffer_succeeds_normally_with_the_allocation_error_scope_in_place() {
+    let Some(mut ctx) = real_context_or_skip("upload_buffer_succeeds_normally_with_the_allocation_error_scope_in_place") else {
+        return;
+    };
+    let handle = ctx.upload_buffer("scope-regression", b"ok").expect("a normal allocation must not report a false allocation error");
+    assert_eq!(ctx.read_buffer(handle).expect("read back"), b"ok".to_vec());
+}
+
+/// CodeRabbit finding on lib.rs:313: nothing released an uploaded buffer's resources, so the
+/// buffer table (and the GPU memory behind it) could only ever grow. free_buffer must actually
+/// make the handle behave as invalid afterward, and must not disturb any other handle's index.
+#[test]
+fn staging_free_buffer_invalidates_the_handle_without_shifting_others() {
+    let mut ctx = WgpuContext::with_caps(WorkerKind::Main, craft_gpu::DeviceCaps::default());
+    let a = ctx.upload_buffer("a", b"aa").expect("upload a");
+    let b = ctx.upload_buffer("b", b"bb").expect("upload b");
+
+    ctx.free_buffer(a);
+
+    assert!(matches!(ctx.buffer_len(a), Err(craft_gpu::GpuFault::InvalidJob(_))), "a freed handle must behave as invalid");
+    assert_eq!(ctx.read_buffer(b).expect("b must be unaffected by freeing a"), b"bb".to_vec());
+}
+
+/// The same guarantee on a real device: freeing one handle must not disturb another's index or
+/// its own buffer.
+#[test]
+fn real_device_free_buffer_invalidates_the_handle_without_shifting_others() {
+    let Some(mut ctx) = real_context_or_skip("real_device_free_buffer_invalidates_the_handle_without_shifting_others") else {
+        return;
+    };
+    let a = ctx.upload_buffer("a", b"aa").expect("upload a");
+    let b = ctx.upload_buffer("b", b"bb").expect("upload b");
+
+    ctx.free_buffer(a);
+
+    assert!(matches!(ctx.buffer_len(a), Err(craft_gpu::GpuFault::InvalidJob(_))), "a freed handle must behave as invalid on a real device too");
+    assert_eq!(ctx.read_buffer(b).expect("b must be unaffected by freeing a"), b"bb".to_vec());
+}
+
+/// Freeing a handle twice, or a handle that never existed, is a no-op: callers are not expected
+/// to track whether they already freed one.
+#[test]
+fn free_buffer_is_a_harmless_no_op_when_repeated_or_given_an_unknown_handle() {
+    let mut ctx = WgpuContext::with_caps(WorkerKind::Main, craft_gpu::DeviceCaps::default());
+    let a = ctx.upload_buffer("a", b"aa").expect("upload a");
+    ctx.free_buffer(a);
+    ctx.free_buffer(a);
+    ctx.free_buffer(craft_gpu::HandleId(999));
+}
+
+/// CodeRabbit finding on lib.rs:401: `poll_reads` can only attach a device-lost fault to a read
+/// it has something to attach it to, so a caller whose event loop only polls, with nothing
+/// outstanding, could never observe loss through it alone. `device_status` covers exactly that
+/// gap: it is checked here with no buffer call and no pending read at all after the device is
+/// destroyed.
+#[cfg(all(not(target_arch = "wasm32"), feature = "adapter-probe"))]
+#[test]
+fn device_status_surfaces_loss_even_with_nothing_pending() {
+    use craft_gpu::GpuFault;
+
+    use crate::Backing;
+
+    let Some(ctx) = real_context_or_skip("device_status_surfaces_loss_even_with_nothing_pending") else {
+        return;
+    };
+    assert_eq!(ctx.device_status(), Ok(()), "a freshly created device must not already report loss");
+
+    if let Backing::Device(d) = &ctx.backing {
+        d.device.destroy();
+        let _ = d.device.poll(wgpu::PollType::Poll);
+    }
+
+    // No upload_buffer, no request_read, no poll_reads: device_status() alone must observe it.
+    assert!(matches!(ctx.device_status(), Err(GpuFault::DeviceLost(_))), "device.destroy() must surface through device_status() alone");
+}
+
 /// Same two guarantees on a real device: empty buffers round-trip (the readback resolves without
 /// mapping, since wgpu refuses an empty map range) and `read_buffer` re-queues completions that
 /// belong to another outstanding request.
