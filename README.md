@@ -256,6 +256,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   JSON control channel.
 - [`craft-web-host`](crates/web-host/README.md): the host messages between a Craft app's web build and the page that hosts it (`?host=parent` or `data-host="page"`): one contract and one bridge for every app.
 - [`craft-xls`](crates/xls/README.md): clean-room Excel 97-2003 workbook (`.xls`, BIFF8) reader: worksheets, cell values, formulas as A1 text (shared and array formulas included), cell formats with resolved palette colours, merged cells, column and row records, defined names, print areas and calculation settings, with limits on records, cells and text.
+- [`craft-ora`](crates/ora/README.md): OpenRaster documents (`.ora`): the ZIP archive and the `stack.xml` layer tree as written, read with bounded sizes and written. From PhotoCraft.
 - [`craft-y4m`](crates/y4m/src/lib.rs): YUV4MPEG2 (`.y4m`) reader, from FilmCraft: the stream
   header, colour space layouts at 8 to 16 bits, a frame index built from the `FRAME` lines without
   loading the file, and plane access. Bounded on hostile input.
