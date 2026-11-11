@@ -18,8 +18,8 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use crate::{
-    AlphaMode, Corner, Error, Image, Limits, Material, Mesh, NONE, Part, Resolver, Result, Scene, TextureRef, count_warning, is_mirror, linear_to_srgb, malformed,
-    srgb_to_linear, too_large, transform_normal, transform_point,
+    AlphaMode, Corner, Error, Image, Limits, Material, Mesh, NONE, Part, Resolver, Result, Scene, TextureRef, count_warning, is_mirror,
+    linear_to_srgb, malformed, srgb_to_linear, too_large, transform_normal, transform_point,
 };
 
 const KIND: &str = "OBJ";
@@ -91,7 +91,7 @@ fn mtl_line(m: &mut Material, key: &str, rest: &str, pr_seen: &mut bool, images:
                 images.len() - 1
             }
         };
-        Ok(Some(TextureRef { image, uv_set: 0 }))
+        Ok(Some(TextureRef { image, ..TextureRef::default() }))
     };
     match key {
         "Kd" => {
@@ -237,7 +237,9 @@ impl Reader<'_> {
         }
         let (materials, images) = read_mtl(&bytes, self.limits)?;
         let base = self.scene.images.len();
-        if base.saturating_add(images.len()) > self.limits.max_materials || self.scene.materials.len().saturating_add(materials.len()) > self.limits.max_materials {
+        if base.saturating_add(images.len()) > self.limits.max_materials
+            || self.scene.materials.len().saturating_add(materials.len()) > self.limits.max_materials
+        {
             return Err(too_large(KIND, format!("more than {} materials or images", self.limits.max_materials)));
         }
         self.scene.external.extend(images.iter().filter_map(|i| i.uri.clone()));
@@ -553,7 +555,11 @@ pub fn write_mtl(scene: &Scene) -> String {
         let ke = m.emissive.map(linear_to_srgb);
         let r = m.roughness.clamp(0.0, 1.0);
         let ns = if r > 0.0 { (2.0 / (r * r) - 2.0).clamp(0.0, 1000.0) } else { 1000.0 };
-        let _ = writeln!(mtl, "newmtl {name}\nKd {} {} {}\nd {}\nKe {} {} {}\nNs {ns}\nPr {r}\nPm {}", kd[0], kd[1], kd[2], m.base_color[3], ke[0], ke[1], ke[2], m.metallic);
+        let _ = writeln!(
+            mtl,
+            "newmtl {name}\nKd {} {} {}\nd {}\nKe {} {} {}\nNs {ns}\nPr {r}\nPm {}",
+            kd[0], kd[1], kd[2], m.base_color[3], ke[0], ke[1], ke[2], m.metallic
+        );
         for (key, tex) in [("map_Kd", m.base_color_texture), ("map_Ke", m.emissive_texture), ("norm", m.normal_texture)] {
             if let Some(uri) = tex.and_then(|t| scene.images.get(t.image)).and_then(|i| i.uri.as_deref()) {
                 let _ = writeln!(mtl, "{key} {}", uri.replace(['\n', '\r'], " "));

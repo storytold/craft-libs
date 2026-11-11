@@ -2,8 +2,11 @@ use super::hammer;
 use crate::stl::{read, write_ascii, write_binary};
 use crate::{Error, IDENTITY, Limits, Scene};
 
-/// A binary STL: `header` (padded to 80 bytes) and facets of (normal, vertices, attribute).
-fn binary_stl(header: &[u8], facets: &[([f32; 3], [[f32; 3]; 3], u16)]) -> Vec<u8> {
+/// A facet: normal, vertices, attribute word.
+type Facet = ([f32; 3], [[f32; 3]; 3], u16);
+
+/// A binary STL: `header` (padded to 80 bytes) and its facets.
+fn binary_stl(header: &[u8], facets: &[Facet]) -> Vec<u8> {
     let mut b = header.to_vec();
     b.resize(80, 0);
     b.extend((facets.len() as u32).to_le_bytes());
@@ -103,7 +106,8 @@ fn quirks_and_hostile_input() {
     assert!(parse(&binary_stl(b"", &[([0.0; 3], [[f32::NAN, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], 0)])).is_err());
     assert!(parse(b"solid empty\nendsolid empty\n").is_err());
     // A non-finite facet among good ones is left out, with a warning.
-    let s = parse(&binary_stl(b"", &[([0.0; 3], SQUARE[0], 0), ([0.0; 3], [[f32::INFINITY, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], 0)])).unwrap();
+    let s =
+        parse(&binary_stl(b"", &[([0.0; 3], SQUARE[0], 0), ([0.0; 3], [[f32::INFINITY, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], 0)])).unwrap();
     assert_eq!((s.meshes[0].triangle_count(), s.warnings.len()), (1, 1));
     // A degenerate facet keeps its stored normal; a garbage stored normal loses to the winding.
     let s = parse(&binary_stl(b"", &[([1.0, 0.0, 0.0], [[0.0; 3]; 3], 0), ([f32::NAN, 9.0, -7.0], SQUARE[0], 0)])).unwrap();

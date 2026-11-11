@@ -29,7 +29,10 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use crate::{Corner, Error, Limits, Material, Mesh, Part, Result, Scene, count_warning, face_normal, is_mirror, malformed, srgb_to_linear, too_large, transform_point};
+use crate::{
+    Corner, Error, Limits, Material, Mesh, Part, Result, Scene, count_warning, face_normal, is_mirror, malformed, srgb_to_linear, too_large,
+    transform_point,
+};
 
 const KIND: &str = "STL";
 /// Header (80) plus facet count (4).
@@ -96,7 +99,8 @@ impl<'a> Builder<'a> {
             self.colors.push(color);
             self.mesh.parts.len() - 1
         });
-        let (Some(part), Ok(base), Ok(normal)) = (self.mesh.parts.get_mut(slot), u32::try_from(self.mesh.positions.len()), u32::try_from(self.mesh.normals.len()))
+        let (Some(part), Ok(base), Ok(normal)) =
+            (self.mesh.parts.get_mut(slot), u32::try_from(self.mesh.positions.len()), u32::try_from(self.mesh.normals.len()))
         else {
             return Err(too_large(KIND, "more vertices than a 32-bit index holds"));
         };

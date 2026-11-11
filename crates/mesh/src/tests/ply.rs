@@ -176,10 +176,20 @@ fn limits() {
     assert!(read(full, &Limits { max_face_corners: 4, ..Limits::default() }).is_ok());
     assert!(too(read(full, &Limits { max_face_corners: 3, ..Limits::default() })));
     // The header's own bounds.
-    let elements = |n: usize| format!("ply\nformat ascii 1.0\n{}element vertex 0\nproperty float x\nproperty float y\nproperty float z\nend_header\n", "element e 0\n".repeat(n));
+    let elements = |n: usize| {
+        format!(
+            "ply\nformat ascii 1.0\n{}element vertex 0\nproperty float x\nproperty float y\nproperty float z\nend_header\n",
+            "element e 0\n".repeat(n)
+        )
+    };
     assert!(parse(elements(MAX_ELEMENTS - 1).as_bytes()).is_ok());
     assert!(too(parse(elements(MAX_ELEMENTS).as_bytes())));
-    let properties = |n: usize| format!("ply\nformat ascii 1.0\nelement vertex 0\n{}end_header\n", "property float x\nproperty float y\nproperty float z\n".repeat(n).lines().take(n).map(|l| format!("{l}\n")).collect::<String>());
+    let properties = |n: usize| {
+        format!(
+            "ply\nformat ascii 1.0\nelement vertex 0\n{}end_header\n",
+            "property float x\nproperty float y\nproperty float z\n".repeat(n).lines().take(n).map(|l| format!("{l}\n")).collect::<String>()
+        )
+    };
     assert!(parse(properties(MAX_PROPERTIES).as_bytes()).is_ok());
     assert!(too(parse(properties(MAX_PROPERTIES + 1).as_bytes())));
 }

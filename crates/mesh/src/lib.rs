@@ -27,7 +27,11 @@
 //! Depends on no other Craft crate.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
+// The helpers the formats share are not all used by every subset of them.
+#![cfg_attr(not(all(feature = "stl", feature = "obj", feature = "ply", feature = "gltf")), allow(dead_code, unused_imports))]
 
+#[cfg(feature = "gltf")]
+pub mod gltf;
 #[cfg(feature = "obj")]
 pub mod obj;
 #[cfg(feature = "ply")]
@@ -47,12 +51,15 @@ pub enum Error {
     TooLarge(String),
     /// The file needs something this crate does not read (a compression extension, …).
     Unsupported(String),
+    /// The file needs another file that the resolver did not supply; holds its name.
+    Missing(String),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Malformed(m) | Error::TooLarge(m) | Error::Unsupported(m) => f.write_str(m),
+            Error::Missing(name) => write!(f, "`{name}`, which the file needs, was not supplied"),
         }
     }
 }
@@ -219,8 +226,9 @@ pub struct Unified {
     pub uvs: Vec<[f32; 2]>,
     /// One per vertex when the mesh has colours, else empty.
     pub colors: Vec<[f32; 4]>,
-    /// The mesh position each vertex came from (for joints, weights and welding).
-    pub source: Vec<u32>,
+    /// The corner of the mesh each vertex came from: its position index finds the joints and
+    /// weights, its UV index the other UV sets.
+    pub corners: Vec<Corner>,
     /// Triangles per part, in the order of [`Mesh::parts`].
     pub parts: Vec<Vec<[u32; 3]>>,
 }
@@ -278,7 +286,11 @@ impl Mesh {
             'tri: for t in part.triangles() {
                 let mut tri = [0u32; 3];
                 for (slot, c) in tri.iter_mut().zip(t) {
-                    let key = Corner { position: c.position, normal: if normals { c.normal } else { NONE }, uv: if uv_set.is_some() { c.uv } else { NONE } };
+                    let key = Corner {
+                        position: c.position,
+                        normal: if normals { c.normal } else { NONE },
+                        uv: if uv_set.is_some() { c.uv } else { NONE },
+                    };
                     if let Some(id) = ids.get(&key) {
                         *slot = *id;
                         continue;
@@ -296,7 +308,7 @@ impl Mesh {
                     if colors {
                         out.colors.extend(self.colors.get(c.position as usize));
                     }
-                    out.source.push(c.position);
+                    out.corners.push(c);
                     ids.insert(key, id);
                     *slot = id;
                 }
@@ -318,12 +330,22 @@ pub enum AlphaMode {
     Blend,
 }
 
-/// A texture slot: an image of the scene and the UV set it reads.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// How a texture continues outside 0..1.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Wrap {
+    #[default]
+    Repeat,
+    Clamp,
+    Mirror,
+}
+
+/// A texture slot: an image of the scene, the UV set it reads and how it wraps along u and v.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct TextureRef {
     /// Index into [`Scene::images`].
     pub image: usize,
     pub uv_set: u32,
+    pub wrap: [Wrap; 2],
 }
 
 /// A metallic-roughness material: the simple parameters every format here can carry.
@@ -414,7 +436,9 @@ pub fn transform_point(m: &Mat4, p: [f64; 3]) -> [f64; 3] {
 /// keep facing out; the writers of formats without a hierarchy do that.
 pub fn is_mirror(m: &Mat4) -> bool {
     let l = |r: usize, c: usize| m[c * 4 + r];
-    l(0, 0) * (l(1, 1) * l(2, 2) - l(1, 2) * l(2, 1)) - l(0, 1) * (l(1, 0) * l(2, 2) - l(1, 2) * l(2, 0)) + l(0, 2) * (l(1, 0) * l(2, 1) - l(1, 1) * l(2, 0)) < 0.0
+    l(0, 0) * (l(1, 1) * l(2, 2) - l(1, 2) * l(2, 1)) - l(0, 1) * (l(1, 0) * l(2, 2) - l(1, 2) * l(2, 0))
+        + l(0, 2) * (l(1, 0) * l(2, 1) - l(1, 1) * l(2, 0))
+        < 0.0
 }
 
 /// The normal `n` under `m` (by the inverse transpose of its linear part, so scale, shear and
@@ -433,12 +457,48 @@ pub fn transform_normal(m: &Mat4, n: [f64; 3]) -> [f64; 3] {
     if len.is_finite() && len > 0.0 { v.map(|x| x / len) } else { n }
 }
 
+/// A placement as translation, rotation (a unit quaternion `x, y, z, w`) and scale.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Trs {
+    pub translation: [f64; 3],
+    pub rotation: [f64; 4],
+    pub scale: [f64; 3],
+}
+
+impl Trs {
+    /// `T · R · S`.
+    pub fn matrix(&self) -> Mat4 {
+        let [x, y, z, w] = self.rotation;
+        let r = [
+            [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y + z * w), 2.0 * (x * z - y * w)],
+            [2.0 * (x * y - z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z + x * w)],
+            [2.0 * (x * z + y * w), 2.0 * (y * z - x * w), 1.0 - 2.0 * (x * x + y * y)],
+        ];
+        let mut m = IDENTITY;
+        for (c, (col, s)) in r.iter().zip(self.scale).enumerate() {
+            for (row, v) in col.iter().enumerate() {
+                m[c * 4 + row] = v * s;
+            }
+        }
+        m[12] = self.translation[0];
+        m[13] = self.translation[1];
+        m[14] = self.translation[2];
+        m
+    }
+}
+
 /// A node of the scene's hierarchy.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Node {
     pub name: String,
     /// Placement relative to the parent.
     pub transform: Mat4,
+    /// The same placement in parts, when the file gave it so (animations move the parts).
+    pub trs: Option<Trs>,
+    /// Index into [`Scene::cameras`].
+    pub camera: Option<usize>,
+    /// Index into [`Scene::lights`].
+    pub light: Option<usize>,
     /// Index into [`Scene::meshes`].
     pub mesh: Option<usize>,
     /// Index into [`Scene::skins`].
@@ -449,7 +509,7 @@ pub struct Node {
 
 impl Default for Node {
     fn default() -> Self {
-        Node { name: String::new(), transform: IDENTITY, mesh: None, skin: None, children: Vec::new() }
+        Node { name: String::new(), transform: IDENTITY, trs: None, camera: None, light: None, mesh: None, skin: None, children: Vec::new() }
     }
 }
 
@@ -463,6 +523,79 @@ pub struct Skin {
     pub inverse_bind: Vec<Mat4>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Projection {
+    /// Vertical field of view in radians; the aspect ratio when the file fixes one.
+    Perspective { yfov: f64, aspect: Option<f64>, znear: f64, zfar: Option<f64> },
+    /// Half the view's width and height.
+    Orthographic { xmag: f64, ymag: f64, znear: f64, zfar: f64 },
+}
+
+/// A camera, looking along its node's −Z with +Y up.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Camera {
+    pub name: String,
+    pub projection: Projection,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LightKind {
+    Directional,
+    Point,
+    /// Cone angles in radians from the axis.
+    Spot {
+        inner: f64,
+        outer: f64,
+    },
+}
+
+/// A punctual light, shining along its node's −Z.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Light {
+    pub name: String,
+    pub kind: LightKind,
+    /// Linear RGB.
+    pub color: [f64; 3],
+    /// Candela for point and spot lights, lux for directional ones.
+    pub intensity: f64,
+    pub range: Option<f64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChannelPath {
+    Translation,
+    Rotation,
+    Scale,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Interpolation {
+    Step,
+    Linear,
+    /// Three values per key: in-tangent, value, out-tangent.
+    CubicSpline,
+}
+
+/// The keys of one part of one node's placement. Sampling them is the caller's.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Channel {
+    /// Index into [`Scene::nodes`].
+    pub node: usize,
+    pub path: ChannelPath,
+    pub interpolation: Interpolation,
+    /// Key times in seconds.
+    pub times: Vec<f32>,
+    /// The keys' values, flat: 3 per key for translation and scale, 4 for rotation (times 3
+    /// for a cubic spline).
+    pub values: Vec<f32>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Animation {
+    pub name: String,
+    pub channels: Vec<Channel>,
+}
+
 /// What a file holds.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Scene {
@@ -474,6 +607,9 @@ pub struct Scene {
     /// The top-level nodes.
     pub roots: Vec<usize>,
     pub skins: Vec<Skin>,
+    pub animations: Vec<Animation>,
+    pub cameras: Vec<Camera>,
+    pub lights: Vec<Light>,
     /// Every other file this one names, as written, whether or not the resolver supplied it.
     pub external: Vec<String>,
     /// What was left out or repaired while reading.
@@ -513,8 +649,8 @@ impl Scene {
         Ok(out)
     }
 
-    /// [`Mesh::validate`] for every mesh, and every material, image, mesh, skin and child index
-    /// in range.
+    /// [`Mesh::validate`] for every mesh, and every material, image, mesh, skin, camera, light
+    /// and node index in range.
     pub fn validate(&self) -> Result<()> {
         let bad = |m: String| Err(Error::Malformed(m));
         for m in &self.meshes {
@@ -531,12 +667,15 @@ impl Scene {
         }
         let n = self.nodes.len();
         for node in &self.nodes {
-            if node.mesh.is_some_and(|m| m >= self.meshes.len()) || node.skin.is_some_and(|s| s >= self.skins.len()) || node.children.iter().any(|c| *c >= n) {
+            let refs =
+                [(node.mesh, self.meshes.len()), (node.skin, self.skins.len()), (node.camera, self.cameras.len()), (node.light, self.lights.len())];
+            if refs.iter().any(|(i, len)| i.is_some_and(|i| i >= *len)) || node.children.iter().any(|c| *c >= n) {
                 return bad(format!("node `{}` names something that does not exist", node.name));
             }
         }
-        if self.roots.iter().any(|r| *r >= n) || self.skins.iter().any(|s| s.joints.iter().any(|j| *j >= n)) {
-            return bad("a root or joint names a node that does not exist".into());
+        let channels = self.animations.iter().flat_map(|a| &a.channels).any(|c| c.node >= n);
+        if self.roots.iter().any(|r| *r >= n) || self.skins.iter().any(|s| s.joints.iter().any(|j| *j >= n)) || channels {
+            return bad("a root, joint or animation channel names a node that does not exist".into());
         }
         Ok(())
     }
@@ -559,8 +698,9 @@ pub(crate) fn count_warning(warnings: &mut Vec<String>, count: usize, what: &str
     }
 }
 
-/// The unit normal of triangle `v` from its counter-clockwise winding.
-pub(crate) fn face_normal(v: [[f64; 3]; 3]) -> Option<[f64; 3]> {
+/// The unit normal of triangle `v` from its counter-clockwise winding; `None` when it has no
+/// area.
+pub fn face_normal(v: [[f64; 3]; 3]) -> Option<[f64; 3]> {
     let (a, b) = ([0, 1, 2].map(|k| v[1][k] - v[0][k]), [0, 1, 2].map(|k| v[2][k] - v[0][k]));
     let n = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
     let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();

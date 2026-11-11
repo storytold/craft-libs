@@ -9,7 +9,8 @@ v -0.5 -0.5  0.5\nv  0.5 -0.5  0.5\nv  0.5  0.5  0.5\nv -0.5  0.5  0.5\nv -0.5 -
 vt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\nvn  0  0  1\nvn  0  0 -1\nvn  1  0  0\nvn -1  0  0\nvn  0  1  0\nvn  0 -1  0\n\
 usemtl Red\nf 1/1/1 2/2/1 3/3/1 4/4/1\nf 6/1/2 5/2/2 8/3/2 7/4/2\nf 2/1/3 6/2/3 7/3/3 3/4/3\n\
 usemtl Gold\nf 5/1/4 1/2/4 4/3/4 8/4/4\nf 4/1/5 3/2/5 7/3/5 8/4/5\nf -4/1/6 -3/2/6 -7/3/6 -8/4/6\n";
-const CUBE_MTL: &str = "# materials for the cube\nnewmtl Red\nKd 1.0 0.0 0.0\nNs 98\nd 1.0\n\nnewmtl Gold\nKd 1.0 0.766 0.336\nKe 0.0 0.0 0.0\nPr 0.3\nPm 1.0\n";
+const CUBE_MTL: &str =
+    "# materials for the cube\nnewmtl Red\nKd 1.0 0.0 0.0\nNs 98\nd 1.0\n\nnewmtl Gold\nKd 1.0 0.766 0.336\nKe 0.0 0.0 0.0\nPr 0.3\nPm 1.0\n";
 
 fn parse(bytes: &[u8]) -> crate::Result<Scene> {
     read(bytes, &Limits::default(), &mut no_external)
@@ -94,7 +95,8 @@ fn mtl_images_are_named_not_opened() {
     assert_eq!((materials[0].alpha_mode, materials[0].base_color[3]), (AlphaMode::Blend, 0.5));
     assert_eq!(materials[1].base_color[3], 0.75);
     // Through an OBJ the image names are listed after the library.
-    let s = read(b"mtllib m.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl A\nf 1 2 3\n", &Limits::default(), &mut |_| Some(mtl.as_bytes().to_vec())).unwrap();
+    let s =
+        read(b"mtllib m.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl A\nf 1 2 3\n", &Limits::default(), &mut |_| Some(mtl.as_bytes().to_vec())).unwrap();
     assert_eq!(s.external, ["m.mtl", "my checker.png", "bump.png", "glow.png"]);
     s.validate().unwrap();
 }
@@ -107,7 +109,10 @@ fn objects_groups_quads_and_negative_indices() {
     let s = parse(src.as_bytes()).unwrap();
     s.validate().unwrap();
     assert!(s.warnings.is_empty(), "{:?}", s.warnings);
-    assert_eq!(s.meshes.iter().map(|m| (m.name.as_str(), m.triangle_count(), m.positions.len())).collect::<Vec<_>>(), [("Cube", 12, 8), ("Tri", 1, 3)]);
+    assert_eq!(
+        s.meshes.iter().map(|m| (m.name.as_str(), m.triangle_count(), m.positions.len())).collect::<Vec<_>>(),
+        [("Cube", 12, 8), ("Tri", 1, 3)]
+    );
     // Each object holds only its own vertices, and has a node.
     assert_eq!(s.meshes[1].positions[0], [5.0, 5.0, 5.0]);
     assert_eq!(s.nodes.iter().map(|n| n.mesh).collect::<Vec<_>>(), [Some(0), Some(1)]);
@@ -161,7 +166,15 @@ fn bad_lines_are_left_out_and_counted() {
     let s = parse(b"v 0 0 0\nv 1 0 0\nv 0 1 0\nvn nan 0 1\nvt inf 0\nf 1/1/1 2/1/1 3/1/1\n").unwrap();
     assert!(s.meshes[0].normals.is_empty() && s.meshes[0].uv_sets.is_empty());
     assert_eq!(s.warnings.len(), 1);
-    for src in ["", "f 1 2 3", "v 1 2\nf 1 1 1", "v 0 0 0\n", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 99999999999999999999", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf -1 -2 -9", "o\ng\nf"] {
+    for src in [
+        "",
+        "f 1 2 3",
+        "v 1 2\nf 1 1 1",
+        "v 0 0 0\n",
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 99999999999999999999",
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\nf -1 -2 -9",
+        "o\ng\nf",
+    ] {
         assert!(parse(src.as_bytes()).is_err(), "{src:?}");
     }
     assert!(parse(b"\x00\xffv 1 1 1").is_err());
@@ -228,12 +241,19 @@ fn writer_places_meshes_keeps_colours_and_names_materials_apart() {
         normals: vec![[0.0, 0.0, 1.0]],
         colors: vec![[1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]],
         parts: vec![
-            Part { name: "g1".into(), material: Some(0), smoothing: 2, corners: [0, 1, 2].map(|p| Corner { position: p, normal: 0, uv: NONE }).to_vec(), ..Part::default() },
+            Part {
+                name: "g1".into(),
+                material: Some(0),
+                smoothing: 2,
+                corners: [0, 1, 2].map(|p| Corner { position: p, normal: 0, uv: NONE }).to_vec(),
+                ..Part::default()
+            },
             Part { material: Some(1), corners: [0, 1, 2].map(Corner::at).to_vec(), ..Part::default() },
         ],
         ..Mesh::default()
     };
-    let mut scene = Scene::from_meshes(vec![mesh], vec![Material::plain("Steel", [1.0; 4]), Material::plain("steel", [1.0; 4]), Material::plain("  ", [1.0; 4])]);
+    let mut scene =
+        Scene::from_meshes(vec![mesh], vec![Material::plain("Steel", [1.0; 4]), Material::plain("steel", [1.0; 4]), Material::plain("  ", [1.0; 4])]);
     assert_eq!(material_names(&scene), ["Steel", "steel_2", "material"]);
     // The mesh placed twice: moved, and mirrored.
     scene.nodes.push(scene.nodes[0].clone());

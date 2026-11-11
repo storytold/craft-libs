@@ -2,6 +2,8 @@
 
 use super::*;
 
+#[cfg(feature = "gltf")]
+mod gltf;
 #[cfg(feature = "obj")]
 mod obj;
 #[cfg(feature = "ply")]
@@ -89,7 +91,7 @@ fn unified_gives_one_vertex_per_distinct_corner() {
     assert_eq!(u.normals.len(), 6);
     assert_eq!(u.colors.len(), 6);
     assert!(u.uvs.is_empty());
-    assert_eq!(u.source, [0, 1, 2, 0, 3, 1]);
+    assert_eq!(u.corners.iter().map(|c| c.position).collect::<Vec<_>>(), [0, 1, 2, 0, 3, 1]);
     assert_eq!(u.parts, [vec![[0, 1, 2], [3, 4, 5]]]);
     // Without normals the shared positions are shared vertices.
     let u = tri_mesh().unified();
@@ -121,7 +123,9 @@ fn transforms() {
 
 fn chain(len: usize) -> Scene {
     let mut s = Scene::from_meshes(vec![tri_mesh()], vec![]);
-    s.nodes = (0..len).map(|i| Node { children: if i + 1 < len { vec![i + 1] } else { vec![] }, mesh: (i + 1 == len).then_some(0), ..Node::default() }).collect();
+    s.nodes = (0..len)
+        .map(|i| Node { children: if i + 1 < len { vec![i + 1] } else { vec![] }, mesh: (i + 1 == len).then_some(0), ..Node::default() })
+        .collect();
     s.roots = vec![0];
     s
 }

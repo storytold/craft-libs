@@ -238,8 +238,10 @@ pub fn parse_header(bytes: &[u8]) -> Result<Header> {
             }
             Some("element") => {
                 let name = it.next().ok_or_else(|| malformed(KIND, "an element without a name"))?.to_string();
-                let count =
-                    it.next().and_then(|c| c.parse::<u64>().ok()).ok_or_else(|| malformed(KIND, format!("element `{}` has no count", short(&name))))?;
+                let count = it
+                    .next()
+                    .and_then(|c| c.parse::<u64>().ok())
+                    .ok_or_else(|| malformed(KIND, format!("element `{}` has no count", short(&name))))?;
                 if elements.len() >= MAX_ELEMENTS {
                     return Err(too_large(KIND, format!("more than {MAX_ELEMENTS} elements")));
                 }
@@ -308,7 +310,11 @@ impl<'a> Rows<'a> {
     pub fn skip(&mut self, t: Scalar, n: usize) -> Result<()> {
         match self {
             Rows::Binary { b, pos, .. } => {
-                *pos = n.checked_mul(t.size()).and_then(|k| pos.checked_add(k)).filter(|p| *p <= b.len()).ok_or_else(|| malformed(KIND, "the file ends early"))?;
+                *pos = n
+                    .checked_mul(t.size())
+                    .and_then(|k| pos.checked_add(k))
+                    .filter(|p| *p <= b.len())
+                    .ok_or_else(|| malformed(KIND, "the file ends early"))?;
                 Ok(())
             }
             Rows::Ascii { .. } => (0..n).try_for_each(|_| self.value(t).map(|_| ())),
@@ -375,7 +381,8 @@ impl VertexColumns {
         let three = |a: &[&str], b: &[&str], c: &[&str]| Some([at(a)?, at(b)?, at(c)?]);
         let xyz = three(&["x"], &["y"], &["z"]).ok_or_else(|| malformed(KIND, "the vertices have no `x`, `y` and `z`"))?;
         let uv = (|| Some([at(&["s", "u", "texture_u"])?, at(&["t", "v", "texture_v"])?]))();
-        let rgb = (|| Some([e.find(&["red", "r", "diffuse_red"])?, e.find(&["green", "g", "diffuse_green"])?, e.find(&["blue", "b", "diffuse_blue"])?]))();
+        let rgb =
+            (|| Some([e.find(&["red", "r", "diffuse_red"])?, e.find(&["green", "g", "diffuse_green"])?, e.find(&["blue", "b", "diffuse_blue"])?]))();
         Ok(VertexColumns { xyz, normal: three(&["nx"], &["ny"], &["nz"]), uv, rgb, alpha: e.find(&["alpha", "a"]) })
     }
 }
@@ -444,8 +451,10 @@ fn faces(e: &Element, list: usize, rows: &mut Rows<'_>, vertex_count: u64, out: 
                 }
             }
         }
-        let corners: Option<Vec<Corner>> =
-            face.iter().map(|v| (*v >= 0.0 && *v < vertex_count as f64 && v.fract() == 0.0).then(|| u32::try_from(*v as u64).ok().map(Corner::at)).flatten()).collect();
+        let corners: Option<Vec<Corner>> = face
+            .iter()
+            .map(|v| (*v >= 0.0 && *v < vertex_count as f64 && v.fract() == 0.0).then(|| u32::try_from(*v as u64).ok().map(Corner::at)).flatten())
+            .collect();
         let Some(corners) = corners.filter(|c| c.len() >= 3) else {
             out.bad += 1;
             continue;
