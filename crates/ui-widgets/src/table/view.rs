@@ -7,7 +7,7 @@ use crate::contract::{
     Bind, BindMut, Collection, CollectionProps, CollectionResponse, ColumnSpec, Common, Component, ContainerProps, Cx, EditResponse, ListDrag,
     Props as _, Role, SelectMode, Sizing,
 };
-use crate::list::{DropTest, ListRow, RowEvent, RowTest, SourceTest};
+use crate::list::{DropTest, ListRow, RowEvent, RowTest, RowText, SourceTest};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{ItemSource, Metrics, Selection, SpanLayout};
@@ -50,6 +50,10 @@ pub struct Table<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// Which rows may be renamed; a rename request on another row does nothing.
     #[prop(func = "Fn(&K) -> bool")]
     can_rename: Option<RowTest<'a, K>>,
+    /// The text a row's rename field opens with, `None` for the row's text: an empty draft when several rows are picked
+    /// takes a name for all of them.
+    #[prop(func = "Fn(&K) -> Option<String>")]
+    rename_draft: Option<RowText<'a, K>>,
     /// Which rows may be dragged.
     #[prop(func = "Fn(&K) -> bool")]
     can_drag: Option<RowTest<'a, K>>,
@@ -76,6 +80,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> Table<'a, K> {
             reveal: None,
             tree: false,
             can_rename: None,
+            rename_draft: None,
             can_drag: None,
             accept_from: None,
             accepts: None,
@@ -123,6 +128,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for Table<'_, K> {
     fn item_layout(&self, source: &dyn ItemSource<K>, width: f32, cx: &StyleCx<'_>) -> SpanLayout {
         let layout = SpanLayout::sized(source, width, cx.control().height);
         if self.tree { layout.tree() } else { layout }
+    }
+
+    fn rename_draft(&self, key: &K) -> Option<String> {
+        self.rename_draft.as_ref().and_then(|draft| draft.text(key))
     }
 
     fn can_rename(&self, key: &K) -> bool {

@@ -7,10 +7,10 @@ use crate::contract::{Collection, Cx};
 use craft_behavior::{EditEvent, Mixed};
 
 impl<C: Collection> ItemsHooks<'_, '_, C> {
-    /// Opens the rename field of the item at `at`.
-    pub(super) fn begin_rename(&mut self, cx: &mut Cx<'_, C>, at: usize) {
+    /// Opens the rename field of the item at `at`, with the draft the collection gives for it, else the item's text.
+    pub(super) fn begin_rename(&mut self, comp: &C, cx: &mut Cx<'_, C>, at: usize) {
         let key = self.source.key(at);
-        let draft = self.source.text(at).map(|text| text.into_owned()).unwrap_or_default();
+        let draft = comp.rename_draft(&key).or_else(|| self.source.text(at).map(|text| text.into_owned())).unwrap_or_default();
         let gesture = crate::runtime::edit::next_gesture_id(&cx.core.ctx);
         let before = Rename { key: key.clone(), name: draft.clone() };
         self.events.push(CollectionEvent::Rename(EditEvent::begin(gesture, Mixed::Same(before), cx.core.label_arc(), None)));
@@ -28,7 +28,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         {
             self.move_lead(at, LeadSource::Keys);
             self.reveal_with(layout, at, view);
-            self.begin_rename(cx, at);
+            self.begin_rename(comp, cx, at);
         }
     }
 }

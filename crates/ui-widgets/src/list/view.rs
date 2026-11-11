@@ -3,7 +3,7 @@
 //! drag with drop marks, rename lifecycle and the context-menu request. The list adds the item layout and the editor
 //! the rename lifecycle shows.
 
-use super::predicate::{DropTest, RowTest, SourceTest};
+use super::predicate::{DropTest, RowTest, RowText, SourceTest};
 use super::{ListRow, RowEvent};
 use crate::contract::{
     Access, ActivateOn, Bind, BindMut, Collection, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, EditResponse,
@@ -53,6 +53,10 @@ pub struct List<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// Which rows may be renamed; a rename request on another row does nothing.
     #[prop(func = "Fn(&K) -> bool")]
     can_rename: Option<RowTest<'a, K>>,
+    /// The text a row's rename field opens with, `None` for the row's text: an empty draft when several rows are picked
+    /// takes a name for all of them.
+    #[prop(func = "Fn(&K) -> Option<String>")]
+    rename_draft: Option<RowText<'a, K>>,
     /// Which rows may be dragged.
     #[prop(func = "Fn(&K) -> bool")]
     can_drag: Option<RowTest<'a, K>>,
@@ -87,6 +91,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> List<'a, K> {
             reveal: None,
             tree: false,
             can_rename: None,
+            rename_draft: None,
             can_drag: None,
             accept_from: None,
             accepts: None,
@@ -198,6 +203,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for List<'_, K> {
     fn item_layout(&self, source: &dyn ItemSource<K>, width: f32, cx: &StyleCx<'_>) -> SpanLayout {
         let layout = SpanLayout::sized(source, width, cx.control().height);
         if self.tree { layout.tree() } else { layout }
+    }
+
+    fn rename_draft(&self, key: &K) -> Option<String> {
+        self.rename_draft.as_ref().and_then(|draft| draft.text(key))
     }
 
     fn can_rename(&self, key: &K) -> bool {

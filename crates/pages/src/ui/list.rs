@@ -26,7 +26,7 @@ mod stories;
 use craft_behavior::{ColumnKey, ColumnWidth, EditEvent, IconId, Mixed, Selection, SelectionChange, keyed};
 use craft_ui::contract::{
     Bind, CollectionEvent, ColumnKind, ColumnSpec, ContextMenuRequest, ListDrag, NoValue, Outcome, ReorderMove, ReorderRule, SelectMode,
-    ShowCollection as _, ShowContainer as _, SweepApply, SweepStep, ToggleColumn, ToggleEdit,
+    ShowCollection as _, ShowContainer as _, SweepApply, SweepStep, ToggleColumn, ToggleEdit, request_rename,
 };
 use craft_ui::list::{ListRow, RowEvent, ToggleCell, TrailingFace, TrailingPart};
 use craft_ui::primitives::IconSpec;
@@ -194,23 +194,33 @@ pub struct PageList<'a> {
     rows: &'a [PageListRow],
     picked: &'a mut Selection<usize>,
     active: usize,
+    rename: Option<usize>,
 }
 
 impl<'a> PageList<'a> {
     /// A list named `label` of `rows`, with `picked` as the selection and `active` as the page or artboard being
     /// edited.
     pub fn new(label: impl Into<Label>, rows: &'a [PageListRow], picked: &'a mut Selection<usize>, active: usize) -> Self {
-        PageList { label: label.into(), rows, picked, active }
+        PageList { label: label.into(), rows, picked, active, rename: None }
+    }
+
+    /// Starts renaming `row` (the app's Rename command): its field opens at the list's next pass.
+    #[must_use]
+    pub fn start_rename(mut self, row: usize) -> Self {
+        self.rename = Some(row);
+        self
     }
 
     /// Shows the list and returns its response and the events for the app to apply.
     pub fn show(self, ui: &mut Ui) -> PageListOutput {
-        let PageList { label, rows, picked, active } = self;
+        let PageList { label, rows, picked, active, rename } = self;
         let env = Env::of(ui);
         let words = env.words::<PageListWords>();
         let unlocked = |from: &[usize]| from.iter().copied().filter(|&row| rows.get(row).is_some_and(|r| !r.locked)).collect::<Vec<_>>();
         let deletable = unlocked(&picked.items);
         let any_picked = !picked.items.is_empty();
+        // With several rows picked the field opens empty, so the typed name goes to all of them.
+        let several = (picked.items.len() > 1).then(|| picked.items.clone());
         let columns = vec![
             ColumnSpec::new(VISIBLE, words.visible.clone(), ColumnWidth::Controls(1.0)).kind(ColumnKind::Toggle(ToggleColumn::sweepable())),
             ColumnSpec::new(LOCKED, words.lock.clone(), ColumnWidth::Controls(1.0)).kind(ColumnKind::Toggle(ToggleColumn::sweepable())),
@@ -258,6 +268,7 @@ impl<'a> PageList<'a> {
                     .selection(Bind::bound(&mut *picked))
                     .reorder(ReorderRule::new())
                     .rename(true)
+                    .rename_draft(|row| several.as_ref().filter(|items| items.contains(row)).map(|_| String::new()))
                     .deletable(true)
                     .current(Some(active))
                     .natural_height(true)
@@ -270,6 +281,9 @@ impl<'a> PageList<'a> {
                             .trailing_part(OPTIONS, TrailingFace::Icon(options), words.options.clone())
                     });
                 *list_id.borrow_mut() = Some(shown.response.id);
+                if let Some(row) = rename {
+                    request_rename(ui.ctx(), shown.response.id, &row);
+                }
                 let mut events = events.borrow_mut();
                 for event in shown.events {
                     match event {

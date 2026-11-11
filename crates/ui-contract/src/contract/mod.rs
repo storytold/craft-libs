@@ -547,6 +547,11 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
         None
     }
 
+    /// The text the rename field of the item `key` opens with; `None` for the item's own text.
+    fn rename_draft(&self, _key: &Self::Key) -> Option<String> {
+        None
+    }
+
     /// Whether the item `key` may be renamed; a rename request on another item does nothing.
     fn can_rename(&self, _key: &Self::Key) -> bool {
         true

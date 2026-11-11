@@ -253,7 +253,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             && !self.source.section_stop(at)
             && comp.can_rename(&self.source.key(at))
         {
-            self.begin_rename(cx, at);
+            self.begin_rename(comp, cx, at);
         }
     }
 

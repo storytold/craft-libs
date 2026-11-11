@@ -188,7 +188,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     && click
                     && let Some(at) = self.index_of(&key)
                 {
-                    self.begin_rename(cx, at);
+                    self.begin_rename(comp, cx, at);
                 }
                 if let Some(key) = self.drags.activate.take()
                     && click
@@ -241,12 +241,12 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             let request = self.menu_request(layout, Placement { rect, offset, rtl }, at, local(pos));
             self.events.push(CollectionEvent::ContextMenu(request));
         }
-        self.slow_click_due(cx);
+        self.slow_click_due(comp, cx);
     }
 
     /// The rename a slow click waits for opens once the double-click interval has passed with no second press and the
     /// item still the only one selected; until then the pass asks to run again at that time.
-    fn slow_click_due(&mut self, cx: &mut Cx<'_, C>) {
+    fn slow_click_due(&mut self, comp: &C, cx: &mut Cx<'_, C>) {
         let Some((key, released)) = self.drags.slow.as_ref().and_then(|slow| Some((slow.key.clone(), slow.released?))) else { return };
         let at = self.index_of(&key).filter(|_| self.selected_keys(&self.selection) == std::slice::from_ref(&key));
         let Some(at) = at else {
@@ -256,7 +256,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let due = released + craft_behavior::press::MULTI_CLICK_TIME;
         if cx.now() >= due {
             self.drags.slow = None;
-            self.begin_rename(cx, at);
+            self.begin_rename(comp, cx, at);
         } else {
             cx.wake_at(due);
         }

@@ -22,6 +22,23 @@ impl<K> RowTest<'_, K> {
     }
 }
 
+/// A text for the row of a key, or none: `List::rename_draft`.
+pub struct RowText<'a, K>(Box<dyn Fn(&K) -> Option<String> + 'a>);
+
+impl<'a, K> RowText<'a, K> {
+    /// The text `text` gives.
+    pub fn new(text: impl Fn(&K) -> Option<String> + 'a) -> Self {
+        RowText(Box::new(text))
+    }
+}
+
+impl<K> RowText<'_, K> {
+    #[doc(hidden)]
+    pub fn text(&self, key: &K) -> Option<String> {
+        (self.0)(key)
+    }
+}
+
 /// Whether a drag that started in the list with an id may drop here: `List::accept_from`.
 pub struct SourceTest<'a>(Box<dyn Fn(Id) -> bool + 'a>);
 
