@@ -173,6 +173,15 @@ fn a_default_pixel_is_read_in_its_space() {
 }
 
 #[test]
+fn a_default_pixel_is_not_inflated_past_one_pixel() {
+    let doc = maindoc("RGBA", "");
+    let big = vec![0u8; 1 << 20];
+    let bytes = zip_of(&[("mimetype", MIMETYPE), ("maindoc.xml", doc.as_bytes()), ("img/layers/l.defaultpixel", &big)], true);
+    let e = Archive::open(&bytes).unwrap().default_pixel("l", Space::Rgba8).unwrap_err();
+    assert_eq!(e, Error::Invalid("img/layers/l.defaultpixel: larger than 4 bytes".into()));
+}
+
+#[test]
 fn raw_tiles_hold_interleaved_pixels() {
     // Krita writes a tile uncompressed (flag 0) when LZF can't shrink it, and then the pixels
     // stay interleaved: only LZF tiles are split into byte planes.

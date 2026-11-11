@@ -299,7 +299,9 @@ impl<'a> Archive<'a> {
     /// The default pixel Krita stores next to the tiled file `name` (`<name>.defaultpixel`), as
     /// straight RGBA ([`Space::rgba`]): what the layer shows wherever it has no tile.
     pub fn default_pixel(&mut self, name: &str, space: Space) -> Result<Option<[f32; 4]>> {
-        let Some(bytes) = self.layer_file(&format!("{name}.defaultpixel"))? else { return Ok(None) };
+        // One pixel: a member declaring the generic layer-file limit must not be inflated first.
+        let path = format!("{}/layers/{name}.defaultpixel", self.image.name);
+        let Some(bytes) = read(&mut self.zip, &path, space.pixel_size())? else { return Ok(None) };
         if bytes.len() != space.pixel_size() {
             return Err(invalid(format!("{name}.defaultpixel has {} bytes, expected {}", bytes.len(), space.pixel_size())));
         }
