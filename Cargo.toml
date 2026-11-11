@@ -239,13 +239,11 @@ lto = "off"
 [profile.dev.package."*"]
 opt-level = 2
 
-# The workspace crates whose code runs in every screen-test frame (the framework runtime, the theme's colour maths
-# and the behaviour cores), and craft-proof, whose tests parse and check whole dictionaries, build at opt-level 1:
-# unoptimised, they made the test binaries several times slower. The crates above the runtime (widgets, panels,
-# canvas, patterns, shell) stay at opt-level 0: their code is a few percent of a frame, and at opt-level 0 a one-line
-# edit rebuilds in seconds instead of the better part of a minute.
-[profile.dev.package.craft-ui-contract]
-opt-level = 1
+# craft-theme's colour maths and the behaviour cores, which run in every screen-test frame, and craft-proof, whose
+# tests parse and check whole dictionaries, build at opt-level 1: unoptimised, they made the test binaries several
+# times slower, and they are rarely edited. Every other workspace crate, the framework runtime included, stays at
+# opt-level 0: an edit to craft-ui-contract (65k lines) rebuilt for 35-90 s at opt-level 1 and rebuilds in seconds at 0,
+# and the runtime's hot pipeline is generic, so it compiles in the dependants at their opt-level anyway.
 [profile.dev.package.craft-theme]
 opt-level = 1
 [profile.dev.package.craft-behavior]

@@ -49,7 +49,7 @@ No workflow runs the tests of: craft-behavior, craft-host and craft-ui-macros; t
 
 - Dependencies build at `opt-level = 2` in dev and test builds, once per target directory, so screen tests and the debug gallery run at a usable speed.
 - `lto = "off"` in dev: with cargo's default (`lto = false`) rustc runs thin-local LTO across every optimised crate's codegen units on each rebuild; off, a one-line edit re-optimises only the changed units (widgets' one-line rebuild went from 41 s to 4 s).
-- craft-ui-contract, craft-theme, craft-behavior and craft-proof build at `opt-level = 1`: the runtime is where a screen-test frame spends its time. Everything above the runtime (widgets, panels, canvas, patterns, shell, the domain crates) builds at 0, where rustc shares generic instantiations across crates and an edit rebuilds in seconds.
+- craft-theme, craft-behavior and craft-proof build at `opt-level = 1`: their code runs in every screen-test frame (colour maths, behaviour cores) or in dictionary-sized tests, and they are rarely edited. Every other workspace crate, the runtime (craft-ui-contract) included, builds at 0, where rustc shares generic instantiations across crates and an edit rebuilds in seconds (the runtime's 65k lines cost 35–90 s of codegen per edit at opt-level 1).
 - The `gallery` profile (the owner's native gallery): release optimisation, incremental, 256 codegen units, and the workspace's own crates at `opt-level = 1`, which keeps rustc sharing generics across crates so a framework edit does not re-generate every dependant's copies; dependencies keep `opt-level = 3`.
 
 ## The job pool
