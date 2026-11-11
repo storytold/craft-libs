@@ -11,10 +11,12 @@ Serde uses internally tagged JSON with `"type"` in **snake_case**:
 
 | Direction | `type` values |
 |-----------|----------------|
-| Tab → worker | `init`, `storage_put`, `storage_flush`, `gpu_jobs`, `cancel` |
+| Tab → worker | `init`, `storage_put`, `storage_delete`, `storage_flush`, `storage_flush_ack`, `gpu_jobs`, `cancel` |
 | Worker → tab | `ready`, `gpu_batch_done`, `storage_flushed`, `error` |
 
-Unit variants (`storage_flush`, `cancel`) are objects with only `"type"`.
+`storage_flush` is the one true unit variant: an object with only `"type"`. `cancel` carries a
+required `batch_id` alongside `"type"`; a client that sends `{ "type": "cancel" }` with nothing
+else gets no cancellation.
 
 ## WASM hooks
 
