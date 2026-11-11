@@ -1,6 +1,6 @@
 [package]
 name = "craft-media"
-description = "Bit-level I/O, clean-room ISO BMFF (MP4), QuickTime (MOV) and Matroska (MKV, WebM) demuxers and muxers, and an Ogg demuxer."
+description = "Bit-level I/O, clean-room ISO BMFF (MP4), QuickTime (MOV) and Matroska (MKV, WebM) demuxers and muxers, and Ogg and MPEG-TS/PS demuxers."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -18,6 +18,8 @@ default = ["isobmff"]
 bitstream = []
 isobmff = ["bitstream", "dep:thiserror"]
 matroska = []
+# MPEG-2 Systems demuxer: transport streams and program streams (`craft_media::mpegts`).
+mpegts = []
 # Ogg demuxer (Ogg Opus and Vorbis mapping, `craft_media::ogg`).
 ogg = []
 # Serialize and Deserialize for `Container`, `CodecId`, `CodecParams` and `PcmFormat`.
@@ -47,6 +49,10 @@ required-features = ["isobmff"]
 [[test]]
 name = "oracle_matroska"
 required-features = ["matroska"]
+
+[[test]]
+name = "oracle_mpegts"
+required-features = ["mpegts"]
 
 [[test]]
 name = "oracle_mux"

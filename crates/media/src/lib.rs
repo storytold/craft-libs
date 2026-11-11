@@ -8,10 +8,12 @@
 //!   QuickTime (MOV) demuxer and muxer, and a box reader for other ISO BMFF formats.
 //! - `matroska` (feature `matroska`): a clean-room Matroska (MKV) and WebM demuxer and muxer.
 //! - `ogg` (feature `ogg`): a clean-room Ogg demuxer with Ogg Opus and Ogg Vorbis stream mapping.
+//! - `mpegts` (feature `mpegts`): a clean-room MPEG-2 Systems demuxer (transport streams and
+//!   program streams).
 //! - [`Container`] and [`CodecId`] (no feature): the identifiers the codec crates report a file's
 //!   container and codec with.
 //!
-//! `bitstream` and `isobmff` are on by default; `matroska` and `ogg` are opt-in. A crate that needs
+//! `bitstream` and `isobmff` are on by default; `matroska`, `ogg` and `mpegts` are opt-in. A crate that needs
 //! only bit I/O uses `default-features = false, features = ["bitstream"]`.
 
 #[cfg(feature = "bitstream")]
@@ -21,6 +23,8 @@ mod id;
 pub mod isobmff;
 #[cfg(feature = "matroska")]
 pub mod matroska;
+#[cfg(feature = "mpegts")]
+pub mod mpegts;
 #[cfg(feature = "ogg")]
 pub mod ogg;
 pub mod source;

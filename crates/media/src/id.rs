@@ -36,6 +36,10 @@ pub enum Container {
     MpegAudio,
     /// A raw AC-3 or E-AC-3 stream.
     Ac3,
+    /// MPEG-2 transport stream (TS, M2TS).
+    MpegTs,
+    /// MPEG-1/2 program stream (MPG, VOB).
+    MpegPs,
 }
 
 impl Container {
@@ -54,6 +58,8 @@ impl Container {
             Container::Adts => "ADTS",
             Container::MpegAudio => "MPEG audio",
             Container::Ac3 => "AC-3",
+            Container::MpegTs => "MPEG-TS",
+            Container::MpegPs => "MPEG-PS",
         }
     }
 }
