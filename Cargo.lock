@@ -1173,6 +1173,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-psd"
+version = "0.1.0"
+dependencies = [
+ "craft-psd",
+ "encoding_rs",
+ "flate2",
+ "proptest",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-quit"
 version = "0.1.0"
 dependencies = [

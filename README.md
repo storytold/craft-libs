@@ -92,6 +92,13 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   VectorCraft: a WMF, EMF and EMF+ reader into a neutral picture (paths with line styles, pattern
   fills, bitmaps, text, clip regions and clip paths) and, behind `write`, EMF and WMF writers.
   Bounded and panic-free on hostile input. Mapping the picture onto a document stays in each app.
+- [`craft-psd`](crates/psd/README.md): Adobe Photoshop PSD and PSB reader and writer, from
+  PhotoCraft: a lossless format-level model (layers, masks, tagged blocks, image resources,
+  descriptors, all four compressions, lazy reading from a file) that writes an unmodified file
+  back byte for byte, a builder for new files, and the Photoshop resource files that share its
+  primitives (`.abr`, `.asl`, `.aco`, `.act`, `.ase`, `.grd`, `.pat`, `.atn`, `.csh`, `.shc`) and
+  the Photoshop blocks of a layered TIFF. Bounded and panic-free on hostile input. Compositing
+  and the mapping onto a document stay in each app.
 - [`craft-jpeg`](crates/jpeg/README.md): clean-room decoder for 12-bit and arithmetic-coded
   JPEG (T.81 SOF0/SOF1 at 12 bits, SOF9, SOF10), from PhotoCraft, and a frame probe for routing.
   Metadata stays in each app.
