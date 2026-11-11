@@ -25,6 +25,10 @@ pub const MAX_POINTS: usize = 2_000_000;
 /// Coordinates are millimetres; anything past a kilometre is corruption.
 const MAX_COORD_MM: f32 = 1.0e6;
 
+/// Nodes the scan may parse in all, counting candidates that turn out not to be outlines:
+/// bytes that merely look like huge outlines cannot make the scan quadratic.
+const MAX_SCANNED_NODES: usize = 4 * MAX_POINTS;
+
 const MAGIC_LEN: usize = 13;
 /// `.studio3` files start with a 1024-byte header holding a table of section lengths.
 const V3_HEADER_LEN: usize = 1024;
@@ -117,7 +121,8 @@ pub fn import(bytes: &[u8]) -> Result<Imported, Error> {
     let mut cursor = root.start;
     // An object's style record comes before its outline: search from the last outline.
     let mut style_from = root.start;
-    while let Some((at, path)) = find_path(body, cursor, root.end) {
+    let budget = std::cell::Cell::new(MAX_SCANNED_NODES);
+    while let Some((at, path)) = find_path(body, cursor, root.end, &budget) {
         cursor = path.end;
         if shapes.len() >= MAX_SHAPES {
             return Err(bad("more than 100,000 shapes"));
@@ -136,6 +141,9 @@ pub fn import(bytes: &[u8]) -> Result<Imported, Error> {
         }
         shapes.push(Shape { path: bez, line_color: line_color_before(body, style_from, at) });
         style_from = path.end;
+    }
+    if budget.get() == 0 {
+        return Err(bad("too much data that only looks like outlines"));
     }
     Ok(Imported { version, page_mm: page_size(body, &root), shapes, warnings })
 }
@@ -217,12 +225,12 @@ struct Node {
     handle_out: Option<Vec2>,
 }
 
-fn find_path(d: &[u8], from: usize, to: usize) -> Option<(usize, PathRecord)> {
+fn find_path(d: &[u8], from: usize, to: usize, budget: &std::cell::Cell<usize>) -> Option<(usize, PathRecord)> {
     let window = d.get(from..to)?;
     let mut offset = 0;
     while let Some(rel) = window.get(offset..)?.iter().position(|&b| b == 1) {
         let at = from + offset + rel;
-        if let Some(path) = path_at(d, at, to) {
+        if let Some(path) = path_at(d, at, to, budget) {
             return Some((at, path));
         }
         offset += rel + 1;
@@ -230,7 +238,7 @@ fn find_path(d: &[u8], from: usize, to: usize) -> Option<(usize, PathRecord)> {
     None
 }
 
-fn path_at(d: &[u8], at: usize, limit: usize) -> Option<PathRecord> {
+fn path_at(d: &[u8], at: usize, limit: usize, budget: &std::cell::Cell<usize>) -> Option<PathRecord> {
     let outer = block(d, at)?;
     if outer.end > limit {
         return None;
@@ -242,14 +250,14 @@ fn path_at(d: &[u8], at: usize, limit: usize) -> Option<PathRecord> {
         if contours.len() >= count {
             return None;
         }
-        let (contour, end) = contour_at(d, p, outer.end)?;
+        let (contour, end) = contour_at(d, p, outer.end, budget)?;
         contours.push(contour);
         p = end;
     }
     (p == outer.end && contours.len() == count).then_some(PathRecord { contours, end: outer.end })
 }
 
-fn contour_at(d: &[u8], at: usize, limit: usize) -> Option<(Contour, usize)> {
+fn contour_at(d: &[u8], at: usize, limit: usize, budget: &std::cell::Cell<usize>) -> Option<(Contour, usize)> {
     let end = at.checked_add(usize::try_from(u32_at(d, at)?).ok()?)?;
     let closed = match *d.get(at + 4)? {
         0 => false,
@@ -261,6 +269,10 @@ fn contour_at(d: &[u8], at: usize, limit: usize) -> Option<(Contour, usize)> {
     if end > limit || count > (end - at) / 10 {
         return None;
     }
+    // Checked before allocating. Zero marks the budget spent: every later candidate fails.
+    let left = budget.get().checked_sub(count);
+    budget.set(left.unwrap_or(0));
+    left?;
     let mut nodes = Vec::with_capacity(count);
     let mut p = at + 9;
     for _ in 0..count {
@@ -516,6 +528,23 @@ mod tests {
     fn a_non_finite_coordinate_is_never_imported() {
         let got = import(&v2((304.8, 304.8), &[&[(f32::NAN, 0.0), (1.0, 1.0)], RECT])).unwrap();
         assert_eq!(got.shapes.len(), 1);
+    }
+
+    /// Every 20 bytes starts a candidate outline of 18,432 nodes that parses to its end and
+    /// then fails its contour count: without the scan budget this is billions of node reads.
+    #[test]
+    fn overlapping_near_outlines_are_refused_not_scanned_quadratically() {
+        let n = 18_432u32;
+        let mut period = vec![1];
+        period.extend_from_slice(&(17 + 10 * n).to_le_bytes());
+        period.extend_from_slice(&1u32.to_le_bytes());
+        period.extend_from_slice(&(9 + 10 * n).to_le_bytes());
+        period.push(0);
+        period.extend_from_slice(&(n - 1).to_le_bytes());
+        period.extend_from_slice(&[0, 0]);
+        assert_eq!(period.len(), 20);
+        let file = v2_records((304.8, 304.8), &[period.repeat(100_000)]);
+        assert!(matches!(import(&file), Err(Error::Malformed(what)) if what.contains("looks like outlines")));
     }
 
     #[test]
