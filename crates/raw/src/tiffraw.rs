@@ -82,6 +82,16 @@ pub(crate) fn check_image(data: &[u8], info: &ImageInfo, limits: &Limits) -> Res
     if available.saturating_mul(2048) < total as u64 {
         return Err(RawError::Corrupt(format!("{available} bytes of image data cannot hold {total} samples")));
     }
+    // Lossless JPEG codes every sample in a bit at least: ljpeg's per-frame check allows 8 samples per entropy byte plus
+    // 64 bytes of slack, which a frame's own headers (over 32 bytes with its Huffman table) cover twice over, so 16
+    // coded samples per byte, and twice that for 4:2:0 YCbCr (half the samples it fills are coded) (storytold/lightcraft#2554). The
+    // bytes are counted once per chunk that points at them here: tiles may legitimately share one payload (identical
+    // tiles written once), and each copy is decoded in full, so every reference brings its payload's samples. The
+    // unique-byte bound above still caps what a small payload shared by a large grid can make the output reserve.
+    let referenced = chunks.iter().fold(0u64, |sum, c| sum.saturating_add(chunk_bytes(data, c).map_or(0, |b| b.len() as u64)));
+    if info.compression == comp::JPEG && referenced.saturating_mul(32) < total as u64 {
+        return Err(RawError::Corrupt(format!("{referenced} bytes of lossless JPEG data cannot hold {total} samples")));
+    }
     Ok(total)
 }
 
@@ -269,7 +279,13 @@ fn decode_chunk(
         #[cfg(feature = "dng")]
         comp::LOSSY_JPEG => {
             // lossy DNG: each chunk is a baseline (DCT) JPEG of 8-bit samples
-            let (px, jw, jh, jc) = lossy_jpeg(src, cpp, limits.max_lossy_tile_samples)?;
+            // a JPEG decoded for a tile may hold no more samples than the tile (a real one is exactly the tile):
+            // many small tiles pointing at one big JPEG would otherwise each decode all of it
+            // (the JPEG codes whole MCUs, at most 32 × 32 pixels each, so its size is the tile's rounded up to them)
+            let mcu = |v: usize| v.div_ceil(32).saturating_mul(32);
+            let tile_budget =
+                mcu(cw).saturating_mul(mcu(ch)).saturating_mul(if cpp == 1 { 1 } else { 3 }).clamp(1, limits.max_lossy_tile_samples.max(1));
+            let (px, jw, jh, jc) = lossy_jpeg(src, cpp, tile_budget)?;
             // An edge tile's JPEG may be smaller than the nominal tile, but it has to cover the part of the tile
             // inside the image: one that doesn't would leave a black region in a picture reported as decoded
             // (PhotoCraft's and FilmCraft's readers refuse a JPEG smaller than its tile; this keeps the edge case).
@@ -300,6 +316,16 @@ fn decode_chunk(
             // Deflate compresses at most about 1:1032, so a source this far under half of its
             // nominal length cannot reconstruct the chunk: refused before the nominal buffer is
             // inflated and predicted, which padding-only work would make gigabytes.
+            // Nor may the nominal chunk be mostly padding outside the image (a tile far larger than the picture):
+            // its allocation and predictor pass would be spent on samples nobody reads.
+            if n > vw
+                .saturating_mul(vh)
+                .saturating_mul(cpp)
+                .saturating_mul(MAX_PADDING_FACTOR)
+                .saturating_add(MAX_WRITER_TILE_SAMPLES.saturating_mul(cpp))
+            {
+                return Err(RawError::Limit("deflated chunk is mostly padding outside the image"));
+            }
             if (src.len() as u64).saturating_mul(2048) < inflate_len {
                 return Err(RawError::Corrupt(format!("a deflated chunk of {inflate_len} bytes is packed into only {} bytes", src.len())));
             }
@@ -343,6 +369,15 @@ fn jxl_chunk(_: &[u8], _: usize, _: usize, _: usize, _: usize, _: usize, _: u32,
 fn jxl_chunk_check(src: &[u8], cw: usize, ch: usize, vw: usize, vh: usize, cpp: usize, bits: u32, float: bool) -> Result<()> {
     jxl_chunk(src, cw, ch, vw, vh, cpp, bits, float).map(|_| ())
 }
+
+/// How many times its in-image samples a deflated chunk's nominal size may reach (plus a writer tile of slack):
+/// edge tiles of real files are mostly inside the image.
+#[cfg(feature = "dng")]
+const MAX_PADDING_FACTOR: usize = 32;
+/// Samples per plane of the largest Deflate tile the DNG writer pads to (2048 × 2048, `dngwrite::MAX_DEFLATE_TILE`),
+/// which a small image's one tile is nearly all padding of: such files still decode.
+#[cfg(feature = "dng")]
+const MAX_WRITER_TILE_SAMPLES: usize = 2048 * 2048;
 
 #[cfg(feature = "dng")]
 /// Decode one baseline JPEG chunk to 8-bit samples: (samples, width, height, channels).
@@ -533,6 +568,65 @@ mod lossy_tests {
         assert!((px(2, 3)[0] as i32 - 40).abs() <= 3 && (px(2, 3)[2] as i32 - 200).abs() <= 3, "{:?}", px(2, 3));
         assert!((px(20, 3)[0] as i32 - 220).abs() <= 3, "second tile: {:?}", px(20, 3));
         assert!((px(10, 5)[1] as i32 - 150).abs() <= 6, "green ramp: {:?}", px(10, 5));
+    }
+
+    /// A small tile may not decode a JPEG much larger than itself (a table of tiny tiles all pointing at one big
+    /// JPEG would decode it once per tile); a JPEG that fills the tile's whole 32 × 32 MCU block still decodes.
+    #[test]
+    fn a_lossy_tile_may_not_decode_a_much_larger_jpeg() {
+        let encode = |w: usize, h: usize| {
+            let mut out = Vec::new();
+            jpeg_encoder::Encoder::new(&mut out, 90).encode(&vec![128u8; w * h * 3], w as u16, h as u16, jpeg_encoder::ColorType::Rgb).unwrap();
+            out
+        };
+        let image = |jpeg: &[u8]| {
+            let mut file = vec![0u8; 8];
+            file.extend_from_slice(jpeg);
+            let info = ImageInfo {
+                width: 4,
+                height: 4,
+                bits_per_sample: vec![8, 8, 8],
+                samples_per_pixel: 3,
+                compression: comp::LOSSY_JPEG,
+                photometric: 34892,
+                planar: 1,
+                predictor: 1,
+                sample_format: 1,
+                new_subfile_type: 0,
+                layout: Layout::Tiles { tile_width: 16, tile_height: 16 },
+                offsets: vec![8],
+                byte_counts: vec![jpeg.len() as u64],
+            };
+            read_image(&file, &info, ByteOrder::Little, Packing::Msb, &Limits::default())
+        };
+        assert!(image(&encode(32, 32)).is_ok());
+        assert!(matches!(image(&encode(256, 256)), Err(RawError::Corrupt(_))));
+    }
+
+    /// A Deflate tile that is nearly all padding outside the image (a 4096 × 4096 tile holding one column of a
+    /// 4097-wide picture) is refused before its nominal buffer is inflated; the writer's largest padded tile
+    /// (2048 × 2048) is within the slack (`dngwrite`'s clamp test).
+    #[test]
+    fn a_deflate_tile_that_is_mostly_padding_is_refused() {
+        let file = vec![0u8; 8 + 8192];
+        let info = ImageInfo {
+            width: 4097,
+            height: 4096,
+            bits_per_sample: vec![8],
+            samples_per_pixel: 1,
+            compression: comp::ADOBE_DEFLATE,
+            photometric: 32803,
+            planar: 1,
+            predictor: 1,
+            sample_format: 1,
+            new_subfile_type: 0,
+            layout: Layout::Tiles { tile_width: 4096, tile_height: 4096 },
+            offsets: vec![8, 8],
+            byte_counts: vec![8192, 8192],
+        };
+        let chunks = info.chunks(file.len() as u64);
+        let edge = decode_chunk(&file, &info, &chunks[1], ByteOrder::Little, Packing::Msb, 1, 8, false, &Limits::default());
+        assert!(matches!(edge, Err(RawError::Limit(_))), "{:?}", edge.err());
     }
 
     fn strip_info(compression: u16, offsets: Vec<u64>, byte_counts: Vec<u64>) -> ImageInfo {
@@ -766,5 +860,71 @@ mod lossy_tests {
             read_image(&zlib, &info(zlib.len() as u64), ByteOrder::Little, Packing::Msb, &Limits::default()),
             Err(RawError::Corrupt(_))
         ));
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+    use crate::ljpeg;
+    use craft_tiff::image::Layout;
+    use craft_tiff::tags::photometric;
+
+    /// `w`×`h` CFA image in `tile`×`tile` lossless-JPEG tiles that all point at the same `payload` bytes at offset 0.
+    fn aliased(w: u32, h: u32, tile: u32, payload: u64) -> ImageInfo {
+        let n = (w.div_ceil(tile) * h.div_ceil(tile)) as usize;
+        ImageInfo {
+            width: w,
+            height: h,
+            bits_per_sample: vec![14],
+            samples_per_pixel: 1,
+            compression: 7,
+            photometric: photometric::CFA,
+            planar: 1,
+            predictor: 1,
+            sample_format: 1,
+            new_subfile_type: 0,
+            layout: Layout::Tiles { tile_width: tile, tile_height: tile },
+            offsets: vec![0; n],
+            byte_counts: vec![payload; n],
+        }
+    }
+
+    /// storytold/lightcraft#2554: 16 tiles of 256×256 sharing one 1 KiB payload pass the generic 2048-samples-per-byte bound (1 Mi samples
+    /// from 1 KiB) but no lossless JPEG holds that many samples in those bytes.
+    #[test]
+    fn lossless_jpeg_tiles_sharing_a_payload_are_refused() {
+        let data = vec![0u8; 1024];
+        let info = aliased(1024, 1024, 256, 1024);
+        assert!(matches!(check_image(&data, &info, &Limits::default()), Err(RawError::Corrupt(_))));
+        // the same grid declared as Deflate (~2000 samples per byte at most) still passes this check
+        let deflate = ImageInfo { compression: 8, ..info };
+        assert!(check_image(&data, &deflate, &Limits::default()).is_ok());
+    }
+
+    /// Tiles may share one payload (a writer storing identical tiles once): each reference decodes its payload in full,
+    /// so 32 constant 256×256 lossless-JPEG tiles pointing at one tile's bytes decode (header check and full decode),
+    /// though the shared bytes alone are far fewer than one bit per sample of the image.
+    #[test]
+    fn lossless_jpeg_tiles_sharing_a_real_tile_decode() {
+        let tile = ljpeg::encode(&vec![300u16; 256 * 256], 256, 256, 1, 12, 1, 0);
+        let info = ImageInfo { bits_per_sample: vec![12], byte_counts: vec![tile.len() as u64; 32], ..aliased(2048, 1024, 256, 0) };
+        // one copy of the bytes holds fewer than 32 samples per byte of the whole grid: a unique-byte bound refused it
+        assert!((tile.len() as u64) * 32 < 2048 * 1024, "{} bytes", tile.len());
+        assert!(read_image_in(crate::Mode::Header, &tile, &info, ByteOrder::Little, Packing::Msb, &Limits::default()).is_ok());
+        assert_eq!(read_image(&tile, &info, ByteOrder::Little, Packing::Msb, &Limits::default()), Ok(RawData::U16(vec![300; 2048 * 1024])));
+    }
+
+    /// The unique-byte bound still caps a large grid of tiles sharing a small payload: 256 tiles of 256×256 (16 Mi
+    /// samples) referencing the same 8000 bytes pass the per-reference lossless-JPEG bound (2 MB referenced) but those
+    /// 8000 bytes cannot hold 16 Mi samples, so nothing is reserved.
+    #[test]
+    fn a_huge_grid_sharing_a_small_payload_is_still_refused() {
+        let data = vec![0u8; 8000];
+        let info = aliased(4096, 4096, 256, 8000);
+        for mode in [crate::Mode::Header, crate::Mode::Full] {
+            let err = read_image_in(mode, &data, &info, ByteOrder::Little, Packing::Msb, &Limits::default()).unwrap_err();
+            assert!(matches!(&err, RawError::Corrupt(m) if m.contains("8000 bytes of image data")), "{err:?}");
+        }
     }
 }
