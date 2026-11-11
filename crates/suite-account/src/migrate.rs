@@ -153,7 +153,13 @@ pub fn adopt<S: TokenStore>(store: &Store<S>, path: &Path, now: i64) -> Result<A
         }
         return Ok(Adopted::Taken(account));
     }
-    let new = NewAccount { service: legacy.service.clone(), user: legacy.user.clone(), display: legacy.display.clone(), email: legacy.email.clone(), linked: false };
+    let new = NewAccount {
+        service: legacy.service.clone(),
+        user: legacy.user.clone(),
+        display: legacy.display.clone(),
+        email: legacy.email.clone(),
+        linked: false,
+    };
     let account = store.sign_in(&new, &legacy.token, now)?;
     // Only now, with the session held somewhere better, does the file go. Something else may
     // have rewritten it in the meantime (another process still running the application's own,

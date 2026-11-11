@@ -361,7 +361,14 @@ fn a_stale_refresh_racing_a_discard_and_re_sign_in_does_not_delete_the_new_sessi
 
 /// What a crafted accounts file at the limit looks like: one account, holding `generation`.
 fn account_at(id: &str, generation: u32) -> Account {
-    Account { id: id.to_owned(), service: SERVICE.to_owned(), user: USER.to_owned(), display: "Ada Lovelace".to_owned(), generation, ..Account::default() }
+    Account {
+        id: id.to_owned(),
+        service: SERVICE.to_owned(),
+        user: USER.to_owned(),
+        display: "Ada Lovelace".to_owned(),
+        generation,
+        ..Account::default()
+    }
 }
 
 #[test]
@@ -377,7 +384,8 @@ fn a_refresh_against_an_account_already_at_the_maximum_generation_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join(paths::FILE);
     let id = accounts::handle(SERVICE, USER);
-    let list = accounts::Accounts { format: accounts::FORMAT, accounts: vec![account_at(&id, u32::MAX)], active: Some(id.clone()), tombstones: Vec::new() };
+    let list =
+        accounts::Accounts { format: accounts::FORMAT, accounts: vec![account_at(&id, u32::MAX)], active: Some(id.clone()), tombstones: Vec::new() };
     accounts::write(&path, &list).unwrap();
     let keychain = Memory::new();
     keychain.put(&id, &Secret::new(TOKEN)).unwrap();
@@ -426,7 +434,8 @@ fn write_refuses_a_list_too_large_for_read_to_ever_open_again() {
 fn write_leaves_a_previously_good_file_untouched_when_the_new_one_is_too_large() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join(paths::FILE);
-    let good = accounts::Accounts { format: accounts::FORMAT, accounts: vec![account_at("a", 0)], active: Some("a".to_owned()), tombstones: Vec::new() };
+    let good =
+        accounts::Accounts { format: accounts::FORMAT, accounts: vec![account_at("a", 0)], active: Some("a".to_owned()), tombstones: Vec::new() };
     accounts::write(&path, &good).unwrap();
 
     let oversized = accounts::Accounts {
@@ -639,7 +648,10 @@ fn migration_leaves_a_legacy_file_alone_once_it_changed_after_being_read() {
     };
     assert_eq!(account.service, SERVICE, "the session that was actually read is still the one adopted");
 
-    assert!(path.exists(), "the file changed after it was read; deleting it would discard the rewritten session with nothing left to recover it from");
+    assert!(
+        path.exists(),
+        "the file changed after it was read; deleting it would discard the rewritten session with nothing left to recover it from"
+    );
     let left_behind = std::fs::read_to_string(&path).unwrap();
     assert!(left_behind.contains("refreshed-elsewhere"), "the file on disk must still be the rewritten one: {left_behind}");
 }
