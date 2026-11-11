@@ -290,9 +290,12 @@ pub fn decode_thumbnail(bytes: &[u8], min_edge: u32, options: &Options) -> Resul
                 Err(_) => continue,
             };
             if let Some((_, tiles)) = grid {
-                let mut seen = std::collections::HashSet::new();
-                let tiles_ok = tiles.iter().filter(|t| seen.insert(**t)).all(|&t| {
-                    item_visits(&ctx, t, 0, &mut candidate_visits).is_ok() && ctx.props(t).is_ok_and(|tp| check_item_parameter_sets(&tp).is_ok())
+                // every reference is rebuilt and decoded, repeats included, so each is charged;
+                // the properties are checked once per distinct tile
+                let mut checked = std::collections::HashSet::new();
+                let tiles_ok = tiles.iter().all(|&t| {
+                    item_visits(&ctx, t, 0, &mut candidate_visits).is_ok()
+                        && (!checked.insert(t) || ctx.props(t).is_ok_and(|tp| check_item_parameter_sets(&tp).is_ok()))
                 });
                 if !tiles_ok {
                     continue;

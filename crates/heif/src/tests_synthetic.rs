@@ -153,6 +153,21 @@ fn an_alpha_grid_decodes_and_its_tile_references_share_the_visit_budget() {
     }
 }
 
+/// A thumbnail grid naming one tile thousands of times is not a candidate (each reference would be
+/// rebuilt and decoded). The candidates share one visit budget, so a valid thumbnail listed before
+/// it still wins; a small repeat count is fine.
+#[test]
+fn a_thumbnail_grid_charges_every_tile_reference() {
+    let ok = Spec { thumbnail_tile_repeats: 2, ..Spec::new(64, 64, &grey) };
+    let t = decode_thumbnail(&build(&ok), 1, &Options::default()).unwrap();
+    assert!(t.is_some(), "a 2 x 2 repeated-tile thumbnail is valid");
+    let hostile = Spec { thumbnail_tile_repeats: 70, ..Spec::new(64, 64, &grey) };
+    assert!(decode_thumbnail(&build(&hostile), 1, &Options::default()).unwrap().is_none());
+    let both = Spec { thumbnail_tile_repeats: 70, thumbnail: Some(&grey), ..Spec::new(64, 64, &grey) };
+    let t = decode_thumbnail(&build(&both), 1, &Options::default()).unwrap().expect("the plain thumbnail is the candidate");
+    assert_eq!((t.width, t.height), (32, 32));
+}
+
 #[test]
 fn limits_are_checked_before_decoding() {
     let bytes = build(&Spec::new(96, 64, &grey));

@@ -50,6 +50,9 @@ pub struct Spec<'a> {
     /// When nonzero, the alpha image is instead a grid of `n` × `n` references to one alpha tile
     /// (a hostile file: the same stored picture rebuilt for every reference).
     pub alpha_tile_repeats: u8,
+    /// When nonzero, a thumbnail that is a grid of `n` × `n` references to one tile, written
+    /// after any `thumbnail` item (a hostile file, as with `alpha_tile_repeats`).
+    pub thumbnail_tile_repeats: u8,
 }
 
 impl<'a> Spec<'a> {
@@ -65,6 +68,7 @@ impl<'a> Spec<'a> {
             thumbnail: None,
             ignored_aux: Vec::new(),
             alpha_tile_repeats: 0,
+            thumbnail_tile_repeats: 0,
         }
     }
 }
@@ -563,6 +567,19 @@ pub fn build(spec: &Spec<'_>) -> Vec<u8> {
         if let Some(it) = f.items.iter_mut().find(|i| i.id == id) {
             it.props.extend(assoc.iter().filter(|a| !a.2).map(|&(i, e, _)| (i, e)));
         }
+        f.refs.push((b"thmb", id, vec![primary]));
+    }
+    if let n @ 1.. = spec.thumbnail_tile_repeats {
+        let tile = f.image(TILE, TILE, bd, false, spec.sample);
+        if let Some(it) = f.items.iter_mut().find(|i| i.id == tile) {
+            it.hidden = true;
+        }
+        let side = u32::from(n) * TILE;
+        let mut g = vec![0u8, 0, n - 1, n - 1];
+        g.extend_from_slice(&(side as u16).to_be_bytes());
+        g.extend_from_slice(&(side as u16).to_be_bytes());
+        let id = f.add(b"grid", g, Vec::new());
+        f.refs.push((b"dimg", id, vec![tile; usize::from(n) * usize::from(n)]));
         f.refs.push((b"thmb", id, vec![primary]));
     }
     f.write(primary)
