@@ -217,9 +217,14 @@ fn button_of(button: egui::PointerButton) -> PointerButton {
     }
 }
 
+/// How far a press may move and still be a click, in points.
+pub(crate) fn slop(ctx: &Context) -> f32 {
+    ctx.options(|options| options.input_options.max_click_dist)
+}
+
 /// Converts the running pass's pointer input.
 pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
-    let slop = ctx.options(|options| options.input_options.max_click_dist);
+    let slop = slop(ctx);
     let os = crate::runtime::windows::os_of(ctx);
     ctx.input(|input| {
         let mut events = Vec::new();

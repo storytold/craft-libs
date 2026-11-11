@@ -256,9 +256,10 @@ fn dragging_a_native_palette_by_its_title_row_docks_it_where_the_app_moves_windo
     assert!(!docked, "a cancelled move docks nothing");
 }
 
-/// Where the OS moves windows and the app reads the system pointer and button meanwhile (macOS): the title row's drag
-/// hands the move to the OS, the system pointer over the main window's group marks it (Cmd keeps the drop floating),
-/// and the window docks when the system tells the button is up, not on the first pass after the hand-off.
+/// Where the OS moves windows and the app reads the system pointer and button meanwhile (macOS): the title row's press
+/// hands the move to the OS in its own pass, the system pointer over the main window's group marks it (Cmd keeps the
+/// drop floating), and the window docks when the system tells the button is up, not on the first pass after the
+/// hand-off. A click on the row docks nothing.
 #[trial]
 fn dragging_a_native_palette_by_its_title_row_docks_it_where_the_os_moves_windows() {
     let system = Arc::new(FakeSystem::new());
@@ -266,11 +267,18 @@ fn dragging_a_native_palette_by_its_title_row_docks_it_where_the_os_moves_window
     let pressed_at = FLOAT_AT.min + ROW_AT.to_vec2();
     system.set_pointer(Some([pressed_at.x, pressed_at.y]));
     system.set_primary_held(Some(true));
-    for events in [vec![moved(ROW_AT)], vec![press(ROW_AT)]] {
-        dock.frame(events);
+    dock.frame(vec![moved(ROW_AT)]);
+    let (_, commands) = dock.frame(vec![press(ROW_AT)]);
+    assert!(commands.contains(&ViewportCommand::StartDrag), "the press hands the move to the OS: {commands:?}");
+    system.set_primary_held(Some(false));
+    let mut clicked = false;
+    for _ in 0..3 {
+        clicked |= docks_window(&dock.frame(vec![]).0);
     }
-    let (_, commands) = dock.frame(vec![moved(ROW_AT + Vec2::new(12.0, 0.0))]);
-    assert!(commands.contains(&ViewportCommand::StartDrag), "the OS moves the window: {commands:?}");
+    assert!(!clicked && drag::mark(&dock.windows.ctx).is_none(), "a click on the row docks nothing");
+    system.set_primary_held(Some(true));
+    dock.frame(vec![press(ROW_AT)]);
+    dock.frame(vec![]);
     system.set_pointer(Some([OVER_GROUP.x, OVER_GROUP.y]));
     let mut docked = false;
     for _ in 0..3 {

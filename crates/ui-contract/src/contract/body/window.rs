@@ -104,6 +104,9 @@ struct WindowMove {
     at: Rect,
     /// The OS moves the window and the app follows the system pointer ([`Caps::OS_MOVES_TRACKED`]).
     tracked: bool,
+    /// The pointer has passed the click distance from the press, and the move is reported. A tracked move is handed
+    /// to the OS on the press, and stays a click, which moves and docks nothing, until then.
+    begun: bool,
 }
 
 /// The outer rect of a viewport mount's OS window as the container last learnt it: the window's placement, which the
@@ -357,10 +360,12 @@ impl BodyHooks<'_> {
     /// The move of an OS window whose app runs it ([`windows::keeps_app_drag`]): a drag of the move band keeps the
     /// pressed point under the pointer, and each step is reported through `placement_changed` as a layer's move is,
     /// from Begin to Commit or Cancel. Where the platform tracks the OS's moves ([`Caps::OS_MOVES_TRACKED`]) the OS
-    /// moves the window, and the window is where the system pointer is less the pressed point; the move ends with the
-    /// release the window host adds once the system tells the button is up. Elsewhere the app moves the window to
-    /// this pass's pointer, relative to where the window reports itself, and Escape puts it back. The drag's desktop
-    /// pointer is the pressed point of the window where the move put it.
+    /// moves the window, from the press: `StartMove` hands it the press event, which a later pass no longer has. The
+    /// window is where the system pointer is less the pressed point, and the move is reported once the pointer has
+    /// passed the click distance, so a click on the band moves and docks nothing; it ends with the release the window
+    /// host adds once the system tells the button is up. Elsewhere the move starts past the click distance, the app
+    /// moves the window to this pass's pointer, relative to where the window reports itself, and Escape puts it back.
+    /// The drag's desktop pointer is the pressed point of the window where the move put it.
     fn window_move<C: Container>(&mut self, viewport: ViewportId, cx: &mut Cx<'_, C>) {
         let ctx = cx.core.ctx.clone();
         let Some(phase) = cx.core.results.get(&(MOVE_BAND, None)).map(|result| result.press.phase) else { return };
@@ -372,27 +377,29 @@ impl BodyHooks<'_> {
         let change = |rect: Rect, phase: GesturePhase| PlacementChange { rect, phase, pointer: None, kind: PlacementKind::Move };
         let pointer_of = |moving: &WindowMove| moving.at.min + inset + moving.grab;
         let Some(mut moving) = self.mode.moving else {
-            if let PressPhase::DragStart { start, pos, .. } = phase {
-                let tracked = windows::shell_of(&ctx, viewport).caps.contains(Caps::OS_MOVES_TRACKED);
-                // The OS keeps the window where it is under the pointer now; the app puts the pressed point under it.
-                let grab = (if tracked { pos } else { start.origin }).to_vec2();
-                let mut moving = WindowMove { grab, start: outer, at: outer, tracked };
-                self.reports.push(change(outer, GesturePhase::Begin));
-                if tracked {
+            let tracked = windows::shell_of(&ctx, viewport).caps.contains(Caps::OS_MOVES_TRACKED);
+            let mut moving = WindowMove { grab: Vec2::ZERO, start: outer, at: outer, tracked, begun: !tracked };
+            match phase {
+                PressPhase::Down { start, .. } if tracked => {
+                    moving.grab = start.origin.to_vec2();
                     windows::act(&ctx, viewport, WindowAction::StartMove);
-                } else {
+                }
+                PressPhase::DragStart { start, pos, .. } if !tracked => {
+                    moving.grab = start.origin.to_vec2();
+                    self.reports.push(change(outer, GesturePhase::Begin));
                     moving.at = outer.translate(pos - start.origin);
                     windows::act(&ctx, viewport, WindowAction::SetOuterPosition(moving.at.min));
+                    self.reports.push(change(moving.at, GesturePhase::Update));
                 }
-                windows::note_moved_pointer(&ctx, viewport, Some(pointer_of(&moving)));
-                self.reports.push(change(moving.at, GesturePhase::Update));
-                self.mode.moving = Some(moving);
+                _ => return,
             }
+            windows::note_moved_pointer(&ctx, viewport, Some(pointer_of(&moving)));
+            self.mode.moving = Some(moving);
             return;
         };
         let ended = match phase {
             PressPhase::Cancel { .. } => Some(GesturePhase::Cancel),
-            PressPhase::Drag { .. } | PressPhase::Held { .. } | PressPhase::DragStart { .. } => None,
+            PressPhase::Down { .. } | PressPhase::Drag { .. } | PressPhase::Held { .. } | PressPhase::DragStart { .. } => None,
             // A release, or a press that ended in a pass the container did not run.
             _ => Some(GesturePhase::Commit),
         };
@@ -401,7 +408,9 @@ impl BodyHooks<'_> {
                 windows::act(&ctx, viewport, WindowAction::SetOuterPosition(moving.start.min));
                 moving.at = moving.start;
             }
-            self.reports.push(change(moving.at, ended));
+            if moving.begun {
+                self.reports.push(change(moving.at, ended));
+            }
             windows::note_moved_pointer(&ctx, viewport, None);
             self.mode.moving = None;
             return;
@@ -417,15 +426,21 @@ impl BodyHooks<'_> {
                 pointer::pass_pointer(&ctx).events.iter().rev().find_map(|event| if let PointerEvent::Moved(at) = event { Some(*at) } else { None });
             moved.map(|at| facts.inner.min + (at.to_vec2() - moving.grab) - inset)
         };
-        if let Some(to) = to.filter(|to| *to != moving.at.min) {
-            moving.at = Rect::from_min_size(to, moving.at.size());
-            if !moving.tracked {
-                windows::act(&ctx, viewport, WindowAction::SetOuterPosition(to));
+        let Some(to) = to.filter(|to| *to != moving.at.min) else { return };
+        if !moving.begun {
+            if to.distance(moving.start.min) <= input::slop(&ctx) {
+                return;
             }
-            windows::note_moved_pointer(&ctx, viewport, Some(pointer_of(&moving)));
-            self.reports.push(change(moving.at, GesturePhase::Update));
-            self.mode.moving = Some(moving);
+            moving.begun = true;
+            self.reports.push(change(moving.start, GesturePhase::Begin));
         }
+        moving.at = Rect::from_min_size(to, moving.at.size());
+        if !moving.tracked {
+            windows::act(&ctx, viewport, WindowAction::SetOuterPosition(to));
+        }
+        windows::note_moved_pointer(&ctx, viewport, Some(pointer_of(&moving)));
+        self.reports.push(change(moving.at, GesturePhase::Update));
+        self.mode.moving = Some(moving);
     }
 
     /// A viewport mount in an OS window reports the window's moves and resizes from its facts, through the
@@ -517,14 +532,14 @@ impl BodyHooks<'_> {
     /// Tells the platform whether the OS may move the container's OS window from where the pointer is (21.2
     /// `WindowDrag`; macOS `NSWindow.movable`): only where a press would go to the move band under the press-target
     /// rule (8.3), so a press on a control over the band never drags the window. Bands of one window combine: any band
-    /// that would take the press allows the move. A window whose move the app runs ([`Self::window_move`]) is never
-    /// moved by the OS from its band; only the move's own hand-off moves it. A pass with no band writes nothing;
-    /// `AppShell` writes `false` for a pass with no title bar.
+    /// that would take the press allows the move. A window whose move the app runs ([`Self::window_move`]) writes
+    /// nothing: its move starts from the band's press, and macOS keeps such a window movable, which AppKit needs to
+    /// move it for the hand-off and to resize it from its edges. A pass with no band writes nothing; `AppShell` writes
+    /// `false` for a pass with no title bar.
     pub(super) fn window_movable<C: Container>(&self, viewport: ViewportId, cx: &Cx<'_, C>) {
         let Some(band) = cx.core.results.get(&(MOVE_BAND, None)) else { return };
         let ctx = &cx.core.ctx;
         if windows::app_moves(ctx, viewport) {
-            viewports::write_movable(ctx, false);
             return;
         }
         let takes_press = band.hovered

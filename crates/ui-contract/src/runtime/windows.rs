@@ -360,7 +360,9 @@ pub fn logic(ctx: &Context) {
 /// Sets the `movable` flag of the running viewport's OS window from this pass's [`viewports::movable`]: the one place
 /// AppKit's flag is set, after the window's UI has run. A window is told apart by its viewport: the key window is the one
 /// whose viewport has focus, so an unfocused viewport is left as it is. AppKit is only called when the flag changes.
-/// Only a macOS window with a full-size content view has a flag to set; elsewhere this does nothing.
+/// Only a macOS window with a full-size content view has a flag to set; elsewhere this does nothing. A window whose
+/// move the app runs ([`keeps_app_drag`]) keeps AppKit's own flag: AppKit moves it for the move's hand-off and resizes
+/// it from its edges only while it is movable.
 fn sync_movable(ctx: &Context) {
     if !viewports::current(ctx).focus_reported {
         return;
@@ -368,7 +370,7 @@ fn sync_movable(ctx: &Context) {
     let movable = viewports::movable(ctx);
     let viewport = pass::current_viewport(ctx);
     PerViewport::<Record>::with(ctx, viewport, |record| {
-        if record.movable_applied != Some(movable) {
+        if !record.app_drag && record.movable_applied != Some(movable) {
             craft_window::mac::set_movable(movable, &mut record.movable_applied);
         }
     });
