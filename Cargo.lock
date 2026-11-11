@@ -1544,6 +1544,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-xls"
+version = "0.1.0"
+dependencies = [
+ "craft-cfb",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-xml"
 version = "0.1.0"
 dependencies = [
