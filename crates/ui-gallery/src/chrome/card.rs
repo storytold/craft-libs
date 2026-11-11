@@ -4,6 +4,7 @@
 //! is in, so its dialogs open over that view, as an app's do. [`StoryBody`] is the story part alone, which the story
 //! renderer (`story-render`) shows too.
 
+use super::inspect::{Inspected, region_key};
 use crate::viewer::{CardState, Cells, DialogState};
 use craft_behavior::{ColumnWidth, IconId};
 use craft_i18n::Direction;
@@ -11,9 +12,10 @@ use craft_theme::{ControlSize, Mode};
 use craft_ui::buttons::Button;
 use craft_ui::contract::Show as _;
 use craft_ui::contract::{CommandSet, Commands as _, Gap, Pad, Props as _, ShowContainer as _, Sizing, StoryLayout, Surface, ThemeScope};
-use craft_ui::display::{Shade, Text};
+use craft_ui::display::{InspectLayers, InspectOverlay, Shade, Text};
 use craft_ui::layout_components::{Grid, Stack};
 use craft_ui::runtime::env::with_env;
+use craft_ui::runtime::inspect::{self, Recorded};
 use craft_ui::runtime::layout_memory;
 use craft_ui::sections::{HeaderCommand, HeaderStrength, Panel};
 use craft_ui::style::SurfaceKind;
@@ -22,6 +24,7 @@ use craft_ui::testing::{StoryData, StoryOutput, StoryRegistration};
 /// A story's show function.
 type StoryFn = fn(&mut Ui, &mut StoryData) -> StoryOutput;
 use egui::{Id, Rect, Ui};
+use std::sync::Arc;
 
 /// The header commands of a card.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
@@ -98,6 +101,8 @@ pub struct Card<'a> {
     /// Whether the stories' wheel takers take the wheel only while focused or armed: a card among others in a
     /// scrolling overview.
     pub gated: bool,
+    /// How the card's stories are inspected, while the inspector is on and the card is the selected one.
+    pub inspect: Option<Inspected>,
 }
 
 /// What a card reported in a pass.
@@ -216,6 +221,7 @@ impl Card<'_> {
             look: self.look,
             gated: self.gated,
             caption: caption.map(str::to_owned),
+            inspect: self.inspect.map(|inspected| (region_key(inspected.tab, story.index), inspected.layers)),
             ..StoryBody::new(key, story.story, self.surface, self.room, Pad::None)
         }
     }
@@ -240,6 +246,8 @@ pub struct StoryBody {
     pub panel_pad: Pad,
     /// The caption over the story, on the story's surface, in the old gallery's caption style.
     pub caption: Option<String>,
+    /// The inspected region the story is shown as, and the drawings shown over it.
+    pub inspect: Option<(Id, InspectLayers)>,
 }
 
 /// What a story body showed.
@@ -253,7 +261,7 @@ pub struct BodyShown {
 impl StoryBody {
     /// The body of `story` on `surface`, in the window's look, with ungated wheel takers.
     pub fn new(key: impl Into<String>, story: &'static StoryRegistration, surface: Surface, room: f32, panel_pad: Pad) -> Self {
-        StoryBody { key: key.into(), story, surface, room, look: Look::default(), gated: false, panel_pad, caption: None }
+        StoryBody { key: key.into(), story, surface, room, look: Look::default(), gated: false, panel_pad, caption: None, inspect: None }
     }
 
     /// The story on its surface, in the shell around the body: its dialogs open over the shell's view.
@@ -292,13 +300,16 @@ impl StoryBody {
         let ran = std::cell::Cell::new(None);
         let value_key = self.value_key();
         let data = &mut state.data;
+        // The record of the story's real run, when it is inspected.
+        let mut recorded = None;
         let surface = host.stack().show(ui, |ui, cx| {
             if !runs {
                 return;
             }
             let shell = cx.shell();
             let before = shell.as_ref().map_or(0, |shell| shell.dialogs_shown());
-            let output = host.content(ui, show, data);
+            let (output, record) = host.content(ui, show, data, self.inspect.map(|(key, _)| key));
+            recorded = record.or(recorded.take());
             if !ui.is_sizing_pass() {
                 ran.set(Some(shell.is_some_and(|shell| shell.dialogs_shown() > before)));
             }
@@ -306,6 +317,10 @@ impl StoryBody {
         });
         if !runs {
             ui.ctx().request_repaint();
+        }
+        if let (Some((key, layers)), Some(recorded)) = (self.inspect, recorded) {
+            let pointed = inspect::pointed(ui.ctx(), key);
+            InspectOverlay::new(recorded).layers(layers).pointed(pointed).show_at(ui, surface.output.rect);
         }
         if let Some(shown) = ran.get() {
             let dialog = &mut state.dialog;
@@ -385,8 +400,9 @@ impl Host<'_> {
         }
     }
 
-    /// The story under its caption, in the card's direction and control size.
-    fn content(&self, ui: &mut Ui, show: StoryFn, data: &mut StoryData) -> StoryOutput {
+    /// The story under its caption, in the card's direction and control size; shown as the inspected region `region`
+    /// when given, with the region's record of a real run.
+    fn content(&self, ui: &mut Ui, show: StoryFn, data: &mut StoryData, region: Option<Id>) -> (StoryOutput, Option<Arc<Recorded>>) {
         self.caption_in(ui);
         let (look, gated) = (self.look, self.gated);
         with_env(
@@ -396,7 +412,10 @@ impl Host<'_> {
                 env.size = look.size;
                 env.wheel = gated.then_some(craft_ui::runtime::env::WheelScope::Gated);
             },
-            |ui| show(ui, data),
+            |ui| match region {
+                Some(key) => inspect::record(ui, key, |ui| show(ui, data)),
+                None => (show(ui, data), None),
+            },
         )
     }
 }

@@ -13,6 +13,7 @@ use crate::theme::ThemeWorkspace;
 use craft_behavior::Selection;
 use craft_behavior::dock::Workspace as Dock;
 use craft_ui::contract::Level;
+use craft_ui::display::InspectLayers;
 use craft_ui::list::OpenSet;
 use craft_ui::runtime::env::RootEnv;
 use std::collections::HashMap;
@@ -98,6 +99,8 @@ pub struct Viewer {
     pub theme_dock: Dock<PanelId>,
     /// The mock application the theme workspace's App preview shows.
     pub mock: MockState,
+    /// The drawings the inspector shows over the selected card's stories.
+    pub inspect_layers: InspectLayers,
     /// The revision of the theme workspace's app layer that `env.sizes` holds; none before the first sync.
     sizes_synced: Option<u64>,
 }
@@ -130,6 +133,7 @@ impl Viewer {
             themes: ThemeWorkspace::new(),
             theme_dock: layout::default_theme(),
             mock: MockState::default(),
+            inspect_layers: InspectLayers::default(),
             sizes_synced: None,
         };
         viewer.restore(settings);

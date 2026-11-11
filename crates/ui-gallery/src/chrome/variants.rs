@@ -167,7 +167,7 @@ pub(super) fn show(ui: &mut Ui, p: &mut Panels<'_>, tab: PanelId) -> bool {
             };
             let _ = Notice::new(Tone::Info, text).show(ui);
         } else {
-            reported = grid(ui, "variants", &cards, p, false, None);
+            reported = grid(ui, "variants", None, &cards, p, false, None);
         }
         closed |= cx.take_cancel();
     });

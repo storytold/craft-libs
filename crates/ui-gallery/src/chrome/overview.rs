@@ -108,6 +108,7 @@ impl Spec {
             selected: self.selected,
             look: self.look,
             gated: self.gated,
+            inspect: None,
         }
     }
 }
@@ -143,11 +144,12 @@ pub(super) fn on_background(ui: &mut Ui, key: &str, mut add: impl FnMut(&mut Ui,
 }
 
 /// The cards in one or two columns, scrolling vertically; each row is as tall as its tallest card. A card out of view
-/// does not run (`Lazy`); the card of the component `reveal` names glides to the top of the view. The cards report
-/// into `reported`.
+/// does not run (`Lazy`); the card of the component `reveal` names glides to the top of the view. The selected card of
+/// `tab` is inspected while the inspector is on. The cards report into `reported`.
 pub(super) fn grid(
     ui: &mut Ui,
     scroll_id: impl std::hash::Hash + std::fmt::Debug,
+    tab: Option<PanelId>,
     cards: &[Spec],
     p: &mut Panels<'_>,
     one_column: bool,
@@ -169,7 +171,9 @@ pub(super) fn grid(
                     lazy.show(ui, |ui| {
                         let stories = spec.card_stories();
                         // Each card is its own id scope: a story's `id_salt` and auto ids must not meet another card's.
-                        let events = spec.card(&stories, format!("{}-{generation}", spec.key), room).show(ui, p.cells);
+                        let mut card = spec.card(&stories, format!("{}-{generation}", spec.key), room);
+                        card.inspect = p.inspect.of(tab, spec.selected);
+                        let events = card.show(ui, p.cells);
                         reported.push(Reported { spec: row * columns + at, events });
                     });
                 }
@@ -246,7 +250,7 @@ pub(super) fn overview(ui: &mut Ui, p: &mut Panels<'_>) {
             Text::new("Level:").shade(Shade::Muted).show(ui);
             Select::new("Level", Bind::bound(&mut chosen), &entries).show(ui);
         });
-        reported = grid(ui, level.title(), &cards, p, false, follow.flatten());
+        reported = grid(ui, level.title(), Some(PanelId::Overview), &cards, p, false, follow.flatten());
     });
     if ran && let Some(selected) = follow {
         *p.followed = Some(selected);
@@ -333,6 +337,6 @@ pub(super) fn component_tab(ui: &mut Ui, p: &mut Panels<'_>, type_name: &'static
         })
         .collect();
     let mut reported = Vec::new();
-    on_background(ui, "component", |ui, _| reported = grid(ui, ("component", type_name), &cards, p, true, None));
+    on_background(ui, "component", |ui, _| reported = grid(ui, ("component", type_name), Some(PanelId::Component(type_name)), &cards, p, true, None));
     apply(p, &cards, reported);
 }

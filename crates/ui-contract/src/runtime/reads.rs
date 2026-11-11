@@ -20,6 +20,8 @@ pub(crate) enum BindKey {
     Kept(Id),
     /// The saved tier under the key with this hash.
     Saved(Id),
+    /// An inspection record, or the element its list points at, under this key.
+    Record(Id),
 }
 
 /// One measure a reader made from the value it read: what it was offered and the size it took.

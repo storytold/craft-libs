@@ -1,12 +1,13 @@
 //! The viewer's window: the shell with the options bar over the dock of the shown workspace, and the settings it keeps.
 
 use super::dock::GalleryDock;
+use super::inspect::Inspect;
 use super::options::options_bar;
 use super::panels::Panels;
 use super::persist::Persisted;
 use crate::theme::{ThemeSubject, parse_sizes};
-use crate::viewer::{Browser, Catalog, GalleryCommands, GallerySettings, Viewer, Workspace, theme_of};
-use craft_behavior::dock::Workspace as Dock;
+use crate::viewer::{Browser, Catalog, GalleryCommands, GallerySettings, PanelId, TreeKey, Viewer, Workspace, theme_of};
+use craft_behavior::dock::{PanelState, Workspace as Dock};
 use craft_theme::AppSizes;
 use craft_ui::contract::{Bind, BodyCx, CommandSet as _, ShowContainer as _};
 use craft_ui::docking::DockConfig;
@@ -75,11 +76,21 @@ fn read_dropped(file: &OsFile) -> Result<AppSizes, String> {
 
 /// The dock of the shown workspace over the viewer's state.
 fn body(ui: &mut Ui, _: &mut BodyCx<'_>, viewer: &mut Viewer) {
-    let Viewer { env, workspace, preview, browser, themes, theme_dock, mock, variants, variants_tab, .. } = viewer;
+    let Viewer { env, workspace, preview, browser, themes, theme_dock, mock, variants, variants_tab, inspect_layers, .. } = viewer;
     let subject = ThemeSubject::new(theme_of(&env.theme), env.appearance(ui.ctx()));
     let in_theme = *workspace == Workspace::Theme;
     let Browser { catalog, filter, selection, open, dock, story_of, generation, cells, open_request, followed, tree_seen, level, .. } = browser;
     let dock: &mut Dock<_> = if in_theme { theme_dock } else { dock };
+    let front = |panel: PanelId| dock.layout.panel_state(&panel) == PanelState::Front;
+    let selected = selection.items.iter().rev().find_map(|key| match key {
+        TreeKey::Component(type_name) => Some(PanelId::Component(type_name)),
+        _ => None,
+    });
+    let inspect = Inspect {
+        on: !in_theme && variants.is_none() && front(PanelId::Inspect),
+        front: [Some(PanelId::Overview), selected].into_iter().flatten().filter(|panel| front(*panel)).collect(),
+        layers: inspect_layers,
+    };
     let panels = Panels {
         catalog,
         filter,
@@ -98,6 +109,7 @@ fn body(ui: &mut Ui, _: &mut BodyCx<'_>, viewer: &mut Viewer) {
         variants_tab,
         env,
         revealed: None,
+        inspect,
     };
     let mut content = GalleryDock { panels, preview: *preview, app: mock };
     // Component tabs are documents: they close from their ×.

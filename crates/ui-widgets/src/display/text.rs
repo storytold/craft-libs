@@ -1,7 +1,7 @@
 //! `Text`: static text in a type role, a shade and optionally a tone.
 
 use crate::contract::{Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role, Styled as _};
-use crate::primitives::{DocRun, DocText, TextRun, Wrap};
+use crate::primitives::{DocRun, DocText, Span, TextRun, Wrap};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx, TextLook, TypeRole};
 use craft_behavior::{Metrics, Proposal, Sense};
@@ -72,12 +72,15 @@ pub struct Text {
     elide: Elide,
     /// The styled spans that replace the label's text; empty for plain text.
     spans: Vec<DocRun<'static>>,
+    /// The label's text is set in italics.
+    italic: bool,
 }
 
 impl Text {
     /// `text`, which is also its accessible name, in body type and the normal shade.
     pub fn new(text: impl Into<Label>) -> Self {
-        Text { common: Common::new(), shade: Shade::Normal, tone: None, role: TypeRole::Body, elide: Elide::Off, spans: Vec::new() }.label(text)
+        Text { common: Common::new(), shade: Shade::Normal, tone: None, role: TypeRole::Body, elide: Elide::Off, spans: Vec::new(), italic: false }
+            .label(text)
     }
 
     /// Text of `spans`, each with its own font, size, colour and lines; the joined text is its accessible name. It wraps
@@ -88,6 +91,12 @@ impl Text {
         let mut text = Text::new(label);
         text.spans = spans.iter().cloned().map(DocRun::into_owned).collect();
         text
+    }
+
+    /// Sets the text in italics: a value set apart from the words around it.
+    pub fn italic(mut self) -> Self {
+        self.italic = true;
+        self
     }
 
     fn doc(&self) -> DocText<'_> {
@@ -101,7 +110,8 @@ impl Text {
             Elide::End => Wrap::Elide,
             Elide::Path => Wrap::ElidePath,
         };
-        TextRun::new(label).role(role).wrap(wrap)
+        let run = if self.italic { TextRun::spans(vec![Span::new(label).italic()]) } else { TextRun::new(label) };
+        run.role(role).wrap(wrap)
     }
 }
 

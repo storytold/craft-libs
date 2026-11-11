@@ -6,6 +6,7 @@
 mod badge;
 mod divider;
 mod icon;
+mod inspect_overlay;
 mod kbd;
 mod picture;
 mod progress;
@@ -16,6 +17,7 @@ mod words;
 pub use badge::{Badge, BadgeStyle};
 pub use divider::{Divider, DividerStyle};
 pub use icon::{Icon, IconStyle};
+pub use inspect_overlay::{InspectLayers, InspectOverlay, InspectOverlayStyle};
 pub use kbd::{ChordWrite, Kbd, KbdStyle};
 pub use picture::{Picture, PictureSize, PictureStyle};
 pub use progress::{Progress, ProgressStyle};

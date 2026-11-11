@@ -1,7 +1,8 @@
-//! The bodies of the viewer's panels: the component tree, the target component's stories, facts and decision record,
+//! The bodies of the viewer's panels: the component tree, the target component's stories and facts, the inspector,
 //! and the theme workspace's tokens, problems, detail and app sizes. The dock draws each panel's tab and frame.
 
 use super::describe;
+use super::inspect::{self, Inspect};
 use super::overview;
 use crate::theme::{AppLayerEditor, Problems, ThemeSubject, ThemeWorkspace, TokenBrowser, TokenDetail};
 use crate::viewer::{self, CardState, Catalog, Cells, ComponentInfo, PanelId, TreeKey, TreeRow, TreeRows};
@@ -15,6 +16,7 @@ use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::list::{List, ListRow, OpenSet, RowEvent, TrailingFace, TrailingPart};
 use craft_ui::runtime::env::Label;
+use craft_ui::sections::Section;
 use craft_ui::style::TypeRole;
 use craft_ui::testing::{StoryData, story_props};
 use craft_ui::text::TextField;
@@ -59,6 +61,8 @@ pub struct Panels<'a> {
     pub env: &'a mut craft_ui::runtime::env::RootEnv,
     /// The row the Problems view picked in this pass, which the token browser brings into view.
     pub revealed: Option<crate::theme::Pick>,
+    /// What the inspector shows.
+    pub inspect: Inspect<'a>,
 }
 
 /// `add` in the panel's padding, scrolling vertically. The body may run more than once in a pass, so `add` is `FnMut`.
@@ -94,6 +98,34 @@ fn state_of(cells: &mut Cells, index: usize) -> &mut CardState {
     cells.entry(index).or_default()
 }
 
+/// The declared facts of the component registered as `type_name`, the Inspect panel's last section: its decision
+/// record, then where it is declared and what it is for.
+pub(super) fn declared(ui: &mut Ui, catalog: &Catalog, type_name: Option<&'static str>) {
+    let Some((type_name, declared)) = type_name.and_then(|type_name| Some((type_name, catalog.declared.get(type_name)?))) else {
+        hint(ui, "Select a component");
+        return;
+    };
+    Section::new("Declared").show(ui, |ui, _| {
+        match declared.probe {
+            None => hint(ui, "A pattern has no record of its own: its parts are the records."),
+            Some(probe) => {
+                fact(ui, "Shape", describe::shape(probe.shape));
+                fact(ui, "Role", describe::role(probe.role));
+                fact(ui, "Input", describe::input(probe.input));
+                fact(ui, "Keys it keeps", describe::keys(&probe.keys));
+                fact(ui, "Opens a popup", probe.overlay.to_string());
+                fact(ui, "Shows its label", probe.shows_label.to_string());
+                for exemption in probe.exempt {
+                    fact(ui, "Exempt from", format!("{}: {}", exemption.case, exemption.reason));
+                }
+            }
+        }
+        fact(ui, "Type", type_name);
+        fact(ui, "Module", declared.module);
+        fact(ui, "Purpose", declared.purpose);
+    });
+}
+
 impl Panels<'_> {
     /// Shows the body of `panel`.
     pub fn show(&mut self, ui: &mut Ui, panel: PanelId) {
@@ -101,7 +133,7 @@ impl Panels<'_> {
             PanelId::Components => self.components(ui),
             PanelId::Stories => self.stories(ui),
             PanelId::Properties => self.properties(ui),
-            PanelId::Inspect => self.record(ui),
+            PanelId::Inspect => inspect::panel(ui, self),
             PanelId::Overview => overview::overview(ui, self),
             PanelId::Component(type_name) => overview::component_tab(ui, self, type_name),
             PanelId::Preview => {}
@@ -243,35 +275,6 @@ impl Panels<'_> {
         if reset {
             state.reset();
         }
-    }
-
-    /// The decision record of the selected component, then where it is declared and what it is for.
-    fn record(&mut self, ui: &mut Ui) {
-        let component = self.selected().map(|component| component.type_name);
-        let declared = component.and_then(|type_name| self.catalog.declared.get(type_name));
-        scrolled(ui, |ui| {
-            let (Some(type_name), Some(declared)) = (component, declared) else {
-                hint(ui, "Select a component");
-                return;
-            };
-            match declared.probe {
-                None => hint(ui, "A pattern has no record of its own: its parts are the records."),
-                Some(probe) => {
-                    fact(ui, "Shape", describe::shape(probe.shape));
-                    fact(ui, "Role", describe::role(probe.role));
-                    fact(ui, "Input", describe::input(probe.input));
-                    fact(ui, "Keys it keeps", describe::keys(&probe.keys));
-                    fact(ui, "Opens a popup", probe.overlay.to_string());
-                    fact(ui, "Shows its label", probe.shows_label.to_string());
-                    for exemption in probe.exempt {
-                        fact(ui, "Exempt from", format!("{}: {}", exemption.case, exemption.reason));
-                    }
-                }
-            }
-            fact(ui, "Type", type_name);
-            fact(ui, "Module", declared.module);
-            fact(ui, "Purpose", declared.purpose);
-        });
     }
 
     /// A panel over the explanation and report of the subject.

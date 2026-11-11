@@ -27,14 +27,12 @@ pub struct FrameInput {
     pub commands: CommandInput,
     /// The app's `Host`, read through `EnvView::host`.
     pub host: Option<Arc<Host>>,
-    /// Whether decision records are kept for the debug inspector.
-    pub inspect: bool,
 }
 
 impl FrameInput {
     /// A frame with `root` and no host.
     pub fn new(root: RootEnv) -> Self {
-        FrameInput { root, commands: CommandInput::new(), host: None, inspect: false }
+        FrameInput { root, commands: CommandInput::new(), host: None }
     }
 
     /// Sets the command input.
@@ -46,12 +44,6 @@ impl FrameInput {
     /// Sets the host.
     pub fn host(mut self, host: Arc<Host>) -> Self {
         self.host = Some(host);
-        self
-    }
-
-    /// Turns decision records on or off.
-    pub const fn inspect(mut self, on: bool) -> Self {
-        self.inspect = on;
         self
     }
 }
@@ -354,11 +346,6 @@ pub fn take_output(ctx: &Context) -> FrameOutput {
 /// Sets the end hook's ghost-layer painter.
 pub(crate) fn set_frame_layers(ctx: &Context, painter: Option<fn(&Context)>) {
     pass_state::with::<FrameState, _>(ctx, |state| state.frame_layers = painter);
-}
-
-/// Whether decision records are kept for the debug inspector.
-pub(crate) fn inspecting(ctx: &Context) -> bool {
-    pass_state::with::<FrameState, _>(ctx, |state| state.input.as_ref().is_some_and(|input| input.inspect))
 }
 
 /// Adds a gesture whose component was evicted to the next `FrameOutput`.

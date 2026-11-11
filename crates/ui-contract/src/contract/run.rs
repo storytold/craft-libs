@@ -598,7 +598,8 @@ fn create_node<C: Component>(ctx: &Context, ui: &Ui, id: Id, member: bool) -> bo
         if member {
             access::register_parent(ctx, id, ui.unique_id());
         }
-        let created = access::create_node(ctx, id);
+        // Inside an inspected region the node is reported whether or not AccessKit runs, so its facts are recorded.
+        let created = access::create_node(ctx, id) || inspect::records_nodes(ui);
         if created {
             scope::enter(ctx, id);
         }
@@ -632,6 +633,7 @@ fn run_in_host<C: Component>(p: &mut Pass<'_, '_, C>, ui: &mut Ui, host_at: Opti
         return;
     }
     p.real = true;
+    let inspected = p.trace.recording() && inspect::open_element(ui, id, std::any::type_name::<C>());
     let (comp, cx) = (&mut *p.comp, &mut *p.cx);
     // 7 parts
     p.trace.mark(Step::Parts);
@@ -738,6 +740,9 @@ fn run_in_host<C: Component>(p: &mut Pass<'_, '_, C>, ui: &mut Ui, host_at: Opti
     if inert {
         if node {
             steps::report_inert(cx);
+        }
+        if inspected {
+            inspect::close_element(&ctx, id, rect, rect);
         }
         return;
     }
@@ -893,6 +898,9 @@ fn run_in_host<C: Component>(p: &mut Pass<'_, '_, C>, ui: &mut Ui, host_at: Opti
     }
     p.activated |= natural || injected.is_some();
     p.injected = p.injected.or(injected);
+    if inspected {
+        inspect::close_element(&ctx, id, cx.core.rect, cx.core.content_rect);
+    }
 }
 
 fn run<C: Component>(mut comp: C, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>, hooks: &mut dyn ShapeHooks<C>) -> C::Output {

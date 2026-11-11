@@ -3,6 +3,7 @@
 mod card;
 mod describe;
 mod dock;
+mod inspect;
 mod options;
 mod overview;
 mod panels;
@@ -11,6 +12,7 @@ mod shell;
 mod variants;
 
 pub use card::{BodyShown, Card, CardEvents, CardStory, Look, StoryBody};
+pub use inspect::{Inspect, Inspected, region_key};
 pub use options::options_bar;
 pub use overview::{Spec, SpecStory, overview_card};
 pub use panels::Panels;

@@ -474,6 +474,11 @@ pub(crate) fn finish(ctx: &Context, container: Id, merged: Option<Merged>) {
             }
             for patch in &patches {
                 adapter::write_label_patch(ctx, patch);
+                if let LabelPatch::LabelledBy { node, label, .. } = patch
+                    && crate::runtime::inspect::recording(ctx)
+                {
+                    crate::runtime::inspect::labelled(ctx, *node, *label);
+                }
             }
             for node in &scope.nodes {
                 let named = patches.iter().any(|patch| matches!(patch, LabelPatch::LabelledBy { node: id, .. } if *id == node.id));

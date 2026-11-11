@@ -209,6 +209,29 @@ pub(crate) fn report_finding(ctx: &Context, finding: Finding) {
     inspect::finding(ctx, finding);
 }
 
+/// What the inspector lists for the node written from `spec`: its role, name, value, actions in words and state.
+fn facts_of(spec: &NodeSpec) -> inspect::Facts {
+    const WORDS: [(NodeAction, &str); 7] = [
+        (NodeAction::Click, "click"),
+        (NodeAction::Focus, "focus"),
+        (NodeAction::SetValue, "set value"),
+        (NodeAction::Increment, "increment"),
+        (NodeAction::Decrement, "decrement"),
+        (NodeAction::Expand, "expand"),
+        (NodeAction::Collapse, "collapse"),
+    ];
+    let declares = |action: NodeAction| spec.actions.contains(&action);
+    inspect::Facts {
+        role: format!("{:?}", spec.role),
+        name: spec.label.clone(),
+        labelled_by: spec.labelled_by.clone(),
+        value: spec.value.clone().or_else(|| spec.numeric.as_ref().and_then(|numeric| numeric.text.clone())),
+        actions: WORDS.iter().filter(|(action, _)| declares(*action)).map(|(_, word)| *word).collect(),
+        disabled: spec.disabled,
+        interactive: declares(NodeAction::Focus) || declares(NodeAction::Click),
+    }
+}
+
 /// Fills the node step 8 created for `own`, registers it for action routing and in the label scope.
 pub(crate) fn report(ctx: &Context, own: &Own<'_>) {
     let access = own.access;
@@ -270,6 +293,9 @@ pub(crate) fn report(ctx: &Context, own: &Own<'_>) {
     declare_scroll_actions(&mut spec, (own.scrolls.0 || access.pans.0, own.scrolls.1 || access.pans.1));
     custom_actions(&mut spec, &access.custom_actions);
     write_node(ctx, own.id, &spec);
+    if inspect::recording(ctx) {
+        inspect::node_facts(ctx, own.id, None, own.rect, facts_of(&spec));
+    }
     if let Some((anchor, focus)) = &access.text_selection {
         let end = |end: &crate::runtime::access::TextEnd| (sub_node_id(own.id, end.part), end.character);
         adapter::write_selection(ctx, own.id, end(anchor), end(focus));
@@ -358,6 +384,9 @@ pub fn report_sub(ctx: &Context, decl: &SubDecl<'_>) {
     custom_actions(&mut spec, &node.custom_actions);
     adapter::register_parent(ctx, id, decl.parent);
     write_node(ctx, id, &spec);
+    if inspect::recording(ctx) {
+        inspect::node_facts(ctx, decl.owner, Some(node.part), spec.rect.unwrap_or(decl.rect), facts_of(&spec));
+    }
     report_violations(
         ctx,
         decl.component,

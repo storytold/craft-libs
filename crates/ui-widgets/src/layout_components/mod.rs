@@ -6,13 +6,14 @@ use crate::contract::{
 };
 use crate::layout::{BodyLayout, RowAlign};
 use crate::style::{ComponentStyle, StyleCx};
-use craft_behavior::{ColumnWidth, Metrics};
+use craft_behavior::{ColumnWidth, Insets, Metrics, Sense};
 use egui::{Response, Ui};
 
 #[cfg(feature = "testing")]
 mod stories;
 
-/// The style of the layout components: no padding, no minimum size.
+/// The style of the layout components: no minimum size, and padding only at the start edge, one
+/// `space.pad.regular` per level of indent.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 pub struct LayoutStyle {
     #[style(metrics)]
@@ -20,8 +21,10 @@ pub struct LayoutStyle {
 }
 
 impl LayoutStyle {
-    fn new() -> Self {
-        LayoutStyle { metrics: Metrics::new() }
+    fn new(indent: f32) -> Self {
+        let mut metrics = Metrics::new();
+        metrics.padding = Insets::new(indent, 0.0, 0.0, 0.0);
+        LayoutStyle { metrics }
     }
 }
 
@@ -61,6 +64,11 @@ macro_rules! layout_component {
             common: Common,
             #[container($($fwd),*)]
             props: ContainerProps,
+            /// Levels of indent at the start edge.
+            #[style_key]
+            indent: u8,
+            /// Whether the root senses the pointer over it.
+            hover: bool,
             $($($field: $ty,)*)?
         }
 
@@ -111,6 +119,20 @@ macro_rules! layout_component {
                 self.props = self.props.theme(theme);
                 self
             }
+
+            /// Indents the children `levels` steps of `space.pad.regular` from the start edge: a row of a tree drawn
+            /// as plain rows.
+            pub fn indent(mut self, levels: u8) -> Self {
+                self.indent = levels;
+                self
+            }
+
+            /// Senses the pointer over the container, so its response reports hover: a row that marks what it
+            /// stands for while the pointer is over it.
+            pub fn hover(mut self) -> Self {
+                self.hover = true;
+                self
+            }
         }
 
         impl $(<$life>)? Component for $name $(<$life>)? {
@@ -119,8 +141,12 @@ macro_rules! layout_component {
             type Style = LayoutStyle;
             type Output = Response;
 
-            fn style(_: &StyleCx<'_>, _: $key) -> LayoutStyle {
-                LayoutStyle::new()
+            fn style(cx: &StyleCx<'_>, key: $key) -> LayoutStyle {
+                LayoutStyle::new(f32::from(key.indent) * cx.tokens.space.pad.regular)
+            }
+
+            fn sense(&self) -> Sense {
+                if self.hover { Sense::HOVER } else { Sense::empty() }
             }
 
             /// A labelled body is a group named by its label, so a named region of a panel reaches assistive tech. A
@@ -165,7 +191,14 @@ layout_component!(
 impl<'a> Stack<'a> {
     /// A stack that takes the size of its children.
     pub fn new() -> Self {
-        Stack { common: Common::new(), props: ContainerProps::new().sizing(Sizing::Content).layout(BodyLayout::stack()), header: None, footer: None }
+        Stack {
+            common: Common::new(),
+            props: ContainerProps::new().sizing(Sizing::Content).layout(BodyLayout::stack()),
+            indent: 0,
+            hover: false,
+            header: None,
+            footer: None,
+        }
     }
 
     /// The header's content: the closure fills a region above the body, outside its scroll.
@@ -195,7 +228,7 @@ impl Default for Stack<'_> {
 impl Row {
     /// A row that takes the size of its children.
     pub fn new() -> Self {
-        Row { common: Common::new(), props: ContainerProps::new().sizing(Sizing::Content).layout(BodyLayout::row()) }
+        Row { common: Common::new(), props: ContainerProps::new().sizing(Sizing::Content).layout(BodyLayout::row()), indent: 0, hover: false }
     }
 
     /// Whether children continue on a new line.
@@ -220,6 +253,11 @@ impl Default for Row {
 impl Grid {
     /// A grid over `columns` that takes the size of its cells.
     pub fn new(columns: &'static [ColumnWidth]) -> Self {
-        Grid { common: Common::new(), props: ContainerProps::new().sizing(Sizing::Content).layout(BodyLayout::grid(columns)) }
+        Grid {
+            common: Common::new(),
+            props: ContainerProps::new().sizing(Sizing::Content).layout(BodyLayout::grid(columns)),
+            indent: 0,
+            hover: false,
+        }
     }
 }

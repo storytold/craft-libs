@@ -3,6 +3,7 @@
 
 use super::{Act, BeginIn, FocusTarget, Initial, State, StopKey, StopRec};
 use crate::runtime::egui::focus as egui_focus;
+use crate::runtime::egui::memory::FastMap;
 use craft_behavior::focus::after_removal;
 use craft_behavior::nav::step;
 use craft_behavior::{Arrows, MoveMods, NavMove, NavOutline, NavStep, ScopeKind};
@@ -60,6 +61,50 @@ impl NavOutline for Members {
     }
 }
 
+/// One pass's registrations: the stops, roving groups and row groups Tab order is made of.
+#[derive(Clone, Copy)]
+struct Lists<'a> {
+    stops: &'a [StopRec],
+    groups: &'a FastMap<Id, super::Group>,
+    row_sets: &'a [super::RowGroups],
+}
+
+impl Lists<'_> {
+    /// The roving group `id`: a plain group, else one of a collection's row groups.
+    fn group(&self, id: Id) -> Option<super::Group> {
+        self.groups.get(&id).copied().or_else(|| {
+            let set = self.row_sets.iter().find(|set| set.ids.binary_search_by_key(&id.value(), |row| row.value()).is_ok())?;
+            Some(super::Group::new(id, craft_behavior::Roving::new(craft_behavior::NavShape::Flat)).row(set.owner).rtl(set.rtl))
+        })
+    }
+
+    /// The arrival member of a roving group: its selected member, else the first.
+    fn arrival(&self, group: &super::Group) -> Option<StopRec> {
+        let members = || self.stops.iter().filter(|rec| rec.stop.group == Some(group.id));
+        group.selected.and_then(|key| members().find(|rec| rec.stop.key() == key)).or_else(|| members().next()).cloned()
+    }
+
+    /// The Tab entries among the stops `keep` takes: a roving group once, at its arrival member; a collection's row
+    /// groups none; another stop when Tab moves over all controls or it holds text.
+    fn entries(&self, keep: impl Fn(&StopRec) -> bool, all_controls: bool) -> Vec<Entry> {
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+        for rec in self.stops.iter().filter(|rec| keep(rec)) {
+            match rec.stop.group.and_then(|group| self.group(group)) {
+                Some(group) if group.row => {}
+                Some(group) => {
+                    if let Some(arrival) = seen.insert(group.id).then(|| self.arrival(&group)).flatten() {
+                        out.push(Entry::Group(group.id, arrival));
+                    }
+                }
+                None if all_controls || rec.stop.text => out.push(Entry::Stop(rec.clone())),
+                None => {}
+            }
+        }
+        out
+    }
+}
+
 impl State {
     pub(super) fn rotate(&mut self) {
         self.last_stops = std::mem::take(&mut self.stops);
@@ -72,12 +117,19 @@ impl State {
         self.entered = false;
     }
 
+    /// The registrations of last pass, which Tab and the arrows move over.
+    fn last(&self) -> Lists<'_> {
+        Lists { stops: &self.last_stops, groups: &self.last_groups, row_sets: &self.last_row_sets }
+    }
+
+    /// The registrations of the running pass so far.
+    fn this(&self) -> Lists<'_> {
+        Lists { stops: &self.stops, groups: &self.groups, row_sets: &self.row_sets }
+    }
+
     /// The registered roving group `id` of last pass: a plain group, else one of a collection's row groups.
     pub(crate) fn group(&self, id: Id) -> Option<super::Group> {
-        self.last_groups.get(&id).copied().or_else(|| {
-            let set = self.last_row_sets.iter().find(|set| set.ids.binary_search_by_key(&id.value(), |row| row.value()).is_ok())?;
-            Some(super::Group::new(id, craft_behavior::Roving::new(craft_behavior::NavShape::Flat)).row(set.owner).rtl(set.rtl))
-        })
+        self.last().group(id)
     }
 
     pub(super) fn find_stop(&self, key: StopKey) -> Option<StopRec> {
@@ -127,25 +179,32 @@ impl State {
         false
     }
 
-    /// The arrival member of a roving group: its selected member, else the first.
+    /// The arrival member of a roving group of last pass: its selected member, else the first.
     fn arrival(&self, group: &super::Group) -> Option<StopRec> {
-        let members = || self.last_stops.iter().filter(|rec| rec.stop.group == Some(group.id));
-        group.selected.and_then(|key| members().find(|rec| rec.stop.key() == key)).or_else(|| members().next()).cloned()
+        self.last().arrival(group)
     }
 
     fn entries(&self, scope_root: Option<Id>, all_controls: bool) -> Vec<Entry> {
+        self.last().entries(|rec| self.in_scope(rec.scope, scope_root), all_controls)
+    }
+
+    /// The stops of the running pass that keyboard focus reaches, among those `keep` takes, in Tab order: every member
+    /// of a roving group, in member order, where Tab enters the group; no row of a collection (Tab stops on the
+    /// collection); every other stop, whatever the platform's Tab setting.
+    pub(super) fn tab_order(&self, keep: impl Fn(&StopRec) -> bool) -> Vec<StopKey> {
+        let lists = self.this();
         let mut seen = HashSet::new();
         let mut out = Vec::new();
-        for rec in self.last_stops.iter().filter(|rec| self.in_scope(rec.scope, scope_root)) {
-            match rec.stop.group.and_then(|group| self.group(group)) {
+        for rec in self.stops.iter().filter(|rec| keep(rec)) {
+            match rec.stop.group.and_then(|group| lists.group(group)) {
                 Some(group) if group.row => {}
                 Some(group) => {
-                    if let Some(arrival) = seen.insert(group.id).then(|| self.arrival(&group)).flatten() {
-                        out.push(Entry::Group(group.id, arrival));
+                    if seen.insert(group.id) {
+                        let members = self.stops.iter().filter(|member| member.stop.group == Some(group.id) && keep(member));
+                        out.extend(members.map(|member| member.stop.key()));
                     }
                 }
-                None if all_controls || rec.stop.text => out.push(Entry::Stop(rec.clone())),
-                None => {}
+                None => out.push(rec.stop.key()),
             }
         }
         out

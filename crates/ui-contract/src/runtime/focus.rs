@@ -557,6 +557,12 @@ pub(crate) fn take_reveal_of(ctx: &Context, id: Id) -> bool {
     with(ctx, |state| state.revealed.is_some_and(|key| key.0 == id).then(|| state.revealed.take()).is_some())
 }
 
+/// The stops registered so far in the running pass that keyboard focus reaches, in Tab order, among those of the
+/// components `of` takes: each member of a roving group, whatever the platform's Tab setting.
+pub(crate) fn tab_order(ctx: &Context, of: impl Fn(Id) -> bool) -> Vec<StopKey> {
+    with(ctx, |state| state.tab_order(|rec| of(rec.stop.id)))
+}
+
 /// The component the last `request` or Tab move asked the enclosing scroll owner to reveal.
 #[cfg_attr(not(feature = "testing"), expect(dead_code, reason = "the component pipeline (F3) registers and reads it"))]
 pub(crate) fn take_reveal(ctx: &Context) -> Option<StopKey> {
