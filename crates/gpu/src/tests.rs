@@ -57,6 +57,30 @@ fn unknown_provider_is_fault() {
 }
 
 #[test]
+fn dispatch_batch_keeps_completed_outcomes_when_a_later_job_fails() {
+    struct Echo;
+    impl crate::GpuProvider for Echo {
+        fn id(&self) -> &'static str {
+            "test.echo"
+        }
+        fn run(&self, _ctx: &mut dyn GpuContext, job: &GpuJob) -> Result<crate::GpuJobOutcome, GpuFault> {
+            Ok(crate::GpuJobOutcome { outputs: vec![], data: Some(job.params.0.clone()) })
+        }
+    }
+    let mut registry = ProviderRegistry::new();
+    registry.register(Box::new(Echo));
+    let mut ctx = mem_context();
+    let ok = GpuJob { provider_id: "test.echo".into(), params: GpuJobParams(b"first".to_vec()), inputs: vec![], outputs: vec![] };
+    let bad = GpuJob { provider_id: "missing".into(), params: GpuJobParams(Vec::new()), inputs: vec![], outputs: vec![] };
+    let ok2 = GpuJob { provider_id: "test.echo".into(), params: GpuJobParams(b"third".to_vec()), inputs: vec![], outputs: vec![] };
+    let results = registry.dispatch_batch(&mut ctx, &[ok, bad, ok2]);
+    assert_eq!(results.len(), 3, "one entry per job, in input order");
+    assert_eq!(results[0].as_ref().expect("first job succeeded").data.as_deref(), Some(b"first".as_slice()));
+    assert!(matches!(results[1], Err(GpuFault::UnknownProvider(_))));
+    assert_eq!(results[2].as_ref().expect("job after the failure still ran").data.as_deref(), Some(b"third".as_slice()));
+}
+
+#[test]
 fn read_buffer_default_resolves_against_request_read_and_poll_reads() {
     let mut ctx = mem_context();
     let handle = ctx.upload_buffer("in", b"hello").expect("upload_buffer");

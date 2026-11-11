@@ -444,17 +444,25 @@ impl GpuContext for WgpuContext {
         }
     }
 
-    /// WebGPU can only map a buffer asynchronously, and `wasm32` is single-threaded: blocking
-    /// here would stop the only thread the browser needs to run `map_async`'s own completion
-    /// callback on, hanging the tab instead of returning. Callers on this target drive
-    /// [`request_read`](GpuContext::request_read) and [`poll_reads`](GpuContext::poll_reads)
-    /// directly from the worker's message loop; see `docs/gpu-backends.md`.
+    /// On `wasm32` the backing is always the in-memory staging store today (real device
+    /// creation needs the async worker-init path and does not exist on this target yet), and a
+    /// staging read resolves synchronously, so serving it blocks nothing. The refusal below
+    /// guards the future wasm device backing: WebGPU can only map a buffer asynchronously, and
+    /// `wasm32` is single-threaded, so blocking on a real device would stop the only thread the
+    /// browser needs to run `map_async`'s own completion callback on, hanging the tab. Callers
+    /// on a device backing drive [`request_read`](GpuContext::request_read) and
+    /// [`poll_reads`](GpuContext::poll_reads) from the worker's message loop instead; see
+    /// `docs/gpu-backends.md`.
     #[cfg(target_arch = "wasm32")]
-    fn read_buffer(&mut self, _handle: HandleId) -> Result<Vec<u8>, GpuFault> {
-        Err(GpuFault::Operation(
-            "read_buffer is not supported on wasm32/WebGPU: it can only map asynchronously. Use request_read + poll_reads from the worker's \
-             message loop instead."
-                .into(),
-        ))
+    fn read_buffer(&mut self, handle: HandleId) -> Result<Vec<u8>, GpuFault> {
+        let request = self.request_read(handle)?;
+        match self.ready.iter().position(|o| o.request == request) {
+            Some(i) => self.ready.remove(i).result,
+            None => Err(GpuFault::Operation(
+                "read_buffer on wasm32: the read did not resolve synchronously. Use request_read + poll_reads from the worker's message loop \
+                 instead."
+                    .into(),
+            )),
+        }
     }
 }
