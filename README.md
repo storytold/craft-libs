@@ -90,6 +90,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   opcode lists, embedded previews), one Cargo feature per format. DNG reading and writing and
   Canon CRW (through `craft-crw`) so far; demosaicing and everything after stay with the develop
   pipeline.
+- [`craft-tga`](crates/tga/src/lib.rs): Truevision Targa, from FilmCraft (reader) and PhotoCraft
+  (writer): true-colour, grayscale and colour-mapped pictures, raw or run-length encoded, any
+  origin, to RGBA8, and a run-length writer whose packets end with their scan line. Bounded on
+  hostile input.
 - [`craft-tiff`](crates/tiff/README.md): TIFF and BigTIFF IFD reader and writer, from LightCraft:
   every field type, the IFD chain, SubIFDs and Exif/GPS/Interop pointer IFDs, maker-note IFDs
   (Canon, Nikon, Sony, Fujifilm, Olympus, Panasonic, Pentax), strip and tile layout. Bounded and
