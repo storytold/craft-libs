@@ -223,6 +223,9 @@ fn separate(
     let [width, page_height] = [w, h].map(|side| (side * scale).floor().max(1.0) as u32);
     // A band is within the plate cap and, like any render, the renderer's side limit.
     let fit = (MAX_PLATE_PIXELS / width as f32).floor().clamp(1.0, MAX_SIDE as f32) as u32;
+    if u64::from(width) * u64::from(page_height) > MAX_BANDED_PIXELS as u64 {
+        return Err(Error::Render(raster::Error::OutputLimit));
+    }
     let rows = rows.unwrap_or(fit).clamp(1, page_height);
     let mut top = 0;
     while top < page_height {
@@ -286,7 +289,15 @@ fn film(scale: f32) -> raster::Options {
 fn banded_scale(w: f32, h: f32, scale: f32) -> f32 {
     let (w, h) = (w.max(1.0), h.max(1.0));
     let by_area = (MAX_BANDED_PIXELS / (w * h)).sqrt();
-    let s = scale.min(by_area).min(MAX_SIDE as f32 / w);
+    let mut s = scale.min(by_area).min(MAX_SIDE as f32 / w);
+    // A side scaled under one pixel still renders one, so the other side alone must fit. The
+    // margin keeps the floored size under the cap despite f32 rounding.
+    if w * s < 1.0 {
+        s = s.min(MAX_BANDED_PIXELS * 0.999 / h);
+    }
+    if h * s < 1.0 {
+        s = s.min(MAX_BANDED_PIXELS * 0.999 / w);
+    }
     if s.is_finite() && s > 0.0 { s } else { f32::MIN_POSITIVE }
 }
 
@@ -571,6 +582,10 @@ endstream endobj
         let s = banded_scale(100.0, 1.0e6, 10.0);
         assert!(100.0 * 1.0e6 * s * s <= MAX_BANDED_PIXELS * 1.0001);
         assert!(banded_scale(0.0, f32::NAN, 1.0) > 0.0);
+        // A 1 pt wide, very tall page: its width floors to one pixel, which the cap still counts.
+        let s = banded_scale(1.0, 1.0e9, 1.0);
+        let [width, height] = [1.0f32, 1.0e9].map(|side| (side * s).floor().max(1.0));
+        assert!(width * height <= MAX_BANDED_PIXELS);
     }
 
     #[test]
