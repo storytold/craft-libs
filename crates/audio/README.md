@@ -131,7 +131,11 @@ if let Some(second) = list.get(1) {
 ```
 
 A track index the file does not have is `Unsupported`. `DecodeOptions::with_max_samples` sets
-another size limit. `tracks_of` lists the tracks of a file read from a `ByteSource`;
+another size limit. The default is `DEFAULT_MAX_SAMPLES`, 2^30 samples (4 GiB of `f32`), which
+`decode` and `decode_with` can fill from a small compressed file because they keep the whole
+result. An app that opens files it did not write passes a limit it can hold (for example
+`DEFAULT_MAX_SAMPLES / 8`, or its longest supported clip), or streams with `Decoder`, which has no
+limit because it keeps nothing. `tracks_of` lists the tracks of a file read from a `ByteSource`;
 `detect_container` names a file's container from its first bytes.
 
 ### Stream and seek
