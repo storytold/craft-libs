@@ -12,6 +12,7 @@ mod edit;
 mod focus;
 mod internals;
 mod list;
+mod popup_surface;
 
 mod rails;
 mod sections;

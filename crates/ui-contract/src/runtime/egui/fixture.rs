@@ -305,7 +305,7 @@ fn flatten_ref<'a>(shape: &'a Shape, out: &mut Vec<&'a Shape>) {
     }
 }
 
-fn flatten(shape: Shape, out: &mut Vec<Shape>) {
+pub(crate) fn flatten(shape: Shape, out: &mut Vec<Shape>) {
     match shape {
         Shape::Vec(shapes) => shapes.into_iter().for_each(|shape| flatten(shape, out)),
         other => out.push(other),

@@ -16,7 +16,7 @@ use crate::contract::label::{self, LabelIn};
 use crate::contract::run::{Measuring, ShapeHooks, ShowAt};
 use crate::contract::{Container, Cx, DragBand, Gap, Internal, Mount, Notch, PartsCx, SetPosition, Sizing, ValueOf};
 use crate::layout::{self};
-use crate::primitives::Surface;
+use crate::primitives::SurfaceSlot;
 use crate::runtime::access::scope;
 use crate::runtime::access::{self, Politeness, Role};
 use crate::runtime::commands;
@@ -29,7 +29,7 @@ use crate::runtime::overlay::CloseReason;
 use crate::runtime::pass_state;
 use crate::runtime::{keys, layout_memory, pointer, wheel};
 use crate::style::ComponentStyle as _;
-use crate::style::{Corners, StyleCx, SurfaceKind, scroll_bar_look, surface_style};
+use crate::style::{StyleCx, SurfaceKind, scroll_bar_look, surface_style};
 use craft_behavior::layout_memory::measure_tolerance;
 use craft_behavior::{CancelRule, CursorIcon, EditEvent, KeyRole, Mixed, Roving, ScrollPos, ScrollSpan, WheelNotch, WheelRoom, WheelTaker};
 use egui::{Context, CornerRadius, Id, Pos2, Rect, Shape, Ui, UiBuilder, Vec2};
@@ -618,14 +618,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let inner = cx.core.content_rect.shrink(pad);
         let room = self.room_size(rect, inner);
         let mut regions = self.regions(&props, inner, pad, room, rtl, self.measured_sizes());
-        // A layer's surface casts its shadow past the layer's own clip: it paints under the whole window. So does a popup
-        // surface at the top of a layer a control owns (`Menu::inline`).
-        let mut surface_painter = ui.painter().clone();
-        let popup_in_layer = matches!(props.surface, Some(SurfaceKind::Popup)) && crate::runtime::overlay::drawing_parent(ui.ctx()).is_some();
-        if matches!(props.mount, Mount::Layer(_)) || popup_in_layer {
-            surface_painter.set_clip_rect(ui.ctx().content_rect());
-        }
-        let surface_slot = surface_painter.add(Shape::Noop);
+        let surface_slot = SurfaceSlot::reserve(ui, matches!(props.mount, Mount::Layer(_)));
         let band_slot = ui.painter().add(Shape::Noop);
         // A measuring run lays out and measures: it registers no instance, focus body, scroll region or body layer,
         // and claims no room in a parent flow.
@@ -958,8 +951,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         }
         // The surface at the final rect, then the rules.
         if let Some(kind) = props.surface {
-            let shapes = Surface::shapes(&surface_style(&env.tokens, kind), None, rect, Corners::All, env.direction, ctx.pixels_per_point());
-            surface_painter.set(surface_slot, Shape::Vec(shapes));
+            surface_slot.paint(&env.tokens, kind, rect, env.direction);
         }
         if let Some(kind) = props.header.and_then(|header| header.fill) {
             let style = surface_style(&env.tokens, props.surface.unwrap_or(SurfaceKind::Panel));

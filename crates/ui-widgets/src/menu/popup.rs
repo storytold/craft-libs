@@ -184,11 +184,10 @@ impl<'a> Menu<'a> {
         self
     }
 
-    /// The rows of a menu in the flow of the layer that shows them, with the popup surface and padding of a menu but no
-    /// close rules of their own: the menu of a control that owns its popup shows its entries through it.
+    /// The rows of a menu in the flow of the layer that shows them, with the padding of a menu but no close rules of
+    /// their own: the menu of a control that owns its popup shows its entries through it, on the layer's surface.
     pub fn inline(label: impl Into<Label>) -> Self {
         let props = ContainerProps::new()
-            .surface(SurfaceKind::Popup)
             .pad(POPUP_PAD)
             .body_gap(Gap::None)
             .least_width(LeastWidth::Popup)

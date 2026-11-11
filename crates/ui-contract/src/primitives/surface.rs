@@ -1,10 +1,11 @@
 //! `Surface`: the pure shapes of a surface kind.
 
-use crate::style::{Corners, SurfaceEdge, SurfaceStyle};
+use crate::style::{Corners, SurfaceEdge, SurfaceKind, SurfaceStyle, UiTokens, surface_style};
 use craft_i18n::Direction;
 use egui::emath::GuiRounding as _;
 use egui::epaint::{Mesh, RectShape};
-use egui::{Color32, CornerRadius, Pos2, Rect, Shape, StrokeKind, Vec2, vec2};
+use egui::layers::ShapeIdx;
+use egui::{Color32, CornerRadius, Painter, Pos2, Rect, Shape, StrokeKind, Ui, Vec2, vec2};
 
 /// The surface painter: shadow, fill, then edge.
 pub struct Surface;
@@ -39,6 +40,32 @@ impl Surface {
             _ => {}
         }
         out
+    }
+}
+
+/// The surface under content that runs before its rect is known: [`reserve`](SurfaceSlot::reserve) takes its place in
+/// the paint order, [`paint`](SurfaceSlot::paint) fills it at the rect the content took.
+pub(crate) struct SurfaceSlot {
+    painter: Painter,
+    slot: ShapeIdx,
+}
+
+impl SurfaceSlot {
+    /// The slot under what `ui` paints next. A layer's surface casts its shadow past the layer's own clip, so on a
+    /// `layer` the slot paints under the whole window.
+    pub(crate) fn reserve(ui: &Ui, layer: bool) -> Self {
+        let mut painter = ui.painter().clone();
+        if layer {
+            painter.set_clip_rect(ui.ctx().content_rect());
+        }
+        let slot = painter.add(Shape::Noop);
+        SurfaceSlot { painter, slot }
+    }
+
+    /// Paints the surface `kind` over `rect`.
+    pub(crate) fn paint(self, tokens: &UiTokens, kind: SurfaceKind, rect: Rect, direction: Direction) {
+        let shapes = Surface::shapes(&surface_style(tokens, kind), None, rect, Corners::All, direction, self.painter.pixels_per_point());
+        self.painter.set(self.slot, Shape::Vec(shapes));
     }
 }
 

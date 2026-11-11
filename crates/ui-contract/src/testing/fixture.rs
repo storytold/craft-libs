@@ -391,6 +391,17 @@ impl Fixture {
         self
     }
 
+    /// One frame with no events; returns the shapes it painted, nested shapes flattened.
+    pub fn frame_shapes(&mut self) -> Vec<egui::Shape> {
+        self.frames.record_paint();
+        self.frame(Vec::new());
+        let mut shapes = Vec::new();
+        for clipped in self.frames.take_paint().map(|paint| paint.shapes).unwrap_or_default() {
+            fixture::flatten(clipped.shape, &mut shapes);
+        }
+        shapes
+    }
+
     /// `n` frames with no events.
     pub fn idle(&mut self, n: usize) -> &mut Self {
         for _ in 0..n {
