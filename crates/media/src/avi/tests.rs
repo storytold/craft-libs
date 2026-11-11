@@ -1,5 +1,7 @@
 use super::*;
 
+mod hostile;
+
 #[test]
 fn stream_number_supports_decimal_and_hex_ids() {
     assert_eq!(Stream::number(b"10dc"), Some(10));
