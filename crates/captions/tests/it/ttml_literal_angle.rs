@@ -1,11 +1,14 @@
 //! TTML / DFXP export keeps literal `<` and `>` text that is not markup.
 
-use craft_captions::{Cue, Document, Format, WriteOptions, write};
 use craft_captions::FrameRate;
+use craft_captions::{Cue, Document, Format, WriteOptions, write};
 
 fn export(text: &str, format: Format) -> String {
     let rate = FrameRate::FPS_25;
-    let doc = Document { cues: vec![Cue { start: rate.tick_of(25), end: rate.tick_of(75), text: text.into(), ..Default::default() }], ..Default::default() };
+    let doc = Document {
+        cues: vec![Cue { start: rate.tick_of(25), end: rate.tick_of(75), text: text.into(), ..Default::default() }],
+        ..Default::default()
+    };
     String::from_utf8(write(&doc, format, WriteOptions::default())).unwrap()
 }
 
