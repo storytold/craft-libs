@@ -135,6 +135,8 @@ pub struct ClassFile {
     pub inner_classes: Vec<InnerClass>,
     /// Class-level annotation types (dotted), with `(runtime)`/`(class)` visibility.
     pub annotations: Vec<String>,
+    /// Bootstrap method handle and static arguments, indexed by dynamic pool constants.
+    pub bootstrap_methods: Vec<(u16, Vec<u16>)>,
     pub pool: Vec<Const>,
     pub warnings: Vec<String>,
 }
@@ -389,6 +391,7 @@ pub fn parse(data: &[u8]) -> Result<ClassFile, FormatError> {
     let mut signature = None;
     let mut inner_classes = Vec::new();
     let mut annotations = Vec::new();
+    let mut bootstrap_methods = Vec::new();
     for a in &attrs {
         match a.name {
             "SourceFile" => {
@@ -401,13 +404,32 @@ pub fn parse(data: &[u8]) -> Result<ClassFile, FormatError> {
                     signature = Some(utf8_of(&pool, i).to_string());
                 }
             }
+            "BootstrapMethods" => match bootstrap_table(a.info) {
+                Some(table) => bootstrap_methods = table,
+                None => warnings.push("invalid BootstrapMethods table".into()),
+            },
             "InnerClasses" => inner_classes = parse_inner_classes(a.info, &pool),
             "RuntimeVisibleAnnotations" => annotations.extend(parse_annotation_types(a.info, &pool, "runtime")),
             "RuntimeInvisibleAnnotations" => annotations.extend(parse_annotation_types(a.info, &pool, "class")),
             _ => {}
         }
     }
-    Ok(ClassFile { version, access, this_class, super_class, interfaces, fields, methods, source_file, signature, inner_classes, annotations, pool, warnings })
+    Ok(ClassFile {
+        version,
+        access,
+        this_class,
+        super_class,
+        interfaces,
+        fields,
+        methods,
+        source_file,
+        signature,
+        inner_classes,
+        annotations,
+        bootstrap_methods,
+        pool,
+        warnings,
+    })
 }
 
 fn parse_pool(c: &mut Cursor<'_>, cp_count: u16, warnings: &mut Vec<String>) -> Result<Vec<Const>, FormatError> {
@@ -478,6 +500,18 @@ fn read_attrs<'a, 'p>(c: &mut Cursor<'a>, pool: &'p [Const]) -> Vec<RawAttr<'a, 
         out.push(RawAttr { name: utf8_of(pool, ni), info });
     }
     out
+}
+
+fn bootstrap_table(data: &[u8]) -> Option<Vec<(u16, Vec<u16>)>> {
+    let mut cursor = Cursor::new(data);
+    let mut table = Vec::new();
+    for _ in 0..cursor.u16()? {
+        let handle = cursor.u16()?;
+        let count = usize::from(cursor.u16()?);
+        let args = cursor.take(count * 2)?.as_chunks::<2>().0.iter().map(|b| u16::from_be_bytes(*b)).collect();
+        table.push((handle, args));
+    }
+    (cursor.pos == data.len()).then_some(table)
 }
 
 fn parse_members(c: &mut Cursor<'_>, pool: &[Const], warnings: &mut Vec<String>, what: &str) -> Result<Vec<Member>, FormatError> {
@@ -763,9 +797,52 @@ pub struct Reference {
     /// Byte offset in the caller's code.
     pub pc: u32,
     pub instruction: &'static str,
-    /// `method`, `field` or `type`.
+    /// Direct member/type use or a method handle, method type or bootstrap linkage.
     pub kind: &'static str,
     pub target: String,
+}
+
+fn class_component(name: &str) -> Option<&str> {
+    if name.starts_with('[') { name.trim_start_matches('[').strip_prefix('L')?.strip_suffix(';') } else { Some(name) }
+}
+
+fn descriptor_mentions(mut descriptor: &str, owner: &str) -> bool {
+    while let Some((_, rest)) = descriptor.split_once('L') {
+        let Some((class, tail)) = rest.split_once(';') else { return false };
+        if class == owner {
+            return true;
+        }
+        descriptor = tail;
+    }
+    false
+}
+
+/// Resolve a loadable constant to its named dependency, retaining the linkage role.
+fn constant_dependency(cf: &ClassFile, idx: u16, owner: &str, method: Option<&str>, bootstrap: bool) -> Option<(&'static str, String)> {
+    match cf.pool.get(usize::from(idx))? {
+        Const::Class(utf) if method.is_none() => {
+            let name = cf.utf8(*utf);
+            (class_component(name) == Some(owner)).then(|| ("type", internal_to_dotted(name)))
+        }
+        Const::MethodType(utf) if method.is_none() => {
+            let desc = cf.utf8(*utf);
+            descriptor_mentions(desc, owner).then(|| ("method-type", desc.to_owned()))
+        }
+        Const::MethodHandle(kind, target) => {
+            let member = cf.pool.get(usize::from(*target))?;
+            let valid = matches!(
+                (kind, member),
+                (1..=4, Const::FieldRef(..))
+                    | (5 | 8, Const::MethodRef(..))
+                    | (6 | 7, Const::MethodRef(..) | Const::InterfaceMethodRef(..))
+                    | (9, Const::InterfaceMethodRef(..))
+            );
+            let target = cf.resolve_ref(*target)?;
+            (valid && (!bootstrap || matches!(*kind, 6 | 8)) && target.owner == owner && method.is_none_or(|m| *kind >= 5 && target.name == m))
+                .then(|| (if bootstrap { "bootstrap-method" } else { "method-handle" }, target.display()))
+        }
+        _ => None,
+    }
 }
 
 /// Every instruction in `cf` that refers to the internal class `owner` (optionally only calls to
@@ -773,6 +850,8 @@ pub struct Reference {
 pub fn references(cf: &ClassFile, owner: &str, method: Option<&str>, max: usize) -> (Vec<Reference>, bool) {
     let mut out = Vec::new();
     let mut incomplete = false;
+    // A single bootstrap record may be referenced by every instruction in a class.
+    let mut linkage_budget = 200_000usize;
     for m in &cf.methods {
         let Some(code) = &m.code else { continue };
         let caller = Ref { owner: cf.this_class.clone(), name: m.name.clone(), descriptor: m.descriptor.clone() }.display();
@@ -780,17 +859,36 @@ pub fn references(cf: &ClassFile, owner: &str, method: Option<&str>, max: usize)
         incomplete |= !complete;
         for i in &insns {
             let Some(cp) = i.cp_index else { continue };
+            if matches!(i.opcode, 0x12..=0x14 | 0xba) {
+                let link = match (cf.pool.get(usize::from(cp)), i.opcode) {
+                    (Some(Const::Dynamic(n, _)), 0x12..=0x14) | (Some(Const::InvokeDynamic(n, _)), 0xba) => Some(*n),
+                    (Some(Const::Class(_) | Const::MethodType(_) | Const::MethodHandle(..)), 0x12 | 0x13) => None,
+                    _ => continue,
+                };
+                let record = link.and_then(|idx| cf.bootstrap_methods.get(usize::from(idx)));
+                let (handle, args): (u16, &[u16]) = record.map_or((cp, &[][..]), |(h, a)| (*h, a));
+                let mut seen = std::collections::BTreeSet::new();
+                for (index, &operand) in std::iter::once(&handle).chain(args).enumerate() {
+                    let Some(left) = linkage_budget.checked_sub(1) else { return (out, true) };
+                    linkage_budget = left;
+                    let is_bootstrap = index == 0 && record.is_some();
+                    if seen.insert((operand, is_bootstrap))
+                        && let Some((kind, target)) = constant_dependency(cf, operand, owner, method, is_bootstrap)
+                    {
+                        if out.len() >= max {
+                            return (out, true);
+                        }
+                        out.push(Reference { caller: caller.clone(), pc: i.pc, instruction: i.name, kind, target });
+                    }
+                }
+                continue;
+            }
             let hit = match i.opcode {
                 0xb6..=0xb9 => cf.resolve_ref(cp).and_then(|r| (r.owner == owner && method.is_none_or(|n| r.name == n)).then(|| ("method", r.display()))),
                 0xb2..=0xb5 if method.is_none() => cf.resolve_ref(cp).and_then(|r| (r.owner == owner).then(|| ("field", r.display()))),
                 0xbb | 0xbd | 0xc0 | 0xc1 | 0xc5 if method.is_none() => {
                     let name = class_name_at(&cf.pool, cp);
-                    let component = if name.starts_with('[') {
-                        name.trim_start_matches('[').strip_prefix('L').and_then(|n| n.strip_suffix(';'))
-                    } else {
-                        Some(name.as_str())
-                    };
-                    (component == Some(owner)).then_some(("type", internal_to_dotted(&name)))
+                    (class_component(&name) == Some(owner)).then_some(("type", internal_to_dotted(&name)))
                 }
                 _ => None,
             };
