@@ -9,6 +9,7 @@ mod testkit;
 
 mod aac;
 mod ac3_oracle;
+mod alac;
 mod concealment;
 mod mpa_oracle;
 mod opus;
