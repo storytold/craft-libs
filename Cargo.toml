@@ -45,6 +45,7 @@ craft-audio = { path = "crates/audio" }
 craft-media = { path = "crates/media", default-features = false }
 craft-media-testkit = { path = "crates/media-testkit" }
 craft-menu = { path = "crates/menu" }
+craft-mobile = { path = "crates/mobile" }
 craft-pcraft-format = { path = "crates/pcraft-format" }
 craft-prepress = { path = "crates/prepress" }
 craft-print = { path = "crates/print" }
