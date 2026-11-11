@@ -1321,6 +1321,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-vectordrawable"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "kurbo 0.13.1",
+]
+
+[[package]]
 name = "craft-video"
 version = "0.1.0"
 dependencies = [
