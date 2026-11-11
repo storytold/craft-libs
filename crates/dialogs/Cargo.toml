@@ -12,7 +12,7 @@ repository.workspace = true
 # through pkg-config unless winit's `dlopen` is in the build too; the apps' own rfd keeps it on.
 [dependencies]
 raw-window-handle = "0.6.2"
-rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
+rfd = { version = "0.18.0", default-features = false, features = ["xdg-portal"] }
 
 # The free-standing Open and Folder panel (`beginWithCompletionHandler:`). rfd and winit already
 # use these.
