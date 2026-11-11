@@ -215,6 +215,59 @@ const CASES: &[Case] = &[
         min_snr: 25.0,
     },
     Case {
+        name: "mp2.mp2",
+        surround: false,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "mp2"],
+        container: Container::MpegAudio,
+        codec: CodecId::Mp2,
+        layout: ChannelLayout::STEREO,
+        channels: 2,
+        frames: None,
+        min_snr: 80.0,
+    },
+    // ffmpeg's default for mono MP2 is 384 kbit/s, which ISO/IEC 11172-3 does not allow.
+    Case {
+        name: "mp2-mono.mp2",
+        surround: false,
+        mono: true,
+        rate: 48_000,
+        args: &["-c:a", "mp2"],
+        container: Container::MpegAudio,
+        codec: CodecId::Mp2,
+        layout: ChannelLayout::MONO,
+        channels: 1,
+        frames: None,
+        min_snr: 80.0,
+    },
+    Case {
+        name: "mp2.mkv",
+        surround: false,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "mp2"],
+        container: Container::Matroska,
+        codec: CodecId::Mp2,
+        layout: ChannelLayout::STEREO,
+        channels: 2,
+        frames: Some(240_000),
+        min_snr: 80.0,
+    },
+    Case {
+        name: "mp2.mp4",
+        surround: false,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "mp2"],
+        container: Container::Mp4,
+        codec: CodecId::Mp2,
+        layout: ChannelLayout::STEREO,
+        channels: 2,
+        frames: Some(240_000),
+        min_snr: 80.0,
+    },
+    Case {
         name: "pcm-s24be.mov",
         surround: false,
         mono: false,
@@ -288,6 +341,7 @@ fn reference_lead(name: &str) -> usize {
     match name {
         "aac.mkv" => 1024,
         "eac3-5.1.mkv" => 256,
+        "mp2.mkv" => 481,
         _ => 0,
     }
 }
@@ -315,6 +369,8 @@ fn early_end(name: &str) -> usize {
     match name {
         "ac3.mp4" => 288,
         "eac3-5.1.mkv" => 240,
+        "mp2.mkv" => 480,
+        "mp2.mp4" => 528,
         _ => 0,
     }
 }
@@ -437,7 +493,7 @@ fn track_decoder_on_demuxed_packets_matches_decode() {
     use craft_audio::TrackDecoder;
     use craft_media::isobmff;
     let ff = require_ffmpeg!();
-    for name in ["aac.m4a", "aac-5.1.m4a", "opus.mp4", "pcm-s24be.mov"] {
+    for name in ["aac.m4a", "aac-5.1.m4a", "opus.mp4", "mp2.mp4", "pcm-s24be.mov"] {
         let c = CASES.iter().find(|c| c.name == name).unwrap();
         let Some(path) = fixture(&ff, c) else { continue };
         let bytes = std::fs::read(&path).unwrap();
