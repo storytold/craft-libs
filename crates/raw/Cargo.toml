@@ -1,6 +1,6 @@
 [package]
 name = "craft-raw"
-description = "Camera raw files, the file-format layer: container parsing, decompression and the sensor data out as a neutral raw image with its levels, crop, orientation, colour tags and embedded previews. DNG (read and write) and Canon CRW so far."
+description = "Camera raw files, the file-format layer: container parsing, decompression and the sensor data out as a neutral raw image with its levels, crop, orientation, colour tags and embedded previews. DNG (read and write), Hasselblad 3FR/FFF and Canon CRW so far."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,11 +11,13 @@ repository.workspace = true
 workspace = true
 
 [features]
-default = ["dng", "jxl", "crw"]
+default = ["dng", "jxl", "crw", "hasselblad"]
 ## Adobe DNG, reading and writing: uncompressed, lossless JPEG, lossy JPEG, Deflate.
 dng = ["dep:miniz_oxide", "dep:zune-jpeg", "dep:zune-core"]
 ## JPEG XL compressed DNGs (DNG 1.7, compression 52546) via jxl-oxide (pure Rust, MIT OR Apache-2.0).
 jxl = ["dng", "dep:jxl-oxide"]
+## Hasselblad 3FR / FFF: the DNG-layout reader plus the embedded 3FR header and the RGB preview.
+hasselblad = ["dng"]
 ## Canon CRW (CIFF) through craft-crw, the one CRW decoder.
 crw = ["dep:craft-crw", "dep:chrono"]
 

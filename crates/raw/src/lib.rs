@@ -25,6 +25,7 @@
 //! | `dng` | Adobe DNG: uncompressed (any depth, packed), lossless JPEG, lossy JPEG, Deflate (integer and floating point), strips and tiles, CFA and LinearRaw, DNG 1.7 interleaved storage; reading and writing |
 //! | `jxl` | JPEG XL compressed DNG (DNG 1.7, compression 52546) through `jxl-oxide`; implies `dng` |
 //! | `crw` | Canon CRW (CIFF), decoded by `craft-crw` and returned through this crate's types |
+//! | `hasselblad` | Hasselblad 3FR and FFF (and other CFA TIFFs in the DNG layout without a DNG version): uncompressed and Hasselblad's lossless JPEG; implies `dng` |
 //!
 //! [`probe`] names every container it can tell apart whatever the features; [`RawFormat::is_supported`] says
 //! whether this build decodes one.
@@ -49,6 +50,8 @@ mod dng;
 #[cfg(feature = "dng")]
 pub mod dngwrite;
 pub mod gaintable;
+#[cfg(feature = "hasselblad")]
+mod hasselblad;
 #[cfg(feature = "jxl")]
 mod jxl;
 pub mod ljpeg;
@@ -290,7 +293,9 @@ impl RawFormat {
     /// Whether [`decode`] reads this container in this build (possibly not every compression inside it): the
     /// format's decoder is in the crate and its Cargo feature is on.
     pub fn is_supported(self) -> bool {
-        (self == RawFormat::Dng && cfg!(feature = "dng")) || (self == RawFormat::Crw && cfg!(feature = "crw"))
+        (self == RawFormat::Dng && cfg!(feature = "dng"))
+            || (self == RawFormat::Crw && cfg!(feature = "crw"))
+            || (self == RawFormat::CfaTiff && cfg!(feature = "hasselblad"))
     }
 }
 
@@ -549,6 +554,8 @@ fn decode_in(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawImage> {
         RawFormat::Dng => dng::decode(bytes, mode, limits),
         #[cfg(feature = "crw")]
         RawFormat::Crw => crw::decode(bytes, mode, limits),
+        #[cfg(feature = "hasselblad")]
+        RawFormat::CfaTiff => hasselblad::decode(bytes, mode, limits),
         RawFormat::OtherTiff => Err(RawError::Unsupported(other_tiff_reason(bytes))),
         other => Err(RawError::Unsupported(format!("{other:?} files are not decoded by this build"))),
     }

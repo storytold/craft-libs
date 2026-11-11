@@ -87,8 +87,8 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-raw`](crates/raw/README.md): camera raw files, the file-format layer, from LightCraft with
   what PhotoCraft's and FilmCraft's readers added: container parsing and decompression to a neutral
   raw image (samples, CFA, black and white levels, active area, crop, orientation, colour tags,
-  opcode lists, embedded previews), one Cargo feature per format. DNG reading and writing and
-  Canon CRW (through `craft-crw`) so far; demosaicing and everything after stay with the develop
+  opcode lists, embedded previews), one Cargo feature per format. DNG reading and writing,
+  Hasselblad 3FR/FFF and Canon CRW (through `craft-crw`) so far; demosaicing and everything after stay with the develop
   pipeline.
 - [`craft-tiff`](crates/tiff/README.md): TIFF and BigTIFF IFD reader and writer, from LightCraft:
   every field type, the IFD chain, SubIFDs and Exif/GPS/Interop pointer IFDs, maker-note IFDs
