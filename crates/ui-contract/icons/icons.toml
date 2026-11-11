@@ -1,0 +1,1834 @@
+# The suite's icons by meaning, and each candidate set's file for them (without `.svg`).
+#
+# `build.rs` turns this into `craft_ui::icons::Icon` and `IconSet`. The `base` set (Phosphor) has a
+# file for every name; a name without one fails the build. Every other set is a pack: it lists the
+# names it has and may omit the rest, and `Icon::svg` returns the base set's file for an omitted
+# name. A file a set folder holds but no icon lists fails the build. Sources and licences:
+# ATTRIBUTION.md.
+#
+# `default`: the set `IconSet::default()` is; exactly one set has it.
+# `directional`: mirrored in a right-to-left interface (arrows of reading order, undo, redo).
+# `kind`: "stroke" sets get their stroke width rewritten to the suite's drawn width; "fill" sets
+# render as drawn. `stroke_width` is the set's own width in view-box units.
+
+[[set]]
+id = "lucide"
+title = "Lucide"
+licence = "ISC"
+kind = "stroke"
+stroke_width = 2.0
+default = true
+
+[[set]]
+id = "phosphor"
+title = "Phosphor (regular)"
+licence = "MIT"
+kind = "fill"
+base = true
+
+[[set]]
+id = "carbon"
+title = "IBM Carbon"
+licence = "Apache-2.0"
+kind = "fill"
+
+[[set]]
+id = "tabler"
+title = "Tabler (outline)"
+licence = "MIT"
+kind = "stroke"
+stroke_width = 2.0
+
+[[icon]]
+name = "close"
+directional = false
+lucide = "x"
+phosphor = "x"
+carbon = "close"
+tabler = "x"
+
+[[icon]]
+name = "chevron_down"
+directional = false
+lucide = "chevron-down"
+phosphor = "caret-down"
+carbon = "chevron--down"
+tabler = "chevron-down"
+
+[[icon]]
+name = "chevron_up"
+directional = false
+lucide = "chevron-up"
+phosphor = "caret-up"
+carbon = "chevron--up"
+tabler = "chevron-up"
+
+[[icon]]
+name = "chevron_left"
+directional = true
+lucide = "chevron-left"
+phosphor = "caret-left"
+carbon = "chevron--left"
+tabler = "chevron-left"
+
+[[icon]]
+name = "chevron_right"
+directional = true
+lucide = "chevron-right"
+phosphor = "caret-right"
+carbon = "chevron--right"
+tabler = "chevron-right"
+
+[[icon]]
+name = "chevrons_left"
+directional = true
+lucide = "chevrons-left"
+phosphor = "caret-double-left"
+carbon = "double-chevron--left"
+tabler = "chevrons-left"
+
+[[icon]]
+name = "chevrons_right"
+directional = true
+lucide = "chevrons-right"
+phosphor = "caret-double-right"
+carbon = "double-chevron--right"
+tabler = "chevrons-right"
+
+[[icon]]
+name = "more"
+directional = false
+lucide = "ellipsis"
+phosphor = "dots-three"
+carbon = "overflow-menu--horizontal"
+tabler = "dots"
+
+[[icon]]
+name = "menu"
+directional = false
+lucide = "menu"
+phosphor = "list"
+carbon = "menu"
+tabler = "menu-2"
+
+[[icon]]
+name = "plus"
+directional = false
+lucide = "plus"
+phosphor = "plus"
+carbon = "add"
+tabler = "plus"
+
+[[icon]]
+name = "minus"
+directional = false
+lucide = "minus"
+phosphor = "minus"
+carbon = "subtract"
+tabler = "minus"
+
+[[icon]]
+name = "check"
+directional = false
+lucide = "check"
+phosphor = "check"
+carbon = "checkmark"
+tabler = "check"
+
+[[icon]]
+name = "search"
+directional = false
+lucide = "search"
+phosphor = "magnifying-glass"
+carbon = "search"
+tabler = "search"
+
+[[icon]]
+name = "zoom_in"
+directional = false
+lucide = "zoom-in"
+phosphor = "magnifying-glass-plus"
+carbon = "zoom--in"
+tabler = "zoom-in"
+
+[[icon]]
+name = "settings"
+directional = false
+lucide = "settings"
+phosphor = "gear"
+carbon = "settings"
+tabler = "settings"
+
+[[icon]]
+name = "trash"
+directional = false
+lucide = "trash"
+phosphor = "trash"
+carbon = "trash-can"
+tabler = "trash"
+
+[[icon]]
+name = "copy"
+directional = false
+lucide = "copy"
+phosphor = "copy"
+carbon = "copy"
+tabler = "copy"
+
+[[icon]]
+name = "save"
+directional = false
+lucide = "save"
+phosphor = "floppy-disk"
+carbon = "save"
+tabler = "device-floppy"
+
+[[icon]]
+name = "folder_open"
+directional = false
+lucide = "folder-open"
+phosphor = "folder-open"
+carbon = "folder--open"
+tabler = "folder-open"
+
+[[icon]]
+name = "new_file"
+directional = false
+lucide = "file-plus"
+phosphor = "file-plus"
+carbon = "document--add"
+tabler = "file-plus"
+
+[[icon]]
+name = "undo"
+directional = true
+lucide = "undo-2"
+phosphor = "arrow-u-up-left"
+carbon = "undo"
+tabler = "arrow-back-up"
+
+[[icon]]
+name = "redo"
+directional = true
+lucide = "redo-2"
+phosphor = "arrow-u-up-right"
+carbon = "redo"
+tabler = "arrow-forward-up"
+
+[[icon]]
+name = "eye"
+directional = false
+lucide = "eye"
+phosphor = "eye"
+carbon = "view"
+tabler = "eye"
+
+[[icon]]
+name = "eye_off"
+directional = false
+lucide = "eye-off"
+phosphor = "eye-slash"
+carbon = "view--off"
+tabler = "eye-off"
+
+[[icon]]
+name = "lock"
+directional = false
+lucide = "lock"
+phosphor = "lock"
+carbon = "locked"
+tabler = "lock"
+
+[[icon]]
+name = "lock_open"
+directional = false
+lucide = "lock-open"
+phosphor = "lock-open"
+carbon = "unlocked"
+tabler = "lock-open"
+
+[[icon]]
+name = "layers"
+directional = false
+lucide = "layers"
+phosphor = "stack"
+carbon = "layers"
+tabler = "stack-2"
+
+[[icon]]
+name = "link"
+directional = false
+lucide = "link"
+phosphor = "link"
+carbon = "link"
+tabler = "link"
+
+[[icon]]
+name = "unlink"
+directional = false
+lucide = "unlink"
+phosphor = "link-break"
+carbon = "unlink"
+tabler = "link-off"
+
+[[icon]]
+name = "float"
+directional = false
+lucide = "external-link"
+phosphor = "arrow-square-out"
+carbon = "launch"
+tabler = "external-link"
+
+[[icon]]
+name = "open"
+directional = false
+lucide = "external-link"
+phosphor = "arrow-square-out"
+carbon = "launch"
+tabler = "external-link"
+
+[[icon]]
+name = "image"
+directional = false
+lucide = "image"
+phosphor = "image"
+carbon = "image"
+tabler = "photo"
+
+[[icon]]
+name = "text"
+directional = false
+lucide = "type"
+phosphor = "text-t"
+carbon = "text--font"
+tabler = "typography"
+
+[[icon]]
+name = "font_variable"
+directional = false
+phosphor = "font-variable"
+
+[[icon]]
+name = "text_warp"
+directional = false
+phosphor = "text-warp"
+
+[[icon]]
+name = "type_mask"
+directional = false
+phosphor = "type-mask"
+
+[[icon]]
+name = "type_mask_vertical"
+directional = false
+phosphor = "type-mask-vertical"
+
+[[icon]]
+name = "square"
+directional = false
+lucide = "square"
+phosphor = "square"
+carbon = "square--outline"
+tabler = "square"
+
+[[icon]]
+name = "circle"
+directional = false
+lucide = "circle"
+phosphor = "circle"
+carbon = "circle--outline"
+tabler = "circle"
+
+[[icon]]
+name = "move"
+directional = false
+lucide = "move"
+phosphor = "arrows-out-cardinal"
+carbon = "move"
+tabler = "arrows-move"
+
+[[icon]]
+name = "hand"
+directional = false
+lucide = "hand"
+phosphor = "hand"
+carbon = "touch--1"
+tabler = "hand-stop"
+
+[[icon]]
+name = "rotate_cw"
+directional = false
+lucide = "rotate-cw"
+phosphor = "arrow-clockwise"
+carbon = "rotate--clockwise"
+tabler = "rotate-clockwise"
+
+[[icon]]
+name = "brush"
+directional = false
+lucide = "brush"
+phosphor = "paint-brush"
+carbon = "paint-brush"
+tabler = "brush"
+
+[[icon]]
+name = "pencil"
+directional = false
+lucide = "pencil"
+phosphor = "pencil-simple"
+carbon = "edit"
+tabler = "pencil"
+
+[[icon]]
+name = "eraser"
+directional = false
+lucide = "eraser"
+phosphor = "eraser"
+carbon = "erase"
+tabler = "eraser"
+
+[[icon]]
+name = "eyedropper"
+directional = false
+lucide = "pipette"
+phosphor = "eyedropper"
+carbon = "eyedropper"
+tabler = "color-picker"
+
+[[icon]]
+name = "eyedropper_black"
+directional = false
+lucide = "eyedropper-black"
+phosphor = "eyedropper-black"
+
+[[icon]]
+name = "eyedropper_gray"
+directional = false
+lucide = "eyedropper-gray"
+phosphor = "eyedropper-gray"
+
+[[icon]]
+name = "eyedropper_white"
+directional = false
+lucide = "eyedropper-white"
+phosphor = "eyedropper-white"
+
+[[icon]]
+name = "info"
+directional = false
+lucide = "info"
+phosphor = "info"
+carbon = "information"
+tabler = "info-circle"
+
+[[icon]]
+name = "warning"
+directional = false
+lucide = "triangle-alert"
+phosphor = "warning"
+carbon = "warning--alt"
+tabler = "alert-triangle"
+
+[[icon]]
+name = "web_colors"
+directional = false
+lucide = "box"
+phosphor = "cube"
+carbon = "cube"
+tabler = "cube"
+
+[[icon]]
+name = "success"
+directional = false
+lucide = "circle-check"
+phosphor = "check-circle"
+carbon = "checkmark--outline"
+tabler = "circle-check"
+
+[[icon]]
+name = "error"
+directional = false
+lucide = "circle-alert"
+phosphor = "warning-circle"
+carbon = "error--outline"
+tabler = "alert-circle"
+
+[[icon]]
+name = "swap_colors"
+directional = false
+lucide = "arrow-left-right"
+phosphor = "swap"
+carbon = "arrows--horizontal"
+tabler = "arrows-exchange"
+
+[[icon]]
+name = "default_colors"
+directional = false
+lucide = "squares-subtract"
+phosphor = "subtract-square"
+carbon = "intersect"
+tabler = "layers-subtract"
+
+[[icon]]
+name = "adjustment_layer"
+directional = false
+lucide = "contrast"
+phosphor = "circle-half"
+carbon = "contrast"
+tabler = "contrast-2"
+
+[[icon]]
+name = "align_center"
+directional = false
+lucide = "align-center"
+phosphor = "text-align-center"
+carbon = "text--align--center"
+tabler = "align-center"
+
+[[icon]]
+name = "align_justify"
+directional = false
+lucide = "align-justify"
+phosphor = "text-align-justify"
+carbon = "text--align--justify"
+tabler = "align-justified"
+
+[[icon]]
+name = "align_left"
+directional = false
+lucide = "align-left"
+phosphor = "text-align-left"
+carbon = "text--align--left"
+tabler = "align-left"
+
+[[icon]]
+name = "align_right"
+directional = false
+lucide = "align-right"
+phosphor = "text-align-right"
+carbon = "text--align--right"
+tabler = "align-right"
+
+[[icon]]
+name = "align_edge_bottom"
+directional = false
+lucide = "align-end-horizontal"
+phosphor = "align-bottom"
+carbon = "align--vertical-bottom"
+tabler = "layout-align-bottom"  # near: one box instead of two
+
+[[icon]]
+name = "align_edge_hcenter"
+directional = false
+lucide = "align-center-vertical"
+phosphor = "align-center-horizontal"
+carbon = "align--horizontal-center"
+tabler = "layout-align-center"  # near: one box instead of two
+
+[[icon]]
+name = "align_edge_left"
+directional = false
+lucide = "align-start-vertical"
+phosphor = "align-left"
+carbon = "align--horizontal-left"
+tabler = "layout-align-left"  # near: one box instead of two
+
+[[icon]]
+name = "align_edge_right"
+directional = false
+lucide = "align-end-vertical"
+phosphor = "align-right"
+carbon = "align--horizontal-right"
+tabler = "layout-align-right"  # near: one box instead of two
+
+[[icon]]
+name = "align_edge_top"
+directional = false
+lucide = "align-start-horizontal"
+phosphor = "align-top"
+carbon = "align--vertical-top"
+tabler = "layout-align-top"  # near: one box instead of two
+
+[[icon]]
+name = "align_edge_vcenter"
+directional = false
+lucide = "align-center-horizontal"
+phosphor = "align-center-vertical"
+carbon = "align--vertical-center"
+tabler = "layout-align-middle"  # near: one box instead of two
+
+[[icon]]
+name = "app_window"
+directional = false
+lucide = "app-window"
+phosphor = "app-window"
+carbon = "application--web"  # near: browser window with address bar
+tabler = "app-window"
+
+[[icon]]
+name = "swap_horizontal"
+directional = false
+lucide = "arrow-left-right"
+phosphor = "arrows-left-right"
+carbon = "arrows--horizontal"
+tabler = "arrows-exchange"
+
+[[icon]]
+name = "swap_vertical"
+directional = false
+lucide = "arrow-up-down"
+phosphor = "arrows-down-up"
+carbon = "arrows--vertical"
+tabler = "arrows-down-up"
+
+[[icon]]
+name = "ban"
+directional = false
+lucide = "ban"
+phosphor = "prohibit"
+carbon = "misuse"  # near: circle with X, not slash
+tabler = "ban"
+
+[[icon]]
+name = "flag"
+directional = false
+lucide = "flag"
+phosphor = "flag"
+carbon = "flag"
+tabler = "flag"
+
+[[icon]]
+name = "refresh"
+directional = false
+lucide = "refresh-cw"
+phosphor = "arrows-clockwise"
+carbon = "renew"
+tabler = "refresh"
+
+[[icon]]
+name = "marquee_ellipse"
+directional = false
+lucide = "circle-dashed"
+phosphor = "circle-dashed"
+carbon = "circle-dash"
+tabler = "circle-dashed"
+
+[[icon]]
+name = "target"
+directional = false
+lucide = "circle-dot"
+phosphor = "radio-button"
+carbon = "radio-button--checked"
+tabler = "circle-dot"
+
+[[icon]]
+name = "clock"
+directional = false
+lucide = "clock"
+phosphor = "clock"
+carbon = "time"
+tabler = "clock"
+
+[[icon]]
+name = "cloud"
+directional = false
+lucide = "cloud"
+phosphor = "cloud"
+carbon = "cloud"
+tabler = "cloud"
+
+[[icon]]
+name = "compass"
+directional = false
+lucide = "compass"
+phosphor = "compass"
+carbon = "compass"
+tabler = "compass"
+
+[[icon]]
+name = "contrast"
+directional = false
+lucide = "contrast"
+phosphor = "circle-half"
+carbon = "contrast"
+tabler = "contrast-2"
+
+[[icon]]
+name = "crop"
+directional = false
+lucide = "crop"
+phosphor = "crop"
+carbon = "crop"
+tabler = "crop"
+
+[[icon]]
+name = "diamond"
+directional = false
+lucide = "diamond"
+phosphor = "diamond"
+carbon = "diamond--outline"
+tabler = "diamond"
+
+[[icon]]
+name = "distribute_bottom"
+directional = false
+phosphor = "distribute-bottom"
+
+[[icon]]
+name = "distribute_hcenter"
+directional = false
+phosphor = "distribute-hcenter"
+
+[[icon]]
+name = "distribute_horizontal"
+directional = false
+phosphor = "distribute-horizontal"
+
+[[icon]]
+name = "distribute_left"
+directional = false
+phosphor = "distribute-left"
+
+[[icon]]
+name = "distribute_right"
+directional = false
+phosphor = "distribute-right"
+
+[[icon]]
+name = "distribute_top"
+directional = false
+phosphor = "distribute-top"
+
+[[icon]]
+name = "distribute_vcenter"
+directional = false
+phosphor = "distribute-vcenter"
+
+[[icon]]
+name = "distribute_vertical"
+directional = false
+phosphor = "distribute-vertical"
+
+[[icon]]
+name = "droplet"
+directional = false
+lucide = "droplet"
+phosphor = "drop"
+carbon = "rain-drop"  # near: drop with inner highlight
+tabler = "droplet"
+
+[[icon]]
+name = "ellipse_dashed"
+directional = false
+lucide = "circle-dashed"  # near: dashed circle, not ellipse
+phosphor = "circle-dashed"  # near: dashed circle, not ellipse
+carbon = "circle-dash"  # near: dashed circle, not ellipse
+tabler = "circle-dashed"  # near: dashed circle, not ellipse
+
+[[icon]]
+name = "rect_dashed"
+directional = false
+lucide = "square-dashed"
+phosphor = "selection"
+carbon = "select--01"  # near: dashed square with crosshair
+tabler = "square-dashed"
+
+[[icon]]
+name = "file"
+directional = false
+lucide = "file"
+phosphor = "file"
+carbon = "document"
+tabler = "file"
+
+[[icon]]
+name = "flame"
+directional = false
+lucide = "flame"
+phosphor = "flame"
+carbon = "fire"
+tabler = "flame"
+
+[[icon]]
+name = "folder"
+directional = false
+lucide = "folder"
+phosphor = "folder"
+carbon = "folder"
+tabler = "folder"
+
+[[icon]]
+name = "new_folder"
+directional = false
+lucide = "folder-plus"
+phosphor = "folder-plus"
+carbon = "folder--add"
+tabler = "folder-plus"
+
+[[icon]]
+name = "gauge"
+directional = false
+lucide = "gauge"
+phosphor = "gauge"
+carbon = "meter"
+tabler = "gauge"
+
+[[icon]]
+name = "grid_small"
+directional = false
+lucide = "grid-2x2"
+phosphor = "grid-four"
+carbon = "grid"
+tabler = "layout-grid"
+
+[[icon]]
+name = "grid"
+directional = false
+lucide = "grid-3x3"
+phosphor = "grid-nine"
+carbon = "view--matrix"  # near: nine cells inside brackets
+tabler = "grid-3x3"
+
+[[icon]]
+name = "home"
+directional = false
+lucide = "house"
+phosphor = "house"
+carbon = "home"
+tabler = "home"
+
+[[icon]]
+name = "maximize_2"
+directional = false
+lucide = "maximize-2"
+phosphor = "arrows-out-simple"
+carbon = "maximize"
+tabler = "arrows-diagonal"
+
+[[icon]]
+name = "scaling"
+directional = false
+phosphor = "scaling"
+
+[[icon]]
+name = "note"
+directional = false
+lucide = "message-square"
+phosphor = "chat"
+carbon = "chat"
+tabler = "message"
+
+[[icon]]
+name = "monitor"
+directional = false
+lucide = "monitor"
+phosphor = "monitor"
+carbon = "screen"
+tabler = "device-desktop"
+
+[[icon]]
+name = "moon"
+directional = false
+lucide = "moon"
+phosphor = "moon"
+carbon = "moon"
+tabler = "moon"
+
+[[icon]]
+name = "mouse_pointer_2"
+directional = false
+lucide = "mouse-pointer-2"
+phosphor = "cursor"
+carbon = "cursor--2"
+tabler = "pointer"
+
+[[icon]]
+name = "navigation"
+directional = false
+lucide = "navigation"
+phosphor = "navigation-arrow"
+carbon = "location--current"  # near: arrow in a circle
+tabler = "navigation"
+
+[[icon]]
+name = "painting_symmetry"
+directional = false
+phosphor = "painting-symmetry"
+
+[[icon]]
+name = "palette"
+directional = false
+lucide = "palette"
+phosphor = "palette"
+carbon = "color-palette"
+tabler = "palette"
+
+[[icon]]
+name = "panels_top_left"
+directional = false
+lucide = "panels-top-left"
+phosphor = "layout"  # near: generic layout
+carbon = "template"  # near: generic layout
+tabler = "layout-2"  # near: generic layout
+
+[[icon]]
+name = "pause"
+directional = false
+lucide = "pause"
+phosphor = "pause"
+carbon = "pause"
+tabler = "player-pause"
+
+[[icon]]
+name = "pen_tool"
+directional = false
+lucide = "pen-tool"
+phosphor = "pen-nib"
+carbon = "pen--fountain"
+tabler = "vector-bezier-2"  # near: bezier curve, no pen nib
+
+[[icon]]
+name = "pentagon"
+directional = false
+lucide = "pentagon"
+phosphor = "polygon"
+carbon = "pentagon--outline"
+tabler = "pentagon"
+
+[[icon]]
+name = "play"
+directional = false
+lucide = "play"
+phosphor = "play"
+carbon = "play"
+tabler = "player-play"
+
+[[icon]]
+name = "pointer"
+directional = false
+lucide = "pointer"
+phosphor = "hand-pointing"
+carbon = "touch--1"
+tabler = "hand-finger"
+
+[[icon]]
+name = "ruler"
+directional = false
+lucide = "ruler"
+phosphor = "ruler"
+carbon = "ruler"
+tabler = "ruler"
+
+[[icon]]
+name = "sampler"
+directional = false
+lucide = "crosshair"
+phosphor = "crosshair"
+carbon = "target"  # near: rings without ticks
+tabler = "crosshair"
+
+[[icon]]
+name = "scan"
+directional = false
+lucide = "scan"
+phosphor = "scan"
+carbon = "scan"
+tabler = "scan"
+
+[[icon]]
+name = "scan_line"
+directional = false
+lucide = "scan-line"
+phosphor = "scan"  # near: frame without line
+carbon = "scan--alt"  # near: frame without line
+tabler = "line-scan"
+
+[[icon]]
+name = "scissors"
+directional = false
+lucide = "scissors"
+phosphor = "scissors"
+carbon = "cut"
+tabler = "scissors"
+
+[[icon]]
+name = "slice_knife"
+directional = false
+lucide = "slice"
+phosphor = "knife"  # near: kitchen knife
+carbon = "cut"  # near: scissors, not blade
+tabler = "slice"
+
+[[icon]]
+name = "slice_select"
+directional = false
+phosphor = "slice-select"
+
+[[icon]]
+name = "adjustments"
+directional = false
+lucide = "sliders-horizontal"
+phosphor = "sliders-horizontal"
+carbon = "settings--adjust"
+tabler = "adjustments-horizontal"
+
+[[icon]]
+name = "spline"
+directional = false
+lucide = "spline"
+phosphor = "bezier-curve"
+carbon = "curved-line--solid"  # near: plain curve without nodes
+tabler = "vector-spline"
+
+[[icon]]
+name = "marquee_rect"
+directional = false
+lucide = "square-dashed"
+phosphor = "selection"
+carbon = "select--01"  # near: dashed square with crosshair
+tabler = "square-dashed"
+
+[[icon]]
+name = "lasso"
+directional = false
+lucide = "lasso"
+phosphor = "lasso"
+carbon = "lasso"
+tabler = "lasso"
+
+[[icon]]
+name = "lasso_magnetic"
+directional = false
+phosphor = "lasso-magnetic"
+
+[[icon]]
+name = "lasso_select"
+directional = false
+lucide = "lasso-select"
+phosphor = "lasso-select"
+
+[[icon]]
+name = "layer_mask"
+directional = false
+phosphor = "layer-mask"
+
+[[icon]]
+name = "lollipop"
+directional = false
+lucide = "lollipop"
+phosphor = "lollipop"
+tabler = "lollipop"
+
+[[icon]]
+name = "marquee_column"
+directional = false
+phosphor = "marquee-column"
+
+[[icon]]
+name = "marquee_row"
+directional = false
+phosphor = "marquee-row"
+
+[[icon]]
+name = "panel_right"
+directional = false
+lucide = "panel-right"
+phosphor = "panel-right"
+carbon = "open-panel--right"
+tabler = "layout-sidebar-right"
+
+[[icon]]
+name = "pen_add_anchor"
+directional = false
+phosphor = "pen-add-anchor"
+
+[[icon]]
+name = "pen_curvature"
+directional = false
+phosphor = "pen-curvature"
+
+[[icon]]
+name = "pen_delete_anchor"
+directional = false
+phosphor = "pen-delete-anchor"
+
+[[icon]]
+name = "pen_freeform"
+directional = false
+phosphor = "pen-freeform"
+
+[[icon]]
+name = "quick_selection"
+directional = false
+phosphor = "quick-selection"
+
+[[icon]]
+name = "object_select"
+directional = false
+phosphor = "square-dashed-mouse-pointer"
+
+[[icon]]
+name = "new_layer"
+directional = false
+lucide = "square-plus"
+phosphor = "plus-square"
+carbon = "add--alt"  # near: plus in a circle, not square
+tabler = "square-plus"
+
+[[icon]]
+name = "squares_subtract"
+directional = false
+lucide = "squares-intersect"
+phosphor = "intersect-square"
+carbon = "intersect"
+tabler = "layers-intersect"
+
+[[icon]]
+name = "stamp"
+directional = false
+lucide = "stamp"
+phosphor = "stamp"
+carbon = "stamp"
+tabler = "rubber-stamp"
+
+[[icon]]
+name = "star"
+directional = false
+lucide = "star"
+phosphor = "star"
+carbon = "star"
+tabler = "star"
+
+[[icon]]
+name = "star_filled"
+directional = false
+phosphor = "star-filled"
+
+[[icon]]
+name = "sun"
+directional = false
+lucide = "sun"
+phosphor = "sun"
+carbon = "sun"
+tabler = "sun"
+
+[[icon]]
+name = "swatch_book"
+directional = false
+lucide = "swatch-book"
+phosphor = "swatches"
+carbon = "color-palette"  # near: palette, not swatch book
+tabler = "color-swatch"
+
+[[icon]]
+name = "symmetry_diagonal"
+directional = false
+phosphor = "symmetry-diagonal"
+
+[[icon]]
+name = "symmetry_dual"
+directional = false
+phosphor = "symmetry-dual"
+
+[[icon]]
+name = "symmetry_horizontal"
+directional = false
+phosphor = "symmetry-horizontal"
+
+[[icon]]
+name = "symmetry_vertical"
+directional = false
+phosphor = "symmetry-vertical"
+
+[[icon]]
+name = "toggle_left"
+directional = true
+lucide = "toggle-left"
+phosphor = "toggle-left"
+carbon = "toggle-off"
+tabler = "toggle-left"
+
+[[icon]]
+name = "toggle_right"
+directional = true
+lucide = "toggle-right"
+phosphor = "toggle-right"
+carbon = "toggle-on"
+tabler = "toggle-right"
+
+[[icon]]
+name = "triangle"
+directional = false
+lucide = "triangle"
+phosphor = "triangle"
+carbon = "triangle--outline"
+tabler = "triangle"
+
+[[icon]]
+name = "triangle_right"
+directional = false
+phosphor = "triangle-right"
+
+[[icon]]
+name = "wand"
+directional = false
+lucide = "wand"
+phosphor = "magic-wand"  # near: with sparkles
+carbon = "magic-wand"  # near: with sparkles
+tabler = "wand"
+
+[[icon]]
+name = "wand_sparkles"
+directional = false
+lucide = "wand-sparkles"
+phosphor = "magic-wand"
+carbon = "magic-wand"
+tabler = "wand"  # near: wand without sparkles
+
+[[icon]]
+name = "artboard"
+directional = false
+lucide = "frame"  # near: frame with guide lines, no ticks
+phosphor = "frame-corners"  # near: corner brackets only
+tabler = "artboard"
+
+[[icon]]
+name = "bandage"
+directional = false
+lucide = "bandage"
+phosphor = "bandaids"  # near: two crossed plasters
+tabler = "bandage"
+
+[[icon]]
+name = "blend"
+directional = false
+lucide = "blend"
+phosphor = "intersect"
+tabler = "blend-mode"
+
+[[icon]]
+name = "brush_cleaning"
+directional = false
+lucide = "brush-cleaning"
+phosphor = "broom"  # near: broom without brush
+carbon = "clean"  # near: broom without brush
+
+[[icon]]
+name = "frame_placeholder"
+directional = false
+lucide = "square-x"  # near: box with small X, not corner to corner
+phosphor = "x-square"  # near: box with small X, not corner to corner
+tabler = "square-x"  # near: box with small X, not corner to corner
+
+[[icon]]
+name = "gradient"
+directional = false
+phosphor = "gradient"
+carbon = "gradient"
+
+[[icon]]
+name = "paint_bucket"
+directional = false
+lucide = "paint-bucket"
+phosphor = "paint-bucket"
+tabler = "bucket-droplet"
+
+[[icon]]
+name = "perspective_crop"
+directional = false
+phosphor = "perspective"  # near: trapezoid, no crop marks
+tabler = "perspective"  # near: trapezoid, no crop marks
+
+[[icon]]
+name = "orientation_landscape"
+directional = false
+lucide = "rectangle-horizontal"
+phosphor = "rectangle"
+tabler = "rectangle"
+
+[[icon]]
+name = "orientation_portrait"
+directional = false
+lucide = "rectangle-vertical"
+phosphor = "rectangle"  # near: rectangle turned 90 degrees
+tabler = "rectangle-vertical"
+
+[[icon]]
+name = "slash"
+directional = false
+lucide = "slash"
+phosphor = "line-segment"  # near: adds end nodes
+tabler = "slash"
+
+[[icon]]
+name = "sparkles"
+directional = false
+lucide = "sparkles"
+phosphor = "sparkle"
+tabler = "sparkles"
+
+[[icon]]
+name = "text_cursor"
+directional = false
+lucide = "text-cursor"
+phosphor = "cursor-text"
+tabler = "cursor-text"
+
+[[icon]]
+name = "bandage_sparkle"
+directional = false
+phosphor = "bandage-sparkle"  # drawn in Phosphor's style: no match in any set
+
+[[icon]]
+name = "brush_replace"
+directional = false
+phosphor = "brush-replace"  # drawn in Phosphor's style: no match in any set
+
+[[icon]]
+name = "clip_below"
+directional = false
+phosphor = "clip-below"  # drawn in Phosphor's style: no match in any set
+
+[[icon]]
+name = "clip_release"
+directional = false
+phosphor = "clip-release"  # drawn in Phosphor's style: no match in any set
+
+[[icon]]
+name = "convert_point"
+directional = false
+phosphor = "convert-point"  # drawn in Phosphor's style: no match in any set
+
+[[icon]]
+name = "direct_select"
+directional = false
+phosphor = "direct-select"  # drawn in Phosphor's style: no match in any set
+
+[[icon]]
+name = "eraser_background"
+directional = false
+phosphor = "eraser-background"  # drawn in Phosphor's style: no match in any set
+
+[[icon]]
+name = "eraser_magic"
+directional = false
+phosphor = "eraser-magic"  # drawn in Phosphor's style: no match in any set
+
+[[icon]]
+name = "font_similar"
+directional = false
+phosphor = "font-similar"  # drawn in Phosphor's style: no match in any set
+
+[[icon]]
+name = "layout_grid"
+directional = false
+lucide = "layout-grid"
+phosphor = "squares-four"
+carbon = "grid"  # the 2 by 2 outline: the 3 by 3 apps glyph fills its square at 12 px
+tabler = "layout-grid"
+
+[[icon]]
+name = "list"
+directional = false
+lucide = "list"
+phosphor = "list-bullets"
+carbon = "list--bulleted"
+tabler = "list"
+
+[[icon]]
+name = "gradient_linear"
+directional = false
+phosphor = "gradient-linear"  # drawn in Phosphor's style: no match in any set
+
+[[icon]]
+name = "gradient_radial"
+directional = false
+phosphor = "gradient-radial"  # drawn in Phosphor's style: no match in any set
+
+[[icon]]
+name = "gradient_angle"
+directional = false
+phosphor = "gradient-angle"  # drawn in Phosphor's style: no match in any set
+
+[[icon]]
+name = "gradient_reflected"
+directional = false
+phosphor = "gradient-reflected"  # drawn in Phosphor's style: no match in any set
+
+[[icon]]
+name = "gradient_diamond"
+directional = false
+phosphor = "gradient-diamond"  # drawn in Phosphor's style: no match in any set
+
+[[icon]]
+name = "fx"
+directional = false
+phosphor = "fx"  # drawn in Phosphor's style: no match in any set
+
+[[icon]]
+name = "rectangle"
+directional = false
+lucide = "rectangle-horizontal"
+phosphor = "rectangle"
+tabler = "rectangle"
+
+[[icon]]
+name = "text_bold"
+directional = false
+lucide = "bold"
+phosphor = "text-b"
+tabler = "bold"
+
+[[icon]]
+name = "text_italic"
+directional = false
+lucide = "italic"
+phosphor = "text-italic"
+tabler = "italic"
+
+[[icon]]
+name = "text_underline"
+directional = false
+lucide = "underline"
+phosphor = "text-underline"
+tabler = "underline"
+
+[[icon]]
+name = "text_strikethrough"
+directional = false
+lucide = "strikethrough"
+phosphor = "text-strikethrough"
+tabler = "strikethrough"
+
+[[icon]]
+name = "text_superscript"
+directional = false
+lucide = "superscript"
+phosphor = "text-t"  # near: no superscript in Phosphor
+tabler = "superscript"
+
+[[icon]]
+name = "text_subscript"
+directional = false
+lucide = "subscript"
+phosphor = "text-t"  # near: no subscript in Phosphor
+tabler = "subscript"
+
+[[icon]]
+name = "text_all_caps"
+directional = false
+lucide = "case-upper"
+phosphor = "text-t"  # near: no capitals mark in Phosphor
+tabler = "letter-case-upper"
+
+[[icon]]
+name = "text_small_caps"
+directional = false
+lucide = "case-sensitive"
+phosphor = "text-t"  # near: no capitals mark in Phosphor
+tabler = "letter-case"
+
+[[icon]]
+name = "ligature"
+directional = false
+lucide = "ligature"
+phosphor = "text-t"  # near: no ligature in Phosphor
+
+[[icon]]
+name = "pilcrow"
+directional = false
+lucide = "pilcrow"
+phosphor = "paragraph"
+tabler = "pilcrow"
+
+[[icon]]
+name = "pilcrow_left"
+directional = false
+lucide = "pilcrow-left"
+phosphor = "paragraph"  # near: no direction in Phosphor
+tabler = "pilcrow-left"
+
+[[icon]]
+name = "pilcrow_right"
+directional = false
+lucide = "pilcrow-right"
+phosphor = "paragraph"  # near: no direction in Phosphor
+tabler = "pilcrow-right"
+
+[[icon]]
+name = "calendar"
+directional = false
+lucide = "calendar"
+phosphor = "calendar"
+carbon = "calendar"
+tabler = "calendar"
+
+[[icon]]
+name = "funnel"
+directional = false
+lucide = "funnel"
+phosphor = "funnel"
+carbon = "filter"
+tabler = "filter"
+
+[[icon]]
+name = "chart_line"
+directional = false
+lucide = "chart-line"
+phosphor = "chart-line"
+carbon = "chart--line"
+tabler = "chart-line"
+
+[[icon]]
+name = "split"
+directional = false
+lucide = "split"
+phosphor = "arrows-split"
+tabler = "arrows-split"
+
+[[icon]]
+name = "split_cross"
+directional = false
+lucide = "grid-2x2"
+phosphor = "squares-four"
+
+[[icon]]
+name = "split_vertical"
+directional = false
+lucide = "square-split-horizontal"
+phosphor = "square-split-horizontal"
+
+[[icon]]
+name = "split_horizontal"
+directional = false
+lucide = "square-split-vertical"
+phosphor = "square-split-vertical"
+
+[[icon]]
+name = "stroke_align_inside"
+directional = false
+phosphor = "stroke-align-inside"
+
+[[icon]]
+name = "stroke_align_center"
+directional = false
+phosphor = "stroke-align-center"
+
+[[icon]]
+name = "stroke_align_outside"
+directional = false
+phosphor = "stroke-align-outside"
+
+[[icon]]
+name = "stroke_cap_butt"
+directional = false
+phosphor = "stroke-cap-butt"
+
+[[icon]]
+name = "stroke_cap_round"
+directional = false
+phosphor = "stroke-cap-round"
+
+[[icon]]
+name = "stroke_cap_square"
+directional = false
+phosphor = "stroke-cap-square"
+
+[[icon]]
+name = "stroke_join_miter"
+directional = false
+phosphor = "stroke-join-miter"
+
+[[icon]]
+name = "stroke_join_round"
+directional = false
+phosphor = "stroke-join-round"
+
+[[icon]]
+name = "stroke_join_bevel"
+directional = false
+phosphor = "stroke-join-bevel"
+
+[[icon]]
+name = "route_straight"
+directional = false
+phosphor = "route-straight"
+
+[[icon]]
+name = "route_elbow"
+directional = false
+phosphor = "route-elbow"
+
+[[icon]]
+name = "route_curved"
+directional = false
+phosphor = "route-curved"
+
+[[icon]]
+name = "square_plus"
+directional = false
+lucide = "square-plus"
+phosphor = "plus-square"
+carbon = "add--alt"  # near: plus in a circle, not square
+tabler = "square-plus"
+
+[[icon]]
+name = "undo_2"
+directional = true
+lucide = "undo-2"
+phosphor = "arrow-bend-up-left"
+carbon = "undo"
+tabler = "arrow-back-up"
+
+# Fixed on screen: the canvas does not mirror in right-to-left, so these must not either
+# (Liquify's Twirl Counterclockwise and Push Left).
+[[icon]]
+name = "rotate_ccw"
+directional = false
+lucide = "rotate-ccw"
+phosphor = "arrow-counter-clockwise"
+carbon = "rotate--counterclockwise"
+tabler = "rotate"
+
+[[icon]]
+name = "arrow_left_fixed"
+directional = false
+lucide = "arrow-left"
+phosphor = "arrow-left"
+carbon = "arrow--left"
+tabler = "arrow-left"
+
+[[icon]]
+name = "track_mute"
+directional = false
+lucide = "volume-off"
+phosphor = "speaker-simple-slash"
+carbon = "volume--mute"
+tabler = "volume-off"
+
+[[icon]]
+name = "solo"
+directional = false
+lucide = "headphones"
+phosphor = "headphones"
+carbon = "headphones"
+tabler = "headphones"
+
+[[icon]]
+name = "sync_lock"
+directional = false
+phosphor = "sync-lock"
+
+[[icon]]
+name = "snap"
+directional = false
+lucide = "magnet"
+phosphor = "magnet"
+tabler = "magnet"
+
+[[icon]]
+name = "linked_selection"
+directional = false
+lucide = "link-2"
+phosphor = "link-simple-horizontal"
+carbon = "link"
+tabler = "link"
+
+[[icon]]
+name = "mark_in"
+directional = false
+phosphor = "mark-in"
+
+[[icon]]
+name = "mark_out"
+directional = false
+phosphor = "mark-out"
+
+[[icon]]
+name = "step_back"
+directional = false
+lucide = "step-back"
+phosphor = "skip-back"
+carbon = "skip--back"
+tabler = "player-skip-back"
+
+[[icon]]
+name = "step_forward"
+directional = false
+lucide = "step-forward"
+phosphor = "skip-forward"
+carbon = "skip--forward"
+tabler = "player-skip-forward"
+
+[[icon]]
+name = "insert_clip"
+directional = false
+phosphor = "insert-clip"
+
+[[icon]]
+name = "overwrite_clip"
+directional = false
+phosphor = "overwrite-clip"
+
+[[icon]]
+name = "lift_clip"
+directional = false
+phosphor = "lift-clip"
+
+[[icon]]
+name = "extract_clip"
+directional = false
+phosphor = "extract-clip"
+
+[[icon]]
+name = "keyframe_linear"
+directional = false
+phosphor = "keyframe-linear"
+
+[[icon]]
+name = "keyframe_bezier"
+directional = false
+phosphor = "keyframe-bezier"
+
+[[icon]]
+name = "keyframe_auto_bezier"
+directional = false
+phosphor = "keyframe-auto-bezier"
+
+[[icon]]
+name = "keyframe_hold"
+directional = false
+phosphor = "keyframe-hold"
+
+[[icon]]
+name = "keyframe_ease_in"
+directional = false
+phosphor = "keyframe-ease-in"
+
+[[icon]]
+name = "keyframe_ease_out"
+directional = false
+phosphor = "keyframe-ease-out"
+
+[[icon]]
+name = "thumbs_up"
+directional = false
+lucide = "thumbs-up"
+phosphor = "thumbs-up"
+carbon = "thumbs-up"
+tabler = "thumb-up"
+
+[[icon]]
+name = "thumbs_down"
+directional = false
+lucide = "thumbs-down"
+phosphor = "thumbs-down"
+carbon = "thumbs-down"
+tabler = "thumb-down"
+
+[[icon]]
+name = "x_circle"
+directional = false
+lucide = "circle-x"
+phosphor = "x-circle"
+carbon = "close--outline"
+tabler = "circle-x"
+
+[[icon]]
+name = "warning_diamond"
+directional = false
+phosphor = "warning-diamond"
+carbon = "warning--diamond"
+
+[[icon]]
+name = "sort_ascending"
+directional = false
+lucide = "arrow-up-narrow-wide"
+phosphor = "sort-ascending"
+carbon = "sort--ascending"
+tabler = "sort-ascending"
+
+[[icon]]
+name = "sort_descending"
+directional = false
+lucide = "arrow-down-wide-narrow"
+phosphor = "sort-descending"
+carbon = "sort--descending"
+tabler = "sort-descending"
+
+[[icon]]
+name = "globe"
+directional = false
+lucide = "globe"
+phosphor = "globe"
+carbon = "earth"
+tabler = "world"
+
+[[icon]]
+name = "bookmark"
+directional = false
+lucide = "bookmark"
+phosphor = "bookmark-simple"
+carbon = "bookmark"
+tabler = "bookmark"
+
+[[icon]]
+name = "mail"
+directional = false
+lucide = "mail"
+phosphor = "envelope-simple"
+carbon = "email"
+tabler = "mail"
+
+[[icon]]
+name = "key_linear"
+directional = false
+phosphor = "key-linear"
+
+[[icon]]
+name = "key_linear_filled"
+directional = false
+phosphor = "key-linear-filled"
+
+[[icon]]
+name = "key_hold"
+directional = false
+phosphor = "key-hold"
+
+[[icon]]
+name = "key_bezier"
+directional = false
+phosphor = "key-bezier"
+
+[[icon]]
+name = "key_auto_bezier"
+directional = false
+phosphor = "key-auto-bezier"
+
+[[icon]]
+name = "key_continuous_bezier"
+directional = false
+phosphor = "key-continuous-bezier"
+
+[[icon]]
+name = "key_ease_in"
+directional = false
+phosphor = "key-ease-in"
+
+[[icon]]
+name = "key_ease_out"
+directional = false
+phosphor = "key-ease-out"
+
+[[icon]]
+name = "keyframe_easy_ease"
+directional = false
+phosphor = "keyframe-easy-ease"
+
+[[icon]]
+name = "keyboard"
+directional = false
+lucide = "keyboard"
+phosphor = "keyboard"
+carbon = "keyboard"
+tabler = "keyboard"

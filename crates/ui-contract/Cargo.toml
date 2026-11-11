@@ -1,0 +1,93 @@
+[package]
+name = "craft-ui-contract"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Runtime, style, fonts, primitives, the component contract, layout and the test kit of the craft UI library, on egui"
+
+[lib]
+# Every test lives in the `it` integration binary.
+test = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# `craft_ui::testing`: the fixture and suite runner.
+testing = ["dep:libtest-mimic"]
+# `craft_ui::testing::snapshot`: stories rendered to images offscreen (desktop only).
+snapshot = ["testing", "dep:egui_kittest", "dep:image"]
+# Draw colour glyphs (COLR, sbix, CBDT), e.g. colour emoji.
+color_fonts = ["dep:epaint", "epaint/color_fonts"]
+# Find installed fonts for characters the app's faces lack (desktop only).
+system_fonts = ["dep:fontique"]
+
+[dependencies]
+craft-behavior = { workspace = true }
+# `Intent::Access` and the AccessKit action requests the key stage routes.
+accesskit = "0.25"
+craft-keymap = { workspace = true, features = ["egui"] }
+craft-theme = { workspace = true }
+craft-ui-macros = { workspace = true }
+egui = { workspace = true }
+libtest-mimic = { version = "0.8", optional = true }
+craft-host = { workspace = true }
+# `WindowSystem` and `restore::Store`, which viewport mounts place windows through.
+# `ui`: the window crate's egui side builds once, the same for the runtime, the shell's `app` and the apps.
+craft-window = { workspace = true, features = ["ui"] }
+# `quit`, which `runtime::windows::logic` routes a root close through.
+craft-quit = { workspace = true }
+craft-i18n = { workspace = true, features = ["collate"] }
+log = "0.4"
+smallvec = { workspace = true }
+inventory = "0.3.25"
+serde = { workspace = true }
+
+# `fonts`: character maps and variation axes of faces, and inflating egui's default fonts, stored deflated.
+skrifa = { version = "0.44", default-features = false, features = ["std"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# The installed font folders, for the on-demand font candidates (`fonts::SystemCandidates`).
+craft-font-catalog = { workspace = true, default-features = false }
+# The craft-fonts faces (`fonts::EmbeddedFace`, `fonts::ServedFace`).
+craft-fonts-build = { workspace = true }
+# Only `color_fonts` reads it: the feature turns on epaint's colour glyphs.
+epaint = { version = "0.37", default-features = false, optional = true }
+
+# Icon rasterising; the version egui_extras's `svg` feature uses, so apps build one copy.
+resvg = { version = "0.45.1", default-features = false }
+# `std::time::Instant` on native; the browser clock on wasm, where `Instant::now` panics.
+web-time = "1.1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The versions egui_system_font_provider 0.37 uses.
+fontique = { version = "0.11.1", default-features = false, features = ["system", "fontconfig-dlopen"], optional = true }
+# `testing::snapshot`: egui's wgpu test renderer, which prefers a software adapter, and PNG output.
+egui_kittest = { version = "0.37", features = ["wgpu"], optional = true }
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+
+# build.rs reads icons/icons.toml and deflates the suite's default fonts (Inter, egui's faces) for `fonts::deflated_default_definitions`.
+[build-dependencies]
+toml = { version = "1.1", default-features = false, features = ["std", "parse", "serde"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+epaint_default_fonts = "0.37"
+
+[dev-dependencies]
+craft-ui-contract = { path = ".", features = ["testing"] }
+craft-behavior = { workspace = true }
+craft-fonts-build = { workspace = true }
+craft-host = { workspace = true }
+craft-keymap = { workspace = true, features = ["egui"] }
+craft-theme = { workspace = true }
+craft-ui-test-kit = { workspace = true }
+craft-window = { workspace = true }
+egui = { workspace = true }
+proc-macro2 = "1"
+syn = { version = "2", features = ["full"] }
+
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+harness = false

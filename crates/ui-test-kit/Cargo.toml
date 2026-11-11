@@ -1,0 +1,22 @@
+[package]
+name = "craft-ui-test-kit"
+description = "Test kits shared by the craft-ui crates' integration binaries."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+test = false
+doctest = false
+
+[dependencies]
+craft-ui-contract = { workspace = true, features = ["testing"] }
+egui = { workspace = true }
+craft-behavior = { workspace = true }
+craft-host = { workspace = true }

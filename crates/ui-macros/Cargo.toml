@@ -1,0 +1,23 @@
+[package]
+name = "craft-ui-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Derives and function-like macros of craft-ui: components, props, styles, words, stories and trials"
+
+[lib]
+proc-macro = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# syn and proc-macro2 build once per feature set, and this crate (and so the whole framework) is rebuilt whenever that
+# set changes. Other proc-macro crates in a build add their syn features to the one syn every proc macro shares
+# (visit-mut, fold, extra-traits, span locations), so this crate asks for all of them: the set is then the same in
+# every build, whichever crates it links.
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1"
+syn = { version = "2", features = ["full", "visit", "visit-mut", "fold", "extra-traits"] }
