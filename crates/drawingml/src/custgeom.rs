@@ -762,7 +762,7 @@ mod tests {
         assert_eq!(p.d, "M 0 0 L 30 0 C 30 20 20 30 0 30 Z");
         assert_eq!(p.fill, FillMode::None);
         let mut w = Writer::new();
-        write_cust_geom(&mut w, std::slice::from_ref(&p));
+        write_cust_geom(&mut w, std::slice::from_ref(&p), &[], (30, 30));
         let back = read_cust_geom(&parse(w.finish().as_bytes()).unwrap(), 1.0, 1.0);
         assert_eq!(parse_path(&back[0].d).len(), 4);
     }
