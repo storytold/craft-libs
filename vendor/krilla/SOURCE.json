@@ -332,7 +332,7 @@
     {
       "path": "src/text/cid.rs",
       "upstream_sha256": "5332282160b75e2a24345b546ead219476768829bef881562f5658dd50ce97f2",
-      "sha256": "5332282160b75e2a24345b546ead219476768829bef881562f5658dd50ce97f2"
+      "sha256": "4bb482edddaf1cac916cb110e8139c90c53582f0c1c7afc6fa1cf6b037ccae5e"
     },
     {
       "path": "src/text/font.rs",

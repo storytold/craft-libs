@@ -1,0 +1,111 @@
+name: Shared format crates
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/xml/**"
+      - "crates/mime/**"
+      - "crates/cfb/**"
+      - "crates/mesh/**"
+      - "crates/metafile/**"
+      - "crates/dxf/**"
+      - "crates/gcode/**"
+      - "crates/svg-paths/**"
+      - "crates/silhouette-studio/**"
+      - "crates/tiff/**"
+      - "crates/heif/**"
+      - "crates/cms/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/formats.yml"
+  pull_request:
+    paths:
+      - "crates/xml/**"
+      - "crates/mime/**"
+      - "crates/cfb/**"
+      - "crates/mesh/**"
+      - "crates/metafile/**"
+      - "crates/dxf/**"
+      - "crates/gcode/**"
+      - "crates/svg-paths/**"
+      - "crates/silhouette-studio/**"
+      - "crates/tiff/**"
+      - "crates/heif/**"
+      - "crates/cms/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/formats.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
+  # run (main, manual) gets its own group: it is never cancelled or replaced while queued, so it
+  # always gets to save the cache.
+  group: shared-formats-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `features`: each is linted alone, so code that needs another feature fails here.
+          - { crate: craft-xml, features: "" }
+          - { crate: craft-mime, features: "" }
+          - { crate: craft-cfb, features: "" }
+          - { crate: craft-mesh, features: "stl obj ply gltf" }
+          - { crate: craft-metafile, features: "write" }
+          - { crate: craft-dxf, features: "" }
+          - { crate: craft-gcode, features: "" }
+          - { crate: craft-svg-paths, features: "" }
+          - { crate: craft-silhouette-studio, features: "" }
+          - { crate: craft-tiff, features: "" }
+          - { crate: craft-heif, features: "testdata" }
+          - { crate: craft-cms, features: "" }
+    name: ${{ matrix.crate }} lint, tests, WASM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: ${{ matrix.crate }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo fmt -p "$CRATE" --check
+        env:
+          CRATE: ${{ matrix.crate }}
+      - name: Clippy, default features and each feature alone
+        env:
+          CRATE: ${{ matrix.crate }}
+          FEATURES: ${{ matrix.features }}
+        run: |
+          cargo clippy -p "$CRATE" --all-targets --locked -- -D warnings
+          for f in $FEATURES; do
+            echo "::group::feature: $f"
+            cargo clippy -p "$CRATE" --all-targets --locked --no-default-features --features "$f" -- -D warnings
+            echo "::endgroup::"
+          done
+      - run: cargo clippy -p "$CRATE" --all-targets --locked --all-features -- -D warnings
+        env:
+          CRATE: ${{ matrix.crate }}
+      - run: cargo test -p "$CRATE" --all-features --locked
+        env:
+          CRATE: ${{ matrix.crate }}
+      - run: cargo check -p "$CRATE" --all-features --locked --target wasm32-unknown-unknown
+        env:
+          CRATE: ${{ matrix.crate }}

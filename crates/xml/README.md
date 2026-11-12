@@ -47,9 +47,12 @@ assert_eq!((rows, sheet.map(|s| s.children.len())), (3, Ok(0)));
 | `max_depth` | 256 levels (the root is 1) | `TooDeep` |
 | `max_nodes` | 2,000,000 nodes kept in the tree: elements, text stretches, kept CDATA, instructions and comments | `TooManyNodes` |
 | `max_attrs` | 1024 on one start tag, namespace declarations and malformed ones included; with canonical names, also the declarations in scope at once | `TooManyAttrs` |
+| `max_attrs_total` | 4,000,000 attributes kept in the tree, over all its elements | `TooManyAttrsTotal` |
 
-A limit exceeded is an error, never a panic and never a truncated tree. Elements handed to a
-streaming callback leave the node count, so a streamed part may be of any length. Text is not
+A limit exceeded is an error, never a panic and never a truncated tree. `parse_streaming_partial`
+returns the error together with what had been read, for a caller that wants the part's other
+children when its rows cannot all be read; that tree is marked as partial by the error beside it. Elements handed to a
+streaming callback leave the node and attribute counts, so a streamed part may be of any length. Text is not
 counted separately: nothing expands, so it is never more than three times the input (the worst
 case is input that is not UTF-8, where each bad byte becomes U+FFFD).
 
@@ -71,7 +74,7 @@ A lenient read keeps what a damaged document had:
 - a malformed attribute is skipped; bytes that are not UTF-8 become U+FFFD.
 
 A strict read makes each of those an error, and also a second root element and text outside the
-root. Markup the tokenizer cannot read (`<a b='1`, an unterminated comment) is an error either
+root, in the pull reader as in the tree. Markup the tokenizer cannot read (`<a b='1`, an unterminated comment) is an error either
 way. A repeated attribute is kept each time in both.
 
 ### Text
@@ -109,7 +112,11 @@ Booleans (`attr_bool`, `flag`, `value::to_bool`): `1`, `true`, `on`, `t` and `0`
 `f`, trimmed, case-sensitive. That is GridCraft's set; DeckCraft's lacks `t`/`f` and IDML only
 writes `true`/`false`, so both are covered. `attr_f64` is finite values only, as in every app.
 
-`descendants`, `find`, `find_all`, `deep_text` and the writer do not recurse.
+`descendants`, `find`, `find_all`, `deep_text`, `node_count` and the writer do not recurse.
+
+`node_count()` is what `max_nodes` counted for an element. A reader of a package of many parts
+keeps one budget with it: charge each tree it keeps, and read the next part with what is left as
+`max_nodes`, so a part over the budget stops before its tree is built.
 
 ## Writing
 
