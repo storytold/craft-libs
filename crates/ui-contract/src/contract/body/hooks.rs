@@ -336,7 +336,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         // it takes its own room, not a share.
         let flows = matches!(at.at, ShowAt::Flow) && self.in_flow(comp);
         // Along an axis the flow does not bound it fills nothing (`sized`): it measures its content there.
-        let bounded = crate::layout::flow_room(at.ui);
+        let bounded = crate::layout::flow_room_filling(at.ui);
         let (fills_x, fills_y) = (self.given.0 && bounded.x.is_finite(), self.given.1 && bounded.y.is_finite());
         if flows
             && at.ui.is_sizing_pass()
@@ -448,7 +448,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let props = comp.props(Internal::new());
         match self.sizing(props) {
             Sizing::Fill => {
-                let room = crate::layout::flow_room(ui);
+                let room = crate::layout::flow_room_filling(ui);
                 // The available rect, not at least it: a fill child that took the whole room in an earlier pass (a
                 // content-sized layer offers its whole room before the footer is known) must not keep its remembered
                 // size once the room is less. Along an axis it is not given it takes its measured size. Along the main
@@ -477,6 +477,8 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 let width = if room.is_finite() && across {
                     match crate::layout::main_fill(ui, id, craft_behavior::Axis::X) {
                         crate::layout::MainFill::Measuring => 0.0,
+                        // In a body that scrolls along x its share never cuts its content: what is past the view scrolls.
+                        crate::layout::MainFill::Share(share) if Env::of(ui).unbounded.0 => size.x.max(share),
                         crate::layout::MainFill::Share(share) => share,
                         crate::layout::MainFill::Room => size.x.max(room),
                     }

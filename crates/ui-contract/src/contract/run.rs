@@ -311,6 +311,8 @@ impl<C: Component> ShapeHooks<C> for LeafHooks {
             }
             match crate::layout::main_fill(ui, id, along) {
                 crate::layout::MainFill::Measuring => 0.0,
+                // In a body that scrolls along x its share never cuts its content: what is past the view scrolls.
+                crate::layout::MainFill::Share(share) if along == craft_behavior::Axis::X && env.unbounded.0 => measured.max(share),
                 crate::layout::MainFill::Share(share) => share,
                 crate::layout::MainFill::Room => measured.max(offered),
             }
@@ -1191,7 +1193,7 @@ pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<T
     // room (`mount_room`). A body that fills the width of a bounded room takes the room or its share of it (`sized`),
     // so it is no unit.
     let in_flow = matches!(at, ShowAt::Flow) && t.fills().is_none();
-    let fill_body = shape == ShapeKind::Body && in_flow && t.in_flow() && t.fills_width() && crate::layout::flow_room(ui).x.is_finite();
+    let fill_body = shape == ShapeKind::Body && in_flow && t.in_flow() && t.fills_width() && crate::layout::flow_room_filling(ui).x.is_finite();
     let shrink = env.shrink.filter(|_| in_flow && (shape == ShapeKind::Leaf || (shape == ShapeKind::Body && t.in_flow() && !fill_body)));
     let cap = match shrink {
         Some(crate::layout::Shrink::Apply(row)) if shape == ShapeKind::Leaf => crate::layout::shrink_cap(&ctx, row, id),

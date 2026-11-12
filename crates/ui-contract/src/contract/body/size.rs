@@ -252,10 +252,11 @@ impl<'b> BodyHooks<'b> {
                 (Mount::Pane(ShellPane { at: Some(rect), content_height: true, .. }), _) => rect.size(),
                 (_, ShowAt::Rect(rect)) => rect.size(),
                 (_, ShowAt::Flow) => {
-                    let room = crate::layout::flow_room(ui);
+                    let content = self.sizing(props) == Sizing::Content;
+                    let room = if content { crate::layout::flow_room(ui) } else { crate::layout::flow_room_filling(ui) };
                     // A row that shrinks its children to fit gives a body among them a width: it measures and shows
                     // in that room. A body that fills a bounded row takes the rest of it instead.
-                    let fills = self.sizing(props) != Sizing::Content && room.x.is_finite();
+                    let fills = !content && room.x.is_finite();
                     let cap = match Env::of(ui).shrink {
                         Some(crate::layout::Shrink::Apply(row)) if !fills => crate::layout::shrink_cap(ui.ctx(), row, id),
                         _ => None,

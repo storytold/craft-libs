@@ -343,15 +343,18 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
     }
 }
 
+/// In a body that scrolls along x, what its view shows from the start of the rest of `ui`'s layout: the width a row
+/// there shrinks to fit and a child that fills its width fills. `None` outside such a body.
+fn view_room(ui: &Ui) -> Option<f32> {
+    let env = Env::of(ui);
+    env.lazy.filter(|view| env.unbounded.0 && view.axes.0).map(|view| (view.rect.width() - view.start_of(ui.available_rect_before_wrap()).x).max(0.0))
+}
+
 /// The width the leaves of a row in `ui` shrink to fit: the row's flow room, except in a body that scrolls along x,
 /// where it is what the view shows from the row's start. There the leaves narrow to their least before the body
 /// scrolls, and when even their least does not fit they keep their natural widths and the body scrolls.
 fn shrink_room(ui: &Ui) -> f32 {
-    let env = Env::of(ui);
-    match env.lazy.filter(|view| env.unbounded.0 && view.axes.0) {
-        Some(view) => (view.rect.width() - view.start_of(ui.available_rect_before_wrap()).x).max(0.0),
-        None => flow_room(ui).x,
-    }
+    view_room(ui).unwrap_or_else(|| flow_room(ui).x)
 }
 
 /// Runs `body` as the content of the `Stack` (along y) or unwrapped `Row` (along x) body `id` in `ui`, the block
@@ -369,6 +372,11 @@ fn run_sharing<R>(ui: &mut Ui, env: &Env, id: Id, axis: Axis, layout: egui::Layo
     }
     let key = sub(id, "share");
     let along = |size: Vec2| if axis == Axis::Y { size.y } else { size.x };
+    // Along x in a body that scrolls along x, the children that fill share what the view shows.
+    let room_of = |ui: &Ui| match axis {
+        Axis::X => view_room(ui).unwrap_or_else(|| ui.available_rect_before_wrap().width()),
+        _ => along(ui.available_rect_before_wrap().size()),
+    };
     let sweep = |ui: &mut Ui, share: Option<f32>, body: &mut dyn FnMut(&mut Ui) -> R| {
         let installed = Env::install_for(
             ui,
@@ -383,7 +391,7 @@ fn run_sharing<R>(ui: &mut Ui, env: &Env, id: Id, axis: Axis, layout: egui::Layo
     };
     if !measure::active(&ctx) {
         let (result, _) = child::block(ui, None, layout, |ui| {
-            let room = along(ui.available_rect_before_wrap().size());
+            let room = room_of(ui);
             let share = layout_memory::measured(&ctx, key)
                 .filter(|found| found.took.y >= 1.0 && room.is_finite())
                 .map(|found| ((room - found.took.x) / found.took.y).max(0.0));
@@ -395,7 +403,7 @@ fn run_sharing<R>(ui: &mut Ui, env: &Env, id: Id, axis: Axis, layout: egui::Layo
     // under the same ids.
     let first = crate::contract::keeping_ids(&ctx, || {
         let mut first = ui.new_child(egui::UiBuilder::new().layout(layout));
-        let room = along(first.available_rect_before_wrap().size());
+        let room = room_of(&first);
         pass_state::with::<FillCounts, _>(&ctx, |counts| counts.0.insert(id, 0));
         let inner = sweep(&mut first, None, &mut body);
         let fills = pass_state::with::<FillCounts, _>(&ctx, |counts| counts.0.remove(&id)).unwrap_or(0);
@@ -573,13 +581,13 @@ pub(crate) fn flow_region(ui: &Ui) -> Rect {
 /// `Row` body that encloses `ui` directly, else the rest of `ui`'s layout.
 pub(crate) fn flow_room(ui: &Ui) -> Vec2 {
     let cell = Env::of(ui).grid.and_then(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| cursors.0.get(&body).map(Cursor::room)));
-    cell.unwrap_or_else(|| open_room(ui))
+    cell.unwrap_or_else(|| open_room(ui, false))
 }
 
 /// The rest of `ui`'s layout (the room offered to the container, less the earlier siblings and gaps; a whole line in a row
 /// that wraps); unbounded along the axes of the scrolling body that encloses it, whose region is only as large as egui
-/// can make it.
-fn open_room(ui: &Ui) -> Vec2 {
+/// can make it, except along x for a child that `fills`, which there fills what the view shows (`view_room`).
+fn open_room(ui: &Ui, fills: bool) -> Vec2 {
     let (x, y) = Env::of(ui).unbounded;
     let mut room = ui.available_size_before_wrap();
     // In a row that wraps, a child that does not fit the rest of the line goes on the next one: its room is a line.
@@ -593,14 +601,22 @@ fn open_room(ui: &Ui) -> Vec2 {
     if let Some(offered) = env.offered.or(env.row_room) {
         room.x += offered - ui.max_rect().width();
     }
-    Vec2::new(if x { f32::INFINITY } else { room.x }, if y { f32::INFINITY } else { room.y })
+    let unbounded_x = if fills { view_room(ui).unwrap_or(f32::INFINITY) } else { f32::INFINITY };
+    Vec2::new(if x { unbounded_x } else { room.x }, if y { f32::INFINITY } else { room.y })
 }
 
 /// The room a child that fills its width fills in `ui`: `flow_room`, except that in a `Content` column of a `Grid` it
 /// is the column's width, so the child never measures as the room and pushes the next column out of it.
 pub(crate) fn flow_fill_room(ui: &Ui) -> Vec2 {
     let cell = Env::of(ui).grid.and_then(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| cursors.0.get(&body).map(Cursor::fill_room)));
-    cell.unwrap_or_else(|| open_room(ui))
+    cell.unwrap_or_else(|| open_room(ui, true))
+}
+
+/// `flow_room` for a container that fills its width: along x in a body that scrolls along x it is what the view shows
+/// from the container's start, so the container fills the view and what it holds past that scrolls.
+pub(crate) fn flow_room_filling(ui: &Ui) -> Vec2 {
+    let cell = Env::of(ui).grid.and_then(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| cursors.0.get(&body).map(Cursor::room)));
+    cell.unwrap_or_else(|| open_room(ui, true))
 }
 
 /// Whether the next child shown in flow in `ui` goes in a `Content` column of the `Grid` body that encloses `ui`
