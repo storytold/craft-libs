@@ -89,6 +89,32 @@ impl Default for Limits {
     }
 }
 
+impl Limits {
+    /// Effectively unlimited (still bounded by overflow checks).
+    pub fn none() -> Self {
+        Limits { max_width: u32::MAX, max_height: u32::MAX, max_pixels: u64::MAX, max_bytes: u64::MAX, max_ratio: u64::MAX }
+    }
+
+    /// Checks a `width × height` buffer of `bytes_per_pixel` against the size limits.
+    pub(crate) fn check_bytes(&self, width: u32, height: u32, bytes_per_pixel: u64) -> Result<()> {
+        if width == 0 || height == 0 {
+            return Err(Error::Malformed(format!("zero-sized picture {width}x{height}")));
+        }
+        if width > self.max_width || height > self.max_height {
+            return Err(Error::LimitExceeded(format!("{width}x{height} exceeds {}x{}", self.max_width, self.max_height)));
+        }
+        let pixels = u64::from(width) * u64::from(height);
+        if pixels > self.max_pixels {
+            return Err(Error::LimitExceeded(format!("{pixels} pixels exceed {}", self.max_pixels)));
+        }
+        let bytes = pixels.saturating_mul(bytes_per_pixel);
+        if bytes > self.max_bytes || usize::try_from(bytes).is_err() {
+            return Err(Error::LimitExceeded(format!("{bytes} bytes exceed {}", self.max_bytes)));
+        }
+        Ok(())
+    }
+}
+
 /// How a channel's samples are stored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SampleType {
@@ -98,7 +124,7 @@ pub enum SampleType {
 }
 
 impl SampleType {
-    fn of(t: ExrSample) -> Self {
+    pub(crate) fn of(t: ExrSample) -> Self {
         match t {
             ExrSample::F16 => SampleType::F16,
             ExrSample::F32 => SampleType::F32,
@@ -167,7 +193,7 @@ impl PartInfo {
 /// and goes on: thousands of tiny malformed previews would each cost that allocation. This walks
 /// the raw headers and checks each preview against its own size. Anything else odd is left to
 /// the crate to report.
-fn check_previews(b: &[u8]) -> Result<()> {
+pub(crate) fn check_previews(b: &[u8]) -> Result<()> {
     if b.get(..4) != Some(&[0x76, 0x2f, 0x31, 0x01][..]) {
         return Ok(());
     }

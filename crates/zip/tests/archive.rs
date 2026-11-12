@@ -146,3 +146,39 @@ fn written_archives_pass_the_strict_preflight() {
     let directory = preflight(&bytes, Limits { max_entries: 10, max_central_directory_bytes: 1 << 16, max_name_bytes: 256 }).unwrap();
     assert_eq!(directory.entries, 2);
 }
+
+#[test]
+fn a_stored_mimetype_is_read_in_place() {
+    let bytes = archive(&[("mimetype", b"image/openraster", Compression::Stored), ("a", b"x", Compression::Deflated)]);
+    assert_eq!(craft_zip::stored_mimetype(&bytes), Some(&b"image/openraster"[..]));
+    assert_eq!(craft_zip::stored_mimetype(&archive(&[("mimetype", b"x", Compression::Deflated)])), None, "compressed");
+    assert_eq!(craft_zip::stored_mimetype(&archive(&[("a", b"x", Compression::Stored), ("mimetype", b"x", Compression::Stored)])), None, "not first");
+    assert_eq!(craft_zip::stored_mimetype(&archive(&[("mimetype", &[b'a'; 257], Compression::Stored)])), None, "too long");
+    assert_eq!(craft_zip::stored_mimetype(b"PK\x03\x04"), None);
+    assert_eq!(craft_zip::stored_mimetype(&[]), None);
+}
+
+#[test]
+fn a_head_is_read_without_inflating_the_rest_and_charged() {
+    let bytes = archive(&[("font", &[b"wOF2".as_slice(), &[0u8; 100_000]].concat(), Compression::Deflated), ("short", b"wO", Compression::Stored)]);
+    let mut z = Archive::open(&bytes, Limits { max_total_bytes: 7, ..ROOMY }).unwrap();
+    assert_eq!(z.compressed_size("short"), Some(2));
+    assert!(z.compressed_size("font").unwrap() < 1000);
+    assert_eq!(z.compressed_size("nope"), None);
+    assert_eq!(z.read_head("font", 4).unwrap().as_deref(), Some(&b"wOF2"[..]));
+    assert_eq!(z.read_head("short", 4).unwrap().as_deref(), Some(&b"wO"[..]), "shorter than asked");
+    assert_eq!(z.read_head("nope", 4).unwrap(), None);
+    assert_eq!(z.budget().used(), 6);
+    assert_eq!(z.read_head("font", 4), Err(Error::BudgetSpent { name: "font".into(), limit: 7 }), "one byte left");
+    assert_eq!(z.budget().used(), 6);
+}
+
+#[test]
+fn a_clone_keeps_its_own_count() {
+    let bytes = archive(&[("a", b"abc", Compression::Deflated)]);
+    let mut z = Archive::open(&bytes, ROOMY).unwrap();
+    let mut c = z.clone();
+    assert_eq!(c.read("a", 10).unwrap().as_deref(), Some(&b"abc"[..]));
+    assert_eq!((c.budget().used(), z.budget().used()), (3, 0));
+    assert!(z.read("a", 10).unwrap().is_some());
+}

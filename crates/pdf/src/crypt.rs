@@ -726,8 +726,10 @@ pub fn file_id(seed: &[u8; 32]) -> Vec<u8> {
 
 /// Build the `/Encrypt` values and an authenticated (owner) handler for a new encryption.
 pub fn create(params: &NewEncryption, id0: &[u8]) -> Result<SecurityHandler, CryptError> {
-    // Bits 7–8 and 13–32 must be 1; bits 1–2 must be 0 (§7.6.4.2).
-    let p = (params.permissions | !0xFFF | 0xC0) & !0x3;
+    // R2 reserves bits 7-32; later revisions reserve bits 7-8 and 13-32.
+    // Reserved bits must be 1, and bits 1-2 must be 0 (§7.6.4.2).
+    let reserved = if params.algorithm == Algorithm::Rc4_40 { !0x3F } else { !0xFFF | 0xC0 };
+    let p = (params.permissions | reserved) & !0x3;
     let mut d = EncryptDict { filter: b"Standard".to_vec(), p, encrypt_metadata: params.encrypt_metadata, ..Default::default() };
     let user = prepared_password(params.algorithm, params.user_password);
     let owner = prepared_password(params.algorithm, params.owner_password);
@@ -790,6 +792,21 @@ pub fn create(params: &NewEncryption, id0: &[u8]) -> Result<SecurityHandler, Cry
             Ok(SecurityHandler::new(d, key, Auth::Owner, None))
         }
     }
+}
+
+/// Like [`create`], but only embedded file streams are encrypted (`/EFF` names the standard
+/// filter; `/StmF` and `/StrF` are `/Identity`, §7.6.6). Needs crypt filters, so RC4-40 and
+/// RC4-128 (V < 4) are refused rather than silently encrypting everything.
+pub fn create_attachments_only(params: &NewEncryption, id0: &[u8]) -> Result<SecurityHandler, CryptError> {
+    if matches!(params.algorithm, Algorithm::Rc4_40 | Algorithm::Rc4_128) {
+        return Err(CryptError::Unsupported("encrypting only attachments needs AES (crypt filters)".into()));
+    }
+    let h = create(params, id0)?;
+    let mut dict = h.dict.clone();
+    dict.stm_f = b"Identity".to_vec();
+    dict.str_f = b"Identity".to_vec();
+    dict.ef_f = b"StdCF".to_vec();
+    Ok(SecurityHandler::new(dict, h.key, h.auth, h.recovered_user))
 }
 
 #[cfg(test)]
