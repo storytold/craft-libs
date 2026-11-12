@@ -45,7 +45,12 @@ fn create_reply_for_a_request_taken_before_reopening_does_not_install_in_the_new
     // The dialog moves on before the application gets around to submitting
     // what it already took.
     dialog.open("doc-B".into(), "B.pdf".into(), None, who("alice"));
-    dialog.submit_request(Request::Create { draft: Box::new(out.draft), document: b"A bytes".to_vec(), idempotency_key: out.idempotency_key, send: true });
+    dialog.submit_request(Request::Create {
+        draft: Box::new(out.draft),
+        document: b"A bytes".to_vec(),
+        idempotency_key: out.idempotency_key,
+        send: true,
+    });
 
     let (_, create) = hold.take(|r| matches!(r, Request::Create { .. }));
     create.answer(Answer::Created(envelope_for("doc-A", "alice")));
