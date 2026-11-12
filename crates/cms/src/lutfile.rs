@@ -135,7 +135,8 @@ pub fn parse_as(format: Format, bytes: &[u8]) -> Result<LutFile, LutError> {
     }
 }
 
-/// UTF-16 with a byte-order mark (Photoshop loads such `.look` files, #9118), else UTF-8.
+/// UTF-16 with a byte-order mark (Photoshop loads such `.look` files, #9118), else UTF-8
+/// (a UTF-8 BOM is stripped).
 fn decode_text(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
     let utf16 = |rest: &[u8], from: fn([u8; 2]) -> u16| {
         let units: Vec<u16> = rest.as_chunks::<2>().0.iter().map(|&c| from(c)).collect();
@@ -144,6 +145,7 @@ fn decode_text(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
     match bytes {
         [0xFF, 0xFE, rest @ ..] => utf16(rest, u16::from_le_bytes),
         [0xFE, 0xFF, rest @ ..] => utf16(rest, u16::from_be_bytes),
+        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest),
         _ => String::from_utf8_lossy(bytes),
     }
 }
@@ -155,14 +157,19 @@ pub fn parse_cube(text: &str) -> Result<LutFile, LutError> {
     let (mut dmin, mut dmax) = ([0.0f32; 3], [1.0f32; 3]);
     let mut rows: Vec<f32> = Vec::new();
     for line in text.lines() {
-        // A '#' inside a quoted TITLE is part of the title, not a comment.
-        let raw = line.trim_start();
-        let skip = if raw.starts_with("TITLE") { raw.find('"').and_then(|q| raw[q + 1..].find('"').map(|e| q + e + 2)) } else { None }.unwrap_or(0);
-        let line = match raw[skip..].find('#') {
-            Some(i) => &raw[..skip + i],
-            None => raw,
+        // Only a quote at the beginning of a TITLE value protects '#'. Quotes inside an
+        // unquoted title's comment must not turn that comment into part of the title.
+        if let Some(quoted) = line
+            .trim_start()
+            .strip_prefix("TITLE")
+            .filter(|rest| rest.starts_with(char::is_whitespace))
+            .and_then(|rest| rest.trim_start().strip_prefix('"'))
+        {
+            let Some((value, _)) = quoted.split_once('"') else { return err("unterminated quoted TITLE") };
+            title = value.to_string();
+            continue;
         }
-        .trim();
+        let line = line.split('#').next().unwrap_or("").trim();
         if line.is_empty() {
             continue;
         }
@@ -187,7 +194,9 @@ pub fn parse_cube(text: &str) -> Result<LutFile, LutError> {
             }
             k if k.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '+' || c == '.') => {
                 let mut v = vec![k.parse::<f32>().map_err(|_| LutError(format!("bad number in `{line}`")))?];
-                v.extend(it.filter_map(|s| s.parse::<f32>().ok()));
+                for value in it {
+                    v.push(value.parse::<f32>().map_err(|_| LutError(format!("bad number in `{line}`")))?);
+                }
                 if v.len() != 3 {
                     return err(format!("bad data line `{line}`"));
                 }
@@ -209,6 +218,15 @@ pub fn parse_cube(text: &str) -> Result<LutFile, LutError> {
         if rows.len() != expected_rows {
             return err("no LUT_3D_SIZE in .cube file");
         }
+        // #8913: the resample below bakes the curve onto a fixed 33-point grid, so a steep
+        // curve over a narrow domain cannot survive the resample — the baked table silently
+        // shifts colours (measured 42 RGB8 levels for a two-node ramp over 0.24..0.26, where
+        // Photoshop renders the ramp exactly). Rather than proxy the risk by domain width (a
+        // 0.1..0.17 ramp spans two grid cells yet still loses ~28 levels), measure the
+        // resample's actual error against the exact curve and refuse only tables whose baked
+        // output shifts by more than a couple of RGB8 levels. Default-domain tables keep the
+        // existing bake untouched; gentle curves over any domain bake within tolerance and
+        // stay accepted.
         // The 1D table is resampled onto a 0..1 cube anyway, so its input domain
         // (`DOMAIN_MIN`/`MAX`, `LUT_1D_INPUT_RANGE`) is baked into the resample: an input `v`
         // reads the table at `(v - min) / (max - min)`, saturating outside.
@@ -221,6 +239,36 @@ pub fn parse_cube(text: &str) -> Result<LutFile, LutError> {
         };
         let mut l = LutFile::from_fn(&title, 33, |c| [curve(0, c[0]), curve(1, c[1]), curve(2, c[2])])?;
         l.title = title;
+        let non_default = dmin.iter().any(|v| *v != 0.0) || dmax.iter().any(|v| *v != 1.0);
+        if non_default {
+            // Worst baked-vs-exact error per channel, in RGB8 levels: the baked cube is read
+            // by linear interpolation between grid points (red fastest, so channel `ch` sits
+            // at stride 33^ch), while `curve` is what the file actually says.
+            const MAX_BAKE_ERROR: f32 = 2.0 / 255.0;
+            for ch in 0..3 {
+                let stride = [1usize, 33, 33 * 33][ch];
+                let mut worst = 0.0f32;
+                for k in 0..=256 {
+                    let v = k as f32 / 256.0;
+                    let x = v * 32.0;
+                    let i = (x as usize).min(31);
+                    let f = x - i as f32;
+                    let baked = l.data[i * stride * 3 + ch] * (1.0 - f) + l.data[(i + 1).min(32) * stride * 3 + ch] * f;
+                    worst = worst.max((baked - curve(ch, v)).abs());
+                }
+                if worst > MAX_BAKE_ERROR {
+                    return err(format!(
+                        "1D LUT domain on {} is {min}..{max}: the curve changes faster than the 33-point grid can \
+                         hold (baking shifts colours by up to {levels:.0} RGB8 levels); export the look as a 3D LUT \
+                         or widen DOMAIN_MIN/DOMAIN_MAX",
+                        ["red", "green", "blue"][ch],
+                        min = dmin[ch],
+                        max = dmax[ch],
+                        levels = worst * 255.0,
+                    ));
+                }
+            }
+        }
         return l.check();
     }
     err("no LUT_3D_SIZE in .cube file")
@@ -554,6 +602,48 @@ pub fn builtin(id: &str) -> Option<LutFile> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn cube_title_hashes_and_comment_quotes_are_distinct() {
+        let rows = "LUT_1D_SIZE 2\n0 0 0 # low\n1 1 1 # high\n";
+        for (line, title) in [
+            (r#"TITLE "Look #3" # comment "ignored""#, "Look #3"),
+            (r#"TITLE Look # "draft""#, "Look"),
+            ("  TITLE\t\"Été #2\"", "Été #2"),
+            (r#"TITLE "" # empty"#, ""),
+        ] {
+            assert_eq!(parse_cube(&format!("{line}\n{rows}")).unwrap().title, title);
+        }
+        let lut = LutFile::from_fn("Look #3", 2, |c| c).unwrap();
+        assert_eq!(parse_cube(&write_cube(&lut)).unwrap().title, "Look #3");
+        assert!(parse_cube(&format!("TITLE \"unterminated # title\n{rows}")).is_err());
+    }
+
+    #[test]
+    fn cube_rejects_invalid_numeric_fields() {
+        let text = "LUT_3D_SIZE 2\n0.25 nope 0.5 0.75\n0 0 1\n0 1 0\n0 1 1\n1 0 0\n1 0 1\n1 1 0\n1 1 1\n";
+        assert!(parse_cube(text).is_err(), "invalid numeric field must not be ignored");
+    }
+
+    #[test]
+    fn utf8_bom_is_stripped() {
+        let l = LutFile::identity(3).unwrap();
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(write_cube(&l).as_bytes());
+        let p = parse("a.cube", &bytes).unwrap();
+        assert_eq!(p.size, l.size);
+        assert_eq!(p.title, l.title);
+        let titled = LutFile::from_fn("Look", 3, |c| c).unwrap();
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(write_cube(&titled).as_bytes());
+        assert_eq!(parse("a.cube", &bytes).unwrap().title, "Look");
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(b"LUT_3D_SIZE 2\n");
+        for i in 0..8 {
+            bytes.extend_from_slice(format!("{} {} {}\n", i & 1, (i >> 1) & 1, i >> 2).as_bytes());
+        }
+        assert_eq!(parse("a.cube", &bytes).unwrap().size, 2);
+    }
+
     /// An identity `.3dl` of edge `n` (12-bit nodes, blue fastest) under `shaper`.
     fn identity_3dl(shaper: &[u32], n: usize) -> String {
         let mut t = shaper.iter().map(u32::to_string).collect::<Vec<_>>().join(" ") + "\n";
@@ -812,6 +902,49 @@ DOMAIN_MAX 0.5 1 1
     }
 
     #[test]
+    fn cube_1d_narrow_domain_is_refused() {
+        // #8913: the issue's fixture — a two-node ramp over 0.24..0.26. Baking it onto the
+        // 33-point grid rendered grey-65 as 148 where Photoshop renders 190 (42-level error).
+        // It must now be an actionable parse error rather than a silently wrong table.
+        let e = parse_cube("LUT_1D_SIZE 2\nDOMAIN_MIN 0.24 0.24 0.24\nDOMAIN_MAX 0.26 0.26 0.26\n0 0 0\n1 1 1\n").unwrap_err();
+        assert!(e.0.contains("changes faster than the 33-point grid"), "{e}");
+        // The same domain via LUT_1D_INPUT_RANGE is refused identically.
+        let e = parse_cube("LUT_1D_SIZE 2\nLUT_1D_INPUT_RANGE 0.24 0.26\n0 0 0\n1 1 1\n").unwrap_err();
+        assert!(e.0.contains("changes faster"), "{e}");
+        // A per-channel narrow domain names the offending channel.
+        let e = parse_cube("LUT_1D_SIZE 2\nDOMAIN_MIN 0 0 0.24\nDOMAIN_MAX 1 1 0.26\n0 0 0\n1 1 1\n").unwrap_err();
+        assert!(e.0.contains("blue"), "{e}");
+    }
+
+    #[test]
+    fn cube_1d_wide_domain_still_bakes() {
+        // A steep ramp over 0.1..0.17 spans two grid cells but still loses ~28 RGB8 levels
+        // to the resample, so the measured-error check refuses it even though the old width
+        // check let it through.
+        let e = parse_cube("LUT_1D_SIZE 2\nLUT_1D_INPUT_RANGE 0.1 0.17\n0 0 0\n1 1 1\n").unwrap_err();
+        assert!(e.0.contains("changes faster"), "steep ramp over 0.1..0.17 refused: {e}");
+        // A gentle (here linear) curve over a grid-aligned domain bakes exactly and stays
+        // accepted — the check measures the bake's error, not the domain's width. Value
+        // assertions, not just a successful parse: the baked table must reproduce the curve.
+        // Table row k sits at t = k/32 of the domain 0.25..0.75; the curve y = 0.4 + 0.4t
+        // is gentle (a half-level per grid step), so the bake must reproduce it exactly.
+        let mut table = String::from("LUT_1D_SIZE 33\nLUT_1D_INPUT_RANGE 0.25 0.75\n");
+        for k in 0..33 {
+            let y = 0.4 + 0.4 * (k as f32 / 32.0);
+            table.push_str(&format!("{y} {y} {y}\n"));
+        }
+        let l = parse_cube(&table).expect("gentle curve over a non-default domain still bakes");
+        let at = |r: usize| l.data[r * 3];
+        // Grid entry r is input r/32: 0.5 is the middle of the domain (t=0.5) -> 0.6.
+        assert!((at(16) - 0.6).abs() < 1.0 / 255.0, "baked value at 0.5 tracks the curve: {}", at(16));
+        // Domain top (input 0.75 = grid 24, t=1) -> 0.8.
+        assert!((at(24) - 0.8).abs() < 1.0 / 255.0, "baked value at the domain top tracks the curve: {}", at(24));
+        // Below the domain saturates to the first row.
+        assert!((at(8) - 0.4).abs() < 1.0 / 255.0, "below the domain saturates: {}", at(8));
+        parse_cube("LUT_1D_SIZE 2\n0 0 0\n1 1 1\n").expect("default domain");
+    }
+
+    #[test]
     fn cube_1d_domain_is_baked_into_the_resample() {
         // An identity ramp over the domain 0.25..0.75: 0.25 maps to 0, 0.5 to 0.5, 0.75 to 1.
         let table = "LUT_1D_SIZE 2\nLUT_1D_INPUT_RANGE 0.25 0.75\n0 0 0\n1 1 1\n";
@@ -1042,11 +1175,14 @@ DOMAIN_MAX 0.5 1 1
     }
 
     #[test]
-    fn look_hex_floats() {
-        let id = LutFile::identity(2).unwrap();
-        let hex: String = id.data.iter().flat_map(|v| v.to_le_bytes()).map(|b| format!("{b:02X}")).collect();
+    fn look_data_is_little_endian_float32() {
+        // Bytes written out by hand rather than by the encoder the parser mirrors, so a wrong byte
+        // order fails: 0.25, 0.5, 1.0 (3E800000, 3F000000, 3F800000 stored low byte first), then zeros.
+        let hex = format!("0000803E 0000003F 0000803F {}", "00000000 ".repeat(21));
         let xml = format!("<?xml version=\"1.0\"?><look><LUT><size>\"2\"</size><data>\"{hex}\"</data></LUT></look>");
-        assert_eq!(parse("a.look", xml.as_bytes()).unwrap().data, id.data);
+        let data = parse("a.look", xml.as_bytes()).unwrap().data;
+        assert_eq!(data[..3], [0.25, 0.5, 1.0]);
+        assert!(data[3..].iter().all(|&v| v == 0.0));
     }
 
     #[test]

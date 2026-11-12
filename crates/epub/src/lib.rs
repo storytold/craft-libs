@@ -19,10 +19,12 @@ struct ReadmeExamples;
 
 mod read;
 mod text;
+mod toc;
 mod write;
 
 pub use read::{Epub, Item, Limits, Package, SpineItem, dir_of, parse_container, parse_package, resolve};
 pub use text::{contents_title, urn_uuid, valid_language_tag, w3cdtf};
+pub use toc::{Encrypted, MAX_TOC_ENTRIES, TocEntry, parse_encryption, parse_nav, parse_ncx};
 pub use write::{Book, Layout, MAX_RESOURCES, MAX_TITLE_CHARS, Metadata, Nav, NavItem, NavKind, Resource, write, xhtml};
 
 /// The content of the first, stored `mimetype` entry.

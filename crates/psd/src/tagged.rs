@@ -28,7 +28,11 @@ pub fn uses_long_length(version: Version, key: &[u8; 4]) -> bool {
 }
 
 /// A tagged block, stored raw.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// A file parsed by [`PsdFile::from_source_deferring`](crate::PsdFile::from_source_deferring) may
+/// leave a large block's data in the source (`stored`, with `data` empty); equality compares the
+/// bytes wherever they are.
+#[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TaggedBlock {
     /// `8BIM` or `8B64`.
@@ -42,7 +46,35 @@ pub struct TaggedBlock {
     /// layer blocks. Parsing yields `None` whenever
     /// the stored padding equals the default, so the model stays canonical.
     pub padding: Option<Vec<u8>>,
+    /// Where the data is when it was left in the source. (Not serialized: load it first.)
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub stored: Option<crate::source::Stored>,
 }
+
+impl PartialEq for TaggedBlock {
+    fn eq(&self, other: &Self) -> bool {
+        if self.signature != other.signature
+            || self.key != other.key
+            || self.padding != other.padding
+            || self.encoded_data_len() != other.encoded_data_len()
+        {
+            return false;
+        }
+        // The same bytes of the same source (a clone): equal without reading them, even when
+        // the source can no longer be read.
+        if let (Some(a), Some(b)) = (&self.stored, &other.stored)
+            && a.same_range(b)
+        {
+            return true;
+        }
+        match (self.encoded(), other.encoded()) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for TaggedBlock {}
 
 /// Layer section divider type (`lsct`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -138,7 +170,7 @@ pub enum BlockData<'a> {
 impl TaggedBlock {
     /// A new `8BIM` block with default padding.
     pub fn new(key: [u8; 4], data: Vec<u8>) -> Self {
-        TaggedBlock { signature: *b"8BIM", key, data, padding: None }
+        TaggedBlock { signature: *b"8BIM", key, data, padding: None, stored: None }
     }
 
     /// `true` for `MIB8` / `46B8`: the signatures [`crate::tiff`] gives a block whose data was
@@ -175,6 +207,11 @@ impl TaggedBlock {
     /// Typed view for known keys. `None` for keys without a typed parser,
     /// `Some(Err)` if a known key's data is malformed.
     pub fn parsed(&self) -> Option<Result<BlockData<'_>>> {
+        // Its views borrow `data`: a block still in the source must be loaded first, not read
+        // as empty.
+        if self.stored.is_some() {
+            return Some(Err(PsdError::invalid(format!("{}: block data is still in the source; load it first", self.key_str()))));
+        }
         let d = &self.data[..];
         let mut r = Reader::new(d);
         Some(match &self.key {
@@ -282,7 +319,9 @@ impl TaggedBlock {
     /// ("Additional Layer Information": Placed Layer, Placed Layer Data,
     /// Linked Layer, Object Based Effects Layer Info).
     pub fn check_structure(&self) -> Result<()> {
-        let d = &self.data[..];
+        // A block left in the source (an embedded smart-object file) is checked from there.
+        let data = self.encoded()?;
+        let d = &data[..];
         let mut r = Reader::new(d);
         match &self.key {
             b"PlLd" => {
@@ -319,7 +358,7 @@ impl TaggedBlock {
                     r.skip(pad as usize)?;
                 }
             }
-            b"FEid" | b"FXid" => {
+            b"FEid" | b"FXid" | b"FELS" => {
                 crate::filter_effects::FilterEffects::parse(d).map_err(|e| PsdError::invalid(format!("{}: {e}", self.key_str())))?;
                 return Ok(());
             }
@@ -333,7 +372,26 @@ impl TaggedBlock {
     }
 
     pub(crate) fn write(&self, out: &mut Vec<u8>, version: Version, alignment: usize) -> Result<()> {
-        Self::write_parts(out, self.signature, self.key, &self.data, self.padding.as_deref(), version, alignment)
+        Self::write_parts(out, self.signature, self.key, &self.encoded()?, self.padding.as_deref(), version, alignment)
+    }
+
+    /// The data: borrowed from `data`, or read from the source when it was left there.
+    pub fn encoded(&self) -> Result<std::borrow::Cow<'_, [u8]>> {
+        crate::source::encoded(&self.data, self.stored.as_ref())
+    }
+
+    /// Length of the data, wherever it is.
+    pub fn encoded_data_len(&self) -> u64 {
+        self.stored.as_ref().map_or(self.data.len() as u64, |s| s.len)
+    }
+
+    /// Reads data left in the source into `data`.
+    pub fn load(&mut self) -> Result<()> {
+        if let Some(s) = &self.stored {
+            self.data = s.read()?;
+            self.stored = None;
+        }
+        Ok(())
     }
 
     /// Writes a block from its parts (no owned [`TaggedBlock`] needed). `padding: None` writes
@@ -360,14 +418,16 @@ impl TaggedBlock {
 
     /// Serialized size in bytes as a layer block (two-byte alignment).
     pub fn encoded_len(&self, version: Version) -> usize {
-        self.encoded_len_aligned(version, 2)
+        usize::try_from(self.encoded_len_aligned(version, 2)).unwrap_or(usize::MAX)
     }
 
-    /// Serialized size in bytes as [`Self::write`] writes it with `alignment`.
-    pub(crate) fn encoded_len_aligned(&self, version: Version, alignment: usize) -> usize {
-        let l = if uses_long_length(version, &self.key) { 8 } else { 4 };
-        let p = self.padding.as_ref().map_or(Self::default_padding(self.data.len(), alignment), Vec::len);
-        (8 + l + p).saturating_add(self.data.len())
+    /// Serialized size in bytes as [`Self::write`] writes it with `alignment`. In `u64`: a
+    /// deferred PSB block can be longer than a 32-bit `usize`.
+    pub(crate) fn encoded_len_aligned(&self, version: Version, alignment: usize) -> u64 {
+        let l: u64 = if uses_long_length(version, &self.key) { 8 } else { 4 };
+        let n = self.encoded_data_len();
+        let p = self.padding.as_ref().map_or(Self::default_padding((n % alignment as u64) as usize, alignment), Vec::len);
+        (8 + l + p as u64).saturating_add(n)
     }
 }
 
@@ -499,7 +559,7 @@ pub(crate) fn read_blocks_with(
             Some(pad_bytes)
         };
         if !consume(blocks.len(), signature, key, data, &padding) {
-            blocks.push(TaggedBlock { signature, key, data: data.to_vec(), padding });
+            blocks.push(TaggedBlock { signature, key, data: data.to_vec(), padding, stored: None });
         }
     }
 }
@@ -523,12 +583,14 @@ pub(crate) fn write_blocks_to<W: std::io::Write + std::io::Seek + ?Sized>(
         out.small(|o| {
             o.put(&b.signature);
             o.put(&b.key);
-            o.put_len(b.data.len() as u64, uses_long_length(version, &b.key))
+            o.put_len(b.encoded_data_len(), uses_long_length(version, &b.key))
         })?;
-        out.put(&b.data)?;
+        // A block left in the source is copied from it piece by piece.
+        out.put_encoded(&b.data, b.stored.as_ref())?;
         match &b.padding {
             Some(p) => out.put(p)?,
-            None => out.zeros(TaggedBlock::default_padding(b.data.len(), alignment))?,
+            // From the length's remainder: a PSB block can be longer than a 32-bit `usize`.
+            None => out.zeros(TaggedBlock::default_padding((b.encoded_data_len() % alignment as u64) as usize, alignment))?,
         }
     }
     Ok(())
