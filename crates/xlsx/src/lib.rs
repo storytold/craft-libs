@@ -13,6 +13,10 @@
 //!   read without holding it; what is left of the part (properties, columns, merged cells,
 //!   validation, and so on) comes back as a tree ([`SheetPart`]).
 //!
+//! Parts are read with fixed prefixes ([`ns`]): the SpreadsheetML main namespace has none
+//! (`sheetData`), the others have theirs whatever the file used (`r:id`, `x14:sparklineGroups`,
+//! `mc:AlternateContent`), so a tree kept from a part can be written back with [`ns::declare`].
+//!
 //! Nothing is interpreted beyond the format: a cell holds a shared-string index and a format
 //! index, a width is in the file's units, a formula is the file's text. Every other part
 //! (drawings, charts, pivot caches, macros) is reachable through [`Package::opc`], so a caller
@@ -45,6 +49,7 @@
 //! # }
 //! ```
 
+pub mod ns;
 mod package;
 mod sheet;
 mod strings;
