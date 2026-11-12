@@ -8,7 +8,7 @@ use crate::ui::stroke::StrokeButton;
 use craft_behavior::{EditEvent, EditEvents, NumberCodec};
 use craft_color::ui::{Paint, PaintChip, PaintChipOutput, ScreenPickGesture};
 use craft_theme::Srgba;
-use craft_ui::contract::{Bind, GlyphLabel, LabelKind, Props as _, Show as _, ShowContainer as _, SideLabel};
+use craft_ui::contract::{Bind, GlyphLabel, LabelKind, LabelScheme, Props as _, Show as _, ShowContainer as _, SideLabel};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::Row;
 use craft_ui::runtime::env::{Env, Label, LengthUnits, UnitKind, Units, with_env};
@@ -131,7 +131,7 @@ impl<'a> ShapePanel<'a> {
         let mut pass = Cells::new(&words, &units, pixels_per_inch, appearance, fallbacks, sampled, chips);
         pass.open = stroke_open;
         let mut body = |ui: &mut Ui| {
-            FieldGroup::new(label.clone()).show(ui, |ui, _| {
+            FieldGroup::new(label.clone()).labels(LabelScheme::Inspector).show(ui, |ui, _| {
                 pass.begin();
                 if sections.0 {
                     Section::new(words.appearance.clone()).id_salt("appearance").show(ui, |ui, _| {
@@ -387,7 +387,7 @@ impl<'p, 'a> Cells<'p, 'a> {
         ];
         let glyphs = [&words.width, &words.height];
         let mut edits = [EditEvents::new(), EditEvents::new()];
-        Row::new().show(ui, |ui, _| {
+        Row::new().fill_width().show(ui, |ui, _| {
             for ((cell, glyph), edit) in cells.iter().zip(glyphs).zip(edits.iter_mut()) {
                 let side = SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(glyph.clone()))).scrub(true);
                 *edit = Field::new(cell.caption.clone()).id_salt(cell.key).side(side).show(ui, |ui, _| cell.show(ui)).inner.unwrap_or_default();

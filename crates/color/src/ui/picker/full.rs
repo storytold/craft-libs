@@ -4,7 +4,8 @@ use craft_behavior::{ColumnWidth, IconId, Metrics, Mixed, NavShape, Sense};
 use craft_theme::{ColorModel, HsbModel, OklchModel, RgbModel, Srgba};
 use craft_ui::choice::{Checkbox, Radio, RadioGroup, Swatch};
 use craft_ui::contract::{
-    Bind, Common, Component, Cx, GlyphLabel, LabelKind, MeasureCx, Outcome, PaintUi, Props as _, Role, Show as _, ShowContainer as _, SideLabel,
+    Bind, Common, Component, Cx, GlyphLabel, LabelKind, LabelScheme, MeasureCx, Outcome, PaintUi, Props as _, Role, Show as _, ShowContainer as _,
+    SideLabel,
 };
 use craft_ui::display::{Icon, Shade, Text};
 use craft_ui::form::{Field, FieldGroup};
@@ -234,7 +235,7 @@ impl<'a> Body<'a> {
                 };
                 Grid::new(widths).show(ui, |ui, _| {
                     for (column, models) in columns.iter().enumerate() {
-                        FieldGroup::new(words.channels.as_str().to_owned()).show(ui, |ui, _| {
+                        FieldGroup::new(words.channels.as_str().to_owned()).labels(LabelScheme::Inspector).show(ui, |ui, _| {
                             for model in models {
                                 self.model_fields(ui, pass, *model, ModelChoice { visible, offered: &offered }, words, got);
                             }

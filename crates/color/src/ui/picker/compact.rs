@@ -3,7 +3,7 @@
 
 use craft_behavior::Mixed;
 use craft_theme::{ColorModel, Srgba};
-use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Entry, LabelScheme, Props as _, Show as _, ShowContainer as _};
 use craft_ui::form::FieldGroup;
 use craft_ui::layout_components::Row;
 use craft_ui::pickers::Select;
@@ -48,7 +48,7 @@ impl<'a> Body<'a> {
         let visible: Vec<&dyn ColorModel> = model.into_iter().chain([pass.mode.model()]).collect();
         self.area_and_strip(ui, pass, &visible, got);
         if let Some(model) = model {
-            FieldGroup::new(words.channels.as_str().to_owned()).show(ui, |ui, _| {
+            FieldGroup::new(words.channels.as_str().to_owned()).labels(LabelScheme::Inspector).show(ui, |ui, _| {
                 let values = pass.shown.values_in(model);
                 for (i, channel) in model.channels().iter().enumerate() {
                     let mut row = ChannelRow::new(

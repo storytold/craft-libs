@@ -1,7 +1,8 @@
 //! The side label as a leaf component: its node, press state, reset dot and colon.
 
-use super::props::{FieldLayout, Glyph, LabelKind};
+use super::props::{FieldLayout, Glyph, LabelKind, LabelScheme};
 use super::step::LabelIn;
+use crate::contract::InBar;
 use crate::contract::{Component, Props};
 use crate::contract::{Cx, MeasureCx, PaintUi, PartsCx, Styled as _};
 use crate::primitives::{IconSpec, TextRun, Wrap};
@@ -71,8 +72,8 @@ pub(super) struct LabelLeaf {
     pub(super) glyph: Option<Glyph>,
     /// The detail, resolved in the scope's language.
     pub(super) detail: Option<Label>,
-    /// The colon drawn after the name, in the scope's language; a separate run, so the name stays the one text a
-    /// narrow room elides.
+    /// The colon drawn after the name or the glyph text, in the scope's language; a separate run, so the name stays
+    /// the one text a narrow room elides.
     pub(super) colon: Option<String>,
     pub(super) baseline: Cell<f32>,
     /// The height of the label's first line: the name's line, the icon and the trailing content. A control placed
@@ -176,7 +177,8 @@ impl Component for LabelLeaf {
                 }
                 Glyph::Text(text) => {
                     let run = cx.layout(&TextRun::new(text.as_str()));
-                    (run.size(), run.first_baseline)
+                    let colon = self.colon.as_deref().map_or(0.0, |colon| cx.layout(&TextRun::new(colon)).size().x);
+                    (run.size() + Vec2::new(colon, 0.0), run.first_baseline)
                 }
             };
             self.baseline.set(baseline);
@@ -303,9 +305,15 @@ impl Component for LabelLeaf {
                     draw.icon(centred(rest.take_start(cx.style.icon).0, cx.style.icon), &icon_of(icon));
                 }
                 Glyph::Text(text) => {
-                    let run = ink.map_or_else(|| TextRun::new(text.as_str()), |ink| TextRun::new(text.as_str()).color(ink));
+                    let run = inked(text.as_str(), ink);
                     let size = draw.layout(&run, rest.rect().width()).size();
-                    draw.text(centred(rest.take_start(size.x).0, size.y), &run);
+                    let (cell, after) = rest.take_start(size.x);
+                    draw.text(centred(cell, size.y), &run);
+                    if let Some(colon) = self.colon.as_deref() {
+                        let run = inked(colon, ink);
+                        let width = draw.layout(&run, f32::INFINITY).size().x;
+                        draw.text(centred(after.take_start(width).0, size.y), &run);
+                    }
                 }
             }
         } else {
@@ -364,15 +372,30 @@ impl Component for LabelLeaf {
     }
 }
 
-/// The colon a beside text label draws after its shown text, unless that text ends in one. The label's node and the
-/// control keep the name as given.
+/// The colon a beside label draws after its shown text in a form (`LabelScheme::Form`), unless that text ends in one:
+/// a text label's, and in a bar a glyph text's as well ("X:"). An inspector's labels draw none. The label's node and
+/// the control keep the name as given.
 pub(super) fn colon(env: &Env, input: &LabelIn<'_>) -> Option<String> {
-    let text = env.view().resolve(input.side.kind.shown(input.text));
-    let beside_text = input.side.layout == FieldLayout::Beside && matches!(input.side.kind, LabelKind::Text | LabelKind::Short(_));
-    if !beside_text || text.as_str().is_empty() || text.as_str().ends_with([':', '\u{ff1a}']) {
+    if input.side.layout != FieldLayout::Beside || env.values.get::<LabelScheme>() != LabelScheme::Form {
+        return None;
+    }
+    let text = match &input.side.kind {
+        LabelKind::Text | LabelKind::Short(_) => env.view().resolve(input.side.kind.shown(input.text)),
+        LabelKind::Glyph(glyph) if env.values.get::<InBar>().0 => match glyph.resolved(env.view()) {
+            Glyph::Text(text) => text,
+            Glyph::Icon(_) => return None,
+        },
+        _ => return None,
+    };
+    if text.as_str().is_empty() || text.as_str().ends_with([':', '\u{ff1a}']) {
         return None;
     }
     Some(colon_of(&env.words::<CommonWords>()))
+}
+
+/// `text` in `ink`, or in the run's own ink without one.
+fn inked(text: &str, ink: Option<StyleColor>) -> TextRun<'_> {
+    ink.map_or_else(|| TextRun::new(text), |ink| TextRun::new(text).color(ink))
 }
 
 /// The colon of the scope's language that follows a caption's name.

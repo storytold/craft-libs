@@ -1,7 +1,7 @@
 //! `Inspector` (24.4): the properties of one target in a `Panel`, with the target's icon, name and kind in the header.
 
 use super::words::PanelWords;
-use crate::contract::{BodyCx, Props as _, Show as _, ShowContainer as _};
+use crate::contract::{BodyCx, LabelScheme, Props as _, Show as _, ShowContainer as _};
 use crate::notices::{Notice, NoticeLayout};
 use crate::primitives::IconSpec;
 use crate::runtime::env::{Env, Label};
@@ -13,7 +13,7 @@ use egui::{AsIdSalt, IdSalt, Ui};
 mod stories;
 
 /// A properties panel: a `Panel` whose header names the target (icon, name and, after it, the kind), and whose body
-/// the caller fills with the target's controls.
+/// the caller fills with the target's controls, labelled as inspector rows (`LabelScheme::Inspector`).
 ///
 /// - Target: [`target`](Inspector::target) gives the key of what is inspected. Every control of the body gets its id
 ///   from the key, so a target keeps its own field state (typing, scrubbing, scroll position) while another is
@@ -93,7 +93,7 @@ impl<'a> Inspector<'a> {
         let Inspector { label, target, icon, name, kind, empty, actions, menu } = self;
         let shown = target.is_some();
         let title = if shown { name.unwrap_or(label) } else { label };
-        let mut panel = Panel::new(title).titled().actions(actions);
+        let mut panel = Panel::new(title).titled().actions(actions).labels(LabelScheme::Inspector);
         if shown {
             if let Some(icon) = icon {
                 panel = panel.icon(icon);

@@ -155,6 +155,9 @@ pub struct Scoped {
     /// The inside label of the side label whose control the scope shows (`FieldLayout::Inside`). Only that control
     /// sees it: a component's children and a container's regions start without one.
     pub(crate) inside_label: Option<Arc<crate::contract::InsideLabel>>,
+    /// The scope is the body of a beside label in an inspector (`LabelScheme::Inspector`): the control shown there
+    /// fills the width the label leaves. Only that control sees it, as with `inside_label`.
+    pub(crate) cell_fills: bool,
 }
 
 /// The values of an env that a scope rarely changes: the resolved tokens, the platform, the language and the app's
@@ -420,6 +423,7 @@ impl Env {
                 row: None,
                 item_facts: None,
                 inside_label: None,
+                cell_fills: false,
             }),
         }
     }

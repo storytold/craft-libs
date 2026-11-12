@@ -1,6 +1,6 @@
 //! `ContainerProps` and the types of its fields (16.2).
 
-use super::label::SideLabel;
+use super::label::{LabelScheme, SideLabel};
 use super::overlay::{Overlay, Resize};
 use crate::layout::BodyLayout;
 use crate::runtime::access::{Politeness, SetPosition};
@@ -684,6 +684,8 @@ pub struct ContainerProps {
     pub collection_body: bool,
     /// The labelled rows of the body share the widest label as one column.
     pub label_column: bool,
+    /// How the labelled rows under the container show their labels; `None` keeps the scheme of the scope.
+    pub labels: Option<LabelScheme>,
 }
 
 impl Default for ContainerProps {
@@ -716,6 +718,7 @@ impl ContainerProps {
             && self.label == other.label
             && self.outer_edit == other.outer_edit
             && self.collection_body == other.collection_body
+            && self.labels == other.labels
     }
 
     /// Props with every field at its default.
@@ -752,6 +755,7 @@ impl ContainerProps {
             outer_edit: false,
             collection_body: false,
             label_column: false,
+            labels: None,
         }
     }
 
@@ -944,6 +948,13 @@ impl ContainerProps {
     /// their mark and icon columns through it.
     pub const fn label_column(mut self, on: bool) -> Self {
         self.label_column = on;
+        self
+    }
+
+    /// The labelled rows under the container show their labels in `scheme`: its regions, its body and every container
+    /// inside, until one sets a scheme of its own.
+    pub const fn labels(mut self, scheme: LabelScheme) -> Self {
+        self.labels = Some(scheme);
         self
     }
 }

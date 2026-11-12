@@ -2,8 +2,8 @@
 //! lays its children out (6.3).
 
 use crate::contract::{
-    Access, BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, FooterPlace, FooterRegion, Gap, HeaderRegion, Pad, Role, Scroll,
-    Sizing, ThemeScope,
+    Access, BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, FooterPlace, FooterRegion, Gap, HeaderRegion, LabelScheme, Pad,
+    Role, Scroll, Sizing, ThemeScope,
 };
 use crate::layout::{BodyLayout, RowAlign};
 use crate::style::{ComponentStyle, StyleCx};
@@ -112,6 +112,12 @@ macro_rules! layout_component {
             /// Takes the available width and the height of the children.
             pub fn fill_width(mut self) -> Self {
                 self.props = self.props.sizing(Sizing::FillWidth);
+                self
+            }
+
+            /// The labelled rows of the body and everything under it show their labels in `scheme`.
+            pub fn labels(mut self, scheme: LabelScheme) -> Self {
+                self.props = self.props.labels(scheme);
                 self
             }
 

@@ -7,8 +7,8 @@ use super::title_row::{HeaderAction, HeaderCommand, HeaderStrength, MenuRows, Ti
 use super::words::SectionWords;
 use crate::contract::overlay::Popup;
 use crate::contract::{
-    Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, FooterRegion, HeaderRegion, NoValue, Outcome, Pad, PaintUi, Props as _,
-    Role, Scroll, Show as _, ShowContainer as _, Sizing, WordSetCx as _,
+    Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, FooterRegion, HeaderRegion, LabelScheme, NoValue, Outcome, Pad, PaintUi,
+    Props as _, Role, Scroll, Show as _, ShowContainer as _, Sizing, WordSetCx as _,
 };
 use crate::primitives::{IconSpec, PaintShape, StrokeWidth};
 use crate::runtime::env::Label;
@@ -134,6 +134,14 @@ impl<'a> Panel<'a> {
     #[must_use]
     pub fn titled(mut self) -> Self {
         self.props.header = Some(HeaderRegion::new().rule(true));
+        self
+    }
+
+    /// The labelled rows of the body show their labels in `scheme`: an inspector panel's rows take
+    /// `LabelScheme::Inspector`.
+    #[must_use]
+    pub fn labels(mut self, scheme: LabelScheme) -> Self {
+        self.props = self.props.labels(scheme);
         self
     }
 

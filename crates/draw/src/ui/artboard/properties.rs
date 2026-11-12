@@ -6,7 +6,7 @@ use craft_behavior::EditEvents;
 use craft_behavior::kurbo::Rect;
 use craft_theme::Srgba;
 use craft_ui::choice::Swatch;
-use craft_ui::contract::{Bind, Entry, GlyphLabel, LabelKind, NoValue, Outcome, Show as _, ShowContainer as _, SideLabel};
+use craft_ui::contract::{Bind, Entry, GlyphLabel, LabelKind, LabelScheme, NoValue, Outcome, Show as _, ShowContainer as _, SideLabel};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::Row;
 use craft_ui::pickers::Select;
@@ -96,7 +96,7 @@ impl<'a> ArtboardProperties<'a> {
             Entry::new(Choice::Other, words.other.clone()),
         ];
         let section = Section::new(words.artboard.clone()).show(ui, |ui, _| {
-            FieldGroup::new(words.artboard.clone()).show(ui, |ui, _| {
+            FieldGroup::new(words.artboard.clone()).labels(LabelScheme::Inspector).show(ui, |ui, _| {
                 let current = self.presets.iter().position(|preset| preset.size.width == width && preset.size.height == height);
                 Field::new(words.size.clone()).show(ui, |ui, _| {
                     let pick = Select::new(words.size.clone(), Bind::given(current), &presets).show(ui);

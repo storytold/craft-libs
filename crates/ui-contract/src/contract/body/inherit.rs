@@ -54,14 +54,18 @@ impl BodyHooks<'_> {
             scoped.inherited_mut().commands = scoped.commands.pushed(WindowCommand::SCOPE, window);
         }
         scoped.extend_values(values);
+        if let Some(scheme) = props.labels {
+            scoped.inherited_mut().values.set(scheme);
+        }
         if cx.core.resolved.ltr_axis {
             scoped.direction = Direction::Ltr;
         }
         scoped.ink = cx.core.ink;
         scoped.surface = SurfaceKind::under(own_surface(props, cx), scoped.surface);
         scoped.start_room();
-        // An inside label is its control's alone: a container shows none of it to what it holds.
+        // An inside label and a filling cell are their control's alone: a container shows neither to what it holds.
         scoped.inside_label = None;
+        scoped.cell_fills = false;
         // Along a width the container takes from its content, its regions measure at their content widths: a child
         // that fills takes what it needs, not the whole room. A container that passes its column's width on measures
         // them across it.

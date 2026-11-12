@@ -2,11 +2,14 @@
 
 use super::Help;
 use super::{Field, FieldGroup};
-use crate::contract::{Bind, FieldLayout, GlyphLabel, LabelKind, Show as _, ShowContainer as _, SideLabel, Validity};
+use crate::choice::Swatch;
+use crate::contract::{Bind, FieldLayout, GlyphLabel, LabelKind, LabelScheme, Show as _, ShowContainer as _, SideLabel, Validity};
+use crate::layout_components::Row;
 use crate::runtime::env::Message;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use crate::text::NumberField;
 use craft_behavior::IconId;
+use craft_theme::Srgba;
 use craft_theme::variant::Tone;
 use egui::Ui;
 
@@ -86,6 +89,30 @@ fn field_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             for (label, name) in rows {
                 Field::new(label).show(ui, |ui, _| NumberField::new(label, Bind::bound(data.value(name, Some(SIZE)))).show(ui));
             }
+        })
+        .into()
+}
+
+/// The rows of an inspector: glyph labels W and H sharing a row, word labels at the row's start without a colon, and
+/// controls that fill the rest of the row.
+#[story(FieldGroup, covers = [], drive = Drive::Never)]
+fn field_inspector_rows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    const FILL: Srgba = Srgba { r: 0.80, g: 0.32, b: 0.24, a: 1.0 };
+    FieldGroup::new("Properties")
+        .labels(LabelScheme::Inspector)
+        .show(ui, |ui, _| {
+            Row::new().fill_width().show(ui, |ui, _| {
+                for (glyph, name, key, value) in [("W", "Width", "w", 640.0), ("H", "Height", "h", 480.0)] {
+                    let side = SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(glyph))).scrub(true);
+                    Field::new(name).side(side).show(ui, |ui, _| NumberField::new(name, Bind::bound(data.value(key, Some(value)))).show(ui));
+                }
+            });
+            for (label, key, value) in [("Opacity", "opacity", 100.0), ("Angle", "angle", 0.0)] {
+                Field::new(label)
+                    .side(SideLabel::new().scrub(true))
+                    .show(ui, |ui, _| NumberField::new(label, Bind::bound(data.value(key, Some(value)))).show(ui));
+            }
+            Field::new("Fill").show(ui, |ui, _| Swatch::new("Fill", FILL).show(ui));
         })
         .into()
 }

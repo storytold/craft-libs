@@ -1,7 +1,7 @@
 //! Where the label and its control sit: the beside, above and after placements and the gap.
 
 use super::leaf::{LabelLeaf, colon};
-use super::props::{FieldLayout, LabelAlign, LabelKind};
+use super::props::{FieldLayout, LabelKind, LabelScheme};
 use super::step::LabelIn;
 use crate::contract::Show;
 use crate::runtime::access::scope::{self};
@@ -132,7 +132,9 @@ pub(super) fn decide(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, kids: 
             baseline,
         );
         let mut label = placed.label;
-        if !placed.stacked && input.side.align == LabelAlign::End {
+        // The scheme decides where a beside label sits in its column: against the control in a form, at the row's
+        // start in an inspector.
+        if !placed.stacked && env.values.get::<LabelScheme>() == LabelScheme::Form {
             let spare = (column - label.width()).max(0.0);
             label = label.translate(Vec2::new(if rtl { -spare } else { spare }, 0.0));
         }

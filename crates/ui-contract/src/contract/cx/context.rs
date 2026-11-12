@@ -384,5 +384,6 @@ pub(crate) fn child_env(env: &Env, under: &Under) -> Env {
         scoped.enabled &= under.enabled;
         scoped.size = under.size;
         scoped.inside_label.clone_from(&under.inside);
+        scoped.cell_fills = false;
     })
 }

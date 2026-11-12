@@ -6,6 +6,7 @@ pub mod group;
 mod hit;
 mod inside;
 pub mod kit;
+mod scheme;
 mod short;
 mod tooltip;
 

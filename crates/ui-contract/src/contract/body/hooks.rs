@@ -755,10 +755,14 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let label_extra = label_extra_of(regions.body, body_rect, label_rect, rtl);
         // The body's control shows an inside label in its slot, in the measuring run and the real run alike.
         let inside = props.label.as_ref().and_then(|side| label::inside(env.view(), side, cx.core.resolved.enabled));
+        // In an inspector the control beside its label fills the width the label leaves.
+        let cell_fills = props.label.as_ref().is_some_and(|side| side.layout == label::FieldLayout::Beside)
+            && env.values.get::<label::LabelScheme>() == label::LabelScheme::Inspector;
         let body_env = line_env.derive_local(|scoped| {
             let label_width = label_extra.x;
             self.scope_body(scoped, &props, id, BodyScope { room, real, sizing, content_column, scroll, label_width });
             scoped.inside_label = inside;
+            scoped.cell_fills = cell_fills;
         });
         // B3 body, if open, under the body env; the gate is read after the header changed it.
         if is_open {

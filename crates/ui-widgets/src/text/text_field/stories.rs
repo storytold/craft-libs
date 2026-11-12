@@ -1,8 +1,8 @@
 //! Stories of `TextField`.
 
 use super::TextField;
+use crate::contract::LabelScheme;
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _, Validity};
-use crate::contract::{LabelAlign, SideLabel};
 use crate::form::{Field, FieldGroup};
 use crate::primitives::{Completer, Completion, IconSpec};
 use crate::runtime::env::Message;
@@ -16,16 +16,16 @@ const SIZES: [(&str, ControlSize); 2] = [("Sm", ControlSize::Sm), ("Md", Control
 const LAYER_LONG: &str = "A layer name long enough to scroll inside the field while the caret moves along it";
 const LONG: &str = "A name that runs on well past the end of the field, so the field scrolls its text under the caret";
 
-/// A row of the states story: the label column starts at the left edge, as the form list does.
+/// A row of the states story, in the group's inspector rows.
 fn row(label: &'static str) -> Field {
-    Field::new(label).side(SideLabel::new().align(LabelAlign::Start)).id_salt(label)
+    Field::new(label).id_salt(label)
 }
 
 #[story(TextField<'static, PlainText>, covers = [Default])]
 fn text_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let size = *data.choice("size", ControlSize::Md, &SIZES);
     let placeholder = data.value("placeholder", String::from("Layer name")).clone();
-    let out = FieldGroup::new("Text field states").show(ui, |ui, _| {
+    let out = FieldGroup::new("Text field states").labels(LabelScheme::Inspector).show(ui, |ui, _| {
         let first = row("Empty").show(ui, |ui, _| {
             TextField::new("Name", Bind::bound(data.value("name", String::new()))).placeholder(placeholder.clone()).size(size).show(ui)
         });
@@ -54,7 +54,7 @@ fn text_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         });
         for (at, text) in ["", "Locked layer"].into_iter().enumerate() {
             let name = if text.is_empty() { "Disabled, empty" } else { "Disabled, filled" };
-            Field::new(name).side(SideLabel::new().align(LabelAlign::Start)).id_salt(("disabled", at)).show(ui, |ui, _| {
+            Field::new(name).id_salt(("disabled", at)).show(ui, |ui, _| {
                 TextField::new(name, Bind::bound(&mut text.to_owned())).placeholder(placeholder.clone()).size(size).enabled(false).show(ui);
             });
         }

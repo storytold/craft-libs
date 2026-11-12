@@ -9,7 +9,7 @@ use craft_color::ui::{ColorPicker, ColorPopover, PickedColor, ScreenPickGesture}
 use craft_theme::Srgba;
 use craft_ui::buttons::IconButton;
 use craft_ui::choice::Swatch;
-use craft_ui::contract::{Bind, BodyCx, Props as _, Remember as _, Show as _, ShowContainer as _, clicked};
+use craft_ui::contract::{Bind, BodyCx, LabelScheme, Props as _, Remember as _, Show as _, ShowContainer as _, clicked};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::runtime::env::{Label, UnitKind};
 use craft_ui::text::NumberField;
@@ -191,7 +191,9 @@ impl Row<'_, '_> {
             return report;
         };
         if self.fields {
-            FieldGroup::new(label(self.words.stop_fields.as_str())).show(ui, |ui, _| self.rows(ui, cx, now, marker, &mut report));
+            FieldGroup::new(label(self.words.stop_fields.as_str()))
+                .labels(LabelScheme::Inspector)
+                .show(ui, |ui, _| self.rows(ui, cx, now, marker, &mut report));
         } else if let StopRef::Color(i) = marker {
             if self.requested.is_some() {
                 cx.memory::<PopoverOpen>().0 = true;

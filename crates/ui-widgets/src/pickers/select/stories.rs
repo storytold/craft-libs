@@ -1,8 +1,8 @@
 //! Stories of `Select`.
 
 use super::Select;
+use crate::contract::LabelScheme;
 use crate::contract::{Bind, Entry, Props, Role, Show as _, ShowContainer as _, Sizing, Validity};
-use crate::contract::{LabelAlign, SideLabel};
 use crate::form::{Field, FieldGroup};
 use crate::primitives::IconSpec;
 use crate::runtime::env::Message;
@@ -46,9 +46,9 @@ fn fitted<S: Props>(select: S, fit: bool) -> S {
     if fit { select.sizing(Sizing::Content) } else { select }
 }
 
-/// A row of the states story: the label column starts at the left edge, as the form list does.
+/// A row of the states story, in the group's inspector rows.
 fn row(label: &'static str) -> Field {
-    Field::new(label).side(SideLabel::new().align(LabelAlign::Start)).id_salt(label)
+    Field::new(label).id_salt(label)
 }
 
 #[story(Select<'static, u8>, covers = [Default], drive = Drive::Pick { row: 1 })]
@@ -58,7 +58,7 @@ fn select(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let fit = *data.value("fit", false);
     let units = units();
     let unit = data.choice("unit", 0u8, &[("Pixels", 0), ("Inches", 1), ("Centimetres", 2), ("Points", 3)]);
-    let out = FieldGroup::new("Select states").show(ui, |ui, _| {
+    let out = FieldGroup::new("Select states").labels(LabelScheme::Inspector).show(ui, |ui, _| {
         let first =
             row("Units").show(ui, |ui, _| fitted(Select::new("Units", Bind::bound(unit), &units).size(size).enabled(!disabled), fit).show(ui));
         row("Resampling").show(ui, |ui, _| {

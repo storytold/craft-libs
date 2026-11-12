@@ -1,8 +1,8 @@
 //! Stories of `NumberField`.
 
 use super::{NumberField, NumberPick};
+use crate::contract::LabelScheme;
 use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Validity};
-use crate::contract::{LabelAlign, SideLabel};
 use crate::form::{Field, FieldGroup};
 use crate::runtime::env::{Env, Message, UnitKind};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
@@ -18,9 +18,9 @@ const RANGE: std::ops::RangeInclusive<f64> = 0.0..=100.0;
 /// The range of the Invalid rows: the value 7 lies inside it.
 const COLUMNS: std::ops::RangeInclusive<f64> = 1.0..=12.0;
 
-/// A row of the states story: the label column starts at the left edge, as the form list does.
+/// A row of the states story, in the group's inspector rows.
 fn row(label: &'static str) -> Field {
-    Field::new(label).side(SideLabel::new().align(LabelAlign::Start)).id_salt(label)
+    Field::new(label).id_salt(label)
 }
 
 /// The zoom stops of the old PhotoCraft zoom field.
@@ -44,7 +44,7 @@ fn refuse_all(_: &Option<f64>) -> Validity<Option<f64>> {
 fn number_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let size = *data.choice("control_size", ControlSize::Md, &[("Sm", ControlSize::Sm), ("Md", ControlSize::Md)]);
     let units = Env::of(ui).view().units();
-    let out = FieldGroup::new("Number field states").show(ui, |ui, _| {
+    let out = FieldGroup::new("Number field states").labels(LabelScheme::Inspector).show(ui, |ui, _| {
         let first = row("Plain").show(ui, |ui, _| NumberField::new("Plain", Bind::bound(data.value("plain", Some(42.0)))).size(size).show(ui).edit);
         row("With unit").show(ui, |ui, _| {
             NumberField::new("Gap", Bind::bound(data.value("gap", Some(SIZE))))

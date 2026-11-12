@@ -1,4 +1,4 @@
-//! What a side label is: its kind, glyph, alignment, layout, `SideLabel` and `Scrub`.
+//! What a side label is: its kind, glyph, layout, scheme, `SideLabel` and `Scrub`.
 
 use crate::contract::Tooltip;
 use crate::primitives::IconSpec;
@@ -70,15 +70,23 @@ impl GlyphLabel {
     }
 }
 
-/// Where a beside label sits in its column.
+/// How the labelled rows under a container show their labels: set once on the container (`ContainerProps::labels`),
+/// read by every label step under it until another container sets its own.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum LabelAlign {
-    /// Against the control: the text ends where the gap before the control begins, on the start side under RTL.
+pub enum LabelScheme {
+    /// A dialog or a form: a beside label sits against its control and ends with a colon; the control keeps its own
+    /// width. In a bar a glyph text takes the colon as well ("X:").
     #[default]
-    End,
-    /// At the row's start edge.
-    Start,
+    Form,
+    /// An inspector: a beside label sits at the row's start with no colon, and its control fills the rest of the row.
+    Inspector,
+}
+
+impl crate::runtime::env::EnvValue for LabelScheme {
+    fn root() -> Self {
+        LabelScheme::Form
+    }
 }
 
 /// Where a side label sits relative to its control.
@@ -164,8 +172,6 @@ pub struct SideLabel {
     pub kind: LabelKind,
     /// Where it sits.
     pub layout: FieldLayout,
-    /// Where a beside label sits in its column.
-    pub align: LabelAlign,
     /// Whether it names or describes its control.
     pub role: FieldLabelRole,
     /// Dragging the label scrubs the control's value.
@@ -198,7 +204,6 @@ impl SideLabel {
         SideLabel {
             kind: LabelKind::Text,
             layout: FieldLayout::Beside,
-            align: LabelAlign::End,
             role: FieldLabelRole::Names,
             scrub: false,
             reset_dot: false,
@@ -219,13 +224,6 @@ impl SideLabel {
     #[must_use]
     pub const fn layout(mut self, layout: FieldLayout) -> Self {
         self.layout = layout;
-        self
-    }
-
-    /// Where a beside label sits in its column: against the control by default.
-    #[must_use]
-    pub const fn align(mut self, align: LabelAlign) -> Self {
-        self.align = align;
         self
     }
 

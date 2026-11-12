@@ -1,6 +1,6 @@
 //! `FieldGroup` (16.3): a container whose `Field`s share one label column.
 
-use crate::contract::{Common, Component, Container, ContainerProps, Cx, Props as _, Role, Sizing};
+use crate::contract::{Common, Component, Container, ContainerProps, Cx, LabelScheme, Props as _, Role, Sizing};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{Metrics, Sense};
@@ -30,6 +30,14 @@ impl FieldGroup {
     pub fn new(label: impl Into<Label>) -> Self {
         let props = ContainerProps::new().sizing(Sizing::FillWidth).label_column(true);
         FieldGroup { common: Common::new(), props }.label(label)
+    }
+
+    /// The fields under the group show their labels in `scheme`: a dialog's form by default, an inspector's rows with
+    /// `LabelScheme::Inspector`. Nested groups and containers keep it unless they set their own.
+    #[must_use]
+    pub fn labels(mut self, scheme: LabelScheme) -> Self {
+        self.props = self.props.labels(scheme);
+        self
     }
 }
 

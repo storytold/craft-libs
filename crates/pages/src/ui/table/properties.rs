@@ -6,9 +6,8 @@
 use craft_behavior::{Mixed, Value};
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, clicked};
-use craft_ui::form::Field;
-use craft_ui::layout_components::Stack;
+use craft_ui::contract::{Bind, Entry, LabelScheme, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, clicked};
+use craft_ui::form::{Field, FieldGroup};
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Label, UnitKind};
 use craft_ui::sections::GroupBox;
@@ -22,6 +21,8 @@ craft_ui::words! {
     /// The panel's words (DesignCraft's strings).
     #[non_exhaustive]
     pub struct TablePropertiesWords {
+        /// The name of the panel's group of fields.
+        table: "tableProperties.table" = "Table";
         rows: "tableProperties.rows" = "Rows";
         columns: "tableProperties.columns" = "Columns";
         row_height_mode: "tableProperties.rowHeightMode" = "Row Height";
@@ -230,7 +231,7 @@ impl<'a> TableProperties<'a> {
         let words = Env::of(ui).words::<TablePropertiesWords>();
         let (v, unit) = (self.values, self.unit);
         let mut change = None;
-        let shown = Stack::new().show(ui, |ui, _| {
+        let shown = FieldGroup::new(words.table.clone()).labels(LabelScheme::Inspector).show(ui, |ui, _| {
             let mut set = |next: Option<TableChange>| change = change.take().or(next);
             set(count(ui, &words.rows, v.rows, 1, TableChange::Rows));
             set(count(ui, &words.columns, v.columns, 1, TableChange::Columns));
