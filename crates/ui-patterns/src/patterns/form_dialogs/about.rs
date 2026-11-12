@@ -386,10 +386,12 @@ impl Shown<'_> {
                 .collect();
             let source = keyed(&order[..], |at: &usize| *at).with_text(|at| Cow::Owned(list[*at].name(mode).into_owned()));
             let by = if work.descending { ColumnSort::descending(work.sort.column()) } else { ColumnSort::ascending(work.sort.column()) };
-            let out = Table::<usize>::new(words.contributors_tab.clone(), columns.clone()).select(SelectMode::Single).sort(Some(by)).show_items(
-                ui,
-                &source,
-                &mut |key, icx| {
+            let out = Table::<usize>::new(words.contributors_tab.clone(), columns.clone())
+                .select(SelectMode::Single)
+                .sort(Some(by))
+                // The rows are the credits named by `mode`: their measure holds while it does, whatever the order.
+                .rows_stamp(mode as u64)
+                .show_items(ui, &source, &mut |key, icx| {
                     let contributor = &list[*key];
                     let mut row = ListRow::new(contributor.name(mode).into_owned())
                         .cells(icx.cells())
@@ -400,8 +402,7 @@ impl Shown<'_> {
                         row = row.cell(sort.column(), writer.cell(*sort, contributor));
                     }
                     row
-                },
-            );
+                });
             for event in out.events {
                 match event {
                     CollectionEvent::Column(ColumnEvent::Sort { key, descending, .. }) => {
@@ -439,13 +440,17 @@ impl Shown<'_> {
             .collect();
         let order: Vec<usize> = (0..models.len()).collect();
         let source = keyed(&order[..], |at: &usize| *at).with_text(|at| Cow::Owned(models[*at].company.to_string()));
-        let _ = Table::<usize>::new(words.models_tab.clone(), columns.clone()).select(SelectMode::None).show_items(ui, &source, &mut |key, icx| {
-            let model = &models[*key];
-            let mut row = ListRow::new(model.company.to_string()).cells(icx.cells()).columns(&columns).striped(icx.row.striped);
-            for column in ModelColumn::ALL.iter().filter(|column| **column != ModelColumn::Company) {
-                row = row.cell(column.key(), column.cell(model, total, writer));
-            }
-            row
-        });
+        let _ = Table::<usize>::new(words.models_tab.clone(), columns.clone()).select(SelectMode::None).rows_stamp(0).show_items(
+            ui,
+            &source,
+            &mut |key, icx| {
+                let model = &models[*key];
+                let mut row = ListRow::new(model.company.to_string()).cells(icx.cells()).columns(&columns).striped(icx.row.striped);
+                for column in ModelColumn::ALL.iter().filter(|column| **column != ModelColumn::Company) {
+                    row = row.cell(column.key(), column.cell(model, total, writer));
+                }
+                row
+            },
+        );
     }
 }

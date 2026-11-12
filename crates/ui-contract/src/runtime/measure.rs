@@ -6,6 +6,30 @@ use super::egui::memory as store;
 use super::pass_state;
 use egui::{Context, Id};
 
+/// The widths per column the items measured inside `cell_widths` report, innermost call last.
+#[derive(Default)]
+struct CellWidths(Vec<Vec<(craft_behavior::ColumnKey, f32)>>);
+
+/// Runs `measure` (one item's measure) and returns what it returned with the widest content it reported for each
+/// column (`MeasureCx::cell_width`).
+pub(crate) fn cell_widths<R>(ctx: &Context, measure: impl FnOnce() -> R) -> (R, Vec<(craft_behavior::ColumnKey, f32)>) {
+    store::with::<CellWidths, _>(ctx, |open| open.0.push(Vec::new()));
+    let out = measure();
+    let widths = store::with::<CellWidths, _>(ctx, |open| open.0.pop()).unwrap_or_default();
+    (out, widths)
+}
+
+/// Records `width` for `column` in the innermost open `cell_widths`; outside one it does nothing.
+pub(crate) fn report_cell_width(ctx: &Context, column: &craft_behavior::ColumnKey, width: f32) {
+    store::with::<CellWidths, _>(ctx, |open| {
+        let Some(widths) = open.0.last_mut() else { return };
+        match widths.iter_mut().find(|(held, _)| held == column) {
+            Some((_, held)) => *held = held.max(width),
+            None => widths.push((column.clone(), width)),
+        }
+    });
+}
+
 /// How many measuring runs enclose the running code of a context.
 #[derive(Default)]
 pub(crate) struct Measuring(u32);

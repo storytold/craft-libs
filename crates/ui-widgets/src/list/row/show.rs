@@ -158,7 +158,11 @@ impl Component for ListRow<'_> {
             None => label,
         };
         let label = label.max(self.below_width(sizes));
-        Vec2::new(probe.ideal_width + toggles - sizes.min_label + label.max(sizes.min_label) + self.indent_full(sizes), height)
+        let own = probe.ideal_width - sizes.min_label + label.max(sizes.min_label) + self.indent_full(sizes);
+        if cx.proposal == Proposal::Ideal {
+            self.report_cell_widths(cx, own);
+        }
+        Vec2::new(own + toggles, height)
     }
 
     fn sense(&self) -> Sense {
@@ -531,6 +535,22 @@ fn part_mods(cx: &Cx<'_, ListRow<'_>>, part: PartRef, source: FireSource) -> Mod
 }
 
 impl ListRow<'_> {
+    /// Reports the width of the row's content in each of its columns (`MeasureCx::cell_width`): `own` for the label
+    /// column, which holds everything but the toggle and text cells, and a text cell's line with its insets. A toggle
+    /// cell's column has its own width.
+    fn report_cell_widths(&self, cx: &MeasureCx<'_, Self>, own: f32) {
+        if let Some(column) = self.label_column(&self.cells) {
+            cx.cell_width(column, own);
+        }
+        let inset = 2.0 * cx.style.sizes.cell_inset;
+        for text in &self.texts {
+            if self.cells.iter().any(|(column, _)| *column == text.column) {
+                let line = cx.layout_at(&TextRun::new(text.text.as_str()).role(cx.style.cell.role), f32::INFINITY).size().x;
+                cx.cell_width(&text.column, line + inset);
+            }
+        }
+    }
+
     /// Measures each hosted component not yet measured in this pass, for its slot.
     fn measure_hosted(&mut self, cx: &MeasureCx<'_, Self>) {
         for (at, trailing) in self.trailing.iter_mut().enumerate() {

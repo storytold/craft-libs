@@ -183,8 +183,8 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let content = Env::of(ui).content;
         self.from_content = (content.0 && crate::runtime::measure::active(ui.ctx()), content.1);
         self.header.measure(scx);
+        self.header.read_content(ui.ctx(), id);
         let bounded = room.x.is_finite();
-        let mut widest = 0.0;
         let item = comp.measures_items().then(|| layout_memory::measured(ui.ctx(), sub(id, "largest")).map(|measured| measured.took)).flatten();
         let width = match (bounded, self.content_sized(comp)) {
             (true, false) => room.x,
@@ -199,14 +199,17 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             // An unbounded room (a horizontally scrolling body) takes the widest row, as a content-sized collection does.
             (_, _) => {
                 let floor = overlay::drawing_parent(ui.ctx()).map_or(0.0, |layer| crate::contract::overlay::floor_width(ui.ctx(), layer));
-                widest = layout_memory::measured(ui.ctx(), sub(id, "largest")).map_or(0.0, |measured| measured.took.x);
-                widest.max(comp.ideal_width(item, scx)).max(floor).min(room.x)
+                let widest = layout_memory::measured(ui.ctx(), sub(id, "largest")).map_or(0.0, |measured| measured.took.x);
+                // Columns side by side at their own widths: a `Content` column takes its widest cell, not the share of
+                // the widest row it would get.
+                let columns = if self.header.has_columns() { self.header.content_width() } else { 0.0 };
+                widest.max(columns).max(comp.ideal_width(item, scx)).max(floor).min(room.x)
             }
         };
         let previous = self.layout.take().or_else(|| self.previous.take()).map(|held| Arc::try_unwrap(held).unwrap_or_else(|held| (*held).clone()));
         let mut layout = comp.item_layout_from(previous, self.source, width, item, scx);
         if self.header.has_columns() {
-            layout.set_columns(&if self.content_sized(comp) { self.header.columns_measured(width, widest) } else { self.header.columns(width) });
+            layout.set_columns(&self.header.columns(width));
         }
         let ctx = ui.ctx();
         rows::measured_heights(ctx, id, |height| layout.measured(&|at| height(rows::measured_id(id, &self.source.key(at)))));
@@ -460,6 +463,9 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         // widget above it takes the hover as it does for the rows' parts.
         let hover_at = crate::primitives::sensing::read_outcome(&ctx, ArenaId::new(cx.core.id)).hover.and(ctx.pointer_latest_pos());
         let menu_open = self.drags.menu.is_some() && crate::contract::overlay::container_open::opened_from(&ctx, cx.core.id);
+        // A double click on a column's edge fits the column to its widest cell among the rows built here, in view.
+        let fit = self.header.fit.as_ref().map(|(column, _)| column.clone());
+        let mut fit_widest = 0.0_f32;
         let place_rows = |ui: &mut Ui| {
             // The items of a collection whose items are members of its run share one `Ui` under the collection's env.
             let members_ui = C::MEMBERS.then(|| {
@@ -594,6 +600,12 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                             row = self.screen(&layout, rect, at, offset, rtl);
                         }
                     }
+                    if let Some(column) = &fit {
+                        let (_, cells) = crate::runtime::measure::cell_widths(&ctx, || item.measure_in(measure_ui, Proposal::Ideal));
+                        if let Some((_, width)) = cells.iter().find(|(held, _)| held == column) {
+                            fit_widest = fit_widest.max(*width);
+                        }
+                    }
                     if layout.auto_widths() {
                         let ideal = item.measure_in(measure_ui, Proposal::Ideal).x;
                         let min = item.measure_in(measure_ui, Proposal::Min).x;
@@ -651,6 +663,10 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 areas::show_body_layer(&ctx, body_layer, place_rows);
             }
             None => place_rows(ui),
+        }
+        if self.header.fit.is_some() {
+            self.header.apply_fit(ui, &cx.core.env, fit_widest);
+            self.take_column_events();
         }
         self.paint_marquee(ui, env, &layout, (rect, offset, rtl));
         focus::register_row_groups(&ctx, id, rtl, row_groups);

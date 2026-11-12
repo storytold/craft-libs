@@ -77,6 +77,9 @@ pub struct ColumnSpec {
     /// The header's tooltip: the column's long name where the header text abbreviates it. Without one the header shows
     /// the header row's help.
     pub tip: Option<Label>,
+    /// The most of the collection's width a `Content` column takes, as a share: a name column as wide as its widest
+    /// name, at most a third of the table.
+    pub max_share: Option<f32>,
 }
 
 /// Where a column's content sits.
@@ -106,6 +109,7 @@ impl ColumnSpec {
             first_descending: false,
             icon: None,
             tip: None,
+            max_share: None,
         }
     }
 
@@ -156,6 +160,13 @@ impl ColumnSpec {
     pub fn numeric(mut self) -> Self {
         self.align = ColumnAlign::End;
         self.tabular = true;
+        self
+    }
+
+    /// A `Content` column takes at most `share` of the collection's width.
+    #[must_use]
+    pub fn at_most(mut self, share: f32) -> Self {
+        self.max_share = Some(share);
         self
     }
 

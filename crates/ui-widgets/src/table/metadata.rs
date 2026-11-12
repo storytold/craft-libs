@@ -21,8 +21,8 @@ use std::sync::Arc;
 const SHOW: ColumnKey = ColumnKey::new("show");
 const NAME: ColumnKey = ColumnKey::new("name");
 const VALUE: ColumnKey = ColumnKey::new("value");
-/// The value column is this many times as wide as the name column.
-const VALUE_SHARE: f32 = 2.0;
+/// The name column is as wide as its widest name, at most this share of the table.
+const NAME_SHARE: f32 = 1.0 / 3.0;
 
 /// One field: its name and its value, as the app formats them.
 #[derive(Clone, Debug, PartialEq, Eq, Props)]
@@ -123,7 +123,8 @@ impl Outcome for MetadataTableOutput {
 
 /// A key and value table in groups: a search field over the rows keeps the fields whose name or value matches the
 /// typed text, and a check column marks the keys the app shows as columns. The search field drives the rows: ArrowDown moves
-/// the lead to the first row and Enter activates it, while focus stays in the field.
+/// the lead to the first row and Enter activates it, while focus stays in the field. The name column is as wide as its
+/// widest name, at most a third of the table; the values take the rest and wrap.
 ///
 /// ```ignore
 /// let out = MetadataTable::new("All metadata", &groups).filter(Bind::bound(&mut dialog.search)).show(ui);
@@ -242,8 +243,8 @@ impl<'a> MetadataTable<'a> {
         let empty = if groups.iter().all(|group| group.rows.is_empty()) { words.none.clone() } else { words.no_match.clone() };
 
         let mut columns = vec![
-            ColumnSpec::new(NAME, words.name.clone(), ColumnWidth::fill(1.0)),
-            ColumnSpec::new(VALUE, words.value.clone(), ColumnWidth::fill(VALUE_SHARE)),
+            ColumnSpec::new(NAME, words.name.clone(), ColumnWidth::Content).at_most(NAME_SHARE),
+            ColumnSpec::new(VALUE, words.value.clone(), ColumnWidth::fill(1.0)),
         ];
         if choose.is_some() {
             columns

@@ -88,6 +88,13 @@ impl<C: Component> MeasureCx<'_, C> {
         self.resolved.label_value.clone()
     }
 
+    /// Reports, from the `Ideal` measure of a collection's item, the width its content in `column` takes unclipped,
+    /// its padding included. The collection sizes its `Content` columns by the widest it hears and fits a column to it
+    /// on a double click on the column's edge. Outside such a measure it does nothing.
+    pub fn cell_width(&self, column: &craft_behavior::ColumnKey, width: f32) {
+        crate::runtime::measure::report_cell_width(self.ui.ctx(), column, width);
+    }
+
     /// Lays `run` out in the content's room, as `Draw::text` will paint it.
     pub fn layout(&self, run: &TextRun<'_>) -> TextLayout {
         self.layout_at(run, self.room.unwrap_or(f32::INFINITY))

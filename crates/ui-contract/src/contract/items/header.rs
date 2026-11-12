@@ -16,13 +16,14 @@ use crate::runtime::access::items::{HeaderCell, report_header};
 use crate::runtime::commands::{self, CommandRef, CommandSet, CommandState};
 use crate::runtime::egui::{alloc, child};
 use crate::runtime::env::{Env, Label};
+use crate::runtime::layout_memory;
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::words::HeaderWords;
 use crate::style::{ComponentStyle, ResizeLineLook, ScrollBarKind, StateSet, StyleColor, StyleCx, TypeRole, resize_line_look, scroll_bar_look};
 use craft_behavior::grid::resolve_columns;
 use craft_behavior::{
     Axis, ColumnKey, ColumnWidth, CursorIcon, DropOperation, Flow, HitLevel, HitPriority, IconId, Insets, Intent, Metrics, NavMove, NavShape,
-    PartKey, PointerButton, PressPhase, Roving, Sense,
+    PartKey, PointerButton, PressPhase, Proposal, Roving, Sense,
 };
 use egui::{Align, Context, Id, Pos2, Rect, Response, Ui, UiBuilder, Vec2};
 
@@ -99,6 +100,11 @@ fn recorded_toggle_names(ctx: &Context, item: Id) -> Option<std::sync::Arc<[(Col
     crate::runtime::egui::memory::peek_clone::<ToggleNames>(ctx, sub(item, "toggle_names")).map(|ToggleNames(names)| names)
 }
 
+/// The id the widest cell of the `Content` column `key` of the collection `id` is recorded under.
+pub(super) fn content_id(id: Id, key: &ColumnKey) -> Id {
+    sub(id, ("column_content", hash_of(key)))
+}
+
 /// What the header keeps in session memory under the collection's id.
 #[derive(Clone, Debug, Default)]
 pub(super) struct HeaderMemory {
@@ -126,6 +132,11 @@ pub(super) struct Header {
     pub(super) height: f32,
     memory: HeaderMemory,
     specs: Vec<ColumnSpec>,
+    /// The widest cell of each `Content` column among all rows, or its header label when wider, from the items'
+    /// measure of this pass (`content_id`); zero for the other columns and while unknown.
+    content: Vec<f32>,
+    /// The column a double click on its edge fits to its widest cell in view, with its width as shown.
+    pub(super) fit: Option<(ColumnKey, f32)>,
     /// The app's sort, drawn on the header and advanced by a press.
     sort: Option<ColumnSort>,
     /// `CollectionProps.header`: the row is built when some column has a header text.
@@ -154,6 +165,7 @@ impl Header {
         let mut specs = props.columns.to_vec();
         let order = &self.memory.order;
         specs.sort_by_key(|spec| order.iter().position(|key| *key == spec.key).unwrap_or(usize::MAX));
+        self.content = vec![0.0; specs.len()];
         self.specs = specs;
     }
 
@@ -179,38 +191,75 @@ impl Header {
         }
     }
 
-    /// The width of each column, in display order, in a row `room` wide.
+    /// The width of each column, in display order, in a row `room` wide: a `Content` column its widest cell (capped by
+    /// its `max_share` of `room`), and the `Fill` columns share what is left.
     fn widths(&self, room: f32) -> Vec<f32> {
-        let kinds: Vec<ColumnWidth> = self.specs.iter().map(|spec| self.width_of(spec)).collect();
-        let content = vec![self.min; kinds.len()];
+        let content: Vec<f32> = self.content.iter().map(|wide| wide.max(self.min)).collect();
+        let kinds: Vec<ColumnWidth> = self
+            .specs
+            .iter()
+            .zip(&content)
+            .map(|(spec, wide)| match (self.width_of(spec), spec.max_share) {
+                (ColumnWidth::Content, Some(share)) if room > 0.0 => ColumnWidth::Fixed(wide.min(share * room)),
+                (kind, _) => kind,
+            })
+            .collect();
         resolve_columns(&kinds, &content, room, 0.0)
     }
 
-    /// The widths for a collection `width` wide whose widest row measured `widest` this pass: the `Content` columns take
-    /// what that row leaves beside the fixed and control columns (at most what `width` leaves), split evenly, and share
-    /// no room with the `Fill` columns.
-    fn widths_measured(&self, width: f32, widest: f32) -> Vec<f32> {
-        let kinds: Vec<ColumnWidth> = self.specs.iter().map(|spec| self.width_of(spec)).collect();
-        let is_content = |kind: &ColumnWidth| matches!(kind, ColumnWidth::Content);
-        let count = kinds.iter().filter(|kind| is_content(kind)).count();
-        let content = vec![self.min; kinds.len()];
-        if count == 0 {
-            return resolve_columns(&kinds, &content, width, 0.0);
-        }
-        let apart: Vec<ColumnWidth> = kinds.iter().map(|kind| if is_content(kind) { ColumnWidth::Fixed(0.0) } else { *kind }).collect();
-        let others: f32 =
-            resolve_columns(&apart, &content, width, 0.0).iter().zip(&kinds).filter(|(_, kind)| !is_content(kind)).map(|(wide, _)| *wide).sum();
-        let each = (widest - others).min(width - others).max(self.min) / count as f32;
-        let sized: Vec<ColumnWidth> = kinds.iter().map(|kind| if is_content(kind) { ColumnWidth::Fixed(each) } else { *kind }).collect();
-        resolve_columns(&sized, &content, width, 0.0)
+    /// Reads the widest cell of each `Content` column the items' measure recorded in this pass under the collection `id`.
+    pub(super) fn read_content(&mut self, ctx: &Context, id: Id) {
+        self.content = self
+            .specs
+            .iter()
+            .map(|spec| {
+                let measured = matches!(spec.width, ColumnWidth::Content).then(|| layout_memory::measured(ctx, content_id(id, &spec.key))).flatten();
+                measured.map_or(0.0, |measured| measured.took.x)
+            })
+            .collect();
     }
 
-    /// The least width the columns take together: a fixed column its width, every other column its least width.
+    /// Whether some column takes the width of its widest cell.
+    pub(super) fn has_content_columns(&self) -> bool {
+        self.specs.iter().any(|spec| matches!(spec.width, ColumnWidth::Content))
+    }
+
+    /// The `Content` columns with their keys, in display order.
+    pub(super) fn content_columns(&self) -> impl Iterator<Item = (usize, &ColumnKey)> + '_ {
+        self.specs.iter().enumerate().filter(|(_, spec)| matches!(spec.width, ColumnWidth::Content)).map(|(at, spec)| (at, &spec.key))
+    }
+
+    /// The width of the header label of the column at display position `at`, its insets and sort mark included; zero
+    /// while the header row is not shown.
+    pub(super) fn label_width(&self, ui: &Ui, env: &crate::runtime::env::EnvView<'_>, at: usize) -> f32 {
+        let Some(spec) = self.specs.get(at).filter(|_| self.height > 0.0) else { return 0.0 };
+        let text = env.resolve(&spec.header).as_str().to_owned();
+        HeaderText::new(Label::from(text), self.inset, self.sort_of(&spec.key)).measure_in(ui, Proposal::Ideal).x
+    }
+
+    /// The width the columns take side by side with nothing to share: a fixed column its width, a `Content` column its
+    /// widest cell, every other column its least width.
+    pub(super) fn content_width(&self) -> f32 {
+        self.specs
+            .iter()
+            .zip(&self.content)
+            .map(|(spec, wide)| match self.width_of(spec) {
+                ColumnWidth::Fixed(width) => width,
+                ColumnWidth::Content => wide.max(self.min),
+                _ => self.min,
+            })
+            .sum()
+    }
+
+    /// The least width the columns take together: a fixed column its width, an uncapped `Content` column its widest
+    /// cell, every other column its least width.
     pub(super) fn least_width(&self) -> f32 {
         self.specs
             .iter()
-            .map(|spec| match self.width_of(spec) {
+            .zip(&self.content)
+            .map(|(spec, wide)| match self.width_of(spec) {
                 ColumnWidth::Fixed(width) => width,
+                ColumnWidth::Content if spec.max_share.is_none() => wide.max(self.min),
                 _ => self.min,
             })
             .sum()
@@ -267,11 +316,6 @@ impl Header {
         self.specs.iter().map(|spec| spec.key.clone()).zip(self.widths(room)).collect()
     }
 
-    /// The columns for a collection sized from its widest row, `width` wide (see `widths_measured`).
-    pub(super) fn columns_measured(&self, width: f32, widest: f32) -> Vec<(ColumnKey, f32)> {
-        self.specs.iter().map(|spec| spec.key.clone()).zip(self.widths_measured(width, widest)).collect()
-    }
-
     /// Step 7: one focusable part per column, a resize grip at the end edge of each resizable one, and the group.
     pub(super) fn parts<C: Component>(&mut self, pcx: &mut PartsCx<'_, C>) {
         self.cells.clear();
@@ -306,7 +350,7 @@ impl Header {
                     Rect::from_min_max(Pos2::new(rect.max.x - grip, rect.min.y), rect.max)
                 };
                 pcx.part(GRIP.at(hash), edge)
-                    .sense(Sense::DRAG)
+                    .sense(Sense::DRAG | Sense::CLICK)
                     .priority(HitPriority::new(HitLevel::Body, 1))
                     .cursor(CursorIcon::ResizeHorizontal)
                     .pointer_only("Resize Column… resizes from the keyboard");
@@ -349,6 +393,15 @@ impl Header {
             }
         }
         self.events.push(ColumnEvent::Resized { key: key.clone(), width });
+    }
+
+    /// Fits the column a double click on its edge asked for (`fit`) to `widest`, the widest of its cells among the
+    /// rows in view, or to its header label when that is wider.
+    pub(super) fn apply_fit(&mut self, ui: &Ui, env: &crate::runtime::env::EnvView<'_>, widest: f32) {
+        let Some((key, shown)) = self.fit.take() else { return };
+        let Some(at) = self.specs.iter().position(|spec| spec.key == key) else { return };
+        let label = self.label_width(ui, env, at);
+        self.resize(&key, widest.max(label), shown);
     }
 
     /// Moves `key` to display position `to`: the session order changes and the move is reported.
@@ -417,6 +470,9 @@ impl Header {
                 cx.start_drag(ColumnDrag { table: id, key: key.clone() }, DragPreview::None);
             }
             if resizable {
+                if cx.part(GRIP.at(hash)).press.double_pressed() {
+                    self.fit = Some((key.clone(), rect.width()));
+                }
                 match cx.part(GRIP.at(hash)).press.phase {
                     PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } => {
                         let from = match &self.memory.grab {
@@ -570,13 +626,18 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     pub(super) fn header_step(&mut self, cx: &mut Cx<'_, C>) -> bool {
         let (id, rtl) = (cx.core.id, cx.core.flow.is_rtl());
         let held = self.header.update(cx, id, rtl);
-        for event in self.header.events.drain(..) {
-            self.events.push(CollectionEvent::Column(event));
-        }
+        self.take_column_events();
         for menu in self.header.menus.drain(..) {
             self.events.push(CollectionEvent::HeaderMenu(menu));
         }
         held
+    }
+
+    /// The header's column events join the collection's.
+    pub(super) fn take_column_events(&mut self) {
+        for event in self.header.events.drain(..) {
+            self.events.push(CollectionEvent::Column(event));
+        }
     }
 }
 
