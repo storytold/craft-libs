@@ -13,7 +13,7 @@ use super::{FieldStyle, text_part};
 use crate::buttons::IconButton;
 use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, Entry, Focus as _, Input, MeasureCx, Numeric, OverlayUi, Overlays as _, PaintUi,
-    PartsCx, Pointer as _, Props as _, Role, Scrub, Styled as _, WordSetCx as _,
+    PartsCx, Pointer as _, Props as _, Role, Scrub, Sizing, Styled as _, WordSetCx as _,
 };
 use crate::primitives::{TextOptions, TextRun};
 use crate::runtime::env::{Label, LengthUnits, UnitKind, Units};
@@ -347,8 +347,8 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         let muted = cx.color(cx.tokens.color.text.muted);
         NumberStyle {
             surface: field.surface.clone(),
-            // The width is a number cell, or the range's widest value with `fit_range` (`measure`); the style's minimum
-            // is only the height.
+            // The width is a number cell, or the range's widest value with `fit_range` or `Sizing::Content` (`measure`);
+            // the style's minimum is only the height.
             metrics: field.metrics.min_size(Vec2::new(0.0, field.metrics.min_size.y)).ideal_width(0.0),
             unit: TextLook::new(TypeRole::Body, Stateful::new(faint).off(States::new(faint, faint, faint, cx.color(cx.tokens.color.text.disabled)))),
             handle: Stateful::new(muted).off(States::new(muted, muted, muted, cx.color(cx.tokens.color.text.disabled))),
@@ -364,9 +364,11 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         self.settle_lengths(&cx.env.units());
         let codec = self.ruled(&cx.env.units(), false, self.names(|row| cx.env.resolve(&row.label().clone())));
-        // The number's room is one digit and the caret; a field sized to its range (`fit_range`) takes the widest value.
+        // The number's room is one digit and the caret; a field sized to its range (`fit_range`) or to its content
+        // (`Sizing::Content`) takes the widest value.
+        let content = cx.resolved.sizing() == Some(Sizing::Content);
         let caret = cx.ui.visuals().text_cursor.stroke.width;
-        let text = if self.fit_range {
+        let text = if self.fit_range || content {
             let sample = cx.value().map_or(Cow::Borrowed(""), |value| codec.sample(value));
             cx.layout(&TextRun::new(sample.as_ref())).size()
         } else {
@@ -378,7 +380,11 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         // The adornments take their own room and the change of the edge inset a button makes.
         let width = text.x + reserve(&cx.style.field, &self.leading, &self.trailing);
         // A field is one number cell wide, the unit and the chevrons inside it, so a column of fields ends at one edge;
-        // it grows only when the room left for the number drops below one digit and the caret.
+        // it grows only when the room left for the number drops below one digit and the caret. A content-sized field
+        // is as wide as its widest value and adornments.
+        if content {
+            return Vec2::new(width, text.y);
+        }
         let field = cx.style.field.metrics();
         let width = width.max(cx.tokens.size.length.number - field.padding.start - field.padding.end);
         Vec2::new(width, text.y)

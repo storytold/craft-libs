@@ -230,6 +230,13 @@ pub struct Resolved<'p> {
     pub(crate) command: Option<&'p crate::runtime::commands::ResolvedCommand>,
 }
 
+impl Resolved<'_> {
+    /// The sizing the host set on this component, if any: a leaf with `Sizing::Content` sizes to its content.
+    pub fn sizing(&self) -> Option<Sizing> {
+        self.sizing
+    }
+}
+
 /// A tooltip: one type for components and parts.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Tooltip(Box<TooltipSpec>);
