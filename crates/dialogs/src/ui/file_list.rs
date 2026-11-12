@@ -5,8 +5,8 @@ use craft_behavior::{DisplayOrder, EditEvent, ItemSource, Selection};
 use craft_host::{PickId, PickKind, PickRequest};
 use craft_ui::buttons::Button;
 use craft_ui::contract::{
-    Bind, BodyCx, CollectionEvent, Entry, Held, NoValue, Outcome, Props as _, Remember as _, ReorderRule, SelectMode, Show as _, ShowCollection as _,
-    ShowContainer as _, clicked,
+    Bind, BodyCx, CollectionEvent, Entry, Held, NoValue, Outcome, Pad, Props as _, Remember as _, ReorderRule, SelectMode, Show as _,
+    ShowCollection as _, ShowContainer as _, clicked,
 };
 use craft_ui::display::{Shade, Text};
 use craft_ui::form::Field;
@@ -14,6 +14,7 @@ use craft_ui::layout_components::Stack;
 use craft_ui::list::{List, ListRow};
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Label};
+use craft_ui::style::SurfaceKind;
 use egui::{Response, Ui};
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -245,13 +246,20 @@ impl<'a> FileListPicker<'a> {
                 let source = Rows::new(paths);
                 let mut selection =
                     now.selected.as_ref().filter(|path| paths.contains(path)).map_or_else(Selection::default, |path| Selection::single(path.clone()));
-                let list = List::new(words.files.clone()).id_salt("files");
-                let list = if folder {
-                    list.select(SelectMode::None)
-                } else {
-                    list.select(SelectMode::Single).deletable(true).reorder(ReorderRule::new()).selection(Bind::bound(&mut selection))
-                };
-                let events = list.show_items(ui, &source, &mut |path, _| file_row(path, info)).events;
+                let events = Stack::new()
+                    .surface(SurfaceKind::Sunken)
+                    .pad(Pad::Control)
+                    .show(ui, |ui, _| {
+                        let list = List::new(words.files.clone()).id_salt("files");
+                        let list = if folder {
+                            list.select(SelectMode::None)
+                        } else {
+                            list.select(SelectMode::Single).deletable(true).reorder(ReorderRule::new()).selection(Bind::bound(&mut selection))
+                        };
+                        list.show_items(ui, &source, &mut |path, _| file_row(path, info)).events
+                    })
+                    .inner
+                    .unwrap_or_default();
                 if folder {
                     return;
                 }

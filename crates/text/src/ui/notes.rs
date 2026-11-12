@@ -10,7 +10,7 @@ mod stories;
 
 mod text;
 
-use craft_behavior::{EditCommand, EditorInput, Granularity, Metrics, NavMove, PointerButton, PressPhase, Sense, TextPos};
+use craft_behavior::{EditCommand, EditorInput, Granularity, Insets, Metrics, NavMove, PointerButton, PressPhase, Sense, TextPos};
 use craft_ui::contract::{
     Animate as _, Commands as _, Common, Component, Cx, Focus as _, MeasureCx, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _,
     Remember as _, Role, WordSetCx as _,
@@ -21,7 +21,7 @@ use craft_ui::runtime::commands::ClipItem;
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::KeyUse;
 use craft_ui::runtime::pending::Pending;
-use craft_ui::style::{ComponentStyle, DataColor, StyleColor, StyleCx, TypeRole};
+use craft_ui::style::{ComponentStyle, DataColor, StyleColor, StyleCx, SurfaceLook, TypeRole};
 use egui::epaint::text::CharIndex;
 use egui::{Pos2, Rect, Response, Vec2};
 
@@ -67,11 +67,13 @@ impl Outcome for NotesEditorOutput {
     }
 }
 
-/// The notes' look: the body type at the pane's zoom, the text and caret colours and the selection fill. Indents are
-/// in document points and scale with the text size.
+/// The notes' look: the text well with a field's side padding all round, the body type at the pane's zoom, the text and
+/// caret colours and the selection fill. Indents are in document points and scale with the text size.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct NotesEditorStyle {
+    #[style(surface)]
+    surface: SurfaceLook,
     #[style(metrics)]
     metrics: Metrics,
     /// The text colour.
@@ -311,7 +313,8 @@ impl Component for NotesEditor<'_> {
 
     fn style(cx: &StyleCx<'_>, _: NotesEditorStyleKey) -> NotesEditorStyle {
         NotesEditorStyle {
-            metrics: Metrics::new(),
+            surface: cx.text_well(),
+            metrics: Metrics::new().padding(Insets::uniform(cx.control().pad_x)),
             ink: cx.color(cx.tokens.color.text.normal),
             muted: cx.color(cx.tokens.color.text.muted),
             selection: cx.color(cx.tokens.color.state.text_selection),

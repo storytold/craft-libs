@@ -25,7 +25,7 @@ use craft_host::Section;
 use craft_theme::variant::Tone;
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{
-    Bind, CollectionEvent, NoValue, Outcome, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing,
+    Bind, CollectionEvent, NoValue, Outcome, Pad, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing,
 };
 use craft_ui::dialog::{Dialog, DialogId, DialogOutput, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft_ui::display::Text;
@@ -36,6 +36,7 @@ use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::runtime::env::Env;
 use craft_ui::runtime::overlay::CloseReason;
 use craft_ui::sections::{DialogRole, FooterButton};
+use craft_ui::style::SurfaceKind;
 use craft_ui::text::TextField;
 use egui::{Response, Ui};
 use serde::{Deserialize, Serialize};
@@ -251,13 +252,22 @@ impl CheckSpellingDialog {
                 let source = keyed(&positions, |at: &usize| *at);
                 let mut selection =
                     suggestions.iter().position(|s| s.as_str() == change_to.as_str()).map_or_else(Selection::default, Selection::single);
-                let events = List::new(words.suggestions.clone())
-                    .select(SelectMode::Single)
-                    .sizing(Sizing::Content)
-                    .natural_height(true)
-                    .selection(Bind::bound(&mut selection))
-                    .show_items(ui, &source, &mut |at, _| ListRow::new(suggestions[*at].clone()))
-                    .events;
+                let events = Stack::new()
+                    .fill_width()
+                    .surface(SurfaceKind::Sunken)
+                    .pad(Pad::Control)
+                    .show(ui, |ui, _| {
+                        List::new(words.suggestions.clone())
+                            .select(SelectMode::Single)
+                            // A `Fill` list measures its rows in the content-sized dialog and spans the well.
+                            .sizing(Sizing::Fill)
+                            .natural_height(true)
+                            .selection(Bind::bound(&mut selection))
+                            .show_items(ui, &source, &mut |at, _| ListRow::new(suggestions[*at].clone()))
+                            .events
+                    })
+                    .inner
+                    .unwrap_or_default();
                 for event in events {
                     match event {
                         CollectionEvent::Selection(SelectionChange::Set(rows)) => {
