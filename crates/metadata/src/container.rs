@@ -368,7 +368,7 @@ pub fn webp_chunks(b: &[u8]) -> Embedded {
 mod tests {
     use super::*;
     use crate::exif::tests::sample_exif;
-    use craft_tiff::ByteOrder;
+    use craft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
 
     fn seg(marker: u8, payload: &[u8]) -> Vec<u8> {
         let mut v = vec![0xff, marker];
@@ -527,6 +527,60 @@ mod tests {
         jpeg.extend_from_slice(&[0xff, 0xda, 0, 2]);
 
         assert_eq!(crate::extract(&jpeg).width, Some(800));
+    }
+
+    #[test]
+    fn jpeg_invalid_iptc_time_created_allows_xmp_and_exif_fallbacks() {
+        fn iim() -> Vec<u8> {
+            let mut data = Vec::new();
+            for (dataset, value) in [(55, &b"20260101"[..]), (60, b"121314+01"), (5, b"retained title")] {
+                data.extend_from_slice(&[0x1c, 2, dataset]);
+                data.extend_from_slice(&(value.len() as u16).to_be_bytes());
+                data.extend_from_slice(value);
+            }
+            data
+        }
+
+        fn jpeg(xmp: &str, exif: Option<&[u8]>) -> Vec<u8> {
+            let mut jpeg = vec![0xff, 0xd8];
+            if let Some(exif) = exif {
+                let mut payload = b"Exif\0\0".to_vec();
+                payload.extend_from_slice(exif);
+                jpeg.extend_from_slice(&seg(0xe1, &payload));
+            }
+            let mut payload = XMP_SIG.to_vec();
+            payload.extend_from_slice(xmp.as_bytes());
+            jpeg.extend_from_slice(&seg(0xe1, &payload));
+            let mut resource = b"Photoshop 3.0\0".to_vec();
+            resource.extend_from_slice(b"8BIM\x04\x04\0\0");
+            let iim = iim();
+            resource.extend_from_slice(&(iim.len() as u32).to_be_bytes());
+            resource.extend_from_slice(&iim);
+            if iim.len() % 2 == 1 {
+                resource.push(0);
+            }
+            jpeg.extend_from_slice(&seg(0xed, &resource));
+            jpeg.extend_from_slice(&[0xff, 0xda, 0, 2]);
+            jpeg
+        }
+
+        let xmp = crate::write_xmp(&crate::Metadata {
+            capture_time: Some(crate::DateTime { year: 2026, month: 1, day: 2, hour: 10, offset_minutes: Some(0), ..Default::default() }),
+            ..Default::default()
+        });
+        let fallback = jpeg(&xmp, None);
+        let embedded = embedded(&fallback);
+        assert!(embedded.iptc.is_some(), "raw IIM remains available");
+        assert_eq!(crate::extract(&fallback).capture_time.map(|time| time.to_iso()).as_deref(), Some("2026-01-02T10:00:00+00:00"));
+        assert_eq!(crate::extract(&fallback).title.as_deref(), Some("retained title"));
+
+        let mut exif_ifd = IfdBuilder::new();
+        exif_ifd.set(0x9003, Value::Ascii("2026:01:03 11:12:13".into()));
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set_child(0x8769, exif_ifd);
+        let exif = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
+        let exif_precedence = jpeg(&xmp, Some(&exif));
+        assert_eq!(crate::extract(&exif_precedence).capture_time.map(|time| time.to_iso()).as_deref(), Some("2026-01-03T11:12:13"));
     }
 
     #[test]
