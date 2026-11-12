@@ -111,3 +111,35 @@ fn a_row_press_shows_on_the_check_cell_that_follows_it_and_a_cell_press_on_its_o
     assert_eq!(held(|[_, _, lock]| lock.center()), (false, true), "a press on the lock shows on the lock only");
     assert_eq!(held(|[check, _, _]| check.center()), (true, false), "a press on the check cell shows on it");
 }
+
+/// A highlighted row that is selected shows the selection, as a selected row does; highlighted alone it takes the tint.
+#[trial]
+fn a_selected_row_shows_its_selection_over_the_highlight() {
+    use craft_behavior::{Selection, keyed};
+    use craft_ui::contract::{SelectMode, ShowCollection as _};
+    use craft_ui::list::{List, ListRow};
+    let rows = Cell::new([Rect::NOTHING; 4]);
+    let mut show = |ui: &mut egui::Ui| {
+        let region = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 200.0));
+        in_region(ui, region, |ui| {
+            let order = [0usize, 1, 2, 3];
+            let source = keyed(&order, |&row| row);
+            let selection = Selection::new(vec![0, 1], None, None);
+            let _ =
+                List::<usize>::new("Styles").select(SelectMode::Multi).selection(Bind::given(selection)).show_items(ui, &source, &mut |key, icx| {
+                    let mut found = rows.get();
+                    found[*key] = icx.rect;
+                    rows.set(found);
+                    // Rows 0 and 1 are selected; rows 0 and 2 are highlighted.
+                    ListRow::new("Style").highlight(*key % 2 == 0)
+                });
+        });
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let shapes = frames.frame_shapes(&mut show);
+    let [both, selected, highlighted, plain] = rows.get().map(|rect| fills(&shapes, rect));
+    assert_eq!(both, selected, "a selected row shows its selection whether highlighted or not");
+    assert_ne!(highlighted, plain, "a highlighted row that is not selected takes the tint");
+    assert_ne!(highlighted, both, "the tint is not the selection");
+}

@@ -66,7 +66,8 @@ pub(super) struct FillKey {
 }
 
 /// The fill of a row: a stripe at rest, the hover and pressed tints over it, the selection's
-/// fills, and the lead row's hover tint (selected hover on a selected row). An emphasized row keeps its hover tint.
+/// fills, and the lead row's hover tint (selected hover on a selected row). An emphasized row that is not selected
+/// keeps its hover tint.
 pub(super) fn fill_of(cx: &StyleCx<'_>, key: FillKey) -> Stateful<StyleColor> {
     let state = &cx.tokens.color.state;
     let clear = Rgba::TRANSPARENT;
@@ -144,8 +145,9 @@ struct FlagRule {
 }
 
 /// The flag rules of a row in priority order. Fill and ink both derive from this list, so an ink always pairs with
-/// the fill under it: an emphasized row keeps its hover-like fill and base ink, the lead row on a selected row
-/// paints the selected hover fill with `text.on_selected`, and the lead row alone keeps the hover tint. The command
+/// the fill under it: the lead row on a selected row paints the selected hover fill with `text.on_selected`, a
+/// selected row shows its selection whether or not it is emphasized, an emphasized row that is not selected keeps its
+/// hover-like fill and base ink, and the lead row alone keeps the hover tint. The command
 /// form of a menu paints the lead row with `accent.solid` and `text.on_accent`. The option form paints the chosen row
 /// with `state.selected` and `text.on_selected`, lead or not, and the lead row alone with `state.hover`.
 fn flag_rules(form: RowForm) -> Vec<FlagRule> {
@@ -164,8 +166,9 @@ fn flag_rules(form: RowForm) -> Vec<FlagRule> {
         RowForm::List => {}
     }
     vec![
-        emphasized,
         FlagRule { flags: Flags::LEAD | Flags::SELECTED, fill: RuleFill::SelectedHover, ink: RuleInk::OnSelected },
+        FlagRule { flags: Flags::EMPHASIZED | Flags::SELECTED, fill: RuleFill::Selected, ink: RuleInk::OnSelected },
+        emphasized,
         FlagRule { flags: Flags::LEAD, fill: RuleFill::Tinted, ink: RuleInk::Base },
     ]
 }
