@@ -155,7 +155,7 @@ impl Component for IconButton<'_> {
                 // The arrow hangs from the glyph's bottom edge, centred on its end edge, so it never covers the glyph.
                 let end = if rtl { glyph.left() } else { glyph.right() };
                 let square = egui::Rect::from_center_size(Pos2::new(end, glyph.bottom()), Vec2::splat(cx.style.arrow));
-                let arrow = DisclosureGlyph::new(1.0);
+                let arrow = DisclosureGlyph::dropdown_form();
                 let points = arrow.path(square, if rtl { Direction::Rtl } else { Direction::Ltr });
                 let top = points.iter().map(|point| point.y).fold(f32::INFINITY, f32::min);
                 let points = points.into_iter().map(|point| point + Vec2::new(0.0, glyph.bottom() - top)).collect();

@@ -855,3 +855,40 @@ fn a_revealed_row_past_unbuilt_rows_taller_than_the_estimate_shows_wholly_in_one
     fixture.idle(1);
     assert!(in_view(&fixture, "Photo 00"), "the first row scrolls back wholly into view");
 }
+
+/// One disclosure glyph: a section's disclosure and a row's trailing disclosure each paint one filled triangle, the
+/// same size, and no stroked chevron.
+#[trial]
+fn a_sections_disclosure_and_a_rows_trailing_disclosure_paint_the_same_triangle() {
+    use craft_ui::contract::{Bind, Show as _};
+    use craft_ui::controls::disclosure::Disclosure;
+    use craft_ui::list::{TrailingFace, TrailingPart};
+    let triangles = |fixture: &mut Fixture| -> Vec<Vec2> {
+        let shapes = fixture.frame_shapes();
+        assert!(!shapes.iter().any(|shape| matches!(shape, egui::Shape::Path(path) if !path.closed)), "no stroked chevron paints");
+        shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Mesh(mesh) => Some(mesh.calc_bounds().size()),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut section = Fixture::new(|ui| {
+        let _ = Disclosure::new(Bind::given(true)).label("Details").show(ui);
+    });
+    section.room(Vec2::new(300.0, 200.0));
+    section.settle();
+    let mut row = Fixture::new(|ui| {
+        let keys = [0_usize];
+        let source = keyed(&keys, |key: &usize| *key);
+        let _ = List::new("Layers").show_items(ui, &source, &mut |key, _| {
+            ListRow::new(NAMES[*key]).trailing_part(TrailingPart::new(1), TrailingFace::disclosure(true), "Effects")
+        });
+    });
+    row.room(Vec2::new(300.0, 200.0));
+    row.settle();
+    let (section, row) = (triangles(&mut section), triangles(&mut row));
+    assert_eq!((section.len(), row.len()), (1, 1), "each paints one filled triangle: {section:?} {row:?}");
+    assert!((section[0] - row[0]).length() < 0.01, "the two triangles are the same size: {section:?} {row:?}");
+}

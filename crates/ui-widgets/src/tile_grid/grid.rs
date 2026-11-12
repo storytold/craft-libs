@@ -675,7 +675,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
             let lead = RowState { emphasized: lead == Some(Slot::Header(placed.group)), ..RowState::default() };
             ui.face(section_part(&group.key), self.header_row(group, lead));
             if placed.toggle {
-                let disclosure = Disclosure::new(Bind::given(group.open)).node(false).triangle(true).label(group.title.clone());
+                let disclosure = Disclosure::new(Bind::given(group.open)).node(false).label(group.title.clone());
                 ui.face(TOGGLE.at(placed.group as u64), disclosure);
             }
         }

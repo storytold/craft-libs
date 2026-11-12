@@ -33,10 +33,10 @@ impl TrailingPart {
 pub enum TrailingFace {
     /// An icon button face.
     Icon(IconSpec<'static>),
-    /// The disclosure face of an open or closed section.
+    /// The disclosure triangle of what the row unfolds under it (a layer's effects), as its group disclosure shows.
     #[non_exhaustive]
     Disclosure {
-        /// Whether the section is open.
+        /// Whether what it unfolds is open.
         open: bool,
     },
     /// A short text in the caption role's semibold face, as wide as it measures (a layer's `fx`).
