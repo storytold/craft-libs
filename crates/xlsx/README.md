@@ -14,9 +14,29 @@ This is the part layer. `Package::open` opens the container through `craft-opc` 
 | `sheet(entry, each)` | each `Row` of `Cell`s to a callback, then a `SheetPart`: the rest of the worksheet as a tree, its relationships, columns and merged cells |
 | `opc()`, `read_xml()`, `optional_xml()`, `rels()` | any other part |
 
+Every part is read with fixed prefixes (`ns::CANONICAL`): the SpreadsheetML main namespace
+(transitional or strict) unprefixed, the others by `ns::NAMESPACES` (`r:id`, `mc:AlternateContent`,
+`x14:sparklineGroups`, `xm:sqref`), and the prefixes in `mc:Ignorable` and `mc:Choice/@Requires`
+rewritten to match. A tree kept from a part goes back out with `ns::declare`, which declares what
+it uses. A name in a namespace that is not listed reads as `?:name` and is not written.
+
 A cell keeps the file's terms: a shared-string index, a format index, the formula text as the
 file spells it, value and cell metadata indexes. `CellValue::resolve` gives the value it shows.
 Shared formulas are not expanded and formulas are not parsed: that needs a formula grammar.
+
+## Writing
+
+`Document::read` holds a whole SpreadsheetML workbook: the `Workbook`, shared strings, `Styles`,
+each worksheet's `Row`s and `SheetPart`, and every other part as a `KeptPart` (bytes and content
+type: drawings, charts, the theme, document properties, a VBA project, their relationships).
+`Document::write` regenerates the workbook part (sheets, defined names, date system, active tab),
+the worksheets (dimension, columns, merged cells, rows), the shared strings and the styles tables
+from those fields, keeps the rest of each part's tree in place, and writes the kept parts as they
+were. Part names and relationship ids are kept, so a file read and written without changes points
+where it did, and writing it twice gives the same bytes. The calculation chain is dropped (Excel
+rebuilds it). `XlsxKind` is the workbook part's content type (`.xlsx`, `.xlsm`, `.xltx`, `.xltm`).
+The parts this crate writes use the transitional namespaces; a strict file's kept parts stay as
+they were. A binary workbook is not written.
 
 A binary workbook gives the same `Workbook`, strings, rows and merged cells, with saved values
 only: its formulas are token streams that are not decoded, and its styles are not read (each

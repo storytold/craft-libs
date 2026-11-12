@@ -15,7 +15,6 @@
 //! - [`edl`]: CMX 3600 edit decision lists.
 //! - [`fcp7`] (feature `xml`): Final Cut Pro 7 XML (`xmeml`).
 //! - [`fcpxml`] (feature `xml`): FCPXML 1.9–1.11.
-//! - [`otio`] (feature `otio`): OpenTimelineIO JSON.
 //! - [`Format`], [`detect_text`], [`decode_text`]: which interchange format a document is.
 //!
 //! No file I/O: documents are text or bytes, and media references are strings. Each format module
@@ -31,8 +30,6 @@ pub mod fcp7;
 pub mod fcpxml;
 pub mod fx;
 pub mod model;
-#[cfg(feature = "otio")]
-pub mod otio;
 pub mod path;
 pub mod rate;
 pub mod report;
@@ -119,7 +116,7 @@ pub enum Error {
 }
 
 impl Error {
-    #[cfg_attr(not(any(feature = "xml", feature = "otio")), allow(dead_code))]
+    #[cfg_attr(not(feature = "xml"), allow(dead_code))]
     pub(crate) fn parse(format: Format, message: impl Into<String>) -> Error {
         Error::Parse { format: format.name(), message: message.into() }
     }
@@ -145,8 +142,6 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct ImportOptions<'a> {
     /// Directory relative media paths are resolved against (normally the document's directory).
     pub base_dir: Option<&'a str>,
-    /// Name for a timeline the document leaves unnamed.
-    pub name: Option<&'a str>,
     /// The application's effects and generators (see [`model::Catalog`]; [`fx::Standard`] knows
     /// only what the formats name themselves).
     pub catalog: &'a dyn model::Catalog,

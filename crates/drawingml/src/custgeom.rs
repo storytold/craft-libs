@@ -28,6 +28,48 @@ pub struct CustomPath {
     pub stroke: bool,
 }
 
+impl CustomPath {
+    /// A path from a `kurbo` path given in a `w` × `h` box (points), its coordinates kept as
+    /// they are. Quadratic segments become cubics: not every reader handles `a:quadBezTo`.
+    pub fn from_bez(bp: &kurbo::BezPath, w: f64, h: f64, filled: bool) -> CustomPath {
+        let mut d = String::new();
+        let mut last = kurbo::Point::ZERO;
+        let mut put = |c: char, pts: &[kurbo::Point]| {
+            if !d.is_empty() {
+                d.push(' ');
+            }
+            d.push(c);
+            for p in pts {
+                let _ = write!(d, " {} {}", finite(p.x), finite(p.y));
+            }
+        };
+        for el in bp.elements() {
+            match *el {
+                kurbo::PathEl::MoveTo(a) => {
+                    put('M', &[a]);
+                    last = a;
+                }
+                kurbo::PathEl::LineTo(a) => {
+                    put('L', &[a]);
+                    last = a;
+                }
+                kurbo::PathEl::QuadTo(a, b) => {
+                    let c1 = last + (a - last) * (2.0 / 3.0);
+                    let c2 = b + (a - b) * (2.0 / 3.0);
+                    put('C', &[c1, c2, b]);
+                    last = b;
+                }
+                kurbo::PathEl::CurveTo(a, b, c) => {
+                    put('C', &[a, b, c]);
+                    last = c;
+                }
+                kurbo::PathEl::ClosePath => put('Z', &[]),
+            }
+        }
+        CustomPath { w, h, d, fill: if filled { FillMode::Norm } else { FillMode::None }, stroke: true }
+    }
+}
+
 impl Default for CustomPath {
     fn default() -> Self {
         CustomPath { w: 0.0, h: 0.0, d: String::new(), fill: FillMode::Norm, stroke: true }
@@ -650,5 +692,21 @@ mod tests {
     fn parsed_coordinate_commands_are_capped() {
         let d = format!("M{}", " 1 2".repeat(1_000_001));
         assert_eq!(parse_path(&d).len(), 1_000_000);
+    }
+
+    #[test]
+    fn a_kurbo_path_becomes_a_custom_path_with_quads_as_cubics() {
+        let mut bp = kurbo::BezPath::new();
+        bp.move_to((0.0, 0.0));
+        bp.line_to((30.0, 0.0));
+        bp.quad_to((30.0, 30.0), (0.0, 30.0));
+        bp.close_path();
+        let p = CustomPath::from_bez(&bp, 30.0, 30.0, false);
+        assert_eq!(p.d, "M 0 0 L 30 0 C 30 20 20 30 0 30 Z");
+        assert_eq!(p.fill, FillMode::None);
+        let mut w = Writer::new();
+        write_cust_geom(&mut w, std::slice::from_ref(&p));
+        let back = read_cust_geom(&parse(w.finish().as_bytes()).unwrap(), 1.0, 1.0);
+        assert_eq!(parse_path(&back[0].d).len(), 4);
     }
 }
