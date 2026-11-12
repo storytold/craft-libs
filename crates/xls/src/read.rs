@@ -438,6 +438,9 @@ struct SheetState<'g> {
     pending_string: Option<(CellRef, Option<u16>)>,
     dropped: usize,
     unsupported: Vec<&'static str>,
+    /// Dv records still to read: the last DVal's count, less those read since. Excel reads
+    /// exactly that many after a DVal, and none without one.
+    dv_left: u32,
 }
 
 impl SheetState<'_> {
@@ -590,6 +593,7 @@ fn worksheet<'g>(
         pending_string: None,
         dropped: 0,
         unsupported: vec![],
+        dv_left: 0,
     };
     let mut depth = 1usize;
     while let Some(rec) = recs.next_record()? {
@@ -798,7 +802,26 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
         0x001C => report.warn(Warning::Comments),
         0x00EC => report.warn(Warning::Drawings),
         0x01B0 | 0x0879 => report.warn(Warning::ConditionalFormatting),
-        0x01B2 => report.warn(Warning::DataValidation),
+        // A short DVal starts no rules.
+        0x01B2 => st.dv_left = crate::dv::dval(&mut c).unwrap_or(0),
+        0x01BE => {
+            if st.dv_left == 0 {
+                report.warn(Warning::DataValidationIgnored);
+                return Ok(());
+            }
+            st.dv_left -= 1;
+            let rule = match crate::dv::dv(&mut c) {
+                Ok(raw) => {
+                    budget.text(raw.text_len())?;
+                    crate::dv::validation(raw, &st.g.links)
+                }
+                Err(_) => None,
+            };
+            match rule {
+                Some(v) if st.sheet.validations.len() < crate::dv::MAX_RULES => st.sheet.validations.push(v),
+                _ => report.warn(Warning::DataValidationSkipped),
+            }
+        }
         0x01B8 => report.warn(Warning::Hyperlinks),
         0x00B0 => report.warn(Warning::PivotTables),
         _ => {}

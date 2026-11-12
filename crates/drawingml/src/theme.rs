@@ -181,3 +181,8 @@ mod tests {
         assert_eq!(partial.name, "X");
     }
 }
+
+mod read;
+mod write;
+pub use read::read_theme;
+pub use write::theme_xml;
