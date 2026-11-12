@@ -32,7 +32,7 @@ fn swatch(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Swatch::new("Fill", BLUE).show(ui).into()
 }
 
-/// Opaque, translucent, clear, a colour equal to the panel, mixed and selected, each named by its label.
+/// Opaque, translucent, clear, mixed, selected and disabled, each named by its label.
 #[story(Swatch<u8>, covers = [], drive = Drive::Never)]
 fn swatch_states(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let clicks = data.note("clicks", 0u32);
@@ -42,6 +42,7 @@ fn swatch_states(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         *clicks += u32::from(Swatch::new("Clear", Srgba { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }).show(ui).clicked);
         *clicks += u32::from(Swatch::new("Mixed", Mixed::<Srgba>::Mixed).show(ui).clicked);
         *clicks += u32::from(Swatch::new("Selected", PALETTE[5]).selected(true).show(ui).clicked);
+        *clicks += u32::from(Swatch::new("Disabled", PALETTE[2]).enabled(false).show(ui).clicked);
     });
     StoryOutput::default().readout(format!("Clicked {clicks} times"))
 }

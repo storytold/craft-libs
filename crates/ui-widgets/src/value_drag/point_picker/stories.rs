@@ -46,3 +46,8 @@ fn point_picker_mixed_axis(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn point_picker_y_up(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     PointPicker::new(Bind::bound(data.value("point", Mixed::each(CENTER))), RANGE, 100.0..=0.0).label("Blur center").show(ui).into()
 }
+
+#[story(PointPicker<'static>, covers = [], drive = Drive::Never)]
+fn point_picker_disabled(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    PointPicker::new(Bind::bound(data.value("point", Mixed::each(CENTER))), RANGE, RANGE).label("Blur center").enabled(false).show(ui).into()
+}

@@ -94,6 +94,19 @@ fn tile_start_caption(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         .into()
 }
 
+/// A disabled tile: its picture, badge, stars and label colour fade with it.
+#[story(Tile<'static>, covers = [], drive = Drive::Never)]
+fn tile_disabled(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Tile::new("IMG_0006.jpg")
+        .thumb(ThumbAspect::new(3, 2), StoryPictures::of(ui.ctx()).thumb(6))
+        .rating(3)
+        .label_color(Srgba::rgb(0.27, 0.63, 0.35))
+        .badge(TileBadge::new(BadgeSlot::EndTop, BadgeKind::Text("Duplicate".into()), Tone::Neutral, None))
+        .enabled(false)
+        .show(ui)
+        .into()
+}
+
 #[story(Tile<'static>, covers = [], disabled_text = "The file is not available")]
 fn tile_with_reason(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let tooltip = data.tooltip("A duplicate of IMG_0001.jpg");

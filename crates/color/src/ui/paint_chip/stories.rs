@@ -4,7 +4,7 @@ use super::{GradientPreview, ImagePreview, Paint, PaintChip, PaintLink, PaintLin
 use craft_behavior::Mixed;
 use craft_theme::Srgba;
 use craft_ui::contract::Role;
-use craft_ui::contract::{Bind, Show as _, Validity};
+use craft_ui::contract::{Bind, Props as _, Show as _, Validity};
 use craft_ui::runtime::env::Message;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -64,6 +64,12 @@ fn paint_chip_gradient(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(PaintChip<'static>, covers = [], drive = Drive::Never)]
 fn paint_chip_pattern(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     chip(ui, data, Paint::Pattern(ImagePreview::new("Bubbles", None)))
+}
+
+#[story(PaintChip<'static>, covers = [], drive = Drive::Never)]
+fn paint_chip_disabled(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let held = data.value("paint", Paint::Solid(Srgba { r: 0.9, g: 0.2, b: 0.2, a: 0.6 }));
+    PaintChip::new("Fill", Bind::bound(held), BLUE).enabled(false).show(ui).into()
 }
 
 fn paints() -> Vec<(String, Paint)> {
