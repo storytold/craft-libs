@@ -436,6 +436,51 @@ mod tests {
     }
 
     #[test]
+    fn from_embedded_preserves_exif_iptc_xmp_precedence() {
+        let exif = Metadata {
+            make: Some("Example".into()),
+            model: Some("Camera".into()),
+            lens_model: Some("35mm F2".into()),
+            artist: Some("EXIF artist".into()),
+            orientation: Some(Orientation::from_exif(6)),
+            exposure_time: Some(1.0 / 125.0),
+            ..Default::default()
+        };
+        let packet = write_xmp(&Metadata {
+            artist: Some("XMP artist".into()),
+            caption: Some("XMP caption".into()),
+            rating: Some(4),
+            keywords: vec!["xmp-keyword".into()],
+            ..Default::default()
+        });
+        let mut iptc = Vec::new();
+        for (dataset, value) in [(5u8, "IPTC title"), (120u8, "IPTC caption")] {
+            iptc.extend_from_slice(&[0x1c, 2, dataset]);
+            iptc.extend_from_slice(&u16::try_from(value.len()).unwrap().to_be_bytes());
+            iptc.extend_from_slice(value.as_bytes());
+        }
+        let blocks = Embedded { exif: Some(write_exif(&exif)), iptc: Some(iptc), xmp: Some(packet.clone()), ..Default::default() };
+        let parsed = from_embedded(&blocks);
+        assert_eq!(parsed.make, exif.make);
+        assert_eq!(parsed.model, exif.model);
+        assert_eq!(parsed.lens_model, exif.lens_model);
+        assert_eq!(parsed.orientation, exif.orientation);
+        assert_eq!(parsed.exposure_time, exif.exposure_time);
+        assert_eq!(parsed.title.as_deref(), Some("IPTC title"));
+        assert_eq!(parsed.caption.as_deref(), Some("XMP caption"));
+        assert_eq!(parsed.artist.as_deref(), Some("XMP artist"));
+        assert_eq!(parsed.rating, Some(4));
+        assert_eq!(parsed.keywords, vec!["xmp-keyword"]);
+        assert_eq!(blocks.xmp.as_deref(), Some(packet.as_str()));
+    }
+
+    #[test]
+    fn from_embedded_ignores_damaged_blocks() {
+        let blocks = Embedded { exif: Some(vec![1, 2, 3]), iptc: Some(vec![0x1c, 2]), xmp: Some("<broken".into()), ..Default::default() };
+        assert_eq!(from_embedded(&blocks), Metadata::default());
+    }
+
+    #[test]
     fn numbers() {
         assert_eq!(parse_number("28/10"), Some(2.8));
         assert_eq!(parse_number(" +0.7 "), Some(0.7));
