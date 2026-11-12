@@ -14,6 +14,7 @@ use craft_ui::pickers::{DatePicker, PickedDate, Select};
 use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::pointer;
+use craft_ui::style::SurfaceKind;
 use craft_ui::text::{NumberField, TextField};
 use egui::{Response, Ui};
 
@@ -291,16 +292,18 @@ impl Rows<'_> {
             path.push(at);
             match item {
                 ConditionItem::Group(nested) => {
-                    Row::new().show(ui, |ui, _| {
-                        let button = IconButton::new(IconSpec::svg(IconId::new("minus")))
-                            .label(words.remove_group.clone())
-                            .tooltip(words.remove_group.as_str().to_owned())
-                            .id_salt((path.clone(), "remove"))
-                            .show(ui);
-                        if clicked(&button) {
-                            remove = Some(at);
-                        }
-                        Stack::new().pad(Pad::Control).show(ui, |ui, _| self.group(ui, nested, path));
+                    Stack::new().surface(SurfaceKind::Frame).pad(Pad::Control).fill_width().show(ui, |ui, _| {
+                        Row::new().show(ui, |ui, _| {
+                            let button = IconButton::new(IconSpec::svg(IconId::new("minus")))
+                                .label(words.remove_group.clone())
+                                .tooltip(words.remove_group.as_str().to_owned())
+                                .id_salt((path.clone(), "remove"))
+                                .show(ui);
+                            if clicked(&button) {
+                                remove = Some(at);
+                            }
+                            Stack::new().show(ui, |ui, _| self.group(ui, nested, path));
+                        });
                     });
                 }
                 ConditionItem::Rule(rule) => self.rule(ui, rule, path, depth, (at, &mut remove, &mut insert)),
