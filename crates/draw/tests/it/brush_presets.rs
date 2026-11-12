@@ -51,6 +51,6 @@ fn rename_brush_opens_the_name_field_on_the_current_preset() {
     fixture.key(Key::Enter, Modifiers::NONE);
     fixture.idle(3);
     let host = host.borrow();
-    let renamed = host.picks.iter().any(|pick| matches!(pick, BrushPick::List(PresetEvent::Rename { key: HARD, text }) if text == "Hard Square"));
+    let renamed = host.picks.iter().any(|pick| matches!(pick, BrushPick::List(PresetEvent::Rename { key: HARD, text, .. }) if text == "Hard Square"));
     assert!(renamed, "the typed name comes back as the browser's rename of the current preset: {:?}", host.picks);
 }

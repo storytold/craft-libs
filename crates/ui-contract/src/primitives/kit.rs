@@ -12,7 +12,7 @@ use craft_behavior::{Axis, CanvasView, kurbo};
 use egui::epaint::{RectShape, Vertex};
 use egui::{
     Color32, ColorImage, Context, CornerRadius, Mesh, Pos2, Rect, Shape, Stroke, TextureFilter, TextureId, TextureOptions, TextureWrapMode, Vec2,
-    pos2, vec2,
+    pos2,
 };
 use std::f32::consts::{FRAC_PI_2, TAU};
 

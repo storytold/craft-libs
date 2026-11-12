@@ -125,11 +125,11 @@ impl<'a> ArtboardProperties<'a> {
                 };
                 let resized = |size: (f64, f64)| Rect::new(rect.x0, rect.y0, rect.x0 + size.0, rect.y0 + size.1);
                 let moved = |at: (f64, f64)| Rect::new(at.0, at.1, at.0 + width, at.1 + height);
-                Row::new().show(ui, |ui, _| {
+                Row::new().fill_width().show(ui, |ui, _| {
                     rect_events.extend(field(ui, &words.width, &words.width_name, width, &SIDE).map(|v| resized((v.unwrap_or(width), height))));
                     rect_events.extend(field(ui, &words.height, &words.height_name, height, &SIDE).map(|v| resized((width, v.unwrap_or(height)))));
                 });
-                Row::new().show(ui, |ui, _| {
+                Row::new().fill_width().show(ui, |ui, _| {
                     rect_events.extend(field(ui, &words.x, &words.x, rect.x0, &OFFSET).map(|v| moved((v.unwrap_or(rect.x0), rect.y0))));
                     rect_events.extend(field(ui, &words.y, &words.y, rect.y0, &OFFSET).map(|v| moved((rect.x0, v.unwrap_or(rect.y0)))));
                 });

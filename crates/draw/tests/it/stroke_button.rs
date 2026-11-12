@@ -2,7 +2,7 @@
 //! change of width.
 
 use craft_draw::ui::stroke::{LineStyle, StrokeButton, StrokeStyle};
-use craft_ui::contract::Bind;
+use craft_ui::contract::{Bind, Show as _};
 use craft_ui::testing::{Fixture, trial};
 use std::cell::RefCell;
 use std::rc::Rc;
