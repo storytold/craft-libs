@@ -93,22 +93,31 @@ pub struct IconSpec<'a> {
     pub mirror: Mirror,
     /// The set an SVG icon is drawn from.
     pub set: IconSet,
+    /// A dot of a colour from data at the icon's bottom-trailing corner; see [`badge`](Self::badge).
+    pub badge: Option<DataColor>,
 }
 
 impl<'a> IconSpec<'a> {
     /// An icon of the SVG set or a tool icon, in the panel ink.
     pub fn svg(id: IconId) -> Self {
-        IconSpec { source: IconSource::Svg(id), ink: Ink::OnPanel, color: None, mirror: Mirror::Auto, set: IconSet::default() }
+        IconSpec { source: IconSource::Svg(id), ink: Ink::OnPanel, color: None, mirror: Mirror::Auto, set: IconSet::default(), badge: None }
     }
 
     /// An icon of `glyph` in the panel ink.
     pub fn glyph(glyph: &'a dyn Glyph) -> Self {
-        IconSpec { source: IconSource::Glyph(glyph), ink: Ink::OnPanel, color: None, mirror: Mirror::Auto, set: IconSet::default() }
+        IconSpec { source: IconSource::Glyph(glyph), ink: Ink::OnPanel, color: None, mirror: Mirror::Auto, set: IconSet::default(), badge: None }
     }
 
     /// A swatch of `color`, painted as [`Draw::swatch_well`](super::Draw::swatch_well) paints a well.
     pub fn swatch(color: Srgba) -> Self {
-        IconSpec { source: IconSource::Swatch(Some(color)), ink: Ink::OnPanel, color: None, mirror: Mirror::Never, set: IconSet::default() }
+        IconSpec {
+            source: IconSource::Swatch(Some(color)),
+            ink: Ink::OnPanel,
+            color: None,
+            mirror: Mirror::Never,
+            set: IconSet::default(),
+            badge: None,
+        }
     }
 
     /// The empty swatch of a colour the theme decides (a "Default" pasteboard colour): it keeps a swatch's place, so
@@ -121,13 +130,13 @@ impl<'a> IconSpec<'a> {
     /// none. A blank name shows an empty box.
     pub fn initial(name: &str) -> Self {
         let letter = name.trim_start().chars().next().map_or(' ', |first| first.to_uppercase().next().unwrap_or(first));
-        IconSpec { source: IconSource::Initial(letter), ink: Ink::OnPanel, color: None, mirror: Mirror::Never, set: IconSet::default() }
+        IconSpec { source: IconSource::Initial(letter), ink: Ink::OnPanel, color: None, mirror: Mirror::Never, set: IconSet::default(), badge: None }
     }
 
     /// A filled circle in the panel ink, or in the colour [`color`](Self::color) or [`data_color`](Self::data_color)
     /// sets (a status dot, a person's dot).
     pub fn disc() -> Self {
-        IconSpec { source: IconSource::Disc, ink: Ink::OnPanel, color: None, mirror: Mirror::Never, set: IconSet::default() }
+        IconSpec { source: IconSource::Disc, ink: Ink::OnPanel, color: None, mirror: Mirror::Never, set: IconSet::default(), badge: None }
     }
 
     /// Sets the ink.
@@ -159,6 +168,14 @@ impl<'a> IconSpec<'a> {
     /// Sets the set an SVG icon is drawn from.
     pub fn set(mut self, set: IconSet) -> Self {
         self.set = set;
+        self
+    }
+
+    /// Adds a dot of `color` at the bottom-trailing corner of an SVG or glyph icon, ringed in the icon's colour: the
+    /// tone a point picker sets. The dot is image data, so it keeps its colour in every state; the ring follows the
+    /// icon's.
+    pub fn badge(mut self, color: DataColor) -> Self {
+        self.badge = Some(color);
         self
     }
 }
@@ -200,6 +217,11 @@ pub(crate) fn paint(painter: &Painter, tokens: &UiTokens, direction: Direction, 
             let mirrored = rtl && svg_set::directional(index) && spec.mirror == Mirror::Auto;
             svg(painter, tokens, square, index, spec.set, mirrored, color);
         }
+    }
+    if let Some(badge) = spec.badge {
+        let radius = tokens.size.handle.sm / 2.0;
+        let centre = if rtl { square.left_bottom() + vec2(radius, -radius) } else { square.right_bottom() - vec2(radius, radius) };
+        painter.circle(centre, radius, badge.0, egui::Stroke::new(tokens.stroke.thin, color));
     }
 }
 

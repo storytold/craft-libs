@@ -15,10 +15,10 @@ use craft_ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointe
 use craft_ui::contract::{Bind, Held, NoValue, Outcome, Pattern, Props, Sampler as _, Show as _, ShowContainer as _};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::Row;
-use craft_ui::primitives::Draw;
+use craft_ui::primitives::{Draw, IconSpec};
 use craft_ui::runtime::env::{Env, Label};
-use craft_ui::style::TypeRole;
-use egui::{Id, Response, Ui, Vec2};
+use craft_ui::style::{DataColor, TypeRole};
+use egui::{Color32, Id, Response, Ui, Vec2};
 
 use super::AdjustWords;
 
@@ -73,13 +73,9 @@ impl TonePicker {
         rgb || (gray && self != TonePicker::Gray)
     }
 
-    /// The picker's pipette: Photoshop's black, grey or white one.
-    fn icon(self) -> IconId {
-        IconId::new(match self {
-            TonePicker::Black => "eyedropper_black",
-            TonePicker::Gray => "eyedropper_gray",
-            TonePicker::White => "eyedropper_white",
-        })
+    /// The picker's pipette with a dot of its tone at the corner, as Photoshop's black, grey and white ones.
+    fn icon(self) -> IconSpec<'static> {
+        IconSpec::svg(IconId::new("eyedropper")).badge(DataColor::new(Color32::from_gray(self.tone())))
     }
 }
 
@@ -103,7 +99,7 @@ impl Outcome for TonePickerRowOutput {
 }
 
 /// The "Eyedroppers:" row: three icon-only toggle buttons (Set Black Point, Set Neutral Gray Point,
-/// Set White Point), each a pipette in its own tone, and the "Unavailable in this color mode" note.
+/// Set White Point), each a pipette with a dot of its tone, and the "Unavailable in this color mode" note.
 ///
 /// - A button is pressed while its picker is armed. A click on a disarmed button arms it; a click on
 ///   the armed one disarms it.

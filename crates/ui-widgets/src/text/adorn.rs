@@ -106,7 +106,7 @@ impl Adornment {
 
     /// The icon, painted in `color` when there is one.
     fn spec(icon: &IconSpec<'static>, color: Option<StyleColor>) -> IconSpec<'static> {
-        IconSpec { source: icon.source.clone(), ink: icon.ink, color: color.or(icon.color), mirror: icon.mirror, set: icon.set }
+        IconSpec { color: color.or(icon.color), ..icon.clone() }
     }
 
     /// Paints the adornment in `rect`, one of `place`'s rects: a glyph or text in `color`, a button as an icon button
