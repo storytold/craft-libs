@@ -90,10 +90,10 @@ impl<'a> Package<'a> {
         &mut self.opc
     }
 
-    /// The XML options parts are read with: local names, an undefined entity kept as written,
-    /// [`Limits::xml`].
+    /// The XML options parts are read with: the names of [`crate::ns::CANONICAL`], an undefined
+    /// entity kept as written, [`Limits::xml`].
     pub fn xml_options(&self) -> Options<'static> {
-        Options { unknown_entity: UnknownEntity::Literal, ..Options::local() }.with_limits(self.limits.xml)
+        Options { unknown_entity: UnknownEntity::Literal, ..Options::canonical(&crate::ns::CANONICAL) }.with_limits(self.limits.xml)
     }
 
     /// Part `part` as XML; `Ok(None)` when there is no such part.

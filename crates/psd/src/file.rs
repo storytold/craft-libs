@@ -190,6 +190,18 @@ impl PsdFile {
         want: impl FnOnce(&PsdFile) -> Result<bool>,
         recover: impl FnOnce(&PsdFile) -> bool,
     ) -> Result<(Self, Option<Result<Vec<u8>>>)> {
+        Self::from_bytes_and_merged_preflight_info(data, |file, _, _| want(file), recover)
+    }
+
+    /// [`Self::from_bytes_and_merged_preflight`] with the merged image's compression and
+    /// encoded byte length (excluding its two-byte compression field). The image itself is
+    /// still unread: `file.image_data` is empty. A missing compression field is `None`, and
+    /// its parse error is deferred until after preflight, so a refusal always takes precedence.
+    pub fn from_bytes_and_merged_preflight_info(
+        data: &[u8],
+        want: impl FnOnce(&PsdFile, Option<Compression>, u64) -> Result<bool>,
+        recover: impl FnOnce(&PsdFile) -> bool,
+    ) -> Result<(Self, Option<Result<Vec<u8>>>)> {
         let mut r = Reader::new(data);
         let header = Header::read(&mut r)?;
         let psb = header.version.is_psb();
@@ -259,7 +271,8 @@ impl PsdFile {
             image_data,
             write_as_psb: false,
         };
-        let want = want(&file)?;
+        let compression = r.clone().u16().ok().map(Compression::from_u16);
+        let want = want(&file, compression, r.remaining().saturating_sub(2) as u64)?;
         let merged = file.read_merged_section(&mut r, want, recover)?;
         Ok((file, merged))
     }

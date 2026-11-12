@@ -106,6 +106,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   and channel names, the channels that make a colour picture, and Cryptomatte IDs, metadata keys,
   manifests and rank channels. The optional `decode` feature adds bounded part listing, flat
   decoding (scan lines, tiles, every compression of the `exr` crate) and writing.
+- [`craft-flow`](crates/flow/README.md): the flow model every text format maps to (paragraphs with a kind, lists and formatted spans; tables; pictures, fields, notes, equations), converted to and from a craft-wordmodel `Document`.
 - [`craft-font-catalog`](crates/font-catalog/README.md): the installed fonts on every platform
   (font folders, fontconfig and Flatpak host folders, CoreText, DirectWrite, the font store),
   lookup by family, style, localized, legacy, full and PostScript names, family loads shared
@@ -150,6 +151,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   raw image (samples, CFA, black and white levels, active area, crop, orientation, colour tags,
   opcode lists, embedded previews), one Cargo feature per format. DNG reading and writing,
   Hasselblad 3FR/FFF, Minolta MRW, Epson ERF, Mamiya MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2, Nikon NEF/NRW, Panasonic RW2, Fujifilm RAF, Olympus ORF (uncompressed) and Canon CRW (through
+  Hasselblad 3FR/FFF, Minolta MRW, Epson ERF, Mamiya MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2, Nikon NEF/NRW, Panasonic RW2, Fujifilm RAF and Canon CRW (through
+  Hasselblad 3FR/FFF, Minolta MRW, Epson ERF, Mamiya MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2, Nikon NEF/NRW, Panasonic RW2 and Canon CRW (through
+  Hasselblad 3FR/FFF, Minolta MRW, Epson ERF, Mamiya MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2, Nikon NEF/NRW and Canon CRW (through
   `craft-crw`) so far; demosaicing and everything after stay with the develop
   pipeline.
 - [`craft-tga`](crates/tga/src/lib.rs): Truevision Targa, from FilmCraft (reader) and PhotoCraft
@@ -163,7 +167,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   mean stays in each app. Bounded and panic-free on hostile input.
 - [`craft-stream-codecs`](crates/stream-codecs/README.md): byte-stream and bi-level image codecs that
   PDF, PostScript and TIFF share: LZW, ASCII85, ASCIIHex, RunLength, TIFF and PNG predictors,
-  CCITT Group 3 and 4 decoding and Group 4 encoding, lossless JBIG2 encoding. Every
+  CCITT Group 3 and 4 decoding and Group 4 encoding, JBIG2 decoding and lossless encoding. Every
   decoder is bounded and returns its partial output on damage. From PdfCraft; a PDF filter chain
   is built on it in `craft-pdf`.
 - [`craft-timeline`](crates/timeline/README.md): editorial timeline interchange: exact media time and SMPTE timecode, import/export reports, media path and `file://` URL handling, Avid Log Exchange (ALE) and CMX 3600 EDL documents, format detection. From FilmCraft.
@@ -207,6 +211,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-audio`](crates/audio/README.md): audio file I/O and codecs (WAV, AIFF, FLAC, AAC, Opus,
   AC-3/E-AC-3, MP1/MP2, MP3 encoding), streaming and seeking, and packet decoding for any demuxer. See its
   README for formats and features.
+- [`craft-markdown`](crates/markdown/README.md): Markdown read and written (a CommonMark subset with GitHub tables and strikethrough), to and from the craft-flow model.
 - [`craft-math`](crates/math/README.md): equations as one tree (the Office Math object model) with its syntaxes, read and written: OMML, presentation MathML, LaTeX math and the UnicodeMath linear format.
 - [`craft-media`](crates/media/README.md): bit-level I/O (`bitstream`), clean-room MP4/MOV
   (`isobmff`), Matroska/WebM (`matroska`) and MXF (`mxf`) demuxers and muxers, Ogg (`ogg`), AVI (`avi`) and

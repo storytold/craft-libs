@@ -50,6 +50,7 @@ craft-font-catalog = { path = "crates/font-catalog" }
 craft-font-manager = { path = "crates/font-manager" }
 craft-font-store = { path = "crates/font-store" }
 craft-gainmap = { path = "crates/gainmap" }
+craft-flow = { path = "crates/flow" }
 craft-gcode = { path = "crates/gcode" }
 craft-gif = { path = "crates/gif" }
 craft-hdr = { path = "crates/hdr" }
@@ -69,6 +70,7 @@ craft-assuan = { path = "crates/assuan" }
 craft-kra = { path = "crates/kra" }
 craft-audio = { path = "crates/audio" }
 # No default features, so craft-audio's `encode` builds craft-media without `isobmff`.
+craft-markdown = { path = "crates/markdown" }
 craft-math = { path = "crates/math" }
 craft-media = { path = "crates/media", default-features = false }
 craft-media-testkit = { path = "crates/media-testkit" }

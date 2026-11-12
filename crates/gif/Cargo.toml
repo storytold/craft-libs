@@ -10,6 +10,13 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Decoding every frame through the `image` crate's GIF decoder, with bounded memory.
+frames = ["dep:image"]
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["gif"], optional = true }
+
 [dev-dependencies]
 # Writes the animated test files the scan is checked against; not a product dependency.
 image = { version = "0.25", default-features = false, features = ["gif"] }
