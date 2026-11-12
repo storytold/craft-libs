@@ -44,16 +44,17 @@ impl Shot {
         self.runs.iter().filter(|run| !run.elided && !run.text.trim().is_empty()).map(|run| (run.text.as_str(), run.rect)).collect()
     }
 
-    /// Whether `rect` lies in what the story shows: its shown rect or one of the layers it has open.
-    fn shows(&self, rect: Rect) -> bool {
-        inside(rect, self.shown) || self.layers.iter().any(|layer| inside(rect, *layer))
+    /// Whether `rect`, painted under `clip`, lies in what the story shows: its shown rect, or the open layer that clips
+    /// it. A run of the story's own area keeps the room's clip, so an open layer over it does not count.
+    fn shows(&self, rect: Rect, clip: Rect) -> bool {
+        inside(rect, self.shown) || self.layers.iter().any(|layer| inside(clip, *layer) && inside(rect, *layer))
     }
 
     /// The text run at `run` stays in its part: it lies in what the story shows, or a scroll region's view cuts it. A
     /// run in a scroll region's content shows through the region's view, so it stays in its part when the whole run
     /// lies in the content, which scrolls, and what the view shows of it in what the story shows.
-    fn keeps(&self, run: Rect) -> bool {
-        self.shows(run)
+    fn keeps(&self, run: Rect, clip: Rect) -> bool {
+        self.shows(run, clip)
             || self
                 .scrolls
                 .iter()
@@ -61,7 +62,7 @@ impl Shot {
                 .min_by(|a, b| a.content.area().total_cmp(&b.content.area()))
                 .is_some_and(|region| {
                     let seen = run.intersect(region.view);
-                    inside(run, region.content) && (!seen.is_positive() || self.shows(seen))
+                    inside(run, region.content) && (!seen.is_positive() || self.shows(seen, clip))
                 })
     }
 }
@@ -136,7 +137,7 @@ fn text_size_from(story: &Story, base: Shot) -> Result<(), String> {
             for same in grown.runs.iter().filter(|other| other.text == run.text) {
                 // A run the component painted elided is shortened by design and keeps its full text in the access name
                 // (the elision rule checks that), so it is not cut; it must still stay inside its part.
-                if !grown.keeps(same.rect) {
+                if !grown.keeps(same.rect, same.clip) {
                     return Err(format!("{}: under {name} the text `{}` leaves its part", story.name, run.text));
                 }
             }

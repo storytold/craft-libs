@@ -80,9 +80,16 @@ pub(crate) fn screen_for(ctx: &Context, env: &Env, overlay: &Overlay) -> Rect {
 }
 
 impl Overlay {
-    /// The overlay as a layer contained in a region shows: its content may take the whole region, since the region is
-    /// what the host has to give.
-    pub(crate) fn in_region(&self) -> Overlay {
+    /// The overlay as a layer opened in `env` shows: a modal or window layer contained in an embedded shell's region
+    /// may take the whole region, since the region is what the host has to give; a popup kept in a [`PopupRegion`]
+    /// keeps its cap.
+    pub(crate) fn opened_in(&self, env: &Env) -> Overlay {
+        let shell = self.rank.is_modal() || matches!(self.rank, crate::runtime::overlay::Rank::Window);
+        if shell && region_for(env, self).is_some() { self.in_region() } else { self.clone() }
+    }
+
+    /// The overlay as a layer contained in a region shows: its content may take the whole region.
+    fn in_region(&self) -> Overlay {
         let mut overlay = self.clone();
         if let OverlayFit::ContentCapped(_) = overlay.fit {
             overlay.fit = OverlayFit::ContentCapped(ViewportShare::new(1.0, 1.0));
@@ -196,7 +203,7 @@ pub(super) fn placement(ctx: &Context, layer: &Layer<'_>, size: Option<egui::Vec
     let rtl = layer.env.direction.is_rtl();
     let cap = cap(layer.overlay, bounds, anchor);
     match &layer.overlay.place {
-        Place::Anchored { side, align, .. } => {
+        Place::Anchored { side, align, flips_across, .. } => {
             let kept = layer_bounds(layer, bounds);
             let Some(size) = size else {
                 let room = content_room(layer.overlay, bounds, kept, anchor, rtl);
@@ -205,7 +212,12 @@ pub(super) fn placement(ctx: &Context, layer: &Layer<'_>, size: Option<egui::Vec
             // The side taken in an earlier pass is the preferred one while the layer stays open: it stays while the
             // content fits there or that side is the larger, so a size measured later (a body that grew) still flips it.
             let taken = overlay::entry(ctx, layer.id).and_then(|entry| entry.side).unwrap_or(*side);
-            let request = PlaceRequest::new(anchor, size, kept).side(taken).align(*align).rtl(rtl).min_width(layer.overlay.min_width);
+            let request = PlaceRequest::new(anchor, size, kept)
+                .side(taken)
+                .align(*align)
+                .rtl(rtl)
+                .min_width(layer.overlay.min_width)
+                .flips_across(*flips_across);
             let placed = craft_behavior::overlay::place(&request);
             // The room is what the side the layer took leaves for a body as large as the cap.
             let room = craft_behavior::overlay::place(&request.kept(Some(placed.side)).size(cap)).rect.size();

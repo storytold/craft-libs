@@ -208,7 +208,7 @@ impl Host for LayerHost {
         let ctx = parent.ctx().clone();
         // A resizable layer with a default size is placed by it until the user or the caller sizes it.
         let region = overlay::region_for(env, &self.overlay);
-        let mut overlay = if region.is_some() { self.overlay.in_region() } else { self.overlay.clone() };
+        let mut overlay = self.overlay.opened_in(env);
         let screen = overlay::screen_for(&ctx, env, &overlay);
         let placement = shown_placement(&ctx, id, self.save.as_ref(), &overlay, screen, env.tokens.space.inset.screen);
         // An anchored resizable layer has no position to seed: its default size is held as its minimum until the

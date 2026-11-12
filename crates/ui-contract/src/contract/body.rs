@@ -108,6 +108,8 @@ pub(super) struct BodyHooks<'b> {
     last_extent: (f32, f32),
     /// The height of a scroll strip (`ScrollIndicator::Strips`).
     strip: f32,
+    /// The height of a control: the row a strip scrolls by.
+    row: f32,
     /// This pass's sizes, recorded at step 17.
     body_size: Option<Vec2>,
     header_size: Option<Vec2>,
@@ -194,6 +196,7 @@ impl<'b> BodyHooks<'b> {
             last: BodyView::default(),
             last_extent: (0.0, 0.0),
             strip: 0.0,
+            row: 0.0,
             body_size: None,
             header_size: None,
             footer_size: None,

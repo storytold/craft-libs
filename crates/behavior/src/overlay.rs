@@ -92,12 +92,26 @@ pub struct PlaceRequest {
     pub bounds: Rect,
     /// The side the overlay had when it opened; it keeps that side while open instead of flipping.
     pub kept: Option<Side>,
+    /// Beside the anchor, the overlay lines up with the anchor's other end when it runs past the bounds from the
+    /// aligned end and fits from the other, instead of sliding: a submenu of a low row opens upward.
+    pub flips_across: bool,
 }
 
 impl PlaceRequest {
     /// A request for `size` around `anchor` inside `bounds`: below, aligned to the start, no gap, free width.
     pub const fn new(anchor: Rect, size: Vec2, bounds: Rect) -> Self {
-        PlaceRequest { anchor, size, side: Side::Below, align: Align::Start, rtl: false, gap: 0.0, min_width: MinWidth::None, bounds, kept: None }
+        PlaceRequest {
+            anchor,
+            size,
+            side: Side::Below,
+            align: Align::Start,
+            rtl: false,
+            gap: 0.0,
+            min_width: MinWidth::None,
+            bounds,
+            kept: None,
+            flips_across: false,
+        }
     }
 
     /// Sets the content size.
@@ -141,6 +155,12 @@ impl PlaceRequest {
         self.kept = side;
         self
     }
+
+    /// Lines up with the anchor's other end, beside it, when that fits and the aligned end does not.
+    pub const fn flips_across(mut self, on: bool) -> Self {
+        self.flips_across = on;
+        self
+    }
 }
 
 /// Where `place` put the overlay.
@@ -178,9 +198,9 @@ fn room(anchor: Rect, bounds: Rect, side: Side, rtl: bool, gap: f32) -> f32 {
 }
 
 /// Places an overlay: the preferred side unless the other has more room and the content does not fit, shifted to
-/// stay inside the bounds, its height (or width, beside the anchor) capped to the room. Beside the anchor it lines up
-/// with the anchor's other end when it runs past the bounds from the aligned end and fits from the other. The rect
-/// is always finite and inside the bounds.
+/// stay inside the bounds, its height (or width, beside the anchor) capped to the room. Beside the anchor, a request that
+/// flips across lines up with the anchor's other end when it runs past the bounds from the aligned end and fits from the
+/// other. The rect is always finite and inside the bounds.
 pub fn place(request: &PlaceRequest) -> Placement {
     let anchor = clean(request.anchor);
     let bounds = clean(request.bounds);
@@ -207,9 +227,10 @@ pub fn place(request: &PlaceRequest) -> Placement {
         (Align::Start, true) | (Align::End, false) => anchor.right() - size.x,
         (Align::Center, _) => anchor.center().x - size.x / 2.0,
     };
-    // Beside the anchor, an overlay that runs past the bounds from the edge it aligns to opens the other way when it
-    // fits there: a tall submenu of a low row opens upward, its bottom level with the row's.
-    let (down, up) = (anchor.top() + size.y <= bounds.bottom(), anchor.bottom() - size.y >= bounds.top());
+    // Beside the anchor, an overlay that flips across and runs past the bounds from the edge it aligns to opens the
+    // other way when it fits there: a tall submenu of a low row opens upward, its bottom level with the row's.
+    let fits = |end: bool| !request.flips_across || end;
+    let (down, up) = (fits(anchor.top() + size.y <= bounds.bottom()), fits(anchor.bottom() - size.y >= bounds.top()));
     let across_y = match request.align {
         Align::Start if down || !up => anchor.top(),
         Align::Center => anchor.center().y - size.y / 2.0,
@@ -239,15 +260,16 @@ mod tests {
     const BOUNDS: Rect = Rect { min: Pos2::new(0.0, 0.0), max: Pos2::new(800.0, 600.0) };
 
     #[test]
-    fn beside_a_low_anchor_a_tall_overlay_opens_upward_and_one_taller_than_both_ways_slides() {
+    fn beside_a_low_anchor_a_tall_overlay_that_flips_across_opens_upward_and_one_taller_than_both_ways_slides() {
         let row = rect(100.0, 500.0, 200.0, 24.0);
-        let request = PlaceRequest::new(row, Vec2::new(150.0, 300.0), BOUNDS).side(Side::End);
+        let request = PlaceRequest::new(row, Vec2::new(150.0, 300.0), BOUNDS).side(Side::End).flips_across(true);
         let placed = place(&request).rect;
         assert_eq!(placed.bottom(), row.bottom(), "opens upward from the row's bottom: {placed:?}");
-        let fits_down = place(&PlaceRequest::new(rect(100.0, 100.0, 200.0, 24.0), Vec2::new(150.0, 300.0), BOUNDS).side(Side::End)).rect;
+        assert_eq!(place(&request.flips_across(false)).rect.bottom(), BOUNDS.bottom(), "one that does not flip slides up");
+        let fits_down = place(&PlaceRequest { anchor: rect(100.0, 100.0, 200.0, 24.0), ..request }).rect;
         assert_eq!(fits_down.top(), 100.0, "hangs down from the row while it fits");
         let mid = rect(100.0, 250.0, 200.0, 24.0);
-        let neither = place(&PlaceRequest::new(mid, Vec2::new(150.0, 400.0), BOUNDS).side(Side::End)).rect;
+        let neither = place(&PlaceRequest { anchor: mid, ..request }.size(Vec2::new(150.0, 400.0))).rect;
         assert_eq!(neither.bottom(), BOUNDS.bottom(), "fits neither way: slides up to stay inside");
     }
 

@@ -3,9 +3,10 @@
 //! low row opens upward.
 
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Role, STRIP_BACK, STRIP_FORWARD, Show as _, ShowContainer as _, Trigger};
+use craft_ui::contract::{Bind, Entry, Role, STRIP_BACK, STRIP_FORWARD, Show as _, ShowContainer as _, Trigger};
 use craft_ui::menu::bar::{MenuBar, MenuTitle};
 use craft_ui::menu::{Menu, MenuItem};
+use craft_ui::pickers::Select;
 use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Id, Key, Modifiers, Rect, Vec2};
 use std::cell::Cell;
@@ -189,4 +190,63 @@ fn no_menu_or_submenu_of_a_menu_bar_covers_the_bar() {
         assert!(menu.rect.top() >= file.rect.bottom() - 0.5, "{:?} covers the bar ending at {}", menu.rect, file.rect.bottom());
         assert!(room.contains_rect(menu.rect), "{:?} stays inside the window {room:?}", menu.rect);
     }
+}
+
+/// A bar's File menu of `ROWS` rows with a submenu row among the last ones, opened and wheeled to its end.
+fn scrolled_bar_menu() -> (Fixture, Rect) {
+    let mut fixture = Fixture::new(|ui| {
+        let titles = vec![MenuTitle::new("&File", |ui| {
+            for at in 0..ROWS {
+                MenuItem::new(row(at)).show(ui);
+                if at == ROWS - 3 {
+                    Menu::submenu_row(ui, "Recent", |ui, _| {
+                        MenuItem::new("Report.txt").show(ui);
+                    });
+                }
+            }
+        })];
+        MenuBar::new("Main menu", titles).show(ui);
+    });
+    fixture.settle();
+    let file = fixture.by_label("File").expect("the File title").rect;
+    fixture.click_at(file.center()).settle();
+    let menu = menu_rect(&fixture);
+    let at_end = |f: &Fixture| f.by_label(&row(ROWS - 1)).is_some_and(|last| menu.contains_rect(last.rect));
+    assert!(until(&mut fixture, 200, || vec![pointer::moved(menu.center()), pointer::wheel(-60.0)], at_end), "the wheel reaches the end");
+    (fixture, file)
+}
+
+#[trial]
+fn a_menu_bar_menu_closed_at_its_end_reopens_at_its_first_row_with_one_level_open() {
+    let (mut fixture, file) = scrolled_bar_menu();
+    fixture.key(Key::Escape, Modifiers::NONE).settle();
+    assert!(fixture.by_role(Role::MENU).is_empty(), "Escape closed the menu");
+    fixture.click_at(file.center());
+    for frame in 0..6 {
+        fixture.frame(vec![]);
+        let menus = fixture.by_role(Role::MENU);
+        assert_eq!(menus.len(), 1, "frame {frame}: the menu is open and no submenu opened under the title");
+        let first = fixture.by_label(&row(0)).expect("the first row");
+        assert!(menus[0].rect.contains_rect(first.rect), "frame {frame}: the menu starts at its first row");
+    }
+}
+
+#[trial]
+fn a_dropdown_in_a_menu_bar_menu_keeps_its_cap() {
+    let mut fixture = Fixture::new(|ui| {
+        let titles = vec![MenuTitle::new("&View", |ui| {
+            let entries: Vec<Entry<u8>> = (0..60u8).map(|at| Entry::new(at, format!("Zoom {at}"))).collect();
+            let mut value = 0u8;
+            Select::new("Zoom", Bind::bound(&mut value), &entries).show(ui);
+        })];
+        MenuBar::new("Main menu", titles).show(ui);
+    });
+    fixture.settle();
+    let view = fixture.by_label("View").expect("the View title");
+    fixture.click(&view).settle();
+    let field = fixture.by_role(Role::COMBO_BOX).first().copied().expect("the select");
+    fixture.click(&field).settle();
+    let list = fixture.by_role(Role::LIST_BOX).first().expect("the list is open").rect;
+    let window = fixture.ctx().content_rect();
+    assert!(list.height() <= window.height() * 0.5, "the list {list:?} keeps the dropdown's share of the window {window:?}");
 }

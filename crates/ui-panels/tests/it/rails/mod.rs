@@ -79,3 +79,24 @@ fn dragging_a_press_away_opens_the_flyout_and_releasing_over_a_row_picks_it() {
     dragged.fixture.release_at(row.center()).idle(2);
     assert_eq!(*dragged.selected.borrow(), [REDO], "releasing over Redo picks it and nothing else");
 }
+
+/// A flyout of a tool low on the rail, too tall for the room under the tool's top, slides up to stay in the window
+/// as PhotoCraft's tool flyouts do, rather than opening upward from the tool as a submenu does.
+#[trial]
+fn the_flyout_of_a_low_tool_slides_up_to_stay_in_the_window() {
+    let all: Vec<RailTool<u8>> = (0..12u8).map(|id| RailTool::new(id, EditCommands::Cut)).collect();
+    let mut fixture = Fixture::new(move |ui| {
+        ui.add_space(440.0);
+        FlyoutButton::new(&all, &0).show(ui);
+    });
+    fixture.settle();
+    let target = fixture.by_role(Role::BUTTON).into_iter().next().expect("the flyout button shows");
+    fixture.press(&target);
+    fixture.advance(HELD);
+    fixture.idle(3);
+    let flyout = fixture.by_role(Role::MENU).first().expect("a held press opens the flyout").rect;
+    let window = fixture.ctx().content_rect();
+    assert!(target.rect.top() + flyout.height() > window.bottom(), "the flyout does not fit under the tool's top");
+    assert!(window.contains_rect(flyout), "the flyout {flyout:?} stays in the window {window:?}");
+    assert!(flyout.bottom() > target.rect.bottom() + 1.0, "it slides: its bottom {} is below the tool's {}", flyout.bottom(), target.rect.bottom());
+}

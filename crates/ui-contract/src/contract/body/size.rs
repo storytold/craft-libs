@@ -234,8 +234,7 @@ impl<'b> BodyHooks<'b> {
         match (overlay_of(props), self.fixed) {
             (Some(overlay), false) => {
                 let env = Env::of(ui);
-                let contained = crate::contract::overlay::region_for(&env, overlay).is_some();
-                let overlay = &if contained { overlay.in_region() } else { overlay.clone() };
+                let overlay = &overlay.opened_in(&env);
                 let room = Self::layer_room(ui.ctx(), &env, overlay).size();
                 // An anchored layer's body runs in the room the anchor leaves on the side it takes, as the host
                 // offers it: a body taller than that scrolls instead of covering the anchor.

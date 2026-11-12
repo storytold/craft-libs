@@ -202,9 +202,9 @@ impl Overlay {
         overlay
     }
 
-    /// A submenu: beside its parent entry.
+    /// A submenu: beside its parent entry, opening upward from a low entry when it fits there and not below.
     pub fn submenu() -> Overlay {
-        Overlay::menu().place(Place::anchored(Anchor::Response, Side::End, Align::Start))
+        Overlay::menu().place(Place::anchored(Anchor::Response, Side::End, Align::Start).flipping_across())
     }
 
     /// A tooltip: below the control, no focus, never takes input.

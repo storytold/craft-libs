@@ -177,6 +177,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         };
         self.last = stage.recall::<BodyView>(sub(id, "view"));
         self.strip = scroll_strip_height(&env.tokens);
+        self.row = env.tokens.size.control.md;
         let Some(scroll) = scroll else { return };
         self.last_extent = stage.session::<ScrollState>(sub(id, "scroll")).extent;
         self.scroll_bound = comp.scroll().is_some();
@@ -432,6 +433,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 scroll_bound: self.scroll_bound,
                 last_extent: self.last_extent,
                 strip: self.strip,
+                row: self.row,
                 anchor: self.anchor,
                 follows_end: self.follows_end,
                 view_offset: self.view_offset,
@@ -444,6 +446,10 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 ..BodyHooks::new(&mut *self.body, Arc::clone(&self.props))
             };
             crate::contract::run::measured_extent(comp, &mut fresh, at, &mut stage, style, shown);
+            // The strips show in the pass whose content first overflows: the measuring run's content decides them.
+            if let Some(extent) = fresh.extent.filter(|_| scroll_of(&props).is_some_and(|scroll| scroll.has_strips())) {
+                self.last_extent = (extent.x, extent.y);
+            }
         }
         let took = |key: Id| layout_memory::measured(&ctx, key).map(|measured| measured.took);
         self.measured_body = took(id);

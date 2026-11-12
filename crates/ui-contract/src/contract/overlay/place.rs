@@ -53,6 +53,9 @@ pub enum Place {
         side: Side,
         /// The alignment along the anchor's edge.
         align: Align,
+        /// Beside the anchor, it lines up with the anchor's other end when that fits and the aligned end does not,
+        /// instead of sliding inside the bounds: a submenu of a low row opens upward.
+        flips_across: bool,
     },
     /// Free-standing.
     Float(FloatPlace),
@@ -61,7 +64,15 @@ pub enum Place {
 impl Place {
     /// An anchored place.
     pub const fn anchored(anchor: Anchor, side: Side, align: Align) -> Self {
-        Place::Anchored { anchor, side, align }
+        Place::Anchored { anchor, side, align, flips_across: false }
+    }
+
+    /// The place, beside its anchor, lining up with the anchor's other end when that fits and the aligned end does not.
+    pub const fn flipping_across(self) -> Self {
+        match self {
+            Place::Anchored { anchor, side, align, .. } => Place::Anchored { anchor, side, align, flips_across: true },
+            float => float,
+        }
     }
 }
 

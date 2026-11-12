@@ -27,8 +27,8 @@ pub const STRIP_BACK: PartKey = PartKey::new("body_scroll_strip_back");
 #[doc(hidden)]
 pub const STRIP_FORWARD: PartKey = PartKey::new("body_scroll_strip_forward");
 
-/// How far resting the pointer on a scroll strip scrolls, in points per second.
-const STRIP_SPEED: f32 = 600.0;
+/// Rows per second a region scrolls at while the pointer rests on one of its strips, in rows a control high.
+const STRIP_ROWS_PER_SECOND: f32 = 24.0;
 
 /// The height of a scroll strip.
 pub(super) fn scroll_strip_height(tokens: &UiTokens) -> f32 {
@@ -199,7 +199,7 @@ impl BodyHooks<'_> {
         }
         // Resting the pointer on a strip scrolls toward it at a steady speed, frame by frame.
         if self.last.view.is_some_and(|at| self.strips(scroll, rect_of(at)).is_some()) {
-            let step = f64::from(STRIP_SPEED * ctx.input(|input| input.stable_dt).clamp(0.0, 0.1));
+            let step = f64::from(STRIP_ROWS_PER_SECOND * self.row * ctx.input(|input| input.stable_dt).clamp(0.0, 0.1));
             for (strip, toward) in [(STRIP_BACK, -1.0), (STRIP_FORWARD, 1.0)] {
                 if cx.core.results.get(&(strip, None)).is_some_and(|result| result.hovered) {
                     offset.y += toward * step;

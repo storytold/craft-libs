@@ -75,6 +75,8 @@ pub struct PaintedText {
     pub text: String,
     /// The screen y of the run's first baseline.
     pub baseline: f32,
+    /// The clip rect the run was painted under.
+    pub clip: Rect,
 }
 
 /// The IME output of a frame: the owner widget, whether it asks the OS to interrupt a composition, the caret rect.
@@ -164,7 +166,7 @@ pub(crate) fn run_frame(
     let mut painted_before: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
     let texts = flat
         .iter()
-        .filter_map(|(shape, _)| match shape {
+        .filter_map(|(shape, clip)| match shape {
             Shape::Text(text) => {
                 let nth = painted_before.entry(Arc::as_ptr(&text.galley) as usize).or_insert(0);
                 let full = super::painted::full_text_of_painted(ctx, &text.galley, *nth);
@@ -178,6 +180,7 @@ pub(crate) fn run_frame(
                     baseline: text.pos.y + baseline,
                     elided: full.is_some(),
                     text: full.unwrap_or_else(|| text.galley.job.text.clone()),
+                    clip: *clip,
                 })
             }
             _ => None,
