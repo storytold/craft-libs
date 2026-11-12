@@ -61,10 +61,10 @@ pub(crate) use config::split_adts_upto;
 pub use config::{AdtsHeader, AudioSpecificConfig, ElementType, ProgramConfig, config_layout, split_adts};
 #[cfg(feature = "aac-decode")]
 pub use decoder::Decoder;
-#[cfg(feature = "aac-decode")]
-pub use latm::{LatmConfig, latm_config, latm_split};
 #[cfg(feature = "aac-encode")]
 pub use encoder::{BitrateMode, Encoder, EncoderConfig, EncoderStats};
+#[cfg(feature = "aac-decode")]
+pub use latm::{LatmConfig, latm_config, latm_split};
 pub use mdct::WindowShape;
 pub use tables::{SAMPLE_RATES, sample_rate_index};
 

@@ -95,7 +95,10 @@ fn stream_mux_config(r: &mut BitReader) -> Option<LatmConfig> {
     } else {
         // `ch` is an index into Table 1.19, not a count: 7 and 12 are eight channels, 11 is seven,
         // and a reserved configuration has no layout
-        (super::AudioSpecificConfig::lc(sf as u8, ch as u8).to_bytes().ok()?, super::config_layout(ch as u8)?.iter().map(|e| e.0.channels() as u32).sum())
+        (
+            super::AudioSpecificConfig::lc(sf as u8, ch as u8).to_bytes().ok()?,
+            super::config_layout(ch as u8)?.iter().map(|e| e.0.channels() as u32).sum(),
+        )
     };
     // what ascLen counts past the fields read here is fill
     if let Some(len) = asc_len {
