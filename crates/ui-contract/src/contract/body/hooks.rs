@@ -724,7 +724,8 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let beside =
             if real { self.measured_sizes() } else { RegionSizes { header: self.header_size, footer: self.measured_footer, end: self.end_size } };
         if !real {
-            regions.body = self.regions(&props, inner, pad, room, rtl, beside).body;
+            let placed = self.regions(&props, inner, pad, room, rtl, beside);
+            (regions.body, regions.beside) = (placed.body, placed.beside);
         }
         let line = shared_line(&props, beside);
         // B2 label: the control gets the rect the label leaves; the label column adds to the container's extent.
@@ -768,7 +769,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             && env.values.get::<label::LabelScheme>() == label::LabelScheme::Inspector;
         let body_env = line_env.derive_local(|scoped| {
             let label_width = label_extra.x;
-            self.scope_body(scoped, &props, id, BodyScope { room, real, sizing, content_column, scroll, label_width });
+            self.scope_body(scoped, &props, id, BodyScope { room, real, sizing, content_column, scroll, label_width, beside: regions.beside });
             scoped.inside_label = inside;
             scoped.cell_fills = cell_fills;
         });

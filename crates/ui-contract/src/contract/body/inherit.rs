@@ -18,6 +18,8 @@ pub(super) struct BodyScope {
     pub(super) scroll: Option<Scroll>,
     /// The width a side label beside the body took from the container's row.
     pub(super) label_width: f32,
+    /// The width the regions beside the body take on its line (`Regions::beside`).
+    pub(super) beside: f32,
 }
 
 /// The surface a container paints under its regions: its props' surface, else its style's in its current state.
@@ -88,7 +90,7 @@ impl BodyHooks<'_> {
 
     /// What the body inherits on top of the line's env: arena, transform, the room it is offered and its scroll axes.
     pub(super) fn scope_body(&self, scoped: &mut Scoped, props: &ContainerProps, id: Id, body: BodyScope) {
-        let BodyScope { room, real, sizing, content_column, scroll, label_width } = body;
+        let BodyScope { room, real, sizing, content_column, scroll, label_width, beside } = body;
         if props.arena {
             scoped.arena = Some(ArenaId::new(id));
         }
@@ -108,14 +110,15 @@ impl BodyHooks<'_> {
         // takes, not the room it could have taken. A fill container that is not given the width still takes at
         // least the room (`regions`), so it offers the room, and so does a container that passes its column's width
         // on: its measuring run offered the room too.
-        // A side label's column is not the body's: the children are offered what is left beside it.
+        // The regions beside the body on its line and a side label's column are not the body's: the children are
+        // offered what is left beside them.
         scoped.offered = (!self.given.0 && room.x.is_finite()).then(|| {
             let offered = if real && sizing == Sizing::Content && !self.passes {
                 self.wanted_width(props).map_or(room.x, |wanted| wanted.min(room.x))
             } else {
                 room.x
             };
-            (offered - label_width).max(0.0)
+            (offered - beside - label_width).max(0.0)
         });
         if scroll.is_some() || props.scroll_owner {
             scoped.scroll_owner = Some(ScrollOwner { id, view: scroll.is_none() });

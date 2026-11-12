@@ -95,6 +95,9 @@ pub(super) struct Regions {
     /// container's bottom, less a footer placed in it.
     pub(super) end: Rect,
     footer: Rect,
+    /// The width the body's line gives the regions beside the body: an inline header and the end region, with their
+    /// gaps.
+    pub(super) beside: f32,
 }
 
 /// The sizes of the header, footer and end region that the regions are placed from (zero or `None` for a region the
@@ -429,7 +432,7 @@ impl<'b> BodyHooks<'b> {
         } else {
             header
         };
-        Regions { header, body, end, footer }
+        Regions { header, body, end, footer, beside: width - body.width() }
     }
 }
 

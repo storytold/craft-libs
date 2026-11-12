@@ -12,7 +12,7 @@ use craft_ui::list::{List, ListRow};
 use craft_ui::popover::Popover;
 use craft_ui::table::{MetadataGroup, MetadataRow, MetadataTable};
 use craft_ui::testing::{Frames, last_pass_measuring_runs, measuring_runs, trial};
-use egui::Ui;
+use egui::{Rect, Ui};
 use std::cell::Cell;
 
 const SNAP: f32 = 1.0;
@@ -208,4 +208,21 @@ fn a_stack_shown_at_a_rect_gives_its_fill_children_the_rect_width() {
     });
     assert!((list.get() - wide.get()).abs() <= SNAP, "the list takes the rect's width: {} vs {}", list.get(), wide.get());
     assert!((stack.get() - wide.get()).abs() <= SNAP, "the stack takes the rect's width: {} vs {}", stack.get(), wide.get());
+}
+
+/// A content column with a column of buttons beside its body (a dialog's side buttons) holds its fill children to the
+/// body: they show across the body's width and end before the buttons start.
+#[trial]
+fn a_fill_child_beside_an_end_column_keeps_to_the_body() {
+    let (child, text, button) = (Cell::new(Rect::NOTHING), Cell::new(Rect::NOTHING), Cell::new(Rect::NOTHING));
+    Frames::new().idle(4, |ui| {
+        Stack::new().footer(|ui, _| button.set(Button::new("OK").show(ui).rect)).footer_beside().show(ui, |ui, _| {
+            let shown = Stack::new().fill_width().show(ui, |ui, _| text.set(Text::new(LONG).show(ui).rect));
+            child.set(shown.output.rect);
+        });
+    });
+    let (child, text, button) = (child.get(), text.get(), button.get());
+    assert!(child.is_positive() && button.is_positive(), "the column and its button are shown");
+    assert!(child.max.x <= button.min.x + SNAP, "the fill child ends before the buttons start: {child:?} {button:?}");
+    assert!((child.width() - text.width()).abs() <= SNAP, "the fill child shows across the body: {child:?} {text:?}");
 }
