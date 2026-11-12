@@ -612,9 +612,9 @@ fn driver_settings_reach_only_the_windows_job() {
             "printer=(default)",
             "copies=1",
             "collate=true",
-            "duplex=(driver settings)",
+            "duplex=(driver settings or queue default)",
             "scaling=exact",
-            "color=(driver settings)",
+            "color=(driver settings or driver default)",
             "driver-settings=Office (east)"
         ]
     );

@@ -169,11 +169,15 @@ settings included, are kept, so a driver that also keeps pages per sheet in its 
 settings can still apply it from there. The dialog's borderless choice is kept too, and on a
 driver that enlarges the page for borderless printing it changes the printed size. The checks
 above still run on the ticket the driver validates; they read the validated ticket, not the
-driver's private settings. Settings are used only on the printer whose name they were chosen
-for: Windows may replace settings meant for another printer with defaults. `command_preview`
-marks them as not used when the job, or the default printer for a job that names none, is
-another printer. An error names the step that failed: the printer, reading the driver's
-settings, the dialog (a driver without one), or the driver refusing the settings.
+driver's private settings. The job is refused when the driver replaces the dialog's media type,
+resolution or print quality while it validates the job's ticket, which it can do when one
+conflicts with the job's paper. Settings are used only on the printer whose name they were
+chosen for: Windows may replace settings meant for another printer with defaults.
+`command_preview` marks them as not used when the job, or the default printer for a job that
+names none, is another printer. It does not ask the driver to read them, and it lists two-sided
+printing and color that the job leaves open as the dialog's settings or the default. An error
+names the step that failed: the printer, reading the driver's settings, the dialog (a driver
+without one), the driver refusing the settings, or the driver replacing one of them.
 `HAS_DRIVER_SETTINGS_DIALOG` is false and the call returns an error on other platforms, and CUPS
 jobs ignore `driver_settings`. `examples/driver_settings_dialog.rs` opens the dialog for a
 printer named on the command line and prints a one-page test sheet with the settings chosen.

@@ -462,6 +462,98 @@ pub(crate) fn verify_job_options(xml: &str, job: &Job, pages: usize, offered: Of
     Ok(())
 }
 
+/// The dialog features whose option a driver may replace while it validates the job's ticket,
+/// and the words an error names them with.
+const CHOSEN_OPTIONS: [(&str, &str); 3] = [("PageMediaType", "media type"), ("PageResolution", "resolution"), ("PageOutputQuality", "print quality")];
+
+/// A qualified name as its namespace and local name.
+type Expanded = (Option<String>, String);
+
+/// The namespace and local name of a QName attribute value of `node`.
+fn expanded(node: roxmltree::Node<'_, '_>, value: &str) -> Expanded {
+    let (prefix, local) = value.split_once(':').map_or((None, value), |(p, n)| (Some(p), n));
+    (node.lookup_namespace_uri(prefix).map(str::to_string), local.to_string())
+}
+
+/// The option of a feature: its name, when it has one, and the value of each scored property
+/// that holds one or refers to a parameter the ticket sets (a resolution's `ResolutionX` and
+/// `ResolutionY`), trimmed. A QName value (`xsi:type="xsd:QName"`) is kept as its namespace and
+/// local name, an integer as its number, any other value as its text.
+struct FeatureOption {
+    name: Option<Expanded>,
+    scored: Vec<(Expanded, Expanded)>,
+}
+
+/// The option of the Print Schema feature `feature` directly under the ticket's root; `None`
+/// when the ticket has no such feature or the feature has no option.
+fn feature_option(document: &roxmltree::Document<'_>, feature: &str) -> Option<FeatureOption> {
+    let option = document
+        .root_element()
+        .children()
+        .find(|n| n.has_tag_name((NS_PSF, "Feature")) && named(*n, feature))?
+        .children()
+        .find(|n| n.has_tag_name((NS_PSF, "Option")))?;
+    let scored = option
+        .children()
+        .filter(|n| n.has_tag_name((NS_PSF, "ScoredProperty")))
+        .filter_map(|n| {
+            let value = match n.children().find(|v| v.has_tag_name((NS_PSF, "Value")) || v.has_tag_name((NS_PSF, "ParameterRef")))? {
+                value if value.has_tag_name((NS_PSF, "Value")) => value,
+                reference => {
+                    let parameter = expanded(reference, reference.attribute("name")?);
+                    document
+                        .root_element()
+                        .children()
+                        .filter(|p| p.has_tag_name((NS_PSF, "ParameterInit")))
+                        .find(|p| p.attribute("name").is_some_and(|name| expanded(*p, name) == parameter))?
+                        .children()
+                        .find(|v| v.has_tag_name((NS_PSF, "Value")))?
+                }
+            };
+            let text = value.text()?.trim();
+            let value = match text.parse::<i64>() {
+                _ if is_qname_value(value) => expanded(value, text),
+                Ok(number) => (None, number.to_string()),
+                Err(_) => (None, text.to_string()),
+            };
+            Some((expanded(n, n.attribute("name")?), value))
+        })
+        .collect();
+    Some(FeatureOption { name: option.attribute("name").map(|value| expanded(option, value)), scored })
+}
+
+/// Whether `validated` is the option `chosen` names: the same name when `chosen` has one, and
+/// the same value for each of `chosen`'s scored properties.
+fn keeps_option(chosen: &FeatureOption, validated: Option<&FeatureOption>) -> bool {
+    validated.is_some_and(|validated| {
+        chosen.name.as_ref().is_none_or(|name| validated.name.as_ref() == Some(name))
+            && chosen.scored.iter().all(|property| validated.scored.contains(property))
+    })
+}
+
+/// Check that the driver's validated ticket (`validated`) kept the media type, resolution and
+/// print quality of the settings chosen in its dialog (`chosen`, the ticket [`driver_settings_xml`]
+/// returned). A driver can replace one of them when it conflicts with the job's paper, and Windows
+/// reports the replacement as a success. An option is compared by its name and by the values of
+/// its scored properties, such as a resolution's dots per inch; names are compared by namespace
+/// and local name, so a driver that spells its namespace with another prefix keeps them. A feature
+/// whose option in `chosen` has neither a name nor a scored value is not checked.
+pub(crate) fn verify_chosen_options(chosen: &str, validated: &str) -> Result<(), Error> {
+    let chosen = roxmltree::Document::parse(chosen).map_err(spool_error)?;
+    let validated = roxmltree::Document::parse(validated).map_err(spool_error)?;
+    for (feature, words) in CHOSEN_OPTIONS {
+        if let Some(wanted) = feature_option(&chosen, feature)
+            && (wanted.name.is_some() || !wanted.scored.is_empty())
+            && !keeps_option(&wanted, feature_option(&validated, feature).as_ref())
+        {
+            return Err(spool_error(format!(
+                "the printer's driver replaced the {words} chosen in its dialog; nothing was sent (choose the settings again in its dialog)"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// XML Schema instance namespace (`xsi:type`).
 const NS_XSI: &str = "http://www.w3.org/2001/XMLSchema-instance";
 /// XML Schema datatypes namespace (`xsd:integer`, `xsd:QName`).
@@ -814,6 +906,88 @@ mod tests {
         assert!(kept.contains("v:Mirrored"));
         assert!(!kept.contains("name=\"PageMediaSize\""), "{kept}");
         assert!(roxmltree::Document::parse(&kept).is_ok());
+    }
+
+    #[test]
+    fn a_media_type_or_quality_the_driver_replaced_refuses_the_job() {
+        let chosen = driver_settings_xml(&converted_settings(), &Job::default()).unwrap();
+        // The vendor's namespace under another prefix than the dialog's `ns0000`.
+        let ticket = |media: &str, resolution: &str, quality: &str| {
+            format!(
+                r#"<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:ns0001="http://example.com/vendor">
+<psf:Feature name="psk:PageMediaType"><psf:Option name="{media}"/></psf:Feature>
+<psf:Feature name="psk:PageResolution"><psf:Option name="{resolution}"/></psf:Feature>{quality}
+</psf:PrintTicket>"#
+            )
+        };
+        assert!(verify_chosen_options(&chosen, &ticket("psk:PhotographicGlossy", "ns0001:Fine", "")).is_ok());
+        let respelled = format!(
+            r#"<PrintTicket version="1" xmlns="{NS_PSF}" xmlns:k="{NS_PSK}"><Feature name="k:PageMediaType"><Option name="k:PhotographicGlossy"/></Feature><Feature name="k:PageResolution"><Option xmlns:v="http://example.com/vendor" name="v:Fine"/></Feature></PrintTicket>"#
+        );
+        assert!(verify_chosen_options(&chosen, &respelled).is_ok(), "the same options under other prefixes");
+        let replaced = [
+            (ticket("psk:Plain", "ns0001:Fine", ""), "media type"),
+            (ticket("ns0001:PhotographicGlossy", "ns0001:Fine", ""), "media type"),
+            (ticket("psk:Plain", "ns0001:Fine", "").replace("PageMediaType", "Other"), "media type"),
+            (ticket("psk:PhotographicGlossy", "ns0001:Draft", ""), "resolution"),
+            (ticket("psk:PhotographicGlossy", "psk:Fine", ""), "resolution"),
+        ];
+        for (replaced, words) in replaced {
+            let refused = verify_chosen_options(&chosen, &replaced);
+            assert!(matches!(&refused, Err(Error::Spool(m)) if m.contains(words) && m.contains("nothing was sent")), "{replaced}: {refused:?}");
+        }
+
+        let with_quality = format!(
+            r#"<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}"><psf:Feature name="psk:PageOutputQuality"><psf:Option name="psk:High"/></psf:Feature></psf:PrintTicket>"#
+        );
+        let quality = |option: &str| {
+            ticket("psk:Plain", "psk:Other", &format!(r#"<psf:Feature name="psk:PageOutputQuality"><psf:Option name="{option}"/></psf:Feature>"#))
+        };
+        assert!(verify_chosen_options(&with_quality, &quality("psk:High")).is_ok(), "no media type or resolution chosen: not checked");
+        let refused = verify_chosen_options(&with_quality, &quality("psk:Draft"));
+        assert!(matches!(&refused, Err(Error::Spool(m)) if m.contains("print quality")), "{refused:?}");
+
+        // A resolution is also its dots per inch, with or without an option name.
+        let resolution = |name: &str, x: u32, y: u32| {
+            format!(
+                r#"<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"><psf:Feature name="psk:PageResolution"><psf:Option{name}>
+<psf:ScoredProperty name="psk:ResolutionX"><psf:Value xsi:type="xsd:integer">{x}</psf:Value></psf:ScoredProperty>
+<psf:ScoredProperty name="psk:ResolutionY"><psf:Value xsi:type="xsd:integer"> {y} </psf:Value></psf:ScoredProperty>
+</psf:Option></psf:Feature></psf:PrintTicket>"#
+            )
+        };
+        for name in ["", r#" name="psk:Fine""#] {
+            let chosen = resolution(name, 600, 600);
+            assert!(verify_chosen_options(&chosen, &resolution(name, 600, 600)).is_ok(), "{name}");
+            assert!(verify_chosen_options(&chosen, &resolution(name, 600, 600).replace(">600<", ">+0600<")).is_ok(), "{name}: the same number");
+            for replaced in [resolution(name, 300, 300), resolution(name, 600, 300), quality("psk:High")] {
+                let refused = verify_chosen_options(&chosen, &replaced);
+                assert!(matches!(&refused, Err(Error::Spool(m)) if m.contains("resolution")), "{name} {replaced}: {refused:?}");
+            }
+        }
+        assert!(verify_chosen_options(&resolution(r#" name="psk:Fine""#, 600, 600), &resolution("", 600, 600)).is_err(), "the name was dropped");
+
+        // Values the option refers to as parameters.
+        let by_reference = |x: u32| {
+            format!(
+                r#"<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:v="http://example.com/vendor" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"><psf:Feature name="psk:PageResolution"><psf:Option name="v:Custom">
+<psf:ScoredProperty name="psk:ResolutionX"><psf:ParameterRef name="v:Dpi"/></psf:ScoredProperty>
+</psf:Option></psf:Feature><psf:ParameterInit name="v:Dpi"><psf:Value xsi:type="xsd:integer">{x}</psf:Value></psf:ParameterInit></psf:PrintTicket>"#
+            )
+        };
+        assert!(verify_chosen_options(&by_reference(600), &by_reference(600)).is_ok());
+        assert!(verify_chosen_options(&by_reference(600), &by_reference(300)).is_err(), "the parameter's value changed");
+
+        // A QName value under another prefix is the same value.
+        let qname = |prefix: &str, value: &str| {
+            format!(
+                r#"<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:{prefix}="http://example.com/vendor" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"><psf:Feature name="psk:PageOutputQuality"><psf:Option name="psk:High">
+<psf:ScoredProperty name="{prefix}:Mode"><psf:Value xsi:type="xsd:QName">{prefix}:{value}</psf:Value></psf:ScoredProperty>
+</psf:Option></psf:Feature></psf:PrintTicket>"#
+            )
+        };
+        assert!(verify_chosen_options(&qname("ns0000", "Photo"), &qname("brpsk", "Photo")).is_ok());
+        assert!(verify_chosen_options(&qname("ns0000", "Photo"), &qname("brpsk", "Text")).is_err());
     }
 
     #[test]

@@ -1021,7 +1021,7 @@ pub(crate) fn job_message(stdout: &[u8]) -> String {
 /// [`command_preview`] for the Windows backend; `default` is the default printer's name.
 fn windows_preview(job: &Job, default: Option<&str>) -> Vec<String> {
     // The driver's dialog decides what the job leaves open, when its settings are for the printer
-    // the job prints on.
+    // the job prints on and hold that choice; the preview does not ask the driver to read them.
     let target = job.printer.as_deref().or(default);
     let chosen = target.is_some_and(|printer| settings_for(job, printer).is_some());
     let mut preview = vec![
@@ -1032,7 +1032,7 @@ fn windows_preview(job: &Job, default: Option<&str>) -> Vec<String> {
         format!(
             "duplex={}",
             match job.duplex {
-                None if chosen => "(driver settings)",
+                None if chosen => "(driver settings or queue default)",
                 None => "(queue default)",
                 Some(Duplex::Off) => "one-sided",
                 Some(Duplex::LongEdge) => "two-sided-long-edge",
@@ -1050,7 +1050,7 @@ fn windows_preview(job: &Job, default: Option<&str>) -> Vec<String> {
             "color={}",
             match (job.grayscale, chosen) {
                 (true, _) => "monochrome",
-                (false, true) => "(driver settings)",
+                (false, true) => "(driver settings or driver default)",
                 (false, false) => "(driver default)",
             }
         ),

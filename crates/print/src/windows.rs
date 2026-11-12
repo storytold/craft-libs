@@ -193,6 +193,7 @@ pub(crate) fn settings_seed(job: &Job, printer: &str) -> Result<crate::Seed, Err
 
 fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape: bool) -> Result<(PrintTicket, (u32, u32)), Error> {
     let chosen = chosen_settings(device, job)?;
+    let chosen_xml = chosen.as_ref().map(|chosen| chosen.get_xml().to_vec());
     let capabilities_xml = {
         let _provider = print_ticket_provider();
         #[cfg(test)]
@@ -254,6 +255,10 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
     let validated = in_drivers_spelling(device, built);
     let xml = std::str::from_utf8(validated.get_xml()).map_err(spool_error)?;
     let paper = ticket::verify_ticket(xml, wanted, landscape)?;
+    // A media type, resolution or quality the driver replaced to resolve a conflict with the job's paper.
+    if let Some(chosen_xml) = &chosen_xml {
+        ticket::verify_chosen_options(std::str::from_utf8(chosen_xml).map_err(spool_error)?, xml)?;
+    }
     Ok((validated, paper))
 }
 
