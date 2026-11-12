@@ -5,6 +5,7 @@
 //! theme's colours at the chart's size, as an app's chart engine builds them from its palette and the chart's frame.
 
 use super::{ChartPrimitive, HAlign, VAlign, paint_chart};
+use craft_theme::TypeRole;
 use craft_ui::contract::{Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role, Show as _};
 use craft_ui::primitives::StrokeWidth;
 use craft_ui::style::{ComponentStyle, DataColor, StyleCx};
@@ -89,7 +90,8 @@ fn column_chart(style: &ChartSheetStyle, size: Vec2) -> Vec<ChartPrimitive> {
     let (left, right) = (size.x * CHART_MARGIN, size.x * (1.0 - CHART_MARGIN));
     let band = size.y * CHART_MARGIN * 1.5;
     let (top, bottom) = (band, size.y - band);
-    let mut out = vec![ChartPrimitive::text(size.x / 2.0, top / 2.0, "Sales by region").anchored(HAlign::Center, VAlign::Center).bold()];
+    let mut out =
+        vec![ChartPrimitive::text(size.x / 2.0, top / 2.0, "Sales by region").anchored(HAlign::Center, VAlign::Center).role(TypeRole::BodyStrong)];
     for step in 1..=3 {
         let y = bottom - (bottom - top) * step as f32 / 4.0;
         out.push(ChartPrimitive::line(vec![[left, y], [right, y]], style.axis, StrokeWidth::Hairline).dashed());
@@ -102,7 +104,7 @@ fn column_chart(style: &ChartSheetStyle, size: Vec2) -> Vec<ChartPrimitive> {
         let height = (bottom - top) * value / max;
         let x = left + slot * at as f32 + (slot - width) / 2.0;
         out.push(ChartPrimitive::rect(x, bottom - height, width, height).filled(style.series[0]));
-        out.push(ChartPrimitive::text(x + width / 2.0, bottom + band / 2.0, region).anchored(HAlign::Center, VAlign::Center));
+        out.push(ChartPrimitive::text(x + width / 2.0, bottom + band / 2.0, region).anchored(HAlign::Center, VAlign::Center).role(TypeRole::Caption));
     }
     out
 }
@@ -113,7 +115,9 @@ fn doughnut_chart(style: &ChartSheetStyle, size: Vec2) -> Vec<ChartPrimitive> {
     let centre = [size.x / 2.0, size.y * 0.55];
     let outer = size.x.min(size.y) * 0.34;
     let total: f32 = shares.iter().sum();
-    let mut out = vec![ChartPrimitive::text(centre[0], size.y * CHART_MARGIN, "Share of sales").anchored(HAlign::Center, VAlign::Center).bold()];
+    let mut out = vec![
+        ChartPrimitive::text(centre[0], size.y * CHART_MARGIN, "Share of sales").anchored(HAlign::Center, VAlign::Center).role(TypeRole::BodyStrong),
+    ];
     let mut from = 0.0;
     for (share, fill) in shares.iter().zip(style.series) {
         let to = from + std::f32::consts::TAU * share / total;

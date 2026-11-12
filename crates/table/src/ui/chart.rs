@@ -46,8 +46,8 @@ pub enum VAlign {
 /// A drawing primitive in chart coordinates (origin top-left, y down, points). The app's chart engine produces the
 /// list; the library paints it.
 ///
-/// Widths are a theme's named width or a document width (`DataStrokeWidth`). Text takes its size from the body and
-/// strong body roles and is not rotated: a text with a `rotation` other than zero paints nothing.
+/// Widths are a theme's named width or a document width (`DataStrokeWidth`). Text takes its size and face from its
+/// type role and is not rotated: a text with a `rotation` other than zero paints nothing.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum ChartPrimitive {
@@ -136,8 +136,8 @@ pub enum ChartPrimitive {
         text: String,
         /// The text colour; `None` takes the surface's ink.
         color: Option<StyleColor>,
-        /// Draw in bold.
-        bold: bool,
+        /// The type role: a title `BodyStrong`, an axis label `Caption`.
+        role: TypeRole,
         /// Horizontal anchor.
         align: HAlign,
         /// Vertical anchor.
@@ -173,9 +173,9 @@ impl ChartPrimitive {
         ChartPrimitive::Circle { center_x: center[0], center_y: center[1], radius, fill: None, stroke: None }
     }
 
-    /// Text anchored at `(x, y)` by its top left corner, in the surface's ink, not bold.
+    /// Text anchored at `(x, y)` by its top left corner, in the surface's ink, in the body role.
     pub fn text(x: f32, y: f32, text: impl Into<String>) -> Self {
-        ChartPrimitive::Text { x, y, text: text.into(), color: None, bold: false, align: HAlign::Left, valign: VAlign::Top, rotation: 0.0 }
+        ChartPrimitive::Text { x, y, text: text.into(), color: None, role: TypeRole::Body, align: HAlign::Left, valign: VAlign::Top, rotation: 0.0 }
     }
 
     /// Fills a rect or circle, or replaces the fill of a polygon or wedge.
@@ -220,11 +220,11 @@ impl ChartPrimitive {
         self
     }
 
-    /// Draws text bold.
+    /// Sets the type role of text.
     #[must_use]
-    pub fn bold(mut self) -> Self {
-        if let ChartPrimitive::Text { bold, .. } = &mut self {
-            *bold = true;
+    pub fn role(mut self, type_role: TypeRole) -> Self {
+        if let ChartPrimitive::Text { role, .. } = &mut self {
+            *role = type_role;
         }
         self
     }
@@ -336,11 +336,11 @@ pub fn paint_chart(draw: &Draw<'_>, origin: Pos2, primitives: &[ChartPrimitive],
                 }
                 outline(&shape, stroke);
             }
-            ChartPrimitive::Text { x, y, text, color, bold, align, valign, rotation } => {
+            ChartPrimitive::Text { x, y, text, color, role, align, valign, rotation } => {
                 if *rotation != 0.0 {
                     continue;
                 }
-                let mut run = TextRun::new(text.as_str()).role(if *bold { TypeRole::BodyStrong } else { TypeRole::Body });
+                let mut run = TextRun::new(text.as_str()).role(*role);
                 if let Some(color) = color {
                     run = run.color(*color);
                 }
