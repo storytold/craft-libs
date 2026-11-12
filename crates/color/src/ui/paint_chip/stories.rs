@@ -32,7 +32,7 @@ const BLUE: Srgba = Srgba::rgb(0.2, 0.4, 0.8);
 fn chip(ui: &mut Ui, data: &mut StoryData, paint: Paint) -> StoryOutput {
     let stops = vec![(0.0, BLUE), (1.0, Srgba::rgb(1.0, 1.0, 1.0))];
     let held = data.value("paint", paint);
-    PaintChip::new("Fill", Bind::bound(held), BLUE).none_allowed().gradient_editor(GradientPreview::new(stops), |_: &mut Ui| None).show(ui).into()
+    PaintChip::new("Fill", Bind::bound(held), BLUE).gradient_editor(GradientPreview::new(stops), |_: &mut Ui| None).show(ui).into()
 }
 
 #[story(PaintChip<'static>, covers = [Default], drive = Drive::Custom(take_last_kind))]
@@ -96,5 +96,5 @@ fn paint_list_selection_colors(ui: &mut Ui, data: &mut StoryData) -> StoryOutput
 fn paint_chip_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let refuse_none = |paint: &Paint| if matches!(paint, Paint::None) { Validity::Refuse(Message::new("A fill is required")) } else { Validity::Ok };
     let held = Bind::bound(data.value("paint", Paint::None)).check(refuse_none);
-    PaintChip::new("Fill", held, BLUE).none_allowed().show(ui).into()
+    PaintChip::new("Fill", held, BLUE).show(ui).into()
 }

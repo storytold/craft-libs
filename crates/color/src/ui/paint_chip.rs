@@ -231,7 +231,7 @@ impl Outcome for PaintChipOutput {
 ///   start-to-end ramp through its stops; No Color is the field fill with a `status.bad` diagonal
 ///   from bottom start to top end; a pattern tiles its texture at 1:1; a picture is stretched.
 /// - Click, Enter or Space opens a popover under the chip: a segmented No Color / Solid / Gradient / Pattern /
-///   Picture switch (No Color only with [`none_allowed`](Self::none_allowed); Gradient, Pattern and Picture only
+///   Picture switch (No Color unless [`none_allowed`](Self::none_allowed) is off; Gradient, Pattern and Picture only
 ///   when the host gave their editor), then the Compact [`ColorPicker`] (Solid, with the screen eyedropper) or the
 ///   host's editor. Switching to Solid starts from the last solid colour (or the fallback), to Gradient, Pattern
 ///   or Picture from the host's default.
@@ -245,8 +245,8 @@ pub struct PaintChip<'a> {
     common: Common,
     paint: Bind<'a, Paint>,
     fallback: Srgba,
-    /// No Color is offered (a stroke can be none, a text colour cannot).
-    #[prop(flag)]
+    /// No Color is offered; on by default (a stroke can be none, a text colour cannot).
+    #[prop]
     none_allowed: bool,
     gradient: Option<(GradientPreview, PaintEditor<'a, GradientPreview>)>,
     pattern: Option<(ImagePreview, PaintEditor<'a, ImagePreview>)>,
@@ -265,7 +265,7 @@ impl<'a> PaintChip<'a> {
             common: Common::new(),
             paint,
             fallback,
-            none_allowed: false,
+            none_allowed: true,
             gradient: None,
             pattern: None,
             picture: None,

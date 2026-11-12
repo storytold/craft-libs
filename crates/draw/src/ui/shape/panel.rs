@@ -275,7 +275,7 @@ impl<'p, 'a> Cells<'p, 'a> {
             ShapePaint::Fill => (&self.appearance.fill, self.fallbacks.0, &self.words.fill_color, &self.words.set_fill_type),
             ShapePaint::Stroke => (&self.appearance.stroke, self.fallbacks.1, &self.words.stroke_color, &self.words.set_stroke_type),
         };
-        let mut chip = PaintChip::new(name.clone(), Bind::given(paint.clone()), fallback).none_allowed().tooltip(tip.clone());
+        let mut chip = PaintChip::new(name.clone(), Bind::given(paint.clone()), fallback).tooltip(tip.clone());
         if let Some((_, color)) = self.sampled.filter(|(target, _)| *target == which) {
             chip = chip.sampled(color);
         }
