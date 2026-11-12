@@ -286,35 +286,29 @@ impl<'a, K: Value + Eq + Hash> BrushSectionList<'a, K> {
                 .space(SpaceAction::ToggleCell)
                 .sizing(Sizing::Content);
             let out = table.show_items(ui, &rows, &mut |key, icx| {
-                let keep = |column: &ColumnKey, uses: &[ColumnKey]| uses.contains(column);
-                let placed = |uses: &[ColumnKey]| -> Vec<_> { icx.cells().iter().filter(|(column, _)| keep(column, uses)).cloned().collect() };
                 match key {
                     Slot::Gap(_) => ListRow::spacer(),
-                    Slot::Link => ListRow::new(words.brushes.clone()).cells(&placed(&[NAME])).icon(IconSpec::svg(IconId::new("brush"))).rule(true),
+                    Slot::Link => ListRow::new(words.brushes.clone()).cells(icx.cells()).icon(IconSpec::svg(IconId::new("brush"))).rule(true),
                     Slot::Section(key) => {
                         let Some(section) = rows.section(key) else { return ListRow::spacer() };
-                        let mut uses = vec![NAME];
                         let mut row =
                             ListRow::new(Label::from(section.name.clone())).strong(rows.sections.first().is_some_and(|first| first.key == *key));
                         match section.kind {
                             BrushSectionKind::Switch => {
-                                uses.insert(0, CHECK);
                                 let state = ToggleState::of(section.enabled == Some(true));
                                 row = row.toggle(ToggleCell::check(CHECK, state, switch_name.clone()).row_press());
                             }
                             BrushSectionKind::Pane => {
                                 if let Some(on) = section.enabled {
-                                    uses.insert(0, CHECK);
                                     row = row.toggle(ToggleCell::check(CHECK, ToggleState::of(on), enable_name.clone()).row_press());
                                 }
                                 if let Some(locked) = section.locked {
-                                    uses.push(LOCK);
                                     let tip = if locked { words.unlock_tip.clone() } else { words.lock_tip.clone() };
                                     row = row.toggle(ToggleCell::lock(LOCK, locked).name(lock_name.clone()).tooltip(tip).always_visible());
                                 }
                             }
                         }
-                        row.cells(&placed(&uses))
+                        row.cells(icx.cells())
                     }
                 }
             });
