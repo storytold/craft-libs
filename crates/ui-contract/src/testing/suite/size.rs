@@ -16,9 +16,11 @@ pub(super) const CASES: &[Case] = &[
     Case::new("elision", ANY, elided_text_keeps_its_full_name),
 ];
 
-/// A settled fixture of the story after `change`: its shown rect, painted text runs and scroll regions.
+/// A settled fixture of the story after `change`: its shown rect, the rects of the layers it has open, painted text
+/// runs and scroll regions.
 struct Shot {
     shown: Rect,
+    layers: Vec<Rect>,
     runs: Vec<crate::runtime::egui::fixture::PaintedText>,
     scrolls: Vec<ScrollRegion>,
 }
@@ -33,7 +35,8 @@ fn shot(story: &Story, change: &dyn Fn(&mut Fixture)) -> Shot {
 impl Shot {
     /// What the settled `fixture` shows.
     fn of(fixture: &Fixture) -> Shot {
-        Shot { shown: fixture.shown(), runs: fixture.texts().to_vec(), scrolls: widgets::scroll_regions(fixture.ctx()) }
+        let layers = crate::runtime::overlay::open_entries(fixture.ctx()).into_iter().filter(|entry| !entry.window).map(|entry| entry.rect).collect();
+        Shot { shown: fixture.shown(), layers, runs: fixture.texts().to_vec(), scrolls: widgets::scroll_regions(fixture.ctx()) }
     }
 
     /// The texts this shot shows whole, in paint order, with their rects.
@@ -41,11 +44,16 @@ impl Shot {
         self.runs.iter().filter(|run| !run.elided && !run.text.trim().is_empty()).map(|run| (run.text.as_str(), run.rect)).collect()
     }
 
-    /// The text run at `run` stays in its part: it lies in the shown rect, or a scroll region's view cuts it. A run
-    /// in a scroll region's content shows through the region's view, so it stays in its part when the whole run lies
-    /// in the content, which scrolls, and what the view shows of it in the shown rect.
+    /// Whether `rect` lies in what the story shows: its shown rect or one of the layers it has open.
+    fn shows(&self, rect: Rect) -> bool {
+        inside(rect, self.shown) || self.layers.iter().any(|layer| inside(rect, *layer))
+    }
+
+    /// The text run at `run` stays in its part: it lies in what the story shows, or a scroll region's view cuts it. A
+    /// run in a scroll region's content shows through the region's view, so it stays in its part when the whole run
+    /// lies in the content, which scrolls, and what the view shows of it in what the story shows.
     fn keeps(&self, run: Rect) -> bool {
-        inside(run, self.shown)
+        self.shows(run)
             || self
                 .scrolls
                 .iter()
@@ -53,7 +61,7 @@ impl Shot {
                 .min_by(|a, b| a.content.area().total_cmp(&b.content.area()))
                 .is_some_and(|region| {
                     let seen = run.intersect(region.view);
-                    inside(run, region.content) && (!seen.is_positive() || inside(seen, self.shown))
+                    inside(run, region.content) && (!seen.is_positive() || self.shows(seen))
                 })
     }
 }
