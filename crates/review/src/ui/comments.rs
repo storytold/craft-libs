@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 
 use craft_behavior::Selection;
 use craft_i18n::{DateStyle, DateTime, TimeZone};
-use craft_ui::contract::{Bind, CollectionEvent, NoValue, Outcome, Pattern, Props as _, Show as _, ShowCollection as _, ShowContainer as _};
+use craft_ui::contract::{Bind, CollectionEvent, NoValue, Outcome, Pattern, Show as _, ShowCollection as _, ShowContainer as _};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::notices::{Notice, NoticeLayout};
