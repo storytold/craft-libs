@@ -4,7 +4,8 @@ use super::{GradientPreview, ImagePreview, Paint, PaintChip, PaintLink, PaintLin
 use craft_behavior::Mixed;
 use craft_theme::Srgba;
 use craft_ui::contract::Role;
-use craft_ui::contract::{Bind, Props as _, Show as _, Validity};
+use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Validity};
+use craft_ui::layout_components::Stack;
 use craft_ui::runtime::env::Message;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -35,9 +36,22 @@ fn chip(ui: &mut Ui, data: &mut StoryData, paint: Paint) -> StoryOutput {
     PaintChip::new("Fill", Bind::bound(held), BLUE).gradient_editor(GradientPreview::new(stops), |_: &mut Ui| None).show(ui).into()
 }
 
+/// A fill, a gradient fill and a stroke with no colour, in one column; the drives use the first.
 #[story(PaintChip<'static>, covers = [Default], drive = Drive::Custom(take_last_kind))]
 fn paint_chip(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    chip(ui, data, Paint::Solid(Srgba { r: 0.9, g: 0.2, b: 0.2, a: 0.6 }))
+    let teal_to_violet = GradientPreview::new(vec![(0.0, Srgba::rgb(0.07, 0.65, 0.58)), (1.0, Srgba::rgb(0.56, 0.31, 0.78))]);
+    let paints = data.value("paints", [Paint::Solid(BLUE), Paint::Gradient(teal_to_violet), Paint::None]);
+    let mut first = None;
+    Stack::new().show(ui, |ui, _| {
+        for (index, (label, paint)) in ["Fill", "Gradient fill", "Stroke"].into_iter().zip(paints.iter_mut()).enumerate() {
+            let stops = vec![(0.0, BLUE), (1.0, Srgba::rgb(1.0, 1.0, 1.0))];
+            let shown = PaintChip::new(label, Bind::bound(paint), BLUE).gradient_editor(GradientPreview::new(stops), |_: &mut Ui| None).show(ui);
+            if index == 0 {
+                first = Some(StoryOutput::from(shown));
+            }
+        }
+    });
+    first.unwrap_or_default()
 }
 
 #[story(PaintChip<'static>, covers = [Mixed], drive = Drive::Never)]
