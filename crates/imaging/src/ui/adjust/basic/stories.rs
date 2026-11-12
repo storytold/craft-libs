@@ -26,11 +26,10 @@ fn threshold(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 }
 
 fn color_balance(ui: &mut Ui, data: &mut StoryData, start: ColorBalanceTone) -> StoryOutput {
-    let value = data.value(
-        "value",
-        ColorBalance { shadows: [-20.0, 0.0, 30.0], midtones: [10.0, -15.0, 0.0], highlights: [25.0, 10.0, -20.0], ..ColorBalance::default() },
-    );
-    let tone = data.value("tone", start);
+    let shifts =
+        ColorBalance { shadows: [-20.0, 0.0, 30.0], midtones: [10.0, -15.0, 0.0], highlights: [25.0, 10.0, -20.0], ..ColorBalance::default() };
+    // The host keeps the value and the tone shown.
+    let (value, tone) = data.value("value", (shifts, start));
     let shown = ColorBalanceEditor::new("Color Balance", Bind::bound(value)).tone(*tone).show(ui);
     *tone = shown.tone;
     shown.into()

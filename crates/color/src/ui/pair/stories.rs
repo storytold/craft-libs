@@ -31,7 +31,7 @@ struct Colors {
 
 /// A pair editing two colours as a host does: swap exchanges them, the default button sets black and white, and the
 /// popup's picker edits the well it opened on. With `ring` the secondary well is a ring, as DesignCraft's stroke.
-fn editing(ui: &mut Ui, data: &mut StoryData, names: [&str; 2], start: [Srgba; 2], ring: bool) -> StoryOutput {
+fn editing(ui: &mut Ui, data: &mut StoryData, names: [&'static str; 2], start: [Srgba; 2], ring: bool) -> StoryOutput {
     let defaults = [Srgba::rgb(0.0, 0.0, 0.0), Srgba::rgb(1.0, 1.0, 1.0)];
     let state = data.value("colors", Colors { active: Well::Primary, colors: start });
     let wells = [PairWell::new(names[0], state.colors[0]), PairWell::new(names[1], state.colors[1]).ring(ring)];
