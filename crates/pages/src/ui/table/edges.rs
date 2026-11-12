@@ -312,7 +312,7 @@ impl Component for EdgePicker<'_> {
                 .radius(sunken.radius)
                 .border(edge, cx.tokens.stroke.thin),
             focus: cx.focus_look(),
-            side: cx.tokens.size.thumb.sm,
+            side: cx.tokens.size.thumb.lg,
             inset: cx.tokens.space.pad.regular,
             fill: cx.color(colors.surface.sunken),
             on: Stateful::new(cx.color(colors.accent.solid)),
