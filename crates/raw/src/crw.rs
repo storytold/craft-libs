@@ -63,6 +63,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, caller: &Limits) -> Result<RawIma
         opcodes: OpcodeLists::default(),
         camera,
         cinema: Default::default(),
+        lens_metadata: Default::default(),
     };
     img.validate_for(mode)?;
     Ok(img)

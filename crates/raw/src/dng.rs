@@ -441,6 +441,7 @@ fn decode_ifd(bytes: &[u8], tiff: &Tiff, pixels: &Ifd, main: &Ifd, mode: Mode, f
         opcodes,
         camera: Camera::from_ifd0(ifd0),
         cinema: cinema_tags(ifd0, raw),
+        lens_metadata: Default::default(),
     };
     img.validate_for(mode)?;
     Ok(img)
