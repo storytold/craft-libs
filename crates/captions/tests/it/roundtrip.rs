@@ -175,7 +175,13 @@ proptest! {
         let opts = WriteOptions { rate: Some(rate), ..Default::default() };
         let bytes = write(&doc, Format::Stl, opts);
         let back = parse(&bytes, Format::Stl).unwrap();
-        prop_assert_eq!(&back.cues, &doc.cues);
+        // The generator makes literal text without markup; STL import escapes its ampersands.
+        // Exact cue equality otherwise, so an unexpected style tag cannot disappear.
+        let mut expected = doc.cues.clone();
+        for cue in &mut expected {
+            cue.text = cue.text.replace('&', "&amp;");
+        }
+        prop_assert_eq!(&back.cues, &expected);
         prop_assert_eq!(write(&back, Format::Stl, opts), bytes);
     }
 
