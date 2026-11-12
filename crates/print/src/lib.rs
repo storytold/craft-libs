@@ -91,6 +91,46 @@ pub struct Job {
     /// The printer driver's own job options (a PPD keyword and the chosen value), such as the
     /// paper tray or paper type; see [`printer_options`]. CUPS only.
     pub options: Vec<(String, String)>,
+    /// The settings chosen in the Windows printer driver's own dialog ([`driver_settings_dialog`]),
+    /// for this job only: media type, print quality and the driver's other options. The job's
+    /// own copies, collation, paper, orientation and scaling win over them, and so do `duplex`
+    /// when it is `Some` and `grayscale` when it is on; the dialog's pages per sheet, binding and
+    /// poster features are removed from them. A job printed on a printer of another name than the
+    /// one they were chosen for prints without them. Windows only; CUPS ignores them.
+    pub driver_settings: Option<DriverSettings>,
+}
+
+/// The settings a Windows printer driver's own dialog returned for one printer
+/// ([`driver_settings_dialog`]): its DEVMODE, private part included.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DriverSettings {
+    printer: String,
+    dev_mode: rgb::DevMode,
+}
+
+impl DriverSettings {
+    /// Settings for `printer`, for example ones an app kept from an earlier
+    /// [`driver_settings_dialog`] (`rgb::DevMode::to_hex` and `from_hex`).
+    pub fn new(printer: impl Into<String>, dev_mode: rgb::DevMode) -> Self {
+        Self { printer: printer.into(), dev_mode }
+    }
+
+    /// The printer the settings were chosen for.
+    pub fn printer(&self) -> &str {
+        &self.printer
+    }
+
+    /// The driver's DEVMODE, as its dialog returned it.
+    pub fn dev_mode(&self) -> &rgb::DevMode {
+        &self.dev_mode
+    }
+}
+
+/// The job's [`Job::driver_settings`] when they were chosen for the printer named exactly
+/// `printer`. Settings chosen for a printer of another name are left out, since Windows may
+/// replace settings meant for another printer with defaults.
+pub(crate) fn settings_for<'a>(job: &'a Job, printer: &str) -> Option<&'a DriverSettings> {
+    job.driver_settings.as_ref().filter(|settings| settings.printer() == printer)
 }
 
 impl Default for Job {
@@ -105,6 +145,7 @@ impl Default for Job {
             grey_pages: false,
             title: "Craft".into(),
             options: Vec::new(),
+            driver_settings: None,
         }
     }
 }
@@ -418,6 +459,87 @@ pub fn open_printer_preferences(printer: &str) -> Result<(), Error> {
         let _ = printer;
         Err(Error::Spool("printer preferences open only on Windows; use the printer's options instead".into()))
     }
+}
+
+/// Whether [`driver_settings_dialog`] can show the driver's own dialog for one job (Windows).
+pub const HAS_DRIVER_SETTINGS_DIALOG: bool = cfg!(windows);
+
+/// Show the job printer's driver dialog (Windows: `DocumentProperties`), modal to `parent` (a
+/// window handle), for this job only. The dialog opens on the job's [`Job::driver_settings`] when
+/// they were chosen for this printer and the driver still reads them, without what the job
+/// decides itself (see [`Job::driver_settings`]), else on the settings the driver gives a new
+/// job, with the job's copies and collation. `Ok(true)`: the user chose OK and
+/// `job.driver_settings` holds the new settings. `Ok(false)`: the user canceled, or the dialog
+/// returned the settings it opened on unchanged (some drivers return OK from Cancel), and the job
+/// is unchanged. The settings are kept in the job only; unlike [`open_printer_preferences`],
+/// craft-print does not save them as the printer's defaults.
+///
+/// The paper, orientation and scaling the job's ticket sets are its own, whatever the dialog
+/// shows. An error says which step failed: the printer, reading the driver's settings, or the
+/// dialog itself (a driver without one). Other platforms return an error.
+pub fn driver_settings_dialog(job: &mut Job, parent: Option<isize>) -> Result<bool, Error> {
+    #[cfg(windows)]
+    {
+        dialog_via(job, windows::default_printer(), windows::settings_seed, |printer, seed| rgb::settings_dialog(printer, Some(seed), parent))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (job, parent);
+        Err(Error::Spool("the printer driver's own settings open only on Windows".into()))
+    }
+}
+
+/// [`driver_settings_dialog`] with the default printer, the settings the dialog opens on
+/// (`seed`) and the dialog supplied, so tests can stand in for the driver. A job's printer is
+/// used as it is named, an empty name included, as when the job is printed.
+#[cfg(any(test, windows))]
+pub(crate) fn dialog_via(
+    job: &mut Job,
+    default: Option<String>,
+    seed: impl FnOnce(&Job, &str) -> Result<Seed, Error>,
+    dialog: impl FnOnce(&str, &rgb::DevMode) -> rgb::Result<Option<rgb::DevMode>>,
+) -> Result<bool, Error> {
+    let printer = match &job.printer {
+        Some(printer) => printer.clone(),
+        None => default.filter(|p| !p.is_empty()).ok_or_else(|| Error::Spool("there is no default printer; choose a printer".into()))?,
+    };
+    let seed = seed(job, &printer)?;
+    match dialog(&printer, &seed.dev_mode) {
+        // Some drivers return OK from Cancel with the settings they were given, so settings that
+        // come back unchanged leave the job as it is, unless they replace earlier settings the
+        // driver can no longer read.
+        Ok(Some(dev_mode)) if dev_mode == seed.dev_mode && !seed.replaces_unreadable => Ok(false),
+        Ok(Some(dev_mode)) => {
+            job.driver_settings = Some(DriverSettings::new(printer, dev_mode));
+            Ok(true)
+        }
+        Ok(None) => Ok(false),
+        Err(e) => Err(Error::Spool(format!("the printer driver's settings dialog could not be shown: {e}"))),
+    }
+}
+
+/// The settings [`driver_settings_dialog`] opens the driver's dialog on.
+#[cfg(any(test, windows))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Seed {
+    pub dev_mode: rgb::DevMode,
+    /// The job has settings for this printer that the driver could not read, so the seed was
+    /// made without them.
+    pub replaces_unreadable: bool,
+}
+
+/// The DEVMODE at the start of `bytes`, `dmSize + dmDriverExtra` long: the buffer
+/// `PrintTicket::to_dev_mode` returns is larger than the settings it holds, and
+/// `rgb::DevMode::from_bytes` takes only the exact length. `None` when `bytes` is shorter than its
+/// sizes say.
+#[cfg(any(test, windows))]
+pub(crate) fn whole_dev_mode(mut bytes: Vec<u8>) -> Option<Vec<u8>> {
+    let word = |at: usize| bytes.get(at..at + 2).map(|w| usize::from(u16::from_le_bytes([w[0], w[1]])));
+    let size = word(68)? + word(70)?;
+    (size <= bytes.len()).then(|| {
+        bytes.truncate(size);
+        bytes
+    })
 }
 
 /// `lpstat`, forced to print untranslated messages so [`parse_lpstat`] and [`parse_lpstat_e`] can
@@ -896,9 +1018,13 @@ pub(crate) fn job_message(stdout: &[u8]) -> String {
     s.strip_suffix("(0 file(s))").map_or(s, str::trim_end).to_string()
 }
 
-/// [`command_preview`] for the Windows backend.
-fn windows_preview(job: &Job) -> Vec<String> {
-    vec![
+/// [`command_preview`] for the Windows backend; `default` is the default printer's name.
+fn windows_preview(job: &Job, default: Option<&str>) -> Vec<String> {
+    // The driver's dialog decides what the job leaves open, when its settings are for the printer
+    // the job prints on.
+    let target = job.printer.as_deref().or(default);
+    let chosen = target.is_some_and(|printer| settings_for(job, printer).is_some());
+    let mut preview = vec![
         "xps-print".into(),
         format!("printer={}", job.printer.as_deref().unwrap_or("(default)")),
         format!("copies={}", job.copies.clamp(1, 999)),
@@ -906,6 +1032,7 @@ fn windows_preview(job: &Job) -> Vec<String> {
         format!(
             "duplex={}",
             match job.duplex {
+                None if chosen => "(driver settings)",
                 None => "(queue default)",
                 Some(Duplex::Off) => "one-sided",
                 Some(Duplex::LongEdge) => "two-sided-long-edge",
@@ -919,8 +1046,24 @@ fn windows_preview(job: &Job) -> Vec<String> {
                 Scaling::ShrinkToFit => "shrink-to-fit",
             }
         ),
-        format!("color={}", if job.grayscale { "monochrome" } else { "(driver default)" }),
-    ]
+        format!(
+            "color={}",
+            match (job.grayscale, chosen) {
+                (true, _) => "monochrome",
+                (false, true) => "(driver settings)",
+                (false, false) => "(driver default)",
+            }
+        ),
+    ];
+    if let Some(settings) = &job.driver_settings {
+        let unused = match (chosen, target) {
+            (true, _) => "",
+            (false, Some(_)) => " (another printer: not used)",
+            (false, None) => " (no default printer: not used)",
+        };
+        preview.push(format!("driver-settings={}{unused}", settings.printer()));
+    }
+    preview
 }
 
 /// The platform backend. No backend is available in the browser.
@@ -947,7 +1090,13 @@ pub const fn backend() -> Option<Backend> {
 pub fn command_preview(job: &Job) -> Result<Vec<String>, Error> {
     match backend() {
         Some(Backend::Cups) => Ok(std::iter::once("lp".to_string()).chain(lp_args(job)).collect()),
-        Some(Backend::WindowsPdf) => Ok(windows_preview(job)),
+        Some(Backend::WindowsPdf) => {
+            #[cfg(windows)]
+            let default = windows::default_printer();
+            #[cfg(not(windows))]
+            let default: Option<String> = None;
+            Ok(windows_preview(job, default.as_deref()))
+        }
         None => Err(Error::Spool("printing to a printer isn't available on this platform yet; save the print-ready PDF instead".into())),
     }
 }

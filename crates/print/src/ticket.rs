@@ -105,6 +105,67 @@ pub(crate) fn ticket_xml_with(job: &Job, landscape: bool, document_only: bool, g
     )
 }
 
+/// Whether the job's own ticket decides the Print Schema feature or parameter `name`, so the
+/// driver dialog's value for it is left out ([`driver_settings_xml`]): copies, collation, paper,
+/// orientation and scaling always; two-sided when the job sets it; color when it asks for grayscale.
+/// Pages per sheet, binding (booklets included) and posters are left out too: they change the
+/// size and the number of the sheets, which the job's own size and its copies rely on. The
+/// parameters of these features start with their feature's name. Only the ticket's features are
+/// removed: a driver that also keeps one of them in its private settings, which are kept, can
+/// still apply it from there.
+fn job_decides(name: &str, job: &Job) -> bool {
+    matches!(
+        name,
+        "JobCopiesAllDocuments" | "DocumentCopiesAllPages" | "PageCopies" | "JobCollateAllDocuments" | "DocumentCollate" | "PageOrientation"
+    ) || ["PageMediaSize", "PageScaling", "JobNUpAllDocumentsContiguously", "DocumentNUp", "JobBindAllDocuments", "DocumentBinding", "PagePoster"]
+        .iter()
+        .any(|feature| name.starts_with(feature))
+        || (job.duplex.is_some() && matches!(name, "JobDuplexAllDocumentsContiguously" | "DocumentDuplex"))
+        || (job.grayscale && name == "PageOutputColor")
+}
+
+/// `xml` without the Print Schema features and parameter initializers directly under its root
+/// whose names `drop` picks. Everything else, vendor features and the driver's private settings
+/// included, is kept as it is written.
+fn without_schema_names(xml: &str, drop: impl Fn(&str) -> bool) -> Result<String, Error> {
+    let unreadable = || spool_error("the printer driver's settings are not a PrintTicket it can read; choose them again in its dialog");
+    let document = roxmltree::Document::parse(xml).map_err(|_| unreadable())?;
+    let root = document.root_element();
+    if !root.has_tag_name((NS_PSF, "PrintTicket")) {
+        return Err(unreadable());
+    }
+    let mut out = String::with_capacity(xml.len());
+    let mut copied = 0;
+    for node in root.children().filter(|n| n.has_tag_name((NS_PSF, "Feature")) || n.has_tag_name((NS_PSF, "ParameterInit"))) {
+        let Some(value) = node.attribute("name") else { continue };
+        let (prefix, local) = value.split_once(':').map_or((None, value), |(p, n)| (Some(p), n));
+        if node.lookup_namespace_uri(prefix) == Some(NS_PSK) && drop(local) {
+            let range = node.range();
+            out.push_str(xml.get(copied..range.start).ok_or_else(unreadable)?);
+            copied = range.end;
+        }
+    }
+    out.push_str(xml.get(copied..).ok_or_else(unreadable)?);
+    Ok(out)
+}
+
+/// The ticket of the settings chosen in the printer driver's dialog, as Windows converted them,
+/// without what the job's own ticket decides ([`job_decides`]): merged before the job's ticket,
+/// they keep the driver's other options (media type, quality, its private settings) and cannot
+/// pull the paper, the copies or a two-sided or grayscale choice of the job away from it.
+pub(crate) fn driver_settings_xml(converted: &str, job: &Job) -> Result<String, Error> {
+    without_schema_names(converted, |name| job_decides(name, job))
+}
+
+/// The job's options for the printer driver's dialog to open on: its copies and collation from
+/// [`ticket_xml_with`]. The orientation and scaling come from the sheets when the job is printed.
+/// The job's two-sided and grayscale choices are left out: the settings the dialog returns are
+/// kept, and a value of the job's in them would apply as the dialog's own once the job leaves
+/// that choice open.
+pub(crate) fn dialog_xml(job: &Job) -> Result<String, Error> {
+    without_schema_names(&ticket_xml_with(job, false, false, Grey::Monochrome), |name| !matches!(name, "JobCopiesAllDocuments" | "DocumentCollate"))
+}
+
 /// Standard paper sizes (points, portrait) and the names drivers give them. A driver can list
 /// one size twice, a plotter's "ARCH D" next to a custom 24 × 36 in entry; the named one is
 /// preferred (from storytold/pdfcraft#599).
@@ -655,6 +716,130 @@ mod tests {
         assert!(ticket_xml(&Job { duplex: Some(Duplex::Off), ..Job::default() }, false).contains("psk:OneSided"));
         assert!(ticket_xml(&Job { duplex: Some(Duplex::LongEdge), ..Job::default() }, false).contains("psk:TwoSidedLongEdge"));
         assert!(!ticket_xml(&Job { printer: Some("Office \"east\" <1>".into()), ..Job::default() }, false).contains("east"));
+    }
+
+    /// A ticket written for these tests in the shape of a converted driver dialog's settings: the
+    /// job-scope schema features, a custom paper with its parameters, pages per sheet, binding
+    /// and a poster, a media type, a vendor's quality and the driver's private settings.
+    fn converted_settings() -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:ns0000="http://example.com/vendor" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+<psf:ParameterInit name="psk:JobCopiesAllDocuments"><psf:Value xsi:type="xsd:integer">4</psf:Value></psf:ParameterInit>
+<psf:Feature name="psk:DocumentCollate"><psf:Option name="psk:Uncollated"/></psf:Feature>
+<psf:Feature name="psk:JobDuplexAllDocumentsContiguously"><psf:Option name="psk:TwoSidedShortEdge"/></psf:Feature>
+<psf:Feature name="psk:DocumentDuplex"><psf:Option name="psk:TwoSidedShortEdge"/></psf:Feature>
+<psf:Feature name="psk:PageMediaSize"><psf:Option name="psk:CustomMediaSize">
+<psf:ScoredProperty name="psk:MediaSizeWidth"><psf:ParameterRef name="psk:PageMediaSizeMediaSizeWidth"/></psf:ScoredProperty>
+</psf:Option></psf:Feature>
+<psf:ParameterInit name="psk:PageMediaSizeMediaSizeWidth"><psf:Value xsi:type="xsd:integer">914400</psf:Value></psf:ParameterInit>
+<psf:Feature name="psk:PageOrientation"><psf:Option name="psk:Landscape"/></psf:Feature>
+<psf:Feature name="psk:PageScaling"><psf:Option name="psk:CustomSquare"/></psf:Feature>
+<psf:ParameterInit name="psk:PageScalingScale"><psf:Value xsi:type="xsd:integer">50</psf:Value></psf:ParameterInit>
+<psf:Feature name="psk:DocumentNUp"><psf:Option><psf:ScoredProperty name="psk:PagesPerSheet"><psf:Value xsi:type="xsd:integer">2</psf:Value></psf:ScoredProperty></psf:Option></psf:Feature>
+<psf:Feature name="psk:JobBindAllDocuments"><psf:Option name="psk:Booklet"/></psf:Feature>
+<psf:ParameterInit name="psk:JobBindAllDocumentsGutter"><psf:Value xsi:type="xsd:integer">0</psf:Value></psf:ParameterInit>
+<psf:Feature name="psk:PagePoster"><psf:Option><psf:ScoredProperty name="psk:SheetsPerPage"><psf:Value xsi:type="xsd:integer">4</psf:Value></psf:ScoredProperty></psf:Option></psf:Feature>
+<psf:Feature name="psk:PageOutputColor"><psf:Option name="psk:Color"/></psf:Feature>
+<psf:Feature name="psk:PageMediaType"><psf:Option name="psk:PhotographicGlossy"/></psf:Feature>
+<psf:Feature name="psk:PageResolution"><psf:Option name="ns0000:Fine"/></psf:Feature>
+<psf:Feature name="ns0000:PageMediaSizeSource"><psf:Option name="ns0000:Roll"/></psf:Feature>
+<psf:ParameterInit name="ns0000:PageDevmodeSnapshot"><psf:Value xsi:type="xsd:string">AAECAw==</psf:Value></psf:ParameterInit>
+</psf:PrintTicket>"#
+        )
+    }
+
+    /// The top-level schema names left in a ticket.
+    fn schema_names(xml: &str) -> Vec<String> {
+        let document = roxmltree::Document::parse(xml).unwrap();
+        document.root_element().children().filter(|n| named_in(*n, NS_PSK)).map(|n| n.attribute("name").unwrap_or_default().to_string()).collect()
+    }
+
+    fn named_in(node: roxmltree::Node<'_, '_>, namespace: &str) -> bool {
+        node.attribute("name").and_then(|v| v.split_once(':')).is_some_and(|(prefix, _)| node.lookup_namespace_uri(Some(prefix)) == Some(namespace))
+    }
+
+    #[test]
+    fn the_driver_dialogs_settings_keep_what_the_job_leaves_open() {
+        let settings = converted_settings();
+        let kept = driver_settings_xml(&settings, &Job::default()).unwrap();
+        assert_eq!(
+            schema_names(&kept),
+            ["psk:JobDuplexAllDocumentsContiguously", "psk:DocumentDuplex", "psk:PageOutputColor", "psk:PageMediaType", "psk:PageResolution"],
+            "without a two-sided or grayscale choice of the job, the dialog's apply"
+        );
+        for vendor in ["ns0000:Fine", "ns0000:PageMediaSizeSource", "ns0000:PageDevmodeSnapshot", "AAECAw=="] {
+            assert!(kept.contains(vendor), "{vendor} is kept");
+        }
+        for job_owned in [
+            "JobCopiesAllDocuments",
+            "DocumentCollate",
+            "PageMediaSize\"",
+            "MediaSizeWidth",
+            "Landscape",
+            "CustomSquare",
+            "PageScalingScale",
+            "PagesPerSheet",
+            "Booklet",
+            "JobBindAllDocumentsGutter",
+            "SheetsPerPage",
+        ] {
+            assert!(!kept.contains(job_owned), "{job_owned} is the job's");
+        }
+        // Everything kept is the driver's own text, unchanged.
+        let line = r#"<psf:Feature name="psk:PageMediaType"><psf:Option name="psk:PhotographicGlossy"/></psf:Feature>"#;
+        assert!(kept.contains(line));
+
+        let job = Job { duplex: Some(Duplex::Off), grayscale: true, ..Job::default() };
+        assert_eq!(
+            schema_names(&driver_settings_xml(&settings, &job).unwrap()),
+            ["psk:PageMediaType", "psk:PageResolution"],
+            "the job's two-sided and grayscale win"
+        );
+    }
+
+    #[test]
+    fn the_dialogs_settings_are_matched_by_namespace_not_by_prefix() {
+        // The schema keywords under another prefix, or unprefixed in the schema's default
+        // namespace, are still the job's; a vendor feature with a schema-like name is the driver's.
+        let settings = format!(
+            r#"<PrintTicket version="1" xmlns="{NS_PSF}" xmlns:k="{NS_PSK}" xmlns:v="http://example.com/vendor">
+<Feature name="k:PageOrientation"><Option name="k:Landscape"/></Feature>
+<Feature name="v:PageOrientation"><Option name="v:Mirrored"/></Feature>
+<p:Feature xmlns:p="{NS_PSF}" xmlns="{NS_PSK}" name="PageMediaSize"/>
+</PrintTicket>"#
+        );
+        let kept = driver_settings_xml(&settings, &Job::default()).unwrap();
+        assert!(!kept.contains("k:Landscape"));
+        assert!(kept.contains("v:Mirrored"));
+        assert!(!kept.contains("name=\"PageMediaSize\""), "{kept}");
+        assert!(roxmltree::Document::parse(&kept).is_ok());
+    }
+
+    #[test]
+    fn settings_that_are_not_a_ticket_are_refused() {
+        for bad in
+            ["", "<not xml", r#"<psf:PrintCapabilities xmlns:psf="http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework"/>"#]
+        {
+            let refused = driver_settings_xml(bad, &Job::default());
+            assert!(matches!(&refused, Err(Error::Spool(m)) if m.contains("choose them again")), "{bad:?}: {refused:?}");
+        }
+    }
+
+    #[test]
+    fn the_driver_dialog_opens_on_the_jobs_copies_and_collation() {
+        let job = Job { copies: 3, collate: false, duplex: Some(Duplex::LongEdge), grayscale: true, ..Job::default() };
+        let xml = dialog_xml(&job).unwrap();
+        assert_eq!(schema_names(&xml), ["psk:JobCopiesAllDocuments", "psk:DocumentCollate"]);
+        for value in [">3<", "psk:Uncollated"] {
+            assert!(xml.contains(value), "missing {value}");
+        }
+        // The job's two-sided and grayscale choices stay out of the settings the dialog returns,
+        // so they do not outlast the job's own choice.
+        for value in ["TwoSided", "Grayscale", "Monochrome"] {
+            assert!(!xml.contains(value), "{value} is the job's");
+        }
+        assert_eq!(schema_names(&dialog_xml(&Job::default()).unwrap()), ["psk:JobCopiesAllDocuments", "psk:DocumentCollate"]);
     }
 
     /// A validated ticket as a driver returns it.
