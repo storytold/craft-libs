@@ -338,7 +338,7 @@ Content runs in every pass, and its sizes come from this pass. Layouts also read
 
 `craft-libs` pins one revision of an egui fork for every egui crate (`[patch.crates-io]` in the root `Cargo.toml`). Two revisions in one build would give two incompatible `Tokens` and `Ui` types. `craft::egui_fork::{GIT, REV}` name the fork and revision, and `craft::egui_fork::check_lockfile` checks that an app's `Cargo.lock` takes every egui package from them; an app's `xtask` calls it. An app must also patch egui to the same fork, because `[patch]` applies only at the workspace root.
 
-**The fork.** This branch pins `github.com/aiongg/egui` at `3f56db2d`. That revision is the storytold egui fork's pinned revision (`6d518fc7`, the pin on storytold `craft-libs` main) plus 20 commits the framework needs:
+**The fork.** This branch pins `github.com/aiongg/egui` at `5493e3aa`. That revision is the storytold egui fork's pinned revision (`6d518fc7`, the pin on storytold `craft-libs` main) plus 22 commits the framework needs:
 
 - `TextEditState::preedit`, and a new IME context ends the old composition
 - `InteractOptions::enabled` (disable one widget of an enabled `Ui`) and `InteractOptions::activate_on_space`
@@ -351,6 +351,7 @@ Content runs in every pass, and its sizes come from this pass. Layouts also read
 - OpenType features per text section (epaint)
 - `IdTypeMap::insert_temp_boxed` keeps the allocation of a value taken out, and `Context::ptr_eq`
 - `Context::pass_mark`, `pass_records_since` and `replay_pass_records`: a settled region replays its last pass's records
+- `egui_kittest`'s eframe harness runs `App::raw_input_hook` before each pass, as eframe does, so an app's `embed::before_input` runs in its tests
 
 The fork's `PATCHES.md` describes each patch and whether it is proposed upstream.
 
