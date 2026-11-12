@@ -19,7 +19,7 @@ roxmltree = "0.21.2"
 thiserror = { workspace = true }
 # The full SVG parser (Apache-2.0 OR MIT). The one version every Craft app uses: apps depend on
 # craft-svg's `tree` feature and take usvg from its re-export, never directly.
-usvg = { version = "=0.48.1", default-features = false, optional = true }
+usvg = { version = "=0.49.0", default-features = false, optional = true }
 
 [features]
 # `craft_svg::tree`: usvg behind the bounded entry point.

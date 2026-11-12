@@ -11,5 +11,5 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-quick-xml = { version = "0.41", default-features = false }
+quick-xml = { version = "0.42", default-features = false }
 thiserror = { workspace = true }

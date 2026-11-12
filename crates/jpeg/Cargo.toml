@@ -15,5 +15,5 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 # Reference encoder and baseline decoder for the comparison tests.
-jpeg-encoder = "0.6"
+jpeg-encoder = "0.7"
 zune-jpeg = "0.5"
