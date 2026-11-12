@@ -49,12 +49,15 @@ pub(crate) fn check_image(data: &[u8], info: &ImageInfo, limits: &Limits) -> Res
     if chunks.is_empty() {
         return Err(RawError::Corrupt("no image data chunks".into()));
     }
-    // every visible sample needs a chunk: a short offsets table would leave zero-filled (black) regions
+    // every visible sample needs a chunk: a short offsets table would leave zero-filled (black) regions.
+    // Count the table, not `chunks`: craft-tiff builds at most one descriptor per byte of file
+    // (storytold/craft-libs#827), so a grid of tiles sharing one payload lists fewer chunks than the
+    // table declares and would be refused here for a short file rather than for the data it holds.
     let (across, down) = info.grid();
     let planes = if info.planar == 2 { cpp } else { 1 };
     let expected = (across as usize).saturating_mul(down as usize).saturating_mul(planes);
-    if chunks.len() < expected {
-        return Err(RawError::Corrupt(format!("{} image data chunks, expected {expected}", chunks.len())));
+    if info.offsets.len() < expected {
+        return Err(RawError::Corrupt(format!("{} image data chunks, expected {expected}", info.offsets.len())));
     }
     // Tile sizes don't depend on the image size, and every tile is decoded at its nominal size and held until the copy:
     // a grid of tiles no larger than the image covers less than twice its width and height, so more than four times
@@ -548,6 +551,11 @@ mod lossy_tests {
             byte_counts: vec![256; 65_536],
         };
         let err = check_image(&file, &info, &Limits::default()).unwrap_err().to_string();
+        assert!(err.contains("cannot hold"), "{err}");
+        // A file shorter than its tile count must reach the same refusal: the table, not the byte-capped
+        // chunk list, says how many chunks the image declares (storytold/lightcraft#4165).
+        let short = vec![0u8; 8 + 256];
+        let err = check_image(&short, &info, &Limits::default()).unwrap_err().to_string();
         assert!(err.contains("cannot hold"), "{err}");
     }
 
