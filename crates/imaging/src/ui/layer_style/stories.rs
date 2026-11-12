@@ -1,15 +1,17 @@
 //! Stories of the Layer Style dialog: the dialog on an effect page, the Blending Options page in an RGB and a CMYK
-//! document, one story per effect page and the Styles page. The story is the host: it keeps one
-//! [`LayerStyleDraft`] per story instance, applies the dialog's edit and view state, and answers the Styles page with
-//! fake thumbnails.
+//! document, one story per effect page and the Styles page. The story is the host: it frames the body in its form
+//! dialog, keeps one [`LayerStyleDraft`] per story instance, applies the dialog's edit and view state, and answers the
+//! Styles page with fake thumbnails.
 
-use craft_ui::contract::Entry;
+use craft_ui::choice::Checkbox;
+use craft_ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft_ui::patterns::form_dialogs::FormDialog;
 use craft_ui::patterns::presets::PresetRow;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
-use super::{LayerStyleDialog, StylePresets};
+use super::{LayerStyleDialog, LayerStyleWords, StylePresets};
 use crate::layer_style::{BlendIf, Blending, EffectId, EffectInstance, EffectKind, EffectSpec, LayerStyle, LayerStyleDraft, LayerStylePage};
 
 craft_ui::words! {
@@ -79,19 +81,37 @@ fn style_of(kinds: &[EffectKind]) -> LayerStyle {
     LayerStyle { effects, ..LayerStyle::default() }
 }
 
-/// The dialog over the story's draft; the host applies the view state and the style edit.
+/// The dialog over the story's draft, in the host's frame: a form dialog with its buttons beside the body and the
+/// Preview check box under OK and Cancel. It starts closed behind the card's button; the host applies the view state
+/// and the style edit.
 fn host(ui: &mut Ui, data: &mut StoryData, start: impl FnOnce() -> LayerStyleDraft, channels: &[Label]) -> StoryOutput {
-    let words = Env::of(ui).words::<LayerStyleStoryWords>();
+    let env = Env::of(ui);
+    let (words, preview) = (env.words::<LayerStyleStoryWords>(), env.words::<LayerStyleWords>().preview.clone());
+    let mut open = *data.value("open", true);
     let draft = data.value("draft", start());
     let names: Vec<String> = channels.iter().map(|name| name.as_str().to_owned()).collect();
     let (modes, patterns, rows) = (blend_modes(&words), patterns(&words), style_rows(&words));
-    let presets = StylePresets::new(&rows, |cx, rect, _| cx.checker(rect));
-    let out = LayerStyleDialog::new("Layer Style", draft, &names).blend_modes(&modes).patterns(&patterns).style_presets(presets).show(ui);
-    out.apply_view(draft);
-    if let Some(value) = out.edit.value() {
-        draft.style = value.clone();
-    }
-    out.into()
+    let mut output = None;
+    FormDialog::new("Layer Style", Bind::bound(draft))
+        .opened(Bind::bound(&mut open))
+        .shaped(|dialog| dialog.side_buttons(true))
+        .footer_value(move |ui, draft| {
+            if let Some(on) = Checkbox::new(Bind::given(draft.preview)).label(preview.clone()).show(ui).value().copied() {
+                draft.preview = on;
+            }
+        })
+        .show(ui, |ui, _, draft| {
+            let presets = StylePresets::new(&rows, |cx, rect, _| cx.checker(rect));
+            let out = LayerStyleDialog::new("Layer Style", draft, &names).blend_modes(&modes).patterns(&patterns).style_presets(presets).show(ui);
+            out.apply_view(draft);
+            if let Some(value) = out.edit.value() {
+                draft.style = value.clone();
+            }
+            output = Some(StoryOutput::from(out));
+            true
+        });
+    *data.value("open", true) = open;
+    output.unwrap_or_default()
 }
 
 fn rgb(words: &LayerStyleStoryWords) -> [Label; 3] {
