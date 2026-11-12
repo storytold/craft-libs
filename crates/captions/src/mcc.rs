@@ -734,7 +734,8 @@ pub fn parse(text: &str) -> Result<Document> {
             continue;
         };
         let tc = tc.split('.').next().unwrap_or(tc);
-        let parts: Option<Vec<i64>> = tc.split([':', ';']).map(|p| p.parse().ok()).collect();
+        let parts: Option<Vec<i64>> =
+            tc.split([':', ';']).map(|p| if !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) { p.parse().ok() } else { None }).collect();
         let Some([h, m, s, f]) = parts.as_deref() else {
             return Err(Error::Syntax { line: n + 1, msg: format!("bad timecode \"{tc}\"") });
         };
@@ -854,6 +855,22 @@ mod tests {
     }
 
     /// Reject malformed fields instead of silently dropping them from the timecode.
+    /// Reject timecode fields carrying a sign instead of only ASCII digits.
+    #[test]
+    fn rejects_signed_timecode_fields() {
+        let doc = Document { cues: vec![cue(0, 60, "Caption")], ..Default::default() };
+        let text = write(&doc, false);
+        assert!(text.contains("00:00:00:00"));
+        assert!(parse(&text).is_ok());
+        for bad in ["00:00:+0:+0", "00:00:-0:-0", "00:00:00:-1", "00:00:00:+1"] {
+            let signed = text.replacen("00:00:00:00", bad, 1);
+            match parse(&signed) {
+                Err(Error::Syntax { msg, .. }) => assert!(msg.contains("bad timecode"), "{msg}"),
+                other => panic!("signed timecode {bad} accepted: {other:?}"),
+            }
+        }
+    }
+
     #[test]
     fn rejects_timecodes_with_unparseable_extra_fields() {
         let doc = Document { cues: vec![cue(60, 120, "Caption")], ..Default::default() };
