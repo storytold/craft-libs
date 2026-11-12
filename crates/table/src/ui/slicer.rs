@@ -8,7 +8,7 @@ use craft_theme::variant::{Emphasis, Tone};
 use craft_ui::buttons::IconButton;
 use craft_ui::contract::{
     ActivateOn, BodyCx, Collection, CollectionEvent, CollectionProps, CollectionResponse, Common, Component, Container, ContainerProps, Cx,
-    HeaderRegion, NoValue, Outcome, PaintUi, Pattern, Props, Role, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing,
+    HeaderRegion, NoValue, Outcome, Pad, PaintUi, Pattern, Props, Role, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing,
     Styled as _, WordSetCx as _, clicked,
 };
 use craft_ui::display::Text;
@@ -196,6 +196,7 @@ impl SlicerCard {
     fn new(caption: Label, filtered: bool) -> Self {
         let props = ContainerProps::new()
             .surface(SurfaceKind::Raised)
+            .pad(Pad::Control)
             .sizing(Sizing::Fill)
             .header(HeaderRegion::new().rule(true).trailing(true))
             .collection_body();
