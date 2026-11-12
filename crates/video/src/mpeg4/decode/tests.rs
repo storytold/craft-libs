@@ -38,14 +38,20 @@ fn vop_before_vol_is_an_error() {
 }
 
 /// Direct mode with hostile time stamps: the temporal distances reach ±2^20 and a vector ±2048,
-/// whose products exceed `i32` (an overflow panic in debug builds before they were widened).
+/// whose products exceed `i32` (an overflow panic in debug builds before they were widened). The
+/// vectors that come out are bounded, so the chrominance vector of four of them cannot overflow
+/// either.
 #[test]
 fn direct_mode_scaling_of_extreme_distances_does_not_overflow() {
     use super::picture::direct_scale;
     for (v, trb, trd) in [(-2048, 1 << 20, -1), (2048, 1 << 20, 1), (-2048, -(1 << 20), 1), (2047, 1 << 20, -(1 << 20))] {
         for d in [0, 5] {
             let [f, b] = direct_scale(v, d, trb, trd);
-            let sat = |x: i64| x.clamp(i64::from(i32::MIN), i64::from(i32::MAX));
+            for q in [false, true] {
+                let c = super::mc::chroma_mv_4(&[[f, b]; 4], q);
+                assert!(c.iter().all(|x| x.unsigned_abs() <= 1 << 17), "{c:?}");
+            }
+            let sat = |x: i64| x.clamp(-(1 << 16), 1 << 16);
             let (v64, trb64, trd64) = (i64::from(v), i64::from(trb), i64::from(trd));
             let exact_f = v64 * trb64 / trd64 + i64::from(d);
             let exact_b = if d == 0 { v64 * (trb64 - trd64) / trd64 } else { exact_f - v64 };
@@ -132,7 +138,7 @@ fn an_orphan_b_vop_does_not_set_the_frame_period() {
 }
 
 /// A layer header the decoder cannot decode ends the old layer: the VOPs that follow it are not
-/// decoded with the old configuration.
+/// decoded with the old configuration, and fail with the reason the layer was refused.
 #[test]
 fn an_unsupported_layer_replaces_the_old_one() {
     let mut d = Decoder::new();
@@ -140,5 +146,27 @@ fn an_unsupported_layer_replaces_the_old_one() {
     assert!(d.info().is_some());
     assert!(matches!(d.decode(&variable_rate_vol(true), 1), Err(DecodeError::Unsupported(_))));
     assert!(d.info().is_none());
-    assert!(matches!(d.decode(&b_vop(), 2), Err(DecodeError::Invalid(_))), "a VOP after the unsupported layer");
+    assert!(matches!(d.decode(&b_vop(), 2), Err(DecodeError::Unsupported(_))), "a VOP after the unsupported layer");
+    // A decodable layer ends the refusal.
+    d.decode(&[variable_rate_vol(false), b_vop()].concat(), 3).expect("a supported layer again");
+    assert!(d.info().is_some());
+}
+
+/// A refused layer and its VOPs in one chunk: `last_error` names the refusal, not the VOP.
+#[test]
+fn the_refusal_of_a_layer_stays_the_last_error() {
+    let mut d = Decoder::new();
+    assert!(d.decode(&[variable_rate_vol(true), b_vop(), b_vop()].concat(), 0).is_err());
+    assert!(matches!(d.last_error(), Some(DecodeError::Unsupported(_))), "{:?}", d.last_error());
+    assert_eq!(d.errors(), 3);
+}
+
+/// The chrominance vector of four extreme luminance vectors (more than direct mode now gives)
+/// overflowed the `i32` sum.
+#[test]
+fn chroma_vector_of_four_extreme_vectors_does_not_overflow() {
+    for q in [false, true] {
+        let c = super::mc::chroma_mv_4(&[[i32::MAX, i32::MIN]; 4], q);
+        assert!(c[0] > 0 && c[1] < 0, "{c:?}");
+    }
 }
