@@ -5,14 +5,14 @@ use craft_behavior::{ColumnWidth, EditEvent, IconId, Mixed, Selection};
 use craft_theme::variant::Tone;
 use craft_ui::buttons::Button;
 use craft_ui::contract::{
-    Bind, CollectionEvent, ColumnKey, ColumnKind, ColumnSpec, ListDrag, OpenChange, Outcome as _, Props as _, ReorderMove, ReorderRule, Scroll,
+    Bind, CollectionEvent, ColumnKey, ColumnKind, ColumnSpec, ListDrag, OpenChange, Outcome as _, Pad, Props as _, ReorderMove, ReorderRule, Scroll,
     SelectMode, Show as _, ShowCollection as _, ShowContainer as _, SpaceAction, ToggleColumn, ToggleEdit, request_rename,
 };
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::list::{List, ListWords};
 use craft_ui::notices::{Notice, NoticeIcon, NoticeLayout};
-use craft_ui::primitives::IconSpec;
+use craft_ui::primitives::{HAlign, IconSpec};
 use craft_ui::runtime::env::{Env, Label};
 use egui::{Id, Response, Ui};
 
@@ -100,8 +100,8 @@ pub(super) fn show_body(ui: &mut Ui, body: &Body<'_>, state: &mut ActionsPanelSt
     show_tree(ui, body, state, session, rename)
 }
 
-/// Button Mode's body: each action of `list` in display order as a button in its colour, set names
-/// between; a click, not a double click's second, reports `Play`.
+/// Button Mode's body: each action of `list` in display order as a full-width button in its colour, its name at the
+/// reading start, set names between, inset like the names; a click, not a double click's second, reports `Play`.
 fn show_buttons(ui: &mut Ui, body: &Body<'_>) -> BodyOutput {
     let list = body.list;
     let mut events = Vec::new();
@@ -113,21 +113,21 @@ fn show_buttons(ui: &mut Ui, body: &Body<'_>) -> BodyOutput {
     let shown_buttons = Stack::new().fill().scroll(Scroll::vertical()).show(ui, |ui, _| {
         for (set, actions) in &shown {
             if let Some(name) = set {
-                Text::new((*name).to_owned()).show(ui);
+                Row::new().pad(Pad::Control).show(ui, |ui, _| {
+                    Text::new((*name).to_owned()).show(ui);
+                });
             }
-            Row::new().wrap(true).show(ui, |ui, _| {
-                for &index in actions {
-                    let Some(action) = list.action(index) else { continue };
-                    let mut button = Button::new(action.name.clone());
-                    if let Some(color) = action.color.label_color() {
-                        button = button.tint(color.fill());
-                    }
-                    let response = button.show(ui);
-                    if response.clicks == 1 {
-                        events.push(ActionsEvent::Play { action: index, from: 0 });
-                    }
+            for &index in actions {
+                let Some(action) = list.action(index) else { continue };
+                let mut button = Button::new(action.name.clone()).fill_width(true).align(HAlign::Start);
+                if let Some(color) = action.color.label_color() {
+                    button = button.tint(color.fill());
                 }
-            });
+                let response = button.show(ui);
+                if response.clicks == 1 {
+                    events.push(ActionsEvent::Play { action: index, from: 0 });
+                }
+            }
         }
     });
     BodyOutput { events, response: shown_buttons.output, selected: None }

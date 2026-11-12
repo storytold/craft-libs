@@ -138,3 +138,26 @@ fn actions_panel_step_rows_are_shorter_than_action_rows() {
     assert!(step.height() < action.height(), "the step row ({step:?}) is shorter than the action row ({action:?})");
     assert_eq!(set.height(), action.height(), "a set row is as high as an action row");
 }
+
+/// A click at `pos`, with the pointer moved there first.
+fn click(fixture: &mut Fixture, pos: Pos2) {
+    fixture.frame(vec![pointer::moved(pos)]);
+    fixture.frame(vec![pointer::press(pos)]);
+    fixture.frame(vec![pointer::release(pos)]);
+    fixture.idle(2);
+}
+
+/// In Button Mode every action is a button as wide as the others and the body; a click plays its action once.
+#[trial]
+fn actions_panel_button_mode_buttons_span_the_body_and_a_click_plays_once() {
+    let mut shown = app(two_sets());
+    shown.state.settings.button_mode = true;
+    let (mut fixture, shared) = rig(shown);
+    let buttons: Vec<Target> = ["Loose", "First", "Second"].iter().map(|name| node(&fixture, name)).collect();
+    let width = buttons[0].rect.width();
+    assert!(buttons.iter().all(|button| button.rect.width() == width), "the buttons share one width: {buttons:?}");
+    assert!(width > PANEL.x / 2.0, "a button spans the body, not its name ({width})");
+    click(&mut fixture, buttons[1].center());
+    let plays: Vec<_> = take(&shared).into_iter().filter(|event| matches!(event, ActionsEvent::Play { .. })).collect();
+    assert!(matches!(plays.as_slice(), [ActionsEvent::Play { action: 1, from: 0 }]), "one Play of First: {plays:?}");
+}

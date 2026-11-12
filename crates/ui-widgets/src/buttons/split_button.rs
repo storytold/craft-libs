@@ -93,7 +93,15 @@ impl<'a, T: Value + 'static> SplitButton<'a, T> {
     }
 
     fn spec<'s>(&'s self, label: &'s str) -> FaceSpec<'s> {
-        FaceSpec { label, role: None, lead: self.icon.as_ref(), trail: None, loading: false, mnemonic: None }
+        FaceSpec {
+            label,
+            role: None,
+            lead: self.icon.as_ref(),
+            trail: None,
+            loading: false,
+            mnemonic: None,
+            align: crate::primitives::HAlign::Center,
+        }
     }
 }
 

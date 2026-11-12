@@ -1,8 +1,8 @@
 //! What a push or toggle button shows: a leading icon (or spinner), a label and a trailing icon, centred in the
-//! button, and the look parts the buttons share.
+//! button unless it aligns them to an edge, and the look parts the buttons share.
 
 use crate::contract::{Component, Cx, MeasureCx, PaintUi, Styled as _};
-use crate::primitives::{IconSpec, TextRun};
+use crate::primitives::{HAlign, IconSpec, TextRun};
 use crate::style::{FocusLook, IconLook, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole, UiTokens, VariantParts};
 use craft_behavior::{Flow, Insets, Metrics, Proposal};
 use craft_theme::{
@@ -42,6 +42,8 @@ pub(crate) struct FaceSpec<'a> {
     pub loading: bool,
     /// The character of `label` underlined as its mnemonic.
     pub mnemonic: Option<usize>,
+    /// Where the icons and the label sit along the area when it is wider than they are.
+    pub align: HAlign,
 }
 
 impl FaceSpec<'_> {
@@ -157,18 +159,24 @@ pub(super) fn tinted<'a>(icon: &IconSpec<'a>, color: StyleColor) -> IconSpec<'a>
     if icon.color.is_some() { icon } else { icon.color(color) }
 }
 
-/// The slots of the parts a face shows, centred in an area.
+/// The slots of the parts a face shows, placed in an area by the spec's alignment.
 struct Slots {
     lead: Option<Rect>,
     text: Option<Rect>,
     trail: Option<Rect>,
 }
 
-/// Places the icons of `side` and a label `text_width` wide with `gap` between them, centred in `area`: the leading
+/// Places the icons of `side` and a label `text_width` wide with `gap` between them, in `area` by `spec.align`: the leading
 /// icon at the reading start, the trailing icon at the reading end.
 fn slots(spec: &FaceSpec<'_>, side: f32, gap: f32, text_width: f32, area: Rect, rtl: bool) -> Slots {
     let width = side * spec.icons() as f32 + gap * spec.gaps() as f32 + text_width;
-    let (_, mut rest) = Flow::new(area, rtl).take_start(((area.width() - width) / 2.0).max(0.0));
+    let free = (area.width() - width).max(0.0);
+    let lead = match spec.align {
+        HAlign::Start => 0.0,
+        HAlign::Center => free / 2.0,
+        HAlign::End => free,
+    };
+    let (_, mut rest) = Flow::new(area, rtl).take_start(lead);
     let mut take = |extent: f32| {
         let (slot, next) = rest.take_start(extent);
         rest = next;
@@ -208,7 +216,7 @@ fn text_top(draw: &crate::primitives::Draw<'_>, area: Rect, text: &crate::primit
     area.center().y - body.size().y / 2.0 + body.first_baseline - text.first_baseline
 }
 
-/// Paints the face centred in `area`: the leading icon at the reading start, the trailing icon at the reading end.
+/// Paints the face in `area`, placed by `spec.align`: the leading icon at the reading start, the trailing icon at the reading end.
 pub(crate) fn paint<C: Component>(ui: &PaintUi<'_>, cx: &Cx<'_, C>, ink: (&TextLook, &IconLook), look: &FaceLook, spec: &FaceSpec<'_>, area: Rect) {
     let (text_look, icon_look) = ink;
     let (text_color, icon_color, side) = (cx.resolve(&text_look.color), cx.resolve(&icon_look.color), icon_look.side);

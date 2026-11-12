@@ -192,6 +192,7 @@ impl Segment {
             trail: None,
             loading: false,
             mnemonic: None,
+            align: crate::primitives::HAlign::Center,
         }
     }
 }

@@ -112,7 +112,18 @@ impl Component for TitleFace {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        face::measure(cx, &FaceSpec { label: cx.resolved.label, role: None, lead: None, trail: None, loading: false, mnemonic: None })
+        face::measure(
+            cx,
+            &FaceSpec {
+                label: cx.resolved.label,
+                role: None,
+                lead: None,
+                trail: None,
+                loading: false,
+                mnemonic: None,
+                align: crate::primitives::HAlign::Center,
+            },
+        )
     }
 
     fn sense(&self) -> Sense {
@@ -124,7 +135,15 @@ impl Component for TitleFace {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        let spec = FaceSpec { label: cx.resolved.label, role: None, lead: None, trail: None, loading: false, mnemonic: self.mnemonic };
+        let spec = FaceSpec {
+            label: cx.resolved.label,
+            role: None,
+            lead: None,
+            trail: None,
+            loading: false,
+            mnemonic: self.mnemonic,
+            align: crate::primitives::HAlign::Center,
+        };
         face::paint(ui, cx, (&cx.style.text, &cx.style.icon), &cx.style.face, &spec, cx.content_rect);
     }
 

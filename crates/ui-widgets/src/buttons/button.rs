@@ -3,7 +3,7 @@
 use super::face::{self, FaceLook, FaceSpec};
 use crate::contract::{Common, Component, Cx, MeasureCx, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props, Role, Styled as _};
 use crate::display::Spinner;
-use crate::primitives::{IconSpec, PaintShape};
+use crate::primitives::{HAlign, IconSpec, PaintShape};
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, DataColor, FocusLook, IconLook, StyleColor, StyleCx, SurfaceLook, TextLook, TypeRole};
@@ -142,12 +142,26 @@ pub struct Button<'a> {
     /// column of buttons shares one width.
     #[prop]
     fill_width: bool,
+    /// Where the icons and the label sit in a button wider than they are: centred unless set (a full-width button
+    /// that names an item at the reading start).
+    #[prop]
+    align: HAlign,
 }
 
 impl<'a> Button<'a> {
     /// A button showing `label`, which is also its accessible name.
     pub fn new(label: impl Into<Label>) -> Self {
-        Button { common: Common::new(), icon: None, trailing_icon: None, loading: false, painted: None, tint: None, fill_width: false }.label(label)
+        Button {
+            common: Common::new(),
+            icon: None,
+            trailing_icon: None,
+            loading: false,
+            painted: None,
+            tint: None,
+            fill_width: false,
+            align: HAlign::Center,
+        }
+        .label(label)
     }
 
     /// A button bound to `command`: its label, enabled state and activation follow the command.
@@ -157,7 +171,15 @@ impl<'a> Button<'a> {
 
     fn spec<'s>(&'s self, label: &'s str) -> FaceSpec<'s> {
         let label = self.painted.as_ref().map_or(label, Label::as_str);
-        FaceSpec { label, role: None, lead: self.icon.as_ref(), trail: self.trailing_icon.as_ref(), loading: self.loading, mnemonic: None }
+        FaceSpec {
+            label,
+            role: None,
+            lead: self.icon.as_ref(),
+            trail: self.trailing_icon.as_ref(),
+            loading: self.loading,
+            mnemonic: None,
+            align: self.align,
+        }
     }
 }
 

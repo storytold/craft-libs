@@ -106,6 +106,7 @@ impl<'a> ToggleButton<'a> {
             trail: self.trailing_icon.as_ref(),
             loading: false,
             mnemonic: None,
+            align: crate::primitives::HAlign::Center,
         }
     }
 }
