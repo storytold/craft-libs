@@ -10,7 +10,7 @@ use craft_ui::contract::{
 use craft_ui::primitives::ContentPainterCx;
 use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, StyleCx};
-use craft_ui::value_drag::PointPicker;
+use craft_ui::value_drag::{PointMark, PointPicker};
 use egui::{Mesh, Rect, Vec2, pos2};
 
 #[cfg(feature = "screen-testing")]
@@ -88,7 +88,7 @@ impl<'a> ColorArea<'a> {
             None => channel_step(model, channel),
         });
         let (mode, levels) = (self.mode, self.levels());
-        let picker = PointPicker::new(Bind::given(point), x, y).steps(steps);
+        let picker = PointPicker::new(Bind::given(point), x, y).steps(steps).mark(PointMark::Ring);
         if field { picker.backdrop(move |painter: &ContentPainterCx, plot: Rect| paint_field(painter, plot, mode, &base, levels)) } else { picker }
     }
 }

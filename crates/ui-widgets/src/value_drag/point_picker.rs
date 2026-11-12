@@ -1,6 +1,7 @@
 //! `PointPicker`: a point on a well, over an image or a checkerboard. A press on the well jumps the point there, a drag
-//! on the point or the well follows the pointer, and the arrow keys and the wheel move it along one axis each. The X
-//! and Y fields are `NumberField`s the caller shows beside it, bound to the same value.
+//! on the point or the well follows the pointer, and the arrow keys and the wheel move it along one axis each; Page Up
+//! and Page Down move it a tenth of the height, Home and End to the left and right edges. The X and Y fields are
+//! `NumberField`s the caller shows beside it, bound to the same value.
 
 use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Numeric, PaintUi, PartsCx, Pointer as _,
@@ -52,10 +53,21 @@ pub struct PointPickerStyle {
     metrics: Metrics,
     #[style(focus)]
     focus: FocusLook,
-    /// The length of the cross at the point.
+    /// The length of the cross, and the width of the ring, at the point.
     thumb: f32,
     /// The side of the square that grabs the point.
     hit: f32,
+}
+
+/// How a point picker marks its point.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PointMark {
+    /// A cross, for a point over an image.
+    #[default]
+    Cross,
+    /// A ring that leaves the colour under the point in view, for a colour field.
+    Ring,
 }
 
 /// Paints the image under the point into the plot rect through the content painter: `PointPicker::backdrop`.
@@ -97,6 +109,9 @@ pub struct PointPicker<'a> {
     /// Paints the image under the point; without one the well shows a checkerboard.
     #[prop(func = "FnOnce(&ContentPainterCx, Rect)")]
     backdrop: Option<Backdrop<'a>>,
+    /// How the point is marked.
+    #[prop]
+    mark: PointMark,
 }
 
 impl<'a> PointPicker<'a> {
@@ -111,8 +126,19 @@ impl<'a> PointPicker<'a> {
             if start > end { (end..=start, true) } else { (range, false) }
         };
         let ((x, flip_x), (y, flip_y)) = (order(x), order(y));
-        PointPicker { common: Common::new(), value, x, y, flipped: [flip_x, flip_y], step: None, steps: None, aspect: None, backdrop: None }
-            .ltr_axis()
+        PointPicker {
+            common: Common::new(),
+            value,
+            x,
+            y,
+            flipped: [flip_x, flip_y],
+            step: None,
+            steps: None,
+            aspect: None,
+            backdrop: None,
+            mark: PointMark::Cross,
+        }
+        .ltr_axis()
     }
 
     fn ranges(&self) -> [&RangeInclusive<f64>; 2] {
@@ -164,16 +190,26 @@ impl<'a> PointPicker<'a> {
         if self.flipped[axis] { *range.end()..=*range.start() } else { range.clone() }
     }
 
-    /// The value of `axis` after an arrow key that goes `toward` the end edge (1) or the start edge (-1) on screen.
-    fn stepped(&self, axis: usize, from: f64, toward: f64, mods: MoveMods) -> f64 {
+    /// The value of `axis` after a key that goes `toward` the end edge (1) or the start edge (-1) on screen as far as
+    /// `reach`.
+    fn stepped(&self, axis: usize, from: f64, toward: f64, reach: Reach, mods: MoveMods) -> f64 {
         let raises = (toward > 0.0) != self.flipped[axis];
-        let (axes, mv) = match (axis, raises) {
-            (0, true) => (ValueAxes::Horizontal, NavMove::Forward),
-            (0, false) => (ValueAxes::Horizontal, NavMove::Back),
-            (_, true) => (ValueAxes::Vertical, NavMove::Up),
-            (_, false) => (ValueAxes::Vertical, NavMove::Down),
+        let axes = if axis == 0 { ValueAxes::Horizontal } else { ValueAxes::Vertical };
+        let mv = match (reach, axis, raises) {
+            (Reach::Step, 0, true) => NavMove::Forward,
+            (Reach::Step, 0, false) => NavMove::Back,
+            (Reach::Step, _, true) => NavMove::Up,
+            (Reach::Step, _, false) => NavMove::Down,
+            (Reach::Page, _, true) => NavMove::PageUp,
+            (Reach::Page, _, false) => NavMove::PageDown,
+            (Reach::Edge, _, true) => NavMove::End,
+            (Reach::Edge, _, false) => NavMove::Start,
         };
-        match step_value(&self.value_steps(axis, from), axes, mv, mods) {
+        let mut steps = self.value_steps(axis, from);
+        if reach == Reach::Page {
+            steps.large = (steps.max - steps.min) / LARGE_STEPS;
+        }
+        match step_value(&steps, axes, mv, mods) {
             StepResult::Set(next) => self.settle(axis, next, self.grid(axis, mods.fine && !mods.extend)),
             _ => from,
         }
@@ -227,14 +263,30 @@ impl<'a> PointPicker<'a> {
     }
 }
 
-/// The axis an arrow key moves and the way on screen: 1 towards the end edge (right, bottom), -1 towards the start
-/// edge. The picker keeps its axis order (`ltr_axis`), so its moves are the physical keys.
-fn arrow(mv: NavMove) -> Option<(usize, f64)> {
+/// How far a key moves the point along its axis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reach {
+    /// One step: an arrow.
+    Step,
+    /// A tenth of the range: Page Up and Page Down.
+    Page,
+    /// To the edge: Home and End.
+    Edge,
+}
+
+/// The axis a key moves, the way on screen (1 towards the end edge, right or bottom; -1 towards the start edge) and
+/// how far. The arrows step their axis, Page Up and Page Down page y, and Home and End take x to the left and right
+/// edges. The picker keeps its axis order (`ltr_axis`), so its moves are the physical keys.
+fn key_move(mv: NavMove) -> Option<(usize, f64, Reach)> {
     match mv {
-        NavMove::Forward => Some((0, 1.0)),
-        NavMove::Back => Some((0, -1.0)),
-        NavMove::Down => Some((1, 1.0)),
-        NavMove::Up => Some((1, -1.0)),
+        NavMove::Forward => Some((0, 1.0, Reach::Step)),
+        NavMove::Back => Some((0, -1.0, Reach::Step)),
+        NavMove::Down => Some((1, 1.0, Reach::Step)),
+        NavMove::Up => Some((1, -1.0, Reach::Step)),
+        NavMove::PageDown => Some((1, 1.0, Reach::Page)),
+        NavMove::PageUp => Some((1, -1.0, Reach::Page)),
+        NavMove::End => Some((0, 1.0, Reach::Edge)),
+        NavMove::Start => Some((0, -1.0, Reach::Edge)),
         _ => None,
     }
 }
@@ -302,9 +354,9 @@ impl Component for PointPicker<'_> {
         let mut now = cx.value().cloned().unwrap_or(ALL_MIXED);
         // While a drag runs, keys, the wheel and screen-reader requests change nothing; they are still taken.
         while let Some((mv, mods)) = cx.intents().take_move() {
-            let Some((axis, toward)) = arrow(mv).filter(|_| !running) else { continue };
+            let Some((axis, toward, reach)) = key_move(mv).filter(|_| !running) else { continue };
             let from = self.placed(&now)[axis];
-            now = with_axis(&now, axis, self.stepped(axis, from, toward, mods));
+            now = with_axis(&now, axis, self.stepped(axis, from, toward, reach, mods));
             cx.set(now);
         }
         if let Some(wheel) = cx.take_wheel()
@@ -366,8 +418,13 @@ impl Component for PointPicker<'_> {
         }
         if let Some(value) = cx.value() {
             let (center, arm) = (self.position(self.placed(value), plot), cx.style.thumb / 2.0);
-            for (from, to) in [(Vec2::new(arm, 0.0), Vec2::new(-arm, 0.0)), (Vec2::new(0.0, arm), Vec2::new(0.0, -arm))] {
-                painter.outline(&PaintShape::Path(vec![center + from, center + to]));
+            match self.mark {
+                PointMark::Cross => {
+                    for (from, to) in [(Vec2::new(arm, 0.0), Vec2::new(-arm, 0.0)), (Vec2::new(0.0, arm), Vec2::new(0.0, -arm))] {
+                        painter.outline(&PaintShape::Path(vec![center + from, center + to]));
+                    }
+                }
+                PointMark::Ring => painter.outline(&PaintShape::Circle(center, arm)),
             }
         }
     }

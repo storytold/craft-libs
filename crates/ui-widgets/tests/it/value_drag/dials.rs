@@ -1,5 +1,6 @@
 //! `AngleDial` points at the pointer in its orientation and steps round or against the ends of its range;
-//! `PointPicker` sets the point under a press in the press pass and moves one axis per arrow key.
+//! `PointPicker` sets the point under a press in the press pass, moves one axis per arrow key, pages y and takes x to
+//! its edges.
 
 use craft_behavior::Mixed;
 use craft_ui::contract::{Bind, Props as _, Show as _};
@@ -84,4 +85,21 @@ fn a_press_on_the_well_sets_the_point_before_any_drag_and_the_release_commits_it
     fixture.key(Key::Escape, Modifiers::NONE);
     fixture.release_at(well.max - well.size() * 0.25);
     assert_eq!(*fixture.data().value("point", [Mixed::Mixed; 2]), [Mixed::Same(25.0), Mixed::Same(25.0)], "Escape restores the start");
+}
+
+/// Page Up and Page Down move the point a tenth of the height and back; End and Home take it to the right and left
+/// edges, leaving y where it is.
+#[trial]
+fn page_keys_move_the_point_a_tenth_up_and_down_and_home_and_end_reach_the_side_edges() {
+    let mut fixture = focused(point);
+    let at = |fixture: &Fixture| *fixture.data().value("point", [Mixed::Mixed; 2]);
+    let start = at(&fixture);
+    key(&mut fixture, Key::PageUp, Modifiers::NONE);
+    assert_eq!(at(&fixture), [start[0], Mixed::Same(40.0)], "y grows downwards, so up is a tenth of 100 less");
+    key(&mut fixture, Key::PageDown, Modifiers::NONE);
+    assert_eq!(at(&fixture), start);
+    key(&mut fixture, Key::End, Modifiers::NONE);
+    assert_eq!(at(&fixture), [Mixed::Same(100.0), start[1]]);
+    key(&mut fixture, Key::Home, Modifiers::NONE);
+    assert_eq!(at(&fixture), [Mixed::Same(0.0), start[1]]);
 }
