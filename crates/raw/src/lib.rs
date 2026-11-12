@@ -32,6 +32,8 @@
 //! | `kodak` | Kodak DCS520C TIFF: two-component lossless JPEG with a response curve |
 //! | `nef` | Nikon NEF and NRW: uncompressed, packed, Nikon's Huffman coding (lossless and lossy, 12 and 14 bits), small raw |
 //! | `rw2` | Panasonic RW2, Leica RWL and the older Panasonic / Leica RAW: packed, formats 4 and 6, format 8 prefix-coded strips, 16-bit words |
+//! | `raf` | Fujifilm RAF: uncompressed Bayer and X-Trans, Fujifilm's lossless and lossy compression, lens corrections |
+//! | `orf` | Olympus / OM System ORF: uncompressed 16-bit, 12-bit packed and two-field layouts, 16-byte blocks; compressed refused |
 //! | `pef` | Pentax PEF: uncompressed (packed or 16-bit words) and Pentax's Huffman coding (compression 65535) |
 //! | `srw` | Samsung SRW: the uncompressed variants (compression 32769 words, 32770 at 12 bits packed) |
 //! | `hasselblad` | Hasselblad 3FR and FFF (and other CFA TIFFs in the DNG layout without a DNG version): uncompressed and Hasselblad's lossless JPEG; implies `dng` |
@@ -85,10 +87,18 @@ mod nef_lens;
 #[cfg(feature = "nef")]
 mod nefc;
 pub mod opcodes;
+#[cfg(feature = "orf")]
+mod orf;
 #[cfg(feature = "pef")]
 mod pef;
 mod preview;
 pub mod profile;
+#[cfg(feature = "raf")]
+mod raf;
+#[cfg(feature = "raf")]
+mod raf_lens;
+#[cfg(feature = "raf")]
+mod rafc;
 #[cfg(feature = "rw2")]
 mod rw2;
 #[cfg(feature = "dng")]
@@ -106,7 +116,10 @@ mod unpack;
 #[cfg(feature = "dng")]
 pub use dngwrite::{DngCompression, DngWriteOptions, write_dng};
 pub use opcodes::{Opcode, OpcodeLists};
-pub use preview::{PreviewColorSpace, embedded_preview, embedded_preview_color_space, embedded_preview_covering};
+pub use preview::{
+    PREVIEW_PREFIX, PreviewColorSpace, PreviewRange, bounded_preview, embedded_preview, embedded_preview_color_space, embedded_preview_covering,
+    embedded_preview_from_range,
+};
 #[cfg(feature = "dng")]
 pub use semantic::{SemanticMask, semantic_masks};
 
@@ -200,7 +213,7 @@ pub(crate) fn checked_pixel_count(width: u64, height: u64) -> Option<u64> {
 }
 
 /// Exif `CFAPattern` (in the Exif IFD), which the Pentax family states its layout with.
-const EXIF_CFA_PATTERN: u16 = 0xa302;
+pub(crate) const EXIF_CFA_PATTERN: u16 = 0xa302;
 
 /// How the stored rows and columns map onto the upright picture: the eight Exif `Orientation` values.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -340,6 +353,8 @@ impl RawFormat {
             || (self == RawFormat::Cr2 && cfg!(feature = "cr2"))
             || (matches!(self, RawFormat::Nef | RawFormat::Nrw) && cfg!(feature = "nef"))
             || (self == RawFormat::Rw2 && cfg!(feature = "rw2"))
+            || (self == RawFormat::Raf && cfg!(feature = "raf"))
+            || (self == RawFormat::Orf && cfg!(feature = "orf"))
             || (self == RawFormat::Pef && cfg!(feature = "pef"))
             || (self == RawFormat::Srw && cfg!(feature = "srw"))
     }
@@ -628,6 +643,10 @@ fn decode_in(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawImage> {
         RawFormat::Nef | RawFormat::Nrw => nef::decode(bytes, mode, limits),
         #[cfg(feature = "rw2")]
         RawFormat::Rw2 => rw2::decode(bytes, mode, limits),
+        #[cfg(feature = "raf")]
+        RawFormat::Raf => raf::decode(bytes, mode, limits),
+        #[cfg(feature = "orf")]
+        RawFormat::Orf => orf::decode(bytes, mode, limits),
         #[cfg(feature = "pef")]
         RawFormat::Pef => pef::decode(bytes, mode, limits),
         #[cfg(feature = "srw")]

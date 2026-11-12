@@ -35,7 +35,9 @@ craft-cms = { path = "crates/cms" }
 craft-crs = { path = "crates/crs" }
 craft-crw = { path = "crates/crw" }
 craft-csv = { path = "crates/csv" }
+craft-dav = { path = "crates/dav" }
 craft-dialogs = { path = "crates/dialogs" }
+craft-docx = { path = "crates/docx" }
 craft-dxf = { path = "crates/dxf" }
 craft-drawingml = { path = "crates/drawingml" }
 craft-eps = { path = "crates/eps" }
@@ -85,6 +87,7 @@ craft-metafile = { path = "crates/metafile" }
 craft-offcrypto = { path = "crates/offcrypto" }
 craft-opc = { path = "crates/opc" }
 craft-ora = { path = "crates/ora" }
+craft-pptx = { path = "crates/pptx" }
 craft-penpot = { path = "crates/penpot" }
 craft-pcraft-format = { path = "crates/pcraft-format" }
 craft-plotter = { path = "crates/plotter" }

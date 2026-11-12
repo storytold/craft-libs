@@ -192,4 +192,51 @@ mod tests {
         assert_eq!(back.format.fills, t.format.fills);
         assert_eq!(back.format.lines.len(), 3);
     }
+
+    #[test]
+    fn extra_theme_colours_and_tint_rows_survive_writing_and_reading() {
+        use crate::color::{ExtraColor, MAX_EXTRA_COLORS, MAX_TINT_ROWS, Rgba, VARIANT_ROWS};
+        let mut t = Theme::default();
+        let c = &mut t.colors;
+        c.computed_tints = false;
+        c.tints.insert(SchemeSlot::Accent5, vec![Rgba::rgb(0xC7, 0xEB, 0xBA), Rgba::rgb(0x0D, 0x4A, 0x21)]);
+        c.tints.insert(SchemeSlot::Accent6, vec![]);
+        c.tints.insert(SchemeSlot::Dk2, vec![Rgba::WHITE; VARIANT_ROWS]);
+        c.extra.push(ExtraColor { name: "Sand".into(), color: Rgba::rgb(0xEB, 0xE5, 0xE0), tints: None });
+        c.extra.push(ExtraColor { name: "Broken white".into(), color: Rgba::rgb(0xFC, 0xFC, 0xFC), tints: Some(vec![]) });
+        c.extra.push(ExtraColor {
+            name: "Grey & \"tones\"".into(),
+            color: Rgba::rgb(0xA5, 0xA5, 0xA5),
+            tints: Some(vec![Rgba::rgb(0xE6, 0xE6, 0xE6), Rgba::rgb(0x32, 0x32, 0x32)]),
+        });
+        let xml = String::from_utf8(crate::theme::theme_xml(&mut Part::new(), &t)).unwrap();
+        let back = crate::theme::read_theme(&mut Part::new(), &parse(xml.as_bytes()).unwrap());
+        assert_eq!(back.colors, t.colors, "lists of 0, 2 and 5 rows, no list, and computed_tints");
+        let (cs_start, cs_end) = (xml.find("<a:clrScheme").unwrap(), xml.find("</a:clrScheme>").unwrap());
+        let ext = xml.find("<a:extLst>").unwrap();
+        assert!(cs_start < ext && ext < cs_end, "the extension belongs to the colour scheme");
+        assert!(xml.contains("computed=\"0\""), "{xml}");
+        assert!(xml.contains("<dc:color name=\"Sand\" val=\"EBE5E0\"></dc:color>"), "{xml}");
+        assert!(xml.contains("<dc:tints slot=\"accent6\"></dc:tints>"), "{xml}");
+        assert!(xml.contains("Grey &amp; &quot;tones&quot;"), "{xml}");
+        // A plain scheme writes no extension; `computed_tints = false` alone is kept.
+        let plain = String::from_utf8(crate::theme::theme_xml(&mut Part::new(), &Theme::default())).unwrap();
+        assert!(!plain.contains("extraColors"), "{plain}");
+        let mut t = Theme::default();
+        t.colors.computed_tints = false;
+        let xml = crate::theme::theme_xml(&mut Part::new(), &t);
+        assert!(!crate::theme::read_theme(&mut Part::new(), &parse(&xml).unwrap()).colors.computed_tints);
+        // Lists and extras past the limits are cut the same way on writing and reading.
+        let mut t = Theme::default();
+        let long: Vec<Rgba> = (0..MAX_TINT_ROWS + 3).map(|i| Rgba::rgb(i as u8, 0, 0)).collect();
+        t.colors.tints.insert(SchemeSlot::Accent1, long.clone());
+        for i in 0..MAX_EXTRA_COLORS + 7 {
+            t.colors.extra.push(ExtraColor { name: format!("Extra {i}"), color: Rgba::rgb((i % 256) as u8, 0, 0), tints: Some(long.clone()) });
+        }
+        let xml = crate::theme::theme_xml(&mut Part::new(), &t);
+        let back = crate::theme::read_theme(&mut Part::new(), &parse(&xml).unwrap()).colors;
+        assert_eq!(back.tints.get(&SchemeSlot::Accent1).map(Vec::as_slice), Some(&long[..MAX_TINT_ROWS]));
+        assert_eq!(back.extra.len(), MAX_EXTRA_COLORS);
+        assert_eq!(back.extra[0].tints.as_deref(), Some(&long[..MAX_TINT_ROWS]));
+    }
 }

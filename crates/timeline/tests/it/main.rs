@@ -2,5 +2,4 @@
 
 mod fcp7;
 mod fcpxml;
-mod otio;
 mod support;

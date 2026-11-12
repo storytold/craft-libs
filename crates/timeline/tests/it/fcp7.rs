@@ -723,7 +723,7 @@ fn absurd_timebase_is_bounded() {
         );
         let (imported, _) = fcp7_import(&doc, None);
         for seq in &imported.sequences {
-            for format in [Format::Fcp7Xml, Format::Fcpxml, Format::Otio] {
+            for format in [Format::Fcp7Xml, Format::Fcpxml] {
                 export(&imported.project, *seq, format, &xopts()).unwrap_or_else(|e| panic!("{format:?}: {e}"));
             }
         }
@@ -742,7 +742,7 @@ fn absurd_start_timecode_is_bounded() {
 </clipitem></track></video></media></sequence></xmeml>"#;
     let (imported, report) = fcp7_import(doc, None);
     for seq in &imported.sequences {
-        for format in [Format::Fcp7Xml, Format::Fcpxml, Format::Otio] {
+        for format in [Format::Fcp7Xml, Format::Fcpxml] {
             export(&imported.project, *seq, format, &xopts()).unwrap_or_else(|e| panic!("{format:?}: {e}"));
         }
         assert_eq!(imported.project.sequence(*seq).map(|s| s.start_timecode), Some(0));

@@ -18,10 +18,6 @@ fn equations() -> Vec<(String, math::Arg, bool)> {
     v
 }
 
-/// Equations whose LaTeX this crate writes in a form it reads back differently (a function
-/// raised to a power: `\sin^2\theta` comes back as `(\sin)^2 θ`). Known; kept visible here.
-const LATEX_ROUND_TRIP_GAPS: &[&str] = &["func"];
-
 #[test]
 fn every_corpus_equation_reads_without_unknown_commands() {
     for (id, tree, _) in equations() {
@@ -54,10 +50,8 @@ fn every_corpus_equation_survives_mathml_and_latex() {
         let lin = math::to_linear(&tree);
         let ml = mathml::to_mathml(&tree, display, "");
         assert_eq!(mathml::parse(&ml).and_then(|m| mathml::read(&m)), Some((lin.clone(), display)), "{id}: {ml}");
-        if !LATEX_ROUND_TRIP_GAPS.contains(&id.as_str()) {
-            let tex = math_latex::to_latex(&tree);
-            assert_eq!(math::to_linear(&math_latex::parse_latex(&tex)), lin, "{id}: {tex}");
-        }
+        let tex = math_latex::to_latex(&tree);
+        assert_eq!(math::to_linear(&math_latex::parse_latex(&tex)), lin, "{id}: {tex}");
     }
 }
 
