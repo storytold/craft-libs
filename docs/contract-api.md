@@ -3570,7 +3570,7 @@ The key stage (spec 9.1, 9.2, 9.3, 9.7): the input hook strips the keys the runt
 - `craft_ui::runtime::keys::MoveMods`: re-export of `craft_behavior::intent::MoveMods`.
 - `craft_ui::runtime::keys::NavMove`: re-export of `craft_behavior::intent::NavMove`.
 - `craft_ui::runtime::keys::PartRef`: re-export of `craft_behavior::part::PartRef`.
-- `craft_ui::runtime::keys::focus_holds`: `pub fn focus_holds(ctx: &Context, chord: Chord) -> bool`. Whether the focused component of the running viewport holds a press of `chord`: it claims the chord, or its
+- `craft_ui::runtime::keys::focus_holds`: `pub fn focus_holds(ctx: &Context, chord: Chord) -> bool`. Whether the focused component of the running viewport holds a press of `chord`, as routing decides for the press:
 - `craft_ui::runtime::keys::with_window_intents`: `pub fn with_window_intents(ctx: &Context, rtl: bool, take: impl FnOnce(&mut Intents) -> bool) -> bool`. Offers the window's unfocused intents to `take` while nothing in the window has framework focus, and writes back
 
 ## `craft_ui::runtime::layout_memory`
@@ -3655,7 +3655,7 @@ The layer stack (15.2): the record of the egui layers shown, their order and the
 - `craft_ui::runtime::overlay::Rank`: `pub enum Rank { Window, Toast, Popup, Modal { backdrop: Backdrop }, ModalChrome, Tooltip }`. An overlay's place in the order. `Rank` is the only place a layer's egui order is chosen.
   - `pub const fn modal(backdrop: Backdrop) -> Rank`. A modal rank with `backdrop`.
 - `craft_ui::runtime::overlay::any_open`: `pub fn any_open(ctx: &Context, filter: OpenFilter) -> bool`. Whether any layer of the running viewport that `filter` counts was shown last frame.
-- `craft_ui::runtime::overlay::close_popups`: `pub fn close_popups(ctx: &Context)`. Queues a close of every popup layer of the running viewport shown last frame: its menus, dropdowns and lists. An
+- `craft_ui::runtime::overlay::close_popups`: `pub fn close_popups(ctx: &Context)`. Queues a close of every popup layer of the running viewport shown last frame: its menus, dropdowns and lists. The
 - `craft_ui::runtime::overlay::family`: `pub fn family(ctx: &Context, id: Id) -> SmallVec<[Id; 4]>`. `id` and everything opened from inside it, shown last frame.
 - `craft_ui::runtime::overlay::is_open`: `pub fn is_open(ctx: &Context, id: Id) -> bool`. Whether the layer `id` was shown last frame.
 - `craft_ui::runtime::overlay::request_close`: `pub fn request_close(ctx: &Context, id: Id, why: CloseReason)`. Queues a close of the layer `id` (a popup or a container). The owner's step 9 or `OverlayUi::show` collects it and
