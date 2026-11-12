@@ -33,6 +33,10 @@ pub struct Embedded {
     pub iptc: Option<Vec<u8>>,
     /// True when the PNG/WebP chunk stream could not be fully inspected.
     pub chunk_walk_incomplete: bool,
+    /// Why the Extended XMP the standard packet links to (`xmpNote:HasExtendedXMP`) could not be
+    /// read: its chunks are missing, truncated, too large, or do not cover their declared length
+    /// exactly once. [`Embedded::xmp_extended`] is `None` then.
+    pub xmp_extended_error: Option<String>,
 }
 
 /// Sniff the container and collect its metadata blocks. Unknown containers yield an empty result.
@@ -70,6 +74,7 @@ pub fn embedded(bytes: &[u8]) -> Embedded {
                 other => craft_tiff::writer::encode(t.order, other),
             }),
             chunk_walk_incomplete: false,
+            xmp_extended_error: None,
         }
     } else {
         Embedded::default()
@@ -209,12 +214,97 @@ fn jpeg_segments_inner(b: &[u8], collect_all_xmp: bool) -> (Embedded, Vec<String
             out.icc = Some(profile);
         }
     }
-    if !ext.is_empty() {
+    attach_extension(&mut out, b, ext, &ext_headers);
+    (out, xmp_packets)
+}
+
+/// Put the Extended XMP of JPEG `b` into `out`: when the standard packet links one, only that GUID's
+/// chunks count, checked strictly ([`extended_xmp`]); otherwise every chunk, offset-sorted.
+fn attach_extension(out: &mut Embedded, b: &[u8], mut ext: Vec<(u32, Vec<u8>)>, ext_headers: &[(&[u8], u32)]) {
+    // a standard packet that links an extension: only that GUID's chunks count, checked strictly
+    let reference = (!ext.is_empty())
+        .then(|| out.xmp.as_deref().and_then(|x| crate::parse_xmp(x).ok()).and_then(|d| crate::xmp::extended_xmp_reference(&d).ok().flatten()))
+        .flatten();
+    if let Some(guid) = reference {
+        match extended_xmp(b, &guid) {
+            Ok(packet) => {
+                out.xmp_extended = Some(packet);
+                out.xmp_extended_guid = Some(guid);
+            }
+            Err(error) => out.xmp_extended_error = Some(error),
+        }
+    } else if !ext.is_empty() {
         ext.sort_by_key(|p| p.0);
-        out.xmp_extended_guid = verified_extension_guid(&ext_headers, &ext);
+        out.xmp_extended_guid = verified_extension_guid(ext_headers, &ext);
         out.xmp_extended = Some(String::from_utf8_lossy(&ext.into_iter().flat_map(|p| p.1).collect::<Vec<u8>>()).into_owned());
     }
-    (out, xmp_packets)
+}
+
+/// Most bytes an Extended XMP packet may have, and most chunks it may be split into.
+const MAX_EXTENDED_XMP_BYTES: usize = 16 * 1024 * 1024;
+const MAX_EXTENDED_XMP_CHUNKS: usize = 4096;
+
+/// The Extended XMP packet of a JPEG for `guid` (upper-case hex, from the standard packet's
+/// `xmpNote:HasExtendedXMP`; Adobe XMP Specification Part 3, 1.1.3.1): the APP1 chunks carrying
+/// that GUID, which must all declare one full length of at most [`MAX_EXTENDED_XMP_BYTES`] and
+/// together cover it exactly once, in at most [`MAX_EXTENDED_XMP_CHUNKS`] complete segments.
+/// Chunks of any other GUID are not looked at, so they cannot exhaust the limits.
+fn extended_xmp(b: &[u8], guid: &str) -> Result<String, String> {
+    let mut chunks: Vec<(u32, &[u8])> = Vec::new();
+    let (mut total, mut received) = (None, 0usize);
+    let mut i = 2usize;
+    while let (Some(&0xff), Some(&marker)) = (b.get(i), b.get(i + 1)) {
+        if marker == 0xff {
+            i += 1;
+            continue;
+        }
+        if marker == 0xd8 || (0xd0..=0xd7).contains(&marker) || marker == 0x01 {
+            i += 2;
+            continue;
+        }
+        if marker == 0xd9 || marker == 0xda {
+            break;
+        }
+        let Some(len) = b.get(i + 2..i + 4).map(|l| usize::from(u16::from_be_bytes([l[0], l[1]]))).filter(|&l| l >= 2) else { break };
+        let (start, end) = (i + 4, i + 2 + len);
+        let payload = b.get(start..end.min(b.len())).unwrap_or_default();
+        if let Some(p) = payload.strip_prefix(XMP_EXT_SIG).filter(|_| marker == 0xe1)
+            && p.get(..32).is_some_and(|g| g.eq_ignore_ascii_case(guid.as_bytes()))
+        {
+            if end > b.len() {
+                return Err("Extended XMP APP1 segment is truncated".into());
+            }
+            let (Some(full), Some(offset), Some(data)) = (p.get(32..36), p.get(36..40), p.get(40..)) else {
+                return Err("Extended XMP APP1 header is truncated".into());
+            };
+            let full = u32::from_be_bytes([full[0], full[1], full[2], full[3]]);
+            if *total.get_or_insert(full) != full {
+                return Err("Extended XMP chunks declare different full lengths".into());
+            }
+            received = received.saturating_add(data.len());
+            if usize::try_from(full).map_or(true, |f| f > MAX_EXTENDED_XMP_BYTES) || received > MAX_EXTENDED_XMP_BYTES {
+                return Err("Extended XMP is larger than 16 MiB".into());
+            }
+            if chunks.len() >= MAX_EXTENDED_XMP_CHUNKS {
+                return Err("Extended XMP has too many chunks".into());
+            }
+            chunks.push((u32::from_be_bytes([offset[0], offset[1], offset[2], offset[3]]), data));
+        }
+        i = end;
+    }
+    let total = total.ok_or("the referenced Extended XMP is missing")?;
+    chunks.sort_by_key(|c| c.0);
+    let mut packet = Vec::with_capacity(received);
+    for (offset, data) in chunks {
+        if usize::try_from(offset).ok() != Some(packet.len()) {
+            return Err("Extended XMP chunks have a gap, an overlap or a repeated offset".into());
+        }
+        packet.extend_from_slice(data);
+    }
+    if u32::try_from(packet.len()).ok() != Some(total) || total == 0 {
+        return Err("Extended XMP chunks do not cover their declared full length".into());
+    }
+    String::from_utf8(packet).map_err(|_| "Extended XMP is not UTF-8".into())
 }
 
 /// The GUID shared by all Extended XMP segments when their offset-sorted chunks are contiguous from
