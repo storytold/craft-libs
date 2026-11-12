@@ -157,7 +157,7 @@
       </Dialog>
 
       <!-- Shown by Windows Installer (Restart Manager) when an upgrade or repair must replace files
-           that a running app holds open. OK closes those programs (MSIRMSHUTDOWN=2) and
+           that a running app holds open. OK requests Restart Manager shutdown/restart and
            continues; Cancel ends setup. -->
       <Dialog Id="MsiRMFilesInUse" Width="370" Height="200" Title="[ProductName] Setup" KeepModeless="yes">
         <Control Id="Title" Type="Text" X="20" Y="15" Width="330" Height="25" Text="{\CraftInstallerTitle}Files in use" />
@@ -165,7 +165,7 @@
             Text="These programs are using files that setup needs to update. Click OK to close them and continue, or Cancel to stop setup." />
         <Control Id="List" Type="ListBox" X="20" Y="80" Width="330" Height="55" Property="FileInUseProcess" Sunken="yes" TabSkip="yes" />
         <Control Id="OK" Type="PushButton" X="195" Y="165" Width="75" Height="23" Default="yes" Text="OK">
-          <Publish Property="MSIRMSHUTDOWN" Value="2" Order="1" />
+          <Publish Event="RMShutdownAndRestart" Value="0" Order="1" />
           <Publish Event="EndDialog" Value="Return" Order="2" />
         </Control>
         <Control Id="Cancel" Type="PushButton" X="280" Y="165" Width="70" Height="23" Cancel="yes" Text="Cancel">
