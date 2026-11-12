@@ -103,8 +103,8 @@ mod tests {
     #[test]
     fn outgoing_tabs_reverse_without_duplicates_and_keep_their_last_position() {
         let mut presence = TabPresence::default();
-        let a = Id::new("table");
-        let b = Id::new("chart");
+        let a = Id::unique("table");
+        let b = Id::unique("chart");
         assert_eq!(presence.update(&[(a, 2)], 0.0, 1.0, true)[0].visibility, 1.0);
         let frames = presence.update(&[(b, 3)], 1.0, 1.0, true);
         assert_eq!(frames.len(), 2);
@@ -126,8 +126,8 @@ mod tests {
     }
     #[test]
     fn motion_off_invalid_parameters_and_rollback_drop_ghosts_and_settle() {
-        let a = Id::new("a");
-        let b = Id::new("b");
+        let a = Id::unique("a");
+        let b = Id::unique("b");
         for (now, duration, motion) in [(1.2, 1.0, false), (f64::NAN, 1.0, true), (1.2, f32::NAN, true), (1.2, -1.0, true), (0.5, 1.0, true)] {
             let mut presence = TabPresence::default();
             presence.update(&[(a, 0)], 0.0, 1.0, true);
