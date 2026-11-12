@@ -132,6 +132,13 @@ impl<'a> Package<'a> {
         self.read(MANIFEST_PATH).ok().flatten().map(|xml| Manifest::parse(&xml)).unwrap_or_default()
     }
 
+    /// The package's manifest read with [`Manifest::parse_strict`]: an error when the package
+    /// has none, or one a strict read refuses, or it is over a limit.
+    pub fn manifest_strict(&mut self) -> Result<Manifest, Error> {
+        let xml = self.read(MANIFEST_PATH)?.ok_or_else(|| Error::Manifest("the package has no manifest".into()))?;
+        Manifest::parse_strict(&xml)
+    }
+
     /// Does the manifest say any file is encrypted ([`crate::crypt`])?
     pub fn is_encrypted(&mut self) -> bool {
         self.manifest().is_encrypted()

@@ -370,6 +370,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "bit_field"
+version = "0.10.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb2907cc03d08cdb1c6724ad0670ce67c4a71e1c45a6d7635224011714cfc4b1"
+
+[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -926,7 +932,7 @@ version = "0.1.0"
 name = "craft-cms"
 version = "0.1.0"
 dependencies = [
- "md-5",
+ "md-5 0.10.6",
  "moxcms",
  "rayon",
 ]
@@ -1025,16 +1031,27 @@ name = "craft-epub"
 version = "0.1.0"
 dependencies = [
  "craft-xml",
- "flate2",
+ "craft-zip",
  "thiserror 2.0.21",
  "zip",
+]
+
+[[package]]
+name = "craft-ews"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "proptest",
 ]
 
 [[package]]
 name = "craft-exr"
 version = "0.1.0"
 dependencies = [
+ "exr",
+ "half",
  "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1182,13 +1199,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ical"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "proptest",
+]
+
+[[package]]
 name = "craft-idml"
 version = "0.1.0"
 dependencies = [
  "craft-xml",
- "flate2",
+ "craft-zip",
  "thiserror 2.0.21",
  "zip",
+]
+
+[[package]]
+name = "craft-jmap"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde_json",
 ]
 
 [[package]]
@@ -1273,6 +1306,18 @@ dependencies = [
  "craft-opc",
  "craft-xml",
  "miniz_oxide 0.9.1",
+ "serde_json",
+]
+
+[[package]]
+name = "craft-metadata"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "craft-tiff",
+ "proptest",
+ "quick-xml 0.41.0",
+ "serde",
  "serde_json",
 ]
 
@@ -1373,6 +1418,7 @@ dependencies = [
 name = "craft-pdf"
 version = "0.1.0"
 dependencies = [
+ "aes",
  "bytemuck",
  "hayro",
  "hayro-cmap",
@@ -1380,9 +1426,23 @@ dependencies = [
  "hayro-syntax",
  "krilla",
  "kurbo 0.13.1",
+ "md-5 0.11.0",
+ "proptest",
+ "sha2 0.11.1",
+ "stringprep",
  "thiserror 2.0.21",
  "ttf-parser",
  "wasm-bindgen-test",
+ "zeroize",
+]
+
+[[package]]
+name = "craft-pdn"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "proptest",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1540,7 +1600,9 @@ dependencies = [
 name = "craft-rtf"
 version = "0.1.0"
 dependencies = [
+ "craft-mime",
  "encoding_rs",
+ "proptest",
 ]
 
 [[package]]
@@ -1553,6 +1615,10 @@ dependencies = [
  "tempfile",
  "toml_edit",
 ]
+
+[[package]]
+name = "craft-sheet"
+version = "0.1.0"
 
 [[package]]
 name = "craft-silhouette-studio"
@@ -1570,6 +1636,18 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "zip",
+]
+
+[[package]]
+name = "craft-stream-codecs"
+version = "0.1.0"
+dependencies = [
+ "fax",
+ "hayro-ccitt",
+ "hayro-jbig2",
+ "proptest",
+ "thiserror 2.0.21",
+ "weezl 0.2.1",
 ]
 
 [[package]]
@@ -1744,6 +1822,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-webp"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-window"
 version = "0.1.0"
 dependencies = [
@@ -1762,10 +1848,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-wordmodel"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "log",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "craft-xcf"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-xls"
 version = "0.1.0"
 dependencies = [
  "craft-cfb",
+ "craft-sheet",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-xlsx"
+version = "0.1.0"
+dependencies = [
+ "craft-opc",
+ "craft-sheet",
+ "craft-xml",
  "thiserror 2.0.21",
 ]
 
@@ -2388,6 +2506,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "exr"
+version = "1.74.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb29d0be702adf92c645d9b2f93472906ba83d400e59f98adb3770ce5c18c2f6"
+dependencies = [
+ "bit_field",
+ "half",
+ "lebe",
+ "miniz_oxide 0.8.9",
+ "multiversion",
+ "smallvec",
+ "zune-inflate",
+]
+
+[[package]]
 name = "extended"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2761,7 +2894,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee8cfcc411d9adbbaba82fb72661cc1bcca13e8bba98b364e62b2dba8f960159"
 dependencies = [
  "color_quant",
- "weezl",
+ "weezl 0.1.12",
 ]
 
 [[package]]
@@ -3971,6 +4104,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
+name = "lebe"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a79a3332a6609480d7d0c9eab957bca6b455b91bb84e66d19f5ff66294b85b8"
+
+[[package]]
 name = "libc"
 version = "0.2.190"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4086,6 +4225,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "md-5"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
+dependencies = [
+ "cfg-if",
+ "digest 0.11.3",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4182,6 +4331,28 @@ dependencies = [
  "png 0.18.1",
  "thiserror 2.0.21",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "multiversion"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb8a68be21d0755f83bfe47e79b896cc732687cf1903f0e50585e8d6ecc53076"
+dependencies = [
+ "multiversion-macros",
+ "target-features",
+]
+
+[[package]]
+name = "multiversion-macros"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a05e0c3c3e4edaa21d87c645852ed0b0c3663752bcc6ec43353bd6189dce35e1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "target-features",
 ]
 
 [[package]]
@@ -6634,6 +6805,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "target-features"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1bbb9f3c5c463a01705937a24fdabc5047929ac764b2d5b9cf681c1f5041ed5"
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6705,7 +6882,7 @@ dependencies = [
  "flate2",
  "half",
  "quick-error 2.0.1",
- "weezl",
+ "weezl 0.1.12",
  "zune-jpeg",
 ]
 
@@ -7563,6 +7740,12 @@ name = "weezl"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
+
+[[package]]
+name = "weezl"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4ca08e5ef825b65b056d9efbd95c8750683f0a6d0466d02e96dc2e4e360f3d2"
 
 [[package]]
 name = "wgpu"
@@ -8460,6 +8643,15 @@ name = "zune-core"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d56377fd46368984a170bc5aac5567e52ca5da874caa60bea39fcbca78fb658b"
+
+[[package]]
+name = "zune-inflate"
+version = "0.2.54"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73ab332fe2f6680068f3582b16a24f90ad7096d5d39b974d1c0aff0125116f02"
+dependencies = [
+ "simd-adler32",
+]
 
 [[package]]
 name = "zune-jpeg"

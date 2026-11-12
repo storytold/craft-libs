@@ -244,3 +244,16 @@ fn parts_are_written_one_element_per_line_without_touching_text() {
     );
     assert!(with_props(El::new("A"), Vec::new()).children.is_empty());
 }
+
+/// A ZIP64 end record can declare millions of entries in a small file; the count is refused on
+/// the raw bytes, before the archive is indexed.
+#[test]
+fn a_package_declaring_too_many_entries_is_refused_before_it_is_indexed() {
+    let bomb = craft_zip::zip64_entry_count_sample(100_001);
+    assert_eq!(Package::open(&bomb).err(), Some(Error::TooManyEntries { found: 100_001, limit: 100_000 }));
+}
+
+#[test]
+fn equal_parts_give_equal_bytes() {
+    assert_eq!(sample(), sample());
+}
