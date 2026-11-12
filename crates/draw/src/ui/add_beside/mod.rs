@@ -110,7 +110,7 @@ pub struct AddBesideOutput {
     pub added: Option<AddSide>,
     /// Alt was held with the click: add with contents (an artboard's copy). A key press never asks for a copy.
     pub copy: bool,
-    /// The button under the pointer or focused (the tool draws its ghost).
+    /// The button under the pointer or focused: the one in the hot look, whose ghost shows.
     pub hovered: Option<AddSide>,
 }
 
@@ -138,7 +138,8 @@ impl Outcome for AddBesideOutput {
 ///   is set (a drag runs); one when its disc touches a [`clear_of`](Self::clear_of) rectangle (a size label, a
 ///   toolbar) or leaves the canvas.
 /// - Pointer: the pointing hand; a click reports [`AddBesideOutput::added`], with Alt held also `copy`; the hot look
-///   (the accent disc) on hover and focus.
+///   (the accent disc) on hover and focus, with the hot side's [`ghosts`](Self::ghosts) rect outlined: what the click
+///   would add.
 /// - Keyboard: the group is one Tab stop named by the label (the "Add a connected shape" word after
 ///   [`connecting`](Self::connecting)); the arrows move the focus to the button that lies in their screen
 ///   direction, Enter or Space adds; each button is a `Button` node ("Add above", ...).
@@ -152,6 +153,9 @@ pub struct AddBesideHandles<'a> {
     /// Screen rectangles no button may cover.
     #[prop]
     clear_of: &'a [Rect],
+    /// What each side would add, in document units: the next board or shape, outlined while its button is hot.
+    #[prop]
+    ghosts: &'a [(AddSide, DocRect)],
     /// Hides every button (while a drag runs).
     #[prop(flag)]
     hidden: bool,
@@ -171,7 +175,8 @@ struct Report {
 impl<'a> AddBesideHandles<'a> {
     /// The buttons around `object`, in document units, the group named `label`.
     pub fn new(label: impl Into<Label>, object: DocRect) -> Self {
-        AddBesideHandles { common: Common::new(), object, clear_of: &[], hidden: false, connecting: false, report: Report::default() }.label(label)
+        AddBesideHandles { common: Common::new(), object, clear_of: &[], ghosts: &[], hidden: false, connecting: false, report: Report::default() }
+            .label(label)
     }
 
     /// The visible buttons' screen centres.
@@ -293,10 +298,19 @@ impl Component for AddBesideHandles<'_> {
             draw.stroke(&PaintShape::Path(vec![at - Vec2::new(arm, 0.0), at + Vec2::new(arm, 0.0)]), StrokeWidth::Medium, plus);
             draw.stroke(&PaintShape::Path(vec![at - Vec2::new(0.0, arm), at + Vec2::new(0.0, arm)]), StrokeWidth::Medium, plus);
         }
-        let Some(&(_, at)) = buttons.iter().find(|(side, _)| ring && focused == Some(*side)) else { return };
-        let painter = ui.content_painter(cx);
-        let ppp = painter.pixels_per_point();
-        painter.painter.extend(FocusRing::shapes(&style.focus, FocusKind::Halo, &PaintShape::Circle(at, style.radius), ppp));
+        if let Some(&(_, at)) = buttons.iter().find(|(side, _)| ring && focused == Some(*side)) {
+            let painter = ui.content_painter(cx);
+            let ppp = painter.pixels_per_point();
+            painter.painter.extend(FocusRing::shapes(&style.focus, FocusKind::Halo, &PaintShape::Circle(at, style.radius), ppp));
+        }
+        // The ghost goes over the hot button, as the host's preview of what a click adds.
+        let hot = buttons.iter().map(|&(side, _)| side).find(|&side| self.report.hovered == Some(side) || focused == Some(side));
+        if let Some(&(_, ghost)) = hot.and_then(|hot| self.ghosts.iter().find(|(side, _)| *side == hot)) {
+            let quad = space.view.quad(ghost.abs());
+            if quad.iter().all(|p| p.x.is_finite() && p.y.is_finite()) {
+                ui.draw().stroke(&PaintShape::Polygon(quad.to_vec()), StrokeWidth::Thin, style.accent);
+            }
+        }
     }
 
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {

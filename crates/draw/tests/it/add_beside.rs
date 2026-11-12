@@ -23,18 +23,19 @@ struct Rig {
     added: Rc<Cell<Option<(AddSide, bool)>>>,
 }
 
-/// What a test varies: the object, whether the buttons hide, the neighbour's rect in document units and the view's
-/// turn.
+/// What a test varies: the object, whether the buttons hide, the neighbour's rect in document units, the view's turn
+/// and what each side would add.
 struct Setup {
     object: DocRect,
     hidden: bool,
     keep_clear: Option<DocRect>,
     rotation: f64,
+    ghosts: Vec<(AddSide, DocRect)>,
 }
 
 impl Default for Setup {
     fn default() -> Self {
-        Setup { object: board(), hidden: false, keep_clear: None, rotation: 0.0 }
+        Setup { object: board(), hidden: false, keep_clear: None, rotation: 0.0, ghosts: Vec::new() }
     }
 }
 
@@ -50,7 +51,7 @@ fn rig(setup: Setup) -> Rig {
             .map(|rect| Rect::from_two_pos(view.to_screen(rect.origin()), view.to_screen(Point::new(rect.x1, rect.y1))))
             .collect();
         let shown_here = Canvas::new("Document").view(view).show(ui, |ui, body| {
-            let mut handles = AddBesideHandles::new("Add beside", setup.object).clear_of(&clear);
+            let mut handles = AddBesideHandles::new("Add beside", setup.object).clear_of(&clear).ghosts(&setup.ghosts);
             if setup.hidden {
                 handles = handles.hidden();
             }
@@ -99,4 +100,24 @@ fn arrows_follow_the_screen_direction_on_a_turned_view() {
     rig.fixture.key(Key::ArrowUp, Modifiers::NONE);
     rig.fixture.key(Key::Enter, Modifiers::NONE);
     assert_eq!(rig.added.take().map(|(side, _)| side), Some(highest));
+}
+
+/// Hovering a button outlines what it would add, and only while it is hot.
+#[trial]
+fn hovering_a_button_outlines_the_ghost_of_what_it_adds() {
+    const GHOST_SIDE: f32 = 100.0;
+    let ghost = DocRect::new(290.0, 100.0, 290.0 + f64::from(GHOST_SIDE), 100.0 + f64::from(GHOST_SIDE));
+    let mut rig = rig(Setup { ghosts: vec![(AddSide::Right, ghost)], ..Setup::default() });
+    let right = rig.fixture.by_label("Add right").expect("the right button").center();
+    // The ghost on screen: a shape of the ghost's size (the view is at 100 %) beyond the right button.
+    let outlined = |fixture: &mut Fixture| {
+        fixture
+            .frame_shapes()
+            .iter()
+            .map(egui::Shape::visual_bounding_rect)
+            .any(|bounds| (bounds.width() - GHOST_SIDE).abs() < 3.0 && (bounds.height() - GHOST_SIDE).abs() < 3.0 && bounds.min.x > right.x)
+    };
+    assert!(!outlined(&mut rig.fixture), "no ghost while no button is hot");
+    rig.fixture.frame(vec![egui::Event::PointerMoved(right)]);
+    assert!(outlined(&mut rig.fixture), "the hovered right button outlines its ghost");
 }

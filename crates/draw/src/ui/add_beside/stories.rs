@@ -1,9 +1,9 @@
 //! Stories of the "+" buttons: an artboard on a pasteboard with the buttons around it, one side kept clear by a
 //! neighbour's rect, and the connected-shape form.
 
-use super::AddBesideHandles;
+use super::{AddBesideHandles, AddSide};
 use craft_behavior::CanvasView;
-use craft_behavior::kurbo::{Point, Rect as DocRect};
+use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2};
 use craft_ui::canvas::{Canvas, PageFrame, Pasteboard};
 use craft_ui::contract::{Show as _, ShowContainer as _};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
@@ -12,6 +12,23 @@ use egui::{Rect, Ui};
 /// The artboard the buttons surround, in document units: in the middle of the story document.
 fn artboard() -> DocRect {
     DocRect::new(220.0, 130.0, 420.0, 270.0)
+}
+
+/// The gap between the artboard and the board a button adds, in document units.
+const GAP: f64 = 40.0;
+
+/// The board each side's button would add: the artboard's size, `GAP` beyond that side.
+fn ghosts() -> [(AddSide, DocRect); 4] {
+    let board = artboard();
+    AddSide::ALL.map(|side| {
+        let by = match side {
+            AddSide::Top => Vec2::new(0.0, -(board.height() + GAP)),
+            AddSide::Right => Vec2::new(board.width() + GAP, 0.0),
+            AddSide::Bottom => Vec2::new(0.0, board.height() + GAP),
+            _ => Vec2::new(-(board.width() + GAP), 0.0),
+        };
+        (side, board + by)
+    })
 }
 
 /// The view of the canvas the story shows: the story document at 100 %, centred.
@@ -44,12 +61,13 @@ fn add_beside(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         view.to_screen(Point::new(artboard().x1 + 16.0, artboard().y0)),
         view.to_screen(Point::new(artboard().x1 + 80.0, artboard().y1)),
     );
-    let clear = [neighbour];
-    on_canvas(ui, rect, |_| AddBesideHandles::new("Add beside", artboard()).clear_of(&clear))
+    let (clear, ghosts) = ([neighbour], ghosts());
+    on_canvas(ui, rect, |_| AddBesideHandles::new("Add beside", artboard()).clear_of(&clear).ghosts(&ghosts))
 }
 
 #[story(AddBesideHandles<'static>, covers = [Default], drive = Drive::Never)]
 fn add_beside_connecting(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let rect = craft_ui::testing::stage(ui);
-    on_canvas(ui, rect, |_| AddBesideHandles::new("Add beside", artboard()).connecting())
+    let ghosts = ghosts();
+    on_canvas(ui, rect, |_| AddBesideHandles::new("Add beside", artboard()).connecting().ghosts(&ghosts))
 }
