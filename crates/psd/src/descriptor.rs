@@ -7,6 +7,8 @@
 use crate::error::{PsdError, Result};
 use crate::io::{Reader, WriteExt, read_unicode_units, write_unicode_units};
 
+mod lookup;
+
 /// Maximum nesting depth accepted when parsing (fuzz safety).
 pub const MAX_DEPTH: usize = 64;
 
