@@ -76,26 +76,54 @@ impl ChannelData {
     /// RLE count table, the whole of a ZIP stream); a damaged row fails when its band is decoded.
     pub fn row_decoder(&self, width: usize, height: usize, depth: u16, version: Version) -> Result<RowDecoder<'_>> {
         let layout = PlaneLayout { planes: 1, width, height, depth, version };
-        let total = layout.decoded_len()?;
-        let row_bytes = layout.row_bytes();
         let bytes = match &self.stored {
             Some(s) => Bytes::Source(s),
             None => Bytes::Memory(&self.data),
         };
-        let kind = match self.compression {
+        RowDecoder::new(self.compression, bytes, &layout, || self.encoded())
+    }
+}
+
+impl crate::image_data::ImageData {
+    /// A decoder of the merged image's rows: its planes one after another, so plane `p`'s row
+    /// `r` is row `p × height + r`. As [`ChannelData::row_decoder`]; only a ZIP merged image is
+    /// decoded whole (and so only one within `MAX_DECODED_BYTES`).
+    pub fn row_decoder(&self, header: &crate::header::Header) -> Result<RowDecoder<'_>> {
+        let layout = Self::layout(header);
+        let bytes = match &self.stored {
+            Some(s) => Bytes::Source(s),
+            None => Bytes::Memory(&self.data),
+        };
+        RowDecoder::new(Some(self.compression), bytes, &layout, || self.encoded())
+    }
+}
+
+impl<'a> RowDecoder<'a> {
+    fn new(
+        compression: Option<Compression>,
+        bytes: Bytes<'a>,
+        layout: &PlaneLayout,
+        encoded: impl FnOnce() -> Result<Cow<'a, [u8]>>,
+    ) -> Result<Self> {
+        // The whole-plane cap applies to a whole decode (ZIP) only: rows are decoded a band at a
+        // time, each band within the cap.
+        let total = layout.total_bytes()?;
+        let row_bytes = layout.row_bytes();
+        let height = layout.rows()?;
+        let kind = match compression {
             None if total == 0 => Kind::Empty,
             None => return Err(PsdError::invalid("channel has no data")),
             Some(Compression::Raw) => {
-                if bytes.len() < total as u64 {
+                if bytes.len() < total {
                     return Err(PsdError::UnexpectedEof {
                         offset: usize::try_from(bytes.len()).unwrap_or(usize::MAX),
-                        needed: total - bytes.len() as usize,
+                        needed: usize::try_from(total - bytes.len()).unwrap_or(usize::MAX),
                     });
                 }
                 Kind::Raw(bytes)
             }
             Some(Compression::Rle) => {
-                let size: u64 = if version.is_psb() { 4 } else { 2 };
+                let size: u64 = if layout.version.is_psb() { 4 } else { 2 };
                 let table_len = (height as u64).saturating_mul(size);
                 if table_len > bytes.len() {
                     return Err(PsdError::UnexpectedEof { offset: 0, needed: usize::try_from(table_len - bytes.len()).unwrap_or(usize::MAX) });
@@ -116,7 +144,7 @@ impl ChannelData {
                 }
                 let data_len = bytes.len() - table_len;
                 // As `decode_planes` checks: PackBits expands at most 64x.
-                if (total as u64) > data_len.saturating_mul(64) {
+                if total > data_len.saturating_mul(64) {
                     return Err(PsdError::Decompress("RLE data too short for declared size".into()));
                 }
                 if at > bytes.len() {
@@ -127,7 +155,7 @@ impl ChannelData {
                 }
                 Kind::Rle { bytes, offsets }
             }
-            Some(c) => Kind::Decoded(decode_planes(c, &self.encoded()?, &layout)?),
+            Some(c) => Kind::Decoded(decode_planes(c, &encoded()?, layout)?),
         };
         Ok(RowDecoder { kind, row_bytes, height })
     }
@@ -157,7 +185,7 @@ impl RowDecoder<'_> {
         out.try_reserve_exact(n).map_err(|_| PsdError::OutOfMemory("not enough memory for the decoded channel data"))?;
         match &self.kind {
             Kind::Empty => {}
-            Kind::Raw(bytes) => out.extend_from_slice(&bytes.get((r0 * self.row_bytes) as u64, n as u64)?),
+            Kind::Raw(bytes) => out.extend_from_slice(&bytes.get(r0 as u64 * self.row_bytes as u64, n as u64)?),
             Kind::Decoded(plane) => out
                 .extend_from_slice(plane.get(r0 * self.row_bytes..r1 * self.row_bytes).ok_or_else(|| PsdError::invalid("decoded plane too short"))?),
             Kind::Rle { bytes, offsets } => {

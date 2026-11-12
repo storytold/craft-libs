@@ -11,7 +11,8 @@
 //! A tab separates the timecode from the code words. Each line's pairs are sent one per frame
 //! starting at its timecode. **Reading** runs a channel-1
 //! CEA-608 decoder (pop-on, roll-up, paint-on; redundant control codes ignored) and emits a cue
-//! whenever the displayed memory changes. **Writing** produces pop-on captions: for each cue the
+//! whenever the displayed memory changes or an End of Caption swaps it, so neighbours with the
+//! same text stay separate cues. **Writing** produces pop-on captions: for each cue the
 //! load (RCL, ENM, PAC + tab offset per row, text) is scheduled into free frames before the cue so
 //! its End of Caption lands exactly on the cue start; an Erase Displayed Memory clears it at the
 //! cue end (omitted when the next caption replaces it). Rows are bottom-aligned (row 15 last),
@@ -116,13 +117,18 @@ impl Decoder {
         if now == cur {
             return;
         }
+        self.close(f);
+        if !now.is_empty() {
+            self.open = Some((f, now));
+        }
+    }
+
+    /// End the cue being shown at frame `f` (dropped if it never reached a frame).
+    fn close(&mut self, f: i64) {
         if let Some((s, text)) = self.open.take()
             && f > s
         {
             self.cues.push((s, f, text));
-        }
-        if !now.is_empty() {
-            self.open = Some((f, now));
         }
     }
 
@@ -186,6 +192,8 @@ impl Decoder {
                 misc::EOC => {
                     std::mem::swap(&mut self.displayed, &mut self.hidden);
                     self.mode = Mode::PopOn;
+                    // each swap presents its own caption, even one reading the same as the last
+                    self.close(f);
                 }
                 misc::CR => {
                     if let Mode::RollUp(n) = self.mode {
@@ -284,8 +292,11 @@ pub fn parse(text: &str) -> Result<Document> {
         let Some(frame) = parse_timecode(tc) else {
             return Err(Error::Syntax { line: n + 1, msg: format!("bad timecode \"{tc}\"") });
         };
+        // the first time code says how the file counts (drop-frame or not)
+        doc.labels.get_or_insert((RATE, tc.contains([';', '.', ','])));
         for (k, w) in it.enumerate() {
-            let Ok(v) = u16::from_str_radix(w, 16) else {
+            let v = if w.len() == 4 && w.bytes().all(|b| b.is_ascii_hexdigit()) { u16::from_str_radix(w, 16).ok() } else { None };
+            let Some(v) = v else {
                 doc.warnings.push(format!("line {}: bad code word \"{w}\"", n + 1));
                 continue;
             };
@@ -354,10 +365,15 @@ pub fn wrap_rows(text: &str) -> Vec<String> {
     rows
 }
 
+/// The rows the CEA-608 writers (SCC, MCC field 1) load for caption `text`: its plain text in at
+/// most 15 rows of 32 columns. What does not fit is left out.
+pub fn caption_rows(text: &str) -> Vec<String> {
+    wrap_rows(&crate::plain_text(text))
+}
+
 /// Byte pairs (without parity) that load `text` into non-displayed memory.
 fn load_pairs(text: &str) -> Vec<(u8, u8)> {
-    let plain = crate::plain_text(text);
-    let rows = wrap_rows(&plain);
+    let rows = caption_rows(text);
     let mut out = vec![(0x14, misc::RCL), (0x14, misc::RCL), (0x14, misc::ENM), (0x14, misc::ENM)];
     let first_row = 16 - rows.len();
     for (i, row) in rows.iter().enumerate() {
@@ -438,14 +454,32 @@ pub fn schedule(doc: &Document) -> BTreeMap<i64, (u8, u8)> {
         }
         let load = load_pairs(&c.text);
         let n = load.len() as i64;
-        // Doubled codes must stay adjacent, so the load is one contiguous run of free frames:
-        // the latest run ending by `s`, else the first run after `cursor` (delaying the caption).
-        let run_free = |occ: &BTreeMap<i64, (u8, u8)>, b: i64| (b..b + n).all(|f| !occ.contains_key(&f));
-        let b = (cursor..=s - n).rev().find(|&b| run_free(&occ, b)).unwrap_or_else(|| (cursor..).find(|&b| run_free(&occ, b)).unwrap_or(cursor));
-        for (k, p) in load.into_iter().enumerate() {
-            occ.insert(b + k as i64, p);
+        // Erasing displayed memory can interrupt loading non-displayed memory. Keep each
+        // doubled control/character code adjacent, but allow pauses between those groups.
+        let plan_load = |mut f: i64| {
+            let mut plan = Vec::with_capacity(load.len());
+            let mut k = 0;
+            while let Some(&p) = load.get(k) {
+                let doubled = (0x10..=0x1f).contains(&p.0) && load.get(k + 1) == Some(&p);
+                let width = if doubled { 2 } else { 1 };
+                while (f..f + width).any(|at| occ.contains_key(&at)) {
+                    f += 1;
+                }
+                for offset in 0..width {
+                    plan.push((f + offset, p));
+                }
+                f += width;
+                k += width as usize;
+            }
+            (plan, f)
+        };
+        // Prefer the latest load that finishes by the requested start; if it cannot fit,
+        // use the earliest available frames rather than waiting until the prior cue ends.
+        let (plan, end) = (cursor..=s - n).rev().map(plan_load).find(|(_, end)| *end <= s).unwrap_or_else(|| plan_load(cursor));
+        for (f, p) in plan {
+            occ.insert(f, p);
         }
-        let mut d = s.max(b + n);
+        let mut d = s.max(end);
         while occ.contains_key(&d) {
             d += 1;
         }
@@ -472,6 +506,7 @@ pub fn code_word(p: (u8, u8)) -> u16 {
 
 pub fn write(doc: &Document, drop_frame: bool) -> String {
     let occ = schedule(doc);
+    let origin = crate::label_frame(doc.start_timecode, RATE, drop_frame); // time codes count from the start time code
     let mut out = String::from(HEADER);
     out.push_str("\n\n");
     let mut line: Option<(i64, Vec<String>)> = None;
@@ -480,13 +515,13 @@ pub fn write(doc: &Document, drop_frame: bool) -> String {
         if f != last + 1
             && let Some((start, words)) = line.take()
         {
-            out.push_str(&format!("{}\t{}\n\n", format_timecode(start, drop_frame), words.join(" ")));
+            out.push_str(&format!("{}\t{}\n\n", format_timecode(start.saturating_add(origin), drop_frame), words.join(" ")));
         }
         line.get_or_insert_with(|| (f, Vec::new())).1.push(format!("{:04x}", word(p)));
         last = f;
     }
     if let Some((start, words)) = line {
-        out.push_str(&format!("{}\t{}\n\n", format_timecode(start, drop_frame), words.join(" ")));
+        out.push_str(&format!("{}\t{}\n\n", format_timecode(start.saturating_add(origin), drop_frame), words.join(" ")));
     }
     out
 }
@@ -502,6 +537,17 @@ mod tests {
 
     fn cue(s: i64, e: i64, text: &str) -> Cue {
         Cue { start: RATE.tick_of(s), end: RATE.tick_of(e), text: text.into(), ..Default::default() }
+    }
+
+    #[test]
+    fn plus_signed_code_word_is_rejected() {
+        for bad in ["+942", "-942", "+94", "94G2"] {
+            let doc = parse(&format!("Scenarist_SCC V1.0\n\n00:00:01:00\t{bad} 9420\n")).unwrap();
+            assert_eq!(doc.warnings.len(), 1, "{bad}: {:?}", doc.warnings);
+            assert!(doc.warnings[0].contains("bad code word"));
+        }
+        let doc = parse("Scenarist_SCC V1.0\n\n00:00:01:00\t9420 9420\n").unwrap();
+        assert!(doc.warnings.is_empty());
     }
 
     #[test]
@@ -526,6 +572,35 @@ mod tests {
         assert_eq!(format_timecode(1800, true), "00:01:00;02");
         assert_eq!(format_timecode(1800, false), "00:01:00:00");
         assert_eq!(parse_timecode("00:10:00;00"), Some(17982));
+    }
+
+    /// Time codes count from the label of the document's start time code, drop-frame or not; the
+    /// code words do not change, and `Document::count_from` reads the cues back from it.
+    #[test]
+    fn time_codes_count_from_the_start_timecode() {
+        let doc = Document { cues: vec![cue(60, 120, "Hello")], ..Default::default() };
+        let hour = Tick(3600 * crate::time::TICKS_PER_SECOND); // the label 01:00:00:00
+        let master = Document { start_timecode: hour, ..doc.clone() };
+        let lines = |text: &str| -> Vec<(i64, String)> {
+            text.lines().filter_map(|l| l.split_once('\t')).map(|(tc, words)| (parse_timecode(tc).unwrap(), words.to_string())).collect()
+        };
+        for (drop_frame, origin) in [(true, 107_892), (false, 108_000)] {
+            let plain = lines(&write(&doc, drop_frame));
+            let shifted: Vec<_> = plain.iter().map(|(f, words)| (f + origin, words.clone())).collect();
+            let text = write(&master, drop_frame);
+            assert_eq!(lines(&text), shifted);
+            assert!(text.contains("\n01:00:0"), "{text}");
+            let mut back = parse(&text).unwrap();
+            assert_eq!(back.labels, Some((RATE, drop_frame)));
+            assert_eq!(back.cues[0].start, RATE.tick_of(origin + 60));
+            assert!(back.count_from(hour));
+            assert_eq!(back.cues, parse(&write(&doc, drop_frame)).unwrap().cues, "read back from the start time code");
+            assert!(!back.count_from(hour), "a cue before the start time code keeps its time");
+        }
+        for t in [Tick(i64::MIN), Tick(-1)] {
+            assert_eq!(write(&Document { start_timecode: t, ..doc.clone() }, true), write(&doc, true), "a negative start counts from zero");
+        }
+        assert!(write(&Document { start_timecode: Tick(i64::MAX), ..doc }, true).contains('\t'));
     }
 
     #[test]
@@ -559,6 +634,24 @@ mod tests {
         let back = parse(&s).unwrap();
         let got: Vec<(i64, i64, &str)> = back.cues.iter().map(|c| (RATE.frame_at(c.start), RATE.frame_at(c.end), c.text.as_str())).collect();
         assert_eq!(got, vec![(60, 120, "Hello, world!"), (120, 200, "Second caption\nwith two lines"), (260, 300, "Ñandú ♪ {x} * café “q”")]);
+    }
+
+    /// Replaying the `scc_back_to_back` proptest failure: neighbours with the same text merged.
+    #[test]
+    fn identical_back_to_back_cues_stay_separate() {
+        let doc = Document {
+            cues: vec![cue(90, 135, "Ht"), cue(135, 180, "Ht"), cue(180, 225, "Ht"), cue(225, 270, "Other"), cue(270, 315, "Ht")],
+            ..Default::default()
+        };
+        // The stream carries each boundary: every cue has its own End of Caption on its start frame.
+        let occ = schedule(&doc);
+        for start in [90, 135, 180, 225, 270] {
+            assert_eq!(occ.get(&start), Some(&(0x14, misc::EOC)), "frame {start}");
+        }
+        let s = write(&doc, false);
+        let back = parse(&s).unwrap();
+        assert_eq!(back.cues, doc.cues);
+        assert_eq!(write(&back, false), s);
     }
 
     #[test]

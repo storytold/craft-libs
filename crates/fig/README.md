@@ -83,8 +83,38 @@ to: a small file can't claim a large tree however far its chunks inflate.
 The archive is read with the `zip` crate directly, with the bounds above applied to each member.
 A shared bounded ZIP reader is planned (craft-libs #126); this crate moves to it when it lands.
 
-## Not here yet
+## The message as REST file JSON (`rest`)
 
-A typed model of the message (nodes, paints, text, components, variables, prototypes). FigCraft
-maps the `Kv` tree straight onto its own document today; a model mirroring the file's schema is
-the next step.
+`rest::to_rest` maps a decoded message onto the REST API file JSON that
+[`craft-figma-rest`](../figma-rest/README.md) models: pages, the layer tree, geometry, paints,
+strokes, effects, text with styled runs, auto layout and grids, components, component sets and
+instances (expanded from their main, with overrides and property values applied), shared styles,
+variables, prototype interactions and flows. Layer kinds the REST shape doesn't have (sticky
+notes, connectors, tables, …) come out as the closest frames, text and vectors. What isn't
+understood is skipped with a warning.
+
+```rust
+let mapped = craft_fig::rest::to_rest(&msg, "Untitled", &craft_fig::rest::Options {
+    max_nodes: craft_fig::rest::layer_budget(packed),
+    ..Default::default()
+});
+let file = craft_figma_rest::File::from_value(mapped.json, usize::MAX)?;  // or read the JSON
+// mapped.networks: the vector networks layers name by `vectorNetworkRef`
+// mapped.warnings: what was skipped or approximated
+```
+
+- **Geometry the caller owns.** A connector's route between its ends, and whether a text path can
+  be measured, come from `Options::geometry` (the `rest::Geometry` trait): an editor routes
+  imported connectors as it routes its own. `rest::Straight` draws straight lines and accepts
+  every text path.
+- **Extensions.** Besides the public fields, the JSON carries the extensions craft-figma-rest
+  documents and private `_fig*` handoffs (each layer's provenance, cached library definitions,
+  mains the layer cap kept out, region paints, saved line breaks, text paths) for an importer
+  that wants them.
+- **Budgets.** At most `Options::max_nodes` layers are produced or scanned, instance expansion
+  included (`rest::layer_budget` follows the compressed canvas: 8 bytes a layer, 200 000 to
+  2 000 000); nesting is followed 256 levels deep (the walk recurses once per level in small frames: an unoptimised build maps past that limit on 512 KiB, half the 1 MiB stack of a WebAssembly build, and a test at the limit runs on a 1 MiB thread); conditional actions 16, expressions 32; grid
+  tracks 1 000; region paint elements 200 000 per file; scale factors between 0.001 and 1000.
+
+The mapping was written in FigCraft (`crates/format/src/fig/map`) by its contributors, from the
+same public format knowledge as the rest of this crate.

@@ -156,6 +156,12 @@ fn interleave(mode: ColorMode, color: &[Cow<'_, [u8]>], alpha: Option<&[u8]>, pa
                 let p = |k: usize| palette.get(k * 256 + idx).copied().unwrap_or(0);
                 (p(0), p(1), p(2))
             }
+            ColorMode::Lab => {
+                let q = |v: f32| (v * 255.0).round() as u8;
+                let [r, g, b] =
+                    crate::float::lab_to_srgb(f32::from(color[0][i]) * 100.0 / 255.0, f32::from(color[1][i]) - 128.0, f32::from(color[2][i]) - 128.0);
+                (q(r), q(g), q(b))
+            }
             ColorMode::Cmyk => {
                 let k = u32::from(color[3][i]);
                 let f = |c: u8| ((u32::from(c) * k + 127) / 255) as u8;
@@ -173,7 +179,7 @@ fn interleave(mode: ColorMode, color: &[Cow<'_, [u8]>], alpha: Option<&[u8]>, pa
 
 fn color_channel_count(mode: ColorMode) -> Result<usize> {
     match mode {
-        ColorMode::Rgb => Ok(3),
+        ColorMode::Rgb | ColorMode::Lab => Ok(3),
         ColorMode::Cmyk => Ok(4),
         ColorMode::Grayscale | ColorMode::Indexed | ColorMode::Bitmap | ColorMode::Duotone => Ok(1),
         m => Err(PsdError::Unsupported(format!("rgba8 for color mode {m:?}"))),
@@ -265,7 +271,15 @@ impl<'a> Layer<'a> {
                 let bytes = self.channel_bytes(id)?;
                 if depth == 8 { bytes } else { plane_to_u8(&bytes, depth, w, h)? }
             } else {
-                vec![if mode == ColorMode::Cmyk { 255 } else { 0 }; n]
+                // A missing channel is no ink in CMYK and neutral (128) for Lab's a and b.
+                vec![
+                    match (mode, id) {
+                        (ColorMode::Cmyk, _) => 255,
+                        (ColorMode::Lab, 1 | 2) => 128,
+                        _ => 0,
+                    };
+                    n
+                ]
             };
             if plane.len() != n {
                 return Err(PsdError::invalid("channel size mismatch"));
@@ -319,7 +333,7 @@ impl PsdFile {
     }
 
     /// The merged composite as RGBA8. Supports RGB, grayscale, CMYK, indexed,
-    /// duotone (as gray) and bitmap at all depths. Alpha comes from the first
+    /// duotone (as gray), bitmap and Lab (D50, to sRGB) at all depths. Alpha comes from the first
     /// extra channel when [`PsdFile::merged_has_alpha`] is true. Removes the
     /// white matte from RGB composites before reducing precision.
     pub fn composite_rgba8(&self) -> Result<RgbaImage> {

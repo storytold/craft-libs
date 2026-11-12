@@ -81,7 +81,8 @@ pub type AttrValueHook<'a> = dyn Fn(&str, &str, &str, &Scope<'_>) -> Option<Stri
 /// Canonical prefixes by namespace URI.
 ///
 /// - An element in a listed namespace is named `prefix:local`; in an unlisted one,
-///   `unknown:local`; in no namespace (or with a prefix nothing declares), `local`.
+///   `unknown:local`; in no namespace (or with a prefix nothing declares), `local`. A namespace
+///   listed with the empty prefix reads unprefixed too: a vocabulary's own namespace.
 /// - A prefixed attribute is named the same way. An unprefixed attribute is in no namespace
 ///   and keeps its name.
 /// - The `xml` prefix needs no entry: `xml:space` stays `xml:space`.
@@ -511,7 +512,7 @@ impl<'o, 'i> Events<'o, 'i> {
                 let listed = canon.prefix(uri);
                 let parent = self.open.last().map(|o| o.name.as_str());
                 let chosen = canon.element.and_then(|hook| hook(&NsName { prefix: listed, uri, local, parent })).unwrap_or(listed);
-                format!("{chosen}:{local}")
+                if chosen.is_empty() { local.to_string() } else { format!("{chosen}:{local}") }
             }
         }
     }
@@ -521,9 +522,9 @@ impl<'o, 'i> Events<'o, 'i> {
             Names::AsWritten => raw.to_string(),
             Names::Local => local_of(raw).to_string(),
             Names::Canonical(canon) => match raw.split_once(':') {
-                Some((prefix, local)) => match self.uri(prefix) {
-                    Some(uri) => format!("{}:{local}", canon.prefix(uri)),
-                    None => local.to_string(),
+                Some((prefix, local)) => match self.uri(prefix).map(|uri| canon.prefix(uri)) {
+                    Some(p) if !p.is_empty() => format!("{p}:{local}"),
+                    _ => local.to_string(),
                 },
                 None => raw.to_string(),
             },

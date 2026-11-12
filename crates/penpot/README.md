@@ -91,8 +91,29 @@ fail the archive. Ids are checked to be UUIDs before they are used in a member p
 The archive is read with the `zip` crate directly, with the bounds above applied to each member.
 A shared bounded ZIP reader is planned (craft-libs #126); this crate moves to it when it lands.
 
+## Typed members (`model`)
+
+`model` types the members as the files name their fields: `Manifest`, `FileHeader`, `Page` (with
+its `Guide`s and `Flow`s), `Shape` (geometry, `SelRect`, `Matrix`, points, `Fill`s with colours,
+`Gradient`s and `ImageRef`s, `Stroke`s, `Shadow`s, `Blur`s, corner radii, constraints, flex and
+grid layout fields, component links, applied tokens), and the library records `LibraryColor`,
+`Typography`, `Component` and `Media`. `ShapeType`, `GradientType` and `BlendMode` keep values
+they don't know (`Other`).
+
+```rust
+let page: craft_penpot::model::Page = archive.typed(&format!("files/{file}/pages/{page_id}.json"))?;
+let shape: craft_penpot::model::Shape = archive.typed(&shape_path)?;
+let bytes = serde_json::to_vec(&shape)?;                     // written back as the file had it
+```
+
+Every record keeps the fields it has no name for in `extra` and writes them back: a member read
+and written loses only `null` fields, and whole numbers come back as floats. Kept as JSON: text
+and path `content`, SVG attributes, interactions, display grids, grid tracks and cells, tokens
+(`tokens.json`), and typography sizes (numbers or numeric strings in the files). A field of the
+wrong type fails `typed`, naming the member; a reader that must skip bad fields one by one reads
+`json` instead. `typed` reads within the same byte and value budgets as `json`. Shapes are flat
+(children by id), so no record nests deeper than the JSON itself.
+
 ## Not here yet
 
-A typed model of the shapes (frames, groups, paths, text content, fills and strokes, layout,
-components and variants, tokens, interactions). FigCraft maps the JSON straight onto its own
-document today; a model mirroring the file's JSON is the next step.
+Typed text and path `content`, interactions and tokens.

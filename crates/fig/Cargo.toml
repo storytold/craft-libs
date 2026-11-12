@@ -11,12 +11,17 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+craft-figma-rest = { workspace = true }
 craft-kiwi = { workspace = true }
+kurbo = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-# `deflate-flate2` with flate2's default miniz_oxide backend, as craft-update pins it (zip's own
-# `deflate` feature would switch a whole app's flate2 to zlib-rs). A shared bounded ZIP reader is
-# planned (#126); until it lands this crate reads through `zip` directly.
-zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+craft-zip = { workspace = true }
+# The canvas chunks are deflate or zlib streams.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 ruzstd = { version = "0.9", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+# The tests build archives, hostile ones included, by hand.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+craft-zip = { workspace = true, features = ["test-support"] }

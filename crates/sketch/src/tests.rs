@@ -284,3 +284,28 @@ fn embedded_fonts_are_listed_by_family() {
     let many: Vec<Value> = (0..50).map(|i| json!({"fontFamilyName": format!("F{i:02}"), "fontData": {}})).collect();
     assert_eq!(embedded_font_families(&json!({"fontReferences": many})).len(), 20);
 }
+
+/// A ZIP64 end record can declare millions of entries in a small file: refused on the raw bytes
+/// before the archive is indexed, and such a file is not taken for a `.sketch`.
+#[test]
+fn an_archive_declaring_too_many_entries_is_refused_before_it_is_indexed() {
+    let bomb = craft_zip::zip64_entry_count_sample(MAX_ENTRIES + 1);
+    let e = Archive::open(&bomb).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(e.contains(&format!("declares {} entries", MAX_ENTRIES + 1)), "{e}");
+    assert!(!is_sketch(&bomb));
+}
+
+/// Two entries of one name: `zip` keeps one, and which one the writer meant is not known.
+#[test]
+fn two_entries_of_one_name_are_refused() {
+    let z = sketch_zip("50.2", 103, document(&["P1"]), &[page("P1", "Page 1", vec![])], &[("images/dupA.png", b"a"), ("images/dupB.png", b"b")]);
+    assert!(Archive::open(&z).is_ok());
+    let mut renamed = z.clone();
+    let mut i = 0;
+    while let Some(at) = renamed[i..].windows(4).position(|w| w == b"dupB") {
+        renamed[i + at + 3] = b'A';
+        i += at + 4;
+    }
+    let e = Archive::open(&renamed).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(e.contains("two entries of the archive share a name"), "{e}");
+}

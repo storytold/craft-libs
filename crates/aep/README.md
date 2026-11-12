@@ -24,6 +24,13 @@ The XML form of a project (`.aepx`) is read into the same tree by `read_aepx` (a
 XML tokenizer of its own); `parse_any` picks the reader by content, so the typed view takes
 either form. The mapping is in [`docs/aep-format.md`](docs/aep-format.md), section 1.
 
+A reader that only looks does not need the owned tree. `TreeIndex` is the same tree as one flat,
+read-only array in depth-first order, borrowed from the input: `TreeIndex::parse` for an `.aep`,
+`index_aepx` and `TreeIndex::from_drafts` for an `.aepx` (decoded into one buffer first). It
+counts the same chunks against the same `Limits` and returns the same errors as `parse`, and the
+typed view reads through either (`Project::new` for the owned tree, `Project::from_index` for the
+index). An importer should use the index; it is about twice as fast and allocates far less.
+
 Bodies that look like lists but are not chunk sequences (for example `LIST btdk`, raw text) stay
 opaque rather than failing the parse. Input is untrusted: sizes are checked against the remaining
 input, nesting and chunk count are bounded (`Limits`), nothing is allocated from a declared size,

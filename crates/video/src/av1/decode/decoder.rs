@@ -1466,6 +1466,14 @@ impl FrameTiles {
     }
 }
 
+/// Bytes all parallel tile states may hold of whole-frame CDEF and restoration metadata; past it
+/// the tiles decode one after another on the frame's own metadata.
+const TILE_METADATA_BUDGET: usize = 256 << 20;
+
+fn tile_metadata_fits(tiles: usize, per_tile: usize) -> bool {
+    tiles.checked_mul(per_tile).is_some_and(|n| n <= TILE_METADATA_BUDGET)
+}
+
 /// Run `pass` (Full or Parse) over the tiles of a frame.
 /// `record_limit`: most record bytes per luma sample of a tile (see [`RECORD_BYTES_PER_SAMPLE`]).
 /// `budget`: the decoder-wide budget the records are reserved from.
@@ -1493,7 +1501,7 @@ fn parse_tiles(
     };
     // Intra block copy reads the current frame through the tile's own buffer: keep whole-frame
     // buffers (tiles one after another) for it.
-    if tiles.len() > 1 && pool.is_parallel() && !fs.fh.allow_intrabc {
+    if tiles.len() > 1 && pool.is_parallel() && !fs.fh.allow_intrabc && tile_metadata_fits(tiles.len(), fs.tile_metadata_bytes()) {
         let mut states: Vec<TileState> = tiles
             .iter()
             .map(|(num, _)| {
@@ -2270,6 +2278,13 @@ mod shown_limit_tests {
 #[cfg(test)]
 mod budget_tests {
     use super::*;
+
+    #[test]
+    fn tile_metadata_copies_are_budgeted() {
+        assert!(tile_metadata_fits(64, 1 << 20));
+        assert!(!tile_metadata_fits(4096, 1 << 20));
+        assert!(!tile_metadata_fits(usize::MAX, 2));
+    }
     use crate::budget::DECODE_MEMORY_BUDGET;
 
     fn color(mono: bool) -> ColorConfig {

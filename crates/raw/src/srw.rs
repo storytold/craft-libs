@@ -33,7 +33,7 @@
 //!   3.5 to 4.5); otherwise the dark rows or columns outside the framing (EX1: eight rows at 2.3); otherwise 0.
 //! - `WB_RGGBLevelsUncorrected` divided by its mean green is the as-shot gain: the renders of the 12 files match the
 //!   camera JPEG at median ΔE76 2.2 to 7.6 (10.7 on the backlit WB2000 sample, 5.7 after registration).
-use crate::shared::{black_from_columns, white_from_data};
+use crate::shared::{black_from_columns_sourced, white_from_data_sourced};
 use crate::unpack::{read_u16s, unpack_lsb, unpack_msb};
 use crate::{BlackLevel, Camera, Cfa, ColorData, Limits, Mode, OpcodeLists, Orientation, RawData, RawError, RawFormat, RawImage, Rect, Result};
 use craft_tiff::image::chunk_bytes;
@@ -143,21 +143,21 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     // saturation: the file's level, or lower where the samples pile up (EX1 clips at 15882 of its stated 16383)
     let stated = levels.as_ref().filter(|v| v[4..].iter().all(|&x| x == v[4]) && (255..=65535).contains(&v[4])).map(|v| v[4] as f32);
     let bits = stated.map_or((info.bits() as u32).clamp(8, 16), |s| 32 - (s as u32).leading_zeros());
-    let plateau = (!samples.is_empty()).then(|| white_from_data(&active_rows(samples, w, active), bits));
-    let white = match (stated, plateau) {
-        (Some(s), Some(p)) => s.min(p),
-        (Some(s), None) => s,
+    let plateau = (!samples.is_empty()).then(|| white_from_data_sourced(&active_rows(samples, w, active), bits));
+    let (white, white_source) = match (stated, plateau) {
+        (Some(s), Some((p, p_source))) if p < s => (p, p_source),
+        (Some(s), _) => (s, crate::LevelSource::Metadata),
         (None, Some(p)) => p,
-        (None, None) => 4095.0,
+        (None, None) => (4095.0, crate::LevelSource::Fallback),
     };
     let tagged_black =
         mn.as_ref().and_then(|m| keyed(m, WB_BLACK, -1)).filter(|v| v.len() == 4 && v.iter().all(|&x| (0..=u16::MAX as i64).contains(&x)));
-    let black = match tagged_black {
+    let (black, black_source) = match tagged_black {
         Some(v) if v.iter().any(|&x| x > 0) => {
             // RGGB-ordered levels -> per CFA position at the active area origin
             let a = cfa.shifted(active.x, active.y);
             let values = a.pattern.iter().map(|&c| [v[0], (v[1] + v[2]) / 2, v[3]][c as usize] as f32).collect();
-            BlackLevel { repeat_rows: 2, repeat_cols: 2, values, ..Default::default() }
+            (BlackLevel { repeat_rows: 2, repeat_cols: 2, values, ..Default::default() }, crate::LevelSource::Metadata)
         }
         // the file states no black level: measure the masked band around the active area, when there is one
         _ => masked_black(samples, w, h, active, white),
@@ -188,6 +188,8 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         opcodes: OpcodeLists::default(),
         camera: tiff.ifds.first().map(Camera::from_ifd0).unwrap_or_default(),
         cinema: Default::default(),
+        lens_metadata: Default::default(),
+        level_sources: crate::LevelSources { black: black_source, white: white_source },
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -232,9 +234,9 @@ fn active_rows(d: &[u16], w: usize, a: Rect) -> Vec<u16> {
 /// Black level from rows or columns outside the active area that are dark (mean below 1.5% of `white`): the
 /// longest run of dark lines on the right, else the left, below, above; at least four lines, the two outermost
 /// rows and columns of the array left out. Uniform 0 when there is no such run.
-fn masked_black(d: &[u16], w: usize, h: usize, a: Rect, white: f32) -> BlackLevel {
+fn masked_black(d: &[u16], w: usize, h: usize, a: Rect, white: f32) -> (BlackLevel, crate::LevelSource) {
     if d.is_empty() {
-        return BlackLevel::uniform(0.0);
+        return (BlackLevel::uniform(0.0), crate::LevelSource::Fallback);
     }
     let limit = f64::from(white) * 0.015;
     let col_mean = |x: usize| {
@@ -261,15 +263,15 @@ fn masked_black(d: &[u16], w: usize, h: usize, a: Rect, white: f32) -> BlackLeve
     let below = longest(a.y + a.height..h.saturating_sub(2), &row_mean);
     let above = longest(2..a.y, &row_mean);
     if right.len() >= 4 {
-        black_from_columns(d, w, right, cols, a)
+        black_from_columns_sourced(d, w, right, cols, a)
     } else if left.len() >= 4 {
-        black_from_columns(d, w, left, cols, a)
+        black_from_columns_sourced(d, w, left, cols, a)
     } else if below.len() >= 4 {
-        black_from_columns(d, w, rows, below, a)
+        black_from_columns_sourced(d, w, rows, below, a)
     } else if above.len() >= 4 {
-        black_from_columns(d, w, rows, above, a)
+        black_from_columns_sourced(d, w, rows, above, a)
     } else {
-        BlackLevel::uniform(0.0)
+        (BlackLevel::uniform(0.0), crate::LevelSource::Fallback)
     }
 }
 
@@ -421,6 +423,7 @@ mod tests {
         assert_eq!(r.active_area, Rect::new(6, 4, 52, 26));
         assert_eq!(r.crop, Rect::new(0, 0, 52, 26));
         assert_eq!((r.black.mean(), r.white.clone()), (3.0, vec![4095.0]));
+        assert_eq!(r.level_sources, crate::LevelSources { black: crate::LevelSource::Metadata, white: crate::LevelSource::Metadata });
         assert_eq!(r.wb_multipliers, Some([2.0, 1.0, 1.5]));
         // headers only: everything but the samples
         let i = probe_info(&bytes).unwrap();
@@ -434,7 +437,10 @@ mod tests {
         let v = ramp(64, 32, 4096);
         for (strip, name) in [(pack12(&v), "msb"), (pack12_lsb(&v), "lsb")] {
             let bytes = srw(Spec { w: 64, h: 32, compression: 32770, strip, pattern: Some([1, 0, 2, 1]), note: None, picture: None });
-            assert_eq!(decode(&bytes).unwrap().data, RawData::U16(v.clone()), "{name}");
+            let r = decode(&bytes).unwrap();
+            assert_eq!(r.data, RawData::U16(v.clone()), "{name}");
+            // no maker note, no dark border, no plateau
+            assert_eq!(r.level_sources, crate::LevelSources { black: crate::LevelSource::Fallback, white: crate::LevelSource::Fallback }, "{name}");
         }
     }
 
@@ -491,6 +497,7 @@ mod tests {
         assert_eq!(r.bits, 14);
         assert!((15800.0..=15882.0).contains(&r.white[0]), "{:?}", r.white);
         assert_eq!(r.black.mean(), 80.0);
+        assert_eq!(r.level_sources, crate::LevelSources { black: crate::LevelSource::MaskedPixels, white: crate::LevelSource::Inferred });
         assert_eq!(r.cfa.unwrap().name(), "RGGB");
     }
 

@@ -3,12 +3,9 @@
 use std::fmt::Write;
 use std::sync::Arc;
 
-use crate::CellError;
+use craft_sheet::{push_col, quote_sheet, sheet_needs_quotes};
 
-/// Rows and columns of the grid a sheet name is tested against when deciding whether it reads
-/// as a cell reference (the SpreadsheetML grid, which is the larger one).
-const GRID_ROWS: u32 = 1_048_576;
-const GRID_COLS: u32 = 16_384;
+use crate::CellError;
 
 /// One end of a reference, with `$` anchors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,31 +113,6 @@ pub(crate) enum Expr {
     Paren(Box<Expr>),
 }
 
-/// 0 → `A`, 25 → `Z`, 26 → `AA`.
-fn push_col(s: &mut String, col: u32) {
-    let mut letters = [0u8; 8];
-    let mut i = letters.len();
-    let mut n = u64::from(col) + 1;
-    while n > 0 && i > 0 {
-        i -= 1;
-        if let Some(l) = letters.get_mut(i) {
-            *l = b'A' + ((n - 1) % 26) as u8;
-        }
-        n = (n - 1) / 26;
-    }
-    for &l in letters.get(i..).unwrap_or_default() {
-        s.push(char::from(l));
-    }
-}
-
-/// The A1 text of a cell (`B3`), for messages and tests.
-pub(crate) fn a1(row: u32, col: u32) -> String {
-    let mut s = String::new();
-    push_col(&mut s, col);
-    let _ = write!(s, "{}", u64::from(row) + 1);
-    s
-}
-
 fn push_anchor(s: &mut String, a: &Anchor) {
     if a.col_abs {
         s.push('$');
@@ -150,53 +122,6 @@ fn push_anchor(s: &mut String, a: &Anchor) {
         s.push('$');
     }
     let _ = write!(s, "{}", u64::from(a.row) + 1);
-}
-
-/// Whether `name` is an A1 cell reference inside the grid (`A1`, `xfd1048576`).
-fn is_a1(name: &str) -> bool {
-    let letters = name.bytes().take_while(u8::is_ascii_alphabetic).count();
-    let Some((cols, digits)) = name.split_at_checked(letters) else { return false };
-    if cols.is_empty() || cols.len() > 3 || digits.is_empty() || digits.len() > 7 || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return false;
-    }
-    let col = cols.bytes().fold(0u32, |n, b| n * 26 + u32::from(b.to_ascii_uppercase() - b'A') + 1);
-    let row: u32 = digits.parse().unwrap_or(0);
-    (1..=GRID_COLS).contains(&col) && (1..=GRID_ROWS).contains(&row)
-}
-
-/// Whether `name` reads as an R1C1 reference: `R`, `C`, `RC`, `R1`, `C1`, `R1C`, `RC1`, `R1C1`
-/// in any case.
-fn is_r1c1_token(name: &str) -> bool {
-    let mut chars = name.chars().peekable();
-    let mut letters = 0;
-    for letter in ['r', 'c'] {
-        if chars.peek().is_some_and(|c| c.to_ascii_lowercase() == letter) {
-            chars.next();
-            letters += 1;
-            while chars.peek().is_some_and(char::is_ascii_digit) {
-                chars.next();
-            }
-        }
-    }
-    letters > 0 && chars.next().is_none()
-}
-
-/// Whether Excel quotes a sheet name in a reference (`'My Sheet'!A1`): it starts with a digit or
-/// `.`, holds anything but letters (any script), digits, `_` and `.`, reads as an A1 cell or as
-/// an R1C1 reference, or is a boolean.
-pub fn sheet_needs_quotes(name: &str) -> bool {
-    let Some(first) = name.chars().next() else {
-        return true;
-    };
-    if first.is_ascii_digit() || first == '.' || name.chars().any(|c| !(c.is_alphanumeric() || c == '_' || c == '.')) {
-        return true;
-    }
-    is_a1(name) || is_r1c1_token(name) || name.eq_ignore_ascii_case("TRUE") || name.eq_ignore_ascii_case("FALSE")
-}
-
-/// A sheet name as it is written in a reference: quoted, with `'` doubled, when Excel quotes it.
-pub fn quote_sheet(name: &str) -> String {
-    if sheet_needs_quotes(name) { format!("'{}'", name.replace('\'', "''")) } else { name.to_string() }
 }
 
 fn push_reference(s: &mut String, r: &Reference) {
@@ -401,20 +326,5 @@ mod tests {
         assert_eq!(number_to_text(0.0001), "0.0001");
         assert_eq!(number_to_text(1e-10), "1E-10");
         assert!(number(f64::MAX).parse::<f64>().is_ok_and(f64::is_finite));
-    }
-
-    #[test]
-    fn sheet_names_are_quoted_when_excel_quotes_them() {
-        for plain in ["Sheet1", "Data_2", "Übersicht", "a.b"] {
-            assert!(!sheet_needs_quotes(plain), "{plain}");
-        }
-        for quoted in ["", "My Data", "1st", ".x", "A1", "xfd1048576", "R1C1", "rc", "true", "It's"] {
-            assert!(sheet_needs_quotes(quoted), "{quoted}");
-        }
-        // Outside the grid it is no cell reference.
-        assert!(!sheet_needs_quotes("XFE1"));
-        assert!(!sheet_needs_quotes("A1048577"));
-        assert_eq!(quote_sheet("It's"), "'It''s'");
-        assert_eq!(a1(2, 27), "AB3");
     }
 }
