@@ -593,27 +593,21 @@ pub(crate) fn paint_face<C: Show>(ui: &mut Ui, env: &Env, source: &super::FaceSo
     let rect = source.result.rect;
     let flow = Flow::new(rect, env.direction.is_rtl());
     let part_state = steps::part_state(source.result, step1.enabled && source.enabled, source.focus);
-    let mut flags = part_state.flags | face.flags() | source.flags;
-    // A face shows the value the step-6 peek found, as `steps::state` reads it for a component: a checked check box
-    // takes the on look.
-    if (shown.as_deref().map(|value| value as &dyn std::any::Any)).and_then(|value| value.downcast_ref::<bool>()) == Some(&true) {
-        flags |= crate::style::Flags::CHECKED;
-    }
-    if mixed {
-        flags |= crate::style::Flags::MIXED;
-    }
-    let on = f32::from(u8::from(flags.intersects(crate::style::Flags::ON)));
-    let state = StateSet::new(part_state.state, flags, crate::style::StateMix::new(part_state.t.hover, part_state.t.press, on));
     let mut core = blank_core(env.view(), &resolved, &mut stage, ctx.clone(), env.ink, source.response.clone(), None);
     core.face_mode = true;
     core.rect = rect;
     core.content_rect = flow.inset(StyleView::metrics(&*style).padding);
     core.flow = flow;
-    core.state = state;
-    core.stated = true;
-    core.ink = steps::surface_ink(StyleView::surface(&*style), &state, env.ink);
     core.visible = rect;
-    let cx = Cx::<C> { core, style: &style, shown, mixed, events: Vec::new(), applied: 0, validity: Validity::Ok };
+    let mut cx = Cx::<C> { core, style: &style, shown, mixed, events: Vec::new(), applied: 0, validity: Validity::Ok };
+    // A face shows its own inputs as `steps::state` reads them for a component: a checked check box takes the on
+    // look, a selected face the selected one.
+    let flags = part_state.flags | source.flags | steps::value_flags(&face, &cx);
+    let on = f32::from(u8::from(flags.intersects(crate::style::Flags::ON)));
+    let state = StateSet::new(part_state.state, flags, crate::style::StateMix::new(part_state.t.hover, part_state.t.press, on));
+    cx.core.state = state;
+    cx.core.stated = true;
+    cx.core.ink = steps::surface_ink(StyleView::surface(&*style), &state, env.ink);
     steps::paint_surface(ui, &env, &cx.core, &*style);
     {
         let results = HashMap::new();
@@ -750,15 +744,6 @@ pub(crate) fn member_show<C: Show>(
         held: false,
     };
     let part_state = steps::part_state(&result, enabled, None);
-    let mut flags = part_state.flags | item.flags();
-    if (shown.as_deref().map(|value| value as &dyn std::any::Any)).and_then(|value| value.downcast_ref::<bool>()) == Some(&true) {
-        flags |= Flags::CHECKED;
-    }
-    if mixed {
-        flags |= Flags::MIXED;
-    }
-    let on = f32::from(u8::from(flags.intersects(Flags::ON)));
-    let state = StateSet::new(part_state.state, flags, crate::style::StateMix::new(part_state.t.hover, part_state.t.press, on));
     // A peek that opens no lifetime stage and is dropped without a write-back, as a face's.
     let mut stage = MemoryStage::open_peek(&ctx, id);
     stage.face = true;
@@ -767,9 +752,6 @@ pub(crate) fn member_show<C: Show>(
     core.rect = row;
     core.content_rect = flow.inset(StyleView::metrics(&*style).padding);
     core.flow = flow;
-    core.state = state;
-    core.stated = true;
-    core.ink = steps::surface_ink(StyleView::surface(&*style), &state, env.ink);
     core.visible = row.intersect(ui.clip_rect());
     core.part_cursors = crate::primitives::sensing::hovered_cursor(decls.parts(), &sensed.parts).into_iter().collect();
     core.results = sensed.parts;
@@ -777,6 +759,12 @@ pub(crate) fn member_show<C: Show>(
     core.member_of = Some(node.owner);
     core.intents = crate::runtime::keys::intents_of(&ctx, Some(id), rtl);
     let mut cx = Cx::<C> { core, style: &style, shown, mixed, events: Vec::new(), applied: 0, validity: Validity::Ok };
+    let flags = part_state.flags | steps::value_flags(&item, &cx);
+    let on = f32::from(u8::from(flags.intersects(Flags::ON)));
+    let state = StateSet::new(part_state.state, flags, crate::style::StateMix::new(part_state.t.hover, part_state.t.press, on));
+    cx.core.state = state;
+    cx.core.stated = true;
+    cx.core.ink = steps::surface_ink(StyleView::surface(&*style), &state, env.ink);
     item.update(&mut cx);
     steps::paint_surface(ui, env, &cx.core, &*style);
     steps::paint_part_layers(ui, env, &cx.core);
