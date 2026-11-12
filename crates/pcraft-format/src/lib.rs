@@ -8,6 +8,7 @@
 //! blobs/<blake3>.zst       content-addressed binary data
 //! thumb.png                optional thumbnail
 //! composite/preview.png    optional flattened preview
+//! composite/full.png       optional full-canvas flattened image
 //! save.lock                directory bundles only: held while a save runs (empty)
 //! ```
 //!
@@ -37,7 +38,9 @@ mod read;
 
 use serde::{Deserialize, Serialize};
 
-pub use limits::{Limits, MAX_DEPTH, MAX_GROUP_DEPTH, MAX_MANIFEST_ITEMS, check_manifest, manifest_depth, parse_manifest};
+pub use limits::{
+    Limits, MAX_DEPTH, MAX_GROUP_DEPTH, MAX_MANIFEST_ITEMS, check_manifest, check_manifest_with_cancel, manifest_depth, parse_manifest,
+};
 pub use migrate::{Step, migrate};
 pub use read::{read_manifest, read_manifest_with};
 
@@ -62,6 +65,8 @@ pub const MANIFEST: &str = "manifest.json";
 pub const THUMB: &str = "thumb.png";
 /// The flattened preview entry, a PNG, in [`COMPOSITE_DIR`].
 pub const COMPOSITE: &str = "composite/preview.png";
+/// The optional full-canvas flattened image, a PNG, in [`COMPOSITE_DIR`].
+pub const FULL_COMPOSITE: &str = "composite/full.png";
 /// The file a directory save holds an exclusive lock on while it runs. ZIP bundles do not have it.
 pub const SAVE_LOCK: &str = "save.lock";
 
@@ -92,6 +97,8 @@ pub fn is_valid_hash(hash: &str) -> bool {
 /// absent. [`read_manifest`] reads one: a missing `thumbnail` or `composite` reads as `None`,
 /// members the type does not name are skipped, and a preview that names any entry other than
 /// [`THUMB`] or [`COMPOSITE`] is refused.
+/// `full_composite` names [`FULL_COMPOSITE`] when present and is omitted on serialization
+/// when absent, preserving the bytes of manifests without it.
 ///
 /// The struct is `#[non_exhaustive]`: build one with [`Manifest::new`] and set the previews.
 ///
@@ -115,13 +122,16 @@ pub struct Manifest<D> {
     pub thumbnail: Option<String>,
     /// The flattened preview entry, [`COMPOSITE`]. [`read_manifest`] refuses any other name.
     pub composite: Option<String>,
+    /// The full-canvas flattened image, [`FULL_COMPOSITE`]. [`read_manifest`] refuses any other name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub full_composite: Option<String>,
 }
 
 impl<D> Manifest<D> {
     /// A manifest at [`FORMAT_VERSION`] written by `generator`, holding `document`, with no
     /// previews.
     pub fn new(generator: impl Into<String>, document: D) -> Self {
-        Manifest { format_version: FORMAT_VERSION, generator: generator.into(), document, thumbnail: None, composite: None }
+        Manifest { format_version: FORMAT_VERSION, generator: generator.into(), document, thumbnail: None, composite: None, full_composite: None }
     }
 }
 
@@ -168,6 +178,9 @@ impl TileRef {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// A cancellation-aware validation observed the caller's request.
+    #[error("manifest check canceled")]
+    Cancelled,
     /// The manifest breaks the format.
     #[error("corrupt .pcraft bundle: {0}")]
     Corrupt(String),
