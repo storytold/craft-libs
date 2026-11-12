@@ -12,8 +12,10 @@ use craft_esign::{Envelope, EnvelopeStatus, EsignCapability};
 
 use super::*;
 
+/// Reused by `coderabbit_repro`, the regression tests for the CodeRabbit
+/// findings reviewed on the same pull request.
 #[derive(Clone, Default)]
-struct Hold(Arc<Mutex<Vec<(Request, Replier)>>>);
+pub(super) struct Hold(Arc<Mutex<Vec<(Request, Replier)>>>);
 
 impl EsignBackend for Hold {
     fn submit(&self, request: Request, reply: Replier) {
@@ -23,18 +25,18 @@ impl EsignBackend for Hold {
 
 impl Hold {
     /// Takes the oldest held request matching `pick`.
-    fn take(&self, pick: impl Fn(&Request) -> bool) -> (Request, Replier) {
+    pub(super) fn take(&self, pick: impl Fn(&Request) -> bool) -> (Request, Replier) {
         let mut held = self.0.lock().unwrap();
         let i = held.iter().position(|(r, _)| pick(r)).expect("request was submitted");
         held.remove(i)
     }
 }
 
-fn who(id: &str) -> Identity {
+pub(super) fn who(id: &str) -> Identity {
     Identity { id: id.into(), display: id.into(), email: Some(format!("{id}@example.com")), avatar: None }
 }
 
-fn envelope_for(doc: &str, sender: &str) -> Envelope {
+pub(super) fn envelope_for(doc: &str, sender: &str) -> Envelope {
     Envelope {
         id: format!("env-{doc}"),
         title: format!("Contract {doc}"),
@@ -53,7 +55,7 @@ fn envelope_for(doc: &str, sender: &str) -> Envelope {
 }
 
 /// A dialog with a held backend whose capabilities probe has been answered.
-fn ready() -> (EsignDialog, Hold) {
+pub(super) fn ready() -> (EsignDialog, Hold) {
     let hold = Hold::default();
     let mut dialog = EsignDialog::default();
     dialog.set_backend(hold.clone());
@@ -70,7 +72,7 @@ fn ready() -> (EsignDialog, Hold) {
 }
 
 /// The app's Send path: queue_send -> take_send_request -> submit Create.
-fn send(dialog: &mut EsignDialog, doc_bytes: &[u8]) {
+pub(super) fn send(dialog: &mut EsignDialog, doc_bytes: &[u8]) {
     dialog.add_email("bob@example.com".into());
     dialog.queue_send();
     let out = dialog.take_send_request().expect("Send produced a request");
