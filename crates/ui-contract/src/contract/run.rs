@@ -371,6 +371,8 @@ fn blank_core<'a>(
         gestures: Default::default(),
         texts: None,
         selections: Vec::new(),
+        faded: false,
+        unfaded: None,
         surface_slot: None,
         editor: None,
         editor_inputs: Vec::new(),
@@ -399,6 +401,8 @@ pub(crate) struct TypeFacts {
     pub canvas_control: bool,
     pub labelled_after: bool,
     pub binds_view: bool,
+    /// `DISABLED` is `Faded`.
+    pub faded: bool,
     /// The style key's type, which `Auto` ids are counted per.
     pub style_key: TypeId,
 }
@@ -416,6 +420,7 @@ impl TypeFacts {
             canvas_control: C::CANVAS_CONTROL,
             labelled_after: C::LABELLED_AFTER,
             binds_view: C::BINDS_VIEW,
+            faded: C::DISABLED == super::DisabledLook::Faded,
             style_key: TypeId::of::<C::StyleKey>(),
         }
     }
@@ -561,6 +566,7 @@ pub(super) fn paint_ui<'a>(ui: &'a mut Ui, env: &'a Env, core: &'a CxCore<'_>, s
         enabled: core.resolved.enabled,
         size: core.resolved.size,
         selections: &core.selections,
+        unfaded: core.unfaded,
         kids: None,
     }
 }
@@ -1020,6 +1026,7 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     p.trace.mark(Step::Paint);
     let mut values = AppValues::default();
     e.content_env(&mut values);
+    let unfaded = steps::fade(ui, e.core());
     steps::paint_surface(ui, env, e.core_ref(), style);
     steps::paint_part_layers(ui, env, e.core_ref());
     // Paint and content stay inside the rect (grown by the type's declared outset), however small the room is.
@@ -1027,6 +1034,7 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     let inside = e.core_ref().rect.expand(e.paint_outset(&env.tokens)).intersect(outer_clip);
     ui.set_clip_rect(inside);
     e.paint(ui, env);
+    ui.set_opacity(unfaded);
     ui.set_clip_rect(outer_clip);
     steps::paint_focus(ui, e.core_ref(), style);
     ui.set_clip_rect(inside);
@@ -1056,7 +1064,9 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     ui.set_clip_rect(outer_clip);
     sensing::place_over_widgets(ui, id, member, decls);
     ui.set_clip_rect(inside);
+    steps::fade(ui, e.core());
     e.paint_over(ui, env);
+    ui.set_opacity(unfaded);
     ui.set_clip_rect(outer_clip);
     // 15 settle
     p.trace.mark(Step::Settle);
@@ -1272,7 +1282,8 @@ pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<T
             log::debug!("{} measured the size {size:?} and shows nothing", facts.name);
         }
     }
-    let core = blank_core(env.view(), &resolved, &mut stage, ctx.clone(), env.ink, steps::inert_response(ui, id), step1.command.clone());
+    let mut core = blank_core(env.view(), &resolved, &mut stage, ctx.clone(), env.ink, steps::inert_response(ui, id), step1.command.clone());
+    core.faded = facts.faded && !resolved.enabled;
     // 6 to 16, in the host's `Ui`, once per call of the host.
     let mut host = t.host(HostCx { ui: &*ui, env, id, label: &step1.label, size });
     let parent = ui.scope_id();
@@ -1392,4 +1403,6 @@ pub(crate) struct FaceSource<'a> {
     pub flags: crate::style::Flags,
     /// Whether the host is enabled: a face of a disabled host paints with the Disabled state.
     pub enabled: bool,
+    /// The host is faded (`DisabledLook::Faded`): its faces paint their enabled look inside its fade.
+    pub faded: bool,
 }

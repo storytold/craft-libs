@@ -697,7 +697,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             if content > f64::from(rect.height()) {
                 let span = ScrollSpan::new(0.0..content, self.offset..self.offset + f64::from(rect.height()));
                 let result = cx.core.results.get(&(SCROLL, Some(crate::contract::cx::THUMB))).cloned().unwrap_or(crate::primitives::PartResult::IDLE);
-                let state = crate::contract::steps::part_state(&result, cx.core.resolved.enabled, None);
+                let state = crate::contract::steps::part_state(&result, cx.core.looks_enabled(), None);
                 ui.painter().extend(ScrollBar::shapes(&look, track, Axis::Y, rtl, &span, &state, ui.ctx().pixels_per_point()));
             }
         }

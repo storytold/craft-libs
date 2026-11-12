@@ -47,6 +47,8 @@ pub struct PaintUi<'a> {
     pub(crate) size: ControlSize,
     /// The selection parts step 7 declared.
     pub(crate) selections: &'a [PartRef],
+    /// The opacity before step 13 faded the component (`DisabledLook::Faded`): its children paint at it.
+    pub(crate) unfaded: Option<f32>,
     /// The children's `Ui`, built on the first child under `sub(id, "children")`.
     pub(crate) kids: Option<Ui>,
 }
@@ -188,9 +190,15 @@ impl PaintUi<'_> {
     fn child_with<C: Show>(&mut self, id: Id, rect: Rect, child: C, tip: Option<TipFn<'_>>, inside: Option<Arc<InsideLabel>>) -> C::Output {
         let scope = sub(self.id, "children");
         let parent = &mut *self.ui;
+        let unfaded = self.unfaded;
         let kids = self.kids.get_or_insert_with(|| {
             let builder = egui::UiBuilder::new().layout(child::pinned_layout()).scope_id(scope).max_rect(self.rect);
-            alloc::child(parent, access::with_parent(builder, self.id))
+            let mut kids = alloc::child(parent, access::with_parent(builder, self.id));
+            // A child shows its own disabled look, outside its owner's fade.
+            if let Some(opacity) = unfaded {
+                kids.set_opacity(opacity);
+            }
+            kids
         });
         let ctx = kids.ctx().clone();
         let env = super::cx::child_env(&Env::of(kids), &super::cx::Under { enabled: self.enabled, size: self.size, inside });
@@ -222,8 +230,17 @@ impl PaintUi<'_> {
             return;
         };
         let focus = self.active.filter(|(active, _)| *active == part).map(|(_, visible)| visible);
-        let source =
-            FaceSource { id: self.id, result, focus, response: self.response, ink, muted: self.muted, flags: self.flags, enabled: self.enabled };
+        let source = FaceSource {
+            id: self.id,
+            result,
+            focus,
+            response: self.response,
+            ink,
+            muted: self.muted,
+            flags: self.flags,
+            enabled: self.enabled,
+            faded: self.unfaded.is_some(),
+        };
         let record = run::paint_face(self.ui, self.env, &source, part, face);
         let mut own = self.record.borrow_mut();
         if let Some(baseline) = record.baseline {

@@ -12,8 +12,8 @@ use craft_behavior::{Axis, EditEvent, EditEvents, Metrics, PartKey};
 use craft_theme::Srgba;
 use craft_ui::choice::{ChoiceWords, Segmented, Swatch};
 use craft_ui::contract::{
-    Access, Activation, Bind, Common, Component, Cx, Edit as _, EditResponse, Entry, Outcome, Overlay, OverlayUi, Overlays as _, PaintUi, PartsCx,
-    Pointer as _, PopupKind, Props as _, Remember as _, Role, Show as _, WordSetCx as _,
+    Access, Activation, Bind, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Entry, Outcome, Overlay, OverlayUi, Overlays as _,
+    PaintUi, PartsCx, Pointer as _, PopupKind, Props as _, Remember as _, Role, Show as _, WordSetCx as _,
 };
 use craft_ui::primitives::textures::CachedTexture;
 use craft_ui::primitives::{ContentPainterCx, PaintShape, StrokeWidth};
@@ -354,6 +354,7 @@ fn value_text(words: &PaintWords, paint: &Paint) -> String {
 
 impl Component for PaintChip<'_> {
     const ROLE: Role = Role::COLOR_WELL;
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     type Style = PaintChipStyle;
     type Output = PaintChipOutput;
 

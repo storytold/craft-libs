@@ -10,7 +10,8 @@ use craft_behavior::IconId;
 use craft_behavior::{Input, Metrics, PartKey, Sense};
 use craft_ui::buttons::IconButton;
 use craft_ui::contract::{
-    CommandSet, Common, Component, Cx, MeasureCx, NoValue, Outcome, PaintUi, PartsCx, Props as _, Role, Show as _, ShowContainer as _, clicked,
+    CommandSet, Common, Component, Cx, DisabledLook, MeasureCx, NoValue, Outcome, PaintUi, PartsCx, Props as _, Role, Show as _, ShowContainer as _,
+    clicked,
 };
 use craft_ui::dialog::Dialog;
 use craft_ui::layout_components::Row;
@@ -212,6 +213,7 @@ impl<'a> PagePicture<'a> {
 
 impl Component for PagePicture<'_> {
     const ROLE: Role = Role::IMAGE;
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     const KEYS: KeyUse = KeyUse::of(Input::Pointer);
     type Style = PagePictureStyle;
     type Output = PagePictureOutput;

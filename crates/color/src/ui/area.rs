@@ -5,7 +5,7 @@ use crate::AreaMode;
 use craft_behavior::{Metrics, Mixed, Sense};
 use craft_theme::ModelValues;
 use craft_ui::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, PaintUi, Props as _, Role, WordSetCx as _,
+    Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, MeasureCx, PaintUi, Props as _, Role, WordSetCx as _,
 };
 use craft_ui::primitives::ContentPainterCx;
 use craft_ui::runtime::env::Label;
@@ -100,6 +100,7 @@ impl<'a> ColorArea<'a> {
 impl Component for ColorArea<'_> {
     const SINGLE_VALUE: bool = true;
     const ROLE: Role = Role::GROUP;
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     const PARTS: bool = false;
     const STOPS: bool = false;
     const OVERLAYS: bool = false;

@@ -428,6 +428,8 @@ Semantic tokens fall in eight groups: surface, text, line, accent, status, state
 
 Accent fills that carry text use the strong pair: the accent moved in lightness only as far as white text needs.
 
+A disabled component looks one of two ways (`Component::DISABLED`). A control whose look is chrome (a button, a field, a slider) takes its style's Disabled state: `text.disabled` ink and the disabled fills. A component that shows data (a picture, a colour, a plot, a tile) declares `DisabledLook::Faded`: step 13 paints its enabled look, faces included, at `Opacity::DISABLED`, so its data dims with the rest. The children it shows stay outside its fade and show their own disabled look.
+
 ### 5.2 Typography
 
 App text maps to the nearest named role. A real new need gets a new role. No role serves a single use.

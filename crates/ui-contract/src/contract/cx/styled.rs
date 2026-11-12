@@ -25,6 +25,12 @@ pub trait Styled {
 }
 
 impl CxCore<'_> {
+    /// Whether the component paints its enabled look: it is enabled, or it is `faded` and the fade alone shows that it
+    /// is not.
+    pub(crate) fn looks_enabled(&self) -> bool {
+        self.resolved.enabled || self.faded
+    }
+
     fn assert_stated(&self) {
         debug_assert!(self.stated, "the state set is written at step 12; it is not readable in `update` or `overlay`");
     }
@@ -69,8 +75,10 @@ impl CxCore<'_> {
             }
         }
         let pressed = result.pressed();
-        let state = if !self.resolved.enabled || result.inactive {
+        let state = if !self.looks_enabled() || result.inactive {
             craft_theme::State::Disabled
+        } else if !self.resolved.enabled {
+            craft_theme::State::Rest
         } else if pressed {
             craft_theme::State::Pressed
         } else if hovered {
@@ -94,8 +102,10 @@ impl Styled for CxCore<'_> {
         self.assert_stated();
         let hovered = self.response.hovered() && !self.results.values().any(|result| result.hovered);
         let pressed = self.press.phase.is_press();
-        let state = if !self.resolved.enabled {
+        let state = if !self.looks_enabled() {
             craft_theme::State::Disabled
+        } else if !self.resolved.enabled {
+            craft_theme::State::Rest
         } else if pressed {
             craft_theme::State::Pressed
         } else if hovered {

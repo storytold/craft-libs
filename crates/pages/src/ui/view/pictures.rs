@@ -7,7 +7,7 @@ use crate::ui::access::{AccessDescriber, describe};
 use craft_behavior::{Input, Metrics, PixelSize, Sense};
 use craft_ui::canvas::DetailPlan;
 use craft_ui::canvas::PixelRect;
-use craft_ui::contract::{Access, Common, Component, Cx, MeasureCx, NoValue, Outcome, PaintUi, Role};
+use craft_ui::contract::{Access, Common, Component, Cx, DisabledLook, MeasureCx, NoValue, Outcome, PaintUi, Role};
 use craft_ui::primitives::textures::{
     Priority, TextureState, TextureStoreOptions, ThumbPaint, ThumbRequest, ThumbnailOptions, Thumbnails, texture_side,
 };
@@ -144,6 +144,7 @@ impl<'a> PagePictures<'a> {
 
 impl Component for PagePictures<'_> {
     const ROLE: Role = Role::GROUP;
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     const ALT_ROLES: &'static [Role] = &[Role::None];
     const PARTS: bool = false;
     const STOPS: bool = false;

@@ -126,7 +126,7 @@ impl BodyHooks<'_> {
                 if !overflow {
                     continue;
                 }
-                let enabled = cx.core.resolved.enabled;
+                let enabled = cx.core.looks_enabled();
                 let state = crate::contract::steps::part_state(
                     cx.core.results.get(&(bar.key, Some(crate::contract::cx::THUMB))).unwrap_or(&crate::primitives::PartResult::IDLE),
                     enabled,

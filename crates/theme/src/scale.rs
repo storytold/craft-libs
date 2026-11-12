@@ -215,8 +215,9 @@ impl Easing {
 pub struct Opacity;
 
 impl Opacity {
-    /// Multiplier for disabled controls.
-    pub const DISABLED: f32 = 0.4;
+    /// How much of its look a disabled thing keeps: the opacity of a faded component (`DisabledLook::Faded`) and the
+    /// share a disabled knob's fill moves toward the disabled fill.
+    pub const DISABLED: f32 = 0.5;
     /// Alpha of a window or layer while it moves over a drop target, so what lies under it shows through.
     pub const MOVING: f32 = 0.75;
     /// Alpha of a mark the app derived, drawn beside the user's own marks of the same kind so those stand out.

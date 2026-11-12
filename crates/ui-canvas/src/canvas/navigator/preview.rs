@@ -7,8 +7,8 @@ use crate::canvas::zoom_motion::{self, Steer};
 use crate::canvas::{CanvasWords, NavigationOptions, PageKey, ViewCommands, WheelAction, WheelNavigation};
 use crate::canvas_data::ProxyColor;
 use crate::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Name, Outcome, PaintUi, PartsCx,
-    Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
+    Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Name, Outcome, PaintUi,
+    PartsCx, Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
 };
 use crate::primitives::textures::CachedTexture;
 use crate::primitives::{ContentPainterCx, PaintShape};
@@ -289,6 +289,7 @@ fn take_navigation(cx: &mut Cx<'_, Navigator<'_>>, next: &mut CanvasView, runnin
 
 impl Component for Navigator<'_> {
     const ROLE: Role = Role::GROUP;
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     const OVERLAYS: bool = false;
     const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_keep(KeepKeys::BlockArrows).with_activate(ActivateKeys::Neither);
     const BINDS_VIEW: bool = true;

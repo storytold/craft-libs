@@ -6,7 +6,8 @@ use craft_behavior::nav::{LARGE_STEPS, StepResult, ValueAxes, ValueSteps, step_u
 use craft_behavior::{Axis, Metrics, NavMove, PartKey, Sense, ValueDrag};
 use craft_theme::ModelValues;
 use craft_ui::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, Numeric, PaintUi, PartsCx, Props as _, Role,
+    Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, Input, Numeric, PaintUi, PartsCx, Props as _,
+    Role,
 };
 use craft_ui::primitives::{PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Label;
@@ -127,6 +128,7 @@ impl<'a> ColorStrip<'a> {
 impl Component for ColorStrip<'_> {
     const SINGLE_VALUE: bool = true;
     const ROLE: Role = Role::SLIDER;
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     const OVERLAYS: bool = false;
     const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_keep(KeepKeys::BlockArrows).with_activate(ActivateKeys::Neither);
     type Style = ColorStripStyle;

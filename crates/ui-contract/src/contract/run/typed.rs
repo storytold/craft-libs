@@ -598,9 +598,10 @@ pub(crate) fn paint_face<C: Show>(ui: &mut Ui, env: &Env, source: &super::FaceSo
     stage.face = true;
     let rect = source.result.rect;
     let flow = Flow::new(rect, env.direction.is_rtl());
-    let part_state = steps::part_state(source.result, step1.enabled && source.enabled, source.focus);
+    let part_state = steps::part_state(source.result, source.faded || (step1.enabled && source.enabled), source.focus);
     let mut core = blank_core(env.view(), &resolved, &mut stage, ctx.clone(), env.ink, source.response.clone(), None);
     core.face_mode = true;
+    core.faded = source.faded;
     core.rect = rect;
     core.content_rect = flow.inset(StyleView::metrics(&*style).padding);
     core.flow = flow;
@@ -633,6 +634,7 @@ pub(crate) fn paint_face<C: Show>(ui: &mut Ui, env: &Env, source: &super::FaceSo
             enabled: step1.enabled && source.enabled,
             size: step1.size,
             selections: &[],
+            unfaded: None,
             kids: None,
         };
         face.paint(&mut pui, &cx);
@@ -738,7 +740,8 @@ pub(crate) fn member_show<C: Show>(
     let rtl = env.direction.is_rtl();
     let resolved = steps::resolved(id, &step1, &common);
     let enabled = node.enabled && step1.enabled;
-    let hovered = sensed.response.hovered();
+    let faded = !enabled && C::DISABLED == crate::contract::DisabledLook::Faded;
+    let hovered = sensed.response.hovered() && !faded;
     let result = crate::primitives::PartResult {
         rect: row,
         press: sensed.press,
@@ -749,11 +752,12 @@ pub(crate) fn member_show<C: Show>(
         inactive: false,
         held: false,
     };
-    let part_state = steps::part_state(&result, enabled, None);
+    let part_state = steps::part_state(&result, enabled || faded, None);
     // A peek that opens no lifetime stage and is dropped without a write-back, as a face's.
     let mut stage = MemoryStage::open_peek(&ctx, id);
     stage.face = true;
     let mut core = blank_core(env.view(), &resolved, &mut stage, ctx.clone(), env.ink, sensed.response, step1.command.clone());
+    core.faded = faded;
     let flow = Flow::new(row, rtl);
     core.rect = row;
     core.content_rect = flow.inset(StyleView::metrics(&*style).padding);
@@ -772,10 +776,12 @@ pub(crate) fn member_show<C: Show>(
     cx.core.stated = true;
     cx.core.ink = steps::surface_ink(StyleView::surface(&*style), &state, env.ink);
     item.update(&mut cx);
+    let unfaded = steps::fade(ui, &mut cx.core);
     steps::paint_surface(ui, env, &cx.core, &*style);
     steps::paint_part_layers(ui, env, &cx.core);
     item.paint(&mut super::paint_ui(ui, env, &cx.core, &*style), &cx);
     item.paint_over(&mut super::paint_ui(ui, env, &cx.core, &*style), &cx);
+    ui.set_opacity(unfaded);
     let mut access = Access::default();
     item.access(&mut access, &cx);
     let member_node = report_member(&cx.core, &access, node, C::ROLE);

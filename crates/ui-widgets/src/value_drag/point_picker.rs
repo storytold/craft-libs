@@ -4,8 +4,8 @@
 //! `NumberField`s the caller shows beside it, bound to the same value.
 
 use crate::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Numeric, PaintUi, PartsCx, Pointer as _,
-    Props as _, Role, WordSetCx as _,
+    Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Numeric, PaintUi, PartsCx,
+    Pointer as _, Props as _, Role, WordSetCx as _,
 };
 use crate::primitives::{ContentPainterCx, PaintShape};
 use crate::runtime::access::Name;
@@ -333,6 +333,7 @@ impl Component for PointPicker<'_> {
     const ROLE: Role = Role::GROUP;
     const OVERLAYS: bool = false;
     const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_keep(KeepKeys::BlockArrows).with_activate(ActivateKeys::Neither);
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     type Style = PointPickerStyle;
     type Output = EditResponse<[Mixed<f64>; 2]>;
 

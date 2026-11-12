@@ -10,8 +10,8 @@ use craft_theme::variant::Tone;
 use craft_ui::buttons::Button;
 use craft_ui::choice::Segmented;
 use craft_ui::contract::{
-    Bind, BindMut, Common, Component, Cx, Edit as _, Entry, Focus as _, MeasureCx, PaintUi, PartsCx, Pointer as _, Props as _, Role, Show as _,
-    ShowContainer as _, clicked,
+    Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, Entry, Focus as _, MeasureCx, PaintUi, PartsCx, Pointer as _, Props as _, Role,
+    Show as _, ShowContainer as _, clicked,
 };
 use craft_ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft_ui::display::{Picture, PictureSize, Text};
@@ -234,6 +234,7 @@ impl<'a> DrawPad<'a> {
 
 impl Component for DrawPad<'_> {
     const ROLE: Role = Role::IMAGE;
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     const OVERLAYS: bool = false;
     const SINGLE_VALUE: bool = true;
     /// The pad is drawn with the pointer: it takes no activation key, and Undo removes the last stroke.

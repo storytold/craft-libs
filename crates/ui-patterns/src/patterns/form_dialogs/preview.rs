@@ -3,8 +3,8 @@
 
 use crate::buttons::IconButton;
 use crate::contract::{
-    Bind, Common, Component, Cx, Focus as _, Input, MeasureCx, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role, Show as _,
-    ShowContainer as _,
+    Bind, Common, Component, Cx, DisabledLook, Focus as _, Input, MeasureCx, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role,
+    Show as _, ShowContainer as _,
 };
 use crate::display::{Progress, Text};
 use crate::layout_components::Row;
@@ -375,6 +375,7 @@ impl PreviewPane<'_> {
 
 impl Component for PreviewPane<'_> {
     const ROLE: Role = Role::GROUP;
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     const OVERLAYS: bool = false;
     const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_keep(KeepKeys::BlockArrows).with_activate(ActivateKeys::Neither);
     type Style = PreviewPaneStyle;

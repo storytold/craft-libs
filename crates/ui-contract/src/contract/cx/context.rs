@@ -160,6 +160,11 @@ pub struct CxCore<'a> {
     pub(crate) texts: Option<(PartKey, Box<dyn TextResult>)>,
     /// The selection parts step 7 declared, which `PaintUi::selectable_text` shows.
     pub(crate) selections: Vec<craft_behavior::PartRef>,
+    /// Not enabled, with `DisabledLook::Faded`: the component and its faces paint their enabled look, which step 13
+    /// fades.
+    pub(crate) faded: bool,
+    /// The opacity of the component's `Ui` before step 13 faded it, which its children paint at.
+    pub(crate) unfaded: Option<f32>,
     /// Where the text part reserved the surface in the painter, so the field's surface paints beneath its text.
     pub(crate) surface_slot: Option<egui::layers::ShapeIdx>,
     /// The editor part as step 8b set it up.

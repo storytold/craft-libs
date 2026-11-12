@@ -8,6 +8,7 @@ mod bars;
 pub(crate) mod body;
 mod commands;
 mod contract;
+mod disabled_fade;
 mod field_text_centred;
 mod keys;
 mod label;

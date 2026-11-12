@@ -2,7 +2,7 @@
 
 #[cfg(doc)]
 use super::ListRow;
-use crate::contract::{Common, Component, Cx, PaintUi, Role};
+use crate::contract::{Common, Component, Cx, DisabledLook, PaintUi, Role};
 use crate::list::words::ListWords;
 use crate::primitives::ContentPainterCx;
 use crate::runtime::env::Label;
@@ -142,6 +142,7 @@ impl Component for RowThumb<'_> {
     const PARTS: bool = false;
     const STOPS: bool = false;
     const OVERLAYS: bool = false;
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     type Style = RowThumbStyle;
     type Output = Response;
 

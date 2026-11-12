@@ -4,8 +4,8 @@
 use super::radio::RadioKind;
 use super::words::ChoiceWords;
 use crate::contract::{
-    Access, Activation, Common, Component, Cx, GroupHandle, MeasureCx, Meta as _, Outcome, PaintUi, Pointer as _, Props as _, Role, Styled as _,
-    WordSetCx as _,
+    Access, Activation, Common, Component, Cx, DisabledLook, GroupHandle, MeasureCx, Meta as _, Outcome, PaintUi, Pointer as _, Props as _, Role,
+    Styled as _, WordSetCx as _,
 };
 use crate::primitives::{Checker, ContentPainterCx, Draw, PaintShape, StrokeWidth, glyph};
 use crate::runtime::requests::ColorRequest;
@@ -199,6 +199,7 @@ impl<T: Value + 'static> Component for Swatch<T> {
     const PARTS: bool = false;
     const OVERLAYS: bool = false;
     const ALT_ROLES: &'static [Role] = &[Role::RADIO_BUTTON, Role::LIST_BOX_OPTION];
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     type Style = SwatchStyle;
     type Output = SwatchOutput;
 
@@ -208,14 +209,13 @@ impl<T: Value + 'static> Component for Swatch<T> {
         let clear = cx.color(Rgba::TRANSPARENT);
         let rest = cx.color(colors.line.control_edge);
         let accent = cx.color(colors.accent.solid);
-        let disabled = cx.color(colors.text.disabled);
         SwatchStyle {
             metrics: Metrics::new(),
             focus: cx.focus_look(),
             side: if key.cell && !key.well { metrics.cell } else { metrics.side },
             radius: if key.cell && !key.well { CornerRadius::ZERO } else { metrics.radius },
-            edge: Stateful::new(rest).off(States::new(rest, rest, rest, disabled)),
-            ring: Stateful::new(clear).on(States::new(accent, accent, accent, disabled)),
+            edge: Stateful::new(rest),
+            ring: Stateful::new(clear).on(States::new(accent, accent, accent, accent)),
             mark: cx.color(colors.text.normal),
             mixed_fill: cx.color(colors.surface.sunken),
             mixed_mark: cx.color(colors.text.muted),

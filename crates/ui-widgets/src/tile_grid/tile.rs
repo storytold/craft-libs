@@ -12,8 +12,8 @@ use super::{BadgeKind, BadgeSlot, BadgeVisibility, CaptionPlace, TileBadge, Tile
 use crate::buttons::IconButton;
 use crate::choice::{Checkbox, ChoiceWords, Rating};
 use crate::contract::{
-    Access, Bind, Common, Component, Cx, Focus as _, ItemOutput, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role,
-    Styled as _, WordSetCx as _,
+    Access, Bind, Common, Component, Cx, DisabledLook, Focus as _, ItemOutput, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Pointer as _,
+    Props as _, Role, Styled as _, WordSetCx as _,
 };
 use crate::display::Badge;
 use crate::list::{RowThumb, ThumbAspect, ThumbPaint, ToggleState};
@@ -24,7 +24,7 @@ use crate::style::{ComponentStyle, Corners, DataColor, Flags, IconLook, StyleCol
 use craft_behavior::{AccessAction, AccessData, Flow, IconId, Insets, Metrics, Mixed, NavShape, PartKey, PressPhase, Proposal, Roving, Sense};
 use craft_keymap::Mods;
 use craft_theme::variant::{Emphasis, Tone};
-use craft_theme::{Opacity, Rgba, Srgba, Stateful, States, TypeRole, Variant, over};
+use craft_theme::{Rgba, Srgba, Stateful, States, TypeRole, Variant, over};
 use egui::{Color32, CornerRadius, Pos2, Rect, Response, Vec2};
 
 /// Stars a rating has.
@@ -228,7 +228,6 @@ pub struct TileStyle {
     pill_icon: IconLook,
     placeholder: StyleColor,
     dim: StyleColor,
-    veil: Stateful<StyleColor>,
     /// The fill under the badge bar and the check box, over the picture.
     plate: StyleColor,
     pill: StyleColor,
@@ -596,6 +595,7 @@ fn badge_rects(flow: Flow, widths: &[f32], height: f32, sizes: &Sizes, plate: Op
 impl Component for Tile<'_> {
     const ROLE: Role = Role::LIST_ITEM;
     const OVERLAYS: bool = false;
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     type Style = TileStyle;
     type Output = TileOutput;
 
@@ -631,21 +631,11 @@ impl Component for Tile<'_> {
         let surface = SurfaceLook::new(fill).radius(radius).border(edge, tokens.stroke.thick);
         let surface = if key.card { surface.kind(SurfaceKind::Raised) } else { surface };
         let on_selected = c(text.on_selected);
-        let ink = |base: StyleColor| {
-            Stateful::new(base).off(States::new(base, base, base, c(text.disabled))).on(States::new(
-                on_selected,
-                on_selected,
-                on_selected,
-                on_selected,
-            ))
-        };
+        let ink = |base: StyleColor| Stateful::new(base).on(States::new(on_selected, on_selected, on_selected, on_selected));
         let fixed = |color: Rgba| Stateful::new(c(color));
         let pill = cx.with_variant(pill_variant(Tone::Neutral)).variant_look();
         let plate = c(colors.surface.scrim);
         let on_bar = |ink: StyleColor, side: f32| IconLook::new(side, Stateful::new(ink)).on(Stateful::new(plate));
-        // A disabled tile's picture moves toward the disabled fill as a disabled surface's fill does.
-        let disabled = c(colors.state.disabled_fill.faded(Opacity::DISABLED));
-        let veil = Stateful::new(c(clear)).off(States::new(c(clear), c(clear), c(clear), disabled));
         TileStyle {
             surface,
             metrics: Metrics::new().padding(Insets::new(sizes.inset, sizes.inset, sizes.inset, sizes.inset)).gap(sizes.tight),
@@ -662,15 +652,10 @@ impl Component for Tile<'_> {
             stars: on_bar(c(text.on_strong), tokens.size.icon.glyph_sm),
             picked: on_bar(cx.tone(Tone::Good), sizes.glyph),
             rejected: on_bar(cx.tone(Tone::Bad), sizes.glyph),
-            face: IconLook::new(
-                sizes.face,
-                Stateful::new(c(text.muted)).off(States::new(c(text.muted), c(text.muted), c(text.muted), c(text.disabled))),
-            )
-            .on(fixed(colors.surface.sunken)),
+            face: IconLook::new(sizes.face, fixed(text.muted)).on(fixed(colors.surface.sunken)),
             pill_icon: IconLook::new(sizes.glyph, pill.text.clone()).on(pill.fill.clone()),
             placeholder: c(colors.surface.sunken),
             dim: c(colors.surface.scrim.faded(DIM_VEIL)),
-            veil,
             plate,
             pill: pill.fill.off.rest,
             band: c(colors.status.bad.solid),
@@ -820,7 +805,6 @@ impl Component for Tile<'_> {
             if self.dimmed || self.rejected || self.hidden {
                 draw.fill(&PaintShape::Rect(picture, flat), style.dim);
             }
-            draw.fill(&PaintShape::Rect(picture, flat), cx.resolve(&style.veil));
             self.paint_range_and_scrub(&draw, cx, picture);
         }
         self.paint_band(ui, cx, &placed);

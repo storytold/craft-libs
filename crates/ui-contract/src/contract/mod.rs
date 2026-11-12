@@ -289,6 +289,19 @@ pub const MAX_EXTENT: f32 = 32_768.0;
 /// a dialog.
 pub trait Pattern {}
 
+/// How a component that is not enabled looks (`Component::DISABLED`). Either way it takes no input, its access node
+/// is disabled and the children it shows inherit the disabled state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DisabledLook {
+    /// The style's Disabled state: `text.disabled` ink, the theme's disabled fills. Controls whose look is chrome
+    /// (buttons, fields, sliders) take it.
+    States,
+    /// The component paints its enabled look at `Opacity::DISABLED`: its surface, its paint, its faces and
+    /// `paint_over`, not its focus ring. A component that shows data (a picture, a colour, a plot) takes it, so the
+    /// data dims with the rest. The children it shows are not inside the fade; each shows its own disabled look.
+    Faded,
+}
+
 /// The core trait: every UI type is a `Component`.
 pub trait Component: Meta + Sized {
     /// The AccessKit role.
@@ -331,6 +344,8 @@ pub trait Component: Meta + Sized {
     /// canvas view), not a value the user edits. The wheel moves a view without focus, as it scrolls a scroll
     /// region; a bound value control takes it only while focused or armed.
     const BINDS_VIEW: bool = false;
+    /// How a disabled instance looks: token states (the default), or its enabled look faded.
+    const DISABLED: DisabledLook = DisabledLook::States;
 
     /// The style type.
     type Style: ComponentStyle;

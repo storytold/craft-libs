@@ -12,6 +12,18 @@ pub(crate) fn surface_ink(look: Option<&crate::style::SurfaceLook>, state: &Stat
     look.and_then(|look| look.kind_in(state)).map_or(inherited, |kind| kind.ink())
 }
 
+/// Step 13 for a component that is `faded` (`DisabledLook::Faded`, not enabled): multiplies `ui`'s opacity by
+/// `Opacity::DISABLED` until the caller sets it back. Returns the opacity before, which the focus ring, step 14 and the
+/// children `PaintUi` shows paint at. egui fades a shape as it is added, so a run record keeps the faded shapes.
+pub(crate) fn fade(ui: &mut Ui, core: &mut CxCore<'_>) -> f32 {
+    let before = core.unfaded.unwrap_or_else(|| ui.opacity());
+    if core.faded {
+        ui.set_opacity(before * craft_theme::Opacity::DISABLED);
+        core.unfaded = Some(before);
+    }
+    before
+}
+
 /// Step 13, paint, the pipeline's part before `C::paint`: the root surface and the state fill.
 pub(crate) fn paint_surface(ui: &Ui, env: &Env, core: &CxCore<'_>, style: &dyn StyleView) {
     let Some(look) = style.surface() else { return };
