@@ -31,6 +31,7 @@ pub mod diagram;
 pub mod numfmt;
 pub mod part;
 pub mod preset;
+mod preset_text;
 pub mod read;
 pub mod style;
 pub mod table;
