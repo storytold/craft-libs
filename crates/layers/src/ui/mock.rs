@@ -9,9 +9,8 @@ use super::filter::{EffectKind, FilterBy, LayerAttribute, LayerFilter, SmartKind
 use super::tree::LayerRowKey;
 use super::tree::{
     LayerInfo, LayerKind, LayerLocks, LayerPart, LayerProperties, LayerSelection, LayerTree, LayersFooterState, MaskInfo, SubRow, SubRowGroup,
-    SubRows,
+    SubRows, ThumbBadge,
 };
-use craft_behavior::IconId;
 
 /// One layer of a [`FakeLayers`] tree.
 #[derive(Clone, Debug)]
@@ -179,7 +178,7 @@ impl FakeLayers {
             }),
             false,
         );
-        tree.add(None, named("Rectangle 1", LayerKind::Shape, |_| {}), false);
+        tree.add(None, named("Rectangle 1", LayerKind::Shape, |i| i.thumb_badge = Some(ThumbBadge::Shape)), false);
         tree.add(None, named("Ellipse 1", LayerKind::Shape, |i| i.locks.position = true), false);
         tree.add(
             None,
@@ -275,7 +274,7 @@ impl FakeLayers {
             Some(board),
             named("Photo", LayerKind::SmartObject, |i| {
                 i.has_smart_filters = true;
-                i.thumb_badge = Some(IconId::new("app_window"));
+                i.thumb_badge = Some(ThumbBadge::SmartObject);
             }),
             false,
         );

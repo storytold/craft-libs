@@ -170,9 +170,9 @@ pub struct LayerInfo {
     /// Whether Cmd/Ctrl-click on the layer thumbnail loads it as a selection; false for the
     /// Background, where Cmd-click is a plain click.
     pub thumb_loads_selection: bool,
-    /// A badge in the layer thumbnail's corner on the scrim, as the mask badges: PhotoCraft's smart
-    /// object and shape marks. The app names it in [`description`](Self::description).
-    pub thumb_badge: Option<IconId>,
+    /// The mark in the layer thumbnail's corner that tells a smart object or a shape layer from a
+    /// pixel layer, whose pictures look alike; the app picks which layers carry one.
+    pub thumb_badge: Option<ThumbBadge>,
     /// The app's own words, added to the row's description for a screen reader.
     pub description: Option<String>,
 }
@@ -236,6 +236,17 @@ impl LayerInfo {
         }
         parts.position(|shown| shown == part).map(ThumbTarget::Extra)
     }
+}
+
+/// The mark in a layer thumbnail's corner ([`LayerInfo::thumb_badge`]), in the badge box the mask
+/// badges use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ThumbBadge {
+    /// A smart object: a window glyph.
+    SmartObject,
+    /// A shape layer: a path with an anchor point on each corner, as Photoshop's.
+    Shape,
 }
 
 /// What a layer is.

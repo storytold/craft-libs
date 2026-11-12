@@ -9,7 +9,7 @@
 mod stories;
 
 use craft_behavior::{EditEvent, IconId, Mixed, SelectionChange};
-use craft_theme::LabelColor;
+use craft_theme::{ControlSize, LabelColor};
 use craft_ui::buttons::ToggleButton;
 use craft_ui::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, Sizing};
 use craft_ui::layout_components::Row;
@@ -793,13 +793,17 @@ const fn smart_salt(kind: SmartKind) -> &'static str {
     }
 }
 
-/// One icon toggle button per `(value, icon, name)`, pressed while `on` holds the value; a toggle
+/// One small icon toggle button per `(value, icon, name)`, pressed while `on` holds the value; a toggle
 /// adds the value to `on` or takes it out.
 fn toggles<K: Copy + PartialEq>(ui: &mut Ui, buttons: &[(K, &'static str, &Label)], salt: fn(K) -> &'static str, on: &mut Vec<K>) {
     let shown = on.clone();
     for &(value, icon, name) in buttons {
-        let toggled =
-            ToggleButton::new(name.clone(), Bind::given(shown.contains(&value))).icon(IconId::new(icon)).icon_only().id_salt(salt(value)).show(ui);
+        let toggled = ToggleButton::new(name.clone(), Bind::given(shown.contains(&value)))
+            .icon(IconId::new(icon))
+            .icon_only()
+            .size(ControlSize::Sm)
+            .id_salt(salt(value))
+            .show(ui);
         match toggled.value() {
             Some(true) => on.push(value),
             Some(false) => on.retain(|held| *held != value),

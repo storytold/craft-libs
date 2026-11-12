@@ -11,14 +11,14 @@ use craft_ui::primitives::{ContentPainterCx, IconSpec};
 use craft_ui::runtime::env::Label;
 use craft_ui::style::{Corners, DataColor, SurfaceKind};
 use egui::emath::GuiRounding as _;
-use egui::{Color32, Rect, Stroke, pos2, vec2};
+use egui::{Color32, Rect, Stroke, StrokeKind, pos2, vec2};
 
 use super::LayersPanelWords;
 use super::body::thumb_click_replaces_select;
 use super::context::{PanelContext, ThumbHost};
 use super::drag::LayersDrag;
 use crate::ui::thumbs::LayerThumb;
-use crate::ui::tree::{LayerInfo, LayerKind, LayerPart, LayerRowKey, LayerTree, MaskInfo, SubRowGroup};
+use crate::ui::tree::{LayerInfo, LayerKind, LayerPart, LayerRowKey, LayerTree, MaskInfo, SubRowGroup, ThumbBadge};
 
 /// The eye column.
 pub(super) const EYE: ColumnKey = ColumnKey::new("eye");
@@ -41,6 +41,8 @@ const DISABLED_MASK: LabelColor = LabelColor::Red;
 const CROSS_INSET_SHARE: f32 = 0.12;
 const MARK_WIDTH_SHARE: f32 = 0.06;
 const BADGE_GLYPH_SHARE: f32 = 0.28;
+/// The side of a shape badge's anchor point, as a share of the badge.
+const ANCHOR_SHARE: f32 = 0.25;
 /// The kind glyph's share of the tile's shorter side.
 const KIND_GLYPH_SHARE: f32 = 0.64;
 /// A type layer's tile is ink on paper, the same in every theme, as the checkerboard is.
@@ -186,20 +188,36 @@ fn paint_kind_tile(painter: &ContentPainterCx<'_>, rect: Rect, kind: LayerKind) 
     }
 }
 
-/// The square in the bottom corner of the thumbnail `rect` that a badge fills: the small icon size, the least that
-/// still reads, within the thumbnail.
-fn badge_area(painter: &ContentPainterCx<'_>, rect: Rect) -> Rect {
+/// The badge box in the bottom corner of the thumbnail `rect`, painted as a field well at the small icon size (the
+/// least that still reads, within the thumbnail); returns the box and the ink its mark draws in. The kind badges and
+/// the mask badges share it.
+fn badge_box(painter: &ContentPainterCx<'_>, rect: Rect) -> (Rect, Color32) {
     let badge = painter.style_cx().tokens.size.icon.sm.min(rect.width().min(rect.height()));
-    Rect::from_min_size(pos2(rect.right() - badge, rect.bottom() - badge), vec2(badge, badge))
+    let area = Rect::from_min_size(pos2(rect.right() - badge, rect.bottom() - badge), vec2(badge, badge));
+    painter.surface(area, SurfaceKind::Well, Corners::All);
+    (area, painter.ink_on(SurfaceKind::Well))
 }
 
-/// The app's badge on a layer thumbnail: its icon at the small glyph size on the scrim.
-fn paint_thumb_badge(painter: &ContentPainterCx<'_>, rect: Rect, icon: IconId) {
-    let area = badge_area(painter, rect);
-    painter.surface(area, SurfaceKind::Scrim, Corners::None);
-    let side = painter.style_cx().tokens.size.icon.glyph_sm.min(area.width());
-    let glyph = Rect::from_center_size(area.center(), vec2(side, side));
-    painter.icon(glyph, &IconSpec::svg(icon).ink(SurfaceKind::Scrim.ink()));
+/// The app's badge on a layer thumbnail: a window glyph for a smart object, or for a shape layer a path with an
+/// anchor point on each corner, painted so the anchors stay solid squares at this size.
+fn paint_thumb_badge(painter: &ContentPainterCx<'_>, rect: Rect, mark: ThumbBadge) {
+    let (area, ink) = badge_box(painter, rect);
+    let badge = area.width();
+    match mark {
+        ThumbBadge::SmartObject => {
+            let side = painter.style_cx().tokens.size.icon.glyph_sm.min(badge);
+            let glyph = Rect::from_center_size(area.center(), vec2(side, side));
+            painter.icon(glyph, &IconSpec::svg(IconId::new("app_window")).ink(SurfaceKind::Well.ink()));
+        }
+        ThumbBadge::Shape => {
+            let path = area.shrink(badge * CROSS_INSET_SHARE * 2.0);
+            painter.painter.rect_stroke(path, 0.0, Stroke::new(badge * MARK_WIDTH_SHARE * 2.0, ink), StrokeKind::Middle);
+            let anchor = vec2(badge * ANCHOR_SHARE, badge * ANCHOR_SHARE);
+            for corner in [path.left_top(), path.right_top(), path.right_bottom(), path.left_bottom()] {
+                painter.painter.rect_filled(Rect::from_center_size(corner, anchor), 0.0, ink);
+            }
+        }
+    }
 }
 
 /// The cross of a disabled mask and the badge that names a layer or vector mask.
@@ -212,10 +230,8 @@ fn paint_mask_marks(painter: &ContentPainterCx<'_>, rect: Rect, mask: &MaskInfo,
         painter.painter.line_segment([inner.right_top(), inner.left_bottom()], stroke);
     }
     if badges {
-        let area = badge_area(painter, rect);
+        let (area, ink) = badge_box(painter, rect);
         let badge = area.width();
-        painter.surface(area, SurfaceKind::Scrim, Corners::None);
-        let ink = painter.ink_on(SurfaceKind::Scrim);
         let glyph = Stroke::new(badge * MARK_WIDTH_SHARE * 2.0, ink);
         if mask.part == LayerPart::VectorMask {
             let inset = area.shrink(badge * CROSS_INSET_SHARE * 2.0);
@@ -254,13 +270,13 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
 
     if size != ThumbSize::None && !compact {
         let host = cx.thumbs;
-        let (layer, kind, badge) = (id.clone(), info.kind, info.thumb_badge.clone());
+        let (layer, kind, badge) = (id.clone(), info.kind, info.thumb_badge);
         row = row.thumb(size, move |painter, rect| {
             if !paint_picture(host, &LayerThumb::pixels(layer, contents), painter, rect, &PicturePaint::default()) {
                 paint_kind_tile(painter, rect, kind);
             }
-            if let Some(icon) = badge {
-                paint_thumb_badge(painter, rect, icon);
+            if let Some(mark) = badge {
+                paint_thumb_badge(painter, rect, mark);
             }
         });
         let frame = info.kind == LayerKind::Frame;

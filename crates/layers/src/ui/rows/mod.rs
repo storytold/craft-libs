@@ -4,6 +4,7 @@
 mod stories;
 
 use craft_behavior::{EditEvent, EditEvents, IconId};
+use craft_theme::ControlSize;
 use craft_ui::buttons::ToggleButton;
 use craft_ui::contract::{Bind, Entry, Gap, NoValue, Outcome, Props as _, RowAlign, Show as _, ShowContainer as _, SideLabel, Sizing, TooltipSpec};
 use craft_ui::form::Field;
@@ -74,7 +75,7 @@ craft_ui::words! {
 /// - **Row 1**: the blend [`Select`] with `blend_modes` and their separators, then Opacity as a
 ///   percent field with its pop-up slider. A wheel notch over the closed select steps one mode;
 ///   hovering a mode in the open list proposes it (`LayerPropertyEdit::Blend` with an `Update`).
-/// - **Row 2** (with [`locks`](Self::locks)): five toggle buttons in [`LockKind::ALL`] order beside
+/// - **Row 2** (with [`locks`](Self::locks)): five small toggle buttons that touch, in [`LockKind::ALL`] order beside
 ///   their "Lock" caption, then Fill as Opacity's field. Lock image pixels disables Lock transparent pixels. Lock
 ///   all shows the other four on and disabled.
 /// - **Caption**: a drag on the "Opacity" or "Fill" caption scrubs its field.
@@ -154,7 +155,8 @@ impl<'a> BlendRows<'a> {
             Row::new().fill_width().align(RowAlign::SpaceBetween).gap(Gap::Section).show(ui, |ui, _| {
                 // The lock buttons' side label: it names the group, and each button keeps its own name.
                 Field::new(words.lock.clone()).sizing(Sizing::Content).show(ui, |ui, _| {
-                    Row::new().show(ui, |ui, _| {
+                    // Small buttons that touch, as Photoshop's: the five fit beside Fill in a panel's width.
+                    Row::new().gap(Gap::None).show(ui, |ui, _| {
                         let names = [&words.lock_transparency, &words.lock_pixels, &words.lock_position, &words.lock_artboard, &words.lock_all];
                         let icons = ["grid", "brush", "move", "scan", "lock"];
                         for ((kind, name), icon) in LockKind::ALL.into_iter().zip(names).zip(icons) {
@@ -171,6 +173,7 @@ impl<'a> BlendRows<'a> {
                             let button = ToggleButton::new(name.clone(), Bind::given(held.get(kind) || included))
                                 .icon(IconId::new(icon))
                                 .icon_only()
+                                .size(ControlSize::Sm)
                                 .enabled(live && reason.is_none())
                                 .tooltip(TooltipSpec::new(name).disabled_text(reason.map_or_else(|| no_layer.clone(), |reason| reason.clone())))
                                 .show(ui);
