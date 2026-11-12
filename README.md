@@ -49,6 +49,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-cms`](crates/cms/README.md): pure-Rust ICC v2/v4 colour management: profile parsing
   and writing, transforms, rendering intents, black point compensation, soft proofing, gamut
   checks, 3D LUTs and built-in profiles (sRGB, Display P3, synthetic coated CMYK and others).
+- [`craft-crs`](crates/crs/README.md): Adobe Camera Raw settings (the `crs:` namespace of an XMP packet or `.xmp` sidecar, read through craft-metadata): the settings by name, numbers, tone curve points, local corrections and the crop, read and written. From PhotoCraft.
 - [`craft-codepage`](crates/codepage/README.md): legacy 8-bit code pages, one table each: the single-byte Windows pages, Mac OS Roman and fifteen DOS pages, keyed by Windows code page number, with the RTF/Word font charsets. craft-rtf, craft-dxf and craft-mime decode through it.
 - [`craft-crw`](crates/crw/README.md): clean-room Canon CRW (CIFF) raw decoder, from LightCraft:
   the heap container, the entropy coding derived by black-box analysis (frozen code tables), sensor
@@ -146,6 +147,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   what PhotoCraft's and FilmCraft's readers added: container parsing and decompression to a neutral
   raw image (samples, CFA, black and white levels, active area, crop, orientation, colour tags,
   opcode lists, embedded previews), one Cargo feature per format. DNG reading and writing,
+  Hasselblad 3FR/FFF, Minolta MRW, Epson ERF, Mamiya MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2, Nikon NEF/NRW, Panasonic RW2 and Canon CRW (through
   Hasselblad 3FR/FFF, Minolta MRW, Epson ERF, Mamiya MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2, Nikon NEF/NRW and Canon CRW (through
   `craft-crw`) so far; demosaicing and everything after stay with the develop
   pipeline.
