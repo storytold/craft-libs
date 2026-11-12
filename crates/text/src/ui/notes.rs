@@ -16,7 +16,7 @@ use craft_ui::contract::{
     Remember as _, Role, WordSetCx as _,
 };
 use craft_ui::fonts::FontRef;
-use craft_ui::primitives::{DocRun, DocText, EditorLine, EditorPurpose, EditorRun, EditorState, PaintShape, StrokeWidth, TextRun};
+use craft_ui::primitives::{DocRun, DocText, EditorLine, EditorPurpose, EditorRun, EditorState, PaintShape, StrokeWidth, TextLayout, TextRun};
 use craft_ui::runtime::commands::ClipItem;
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::KeyUse;
@@ -161,24 +161,18 @@ impl NotesEditor<'_> {
         let style = &cx.style;
         let area = cx.content_rect;
         let size = style.body_size * self.zoom;
-        let scale = size / DOCUMENT_SIZE;
-        let ink = DataColor::new(style.ink.egui());
-        let font = FontRef::proportional();
+        let marks = markers_of(self.notes);
         let mut y = area.top();
         let mut at = 0usize;
         let mut hit = 0usize;
-        for (index, paragraph) in self.notes.paragraphs.iter().enumerate() {
-            let (_, margin) = line_starts(paragraph.level, paragraph.margin, paragraph.indent);
-            let origin = area.left() + indent(style, margin, scale);
-            let runs = paragraph_runs(paragraph, &font, size, ink);
-            let mut text = DocText::new(&runs);
-            text.wrap = Some((area.width() - (origin - area.left())).max(0.0));
-            let layout = cx.layout_doc(&text);
+        for (index, (paragraph, marker)) in self.notes.paragraphs.iter().zip(&marks).enumerate() {
+            let laid = lay_out(style, paragraph, marker.as_deref(), size, area.width(), &|text| cx.layout_doc(text));
+            let origin = area.left() + laid.margin;
             let length: usize = paragraph.runs.iter().map(|run| run.text.chars().count()).sum();
             if index == 0 || pos.y >= y {
-                hit = at + layout.galley.cursor_from_pos(pos - Pos2::new(origin, y)).index.0.min(length);
+                hit = at + laid.text.galley.cursor_from_pos(pos - Pos2::new(origin, y)).index.0.min(length);
             }
-            y += layout.size().y.max(size);
+            y += laid.text.size().y.max(size);
             at += length + 1;
         }
         hit
@@ -332,19 +326,15 @@ impl Component for NotesEditor<'_> {
         let style = cx.style;
         let size = style.body_size * self.zoom;
         let width = cx.room.unwrap_or(DEFAULT_WIDTH * self.zoom);
-        let scale = size / DOCUMENT_SIZE;
-        let font = FontRef::proportional();
-        let ink = DataColor::new(style.ink.egui());
+        let marks = markers_of(self.notes);
         let height: f32 = self
             .notes
             .paragraphs
             .iter()
-            .map(|paragraph| {
-                let (_, margin) = line_starts(paragraph.level, paragraph.margin, paragraph.indent);
-                let runs = paragraph_runs(paragraph, &font, size, ink);
-                let mut text = DocText::new(&runs);
-                text.wrap = Some((width - indent(style, margin, scale)).max(0.0));
-                cx.layout_doc(&text).size().y.max(size)
+            .zip(&marks)
+            .map(|(paragraph, marker)| {
+                let laid = lay_out(style, paragraph, marker.as_deref(), size, width, &|text| cx.layout_doc(text));
+                laid.text.size().y.max(size)
             })
             .sum();
         Vec2::new(width, height.max(style.line_height * self.zoom * MIN_LINES))
@@ -407,28 +397,21 @@ impl Component for NotesEditor<'_> {
         let style = &cx.style;
         let area = cx.content_rect;
         let size = style.body_size * self.zoom;
-        let scale = size / DOCUMENT_SIZE;
         let ink_color = style.ink.egui();
-        let ink = DataColor::new(ink_color);
         let cursor = cx.recall::<Cursor>();
         let plain = self.notes.plain();
         let chars = plain.chars().count();
         let selected = cursor.caret.min(cursor.anchor).min(chars)..cursor.caret.max(cursor.anchor).min(chars);
         let marks = markers_of(self.notes);
-        let font = FontRef::proportional();
 
         let mut y = area.top();
         let mut at = 0usize;
         let mut editor_lines: Vec<(String, Rect, f32)> = Vec::new();
         let mut caret_rect = Rect::from_min_size(area.min, Vec2::new(0.0, size));
         for (paragraph, marker) in self.notes.paragraphs.iter().zip(&marks) {
-            let (first, margin) = line_starts(paragraph.level, paragraph.margin, paragraph.indent);
-            let (first, margin) = (indent(style, first, scale), indent(style, margin, scale));
-            let origin = area.left() + margin;
-            let runs = paragraph_runs(paragraph, &font, size, ink);
-            let mut text = DocText::new(&runs);
-            text.wrap = Some((area.width() - (origin - area.left())).max(0.0));
-            let layout = painter.layout(&text);
+            let laid = lay_out(style, paragraph, marker.as_deref(), size, area.width(), &|text| painter.layout(text));
+            let layout = laid.text;
+            let origin = area.left() + laid.margin;
             let length: usize = paragraph.runs.iter().map(|run| run.text.chars().count()).sum();
             let range = at..at + length;
             let top_left = Pos2::new(origin, y);
@@ -444,10 +427,8 @@ impl Component for NotesEditor<'_> {
                 }
             }
             painter.painter.galley(top_left, layout.galley.clone(), ink_color);
-            if let Some(marker) = marker {
-                let marker_run = [DocRun::new(marker, font.clone(), size, ink)];
-                let laid = painter.layout(&DocText::new(&marker_run));
-                painter.painter.galley(Pos2::new(area.left() + first.min(margin), y), laid.galley, ink_color);
+            if let Some((x, marker)) = laid.marker {
+                painter.painter.galley(Pos2::new(area.left() + x, y), marker.galley, ink_color);
             }
             if (range.start..=range.end).contains(&cursor.caret.min(chars)) {
                 let cursor_pos = layout.galley.pos_from_cursor(egui::text::CCursor::new(cursor.caret.min(chars) - range.start));
@@ -485,6 +466,40 @@ impl Component for NotesEditor<'_> {
     fn finish(self, cx: Cx<'_, Self>) -> NotesEditorOutput {
         NotesEditorOutput { response: cx.response.clone(), changed: self.changed }
     }
+}
+
+/// A paragraph laid out for the editor: its text from `margin`, the first line's text past the marker, and the marker
+/// with its offset, both from the text area's start edge.
+struct Laid {
+    margin: f32,
+    text: TextLayout,
+    marker: Option<(f32, TextLayout)>,
+}
+
+/// Lays `paragraph` out `width` wide with `layout`, the one rule `measure`, `char_at` and `paint` share: wrapped lines
+/// start at the margin, the marker sits at the first line's start, and the first line's text starts at the margin or,
+/// when the marker and a space are wider than the hanging indent, after them.
+fn lay_out(
+    style: &NotesEditorStyle,
+    paragraph: &NotesParagraph,
+    marker: Option<&str>,
+    size: f32,
+    width: f32,
+    layout: &dyn Fn(&DocText<'_>) -> TextLayout,
+) -> Laid {
+    let (font, ink, scale) = (FontRef::proportional(), DataColor::new(style.ink.egui()), size / DOCUMENT_SIZE);
+    let (first, margin) = line_starts(paragraph.level, paragraph.margin, paragraph.indent);
+    let (first, margin) = (indent(style, first, scale), indent(style, margin, scale));
+    // The marker is laid out with the space after it, so its width is where the text may start.
+    let marker = marker.map(|marker| layout(&DocText::new(&[DocRun::new(format!("{marker} "), font.clone(), size, ink)])));
+    let start = margin.max(first + marker.as_ref().map_or(0.0, |marker| marker.size().x));
+    let mut runs = paragraph_runs(paragraph, &font, size, ink);
+    if let Some(run) = runs.first_mut() {
+        run.indent = start - margin;
+    }
+    let mut text = DocText::new(&runs);
+    text.wrap = Some((width - margin).max(0.0));
+    Laid { margin, text: layout(&text), marker: marker.map(|marker| (first, marker)) }
 }
 
 /// The indent of `points` document points at `scale`, within the largest indent.
