@@ -32,6 +32,7 @@ pub mod numfmt;
 pub mod part;
 pub mod preset;
 pub mod read;
+mod preset_text;
 pub mod style;
 pub mod table;
 pub mod text;

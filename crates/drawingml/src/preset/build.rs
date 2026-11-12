@@ -26,6 +26,15 @@ impl Ctx<'_> {
 /// Builds the geometry for preset `name` at size `w`×`h` with adjust values `adj` (missing
 /// values use the preset's defaults). Unknown names return `None`; the caller falls back to `rect`.
 pub fn build(name: &str, w: f64, h: f64, adj: &[f64]) -> Option<Geometry> {
+    let mut g = build_outline(name, w, h, adj)?;
+    // Text goes where presetShapeDefinitions put it, from the standard's own guide formulas.
+    if let Some(t) = crate::preset_text::text_rect(name, w.max(0.0), h.max(0.0), adj) {
+        g.text_rect = t;
+    }
+    Some(g)
+}
+
+fn build_outline(name: &str, w: f64, h: f64, adj: &[f64]) -> Option<Geometry> {
     if !(w.is_finite() && h.is_finite()) {
         return None;
     }
