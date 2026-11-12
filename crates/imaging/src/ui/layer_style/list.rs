@@ -2,8 +2,8 @@
 
 use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, IconId, ItemSource, Selection, SelectionChange};
 use craft_ui::contract::{
-    ActivateOn, Bind, BodyCx, CollectionEvent, ColumnKind, ColumnSpec, CommandSet, Commands as _, Remember as _, SelectMode, ShowCollection as _,
-    Sizing, SpaceAction, SweepApply, SweepStep, ToggleColumn,
+    ActivateOn, Bind, BodyCx, CollectionEvent, ColumnKind, ColumnSpec, CommandSet, Commands as _, Props as _, Remember as _, SelectMode,
+    ShowCollection as _, Sizing, SpaceAction, SweepApply, SweepStep, ToggleColumn,
 };
 use craft_ui::list::{List, ListRow, RowEvent, RowInk, ToggleCell, ToggleState, TrailingFace, TrailingPart};
 use craft_ui::primitives::IconSpec;

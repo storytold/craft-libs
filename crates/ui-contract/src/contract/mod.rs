@@ -221,6 +221,12 @@ pub trait Meta {
     fn common(&self, _: Internal) -> &Common;
     #[doc(hidden)]
     fn common_mut(&mut self, _: Internal) -> &mut Common;
+    /// Takes the caller's `Props::sizing`: a leaf keeps it in its `Common`; the derive writes a container's or a
+    /// collection's into its `ContainerProps`, over the default its constructor set.
+    #[doc(hidden)]
+    fn set_sizing(&mut self, sizing: Sizing, _: Internal) {
+        self.common_mut(Internal::new()).sizing = Some(sizing);
+    }
 }
 
 /// Written by the derive from a `#[container]` field, for containers and collections.

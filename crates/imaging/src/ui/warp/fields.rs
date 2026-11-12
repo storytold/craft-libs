@@ -261,7 +261,7 @@ impl<'a> WarpFields<'a> {
                         Entry::new(WarpGridChoice::Four, words.four.clone()),
                         Entry::new(WarpGridChoice::Five, words.five.clone()),
                     ];
-                    let pick = Select::new(words.grid.clone(), Bind::given(values.grid), &entries).show(ui);
+                    let pick = Select::new(words.grid.clone(), Bind::given(values.grid), &entries).sizing(Sizing::Content).show(ui);
                     if let Some(&picked) = pick.value()
                         && picked != values.grid
                         && let Some(size) = picked.size()
@@ -277,7 +277,7 @@ impl<'a> WarpFields<'a> {
                     .filter(|entry| !(on_type && entry.custom))
                     .map(|entry| Entry::new(entry.key.clone(), entry.label.clone()))
                     .collect();
-                let pick = Select::new(words.warp.clone(), Bind::given(values.style.clone()), &entries).show(ui);
+                let pick = Select::new(words.warp.clone(), Bind::given(values.style.clone()), &entries).sizing(Sizing::Content).show(ui);
                 if let Some(picked) = pick.value()
                     && *picked != values.style
                 {

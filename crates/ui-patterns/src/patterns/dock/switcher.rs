@@ -3,7 +3,7 @@
 #[cfg(feature = "testing")]
 mod stories;
 
-use crate::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _};
+use crate::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, Sizing};
 use crate::display::Divider;
 use crate::docking::{DockWords, WorkspaceCommands};
 use crate::menu::MenuItem;
@@ -56,6 +56,7 @@ impl<'a, P> WorkspaceSwitcher<'a, P> {
         let entries: Vec<Entry<String>> = set.builtin.iter().chain(&set.saved).map(|w| Entry::new(w.id.clone(), w.name.clone())).collect();
         let shown = Select::new(words.choose_workspace.clone(), Bind::given(set.current.clone()), &entries)
             .size(ControlSize::Sm)
+            .sizing(Sizing::Content)
             .header_menu(|ui, _| {
                 for ran in [WorkspaceCommands::Reset, WorkspaceCommands::New, WorkspaceCommands::Delete, WorkspaceCommands::Lock] {
                     if ran == WorkspaceCommands::Lock {

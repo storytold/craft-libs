@@ -8,7 +8,7 @@ use crate::viewer::{Catalog, ComponentInfo, PanelId, TreeKey, by_level, entry_of
 use craft_behavior::{ColumnWidth, Selection};
 use craft_theme::variant::Tone;
 use craft_theme::{Tokens, TypeRole};
-use craft_ui::contract::{Bind, BodyCx, Entry, Gap, Lazy, Pad, Props as _, Scroll, Show as _, ShowContainer as _, StoryLayout};
+use craft_ui::contract::{Bind, BodyCx, Entry, Gap, Lazy, Pad, Props as _, Scroll, Show as _, ShowContainer as _, Sizing, StoryLayout};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Grid, Row, Stack};
 use craft_ui::notices::Notice;
@@ -259,7 +259,7 @@ pub(super) fn overview(ui: &mut Ui, p: &mut Panels<'_>) {
         ran = true;
         Row::new().show(ui, |ui, _| {
             Text::new("Level:").shade(Shade::Muted).show(ui);
-            Select::new("Level", Bind::bound(&mut chosen), &entries).show(ui);
+            Select::new("Level", Bind::bound(&mut chosen), &entries).sizing(Sizing::Content).show(ui);
         });
         reported = grid(ui, level.title(), Some(PanelId::Overview), &cards, p, false, follow.flatten());
     });

@@ -1099,7 +1099,7 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
 /// Step 5's size for `input`: what the component measures plus `extent`, padded and bounded by its style.
 fn measured(t: &mut dyn Erased, input: &MeasureIn<'_>, style: &dyn StyleView, resolved: &Resolved<'_>, extent: Vec2) -> (Vec2, Inputs) {
     let (content, inputs) = t.measure_content(input, resolved);
-    (steps::measure(style, input, content, extent), inputs)
+    (steps::measure(style, input, content, extent, resolved.sizing), inputs)
 }
 
 /// The pipeline: steps 1 to 17 for one component, whatever its type and shape.

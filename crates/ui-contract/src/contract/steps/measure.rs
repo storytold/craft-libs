@@ -2,7 +2,7 @@
 
 use super::ShapeKind;
 use crate::contract::cx::MeasureCx;
-use crate::contract::{Component, Resolved, ValueOf};
+use crate::contract::{Component, Resolved, Sizing, ValueOf};
 use crate::runtime::env::Env;
 use crate::runtime::layout_memory::{self, Inputs};
 use crate::style::{ComponentStyle, StyleView};
@@ -31,9 +31,10 @@ pub(crate) fn measure_content<C: Component>(
 }
 
 /// Step 5, measure: the `content` size plus padding, then `max(min_size)`, and for any proposal but `Min` at least the
-/// ideal width, up to the room. At `Min` a least width the style sets takes the place of `min_size`'s width. `extent`
-/// is what the shape adds to the content: a body's remembered size or a collection's content size.
-pub(crate) fn measure(style: &dyn StyleView, input: &MeasureIn<'_>, content: Vec2, extent: Vec2) -> Vec2 {
+/// ideal width, up to the room, unless the component is sized to its content (`sizing`, a leaf's `Sizing::Content`).
+/// At `Min` a least width the style sets takes the place of `min_size`'s width. `extent` is what the shape adds to the
+/// content: a body's remembered size or a collection's content size.
+pub(crate) fn measure(style: &dyn StyleView, input: &MeasureIn<'_>, content: Vec2, extent: Vec2, sizing: Option<Sizing>) -> Vec2 {
     let metrics = style.metrics();
     let content = content + extent;
     let padding = Vec2::new(metrics.padding.start + metrics.padding.end, metrics.padding.top + metrics.padding.bottom);
@@ -42,7 +43,7 @@ pub(crate) fn measure(style: &dyn StyleView, input: &MeasureIn<'_>, content: Vec
         _ => metrics.min_size,
     };
     let mut size = (content + padding).max(floor);
-    if input.proposal != Proposal::Min {
+    if input.proposal != Proposal::Min && sizing != Some(Sizing::Content) {
         size.x = size.x.max(input.room.map_or(metrics.ideal_width, |room| metrics.ideal_width.min(room)));
     }
     size

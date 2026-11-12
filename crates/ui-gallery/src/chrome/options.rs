@@ -20,7 +20,7 @@ use egui::Ui;
 /// A select over `entries` in a field with its caption.
 fn pick<T: Value>(ui: &mut Ui, caption: &'static str, value: &mut T, entries: &[Entry<T>]) {
     Field::new(caption).sizing(Sizing::Content).show(ui, |ui, _| {
-        Select::new(caption, Bind::bound(&mut *value), entries).show(ui);
+        Select::new(caption, Bind::bound(&mut *value), entries).sizing(Sizing::Content).show(ui);
     });
 }
 

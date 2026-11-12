@@ -1,6 +1,6 @@
 //! `Common`, `Props`, `Resolved` and `Tooltip` (chapter 3).
 
-use super::{IdSource, Internal, Meta};
+use super::{IdSource, Internal, Meta, Sizing};
 use crate::runtime::commands::{CommandRef, CommandScope};
 use crate::runtime::env::Label;
 use craft_behavior::DocKey;
@@ -34,6 +34,8 @@ pub struct Common {
     pub(crate) command_scope: Option<CommandScope>,
     /// The component's horizontal axis keeps its left-to-right order under a right-to-left interface.
     pub(crate) ltr_axis: bool,
+    /// A leaf's `Props::sizing`; a container or collection keeps it in its `ContainerProps`.
+    pub(crate) sizing: Option<Sizing>,
 }
 
 impl Common {
@@ -56,6 +58,7 @@ impl Common {
             doc_key: None,
             command_scope: None,
             ltr_axis: false,
+            sizing: None,
         }
     }
 }
@@ -95,6 +98,15 @@ pub trait Props: Meta + Sized {
     /// The control size, over the scope's.
     fn size(mut self, size: ControlSize) -> Self {
         self.common_mut(Internal::new()).size = Some(size);
+        self
+    }
+
+    /// How the component takes its size. A container or collection takes it over its own default (`ContainerProps`).
+    /// A leaf with `Sizing::Content` is as wide as its content, without the ideal width its style asks for where the
+    /// room allows (a field's `size.length.field`); a leaf otherwise keeps that width, and fills only along the axis
+    /// its `Component::fills` names.
+    fn sizing(mut self, sizing: Sizing) -> Self {
+        self.set_sizing(sizing, Internal::new());
         self
     }
 
@@ -204,6 +216,8 @@ pub struct Resolved<'p> {
     pub(crate) default_stop: bool,
     /// `Common.ltr_axis`.
     pub(crate) ltr_axis: bool,
+    /// `Common.sizing`: a leaf's own sizing.
+    pub(crate) sizing: Option<Sizing>,
     /// `Common.description`.
     pub(crate) description: Option<&'p str>,
     /// `Common.tooltip`.

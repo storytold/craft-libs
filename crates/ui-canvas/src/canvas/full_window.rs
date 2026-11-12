@@ -55,7 +55,7 @@ type SettleFn<'a> = Box<dyn FnMut(&mut BodyCx<'_>, &mut [FooterButton]) + 'a>;
 pub struct FullWindowDialog<'a> {
     #[common]
     common: Common,
-    #[container(sizing, surface, live, end, position, collection_body)]
+    #[container(surface, live, end, position, collection_body)]
     props: ContainerProps,
     /// Binds the open state to `open`.
     #[prop(name = "opened")]

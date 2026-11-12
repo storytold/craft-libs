@@ -493,6 +493,13 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
         Some(field) => (quote!(&self.#field), quote!(&mut self.#field)),
         None => return Err(syn::Error::new_spanned(ident, "`#[common]` needs a named field")),
     };
+    let set_sizing = marked.container.and_then(|field| field.ident.as_ref()).map(|field| {
+        quote! {
+            fn set_sizing(&mut self, sizing: ::craft_ui::contract::Sizing, _: ::craft_ui::contract::Internal) {
+                self.#field.sizing = sizing;
+            }
+        }
+    });
     let has_props = marked.container.and_then(|field| field.ident.as_ref()).map(|field| {
         quote! {
             impl #impl_generics ::craft_ui::contract::HasProps for #ident #type_generics #where_clause {
@@ -551,6 +558,7 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
             fn common_mut(&mut self, _: ::craft_ui::contract::Internal) -> &mut ::craft_ui::contract::Common {
                 #common_mut
             }
+            #set_sizing
         }
         #has_props
         #content_painter

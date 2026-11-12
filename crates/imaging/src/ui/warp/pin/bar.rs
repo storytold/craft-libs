@@ -5,7 +5,7 @@ use craft_theme::variant::Tone;
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::buttons::{Button, IconButton};
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, clicked};
+use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Sizing, clicked};
 use craft_ui::display::{Divider, Text};
 use craft_ui::form::Field;
 use craft_ui::pickers::Select;
@@ -112,7 +112,7 @@ fn body(ui: &mut Ui, session: &PinWarpSession, words: &PinWarpBarWords, notice: 
         Entry::new(PinMode::Distort, words.distort.clone()),
     ];
     captioned(ui, &words.mode, |ui| {
-        let picked = Select::new(words.mode.clone(), Bind::given(options.mode), &modes).show(ui);
+        let picked = Select::new(words.mode.clone(), Bind::given(options.mode), &modes).sizing(Sizing::Content).show(ui);
         if let Some(&mode) = picked.value().filter(|&&mode| mode != options.mode) {
             edits.push(PinEdit::Options(PinWarpOptions { mode, ..options }));
         }
@@ -123,7 +123,7 @@ fn body(ui: &mut Ui, session: &PinWarpSession, words: &PinWarpBarWords, notice: 
         Entry::new(PinDensity::More, words.more_points.clone()),
     ];
     captioned(ui, &words.density, |ui| {
-        let picked = Select::new(words.density.clone(), Bind::given(options.density), &densities).show(ui);
+        let picked = Select::new(words.density.clone(), Bind::given(options.density), &densities).sizing(Sizing::Content).show(ui);
         if let Some(&density) = picked.value().filter(|&&density| density != options.density) {
             edits.push(PinEdit::Options(PinWarpOptions { density, ..options }));
         }

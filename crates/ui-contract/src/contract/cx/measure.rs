@@ -130,9 +130,13 @@ impl<C: Component> MeasureCx<'_, C> {
     }
 
     /// The size `face` has when `PaintUi::face` shows it as the look of a part: steps 1, 2 and 4 of the face run
-    /// under the composite's resolved `enabled` and `size`. A composite measured at its least measures the face at
+    /// under the composite's resolved `enabled`, `size` and sizing. A composite measured at its least measures the face at
     /// its least; otherwise the face has no proposal.
     pub fn face<S: Show>(&self, mut face: S) -> Vec2 {
+        // The face is the composite's look: a composite sized to its content sizes its face so.
+        if let Some(sizing) = self.resolved.sizing {
+            face.set_sizing(sizing, crate::contract::Internal::new());
+        }
         let id = self.id.with("face");
         let proposal = if self.proposal == Proposal::Min { Proposal::Min } else { Proposal::Ideal };
         crate::contract::measure_under(&mut face, self.ui, Some(id), proposal, Some(&self.under()))

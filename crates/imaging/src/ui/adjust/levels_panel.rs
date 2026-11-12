@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use craft_behavior::{EditEvent, EditEvents, Mixed};
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, Entry, NoValue, Outcome, Pattern, Props, Remember as _, Show as _, ShowContainer as _, clicked};
+use craft_ui::contract::{Bind, Entry, NoValue, Outcome, Pattern, Props, Remember as _, Show as _, ShowContainer as _, Sizing, clicked};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::pickers::Select;
@@ -171,7 +171,7 @@ impl<'a> LevelsPanel<'a> {
             let mut auto = false;
             Row::new().show(ui, |ui, _| {
                 Text::new(words.channel.clone()).shade(Shade::Muted).role(TypeRole::Label).show(ui);
-                let select = Select::new(words.channel.clone(), Bind::given(channel), &entries).show(ui);
+                let select = Select::new(words.channel.clone(), Bind::given(channel), &entries).sizing(Sizing::Content).show(ui);
                 if let Some(&at) = select.value() {
                     picked = at;
                 }

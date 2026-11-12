@@ -3,7 +3,7 @@
 use craft_theme::Srgba;
 use craft_ui::choice::{Checkbox, Radio, RadioGroup, Swatch};
 use craft_ui::contract::{
-    Bind, EditResponse, Entry, LabelKind, Outcome, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _, SideLabel,
+    Bind, EditResponse, Entry, LabelKind, Outcome, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _, SideLabel, Sizing,
 };
 use craft_ui::form::Field;
 use craft_ui::layout_components::Row;
@@ -270,8 +270,13 @@ impl<'a> PhotoFilterEditor<'a> {
                 Field::new(words.filter.clone()).side(SideLabel::new().kind(LabelKind::Hidden)).id_salt("filter").show(ui, |ui, _| {
                     Row::new().show(ui, |ui, _| {
                         Radio::new(false).label(words.filter.clone()).show(ui);
-                        preset_edit =
-                            Some(Select::new(words.filter.clone(), Bind::given(preset), &entries).enabled(!use_color).id_salt("preset").show(ui));
+                        preset_edit = Some(
+                            Select::new(words.filter.clone(), Bind::given(preset), &entries)
+                                .enabled(!use_color)
+                                .sizing(Sizing::Content)
+                                .id_salt("preset")
+                                .show(ui),
+                        );
                     });
                 });
                 Field::new(words.color.clone()).side(SideLabel::new().kind(LabelKind::Hidden)).id_salt("color").show(ui, |ui, _| {

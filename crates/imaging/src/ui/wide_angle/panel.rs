@@ -6,7 +6,7 @@ use craft_behavior::{EditEvent, EditEvents, Mixed};
 use craft_theme::{ControlSize, TypeRole};
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, clicked};
+use craft_ui::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, Sizing, clicked};
 use craft_ui::display::{Shade, Text};
 use craft_ui::form::SliderField;
 use craft_ui::layout_components::{Row, Stack};
@@ -135,8 +135,10 @@ impl<'a> WideAnglePanel<'a> {
                             Entry::new(ConstraintOrientation::Vertical, words.vertical.clone()),
                         ];
                         let name = words.orientation_of.fill(&[("n", number.as_str())]);
-                        let select =
-                            Select::new(name, Bind::given(row.orientation), &orientations).size(ControlSize::Sm).id_salt(("orientation", index));
+                        let select = Select::new(name, Bind::given(row.orientation), &orientations)
+                            .size(ControlSize::Sm)
+                            .sizing(Sizing::Content)
+                            .id_salt(("orientation", index));
                         if let Some(&orientation) = select.show(ui).value() {
                             constraint = constraint.take().or(Some(WideAngleConstraintEdit::Orient { index, orientation }));
                         }

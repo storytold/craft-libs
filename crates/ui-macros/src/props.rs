@@ -204,7 +204,6 @@ const COLLECTION: &[Forwarded] = &[
 /// caller under the builder's own name. A new `ContainerProps` builder of that kind is added here. Builders whose name
 /// a component writes itself (`label`, `header`, `footer`, `scroll`) stay off the list.
 const CONTAINER: &[Forwarded] = &[
-    ("sizing", "::craft_ui::contract::Sizing", "How the component takes its size: to its content or to the room it has."),
     ("command_scope", "::craft_ui::runtime::commands::CommandScope", "Commands of `scope` reach the component while focus is in it."),
     ("surface", "::craft_ui::style::SurfaceKind", "The surface painted behind the body."),
     ("live", "::craft_ui::contract::Politeness", "The body is a live region announced with this politeness."),

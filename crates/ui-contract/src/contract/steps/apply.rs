@@ -174,7 +174,7 @@ pub(crate) fn rerun_after_edit(
     let resized = if leaf {
         earlier.samples.iter().any(|sample| {
             let input = MeasureIn { ui: input.ui, env: input.env, proposal: sample.proposal, room: sample.room };
-            measure(style, &input, p.measure_content(&input, resolved).0, Vec2::ZERO) != sample.took
+            measure(style, &input, p.measure_content(&input, resolved).0, Vec2::ZERO, resolved.sizing) != sample.took
         })
     } else {
         earlier.measured

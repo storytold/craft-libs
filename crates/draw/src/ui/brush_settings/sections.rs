@@ -3,8 +3,8 @@
 use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, IconId, ItemSource, Mixed, Selection, SelectionChange, Value};
 use craft_keymap::{Chord, Key, Mods};
 use craft_ui::contract::{
-    ActivateOn, Bind, CollectionEvent, ColumnKind, ColumnSpec, Outcome, Remember as _, SelectMode, ShowCollection as _, ShowContainer as _, Sizing,
-    SpaceAction, SweepApply, SweepStep, ToggleColumn, ToggleEdit,
+    ActivateOn, Bind, CollectionEvent, ColumnKind, ColumnSpec, Outcome, Props as _, Remember as _, SelectMode, ShowCollection as _,
+    ShowContainer as _, Sizing, SpaceAction, SweepApply, SweepStep, ToggleColumn, ToggleEdit,
 };
 use craft_ui::layout_components::Stack;
 use craft_ui::list::{ListRow, ToggleCell, ToggleState};
