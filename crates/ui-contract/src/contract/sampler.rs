@@ -2,6 +2,7 @@
 //! `runtime::sampler`.
 
 use super::{BodyCx, Component, Cx};
+pub use crate::runtime::sampler::CanvasGesture;
 use crate::runtime::sampler::{self, Reach};
 use egui::{Context, Id};
 
@@ -27,14 +28,17 @@ mod sealed {
 }
 
 /// The canvas reach under a modal layer (15.5, 8.3): a control of a dialog keeps the canvas below it usable. It is
-/// implemented for `Cx`, `BodyCx` and so for `FormCx`, which derefs to `BodyCx`. The registration holds for this pass
+/// implemented for `Cx`, `BodyCx` and so for `FormCx`, which derefs to `BodyCx`. A registration holds for this pass
 /// and the next and belongs to the modal layer whose body calls it: a modal opened over that layer blocks the canvas.
+/// The registrations of one pass add up.
 pub trait Sampler: sealed::Host {
-    /// Arms a sampler for `canvas` (the canvas component's id): while the modal layer is open, primary presses on the
-    /// canvas pass through it to the canvas, and so does the view navigation (`keep_view_open`). The arming control
-    /// calls it in every pass while it is armed.
-    fn arm_sampler(&mut self, canvas: Id) {
-        sampler::register(self.egui(), canvas, Reach::Sample);
+    /// Lets `gesture` on `canvas` (the canvas component's id) through the modal layer, and the view navigation with it
+    /// (`keep_view_open`): an armed eyedropper's press ([`CanvasGesture::PRIMARY`]), a dialog's drag on the image, a
+    /// ⌘-click (`CanvasGesture::PRIMARY.with(Mods::CMD)`). A press that starts no named gesture stays blocked. The
+    /// app runs the dialog's own tool on the canvas meanwhile. The control calls it in every pass while it takes the
+    /// gesture.
+    fn pass_canvas_gesture(&mut self, canvas: Id, gesture: CanvasGesture) {
+        sampler::register(self.egui(), canvas, Reach::gesture(gesture));
     }
 
     /// Keeps the view of `canvas` (the canvas component's id) usable under the modal layer: the wheel scrolls and
@@ -42,7 +46,7 @@ pub trait Sampler: sealed::Host {
     /// canvas adds the primary press for the pan. Its other input stays blocked. A dialog body calls it in every pass
     /// while the dialog is open.
     fn keep_view_open(&mut self, canvas: Id) {
-        sampler::register(self.egui(), canvas, Reach::View);
+        sampler::register(self.egui(), canvas, Reach::view());
     }
 }
 

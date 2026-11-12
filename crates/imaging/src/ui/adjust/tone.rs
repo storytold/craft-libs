@@ -12,7 +12,7 @@ use craft_behavior::{CancelReason, Cursor, IconId, PaintedCursor};
 use craft_theme::Srgba;
 use craft_ui::buttons::ToggleButton;
 use craft_ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
-use craft_ui::contract::{Bind, Held, NoValue, Outcome, Pattern, Props, Sampler as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, CanvasGesture, Held, NoValue, Outcome, Pattern, Props, Sampler as _, Show as _, ShowContainer as _};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::Row;
 use craft_ui::primitives::{Draw, IconSpec};
@@ -104,7 +104,7 @@ impl Outcome for TonePickerRowOutput {
 /// - A button is pressed while its picker is armed. A click on a disarmed button arms it; a click on
 ///   the armed one disarms it.
 /// - While a picker is armed and [`canvas`](Self::canvas) names the document's canvas, the row
-///   arms the canvas's sampler in every pass: a primary press on the canvas under the modal dialog
+///   keeps the canvas reachable in every pass: a primary press on the canvas under the modal dialog
 ///   reaches the canvas's tool (a [`TonePickTool`]), and the wheel and middle-drag navigate it.
 ///   Keys, focus and Escape stay the dialog's.
 /// - A picker the host disabled ([`enabled_picker`](Self::enabled_picker)) shows disabled.
@@ -147,7 +147,7 @@ impl<'a> TonePickerRow<'a> {
         let shown = Row::new().label(words.eyedroppers.clone()).show(ui, |ui, cx| {
             let current = held.read(cx).flatten();
             if let (Some(canvas), Some(_)) = (canvas, current) {
-                cx.arm_sampler(canvas);
+                cx.pass_canvas_gesture(canvas, CanvasGesture::PRIMARY);
             }
             Text::new(words.eyedroppers.clone()).shade(Shade::Muted).role(TypeRole::Label).show(ui);
             for picker in TonePicker::ALL {

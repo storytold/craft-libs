@@ -1,12 +1,13 @@
 //! The canvas reach under a modal layer (15.5, 8.3): the one exception to "a modal blocks the input below it".
 //!
 //! A modal dialog that shows a canvas keeps it usable, as Photoshop's Color Picker, Levels and Curves do. A control
-//! of the dialog registers the canvas every pass with one of two reaches. `Reach::View` lets the view navigation
-//! through: the wheel (scroll and zoom) and the middle press that pans. `Reach::Sample` adds the primary press, for
-//! the eyedropper a control of the dialog armed. Space held over the canvas adds the primary press under either
-//! reach, for the pan. Focus, keys and Escape stay with the dialog. One registration holds per app (the latest), for
-//! the root frame it is made in and the next, and only while the modal layer that made it is the top modal: a modal
-//! opened over it blocks the canvas again.
+//! of the dialog registers the canvas every pass with its reach: the view navigation always passes (the wheel that
+//! scrolls and zooms, the middle press that pans, and the primary press while Space is held over the canvas, for the
+//! pan), and so do the gestures the dialog names ([`CanvasGesture`]: an eyedropper's press, a shadow drag, Curves'
+//! ⌘-click), each a button with the modifiers it needs, its drag included. Every other press stays blocked. Focus,
+//! keys and Escape stay with the dialog. One registration holds per app (the latest; the controls of one pass add
+//! up), for the root frame it is made in and the next, and only while the modal layer that made it is the top modal: a
+//! modal opened over it blocks the canvas again.
 //!
 //! One test answers a pointer input ([`Hole::answers`]): the point lies in the canvas and no layer lies over the
 //! canvas's own layer there (the dialog, a popup above it, a floating panel). The input hook keeps the events the
@@ -19,20 +20,77 @@ use crate::runtime::egui::memory::Service;
 use crate::runtime::egui::pass;
 use crate::runtime::frame::{PerViewport, Stored};
 use crate::runtime::{overlay, pointer};
-use craft_keymap::KeyInput;
-use egui::{Context, Event, Id, PointerButton, Pos2, Rect, ViewportId};
+use craft_behavior::PointerButton;
+use craft_host::target::Os;
+use craft_keymap::{KeyInput, Mods};
+use egui::{Context, Event, Id, Pos2, Rect, ViewportId};
+use smallvec::SmallVec;
 
-/// What a modal leaves of the canvas below it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum Reach {
-    /// View navigation: the wheel and the middle press.
-    View,
-    /// View navigation and the primary press, for the sampler an armed control runs on the canvas.
-    Sample,
+/// A gesture on the canvas that a dialog takes under its modal layer: a press of `button` with at least `mods` held,
+/// and the drag that follows it. Other modifiers may be held too: an eyedropper's Shift and Alt add and subtract.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CanvasGesture {
+    /// The button that starts it.
+    pub button: PointerButton,
+    /// The modifiers it needs held at the press.
+    pub mods: Mods,
+}
+
+impl CanvasGesture {
+    /// A press of the primary button, with any modifiers: an eyedropper, a shadow or pattern drag.
+    pub const PRIMARY: CanvasGesture = CanvasGesture::press(PointerButton::Primary);
+
+    /// A press of `button`, with any modifiers.
+    pub const fn press(button: PointerButton) -> CanvasGesture {
+        CanvasGesture { button, mods: Mods::NONE }
+    }
+
+    /// The same gesture, needing `mods` held at the press.
+    #[must_use]
+    pub const fn with(mut self, mods: Mods) -> CanvasGesture {
+        self.mods = mods;
+        self
+    }
+
+    /// Whether a press of `button` with `held` (read for `os`) starts this gesture.
+    fn starts(self, button: PointerButton, held: Mods, os: Os) -> bool {
+        let need = self.mods.effective(os);
+        let held = held.effective(os);
+        button == self.button && (!need.cmd || held.cmd) && (!need.ctrl || held.ctrl) && (!need.alt || held.alt) && (!need.shift || held.shift)
+    }
+}
+
+/// What a modal leaves of the canvas below it: the view navigation, and the gestures it names.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Reach {
+    gestures: SmallVec<[CanvasGesture; 2]>,
+}
+
+impl Reach {
+    /// The view navigation alone.
+    pub(crate) fn view() -> Reach {
+        Reach::default()
+    }
+
+    /// The view navigation and `gesture`.
+    pub(crate) fn gesture(gesture: CanvasGesture) -> Reach {
+        Reach { gestures: SmallVec::from_slice(&[gesture]) }
+    }
+
+    /// What this reach and `other` let through together.
+    fn join(mut self, other: Reach) -> Reach {
+        for gesture in other.gestures {
+            if !self.gestures.contains(&gesture) {
+                self.gestures.push(gesture);
+            }
+        }
+        self
+    }
 }
 
 /// The canvas a dialog keeps open, how far, and the modal layer that made the registration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Armed {
     canvas: Id,
     reach: Reach,
@@ -52,6 +110,8 @@ pub(crate) struct Hole {
     /// The canvas's screen rect.
     pub rect: Rect,
     pub reach: Reach,
+    /// The platform the gestures' modifiers are read for.
+    os: Os,
     /// Space is held over the canvas.
     pub space: bool,
     /// A Space press that the hook read this pass belongs to the canvas: the key stage takes it as the canvas's
@@ -68,12 +128,16 @@ impl Hole {
         self.rect.contains(at) && !self.covers.iter().any(|cover| cover.contains(at))
     }
 
-    /// Whether the canvas takes a press of `button` at `at`: the reach admits the button and the canvas answers.
-    pub(crate) fn admits_press(&self, button: PointerButton, at: Pos2) -> bool {
+    /// Whether the canvas takes a press of `button` with `modifiers` at `at`: the middle press and, with Space held,
+    /// the primary one pan; any other press starts a gesture the dialog named; and the canvas answers.
+    pub(crate) fn admits_press(&self, button: egui::PointerButton, modifiers: &egui::Modifiers, at: Pos2) -> bool {
         let reached = match button {
-            PointerButton::Primary => self.reach == Reach::Sample || self.space,
-            PointerButton::Middle => true,
-            _ => false,
+            egui::PointerButton::Middle => true,
+            egui::PointerButton::Primary if self.space => true,
+            _ => {
+                let (button, held) = (crate::runtime::egui::input::button_of(button), Mods::from_egui(modifiers, self.os));
+                self.reach.gestures.iter().any(|gesture| gesture.starts(button, held, self.os))
+            }
         };
         reached && self.answers(at)
     }
@@ -82,7 +146,7 @@ impl Hole {
     /// `pointer` is where the pointer stood before the event.
     pub(crate) fn admits(&self, event: &Event, pointer: Option<Pos2>) -> bool {
         match event {
-            Event::PointerButton { pos, button, pressed: true, .. } => self.admits_press(*button, *pos),
+            Event::PointerButton { pos, button, pressed: true, modifiers } => self.admits_press(*button, modifiers, *pos),
             Event::MouseWheel { .. } => pointer.is_some_and(|at| self.answers(at)),
             _ => false,
         }
@@ -99,8 +163,8 @@ struct Registry {
     over: bool,
 }
 
-/// Registers `canvas` with `reach` for the modal layer whose body is running. `Cx::arm_sampler` and
-/// `Cx::keep_view_open` (contract layer) call it.
+/// Registers `canvas` with `reach` for the modal layer whose body is running. `Sampler::pass_canvas_gesture` and
+/// `Sampler::keep_view_open` (contract layer) call it.
 pub(crate) fn register(ctx: &Context, canvas: Id, reach: Reach) {
     if !crate::runtime::measure::effect(ctx, "sampler::register") {
         return;
@@ -108,8 +172,8 @@ pub(crate) fn register(ctx: &Context, canvas: Id, reach: Reach) {
     let now = pass::root_frame_nr(ctx);
     let modal = overlay::modal_drawing(ctx);
     Service::<Registry>::run(ctx, |registry| {
-        let reach = match registry.made {
-            Some((made, held)) if made == now && held.canvas == canvas && held.modal == modal => held.reach.max(reach),
+        let reach = match registry.made.take() {
+            Some((made, held)) if made == now && held.canvas == canvas && held.modal == modal => held.reach.join(reach),
             _ => reach,
         };
         registry.made = Some((now, Armed { canvas, reach, modal }));
@@ -119,7 +183,7 @@ pub(crate) fn register(ctx: &Context, canvas: Id, reach: Reach) {
 /// The registration made in this root frame or the last: one per app, the latest wins.
 fn armed(ctx: &Context) -> Option<Armed> {
     let now = pass::root_frame_nr(ctx);
-    Service::<Registry>::run(ctx, |registry| registry.made.filter(|(made, _)| made + 1 >= now).map(|(_, armed)| armed))
+    Service::<Registry>::run(ctx, |registry| registry.made.clone().filter(|(made, _)| made + 1 >= now).map(|(_, armed)| armed))
 }
 
 /// The armed canvas, while the modal layer that registered it is the top modal and no popup stands over a modal.
@@ -132,7 +196,8 @@ fn open_hole(ctx: &Context) -> Option<Hole> {
         && overlay::top_modal_in(ctx, viewport).is_none_or(|top| top.id == modal)
         && !overlay::popup_over_modal(ctx);
     let space = Service::<Registry>::run(ctx, |registry| registry.space);
-    held.then_some(Hole { viewport, canvas: armed.canvas, layer, rect, reach: armed.reach, space, space_pressed: false, covers: Vec::new() })
+    let os = crate::runtime::windows::os_of(ctx);
+    held.then_some(Hole { viewport, canvas: armed.canvas, layer, rect, reach: armed.reach, os, space, space_pressed: false, covers: Vec::new() })
 }
 
 /// The canvas a modal layer keeps open in this pass, while the registration holds.
@@ -178,7 +243,18 @@ pub(crate) fn layer_at(ctx: &Context, at: Pos2) -> Option<Layer> {
 
 /// Whether the canvas took the primary press at `at` in the running pass: it moves no key focus.
 pub(crate) fn admitted_press(ctx: &Context, at: Pos2) -> bool {
-    hole_of_pass(ctx).is_some_and(|hole| hole.admits_press(PointerButton::Primary, at))
+    let Some(hole) = hole_of_pass(ctx) else { return false };
+    let modifiers = ctx.input(|input| {
+        input
+            .events
+            .iter()
+            .find_map(|event| match event {
+                Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers } if *pos == at => Some(*modifiers),
+                _ => None,
+            })
+            .unwrap_or(input.modifiers)
+    });
+    hole.admits_press(egui::PointerButton::Primary, &modifiers, at)
 }
 
 /// Whether the root `root` may start a press that egui gave no target at `at`: where the canvas answers, only the

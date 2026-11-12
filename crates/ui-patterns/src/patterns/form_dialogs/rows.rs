@@ -8,7 +8,9 @@ use super::path_row::PathRow;
 use super::words::ParamWords;
 use crate::buttons::{Button, ToggleButton};
 use crate::choice::{Checkbox, Radio, RadioGroup, Swatch};
-use crate::contract::{Bind, Entry, NoValue, Outcome, Props as _, Remember as _, Sampler as _, Show as _, ShowContainer as _, clicked};
+use crate::contract::{
+    Bind, CanvasGesture, Entry, NoValue, Outcome, Props as _, Remember as _, Sampler as _, Show as _, ShowContainer as _, clicked,
+};
 use crate::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
 
 use crate::layout_components::{Row, Stack};
@@ -110,8 +112,7 @@ impl<'a> ParamRows<'a> {
     }
 
     /// The canvas (the canvas component's id) the eyedropper rows sample while the rows are inside a modal dialog: an
-    /// armed eyedropper registers it with `Sampler::arm_sampler`, so primary presses on it pass through the dialog's
-    /// modal layer. The dialog body keeps the view usable itself with `Sampler::keep_view_open`.
+    /// armed eyedropper lets its press through the dialog's modal layer (`Sampler::pass_canvas_gesture`). The dialog body keeps the view usable itself with `Sampler::keep_view_open`.
     pub fn canvas(mut self, canvas: Id) -> Self {
         self.canvas = Some(canvas);
         self
@@ -148,7 +149,7 @@ impl<'a> ParamRows<'a> {
                 pass.begin(&filled, state, cx.keep::<Memo>().clone());
                 pass.rows(ui, params);
                 if let Some(canvas) = canvas.filter(|_| pass.sampling && !read_only) {
-                    cx.arm_sampler(canvas);
+                    cx.pass_canvas_gesture(canvas, CanvasGesture::PRIMARY);
                 }
                 *cx.keep::<Memo>() = pass.memo.clone();
                 changed = pass.work != filled;

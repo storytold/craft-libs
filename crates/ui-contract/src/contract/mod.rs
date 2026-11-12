@@ -95,7 +95,7 @@ pub use props::{Common, Props, Resolved, Tooltip, TooltipAt, TooltipSpec, Toolti
 pub use registry::registrations;
 #[doc(hidden)]
 pub use registry::{CollectionEntry, ContainerEntry, Exemption, LeafEntry, PatternKind, PatternProbe, Probe, Registration, ShowEntry};
-pub use sampler::Sampler;
+pub use sampler::{CanvasGesture, Sampler};
 pub use settle::SettleCx;
 pub use text::EDIT_MENU;
 pub use values::{Bind, BindMut, EditResponse, ItemOutput, NoValue, Outcome, Validity, ValueOf, clicked, pressed};

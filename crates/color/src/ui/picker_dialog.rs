@@ -15,7 +15,7 @@ use craft_host::Host;
 use craft_host::target::Caps;
 use craft_settings::Remembered;
 use craft_theme::{ColorModel, Srgba, builtin_models};
-use craft_ui::contract::{Bind, Sampler as _, ShowContainer as _};
+use craft_ui::contract::{Bind, CanvasGesture, Sampler as _, ShowContainer as _};
 use craft_ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft_ui::patterns::form_dialogs::{HostRequests, ResetFooter};
 use craft_ui::runtime::env::{Env, Label};
@@ -246,7 +246,7 @@ impl ColorPickerDialog {
     }
 
     /// The canvas whose presses pass through the dialog's modal layer while the dropper is armed
-    /// (`Sampler::arm_sampler`), and whose view stays usable (`keep_view_open`).
+    /// (`Sampler::pass_canvas_gesture`), and whose view stays usable (`keep_view_open`).
     #[must_use]
     pub fn canvas(mut self, canvas: Id) -> ColorPickerDialog {
         self.canvas = Some(canvas);
@@ -422,7 +422,7 @@ impl StackDialog for ColorPickerDialog {
                     cx.keep_view_open(canvas);
                 }
                 if let Some(canvas) = arm {
-                    cx.arm_sampler(canvas);
+                    cx.pass_canvas_gesture(canvas, CanvasGesture::PRIMARY);
                 }
                 let mut models: Vec<&dyn ColorModel> = builtin_models().into_iter().filter(|model| model.default_on().full).collect();
                 models.push(&cmyk);

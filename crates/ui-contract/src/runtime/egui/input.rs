@@ -228,7 +228,7 @@ const ALL_BUTTONS: [egui::PointerButton; 5] = [
     egui::PointerButton::Extra2,
 ];
 
-fn button_of(button: egui::PointerButton) -> PointerButton {
+pub(crate) fn button_of(button: egui::PointerButton) -> PointerButton {
     match button {
         egui::PointerButton::Primary => PointerButton::Primary,
         egui::PointerButton::Secondary => PointerButton::Secondary,

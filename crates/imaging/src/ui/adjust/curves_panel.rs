@@ -12,7 +12,9 @@ use craft_behavior::{EditEvent, EditEvents, IconId, Mixed};
 use craft_keymap::{Chord, Key, Mods};
 use craft_theme::Srgba;
 use craft_ui::buttons::{Button, ToggleButton};
-use craft_ui::contract::{Bind, Entry, NoValue, Outcome, Pattern, Props, Remember as _, Sampler as _, Show as _, ShowContainer as _, clicked};
+use craft_ui::contract::{
+    Bind, CanvasGesture, Entry, NoValue, Outcome, Pattern, Props, Remember as _, Sampler as _, Show as _, ShowContainer as _, clicked,
+};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::pickers::Select;
@@ -148,8 +150,8 @@ type SamplerFn<'a> = Box<dyn Fn(&[[f32; 2]]) -> Vec<f32> + 'a>;
 /// - **Mode icons** report [`CurvesPanelOutput::mode`]; the current mode's icon reports nothing.
 /// - **Selection**: the selected point is the panel's own state ([`CurvesPanelOutput::selected`]); the host sets
 ///   it with [`select`](Self::select), after [`add_point_from_sample`](Self::add_point_from_sample).
-/// - **Sampling under the dialog**: with a [`canvas`](Self::canvas) the panel arms the canvas's sampler in every
-///   pass, so a ⌘/Ctrl-click on the image reaches the host's tool, which calls `add_point_from_sample`.
+/// - **Sampling under the dialog**: with a [`canvas`](Self::canvas) the panel lets the ⌘/Ctrl-click on the image
+///   through the dialog in every pass, so it reaches the host's tool, which calls `add_point_from_sample`.
 #[must_use = "show the panel with `show`"]
 #[derive(Pattern, Props)]
 pub struct CurvesPanel<'a> {
@@ -165,7 +167,7 @@ pub struct CurvesPanel<'a> {
     /// The armed point picker; the picker row shows when it is given.
     #[prop]
     pickers: Option<Bind<'a, Option<TonePicker>>>,
-    /// The document canvas the sampler is armed for.
+    /// The document canvas the ⌘/Ctrl-click and the eyedroppers reach under the dialog.
     #[prop]
     canvas: Option<Id>,
     picker_enabled: [bool; 3],
@@ -318,7 +320,7 @@ impl<'a> CurvesPanel<'a> {
             let hint = template.fill(&[("key", &key)]);
             // A Curves panel in a dialog keeps the image under the dialog usable for the ⌘/Ctrl-click point.
             if let Some(canvas) = canvas {
-                cx.arm_sampler(canvas);
+                cx.pass_canvas_gesture(canvas, CanvasGesture::PRIMARY.with(Mods::CMD));
             }
 
             let mut picked = channel;
