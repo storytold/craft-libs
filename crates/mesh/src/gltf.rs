@@ -3,7 +3,7 @@
 //!
 //! Read: the default scene's node hierarchy (matrix or translation/rotation/scale), triangle
 //! primitives (`TRIANGLES`, `TRIANGLE_STRIP`, `TRIANGLE_FAN`, indexed or not) with POSITION,
-//! NORMAL, every TEXCOORD_n, COLOR_0, JOINTS_0 and WEIGHTS_0 of any component type the
+//! NORMAL, TANGENT, every TEXCOORD_n, COLOR_0, JOINTS_0 and WEIGHTS_0 of any component type the
 //! specification or `KHR_mesh_quantization` allows, strided buffer views, sparse accessors,
 //! metallic-roughness materials (factors, the five texture slots with their UV set and wrap
 //! modes, alpha modes, double-sided, `KHR_materials_emissive_strength`, `KHR_materials_unlit`;
@@ -15,7 +15,7 @@
 //! same accessors), and each primitive a [`Part`].
 //!
 //! Not read: required extensions that change how geometry is stored (Draco, meshopt) are
-//! [`Error::Unsupported`]; points, lines, morph targets, tangents and
+//! [`Error::Unsupported`]; points, lines, morph targets and
 //! other extensions are passed over (skipped primitives are counted in a warning).
 //!
 //! Buffers are needed to read anything, so an external buffer is asked of the resolver (by its
@@ -353,7 +353,7 @@ fn rows_of<const N: usize>(v: &[f64]) -> impl Iterator<Item = [f64; N]> + '_ {
 
 /// Append the primitive's vertex attributes to the mesh's pools; the bases its corners count
 /// from (`NONE` for a pool the primitive does not fill).
-fn attributes(d: &Doc, attrs: &Value, pos: &[f64], mesh: &mut Mesh) -> Result<[u32; 3]> {
+fn attributes(d: &Doc, attrs: &Value, pos: &[f64], mesh: &mut Mesh) -> Result<[u32; 4]> {
     let nv = pos.len() / 3;
     let base_of = |len: usize| {
         u32::try_from(len)
@@ -366,6 +366,18 @@ fn attributes(d: &Doc, attrs: &Value, pos: &[f64], mesh: &mut Mesh) -> Result<[u
     if let Some((v, _)) = d.attribute(attrs, "NORMAL", nv, &[3])? {
         normal_base = base_of(mesh.normals.len())?;
         mesh.normals.extend(rows_of::<3>(&v));
+    }
+    let mut tangent_base = NONE;
+    match d.attribute(attrs, "TANGENT", nv, &[4])? {
+        Some((v, _)) => {
+            if mesh.tangents.is_empty() {
+                mesh.tangents.resize(mesh.positions.len(), [0.0; 4]);
+            }
+            tangent_base = base_of(mesh.tangents.len())?;
+            mesh.tangents.extend(rows_of::<4>(&v));
+        }
+        None if !mesh.tangents.is_empty() => mesh.tangents.resize(mesh.positions.len() + nv, [0.0; 4]),
+        None => {}
     }
     let mut sets = Vec::new();
     while sets.len() < MAX_UV_SETS {
@@ -411,13 +423,13 @@ fn attributes(d: &Doc, attrs: &Value, pos: &[f64], mesh: &mut Mesh) -> Result<[u
         _ => {}
     }
     mesh.positions.extend(rows_of::<3>(pos));
-    Ok([base, normal_base, uv_base])
+    Ok([base, normal_base, uv_base, tangent_base])
 }
 
 /// Where the vertices of one set of attribute accessors start in the mesh's pools (positions,
 /// normals, UVs), and how many there are. Primitives of a mesh that name the same accessors
 /// (one vertex buffer, several materials) share the vertices.
-type Shared = std::collections::HashMap<String, ([u32; 3], usize)>;
+type Shared = std::collections::HashMap<String, ([u32; 4], usize)>;
 
 fn primitive(d: &Doc, p: &Value, mesh: &mut Mesh, shared: &mut Shared, materials: usize, skipped: &mut Skipped) -> Result<()> {
     let mode = idx(p, "mode").unwrap_or(4);
@@ -428,7 +440,7 @@ fn primitive(d: &Doc, p: &Value, mesh: &mut Mesh, shared: &mut Shared, materials
     };
     charge(&d.parts_left, 1, "primitives")?;
     let key = attrs.to_string();
-    let ([base, normal_base, uv_base], nv) = match shared.get(&key) {
+    let ([base, normal_base, uv_base, tangent_base], nv) = match shared.get(&key) {
         Some(known) => *known,
         None => {
             let (pos, n) = d.rows(pa, d.vertices_left.get(), "vertices")?;
@@ -464,7 +476,7 @@ fn primitive(d: &Doc, p: &Value, mesh: &mut Mesh, shared: &mut Shared, materials
     };
     let finite = |i: u32| (i as usize) < nv && mesh.positions.get(base as usize + i as usize).is_some_and(|p| p.iter().all(|x| x.is_finite()));
     let offset = |b: u32, i: u32| if b == NONE { NONE } else { b + i };
-    let mut part = Part { material: idx(p, "material").filter(|m| *m < materials), ..Part::default() };
+    let mut part = Part { material: idx(p, "material").filter(|m| *m < materials), has_tangents: tangent_base != NONE, ..Part::default() };
     let count = if mode == 4 { raw.len() / 3 } else { raw.len().saturating_sub(2) };
     for t in (0..count).filter_map(triangle) {
         if t.iter().all(|i| finite(*i)) {
