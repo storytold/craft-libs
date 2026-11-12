@@ -474,3 +474,30 @@ fn shrink_to_fit_refuses_a_sheet_the_output_cannot_represent() {
     let refused = plan(&sheets.sheets, (612.0, 792.0), Fit::Shrink { margin: 18.0 });
     assert!(matches!(refused, Err(Error::Spool(ref m)) if m.contains("shrink")), "{refused:?}");
 }
+
+#[test]
+fn shrink_to_fit_holds_the_one_percent_scale_boundary() {
+    use crate::sheets::{Fit, plan, read};
+    // The matrix carries the scale through the four-decimal formatter, so the plan refuses when
+    // what would be written is more than 1% off the real scale. Letter with an 18 pt margin gives
+    // 576 pt of printable width: a 118 700 pt wide, 120 000 pt tall sheet (no quarter turn) scales
+    // by 576 / 118 700 = 0.00485257, written 0.0049 -- 0.98% short, inside the bound, so it
+    // prints.
+    let inside = TestPage { media: Some([0.0, 0.0, 118_700.0, 120_000.0]), ..LETTER };
+    let pdf = test_pdf(&[inside], false);
+    let sheets = read(&pdf).unwrap();
+    let edits = plan(&sheets.sheets, (612.0, 792.0), Fit::Shrink { margin: 18.0 }).unwrap();
+    let updated = sheets.update(&edits).unwrap();
+    let frame = frame_of(&updated, pdf.len());
+    let written: f64 = frame.split_whitespace().nth(1).unwrap().parse().unwrap();
+    let real = edits[0].frame.as_ref().unwrap().matrix[0];
+    assert!(written != real && (written - real).abs() < real * 0.01, "just inside the 1% bound the written scale is accepted: {frame}");
+
+    // A 118 750 pt wide sheet: 576 / 118 750 = 0.00485053, written 0.0049, 1.02% off -- refused as
+    // an error before anything is sent, rather than printed a percent too small.
+    let outside = TestPage { media: Some([0.0, 0.0, 118_750.0, 120_000.0]), ..LETTER };
+    let pdf = test_pdf(&[outside], false);
+    let sheets = read(&pdf).unwrap();
+    let refused = plan(&sheets.sheets, (612.0, 792.0), Fit::Shrink { margin: 18.0 });
+    assert!(matches!(refused, Err(Error::Spool(ref m)) if m.contains("shrink") && m.contains("nothing was sent")), "{refused:?}");
+}
