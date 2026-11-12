@@ -384,6 +384,8 @@ pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError> {
             match out16 {
                 Some(out) => Image::from_u16(w, hgt, layout, &out)?,
                 None => {
+                    // Admission above assumed 16-bit samples; the float fallback is twice that.
+                    limits.check(w, hgt, layout, SampleType::F32)?;
                     let max = (0..n).filter_map(physical).fold(0.0f64, f64::max);
                     let white = if max <= 2.0 {
                         1.0
@@ -724,6 +726,19 @@ mod tests {
         }
         let img = decode(&b, &Limits::default()).unwrap();
         assert_eq!(img.sample_type(), SampleType::F32);
+    }
+
+    #[test]
+    fn the_float_fallback_is_checked_against_the_allocation_limit() {
+        let mut b = header(&["SIMPLE  = T", "BITPIX  = 16", "NAXIS   = 2", "NAXIS1  = 2", "NAXIS2  = 1"]);
+        for v in [-100i16, 1000] {
+            b.extend_from_slice(&v.to_be_bytes());
+        }
+        // Room for two 16-bit samples, not for two floats.
+        let limits = Limits { max_alloc: 4, ..Limits::default() };
+        assert!(matches!(decode(&b, &limits), Err(CodecError::LimitExceeded(_))));
+        let limits = Limits { max_alloc: 8, ..Limits::default() };
+        assert_eq!(decode(&b, &limits).unwrap().sample_type(), SampleType::F32);
     }
 
     #[test]
