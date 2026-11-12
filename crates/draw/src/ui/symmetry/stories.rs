@@ -3,14 +3,15 @@
 use super::handles::{CENTRE, SYMMETRY};
 use super::{
     Symmetry, SymmetryChoice, SymmetryEvent, SymmetryHandles, SymmetryMenu, SymmetryMode, SymmetryOverlay, SymmetryPathRow, SymmetryTool,
-    SymmetryTransform,
+    SymmetryTransform, SymmetryWords,
 };
 use craft_behavior::kurbo::{Size, Vec2};
 use craft_behavior::{CanvasView, EditEvent};
+use craft_ui::bars::{Bar, BarKind};
 use craft_ui::canvas::Canvas;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::runtime::env::Env;
-use craft_ui::testing::{Drive, EditKind, Grip, StoryButton, StoryData, StoryOutput, ToolStory, story, tool_story};
+use craft_ui::testing::{Drive, EditKind, Grip, StoryData, StoryOutput, ToolStory, story, tool_story};
 use egui::Ui;
 
 craft_ui::words! {
@@ -138,13 +139,14 @@ struct SymmetryKept {
     ended: Option<bool>,
 }
 
-/// Transform Symmetry live over the page: the handles move the centre and turn the guides, Enter or Apply stores the
-/// symmetry and reopens the session on it, Esc or Discard drops the session and reopens it on the stored symmetry. The
-/// stored symmetry is the story's document; the story values set it anew.
+/// Transform Symmetry live over the page, under its options bar: the handles move the centre and turn the guides, Enter
+/// or ✓ stores the symmetry and reopens the session on it, Esc or ⊘ drops the session and reopens it on the stored
+/// symmetry. The stored symmetry is the story's document; the story values set it anew.
 #[story(SymmetryHandles<'static>, covers = [], drive = Drive::Never)]
 fn transform_symmetry(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let words = Env::of(ui).words::<SymmetryStoryWords>();
-    let units = Env::of(ui).units();
+    let env = Env::of(ui);
+    let (words, units) = (env.words::<SymmetryStoryWords>(), env.units());
+    let symmetry = env.words::<SymmetryWords>();
     let described = described(data);
     let set = data.note("described", described);
     if *set != described {
@@ -162,8 +164,11 @@ fn transform_symmetry(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     };
     let start = || SymmetryKept { session: SymmetryTransform::begin(described), ended: None };
     let picture = SHOWN;
-    let buttons = [StoryButton::new("Apply"), StoryButton::new("Discard")];
-    let story = ToolStory::new("Document", &picture).buttons(&buttons);
+    // The bar shows before the canvas, as the app's options bar does: its commands reach the session on this pass.
+    let bar =
+        Bar::new(symmetry.transform.clone(), BarKind::Options).commit_cancel(symmetry.commit.clone(), symmetry.cancel.clone()).show(ui, |_, _| {});
+    let (committed, cancelled) = (bar.output.committed, bar.output.cancelled);
+    let story = ToolStory::new("Document", &picture);
     tool_story(ui, data, story, start, described, body, |run| {
         let (stored, kept) = (run.document, run.tool);
         let mut output = StoryOutput::default();
@@ -175,13 +180,13 @@ fn transform_symmetry(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         let mut tool = SymmetryTool::new(&kept.session, true);
         let _ = run.host.run(&mut tool);
         let mut events = tool.take_events();
-        if apply || run.pressed == Some("Apply") {
+        if apply || committed {
             events.push(kept.session.commit());
         }
-        if discard || run.pressed == Some("Discard") {
+        if discard || cancelled {
             events.push(kept.session.discard());
         }
-        output.clicked = run.pressed.is_some();
+        output.clicked = committed || cancelled;
         for event in events {
             match event {
                 SymmetryEvent::Apply(symmetry) => {
