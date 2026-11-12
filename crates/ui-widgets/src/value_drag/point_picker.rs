@@ -343,14 +343,19 @@ impl Component for PointPicker<'_> {
         PointPickerStyle {
             metrics: Metrics::new().min_size(Vec2::new(cx.tokens.size.plot.width, cx.tokens.size.plot.height)),
             focus: cx.focus_look(),
-            thumb: cx.tokens.size.handle.md,
+            thumb: cx.tokens.size.icon.md,
             marker: cx.marker(),
             hit: cx.tokens.size.hit.target,
         }
     }
 
+    /// The well takes the width its row leaves after the fields beside it, and all the room where it is alone.
+    fn fills(&self) -> Option<craft_behavior::Axis> {
+        Some(craft_behavior::Axis::X)
+    }
+
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        Vec2::new(cx.picture_width(cx.tokens.size.plot.width, f32::INFINITY), 0.0)
+        Vec2::new(cx.tokens.size.plot.width, 0.0)
     }
 
     fn sense(&self) -> Sense {

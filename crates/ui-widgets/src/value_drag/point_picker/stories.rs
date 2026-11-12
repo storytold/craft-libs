@@ -1,9 +1,12 @@
 //! Stories of `PointPicker`.
 
 use super::PointPicker;
-use crate::contract::{Bind, Props as _, Show as _, Validity};
+use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _, Validity};
+use crate::form::Field;
+use crate::layout_components::{Row, Stack};
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Grip, StoryData, StoryOutput, story};
+use crate::text::NumberField;
 use craft_behavior::Mixed;
 use egui::Ui;
 
@@ -12,9 +15,25 @@ const CENTER: [f64; 2] = [50.0, 50.0];
 const RIGHT: [f64; 2] = [90.0, 50.0];
 const CAP: f64 = 80.0;
 
+/// The picker with the X and Y fields its caller shows beside it, bound to the same point (a dialog's point row).
 #[story(PointPicker<'static>, covers = [Default], drive = Drive::Step)]
 fn point_picker(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    PointPicker::new(Bind::bound(data.value("point", Mixed::each(CENTER))), RANGE, RANGE).label("Blur center").show(ui).into()
+    let mut point = *data.value("point", Mixed::each(CENTER));
+    let shown = Row::new().show(ui, |ui, _| {
+        let picked = PointPicker::new(Bind::bound(&mut point), RANGE, RANGE).label("Blur center").show(ui);
+        Stack::new().show(ui, |ui, _| {
+            for (axis, name) in ["X", "Y"].into_iter().enumerate() {
+                let value = point[axis].same().copied();
+                let field = Field::new(name).show(ui, |ui, _| NumberField::new(name, Bind::given(value)).range(RANGE).unit("%").show(ui));
+                if let Some(typed) = field.inner.and_then(|out| out.edit.value().cloned().flatten()) {
+                    point[axis] = Mixed::Same(typed);
+                }
+            }
+        });
+        picked
+    });
+    *data.value("point", Mixed::each(CENTER)) = point;
+    shown.inner.map(Into::into).unwrap_or_default()
 }
 
 #[story(PointPicker<'static>, covers = [], drive = Drive::Drag(Grip::new(PointPicker::WELL)))]
