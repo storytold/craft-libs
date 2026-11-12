@@ -45,6 +45,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-cfb`](crates/cfb/README.md): clean-room Compound File Binary ([MS-CFB], OLE structured
   storage) reader and writer: the container of legacy Office files, Outlook messages, encrypted
   OOXML packages and AAF. Bounded on hostile input; what the streams hold stays with each format.
+- [`craft-dav`](crates/dav/README.md): WebDAV multistatus documents (RFC 4918) with the CalDAV and
+  CardDAV namespaces, from MailCraft: read fail-closed into a bounded `craft-xml` tree with fixed
+  prefixes, and the successful properties of each response. No I/O.
 - [`craft-cms`](crates/cms/README.md): pure-Rust ICC v2/v4 colour management: profile parsing
   and writing, transforms, rendering intents, black point compensation, soft proofing, gamut
   checks, 3D LUTs and built-in profiles (sRGB, Display P3, synthetic coated CMYK and others).

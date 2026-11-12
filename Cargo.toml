@@ -32,6 +32,7 @@ craft-cfb = { path = "crates/cfb" }
 craft-cms = { path = "crates/cms" }
 craft-crw = { path = "crates/crw" }
 craft-csv = { path = "crates/csv" }
+craft-dav = { path = "crates/dav" }
 craft-dialogs = { path = "crates/dialogs" }
 craft-dxf = { path = "crates/dxf" }
 craft-drawingml = { path = "crates/drawingml" }
