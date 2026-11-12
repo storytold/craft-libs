@@ -1,12 +1,12 @@
 //! `LayersPanel` rows the app reads back: the hovered layer, a Smart Filter row selected on its own, its Blending
-//! Options button, and a frame's masks after its content thumbnail.
+//! Options button, and a frame's masks after its content thumbnail: linked and dragged by their own index.
 
-use craft_behavior::SelectionChange;
+use craft_behavior::{EditEvent, SelectionChange};
 use craft_layers::ui::mock::{FakeLayers, sub_row};
-use craft_layers::ui::panel::{ActivateOn, LayersEvent, LayersPanel};
+use craft_layers::ui::panel::{ActivateOn, LayerDrop, LayersEvent, LayersPanel, MaskMove};
 use craft_layers::ui::tree::{LayerInfo, LayerKind, LayerPart, LayerRowKey, LayerSelection, MaskInfo, SubRow, SubRows};
 use craft_ui::testing::{Fixture, Target, pointer, trial};
-use egui::{Key, Modifiers, Vec2};
+use egui::{Key, Modifiers, Pos2, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -162,4 +162,28 @@ fn a_frames_mask_chain_links_the_mask_after_the_content() {
         .filter_map(|event| if let LayersEvent::MaskLink { layer, part, linked, .. } = event { Some((layer, part, linked)) } else { None })
         .collect();
     assert_eq!(links, [(1, LayerPart::LayerMask, false)]);
+}
+
+/// A frame's layer mask thumbnail, after its content thumbnail, drags the mask: dropped on another layer it moves there.
+#[trial]
+fn a_frames_mask_thumbnail_drags_the_mask() {
+    let mut frame = LayerInfo::new("Frame 1", LayerKind::Frame);
+    frame.masks.push(MaskInfo::new(LayerPart::LayerMask, true, true));
+    let mut tree = FakeLayers::default();
+    tree.add(None, LayerInfo::new("Title", LayerKind::Text), false);
+    let id = tree.add(None, frame, false);
+    let (mut fixture, app) = rig(tree);
+    take(&app);
+    let link = node(&fixture, "Unlink layer mask of Frame 1").rect;
+    let from = Pos2::new(link.right() + link.width() * 0.75, link.center().y);
+    let to = node(&fixture, "Title").center();
+    fixture.drag_hold_at(from, to - from).release_at(to).idle(2);
+    let moves: Vec<_> = take(&app)
+        .into_iter()
+        .filter_map(|event| match event {
+            LayersEvent::Drop(EditEvent::Set { after: LayerDrop::Mask(mv), .. }) => Some(mv),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(moves, [MaskMove::new(id, LayerPart::LayerMask, 1, false)]);
 }
