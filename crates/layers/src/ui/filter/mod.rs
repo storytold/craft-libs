@@ -8,7 +8,7 @@
 #[cfg(feature = "screen-testing")]
 mod stories;
 
-use craft_behavior::{EditEvent, IconId, Mixed};
+use craft_behavior::{EditEvent, IconId, Mixed, SelectionChange};
 use craft_theme::{ControlSize, LabelColor};
 use craft_ui::buttons::ToggleButton;
 use craft_ui::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, Sizing};
@@ -21,6 +21,7 @@ use craft_ui::runtime::memory::Remember as _;
 use craft_ui::text::TextField;
 use egui::{Response, Ui};
 
+use super::panel::LayerSelect;
 use super::tree::{LayerInfo, LayerKind, LayerPart, LayerTree};
 
 /// What the Layers panel filters by: the filter bar's type select, Photoshop's types in its order
@@ -453,6 +454,32 @@ impl LayerFilter {
             }
             _ => self.shows(&tree.info(id)),
         }
+    }
+
+    /// The selection change a newly applied filter makes, as Photoshop: the selected layers it no longer lists are
+    /// deselected, the listed ones stay selected and the active one stays active while listed (else the last listed
+    /// becomes active); `Clear` when none stays listed. `None` when the filter is off or lists every selected layer.
+    /// The panel calls it when its filter bar edits the filter; an app that sets the filter itself (a control
+    /// channel) calls it there. A layer selected later, while the filter hides it, stays selected.
+    pub fn deselect_hidden<T: LayerTree>(&self, tree: &T) -> Option<LayerSelect<T::Id>> {
+        if !self.active() {
+            return None;
+        }
+        let selection = tree.selection();
+        let mut listed: Vec<T::Id> = selection.layers.iter().filter(|id| tree.listed(id, self)).cloned().collect();
+        let active_hidden = selection.active.as_ref().is_some_and(|active| !listed.contains(active));
+        if listed.len() == selection.layers.len() && !active_hidden {
+            return None;
+        }
+        let active = selection.active.filter(|active| listed.contains(active));
+        if listed.is_empty() {
+            return Some(LayerSelect::new(SelectionChange::Clear, None));
+        }
+        if let Some(active) = active {
+            listed.retain(|id| *id != active);
+            listed.push(active);
+        }
+        Some(LayerSelect::new(SelectionChange::Set(listed), None))
     }
 }
 

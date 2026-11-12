@@ -359,10 +359,10 @@ fn rows_of_different_measured_heights_place_and_hit_correctly() {
     assert_eq!(log.leads().last(), Some(&2));
 }
 
-/// 17.3 step 9: when the lead's key leaves the source, the lead moves to the key now in its place and a selection
-/// that held the old lead moves with it.
+/// 17.3 step 9: when the lead's key leaves the source (deleted, or hidden by a filter), the lead moves to the key now
+/// in its place and the selection stays the host's: the list selects no row in place of the one that left.
 #[trial]
-fn a_selected_lead_that_leaves_the_source_moves_the_selection_to_the_new_lead() {
+fn a_selected_lead_that_leaves_the_source_moves_the_lead_and_leaves_the_selection() {
     let rows = RefCell::new(vec![(10_usize, "a"), (11, "b"), (12, "c"), (13, "d")]);
     let selection = RefCell::new(Selection::<usize>::default());
     let seen = Cell::new(None);
@@ -385,12 +385,14 @@ fn a_selected_lead_that_leaves_the_source_moves_the_selection_to_the_new_lead() 
     frames.idle(3, &mut show);
     pointer::click(&mut frames, ORIGIN + Vec2::new(5.0, ROW_H * 2.5), &mut show);
     assert_eq!(selection.borrow().items, vec![12]);
+    events.borrow_mut().clear();
     rows.borrow_mut().remove(2);
     frames.idle(2, &mut show);
-    assert_eq!(selection.borrow().items, vec![13], "the selection follows the lead to the key now in its place");
+    assert_eq!(selection.borrow().items, vec![12], "the selection is the host's: no neighbour is picked");
+    assert!(!events.borrow().iter().any(|event| matches!(event, CollectionEvent::Selection(_))), "no selection change is reported");
     let leads: Vec<usize> =
         events.borrow().iter().filter_map(|event| if let CollectionEvent::LeadMoved { key, .. } = event { Some(*key) } else { None }).collect();
-    assert_eq!(leads.last(), Some(&13));
+    assert_eq!(leads.last(), Some(&13), "the lead moves to the key now in its place");
 }
 
 /// 17.3, I1: the lead row above the view grows (an auto row it measures taller): the rows in view stay where they

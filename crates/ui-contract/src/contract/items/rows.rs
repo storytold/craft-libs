@@ -90,12 +90,6 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         self.selection.contains(RowAt::new(&key, at, self.source))
     }
 
-    /// Whether `key`, standing at position `at`, is selected. `key` need not be in the source: a selection of ranges
-    /// answers for the position.
-    pub(super) fn holds_key(&self, key: &C::Key, at: usize) -> bool {
-        self.selection.contains(RowAt::new(key, at, self.source))
-    }
-
     /// The selection placed once in the source's order; the reads of a pass go by position.
     pub(super) fn placed(&self) -> PlacedSelection {
         self.selection.placed(self.source)

@@ -350,7 +350,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let header_held = self.header_step(cx);
         self.offset_x = self.offset_x.clamp(0.0, f64::from((self.content.x - rect.width()).max(0.0)));
         self.open_lead(comp);
-        self.follow_lead_source(comp);
+        self.follow_lead_source();
         let lead_at = self.lead.key.as_ref().and_then(|key| self.index_of(key));
         let props = comp.items().clone();
         let Some(layout) = self.layout.take() else { return };

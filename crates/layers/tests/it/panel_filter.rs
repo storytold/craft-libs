@@ -1,10 +1,11 @@
 //! `LayersPanel` filters: Artboard and Group keep each group open or closed, the app answers what only it knows, and
 //! Find Layers puts the caret in the Name field.
 
+use craft_behavior::SelectionChange;
 use craft_layers::ui::filter::{FilterBy, LayerAttribute, LayerFilter, SmartKind};
 use craft_layers::ui::mock::FakeLayers;
-use craft_layers::ui::panel::LayersPanel;
-use craft_layers::ui::tree::LayerSelection;
+use craft_layers::ui::panel::{LayersEvent, LayersPanel};
+use craft_layers::ui::tree::{LayerPart, LayerSelection};
 use craft_ui::contract::Bind;
 use craft_ui::testing::{Fixture, trial};
 use egui::Vec2;
@@ -151,4 +152,52 @@ fn the_type_select_lists_only_the_offered_types() {
     }
     let rows = BOARDS.iter().filter(|label| fixture.by_label(label).is_some()).count();
     assert_eq!(rows, BOARDS.len(), "the fallback Kind filter is empty, so every layer is listed");
+}
+
+/// #10879: a filter the bar applies deselects the selected layers it hides, keeps the listed ones (the active one last,
+/// so it stays active) and clears the selection when none stays listed; the list picks no row in place of a hidden one.
+#[trial]
+fn a_filter_the_bar_applies_deselects_what_it_hides() {
+    let mut tree = FakeLayers::sample();
+    tree.selection = LayerSelection::new(vec![3, 2, 4], Some(3), LayerPart::Pixels);
+    let tree = Rc::new(RefCell::new(tree));
+    let filter = Rc::new(RefCell::new(LayerFilter::default()));
+    let find = Rc::new(Cell::new(false));
+    let seen: Shared<Vec<LayersEvent<u32>>> = Rc::default();
+    let (shown, by, asked, sink) = (Rc::clone(&tree), Rc::clone(&filter), Rc::clone(&find), Rc::clone(&seen));
+    let mut fixture = Fixture::new(move |ui| {
+        let tree = shown.borrow();
+        let mut filter = by.borrow_mut();
+        let mut panel = LayersPanel::new(&*tree).filter(Bind::bound(&mut *filter));
+        if asked.replace(false) {
+            panel = panel.focus_filter_name();
+        }
+        sink.borrow_mut().extend(panel.show(ui).events);
+    });
+    fixture.room(ONE_PANEL);
+    fixture.settle();
+    let selects = |seen: &Shared<Vec<LayersEvent<u32>>>| -> Vec<SelectionChange<u32>> {
+        seen.borrow_mut().drain(..).filter_map(|event| if let LayersEvent::Select(select) = event { Some(select.change) } else { None }).collect()
+    };
+    selects(&seen);
+
+    find.set(true);
+    fixture.idle(2);
+    fixture.type_text("ed");
+    fixture.idle(2);
+    let changes = selects(&seen);
+    assert!(!changes.is_empty(), "the filter that hides Title deselects it");
+    assert!(changes.iter().all(|change| *change == SelectionChange::Set(vec![2, 3])), "Clipped and Masked stay, Masked active: {changes:?}");
+
+    tree.borrow_mut().selection = LayerSelection::new(vec![2, 3], Some(3), LayerPart::Pixels);
+    find.set(true);
+    fixture.idle(2);
+    fixture.type_text("zz");
+    fixture.idle(2);
+    let changes = selects(&seen);
+    assert!(!changes.is_empty() && changes.iter().all(|change| *change == SelectionChange::Clear), "none stays listed: {changes:?}");
+
+    tree.borrow_mut().selection = LayerSelection::new(vec![4], Some(4), LayerPart::Pixels);
+    fixture.idle(2);
+    assert!(selects(&seen).is_empty(), "a layer selected later, while the filter hides it, stays selected");
 }

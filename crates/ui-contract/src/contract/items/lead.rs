@@ -106,19 +106,16 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
     }
 
-    /// A lead whose key left the source moves to the key now in its place, else the one before it.
-    pub(super) fn follow_lead_source(&mut self, comp: &C) {
+    /// A lead whose key left the source moves to the key now in its place, else the one before it. The selection is
+    /// the host's: a row that left (deleted, or hidden by a filter) is not replaced by its neighbour.
+    pub(super) fn follow_lead_source(&mut self) {
         let len = self.source.len();
         if let Some(key) = self.lead.key.clone()
             && self.index_of(&key).is_none()
         {
             self.lead.key = None;
             if len > 0 {
-                let to = self.lead.at.min(len - 1);
-                self.move_lead(to, LeadSource::Keys);
-                if self.holds_key(&key, to) {
-                    self.pick(comp, to, false, false);
-                }
+                self.move_lead(self.lead.at.min(len - 1), LeadSource::Keys);
             }
         } else if let Some(at) = self.lead.key.as_ref().and_then(|key| self.index_of(key)) {
             self.lead.at = at;

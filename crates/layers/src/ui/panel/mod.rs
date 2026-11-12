@@ -369,6 +369,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
                     }
                 };
                 let before = held(&mut filter, stack);
+                let mut edited = false;
                 if filter_bar && settings.show_filters && !filter_types.is_empty() {
                     let modes = tree.blend_modes(false, &before.mode);
                     match filter.as_mut() {
@@ -378,21 +379,27 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
                                 .blend_modes(&modes)
                                 .focus_name(find_name)
                                 .show(ui);
+                            edited = out.edit.is_some();
                             events.borrow_mut().extend(out.edit.map(LayersEvent::Filter));
                         }
                         None => {
                             let own = &mut stack.memory::<Session<T::Id>>().filter;
-                            let _ = LayerFilterBar::new(Bind::bound(own))
+                            edited = LayerFilterBar::new(Bind::bound(own))
                                 .filter_types(filter_types.as_slice())
                                 .blend_modes(&modes)
                                 .focus_name(find_name)
-                                .show(ui);
+                                .show(ui)
+                                .changed;
                         }
                     }
                 }
                 let mut listed = held(&mut filter, stack);
                 if !filter_types.is_empty() {
                     listed.by = listed.by.among(&filter_types);
+                }
+                // A filter the bar just applied deselects the layers it hides; the list picks no row in their place.
+                if edited && let Some(select) = listed.deselect_hidden(tree) {
+                    events.borrow_mut().push(LayersEvent::Select(select));
                 }
                 *current.borrow_mut() = listed;
                 if blend_rows {
