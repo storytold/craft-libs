@@ -29,6 +29,7 @@ egui = { workspace = true }
 craft-host = { workspace = true }
 craft-i18n = { workspace = true, features = ["collate"] }
 serde = { workspace = true }
+serde_json = { workspace = true }
 # `patterns::preferences::SettingsDocument` turns an app's settings struct into a draft table and back; `toml_edit` gives
 # the struct's field order, which a `toml::Table` sorts away.
 toml = { version = "1.1", default-features = false, features = ["std", "parse", "serde"] }

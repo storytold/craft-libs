@@ -15,6 +15,7 @@ use craft_behavior::Mixed;
 use craft_host::target::Os;
 use craft_quit::{CloseAnswer, CloseScope};
 use egui::{Context, Response, Ui};
+use serde_json::{Value, json};
 
 /// The answer for one document, with whether it applies to the rest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -76,6 +77,17 @@ impl UnsavedChangesDialog {
         self.chosen = Some(answer);
     }
 
+    /// What a programmatic OK answers.
+    fn chosen(&self) -> CloseAnswer {
+        let accepting = if self.scope == CloseScope::Revert { CloseAnswer::DontSave } else { CloseAnswer::Save };
+        self.chosen.unwrap_or(accepting)
+    }
+
+    /// Whether the "Apply to All" box shows: the guard has more documents, and the question is not a revert.
+    fn offers_apply_to_all(&self) -> bool {
+        self.remaining > 1 && self.scope != CloseScope::Revert
+    }
+
     /// How many documents the guard still asks about, this one included; above one the "Apply to All" box shows.
     #[must_use]
     pub fn remaining(mut self, remaining: usize) -> Self {
@@ -124,7 +136,7 @@ impl UnsavedChangesDialog {
         let replies: Vec<Reply> = replies.into_iter().map(|(_, reply)| reply).collect();
         let mut prompt = Prompt::new(words.unsaved_title.clone(), message).answers(buttons(&env, replies));
         let mut ticked = hosted && self.apply_to_all;
-        if self.remaining > 1 && self.scope != CloseScope::Revert {
+        if self.offers_apply_to_all() {
             let label = words.unsaved_apply_to_all.clone();
             let tick = &mut ticked;
             let mut value = hosted.then_some(&mut self.apply_to_all);
@@ -163,7 +175,40 @@ impl StackDialog for UnsavedChangesDialog {
 
     /// The answer set with `set_answer`; the accepting answer's (Save, or Don't Save when reverting) unless set.
     fn confirm(&mut self, _: &Context) -> Option<UnsavedAnswer> {
-        let accepting = if self.scope == CloseScope::Revert { CloseAnswer::DontSave } else { CloseAnswer::Save };
-        Some(self.answer(self.chosen.unwrap_or(accepting)))
+        Some(self.answer(self.chosen()))
+    }
+
+    /// `choice` (`save`, `dontSave` or `cancel`), the answer a programmatic OK gives, and `applyToAll` while the
+    /// guard has more documents.
+    fn json_fields(&self) -> Option<Value> {
+        let choice = match self.chosen() {
+            CloseAnswer::Save => "save",
+            CloseAnswer::DontSave => "dontSave",
+            CloseAnswer::Cancel => "cancel",
+        };
+        let mut fields = json!({ "choice": choice });
+        if self.offers_apply_to_all() {
+            fields["applyToAll"] = Value::Bool(self.apply_to_all);
+        }
+        Some(fields)
+    }
+
+    fn set_json_field(&mut self, field: &str, value: Value) -> Result<(), String> {
+        match field {
+            "choice" => self.set_answer(match value.as_str() {
+                Some("save") if self.scope != CloseScope::Revert => CloseAnswer::Save,
+                Some("dontSave") => CloseAnswer::DontSave,
+                Some("cancel") => CloseAnswer::Cancel,
+                _ => {
+                    return Err(format!(
+                        "`choice` takes {}",
+                        if self.scope == CloseScope::Revert { "dontSave or cancel" } else { "save, dontSave or cancel" }
+                    ));
+                }
+            }),
+            "applyToAll" if self.offers_apply_to_all() => self.apply_to_all = value.as_bool().ok_or("`applyToAll` takes true or false")?,
+            _ => return Err(format!("unknown field `{field}`")),
+        }
+        Ok(())
     }
 }

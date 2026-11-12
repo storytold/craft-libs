@@ -15,6 +15,7 @@ use craft_behavior::Mixed;
 use craft_i18n::{Count, Format};
 use craft_theme::variant::Tone;
 use egui::{Context, Response, Ui};
+use serde_json::{Value, json};
 use std::any::Any;
 use std::fmt;
 
@@ -61,8 +62,9 @@ pub enum PromptKind {
     Custom,
 }
 
-/// The answer to a `StandardPrompt`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// The answer to a `StandardPrompt`. Automation names it in camel case (`"proceed"`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum PromptChoice {
     /// The default button: Delete, Open Anyway, Replace, Apply.
@@ -448,5 +450,24 @@ impl StackDialog for StandardPrompt {
     /// The answer set with `set_choice`: the default button's, Proceed, unless set.
     fn confirm(&mut self, _: &Context) -> Option<PromptAnswer> {
         Some(self.answer(self.chosen, self.skip))
+    }
+
+    /// `choice`, the answer a programmatic OK gives, and `skip`, the "Don't show again" box where the prompt has
+    /// one.
+    fn json_fields(&self) -> Option<Value> {
+        let mut fields = json!({ "choice": self.chosen });
+        if self.skip_box {
+            fields["skip"] = Value::Bool(self.skip);
+        }
+        Some(fields)
+    }
+
+    fn set_json_field(&mut self, field: &str, value: Value) -> Result<(), String> {
+        match field {
+            "choice" => self.set_choice(serde_json::from_value(value).map_err(|error| format!("`choice`: {error}"))?),
+            "skip" if self.skip_box => self.skip = value.as_bool().ok_or("`skip` takes true or false")?,
+            _ => return Err(format!("unknown field `{field}`")),
+        }
+        Ok(())
     }
 }

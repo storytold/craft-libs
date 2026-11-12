@@ -6,7 +6,7 @@ use crate::runtime::requests::{ColorRequest, HostAnswer, PathRequest};
 
 use super::form::FormDialog;
 use super::host_requests::HostRequests;
-use super::param::{Param, ParamKind, open_fields, set_color_field};
+use super::param::{Param, ParamKind, fill_defaults, open_fields, set_color_field};
 use super::preview::{PreviewPane, PreviewView, PreviewZoom};
 
 use super::rows::{ParamRows, ParamRowsOutput};
@@ -27,7 +27,8 @@ use crate::runtime::words::CommonWords;
 use crate::sections::{DialogRole, FooterButton};
 
 use egui::load::SizedTexture;
-use egui::{Response, Ui};
+use egui::{Context, Response, Ui};
+use serde_json::Value;
 
 use std::borrow::Cow;
 use std::cell::Cell;
@@ -685,5 +686,37 @@ impl StackDialog for HostedParamDialog {
 
     fn instance(&self) -> Option<DialogId> {
         self.instance
+    }
+
+    /// Answers OK as the button does: none while OK is disabled. The result keeps what a remembering dialog saves.
+    fn confirm(&mut self, _: &Context) -> Option<ParamResult> {
+        let ParamDialog { key, params, remember, ok_enabled, .. } = (self.build)(&mut self.fields);
+        if !ok_enabled {
+            return None;
+        }
+        let params = params.into_owned();
+        fill_defaults(&params, &mut self.fields);
+        let fields = self.fields.clone();
+        let remember = remember.map(|save| (save, ParamDialog::remembered(&params, &fields)));
+        Some(ParamResult { key, fields, remember })
+    }
+
+    /// The values by parameter key, as [`DialogFields`] serializes them.
+    fn json_fields(&self) -> Option<Value> {
+        serde_json::to_value(&self.fields).ok()
+    }
+
+    /// Keeps `value` when a parameter row (or its unit choice) takes it, as [`Param::accepts`] says.
+    fn set_json_field(&mut self, field: &str, value: Value) -> Result<(), String> {
+        let params = (self.build)(&mut self.fields).params.into_owned();
+        let parsed: FieldValue = serde_json::from_value(value.clone()).map_err(|error| format!("`{field}`: {error}"))?;
+        if params.iter().any(|param| param.accepts(field, &parsed)) {
+            self.fields.set(field, parsed);
+            Ok(())
+        } else if params.iter().any(|param| param.key == field || param.unit_key() == Some(field)) {
+            Err(format!("`{field}` can't take {value}"))
+        } else {
+            Err(format!("unknown field `{field}`"))
+        }
     }
 }

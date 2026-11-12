@@ -341,7 +341,7 @@ impl FilePanels {
 
     /// The dialog ids of the Replace questions open on the app's dialog host, for an app that lists
     /// its open prompts to automation (`ui.inspect`) and answers them by id
-    /// (`DialogHost::confirm_by_id::<StandardPrompt>`).
+    /// (`DialogHost::confirm_by_id`).
     #[cfg(feature = "ui")]
     pub fn open_questions(&self) -> impl Iterator<Item = craft_ui::dialog::DialogId> + '_ {
         self.prompts.iter().filter_map(|asked| asked.dialog)

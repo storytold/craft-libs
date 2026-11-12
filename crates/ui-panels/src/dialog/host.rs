@@ -8,6 +8,7 @@ use std::any::{Any, TypeId};
 use std::fmt;
 
 use egui::{Context, Ui};
+use serde_json::Value;
 
 use super::stack::{DialogId, DialogStack};
 use crate::contract::{Pattern, PatternKind, PatternProbe};
@@ -72,6 +73,19 @@ pub trait StackDialog: Any + Send {
         None
     }
 
+    /// The dialog's values as a JSON object, keyed as [`set_json_field`](StackDialog::set_json_field) takes them:
+    /// what automation lists for the open dialog (`ui.inspect`). `None` (the default) for a dialog without values.
+    fn json_fields(&self) -> Option<Value> {
+        None
+    }
+
+    /// Sets the value `field` names, as the user editing that control would (`ui.dialog.set`); a prompt's answer
+    /// is its `choice` field. `Err` says why the dialog refused: no such field, or a value the control can't hold.
+    /// Refuses everything by default.
+    fn set_json_field(&mut self, field: &str, _value: Value) -> Result<(), String> {
+        Err(format!("unknown field `{field}`: this dialog has no fields"))
+    }
+
     /// Called when the host closes the dialog from outside with [`DialogResult::Cancel`]
     /// ([`DialogHost::cancel`], a dialog of the same type opened over it, or its parent closing),
     /// so it can release what it holds: a pick ticket (`Files::forget`), an armed dropper. The
@@ -114,6 +128,8 @@ trait AnyStackDialog: Send {
     fn key(&self) -> Option<String>;
     fn instance(&self) -> Option<DialogId>;
     fn confirm_erased(&mut self, ctx: &Context) -> Option<Box<dyn Any + Send>>;
+    fn json_fields(&self) -> Option<Value>;
+    fn set_json_field(&mut self, field: &str, value: Value) -> Result<(), String>;
     fn show_erased(&mut self, ui: &mut Ui, stack: &DialogStack) -> Option<Box<dyn Any + Send>>;
     /// `DialogResult::<D::Result>::Cancel`, boxed, for a dialog closed from outside.
     fn cancelled(&self) -> Box<dyn Any + Send>;
@@ -142,6 +158,14 @@ impl<D: StackDialog> AnyStackDialog for D {
 
     fn confirm_erased(&mut self, ctx: &Context) -> Option<Box<dyn Any + Send>> {
         self.confirm(ctx).map(|result| Box::new(DialogResult::Ok(result)) as Box<dyn Any + Send>)
+    }
+
+    fn json_fields(&self) -> Option<Value> {
+        StackDialog::json_fields(self)
+    }
+
+    fn set_json_field(&mut self, field: &str, value: Value) -> Result<(), String> {
+        StackDialog::set_json_field(self, field, value)
     }
 
     fn show_erased(&mut self, ui: &mut Ui, stack: &DialogStack) -> Option<Box<dyn Any + Send>> {
@@ -195,7 +219,11 @@ impl<D: StackDialog> AnyStackDialog for D {
 ///   [`open_unless_open`](DialogHost::open_unless_open) refuses while any `D` is open and leaves
 ///   it alone (PhotoCraft's `confirmationPending`).
 /// - Automation: [`get`](DialogHost::get) and [`get_mut`](DialogHost::get_mut) reach the open
-///   dialog's value, so a script sets fields and a test reads them like a user would.
+///   dialog's value for code that knows its type. A script that doesn't goes by id:
+///   [`open_dialogs`](DialogHost::open_dialogs) lists every open dialog with its
+///   [`json_fields`](StackDialog::json_fields), [`set_json_field`](DialogHost::set_json_field) sets one,
+///   and [`confirm_by_id`](DialogHost::confirm_by_id) and [`cancel_by_id`](DialogHost::cancel_by_id) close it,
+///   whatever its type.
 #[derive(Default)]
 pub struct DialogHost {
     stack: DialogStack,
@@ -205,6 +233,20 @@ pub struct DialogHost {
     /// Dialogs another of their type replaced, waiting for the pass's `run` to run their
     /// [`StackDialog::cancelled`] (`open` has no `Context`).
     replaced: Vec<Box<dyn AnyStackDialog>>,
+}
+
+/// One open dialog as automation sees it ([`DialogHost::open_dialogs`]).
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct OpenDialog {
+    /// The id the `_by_id` calls take.
+    pub id: DialogId,
+    /// The dialog it was opened from, for a child.
+    pub parent: Option<DialogId>,
+    /// [`StackDialog::key`].
+    pub key: Option<String>,
+    /// [`StackDialog::json_fields`].
+    pub fields: Option<Value>,
 }
 
 /// A finished dialog's answer, with the key the dialog had.
@@ -329,9 +371,9 @@ impl DialogHost {
         }
     }
 
-    /// [`confirm`](DialogHost::confirm) for the open `D` that `id` names.
-    pub fn confirm_by_id<D: StackDialog>(&mut self, ctx: &Context, id: DialogId) -> bool {
-        match self.position_by_id::<D>(id) {
+    /// [`confirm`](DialogHost::confirm) for the open dialog `id` names, whatever its type.
+    pub fn confirm_by_id(&mut self, ctx: &Context, id: DialogId) -> bool {
+        match self.position_by_id(id) {
             Some(at) => self.confirm_at(ctx, at),
             None => false,
         }
@@ -356,9 +398,9 @@ impl DialogHost {
         }
     }
 
-    /// [`cancel`](DialogHost::cancel) for the open `D` that `id` names.
-    pub fn cancel_by_id<D: StackDialog>(&mut self, ctx: &Context, id: DialogId) -> bool {
-        match self.position_by_id::<D>(id) {
+    /// [`cancel`](DialogHost::cancel) for the open dialog `id` names, whatever its type.
+    pub fn cancel_by_id(&mut self, ctx: &Context, id: DialogId) -> bool {
+        match self.position_by_id(id) {
             Some(at) => self.cancel_at(ctx, at),
             None => false,
         }
@@ -372,6 +414,22 @@ impl DialogHost {
         self.stack.remove_tree(id);
         self.cancel_orphans(Some(ctx));
         true
+    }
+
+    /// The open dialogs in opening order (the top one last), with their fields.
+    pub fn open_dialogs(&self) -> Vec<OpenDialog> {
+        self.open
+            .iter()
+            .map(|dialog| OpenDialog { id: dialog.id(), parent: self.stack.parent(dialog.id()), key: dialog.key(), fields: dialog.json_fields() })
+            .collect()
+    }
+
+    /// Sets `field` of the open dialog `id` names ([`StackDialog::set_json_field`]), whatever its type.
+    pub fn set_json_field(&mut self, id: DialogId, field: &str, value: Value) -> Result<(), String> {
+        match self.open.iter_mut().find(|dialog| dialog.id() == id) {
+            Some(dialog) => dialog.set_json_field(field, value),
+            None => Err("no such dialog".to_owned()),
+        }
     }
 
     /// The open dialog `id` ([`dialog_id`](super::dialog_id) of its key) as `Any`, for an app with
@@ -411,8 +469,8 @@ impl DialogHost {
         self.open.iter().rposition(|dialog| dialog.result_type() == TypeId::of::<D>())
     }
 
-    fn position_by_id<D: StackDialog>(&self, id: DialogId) -> Option<usize> {
-        self.open.iter().position(|dialog| dialog.id() == id && dialog.result_type() == TypeId::of::<D>())
+    fn position_by_id(&self, id: DialogId) -> Option<usize> {
+        self.open.iter().position(|dialog| dialog.id() == id)
     }
 
     fn store_result(&mut self, dialog: &dyn AnyStackDialog, result: Box<dyn Any + Send>) {

@@ -23,6 +23,8 @@ pub mod ui;
 pub mod args;
 #[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
 pub mod control;
+#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+pub mod dialogs;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod profiler;
 #[cfg(not(target_arch = "wasm32"))]

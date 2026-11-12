@@ -31,6 +31,7 @@ craft-host = { workspace = true }
 craft-quit = { workspace = true }
 craft-i18n = { workspace = true, features = ["collate"] }
 serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 craft-ui-panels = { path = ".", features = ["testing"] }

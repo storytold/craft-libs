@@ -83,6 +83,11 @@ impl DialogStack {
         self.entries.iter().any(|(_, parent)| *parent == Some(id))
     }
 
+    /// The dialog `id` was opened from, when it is a child.
+    pub fn parent(&self, id: DialogId) -> Option<DialogId> {
+        self.entries.iter().find(|(entry, _)| *entry == id)?.1
+    }
+
     /// The dialogs opened from `id`, in opening order.
     pub fn children(&self, id: DialogId) -> impl Iterator<Item = DialogId> + '_ {
         self.entries.iter().filter(move |(_, parent)| *parent == Some(id)).map(|(entry, _)| *entry)

@@ -25,7 +25,7 @@ pub use blocking::{BlockingOverlay, BlockingOverlayStyle};
 pub use frame::{DialogFrame, DialogFrameStyle, DialogOutput, FooterCx, FooterHooks};
 #[doc(hidden)]
 pub use host::dialog_probe;
-pub use host::{DialogHost, DialogResult, StackDialog, StartupStage};
+pub use host::{DialogHost, DialogResult, OpenDialog, StackDialog, StartupStage};
 pub use modal::{Dialog, DialogStyle};
 pub use prompt::{Prompt, PromptOutput};
 pub use prompts::{PromptAnswer, PromptChoice, PromptKind, StandardPrompt, StandardPromptOutput};
