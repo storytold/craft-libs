@@ -22,6 +22,7 @@ mod entity;
 mod hatch;
 pub mod mleader;
 pub mod objects;
+pub mod table;
 mod tables;
 pub mod text;
 pub mod write;

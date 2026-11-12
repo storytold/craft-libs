@@ -532,6 +532,8 @@ pub enum EntityKind {
     MLine(MLine),
     /// Read only: [`super::write`] leaves it out (pass the record as raw tags).
     MLeader(super::mleader::MLeader),
+    /// Read only: [`super::write`] leaves it out (pass the record as raw tags).
+    Table(super::table::Table),
     Ray {
         base: Point,
         direction: Point,
@@ -800,6 +802,7 @@ impl Entity {
                 EntityKind::MLine(mline(own.0, &own))
             }
             "MULTILEADER" | "MLEADER" => EntityKind::MLeader(super::mleader::MLeader::read(e.tags)),
+            "ACAD_TABLE" => EntityKind::Table(super::table::Table::read(e.tags)),
             "RAY" => EntityKind::Ray { base: line(&g).0, direction: line(&g).1 },
             "XLINE" => EntityKind::XLine { base: line(&g).0, direction: line(&g).1 },
             "TEXT" => EntityKind::Text(Text::read(&g)),
