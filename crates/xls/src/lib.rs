@@ -40,13 +40,12 @@ mod styles;
 #[doc(hidden)]
 pub mod testing;
 
-pub use expr::{quote_sheet, sheet_needs_quotes};
+pub use craft_sheet::{DEFAULT_PALETTE, quote_sheet, sheet_needs_quotes};
 pub use model::{
     Alignment, BorderLine, BorderStyle, Borders, Calc, CalcMode, Cell, CellError, CellFormat, CellRef, Color, Column, DefinedName, Fill, Font,
     Formula, HAlign, Pattern, Range, Row, Script, Sheet, Underline, VAlign, Value, View, Visibility, Workbook,
 };
 pub use read::{is_xls, read, read_with};
-pub use styles::DEFAULT_PALETTE;
 
 /// Why a workbook could not be read.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
