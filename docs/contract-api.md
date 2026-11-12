@@ -1811,6 +1811,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn grid(columns: impl Into<Cow<'static, [ColumnWidth]>>) -> Self`. Children row-major over `columns`: a `'static` slice, or columns built in the pass.
   - `pub fn wrap(self, on: bool) -> Self`. A `Row` that wraps; any other layout is unchanged.
   - `pub fn align(self, align: RowAlign) -> Self`. A `Row` with `align`; any other layout is unchanged.
+- `craft_ui::contract::CanvasGesture`: re-export of `craft_ui::runtime::sampler::CanvasGesture`.
 - `craft_ui::contract::CellWidth`: `pub type CellWidth = ColumnWidth`. The width of a caption's cell.
 - `craft_ui::contract::Collapse`: `pub struct Collapse { pub initially_open: bool, pub animated: bool }`. Collapse configuration.
   - `pub const fn new() -> Self`. A collapsible body that starts open, animated.
@@ -2298,7 +2299,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::RowPressed`: `pub enum RowPressed { Row, Cell(ColumnKey), Part { was_lead: bool } }`. Where the collection holds a primary press on a row, within slop, or the press a part of the row holds.
 - `craft_ui::contract::RowState`: `pub struct RowState { pub selected: bool, pub lead: bool, pub drop_target: bool, pub dragging: bool, pub renaming: bool, pub emphasized: bool, pub current: bool, pub striped: bool, pub open: bool, pub hovered: bool, pub pressed: Option<RowPressed>, pub menu_open: bool, pub sub_row: Option<usize>, pub continued: bool, pub last: bool, pub activated_by_key: bool }`. What an item reads of its place in the collection; the item step joins it to the item's flags at step 12.
 - `craft_ui::contract::Sampler`: `pub trait Sampler: sealed::Host`. The canvas reach under a modal layer (15.5, 8.3): a control of a dialog keeps the canvas below it usable. It is
-  - `fn arm_sampler(&mut self, canvas: Id)`. Arms a sampler for `canvas` (the canvas component's id): while the modal layer is open, primary presses on the
+  - `fn pass_canvas_gesture(&mut self, canvas: Id, gesture: CanvasGesture)`. Lets `gesture` on `canvas` (the canvas component's id) through the modal layer, and the view navigation with it
   - `fn keep_view_open(&mut self, canvas: Id)`. Keeps the view of `canvas` (the canvas component's id) usable under the modal layer: the wheel scrolls and
 - `craft_ui::contract::Savable`: re-export of `craft_ui::runtime::memory::Savable`.
 - `craft_ui::contract::SaveKey`: re-export of `craft_ui::runtime::memory::SaveKey`.
@@ -3688,6 +3689,16 @@ What a control asks of its host and what the host answers: the colour picker, th
 - `craft_ui::runtime::requests::PathRequest`: `pub struct PathRequest { pub key: String, pub kind: PathKind, pub file_name: Option<String>, pub filters: Vec<PathFilter> }`. A pressed Browse button: the host opens its file dialog for `kind` and writes the answer into `key` as a
   - `pub fn new(key: impl Into<String>, kind: PathKind) -> Self`. A request for the path of `key`.
   - `pub fn save(key: impl Into<String>, file_name: impl Into<String>, filters: impl IntoIterator<Item = PathFilter>) -> Self`. A request for a file to write under `key`, suggesting `file_name` and offering `filters`.
+
+## `craft_ui::runtime::sampler`
+
+The canvas reach under a modal layer (15.5, 8.3): the one exception to "a modal blocks the input below it".
+
+- `craft_ui::runtime::sampler::CanvasGesture`: `pub struct CanvasGesture { pub button: PointerButton, pub mods: Mods }`. A gesture on the canvas that a dialog takes under its modal layer: a press of `button` with at least `mods` held,
+  - `pub const PRIMARY: CanvasGesture`. A press of the primary button, with any modifiers: an eyedropper, a shadow or pattern drag.
+  - `pub const fn press(button: PointerButton) -> CanvasGesture`. A press of `button`, with any modifiers.
+  - `pub const fn with(mut self, mods: Mods) -> CanvasGesture`. The same gesture, needing `mods` held at the press.
+- `craft_ui::runtime::sampler::pass_tool_gesture`: `pub fn pass_tool_gesture(ctx: &Context, canvas: Id, gesture: CanvasGesture)`. The canvas host's entry (`ToolHost`): passes `gesture` on `canvas`, the canvas whose tool the host runs. It takes
 
 ## `craft_ui::runtime::toast`
 
