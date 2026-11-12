@@ -59,7 +59,11 @@ impl Component for ListRow<'_> {
         let text = &colors.text;
         let clear = Rgba::TRANSPARENT;
         let c = |rgba: Rgba| cx.color(rgba);
-        let form = if key.option { RowForm::Option } else { RowForm::List };
+        let form = match () {
+            _ if key.option && key.command => RowForm::Command,
+            _ if key.option => RowForm::Option,
+            _ => RowForm::List,
+        };
         let fill = fill_of(cx, FillKey { striped: key.striped, layer: key.layer, form });
         // An option sits inset in its popup with rounded corners whatever the theme's row form.
         let rounded = key.option || tokens.shape.rows == RowStyle::Rounded;
@@ -68,7 +72,7 @@ impl Component for ListRow<'_> {
         if key.layer {
             surface = surface.border(Stateful::new(c(clear)).when(Flags::SELECTED, c(selected_outline(cx))), tokens.stroke.thin);
         }
-        if key.option {
+        if form == RowForm::Option {
             let edge = Stateful::new(c(clear)).when(Flags::SELECTED, c(colors.accent.text)).when(Flags::LEAD, c(colors.line.control_edge));
             surface = surface.border(edge, tokens.stroke.thin);
         }

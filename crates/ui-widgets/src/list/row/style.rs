@@ -46,7 +46,7 @@ pub struct ListRowStyle {
 pub(super) enum RowForm {
     /// An item of a list.
     List,
-    /// A row of a menu: the lead row is the command highlight.
+    /// A row of a menu, or an option that runs a command: the lead row is the command highlight.
     Command,
     /// An option of a listbox: the chosen row keeps the selected fill, the lead row the hover fill.
     Option,

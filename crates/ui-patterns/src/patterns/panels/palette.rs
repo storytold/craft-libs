@@ -230,7 +230,7 @@ impl RowData {
     /// One line: the label, then the menu path, which drops out when the label would get too narrow, and the chord
     /// at the end.
     fn row(&self) -> ListRow<'static> {
-        let row = ListRow::new(self.label.clone()).option().enabled(self.enabled);
+        let row = ListRow::new(self.label.clone()).option().command().enabled(self.enabled);
         // The first trailing item is the outermost: the chord ends the row and the path sits before it.
         let row = match &self.chord {
             Some(chord) => row.trailing(chord.clone()),

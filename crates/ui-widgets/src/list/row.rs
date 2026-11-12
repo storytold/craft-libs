@@ -247,6 +247,11 @@ pub struct ListRow<'a> {
     #[style_key]
     #[prop(flag)]
     pub(super) option: bool,
+    /// On an option that runs a command (a command palette's row): the lead row is the command highlight, as a menu's,
+    /// and no edge outlines the lead or the chosen row.
+    #[style_key]
+    #[prop(flag)]
+    pub(super) command: bool,
     /// On an option of a list that picks a value: the row keeps a mark column, with the check mark when `true`.
     #[prop]
     pub(super) check: Option<bool>,
@@ -314,6 +319,7 @@ impl<'a> ListRow<'a> {
             group: None,
             disclosure_by_host: false,
             option: false,
+            command: false,
             check: None,
             event: None,
             open: None,
