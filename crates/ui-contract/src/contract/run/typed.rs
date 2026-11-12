@@ -324,7 +324,7 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
     }
 
     fn validity(&self) -> Option<(&Message, bool)> {
-        steps::validity_of(&self.cx.validity)
+        steps::validity_of(&self.cx.validity).or_else(|| self.cx.core.text_unparsed.as_ref().map(|message| (message, false)))
     }
 
     fn shows_label(&self) -> bool {

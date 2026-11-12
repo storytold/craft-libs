@@ -168,6 +168,9 @@ pub struct CxCore<'a> {
     pub(crate) editor_inputs: Vec<craft_behavior::EditorInput>,
     /// The text part's draft is not a value of its codec.
     pub(crate) text_invalid: bool,
+    /// The text part's `TextOptions::unparsed` while its draft does not parse: the refusal the pass reports when the
+    /// binding gives none.
+    pub(crate) text_unparsed: Option<crate::runtime::env::Message>,
     /// The text part takes the pointer this pass: the field is in edit, or the press under way began in edit. A body
     /// scrub (`Scrub::on_field`) leaves such a press to the text.
     pub(crate) text_takes_pointer: bool,

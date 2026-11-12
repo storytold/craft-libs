@@ -319,12 +319,15 @@ pub struct FooterRegion {
     pub place: FooterPlace,
     /// The space above the footer's content, inside the region; none by default.
     pub gap: Option<Gap>,
+    /// The footer shows the validity message of the control the container labels as its status line
+    /// (`BodyCx::field_message`); a control under a container without one shows its message itself.
+    pub status: bool,
 }
 
 impl FooterRegion {
     /// A footer across the container under the line, with no rule.
     pub const fn new() -> Self {
-        FooterRegion { rule: false, place: FooterPlace::Across, gap: None }
+        FooterRegion { rule: false, place: FooterPlace::Across, gap: None, status: false }
     }
 
     /// Whether a rule separates the footer from the content beside it.
@@ -342,6 +345,12 @@ impl FooterRegion {
     /// The space above the footer's content, inside the region.
     pub const fn gap(mut self, gap: Gap) -> Self {
         self.gap = Some(gap);
+        self
+    }
+
+    /// The footer shows the validity message of the control the container labels as its status line.
+    pub const fn status(mut self) -> Self {
+        self.status = true;
         self
     }
 }

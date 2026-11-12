@@ -45,6 +45,8 @@ pub struct FieldLabel {
     pub detail: Option<String>,
     /// The label was clicked or activated this pass: focus goes to its control.
     pub activated: bool,
+    /// The container shows its control's validity message as its status line (`FooterRegion::status`).
+    pub status: bool,
 }
 
 impl FieldLabel {
@@ -59,6 +61,7 @@ impl FieldLabel {
             role: FieldLabelRole::Names,
             detail: None,
             activated: false,
+            status: false,
         }
     }
 
@@ -73,6 +76,13 @@ impl FieldLabel {
     #[must_use]
     pub fn detail(mut self, detail: impl Into<String>) -> Self {
         self.detail = Some(detail.into());
+        self
+    }
+
+    /// Whether the container shows its control's validity message as its status line.
+    #[must_use]
+    pub fn status(mut self, status: bool) -> Self {
+        self.status = status;
         self
     }
 
@@ -333,13 +343,15 @@ pub(crate) fn register_reset(ctx: &Context, control: Id, differs: bool) {
 }
 
 /// Registers the validity message of a control with the innermost label scope; `text` is the message resolved.
-/// `tone` is the effective tone of the message. The first message wins.
-pub(crate) fn register_message(ctx: &Context, message: &Message, tone: Tone, text: String) {
+/// `tone` is the effective tone of the message. The first message wins. Returns whether that scope's container shows
+/// the message as its status line; without one, the control shows it itself.
+pub(crate) fn register_message(ctx: &Context, message: &Message, tone: Tone, text: String) -> bool {
     pass_state::with::<Stack, _>(ctx, |stack| {
-        if let Some(scope) = stack.0.iter_mut().rev().find(|scope| matches!(scope.kind, Kind::Label(_))) {
-            scope.message.get_or_insert_with(|| (message.clone(), tone, text));
-        }
-    });
+        let Some(scope) = stack.0.iter_mut().rev().find(|scope| matches!(scope.kind, Kind::Label(_))) else { return false };
+        let status = matches!(&scope.kind, Kind::Label(label) if label.status);
+        scope.message.get_or_insert_with(|| (message.clone(), tone, text));
+        status
+    })
 }
 
 /// The message the label scope of `container` recorded last frame.

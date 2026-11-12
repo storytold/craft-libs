@@ -441,6 +441,7 @@ pub(crate) fn run<C: Component>(
     }
     facts(cx, &mut state, widget, &out, decl.rect, decl.options.mask, read_only);
     cx.core.text_invalid = state.invalid;
+    cx.core.text_unparsed = decl.options.unparsed.clone().filter(|_| state.invalid);
     cx.core.escape_to_list = state.completions.open;
     if state.draft.is_some() || (decl.options.clear_on_escape && !out.layout.full.is_empty()) {
         keys::hold_escape(&ctx, id);

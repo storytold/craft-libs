@@ -43,6 +43,8 @@ pub(crate) struct LabelIn<'a> {
     pub leaf: bool,
     /// The leaf child draws only its mark (`Component::LABELLED_AFTER`): the label is part of its hit target.
     pub claims: bool,
+    /// The container shows its control's validity message as its status line (`FooterRegion::status`).
+    pub status: bool,
     /// The size of the content shown after the label's text, inside the label; zero without one.
     pub trailing: Vec2,
 }
@@ -50,7 +52,7 @@ pub(crate) struct LabelIn<'a> {
 /// The label fact the scope records: the name's text, and the detail and the help line (resolved) as the control's
 /// description.
 fn field_label(env: &Env, input: &LabelIn<'_>, id: Id, rect: Rect) -> FieldLabel {
-    let label = FieldLabel::new(id, rect, input.text.as_str()).role(input.side.role);
+    let label = FieldLabel::new(id, rect, input.text.as_str()).role(input.side.role).status(input.status);
     let described: Vec<String> =
         [input.side.detail.as_ref(), input.help].into_iter().flatten().map(|text| env.view().resolve(text).as_str().to_owned()).collect();
     if described.is_empty() { label } else { label.detail(described.join(". ")) }
@@ -118,6 +120,7 @@ pub(crate) fn leaf<C: Show>(ui: &mut Ui, env: &Env, at: &LeafLabel<'_>, child: &
         control_min,
         leaf: true,
         claims: C::LABELLED_AFTER,
+        status: false,
         trailing: trailing.as_ref().map_or(Vec2::ZERO, |trailing| trailing.size),
     };
     let placed = run(ui, env, &input, trailing);

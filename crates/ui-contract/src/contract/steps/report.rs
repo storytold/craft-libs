@@ -47,13 +47,27 @@ pub(crate) fn validity_of<V>(validity: &Validity<V>) -> Option<(&Message, bool)>
 }
 
 /// Step 16, report: the AccessKit node filled with its sub-nodes, the label-scope patch and the merge, then the
-/// cursor request.
-pub(crate) fn report(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>) {
-    report_access(p, facts, input);
+/// cursor request. Returns the validity message no enclosing container shows as its status line: the component's
+/// own tooltip shows it.
+pub(crate) fn report(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>) -> Option<String> {
+    let validity = register_validity(p);
+    report_access(p, facts, input, validity.as_ref().map(|(text, _)| text.clone()));
     crate::contract::cx::write_cursor(p.core_ref());
+    validity.filter(|(_, shown)| !shown).map(|(text, _)| text)
 }
 
-fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>) {
+/// The message of a validity that warns or refuses as text, registered with the innermost label scope, and whether
+/// that scope's container shows it as its status line.
+fn register_validity(p: &dyn ErasedPass<'_>) -> Option<(String, bool)> {
+    let core = p.core_ref();
+    let (message, warns) = p.validity()?;
+    let text = core.env.resolve(&message.text).as_str().to_owned();
+    let shown = scope::register_message(&core.ctx, message, message.effective_tone(warns), text.clone());
+    Some((text, shown))
+}
+
+/// `validity` is the validity message as text: the node's description when the component gives none.
+fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>, validity: Option<String>) {
     let core = p.core_ref();
     let (ctx, id) = (&core.ctx, core.id);
     let (mut access, value_text) = p.access();
@@ -82,12 +96,6 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
     let shortcut = shortcut.as_deref();
     for (_, label) in &mut access.custom_actions {
         *label = core.env.resolve(label);
-    }
-    // The message of a validity that warns or refuses as text; the node's description when the component gives none.
-    let message = p.validity();
-    let validity = message.map(|(message, _)| core.env.resolve(&message.text).as_str().to_owned());
-    if let (Some((message, warns)), Some(text)) = (message, &validity) {
-        scope::register_message(ctx, message, message.effective_tone(warns), text.clone());
     }
     let tooltip_text = resolved.tooltip.map(|tooltip| core.env.resolve(&tooltip.spec().text));
     let tooltip = tooltip_text.as_ref().map(Label::as_str);

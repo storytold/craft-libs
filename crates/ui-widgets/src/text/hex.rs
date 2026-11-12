@@ -7,6 +7,7 @@ use super::TextField;
 use crate::contract::Bind;
 use crate::runtime::env::Label;
 use craft_behavior::{Caret, Codec, NotAValue};
+use craft_i18n::Word;
 use craft_theme::Rgba;
 use std::borrow::Cow;
 
@@ -105,10 +106,14 @@ impl Codec for HexCodec {
 /// A text field over a colour's hexadecimal digits.
 pub type HexField<'a> = TextField<'a, HexCodec>;
 
+/// Why a hex field's draft is no colour.
+const NOT_HEX: Word = Word::keyed("hexField.unparsed", "Not a hex color");
+
 impl<'a> TextField<'a, HexCodec> {
-    /// A hex field named `label` that shows and edits `value`: monospace digits behind a fixed `#`.
+    /// A hex field named `label` that shows and edits `value`: monospace digits behind a fixed `#`. A draft that is no
+    /// colour says so ("Not a hex color", `TextField::unparsed`).
     pub fn hex(label: impl Into<Label>, value: Bind<'a, Rgba>) -> Self {
-        let mut field = TextField::with_codec(label, value, HexCodec::default()).mono().prefix("#");
+        let mut field = TextField::with_codec(label, value, HexCodec::default()).mono().prefix("#").unparsed(NOT_HEX);
         field.empty = Some(Rgba::rgb(0, 0, 0));
         field
     }

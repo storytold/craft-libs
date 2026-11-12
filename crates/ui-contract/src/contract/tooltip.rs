@@ -57,6 +57,8 @@ pub(crate) struct TipIn<'a> {
     pub parts: &'a Decls,
     /// The instance's `shows_label` fact.
     pub shows_label: bool,
+    /// The validity message no enclosing container shows as its status line (step 16's report).
+    pub message: Option<String>,
 }
 
 /// The text a tooltip shows for `spec`: the disabled text while disabled.
@@ -68,10 +70,14 @@ fn spec_text(env: &crate::runtime::env::EnvView<'_>, spec: &TooltipSpec, enabled
     env.resolve(label).as_str().to_owned()
 }
 
-/// The text the component's own tooltip shows, or `None` when it has none: the tooltip's text, or its disabled text
-/// while disabled, with the bound command's chord; else the full label when the paint cut it, or its own label when
-/// the component declares it paints no label (`shows_label`).
-fn text_of(core: &super::CxCore<'_>, shows_label: bool) -> Option<String> {
+/// The text the component's own tooltip shows, or `None` when it has none: its validity message when no container
+/// shows it (`message`); else the tooltip's text, or its disabled text while disabled, with the bound command's
+/// chord; else the full label when the paint cut it, or its own label when the component declares it paints no
+/// label (`shows_label`).
+fn text_of(core: &super::CxCore<'_>, shows_label: bool, message: Option<String>) -> Option<String> {
+    if message.is_some() {
+        return message;
+    }
     let base = match core.resolved.tooltip.map(|tooltip| tooltip.spec()) {
         Some(spec) => spec_text(&core.env, spec, core.resolved.enabled),
         None => {
@@ -150,7 +156,7 @@ pub(crate) fn run(core: &super::CxCore<'_>, input: TipIn<'_>) {
             part.hovered || keyboard,
             Some(part.part),
         ),
-        None => (text_of(core, input.shows_label), own_spec, core.rect, core.response.hovered() || keyboard, None),
+        None => (text_of(core, input.shows_label, input.message), own_spec, core.rect, core.response.hovered() || keyboard, None),
     };
     let call = TipCall {
         ctx: &core.ctx,

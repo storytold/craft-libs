@@ -375,6 +375,7 @@ fn blank_core<'a>(
         editor: None,
         editor_inputs: Vec::new(),
         text_invalid: false,
+        text_unparsed: None,
         text_takes_pointer: false,
         grid: crate::runtime::access::GridPlace::default(),
         escape_to_list: false,
@@ -1060,7 +1061,7 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     steps::rerun_after_edit(e, style, edit, &MeasureIn { ui: &*ui, env: p.env, proposal: Proposal::Ideal, room: p.room }, resolved, leaf);
     // 16 report, then the tooltip.
     p.trace.mark(Step::Report);
-    steps::report(
+    let message = steps::report(
         e,
         facts,
         &steps::ReportIn {
@@ -1075,7 +1076,7 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
         },
     );
     let shows_label = e.shows_label();
-    tooltip::run(e.core_ref(), tooltip::TipIn { ui: &*ui, env, rich: p.tip.take(), parts: &parts.decls, shows_label });
+    tooltip::run(e.core_ref(), tooltip::TipIn { ui: &*ui, env, rich: p.tip.take(), parts: &parts.decls, shows_label, message });
     // Activations accumulate across the passes of a viewport mount; step 17 fires the bound command once, with the
     // injected source when there is one.
     let natural = e.activated() && resolved.enabled;

@@ -10,7 +10,7 @@ use crate::contract::{
     Styled as _, WordSetCx as _,
 };
 use crate::primitives::{Completer, IconSpec, TextOptions, TextRun};
-use crate::runtime::env::Label;
+use crate::runtime::env::{Label, Message};
 use craft_behavior::{Codec, IconId, PartKey, PlainText, Proposal, Sense};
 use egui::{Id, Rect, Vec2};
 use smallvec::SmallVec;
@@ -171,6 +171,15 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
     #[must_use]
     pub fn complete(mut self, completer: impl Completer + 'static) -> Self {
         self.options.complete = Some(Arc::new(completer));
+        self
+    }
+
+    /// Why a draft that does not parse is no value ("Not a hex color"). While such a draft shows, an enclosing field
+    /// row shows it as its status line, or the field shows it as its tooltip where no row does, and assistive
+    /// technology reads it as the field's description. A refusal or warning of the binding comes first.
+    #[must_use]
+    pub fn unparsed(mut self, reason: impl Into<Label>) -> Self {
+        self.options.unparsed = Some(Message::new(reason));
         self
     }
 

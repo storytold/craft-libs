@@ -72,8 +72,8 @@ impl<'a> BodyCx<'a> {
     }
 
     /// The validity message of the first control in the container's label scope, recorded last frame, with the
-    /// tone it shows in: the container shows it as its status text. `None` when the container has no label or no
-    /// control reported one.
+    /// tone it shows in: a container whose footer declares `FooterRegion::status` shows it as its status text. `None`
+    /// when the container has no label or no control reported one.
     pub fn field_message(&self) -> Option<(Message, craft_theme::variant::Tone)> {
         self.field_message.clone()
     }

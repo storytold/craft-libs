@@ -747,6 +747,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 control_min: scope::measured_control_min(&ctx, id),
                 leaf: false,
                 claims: false,
+                status: props.footer.is_some_and(|footer| footer.status),
                 trailing: Vec2::ZERO,
             };
             let placed = label::run(ui, env, &input, None);

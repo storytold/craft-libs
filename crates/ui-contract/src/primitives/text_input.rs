@@ -1,7 +1,7 @@
 //! The types of text parts and editors (18.2, 18.4): keys, options, completion and the own-caret editor state.
 
 use crate::primitives::TextLayout;
-use crate::runtime::env::Label;
+use crate::runtime::env::{Label, Message};
 use crate::style::Ink;
 use craft_behavior::{PartKey, TextPos};
 use craft_theme::TypeRole;
@@ -83,6 +83,9 @@ pub struct TextOptions {
     /// A plain Left or Right with the whole text selected starts from the end of the text, not from the selection's
     /// start: a field whose last digits are what the user edits (a timecode's frames).
     pub arrows_from_end: bool,
+    /// Why a draft the codec cannot parse is no value ("Not a hex color"): while such a draft shows, it is the
+    /// component's refusing validity message, unless its binding refuses or warns with one of its own.
+    pub unparsed: Option<Message>,
 }
 
 impl Default for TextOptions {
@@ -108,6 +111,7 @@ impl Default for TextOptions {
             mixed: false,
             centred: false,
             arrows_from_end: false,
+            unparsed: None,
         }
     }
 }
