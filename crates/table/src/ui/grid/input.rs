@@ -36,6 +36,8 @@ const fn mods(cmd: bool, shift: bool) -> Mods {
 
 const ESCAPE: Chord = Chord::plain(Key::Escape);
 const F2: Chord = Chord::plain(Key::F2);
+/// Alt+Enter and Ctrl+Enter (the Control key on macOS) open the active cell's editor as F2 does (Excel).
+const EDIT_KEYS: [Chord; 2] = [Chord::new(Mods::ALT, Key::Enter), Chord::new(Mods::CTRL, Key::Enter)];
 const HOME: Chord = Chord::plain(Key::Home);
 const CMD_HOME: Chord = Chord::new(Mods::CMD, Key::Home);
 const END: Chord = Chord::plain(Key::End);
@@ -101,6 +103,7 @@ struct ArrowStep {
 struct ClaimedKeys {
     escape: bool,
     advance: Option<(CellAdvance, bool)>,
+    /// F2, Alt+Enter or Ctrl+Enter.
     f2: bool,
     /// Each arrow: its direction, whether Shift was held and whether Cmd was held.
     arrows: Vec<(CellDirection, bool, bool)>,
@@ -125,6 +128,7 @@ impl ClaimedKeys {
         let escape = cx.take_claimed(ESCAPE);
         let advance = ADVANCES.iter().find_map(|&(chord, along, back)| cx.take_claimed(chord).then_some((along, back)));
         let f2 = cx.take_claimed(F2);
+        let edit_key = EDIT_KEYS.iter().fold(false, |any, &chord| cx.take_claimed(chord) || any);
         let mut arrows = Vec::new();
         for shift in [false, true] {
             for (key, direction) in ARROWS {
@@ -139,7 +143,7 @@ impl ClaimedKeys {
         ClaimedKeys {
             escape,
             advance,
-            f2,
+            f2: f2 || edit_key,
             arrows,
             home: cx.take_claimed(HOME),
             end: cx.take_claimed(END),
@@ -433,6 +437,11 @@ impl CellGrid<'_> {
         }
         if state.mode != Mode::Ready || grabbing || !self.copy_mark.is_empty() || state.end_mode {
             cx.claim(ESCAPE);
+        }
+        if state.mode == Mode::Ready {
+            for chord in EDIT_KEYS {
+                cx.claim(chord);
+            }
         }
         for (key, _) in ARROWS {
             cx.claim(Chord::new(Mods::CMD, key));

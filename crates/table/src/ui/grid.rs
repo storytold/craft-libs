@@ -146,8 +146,8 @@ pub struct CellGridStyle {
 /// - Keys: arrows move (Shift extends; Cmd/Ctrl jumps to [`GridModel::data_edge`]), Page Up and Down a screen, Home the
 ///   row start, Cmd/Ctrl+Home the first cell after the frozen panes, Cmd/Ctrl+End [`GridModel::last_used`], Enter and
 ///   Tab advance inside a selection (Shift back), Cmd/Ctrl+A selects all, Cmd/Ctrl+Space the column, Shift+Space the
-///   row, F2 edits, Delete clears, Backspace clears and edits, typed text starts an edit with it. Esc and Enter with a
-///   copy mark report [`GridEdit::ClearCopyMark`] and [`GridEdit::PasteAtActive`].
+///   row, F2, Alt+Enter and Ctrl+Enter edit, Delete clears, Backspace clears and edits, typed text starts an edit with
+///   it. Esc and Enter with a copy mark report [`GridEdit::ClearCopyMark`] and [`GridEdit::PasteAtActive`].
 /// - The editor: typing opens the active cell in Enter mode (the arrows move to another cell and commit), F2 in Edit
 ///   mode (the arrows move the caret), `=` and an operator in point mode (the arrows move a reference cursor).
 ///

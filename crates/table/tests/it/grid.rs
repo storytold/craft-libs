@@ -221,3 +221,14 @@ fn a_pass_runs_only_the_rows_in_view() {
     let in_view = (ROOM.y / ROW).ceil() as u32;
     assert!(painted.iter().all(|&row| row < in_view), "rows past the view ran: {painted:?}");
 }
+
+/// Alt+Enter and Ctrl+Enter open the active cell's editor, as F2 does.
+#[trial]
+fn alt_or_ctrl_enter_opens_the_active_cell() {
+    for modifiers in [Modifiers::ALT, Modifiers::CTRL] {
+        let mut rig = rig(None, a1(), 1.0);
+        rig.press(Key::Enter, modifiers);
+        assert!(rig.take_edits().iter().any(|edit| matches!(edit, GridEdit::BeginEdit { typed: None, .. })), "{modifiers:?}+Enter opens the editor");
+        assert_eq!(rig.active(), Some(CellAt::new(0, 0)), "{modifiers:?}+Enter does not advance");
+    }
+}
