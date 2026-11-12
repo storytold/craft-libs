@@ -10,90 +10,116 @@ use mkv::*;
 use serde_json::Value;
 use std::path::Path;
 
-/// Compare every packet (file order) and stream parameter against ffprobe.
-fn compare(ffprobe: &Path, path: &Path) -> (MkvFile, Vec<Packet>) {
-    let json = ffprobe_json(ffprobe, path);
-    let bytes = std::fs::read(path).unwrap();
-    let mut d = Demuxer::from_slice(&bytes).unwrap();
-    let name = path.file_name().unwrap().to_string_lossy().to_string();
-    let file = d.file().clone();
+fn assert_streams_match(json: &Value, file: &MkvFile, name: &str) {
     let streams = json["streams"].as_array().unwrap();
     assert_eq!(streams.len(), file.tracks.len(), "{name}: stream count");
-    for (i, st) in streams.iter().enumerate() {
-        let t = &file.tracks[i];
-        assert_eq!(st["codec_name"].as_str().unwrap_or(""), t.codec.name(), "{name}: track {i} codec ({})", t.codec_id);
-        assert_eq!(st["time_base"].as_str(), Some(format!("{}/{}", t.timebase.0, t.timebase.1).as_str()), "{name}: time_base");
-        match t.kind {
+    for (index, stream) in streams.iter().enumerate() {
+        let track = &file.tracks[index];
+        assert_eq!(stream["codec_name"].as_str().unwrap_or(""), track.codec.name(), "{name}: track {index} codec ({})", track.codec_id);
+        assert_eq!(stream["time_base"].as_str(), Some(format!("{}/{}", track.timebase.0, track.timebase.1).as_str()), "{name}: time_base");
+        match track.kind {
             TrackKind::Video => {
-                let v = t.video.as_ref().unwrap();
-                assert_eq!(int(&st["width"]), Some(v.pixel_width as i64), "{name}: width");
-                assert_eq!(int(&st["height"]), Some(v.pixel_height as i64), "{name}: height");
+                let video = track.video.as_ref().unwrap();
+                assert_eq!(int(&stream["width"]), Some(video.pixel_width as i64), "{name}: width");
+                assert_eq!(int(&stream["height"]), Some(video.pixel_height as i64), "{name}: height");
             }
             TrackKind::Audio => {
-                let a = t.audio.as_ref().unwrap();
-                assert_eq!(int(&st["sample_rate"]), Some(a.sampling_frequency as i64), "{name}: sample_rate");
-                assert_eq!(int(&st["channels"]), Some(a.channels as i64), "{name}: channels");
+                let audio = track.audio.as_ref().unwrap();
+                assert_eq!(int(&stream["sample_rate"]), Some(audio.sampling_frequency as i64), "{name}: sample_rate");
+                assert_eq!(int(&stream["channels"]), Some(audio.channels as i64), "{name}: channels");
             }
             _ => {}
         }
     }
-    let packets: Vec<Packet> = d.by_ref().collect::<Result<_>>().unwrap();
-    let ff = json["packets"].as_array().unwrap();
-    assert_eq!(packets.len(), ff.len(), "{name}: packet count");
-    let (mut pts_checked, mut dur_checked) = (0, 0);
-    for (i, (p, f)) in packets.iter().zip(ff).enumerate() {
-        let ctx = format!("{name}: packet {i} (track {})", p.track);
-        assert_eq!(int(&f["stream_index"]), Some(p.track as i64), "{ctx}: stream");
-        if file.tracks[p.track].codec_id.starts_with("D_WEBVTT") {
-            // WebM WebVTT blocks carry "id\nsettings\npayload"; FFmpeg moves id/settings to side data
-            assert!(p.data.len() as i64 >= int(&f["size"]).unwrap(), "{ctx}: size");
+}
+
+fn assert_packets_match(json: &Value, file: &MkvFile, packets: &[Packet], name: &str) {
+    let ffprobe_packets = json["packets"].as_array().unwrap();
+    assert_eq!(packets.len(), ffprobe_packets.len(), "{name}: packet count");
+    let (mut pts_checked, mut duration_checked) = (0, 0);
+    for (index, (packet, ffprobe_packet)) in packets.iter().zip(ffprobe_packets).enumerate() {
+        let context = format!("{name}: packet {index} (track {})", packet.track);
+        assert_eq!(int(&ffprobe_packet["stream_index"]), Some(packet.track as i64), "{context}: stream");
+        if file.tracks[packet.track].codec_id.starts_with("D_WEBVTT") {
+            // WebM WebVTT blocks carry "id\nsettings\npayload"; FFmpeg moves id/settings to side data.
+            assert!(packet.data.len() as i64 >= int(&ffprobe_packet["size"]).unwrap(), "{context}: size");
         } else {
-            assert_eq!(int(&f["size"]), Some(p.data.len() as i64), "{ctx}: size");
+            assert_eq!(int(&ffprobe_packet["size"]), Some(packet.data.len() as i64), "{context}: size");
         }
-        let key = f["flags"].as_str().unwrap_or("").starts_with('K');
-        assert_eq!(key, p.keyframe, "{ctx}: keyframe");
-        if let Some(pts) = int(&f["pts"])
-            && !(p.lace > 0 && p.duration == 0)
-        {
-            // FFmpeg truncates the per-lace duration to whole ticks; we place laces exactly
-            // (rounded once), so later laces may differ by up to one tick per lace.
-            assert!((pts - p.pts).abs() <= p.lace as i64, "{ctx}: pts ffprobe {pts} vs {}", p.pts);
-            pts_checked += 1;
-        }
-        // The last audio or video frame of a track cut by `-t` is shorter than a codec frame.
-        // ffmpeg 8 writes a shortened BlockDuration there and reports the codec frame duration; a
-        // remux by our writer stores DefaultDuration and ffprobe reports the shortened one. So
-        // that frame's duration is not compared. A subtitle's duration is its cue's, and is.
-        let last_of_track = packets[i + 1..].iter().all(|q| q.track != p.track);
-        if let Some(dur) = int(&f["duration"])
-            && p.duration != 0
-            && (!last_of_track || file.tracks[p.track].kind == TrackKind::Subtitle)
-        {
-            assert!((dur - p.duration as i64).abs() <= 1, "{ctx}: duration ffprobe {dur} vs {}", p.duration);
-            dur_checked += 1;
-        }
+        assert_eq!(ffprobe_packet["flags"].as_str().unwrap_or("").starts_with('K'), packet.keyframe, "{context}: keyframe");
+        compare_packet_pts(ffprobe_packet, packet, &context, &mut pts_checked);
+        compare_packet_duration(ffprobe_packet, packet, packets, file, &context, index, &mut duration_checked);
     }
     assert!(pts_checked > 0, "{name}: no pts compared");
-    eprintln!("{name}: {} packets, {pts_checked} pts and {dur_checked} durations compared", packets.len());
-    // the sample index agrees with the packet stream
-    for (ti, t) in file.tracks.iter().enumerate() {
-        let pk: Vec<&Packet> = packets.iter().filter(|p| p.track == ti).collect();
-        assert_eq!(t.samples.len(), pk.len(), "{name}: index size track {ti}");
-        for (i, p) in pk.iter().enumerate() {
-            assert_eq!(t.samples[i].pts, p.pts);
-            assert_eq!(t.samples[i].keyframe, p.keyframe);
-            assert_eq!(t.sample_size(i), Some(p.data.len() as u64));
-        }
-        if let Some(i) = pk.len().checked_sub(1) {
-            assert_eq!(file.read_sample(&bytes[..], ti, i).unwrap(), pk[i].data);
-        }
-    }
-    // duration
-    if let Some(fd) = json["format"]["duration"].as_str().and_then(|s| s.parse::<f64>().ok())
-        && let Some(ours) = file.duration_ns()
+    eprintln!("{name}: {} packets, {pts_checked} pts and {duration_checked} durations compared", packets.len());
+}
+
+fn compare_packet_pts(ffprobe_packet: &Value, packet: &Packet, context: &str, checked: &mut usize) {
+    if let Some(pts) = int(&ffprobe_packet["pts"])
+        && !(packet.lace > 0 && packet.duration == 0)
     {
-        assert!((fd - ours as f64 / 1e9).abs() < 0.05, "{name}: duration {fd} vs {ours}");
+        // FFmpeg truncates per-lace duration to whole ticks; later laces can differ by one tick each.
+        assert!((pts - packet.pts).abs() <= packet.lace as i64, "{context}: pts ffprobe {pts} vs {}", packet.pts);
+        *checked += 1;
     }
+}
+
+fn compare_packet_duration(
+    ffprobe_packet: &Value,
+    packet: &Packet,
+    packets: &[Packet],
+    file: &MkvFile,
+    context: &str,
+    index: usize,
+    checked: &mut usize,
+) {
+    // The final audio/video frame cut by `-t` has a shortened BlockDuration, but ffprobe reports
+    // the codec frame duration. Subtitle durations remain exact cue intervals and are compared.
+    let last_of_track = packets[index + 1..].iter().all(|next| next.track != packet.track);
+    if let Some(duration) = int(&ffprobe_packet["duration"])
+        && packet.duration != 0
+        && (!last_of_track || file.tracks[packet.track].kind == TrackKind::Subtitle)
+    {
+        assert!((duration - packet.duration as i64).abs() <= 1, "{context}: duration ffprobe {duration} vs {}", packet.duration);
+        *checked += 1;
+    }
+}
+
+fn assert_packet_index_matches(file: &MkvFile, packets: &[Packet], bytes: &[u8], name: &str) {
+    for (track_index, track) in file.tracks.iter().enumerate() {
+        let track_packets: Vec<&Packet> = packets.iter().filter(|packet| packet.track == track_index).collect();
+        assert_eq!(track.samples.len(), track_packets.len(), "{name}: index size track {track_index}");
+        for (sample_index, packet) in track_packets.iter().enumerate() {
+            assert_eq!(track.samples[sample_index].pts, packet.pts);
+            assert_eq!(track.samples[sample_index].keyframe, packet.keyframe);
+            assert_eq!(track.sample_size(sample_index), Some(packet.data.len() as u64));
+        }
+        if let Some(sample_index) = track_packets.len().checked_sub(1) {
+            assert_eq!(file.read_sample(bytes, track_index, sample_index).unwrap(), track_packets[sample_index].data);
+        }
+    }
+}
+
+fn assert_duration_matches(json: &Value, file: &MkvFile, name: &str) {
+    if let Some(ffprobe_duration) = json["format"]["duration"].as_str().and_then(|duration| duration.parse::<f64>().ok())
+        && let Some(duration_ns) = file.duration_ns()
+    {
+        assert!((ffprobe_duration - duration_ns as f64 / 1e9).abs() < 0.05, "{name}: duration {ffprobe_duration} vs {duration_ns}");
+    }
+}
+
+/// Compare every packet (file order) and stream parameter against ffprobe.
+fn compare(ffprobe: &Path, path: &Path) -> (MkvFile, Vec<Packet>) {
+    let json = ffprobe_json(ffprobe, path);
+    let bytes = std::fs::read(path).unwrap();
+    let mut demuxer = Demuxer::from_slice(&bytes).unwrap();
+    let name = path.file_name().unwrap().to_string_lossy().to_string();
+    let file = demuxer.file().clone();
+    assert_streams_match(&json, &file, &name);
+    let packets: Vec<Packet> = demuxer.by_ref().collect::<Result<_>>().unwrap();
+    assert_packets_match(&json, &file, &packets, &name);
+    assert_packet_index_matches(&file, &packets, &bytes, &name);
+    assert_duration_matches(&json, &file, &name);
     (file, packets)
 }
 
@@ -142,12 +168,12 @@ fn h264_aac() {
     assert!(!f.cues.is_empty());
     assert!(!f.seek_head.is_empty());
     check_seeks(&bytes, OpenOptions::default(), v, &packets);
-    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false }, v, &packets);
+    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false, index_limit: None }, v, &packets);
     check_seeks(&bytes, OpenOptions::default(), a, &packets);
     // Read + Seek entry point and CRC verification (ffmpeg writes CRC-32 in level-1 elements)
     let d = Demuxer::from_reader(std::io::Cursor::new(bytes.clone())).unwrap();
     assert_eq!(d.file().tracks.len(), 2);
-    let crc = open_with(&bytes[..], &OpenOptions { index: true, verify_crc: true }).unwrap();
+    let crc = open_with(&bytes[..], &OpenOptions { index: true, verify_crc: true, index_limit: None }).unwrap();
     assert!(crc.crc_checked > 0);
     assert!(crc.crc_errors.is_empty());
     let kf = Demuxer::from_slice(&bytes).unwrap().keyframe_index(v).unwrap();
@@ -166,7 +192,7 @@ fn vp9_opus_webm() {
     let v = f.track_of_kind(TrackKind::Video).unwrap();
     assert!(matches!(f.tracks[v].codec, Codec::Vp9 { .. }));
     check_seeks(&bytes, OpenOptions::default(), v, &packets);
-    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false }, v, &packets);
+    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false, index_limit: None }, v, &packets);
 }
 
 #[test]
@@ -215,7 +241,7 @@ fn cues_at_front() {
     assert!(!f.cues.is_empty());
     assert!(f.clusters.len() >= 5);
     let v = f.track_of_kind(TrackKind::Video).unwrap();
-    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false }, v, &packets);
+    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false, index_limit: None }, v, &packets);
 }
 
 #[test]
@@ -226,8 +252,8 @@ fn live_stream_without_cues() {
     assert!(f.duration_ns().unwrap() > 1_900_000_000);
     let v = f.track_of_kind(TrackKind::Video).unwrap();
     // no cues: seeking builds the index by scanning clusters
-    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false }, v, &packets);
-    let mut d = Demuxer::with_options(&bytes[..], OpenOptions { index: false, verify_crc: false }).unwrap();
+    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false, index_limit: None }, v, &packets);
+    let mut d = Demuxer::with_options(&bytes[..], OpenOptions { index: false, verify_crc: false, index_limit: None }).unwrap();
     assert!(!d.file().indexed);
     assert!(!d.keyframe_index(v).unwrap().is_empty());
     assert!(d.file().indexed);
@@ -298,11 +324,20 @@ fn laced_remux() {
                 .map(|(ti, t)| {
                     let mut s = TrackSpec::new(t.kind, t.codec_id.clone());
                     s.codec_private = t.codec_private.clone();
-                    // audio without a DefaultDuration gets its mean packet spacing, so it can lace
-                    s.default_duration_ns = t.default_duration_ns.or_else(|| {
-                        let pts: Vec<i64> = packets.iter().filter(|p| p.track == ti).map(|p| p.pts_ns).collect();
-                        (t.kind == TrackKind::Audio && pts.len() > 1).then(|| ((pts[pts.len() - 1] - pts[0]) / (pts.len() as i64 - 1)) as u64)
-                    });
+                    // BlockDuration overrides DefaultDuration: ffmpeg's Vorbis files declare a short
+                    // default and store longer durations per block. Audio takes its median packet
+                    // duration (the packet spacing when no packet has one), so its frames can lace.
+                    s.default_duration_ns = if t.kind == TrackKind::Audio {
+                        let audio: Vec<&Packet> = packets.iter().filter(|p| p.track == ti).collect();
+                        let mut durations: Vec<u64> = audio.iter().map(|p| p.duration_ns).filter(|&d| d > 0).collect();
+                        if durations.is_empty() {
+                            durations = audio.windows(2).filter_map(|w| u64::try_from(w[1].pts_ns - w[0].pts_ns).ok()).filter(|&d| d > 0).collect();
+                        }
+                        durations.sort_unstable();
+                        durations.get(durations.len() / 2).copied().or(t.default_duration_ns)
+                    } else {
+                        t.default_duration_ns
+                    };
                     s.video_size = t.video.as_ref().map(|v| (v.pixel_width, v.pixel_height));
                     s.audio = t.audio.as_ref().map(|a| (a.sampling_frequency, a.channels, a.bit_depth));
                     s.codec_delay_ns = t.codec_delay_ns;
@@ -312,7 +347,9 @@ fn laced_remux() {
             let opts = MuxOptions { lacing: mode, ..Default::default() };
             let mut w = MkvWriter::new(std::io::Cursor::new(Vec::new()), specs, opts).unwrap();
             for p in &packets {
-                w.write_frame(p.track, p.pts_ns, p.keyframe, &p.data, None).unwrap();
+                // Keep explicit durations, a short last packet's too: one that differs from the
+                // track's default ends the lace.
+                w.write_frame(p.track, p.pts_ns, p.keyframe, &p.data, (p.duration_ns > 0).then_some(p.duration_ns)).unwrap();
             }
             let out = w.finish().unwrap().into_inner();
             let laced = {

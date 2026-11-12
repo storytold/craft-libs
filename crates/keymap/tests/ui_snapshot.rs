@@ -5,10 +5,8 @@
 //!
 //! `CRAFT_KEYMAP_SNAPSHOT_DIR=/tmp/shots cargo test -p craft-keymap --features snapshot --test ui_snapshot`
 //!
-//! egui's default fonts have no ⇧ ⌥ ⌃ or arrows. Apps load their own fonts; here the pictures add
-//! fallback fonts when they are found: the file in `CRAFT_KEYMAP_SNAPSHOT_FONT`, DejaVu Sans
-//! from the usual Linux path, and BIZ UDPGothic from a craft-fonts checkout in `CRAFT_FONTS_DIR`
-//! (⇧ ⌘ and arrows, not ⌥ ⌃). Without any of them those glyphs show as boxes.
+//! Uses the same hash-verified `CRAFT_FONTS_DIR` input as ui_dialog (see README.md).
+//! Fonts are installed before the first layout pass; missing glyphs remain errors.
 
 use std::path::PathBuf;
 
@@ -19,6 +17,8 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use ui_fixture::{EnglishRtl, Pseudo, fixture, with_long_label};
 
+#[path = "support/fonts.rs"]
+mod test_fonts;
 mod ui_fixture;
 
 struct Fx {
@@ -96,25 +96,6 @@ impl Case {
     }
 }
 
-/// Fallback fonts with the key glyphs, when this machine has them.
-fn fonts() -> egui::FontDefinitions {
-    let mut defs = egui::FontDefinitions::default();
-    let mut files: Vec<PathBuf> = std::env::var_os("CRAFT_KEYMAP_SNAPSHOT_FONT").map(PathBuf::from).into_iter().collect();
-    files.push("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf".into());
-    if let Some(dir) = std::env::var_os("CRAFT_FONTS_DIR") {
-        files.push(PathBuf::from(dir).join("fonts/biz-ud-pgothic/BIZUDPGothic-Regular.ttf"));
-    }
-    for (i, file) in files.iter().enumerate() {
-        let Ok(bytes) = std::fs::read(file) else { continue };
-        let name = format!("fallback-{i}");
-        defs.font_data.insert(name.clone(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
-        for family in defs.families.values_mut() {
-            family.push(name.clone());
-        }
-    }
-    defs
-}
-
 fn foreign_review(h: &mut Harness<'_, Fx>) {
     let read = |text: &str| ForeignKey::read(Some("Default"), text, Flavor::Windows);
     let set = ForeignSet::new(vec![
@@ -136,6 +117,8 @@ fn click(h: &mut Harness<'_, Fx>, label: &str) {
     h.run();
 }
 
+/// Click the widget carrying `label` and run a frame; used to put a command row
+/// into the snapshot's selected state.
 fn select(h: &mut Harness<'_, Fx>, label: &str) {
     h.get_by_label(label).click();
     h.run();
@@ -208,12 +191,16 @@ const CASES: &[Case] = &[
 ];
 
 #[test]
+/// Write review screenshots when `CRAFT_KEYMAP_SNAPSHOT_DIR` is set.
+///
+/// For every case whose name starts with `CRAFT_KEYMAP_SNAPSHOT_ONLY`, renders light and dark at
+/// 1× and 2× with the pinned fonts, optional sets and long labels, after running the case action.
+/// Without the directory variable the test does nothing; these are not golden comparisons.
 fn dialog_screenshots() {
     let Some(dir) = std::env::var_os("CRAFT_KEYMAP_SNAPSHOT_DIR").map(PathBuf::from) else { return };
     std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
     // `CRAFT_KEYMAP_SNAPSHOT_ONLY=keyboard` renders only the cases whose name starts with it.
     let only = std::env::var("CRAFT_KEYMAP_SNAPSHOT_ONLY").unwrap_or_default();
-    let fonts = fonts();
     for case in CASES.iter().filter(|c| c.name.starts_with(&only)) {
         for (theme_name, theme) in [("light", Theme::Light), ("dark", Theme::Dark)] {
             for scale in [1.0, 2.0] {
@@ -236,16 +223,22 @@ fn dialog_screenshots() {
                     Words::Pseudo => Box::new(Pseudo::default()),
                 };
                 let fx = Fx { km, text, options, state: DialogState::new(), sets };
-                let mut h = Harness::builder().with_size(case.size).with_pixels_per_point(scale).with_theme(theme).wgpu().build_ui_state(
-                    |ui, fx: &mut Fx| {
-                        egui::Frame::central_panel(ui.style()).show(ui, |ui| {
-                            let (d, state) = fx.dialog();
-                            d.ui(ui, state);
-                        });
-                    },
-                    fx,
-                );
-                h.ctx.set_fonts(fonts.clone());
+                let mut h = Harness::builder()
+                    .with_size(case.size)
+                    .with_pixels_per_point(scale)
+                    .with_theme(theme)
+                    .with_context_setup(test_fonts::configure)
+                    .wgpu()
+                    .build_ui_state(
+                        |ui, fx: &mut Fx| {
+                            test_fonts::assert_coverage(ui.ctx());
+                            egui::Frame::central_panel(ui.style()).show(ui, |ui| {
+                                let (d, state) = fx.dialog();
+                                d.ui(ui, state);
+                            });
+                        },
+                        fx,
+                    );
                 h.run();
                 (case.act)(&mut h);
                 let image = h.render().unwrap_or_else(|e| panic!("render {}: {e}", case.name));

@@ -1,0 +1,45 @@
+{
+  "id": "S08",
+  "title": "M100 in Color blend mode over Gold and over C50",
+  "source": "research S8, DesignCraft DC09",
+  "page": [360, 216],
+  "inks": [{"name": "Gold", "cmyk": [0, 20, 60, 20]}],
+  "settings": {"group_cs": "cmyk"},
+  "objects": [
+    {"type": "rect", "rect": [36, 36, 180, 144], "fill": {"spot": "Gold", "tint": 100}},
+    {"type": "rect", "rect": [216, 36, 124, 144], "fill": {"cmyk": [50, 0, 0, 0]}},
+    {
+      "type": "rect",
+      "rect": [144, 72, 156, 72],
+      "fill": {"cmyk": [0, 100, 0, 0]},
+      "blend": "color"
+    }
+  ],
+  "expect": {
+    "plates": ["Cyan", "Magenta", "Yellow", "Black", "Gold"],
+    "points": [
+      {"at": [60, 108], "inks": {"Gold": 100}, "tol": 2, "note": "spot only"},
+      {
+        "at": [180, 108],
+        "inks": {},
+        "tol": 6,
+        "note": "spot plate composites Normal (knocked out); Color over a paper process backdrop gives paper"
+      },
+      {
+        "at": [258, 108],
+        "inks": {},
+        "tol": 6,
+        "info": true,
+        "note": "non-separable blend of process inks"
+      },
+      {"at": [320, 160], "inks": {"Cyan": 50}, "tol": 2, "note": "cyan 50% only"}
+    ]
+  },
+  "structure": {
+    "page_group": "DeviceCMYK",
+    "blend_modes": ["Color"],
+    "color_spaces": ["DeviceCMYK", "Separation(Gold, alt DeviceCMYK)"],
+    "device_rgb": false,
+    "output_intents": []
+  }
+}

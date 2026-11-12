@@ -7,8 +7,7 @@ use std::sync::Arc;
 
 use egui::text::{LayoutJob, TextFormat, TextWrapping};
 use egui::{
-    Align, Button, Color32, CornerRadius, FontId, Layout, Rect, RichText, ScrollArea, Sense, Stroke, StrokeKind, Ui, WidgetInfo, WidgetType, pos2,
-    vec2,
+    Align, Button, Color32, CornerRadius, FontId, Layout, Rect, RichText, Role, ScrollArea, Sense, Stroke, StrokeKind, Ui, WidgetInfo, pos2, vec2,
 };
 
 use super::{Draw, fill};
@@ -484,6 +483,13 @@ impl Draw<'_, '_> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Draw one key cap, modifier, Caps Lock or System cap at `rect`.
+    ///
+    /// `Cap::Gap` is a no-op with no hit target. A key cap is colored by its holder class, selects
+    /// the application-wide holder as visible title when present, and sets `clicks.key` on click;
+    /// it exposes the selected state and a description naming the class. Modifier caps toggle into
+    /// `clicks.toggle`, while Caps Lock and System caps are only painted. Sizing derives from `u`;
+    /// a key's hover text lists every holder label.
     fn cap(&mut self, ui: &mut Ui, rect: Rect, cap: Cap, u: f32, mods: Mods, index: &Index, clicks: &mut Clicks) {
         if matches!(cap, Cap::Gap) {
             return;
@@ -560,7 +566,7 @@ impl Draw<'_, '_> {
         let a11y = if names.is_empty() { spoken } else { fill(self.ui("{chord}: {label}"), &[("chord", &spoken), ("label", &names.join(", "))]) };
         let selected = self.state.keyboard.key == Some(key);
         let resp = ui.interact(r, self.base.with(("key", key.name())), Sense::click());
-        resp.widget_info(|| WidgetInfo::selected(WidgetType::Button, true, selected, &a11y));
+        resp.widget_info(|| WidgetInfo::selected(Role::Button, true, selected, &a11y));
         let description = match class(holders) {
             Class::Free => self.ui("Not assigned"),
             Class::App => self.ui("Application"),

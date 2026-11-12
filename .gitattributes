@@ -1,0 +1,2 @@
+# Copies of the vendored krilla source diff, one per patch (see vendor/krilla/README.craft.md).
+vendor/krilla/patches/*.patch linguist-generated=true

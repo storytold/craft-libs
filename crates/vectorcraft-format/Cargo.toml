@@ -1,0 +1,17 @@
+[package]
+name = "craft-vectorcraft-format"
+description = "The envelope of VectorCraft's .vectorcraft file: its members, version, embedded images and the data after the JSON, with the document as a type parameter."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

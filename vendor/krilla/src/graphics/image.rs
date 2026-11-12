@@ -22,8 +22,9 @@ use zune_jpeg::JpegDecoder;
 use crate::chunk_container::ChunkContainer;
 use crate::configure::ValidationError;
 use crate::error::KrillaError;
+use crate::graphics::color::device_n::DeviceNSpace;
 use crate::graphics::color::DEVICE_GRAY;
-use crate::graphics::color::{cmyk, luma, rgb};
+use crate::graphics::color::{cmyk, luma, rgb, ColorSpace as PdfColorSpace, SpecialColorSpace};
 use crate::graphics::icc::{GenericICCProfile, ICCBasedColorSpace, ICCProfile};
 use crate::serialize::SerializeContext;
 use crate::stream::{deflate_encode, FilterStreamBuilder};
@@ -57,22 +58,19 @@ pub enum ImageColorspace {
     Luma,
     /// The CMYK color space.
     Cmyk,
+    /// The DeviceN color space that [`CustomImage::device_n_space`] returns: one sample per
+    /// colorant, in the space's colorant order, 0 = no ink. Only for [`CustomImage`]; an ICC
+    /// profile is ignored.
+    DeviceN,
 }
 
 impl ImageColorspace {
-    fn num_components(&self) -> u8 {
-        match self {
-            ImageColorspace::Luma => 1,
-            ImageColorspace::Rgb => 3,
-            ImageColorspace::Cmyk => 4,
-        }
-    }
-
     fn matches_icc_profile(&self, profile: &GenericICCProfile) -> bool {
         match self {
             ImageColorspace::Rgb => matches!(profile, GenericICCProfile::Rgb(_)),
             ImageColorspace::Luma => matches!(profile, GenericICCProfile::Luma(_)),
             ImageColorspace::Cmyk => matches!(profile, GenericICCProfile::Cmyk(_)),
+            ImageColorspace::DeviceN => false,
         }
     }
 }
@@ -139,6 +137,11 @@ pub trait CustomImage: Hash + Clone + Send + Sync + 'static {
     fn icc_profile(&self) -> Option<&[u8]>;
     /// Return the color space of the image.
     fn color_space(&self) -> ImageColorspace;
+    /// Return the DeviceN color space of the image. Required when [`Self::color_space`]
+    /// returns [`ImageColorspace::DeviceN`], ignored otherwise.
+    fn device_n_space(&self) -> Option<DeviceNSpace> {
+        None
+    }
 }
 
 struct ImageMetadata {
@@ -147,6 +150,19 @@ struct ImageMetadata {
     has_alpha: bool,
     bits_per_component: BitsPerComponent,
     icc: Option<GenericICCProfile>,
+    /// The space of an [`ImageColorspace::DeviceN`] image.
+    device_n: Option<DeviceNSpace>,
+}
+
+impl ImageMetadata {
+    fn num_components(&self) -> usize {
+        match self.color_space {
+            ImageColorspace::Luma => 1,
+            ImageColorspace::Rgb => 3,
+            ImageColorspace::Cmyk => 4,
+            ImageColorspace::DeviceN => self.device_n.as_ref().map_or(0, |s| s.colorants().len()),
+        }
+    }
 }
 
 struct ImageRepr {
@@ -274,11 +290,11 @@ impl Image {
 
     /// Create a new image from a custom image.
     ///
-    /// Panics if the dimensions of the image and the length of the
-    /// data doesn't match.
+    /// Returns an error if the dimensions of the image and the length of the
+    /// data don't match.
     pub fn from_custom<T: CustomImage>(image: T, interpolate: bool) -> Result<Image, String> {
         let hash = (image.clone(), interpolate).sip_hash();
-        let metadata = ImageMetadata {
+        let mut metadata = ImageMetadata {
             size: image.size(),
             color_space: image.color_space(),
             has_alpha: image.alpha_channel().is_some(),
@@ -286,23 +302,40 @@ impl Image {
             icc: image
                 .icc_profile()
                 .and_then(|d| get_icc_profile_type(d, image.color_space())),
+            device_n: None,
         };
+        if metadata.color_space == ImageColorspace::DeviceN {
+            metadata.device_n = Some(
+                image
+                    .device_n_space()
+                    .ok_or("DeviceN image without a DeviceN space")?,
+            );
+        }
+
+        // Checked: 32 DeviceN components at 16 bits overflow `u32` at about 67 megapixels.
+        let bytes_per_component = usize::from(image.bits_per_component().as_u8() / 8);
+        let (width, height) = metadata.size;
+        let alpha_channel_len = usize::try_from(width)
+            .ok()
+            .zip(usize::try_from(height).ok())
+            .and_then(|(w, h)| w.checked_mul(h)?.checked_mul(bytes_per_component))
+            .ok_or("image dimensions are too large")?;
+        let color_channel_len = alpha_channel_len
+            .checked_mul(metadata.num_components())
+            .ok_or("image dimensions are too large")?;
+        if image.color_channel().len() != color_channel_len {
+            return Err("color channel length doesn't match the image dimensions".to_string());
+        }
+        if image
+            .alpha_channel()
+            .is_some_and(|alpha| alpha.len() != alpha_channel_len)
+        {
+            return Err("alpha channel length doesn't match the image dimensions".to_string());
+        }
 
         Ok(Self(Arc::new(ImageRepr {
             inner: Deferred::new(move || {
-                let bytes_per_component = (image.bits_per_component().as_u8() / 8) as u32;
-                let color_channel_len = bytes_per_component
-                    * image.color_space().num_components() as u32
-                    * metadata.size.0
-                    * metadata.size.1;
                 let color_channel = image.color_channel();
-                assert_eq!(color_channel.len(), color_channel_len as usize);
-
-                let alpha_channel_len = bytes_per_component * metadata.size.0 * metadata.size.1;
-                let alpha_channel = image.alpha_channel();
-                if let Some(alpha_channel) = alpha_channel {
-                    assert_eq!(alpha_channel.len(), alpha_channel_len as usize);
-                }
 
                 Ok(Repr::Sampled(SampledRepr {
                     color_channel: deflate_encode(color_channel),
@@ -325,6 +358,7 @@ impl Image {
             bits_per_component: BitsPerComponent::Eight,
             color_space: ImageColorspace::Rgb,
             icc: None,
+            device_n: None,
         };
 
         Self(Arc::new(ImageRepr {
@@ -365,6 +399,7 @@ impl Image {
     ) {
         let soft_mask_id = self.0.metadata.has_alpha.then(|| {
             sc.register_validation_error(ValidationError::Transparency(sc.location));
+            sc.mark_transparent(root_ref);
             sc.new_ref()
         });
 
@@ -415,6 +450,13 @@ impl Image {
                         crate::color::DeviceColorSpace::Cmyk.into()
                     }
                     Some(cs) => cs.into(),
+                },
+                ImageColorspace::DeviceN => match &self.0.metadata.device_n {
+                    Some(space) => {
+                        PdfColorSpace::Special(SpecialColorSpace::DeviceN(space.clone()))
+                    }
+                    // `from_custom` refuses a DeviceN image without a space.
+                    None => luma::color_space(sc.serialize_settings().no_device_cs).into(),
                 },
             };
 
@@ -495,8 +537,7 @@ impl Image {
             // marker.
             if let Repr::Jpeg(j) = repr {
                 if j.invert_cmyk {
-                    image_x_object
-                        .decode([1.0, 0.0].repeat(self.color_space().num_components() as usize));
+                    image_x_object.decode([1.0, 0.0].repeat(self.0.metadata.num_components()));
                 }
             }
 
@@ -559,6 +600,7 @@ fn png_metadata(data: &[u8]) -> Result<ImageMetadata, String> {
         bits_per_component,
         color_space: image_color_space,
         icc,
+        device_n: None,
     })
 }
 
@@ -638,6 +680,7 @@ fn jpeg_metadata(data: &[u8]) -> Result<ImageMetadata, String> {
         bits_per_component: BitsPerComponent::Eight,
         color_space: image_color_space,
         icc,
+        device_n: None,
     })
 }
 
@@ -702,6 +745,7 @@ fn gif_metadata(data: &[u8]) -> Result<ImageMetadata, String> {
         size: (size.width as u32, size.height as u32),
         color_space: ImageColorspace::Rgb,
         icc: None,
+        device_n: None,
     })
 }
 
@@ -721,6 +765,7 @@ fn webp_metadata(data: &[u8]) -> Result<ImageMetadata, String> {
         size,
         color_space,
         icc,
+        device_n: None,
     })
 }
 
@@ -843,6 +888,7 @@ fn get_icc_profile_type(data: &[u8], color_space: ImageColorspace) -> Option<Gen
         ImageColorspace::Rgb => GenericICCProfile::Rgb(ICCProfile::new(data)?),
         ImageColorspace::Luma => GenericICCProfile::Luma(ICCProfile::new(data)?),
         ImageColorspace::Cmyk => GenericICCProfile::Cmyk(ICCProfile::new(data)?),
+        ImageColorspace::DeviceN => return None,
     };
 
     Some(wrapper)
