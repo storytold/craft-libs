@@ -236,3 +236,14 @@ fn find_puts_the_keyboard_in_the_search_field() {
     let cards = rig.cards();
     assert!(!cards.is_empty() && cards.iter().all(|name| !name.starts_with("Hack")), "the search keeps only Ubuntu: {cards:?}");
 }
+
+/// A press outside the details sheet closes it and reaches nothing below: the card under it does not open.
+#[trial]
+fn a_press_outside_the_details_sheet_closes_it() {
+    let mut rig = setup("outside");
+    let other = rig.fx.by_role(Role::LIST_ITEM).into_iter().last().expect("a second card");
+    rig.open("Hack");
+    rig.fx.click_at(Pos2::new(other.rect.left() + 4.0, other.rect.bottom() - 4.0));
+    rig.fx.settle();
+    assert_eq!(rig.panel.borrow().details_family(), None, "the sheet closed and no other family opened");
+}

@@ -11,6 +11,7 @@ use craft_behavior::ColumnWidth;
 use craft_host::Host;
 use craft_theme::variant::{Emphasis, Tone};
 use craft_ui::buttons::Button;
+use craft_ui::contract::overlay::Outside;
 use craft_ui::contract::{Bind, CollectionEvent, NoValue, Outcome, Props as _, Show as _, ShowCollection as _, ShowContainer as _, clicked};
 use craft_ui::dialog::Dialog;
 use craft_ui::display::{Badge, Progress, Shade, Text};
@@ -206,7 +207,7 @@ struct Sheet {
 pub(crate) struct DetailsOutput {
     /// The dialog's response.
     pub response: Response,
-    /// The sheet closed in this pass: Escape, its close action or a family that is gone.
+    /// The sheet closed in this pass: Escape, its close action, a press outside it or a family that is gone.
     pub closed: bool,
 }
 
@@ -218,7 +219,8 @@ impl Outcome for DetailsOutput {
     }
 }
 
-/// The sheet of the family `panel.detail` names: a dialog on the modal preset, closed by Escape or its close action.
+/// The sheet of the family `panel.detail` names: a dialog on the modal preset, closed by Escape, its close action or a
+/// press outside it, which reaches nothing below.
 #[derive(craft_ui::contract::Pattern, craft_ui::contract::Props)]
 pub(crate) struct DetailsSheet<'a> {
     panel: &'a mut FontsPanel,
@@ -244,12 +246,18 @@ impl<'a> DetailsSheet<'a> {
         let points = panel.settings.size.max(MIN_SAMPLE_POINTS);
         let mut todo: Vec<Do> = Vec::new();
         let mut open = true;
-        let shown = Dialog::prompt(sheet.title.clone()).opened(Bind::bound(&mut open)).show(ui, |ui, _| {
-            Stack::new().show(ui, |ui, _| {
-                sheet.header(ui, &env, &words, &catalogs, &mut todo);
-                sheet.body(ui, &env, &words, &catalogs, points, &mut todo);
+        let shown = Dialog::prompt(sheet.title.clone())
+            .overlay(|overlay| {
+                let dismiss = overlay.dismiss.outside(Outside::Absorb);
+                overlay.dismiss(dismiss)
+            })
+            .opened(Bind::bound(&mut open))
+            .show(ui, |ui, _| {
+                Stack::new().show(ui, |ui, _| {
+                    sheet.header(ui, &env, &words, &catalogs, &mut todo);
+                    sheet.body(ui, &env, &words, &catalogs, points, &mut todo);
+                });
             });
-        });
         let closed = shown.output.closed.is_some();
         if closed {
             panel.detail = None;
