@@ -197,6 +197,12 @@ fn guid(v: &Kv) -> Option<String> {
     Some(format!("{}:{}", num(v, "sessionID")? as u64, num(v, "localID")? as u64))
 }
 
+/// The main an `overriddenSymbolID` swaps to: none for the empty GUID written there for "no
+/// swap", which names no node.
+fn swap_guid(v: &Kv) -> Option<String> {
+    guid(v).filter(|g| g != NO_STYLE)
+}
+
 #[cfg(test)]
 mod connector_snapshot_budget_tests;
 

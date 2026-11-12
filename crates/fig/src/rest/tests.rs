@@ -78,7 +78,7 @@ message Event InteractionType interactionType
 message Action GUID transitionNodeID, TransitionType transitionType, float transitionDuration, EasingType easingType, ConnectionType connectionType, NavigationType navigationType, VariableTarget targetVariable, VariableData targetVariableData, VariableSetID targetVariableSetID, GUID targetVariableModeID, ConditionalActions[] conditionalActions
 message Interaction Event event, Action[] actions
 message StartingPoint string name, string position
-message NodeChange GUID guid, ParentIndex parentIndex, NodeType type, string name, bool visible, float opacity, Vector size, Matrix transform, Paint[] fillPaints, Paint[] strokePaints, float strokeWeight, float cornerRadius, bool resizeToFit, bool internalOnly, float fontSize, FontName fontName, TextData textData, uint styleID, Path[] fillGeometry, Path[] strokeGeometry, StyleType styleType, StyleId styleIdForFill, SymbolData symbolData, PropDef[] componentPropDefs, PropAssignment[] componentPropAssignments, VariableDataMap parameterConsumptionMap, SetMode[] variableSetModes, VariableID variableSetID, ResolvedType variableResolvedType, Values variableDataValues, ModeMap variableModeBySetMap, Interaction[] prototypeInteractions, StartingPoint prototypeStartingPoint, GUIDPath guidPath, StackMode stackMode, float stackSpacing, float stackHorizontalPadding, float stackVerticalPadding, uint count, float starInnerScale, VectorData vectorData, StrokeCap strokeCap, StrokeJoin strokeJoin, VectorMirror handleMirroring, ShapeWithTextType shapeWithTextType, ConnectorEndpoint connectorStart, ConnectorEndpoint connectorEnd, StrokeCap connectorStartCap, StrokeCap connectorEndCap, ConnectorLineStyle connectorLineStyle, ConstraintType horizontalConstraint, ConstraintType verticalConstraint, NodeChange[] derivedSymbolData, string key, string version, LeadingTrim leadingTrim, float[] dashPattern, ConnectorControlPoint[] connectorControlPoints, NodePhase phase
+message NodeChange GUID guid, ParentIndex parentIndex, NodeType type, string name, bool visible, float opacity, Vector size, Matrix transform, Paint[] fillPaints, Paint[] strokePaints, float strokeWeight, float cornerRadius, bool resizeToFit, bool internalOnly, float fontSize, FontName fontName, TextData textData, uint styleID, Path[] fillGeometry, Path[] strokeGeometry, StyleType styleType, StyleId styleIdForFill, SymbolData symbolData, PropDef[] componentPropDefs, PropAssignment[] componentPropAssignments, VariableDataMap parameterConsumptionMap, SetMode[] variableSetModes, VariableID variableSetID, ResolvedType variableResolvedType, Values variableDataValues, ModeMap variableModeBySetMap, Interaction[] prototypeInteractions, StartingPoint prototypeStartingPoint, GUIDPath guidPath, StackMode stackMode, float stackSpacing, float stackHorizontalPadding, float stackVerticalPadding, uint count, float starInnerScale, VectorData vectorData, StrokeCap strokeCap, StrokeJoin strokeJoin, VectorMirror handleMirroring, ShapeWithTextType shapeWithTextType, ConnectorEndpoint connectorStart, ConnectorEndpoint connectorEnd, StrokeCap connectorStartCap, StrokeCap connectorEndCap, ConnectorLineStyle connectorLineStyle, ConstraintType horizontalConstraint, ConstraintType verticalConstraint, NodeChange[] derivedSymbolData, string key, string version, LeadingTrim leadingTrim, float[] dashPattern, ConnectorControlPoint[] connectorControlPoints, NodePhase phase, GUID overriddenSymbolID
 message Blob byte[] bytes
 message Message NodeChange[] nodeChanges, Blob[] blobs
 ";
@@ -578,4 +578,76 @@ fn mangled_messages_never_panic() {
             assert!(craft_figma_rest::check(&out.json, usize::MAX).is_ok());
         }
     }
+}
+
+/// The GUID written for "none".
+fn empty_guid() -> Kv<'static> {
+    o(vec![("sessionID", u(4_294_967_295)), ("localID", u(4_294_967_295))])
+}
+
+fn symbol(main: u64, overrides: Vec<Kv<'static>>) -> Kv<'static> {
+    o(vec![("symbolID", g(main)), ("symbolOverrides", arr(overrides))])
+}
+
+fn row(path: &[u64], more: Vec<(&'static str, Kv<'static>)>) -> Kv<'static> {
+    let mut fields = vec![("guidPath", o(vec![("guids", arr(path.iter().map(|id| g(*id)).collect()))]))];
+    fields.extend(more);
+    o(fields)
+}
+
+/// A Badge main with a label, an Error variant, a Card main holding a Badge instance whose
+/// `overriddenSymbolID` is the empty GUID and a second one the Card swaps to Error, and a Card
+/// instance whose override rows write the empty GUID over both.
+fn cards() -> Mapped {
+    let n = |id: u64, parent: u64, ty: &'static str, name: &str, more| node(id, Some((parent, &format!("{id:04}"))), ty, name, more);
+    let msg = o(vec![(
+        "nodeChanges",
+        arr(vec![
+            node(1, None, "DOCUMENT", "Document", vec![]),
+            n(2, 1, "CANVAS", "Page", vec![]),
+            n(10, 2, "SYMBOL", "Property 1=Informative", vec![]),
+            n(11, 10, "RECTANGLE", "Label", vec![]),
+            n(20, 2, "SYMBOL", "Property 1=Error", vec![]),
+            n(21, 20, "RECTANGLE", "Error label", vec![]),
+            n(30, 2, "SYMBOL", "Card", vec![]),
+            n(31, 30, "INSTANCE", "Badge", vec![("symbolData", symbol(10, vec![])), ("overriddenSymbolID", empty_guid())]),
+            n(32, 30, "INSTANCE", "Swapped badge", vec![("symbolData", symbol(10, vec![])), ("overriddenSymbolID", g(20))]),
+            n(
+                40,
+                2,
+                "INSTANCE",
+                "Card copy",
+                vec![(
+                    "symbolData",
+                    symbol(30, vec![row(&[31], vec![("overriddenSymbolID", empty_guid())]), row(&[32], vec![("overriddenSymbolID", empty_guid())])]),
+                )],
+            ),
+        ]),
+    )]);
+    mapped(&msg)
+}
+
+/// The main of the `index`th child of `card`.
+fn badge_main(json: &Value, card: &str, index: usize) -> Option<String> {
+    let badge = &named(json, card)["children"][index];
+    (badge["type"] == "INSTANCE").then(|| badge["componentId"].as_str().map(str::to_string)).flatten()
+}
+
+#[test]
+fn an_empty_swap_guid_keeps_the_instance_of_its_main() {
+    let out = cards();
+    assert!(out.warnings.is_empty(), "no missing components: {:?}", out.warnings);
+    for card in ["Card", "Card copy"] {
+        assert_eq!(badge_main(&out.json, card, 0).as_deref(), Some("1:10"), "{card}");
+        assert_eq!(named(&out.json, card)["children"][0]["children"][0]["name"], "Label", "{card}: the main's layers");
+    }
+}
+
+#[test]
+fn an_empty_swap_guid_on_a_row_resets_a_swap_below_it_to_the_default_main() {
+    let out = cards();
+    // In the Card main the badge is swapped to Error; the Card instance's row writes the empty
+    // GUID over that swap: back to the main its symbolData names.
+    assert_eq!(badge_main(&out.json, "Card", 1).as_deref(), Some("1:20"));
+    assert_eq!(badge_main(&out.json, "Card copy", 1).as_deref(), Some("1:10"));
 }
