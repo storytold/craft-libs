@@ -2,11 +2,11 @@
 //! line from a press on the background and moves the whole line with the arrow keys.
 
 use super::model::{MIN_LINE, RulerLine, RulerPart};
-use super::overlay::{RulerOverlay, moved};
+use super::overlay::{RulerOverlay, moved, reading_text};
 use super::words::RulerWords;
 use craft_behavior::kurbo::Point;
 use craft_behavior::{CancelReason, Cursor, CursorIcon, EditEvent, GestureId, Mixed};
-use craft_ui::canvas::{CanvasTool, NUDGE, NUDGE_FAR, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
+use craft_ui::canvas::{CanvasTool, NUDGE, NUDGE_FAR, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::canvas_controls::StraightLinePreview;
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::primitives::Draw;
@@ -172,7 +172,18 @@ impl CanvasTool for RulerPass<'_> {
     }
 
     fn claims(&self) -> ToolClaims {
-        if self.line.is_some() && self.tool.drag.is_none() { ToolClaims::NONE.deletes() } else { ToolClaims::NONE }
+        if self.line.is_some() && self.tool.drag.is_none() { ToolClaims::NONE.deletes().nudges() } else { ToolClaims::NONE }
+    }
+
+    /// The line the arrows move, with its length and angle.
+    fn access(&self, cx: &ToolContext<'_>) -> Option<ToolAccess> {
+        let (line, space) = (self.line?, cx.space()?);
+        let words = cx.words::<RulerWords>();
+        let bounds = [RulerPart::Start, RulerPart::End, RulerPart::Protractor]
+            .into_iter()
+            .filter_map(|part| line.point(part))
+            .fold(craft_behavior::kurbo::Rect::from_points(line.start, line.end), |bounds, at| bounds.union_pt(at));
+        Some(ToolAccess::new(words.group.as_str()).value(reading_text(&line, &space, &cx.units(), &words)).bounds(bounds))
     }
 
     fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}

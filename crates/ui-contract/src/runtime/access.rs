@@ -521,6 +521,7 @@ pub struct SubNode {
     #[doc(hidden)]
     pub flags: Flags,
     pub(crate) custom_actions: Vec<(i32, Label)>,
+    pub(crate) steps: bool,
     pub(crate) bounds: Option<egui::Rect>,
     pub(crate) run: Option<RunFacts>,
     pub(crate) run_links: Vec<RunLink>,
@@ -551,6 +552,7 @@ impl SubNode {
             under: None,
             flags: Flags::empty(),
             custom_actions: Vec::new(),
+            steps: false,
             bounds: None,
             run: None,
             run_links: Vec::new(),
@@ -578,6 +580,14 @@ impl SubNode {
     /// `positions` and `widths` do. A link on a node that is not a run is not emitted.
     pub fn run_link(&mut self, chars: std::ops::Range<usize>, target: impl Into<String>) -> &mut Self {
         self.run_links.push(RunLink { chars, target: target.into() });
+        self
+    }
+
+    /// Declares Increment and Decrement on a node that steps something with no number (a canvas tool's arrows
+    /// nudging what it holds); a part with no focus stop gets them as `take_access` requests that name the part.
+    #[doc(hidden)]
+    pub fn steps(&mut self) -> &mut Self {
+        self.steps = true;
         self
     }
 

@@ -197,7 +197,12 @@ impl CanvasTool for ArtboardTool {
     }
 
     fn claims(&self) -> ToolClaims {
-        if self.selected.is_empty() { ToolClaims::NONE } else { ToolClaims::NONE.deletes() }
+        let movable = self.drag.is_none() && self.selected.iter().any(|&index| self.items.get(index).is_some_and(|item| !item.locked));
+        match (self.selected.is_empty(), movable) {
+            (true, _) => ToolClaims::NONE,
+            (false, false) => ToolClaims::NONE.deletes(),
+            (false, true) => ToolClaims::NONE.deletes().nudges(),
+        }
     }
 
     fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
@@ -209,9 +214,10 @@ impl CanvasTool for ArtboardTool {
         }
     }
 
+    /// The board being drawn, or outside a drag the selected boards the arrows move.
     fn access(&self, cx: &ToolContext<'_>) -> Option<ToolAccess> {
-        let drag = self.drag.as_ref().filter(|drag| drag.run.is_some())?;
-        let rect = drawn_rect(drag.start, drag.at);
+        let Some(drag) = self.drag.as_ref() else { return self.selection_access() };
+        let rect = drag.run.as_ref().map(|_| drawn_rect(drag.start, drag.at))?;
         let units = cx.units();
         let name = cx.words::<ArtboardToolWords>().tool.as_str().to_owned();
         Some(ToolAccess::new(name).value(format!("{} x {}", units.pixels(rect.width()), units.pixels(rect.height()))).bounds(rect))
@@ -219,6 +225,16 @@ impl CanvasTool for ArtboardTool {
 
     fn command_form(&self) -> ToolPath {
         ToolPath::Command("the Width and Height fields of the options bar and Add New Artboard")
+    }
+}
+
+impl ArtboardTool {
+    /// The selected boards as one object: their names and the bounds round them.
+    fn selection_access(&self) -> Option<ToolAccess> {
+        let boards: Vec<&ArtboardItem> = self.selected.iter().filter_map(|&index| self.items.get(index)).collect();
+        let bounds = boards.iter().map(|item| item.rect).reduce(|bounds, rect| bounds.union(rect))?;
+        let names: Vec<&str> = boards.iter().map(|item| item.name.as_str()).collect();
+        Some(ToolAccess::new(names.join(", ")).bounds(bounds))
     }
 }
 

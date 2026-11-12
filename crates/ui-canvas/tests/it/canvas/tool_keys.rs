@@ -5,15 +5,18 @@
 //! freehand switch). Unclaimed deletes are the app's (Edit > Clear, Fill). Enter and Escape reach a tool as `Submit`
 //! and `Cancel` with Alt carried, and Shift+Delete is no delete (Photoshop opens Fill, which the app binds). A
 //! session control in the canvas body (a crop frame) takes the arrows, Enter and Escape before the tool, with the
-//! canvas focused or nothing focused; with none shown, the arrows reach the tool with nothing focused.
+//! canvas focused or nothing focused; with none shown, the arrows reach the tool with nothing focused. A tool that
+//! claims the nudges declares Increment and Decrement on its node, and an AccessKit step moves what it holds as the
+//! arrow toward or away from the reading end does.
 
 use craft_behavior::geometry::CropBox;
 use craft_behavior::kurbo::{Point, Rect};
 use craft_behavior::{CancelReason, CanvasView};
-use craft_ui::canvas::{CanvasTool, CropOverlay, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
+use craft_ui::canvas::{CanvasTool, CropOverlay, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::primitives::Draw;
-use craft_ui::testing::focus::key_release;
+use craft_ui::testing::access::Declared;
+use craft_ui::testing::focus::{AccessActionKind, key_release};
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::{ToolFixture, pointer, trial};
 use egui::{Key, Modifiers};
@@ -165,4 +168,62 @@ fn with_no_session_control_the_arrows_and_enter_reach_the_tool_with_nothing_focu
     canvas.fixture().key(Key::ArrowRight, Modifiers::NONE).key(Key::Enter, Modifiers::NONE).settle();
     let seen = &canvas.tool().seen;
     assert!(matches!(seen[..], [ToolKey::Nudge { .. }, ToolKey::Submit]), "{seen:?}");
+}
+
+/// A marker the arrows move one unit along x while `held`; it describes itself as `Marker` at its place.
+struct Marker {
+    held: bool,
+    x: f64,
+}
+
+impl CanvasTool for Marker {
+    fn claims(&self) -> ToolClaims {
+        if self.held { ToolClaims::NONE.nudges() } else { ToolClaims::NONE }
+    }
+
+    fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        ToolAction::Ignored
+    }
+
+    fn drag(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn key(&mut self, key: &ToolKey, _: &mut ToolContext<'_>) -> bool {
+        let ToolKey::Nudge { direction, .. } = key else { return false };
+        self.x += f64::from(direction.x);
+        true
+    }
+
+    fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn access(&self, _: &ToolContext<'_>) -> Option<ToolAccess> {
+        Some(ToolAccess::new("Marker").bounds(Rect::new(self.x, 0.0, self.x + 10.0, 10.0)))
+    }
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Command("the marker's form")
+    }
+}
+
+#[trial]
+fn a_tool_that_claims_the_nudges_takes_increment_and_decrement_on_its_node() {
+    let mut canvas = ToolFixture::new("Document", Marker { held: false, x: 0.0 });
+    canvas.fixture().settle();
+    let node = canvas.fixture().by_label("Marker").expect("the tool's node").node;
+    let steps = |canvas: &mut ToolFixture<Marker>| {
+        let tree = canvas.fixture().tree();
+        (tree.declares_key(node, Declared::Increment), tree.declares_key(node, Declared::Decrement))
+    };
+    assert_eq!(steps(&mut canvas), (false, false), "a tool that holds nothing to nudge declares no step");
+    canvas.tool_mut().held = true;
+    canvas.fixture().settle();
+    assert_eq!(steps(&mut canvas), (true, true), "a tool that claims the nudges declares both steps on its node");
+    let target = canvas.fixture().by_label("Marker").expect("the tool's node");
+    canvas.fixture().access(AccessActionKind::Increment, &target).settle();
+    assert_eq!(canvas.tool().x, 1.0, "Increment moves the marker toward the reading end");
+    canvas.fixture().access(AccessActionKind::Decrement, &target).access(AccessActionKind::Decrement, &target).settle();
+    assert_eq!(canvas.tool().x, -1.0, "Decrement moves it back");
 }

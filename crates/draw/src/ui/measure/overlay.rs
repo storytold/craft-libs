@@ -6,13 +6,13 @@ use super::words::RulerWords;
 use craft_behavior::geometry::{Directions, round_to_direction};
 use craft_behavior::kurbo::{Point, Vec2 as DocVec};
 use craft_behavior::{Granularity, HitLevel, HitPriority, HitShape, Intent, Metrics, NavShape, PartKey, PointerButton, PressPhase, Roving, Sense};
-use craft_ui::canvas::{NUDGE, NUDGE_FAR, canvas_space};
+use craft_ui::canvas::{CanvasSpace, NUDGE, NUDGE_FAR, canvas_space};
 use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Name, PaintUi, PartsCx, Pointer as _, Props as _,
     Remember as _, Role, Styled as _, WordSetCx as _,
 };
 use craft_ui::primitives::{PaintShape, StrokeWidth};
-use craft_ui::runtime::env::Label;
+use craft_ui::runtime::env::{Label, Units};
 use craft_ui::runtime::focus::KeyUse;
 use craft_ui::style::{ComponentStyle, HandleLook, StyleCx};
 use egui::{CornerRadius, Rect, Vec2};
@@ -200,9 +200,7 @@ impl Component for RulerOverlay<'_> {
         let words = cx.words::<RulerWords>();
         let units = cx.env.units();
         let rulers = space.rulers();
-        let length = rulers.x.format_value(&units, line.reading().l1, 0.0);
-        let angle = units.number(line.reading().angle, 0..=1);
-        access.value(words.value.fill(&[("length", length.as_str()), ("angle", angle.as_str())]));
+        access.value(reading_text(&line, &space, &units, &words));
         for (part, name) in [(RulerPart::Start, &words.start), (RulerPart::End, &words.end), (RulerPart::Protractor, &words.protractor)] {
             let Some(at) = line.point(part) else { continue };
             let value = format!("{}, {}", rulers.x.format_value(&units, at.x, 0.0), rulers.y.format_value(&units, at.y, 0.0));
@@ -215,6 +213,13 @@ impl Component for RulerOverlay<'_> {
     fn finish(self, cx: Cx<'_, Self>) -> EditResponse<Option<RulerLine>> {
         cx.edit_response()
     }
+}
+
+/// The line's length and angle as assistive technology reads them, in the canvas's ruler units.
+pub(super) fn reading_text(line: &RulerLine, space: &CanvasSpace, units: &Units, words: &RulerWords) -> String {
+    let length = space.rulers().x.format_value(units, line.reading().l1, 0.0);
+    let angle = units.number(line.reading().angle, 0..=1);
+    words.value.fill(&[("length", length.as_str()), ("angle", angle.as_str())])
 }
 
 /// The unit vector in document space of an arrow key's direction on screen.

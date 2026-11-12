@@ -501,11 +501,15 @@ pub struct ToolClaims {
     /// point). With [`keyboard`](Self::keyboard) they are also claimed with Alt held: a polygonal lasso removes its
     /// last point while Alt holds the straight-segment switch. Shift, Cmd and Ctrl deletes stay the app's (Fill).
     pub deletes: bool,
+    /// The arrows move something the tool holds (a ruler line, selected boards): the host declares Increment and
+    /// Decrement on the tool's node and turns them into [`ToolKey::Nudge`], so a tool that claims the nudges
+    /// describes what they move in [`CanvasTool::access`]. The arrows reach [`CanvasTool::key`] either way.
+    pub nudges: bool,
 }
 
 impl ToolClaims {
     /// No keys: every key stays the app's.
-    pub const NONE: ToolClaims = ToolClaims { keyboard: false, deletes: false };
+    pub const NONE: ToolClaims = ToolClaims { keyboard: false, deletes: false, nudges: false };
 
     /// The same claims with the canvas's plain keys.
     #[must_use]
@@ -518,6 +522,13 @@ impl ToolClaims {
     #[must_use]
     pub const fn deletes(mut self) -> Self {
         self.deletes = true;
+        self
+    }
+
+    /// The same claims with the nudges.
+    #[must_use]
+    pub const fn nudges(mut self) -> Self {
+        self.nudges = true;
         self
     }
 }

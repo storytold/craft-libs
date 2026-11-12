@@ -382,6 +382,9 @@ pub fn report_sub(ctx: &Context, decl: &SubDecl<'_>) {
     spec.sortable = node.sortable;
     write_states(&mut spec, flags, decl.enabled, false);
     declare_actions(&mut spec, decl.focusable, decl.clickable, numeric);
+    if node.steps && numeric.is_none() {
+        spec.actions.extend([NodeAction::Increment, NodeAction::Decrement]);
+    }
     custom_actions(&mut spec, &node.custom_actions);
     adapter::register_parent(ctx, id, decl.parent);
     write_node(ctx, id, &spec);

@@ -17,6 +17,8 @@
 //! 5. The deletes and the plain keys are the app's unless the tool claims them ([`CanvasTool::claims`]). The host
 //!    reads the claims at the end of every pass, after the pointer events and keys, and holds the claimed chords from
 //!    the app's shortcuts in the next pass: a plain Delete with nothing to delete runs the app's Edit > Clear.
+//!    A tool that claims the nudges has AccessKit Increment and Decrement on its node, and they reach `key` as the
+//!    arrows toward and away from the reading end.
 //! 6. The tool paints over the canvas and requests its cursor at tool priority.
 //!
 //! The host keeps its state under the canvas's id (`CanvasOutput::response.id`), so two canvases never share a
@@ -66,8 +68,8 @@ use crate::runtime::{cursor, frame, keys, lock_keys, measure};
 use crate::style::StyleCx;
 use craft_behavior::kurbo;
 use craft_behavior::{
-    CancelReason, CanvasView, Cursor, CursorPriority, GestureId, GesturePhase, Intent, PartKey, PartRef, PointerButton, PointerSample, PressCancel,
-    PressPhase, PressStart, PressState,
+    AccessAction, AccessRequest, CancelReason, CanvasView, Cursor, CursorPriority, GestureId, GesturePhase, Intent, PartKey, PartRef, PointerButton,
+    PointerSample, PressCancel, PressPhase, PressStart, PressState,
 };
 use craft_keymap::{Chord, Key, Mods};
 use craft_theme::Variant;
@@ -364,8 +366,10 @@ impl<'m> ToolHost<'m> {
         };
         paint_tool(ui, &env, tool, context());
         let cx = context();
+        // A disabled host delivers no key, so it holds none from the app.
+        state.claims = if disabled { ToolClaims::NONE } else { tool.claims() };
         if let Some(access) = tool.access(&cx) {
-            report_access(&ctx, canvas, rect, &access);
+            report_access(&ctx, canvas, rect, &access, state.claims.nudges);
         }
         if over {
             let wanted = tool.cursor(&cx);
@@ -379,8 +383,6 @@ impl<'m> ToolHost<'m> {
         if requests.repaint {
             frame::request_repaint(&ctx);
         }
-        // A disabled host delivers no key, so it holds none from the app.
-        state.claims = if disabled { ToolClaims::NONE } else { tool.claims() };
         for chord in claimed_chords(state.claims) {
             keys::claim(&ctx, canvas.response.id, chord);
         }
@@ -444,9 +446,9 @@ const TOOL_ANCHOR: PartKey = PartKey::new("tool anchor");
 
 /// Emits what the tool is to assistive technology through the sub-node path of the canvas's component: a hover-only
 /// graphics object over the drawing's bounds (no size at the canvas centre without bounds), and a child object of no
-/// size at each anchor, clamped to the canvas. The ids derive from the canvas id, so they stay the same from pass to
-/// pass.
-fn report_access(ctx: &Context, canvas: &CanvasOutput, rect: Rect, tool: &ToolAccess) {
+/// size at each anchor, clamped to the canvas. The object declares Increment and Decrement while the tool claims the
+/// nudges. The ids derive from the canvas id, so they stay the same from pass to pass.
+fn report_access(ctx: &Context, canvas: &CanvasOutput, rect: Rect, tool: &ToolAccess, nudges: bool) {
     let owner = canvas.response.id;
     let to_screen = |point: kurbo::Point| canvas.space.map(|space| space.view.to_screen(point));
     let bounds = tool.bounds.and_then(|bounds| {
@@ -462,6 +464,9 @@ fn report_access(ctx: &Context, canvas: &CanvasOutput, rect: Rect, tool: &ToolAc
     if let Some(value) = &tool.value {
         node.value(value.clone());
     }
+    if nudges {
+        node.steps();
+    }
     access::report_sub(ctx, &sub_decl(owner, &node, bounds.unwrap_or(at_centre), owner));
     let parent = access::sub_node_id(owner, tool_part);
     for (index, anchor) in (0u64..).zip(&tool.anchors) {
@@ -471,6 +476,11 @@ fn report_access(ctx: &Context, canvas: &CanvasOutput, rect: Rect, tool: &ToolAc
         let place = to_screen(anchor.at).map_or(at_centre, |at| Rect::from_center_size(rect.clamp(at), Vec2::ZERO));
         access::report_sub(ctx, &sub_decl(owner, &node, place, parent));
     }
+}
+
+/// An AccessKit Increment or Decrement on the tool's node.
+fn is_tool_step(request: &AccessRequest) -> bool {
+    matches!(request.action, AccessAction::Increment | AccessAction::Decrement) && request.target == Some(TOOL_NODE.into())
 }
 
 /// A sub-node of the canvas that is read only: not focusable, not clickable, never the active part.
@@ -791,6 +801,16 @@ impl<'a> Run<'a> {
         });
         let mut intents = keys::intents_of(ctx, Some(canvas), rtl);
         let mut taken = self.offer(&mut intents, |intents| intents.take_nudge().map(|(direction, mods)| ToolKey::Nudge { direction, mods }));
+        if self.state.claims.nudges {
+            // Increment is the arrow toward the reading end, as for any focused control.
+            let forward = if rtl { -Vec2::X } else { Vec2::X };
+            taken |= self.offer(&mut intents, |intents| {
+                intents.take_access_where(is_tool_step).map(|request| {
+                    let direction = if request.action == AccessAction::Increment { forward } else { -forward };
+                    ToolKey::Nudge { direction, mods: Mods::NONE }
+                })
+            });
+        }
         taken |= self.offer(&mut intents, |intents| intents.take(Intent::Submit).then_some(ToolKey::Submit));
         if !self.cancelled {
             taken |= self.offer(&mut intents, |intents| intents.take(Intent::Cancel).then_some(ToolKey::Cancel));

@@ -4,7 +4,7 @@ use craft_behavior::geometry::draft::turn_to_45;
 use craft_behavior::{CancelReason, Cursor, CursorIcon, EditEvent, GestureId, Mixed, PointerButton, SelectionChange};
 use craft_keymap::Mods;
 use craft_theme::Srgba;
-use craft_ui::canvas::{CanvasTool, NUDGE, NUDGE_FAR, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
+use craft_ui::canvas::{CanvasTool, NUDGE, NUDGE_FAR, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamKind};
 use craft_ui::primitives::{Draw, PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Label;
@@ -682,7 +682,20 @@ impl CanvasTool for AnnotateTool {
     }
 
     fn claims(&self) -> ToolClaims {
-        if self.tool == AnnotationTool::Select && !self.editable().is_empty() { ToolClaims::NONE.deletes() } else { ToolClaims::NONE }
+        if self.tool == AnnotationTool::Select && !self.editable().is_empty() { ToolClaims::NONE.deletes().nudges() } else { ToolClaims::NONE }
+    }
+
+    /// In Select, the annotations the arrows move: their kinds and the bounds round them.
+    fn access(&self, cx: &ToolContext<'_>) -> Option<ToolAccess> {
+        if self.tool != AnnotationTool::Select {
+            return None;
+        }
+        let ids = self.editable();
+        let moved: Vec<&Annotation> = self.annotations.iter().filter(|a| ids.contains(&a.id)).collect();
+        let bounds = moved.iter().map(|a| a.rect).reduce(|bounds, rect| bounds.union(rect))?;
+        let words = cx.words::<AnnotateWords>();
+        let names: Vec<&str> = moved.iter().map(|a| words.kind(a.kind)).collect();
+        Some(ToolAccess::new(names.join(", ")).bounds(bounds))
     }
 
     fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
