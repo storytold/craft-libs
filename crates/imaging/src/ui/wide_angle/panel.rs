@@ -152,7 +152,7 @@ impl<'a> WideAnglePanel<'a> {
                         }
                     });
                 }
-                if clicked(&Button::new(words.add_constraint.clone()).size(ControlSize::Sm).id_salt("add").show(ui)) {
+                if clicked(&Button::new(words.add_constraint.clone()).id_salt("add").show(ui)) {
                     add = true;
                 }
             });

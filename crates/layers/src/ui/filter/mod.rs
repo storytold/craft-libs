@@ -9,7 +9,7 @@
 mod stories;
 
 use craft_behavior::{EditEvent, IconId, Mixed, SelectionChange};
-use craft_theme::{ControlSize, LabelColor};
+use craft_theme::LabelColor;
 use craft_ui::buttons::ToggleButton;
 use craft_ui::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, Sizing};
 use craft_ui::layout_components::Row;
@@ -672,7 +672,6 @@ impl<'a> LayerFilterBar<'a> {
             return LayerFilterOutput { response: ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover()), changed: false, edit: None };
         }
         let words = Env::of(ui).words::<LayerFilterWords>();
-        let size = ControlSize::Sm;
         let mut edit = None;
         let row = Row::new().show(ui, |ui, cx| {
             let select_name = std::mem::replace(&mut cx.memory::<FindName>().select, focus_name);
@@ -686,7 +685,7 @@ impl<'a> LayerFilterBar<'a> {
             }
             let types: Vec<Entry<FilterBy>> = offered.iter().copied().map(|by| Entry::new(by, type_label(by, &words).clone())).collect();
             // The type select fits its widest type, so the controls after it keep their room.
-            let picked = Select::new(words.filter_type.clone(), Bind::given(next.by), &types).size(size).sizing(Sizing::Content).show(ui);
+            let picked = Select::new(words.filter_type.clone(), Bind::given(next.by), &types).sizing(Sizing::Content).show(ui);
             if let Some(by) = picked.value() {
                 next.by = *by;
             }
@@ -701,12 +700,11 @@ impl<'a> LayerFilterBar<'a> {
                         (FilterKind::Shape, "square", &words.shape),
                         (FilterKind::SmartObject, "app_window", &words.smart_object),
                     ];
-                    toggles(ui, size, &kinds, FilterKind::name, &mut next.kinds);
+                    toggles(ui, &kinds, FilterKind::name, &mut next.kinds);
                 }
                 FilterBy::Name => {
-                    let mut field = TextField::search(words.search_layers.clone(), Bind::given(current.name.clone()))
-                        .placeholder(words.search.clone())
-                        .size(size);
+                    let mut field =
+                        TextField::search(words.search_layers.clone(), Bind::given(current.name.clone())).placeholder(words.search.clone());
                     if focus_name || select_name {
                         field = field.select_on_focus();
                     }
@@ -721,13 +719,13 @@ impl<'a> LayerFilterBar<'a> {
                 FilterBy::Effect => {
                     let effects: Vec<Entry<EffectKind>> =
                         EffectKind::ALL.into_iter().map(|kind| Entry::new(kind, kind.label(&words).clone())).collect();
-                    let picked = Select::new(words.filter_effect.clone(), Bind::given(current.effect), &effects).size(size).show(ui);
+                    let picked = Select::new(words.filter_effect.clone(), Bind::given(current.effect), &effects).show(ui);
                     if let Some(effect) = picked.value() {
                         next.effect = *effect;
                     }
                 }
                 FilterBy::Mode => {
-                    let picked = Select::new(words.blend_mode.clone(), Bind::given(current.mode.clone()), blend_modes).size(size).show(ui);
+                    let picked = Select::new(words.blend_mode.clone(), Bind::given(current.mode.clone()), blend_modes).show(ui);
                     if let Some(mode) = picked.value() {
                         next.mode.clone_from(mode);
                     }
@@ -735,7 +733,7 @@ impl<'a> LayerFilterBar<'a> {
                 FilterBy::Attribute => {
                     let attributes: Vec<Entry<LayerAttribute>> =
                         LayerAttribute::ALL.into_iter().map(|attribute| Entry::new(attribute, attribute.label(&words).clone())).collect();
-                    let picked = Select::new(words.filter_attribute.clone(), Bind::given(current.attribute), &attributes).size(size).show(ui);
+                    let picked = Select::new(words.filter_attribute.clone(), Bind::given(current.attribute), &attributes).show(ui);
                     if let Some(attribute) = picked.value() {
                         next.attribute = *attribute;
                     }
@@ -746,7 +744,7 @@ impl<'a> LayerFilterBar<'a> {
                         .chain(LabelColor::ALL.into_iter().map(Some))
                         .map(|color| Entry::new(color, label_color_label(color, &list_words)))
                         .collect();
-                    let picked = Select::new(words.filter_color.clone(), Bind::given(current.color), &colors).size(size).show(ui);
+                    let picked = Select::new(words.filter_color.clone(), Bind::given(current.color), &colors).show(ui);
                     if let Some(color) = picked.value() {
                         next.color = *color;
                     }
@@ -757,7 +755,7 @@ impl<'a> LayerFilterBar<'a> {
                         (SmartKind::Missing, "unlink", &words.smart_missing),
                         (SmartKind::Embedded, "file", &words.smart_embedded),
                     ];
-                    toggles(ui, size, &kinds, smart_salt, &mut next.smart);
+                    toggles(ui, &kinds, smart_salt, &mut next.smart);
                 }
                 // The selected layers pick the artboards; Group lists every group.
                 FilterBy::Artboard | FilterBy::Group => {}
@@ -797,15 +795,11 @@ const fn smart_salt(kind: SmartKind) -> &'static str {
 
 /// One icon toggle button per `(value, icon, name)`, pressed while `on` holds the value; a toggle
 /// adds the value to `on` or takes it out.
-fn toggles<K: Copy + PartialEq>(ui: &mut Ui, size: ControlSize, buttons: &[(K, &'static str, &Label)], salt: fn(K) -> &'static str, on: &mut Vec<K>) {
+fn toggles<K: Copy + PartialEq>(ui: &mut Ui, buttons: &[(K, &'static str, &Label)], salt: fn(K) -> &'static str, on: &mut Vec<K>) {
     let shown = on.clone();
     for &(value, icon, name) in buttons {
-        let toggled = ToggleButton::new(name.clone(), Bind::given(shown.contains(&value)))
-            .icon(IconId::new(icon))
-            .icon_only()
-            .size(size)
-            .id_salt(salt(value))
-            .show(ui);
+        let toggled =
+            ToggleButton::new(name.clone(), Bind::given(shown.contains(&value))).icon(IconId::new(icon)).icon_only().id_salt(salt(value)).show(ui);
         match toggled.value() {
             Some(true) => on.push(value),
             Some(false) => on.retain(|held| *held != value),

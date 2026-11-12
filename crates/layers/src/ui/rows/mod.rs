@@ -4,7 +4,6 @@
 mod stories;
 
 use craft_behavior::{EditEvent, EditEvents, IconId};
-use craft_theme::ControlSize;
 use craft_ui::buttons::ToggleButton;
 use craft_ui::contract::{Bind, Entry, Gap, NoValue, Outcome, Props as _, RowAlign, Show as _, ShowContainer as _, SideLabel, Sizing, TooltipSpec};
 use craft_ui::form::Field;
@@ -15,9 +14,6 @@ use craft_ui::text::NumberField;
 use egui::{Response, Ui};
 
 use super::tree::{LayerProperties, LockKind};
-
-/// The rows sit in a panel, so their controls take the small size.
-const SIZE: ControlSize = ControlSize::Sm;
 
 /// An edit of the active layer's properties, which the app applies to every selected layer (the
 /// Background left out of a multi-layer change, as PhotoCraft).
@@ -143,7 +139,6 @@ impl<'a> BlendRows<'a> {
                 let blend_name = words.blend_mode.clone();
                 let picked = Select::new(blend_name.clone(), Bind::given(props.blend_key.clone()), blend_modes)
                     .preview()
-                    .size(SIZE)
                     .enabled(editable)
                     .tooltip(TooltipSpec::new(blend_name).disabled_text(unavailable.clone()))
                     .show(ui);
@@ -174,7 +169,6 @@ impl<'a> BlendRows<'a> {
                             let button = ToggleButton::new(name.clone(), Bind::given(held.get(kind) || included))
                                 .icon(IconId::new(icon))
                                 .icon_only()
-                                .size(SIZE)
                                 .enabled(live && reason.is_none())
                                 .tooltip(TooltipSpec::new(name).disabled_text(reason.map_or_else(|| no_layer.clone(), |reason| reason.clone())))
                                 .show(ui);
@@ -201,7 +195,6 @@ fn percent_field(ui: &mut Ui, caption: &Label, value: f64, enabled: bool, reason
             .unit_kind(UnitKind::Percent)
             .popup_slider(0.0..=100.0)
             .scrub_by_label()
-            .size(SIZE)
             .enabled(enabled)
             .tooltip(TooltipSpec::new(caption.clone()).disabled_text(reason.clone()))
             .show(ui);

@@ -16,7 +16,7 @@ use super::zones::{ScopeZoneEdit, ToneZone, ToneZones};
 use crate::scopes::{HistogramStatistics, histogram_statistics};
 use crate::ui::histogram::{ChannelColor, Histogram, HistogramData, LevelRange, PlotHeight, StaleMark};
 use craft_behavior::{ColumnWidth, EditEvents, IconId, Proposal};
-use craft_theme::{ControlSize, Mode};
+use craft_theme::Mode;
 use craft_ui::buttons::IconButton;
 use craft_ui::contract::{
     Bind, BodyCx, Entry, FieldLabelRole, Gap, NoValue, Outcome, Pattern, Props as _, Show as _, ShowContainer as _, SideLabel, ThemeScope, clicked,
@@ -296,7 +296,7 @@ impl Pass<'_> {
                     .show(ui, |ui, _| Select::new(words.channel_name.clone(), Bind::given(shown_key.to_owned()), &entries).show(ui))
             });
             picked = field.inner.and_then(|field| field.inner).and_then(|select| select.value().cloned());
-            let button = IconButton::new(IconId::new("rotate_cw")).label(words.uncached_refresh.clone()).size(ControlSize::Sm).show(ui);
+            let button = IconButton::new(IconId::new("rotate_cw")).label(words.uncached_refresh.clone()).show(ui);
             refresh = clicked(&button);
         });
         self.report.refresh |= refresh;
