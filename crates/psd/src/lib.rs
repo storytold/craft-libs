@@ -78,6 +78,7 @@ pub mod metadata;
 pub mod path;
 pub mod patterns;
 pub mod pixels;
+pub mod preview;
 pub mod resources;
 pub mod rows;
 pub mod shc;
@@ -104,6 +105,7 @@ pub use header::{ColorMode, Header, Version};
 pub use image_data::ImageData;
 pub use layer::{BlendingRanges, ChannelData, LayerFlags, LayerInfo, LayerMask, LayerRecord, MaskData, MaskParameters, RealMask, Rect};
 pub use pixels::{GrayImage, Layer, RgbaImage};
+pub use preview::Preview;
 pub use resources::{ImageResource, ResolutionInfo, ResourceData};
 pub use rows::RowDecoder;
 #[cfg(any(unix, windows))]

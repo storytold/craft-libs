@@ -831,7 +831,7 @@ fn psb_foreign_order_long_key_roundtrips() {
     let d = ImageSourceData {
         version: Version::Psb,
         byte_order: ByteOrder::Little,
-        global_blocks: vec![TaggedBlock { signature: *b"MIB8", key: *b"Mt16", data: vec![9, 8, 7, 6, 5, 4], padding: None }],
+        global_blocks: vec![TaggedBlock { signature: *b"MIB8", key: *b"Mt16", data: vec![9, 8, 7, 6, 5, 4], padding: None, stored: None }],
         ..Default::default()
     };
     let (little, w) = d.to_bytes(ByteOrder::Little).unwrap();
