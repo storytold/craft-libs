@@ -40,9 +40,11 @@ fn a_bar_too_narrow_for_its_members_elides_a_select_before_it_scrolls() {
     let (select, button) = bar(240.0, 1);
     assert!(select.width() < wide.width() - SLACK, "the select kept its width {} in a narrow bar", select.width());
     assert!(button.max.x <= 240.0 + SLACK, "the last member ends at {} past the bar's end", button.max.x);
-    // Buttons do not shrink: once the select is at its least, the rest scrolls.
-    let (_, button) = bar(240.0, 6);
+    // Buttons do not shrink: when even the select's least leaves no room for them, the select keeps its width (at most
+    // the bar's room) and the rest scrolls.
+    let (crowded, button) = bar(240.0, 6);
     assert!(button.max.x > 240.0, "six buttons fit a 240-point bar: {button:?}");
+    assert!(crowded.width() > select.width() + SLACK, "the select narrowed to {} in a bar that scrolls anyway", crowded.width());
 }
 
 /// What a captioned select in an options bar `width` wide shows, with `buttons` buttons after it.

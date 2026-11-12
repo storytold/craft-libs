@@ -176,16 +176,21 @@ fn shrink_key(row: Id, leaf: Id) -> Id {
 
 /// The widths of the units of a row whose units, with `fixed` (its other children and gaps), ask for more than `room`:
 /// the shortfall comes off every unit in proportion to what it can give (its ideal less its least), the same share of
-/// that from each, so all reach their least together. A row that fits gives each unit its ideal.
+/// that from each, so all reach their least together. A row that fits gives each unit its ideal, and so does a row
+/// that does not fit even with every unit at its least: it overflows (or its body scrolls) at its natural widths,
+/// instead of cutting its units to their least and overflowing all the same.
 fn shrink_widths(leaves: &[Reported], fixed: f32, room: f32) -> Vec<f32> {
     let short = fixed + leaves.iter().map(|leaf| leaf.ideal).sum::<f32>() - room;
     let slack: f32 = leaves.iter().map(|leaf| leaf.ideal - leaf.least).sum();
-    let share = if short > 0.0 && slack > 0.0 { (short / slack).min(1.0) } else { 0.0 };
+    // Half a point: less than a pixel shows at any scale the box runs.
+    let fits_at_least = short - slack < 0.5;
+    let share = if short > 0.0 && slack > 0.0 && fits_at_least { (short / slack).min(1.0) } else { 0.0 };
     leaves.iter().map(|leaf| leaf.ideal - (leaf.ideal - leaf.least) * share).collect()
 }
 
 /// Runs `body`, the children of the unwrapped `Row` body `id`, in `ui`, the block they are placed in, with the row's
-/// shrink step: a row fits its room by narrowing its units, never past the least each reports. A unit is a leaf that
+/// shrink step: a row fits its room by narrowing its units, never past the least each reports, and a row that cannot
+/// fit even at its units' leasts keeps their natural widths. A unit is a leaf that
 /// can shrink (elidable text, fields, selects), whose least is its `Proposal::Min`, or a body that does not fill the
 /// row (a captioned field, a nested row), whose least is what its content takes unbounded with every leaf at its least.
 ///
@@ -271,7 +276,7 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
 
 /// The width the leaves of a row in `ui` shrink to fit: the row's flow room, except in a body that scrolls along x,
 /// where it is what the view shows from the row's start. There the leaves narrow to their least before the body
-/// scrolls, and the body scrolls only when even their least does not fit.
+/// scrolls, and when even their least does not fit they keep their natural widths and the body scrolls.
 fn shrink_room(ui: &Ui) -> f32 {
     let env = Env::of(ui);
     match env.lazy.filter(|view| env.unbounded.0 && view.axes.0) {
