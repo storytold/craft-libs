@@ -12,6 +12,16 @@ reference decoder attached to the RFC. No code was taken or ported from libvpx, 
 other decoder; ffmpeg (with libvpx) and vpxenc are used only as external fixture generators and
 test oracles.
 
+## Encoder (feature `vp8-encode`)
+
+`encode::encode_frame` writes one VP8 key frame (the payload of a lossy WebP `VP8 ` chunk): the four
+whole-block luma modes and the sixteen sub-block modes chosen per macroblock from the frame's own
+reconstruction, one frame quantizer from a 0–100 quality, token probabilities refined from the
+frame's statistics, skipped empty macroblocks, a loop filter level matched to the quantizer. Moved
+from PhotoCraft, where it was written from RFC 6386. Its frames decode with the decoder here and
+with FFmpeg identically. Inter frames, rate control, segments and multiple partitions are not
+written.
+
 ## Status
 
 | Area | Status |

@@ -16,22 +16,39 @@
 //! }
 //! ```
 
+//!
+//! With feature `vp8-encode`, [`encode`] writes VP8 key frames (the lossy WebP bitstream).
+
 #![allow(clippy::needless_range_loop)]
 
+#[cfg(feature = "vp8")]
 mod boolcoder;
+#[cfg(feature = "vp8")]
 mod decoder;
+#[cfg(feature = "vp8-encode")]
+pub mod encode;
+#[cfg(feature = "vp8")]
 mod error;
+#[cfg(feature = "vp8")]
 mod header;
+#[cfg(feature = "vp8")]
 mod loopfilter;
+#[cfg(feature = "vp8")]
 mod predict;
+#[cfg(feature = "vp8")]
 #[rustfmt::skip]
 mod spec_tables;
+#[cfg(feature = "vp8")]
 mod tables;
+#[cfg(feature = "vp8")]
 mod transform;
 
+#[cfg(feature = "vp8")]
 pub use decoder::{DecodeStats, Decoder};
+#[cfg(feature = "vp8")]
 pub use error::{Error, Result};
 
+#[cfg(feature = "vp8")]
 /// A decoded picture: 8-bit 4:2:0, planes tight (stride = width).
 #[derive(Clone, Debug)]
 pub struct Picture {
@@ -49,6 +66,7 @@ pub struct Picture {
     pub color_space: u8,
 }
 
+#[cfg(feature = "vp8")]
 /// Stream parameters read from a key frame's uncompressed chunk (see [`keyframe_info`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KeyframeInfo {
@@ -60,6 +78,7 @@ pub struct KeyframeInfo {
     pub version: u8,
 }
 
+#[cfg(feature = "vp8")]
 /// If `frame` is a key frame (a random access point), its parameters.
 pub fn keyframe_info(frame: &[u8]) -> Option<KeyframeInfo> {
     let tag = header::FrameTag::parse(frame).ok()?;
@@ -72,6 +91,7 @@ pub fn keyframe_info(frame: &[u8]) -> Option<KeyframeInfo> {
     })
 }
 
+#[cfg(feature = "vp8")]
 /// Whether `frame` is a key frame (decoding can start there).
 pub fn is_keyframe(frame: &[u8]) -> bool {
     keyframe_info(frame).is_some()
