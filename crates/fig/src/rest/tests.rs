@@ -87,7 +87,7 @@ fn schema() -> Schema {
     Schema::parse(SCHEMA).unwrap()
 }
 
-fn o(fields: Vec<(&'static str, Kv<'static>)>) -> Kv<'static> {
+pub(super) fn o(fields: Vec<(&'static str, Kv<'static>)>) -> Kv<'static> {
     Kv::Object(fields)
 }
 fn f(x: f64) -> Kv<'static> {
@@ -99,13 +99,13 @@ fn u(x: u64) -> Kv<'static> {
 fn e(n: &'static str) -> Kv<'static> {
     Kv::Enum(n)
 }
-fn s(x: impl Into<String>) -> Kv<'static> {
+pub(super) fn s(x: impl Into<String>) -> Kv<'static> {
     Kv::Str(x.into())
 }
-fn g(l: u64) -> Kv<'static> {
+pub(super) fn g(l: u64) -> Kv<'static> {
     o(vec![("sessionID", u(1)), ("localID", u(l))])
 }
-fn arr(v: Vec<Kv<'static>>) -> Kv<'static> {
+pub(super) fn arr(v: Vec<Kv<'static>>) -> Kv<'static> {
     Kv::Array(v)
 }
 fn xy(x: f64, y: f64) -> Kv<'static> {
@@ -117,7 +117,7 @@ fn at(x: f64, y: f64) -> Kv<'static> {
 fn rgb(r: f64, gr: f64, b: f64) -> Kv<'static> {
     o(vec![("r", f(r)), ("g", f(gr)), ("b", f(b)), ("a", f(1.0))])
 }
-fn solid(r: f64, gr: f64, b: f64) -> Kv<'static> {
+pub(super) fn solid(r: f64, gr: f64, b: f64) -> Kv<'static> {
     o(vec![("type", e("SOLID")), ("color", rgb(r, gr, b)), ("opacity", f(1.0)), ("visible", Kv::Bool(true))])
 }
 fn root_guid() -> Kv<'static> {
@@ -132,7 +132,7 @@ fn prop_ref(def: u64, field: &'static str) -> Kv<'static> {
 }
 
 /// A node: id (0: the document), parent (id, position), type, name and further fields.
-fn node(id: u64, par: Option<(u64, &str)>, ty: &'static str, name: &str, mut more: Vec<(&'static str, Kv<'static>)>) -> Kv<'static> {
+pub(super) fn node(id: u64, par: Option<(u64, &str)>, ty: &'static str, name: &str, mut more: Vec<(&'static str, Kv<'static>)>) -> Kv<'static> {
     let mut v = vec![("guid", if id == 0 { root_guid() } else { g(id) })];
     if let Some((p, pos)) = par {
         v.push(("parentIndex", o(vec![("guid", if p == 0 { root_guid() } else { g(p) }), ("position", s(pos))])));
@@ -359,7 +359,7 @@ fn mapped(msg: &Kv) -> Mapped {
 }
 
 /// A node of the mapped document by name.
-fn named<'v>(json: &'v Value, name: &str) -> &'v Value {
+pub(super) fn named<'v>(json: &'v Value, name: &str) -> &'v Value {
     let mut pending = vec![&json["document"]];
     while let Some(n) = pending.pop() {
         if n["name"] == name {

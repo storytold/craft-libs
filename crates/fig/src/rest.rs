@@ -33,6 +33,7 @@ mod layer;
 mod layout;
 mod paint;
 mod proto;
+mod swap;
 mod text;
 mod text_path;
 mod variables;
@@ -175,6 +176,8 @@ fn clip_str(s: &str) -> &str {
 
 #[cfg(test)]
 mod image_filter_tests;
+#[cfg(test)]
+mod swap_tests;
 #[cfg(test)]
 mod tests;
 
