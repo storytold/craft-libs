@@ -32,6 +32,25 @@ pub use guard::check_entry_count;
 pub use guard::zip64_entry_count_sample;
 pub use write::{Compression, Writer};
 
+/// The payload of a ZIP's first entry when it is a stored file named `mimetype` of at most 256
+/// bytes: how OpenDocument, EPUB, IDML, OpenRaster and Krita mark their archives so the type is
+/// readable at a fixed offset without unzipping.
+pub fn stored_mimetype(bytes: &[u8]) -> Option<&[u8]> {
+    let u16_at = |o: usize| bytes.get(o..o + 2).and_then(|s| <[u8; 2]>::try_from(s).ok()).map(u16::from_le_bytes);
+    let u32_at = |o: usize| bytes.get(o..o + 4).and_then(|s| <[u8; 4]>::try_from(s).ok()).map(u32::from_le_bytes);
+    if u32_at(0)? != 0x0403_4b50 || u16_at(8)? != 0 {
+        return None;
+    }
+    let size = usize::try_from(u32_at(18)?).ok()?;
+    let name_len = usize::from(u16_at(26)?);
+    let extra_len = usize::from(u16_at(28)?);
+    if bytes.get(30..30 + name_len)? != b"mimetype" || size > 256 {
+        return None;
+    }
+    let start = 30 + name_len + extra_len;
+    bytes.get(start..start.checked_add(size)?)
+}
+
 /// Why an archive was not read or not written.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
