@@ -148,15 +148,15 @@ impl<'a, T: Value + 'static> FlyoutButton<'a, T> {
     }
 
     /// The face the button shows: the shown tool's icon, in the look of its command (label, enabled state, marked dot).
-    /// The button itself runs the command, so the face only wears it.
-    fn face(&self, laid: &Laid) -> IconButton<'static> {
+    /// The button itself runs the command, so the face only wears it, and the button's selected state with it.
+    fn face(&self, laid: &Laid, selected: bool) -> IconButton<'static> {
         let resolved = laid.resolved.get(laid.shown).and_then(Option::as_ref);
         let icon = resolved.and_then(|resolved| resolved.icon.clone()).map_or_else(|| IconId::new("more"), IconId::from);
         let face = match self.tools.get(laid.shown) {
             Some(tool) => IconButton::command(icon, tool.command.clone()),
             None => IconButton::new(icon),
         };
-        let mut face = face.selected(self.common.selected.unwrap_or(false));
+        let mut face = face.selected(selected);
         if self.has_flyout() {
             face = face.popup(PopupKind::Menu);
         }
@@ -181,7 +181,7 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let laid = self.resolve(cx);
-        cx.face(self.face(&laid))
+        cx.face(self.face(&laid, cx.resolved.selected == Some(true)))
     }
 
     fn sense(&self) -> Sense {
@@ -304,9 +304,9 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
         }
     }
 
-    fn paint(&mut self, ui: &mut PaintUi<'_>, _: &Cx<'_, Self>) {
+    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let Some(laid) = &self.laid else { return };
-        let face = self.face(laid);
+        let face = self.face(laid, cx.resolved.selected == Some(true));
         ui.face(FACE, face);
     }
 
