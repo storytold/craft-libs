@@ -4,6 +4,7 @@ This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some fi
 changes listed under Local changes. `.cargo_vcs_info.json` names the commit it was packaged from,
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
+The patched files are `src/sweep/sweep_line.rs` and `src/curve/mod.rs`.
 
 Every file here except this one, `SOURCE.json` and the files under Local changes is byte for byte the
 file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
@@ -15,6 +16,7 @@ holds `upstream_revision`. `local_patches` describes each local change.
 
 | Change | Code comment label | Touches | Tests |
 |---|---|---|---|
+| The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out | `Craft patch (exited slots)` | `src/sweep/sweep_line.rs` | none |
 | In `intersect_cubics_rec`, the exact check that both curves are on the interval's side at each re-centered interval end runs only with the `slow-asserts` feature. Without the change, debug builds panicked on finite curves near 1e8, where the rounded end puts the curves on the wrong side by up to 69 times `ish_tolerance`; release builds already skipped the check | `Craft patch (end order check)` | `src/curve/mod.rs` | `curve::test::crossing_at_large_coordinates` |
 
 Every change here updates this table and `SOURCE.json` in the same commit.
