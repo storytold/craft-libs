@@ -50,6 +50,11 @@ impl BodyHooks<'_> {
         real: bool,
     ) {
         let (id, ctx) = (cx.core.id, &cx.core.ctx);
+        // A layer's content starts from its opener's scope with the layer-local fields fresh, in a measure under the
+        // opener's env as in the run under the layer's.
+        if matches!(props.mount, Mount::Layer(_) | Mount::Viewport { .. } | Mount::FullWindow) {
+            scoped.start_layer();
+        }
         // The container's own `enabled(false)` greys everything inside it, as a scope would.
         scoped.enabled &= cx.core.resolved.enabled;
         if let Some(window) = window {

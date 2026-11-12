@@ -12,6 +12,7 @@ use craft_ui::contract::{Bind, Entry, Lazy, Props as _, Show as _, ShowContainer
 use craft_ui::display::{Divider, Text};
 use craft_ui::form::Field;
 use craft_ui::pickers::Select;
+use craft_ui::popover::Popover;
 use craft_ui::runtime::commands::EditCommands;
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::{Fixture, Frames, trial};
@@ -157,7 +158,7 @@ const SHORT: &[&str] = &["Normal", "Fixed"];
 const LONG: &[&str] = &["Normal", "A select entry far longer than any field is wide, so the box elides it"];
 
 /// The width of a small select of `entries`, in an options bar or in a plain column.
-fn select_width(entries: &[&str], in_bar: bool) -> f32 {
+fn select_width(entries: &'static [&'static str], in_bar: bool) -> f32 {
     let entries: Vec<Entry<u8>> = (0u8..).zip(entries).map(|(at, text)| Entry::new(at, *text)).collect();
     let mut fixture = Fixture::new(move |ui| {
         let select = |ui: &mut Ui| {
@@ -182,13 +183,32 @@ fn a_select_in_a_bar_fits_its_widest_entry_up_to_the_field_length() {
     assert!(long_plain > long_bar + SLACK, "outside a bar the long entry sets the width: {long_plain}, in a bar {long_bar}");
 }
 
-/// A bar `width` wide holding a button, a rule and a wider button; `rects` gets the two buttons' rects.
+/// A layer opened from a bar is not the bar's line: a select in a popover a bar's button opens keeps the field length.
+#[trial]
+fn a_select_in_a_popover_opened_from_a_bar_keeps_the_field_length() {
+    let mut fixture = Fixture::new(|ui| {
+        let entries = [Entry::new(0u8, SHORT[0]), Entry::new(1, SHORT[1])];
+        Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
+            let opener = Button::new("More").show(ui).response;
+            Popover::new("More options", Bind::given(true)).opened_by(&opener).show(ui, |ui, _| {
+                Select::new("Inside", Bind::given(0u8), &entries).size(ControlSize::Sm).show(ui);
+            });
+        });
+    });
+    fixture.room(Vec2::new(900.0, 300.0)).settle();
+    let inside = fixture.by_label("Inside").expect("the select in the popover").rect.width();
+    let plain = select_width(SHORT, false);
+    assert!((inside - plain).abs() <= SLACK, "the select in the popover is {inside} wide, a select outside any bar {plain}");
+}
+
+/// A bar `width` wide holding an icon button, a rule and a second icon button; `rects` gets the two buttons' rects.
+/// Icon buttons keep their width, so nothing in the line narrows to make room.
 fn rule_bar(ui: &mut Ui, width: f32, rects: &std::cell::Cell<(Rect, Rect)>) {
     in_region(ui, Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 80.0)), |ui| {
         Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
-            let first = Button::new("First").show(ui).response.rect;
+            let first = IconButton::new(IconId::new("plus")).label("First").show(ui).rect;
             Divider::vertical().show(ui);
-            let second = Button::new("A second, wider button").show(ui).response.rect;
+            let second = IconButton::new(IconId::new("minus")).label("Second").show(ui).rect;
             rects.set((first, second));
         });
     });
@@ -209,30 +229,25 @@ fn rule_bar_shapes(width: f32) -> (Vec<Shape>, (Rect, Rect)) {
     (shapes, rects.get())
 }
 
-/// A width at which the bar shows the second button only in part: it starts inside the bar and ends past it.
-fn cutting_width() -> f32 {
-    (180..=520)
-        .step_by(11)
-        .map(|width| width as f32)
-        .find(|&width| {
-            let (_, (_, second)) = rule_bar_shapes(width);
-            second.min.x + 2.0 < width - 20.0 && second.max.x > width && second.width() < width - 40.0
-        })
-        .expect("no width put the second button across the bar's end")
+/// A width at which the bar's view ends inside the second button of `rects`, as a wide bar lays it out.
+fn cutting_width((_, second): (Rect, Rect)) -> f32 {
+    (second.min.x + second.max.x) / 2.0
 }
 
 #[trial]
 fn a_rule_before_a_member_the_bar_hides_is_not_drawn() {
     let (shown, rects) = rule_bar_shapes(900.0);
     assert!(draws_rule(&shown, rects), "with both buttons whole the rule between them is drawn");
-    let (cut, rects) = rule_bar_shapes(cutting_width());
+    let (cut, (_, hidden)) = rule_bar_shapes(cutting_width(rects));
+    assert!(!hidden.is_positive(), "the second button shows at {hidden:?} in a bar that ends inside it");
     assert!(!draws_rule(&cut, rects), "the rule before the hidden button is drawn");
 }
 
 /// A settled region holding a bar whose rule was taken back replays the bar without the rule.
 #[trial]
 fn a_settled_bar_replays_the_rule_it_took_back() {
-    let width = cutting_width();
+    let (_, wide) = rule_bar_shapes(900.0);
+    let width = cutting_width(wide);
     let runs = std::cell::Cell::new(0);
     let rects = std::cell::Cell::new((Rect::NOTHING, Rect::NOTHING));
     let scene = |ui: &mut Ui| {
@@ -249,6 +264,6 @@ fn a_settled_bar_replays_the_rule_it_took_back() {
         runs.set(0);
         let shapes = frames.frame_shapes(scene);
         assert_eq!(runs.get(), 0, "settled frame {frame} ran the region");
-        assert!(!draws_rule(&shapes, rects.get()), "settled frame {frame} replays the rule the run took back");
+        assert!(!draws_rule(&shapes, wide), "settled frame {frame} replays the rule the run took back");
     }
 }

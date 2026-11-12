@@ -293,6 +293,28 @@ impl Scoped {
         !self.content.0 && !self.content_column
     }
 
+    /// Starts a layer from its opener's scope: the inherited group stays, the layer-local fields start fresh, and the
+    /// layer is no line of a bar it was opened from. A layer's content measures and runs in this.
+    pub(crate) fn start_layer(&mut self) {
+        self.start_room();
+        self.measure = None;
+        self.arena = None;
+        self.roving = None;
+        self.transform = None;
+        self.scroll_owner = None;
+        self.wheel = WheelScope::Plain;
+        self.unbounded = (false, false);
+        self.lazy = None;
+        self.pane_edge = None;
+        self.glyphs = GlyphRole::Control;
+        self.item = None;
+        self.row = None;
+        self.item_facts = None;
+        self.ink = Ink::default();
+        self.surface = SurfaceKind::Background;
+        self.inherited_mut().values.set(crate::contract::InBar(false));
+    }
+
     /// Ends the layout room of the enclosing body: its flow grid and content column.
     pub(crate) fn start_room(&mut self) {
         self.grid = None;
@@ -474,24 +496,7 @@ impl Env {
 
     /// The inherited group only; layer-local fields start fresh where the capture is installed.
     pub fn capture(&self) -> EnvCapture {
-        EnvCapture(self.derive(|s| {
-            s.start_room();
-            s.measure = None;
-            s.arena = None;
-            s.roving = None;
-            s.transform = None;
-            s.scroll_owner = None;
-            s.wheel = WheelScope::Plain;
-            s.unbounded = (false, false);
-            s.lazy = None;
-            s.pane_edge = None;
-            s.glyphs = GlyphRole::Control;
-            s.item = None;
-            s.row = None;
-            s.item_facts = None;
-            s.ink = Ink::default();
-            s.surface = SurfaceKind::Background;
-        }))
+        EnvCapture(self.derive(Scoped::start_layer))
     }
 
     /// What component code sees of this env.
@@ -517,6 +522,8 @@ impl Env {
             scoped.start_room();
             scoped.lazy = None;
             scoped.measure = None;
+            // A pane opened from a bar is not the bar's line.
+            scoped.inherited_mut().values.set(crate::contract::InBar(false));
         })
     }
 

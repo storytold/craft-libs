@@ -44,13 +44,13 @@ fn bar(width: f32, buttons: usize) -> (Rect, Rect) {
 #[trial]
 fn a_bar_too_narrow_for_its_members_elides_a_select_before_it_scrolls() {
     let (wide, _) = bar(900.0, 1);
-    let (select, button) = bar(240.0, 1);
+    let (select, button) = bar(200.0, 1);
     assert!(select.width() < wide.width() - SLACK, "the select kept its width {} in a narrow bar", select.width());
-    assert!(button.max.x <= 240.0 + SLACK, "the last member ends at {} past the bar's end", button.max.x);
+    assert!(button.max.x <= 200.0 + SLACK, "the last member ends at {} past the bar's end", button.max.x);
     // Buttons do not shrink: when even the select's least leaves no room for them, the select keeps its width (at most
     // the bar's room) and the rest scrolls.
-    let (crowded, button) = bar(240.0, 6);
-    assert!(button.max.x > 240.0, "six buttons fit a 240-point bar: {button:?}");
+    let (crowded, button) = bar(200.0, 6);
+    assert!(button.max.x > 200.0, "six buttons fit a 200-point bar: {button:?}");
     assert!(crowded.width() > select.width() + SLACK, "the select narrowed to {} in a bar that scrolls anyway", crowded.width());
 }
 
@@ -87,9 +87,9 @@ fn captioned(width: f32, buttons: usize) -> Captioned {
 fn a_captioned_select_in_a_narrow_bar_narrows_with_its_caption_beside_it_before_the_bar_scrolls() {
     let wide = captioned(900.0, 1);
     assert!(!wide.probed, "a bar its members fit asked a body for its least width");
-    let narrow = captioned(300.0, 1);
+    let narrow = captioned(260.0, 1);
     assert!(narrow.select.width() < wide.select.width() - SLACK, "the select kept its width {} in a narrow bar", narrow.select.width());
-    assert!(narrow.last.max.x <= 300.0 + SLACK, "the last member ends at {} past the bar's end", narrow.last.max.x);
+    assert!(narrow.last.max.x <= 260.0 + SLACK, "the last member ends at {} past the bar's end", narrow.last.max.x);
     assert!(
         narrow.caption.max.x <= narrow.select.min.x + SLACK && narrow.caption.center().y > narrow.select.min.y,
         "the caption {:?} is not beside the select {:?}",
@@ -97,8 +97,8 @@ fn a_captioned_select_in_a_narrow_bar_narrows_with_its_caption_beside_it_before_
         narrow.select
     );
     // Once the field is at its least, the rest scrolls.
-    let crowded = captioned(300.0, 6);
-    assert!(crowded.last.max.x > 300.0, "six buttons fit a 300-point bar: {:?}", crowded.last);
+    let crowded = captioned(260.0, 6);
+    assert!(crowded.last.max.x > 260.0, "six buttons fit a 260-point bar: {:?}", crowded.last);
 }
 
 /// The rects of an up button, a path, a search field and a count, in that order, in a tool bar `width` wide.
