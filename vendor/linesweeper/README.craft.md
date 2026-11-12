@@ -15,6 +15,7 @@ holds `upstream_revision`. `local_patches` describes each local patch.
 
 | File | Change |
 |---|---|
+| `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
 | `src/curve/mod.rs` | `CurveOrder::next_touch_after(y)` walks the order once and compares each touch with `y`. Before, when `y` was inside a touch followed by a Left interval and another touch, it called itself with the end of the Left interval, which is where the next touch starts, so it skipped that touch too and returned `None`. Two curves that start at one point and touch again later gave no later touch at the start height. The `next_touch_after_a_touch_that_contains_y` and `next_touch_after_on_two_curves_that_start_together` tests cover a built order and two curves from `intersect_cubics`. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
