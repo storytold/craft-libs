@@ -458,7 +458,7 @@ impl Component for ListRow<'_> {
         let ink = cx.resolve(&style.text.color);
         if let (Some(slot), Some((text, _))) = (placed.icon, &self.lead_text) {
             let draw = ui.draw();
-            let run = lead_run(text).color(cx.resolve(&style.detail.color));
+            let run = lead_run(text, self.lead_role).color(cx.resolve(&style.detail.color));
             let shown = draw.layout(&run, slot.width());
             let x = if rtl { slot.left() } else { slot.right() - shown.size().x };
             draw.galley(Pos2::new(x, slot.center().y - shown.size().y / 2.0), &shown);

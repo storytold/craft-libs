@@ -63,7 +63,7 @@ pub(crate) fn show<C: Component, V: 'static>(ui: &mut OverlayUi<'_>, cx: &mut Cx
     let overlay = Overlay::dropdown().focus(focus);
     let events = ui.show(popup, overlay, |ui, _| {
         let list = List::options(name.clone()).rows_stamp(stamp).show_items(ui, &Candidates { labels: &labels }, &mut |at, _| {
-            let row = ListRow::new(labels[*at].clone()).option();
+            let row = ListRow::new(labels[*at].clone()).option().role(TypeRole::Mono).lead_role(TypeRole::Mono);
             match (&marks[*at], &widest) {
                 (Some(mark), Some(widest)) => row.lead_text(mark.clone(), widest.clone()),
                 (None, Some(widest)) => row.lead_text(Label::Empty, widest.clone()),

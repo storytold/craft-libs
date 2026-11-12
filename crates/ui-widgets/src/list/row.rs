@@ -201,6 +201,9 @@ pub struct ListRow<'a> {
     pub(super) lead_paint: Option<LeadPaintFn<'a>>,
     /// The leading text and the widest text its slot is sized for (`lead_text`).
     pub(super) lead_text: Option<(Label, Label)>,
+    /// The type role of the leading text: `Caption` unless set.
+    #[prop]
+    pub(super) lead_role: TypeRole,
     pub(super) thumb: ThumbSize,
     pub(super) thumb_aspect: ThumbAspect,
     pub(super) first: Option<ThumbPaint<'a>>,
@@ -273,6 +276,7 @@ impl<'a> ListRow<'a> {
             icon: None,
             lead_paint: None,
             lead_text: None,
+            lead_role: TypeRole::Caption,
             thumb: ThumbSize::None,
             thumb_aspect: ThumbAspect::SQUARE,
             first: None,
@@ -504,7 +508,7 @@ impl<'a> ListRow<'a> {
         self
     }
 
-    /// A short text in the leading slot (a page number), in the detail's role and ink, at the slot's end so the labels
+    /// A short text in the leading slot (a page number), in `lead_role` and the detail's ink, at the slot's end so the labels
     /// after it line up: the slot is as wide as `widest` measures. It takes the icon's place; thumbnails replace it.
     /// A click on it picks the row as a click on the row does and reports [`RowEvent::LeadClicked`]; a double click
     /// there does not activate the row.

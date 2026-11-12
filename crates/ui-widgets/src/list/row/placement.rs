@@ -119,8 +119,8 @@ pub(super) struct Widths {
 }
 
 /// The run of a leading text, without its colour.
-pub(super) fn lead_run(text: &Label) -> TextRun<'_> {
-    TextRun::new(text.as_str()).role(TypeRole::Caption)
+pub(super) fn lead_run(text: &Label, role: TypeRole) -> TextRun<'_> {
+    TextRun::new(text.as_str()).role(role)
 }
 
 /// The cells of a row that lead and trail its label band.
@@ -264,7 +264,7 @@ impl ListRow<'_> {
                 ItemWidth { width, least: least(&trailing.item, width), optional: trailing.optional }
             })
             .collect();
-        let lead = self.lead_text.as_ref().map(|(_, widest)| text_width(&lead_run(widest)));
+        let lead = self.lead_text.as_ref().map(|(_, widest)| text_width(&lead_run(widest, self.lead_role)));
         Widths { items, lead }
     }
 
