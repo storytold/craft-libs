@@ -172,6 +172,7 @@ impl R<'_> {
         let mut sample_rate = tag("FilmCraft Audio Sample Rate").and_then(|s| s.parse().ok()).unwrap_or(0u32);
         let mut comp = Composition {
             name,
+            aaf_mob_id: c.mob_id(pid::MOB_ID).map(|id| hex(&id)),
             rate,
             sample_rate: 48_000,
             width: 1920,

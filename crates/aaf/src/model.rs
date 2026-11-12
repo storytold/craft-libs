@@ -32,6 +32,10 @@ pub struct Document {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Composition {
     pub name: String,
+    /// AAF CompositionMob identifier as 64 lowercase hexadecimal digits. OMF has no equivalent.
+    /// It is a read identity for applications that let a user choose among compositions; writers
+    /// generate fresh format identifiers and do not preserve it.
+    pub aaf_mob_id: Option<String>,
     pub rate: FrameRate,
     pub sample_rate: u32,
     pub width: u32,
