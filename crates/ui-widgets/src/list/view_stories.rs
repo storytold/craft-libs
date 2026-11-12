@@ -1,13 +1,16 @@
 //! Stories of `List`, `FindingsList`, `FindingsSummary`, `EventList` and `UndoList`.
 
-use super::view_words::{EventWords, FindingsWords};
+use super::view_words::{EventWords, FindingsWords, UndoWords};
 use super::{
     EventLevel, EventList, EventLog, EventLogState, Finding, Findings, FindingsList, FindingsSummary, List, ListRow, LogEvent, Severity, UndoList,
-    UndoMark, UndoRows,
+    UndoMark, UndoRows, footer_text,
 };
-use crate::contract::{Bind, CollectionEvent, Entry, Show as _, ShowCollection as _, WordSetCx as _, request_rename};
+use crate::buttons::Button;
+use crate::contract::{Bind, CollectionEvent, Entry, Show as _, ShowCollection as _, ShowContainer as _, WordSetCx as _, request_rename};
 use crate::menu::Menu;
-use crate::testing::{Drive, StoryData, StoryOutput, story};
+use crate::popover::Popover;
+use crate::runtime::env::{Env, Label};
+use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::{DisplayOrder, ItemSource, Selection};
 use egui::Ui;
 
@@ -169,24 +172,51 @@ fn event_list_empty(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     event_list(ui, 0)
 }
 
-fn undo_list(ui: &mut Ui, data: &mut StoryData, count: usize) -> StoryOutput {
-    let labels: Vec<String> = (1..=count).rev().map(|n| format!("Action {n}")).collect();
-    let mark = data.value("mark", UndoMark::default());
+/// An undo list of `count` actions, "Step 1" the oldest, starting with `mark`, and its footer as the readout: the
+/// actions a pick undoes, or Cancel while none is marked.
+fn undo_list(ui: &mut Ui, data: &mut StoryData, count: usize, mark: UndoMark) -> StoryOutput {
+    let labels: Vec<String> = (1..=count).rev().map(|n| format!("Step {n}")).collect();
+    let mark = data.value("mark", mark);
     let rows = UndoRows::new(&labels);
-    UndoList::new("Undo History").selection(Bind::bound(mark)).show_items(ui, &rows, &mut |key, _| rows.row(*key)).into()
+    let out = UndoList::new("Undo History").selection(Bind::bound(&mut *mark)).show_items(ui, &rows, &mut |key, _| rows.row(*key));
+    let env = Env::of(ui);
+    let words = env.words::<UndoWords>();
+    let footer = footer_text(&words, env.format(), mark).map_or_else(|| words.cancel.clone(), Label::from);
+    StoryOutput::from(out).readout(footer.as_str())
 }
 
+/// WordCraft's undo list: 30 actions, the newest three marked.
 #[story(UndoList<'static>, covers = [Default, Many], drive = Drive::Never)]
 fn undo_list_many(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    undo_list(ui, data, 20)
+    undo_list(ui, data, 30, UndoMark::at(2))
+}
+
+/// The drive of the popover story: a click on its button.
+fn open_undo_history(fixture: &mut Fixture) {
+    if let Some(opener) = fixture.by_label("Undo History") {
+        fixture.click(&opener);
+    }
+}
+
+/// The list as WordCraft hosts it: a button opens it in a popover.
+#[story(UndoList<'static>, covers = [], drive = Drive::Custom(open_undo_history))]
+fn undo_list_in_a_popover(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let opener = Button::new("Undo History").show(ui);
+    let mut open = *data.value("open", false);
+    let mut shown = None;
+    let popover = Popover::new("Undo History", Bind::bound(&mut open)).opened_by(&opener).show(ui, |ui, _| {
+        shown = Some(undo_list(ui, data, 30, UndoMark::at(2)));
+    });
+    *data.value("open", false) = open;
+    shown.unwrap_or_else(|| popover.output.into())
 }
 
 #[story(UndoList<'static>, covers = [One], drive = Drive::Never)]
 fn undo_list_one(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    undo_list(ui, data, 1)
+    undo_list(ui, data, 1, UndoMark::default())
 }
 
 #[story(UndoList<'static>, covers = [Empty], drive = Drive::Never)]
 fn undo_list_empty(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    undo_list(ui, data, 0)
+    undo_list(ui, data, 0, UndoMark::default())
 }
