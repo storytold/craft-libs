@@ -481,8 +481,11 @@ hold.
 
 `Stream::codec_params()` maps `biCompression` and the `WAVEFORMATEX` format tag to a `CodecId`
 (Motion JPEG, H.264, HEVC, MPEG-4 Part 2, MPEG-2, VP8/VP9, AV1, ProRes, DNxHD; PCM, ADPCM, A-law,
-µ-law, MP2, MP3, AAC, AC-3, Vorbis, FLAC). AVI stores H.264 and HEVC as Annex B, so `extradata`
-is the bytes after the format header as stored, not an `avcC` / `hvcC` record. Uncompressed video
+µ-law, MP2, MP3, AAC, AC-3, Vorbis, FLAC). `extradata` is the bytes after the format header
+as stored. For H.264 and HEVC, `Stream::nal_framing()` says what they are: nothing (parameter sets in
+the chunks), Annex B parameter sets (a file written with global headers) or an `avcC` / `hvcC` record
+(a stream copied from MP4, whose chunks are then length-prefixed by the size it gives;
+`bitstream::length_prefixed_nals` splits them). Uncompressed video
 is `CodecId::Unknown` with the FourCC in `tag`.
 
 Differences from `filmcraft-avi`: `ByteSource` is `craft_media::ByteSource`; `Error::Io` holds the
@@ -670,7 +673,8 @@ sample rate, channels and (for plain PCM) the little-endian `PcmFormat`. MXF ess
 configuration in band, so `extradata` is empty.
 
 Limits, each with a test: a run-in of at most 65 535 bytes before the header partition pack, a
-metadata or index value of at most 64 MiB (larger is refused before it is read), 16 MiB scanned
+metadata or index value of at most 64 MiB (larger is refused before it is read) and 256 MiB of
+them in all, 16 MiB scanned
 for the next partition pack after a lost KLV sync, an index position that cannot make a sparse
 table, at most 256 sound channels (8 in an AES3 element), a PCM block alignment of at most 4096
 bytes, and a sound request of at most 2²⁴ samples past the stored essence.
@@ -731,9 +735,13 @@ w.finish()?;
 ### Differences from `filmcraft-mxf`
 
 - `ByteSource` is `craft_media::ByteSource`.
-- `WriterConfig::new` sets `company` and `product` to `craft-media` (FilmCraft: `FilmCraft`), and
-  the identification set's product UID is derived from `craft-media MXF writer`. Apps set their
-  own names; `write_opatom_pcm` always writes the defaults.
+- `WriterConfig::new` sets `company` and `product` to `craft-media` (FilmCraft: `FilmCraft`) and
+  `version` to this crate's. Apps set their own; `write_opatom_pcm_as` takes them for the
+  in-memory OP-Atom PCM writer (`write_opatom_pcm` writes the defaults). The identification
+  set's product UID is derived from `"<product> MXF writer"`, so `company` and `product` of
+  `FilmCraft` with FilmCraft's version string write the bytes `filmcraft-mxf` wrote.
+- Everything read while opening (partition packs, primers, metadata sets, index segments) shares
+  a budget of 256 MiB; past it the file is refused. `filmcraft-mxf` bounded each value only.
 - `EssenceTrack::sync_before` returns 0 for a track without picture samples (a sound track); it
   indexed an empty table and panicked.
 - `Timecode::format` saturates for a drop-frame start near `i64::MAX`; it overflowed (a panic in
