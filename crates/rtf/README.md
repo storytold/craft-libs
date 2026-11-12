@@ -79,6 +79,17 @@ elsewhere are kept. `\sect` ends a paragraph.
 The reader does not recurse, and what it returns is never larger than a small multiple of the
 file: each character of text costs the file at least one byte.
 
+## Outlook bodies (feature `outlook`)
+
+`outlook::decompress_rtf` undoes the compression of `PidTagRtfCompressed` ([MS-OXRTFCP]: `LZFu`
+with its CRC checked, or `MELA` stored as is), never allocating past the caller's cap.
+`outlook::rtf_text` gives the text a mail body shows (font charsets and `\ansicpg` decoded through
+`craft_mime::charset`, `\uN` with its fallback skipped, destinations dropped), and
+`outlook::rtf_html` the HTML of an encapsulated-HTML body ([MS-OXRTFEX], `\fromhtml1`). Groups nest
+at most `MAX_RTF_DEPTH` (256) deep. From MailCraft `crates/pst/src/rtf.rs` at
+[a44a450](https://github.com/UCS-Care-Group/mailcraft/commit/a44a45013d1c6396229c40ab60172d1882b368d5),
+by Martin Ball and the MailCraft contributors.
+
 ## Not here yet
 
 WordCraft's full reader and writer (styles, lists, fields, bookmarks, pictures, notes,
