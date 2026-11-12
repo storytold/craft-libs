@@ -13,6 +13,8 @@ workspace = true
 [dependencies]
 craft-cfb = { workspace = true }
 craft-sheet = { workspace = true }
+# RC4 encryption ([MS-OFFCRYPTO] 2.3.6).
+md5 = { workspace = true }
 # zlib-wrapped metafiles in the drawing group.
 miniz_oxide = "0.9"
 thiserror = { workspace = true }

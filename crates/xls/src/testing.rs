@@ -128,3 +128,9 @@ fn write_sst(out: &mut Vec<u8>, parts: &[Vec<u8>]) {
     }
     rec(out, kind, &cur);
 }
+
+/// `stream` (a Workbook stream starting with the globals' BOF) encrypted with RC4 1.1 and
+/// `password`, a FilePass record put after the BOF. `None` for a stream that is not one.
+pub fn encrypt_rc4(stream: &[u8], password: &str) -> Option<Vec<u8>> {
+    crate::crypt::encrypt(stream, password)
+}

@@ -13,8 +13,10 @@
 //! stay in the file's units.
 //!
 //! Everything else (charts, other shapes, newer conditional formats, hyperlinks,
-//! PivotTables, macros) is skipped and named in [`Read::warnings`]. Encrypted workbooks and
-//! versions before BIFF8 are refused ([`Error::Encrypted`], [`Error::Biff5`]). A formula that
+//! PivotTables, macros) is skipped and named in [`Read::warnings`]. A workbook encrypted with
+//! RC4 is read with its password ([`read_with_password`]; without one, Excel's
+//! default password is tried and [`Error::Encrypted`] says one is needed). Other encryption and
+//! versions before BIFF8 are refused ([`Error::UnsupportedEncryption`], [`Error::Biff5`]). A formula that
 //! cannot be put back into text (links to other workbooks, macro commands, unknown tokens)
 //! leaves its cell with the saved result and a [`Warning::FormulaKept`].
 //!
@@ -33,6 +35,7 @@
 //! ```
 
 mod cond;
+mod crypt;
 mod drawing;
 mod dv;
 mod expr;
@@ -52,7 +55,7 @@ pub use model::{
     ConditionalFormat, DataValidation, DefinedName, DifferentialFormat, DxfFill, ErrorStyle, Fill, Font, Formula, HAlign, Note, Operator, Pattern,
     Picture, Range, Row, Script, Sheet, Underline, VAlign, ValidationType, Value, View, Visibility, Workbook,
 };
-pub use read::{is_xls, read, read_with};
+pub use read::{is_encrypted, is_xls, read, read_with, read_with_password};
 
 /// Why a workbook could not be read.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -64,9 +67,17 @@ pub enum Error {
     /// More than a [`Limits`] value or a fixed cap allows.
     #[error("the workbook is too large: {0}")]
     TooLarge(String),
-    /// The workbook is password-protected (it has a FilePass record).
+    /// The workbook is encrypted with a password (it has a FilePass record): read it with
+    /// [`read_with_password`].
     #[error("the workbook is password-protected (encrypted)")]
     Encrypted,
+    /// The password does not open the workbook.
+    #[error("the password is not the workbook's")]
+    WrongPassword,
+    /// The workbook is encrypted with a scheme that is not read (XOR obfuscation, RC4
+    /// CryptoAPI), named.
+    #[error("the workbook uses {0} encryption, which is not read")]
+    UnsupportedEncryption(String),
     /// An Excel 5.0/95 workbook (BIFF5), which is not read.
     #[error("Excel 5.0/95 workbooks (BIFF5) are not supported")]
     Biff5,
