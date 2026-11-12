@@ -204,7 +204,7 @@ impl Grid {
         if t[0] < 0 || t[..=n].windows(2).any(|w| w[0] >= w[1]) {
             return Err(bad());
         }
-        // l_A (ISO/IEC 14496-3 §4.6.18.3.3): VARFIX pointer 1, like 0, marks no envelope
+        // l_A: in ISO/IEC 14496-3 a VARFIX pointer of 1, like 0, marks no transient envelope
         let la = match (pointer, class) {
             (0, _) | (1, VARFIX) => None,
             (p, FIXVAR | VARVAR) => Some((n + 1).checked_sub(p).ok_or_else(bad)?),
