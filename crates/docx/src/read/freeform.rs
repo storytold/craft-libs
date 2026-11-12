@@ -8,64 +8,56 @@ use crate::xml::El;
 
 /// Straight pieces a Bézier curve is flattened into.
 const CURVE_STEPS: usize = 8;
-/// Points read from one path segment. A conformant `a:lnTo`/`a:moveTo` has one, `a:quadBezTo`
-/// two and `a:cubicBezTo` three; the cap bounds the de Casteljau control polygon so a segment
-/// stuffed with points can't make curve flattening quadratic in the point count.
-const MAX_SEG_POINTS: usize = 8;
 /// Largest path coordinate kept, in EMUs.
 const MAX_EMU: f64 = 1.0e12;
 
-/// The paths of the custom geometry in `sppr` (`wps:spPr`), mapped onto a `w` × `h` shape
-/// (points): each `a:path` in its own `w` × `h` space (EMUs of the shape's size when it gives
-/// none). Lines and Bézier curves (flattened) are kept; arcs are drawn straight to their end.
-/// `None` when there is no `a:custGeom` or it has no points.
+/// The paths of the custom geometry in `sppr` (`wps:spPr`), read by `craft-drawingml` (guides,
+/// arcs as Bézier curves), mapped onto a `w` × `h` shape (points): each path in its own
+/// coordinate space (EMUs of the shape's size when it gives none). Curves are flattened. `None`
+/// when there is no `a:custGeom` or it has no points.
 pub fn cust_geom(sppr: &El, w: f32, h: f32) -> Option<Freeform> {
-    let list = sppr.child("a:custGeom")?.child("a:pathLst")?;
+    let cg = sppr.child("a:custGeom")?;
+    let (w_emu, h_emu) = (w as f64 * 12_700.0, h as f64 * 12_700.0);
     let mut paths = Vec::new();
-    for p in list.children("a:path").take(MAX_PATHS) {
+    for p in craft_drawingml::custgeom::read_cust_geom(&crate::xml::to_craft(cg), w_emu, h_emu).into_iter().take(MAX_PATHS) {
         // Subpaths count too: stop once the shape has as many paths as it may keep.
         if paths.len() >= MAX_PATHS {
             break;
         }
-        let dim = |n: &str, shape: f32| p.attr(n).and_then(int).filter(|v| *v > 0).map_or(shape as f64 * 12_700.0, |v| v as f64);
-        let (pw, ph) = (dim("w", w), dim("h", h));
-        let scale = |[x, y]: [f64; 2]| -> [f32; 2] {
-            let sx = if pw > 0.0 { w as f64 / pw } else { 1.0 / 12_700.0 };
-            let sy = if ph > 0.0 { h as f64 / ph } else { 1.0 / 12_700.0 };
-            [(x * sx) as f32, (y * sy) as f32]
-        };
-        let pt = |e: &El| -> Option<[f64; 2]> {
-            let c = |n: &str| e.attr(n).and_then(int).map(|v| (v as f64).clamp(-MAX_EMU, MAX_EMU));
-            Some([c("x")?, c("y")?])
-        };
-        // Each subpath (from an `a:moveTo`) becomes a path of its own.
+        let (pw, ph) = (if p.w > 0.0 { p.w } else { w_emu }, if p.h > 0.0 { p.h } else { h_emu });
+        let sx = if pw > 0.0 { w as f64 / pw } else { 1.0 / 12_700.0 };
+        let sy = if ph > 0.0 { h as f64 / ph } else { 1.0 / 12_700.0 };
+        let scale = |[x, y]: [f64; 2]| -> [f32; 2] { [(x * sx) as f32, (y * sy) as f32] };
+        let at =
+            |a: &[f64], i: usize| -> Option<[f64; 2]> { Some([a.get(2 * i)?.clamp(-MAX_EMU, MAX_EMU), a.get(2 * i + 1)?.clamp(-MAX_EMU, MAX_EMU)]) };
+        // Each subpath (from a move) becomes a path of its own.
         let mut cur: Vec<[f64; 2]> = Vec::new();
         let mut done: Vec<(Vec<[f64; 2]>, bool)> = Vec::new();
-        let fill_none = p.attr("fill") == Some("none");
-        for seg in p.els() {
+        for (op, args) in craft_drawingml::custgeom::parse_path(&p.d) {
             if cur.len() >= MAX_POINTS || done.len() >= MAX_PATHS {
                 break;
             }
-            let pts: Vec<[f64; 2]> = seg.children("a:pt").filter_map(pt).take(MAX_SEG_POINTS).collect();
-            match seg.local() {
-                "moveTo" => {
+            match op {
+                'M' => {
                     if !cur.is_empty() {
                         done.push((std::mem::take(&mut cur), false));
                     }
-                    cur.extend(pts.first());
+                    cur.extend(at(&args, 0));
                 }
-                "lnTo" => cur.extend(pts.first()),
-                "cubicBezTo" | "quadBezTo" => {
+                'L' => cur.extend(at(&args, 0)),
+                'C' | 'Q' => {
+                    let n = if op == 'C' { 3 } else { 2 };
+                    let pts: Vec<[f64; 2]> = (0..n).filter_map(|i| at(&args, i)).collect();
                     let Some(&start) = cur.last() else {
                         cur.extend(pts.last());
                         continue;
                     };
-                    let ctrl: Vec<[f64; 2]> = std::iter::once(start).chain(pts.iter().copied()).collect();
+                    let ctrl: Vec<[f64; 2]> = std::iter::once(start).chain(pts).collect();
                     for i in 1..=CURVE_STEPS {
                         cur.push(bezier(&ctrl, i as f64 / CURVE_STEPS as f64));
                     }
                 }
-                "close" if !cur.is_empty() => done.push((std::mem::take(&mut cur), true)),
+                'Z' if !cur.is_empty() => done.push((std::mem::take(&mut cur), true)),
                 _ => {}
             }
         }
@@ -75,6 +67,7 @@ pub fn cust_geom(sppr: &El, w: f32, h: f32) -> Option<Freeform> {
             let back = cur.len() > 2 && cur.first() == cur.last();
             done.push((cur, back));
         }
+        let fill_none = p.fill == craft_drawingml::preset::FillMode::None;
         for (pts, closed) in done.into_iter().take(MAX_PATHS.saturating_sub(paths.len())) {
             paths.push(FreePath { pts: pts.into_iter().take(MAX_POINTS).map(scale).collect(), closed: closed && !fill_none });
         }
@@ -388,5 +381,24 @@ mod tests {
         let f = cust_geom(&sppr, 100.0, 100.0).expect("a path");
         assert_eq!(f.paths.len(), 1);
         assert!(f.paths[0].pts.len() >= 2 && f.paths[0].pts.len() <= 1 + CURVE_STEPS);
+    }
+
+    /// Arcs and guide-named points are read (craft-drawingml); they were drawn straight, and a
+    /// point given by a guide was lost.
+    #[test]
+    fn arcs_and_guides_are_read() {
+        let sppr = sppr("<a:arcTo wR=\"50\" hR=\"50\" stAng=\"10800000\" swAng=\"10800000\"/><a:close/>");
+        let f = cust_geom(&sppr, 100.0, 100.0).expect("a path");
+        assert!(f.paths[0].pts.len() > 3, "the arc is curved: {:?}", f.paths[0].pts);
+        assert!(f.paths[0].closed);
+        // From (0,0), half a circle of radius 50 starting at 180 degrees ends at (100,0) and
+        // passes through (50,-50).
+        let pts = &f.paths[0].pts;
+        assert!(pts.iter().any(|[x, y]| (x - 50.0).abs() < 1.0 && (y + 50.0).abs() < 1.0), "{pts:?}");
+        let xml = "<wps:spPr xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:wps=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\">\
+            <a:custGeom><a:gdLst><a:gd name=\"mid\" fmla=\"val 50\"/></a:gdLst><a:pathLst><a:path w=\"100\" h=\"100\">\
+            <a:moveTo><a:pt x=\"0\" y=\"0\"/></a:moveTo><a:lnTo><a:pt x=\"mid\" y=\"100\"/></a:lnTo></a:path></a:pathLst></a:custGeom></wps:spPr>";
+        let f = cust_geom(&crate::xml::parse(xml.as_bytes()).unwrap(), 100.0, 100.0).expect("a path");
+        assert_eq!(f.paths[0].pts, vec![[0.0, 0.0], [50.0, 100.0]]);
     }
 }

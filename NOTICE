@@ -93,7 +93,7 @@ crates/raw (craft-raw) is moved from LightCraft, with behaviour ported from two 
 - LightCraft, crates/raw (src/lib.rs, dng.rs, dngwrite.rs, tiffraw.rs, unpack.rs, ljpeg.rs, jxl.rs,
   opcodes.rs, profile.rs, gaintable.rs, semantic.rs, preview.rs, vendor/crw.rs, vendor/hasselblad.rs,
   vendor.rs (shared level helpers), vendor/mrw.rs, vendor/erf.rs, vendor/mef.rs, vendor/kodak.rs, vendor/pef.rs,
-  vendor/srw.rs, vendor/cr2.rs, vendor/cr2/sraw.rs, vendor/nef.rs, vendor/nefc.rs, vendor/nef_lens.rs, docs/nikon-lens-corrections.md, vendor/rw2.rs, vendor/raf.rs, vendor/rafc.rs, vendor/raf_lens.rs, docs/raf-compression.md, docs/raf-corpus.sha256, vendor/orf.rs, docs/orf-compression.md, vendor/arw.rs, vendor/arw6.rs, vendor/arw6_curve.rs, vendor/arw6_testenc.rs, vendor/arw_lens.rs, vendor/arw_lens_rm6.rs, vendor/sr2.rs, llvc.rs, lens_metadata.rs, docs/arw6-compression.md, docs/sony-lens-corrections.md, docs/sony-ilce7rm6-lens-corrections.md, kelvin_presets.rs (the preset ordering), tests/it/vendor_robust.rs and their tests) and crates/meta/src/mrw.rs (the MRW block container),
+  vendor/srw.rs, vendor/cr2.rs, vendor/cr2/sraw.rs, vendor/nef.rs, vendor/nefc.rs, vendor/nef_lens.rs, docs/nikon-lens-corrections.md, vendor/rw2.rs, vendor/raf.rs, vendor/rafc.rs, vendor/raf_lens.rs, docs/raf-compression.md, docs/raf-corpus.sha256, vendor/orf.rs, docs/orf-compression.md, kelvin_presets.rs (the preset ordering), tests/it/vendor_robust.rs and their tests) and crates/meta/src/mrw.rs (the MRW block container),
   revision 5ff567a4a2e067bef1b6bce152c11e7f727ccbaf.
   https://github.com/storytold/lightcraft
   Copyright (c) 2026 ArtCraft Team and the LightCraft contributors.
