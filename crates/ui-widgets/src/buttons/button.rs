@@ -1,7 +1,7 @@
 //! `Button`: a push button with an optional leading and trailing icon and a busy state.
 
 use super::face::{self, FaceLook, FaceSpec};
-use crate::contract::{Common, Component, Cx, MeasureCx, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props, Role, Styled as _};
+use crate::contract::{Common, Component, Cx, LeastWidth, MeasureCx, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props, Role, Styled as _};
 use crate::display::Spinner;
 use crate::primitives::{HAlign, IconSpec, PaintShape};
 use crate::runtime::commands::CommandRef;
@@ -148,6 +148,10 @@ pub struct Button<'a> {
     /// column of buttons shares one width.
     #[prop]
     fill_width: bool,
+    /// The least width, from a size role (a dialog's footer buttons); a longer label is wider.
+    #[style_key]
+    #[prop]
+    least_width: Option<LeastWidth>,
     /// Where the icons and the label sit in a button wider than they are: centred unless set (a full-width button
     /// that names an item at the reading start).
     #[prop]
@@ -165,6 +169,7 @@ impl<'a> Button<'a> {
             painted: None,
             tint: None,
             fill_width: false,
+            least_width: None,
             align: HAlign::Center,
         }
         .label(label)
@@ -196,10 +201,14 @@ impl Component for Button<'_> {
     type Output = ButtonOutput;
 
     fn style(cx: &StyleCx<'_>, key: ButtonStyleKey) -> ButtonStyle {
-        match key.tint {
+        let mut style = match key.tint {
             Some(tint) => ButtonStyle::tinted(cx, tint),
             None => ButtonStyle::of(cx),
+        };
+        if let Some(least) = key.least_width {
+            style.metrics.min_size.x = style.metrics.min_size.x.max(least.points(cx.tokens));
         }
+        style
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {

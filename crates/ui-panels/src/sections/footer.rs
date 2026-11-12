@@ -3,8 +3,8 @@
 use super::words::SectionWords;
 use crate::buttons::{Button, IconButton};
 use crate::contract::{
-    Access, BodyLayout, Common, Component, Container, ContainerProps, Cx, DropMark, DropOperation, DropTarget, NoValue, Outcome, Pad, PaintUi,
-    Pointer as _, PopupKind, Props as _, Role, RowAlign, Show as _, ShowContainer as _, Sizing, TooltipSpec, WordSetCx as _,
+    Access, BodyLayout, Common, Component, Container, ContainerProps, Cx, DropMark, DropOperation, DropTarget, LeastWidth, NoValue, Outcome, Pad,
+    PaintUi, Pointer as _, PopupKind, Props as _, Role, RowAlign, Show as _, ShowContainer as _, Sizing, TooltipSpec, WordSetCx as _,
 };
 use crate::layout_components::Row;
 use crate::primitives::IconSpec;
@@ -582,8 +582,8 @@ impl FooterBar {
         self
     }
 
-    /// A footer bar of dialog buttons, in the order of the platform's dialog convention. Show it with
-    /// `show_footer`.
+    /// A footer bar of dialog buttons, in the order of the platform's dialog convention, each at least
+    /// `size.dialog.button` wide (`size.dialog.side_button` in a column). Show it with `show_footer`.
     pub fn buttons(buttons: impl IntoIterator<Item = FooterButton>) -> Self {
         FooterBar { content: Content::Buttons(buttons.into_iter().collect()), ..FooterBar::body() }
     }
@@ -620,6 +620,7 @@ impl FooterBar {
                 let labels = accelerator_labels(&lettering, crate::runtime::windows::os_of(&ctx));
                 // Initial focus lands on the first enabled Accept button on every OS.
                 let default_at = buttons.iter().position(|button| button.role == DialogRole::Accept && button.enabled);
+                let least = if column { LeastWidth::DialogSideButton } else { LeastWidth::DialogButton };
                 for at in display_order(&roles, crate::runtime::windows::os_of(ui.ctx()) == Os::Windows, column) {
                     let button = &buttons[at];
                     let variant = match button.role {
@@ -627,8 +628,12 @@ impl FooterBar {
                         DialogRole::Destructive => Variant::DANGER,
                         DialogRole::Cancel | DialogRole::Other => Variant::SECONDARY,
                     };
-                    let mut widget =
-                        Button::new(button.label.clone()).painted(labels[at].clone()).variant(variant).enabled(button.enabled).fill_width(column);
+                    let mut widget = Button::new(button.label.clone())
+                        .painted(labels[at].clone())
+                        .variant(variant)
+                        .enabled(button.enabled)
+                        .fill_width(column)
+                        .least_width(least);
                     let tip = if button.enabled { button.tooltip.clone() } else { button.disabled_reason.clone().or_else(|| button.tooltip.clone()) };
                     if let Some(tip) = tip {
                         widget = widget.tooltip(TooltipSpec::new(tip.clone()).disabled_text(tip));
