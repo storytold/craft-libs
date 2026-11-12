@@ -356,3 +356,56 @@ fn lost_sync_scans_a_bounded_stretch_for_the_next_partition() {
     assert!(src.2.get() > 15 << 20, "the scan ran: {} bytes read", src.2.get());
     assert!(src.2.get() < 18 << 20, "{} bytes read of a 1 GiB file", src.2.get());
 }
+
+/// Everything read while opening shares one budget (256 MiB): a file made of metadata sets, each
+/// under the 64 MiB value limit, is refused once they pass it instead of being read whole.
+#[test]
+fn metadata_past_the_total_budget_is_refused() {
+    use super::file::walk_within;
+    let f = atom_pcm(None);
+    let read: u64 = klvs(&f)
+        .iter()
+        .filter(|&&(k, _, _)| {
+            use klv::KeyClass::{IndexSegment, LocalSet, Partition, Primer};
+            matches!(klv::classify(&klv::Ul(f[k..k + 16].try_into().unwrap())), Partition { .. } | Primer | LocalSet | IndexSegment)
+        })
+        .map(|&(_, _, len)| len as u64)
+        .sum();
+    assert!(read > 1000, "{read} bytes of metadata");
+    // exactly what the file holds is enough; one byte less is not
+    assert!(walk_within(&f, read).is_ok());
+    match walk_within(&f, read - 1) {
+        Err(Error::Invalid(text)) => assert!(text.contains("past the limit"), "{text}"),
+        other => panic!("expected a refusal, got {:?}", other.map(|_| ())),
+    }
+    assert!(open(&f).is_ok());
+}
+
+/// The identification of a written file is the caller's on every entry point, and the product
+/// UID follows the product name.
+#[test]
+fn every_writer_entry_point_takes_the_identification() {
+    use super::write::write_opatom_pcm_as;
+    let opts = OpAtomPcm { sample_rate: 48_000, bits: 16, channels: 1, edit_rate: None, ids: PackageIds::from_seed("id", "Id"), timecode: None };
+    let named = write_opatom_pcm_as(&opts, &[1, 2, 3], "Acme", "Editor", "9.9").unwrap();
+    let m = open(&named).unwrap();
+    assert_eq!((m.company_name.as_deref(), m.product_name.as_deref()), (Some("Acme"), Some("Editor")));
+    // the defaults, and the same bytes when they are passed explicitly
+    let default = write_opatom_pcm(&opts, &[1, 2, 3]).unwrap();
+    let m = open(&default).unwrap();
+    assert_eq!((m.company_name.as_deref(), m.product_name.as_deref()), (Some("craft-media"), Some("craft-media")));
+    assert_eq!(default, write_opatom_pcm_as(&opts, &[1, 2, 3], "craft-media", "craft-media", env!("CARGO_PKG_VERSION")).unwrap());
+    // two products of one length differ in the product UID as well as in the name
+    let other = write_opatom_pcm_as(&opts, &[1, 2, 3], "Acme", "Edited", "9.9").unwrap();
+    assert_eq!(named.len(), other.len());
+    let differing = named.iter().zip(&other).filter(|(a, b)| a != b).count();
+    assert!(differing > 4, "only the name's {differing} bytes differ");
+    // the streaming writer
+    let mut cfg = WriterConfig::new(Pattern::OpAtom, Rational::new(24, 1), PackageIds::from_seed("id", "Id"));
+    cfg.picture = Some(PictureDesc::new(PictureCoding::Vc3 { cid: 1272 }, 64, 36));
+    (cfg.company, cfg.product) = ("Acme".into(), "Editor".into());
+    let mut w = MxfWriter::new(Cursor::new(Vec::new()), cfg).unwrap();
+    w.push_picture(&[0, 0, 2, 0x80, 1, 9, 9, 9], FrameInfo::intra()).unwrap();
+    let m = open(&w.finish().unwrap().into_inner()).unwrap();
+    assert_eq!((m.company_name.as_deref(), m.product_name.as_deref()), (Some("Acme"), Some("Editor")));
+}

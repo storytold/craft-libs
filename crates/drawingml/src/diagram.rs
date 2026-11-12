@@ -51,3 +51,5 @@ pub struct DiagramNode {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub title: String,
 }
+
+pub mod parts;

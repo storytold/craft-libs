@@ -271,7 +271,7 @@ fn faces_viewports_images_and_tolerances() {
         k("0|TOLERANCE|3|Tol|10|1.0|1|{\\Fgdt;j}%%v0.1"),
         EntityKind::Tolerance { insert: [1.0, 0.0, 0.0], direction: [1.0, 0.0, 0.0], style: "Tol".into(), text: "{\\Fgdt;j}%%v0.1".into() }
     );
-    assert_eq!(k("0|MULTILEADER|10|1.0"), EntityKind::Other, "a type the model does not have is read from its tags");
+    assert_eq!(k("0|ARC_DIMENSION|10|1.0"), EntityKind::Other, "a type the model does not have is read from its tags");
 }
 
 #[test]
@@ -390,4 +390,47 @@ fn a_spline_edge_without_fit_data_leaves_the_loops_source_count() {
     assert!(
         matches!(&h.loops[0].path, HatchPath::Edges(e) if matches!(&e[0], HatchEdge::Spline { fit, control, .. } if fit.is_empty() && control.len() == 2))
     );
+}
+
+#[test]
+fn an_attributes_vertical_alignment_is_group_74_not_the_field_length() {
+    // 73 is the field length of an ATTRIB or ATTDEF; a writer that emits it must not turn a
+    // middle-aligned attribute into another alignment.
+    let EntityKind::AttDef(a) = one("0|ATTDEF|10|1.0|1|x|2|TAG|70|0|73|8|74|2").kind else { panic!("an attribute definition") };
+    assert_eq!(a.text.valign, 2);
+    let EntityKind::AttDef(a) = one("0|ATTDEF|10|1.0|1|x|2|TAG|70|0|73|3").kind else { panic!("an attribute definition") };
+    assert_eq!(a.text.valign, 0, "a field length alone is no alignment");
+    let EntityKind::Text(t) = one("0|TEXT|10|1.0|1|x|73|3|74|1").kind else { panic!("text") };
+    assert_eq!(t.valign, 3, "TEXT has its alignment in 73");
+}
+
+#[test]
+fn entity_groups_written_after_the_entitys_own_marker() {
+    // An AcDbEntity subclass without a layer: the run of entity codes after the LINE's own marker
+    // is the entity's.
+    let c = one("0|LINE|5|2A|100|AcDbEntity|100|AcDbLine|8|Walls|62|1|370|50|10|1.0|20|2.0|48|9.0").common;
+    assert_eq!((c.layer.as_str(), c.color, c.lineweight), ("Walls", Color::Index(1), Lineweight::Hundredths(50)));
+    assert_eq!(c.ltscale, 1.0, "the run ends at the entity's own first group");
+    // With a layer in AcDbEntity, nothing after the entity's marker is taken.
+    let c = one("0|MTEXT|100|AcDbEntity|8|A|100|AcDbMText|62|3|48|7.0").common;
+    assert_eq!((c.layer.as_str(), c.color, c.ltscale), ("A", Color::ByLayer, 1.0));
+}
+
+#[test]
+fn an_attributes_justification_is_not_its_multiline_header() {
+    // A left-justified multiline attribute writes no 72 of its own; the 72 and 11 of its
+    // AcDbAttribute subclass are the multiline header.
+    let EntityKind::AttDef(a) = one(
+        "0|ATTDEF|100|AcDbText|10|1.0|20|2.0|40|2.5|1|x|100|AcDbAttributeDefinition|280|0|3|p|2|TAG|70|0|74|0|280|0|71|4|72|1|11|9.0|21|9.0|31|0.0|101|Embedded Object|10|1.0|1|x",
+    )
+    .kind
+    else {
+        panic!("an attribute definition")
+    };
+    assert_eq!((a.text.halign, a.text.valign, a.text.align, a.text.generation), (0, 0, None, 0));
+    // The text's own justification still counts.
+    let EntityKind::AttDef(a) = one("0|ATTDEF|100|AcDbText|10|1.0|1|x|72|2|11|5.0|100|AcDbAttributeDefinition|2|TAG|74|3").kind else {
+        panic!("an attribute definition")
+    };
+    assert_eq!((a.text.halign, a.text.valign, a.text.align), (2, 3, Some([5.0, 0.0, 0.0])));
 }
