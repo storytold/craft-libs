@@ -165,6 +165,20 @@ fn paint_kind_tile(painter: &ContentPainterCx<'_>, rect: Rect, kind: LayerKind) 
     }
 }
 
+/// The square in the bottom corner of the thumbnail `rect` that a badge fills.
+fn badge_area(rect: Rect) -> Rect {
+    let badge = rect.width().min(rect.height()) * BADGE_SHARE;
+    Rect::from_min_size(pos2(rect.right() - badge, rect.bottom() - badge), vec2(badge, badge))
+}
+
+/// The app's badge on a layer thumbnail: its icon on the scrim.
+fn paint_thumb_badge(painter: &ContentPainterCx<'_>, rect: Rect, icon: IconId) {
+    let area = badge_area(rect);
+    painter.surface(area, SurfaceKind::Scrim, Corners::None);
+    let glyph = area.shrink(area.width() * CROSS_INSET_SHARE);
+    painter.icon(glyph, &IconSpec::svg(icon).ink(SurfaceKind::Scrim.ink()));
+}
+
 /// The cross of a disabled mask and the badge that names a layer or vector mask.
 fn paint_mask_marks(painter: &ContentPainterCx<'_>, rect: Rect, mask: &MaskInfo, badges: bool) {
     let side = rect.width().min(rect.height());
@@ -175,8 +189,8 @@ fn paint_mask_marks(painter: &ContentPainterCx<'_>, rect: Rect, mask: &MaskInfo,
         painter.painter.line_segment([inner.right_top(), inner.left_bottom()], stroke);
     }
     if badges {
-        let badge = side * BADGE_SHARE;
-        let area = Rect::from_min_size(pos2(rect.right() - badge, rect.bottom() - badge), vec2(badge, badge));
+        let area = badge_area(rect);
+        let badge = area.width();
         painter.surface(area, SurfaceKind::Scrim, Corners::None);
         let ink = painter.ink_on(SurfaceKind::Scrim);
         let glyph = Stroke::new(badge * MARK_WIDTH_SHARE * 2.0, ink);
@@ -217,10 +231,13 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
 
     if size != ThumbSize::None && !compact {
         let host = cx.thumbs;
-        let (layer, kind) = (id.clone(), info.kind);
+        let (layer, kind, badge) = (id.clone(), info.kind, info.thumb_badge.clone());
         row = row.thumb(size, move |painter, rect| {
             if !paint_picture(host, &LayerThumb::pixels(layer, contents), painter, rect, &PicturePaint::default()) {
                 paint_kind_tile(painter, rect, kind);
+            }
+            if let Some(icon) = badge {
+                paint_thumb_badge(painter, rect, icon);
             }
         });
         let frame = info.kind == LayerKind::Frame;

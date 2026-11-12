@@ -153,6 +153,9 @@ pub struct LayerInfo {
     /// Whether Cmd/Ctrl-click on the layer thumbnail loads it as a selection; false for the
     /// Background, where Cmd-click is a plain click.
     pub thumb_loads_selection: bool,
+    /// A badge in the layer thumbnail's corner on the scrim, as the mask badges: PhotoCraft's smart
+    /// object and shape marks. The app names it in [`description`](Self::description).
+    pub thumb_badge: Option<IconId>,
     /// The app's own words, added to the row's description for a screen reader.
     pub description: Option<String>,
 }
@@ -183,6 +186,7 @@ impl LayerInfo {
             smart_filters_enabled: true,
             warning: None,
             thumb_loads_selection: true,
+            thumb_badge: None,
             description: None,
         }
     }
