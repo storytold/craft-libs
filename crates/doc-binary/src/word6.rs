@@ -31,8 +31,9 @@
 //!   others were identified against Word. See [`chp`] and [`pap`].
 //! - A font table entry is a size byte (the entry's length − 1), a flags byte, a 2-byte weight, the
 //!   charset byte, one more byte, then the name in 8-bit characters.
-//! - The stylesheet (pair 1) has the Word 97 shape with smaller parts: a 14-byte header whose
-//!   first two words are the style count and the size of a style's fixed part (8, Word 97: 10);
+//! - The stylesheet (pair 1) has the Word 97 shape with smaller parts: a u16 header size (14),
+//!   then a header of that many bytes whose first two words are the style count and the size of
+//!   a style's fixed part (8, Word 97: 10);
 //!   then per style a u16 size (0: an empty slot) and that many bytes: the fixed part (sti, then
 //!   kind and base style, then UPX count and next style, then a size), the name (a length byte,
 //!   8-bit characters, a 0), and the UPXs, each a u16 size and its bytes, padded to even. A
@@ -258,6 +259,13 @@ pub(crate) fn content(word: &[u8], fib: &Fib6) -> Result<Content, DocbinError> {
         _ => 0,
     };
     let code_pages = if windows { code_page_runs(&chp_runs, &pap_runs, &facts, &fonts, default_code_page) } else { Vec::new() };
+    // shortcut: East Asian (lead and trail byte) text is refused, as all Word 6.0/95 files were
+    // before; read it a character at a time when the piece walk can decode byte pairs.
+    let east_asian = || DocbinError::NotWord("Word 6.0/95 text in an East Asian code page is not read yet".into());
+    if craft_codepage::is_multibyte_code_page(default_code_page) || code_pages.iter().any(|r| craft_codepage::is_multibyte_code_page(r.code_page)) {
+        return Err(east_asian());
+    }
+    let multibyte_piece = std::cell::Cell::new(false);
     let text = Word6Text { wide: fib.wide, default_code_page, code_pages };
     let pieces = if fib.complex {
         let (fc, lcb) = fib.pair(PAIR_CLX).ok_or_else(|| DocbinError::Malformed("the fast-saved file has no piece table".into()))?;
@@ -267,12 +275,20 @@ pub(crate) fn content(word: &[u8], fib: &Fib6) -> Result<Content, DocbinError> {
             if !windows || prm & 1 == 0 {
                 return None;
             }
-            last_font(prcs.get(usize::from(prm >> 1))?).and_then(|f| font_code_page(&fonts, f))
+            let cp = last_font(prcs.get(usize::from(prm >> 1))?).and_then(|f| font_code_page(&fonts, f));
+            if cp.is_some_and(craft_codepage::is_multibyte_code_page) {
+                multibyte_piece.set(true);
+            }
+            cp
         };
         // The Prcs then carry Word 97 sprms, as the CHPXs and PAPXs do: the walk applies their
         // character sprms to the piece's text and their paragraph sprms to the paragraph whose mark
         // the piece holds.
-        PieceTable::parse_word6(word, fc, lcb, text, piece_code_page, translate_prc)?
+        let table = PieceTable::parse_word6(word, fc, lcb, text, piece_code_page, translate_prc)?;
+        if multibyte_piece.get() {
+            return Err(east_asian());
+        }
+        table
     } else {
         // Word reads no more characters than the text's byte range (fcMin..fcMac) holds, one byte
         // each or two for UTF-16, whatever the character count says.

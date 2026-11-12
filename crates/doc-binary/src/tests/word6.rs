@@ -274,6 +274,19 @@ fn a_runs_font_charset_chooses_its_code_page() {
     assert_eq!(texts(&d), ["Da Да"]);
 }
 
+/// Text in an East Asian code page (a Japanese font, charset 128: Shift-JIS) is refused, not
+/// read a byte at a time into replacement characters (review of wordcraft#6345).
+#[test]
+fn east_asian_text_is_refused_not_lost() {
+    let fonts: &[(u8, &str)] = &[(0, "Times New Roman"), (128, "MS Mincho")];
+    let runs: &[(u32, u32, &[u8])] = &[(0, 2, &[0x5D, 0x01, 0x00]), (2, 3, &[])];
+    let d = Doc6 { text: b"\x93\xfa\r", fonts, runs, ..Default::default() };
+    assert!(matches!(read(&word6_file(&d)), Err(DocbinError::NotWord(e)) if e.contains("East Asian")));
+    // The same file in a Western font still opens.
+    let d = Doc6 { text: b"\x93\xfa\r", fonts, runs: &[], ..Default::default() };
+    assert_eq!(texts(&d).len(), 1);
+}
+
 #[test]
 fn the_font_sprm_is_found_after_other_sprms() {
     // As in real files: bold-like toggles, a size, a picture anchor's length-prefixed sprm.
@@ -300,15 +313,6 @@ fn an_unknown_sprm_leaves_font_0() {
     let runs: &[(u32, u32, &[u8])] = &[(0, 2, &[0x99, 0x5D, 0x01, 0x00]), (2, 3, &[])];
     let d = Doc6 { text, fonts: FONTS, runs, ..Default::default() };
     assert_eq!(texts(&d), ["Äà"]);
-}
-
-#[test]
-fn east_asian_font_bytes_read_as_replacement_characters() {
-    // A multibyte code page can't be read one byte per CP: ASCII stays, the rest is U+FFFD.
-    let text = b"ab\x82\xA0\r";
-    let runs: &[(u32, u32, &[u8])] = &[(0, 4, &[0x5D, 0x01, 0x00]), (4, 5, &[])];
-    let d = Doc6 { text, fonts: &[(0, "Arial"), (128, "MS Mincho")], runs, ..Default::default() };
-    assert_eq!(texts(&d), ["ab\u{FFFD}\u{FFFD}"]);
 }
 
 #[test]
