@@ -1,4 +1,5 @@
-//! HTML.
+//! HTML documents (feature `flow`): read into and written from the craft-flow model and a
+//! craft-wordmodel `Document`.
 //!
 //! Import is a tolerant tag-soup reader (no DOM): a tokenizer plus a stack of open elements with
 //! HTML's implicit closes for `p`, `li`, `tr`, `td`/`th` and headings. It understands `p`, `div`,
@@ -18,12 +19,13 @@
 
 use std::sync::Arc;
 
-use wordcraft_doc::props::LineSpacing;
-use wordcraft_doc::props::VAlign;
-use wordcraft_doc::{Align, Document};
+use craft_wordmodel::props::LineSpacing;
+use craft_wordmodel::props::VAlign;
+use craft_wordmodel::{Align, Document};
 
-use crate::model::{
-    self, Cell, FBlock, FTable, Flow, Fmt, Inline, Kind, ListInfo, Meta, Para, Spacing, base64_encode, data_uri, make_img, mime_of, parse_color,
+use craft_flow::{
+    self as model, Cell, FBlock, FTable, Flow, Fmt, Inline, Kind, ListInfo, Meta, Para, Spacing, base64_encode, data_uri, make_img, mime_of,
+    parse_color,
 };
 
 mod builder;

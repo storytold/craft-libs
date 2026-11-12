@@ -71,7 +71,7 @@ fn fmt_tags(f: &Fmt) -> (String, Vec<&'static str>) {
     let mut open = String::new();
     let mut close: Vec<&str> = Vec::new();
     // A script or other non-web target is written as plain text (`is_safe_href`).
-    if let Some(l) = f.link.as_deref().filter(|l| wordcraft_doc::link::is_safe_href(l)) {
+    if let Some(l) = f.link.as_deref().filter(|l| craft_wordmodel::link::is_safe_href(l)) {
         open.push_str(&format!("<a href=\"{}\">", esc(l)));
         close.push("</a>");
     }
@@ -175,9 +175,9 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
                 }
             }
             // No picture to show: the browser shows the alt text in its place.
-            Inline::Figure(alt) | Inline::Chart(crate::model::Chart { alt, .. }) => o.push_str(&format!("<img alt=\"{}\">", esc(alt))),
+            Inline::Figure(alt) | Inline::Chart(craft_flow::Chart { alt, .. }) => o.push_str(&format!("<img alt=\"{}\">", esc(alt))),
             // MathML, which browsers, Word and LibreOffice show as an equation (#816).
-            Inline::Equation { linear, display } => o.push_str(&crate::mathml::linear_to_mathml(linear, *display)),
+            Inline::Equation { linear, display } => o.push_str(&craft_math::mathml::linear_to_mathml(linear, *display)),
         }
     }
     o

@@ -459,8 +459,8 @@ fn important_last(css: &str) -> String {
 
 /// The borders a cell's CSS gives it (`border`, `border-top`…: style, width and colour in any
 /// order; `windowtext` is the automatic colour). `None` when it states none.
-fn cell_borders(css: &str) -> Option<wordcraft_doc::props::Borders> {
-    use wordcraft_doc::props::{Border, BorderStyle, Borders};
+fn cell_borders(css: &str) -> Option<craft_wordmodel::props::Borders> {
+    use craft_wordmodel::props::{Border, BorderStyle, Borders};
     let mut b = Borders::default();
     let mut any = false;
     for (k, v) in decls(css) {
@@ -681,7 +681,7 @@ impl<'r> Builder<'r> {
             // `<p>&nbsp;</p>`: an empty paragraph on purpose, whose line is as high as the
             // space's formatting makes it.
             if let Some(Inline::Text(_, f)) = p.inlines.first() {
-                p.mark = Some(Box::new(crate::model::char_props(f)));
+                p.mark = Some(Box::new(craft_flow::char_props(f)));
             }
             p.inlines.clear();
             self.para_cont = false;
@@ -850,7 +850,7 @@ impl<'r> Builder<'r> {
                     let borderless = !t.bordered;
                     // Keep at most MAX_ROWS rows (the model drops the rest anyway): bounds the
                     // O(rows × rowspan) work of `insert_covered` on a table of millions of `<tr>`.
-                    let rows: Vec<_> = t.rows.into_iter().filter(|r| !r.is_empty()).take(wordcraft_doc::table::MAX_ROWS).collect();
+                    let rows: Vec<_> = t.rows.into_iter().filter(|r| !r.is_empty()).take(craft_wordmodel::table::MAX_ROWS).collect();
                     let mut ft = FTable { rows, widths: Vec::new(), borderless, extra: None, kept: None, wrap: None };
                     if !ft.rows.is_empty() {
                         ft.insert_covered();
@@ -1019,10 +1019,10 @@ impl<'r> Builder<'r> {
             "sub" => fmt.sub = true,
             "small" => fmt.size = Some(fmt.size.map_or(10.0, |s| (s * 0.833).max(1.0))),
             "big" => fmt.size = Some(fmt.size.map_or(14.0, |s| (s * 1.2).min(1638.0))),
-            "mark" => fmt.background = Some(wordcraft_doc::Rgb(255, 255, 0)),
+            "mark" => fmt.background = Some(craft_wordmodel::Rgb(255, 255, 0)),
             "font" => apply_font_attributes(attrs, &mut fmt),
             "a" => {
-                if let Some(href) = attr(attrs, "href").filter(|h| wordcraft_doc::link::is_safe_href(h)) {
+                if let Some(href) = attr(attrs, "href").filter(|h| craft_wordmodel::link::is_safe_href(h)) {
                     fmt.link = model::kept_link(href.trim());
                 }
             }
@@ -1046,7 +1046,7 @@ impl<'r> Builder<'r> {
             // A page's headings are bold, black (unless they inherit a colour) and sized as
             // browsers show them.
             fmt.bold = true;
-            fmt.color.get_or_insert(wordcraft_doc::Rgb(0, 0, 0));
+            fmt.color.get_or_insert(craft_wordmodel::Rgb(0, 0, 0));
             fmt.size = PAGE_HEADING_SIZES.get(usize::from(n.clamp(1, 6)) - 1).copied();
         }
         apply_style(css, &mut fmt, &mut align, &mut preserve, &mut page_break, &mut page_break_after);

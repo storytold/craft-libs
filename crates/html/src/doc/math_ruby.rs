@@ -3,8 +3,8 @@ use super::lexer::{Lexer, Tok};
 
 /// A `<math>` element (#816): its tokens up to the matching end tag, as a tree. Nesting and size
 /// are bounded; an unclosed element ends with the input.
-pub(super) fn read_math(lx: &mut Lexer, name: String, attrs: Vec<(String, String)>) -> crate::mathml::El {
-    use crate::mathml::{El, Item, MAX_NODES, local};
+pub(super) fn read_math(lx: &mut Lexer, name: String, attrs: Vec<(String, String)>) -> craft_math::mathml::El {
+    use craft_math::mathml::{El, Item, MAX_NODES, local};
     let mut stack: Vec<El> = vec![El { name, attrs, children: Vec::new() }];
     let mut count = 0usize;
     let close = |stack: &mut Vec<El>| {
@@ -32,7 +32,7 @@ pub(super) fn read_math(lx: &mut Lexer, name: String, attrs: Vec<(String, String
             }
             Tok::Start { name, attrs, self_close } => {
                 let el = El { name, attrs, children: Vec::new() };
-                if self_close || stack.len() > wordcraft_doc::math::MAX_DEPTH {
+                if self_close || stack.len() > craft_wordmodel::math::MAX_DEPTH {
                     if let Some(top) = stack.last_mut() {
                         top.children.push(Item::El(el));
                     }
@@ -63,7 +63,7 @@ pub(super) fn read_math(lx: &mut Lexer, name: String, attrs: Vec<(String, String
 /// Skip tokens (starting with `first`) up to and including the `</math>` that closes the element
 /// being read; nested `<math>` elements are counted. An unclosed element ends with the input.
 fn skip_math(lx: &mut Lexer, first: Tok) {
-    use crate::mathml::local;
+    use craft_math::mathml::local;
     let mut depth = 0usize;
     let mut t = Some(first);
     while let Some(tok) = t {
@@ -122,11 +122,11 @@ pub(super) fn read_ruby(lx: &mut Lexer) -> RubyText {
     let mut count = 0usize;
     while count < MAX_TOKENS {
         count += 1;
-        let start = lx.pos;
+        let start = lx.pos();
         let Some(t) = lx.next() else { break };
         if nested == 0 && ends_ruby(&t) {
             // The boundary ends the element: give the token back to the main reader.
-            lx.pos = start;
+            lx.set_pos(start);
             break;
         }
         match t {

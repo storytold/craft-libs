@@ -29,7 +29,7 @@ pub(super) fn parse_in(s: &str, images: ImageLoader, page: bool) -> Flow {
     };
     // The lexer's offsets (a style element's text is cut out by them) are into the normalized text.
     let s: &str = &normalized;
-    let mut lx = Lexer { s, pos: 0 };
+    let mut lx = Lexer::new(s);
     let mut b = Builder::new(images, page);
     let mut guard = 0usize;
     while let Some(t) = lx.next() {
@@ -41,10 +41,10 @@ pub(super) fn parse_in(s: &str, images: ImageLoader, page: bool) -> Flow {
             Tok::Text(t) => b.text(&t),
             Tok::Start { name, attrs, self_close } => {
                 b.close_head_for_start(&name);
-                if crate::mathml::local(&name) == "math" && !self_close {
+                if craft_math::mathml::local(&name) == "math" && !self_close {
                     let el = read_math(&mut lx, name, attrs);
                     if !b.in_head()
-                        && let Some((linear, display)) = crate::mathml::read(&el)
+                        && let Some((linear, display)) = craft_math::mathml::read(&el)
                     {
                         b.start_para().inlines.push(Inline::Equation { linear, display });
                     }
@@ -58,7 +58,7 @@ pub(super) fn parse_in(s: &str, images: ImageLoader, page: bool) -> Flow {
                     continue;
                 }
                 if matches!(name.as_str(), "script" | "style" | "noscript" | "template" | "textarea") && !self_close {
-                    let from = lx.pos;
+                    let from = lx.pos();
                     let to = lx.skip_past_end_tag(&name);
                     if name == "style" {
                         parse_sheet(s.get(from..to).unwrap_or(""), &mut b.sheet);
@@ -114,7 +114,7 @@ pub fn import_page(s: &str, images: ImageLoader) -> Document {
 
 /// [`import_page`] onto `page` (its size and margins), which tables size to: HTML gives no page
 /// size, so the caller picks it (the region's paper, #1381).
-pub fn import_on(s: &str, images: ImageLoader, page: &wordcraft_doc::SectionProps) -> Document {
+pub fn import_on(s: &str, images: ImageLoader, page: &craft_wordmodel::SectionProps) -> Document {
     model::begin_import();
     model::to_doc_in(&parse_in(s, images, true), page.clone())
 }

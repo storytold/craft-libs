@@ -10,8 +10,8 @@ fn numeric_entity_rejects_sign() {
 #[test]
 fn important_declarations_win_the_cascade() {
     let color = |html: &str| fmt_of(paras(&parse(html))[0]).color;
-    let red = Some(wordcraft_doc::Rgb(255, 0, 0));
-    let blue = Some(wordcraft_doc::Rgb(0, 0, 255));
+    let red = Some(craft_wordmodel::Rgb(255, 0, 0));
+    let blue = Some(craft_wordmodel::Rgb(0, 0, 255));
     assert_eq!(color("<style>p { color: red }</style><p style='color: blue'>x</p>"), blue);
     assert_eq!(color("<style>p { color: red !important }</style><p style='color: blue'>x</p>"), red);
     assert_eq!(color("<style>p { color: red !important }</style><p style='color: blue !important'>x</p>"), blue);
@@ -39,9 +39,9 @@ fn texts(f: &Flow) -> Vec<String> {
 }
 
 fn table_style(html: &str) -> Option<String> {
-    let doc = crate::model::to_doc(&parse(html));
+    let doc = craft_flow::to_doc(&parse(html));
     doc.body.iter().find_map(|b| match &**b {
-        wordcraft_doc::Block::Table(t) => Some(t.props.style.clone().unwrap_or_default()),
+        craft_wordmodel::Block::Table(t) => Some(t.props.style.clone().unwrap_or_default()),
         _ => None,
     })
 }
@@ -67,7 +67,7 @@ fn borderless_tables_export_without_cell_borders() {
         ("<table><tr><td>A<td>B</table>", false),
         ("<table border=1><tr><td>A<td>B</table>", true),
     ] {
-        let out = export(&crate::model::to_doc(&parse(src)));
+        let out = export(&craft_flow::to_doc(&parse(src)));
         assert_eq!(out.contains("border:1px"), grid, "{src}: {out}");
         assert_eq!(table_style(&out).as_deref(), Some(if grid { "TableGrid" } else { "" }), "{src}");
         assert!(out.contains(">A</td>") && out.contains(">B</td>"), "{out}");
@@ -157,7 +157,7 @@ fn styles_and_links() {
     let f = parse("<p style='text-align:center'><span style=\"color:#ff0000;font-weight:700\">red</span> <a href=\"http://x\">l</a><br>n</p>");
     let FBlock::Para(p) = &f.blocks[0] else { panic!() };
     assert_eq!(p.align, Some(Align::Center));
-    assert!(matches!(&p.inlines[0], Inline::Text(t, f) if t == "red" && f.bold && f.color == Some(wordcraft_doc::Rgb(255,0,0))));
+    assert!(matches!(&p.inlines[0], Inline::Text(t, f) if t == "red" && f.bold && f.color == Some(craft_wordmodel::Rgb(255,0,0))));
     assert!(p.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t == "l" && f.link.as_deref() == Some("http://x"))));
     assert!(p.text().ends_with("l\nn"));
 }
@@ -369,14 +369,14 @@ fn font_names_are_written_as_css_strings() {
 
 /// A document that reads "I read " then a phonetic guide over `base`, then " daily.".
 fn ruby_doc(base: &str, ruby: &str) -> Document {
-    let props = wordcraft_doc::CharProps::default();
-    let mut p = wordcraft_doc::Paragraph::with_text("I read ", props.clone());
+    let props = craft_wordmodel::CharProps::default();
+    let mut p = craft_wordmodel::Paragraph::with_text("I read ", props.clone());
     let n = p.len();
-    p.insert_object(n, crate::model::ruby_object(base.into(), ruby.into(), 20.0), &props).unwrap();
+    p.insert_object(n, craft_flow::ruby_object(base.into(), ruby.into(), 20.0), &props).unwrap();
     let n = p.len();
     p.insert_text(n, " daily.", &props).unwrap();
     let mut d = Document::new();
-    d.body = vec![wordcraft_doc::para_block(p)];
+    d.body = vec![craft_wordmodel::para_block(p)];
     d
 }
 
@@ -394,8 +394,8 @@ fn ruby_of(f: &Flow) -> Option<(String, String)> {
 /// The first document ruby: its base text and reading.
 fn doc_ruby(d: &Document) -> Option<(String, String)> {
     d.body.iter().find_map(|b| match &**b {
-        wordcraft_doc::Block::Para(p) => p.objects.iter().find_map(|o| match o {
-            wordcraft_doc::InlineObject::Ruby { base, ruby, .. } => Some((base.clone(), ruby.clone())),
+        craft_wordmodel::Block::Para(p) => p.objects.iter().find_map(|o| match o {
+            craft_wordmodel::InlineObject::Ruby { base, ruby, .. } => Some((base.clone(), ruby.clone())),
             _ => None,
         }),
         _ => None,
@@ -403,10 +403,10 @@ fn doc_ruby(d: &Document) -> Option<(String, String)> {
 }
 
 /// The first document ruby: base size, ruby size, raise and alignment.
-fn doc_ruby_attrs(d: &Document) -> Option<(f32, f32, f32, wordcraft_doc::para::RubyAlign)> {
+fn doc_ruby_attrs(d: &Document) -> Option<(f32, f32, f32, craft_wordmodel::para::RubyAlign)> {
     d.body.iter().find_map(|b| match &**b {
-        wordcraft_doc::Block::Para(p) => p.objects.iter().find_map(|o| match o {
-            wordcraft_doc::InlineObject::Ruby { base_size, size, raise, align, .. } => Some((*base_size, *size, *raise, *align)),
+        craft_wordmodel::Block::Para(p) => p.objects.iter().find_map(|o| match o {
+            craft_wordmodel::InlineObject::Ruby { base_size, size, raise, align, .. } => Some((*base_size, *size, *raise, *align)),
             _ => None,
         }),
         _ => None,
@@ -432,7 +432,7 @@ fn ruby_imports_with_its_surrounding_text() {
     assert!(matches!(&p.inlines[0], Inline::Text(t, _) if t == "I read "), "{:?}", p.inlines);
     assert!(matches!(p.inlines.last(), Some(Inline::Text(t, _)) if t == " daily."), "{:?}", p.inlines);
     // One document object, holding the base text and the reading.
-    assert_eq!(doc_ruby(&crate::model::to_doc(&f)), Some(("漢字".into(), "かんじ".into())));
+    assert_eq!(doc_ruby(&craft_flow::to_doc(&f)), Some(("漢字".into(), "かんじ".into())));
 }
 
 #[test]
@@ -442,19 +442,19 @@ fn ruby_rb_and_rp_fallbacks_import_as_one_guide() {
     let f = parse("<p><ruby><rb>漢</rb><rb>字</rb><rp>(</rp><rt>かんじ</rt><rp>)</rp></ruby></p>");
     assert_eq!(ruby_of(&f), Some(("漢字".into(), "かんじ".into())));
     assert_eq!(texts(&f), vec!["NormalNone:漢字"]);
-    assert_eq!(doc_ruby(&crate::model::to_doc(&f)), Some(("漢字".into(), "かんじ".into())));
+    assert_eq!(doc_ruby(&craft_flow::to_doc(&f)), Some(("漢字".into(), "かんじ".into())));
 }
 
 #[test]
 fn ruby_import_uses_the_phonetic_guide_defaults() {
     // HTML states no alignment, size or raise: the Phonetic Guide's own defaults over a
     // 20 pt run (half the base size, raised clear of the base text, centred)…
-    let d = crate::html::import("<p style='font-size:20pt'><ruby>漢字<rt>かんじ</rt></ruby></p>");
+    let d = crate::doc::import("<p style='font-size:20pt'><ruby>漢字<rt>かんじ</rt></ruby></p>");
     let Some((base_size, size, raise, align)) = doc_ruby_attrs(&d) else { panic!("no ruby") };
     assert_eq!((base_size, size, align.ooxml()), (20.0, 10.0, "center"));
     assert!((raise - 18.0).abs() < 0.001, "{raise}");
     // …and the guide's 10.5 pt fallback base size when the source states none.
-    let d = crate::html::import("<p><ruby>漢字<rt>かんじ</rt></ruby></p>");
+    let d = crate::doc::import("<p><ruby>漢字<rt>かんじ</rt></ruby></p>");
     let Some((base_size, size, raise, _)) = doc_ruby_attrs(&d) else { panic!("no ruby") };
     assert_eq!((base_size, size), (10.5, 5.0));
     assert!((raise - 9.4).abs() < 0.001, "{raise}");
@@ -464,19 +464,19 @@ fn ruby_import_uses_the_phonetic_guide_defaults() {
 fn ruby_survives_an_html_round_trip() {
     let html = export(&ruby_doc("漢字", "かんじ"));
     assert_eq!(ruby_of(&parse(&html)), Some(("漢字".into(), "かんじ".into())));
-    let back = crate::html::import(&html);
+    let back = crate::doc::import(&html);
     assert_eq!(doc_ruby(&back), Some(("漢字".into(), "かんじ".into())));
     assert_eq!(back.plain_text(Default::default()), "I read 漢字 daily.");
 }
 
 #[test]
 fn ruby_keeps_the_run_formatting() {
-    let props = wordcraft_doc::CharProps { bold: Some(true), ..Default::default() };
-    let mut p = wordcraft_doc::Paragraph::with_text("I read ", props.clone());
+    let props = craft_wordmodel::CharProps { bold: Some(true), ..Default::default() };
+    let mut p = craft_wordmodel::Paragraph::with_text("I read ", props.clone());
     let n = p.len();
-    p.insert_object(n, crate::model::ruby_object("漢字".into(), "かんじ".into(), 20.0), &props).unwrap();
+    p.insert_object(n, craft_flow::ruby_object("漢字".into(), "かんじ".into(), 20.0), &props).unwrap();
     let mut d = Document::new();
-    d.body = vec![wordcraft_doc::para_block(p)];
+    d.body = vec![craft_wordmodel::para_block(p)];
     assert!(export(&d).contains("<strong><ruby>漢字<rt>かんじ</rt></ruby></strong>"), "{}", export(&d));
     // Importing it back keeps the formatting for the base text and the reading.
     let f = parse("<p><strong><ruby>漢字<rt>かんじ</rt></ruby></strong></p>");
@@ -533,7 +533,7 @@ fn css_important_casing_and_spacing() {
     assert_eq!(p.align, Some(Align::Center));
     match &p.inlines[0] {
         Inline::Text(_, fmt) => {
-            assert_eq!(fmt.color, Some(wordcraft_doc::props::Rgb(0xFF, 0x00, 0x00)));
+            assert_eq!(fmt.color, Some(craft_wordmodel::props::Rgb(0xFF, 0x00, 0x00)));
             assert_eq!(fmt.size, Some(16.0));
             assert!(fmt.bold);
         }
@@ -548,8 +548,8 @@ fn table_cell_vertical_alignment() {
     assert_eq!(t.rows[0][0].valign, Some(VAlign::Top));
     assert_eq!(t.rows[0][1].valign, Some(VAlign::Center));
     assert_eq!(t.rows[0][2].valign, Some(VAlign::Bottom));
-    let doc = crate::model::to_doc(&f);
-    let wordcraft_doc::Block::Table(dt) = &*doc.body[0] else { panic!() };
+    let doc = craft_flow::to_doc(&f);
+    let craft_wordmodel::Block::Table(dt) = &*doc.body[0] else { panic!() };
     assert_eq!(dt.rows[0].cells[0].props.valign, Some(VAlign::Top));
     assert_eq!(dt.rows[0].cells[1].props.valign, Some(VAlign::Center));
     assert_eq!(dt.rows[0].cells[2].props.valign, Some(VAlign::Bottom));
@@ -595,7 +595,7 @@ fn font_size_at_the_integer_limits_does_not_overflow() {
 #[test]
 fn empty_comments_do_not_swallow_the_rest() {
     for html in ["<p>a<!-->b</p><p>c</p>", "<p>a<!--->b</p><p>c</p>"] {
-        let doc = crate::html::import(html);
+        let doc = crate::doc::import(html);
         assert_eq!(doc.plain_text(Default::default()), "ab\nc", "{html}");
     }
 }
@@ -616,7 +616,7 @@ fn style_sheet_rules_apply_in_cascade_order() {
     );
     let ps = paras(&f);
     let (plain, big, inline, digits) = (fmt_of(ps[0]), fmt_of(ps[1]), fmt_of(ps[2]), fmt_of(ps[3]));
-    assert_eq!((plain.color, plain.size, plain.bold, plain.italic), (Some(wordcraft_doc::Rgb(0, 255, 0)), Some(10.0), false, false));
+    assert_eq!((plain.color, plain.size, plain.bold, plain.italic), (Some(craft_wordmodel::Rgb(0, 255, 0)), Some(10.0), false, false));
     assert_eq!((big.size, big.bold), (Some(20.0), true));
     assert_eq!(inline.size, Some(8.0));
     assert_eq!(ps[3].align, Some(Align::Center));
@@ -662,7 +662,7 @@ fn a_page_opens_as_word_opens_one() {
     let FBlock::Para(cp) = &t.rows[0][0].blocks[0] else { panic!() };
     assert_eq!(cp.spacing.line, Some(LineSpacing::Multiple(1.0)));
     let head = fmt_of(ps[1]);
-    assert_eq!((head.bold, head.size, head.color), (true, Some(24.0), Some(wordcraft_doc::Rgb(0, 0, 0))));
+    assert_eq!((head.bold, head.size, head.color), (true, Some(24.0), Some(craft_wordmodel::Rgb(0, 0, 0))));
     // A colour the heading inherits stays.
     // A generic family names a face on a page; pasted text keeps the document's font.
     let generic = parse_in("<p style='font-family: sans-serif'>a</p><p style='font-family: serif'>b</p>", &|_| None, true);
@@ -670,7 +670,7 @@ fn a_page_opens_as_word_opens_one() {
     assert_eq!(fonts, [Some("Arial".to_string()), Some(PAGE_FONT.to_string())]);
     assert_eq!(fmt_of(paras(&parse("<p style='font-family: sans-serif'>a</p>"))[0]).font, None);
     let inherited = parse_in("<body style='color: #000080'><h1>Head</h1></body>", &|_| None, true);
-    assert_eq!(fmt_of(paras(&inherited)[0]).color, Some(wordcraft_doc::Rgb(0, 0, 0x80)));
+    assert_eq!(fmt_of(paras(&inherited)[0]).color, Some(craft_wordmodel::Rgb(0, 0, 0x80)));
     // Automatic spacing where a p or heading leaves its margins out (layout drops it at the
     // top of the page and of a cell).
     let auto = |p: &Para| (p.spacing.before_auto, p.spacing.after_auto, p.spacing.before, p.spacing.after);
@@ -684,7 +684,7 @@ fn a_page_opens_as_word_opens_one() {
     // The document says so, and the empty paragraph's mark keeps its size.
     let d = model::to_doc(&f);
     let props = |i: usize| match &*d.body[i] {
-        wordcraft_doc::Block::Para(p) => p.clone(),
+        craft_wordmodel::Block::Para(p) => p.clone(),
         b => panic!("{b:?}"),
     };
     assert_eq!((props(0).props.space_before_auto, props(0).props.space_after_auto), (Some(true), Some(true)));
@@ -719,16 +719,16 @@ fn cells_give_their_columns_widths() {
 
 #[test]
 fn cells_take_their_css_borders() {
-    use wordcraft_doc::props::{Border, BorderStyle};
+    use craft_wordmodel::props::{Border, BorderStyle};
     let f = parse(
         "<style>td.b { border-top: solid windowtext 1px; border-bottom: 2pt double #ff0000; border-left: none; border-right: 0px solid; vertical-align: bottom }</style><table><tr><td class=b>a</td><td>b</td></tr></table>",
     );
     let FBlock::Table(t) = &f.blocks[0] else { panic!() };
     // The style sheet's other cell properties apply too.
-    assert_eq!(t.rows[0][0].valign, Some(wordcraft_doc::props::VAlign::Bottom));
+    assert_eq!(t.rows[0][0].valign, Some(craft_wordmodel::props::VAlign::Bottom));
     let b = t.rows[0][0].borders.expect("borders");
     assert_eq!(b.top, Some(Border::single(0.75)));
-    assert_eq!(b.bottom, Some(Border { style: BorderStyle::Double, width: 2.0, color: Some(wordcraft_doc::Rgb(255, 0, 0)), space: 0.0 }));
+    assert_eq!(b.bottom, Some(Border { style: BorderStyle::Double, width: 2.0, color: Some(craft_wordmodel::Rgb(255, 0, 0)), space: 0.0 }));
     assert_eq!(b.left.map(|l| l.style), Some(BorderStyle::None));
     // A border of no width is none (OOXML has no zero-width line).
     assert_eq!(b.right.map(|r| r.style), Some(BorderStyle::None));
@@ -745,7 +745,7 @@ fn style_sheet_edge_cases() {
     );
     let ps = paras(&f);
     // A rule right after statement at-rules still applies.
-    assert_eq!(fmt_of(ps[0]).color, Some(wordcraft_doc::Rgb(0, 0, 255)));
+    assert_eq!(fmt_of(ps[0]).color, Some(craft_wordmodel::Rgb(0, 0, 255)));
     // The body's margins aren't the paragraphs' indents.
     assert_eq!((ps[1].spacing.left, ps[1].spacing.before), (None, None));
     // Bare numbers, percentages and keywords state no margin: automatic spacing stays.
@@ -753,7 +753,7 @@ fn style_sheet_edge_cases() {
     // The `style` attribute wins even over a sheet with more declarations than are read.
     let many = (0..600).map(|i| format!("x-{i}: 1")).collect::<Vec<_>>().join(";");
     let f = parse(&format!("<style>p {{ {many}; color: #ff0000 }}</style><p style='color: #00ff00'>c</p>"));
-    assert_eq!(fmt_of(paras(&f)[0]).color, Some(wordcraft_doc::Rgb(0, 255, 0)));
+    assert_eq!(fmt_of(paras(&f)[0]).color, Some(craft_wordmodel::Rgb(0, 255, 0)));
 }
 
 #[test]

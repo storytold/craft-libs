@@ -1248,6 +1248,12 @@ dependencies = [
 name = "craft-html"
 version = "0.1.0"
 dependencies = [
+ "craft-codepage",
+ "craft-flow",
+ "craft-math",
+ "craft-mime",
+ "craft-wordmodel",
+ "encoding_rs",
  "proptest",
 ]
 

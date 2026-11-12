@@ -34,6 +34,8 @@
 #[doc = include_str!("../README.md")]
 struct ReadmeExamples;
 
+#[cfg(feature = "flow")]
+pub mod doc;
 mod entity;
 mod lex;
 
