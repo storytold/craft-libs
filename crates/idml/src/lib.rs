@@ -18,8 +18,9 @@
 //!   link URIs, base64 `Contents`.
 //! - [`tagged`] reads and writes InDesign Tagged Text, the plain-text interchange format.
 //!
-//! What the elements mean (spreads, page items, stories, styles) is not modelled here yet: a
-//! caller walks the tree.
+//! - [`model`] types the layout: spreads and parent spreads, pages, guides, page items and the
+//!   graphics placed in them, with path geometry. Stories, styles, swatches and preferences are
+//!   walked as elements for now.
 //!
 //! Implemented clean-room from the public IDML File Format Specification and from inspecting
 //! IDML packages exported from synthetic documents.
@@ -28,6 +29,7 @@
 #[doc = include_str!("../README.md")]
 struct ReadmeExamples;
 
+pub mod model;
 mod package;
 mod part;
 pub mod tagged;

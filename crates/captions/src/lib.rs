@@ -38,7 +38,8 @@ pub mod scc;
 pub mod srt;
 pub mod stl;
 mod text;
-pub mod time;
+/// Exact time: `craft-timeline`'s ticks, frame rates and timecode fields.
+pub use craft_timeline::time;
 pub mod ttml;
 pub mod vtt;
 
@@ -148,12 +149,55 @@ pub struct Document {
     pub blocks: Vec<String>,
     /// Non-fatal problems found while reading (skipped cues…).
     pub warnings: Vec<String>,
+    /// SCC / MCC: the time code label of time zero, read as a time ([`label_time`]: a sequence's
+    /// start timecode on export). The writers count their time codes from the label it reads as,
+    /// so 01:00:00:00 at 25 fps is 01:00:00;00 or 01:00:00:00 at 29.97. Readers leave it at zero.
+    pub start_timecode: Tick,
+    /// SCC / MCC read from a file: the frame rate of its time code labels and whether they are
+    /// drop-frame. [`Document::count_from`] needs it.
+    pub labels: Option<(FrameRate, bool)>,
     /// BCP 47 language tag of the text, when known: TTML's `xml:lang` on import, the caption
     /// track's language on export. TTML and DFXP write it (else `en`).
     pub language: Option<String>,
 }
 
+/// Frame `frame` of a `rate` time code (drop-frame or not) as its label read as a time: hours,
+/// minutes, seconds and the frame's share of a second at the label's nominal rate (25 for 25 fps,
+/// 30 for 29.97). Negative frames read as zero.
+pub fn label_time(frame: i64, rate: FrameRate, drop_frame: bool) -> Tick {
+    let base = rate.timecode_base();
+    let (_, h, m, s, f) = crate::time::frames_to_fields(frame.max(0), rate, drop_frame && rate.supports_drop_frame());
+    let seconds = h.saturating_mul(3600).saturating_add(m.saturating_mul(60)).saturating_add(s);
+    Tick(TICKS_PER_SECOND.saturating_mul(seconds)) + FrameRate::new(base, 1).tick_of(f)
+}
+
+/// The frame of a `rate` time code (drop-frame or not) whose label reads as `label` (as
+/// [`label_time`] gives it), to the nearest frame of the label's nominal rate.
+pub fn label_frame(label: Tick, rate: FrameRate, drop_frame: bool) -> i64 {
+    let nominal = FrameRate::new(rate.timecode_base(), 1);
+    let n = nominal.frame_at(nominal.snap_nearest(label.max(Tick::ZERO)));
+    let (_, h, m, s, f) = crate::time::frames_to_fields(n, nominal, false);
+    crate::time::fields_to_frames(h, m, s, f, rate, drop_frame && rate.supports_drop_frame())
+}
+
 impl Document {
+    /// SCC / MCC read from a file: count cue times from the time code labelled `start` (as
+    /// [`Document::start_timecode`]) rather than from 00:00:00:00, the inverse of what the writers
+    /// do. Only when every cue is at or after it, so a file that counts from zero keeps its times.
+    /// Returns whether the cues moved.
+    pub fn count_from(&mut self, start: Tick) -> bool {
+        let Some((rate, drop_frame)) = self.labels else { return false };
+        let origin = rate.tick_of(label_frame(start, rate, drop_frame));
+        if origin <= Tick::ZERO || self.cues.iter().any(|c| c.start < origin) {
+            return false;
+        }
+        for c in &mut self.cues {
+            c.start -= origin;
+            c.end -= origin;
+        }
+        true
+    }
+
     /// Snap cue times to frame boundaries of `rate` (nearest), keeping every cue at least one frame
     /// long and removing overlaps (a cue is cut where the next one starts).
     pub fn snap_to_frames(&mut self, rate: FrameRate) {
@@ -266,11 +310,16 @@ pub struct WriteOptions {
     pub rate: Option<FrameRate>,
     /// MCC / EBU STL: the name written as the creating program ([`PROGRAM`] by default).
     pub program: &'static str,
+    /// MCC: a packet on every frame from the start to this time (the end of the programme), with
+    /// no caption data where there is none, as SDI and frame-wrapped MXF carry one per frame.
+    /// The frames are MCC's 29.97 fps ones, so this is one packet per video frame only for
+    /// 29.97 fps video. None (the default) writes only the frames that carry caption data.
+    pub every_frame_until: Option<Tick>,
 }
 
 impl Default for WriteOptions {
     fn default() -> Self {
-        Self { drop_frame: true, rate: None, program: PROGRAM }
+        Self { drop_frame: true, rate: None, program: PROGRAM, every_frame_until: None }
     }
 }
 
@@ -280,7 +329,7 @@ pub fn write(doc: &Document, format: Format, opts: WriteOptions) -> Vec<u8> {
         Format::Srt => srt::write(doc).into_bytes(),
         Format::WebVtt => vtt::write(doc).into_bytes(),
         Format::Scc => scc::write(doc, opts.drop_frame).into_bytes(),
-        Format::Mcc => mcc::write_with(doc, opts.drop_frame, true, true, opts.program).into_bytes(),
+        Format::Mcc => mcc::write_padded(doc, opts.drop_frame, true, true, mcc_pad_frames(opts), opts.program).into_bytes(),
         Format::Stl => stl::write(doc, opts.rate, opts.program),
         Format::Ttml => ttml::write(doc, ttml::Flavor::Imsc1, opts.rate, doc.language.as_deref().unwrap_or("")).into_bytes(),
         Format::Dfxp => ttml::write(doc, ttml::Flavor::Dfxp, opts.rate, doc.language.as_deref().unwrap_or("")).into_bytes(),
@@ -331,13 +380,32 @@ fn lossy_chars(doc: &Document, stream: &str, shown_as: impl Fn(char) -> Option<c
     let times = |n: usize| if n == 1 { "once".to_string() } else { format!("{n} times") };
     for &(c, shown, n, frame) in lost.iter().take(LISTED_CHARS) {
         let what = shown.map_or_else(|| "dropped".to_string(), |s| format!("written as \"{s}\""));
-        let at = scc::format_timecode(frame, drop_frame);
+        // the time code the file has for it: counted from the start time code, as the writers do
+        let at = scc::format_timecode(frame.saturating_add(label_frame(doc.start_timecode, scc::RATE, drop_frame)), drop_frame);
         out.push(format!("{stream} has no \"{c}\" (U+{:04X}): {what} {}, first in the caption at {at}", c as u32, times(n)));
     }
     if let Some(rest) = lost.get(LISTED_CHARS..).filter(|rest| !rest.is_empty()) {
         let n = rest.iter().fold(0usize, |n, e| n.saturating_add(e.2));
         out.push(format!("{stream} has no code for {} more characters either: changed or dropped {}", rest.len(), times(n)));
     }
+}
+
+/// [`write`] into `out`. MCC goes out line by line, so a long `every_frame_until` export is never
+/// held in memory; the other formats are small and written whole.
+pub fn write_to(out: &mut dyn std::io::Write, doc: &Document, format: Format, opts: WriteOptions) -> std::io::Result<()> {
+    match format {
+        Format::Mcc => mcc::write_padded_to(out, doc, opts.drop_frame, true, true, mcc_pad_frames(opts), opts.program),
+        _ => out.write_all(&write(doc, format, opts)),
+    }
+}
+
+/// The MCC frames `opts.every_frame_until` asks for: those that start before it, so a last
+/// partial frame gets its packet too.
+fn mcc_pad_frames(opts: WriteOptions) -> i64 {
+    opts.every_frame_until.map_or(0, |end| {
+        let f = mcc::RATE.frame_at(end);
+        if mcc::RATE.tick_of(f) < end { f.saturating_add(1) } else { f }
+    })
 }
 
 /// Decode text bytes: UTF-8 (BOM stripped), UTF-16 with BOM, else Windows-1252. Line endings are
@@ -414,6 +482,31 @@ pub fn format_clock(t: Tick, sep: char) -> String {
 mod tests {
     use super::*;
 
+    /// A start time code keeps its label from a sequence's rate to the SCC / MCC 29.97 grid.
+    #[test]
+    fn start_timecode_labels_carry_across_rates() {
+        let secs = |s: i64| Tick(TICKS_PER_SECOND * s);
+        let scc = FrameRate::FPS_29_97;
+        // 01:00:00:00 at 25, 24 and 29.97 drop-frame all read as one hour
+        assert_eq!(label_time(90_000, FrameRate::FPS_25, false), secs(3600));
+        assert_eq!(label_time(86_400, FrameRate::FPS_23_976, false), secs(3600));
+        assert_eq!(label_time(107_892, scc, true), secs(3600));
+        assert_eq!(label_time(108_000, scc, false), secs(3600));
+        // 01:00:02:00 at 25 fps is 01:00:02;00 drop-frame and 01:00:02:00 non-drop at 29.97
+        let two = label_time(90_050, FrameRate::FPS_25, false);
+        assert_eq!(crate::time::format_timecode_frames(label_frame(two, scc, true), scc, true), "01;00;02;00");
+        assert_eq!(crate::time::format_timecode_frames(label_frame(two, scc, false), scc, false), "01:00:02:00");
+        // a frame's share of a second goes to the nearest 29.97 label frame
+        assert_eq!(label_frame(label_time(90_001, FrameRate::FPS_25, false), scc, false), 108_001);
+        // drop-frame on a rate that has none counts non-drop
+        assert_eq!(label_time(90_000, FrameRate::FPS_25, true), secs(3600));
+        // hostile values neither panic nor go negative
+        assert_eq!(label_time(-5, FrameRate::FPS_25, false), Tick::ZERO);
+        assert!(label_time(i64::MAX, FrameRate::FPS_25, false) > Tick::ZERO);
+        assert_eq!(label_frame(Tick(i64::MIN), scc, true), 0);
+        assert!(label_frame(Tick(i64::MAX), scc, true) > 0);
+    }
+
     #[test]
     fn clock() {
         assert_eq!(parse_clock("00:00:01,500"), Some(Tick(TICKS_PER_SECOND * 3 / 2)));
@@ -466,6 +559,9 @@ mod tests {
         // CEA-708 carries … (G2) and ’ but not the em dash, which 608 does carry
         let em_dash = "CEA-708 has no \"—\" (U+2014): written as \"?\" once, first in the caption at 00:00:00;00";
         assert_eq!(charset_warnings(&doc, Format::Mcc, opts), [dropped, replaced, em_dash]);
+        // a document that starts at 01:00:00:00 names the time codes its file has
+        let master = Document { start_timecode: Tick(3600 * TICKS_PER_SECOND), ..doc.clone() };
+        assert!(charset_warnings(&master, Format::Scc, opts)[0].ends_with("first in the caption at 01:00:00;00"));
         let ndf = charset_warnings(&doc, Format::Scc, WriteOptions { drop_frame: false, ..opts });
         assert!(ndf[0].ends_with("00:00:00:00"), "{ndf:?}");
         for f in [Format::Srt, Format::WebVtt, Format::Ttml, Format::Dfxp] {
@@ -514,5 +610,18 @@ mod tests {
         d.normalize();
         let r: Vec<(i64, i64)> = d.cues.iter().map(|c| (c.start.0, c.end.0)).collect();
         assert_eq!(r, vec![(0, 10), (10, 12), (12, 20)]);
+    }
+
+    /// `write_to` streams the same bytes `write` returns, for every format and a padded MCC.
+    #[test]
+    fn write_to_matches_write() {
+        let cue = Cue { start: Tick(TICKS_PER_SECOND), end: Tick(2 * TICKS_PER_SECOND), text: "Hello".into(), ..Default::default() };
+        let doc = Document { cues: vec![cue], ..Default::default() };
+        let padded = WriteOptions { every_frame_until: Some(Tick(3 * TICKS_PER_SECOND)), ..Default::default() };
+        for (format, opts) in Format::ALL.map(|f| (f, WriteOptions::default())).into_iter().chain([(Format::Mcc, padded)]) {
+            let mut out = Vec::new();
+            write_to(&mut out, &doc, format, opts).unwrap();
+            assert_eq!(out, write(&doc, format, opts), "{format:?}");
+        }
     }
 }
