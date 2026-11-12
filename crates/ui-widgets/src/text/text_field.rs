@@ -27,7 +27,7 @@ pub struct TextField<'a, C: Codec + Clone + 'static = PlainText> {
     #[common]
     common: Common,
     value: Bind<'a, C::Value>,
-    codec: C,
+    pub(super) codec: C,
     options: TextOptions,
     /// The value of an empty field, for a codec whose values have no natural empty: the start a mixed field's typing
     /// parses against (a mixed field shows no text) and what the clear part of a search field sets.
@@ -93,6 +93,15 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
     #[must_use]
     pub fn leading(mut self, icon: impl Into<IconSpec<'static>>) -> Self {
         self.leading.push(Adornment::glyph(icon));
+        self
+    }
+
+    /// Fixed text before the text (the `#` before hex digits), in the type role and face set before this call: the user
+    /// neither selects nor deletes it, and screen readers skip it.
+    #[must_use]
+    pub fn prefix(mut self, text: impl Into<Label>) -> Self {
+        let prefix = Adornment::text(text, self.options.role);
+        self.leading.push(if self.options.mono { prefix.mono() } else { prefix });
         self
     }
 
@@ -230,6 +239,7 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
             size.x = 0.0;
         }
         let clear = self.search.then(|| Self::clear_name(&cx.words::<words::TextWords>()));
+        self.leading = std::mem::take(&mut self.leading).into_iter().map(|adornment| adornment.measured(cx)).collect();
         size.x += adorn::reserve(cx.style, &self.leading, &self.trailing(clear));
         size
     }
@@ -238,6 +248,7 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
         let value = cx.value();
         let clear = self.clear_shown(value).then(|| Self::clear_name(&cx.words::<words::TextWords>()));
         let trailing = self.trailing(clear);
+        self.leading = std::mem::take(&mut self.leading).into_iter().map(|adornment| adornment.measured(cx)).collect();
         let placed = adorn::place(cx.content_rect, cx.style, &self.leading, &trailing, cx.flow.is_rtl());
         for (adornment, rect) in trailing.iter().zip(&placed.trailing) {
             if adornment.part() == Some(CLEAR) {

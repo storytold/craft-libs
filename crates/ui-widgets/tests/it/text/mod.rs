@@ -1,6 +1,7 @@
 mod access;
 mod chips;
 mod fields;
+mod hex;
 mod kit;
 mod linked;
 mod mixed_blank;

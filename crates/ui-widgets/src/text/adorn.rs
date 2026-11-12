@@ -4,7 +4,7 @@
 use super::FieldStyle;
 use crate::buttons::IconButton;
 use crate::contract::{MeasureCx, PaintUi, Props as _};
-use crate::primitives::{IconSpec, TextRun};
+use crate::primitives::{IconSpec, Span, TextRun};
 use crate::runtime::env::Label;
 use crate::style::{StyleColor, TypeRole};
 use craft_behavior::{Flow, PartKey};
@@ -20,10 +20,12 @@ pub struct Adornment {
 enum Kind {
     Glyph(IconSpec<'static>),
     Button(PartKey, IconSpec<'static>, Label),
-    /// Text in the line, of `role`; `size` is its measured run, zero until [`Adornment::measured`].
+    /// Text in the line, of `role`, monospace with `mono`; `size` is its measured run, zero until
+    /// [`Adornment::measured`].
     Text {
         label: Label,
         role: TypeRole,
+        mono: bool,
         size: Vec2,
     },
 }
@@ -43,13 +45,28 @@ impl Adornment {
     /// its run, which the field measures with [`Adornment::measured`] before placing it, and sits against the text
     /// with no gap between them.
     pub fn text(label: impl Into<Label>, role: TypeRole) -> Adornment {
-        Adornment { kind: Kind::Text { label: label.into(), role, size: Vec2::ZERO } }
+        Adornment { kind: Kind::Text { label: label.into(), role, mono: false, size: Vec2::ZERO } }
+    }
+
+    /// A text adornment in the monospace face, as the text of a monospace field; a glyph or a button is returned as it
+    /// is.
+    pub fn mono(mut self) -> Adornment {
+        if let Kind::Text { mono, .. } = &mut self.kind {
+            *mono = true;
+        }
+        self
+    }
+
+    /// The run of a text adornment.
+    fn run(label: &Label, role: TypeRole, mono: bool) -> TextRun<'_> {
+        let span = Span::new(label.as_str());
+        TextRun::spans(vec![if mono { span.mono() } else { span }]).role(role)
     }
 
     /// The adornment with a text adornment's run measured in `cx`; a glyph or a button is returned as it is.
     pub fn measured<C: crate::contract::Component>(mut self, cx: &MeasureCx<'_, C>) -> Adornment {
-        if let Kind::Text { label, role, size } = &mut self.kind {
-            *size = cx.layout(&TextRun::new(label.as_str()).role(*role)).size();
+        if let Kind::Text { label, role, mono, size } = &mut self.kind {
+            *size = cx.layout(&Self::run(label, *role, *mono)).size();
         }
         self
     }
@@ -89,8 +106,8 @@ impl Adornment {
             Kind::Button(part, icon, name) => {
                 ui.face(*part, IconButton::new(Self::spec(icon, None)).label(name.clone()).focusable(false).size(ControlSize::Sm))
             }
-            Kind::Text { label, role, .. } => {
-                ui.draw().text(rect, &TextRun::new(label.as_str()).role(*role).color(color));
+            Kind::Text { label, role, mono, .. } => {
+                ui.draw().text(rect, &Self::run(label, *role, *mono).color(color));
             }
         }
     }
