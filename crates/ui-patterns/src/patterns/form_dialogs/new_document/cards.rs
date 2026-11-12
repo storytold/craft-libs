@@ -86,6 +86,9 @@ impl DisplayOrder<usize> for CardList<'_> {
 
 impl ItemSource<usize> for CardList<'_> {}
 
+/// The columns of preset cards the grid holds: the dialog's left side is as wide as they are.
+const CARD_COLUMNS: usize = 3;
+
 /// Shows the tabs and what the open tab lists, and reports the tab and the card the user picked.
 pub(super) fn show(ui: &mut Ui, session: &Session, values: &DocumentOptions, read: &Read<'_>, left: &mut Left) {
     let (setup, words) = (read.setup, read.words);
@@ -139,6 +142,7 @@ pub(super) fn show(ui: &mut Ui, session: &Session, values: &DocumentOptions, rea
         let count = read.units.number(cards.len() as f64, 0..=0);
         Text::new(words.presets_heading.fill(&[("n", &count)])).role(TypeRole::Label).shade(Shade::Muted).show(ui);
         let shown = TileGrid::<usize>::new(words.cards.clone())
+            .card_columns(CARD_COLUMNS)
             .select(SelectMode::Single)
             .detail_line()
             .rows_stamp(stamp)
