@@ -3,16 +3,16 @@
 use super::channels::{QUANTIZE_CELLS, channel_range, channel_step, quantized, settled, snapped};
 use crate::AreaMode;
 use craft_behavior::nav::{LARGE_STEPS, StepResult, ValueAxes, ValueSteps, step_until_changed, step_value};
-use craft_behavior::{Axis, Metrics, NavMove, PartKey, Sense, ValueDrag};
+use craft_behavior::{Axis, Insets, Metrics, NavMove, PartKey, Sense, ValueDrag};
 use craft_theme::ModelValues;
 use craft_ui::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, Input, Numeric, PaintUi, PartsCx, Props as _,
-    Role,
+    Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Numeric, PaintUi, PartsCx,
+    Props as _, Role,
 };
 use craft_ui::primitives::{PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
-use craft_ui::style::{ComponentStyle, DataColor, FocusLook, StyleColor, StyleCx, UiTokens};
+use craft_ui::style::{ComponentStyle, DataColor, FocusLook, StyleColor, StyleCx};
 use egui::{CornerRadius, Mesh, Pos2, Rect, Vec2, pos2};
 
 #[cfg(feature = "screen-testing")]
@@ -36,8 +36,8 @@ pub struct ColorStripStyle {
     edge: StyleColor,
     /// The pointers' fill.
     pointer: StyleColor,
-    /// The side of the square a pointer triangle fills.
-    pointer_size: f32,
+    /// A pointer triangle's depth across the strip (the padding each side of the colours) and its height along it.
+    pointer_size: Vec2,
 }
 
 /// The component strip beside a colour picker's [`ColorArea`](super::ColorArea): the [`AreaMode`]'s strip component
@@ -55,7 +55,7 @@ pub struct ColorStripStyle {
 /// - AccessKit: a `Slider` named `label` ("Hue") with its value, bounds and step, which takes increment, decrement
 ///   and set-value requests.
 ///
-/// The pointer triangles on both sides are drawn outside its rect.
+/// The colours are as wide as `size.icon.lg`, with a pointer triangle's room on each side.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(content_painter)]
 pub struct ColorStrip<'a> {
@@ -136,17 +136,18 @@ impl Component for ColorStrip<'_> {
 
     fn style(cx: &StyleCx<'_>, _: ColorStripStyleKey) -> ColorStripStyle {
         let tokens = cx.tokens;
+        let pointer_size = Vec2::new(tokens.size.handle.sm, tokens.size.handle.md);
         ColorStripStyle {
-            metrics: Metrics::new().min_size(Vec2::new(tokens.size.icon.lg, tokens.size.plot.height)),
+            metrics: Metrics::new().padding(Insets::horizontal(pointer_size.x)),
             focus: cx.focus_look(),
             edge: cx.color(tokens.color.line.control_edge),
             pointer: cx.color(tokens.color.text.normal),
-            pointer_size: tokens.size.handle.md,
+            pointer_size,
         }
     }
 
-    fn paint_outset(tokens: &UiTokens) -> f32 {
-        tokens.size.handle.md
+    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        Vec2::new(cx.tokens.size.icon.lg, cx.tokens.size.plot.height)
     }
 
     fn sense(&self) -> Sense {
@@ -201,7 +202,7 @@ impl Component for ColorStrip<'_> {
         let channel = self.mode.strip();
         let range = channel_range(model, channel);
         let (min, max) = (*range.start() as f32, *range.end() as f32);
-        let rect = cx.rect;
+        let rect = cx.rect.shrink2(Vec2::new(cx.style.pointer_size.x, 0.0));
         let shown = cx.value().copied().unwrap_or_else(|| ModelValues::new(model.id(), &[]));
         let base = self.mode.strip_base(&shown);
         let painter = ui.content_painter(cx);
@@ -235,7 +236,7 @@ impl Component for ColorStrip<'_> {
         let span = max - min;
         let share = if span > 0.0 { ((shown.values[channel] - min) / span).clamp(0.0, 1.0) } else { 0.0 };
         let y = egui::lerp(rect.bottom()..=rect.top(), share);
-        let (depth, half) = (cx.style.pointer_size / 2.0, cx.style.pointer_size / 2.0);
+        let (depth, half) = (cx.style.pointer_size.x, cx.style.pointer_size.y / 2.0);
         for (tip, direction) in [(rect.left(), -1.0), (rect.right(), 1.0)] {
             let base_x = tip + direction * depth;
             let points: Vec<Pos2> = vec![pos2(tip, y), pos2(base_x, y - half), pos2(base_x, y + half)];
