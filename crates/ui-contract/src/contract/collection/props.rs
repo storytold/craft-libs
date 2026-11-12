@@ -593,4 +593,6 @@ pub struct RowState {
     /// The collection asked for this row's menu and a menu hung from the collection is open: the row keeps its menu
     /// button shown.
     pub menu_open: bool,
+    /// The activation key (Enter) activated the row this pass: a row with controls of its own may move focus into one.
+    pub activated_by_key: bool,
 }

@@ -2,3 +2,4 @@
 
 mod annotate;
 mod collab;
+mod comments;

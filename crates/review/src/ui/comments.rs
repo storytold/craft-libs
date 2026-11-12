@@ -21,8 +21,7 @@ use std::collections::BTreeMap;
 
 use craft_behavior::Selection;
 use craft_i18n::{DateStyle, DateTime, TimeZone};
-use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, CollectionEvent, NoValue, Outcome, Pattern, Props as _, Show as _, ShowCollection as _, ShowContainer as _, clicked};
+use craft_ui::contract::{Bind, CollectionEvent, NoValue, Outcome, Pattern, Props as _, Show as _, ShowCollection as _, ShowContainer as _};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::notices::{Notice, NoticeLayout};
@@ -42,7 +41,7 @@ use row::{CommentRow, MORE};
 /// Ages under this many seconds (one week) read relative; older ones read as a date.
 pub(crate) const AGE_SHOWN_AS_DATE: u64 = 7 * 24 * 60 * 60;
 
-/// The rows of the add box and of a reply box.
+/// The rows of a reply box.
 const REPLY_LINES: usize = 2;
 
 /// The rows of an inline editor.
@@ -251,15 +250,16 @@ pub(crate) fn age_text(env: &EnvView<'_>, then: i64, now: i64) -> String {
 ///   ([`CommentFilter`]: Type, Author, Status, Color, Checkmark rows that hide what they name) and,
 ///   under the Page sort, a menu with Collapse all pages and Expand all pages. A search or filter
 ///   that leaves nothing shows "No comments match."
-/// - "Add a comment" box: a multi-line field and Post.
+/// - "Add a comment" box: a field whose Enter posts a sticky note.
 /// - Cards in one collection, grouped under headings by [`sort_threads`]; under the Page sort a
 ///   heading names the page, shows the count of the page's comments before filtering and folds its
 ///   cards. A card shows the kind's icon, author, age (relative under a week, then the date), the
 ///   text, a status icon, the checkmark, a lock icon and the replies, each with its own "..." menu.
 /// - The selected card has the accent bar, the reply box and "..." (Edit, Set status, Delete).
 ///   Locked threads and `read_only` hide the editing items.
-/// - Keyboard: Up and Down move between cards (selecting them), Enter selects, Escape in a control
-///   of a card returns to the card.
+/// - Keyboard: Up and Down move between cards (selecting them), Enter puts the focus in the selected
+///   card's reply box, Cmd+Enter (Ctrl+Enter off macOS) in the reply box or an inline editor posts,
+///   Escape in a control of a card returns to the card.
 ///
 /// ```ignore
 /// let out = CommentsPanel::new("Comments", &threads, &mut state).now(now).show(ui);
@@ -428,13 +428,12 @@ impl CommentsPanel<'_> {
                 }
             });
             if !read_only {
-                TextField::new(words.add_comment.clone(), Bind::bound(&mut state.new_comment))
-                    .lines(REPLY_LINES)
+                let field = TextField::new(words.add_comment.clone(), Bind::bound(&mut state.new_comment))
                     .placeholder(words.add_comment.clone())
+                    .submits()
                     .show(ui);
                 let text = state.new_comment.trim().to_owned();
-                let post = Button::new(words.post.clone()).enabled(!text.is_empty()).show(ui);
-                if clicked(&post) {
+                if field.submitted && !text.is_empty() {
                     edits.push(CommentEdit::Add { text });
                     state.new_comment.clear();
                 }
@@ -518,6 +517,7 @@ impl CommentsPanel<'_> {
                         }
                         CommentRow::card(thread, name)
                             .state(is_selected, !read_only && !thread.locked, now)
+                            .focus_reply(is_selected && item.row.activated_by_key)
                             .drafts(editing, if is_selected { reply } else { "" })
                     }
                 });

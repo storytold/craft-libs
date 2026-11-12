@@ -154,7 +154,9 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             if !props.arrows_select && !self.holds(row) {
                 self.pick(comp, row, false, false);
             }
-            self.events.push(CollectionEvent::Activate(self.source.key(row)));
+            let key = self.source.key(row);
+            self.keyed_activation = Some(key.clone());
+            self.events.push(CollectionEvent::Activate(key));
         }
     }
 

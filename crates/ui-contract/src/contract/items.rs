@@ -157,6 +157,8 @@ pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
     events: Vec<CollectionEvent<C::Key, C::ItemEvent>>,
     /// The click count of the press behind this pass's pointer activation, 0 when no pointer activated.
     activation_clicks: u8,
+    /// The row the activation key activated this pass, which reads it as `RowState::activated_by_key`.
+    keyed_activation: Option<C::Key>,
     visible: Range<usize>,
     /// The rows built this pass with their rects, for `collection_response`.
     shown: Vec<ShownRow<C::Key>>,
@@ -222,6 +224,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             selection_at_read: C::Selection::default(),
             events: Vec::new(),
             activation_clicks: 0,
+            keyed_activation: None,
             visible: 0..0,
             shown: Vec::new(),
             offset: 0.0,

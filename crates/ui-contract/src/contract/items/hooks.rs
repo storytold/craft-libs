@@ -494,6 +494,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                     hovered: hover_at.is_some_and(|pos| row.contains(pos)),
                     pressed: self.pressed.as_ref().filter(|(held, _)| *held == at).map(|(_, pressed)| pressed.clone()),
                     menu_open: self.drags.menu.as_ref() == Some(&key) && menu_open,
+                    activated_by_key: self.keyed_activation.as_ref() == Some(&key),
                     ..RowState::default()
                 };
                 let mut flags = crate::style::Flags::empty();

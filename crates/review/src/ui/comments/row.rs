@@ -3,13 +3,15 @@
 use std::sync::Arc;
 
 use craft_behavior::{IconId, Metrics, PartKey, Proposal, Sense};
+use craft_theme::variant::Variant;
 use craft_ui::buttons::{Button, IconButton};
 use craft_ui::contract::{Bind, Common, Component, Cx, MeasureCx, PaintUi, PartsCx, Props as _, Role, WordSetCx as _, clicked};
 use craft_ui::primitives::{HAlign, IconSpec, PaintShape, TextRun, Wrap};
 use craft_ui::runtime::env::Label;
-use craft_ui::style::{ComponentStyle, Ink, StyleColor, StyleCx, TypeRole};
+use craft_ui::runtime::focus::{self, FocusTarget};
+use craft_ui::style::{ComponentStyle, DataColor, Ink, StyleColor, StyleCx, TypeRole};
 use craft_ui::text::TextField;
-use egui::{CornerRadius, Pos2, Rect, Vec2, vec2};
+use egui::{Color32, CornerRadius, Pos2, Rect, Vec2, vec2};
 
 use super::list::{CardEvent, RowOut};
 use super::{CommentsWords, EDIT_LINES, Line, REPLY_LINES, age_text};
@@ -32,6 +34,10 @@ pub(crate) struct CommentRowStyle {
     bar: StyleColor,
     avatar: StyleColor,
     avatar_ink: StyleColor,
+    /// The disc behind a card's kind icon.
+    sunken: StyleColor,
+    /// The kind icon's side.
+    kind_icon: f32,
     bar_width: f32,
     /// The width of a card when the room names none.
     column: f32,
@@ -98,6 +104,8 @@ trait Sink {
     fn width(&mut self, spec: Spec, text: &str) -> f32;
     /// The icon `id` in `rect`.
     fn icon(&mut self, rect: Rect, id: &'static str, tone: Tone);
+    /// A card's kind: the icon `id` on a sunken disc filling `rect`, in the annotation's `color` (the accent without one).
+    fn kind(&mut self, rect: Rect, id: &'static str, color: Option<[u8; 3]>);
     /// The avatar of `name`.
     fn avatar(&mut self, rect: Rect, name: &str);
     /// A square icon button; it reports its press.
@@ -125,6 +133,8 @@ pub(crate) struct CommentRow<'r> {
     now: i64,
     editing: Option<(usize, &'r str)>,
     reply: &'r str,
+    /// The activation key reached the card this pass: the reply box takes the focus.
+    focus_reply: bool,
     words: Option<Arc<CommentsWords>>,
     /// The heights the editor field and the reply field measured, for the paint of the same pass.
     heights: [f32; 2],
@@ -146,6 +156,7 @@ impl<'r> CommentRow<'r> {
             now: 0,
             editing: None,
             reply: "",
+            focus_reply: false,
             words: None,
             heights: [0.0; 2],
             buttons: [Vec2::ZERO; 3],
@@ -171,6 +182,12 @@ impl<'r> CommentRow<'r> {
         self.selected = selected;
         self.editable = editable;
         self.now = now;
+        self
+    }
+
+    /// The activation key reached the card this pass: its reply box takes the focus, when it shows one.
+    pub(crate) fn focus_reply(mut self, on: bool) -> Self {
+        self.focus_reply = on;
         self
     }
 
@@ -231,7 +248,7 @@ impl CommentRow<'_> {
         let Some(thread) = self.thread else { return h };
         let y = pad;
         let first = thread.messages.first();
-        sink.icon(square(Pos2::new(pad, y), h), kind_icon(thread.kind), Tone::Normal);
+        sink.kind(square(Pos2::new(pad, y), h), kind_icon(thread.kind), thread.color);
         let mut end = width - pad;
         if self.selected && self.editable {
             end -= h;
@@ -335,6 +352,8 @@ impl Sink for Measure<'_, '_, '_> {
 
     fn icon(&mut self, _: Rect, _: &'static str, _: Tone) {}
 
+    fn kind(&mut self, _: Rect, _: &'static str, _: Option<[u8; 3]>) {}
+
     fn avatar(&mut self, _: Rect, _: &str) {}
 
     fn button(&mut self, slot: Slot, rect: Rect, _: &'static str, _: &Label, _: bool) {
@@ -378,6 +397,8 @@ struct Paint<'a, 'b> {
     thread: Option<ThreadId>,
     heights: [f32; 2],
     buttons: [Vec2; 3],
+    /// Set when the reply box takes the focus as it shows: the context the request goes to.
+    focus_reply: Option<&'a egui::Context>,
     events: &'a mut Vec<CardEvent>,
 }
 
@@ -430,6 +451,18 @@ impl Sink for Paint<'_, '_> {
         self.ui.draw().icon(self.place(rect), &spec);
     }
 
+    fn kind(&mut self, rect: Rect, id: &'static str, color: Option<[u8; 3]>) {
+        let rect = self.place(rect);
+        let draw = self.ui.draw();
+        draw.fill(&PaintShape::Circle(rect.center(), rect.width().min(rect.height()) / 2.0), self.st.sunken);
+        let spec = IconSpec::svg(IconId::new(id));
+        let spec = match color {
+            Some([r, g, b]) => spec.data_color(DataColor::new(Color32::from_rgb(r, g, b))),
+            None => spec.color(self.st.bar),
+        };
+        draw.icon(Rect::from_center_size(rect.center(), Vec2::splat(self.st.kind_icon)), &spec);
+    }
+
     fn avatar(&mut self, rect: Rect, name: &str) {
         let rect = self.place(rect);
         paint_face(&self.ui.draw(), rect, name, self.st.avatar, self.st.avatar_ink);
@@ -451,13 +484,21 @@ impl Sink for Paint<'_, '_> {
     fn field(&mut self, slot: Slot, at: Rect, label: &Label, text: &str, lines: usize) -> f32 {
         let height = self.heights[usize::from(slot == Slot::ReplyField)];
         let rect = self.place(Rect::from_min_size(at.min, vec2(at.width(), height)));
-        let field = TextField::new(label.clone(), Bind::given(text.to_owned())).lines(lines).placeholder(label.clone());
+        let field = TextField::new(label.clone(), Bind::given(text.to_owned())).lines(lines).placeholder(label.clone()).submits();
         let out = self.ui.child(slot, rect, field);
         if let Some(value) = out.value() {
             self.events.push(if slot == Slot::EditField { CardEvent::EditText(value.clone()) } else { CardEvent::ReplyText(value.clone()) });
         }
+        if out.submitted {
+            self.events.push(if slot == Slot::EditField { CardEvent::EditPost } else { CardEvent::ReplyPost });
+        }
         if out.escaped && slot == Slot::EditField {
             self.events.push(CardEvent::EditCancel);
+        }
+        if slot == Slot::ReplyField
+            && let Some(ctx) = self.focus_reply
+        {
+            focus::request(ctx, FocusTarget::Id(out.response.id));
         }
         height
     }
@@ -467,7 +508,9 @@ impl Sink for Paint<'_, '_> {
     }
 
     fn push(&mut self, slot: Slot, rect: Rect, label: &Label, enabled: bool) {
-        let response = self.ui.child(slot, self.place(rect), Button::new(label.clone()).enabled(enabled));
+        let button = Button::new(label.clone()).enabled(enabled);
+        let button = if slot == Slot::EditCancel { button } else { button.variant(Variant::PRIMARY) };
+        let response = self.ui.child(slot, self.place(rect), button);
         if clicked(&response) {
             self.events.push(match slot {
                 Slot::EditPost => CardEvent::EditPost,
@@ -507,6 +550,8 @@ impl Component for CommentRow<'_> {
             bar: cx.color(color.accent.solid),
             avatar: cx.color(color.accent.strong),
             avatar_ink: cx.color(color.text.on_strong),
+            sunken: cx.color(color.surface.sunken),
+            kind_icon: cx.tokens.size.icon.sm,
             bar_width: cx.tokens.stroke.thick,
             column: cx.tokens.size.dock.column,
             height: cx.control().height,
@@ -570,6 +615,7 @@ impl Component for CommentRow<'_> {
             thread: self.thread.map(|t| t.id),
             heights: self.heights,
             buttons: self.buttons,
+            focus_reply: self.focus_reply.then_some(&cx.ctx),
             events: &mut events,
         };
         self.lay(st, rect.width(), &age, &mut sink);
