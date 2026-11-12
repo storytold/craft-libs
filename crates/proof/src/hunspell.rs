@@ -754,9 +754,13 @@ mod tests {
     /// spec's default `~/.local/share` applies, and with no home there is no folder.
     #[test]
     fn xdg_data_home_follows_the_spec() {
-        let home = Path::new("/home/a");
-        assert_eq!(xdg_data_home(Some("/data".into()), Some(home)), Some(PathBuf::from("/data")));
-        assert_eq!(xdg_data_home(Some("/data".into()), None), Some(PathBuf::from("/data")));
+        // On Windows a rooted path without a drive is not absolute. Keep the same
+        // absolute/relative contract on each platform instead of changing the loader.
+        let (home, data) = if cfg!(windows) { (r"C:\Users\a", r"C:\data") } else { ("/home/a", "/data") };
+        let (home, data) = (Path::new(home), Path::new(data));
+        assert!(data.is_absolute());
+        assert_eq!(xdg_data_home(Some(data.as_os_str().into()), Some(home)), Some(data.to_path_buf()));
+        assert_eq!(xdg_data_home(Some(data.as_os_str().into()), None), Some(data.to_path_buf()));
         for xdg in [None, Some(""), Some("relative/data")] {
             assert_eq!(xdg_data_home(xdg.map(Into::into), Some(home)), Some(home.join(".local/share")), "{xdg:?}");
             assert_eq!(xdg_data_home(xdg.map(Into::into), None), None, "{xdg:?}");
@@ -1010,7 +1014,12 @@ mod tests {
         assert!(load(&aff, &big).unwrap_err().contains("too large"));
         // A directory, and on Unix an endless device, are not dictionary files. (No clock: a
         // reader that read `/dev/zero` would never return, so the error itself is the proof.)
-        assert!(load(&aff, &dir).unwrap_err().contains("not a regular file"));
+        // Windows rejects directories in File::open, before the regular-file guard. The
+        // rejection is required everywhere; its diagnostic is platform-dependent.
+        let directory_error = load(&aff, &dir).unwrap_err();
+        assert!(directory_error.contains(&dir.display().to_string()), "{directory_error}");
+        #[cfg(unix)]
+        assert!(directory_error.contains("not a regular file"), "{directory_error}");
         #[cfg(unix)]
         assert!(load(&aff, Path::new("/dev/zero")).unwrap_err().contains("not a regular file"));
         // Turkish reads through the same reader.
