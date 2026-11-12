@@ -1830,6 +1830,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-xlsx"
+version = "0.1.0"
+dependencies = [
+ "craft-opc",
+ "craft-sheet",
+ "craft-xml",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-xml"
 version = "0.1.0"
 dependencies = [
