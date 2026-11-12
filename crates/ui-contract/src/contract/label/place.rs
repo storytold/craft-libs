@@ -19,6 +19,9 @@ pub(crate) struct Placed {
     pub control: Rect,
     /// The rect of the content shown inside the label after its text; `Rect::NOTHING` without one.
     pub trailing: Rect,
+    /// The width a caption above its control takes whole (its own width, at most its cell's); the field is never
+    /// narrower, so the caption shows whole. 0 for a label beside or after its control.
+    pub caption: f32,
 }
 
 /// The `After` placement: the control's cell first, then the gap, then the label. A leaf control (a box, circle or
@@ -36,7 +39,7 @@ fn place_after(ctx: &egui::Context, input: &LabelIn<'_>, flow: Flow, gap: f32, l
         let label_drop = (line - first_line) / 2.0;
         let label = Flow::new(rest.rect(), rtl).align(Vec2::new(label_width, label.y), Align::Min, Align::Min).translate(Vec2::new(0.0, label_drop));
         let control = control_cell.translate(Vec2::new(0.0, (line - control_cell.height()) / 2.0));
-        return Placed { label, control, trailing: Rect::NOTHING };
+        return Placed { label, control, trailing: Rect::NOTHING, caption: 0.0 };
     }
     let control_baseline = crate::layout::control_baseline(ctx, input.scope, label, label_baseline);
     let drop = control_baseline.map_or(0.0, |control| control - label_baseline);
@@ -44,7 +47,7 @@ fn place_after(ctx: &egui::Context, input: &LabelIn<'_>, flow: Flow, gap: f32, l
     let label_size = Vec2::new(label_width, label.y);
     let label = Flow::new(rest.rect(), rtl).align(label_size, Align::Min, Align::Min).translate(Vec2::new(0.0, label_drop));
     let control = Rect::from_min_max(egui::pos2(control_cell.left(), control_cell.top() + control_drop), control_cell.max);
-    Placed { label, control, trailing: Rect::NOTHING }
+    Placed { label, control, trailing: Rect::NOTHING, caption: 0.0 }
 }
 
 /// The rect a hidden label leaves for its control. In a body whose labelled rows share a label column the label
@@ -82,7 +85,7 @@ pub(super) fn decide(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, kids: 
         let width = natural.x.min((rest.rect().width() - gap).max(0.0));
         let drop = (cell.height() - natural.y).max(0.0) / 2.0;
         let label = Flow::new(rest.rect(), rtl).align(Vec2::new(width, natural.y), Align::Min, Align::Min).translate(Vec2::new(0.0, drop));
-        return Placed { label, control: cell, trailing: Rect::NOTHING };
+        return Placed { label, control: cell, trailing: Rect::NOTHING, caption: 0.0 };
     }
     let (column, stack_below) = match input.side.layout {
         FieldLayout::Beside => {
@@ -103,6 +106,7 @@ pub(super) fn decide(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, kids: 
             (width, f32::INFINITY)
         }
     };
+    let caption = if matches!(input.side.layout, FieldLayout::Above | FieldLayout::Caption(_)) { column } else { 0.0 };
     // The room decides; a beside label gets the width it needs even where last frame's content was narrower. A label
     // that never sits beside stacks in an unbounded room as well.
     let stacks = (input.room < stack_below || stack_below == f32::INFINITY) && !(input.content_row && input.side.layout == FieldLayout::Beside);
@@ -138,7 +142,7 @@ pub(super) fn decide(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, kids: 
             let spare = (column - label.width()).max(0.0);
             label = label.translate(Vec2::new(if rtl { -spare } else { spare }, 0.0));
         }
-        Placed { label, control: placed.control, trailing: Rect::NOTHING }
+        Placed { label, control: placed.control, trailing: Rect::NOTHING, caption }
     }
 }
 
@@ -155,7 +159,7 @@ pub(crate) fn control_after(ui: &mut Ui, env: &Env, input: &LabelIn<'_>) -> Plac
     let flow = Flow::new(input.row, env.direction.is_rtl());
     let content = input.trailing.x > 0.0;
     if input.side.shows_no_leaf(content) {
-        return Placed { label: Rect::NOTHING, control: hidden_control(&ctx, input, flow, label_gap(env)), trailing: Rect::NOTHING };
+        return Placed { label: Rect::NOTHING, control: hidden_control(&ctx, input, flow, label_gap(env)), trailing: Rect::NOTHING, caption: 0.0 };
     }
     let reset = scope::last_reset(&ctx, input.scope);
     let slot = if reset.is_some() && input.side.reset_dot { env.tokens.size.handle.sm } else { 0.0 };

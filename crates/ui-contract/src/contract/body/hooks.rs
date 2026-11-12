@@ -724,6 +724,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let mut body_rect = regions.body;
         let mut label_rect = Rect::NOTHING;
         let mut label_input = None;
+        let mut caption = 0.0;
         if let Some(side) = props.label.as_ref() {
             let resolved = cx.core.resolved;
             let input = LabelIn {
@@ -749,7 +750,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 trailing: Vec2::ZERO,
             };
             let placed = label::run(ui, env, &input, None);
-            (body_rect, label_rect) = (placed.control, placed.label);
+            (body_rect, label_rect, caption) = (placed.control, placed.label, placed.caption);
             label_input = Some(input);
         }
         let label_extra = label_extra_of(regions.body, body_rect, label_rect, rtl);
@@ -922,7 +923,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 // The footer starts under the control column this decision gives, not the one before the control
                 // reported its minimum.
                 let placed = label::control_after(ui, env, input);
-                (body_rect, label_rect) = (placed.control, placed.label);
+                (body_rect, label_rect, caption) = (placed.control, placed.label, placed.caption);
                 label_extra = label_extra_of(regions.body, body_rect, label_rect, rtl);
             }
             if let Some(size) = &mut self.body_size {
@@ -934,6 +935,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                     layout::report_beyond(&ctx, std::slice::from_ref(&column), label::label_gap(env) + size.x);
                 }
                 *size += label_extra;
+                // A caption above the control counts whole toward the container's width, so a row never narrows the
+                // field below it.
+                size.x = size.x.max(caption);
             }
             self.view = Some(body_rect);
             if real && props.end.is_some() {

@@ -2,6 +2,7 @@
 
 mod align;
 mod baseline;
+mod caption;
 pub mod group;
 mod hit;
 mod inside;

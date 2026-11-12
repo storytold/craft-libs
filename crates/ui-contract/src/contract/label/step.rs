@@ -149,7 +149,7 @@ pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>, trailing: Option<
         scope::begin(&ctx, input.scope, input.owner, scope::Kind::Label(field_label(env, input, label_id, Rect::NOTHING)));
         let control = hidden_control(&ctx, input, flow, gap);
         scope::place_controls(&ctx, input.scope, control.top());
-        return Placed { label: Rect::NOTHING, control, trailing: Rect::NOTHING };
+        return Placed { label: Rect::NOTHING, control, trailing: Rect::NOTHING, caption: 0.0 };
     }
     let slot = if reset.is_some() && input.side.reset_dot { slot_side } else { 0.0 };
     let mut leaf = LabelLeaf::new(input.side.kind.shown(input.text).clone(), slot);
