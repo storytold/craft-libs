@@ -25,6 +25,9 @@ use crate::io::{Reader, WriteExt, read_pascal};
 use crate::layer::LayerRecord;
 use crate::tagged::TaggedBlock;
 
+mod write;
+pub use write::PlacedLayerOptions;
+
 /// The most pixels a baked smart object may have: 2^24 (256 MiB as float RGBA). The size comes
 /// from the file's transform, which is untrusted.
 pub const MAX_BAKE_PIXELS: u64 = 1 << 24;
@@ -64,6 +67,15 @@ fn quad_from(t: [f64; 8]) -> [[f64; 2]; 4] {
     [[t[0], t[1]], [t[2], t[3]], [t[4], t[5]], [t[6], t[7]]]
 }
 
+/// The patch boundaries of a custom envelope: a list of numbers, or (as Photoshop writes a
+/// `quiltWarp`) an object array whose body holds them under the same key.
+fn quilt_slices(env: &Descriptor, key: &str) -> Vec<f64> {
+    match env.get(key) {
+        Some(Value::ObjectArray(o)) => o.body.get_numbers(key),
+        _ => env.get_numbers(key),
+    }
+}
+
 impl Warp {
     /// Reads a `warp` descriptor; `None` for no warp (the identity, or a custom warp without a
     /// usable mesh).
@@ -83,8 +95,8 @@ impl Warp {
             style,
         };
         if let Some(env) = d.get_object("customEnvelopeWarp") {
-            let cols = env.get_numbers("quiltSliceX").len().saturating_sub(1).max(1);
-            let rows = env.get_numbers("quiltSliceY").len().saturating_sub(1).max(1);
+            let cols = quilt_slices(env, "quiltSliceX").len().saturating_sub(1).max(1);
+            let rows = quilt_slices(env, "quiltSliceY").len().saturating_sub(1).max(1);
             if let Some(Value::ObjectArray(pts)) = env.get("meshPoints") {
                 let xs = pts.body.get_numbers("Hrzn");
                 let ys = pts.body.get_numbers("Vrtc");
@@ -257,7 +269,8 @@ impl SmartObject {
         // The non-affine transform when present (perspective), else the transform.
         let t = eight(&d, "nonAffineTransform").unwrap_or(t);
         let size = d.get_object("Sz  ").and_then(|s| Some([s.get_number("Wdth")?, s.get_number("Hght")?]));
-        let warp = d.get_object("warp").and_then(Warp::from_descriptor);
+        // A split warp is in `quiltWarp`, with `warp` holding none.
+        let warp = d.get_object("quiltWarp").and_then(Warp::from_descriptor).or_else(|| d.get_object("warp").and_then(Warp::from_descriptor));
         Ok(SmartObject { uuid, quad: quad_from(t), size, warp })
     }
 
