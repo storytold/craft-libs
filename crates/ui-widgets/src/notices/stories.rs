@@ -93,12 +93,12 @@ fn settings_notices(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 }
 
 /// Three notices in the bottom corner of the story's stage: a neutral one, a warning with Don't Show Again and an
-/// error that stays. Notices that ended stay gone.
+/// error. They stay until closed, and come back once all are closed.
 #[story(NoticeCenter, covers = [], drive = Drive::Never)]
-fn notice_center(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+fn notice_center(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let ctx = ui.ctx().clone();
     let window = WindowKey::new("notice-center-story");
-    if !std::mem::replace(data.value("posted", false), true) {
+    if toast::cards(&ctx, &window).is_empty() {
         let center = NoticeCenter::new().window(window.clone());
         let _ = center.post(&ctx, &PostedNotice::new("Pasted from the clipboard").sticky(), &[]);
         let warning = PostedNotice::new("Profile mismatch").lines(vec!["The document uses its own profile.".to_owned()]).tone(Tone::Warn);
@@ -113,10 +113,10 @@ fn notice_center(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 /// A neutral toast, a warning with ten lines and an error in the bottom corner of the story's stage.
 #[story(ToastStack, covers = [], drive = Drive::Never)]
-fn toast_stack(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+fn toast_stack(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let ctx = ui.ctx().clone();
     let window = WindowKey::new("toast-stack-story");
-    if !std::mem::replace(data.value("posted", false), true) {
+    if toast::cards(&ctx, &window).is_empty() {
         let lines = (1..=10).map(|n| format!("Warning {n}"));
         toast::post(&ctx, &window, toast::Toast::new(Label::Empty).title("Pasted from the clipboard").timeout(None));
         toast::post(&ctx, &window, toast::Toast::new(Label::Empty).title("Opened with 10 warnings").lines(lines).tone(Tone::Warn).timeout(None));
