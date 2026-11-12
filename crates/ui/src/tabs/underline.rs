@@ -79,7 +79,7 @@ mod tests {
         Rect::from_min_size(egui::pos2(x, 30.0), egui::vec2(40.0, 2.0))
     }
     fn frame(state: &mut SlidingUnderline, id: &str, x: f32, now: f64, motion: bool) -> UnderlineFrame {
-        let result = state.update(Id::new(id), rect(x), now, 1.0, motion);
+        let result = state.update(Id::unique(id), rect(x), now, 1.0, motion);
         assert!(result.is_some(), "valid target rejected");
         result.unwrap_or(UnderlineFrame { rect: Rect::NOTHING, moving: false })
     }
@@ -102,7 +102,7 @@ mod tests {
         assert_eq!(frame(&mut state, "c", 200.0, 1.2, false).rect, rect(200.0));
         assert!(!frame(&mut state, "d", 300.0, 0.0, true).moving);
         assert!(!frame(&mut state, "e", 400.0, f64::NAN, true).moving);
-        assert!(state.update(Id::new("bad"), Rect::NOTHING, 1.0, 1.0, true).is_none());
+        assert!(state.update(Id::unique("bad"), Rect::NOTHING, 1.0, 1.0, true).is_none());
         assert!(!frame(&mut state, "f", 500.0, 2.0, true).moving);
     }
 }
