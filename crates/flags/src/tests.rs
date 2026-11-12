@@ -49,6 +49,15 @@ fn bad_entries_are_reported_and_left_out_never_fatal() {
 }
 
 #[test]
+fn oversized_text_is_not_read() {
+    let mut text = String::from("[flags]\nAI-MCP = true\n");
+    text.push_str(&"#".repeat(MAX_FILE_BYTES as usize));
+    let flags = Flags::from_parts(Some(&text), None);
+    assert!(!flags.enabled(&AI_MCP));
+    assert!(flags.problems.iter().any(|p| p.contains("larger than")));
+}
+
+#[test]
 fn many_entries_are_capped() {
     let mut text = String::from("[flags]\n");
     for i in 0..(MAX_ENTRIES + 10) {
@@ -79,6 +88,7 @@ fn ids_are_checked() {
 #[cfg(not(target_arch = "wasm32"))]
 mod file {
     use super::super::*;
+    use crate::store;
 
     #[test]
     fn set_creates_the_file_and_keeps_what_else_is_in_it() {
@@ -96,6 +106,55 @@ mod file {
         let flags = Flags::from_parts(Some(&text), None);
         assert!(!flags.enabled(&AI_MCP));
         assert!(flags.enabled(&AI_MODELS));
+    }
+
+    #[test]
+    fn set_keeps_the_comment_after_a_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        std::fs::write(&path, "[flags]\nAI-MCP = true # on for testing\n").unwrap();
+        set(&path, "AI-MCP", false).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("AI-MCP = false # on for testing"), "{text}");
+    }
+
+    #[test]
+    fn set_refuses_to_write_what_could_not_be_read_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        let mut text = String::from("[flags]\n");
+        while (text.len() as u64) < MAX_FILE_BYTES - 4 {
+            text.push_str("# padding\n");
+        }
+        std::fs::write(&path, &text).unwrap();
+        assert!(matches!(set(&path, "AI-MODELS", true), Err(FlagError::Unreadable(_))));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text, "left as it was");
+    }
+
+    #[test]
+    fn a_missing_file_is_mentioned_only_when_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope.toml");
+        let named = store::load_from(Some(missing.clone()), true, None);
+        assert!(named.problems.iter().any(|p| p.contains("does not exist")), "{:?}", named.problems);
+        assert!(store::load_from(Some(missing), false, None).problems.is_empty(), "the usual file not existing yet is normal");
+    }
+
+    #[test]
+    fn two_writers_keep_both_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        let ids: Vec<String> = (0..8).map(|i| format!("F{i}")).collect();
+        std::thread::scope(|s| {
+            for id in &ids {
+                let path = &path;
+                s.spawn(move || set(path, id, true).unwrap());
+            }
+        });
+        let flags = Flags::from_parts(Some(&std::fs::read_to_string(&path).unwrap()), None);
+        for id in &ids {
+            assert!(flags.enabled_id(id), "{id} lost");
+        }
     }
 
     #[test]
