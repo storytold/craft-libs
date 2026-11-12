@@ -301,6 +301,9 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
 - [`craft-pptx`](crates/pptx/README.md): PresentationML, the model of a `.pptx` presentation:
   masters, layouts, slides, shapes, placeholders and their inheritance, transitions and animations,
   comments, sections, media and kept parts. From DeckCraft. DrawingML comes from `craft-drawingml`.
+- [`craft-press-print`](crates/press-print/README.md): press-accurate printing: a PDF page separated
+  into plates by `craft-prepress`, composited into the printer's RGB profile and printed through
+  `craft-print`'s RGB transport, application-managed.
 - [`craft-print`](crates/print/README.md): PDF submission to CUPS and Windows, printer discovery,
   duplex/copies/colour and driver preferences. PDF generation stays in each app.
 - [`craft-proof`](crates/proof/README.md): proofing per language (spelling, suggestions, grammar,
