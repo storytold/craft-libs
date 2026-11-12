@@ -1,7 +1,7 @@
 //! The model and edit vocabulary: [`GridModel`], [`GridState`], edits, filters and cell problems.
 
 use super::column_letters;
-use craft_behavior::{CellAt, CellDirection, CellRange, CellSelection, EditEvent, LineIndex};
+use craft_behavior::{CellAt, CellDirection, CellRange, CellSelection, EditEvent, LineIndex, ScrollPos};
 use craft_ui::contract::PaintUi;
 use craft_ui::runtime::env::Label;
 use egui::{Pos2, Rect};
@@ -74,19 +74,21 @@ pub struct GridState {
     pub selection: CellSelection<u32>,
     /// The zoom, within [`SHEET_ZOOM`]; 1.0 for a new sheet.
     pub zoom: f32,
+    /// How far the cells are scrolled, in points at the zoom; a pinch keeps the cell under the pointer by moving it.
+    pub scroll: ScrollPos,
 }
 
 impl GridState {
-    /// A sheet view with `selection` at `zoom`.
+    /// A sheet view with `selection` at `zoom`, scrolled to the first cell.
     pub fn new(selection: CellSelection<u32>, zoom: f32) -> Self {
-        GridState { selection, zoom }
+        GridState { selection, zoom, scroll: ScrollPos::default() }
     }
 }
 
 impl Default for GridState {
     /// A1 selected at 100 %.
     fn default() -> Self {
-        Self { selection: CellSelection::cell(CellAt::new(0, 0)), zoom: 1.0 }
+        Self { selection: CellSelection::cell(CellAt::new(0, 0)), zoom: 1.0, scroll: ScrollPos::default() }
     }
 }
 

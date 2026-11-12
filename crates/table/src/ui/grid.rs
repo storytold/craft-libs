@@ -6,7 +6,7 @@
 //! parts and paint.
 
 pub use craft_behavior::{CellAdvance, CellAt, CellDirection, CellRange, CellSelection, CellSpace, LineIndex, Positions, SHEET_ZOOM};
-use craft_behavior::{DisplayOrder, ItemSource, Metrics, SheetLayout};
+use craft_behavior::{DisplayOrder, EditEvent, ItemSource, Metrics, Mixed, ScrollPos, SheetLayout};
 use craft_ui::contract::{
     Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, Common, ContainerProps, ContextMenuRequest, Cx, Outcome,
     PaintUi, Props as _, Remember as _, Role, SelectMode, Sizing,
@@ -151,7 +151,8 @@ pub struct CellGridStyle {
 /// - The editor: typing opens the active cell in Enter mode (the arrows move to another cell and commit), F2 in Edit
 ///   mode (the arrows move the caret), `=` and an operator in point mode (the arrows move a reference cursor).
 ///
-/// The scroll lives in the collection.
+/// A pinch or Cmd/Ctrl+wheel over the grid zooms it within [`SHEET_ZOOM`] about the pointer, keeping the cell under
+/// the pointer in place. The zoom and the scroll live in the [`GridState`].
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(collection)]
 pub struct CellGrid<'a> {
@@ -174,7 +175,11 @@ pub struct CellGrid<'a> {
     selection: Bind<'a, CellSelection<u32>>,
     /// The selection as the app held it when the pass began, for the parts that declare before the item step runs.
     snapshot: CellSelection<u32>,
+    /// The zoom this pass shows, clamped from the state's.
     zoom: f32,
+    /// The state's zoom, which a pinch writes for the next pass.
+    zoom_kept: &'a mut f32,
+    scroll: Bind<'a, ScrollPos>,
     /// The ranges the copy marks surround.
     #[prop]
     copy_mark: &'a [CellRange<u32>],
@@ -195,8 +200,8 @@ pub struct CellGrid<'a> {
 impl<'a> CellGrid<'a> {
     /// A grid named `label` over `model` that keeps its selection and zoom in `state`.
     pub fn new(label: impl Into<Label>, model: &'a dyn GridModel, state: &'a mut GridState) -> Self {
-        let GridState { selection, zoom } = state;
-        let zoom = if zoom.is_finite() { zoom.clamp(*SHEET_ZOOM.start(), *SHEET_ZOOM.end()) } else { 1.0 };
+        let GridState { selection, zoom: zoom_kept, scroll } = state;
+        let zoom = if zoom_kept.is_finite() { zoom_kept.clamp(*SHEET_ZOOM.start(), *SHEET_ZOOM.end()) } else { 1.0 };
         let digits = digits_of(model.last_used().row.saturating_add(ROW_HEADER_LOOKAHEAD as u32)) as u8;
         CellGrid {
             common: Common::new(),
@@ -210,6 +215,8 @@ impl<'a> CellGrid<'a> {
             snapshot: selection.clone(),
             selection: Bind::bound(selection),
             zoom,
+            zoom_kept,
+            scroll: Bind::bound(scroll),
             copy_mark: &[],
             filters: &[],
             error_tag: None,
@@ -268,10 +275,14 @@ impl craft_ui::contract::Component for CellGrid<'_> {
         self.paint_sheet(ui, cx);
     }
 
-    fn finish(self, mut cx: Cx<'_, Self>) -> GridOutput {
+    fn scroll(&mut self) -> Option<BindMut<'_, ScrollPos>> {
+        Some(self.scroll.reborrow())
+    }
+
+    fn finish(mut self, mut cx: Cx<'_, Self>) -> GridOutput {
         let mut collection = cx.collection_response();
         let geometry = self.frame.as_ref().map(|frame| frame.geometry.clone());
-        let mut pass = self.pass;
+        let mut pass = std::mem::take(&mut self.pass);
         if collection.events.iter().any(|event| matches!(event, CollectionEvent::Activate(_)))
             && let Some(cell) = cx.collection_selection().and_then(|selection| selection.active().copied())
         {
@@ -296,6 +307,14 @@ impl craft_ui::contract::Component for CellGrid<'_> {
             }
         }
         collection.events.retain(|event| !matches!(event, CollectionEvent::ContextMenu(_)));
+        if let Some(geometry) = &geometry {
+            for event in &collection.events {
+                if let CollectionEvent::Zoom { factor, about, .. } = event {
+                    self.zoom_about(geometry, *factor, *about, cx.resolved.label);
+                }
+            }
+        }
+        collection.events.retain(|event| !matches!(event, CollectionEvent::Zoom { .. }));
         let geometry = geometry.unwrap_or_else(|| {
             let layout = GridLayout::new(cx.rect, self.model.rows().clone(), self.model.columns().clone()).bands(cx.style.bands);
             SheetGeometry::new(layout, cx.style.sheet)
@@ -333,6 +352,10 @@ impl Collection for CellGrid<'_> {
         self.reveal.as_ref()
     }
 
+    fn zooms(&self) -> bool {
+        true
+    }
+
     fn cell_space<'s>(&'s self, space: CellSpace<'s, u32>) -> CellSpace<'s, u32> {
         space.merges(self.model.merges()).selectable(&*self.selectable)
     }
@@ -343,6 +366,23 @@ impl Collection for CellGrid<'_> {
 }
 
 impl CellGrid<'_> {
+    /// Zooms by `factor` within [`SHEET_ZOOM`] about the screen point `about`: the state's zoom changes, and its scroll
+    /// moves so the content under `about` stays there on the next pass (the offset is in points at the zoom).
+    fn zoom_about(&mut self, geometry: &SheetGeometry, factor: f32, about: egui::Pos2, label: &str) {
+        let (from, to) = (self.zoom, (self.zoom * factor).clamp(*SHEET_ZOOM.start(), *SHEET_ZOOM.end()));
+        if !to.is_finite() || to == from {
+            return;
+        }
+        (self.zoom, *self.zoom_kept) = (to, to);
+        let Some(Mixed::Same(before)) = self.scroll.reborrow().get() else { return };
+        // The pointer from where the scrolling cells begin; over the frozen panes or the headers the scroll stays.
+        let past = (geometry.mirror_pos(about) - geometry.split()).max(Vec2::ZERO);
+        let ratio = f64::from(to) / f64::from(from);
+        let keep = |offset: f64, past: f32| ((offset + f64::from(past)) * ratio - f64::from(past)).max(0.0);
+        let after = ScrollPos { x: keep(before.x, past.x), y: keep(before.y, past.y) };
+        self.scroll.reborrow().apply(&EditEvent::set(Mixed::Same(before), after, std::sync::Arc::from(label), None));
+    }
+
     /// The layout of the sheet: its frozen lines say where Ctrl+Home lands.
     fn sheet_layout(&self) -> SheetLayout {
         let (rows, columns) = self.model.frozen();

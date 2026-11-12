@@ -5,11 +5,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use craft_behavior::{CellSelection, EditEvent, PartKey, PartRef};
-use craft_table::ui::{CellAt, CellEdit, CellGrid, CellRange, GridEdit, GridModel, GridState, LineIndex, SHEET_COLUMNS, SHEET_ROWS};
+use craft_table::ui::{CellAt, CellEdit, CellGrid, CellRange, GridEdit, GridModel, GridState, LineIndex, SHEET_COLUMNS, SHEET_ROWS, SheetGeometry};
 use craft_ui::contract::PaintUi;
 use craft_ui::primitives::TextRun;
 use craft_ui::testing::focus::AccessActionKind;
-use craft_ui::testing::{Fixture, trial};
+use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Key, Modifiers, Rect, Vec2};
 
 /// The default line sizes of the test sheet, points at 100 %.
@@ -58,6 +58,7 @@ struct Rig {
     edits: Rc<RefCell<Vec<GridEdit>>>,
     committed: Rc<RefCell<Vec<CellEdit>>>,
     grid: Rc<Cell<Option<egui::Id>>>,
+    geometry: Rc<RefCell<Option<SheetGeometry>>>,
 }
 
 fn rig(hidden_column: Option<u32>, selection: CellSelection<u32>, zoom: f32) -> Rig {
@@ -69,11 +70,14 @@ fn rig(hidden_column: Option<u32>, selection: CellSelection<u32>, zoom: f32) -> 
     let shown_committed = committed.clone();
     let grid = Rc::new(Cell::new(None));
     let shown_grid = grid.clone();
+    let geometry = Rc::new(RefCell::new(None));
+    let shown_geometry = geometry.clone();
     let mut fixture = Fixture::new(move |ui| {
         let model = Sheet::new(hidden_column, shown_zoom.clone());
         let mut state = shown_state.borrow().clone();
         let out = CellGrid::new("Sheet", &model, &mut state).show_sheet(ui);
         shown_grid.set(Some(out.collection.response.id));
+        *shown_geometry.borrow_mut() = Some(out.geometry);
         *shown_state.borrow_mut() = state;
         shown_edits.borrow_mut().extend(out.edits);
         shown_committed.borrow_mut().extend(out.committed);
@@ -82,7 +86,7 @@ fn rig(hidden_column: Option<u32>, selection: CellSelection<u32>, zoom: f32) -> 
     let target = fixture.node_of(grid.get().expect("the grid showed")).expect("the grid has a node");
     fixture.access(AccessActionKind::Focus, &target);
     fixture.settle();
-    Rig { fixture, state, edits, committed, grid }
+    Rig { fixture, state, edits, committed, grid, geometry }
 }
 
 impl Rig {
@@ -109,6 +113,13 @@ impl Rig {
     fn click_part(&mut self, part: impl Into<PartRef>, modifiers: Modifiers) {
         let at = self.part_rect(part).center();
         self.fixture.hold(modifiers).click_at(at).hold(Modifiers::NONE).idle(2);
+    }
+
+    /// The cell under the screen point `at` in the last pass's geometry.
+    fn cell_under(&self, at: egui::Pos2) -> CellAt<u32> {
+        let geometry = self.geometry.borrow();
+        let geometry = geometry.as_ref().expect("the grid showed");
+        geometry.cell_at(geometry.mirror_pos(at))
     }
 
     fn drag_part(&mut self, part: impl Into<PartRef>, by: Vec2) {
@@ -260,4 +271,19 @@ fn header_shift_click_extends_and_cmd_click_adds_a_whole_line() {
     assert_eq!(ranges.len(), 2, "Cmd adds a range: {ranges:?}");
     assert_eq!((ranges[0].rows(), ranges[0].column_span()), whole, "the first range stays");
     assert_eq!((ranges[1].rows(), ranges[1].column_span()), (0..=SHEET_ROWS - 1, 5..=5), "the new range is all of column F");
+}
+
+/// A pinch (Cmd/Ctrl with the wheel) over the grid zooms it about the pointer: the cell under the pointer stays there.
+#[trial]
+fn a_pinch_zooms_about_the_pointer() {
+    let mut rig = rig(None, a1(), 1.0);
+    let target = rig.fixture.node_of(rig.grid.get().expect("the grid showed")).expect("the grid has a node");
+    let at = target.rect.center();
+    let before = rig.cell_under(at);
+    rig.fixture.frame(vec![pointer::moved(at)]);
+    rig.fixture.frame(vec![pointer::zoom_wheel(40.0)]);
+    rig.fixture.idle(3);
+    let zoom = rig.state.borrow().zoom;
+    assert!(zoom > 1.0 && zoom <= 4.0, "the zoom grew within the sheet's range: {zoom}");
+    assert_eq!(rig.cell_under(at), before, "the cell under the pointer stays under it");
 }
