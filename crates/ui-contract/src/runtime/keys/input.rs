@@ -38,6 +38,9 @@ struct Strip<'a> {
     /// Nothing has the focus and the window's canvas keeps Tab (`KeepKeys::Tab`): the canvas is the key target, as
     /// the chrome gate takes it, and reads a bare Tab from egui.
     canvas_keeps_tab: bool,
+    /// Nothing has the focus and the window registered no focus stop in its last pass: a framework focus move has
+    /// nowhere to go, so a bare Tab is egui's.
+    no_stops: bool,
     /// egui holds a label text selection, which a copy or cut event copies.
     label_selection: bool,
 }
@@ -188,6 +191,10 @@ impl Strip<'_> {
             // The app's own focused widget or popup, or the canvas that keeps Tab with nothing focused, reads the key
             // from egui; the runtime routes nothing for it, so no shortcut toggles the chrome with it either.
             true
+        } else if bare_tab && self.no_stops {
+            // egui moves its own focus with it, from nothing focused into the app's own widgets (`focus::begin`).
+            batch.nav.tab_to_egui = true;
+            true
         } else if bare_tab && !self.keeps_tab {
             batch.tabs.push(TabPress { input: *input, repeat });
             false
@@ -273,6 +280,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
     let window_shortcuts = commands::window_shortcuts(ctx);
     let canvas_keeps_tab =
         keys.is_none() && !record.foreign && focus::canvas_keys(ctx, viewport).is_some_and(|canvas| canvas.keep == focus::KeepKeys::Tab);
+    let no_stops = keys.is_none() && !record.foreign && !focus::has_stops(ctx, viewport);
     let latin = input.latin_layout_chars.clone();
     let (batch, visible) = with(ctx, viewport, |stage| {
         let mut claims = record.claims.clone();
@@ -299,6 +307,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
             canvas_space: hole.as_ref().is_some_and(|hole| hole.space || hole.space_pressed),
             foreign: record.foreign,
             canvas_keeps_tab,
+            no_stops,
             label_selection: record.label_selection,
         };
         let mut batch = Batch::default();

@@ -58,6 +58,9 @@ pub enum MenuKey {
 pub(crate) struct NavKeys {
     pub(crate) tabs: Vec<bool>,
     pub(crate) panes: Vec<bool>,
+    /// The input hook left a bare Tab in egui's input: nothing has the focus and the window registered no focus stop,
+    /// so the framework has nothing to move to and egui moves its own focus.
+    pub(crate) tab_to_egui: bool,
 }
 
 struct Press {

@@ -143,6 +143,8 @@ pub(crate) struct State {
     pub(super) frame: u64,
     /// The stop focus moved onto and the frame whose passes see it.
     pub(super) arrived: Option<(u64, StopKey)>,
+    /// The running pass's begin hook left a Tab to egui (`NavKeys::tab_to_egui`); its end hook takes it.
+    pub(super) tab_to_egui: bool,
 }
 
 fn viewport(ctx: &Context) -> ViewportId {
@@ -202,6 +204,12 @@ pub fn host_canvas(ctx: &Context, id: Id, keys: KeyUse) {
 /// app's own. Read before the begin hook rotates the registrations, by the input hook and the begin hook's Tab moves.
 pub(crate) fn canvas_keys(ctx: &Context, viewport: ViewportId) -> Option<KeyUse> {
     with_viewport(ctx, viewport, |state| state.stops.iter().find(|rec| rec.stop.keys.chrome_key).map(|rec| rec.stop.keys))
+}
+
+/// Whether `viewport` registered any focus stop in its last pass. Read before the begin hook rotates the
+/// registrations, by the input hook.
+pub(crate) fn has_stops(ctx: &Context, viewport: ViewportId) -> bool {
+    with_viewport(ctx, viewport, |state| !state.stops.is_empty())
 }
 
 /// How many stops the running pass has registered so far.
@@ -652,14 +660,16 @@ pub(crate) fn begin(ctx: &Context, tab_all_controls: bool) {
         tab_all_controls,
         frame: crate::runtime::egui::pass::frame_nr(ctx, viewport(ctx)),
     };
+    let tab_to_egui = input.nav.tab_to_egui;
     let (acts, announcements, host_focus) = with(ctx, |state| {
         let host_focus = state.record.host_focus;
+        state.tab_to_egui = tab_to_egui;
         let (acts, announcements) = nav::begin(state, input);
         (acts, announcements, host_focus)
     });
-    // egui's direction moves focus from the widget it holds: only from an app's own widget, and not in a pass whose
-    // focus the framework moves.
-    if !host_focus || !acts.is_empty() {
+    // egui's direction moves focus from the widget it holds, an app's own, or from nothing with a Tab the key stage
+    // left to egui; never in a pass whose focus the framework moves.
+    if !(host_focus || tab_to_egui) || !acts.is_empty() {
         egui_focus::clear_directional_focus(ctx);
     }
     apply(ctx, acts);
@@ -671,8 +681,15 @@ pub(crate) fn begin(ctx: &Context, tab_all_controls: bool) {
 /// The end hook: applies the press's focus move, returns focus to the opener of a scope that went away,
 /// moves it off a stop that was not registered, and records what the next input hook reads.
 pub(crate) fn end(ctx: &Context) {
-    let focused = egui_focus::focused(ctx);
     let viewport = viewport(ctx);
+    // A Tab left to egui moves egui focus into the app's own widgets only: a component's egui widget takes focus
+    // through its stop, and a component that registered none (a disabled one) takes none.
+    if with(ctx, |state| std::mem::take(&mut state.tab_to_egui))
+        && let Some(id) = egui_focus::focused(ctx).filter(|id| crate::runtime::pointer::made_by_component(ctx, viewport, *id))
+    {
+        egui_focus::surrender(ctx, id);
+    }
+    let focused = egui_focus::focused(ctx);
     let frame = crate::runtime::egui::pass::frame_nr(ctx, viewport);
     let acts = with(ctx, |state| nav::end(state, focused, frame));
     apply(ctx, acts);

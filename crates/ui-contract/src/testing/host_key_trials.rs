@@ -191,6 +191,56 @@ fn arrows_and_tab_move_egui_focus_among_host_buttons() {
     assert_eq!(egui_focused(&frames.ctx), Some(named_id("button")), "egui's arrows leave a framework stop's focus alone");
 }
 
+/// What the window shows before the app's own egui buttons.
+#[derive(Clone, Copy)]
+enum Before {
+    Nothing,
+    /// A framework focus stop.
+    Stop,
+    /// A component's egui widget that registered no stop, as a disabled component's.
+    Unstopped,
+}
+
+/// A window of the app's own egui buttons after `before`: where egui focus is after a bare Tab or Shift+Tab from
+/// nothing focused, and whether the press reached egui's input.
+fn tab_from_nothing(before: Before, shift: bool) -> (Option<Id>, bool) {
+    let (first, last) = (named_id("host first"), named_id("host last"));
+    let reached = Rc::new(RefCell::new(false));
+    let seen_tab = Rc::clone(&reached);
+    let mut show = move |ui: &mut Ui| {
+        *seen_tab.borrow_mut() |= key_reached(ui.ctx(), Key::Tab);
+        match before {
+            Before::Nothing => {}
+            Before::Stop => {
+                widget(ui, named_id("button"));
+                register_stop(ui.ctx(), Stop::new(named_id("button"), KeyUse::of(Input::Pointer)));
+            }
+            Before::Unstopped => {
+                sensing::show(ui, &[ProbeRoot::new("unstopped", Rect::from_min_size(Pos2::new(100.0, 300.0), egui::vec2(80.0, 30.0)), Sense::CLICK)]);
+            }
+        }
+        fixture::host_button(ui, first, Rect::from_min_size(Pos2::new(300.0, 300.0), egui::vec2(80.0, 30.0)));
+        fixture::host_button(ui, last, Rect::from_min_size(Pos2::new(420.0, 300.0), egui::vec2(80.0, 30.0)));
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    assert_eq!(egui_focused(&frames.ctx), None);
+    let mods = if shift { Modifiers::SHIFT } else { Modifiers::NONE };
+    frames.frame(vec![key_press(Key::Tab, mods)], &mut show);
+    let reached = *reached.borrow();
+    frames.frame(Vec::new(), &mut show);
+    (egui_focused(&frames.ctx), reached)
+}
+
+#[trial]
+fn tab_from_nothing_focused_in_a_window_without_stops_moves_egui_focus() {
+    let (first, last) = (Some(named_id("host first")), Some(named_id("host last")));
+    assert_eq!(tab_from_nothing(Before::Nothing, false), (first, true), "Tab gives egui focus to the first host button");
+    assert_eq!(tab_from_nothing(Before::Nothing, true), (last, true), "Shift+Tab to the last");
+    assert_eq!(tab_from_nothing(Before::Stop, false), (Some(named_id("button")), false), "with a framework stop, Tab is the framework's move");
+    assert_eq!(tab_from_nothing(Before::Unstopped, false), (None, true), "egui's Tab gives no focus to a component's widget without a stop");
+}
+
 #[trial]
 fn escape_ends_an_egui_drag_on_a_host_widget() {
     let area = named_id("host drag area");
