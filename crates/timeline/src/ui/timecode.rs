@@ -1,23 +1,22 @@
 //! The timecode field, its codec and the Timecode panel.
 
+mod readout;
 #[cfg(feature = "screen-testing")]
 mod stories;
 
 use craft_behavior::nav::LARGE_STEPS;
-use craft_behavior::{Caret, Codec, DisplayOrder, IconId, ItemSource, NavMove, NotAValue, PartKey, Selection, Sense, ValueDrag};
+use craft_behavior::{Caret, Codec, IconId, NavMove, NotAValue, PartKey, Sense, ValueDrag};
 use craft_ui::buttons::IconButton;
 use craft_ui::contract::{
     Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Held, Input, MeasureCx, NoValue, Outcome, PartsCx, Props, Role, Scrub,
-    SelectMode, Show as _, ShowCollection as _, ShowContainer as _, clicked,
+    Show as _, ShowContainer as _, clicked,
 };
 use craft_ui::display::Divider;
 use craft_ui::layout_components::Stack;
-use craft_ui::list::{List, ListRow};
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::primitives::{TextKey, TextOptions, TextRun};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::focus::KeyUse;
-use craft_ui::runtime::memory::Remember as _;
 use craft_ui::style::{Ink, StyleCx, TypeRole};
 use craft_ui::text::FieldStyle;
 use egui::{Rect, Response, Ui, Vec2};
@@ -26,6 +25,7 @@ use std::ops::Deref;
 
 use crate::time::Tick;
 use crate::timecode::{TimeDisplay, TimeFormat, TimecodeError, format_time, parse_time};
+use readout::TimecodeReadout;
 
 /// Frames the Up and Down keys step a field.
 const STEP_FRAMES: i64 = 1;
@@ -430,33 +430,6 @@ struct RowText {
     spoken: String,
 }
 
-/// The rows as a collection source, keyed by position.
-struct Rows<'a> {
-    texts: &'a [RowText],
-}
-
-impl DisplayOrder<usize> for Rows<'_> {
-    fn len(&self) -> usize {
-        self.texts.len()
-    }
-
-    fn key(&self, at: usize) -> usize {
-        at
-    }
-
-    fn text(&self, at: usize) -> Option<Cow<'_, str>> {
-        Some(Cow::Borrowed(self.texts[at].value.as_str()))
-    }
-}
-
-impl ItemSource<usize> for Rows<'_> {}
-
-/// The panel's session state: the row the menu acts on.
-#[derive(Clone, Debug, Default)]
-struct PanelMemory {
-    selection: Selection<usize>,
-}
-
 /// A row's menu: its kind, its monitor, its display, and Remove Row while another row is left.
 fn row_menu(ui: &mut Ui, words: &TimecodeWords, row: &TimecodeRow, removable: bool) -> Option<RowCommand> {
     let mut ran = None;
@@ -490,10 +463,10 @@ fn row_menu(ui: &mut Ui, words: &TimecodeWords, row: &TimecodeRow, removable: bo
     ran
 }
 
-/// Premiere's Timecode panel: each row's text with its caption ("Current Time \u{b7} Program"), the first row
-/// emphasised. The app gives each row's text. A secondary click, the Menu key or Shift+F10 on a row opens its menu
-/// (kind, source, display with "Sequence Display" to follow the sequence again, Remove Row); "+" adds a row. The rows
-/// are one list: one Tab stop, the arrows move.
+/// Premiere's Timecode panel: each row's time centred over its caption ("Current Time \u{b7} Program"), the first row
+/// in the accent ink. The app gives each row's text. Rows are read-only readouts, each one Tab stop; a secondary click,
+/// the Menu key or Shift+F10 on a row opens its menu (kind, source, display with "Sequence Display" to follow the
+/// sequence again, Remove Row); "+" adds a row.
 #[derive(craft_ui::contract::Pattern)]
 pub struct TimecodePanel<'a> {
     label: Label,
@@ -527,32 +500,20 @@ impl<'a> TimecodePanel<'a> {
                     RowText { value, caption, spoken }
                 })
                 .collect();
-            let mut selection = root.keep::<PanelMemory>().selection.clone();
-            let source = Rows { texts: &texts };
-            let out = List::<usize>::new(label.clone()).select(SelectMode::Single).selection(Bind::bound(&mut selection)).show_items(
-                ui,
-                &source,
-                &mut |key, _| {
-                    let row = &texts[*key];
-                    ListRow::new(row.value.clone()).detail(row.caption.clone()).strong(*key == 0).accessible_name(row.spoken.clone())
-                },
-            );
-            let target = selection.lead.or_else(|| selection.items.first().copied());
-            root.keep::<PanelMemory>().selection = selection;
             let removable = before.rows.len() > 1;
-            let ran = Menu::context(words.menu.clone(), &out.response)
-                .show(ui, |ui, _| target.and_then(|at| before.rows.get(at)).and_then(|row| row_menu(ui, &words, row, removable)))
-                .inner
-                .flatten();
-            if let (Some(command), Some(at)) = (ran, target)
-                && let Some(row) = next.rows.get_mut(at)
-            {
-                match command {
-                    RowCommand::Kind(kind) => row.kind = kind,
-                    RowCommand::Source(source) => row.source = source,
-                    RowCommand::Display(display) => row.display = display,
-                    RowCommand::Remove => {
-                        next.rows.remove(at);
+            for (at, (row, shown)) in before.rows.iter().zip(&texts).enumerate() {
+                let readout = TimecodeReadout::new(shown.spoken.clone(), &shown.value, &shown.caption).accent(at == 0).show(ui);
+                let ran = Menu::context(words.menu.clone(), &readout).show(ui, |ui, _| row_menu(ui, &words, row, removable)).inner.flatten();
+                if let Some(command) = ran
+                    && let Some(row) = next.rows.get_mut(at)
+                {
+                    match command {
+                        RowCommand::Kind(kind) => row.kind = kind,
+                        RowCommand::Source(source) => row.source = source,
+                        RowCommand::Display(display) => row.display = display,
+                        RowCommand::Remove => {
+                            next.rows.remove(at);
+                        }
                     }
                 }
             }
