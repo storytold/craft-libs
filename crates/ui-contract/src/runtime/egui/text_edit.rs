@@ -182,7 +182,7 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
             ui.ctx().memory_mut(|memory| {
                 memory.interested_in_focus(id, layer);
                 if had_focus {
-                    memory.request_focus(id);
+                    super::focus::keep_focus(memory, id);
                 }
             });
         }

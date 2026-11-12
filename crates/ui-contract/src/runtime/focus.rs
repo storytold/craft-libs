@@ -689,14 +689,18 @@ pub(crate) fn end(ctx: &Context) {
     {
         egui_focus::surrender(ctx, id);
     }
+    let app_widget = |id: Id| {
+        let made = crate::runtime::pointer::made_by_component(ctx, viewport, id);
+        with(ctx, |state| state.app_widget(id, made))
+    };
     let focused = egui_focus::focused(ctx);
+    let on_app_widget = focused.is_some_and(app_widget);
     let frame = crate::runtime::egui::pass::frame_nr(ctx, viewport);
-    let acts = with(ctx, |state| nav::end(state, focused, frame));
+    let acts = with(ctx, |state| nav::end(state, focused, on_app_widget, frame));
     apply(ctx, acts);
     // Escape over a captured framework press or drag cancels it (`frame::begin_pass`), whatever egui has focused.
     let captured = crate::runtime::pointer::press_captured(ctx) || crate::runtime::drag::running(ctx);
-    let unmade = with(ctx, |state| state.focus_now.filter(|_| state.stop_of_focus().is_none()));
-    let host_focus = !captured && unmade.is_some_and(|id| !crate::runtime::pointer::made_by_component(ctx, viewport, id));
+    let host_focus = !captured && with(ctx, |state| state.focus_now).is_some_and(app_widget);
     let foreign = host_focus || (!captured && egui_focus::popup_open(ctx));
     let label_selection = egui_focus::label_selection(ctx);
     with(ctx, |state| {

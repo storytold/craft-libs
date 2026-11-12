@@ -250,6 +250,18 @@ pub(crate) fn set_click_options(ctx: &Context, distance: f32, seconds: f64) {
     });
 }
 
+/// Sets egui's surrender option, the app's rule for its own focused widgets: with `never`, a click elsewhere leaves
+/// their focus; otherwise egui's default, which surrenders it on a click elsewhere.
+pub(crate) fn set_app_surrender(ctx: &Context, never: bool) {
+    let rule = if never { egui::SurrenderFocusOn::Never } else { egui::SurrenderFocusOn::Clicks };
+    ctx.options_mut(|options| options.input_options.surrender_focus_on = rule);
+}
+
+/// Whether egui's surrender option is egui's default, a click elsewhere.
+pub(crate) fn app_surrenders_on_click(ctx: &Context) -> bool {
+    ctx.options(|options| options.input_options.surrender_focus_on == egui::SurrenderFocusOn::Clicks)
+}
+
 /// egui's click options: the longest movement and the longest press that still count as a click.
 pub(crate) fn click_options(ctx: &Context) -> (f32, f64) {
     ctx.options(|options| (options.input_options.max_click_dist, options.input_options.max_click_duration))

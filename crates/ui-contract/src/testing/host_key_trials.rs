@@ -67,23 +67,60 @@ fn host_window() -> (Rc<RefCell<Host>>, impl FnMut(&mut Ui)) {
     (host, show)
 }
 
+/// A click at `at`, with the pointer moved there first; returns egui's focus after the press and after the release.
+fn click_focus(frames: &mut Frames, show: &mut impl FnMut(&mut Ui), at: Pos2) -> (Option<Id>, Option<Id>) {
+    frames.frame(vec![moved(at)], &mut *show);
+    frames.frame(vec![press(at)], &mut *show);
+    let pressed = egui_focused(&frames.ctx);
+    frames.frame(vec![release(at)], &mut *show);
+    frames.frame(Vec::new(), &mut *show);
+    (pressed, egui_focused(&frames.ctx))
+}
+
 #[trial]
-fn a_press_on_the_focused_egui_field_keeps_its_focus() {
+fn an_app_widget_keeps_or_surrenders_focus_by_egui_s_rule() {
     let (host, mut show) = host_window();
     let mut frames = Frames::new();
     frames.frame(Vec::new(), &mut show);
-    let inside = host.borrow().rect.center();
-    fixture::host_focus(&frames.ctx, field());
-    frames.frame(vec![moved(inside)], &mut show);
-    assert_eq!(egui_focused(&frames.ctx), Some(field()));
-    frames.frame(vec![press(inside)], &mut show);
-    assert_eq!(egui_focused(&frames.ctx), Some(field()), "a press inside the focused field keeps its focus");
-    frames.frame(vec![release(inside)], &mut show);
+    assert!(fixture::app_surrenders_on_click(&frames.ctx), "the runtime leaves the app's surrender option alone");
     let rect = host.borrow().rect;
     let outside = rect.left_bottom() + egui::vec2(0.0, rect.height() * 3.0);
-    frames.frame(vec![moved(outside)], &mut show);
-    frames.frame(vec![press(outside)], &mut show);
-    assert_eq!(egui_focused(&frames.ctx), None, "a press no widget takes surrenders the focus");
+    fixture::host_focus(&frames.ctx, field());
+    frames.frame(Vec::new(), &mut show);
+    assert_eq!(click_focus(&mut frames, &mut show, rect.center()), (Some(field()), Some(field())), "a click inside the field keeps its focus");
+    assert_eq!(
+        click_focus(&mut frames, &mut show, outside),
+        (Some(field()), None),
+        "a click no widget takes ends the field's focus by egui's rule: at the release, not at the press"
+    );
+    fixture::set_app_surrender(&frames.ctx, true);
+    fixture::host_focus(&frames.ctx, field());
+    frames.frame(Vec::new(), &mut show);
+    assert_eq!(click_focus(&mut frames, &mut show, outside), (Some(field()), Some(field())), "the app's rule keeps it");
+}
+
+#[trial]
+fn the_framework_s_focus_moves_only_by_its_press_rule() {
+    let probe_rect = Rect::from_min_size(Pos2::new(300.0, 300.0), egui::vec2(160.0, 40.0));
+    let (_, mut base) = host_window();
+    let mut show = move |ui: &mut Ui| {
+        base(ui);
+        sensing::show(ui, &[ProbeRoot::new("probe", probe_rect, Sense::CLICK)]);
+    };
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), &mut show);
+    assert!(fixture::app_surrenders_on_click(&frames.ctx));
+    let button = named_id("button");
+    request(&frames.ctx, FocusTarget::Id(button));
+    frames.frame(Vec::new(), &mut show);
+    assert_eq!(egui_focused(&frames.ctx), Some(button));
+    assert_eq!(
+        click_focus(&mut frames, &mut show, probe_rect.center()),
+        (Some(button), Some(button)),
+        "a click on a control that takes no focus leaves the framework's focus, whatever egui's option"
+    );
+    let empty = probe_rect.left_bottom() + egui::vec2(0.0, 100.0);
+    assert_eq!(click_focus(&mut frames, &mut show, empty).0, None, "a press no component takes drops the framework's focus at the press");
 }
 
 #[trial]

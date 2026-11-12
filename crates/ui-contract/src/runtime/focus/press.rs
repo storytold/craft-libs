@@ -65,8 +65,8 @@ impl State {
     /// text part to commit its draft when the press leaves it.
     pub(super) fn classify_press(&mut self, at: &PressAt) {
         let winner = at.winner.as_ref();
-        // A press on the widget that holds egui focus (the text of a field in edit, or a host's own focused widget) is
-        // that widget's own: it keeps the focus and the draft.
+        // A press on the widget that holds egui focus (the text of a field in edit) is that widget's own: it keeps the
+        // focus and the draft.
         let on_focused = at.target.is_some() && at.target == self.focus_now;
         let kind = if on_focused { PressFocus::Keep } else { classify_press(winner.map(|winner| winner.sense)) };
         let (owner, part) = winner.map_or((None, None), |winner| (Some(winner.owner), winner.part));
@@ -92,8 +92,11 @@ impl State {
         self.find_stop((owner, part)).or_else(|| self.find_stop((owner, None)))
     }
 
-    /// The press's focus move at the end hook; `focused` is egui's focus now.
-    pub(super) fn apply_press(&mut self, focused: Option<Id>) -> Vec<Act> {
+    /// The press's focus move at the end hook; `focused` is egui's focus now. The press moves the framework's focus
+    /// only: when `focused` is an app's own widget (`on_app_widget`), egui's own surrender rule, by the app's
+    /// `surrender_focus_on`, decides whether a press elsewhere takes it; a press a component takes still moves focus
+    /// to the component.
+    pub(super) fn apply_press(&mut self, focused: Option<Id>, on_app_widget: bool) -> Vec<Act> {
         let Some(plan) = self.press.plan.take() else { return Vec::new() };
         match plan.kind {
             PressFocus::Take => self.take_focus(&plan),
@@ -107,7 +110,7 @@ impl State {
                 None if self.in_trapping_scope() => Vec::new(),
                 None => focused.map(Act::Surrender).into_iter().collect(),
             },
-            PressFocus::Unclaimed if focused == self.press.focus_at_begin && !self.in_trapping_scope() => {
+            PressFocus::Unclaimed if focused == self.press.focus_at_begin && !on_app_widget && !self.in_trapping_scope() => {
                 focused.map(Act::Surrender).into_iter().collect()
             }
             _ => Vec::new(),

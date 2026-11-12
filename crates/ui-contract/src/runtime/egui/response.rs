@@ -42,7 +42,7 @@ pub(crate) fn widget(ui: &Ui, id: Id, rect: Rect, sense: Sense) -> Response {
         ctx.memory_mut(|memory| {
             memory.interested_in_focus(id, ui.layer_id());
             if held {
-                memory.request_focus(id);
+                super::focus::keep_focus(memory, id);
             }
         });
     }

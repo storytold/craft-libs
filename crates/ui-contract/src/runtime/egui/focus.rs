@@ -1,11 +1,6 @@
-//! egui focus, `move_focus` and `surrender_focus_on`.
+//! egui focus, `move_focus` and the surrender rule of the focus the runtime gives.
 
 use egui::{Context, EventFilter, FocusDirection, Id, Pos2, SurrenderFocusOn};
-
-/// Stops egui from taking focus away on its own: focus on press is the runtime's (8.3).
-pub(crate) fn never_surrender_focus(ctx: &Context) {
-    ctx.options_mut(|options| options.input_options.surrender_focus_on = SurrenderFocusOn::Never);
-}
 
 /// The key filter a focused component keeps: egui keeps the keys it lists from moving focus. Arrows and Enter
 /// stay in raw input for egui's `TextEdit`; Escape is the runtime's, so the filter keeps it only for a
@@ -42,11 +37,23 @@ pub(crate) fn label_selection(ctx: &Context) -> bool {
     ctx.with_plugin::<egui::text_selection::LabelSelectionState, _>(|state| state.has_selection()).unwrap_or(false)
 }
 
-/// Gives `id` key focus with `filter`, applied from this pass: a filter set afterwards acts a pass late.
+/// Gives `id` key focus with `filter`, applied from this pass: a filter set afterwards acts a pass late. egui never
+/// takes this focus away on a press or click elsewhere: the runtime moves it on press (8.3). egui's own rule, the
+/// app's `surrender_focus_on`, applies to the focus of the app's own widgets.
 pub(crate) fn focus_with_filter(ctx: &Context, id: Id, filter: KeyFilter) {
     let filter =
         EventFilter { tab: filter.tab, horizontal_arrows: filter.horizontal_arrows, vertical_arrows: filter.vertical_arrows, escape: filter.escape };
-    ctx.memory_mut(|memory| memory.request_focus_with_filter(id, filter));
+    ctx.memory_mut(|memory| {
+        memory.request_focus_with_filter(id, filter);
+        memory.set_focus_surrender(id, SurrenderFocusOn::Never);
+    });
+}
+
+/// Gives a component's widget `id` back the focus egui dropped in this pass (egui drops the focus of a disabled
+/// widget), as the runtime's focus: egui never surrenders it on a press or click elsewhere.
+pub(crate) fn keep_focus(memory: &mut egui::Memory, id: Id) {
+    memory.request_focus(id);
+    memory.set_focus_surrender(id, SurrenderFocusOn::Never);
 }
 
 /// Takes key focus from `id` if it holds it.

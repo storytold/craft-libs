@@ -145,6 +145,12 @@ impl State {
             .or_else(|| self.stops.iter().chain(&self.last_stops).find(|rec| rec.stop.root == root).cloned())
     }
 
+    /// Whether `id`, holding egui focus, is an app's own widget: no stop's root and, as `made` says, no widget a
+    /// component made (`pointer::made_by_component`).
+    pub(super) fn app_widget(&self, id: Id, made: bool) -> bool {
+        !made && self.find_stop((id, None)).is_none() && !self.stops.iter().chain(&self.last_stops).any(|rec| rec.stop.root == id)
+    }
+
     /// Moves focus to `rec`: the egui widget is its root, and the stop is recorded under that root.
     pub(super) fn focus_stop(&mut self, rec: StopRec) -> Vec<Act> {
         self.note_entry(&rec);
@@ -556,10 +562,11 @@ pub(super) fn begin(state: &mut State, input: BeginIn) -> (Vec<Act>, Vec<String>
 }
 
 /// The end hook's focus moves, and the record the next input hook reads.
-pub(super) fn end(state: &mut State, focused: Option<Id>, frame: u64) -> Vec<Act> {
+/// `on_app_widget`: `focused` is an app's own widget (`State::app_widget`).
+pub(super) fn end(state: &mut State, focused: Option<Id>, on_app_widget: bool, frame: u64) -> Vec<Act> {
     // The moves below belong to the next frame's passes.
     state.frame = frame + 1;
-    let mut acts = state.apply_press(focused);
+    let mut acts = state.apply_press(focused, on_app_widget);
     // A layer that appeared in this pass took focus already: the press that opened it does not take it back.
     if state.entered {
         acts.clear();

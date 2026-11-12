@@ -1,6 +1,6 @@
 //! `runtime::install`: adds the runtime plugin once and sets the egui options the runtime owns.
 
-use crate::runtime::egui::{focus, input, plugin};
+use crate::runtime::egui::{input, plugin};
 use crate::runtime::{commands, frame, windows};
 use crate::style::{DuplicateStyle, StyleReplacements};
 use craft_host::target::ShellInfo;
@@ -84,9 +84,8 @@ impl std::fmt::Display for InstallError {
 
 impl std::error::Error for InstallError {}
 
-/// Adds the runtime plugin to `ctx` and sets the egui options the runtime owns: focus on press is the
-/// runtime's, interface scale is a command, and quit goes through the close guard. A second call on the same
-/// context is an error.
+/// Adds the runtime plugin to `ctx` and sets the egui options the runtime owns: interface scale is a command, and
+/// quit goes through the close guard. A second call on the same context is an error.
 pub fn install(ctx: &Context, spec: InstallSpec) -> Result<(), InstallError> {
     if plugin::is_registered(ctx) {
         return Err(InstallError::AlreadyInstalled);
@@ -94,7 +93,6 @@ pub fn install(ctx: &Context, spec: InstallSpec) -> Result<(), InstallError> {
     let looks = spec.looks.freeze().map_err(InstallError::DuplicateStyle)?;
     commands::install(ctx).map_err(InstallError::Commands)?;
     looks.store(ctx);
-    focus::never_surrender_focus(ctx);
     input::clear_shortcuts(ctx);
     windows::install(ctx, spec.shell_info, spec.window_system, spec.placement, spec.frame);
     frame::set_frame_layers(ctx, spec.frame_layers);
