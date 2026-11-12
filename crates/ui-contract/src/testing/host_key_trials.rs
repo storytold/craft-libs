@@ -308,8 +308,14 @@ fn tab_with_canvas(keys: Option<KeyUse>, focused: bool) -> (Vec<(ViewportId, Chr
     }
     take_output(&frames.ctx);
     seen(&host);
+    let before = egui_focused(&frames.ctx);
     press_key(&mut frames, &mut show, Key::Tab);
-    (take_output(&frames.ctx).chrome_toggles, seen(&host).0.contains(&Key::Tab))
+    let reached = seen(&host).0.contains(&Key::Tab);
+    if reached {
+        frames.frame(Vec::new(), &mut show);
+        assert_eq!(egui_focused(&frames.ctx), before, "a Tab the canvas keeps moves no egui focus");
+    }
+    (take_output(&frames.ctx).chrome_toggles, reached)
 }
 
 #[trial]
@@ -321,6 +327,11 @@ fn a_host_canvas_marks_the_window_and_tab_toggles_its_panels() {
         tab_with_canvas(Some(KeyUse::CANVAS.with_keep(KeepKeys::Tab)), true),
         (Vec::new(), true),
         "a focused canvas that keeps Tab gets it from egui"
+    );
+    assert_eq!(
+        tab_with_canvas(Some(KeyUse::CANVAS.with_keep(KeepKeys::Tab)), false),
+        (Vec::new(), true),
+        "with nothing focused, a canvas that keeps Tab gets it from egui and nothing toggles"
     );
 }
 

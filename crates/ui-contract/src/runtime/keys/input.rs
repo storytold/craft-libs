@@ -35,6 +35,9 @@ struct Strip<'a> {
     /// An app's own egui widget or popup has the focus (`FocusedRecord::foreign`): Tab, Escape and the clipboard
     /// events are its own.
     foreign: bool,
+    /// Nothing has the focus and the window's canvas keeps Tab (`KeepKeys::Tab`): the canvas is the key target, as
+    /// the chrome gate takes it, and reads a bare Tab from egui.
+    canvas_keeps_tab: bool,
     /// egui holds a label text selection, which a copy or cut event copies.
     label_selection: bool,
 }
@@ -181,8 +184,9 @@ impl Strip<'_> {
                 batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, typed: false, press: None });
             }
             false
-        } else if self.foreign && (bare_tab || escape) {
-            // The app's own focused widget or popup reads the key from egui; the runtime routes nothing for it.
+        } else if (self.foreign && (bare_tab || escape)) || (self.canvas_keeps_tab && bare_tab) {
+            // The app's own focused widget or popup, or the canvas that keeps Tab with nothing focused, reads the key
+            // from egui; the runtime routes nothing for it, so no shortcut toggles the chrome with it either.
             true
         } else if bare_tab && !self.keeps_tab {
             batch.tabs.push(TabPress { input: *input, repeat });
@@ -267,6 +271,8 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
         Arc::default()
     };
     let window_shortcuts = commands::window_shortcuts(ctx);
+    let canvas_keeps_tab =
+        keys.is_none() && !record.foreign && focus::canvas_keys(ctx, viewport).is_some_and(|canvas| canvas.keep == focus::KeepKeys::Tab);
     let latin = input.latin_layout_chars.clone();
     let (batch, visible) = with(ctx, viewport, |stage| {
         let mut claims = record.claims.clone();
@@ -292,6 +298,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
             menu_bar,
             canvas_space: hole.as_ref().is_some_and(|hole| hole.space || hole.space_pressed),
             foreign: record.foreign,
+            canvas_keeps_tab,
             label_selection: record.label_selection,
         };
         let mut batch = Batch::default();
@@ -358,7 +365,7 @@ pub(crate) fn take_nav(ctx: &Context) -> NavKeys {
     let viewport = crate::runtime::egui::pass::current_viewport(ctx);
     let enabled = Env::root_for(ctx, viewport).is_some_and(|env| env.tab_toggles_chrome);
     let focused = focus::focused_rec(ctx);
-    let canvas = focus::with(ctx, |state| state.stops.iter().any(|rec| rec.stop.keys.chrome_key));
+    let canvas = focus::canvas_keys(ctx, viewport).is_some();
     let layer = overlay::key_layer(ctx, &focused.as_ref().map(|rec| focus::scope_chain(ctx, rec)).unwrap_or_default());
     let gate = tab_toggles_chrome(enabled, canvas, layer, focused.as_ref().map(|rec| &rec.stop.keys));
     for press in tabs {

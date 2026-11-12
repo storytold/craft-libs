@@ -191,10 +191,17 @@ pub(crate) fn register_stop(ctx: &Context, stop: Stop) {
 /// `RootEnv::tab_toggles_chrome` a bare Tab with nothing focused toggles its panels, as with a framework canvas. Focus
 /// reaches the canvas by Tab, F6 or `request`; while it has focus, its keys route as `keys` says (the arrows as
 /// nudges, Escape as its `Intent::Cancel`). `keys` is `KeyUse::CANVAS`, or a variant such as
-/// `KeyUse::CANVAS.with_keep(KeepKeys::Tab)` while the canvas edits text in place and Tab is its own. Call it each pass
-/// the canvas shows.
+/// `KeyUse::CANVAS.with_keep(KeepKeys::Tab)` while the canvas edits text in place and Tab is its own: with the canvas
+/// focused or nothing focused, a bare Tab then stays in egui's input for the app and toggles nothing. Call it each
+/// pass the canvas shows.
 pub fn host_canvas(ctx: &Context, id: Id, keys: KeyUse) {
     register_stop(ctx, Stop::new(id, keys.with_chrome_key(true)));
+}
+
+/// The keys of the document canvas `viewport` registered in its last pass (`KeyUse::chrome_key`), framework or the
+/// app's own. Read before the begin hook rotates the registrations, by the input hook and the begin hook's Tab moves.
+pub(crate) fn canvas_keys(ctx: &Context, viewport: ViewportId) -> Option<KeyUse> {
+    with_viewport(ctx, viewport, |state| state.stops.iter().find(|rec| rec.stop.keys.chrome_key).map(|rec| rec.stop.keys))
 }
 
 /// How many stops the running pass has registered so far.
