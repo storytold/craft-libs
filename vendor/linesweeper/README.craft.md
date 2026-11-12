@@ -5,6 +5,8 @@ local patches listed below. `.cargo_vcs_info.json` names the commit it was packa
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
+The patched files are `src/sweep/sweep_line.rs` and `src/treevec.rs`.
+
 Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
 in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
@@ -15,6 +17,7 @@ holds `upstream_revision`. `local_patches` describes each local patch.
 
 | File | Change |
 |---|---|
+| `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
 | `src/sweep/sweep_line.rs`, `src/treevec.rs` | `intersection_scan_right` and `intersection_scan_left` step over each run of sweep-line segments that end at the current height with one pass of a `TreeVec` iterator, instead of one indexed tree lookup per segment. `TreeVec::range_rev_to` iterates the elements before an index from back to front for the left scan. The scans compare the same segments and push the same events, so the output does not change; a polygon with 40,000 segments ending and 40,000 starting at one height sweeps in about 60% of the time. The `scans_step_over_segments_that_end` test checks that a segment ending at the current height does not stop the scan, `runs_of_ending_segments_keep_the_output` checks the area of such a polygon, and the `treevec` test `range_rev_to` checks the iterator. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
