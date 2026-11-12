@@ -162,6 +162,7 @@ size.length.track = 128
 size.length.short = 96
 size.length.number.sm = 60
 size.length.number.md = 72
+size.row.text = 18
 size.groove = 3
 size.ramp.bar = 10
 size.ramp.groove = 5
