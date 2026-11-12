@@ -9,7 +9,8 @@
 //! [`write_message`] write one. Beside them are the pieces both are made of, for callers that
 //! work below the tree: header fields ([`split_headers`], [`write_field`]), parameters
 //! ([`parse_params`]), encoded-words ([`decode_words`], [`encode_words`]), transfer encodings
-//! ([`transfer`]), character sets ([`charset`]), address lists ([`parse_address_list`],
+//! ([`transfer`]), character sets ([`charset`]; with the `detect` feature, `detect` for bytes
+//! that name none), address lists ([`parse_address_list`],
 //! [`format_address_list`]), dates ([`parse_date`], [`format_date`]), mbox files
 //! ([`mbox_messages`], [`write_mbox_message`]) and the lookups of `multipart/related`
 //! ([`Resources`]). Beside MIME: `mailto:` links ([`parse_mailto`], RFC 6068) and strict
@@ -28,6 +29,8 @@
 
 pub mod base64;
 pub mod charset;
+#[cfg(feature = "detect")]
+pub mod detect;
 pub mod transfer;
 
 mod address;

@@ -114,6 +114,47 @@ impl PsdFile {
         Self::from_bytes_and_merged(data, |_| false).map(|(file, _)| file)
     }
 
+    /// Parses like [`Self::from_bytes`], but a file whose layer and mask section cannot be read
+    /// still opens as its merged image: the file without layers, global blocks or global mask,
+    /// with the error that was skipped. For readers that show a damaged document flattened rather
+    /// than not at all. A damaged header, colour mode data, image resources or merged image is
+    /// still an error (the first one found).
+    ///
+    /// Writing a salvaged file writes a flattened document: the unreadable layers are not in it.
+    pub fn from_bytes_salvaging(data: &[u8]) -> Result<(Self, Option<PsdError>)> {
+        let error = match Self::from_bytes(data) {
+            Ok(file) => return Ok((file, None)),
+            Err(e) => e,
+        };
+        let mut r = Reader::new(data);
+        let flattened = (|| -> Result<Self> {
+            let header = Header::read(&mut r)?;
+            let cmd_len = r.u32()?;
+            let color_mode_data = r.bytes_u64(u64::from(cmd_len))?.to_vec();
+            let resources = resources::read_section(&mut r)?;
+            let lm_len = r.len_field(header.version.is_psb())?;
+            r.bytes_u64(lm_len)?;
+            let mut file = PsdFile {
+                header,
+                color_mode_data,
+                resources,
+                layer_info: None,
+                layer_info_placement: LayerInfoPlacement::Section,
+                global_layer_mask: None,
+                global_blocks: Vec::new(),
+                layer_mask_trailing: Vec::new(),
+                image_data: ImageData::new(Compression::Raw, Vec::new()),
+                write_as_psb: false,
+            };
+            file.read_merged_section(&mut r, false, |_| false)?;
+            Ok(file)
+        })();
+        match flattened {
+            Ok(file) => Ok((file, Some(error))),
+            Err(_) => Err(error),
+        }
+    }
+
     /// Parses like [`Self::from_bytes`] and, when `want` asks for it, decodes the merged image
     /// (as [`Self::decode_merged`] would) in the same pass. `want` sees the file with everything
     /// but the merged image parsed (its `image_data` is still empty). A ZIP merged image is then
@@ -147,6 +188,18 @@ impl PsdFile {
     pub fn from_bytes_and_merged_preflight(
         data: &[u8],
         want: impl FnOnce(&PsdFile) -> Result<bool>,
+        recover: impl FnOnce(&PsdFile) -> bool,
+    ) -> Result<(Self, Option<Result<Vec<u8>>>)> {
+        Self::from_bytes_and_merged_preflight_info(data, |file, _, _| want(file), recover)
+    }
+
+    /// [`Self::from_bytes_and_merged_preflight`] with the merged image's compression and
+    /// encoded byte length (excluding its two-byte compression field). The image itself is
+    /// still unread: `file.image_data` is empty. A missing compression field is `None`, and
+    /// its parse error is deferred until after preflight, so a refusal always takes precedence.
+    pub fn from_bytes_and_merged_preflight_info(
+        data: &[u8],
+        want: impl FnOnce(&PsdFile, Option<Compression>, u64) -> Result<bool>,
         recover: impl FnOnce(&PsdFile) -> bool,
     ) -> Result<(Self, Option<Result<Vec<u8>>>)> {
         let mut r = Reader::new(data);
@@ -218,7 +271,8 @@ impl PsdFile {
             image_data,
             write_as_psb: false,
         };
-        let want = want(&file)?;
+        let compression = r.clone().u16().ok().map(Compression::from_u16);
+        let want = want(&file, compression, r.remaining().saturating_sub(2) as u64)?;
         let merged = file.read_merged_section(&mut r, want, recover)?;
         Ok((file, merged))
     }
@@ -434,7 +488,7 @@ impl PsdFile {
         let (v, widen) = self.write_form();
         let psb = v.is_psb();
         let len_field = |long: bool| if long { 8u64 } else { 4 };
-        let blocks_len = |blocks: &[TaggedBlock]| blocks.iter().fold(0u64, |n, b| n.saturating_add(b.encoded_len_aligned(v, 4) as u64));
+        let blocks_len = |blocks: &[TaggedBlock]| blocks.iter().fold(0u64, |n, b| n.saturating_add(b.encoded_len_aligned(v, 4)));
         let body_len = |info: &LayerInfo| -> Result<u64> {
             let unpadded = info.unpadded_len_as(v, widen)?;
             let padding = info.padding.as_ref().map_or(unpadded % 2, |p| p.len() as u64);
@@ -650,6 +704,41 @@ impl PsdFile {
 #[cfg(test)]
 mod write_tests {
     use super::*;
+
+    /// The first `8BIM` + blend key of a layer record, after the header.
+    fn first_layer_signature(bytes: &[u8]) -> usize {
+        bytes.windows(8).position(|w| w == b"8BIMnorm").unwrap()
+    }
+
+    #[test]
+    fn salvaging_keeps_the_merged_image_of_a_file_whose_layers_are_damaged() {
+        let mut b = crate::PsdBuilder::new(3, 2);
+        b.push_layer(crate::LayerSpec::new("l", 0, 0, 3, 2, crate::PixelData::Rgba8(vec![7; 24])));
+        b.composite(crate::PixelData::Rgba8(vec![200; 24]));
+        let good = b.to_bytes().unwrap();
+        let (file, skipped) = PsdFile::from_bytes_salvaging(&good).unwrap();
+        assert!(skipped.is_none());
+        assert_eq!(file, PsdFile::from_bytes(&good).unwrap());
+
+        let mut bad = good.clone();
+        let at = first_layer_signature(&bad);
+        bad[at] = b'X';
+        assert!(PsdFile::from_bytes(&bad).is_err());
+        let (file, skipped) = PsdFile::from_bytes_salvaging(&bad).unwrap();
+        assert!(skipped.is_some());
+        assert!(file.layers().is_empty() && file.global_blocks.is_empty());
+        assert_eq!(file.composite_rgba8().unwrap(), PsdFile::from_bytes(&good).unwrap().composite_rgba8().unwrap());
+        // What it writes is a flattened document that opens normally.
+        let flat = PsdFile::from_bytes(&file.to_bytes().unwrap()).unwrap();
+        assert!(flat.layers().is_empty());
+        assert_eq!(flat.decode_merged().unwrap(), file.decode_merged().unwrap());
+
+        // Damage outside the layer section is not salvaged: a cut merged image, a bad header.
+        assert!(PsdFile::from_bytes_salvaging(&bad[..bad.len() - 3]).is_err());
+        let mut header = good;
+        header[0] = b'X';
+        assert!(PsdFile::from_bytes_salvaging(&header).is_err());
+    }
     use crate::{Compression, testgen};
     use std::io::{Seek, Write};
 
@@ -962,9 +1051,10 @@ mod write_tests {
                         let mut materialized = file.clone();
                         let mut data = Vec::new();
                         materialized.layer_info.take().unwrap().write_body(&mut data, version).unwrap();
-                        materialized
-                            .global_blocks
-                            .insert(index.min(materialized.global_blocks.len()), TaggedBlock { signature: *b"8B64", key, data, padding });
+                        materialized.global_blocks.insert(
+                            index.min(materialized.global_blocks.len()),
+                            TaggedBlock { signature: *b"8B64", key, data, padding, stored: None },
+                        );
                         materialized.layer_info_placement = LayerInfoPlacement::Section;
                         assert_eq!(actual, materialized.to_bytes().unwrap(), "{version:?} {key:?} {index}");
                     }

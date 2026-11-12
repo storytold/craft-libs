@@ -69,6 +69,48 @@ fn a_manifest_is_read_by_namespace_and_survives_damage() {
 }
 
 #[test]
+fn a_strict_manifest_refuses_what_a_lenient_one_repairs() {
+    const NS: &str = r#"xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0""#;
+    let good = format!(
+        r#"<?xml version="1.0"?><manifest:manifest {NS} manifest:version="1.3"><manifest:file-entry manifest:full-path="/" manifest:media-type="a/b"/></manifest:manifest>"#
+    );
+    let m = Manifest::parse_strict(good.as_bytes()).unwrap();
+    assert_eq!((m.version.as_deref(), m.media_type("/")), (Some("1.3"), Some("a/b")));
+    // Another prefix for the same namespace is the same manifest.
+    let other = r#"<m:manifest xmlns:m="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" m:version="1.3"><m:file-entry m:full-path="/" m:media-type="a/b"/></m:manifest>"#;
+    assert_eq!(Manifest::parse_strict(other.as_bytes()), Ok(m.clone()));
+    for bad in [
+        format!(r#"<manifest:manifest {NS}><manifest:file-entry manifest:full-path="/">"#),
+        format!(r#"<!DOCTYPE manifest:manifest><manifest:manifest {NS}/>"#),
+        format!(r#"<!DOCTYPE m [<!ENTITY a "b">]><manifest:manifest {NS}/>"#),
+        format!(r#"<manifest:manifest {NS}/><manifest:manifest {NS}/>"#),
+        format!(r#"<manifest:manifest {NS}/>trailing"#),
+        format!(r#"<manifest:manifest {NS}><manifest:file-entry manifest:full-path="&bogus;"/></manifest:manifest>"#),
+        format!(r#"<manifest:manifest {NS}><manifest:file-entry manifest:media-type="a/b"/></manifest:manifest>"#),
+        format!(r#"<manifest:manifest {NS}></manifest:file-entry></manifest:manifest>"#),
+        r#"<manifest:manifest><manifest:file-entry manifest:full-path="/"/></manifest:manifest>"#.to_string(),
+        r#"<html/>"#.to_string(),
+        String::new(),
+    ] {
+        assert!(matches!(Manifest::parse_strict(bad.as_bytes()), Err(Error::Manifest(_))), "{bad}");
+        let _ = Manifest::parse(bad.as_bytes());
+    }
+    // The lenient read takes what it can of the first.
+    assert_eq!(Manifest::parse(format!(r#"<manifest:manifest {NS}><manifest:file-entry manifest:full-path="/">"#).as_bytes()).entries.len(), 1);
+    // Entries: up to the cap, not past it.
+    let many = |n: usize| format!(r#"<manifest:manifest {NS}>{}</manifest:manifest>"#, r#"<manifest:file-entry manifest:full-path="a"/>"#.repeat(n));
+    assert_eq!(Manifest::parse_strict(many(crate::manifest::MAX_ENTRIES).as_bytes()).map(|m| m.entries.len()), Ok(crate::manifest::MAX_ENTRIES));
+    assert!(Manifest::parse_strict(many(crate::manifest::MAX_ENTRIES + 1).as_bytes()).is_err());
+    // Through a package: missing and present.
+    let mut p_bytes = zip_of(&[("mimetype", mime::SPREADSHEET.as_bytes())]);
+    assert!(matches!(Package::open(&p_bytes, &Limits::DEFAULT).unwrap().manifest_strict(), Err(Error::Manifest(_))));
+    p_bytes = zip_of(&[("mimetype", mime::SPREADSHEET.as_bytes()), ("META-INF/manifest.xml", good.as_bytes())]);
+    assert_eq!(Package::open(&p_bytes, &Limits::DEFAULT).unwrap().manifest_strict(), Ok(m));
+    // A written package passes.
+    assert!(Package::open(&secret(), &Limits::DEFAULT).unwrap().manifest_strict().is_ok_and(|m| m.entries.len() == 4));
+}
+
+#[test]
 fn a_package_is_held_to_its_limits() {
     let bytes = zip_of(&[("mimetype", mime::SPREADSHEET.as_bytes()), ("a.xml", &[b'a'; 100]), ("b.xml", &[b'b'; 100])]);
     // Entries.
@@ -325,4 +367,30 @@ fn hostile_flat_documents_do_not_panic() {
     assert_eq!(flat::split(many.as_bytes(), &Limits::DEFAULT).unwrap().files.len(), 10_000);
     // A package with no media type has no flat form.
     assert_eq!(flat::from_package(&zip_of(&[("content.xml", b"<a/>")]), &Limits::DEFAULT), Err(Error::Flat("the package has no media type")));
+}
+
+/// Two files of one name: `zip` keeps one, and which one the writer meant is not known.
+#[test]
+fn two_files_of_one_name_are_refused() {
+    let bytes = zip_of(&[("mimetype", mime::SPREADSHEET.as_bytes()), ("dupA.xml", b"<a/>"), ("dupB.xml", b"<b/>")]);
+    assert!(Package::open(&bytes, &Limits::DEFAULT).is_ok());
+    let mut renamed = bytes.clone();
+    let mut i = 0;
+    while let Some(at) = renamed[i..].windows(4).position(|w| w == b"dupB") {
+        renamed[i + at + 3] = b'A';
+        i += at + 4;
+    }
+    assert_eq!(Package::open(&renamed, &Limits::DEFAULT).err(), Some(Error::Zip("two files of the package share a name".into())));
+}
+
+/// Encrypting and decrypting read each file within the per-file limit: a file declaring more is
+/// refused before it is inflated (encrypting read every file whole; decrypting cut it short).
+#[test]
+fn encrypting_and_decrypting_refuse_a_file_past_the_limit() {
+    let over = u32::try_from(Limits::DEFAULT.max_entry + 1).unwrap();
+    let bytes = lying_zip(b"<a/>", over);
+    assert!(crate::crypt::encrypt(&bytes, "pw").is_err());
+    assert!(crate::crypt::decrypt(&bytes, "pw").is_err());
+    // The same file declaring its real size encrypts.
+    assert!(crate::crypt::encrypt(&lying_zip(b"<a/>", 4), "pw").is_ok());
 }
