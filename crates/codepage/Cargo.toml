@@ -1,0 +1,14 @@
+[package]
+name = "craft-codepage"
+description = "Legacy 8-bit code pages, one table each: the single-byte Windows pages, Mac OS Roman and the DOS (OEM) pages, keyed by Windows code page number, with the RTF/Word font charsets."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+encoding_rs = { workspace = true }
