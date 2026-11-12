@@ -49,6 +49,7 @@ craft-gcode = { path = "crates/gcode" }
 craft-gif = { path = "crates/gif" }
 craft-hdr = { path = "crates/hdr" }
 craft-mesh = { path = "crates/mesh" }
+craft-html = { path = "crates/html" }
 craft-heif = { path = "crates/heif" }
 craft-fig = { path = "crates/fig" }
 craft-fonts-build = { path = "crates/fonts-build" }
@@ -65,6 +66,8 @@ craft-media = { path = "crates/media", default-features = false }
 craft-media-testkit = { path = "crates/media-testkit" }
 craft-midi = { path = "crates/midi" }
 craft-mime = { path = "crates/mime" }
+craft-odf = { path = "crates/odf" }
+craft-prc = { path = "crates/prc" }
 craft-lottie = { path = "crates/lottie" }
 craft-menu = { path = "crates/menu" }
 craft-metafile = { path = "crates/metafile" }
@@ -99,6 +102,7 @@ craft-vectorcraft-format = { path = "crates/vectorcraft-format" }
 craft-vectordrawable = { path = "crates/vectordrawable" }
 craft-xls = { path = "crates/xls" }
 craft-xml = { path = "crates/xml" }
+craft-zip = { path = "crates/zip" }
 craft-y4m = { path = "crates/y4m" }
 craft-epub = { path = "crates/epub" }
 craft-video = { path = "crates/video" }
