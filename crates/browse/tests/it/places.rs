@@ -91,3 +91,24 @@ fn the_tree_reveals_the_browsed_folder_once_and_collapse_sticks() {
     settle(&mut fixture, &state);
     assert!(!rows(&fixture).iter().any(|row| row == "2024"), "the reveal does not open it again");
 }
+
+/// The disclosure triangle of a folder opens it and closes it again.
+#[trial]
+fn the_disclosure_opens_and_closes_a_folder() {
+    let (mut fixture, state) = rig(None, home());
+    let shown = |fixture: &Fixture, name: &str| rows(fixture).iter().any(|row| row == name);
+    if shown(&fixture, "Docs") {
+        let collapse = fixture.by_label("Collapse Home").expect("an open folder's triangle collapses it");
+        fixture.click(&collapse);
+        settle(&mut fixture, &state);
+    }
+    assert!(!shown(&fixture, "Docs"), "Home starts closed");
+    let expand = fixture.by_label("Expand Home").expect("a closed folder's triangle expands it");
+    fixture.click(&expand);
+    settle(&mut fixture, &state);
+    assert!(shown(&fixture, "Docs") && shown(&fixture, "Photos"), "the triangle opens Home: {:?}", rows(&fixture));
+    let collapse = fixture.by_label("Collapse Home").expect("the open folder's triangle collapses it");
+    fixture.click(&collapse);
+    settle(&mut fixture, &state);
+    assert!(!shown(&fixture, "Docs"), "the triangle closes Home again: {:?}", rows(&fixture));
+}
