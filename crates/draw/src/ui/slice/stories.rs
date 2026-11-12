@@ -122,7 +122,6 @@ fn sample_slices() -> Vec<SliceItem> {
 struct Slices {
     items: Vec<SliceItem>,
     selected: Option<usize>,
-    hide_auto: bool,
 }
 
 impl Slices {
@@ -208,9 +207,10 @@ fn command_name(command: SliceCommand) -> &'static str {
     COMMANDS.iter().find(|(_, listed)| *listed == command).map_or("", |(name, _)| *name)
 }
 
-/// The Slice and Slice Select tools live over a document's user, auto and layer slices. Slice mode draws a slice;
-/// Select mode moves and resizes a user slice (an auto or layer slice that moves becomes a user slice). Promote,
-/// Delete and Hide Auto Slices act; Slice Options and Divide only report. The lock refuses every edit.
+/// The Slice and Slice Select tools live over a document's user, auto and layer slices, under the mode's options bar.
+/// Slice mode draws a slice in the bar's Style; Select mode moves and resizes a user slice (an auto or layer slice that
+/// moves becomes a user slice). Promote, Delete and Hide Auto Slices act; Slice Options and Divide only report. The
+/// lock refuses every edit.
 #[story(SliceOverlay<'static>, covers = [], drive = Drive::Never)]
 fn slice_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let env = Env::of(ui);
@@ -218,7 +218,13 @@ fn slice_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mode = *data.choice("mode", SliceMode::Slice, &[("Slice", SliceMode::Slice), ("Select", SliceMode::Select)]);
     let rules = *data.choice("rules", SliceRules::PHOTOSHOP, &[("Photoshop", SliceRules::PHOTOSHOP), ("Illustrator", SliceRules::ILLUSTRATOR)]);
     let locked = *data.value("locked", false);
-    let settings = SliceToolSettings::new(Constraint::Free);
+    let settings = data.value("settings", SliceToolSettings::new(Constraint::Free));
+    // The bar shows before the canvas, as the app's options bar does: the tool runs with its settings on this pass.
+    let _ = Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
+        SliceBar::new(mode, settings).show(ui);
+    });
+    let mut settings = *settings;
+    let hide_auto = settings.hide_auto;
     let buttons: Vec<StoryButton> = COMMANDS[..4].iter().map(|(label, _)| *label).chain([HIDE_AUTO]).map(StoryButton::new).collect();
     let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, _: &mut SliceKept, slices: &Slices| {
         let overlay = SliceOverlay::new("Slices", &slices.items);
@@ -226,16 +232,14 @@ fn slice_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             Some(number) => overlay.selected_slice(number),
             None => overlay,
         };
-        let overlay = overlay.pick(mode == SliceMode::Select).hide_auto(slices.hide_auto).locked(locked).rules(rules);
+        let overlay = overlay.pick(mode == SliceMode::Select).hide_auto(hide_auto).locked(locked).rules(rules);
         overlay.show_at(ui, at).events
     };
-    let first = Slices { items: sample_slices(), selected: None, hide_auto: false };
+    let first = Slices { items: sample_slices(), selected: None };
     let picture = StoryDocument::STANDARD;
-    tool_story(ui, data, ToolStory::new("Document", &picture).buttons(&buttons), SliceKept::default, first, body, |run| {
+    let output = tool_story(ui, data, ToolStory::new("Document", &picture).buttons(&buttons), SliceKept::default, first, body, |run| {
         let (slices, kept) = (run.document, run.tool);
-        let mut tool_settings = settings;
-        tool_settings.hide_auto = slices.hide_auto;
-        kept.tool.mode(mode).items(&slices.items).selected(slices.selected).locked(locked).rules(rules).settings(tool_settings);
+        kept.tool.mode(mode).items(&slices.items).selected(slices.selected).locked(locked).rules(rules).settings(settings);
         let _ = run.host.run(&mut kept.tool);
         let mut events = run.shown.unwrap_or_default();
         events.extend(kept.tool.take_events());
@@ -243,7 +247,7 @@ fn slice_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         output.edits = events.iter().filter_map(edit_kind).collect();
         output.clicked = run.pressed.is_some();
         if run.pressed == Some(HIDE_AUTO) {
-            slices.hide_auto = !slices.hide_auto;
+            settings.hide_auto = !settings.hide_auto;
         } else if let Some((_, command)) = run.pressed.and_then(|label| COMMANDS.iter().find(|(name, _)| *name == label)) {
             events.push(SliceEvent::Command(*command));
         }
@@ -258,5 +262,7 @@ fn slice_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         };
         let note = kept.note.clone().unwrap_or_else(|| words.idle.as_str().to_owned());
         output.readout(craft_i18n::fmt(words.status.as_str(), &[("selection", selection.as_str()), ("note", note.as_str())]))
-    })
+    });
+    *data.value("settings", settings) = settings;
+    output
 }
