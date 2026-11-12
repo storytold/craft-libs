@@ -1420,6 +1420,8 @@ version = "0.1.0"
 dependencies = [
  "aes",
  "bytemuck",
+ "craft-stream-codecs",
+ "flate2",
  "hayro",
  "hayro-cmap",
  "hayro-interpret",
