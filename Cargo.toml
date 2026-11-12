@@ -35,7 +35,9 @@ craft-cms = { path = "crates/cms" }
 craft-crs = { path = "crates/crs" }
 craft-crw = { path = "crates/crw" }
 craft-csv = { path = "crates/csv" }
+craft-dav = { path = "crates/dav" }
 craft-dialogs = { path = "crates/dialogs" }
+craft-docx = { path = "crates/docx" }
 craft-dxf = { path = "crates/dxf" }
 craft-drawingml = { path = "crates/drawingml" }
 craft-eps = { path = "crates/eps" }
@@ -49,6 +51,7 @@ craft-font-catalog = { path = "crates/font-catalog" }
 craft-font-manager = { path = "crates/font-manager" }
 craft-font-store = { path = "crates/font-store" }
 craft-gainmap = { path = "crates/gainmap" }
+craft-flow = { path = "crates/flow" }
 craft-gcode = { path = "crates/gcode" }
 craft-gif = { path = "crates/gif" }
 craft-hdr = { path = "crates/hdr" }
@@ -68,6 +71,9 @@ craft-assuan = { path = "crates/assuan" }
 craft-kra = { path = "crates/kra" }
 craft-audio = { path = "crates/audio" }
 # No default features, so craft-audio's `encode` builds craft-media without `isobmff`.
+craft-latex = { path = "crates/latex" }
+craft-markdown = { path = "crates/markdown" }
+craft-math = { path = "crates/math" }
 craft-media = { path = "crates/media", default-features = false }
 craft-media-testkit = { path = "crates/media-testkit" }
 craft-midi = { path = "crates/midi" }
@@ -81,6 +87,7 @@ craft-metafile = { path = "crates/metafile" }
 craft-offcrypto = { path = "crates/offcrypto" }
 craft-opc = { path = "crates/opc" }
 craft-ora = { path = "crates/ora" }
+craft-pptx = { path = "crates/pptx" }
 craft-penpot = { path = "crates/penpot" }
 craft-pcraft-format = { path = "crates/pcraft-format" }
 craft-plotter = { path = "crates/plotter" }

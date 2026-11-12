@@ -1,0 +1,23 @@
+[package]
+name = "craft-latex"
+description = "LaTeX documents read and written: the everyday subset (sections, lists, tables, math, formatting, links) to and from the craft-flow model, and a standalone article that compiles with any TeX distribution."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-flow = { workspace = true }
+craft-math = { workspace = true }
+# Text that names no encoding: BOM, UTF-16, UTF-8, else the legacy encoding it looks like.
+craft-mime = { workspace = true, features = ["detect"] }
+craft-wordmodel = { workspace = true }
+
+[dev-dependencies]
+craft-markdown = { workspace = true }
+
+proptest = { workspace = true }

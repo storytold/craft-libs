@@ -18,15 +18,23 @@ are one crate.
 | `parse_iptc(&[u8]) -> Metadata` | IIM record 2: title (2:5), keywords (2:25), by-line (2:80), copyright (2:116), caption (2:120), date and time created (2:55, 2:60). |
 | `parse_xmp(&str) -> Result<XmpData>` | `Metadata`, every property (`prefix:name`, structs flattened as `a:b/c:d`) and the structured values. `parse_xmp_with` also canonicalises the caller's own namespaces. |
 | `write_xmp(&Metadata) -> String` | A complete `<?xpacket?>` packet. `write_xmp_with` sets the toolkit name and adds simple properties in the caller's namespace. |
+| `XmpData::has_location_metadata`, `XmpData::properties_truncated` | Whether a packet names GPS or a place anywhere (array items and repeated structs included), and whether the flattened map is complete, for a caller that must prove a file carries no location. `parse_gps_position` reads an XMP coordinate pair. |
+| `embedded_xmp(&Embedded)`, `parse_xmp_pair` | A JPEG's standard XMP with the Extended XMP it links (`xmpNote:HasExtendedXMP`) read as one packet; an `EmbeddedXmpError` (keeping the standard packet) when the link or the extension cannot be read whole. `extract` and `from_embedded` use it best-effort. Extended XMP: 16 MiB, 4096 chunks, only the linked GUID's chunks counted. |
 | `merge_xmp(existing, fresh, MergeRules)` | Updates a packet another program wrote: owned properties are replaced, everything else stays byte for byte. |
-| `parse_gpx(&str) -> Result<Tracklog>` | GPX track points; `Tracklog::locate` gives the position at a capture time. |
+| `parse_gpx(&str) -> Result<Tracklog>` | GPX track points with their track and segment; `Tracklog::locate` gives the position at a capture time, `Tracklog::only_track` one track. |
 | `embedded(&[u8]) -> Embedded` | Sniffs JPEG, PNG, WebP, TIFF-based files, Fujifilm RAF, Canon CR3 and JPEG XL containers and returns the Exif, XMP (and extended XMP), ICC and IPTC blocks. `jpeg_segments`, `png_chunks`, `webp_chunks` are the walkers. |
 | `cr3::parse_cr3` | The Canon CR3 container: `CMT1`…`CMT4`, the XMP `uuid` box, the thumbnail, the tracks. |
 | `jxl::metadata` | The `Exif` and `xml ` boxes of a JPEG XL container, plain or Brotli-wrapped in `brob`. |
+| `edit::upright_exif`, `edit::upright_xmp`, `edit::exif_with_resolution`, `edit::xmp_with_resolution`, `edit::export_exif`, `edit::export_xmp` | Byte-preserving edits for export: Orientation set to 1, the resolution set (in place, malformed entries removed, or appended when missing), the source thumbnail dropped. Every other byte stays. `edit::exif_orientation`, `edit::exif_resolution`, `edit::xmp_resolution`, `edit::photoshop_resolution` and `edit::exif_color_space` read the same values with the editors' strict rules. |
+| `mpf::images`, `mpf::write` | The Multi-Picture Format index (CIPA DC-007) of a JPEG: the images stored after the primary one (a gain map, a preview), and writing an index plus appending the images. `mpf::markers` lists the marker segments before the first scan. |
 | `extract(&[u8]) -> Metadata` | All of it for a whole file. Precedence: EXIF, then IPTC fills gaps, then XMP overrides the user fields (rating, label, title, caption, artist, copyright, keywords, GPS) and fills the rest. `from_embedded` does the same for blocks already located. |
 
 HEIF, PSD and MRW files are read by `craft-heif`, `craft-psd` and `craft-raw`. Put the blocks they
 return into an `Embedded` and call `from_embedded`.
+
+## Validation
+
+Only well-formed values become typed metadata; the raw property stays in `XmpData::properties`. XMP orientation must be an integral code 1 to 8; ISO and pixel dimensions exact whole numbers in range (compared as decimal digits); GPS minutes and seconds under 60, the sign from the axis letter. IPTC Time Created counts only as a whole `HHMMSS` or `HHMMSS±HHMM`. A carriage return in written text is `&#13;`.
 
 ## Capture time
 
@@ -48,8 +56,8 @@ A foreign namespace that uses a recognised prefix cannot supply recognised prope
 
 ## Limits
 
-XMP: 64 levels, 200 000 nodes, 1 MiB of flattened keys and 8 MiB of opaque names per packet
-(`XmpError::TooComplex`). GPX: 64 levels, 5 000 000 points. CR3 and JPEG XL: 4096 boxes; a `brob` box inflates to at most 32 MiB. JPEG ICC is returned only when its APP2 chunks form a
+XMP: 64 levels, 200 000 nodes, 512 namespace declarations in scope, 1 MiB of flattened keys and 8 MiB of opaque names per packet
+(`XmpError::TooComplex`). GPX: 64 levels, 5 000 000 points. MPF: 16 index entries. CR3 and JPEG XL: 4096 boxes; a `brob` box inflates to at most 32 MiB. JPEG ICC is returned only when its APP2 chunks form a
 complete, consistent, uniquely numbered sequence. TIFF limits are `craft-tiff`'s. No input panics:
 proptests feed random bytes to every container walker and random text to the XMP parser, and a sample
 JPEG is cut at every byte.

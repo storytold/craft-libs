@@ -236,6 +236,29 @@ fn chunk_samples(c: &Chunk, ccpp: usize) -> usize {
     (c.width as usize).saturating_mul(c.height as usize).saturating_mul(ccpp)
 }
 
+/// Consecutive index ranges of `chunks` whose combined nominal samples (`ccpp` per pixel) stay within the group size
+/// [`read_image`] uses for an image of `total` samples (at least one chunk per range). A decoder that holds its
+/// decoded tiles until it copies them decodes one range at a time, so it holds a group's frames beside the output,
+/// not the whole grid's (storytold/lightcraft#1517, storytold/lightcraft#2554).
+#[cfg(feature = "arw")]
+pub(crate) fn decode_groups(chunks: &[Chunk], ccpp: usize, total: usize) -> Vec<std::ops::Range<usize>> {
+    let budget = (total / 4).max(1 << 20);
+    let mut groups = Vec::new();
+    let (mut from, mut taken) = (0usize, 0usize);
+    for (i, c) in chunks.iter().enumerate() {
+        let n = chunk_samples(c, ccpp);
+        if i > from && taken.saturating_add(n) > budget {
+            groups.push(from..i);
+            (from, taken) = (i, 0);
+        }
+        taken = taken.saturating_add(n);
+    }
+    if from < chunks.len() {
+        groups.push(from..chunks.len());
+    }
+    groups
+}
+
 #[allow(clippy::too_many_arguments)]
 fn decode_chunk(
     data: &[u8],
@@ -926,5 +949,25 @@ mod budget_tests {
             let err = read_image_in(mode, &data, &info, ByteOrder::Little, Packing::Msb, &Limits::default()).unwrap_err();
             assert!(matches!(&err, RawError::Corrupt(m) if m.contains("8000 bytes of image data")), "{err:?}");
         }
+    }
+
+    /// storytold/lightcraft#2554: tiled decoders decode the grid in groups of at most a quarter of the image (1 Mi samples at
+    /// least), each group at least one chunk, covering every chunk once and in order.
+    #[cfg(feature = "arw")]
+    #[test]
+    fn decode_groups_split_the_grid() {
+        let info = aliased(4096, 4096, 512, 64);
+        let chunks = info.chunks(64);
+        assert_eq!(chunks.len(), 64);
+        let groups = decode_groups(&chunks, 1, 4096 * 4096);
+        // a quarter of 16 Mi samples is 4 Mi: 16 tiles of 256 Ki samples per group
+        assert_eq!(groups.len(), 4);
+        assert!(groups.iter().all(|g| g.len() == 16));
+        assert_eq!(groups.first().map(|g| g.start), Some(0));
+        assert!(groups.windows(2).all(|p| p[0].end == p[1].start));
+        assert_eq!(groups.last().map(|g| g.end), Some(64));
+        // a tile larger than the budget is still a group of its own
+        let big = aliased(8192, 8192, 8192, 64);
+        assert_eq!(decode_groups(&big.chunks(64), 1, 1 << 20), vec![0..1]);
     }
 }
