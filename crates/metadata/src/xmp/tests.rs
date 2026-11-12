@@ -655,3 +655,19 @@ fn resource_struct_attributes_and_elements_flatten_like_description_fields() {
         previous = Some((packet.properties, packet.values));
     }
 }
+
+#[test]
+fn the_toolkit_is_read_and_written_back() {
+    let x = write_lc(&Metadata::default(), &[]);
+    assert_eq!(parse_xmp(&x).unwrap().toolkit.as_deref(), Some("Editor"));
+    assert_eq!(crate::parse_xmp(&write_xmp(&Metadata::default())).unwrap().toolkit.as_deref(), Some("craft-metadata"));
+    let escaped = write_xmp_with(&Metadata::default(), &XmpWrite { toolkit: "A & \"B\"", ..Default::default() });
+    assert_eq!(crate::parse_xmp(&escaped).unwrap().toolkit.as_deref(), Some("A & \"B\""));
+    // any prefix bound to adobe:ns:meta/, the older xapmeta form, and none at all
+    let other = r#"<m:xmpmeta xmlns:m="adobe:ns:meta/" m:xmptk="Adobe XMP Core 5.6"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"/></m:xmpmeta>"#;
+    assert_eq!(crate::parse_xmp(other).unwrap().toolkit.as_deref(), Some("Adobe XMP Core 5.6"));
+    let old = r#"<x:xapmeta xmlns:x="adobe:ns:meta/" x:xaptk="XMP toolkit 3.0-28"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"/></x:xapmeta>"#;
+    assert_eq!(crate::parse_xmp(old).unwrap().toolkit.as_deref(), Some("XMP toolkit 3.0-28"));
+    let bare = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"/>"#;
+    assert_eq!(crate::parse_xmp(bare).unwrap().toolkit, None);
+}
