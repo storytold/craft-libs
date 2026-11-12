@@ -188,7 +188,6 @@ fn max_tags_from(v: Option<&str>) -> usize {
 
 mod codepage;
 pub use codepage::decode_code_page;
-mod dos_tables;
 
 /// Parse a DXF file (ASCII or binary).
 ///
