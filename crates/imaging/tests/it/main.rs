@@ -3,6 +3,7 @@
 mod adjust_editors;
 mod adjust_tone;
 mod blur_pins;
+mod contour_field;
 mod curve;
 mod fill;
 mod filter_gallery;
@@ -16,6 +17,7 @@ mod scopes;
 mod select;
 mod select_mask;
 mod selection;
+mod threshold;
 mod transform_preview;
 mod vanishing_point;
 mod warp;

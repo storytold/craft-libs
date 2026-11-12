@@ -8,9 +8,8 @@ mod stories;
 use std::sync::Arc;
 
 use craft_behavior::{EditEvents, Mixed};
-use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, EditResponse, NoValue, Outcome, Pattern, Props as _, Show as _, ShowContainer as _, clicked};
+use craft_ui::contract::{Bind, EditResponse, NoValue, Outcome, Pattern, Props as _, Show as _, ShowContainer as _};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::list::ThumbAspect;
 use craft_ui::patterns::presets::{PickerField, PresetEvent, PresetFooterEvent, PresetPicker, PresetRow, PresetState};
@@ -29,7 +28,6 @@ craft_ui::words! {
     #[non_exhaustive]
     pub struct ContourWords {
         editor: "contour.editor" = "Contour Editor";
-        edit: "contour.edit" = "Edit Contour…";
         presets: "contour.presets" = "Contour presets";
         anti_aliased: "contour.antiAliased" = "Anti-aliased";
         preset: "contour.preset" = "Preset";
@@ -207,9 +205,8 @@ pub fn from_curve(curve: &Curve, name: &str) -> Option<Contour> {
     Contour::from_points(name, points)
 }
 
-/// A contour field: the current contour's thumbnail opening the preset browser (a `PresetPicker`), an Edit Contour…
-/// button that asks for the Contour Editor, and, with [`anti_alias`](ContourField::anti_alias), the Anti-aliased
-/// check box.
+/// A contour field: a `PresetPicker` whose thumbnail asks for the Contour Editor and whose arrow opens the preset
+/// browser, and, with [`anti_alias`](ContourField::anti_alias), the Anti-aliased check box.
 ///
 /// A pick reports an edit of the contour. A built-in contour keeps its name; the one the editor made is "Custom".
 /// Deleting a user's contour from the browser, or New in its footer, reports a [`ContourAction`].
@@ -269,6 +266,7 @@ impl<'a> ContourField<'a> {
                 let picker = PresetPicker::new(label.clone(), Bind::bound(&mut key), rows, state.reborrowed())
                     .field(PickerField::Thumbnail)
                     .can_delete(|key| matches!(key, ContourKey::User(_)))
+                    .edit_face()
                     .show(ui);
                 for event in &picker.events {
                     match event {
@@ -277,10 +275,10 @@ impl<'a> ContourField<'a> {
                         _ => {}
                     }
                 }
-                picked = Some(picker.edit);
-                if clicked(&Button::new(words.edit.clone()).show(ui)) {
+                if picker.edit_requested {
                     edit_contour = Some(ContourRequest { key: label.as_str().to_owned(), contour: held.clone() });
                 }
+                picked = Some(picker.edit);
                 if let Some(bind) = anti_alias.as_mut()
                     && let Some(Mixed::Same(Some(on))) = bind.reborrow().read(root)
                 {
