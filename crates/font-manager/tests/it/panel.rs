@@ -212,3 +212,27 @@ fn queued_installs_run_one_runner_in_request_order() {
     spawned.remove(0)();
     assert_eq!(rig.store.calls(), [Call::Install("Amiri".into()), Call::Install("Hack".into())]);
 }
+
+impl Rig {
+    /// The names of the family cards on screen.
+    fn cards(&self) -> Vec<String> {
+        (self.fx.by_role(Role::LIST_ITEM).into_iter())
+            .filter_map(|target| craft_ui::testing::access::name(self.fx.tree(), target.node).map(str::to_owned))
+            .collect()
+    }
+}
+
+/// With the keyboard on a card, Cmd/Ctrl+F puts it in the search field: typed text searches.
+#[trial]
+fn find_puts_the_keyboard_in_the_search_field() {
+    let mut rig = setup("find");
+    let card = rig.named(Role::LIST_ITEM, "Hack");
+    rig.fx.click_at(Pos2::new(card.rect.left() + 4.0, card.rect.top() + 4.0));
+    rig.fx.settle();
+    rig.fx.key(Key::F, Modifiers::COMMAND);
+    rig.fx.settle();
+    rig.fx.type_text("Ubuntu");
+    rig.fx.settle();
+    let cards = rig.cards();
+    assert!(!cards.is_empty() && cards.iter().all(|name| !name.starts_with("Hack")), "the search keeps only Ubuntu: {cards:?}");
+}
