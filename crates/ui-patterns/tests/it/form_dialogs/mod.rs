@@ -3,6 +3,7 @@
 
 mod dialog;
 mod export;
+mod new_document;
 mod params;
 mod password;
 mod preview;

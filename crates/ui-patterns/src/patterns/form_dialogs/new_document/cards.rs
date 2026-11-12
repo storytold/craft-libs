@@ -2,7 +2,8 @@
 
 use super::presets::{DEFAULT_ID, DocumentOptions, DocumentPreset, NewDocumentPresetWords, size_line};
 use super::{NewDocumentWords, Read, Session, Setup, background_label, depth_label, mode_label};
-use crate::contract::{Bind, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _};
+use crate::buttons::{Button, ButtonOutput};
+use crate::contract::{Bind, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _, clicked};
 use crate::display::{Shade, Text};
 use crate::list::{List, ListRow, ThumbAspect};
 use crate::patterns::presets::PresetId;
@@ -14,6 +15,7 @@ use crate::tile_grid::{Tile, TileGrid};
 use craft_behavior::{DisplayOrder, ItemSource, Selection, SelectionChange, keyed};
 use egui::{CornerRadius, Rect, Ui, vec2};
 use std::borrow::Cow;
+use std::cell::Cell;
 
 /// A tab of the preset browser.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -109,14 +111,30 @@ pub(super) fn show(ui: &mut Ui, session: &Session, values: &DocumentOptions, rea
     let stamp = stamp_of(tab, cards.len());
     let list = CardList(&cards);
     if tab == TabId::Saved {
+        // Each row's Delete button removes its preset, as the Delete key removes the selected ones.
+        let pressed: Cell<Option<usize>> = Cell::new(None);
         let shown = List::<usize>::new(words.saved_list.clone())
             .select(SelectMode::Single)
             .deletable(true)
             .empty(words.no_saved.clone())
             .rows_stamp(stamp)
             .selection(Bind::given(selection))
-            .show_items(ui, &list, &mut |index, _| ListRow::new(cards[*index].title.clone()).detail(cards[*index].line.clone()));
+            .show_items(ui, &list, &mut |index, _| {
+                let at = *index;
+                let pressed = &pressed;
+                ListRow::new(cards[at].title.clone()).detail(cards[at].line.clone()).trailing_field(
+                    Button::new(words.delete.clone()).id_salt(("delete", at)),
+                    move |button: ButtonOutput| {
+                        if clicked(&button) {
+                            pressed.set(Some(at));
+                        }
+                    },
+                )
+            });
         route(shown.events, &cards, left);
+        if let Some(card) = pressed.get().and_then(|at| cards.get(at)) {
+            left.delete.extend(card.saved);
+        }
     } else {
         let count = read.units.number(cards.len() as f64, 0..=0);
         Text::new(words.presets_heading.fill(&[("n", &count)])).role(TypeRole::Label).shade(Shade::Muted).show(ui);

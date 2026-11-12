@@ -48,6 +48,7 @@ craft_ui::words! {
         tabs: "newDocument.tabs" = "Preset Categories";
         cards: "newDocument.cards" = "Blank Document Presets";
         saved_list: "newDocument.savedList" = "Saved Presets";
+        delete: "newDocument.delete" = "Delete";
         recent: "newDocument.recent" = "Recent";
         saved: "newDocument.saved" = "Saved";
         photo: "newDocument.photo" = "Photo";
