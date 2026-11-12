@@ -764,9 +764,9 @@ mod tests {
     /// Sizes the digests were taken at: wide, tall and square.
     const GOLD_SIZES: [(f64, f64); 4] = [(120.0, 80.0), (300.0, 50.0), (64.0, 64.0), (50.0, 300.0)];
 
-    /// FNV-1a over each outline's path elements, for every adjust set and size. Coordinates are
-    /// printed to 2 decimal places so last-bit libm differences between platforms do not change it.
-    fn outline_digest(name: &str) -> u64 {
+    /// Each outline's path elements, for every adjust set and size. Coordinates are printed to 2
+    /// decimal places so last-bit libm differences between platforms do not change it.
+    fn outline_text(name: &str) -> String {
         use std::fmt::Write;
         let mut text = String::new();
         // Negative zero prints "-0.00" on one platform and "0.00" on another.
@@ -788,7 +788,16 @@ mod tests {
                 text.push('|');
             }
         }
+        text
+    }
+
+    /// FNV-1a of [`outline_text`].
+    fn fnv(text: &str) -> u64 {
         text.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
+    }
+
+    fn outline_digest(name: &str) -> u64 {
+        fnv(&outline_text(name))
     }
 
     /// Digests of every name's outline: any changed shape fails here. Arcs are laid out by
@@ -839,8 +848,8 @@ mod tests {
     #[test]
     fn outlines_match_the_string_dispatch() {
         for (name, want) in GOLDEN {
-            let have = outline_digest(name);
-            assert_eq!(have, want, "{name} outline changed");
+            let text = outline_text(name);
+            assert_eq!(fnv(&text), want, "{name} outline changed\n{text}");
         }
         assert!(build("noSuchShape", 100.0, 100.0, &[]).is_none());
     }

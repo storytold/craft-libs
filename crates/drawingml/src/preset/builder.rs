@@ -44,7 +44,10 @@ impl Pb {
         // pin. `ceil` of a ratio of two exactly computed angles has no such edge.
         let (rx, ry) = (wr.abs(), hr.abs());
         let sweep = e - s;
-        let n = (sweep.abs() / std::f64::consts::FRAC_PI_2).ceil().max(1.0) as usize;
+        // The small offset keeps a quarter turn that came out of `to_radians` or `acos` a hair
+        // above the exact ratio from asking for a second segment.
+        let quarters = sweep.abs() / std::f64::consts::FRAC_PI_2;
+        let n = (quarters - 1e-9).ceil().max(1.0) as usize;
         let step = sweep / n as f64;
         let arm = (4.0 / 3.0) * (step * 0.25).abs().tan() * sweep.signum();
         let sample = |a: f64| (c.x + rx * a.cos(), c.y + ry * a.sin());
