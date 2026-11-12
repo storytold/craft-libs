@@ -152,7 +152,10 @@ driver still reads them, else on the settings the driver gives a new job; either
 job's copies and collation. OK stores the settings in `Job::driver_settings` for that printer.
 Cancel leaves the job unchanged, and so do settings the dialog returns exactly as it opened on
 them: some drivers return OK from Cancel with the settings they were given. Earlier settings
-the driver can no longer read are replaced even then. craft-print keeps the settings in the job
+the driver can no longer read are replaced even then. Some drivers read settings that hold no
+choices, such as a DEVMODE of zeros, as the settings they give a new job instead of refusing
+them; such settings stay on the job after Cancel, and the job prints with the driver's defaults
+for the options the job leaves open. craft-print keeps the settings in the job
 only and does not save them as the printer's defaults (`open_printer_preferences` does that).
 When the job is printed, Windows converts the settings to a PrintTicket
 ([`PTConvertDevModeToPrintTicket`](https://learn.microsoft.com/en-us/windows/win32/api/prntvpt/nf-prntvpt-ptconvertdevmodetoprintticket)),

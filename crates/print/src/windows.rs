@@ -555,7 +555,8 @@ mod tests {
     /// Settings from the driver's own dialog, here landscape and four uncollated copies converted
     /// to the driver's DEVMODE, leave the job's paper, orientation and copies as the job asks;
     /// settings chosen for another printer leave the job's ticket as it is without them; and
-    /// damaged earlier settings are left out of the dialog's starting settings.
+    /// earlier settings of all zeros, which a driver either refuses or reads as its defaults, open
+    /// the dialog as if the job had none.
     /// `CRAFT_PRINT_TEST_PRINTER` names the queue. Sends no job and opens no dialog.
     #[test]
     #[ignore = "needs CRAFT_PRINT_TEST_PRINTER naming an installed printer; sends no job"]
@@ -599,11 +600,17 @@ mod tests {
 
         let mut zeros = vec![0u8; 220];
         zeros[68..70].copy_from_slice(&220u16.to_le_bytes());
-        let damaged =
+        let zeroed =
             Job { driver_settings: Some(crate::DriverSettings::new(device.name(), rgb::DevMode::from_bytes(zeros).unwrap())), ..plain.clone() };
-        assert!(chosen_settings(&device, &damaged).is_err(), "the driver does not read the damaged settings");
-        let seed = settings_seed(&damaged, device.name()).unwrap();
-        assert!(seed.replaces_unreadable);
+        let seed = settings_seed(&zeroed, device.name()).unwrap();
+        // A driver may refuse settings that hold no choices, or read them as its defaults.
+        match chosen_settings(&device, &zeroed) {
+            Err(_) => assert!(seed.replaces_unreadable, "settings the driver refuses are replaced by the dialog"),
+            Ok(chosen) => {
+                assert!(chosen.is_some(), "settings for this printer are used");
+                assert!(!seed.replaces_unreadable, "settings the driver reads are kept on Cancel");
+            }
+        }
         assert_eq!(seed.dev_mode, settings_seed(&plain, device.name()).unwrap().dev_mode, "the dialog opens as if the job had no settings");
     }
 
