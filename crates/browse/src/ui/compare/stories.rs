@@ -64,18 +64,21 @@ fn filling(ui: &mut Ui, content: impl FnMut(&mut Ui, Rect) -> StoryOutput) -> St
 
 #[story(CompareTile<'static>, covers = [Default], drive = Drive::Never)]
 fn compare_pair(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let rtl = Env::of(ui).view().direction().is_rtl();
-    filling(ui, |ui, area| {
+    let env = Env::of(ui);
+    let rtl = env.view().direction().is_rtl();
+    let space = ArrangeSpace::new(env.tokens.space.pad.roomy, env.tokens.space.gap.section);
+    let labels = ["Select", "Candidate"];
+    let output = filling(ui, |ui, area| {
         let mut active = *data.value("active", 0usize);
         let view = data.value("view", PreviewView::fitting());
-        let [left, right] = ComparePair::new(ArrangeSpace::new(18.0, 16.0)).rtl(rtl).rects(area);
+        let [left, right] = ComparePair::new(space).rtl(rtl).rects(area);
         let select =
-            CompareTile::new("Select", Bind::bound(view), image(1)).caption(caption("Select", "IMG_0001.jpg")).active(active == 0).place(ui, left);
+            CompareTile::new(labels[0], Bind::bound(view), image(1)).caption(caption(labels[0], "IMG_0001.jpg")).active(active == 0).place(ui, left);
         if select.clicked {
             active = 0;
         }
-        let candidate = CompareTile::new("Candidate", Bind::bound(view), image(2))
-            .caption(caption("Candidate", "IMG_0002.jpg"))
+        let candidate = CompareTile::new(labels[1], Bind::bound(view), image(2))
+            .caption(caption(labels[1], "IMG_0002.jpg"))
             .active(active == 1)
             .rejected(true)
             .place(ui, right);
@@ -84,7 +87,9 @@ fn compare_pair(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         }
         *data.value("active", 0usize) = active;
         select.into()
-    })
+    });
+    let active = labels.get(*data.value("active", 0usize)).copied().unwrap_or_default();
+    output.readout(format!("Active pane: {active}"))
 }
 
 #[story(CompareTile<'static>, covers = [LongText], drive = Drive::Never)]
