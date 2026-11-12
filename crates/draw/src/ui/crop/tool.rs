@@ -644,3 +644,6 @@ fn fitted_ratio(rect: DocRect, ratio: f64) -> Option<DocRect> {
     let fitted = DocRect::new(c.x - w / 2.0, c.y - h / 2.0, c.x + w / 2.0, c.y + h / 2.0);
     (fitted.x1 > fitted.x0 && fitted.y1 > fitted.y0 && [fitted.x0, fitted.y0, fitted.x1, fitted.y1].iter().all(|v| v.is_finite())).then_some(fitted)
 }
+
+#[cfg(feature = "screen-testing")]
+mod stories;
