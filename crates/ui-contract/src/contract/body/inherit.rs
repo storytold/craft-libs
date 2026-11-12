@@ -63,8 +63,9 @@ impl BodyHooks<'_> {
         // An inside label is its control's alone: a container shows none of it to what it holds.
         scoped.inside_label = None;
         // Along a width the container takes from its content, its regions measure at their content widths: a child
-        // that fills takes what it needs, not the whole room.
-        if !real && !self.given.0 {
+        // that fills takes what it needs, not the whole room. A container that passes its column's width on measures
+        // them across it.
+        if !real && !self.wide() {
             scoped.content_column = true;
         }
         if props.header.is_some_and(|header| header.band == DragBand::Reorder) {
@@ -94,17 +95,22 @@ impl BodyHooks<'_> {
             _ => scoped.pane_edge = None,
         }
         scoped.content_column = content_column;
+        scoped.given_column = !content_column && matches!(props.layout, crate::layout::BodyLayout::Stack);
         scoped.row_room = None;
         scoped.row_line = None;
-        scoped.content = (!self.given.0, !self.given.1);
+        scoped.content = (!self.wide(), !self.given.1);
         // A content-sized container offers its children, in the real run, the width this pass measured it at: a
         // child that fits itself into its room (a bar moving items into "More") fits the width the container
         // takes, not the room it could have taken. A fill container that is not given the width still takes at
-        // least the room (`regions`), so it offers the room.
+        // least the room (`regions`), so it offers the room, and so does a container that passes its column's width
+        // on: its measuring run offered the room too.
         // A side label's column is not the body's: the children are offered what is left beside it.
         scoped.offered = (!self.given.0 && room.x.is_finite()).then(|| {
-            let offered =
-                if real && sizing == Sizing::Content { self.wanted_width(props).map_or(room.x, |wanted| wanted.min(room.x)) } else { room.x };
+            let offered = if real && sizing == Sizing::Content && !self.passes {
+                self.wanted_width(props).map_or(room.x, |wanted| wanted.min(room.x))
+            } else {
+                room.x
+            };
             (offered - label_width).max(0.0)
         });
         if scroll.is_some() || props.scroll_owner {

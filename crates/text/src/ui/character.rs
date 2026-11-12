@@ -449,7 +449,7 @@ impl<'a> CharacterControls<'a> {
         let preview_family = None;
         let mut requests = HostRequests::new();
 
-        let shown = Stack::new().fill_width().label(self.label).show(ui, |ui, _| {
+        let shown = Stack::new().label(self.label).show(ui, |ui, _| {
             #[cfg(feature = "font-picker")]
             let by_picker = if let Some((catalog, settings, filters)) = picker.as_mut() {
                 let family = mixed(values.family.clone());

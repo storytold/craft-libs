@@ -164,7 +164,8 @@ pub enum Sizing {
     /// The available width and the height its content took last pass: a row of a column that gives no row the room
     /// left under it.
     FillWidth,
-    /// The size its content took last pass.
+    /// The size its content took last pass. Shown in a `Stack` given its width, it passes that width on: a child that
+    /// fills takes it, and the container with it. A content-sized mount, a row or a grid stops that.
     #[default]
     Content,
 }

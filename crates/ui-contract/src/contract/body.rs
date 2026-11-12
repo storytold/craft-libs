@@ -128,6 +128,9 @@ pub(super) struct BodyHooks<'b> {
     /// The axes (horizontal, vertical) the container is given: it fills them, and its own container was given them
     /// too or it is shown at a rect. Along the others it sizes from its content.
     given: (bool, bool),
+    /// A content-sized container that passes the width its column gives it on to its own body (`passes`): it is not
+    /// given the width, but its body is laid out as if it were.
+    passes: bool,
     /// A bottom-anchored region is following the end of its content.
     follows_end: bool,
 }
@@ -187,6 +190,7 @@ impl<'b> BodyHooks<'b> {
             reports: Vec::new(),
             fixed: false,
             given: (false, false),
+            passes: false,
             follows_end: false,
         }
     }

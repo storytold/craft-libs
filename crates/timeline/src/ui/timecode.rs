@@ -489,7 +489,7 @@ impl<'a> TimecodePanel<'a> {
         let name = label.as_str().to_owned();
         let mut changed = false;
         let mut held = Held::new(settings);
-        let shown = Stack::new().fill_width().label(label.clone()).show(ui, |ui, root| {
+        let shown = Stack::new().label(label.clone()).show(ui, |ui, root| {
             let before = held.read(root).unwrap_or_default();
             let mut next = before.clone();
             let texts: Vec<RowText> = before

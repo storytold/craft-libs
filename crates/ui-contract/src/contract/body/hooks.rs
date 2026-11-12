@@ -275,6 +275,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.room = self.mount_room(props, ui, id, at);
         let env = Env::of(ui);
         self.given = self.given_axes(props, &env, at);
+        self.passes = self.passes_width(props, &env, at);
         self.given.1 |= self.over_room(props, &env, at, ui.ctx(), id);
         let measured = self.measured_body.unwrap_or(Vec2::ZERO);
         let body = if self.presence.visible { Vec2::new(measured.x, measured.y * self.presence.t) } else { Vec2::ZERO };
@@ -327,6 +328,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             None => self.mount_room(&props, at.ui, id, at.at),
         };
         self.given = self.given_axes(&props, at.env, at.at);
+        self.passes = self.passes_width(&props, at.env, at.at);
         // A body that fills the main axis of the body it sits in is measured and shown at its share of it. The first
         // sweep of that body's measuring run only counts it: its contents run in the second sweep, at the share.
         let (x, y) = (craft_behavior::Axis::X, craft_behavior::Axis::Y);
@@ -697,9 +699,12 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         if real {
             crate::runtime::focus::begin_body(&ctx);
         }
-        // A held fill-width container is part of the content column it sits in: its own stack is one too.
+        // A held fill-width container is part of the content column it sits in: its own stack is one too. A
+        // content-sized stack that passes its column's width on is a given column itself, so the width reaches down
+        // through nested stacks.
         let (sizing, held) = (self.sizing(&props), self.held(&props, env));
-        let content_column = (sizing == Sizing::Content || held || !self.given.0) && matches!(props.layout, layout::BodyLayout::Stack);
+        let content_column =
+            ((sizing == Sizing::Content && !self.passes) || held || !self.wide()) && matches!(props.layout, layout::BodyLayout::Stack);
         let layout_id = sub(id, "layout");
         // The body is measured in the line the real run gives it: what the header and the end region leave. The
         // measuring run places it once both have measured, so its end region runs first (its content never depends
@@ -768,6 +773,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                     Pos2::new(body_rect.max.x, body_rect.min.y + self.measured_body.map_or(0.0, |size| size.y) * self.presence.t),
                 )
             });
+            let wide = self.wide();
             let (layout, body) = (&props.layout, &mut *self.body);
             let label_column = props.label_column;
             let mut run = |parent: &mut Ui, at: Rect, bcx: &mut BodyCx<'_>| -> Option<Vec2> {
@@ -868,7 +874,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 let took = took.unwrap_or_else(|| body_ui.min_rect().size());
                 // A content-sized column of rows takes, in a measuring run, the width they take at the group's widest
                 // label: the rows measured before the widest one measured against a narrower column.
-                let stacked = matches!(layout, layout::BodyLayout::Stack) && !self.given.0;
+                let stacked = matches!(layout, layout::BodyLayout::Stack) && !wide;
                 Some(match group_extent.filter(|_| stacked && !real) {
                     Some(width) => Vec2::new(took.x.max(width), took.y),
                     None => took,

@@ -102,8 +102,12 @@ pub struct Scoped {
     /// The `Grid` or spread `Row` body whose cursor places the children in flow.
     pub(crate) grid: Option<Id>,
     /// The body that encloses the scope is a content-sized column: it takes its width from its widest child that is
-    /// not fill-width, so a fill-width child takes the width the others settle on and never sets it.
+    /// not fill-width, so a fill-width child takes the width the others settle on and never sets it. Such a column
+    /// exists only where the width comes from content: under a content-sized mount, a row or a grid.
     pub(crate) content_column: bool,
+    /// The body that encloses the scope is a `Stack` given its width: a content-sized container in it passes that
+    /// width on to its own body, so a child there that fills takes it (fill propagates down the column).
+    pub(crate) given_column: bool,
     /// The axes (horizontal, vertical) the enclosing body sizes from its content: a child that fills there takes its
     /// measured size, not the room.
     pub(crate) content: (bool, bool),
@@ -273,6 +277,7 @@ impl Scoped {
     pub(crate) fn start_room(&mut self) {
         self.grid = None;
         self.content_column = false;
+        self.given_column = false;
         self.content = (false, false);
         self.row_room = None;
         self.row_line = None;
@@ -391,6 +396,7 @@ impl Env {
                 transform: None,
                 grid: None,
                 content_column: false,
+                given_column: false,
                 content: (false, false),
                 row_room: None,
                 row_line: None,

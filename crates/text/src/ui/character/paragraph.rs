@@ -209,7 +209,7 @@ impl<'a> ParagraphControls<'a> {
         .collect();
 
         let mut edits: Vec<EditEvent<ParagraphChange>> = Vec::new();
-        let shown = Stack::new().fill_width().label(self.label).show(ui, |ui, _| {
+        let shown = Stack::new().label(self.label).show(ui, |ui, _| {
             edits.extend(toggle_row(ui, Some(&words.alignment), &aligns));
             edits.extend(toggle_row(ui, Some(&words.direction), &directions));
 

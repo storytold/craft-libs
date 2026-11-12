@@ -175,7 +175,7 @@ impl<'a> ReorderableSections<'a> {
         let name: Arc<str> = Arc::from(label.as_str());
         let mut events: Vec<SectionEvent> = Vec::new();
         let mut buttons: Vec<(SectionKey, Response)> = Vec::new();
-        let shown = Stack::new().fill_width().label(label).show(ui, |ui, root| {
+        let shown = Stack::new().label(label).show(ui, |ui, root| {
             let stored = bind.reborrow().read(root).and_then(|held| held.same().cloned());
             let mut held = stored.clone().unwrap_or_default();
             held.reconcile(&keys);

@@ -90,7 +90,7 @@ impl<'a> BlendIfBar<'a> {
         let words = env.words::<BlendIfWords>();
         let units = env.units();
         let mut out: Option<EditResponse<BlendIfRange>> = None;
-        let shown_stack = Stack::new().fill_width().label(label.clone()).show(ui, |ui, root| {
+        let shown_stack = Stack::new().label(label.clone()).show(ui, |ui, root| {
             let held = range.reborrow().read(root);
             let mut row = match &held {
                 Some(Mixed::Same(range)) => range.row(),

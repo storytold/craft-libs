@@ -49,6 +49,7 @@ pub(crate) struct EnvFacts {
     text_direction: crate::runtime::env::Direction,
     content: (bool, bool),
     content_column: bool,
+    given_column: bool,
     unbounded: (bool, bool),
     row_room: Option<f32>,
     row_line: Option<f32>,
@@ -66,6 +67,7 @@ impl EnvFacts {
             text_direction: env.text_direction,
             content: env.content,
             content_column: env.content_column,
+            given_column: env.given_column,
             unbounded: env.unbounded,
             row_room: env.row_room,
             row_line: env.row_line,
@@ -119,6 +121,19 @@ impl<'b> BodyHooks<'b> {
         }
     }
 
+    /// Whether a content-sized inline container passes the width its column gives it on to its own body, where `env`
+    /// is its parent's: in a `Stack` body given its width, a child of its body that fills takes that width, and the
+    /// container takes what its content took. A content-sized mount, a row or a grid stops it.
+    pub(super) fn passes_width(&self, props: &ContainerProps, env: &Env, at: ShowAt) -> bool {
+        matches!((at, &props.mount), (ShowAt::Flow, Mount::Inline)) && self.sizing(props) == Sizing::Content && env.given_column
+    }
+
+    /// Whether the container's body is laid out across the width it is offered: the container is given the width, or
+    /// passes it on.
+    pub(super) fn wide(&self) -> bool {
+        self.given.0 || self.passes
+    }
+
     /// Whether the container fills a height its parent sizes from its content, in a room of finite height: it takes
     /// its content height, at most that room. A body that scrolls along the height keeps to the room by scrolling.
     pub(super) fn capped(&self, props: &ContainerProps, env: &Env, at: ShowAt) -> bool {
@@ -149,7 +164,7 @@ impl<'b> BodyHooks<'b> {
             (region("header", props.header.is_some()), region("footer", props.footer.is_some()), region("end", props.end.is_some()));
         let fits = |now: f32, was: f32, given: bool, took: f32| layout_memory::Measured::serves(now, was, given, took, tolerance);
         let full = self.regions_size(props, body.took, header, footer, end) + pad;
-        if !(fits(self.room.x, body.room.x, self.given.0, full.x) && fits(self.room.y, body.room.y, self.given.1, full.y)) {
+        if !(fits(self.room.x, body.room.x, self.wide(), full.x) && fits(self.room.y, body.room.y, self.given.1, full.y)) {
             return None;
         }
         let body = if self.open { body.took } else { Vec2::ZERO };
