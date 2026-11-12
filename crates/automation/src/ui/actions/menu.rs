@@ -133,9 +133,9 @@ impl ActionsPanelCommands {
 }
 
 /// The rows of the Actions panel's menu, for the dock's `PanelMenu`: New Action…, New Set…, Set
-/// Options…, Play, Start and Stop Recording, Delete, Insert Stop…, Batch…, Load and Save Actions…
-/// and Button Mode, in groups.
-pub fn panel_rows() -> Vec<PanelRow> {
+/// Options…, Play, Start Recording (Stop Recording while `recording`), Delete, Insert Stop…, Batch…,
+/// Load and Save Actions… and Button Mode, in groups.
+pub fn panel_rows(recording: bool) -> Vec<PanelRow> {
     let command = |command: ActionsPanelCommands| PanelRow::Command(CommandRef::from(command));
     vec![
         command(ActionsPanelCommands::NewAction),
@@ -143,8 +143,7 @@ pub fn panel_rows() -> Vec<PanelRow> {
         command(ActionsPanelCommands::SetOptions),
         PanelRow::Separator,
         command(ActionsPanelCommands::Play),
-        command(ActionsPanelCommands::StartRecording),
-        command(ActionsPanelCommands::StopRecording),
+        command(if recording { ActionsPanelCommands::StopRecording } else { ActionsPanelCommands::StartRecording }),
         command(ActionsPanelCommands::Delete),
         PanelRow::Separator,
         command(ActionsPanelCommands::InsertStop),

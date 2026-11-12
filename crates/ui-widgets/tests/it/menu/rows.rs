@@ -41,3 +41,28 @@ fn a_row_shows_its_tooltip_when_the_pointer_rests_on_it_in_an_open_menu() {
     fixture.settle();
     assert!(fixture.texts().iter().any(|run| run.text == "Take back the last change"), "the row's tooltip shows");
 }
+
+#[trial]
+fn a_letter_no_row_takes_while_a_menu_is_open_does_not_reach_the_text_field_under_it() {
+    let text = std::rc::Rc::new(std::cell::RefCell::new("hello".to_owned()));
+    let held = text.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let mut value = held.borrow_mut();
+        let field = craft_ui::text::TextField::new("Name", craft_ui::contract::Bind::bound(&mut *value)).show(ui);
+        Menu::context("Field menu", &field.response).show(ui, |ui, _| {
+            MenuItem::new("Copy").show(ui);
+            MenuItem::new("Paste").show(ui);
+        });
+    });
+    fixture.settle();
+    let at = fixture.by_label("Name").expect("the field").center();
+    fixture.click_at(at);
+    fixture.settle();
+    fixture.frame(vec![pointer::secondary(at, true)]);
+    fixture.frame(vec![pointer::secondary(at, false)]);
+    fixture.settle();
+    assert!(fixture.by_label("Copy").is_some(), "the context menu is open over the field");
+    fixture.type_text("q");
+    fixture.settle();
+    assert_eq!(*text.borrow(), "hello", "the letter does not reach the field");
+}

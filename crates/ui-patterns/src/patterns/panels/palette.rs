@@ -62,9 +62,9 @@ impl crate::contract::Outcome for PaletteOutput {
 
 /// A search over the app's commands in a centred modal box: a search field over the matching commands.
 ///
-/// - Entries: [`HelpEntry`]s, found by label, English label or menu path and ranked by [`search_order`]. A row shows
-///   the label, the menu path under it and the command's chord at the end; a disabled command is listed and does
-///   not run.
+/// - Entries: [`HelpEntry`]s, found by label, English label or menu path and ranked by [`search_order`]. A row is one
+///   line: the label, the menu path (dropped when the label would get too narrow) and the command's chord at the end.
+///   A disabled command is listed and does not run.
 /// - Empty query: the commands last run, newest first (the `recents` binding), else the first entries.
 /// - Keys: the field keeps the focus; Up, Down, Page Up, Page Down move the active row (Up and Down wrap at the ends),
 ///   Enter picks it, Escape clears
@@ -222,14 +222,17 @@ struct RowData {
 }
 
 impl RowData {
+    /// One line: the label, then the menu path, which drops out when the label would get too narrow, and the chord
+    /// at the end.
     fn row(&self) -> ListRow<'static> {
         let row = ListRow::new(self.label.clone()).option().enabled(self.enabled);
-        let row = match &self.path {
-            Some(path) => row.detail(path.clone()),
+        // The first trailing item is the outermost: the chord ends the row and the path sits before it.
+        let row = match &self.chord {
+            Some(chord) => row.trailing(chord.clone()),
             None => row,
         };
-        match &self.chord {
-            Some(chord) => row.trailing(chord.clone()),
+        match &self.path {
+            Some(path) => row.optional(path.clone()),
             None => row,
         }
     }
