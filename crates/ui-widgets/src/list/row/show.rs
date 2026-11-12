@@ -49,7 +49,7 @@ pub(super) fn named(pattern: &Label, row: &str) -> String {
 impl Component for ListRow<'_> {
     const ROLE: Role = Role::LIST_ITEM;
     const OVERLAYS: bool = false;
-    const ALT_ROLES: &'static [Role] = &[Role::TREE_ITEM, Role::LIST_BOX_OPTION, Role::HEADING];
+    const ALT_ROLES: &'static [Role] = &[Role::TREE_ITEM, Role::LIST_BOX_OPTION];
     type Style = ListRowStyle;
     type Output = RowOutput;
 
@@ -116,10 +116,6 @@ impl Component for ListRow<'_> {
         if self.spacer {
             return Vec2::ZERO;
         }
-        if self.caption {
-            let caption = cx.layout_at(&TextRun::new(cx.resolved.label).role(cx.style.detail.role), f32::INFINITY).size();
-            return Vec2::new(caption.x + 2.0 * sizes.pad, sizes.row.max(caption.y));
-        }
         let above = if self.space_above { sizes.gap_row } else { 0.0 };
         let height = sizes.height(self.thumb, self.detail_line());
         let rtl = cx.env.direction().is_rtl();
@@ -166,12 +162,12 @@ impl Component for ListRow<'_> {
     }
 
     fn sense(&self) -> Sense {
-        if self.spacer || self.caption { Sense::empty() } else { Sense::CLICK | Sense::FOCUS }
+        if self.spacer { Sense::empty() } else { Sense::CLICK | Sense::FOCUS }
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         self.record_toggle_names(cx);
-        if self.spacer || self.caption {
+        if self.spacer {
             return;
         }
         self.adopt_toggle_columns(&cx.env, cx.resolved.id);
@@ -287,7 +283,7 @@ impl Component for ListRow<'_> {
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
-        if self.spacer || self.caption {
+        if self.spacer {
             return;
         }
         if let Some(open) = self.group
@@ -350,10 +346,6 @@ impl Component for ListRow<'_> {
         }
         if self.spacer {
             access.name(Name::Decorative);
-            return;
-        }
-        if self.caption {
-            access.role(Role::HEADING);
             return;
         }
         let words = cx.words::<ListWords>();
@@ -452,16 +444,6 @@ impl Component for ListRow<'_> {
         let sizes = &style.sizes;
         let rtl = cx.env.direction().is_rtl();
         let rect = cx.rect;
-        if self.caption {
-            let draw = ui.draw();
-            let content = rect.shrink2(Vec2::new(sizes.pad, 0.0));
-            let run = TextRun::new(cx.resolved.label).role(style.detail.role).color(cx.resolve(&style.detail.color)).elide();
-            let layout = draw.layout(&run, content.width());
-            let size = layout.size();
-            let x = if rtl { content.max.x - size.x } else { content.min.x };
-            draw.galley(Pos2::new(x, content.center().y - size.y / 2.0), &layout);
-            return;
-        }
         let widths = self.widths(sizes, &|run| ui.draw().layout(run, f32::INFINITY).size().x);
         let placed = self.place(sizes, &widths, rect, rtl);
         self.label_rect = placed.label;

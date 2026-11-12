@@ -34,7 +34,7 @@ impl<'e, 'l, T> EntryRows<'e, 'l, T> {
         let entries: &'e [Entry<T>] = self.entries;
         let entry = &entries[at];
         let Some(value) = entry.value() else {
-            return if entry.is_heading() { ListRow::caption(self.labels[at].clone()) } else { ListRow::spacer() };
+            return if entry.is_heading() { ListRow::new(self.labels[at].clone()).heading() } else { ListRow::spacer() };
         };
         let row = ListRow::new(self.labels[at].clone()).option().check(chosen == Some(at)).enabled(entry.is_enabled());
         let row = match entry.icon_spec() {
