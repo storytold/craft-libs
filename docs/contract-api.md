@@ -1671,6 +1671,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `fn can_drag(&self, _key: &Self::Key) -> bool`. Whether the item `key` may be dragged (reordered, moved in a free layout, or dragged to another collection).
   - `fn accepts(&self, _drag: &ListDrag<Self::Key>, _over: Option<&Self::Key>, _insert: usize) -> bool`. Whether the collection's own dragged items may land before `insert` (a position of the display order, `over` is
   - `fn drops(&self) -> &[DropKind<'_, Self::Key>]`. What the collection takes from drags that did not start in it, in order: the first kind that takes the drag's
+  - `fn edge_press(&self) -> Option<&EdgePress<'_, Self::Key>>`. The press on the line between two adjacent rows the collection takes, reported as
   - `fn zooms(&self) -> bool`. Whether the collection takes the zoom share of the wheel (Ctrl or Cmd with the wheel): it reports
   - `fn empty_height(&self, width: f32, ui: &Ui, _cx: &StyleCx<'_>) -> f32`. The height of the empty state at `width`: a `Sizing::Content` collection with no rows is this tall. The
   - `fn empty(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>)`. The empty state at the rect the item step placed. The default shows `CollectionProps::empty`.
@@ -1809,7 +1810,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub const fn new() -> Self`. A collapsible body that starts open, animated.
   - `pub const fn initially_open(mut self, on: bool) -> Self`. Whether the body starts open.
   - `pub const fn animated(mut self, on: bool) -> Self`. Whether opening and closing animate.
-- `craft_ui::contract::CollectionEvent`: `pub enum CollectionEvent<K, E> { Selection(SelectionChange<K>), LeadMoved { key: K, by: LeadSource }, Activate(K), EmptyActivated, Preview(K), ContextMenu(ContextMenuRequest<K>), CommandClick { key: K, mods: craft_keymap::Mods }, Delete(Vec<K>), Open(OpenChange<K>), Reorder(EditEvent<ReorderMove<K>>), Move(EditEvent<Vec2>), Dropped { at: DropAt<K>, op: DropOperation, payload: DropPayload }, Zoom { factor: f32, about: Pos2 }, Rename(EditEvent<Rename<K>>), Toggle(EditEvent<ToggleEdit<K>>), Column(ColumnEvent), Item(K, E) }`. What a collection reports, in drawing order.
+- `craft_ui::contract::CollectionEvent`: `pub enum CollectionEvent<K, E> { Selection(SelectionChange<K>), LeadMoved { key: K, by: LeadSource }, Activate(K), EmptyActivated, EmptyContextMenu { at: Pos2 }, Preview(K), ContextMenu(ContextMenuRequest<K>), EdgePressed { above: K, below: K, mods: craft_keymap::Mods }, CommandClick { key: K, mods: craft_keymap::Mods }, Delete(Vec<K>), Open(OpenChange<K>), Reorder(EditEvent<ReorderMove<K>>), Move(EditEvent<Vec2>), Dropped { at: DropAt<K>, op: DropOperation, payload: DropPayload }, Zoom { factor: f32, about: Pos2 }, Rename(EditEvent<Rename<K>>), Toggle(EditEvent<ToggleEdit<K>>), Column(ColumnEvent), Item(K, E) }`. What a collection reports, in drawing order.
 - `craft_ui::contract::CollectionProps`: `pub struct CollectionProps { pub select: SelectMode, pub reorder: Option<ReorderRule>, pub rename: bool, pub rename_column: Option<ColumnKey>, pub slow_click_rename: bool, pub columns: Vec<ColumnSpec>, pub sort: Option<ColumnSort>, pub empty: Option<Label>, pub activate: ActivateOn, pub striped: bool, pub allow_empty: bool, pub lead_on_open: LeadOnOpen, pub lead_follows_hover: bool, pub arrows_select: bool, pub focus_on_press: bool, pub rows_stamp: Option<u64>, pub space: SpaceAction, pub type_ahead: bool, pub arrows_wrap: bool, pub header: bool, pub digit_keys: bool, pub menu_on_click: bool, pub item_keys: ItemKeys, pub marquee: bool, pub deletable: bool, pub drag_payload: Option<DragPayload>, pub drag_count: Option<Counted>, pub natural_height: bool, pub min_rows: u16, pub max_rows: Option<u16>, pub row_height: RowHeight, pub command_click: bool, pub notch: Option<Notch>, pub overflow: Axis, pub pages: bool, pub current: Option<Arc<dyn Any + Send + Sync>> }`. What a collection reads from the app: plain data. A new builder's name is added to the forwarder list in
   - `pub const fn new() -> Self`. Collection props with every setting at its default.
   - `pub fn select(mut self, mode: SelectMode) -> Self`. What can be selected.
@@ -1943,6 +1944,8 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn get<P: 'static>(&self) -> Option<&P>`. The payload, when it is a `P`.
 - `craft_ui::contract::DropPlace`: `pub enum DropPlace { Between, Onto }`. Where a drop kind takes its drops.
 - `craft_ui::contract::DropTarget`: re-export of `craft_ui::runtime::drag::DropTarget`.
+- `craft_ui::contract::EdgePress`: `pub struct EdgePress<'a, K>`. The line between two adjacent rows as a target of its own while `mods` are held (Photoshop's Alt-click between two
+  - `pub fn new(mods: Mods, test: impl Fn(&K, &K) -> Option<Cursor> + 'a) -> Self`. The edge press while exactly `mods` are held, on the lines `test` takes.
 - `craft_ui::contract::Edit`: `pub trait Edit`. Values and edits (chapter 10). `value`, `validity`, `gesture`, `adopt` and `edit_response` take `&self`, so `paint`
   - `type Value`. The component's value type.
   - `fn value(&self) -> Option<&Self::Value>`. The shown value: the running gesture's proposal, else the binding's. `None` for a mixed binding, a kept
@@ -4352,7 +4355,7 @@ Stories rendered to images offscreen: egui's wgpu test renderer over what [`Fram
 
 Stories: named ways to show one registered type, and the data and output the runner reads from them.
 
-- `craft_ui::testing::story::CollectionKind`: `pub enum CollectionKind { Selection, LeadMoved, Activate, EmptyActivated, Preview, ContextMenu, CommandClick, Delete, Open, Reorder(EditKind), Move(EditKind), Dropped, Zoom, Rename(EditKind), Toggle(EditKind), Column, Item }`. The kind of a collection event, with the edit kind of the events that carry one.
+- `craft_ui::testing::story::CollectionKind`: `pub enum CollectionKind { Selection, LeadMoved, Activate, EmptyActivated, EmptyContextMenu, EdgePressed, Preview, ContextMenu, CommandClick, Delete, Open, Reorder(EditKind), Move(EditKind), Dropped, Zoom, Rename(EditKind), Toggle(EditKind), Column, Item }`. The kind of a collection event, with the edit kind of the events that carry one.
   - `pub fn of<K, E>(event: &CollectionEvent<K, E>) -> Option<CollectionKind>`. The kind of `event`, `None` for an edit event of a kind the runner does not know.
 - `craft_ui::testing::story::Drive`: `pub enum Drive { Auto, Activate, Step, Drag(Grip), DragChild(Grip), Type(&'static str), Pick { row: usize }, Custom(fn(&mut Fixture)), Never }`. How the runner changes the value a story shows.
 - `craft_ui::testing::story::EditKind`: `pub enum EditKind { Begin, Update, Commit, Cancel, Set }`. The kind of an edit event.
