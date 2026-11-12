@@ -295,6 +295,27 @@ fn flyout_top_edge_and_free_top_corner_grow_it_upward() {
     }
 }
 
+/// The top handle is a band as tall as stock chrome's, so a press a few points below the
+/// top edge resizes; a press below the band reaches the tab strip and floats the group.
+#[test]
+fn the_flyout_top_handle_is_a_band_that_leaves_the_strip_its_drags() {
+    let mut d = DockDriver::new(docked(&[&[1], &[3]], true), Content);
+    d.click(hit(&d, Hit::Icon(3)).center());
+    d.settle();
+    let before = flyout_rect(&d);
+    let from = pos2(before.center().x, before.top() + chrome::RESIZE_BAND - 1.0);
+    d.drag(from, from - vec2(0.0, 20.0));
+    d.settle();
+    let raised = flyout_rect(&d);
+    assert!((raised.top() - (before.top() - 20.0)).abs() < 1.0, "{before:?} -> {raised:?}");
+    assert_eq!(raised.bottom(), before.bottom());
+    let bar = hit(&d, Hit::DragBar(3));
+    assert!(bar.top() >= raised.top(), "{bar:?} in {raised:?}");
+    let below = pos2(bar.center().x, (raised.top() + chrome::RESIZE_BAND + 2.0).max(bar.top() + 1.0));
+    let out = d.drag(below, CANVAS);
+    assert!(matches!(out.actions.as_slice(), [Action::MoveGroup { panel: 3, to: Target::Float { .. } }]), "{:?}", out.actions);
+}
+
 /// A saved offset that would put the flyout above the window or below it is clamped there,
 /// and an older workspace without one aligns the flyout with its icons as before.
 #[test]

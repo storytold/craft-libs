@@ -121,6 +121,7 @@ pub struct FloatingFrame<'a> {
     resize_label: &'a str,
     opacity: f32,
     reserve_top_resize_band: bool,
+    top_handle_height: Option<f32>,
 }
 
 /// What a [`FloatingFrame`] did this frame.
@@ -151,6 +152,7 @@ impl<'a> FloatingFrame<'a> {
             resize_label: "Resize window",
             opacity: 1.0,
             reserve_top_resize_band: true,
+            top_handle_height: None,
         }
     }
 
@@ -171,6 +173,13 @@ impl<'a> FloatingFrame<'a> {
     /// Hosts supplying their own header also supply its minimum size through [`Self::limits`].
     pub fn reserve_top_resize_band(mut self, reserve: bool) -> Self {
         self.reserve_top_resize_band = reserve;
+        self
+    }
+
+    /// Without a reserved band, how far the top handles reach into the contents, in points.
+    /// The default is one physical pixel, so a host-owned header keeps nearly all its clicks.
+    pub fn top_handle_height(mut self, height: f32) -> Self {
+        self.top_handle_height = Some(height);
         self
     }
 
@@ -267,7 +276,8 @@ impl<'a> FloatingFrame<'a> {
                 continue;
             }
             if !self.reserve_top_resize_band && direction.y < 0.0 {
-                handle.max.y = (rect.top() + ui.ctx().pixels_per_point().recip()).min(rect.bottom());
+                let reach = self.top_handle_height.filter(|h| h.is_finite() && *h > 0.0).unwrap_or_else(|| ui.ctx().pixels_per_point().recip());
+                handle.max.y = (rect.top() + reach).min(rect.bottom());
             }
             direction = vec2(if self.resize_axes[0] { direction.x } else { 0.0 }, if self.resize_axes[1] { direction.y } else { 0.0 });
             if direction == egui::Vec2::ZERO {

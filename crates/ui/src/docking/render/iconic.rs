@@ -345,6 +345,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             .resizable(movable)
             .resize_edges([matches!(request.edge, Edge::Right), matches!(request.edge, Edge::Left), true, true])
             .reserve_top_resize_band(false)
+            // A band as tall as stock chrome's, over the top of the tab strip, is easy to grab.
+            .top_handle_height(crate::docking::chrome::RESIZE_BAND)
             .resize_label(&label)
             .show(ctx, &style, |ui, rect| {
                 self.group(ui, &group.panels, group.active, false, rect, GroupKind::Dock);
