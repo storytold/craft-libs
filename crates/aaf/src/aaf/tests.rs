@@ -501,3 +501,12 @@ fn flattened_selectors_and_nested_scopes_are_reported() {
         assert!(report.mentions(message), "{report}");
     }
 }
+
+#[test]
+fn relative_media_locator_round_trips_escaped_characters() {
+    let mut doc = document();
+    doc.sources[0].path = Some("Audio Files/100%20 #1.wav".into());
+    let bytes = written(&doc, false);
+    let got = read_clean(&bytes);
+    assert!(got.sources.iter().any(|s| s.path.as_deref() == Some("Audio Files/100%20 #1.wav")));
+}
