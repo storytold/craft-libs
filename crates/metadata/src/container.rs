@@ -362,6 +362,28 @@ mod tests {
     }
 
     #[test]
+    fn jpeg_invalid_xmp_iso_stays_absent_and_exif_iso_wins() {
+        let make_jpeg = |exif: Option<Vec<u8>>, xmp: &str| {
+            let mut jpeg = vec![0xff, 0xd8];
+            if let Some(exif) = exif {
+                let mut payload = b"Exif\0\0".to_vec();
+                payload.extend(exif);
+                jpeg.extend(seg(0xe1, &payload));
+            }
+            let mut payload = XMP_SIG.to_vec();
+            payload.extend_from_slice(xmp.as_bytes());
+            jpeg.extend(seg(0xe1, &payload));
+            jpeg.extend_from_slice(&[0xff, 0xda, 0, 2, 0xff, 0xd9]);
+            jpeg
+        };
+        let invalid = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:exif="http://ns.adobe.com/exif/1.0/" exif:ISOSpeedRatings="0.5"/></rdf:RDF>"#;
+        assert_eq!(crate::extract(&make_jpeg(None, invalid)).iso, None);
+
+        let valid = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:exif="http://ns.adobe.com/exif/1.0/" exif:ISOSpeedRatings="200"/></rdf:RDF>"#;
+        assert_eq!(crate::extract(&make_jpeg(Some(sample_exif(ByteOrder::Big)), valid)).iso, Some(400));
+    }
+
+    #[test]
     fn jpeg_extended_xmp() {
         let mut j = vec![0xff, 0xd8];
         for (off, part) in [(5u32, &b"world"[..]), (0, b"hello")] {

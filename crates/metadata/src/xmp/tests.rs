@@ -194,6 +194,109 @@ fn non_positive_iso_is_ignored() {
     assert_eq!(read(r#"exif:ISOSpeedRatings="200""#), Some(200));
 }
 
+fn iso_packet(attrs: &str, element: &str) -> String {
+    format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:exifEX="http://cipa.jp/exif/1.0/" {attrs}>{element}</rdf:Description>
+            </rdf:RDF></x:xmpmeta>"#
+    )
+}
+
+#[test]
+fn xmp_iso_rejects_fractional_values() {
+    let cases = [
+        (iso_packet(r#"exif:ISOSpeedRatings="0.5""#, ""), "exif:ISOSpeedRatings", "0.5"),
+        (iso_packet(r#"exif:ISOSpeedRatings="1.0000000000000001""#, ""), "exif:ISOSpeedRatings", "1.0000000000000001"),
+        (iso_packet(r#"exif:ISOSpeedRatings="1.0000000000000001/1""#, ""), "exif:ISOSpeedRatings", "1.0000000000000001/1"),
+        (iso_packet("", "<exif:ISOSpeedRatings><rdf:Seq><rdf:li>160.9</rdf:li></rdf:Seq></exif:ISOSpeedRatings>"), "exif:ISOSpeedRatings", "160.9"),
+        (iso_packet(r#"exifEX:PhotographicSensitivity="160.9""#, ""), "exifEX:PhotographicSensitivity", "160.9"),
+        (iso_packet("", "<exifEX:PhotographicSensitivity>0.5</exifEX:PhotographicSensitivity>"), "exifEX:PhotographicSensitivity", "0.5"),
+        (
+            iso_packet("", "<exifEX:PhotographicSensitivity><rdf:Seq><rdf:li>160.9</rdf:li></rdf:Seq></exifEX:PhotographicSensitivity>"),
+            "exifEX:PhotographicSensitivity",
+            "160.9",
+        ),
+    ];
+    for (packet, key, raw) in cases {
+        let d = parse_xmp(&packet).unwrap();
+        assert_eq!(d.metadata.iso, None, "{packet}");
+        assert_eq!(
+            d.properties.get(key).map(|values| values.iter().map(String::as_str).collect::<Vec<_>>()),
+            Some(vec![raw]),
+            "raw property changed: {packet}"
+        );
+        assert_eq!(d.metadata.make, None);
+    }
+}
+
+#[test]
+fn xmp_iso_rejects_out_of_range_values() {
+    for value in ["4294967296", "0", "-1", "NaN", "inf", "bad"] {
+        let packet = iso_packet(&format!(r#"exif:ISOSpeedRatings="{value}""#), "");
+        let d = parse_xmp(&packet).unwrap();
+        assert_eq!(d.metadata.iso, None, "{value}");
+        assert_eq!(d.properties.get("exif:ISOSpeedRatings").map(|v| v.first().map(String::as_str)), Some(Some(value)));
+    }
+    let packet = iso_packet("", "<exifEX:PhotographicSensitivity>4294967296</exifEX:PhotographicSensitivity>");
+    assert_eq!(parse_xmp(&packet).unwrap().metadata.iso, None);
+}
+
+#[test]
+fn xmp_iso_invalid_primary_allows_fallback() {
+    for primary in ["0.5", "1.0000000000000001", "160.9", "4294967296", "0", "-1", "bad", "NaN"] {
+        let packet = iso_packet(&format!(r#"exif:ISOSpeedRatings="{primary}" exifEX:PhotographicSensitivity="200""#), "");
+        assert_eq!(parse_xmp(&packet).unwrap().metadata.iso, Some(200), "{primary}");
+    }
+}
+
+#[test]
+fn xmp_iso_preserves_valid_values() {
+    for (value, expected) in [
+        ("200", 200),
+        ("200.0", 200),
+        ("2e2", 200),
+        ("400/2", 200),
+        ("1.5/0.5", 3),
+        ("0.3/0.1", 3),
+        ("1.0000000000000001/1.0000000000000001", 1),
+        ("1e39/1e39", 1),
+        ("1e39/5e38", 2),
+        ("1e39/2e38", 5),
+        ("4294967295", u32::MAX),
+    ] {
+        let packet = iso_packet(&format!(r#"exif:ISOSpeedRatings="{value}""#), "");
+        assert_eq!(parse_xmp(&packet).unwrap().metadata.iso, Some(expected), "{value}");
+    }
+    assert_eq!(parse_xmp(&iso_packet("", "<exifEX:PhotographicSensitivity>640</exifEX:PhotographicSensitivity>")).unwrap().metadata.iso, Some(640));
+    let packet = iso_packet(r#"exif:ISOSpeedRatings="100" exifEX:PhotographicSensitivity="200""#, "");
+    assert_eq!(parse_xmp(&packet).unwrap().metadata.iso, Some(100));
+}
+
+#[test]
+fn xmp_iso_accepts_equal_coefficients_above_u128() {
+    let value = "340282366920938463463374607431768211456/340282366920938463463374607431768211456";
+    assert_eq!(parse_xmp(&iso_packet(&format!(r#"exif:ISOSpeedRatings="{value}""#), "")).unwrap().metadata.iso, Some(1));
+}
+
+#[test]
+fn xmp_iso_rejected_value_is_not_written() {
+    let packet = iso_packet(r#"exif:ISOSpeedRatings="0.5""#, r#"<dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">kept</dc:title>"#);
+    let parsed = parse_xmp(&packet).unwrap();
+    assert_eq!(parsed.metadata.iso, None);
+    assert_eq!(parsed.metadata.title.as_deref(), Some("kept"));
+    let written = write_xmp(&parsed.metadata);
+    assert!(!written.contains("ISOSpeedRatings"), "{written}");
+}
+
+#[test]
+fn xmp_iso_writer_omits_zero() {
+    let written = write_xmp(&Metadata { iso: Some(0), ..Default::default() });
+    assert!(!written.contains("ISOSpeedRatings"), "{written}");
+
+    let written = write_xmp(&Metadata { iso: Some(200), ..Default::default() });
+    assert!(written.contains("<rdf:li>200</rdf:li>"), "{written}");
+}
+
 #[test]
 fn negative_xmp_pixel_width_is_ignored() {
     let read = |attrs: &str| {

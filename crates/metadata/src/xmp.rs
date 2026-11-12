@@ -581,6 +581,133 @@ fn fmt_gps_coord(v: f64, pos: char, neg: char) -> String {
     format!("{},{:.6}{}", d as i64, m, if v < 0.0 { neg } else { pos })
 }
 
+// Preserve the numeric text exactly: parsing it as `f64` first can round a fractional value to an integer.
+struct ExactDecimal {
+    negative: bool,
+    coefficient: String,
+    exponent: i64,
+}
+
+struct ExactRatio {
+    negative: bool,
+    numerator: String,
+    denominator: String,
+    exponent: i64,
+}
+
+fn exact_decimal(value: &str) -> Option<ExactDecimal> {
+    let value = value.trim();
+    let (negative, value) = if let Some(value) = value.strip_prefix('-') {
+        (true, value)
+    } else if let Some(value) = value.strip_prefix('+') {
+        (false, value)
+    } else {
+        (false, value)
+    };
+    let (mantissa, exponent) = if let Some((mantissa, exponent)) = value.split_once('e').or_else(|| value.split_once('E')) {
+        if exponent.contains('e') || exponent.contains('E') {
+            return None;
+        }
+        (mantissa, exponent.parse::<i64>().ok()?)
+    } else {
+        (value, 0)
+    };
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    if fraction.contains('.') {
+        return None;
+    }
+    let digits = whole.bytes().chain(fraction.bytes());
+    if !digits.clone().all(|digit| digit.is_ascii_digit()) {
+        return None;
+    }
+    let digit_count = whole.len().checked_add(fraction.len())?;
+    if digit_count == 0 {
+        return None;
+    }
+    let leading_zeroes = digits.clone().take_while(|digit| *digit == b'0').count();
+    if leading_zeroes == digit_count {
+        return Some(ExactDecimal { negative, coefficient: "0".to_string(), exponent: 0 });
+    }
+    let trailing_zeroes = digits.clone().rev().take_while(|digit| *digit == b'0').count();
+    let significant_digits = digit_count.checked_sub(leading_zeroes)?.checked_sub(trailing_zeroes)?;
+    let coefficient: String = digits.skip(leading_zeroes).take(significant_digits).map(char::from).collect();
+    let exponent = exponent.checked_sub(i64::try_from(fraction.len()).ok()?)?.checked_add(i64::try_from(trailing_zeroes).ok()?)?;
+    Some(ExactDecimal { negative, coefficient, exponent })
+}
+
+fn exact_ratio(numerator: ExactDecimal, denominator: ExactDecimal) -> Option<ExactRatio> {
+    if denominator.coefficient == "0" {
+        return None;
+    }
+    Some(ExactRatio {
+        negative: numerator.negative ^ denominator.negative,
+        numerator: numerator.coefficient,
+        denominator: denominator.coefficient,
+        exponent: numerator.exponent.checked_sub(denominator.exponent)?,
+    })
+}
+
+fn multiply_decimal_by_u32(value: &str, multiplier: u32) -> Option<String> {
+    let mut reversed = Vec::new();
+    let mut carry = 0u64;
+    for digit in value.bytes().rev() {
+        let digit = u64::from(digit.checked_sub(b'0')?);
+        let product = digit.checked_mul(u64::from(multiplier))?.checked_add(carry)?;
+        reversed.push(b'0'.checked_add(u8::try_from(product % 10).ok()?)?);
+        carry = product / 10;
+    }
+    while carry > 0 {
+        reversed.push(b'0'.checked_add(u8::try_from(carry % 10).ok()?)?);
+        carry /= 10;
+    }
+    reversed.reverse();
+    String::from_utf8(reversed).ok()
+}
+
+fn compare_scaled_decimal(left: &str, left_zeroes: i64, right: &str, right_zeroes: i64) -> Option<std::cmp::Ordering> {
+    let left_zeroes = usize::try_from(left_zeroes).ok()?;
+    let right_zeroes = usize::try_from(right_zeroes).ok()?;
+    let left_len = left.len().checked_add(left_zeroes)?;
+    let right_len = right.len().checked_add(right_zeroes)?;
+    if left_len != right_len {
+        return Some(left_len.cmp(&right_len));
+    }
+    Some(left.bytes().chain(std::iter::repeat_n(b'0', left_zeroes)).cmp(right.bytes().chain(std::iter::repeat_n(b'0', right_zeroes))))
+}
+
+fn exact_ratio_to_u32(value: ExactRatio, candidate: u32) -> Option<u32> {
+    if value.negative || value.numerator == "0" || value.denominator == "0" || candidate == 0 {
+        return None;
+    }
+    let denominator = multiply_decimal_by_u32(&value.denominator, candidate)?;
+    let (numerator_zeroes, denominator_zeroes) = if value.exponent >= 0 { (value.exponent, 0) } else { (0, value.exponent.checked_neg()?) };
+    (compare_scaled_decimal(&value.numerator, numerator_zeroes, &denominator, denominator_zeroes)? == std::cmp::Ordering::Equal).then_some(candidate)
+}
+
+fn exact_iso_from_text(value: &str, candidate: u32) -> Option<u32> {
+    let value = value.trim();
+    let ratio = if let Some((numerator, denominator)) = value.split_once('/') {
+        exact_ratio(exact_decimal(numerator)?, exact_decimal(denominator)?)?
+    } else {
+        let value = exact_decimal(value)?;
+        ExactRatio { negative: value.negative, numerator: value.coefficient, denominator: "1".to_string(), exponent: value.exponent }
+    };
+    exact_ratio_to_u32(ratio, candidate)
+}
+
+fn iso_from_text(value: &str) -> Option<u32> {
+    // The float supplies a candidate only. Exact decimal comparison decides whether it is integral.
+    let approximate = parse_number(value)?;
+    if !approximate.is_finite() || approximate <= 0.0 {
+        return None;
+    }
+    let rounded = approximate.round();
+    if rounded < 1.0 || rounded > u32::MAX as f64 {
+        return None;
+    }
+    exact_iso_from_text(value, rounded as u32)
+}
+
 /// Parse an XMP packet (with or without the `<?xpacket?>` wrapper / `x:xmpmeta` element).
 pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     parse_xmp_with(s, &[])
@@ -643,7 +770,8 @@ pub fn parse_xmp_with(s: &str, extra: &[XmpNamespace]) -> Result<XmpData, XmpErr
         label: first("xmp:Label"),
         ..Default::default()
     };
-    m.iso = [num("exif:ISOSpeedRatings"), num("exifEX:PhotographicSensitivity")].into_iter().flatten().find(|v| *v > 0.0).map(|v| v as u32);
+    let iso = |key: &str| first(key).and_then(|value| iso_from_text(&value));
+    m.iso = [iso("exif:ISOSpeedRatings"), iso("exifEX:PhotographicSensitivity")].into_iter().flatten().next();
     if let Some(spec) = props.get("exifEX:LensSpecification").filter(|v| v.len() == 4) {
         let v: Vec<f64> = spec.iter().filter_map(|s| parse_number(s)).collect();
         if v.len() == 4 {
@@ -799,7 +927,7 @@ pub fn write_xmp_with(meta: &Metadata, with: &XmpWrite) -> String {
     array(&mut x, "dc:creator", "Seq", &one(&meta.artist), false);
     array(&mut x, "dc:subject", "Bag", &meta.keywords, false);
     array(&mut x, "lr:hierarchicalSubject", "Bag", &meta.hierarchical_keywords, false);
-    array(&mut x, "exif:ISOSpeedRatings", "Seq", &meta.iso.map(|v| vec![v.to_string()]).unwrap_or_default(), false);
+    array(&mut x, "exif:ISOSpeedRatings", "Seq", &meta.iso.filter(|value| *value > 0).map(|v| vec![v.to_string()]).unwrap_or_default(), false);
     if let Some(s) = meta.lens_spec {
         array(&mut x, "exifEX:LensSpecification", "Seq", &s.iter().map(|&v| frac(v)).collect::<Vec<_>>(), false);
     }
