@@ -258,7 +258,19 @@ pub fn write(path: &Path, accounts: &Accounts) -> Result<(), Error> {
         file.sync_all().map_err(|e| Error::Io(format!("couldn't flush {} ({e})", tmp.display())))?;
         restrict(&tmp)?;
     }
-    std::fs::rename(&tmp, path).map_err(|e| Error::Io(format!("couldn't replace {} ({e})", path.display())))
+    std::fs::rename(&tmp, path).map_err(|e| Error::Io(format!("couldn't replace {} ({e})", path.display())))?;
+    // The flush above persisted the file's bytes. The rename changed a directory entry, and that
+    // entry has its own durability: on Linux, power loss after this function returned could
+    // otherwise resurrect the older list, losing a tombstone a discard already reported written.
+    // Directories open and sync on unix only; elsewhere the rename's own guarantees stand alone.
+    #[cfg(unix)]
+    {
+        if let Some(parent) = path.parent() {
+            let dir = std::fs::File::open(parent).map_err(|e| Error::Io(format!("couldn't open {} ({e})", parent.display())))?;
+            dir.sync_all().map_err(|e| Error::Io(format!("couldn't flush {} ({e})", parent.display())))?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(not(unix))]
