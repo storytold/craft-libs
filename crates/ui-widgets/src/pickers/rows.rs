@@ -9,13 +9,13 @@ use std::borrow::Cow;
 
 /// The entries as a collection source, keyed by entry position: the entries are fixed while the list is open, and the
 /// list's filter leaves out the ones that do not match.
-pub(super) struct EntryRows<'a, T> {
-    entries: &'a [Entry<T>],
-    labels: &'a [Label],
+pub(super) struct EntryRows<'e, 'l, T> {
+    entries: &'e [Entry<T>],
+    labels: &'l [Label],
 }
 
-impl<'a, T> EntryRows<'a, T> {
-    pub(super) fn new(entries: &'a [Entry<T>], labels: &'a [Label]) -> Self {
+impl<'e, 'l, T> EntryRows<'e, 'l, T> {
+    pub(super) fn new(entries: &'e [Entry<T>], labels: &'l [Label]) -> Self {
         EntryRows { entries, labels }
     }
 
@@ -26,12 +26,12 @@ impl<'a, T> EntryRows<'a, T> {
         at: usize,
         chosen: Option<usize>,
         dress: Option<&RowDress<'r, T>>,
-        picture: Option<&'r SelectPicture<'r, T>>,
+        picture: Option<&SelectPicture<'r, T>>,
     ) -> ListRow<'r>
     where
-        'a: 'r,
+        'e: 'r,
     {
-        let entries: &'a [Entry<T>] = self.entries;
+        let entries: &'e [Entry<T>] = self.entries;
         let entry = &entries[at];
         let Some(value) = entry.value() else {
             return if entry.is_heading() { ListRow::heading(self.labels[at].clone()) } else { ListRow::spacer() };
@@ -42,7 +42,10 @@ impl<'a, T> EntryRows<'a, T> {
             None => row,
         };
         let row = match picture {
-            Some(picture) => row.thumb(ThumbSize::Small, move |cx, rect| picture.paint(value, cx, rect)),
+            Some(picture) => {
+                let picture = picture.clone();
+                row.thumb(ThumbSize::Small, move |cx, rect| picture.paint(value, cx, rect))
+            }
             None => row,
         };
         let row = match entry.why_disabled() {
@@ -56,7 +59,7 @@ impl<'a, T> EntryRows<'a, T> {
     }
 }
 
-impl<T> DisplayOrder<usize> for EntryRows<'_, T> {
+impl<T> DisplayOrder<usize> for EntryRows<'_, '_, T> {
     fn len(&self) -> usize {
         self.entries.len()
     }
@@ -82,4 +85,4 @@ impl<T> DisplayOrder<usize> for EntryRows<'_, T> {
     }
 }
 
-impl<T> ItemSource<usize> for EntryRows<'_, T> {}
+impl<T> ItemSource<usize> for EntryRows<'_, '_, T> {}

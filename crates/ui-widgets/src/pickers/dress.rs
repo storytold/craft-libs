@@ -3,6 +3,7 @@
 use crate::list::ListRow;
 use crate::primitives::ContentPainterCx;
 use egui::Rect;
+use std::rc::Rc;
 
 /// What a picker adds to an option's row: the host's content for an option (a detail line, a trailing shortcut text, a
 /// thumbnail painter). `Select::decorate` and `ComboBox::decorate` take the closure.
@@ -24,14 +25,21 @@ impl<'a, T> RowDress<'a, T> {
 
 /// The picture of an option (an arrowhead, a line style): one painter draws it in the option's list row and on the
 /// closed face. `Select::picture` takes the closure.
-pub struct SelectPicture<'a, T>(Box<PictureFn<'a, T>>);
+pub struct SelectPicture<'a, T>(Rc<PictureFn<'a, T>>);
+
+/// A copy shares the painter: each row's thumbnail holds one.
+impl<T> Clone for SelectPicture<'_, T> {
+    fn clone(&self) -> Self {
+        SelectPicture(Rc::clone(&self.0))
+    }
+}
 
 type PictureFn<'a, T> = dyn Fn(&T, &ContentPainterCx, Rect) + 'a;
 
 impl<'a, T> SelectPicture<'a, T> {
     /// The picture `paint` draws for an option, given its value, into the rect the row or face gives it.
     pub fn new(paint: impl Fn(&T, &ContentPainterCx, Rect) + 'a) -> Self {
-        SelectPicture(Box::new(paint))
+        SelectPicture(Rc::new(paint))
     }
 
     /// Paints the picture of `value` into `rect`.
