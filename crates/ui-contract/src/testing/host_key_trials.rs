@@ -111,6 +111,8 @@ fn a_focused_egui_field_keeps_tab_escape_and_the_clipboard() {
     assert_eq!(host.borrow().text, "x", "the paste reaches the focused field");
     press_key(&mut frames, &mut show, Key::Tab);
     assert_eq!(seen(&host), (vec![Key::Tab], 0), "the field's Tab is egui's");
+    frames.frame(Vec::new(), &mut show);
+    assert_eq!(egui_focused(&frames.ctx), Some(named_id("button")), "egui's Tab moves focus on to the next widget");
     fixture::host_focus(&frames.ctx, field());
     frames.frame(Vec::new(), &mut show);
     press_key(&mut frames, &mut show, Key::Escape);
@@ -155,6 +157,37 @@ fn escape_cancels_a_framework_drag_while_an_egui_field_has_focus() {
     assert!(!drag::running(&frames.ctx), "Escape cancelled the drag");
     assert_eq!(seen(&host), (Vec::new(), 0), "the Escape went to the drag alone");
     frames.frame(vec![release(inside)], &mut show);
+}
+
+#[trial]
+fn arrows_and_tab_move_egui_focus_among_host_buttons() {
+    let (left, right) = (named_id("host left"), named_id("host right"));
+    let (_host, mut base) = host_window();
+    let mut show = move |ui: &mut Ui| {
+        base(ui);
+        fixture::host_button(ui, left, Rect::from_min_size(Pos2::new(300.0, 300.0), egui::vec2(80.0, 30.0)));
+        fixture::host_button(ui, right, Rect::from_min_size(Pos2::new(420.0, 300.0), egui::vec2(80.0, 30.0)));
+    };
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), &mut show);
+    fixture::host_focus(&frames.ctx, left);
+    frames.idle(2, &mut show);
+    press_key(&mut frames, &mut show, Key::ArrowRight);
+    assert_eq!(egui_focused(&frames.ctx), Some(right), "ArrowRight moves egui focus to the host's next button");
+    press_key(&mut frames, &mut show, Key::ArrowLeft);
+    assert_eq!(egui_focused(&frames.ctx), Some(left), "ArrowLeft moves it back");
+    press_key(&mut frames, &mut show, Key::Tab);
+    assert_eq!(egui_focused(&frames.ctx), Some(right), "Tab moves egui focus on");
+    frames.frame(vec![key_press(Key::Tab, Modifiers::SHIFT)], &mut show);
+    frames.frame(Vec::new(), &mut show);
+    assert_eq!(egui_focused(&frames.ctx), Some(left), "Shift+Tab moves it back");
+
+    request(&frames.ctx, FocusTarget::Id(named_id("button")));
+    frames.idle(2, &mut show);
+    assert_eq!(egui_focused(&frames.ctx), Some(named_id("button")));
+    press_key(&mut frames, &mut show, Key::ArrowRight);
+    frames.frame(Vec::new(), &mut show);
+    assert_eq!(egui_focused(&frames.ctx), Some(named_id("button")), "egui's arrows leave a framework stop's focus alone");
 }
 
 #[trial]

@@ -347,6 +347,11 @@ pub(crate) fn host_focus(ctx: &Context, id: egui::Id) {
     ctx.memory_mut(|memory| memory.request_focus(id));
 }
 
+/// A host's own clickable egui widget `id` at `rect`, a focus stop for egui's own focus moves.
+pub(crate) fn host_button(ui: &Ui, id: egui::Id, rect: Rect) {
+    ui.interact(rect, id, egui::Sense::click());
+}
+
 /// A host's own egui drag area `id` at `rect`; returns whether egui reports it dragged and whether its drag stopped
 /// this pass.
 pub(crate) fn host_drag_area(ui: &Ui, id: egui::Id, rect: Rect) -> (bool, bool) {

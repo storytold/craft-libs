@@ -76,6 +76,9 @@ pub(crate) struct FocusedRecord {
     /// drag is captured: an app's own focused widget or popup keeps the keys a focused component keeps (Tab, Escape,
     /// the clipboard events). Written by the end hook after its focus moves.
     pub(crate) foreign: bool,
+    /// egui focus is on a widget no framework component made, and no framework press or drag is captured: egui
+    /// moves focus among the app's own widgets with the arrows and the Tab it keeps. Written by the end hook.
+    pub(crate) host_focus: bool,
     /// egui holds a label text selection: a copy or cut event is egui's, which copies the selection. Written by the
     /// end hook.
     pub(crate) label_selection: bool,
@@ -642,8 +645,16 @@ pub(crate) fn begin(ctx: &Context, tab_all_controls: bool) {
         tab_all_controls,
         frame: crate::runtime::egui::pass::frame_nr(ctx, viewport(ctx)),
     };
-    egui_focus::clear_directional_focus(ctx);
-    let (acts, announcements) = with(ctx, |state| nav::begin(state, input));
+    let (acts, announcements, host_focus) = with(ctx, |state| {
+        let host_focus = state.record.host_focus;
+        let (acts, announcements) = nav::begin(state, input);
+        (acts, announcements, host_focus)
+    });
+    // egui's direction moves focus from the widget it holds: only from an app's own widget, and not in a pass whose
+    // focus the framework moves.
+    if !host_focus || !acts.is_empty() {
+        egui_focus::clear_directional_focus(ctx);
+    }
     apply(ctx, acts);
     for text in announcements {
         crate::runtime::frame::announce(ctx, text);
@@ -661,11 +672,12 @@ pub(crate) fn end(ctx: &Context) {
     // Escape over a captured framework press or drag cancels it (`frame::begin_pass`), whatever egui has focused.
     let captured = crate::runtime::pointer::press_captured(ctx) || crate::runtime::drag::running(ctx);
     let unmade = with(ctx, |state| state.focus_now.filter(|_| state.stop_of_focus().is_none()));
-    let foreign =
-        !captured && (egui_focus::popup_open(ctx) || unmade.is_some_and(|id| !crate::runtime::pointer::made_by_component(ctx, viewport, id)));
+    let host_focus = !captured && unmade.is_some_and(|id| !crate::runtime::pointer::made_by_component(ctx, viewport, id));
+    let foreign = host_focus || (!captured && egui_focus::popup_open(ctx));
     let label_selection = egui_focus::label_selection(ctx);
     with(ctx, |state| {
         state.record.foreign = foreign;
+        state.record.host_focus = host_focus;
         state.record.label_selection = label_selection;
     });
 }

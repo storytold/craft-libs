@@ -54,8 +54,10 @@ pub(crate) fn surrender(ctx: &Context, id: Id) {
     ctx.memory_mut(|memory| memory.surrender_focus(id));
 }
 
-/// H7: egui's begin pass set a focus direction from an unmodified arrow; the runtime's focus service is the
-/// only mover, so the direction is cleared before any component runs.
+/// H7: egui's begin pass set a focus direction from an unmodified arrow or the Tab it kept. The focus service clears
+/// it before any component runs unless egui focus is on an app's own widget (`FocusedRecord::host_focus`) and the
+/// service moves no focus in the pass: egui would otherwise move focus off a framework stop that the same arrow
+/// reaches as an intent.
 pub(crate) fn clear_directional_focus(ctx: &Context) {
     ctx.memory_mut(|memory| memory.move_focus(FocusDirection::None));
 }
