@@ -1,7 +1,7 @@
 //! Stories of the people bar.
 
 use super::{FollowFrame, PeopleBar, RemoteCursor, RemoteCursors};
-use crate::collab::{CollabTransport, CursorChat, JoinState, PEOPLE_COLORS, Participant, ParticipantId, VoteSession};
+use crate::collab::{CollabRequest, CollabTransport, CursorChat, JoinState, PEOPLE_COLORS, Participant, ParticipantId, VoteSession};
 use craft_behavior::CanvasView;
 use craft_ui::canvas::Canvas;
 use craft_ui::contract::ShowContainer as _;
@@ -9,10 +9,11 @@ use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 use kurbo::Point;
 
-/// A session of `count` people, you the first.
-pub(crate) struct Room(pub Vec<Participant>);
+/// A session of people, you the first, and whether you may remove the others.
+pub(crate) struct Room(pub Vec<Participant>, pub bool);
 
 impl Room {
+    /// A session of `names`, you the first, in which you may not remove anyone.
     pub(crate) fn of(names: &[&str]) -> Self {
         let person = |(at, name): (usize, &&str)| Participant {
             id: ParticipantId(at as u64 + 1),
@@ -24,7 +25,7 @@ impl Room {
             viewer: false,
             spotlight: false,
         };
-        Room(names.iter().enumerate().map(person).collect())
+        Room(names.iter().enumerate().map(person).collect(), false)
     }
 }
 
@@ -44,9 +45,33 @@ impl CollabTransport for Room {
     fn join_state(&self) -> JoinState {
         JoinState::Joined
     }
+
+    fn can_remove(&self) -> bool {
+        self.1
+    }
 }
 
-#[story(PeopleBar<'static>, covers = [Default, Many], drive = Drive::Never)]
+/// Five people: Ana followed, Cy a viewer, Dee spotlighting; you host, so a right-click offers Remove.
+#[story(PeopleBar<'static>, covers = [Default], drive = Drive::Never, title = "Session")]
+fn people_bar(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut room = Room::of(&["Maya Chen", "Ana Silva", "Bo Lindqvist", "Cy Okafor", "Dee Park"]);
+    room.0[3].viewer = true;
+    room.0[4].spotlight = true;
+    room.1 = true;
+    let following = *data.value("following", Some(ParticipantId(2)));
+    let shown = PeopleBar::new(&room).following(following).show(ui);
+    let last = data.note("last", None::<String>);
+    if let Some(request) = shown.requests.last() {
+        *last = Some(format!("{request:?}"));
+    }
+    let readout = last.as_ref().map_or_else(|| "No event yet".to_owned(), |event| format!("Last event: {event}"));
+    if let Some(CollabRequest::Follow(who)) = shown.requests.last() {
+        *data.value("following", Some(ParticipantId(2))) = *who;
+    }
+    StoryOutput::from(shown).readout(readout)
+}
+
+#[story(PeopleBar<'static>, covers = [Many], drive = Drive::Never)]
 fn people_bar_seven(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let room = Room::of(&["Ana Reyes", "Bo Chen", "Cy Dahl", "Di Evans", "Ed Fox", "Flo Gray", "Gus Hall"]);
     PeopleBar::new(&room).following(ParticipantId(3)).show(ui).into()
