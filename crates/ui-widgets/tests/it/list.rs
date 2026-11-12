@@ -89,3 +89,43 @@ fn the_row_menu_button_shows_on_the_hovered_and_selected_rows_and_asks_for_the_r
         "a click on the button asks for its row's menu"
     );
 }
+
+/// A right-click on a row's thumbnail asks for the row's menu and names the thumbnail. With command clicks on, a
+/// Cmd/Ctrl click on a row's label or on its thumbnail is a command on the row and leaves the selection alone.
+#[trial]
+fn pointer_commands_name_the_thumbnail_and_leave_the_selection() {
+    use craft_ui::list::{ThumbSize, ThumbTarget};
+    use craft_ui::testing::pointer;
+    use egui::{Modifiers, Rect};
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let thumbs = Rc::new(RefCell::new([Rect::NOTHING; 3]));
+    let (held, painted) = (seen.clone(), thumbs.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key);
+        let out = List::new("Channels").command_click(true).show_items(ui, &source, &mut |key, _| {
+            let (at, painted) = (*key, painted.clone());
+            ListRow::new(NAMES[*key]).thumb(ThumbSize::Medium, move |_, rect| painted.borrow_mut()[at] = rect)
+        });
+        held.borrow_mut().extend(out.events);
+    });
+    fixture.settle();
+    let thumb = |at: usize| thumbs.borrow()[at].center();
+    fixture.frame(vec![pointer::moved(thumb(1)), pointer::secondary(thumb(1), true)]);
+    fixture.frame(vec![pointer::secondary(thumb(1), false)]).settle();
+    let menu = seen.borrow().iter().find_map(|event| match event {
+        CollectionEvent::ContextMenu(request) => Some((request.key, request.part.and_then(ThumbTarget::of_part))),
+        _ => None,
+    });
+    assert_eq!(menu, Some((1, Some(ThumbTarget::First))), "the right-click on the thumbnail asks for the row's menu and names it");
+
+    seen.borrow_mut().clear();
+    let label = fixture.by_label(NAMES[0]).expect("the first row").rect.right_center() - Vec2::new(20.0, 0.0);
+    fixture.hold(Modifiers::COMMAND).click_at(label).settle();
+    fixture.click_at(thumb(2)).settle();
+    fixture.hold(Modifiers::NONE);
+    let commands: Vec<usize> =
+        seen.borrow().iter().filter_map(|event| if let CollectionEvent::CommandClick { key, .. } = event { Some(*key) } else { None }).collect();
+    assert_eq!(commands, [0, 2], "a Cmd/Ctrl click on the label and one on the thumbnail are commands on their rows");
+    assert!(!seen.borrow().iter().any(|event| matches!(event, CollectionEvent::Selection(_))), "the selection is left alone");
+}

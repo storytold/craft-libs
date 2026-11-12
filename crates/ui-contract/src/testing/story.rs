@@ -413,6 +413,8 @@ pub enum CollectionKind {
     Preview,
     /// A context menu was asked for.
     ContextMenu,
+    /// A Cmd/Ctrl click on an item of a `command_click` collection.
+    CommandClick,
     /// Delete was pressed on items.
     Delete,
     /// A tree row opened or closed.
@@ -449,6 +451,7 @@ impl CollectionKind {
             CollectionEvent::EmptyActivated => CollectionKind::EmptyActivated,
             CollectionEvent::Preview(_) => CollectionKind::Preview,
             CollectionEvent::ContextMenu(_) => CollectionKind::ContextMenu,
+            CollectionEvent::CommandClick { .. } => CollectionKind::CommandClick,
             CollectionEvent::Delete(_) => CollectionKind::Delete,
             CollectionEvent::Open(_) => CollectionKind::Open,
             CollectionEvent::Reorder(edit) => CollectionKind::Reorder(EditKind::of(edit)?),

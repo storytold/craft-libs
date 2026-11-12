@@ -87,7 +87,12 @@ impl<'r, C: Collection> ItemsHooks<'_, 'r, C> {
                 self.events.push(CollectionEvent::Open(OpenChange { key: key.clone(), open: ask.open, all: ask.all }));
             }
             if let Some(at) = output.menu_request() {
-                self.events.push(CollectionEvent::ContextMenu(ContextMenuRequest { key: key.clone(), at: self.on_screen(at), column: None }));
+                self.events.push(CollectionEvent::ContextMenu(ContextMenuRequest {
+                    key: key.clone(),
+                    at: self.on_screen(at),
+                    column: None,
+                    part: None,
+                }));
             }
             if let Some(event) = output.into_event() {
                 self.events.push(CollectionEvent::Item(key.clone(), event));

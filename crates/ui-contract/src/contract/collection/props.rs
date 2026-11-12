@@ -197,6 +197,9 @@ pub struct CollectionProps {
     /// The most rows the collection shows: past them it is as tall as its first `max_rows` rows and scrolls them. It
     /// owns that scroll inside a scrolling body too, since its height is bounded and the wheel passes on at its ends.
     pub max_rows: Option<u16>,
+    /// A Cmd/Ctrl click on an item, on its own area or a part that picks it, is a command on the item, not a pick: the
+    /// selection stays and the release reports `CollectionEvent::CommandClick`.
+    pub command_click: bool,
     /// The distance one wheel notch scrolls the rows; unset, the default notch.
     pub notch: Option<Notch>,
     /// The axis the rows overflow along. A collection owns the scroll along it, so it sits only in a scrolling body
@@ -284,6 +287,7 @@ impl CollectionProps {
             natural_height: false,
             min_rows: 0,
             max_rows: None,
+            command_click: false,
             notch: None,
             overflow: Axis::Y,
             pages: false,
@@ -500,6 +504,13 @@ impl CollectionProps {
     #[must_use]
     pub const fn max_rows(mut self, rows: u16) -> Self {
         self.max_rows = Some(rows);
+        self
+    }
+
+    /// A Cmd/Ctrl click on an item is a command, not a pick (see [`CollectionProps::command_click`]).
+    #[must_use]
+    pub const fn command_click(mut self, on: bool) -> Self {
+        self.command_click = on;
         self
     }
 

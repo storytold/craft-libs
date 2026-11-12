@@ -13,7 +13,7 @@ use super::super::context::PanelContext;
 use super::super::drag::drop_event;
 use super::super::events::{ActivateOn, LayerColumn, LayerSelect, LayerToggle, LayersEvent, MenuTarget};
 use super::super::menu::OpenMenu;
-use super::super::row::{EYE, FX_PART, LOCK_PART};
+use super::super::row::{EYE, FX_PART, LOCK_PART, NAME};
 use super::rows::{ToggleSweeps, thumb_click_replaces_select, thumb_part};
 use crate::ui::tree::{LayerRowKey, LayerTree};
 
@@ -89,7 +89,8 @@ pub(super) fn map_events<T: LayerTree>(
             CollectionEvent::ContextMenu(request) => {
                 let layer = request.key.layer().clone();
                 let eye = request.column.as_ref() == Some(&EYE) && matches!(request.key, LayerRowKey::Layer(_));
-                let plain = request.column.is_none() || matches!(request.key, LayerRowKey::Effects(..) | LayerRowKey::Filters(..));
+                let plain = request.column.as_ref().is_none_or(|column| *column == NAME)
+                    || matches!(request.key, LayerRowKey::Effects(..) | LayerRowKey::Filters(..));
                 let selected = cx.selection.layers.contains(&layer);
                 if eye {
                     let rows = if selected { cx.selection.layers.clone() } else { vec![layer] };
@@ -104,7 +105,10 @@ pub(super) fn map_events<T: LayerTree>(
                         session.anchor = Some(LayerRowKey::Layer(layer));
                     }
                     let on_selection = selected && cx.selection.layers.len() > 1;
-                    session.menu = Some(OpenMenu::Row(MenuTarget { row: request.key.clone(), part: None, on_selection }));
+                    // A right-click on a thumbnail opens the menu for what it shows (a mask).
+                    let part =
+                        request.part.and_then(ThumbTarget::of_part).map(|which| thumb_part(&request.key, &tree.info(request.key.layer()), which));
+                    session.menu = Some(OpenMenu::Row(MenuTarget { row: request.key.clone(), part, on_selection }));
                 }
             }
             CollectionEvent::Reorder(edit) => events.extend(drop_event(edit, order, parent_of, filtered)),

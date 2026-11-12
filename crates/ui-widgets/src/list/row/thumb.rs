@@ -80,6 +80,15 @@ pub enum ThumbTarget {
     Extra(usize),
 }
 
+impl ThumbTarget {
+    /// The thumbnail a part of a row names, as a collection reports the part under the pointer
+    /// (`ContextMenuRequest::part`); `None` for any other part.
+    pub fn of_part(part: craft_behavior::PartRef) -> Option<ThumbTarget> {
+        let at = part.index.filter(|_| part.key == super::show::THUMB)?;
+        usize::try_from(at).ok().map(target_at)
+    }
+}
+
 /// Paints into a thumbnail's rect through the content painter, which is clipped to it.
 pub type ThumbPaint<'a> = Box<dyn FnOnce(&ContentPainterCx, Rect) + 'a>;
 

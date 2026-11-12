@@ -160,6 +160,9 @@ pub(super) struct Drags<K> {
     /// The row a primary press of an `ActivateOn::Click` collection landed on: it activates when the press ends as a
     /// click, not when it becomes a drag.
     pub(super) activate: Option<K>,
+    /// The row a Cmd/Ctrl press of a `command_click` collection landed on: the release as a click reports
+    /// `CollectionEvent::CommandClick` with the modifiers held.
+    pub(super) command: Option<K>,
     /// The marquee a press on empty space started.
     pub(super) marquee: Option<MarqueeDrag<K>>,
     /// A plain press on the only selected item of a `slow_click_rename` collection, waiting to become a rename.
@@ -181,7 +184,18 @@ pub(super) struct SlowClick<K> {
 
 impl<K> Default for Drags<K> {
     fn default() -> Self {
-        Drags { grabbed: None, sweep: None, moving: None, pending: None, collapse: None, rename: None, activate: None, marquee: None, slow: None }
+        Drags {
+            grabbed: None,
+            sweep: None,
+            moving: None,
+            pending: None,
+            collapse: None,
+            rename: None,
+            activate: None,
+            command: None,
+            marquee: None,
+            slow: None,
+        }
     }
 }
 

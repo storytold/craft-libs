@@ -192,6 +192,7 @@ const COLLECTION: &[Forwarded] = &[
     ("min_rows", "u16", "The collection is at least this many rows tall; rows it does not have count the control height."),
     ("max_rows", "u16", "The collection shows at most this many rows and scrolls the rest, inside a scrolling body too."),
     ("notch", "::craft_ui::contract::Notch", "The distance one wheel notch scrolls the rows."),
+    ("command_click", "bool", "A Cmd/Ctrl click on an item is a command (`CollectionEvent::CommandClick`), not a pick."),
     (
         "current",
         "::core::option::Option<impl ::core::marker::Send + ::core::marker::Sync + 'static>",

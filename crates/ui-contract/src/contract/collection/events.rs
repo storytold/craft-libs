@@ -2,7 +2,7 @@
 
 use super::props::LeadSource;
 use crate::runtime::drag::OsFile;
-use craft_behavior::{ColumnKey, DropOperation, EditEvent, SelectionChange};
+use craft_behavior::{ColumnKey, DropOperation, EditEvent, PartRef, SelectionChange};
 use egui::{Id, Pos2, Vec2};
 
 /// A committed rename.
@@ -123,6 +123,8 @@ pub struct ContextMenuRequest<K> {
     /// The column the press landed in (a toggle, a text or the label column); `None` from the keyboard and in a list
     /// without columns.
     pub column: Option<ColumnKey>,
+    /// The part of the item under the pointer (a thumbnail); `None` on the item's own area and from the keyboard.
+    pub part: Option<PartRef>,
 }
 
 /// A change to the columns.
@@ -176,6 +178,15 @@ pub enum CollectionEvent<K, E> {
     Preview(K),
     /// The user asked for an item's context menu.
     ContextMenu(ContextMenuRequest<K>),
+    /// A Cmd/Ctrl click on an item of a `command_click` collection: a command on the item (load it as a selection),
+    /// not a pick. The selection is unchanged.
+    #[non_exhaustive]
+    CommandClick {
+        /// The item.
+        key: K,
+        /// The modifiers held at the click.
+        mods: craft_keymap::Mods,
+    },
     /// Delete or Backspace at the lead of a `deletable` collection: the selected items when the lead is selected, else
     /// the lead alone, in display order.
     Delete(Vec<K>),

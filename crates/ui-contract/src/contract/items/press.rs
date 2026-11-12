@@ -80,6 +80,10 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 let toggle = on_toggle.filter(|_| primary);
                 if let Some((column, toggle)) = toggle {
                     self.begin_toggle(cx, at, column, toggle);
+                } else if primary && props.command_click && mods_now.cmd {
+                    // A command on the row, reported when the press ends as a click; the selection stays.
+                    self.drags.command = Some(self.source.key(at));
+                    self.move_lead(at, LeadSource::Pointer);
                 } else if !secondary_on_toggle {
                     let mods = crate::runtime::pointer::frame(&ctx).mods;
                     let key = self.source.key(at);
@@ -170,6 +174,8 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             let mods = crate::runtime::pointer::frame(&ctx).mods;
             if !(mods.shift || mods.cmd || mods.alt) {
                 self.pick(comp, at, false, false);
+            } else if props.command_click && mods.cmd {
+                self.events.push(CollectionEvent::CommandClick { key: self.source.key(at), mods });
             }
         }
         match cx.core.press.phase {
@@ -195,6 +201,12 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 {
                     self.begin_rename(comp, cx, at);
                 }
+                if let Some(key) = self.drags.command.take()
+                    && click
+                    && self.index_of(&key).is_some()
+                {
+                    self.events.push(CollectionEvent::CommandClick { key, mods: mods_now });
+                }
                 if let Some(key) = self.drags.activate.take()
                     && click
                     && self.index_of(&key).is_some()
@@ -219,18 +231,19 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 self.drags.collapse = None;
                 self.drags.rename = None;
                 self.drags.activate = None;
+                self.drags.command = None;
             }
             _ => {}
         }
         // A secondary release on a row asks for its menu (9.2 rule 3); the row joins the selection unless it is in it.
         // Something over the collection, or a part of a row or of the collection that takes presses and is under the
-        // pointer, keeps the request away.
+        // pointer, keeps the request away; a part that picks its item (a thumbnail) is the row's, and the request names
+        // it.
         let released = crate::runtime::pointer::frame(&ctx);
+        let hover = crate::primitives::sensing::read_outcome(&ctx, ArenaId::new(cx.core.id)).hover;
         if released.release == Some(craft_behavior::PointerButton::Secondary)
             && cx.core.response.hovered()
-            && crate::primitives::sensing::read_outcome(&ctx, ArenaId::new(cx.core.id))
-                .hover
-                .is_none_or(|hit| hit.part.is_none() || !hit.sense.takes_press())
+            && hover.is_none_or(|hit| hit.part.is_none() || !hit.sense.takes_press() || hit.sense.contains(Sense::PICKS_ITEM))
             && let Some(pos) = released.pos.filter(|pos| rect.contains(xf.map_or(*pos, |map| map.to_layer(*pos))))
             && let Some(at) = layout.hit(local(pos), offset)
             && self.source.enabled(at)
@@ -243,7 +256,8 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 }
             }
             self.move_lead(at, LeadSource::Pointer);
-            let request = self.menu_request(layout, Placement { rect, offset, rtl }, at, local(pos));
+            let mut request = self.menu_request(layout, Placement { rect, offset, rtl }, at, local(pos));
+            request.part = hover.filter(|hit| hit.owner != cx.core.id).and_then(|hit| hit.part);
             self.events.push(CollectionEvent::ContextMenu(request));
         }
         self.slow_click_due(comp, cx);
@@ -282,7 +296,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let mut cells = Vec::new();
         layout.cells(row, offset, &mut cells);
         let column = cells.into_iter().find(|(_, cell)| cell.contains(point)).map(|(column, _)| column);
-        ContextMenuRequest { key: self.source.key(row), at: place, column }
+        ContextMenuRequest { key: self.source.key(row), at: place, column, part: None }
     }
 
     /// The response of each part an item asked to open a menu from (`ItemCx::part_opener`): the part's click this pass

@@ -38,7 +38,7 @@ const LINES: PartKey = PartKey::new("lines");
 pub(super) const TRAILING: PartKey = PartKey::new("trailing");
 const TRAILING_ICON: PartKey = PartKey::new("trailing-icon");
 const TRAILING_TEXT: PartKey = PartKey::new("trailing-text");
-const THUMB: PartKey = PartKey::new("thumb");
+pub(super) const THUMB: PartKey = PartKey::new("thumb");
 
 /// The name a pattern with `{row}` gives for the row labelled `row`.
 pub(super) fn named(pattern: &Label, row: &str) -> String {

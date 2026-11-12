@@ -12,7 +12,7 @@ use craft_ui::contract::{
     ToggleColumn, request_rename,
 };
 use craft_ui::layout_components::Stack;
-use craft_ui::list::{List, RowEvent, ThumbSize, ThumbTarget};
+use craft_ui::list::{List, RowEvent, ThumbSize};
 use craft_ui::primitives::textures::{ThumbSource, Thumbnails};
 use craft_ui::runtime::commands::{CommandState, Commands as _};
 use craft_ui::runtime::env::{Env, Label};
@@ -83,7 +83,7 @@ impl<K: Clone> ItemSource<K> for Order<'_, K> {
 /// - **Layout**: the rows fill the panel's height above the footer: a [`List`] of `ListRow`s in the layer form.
 /// - **Selection**: the list shows the rows the app marks `targeted` as selected (several while the composite is
 ///   targeted), over a selection rebuilt from the rows each pass; its own changes are not kept. A click or Shift-click
-///   reports [`Target`](ChannelsEvent::Target); Cmd/Ctrl-click on the thumbnail reports
+///   reports [`Target`](ChannelsEvent::Target); Cmd/Ctrl-click anywhere on a row reports
 ///   [`LoadSelection`](ChannelsEvent::LoadSelection) with the operation Shift and Alt ask for; ↑ ↓ report `Target`
 ///   for the new lead; the Load Selection command (Cmd/Ctrl+Enter) loads the lead.
 /// - **Eyes**: the list's toggle column; a click or a sweep reports [`Visibility`](ChannelsEvent::Visibility) steps, one per eye crossed;
@@ -184,6 +184,7 @@ impl<'a, K: Clone + Eq + Hash + Debug + Send + Sync + 'static> ChannelsPanel<'a,
                 let out = List::new(words.list.clone())
                     .id(list)
                     .reorder(ReorderRule::new())
+                    .command_click(true)
                     .allow_empty(false)
                     .rename(true)
                     .rename_column(NAME)
@@ -250,7 +251,7 @@ fn map_events<K: Clone + PartialEq>(
                     events.push(ChannelsEvent::Target(key.clone()));
                 }
             }
-            CollectionEvent::Item(key, RowEvent::ThumbClicked { target: ThumbTarget::First, mods, .. }) if mods.cmd => {
+            CollectionEvent::CommandClick { key, mods, .. } => {
                 events.push(ChannelsEvent::LoadSelection { key, operation: SelectionOperation::from_mods(mods) });
             }
             CollectionEvent::Item(key, RowEvent::ThumbClicked { clicks: 2, .. }) if kind_of(&key).is_some_and(ChannelKind::has_options) => {
