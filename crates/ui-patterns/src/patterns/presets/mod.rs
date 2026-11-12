@@ -25,7 +25,7 @@ pub use model::{
     CellShape, GroupPath, PresetChange, PresetError, PresetGroup, PresetId, PresetItem, PresetKey, PresetKind, PresetLibrary, PresetRow, Preview,
     PreviewPaint, ThumbInfo, children_end, has_captions, nest_allowed,
 };
-pub use named::{NameCheck, NamedPresetCommands, NamedPresetEvent, NamedPresetOutput, NamedPresetRow};
+pub use named::{NameCheck, NamedPresetCommands, NamedPresetEvent, NamedPresetOutput, NamedPresetRow, NamedPresetStyle};
 pub use panel_menu::{PresetCommands, PresetMenuAction, PresetPanelMenu};
 pub use picker::{PickerField, PickerHead, PresetPicker, PresetPickerOutput, PresetPickerStyle};
 pub use state::{DefaultOpen, PresetState, PresetView, default_is_open};

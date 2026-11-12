@@ -1,4 +1,5 @@
-//! `NamedPresetRow`: a preset picker with a name prompt and a menu of New, Rename, Delete and the file entries.
+//! `NamedPresetRow`: a preset picker with a name prompt and the commands New, Rename, Delete and the file entries, as
+//! buttons or one menu.
 //!
 //! The host keeps the library and performs every event the row reports. New and Rename open the prompt: Enter or OK
 //! commits the name, Escape or Cancel closes it, and a name the host refuses shows its message under the field and
@@ -20,7 +21,9 @@ use crate::form::Field;
 use crate::layout_components::Row;
 use crate::list::RowTest;
 use crate::menu::{Menu, MenuItem};
+use crate::runtime::commands::{CommandSet as _, CommandState, Commands as _};
 use crate::runtime::env::{Env, Label, Message};
+use crate::runtime::focus::{self, FocusTarget};
 use crate::runtime::words::CommonWords;
 use crate::text::TextField;
 use craft_behavior::{IconId, Value};
@@ -28,10 +31,10 @@ use craft_theme::Variant;
 use egui::{Response, Ui};
 use std::hash::Hash;
 
-/// The commands of the row's menu. They are app commands: the row reports a run row as the event of the same name,
-/// and a host that binds a key to one (F2 renames) handles it as it handles the event.
+/// The commands of a row, run on the row that holds the focus: its menu rows, its buttons and the chords the keymap
+/// binds (F2 renames). The row reports each as the event of the same name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft_ui_macros::CommandSet)]
-#[command(prefix = "namedPreset")]
+#[command(prefix = "namedPreset", scope = "namedPreset")]
 #[non_exhaustive]
 pub enum NamedPresetCommands {
     /// Ask for a name and make a preset of the current settings.
@@ -43,6 +46,19 @@ pub enum NamedPresetCommands {
     /// Delete the current preset.
     #[command(label = "Delete")]
     Delete,
+}
+
+/// How a [`NamedPresetRow`] lays out its commands.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum NamedPresetStyle {
+    /// Buttons after the picker: the file entries, then New…. Rename… and Delete are the picker's context menu
+    /// (Photoshop's Contour Editor).
+    #[default]
+    Buttons,
+    /// One "Manage presets" button with a menu: Save as New Preset…, Rename…, Delete, then the file entries
+    /// (Illustrator's Image Trace).
+    Menu,
 }
 
 type NameCheckFn<'a> = Box<dyn Fn(&str) -> Option<PresetError> + 'a>;
@@ -115,9 +131,11 @@ impl<K> Outcome for NamedPresetOutput<K> {
 struct Draft<K> {
     target: Option<K>,
     text: String,
+    /// The prompt has just opened and asks for the focus.
+    focus: bool,
 }
 
-/// What a menu row asked for in this pass.
+/// What a command of the row asked for in this pass.
 enum Ask {
     New,
     Rename,
@@ -128,11 +146,14 @@ enum Ask {
 /// A preset picker with the commands that make, rename and delete presets.
 ///
 /// - **Picker.** The host builds the `PresetPicker` and its bindings; a pick comes back as `Apply`.
-/// - **Prompt.** New opens the name field with the suggestion; Rename opens it with the current name. The host's
+/// - **Prompt.** New opens the name field, focused, with the suggestion; Rename opens it with the current name. The host's
 ///   `check_name` refuses a name, and the message shows through the field. A name equal to the current name, ignoring
 ///   case, is no clash with itself, and the same name changes nothing.
 /// - **Built-in presets.** `built_in` presets show "(built-in)" after their name and cannot be renamed or deleted.
-/// - **Files.** `files` adds its Load, Replace and Save entries to the menu.
+/// - **Files.** `files` adds its Load, Replace and Save entries.
+/// - **Style.** `Buttons` (the default) puts the file entries and New… as buttons after the picker, with Rename… and
+///   Delete as the picker's context menu; `Menu` puts them all in one "Manage presets" menu.
+/// - **Keys.** F2 on the picker renames a user preset ([`NamedPresetCommands`] has the keys).
 #[must_use = "show the row with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
 #[pattern(probe(NamedPresetRow<'static, u32>))]
@@ -151,17 +172,28 @@ pub struct NamedPresetRow<'a, K: Value + Eq + Hash + 'static> {
     /// The file entries of the menu.
     #[prop]
     files: Option<&'a PresetFiles<'a, K>>,
+    /// How the commands are laid out.
+    #[prop]
+    style: NamedPresetStyle,
 }
 
 impl<'a, K: Value + Eq + Hash + 'static> NamedPresetRow<'a, K> {
     /// A row named `label` around `picker`.
     pub fn new(label: impl Into<Label>, picker: PresetPicker<'a, K>) -> Self {
-        NamedPresetRow { label: label.into(), picker, suggest_name: None, check_name: None, built_in: None, files: None }
+        NamedPresetRow {
+            label: label.into(),
+            picker,
+            suggest_name: None,
+            check_name: None,
+            built_in: None,
+            files: None,
+            style: NamedPresetStyle::default(),
+        }
     }
 
     /// Shows the row and reports what the host carries out.
     pub fn show(self, ui: &mut Ui) -> NamedPresetOutput<K> {
-        let NamedPresetRow { label, picker, suggest_name, check_name, built_in, files } = self;
+        let NamedPresetRow { label, picker, suggest_name, check_name, built_in, files, style } = self;
         let env = Env::of(ui);
         let words = env.words::<PresetWords>();
         let common = env.words::<CommonWords>();
@@ -173,7 +205,7 @@ impl<'a, K: Value + Eq + Hash + 'static> NamedPresetRow<'a, K> {
         let mut events: Vec<NamedPresetEvent<K>> = Vec::new();
         let mut from_picker: Vec<PresetEvent<K>> = Vec::new();
 
-        let shown = Field::new(label.clone()).show(ui, |ui, body| {
+        let shown = Field::new(label.clone()).command_scope(NamedPresetCommands::SCOPE).show(ui, |ui, body| {
             if let Some(shown) = picker.as_mut() {
                 held = shown.held_key(body);
             }
@@ -185,9 +217,11 @@ impl<'a, K: Value + Eq + Hash + 'static> NamedPresetRow<'a, K> {
                 picker = Some(shown.display_name(words.built_in.fill(&[("name", row.label.as_str())])));
             }
             let naming = body.memory::<Option<Draft<K>>>();
-            Row::new().wrap(true).show(ui, |ui, _| {
+            Row::new().wrap(true).show(ui, |ui, row| {
+                let mut field: Option<Response> = None;
                 if let Some(picker) = picker.take() {
                     let out = picker.show(ui);
+                    field = Some(out.edit.response.clone());
                     if let Some(key) = out.picked {
                         if naming.as_ref().and_then(|draft| draft.target.as_ref()).is_some_and(|target| *target != key) {
                             *naming = None;
@@ -223,12 +257,14 @@ impl<'a, K: Value + Eq + Hash + 'static> NamedPresetRow<'a, K> {
                                 .id_salt("name-text")
                                 .select_on_focus()
                                 .submits()
-                                .default_stop()
                                 .show(ui)
                         })
                         .inner;
                     let (mut submitted, mut escaped) = (false, false);
                     if let Some(edit) = edit {
+                        if draft.focus {
+                            draft.focus = !focus::request(ui.ctx(), FocusTarget::Id(edit.response.id));
+                        }
                         if let Some(value) = edit.value() {
                             draft.text.clone_from(value);
                         }
@@ -253,35 +289,60 @@ impl<'a, K: Value + Eq + Hash + 'static> NamedPresetRow<'a, K> {
                 }
 
                 let idle = naming.is_none();
+                for (command, enabled) in
+                    [(NamedPresetCommands::New, idle), (NamedPresetCommands::Rename, user.is_some()), (NamedPresetCommands::Delete, user.is_some())]
+                {
+                    row.publish(command, CommandState::new().enabled(enabled));
+                }
                 let mut asked: Vec<Ask> = Vec::new();
-                let more = IconButton::new(IconId::new("more")).label(words.more.clone()).show(ui);
-                let _ = Menu::new(words.more.clone()).opened_by(&more, Trigger::Click).show(ui, |ui, _| {
-                    if MenuItem::command(NamedPresetCommands::New).enabled(idle).show(ui).ran {
-                        asked.push(Ask::New);
-                    }
-                    if MenuItem::command(NamedPresetCommands::Rename).enabled(user.is_some()).show(ui).ran {
-                        asked.push(Ask::Rename);
-                    }
-                    if MenuItem::command(NamedPresetCommands::Delete).enabled(user.is_some()).show(ui).ran {
-                        asked.push(Ask::Delete);
-                    }
-                    let Some(files) = files else { return };
-                    let commands = files.commands();
-                    if !commands.is_empty() {
-                        Divider::horizontal().show(ui);
-                    }
-                    for command in commands {
-                        if MenuItem::command(command).enabled(files.enabled(command, held.as_ref())).show(ui).ran {
-                            asked.push(Ask::File(command));
+                match style {
+                    NamedPresetStyle::Buttons => {
+                        for command in files.map(PresetFiles::commands).unwrap_or_default() {
+                            let enabled = files.is_some_and(|files| files.enabled(command, held.as_ref()));
+                            if clicked(&Button::new(Label::Empty).command(command).enabled(enabled).show(ui)) {
+                                asked.push(Ask::File(command));
+                            }
+                        }
+                        let _ = Button::new(Label::Empty).command(NamedPresetCommands::New).show(ui);
+                        if let Some(field) = &field {
+                            let _ = Menu::new(words.more.clone()).opened_by(field, Trigger::Context).show(ui, |ui, _| {
+                                let _ = MenuItem::command(NamedPresetCommands::Rename).show(ui);
+                                let _ = MenuItem::command(NamedPresetCommands::Delete).show(ui);
+                            });
                         }
                     }
-                });
+                    NamedPresetStyle::Menu => {
+                        let more = IconButton::new(IconId::new("more")).label(words.more.clone()).show(ui);
+                        let _ = Menu::new(words.more.clone()).opened_by(&more, Trigger::Click).show(ui, |ui, _| {
+                            let _ = MenuItem::command(NamedPresetCommands::New).label(words.save_as_new.clone()).show(ui);
+                            let _ = MenuItem::command(NamedPresetCommands::Rename).show(ui);
+                            let _ = MenuItem::command(NamedPresetCommands::Delete).show(ui);
+                            let Some(files) = files else { return };
+                            let commands = files.commands();
+                            if !commands.is_empty() {
+                                Divider::horizontal().show(ui);
+                            }
+                            for command in commands {
+                                if MenuItem::command(command).enabled(files.enabled(command, held.as_ref())).show(ui).ran {
+                                    asked.push(Ask::File(command));
+                                }
+                            }
+                        });
+                    }
+                }
+                while let Some((command, _)) = row.take_command::<NamedPresetCommands>() {
+                    asked.push(match command {
+                        NamedPresetCommands::New => Ask::New,
+                        NamedPresetCommands::Rename => Ask::Rename,
+                        NamedPresetCommands::Delete => Ask::Delete,
+                    });
+                }
                 for ask in asked {
                     match ask {
-                        Ask::New => *naming = Some(Draft { target: None, text: suggestion.to_owned() }),
+                        Ask::New => *naming = Some(Draft { target: None, text: suggestion.to_owned(), focus: true }),
                         Ask::Rename => {
                             if let Some(row) = user {
-                                *naming = Some(Draft { target: Some(row.key.clone()), text: row.label.clone() });
+                                *naming = Some(Draft { target: Some(row.key.clone()), text: row.label.clone(), focus: true });
                             }
                         }
                         Ask::Delete => {

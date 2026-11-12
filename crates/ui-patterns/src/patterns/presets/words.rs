@@ -41,5 +41,6 @@ craft_ui::words! {
         name_taken: "namedPresetRow.nameTaken" = "A preset with this name already exists.";
         name_invalid: "namedPresetRow.nameInvalid" = "This name can't be used.";
         more: "namedPresetRow.more" = "Manage presets";
+        save_as_new: "namedPresetRow.saveAsNew" = "Save as New Preset…";
     }
 }
