@@ -112,6 +112,23 @@ fn a_filling_body_lies_between_its_header_and_its_footer_in_the_first_pass() {
     assert!(footer.max.y <= AREA.max.y + EDGE_SLACK, "the footer lies inside the container, at its foot: {footer:?}");
 }
 
+/// A footer inset keeps the footer's content off the sides and the foot of a container without padding (a
+/// full-window dialog's buttons), under the body.
+#[trial]
+fn a_footer_inset_keeps_the_footer_off_the_sides_and_the_foot() {
+    use craft_ui::contract::Pad;
+    let footer_of = |footer: FooterRegion| {
+        let took = first_pass(ContainerProps::new().sizing(Sizing::Fill).footer(footer), None);
+        (took.body.unwrap(), took.footer.unwrap())
+    };
+    let (_, flush) = footer_of(FooterRegion::new());
+    let (body, inset) = footer_of(FooterRegion::new().inset(Pad::Regular));
+    assert!(inset.min.x > flush.min.x + EDGE_SLACK, "the inset moves the footer off the start side: {flush:?} {inset:?}");
+    assert!(inset.max.y < flush.max.y - EDGE_SLACK, "the inset lifts the footer off the foot: {flush:?} {inset:?}");
+    assert!(inset.max.y <= AREA.max.y + EDGE_SLACK, "the inset footer stays inside the container: {inset:?}");
+    assert!(body.max.y <= inset.min.y + EDGE_SLACK, "the body ends above the inset footer: {body:?} {inset:?}");
+}
+
 /// A row body beside an inline header and before an end region is measured in the line they leave, as it is shown:
 /// a wrapping text there shows on one line while the line has room for it, between the header and the end region.
 #[trial]

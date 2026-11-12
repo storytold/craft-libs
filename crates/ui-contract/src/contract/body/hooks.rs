@@ -989,10 +989,14 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         // the control.
         if props.footer.is_some() {
             let (mut footer_rect, offset) = self.place_footer(&props, &mut regions, inner, body_rect, rtl);
-            // The region's height counts the gap (it is part of what the footer took), so the content starts below it.
+            // The region's size counts the gap and the inset (they are part of what the footer took), so the content
+            // starts below the gap and stays the inset away from the sides and the foot.
             let lead = props.footer.and_then(|footer| footer.gap).map_or(0.0, |gap| gap_of(&env.tokens, gap));
+            let inset = props.footer.map_or(0.0, |footer| pad_of(&env.tokens, footer.inset));
             footer_rect.min.y += lead;
-            footer_rect.max.y = footer_rect.max.y.max(footer_rect.min.y);
+            footer_rect.max.y = (footer_rect.max.y - inset).max(footer_rect.min.y);
+            footer_rect.min.x += inset;
+            footer_rect.max.x = (footer_rect.max.x - inset).max(footer_rect.min.x);
             let mut bcx = BodyCx::new(body_id, env_view, resolved, footer_rect, &mut *cx.core.memory, &mut open, gate.as_mut())
                 .with_field_message(field_message)
                 .with_owner(owner);
@@ -1004,10 +1008,10 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             let mut took = self.region_size(&footer_ui);
             // The footer's width counts from the container's edge, past the column it starts after.
             if took.x > 0.0 {
-                took.x += offset;
+                took.x += offset + 2.0 * inset;
             }
             if took.y > 0.0 {
-                took.y += lead;
+                took.y += lead + inset;
             }
             self.footer_size = Some(took);
         }

@@ -100,6 +100,36 @@ fn a_dialog_widens_for_a_footer_wider_than_its_body() {
     assert_eq!(short, long, "a short body does not squeeze the buttons");
 }
 
+/// The dialog chrome every dialog shares: the body starts apart from the title row's rule and ends apart from the
+/// footer, and the buttons stay inside the dialog, off its foot.
+#[trial]
+fn a_dialogs_body_stands_apart_from_its_header_and_its_footer() {
+    let mut frames = Frames::new();
+    let mut ui = |ui: &mut Ui| {
+        let (mut open, mut snap) = (true, false);
+        Dialog::new("Options")
+            .opened(Bind::bound(&mut open))
+            .buttons([FooterButton::new("Cancel", DialogRole::Cancel), FooterButton::new("OK", DialogRole::Accept)])
+            .show(ui, |ui, _| {
+                Checkbox::new(Bind::bound(&mut snap)).label("Snap to the grid").show(ui);
+            });
+    };
+    frames.idle(30, &mut ui);
+    let tree = frames.tree();
+    let rect = |role: Role, name: &str| {
+        let key = tree.keys().into_iter().find(|key| tree.role_of(*key) == Some(role) && tree.name_of(*key) == Some(name));
+        key.and_then(|key| tree.bounds_of(key))
+    };
+    let [Some(dialog), Some(title), Some(body), Some(ok)] =
+        [rect(Role::DIALOG, "Options"), rect(Role::HEADING, "Options"), rect(Role::CHECK_BOX, "Snap to the grid"), rect(Role::BUTTON, "OK")]
+    else {
+        panic!("every part is shown");
+    };
+    assert!(body.min.y > title.max.y + 1.0, "a space separates the body from the title row's rule: {title:?} {body:?}");
+    assert!(ok.min.y > body.max.y + 1.0, "a space separates the body from the footer: {body:?} {ok:?}");
+    assert!(ok.max.y < dialog.max.y - 1.0, "the buttons stay off the dialog's foot: {ok:?} {dialog:?}");
+}
+
 #[trial]
 fn side_buttons_stand_in_one_column_beside_the_body() {
     let mut frames = Frames::new();

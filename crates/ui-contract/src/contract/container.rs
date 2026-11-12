@@ -320,15 +320,24 @@ pub struct FooterRegion {
     pub place: FooterPlace,
     /// The space above the footer's content, inside the region; none by default.
     pub gap: Option<Gap>,
+    /// The padding between the container's edges and the footer's content, at its two sides and under it: the
+    /// footer's own tier, for a container whose body has no padding.
+    pub inset: Pad,
     /// The footer shows the validity message of the control the container labels as its status line
     /// (`BodyCx::field_message`); a control under a container without one shows its message itself.
     pub status: bool,
 }
 
 impl FooterRegion {
-    /// A footer across the container under the line, with no rule.
+    /// A footer across the container under the line, with no rule and no inset.
     pub const fn new() -> Self {
-        FooterRegion { rule: false, place: FooterPlace::Across, gap: None, status: false }
+        FooterRegion { rule: false, place: FooterPlace::Across, gap: None, inset: Pad::None, status: false }
+    }
+
+    /// The padding tier between the container's edges and the footer's content, at its sides and under it.
+    pub const fn inset(mut self, pad: Pad) -> Self {
+        self.inset = pad;
+        self
     }
 
     /// Whether a rule separates the footer from the content beside it.

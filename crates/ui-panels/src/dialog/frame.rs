@@ -3,7 +3,7 @@
 
 use super::host::DialogResult;
 use crate::contract::{
-    BodyCx, Common, Component, Container, ContainerProps, Cx, FooterRegion, HeaderRegion, Pad, Props as _, Role, Scroll, Show as _,
+    BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, FooterRegion, Gap, HeaderRegion, Pad, Props as _, Role, Scroll, Show as _,
     ShowContainer as _, WordSetCx as _,
 };
 use crate::contract::{NoValue, Outcome};
@@ -212,15 +212,26 @@ pub fn close_action(closable: bool) -> &'static [HeaderAction] {
     if closable { &[HeaderAction::Close] } else { &[] }
 }
 
-/// The props every dialog shell starts from: the dialog surface and a header with a rule under it. A layer scrolls its
-/// body vertically unless the body is a collection; a frame in a parent's flow asks for the scroll itself.
-pub(crate) fn chrome_props() -> ContainerProps {
-    ContainerProps::new().surface(SurfaceKind::Dialog).pad(Pad::Regular).header(HeaderRegion::new().rule(true))
-}
+/// The space between a dialog's regions: under the header's rule, above the footer and beside a column of buttons.
+const REGION_GAP: Gap = Gap::Section;
 
-/// The footer region of a shell that has footer content.
+/// The header region of a dialog shell: the title row, a rule under it and the region gap before the body.
 #[doc(hidden)]
-pub const FOOTER: FooterRegion = FooterRegion::new().rule(true);
+pub const HEADER: HeaderRegion = HeaderRegion::new().rule(true).gap(REGION_GAP);
+
+/// The footer region of a shell that has footer content: the region gap above it, and no rule.
+#[doc(hidden)]
+pub const FOOTER: FooterRegion = FooterRegion::new().gap(REGION_GAP);
+
+/// The end region of a dialog whose buttons stand in a column beside the body, the region gap away from it.
+#[doc(hidden)]
+pub const SIDE_BUTTONS: EndRegion = EndRegion::new().gap(REGION_GAP);
+
+/// The props every dialog shell starts from: the dialog surface and the dialog header. A layer scrolls its body
+/// vertically unless the body is a collection; a frame in a parent's flow asks for the scroll itself.
+pub(crate) fn chrome_props() -> ContainerProps {
+    ContainerProps::new().surface(SurfaceKind::Dialog).pad(Pad::Regular).header(HEADER)
+}
 
 /// The style of a dialog frame: the surface and padding come from the container.
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]

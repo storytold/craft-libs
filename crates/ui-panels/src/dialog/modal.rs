@@ -1,11 +1,11 @@
 //! `Dialog` (16.5): `DialogFrame`'s chrome on an egui layer: modal or modeless, movable by its header, with a
 //! focus trap, placement and size remembered under a `SaveKey`.
 
-use super::frame::{self, DialogOutput, FOOTER, FooterCx, FooterFn, FooterHooks};
+use super::frame::{self, DialogOutput, FOOTER, FooterCx, FooterFn, FooterHooks, HEADER, SIDE_BUTTONS};
 use crate::contract::overlay::{FloatPlace, OverlayFit, Place};
 use crate::contract::{
-    Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, EndRegion, FooterPlace, FooterRegion, HeaderRegion, Mount,
-    Overlay, Pad, Props as _, Role, SaveKey, ShowContainer as _,
+    Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, FooterPlace, FooterRegion, HeaderRegion, Mount, Overlay, Pad,
+    Props as _, Role, SaveKey, ShowContainer as _,
 };
 use crate::edit::outer::{self, OuterEnd};
 use crate::runtime::access::Access;
@@ -89,13 +89,13 @@ impl<'a> Dialog<'a> {
     /// `resizable` says so.
     pub fn new(title: impl Into<Label>) -> Self {
         let overlay = Overlay::dialog().resizable(false);
-        Dialog::on(title, overlay, HeaderRegion::new().band(DragBand::Move).rule(true))
+        Dialog::on(title, overlay, HEADER.band(DragBand::Move))
     }
 
     /// A prompt titled `title`: a dialog on the modal preset, centred with its content capped, fixed in place and
     /// not remembered.
     pub fn prompt(title: impl Into<Label>) -> Self {
-        Dialog::on(title, Overlay::modal(), HeaderRegion::new().rule(true))
+        Dialog::on(title, Overlay::modal(), HEADER)
     }
 
     fn on(title: impl Into<Label>, overlay: Overlay, header: HeaderRegion) -> Self {
@@ -261,7 +261,7 @@ impl<'a> Dialog<'a> {
     #[must_use]
     pub fn side_buttons(mut self, on: bool) -> Self {
         self.side = on;
-        self.props.end = on.then(EndRegion::new);
+        self.props.end = on.then_some(SIDE_BUTTONS);
         if self.props.footer.is_some() {
             let region = self.footer_region();
             self.props = self.props.footer(region);

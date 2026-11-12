@@ -93,7 +93,7 @@ impl<'a> FullWindowDialog<'a> {
             .mount(Mount::FullWindow)
             .surface(SurfaceKind::Panel)
             .pad(Pad::None)
-            .header(HeaderRegion::new().rule(true))
+            .header(HeaderRegion::new().rule(true).inset(Pad::Regular))
             .focus(FocusPolicy::DIALOG.initial(Initial::Keep))
             .command_scope(ViewCommands::SCOPE);
         FullWindowDialog {
@@ -195,7 +195,7 @@ impl<'a> FullWindowDialog<'a> {
 
     /// The footer region: among the side columns when there are any, else across the dialog's foot.
     fn footer_region(&self) -> FooterRegion {
-        FOOTER.place(if self.sides.is_some() { self.side_footer.place() } else { FooterPlace::Across })
+        FOOTER.inset(Pad::Regular).place(if self.sides.is_some() { self.side_footer.place() } else { FooterPlace::Across })
     }
 
     fn place_footer(mut self) -> Self {
