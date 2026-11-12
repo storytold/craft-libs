@@ -163,14 +163,20 @@ struct Registry {
     over: bool,
 }
 
-/// Registers `canvas` with `reach` for the modal layer whose body is running. `Sampler::pass_canvas_gesture` and
-/// `Sampler::keep_view_open` (contract layer) call it.
+/// Registers `canvas` with `reach` for the modal layer whose body is running; outside every modal body (the tool host
+/// that runs the canvas's tool), for the top modal layer, here or in another viewport. `Sampler::pass_canvas_gesture`
+/// and `Sampler::keep_view_open` (contract layer) call it.
 pub(crate) fn register(ctx: &Context, canvas: Id, reach: Reach) {
     if !crate::runtime::measure::effect(ctx, "sampler::register") {
         return;
     }
     let now = pass::root_frame_nr(ctx);
-    let modal = overlay::modal_drawing(ctx);
+    let viewport = pass::current_viewport(ctx);
+    let modal = overlay::modal_drawing(ctx).or_else(|| {
+        let shown = overlay::top_modal_in(ctx, viewport)
+            .or_else(|| overlay::modal_viewport(ctx, viewport).and_then(|other| overlay::top_modal_in(ctx, other)));
+        shown.map(|top| top.id)
+    });
     Service::<Registry>::run(ctx, |registry| {
         let reach = match registry.made.take() {
             Some((made, held)) if made == now && held.canvas == canvas && held.modal == modal => held.reach.join(reach),

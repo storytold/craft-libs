@@ -41,12 +41,14 @@ struct Took {
     zooms: u32,
 }
 
-/// The canvas: a surface that takes presses of any button, their drags and the wheel.
+/// The canvas: a surface that takes presses of any button, their drags and the wheel, and passes `outside` itself, as
+/// a tool host passes its running tool's gesture.
 #[derive(Component)]
 struct Surface<'a> {
     #[common]
     common: Common,
     took: &'a RefCell<Took>,
+    outside: Option<CanvasGesture>,
 }
 
 impl Component for Surface<'_> {
@@ -67,6 +69,10 @@ impl Component for Surface<'_> {
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        if let Some(gesture) = self.outside {
+            let id = cx.id;
+            cx.pass_canvas_gesture(id, gesture);
+        }
         let mut took = self.took.borrow_mut();
         took.id = Some(cx.id);
         let phase = cx.press().phase;
@@ -155,6 +161,8 @@ struct Scene {
     armer_id: Cell<Id>,
     open: Cell<bool>,
     arm: Cell<Arm>,
+    /// The gesture the canvas passes itself, outside the dialog's body.
+    outside: Cell<Option<CanvasGesture>>,
     dialog: Opened,
 }
 
@@ -166,6 +174,7 @@ impl Scene {
             armer_id: Cell::new(Id::NULL),
             open: Cell::new(false),
             arm: Cell::new(arm),
+            outside: Cell::new(None),
             dialog: Opened::default(),
         }
     }
@@ -173,7 +182,7 @@ impl Scene {
     fn show(&self, ui: &mut Ui) {
         self.dialog.shown.set(false);
         let canvas = self.canvas.borrow().id.unwrap_or(Id::NULL);
-        Surface { common: Common::new(), took: &self.canvas }.id_salt("canvas").show_at(ui, CANVAS);
+        Surface { common: Common::new(), took: &self.canvas, outside: self.outside.get() }.id_salt("canvas").show_at(ui, CANVAS);
         Dialog { common: Common::new(), scene: self, canvas }.id_salt("dialog").show_at(ui, OPENER);
     }
 
@@ -298,4 +307,26 @@ fn a_gesture_with_a_modifier_passes_only_with_the_modifier_held() {
     scene.drag_with(&mut frames, egui::PointerButton::Primary, Modifiers::COMMAND, CANVAS.center(), Vec2::new(40.0, 10.0));
     assert!(scene.took(PointerButton::Primary) && scene.dragged_canvas(), "the ⌘-press and its drag reached the canvas");
     scene.assert_dialog_holds(&frames);
+}
+
+/// A gesture the canvas passes outside the dialog's body, as a tool host passes its running tool's gesture, belongs to
+/// the top modal: it reaches the canvas under the open dialog, and once the dialog closes it lapses with it, so the
+/// next dialog blocks the canvas while nothing passes the gesture again.
+#[trial]
+fn a_gesture_passed_outside_the_dialog_reaches_the_canvas_and_lapses_with_the_dialog() {
+    let mut frames = Frames::new();
+    let scene = Scene::new(Arm::Nothing);
+    scene.outside.set(Some(CanvasGesture::PRIMARY));
+    scene.open_dialog(&mut frames);
+    scene.drag(&mut frames, CANVAS.center(), Vec2::new(40.0, 10.0));
+    assert!(scene.took(PointerButton::Primary) && scene.dragged_canvas(), "the press and its drag reached the canvas");
+    scene.assert_dialog_holds(&frames);
+    scene.frame(&mut frames, vec![key_press(Key::Escape, Modifiers::NONE)]);
+    scene.settle(&mut frames, 30);
+    assert!(!scene.dialog.shown.get(), "Escape closes the dialog");
+    scene.outside.set(None);
+    scene.open_dialog(&mut frames);
+    scene.forget_canvas();
+    scene.drag(&mut frames, CANVAS.center(), Vec2::new(40.0, 10.0));
+    assert!(!scene.took(PointerButton::Primary), "the registration lapsed with its dialog");
 }

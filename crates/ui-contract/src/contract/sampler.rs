@@ -29,7 +29,8 @@ mod sealed {
 
 /// The canvas reach under a modal layer (15.5, 8.3): a control of a dialog keeps the canvas below it usable. It is
 /// implemented for `Cx`, `BodyCx` and so for `FormCx`, which derefs to `BodyCx`. A registration holds for this pass
-/// and the next and belongs to the modal layer whose body calls it: a modal opened over that layer blocks the canvas.
+/// and the next and belongs to the modal layer whose body calls it, or, called outside every modal body (the tool host
+/// passing the running tool's gestures), to the top modal layer: a modal opened over that layer blocks the canvas.
 /// The registrations of one pass add up.
 pub trait Sampler: sealed::Host {
     /// Lets `gesture` on `canvas` (the canvas component's id) through the modal layer, and the view navigation with it
