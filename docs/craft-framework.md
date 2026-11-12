@@ -142,13 +142,14 @@ An app with its own eframe `App` calls the hooks in `craft::ui::shell::embed`. `
 | Each frame | `raw_input_hook` | `embed::before_input(ctx, \|output\| { ...; input })`: the closure receives the `FrameOutput` of the frame before (fired commands, announcements, chrome toggles) and returns the `FrameInput` for this frame (`RootEnv`, command states, the `Host`). |
 | Each frame | `logic`, after the app's own logic | `embed::logic(ctx, \|\| decision)`: the root window's close path. The closure runs only when the root window was asked to close, and returns `CloseDecision::Close` or `Hold`. |
 | Each pass | `ui`, before the app's UI | `embed::before_ui(ctx, frame)`: hands the runtime the native window on Windows, and fits the root window to its monitor once. Needs `ui-app`. |
+| Each pass | `ui`, where the app draws its own document canvas | Optional: `ui::runtime::focus::host_canvas(ctx, id, KeyUse::CANVAS)` declares it as the window's canvas (Tab row below). |
 | Each pass | `ui`, last | Optional: `ui::runtime::keys::with_window_intents(ctx, rtl, \|intents\| ...)` reads the keys no component took (below). |
 
 `install` takes over these parts of the context for the whole window, not only for framework components:
 
 | What | Effect on the app's own egui code |
 | --- | --- |
-| Tab | Bare Tab moves framework focus and never reaches egui, unless the focused framework stop keeps Tab or an app's own widget has the focus (below). With `RootEnv::tab_toggles_chrome`, Tab with nothing focused toggles the chrome and arrives in `FrameOutput::chrome_toggles`. |
+| Tab | Bare Tab moves framework focus and never reaches egui, unless the focused framework stop keeps Tab or an app's own widget has the focus (below). With `RootEnv::tab_toggles_chrome`, Tab toggles the chrome in a window that shows a document canvas, with nothing focused or the canvas focused, and arrives in `FrameOutput::chrome_toggles`. The canvas is a framework canvas, or the app's own egui canvas declared each pass with `ui::runtime::focus::host_canvas`. |
 | F6 | F6 and Shift+F6 move between panes and never reach egui. |
 | Escape | Plain Escape (Alt and Shift may be held) goes to the focused framework stop and its scopes; with no framework stop focused, it goes to the window as `Intent::Cancel`. It reaches egui only while an app's own widget has the focus (below). |
 | F10, Alt+letter | Taken while a framework menu bar is registered: F10 focuses the bar, Alt+letter opens a menu (not on macOS). |

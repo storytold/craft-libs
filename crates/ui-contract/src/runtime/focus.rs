@@ -183,6 +183,17 @@ pub(crate) fn register_stop(ctx: &Context, stop: Stop) {
     });
 }
 
+/// Registers the app's own egui widget `id`, drawn in the running pass, as its window's document canvas: a focus stop
+/// with `keys`, marked as the canvas (`KeyUse::chrome_key`). The window then shows a document, so with
+/// `RootEnv::tab_toggles_chrome` a bare Tab with nothing focused toggles its panels, as with a framework canvas. Focus
+/// reaches the canvas by Tab, F6 or `request`; while it has focus, its keys route as `keys` says (the arrows as
+/// nudges, Escape as its `Intent::Cancel`). `keys` is `KeyUse::CANVAS`, or a variant such as
+/// `KeyUse::CANVAS.with_keep(KeepKeys::Tab)` while the canvas edits text in place and Tab is its own. Call it each pass
+/// the canvas shows.
+pub fn host_canvas(ctx: &Context, id: Id, keys: KeyUse) {
+    register_stop(ctx, Stop::new(id, keys.with_chrome_key(true)));
+}
+
 /// How many stops the running pass has registered so far.
 pub(crate) fn stop_count(ctx: &Context) -> usize {
     with(ctx, |state| state.stops.len())

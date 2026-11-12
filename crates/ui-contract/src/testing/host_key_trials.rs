@@ -2,14 +2,16 @@
 
 use crate::runtime::drag::{self, DragPreview};
 use crate::runtime::egui::fixture;
-use crate::runtime::focus::KeyUse;
+use crate::runtime::env::RootEnv;
+use crate::runtime::focus::{FocusTarget, KeepKeys, KeyUse, host_canvas, request};
+use crate::runtime::frame::{ChromeToggle, take_output};
 use crate::runtime::keys::with_window_intents;
 use crate::testing::focus::{Stop, egui_focused, named_id, register_stop, widget};
 use crate::testing::input::{key_press, key_reached};
 use crate::testing::pointer::{self, moved, press, release};
 use crate::testing::{Frames, trial};
 use craft_behavior::{Input, Intent};
-use egui::{Event, Id, ImeEvent, Key, Modifiers, Pos2, Rect, Ui};
+use egui::{Event, Id, ImeEvent, Key, Modifiers, Pos2, Rect, Ui, ViewportId};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -172,4 +174,41 @@ fn copy_with_a_label_selection_copies_the_label() {
     pointer::drag(&mut frames, rect.left_center() + egui::vec2(1.0, 0.0), egui::vec2(rect.width() - 2.0, 0.0), &mut show);
     frames.frame(vec![Event::Copy], &mut show);
     assert!(frames.copied().iter().any(|copied| !copied.is_empty() && TEXT.contains(copied.as_str())), "egui copied the selection");
+}
+
+/// What a bare Tab did in a window whose host declares its canvas with `keys` (`None`: no canvas), with the canvas
+/// focused or not: the chrome toggles it asked for, and whether it reached egui.
+fn tab_with_canvas(keys: Option<KeyUse>, focused: bool) -> (Vec<(ViewportId, ChromeToggle)>, bool) {
+    let canvas = named_id("host canvas");
+    let (host, mut base) = host_window();
+    let mut show = move |ui: &mut Ui| {
+        base(ui);
+        widget(ui, canvas);
+        if let Some(keys) = keys {
+            host_canvas(ui.ctx(), canvas, keys);
+        }
+    };
+    let mut frames = Frames::new();
+    frames.root(RootEnv { tab_toggles_chrome: true, ..RootEnv::default() });
+    frames.frame(Vec::new(), &mut show);
+    if focused {
+        request(&frames.ctx, FocusTarget::Id(canvas));
+        frames.frame(Vec::new(), &mut show);
+    }
+    take_output(&frames.ctx);
+    seen(&host);
+    press_key(&mut frames, &mut show, Key::Tab);
+    (take_output(&frames.ctx).chrome_toggles, seen(&host).0.contains(&Key::Tab))
+}
+
+#[trial]
+fn a_host_canvas_marks_the_window_and_tab_toggles_its_panels() {
+    assert_eq!(tab_with_canvas(None, false), (Vec::new(), false), "no canvas: Tab moves focus");
+    assert_eq!(tab_with_canvas(Some(KeyUse::CANVAS), false), (vec![(ViewportId::ROOT, ChromeToggle::Panels)], false), "nothing focused");
+    assert_eq!(tab_with_canvas(Some(KeyUse::CANVAS), true), (vec![(ViewportId::ROOT, ChromeToggle::Panels)], false), "the canvas focused");
+    assert_eq!(
+        tab_with_canvas(Some(KeyUse::CANVAS.with_keep(KeepKeys::Tab)), true),
+        (Vec::new(), true),
+        "a focused canvas that keeps Tab gets it from egui"
+    );
 }
