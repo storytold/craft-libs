@@ -70,3 +70,35 @@ fn reset_capabilities_reprobes_the_same_backend_after_an_out_of_band_sign_in() {
 
     assert!(dialog.linked, "reset_capabilities did not pick up the backend's new linked state");
 }
+
+/// The captured send context belongs only to the create submission that
+/// answers a taken [`SendRequest`]. A status refresh submitted for the
+/// current document while another document's send is still outstanding must
+/// carry the current context, or `pump` drops its reply as belonging to the
+/// abandoned send.
+#[test]
+fn status_for_the_current_document_is_not_consumed_by_an_outstanding_send_from_another() {
+    let (mut dialog, hold) = ready();
+
+    // Document A's send is taken by the app but never submitted: its captured
+    // context stays pending.
+    dialog.open("doc-A".into(), "A.pdf".into(), None, who("alice"));
+    send(&mut dialog, b"A bytes");
+
+    // The dialog moves on to document B, which already has an envelope the
+    // host wants a status for.
+    dialog.open("doc-B".into(), "B.pdf".into(), None, who("alice"));
+    dialog.envelope = Some(envelope_for("doc-B", "alice"));
+    let env_id = dialog.envelope.as_ref().map(|e| e.id.clone()).unwrap_or_default();
+
+    dialog.submit_request(Request::Status { envelope: env_id });
+    let (_, status) = hold.take(|r| matches!(r, Request::Status { .. }));
+    status.answer(Answer::Status(Envelope { status: EnvelopeStatus::Completed, ..envelope_for("doc-B", "alice") }));
+    dialog.pump(1.0);
+
+    assert_eq!(
+        dialog.envelope.as_ref().map(|e| e.status),
+        Some(EnvelopeStatus::Completed),
+        "B's status reply was dropped because the status request consumed A's outstanding send context"
+    );
+}
