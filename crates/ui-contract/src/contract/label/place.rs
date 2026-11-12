@@ -161,6 +161,7 @@ pub(crate) fn control_after(ui: &mut Ui, env: &Env, input: &LabelIn<'_>) -> Plac
     let slot = if reset.is_some() && input.side.reset_dot { env.tokens.size.handle.sm } else { 0.0 };
     let mut leaf = LabelLeaf::new(input.side.kind.shown(input.text).clone(), slot);
     leaf.resettable = reset.is_some();
+    leaf.after = input.side.layout == FieldLayout::After;
     leaf.trailing = input.trailing;
     leaf.named = !input.side.content_only(content);
     leaf.colon = colon(env, input).filter(|_| leaf.named);

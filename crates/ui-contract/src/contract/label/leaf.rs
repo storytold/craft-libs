@@ -29,7 +29,8 @@ pub(super) struct LabelStyle {
     gap: f32,
     /// The detail: `text.muted`, `text.disabled` with a disabled control.
     detail: Stateful<StyleColor>,
-    /// The name: `text.muted`, dimmed with a disabled control.
+    /// The name: `TypeRole::Label` in `text.muted`; after a check box or a radio, `TypeRole::Body` in `text.normal`.
+    /// `text.disabled` with a disabled control.
     #[style(text)]
     name: TextLook,
     /// The glyph and icon: their own ink (`None`), `text.disabled` with a disabled control.
@@ -79,8 +80,10 @@ pub(super) struct LabelLeaf {
     /// The height of the label's first line: the name's line, the icon and the trailing content. A control placed
     /// after the label is centred on it.
     pub(super) first_line: Cell<f32>,
-    /// The name wraps in its room instead of eliding: a label after its control.
-    pub(super) wraps: bool,
+    /// The label sits after its control, as a check box's or a radio's text: the name reads in body type at full ink
+    /// and wraps in its room instead of eliding.
+    #[style_key]
+    pub(super) after: bool,
     /// The control the label names takes the label into its own hit target: the label senses nothing itself.
     pub(super) claimed: bool,
     /// The size of the content the label step shows after the text, inside the label: 0 without one.
@@ -120,7 +123,7 @@ impl LabelLeaf {
             colon: None,
             baseline: Cell::new(0.0),
             first_line: Cell::new(0.0),
-            wraps: false,
+            after: false,
             claimed: false,
             trailing: Vec2::ZERO,
             named: true,
@@ -145,7 +148,7 @@ impl Component for LabelLeaf {
         self.glyph.is_none()
     }
 
-    fn style(cx: &StyleCx<'_>, _: LabelLeafStyleKey) -> LabelStyle {
+    fn style(cx: &StyleCx<'_>, key: LabelLeafStyleKey) -> LabelStyle {
         LabelStyle {
             metrics: Metrics::new(),
             reset: cx.reset_mark(),
@@ -155,9 +158,12 @@ impl Component for LabelLeaf {
                 let (muted, off) = (cx.color(cx.tokens.color.text.muted), cx.color(cx.tokens.color.text.disabled));
                 Stateful::new(muted).off(States::new(muted, muted, muted, off))
             },
+            // A caption reads as secondary; a check box's or a radio's text after it is the control's own.
             name: {
-                let (muted, off) = (cx.color(cx.tokens.color.text.muted), cx.color(cx.tokens.color.text.disabled));
-                TextLook::new(TypeRole::Label, Stateful::new(muted).off(States::new(muted, muted, muted, off)))
+                let text = &cx.tokens.color.text;
+                let (role, ink) = if key.after { (TypeRole::Body, text.normal) } else { (TypeRole::Label, text.muted) };
+                let (ink, off) = (cx.color(ink), cx.color(text.disabled));
+                TextLook::new(role, Stateful::new(ink).off(States::new(ink, ink, ink, off)))
             },
             glyph: {
                 let off = Some(cx.color(cx.tokens.color.text.disabled));
@@ -200,7 +206,7 @@ impl Component for LabelLeaf {
         let trailing = self.trailing_width(cx.style.gap);
         // A name wider than the room the icon, colon, content and slot leave wraps there.
         let mut name = name;
-        if self.wraps
+        if self.after
             && let Some(room) = room
         {
             let left = (room - self.slot - icon - colon - trailing).max(0.0);
@@ -280,7 +286,7 @@ impl Component for LabelLeaf {
         // A wrapped name starts on the first line, which the icon and the content share; a one-line label sits at the
         // row's vertical centre.
         let line = draw.layout(&TextRun::new(cx.core.resolved.label), f32::INFINITY).size();
-        let wrapped = self.wraps && self.glyph.is_none() && {
+        let wrapped = self.after && self.glyph.is_none() && {
             let colon = self.colon.as_deref().map_or(0.0, |colon| draw.layout(&TextRun::new(colon), f32::INFINITY).size().x);
             let icon = if self.icon.is_some() { cx.style.icon + cx.style.gap } else { 0.0 };
             line.x > rest.rect().width() - self.trailing_width(cx.style.gap) - icon - colon

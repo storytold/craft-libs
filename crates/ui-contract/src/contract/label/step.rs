@@ -158,7 +158,7 @@ pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>, trailing: Option<
     leaf.differs = reset.is_some_and(|fact| fact.differs);
     leaf.named = !input.side.content_only(content);
     leaf.colon = colon(env, input).filter(|_| leaf.named);
-    leaf.wraps = input.side.layout == FieldLayout::After;
+    leaf.after = input.side.layout == FieldLayout::After;
     leaf.claimed = input.claims;
     leaf.trailing = input.trailing;
     if let Some(tooltip) = input.side.tooltip.clone() {
