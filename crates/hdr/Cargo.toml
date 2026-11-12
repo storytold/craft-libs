@@ -1,0 +1,14 @@
+[package]
+name = "craft-hdr"
+description = "Clean-room Radiance HDR (RGBE) picture reader: flat, old and new run-length scan lines, all eight axis orders, to linear float RGB."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }

@@ -53,6 +53,8 @@ One module and one Cargo feature per maker or container family. All are on by de
 | `dng` | Adobe DNG | Uncompressed at 1 to 16 bits (packed MSB-first, or 8/16-bit in file byte order), lossless JPEG (all seven predictors, 1 to 4 components, point transform, restart intervals), lossy JPEG (compression 34892, 8-bit baseline tiles or strips), Deflate with predictors 1, 2 and the floating-point predictors (16, 24 and 32-bit floats), strips and tiles, planar or interleaved, CFA of any period up to 16 × 16 (Bayer, X-Trans) and LinearRaw with 1, 3 or 4 samples, DNG 1.7 row and column interleave, reduced-resolution LinearRaw copies (`decode_reduced`), semantic masks, CinemaDNG frame tags. Writing: uncompressed, lossless JPEG tiles, Deflate tiles (integer, half and single floats) |
 | `jxl` | JPEG XL DNG (DNG 1.7, compression 52546) | Lossless and lossy tiles through `jxl-oxide`; implies `dng` |
 | `crw` | Canon CRW (CIFF) | Decoded by [`craft-crw`](../crw/README.md), the one CRW decoder, and returned through this crate's types |
+| `cr2` | Canon CR2 | The lossless-JPEG frame of IFD 3 de-sliced (`0xc640`); the layout from `CR2CFAPattern` (`0xc5e0`); image area from `SensorInfo`; black measured on the masked columns; white from the saturation plateau; as-shot white balance from `ColorData` or `WBInfo`; the white-balance presets at their temperatures (`ColorData::kelvin_presets`). sRAW / mRAW (subsampled YCbCr, 4:2:2 and 4:2:0) come out as linear white-balanced RGB with three samples per pixel, the chroma gains measured against the file's own 16-bit RGB image in IFD 2 |
+| `nef` | Nikon NEF / NRW | Uncompressed (16-bit words, 12-bit packed, Coolpix word packing), the packed layouts labelled compression 34713, Nikon's Huffman coding (lossless and lossy types, 12 and 14 bits, "lossy after split") with the `0x0096` linearisation table, small raw (YCbCr 4:2:2) as linear white-balanced RGB; black from `0x003d` or the NRW block, as-shot white balance from `0x000c`, `CropArea` or the measured image area of bodies that record none, masked trailing columns left out of the active area, the D1X pixel aspect, and the in-file distortion correction as a `WarpRectilinear` opcode ([derivation](docs/nikon-lens-corrections.md)). High Efficiency (HE / HE★) is refused by name; the previews still read |
 | `mrw` | Minolta / Konica Minolta MRW | The `\0MRM` block container (`PRD`, `WBG`, `TTW`), 12-bit packed and 16-bit word mosaics, as-shot white balance from `WBG`, white from the saturation plateau |
 | `erf` | Epson ERF (R-D1, R-D1s, R-D1x) | 12-bit samples in 16-byte blocks, black levels from the maker note, the measured picture origin. No white balance (the file states none) |
 | `mef` | Mamiya MEF (ZD) | Uncompressed 12-bit packed; default crop from the RGB preview's measured window. No white balance (the file states none) |
@@ -62,7 +64,7 @@ One module and one Cargo feature per maker or container family. All are on by de
 | `hasselblad` | Hasselblad 3FR and FFF, and other CFA TIFFs in the DNG layout without a DNG version tag (`RawFormat::CfaTiff`) | Uncompressed and Hasselblad's lossless JPEG (predictor selection value 8); RGGB from the sensor origin when the file states no `CFAPattern`; an FFF's colour matrix from the 3FR header it embeds; the 8-bit RGB preview handed on as a baseline TIFF. Implies `dng` |
 
 Not decoded: GoPro VC-5 DNG (GPR), CFA with more than three colours, non-rectangular CFA layouts.
-`probe` names every container it can tell apart whatever the features (CR2, CR3, NEF, NRW, ARW,
+`probe` names every container it can tell apart whatever the features (CR3, NEF, NRW, ARW,
 RAF, ORF, RW2, X3F, other TIFF-based raws);
 their decoders are still in the apps and move here one maker family at a time.
 `RawFormat::is_supported` says what this build decodes.
@@ -121,6 +123,25 @@ Left as LightCraft has it, with the reason:
 - Pentax PEF and Samsung SRW are LightCraft's readers unchanged. PhotoCraft has no reader for either: it sends
   them down its generic TIFF/EP path, which reads an uncompressed CFA IFD and refuses Pentax's Huffman coding
   and Samsung's private compressions, so there was nothing of PhotoCraft's to fold in.
+- Canon CR2 is LightCraft's reader. Two things PhotoCraft's reader does differently were not taken over:
+  - Colour filter phase. PhotoCraft measures the row phase from the green diagonal of the samples, with a table of
+    five model IDs for flat frames, because it found no tag for it. LightCraft reads `CR2CFAPattern` (`0xc5e0`)
+    from the raw IFD, which states the layout per file, and falls back to RGGB without it; both end at RGGB when
+    nothing else is known. The tag is kept: it needs no samples, so `probe_info` and `decode` agree.
+  - sRAW / mRAW. PhotoCraft multiplies the stored RGB by a gain set from `ColorData` (word `0x80`, version 15 only,
+    observed on one body) to get camera RGB and then applies the as-shot white balance. LightCraft leaves the
+    camera's white balance in (`wb_multipliers` is `[1, 1, 1]`) and measures the chroma scale per file against the
+    IFD 2 image, on 31 files of 16 models including the 2008 to 2010 bodies whose chroma scale differs. That reading
+    is kept; a developer that wants camera RGB for version 15 can divide by the same word.
+- Nikon NEF / NRW is LightCraft's reader with two things from PhotoCraft's:
+  - The maker note's compression mode (`0x0093`, or the `u16` at byte 10 of `0x0051`) is read first. 6 and 10
+    send the strip to the packed reader even when a `0x0096` table is present, and allow 14-bit rows without
+    padding; 13 and 14 are High Efficiency. LightCraft chose the packed reader only when there was no table and
+    recognised High Efficiency by the JPEG XS markers; both rules remain for files without the mode.
+  - A 12-bit Nikon D4 file takes the measured 14-bit saturation level shifted like its samples (3880).
+    LightCraft measured it from the data.
+  LightCraft's built-in white-balance preset table for bodies that record none is not file data and stays with
+  the developer. `CropArea`, the D90 / D5100 / D800E areas and the 14-bit-unit black level are the same in both.
 - Lossy JPEG is accepted for CFA data (one grey component) as in PhotoCraft; FilmCraft refuses it
   because DNG 1.4 allows the coding for LinearRaw only.
 
