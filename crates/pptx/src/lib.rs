@@ -15,6 +15,7 @@ pub mod anim;
 mod package;
 pub mod placeholder;
 mod read;
+mod write;
 
 pub use package::{LIMITS, MAX_ENTRIES, MAX_INFLATE_WORK, MAX_PART, MAX_TOTAL, MAX_XML_PART};
 pub use read::MAX_TAG_BYTES;
@@ -50,8 +51,10 @@ pub enum Error {
     Xml(String),
 }
 
-/// What the caller supplies where a file leaves something out: the reader asks for a master when a
-/// file has none it can read, and for the theme of a master that names none.
+/// What the caller supplies where a file or a presentation leaves something out. The reader asks
+/// for a master when a file has none it can read, and for the theme of a master that names none;
+/// the writer for a master when the presentation has none, and for the text styles a master or
+/// the presentation leaves empty.
 pub trait Defaults {
     /// A slide master for slides of `size`, with at least one layout. Its ids (master, layouts,
     /// shapes) are above `after`; returns the master and the largest id it used.
@@ -59,6 +62,19 @@ pub trait Defaults {
     /// The theme of a master whose file names none.
     fn theme(&self) -> Theme {
         Theme::default()
+    }
+    /// The title, body and other text styles written for a master whose own are empty.
+    fn master_styles(&self) -> (text::ListStyle, text::ListStyle, text::ListStyle) {
+        Default::default()
+    }
+    /// The presentation's default text style, written when its own is empty.
+    fn default_text_style(&self) -> text::ListStyle {
+        text::ListStyle::default()
+    }
+    /// The program writing the file: `Application` in `docProps/app.xml`, and the first word of
+    /// the names of the table styles the writer defines.
+    fn application(&self) -> &str {
+        "craft-pptx"
     }
 }
 
@@ -105,6 +121,23 @@ pub fn import_with_chart_budget(bytes: &[u8], defaults: &dyn Defaults, points: u
 /// The theme of a `.thmx` file, or of a `.pptx` / `.potx`'s first master, with its media.
 pub fn import_theme(bytes: &[u8]) -> Result<(Theme, Vec<MediaItem>), Error> {
     read::import_theme(bytes)
+}
+
+/// Writes a `.pptx` package that PowerPoint opens without repair. `defaults` fills in what the
+/// presentation leaves out (see [`Defaults`]).
+pub fn export(p: &Presentation, defaults: &dyn Defaults) -> Result<Vec<u8>, Error> {
+    write::export(p, defaults, write::CT_PRES)
+}
+
+/// Writes a package for `ext`: `potx` (template) and `ppsx` (slide show) differ from `pptx` only in
+/// the main part's content type.
+pub fn export_as(p: &Presentation, defaults: &dyn Defaults, ext: &str) -> Result<Vec<u8>, Error> {
+    let ct = match ext {
+        "potx" => write::CT_TEMPLATE,
+        "ppsx" => write::CT_SHOW,
+        _ => write::CT_PRES,
+    };
+    write::export(p, defaults, ct)
 }
 
 /// Content type for a file name's extension.
