@@ -73,6 +73,8 @@ pub struct PaintedText {
     pub elided: bool,
     /// The run's full text.
     pub text: String,
+    /// The screen y of the run's first baseline.
+    pub baseline: f32,
 }
 
 /// The IME output of a frame: the owner widget, whether it asks the OS to interrupt a composition, the caret rect.
@@ -167,8 +169,13 @@ pub(crate) fn run_frame(
                 let nth = painted_before.entry(Arc::as_ptr(&text.galley) as usize).or_insert(0);
                 let full = super::painted::full_text_of_painted(ctx, &text.galley, *nth);
                 *nth += 1;
+                let baseline = text.galley.rows.first().map_or(0.0, |placed| match placed.row.glyphs.first() {
+                    Some(glyph) => placed.pos.y + glyph.pos.y,
+                    None => placed.pos.y + placed.row.size.y,
+                });
                 Some(PaintedText {
                     rect: text.galley.rect.translate(text.pos.to_vec2()),
+                    baseline: text.pos.y + baseline,
                     elided: full.is_some(),
                     text: full.unwrap_or_else(|| text.galley.job.text.clone()),
                 })

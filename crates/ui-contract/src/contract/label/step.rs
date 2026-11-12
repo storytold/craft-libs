@@ -146,7 +146,9 @@ pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>, trailing: Option<
     let label_id = sub(input.scope, "label");
     if input.side.shows_no_leaf() {
         scope::begin(&ctx, input.scope, input.owner, scope::Kind::Label(field_label(env, input, label_id, Rect::NOTHING)));
-        return Placed { label: Rect::NOTHING, control: hidden_control(&ctx, input, flow, gap), trailing: Rect::NOTHING };
+        let control = hidden_control(&ctx, input, flow, gap);
+        scope::place_controls(&ctx, input.scope, control.top());
+        return Placed { label: Rect::NOTHING, control, trailing: Rect::NOTHING };
     }
     let slot = if reset.is_some() && input.side.reset_dot { slot_side } else { 0.0 };
     let mut leaf = LabelLeaf::new(input.side.kind.shown(input.text).clone(), slot);
@@ -199,6 +201,7 @@ pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>, trailing: Option<
     let label =
         field_label(env, input, label_id_for_scope, placed.label).with_press(shown.press).with_hover(shown.hovered).activated(shown.activated);
     scope::begin(&ctx, input.scope, input.owner, scope::Kind::Label(label));
+    scope::place_controls(&ctx, input.scope, placed.control.top());
     if input.claims {
         scope::offer_claim(&ctx, unslotted.rect());
     }

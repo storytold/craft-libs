@@ -132,9 +132,12 @@ struct Scope {
     /// Node components inside this scope whose step 16 has not come yet, outermost first, with the number of focus stops
     /// registered before they began.
     open: Vec<(Id, usize)>,
-    /// The first baseline of the first control, from the control's top.
+    /// The screen y of the top of the rect the label step placed the controls in; the recorded baseline and centre
+    /// are stored measured from it.
+    control_top: f32,
+    /// The screen y of the first baseline of the first control.
     baseline: Option<f32>,
-    /// The centre line of the first control, from its top, for a control that paints no text.
+    /// The screen y of the centre line of the first control, for a control that paints no text.
     centre: Option<f32>,
     /// The control that registered a reset value and whether its value differs from it.
     reset: Option<ResetFact>,
@@ -191,6 +194,7 @@ pub(crate) fn begin(ctx: &Context, container: Id, owner: Id, kind: Kind) {
             kind,
             nodes: Vec::new(),
             open: Vec::new(),
+            control_top: 0.0,
             baseline: None,
             centre: None,
             reset: None,
@@ -251,8 +255,18 @@ fn report_unnamed(ctx: &Context, unnamed: Option<Finding>) {
     }
 }
 
-/// Records the first baseline of a control inside the innermost label scope, measured from the control's top.
-/// The first control to report wins.
+/// Sets the screen y of the top of the rect the label step of `container` placed its controls in. The label lines up
+/// with a baseline measured from there: a control that sits lower in that rect (a short piece a row centres beside a
+/// taller one) reports a baseline further down.
+pub(crate) fn place_controls(ctx: &Context, container: Id, top: f32) {
+    pass_state::with::<Stack, _>(ctx, |stack| {
+        if let Some(scope) = stack.0.iter_mut().rev().find(|scope| scope.container == container && matches!(scope.kind, Kind::Label(_))) {
+            scope.control_top = top;
+        }
+    });
+}
+
+/// Records the screen y of a control's first baseline in the innermost label scope. The first control to report wins.
 pub(crate) fn record_baseline(ctx: &Context, baseline: f32) {
     pass_state::with::<Stack, _>(ctx, |stack| {
         if let Some(scope) = stack.0.iter_mut().rev().find(|scope| matches!(scope.kind, Kind::Label(_))) {
@@ -261,8 +275,8 @@ pub(crate) fn record_baseline(ctx: &Context, baseline: f32) {
     });
 }
 
-/// Records the centre line of a control that paints no text (a box, a track), measured from its top, in the innermost
-/// label scope; the label centres on it. The first control to report wins.
+/// Records the screen y of the centre line of a control that paints no text (a box, a track) in the innermost label
+/// scope; the label centres on it. The first control to report wins.
 pub(crate) fn record_centre(ctx: &Context, centre: f32) {
     pass_state::with::<Stack, _>(ctx, |stack| {
         if let Some(scope) = stack.0.iter_mut().rev().find(|scope| matches!(scope.kind, Kind::Label(_))) {
@@ -548,10 +562,10 @@ pub(crate) fn finish(ctx: &Context, container: Id, merged: Option<Merged>) {
                 crate::runtime::focus::request(ctx, only.inner_stop.unwrap_or(crate::runtime::focus::FocusTarget::Id(only.id)));
             }
             if let Some(baseline) = scope.baseline {
-                layout_memory::record(ctx, sub(scope.container, "baseline"), Vec2::new(0.0, baseline));
+                layout_memory::record(ctx, sub(scope.container, "baseline"), Vec2::new(0.0, baseline - scope.control_top));
             }
             if let (None, Some(centre)) = (scope.baseline, scope.centre) {
-                layout_memory::record(ctx, sub(scope.container, "centre"), Vec2::new(0.0, centre));
+                layout_memory::record(ctx, sub(scope.container, "centre"), Vec2::new(0.0, centre - scope.control_top));
             }
             let slot = reset_slot(scope.container);
             match scope.reset {

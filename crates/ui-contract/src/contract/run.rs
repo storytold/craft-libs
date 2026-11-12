@@ -1330,9 +1330,9 @@ pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<T
             let core = e.core_ref();
             let baseline = core.paint.borrow().baseline;
             if let Some(baseline) = baseline {
-                scope::record_baseline(&ctx, baseline - core.rect.top());
+                scope::record_baseline(&ctx, baseline);
             } else if shape == ShapeKind::Leaf {
-                scope::record_centre(&ctx, core.rect.height() / 2.0);
+                scope::record_centre(&ctx, core.rect.center().y);
             }
         }
         real_pass = real;

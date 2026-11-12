@@ -1,6 +1,7 @@
 //! The label step: scrub across a pointer warp and the label beside or above a fill-width control.
 
 mod align;
+mod baseline;
 pub mod group;
 mod hit;
 mod inside;
