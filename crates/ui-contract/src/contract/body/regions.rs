@@ -105,19 +105,31 @@ pub(super) struct RegionSizes {
     pub(super) end: Option<Vec2>,
 }
 
-/// What every region of a container shares: its id, direction, whether it is an AccessKit node and its env.
+/// What every region of a container shares: its id, direction, whether it is an AccessKit node, its env and the
+/// container's body gap.
 pub(super) struct RegionFrame<'e> {
     pub(super) id: Id,
     pub(super) rtl: bool,
     pub(super) node: bool,
     pub(super) env: &'e Env,
+    pub(super) gap: Vec2,
 }
 
 impl RegionFrame<'_> {
-    /// The ui builder of the region `name` in `rect`.
-    pub(super) fn region(&self, name: &'static str, rect: Rect) -> UiBuilder {
+    /// The ui of a region, an AccessKit child of the container when it is a node, its children spaced by `spacing`.
+    /// The ui around a region spaces its own children differently in the measuring run and the real run, so a region
+    /// sets its spacing itself: its measured size is then the size it takes.
+    pub(super) fn open(&self, ui: &mut Ui, builder: UiBuilder, spacing: Vec2) -> Ui {
+        let builder = if self.node { access::with_parent(builder, self.id) } else { builder };
+        let mut region = alloc::child(ui, builder);
+        style::set_item_spacing(&mut region, spacing);
+        region
+    }
+
+    /// The column ui of the region `name` in `rect`, its children spaced by the container's body gap.
+    pub(super) fn region(&self, ui: &mut Ui, name: &'static str, rect: Rect) -> Ui {
         let builder = UiBuilder::new().max_rect(rect).layout(child::column_layout(self.rtl)).scope_id(sub(self.id, name));
-        if self.node { access::with_parent(builder, self.id) } else { builder }
+        self.open(ui, builder, self.gap)
     }
 }
 
@@ -217,10 +229,7 @@ impl<'b> BodyHooks<'b> {
                 None => header,
             };
             let builder = UiBuilder::new().max_rect(room).layout(layout).scope_id(sub(id, "controls"));
-            let builder = if frame.node { access::with_parent(builder, id) } else { builder };
-            let mut controls_ui = alloc::child(ui, builder);
-            // The same spacing in the measuring run and the placing run, whatever the parent's item spacing is.
-            style::set_item_spacing(&mut controls_ui, Vec2::splat(gap_of(&frame.env.tokens, Gap::Item)));
+            let mut controls_ui = frame.open(ui, builder, Vec2::splat(gap_of(&frame.env.tokens, Gap::Item)));
             let installed = Env::install_for(&controls_ui, frame.env.clone());
             comp.controls(&mut controls_ui, bcx);
             Env::restore(&ctx, installed);
@@ -235,7 +244,7 @@ impl<'b> BodyHooks<'b> {
                 }
             }
         }
-        let mut header_ui = alloc::child(ui, frame.region("header", header_rect));
+        let mut header_ui = frame.region(ui, "header", header_rect);
         let installed = Env::install_for(&header_ui, frame.env.clone());
         comp.header(&mut header_ui, bcx);
         Env::restore(&ctx, installed);
@@ -291,8 +300,7 @@ impl<'b> BodyHooks<'b> {
         let cross = if end_full_height(props) { Align::Min } else { Align::Center };
         let layout = if frame.rtl { Layout::right_to_left(cross) } else { Layout::left_to_right(cross) };
         let builder = UiBuilder::new().max_rect(end).layout(layout).scope_id(sub(frame.id, "end"));
-        let builder = if frame.node { access::with_parent(builder, frame.id) } else { builder };
-        let mut end_ui = alloc::child(ui, builder);
+        let mut end_ui = frame.open(ui, builder, frame.gap);
         let installed = Env::install_for(&end_ui, frame.env.clone());
         comp.end(&mut end_ui, bcx);
         Env::restore(ui.ctx(), installed);

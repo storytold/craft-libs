@@ -34,8 +34,8 @@ struct Regioned<'a> {
     header: Option<Vec2>,
     end: Vec2,
     footer: Vec2,
-    /// How many blocks of `footer` the footer stacks.
-    footer_rows: usize,
+    /// How many blocks of its size the header and the footer each stack.
+    rows: usize,
     took: &'a RefCell<Took>,
 }
 
@@ -59,7 +59,7 @@ impl Component for Regioned<'_> {
 
 impl Container for Regioned<'_> {
     fn header(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
-        self.took.borrow_mut().header = self.header.map(|size| allocate(ui, size));
+        self.took.borrow_mut().header = self.header.and_then(|size| stacked(ui, size, self.rows));
     }
 
     fn end(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
@@ -67,13 +67,17 @@ impl Container for Regioned<'_> {
     }
 
     fn footer(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
-        let rows = (0..self.footer_rows).map(|_| allocate(ui, self.footer)).reduce(|a, b| a.union(b));
-        self.took.borrow_mut().footer = rows;
+        self.took.borrow_mut().footer = stacked(ui, self.footer, self.rows);
     }
 }
 
 /// Shows a filling `Regioned` at `AREA` with `props` for one frame and returns what its regions took in the frame's
 /// first pass, before any discard pass: no region has a size from an earlier pass then.
+/// `rows` blocks of `size`, one under the other: the rect they cover.
+fn stacked(ui: &mut Ui, size: Vec2, rows: usize) -> Option<Rect> {
+    (0..rows).map(|_| allocate(ui, size)).reduce(|a, b| a.union(b))
+}
+
 fn first_pass(props: ContainerProps, header: Option<Vec2>) -> Took {
     let took = RefCell::new(Took::default());
     let passes = RefCell::new(Vec::new());
@@ -85,7 +89,7 @@ fn first_pass(props: ContainerProps, header: Option<Vec2>) -> Took {
             header,
             end: Vec2::new(80.0, 40.0),
             footer: Vec2::new(70.0, 16.0),
-            footer_rows: 1,
+            rows: 1,
             took: &took,
         }
         .show_at(ui, AREA, |_, cx| cx.rect);
@@ -128,7 +132,7 @@ fn a_row_body_between_an_inline_header_and_an_end_region_measures_in_the_line_th
                 header: Some(Vec2::new(40.0, 20.0)),
                 end: Vec2::new(80.0, 20.0),
                 footer: Vec2::ZERO,
-                footer_rows: 1,
+                rows: 1,
                 took: &took,
             };
             bar.show(ui, |ui, _| *text.borrow_mut() = Text::new(WORDS).show(ui).rect);
@@ -204,7 +208,7 @@ fn a_footer_of_several_rows_lies_inside_its_container_whatever_the_parent_spacin
                 header: None,
                 end: Vec2::ZERO,
                 footer: Vec2::new(70.0, 16.0),
-                footer_rows: 3,
+                rows: 3,
                 took: &took,
             };
             *shown.borrow_mut() = regioned.show(ui, |ui, _| allocate(ui, Vec2::new(70.0, 16.0))).output.rect;
@@ -214,4 +218,30 @@ fn a_footer_of_several_rows_lies_inside_its_container_whatever_the_parent_spacin
     frames.idle(3, show);
     let (footer, rect) = (took.borrow().footer.expect("the footer ran"), *shown.borrow());
     assert!(footer.max.y <= rect.max.y + EDGE_SLACK, "the footer {footer:?} lies inside its container {rect:?}");
+}
+
+/// A stacked header of several rows, in a container whose parent spaces its own children differently: the body
+/// starts under the header's last row, as the header is placed by the height it measured.
+#[trial]
+fn a_header_of_several_rows_lies_above_the_body_whatever_the_parent_spacing() {
+    let took = RefCell::new(Took::default());
+    let body = RefCell::new(None);
+    let show = |ui: &mut Ui| {
+        Slab::new(ContainerProps::new().body_gap(Gap::Section)).show_at(ui, AREA, |ui, _| {
+            let regioned = Regioned {
+                common: Common::new(),
+                props: ContainerProps::new().header(HeaderRegion::new()),
+                header: Some(Vec2::new(70.0, 16.0)),
+                end: Vec2::ZERO,
+                footer: Vec2::ZERO,
+                rows: 3,
+                took: &took,
+            };
+            *body.borrow_mut() = regioned.show(ui, |ui, _| allocate(ui, Vec2::new(70.0, 16.0))).inner;
+        });
+    };
+    let mut frames = Frames::new();
+    frames.idle(3, show);
+    let (header, body) = (took.borrow().header.expect("the header ran"), body.borrow().expect("the body ran"));
+    assert!(body.min.y >= header.max.y - EDGE_SLACK, "the body {body:?} starts under the header {header:?}");
 }

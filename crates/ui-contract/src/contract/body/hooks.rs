@@ -648,8 +648,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         }
         let region_env = env.derive(|scoped| self.scope_regions(scoped, &props, cx, window, values, real));
         let body_id = sub(id, "body");
-        let owner = BodyOwner::new(cx.style, gap_of(&env.tokens, props.body_gap));
-        let frame = RegionFrame { id, rtl, node, env: &region_env };
+        let gap = Vec2::splat(gap_of(&env.tokens, props.body_gap));
+        let owner = BodyOwner::new(cx.style, gap.y);
+        let frame = RegionFrame { id, rtl, node, env: &region_env, gap };
         let (resolved, env_view) = (cx.core.resolved, region_env.view());
         let mut open = self.open;
         let mut gate = self.gate;
@@ -689,7 +690,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 }
             })
         };
-        let end_frame = RegionFrame { id, rtl, node, env: &line_env };
+        let end_frame = RegionFrame { id, rtl, node, env: &line_env, gap };
         // A footer in the end region is part of a column sized from its content: a fill-width child takes its
         // measured width there and shows across the column, so it never sets the column's width.
         let footer_env = if footer_in_end(&props) { region_env.derive_local(|scoped| scoped.content_column = true) } else { region_env.clone() };
@@ -699,7 +700,6 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         // A held fill-width container is part of the content column it sits in: its own stack is one too.
         let (sizing, held) = (self.sizing(&props), self.held(&props, env));
         let content_column = (sizing == Sizing::Content || held || !self.given.0) && matches!(props.layout, layout::BodyLayout::Stack);
-        let gap = Vec2::splat(gap_of(&env.tokens, props.body_gap));
         let layout_id = sub(id, "layout");
         // The body is measured in the line the real run gives it: what the header and the end region leave. The
         // measuring run places it once both have measured, so its end region runs first (its content never depends
@@ -955,10 +955,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             let mut bcx = BodyCx::new(body_id, env_view, resolved, footer_rect, &mut *cx.core.memory, &mut open, gate.as_mut())
                 .with_field_message(field_message)
                 .with_owner(owner);
-            let mut footer_ui = alloc::child(ui, frame.region("footer", footer_rect));
-            // The footer's children are spaced as the body's, in the measuring run and the real run alike: the item
-            // spacing of the ui around differs between the two, and the footer's measured height must be the height it takes.
-            style::set_item_spacing(&mut footer_ui, gap);
+            let mut footer_ui = frame.region(ui, "footer", footer_rect);
             let installed = Env::install_for(&footer_ui, footer_env);
             comp.footer(&mut footer_ui, &mut bcx);
             Env::restore(&ctx, installed);
