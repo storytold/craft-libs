@@ -80,14 +80,22 @@ pub enum Located<'a> {
 }
 
 /// The whole file.
+///
+/// `format` has no `#[serde(default)]` of its own, unlike every other field here. A container-
+/// level default would fill a missing `format` key in from this struct's own `Default` impl,
+/// which answers [`FORMAT`]: a file that never said what format it was would then read as
+/// exactly the format this build understands. Requiring the key keeps a file that never
+/// declared a format from passing as one that did.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
 pub struct Accounts {
     pub format: u32,
+    #[serde(default)]
     pub accounts: Vec<Account>,
     /// The account an application should use when it has no reason to prefer another.
+    #[serde(default)]
     pub active: Option<String>,
     /// Removed accounts, holding the generation they reached. See [`Tombstone`].
+    #[serde(default)]
     pub tombstones: Vec<Tombstone>,
 }
 
@@ -133,12 +141,31 @@ impl Accounts {
     ///
     /// Clears any tombstone for this id: the account is current again, so nothing should still
     /// answer a write against it with "removed".
+    ///
+    /// For a sign-in. [`Store::set_active`] is the other caller allowed to change `active`; a
+    /// background refresh never should. See [`Accounts::refresh_in_place`].
+    ///
+    /// [`Store::set_active`]: crate::Store::set_active
     pub fn put(&mut self, account: Account) {
         self.tombstones.retain(|t| t.id != account.id);
         self.active = Some(account.id.clone());
         match self.accounts.iter_mut().find(|a| a.id == account.id) {
             Some(existing) => *existing = account,
             None => self.accounts.push(account),
+        }
+    }
+
+    /// Replaces an active row's content without touching which account is current.
+    ///
+    /// For [`Store::update_token`]: a refresh is maintenance a person never asked for by name. It
+    /// must not steal the selection away from whichever account they actually picked, the way
+    /// [`Accounts::put`] would. Does nothing when `id` no longer names an active row; the caller
+    /// has already confirmed it does, under the same lock, right before calling this.
+    ///
+    /// [`Store::update_token`]: crate::Store::update_token
+    pub fn refresh_in_place(&mut self, id: &str, account: Account) {
+        if let Some(existing) = self.accounts.iter_mut().find(|a| a.id == id) {
+            *existing = account;
         }
     }
 
@@ -184,20 +211,44 @@ pub fn normalise(service: &str) -> String {
     service.trim().trim_end_matches('/').to_owned()
 }
 
+/// Just the file's name, for an error a log might show.
+///
+/// The full path sits under a user's profile folder and names them. [`Store::shared`] logs a
+/// read failure at `warn`. Every message built here therefore says only the file, never the
+/// path it lived under. The name alone is enough to say which file failed and why.
+///
+/// [`Store::shared`]: crate::Store::shared
+fn named(path: &Path) -> &str {
+    path.file_name().and_then(|n| n.to_str()).unwrap_or("the accounts file")
+}
+
 /// Reads the file. A missing file is an empty list. That is what "nobody has signed in" looks like.
+///
+/// Accepts only a file that explicitly declares this exact [`FORMAT`]. `format` carries no
+/// `#[serde(default)]` (see [`Accounts`]). A file with no `format` key therefore fails to parse
+/// here. It never quietly reads as [`FORMAT`] through [`Accounts`]'s own `Default` impl. A file
+/// that spells out `"format": 0` parses fine. The check just below rejects it there, the same as
+/// any other value [`FORMAT`] does not name. Without both checks, an unrelated JSON file that
+/// happens to parse into this permissive shape (every other field here defaults) could be read
+/// as an empty account list and then overwritten outright by the next sign-in, a format this
+/// reader never actually established.
 pub fn read(path: &Path) -> Result<Accounts, Error> {
     let bytes = match std::fs::metadata(path) {
         Ok(meta) if meta.len() > MAX_BYTES => {
-            return Err(Error::Malformed(format!("{} is {} bytes, too large to be an account list", path.display(), meta.len())));
+            return Err(Error::Malformed(format!("{} is {} bytes, too large to be an account list", named(path), meta.len())));
         }
         Ok(_) => std::fs::read(path),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Accounts::default()),
-        Err(e) => return Err(Error::Io(format!("couldn't read {} ({e})", path.display()))),
+        Err(e) => return Err(Error::Io(format!("couldn't read {} ({e})", named(path)))),
     };
-    let bytes = bytes.map_err(|e| Error::Io(format!("couldn't read {} ({e})", path.display())))?;
-    let parsed: Accounts = serde_json::from_slice(&bytes).map_err(|e| Error::Malformed(format!("{} didn't parse ({e})", path.display())))?;
-    if parsed.format > FORMAT {
-        return Err(Error::Malformed(format!("{} is format {}. This build understands {FORMAT}.", path.display(), parsed.format)));
+    let bytes = bytes.map_err(|e| Error::Io(format!("couldn't read {} ({e})", named(path))))?;
+    let parsed: Accounts = serde_json::from_slice(&bytes).map_err(|e| Error::Malformed(format!("{} didn't parse ({e})", named(path))))?;
+    if parsed.format != FORMAT {
+        return Err(Error::Malformed(format!(
+            "{} declares format {}. This build writes and reads only format {FORMAT}. A missing or unrecognised marker is never read as an account list.",
+            named(path),
+            parsed.format
+        )));
     }
     Ok(parsed)
 }
@@ -275,6 +326,17 @@ pub fn write(path: &Path, accounts: &Accounts) -> Result<(), Error> {
 
 #[cfg(not(unix))]
 fn restrict(_path: &Path) -> Result<(), Error> {
-    // Windows gives a file in `%APPDATA%` the profile's own access rules. Those are this user's.
+    // A no-op today. That is a real gap this comment used to paper over. A new file in the
+    // platform configuration folder (the default `paths::Rule::Platform` home) inherits that
+    // folder's own, profile-scoped access rules. The account list is this user's alone there.
+    // `paths::Rule::Portable` and `paths::Rule::EnvVar` point `write` at whatever folder the
+    // caller named. A new file there inherits that folder's own Windows access control list,
+    // whatever it is. A shared or loosely permissioned folder in either of those two cases
+    // leaves the account list (subjects, display names, emails, never a token) readable by
+    // anyone else with access to it. Narrowing that needs a per-user Windows DACL on the file,
+    // set through the Win32 authorization API. Every binding for that API is an `unsafe fn`.
+    // This workspace forbids `unsafe_code` outright. Closing this for real needs either a
+    // maintainer-approved exception for one call site or a vetted dependency that wraps that API
+    // safely. Both are decisions for a dedicated PR. See `paths::Rule`.
     Ok(())
 }
