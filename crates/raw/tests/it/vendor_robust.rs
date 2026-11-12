@@ -61,6 +61,8 @@ fn cr2() -> Vec<u8> {
 fn samples() -> Vec<Vec<u8>> {
     vec![
         cr2(),
+        cfa_tiff("NIKON CORPORATION", 1, 12, ByteOrder::Big),
+        cfa_tiff("NIKON CORPORATION", 34713, 14, ByteOrder::Big),
         pef(1),
         pef(65535),
         cfa_tiff("SAMSUNG", 1, 12, ByteOrder::Little),

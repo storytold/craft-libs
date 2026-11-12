@@ -492,3 +492,22 @@ fn next_start_is_the_first_box_or_forced_break_after_each_item() {
         assert_eq!(s.next_start(b), scan, "after {b}");
     }
 }
+
+/// Past its work limit the paragraph is broken greedily, with every item laid out and no error or
+/// cut: a limit of a few units stands for the real one, which a hostile paragraph of hundreds of
+/// thousands of items would reach (and the test never builds).
+#[test]
+fn a_paragraph_past_the_work_limit_falls_back_to_greedy_with_every_item() {
+    let p = vectorcraft(false);
+    let para = Para::new(COPY, &p, Some(50.0));
+    let w = |_| 150.0;
+    let within = break_paragraph_within(&para.items, &w, &p, &PASSES, MAX_WORK);
+    assert!(matches!(within.method, Method::KnuthPlass { .. }), "{:?}", within.method);
+    let limited = break_paragraph_within(&para.items, &w, &p, &PASSES, 20);
+    assert_eq!(limited.method, Method::Greedy);
+    assert_eq!(limited.lines, greedy(&para.items, &w, &p));
+    assert_covers(&para.items, &limited.lines);
+    // The work is shared by the passes: what one spends the next doesn't have.
+    let mut work = 30;
+    assert!(knuth_plass_within(&para.items, &w, &Params { tolerance: 1.0, ..p }, &mut work).is_none());
+}
