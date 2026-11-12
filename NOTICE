@@ -106,6 +106,23 @@ crates/raw (craft-raw) is moved from LightCraft, with behaviour ported from two 
   4bec22bd03bd1d995c9cf72e02a284f96d3d72cd.
   https://github.com/storytold/filmcraft
   Copyright (c) 2026 ArtCraft Team and the FilmCraft contributors.
+crates/develop (craft-develop) is moved from LightCraft: crates/pipeline (all of it, with its tests),
+crates/color, crates/raster, crates/inpaint and crates/scenes (test-only), the develop half of crates/raw
+(binned.rs, color.rs, dcp.rs, demosaic.rs and demosaic/, highlight.rs, hotpixel.rs, kelvin_builtin.rs,
+kelvin_presets.rs, saturation.rs, spectral.rs, spectral_table.rs, chart_table.rs, wb_estimate.rs, and the
+applying halves of opcodes.rs, profile.rs, gaintable.rs, semantic.rs and lib.rs), and from crates/engine
+camera_preview.rs and camera_preview/, camera_profiles.rs, files.rs, files/load.rs, files/colour.rs, the
+embedded lens of files/probe.rs and the render tests of crs_masks/tests.rs, with assets/camera-profiles/ and
+assets/camera-tone/, revision a75497d6.
+  https://github.com/storytold/lightcraft
+  Copyright (c) 2026 ArtCraft Team and the LightCraft contributors.
+  crates/develop/src/sensor/spectral_table.rs holds camera colour matrices derived from the camera spectral
+  sensitivities, training reflectances and model alias list of rawtoaces-data
+  (https://github.com/AcademySoftwareFoundation/rawtoaces-data, v1.1.0), an Academy Software Foundation
+  project licensed under the Apache License 2.0, and from the CIE 1931 colour-matching functions it ships
+  (CIE, CC-BY-4.0). The matrices were fitted by the LightCraft contributors (2026). See ATTRIBUTION.md.
+  crates/develop/src/inpaint ports PhotoCraft's inpainting (crates/algo/src/inpaint.rs and poisson.rs,
+  https://github.com/storytold/photocraft, MIT OR Apache-2.0), as LightCraft's crates/inpaint did.
 The SVG icon preparation in crates/ui is adapted from:
 - PhotoCraft, crates/ui-egui/src/icons.rs, revision e7a83ca342cdff568254f85f442b9cc8afb08066.
   https://github.com/storytold/photocraft

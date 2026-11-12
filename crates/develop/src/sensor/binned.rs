@@ -8,12 +8,12 @@
 //! interpolation, so there are no demosaicing artefacts; the colour planes are offset by less than
 //! one output pixel, which is invisible at these scales.
 //!
-//! Clipping is decided per sample, before averaging. [`RawImage::develop_binned_masked`] keeps every
+//! Clipping is decided per sample, before averaging. [`crate::sensor::Binning::develop_binned_masked`] keeps every
 //! channel the mean of its samples and says, per output pixel, which colours had a sample at or above
 //! `clip` (for [`crate::sensor::highlight::reconstruct_masked`], which rebuilds them with the mean as a lower
 //! bound). A specular point that clips one green sample of the 32 in an 8 × 8 block thus counts as
 //! partly clipped without the block's green jumping to the clip level, which would read as a green
-//! speckle once reconstructed. [`RawImage::develop_binned`] instead gives such a channel the block's
+//! speckle once reconstructed. [`crate::sensor::Binning::develop_binned`] instead gives such a channel the block's
 //! maximum sample of the colour, so that plain value thresholds see it as clipped.
 
 use crate::sensor::{Develop, Normalized, RawData, RawImage, Result, Rgb32f};
@@ -25,12 +25,12 @@ pub trait Binning {
     /// and B; Bayer: `k` even, so that every block has the same layout)?
     fn can_bin(&self, k: usize) -> bool;
 
-    /// Like [`RawImage::develop`] at `1/k` of the size (camera RGB, white = 1.0, default crop applied,
-    /// not oriented). `None` when the data cannot be binned ([`RawImage::can_bin`]) or carries an
+    /// Like [`crate::sensor::Develop::develop`] at `1/k` of the size (camera RGB, white = 1.0, default crop applied,
+    /// not oriented). `None` when the data cannot be binned ([`crate::sensor::Binning::can_bin`]) or carries an
     /// `OpcodeList3` (whose operations are defined at full resolution); callers then demosaic.
     fn develop_binned(&self, k: usize, clip: f32) -> Result<Option<Rgb32f>>;
 
-    /// Like [`RawImage::develop_binned`], with every channel the mean of its block's samples, and the
+    /// Like [`crate::sensor::Binning::develop_binned`], with every channel the mean of its block's samples, and the
     /// clip mask: per output pixel, bits [`crate::sensor::highlight::CLIPPED_R`] / `_G` / `_B` for the colours
     /// with a sample at or above `clip` in the block. Hand both to [`crate::sensor::highlight::reconstruct_masked`].
     fn develop_binned_masked(&self, k: usize, clip: f32) -> Result<Option<(Rgb32f, Vec<u8>)>>;

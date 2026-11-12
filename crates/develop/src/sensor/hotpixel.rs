@@ -6,7 +6,7 @@
 //! is too bright, not just the wrong colour. DNGs list such pixels in their opcodes and Panasonic marks
 //! them in the data (both repaired elsewhere); other raws, such as Sony ARWs, carry no list.
 //!
-//! [`RawImage::suppress_hot_pixels`] finds them in the mosaic, before demosaicing:
+//! [`crate::sensor::HotPixels::suppress_hot_pixels`] finds them in the mosaic, before demosaicing:
 //!
 //! 1. **Noise model.** On a sparse sample of the image, each photosite is compared with the median of
 //!    its same-colour neighbours. The spread of that difference, per brightness, gives the noise

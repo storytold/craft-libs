@@ -6,7 +6,7 @@
 //! as clipped; samples stuck 15 % below it look like real, bright, unclipped light, so white balance
 //! multiplies each channel's plateau by a different factor and the highlights turn magenta or cyan.
 //!
-//! [`RawImage::lift_clipped_samples`] finds the real saturation point of each colour from the samples
+//! [`crate::sensor::Saturation::lift_clipped_samples`] finds the real saturation point of each colour from the samples
 //! (a pile-up of identical values near the top of the range) and raises the samples at or above it to
 //! the stated white level. Nothing else changes: unclipped samples keep their values, and a file whose
 //! data really reaches its white level, or has no pile-up, is left alone.

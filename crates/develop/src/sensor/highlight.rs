@@ -353,7 +353,7 @@ pub const CLIPPED_R: u8 = 1;
 pub const CLIPPED_G: u8 = 2;
 pub const CLIPPED_B: u8 = 4;
 
-/// [`reconstruct_with`] for a binned image ([`crate::sensor::RawImage::develop_binned_masked`]): its values are block
+/// [`reconstruct_with`] for a binned image ([`crate::sensor::Binning::develop_binned_masked`]): its values are block
 /// means, and `mask` (one entry per pixel, bits [`CLIPPED_R`], [`CLIPPED_G`], [`CLIPPED_B`]) says which colours
 /// had a clipped sample in the block. Those channels count as clipped with their mean as the lower bound of their
 /// true value, so one clipped specular sample among many unclipped ones neither escapes reconstruction nor

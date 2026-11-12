@@ -86,7 +86,7 @@ pub struct GainEval<'a> {
 }
 
 impl GainEval<'_> {
-    /// [`GainTableMap::gain`].
+    /// [`GainTableMapExt::gain`].
     #[inline]
     pub fn gain(&self, p: [f32; 3], x: f64, y: f64) -> f32 {
         let m = self.map;
@@ -126,7 +126,7 @@ fn input(m: &GainTableMap, p: [f32; 3]) -> f32 {
     if m.gamma == 1.0 { x } else { x.powf(m.gamma) }
 }
 
-/// Where the pixels of a developed source sit in the raw's active area, for [`GainTableMap::gain`].
+/// Where the pixels of a developed source sit in the raw's active area, for [`GainTableMapExt::gain`].
 /// The source is the default crop of the active area (`rect`, relative to the active area),
 /// then EXIF-`orientation`ed. Resolution independent.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

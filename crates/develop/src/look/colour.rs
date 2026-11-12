@@ -43,7 +43,7 @@ pub fn file_local_look(format: RawFormat) -> bool {
 /// white (a monochrome picture style) has no colour to fit, but still gives its tone curve: with the camera profile's
 /// colour in [`fit_preview`], else on top of the spectral matrices or the fallback ([`monochrome_look`]). Returns the
 /// as-shot white, the camera transform at it and the fitted look.
-/// `lens` is the file's own lens-correction warp ([`lens_geometry`], read before the caller removes it from
+/// `lens` is the file's own lens-correction warp ([`super::lens_geometry`], read before the caller removes it from
 /// `OpcodeList3`): the camera applied it to its JPEG, so the sensor proxy is warped the same way before pairing.
 /// `embedded` is the file's embedded lens correction: its vignetting is applied to the sensor proxy of every fit, as
 /// the render applies it.
