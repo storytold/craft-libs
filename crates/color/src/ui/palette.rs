@@ -185,6 +185,12 @@ pub struct SwatchTable<'a> {
 }
 
 impl<'a> SwatchTable<'a> {
+    /// The side of a cell: a well at the control height, or a small touching cell.
+    fn cell(&self, cx: &StyleCx<'_>) -> f32 {
+        let metrics = SwatchMetrics::of(cx);
+        if self.wells { metrics.side } else { metrics.cell }
+    }
+
     /// A table named `label` of `swatches`, each a name and a colour.
     pub fn new(label: impl Into<Label>, swatches: &'a [(Label, Srgba)]) -> Self {
         SwatchTable {
@@ -270,9 +276,16 @@ impl Collection for SwatchTable<'_> {
         self.selection.as_mut().map(Bind::reborrow)
     }
 
+    /// Where the table takes its width from its content it asks for every cell in one row, or its count per row: the
+    /// room it is offered then wraps the cells, as it does where it is given the width.
+    fn ideal_width(&self, _item: Option<Vec2>, cx: &StyleCx<'_>) -> f32 {
+        let columns = self.per_row.map_or(self.swatches.len(), |columns| columns.max(1).min(self.swatches.len()));
+        // Half a point over, so the division that counts the columns back never rounds below `columns`.
+        columns as f32 * self.cell(cx) + 0.5
+    }
+
     fn item_layout(&self, source: &dyn ItemSource<usize>, width: f32, cx: &StyleCx<'_>) -> TileLayout {
-        let metrics = SwatchMetrics::of(cx);
-        let cell = if self.wells { metrics.side } else { metrics.cell };
+        let cell = self.cell(cx);
         match self.per_row {
             Some(columns) => {
                 let columns = columns.max(1);
