@@ -11,7 +11,7 @@
 use craft_sheet::{CellRef, MAX_COLS, MAX_ROWS, Range};
 
 use crate::formula::{Links, Mode, decode};
-use crate::model::{DataValidation, ErrorStyle, ValidationOperator, ValidationType};
+use crate::model::{DataValidation, ErrorStyle, Operator, ValidationType};
 use crate::records::Cursor;
 use crate::{Error, expr};
 
@@ -137,18 +137,18 @@ pub(crate) fn validation(dv: Dv, links: &Links) -> Option<DataValidation> {
     let compares = !matches!(kind, ValidationType::Any | ValidationType::List | ValidationType::Custom);
     let operator = if compares {
         match (f >> 20) & 0xF {
-            0 => ValidationOperator::Between,
-            1 => ValidationOperator::NotBetween,
-            2 => ValidationOperator::Equal,
-            3 => ValidationOperator::NotEqual,
-            4 => ValidationOperator::Greater,
-            5 => ValidationOperator::Less,
-            6 => ValidationOperator::GreaterOrEqual,
-            7 => ValidationOperator::LessOrEqual,
+            0 => Operator::Between,
+            1 => Operator::NotBetween,
+            2 => Operator::Equal,
+            3 => Operator::NotEqual,
+            4 => Operator::Greater,
+            5 => Operator::Less,
+            6 => Operator::GreaterOrEqual,
+            7 => Operator::LessOrEqual,
             _ => return None,
         }
     } else {
-        ValidationOperator::Between
+        Operator::Between
     };
     let text = |rgce: &[u8]| decode(rgce, &[], base, Mode::Cell, links).ok().map(|e| expr::print(&e));
     let formula1 = match kind {
@@ -160,11 +160,8 @@ pub(crate) fn validation(dv: Dv, links: &Links) -> Option<DataValidation> {
         },
         _ => text(&dv.rgce1)?,
     };
-    let formula2 = if compares && matches!(operator, ValidationOperator::Between | ValidationOperator::NotBetween) && !dv.rgce2.is_empty() {
-        Some(text(&dv.rgce2)?)
-    } else {
-        None
-    };
+    let formula2 =
+        if compares && matches!(operator, Operator::Between | Operator::NotBetween) && !dv.rgce2.is_empty() { Some(text(&dv.rgce2)?) } else { None };
     Some(DataValidation {
         ranges: dv.ranges,
         kind,

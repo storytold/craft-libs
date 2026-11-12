@@ -5,9 +5,9 @@ use std::collections::HashSet;
 use craft_dxf::model::text::{MText, MTextColumns};
 use craft_dxf::model::write::{BlockDef, Drawing, Format, entity_tags, fixed};
 use craft_dxf::model::{
-    Attrib, Color, Common, DashElement, Dimension, Document, Entity, EntityKind, Gradient, Hatch, HatchEdge, HatchLoop, HatchPath, Image, Insert,
-    Layer, Leader, Linetype, Lineweight, LwPolyline, LwVertex, PatternLine, Polyline, Spline, Text, TextStyle, Transparency, Vertex, Viewport,
-    records,
+    Attrib, Color, Common, DashElement, Dimension, Document, Entity, EntityKind, Gradient, Hatch, HatchEdge, HatchLoop, HatchPath, Helix, Image,
+    Insert, Layer, Leader, Linetype, Lineweight, LwPolyline, LwVertex, MLine, MLineVertex, PatternLine, Polyline, Spline, Text, TextStyle,
+    Transparency, Vertex, Viewport, records,
 };
 use craft_dxf::{Tag, parse, write_ascii_as};
 
@@ -236,6 +236,52 @@ fn sample(full: bool) -> Vec<Entity> {
             end_tangent: Some([0.0, 1.0, 0.0]),
             fit_tolerance: 0.01,
         })),
+        e(EntityKind::Helix(Helix {
+            spline: Spline {
+                degree: 3,
+                flags: 0,
+                knots: vec![0.0, 1.0],
+                control: vec![p(0.0), p(1.0)],
+                weights: vec![],
+                fit: vec![],
+                start_tangent: None,
+                end_tangent: None,
+                fit_tolerance: 0.0,
+            },
+            axis_base: p(1.0),
+            start: p(2.0),
+            axis: [0.0, 0.0, 1.0],
+            radius: 2.0,
+            turns: 3.0,
+            turn_height: 1.5,
+            ccw: false,
+            constrain: 1,
+        })),
+        e(EntityKind::MLine(MLine {
+            style: "WALL".into(),
+            style_handle: Some(0x41),
+            scale: 2.0,
+            justification: 1,
+            flags: 1 | 4,
+            elements: 2,
+            start: p(0.0),
+            vertices: vec![
+                MLineVertex {
+                    location: p(0.0),
+                    direction: [1.0, 0.0, 0.0],
+                    miter: [0.0, 1.0, 0.0],
+                    element_params: vec![vec![0.5, 1.0, 2.0], vec![-0.5]],
+                    fill_params: vec![vec![], vec![]],
+                },
+                MLineVertex {
+                    location: p(4.0),
+                    direction: [1.0, 0.0, 0.0],
+                    miter: [0.0, 1.0, 0.0],
+                    element_params: vec![vec![0.5], vec![-0.5]],
+                    fill_params: vec![vec![], vec![]],
+                },
+            ],
+        })),
         e(EntityKind::Ray { base: p(1.0), direction: [0.0, 1.0, 0.0] }),
         e(EntityKind::XLine { base: p(1.0), direction: [1.0, 0.0, 0.0] }),
         e(EntityKind::Text(text("10^2\tm"))),
@@ -373,8 +419,8 @@ fn owners_are_the_space_the_entity_is_in() {
     let back = read_back(&tags);
     assert_eq!(back[0].common.owner, Some(fixed::PAPER_RECORD), "a paper space entity");
     assert_eq!(back[1].common.owner, Some(fixed::MODEL_RECORD));
-    let EntityKind::Insert(i) = &back[17].kind else { panic!("an insert") };
-    assert_eq!(i.attribs[0].0.owner, back[17].common.handle, "an attribute is owned by its insert");
+    let EntityKind::Insert(i) = &back[19].kind else { panic!("an insert") };
+    assert_eq!(i.attribs[0].0.owner, back[19].common.handle, "an attribute is owned by its insert");
     assert_eq!((back[0].common.handle, i.attribs[0].0.handle), (Some(0x500), Some(0x501)), "given handles are kept");
 }
 
@@ -592,7 +638,7 @@ fn the_file_around_the_content() {
 
 #[test]
 fn one_entity_for_a_file_the_caller_writes() {
-    let insert = sample(true).remove(17);
+    let insert = sample(true).remove(19);
     let mut next = 0x10;
     let tags =
         entity_tags(&Entity { common: Common { handle: Some(0x5), ..insert.common.clone() }, ..insert.clone() }, Format::R2018, 0x1F, &mut next);
@@ -603,4 +649,50 @@ fn one_entity_for_a_file_the_caller_writes() {
     assert_eq!(recs[0].seqend.map(|s| s.handle()), Some(Some(0x10)));
     assert_eq!(next, 0x11, "the next free handle is past the ones used");
     assert!(entity_tags(&Entity { common: common("0"), kind: EntityKind::Other }, Format::R2018, 0, &mut next).is_empty());
+}
+
+#[test]
+fn records_kept_from_another_file_are_renumbered() {
+    use craft_dxf::model::write::{is_pointer_code, remap_handles};
+    let kept = parse(
+        b"0\nMULTILEADER\n5\n80\n102\n{ACAD_REACTORS\n330\n81\n102\n}\n330\n1F\n100\nAcDbEntity\n8\n0\n340\n0\n344\nZZ\n1001\nAPP\n1005\n82\n0\nDIMSTYLE\n105\n90\n2\nX\n340\n81\n",
+    )
+    .expect("parses");
+    let map = |h: u64| match h {
+        0x80 => Some(0x500),
+        0x81 => Some(0x501),
+        0x90 => Some(0x502),
+        _ => None,
+    };
+    let out = remap_handles(&kept, map);
+    let groups: Vec<(i32, String)> = out.iter().map(|t| (t.code, t.str())).collect();
+    let want: Vec<(i32, String)> = [
+        (0, "MULTILEADER"),
+        (5, "500"),
+        (102, "{ACAD_REACTORS"),
+        (330, "501"),
+        (102, "}"),
+        // An owner the new file has no counterpart for is the null handle.
+        (330, "0"),
+        (100, "AcDbEntity"),
+        (8, "0"),
+        (340, "0"),
+        // Text that is no handle is left as it is.
+        (344, "ZZ"),
+        (1001, "APP"),
+        (1005, "0"),
+        (0, "DIMSTYLE"),
+        (105, "502"),
+        (2, "X"),
+        (340, "501"),
+    ]
+    .iter()
+    .map(|(c, v)| (*c, v.to_string()))
+    .collect();
+    assert_eq!(groups, want);
+    assert!(is_pointer_code(330) && is_pointer_code(1005) && is_pointer_code(390) && !is_pointer_code(5) && !is_pointer_code(370));
+    // The renumbered records go through the writer as they are.
+    let (tags, skipped) = Drawing { raw_entities: out[..12].to_vec(), ..Drawing::default() }.tags();
+    assert_eq!(skipped, 0);
+    assert!(Document::read(&tags).entities.iter().any(|e| e.kind == "MULTILEADER" && e.record().handle() == Some(0x500)));
 }

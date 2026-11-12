@@ -13,6 +13,10 @@
 //!   read without holding it; what is left of the part (properties, columns, merged cells,
 //!   validation, and so on) comes back as a tree ([`SheetPart`]).
 //!
+//! Parts are read with fixed prefixes ([`ns`]): the SpreadsheetML main namespace has none
+//! (`sheetData`), the others have theirs whatever the file used (`r:id`, `x14:sparklineGroups`,
+//! `mc:AlternateContent`), so a tree kept from a part can be written back with [`ns::declare`].
+//!
 //! Nothing is interpreted beyond the format: a cell holds a shared-string index and a format
 //! index, a width is in the file's units, a formula is the file's text. Every other part
 //! (drawings, charts, pivot caches, macros) is reachable through [`Package::opc`], so a caller
@@ -45,26 +49,48 @@
 //! # }
 //! ```
 
+mod document;
+mod drawing;
+#[macro_use]
+mod features;
+pub mod ns;
 mod package;
+mod pivot;
+mod richdata;
 mod sheet;
 mod strings;
 mod styles;
 #[doc(hidden)]
 pub mod testing;
 mod workbook;
+mod write;
 mod xlsb;
 
+pub use craft_drawingml;
 pub use craft_sheet::{
     BorderStyle, CellError, CellRef, DEFAULT_PALETTE, HAlign, MAX_COLS, MAX_ROWS, Pattern, Range, Script, Underline, VAlign, Value, Visibility,
     builtin_format, builtin_format_id, quote_sheet, sheet_needs_quotes,
 };
+pub use document::{Document, DrawingPart, KeptPart, PivotCachePart, PivotTablePart, TablePart, Worksheet, XlsxKind};
+pub use drawing::{Anchor, Drawing, Item, Marker, ObjectKind, Placement};
+pub use features::{
+    Break, CfRule, Cfvo, ColorScale, Comment, Comments, ConditionalFormatting, DataBar, DataValidation, DataValidations, Features, HeaderFooter,
+    Hyperlink, IconSet, NoteShape, PageMargins, PageSetup, Pane, Print, PrintOptions, Selection, SheetView, Table, TableColumn, TableStyleInfo,
+    notes_vml, parse_sqref, range_ref,
+};
 pub use package::{Package, is_xlsb};
+pub use pivot::{
+    CacheField, CacheItem, CacheRecord, CacheSource, CacheValue, DataField, FieldGroup, Location, PageField, PivotCacheDefinition, PivotField,
+    PivotItem, PivotTableDefinition, PivotTableStyleInfo, RangePr, SharedItems, WorksheetSource, records_xml,
+};
+pub use richdata::{CellPicture, MAX_PICTURE, MAX_PICTURES_TOTAL, MAX_RECORDS};
 pub use sheet::{Cell, CellFormula, CellValue, Column, FormulaKind, Row, SheetPart, iso_date_serial};
-pub use strings::{PhoneticProps, PhoneticRun, StringItem, TextRun, decode_xstring, encode_xstring, rich_text};
+pub use strings::{PhoneticProps, PhoneticRun, StringItem, TextRun, decode_xstring, encode_xstring, rich_text, t_el};
 pub use styles::{
     Alignment, Border, BorderEdge, CellStyle, Color, ColorSource, Dxf, Fill, Font, FontScheme, GradientFill, PatternFill, Protection, Styles, Xf,
 };
-pub use workbook::{DefinedName, SheetEntry, SheetKind, Workbook};
+pub use workbook::{DefinedName, PivotCacheEntry, SheetEntry, SheetKind, Workbook};
+pub use write::num;
 
 /// Why a workbook could not be read.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

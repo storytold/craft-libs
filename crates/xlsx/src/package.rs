@@ -3,6 +3,12 @@
 use craft_opc::{ContentTypes, LazyPackage, Rels};
 use craft_xml::{El, Options, UnknownEntity};
 
+use craft_drawingml::chart::Chart;
+use craft_drawingml::theme::Theme;
+
+use crate::drawing::Drawing;
+use crate::features::{Comments, NoteShape, Table};
+use crate::pivot::{CacheRecord, PivotCacheDefinition, PivotTableDefinition, read_record};
 use crate::sheet::{Row, RowReader, SheetPart};
 use crate::strings::StringItem;
 use crate::styles::Styles;
@@ -90,10 +96,10 @@ impl<'a> Package<'a> {
         &mut self.opc
     }
 
-    /// The XML options parts are read with: local names, an undefined entity kept as written,
-    /// [`Limits::xml`].
+    /// The XML options parts are read with: the names of [`crate::ns::CANONICAL`], an undefined
+    /// entity kept as written, [`Limits::xml`].
     pub fn xml_options(&self) -> Options<'static> {
-        Options { unknown_entity: UnknownEntity::Literal, ..Options::local() }.with_limits(self.limits.xml)
+        Options { unknown_entity: UnknownEntity::Literal, ..Options::canonical(&crate::ns::CANONICAL) }.with_limits(self.limits.xml)
     }
 
     /// Part `part` as XML; `Ok(None)` when there is no such part.
@@ -255,6 +261,124 @@ impl<'a> Package<'a> {
             SheetPart { part, root: root.unwrap_or_default(), rels, rows: rows.rows, dropped: rows.dropped, damaged, ..SheetPart::default() };
         sheet.lift();
         Ok(sheet)
+    }
+
+    /// The comments of a worksheet read by [`Package::sheet`]; `None` when it has none.
+    pub fn comments(&mut self, sheet: &SheetPart) -> Result<Option<Comments>, Error> {
+        let Some(rel) = sheet.rels.first("comments").filter(|r| !r.external) else { return Ok(None) };
+        Ok(self.optional_xml(&rel.target.clone())?.map(Comments::read))
+    }
+
+    /// The note shapes of a worksheet's legacy VML drawing: how its comments are shown.
+    pub fn note_shapes(&mut self, sheet: &SheetPart) -> Result<Vec<NoteShape>, Error> {
+        let Some(rel) = sheet.rels.first("vmlDrawing").filter(|r| !r.external) else { return Ok(Vec::new()) };
+        Ok(self.optional_xml(&rel.target.clone())?.map(|v| NoteShape::read_all(&v)).unwrap_or_default())
+    }
+
+    /// The drawing part of a worksheet read by [`Package::sheet`]: its name, the drawing, and its
+    /// relationships (charts, pictures). `None` when the sheet has none.
+    pub fn drawing(&mut self, sheet: &SheetPart) -> Result<Option<(String, Drawing, Rels)>, Error> {
+        let Some(rel) = sheet.rels.first("drawing").filter(|r| !r.external) else { return Ok(None) };
+        let part = rel.target.clone();
+        let Some(root) = self.optional_xml(&part)? else { return Ok(None) };
+        let rels = self.rels(&part)?;
+        Ok(Some((part, Drawing::read(&root), rels)))
+    }
+
+    /// The tables of a worksheet read by [`Package::sheet`], in the order of its `tableParts`,
+    /// each with its part name. A table part that does not read is skipped with a warning.
+    pub fn tables(&mut self, sheet: &SheetPart) -> Result<Vec<(String, Table)>, Error> {
+        let mut out = Vec::new();
+        for id in &sheet.features.table_parts {
+            let Some(rel) = sheet.rels.by_id(id).filter(|r| !r.external) else { continue };
+            let part = rel.target.clone();
+            match self.optional_xml(&part)?.map(|t| Table::read(&t)) {
+                Some(Some(t)) => out.push((part, t)),
+                Some(None) => self.warn(format!("skipped {part}: the table has no range")),
+                None => {}
+            }
+        }
+        Ok(out)
+    }
+
+    /// The pivot cache definition in `part` (a workbook relationship that
+    /// [`Workbook::pivot_caches`] names). `None`, with a warning, when it is missing or does not
+    /// read.
+    pub fn pivot_cache(&mut self, part: &str) -> Result<Option<PivotCacheDefinition>, Error> {
+        let Some(x) = self.optional_xml(part)? else { return Ok(None) };
+        let def = PivotCacheDefinition::read(&x);
+        if def.is_none() {
+            self.warn(format!("{part}: a pivot cache this crate does not read (OLAP data, or not a cache definition)"));
+        }
+        Ok(def)
+    }
+
+    /// The records of the pivot cache in `cache_part`, one at a time, so a cache of any size is
+    /// read without holding it. Nothing when it saved none.
+    pub fn pivot_records(&mut self, cache_part: &str, mut each: impl FnMut(CacheRecord) -> Result<(), Error>) -> Result<(), Error> {
+        let rels = self.opc.rels(cache_part)?;
+        let Some(part) = rels.first("pivotCacheRecords").filter(|r| !r.external).map(|r| r.target.clone()) else { return Ok(()) };
+        let Some(bytes) = self.opc.read(&part)? else {
+            self.warn(format!("missing part {part}"));
+            return Ok(());
+        };
+        let (_, err) = self.xml_options().parse_streaming_partial(&bytes, &["r"], |e| each(read_record(&e)).map_err(Stop::Caller));
+        match err {
+            Some(Stop::Caller(e)) => Err(e),
+            Some(Stop::Xml(e)) if e.is_limit() => Err(e.into()),
+            Some(Stop::Xml(e)) => {
+                self.warn(format!("{part} is damaged ({e}); its records were read up to there"));
+                Ok(())
+            }
+            None => Ok(()),
+        }
+    }
+
+    /// The PivotTables of a worksheet read by [`Package::sheet`], each with its part name and
+    /// the part of its cache: the one the table relates to, else the one `workbook` names by
+    /// its `cacheId`. A part that does not read is skipped with a warning.
+    pub fn pivot_tables(&mut self, workbook: &Workbook, sheet: &SheetPart) -> Result<Vec<(String, PivotTableDefinition, Option<String>)>, Error> {
+        let mut out = Vec::new();
+        for rel in sheet.rels.list.iter().filter(|r| r.kind() == "pivotTable" && !r.external) {
+            let Some(x) = self.optional_xml(&rel.target)? else { continue };
+            let Some(table) = PivotTableDefinition::read(&x) else {
+                self.warn(format!("skipped {}: not a PivotTable with a location", rel.target));
+                continue;
+            };
+            let own = self.opc.rels(&rel.target)?.first("pivotCacheDefinition").filter(|r| !r.external).map(|r| r.target.clone());
+            let cache = match own {
+                Some(c) => Some(c),
+                None => {
+                    let book = self.workbook_rels()?;
+                    let entry = workbook.pivot_caches.iter().find(|c| Some(c.cache_id) == table.cache_id);
+                    entry.and_then(|e| book.by_id(&e.rel_id)).filter(|r| !r.external).map(|r| r.target.clone())
+                }
+            };
+            out.push((rel.target.clone(), table, cache));
+        }
+        Ok(out)
+    }
+
+    /// A chart part (`c:chartSpace`, or `cx:chartSpace` of an Office 2016 chart) through
+    /// `craft-drawingml`. `None` when the part is missing or holds no chart it can read.
+    pub fn chart(&mut self, part: &str) -> Result<Option<Chart>, Error> {
+        let Some(bytes) = self.opc.read(part)? else {
+            self.warn(format!("missing part {part}"));
+            return Ok(None);
+        };
+        let chart = craft_drawingml::chart::read::read_chart_xml(&bytes).or_else(|| craft_drawingml::chart::chartex::read_chartex_xml(&bytes));
+        if chart.is_none() {
+            self.warn(format!("skipped {part}: not a chart that can be read"));
+        }
+        Ok(chart)
+    }
+
+    /// The workbook's theme (`a:theme`) through `craft-drawingml`; `None` when it has none.
+    pub fn theme(&mut self) -> Result<Option<Theme>, Error> {
+        let rels = self.workbook_rels()?;
+        let Some(rel) = rels.first("theme").filter(|r| !r.external) else { return Ok(None) };
+        let root = self.optional_xml(&rel.target.clone())?;
+        Ok(root.map(|r| craft_drawingml::theme::read_theme(&mut craft_drawingml::part::NoSource, &r)))
     }
 
     fn required(&mut self, part: &str) -> Result<Vec<u8>, Error> {

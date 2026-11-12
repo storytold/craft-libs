@@ -101,7 +101,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     }
     let mut d = vec![0u16; n];
     crate::unpack::unpack_msb(src, 12, &mut d);
-    let white = crate::shared::white_from_data(&d, 12);
+    let (white, white_source) = crate::shared::white_from_data_sourced(&d, 12);
     let black = BlackLevel::uniform(0.0);
     let data = if mode == Mode::Full { RawData::U16(d) } else { RawData::U16(Vec::new()) };
     let orientation = raw.u16(t::ORIENTATION).or_else(|| tiff.ifds.first().and_then(|i| i.u16(t::ORIENTATION))).unwrap_or(1);
@@ -124,6 +124,8 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         opcodes: OpcodeLists::default(),
         camera: tiff.ifds.first().map(Camera::from_ifd0).unwrap_or_default(),
         cinema: Default::default(),
+        lens_metadata: Default::default(),
+        level_sources: crate::LevelSources { black: crate::LevelSource::Fallback, white: white_source },
         pixel_aspect: 1.0,
     };
     img.validate_for(mode)?;
@@ -217,6 +219,8 @@ mod tests {
         assert_eq!(r.data, RawData::U16(px));
         assert_eq!(r.orientation, Orientation::from_exif(6));
         assert_eq!(r.crop, Rect::new(0, 0, 16, 6));
+        // the format's black is a constant 0; no plateau
+        assert_eq!(r.level_sources, crate::LevelSources { black: crate::LevelSource::Fallback, white: crate::LevelSource::Fallback });
         assert_eq!(crate::probe_info(&f).unwrap(), r.info());
     }
 

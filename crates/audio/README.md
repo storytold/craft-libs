@@ -32,7 +32,7 @@ No default features. The shared types (`AudioBuffer`, `AudioInfo`, `ChannelLayou
 | `lossless-encode` | WAV, AIFF and FLAC writing | `pcm-encode`, `flac-encode` |
 | `pcm-encode` | `encode`, `FileEncoder` for WAV and AIFF; `wav_float_header`; `pcm_wav_file`, `pcm_wav_header`, `pcm_aiff_file`, `pcm_aiff_header` (minimal files around integer PCM bytes, for essence embedded in AAF / OMF) | none |
 | `flac-encode` | `encode`, `FileEncoder` for FLAC; `flac::Encoder`, the packet encoder for callers that mux FLAC themselves | craft-media `bitstream` |
-| `aac-decode`, `aac-encode` | `aac::Decoder`, `aac::Encoder` | craft-media `bitstream` |
+| `aac-decode`, `aac-encode` | `aac::Decoder`, `aac::Encoder`; with `aac-decode`, `aac::latm_config` / `latm_split` for LOAS / LATM frames (AAC in MPEG transport streams) | craft-media `bitstream` |
 | `alac-decode` | `alac::Decoder` | none |
 | `alac-encode` | `alac::Encoder` | none |
 | `opus-decode` | `opus::Decoder`/`StreamDecoder` | none |
