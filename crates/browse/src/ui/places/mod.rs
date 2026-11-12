@@ -25,8 +25,9 @@ use craft_host::target::{Os, Runtime};
 use craft_i18n::Format;
 use craft_ui::contract::{
     ActivateOn, Bind, CollectionEvent, DropAt, DropKind, DropPayload, DropPlace, Entry, NoValue, Outcome, Pattern, Props, Remember as _, SelectMode,
-    Show as _,
+    Show as _, Trigger,
 };
+use craft_ui::contract::overlay::Anchor;
 use craft_ui::contract::{ShowCollection as _, ShowContainer as _};
 use craft_ui::display::Divider;
 use craft_ui::layout_components::Stack;
@@ -162,16 +163,16 @@ impl<'a> RowMenu<'a> {
 ///   one `loading` row; `Failed` shows nothing and the disclosure goes. The open state is the tree's own and lives in
 ///   its container's slot. When the window regains focus the tree calls `FolderCache::refresh`; opening a row calls
 ///   `refresh_folder`. At the end of the pass `FolderCache::finish_pass`.
-/// - **Click.** A click or Enter on a folder reports `Open(path)`; the tree keys of the collection contract open and
-///   close rows.
+/// - **Click.** A click or Enter on a folder reports `Open(path)`; the second click of a double click opens or closes
+///   the row instead, and the tree keys of the collection contract open and close rows.
 /// - **Reveal.** When `current` changes, the rows on the way down to it in the owner root (`Places::owner`, folders
 ///   compared by [`same_folder`] and [`folder_within`]) open once, as their listings arrive, and its row scrolls
 ///   into view; collapsing afterwards sticks. A copy of one folder in two roots opens independently.
 /// - **Menu** (secondary click, Menu key, Shift+F10): on a folder that is not a root `keep` (or `add_favorite` when
 ///   the host shows a Favorites group); on a root `remove`; the reveal item (desktop only), reported as
 ///   [`PlacesEvent::Reveal`]; `clear_recent` in the Recent group; then the host's [`row_menu`](PlacesTree::row_menu)
-///   entries. On the hidden-places row the menu lists the hidden roots and `restore_all`; a click on it with one
-///   hidden root restores it.
+///   entries. On the hidden-places row the menu lists the hidden roots and `restore_all`. A click on that row with
+///   one hidden root restores it; with several it opens the same menu at the row.
 #[must_use = "show the tree with `show`"]
 #[derive(Pattern, Props)]
 pub struct PlacesTree<'a> {
@@ -336,8 +337,8 @@ struct Memory {
     sync: bool,
     /// Whether the window was active in the last pass.
     active: Option<bool>,
-    /// The target of the open context menu.
-    menu: Option<Target>,
+    /// The target of the open menu and where it hangs.
+    menu: Option<(Target, Anchor)>,
 }
 
 /// What the tree reads from the environment, once per pass.
@@ -427,24 +428,37 @@ impl PlacesTree<'_> {
                 }
             });
 
+            let double = out.activation_clicks == 2;
+            let hidden_row = out.shown.iter().find(|row| row.key == RowKey::Hidden).map(|row| row.rect);
             for event in out.events {
                 match event {
+                    CollectionEvent::Activate(RowKey::Folder(at)) if double => {
+                        let key = RowKey::Folder(at);
+                        let wanted = !memory.open.is_open(&key);
+                        apply_open(&mut memory.open, cache, &rows, &key, wanted, false);
+                    }
                     CollectionEvent::Activate(RowKey::Folder(at)) => events.push(PlacesEvent::Open(at.path)),
-                    CollectionEvent::Activate(RowKey::Hidden) => {
-                        if let [only] = places.hidden.as_slice() {
-                            events.push(PlacesEvent::Restore(only.path.clone()));
+                    CollectionEvent::Activate(RowKey::Hidden) => match places.hidden.as_slice() {
+                        [] => {}
+                        [only] => events.push(PlacesEvent::Restore(only.path.clone())),
+                        _ => {
+                            let row = hidden_row.unwrap_or(out.response.rect);
+                            memory.menu = Some((Target::Hidden, Anchor::Rect(row)));
+                        }
+                    },
+                    CollectionEvent::Open(change) => apply_open(&mut memory.open, cache, &rows, &change.key, change.open, change.all),
+                    CollectionEvent::ContextMenu(request) => {
+                        let at_pointer = Anchor::Point(request.at);
+                        match request.key {
+                            RowKey::Folder(at) => {
+                                let root = places.groups.get(at.group).and_then(|group| group.places.iter().find(|place| place.path == at.root));
+                                let root = root.filter(|_| at.path == at.root).map(|place| place.kind);
+                                memory.menu = Some((Target::Folder { path: at.path, root }, at_pointer));
+                            }
+                            RowKey::Hidden => memory.menu = Some((Target::Hidden, at_pointer)),
+                            _ => {}
                         }
                     }
-                    CollectionEvent::Open(change) => apply_open(&mut memory.open, cache, &rows, &change.key, change.open, change.all),
-                    CollectionEvent::ContextMenu(request) => match request.key {
-                        RowKey::Folder(at) => {
-                            let root = places.groups.get(at.group).and_then(|group| group.places.iter().find(|place| place.path == at.root));
-                            let root = root.filter(|_| at.path == at.root).map(|place| place.kind);
-                            memory.menu = Some(Target::Folder { path: at.path, root });
-                        }
-                        RowKey::Hidden => memory.menu = Some(Target::Hidden),
-                        _ => {}
-                    },
                     CollectionEvent::Dropped { at: DropAt::Onto(RowKey::Folder(at)), payload, .. } => {
                         events.push(PlacesEvent::Dropped { place: at.path, payload });
                     }
@@ -452,15 +466,20 @@ impl PlacesTree<'_> {
                 }
             }
 
-            if let Some(target) = memory.menu.clone() {
+            if let Some((target, anchor)) = memory.menu.clone() {
                 let host = match (&target, &row_menu) {
                     (Target::Folder { path, .. }, Some(menu)) => menu.entries(path),
                     _ => Vec::new(),
                 };
                 let mut ran: Vec<Command> = Vec::new();
                 let rows = MenuRows { places, host: &host, words: &words, around: &around, favorites_group };
-                let menu = Menu::context(words.menu.clone(), &out.response).show(ui, |ui, _| rows.show(ui, &target, &mut ran));
-                if menu.output.closed.is_some() {
+                let mut open = true;
+                let menu = Menu::new(words.menu.clone())
+                    .opened_by(&out.response, Trigger::Manual)
+                    .anchor(anchor)
+                    .open(Bind::bound(&mut open))
+                    .show(ui, |ui, _| rows.show(ui, &target, &mut ran));
+                if menu.output.closed.is_some() || !open {
                     memory.menu = None;
                 }
                 events.extend(ran.into_iter().map(into_event));

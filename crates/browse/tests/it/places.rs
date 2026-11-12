@@ -153,3 +153,47 @@ fn a_dragged_row_drops_onto_a_folder_the_host_accepts() {
         );
     }
 }
+
+/// The second click of a double click on a folder opens it, and the next double click closes it again.
+#[trial]
+fn a_double_click_opens_and_closes_a_folder() {
+    let (mut fixture, state) = rig(None, home());
+    let shown = |fixture: &Fixture, name: &str| rows(fixture).iter().any(|row| row == name);
+    let open = shown(&fixture, "Docs");
+    for round in 0..2 {
+        let home = fixture.by_label("Home").expect("the Home row is shown").center();
+        fixture.click_at(home).click_at(home);
+        settle(&mut fixture, &state);
+        let flipped = if round == 0 { !open } else { open };
+        assert_eq!(shown(&fixture, "Docs"), flipped, "double click {} on Home: {:?}", round + 1, rows(&fixture));
+        fixture.advance(1.0).idle(1);
+    }
+}
+
+/// With several hidden roots, a click on the hidden-places row opens the menu of them, whose Restore All reports
+/// `RestoreAll`.
+#[trial]
+fn a_click_on_the_hidden_places_row_opens_their_menu() {
+    let mut places = home();
+    places.hidden = vec![
+        Place { path: path("/home/u/Music"), name: "Music".into(), kind: PlaceKind::Standard(StandardFolder::Music) },
+        Place { path: path("/home/u/Movies"), name: "Movies".into(), kind: PlaceKind::Standard(StandardFolder::Movies) },
+    ];
+    let jobs = Arc::new(ManualJobs::new());
+    let cache = FolderCache::new(Arc::new(fake()), jobs.clone(), Wake::new(|| {}));
+    let state = Rc::new(RefCell::new(Rig { places, cache, jobs, current: None }));
+    let events: Rc<RefCell<Vec<PlacesEvent>>> = Rc::default();
+    let (shown, seen) = (state.clone(), events.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let mut rig = shown.borrow_mut();
+        let Rig { places, cache, .. } = &mut *rig;
+        seen.borrow_mut().extend(PlacesTree::new("Places", places, cache).show(ui).events);
+    });
+    settle(&mut fixture, &state);
+    click_row(&mut fixture, "Show 2 hidden places");
+    fixture.settle();
+    assert!(fixture.by_label("Music").is_some() && fixture.by_label("Movies").is_some(), "the menu lists the hidden roots");
+    let restore = fixture.by_label("Restore All").expect("the menu has Restore All");
+    fixture.click(&restore).settle();
+    assert!(events.borrow().contains(&PlacesEvent::RestoreAll), "{:?}", events.borrow());
+}
