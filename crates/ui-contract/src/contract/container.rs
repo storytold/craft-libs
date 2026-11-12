@@ -644,8 +644,8 @@ pub enum Gap {
 }
 
 /// Set by a bar for its body: its fields put `space.gap.item` between a caption and the control, a vertical divider
-/// takes a box wider than its line, a select fits its widest entry up to a field length, and a
-/// row too long for its room narrows its last units first.
+/// takes a box wider than its line, a select fits its widest entry up to a field length, a rule shows only with the
+/// member after it, and a row too long for its room narrows its last units first.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[doc(hidden)]
 pub struct InBar(pub bool);

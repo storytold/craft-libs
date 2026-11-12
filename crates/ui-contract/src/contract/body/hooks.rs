@@ -852,6 +852,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                             shared_labels(ui, id, columns, room.x, self.settle.clone(), &mut labels, |ui| body(ui, bcx))
                         });
                         Env::restore(&ctx, region_env);
+                        if lays_out {
+                            crate::contract::run::close_bar_line(&ctx, id);
+                        }
                         let extent = region_ui.min_rect().size();
                         if lays_out {
                             let placed = crate::runtime::lazy::placed(&ctx, id);

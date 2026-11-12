@@ -32,8 +32,8 @@ enum Axis {
 }
 
 /// A separator line in the divider colour, snapped to the pixel grid. A horizontal line takes the width it is
-/// offered (at least one control height; in a content-sized column it never widens the column) and a vertical one the height of its row, at least a control's height. Decoration: it is not in the
-/// AccessKit tree.
+/// offered (at least one control height; in a content-sized column it never widens the column) and a vertical one the height of its row, at least a control's height. In a bar it
+/// shows only with the member after it. Decoration: it is not in the AccessKit tree.
 #[derive(crate::contract::Component)]
 pub struct Divider {
     #[common]
@@ -60,6 +60,7 @@ impl Component for Divider {
     const INPUT: craft_behavior::Input = craft_behavior::Input::Display;
     const SHOWS_LABEL: bool = false;
     const OVERLAYS: bool = false;
+    const RULE: bool = true;
     type Style = DividerStyle;
     type Output = Response;
 

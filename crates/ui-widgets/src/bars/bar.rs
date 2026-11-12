@@ -83,7 +83,7 @@ impl Outcome for BarOutput {
 /// member past the edge is reached by Tab and revealed. A member the view shows only in part (a control, or a captioned
 /// field with its caption) is not shown until a scroll brings it in whole. Under right-to-left the bar is the mirror of
 /// left-to-right. A select in a bar fits its widest entry, up to a field length. A rule between groups of members is a
-/// `Divider::vertical()`. A bar with `commit_cancel` ends with a
+/// `Divider::vertical()`; it shows only with the member after it. A bar with `commit_cancel` ends with a
 /// cancel and a commit button in its end region, outside the scroll, `space.gap.stack` from the body and on the
 /// members' line; they run `BarCommands`.
 #[derive(crate::contract::Component)]

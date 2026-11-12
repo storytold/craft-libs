@@ -114,6 +114,7 @@ pub use crate::runtime::drag::{DragPreview, DropMark, DropTarget, OsFile, OsFile
 pub(crate) use body::MOVE_BAND;
 pub use craft_behavior::ColumnKey;
 pub use craft_behavior::DropOperation;
+pub(crate) use run::BarRules;
 pub(crate) use run::measure_under;
 #[cfg(feature = "testing")]
 pub(crate) use steps::queue_reveal;
@@ -352,6 +353,9 @@ pub trait Component: Meta + Sized {
     const BINDS_VIEW: bool = false;
     /// How a disabled instance looks: token states (the default), or its enabled look faded.
     const DISABLED: DisabledLook = DisabledLook::States;
+    /// Whether the component is a rule between groups of members (a divider). In a bar's line a rule shows only when
+    /// the member after it shows: a rule before a member the bar hides, or with no member after it, is taken back.
+    const RULE: bool = false;
 
     /// The style type.
     type Style: ComponentStyle;

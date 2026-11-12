@@ -430,6 +430,8 @@ pub(crate) struct TypeFacts {
     pub binds_view: bool,
     /// `DISABLED` is `Faded`.
     pub faded: bool,
+    /// `RULE`.
+    pub rule: bool,
     /// The style key's type, which `Auto` ids are counted per.
     pub style_key: TypeId,
 }
@@ -448,6 +450,7 @@ impl TypeFacts {
             labelled_after: C::LABELLED_AFTER,
             binds_view: C::BINDS_VIEW,
             faded: C::DISABLED == super::DisabledLook::Faded,
+            rule: C::RULE,
             style_key: TypeId::of::<C::StyleKey>(),
         }
     }
@@ -903,9 +906,16 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     // scroll brings it in whole: it keeps its stop, so Tab reaches it and the reveal scrolls it in. Only a member in
     // flow is judged: a part shown at a rect, and a control in a label scope, belong to the member around them.
     let shown_clip = ui.clip_rect();
-    let cut = e.member() && matches!(at, ShowAt::Flow) && !scope::in_label(&ctx) && cut_by_bar_view(env, hit);
+    let line = if e.member() && matches!(at, ShowAt::Flow) && !scope::in_label(&ctx) { bar_line(env) } else { None };
+    let cut = line.is_some() && cut_by_bar_view(env, hit);
+    // Rules wait for their member only in the run that paints.
+    let line = line.filter(|_| !crate::runtime::measure::active(&ctx));
     if cut {
         ui.set_clip_rect(Rect::NOTHING);
+    }
+    // The rules before a member show with it, or are taken back with it.
+    if let Some(line) = line.filter(|_| !facts.rule) {
+        settle_rules(&ctx, line, cut);
     }
     let sensing::RootResult { mut response, parts: results, press, activation, activated_member, sense: root_sense } =
         sense_root(ui, member, RootSpec { id, rect: hit, own_sense: own, own: decls, enabled }, arena);
@@ -1073,6 +1083,7 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     let mut values = AppValues::default();
     e.content_env(&mut values);
     let unfaded = steps::fade(ui, e.core());
+    let rule_from = line.filter(|_| facts.rule && !cut).map(|line| (line, next_shape(ui)));
     steps::paint_surface(ui, env, e.core_ref(), style);
     steps::paint_part_layers(ui, env, e.core_ref());
     // Paint and content stay inside the rect (grown by the type's declared outset), however small the room is.
@@ -1083,6 +1094,10 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     ui.set_opacity(unfaded);
     ui.set_clip_rect(outer_clip);
     steps::paint_focus(ui, e.core_ref(), style);
+    // A rule a bar's view shows waits for the member after it.
+    if let Some((line, from)) = rule_from {
+        hold_rule(ui, line, from);
+    }
     ui.set_clip_rect(inside);
     // 14 content, then `paint_over`
     if p.trace.mark(Step::Content) {
@@ -1153,6 +1168,65 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     if cut {
         ui.set_clip_rect(shown_clip);
     }
+}
+
+/// The bar line a component in `env` sits in: the scrolling body of a bar, by its id.
+fn bar_line(env: &Env) -> Option<Id> {
+    if !env.values.get::<crate::contract::InBar>().0 {
+        return None;
+    }
+    env.lazy.filter(|view| view.axes.0).map(|view| view.owner)
+}
+
+/// The rules a bar line shows this pass that wait for the member after them: the shapes each painted, by line.
+#[derive(Default)]
+pub(crate) struct BarRules(HashMap<Id, Vec<HeldRule>>);
+
+/// A rule's paint: `shapes` of the paint list of `layer`, in the pass `pass`.
+struct HeldRule {
+    layer: egui::LayerId,
+    shapes: std::ops::Range<usize>,
+    pass: u64,
+}
+
+/// The index the next shape `ui` paints gets in its layer's paint list.
+fn next_shape(ui: &Ui) -> usize {
+    ui.ctx().graphics(|layers| layers.get(ui.layer_id()).map_or(0, |list| list.next_idx().0))
+}
+
+/// Holds the shapes a rule of `line` painted since `from` until the member after it settles them.
+fn hold_rule(ui: &Ui, line: Id, from: usize) {
+    let rule = HeldRule { layer: ui.layer_id(), shapes: from..next_shape(ui), pass: ui.ctx().cumulative_pass_nr() };
+    crate::runtime::pass_state::with::<BarRules, _>(ui.ctx(), |rules| rules.0.entry(line).or_default().push(rule));
+}
+
+/// Settles the rules of `line` that wait for a member: a member shown keeps them, a member `cut` takes them back.
+fn settle_rules(ctx: &Context, line: Id, cut: bool) {
+    let Some(held) = crate::runtime::pass_state::with::<BarRules, _>(ctx, |rules| rules.0.remove(&line)) else { return };
+    if cut {
+        take_back(ctx, &held);
+    }
+}
+
+/// Closes the line of the bar body `line`: a rule no member came after is taken back.
+pub(crate) fn close_bar_line(ctx: &Context, line: Id) {
+    if let Some(held) = crate::runtime::pass_state::with::<BarRules, _>(ctx, |rules| rules.0.remove(&line)) {
+        take_back(ctx, &held);
+    }
+}
+
+/// Empties the shapes of `held` painted this pass. The run record of a settling region is taken when it closes, after
+/// this, so a replay repeats the line as it shows.
+fn take_back(ctx: &Context, held: &[HeldRule]) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.graphics_mut(|layers| {
+        for rule in held.iter().filter(|rule| rule.pass == pass) {
+            let list = layers.entry(rule.layer);
+            for at in rule.shapes.clone() {
+                list.reset_shape(egui::layers::ShapeIdx(at));
+            }
+        }
+    });
 }
 
 /// Whether `rect`, in the scrolling body of a bar, lies partly outside the body's view along x. A member wider than the
