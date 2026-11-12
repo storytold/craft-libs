@@ -88,6 +88,14 @@ pub struct DefinedName {
     pub attrs: Vec<(String, String)>,
 }
 
+/// `<pivotCache>`: a pivot cache of the workbook, by the id its PivotTables name it with.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PivotCacheEntry {
+    pub cache_id: u32,
+    /// The relationship to the cache definition part.
+    pub rel_id: String,
+}
+
 /// The workbook part.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Workbook {
@@ -97,6 +105,8 @@ pub struct Workbook {
     pub defined_names: Vec<DefinedName>,
     /// `activeTab` of the first visible workbook view (of the first view when none is visible).
     pub active_tab: Option<u32>,
+    /// `pivotCaches`, in order.
+    pub pivot_caches: Vec<PivotCacheEntry>,
     /// The whole part, for everything not lifted out above (calculation settings, views,
     /// protection, pivot caches, external references). Empty for a binary workbook.
     pub root: El,
@@ -136,6 +146,12 @@ impl Workbook {
                 });
             }
         }
+        if let Some(caches) = root.child("pivotCaches") {
+            wb.pivot_caches = caches
+                .children("pivotCache")
+                .filter_map(|c| Some(PivotCacheEntry { cache_id: c.attr_u32("cacheId")?, rel_id: c.attr_or_plain("r:id")?.to_string() }))
+                .collect();
+        }
         if let Some(views) = root.child("bookViews") {
             let view = views
                 .children("workbookView")
@@ -149,8 +165,8 @@ impl Workbook {
 
     /// The workbook part's root: `sheets` and `definedNames` regenerated from the fields, the
     /// date system set in `workbookPr` and the active tab in the view it was read from;
-    /// everything else in [`Workbook::root`] as kept. Each sheet's `r:id` is written as
-    /// [`SheetEntry::rel_id`] holds it.
+    /// `pivotCaches` from [`Workbook::pivot_caches`]; everything else in [`Workbook::root`] as
+    /// kept. Each sheet's `r:id` is written as [`SheetEntry::rel_id`] holds it.
     pub fn to_el(&self) -> El {
         let root = if self.root.name.is_empty() { El::new("workbook") } else { self.root.clone() };
         let mut pr = root.child("workbookPr").cloned().unwrap_or_else(|| El::new("workbookPr"));
@@ -195,6 +211,16 @@ impl Workbook {
             ("bookViews", views),
             ("sheets", Some(sheets)),
             ("definedNames", (!self.defined_names.is_empty()).then_some(names)),
+            (
+                "pivotCaches",
+                (!self.pivot_caches.is_empty()).then(|| {
+                    let mut e = El::new("pivotCaches");
+                    self.pivot_caches
+                        .iter()
+                        .for_each(|c| e.push(El::new("pivotCache").with_attr("cacheId", c.cache_id).with_attr("r:id", &c.rel_id)));
+                    e
+                }),
+            ),
         ];
         assemble(&root, WORKBOOK, owned)
     }
