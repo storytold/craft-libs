@@ -252,6 +252,28 @@ fn a_write_against_the_current_generation_succeeds_and_advances_it() {
 }
 
 #[test]
+fn refreshing_an_account_does_not_steal_activation_from_another() {
+    let dir = tempfile::tempdir().unwrap();
+    let keychain = Memory::new();
+    let store = Store::at(Some(dir.path().to_path_buf()), keychain.clone());
+    let a = store.sign_in(&new_account(), &Secret::new("a-token"), NOW).unwrap();
+    let elsewhere = NewAccount { service: "https://other.example.com".to_owned(), ..new_account() };
+    let b = store.sign_in(&elsewhere, &Secret::new("b-token"), NOW + 1).unwrap();
+    assert_eq!(store.accounts().unwrap().active.as_deref(), Some(b.id.as_str()), "B is the one picked by signing in last");
+
+    store.update_token(&a.id, a.generation, &Secret::new("a-token-refreshed"), NOW + 2).unwrap();
+
+    assert_eq!(store.accounts().unwrap().active.as_deref(), Some(b.id.as_str()), "refreshing A in the background must not steal B's selection");
+    match store.shared() {
+        Shared::Session { account, token } => {
+            assert_eq!(account.id, b.id);
+            assert_eq!(token, Secret::new("b-token"));
+        }
+        other => panic!("expected B's session, got {other:?}"),
+    }
+}
+
+#[test]
 fn a_write_against_an_unknown_account_says_so_rather_than_claiming_a_stale_generation() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::at(Some(dir.path().to_path_buf()), Memory::new());
@@ -616,6 +638,58 @@ fn unreadable_json_does_not_stop_an_application_starting() {
     std::fs::write(dir.path().join(paths::FILE), b"this is not JSON").unwrap();
     let store = Store::at(Some(dir.path().to_path_buf()), Memory::new());
     assert!(matches!(store.shared(), Shared::None));
+}
+
+#[test]
+fn a_format_of_zero_is_refused_rather_than_silently_accepted() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(paths::FILE);
+    std::fs::write(&path, br#"{"format":0,"accounts":[],"active":null,"tombstones":[]}"#).unwrap();
+    assert!(matches!(accounts::read(&path), Err(Error::Malformed(_))));
+}
+
+#[test]
+fn a_missing_format_marker_is_refused_rather_than_silently_accepted() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(paths::FILE);
+    // No `format` key at all: `#[serde(default)]` would otherwise read this exactly as it reads
+    // an explicit `"format":0` above. Both would have passed the old `> FORMAT` check.
+    std::fs::write(&path, br#"{"accounts":[],"active":null,"tombstones":[]}"#).unwrap();
+    assert!(matches!(accounts::read(&path), Err(Error::Malformed(_))));
+}
+
+#[test]
+fn the_one_supported_format_still_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(paths::FILE);
+    let body = format!(r#"{{"format":{},"accounts":[],"active":null,"tombstones":[]}}"#, accounts::FORMAT);
+    std::fs::write(&path, body.as_bytes()).unwrap();
+    assert!(accounts::read(&path).is_ok());
+}
+
+#[test]
+fn a_read_error_does_not_name_the_profile_folder_it_lives_under() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("Users").join("a-real-persons-name").join(paths::DIR);
+    std::fs::create_dir_all(&home).unwrap();
+    let path = home.join(paths::FILE);
+    std::fs::write(&path, b"this is not JSON").unwrap();
+
+    let message = accounts::read(&path).unwrap_err().to_string();
+    assert!(!message.contains("a-real-persons-name"), "the profile folder leaked into the error: {message}");
+    assert!(message.contains(paths::FILE), "the error should still say which file: {message}");
+}
+
+#[test]
+fn an_oversized_file_error_does_not_name_the_profile_folder_either() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("Users").join("another-real-name").join(paths::DIR);
+    std::fs::create_dir_all(&home).unwrap();
+    let path = home.join(paths::FILE);
+    std::fs::write(&path, vec![b'x'; 2 << 20]).unwrap();
+
+    let message = accounts::read(&path).unwrap_err().to_string();
+    assert!(!message.contains("another-real-name"), "the profile folder leaked into the error: {message}");
 }
 
 // ---- taking over a per-application session file ----------------------------

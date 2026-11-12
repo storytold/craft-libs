@@ -284,6 +284,11 @@ impl<S: TokenStore> Store<S> {
 
     /// Writes a refreshed token back, honouring the account's generation.
     ///
+    /// Updates this account's row in place. It never changes which account is active. A refresh
+    /// runs in the background for whichever account needs one, including one the person did not
+    /// select. It must never steal the selection away from the account they actually picked.
+    /// [`Store::sign_in`] and [`Store::set_active`] are the only calls that change `active`.
+    ///
     /// `expected_generation` is the generation the caller last read the account at. A sign-in or a
     /// removal bumps the generation (see [`Account::generation`]); a refresh that was already in
     /// flight when one of those landed is then refused rather than silently overwriting something
@@ -327,7 +332,9 @@ impl<S: TokenStore> Store<S> {
                     let mut updated = account.clone();
                     updated.generation = updated.generation.checked_add(1).ok_or_else(|| Error::GenerationExhausted(id.to_owned()))?;
                     updated.last_used = now;
-                    list.put(updated.clone());
+                    // Not `list.put`: a refresh is maintenance, never a reason to make this the
+                    // account a person selected. See [`accounts::Accounts::refresh_in_place`].
+                    list.refresh_in_place(id, updated.clone());
                     accounts::write(&path, &list)?;
                     Ok(updated)
                 }
