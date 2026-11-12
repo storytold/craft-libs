@@ -650,12 +650,15 @@ fn metadata(ctx: &Context<'_>) -> (Option<Vec<u8>>, Option<String>) {
     (exif, xmp.map(|x| x.trim_end_matches('\0').to_string()))
 }
 
-#[cfg(all(test, feature = "decode"))]
+#[cfg(test)]
+#[cfg(feature = "decode")]
 mod tests_icc;
-#[cfg(all(test, feature = "decode"))]
+#[cfg(test)]
+#[cfg(feature = "decode")]
 mod tests_synthetic;
 
-#[cfg(all(test, feature = "decode"))]
+#[cfg(test)]
+#[cfg(feature = "decode")]
 mod tests {
     use super::*;
 
