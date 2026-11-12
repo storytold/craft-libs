@@ -441,7 +441,7 @@ impl Component for TextRuler<'_> {
             marker_height: tokens.size.handle.sm,
             stem: tokens.size.handle.sm,
             foot: tokens.size.handle.sm,
-            dot: tokens.stroke.thick,
+            dot: tokens.stroke.thin,
             grip_gap: tokens.space.gap.tight,
             grip_reach: tokens.size.handle.sm,
             length: tokens.size.length.track,
