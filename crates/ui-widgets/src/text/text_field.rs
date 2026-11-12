@@ -45,6 +45,10 @@ pub struct TextField<'a, C: Codec + Clone + 'static = PlainText> {
     /// the id the collection is built with (`Props::id`), so a pattern can name a collection it shows after the field.
     #[prop]
     drives: Option<Id>,
+    /// Takes the room its row leaves after the other members, instead of its ideal width: a search field before a
+    /// count.
+    #[prop]
+    fill_width: bool,
 }
 
 impl<'a> TextField<'a, PlainText> {
@@ -78,6 +82,7 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
             leading: Vec::new(),
             arrow: false,
             drives: None,
+            fill_width: false,
         }
         .label(label)
     }
@@ -235,6 +240,10 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
 
     fn sense(&self) -> Sense {
         Sense::CLICK | Sense::FOCUS | Sense::TAKE_FOCUS
+    }
+
+    fn fills(&self) -> Option<craft_behavior::Axis> {
+        self.fill_width.then_some(craft_behavior::Axis::X)
     }
 
     /// The text, and the room the adornments take; a search field keeps the room of its clear button while the text is
