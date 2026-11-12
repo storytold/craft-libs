@@ -358,6 +358,69 @@ fn a_stale_refresh_racing_a_discard_and_re_sign_in_does_not_delete_the_new_sessi
     assert_eq!(keychain.get(&s2.id).unwrap(), Some(Secret::new("session-2")));
 }
 
+#[test]
+fn sign_in_restores_its_token_when_a_concurrent_discard_takes_it_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let keychain = Memory::new();
+    let plain = Store::at(Some(dir.path().to_path_buf()), keychain.clone());
+    let first = plain.sign_in(&new_account(), &Secret::new("session-1"), NOW).unwrap();
+
+    /// Fires once, on this sign-in's own first token write, before it asks for the accounts
+    /// lock: runs a full discard for the same handle, taking the entry this call just wrote with
+    /// it and leaving a tombstone behind it. By the time the sign-in reaches its own lock, the
+    /// row it is about to commit has no keychain entry behind it unless something restores one.
+    ///
+    /// Armed for a single call only. The fix's own re-assertion put runs inside the lock and must
+    /// land plainly. Firing discard again from inside it would try to take the same accounts
+    /// lock this call already holds. That is the lock module's own deadlock case. This test
+    /// means to cover a different race, the one between two separate lock holders.
+    struct DiscardAfterPut {
+        inner: Memory,
+        dir: PathBuf,
+        id: String,
+        fired: std::sync::atomic::AtomicBool,
+    }
+    impl TokenStore for DiscardAfterPut {
+        fn available(&self) -> Result<(), String> {
+            self.inner.available()
+        }
+        fn get(&self, h: &str) -> Result<Option<Secret>, String> {
+            self.inner.get(h)
+        }
+        fn put(&self, h: &str, t: &Secret) -> Result<(), String> {
+            let r = self.inner.put(h, t);
+            if !self.fired.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                Store::at(Some(self.dir.clone()), self.inner.clone()).discard(&self.id).unwrap();
+            }
+            r
+        }
+        fn remove(&self, h: &str) -> Result<(), String> {
+            self.inner.remove(h)
+        }
+    }
+
+    let racing = Store::at(
+        Some(dir.path().to_path_buf()),
+        DiscardAfterPut {
+            inner: keychain.clone(),
+            dir: dir.path().to_path_buf(),
+            id: first.id.clone(),
+            fired: std::sync::atomic::AtomicBool::new(false),
+        },
+    );
+    let account = racing.sign_in(&new_account(), &Secret::new("session-2"), NOW + 10).unwrap();
+
+    assert_eq!(account.id, first.id, "the same deployment and subject is the same handle");
+    assert!(
+        keychain.has(&account.id),
+        "a discard landed between this sign-in's own token write and its row commit; the row this call reported Ok for must not be left without a token"
+    );
+    match Store::at(Some(dir.path().to_path_buf()), keychain.clone()).shared() {
+        Shared::Session { token, .. } => assert_eq!(token, Secret::new("session-2")),
+        other => panic!("expected a session, got {other:?}"),
+    }
+}
+
 // ---- generations never wrap ------------------------------------------------
 
 /// What a crafted accounts file at the limit looks like: one account, holding `generation`.

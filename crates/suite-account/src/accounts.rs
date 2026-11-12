@@ -202,7 +202,15 @@ pub fn read(path: &Path) -> Result<Accounts, Error> {
     Ok(parsed)
 }
 
-/// Writes the file through a temporary file and a rename. A crash then never leaves half of one.
+/// Writes the file through a temporary file and a rename. The rename is atomic: a reader never
+/// sees a half-written file, only the previous write or this one, never a mix of both.
+///
+/// That atomicity is not durability. The temporary file is flushed to disk with `sync_all` before
+/// the rename. The rename itself then never promotes data the disk has not actually taken yet.
+/// Without that flush, power loss right after the rename could still leave an empty or truncated
+/// file on a filesystem that reorders writes behind a rename. [`read`] would then answer
+/// [`Error::Malformed`] forever. Every mutation here reads the file first. There would be
+/// nothing left to repair it with.
 ///
 /// Readable by this user alone where the platform has file modes. The file holds no token. It does
 /// say who is signed in. That is nobody else's business.
@@ -239,6 +247,7 @@ pub fn write(path: &Path, accounts: &Accounts) -> Result<(), Error> {
             .open(&tmp)
             .map_err(|e| Error::Io(format!("couldn't create {} ({e})", tmp.display())))?;
         file.write_all(&json).map_err(|e| Error::Io(format!("couldn't write {} ({e})", tmp.display())))?;
+        file.sync_all().map_err(|e| Error::Io(format!("couldn't flush {} ({e})", tmp.display())))?;
     }
     #[cfg(not(unix))]
     {
@@ -246,6 +255,7 @@ pub fn write(path: &Path, accounts: &Accounts) -> Result<(), Error> {
         let mut file =
             OpenOptions::new().write(true).create_new(true).open(&tmp).map_err(|e| Error::Io(format!("couldn't create {} ({e})", tmp.display())))?;
         file.write_all(&json).map_err(|e| Error::Io(format!("couldn't write {} ({e})", tmp.display())))?;
+        file.sync_all().map_err(|e| Error::Io(format!("couldn't flush {} ({e})", tmp.display())))?;
         restrict(&tmp)?;
     }
     std::fs::rename(&tmp, path).map_err(|e| Error::Io(format!("couldn't replace {} ({e})", path.display())))
