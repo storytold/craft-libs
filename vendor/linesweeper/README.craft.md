@@ -13,8 +13,11 @@ holds `upstream_revision`. `local_patches` describes each local change.
 
 ## Local changes
 
+Two files differ from the package: `src/sweep/sweep_line.rs` and `src/segments.rs`.
+
 | Change | Code comment label | Touches | Tests |
 |---|---|---|---|
+| The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out | `Craft patch (exited slots)` | `src/sweep/sweep_line.rs` | none |
 | `Segments::add_points` skips a point equal to the one before it, as the closed-polyline path does, so it adds no zero-length segment | `Craft patch (repeated points)` | `src/segments.rs` | `segments::tests::add_points_skips_repeated_points` |
 
 Every change here updates this table and `SOURCE.json` in the same commit.

@@ -1,0 +1,71 @@
+[package]
+name = "craft-odf"
+description = "OpenDocument packages: the ZIP container with its mimetype and manifest, password protection (AES-256-CBC, PBKDF2) and flat single-file documents, read and written."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-xml = { workspace = true }
+thiserror = { workspace = true }
+# `test-support`: `zip_guard::zip64_entry_count_sample` is public here.
+craft-zip = { workspace = true, features = ["test-support"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+base64 = "0.23"
+# Password-protected packages (ODF 1.3 Part 2 section 3.4): AES-256-CBC, SHA-1/SHA-256, PBKDF2
+# (HMAC-SHA-1).
+aes = "0.9"
+sha1 = "0.11"
+sha2 = "0.11"
+hmac = "0.13"
+getrandom = "0.3"
+zeroize = "1"
+
+[features]
+# ODT documents: read into and written from the craft-flow model and a craft-wordmodel Document.
+text = ["dep:craft-flow", "dep:craft-wordmodel", "dep:craft-math", "dep:craft-metafile", "dep:image", "dep:chrono", "dep:log", "dep:js-sys"]
+
+[dependencies.craft-flow]
+workspace = true
+optional = true
+
+[dependencies.craft-wordmodel]
+workspace = true
+optional = true
+
+[dependencies.craft-math]
+workspace = true
+optional = true
+
+[dependencies.craft-metafile]
+workspace = true
+optional = true
+
+[dependencies.image]
+version = "0.25"
+default-features = false
+features = ["png"]
+optional = true
+
+[dependencies.chrono]
+workspace = true
+optional = true
+
+[dependencies.log]
+version = "0.4"
+optional = true
+
+[dev-dependencies]
+# The tests build archives, hostile ones included, by hand.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+# The browser clock for tracked-change dates (`text` feature; `SystemTime::now()` panics there).
+js-sys = { version = "0.3", optional = true }
+# The browser's `crypto.getRandomValues` for the salts and vectors of encrypted saves.
+getrandom = { version = "0.3", features = ["wasm_js"] }
