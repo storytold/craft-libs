@@ -168,22 +168,26 @@ pub struct HalfSegmentWindingNumbers<W: WindingNumber> {
     pub clockwise: W,
 }
 
-/// Craft patch (work limit): the output units a topology has used and the most it may use.
-/// Each output segment takes one unit plus the storage units of its two winding numbers.
+/// Craft patch (work limit): the output units a topology has used and the most it may use, if
+/// it has a limit. Each output segment takes one unit plus the storage units of its two winding
+/// numbers.
 struct OutputLimit {
     used: usize,
-    limit: usize,
+    limit: Option<usize>,
 }
 
 impl OutputLimit {
     /// Takes the units of a new output segment with `windings`, or returns `false` and takes
-    /// nothing if they would pass the limit.
+    /// nothing if they would pass the limit. Without a limit it counts nothing.
     fn take<W: WindingNumber>(&mut self, windings: &HalfSegmentWindingNumbers<W>) -> bool {
+        let Some(limit) = self.limit else {
+            return true;
+        };
         let units = 1usize
             .saturating_add(windings.clockwise.storage_units())
             .saturating_add(windings.counter_clockwise.storage_units());
         match self.used.checked_add(units) {
-            Some(used) if used <= self.limit => {
+            Some(used) if used <= limit => {
                 self.used = used;
                 true
             }
@@ -582,7 +586,7 @@ impl<W: WindingNumber> Topology<W> {
     where
         Iter: IntoIterator<Item = (&'a BezPath, W::Tag)>,
     {
-        Self::from_paths_with_limits(paths, eps, work_limit, usize::MAX)
+        Self::from_paths_with_optional_limits(paths, eps, work_limit, None)
     }
 
     /// [`Topology::from_paths_with_work_limit`], which also returns
@@ -598,6 +602,19 @@ impl<W: WindingNumber> Topology<W> {
         eps: f64,
         work_limit: u64,
         output_limit: usize,
+    ) -> Result<Self, crate::Error>
+    where
+        Iter: IntoIterator<Item = (&'a BezPath, W::Tag)>,
+    {
+        Self::from_paths_with_optional_limits(paths, eps, work_limit, Some(output_limit))
+    }
+
+    /// Builds the topology with a work limit and, if given, an output limit in units.
+    fn from_paths_with_optional_limits<'a, Iter>(
+        paths: Iter,
+        eps: f64,
+        work_limit: u64,
+        output_limit: Option<usize>,
     ) -> Result<Self, crate::Error>
     where
         Iter: IntoIterator<Item = (&'a BezPath, W::Tag)>,
@@ -620,14 +637,14 @@ impl<W: WindingNumber> Topology<W> {
     }
 
     /// Returns [`crate::Error::WorkLimitExceeded`] if `limits` is given and the sweep does
-    /// more work than its first value, or the topology's output would pass its second value
-    /// in units.
+    /// more work than its first value, or its second value is given and the topology's output
+    /// would pass it in units.
     fn from_segments(
         segments: Segments,
         tag: SegVec<W::Tag>,
         eps: f64,
         correctness: Correctness,
-        limits: Option<(u64, usize)>,
+        limits: Option<(u64, Option<usize>)>,
     ) -> Result<Self, crate::Error> {
         let mut ret = Self {
             eps,
@@ -649,7 +666,7 @@ impl<W: WindingNumber> Topology<W> {
             segments: Segments::default(),
         };
         let mut sweep_state = Sweeper::new_with_correctness(&segments, eps, correctness);
-        let mut output = OutputLimit { used: 0, limit: usize::MAX };
+        let mut output = OutputLimit { used: 0, limit: None };
         if let Some((work_limit, output_limit)) = limits {
             sweep_state.set_work_limit(work_limit);
             output.limit = output_limit;
@@ -2860,6 +2877,53 @@ mod tests {
         let exact = Topology::<i32>::from_paths_with_limits(tagged(), 1e-6, u64::MAX, 3 * all).unwrap();
         assert_eq!(exact.winding.inner.len(), all);
         let result = Topology::<i32>::from_paths_with_limits(tagged(), 1e-6, u64::MAX, 3 * all - 1);
+        assert_eq!(result.err(), Some(crate::Error::WorkLimitExceeded));
+    }
+
+    // Craft patch (work limit). A winding number may report any storage size;
+    // constructors without an output limit do not count it.
+    #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+    struct HugeWinding(i32);
+
+    impl std::ops::Add for HugeWinding {
+        type Output = Self;
+        fn add(self, rhs: Self) -> Self {
+            HugeWinding(self.0 + rhs.0)
+        }
+    }
+
+    impl std::ops::AddAssign for HugeWinding {
+        fn add_assign(&mut self, rhs: Self) {
+            self.0 += rhs.0;
+        }
+    }
+
+    impl super::WindingNumber for HugeWinding {
+        type Tag = ();
+        fn single((): (), positive: bool) -> Self {
+            HugeWinding(if positive { 1 } else { -1 })
+        }
+        fn of_tag(&self, (): ()) -> Self {
+            self.clone()
+        }
+        fn storage_units(&self) -> usize {
+            usize::MAX
+        }
+    }
+
+    #[test]
+    fn unlimited_constructors_ignore_storage_units() {
+        let mut square = BezPath::new();
+        square.move_to((0.0, 0.0));
+        square.line_to((1.0, 0.0));
+        square.line_to((1.0, 1.0));
+        square.line_to((0.0, 1.0));
+        square.close_path();
+        let paths = [(&square, ())];
+
+        assert!(Topology::<HugeWinding>::from_paths(paths, 1e-6).is_ok());
+        assert!(Topology::<HugeWinding>::from_paths_with_work_limit(paths, 1e-6, u64::MAX).is_ok());
+        let result = Topology::<HugeWinding>::from_paths_with_limits(paths, 1e-6, u64::MAX, usize::MAX);
         assert_eq!(result.err(), Some(crate::Error::WorkLimitExceeded));
     }
 
