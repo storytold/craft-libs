@@ -42,8 +42,9 @@ written back as it was read.
 `write(doc)`, `write_as(doc, Flavor)` for `.docx`, `.docm`, `.dotx` and `.dotm`; `write_flat`
 and `write_wordml2003` for the XML forms; `encrypt` for a password.
 
+Equations (OMML) are read and written by `craft_math::omml`.
+
 ## Not here yet
 
 - DrawingML (`a:`) shape fills, lines, custom geometry and colours are still read with this
   crate's own code; they move to `craft-drawingml`.
-- Equations (OMML) are read and written by this crate; they move to `craft-math`.

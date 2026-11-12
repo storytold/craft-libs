@@ -401,6 +401,20 @@ fn from_tree(e: craft_xml::El) -> El {
     El { name: e.name, attrs: e.attrs, kids }
 }
 
+/// This module's tree as `craft-xml`'s, for the shared readers (`craft-drawingml`, `craft-math`)
+/// that take one. Both use the canonical prefixes.
+// shortcut: copies the subtree; goes when the reader reads craft_xml::El directly.
+pub(crate) fn to_craft(e: &El) -> craft_xml::El {
+    let mut out = craft_xml::El { name: e.name.clone(), attrs: e.attrs.clone(), children: Vec::with_capacity(e.kids.len()) };
+    for k in &e.kids {
+        out.children.push(match k {
+            Node::El(c) => craft_xml::Node::El(to_craft(c)),
+            Node::Text(t) => craft_xml::Node::Text(t.clone()),
+        });
+    }
+    out
+}
+
 /// Is `c` allowed in XML 1.0 text?
 fn xml_char_ok(c: char) -> bool {
     matches!(c, '\t' | '\n' | '\r' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..='\u{10FFFF}')
