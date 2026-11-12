@@ -17,6 +17,9 @@
 //! * [`text`], [`smart`] and [`adjust`] are read-only views of the blocks a viewer needs: a type
 //!   layer's text and style, a smart object's placement, warp and embedded file, an adjustment
 //!   layer's settings, a fill layer's colour and the layer effects.
+//! * [`PsdFile::composite_f32`] and [`PsdFile::layer_f32`] decode to straight RGBA `f32` in
+//!   every colour mode and depth, within a memory budget; [`smart::SmartObject::render_placed`]
+//!   bakes a warped or perspective placement.
 //!
 //! Implemented clean-room from Adobe's public "Photoshop File Formats
 //! Specification". Undocumented details that follow MIT-licensed psd-tools
@@ -64,6 +67,7 @@ pub mod file;
 pub mod filter_effects;
 #[cfg(any(test, feature = "testgen"))]
 pub mod fixtures;
+pub mod float;
 pub mod grd;
 pub mod hdr;
 pub mod header;
@@ -96,6 +100,7 @@ pub use compression::{Compression, PlaneLayout};
 pub use descriptor::{Descriptor, VersionedDescriptor};
 pub use error::{PsdError, Result};
 pub use file::{GlobalLayerMask, LayerInfoPlacement, PsdFile};
+pub use float::FloatImage;
 pub use header::{ColorMode, Header, Version};
 pub use image_data::ImageData;
 pub use layer::{BlendingRanges, ChannelData, LayerFlags, LayerInfo, LayerMask, LayerRecord, MaskData, MaskParameters, RealMask, Rect};
