@@ -18,4 +18,19 @@ unique across a presentation; `Presentation::alloc_id` hands out fresh ones and 
 run out. `Presentation::default()` is an empty 16:9 deck with no masters: an application adds its
 own starting masters and layouts.
 
-The reader and writer come in later changes.
+## Reading
+
+`import(bytes, &defaults)` reads a `.pptx`, `.potx` or `.ppsx` into a `Presentation`, on
+`craft-opc` for the package and `craft-drawingml` for the DrawingML. It is lenient: unknown parts
+are skipped, a malformed part is logged and left out, and a slide the presentation lists but the
+package lacks is left out and named by `import_checked`. Everything is bounded: entries, part and
+package sizes, inflate work, XML depth and nodes, shapes per part, group nesting, chart points and
+decoded chart bytes, kept chart parts, and add-in tag bytes (`MAX_TAG_BYTES`).
+
+What the file leaves out comes from the caller's `Defaults`: the master for a file without a
+readable one, and the theme of a master that names none. `Plain` has no application's look in it.
+`import_theme` reads the theme of a `.thmx`, or of a presentation's first master. `sniff` tells a
+package from other bytes.
+
+Not read yet (later changes): transitions and animations, speaker notes, comments. The writer
+comes later too.

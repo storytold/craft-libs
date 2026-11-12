@@ -1670,9 +1670,13 @@ name = "craft-pptx"
 version = "0.1.0"
 dependencies = [
  "craft-drawingml",
+ "craft-opc",
+ "craft-xml",
  "kurbo 0.13.1",
+ "log",
  "serde",
  "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
