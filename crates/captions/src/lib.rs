@@ -43,7 +43,7 @@ pub use craft_timeline::time;
 pub mod ttml;
 pub mod vtt;
 
-pub use text::plain_text;
+pub use text::{decode_entities, entity_at, plain_text};
 pub use time::{FrameRate, TICKS_PER_SECOND, Tick};
 
 /// The creating program MCC and EBU STL files name when the caller gives none.

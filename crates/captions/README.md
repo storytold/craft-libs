@@ -144,3 +144,22 @@ Text is encoded in ISO/IEC 6937 (character code table `00`). Characters it has n
 the ellipsis, the em dash, the euro sign and most scripts other than Latin, are written as `?`;
 `charset_warnings` names each one with how often it occurs and the first caption that has it, at the
 STL file's own time code.
+
+### TTML inherited text styles
+
+On import, italic, bold and underline styles from `<body>`, `<p>` and timed `<span>` roots appear in
+the cue text as balanced `<i>`, `<b>` and `<u>` tags. Descendant overrides and explicit
+`normal` / `noUnderline` resets are kept, and `inherit` restores the parent value. Styling
+attributes are read from the TTML styling namespaces (and those of the 2006 drafts), with
+unqualified attributes as a compatibility fallback; other namespaces are ignored. Named-style
+chaining and `xml:space="preserve"` are not supported. The inline text collector does not
+recurse. Content style inheritance follows [W3C TTML1, second edition (2013)](https://www.w3.org/TR/2013/REC-ttml1-20130924/#semantics-style-inheritance-content).
+
+### Literal text and style markup
+
+Cue text combines style tags with character entities, as WebVTT does. The TTML and EBU STL
+readers keep a literal `<` as `&lt;` (and a literal `&` that would read as an entity as `&amp;`),
+so it never turns into a tag. The TTML and STL writers decode the eight entities `entity_at`
+knows: `&amp;`, `&lt;`, `&gt;`, `&nbsp;`, `&quot;`, `&apos;`, `&lrm;` and `&rlm;`; other named
+entities and numeric references stay literal. The SRT writer keeps stored entities next to real
+style tags, so a reimport does not turn a literal bracket into markup.
