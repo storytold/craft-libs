@@ -7,7 +7,9 @@ use craft_behavior::{EditEvent, EditEvents, Metrics, Mixed, NumberCodec};
 use craft_theme::variant::Tone;
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, Common, Component, Cx, Entry, MeasureCx, PaintUi, Props as _, Role, Show as _, ShowContainer as _, clicked};
+use craft_ui::contract::{
+    Bind, Common, Component, Cx, Entry, FieldLayout, MeasureCx, PaintUi, Props as _, Role, Show as _, ShowContainer as _, SideLabel, Sizing, clicked,
+};
 use craft_ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::Row;
@@ -18,7 +20,7 @@ use craft_ui::runtime::env::{Env, Label, Units};
 use craft_ui::runtime::words::CommonWords;
 use craft_ui::sections::{DialogRole, FooterButton, GroupBox};
 use craft_ui::style::{ComponentStyle, StyleColor, StyleCx, SurfaceKind, TypeRole};
-use craft_ui::text::NumberField;
+use craft_ui::text::{NumberField, NumberOutput};
 use egui::{Pos2, Rect, Ui, Vec2, pos2, vec2};
 use std::cell::Cell;
 
@@ -408,7 +410,13 @@ impl TextColumnsDialog {
         words.spacing_range.fill(&[("min", &show(0.0)), ("max", &show(MAX_SPACING))])
     }
 
-    /// One width or spacing field of the grid, named `caption`; its event in points.
+    /// One width or spacing field, named `caption`.
+    fn length_cell(&self, caption: &str, points: Option<f32>, enabled: bool, range: std::ops::RangeInclusive<f32>) -> NumberField<'static> {
+        let points = points.map_or(Mixed::Mixed, |p| Mixed::Same(Some(f64::from(p))));
+        length_field(self.unit, caption.to_owned(), points, f64::from(*range.start())..=f64::from(*range.end())).enabled(enabled)
+    }
+
+    /// One width or spacing field, named `caption`; its events in points.
     fn length_row(
         &self,
         ui: &mut Ui,
@@ -417,9 +425,7 @@ impl TextColumnsDialog {
         enabled: bool,
         range: std::ops::RangeInclusive<f32>,
     ) -> EditEvents<Option<f32>> {
-        let points = points.map_or(Mixed::Mixed, |p| Mixed::Same(Some(f64::from(p))));
-        let field = length_field(self.unit, caption.to_owned(), points, f64::from(*range.start())..=f64::from(*range.end())).enabled(enabled);
-        field.show(ui).edit.events.map(|v| v.map(|p| p as f32))
+        in_points(self.length_cell(caption, points, enabled, range).show(ui))
     }
 
     fn body(&mut self, ui: &mut Ui, words: &TextColumnsWords, units: &Units, valid: &Cell<bool>) {
@@ -456,8 +462,10 @@ impl TextColumnsDialog {
             Row::new().show(ui, |ui, _| {
                 GroupBox::new(words.width_and_spacing.clone(), None).show(ui, |ui, _| self.grid(ui, words, units));
                 let text_width = self.word.unwrap_or(0.0);
-                let preview = ColumnsPreview::new(words.preview.clone(), self.rows(), text_width, self.edited.line_between == Some(true));
-                preview.show(ui);
+                let line_between = self.edited.line_between == Some(true);
+                Field::new(words.preview.clone()).layout(FieldLayout::Above).sizing(Sizing::Content).show(ui, |ui, _| {
+                    ColumnsPreview::new(words.preview.clone(), self.rows(), text_width, line_between).show(ui);
+                });
             });
             let equal = self.edited.equal_width.map_or(Mixed::Mixed, Mixed::Same);
             if let Some(on) = Checkbox::new(Bind::given(equal)).label(words.equal_width.clone()).show(ui).value().copied() {
@@ -526,7 +534,7 @@ impl TextColumnsDialog {
         }
     }
 
-    /// One row per column: its number, then its width and the spacing after it.
+    /// One row per column: its number, then its width and the spacing after it, each behind its caption.
     fn grid(&mut self, ui: &mut Ui, words: &TextColumnsWords, units: &Units) {
         let rows = self.rows();
         let equal = self.equal();
@@ -538,8 +546,16 @@ impl TextColumnsDialog {
             let label = words.column.fill(&[("n", &number)]);
             let last = i + 1 == rows.len();
             Field::new(label).show(ui, |ui, _| {
-                let w = self.length_row(ui, width_name, Some(*width), !equal || i == 0, 0.0..=MAX_SPACING);
-                let s = self.length_row(ui, spacing_name, (!last).then_some(*spacing), !last, 0.0..=MAX_SPACING);
+                let (w, s) = Row::new()
+                    .show(ui, |ui, cx| {
+                        let width_field = self.length_cell(width_name, Some(*width), !equal || i == 0, 0.0..=MAX_SPACING);
+                        let w = in_points(cx.labelled(ui, "width", Label::from(width_name.to_owned()), SideLabel::new(), width_field));
+                        let spacing_field = self.length_cell(spacing_name, (!last).then_some(*spacing), !last, 0.0..=MAX_SPACING);
+                        let s = in_points(cx.labelled(ui, "spacing", Label::from(spacing_name.to_owned()), SideLabel::new(), spacing_field));
+                        (w, s)
+                    })
+                    .inner
+                    .unwrap_or_default();
                 // A run of a row without events leaves the events an earlier run of it reported alone.
                 if !w.is_empty() {
                     width_edits.retain(|(row, _)| *row != i);
@@ -566,6 +582,11 @@ impl TextColumnsDialog {
             });
         }
     }
+}
+
+/// A length field's events in points.
+fn in_points(out: NumberOutput) -> EditEvents<Option<f32>> {
+    out.edit.events.map(|v| v.map(|p| p as f32))
 }
 
 /// A caption without its trailing colon: the name of a field whose row label carries the colon.

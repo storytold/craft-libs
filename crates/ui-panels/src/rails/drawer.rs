@@ -285,11 +285,11 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
                                     row = row.icon(IconSpec::svg(IconId::from(icon.clone())));
                                 }
                                 if on_toolbar(toolbar, &groups[group].tools[tool].id) {
-                                    row.ink(RowInk::Dimmed).trailing(words.in_toolbar.clone())
-                                } else if let Some(chord) = chord_of(command) {
-                                    row.trailing(chord)
-                                } else {
-                                    row
+                                    row = row.ink(RowInk::Dimmed).description(words.in_toolbar.as_str());
+                                }
+                                match chord_of(command) {
+                                    Some(chord) => row.trailing(chord),
+                                    None => row,
                                 }
                             }
                         });
