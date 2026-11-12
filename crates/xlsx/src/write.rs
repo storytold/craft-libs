@@ -21,18 +21,19 @@ pub fn num(n: f64) -> String {
 
 /// `root` with the children named in `owned` regenerated. Each `(name, new)` takes the place
 /// of the first child of that name, and later children of that name are dropped; when `root`
-/// has none, `new` goes where `order` (the schema's sequence) puts it. `None` removes the
-/// child. Every other child stays where it is, so elements the schema does not list
+/// has none, `new` goes where `order` (the schema's sequence) puts it. No element (`None`)
+/// removes the children; several (repeated blocks) go in a row. Every other child stays where it is, so elements the schema does not list
 /// (`mc:AlternateContent`) keep their place.
-pub(crate) fn assemble(root: &El, order: &[&str], mut owned: Vec<(&str, Option<El>)>) -> El {
+pub(crate) fn assemble<I: IntoIterator<Item = El>>(root: &El, order: &[&str], owned: Vec<(&str, I)>) -> El {
+    let mut owned: Vec<(&str, Vec<El>)> = owned.into_iter().map(|(n, e)| (n, e.into_iter().collect())).collect();
     let pos = |n: &str| order.iter().position(|o| *o == n).unwrap_or(order.len());
     owned.sort_by_key(|(n, _)| pos(n));
     // The children of `root` each owned name replaces, so a regenerated one is not also written
     // where `order` would put it.
     let present: Vec<&str> = owned.iter().map(|(n, _)| *n).filter(|n| root.child(*n).is_some()).collect();
     let mut out = El { name: root.name.clone(), attrs: root.attrs.clone(), children: Vec::new() };
-    let mut pending: Vec<(&str, Option<El>)> = Vec::new();
-    let mut later: Vec<(&str, Option<El>)> = Vec::new();
+    let mut pending: Vec<(&str, Vec<El>)> = Vec::new();
+    let mut later: Vec<(&str, Vec<El>)> = Vec::new();
     for (n, e) in owned {
         if present.contains(&n) { later.push((n, e)) } else { pending.push((n, e)) }
     }
@@ -47,12 +48,12 @@ pub(crate) fn assemble(root: &El, order: &[&str], mut owned: Vec<(&str, Option<E
             // Missing children that come before this one.
             while pending.first().is_some_and(|(n, _)| pos(n) < p) {
                 let (_, e) = pending.remove(0);
-                out.children.extend(e.map(Node::El));
+                out.children.extend(e.into_iter().map(Node::El));
             }
         }
         if let Some(i) = later.iter().position(|(n, _)| *n == c.name) {
             let (n, e) = later.remove(i);
-            out.children.extend(e.map(Node::El));
+            out.children.extend(e.into_iter().map(Node::El));
             done.push(n);
             continue;
         }
@@ -61,7 +62,7 @@ pub(crate) fn assemble(root: &El, order: &[&str], mut owned: Vec<(&str, Option<E
         }
         out.children.push(node.clone());
     }
-    out.children.extend(pending.into_iter().filter_map(|(_, e)| e).map(Node::El));
+    out.children.extend(pending.into_iter().flat_map(|(_, e)| e).map(Node::El));
     out
 }
 
@@ -148,9 +149,9 @@ mod tests {
         let out = assemble(
             &root,
             &order,
-            vec![("c", Some(El::new("c").with_attr("new", 1))), ("b", Some(El::new("b"))), ("d", Some(El::new("d"))), ("a", None)],
+            vec![("c", vec![El::new("c").with_attr("new", 1), El::new("c")]), ("b", vec![El::new("b")]), ("d", vec![El::new("d")]), ("a", vec![])],
         );
-        assert_eq!(out.to_xml(), r#"<w><mc:AlternateContent/><b/><c new="1"/><d/><ext/></w>"#);
+        assert_eq!(out.to_xml(), r#"<w><mc:AlternateContent/><b/><c new="1"/><c/><d/><ext/></w>"#);
         let empty = assemble(&El::new("w"), &order, vec![("d", Some(El::new("d"))), ("a", Some(El::new("a")))]);
         assert_eq!(empty.to_xml(), "<w><a/><d/></w>");
     }
