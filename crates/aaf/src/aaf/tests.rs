@@ -472,3 +472,12 @@ fn audio_tracks_keep_their_names() {
         assert_eq!(back.compositions[0].tracks[1].name, name);
     }
 }
+
+#[test]
+fn relative_media_locator_round_trips_escaped_characters() {
+    let mut doc = document();
+    doc.sources[0].path = Some("Audio Files/100%20 #1.wav".into());
+    let bytes = written(&doc, false);
+    let got = read_clean(&bytes);
+    assert!(got.sources.iter().any(|s| s.path.as_deref() == Some("Audio Files/100%20 #1.wav")));
+}

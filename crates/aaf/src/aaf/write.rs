@@ -793,7 +793,11 @@ fn descriptor(w: &mut W, s: &Source) -> Obj {
     d.set(pid::FILE_LENGTH, Value::Data(len.to_le_bytes().to_vec()));
     d.set(pid::CONTAINER_FORMAT, weak(path::CONTAINER_DEFS, container));
     if let Some(p) = &s.path {
-        let url = if craft_timeline::path::is_absolute(p) { craft_timeline::path::path_to_file_url(p, false) } else { p.clone() };
+        let url = if craft_timeline::path::is_absolute(p) {
+            craft_timeline::path::path_to_file_url(p, false)
+        } else {
+            craft_timeline::path::encode_uri_path(p)
+        };
         d.set(pid::LOCATOR, Value::StrongVec(vec![Obj::new(cls::NETWORK_LOCATOR).data_prop(pid::URL_STRING, utf16z(&url))]));
     }
     d
