@@ -66,6 +66,22 @@ fn nikon_color_space(bytes: &[u8], tiff: &Tiff, exif: &Ifd, make: &str) -> Optio
     }
 }
 
+/// Whether the camera optimised its embedded JPEG's dynamic range with local tone mapping that the raw data doesn't
+/// carry: Sony's Dynamic Range Optimizer (maker note `0xb025`). Such a JPEG is brighter in its darker regions than
+/// the raw developed with the camera's global tone curve. `Some(false)` when the file says it was off, `None` when
+/// it doesn't say (other makers, notes without the tag, undocumented values).
+#[cfg(feature = "arw")]
+pub fn embedded_preview_dynamic_range_optimized(bytes: &[u8]) -> Option<bool> {
+    let tiff = Tiff::parse(bytes).ok()?;
+    let make = tiff.ifds.first()?.string(t::MAKE)?;
+    if !make.trim().to_ascii_uppercase().starts_with("SONY") {
+        return None;
+    }
+    let e = tiff.exif()?.get(t::MAKER_NOTE)?;
+    let mn = makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &make)?;
+    crate::arw::dynamic_range_optimizer(&mn)
+}
+
 /// The first frame (SOF) marker of a JPEG and its position, from the marker segments before the first scan.
 fn first_frame(b: &[u8]) -> Option<(u8, usize)> {
     first_frame_within(b, &mut { usize::MAX })

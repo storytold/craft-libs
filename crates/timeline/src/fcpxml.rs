@@ -1325,7 +1325,7 @@ mod tests {
 <asset-clip ref="a1" offset="3600s" duration="5s"><marker start="1s" duration="1/25s" value="m"/></asset-clip></spine></sequence></project></event></library></fcpxml>"#
             );
             let mut report = Report::default();
-            let iopts = ImportOptions { base_dir: None, catalog: &crate::fx::Standard, namespace: "test" };
+            let iopts = ImportOptions { base_dir: None, name: None, catalog: &crate::fx::Standard, namespace: "test" };
             let imported = import(&xml, &iopts, &mut report).expect("import succeeds");
             let xopts = ExportOptions {
                 relative_to: None,

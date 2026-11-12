@@ -229,6 +229,21 @@ fn parse_forms() {
     assert!(parse_timecode("abc", r, false, 0).is_err());
 }
 
+/// Overflowing fields carry into the next one before drop-frame counting, so `01;00;00;30` is the
+/// frame `01;00;01;00` names rather than a non-drop count; non-drop overflow is counted as before.
+#[test]
+fn overflowing_drop_frame_fields_carry_before_counting() {
+    let df = FrameRate::FPS_29_97;
+    // (typed, the label it reads as)
+    let cases = [("01;00;00;30", "01;00;01;00"), ("00;09;59;45", "00;10;00;15"), ("00;00;90;00", "00;01;30;00"), ("01;75;00;02", "02;15;00;02")];
+    for (typed, label) in cases {
+        let f = parse_timecode(typed, df, true, 0).unwrap();
+        assert_eq!((f, format_timecode_frames(f, df, true)), (parse_timecode(label, df, true, 0).unwrap(), label.to_string()), "{typed}");
+    }
+    assert_eq!(parse_timecode("00:00:00:90", FrameRate::FPS_25, false, 0).unwrap(), 90);
+    assert_eq!(parse_timecode("00:00:00:90", df, false, 0).unwrap(), 90);
+}
+
 #[test]
 fn signed_field_rejected() {
     let r = FrameRate::FPS_25;
@@ -484,4 +499,22 @@ proptest! {
         let txt = format_timecode_frames(f, r, false);
         prop_assert_eq!(parse_timecode(&txt, r, false, 0).unwrap(), f);
     }
+}
+
+/// At 11 fps a frame is not a whole number of ticks, so the ticks from one boundary to the next
+/// can read as zero frames; counting between frame indices gives one.
+#[test]
+fn frames_between_counts_boundaries_at_fractional_tick_rates() {
+    let r = FrameRate::new(11, 1);
+    for f in 0..1000 {
+        for n in 1..=12 {
+            let (a, b) = (r.tick_of(f), r.tick_of(f + n));
+            assert_eq!(r.frames_between(a, b), n, "frames {f}..{}", f + n);
+        }
+    }
+    assert_eq!(r.frame_at(Tick(r.tick_of(2).0 - r.tick_of(1).0)), 0, "the length alone reads one short");
+    // frame indices that span the whole integer range saturate instead of overflowing
+    let fast = FrameRate::new(i64::MAX, 1);
+    assert_eq!(fast.frames_between(Tick(i64::MIN), Tick(i64::MAX)), i64::MAX);
+    assert_eq!(fast.frames_between(Tick(i64::MAX), Tick(i64::MIN)), i64::MIN);
 }
