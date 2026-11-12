@@ -85,7 +85,7 @@ LayerInfo::unpadded_len(version), LayerInfo::pad_to(version, 4)   // Photoshop p
 // Image resources
 ImageResource { signature, id, name, data };  ImageResource::parsed() -> Option<Result<ResourceData>>
 ResourceData::{ResolutionInfo, LayerState, LayerGroupInfo, Thumbnail, GlobalAngle, IccProfile,
-               GlobalAltitude, VersionInfo, Exif, Xmp, TimelineInfo, Animation}
+               GlobalAltitude, VersionInfo, Exif, Xmp, TimelineInfo, Animation, LayerSelectionIds}
 
 // Legacy animation syntax (no playback/document-model dependency)
 animation::AnimationResource::from_bytes / to_bytes  // maniIRFR; ordered raw records
@@ -125,7 +125,7 @@ testgen::{all_cases, merged_only, layered, small, sample_descriptor, pattern_pla
 |---|:-:|:-:|:-:|---|
 | Header, PSD v1 / PSB v2 | ✓ | ✓ | ✓ | depth 1/8/16/32; all 8 color modes plus `Unknown` |
 | Color mode data | ✓ | ✓ | raw | indexed palette is used by `composite_rgba8` |
-| Image resources | ✓ | ✓ | partial | 1005, 1024, 1026, 1033/1036 (raw), 1037, 1039, 1049, 1057, 1058, 1060 |
+| Image resources | ✓ | ✓ | partial | 1005, 1024, 1026, 1033/1036 (raw), 1037, 1039, 1049, 1057, 1058, 1060, 1069 |
 | Layer records | ✓ | ✓ | ✓ | flags, clipping, filler, blending ranges (raw + accessor) |
 | Layer masks | ✓ | ✓ | ✓ | 20 / 36-byte forms, mask parameters, real mask; unparseable masks stay raw |
 | Channel ids -1 / -2 / -3 | ✓ | ✓ | ✓ | per-channel rect via `channel_rect` |
