@@ -3,7 +3,7 @@
 use craft_behavior::{EditEvent, HitLevel, HitPriority, Mixed, PartKey, Sense};
 use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, Overlay, OverlayUi, Overlays as _, PaintUi, PartsCx,
-    Props as _, Role, Show as _, WordSetCx as _,
+    Props as _, Role, Show as _, Sizing, WordSetCx as _,
 };
 use craft_ui::display::Text;
 use craft_ui::list::ThumbAspect;
@@ -99,7 +99,7 @@ pub struct StrokeButton<'a> {
 }
 
 impl<'a> StrokeButton<'a> {
-    /// A button named `label` over `value`; `open` follows whether the popover is open.
+    /// A button named `label` over `value`, as wide as its widest face; `open` follows whether the popover is open.
     pub fn new(label: impl Into<Label>, value: Bind<'a, StrokeStyle>, open: Bind<'a, bool>) -> Self {
         StrokeButton {
             common: Common::new(),
@@ -112,6 +112,7 @@ impl<'a> StrokeButton<'a> {
             stroked: true,
         }
         .label(label)
+        .sizing(Sizing::Content)
     }
 
     /// The name the face shows for `style`.
