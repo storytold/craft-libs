@@ -94,9 +94,6 @@ pub struct Slider<'a> {
     track_face: Option<TrackFace<'a>>,
     /// The kept part of the range, its ends drawn across the track ([`Slider::trim`]).
     trim: Option<(f64, f64)>,
-    /// Takes the width its row offers past its length: a seek track along the rest of a bar.
-    #[prop]
-    fill_width: bool,
 }
 
 /// The shape of a slider's thumb.
@@ -129,7 +126,6 @@ impl<'a> Slider<'a> {
             value_text: None,
             track_face: None,
             trim: None,
-            fill_width: false,
         }
     }
 
@@ -194,10 +190,6 @@ impl Component for Slider<'_> {
             length,
             trim: cx.color(cx.tokens.color.status.warn.fg),
         }
-    }
-
-    fn fills(&self) -> Option<craft_behavior::Axis> {
-        self.fill_width.then_some(craft_behavior::Axis::X)
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {

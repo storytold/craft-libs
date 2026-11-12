@@ -19,7 +19,7 @@ use craft_theme::{Rgba, Srgba};
 use craft_ui::choice::Swatch;
 #[cfg(feature = "font-picker")]
 use craft_ui::contract::Bind;
-use craft_ui::contract::{Entry, GlyphLabel, LabelKind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, SideLabel};
+use craft_ui::contract::{Entry, GlyphLabel, LabelKind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing};
 use craft_ui::form::Field;
 use craft_ui::layout_components::{Grid, Stack};
 use craft_ui::patterns::form_dialogs::HostRequests;
@@ -563,7 +563,7 @@ impl<'a> CharacterControls<'a> {
                 let side = SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(words.color.clone())));
                 let well = Field::new(words.text_color.clone())
                     .side(side)
-                    .show(ui, |ui, _| Swatch::new(words.text_color.clone(), color).picker(COLOR_KEY).fill().show(ui).pick_color);
+                    .show(ui, |ui, _| Swatch::new(words.text_color.clone(), color).picker(COLOR_KEY).sizing(Sizing::FillWidth).show(ui).pick_color);
                 if let Some(request) = well.inner.flatten() {
                     requests.request_color(request);
                 }

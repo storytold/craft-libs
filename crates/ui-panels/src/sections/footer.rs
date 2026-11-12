@@ -628,12 +628,11 @@ impl FooterBar {
                         DialogRole::Destructive => Variant::DANGER,
                         DialogRole::Cancel | DialogRole::Other => Variant::SECONDARY,
                     };
-                    let mut widget = Button::new(button.label.clone())
-                        .painted(labels[at].clone())
-                        .variant(variant)
-                        .enabled(button.enabled)
-                        .fill_width(column)
-                        .least_width(least);
+                    let mut widget =
+                        Button::new(button.label.clone()).painted(labels[at].clone()).variant(variant).enabled(button.enabled).least_width(least);
+                    if column {
+                        widget = widget.sizing(Sizing::FillWidth);
+                    }
                     let tip = if button.enabled { button.tooltip.clone() } else { button.disabled_reason.clone().or_else(|| button.tooltip.clone()) };
                     if let Some(tip) = tip {
                         widget = widget.tooltip(TooltipSpec::new(tip.clone()).disabled_text(tip));

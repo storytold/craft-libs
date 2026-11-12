@@ -7,7 +7,7 @@ use craft_behavior::{EditEvents, IconId};
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::buttons::{Button, IconButton, ToggleButton};
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, BodyCx, Held, NoValue, Outcome, Pattern, PopupKind, Props, Show as _, ShowContainer as _, clicked};
+use craft_ui::contract::{Bind, BodyCx, Held, NoValue, Outcome, Pattern, PopupKind, Props, Show as _, ShowContainer as _, Sizing, clicked};
 use craft_ui::display::{Divider, Text};
 use craft_ui::layout::RowAlign;
 use craft_ui::popover::Popover;
@@ -375,7 +375,8 @@ impl MediaControls {
                 nudge = Some(NUDGE);
             }
             let range = if playable { 0.0..=duration } else { 0.0..=1.0 };
-            let mut slider = Slider::new(Bind::given(position), range).step(NUDGE).fill_width(true).enabled(playable).label(words.seek.clone());
+            let mut slider =
+                Slider::new(Bind::given(position), range).step(NUDGE).sizing(Sizing::FillWidth).enabled(playable).label(words.seek.clone());
             if let Some((start, end)) = trim.filter(|_| playable) {
                 slider = slider.trim(start, end);
             }

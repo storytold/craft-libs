@@ -5,7 +5,7 @@ use craft_theme::{ColorModel, HsbModel, OklchModel, RgbModel, Srgba};
 use craft_ui::choice::{Checkbox, Radio, RadioGroup, Swatch};
 use craft_ui::contract::{
     Bind, Common, Component, Cx, GlyphLabel, LabelKind, LabelScheme, MeasureCx, Outcome, PaintUi, Props as _, Role, Show as _, ShowContainer as _,
-    SideLabel,
+    SideLabel, Sizing,
 };
 use craft_ui::display::{Icon, Shade, Text};
 use craft_ui::form::{Field, FieldGroup};
@@ -204,9 +204,9 @@ impl<'a> Body<'a> {
         let caption = |text: &str| Text::new(text.to_owned()).role(TypeRole::Caption).shade(Shade::Muted);
         Stack::new().show(ui, |ui, _| {
             caption(words.new_caption.as_str()).show(ui);
-            Swatch::new(words.new_color.as_str().to_owned(), pass.shows(pass.shown.color)).fill().show(ui);
+            Swatch::new(words.new_color.as_str().to_owned(), pass.shows(pass.shown.color)).sizing(Sizing::FillWidth).show(ui);
             let restore = words.restore.as_str().to_owned();
-            if Swatch::new(restore.clone(), current).tooltip(restore).fill().show(ui).clicked
+            if Swatch::new(restore.clone(), current).tooltip(restore).sizing(Sizing::FillWidth).show(ui).clicked
                 && let Mixed::Same(current) = current
             {
                 got.clicks.push(current);

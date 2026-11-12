@@ -81,7 +81,10 @@ impl<C: Component> Erased for Typed<'_, '_, C> {
     }
 
     fn take_common(&mut self) -> Common {
-        std::mem::take(self.comp.get().common_mut(Internal::new()))
+        let common = std::mem::take(self.comp.get().common_mut(Internal::new()));
+        // The sizing stays with the component: the layout hooks after step 1 read it through `Component::fills`.
+        self.comp.get().common_mut(Internal::new()).sizing = common.sizing;
+        common
     }
 
     fn variants(&self, asked: Option<Variant>) -> (Variant, Variant) {

@@ -144,10 +144,6 @@ pub struct Button<'a> {
     #[style_key]
     #[prop]
     tint: Option<Rgba>,
-    /// Takes the width its column offers; in a column sized from its content, the width of the widest member, so a
-    /// column of buttons shares one width.
-    #[prop]
-    fill_width: bool,
     /// The least width, from a size role (a dialog's footer buttons); a longer label is wider.
     #[style_key]
     #[prop]
@@ -168,7 +164,6 @@ impl<'a> Button<'a> {
             loading: false,
             painted: None,
             tint: None,
-            fill_width: false,
             least_width: None,
             align: HAlign::Center,
         }
@@ -213,10 +208,6 @@ impl Component for Button<'_> {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         face::measure(cx, &self.spec(cx.resolved.label))
-    }
-
-    fn fills(&self) -> Option<craft_behavior::Axis> {
-        self.fill_width.then_some(craft_behavior::Axis::X)
     }
 
     fn sense(&self) -> Sense {

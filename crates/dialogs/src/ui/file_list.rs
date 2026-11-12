@@ -6,7 +6,7 @@ use craft_host::{PickId, PickKind, PickRequest};
 use craft_ui::buttons::Button;
 use craft_ui::contract::{
     Bind, BodyCx, CollectionEvent, Entry, Held, NoValue, Outcome, Pad, Props as _, Remember as _, ReorderRule, SelectMode, Show as _,
-    ShowCollection as _, ShowContainer as _, clicked,
+    ShowCollection as _, ShowContainer as _, Sizing, clicked,
 };
 use craft_ui::display::{Shade, Text};
 use craft_ui::form::Field;
@@ -205,7 +205,7 @@ impl<'a> FileListPicker<'a> {
                 let (mut browse, mut remove, mut add_open, mut sort) = (false, false, false, false);
                 Stack::new().show(ui, |ui, _| {
                     let button = |ui: &mut Ui, label: &Label, key: &'static str, enabled: bool| {
-                        clicked(&Button::new(label.clone()).enabled(enabled).fill_width(true).id_salt(key).show(ui))
+                        clicked(&Button::new(label.clone()).enabled(enabled).sizing(Sizing::FillWidth).id_salt(key).show(ui))
                     };
                     browse = button(ui, &words.browse, "browse", true);
                     remove = button(ui, &words.remove, "remove", !folder && now.selected.is_some());

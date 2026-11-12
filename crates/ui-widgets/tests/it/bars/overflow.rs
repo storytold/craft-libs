@@ -8,7 +8,7 @@ use craft_i18n::Direction;
 use craft_theme::ControlSize;
 use craft_ui::bars::{Bar, BarItem, BarItems, BarKind, ConstraintFields, ItemDisplay};
 use craft_ui::buttons::{Button, IconButton};
-use craft_ui::contract::{Bind, Entry, Lazy, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Entry, Lazy, Props as _, Show as _, ShowContainer as _, Sizing};
 use craft_ui::display::{Divider, Text};
 use craft_ui::form::Field;
 use craft_ui::pickers::Select;
@@ -90,7 +90,7 @@ fn filled(width: f32) -> (Rect, Rect) {
         let (mut slider, mut readout) = (Rect::NOTHING, Rect::NOTHING);
         Bar::new("Media", BarKind::Tool).show(ui, |ui, _| {
             IconButton::new(IconId::new("play")).label("Play").show(ui);
-            slider = Slider::new(Bind::given(2.0), 0.0..=10.0).fill_width(true).label("Seek").show(ui).response.rect;
+            slider = Slider::new(Bind::given(2.0), 0.0..=10.0).sizing(Sizing::FillWidth).label("Seek").show(ui).response.rect;
             readout = Text::new("0:12.50").show(ui).rect;
         });
         out.set((slider, readout));

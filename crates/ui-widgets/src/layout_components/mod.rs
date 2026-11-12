@@ -226,7 +226,7 @@ impl<'a> Stack<'a> {
     }
 
     /// The footer stands in a column at the end edge, beside the body and at its top, as wide as its widest child;
-    /// a child that fills the width (`Button::fill_width`) takes that width. Set it after [`footer`](Stack::footer).
+    /// a child that fills the width (a button with `Sizing::FillWidth`) takes that width. Set it after [`footer`](Stack::footer).
     #[must_use]
     pub fn footer_beside(mut self) -> Self {
         self.props.end = Some(EndRegion::new());

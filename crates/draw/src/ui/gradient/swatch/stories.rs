@@ -3,7 +3,7 @@
 use super::GradientSwatch;
 use crate::ui::gradient::{ColorStop, GradientStops, OpacityStop, StopRows};
 use craft_theme::Srgba;
-use craft_ui::contract::{Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Props as _, Show as _, ShowContainer as _, Sizing};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::runtime::env::Env;
@@ -50,7 +50,7 @@ fn gradient_swatch(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
                 clicked |= GradientSwatch::new(name, stops).rows(rows).has_popup().show(ui).clicked;
                 Text::new(name).shade(Shade::Muted).show(ui);
             });
-            clicked |= GradientSwatch::new(name, stops).rows(rows).fill().show(ui).clicked;
+            clicked |= GradientSwatch::new(name, stops).rows(rows).sizing(Sizing::FillWidth).show(ui).clicked;
         }
     });
     if clicked {

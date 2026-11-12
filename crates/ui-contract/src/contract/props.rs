@@ -113,8 +113,8 @@ pub trait Props: Meta + Sized {
 
     /// How the component takes its size. A container or collection takes it over its own default (`ContainerProps`).
     /// A leaf with `Sizing::Content` is as wide as its content, without the ideal width its style asks for where the
-    /// room allows (a field's `size.length.field`); a leaf otherwise keeps that width, and fills only along the axis
-    /// its `Component::fills` names.
+    /// room allows (a field's `size.length.field`); a leaf otherwise keeps that width, and with `Sizing::FillWidth` it
+    /// takes the room its row leaves after the other members, or the width its column offers (`Component::fills`).
     fn sizing(mut self, sizing: Sizing) -> Self {
         self.set_sizing(sizing, Internal::new());
         self

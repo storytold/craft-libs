@@ -4,7 +4,7 @@
 mod stories;
 
 use crate::buttons::Button;
-use crate::contract::{Bind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, clicked};
+use crate::contract::{Bind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, Sizing, clicked};
 use crate::layout_components::Row;
 use crate::runtime::env::{Env, Label};
 use crate::text::TextField;
@@ -68,7 +68,7 @@ impl<'a> PathRow<'a> {
         let mut edit = EditEvents::new();
         let mut browse = false;
         let shown = Row::new().show(ui, |ui, _| {
-            let mut field = TextField::new(name.clone(), value.reborrowed()).fill_width(true).id_salt("path");
+            let mut field = TextField::new(name.clone(), value.reborrowed()).sizing(Sizing::FillWidth).id_salt("path");
             if let Some(placeholder) = placeholder.clone() {
                 field = field.placeholder(placeholder);
             }

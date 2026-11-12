@@ -5,7 +5,7 @@ use super::radio::RadioKind;
 use super::words::ChoiceWords;
 use crate::contract::{
     Access, Activation, Common, Component, Cx, DisabledLook, GroupHandle, MeasureCx, Meta as _, Outcome, PaintUi, Pointer as _, Props as _, Role,
-    Styled as _, WordSetCx as _,
+    Sizing, Styled as _, WordSetCx as _,
 };
 use crate::primitives::{ContentPainterCx, Draw, PaintShape, StrokeWidth};
 use crate::runtime::requests::ColorRequest;
@@ -140,9 +140,6 @@ pub struct Swatch<T: Value + 'static = ()> {
     #[style_key]
     #[prop(flag)]
     well: bool,
-    /// Takes the width the layout offers, at the control height.
-    #[prop(flag)]
-    fill: bool,
     /// A thin edge in the text colour just inside the outline.
     #[prop(flag)]
     marked: bool,
@@ -162,7 +159,6 @@ impl Swatch<()> {
             member: None,
             cell: false,
             well: false,
-            fill: false,
             marked: false,
             picker: None,
             checked: false,
@@ -181,7 +177,6 @@ impl<T: Value + 'static> Swatch<T> {
             member: Some(value),
             cell: self.cell,
             well: self.well,
-            fill: self.fill,
             marked: self.marked,
             picker: self.picker,
             checked: false,
@@ -220,12 +215,12 @@ impl<T: Value + 'static> Component for Swatch<T> {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let side = cx.style.side;
-        let width = if self.fill { cx.room.filter(|room| room.is_finite()).map_or(side, |room| room.max(side)) } else { side };
+        let width = if cx.resolved.sizing() == Some(Sizing::FillWidth) {
+            cx.room.filter(|room| room.is_finite()).map_or(side, |room| room.max(side))
+        } else {
+            side
+        };
         Vec2::new(width, side)
-    }
-
-    fn fills(&self) -> Option<craft_behavior::Axis> {
-        self.fill.then_some(craft_behavior::Axis::X)
     }
 
     fn sense(&self) -> Sense {

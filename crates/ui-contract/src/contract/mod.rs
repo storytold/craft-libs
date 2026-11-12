@@ -390,9 +390,10 @@ pub trait Component: Meta + Sized {
     }
 
     /// The axis along which the component takes all the room the flow offers when that is more than it measured,
-    /// as a container with `Sizing::Fill` does: a vertical rule fills its row's height.
+    /// as a container with `Sizing::Fill` does: the width when its caller set `Sizing::FillWidth` (a search field
+    /// before a count). A component that fills by what it is overrides it: a vertical rule fills its row's height.
     fn fills(&self) -> Option<craft_behavior::Axis> {
-        None
+        (self.common(Internal::new()).sizing == Some(Sizing::FillWidth)).then_some(craft_behavior::Axis::X)
     }
 
     /// Whether the content is made to be cut where it does not fit: an elided line or a path. In a row too short for

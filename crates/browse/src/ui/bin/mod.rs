@@ -697,7 +697,7 @@ where
                     TextField::search(words.search.clone(), Bind::bound(&mut local.search))
                         .placeholder(words.search.clone())
                         .drives(list_id)
-                        .fill_width(true)
+                        .sizing(Sizing::FillWidth)
                         .show(ui);
                     if local.search != typed {
                         events.push(BinEvent::Search(local.search.clone()));

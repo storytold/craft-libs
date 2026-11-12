@@ -6,7 +6,7 @@ use craft_theme::variant::Tone;
 use craft_ui::buttons::Button;
 use craft_ui::contract::{
     Bind, CollectionEvent, ColumnKey, ColumnKind, ColumnSpec, ListDrag, OpenChange, Outcome as _, Pad, Props as _, ReorderMove, ReorderRule, Scroll,
-    SelectMode, Show as _, ShowCollection as _, ShowContainer as _, SpaceAction, ToggleColumn, ToggleEdit, request_rename,
+    SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing, SpaceAction, ToggleColumn, ToggleEdit, request_rename,
 };
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};
@@ -119,7 +119,7 @@ fn show_buttons(ui: &mut Ui, body: &Body<'_>) -> BodyOutput {
             }
             for &index in actions {
                 let Some(action) = list.action(index) else { continue };
-                let mut button = Button::new(action.name.clone()).fill_width(true).align(HAlign::Start);
+                let mut button = Button::new(action.name.clone()).sizing(Sizing::FillWidth).align(HAlign::Start);
                 if let Some(color) = action.color.label_color() {
                     button = button.tint(color.fill());
                 }

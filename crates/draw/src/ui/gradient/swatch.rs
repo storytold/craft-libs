@@ -1,8 +1,10 @@
 //! [`GradientSwatch`]: a well that shows a gradient.
 
-use craft_behavior::{Axis, CursorIcon, CursorPriority, Metrics, Sense};
+use craft_behavior::{CursorIcon, CursorPriority, Metrics, Sense};
 use craft_ui::choice::SwatchMetrics;
-use craft_ui::contract::{Access, Common, Component, Cx, DisabledLook, MeasureCx, Outcome, PaintUi, Pointer as _, PopupKind, Props as _, Role};
+use craft_ui::contract::{
+    Access, Common, Component, Cx, DisabledLook, MeasureCx, Outcome, PaintUi, Pointer as _, PopupKind, Props as _, Role, Sizing,
+};
 use craft_ui::style::{ComponentStyle, FocusLook, StyleColor, StyleCx};
 use egui::{CornerRadius, Response, Vec2};
 
@@ -52,9 +54,9 @@ impl Outcome for GradientSwatchOutput {
 ///
 /// The ramp is drawn over the checkerboard where it is translucent, inside the swatch's ring. The
 /// swatch edits nothing; a click is the host's cue. The well has the gradient chip aspect
-/// (`GradientRamp::CHIP_ASPECT`); `fill` takes the wider width the layout offers (an options bar
-/// cell). AccessKit sees a button named by the label, with `has_popup` when the host opens a
-/// dialog on the click.
+/// (`GradientRamp::CHIP_ASPECT`); with `Sizing::FillWidth` it takes the wider width the layout
+/// offers (an options bar cell). AccessKit sees a button named by the label, with `has_popup`
+/// when the host opens a dialog on the click.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(content_painter)]
 pub struct GradientSwatch<'a> {
@@ -67,9 +69,6 @@ pub struct GradientSwatch<'a> {
     /// Samples the gradient instead of [`default_sampler`].
     #[prop]
     sampler: Option<&'a Sampler>,
-    /// Takes the width the layout offers, at the control height.
-    #[prop(flag)]
-    fill: bool,
     /// Tells AccessKit that a click opens a dialog.
     #[prop(flag)]
     has_popup: bool,
@@ -79,8 +78,7 @@ pub struct GradientSwatch<'a> {
 impl<'a> GradientSwatch<'a> {
     /// A swatch of `stops`; `label` names it for a screen reader.
     pub fn new(label: impl Into<craft_ui::runtime::env::Label>, stops: &'a GradientStops) -> Self {
-        GradientSwatch { common: Common::new(), stops, rows: StopRows::Split, sampler: None, fill: false, has_popup: false, clicked: false }
-            .label(label)
+        GradientSwatch { common: Common::new(), stops, rows: StopRows::Split, sampler: None, has_popup: false, clicked: false }.label(label)
     }
 }
 
@@ -101,12 +99,12 @@ impl Component for GradientSwatch<'_> {
         let height = cx.style.side;
         let (wide, high) = GradientRamp::CHIP_ASPECT;
         let chip = height * f32::from(wide) / f32::from(high);
-        let width = if self.fill { cx.room.filter(|room| room.is_finite()).map_or(chip, |room| room.max(chip)) } else { chip };
+        let width = if cx.resolved.sizing() == Some(Sizing::FillWidth) {
+            cx.room.filter(|room| room.is_finite()).map_or(chip, |room| room.max(chip))
+        } else {
+            chip
+        };
         Vec2::new(width, height)
-    }
-
-    fn fills(&self) -> Option<Axis> {
-        self.fill.then_some(Axis::X)
     }
 
     fn sense(&self) -> Sense {
