@@ -62,6 +62,10 @@ cargo gives each build a jobserver with one token per core, so a build alone use
 
 Test binaries take no tokens: each starts its own test threads, and screen tests a software renderer's threads as well. `cl test` therefore builds with `cargo test --no-run` through `CL_LAUNCHER` and then runs each test binary itself, as cargo would (from its package's directory, the lib's unit tests first, stopping at the first that fails), through `CL_RUNNER` when it is set: a command that limits how many test binaries run at once. `cl render` runs the story renderer through `CL_RUNNER` too. Keep the two apart: a limit held for a whole build only queues the builds behind it, and the job pool already shares the cores between builds.
 
+## Build records
+
+Every build `cl` composes passes cargo's `--timings`: a report per build in `<target>/cargo-timings/` (each unit's start and duration, whether it was fresh, and how many units waited for a job token; the newest 200 are kept). Every `cl` command also appends one line to `<target>/cl.log`: when it started, the command, the wall time of its build and of its test runs, the exit code and the build's report. A slow loop is read from these, not timed again: a build much longer than its report's units points at a wait before cargo started, a run much longer than the tests' own `finished in` at a wait for `CL_RUNNER`.
+
 ## A new worktree's first build
 
 A new target directory builds the dependencies once (about 240 crates, 2–3 minutes with 16 cores) and then the framework for the first crate you work on (contract, widgets, panels, canvas, patterns, shell: another 1–2 minutes). After that, a one-line edit in a framework crate rebuilds that crate (seconds) and its test binary; a domain crate's test binary after a framework edit takes about 25 s (the chain above the edit at opt-level 0).

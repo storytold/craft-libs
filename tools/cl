@@ -26,6 +26,10 @@ crate, so every command resolves features as the gallery does and builds only th
 test feature (`screen-testing`, else `testing`) is added on top. Builds that take other features (CI's
 `--all-features`, wasm checks) belong on GitHub. docs/development.md has the whole picture.
 
+Records: every build cl composes passes cargo's --timings (a report per build in <target>/cargo-timings/, the newest
+200 kept), and every cl command appends one line to <target>/cl.log: when it started, the command, the build's and
+the test runs' wall time, the exit code and the build's report.
+
 Guards: `--all-features`, `--bins` and workspace-wide builds are refused with the reason; after every command, a new
 build of a framework crate in the target directory is named, with its feature set; `cl doctor` (also run before every
 command, it reads a few manifests) reports manifest lines that would bring a second build back.
@@ -37,6 +41,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 
 FRAMEWORK = ["craft-ui-contract", "craft-ui-widgets", "craft-ui-panels", "craft-ui-canvas", "craft-ui-patterns", "craft-ui-shell", "craft-ui"]
 # Selected beside every command's package; its dependencies decide every shared crate's features (its manifest).
@@ -53,6 +58,9 @@ REFUSED = {
     "--all": "a workspace-wide build or test takes the better part of an hour; build the crate you changed, CI runs the rest",
     "--all-targets": "it builds every binary and benchmark too; use `cl check` or `cl test` (--tests)",
 }
+TIMING_REPORTS_KEPT = 200
+# What cl.log records about this command; filled in as it runs.
+RECORD = {"start": time.time(), "target": None, "build": None, "run": 0.0, "report": ""}
 # The manifest lines the one feature set rests on: (file, regex that must match, what its absence brings back).
 PINS = [
     ("crates/ui-macros/Cargo.toml", r'^syn = \{[^\n]*"full"[^\n]*"visit"[^\n]*"visit-mut"[^\n]*"fold"[^\n]*"extra-traits"',
@@ -212,19 +220,52 @@ def report_new_variants(before, after):
                   file=sys.stderr)
 
 
-def cargo(top, cargo_args, json_out=False):
-    """Runs cargo through CL_LAUNCHER and reports new framework builds. Returns (return code, target dir, the JSON
-    messages cargo printed on stdout when `json_out`)."""
+def timing_report(target, since):
+    """The timing report cargo wrote after `since`, and the older ones beyond the newest TIMING_REPORTS_KEPT removed."""
+    folder = os.path.join(target, "cargo-timings")
+    try:
+        reports = sorted((e.stat().st_mtime, e.path) for e in os.scandir(folder) if e.name.startswith("cargo-timing-"))
+    except OSError:
+        return ""
+    for _, path in reports[:-TIMING_REPORTS_KEPT]:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    return os.path.basename(reports[-1][1]) if reports and reports[-1][0] >= since else ""
+
+
+def log_command(rc):
+    """One line in <target>/cl.log for this cl command."""
+    if not RECORD["target"]:
+        return
+    took = lambda seconds: "-" if seconds is None else f"{seconds:.1f} s"
+    line = (f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(RECORD['start']))} cl {' '.join(sys.argv[1:])} | "
+            f"build {took(RECORD['build'])} | run {took(RECORD['run'])} | rc {rc} | {RECORD['report'] or '-'}\n")
+    try:
+        with open(os.path.join(RECORD["target"], "cl.log"), "a") as f:
+            f.write(line)
+    except OSError:
+        pass
+
+
+def cargo(top, cargo_args, json_out=False, timings=True):
+    """Runs cargo through CL_LAUNCHER, with a timing report unless `timings` is off, and reports new framework builds.
+    Returns (return code, target dir, the JSON messages cargo printed on stdout when `json_out`)."""
     # cargo fmt builds nothing, so its `--all` is the usual whole-workspace format.
     for arg in ([] if cargo_args[:1] == ["fmt"] else cargo_args):
         if arg in REFUSED:
             fail(f"{arg} refused: {REFUSED[arg]}")
     env = dict(os.environ)
     target = target_dir(top, env)
+    RECORD["target"] = target
+    if timings:
+        cargo_args = cargo_args[:1] + ["--timings"] + cargo_args[1:]
     cmd = shlex.split(env.get("CL_LAUNCHER", "")) + ["cargo"] + cargo_args
     print("cl: " + " ".join(cmd) + f"  (target {target})", file=sys.stderr)
     sys.stdout.flush()
     before = variants(target)
+    started = time.time()
     messages = []
     if json_out:
         proc = subprocess.Popen(cmd, cwd=top, env=env, stdout=subprocess.PIPE, text=True)
@@ -236,6 +277,9 @@ def cargo(top, cargo_args, json_out=False):
         rc = proc.wait()
     else:
         rc = subprocess.run(cmd, cwd=top, env=env).returncode
+    RECORD["build"] = time.time() - started
+    if timings:
+        RECORD["report"] = timing_report(target, started)
     report_new_variants(before, variants(target))
     return rc, target, messages
 
@@ -243,7 +287,10 @@ def cargo(top, cargo_args, json_out=False):
 def run_binary(cmd, cwd, env=None):
     """Runs a built binary through CL_RUNNER."""
     sys.stdout.flush()
-    return subprocess.run(shlex.split(os.environ.get("CL_RUNNER", "")) + cmd, cwd=cwd, env=env).returncode
+    started = time.time()
+    rc = subprocess.run(shlex.split(os.environ.get("CL_RUNNER", "")) + cmd, cwd=cwd, env=env).returncode
+    RECORD["run"] += time.time() - started
+    return rc
 
 
 def shown(path, top):
@@ -286,10 +333,10 @@ def test(top, packages, cargo_args, test_args):
     sys.exit(0)
 
 
-def run(top, cargo_args, then=None):
+def run(top, cargo_args, then=None, timings=True):
     """Runs cargo; `then` (a binary in the target's debug dir and its arguments) runs after a successful cargo. Exits
     with the last return code."""
-    rc, target, _ = cargo(top, cargo_args)
+    rc, target, _ = cargo(top, cargo_args, timings=timings)
     if rc == 0 and then:
         rc = run_binary([os.path.join(target, "debug", then[0])] + then[1:], top)
     sys.exit(rc)
@@ -314,7 +361,7 @@ def main():
         sys.exit(1 if doctor(top, packages) else 0)
     doctor(top, packages, quiet=True)
     if command == "cargo":
-        run(top, rest)
+        run(top, rest, timings=False)
     if command == "features":
         if not rest:
             fail("cl features <crate>")
@@ -352,4 +399,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit as done:
+        log_command(done.code if isinstance(done.code, int) else 1)
+        raise
