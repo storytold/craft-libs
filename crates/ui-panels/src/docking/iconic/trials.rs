@@ -1,6 +1,5 @@
 //! Trials of `IconicColumn`: the letter of a panel without an icon, and the names a wide column shows.
 
-use super::CELL;
 use crate::contract::{Bind, ShowContainer as _};
 use crate::docking::{GroupAt, IconicColumn, PanelSpec};
 use crate::sections::Panel;
@@ -44,8 +43,7 @@ fn an_icon_less_panel_shows_its_initial_and_a_wide_column_shows_names_that_open_
 
     let (mut wide, open) = column(200.0);
     assert!(painted(&wide, "Brushes") && painted(&wide, "Swatches"), "a wide column shows the names");
-    let id = wide.root_id().expect("the column is shown");
-    let icon = wide.part(id, CELL.at(1)).expect("the second icon");
+    let icon = wide.by_label("Swatches").expect("the Swatches icon");
     assert!(icon.rect.width() < 200.0 / 2.0, "the icon keeps its square at the start: {:?}", icon.rect);
     // The name has no node of its own: the icon is its keyboard stop. Click on it, past the icon.
     wide.click_at(icon.rect.right_center() + Vec2::new(icon.rect.width(), 0.0)).idle(3);

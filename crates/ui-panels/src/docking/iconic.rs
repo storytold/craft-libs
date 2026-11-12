@@ -5,6 +5,7 @@ use super::dock_column::{BarRecord, CHEVRON, bar_slots, chevron_name, column_gri
 use super::flyout;
 use super::{DockSizes, DockSpot, DockTargets, DockWords, DragUnit, Flyout, GroupAt, PanelKey, PanelSpec, Splitter, start_group_drag};
 use crate::buttons::IconButton;
+use crate::contract::overlay::Anchor;
 use crate::contract::{
     Access, Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, Edit as _, EditResponse, HeaderEdge, HeaderParts, HeaderRegion,
     MeasureCx, Name, Outcome, OverlayUi, Overlays as _, Pad, PaintUi, PartsCx, Pointer as _, Props as _, Role, ShowContainer as _, Sizing,
@@ -486,11 +487,16 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
                 })
             })
             .collect();
+        let wide = self.laid.as_ref().is_some_and(|plan| !plan.names.is_empty());
         let Some(view) = self.view.as_mut() else { return };
         let mut dismissed = false;
         for (at, group) in groups.into_iter().enumerate() {
             let Some((group, height)) = group else { continue };
-            let anchor = ui.anchor_part(CELL.at(at as u64));
+            // In a wide column the flyout hangs beside the whole row, past the name.
+            let anchor = match (ui.anchor_part(CELL.at(at as u64)), wide.then(|| ui.anchor_part(NAME.at(at as u64)))) {
+                (Anchor::Rect(icon), Some(Anchor::Rect(name))) => Anchor::Rect(icon.union(name)),
+                (icon, _) => icon,
+            };
             Flyout::new(edge, Vec2::new(width, height), auto_collapse)
                 .show(ui, popup.at(at), anchor, |ui, body, place| view(&group, place, ui, body));
             dismissed |= flyout::dismissed(ui, popup.at(at));

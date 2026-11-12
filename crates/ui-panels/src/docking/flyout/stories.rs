@@ -22,7 +22,7 @@ fn open_beside_its_column(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         .show_flyouts(ui, |group, at, ui, _| {
             let GroupAt::Show(rect) = at else { return None };
             let title = group.active_panel().map_or_else(String::new, |panel| spec(panel).label.as_str().to_owned());
-            Panel::new(title).show_at(ui, rect, |_, _| ());
+            Panel::new(title).titled().show_at(ui, rect, |_, _| ());
             None
         })
         .into()

@@ -34,7 +34,8 @@ impl crate::contract::cx::Toggle {
 
 impl PartBuilder<'_> {
     /// The part opens and closes the repeat `index` of the component's popup `popup`: `toggles` for a component with
-    /// one popup per part. Open one popup at a time: opening the second closes the first.
+    /// one popup per part. Open one popup at a time: opening the second closes the first. Several parts may toggle the
+    /// same popup.
     pub fn toggles_at(self, popup: &'static str, index: usize) -> Self {
         self.declared.toggles = Some(ToggleDecl::new(popup, index));
         self
@@ -115,9 +116,11 @@ pub(crate) fn drive_toggles(core: &mut CxCore<'_>, overlays: bool, name: &str) {
         open.push(toggle.handle(owner).is_open_in(core));
     }
     if let Some(keeper) = opened {
-        // Opening one popup closes the others.
+        // Opening one popup closes the others. Several parts may toggle one popup (an icon and the name beside it):
+        // theirs stays open.
+        let kept = toggles[keeper].handle(owner).id;
         for (at, toggle) in toggles.iter().enumerate() {
-            if at != keeper && open[at] {
+            if toggle.handle(owner).id != kept && open[at] {
                 toggle.handle(owner).close_in(core);
                 open[at] = false;
             }
