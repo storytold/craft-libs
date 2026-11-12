@@ -36,18 +36,27 @@ pub(crate) fn measure_content<C: Component>(
 /// content: a body's remembered size or a collection's content size. The padding is the style's and the props' (`padding`).
 pub(crate) fn measure(style: &dyn StyleView, input: &MeasureIn<'_>, content: Vec2, extent: Vec2, resolved: &Resolved<'_>) -> Vec2 {
     let (metrics, sizing) = (style.metrics(), resolved.sizing);
-    let content = content + extent;
-    let padding = padding(metrics.padding, resolved.pad);
-    let padding = Vec2::new(padding.start + padding.end, padding.top + padding.bottom);
     let floor = match (input.proposal, metrics.least_width) {
         (Proposal::Min, Some(least)) => Vec2::new(least, metrics.min_size.y),
         _ => metrics.min_size,
     };
-    let mut size = (content + padding).max(floor);
+    let mut size = padded(style, content + extent, resolved).max(floor);
     if input.proposal != Proposal::Min && sizing != Some(Sizing::Content) {
         size.x = size.x.max(input.room.map_or(metrics.ideal_width, |room| metrics.ideal_width.min(room)));
     }
     size
+}
+
+/// The least width at which the `content` an `Ideal` measure gave shows whole: step 5's width without the ideal
+/// width, which is room the style asks for beyond the content. A row's shrink step takes that room first.
+pub(crate) fn whole(style: &dyn StyleView, content: Vec2, extent: Vec2, resolved: &Resolved<'_>) -> f32 {
+    padded(style, content + extent, resolved).max(style.metrics().min_size).x
+}
+
+/// `content` plus the padding of the style and the props.
+fn padded(style: &dyn StyleView, content: Vec2, resolved: &Resolved<'_>) -> Vec2 {
+    let padding = padding(style.metrics().padding, resolved.pad);
+    content + Vec2::new(padding.start + padding.end, padding.top + padding.bottom)
 }
 
 /// The padding between the component's edge and its content: `padding` (the style's, or `Component::padding` where

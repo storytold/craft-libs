@@ -57,16 +57,18 @@ impl<C: Component> MeasureCx<'_, C> {
     }
 
     /// The width a component whose height follows its width (wrapped text, a square plot) sizes at: the room the
-    /// parent offers, else the width the column has. A measuring run in a content column offers no room (nothing
-    /// there fills it), yet such a component takes the size it will show at: a message wider than a capped dialog
-    /// takes the lines it will show. A container that sets a wrap width (a dialog's) caps it there. `None` when the
-    /// width is unbounded and no wrap width is set.
+    /// parent offers, else the width the column has, or in a row the width the row has. A measuring run in a content
+    /// column offers no room (nothing there fills it), yet such a component takes the size it will show at: a message
+    /// wider than a capped dialog takes the lines it will show. A row asks its units what they take in no room as
+    /// what they take alone in it, so a text after a field reports its line, not what the field left it, and the
+    /// row's shrink step decides who gives way. A container that sets a wrap width (a dialog's) caps it there.
+    /// `None` when the width is unbounded and no wrap width is set.
     pub fn column_room(&self) -> Option<f32> {
         let room = self.room.or_else(|| {
             // The column is an input of this measure call besides its room (step 5 opens the call), and of the calls
             // around it that measure it.
             let ctx = self.ui.ctx();
-            let width = crate::layout::flow_room(self.ui).x;
+            let width = crate::layout::row_alone_room(self.ui).unwrap_or_else(|| crate::layout::flow_room(self.ui).x);
             let width = layout_memory::read_input(ctx, layout_memory::calls_from(ctx), self.id.with("column_room"), width);
             Some(width).filter(|width| width.is_finite())
         });

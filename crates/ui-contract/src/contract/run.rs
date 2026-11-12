@@ -1316,8 +1316,13 @@ pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<T
     let size = if t.in_flow() { t.sized(ui, id, size) } else { size };
     match shrink {
         Some(crate::layout::Shrink::Count(row)) if shape == ShapeKind::Leaf => {
-            let (ideal, least) = (ask(&mut *t, Proposal::Ideal, None, Vec2::ZERO).0.x, ask(&mut *t, Proposal::Min, None, Vec2::ZERO).0.x);
-            crate::layout::report_shrink(&ctx, row, id, size.x, ideal, Some(least), t.cut_first());
+            // The `Ideal` size in no room, and the least width at which its content shows whole.
+            let input = MeasureIn { ui: &*ui, env, proposal: Proposal::Ideal, room: None };
+            let (content, _) = t.measure_content(&input, &resolved);
+            let ideal = steps::measure(&*style, &input, content, Vec2::ZERO, &resolved).x;
+            let whole = steps::whole(&*style, content, Vec2::ZERO, &resolved);
+            let least = ask(&mut *t, Proposal::Min, None, Vec2::ZERO).0.x;
+            crate::layout::report_shrink(&ctx, row, id, size.x, ideal, Some((whole, least)), t.cut_first());
         }
         Some(crate::layout::Shrink::Count(row)) => crate::layout::report_shrink(&ctx, row, id, size.x, size.x, None, false),
         Some(crate::layout::Shrink::Least(row)) if shape == ShapeKind::Body => crate::layout::report_least(&ctx, row, id, size.x),
@@ -1327,7 +1332,7 @@ pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<T
     // the units narrow to leave it, and it takes what they leave.
     if let Some(crate::layout::Shrink::Count(row)) = env.shrink.filter(|_| fill_body) {
         let content = measured.x + t.overflow();
-        crate::layout::report_shrink(&ctx, row, id, size.x.min(content), content, Some(content), false);
+        crate::layout::report_shrink(&ctx, row, id, size.x.min(content), content, Some((content, content)), false);
     }
     // A component shown at a rect fills it: the rect is its size, and a leaf that measures nothing (a content
     // painter) still shows there.
