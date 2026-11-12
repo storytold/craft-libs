@@ -2,7 +2,7 @@
 """The craft-libs build loop: cargo with one resolution of features, so every local build shares one build of each crate.
 
     cl check <crate> [cargo args]                 cargo check of the crate's lib, bins and tests
-    cl test <crate> [cargo args] [-- test args]   cargo test -p <crate> --tests
+    cl test <crate> [cargo args] [-- test args]   build the crate's tests (cargo test --no-run), then run each test binary
     cl build gallery [cargo args]                 the debug gallery binary (target/debug/craft-ui-gallery)
     cl build <crate> [cargo args]                 cargo build of the crate's lib and bins
     cl render <crate|ui> <Component> [--card] [--story <name>] [--out <dir>] [--threads N]
@@ -12,8 +12,10 @@
     cl cargo <args...>                            cargo through the job pool, nothing added
 
 Every cargo command runs through the command in CL_LAUNCHER when it is set (for example a wrapper that gives several
-builds on one machine a shared jobserver; docs/development.md "The job pool"), else plain cargo. CARGO_TARGET_DIR
-defaults to <worktree>-target when that directory exists beside the worktree.
+builds on one machine a shared jobserver; docs/development.md "The job pool"), else plain cargo. The binaries cl runs
+after a build (test binaries, the story renderer) run through the command in CL_RUNNER when it is set (for example a
+wrapper that limits how many run at once), else directly; a test binary runs from its package's directory, as cargo
+runs it. CARGO_TARGET_DIR defaults to <worktree>-target when that directory exists beside the worktree.
 
 Why one resolution: cargo builds a crate once per distinct feature set, and everything above it again, and it unifies
 features only over the packages a command selects. A framework crate's tests, a domain crate's tests, the gallery and
@@ -210,24 +212,86 @@ def report_new_variants(before, after):
                   file=sys.stderr)
 
 
-def run(top, cargo_args, then=None):
-    """Runs cargo through the launcher and reports new framework builds; `then` (a command) runs after a successful
-    cargo, through the launcher too. Exits with the last return code."""
+def cargo(top, cargo_args, json_out=False):
+    """Runs cargo through CL_LAUNCHER and reports new framework builds. Returns (return code, target dir, the JSON
+    messages cargo printed on stdout when `json_out`)."""
     # cargo fmt builds nothing, so its `--all` is the usual whole-workspace format.
     for arg in ([] if cargo_args[:1] == ["fmt"] else cargo_args):
         if arg in REFUSED:
             fail(f"{arg} refused: {REFUSED[arg]}")
     env = dict(os.environ)
     target = target_dir(top, env)
-    launcher = shlex.split(env.get("CL_LAUNCHER", ""))
-    cmd = launcher + ["cargo"] + cargo_args
+    cmd = shlex.split(env.get("CL_LAUNCHER", "")) + ["cargo"] + cargo_args
     print("cl: " + " ".join(cmd) + f"  (target {target})", file=sys.stderr)
     sys.stdout.flush()
     before = variants(target)
-    rc = subprocess.run(cmd, cwd=top, env=env).returncode
+    messages = []
+    if json_out:
+        proc = subprocess.Popen(cmd, cwd=top, env=env, stdout=subprocess.PIPE, text=True)
+        for line in proc.stdout:
+            try:
+                messages.append(json.loads(line))
+            except ValueError:
+                sys.stdout.write(line)
+        rc = proc.wait()
+    else:
+        rc = subprocess.run(cmd, cwd=top, env=env).returncode
     report_new_variants(before, variants(target))
+    return rc, target, messages
+
+
+def run_binary(cmd, cwd, env=None):
+    """Runs a built binary through CL_RUNNER."""
+    sys.stdout.flush()
+    return subprocess.run(shlex.split(os.environ.get("CL_RUNNER", "")) + cmd, cwd=cwd, env=env).returncode
+
+
+def shown(path, top):
+    """A path as cargo shows it: relative to the worktree when inside it."""
+    return os.path.relpath(path, top) if path.startswith(top + os.sep) else path
+
+
+def test(top, packages, cargo_args, test_args):
+    """Builds the tests with `cargo test --no-run`, then runs each test binary as cargo would: from its package's
+    directory, the lib's unit tests first, stopping at the first that fails."""
+    no_run = "--no-run" in cargo_args
+    quiet = "-q" in cargo_args or "--quiet" in cargo_args
+    cargo_args = [a for a in cargo_args if a != "--no-run"]
+    rc, target, messages = cargo(top, cargo_args[:1] + ["--no-run", "--message-format=json-render-diagnostics"] + cargo_args[1:], json_out=True)
+    if rc != 0:
+        sys.exit(rc)
+    by_manifest = {p["manifest_path"]: p for p in packages.values()}
+    tests = []
+    for m in messages:
+        if m.get("reason") != "compiler-artifact" or not m.get("executable") or not m["profile"]["test"]:
+            continue
+        root = os.path.dirname(m["manifest_path"])
+        source = os.path.relpath(m["target"]["src_path"], root)
+        lib = any(k in ("lib", "rlib", "proc-macro") for k in m["target"]["kind"])
+        tests.append((not lib, m["target"]["name"], "unittests " + source if lib else source, m["executable"], m["manifest_path"]))
+    tests.sort()
+    for _, _, source, exe, manifest in tests:
+        print(f"{'Executable':>12} {source} ({shown(exe, top)})", file=sys.stderr)
+    if no_run:
+        sys.exit(0)
+    for _, _, source, exe, manifest in tests:
+        if not quiet:
+            print(f"{'Running':>12} {source} ({shown(exe, top)})", file=sys.stderr)
+        package = by_manifest.get(manifest, {})
+        env = dict(os.environ, CARGO_MANIFEST_DIR=os.path.dirname(manifest), CARGO_PKG_NAME=package.get("name", ""))
+        rc = run_binary([exe] + test_args + (["--quiet"] if quiet else []), os.path.dirname(manifest), env)
+        if rc != 0:
+            print(f"cl: test failed: {source} ({shown(exe, top)}) exited with {rc}", file=sys.stderr)
+            sys.exit(rc)
+    sys.exit(0)
+
+
+def run(top, cargo_args, then=None):
+    """Runs cargo; `then` (a binary in the target's debug dir and its arguments) runs after a successful cargo. Exits
+    with the last return code."""
+    rc, target, _ = cargo(top, cargo_args)
     if rc == 0 and then:
-        rc = subprocess.run(launcher + [os.path.join(target, "debug", then[0])] + then[1:], cwd=top, env=env).returncode
+        rc = run_binary([os.path.join(target, "debug", then[0])] + then[1:], top)
     sys.exit(rc)
 
 
@@ -266,7 +330,8 @@ def main():
         if command == "check":
             run(top, with_features(["check"] + selected(pkg) + ["--tests"] + own_targets(packages[pkg]), features) + args)
         if command == "test":
-            run(top, with_features(["test"] + selected(pkg) + ["--tests"], features) + args)
+            mine, theirs = (args[:args.index("--")], args[args.index("--") + 1:]) if "--" in args else (args, [])
+            test(top, packages, with_features(["test"] + selected(pkg) + ["--tests"], features) + mine, theirs)
         run(top, with_features(["build"] + selected(pkg) + own_targets(packages[pkg]), features) + args)
     if command == "render":
         if len(rest) < 2:

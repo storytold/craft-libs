@@ -9,8 +9,8 @@ How to build, test and look at this workspace without waiting for it. The rules 
 | What | Command | Builds |
 |---|---|---|
 | check the crate you changed | `cl check <crate>` | `cargo check` of the crate's lib, bins and tests |
-| build its tests | `cl test <crate> --no-run` | `cargo test -p <crate> --tests` |
-| run some trials | `cl test <crate> -- <filter> --test-threads 4` | nothing new when warm |
+| build its tests | `cl test <crate> --no-run` | `cargo test -p <crate> --tests --no-run`; prints each test binary's path |
+| run some trials | `cl test <crate> -- <filter> --test-threads 4` | nothing new when warm; then runs each test binary with the filter |
 | the debug gallery | `cl build gallery` | the `craft-ui-gallery` binary only |
 | one component's stories as PNGs | `cl render <crate\|ui> <Component> [--story <name>] [--out <dir>]` | the `story-render` binary with that crate's feature |
 | anything else | `cl cargo <args>` | what you asked for, through the job pool, nothing added |
@@ -59,6 +59,8 @@ Frame-time numbers come from the gallery profile, the build the owner runs: `cl 
 ## The job pool
 
 cargo gives each build a jobserver with one token per core, so a build alone uses the whole machine, but several builds at once (worktrees, agents) each take every core and slow each other down. To share one job pool between them, set `CL_LAUNCHER` to a command that runs its arguments with a shared jobserver in `MAKEFLAGS` (cargo joins a jobserver it finds there). `cl` runs every cargo command through that command; without `CL_LAUNCHER` it runs cargo directly.
+
+Test binaries take no tokens: each starts its own test threads, and screen tests a software renderer's threads as well. `cl test` therefore builds with `cargo test --no-run` through `CL_LAUNCHER` and then runs each test binary itself, as cargo would (from its package's directory, the lib's unit tests first, stopping at the first that fails), through `CL_RUNNER` when it is set: a command that limits how many test binaries run at once. `cl render` runs the story renderer through `CL_RUNNER` too. Keep the two apart: a limit held for a whole build only queues the builds behind it, and the job pool already shares the cores between builds.
 
 ## A new worktree's first build
 
