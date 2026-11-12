@@ -11,10 +11,13 @@ in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
 holds `upstream_revision`. `local_patches` describes each local patch.
 
+The patched files are `src/sweep/sweep_line.rs` and `src/curve/mod.rs`.
+
 ## Local patches
 
 | File | Change |
 |---|---|
+| `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
 | `src/curve/mod.rs` | `solve_t_for_y` asks the root finder for `t` to the precision of f64 (`x_error` 0) instead of to within 1e-12. The x error of a `t` that is off by 1e-12 grows with the coordinates: on a curve 1e9 tall it reached 166 times `64 * f64::EPSILON * 1e9`, and pieces that `y_subsegment` cut from curves near 3e7 tall moved by tens of tolerances. Comparing two near-parallel curves of that size recursed down to y intervals shorter than the tolerance: 950,130 entries and 9 s for a pair 3e7 tall, minutes for a pair 1e8 tall. The `solve_x_for_y_on_tall_curve` test checks x on a curve 1e9 tall against a bisection, and the `near_parallel_tall_curves` test compares two curves 2e7 tall, 1.2 tolerances apart, and allows at most 64 entries. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
