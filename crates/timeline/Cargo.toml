@@ -10,7 +10,7 @@ autotests = false
 
 [lib]
 # The lib's test target is the crate's one test executable: its trials and, with `screen-testing`, the
-# screen tests in tests/it.
+# integration tests in tests/it (the interchange round trips also need `xml` and `otio`).
 harness = false
 
 [lints]

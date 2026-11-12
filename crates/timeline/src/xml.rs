@@ -1,5 +1,6 @@
 //! XML for the xmeml and FCPXML modules: bounded reading and pretty writing through craft-xml,
 //! with the small node view their readers are written against.
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub(crate) use craft_xml::esc_attr as escape_attr;
 use craft_xml::{Doctype, El, Limits, Options, UnknownEntity};
@@ -146,8 +147,9 @@ impl XmlWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use craft_ui::testing::trial;
 
-    #[test]
+    #[trial]
     fn writer_roundtrip() {
         let mut w = XmlWriter::new(Some("xmeml"));
         w.open("a", &[("x", "1 & 2")]);
@@ -168,7 +170,7 @@ mod tests {
         assert_eq!(num(0.1 + 0.2).parse::<f64>().unwrap(), 0.1 + 0.2);
     }
 
-    #[test]
+    #[trial]
     fn attr_whitespace_roundtrip() {
         let mut w = XmlWriter::new(None);
         w.open("a", &[("name", "x\ny\tz\r")]);
@@ -180,7 +182,7 @@ mod tests {
         assert_eq!(child(a, "b").and_then(Node::text), Some("a\nb"));
     }
 
-    #[test]
+    #[trial]
     fn rejects_internal_dtd_entity_expansion() {
         let text = "<!DOCTYPE root [<!ENTITY word 'expanded'>]><root>&word;</root>";
         assert!(parse(text).is_err());
@@ -189,7 +191,7 @@ mod tests {
     }
 
     /// Elements nested beyond the limit are an error, not a deep recursion.
-    #[test]
+    #[trial]
     fn nesting_is_bounded() {
         let nested = |depth: usize| format!("{}{}", "<a>".repeat(depth), "</a>".repeat(depth));
         assert!(parse(&nested(LIMITS.max_depth)).is_ok());

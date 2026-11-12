@@ -1,14 +1,15 @@
 //! Final Cut Pro 7 XML (xmeml): a hand-written Premiere-style document (written from the public
 //! xmeml element descriptions) and export → import round trips.
 
-use crate::support;
+use super::support;
 
-use craft_timeline::model::{
+use craft_timeline::interchange::{
     BinEntry, ClipId, Generator, ItemId, ItemKind, Keyframe, Label, Marker, MarkerId, MarkerKind, MediaRef, Param, ParamValue, Project, Sequence,
     TrackKind, TransitionAlign,
 };
-use craft_timeline::time::{FrameRate, Tick};
 use craft_timeline::{ExportOptions, Format, Imported, Report, detect_text};
+use craft_timeline::{FrameRate, Tick};
+use craft_ui::testing::trial;
 use proptest::prelude::*;
 use support::*;
 
@@ -184,7 +185,7 @@ fn premiere_style_doc() -> String {
     )
 }
 
-#[test]
+#[trial]
 fn golden_premiere_style_nested_and_transitions() {
     let doc = premiere_style_doc();
     assert_eq!(detect_text(doc.as_bytes(), Some("xml")), Some(Format::Fcp7Xml));
@@ -335,7 +336,7 @@ fn rich_project() -> (Project, ItemId) {
     (p, s)
 }
 
-#[test]
+#[trial]
 fn rich_roundtrip() {
     let (p, s) = rich_project();
     let (imp, text, rep) = fcp7_roundtrip(&p, s, &xopts());
@@ -380,7 +381,7 @@ fn rich_roundtrip() {
 }
 
 /// filmcraft#1868: a filter is written by the catalog's stable name, which other applications read back.
-#[test]
+#[trial]
 fn grading_keeps_its_interchange_name() {
     let (mut p, s) = rich_project();
     let first = p.sequence(s).unwrap().video_tracks[0].items[0].id;
@@ -395,7 +396,7 @@ fn grading_keeps_its_interchange_name() {
     assert!(fcpxml.contains("uid=\"testapp.lumetri\""), "{fcpxml}");
 }
 
-#[test]
+#[trial]
 fn version_5_and_generators() {
     let (mut p, s) = rich_project();
     let g = generator(&mut p, "Bars", Generator::BarsAndTone);
@@ -447,7 +448,7 @@ fn gen_clip() -> impl Strategy<Value = G> {
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(48))]
-    #[test]
+    #[trial]
     fn xmeml_roundtrip(clips in prop::collection::vec(gen_clip(), 1..20), ri in 0usize..5) {
         let rate = [FrameRate::FPS_23_976, FrameRate::FPS_25, FrameRate::FPS_29_97, FrameRate::FPS_59_94, FrameRate::FPS_24][ri];
         let mut p = Project::new("P");
@@ -495,7 +496,7 @@ proptest! {
     }
 }
 
-#[test]
+#[trial]
 fn a_master_clip_used_by_an_earlier_sequence_still_lands_in_its_bin() {
     // Premiere and other writers may put a stringout sequence ahead of the bins that hold its clips.
     let file = format!(
@@ -542,7 +543,7 @@ fn clip_spans(xml: &str) -> Vec<(i64, i64, i64, i64)> {
 /// filmcraft#340: a clip placed by seconds in a 23.976 sequence has sub-frame start, duration and source in.
 /// Its record span and source span were rounded to frames independently, so `out - in` could come
 /// out a frame shorter than `end - start` (Premiere then reads a different source range).
-#[test]
+#[trial]
 fn sub_frame_clips_keep_equal_source_and_record_spans() {
     const SECOND: i64 = 254_016_000_000;
     let r = FrameRate::FPS_23_976;
@@ -574,7 +575,7 @@ fn sub_frame_clips_keep_equal_source_and_record_spans() {
 
 /// filmcraft#463: a stereo file split onto two mono tracks (A1 = channel 1, A2 = channel 2) lost the right channel,
 /// because every audio clip item was written with `sourcetrack/trackindex` 1 and the importer ignored it.
-#[test]
+#[trial]
 fn split_mono_tracks_keep_their_source_channel() {
     let r = FrameRate::FPS_23_976;
     let mut p = Project::new("P");
@@ -596,7 +597,7 @@ fn split_mono_tracks_keep_their_source_channel() {
     assert!(again.contains("<trackindex>2</trackindex>"));
 }
 
-#[test]
+#[trial]
 fn audio_sourcetrack_trackindex_2_imports_as_source_channel_1() {
     let doc = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -615,7 +616,7 @@ fn audio_sourcetrack_trackindex_2_imports_as_source_channel_1() {
 
 /// filmcraft#463: Premiere writes a stereo file split onto two mono tracks as clip items with `trackindex` 1 and 2;
 /// a file used only with `trackindex` 1 is a stereo clip and keeps the default (all channels) mapping.
-#[test]
+#[trial]
 fn audio_trackindex_1_is_channel_0_only_when_the_file_is_split() {
     let doc = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -676,14 +677,14 @@ fn balances(imp: &Imported) -> Vec<f64> {
 
 /// filmcraft#371: the halves of a split stereo file played centred, so both channels summed on both sides
 /// (+3 dB for a stereo effect, +6 dB for dual-mono dialogue). They now play on their own side.
-#[test]
+#[trial]
 fn split_stereo_halves_are_panned_to_their_side() {
     let (imp, _) = fcp7_import(&split_stereo_doc(""), None);
     assert_eq!(balances(&imp), vec![-100.0, 100.0]);
 }
 
 /// An Audio Pan filter on a split half still wins.
-#[test]
+#[trial]
 fn split_stereo_half_keeps_its_audio_pan() {
     let pan = r#"<filter><effect><name>Audio Pan</name><effectid>audiopan</effectid><effectcategory>audiopan</effectcategory><effecttype>audiopan</effecttype><mediatype>audio</mediatype>
       <parameter><parameterid>pan</parameterid><name>Pan</name><valuemin>-1</valuemin><valuemax>1</valuemax><value>0</value></parameter></effect></filter>"#;
@@ -692,7 +693,7 @@ fn split_stereo_half_keeps_its_audio_pan() {
 }
 
 /// A centred one-channel clip (Breakout to Mono) round-trips centred: export writes its Audio Pan.
-#[test]
+#[trial]
 fn centred_mono_breakout_round_trips_centred() {
     let r = FrameRate::FPS_23_976;
     let mut p = Project::new("P");
@@ -711,7 +712,7 @@ fn centred_mono_breakout_round_trips_centred() {
 /// A `timebase` near `i64::MAX` made a rate of ~9e18 per second: with `ntsc` the importer multiplied it by
 /// 1000 (overflow), without it the export overflowed adding 1 to a clamped frame index. The timebase is
 /// limited instead, and the document imports and exports.
-#[test]
+#[trial]
 fn absurd_timebase_is_bounded() {
     for (tb, ntsc) in [("9223372036854775807", "TRUE"), ("9223372036854775807", "FALSE"), ("4294967296", "FALSE"), ("-5", "TRUE")] {
         let doc = format!(
@@ -732,7 +733,7 @@ fn absurd_timebase_is_bounded() {
 
 /// A start timecode of 18446744073709551615 frames saturates to `i64::MAX`; the EDL export then
 /// overflowed adding frame numbers to it. Out-of-range start timecodes are reset with a warning.
-#[test]
+#[trial]
 fn absurd_start_timecode_is_bounded() {
     let doc = r#"<?xml version="1.0"?><xmeml version="4"><sequence id="s"><name>S</name><rate><timebase>25</timebase><ntsc>FALSE</ntsc></rate>
 <timecode><rate><timebase>25</timebase><ntsc>FALSE</ntsc></rate><string>00:00:00:00</string><frame>18446744073709551615</frame></timecode>
@@ -750,7 +751,7 @@ fn absurd_start_timecode_is_bounded() {
     assert!(report.mentions("out-of-range start timecode"), "{report}");
 }
 
-#[test]
+#[trial]
 fn a_huge_link_group_does_not_write_quadratic_links() {
     let r = FrameRate::FPS_29_97;
     let mut p = Project::new("P");

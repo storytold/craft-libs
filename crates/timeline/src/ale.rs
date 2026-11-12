@@ -21,8 +21,13 @@
 //! `Tracks` lists the clip's tracks (`V`, `A1`…`A16`); `Start` and `End` are SMPTE timecode at the
 //! heading's `FPS`, `End` exclusive. Values never contain tabs or line breaks (they are replaced by
 //! spaces). Lines end with CR LF (Avid's own files); the reader accepts LF and CR too.
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use crate::time::{FrameRate, Tick, parse_timecode};
+use crate::rates::FrameRate;
+
+use crate::time::Tick;
+
+use crate::timecode::{TimeFormat, parse_time};
 
 /// A parsed or to-be-written ALE file.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -171,24 +176,26 @@ pub fn parse(text: &str) -> Result<AleDoc, String> {
 /// Start and end (exclusive) of a data row, in ticks at the heading's rate.
 pub fn row_range(doc: &AleDoc, row: usize) -> Option<(Tick, Tick)> {
     let rate = doc.rate()?;
-    let a = parse_timecode(doc.get(row, "Start")?, rate, false, 0).ok()?;
-    let b = parse_timecode(doc.get(row, "End")?, rate, false, 0).ok()?;
-    Some((rate.tick_of(a), rate.tick_of(b)))
+    let format = TimeFormat::timecode(rate);
+    let a = parse_time(doc.get(row, "Start")?, &format, Tick::ZERO).ok()?;
+    let b = parse_time(doc.get(row, "End")?, &format, Tick::ZERO).ok()?;
+    Some((a, b))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::time::format_timecode_frames;
+    use crate::timecode::format_timecode_frames;
+    use craft_ui::testing::trial;
 
-    #[test]
+    #[trial]
     fn utf8_bom_is_ignored() {
         let doc = parse("\u{feff}Heading\r\nFPS\t24\r\n\r\nColumn\r\nName\tStart\r\n\r\nData\r\nA\t01:00:00:00\r\n").unwrap();
         assert_eq!(doc.columns, ["Name", "Start"]);
         assert_eq!(doc.rows.len(), 1);
     }
 
-    #[test]
+    #[trial]
     fn non_positive_or_non_finite_fps_is_rejected() {
         for fps in ["0", "-24", "nan", "inf", "1e300", "0.0001"] {
             let doc = parse(&format!("Heading\nFPS\t{fps}\n\nColumn\nName\tStart\tEnd\n\nData\nA\t01:00:00:00\t01:00:10:00\n")).unwrap();
@@ -196,7 +203,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[trial]
     fn writes_the_three_sections_and_round_trips() {
         let r = FrameRate::FPS_23_976;
         let mut columns: Vec<String> = STANDARD_COLUMNS.iter().map(|s| s.to_string()).collect();
@@ -244,7 +251,7 @@ mod tests {
         assert!(parse("hello").is_err());
     }
 
-    #[test]
+    #[trial]
     fn fps_and_formats() {
         assert_eq!(fps_text(FrameRate::FPS_29_97), "29.97");
         assert_eq!(fps_text(FrameRate::FPS_25), "25");

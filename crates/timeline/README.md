@@ -6,7 +6,7 @@ The core is egui-free:
 
 - `time`: `Tick` (254,016,000,000 per second, exact for every broadcast frame rate and common sample rate), `TimeRange`, and `TimeView` (the time-to-pixel map with zoom and scroll).
 - `rates`: `FrameRate` (rational), `SampleRate`, `PixelAspect` and their menu presets.
-- `timecode`: SMPTE timecode (drop and non-drop), frames, feet + frames, samples and seconds, formatted and parsed the way Premiere's fields do.
+- `timecode`: SMPTE timecode (drop and non-drop), frames, feet + frames, samples and seconds, formatted and parsed the way Premiere's fields do, as ticks (`parse_time`) or frame counts (`parse_frames`).
 - `clock`: `PlaybackClock` (play, stop, preroll, loop, stop point, an external audio clock) and `Follow` (the view follows the playhead while playing).
 - `cache` and `frames`: a byte-budgeted `FrameCache` that spares the frames a playing preview reaches next, and a `FrameServer` that renders frames on worker threads by priority with playback prefetch (on wasm, `pump` runs them on the UI thread).
 - `clips`: clip edges, trims and snapping rules; `markers`: timeline markers; `model`: the `TimelineModel` trait the app implements on its sequence.
@@ -25,7 +25,7 @@ that are documents of their own. Times are the core's `Tick` and `FrameRate`.
 | `rate` | Frame-rate conventions of documents: `timebase` + `ntsc`, floating rates snapped to exact ones, the highest rate an importer accepts (`MAX_RATE`). |
 | `report` | `Report`: what an import or export could not represent exactly, identical messages merged with a count. |
 | `path` | Media references: `file://` URLs (`localhost`, drive letters, UNC hosts, percent-encoding) to and from paths, and relative references joined to a document's folder. Lexical only. |
-| `interchange` | A neutral timeline: a `Project` of bins and items (media with what a document says about it, sequences, subclips), sequences of video and audio `Track`s holding `TrackItem`s (speed, reverse, freeze frame, links, effects with keyframes, markers) and `Transition`s. `Catalog` is the application's effects, supplied by the caller. Every object has an `ext` slot for application JSON a format can carry unread. |
+| `interchange` | A neutral timeline: a `Project` of bins and items (media with what a document says about it, sequences, subclips), sequences of video and audio `Track`s holding `TrackItem`s (speed, reverse, freeze frame, links, effects with keyframes, markers) and `Transition`s. `Catalog` is the application's effects, supplied by the caller. Every object has an `ext` slot for application JSON a format can carry unread. What every reader and writer shares: `Format`, `detect_text` and `decode_text`, `ImportOptions`, `ExportOptions` and `Error`. |
 | `fx` | The effect and parameter ids the formats name themselves (motion, opacity, time remap, volume, pan, the common dissolves) and `Standard`, a catalog of just those. |
 | `build` | Building an `interchange::Project` while reading a document (`Builder`, media deduplicated by key, track placement bounded at 256 tracks) and the bounds every import ends with (`Imported::bound`: implausible rates and start timecodes reset and reported). |
 | `ale` | Avid Log Exchange: `AleDoc` (heading, columns, rows), `parse`, `write`, the standard heading and columns. |

@@ -1,14 +1,15 @@
 //! FCPXML: a hand-written document (from the public FCPXML element reference) with connected
 //! clips, a transition, a retimed clip, a gap and a compound clip; plus export → import round trips.
 
-use crate::support;
+use super::support;
 
-use craft_timeline::model::{
+use craft_timeline::interchange::{
     BinEntry, ClipId, ItemId, ItemKind, Keyframe, Label, Marker, MarkerId, MarkerKind, MediaRef, Param, ParamValue, Project, Sequence, TrackKind,
     TransitionAlign,
 };
-use craft_timeline::time::{FrameRate, TICKS_PER_SECOND, Tick};
 use craft_timeline::{ExportOptions, FcpxmlVersion, Format, Report, detect_text as detect};
+use craft_timeline::{FrameRate, TICKS_PER_SECOND, Tick};
+use craft_ui::testing::trial;
 use proptest::prelude::*;
 use support::*;
 
@@ -100,7 +101,7 @@ fn doc() -> String {
     )
 }
 
-#[test]
+#[trial]
 fn self_referencing_compound_media_is_ignored_without_recursing() {
     let xml = r#"<fcpxml version="1.10">
       <resources>
@@ -118,7 +119,7 @@ fn self_referencing_compound_media_is_ignored_without_recursing() {
     assert!(report.mentions("recursive FCPXML media"), "{report:?}");
 }
 
-#[test]
+#[trial]
 fn golden_connected_clips() {
     let d = doc();
     assert_eq!(detect(d.as_bytes(), Some("fcpxml")), Some(Format::Fcpxml));
@@ -198,7 +199,7 @@ fn assert_connected_audio_markers_and_bins(p: &Project, s: &Sequence, r: FrameRa
     assert!(matches!(&m.media, MediaRef::File { path } if path == "/proj/boats.mov"));
 }
 
-#[test]
+#[trial]
 fn hostile_lane_numbers_do_not_create_sparse_tracks() {
     let d = doc().replace("lane=\"-1\"", "lane=\"-2147483648\"").replace("lane=\"1\"", "lane=\"2147483647\"");
     let (imp, rep) = import(d.as_bytes(), Format::Fcpxml, Some("/proj")).unwrap();
@@ -209,7 +210,7 @@ fn hostile_lane_numbers_do_not_create_sparse_tracks() {
 }
 
 /// Final Cut writes slideshow stills directly as video elements, including zero-duration assets.
-#[test]
+#[trial]
 fn standalone_video_stills_keep_timing_paths_and_transitions() {
     let xml = r#"<fcpxml version="1.11"><resources>
       <format id="f" frameDuration="1/30s" width="1920" height="1080"/>
@@ -248,7 +249,7 @@ fn standalone_video_stills_keep_timing_paths_and_transitions() {
 }
 
 /// A video element selects only picture from an AV asset, including on connected lanes.
-#[test]
+#[trial]
 fn standalone_video_uses_only_video_and_preserves_connected_placement() {
     let xml = doc().replace("<asset-clip ref=\"r2\"", "<video ref=\"r2\"");
     // The first r2 occurrence has children; the connected r2 occurrence does too.
@@ -271,7 +272,7 @@ fn standalone_video_uses_only_video_and_preserves_connected_placement() {
 }
 
 /// Unsupported generators, unresolved references and alternate sources keep an actionable warning.
-#[test]
+#[trial]
 fn standalone_video_invalid_sources_are_reported_without_panicking() {
     for attrs in ["", "ref=\"missing\"", "ref=\"effect\"", "ref=\"audio\"", "ref=\"picture\" srcID=\"2\""] {
         let xml = format!(
@@ -354,7 +355,7 @@ fn project() -> (Project, ItemId) {
     (p, s)
 }
 
-#[test]
+#[trial]
 fn roundtrip_all_versions() {
     for v in [FcpxmlVersion::V1_9, FcpxmlVersion::V1_10, FcpxmlVersion::V1_11] {
         let (p, s) = project();
@@ -424,7 +425,7 @@ fn gen_clip() -> impl Strategy<Value = G> {
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(48))]
-    #[test]
+    #[trial]
     fn fcpxml_roundtrip(clips in prop::collection::vec(gen_clip(), 1..20), ri in 0usize..5) {
         let rate = [FrameRate::FPS_23_976, FrameRate::FPS_25, FrameRate::FPS_29_97, FrameRate::FPS_59_94, FrameRate::FPS_24][ri];
         let mut p = Project::new("P");
@@ -495,7 +496,7 @@ proptest! {
 }
 
 /// filmcraft#2195: a relative `src` is a URL like an absolute one: `boats%20b.mov` is the file `boats b.mov`.
-#[test]
+#[trial]
 fn relative_media_urls_are_percent_decoded() {
     let d = doc().replace(r#"src="boats.mov""#, r#"src="media/boats%20b.mov""#);
     let (imp, _) = import(d.as_bytes(), Format::Fcpxml, Some("/proj")).unwrap();

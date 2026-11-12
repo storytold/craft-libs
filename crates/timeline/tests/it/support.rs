@@ -5,13 +5,13 @@
 use std::ops::Range;
 
 use craft_timeline::fx::Standard;
-use craft_timeline::model::{
+use craft_timeline::interchange::{
     AudioStreamInfo, Catalog, ClipId, EffectDef, EffectInstance, EffectKind, Generator, ItemId, ItemKind, Label, MediaClip, MediaInfo, MediaKind,
     MediaRef, ParamDef, ParamValue, Project, Sequence, SequenceSettings, Track, TrackId, TrackItem, TrackKind, Transition, TransitionAlign,
     TransitionId, VideoStreamInfo,
 };
-use craft_timeline::time::{FrameRate, TICKS_PER_SECOND, Tick, TimeRange};
 use craft_timeline::{Error, ExportOptions, Format, ImportOptions, Imported, Report, fcp7, fcpxml, otio};
+use craft_timeline::{FrameRate, TICKS_PER_SECOND, Tick, TimeRange};
 
 /// [`Standard`] and a few effects an application adds: a blur, a grade, two transitions.
 pub struct TestCatalog;

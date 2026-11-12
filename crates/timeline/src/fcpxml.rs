@@ -1,6 +1,6 @@
 //! FCPXML (1.9–1.11) import/export.
 //!
-//! Mapping between the track model of [`crate::model`] and FCPXML's magnetic model:
+//! Mapping between the track model of [`crate::interchange`] and FCPXML's magnetic model:
 //! - V1 is the primary storyline (`spine`): clips, `gap`s and `transition`s.
 //! - Other video tracks become connected clips with `lane = track index` (V2 → lane 1); audio-only
 //!   items on audio track n become connected clips on lane `-n`. A V1/V2… clip whose linked audio
@@ -15,6 +15,7 @@
 //! - Markers on primary-storyline elements become sequence markers; markers on connected clips stay
 //!   clip markers. Transitions are supported on the primary storyline (and read from secondary
 //!   storylines); transitions elsewhere are reported.
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::collections::{HashMap, HashSet};
 
@@ -22,13 +23,14 @@ use crate::build::{
     Builder, Imported, MAX_IMPORTED_TRACKS, MediaSpec, base_item, db_to_gain, empty_sequence, gain_to_db, generator_of, item_media, item_path,
     kind_from_ext, param, param_modified, scaled, set_param, settings_for, standard_effects, transition_effect, transition_name,
 };
-use crate::model::{
+use crate::interchange::{
     BinId, ClipId, Interpolation, ItemId, ItemKind, Keyframe, Label, Marker, MarkerId, MarkerKind, MediaKind, Param, ParamValue, Project, Sequence,
     TrackItem, TrackKind, Transition, TransitionAlign, TransitionId, Vec2,
 };
 use crate::path::{file_name, path_to_file_url, resolve_path, resolve_url};
+use crate::rates::FrameRate;
 use crate::report::Report;
-use crate::time::{FrameRate, TICKS_PER_SECOND, Tick};
+use crate::time::{TICKS_PER_SECOND, Tick};
 use crate::xml::{Node, child, children, elements, escape_attr, num};
 use crate::{Error, ExportOptions, Format, ImportOptions, Result};
 
@@ -782,7 +784,7 @@ impl Exp<'_, '_> {
         let id = self.rid();
         self.res_out.push(format!(
             "    <format id=\"{id}\" name=\"FFVideoFormat{h}p{}\" frameDuration=\"{}/{}s\" width=\"{w}\" height=\"{h}\"/>\n",
-            rate.label().replace('.', ""),
+            rate.to_string().replace('.', ""),
             rate.den,
             rate.num
         ));
@@ -1288,8 +1290,9 @@ fn marker_xml(m: &Marker, local: Tick, rate: FrameRate) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use craft_ui::testing::trial;
 
-    #[test]
+    #[trial]
     fn rational_times_are_exact() {
         let r = FrameRate::FPS_23_976;
         assert_eq!(parse_time("1001/24000s"), Some(r.frame_duration()));
@@ -1315,7 +1318,7 @@ mod tests {
 
     /// A zero frame duration denominator gave the format a zero frame rate, and export then
     /// divided by zero (`fmt_time`) as soon as the sequence had a start timecode or a marker.
-    #[test]
+    #[trial]
     fn zero_frame_duration_falls_back_to_the_default_rate() {
         for fd in ["100/0s", "0/100s", "-100/2500s"] {
             let xml = format!(

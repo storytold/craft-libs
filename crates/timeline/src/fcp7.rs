@@ -14,6 +14,7 @@
 //! Coordinates: Basic Motion `center` is written relative to the frame centre as a fraction of the
 //! frame width/height (0,0 = centred); `centerOffset` (anchor) likewise relative to the source.
 //! Keyframe `when` values and clip markers are source (media) frames, like `in`/`out`.
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::collections::{HashMap, HashSet};
 
@@ -21,14 +22,16 @@ use crate::build::{
     Builder, Imported, MAX_IMPORTED_TRACKS, MediaSpec, base_item, db_to_gain, empty_sequence, gain_to_db, item_media, item_path, kind_from_ext,
     label_from, param, param_modified, set_param, settings_for, standard_effects, transition_effect, transition_name, unscaled,
 };
-use crate::model::{
+use crate::interchange::{
     BinId, ClipId, EffectInstance, Generator, Interpolation, ItemId, ItemKind, Keyframe, Label, Marker, MarkerId, MarkerKind, MediaKind, Param,
     ParamValue, Project, Sequence, TrackItem, TrackKind, Transition, TransitionAlign, TransitionId, Vec2,
 };
 use crate::path::{file_name, path_to_file_url, resolve_path, resolve_url};
 use crate::rate::{MAX_RATE, frames_round, on_frame, rate_from_timebase, timebase};
+use crate::rates::FrameRate;
 use crate::report::Report;
-use crate::time::{FrameRate, Tick, format_timecode_frames};
+use crate::time::Tick;
+use crate::timecode::format_timecode_frames;
 use crate::xml::{Node, XmlWriter, bool_str, child, child_bool, child_f64, child_i64, child_text, children, elements, num, path_text};
 use crate::{Error, ExportOptions, Format, ImportOptions, Result};
 
@@ -1012,7 +1015,7 @@ impl Exp<'_, '_> {
         self.written_seqs.insert(id);
     }
 
-    fn write_transition(&mut self, tr: &Transition, kind: TrackKind, rate: FrameRate, t: &crate::model::Track) {
+    fn write_transition(&mut self, tr: &Transition, kind: TrackKind, rate: FrameRate, t: &crate::interchange::Track) {
         if !on_frame(rate, tr.start) || !on_frame(rate, tr.duration) {
             self.report.warn("sub-frame transition positions were rounded to frames");
         }

@@ -1,13 +1,14 @@
 //! OpenTimelineIO: a hand-written plain OTIO document (from the public OTIO schema docs) with gaps,
 //! transitions, markers and legacy `Clip.1`; lossless round trips through `metadata.<namespace>`.
 
-use crate::support;
+use super::support;
 
-use craft_timeline::model::{
+use craft_timeline::interchange::{
     ClipId, Generator, ItemId, Keyframe, Label, Marker, MarkerId, MarkerKind, MediaRef, Param, ParamValue, Project, TrackKind, TransitionAlign,
 };
-use craft_timeline::time::{FrameRate, TICKS_PER_SECOND, Tick};
 use craft_timeline::{ExportOptions, Format, detect_text as detect};
+use craft_timeline::{FrameRate, TICKS_PER_SECOND, Tick};
+use craft_ui::testing::trial;
 use proptest::prelude::*;
 use support::*;
 
@@ -99,7 +100,7 @@ fn doc() -> String {
     )
 }
 
-#[test]
+#[trial]
 fn golden_gaps_and_transitions() {
     let d = doc();
     assert_eq!(detect(d.as_bytes(), Some("otio")), Some(Format::Otio));
@@ -215,7 +216,7 @@ fn project() -> (Project, ItemId) {
     (p, s)
 }
 
-#[test]
+#[trial]
 fn lossless_roundtrip_with_application_metadata() {
     let (p, s) = project();
     let (imp, text, rep) = roundtrip(&p, s, Format::Otio, &xopts());
@@ -268,7 +269,7 @@ fn lossless_roundtrip_with_application_metadata() {
     assert_eq!(structure(&imp2.project, imp2.sequences[0], TrackKind::Video), structure(&p, s, TrackKind::Video));
 }
 
-#[test]
+#[trial]
 fn collections_and_bare_tracks() {
     let one = r#"{"OTIO_SCHEMA": "SerializableCollection.1", "name": "Bundle", "children": [
         {"OTIO_SCHEMA": "Timeline.1", "name": "T1", "tracks": {"OTIO_SCHEMA": "Stack.1", "children": [
@@ -292,7 +293,7 @@ fn collections_and_bare_tracks() {
 /// OTIO, and so is a global start time at that rate. No sequence runs at 48 000 fps, so these do
 /// not set the sequence rate (it was 48 000, and importing the file into a project failed); the
 /// items keep their exact times.
-#[test]
+#[trial]
 fn items_at_a_sample_rate_do_not_set_the_sequence_rate() {
     let (sr, fps) = (48_000.0, 25.0);
     for global_start in ["null".to_string(), rt(3600.0 * sr, sr)] {
@@ -320,7 +321,7 @@ fn items_at_a_sample_rate_do_not_set_the_sequence_rate() {
 
 /// What an application wrote for itself next to the model's fields (FilmCraft's saved palette on a
 /// timeline) comes back in `ext`, and is written back.
-#[test]
+#[trial]
 fn unknown_metadata_keys_come_back_in_ext() {
     use serde_json::json;
     let doc = json!({"OTIO_SCHEMA":"Timeline.1","name":"T","metadata":{"testapp":{"label":"Teal","custom_colors":["#FFFFFE"],"custom_color_names":{"#FFFFFE":"Sea"}},"other":{"x":1}},
@@ -342,13 +343,13 @@ fn unknown_metadata_keys_come_back_in_ext() {
 }
 
 /// JSON nesting beyond serde_json's limit is a parse error, not a deep recursion.
-#[test]
+#[trial]
 fn deep_nesting_is_an_error() {
     let deep = format!("{}{}", "[".repeat(100_000), "]".repeat(100_000));
     assert!(import(deep.as_bytes(), Format::Otio, None).is_err());
 }
 
-#[test]
+#[trial]
 fn review_generator_preset_labels_survive_otio_round_trip() {
     let mut p = Project::new("Generator labels");
     let s = sequence(&mut p, "Main", FrameRate::FPS_25, false);
@@ -376,7 +377,7 @@ fn review_generator_preset_labels_survive_otio_round_trip() {
     }
 }
 
-#[test]
+#[trial]
 fn review_distinct_identical_generators_keep_identity_and_shared_references() {
     let mut p = Project::new("Generator identity");
     let s = sequence(&mut p, "Main", FrameRate::FPS_25, false);
@@ -413,7 +414,7 @@ fn review_distinct_identical_generators_keep_identity_and_shared_references() {
     }
 }
 
-#[test]
+#[trial]
 fn review_generators_without_valid_item_ids_keep_legacy_sharing() {
     use serde_json::json;
     let mut p = Project::new("Legacy generators");
@@ -478,7 +479,7 @@ fn gen_clip() -> impl Strategy<Value = G> {
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(48))]
-    #[test]
+    #[trial]
     fn otio_roundtrip(clips in prop::collection::vec(gen_clip(), 1..20), ri in 0usize..5) {
         let rate = [FrameRate::FPS_23_976, FrameRate::FPS_25, FrameRate::FPS_29_97, FrameRate::FPS_59_94, FrameRate::FPS_24][ri];
         let mut p = Project::new("P");
@@ -532,7 +533,7 @@ proptest! {
     }
 }
 
-#[test]
+#[trial]
 fn marker_urls_roundtrip_in_otio_and_warn_in_other_formats() {
     let (mut p, s) = project();
     let sequence_url = "https://example.com/sequence?q=日本語#review";
@@ -559,7 +560,7 @@ fn marker_urls_roundtrip_in_otio_and_warn_in_other_formats() {
 }
 
 /// filmcraft#2195: a relative `target_url` is a URL: `Clip%20A.mov` is the file `Clip A.mov`.
-#[test]
+#[trial]
 fn relative_target_urls_are_percent_decoded() {
     let doc = r#"{"OTIO_SCHEMA": "Timeline.1", "name": "T", "tracks": {"OTIO_SCHEMA": "Stack.1", "children": [
         {"OTIO_SCHEMA": "Track.1", "kind": "Video", "children": [

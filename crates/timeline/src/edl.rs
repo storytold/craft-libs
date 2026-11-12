@@ -10,11 +10,13 @@
 //! an event means on a timeline (which media a reel is, how a dissolve overlaps) is the caller's
 //! mapping. A list carries no frame rate: [`guess_rate`] guesses one, and [`Timecode::frames`]
 //! counts at the rate the caller settles on. [`write`] lays out events the caller built.
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::collections::BTreeSet;
 
+use crate::rates::FrameRate;
 use crate::report::Report;
-use crate::time::{FrameRate, fields_to_frames, format_timecode_frames};
+use crate::timecode::{TimecodeFields, fields_to_frames, format_timecode_frames};
 
 /// Heuristic: does this text look like an EDL?
 pub fn looks_like_edl(text: &str) -> bool {
@@ -27,10 +29,7 @@ pub fn looks_like_edl(text: &str) -> bool {
 /// A timecode as written: its four fields, and whether its separators say drop-frame (`;` or `,`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Timecode {
-    pub h: i64,
-    pub m: i64,
-    pub s: i64,
-    pub f: i64,
+    pub fields: TimecodeFields,
     pub df: bool,
 }
 
@@ -41,7 +40,8 @@ pub fn parse_tc(s: &str) -> Option<Timecode> {
         return None;
     }
     let n: Vec<i64> = parts.iter().map(|p| p.parse().ok()).collect::<Option<_>>()?;
-    Some(Timecode { h: n[0], m: n[1], s: n[2], f: n[3], df: s.contains(';') || s.contains(',') })
+    let fields = TimecodeFields { negative: false, hours: n[0], minutes: n[1], seconds: n[2], frames: n[3] };
+    Some(Timecode { fields, df: s.contains(';') || s.contains(',') })
 }
 
 /// The edit type of an event line (`C`, `D`, `Wnnn`, `K B`, `K`, `K O`).
@@ -238,7 +238,7 @@ pub fn parse(text: &str, report: &mut Report) -> Edl {
         }
         if let Some(line) = parse_event_line(l) {
             for tc in &line.tcs {
-                p.max_ff = p.max_ff.max(tc.f);
+                p.max_ff = p.max_ff.max(tc.fields.frames);
                 p.any_df |= tc.df;
             }
             if let Some(e) = p.events.last_mut().filter(|e| !skip_metadata && e.lines.last().is_some_and(|last| last.num == line.num)) {
@@ -281,7 +281,7 @@ impl Timecode {
     /// The frame count at `rate`; drop-frame when the timecode's separators or `drop_frame` (the
     /// `FCM:` in force) say so and the rate has drop-frame timecode.
     pub fn frames(self, rate: FrameRate, drop_frame: bool) -> i64 {
-        fields_to_frames(self.h, self.m, self.s, self.f, rate, self.df || drop_frame)
+        fields_to_frames(self.fields, rate, self.df || drop_frame)
     }
 }
 
@@ -415,8 +415,9 @@ pub fn write(header: &OutHeader, events: &[OutEvent]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use craft_ui::testing::trial;
 
-    #[test]
+    #[trial]
     fn channels() {
         assert_eq!(parse_channels("B"), Some(vec![Channel::V, Channel::A(1)]));
         assert_eq!(parse_channels("AA/V"), Some(vec![Channel::A(1), Channel::A(2), Channel::V]));
@@ -425,15 +426,18 @@ mod tests {
         assert_eq!(parse_channels("A+4"), None);
     }
 
-    #[test]
+    #[trial]
     fn timecode_rejects_fields_too_large_for_i64() {
         for tc in ["9223372036854775808:00:00:00", "00:9223372036854775808:00:00", "00:00:9223372036854775808:00", "00:00:00:9223372036854775808"] {
             assert!(parse_tc(tc).is_none(), "accepted {tc}");
         }
-        assert_eq!(parse_tc("01:02:03:04"), Some(Timecode { h: 1, m: 2, s: 3, f: 4, df: false }));
+        assert_eq!(
+            parse_tc("01:02:03:04"),
+            Some(Timecode { fields: TimecodeFields { negative: false, hours: 1, minutes: 2, seconds: 3, frames: 4 }, df: false })
+        );
     }
 
-    #[test]
+    #[trial]
     fn rejected_event_metadata_does_not_change_previous_event() {
         let text = "TITLE: Rejected event\n\
 001 A V C 00:00:00:00 00:00:01:00 01:00:00:00 01:00:01:00\n\
@@ -462,7 +466,7 @@ AUD 2\n\
         }
     }
 
-    #[test]
+    #[trial]
     fn event_lines() {
         let l = parse_event_line("002  REEL_B   V     D    030 02:00:10:00 02:00:15:00 01:00:05:00 01:00:10:00").unwrap();
         assert_eq!(l.trans, Transition::Dissolve);
@@ -475,7 +479,7 @@ AUD 2\n\
         assert!(parse_tc("01;00;00;02").unwrap().df);
     }
 
-    #[test]
+    #[trial]
     fn aud_line_out_of_range_channel_is_ignored() {
         for n in ["0", "100", "3000000"] {
             let text = format!("TITLE: t\n001  AX       V     C        00:00:00:00 00:00:01:00 01:00:00:00 01:00:01:00\nAUD {n}\n");
@@ -490,7 +494,7 @@ AUD 2\n\
         assert!(report.is_empty(), "{report}");
     }
 
-    #[test]
+    #[trial]
     fn hostile_m2_speeds_are_read_as_written() {
         // the caller decides what a speed means; the parser must only not fail on them
         for v in ["nan", "inf", "-inf", "0.00001", "1e300"] {
@@ -503,7 +507,7 @@ AUD 2\n\
         }
     }
 
-    #[test]
+    #[trial]
     fn frame_counts_and_rate_guess() {
         let ndf = parse_tc("01:00:00:00").unwrap();
         assert_eq!(ndf.frames(FrameRate::FPS_24, false), 86_400);
@@ -521,15 +525,15 @@ AUD 2\n\
         assert_eq!(rate(&format!("FCM: NON-DROP FRAME\n{}", ev("10"))), FrameRate::FPS_24);
     }
 
-    #[test]
+    #[trial]
     fn locators_take_a_colour_word_only_from_the_known_set() {
         let text = "001 AX V C 00:00:00:00 00:00:01:00 01:00:00:00 01:00:01:00\n* LOC: 01:00:00:10 red    Slate\n* LOC: 01:00:00:20 Take two\n";
         let edl = parse(text, &mut Report::default());
-        let locs: Vec<(i64, &str, &str)> = edl.events[0].locs.iter().map(|(t, c, n)| (t.f, c.as_str(), n.as_str())).collect();
+        let locs: Vec<(i64, &str, &str)> = edl.events[0].locs.iter().map(|(t, c, n)| (t.fields.frames, c.as_str(), n.as_str())).collect();
         assert_eq!(locs, [(10, "red", "Slate"), (20, "", "Take two")]);
     }
 
-    #[test]
+    #[trial]
     fn written_lists_have_the_column_layout_and_read_back() {
         let header = OutHeader { title: "Cut 1".into(), rate: FrameRate::FPS_29_97, drop_frame: true, reel_len: 8 };
         let events = [
