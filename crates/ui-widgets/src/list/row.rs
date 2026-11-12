@@ -9,7 +9,7 @@
 
 use super::toggle::ToggleCell;
 use super::words::ListWords;
-use crate::contract::{Common, OpenChange, RowPressed, RowState, Show};
+use crate::contract::{Common, OpenChange, RowHeight, RowPressed, RowState, Show};
 use crate::primitives::{ContentPainterCx, HAlign, IconSpec};
 use crate::runtime::env::Label;
 use craft_behavior::ColumnKey;
@@ -133,6 +133,9 @@ pub struct ListRow<'a> {
     #[style_key]
     #[prop]
     pub(super) role: Option<TypeRole>,
+    /// How tall the row is: its collection sets it from `CollectionProps::row_height` in `Collection::dress`.
+    #[style_key]
+    pub(super) rows: RowHeight,
     /// The label in italics.
     #[prop]
     pub(super) italic: bool,
@@ -257,6 +260,7 @@ impl<'a> ListRow<'a> {
             layer: false,
             striped: false,
             role: None,
+            rows: RowHeight::Control,
             italic: false,
             highlight: false,
             clipped: false,
@@ -326,6 +330,13 @@ impl<'a> ListRow<'a> {
     #[must_use]
     pub(crate) fn disclosure_by_host(mut self) -> Self {
         self.disclosure_by_host = true;
+        self
+    }
+
+    /// The row is `rows` tall: the height its collection's rows take.
+    #[must_use]
+    pub(crate) fn rows(mut self, rows: RowHeight) -> Self {
+        self.rows = rows;
         self
     }
 

@@ -189,8 +189,13 @@ const COLLECTION: &[Forwarded] = &[
     ("deletable", "bool", "Delete and Backspace at the lead report the items to delete."),
     ("drag_count", "::craft_ui::runtime::env::Counted", "The drag badge reads this count word for the dragged items, one included."),
     ("natural_height", "bool", "The collection takes its full content height and owns no scroll: for a short collection inside a scrolling page."),
-    ("min_rows", "u16", "The collection is at least this many rows tall; rows it does not have count the control height."),
+    ("min_rows", "u16", "The collection is at least this many rows tall; rows it does not have count the row height."),
     ("max_rows", "u16", "The collection shows at most this many rows and scrolls the rest, inside a scrolling body too."),
+    (
+        "row_height",
+        "::craft_ui::contract::RowHeight",
+        "How tall the rows are: text rows for a read-only display table, control-high rows for a list the user picks from.",
+    ),
     ("notch", "::craft_ui::contract::Notch", "The distance one wheel notch scrolls the rows."),
     ("command_click", "bool", "A Cmd/Ctrl click on an item is a command (`CollectionEvent::CommandClick`), not a pick."),
     (

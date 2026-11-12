@@ -4,6 +4,7 @@ use super::columns::{ColumnSort, ColumnSpec};
 use super::events::ListDrag;
 use crate::contract::Notch;
 use crate::runtime::env::{Counted, Label};
+use crate::style::StyleCx;
 use craft_behavior::{Axis, ColumnKey};
 use std::any::Any;
 use std::sync::Arc;
@@ -117,6 +118,29 @@ pub enum LeadOnOpen {
     First,
 }
 
+/// How tall a collection's rows are. Read-only display tables (a metadata table) take text rows; lists the user picks
+/// from or navigates keep control-high rows, a pointer target as tall as a control. A row with a thumbnail or a
+/// detail line is as tall as those need either way.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RowHeight {
+    /// A control high: `size.control` at the collection's control size.
+    #[default]
+    Control,
+    /// One text line and a tight gap: `size.row.text`.
+    Text,
+}
+
+impl RowHeight {
+    /// The height of one row under `cx`.
+    pub fn of(self, cx: &StyleCx<'_>) -> f32 {
+        match self {
+            RowHeight::Control => cx.control().height,
+            RowHeight::Text => cx.tokens.size.row.text,
+        }
+    }
+}
+
 /// What a collection reads from the app: plain data. A new builder's name is added to the forwarder list in
 /// `crates/ui-macros/src/props.rs`, so the components that embed these props forward it.
 #[derive(Clone, Debug)]
@@ -191,12 +215,14 @@ pub struct CollectionProps {
     /// the lead scrolls the page to keep the row in view. For short collections only; a long one keeps its own
     /// scroll and is shown outside a scrolling body (16.3).
     pub natural_height: bool,
-    /// The least number of rows the collection is tall: rows it does not have count the control height, so an empty
+    /// The least number of rows the collection is tall: rows it does not have count the row height, so an empty
     /// collection stays a target of its size.
     pub min_rows: u16,
     /// The most rows the collection shows: past them it is as tall as its first `max_rows` rows and scrolls them. It
     /// owns that scroll inside a scrolling body too, since its height is bounded and the wheel passes on at its ends.
     pub max_rows: Option<u16>,
+    /// How tall the rows are.
+    pub row_height: RowHeight,
     /// A Cmd/Ctrl click on an item, on its own area or a part that picks it, is a command on the item, not a pick: the
     /// selection stays and the release reports `CollectionEvent::CommandClick`.
     pub command_click: bool,
@@ -287,6 +313,7 @@ impl CollectionProps {
             natural_height: false,
             min_rows: 0,
             max_rows: None,
+            row_height: RowHeight::Control,
             command_click: false,
             notch: None,
             overflow: Axis::Y,
@@ -504,6 +531,13 @@ impl CollectionProps {
     #[must_use]
     pub const fn max_rows(mut self, rows: u16) -> Self {
         self.max_rows = Some(rows);
+        self
+    }
+
+    /// The rows are `height` tall (see [`RowHeight`]).
+    #[must_use]
+    pub const fn row_height(mut self, height: RowHeight) -> Self {
+        self.row_height = height;
         self
     }
 

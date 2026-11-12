@@ -5,7 +5,7 @@ use super::show::named;
 use super::style::ListRowStyle;
 use super::thumb::{Thumb, ThumbSize};
 use super::trailing::{TrailingItem, trailing_run};
-use crate::contract::{ColumnAlign, PartsCx, WordSetCx as _};
+use crate::contract::{ColumnAlign, PartsCx, RowHeight, WordSetCx as _};
 use crate::layout::{ShrinkOrder, ShrinkUnit, shrink_widths};
 use crate::list::toggle::ToggleState;
 use crate::list::words::ListWords;
@@ -44,11 +44,11 @@ pub(super) struct Sizes {
 }
 
 impl Sizes {
-    pub(super) fn of(cx: &StyleCx<'_>, role: TypeRole) -> Sizes {
+    pub(super) fn of(cx: &StyleCx<'_>, role: TypeRole, rows: RowHeight) -> Sizes {
         let (control, tokens) = (cx.control(), cx.tokens);
         let thumbs = &tokens.size.thumb;
         Sizes {
-            row: control.height,
+            row: rows.of(cx),
             icon: control.icon,
             pad: control.pad_x,
             gap: control.gap,
@@ -76,8 +76,8 @@ impl Sizes {
         thumb.pick(self.thumbs)
     }
 
-    /// The height of a row with a thumbnail of `thumb` and, if `detail`, a detail line: the control height, the
-    /// thumbnail with its padding (at least `thumb_row`), or the two lines of text, whichever is tallest.
+    /// The height of a row with a thumbnail of `thumb` and, if `detail`, a detail line: the row height, the thumbnail
+    /// with its padding (at least `thumb_row`), or the two lines of text, whichever is tallest.
     pub(super) fn height(&self, thumb: ThumbSize, detail: bool) -> f32 {
         let base = match self.side(thumb) {
             0.0 => self.row,
@@ -95,10 +95,10 @@ pub(super) fn halign(align: ColumnAlign) -> HAlign {
 }
 
 impl ListRow<'_> {
-    /// The height of a row with a thumbnail of `thumb` and, if `detail`, a detail line, for the item layout of a
-    /// list of such rows.
+    /// The height of a control-high row with a thumbnail of `thumb` and, if `detail`, a detail line, for the item
+    /// layout of a list of such rows.
     pub fn row_height(cx: &StyleCx<'_>, thumb: ThumbSize, detail: bool) -> f32 {
-        Sizes::of(cx, TypeRole::Body).height(thumb, detail)
+        Sizes::of(cx, TypeRole::Body, RowHeight::Control).height(thumb, detail)
     }
 
     /// Where this row's disclosure lies when it fills `rect` under `style`, with texts `text_width` wide: the rect at

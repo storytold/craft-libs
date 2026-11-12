@@ -6,7 +6,7 @@ use super::words::ListWords;
 use super::{ListRow, RowEvent};
 use crate::contract::{
     ActivateOn, Bind, BindMut, Collection, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, MeasureCx, PaintUi,
-    Props as _, Role, SelectMode, Sizing, Styled as _, WordSetCx as _,
+    Props as _, Role, RowState, SelectMode, Sizing, Styled as _, WordSetCx as _,
 };
 use crate::primitives::{IconSpec, TextRun, glyph};
 use crate::runtime::env::{Label, WordSet as _};
@@ -208,7 +208,11 @@ impl Collection for FindingsList<'_> {
     }
 
     fn item_layout(&self, source: &dyn ItemSource<u64>, width: f32, cx: &StyleCx<'_>) -> SpanLayout {
-        SpanLayout::sized(source, width, cx.control().height)
+        SpanLayout::sized(source, width, self.items.row_height.of(cx))
+    }
+
+    fn dress<'r>(&self, row: Self::Item<'r>, _: &RowState) -> Self::Item<'r> {
+        row.rows(self.items.row_height)
     }
 }
 

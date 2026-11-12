@@ -5,7 +5,7 @@ use super::view_words::UndoWords;
 use super::{ListRow, RowEvent};
 use crate::contract::{
     ActivateOn, Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, Props as _,
-    Role, SelectMode, Sizing,
+    Role, RowState, SelectMode, Sizing,
 };
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx};
@@ -178,6 +178,10 @@ impl Collection for UndoList<'_> {
     }
 
     fn item_layout(&self, source: &dyn ItemSource<usize>, width: f32, cx: &StyleCx<'_>) -> SpanLayout {
-        SpanLayout::new(source, width, cx.control().height)
+        SpanLayout::new(source, width, self.items.row_height.of(cx))
+    }
+
+    fn dress<'r>(&self, row: Self::Item<'r>, _: &RowState) -> Self::Item<'r> {
+        row.rows(self.items.row_height)
     }
 }

@@ -80,7 +80,7 @@ impl Component for ListRow<'_> {
         };
         let weight = key.strong || key.heading;
         let role = key.role.unwrap_or(if weight { TypeRole::BodyStrong } else { TypeRole::Body });
-        let sizes = Sizes::of(cx, role);
+        let sizes = Sizes::of(cx, role, key.rows);
         let muted = if key.ink == RowInk::Dimmed { text.faint } else { text.muted };
         ListRowStyle {
             surface,

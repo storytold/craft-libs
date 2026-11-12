@@ -6,7 +6,8 @@ use super::words::TableWords;
 use crate::contract::overlay::Anchor;
 use crate::contract::{
     Bind, BindMut, Collection, CollectionProps, CollectionResponse, ColumnCommands, ColumnRequest, ColumnSpec, Common, Component, ContainerProps, Cx,
-    DropKind, EditResponse, ListDrag, OverlayUi, Overlays as _, Props as _, Role, SelectMode, Show as _, ShowContainer as _, Sizing, WordSetCx as _,
+    DropKind, EditResponse, ListDrag, OverlayUi, Overlays as _, Props as _, Role, RowState, SelectMode, Show as _, ShowContainer as _, Sizing,
+    WordSetCx as _,
 };
 use crate::display::Divider;
 use crate::list::{DropTest, ListRow, RowEvent, RowTest, RowText};
@@ -192,10 +193,14 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for Table<'_, K> {
         self.reveal.as_ref()
     }
 
-    /// Column widths come from the specs and the header's memory; a row is a control high.
+    /// Column widths come from the specs and the header's memory; a row is as tall as `CollectionProps::row_height`.
     fn item_layout(&self, source: &dyn ItemSource<K>, width: f32, cx: &StyleCx<'_>) -> SpanLayout {
-        let layout = SpanLayout::sized(source, width, cx.control().height);
+        let layout = SpanLayout::sized(source, width, self.items.row_height.of(cx));
         if self.tree { layout.tree() } else { layout }
+    }
+
+    fn dress<'r>(&self, row: Self::Item<'r>, _: &RowState) -> Self::Item<'r> {
+        row.rows(self.items.row_height)
     }
 
     fn rename_draft(&self, key: &K) -> Option<String> {

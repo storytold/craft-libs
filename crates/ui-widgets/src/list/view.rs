@@ -208,11 +208,12 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for List<'_, K> {
     }
 
     fn item_layout(&self, source: &dyn ItemSource<K>, width: f32, cx: &StyleCx<'_>) -> SpanLayout {
-        let layout = SpanLayout::sized(source, width, cx.control().height);
+        let layout = SpanLayout::sized(source, width, self.items.row_height.of(cx));
         if self.tree { layout.tree() } else { layout }
     }
 
     fn dress<'r>(&self, row: Self::Item<'r>, _: &RowState) -> Self::Item<'r> {
+        let row = row.rows(self.items.row_height);
         if self.row_menu { row.row_menu() } else { row }
     }
 

@@ -228,7 +228,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let content = layout.content_size();
         self.content = Vec2::new(content.x as f32, content.y as f32);
         let props = comp.items();
-        let row = scx.control().height;
+        let row = props.row_height.of(scx);
         let floor = rows_height(&layout, self.source.len(), props.min_rows, row);
         let cap = props.max_rows.map(|rows| rows_height(&layout, self.source.len(), rows, row).max(floor));
         self.columns = layout.column_count() as u32;
@@ -904,8 +904,8 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     }
 }
 
-/// The height of the first `rows` rows of `layout` over `len` items: the rows it lays out, and the control height `row`
-/// for each one it does not have.
+/// The height of the first `rows` rows of `layout` over `len` items: the rows it lays out, and the row height `row` for
+/// each one it does not have.
 fn rows_height(layout: &impl ItemLayout, len: usize, rows: u16, row: f32) -> f32 {
     let rows = usize::from(rows);
     let laid = rows.min(len);

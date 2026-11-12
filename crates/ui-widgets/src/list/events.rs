@@ -4,7 +4,8 @@
 use super::view_words::EventWords;
 use super::{ListRow, RowEvent};
 use crate::contract::{
-    Bind, BindMut, Collection, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, Props as _, Role, SelectMode, Sizing,
+    Bind, BindMut, Collection, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, Props as _, Role, RowState, SelectMode,
+    Sizing,
 };
 use crate::primitives::IconSpec;
 use crate::runtime::env::{Label, WordSet as _};
@@ -247,7 +248,11 @@ impl Collection for EventList<'_> {
     }
 
     fn item_layout(&self, source: &dyn ItemSource<u64>, width: f32, cx: &StyleCx<'_>) -> SpanLayout {
-        SpanLayout::sized(source, width, cx.control().height)
+        SpanLayout::sized(source, width, self.items.row_height.of(cx))
+    }
+
+    fn dress<'r>(&self, row: Self::Item<'r>, _: &RowState) -> Self::Item<'r> {
+        row.rows(self.items.row_height)
     }
 }
 
