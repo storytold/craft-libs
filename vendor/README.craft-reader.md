@@ -59,6 +59,7 @@ where noted below.
 |---|---|---|---|---|
 | [#2770](https://github.com/storytold/pdfcraft/pull/2770) | Guillem Hermida (guillehr2) | [6fcf2a4](https://github.com/guillehr2/pdfcraft/commit/6fcf2a4aca29e943e28cb69017ff8f87d00656c6) | hayro-interpret `color.rs`, `interpret/mod.rs`, `interpret/path.rs`, `interpret/state.rs`, `pattern.rs`, `shading.rs`, `soft_mask.rs`, `x_object.rs` | Patches 35 and 36, plate mode: `InterpreterSettings::plate` draws one ink's separation as a gray film (`color::Plate`, `ColorSpace::ink_use`/`ink_tint`); the graphics state reads `OP`, `op` and `OPM` and an overprinting paint that doesn't specify the plate's ink leaves the plate as it is (ISO 32000-2 §8.6.7); `InterpreterSettings::ink_sink` reports spot inks; `color::CmykSimulation` converts process color to an output intent's CMYK. Only the vendored interpreter part is ported; PdfCraft's `separations.rs` and Output Preview UI are not |
 | [#2974](https://github.com/storytold/pdfcraft/pull/2974) | mtlcl410 | [bae6981](https://github.com/mtlcl410/pdfcraft/commit/bae69819594a6385a027fec1f67e6b3c36c259b4) | hayro-interpret `device.rs`, `x_object.rs`; hayro `renderer.rs` | Knockout groups (`/K true`) knock out: while one is innermost, fills, strokes, glyph outlines and shadings are drawn with `Compose::Copy` (weighted by coverage); an unmasked image's rectangle (`Device::knockout_image`) and a nested group's shape (an erase pass between `Device::begin_knockout_erase` and `end_knockout_erase`) are cleared before their layer composites; a transparency group drawn in a knockout group always gets a layer of its own. Masked images and stencils composite as before |
+| [#4898](https://github.com/storytold/pdfcraft/pull/4898) | KenM76 | [6a76d28](https://github.com/KenM76/pdfcraft/commit/6a76d280168ebad42198de184d03ac11bf31f647) | hayro-interpret `device.rs`, `ocg.rs`, `x_object.rs`; hayro `renderer.rs` | A non-isolated knockout group entered at full opacity, without a soft mask and with Normal blending, composites each element with the backdrop in the element's own blend mode: the group is drawn once per blend mode its elements use (`Device::begin_knockout_pass`, `end_knockout_pass`), each pass a layer composited in its mode, in which elements of other modes clear their shape; a shading in a knockout group clears only where it paints (`Compose::DestOut`), so a mesh or a `/BBox` no longer clears its whole path |
 
 Code comments label #2974's changes `Knockout patch (pdfcraft #2974)` instead of a number: the
 pull request numbers them hayro-interpret patch 39 and hayro patch 19, and PdfCraft may
@@ -66,6 +67,11 @@ renumber them when it merges. `crates/pdf/tests/knockout.rs` adapts its test; a 
 test in `crates/pdf/tests/plates.rs` checks that a knockout group separates with only the top
 object where two objects overlap. The erase pass resolves the group's resources with
 `Resources::from_scope`, as the group's own draw does in this tree.
+
+#4898 was merged in PdfCraft (b0555cb) after this tree's snapshot. Its comments keep the label
+`Knockout patch (pdfcraft #4898)`, beside #2974's. `crates/pdf/tests/knockout_backdrop.rs`
+adapts its tests; a plate-mode test in `crates/pdf/tests/plates.rs` checks the case of craft-libs
+#870, a Multiply knockout group over a yellow page.
 
 A craft-libs patch, labeled `Craft patch (CMYK masks)` in code comments,
 takes a luminosity soft mask whose group is DeviceCMYK from the group's inks: ISO 32000-2
