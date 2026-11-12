@@ -134,3 +134,13 @@ fn write_sst(out: &mut Vec<u8>, parts: &[Vec<u8>]) {
 pub fn encrypt_rc4(stream: &[u8], password: &str) -> Option<Vec<u8>> {
     crate::crypt::encrypt(stream, password)
 }
+
+/// [`encrypt_rc4`] with RC4 CryptoAPI version 4.2 and a `bits`-bit key, as current Excel writes it.
+pub fn encrypt_cryptoapi(stream: &[u8], password: &str, bits: u32) -> Option<Vec<u8>> {
+    crate::crypt::encrypt_cryptoapi(stream, password, bits)
+}
+
+/// The FilePass record data [`encrypt_cryptoapi`] writes, for tests that damage it.
+pub fn cryptoapi_filepass(password: &str, bits: u32) -> Vec<u8> {
+    crate::crypt::cryptoapi_filepass(password, bits)
+}

@@ -14,7 +14,7 @@
 //!
 //! Everything else (charts, other shapes, newer conditional formats, hyperlinks,
 //! PivotTables, macros) is skipped and named in [`Read::warnings`]. A workbook encrypted with
-//! RC4 is read with its password ([`read_with_password`]; without one, Excel's
+//! RC4 or RC4 CryptoAPI is read with its password ([`read_with_password`]; without one, Excel's
 //! default password is tried and [`Error::Encrypted`] says one is needed). Other encryption and
 //! versions before BIFF8 are refused ([`Error::UnsupportedEncryption`], [`Error::Biff5`]). A formula that
 //! cannot be put back into text (links to other workbooks, macro commands, unknown tokens)
@@ -74,8 +74,8 @@ pub enum Error {
     /// The password does not open the workbook.
     #[error("the password is not the workbook's")]
     WrongPassword,
-    /// The workbook is encrypted with a scheme that is not read (XOR obfuscation, RC4
-    /// CryptoAPI), named.
+    /// The workbook is encrypted with a scheme that is not read (XOR obfuscation, CryptoAPI with
+    /// AES or another cipher or hash, an external provider), named.
     #[error("the workbook uses {0} encryption, which is not read")]
     UnsupportedEncryption(String),
     /// An Excel 5.0/95 workbook (BIFF5), which is not read.

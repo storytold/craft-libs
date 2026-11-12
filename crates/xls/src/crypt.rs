@@ -3,11 +3,14 @@
 //! after it is encrypted with RC4, rekeyed every 1024 bytes of the stream. Record headers, and the
 //! data of a few records, are left in the clear.
 //!
-//! RC4 (version 1.1), keyed from the password through MD5, is read. XOR obfuscation and RC4
-//! CryptoAPI are reported as unsupported. Clean-room from Microsoft's public
+//! Two schemes are read: RC4 (version 1.1), keyed from the password through MD5, and RC4
+//! CryptoAPI (versions 2.2, 3.2 and 4.2, what current Excel writes for an `.xls` saved with a
+//! password), keyed through SHA-1 with a 40- to 128-bit key. XOR obfuscation, and CryptoAPI with
+//! another cipher or hash, are reported as unsupported. Clean-room from Microsoft's public
 //! specifications.
 
 use md5::{Digest, Md5};
+use sha1::Sha1;
 
 /// Why a Workbook stream could not be decrypted.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +34,18 @@ const BOUNDSHEET: u16 = 0x0085;
 const CLEAR: [u16; 7] = [0x0809, FILEPASS, 0x0194, 0x0195, 0x00E1, 0x0196, 0x0138];
 /// The RC4 key changes every this many bytes of the stream.
 const REKEY: usize = 1024;
+/// CryptoAPI `AlgID` for RC4 ([MS-OFFCRYPTO] 2.3.2); 0 means the flags decide, which without
+/// `fAES` is RC4 too.
+const CALG_RC4: u32 = 0x6801;
+/// CryptoAPI `AlgIDHash` for SHA-1; 0 means SHA-1 too.
+const CALG_SHA1: u32 = 0x8004;
+/// EncryptionHeader flags: `fExternal` (an external provider does the encryption) and `fAES`.
+const F_EXTERNAL: u32 = 0x10;
+const F_AES: u32 = 0x20;
+/// A CryptoAPI salt is 16 bytes, the verifier too, and the verifier's SHA-1 hash 20.
+const SALT_LEN: usize = 16;
+const SHA1_LEN: usize = 20;
+
 fn malformed(m: &str) -> DecryptError {
     DecryptError::Malformed(m.into())
 }
@@ -86,6 +101,9 @@ pub(crate) fn decrypt(stream: &mut [u8], password: &str) -> Result<(), DecryptEr
 enum Key {
     /// RC4 1.1: the 5 bytes every block key is the MD5 of, with the block number.
     Rc4([u8; 5]),
+    /// RC4 CryptoAPI: H0, which every block key is the SHA-1 of, with the block number, cut to
+    /// `bits`.
+    CryptoApi { h0: [u8; SHA1_LEN], bits: u32 },
 }
 
 impl Key {
@@ -95,6 +113,15 @@ impl Key {
         match self {
             // MD5(key ‖ LE32(block)) ([MS-OFFCRYPTO] 2.3.6.2).
             Key::Rc4(key) => Rc4::new(&md5(&[key, &block])),
+            // SHA-1(H0 ‖ LE32(block)), its first bits / 8 bytes; a 40-bit key is padded with
+            // zeros to 128 bits ([MS-OFFCRYPTO] 2.3.5.2).
+            Key::CryptoApi { h0, bits } => {
+                let hash = sha1(&[h0, &block]);
+                let mut key = [0u8; 16];
+                let len = usize::try_from(*bits / 8).unwrap_or(0).min(key.len());
+                key.iter_mut().zip(hash.iter()).take(len).for_each(|(k, h)| *k = *h);
+                Rc4::new(if *bits == 40 { &key } else { key.get(..len).unwrap_or(&key) })
+            }
         }
     }
 }
@@ -110,7 +137,7 @@ fn password_key(filepass: &[u8], password: &str) -> Result<Key, DecryptError> {
     }
     match (u16_at(filepass, 2).ok_or_else(short)?, u16_at(filepass, 4).ok_or_else(short)?) {
         (1, 1) => rc4_key(filepass, password),
-        (2..=4, 2) => Err(DecryptError::Unsupported("RC4 CryptoAPI".into())),
+        (2..=4, 2) => cryptoapi_key(filepass, password),
         (major, minor) => Err(DecryptError::Unsupported(format!("version {major}.{minor}"))),
     }
 }
@@ -118,6 +145,11 @@ fn password_key(filepass: &[u8], password: &str) -> Result<Key, DecryptError> {
 fn u16_at(b: &[u8], at: usize) -> Option<u16> {
     let v = b.get(at..at.checked_add(2)?)?;
     Some(u16::from_le_bytes([*v.first()?, *v.get(1)?]))
+}
+
+fn u32_at(b: &[u8], at: usize) -> Option<u32> {
+    let v = b.get(at..at.checked_add(4)?)?;
+    Some(u32::from_le_bytes([*v.first()?, *v.get(1)?, *v.get(2)?, *v.get(3)?]))
 }
 
 /// RC4 1.1 ([MS-OFFCRYPTO] 2.3.6.1, 2.3.6.2): the key, after checking the verifier.
@@ -151,12 +183,82 @@ fn rc4_key(filepass: &[u8], password: &str) -> Result<Key, DecryptError> {
     Ok(key)
 }
 
+/// RC4 CryptoAPI ([MS-OFFCRYPTO] 2.3.5.1, 2.3.5.2, 2.3.5.6): after the version, the flags, the
+/// EncryptionHeader's size and the header itself, then the EncryptionVerifier (salt size, salt,
+/// encrypted verifier, verifier hash size, encrypted verifier hash). Every size is the file's
+/// word, so each is checked before it is used.
+fn cryptoapi_key(filepass: &[u8], password: &str) -> Result<Key, DecryptError> {
+    let short = || malformed("truncated FilePass record");
+    let unsupported = |scheme: String| Err(DecryptError::Unsupported(scheme));
+    let flags = u32_at(filepass, 6).ok_or_else(short)?;
+    let header_size = usize::try_from(u32_at(filepass, 10).ok_or_else(short)?).unwrap_or(usize::MAX);
+    let header_end = 14usize.saturating_add(header_size);
+    let header = filepass.get(14..header_end).ok_or_else(short)?;
+    // Eight words (Flags, SizeExtra, AlgID, AlgIDHash, KeySize, ProviderType and two reserved),
+    // then the provider's name, which says nothing the reader needs.
+    let (true, Some(alg), Some(alg_hash), Some(bits)) = (header.len() >= 32, u32_at(header, 8), u32_at(header, 12), u32_at(header, 16)) else {
+        return Err(malformed("EncryptionHeader too short"));
+    };
+    if flags & F_EXTERNAL != 0 {
+        return unsupported("CryptoAPI with an external provider".into());
+    }
+    if flags & F_AES != 0 {
+        return unsupported("CryptoAPI AES".into());
+    }
+    if !matches!(alg, 0 | CALG_RC4) {
+        return unsupported(format!("CryptoAPI with cipher 0x{alg:04X}"));
+    }
+    if !matches!(alg_hash, 0 | CALG_SHA1) {
+        return unsupported(format!("RC4 CryptoAPI with hash 0x{alg_hash:04X}"));
+    }
+    // 0 means 40 bits; otherwise 40 to 128 bits in steps of 8.
+    let bits = if bits == 0 { 40 } else { bits };
+    if !(40..=128).contains(&bits) || bits % 8 != 0 {
+        return unsupported(format!("RC4 CryptoAPI with a {bits}-bit key"));
+    }
+
+    let verifier_at = header_end;
+    let field = |at: usize, len: usize| filepass.get(verifier_at.saturating_add(at)..verifier_at.saturating_add(at + len));
+    if u32_at(filepass, verifier_at) != Some(SALT_LEN as u32) {
+        return Err(field(0, 4).map_or_else(short, |_| malformed("unexpected salt size")));
+    }
+    let salt = field(4, SALT_LEN).ok_or_else(short)?;
+    let verifier = field(4 + SALT_LEN, SALT_LEN).ok_or_else(short)?;
+    if u32_at(filepass, verifier_at.saturating_add(4 + 2 * SALT_LEN)) != Some(SHA1_LEN as u32) {
+        return Err(field(4 + 2 * SALT_LEN, 4).map_or_else(short, |_| malformed("unexpected verifier hash size")));
+    }
+    let verifier_hash = field(8 + 2 * SALT_LEN, SHA1_LEN).ok_or_else(short)?;
+
+    // H0 = SHA-1(salt ‖ UTF-16LE password).
+    let pw: Vec<u8> = password.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let key = Key::CryptoApi { h0: sha1(&[salt, &pw]), bits };
+
+    // As with RC4 1.1, the verifier and its hash run on through one block-0 cipher.
+    let mut rc4 = key.block(0);
+    let verifier: Vec<u8> = verifier.iter().map(|b| b ^ rc4.next_byte()).collect();
+    let verifier_hash: Vec<u8> = verifier_hash.iter().map(|b| b ^ rc4.next_byte()).collect();
+    if sha1(&[&verifier]).as_slice() != verifier_hash.as_slice() {
+        return Err(DecryptError::WrongPassword);
+    }
+    Ok(key)
+}
+
 fn md5(parts: &[&[u8]]) -> [u8; 16] {
     let mut m = Md5::new();
     for p in parts {
         m.update(p);
     }
     let mut out = [0u8; 16];
+    out.iter_mut().zip(m.finalize().iter()).for_each(|(o, h)| *o = *h);
+    out
+}
+
+fn sha1(parts: &[&[u8]]) -> [u8; SHA1_LEN] {
+    let mut m = Sha1::new();
+    for p in parts {
+        m.update(p);
+    }
+    let mut out = [0u8; SHA1_LEN];
     out.iter_mut().zip(m.finalize().iter()).for_each(|(o, h)| *o = *h);
     out
 }
@@ -253,6 +355,34 @@ pub(crate) fn encrypt(stream: &[u8], password: &str) -> Option<Vec<u8>> {
     filepass.extend(verifier.iter().map(|b| b ^ rc4.next_byte()));
     filepass.extend(md5(&[&verifier]).iter().map(|b| b ^ rc4.next_byte()));
     with_filepass(stream, &filepass, password)
+}
+
+/// The FilePass data [`encrypt_cryptoapi`] writes: RC4 CryptoAPI version 4.2, as current Excel
+/// writes it, with a `bits`-bit key (40 to 128) and a fixed salt and verifier.
+pub(crate) fn cryptoapi_filepass(password: &str, bits: u32) -> Vec<u8> {
+    let salt: [u8; SALT_LEN] = std::array::from_fn(|n| (n as u8).wrapping_mul(7).wrapping_add(0x11));
+    let verifier: [u8; SALT_LEN] = std::array::from_fn(|n| n as u8 + 0x80);
+    let pw: Vec<u8> = password.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let mut rc4 = Key::CryptoApi { h0: sha1(&[&salt, &pw]), bits }.block(0);
+    // fCryptoAPI and fDocProps, as Excel sets them.
+    let flags: u32 = 0x0C;
+    let provider = "Test provider\0".encode_utf16().flat_map(u16::to_le_bytes);
+    let header: Vec<u8> = [flags, 0, CALG_RC4, CALG_SHA1, bits, 1, 0, 0].iter().flat_map(|w| w.to_le_bytes()).chain(provider).collect();
+    let mut filepass = vec![1, 0, 4, 0, 2, 0];
+    filepass.extend(flags.to_le_bytes());
+    filepass.extend((header.len() as u32).to_le_bytes());
+    filepass.extend(header);
+    filepass.extend((SALT_LEN as u32).to_le_bytes());
+    filepass.extend(salt);
+    filepass.extend(verifier.iter().map(|b| b ^ rc4.next_byte()));
+    filepass.extend((SHA1_LEN as u32).to_le_bytes());
+    filepass.extend(sha1(&[&verifier]).iter().map(|b| b ^ rc4.next_byte()));
+    filepass
+}
+
+/// [`encrypt`] with RC4 CryptoAPI ([`cryptoapi_filepass`]).
+pub(crate) fn encrypt_cryptoapi(stream: &[u8], password: &str, bits: u32) -> Option<Vec<u8>> {
+    with_filepass(stream, &cryptoapi_filepass(password, bits), password)
 }
 
 /// `stream` with a FilePass record holding `filepass` right after its first BOF, encrypted with

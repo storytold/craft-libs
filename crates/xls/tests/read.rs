@@ -703,7 +703,7 @@ fn reports_the_sheet_it_was_saved_on() {
     assert_eq!(book(&cat(&[&window1(1), &window1(2)])).as_deref(), Some("Sheet1"));
 }
 
-// Encrypted workbooks. Ported from storytold/gridcraft#847 (RC4).
+// Encrypted workbooks. Ported from storytold/gridcraft#847 (RC4) and #3713 (RC4 CryptoAPI).
 
 fn read_pw(file: &[u8], password: &str) -> Result<craft_xls::Read, Error> {
     craft_xls::read_with_password(file, Limits::default(), password)
@@ -758,4 +758,73 @@ fn excels_default_password_opens_without_asking() {
     // A workbook protected only against changes is encrypted with "VelvetSweatshop".
     let file = compound("Workbook", &craft_xls::testing::encrypt_rc4(&sample(false), "VelvetSweatshop").unwrap());
     assert_eq!(read_xls(&file).unwrap().0.sheets.len(), 2);
+    let file = compound("Workbook", &craft_xls::testing::encrypt_cryptoapi(&sample(false), "VelvetSweatshop", 128).unwrap());
+    assert_eq!(read_xls(&file).unwrap().0.sheets.len(), 2);
+}
+
+#[test]
+fn rc4_cryptoapi_encrypted_workbooks_read_with_their_password() {
+    use craft_xls::testing::encrypt_cryptoapi;
+    let (expected, _) = read_xls(&compound("Workbook", &sample(false))).unwrap();
+    // Current Excel's 128-bit key, the oldest 40-bit one (padded to 128 bits) and one between.
+    for bits in [128, 40, 56] {
+        let file = compound("Workbook", &encrypt_cryptoapi(&sample(false), "Synthetic pw 9", bits).unwrap());
+        assert!(craft_xls::is_encrypted(&file), "{bits}");
+        assert_eq!(read_xls(&file).err(), Some(Error::Encrypted), "{bits}");
+        assert_eq!(read_pw(&file, "synthetic pw 9").err(), Some(Error::WrongPassword), "{bits}");
+        let wb = read_pw(&file, "Synthetic pw 9").unwrap().workbook;
+        assert_eq!(v(&wb, 0, "D1"), text("Wörld"));
+        assert_eq!(ftext(&wb, "B3").as_deref(), Some("SUM(B1:C1)"));
+        assert_eq!(wb.sheets[0].cells, expected.sheets[0].cells, "{bits}");
+        assert_eq!(wb.sheets[1].cells, expected.sheets[1].cells, "{bits}");
+    }
+    let file = compound("Workbook", &encrypt_cryptoapi(&long_sheet(), "pw", 128).unwrap());
+    let wb = read_pw(&file, "pw").unwrap().workbook;
+    for r in [0u32, 56, 57, 120, 499] {
+        assert_eq!(wb.sheets[0].cells[&CellRef::new(r, 0)].value, Value::Number(f64::from(r)), "row {r}");
+    }
+}
+
+/// The RC4 CryptoAPI FilePass fields are the file's word: other ciphers, hashes and key sizes are
+/// named, and sizes that don't fit are a damaged file, never a panic.
+#[test]
+fn rc4_cryptoapi_filepass_fields_are_checked() {
+    let good = craft_xls::testing::cryptoapi_filepass("pw", 128);
+    // The EncryptionHeader starts at byte 14.
+    let edited = |at: usize, word: u32| {
+        let mut f = good.clone();
+        f[at..at + 4].copy_from_slice(&word.to_le_bytes());
+        read_pw(&with_filepass(&f), "pw")
+    };
+    let unsupported = |r: Result<craft_xls::Read, Error>| match r {
+        Err(Error::UnsupportedEncryption(s)) => s,
+        other => panic!("{other:?}"),
+    };
+    let damaged = |r: Result<craft_xls::Read, Error>| matches!(&r, Err(Error::Invalid(m)) if m.contains("encryption record"));
+    // Decrypted, the record alone is a workbook with no sheets: refused for that, not for its key.
+    let decrypts = |r: Result<craft_xls::Read, Error>| matches!(&r, Err(Error::Invalid(m)) if m.contains("no worksheets"));
+    assert!(decrypts(read_pw(&with_filepass(&good), "pw")));
+    assert_eq!(unsupported(edited(14 + 8, 0x660E)), "CryptoAPI with cipher 0x660E");
+    assert_eq!(unsupported(edited(6, 0x24)), "CryptoAPI AES");
+    assert_eq!(unsupported(edited(6, 0x14)), "CryptoAPI with an external provider");
+    assert_eq!(unsupported(edited(14 + 12, 0x800C)), "RC4 CryptoAPI with hash 0x800C");
+    for bits in [32, 136, 256, 44, u32::MAX] {
+        assert_eq!(unsupported(edited(14 + 16, bits)), format!("RC4 CryptoAPI with a {bits}-bit key"));
+    }
+    // A key size of 0 means 40 bits: a valid header, so only the verifier tells.
+    assert_eq!(edited(14 + 16, 0).err(), Some(Error::WrongPassword));
+    // An algorithm of 0 means RC4 and SHA-1.
+    assert!(decrypts(edited(14 + 8, 0)) && decrypts(edited(14 + 12, 0)));
+    let header_size = u32::from_le_bytes(good[10..14].try_into().unwrap()) as usize;
+    for size in [0, 31, u32::MAX, header_size as u32 + 1000] {
+        assert!(damaged(edited(10, size)), "header size {size}");
+    }
+    let verifier_at = 14 + header_size;
+    assert!(damaged(edited(verifier_at, 20)), "salt size");
+    assert!(damaged(edited(verifier_at, u32::MAX)), "salt size");
+    assert!(damaged(edited(verifier_at + 36, 16)), "verifier hash size");
+    // Cut anywhere, the record is a damaged file, never a panic.
+    for cut in 6..good.len() {
+        assert!(damaged(read_pw(&with_filepass(&good[..cut]), "pw")), "cut at {cut}");
+    }
 }
