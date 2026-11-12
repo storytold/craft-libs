@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::FBlock;
+use craft_flow::FBlock;
 
 fn paras(src: &str) -> Vec<Para> {
     parse(src).blocks.into_iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None }).collect()
@@ -33,11 +33,11 @@ fn spec_widths_repeats_are_bounded() {
     assert_eq!(spec_widths("*{2}{*{2}{l}}").0, 4);
     let deep = format!("{}l{}", "*{1}{".repeat(MAX_NEST + 5), "}".repeat(MAX_NEST + 5));
     let (cols, widths) = spec_widths(&deep);
-    assert!(cols <= wordcraft_doc::table::MAX_COLS && widths.is_empty());
+    assert!(cols <= craft_wordmodel::table::MAX_COLS && widths.is_empty());
     let wide = format!("{}p{{1cm}}{}", "*{64}{".repeat(30), "}".repeat(30));
     let (cols, widths) = spec_widths(&wide);
-    assert_eq!(cols, wordcraft_doc::table::MAX_COLS);
-    assert!(widths.len() <= wordcraft_doc::table::MAX_COLS);
+    assert_eq!(cols, craft_wordmodel::table::MAX_COLS);
+    assert!(widths.len() <= craft_wordmodel::table::MAX_COLS);
 }
 
 #[test]
@@ -281,26 +281,26 @@ fn math_conversions() {
 #[test]
 fn equations_survive_a_round_trip() {
     let mut d = Document::new();
-    let mut p = wordcraft_doc::Paragraph::with_text("Area ", Default::default());
+    let mut p = craft_wordmodel::Paragraph::with_text("Area ", Default::default());
     let n = p.len();
     p.insert_object(
         n,
-        wordcraft_doc::para::InlineObject::Equation { linear: "π r^2".into(), display: false, math: Default::default() },
+        craft_wordmodel::para::InlineObject::Equation { linear: "π r^2".into(), display: false, math: Default::default() },
         &Default::default(),
     )
     .unwrap();
-    d.body = vec![wordcraft_doc::para_block(p)];
+    d.body = vec![craft_wordmodel::para_block(p)];
     let tex = export(&d);
     assert!(tex.contains("$\\pi r^2$") && tex.contains("\\usepackage{amsmath}"), "{tex}");
     let back = import(tex.as_bytes());
-    let wordcraft_doc::Block::Para(bp) = &*back.body[0] else { panic!() };
+    let craft_wordmodel::Block::Para(bp) = &*back.body[0] else { panic!() };
     assert!(
-        bp.objects.iter().any(|o| matches!(o, wordcraft_doc::para::InlineObject::Equation { linear, .. } if linear == "π r^2")),
+        bp.objects.iter().any(|o| matches!(o, craft_wordmodel::para::InlineObject::Equation { linear, .. } if linear == "π r^2")),
         "{:?}",
         bp.objects
     );
     // Formats without equations keep the text.
-    let md = crate::markdown::export(&d);
+    let md = craft_markdown::export(&d);
     assert!(md.contains("π r^2"), "{md}");
 }
 
@@ -308,7 +308,7 @@ fn equations_survive_a_round_trip() {
 fn leading_brackets_stay_text() {
     // `\item [x]` and `\\ [1]` would read the bracket as an optional argument.
     assert_eq!(escape_text("[x] a\n [1] b [c]"), "{[}x] a\\\\\n {[}1] b [c]");
-    let doc = crate::markdown::import("- [x] done");
+    let doc = craft_markdown::import("- [x] done");
     let back = import(export(&doc).as_bytes());
     assert_eq!(back.plain_text(Default::default()), "[x] done");
 }
@@ -384,8 +384,8 @@ fn exported_borderless_tables_omit_rules() {
 
 #[test]
 fn table_borders_and_borderless_round_trip() {
+    use craft_wordmodel::{Block, CharProps, Paragraph, Table, para_block};
     use std::sync::Arc;
-    use wordcraft_doc::{Block, CharProps, Paragraph, Table, para_block};
 
     // 1. Borderless table.
     let mut doc = Document::new();
@@ -426,7 +426,7 @@ fn verbatim_end_is_kept_out_after_control_characters_go() {
     // the code line closed the environment and the rest ran as TeX.
     let mut d = Document::new();
     let line = "\\end{verb\u{E}atim}\\input{/etc/passwd}";
-    d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(line, Default::default()).styled(model::CODE_STYLE))];
+    d.body = vec![craft_wordmodel::para_block(craft_wordmodel::Paragraph::with_text(line, Default::default()).styled(model::CODE_STYLE))];
     let out = export(&d);
     assert_eq!(out.matches("\\end{verbatim}").count(), 1, "{out}");
     assert!(out.contains("\\end {verbatim}\\input"), "{out}");
@@ -452,9 +452,13 @@ fn nested_multicolumn_wrappers_are_bounded() {
 
 #[test]
 fn ligature_characters_split_across_runs_stay_apart() {
-    let d = crate::html::import(
-        "<p><span style=\"font-family:Arial\">a-</span><span style=\"font-family:Georgia\">-b '</span><span style=\"font-family:Arial\">'x</span></p>",
-    );
+    // Three runs in different fonts (as HTML with font-family spans gives them).
+    let font = |f: &str| Fmt { font: Some(f.into()), ..Default::default() };
+    let mut p = Para::default();
+    p.push_text("a-", &font("Arial"));
+    p.push_text("-b '", &font("Georgia"));
+    p.push_text("'x", &font("Arial"));
+    let d = model::to_doc(&Flow { blocks: vec![FBlock::Para(p)], ..Default::default() });
     let tex = export(&d);
     assert!(tex.contains("a-{}-b '{}'x"), "{tex}");
     let back = import(tex.as_bytes());
@@ -468,6 +472,6 @@ fn a_tabular_row_keeps_the_cells_a_table_row_holds() {
     let wide = vec!["\\multicolumn{63}{c}{x}"; 5000].join("&");
     let toks = tokenize(&format!("{wide}\\\\ a & b \\\\"));
     let t = table::table(&toks, "", 0);
-    assert_eq!(t.rows.first().map(Vec::len), Some(wordcraft_doc::table::MAX_COLS));
+    assert_eq!(t.rows.first().map(Vec::len), Some(craft_wordmodel::table::MAX_COLS));
     assert_eq!(t.rows.get(1).map(Vec::len), Some(2));
 }

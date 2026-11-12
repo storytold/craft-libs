@@ -88,7 +88,7 @@ pub(super) fn table(toks: &[Tok], spec: &str, depth: usize) -> FTable {
             }
             _ => {}
         }
-        if rows.len() >= wordcraft_doc::table::MAX_ROWS {
+        if rows.len() >= craft_wordmodel::table::MAX_ROWS {
             break;
         }
     }
@@ -106,7 +106,7 @@ pub(super) fn table(toks: &[Tok], spec: &str, depth: usize) -> FTable {
         let mut g = 0usize;
         // A document row keeps MAX_COLS cells; the rest would only widen `covering`, which is
         // walked once per row.
-        for cell_toks in r.into_iter().take(wordcraft_doc::table::MAX_COLS) {
+        for cell_toks in r.into_iter().take(craft_wordmodel::table::MAX_COLS) {
             let mut cell = Cell::default();
             let mut content = trim_cell(cell_toks);
             // `\multicolumn{n}{spec}{content}`, `\multirow{n}{width}{content}`. Each wrapper

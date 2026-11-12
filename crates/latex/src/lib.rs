@@ -1,3 +1,4 @@
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 //! LaTeX (`.tex`) import and export.
 //!
 //! **Export** writes a standalone LaTeX 2ε `article` that compiles with pdfLaTeX, XeLaTeX or
@@ -18,8 +19,12 @@
 //! Like the other text formats, the parser is lenient and never panics on hostile input: group and
 //! environment nesting is depth-limited and the input size is capped.
 
-use crate::model::{self, Cell, FBlock, FTable, Flow, Fmt, Inline, Kind, ListInfo, Para};
-use wordcraft_doc::{Align, Document, Rgb};
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeExamples;
+
+use craft_flow::{self as model, Cell, FBlock, FTable, Flow, Fmt, Inline, Kind, ListInfo, Para};
+use craft_wordmodel::{Align, Document, Rgb};
 
 mod export;
 mod lex;

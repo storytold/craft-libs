@@ -50,7 +50,7 @@ fn named_color(name: &str) -> Option<Rgb> {
 pub(super) fn parse_color(model: Option<&str>, spec: &str) -> Option<Rgb> {
     let spec = spec.trim();
     match model.map(str::trim) {
-        Some("HTML") => crate::model::parse_color(&format!("#{spec}")),
+        Some("HTML") => craft_flow::parse_color(&format!("#{spec}")),
         Some("RGB") => {
             let v: Vec<u8> = spec.split(',').filter_map(|x| x.trim().parse::<f32>().ok()).map(|x| x.clamp(0.0, 255.0) as u8).collect();
             match v.as_slice() {
@@ -109,14 +109,14 @@ pub(super) fn length_pt(s: &str) -> Option<f32> {
 /// Column widths of a `tabular` column spec, when every column has one (`p{3cm}`).
 pub(super) fn spec_widths(spec: &str) -> (usize, Vec<f32>) {
     let (cols, widths) = spec_widths_at(spec, 0);
-    (cols.min(wordcraft_doc::table::MAX_COLS), if widths.len() == cols { widths } else { Vec::new() })
+    (cols.min(craft_wordmodel::table::MAX_COLS), if widths.len() == cols { widths } else { Vec::new() })
 }
 
 /// [`spec_widths`] at nesting `depth` of `*{n}{…}` repeats. The column count saturates and the
-/// widths stop growing past [`wordcraft_doc::table::MAX_COLS`], so nested repeats can't overflow
+/// widths stop growing past [`craft_wordmodel::table::MAX_COLS`], so nested repeats can't overflow
 /// or exhaust memory; the returned widths are empty unless every column has one.
 fn spec_widths_at(spec: &str, depth: usize) -> (usize, Vec<f32>) {
-    let max_cols = wordcraft_doc::table::MAX_COLS;
+    let max_cols = craft_wordmodel::table::MAX_COLS;
     let chars: Vec<char> = spec.chars().collect();
     let braces = closers(&chars, '{', '}');
     let mut cols = 0usize;

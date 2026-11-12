@@ -316,7 +316,7 @@ impl Writer {
                 Some(target) => format!("\\hyperlink{{{}}}{{{s}}}", escape_url(target)),
                 // A script, `file:`, UNC or other non-web target becomes plain text: a `\href`
                 // compiles to a PDF `/URI` action the reader would otherwise follow on click.
-                None if wordcraft_doc::link::is_safe_href(l) => format!("\\href{{{}}}{{{s}}}", escape_url(l)),
+                None if craft_wordmodel::link::is_safe_href(l) => format!("\\href{{{}}}{{{s}}}", escape_url(l)),
                 None => s,
             };
         }
@@ -324,7 +324,7 @@ impl Writer {
     }
 
     pub(super) fn table(&mut self, t: &FTable) {
-        let cols = t.cols().clamp(1, wordcraft_doc::table::MAX_COLS);
+        let cols = t.cols().clamp(1, craft_wordmodel::table::MAX_COLS);
         let widths: Vec<f32> = if t.widths.len() == cols && t.widths.iter().all(|w| w.is_finite() && *w > 1.0) {
             let total: f32 = t.widths.iter().sum();
             // Scale a table wider than the page to fit.

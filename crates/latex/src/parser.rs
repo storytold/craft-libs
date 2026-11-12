@@ -11,7 +11,7 @@ use super::{Align, Document, FBlock, Flow, Fmt, Inline, Kind, ListInfo, Para, mo
 /// Import a LaTeX source file.
 pub fn import(bytes: &[u8]) -> Document {
     model::begin_import();
-    let mut d = model::to_doc(&parse(&crate::txt::decode(bytes.get(..MAX_SOURCE).unwrap_or(bytes))));
+    let mut d = model::to_doc(&parse(&craft_mime::detect::decode(bytes.get(..MAX_SOURCE).unwrap_or(bytes))));
     d.ensure_nonempty();
     d
 }
