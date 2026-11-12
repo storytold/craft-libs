@@ -8,13 +8,15 @@ How to build, test and look at this workspace without waiting for it. The rules 
 
 | What | Command | Builds |
 |---|---|---|
-| check the crate you changed | `cl check <crate>` | `cargo check` of the crate's lib, bins and tests |
+| check a crate you changed but don't test | `cl check <crate>` | `cargo check` of the crate's lib, bins and tests |
 | build its tests | `cl test <crate> --no-run` | `cargo test -p <crate> --tests --no-run`; prints each test binary's path |
 | run some trials | `cl test <crate> -- <filter> --test-threads 4` | nothing new when warm; then runs each test binary with the filter |
 | the debug gallery | `cl build gallery` | the `craft-ui-gallery` binary only |
 | one component's stories as PNGs | `cl render <crate\|ui> <Component> [--story <name>] [--out <dir>]` | the `story-render` binary with that crate's feature |
 | anything else | `cl cargo <args>` | what you asked for, through the job pool, nothing added |
 | the features `cl` adds for a crate | `cl features <crate>` | nothing |
+
+For a crate whose tests you build next, skip `cl check`: a check is a separate cargo build (metadata only) of the same crates, so after a framework edit the check and the test build each compile the edited crates' front end, and the test build reports the same errors at about the same point.
 
 `<crate>` is the package name with or without `craft-` (`color`, `craft-ui-widgets`). `cl` uses `<worktree>-target` as the target directory when that directory exists beside the worktree, else `CARGO_TARGET_DIR`, else `target/`.
 
