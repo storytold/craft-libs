@@ -6,6 +6,7 @@ use crate::primitives::{Draw, PaintShape, StrokeWidth, TextRun};
 use crate::runtime::inspect::Recorded;
 use crate::style::{ComponentStyle, StyleColor, StyleCx, TypeRole};
 use craft_behavior::{Metrics, Sense};
+use craft_theme::Opacity;
 use egui::{CornerRadius, Pos2, Rect, Response, Vec2};
 use std::sync::Arc;
 
@@ -114,12 +115,12 @@ impl Component for InspectOverlay {
         InspectOverlayStyle {
             metrics: Metrics::new(),
             guide: cx.color(color.overlay.guide),
-            band: cx.color(color.overlay.guide.faded(0.25)),
+            band: cx.color(color.overlay.guide.faded(Opacity::TINT)),
             stroke: cx.color(color.overlay.stroke),
             flagged: cx.color(color.status.bad.solid),
             halo: cx.color(color.overlay.halo),
             marquee: cx.color(color.overlay.marquee),
-            marquee_fill: cx.color(color.overlay.marquee.faded(0.2)),
+            marquee_fill: cx.color(color.overlay.marquee.faded(Opacity::TINT)),
             badge: cx.color(color.status.info.solid),
             badge_text: cx.color(color.text.on_status),
             min_target: cx.tokens.size.control.sm,
