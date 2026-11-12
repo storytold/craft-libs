@@ -42,8 +42,8 @@ pub enum LayersEvent<K> {
     /// Escape during an Alt eye sweep: undo the `ShowOnly` of that sweep, which turned the other layers' eyes off.
     /// The key is the layer the sweep began on.
     UndoShowOnly(LayerRowKey<K>),
-    /// A pick in the eye cell's colour menu (None and the label colours): for every selected
-    /// layer when the row is in a multi-selection, else for the row.
+    /// A pick in the eye cell's colour menu or the row menu's Label Color submenu (None and the label colours): for
+    /// every selected layer when the row is in a multi-selection, else for the row.
     #[non_exhaustive]
     LabelColor {
         /// The layers to colour.

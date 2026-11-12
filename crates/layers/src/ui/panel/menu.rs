@@ -1,10 +1,11 @@
-//! The panel's commands and keys, its panel-menu rows, the row menu and the eye's label-colour menu.
+//! The panel's commands and keys, its panel-menu rows, the row menu with its Label Color submenu and the eye's
+//! label-colour menu.
 
 use craft_theme::LabelColor;
 use craft_ui::contract::{CommandSet, Entry, Show as _, ShowContainer as _};
 use craft_ui::display::Divider;
 use craft_ui::list::{ListWords, label_color_label};
-use craft_ui::menu::{Menu, MenuItem, PanelRow};
+use craft_ui::menu::{Menu, MenuItem, PanelRow, entry_rows};
 use craft_ui::runtime::commands::CommandRef;
 use egui::{Response, Ui};
 use std::sync::Arc;
@@ -16,7 +17,7 @@ use super::drag::stacking_event;
 use super::events::{LayersEvent, MenuTarget};
 use crate::ui::options::LayersSettings;
 use crate::ui::thumbs::ThumbContents;
-use crate::ui::tree::LayerTree;
+use crate::ui::tree::{LayerRowKey, LayerTree};
 
 /// The commands of the Layers panel: its panel-menu rows and the stacking keys.
 ///
@@ -158,8 +159,15 @@ pub(super) enum OpenMenu<Id> {
 /// The host's menu for a row: its entries for where it was opened.
 pub(super) type RowMenu<'a, Id> = dyn Fn(&MenuTarget<Id>) -> Vec<Entry<String>> + 'a;
 
-/// The label colour rows of the eye column's menu: None, a rule, then each colour on its own tint, the current one
-/// checked. Returns the colour a row picked.
+/// The colour `rows` share, `None` when they have none or differ: the check in the label colour menus.
+pub(super) fn shared_label<T: LayerTree>(tree: &T, rows: &[T::Id]) -> Option<LabelColor> {
+    let mut labels = rows.iter().map(|id| tree.info(id).label);
+    let first = labels.next().flatten();
+    if labels.all(|label| label == first) { first } else { None }
+}
+
+/// The label colour rows of the eye column's menu and the row menu's Label Color submenu: None, a rule, then each
+/// colour on its own tint, the current one checked. Returns the colour a row picked.
 fn eye_rows(ui: &mut Ui, words: &ListWords, current: Option<LabelColor>) -> Option<Option<LabelColor>> {
     let mut picked = None;
     if MenuItem::new(label_color_label(None, words)).check(current.is_none()).show(ui).ran {
@@ -174,13 +182,31 @@ fn eye_rows(ui: &mut Ui, words: &ListWords, current: Option<LabelColor>) -> Opti
     picked
 }
 
+/// What a row menu pick ran: the host's command, or a colour of the Label Color submenu.
+enum RowPick {
+    Command(String),
+    Color(Option<LabelColor>),
+}
+
+/// The layers the row menu's Label Color submenu colours: every selected layer when the menu acts on the selection,
+/// else the row's layer. `None` where the submenu is not shown: on a thumbnail, whose menu is the host's own, and on
+/// effects and Smart Filter rows.
+fn label_rows<Id: Clone>(target: &MenuTarget<Id>, selected: &[Id]) -> Option<Vec<Id>> {
+    let LayerRowKey::Layer(layer) = &target.row else { return None };
+    if target.part.is_some() {
+        return None;
+    }
+    Some(if target.on_selection { selected.to_vec() } else { vec![layer.clone()] })
+}
+
 /// Shows the menu the last context request chose, hanging from `opener` (the list). A right-click
-/// on a row opens it at the pointer.
+/// on a row opens it at the pointer. With `label_colors`, a layer row's menu ends with the Label Color submenu.
 pub(super) fn show_row_menus<T: LayerTree>(
     ui: &mut Ui,
     cx: &PanelContext<'_, T>,
     opener: &Response,
     row_menu: Option<&RowMenu<'_, T::Id>>,
+    label_colors: bool,
     session: &Session<T::Id>,
 ) -> Vec<LayersEvent<T::Id>> {
     let words = cx.words;
@@ -188,8 +214,25 @@ pub(super) fn show_row_menus<T: LayerTree>(
         Some(OpenMenu::Row(target)) => {
             let Some(menu) = row_menu else { return Vec::new() };
             let entries = menu(&target);
-            let picked = Menu::context(words.row_menu.clone(), opener).pick(ui, &entries).picked;
-            picked.map(|command| LayersEvent::Menu { target, command }).into_iter().collect()
+            let colored = if label_colors { label_rows(&target, &cx.selection.layers) } else { None };
+            let current = colored.as_deref().and_then(|rows| shared_label(cx.tree, rows));
+            let shown = Menu::context(words.row_menu.clone(), opener).show(ui, |ui, _| {
+                let ran = entry_rows(ui, &entries).and_then(|at| entries.get(at)).and_then(Entry::value).cloned();
+                let mut color = None;
+                if colored.is_some() {
+                    let _ = Menu::submenu_row(ui, words.label_color_menu.clone(), |ui, _| {
+                        if let Some(picked) = eye_rows(ui, cx.list_words, current) {
+                            color = Some(picked);
+                        }
+                    });
+                }
+                ran.map(RowPick::Command).or(color.map(RowPick::Color))
+            });
+            match shown.inner.flatten() {
+                Some(RowPick::Command(command)) => vec![LayersEvent::Menu { target, command }],
+                Some(RowPick::Color(color)) => colored.map(|rows| LayersEvent::LabelColor { rows, color }).into_iter().collect(),
+                None => Vec::new(),
+            }
         }
         Some(OpenMenu::Eye { rows, current }) => {
             let picked = Menu::context(words.label_color_menu.clone(), opener).show(ui, |ui, _| eye_rows(ui, cx.list_words, current)).inner.flatten();

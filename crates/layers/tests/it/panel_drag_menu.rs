@@ -1,12 +1,13 @@
-//! `LayersPanel` drags and menus: a mask thumbnail dropped on another layer, and what a drag carries for the app's
-//! own drop targets.
+//! `LayersPanel` drags and menus: a mask thumbnail dropped on another layer, what a drag carries for the app's own
+//! drop targets, and the row menu's Label Color submenu.
 
 use craft_behavior::EditEvent;
 use craft_layers::ui::mock::FakeLayers;
 use craft_layers::ui::panel::{LayerDrop, LayersDrag, LayersEvent, LayersPanel, MaskMove};
 use craft_layers::ui::tree::LayerPart;
+use craft_theme::LabelColor;
 use craft_ui::contract::Entry;
-use craft_ui::testing::{Fixture, Target, trial};
+use craft_ui::testing::{Fixture, Target, pointer, trial};
 use egui::{Modifiers, Pos2, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -88,4 +89,28 @@ fn a_row_drag_carries_its_layers_for_targets_outside_the_panel() {
     fixture.drag_hold_at(mask, away);
     assert!(held(&fixture).layers().is_empty(), "a mask is no layer");
     fixture.release_at(mask + away).idle(2);
+}
+
+/// The row menu ends with the Label Color submenu, whose pick colours the row's layer as the eye's menu does.
+#[trial]
+fn the_row_menus_label_color_submenu_colours_the_layer() {
+    let (mut fixture, seen) = rig();
+    let title = node(&fixture, "Title").center();
+    fixture.frame(vec![pointer::moved(title)]);
+    fixture.frame(vec![pointer::secondary(title, true)]);
+    fixture.frame(vec![pointer::secondary(title, false)]);
+    fixture.idle(3);
+    let submenu = node(&fixture, "Label Color");
+    fixture.click(&submenu).idle(3);
+    let red = node(&fixture, "Red");
+    fixture.click(&red).idle(2);
+    let picked: Vec<(Vec<u32>, Option<LabelColor>)> = seen
+        .borrow()
+        .iter()
+        .filter_map(|event| match event {
+            LayersEvent::LabelColor { rows, color, .. } => Some((rows.clone(), *color)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(picked, [(vec![4], Some(LabelColor::Red))]);
 }
