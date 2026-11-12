@@ -836,12 +836,8 @@ mod tests {
 
     #[test]
     fn compose_form_shows_sign_in_message_when_not_linked() {
-        let mut dialog = EsignDialog {
-            capabilities: Some(vec![EsignCapability::Envelopes]),
-            document_title: "A.pdf".into(),
-            linked: false,
-            ..Default::default()
-        };
+        let mut dialog =
+            EsignDialog { capabilities: Some(vec![EsignCapability::Envelopes]), document_title: "A.pdf".into(), linked: false, ..Default::default() };
         let ctx = Context::default();
         let mut full = ctx.run_ui(egui::RawInput::default(), |ui| dialog.ui(ui));
         full.textures_delta.clear();
@@ -860,8 +856,14 @@ mod tests {
     #[test]
     fn add_contact_rejects_a_contact_with_no_email() {
         let mut dialog = EsignDialog::default();
-        let contact =
-            Contact { id: "share-id-123".into(), target: craft_cloud::ShareTarget::User("share-id-123".into()), name: "Mallory".into(), email: None, avatar: None, is_group: false };
+        let contact = Contact {
+            id: "share-id-123".into(),
+            target: craft_cloud::ShareTarget::User("share-id-123".into()),
+            name: "Mallory".into(),
+            email: None,
+            avatar: None,
+            is_group: false,
+        };
         dialog.add_contact(contact);
         assert!(dialog.recipients.is_empty(), "a contact with no email became a recipient: {:?}", dialog.recipients);
         assert_eq!(dialog.error.as_deref(), Some(dialog.labels.contact_missing_email.as_str()));
