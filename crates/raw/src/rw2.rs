@@ -403,6 +403,11 @@ fn format8<'a>(ifd: &Ifd, order: ByteOrder, bytes: &'a [u8], w: usize, h: usize)
         let Some(data) = data.filter(|_| inside) else {
             return Err(RawError::Corrupt(format!("RW2 format 8: strip {i} outside the image or file")));
         };
+        // every sample costs at least one bit (no code is shorter), so a strip stating fewer bits than samples is
+        // corrupt: refusing it here keeps a few-byte file from sizing the full-sensor buffer
+        if bits[i] < (width * height) as u64 {
+            return Err(RawError::Corrupt(format!("RW2 format 8: strip {i} states {} bits for {} samples", bits[i], width * height)));
+        }
         area += width * height;
         strips.push(Strip { data, left, top, width, height, bits: bits[i] });
     }
@@ -1267,6 +1272,24 @@ mod tests {
         assert!(matches!(case(STRIP_BITS, undefined(&[2, 0, 256, 0, 256])), Err(RawError::Corrupt(_))));
         // a strip whose stated length ends before its data does
         assert!(matches!(case(STRIP_BITS, undefined(&[2, 64, 0, 64, 0])), Err(RawError::Corrupt(_))));
+        // strips stating fewer bits than they have samples (one bit each at least): refused while reading the layout,
+        // so before the sensor-sized buffer is made (probing, which never decodes, refuses it too)
+        let short_bits = format8_file(w, h, &px, &[32, 32], &TABLE14, &|t| replace(t, STRIP_BITS, undefined(&[2, 959, 0, 959, 0])));
+        assert!(matches!(crate::probe_info(&short_bits), Err(RawError::Corrupt(_))));
+        assert!(matches!(crate::decode(&short_bits), Err(RawError::Corrupt(_))));
+        // only the second strip short (the first keeps its real length), by one bit or entirely: still refused, naming it
+        let second_strip_bits = |stated: u32| {
+            format8_file(w, h, &px, &[32, 32], &TABLE14, &|t| {
+                let Some((_, Value::Undefined(b))) = t.iter_mut().find(|(tag, _)| *tag == STRIP_BITS) else { panic!("strip bits tag") };
+                b[6..10].copy_from_slice(&[stated as u8, (stated >> 8) as u8, (stated >> 16) as u8, (stated >> 24) as u8]);
+            })
+        };
+        for stated in [959, 0] {
+            let file = second_strip_bits(stated);
+            for got in [crate::probe_info(&file).map(|_| ()), crate::decode(&file).map(|_| ())] {
+                assert!(matches!(&got, Err(RawError::Corrupt(m)) if m.contains("strip 1 states")), "{stated} bits: {got:?}");
+            }
+        }
         // code tables: two categories with the same code, a code longer than its length, missing entries
         let table: Vec<u16> = std::iter::once(17).chain(TABLE14.iter().flat_map(|&(l, c)| [l as u16, c as u16])).collect();
         let mut dup = table.clone();
