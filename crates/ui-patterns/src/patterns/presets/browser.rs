@@ -543,7 +543,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                 let locked = view_lock.is_some();
                 let mut bar = Bar::new(Label::Empty, BarKind::Tool);
                 if let Some(tools) = tools.as_mut() {
-                    bar = bar.trailing(|ui| tools.show(ui));
+                    bar = bar.trailing(|ui, _| tools.show(ui));
                 }
                 let _ = bar.show(ui, |ui, _| {
                     let field = TextField::search(words.search.clone(), Bind::bound(&mut local.filter)).placeholder(words.search.clone());
