@@ -4,8 +4,10 @@ use super::commands::AppCommand;
 use super::model::{MockState, Panel, Tool, ToolKey};
 use super::panels::Panels;
 use super::tools::Tools;
+use craft_behavior::IconId;
 use craft_behavior::dock::PanelState;
 use craft_ui::bars::{Bar, BarKind, StatusReadout, StatusValues};
+use craft_ui::buttons::IconButton;
 use craft_ui::canvas::{PickStep, ViewCommands};
 use craft_ui::contract::{Bind, BodyCx, Props as _, Remember as _, SaveKey, Show as _, ShowContainer as _};
 use craft_ui::dialog::{DialogResult, PromptChoice, StandardPrompt};
@@ -19,7 +21,8 @@ use craft_ui::patterns::form_dialogs::{
 use craft_ui::rails::ToolRail;
 use craft_ui::runtime::commands::{CommandRef, Commands as _, EditCommands};
 use craft_ui::runtime::env::{Label, WindowKey};
-use craft_ui::shell::{AppShell, AppShellOutput, ShellDialogsCx as _, Title, TitleBar};
+use craft_ui::shell::{AppShell, AppShellOutput, CaptionFamily, Captions, Frame, ShellDialogsCx as _, Title, TitleBar};
+use craft_window::Layout;
 use egui::Ui;
 
 /// The parameters of Gaussian Blur.
@@ -158,10 +161,14 @@ fn pick(state: &mut MockState, tool: Tool, step: PickStep) {
     }
 }
 
+/// The title bar as a picture of a window: an integrated frame of the generic family with every caption at the end,
+/// the menus at the start, the document's name in the middle and search at the end. It acts on no window, since the
+/// mock's shell is embedded.
 fn title_bar(ui: &mut Ui, state: &MockState) {
     let document = &state.document;
     let title = if document.dirty { Title::unsaved(document.title.clone()) } else { Title::new(document.title.clone()) };
-    TitleBar::new().show_titled(
+    let frame = Frame::Integrated(Captions { family: CaptionFamily::Generic, layout: Layout::default() });
+    TitleBar::new().frame(frame).separator().show_titled(
         ui,
         title,
         |ui, _| {
@@ -210,7 +217,9 @@ fn title_bar(ui: &mut Ui, state: &MockState) {
             ];
             MenuBar::new("Main menu", titles).show(ui);
         },
-        |_, _| {},
+        |ui, _| {
+            let _ = IconButton::new(IconId::new("search")).label("Search").show(ui);
+        },
     );
 }
 
