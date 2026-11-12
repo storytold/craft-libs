@@ -314,6 +314,18 @@ impl Dtv {
     }
 }
 
+/// The rows of the CEA-708 window a caption is loaded into.
+pub const WINDOW_ROWS: usize = 12;
+
+/// The rows the CEA-708 writer loads for caption `text`: the CEA-608 rows (plain text in 32-column
+/// rows), as many as the window holds. The rest is left out: past a window's last row, decoders
+/// differ (one scrolls the first rows away, another runs the text into the last row).
+pub fn window_rows(text: &str) -> Vec<String> {
+    let mut rows = scc::caption_rows(text);
+    rows.truncate(WINDOW_ROWS);
+    rows
+}
+
 /// Schedule CEA-708 service 1 pop-on captions (see the module docs).
 fn schedule_708(doc: &Document) -> BTreeMap<i64, Vec<(bool, u8, u8)>> {
     let mut d = Dtv { frames: BTreeMap::new() };
@@ -325,7 +337,7 @@ fn schedule_708(doc: &Document) -> BTreeMap<i64, Vec<(bool, u8, u8)>> {
         let win = (i % 2) as u8;
         let s = scc::frame_of(c.start).max(cursor);
         let e = scc::frame_of(c.end);
-        let rows = scc::wrap_rows(&crate::plain_text(&c.text));
+        let rows = window_rows(&c.text);
         let load = packets(&load_atoms(win, &rows), &mut seq);
         let mut f = (s - load.len() as i64).max(cursor);
         let mut last = f;
@@ -581,6 +593,10 @@ impl Dec708 {
 // File
 // ---------------------------------------------------------------------------------------------
 
+/// The most frames [`write_padded`] fills: 24 hours of 29.97 fps drop-frame time code, as far
+/// as an MCC time code counts.
+pub const MAX_PADDED_FRAMES: i64 = 24 * 107_892;
+
 /// Write `doc` as MCC: CEA-608 field 1 and CEA-708 service 1 (see the module docs), with
 /// [`crate::PROGRAM`] as the creation program.
 pub fn write(doc: &Document, drop_frame: bool) -> String {
@@ -600,46 +616,82 @@ fn header_value(program: &str) -> String {
 /// An empty document or two disabled streams produces a header with no data lines.
 /// `program` is named as the file's creation program.
 pub fn write_with(doc: &Document, drop_frame: bool, cea608: bool, cea708: bool, program: &str) -> String {
+    write_padded(doc, drop_frame, cea608, cea708, 0, program)
+}
+
+/// [`write_with`], plus a packet with no caption data (CEA-608 nulls, CEA-708 padding) on every
+/// frame before `pad_frames` that has none, as SDI and frame-wrapped MXF carry one packet per
+/// video frame. Frames with caption data after `pad_frames` are written as usual. At most
+/// [`MAX_PADDED_FRAMES`] are filled.
+pub fn write_padded(doc: &Document, drop_frame: bool, cea608: bool, cea708: bool, pad_frames: i64, program: &str) -> String {
+    let mut out = Vec::new();
+    // writing into a Vec cannot fail, and the text is UTF-8 (ASCII but for the program name)
+    let _ = write_padded_to(&mut out, doc, drop_frame, cea608, cea708, pad_frames, program);
+    String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
+}
+
+/// [`write_padded`] into `out` line by line, so a long padded export is never held in memory.
+pub fn write_padded_to(
+    out: &mut dyn std::io::Write,
+    doc: &Document,
+    drop_frame: bool,
+    cea608: bool,
+    cea708: bool,
+    pad_frames: i64,
+    program: &str,
+) -> std::io::Result<()> {
     let program = header_value(program);
+    let pad = pad_frames.clamp(0, MAX_PADDED_FRAMES);
     let f1 = if cea608 { scc::schedule(doc) } else { BTreeMap::new() };
     let dtv = if cea708 { schedule_708(doc) } else { BTreeMap::new() };
     let origin = crate::label_frame(doc.start_timecode, RATE, drop_frame); // time codes count from the start time code
-    let mut out = String::from("File Format=MacCaption_MCC V1.0\n\n");
-    out.push_str("///////////////////////////////////////////////////////////////////////////////////\n");
-    out.push_str(&format!("// Closed captions written by {program}: SMPTE ST 334-2 caption distribution packets\n"));
-    out.push_str("// carrying CEA-608 field 1 and CEA-708 service 1 data; empty frames omitted.\n");
-    out.push_str("///////////////////////////////////////////////////////////////////////////////////\n\n");
+    out.write_all(b"File Format=MacCaption_MCC V1.0\n\n")?;
+    out.write_all(b"///////////////////////////////////////////////////////////////////////////////////\n")?;
+    writeln!(out, "// Closed captions written by {program}: SMPTE ST 334-2 caption distribution packets")?;
+    let frames: &[u8] = if pad > 0 {
+        b"// carrying CEA-608 field 1 and CEA-708 service 1 data; a packet on every frame.\n"
+    } else {
+        b"// carrying CEA-608 field 1 and CEA-708 service 1 data; empty frames omitted.\n"
+    };
+    out.write_all(frames)?;
+    out.write_all(b"///////////////////////////////////////////////////////////////////////////////////\n\n")?;
     let n = doc.cues.len() as u64;
     let h = doc
         .cues
         .iter()
         .fold(0xcbf2_9ce4_8422_2325u64 ^ n, |h, c| (h ^ c.start.0 as u64 ^ (c.end.0 as u64).rotate_left(17)).wrapping_mul(0x100_0000_01b3));
-    out.push_str(&format!(
-        "UUID={:08X}-{:04X}-4{:03X}-8{:03X}-{:012X}\n",
+    writeln!(
+        out,
+        "UUID={:08X}-{:04X}-4{:03X}-8{:03X}-{:012X}",
         h >> 32,
         (h >> 16) & 0xffff,
         h & 0xfff,
         (h >> 20) & 0xfff,
         h.rotate_left(29) & 0xffff_ffff_ffff
-    ));
-    out.push_str(&format!("Creation Program={program}\n"));
-    out.push_str(&format!("Time Code Rate={}\n\n", if drop_frame { "30DF" } else { "30" }));
+    )?;
+    writeln!(out, "Creation Program={program}")?;
+    writeln!(out, "Time Code Rate={}\n", if drop_frame { "30DF" } else { "30" })?;
     // Merge the sparse schedules without walking (or allocating for) input-derived time gaps.
     // Erase/hide commands are scheduled data too, so omitting padding preserves cue end times.
+    // Padding walks only the frames before `pad`, which the caller chose and is capped.
     let mut f1 = f1.into_iter().peekable();
     let mut dtv = dtv.into_iter().peekable();
     let mut seq = 0u16;
-    while let Some(f) = f1.peek().map(|(f, _)| *f).into_iter().chain(dtv.peek().map(|(f, _)| *f)).min() {
+    let mut unpadded = 0i64; // the first frame with no packet yet, while it is before `pad`
+    loop {
+        let data = f1.peek().map(|(f, _)| *f).into_iter().chain(dtv.peek().map(|(f, _)| *f)).min();
+        let Some(f) = data.into_iter().chain((unpadded < pad).then_some(unpadded)).min() else { break };
+        unpadded = unpadded.max(f.saturating_add(1));
         let data = FrameData {
             f1: f1.next_if(|(frame, _)| *frame == f).map(|(_, pair)| pair),
             dtvcc: dtv.next_if(|(frame, _)| *frame == f).map(|(_, pairs)| pairs).unwrap_or_default(),
         };
         let (_, hh, mm, ss, ff) = frames_to_fields(f.saturating_add(origin), RATE, drop_frame);
         let sep = if drop_frame { ';' } else { ':' };
-        out.push_str(&format!("{hh:02}:{mm:02}:{ss:02}{sep}{ff:02}\t{}\n", compress(&build_cdp(seq, &data))));
+        writeln!(out, "{hh:02}:{mm:02}:{ss:02}{sep}{ff:02}\t{}", compress(&build_cdp(seq, &data)))?;
         seq = seq.wrapping_add(1);
     }
-    out
+    Ok(())
 }
 
 fn tc_rate(v: &str) -> Option<(FrameRate, bool)> {
@@ -682,7 +734,8 @@ pub fn parse(text: &str) -> Result<Document> {
             continue;
         };
         let tc = tc.split('.').next().unwrap_or(tc);
-        let parts: Option<Vec<i64>> = tc.split([':', ';']).map(|p| p.parse().ok()).collect();
+        let parts: Option<Vec<i64>> =
+            tc.split([':', ';']).map(|p| if !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) { p.parse().ok() } else { None }).collect();
         let Some([h, m, s, f]) = parts.as_deref() else {
             return Err(Error::Syntax { line: n + 1, msg: format!("bad timecode \"{tc}\"") });
         };
@@ -802,6 +855,22 @@ mod tests {
     }
 
     /// Reject malformed fields instead of silently dropping them from the timecode.
+    /// Reject timecode fields carrying a sign instead of only ASCII digits.
+    #[test]
+    fn rejects_signed_timecode_fields() {
+        let doc = Document { cues: vec![cue(0, 60, "Caption")], ..Default::default() };
+        let text = write(&doc, false);
+        assert!(text.contains("00:00:00:00"));
+        assert!(parse(&text).is_ok());
+        for bad in ["00:00:+0:+0", "00:00:-0:-0", "00:00:00:-1", "00:00:00:+1"] {
+            let signed = text.replacen("00:00:00:00", bad, 1);
+            match parse(&signed) {
+                Err(Error::Syntax { msg, .. }) => assert!(msg.contains("bad timecode"), "{msg}"),
+                other => panic!("signed timecode {bad} accepted: {other:?}"),
+            }
+        }
+    }
+
     #[test]
     fn rejects_timecodes_with_unparseable_extra_fields() {
         let doc = Document { cues: vec![cue(60, 120, "Caption")], ..Default::default() };
@@ -891,6 +960,46 @@ mod tests {
         let doc = Document { cues: vec![cue(60, 120, "Caption")], ..Default::default() };
         assert!(!write_with(&doc, true, false, false, "test").contains('\t'));
         assert!(!write(&Document::default(), true).contains('\t'));
+    }
+
+    /// With padding, every frame to the end has one packet in time code order, numbered and
+    /// checksummed, empty frames carry no caption data, and the captions read back unchanged.
+    #[test]
+    fn padded_export_has_a_packet_on_every_frame() {
+        let doc = Document { cues: vec![cue(60, 120, "First"), cue(300, 330, "Last")], ..Default::default() };
+        let empty = compress(&build_cdp(0, &FrameData::default()));
+        for drop_frame in [false, true] {
+            for (cea608, cea708) in [(true, true), (true, false), (false, true)] {
+                let text = write_padded(&doc, drop_frame, cea608, cea708, 2_000, "test");
+                assert!(text.contains("a packet on every frame"));
+                let lines: Vec<(&str, &str)> = text.lines().filter_map(|line| line.split_once('\t')).collect();
+                assert_eq!(lines.len(), 2_000);
+                for (f, (tc, data)) in lines.iter().enumerate() {
+                    let (_, hh, mm, ss, ff) = frames_to_fields(f as i64, RATE, drop_frame);
+                    let sep = if drop_frame { ';' } else { ':' };
+                    assert_eq!(*tc, format!("{hh:02}:{mm:02}:{ss:02}{sep}{ff:02}"));
+                    let bytes = expand(data).unwrap();
+                    assert_eq!(u16::from_be_bytes([bytes[8], bytes[9]]), f as u16);
+                    assert_eq!(bytes[3..76].iter().map(|&b| b as u32).sum::<u32>() % 256, 0);
+                }
+                // nothing is scheduled at frame 0 (the first load comes later), nor after the last erase
+                assert_eq!(lines[0].1, empty);
+                assert_eq!(lines[1_999].1, compress(&build_cdp(1_999, &FrameData::default())));
+                assert_eq!(parse(&text).unwrap().cues, doc.cues);
+            }
+        }
+        // caption data after the padded span is still written; no padding is the sparse writer
+        let sparse = write_with(&doc, true, true, true, "test");
+        let tcs = |text: &str| text.lines().filter_map(|line| line.split_once('\t')).map(|(tc, _)| tc.to_string()).collect::<Vec<_>>();
+        let first_unpadded = scc::format_timecode(200, true);
+        let later = |tcs: Vec<String>| tcs.into_iter().filter(|tc| *tc >= first_unpadded).collect::<Vec<_>>();
+        let short = tcs(&write_padded(&doc, true, true, true, 200, "test"));
+        assert!(!later(short.clone()).is_empty());
+        assert_eq!(short.len(), 200 + later(short.clone()).len());
+        assert_eq!(later(short), later(tcs(&sparse)));
+        for pad in [0, -5, i64::MIN] {
+            assert_eq!(write_padded(&doc, true, true, true, pad, "test"), sparse);
+        }
     }
 
     /// Prevent CEA-708 text and line breaks from overflowing a window's declared dimensions.
