@@ -39,6 +39,10 @@ Each module has a `looks_like_*` (or `is_dicom`) sniffer for the format's signat
 `fits` also have `has_additional_images`, which says without decoding whether a file holds
 more than the one image `decode` returns (cube faces, array slices, further HDUs).
 
+`xpm::x11_color_rgb` also looks up exact normalized X11 names as RGB channels in `0..=1`.
+It accepts only 1–64 lowercase ASCII letters or digits, without normalization, XPM-only aliases,
+CSS overrides or color-space conversion. XPM decoding keeps its existing name and alias policy.
+
 Encoders take an image already in a layout and depth the format stores, and return
 `CodecError::Encode` for any other. Choosing the nearest layout and converting to it stays in the
 app. The same goes for colour management, orientation, format detection across a whole format
