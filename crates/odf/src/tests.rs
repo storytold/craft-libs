@@ -326,3 +326,29 @@ fn hostile_flat_documents_do_not_panic() {
     // A package with no media type has no flat form.
     assert_eq!(flat::from_package(&zip_of(&[("content.xml", b"<a/>")]), &Limits::DEFAULT), Err(Error::Flat("the package has no media type")));
 }
+
+/// Two files of one name: `zip` keeps one, and which one the writer meant is not known.
+#[test]
+fn two_files_of_one_name_are_refused() {
+    let bytes = zip_of(&[("mimetype", mime::SPREADSHEET.as_bytes()), ("dupA.xml", b"<a/>"), ("dupB.xml", b"<b/>")]);
+    assert!(Package::open(&bytes, &Limits::DEFAULT).is_ok());
+    let mut renamed = bytes.clone();
+    let mut i = 0;
+    while let Some(at) = renamed[i..].windows(4).position(|w| w == b"dupB") {
+        renamed[i + at + 3] = b'A';
+        i += at + 4;
+    }
+    assert_eq!(Package::open(&renamed, &Limits::DEFAULT).err(), Some(Error::Zip("two files of the package share a name".into())));
+}
+
+/// Encrypting and decrypting read each file within the per-file limit: a file declaring more is
+/// refused before it is inflated (encrypting read every file whole; decrypting cut it short).
+#[test]
+fn encrypting_and_decrypting_refuse_a_file_past_the_limit() {
+    let over = u32::try_from(Limits::DEFAULT.max_entry + 1).unwrap();
+    let bytes = lying_zip(b"<a/>", over);
+    assert!(crate::crypt::encrypt(&bytes, "pw").is_err());
+    assert!(crate::crypt::decrypt(&bytes, "pw").is_err());
+    // The same file declaring its real size encrypts.
+    assert!(crate::crypt::encrypt(&lying_zip(b"<a/>", 4), "pw").is_ok());
+}

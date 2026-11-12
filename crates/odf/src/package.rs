@@ -1,8 +1,6 @@
 //! The ZIP container (ODF 1.3 Part 2 section 3): a `mimetype` file first and stored, a
 //! manifest, and the document's files.
 
-use std::io::{Cursor, Read, Write};
-
 use crate::manifest::{FileEntry, MANIFEST_PATH, Manifest};
 use crate::{Error, zip_guard};
 
@@ -31,17 +29,16 @@ impl Default for Limits {
 /// The longest `mimetype` file read: media types are short, and a longer one is no media type.
 const MAX_MIMETYPE: u64 = 255;
 
-pub(crate) fn zip_err(e: zip::result::ZipError) -> Error {
-    Error::Zip(e.to_string())
-}
-
-pub(crate) fn io_err(e: std::io::Error) -> Error {
-    Error::Zip(e.to_string())
+pub(crate) fn zip_err(e: craft_zip::Error) -> Error {
+    match e {
+        craft_zip::Error::NotZip(m) | craft_zip::Error::Write(m) => Error::Zip(m),
+        e => Error::Zip(e.to_string()),
+    }
 }
 
 /// An OpenDocument package open for reading.
 pub struct Package<'a> {
-    zip: zip::ZipArchive<Cursor<&'a [u8]>>,
+    zip: craft_zip::Archive<'a>,
     /// The files' names (folders and names that are not text left out), in the ZIP's order.
     names: Vec<String>,
     limits: Limits,
@@ -54,11 +51,22 @@ impl<'a> Package<'a> {
     /// [`Limits::max_entries`] before anything is parsed. No file is inflated yet.
     pub fn open(bytes: &'a [u8], limits: &Limits) -> Result<Package<'a>, Error> {
         zip_guard::check(bytes, limits.max_entries).map_err(Error::TooManyEntries)?;
-        let zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(zip_err)?;
-        if zip.len() as u64 > limits.max_entries {
-            return Err(Error::TooManyEntries(format!("the package has {} entries, more than {}", zip.len(), limits.max_entries)));
+        // This reader keeps its own count (a damaged file is charged what it cost), so the
+        // archive's total is not used.
+        let zip =
+            craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: limits.max_entries, max_total_bytes: u64::MAX }).map_err(
+                |e| match e {
+                    craft_zip::Error::TooManyEntries { declared, limit } => {
+                        Error::TooManyEntries(format!("the package has {declared} entries, more than {limit}"))
+                    }
+                    e => zip_err(e),
+                },
+            )?;
+        // `zip` keeps one file of a repeated name; which one the writer meant is not known.
+        if zip.has_duplicate_names() {
+            return Err(Error::Zip("two files of the package share a name".into()));
         }
-        let names = zip.file_names().filter_map(|n| n.ok()).filter(|n| !n.ends_with('/')).map(|n| n.into_owned()).collect();
+        let names = zip.names().filter(|n| !n.ends_with('/')).map(|n| n.into_owned()).collect();
         Ok(Package { zip, names, limits: *limits, spent: 0 })
     }
 
@@ -69,13 +77,13 @@ impl<'a> Package<'a> {
 
     /// Is there a file `name`?
     pub fn contains(&self, name: &str) -> bool {
-        self.zip.index_for_name(name).is_some()
+        self.zip.contains(name)
     }
 
     /// The size the ZIP declares for `name` (what it claims to inflate to; [`Package::read`]
     /// does not trust it).
     pub fn declared_size(&mut self, name: &str) -> Option<u64> {
-        self.zip.by_name(name).ok().map(|f| f.size())
+        self.zip.declared_size(name)
     }
 
     /// File `name` inflated. `Ok(None)` when the package has no such file, or it cannot be
@@ -84,29 +92,26 @@ impl<'a> Package<'a> {
     /// held to the same limits.
     pub fn read(&mut self, name: &str) -> Result<Option<Vec<u8>>, Error> {
         let (max_entry, room) = (self.limits.max_entry, self.limits.max_total.saturating_sub(self.spent));
-        let Ok(f) = self.zip.by_name(name) else { return Ok(None) };
-        if f.size() > max_entry {
+        let Some(size) = self.zip.declared_size(name) else { return Ok(None) };
+        if size > max_entry {
             return Err(Error::EntryTooLarge(name.to_string(), max_entry));
         }
-        if f.size() > room {
+        if size > room {
             return Err(Error::TotalTooLarge(self.limits.max_total));
         }
-        let cap = max_entry.min(room);
-        let mut out = Vec::new();
-        // One byte past the cap tells a file at the cap from one beyond it.
-        if f.take(cap.saturating_add(1)).read_to_end(&mut out).is_err() {
-            self.spent = self.spent.saturating_add(out.len() as u64);
-            return Ok(None);
+        match self.zip.read(name, max_entry.min(room)) {
+            Ok(Some(out)) => {
+                self.spent = self.spent.saturating_add(out.len() as u64);
+                Ok(Some(out))
+            }
+            Ok(None) => Ok(None),
+            // Damaged, or inflating past what it declares (the read stops one byte past that):
+            // unreadable, and charged its declared size.
+            Err(_) => {
+                self.spent = self.spent.saturating_add(size);
+                Ok(None)
+            }
         }
-        self.spent = self.spent.saturating_add(out.len() as u64);
-        if out.len() as u64 > cap {
-            return Err(if cap == max_entry {
-                Error::EntryTooLarge(name.to_string(), max_entry)
-            } else {
-                Error::TotalTooLarge(self.limits.max_total)
-            });
-        }
-        Ok(Some(out))
     }
 
     /// Bytes inflated from this package so far.
@@ -117,15 +122,7 @@ impl<'a> Package<'a> {
     /// The package's media type: what its `mimetype` file holds, surrounding whitespace
     /// dropped. `None` when it has none, or one longer than a media type can be.
     pub fn mimetype(&mut self) -> Option<String> {
-        let f = self.zip.by_name("mimetype").ok()?;
-        if f.size() > MAX_MIMETYPE {
-            return None;
-        }
-        let mut out = Vec::new();
-        f.take(MAX_MIMETYPE + 1).read_to_end(&mut out).ok()?;
-        if out.len() as u64 > MAX_MIMETYPE {
-            return None;
-        }
+        let out = self.zip.read("mimetype", MAX_MIMETYPE).ok()??;
         self.spent = self.spent.saturating_add(out.len() as u64);
         Some(String::from_utf8_lossy(&out).trim().to_string())
     }
@@ -213,18 +210,14 @@ impl PackageWriter {
 
     /// The package's bytes.
     pub fn finish(self) -> Result<Vec<u8>, Error> {
-        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-        let deflated = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-        let mut z = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        z.start_file("mimetype", stored).map_err(zip_err)?;
-        z.write_all(self.mime.as_bytes()).map_err(io_err)?;
+        use craft_zip::Compression::{Deflated, Stored};
+        let mut z = craft_zip::Writer::new();
+        z.add("mimetype", self.mime.as_bytes(), Stored).map_err(zip_err)?;
         let manifest = self.manifest_xml.unwrap_or_else(|| self.manifest.to_xml());
-        z.start_file(MANIFEST_PATH, deflated).map_err(zip_err)?;
-        z.write_all(manifest.as_bytes()).map_err(io_err)?;
+        z.add(MANIFEST_PATH, manifest.as_bytes(), Deflated).map_err(zip_err)?;
         for e in &self.entries {
-            z.start_file(e.path.as_str(), if e.stored { stored } else { deflated }).map_err(zip_err)?;
-            z.write_all(&e.data).map_err(io_err)?;
+            z.add(&e.path, &e.data, if e.stored { Stored } else { Deflated }).map_err(zip_err)?;
         }
-        Ok(z.finish().map_err(zip_err)?.into_inner())
+        z.finish().map_err(zip_err)
     }
 }
