@@ -1,20 +1,21 @@
 # Local linesweeper 0.5.0 copy
 
 This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and the
-local patch listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
+local patches listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
-Every file here except this one, `SOURCE.json` and the patched file below is byte for byte the file
-in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
+Every file here except this one, `SOURCE.json`, `src/sweep/sweep_line.rs` and `tests/regression.rs` is
+byte for byte the file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
 hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
-holds `upstream_revision`. `local_patches` describes the local patch.
+holds `upstream_revision`. `local_patches` describes the local patches.
 
 ## Local patches
 
 | File | Change |
 |---|---|
+| `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
 | `tests/regression.rs` | The test escapes `CARGO_MANIFEST_DIR` with `glob::Pattern::escape` and fails when it finds no inputs. A checkout path containing `[` used to match no files, so the test ran zero cases and passed. Code comments label the change `Craft patch (regression glob)`. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
