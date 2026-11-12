@@ -612,7 +612,9 @@ impl<W: WindingNumber> Topology<W> {
                     debug_assert!(!ret.open_segs[prev_seg].is_empty());
                     ret.open_segs[prev_seg].front().copied()
                 };
-                ret.process_sweep_line_range(positions, &segments, scan_west_seg);
+                if !ret.process_sweep_line_range(positions, &segments, scan_west_seg) {
+                    return Err(crate::Error::WorkLimitExceeded);
+                }
             }
         }
         if sweep_state.work_limit_exceeded() {
@@ -772,12 +774,15 @@ impl<W: WindingNumber> Topology<W> {
         out_idx
     }
 
+    /// Craft patch (work limit): returns `false`, leaving the topology
+    /// incomplete, if the sweep passes its work limit while visiting the
+    /// horizontal segments of this range.
     fn process_sweep_line_range(
         &mut self,
         mut pos: SweepLineRange,
         segments: &Segments,
         mut scan_west: Option<OutputSegIdx>,
-    ) {
+    ) -> bool {
         let y = pos.line().y();
         let mut winding = scan_west
             .map(|idx| self.winding[idx].counter_clockwise.clone())
@@ -792,6 +797,9 @@ impl<W: WindingNumber> Topology<W> {
         let mut last_connected_down_seg: Option<OutputSegIdx> = None;
 
         while let Some(next_x) = pos.x() {
+            if pos.work_limit_exceeded() {
+                return false;
+            }
             let p = PointIdx(self.points.inner.len());
             self.points.inner.push(Point::new(next_x, y));
             // The first segment at our current point, in clockwise order.
@@ -892,6 +900,7 @@ impl<W: WindingNumber> Topology<W> {
                 self.scan_after.push((y, west, east));
             }
         }
+        true
     }
 
     fn delete_half(&mut self, half_seg: HalfOutputSegIdx) {
@@ -2730,6 +2739,34 @@ mod tests {
         let paths = |c: &super::Contours| c.contours().map(|c| c.path.clone()).collect::<Vec<_>>();
         assert_eq!(paths(&actual), paths(&expected));
         assert!(!paths(&actual).is_empty());
+    }
+
+    // Craft patch (work limit). Closed paths made only of horizontal segments
+    // at one height take little sweep work, but every overlapping horizontal
+    // segment is split at every x position of the others, so the topology
+    // visits about n^2 of them. Those visits count toward the limit.
+    #[test]
+    fn work_limit_counts_the_horizontal_splits() {
+        let n = 300;
+        let paths: Vec<BezPath> = (0..n)
+            .map(|i| {
+                let i = f64::from(i);
+                let mut path = BezPath::new();
+                path.move_to((i, 0.0));
+                path.line_to((2.0 * f64::from(n) + i, 0.0));
+                path.close_path();
+                path
+            })
+            .collect();
+        let tagged = || paths.iter().map(|p| (p, ()));
+
+        let result = Topology::<i32>::from_paths_with_work_limit(tagged(), 1e-6, 100_000);
+        assert_eq!(result.err(), Some(crate::Error::WorkLimitExceeded));
+
+        let expected = Topology::<i32>::from_paths(tagged(), 1e-6).unwrap();
+        let actual = Topology::<i32>::from_paths_with_work_limit(tagged(), 1e-6, u64::MAX).unwrap();
+        assert_eq!(actual.winding.inner.len(), expected.winding.inner.len());
+        assert!(actual.winding.inner.len() > 100_000, "{} output segments", actual.winding.inner.len());
     }
 
     fn run_perturbation(ps: Vec<Perturbation<F64Perturbation>>) {

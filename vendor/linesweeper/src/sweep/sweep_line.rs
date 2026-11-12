@@ -2,7 +2,7 @@
 //!
 //! This algorithm is documented in `docs/sweep.typ`.
 
-use std::cell::{RefCell, RefMut};
+use std::cell::{Cell, RefCell, RefMut};
 
 #[cfg(feature = "slow-asserts")]
 use std::ops::DerefMut;
@@ -363,10 +363,13 @@ pub struct Sweeper<'a> {
     // horizontal segments. `segments_passed` counts the segments that linear
     // searches of the sweep line step over without comparing them; each
     // `SEGMENTS_PASSED_PER_UNIT` of them counts as one unit of work.
+    // `range_horizontals` counts the horizontal segments that the steps of a
+    // `SweepLineRange` visit; a range borrows the sweeper, so it is a `Cell`.
     work_limit: Option<u64>,
     stopped_at_work_limit: bool,
     position_checks: u64,
     segments_passed: u64,
+    range_horizontals: Cell<u64>,
 }
 
 impl<'segs> Sweeper<'segs> {
@@ -398,6 +401,7 @@ impl<'segs> Sweeper<'segs> {
             stopped_at_work_limit: false,
             position_checks: 0,
             segments_passed: 0,
+            range_horizontals: Cell::new(0),
         }
     }
 
@@ -413,7 +417,10 @@ impl<'segs> Sweeper<'segs> {
     /// positions checked against horizontal segments and contour endpoints while
     /// finding a sweep line's changed intervals, plus n log2 n for sorting the n
     /// horizontal segments of a sweep line, plus one unit for every 16 segments
-    /// that linear searches of the sweep line step over without comparing them.
+    /// that linear searches of the sweep line step over without comparing them,
+    /// plus the horizontal segments that each step of a [`SweepLineRange`]
+    /// visits. A caller stops processing a range once
+    /// [`SweepLineRange::work_limit_exceeded`] returns `true`.
     /// Once the sweep has done more than `limit`,
     /// [`Sweeper::next_line`] returns `None` and
     /// [`Sweeper::work_limit_exceeded`] returns `true`. The sweep checks the limit
@@ -441,13 +448,21 @@ impl<'segs> Sweeper<'segs> {
     }
 
     /// The work done so far: the segment comparisons, cached or not, the
-    /// position checks, and the segments that linear searches passed.
+    /// position checks, the segments that linear searches passed, and the
+    /// horizontal segments that range steps visited.
     fn work(&self) -> u64 {
         let calls = self.comparisons.borrow().calls;
         calls
             .saturating_add(self.conservative_comparisons.borrow().calls)
             .saturating_add(self.position_checks)
             .saturating_add(self.segments_passed / SEGMENTS_PASSED_PER_UNIT)
+            .saturating_add(self.range_horizontals.get())
+    }
+
+    /// Counts `n` horizontal segments visited by a step of a [`SweepLineRange`].
+    pub(crate) fn count_range_horizontals(&self, n: usize) {
+        let total = self.range_horizontals.get().saturating_add(n as u64);
+        self.range_horizontals.set(total);
     }
 
     /// Finds `seg_idx` on the sweep line, counting the segments the search passes.
