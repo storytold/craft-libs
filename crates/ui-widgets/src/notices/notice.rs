@@ -13,7 +13,7 @@ use crate::runtime::commands::CommandRef;
 use crate::runtime::env::{EnvView, Label};
 use crate::style::{ComponentStyle, IconLook, Insets, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole, UiTokens};
 use craft_behavior::{Flow, IconId, Intent, Metrics, NavShape, PartKey, Roving, Sense};
-use craft_theme::{Rgba, Stateful, States, variant::Tone};
+use craft_theme::{Rgba, Stateful, States, Variant, variant::Tone};
 use egui::{Align, Pos2, Rect, Response, Vec2};
 
 /// Where a notice sits and how much room it takes.
@@ -25,8 +25,9 @@ pub enum NoticeLayout {
     Inline,
     /// The inline layout on a floating surface, as wide as its text up to the card width: a toast.
     Card,
-    /// Icon, title, message and actions in a column centred in the room, at most the reading width wide, with the
-    /// actions stacked when they do not fit side by side: an empty state.
+    /// Icon, title, message and actions in a column centred in the room, at most the reading width wide: an empty
+    /// state. The first action is the primary button and the others secondary, all as wide as the widest, side by side
+    /// or stacked when they do not fit.
     Centred,
 }
 
@@ -271,8 +272,25 @@ impl<'a> Notice<'a> {
         self.layout != NoticeLayout::Centred
     }
 
-    fn face_size(&self, cx: &MeasureCx<'_, Self>, label: Label) -> Vec2 {
-        if self.row() { cx.face(Link::new(label).role(cx.style.message.role)) } else { cx.face(Button::new(label)) }
+    /// The face of a centred notice's action `at`: the first is the primary button.
+    fn button(at: usize, label: Label) -> Button<'static> {
+        Button::new(label).variant(if at == 0 { Variant::PRIMARY } else { Variant::SECONDARY })
+    }
+
+    /// The face of an inline or card notice's action.
+    fn link(role: TypeRole, label: Label) -> Link {
+        Link::new(label).role(role)
+    }
+
+    /// The sizes of the actions' faces; a centred notice's buttons all take the widest one's width.
+    fn action_sizes(&self, cx: &MeasureCx<'_, Self>) -> Vec<Vec2> {
+        let labels = self.action_labels(cx).into_iter().enumerate();
+        if self.row() {
+            return labels.map(|(_, label)| cx.face(Self::link(cx.style.message.role, label))).collect();
+        }
+        let sizes: Vec<Vec2> = labels.map(|(at, label)| cx.face(Self::button(at, label))).collect();
+        let widest = sizes.iter().map(|size| size.x).fold(0.0, f32::max);
+        sizes.into_iter().map(|size| Vec2::new(widest, size.y)).collect()
     }
 
     /// Sizes every element for `width`, which is infinite to find the natural width.
@@ -282,7 +300,7 @@ impl<'a> Notice<'a> {
         let row = self.row();
         let icon = self.icon_spec().map(|_| cx.style.icon.side);
         let dismiss = (self.dismiss && row).then(|| cx.face(IconButton::new(IconId::new(DISMISS_ICON)).label(words.dismiss.clone())));
-        let actions: Vec<Vec2> = self.action_labels(cx).into_iter().map(|label| self.face_size(cx, label)).collect();
+        let actions = self.action_sizes(cx);
         let icon_width = if row { icon.map_or(0.0, |side| side + gap) } else { 0.0 };
         let dismiss_width = dismiss.map_or(0.0, |size| size.x + gap);
         let column = if width.is_finite() { (width - icon_width - dismiss_width).max(0.0) } else { f32::INFINITY };
@@ -527,9 +545,9 @@ impl Component for Notice<'_> {
         for (at, label) in placed.labels.iter().cloned().enumerate() {
             let part = ACTION.at(at as u64);
             if self.row() {
-                ui.face(part, Link::new(label).role(cx.style.message.role));
+                ui.face(part, Self::link(cx.style.message.role, label));
             } else {
-                ui.face(part, Button::new(label));
+                ui.face(part, Self::button(at, label));
             }
         }
         if placed.dismiss.is_some() {
