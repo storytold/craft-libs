@@ -1491,8 +1491,8 @@ The library's sense set, for a root or a part.
 
 `Proposal`, `Metrics` and `ControlMetrics`: what a measure call is asked and what a style gives it to add.
 
-- `craft_behavior::sizing::ControlMetrics`: `pub struct ControlMetrics { pub height: f32, pub icon: f32, pub pad_x: f32, pub gap: f32 }`. The sizes a control takes from its `ControlSize`: height, icon side, horizontal padding and gap.
-  - `pub fn at(size: ControlSize, height: &BySize<f32>, icon: &BySize<f32>, pad_x: &BySize<f32>, gap: &BySize<f32>) -> Self`. The entries of the four tables at `size`.
+- `craft_behavior::sizing::ControlMetrics`: `pub struct ControlMetrics { pub height: f32, pub icon: f32, pub pad_x: f32, pub gap: f32, pub field: f32, pub number: f32 }`. The sizes a control takes from its `ControlSize`: height, icon side, horizontal padding, gap and the widths of a
+  - `pub fn at(size: ControlSize, height: &BySize<f32>, icon: &BySize<f32>, pad_x: &BySize<f32>, gap: &BySize<f32>, field: &BySize<f32>, number: &BySize<f32>,) -> Self`. The entries of the six tables at `size`.
   - `pub const fn metrics(&self) -> Metrics`. The `Metrics` of a control of this height: horizontal padding, the height as the least height, the gap.
 - `craft_behavior::sizing::Metrics`: `pub struct Metrics { pub padding: Insets, pub min_size: Vec2, pub max_width: Option<f32>, pub gap: f32, pub min_text: f32, pub ideal_width: f32, pub least_width: Option<f32> }`. What the pipeline adds around a component's measured content.
   - `pub const fn new() -> Self`. No padding, no minimum, no wrap width.
@@ -3817,7 +3817,7 @@ The style layer: the state set and its resolver, style parts and `ComponentStyle
   - `pub fn accent_fill(&self) -> Stateful<StyleColor>`. The fill of an accent control that is on or filled: the strong accent at rest, with its hover and pressed
   - `pub fn track(&self) -> TrackLook`. The look of a value track: a groove of `size.groove` with the part a value fills over it, and its marks.
   - `pub fn ink(&self, ink: Ink) -> StyleColor`. The colour text and icons on a surface read in.
-  - `pub fn control(&self) -> ControlMetrics`. The height, icon side, padding and gap of a control at the ambient size.
+  - `pub fn control(&self) -> ControlMetrics`. The height, icon side, padding, gap and field widths of a control at the ambient size.
   - `pub fn glyph(&self) -> f32`. The side of a mark inside a control at the ambient size (`size.icon.glyph_sm`, `glyph_md`): an icon-only
   - `pub fn control_of(&self, size: ControlSize) -> ControlMetrics`. `control` at `size`, whatever the ambient size: the part of a control that keeps its own size (a field's
   - `pub fn segment_control(&self) -> ControlMetrics`. `control`, with the side padding of a segment of a segmented control: `space.pad.control` at the small size
