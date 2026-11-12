@@ -23,7 +23,7 @@ use craft_ui::runtime::focus::KeyUse;
 use craft_ui::runtime::pending::Pending;
 use craft_ui::style::{ComponentStyle, DataColor, StyleColor, StyleCx, SurfaceLook, TypeRole};
 use egui::epaint::text::CharIndex;
-use egui::{Pos2, Rect, Response, Vec2};
+use egui::{Pos2, Rect, Response, Shape, Vec2};
 
 use super::editor::word_boundary;
 use crate::lists::line_starts;
@@ -426,9 +426,10 @@ impl Component for NotesEditor<'_> {
                     );
                 }
             }
-            painter.painter.galley(top_left, layout.galley.clone(), ink_color);
+            // The notes' runs are document text, so they paint as data.
+            painter.data_shapes([Shape::galley(top_left, layout.galley.clone(), ink_color)]);
             if let Some((x, marker)) = laid.marker {
-                painter.painter.galley(Pos2::new(area.left() + x, y), marker.galley, ink_color);
+                painter.data_shapes([Shape::galley(Pos2::new(area.left() + x, y), marker.galley, ink_color)]);
             }
             if (range.start..=range.end).contains(&cursor.caret.min(chars)) {
                 let cursor_pos = layout.galley.pos_from_cursor(egui::text::CCursor::new(cursor.caret.min(chars) - range.start));

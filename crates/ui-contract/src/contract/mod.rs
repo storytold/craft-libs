@@ -298,8 +298,9 @@ pub trait Pattern {}
 #[non_exhaustive]
 pub enum DisabledLook {
     /// The style's Disabled state: `text.disabled` ink, the theme's disabled fills, and the data colours its `Draw`
-    /// paints (a tone dot, a swatch icon, a series) at `Opacity::DISABLED`, each keeping its hue. Controls whose look
-    /// is chrome (buttons, fields, sliders) take it.
+    /// and its content painter's data paths paint (a tone dot, a swatch icon, a gradient ramp, document text) at
+    /// `Opacity::DISABLED`, each keeping its hue. Controls whose look is chrome (buttons, fields, sliders, a gradient
+    /// bar's stops) take it.
     States,
     /// The component paints its enabled look at `Opacity::DISABLED`: its surface, its paint, its faces and
     /// `paint_over`, not its focus ring. A component that shows data (a picture, a colour, a plot) takes it, so the

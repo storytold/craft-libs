@@ -511,7 +511,7 @@ impl Component for Histogram<'_> {
             let look = if self.ribbons { HistogramLook::Rgb } else { HistogramLook::Tone };
             paint_bins(&painter, rect, self.data, look, &style.inks);
             if let Some((original, channel)) = self.outline_bins() {
-                painter.painter.extend(outline_shapes(rect, self.data, original, channel, &style.inks));
+                painter.data_shapes(outline_shapes(rect, self.data, original, channel, &style.inks));
             }
             if let Some(range) = Self::current(cx) {
                 painter.painter.extend(selection_shapes(rect, bins, range, style.marker_width, style.selection));

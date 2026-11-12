@@ -182,6 +182,31 @@ impl DataMode {
     pub(crate) fn of(state: &crate::style::StateSet) -> Self {
         if state.state == craft_theme::State::Disabled { DataMode::Dimmed } else { DataMode::Full }
     }
+
+    /// A colour from data as this mode paints it.
+    pub(crate) fn color(self, tokens: &UiTokens, color: Color32) -> Color32 {
+        self.map(crate::style::rgba_color(tokens.color.state.disabled_fill), color)
+    }
+
+    /// Maps every colour of `shape` (fills, strokes, mesh vertices, glyphs) as [`Self::color`] maps one.
+    pub(crate) fn shape(self, tokens: &UiTokens, shape: &mut Shape) {
+        if self == DataMode::Full {
+            return;
+        }
+        let inactive = crate::style::rgba_color(tokens.color.state.disabled_fill);
+        egui::epaint::shape_transform::adjust_colors(shape, move |color| *color = self.map(inactive, *color));
+    }
+
+    /// The one mapping, with `inactive` the theme's disabled fill. `Color32::PLACEHOLDER` passes through, so a
+    /// galley's fallback ink still resolves when it is painted.
+    fn map(self, inactive: Color32, color: Color32) -> Color32 {
+        match self {
+            _ if color == Color32::PLACEHOLDER => color,
+            DataMode::Full => color,
+            DataMode::Dimmed => color.gamma_multiply(craft_theme::Opacity::DISABLED),
+            DataMode::Inactive => inactive,
+        }
+    }
 }
 
 /// The content-paint API `PaintUi::draw` gives.
@@ -445,31 +470,14 @@ impl<'a> Draw<'a> {
     /// is data: a disabled component paints it at `Opacity::DISABLED`, and a `Draw` for an inactive part fills `rect`
     /// with the theme's disabled fill instead, as `data_fill` does.
     pub fn texture(&self, rect: Rect, texture: TextureId, uv: Rect) {
-        let tint = match self.data {
-            DataMode::Inactive => {
-                self.data_fill(&PaintShape::Rect(rect, CornerRadius::ZERO), DataColor::new(Color32::TRANSPARENT));
-                return;
-            }
-            DataMode::Dimmed => super::textures::UNTINTED.gamma_multiply(craft_theme::Opacity::DISABLED),
-            DataMode::Full => super::textures::UNTINTED,
-        };
-        self.painter.image(texture, rect, uv, tint);
+        data_picture(self.painter, self.env.tokens, self.data, texture, rect, uv, CornerRadius::ZERO);
     }
 
     /// Paints `checker` over `rect` with corners `radius`, a light cell at the rect's top left. It shows through data,
     /// so it paints as the data over it: at `Opacity::DISABLED` for a disabled component, and for an inactive part as
     /// the theme's disabled fill, as `data_fill` does.
     pub fn checker(&self, checker: &super::Checker, rect: Rect, radius: CornerRadius) {
-        let shape = || checker.shape(self.painter.ctx(), self.env.tokens, super::CheckerArea::Rect(rect, radius), rect.min);
-        match self.data {
-            DataMode::Inactive => self.data_fill(&PaintShape::Rect(rect, radius), DataColor::new(Color32::TRANSPARENT)),
-            DataMode::Dimmed => {
-                faded_painter(self.painter, craft_theme::Opacity::DISABLED).add(shape());
-            }
-            DataMode::Full => {
-                self.painter.add(shape());
-            }
-        }
+        data_checker(self.painter, self.env.tokens, self.data, checker, rect, radius);
     }
 
     /// Paints the well of a colour swatch over `well` with corners `radius`: the colour, over a checkerboard where it is
@@ -493,13 +501,9 @@ impl<'a> Draw<'a> {
         }
     }
 
-    /// The one mapping of a data colour, by `self.data`.
+    /// A data colour as `self.data` paints it.
     fn data_color(&self, color: DataColor) -> Color32 {
-        match self.data {
-            DataMode::Full => color.0,
-            DataMode::Dimmed => color.0.gamma_multiply(craft_theme::Opacity::DISABLED),
-            DataMode::Inactive => crate::style::rgba_color(self.env.tokens.color.state.disabled_fill),
-        }
+        self.data.color(self.env.tokens, color.0)
     }
 
     /// Strokes the open path `path` as dashes (copy marks, drag previews, reference lines), with the width and colour
@@ -568,6 +572,30 @@ impl<'a> Draw<'a> {
             PaintShape::Path(points) => Shape::line(points.clone(), stroke),
         };
         self.painter.add(shape);
+    }
+}
+
+/// Paints the part `uv` of `texture` into `rect` with corners `radius` as data in `mode`: tinted as `mode` maps a
+/// colour, or for an inactive part `rect` in the theme's disabled fill. `Draw::texture` and `ContentPainterCx::picture`
+/// paint through it.
+pub(super) fn data_picture(painter: &Painter, tokens: &UiTokens, mode: DataMode, texture: TextureId, rect: Rect, uv: Rect, radius: CornerRadius) {
+    if mode == DataMode::Inactive {
+        painter.rect_filled(rect, radius, mode.color(tokens, Color32::TRANSPARENT));
+    } else {
+        crate::runtime::egui::textures::paint(painter, texture, rect, uv, mode.color(tokens, super::textures::UNTINTED), radius);
+    }
+}
+
+/// Paints `checker` over `rect` with corners `radius`, a light cell at the rect's top left, as the data over it in
+/// `mode`: mapped as `mode` maps a colour, or for an inactive part `rect` in the theme's disabled fill. `Draw::checker`
+/// and `ContentPainterCx::checker_with` paint through it.
+pub(super) fn data_checker(painter: &Painter, tokens: &UiTokens, mode: DataMode, checker: &super::Checker, rect: Rect, radius: CornerRadius) {
+    if mode == DataMode::Inactive {
+        painter.rect_filled(rect, radius, mode.color(tokens, Color32::TRANSPARENT));
+    } else {
+        let mut shape = checker.shape(painter.ctx(), tokens, super::CheckerArea::Rect(rect, radius), rect.min);
+        mode.shape(tokens, &mut shape);
+        painter.add(shape);
     }
 }
 

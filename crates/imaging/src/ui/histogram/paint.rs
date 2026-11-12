@@ -120,9 +120,9 @@ pub fn paint_edge(painter: &ContentPainterCx<'_>, rect: Rect, frame: &PlotFrame)
 }
 
 /// Draws `data` in `look` into `rect`: no frame, no layout, no interaction, nothing in the AccessKit tree. `data` that
-/// doesn't fit the look (RGB data in the tone look) and a degenerate `rect` draw nothing.
+/// doesn't fit the look (RGB data in the tone look) and a degenerate `rect` draw nothing. The bins are data.
 pub fn paint_bins(painter: &ContentPainterCx<'_>, rect: Rect, data: &HistogramData, look: HistogramLook, inks: &HistogramInks) {
-    painter.painter.extend(plot_shapes(rect, data, look, inks));
+    painter.data_shapes(plot_shapes(rect, data, look, inks));
 }
 
 /// Whether `rect` is a finite rectangle with room to draw in.

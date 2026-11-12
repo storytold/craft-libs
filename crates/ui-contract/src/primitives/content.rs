@@ -25,14 +25,16 @@ const BOLD_FROM: u16 = 600;
 /// The raw painter of an allowlisted content painter, clipped to its rect.
 #[non_exhaustive]
 pub struct ContentPainterCx<'a> {
-    /// The painter.
+    /// The painter, for theme colours. Colours from data go through [`data_shapes`](Self::data_shapes), the kit's data
+    /// methods (`picture`, `checker`, `ramp`) or `with_draw`, which dim them while the component paints its Disabled
+    /// state; a component that paints data with this painter takes `DisabledLook::Faded`.
     pub painter: Painter,
     pub(super) tokens: &'a UiTokens,
     pub(super) direction: Direction,
     env: &'a Env,
     ink: Ink,
-    /// How `with_draw` paints data colours, as the component's `PaintUi::draw` does.
-    data: super::DataMode,
+    /// How the data paths and `with_draw` paint data colours, as the component's `PaintUi::draw` does.
+    pub(super) data: super::DataMode,
 }
 
 impl<'a> ContentPainterCx<'a> {

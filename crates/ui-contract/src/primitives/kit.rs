@@ -772,19 +772,30 @@ impl ContentPainterCx<'_> {
         self.painter.pixels_per_point()
     }
 
-    /// Paints the part `uv` of `texture` into `rect`, untinted, with corners of `radius` points (zero for square ones).
-    pub fn picture(&self, texture: egui::TextureId, rect: Rect, uv: Rect, radius: f32) {
-        crate::runtime::egui::textures::paint(&self.painter, texture, rect, uv, super::textures::UNTINTED, UiTokens::corner(radius));
+    /// Paints shapes whose colours are data (a colour mesh, a plot's series, document text laid out by `layout`): as
+    /// they are, at `Opacity::DISABLED` while the component paints its Disabled state (each colour keeps its hue), and
+    /// in the theme's disabled fill for an inactive part, as `Draw::data_fill` paints a data colour.
+    pub fn data_shapes(&self, shapes: impl IntoIterator<Item = Shape>) {
+        self.painter.extend(shapes.into_iter().map(|mut shape| {
+            self.data.shape(self.tokens, &mut shape);
+            shape
+        }));
     }
 
-    /// Paints the theme's transparency checkerboard over `rect`.
+    /// Paints the part `uv` of `texture` into `rect`, untinted, with corners of `radius` points (zero for square ones).
+    /// The picture is data, painted as `Draw::texture` paints one.
+    pub fn picture(&self, texture: egui::TextureId, rect: Rect, uv: Rect, radius: f32) {
+        super::draw::data_picture(&self.painter, self.tokens, self.data, texture, rect, uv, UiTokens::corner(radius));
+    }
+
+    /// Paints the theme's transparency checkerboard over `rect`, as the data over it; see [`Self::checker_with`].
     pub fn checker(&self, rect: Rect) {
         self.checker_with(&Checker::new(), rect, CornerRadius::ZERO);
     }
 
-    /// Paints a colour ramp over `rect` with corners of `radius` along `axis`; see [`ramp`].
+    /// Paints a colour ramp over `rect` with corners of `radius` along `axis`, as data; see [`ramp`].
     pub fn ramp(&self, rect: Rect, radius: CornerRadius, stops: &[(f32, DataColor)], axis: Axis) {
-        self.painter.extend(ramp(rect, radius, stops, axis));
+        self.data_shapes(ramp(rect, radius, stops, axis));
     }
 
     /// Paints the well of a plot over `rect` and returns the rect inside its edge, where the plot draws.
@@ -815,9 +826,10 @@ impl ContentPainterCx<'_> {
         self.painter.extend(grid_lines(self.tokens, grid, ink, self.ppp()));
     }
 
-    /// Paints the checkerboard `checker` over `rect` with corners of `radius`.
+    /// Paints the checkerboard `checker` over `rect` with corners of `radius`. It shows through data, so it paints as
+    /// the data over it, as `Draw::checker` does.
     pub fn checker_with(&self, checker: &Checker, rect: Rect, radius: CornerRadius) {
-        self.painter.add(checker.shape(self.painter.ctx(), self.tokens, CheckerArea::Rect(rect, radius), rect.min));
+        super::draw::data_checker(&self.painter, self.tokens, self.data, checker, rect, radius);
     }
 
     /// Paints tick marks on one edge of `rect`.
