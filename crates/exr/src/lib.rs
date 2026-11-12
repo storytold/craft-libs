@@ -10,7 +10,14 @@
 //! - [`cryptomatte`]: Cryptomatte (specification 1.2) IDs, metadata keys, manifests and rank
 //!   channel names.
 //!
-//! Nothing here reads pixels or depends on a decoder: the functions take names and attribute text.
+//! Those take names and attribute text and depend on no decoder. With the `decode` feature:
+//!
+//! - [`decode`]: bounded part listing, flat decoding (scan lines and tiles, every compression the
+//!   `exr` crate reads) and writing, on top of the `exr` crate.
 
 pub mod channels;
 pub mod cryptomatte;
+#[cfg(feature = "decode")]
+pub mod decode;
+#[cfg(all(test, feature = "decode"))]
+mod decode_tests;

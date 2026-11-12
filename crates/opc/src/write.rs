@@ -1,7 +1,6 @@
 //! Writing a package.
 
 use std::collections::{HashMap, HashSet};
-use std::io::{Cursor, Write};
 
 use craft_xml::Writer;
 
@@ -27,14 +26,9 @@ pub fn compression_for(name: &str) -> Compression {
 
 /// A ZIP archive being written. The output is deterministic: deflate level 6 and the same
 /// (1980) timestamp on every entry.
+#[derive(Default)]
 pub struct ZipOut {
-    zip: zip::ZipWriter<Cursor<Vec<u8>>>,
-}
-
-impl Default for ZipOut {
-    fn default() -> ZipOut {
-        ZipOut { zip: zip::ZipWriter::new(Cursor::new(Vec::new())) }
-    }
+    zip: craft_zip::Writer,
 }
 
 impl ZipOut {
@@ -44,22 +38,15 @@ impl ZipOut {
 
     /// Adds an entry. The caller keeps names unique.
     pub fn add(&mut self, name: &str, data: &[u8], compression: Compression) -> Result<(), Error> {
-        let method = match compression {
-            Compression::Deflate => zip::CompressionMethod::Deflated,
-            Compression::Store => zip::CompressionMethod::Stored,
+        let compression = match compression {
+            Compression::Deflate => craft_zip::Compression::Deflated,
+            Compression::Store => craft_zip::Compression::Stored,
         };
-        let opts = zip::write::SimpleFileOptions::default()
-            .compression_method(method)
-            .compression_level((compression == Compression::Deflate).then_some(6))
-            .last_modified_time(zip::DateTime::default())
-            // Deflate can grow incompressible data a little, so well before 4 GiB.
-            .large_file(data.len() as u64 >= u64::from(u32::MAX) / 2);
-        self.zip.start_file(name, opts).map_err(|e| Error::Write(e.to_string()))?;
-        self.zip.write_all(data).map_err(|e| Error::Write(e.to_string()))
+        self.zip.add(name, data, compression).map_err(crate::zip_error)
     }
 
     pub fn finish(self) -> Result<Vec<u8>, Error> {
-        self.zip.finish().map(Cursor::into_inner).map_err(|e| Error::Write(e.to_string()))
+        self.zip.finish().map_err(crate::zip_error)
     }
 }
 
