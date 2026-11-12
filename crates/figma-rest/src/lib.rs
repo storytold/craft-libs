@@ -26,11 +26,13 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod build;
 pub mod ext;
 mod model;
 #[cfg(test)]
 mod tests;
 
+pub use build::{MAX_WARNINGS, Warnings, style_name};
 pub use model::{
     ArcData, BlendMode, Color, ColorStop, Component, ComponentSet, Effect, EffectType, ExportSetting, File, FileNode, FileNodes, LayoutConstraint,
     LayoutGrid, Node, NodeProps, NodeType, Paint, PaintType, Path, Rectangle, Style, StyleType, Transform, TypeStyle, Vector,

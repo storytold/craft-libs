@@ -307,3 +307,38 @@ fn junk_values_never_panic() {
     }
     assert!(read > 0 && read < all.len());
 }
+
+#[test]
+fn warnings_are_counted_once_each_and_capped() {
+    let mut w = Warnings::default();
+    for _ in 0..3 {
+        w.add("a".into());
+    }
+    w.add("b".into());
+    assert_eq!(w.seen().collect::<Vec<_>>(), ["a", "b"]);
+    assert_eq!(w.finish(), ["a (×3)", "b"]);
+    let mut w = Warnings::default();
+    for i in 0..MAX_WARNINGS + 5 {
+        w.add(format!("{i}"));
+    }
+    w.add("0".into());
+    let out = w.finish();
+    assert_eq!(out.len(), MAX_WARNINGS);
+    assert_eq!(out[0], "0 (×2)");
+}
+
+#[test]
+fn style_names_are_spelled_as_words() {
+    for (from, to) in [
+        ("SemiBold", "Semi Bold"),
+        ("ExtraBoldItalic", "Extra Bold Italic"),
+        ("Regular Italic", "Italic"),
+        ("italic", "Italic"),
+        ("bold", "Bold"),
+        ("Demi-Bold", "Demi Bold"),
+        ("Condensed", "Condensed"),
+        ("", ""),
+    ] {
+        assert_eq!(style_name(from), to, "{from}");
+    }
+}

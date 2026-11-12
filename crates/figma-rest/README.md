@@ -67,6 +67,12 @@ A consumer that doesn't know an extension ignores it; the public fields still de
 Fields starting with `_fig` are private handoffs between one reader and one importer and are not
 part of this contract; they are kept like any unknown field.
 
+## For readers
+
+`Warnings` collects a reader's notes (each once, with a count, at most 200) and `style_name`
+spells a font style the way this shape names it ("SemiBold" → "Semi Bold"), so the readers that
+build this shape report and name things alike.
+
 ## Reading and writing
 
 ```rust
