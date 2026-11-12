@@ -145,6 +145,42 @@ impl Xfrm {
         let r = self.rot.rem_euclid(360.0);
         if r >= 360.0 { 0.0 } else { r }
     }
+    /// The box `inner` occupies under `m` (inner space → parent), as an `a:xfrm`: rotated about
+    /// its centre, flipped vertically for a negative determinant. `None` when `m` shears (an
+    /// `a:xfrm` cannot), or is not finite. A shape drawn in `inner`'s space then maps onto the
+    /// box by the per-axis scales of [`decompose`]`(m)`.
+    pub fn from_affine(inner: Rect, m: Affine) -> Option<Xfrm> {
+        let dm = decompose(m);
+        if dm.shear.abs() > 1e-6 || ![dm.sx, dm.sy, dm.rot].iter().all(|v| v.is_finite()) {
+            return None;
+        }
+        let c = m * inner.center();
+        let (w, h) = (inner.width() * dm.sx.abs(), inner.height() * dm.sy.abs());
+        let x = Xfrm { x: c.x - w / 2.0, y: c.y - h / 2.0, w, h, rot: dm.rot, flip_h: false, flip_v: dm.sy < 0.0 };
+        x.is_finite().then_some(x)
+    }
+}
+
+/// An affine split into rotation, axis scales and shear: `m = translate · rotate(rot) ·
+/// [sx, shear·sy; 0, sy]`. `rot` is in degrees; `sy` is negative for a mirroring transform.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Decomposed {
+    pub rot: f64,
+    pub sx: f64,
+    pub sy: f64,
+    pub shear: f64,
+}
+
+/// See [`Decomposed`].
+pub fn decompose(m: Affine) -> Decomposed {
+    let [a, b, c, d, _, _] = m.as_coeffs();
+    let sx = a.hypot(b);
+    let rot = b.atan2(a);
+    let (cos, sin) = (rot.cos(), rot.sin());
+    let c2 = cos * c + sin * d;
+    let d2 = -sin * c + cos * d;
+    let shear = if d2.abs() > 1e-12 { c2 / d2 } else { 0.0 };
+    Decomposed { rot: rot.to_degrees(), sx, sy: d2, shear }
 }
 
 /// Maps a group's child coordinate space (`ch_off`, `ch_ext`) onto the group's own box.
@@ -199,5 +235,25 @@ mod tests {
             let n = Xfrm { rot, ..Default::default() }.rot_norm();
             assert!((0.0..360.0).contains(&n), "rot {rot} -> {n}");
         }
+    }
+
+    #[test]
+    fn an_affine_without_shear_becomes_an_xfrm_that_places_the_box_the_same_way() {
+        let inner = Rect::new(10.0, 20.0, 110.0, 70.0);
+        for (rot, sx, sy) in [(0.0, 1.0, 1.0), (30.0, 2.0, 0.5), (-120.0, 1.5, -2.0), (90.0, 1.0, -1.0)] {
+            let m = Affine::translate((300.0, 200.0)) * Affine::rotate(f64::to_radians(rot)) * Affine::scale_non_uniform(sx, sy);
+            let x = Xfrm::from_affine(inner, m).unwrap();
+            let dm = decompose(m);
+            assert!((dm.rot - rot).abs() < 1e-9 && (dm.sx - sx).abs() < 1e-9 && (dm.sy - sy).abs() < 1e-9, "{dm:?}");
+            assert_eq!(x.flip_v, sy < 0.0);
+            // The xfrm's local box, scaled from inner space, lands where `m` puts each corner.
+            let local = |p: Point| Point::new((p.x - inner.x0) * sx.abs(), (p.y - inner.y0) * sy.abs());
+            for p in [Point::new(inner.x0, inner.y0), Point::new(inner.x1, inner.y0), Point::new(inner.x1, inner.y1)] {
+                let (a, b) = (x.affine() * local(p), m * p);
+                assert!((a - b).hypot() < 1e-9, "rot {rot} sy {sy}: {a:?} vs {b:?}");
+            }
+        }
+        assert!(Xfrm::from_affine(inner, Affine::skew(0.3, 0.0)).is_none(), "a shear has no xfrm");
+        assert!(Xfrm::from_affine(inner, Affine::scale(f64::NAN)).is_none());
     }
 }
