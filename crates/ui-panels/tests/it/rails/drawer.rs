@@ -88,3 +88,28 @@ fn only_a_tool_off_the_toolbar_drags() {
     assert!(!drags(&mut fixture, "Brush"), "Brush is on the toolbar");
     assert!(drags(&mut fixture, "Eraser"), "Eraser is not");
 }
+
+/// A click on a tool reports it as the one to select and leaves no row selected: the drawer's rows pick, they do not
+/// hold a selection.
+#[trial]
+fn a_click_on_a_tool_selects_it_and_no_row_stays_selected() {
+    use craft_ui::rails::{DrawerGroup, ToolbarDrawer};
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let picked = Rc::new(Cell::new(None::<u8>));
+    let seen = picked.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let groups = [DrawerGroup::new("Edit", vec![tool(UNDO), tool(CUT), tool(4)])];
+        let toolbar = [slot(0, &[UNDO])];
+        let out = ToolbarDrawer::new(ui.max_rect(), &groups, &toolbar, None).show(ui);
+        if let Some(id) = out.select {
+            seen.set(Some(id));
+        }
+    });
+    fixture.settle();
+    let row = fixture.by_label("Cut").expect("the Cut row");
+    fixture.click_at(row.center()).settle();
+    assert_eq!(picked.get(), Some(CUT), "the click selects the tool");
+    let selected = fixture.tree().selected_of(row.node).unwrap_or(false);
+    assert!(!selected, "the row keeps no selection");
+}

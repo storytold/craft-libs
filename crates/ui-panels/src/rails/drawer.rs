@@ -6,8 +6,8 @@ use super::words::RailWords;
 use crate::buttons::{Button, IconButton};
 use crate::contract::overlay::{Anchor, Dismiss, Overlay, Place};
 use crate::contract::{
-    Bind, CollectionEvent, Gap, ListDrag, NoValue, Outcome, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing,
-    clicked,
+    ActivateOn, Bind, CollectionEvent, Gap, ListDrag, NoValue, Outcome, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
+    Sizing, clicked,
 };
 use crate::display::{Shade, Text};
 use crate::layout_components::{Row, Stack};
@@ -20,7 +20,7 @@ use crate::runtime::windows::os_of;
 use crate::sections::DropAction;
 use crate::style::TypeRole;
 use craft_behavior::overlay::{Align, Side};
-use craft_behavior::{DisplayOrder, IconId, ItemSource, SelectionChange, Value};
+use craft_behavior::{DisplayOrder, IconId, ItemSource, Value};
 use egui::{Rect, Response, Ui};
 use std::borrow::Cow;
 
@@ -117,8 +117,8 @@ impl<T: Value> Outcome for ToolbarDrawerOutput<T> {
 /// tool that is on the toolbar is dimmed. The drawer is as tall as its rows, up to the share of the window a dialog
 /// takes, and the list scrolls inside that height.
 ///
-/// - **Rows.** A selected row reports its tool as `select`. Enter or a double click on a tool that is not on the
-///   toolbar adds it as a slot of its own at the end; on a tool that is on the toolbar it takes it off.
+/// - **Rows.** A click on a row, or Enter on the lead row, reports its tool as `select`. The rows pick without
+///   selecting: no row keeps a selection fill.
 /// - **Drags.** A tool dragged from the rail and dropped on the drawer is taken off the toolbar. A drop on the rail
 ///   comes back from the rail as a [`ToolDropped`]; hand it to [`ToolbarDrawer::new`] and the drawer turns it into an
 ///   edit.
@@ -265,7 +265,8 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
                     .show(ui, |ui, _| {
                         let list = List::<DrawerKey>::new(words.drawer_tools.clone())
                             .id(ui.scope_id().with("drawer-tools"))
-                            .select(SelectMode::Single)
+                            .select(SelectMode::None)
+                            .activate(ActivateOn::Click)
                             .can_drag(|key| match *key {
                                 DrawerKey::Tool { group, tool } => !on_toolbar(toolbar, &groups[group].tools[tool].id),
                                 DrawerKey::Group(_) => false,
@@ -297,19 +298,10 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
                             DrawerKey::Group(_) => None,
                         };
                         for event in out.events {
-                            match event {
-                                CollectionEvent::Selection(SelectionChange::Set(keys)) => {
-                                    select = keys.last().and_then(tool_of).map(|tool| tool.id.clone());
-                                }
-                                CollectionEvent::Activate(key) => {
-                                    let Some(tool) = tool_of(&key) else { continue };
-                                    edits.push(if on_toolbar(toolbar, &tool.id) {
-                                        ToolbarEdit::Remove { tool: tool.id.clone() }
-                                    } else {
-                                        ToolbarEdit::Add { tool: tool.clone(), at: DropAt::new_slot(toolbar.len()) }
-                                    });
-                                }
-                                _ => {}
+                            if let CollectionEvent::Activate(key) = event
+                                && let Some(tool) = tool_of(&key)
+                            {
+                                select = Some(tool.id.clone());
                             }
                         }
                     });
