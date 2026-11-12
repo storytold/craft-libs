@@ -279,3 +279,106 @@ fn invalid_rectangles_do_not_paint_or_accept_input() {
         assert!(responses.iter().all(|r| r.rect.is_finite() && !r.sense.senses_click()));
     }
 }
+
+/// A strip at 20,20 (200×26) over `count` tabs whose selection follows the wheel.
+struct Wheel {
+    ctx: Context,
+    selected: usize,
+    count: usize,
+    strip: Rect,
+    enabled: bool,
+    time: f64,
+}
+
+impl Wheel {
+    fn new(count: usize, selected: usize) -> Self {
+        Self { ctx: Context::default(), selected, count, strip: Rect::from_min_size(pos2(20.0, 20.0), vec2(200.0, 26.0)), enabled: true, time: 0.0 }
+    }
+
+    fn over(&self) -> Event {
+        Event::PointerMoved(self.strip.center())
+    }
+
+    /// Run a frame with `events`, apply the wheel's choice, and return it.
+    fn frame(&mut self, events: Vec<Event>) -> Option<usize> {
+        self.time += 0.05;
+        let raw =
+            RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(500.0, 200.0))), events, time: Some(self.time), ..Default::default() };
+        let mut chosen = None;
+        let mut output = self.ctx.run_ui(raw, |ui| {
+            ui.add_enabled_ui(self.enabled, |ui| {
+                chosen = wheel_select(ui, ui.scope_id().with("strip"), self.strip, self.selected, self.count);
+            });
+        });
+        output.textures_delta.clear();
+        if let Some(to) = chosen {
+            self.selected = to;
+        }
+        chosen
+    }
+}
+
+fn wheel(unit: egui::MouseWheelUnit, y: f32, modifiers: Modifiers) -> Event {
+    Event::MouseWheel { unit, delta: vec2(0.0, y), phase: egui::TouchPhase::Move, modifiers, source: egui::MouseWheelSource::Unknown }
+}
+
+fn notch(y: f32) -> Event {
+    wheel(egui::MouseWheelUnit::Line, y, Modifiers::NONE)
+}
+
+#[test]
+fn the_wheel_over_the_strip_selects_the_next_and_previous_tab_and_stops_at_the_ends() {
+    let mut h = Wheel::new(3, 1);
+    h.frame(vec![h.over()]);
+    assert_eq!(h.frame(vec![notch(-1.0)]), Some(2), "wheel down selects the next tab");
+    assert_eq!(h.frame(vec![notch(-1.0)]), None, "and stops at the last");
+    assert_eq!(h.frame(vec![notch(1.0)]), Some(1), "wheel up selects the previous tab");
+    assert_eq!(h.frame(vec![notch(2.0)]), Some(0), "two notches in a frame skip over a tab if they must");
+    assert_eq!(h.frame(vec![notch(1.0)]), None, "and stop at the first");
+    assert_eq!(h.frame(vec![notch(-1e30)]), Some(2), "a huge delta stops at the last tab");
+    assert_eq!(h.frame(vec![notch(1e30)]), Some(0), "and at the first");
+}
+
+#[test]
+fn trackpad_scrolling_adds_up_to_a_notch_until_the_pointer_leaves() {
+    let point = |y| wheel(egui::MouseWheelUnit::Point, y, Modifiers::NONE);
+    let mut h = Wheel::new(4, 0);
+    h.frame(vec![h.over()]);
+    assert_eq!(h.frame(vec![point(-30.0)]), None);
+    assert_eq!(h.frame(vec![point(-30.0)]), Some(1), "60 points make a notch");
+    assert_eq!(h.frame(vec![point(-30.0)]), Some(2), "the remaining 20 points and 30 more make another");
+    h.frame(vec![Event::PointerMoved(pos2(400.0, 150.0))]);
+    h.frame(vec![h.over()]);
+    assert_eq!(h.frame(vec![point(-30.0)]), None, "the 10 points left over were dropped when the pointer left");
+    assert_eq!(h.frame(vec![point(-30.0)]), Some(3));
+}
+
+#[test]
+fn the_wheel_selects_nothing_outside_the_strip_while_disabled_or_with_zoom_modifiers() {
+    let mut h = Wheel::new(3, 1);
+    h.frame(vec![Event::PointerMoved(pos2(400.0, 150.0))]);
+    assert_eq!(h.frame(vec![notch(-1.0)]), None, "outside the strip");
+    h.frame(vec![h.over()]);
+    for modifiers in [Modifiers::CTRL, Modifiers::COMMAND] {
+        assert_eq!(h.frame(vec![wheel(egui::MouseWheelUnit::Line, -1.0, modifiers)]), None, "{modifiers:?} zooms");
+    }
+    h.enabled = false;
+    assert_eq!(h.frame(vec![notch(-1.0)]), None, "disabled");
+    h.enabled = true;
+    h.strip = Rect::NOTHING;
+    assert_eq!(h.frame(vec![notch(-1.0)]), None, "a strip the caller gave up");
+    assert_eq!(h.selected, 1);
+}
+
+#[test]
+fn the_wheel_handles_no_tabs_one_tab_a_stale_selection() {
+    let mut h = Wheel::new(0, 0);
+    h.frame(vec![h.over()]);
+    assert_eq!(h.frame(vec![notch(-1.0)]), None, "no tabs");
+    let mut h = Wheel::new(1, 0);
+    h.frame(vec![h.over()]);
+    assert_eq!(h.frame(vec![notch(-1.0)]), None, "one tab");
+    let mut h = Wheel::new(3, usize::MAX);
+    h.frame(vec![h.over()]);
+    assert_eq!(h.frame(vec![notch(1.0)]), Some(1), "a stale selection counts as the last tab");
+}

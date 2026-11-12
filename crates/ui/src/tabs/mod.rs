@@ -143,6 +143,57 @@ fn squeeze(natural: &[f32], indices: &[usize], total: f32, minimum: f32) -> Vec<
         .collect()
 }
 
+/// Points of trackpad scrolling that make one wheel notch.
+const WHEEL_NOTCH: f32 = 40.0;
+
+/// The tab the mouse wheel selects while the pointer is over `strip`, or `None` when the
+/// selection stays.
+///
+/// Wheel down selects the next tab and wheel up the previous one, one tab per notch, stopping at
+/// the first and last tab. A mouse wheel notch is a line; trackpad scrolling adds up across frames
+/// until it makes a notch. Call this every frame with the strip's rectangle, in logical order and
+/// including overflowed tabs: `selected` and the result are indices into all `count` tabs, and
+/// the caller applies the result to its own selection. An out-of-range `selected` counts as the
+/// final tab, as in [`fit`]. Pass `Rect::NOTHING` while the pointer is over a part of the strip
+/// that scrolls by itself, such as an overflow button's menu: the wheel then goes to it.
+///
+/// `id` keeps the notch left over from a slow trackpad turn, so it must be unique in the UI scope
+/// and the same on every frame. That remainder is dropped when the pointer leaves the strip. Wheel
+/// events with Ctrl or Command held (zoom) and a disabled `ui` select nothing. The events stay in
+/// the input, so a scroll area under the strip still sees them: put the strip outside it if that
+/// is unwanted. Non-finite deltas are ignored.
+pub fn wheel_select(ui: &Ui, id: Id, strip: Rect, selected: usize, count: usize) -> Option<usize> {
+    let key = id.with("craft_ui::tabs::wheel");
+    if count == 0 || !ui.is_enabled() || !ui.rect_contains_pointer(strip) {
+        ui.data_mut(|d| d.remove::<f32>(key));
+        return None;
+    }
+    let notches: f32 = ui.input(|i| {
+        i.events
+            .iter()
+            .map(|event| match event {
+                egui::Event::MouseWheel { unit, delta, modifiers, .. } if !modifiers.command && !modifiers.ctrl => match unit {
+                    egui::MouseWheelUnit::Point => delta.y / WHEEL_NOTCH,
+                    egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page => delta.y,
+                },
+                _ => 0.0,
+            })
+            .sum()
+    });
+    if notches == 0.0 || !notches.is_finite() {
+        return None;
+    }
+    let total = ui.data(|d| d.get_temp::<f32>(key)).unwrap_or(0.0) + notches;
+    let steps = total.trunc();
+    ui.data_mut(|d| d.insert_temp(key, total - steps));
+    let last = count.saturating_sub(1);
+    let selected = selected.min(last);
+    // A wheel turned down scrolls content up: a negative delta selects the next tab.
+    let to = i64::try_from(selected).unwrap_or(i64::MAX).saturating_sub(steps as i64).clamp(0, i64::try_from(last).unwrap_or(i64::MAX));
+    let to = usize::try_from(to).unwrap_or(last);
+    (to != selected).then_some(to)
+}
+
 /// An accessible tab at a caller-supplied rectangle, with caller-supplied painting.
 ///
 /// IDs must be unique in their UI scope and independent of translated labels. Selection remains

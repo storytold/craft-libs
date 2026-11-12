@@ -196,6 +196,15 @@ fit; the selected tab is always shown in its logical place, taking the place of 
 fit when it lies past them. Only a selected tab wider than the strip minus the overflow button is
 narrowed.
 
+`tabs::wheel_select(ui, id, strip, selected, count)` returns the tab the mouse wheel selects while
+the pointer is over `strip`: down → next tab, up → previous tab. Call `tabs::wheel_select` every frame
+with all `count` tabs, overflowed ones included, and select the returned tab if it isn't `None`.
+Pass `Rect::NOTHING` while the pointer is over a part of the strip that uses the wheel itself.
+The wheel events themselves aren't consumed.
+Nothing happens if the user is at either end (e.g. attempting to scroll up when the first tab is
+selected). Likewise, nothing happens if Ctrl or Command is held or `ui` is disabled.
+Docking turns wheel selection on with `DockStyle::wheel_selects_tabs`.
+
 `tabs::Tab` registers a tab at a supplied rectangle and invokes the application's painter:
 
 ```rust
