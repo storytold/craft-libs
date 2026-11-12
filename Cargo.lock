@@ -1025,7 +1025,7 @@ name = "craft-epub"
 version = "0.1.0"
 dependencies = [
  "craft-xml",
- "flate2",
+ "craft-zip",
  "thiserror 2.0.21",
  "zip",
 ]
@@ -1151,6 +1151,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-html"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
 name = "craft-i18n"
 version = "0.1.0"
 dependencies = [
@@ -1174,11 +1181,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ical"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "proptest",
+]
+
+[[package]]
 name = "craft-idml"
 version = "0.1.0"
 dependencies = [
  "craft-xml",
- "flate2",
+ "craft-zip",
  "thiserror 2.0.21",
  "zip",
 ]
@@ -1269,6 +1284,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-metadata"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "craft-tiff",
+ "proptest",
+ "quick-xml 0.41.0",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-metafile"
 version = "0.1.0"
 dependencies = [
@@ -1295,6 +1322,23 @@ dependencies = [
  "chrono",
  "encoding_rs",
  "proptest",
+]
+
+[[package]]
+name = "craft-odf"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "base64 0.23.1",
+ "craft-xml",
+ "flate2",
+ "getrandom 0.3.4",
+ "hmac",
+ "sha1 0.11.0",
+ "sha2 0.11.1",
+ "thiserror 2.0.21",
+ "zeroize",
+ "zip",
 ]
 
 [[package]]
@@ -1366,6 +1410,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-pdn"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "proptest",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-penpot"
 version = "0.1.0"
 dependencies = [
@@ -1410,6 +1463,15 @@ name = "craft-plotter"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-prc"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "proptest",
  "thiserror 2.0.21",
 ]
 
@@ -1511,7 +1573,9 @@ dependencies = [
 name = "craft-rtf"
 version = "0.1.0"
 dependencies = [
+ "craft-mime",
  "encoding_rs",
+ "proptest",
 ]
 
 [[package]]
@@ -1524,6 +1588,10 @@ dependencies = [
  "tempfile",
  "toml_edit",
 ]
+
+[[package]]
+name = "craft-sheet"
+version = "0.1.0"
 
 [[package]]
 name = "craft-silhouette-studio"
@@ -1541,6 +1609,18 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "zip",
+]
+
+[[package]]
+name = "craft-stream-codecs"
+version = "0.1.0"
+dependencies = [
+ "fax",
+ "hayro-ccitt",
+ "hayro-jbig2",
+ "proptest",
+ "thiserror 2.0.21",
+ "weezl 0.2.1",
 ]
 
 [[package]]
@@ -1733,10 +1813,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-xcf"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-xls"
 version = "0.1.0"
 dependencies = [
  "craft-cfb",
+ "craft-sheet",
  "thiserror 2.0.21",
 ]
 
@@ -1753,6 +1842,16 @@ name = "craft-y4m"
 version = "0.1.0"
 dependencies = [
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-zip"
+version = "0.1.0"
+dependencies = [
+ "craft-zip",
+ "flate2",
+ "thiserror 2.0.21",
+ "zip",
 ]
 
 [[package]]
@@ -2722,7 +2821,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee8cfcc411d9adbbaba82fb72661cc1bcca13e8bba98b364e62b2dba8f960159"
 dependencies = [
  "color_quant",
- "weezl",
+ "weezl 0.1.12",
 ]
 
 [[package]]
@@ -6676,7 +6775,7 @@ dependencies = [
  "flate2",
  "half",
  "quick-error 2.0.1",
- "weezl",
+ "weezl 0.1.12",
  "zune-jpeg",
 ]
 
@@ -7534,6 +7633,12 @@ name = "weezl"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
+
+[[package]]
+name = "weezl"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4ca08e5ef825b65b056d9efbd95c8750683f0a6d0466d02e96dc2e4e360f3d2"
 
 [[package]]
 name = "wgpu"
