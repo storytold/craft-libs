@@ -21,3 +21,10 @@ path = "fuzz_targets/decode.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "bands"
+path = "fuzz_targets/bands.rs"
+test = false
+doc = false
+bench = false

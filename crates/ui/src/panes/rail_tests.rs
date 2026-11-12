@@ -267,29 +267,38 @@ fn the_rail_is_outermost_and_the_open_pane_sits_between_it_and_the_document() {
 
 #[test]
 fn in_a_short_window_the_items_scroll_and_the_foot_stays_visible() {
-    let mut app = App::new();
-    app.foot = true;
-    let mut h = harness(app, 200.0);
-    let foot = h.get_by_label("Foot").rect();
-    assert!(foot.bottom() <= 192.0, "{foot:?}");
-    assert!(item(&h, Tool::Comments).top() < 30.0);
-    assert!(item(&h, Tool::Tags).bottom() > foot.top(), "the last item starts out of view");
+    for (edge, height) in [(Edge::Start, 200.0), (Edge::End, 200.0), (Edge::Start, 100.0), (Edge::End, 100.0)] {
+        let mut app = App::new();
+        app.foot = true;
+        app.edge = edge;
+        let mut h = harness(app, height);
+        let foot = h.get_by_label("Foot").rect();
+        assert!(foot.bottom() <= height - 8.0, "{foot:?}");
+        assert!(item(&h, Tool::Comments).top() < 30.0);
+        assert!(item(&h, Tool::Tags).bottom() > foot.top(), "the last item starts out of view");
 
-    let over = item(&h, Tool::Comments).center();
-    h.input_mut().events.extend([
-        Event::PointerMoved(over),
-        Event::MouseWheel {
-            source: egui::MouseWheelSource::Unknown,
-            unit: egui::MouseWheelUnit::Point,
-            delta: vec2(0.0, -500.0),
-            phase: egui::TouchPhase::Move,
-            modifiers: Modifiers::NONE,
-        },
-    ]);
-    h.run_steps(3);
-    let tags = item(&h, Tool::Tags);
-    assert!(tags.bottom() <= h.get_by_label("Foot").rect().top(), "{tags:?} above the foot after scrolling");
-    assert_eq!(h.get_by_label("Foot").rect(), foot);
+        let first = item(&h, Tool::Comments);
+        if height == 100.0 {
+            let available = foot.top() - first.top();
+            assert!((RAIL_BUTTON..64.0).contains(&available), "exercise a viewport smaller than the default minimum: {available}");
+        }
+        let over = first.center();
+        h.input_mut().events.extend([
+            Event::PointerMoved(over),
+            Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
+                unit: egui::MouseWheelUnit::Point,
+                delta: vec2(0.0, -500.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: Modifiers::NONE,
+            },
+        ]);
+        h.run_steps(3);
+        let tags = item(&h, Tool::Tags);
+        assert!(tags.top() >= first.top(), "{tags:?} fully visible after scrolling");
+        assert!(tags.bottom() <= h.get_by_label("Foot").rect().top(), "{tags:?} above the foot after scrolling");
+        assert_eq!(h.get_by_label("Foot").rect(), foot);
+    }
 }
 
 #[test]

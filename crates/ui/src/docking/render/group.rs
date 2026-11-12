@@ -151,10 +151,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         }
         let bar =
             mirror(Rect::from_min_max(pos2(x.min(strip.right() - header_width), strip.top()), pos2(strip.right() - header_width, strip.bottom())));
-        self.group_handle(ui, "drag-bar", bar, &owner, movable);
+        let named = self.group_handle(ui, "drag-bar", bar, &owner, movable, true);
         // Registered last, so the band wins over the tabs below it.
         let border = mirror(Rect::from_min_max(strip.min, pos2(strip.right() - header_width, (strip.top() + BORDER_BAND).min(strip.bottom()))));
-        self.group_handle(ui, "drag-border", border, &owner, movable);
+        self.group_handle(ui, "drag-border", border, &owner, movable, !named);
         if self.style.wheel_selects_tabs {
             let tabs_area = mirror(Rect::from_min_max(strip.min, pos2(strip.right() - header_width, strip.bottom())));
             self.wheel_tabs(ui, tabs_area, extra, panels, active);
@@ -191,22 +191,30 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
 
     /// The drag bar (`drag-bar`: drag, double-click, and the group menu on a right click, Enter
     /// or Space) or the top border band (`drag-border`: drag only). Both move the whole group;
-    /// a left click on the bar only focuses it.
-    fn group_handle(&mut self, ui: &mut Ui, name: &'static str, hit: Rect, owner: &TabGroup<'_, P>, movable: bool) {
+    /// a left click on the bar only focuses it. Only an `accessible` handle takes focus and is in
+    /// the accessibility tree, so each group is announced once: the band, which has no keyboard
+    /// function, only where no bar is drawn. Returns whether the handle is drawn.
+    fn group_handle(&mut self, ui: &mut Ui, name: &'static str, hit: Rect, owner: &TabGroup<'_, P>, movable: bool, accessible: bool) -> bool {
         if !crate::docking::targets::usable(hit) {
-            return;
+            return false;
         }
         let bar = name == "drag-bar";
-        let sense = if bar { Sense::click_and_drag() } else { Sense::drag() };
+        let sense = match (bar, accessible) {
+            (true, _) => Sense::click_and_drag(),
+            (false, true) => Sense::drag(),
+            (false, false) => Sense::DRAG,
+        };
         let response = ui.interact(hit, self.id.with((name, owner.panels.first())), sense);
         let response = if movable { response.on_hover_cursor(egui::CursorIcon::Grab) } else { response };
         self.register_interaction(ui.ctx(), response.id);
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &self.style.move_group_label));
+        if accessible {
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), self.move_group_name(owner.selected)));
+        }
         if movable && response.drag_started() {
             self.start_group_drag(ui, owner.panels, self.drag_source(owner));
         }
         if !bar {
-            return;
+            return true;
         }
         if self.minimizes(owner) && response.double_clicked() {
             self.output.actions.push(Action::SetMinimized { panel: owner.selected.clone(), minimized: !owner.minimized });
@@ -243,6 +251,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             None
         };
         egui::Popup::menu(&response).open_memory(command).show(|ui| self.group_menu(ui, owner, owner.selected));
+        true
     }
 
     /// The wheel over a group's strip: down selects the next tab, up the previous, one tab per

@@ -10,11 +10,21 @@ let receipt = craft_print::submit(&pdf_bytes, &job)?;
 
 The caller generates the PDF, checks document permissions, and handles page selection,
 imposition, marks and bleed. This crate discovers printers, exposes CUPS driver options,
-opens Windows printer preferences and submits jobs with copies, collation, duplex and colour.
+opens Windows printer preferences, takes a Windows driver's own settings for one job, and
+submits jobs with copies, collation, duplex and color.
 `command_preview` returns diagnostics without creating files or starting a process.
 
 - **macOS/Linux:** CUPS `lpstat`, `lpoptions` and `lp`. Jobs stream through stdin. Exact-size
   sheets use `fit-to-page=false`; shrink-to-fit uses IPP `print-scaling=auto-fit`.
+- **macOS paper tray:** a job whose options name no `InputSlot` also sends `AP_D_InputSlot=`,
+  the system Print dialog's Paper Feed: Auto Select. Without it CUPS uses the PPD's default
+  tray, and a printer whose default tray is empty holds the job while CUPS reports it completed
+  (storytold/pdfcraft#3752). A tray the job names wins, as does one in the user's `lpoptions`
+  defaults, which `lp` adds to every job. `apply_queue_defaults` puts the same choice in the
+  driver's tray option: `AUTO_SELECT` (an empty keyword, which `lp_args` never sends), labelled
+  "Auto Select", first and as the default unless the user's defaults name another tray. Apps
+  may show their own translation of the label. Other CUPS builds don't know `AP_D_InputSlot`,
+  so Linux jobs are unchanged.
 - **Flatpak:** the Freedesktop runtime has libcups but not `lpstat`/`lp`/`lpoptions`, so the app
   bundles them (the apps' manifests build them from CUPS as a `cups-client` module). What each
   piece is for:
@@ -37,7 +47,13 @@ opens Windows printer preferences and submits jobs with copies, collation, duple
 - **Windows:** in this process, with no PowerShell, script or other program started, so
   printing works where App Control for Business or AppLocker enforce script rules. Printers
   come from `EnumPrinters` (local queues and `\\server\queue` connections) and the default from
-  `GetDefaultPrinter`. A job is drawn as vectors by the in-box `Windows.Data.Pdf` with Direct2D
+  `GetDefaultPrinter`. `printers` also reads each driver's PrintCapabilities to report two-sided
+  support, which can wait on the device (a networked printer in power save); `printer_queues`
+  lists the same queues without asking any driver, so a Print dialog's list never waits on a
+  device, and `two_sided(name)` asks the driver of just the printer picked. A job asks the
+  driver too before it is sent; `submit_cancellable` with a
+  `Cancel` token lets the app stop a job still waiting on it, and a cancelled job is never
+  sent. A job is drawn as vectors by the in-box `Windows.Data.Pdf` with Direct2D
   into the XPS print API (the `winprint` crate), and copies, collation, duplex, colour, paper,
   orientation and "no scaling" travel in a PrintTicket that the driver validates first; a
   driver that would change the paper, orientation or scaling is refused before anything is
@@ -61,8 +77,12 @@ opens Windows printer preferences and submits jobs with copies, collation, duple
   Parsing caps cumulative cross-reference/object-stream records at 500,000, decoded streams
   at 16 MiB each and 32 MiB per job, and parsed nodes/tokens at 250,000/16 MiB per job and
   32,000/1 MiB per object. Files exceeding these limits return a clear error.
-  Long-edge duplex is `TwoSidedLongEdge` and short-edge `TwoSidedShortEdge`; `duplex: None`
-  leaves duplex out of the ticket. Driver-specific defaults remain in Windows printer
+  Long-edge duplex is `TwoSidedLongEdge` and short-edge `TwoSidedShortEdge`.
+  Explicit bindings use `JobDuplexAllDocumentsContiguously` when it offers the requested standard option,
+  otherwise `DocumentDuplex` when that feature offers that exact binding. Discovery and selection
+  resolve option names against their in-scope namespaces, including the default namespace. Validation accepts either
+  scope and rejects missing, changed or conflicting bindings before submission.
+  `duplex: None` leaves duplex out of the ticket. Driver-specific defaults remain in Windows printer
   preferences (`rundll32 printui.dll`, the one process this crate starts, and only when asked).
 - **Browser/other targets:** discovery is empty and submission reports an unsupported
   platform; callers can offer PDF export instead.
@@ -81,7 +101,11 @@ each sheet is successfully added to the native print job. These are source PDF s
 copies and duplex; the events describe sheet processing, and do not confirm physical output.
 The callback runs on the thread calling submission, can capture non-`Send` state, and should
 return promptly. It is never retained. Keep waiting for the final `Result` even at full progress:
-the job can still fail. The API does not provide cancellation. CUPS reports no progress.
+the job can still fail. `submit_cancellable` can cancel a job only until it starts reaching
+the spooler (on Windows after craft-print's driver queries and preflight DEVMODE conversion;
+with CUPS before `lp` starts); a job already being sent completes. On Windows, winprint repeats
+the DEVMODE conversion after that boundary. Cancellation is already unavailable during this
+repeat, so a driver that stalls there can still block submission. CUPS reports no progress.
 UI callers must forward events to their own progress state; adopting the API alone does not
 change an application's UI.
 Receipts are backend messages, not portable job IDs. `Job::duplex = None` preserves the queue's
@@ -119,9 +143,49 @@ ticket names no colour, so the colour in the user's printing preferences (Proper
 Windows Settings) applies, black and white included. Single-page or single-copy jobs have no
 collating order to check.
 
+`driver_settings_dialog(&mut job, parent)` opens the job printer's driver dialog
+([`DocumentProperties`](https://learn.microsoft.com/en-us/windows/win32/printdocs/documentproperties)),
+modal to the `parent` window handle, for that one job: options craft-print does not set, such
+as media type, print quality and the driver's own options. The dialog opens on the job's
+earlier choices in it for the same printer, without the ones the job decides (below), when the
+driver still reads them, else on the settings the driver gives a new job; either way with the
+job's copies and collation. OK stores the settings in `Job::driver_settings` for that printer.
+Cancel leaves the job unchanged, and so do settings the dialog returns exactly as it opened on
+them: some drivers return OK from Cancel with the settings they were given. Earlier settings
+the driver can no longer read are replaced even then. Some drivers read settings that set no
+fields (a DEVMODE whose [`dmFields`](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-devmodew) is 0
+and that has no private section) without an error instead of refusing them; such settings stay
+on the job after Cancel, and after OK with nothing changed. craft-print keeps the settings in
+the job only and does not save them as the printer's defaults (`open_printer_preferences` does
+that). When the job is printed, Windows converts the settings to a PrintTicket
+([`PTConvertDevModeToPrintTicket`](https://learn.microsoft.com/en-us/windows/win32/api/prntvpt/nf-prntvpt-ptconvertdevmodetoprintticket)),
+craft-print removes from it what the job's own ticket decides, and merges the job's ticket
+after it. The dialog's copies, collation, paper, orientation and scaling are removed, and so
+are its pages per sheet, binding (booklets included) and poster features. Its two-sided choice
+is removed when `duplex` is `Some`, and its color when grayscale is on. The dialog does not
+open on the job's two-sided or grayscale choice, so when the job later leaves that choice open,
+the dialog's settings decide it. The driver's other options, vendor options and private
+settings included, are kept, so a driver that also keeps pages per sheet in its private
+settings can still apply it from there. The dialog's borderless choice is kept too, and on a
+driver that enlarges the page for borderless printing it changes the printed size. The checks
+above still run on the ticket the driver validates; they read the validated ticket, not the
+driver's private settings. The job is refused when the driver replaces the dialog's media type,
+resolution or print quality while it validates the job's ticket, which it can do when one
+conflicts with the job's paper. Settings are used only on the printer whose name they were
+chosen for: Windows may replace settings meant for another printer with defaults.
+`command_preview` marks them as not used when the job, or the default printer for a job that
+names none, is another printer. It does not ask the driver to read them, and it lists two-sided
+printing and color that the job leaves open as the dialog's settings or the default. An error
+names the step that failed: the printer, reading the driver's settings, the dialog (a driver
+without one), the driver refusing the settings, or the driver replacing one of them.
+`HAS_DRIVER_SETTINGS_DIALOG` is false and the call returns an error on other platforms, and CUPS
+jobs ignore `driver_settings`. `examples/driver_settings_dialog.rs` opens the dialog for a
+printer named on the command line and prints a one-page test sheet with the settings chosen.
+
 `cargo test -p craft-print` tests CUPS transport (including pipe-sized jobs and refusal),
 printer parsing, PPD options and argument mapping, and on every platform the Windows pieces that
-need no printer: the PrintTicket, the checks on the driver's validated ticket and capabilities,
+need no printer: the PrintTicket, what is removed from the driver dialog's settings, the
+dialog's Cancel, the checks on the driver's validated ticket and capabilities,
 paper matching, job file names, and the PDF sheet reader and its update (classic and compressed
 cross-references, turning, reframing, refusal, and thousands of truncated and corrupted files
 that must fail without a panic). On Windows it also submits a mixed-orientation exact-size job
@@ -129,8 +193,9 @@ and a shrink-to-fit job to a temporary paused queue (inbox "Generic / Text Only"
 `LPT1:`) and checks each arrives as one job with all its sheets. The queue portion explicitly
 skips if the driver or administrative rights are absent. Windows CI installs the inbox test
 driver and sets `CRAFT_PRINT_REQUIRE_QUEUE=1`, making queue preparation/submission mandatory on
-its runner. Two ignored tests check a real printer by hand: `an_installed_driver_validates_the_ticket`
-(`CRAFT_PRINT_TEST_PRINTER`; sends no job) and `an_installed_printer_prints_a_file`
+its runner. Ignored tests check a real printer by hand: `an_installed_driver_validates_the_ticket`
+and `the_driver_dialogs_settings_leave_the_jobs_own_options` (`CRAFT_PRINT_TEST_PRINTER`; send no
+job) and `an_installed_printer_prints_a_file`
 (`CRAFT_PRINT_TEST_PRINTER`, `CRAFT_PRINT_TEST_FILE`, optional `CRAFT_PRINT_TEST_SCALING=shrink`
 and `CRAFT_PRINT_TEST_DUPLEX=long`). Physical printer fidelity remains a hardware check.
 

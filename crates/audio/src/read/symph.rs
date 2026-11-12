@@ -27,6 +27,15 @@ use crate::{AudioBuffer, AudioError, AudioInfo, ChannelLayout, CodecId, Containe
 /// takes its frame length from the file (encoders use 4096).
 const MAX_PACKET_FRAMES: u64 = 1 << 20;
 
+/// The most frames of silence one block holds where a FLAC lost frames; a longer loss is several
+/// blocks.
+const GAP_BLOCK_FRAMES: u64 = 1 << 16;
+
+/// The most samples (frames x channels) a packet may declare: the PCM decoder allocates
+/// that many for its output up front, so a CAF with thousands of channels and a long packet could
+/// otherwise claim gigabytes before a sample is decoded (64 MiB of `f32`). Ports soundcraft #1332.
+const MAX_PACKET_SAMPLES: u64 = 1 << 24;
+
 /// How far [`first_marker`] looks for the first format marker: the same 1 MiB a default symphonia
 /// probe scans.
 const MAX_PREFIX_SCAN: usize = 1 << 20;
@@ -81,9 +90,21 @@ fn guarded<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
     catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| Err(AudioError::Malformed("decoder failed on malformed input".into())))
 }
 
+/// What [`open`] read from the file for what symphonia's FLAC and Ogg readers leave out.
+enum Preread {
+    /// Not a FLAC file or an Ogg file.
+    Nothing,
+    /// A FLAC file's layout.
+    Flac(ChannelLayout),
+    /// An Ogg file's audio streams in file order: each one's serial, which is symphonia's track ID,
+    /// and its FLAC channel mask. Symphonia orders the tracks by serial, and the tags its reader
+    /// collects do not say which track they are from.
+    Ogg(Vec<(u32, Option<u32>)>),
+}
+
 /// What [`open`] found: a reader, or a stream that holds no audio frames and has no reader.
 enum Opened {
-    Reader(Box<dyn FormatReader>),
+    Reader(Box<dyn FormatReader>, Preread),
     Empty(AudioInfo),
 }
 
@@ -124,6 +145,8 @@ enum Precheck {
     Empty(AudioInfo),
     /// The size checks ran for the container the probe reports under this short name.
     Checked(&'static str),
+    /// As `Checked`, for a FLAC stream with this layout, which symphonia's reader does not parse.
+    Flac(&'static str, Option<ChannelLayout>),
     /// No container size check was needed.
     Unchecked,
 }
@@ -330,7 +353,7 @@ fn precheck(b: &[u8], start: usize, detected: Option<Container>) -> Result<Prech
             if let Some(info) = super::flac::empty_stream_info(b, at) {
                 return Ok(Precheck::Empty(info));
             }
-            Ok(Precheck::Checked(expected))
+            Ok(Precheck::Flac(expected, super::flac::layout(b, at)))
         }
         FirstMarker::Caf(at) => {
             super::caf::check(b, at)?;
@@ -348,6 +371,22 @@ fn precheck(b: &[u8], start: usize, detected: Option<Container>) -> Result<Prech
     }
 }
 
+/// `block` without the frames still to drop after a seek landed before its target; `None` when
+/// that is all of it.
+fn after_seek(discard: &mut u64, mut block: AudioBuffer) -> Option<AudioBuffer> {
+    if *discard > 0 {
+        let drop = (*discard as usize).min(block.frames());
+        for c in &mut block.channels {
+            c.drain(..drop);
+        }
+        *discard -= drop as u64;
+        if block.frames() == 0 {
+            return None;
+        }
+    }
+    Some(block)
+}
+
 /// Skip leading ID3v2 tags, run the container size preflight, then probe with symphonia; a zero-frame FLAC found by
 /// the preflight comes back as [`Opened::Empty`] without probing. A size-checked container is refused when probing
 /// selects a different reader or one that was never checked, so incidental payload magic cannot bypass those limits.
@@ -356,10 +395,15 @@ fn open(bytes: Cow<'_, [u8]>, detected: Option<Container>) -> Result<Opened> {
     if start > 0 && start >= bytes.len() {
         return Err(AudioError::Malformed("ID3v2 tag extends past the end of the file".into()));
     }
-    let checked = precheck(&bytes, start, detected)?;
-    if let Precheck::Empty(info) = checked {
-        return Ok(Opened::Empty(info));
-    }
+    let (checked, flac_layout) = match precheck(&bytes, start, detected)? {
+        Precheck::Empty(info) => return Ok(Opened::Empty(info)),
+        Precheck::Flac(expected, layout) => (Precheck::Checked(expected), layout),
+        checked => (checked, None),
+    };
+    let body = bytes.get(start..).unwrap_or_default();
+    // symphonia finds the first page past leading bytes, so look for it the same way.
+    let first_page = body.windows(4).take(MAX_PREFIX_SCAN).position(|w| w == b"OggS");
+    let ogg_streams = first_page.map(|at| super::flac::ogg_audio_streams(&body[at..]));
     // symphonia reads from an owned stream: a borrowed buffer is copied once, a buffer read from
     // a shared source is moved in.
     let mut mss = MediaSourceStream::new(Box::new(Cursor::new(bytes.into_owned())), MediaSourceStreamOptions::default());
@@ -381,7 +425,12 @@ fn open(bytes: Cow<'_, [u8]>, detected: Option<Container>) -> Result<Opened> {
         }
         _ => {}
     }
-    Ok(Opened::Reader(reader))
+    let preread = match (flac_layout.filter(|_| probed == "flac"), ogg_streams.filter(|_| probed == "ogg")) {
+        (Some(layout), _) => Preread::Flac(layout),
+        (None, Some(streams)) => Preread::Ogg(streams),
+        _ => Preread::Nothing,
+    };
+    Ok(Opened::Reader(reader, preread))
 }
 
 /// The codec symphonia reports, as a [`CodecId`].
@@ -488,10 +537,22 @@ fn audio_tracks(reader: &dyn FormatReader) -> impl Iterator<Item = &Track> {
     reader.tracks().iter().filter(|t| audio_params(t).is_some_and(|p| p.codec != CODEC_ID_NULL_AUDIO))
 }
 
-/// The `n`-th audio track (the first when `None`), with the stream information the UI shows.
-fn info_of(reader: &dyn FormatReader, detected: Option<Container>, n: Option<usize>) -> Result<(u32, AudioInfo)> {
+/// The `n`-th audio track (the first when `None`), counting an Ogg file's `streams` in file order
+/// when they are known. With no `n`, the first stream symphonia has a track for: it has none for
+/// some of the codecs `tracks` lists.
+fn pick_track<'a>(reader: &'a dyn FormatReader, streams: &[(u32, Option<u32>)], n: Option<usize>) -> Option<&'a Track> {
+    let with_serial = |serial: u32| audio_tracks(reader).find(|t| t.id == serial);
+    match n {
+        _ if streams.is_empty() => audio_tracks(reader).nth(n.unwrap_or(0)),
+        Some(n) => with_serial(streams.get(n)?.0),
+        None => streams.iter().find_map(|s| with_serial(s.0)),
+    }
+}
+
+/// The `n`-th audio track (see [`pick_track`]), with the stream information the UI shows.
+fn info_of(reader: &dyn FormatReader, detected: Option<Container>, ogg_streams: &[(u32, Option<u32>)], n: Option<usize>) -> Result<(u32, AudioInfo)> {
     let container = container_of(reader.format_info().short_name, detected);
-    let track = audio_tracks(reader).nth(n.unwrap_or(0)).ok_or_else(|| AudioError::Unsupported("no decodable audio track".into()))?;
+    let track = pick_track(reader, ogg_streams, n).ok_or_else(|| AudioError::Unsupported("no decodable audio track".into()))?;
     let p = audio_params(track).ok_or_else(|| AudioError::Unsupported("no decodable audio track".into()))?;
     let sample_rate = p.sample_rate.filter(|&r| r > 0).ok_or_else(|| AudioError::Malformed("unknown sample rate".into()))?;
     let layout = layout_of(p.channels.as_ref());
@@ -535,6 +596,13 @@ pub(crate) struct Symph {
     last_frames: usize,
     /// Frames still to drop after a seek landed before its target.
     discard: u64,
+    /// A FLAC file: the frame the next packet starts at when none was lost. The FLAC demuxer drops
+    /// a frame whose checksum fails and resyncs on the next one, so a later timestamp is audio that
+    /// was lost.
+    flac_next: Option<u64>,
+    /// Frames of silence still to return for lost FLAC frames, then the block decoded after them.
+    gap: u64,
+    held: Option<Vec<Vec<f32>>>,
     ended: bool,
     interleaved: Vec<f32>,
 }
@@ -543,8 +611,8 @@ impl Symph {
     /// Open audio track `track` (the first when `None`) of the file in `bytes`.
     pub(crate) fn open(bytes: Cow<'_, [u8]>, detected: Option<Container>, track: Option<usize>) -> Result<Symph> {
         guarded(move || {
-            let reader = match open(bytes, detected)? {
-                Opened::Reader(reader) => reader,
+            let (reader, preread) = match open(bytes, detected)? {
+                Opened::Reader(reader, preread) => (reader, preread),
                 Opened::Empty(info) => {
                     // a stream with no audio still has one track, as WAV and AIFF do
                     if let Some(n) = track.filter(|&n| n > 0) {
@@ -561,20 +629,41 @@ impl Symph {
                         errors: 0,
                         last_frames: 0,
                         discard: 0,
+                        flac_next: None,
+                        gap: 0,
+                        held: None,
                         ended: true,
                         interleaved: Vec::new(),
                     });
                 }
             };
-            let (track_id, info) = info_of(reader.as_ref(), detected, track)?;
+            let ogg_streams = if let Preread::Ogg(streams) = &preread { streams.as_slice() } else { &[] };
+            let (track_id, mut info) = info_of(reader.as_ref(), detected, ogg_streams, track)?;
+            match &preread {
+                Preread::Flac(layout) if layout.channels() == info.channels => info.layout = *layout,
+                Preread::Ogg(streams) if info.codec == CodecId::Flac => {
+                    let mask = streams.iter().find(|(serial, _)| *serial == track_id).and_then(|&(_, mask)| mask);
+                    info.layout = super::flac::layout_from(mask, info.channels);
+                }
+                _ => {}
+            }
             let t = reader.tracks().iter().find(|t| t.id == track_id).ok_or_else(|| AudioError::Malformed("track vanished".into()))?;
             let params = audio_params(t).cloned().ok_or_else(|| AudioError::Malformed("track vanished".into()))?;
             let alac = params.extra_data.as_deref().filter(|_| params.codec == CODEC_ID_ALAC).and_then(|d| be_u32(d, 0));
-            if params.max_frames_per_packet.into_iter().chain(alac.map(u64::from)).any(|n| n > MAX_PACKET_FRAMES) {
+            let channels = u64::from(info.channels);
+            if params
+                .max_frames_per_packet
+                .into_iter()
+                .chain(alac.map(u64::from))
+                .any(|n| n > MAX_PACKET_FRAMES || n.saturating_mul(channels) > MAX_PACKET_SAMPLES)
+            {
                 return Err(AudioError::Malformed("the file declares packets far longer than any codec uses".into()));
             }
             let decoder = symphonia::default::get_codecs().make_audio_decoder(&params, &decoder_options()).map_err(map_err)?;
             let frames_known = info.frames > 0 && info.channels > 0;
+            // Native FLAC timestamps count frames from 0.
+            let counts_frames = t.time_base.is_none_or(|tb| tb.numer.get() == 1 && tb.denom.get() == info.sample_rate);
+            let flac_next = (info.container == Container::Flac && info.codec == CodecId::Flac && counts_frames).then_some(0);
             Ok(Symph {
                 time_base: t.time_base,
                 reader: Some(reader),
@@ -586,6 +675,9 @@ impl Symph {
                 errors: 0,
                 last_frames: 0,
                 discard: 0,
+                flac_next,
+                gap: 0,
+                held: None,
                 ended: false,
                 interleaved: Vec::new(),
             })
@@ -613,6 +705,20 @@ impl Symph {
     fn next_block_inner(&mut self) -> Result<Option<AudioBuffer>> {
         let (Some(reader), Some(decoder)) = (self.reader.as_mut(), self.decoder.as_mut()) else { return Ok(None) };
         loop {
+            // Silence for lost FLAC frames comes first, then the block that was decoded after them.
+            let pending = if self.gap > 0 {
+                let n = self.gap.min(GAP_BLOCK_FRAMES);
+                self.gap -= n;
+                Some(crate::pcm::silence(usize::from(self.info.channels), n as usize)?)
+            } else {
+                self.held.take()
+            };
+            if let Some(block) = pending {
+                match after_seek(&mut self.discard, AudioBuffer { sample_rate: self.info.sample_rate, channels: block }) {
+                    Some(block) => return Ok(Some(block)),
+                    None => continue,
+                }
+            }
             if self.ended {
                 if self.info.channels == 0 {
                     return Err(AudioError::Malformed("stream contains no audio".into()));
@@ -637,6 +743,18 @@ impl Symph {
             };
             if packet.track_id != self.track_id {
                 continue;
+            }
+            if let Some(next) = self.flac_next {
+                let pts = u64::try_from(packet.pts.get()).unwrap_or(0);
+                let lost = pts.saturating_sub(next);
+                // Never past the declared length. Without one, a jump longer than any packet is
+                // not believed.
+                let room = if self.frames_known { self.info.frames.saturating_sub(next) } else { MAX_PACKET_FRAMES };
+                if lost > 0 && lost <= room && self.info.channels > 0 {
+                    self.gap = lost;
+                    self.info.damaged += 1;
+                }
+                self.flac_next = Some(pts.saturating_add(packet.dur.get()));
             }
             let block = match decoder.decode(&packet) {
                 Ok(decoded) => {
@@ -699,18 +817,13 @@ impl Symph {
                 }
                 Err(e) => return Err(map_err(e)),
             };
-            let mut block = AudioBuffer { sample_rate: self.info.sample_rate, channels: block };
-            if self.discard > 0 {
-                let drop = (self.discard as usize).min(block.frames());
-                for c in &mut block.channels {
-                    c.drain(..drop);
-                }
-                self.discard -= drop as u64;
-                if block.frames() == 0 {
-                    continue;
-                }
+            if self.gap > 0 {
+                self.held = Some(block);
+                continue;
             }
-            return Ok(Some(block));
+            if let Some(block) = after_seek(&mut self.discard, AudioBuffer { sample_rate: self.info.sample_rate, channels: block }) {
+                return Ok(Some(block));
+            }
         }
     }
 
@@ -746,8 +859,13 @@ impl Symph {
             decoder.reset();
             // the packet before the seek says nothing about the length of one lost after it
             self.last_frames = 0;
+            self.gap = 0;
+            self.held = None;
             let actual = u64::try_from(seeked.actual_ts.get()).unwrap_or(0);
             let actual = u64::try_from(u128::from(actual) * u128::from(numer) * u128::from(rate) / u128::from(denom)).unwrap_or(u64::MAX);
+            // A seek into lost frames lands on the next one that survived: the stream is where the
+            // seek says, and that packet's later timestamp is the rest of the loss.
+            self.flac_next = self.flac_next.map(|_| actual);
             self.discard = frame.saturating_sub(actual);
             self.ended = false;
             Ok(frame)
@@ -759,7 +877,7 @@ impl Symph {
 pub(crate) fn tracks(bytes: Cow<'_, [u8]>, detected: Option<Container>) -> Result<Vec<(CodecId, u32, u16)>> {
     guarded(move || {
         let reader = match open(bytes, detected)? {
-            Opened::Reader(reader) => reader,
+            Opened::Reader(reader, _) => reader,
             Opened::Empty(info) => return Ok(vec![(info.codec, info.sample_rate, info.channels)]),
         };
         Ok(audio_tracks(reader.as_ref())
