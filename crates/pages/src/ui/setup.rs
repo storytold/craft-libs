@@ -24,6 +24,7 @@ use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::patterns::form_dialogs::{FormCx, FormDialog, FormOutput};
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Label, UnitKind, Units};
+use craft_ui::sections::Section;
 use craft_ui::text::NumberField;
 use egui::{Response, Ui};
 
@@ -258,36 +259,33 @@ impl Rows<'_> {
         !field.edit.unparsed
     }
 
-    /// The Margins group: the four sides and the gutter, with the notice under them while the margins do not fit.
+    /// The Margins section: the four sides and the gutter, with the notice under them while the margins do not fit.
     fn margins(&self, ui: &mut Ui, form: &mut FormCx<'_, '_>, setup: &mut PageSetup, document_setup: bool) -> bool {
         let words = self.words;
         let (left, right) = if setup.mirrored { (&words.inside, &words.outside) } else { (&words.left, &words.right) };
         let side = 0.0..=MAX_PAGE_SIDE;
         let (left, right) = (left.clone(), right.clone());
-        FieldGroup::new(words.margins.clone())
-            .show(ui, |ui, _| {
-                let mut valid = true;
-                let mut side_row = |ui: &mut Ui,
-                                    form: &mut FormCx<'_, '_>,
-                                    setup: &mut PageSetup,
-                                    key: &'static str,
-                                    label: Label,
-                                    get: fn(&PageSetup) -> f64,
-                                    set: fn(&mut PageSetup, f64)| {
-                    valid &= self.length(ui, form, setup, Length { key, label, get, set, range: side.clone() });
-                };
-                side_row(ui, form, setup, "top", words.top.clone(), |s| s.margins.top, |s, v| s.margins.top = v);
-                side_row(ui, form, setup, "bottom", words.bottom.clone(), |s| s.margins.bottom, |s, v| s.margins.bottom = v);
-                side_row(ui, form, setup, "left", left.clone(), |s| s.margins.left, |s, v| s.margins.left = v);
-                side_row(ui, form, setup, "right", right.clone(), |s| s.margins.right, |s, v| s.margins.right = v);
-                if !document_setup {
-                    side_row(ui, form, setup, "gutter", words.gutter.clone(), |s| s.gutter, |s, v| s.gutter = v);
-                }
-                valid
-            })
-            .inner
-            .unwrap_or(true)
-            && self.fit_notice(ui, setup)
+        section(ui, &words.margins, |ui| {
+            let mut valid = true;
+            let mut side_row = |ui: &mut Ui,
+                                form: &mut FormCx<'_, '_>,
+                                setup: &mut PageSetup,
+                                key: &'static str,
+                                label: Label,
+                                get: fn(&PageSetup) -> f64,
+                                set: fn(&mut PageSetup, f64)| {
+                valid &= self.length(ui, form, setup, Length { key, label, get, set, range: side.clone() });
+            };
+            side_row(ui, form, setup, "top", words.top.clone(), |s| s.margins.top, |s, v| s.margins.top = v);
+            side_row(ui, form, setup, "bottom", words.bottom.clone(), |s| s.margins.bottom, |s, v| s.margins.bottom = v);
+            side_row(ui, form, setup, "left", left.clone(), |s| s.margins.left, |s, v| s.margins.left = v);
+            side_row(ui, form, setup, "right", right.clone(), |s| s.margins.right, |s, v| s.margins.right = v);
+            if !document_setup {
+                side_row(ui, form, setup, "gutter", words.gutter.clone(), |s| s.gutter, |s, v| s.gutter = v);
+            }
+            valid && self.fit_notice(ui, setup)
+        })
+        .unwrap_or(true)
     }
 
     /// The notice under the margins while they do not fit; `false` then.
@@ -299,10 +297,10 @@ impl Rows<'_> {
         fits
     }
 
-    /// The Orientation group.
+    /// The Orientation section.
     fn orientation(&self, ui: &mut Ui, setup: &mut PageSetup) {
         let words = self.words;
-        FieldGroup::new(words.orientation.clone()).show(ui, |ui, _| {
+        section(ui, &words.orientation, |ui| {
             let after = SideLabel::new().layout(FieldLayout::After);
             let group = RadioGroup::new(words.orientation.clone(), Bind::given(setup.orientation)).show(ui, |ui, cx| {
                 cx.labelled(ui, "portrait", words.portrait.clone(), after.clone(), Radio::new(Orientation::Portrait));
@@ -314,86 +312,81 @@ impl Rows<'_> {
         });
     }
 
-    /// The Pages group: Mirror margins, or Facing Pages and Number of Pages in Document Setup.
+    /// The Pages section: Mirror margins, or Facing Pages and Number of Pages in Document Setup.
     fn pages(&self, ui: &mut Ui, form: &mut FormCx<'_, '_>, setup: &mut PageSetup, document_setup: bool) -> bool {
         let words = self.words;
-        FieldGroup::new(words.pages.clone())
-            .show(ui, |ui, _| {
-                let label = if document_setup { &words.facing_pages } else { &words.mirror_margins };
-                let check = Checkbox::new(Bind::given(setup.mirrored)).label(label.clone()).show(ui);
-                if let Some(on) = check.value().copied() {
-                    setup.mirrored = on;
+        section(ui, &words.pages, |ui| {
+            let label = if document_setup { &words.facing_pages } else { &words.mirror_margins };
+            let check = Checkbox::new(Bind::given(setup.mirrored)).label(label.clone()).show(ui);
+            if let Some(on) = check.value().copied() {
+                setup.mirrored = on;
+            }
+            if !document_setup {
+                return true;
+            }
+            let shown = f64::from(setup.pages.unwrap_or(1));
+            let codec = NumberCodec::new(self.units.reader(None), 0);
+            let field = Field::new(words.number_of_pages.clone())
+                .id_salt("pages")
+                .show(ui, |ui, _| {
+                    NumberField::new(words.number_of_pages.clone(), Bind::given(Some(shown)))
+                        .codec(codec.clone())
+                        .range(1.0..=f64::from(MAX_PAGES))
+                        .show(ui)
+                })
+                .inner;
+            let Some(field) = field else { return true };
+            apply(form, setup, &field.edit, |next, value| {
+                if value != shown {
+                    next.pages = Some(value.round() as u32);
                 }
-                if !document_setup {
-                    return true;
-                }
-                let shown = f64::from(setup.pages.unwrap_or(1));
-                let codec = NumberCodec::new(self.units.reader(None), 0);
-                let field = Field::new(words.number_of_pages.clone())
-                    .id_salt("pages")
-                    .show(ui, |ui, _| {
-                        NumberField::new(words.number_of_pages.clone(), Bind::given(Some(shown)))
-                            .codec(codec.clone())
-                            .range(1.0..=f64::from(MAX_PAGES))
-                            .show(ui)
-                    })
-                    .inner;
-                let Some(field) = field else { return true };
-                apply(form, setup, &field.edit, |next, value| {
-                    if value != shown {
-                        next.pages = Some(value.round() as u32);
-                    }
-                });
-                !field.edit.unparsed
-            })
-            .inner
-            .unwrap_or(true)
+            });
+            !field.edit.unparsed
+        })
+        .unwrap_or(true)
     }
 
-    /// The Paper group: the list of papers plus Custom size, and Width and Height.
+    /// The Paper section: the list of papers plus Custom size, and Width and Height.
     fn paper(&self, ui: &mut Ui, form: &mut FormCx<'_, '_>, setup: &mut PageSetup, papers: &[PaperSize]) -> bool {
         let words = self.words;
-        FieldGroup::new(words.paper.clone())
-            .show(ui, |ui, _| {
-                let named = paper_named(papers, setup.width, setup.height).and_then(|paper| papers.iter().position(|other| other == paper));
-                let custom = form.memory::<CustomSize>().0;
-                let choice = match named {
-                    Some(index) if !custom => PaperChoice::Named(index),
-                    _ => PaperChoice::Custom,
-                };
-                let mut entries: Vec<Entry<PaperChoice>> =
-                    papers.iter().enumerate().map(|(index, paper)| Entry::new(PaperChoice::Named(index), words.paper_name(paper))).collect();
-                entries.push(Entry::new(PaperChoice::Custom, words.custom_size.clone()));
-                Field::new(words.paper_size.clone()).id_salt("paper").show(ui, |ui, _| {
-                    let picked = Select::new(words.paper_size.clone(), Bind::given(choice), &entries).show(ui);
-                    match picked.value().copied() {
-                        Some(PaperChoice::Named(index)) => {
-                            if let Some(paper) = papers.get(index) {
-                                let (width, height) = setup.orientation.turn((paper.width, paper.height));
-                                setup.set_size(width, height);
-                            }
-                            form.memory::<CustomSize>().0 = false;
+        section(ui, &words.paper, |ui| {
+            let named = paper_named(papers, setup.width, setup.height).and_then(|paper| papers.iter().position(|other| other == paper));
+            let custom = form.memory::<CustomSize>().0;
+            let choice = match named {
+                Some(index) if !custom => PaperChoice::Named(index),
+                _ => PaperChoice::Custom,
+            };
+            let mut entries: Vec<Entry<PaperChoice>> =
+                papers.iter().enumerate().map(|(index, paper)| Entry::new(PaperChoice::Named(index), words.paper_name(paper))).collect();
+            entries.push(Entry::new(PaperChoice::Custom, words.custom_size.clone()));
+            Field::new(words.paper_size.clone()).id_salt("paper").show(ui, |ui, _| {
+                let picked = Select::new(words.paper_size.clone(), Bind::given(choice), &entries).show(ui);
+                match picked.value().copied() {
+                    Some(PaperChoice::Named(index)) => {
+                        if let Some(paper) = papers.get(index) {
+                            let (width, height) = setup.orientation.turn((paper.width, paper.height));
+                            setup.set_size(width, height);
                         }
-                        Some(PaperChoice::Custom) => form.memory::<CustomSize>().0 = true,
-                        None => {}
+                        form.memory::<CustomSize>().0 = false;
                     }
-                });
-                let sides = MIN_PAGE_SIDE..=MAX_PAGE_SIDE;
-                let width =
-                    Length { key: "width", label: words.width.clone(), get: |s| s.width, set: |s, v| s.set_size(v, s.height), range: sides.clone() };
-                let height =
-                    Length { key: "height", label: words.height.clone(), get: |s| s.height, set: |s, v| s.set_size(s.width, v), range: sides };
-                let wide = self.length(ui, form, setup, width);
-                self.length(ui, form, setup, height) && wide
-            })
-            .inner
-            .unwrap_or(true)
+                    Some(PaperChoice::Custom) => form.memory::<CustomSize>().0 = true,
+                    None => {}
+                }
+            });
+            let sides = MIN_PAGE_SIDE..=MAX_PAGE_SIDE;
+            let width =
+                Length { key: "width", label: words.width.clone(), get: |s| s.width, set: |s, v| s.set_size(v, s.height), range: sides.clone() };
+            let height = Length { key: "height", label: words.height.clone(), get: |s| s.height, set: |s, v| s.set_size(s.width, v), range: sides };
+            let wide = self.length(ui, form, setup, width);
+            self.length(ui, form, setup, height) && wide
+        })
+        .unwrap_or(true)
     }
 
-    /// The Headers and footers group: vertical alignment, odd and even pages, first page.
+    /// The Headers and footers section: vertical alignment, odd and even pages, first page.
     fn layout(&self, ui: &mut Ui, setup: &mut PageSetup) {
         let words = self.words;
-        FieldGroup::new(words.headers_and_footers.clone()).show(ui, |ui, _| {
+        section(ui, &words.headers_and_footers, |ui| {
             let entries = [
                 Entry::new(PageVerticalAlign::Top, words.align_top.clone()),
                 Entry::new(PageVerticalAlign::Center, words.align_center.clone()),
@@ -417,10 +410,10 @@ impl Rows<'_> {
         });
     }
 
-    /// The section direction group.
+    /// The section direction section.
     fn direction(&self, ui: &mut Ui, setup: &mut PageSetup) {
         let words = self.words;
-        FieldGroup::new(words.section_direction.clone()).show(ui, |ui, _| {
+        section(ui, &words.section_direction, |ui| {
             let after = SideLabel::new().layout(FieldLayout::After);
             let group = RadioGroup::new(words.section_direction.clone(), Bind::given(setup.right_to_left)).show(ui, |ui, cx| {
                 cx.labelled(ui, "ltr", words.left_to_right.clone(), after.clone(), Radio::new(false));
@@ -431,6 +424,11 @@ impl Rows<'_> {
             }
         });
     }
+}
+
+/// A section of the dialog: a rule and `title` over a field group, so the section's fields share one label column.
+fn section<R>(ui: &mut Ui, title: &Label, mut body: impl FnMut(&mut Ui) -> R) -> Option<R> {
+    Section::fixed(title.clone()).show(ui, |ui, _| FieldGroup::new(title.clone()).show(ui, |ui, _| body(ui)).inner).inner.flatten()
 }
 
 /// Page Setup (or Document Setup) as a form dialog over a [`PageSetup`]. OK answers the edited setup and is refused,
