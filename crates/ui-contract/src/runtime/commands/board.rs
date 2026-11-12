@@ -66,6 +66,9 @@ pub(crate) struct Board {
     instances: Vec<Instance>,
     /// The focused component of each viewport's last step 12 and the instances around it.
     chains: HashMap<ViewportId, (Id, CommandChain)>,
+    /// The focused component and its chain before the one in `chains`, per viewport: the stop a menu bar took the
+    /// focus from, whose scopes a shortcut pressed on the bar matches in.
+    before: HashMap<ViewportId, (Id, CommandChain)>,
     /// The instances around the component that holds key focus, per viewport, as the viewport's begin hook read them.
     focused: Vec<(ViewportId, Vec<Id>)>,
     /// The chain of the last pass in which any component held key focus.
@@ -413,7 +416,11 @@ pub(crate) fn register_instance(ctx: &Context, scope: CommandScope, id: Id) {
 pub(crate) fn note_focus(ctx: &Context, id: Id, chain: &CommandChain) {
     let viewport = pass::current_viewport(ctx);
     with(ctx, |board| {
-        board.chains.insert(viewport, (id, chain.clone()));
+        if let Some(old) = board.chains.insert(viewport, (id, chain.clone()))
+            && old.0 != id
+        {
+            board.before.insert(viewport, old);
+        }
     });
 }
 
@@ -623,10 +630,17 @@ pub(crate) fn begin(ctx: &Context) {
     let shortcuts = keys::take_shortcuts(ctx);
     let now = pass::now(ctx);
     let held_open = sampler::held_canvas(ctx);
+    // A shortcut pressed while a menu bar holds the focus (F10, then Ctrl+S) leaves the bar: it matches in the scopes
+    // of the stop the bar took the focus from, and a hit gives the focus back to that stop.
+    let returning = focused.filter(|_| !shortcuts.keys.is_empty()).and_then(|focused| focus::bar_return_of(ctx, focused));
     let taken = with(ctx, |board| {
         board.held_open = held_open;
-        let chain: Vec<Id> =
-            board.chains.get(&viewport).filter(|(id, _)| Some(*id) == focused).map(|(_, chain)| chain.ids().collect()).unwrap_or_default();
+        let returned = returning
+            .and_then(|held| [board.before.get(&viewport), board.chains.get(&viewport)].into_iter().flatten().find(|(id, _)| *id == held))
+            .map(|(_, chain)| chain.ids().collect());
+        let chain: Vec<Id> = returned.unwrap_or_else(|| {
+            board.chains.get(&viewport).filter(|(id, _)| Some(*id) == focused).map(|(_, chain)| chain.ids().collect()).unwrap_or_default()
+        });
         // Nothing focused inside a modal: the modal's root takes the commands, as a plain Enter goes to its default button.
         let chain = match (chain.is_empty() && focused.is_none(), board.modal_roots.iter().find(|(of, _)| *of == viewport)) {
             (true, Some((_, root))) => vec![*root],
@@ -707,6 +721,9 @@ pub(crate) fn begin(ctx: &Context) {
         }
     }
     with(ctx, |board| board.matcher = matcher);
+    if returning.is_some() && fired.iter().any(|fired| fired.phase == FirePhase::Press) {
+        focus::give_back_bar(ctx);
+    }
     for fired in fired {
         queue(ctx, fired);
     }
@@ -723,6 +740,7 @@ pub(crate) fn end(ctx: &Context) {
         board.queue.retain(|fired| fired.target.is_some_and(|id| ids.contains(&id)));
         board.held.retain(|held| held.target.is_none_or(|id| ids.contains(&id)));
         board.chains.retain(|viewport, _| live.contains(viewport));
+        board.before.retain(|viewport, _| live.contains(viewport));
         board.focused.retain(|(viewport, _)| live.contains(viewport));
     });
 }

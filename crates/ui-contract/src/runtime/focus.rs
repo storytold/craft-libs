@@ -388,6 +388,12 @@ pub fn give_back_bar(ctx: &Context) -> bool {
     true
 }
 
+/// The stop a menu bar took the focus from, while the bar's stop `focused` holds it: where a shortcut pressed on the
+/// bar matches and goes.
+pub(crate) fn bar_return_of(ctx: &Context, focused: Id) -> Option<Id> {
+    with(ctx, |state| state.bar_return.as_ref().filter(|(bar, _)| *bar == focused).map(|(_, (id, _))| *id))
+}
+
 /// Forgets the stop a menu bar took focus from: focus left the bar by other means, so a later Escape has nowhere
 /// to return to.
 #[doc(hidden)]

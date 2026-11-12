@@ -3,6 +3,7 @@
 use super::popup::MenuStep;
 use crate::contract::{Component, Cx, Remember as _};
 use crate::runtime::env::{AppValues, EnvValue};
+use craft_behavior::NavMove;
 use craft_keymap::mnemonic;
 use egui::{Id, Pos2, Rect, pos2};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -283,6 +284,37 @@ impl MenuLevel {
 
     pub(crate) fn active(&self) -> Option<Id> {
         self.with(|state| state.active)
+    }
+
+    /// Moves the active row by `mv` among the enabled rows as the user last saw them, without moving the focus (the
+    /// keys of a field that drives the menu): Up and Down wrap, Home and Page Up go to the first, End and Page Down to
+    /// the last. Returns whether it moved.
+    pub(super) fn step_active(&self, mv: NavMove) -> bool {
+        self.with(|state| {
+            let rows: Vec<Id> = state.shown.iter().filter(|row| row.enabled).map(|row| row.id).collect();
+            let n = rows.len();
+            if n == 0 {
+                return false;
+            }
+            let at = state.active.and_then(|active| rows.iter().position(|id| *id == active));
+            let to = match mv {
+                NavMove::Down | NavMove::Forward => at.map_or(0, |at| (at + 1) % n),
+                NavMove::Up | NavMove::Back => at.map_or(n - 1, |at| (at + n - 1) % n),
+                NavMove::Start | NavMove::PageUp => 0,
+                NavMove::End | NavMove::PageDown => n - 1,
+                _ => return false,
+            };
+            state.active = Some(rows[to]);
+            true
+        })
+    }
+
+    /// The row an activation of the menu runs: the active row while it is enabled, else the first enabled row.
+    pub(super) fn active_or_first(&self) -> Option<Id> {
+        self.with(|state| {
+            let enabled = |id: Id| state.shown.iter().any(|row| row.id == id && row.enabled);
+            state.active.filter(|active| enabled(*active)).or_else(|| state.shown.iter().find(|row| row.enabled).map(|row| row.id))
+        })
     }
 
     pub(crate) fn has_active(&self) -> bool {

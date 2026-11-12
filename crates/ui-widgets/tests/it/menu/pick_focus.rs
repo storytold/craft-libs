@@ -74,3 +74,27 @@ fn undo_picked_from_the_edit_menu_undoes_in_the_field_that_held_focus() {
     rig.click("Undo");
     rig.assert_undone_in_the_field("Edit › Undo");
 }
+
+#[trial]
+fn opening_help_focuses_its_search_and_down_then_enter_runs_the_first_match() {
+    let mut rig = rig();
+    rig.click("Help");
+    rig.fixture.type_text("und");
+    rig.fixture.settle();
+    assert_eq!(*rig.text.borrow(), "helloabc", "the typed text lands in the search field, not the text field");
+    rig.fixture.key(egui::Key::ArrowDown, egui::Modifiers::NONE);
+    rig.fixture.key(egui::Key::Enter, egui::Modifiers::NONE);
+    rig.fixture.settle();
+    rig.assert_undone_in_the_field("Help › und, Down, Enter");
+}
+
+#[trial]
+fn a_shortcut_pressed_on_the_focused_bar_runs_once_where_focus_was_and_gives_focus_back() {
+    let mut rig = rig();
+    rig.fixture.key(egui::Key::F10, egui::Modifiers::NONE);
+    rig.fixture.settle();
+    assert_ne!(rig.fixture.focused_stop().map(|(id, _)| id), rig.field.get(), "F10 takes the focus to the bar");
+    rig.fixture.key(egui::Key::Z, egui::Modifiers::COMMAND);
+    rig.fixture.settle();
+    rig.assert_undone_in_the_field("F10, then the Undo shortcut");
+}

@@ -13,7 +13,7 @@ use crate::runtime::focus::{FocusPolicy, Initial};
 use crate::runtime::frame;
 use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
-use craft_behavior::{Arrows, Metrics, NavShape, Roving, Sense, Value};
+use craft_behavior::{Arrows, Intent, Metrics, NavShape, Roving, Sense, Value};
 use egui::{Response, Ui};
 
 /// The style of a menu: the surface comes from the container.
@@ -280,6 +280,8 @@ impl Component for Menu<'_> {
     const ROLE: Role = Role::MENU;
     const PARTS: bool = false;
     const STOPS: bool = false;
+    /// The moves a field that drives the menu routes to it.
+    const KEYS: crate::runtime::focus::KeyUse = crate::runtime::focus::KeyUse::of(Self::INPUT).with_moves();
     type Style = MenuStyle;
     type Output = MenuOutput;
 
@@ -296,9 +298,23 @@ impl Component for Menu<'_> {
     /// the first key enters it at an end. The active row is the lead, so the first key after the pointer lit a row
     /// moves from that row; a row lit in this pass leads from the next, so only a key in the same frame as the pointer
     /// move that lit it starts from the row lit before.
+    ///
+    /// A field that drives the menu (Help's search) hands it Up, Down, Page keys, Home and End, which move the active
+    /// row, and Enter, which runs the active row, or else the first enabled one; the focus stays in the field.
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let level = MenuLevel::of(cx.memory::<LevelMemory>());
         level.resume(cx.core.ctx.cumulative_pass_nr());
+        while let Some((mv, _)) = cx.intents().take_move() {
+            if level.step_active(mv) {
+                frame::request_repaint(&cx.core.ctx);
+            }
+        }
+        if cx.intents().take(Intent::Activate)
+            && let Some(row) = level.active_or_first()
+        {
+            level.run(row);
+            frame::request_repaint(&cx.core.ctx);
+        }
         let keyboard = crate::runtime::focus::keyboard_in_menu(&cx.core.ctx);
         self.props.roving = self.props.roving.map(|roving| roving.no_lead(!keyboard && !level.has_active()));
         if let Some(row) = level.active() {

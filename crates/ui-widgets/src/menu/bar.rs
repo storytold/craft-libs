@@ -203,9 +203,9 @@ struct BarState {
     hover: Option<Pos2>,
 }
 
-/// The help field's text.
+/// The help field's text, the passes the Help menu has been open, and whether the field has taken the key focus.
 #[derive(Clone, Debug, Default)]
-struct Query(String);
+struct Query(String, u32, bool);
 
 /// What the bar published for `is_open` and `is_focused`.
 #[derive(Clone, Copy, Debug)]
@@ -519,15 +519,34 @@ impl Component for MenuBar<'_> {
             let titles = &mut self.titles;
             let step = ui.show(popup, layer, |ui, _| {
                 Menu::inline(Label::from(name.clone()))
-                    .show(ui, |ui, _| match slot {
+                    .show(ui, |ui, menu| match slot {
                         Open::Title(at) => {
                             if let (Some(help), Some(rows)) = (help.filter(|help| help.menu == *at), help_rows.as_ref()) {
                                 // The field sits in a padded frame: its edge lines up with the row labels and it keeps clear of the first row.
-                                Stack::new().pad(Pad::Regular).fill_width().show(ui, |ui, _| {
-                                    TextField::search(words.bar_search.as_str().to_owned(), Bind::bound(&mut query.0))
-                                        .placeholder(words.bar_search.as_str().to_owned())
-                                        .show(ui);
-                                });
+                                // The field drives the menu: Up, Down, Home and End move its active row and Enter runs
+                                // it, or the first enabled match, while typing stays in the field.
+                                let drives = menu.resolved.id;
+                                let field = Stack::new()
+                                    .pad(Pad::Regular)
+                                    .fill_width()
+                                    .show(ui, |ui, _| {
+                                        TextField::search(words.bar_search.as_str().to_owned(), Bind::bound(&mut query.0))
+                                            .placeholder(words.bar_search.as_str().to_owned())
+                                            .drives(drives)
+                                            .show(ui)
+                                            .response
+                                    })
+                                    .inner;
+                                // Opening Help puts the key focus in its field, from the pass after the menu opened, once
+                                // the layer has recorded where focus returns to.
+                                if let Some(field) = field {
+                                    if field.has_focus() {
+                                        query.2 = true;
+                                    } else if !query.2 && query.1 > 0 {
+                                        focus::request(ui.ctx(), FocusTarget::Id(field.id));
+                                    }
+                                }
+                                query.1 = query.1.saturating_add(1);
                                 let refs: Vec<[&str; 3]> =
                                     rows.iter().map(|[label, english, path]| [label.as_str(), english.as_str(), path.as_str()]).collect();
                                 let mut seen: Vec<&CommandRef> = Vec::new();
