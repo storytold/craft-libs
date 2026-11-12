@@ -1564,6 +1564,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-wordmodel"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "log",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "craft-xls"
 version = "0.1.0"
 dependencies = [
