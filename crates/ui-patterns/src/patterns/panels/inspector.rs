@@ -93,7 +93,7 @@ impl<'a> Inspector<'a> {
         let Inspector { label, target, icon, name, kind, empty, actions, menu } = self;
         let shown = target.is_some();
         let title = if shown { name.unwrap_or(label) } else { label };
-        let mut panel = Panel::new(title).actions(actions);
+        let mut panel = Panel::new(title).titled().actions(actions);
         if shown {
             if let Some(icon) = icon {
                 panel = panel.icon(icon);

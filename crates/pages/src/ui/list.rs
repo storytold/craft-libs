@@ -239,7 +239,6 @@ impl<'a> PageList<'a> {
             .with_text(|&row| Cow::Owned(rows[row].name.clone()))
             .with_toggled(|&row, column| (*column == VISIBLE && !rows[row].hidden) || (*column == LOCKED && rows[row].locked));
         let response = Panel::new(label.clone())
-            .headerless()
             .footer(|ui, _| {
                 let list = *list_id.borrow();
                 let ours = move |drag: &ListDrag<usize>| Some(drag.list) == list;

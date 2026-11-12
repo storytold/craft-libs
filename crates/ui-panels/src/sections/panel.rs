@@ -1,6 +1,6 @@
-//! `Panel` (16.5): an inline container on the panel surface that fills the room it is given. Its header is a
-//! `TitleRow` with optional icon, subtitle and actions, its body scrolls vertically and an optional footer sits under
-//! the body. The panel is one pane for F6.
+//! `Panel` (16.5): an inline container on the panel surface that fills the room it is given. Its title names it; a
+//! titled panel shows it in a `TitleRow` header with optional icon, subtitle and actions. Its body scrolls vertically
+//! and an optional footer sits under the body. The panel is one pane for F6.
 
 use super::FooterBar;
 use super::title_row::{HeaderAction, HeaderCommand, HeaderStrength, MenuRows, TitleRow};
@@ -57,12 +57,14 @@ impl Outcome for PanelOutput {
 /// The closure that fills the footer bar.
 type FooterFn<'a> = Box<dyn FnMut(&mut Ui, &mut BodyCx<'_>) + 'a>;
 
-/// A panel of a workspace: title row, scrolling body, optional footer.
+/// A panel of a workspace: scrolling body, optional footer, optional title row.
 ///
-/// - Header: the title, with the optional icon and subtitle, and the actions in `actions`. The Menu action opens the
-///   rows given to `menu` under the title row; Close asks the panel to close, which hides its body until the host
-///   stops showing it (bind the state with `opened` to keep it); Float is reported in `PanelOutput::action` for the
-///   host. [`headerless`](Panel::headerless) leaves the header out.
+/// - Title: names the panel for assistive technology. A docked panel shows no header, since its dock tab names it.
+/// - Header: [`titled`](Panel::titled) or [`band`](Panel::band) shows the title in a header, with the optional icon and
+///   subtitle, the commands in `commands` and the actions in `actions`; without a header these show nowhere. The Menu
+///   action opens the rows given to `menu` under the title row; Close asks the panel to close, which hides its body
+///   until the host stops showing it (bind the state with `opened` to keep it); Float is reported in
+///   `PanelOutput::action` for the host.
 /// - Body: scrolls vertically; the panel fills the width and height offered.
 /// - Selected: `selected(true)` draws an accent ring inside the panel's edge, so a host can mark the picked panel.
 /// - Framed: `framed()` outlines the panel's edge in the border line colour.
@@ -100,13 +102,12 @@ pub struct Panel<'a> {
 }
 
 impl<'a> Panel<'a> {
-    /// A panel titled `title`, with a header, a vertical scroll and no footer.
+    /// A panel named `title`, with no header, a vertical scroll and no footer.
     pub fn new(title: impl Into<Label>) -> Self {
         let props = ContainerProps::new()
             .surface(SurfaceKind::Panel)
             .pad(Pad::Regular)
             .sizing(Sizing::Fill)
-            .header(HeaderRegion::new().rule(true))
             .scroll(Scroll::vertical())
             .focus(FocusPolicy::PANE);
         Panel {
@@ -127,6 +128,13 @@ impl<'a> Panel<'a> {
             strength: HeaderStrength::Strong,
         }
         .label(title)
+    }
+
+    /// A header showing the title in a title row, with a rule under it: for a panel that no dock tab or window names.
+    #[must_use]
+    pub fn titled(mut self) -> Self {
+        self.props.header = Some(HeaderRegion::new().rule(true));
+        self
     }
 
     /// The header as a band of `kind` across the panel's width and top edge, with no rule under it. The header's
@@ -177,13 +185,6 @@ impl<'a> Panel<'a> {
     #[must_use]
     pub fn framed(mut self) -> Self {
         self.framed = true;
-        self
-    }
-
-    /// A panel with no header: the title names the panel for assistive technology only.
-    #[must_use]
-    pub fn headerless(mut self) -> Self {
-        self.props.header = None;
         self
     }
 

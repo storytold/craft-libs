@@ -32,6 +32,7 @@ fn panel(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 #[story(Panel<'static>, covers = [], drive = Drive::Never)]
 fn panel_with_actions_and_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let shown = Panel::new("Layers")
+        .titled()
         .opened(Bind::bound(data.value("open", true)))
         .subtitle("3 layers")
         .icon(IconSpec::svg(IconId::new("settings")))
@@ -56,13 +57,14 @@ fn panel_with_footer(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 }
 
 #[story(Panel<'static>, covers = [], drive = Drive::Never)]
-fn panel_headerless(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    Panel::new("Layers").headerless().show(ui, |ui, _| body(ui)).output.into()
+fn panel_titled(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Panel::new("Layers").titled().show(ui, |ui, _| body(ui)).output.into()
 }
 
 #[story(Panel<'static>, covers = [], drive = Drive::Never)]
 fn panel_selected_with_commands(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Panel::new("Button")
+        .titled()
         .selected(true)
         .commands([HeaderCommand::new(IconId::new("open"), CardCommands::Open), HeaderCommand::new(IconId::new("undo"), CardCommands::Reset)])
         .show(ui, |ui, _| body(ui))
