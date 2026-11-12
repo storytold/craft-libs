@@ -424,3 +424,20 @@ dictionary of revision 2–4 whose `/Length` is above 128 bits is refused with `
 Those revisions take the file key from a 16-byte MD5 hash, so `/V 2 /R 3 /Length 256` sliced past
 the hash and panicked on open. Test:
 `crypto::pdfcraft_password_tests::legacy_key_length_above_128_bits_is_refused_not_a_panic`.
+
+JBIG2 decode bounds, ported from PdfCraft commits
+[85c10051](https://github.com/storytold/pdfcraft/commit/85c100514) (hayro-jbig2 patches 5 to 9),
+[82439525](https://github.com/storytold/pdfcraft/commit/824395256) (patch 10) and
+[10107d94](https://github.com/storytold/pdfcraft/commit/10107d943) (patch 12), marked `PdfCraft patch`
+in `hayro-jbig2`: a page's segments may hold at most 64 MiB (`MAX_RETAINED_WORDS`; regions,
+dictionaries, Huffman tables, retained coding contexts), a segment may refer to at most 2^20 symbols
+(`MAX_REFERRED_SYMBOLS`), a halftone grid has at most 2^25 cells, a custom Huffman table 2^16 lines,
+a stream with its globals 2^20 segments and 2^22 references; a stream may ask for 2^30 units of
+decoding work in total (`MAX_WORK`, charged item by item before each is decoded), and an image past a
+bound is refused (not drawn) like the other caps; region locations, refinement offsets, symbol corners,
+Huffman range lines and integers at the end of an `i32` no longer overflow. The `/JBIG2Globals` change
+of 85c10051 for hayro-syntax was already carried here. PdfCraft's raster tests are adapted in
+`hayro-jbig2/src/pdfcraft_tests.rs` (`jbig2_decoding_work_is_counted_item_by_item`,
+`jbig2_placements_at_the_end_of_an_i32_draw_nothing`); the unit tests in `lib.rs`, `bitmap.rs` and
+`decode/symbol.rs` come with the patches. PdfCraft's later JBIG2 follow-ups (b7ec3669, 72e763ad,
+e3bc4e85, patch 13 and later) are not part of this port.
