@@ -10,7 +10,8 @@
 //!   another program wrote without losing what it does not understand.
 //! - GPX: [`parse_gpx`] reads track logs for geotagging by capture time.
 //! - Containers: [`embedded`], [`jpeg_segments`], [`png_chunks`] and [`webp_chunks`] locate the Exif,
-//!   XMP, ICC and IPTC blocks of JPEG, PNG, WebP, TIFF-based, Fujifilm RAF and Canon CR3 ([`cr3`]) files.
+//!   XMP, ICC and IPTC blocks of JPEG, PNG, WebP, TIFF-based, Fujifilm RAF, Canon CR3 ([`cr3`]) and
+//!   JPEG XL ([`jxl`]) files.
 //!   [`extract`] does all of the above for a whole file.
 //!
 //! HEIF, PSD and MRW files are read by their own crates. Put the blocks they return into an
@@ -25,12 +26,13 @@ mod focus_read;
 mod geom;
 mod gpx;
 mod iptc;
+pub mod jxl;
 pub mod tags;
 mod xmp;
 mod xmp_merge;
 
 pub use container::{Embedded, embedded, jpeg_segments, png_chunks, webp_chunks};
-pub use datetime::DateTime;
+pub use datetime::{DatePrecision, DateTime};
 pub use exif::{from_tiff, read_exif, strip_exif_header, try_read_exif, try_read_exif_with, write_exif};
 pub use focus::FocusPoint;
 pub use geom::{Orientation, Point, Rect};
@@ -162,6 +164,29 @@ macro_rules! overlay {
     ($self:ident, $o:ident, $($f:ident),*) => { $( if $o.$f.is_some() { $self.$f = $o.$f.clone(); } )* };
 }
 
+/// How far (relative) a duration may be from an exact `1/n` second and still be shown as `1/n`:
+/// absorbs decimal EXIF rationals such as `3333/10000` for 1/3 s without turning 0.3 s or
+/// 1/2.8 s into a reciprocal they aren't.
+pub const RECIPROCAL_TOLERANCE: f64 = 1e-3;
+
+/// The one shutter-speed formatter for display (catalog `shutter`, Info panel, All Metadata):
+/// a near-exact `1/n` second as `1/n` (`1/3`, `1/250`), anything else rounded to four
+/// significant digits with trailing zeros dropped (`0.3`, `0.3571`, `2.5`, `30`). Display only:
+/// export writes the exact duration. `None` for a time that isn't positive and finite.
+pub fn format_exposure_time(t: f64) -> Option<String> {
+    if !t.is_finite() || t <= 0.0 {
+        return None;
+    }
+    let n = (1.0 / t).round();
+    if n >= 2.0 && n.is_finite() && (1.0 / (n * t) - 1.0).abs() <= RECIPROCAL_TOLERANCE {
+        return Some(format!("1/{n}"));
+    }
+    // four significant digits; whole seconds never lose digits
+    let decimals = (3 - t.log10().floor() as i32).max(0) as usize;
+    let text = format!("{t:.decimals$}");
+    Some(if text.contains('.') { text.trim_end_matches('0').trim_end_matches('.').to_string() } else { text })
+}
+
 impl Metadata {
     /// Fill every empty field of `self` from `other`.
     pub fn fill_missing(&mut self, other: &Metadata) {
@@ -245,19 +270,10 @@ impl Metadata {
         }
     }
 
-    /// Exposure time formatted like cameras show it: `1/250`, `0.5`, `2″`.
+    /// Exposure time formatted like cameras show it: `1/250`, `0.3571`, `2.5″` (see [`format_exposure_time`]).
     pub fn exposure_display(&self) -> Option<String> {
         let t = self.exposure_time?;
-        if t.is_nan() || t <= 0.0 {
-            return None;
-        }
-        Some(if t < 0.3 {
-            format!("1/{}", (1.0 / t).round())
-        } else if t < 1.0 {
-            format!("{}", (t * 10.0).round() / 10.0)
-        } else {
-            format!("{}″", (t * 10.0).round() / 10.0)
-        })
+        format_exposure_time(t).map(|text| if t >= 1.0 { format!("{text}″") } else { text })
     }
 
     /// Human name of the metering mode.
@@ -291,7 +307,7 @@ impl Metadata {
     }
 }
 
-/// Read everything understood from a whole file (JPEG, PNG, WebP, TIFF-based incl. DNG and most raws, RAF, CR3).
+/// Read everything understood from a whole file (JPEG, PNG, WebP, TIFF-based incl. DNG and most raws, RAF, CR3, JPEG XL).
 /// Precedence: EXIF, then IPTC fills gaps, then XMP overrides user fields and fills the rest.
 pub fn extract(bytes: &[u8]) -> Metadata {
     from_embedded(&embedded(bytes))
@@ -387,11 +403,57 @@ mod tests {
     }
 
     #[test]
+    fn exposure_time_formats_reciprocals_and_significant_digits() {
+        for (t, want) in [
+            (1.0 / 3.0, "1/3"),
+            (1.0 / 250.0, "1/250"),
+            (1.0 / 8000.0, "1/8000"),
+            (0.5, "1/2"),
+            (0.3, "0.3"),
+            (0.4, "0.4"),
+            (1.0 / 2.8, "0.3571"),
+            (0.625, "0.625"),
+            (0.003, "0.003"),
+            (1.0, "1"),
+            (1.3, "1.3"),
+            (2.5, "2.5"),
+            (30.0, "30"),
+            (9.99996, "10"),
+            (1800.0, "1800"),
+        ] {
+            assert_eq!(format_exposure_time(t).as_deref(), Some(want), "{t}");
+        }
+        for t in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(format_exposure_time(t), None, "{t}");
+        }
+    }
+
+    #[test]
+    fn exposure_time_reciprocal_tolerance() {
+        // a camera's decimal rational for 1/3 s, and times just inside the tolerance either side
+        assert_eq!(format_exposure_time(3333.0 / 10000.0).as_deref(), Some("1/3"));
+        // a microsecond-level rational error still reads as 1/8000; above ~1/1000 s every time is
+        // within the tolerance of some 1/n, which is how cameras show those speeds anyway
+        assert_eq!(format_exposure_time(1.0 / 8000.0 * (1.0 + 1e-5)).as_deref(), Some("1/8000"));
+        for n in [3.0, 10.0, 250.0] {
+            let inside = 0.9 * RECIPROCAL_TOLERANCE;
+            let outside = 1.1 * RECIPROCAL_TOLERANCE;
+            let want = format!("1/{n}");
+            assert_eq!(format_exposure_time(1.0 / n * (1.0 + inside)).as_deref(), Some(want.as_str()), "{n} +inside");
+            assert_eq!(format_exposure_time(1.0 / n * (1.0 - inside)).as_deref(), Some(want.as_str()), "{n} -inside");
+            assert_ne!(format_exposure_time(1.0 / n * (1.0 + outside)).as_deref(), Some(want.as_str()), "{n} +outside");
+            assert_ne!(format_exposure_time(1.0 / n * (1.0 - outside)).as_deref(), Some(want.as_str()), "{n} -outside");
+        }
+    }
+
+    #[test]
     fn exposure_display() {
         let mut m = Metadata { exposure_time: Some(1.0 / 250.0), ..Default::default() };
         assert_eq!(m.exposure_display().as_deref(), Some("1/250"));
         m.exposure_time = Some(0.5);
-        assert_eq!(m.exposure_display().as_deref(), Some("0.5"));
+        assert_eq!(m.exposure_display().as_deref(), Some("1/2"));
+        m.exposure_time = Some(0.3);
+        assert_eq!(m.exposure_display().as_deref(), Some("0.3"));
         m.exposure_time = Some(2.0);
         assert_eq!(m.exposure_display().as_deref(), Some("2″"));
         m.exposure_time = Some(0.0);

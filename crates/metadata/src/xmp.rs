@@ -442,9 +442,8 @@ fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<Str
         return;
     }
     if p.attr("rdf:parseType") == Some("Resource") {
-        for c in &p.children {
-            collect_property(c, &struct_prefix, props, budget);
-        }
+        // a Resource struct carries fields as attributes as well as child elements, like a nested Description
+        collect_description(p, &struct_prefix, props, budget);
         return;
     }
     if let Some(d) = p.children.iter().find(|c| c.name == "rdf:Description") {
@@ -715,7 +714,9 @@ pub fn write_xmp_with(meta: &Metadata, with: &XmpWrite) -> String {
     push("xmp:CreatorTool", meta.software.clone());
     push("xmp:Rating", meta.rating.map(|v| v.to_string()));
     push("xmp:Label", meta.label.clone());
-    push("exif:DateTimeOriginal", meta.capture_time.map(|d| d.to_iso()));
+    // a year or a month alone goes in `photoshop:DateCreated` only, as Lightroom writes it: Exif's
+    // date can't say it
+    push("exif:DateTimeOriginal", meta.capture_time.filter(DateTime::is_full).map(|d| d.to_iso()));
     push("photoshop:DateCreated", meta.capture_time.map(|d| d.to_iso()));
     push("exif:ExposureTime", meta.exposure_time.map(frac));
     push("exif:FNumber", meta.f_number.map(frac));
