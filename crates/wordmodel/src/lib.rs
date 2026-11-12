@@ -40,6 +40,7 @@ pub mod math;
 pub mod math_latex;
 pub mod math_linear;
 pub mod math_symbols;
+pub mod math_tree;
 pub mod numbering;
 pub mod para;
 pub mod picfx;
