@@ -23,11 +23,11 @@ use std::path::{Path, PathBuf};
 use craft_behavior::{DisplayOrder, IconId, ItemSource, Selection};
 use craft_host::target::{Os, Runtime};
 use craft_i18n::Format;
+use craft_ui::contract::overlay::Anchor;
 use craft_ui::contract::{
     ActivateOn, Bind, CollectionEvent, DropAt, DropKind, DropPayload, DropPlace, Entry, NoValue, Outcome, Pattern, Props, Remember as _, SelectMode,
     Show as _, Trigger,
 };
-use craft_ui::contract::overlay::Anchor;
 use craft_ui::contract::{ShowCollection as _, ShowContainer as _};
 use craft_ui::display::Divider;
 use craft_ui::layout_components::Stack;

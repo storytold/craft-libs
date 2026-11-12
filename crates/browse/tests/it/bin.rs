@@ -3,10 +3,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use craft_behavior::ColumnKey;
 use craft_behavior::keyed;
 use craft_browse::ui::bin::{BinEntry, BinItem, BinModel, BinView};
 use craft_browse::ui::{BinEvent, BinState, MediaBin};
-use craft_behavior::ColumnKey;
 use craft_ui::contract::{Bind, ListDrag, ShowCollection as _};
 use craft_ui::list::{List, ListRow};
 use craft_ui::testing::{Fixture, trial};

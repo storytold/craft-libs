@@ -1,10 +1,10 @@
 //! `RenderPill`: a compare tile's render state over its picture.
 
 use craft_behavior::{Insets, Metrics, Sense};
-use craft_ui::runtime::access::Access;
 use craft_ui::contract::{Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role, Styled as _};
 use craft_ui::display::Spinner;
 use craft_ui::primitives::TextRun;
+use craft_ui::runtime::access::Access;
 use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, Stateful, StyleCx, SurfaceLook, TextLook, TypeRole, UiTokens};
 use egui::{Rect, Response, Vec2, pos2};

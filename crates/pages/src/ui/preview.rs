@@ -116,9 +116,8 @@ impl<'a> PagePreview<'a> {
         let words = env.words::<PagePreviewWords>();
         let format = env.format();
         let page = pages[*at];
-        let title = Label::from(
-            words.page_of.fill(&[("p", source.page_label(page).as_str()), ("n", format.integer(source.page_count() as u64).as_str())]),
-        );
+        let title =
+            Label::from(words.page_of.fill(&[("p", source.page_label(page).as_str()), ("n", format.integer(source.page_count() as u64).as_str())]));
         let step = Cell::new(0_isize);
         let side = if env.direction.is_rtl() { -1 } else { 1 };
         let mut open = true;

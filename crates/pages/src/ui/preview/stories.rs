@@ -4,9 +4,9 @@ use super::{PagePicture, PagePreview, PagePreviewWords, PreviewLayer};
 use crate::ui::fixtures::{DemoPages, PAPER};
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer};
 use craft_ui::runtime::env::{Env, Label};
-use std::cell::Cell;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
+use std::cell::Cell;
 
 #[story(PagePreview<'static>, covers = [Open], drive = Drive::Never)]
 fn open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
