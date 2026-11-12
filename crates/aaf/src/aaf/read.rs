@@ -330,22 +330,28 @@ impl R<'_> {
                 }
                 items
             }
-            x if x == cls::SELECTOR => match c.strong(pid::SELECTED) {
-                Some(s) => {
-                    let mut items = self.segment(s, rate, kind, depth);
-                    fit(&mut items, len);
-                    items
+            x if x == cls::SELECTOR => {
+                self.report.info("a selector was flattened to its selected input");
+                match c.strong(pid::SELECTED) {
+                    Some(s) => {
+                        let mut items = self.segment(s, rate, kind, depth);
+                        fit(&mut items, len);
+                        items
+                    }
+                    None => vec![CItem::Filler(len)],
                 }
-                None => vec![CItem::Filler(len)],
-            },
-            x if x == cls::NESTED_SCOPE => match c.objs(pid::NESTED_SLOTS).last() {
-                Some(s) => {
-                    let mut items = self.segment(s, rate, kind, depth);
-                    fit(&mut items, len);
-                    items
+            }
+            x if x == cls::NESTED_SCOPE => {
+                self.report.info("a nested scope was flattened to its final input");
+                match c.objs(pid::NESTED_SLOTS).last() {
+                    Some(s) => {
+                        let mut items = self.segment(s, rate, kind, depth);
+                        fit(&mut items, len);
+                        items
+                    }
+                    None => vec![CItem::Filler(len)],
                 }
-                None => vec![CItem::Filler(len)],
-            },
+            }
             _ => {
                 self.report.info("an unsupported component was imported as a gap");
                 vec![CItem::Filler(len)]

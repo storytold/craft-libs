@@ -472,3 +472,32 @@ fn audio_tracks_keep_their_names() {
         assert_eq!(back.compositions[0].tracks[1].name, name);
     }
 }
+
+#[test]
+fn flattened_selectors_and_nested_scopes_are_reported() {
+    for (class, property, message) in
+        [(cls::SELECTOR, pid::SELECTED, "selector was flattened"), (cls::NESTED_SCOPE, pid::NESTED_SLOTS, "nested scope was flattened")]
+    {
+        let mut root = store::read(&written(&document(), false)).unwrap();
+        let content = strong_mut(strong_mut(&mut root, pid::ROOT_HEADER), pid::CONTENT);
+        let comp = objs_mut(content, pid::MOBS).iter_mut().find(|mob| mob.class == cls::COMPOSITION_MOB).unwrap();
+        let slot = objs_mut(comp, pid::SLOTS)
+            .iter_mut()
+            .find(|slot| {
+                slot.strong(pid::SEGMENT).is_some_and(|s| s.class == cls::SEQUENCE && s.weak_key(pid::DATA_DEFINITION) == Some(&ddef::SOUND[..]))
+            })
+            .unwrap();
+        let segment = strong_mut(slot, pid::SEGMENT);
+        let child = segment.clone();
+        let mut wrapper = Obj::new(class)
+            .with(pid::DATA_DEFINITION, child.get(pid::DATA_DEFINITION).unwrap().clone())
+            .with(pid::LENGTH, child.get(pid::LENGTH).unwrap().clone());
+        let value = if class == cls::SELECTOR { Value::Strong(Box::new(child)) } else { Value::StrongVec(vec![child]) };
+        wrapper.set(property, value);
+        *segment = wrapper;
+        let bytes = store::write(&root, craft_cfb::Version::V4).unwrap();
+        let mut report = Report::default();
+        read(&bytes, &mut report).unwrap();
+        assert!(report.mentions(message), "{report}");
+    }
+}
