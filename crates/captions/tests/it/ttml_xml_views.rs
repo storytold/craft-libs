@@ -4,13 +4,18 @@
 
 use craft_captions::{Cue, Document, Format, FrameRate, WriteOptions, write};
 
-const NAMESPACES: [(&str, &str); 6] = [
+const NAMESPACES: [(&str, &str); 11] = [
     ("tt", "http://www.w3.org/ns/ttml"),
     ("tt10", "http://www.w3.org/2006/10/ttaf1"),
     ("tt04", "http://www.w3.org/2006/04/ttaf1"),
     ("ttm", "http://www.w3.org/ns/ttml#metadata"),
     ("ttm10", "http://www.w3.org/2006/10/ttaf1#metadata"),
     ("ttm04", "http://www.w3.org/2006/04/ttaf1#metadata"),
+    ("tts", "http://www.w3.org/ns/ttml#styling"),
+    ("tts10", "http://www.w3.org/2006/10/ttaf1#style"),
+    ("tts10s", "http://www.w3.org/2006/10/ttaf1#styling"),
+    ("tts04", "http://www.w3.org/2006/04/ttaf1#style"),
+    ("tts04s", "http://www.w3.org/2006/04/ttaf1#styling"),
 ];
 
 /// A name the way the reader's canonical names spell it.
