@@ -17,7 +17,7 @@ use crate::primitives::{IconSpec, PaintShape, StrokeWidth, TextRun};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, Corners, Flags, IconLook, RuleKind, StyleColor, StyleCx, SurfaceLook, TextLook, UiTokens};
 use craft_behavior::{Flow, IconId, Insets, Metrics, PartKey, PointerButton, PressPhase, Proposal, Sense};
-use craft_theme::{Rgba, RowStyle, Stateful, States, TypeRole};
+use craft_theme::{Contrast, Rgba, RowStyle, Stateful, States, TypeRole};
 use egui::{Pos2, Rect, Response, Vec2};
 
 #[cfg(feature = "testing")]
@@ -77,6 +77,8 @@ struct Sizes {
     label_line: f32,
     detail_line: f32,
     underline_gap: f32,
+    /// The height of the selected tab's indicator bar.
+    indicator: f32,
     text_only: bool,
 }
 
@@ -100,6 +102,8 @@ pub struct TabStyle {
     icon: IconLook,
     /// Under the selected text tab's label.
     underline: StyleColor,
+    /// The bar along the selected tab's top edge: the accent in high contrast, none otherwise and on text tabs.
+    indicator: Option<StyleColor>,
     /// A divider at the tab's trailing edge, in a theme that divides rows.
     divider: bool,
     close_side: CloseSide,
@@ -256,6 +260,7 @@ impl Component for Tab<'_> {
             label_line: line(role),
             detail_line: line(TypeRole::Caption),
             underline_gap: space.gap.tight,
+            indicator: stroke.thick,
             text_only,
         };
         TabStyle {
@@ -265,6 +270,7 @@ impl Component for Tab<'_> {
             detail: TextLook::new(TypeRole::Caption, ink(colors.text.faint, colors.text.faint)),
             icon: IconLook::new(sizes.icon, ink(colors.text.muted, colors.text.normal)),
             underline: c(colors.text.normal),
+            indicator: (!text_only && cx.contrast() == Contrast::High).then(|| c(colors.accent.solid)),
             divider: key.kind.compact_dividers() && tokens.shape.rows == RowStyle::Divided,
             close_side: close_side(cx.os, cx.direction.is_rtl()),
             sizes,
@@ -404,6 +410,10 @@ impl Component for Tab<'_> {
         if style.divider {
             let x = cx.flow.end_x();
             draw.rule(RuleKind::Divider, Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom()));
+        }
+        if let (Some(color), true) = (style.indicator, selected) {
+            let bar = Rect::from_min_size(rect.min, Vec2::new(rect.width(), sizes.indicator.min(rect.height())));
+            draw.fill(&PaintShape::Rect(bar, egui::CornerRadius::ZERO), color);
         }
         if sizes.text_only && selected {
             let y = placed.label.bottom() + sizes.underline_gap;
