@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 
-use craft_behavior::{DisplayOrder, IconId, ItemSource, Metrics, Selection, Sense, TileLayout};
+use craft_behavior::{DisplayOrder, IconId, ItemSource, Metrics, Proposal, Selection, Sense, TileLayout};
 use craft_theme::Variant;
 use craft_theme::variant::{Emphasis, Tone};
 use craft_ui::buttons::IconButton;
@@ -101,19 +101,30 @@ impl<'a> Slicer<'a> {
         self
     }
 
+    /// The slicer's height at `width`: its header over every row of tiles, none scrolled. An app sizes a new slicer
+    /// with it.
+    pub fn height_for(&self, ui: &Ui, width: f32) -> f32 {
+        let mut card = SlicerCard::new(self.caption.clone(), self.filtered);
+        card.measure_in(ui, Proposal::Width(width), |ui, _| self.tiles(ui)).y
+    }
+
     /// Shows the slicer in `rect` and reports what the user did.
     pub fn show(self, ui: &mut Ui, rect: Rect) -> SlicerOutput {
-        let Slicer { caption, items, columns, filtered, zoom } = self;
-        let source = Values(items);
-        let card = SlicerCard::new(caption.clone(), filtered);
-        let shown = card.show_at(ui, rect, |ui, _| {
-            let tiles = SlicerTiles::new(columns, zoom).label(caption.clone());
-            tiles.show_items(ui, &source, &mut |key, _| SlicerTile::new(items[*key].0.clone()).on(items[*key].1))
-        });
+        let card = SlicerCard::new(self.caption.clone(), self.filtered);
+        let shown = card.show_at(ui, rect, |ui, _| self.tiles(ui));
+        let items = self.items;
         let toggled = shown.inner.and_then(|tiles| toggled(&tiles, items));
         let SlicerCardOutput { response, cleared } = shown.output;
         let action = if cleared { Some(SlicerAction::Clear) } else { toggled.map(SlicerAction::Toggle) };
         SlicerOutput { response, action }
+    }
+
+    /// The card's body: the value tiles.
+    fn tiles(&self, ui: &mut Ui) -> CollectionResponse<usize, ()> {
+        let items = self.items;
+        let source = Values(items);
+        let tiles = SlicerTiles::new(self.columns, self.zoom).label(self.caption.clone());
+        tiles.show_items(ui, &source, &mut |key, _| SlicerTile::new(items[*key].0.clone()).on(items[*key].1))
     }
 }
 

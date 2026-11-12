@@ -44,7 +44,7 @@ pub use crate::runtime::measure::{
 pub use craft_ui_macros::{story, trial};
 pub use fixture::{Fixture, Impure, Room, Target};
 pub use frames::Frames;
-pub use stage::{room_height, stage, stage_fitting};
+pub use stage::{room_height, stage, stage_fitting, stage_width};
 #[doc(hidden)]
 pub use story::{
     CollectionKind, Drive, EditKind, Grip, Required, Story, StoryData, StoryOutput, StoryRegistration, StorySnapshot, show_as_only_item, stories,

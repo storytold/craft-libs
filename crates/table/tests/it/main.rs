@@ -3,6 +3,7 @@
 mod grid;
 mod outline;
 mod refpick;
+mod slicer;
 
 use craft_table::ui::testing::registered;
 

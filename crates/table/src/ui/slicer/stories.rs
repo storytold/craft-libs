@@ -2,18 +2,26 @@
 
 use super::{Slicer, SlicerCard, SlicerTile, SlicerTiles, Values};
 use craft_ui::contract::{Props as _, ShowCollection as _, ShowContainer as _};
-use craft_ui::testing::{Drive, StoryData, StoryOutput, show_as_only_item, story};
+use craft_ui::testing::{Drive, StoryData, StoryOutput, show_as_only_item, stage_fitting, stage_width, story};
 use egui::Ui;
 
 fn colours() -> Vec<(String, bool)> {
     ["Red", "Green", "Blue", "Cyan", "Magenta"].iter().map(|name| ((*name).to_owned(), *name == "Green")).collect()
 }
 
+/// Six regions, every other one on.
+fn regions() -> Vec<(String, bool)> {
+    ["North", "South", "East", "West", "Central", "Export"].iter().enumerate().map(|(at, name)| ((*name).to_owned(), at % 2 == 0)).collect()
+}
+
 #[story(Slicer<'static>, covers = [Default], drive = Drive::Never)]
 fn slicer(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    let items = colours();
-    let rect = ui.available_rect_before_wrap();
-    Slicer::new("Colour", &items).columns(2).filtered(true).show(ui, rect).into()
+    let items = regions();
+    let filtered = items.iter().any(|(_, on)| !on);
+    let slicer = Slicer::new("Region", &items).columns(2).filtered(filtered);
+    let height = slicer.height_for(ui, stage_width(ui));
+    let rect = stage_fitting(ui, |_| height);
+    slicer.show(ui, rect).into()
 }
 
 fn card(ui: &mut Ui, filtered: bool) -> StoryOutput {
