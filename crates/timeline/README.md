@@ -14,6 +14,7 @@ text formats that are documents of their own.
 | `build` | Building a `Project` while reading a document (`Builder`, media deduplicated by key, track placement bounded at 256 tracks) and the bounds every import ends with (`Imported::bound`: implausible rates and start timecodes reset and reported). |
 | `ale` | Avid Log Exchange: `AleDoc` (heading, columns, rows), `parse`, `write`, the standard heading and columns. |
 | `edl` | CMX 3600 edit decision lists: `parse` to the list as written (events, their lines and timecode fields, `M2`, `AUD`, clip-name, source-file, effect-name and locator comments), `write` for events the caller built, channel codes, reel names, the frame-rate guess. |
+| `fcp7` (feature `xml`) | Final Cut Pro 7 XML (`xmeml` 4 and 5, the dialect Premiere Pro reads and writes) to and from `model`. Read with craft-xml, strictly and bounded. |
 | crate root | `Format` (EDL, xmeml, FCPXML, OTIO, AAF, OMF), `detect_text`, `decode_text`. |
 
 No file I/O. EDL and ALE give the document as the format writes it. The formats that describe a
@@ -21,7 +22,7 @@ whole edit read into and write from `model`; mapping `model` onto an application
 stays in the application.
 AAF and OMF are in `craft-aaf`.
 
-Feature `serde`: `Serialize` / `Deserialize` for the time, report and `Format` types.
+Feature `xml`: the XML formats, on craft-xml. Feature `serde`: `Serialize` / `Deserialize` for the time, report and `Format` types.
 
 ## Specifications
 
