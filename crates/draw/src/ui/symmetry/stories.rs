@@ -18,7 +18,7 @@ craft_ui::words! {
     #[non_exhaustive]
     pub(crate) struct SymmetryStoryWords {
         /// The preview's centre and angle.
-        centre: template "symmetryStory.centre" = "Centre {x}, {y}, angle {angle}°";
+        centre: template "symmetryStory.centre" = "Center {x}, {y} · {angle}°";
         /// The centre line, then how the last session ended.
         ended: template "symmetryStory.ended" = "{text}. {ended}";
         /// The last session stored its symmetry.
@@ -144,6 +144,7 @@ struct SymmetryKept {
 #[story(SymmetryHandles<'static>, covers = [], drive = Drive::Never)]
 fn transform_symmetry(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let words = Env::of(ui).words::<SymmetryStoryWords>();
+    let units = Env::of(ui).units();
     let described = described(data);
     let set = data.note("described", described);
     if *set != described {
@@ -192,7 +193,7 @@ fn transform_symmetry(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             kept.session = SymmetryTransform::begin(*stored);
         }
         let preview = kept.session.preview();
-        let number = |value: f64| format!("{value:.1}");
+        let number = |value: f64| units.number(value, 0..=1);
         let text = craft_i18n::fmt(
             words.centre.as_str(),
             &[("x", number(preview.center.x).as_str()), ("y", number(preview.center.y).as_str()), ("angle", number(preview.rotation).as_str())],

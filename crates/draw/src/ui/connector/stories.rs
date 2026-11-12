@@ -22,10 +22,10 @@ craft_ui::words! {
     /// The status line of the Connector tool story.
     #[non_exhaustive]
     pub(crate) struct ConnectorStoryWords {
-        /// The status line: the last thing the tool or the handles did.
-        status: template "connectorStory.status" = "Last event: {event}";
+        /// The status line: how many connectors there are, then the last thing the tool or the handles did.
+        status: template "connectorStory.status" = "{count} connectors · {event}";
         /// Nothing done so far.
-        idle: "connectorStory.idle" = "none";
+        idle: "connectorStory.idle" = "No event yet";
         /// A connector being drawn.
         drawing: "connectorStory.drawing" = "drawing a connector";
         /// A connector drawn.
@@ -218,7 +218,7 @@ struct ConnectorKept {
 
 /// The Connector tool live over three boxes, the third with numbered sites: a drag from a box draws a connector with
 /// the routing the story picks, a hovered box shows its sites, and the new connector is selected, so its handles
-/// reattach its ends and reshape its bends. Select Next moves the selection; the other connectors are drawn muted.
+/// reattach its ends and reshape its bends. Select next connector moves the selection; the other connectors are drawn muted.
 #[story(ConnectorHandles<'static>, covers = [], drive = Drive::Never)]
 fn connector_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let words = Env::of(ui).words::<ConnectorStoryWords>();
@@ -250,7 +250,7 @@ fn connector_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     tool_story(
         ui,
         data,
-        ToolStory::new("Document", &picture).buttons(&[StoryButton::new("Select Next")]),
+        ToolStory::new("Document", &picture).buttons(&[StoryButton::new("Select next connector")]),
         ConnectorKept::default,
         Connectors::new(routing),
         body,
@@ -299,7 +299,8 @@ fn connector_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
                 output.clicked = true;
             }
             let event = kept.note.clone().unwrap_or_else(|| words.idle.as_str().to_owned());
-            output.readout(craft_i18n::fmt(words.status.as_str(), &[("event", event.as_str())]))
+            let count = connectors.items.len().to_string();
+            output.readout(craft_i18n::fmt(words.status.as_str(), &[("count", count.as_str()), ("event", event.as_str())]))
         },
     )
 }
