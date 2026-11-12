@@ -60,12 +60,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cc7bb162ec39d46ab1ca8c77bf72e890535becd1751bb45f64c597edb4c8c6b3"
 
 [[package]]
+name = "alloc-no-stdlib"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2fb6cfd47bf496ff64095c20eaba0c201404ee38714d4142fcfa1dc334fcc7a"
+
+[[package]]
 name = "alloc-stdlib"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e76a019e91224d279006ff972f1e984179a6e9feb050adba6ce8274aef23195"
 dependencies = [
- "alloc-no-stdlib",
+ "alloc-no-stdlib 2.0.4",
+]
+
+[[package]]
+name = "alloc-stdlib"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b5c1865780388bfa186411ab5f247819487fc4864c6e9c3106611fa347586e1"
+dependencies = [
+ "alloc-no-stdlib 3.0.0",
 ]
 
 [[package]]
@@ -479,9 +494,20 @@ version = "8.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5cc91aac060a7a1e25823bdccbfb6af1875b88f17c6daac97894eed8207166b3"
 dependencies = [
- "alloc-no-stdlib",
- "alloc-stdlib",
- "brotli-decompressor",
+ "alloc-no-stdlib 2.0.4",
+ "alloc-stdlib 0.2.4",
+ "brotli-decompressor 5.0.3",
+]
+
+[[package]]
+name = "brotli"
+version = "9.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "627b7cfb0578f0eafce087a90fcd40add1231900b69e4d4de2d456260a4f5d81"
+dependencies = [
+ "alloc-no-stdlib 3.0.0",
+ "alloc-stdlib 0.3.0",
+ "brotli-decompressor 6.3.1",
 ]
 
 [[package]]
@@ -490,8 +516,18 @@ version = "5.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a32acac15fe1967bc3986b2a6347dffc965602354ea6f450ad07e8bfd253583"
 dependencies = [
- "alloc-no-stdlib",
- "alloc-stdlib",
+ "alloc-no-stdlib 2.0.4",
+ "alloc-stdlib 0.2.4",
+]
+
+[[package]]
+name = "brotli-decompressor"
+version = "6.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75c74c9c51b9140663e196b5fb88bc94c334d7a497c8311cb759d8557874747f"
+dependencies = [
+ "alloc-no-stdlib 3.0.0",
+ "alloc-stdlib 0.3.0",
 ]
 
 [[package]]
@@ -612,6 +648,17 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.3.1",
  "rand_core 0.10.1",
+]
+
+[[package]]
+name = "chardetng"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13de944a44b5064ee5d3a5ceccc49a41bfec50f2580e66f82e87703acdb88b53"
+dependencies = [
+ "cfg-if",
+ "encoding_rs",
+ "memchr",
 ]
 
 [[package]]
@@ -927,6 +974,9 @@ dependencies = [
 [[package]]
 name = "craft-cfb"
 version = "0.1.0"
+dependencies = [
+ "craft-media-testkit",
+]
 
 [[package]]
 name = "craft-cms"
@@ -935,6 +985,22 @@ dependencies = [
  "md-5 0.10.6",
  "moxcms",
  "rayon",
+]
+
+[[package]]
+name = "craft-codepage"
+version = "0.1.0"
+dependencies = [
+ "encoding_rs",
+]
+
+[[package]]
+name = "craft-crs"
+version = "0.1.0"
+dependencies = [
+ "craft-metadata",
+ "craft-xml",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -953,6 +1019,14 @@ name = "craft-csv"
 version = "0.1.0"
 dependencies = [
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-dav"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "proptest",
 ]
 
 [[package]]
@@ -988,6 +1062,30 @@ name = "craft-docpath"
 version = "0.1.0"
 
 [[package]]
+name = "craft-docx"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "chrono",
+ "craft-cfb",
+ "craft-drawingml",
+ "craft-math",
+ "craft-offcrypto",
+ "craft-opc",
+ "craft-wordmodel",
+ "craft-xml",
+ "image",
+ "log",
+ "proptest",
+ "quick-xml 0.41.0",
+ "serde_json",
+ "thiserror 2.0.21",
+ "unicode-bidi",
+ "zeroize",
+ "zip",
+]
+
+[[package]]
 name = "craft-dpx"
 version = "0.1.0"
 dependencies = [
@@ -1000,6 +1098,7 @@ version = "0.1.0"
 dependencies = [
  "craft-xml",
  "kurbo 0.13.1",
+ "log",
  "serde",
  "serde_json",
 ]
@@ -1008,6 +1107,7 @@ dependencies = [
 name = "craft-dxf"
 version = "0.1.0"
 dependencies = [
+ "craft-codepage",
  "encoding_rs",
  "log",
  "thiserror 2.0.21",
@@ -1049,6 +1149,7 @@ name = "craft-exr"
 version = "0.1.0"
 dependencies = [
  "exr",
+ "flate2",
  "half",
  "serde_json",
  "thiserror 2.0.21",
@@ -1058,13 +1159,33 @@ dependencies = [
 name = "craft-fig"
 version = "0.1.0"
 dependencies = [
+ "craft-figma-rest",
  "craft-kiwi",
  "craft-zip",
  "flate2",
+ "kurbo 0.13.1",
  "ruzstd",
  "serde_json",
  "thiserror 2.0.21",
  "zip",
+]
+
+[[package]]
+name = "craft-figma-rest"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-flow"
+version = "0.1.0"
+dependencies = [
+ "craft-wordmodel",
+ "image",
+ "log",
 ]
 
 [[package]]
@@ -1172,6 +1293,12 @@ dependencies = [
 name = "craft-html"
 version = "0.1.0"
 dependencies = [
+ "craft-codepage",
+ "craft-flow",
+ "craft-math",
+ "craft-mime",
+ "craft-wordmodel",
+ "encoding_rs",
  "proptest",
 ]
 
@@ -1264,11 +1391,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-latex"
+version = "0.1.0"
+dependencies = [
+ "craft-flow",
+ "craft-markdown",
+ "craft-math",
+ "craft-mime",
+ "craft-wordmodel",
+ "proptest",
+]
+
+[[package]]
 name = "craft-lottie"
 version = "0.1.0"
 dependencies = [
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-markdown"
+version = "0.1.0"
+dependencies = [
+ "craft-flow",
+ "craft-html",
+ "craft-wordmodel",
+]
+
+[[package]]
+name = "craft-math"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1313,6 +1471,8 @@ dependencies = [
 name = "craft-metadata"
 version = "0.1.0"
 dependencies = [
+ "brotli 9.1.1",
+ "brotli-decompressor 6.3.1",
  "chrono",
  "craft-tiff",
  "proptest",
@@ -1345,7 +1505,9 @@ dependencies = [
 name = "craft-mime"
 version = "0.1.0"
 dependencies = [
+ "chardetng",
  "chrono",
+ "craft-codepage",
  "encoding_rs",
  "proptest",
 ]
@@ -1356,16 +1518,34 @@ version = "0.1.0"
 dependencies = [
  "aes",
  "base64 0.23.1",
+ "chrono",
+ "craft-flow",
+ "craft-math",
+ "craft-metafile",
+ "craft-wordmodel",
  "craft-xml",
  "craft-zip",
  "flate2",
  "getrandom 0.3.4",
  "hmac",
+ "image",
+ "js-sys",
+ "log",
  "sha1 0.11.0",
  "sha2 0.11.1",
  "thiserror 2.0.21",
  "zeroize",
  "zip",
+]
+
+[[package]]
+name = "craft-ods"
+version = "0.1.0"
+dependencies = [
+ "craft-odf",
+ "craft-sheet",
+ "craft-xml",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1456,6 +1636,7 @@ name = "craft-penpot"
 version = "0.1.0"
 dependencies = [
  "craft-zip",
+ "serde",
  "serde_json",
  "thiserror 2.0.21",
  "zip",
@@ -1496,6 +1677,20 @@ name = "craft-plotter"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-pptx"
+version = "0.1.0"
+dependencies = [
+ "craft-drawingml",
+ "craft-opc",
+ "craft-xml",
+ "kurbo 0.13.1",
+ "log",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 
@@ -1553,6 +1748,7 @@ dependencies = [
  "encoding_rs",
  "flate2",
  "proptest",
+ "rayon",
  "serde",
  "thiserror 2.0.21",
 ]
@@ -1596,6 +1792,7 @@ dependencies = [
  "proptest",
  "rayon",
  "serde",
+ "sha2 0.10.9",
  "thiserror 2.0.21",
  "zune-core",
  "zune-jpeg",
@@ -1606,6 +1803,7 @@ dependencies = [
 name = "craft-rtf"
 version = "0.1.0"
 dependencies = [
+ "craft-codepage",
  "craft-mime",
  "encoding_rs",
  "proptest",
@@ -1638,7 +1836,9 @@ dependencies = [
 name = "craft-sketch"
 version = "0.1.0"
 dependencies = [
+ "craft-figma-rest",
  "craft-zip",
+ "kurbo 0.13.1",
  "serde_json",
  "thiserror 2.0.21",
  "zip",
@@ -1710,8 +1910,10 @@ dependencies = [
 name = "craft-timeline"
 version = "0.1.0"
 dependencies = [
+ "craft-xml",
  "proptest",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1831,6 +2033,7 @@ dependencies = [
 name = "craft-webp"
 version = "0.1.0"
 dependencies = [
+ "craft-video",
  "image",
  "thiserror 2.0.21",
 ]
@@ -1858,6 +2061,7 @@ name = "craft-wordmodel"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "craft-math",
  "log",
  "proptest",
  "serde",
@@ -1880,6 +2084,9 @@ version = "0.1.0"
 dependencies = [
  "craft-cfb",
  "craft-sheet",
+ "md-5 0.10.6",
+ "miniz_oxide 0.9.1",
+ "sha1 0.10.7",
  "thiserror 2.0.21",
 ]
 
@@ -3134,7 +3341,7 @@ checksum = "9f4d0e94ddd48749f06bbe4e5389fb9799a0c45bcaf00495042076ef05e3241a"
 name = "hayro-cmap"
 version = "0.1.0"
 dependencies = [
- "brotli",
+ "brotli 8.0.4",
  "hayro-postscript",
 ]
 
@@ -3917,7 +4124,7 @@ version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e35d032bcec660647828527ff42c6f5776d2fd44b8357f9f6d9ac6dc07218e46"
 dependencies = [
- "brotli-decompressor",
+ "brotli-decompressor 5.0.3",
  "jxl-bitstream",
  "jxl-frame",
  "jxl-grid",
@@ -3949,7 +4156,7 @@ version = "0.12.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d36c662923f47586880211f3bc7c0d83fb3a9b410d278c7bde93450748abeef3"
 dependencies = [
- "brotli-decompressor",
+ "brotli-decompressor 5.0.3",
  "jxl-bitstream",
  "jxl-color",
  "jxl-frame",

@@ -72,9 +72,45 @@ so a page list can't repeat an unpacking within the budget.
 The archive is read with the `zip` crate directly, with the bounds above applied to each member.
 A shared bounded ZIP reader is planned (craft-libs #126); this crate moves to it when it lands.
 
+## The layers as REST file JSON (`rest`)
+
+`rest::to_rest` maps the pages and layers onto the REST API file JSON that
+[`craft-figma-rest`](../figma-rest/README.md) models: artboards and frames, groups, shape paths
+and shape groups with their boolean operations, text with its attributed runs, bitmaps, symbol
+masters (components) and instances (expanded from their master with the instance's overrides,
+including those in nested instances and swaps), stacks (auto layout), shared styles, swatches
+(colour variables), prototype links, export options and layout grids. Paths come as vector
+networks beside the JSON (`vectorNetworkRef`); stars and polygons whose points are still the
+generated ones carry `pointCount` and `innerRadius`. What isn't understood is skipped with a
+warning.
+
+```rust
+let archive = craft_sketch::Archive::open(&bytes)?;
+let mapped = craft_sketch::rest::to_rest(&archive, "Untitled", craft_sketch::rest::Options::default());
+if mapped.too_old { /* text stored the pre-48 way */ }
+```
+
+`Options::fonts` finds the installed face a PostScript name belongs to; without it, families
+are read from the names.
+
+| Limit | Value |
+|---|---|
+| Layers (`Options::max_nodes`) | 200 000 by default |
+| Layer nesting, symbol expansion included | 128 levels |
+| Work spent expanding symbols (one unit per JSON value copied) | 60 million (15 million on 32-bit targets) |
+| Points of one path | 100 000 |
+| Distinct warnings | 200 |
+
+The walk recurses once per level of nesting, in small frames (each layer's own work is done in
+functions that return before its children are mapped). An unoptimised build maps about 140
+levels of nested instances on a 512 KiB stack; the limit of 128 leaves twice the room on the
+1 MiB stack of a WebAssembly build, and a test at the limit runs on a 1 MiB thread. FigCraft
+followed 200 levels.
+
+The mapping was written in FigCraft (`crates/format/src/sketch`), mostly by Jindřich Šaršon, from
+the public description of the format and files built for each case.
+
 ## Not here yet
 
-- A typed model of the document and the layers (`_class` objects: pages, artboards, groups,
-  shape paths, text with attributed strings, symbols and overrides, styles). FigCraft maps the
-  JSON straight onto its own import shape today.
+- A typed model of the Sketch document itself (`_class` objects): the mapping reads the JSON.
 - Writing.

@@ -5,9 +5,58 @@ use std::sync::Arc;
 
 use craft_opc::Rels;
 use craft_sheet::{CellError, CellRef, MAX_COLS, MAX_ROWS, Range, Value};
-use craft_xml::El;
+use craft_xml::{El, Writer};
 
-use crate::strings::{StringItem, decode_xstring};
+use crate::features::Features;
+use crate::strings::{StringItem, decode_xstring, encode_xstring};
+use crate::write::{assemble, list, num, write_streamed};
+
+/// The children of a worksheet in schema order (`CT_Worksheet`).
+const WORKSHEET: &[&str] = &[
+    "sheetPr",
+    "dimension",
+    "sheetViews",
+    "sheetFormatPr",
+    "cols",
+    "sheetData",
+    "sheetCalcPr",
+    "sheetProtection",
+    "protectedRanges",
+    "scenarios",
+    "autoFilter",
+    "sortState",
+    "dataConsolidate",
+    "customSheetViews",
+    "mergeCells",
+    "phoneticPr",
+    "conditionalFormatting",
+    "dataValidations",
+    "hyperlinks",
+    "printOptions",
+    "pageMargins",
+    "pageSetup",
+    "headerFooter",
+    "rowBreaks",
+    "colBreaks",
+    "customProperties",
+    "cellWatches",
+    "ignoredErrors",
+    "smartTags",
+    "drawing",
+    "legacyDrawing",
+    "legacyDrawingHF",
+    "drawingHF",
+    "picture",
+    "oleObjects",
+    "controls",
+    "webPublishItems",
+    "tableParts",
+    "extLst",
+];
+
+/// Row attributes read into [`Row`]'s fields; the others go to [`Row::attrs`]. `spans` is
+/// dropped: it is a hint that goes stale when cells change.
+const ROW_ATTRS: &[&str] = &["r", "spans", "ht", "customHeight", "hidden", "outlineLevel", "collapsed", "s", "customFormat"];
 
 /// What a cell's `<v>` holds, by its type (`t`, 18.18.11).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -105,6 +154,8 @@ pub struct Row {
     /// `s` when `customFormat` is set: the format of the row's empty cells.
     pub style: Option<u32>,
     pub cells: Vec<Cell>,
+    /// The other attributes as written (`thickBot`, `x14ac:dyDescent`).
+    pub attrs: Vec<(String, String)>,
 }
 
 /// One `<col>`: columns `first..=last` (zero-based).
@@ -140,6 +191,9 @@ pub struct SheetPart {
     /// Why reading stopped early, when the part is damaged; the rows before the damage were
     /// handed out.
     pub damaged: Option<String>,
+    /// Views, print setup, data validation, conditional formats, hyperlinks: written from here,
+    /// not from [`SheetPart::root`].
+    pub features: Features,
 }
 
 impl SheetPart {
@@ -163,10 +217,140 @@ impl SheetPart {
                 });
             }
         }
+        self.features = Features::read(&self.root, &self.rels);
         if let Some(m) = self.root.child("mergeCells") {
             self.merges.extend(m.children("mergeCell").filter_map(|m| m.attr("ref").and_then(Range::parse)).filter(|r| !r.is_single()));
         }
     }
+}
+
+impl SheetPart {
+    /// The worksheet part with `rows` as its `sheetData`. The dimension, the columns, the
+    /// merged cells and [`SheetPart::features`] come from the fields; everything else in [`SheetPart::root`] is written as
+    /// kept, in place.
+    pub fn to_xml(&self, rows: &[Row]) -> Vec<u8> {
+        let root = if self.root.name.is_empty() { El::new("worksheet") } else { self.root.clone() };
+        let mut cols = El::new("cols");
+        for c in &self.columns {
+            cols.push(column_el(c));
+        }
+        let merges = self.merges.iter().map(|m| El::new("mergeCell").with_attr("ref", m.a1())).collect();
+        let mut owned = vec![
+            ("dimension", vec![El::new("dimension").with_attr("ref", used(rows).map_or_else(|| "A1".to_string(), |r| r.a1()))]),
+            ("cols", Vec::from_iter((!self.columns.is_empty()).then_some(cols))),
+            ("sheetData", vec![El::new("sheetData")]),
+            ("mergeCells", Vec::from_iter(list(&root, "mergeCells", merges))),
+        ];
+        owned.extend(self.features.owned());
+        let mut root = assemble(&root, WORKSHEET, owned);
+        let prefixes: Vec<&str> = rows.iter().flat_map(|r| &r.attrs).filter_map(|(k, _)| k.split_once(':').map(|(p, _)| p)).collect();
+        crate::ns::declare_with(&mut root, &prefixes);
+        write_streamed(&root, "sheetData", |w| rows.iter().for_each(|r| write_row(w, r)))
+    }
+}
+
+/// The range from the first to the last cell of `rows`.
+fn used(rows: &[Row]) -> Option<Range> {
+    let mut cells = rows.iter().flat_map(|r| &r.cells).map(|c| c.at);
+    let first = cells.next()?;
+    let (lo, hi) = cells
+        .fold((first, first), |(lo, hi), c| (CellRef::new(lo.row.min(c.row), lo.col.min(c.col)), CellRef::new(hi.row.max(c.row), hi.col.max(c.col))));
+    Some(Range::new(lo, hi))
+}
+
+fn column_el(c: &Column) -> El {
+    let mut e = El::new("col").with_attr("min", c.first + 1).with_attr("max", c.last + 1);
+    let mut put = |k: &str, v: Option<String>| {
+        if let Some(v) = v {
+            e.set_attr(k, v);
+        }
+    };
+    put("width", c.width.map(num));
+    put("style", c.style.map(|s| s.to_string()));
+    put("hidden", c.hidden.then(|| "1".into()));
+    put("bestFit", c.best_fit.then(|| "1".into()));
+    put("customWidth", c.custom_width.then(|| "1".into()));
+    put("outlineLevel", (c.outline_level > 0).then(|| c.outline_level.to_string()));
+    put("collapsed", c.collapsed.then(|| "1".into()));
+    e
+}
+
+fn write_row(w: &mut Writer, row: &Row) {
+    let mut t = w.tag("row").attr("r", row.index + 1);
+    if let Some(s) = row.style {
+        t = t.attr("s", s).attr("customFormat", 1);
+    }
+    t = t.attr_opt("ht", row.height.map(num));
+    if row.custom_height {
+        t = t.attr("customHeight", 1);
+    }
+    if row.hidden {
+        t = t.attr("hidden", 1);
+    }
+    if row.outline_level > 0 {
+        t = t.attr("outlineLevel", row.outline_level);
+    }
+    if row.collapsed {
+        t = t.attr("collapsed", 1);
+    }
+    for (k, v) in row.attrs.iter().filter(|(k, _)| craft_xml::is_name(k)) {
+        t = t.attr(k, v);
+    }
+    if row.cells.is_empty() {
+        t.empty();
+        return;
+    }
+    t.open();
+    for c in &row.cells {
+        write_cell(w, c);
+    }
+    w.close();
+}
+
+fn write_cell(w: &mut Writer, c: &Cell) {
+    let (kind, v): (Option<&str>, Option<String>) = match &c.value {
+        CellValue::Empty => (None, None),
+        CellValue::Number(n) => (None, Some(num(*n))),
+        CellValue::Shared(i) => (Some("s"), Some(i.to_string())),
+        // An unreadable value is kept as the text it was.
+        CellValue::Text(t) => (Some("str"), Some(encode_xstring(t))),
+        CellValue::Invalid(t) => (Some("str"), Some(encode_xstring(t))),
+        CellValue::Inline(_) => (Some("inlineStr"), None),
+        CellValue::Bool(b) => (Some("b"), Some(u8::from(*b).to_string())),
+        CellValue::Error(e) => (Some("e"), Some(e.as_str().to_string())),
+        CellValue::Date(d) => (Some("d"), Some(d.clone())),
+    };
+    let mut t = w.tag("c").attr("r", c.at.a1());
+    if c.style != 0 {
+        t = t.attr("s", c.style);
+    }
+    let t = t.attr_opt("t", kind).attr_opt("cm", c.cell_metadata).attr_opt("vm", c.value_metadata);
+    let t = if c.phonetic { t.attr("ph", 1) } else { t };
+    if c.formula.is_none() && v.is_none() && !matches!(c.value, CellValue::Inline(_)) {
+        t.empty();
+        return;
+    }
+    t.open();
+    if let Some(f) = &c.formula {
+        let kind = match f.kind {
+            FormulaKind::Normal => None,
+            FormulaKind::Shared => Some("shared"),
+            FormulaKind::Array => Some("array"),
+            FormulaKind::DataTable => Some("dataTable"),
+        };
+        let mut t = w.tag("f").attr_opt("t", kind).attr_opt("ref", f.range.map(|r| r.a1())).attr_opt("si", f.shared_index);
+        for (k, v) in f.attrs.iter().filter(|(k, _)| !matches!(k.as_str(), "t" | "ref" | "si") && craft_xml::is_name(k)) {
+            t = t.attr(k, v);
+        }
+        if f.text.is_empty() { t.empty() } else { t.text(&f.text) }
+    }
+    if let CellValue::Inline(s) = &c.value {
+        w.tree(&s.to_el("is"));
+    }
+    if let Some(v) = v {
+        w.tag("v").text(&v);
+    }
+    w.close();
 }
 
 /// Reads rows one at a time, remembering where the last one ended.
@@ -203,6 +387,7 @@ impl RowReader {
             collapsed: e.flag("collapsed", false),
             style: if e.flag("customFormat", false) { e.attr_u32("s") } else { None },
             cells: Vec::new(),
+            attrs: e.attrs.iter().filter(|(k, _)| !ROW_ATTRS.contains(&k.as_str())).cloned().collect(),
         };
         let mut next_col = 0u32;
         for c in e.children("c") {
@@ -383,5 +568,21 @@ mod tests {
         assert!(r.row(&craft_xml::El::new("row").with_attr("r", "1048577")).is_none());
         assert!(r.row(&craft_xml::El::new("row").with_attr("r", "0")).is_none());
         assert_eq!((r.rows, r.dropped), (4, 3));
+    }
+
+    #[test]
+    fn rows_write_back() {
+        let xml = r#"<row r="3" spans="1:9" ht="20" customHeight="1" s="4" customFormat="1" outlineLevel="2" collapsed="1" hidden="1" thickBot="1"><c r="B3" s="2" t="s"><v>7</v></c><c r="C3"><f t="shared" ref="C3:C9" si="0" aca="1">A1*2</f><v>4</v></c><c r="D3"><f t="shared" si="0"/><v>0.1</v></c><c r="E3" t="e"><v>#SPILL!</v></c><c r="G3" t="b"><v>0</v></c><c r="H3" t="inlineStr"><is><t xml:space="preserve">in_x000A_line </t></is></c><c r="J3" t="str"><f>"a"&amp;"b"</f><v>a_x0009_b</v></c><c r="K3" t="d"><v>2024-01-01</v></c><c r="L3" s="1" cm="1" vm="2" ph="1"/></row>"#;
+        let read = |xml: &str| RowReader::default().row(&craft_xml::Options::local().parse(xml.as_bytes()).unwrap_or_default()).unwrap_or_default();
+        let row = read(xml);
+        let mut w = Writer::new();
+        write_row(&mut w, &row);
+        let out = w.finish();
+        assert!(out.starts_with(r#"<row r="3" s="4" customFormat="1" ht="20" customHeight="1" hidden="1" outlineLevel="2" collapsed="1" thickBot="1"><c r="B3" s="2" t="s"><v>7</v></c><c r="C3"><f t="shared" ref="C3:C9" si="0" aca="1">A1*2</f>"#), "{out}");
+        assert_eq!(read(&out), row);
+        let empty = Row { index: 0, ..Row::default() };
+        let mut w = Writer::new();
+        write_row(&mut w, &empty);
+        assert_eq!(w.finish(), r#"<row r="1"/>"#);
     }
 }

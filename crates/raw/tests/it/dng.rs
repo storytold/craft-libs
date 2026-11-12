@@ -62,6 +62,7 @@ fn synthetic(w: usize, h: usize, cfa: Option<Cfa>, cpp: usize) -> RawImage {
         opcodes: OpcodeLists::default(),
         camera,
         cinema: Default::default(),
+        lens_metadata: Default::default(),
     }
 }
 

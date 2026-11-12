@@ -191,6 +191,9 @@ fn backslash_zip_entry_names_are_found() {
     assert_eq!(p.canonical("docprops/core.xml"), Some("docProps/core.xml"));
     let mut lazy = LazyPackage::open(&z, &LIMITS).unwrap();
     assert_eq!(lazy.names(), ["docprops/core.xml", "ppt/slides/slide1.xml"]);
+    assert_eq!(lazy.canonical("ppt/slides/slide1.xml").as_deref(), Some("PPT/Slides/Slide1.xml"));
+    assert_eq!(lazy.canonical("/DOCPROPS/core.xml").as_deref(), Some("docProps/core.xml"));
+    assert_eq!(lazy.canonical("nothing"), None);
     assert_eq!(lazy.read("PPT/slides/slide1.xml").unwrap().as_deref(), Some(&b"<a/>"[..]));
 }
 

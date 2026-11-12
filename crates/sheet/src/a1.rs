@@ -66,8 +66,9 @@ impl std::fmt::Display for CellRef {
     }
 }
 
-/// A rectangle of cells, both corners included; `first` is the top left one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// A rectangle of cells, both corners included; `first` is the top left one. The default is
+/// `A1`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Range {
     pub first: CellRef,
     pub last: CellRef,
