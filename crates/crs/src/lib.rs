@@ -48,18 +48,21 @@ pub enum Error {
 }
 
 /// What a setting holds.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     /// An attribute's value, or the text of an element without child elements.
     Text(String),
-    /// The items of an `rdf:Seq`: a tone curve's points, one `"x, y"` each.
+    /// The items of an `rdf:Seq` that are all plain text: a tone curve's points, one `"x, y"`
+    /// each.
     Seq(Vec<String>),
-    /// An element with other child elements (masks, looks, lens profiles): not read.
-    Structured,
+    /// Any other element with child elements (masks and local corrections, looks, lens
+    /// profiles): the `crs:` element itself, its names with the prefixes of [`CANONICAL`],
+    /// for the caller to read. [`Settings::to_xmp`] writes it back as it is.
+    Structured(El),
 }
 
 /// One `crs:` setting.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Setting {
     /// The name without its prefix: `Exposure2012`, `ToneCurvePV2012`.
     pub name: String,
@@ -69,7 +72,7 @@ pub struct Setting {
 /// The `crs:` settings of a packet, in file order: for each `rdf:Description`, its attributes
 /// and then its child elements. A name may occur more than once; a reader applying settings in
 /// order lets the last win.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Settings {
     pub entries: Vec<Setting>,
 }
@@ -108,9 +111,20 @@ impl Settings {
 
     /// The `crs:` settings of a parsed packet whose names carry the prefixes of [`CANONICAL`]
     /// (as [`packet`] returns it). `root` may be `x:xmpmeta`, `rdf:RDF` or anything around them.
+    /// Settings are read from every `rdf:Description` that is not inside a `crs:` element: one
+    /// inside belongs to that setting's structure.
     pub fn from_packet(root: &El) -> Settings {
         let mut entries = Vec::new();
-        for desc in std::iter::once(root).chain(root.descendants()).filter(|e| e.name == "rdf:Description") {
+        // Iterative, so a hand-built tree of any depth is walked without recursion.
+        let mut descriptions = Vec::new();
+        let mut open = vec![root];
+        while let Some(el) = open.pop() {
+            if el.name == "rdf:Description" {
+                descriptions.push(el);
+            }
+            open.extend(el.elements().filter(|c| !c.name.starts_with("crs:")).collect::<Vec<_>>().into_iter().rev());
+        }
+        for desc in descriptions {
             for (name, value) in &desc.attrs {
                 if let Some(name) = name.strip_prefix("crs:") {
                     entries.push(Setting { name: name.to_string(), value: Value::Text(value.clone()) });
@@ -118,9 +132,13 @@ impl Settings {
             }
             for child in desc.elements() {
                 let Some(name) = child.name.strip_prefix("crs:") else { continue };
-                let value = match child.child("rdf:Seq") {
-                    Some(seq) => Value::Seq(seq.elements().filter(|li| li.local() == "li").map(|li| li.text().into_owned()).collect()),
-                    None if child.elements().next().is_some() => Value::Structured,
+                let plain_seq = child.child("rdf:Seq").filter(|seq| {
+                    child.elements().count() == 1
+                        && seq.elements().all(|li| li.name == "rdf:li" && li.attrs.is_empty() && li.elements().next().is_none())
+                });
+                let value = match plain_seq {
+                    Some(seq) => Value::Seq(seq.elements().map(|li| li.text().into_owned()).collect()),
+                    None if child.elements().next().is_some() => Value::Structured(child.clone()),
                     None => Value::Text(child.text().into_owned()),
                 };
                 entries.push(Setting { name: name.to_string(), value });
@@ -192,8 +210,9 @@ impl Settings {
 
     /// Writes the settings as a Camera Raw settings file, naming `toolkit` as the application
     /// that wrote it: text settings as attributes of one `rdf:Description`, sequences as its
-    /// child elements, each in the order given. [`Value::Structured`] entries and names that
-    /// are not XML names are left out.
+    /// child elements, each in the order given, then structures as they are. Names that are
+    /// not XML names are left out, as is a structure whose element is not the `crs:` element
+    /// of that name.
     pub fn to_xmp(&self, toolkit: &str) -> String {
         let named = |s: &&Setting| craft_xml::is_name(&s.name) && !s.name.contains(':');
         let mut out = format!(
@@ -213,6 +232,15 @@ impl Settings {
                     out.push_str(&format!("     <rdf:li>{}</rdf:li>\n", craft_xml::esc(item)));
                 }
                 out.push_str(&format!("    </rdf:Seq>\n   </crs:{}>\n", s.name));
+            }
+        }
+        for s in self.entries.iter().filter(named) {
+            if let Value::Structured(el) = &s.value
+                && el.name.strip_prefix("crs:") == Some(s.name.as_str())
+            {
+                out.push_str("   ");
+                el.write_xml(&mut out);
+                out.push('\n');
             }
         }
         out.push_str("  </rdf:Description>\n </rdf:RDF>\n</x:xmpmeta>\n");

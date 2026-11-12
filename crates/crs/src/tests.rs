@@ -1,4 +1,5 @@
 use super::*;
+use craft_xml::El;
 
 /// A hand-written settings file laid out as Photoshop 26's Camera Raw Filter saves one (the
 /// field set and order follow Camera Raw 18; the values are synthetic), plus element-form
@@ -70,10 +71,12 @@ fn structures_other_prefixes_and_other_namespaces() {
     );
     let s = Settings::parse(xmp.as_bytes()).unwrap();
     let names: Vec<&str> = s.entries.iter().map(|e| e.name.as_str()).collect();
-    // A nested description's own crs: attributes are settings of that description.
-    assert_eq!(names, ["Texture", "Look", "MaskGroupBasedCorrections", "Empty", "Name", "What"]);
-    assert_eq!(s.get("Look"), Some(&Value::Structured));
-    assert_eq!(s.get("MaskGroupBasedCorrections"), Some(&Value::Seq(vec![String::new()])));
+    // A description inside a structure belongs to the structure, not to the settings.
+    assert_eq!(names, ["Texture", "Look", "MaskGroupBasedCorrections", "Empty"]);
+    let Some(Value::Structured(look)) = s.get("Look") else { panic!("not a structure") };
+    assert_eq!(look.path(&["rdf:Description"]).and_then(|d| d.attr("crs:Name")), Some("Adobe Color"), "names carry the canonical prefixes");
+    let Some(Value::Structured(masks)) = s.get("MaskGroupBasedCorrections") else { panic!("a sequence of descriptions is a structure") };
+    assert_eq!(masks.path(&["rdf:Seq", "rdf:li", "rdf:Description"]).and_then(|d| d.attr("crs:What")), Some("Correction"));
     assert_eq!(s.get("Empty"), Some(&Value::Text(String::new())));
     assert_eq!(s.get("format"), None);
     // The last value of a repeated name wins.
@@ -182,7 +185,7 @@ fn a_written_file_reads_back_the_same() {
     assert_eq!(back.crop(), CropState::Crop(Crop { top: 0.125, left: 0.25, bottom: 0.875, right: 0.5 }));
     // What cannot be written is left out: a structure, and a name that is not an XML name.
     let mut odd = Settings::default();
-    odd.entries.push(Setting { name: "Look".into(), value: Value::Structured });
+    odd.entries.push(Setting { name: "Look".into(), value: Value::Structured(El::new("crs:Other")) });
     odd.push("bad name=\"x\"", "1");
     odd.push("crs:Prefixed", "1");
     odd.push("Texture", "1");
@@ -276,4 +279,25 @@ fn crops_follow_the_orientation() {
     assert_eq!(Crop { top: 0.5, left: 0.5, bottom: 0.5001, right: 0.5001 }.pixels(10, 10), Some((5, 5, 6, 6)), "at least a pixel");
     assert_eq!(Crop { top: 0.999, left: 0.999, bottom: 1.0, right: 1.0 }.pixels(10, 10), Some((9, 9, 10, 10)), "inside the frame");
     assert_eq!(c.pixels(0, 10), None);
+}
+
+#[test]
+fn structures_are_written_back_as_they_were_read() {
+    // A local correction as Lightroom writes it, with a nested sequence and a text property.
+    let correction = format!(
+        "<x:xmpmeta xmlns:x=\"{META_NS}\"><rdf:RDF xmlns:rdf=\"{RDF_NS}\"><rdf:Description xmlns:crs=\"{CRS_NS}\" crs:Exposure2012=\"+0.50\">\
+         <crs:GradientBasedCorrections><rdf:Seq><rdf:li><rdf:Description crs:What=\"Correction\" crs:LocalExposure2012=\"0.25\">\
+         <crs:CorrectionMasks><rdf:Seq><rdf:li crs:What=\"Mask/Gradient\" crs:ZeroX=\"0.1\" crs:FullX=\"0.9\"/></rdf:Seq></crs:CorrectionMasks>\
+         <crs:CorrectionName>Sky &amp; sea</crs:CorrectionName></rdf:Description></rdf:li></rdf:Seq></crs:GradientBasedCorrections>\
+         </rdf:Description></rdf:RDF></x:xmpmeta>"
+    );
+    let s = Settings::parse(correction.as_bytes()).unwrap();
+    let Some(Value::Structured(el)) = s.get("GradientBasedCorrections") else { panic!("not a structure") };
+    let d = el.path(&["rdf:Seq", "rdf:li", "rdf:Description"]).unwrap();
+    assert_eq!((d.attr("crs:LocalExposure2012"), d.child_text("crs:CorrectionName").as_deref()), (Some("0.25"), Some("Sky & sea")));
+    let mask = d.path(&["crs:CorrectionMasks", "rdf:Seq", "rdf:li"]).unwrap();
+    assert_eq!((mask.attr("crs:What"), mask.attr("crs:ZeroX")), (Some("Mask/Gradient"), Some("0.1")));
+    assert_eq!(s.entries.len(), 2, "the correction's own properties are not settings");
+    let back = Settings::parse(s.to_xmp("Example").as_bytes()).unwrap();
+    assert_eq!(back, s);
 }
