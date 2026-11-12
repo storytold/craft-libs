@@ -1,11 +1,17 @@
-//! WordCraft DOCX reader and writer (ECMA-376 / ISO/IEC 29500 WordprocessingML).
+//! DOCX reader and writer (ECMA-376 / ISO/IEC 29500 WordprocessingML).
 //!
-//! [`read`] turns a `.docx` package into a [`wordcraft_doc::Document`]; [`write`] does the
+//! [`read`] turns a `.docx` package into a [`craft_wordmodel::Document`]; [`write`] does the
 //! reverse. Both are written from the public specification. The reader is lenient (unknown
 //! markup is skipped, bad numbers fall back to defaults) and bounded (zip entry sizes, total
 //! decompressed size, XML depth and element counts are capped), so hostile input yields an
 //! error or a best-effort document, never a panic.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+// The code came from an app whose lints allow this.
+#![allow(clippy::type_complexity)]
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeExamples;
 
 mod bibliography;
 mod chart_spec;
@@ -43,7 +49,7 @@ pub const MAX_XML_FILE: usize = 1 << 30;
 /// Read a Word XML file (`.xml`): a Word XML Document (Flat OPC, the whole package in one XML
 /// file) or a Word 2003 XML Document (WordprocessingML 2003), told apart by the root element.
 /// Any other XML gives [`DocxError::NotWordXml`].
-pub fn read_xml(bytes: &[u8]) -> Result<wordcraft_doc::Document, DocxError> {
+pub fn read_xml(bytes: &[u8]) -> Result<craft_wordmodel::Document, DocxError> {
     if bytes.len() > MAX_XML_FILE {
         return Err(DocxError::Limit(format!("XML file of {} bytes", bytes.len())));
     }
@@ -67,11 +73,8 @@ pub fn package_title<R: std::io::Read>(package: R, max_part: u64) -> Option<Stri
     if bytes.len() as u64 > MAX_PACKAGE {
         return None;
     }
-    wordcraft_doc::zip_guard::check(&bytes, package::MAX_ENTRIES as u64).ok()?;
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).ok()?;
-    let part = zip.by_name("docProps/core.xml").ok()?;
-    let mut xml = Vec::new();
-    part.take(max_part).read_to_end(&mut xml).ok()?;
+    let mut pkg = craft_opc::LazyPackage::open(&bytes, &package::LIMITS).ok()?;
+    let xml = pkg.read_limited("docProps/core.xml", max_part).ok()??;
     let root = xml::parse(&xml).ok()?;
     let title = root.child("dc:title")?.text();
     let title = title.trim();
@@ -91,14 +94,14 @@ pub(crate) const CANVAS_SPIN_EXT: &str = "urn:wordcraft:canvas-xfrm";
 /// Read a package that may be password-protected ([`is_encrypted`]): it is decrypted with
 /// `password` first. An encrypted package without a password gives
 /// [`DocxError::PasswordRequired`]; a wrong one, [`DocxError::WrongPassword`].
-pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<wordcraft_doc::Document, DocxError> {
+pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<craft_wordmodel::Document, DocxError> {
     read_with(bytes, &ReadOptions { password, ..Default::default() })
 }
 
 /// Read a package with options: the password of an encrypted one ([`read_with_password`]) and
 /// an importer for `w:altChunk` content in formats other than WordprocessingML (see
 /// [`ChunkImporter`]).
-pub fn read_with(bytes: &[u8], opts: &ReadOptions) -> Result<wordcraft_doc::Document, DocxError> {
+pub fn read_with(bytes: &[u8], opts: &ReadOptions) -> Result<craft_wordmodel::Document, DocxError> {
     if is_encrypted(bytes) {
         let package = zeroize::Zeroizing::new(decrypt(bytes, opts.password)?);
         return read::read_package(&package, opts.chunks);

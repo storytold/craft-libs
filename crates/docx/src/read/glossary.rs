@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use wordcraft_doc::{Blocks, BuildingBlock};
+use craft_wordmodel::{Blocks, BuildingBlock};
 
 use super::Reader;
 use super::story::StoryCtx;

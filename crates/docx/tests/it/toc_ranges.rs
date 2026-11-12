@@ -1,7 +1,7 @@
 //! Original field-boundary fixtures from the public OOXML complex-field contract.
 use std::io::Write;
 
-use wordcraft_doc::{InlineObject, Path, StoryRef};
+use craft_wordmodel::{InlineObject, Path, StoryRef};
 
 fn package(body: &str) -> Vec<u8> {
     let xml = format!(r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{body}</w:body></w:document>"#);
@@ -41,7 +41,7 @@ fn unstyled_toc_keeps_range_nested_field_and_formatting_through_two_edited_saves
             r#"<w:p><w:r><w:t>Before.</w:t></w:r></w:p><w:p>{}{content}{END}</w:p><w:p><w:r><w:t>After.</w:t></w:r></w:p>"#,
             start(r#"TOC \o "1-2" \h"#)
         );
-        let mut doc = wordcraft_docx::read(&package(&body)).unwrap();
+        let mut doc = craft_docx::read(&package(&body)).unwrap();
         for cycle in 0..=2 {
             let ranges = doc.field_ranges(StoryRef::Body);
             assert_eq!(ranges.len(), 1);
@@ -52,7 +52,7 @@ fn unstyled_toc_keeps_range_nested_field_and_formatting_through_two_edited_saves
             assert_eq!(ranges[0].end.path, Path::top(if split { 2 } else { 1 }));
             let entry = doc.body[1].as_para().unwrap();
             assert_eq!(entry.plain_text(), "Scope\t7");
-            let props = entry.props_of_char(wordcraft_doc::para::OBJ.len_utf8());
+            let props = entry.props_of_char(craft_wordmodel::para::OBJ.len_utf8());
             assert_eq!(props.bold, Some(true));
             assert_eq!(props.italic, Some(true));
             assert_eq!(props.link.as_deref(), Some("#Original"));
@@ -64,7 +64,7 @@ fn unstyled_toc_keeps_range_nested_field_and_formatting_through_two_edited_saves
                 break;
             }
             doc.para_mut(StoryRef::Body, &Path::top(0)).unwrap().insert_text(0, "Independent edit. ", &Default::default()).unwrap();
-            doc = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+            doc = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
         }
     }
 }
@@ -80,7 +80,7 @@ fn styled_heading_does_not_expand_partial_custom_or_short_ranges() {
             r#"{heading}<w:p><w:pPr><w:pStyle w:val="{style}"/></w:pPr><w:r><w:t>{prefix}</w:t></w:r>{}<w:r><w:t>Scope</w:t></w:r>{END}<w:r><w:t>{suffix}</w:t></w:r></w:p>{following}<w:p><w:r><w:t>Body.</w:t></w:r></w:p>"#,
             start("TOC")
         );
-        let mut doc = wordcraft_docx::read(&package(&body)).unwrap();
+        let mut doc = craft_docx::read(&package(&body)).unwrap();
         let text = doc.plain_text(StoryRef::Body);
         for cycle in 0..=2 {
             let ranges = doc.field_ranges(StoryRef::Body);
@@ -88,12 +88,12 @@ fn styled_heading_does_not_expand_partial_custom_or_short_ranges() {
             assert_eq!(ranges[0].start.path, Path::top(1));
             assert_eq!(ranges[0].end.path, Path::top(1));
             assert_eq!(ranges[0].start.off, prefix.len());
-            assert_eq!(ranges[0].end.off, prefix.len() + wordcraft_doc::para::OBJ.len_utf8() + "Scope".len());
+            assert_eq!(ranges[0].end.off, prefix.len() + craft_wordmodel::para::OBJ.len_utf8() + "Scope".len());
             assert_eq!(doc.plain_text(StoryRef::Body), text);
             if cycle == 2 {
                 break;
             }
-            doc = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+            doc = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
         }
     }
 }
@@ -104,7 +104,7 @@ fn simple_lowercase_toc_and_multiple_tocs_keep_their_own_ranges() {
         r#"<w:p><w:fldSimple w:instr="toc \h" w:fldLock="true">{ENTRY}{PAGE}</w:hyperlink></w:fldSimple><w:r><w:t>Between.</w:t></w:r>{}<w:r><w:t>Other result.</w:t></w:r>{END}<w:r><w:t>After.</w:t></w:r></w:p>"#,
         start(r#"TOC \o "1-1""#)
     );
-    let mut doc = wordcraft_docx::read(&package(&body)).unwrap();
+    let mut doc = craft_docx::read(&package(&body)).unwrap();
     for cycle in 0..=2 {
         let r = doc.field_ranges(StoryRef::Body);
         assert_eq!(r.len(), 2);
@@ -116,7 +116,7 @@ fn simple_lowercase_toc_and_multiple_tocs_keep_their_own_ranges() {
         if cycle == 2 {
             break;
         }
-        doc = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+        doc = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
     }
 }
 
@@ -126,17 +126,17 @@ fn toc_in_table_cell_does_not_capture_the_next_cell() {
         r#"<w:tbl><w:tr><w:tc><w:p>{}{ENTRY}{PAGE}</w:hyperlink>{END}</w:p></w:tc><w:tc><w:p><w:r><w:t>Other cell.</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
         start("TOC")
     );
-    let mut doc = wordcraft_docx::read(&package(&body)).unwrap();
+    let mut doc = craft_docx::read(&package(&body)).unwrap();
     for cycle in 0..=2 {
         let ranges = doc.field_ranges(StoryRef::Body);
         assert_eq!(ranges.len(), 1);
-        assert_eq!(ranges[0].start.path, wordcraft_doc::Path(vec![0, 0, 0, 0]));
+        assert_eq!(ranges[0].start.path, craft_wordmodel::Path(vec![0, 0, 0, 0]));
         assert_eq!(ranges[0].end.path, ranges[0].start.path);
         assert_eq!(doc.body[0].as_table().unwrap().rows[0].cells[1].blocks[0].as_para().unwrap().plain_text(), "Other cell.");
         if cycle == 2 {
             break;
         }
-        doc = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+        doc = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
     }
 }
 
@@ -144,8 +144,8 @@ fn toc_in_table_cell_does_not_capture_the_next_cell() {
 fn missing_end_and_excessive_nesting_stay_bounded_and_save_balanced() {
     for (starts, ends) in [(1, 0), (40, 40)] {
         let body = format!("<w:p>{}<w:r><w:t>Visible result.</w:t></w:r>{}</w:p>", start("TOC").repeat(starts), END.repeat(ends));
-        let doc = wordcraft_docx::read(&package(&body)).unwrap();
-        let saved = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+        let doc = craft_docx::read(&package(&body)).unwrap();
+        let saved = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
         assert!(!saved.has_unbalanced_field_ranges());
         assert_eq!(saved.plain_text(StoryRef::Body), "Visible result.");
         assert!(saved.field_ranges(StoryRef::Body).len() <= 32);
@@ -159,8 +159,8 @@ fn section_break_keeps_an_explicit_range_and_toc_prefix_is_not_a_toc() {
         start("TOC"),
         start("TOC_OTHER")
     );
-    let doc = wordcraft_docx::read(&package(&body)).unwrap();
-    for d in [&doc, &wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap()] {
+    let doc = craft_docx::read(&package(&body)).unwrap();
+    for d in [&doc, &craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap()] {
         let ranges = d.field_ranges(StoryRef::Body);
         assert_eq!(ranges.len(), 1);
         assert_eq!(ranges[0].start.path, Path::top(1));
@@ -177,8 +177,8 @@ fn section_break_keeps_an_explicit_range_and_toc_prefix_is_not_a_toc() {
 }
 
 /// The paragraph's characters other than objects, each with the link it carries.
-fn linked_chars(p: &wordcraft_doc::Paragraph) -> Vec<(char, Option<String>)> {
-    p.text.char_indices().filter(|(_, c)| *c != wordcraft_doc::para::OBJ).map(|(i, c)| (c, p.props_of_char(i).link.clone())).collect()
+fn linked_chars(p: &craft_wordmodel::Paragraph) -> Vec<(char, Option<String>)> {
+    p.text.char_indices().filter(|(_, c)| *c != craft_wordmodel::para::OBJ).map(|(i, c)| (c, p.props_of_char(i).link.clone())).collect()
 }
 
 /// #2174: Word for the web writes each table of contents entry as a `HYPERLINK` complex field
@@ -201,8 +201,8 @@ fn hyperlink_field_entries_read_as_linked_text_with_their_page_field() {
         entry("_Toc1", "Intro", "1"),
         entry("_Toc2", "Title 2", "2")
     );
-    let doc = wordcraft_docx::read(&package(&body)).unwrap();
-    let saved = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+    let doc = craft_docx::read(&package(&body)).unwrap();
+    let saved = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
     for d in [&doc, &saved] {
         for (i, anchor, text, page) in [(0, "_Toc1", "Intro", "1"), (1, "_Toc2", "Title 2", "2")] {
             let p = d.body[i].as_para().unwrap();
@@ -235,7 +235,7 @@ fn hyperlink_field_targets_follow_the_field_code() {
         (complex("HYPERLINK"), None),
         (complex(r#"HYPERLINKS "https://example.org/""#), None),
     ] {
-        let doc = wordcraft_docx::read(&package(&para)).unwrap();
+        let doc = craft_docx::read(&package(&para)).unwrap();
         let p = doc.body[0].as_para().unwrap();
         assert_eq!(p.plain_text(), "Go");
         match link {

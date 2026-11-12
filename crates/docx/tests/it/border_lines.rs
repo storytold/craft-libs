@@ -4,7 +4,7 @@
 
 use std::io::{Read, Write};
 
-use wordcraft_doc::props::BorderStyle;
+use craft_wordmodel::props::BorderStyle;
 
 const LINES: [(&str, BorderStyle); 9] = [
     ("thinThickSmallGap", BorderStyle::ThinThickSmallGap),
@@ -50,11 +50,11 @@ fn compound_paragraph_borders_are_written_back_as_read() {
             format!(r#"<w:p><w:pPr><w:pBdr>{}{}</w:pBdr></w:pPr><w:r><w:t>{val}</w:t></w:r></w:p>"#, side("top", val), side("bottom", val))
         })
         .collect();
-    let d = wordcraft_docx::read(&docx(&body)).unwrap();
+    let d = craft_docx::read(&docx(&body)).unwrap();
     let got: Vec<Option<BorderStyle>> =
         d.body.iter().filter_map(|b| b.as_para()).map(|p| p.props.borders.and_then(|b| b.top).map(|t| t.style)).collect();
     assert_eq!(got, LINES.iter().map(|(_, s)| Some(*s)).collect::<Vec<_>>());
-    let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
+    let xml = document_xml(&craft_docx::write(&d).unwrap());
     for (val, _) in LINES {
         assert_eq!(xml.matches(&format!(r#"w:val="{val}""#)).count(), 2, "{val}: {xml}");
     }
@@ -69,7 +69,7 @@ fn compound_cell_and_page_borders_are_written_back_as_read() {
         side("left", "thinThickSmallGap"),
         side("right", "thinThickThinMediumGap")
     );
-    let xml = document_xml(&wordcraft_docx::write(&wordcraft_docx::read(&docx(&body)).unwrap()).unwrap());
+    let xml = document_xml(&craft_docx::write(&craft_docx::read(&docx(&body)).unwrap()).unwrap());
     for val in ["thickThinLargeGap", "thinThickSmallGap", "thinThickThinMediumGap"] {
         assert_eq!(xml.matches(&format!(r#"w:val="{val}""#)).count(), 1, "{val}: {xml}");
     }

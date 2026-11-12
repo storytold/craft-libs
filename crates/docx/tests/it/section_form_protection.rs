@@ -31,15 +31,15 @@ fn form_protection_round_trips_in_schema_order() {
         r#"<w:p><w:pPr><w:sectPr><w:formProt w:val="0"/></w:sectPr></w:pPr><w:r><w:t>B</w:t></w:r></w:p>"#,
         r#"<w:p><w:r><w:t>C</w:t></w:r></w:p><w:sectPr/>"#
     );
-    let d = wordcraft_docx::read(&docx(body)).unwrap();
+    let d = craft_docx::read(&docx(body)).unwrap();
     let flags: Vec<Option<bool>> = d.sections().iter().map(|(_, s)| s.form_prot).collect();
     assert_eq!(flags, vec![Some(true), Some(false), None]);
-    let out = wordcraft_docx::write(&d).unwrap();
+    let out = craft_docx::write(&d).unwrap();
     let xml = document_xml(&out);
     // Before w:titlePg in CT_SectPr's sequence; a section that never said it writes none.
     assert!(xml.contains(r#"<w:formProt/><w:titlePg/>"#), "{xml}");
     assert!(xml.contains(r#"<w:formProt w:val="0"/>"#), "{xml}");
     assert_eq!(xml.matches("w:formProt").count(), 2);
-    let again: Vec<Option<bool>> = wordcraft_docx::read(&out).unwrap().sections().iter().map(|(_, s)| s.form_prot).collect();
+    let again: Vec<Option<bool>> = craft_docx::read(&out).unwrap().sections().iter().map(|(_, s)| s.form_prot).collect();
     assert_eq!(again, flags);
 }

@@ -4,9 +4,9 @@
 
 use std::io::{Read, Write};
 
-use wordcraft_doc::para::ShapeKind;
-use wordcraft_doc::props::{TextVert, VAlign};
-use wordcraft_doc::{Document, InlineObject, PartKind, TextBody, para_block};
+use craft_wordmodel::para::ShapeKind;
+use craft_wordmodel::props::{TextVert, VAlign};
+use craft_wordmodel::{Document, InlineObject, PartKind, TextBody, para_block};
 
 fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -34,7 +34,7 @@ fn boxes(d: &Document) -> Vec<u32> {
 }
 
 fn text_box(d: &mut Document, text: &str, body: TextBody) -> InlineObject {
-    let id = d.add_part(PartKind::TextBox, vec![para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))]);
+    let id = d.add_part(PartKind::TextBox, vec![para_block(craft_wordmodel::Paragraph::with_text(text, Default::default()))]);
     d.parts.get_mut(&id).unwrap().body = body;
     InlineObject::Shape {
         kind: ShapeKind::TextBox,
@@ -58,20 +58,20 @@ fn direction_alignment_and_links_round_trip() {
     let b = text_box(&mut d, "", TextBody::default());
     let c = text_box(&mut d, "", TextBody { vert: TextVert::Stacked, anchor: VAlign::Bottom, ..Default::default() });
     for (i, o) in [a, b, c].into_iter().enumerate() {
-        d.insert_object(&wordcraft_doc::Pos::body(i, 1), o, &Default::default()).unwrap();
+        d.insert_object(&craft_wordmodel::Pos::body(i, 1), o, &Default::default()).unwrap();
     }
     let ids = boxes(&d);
     d.parts.get_mut(&ids[0]).unwrap().body.next = Some(ids[1]);
     d.parts.get_mut(&ids[1]).unwrap().body.next = Some(ids[2]);
-    let bytes = wordcraft_docx::write(&d).unwrap();
+    let bytes = craft_docx::write(&d).unwrap();
     let xml = document_xml(&bytes);
     assert!(xml.contains(r#"<wps:txbx id="1">"#), "{xml}");
     assert!(xml.contains(r#"<wps:linkedTxbx id="1" seq="1"/>"#) && xml.contains(r#"<wps:linkedTxbx id="1" seq="2"/>"#));
     assert!(xml.contains(r#"<wps:bodyPr vert="vert" anchor="ctr"/>"#) && xml.contains(r#"<wps:bodyPr vert="wordArtVert" anchor="b"/>"#));
-    let r = wordcraft_docx::read(&bytes).unwrap();
+    let r = craft_docx::read(&bytes).unwrap();
     let got = boxes(&r);
     assert_eq!(r.text_box_chains(), vec![got.clone()]);
-    assert_eq!(r.plain_text(wordcraft_doc::StoryRef::Part(got[0])), "Flows on");
+    assert_eq!(r.plain_text(craft_wordmodel::StoryRef::Part(got[0])), "Flows on");
     let body = |id: u32| r.parts.get(&id).unwrap().body;
     assert_eq!((body(got[0]).vert, body(got[0]).anchor), (TextVert::Vert, VAlign::Center));
     assert_eq!((body(got[2]).vert, body(got[2]).anchor), (TextVert::Stacked, VAlign::Bottom));
@@ -102,7 +102,7 @@ fn hostile_links_read_without_chains_running_wild() {
     let doc = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><w:body>{body}</w:body></w:document>"#
     );
-    let r = wordcraft_docx::read(&zip(&[("_rels/.rels", root.as_bytes()), ("word/document.xml", doc.as_bytes())])).unwrap();
+    let r = craft_docx::read(&zip(&[("_rels/.rels", root.as_bytes()), ("word/document.xml", doc.as_bytes())])).unwrap();
     let got = boxes(&r);
     assert_eq!(got.len(), 4, "every box with a story is read (a bad seq links nothing)");
     assert_eq!(r.text_box_chains(), vec![vec![got[0], got[1]]], "one chain: the first box and the first seq 1");
@@ -147,19 +147,19 @@ fn vml_text_boxes_keep_their_inset_fit_and_anchor() {
         r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><w:body>{body}</w:body></w:document>"#
     );
     let rels = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
-    let d = wordcraft_docx::read(&zip(&[("_rels/.rels", rels), ("word/document.xml", doc.as_bytes())])).unwrap();
+    let d = craft_docx::read(&zip(&[("_rels/.rels", rels), ("word/document.xml", doc.as_bytes())])).unwrap();
     let bodies: Vec<TextBody> = boxes(&d).iter().map(|id| d.parts[id].body).collect();
     assert_eq!(bodies.len(), 12);
     assert_eq!(bodies[0].inset, Some([0, 0, 0, 0]));
     assert_eq!((bodies[1].inset, bodies[1].auto_fit, bodies[1].anchor), (Some([36_000, 45_720, 25_400, 45_720]), true, VAlign::Center));
     assert_eq!(bodies[2], TextBody::default());
-    assert_eq!((bodies[3].inset, bodies[3].anchor), (Some([12_700, 45_720, 0, wordcraft_doc::MAX_TEXT_BOX_INSET]), VAlign::Bottom));
+    assert_eq!((bodies[3].inset, bodies[3].anchor), (Some([12_700, 45_720, 0, craft_wordmodel::MAX_TEXT_BOX_INSET]), VAlign::Bottom));
     assert_eq!(bodies[4].inset, None);
     assert_eq!(bodies[5].inset, Some([0, 0, 0, 0]));
     let verts: Vec<TextVert> = bodies[6..].iter().map(|b| b.vert).collect();
     assert_eq!(verts, [TextVert::Vert, TextVert::Vert270, TextVert::Vert, TextVert::Vert270, TextVert::Vert270, TextVert::Horz]);
     // Saved and read again, they stay.
-    let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    let back = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
     let again: Vec<TextBody> = boxes(&back).iter().map(|id| back.parts[id].body).collect();
     assert_eq!(again, bodies);
 }
@@ -198,19 +198,19 @@ fn hidden_drawings_stay_hidden() {
         out
     };
     let want = [true, false, true, true, false, true, false];
-    let d = wordcraft_docx::read(&zip(&[("_rels/.rels", rels), ("word/document.xml", doc.as_bytes())])).unwrap();
+    let d = craft_docx::read(&zip(&[("_rels/.rels", rels), ("word/document.xml", doc.as_bytes())])).unwrap();
     assert_eq!(hidden(&d), want);
-    let saved = wordcraft_docx::write(&d).unwrap();
+    let saved = craft_docx::write(&d).unwrap();
     let xml = document_xml(&saved);
     let marked =
         |tag: &str| xml.split(&format!("<{tag} ")).skip(1).filter(|a| a.split('>').next().is_some_and(|a| a.contains(r#"hidden="1""#))).count();
     assert_eq!((marked("wp:docPr"), marked("wps:cNvPr")), (3, 1), "{xml}");
-    assert_eq!(hidden(&wordcraft_docx::read(&saved).unwrap()), want);
+    assert_eq!(hidden(&craft_docx::read(&saved).unwrap()), want);
 }
 
 #[test]
 fn picture_in_box_keeps_its_frame() {
-    use wordcraft_doc::{Paragraph, Pos, StoryRef};
+    use craft_wordmodel::{Paragraph, Pos, StoryRef};
 
     let mut d = Document::from_text("Anchor");
     let body = TextBody { anchor: VAlign::Center, inset: Some([0; 4]), ..Default::default() };
@@ -234,16 +234,16 @@ fn picture_in_box_keeps_its_frame() {
     d.parts.get_mut(&id).unwrap().blocks.push(para_block(p));
     d.insert_object(&Pos::body(0, 0), outer, &Default::default()).unwrap();
 
-    let read = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    let read = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
     let ids = boxes(&read);
     assert_eq!(ids.len(), 1, "a nested picture must not replace its text box");
     let id = ids[0];
     assert_eq!(read.parts[&id].body, body);
     assert!(read.plain_text(StoryRef::Part(id)).starts_with("Label"));
-    let p = read.para(StoryRef::Part(id), &wordcraft_doc::Path::top(1)).unwrap();
+    let p = read.para(StoryRef::Part(id), &craft_wordmodel::Path::top(1)).unwrap();
     assert!(matches!(&p.objects[0], InlineObject::Image { w, h, alt, .. }
         if *w == 90.0 && *h == 36.0 && alt == "Synthetic marker"));
-    let p = read.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    let p = read.para(StoryRef::Body, &craft_wordmodel::Path::top(0)).unwrap();
     assert!(matches!(&p.objects[0], InlineObject::Shape { w, h, .. } if *w == 144.0 && *h == 72.0));
 }
 
@@ -253,9 +253,9 @@ fn story_shared_by_many_shapes_is_written_once() {
     let text = "abcdefghij".repeat(5_000);
     let o = text_box(&mut d, &text, TextBody::default());
     for _ in 0..500 {
-        d.insert_object(&wordcraft_doc::Pos::body(0, 0), o.clone(), &Default::default()).unwrap();
+        d.insert_object(&craft_wordmodel::Pos::body(0, 0), o.clone(), &Default::default()).unwrap();
     }
-    let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
+    let xml = document_xml(&craft_docx::write(&d).unwrap());
     assert!(xml.len() < 2_000_000, "document.xml is {} bytes", xml.len());
     assert_eq!(xml.matches(text.as_str()).count(), 1);
 }

@@ -1,10 +1,10 @@
 //! The document default font size (`w:docDefaults/w:rPrDefault/w:rPr/w:sz`) across a save and
 //! reopen. An unset default is resolved as `DEFAULT_FONT_SIZE`; the writer must say so, because
 //! the reader reads an omitted size as 10 pt.
+use craft_wordmodel::Document;
+use craft_wordmodel::props::{CharProps, DEFAULT_FONT_SIZE};
 use std::io::{Read, Write};
 use std::sync::Arc;
-use wordcraft_doc::Document;
-use wordcraft_doc::props::{CharProps, DEFAULT_FONT_SIZE};
 fn resolved(d: &Document) -> f32 {
     d.styles.resolve_char(None, &CharProps::default()).size
 }
@@ -22,12 +22,12 @@ fn an_unset_default_size_keeps_its_effective_size_across_save_and_reopen() {
     let mut d = Document::new();
     Arc::make_mut(&mut d.styles).default_chr.size = None;
     assert_eq!(resolved(&d), DEFAULT_FONT_SIZE);
-    let bytes = wordcraft_docx::write(&d).unwrap();
+    let bytes = craft_docx::write(&d).unwrap();
     assert!(defaults(&styles_xml(&bytes)).contains(r#"<w:sz w:val="22"/>"#));
-    let reopened = wordcraft_docx::read(&bytes).unwrap();
+    let reopened = craft_docx::read(&bytes).unwrap();
     assert_eq!(resolved(&reopened), DEFAULT_FONT_SIZE);
     // Saving again changes nothing further.
-    let again = wordcraft_docx::read(&wordcraft_docx::write(&reopened).unwrap()).unwrap();
+    let again = craft_docx::read(&craft_docx::write(&reopened).unwrap()).unwrap();
     assert_eq!(resolved(&again), DEFAULT_FONT_SIZE);
 }
 #[test]
@@ -35,8 +35,8 @@ fn an_explicit_default_size_is_written_as_it_is() {
     for size in [8.0, 10.0, 11.0, 12.5, 18.0] {
         let mut d = Document::new();
         Arc::make_mut(&mut d.styles).default_chr.size = Some(size);
-        let bytes = wordcraft_docx::write(&d).unwrap();
-        assert_eq!(resolved(&wordcraft_docx::read(&bytes).unwrap()), size);
+        let bytes = craft_docx::write(&d).unwrap();
+        assert_eq!(resolved(&craft_docx::read(&bytes).unwrap()), size);
     }
 }
 #[test]
@@ -52,7 +52,7 @@ fn a_file_that_omits_the_default_size_is_still_read_as_ten_points() {
         zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
         zw.write_all(body.as_bytes()).unwrap();
     }
-    let d = wordcraft_docx::read(&zw.finish().unwrap().into_inner()).unwrap();
+    let d = craft_docx::read(&zw.finish().unwrap().into_inner()).unwrap();
     assert_eq!(d.styles.default_chr.size, Some(10.0));
 }
 #[test]
@@ -64,7 +64,7 @@ fn an_unset_default_size_does_not_take_a_styles_size() {
     if let Some(normal) = Arc::make_mut(&mut d.styles).get_mut("Normal") {
         normal.chr.size = Some(14.0);
     }
-    let reopened = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    let reopened = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
     assert_eq!(reopened.styles.default_chr.size, Some(DEFAULT_FONT_SIZE));
     assert_eq!(resolved(&reopened), resolved(&d));
 }

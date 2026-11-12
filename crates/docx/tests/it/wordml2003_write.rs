@@ -3,12 +3,12 @@
 
 use std::sync::Arc;
 
-use wordcraft_doc::numbering::ListKind;
-use wordcraft_doc::para::NoteKind;
-use wordcraft_doc::props::{Align, CharProps, NumRef, Rgb, TextColor};
-use wordcraft_doc::table::{Cell, Table};
-use wordcraft_doc::{Block, Comment, Document, InlineObject, Paragraph, PartKind, Revision, RevisionKind, para_block};
-use wordcraft_docx::{XmlKind, read_xml, sniff_xml, write_wordml2003};
+use craft_docx::{XmlKind, read_xml, sniff_xml, write_wordml2003};
+use craft_wordmodel::numbering::ListKind;
+use craft_wordmodel::para::NoteKind;
+use craft_wordmodel::props::{Align, CharProps, NumRef, Rgb, TextColor};
+use craft_wordmodel::table::{Cell, Table};
+use craft_wordmodel::{Block, Comment, Document, InlineObject, Paragraph, PartKind, Revision, RevisionKind, para_block};
 
 fn tiny_png() -> Vec<u8> {
     let img = image::RgbaImage::from_fn(3, 2, |x, y| image::Rgba([x as u8 * 80, y as u8 * 120, 200, 255]));
@@ -193,7 +193,7 @@ fn big_and_deep_documents_write() {
 /// `blacklevel`; transparency has no place on `v:imagedata` and is dropped.
 #[test]
 fn picture_brightness_and_contrast_round_trip() {
-    use wordcraft_doc::picfx::PicFx;
+    use craft_wordmodel::picfx::PicFx;
     let cases = [PicFx::new(70_000, -70_000, 0), PicFx::new(-30_000, 50_000, 40_000), PicFx::default()];
     let mut d = Document::new();
     let key = d.add_media(tiny_png(), "png");
@@ -276,5 +276,5 @@ fn headers_past_the_inlined_byte_budget_fail_the_export() {
     }
     d.body = blocks;
     let out = write_wordml2003(&d);
-    assert!(matches!(out, Err(wordcraft_docx::DocxError::Limit(_))), "expected a limit error, got {:?}", out.map(|x| x.len()));
+    assert!(matches!(out, Err(craft_docx::DocxError::Limit(_))), "expected a limit error, got {:?}", out.map(|x| x.len()));
 }

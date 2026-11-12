@@ -8,7 +8,7 @@ impl Writer<'_> {
         let inline = std::mem::take(&mut self.inline_controls);
         // A drop cap is a separate framed paragraph holding the first character.
         if let Some(lines) = p.props.drop_cap.filter(|l| *l > 0)
-            && let Some(first) = p.text.chars().next().filter(|c| !matches!(*c, wordcraft_doc::para::OBJ | '\t' | '\n' | '\u{c}' | '\u{e}'))
+            && let Some(first) = p.text.chars().next().filter(|c| !matches!(*c, craft_wordmodel::para::OBJ | '\t' | '\n' | '\u{c}' | '\u{e}'))
             && p.text.len() > first.len_utf8()
         {
             let mut head = p.clone();
@@ -158,7 +158,7 @@ impl Writer<'_> {
                     '\u{000E}' => Some(Piece::Br(Some("column"))),
                     '\u{2011}' => Some(Piece::NbHyphen),
                     '\u{00AD}' => Some(Piece::SoftHyphen),
-                    wordcraft_doc::para::OBJ => {
+                    craft_wordmodel::para::OBJ => {
                         let o = p.objects.get(k);
                         k += 1;
                         Some(match o {

@@ -3,7 +3,7 @@
 
 use std::io::{Read, Write};
 
-use wordcraft_doc::props::EmphasisMark;
+use craft_wordmodel::props::EmphasisMark;
 
 fn docx(body: &str) -> Vec<u8> {
     let root = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
@@ -18,7 +18,7 @@ fn docx(body: &str) -> Vec<u8> {
     zw.finish().unwrap().into_inner()
 }
 
-fn marks(d: &wordcraft_doc::Document) -> Vec<Option<EmphasisMark>> {
+fn marks(d: &craft_wordmodel::Document) -> Vec<Option<EmphasisMark>> {
     d.body[0].as_para().unwrap().runs.iter().map(|r| r.props.emphasis).collect()
 }
 
@@ -34,15 +34,15 @@ fn emphasis_marks_are_read_and_saved() {
         run("e", r#"<w:em w:val="none"/>"#),
         run("f", r#"<w:em w:val="sparkle"/>"#),
     );
-    let d = wordcraft_docx::read(&docx(&body)).unwrap();
+    let d = craft_docx::read(&docx(&body)).unwrap();
     // An unknown mark is none (and the run with it joins the one before, now alike).
     let want = [EmphasisMark::Dot, EmphasisMark::Comma, EmphasisMark::Circle, EmphasisMark::UnderDot, EmphasisMark::None].map(Some);
     assert_eq!(marks(&d), want);
-    let saved = wordcraft_docx::write(&d).unwrap();
+    let saved = craft_docx::write(&d).unwrap();
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap();
     let mut xml = String::new();
     z.by_name("word/document.xml").unwrap().read_to_string(&mut xml).unwrap();
     // In its place: after w:cs, before w:lang.
     assert!(xml.contains(r#"<w:cs/><w:em w:val="underDot"/><w:lang"#), "{xml}");
-    assert_eq!(marks(&wordcraft_docx::read(&saved).unwrap()), want);
+    assert_eq!(marks(&craft_docx::read(&saved).unwrap()), want);
 }

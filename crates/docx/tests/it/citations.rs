@@ -4,9 +4,9 @@
 
 use std::io::Write;
 
-use wordcraft_doc::para::OBJ;
-use wordcraft_doc::{CharProps, Document, InlineObject, Path, StoryRef};
-use wordcraft_docx::{read, write};
+use craft_docx::{read, write};
+use craft_wordmodel::para::OBJ;
+use craft_wordmodel::{CharProps, Document, InlineObject, Path, StoryRef};
 
 const W_NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#;
 const ROOT_RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/custom-properties" Target="docProps/custom.xml"/></Relationships>"#;

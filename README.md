@@ -75,6 +75,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   preview header (read and write), the DSC header comments and bounding boxes (also `(atend)`),
   the EPSI preview bitmap, ASCII85 data, and telling EPS, PostScript and Illustrator files
   (PostScript- or PDF-based) apart. No PostScript interpreter.
+- [`craft-docx`](crates/docx/README.md): DOCX (WordprocessingML) read and written on `craft-wordmodel`, with
+  Word XML (Flat OPC) and Word 2003 XML, password-protected packages and Restrict Editing hashes.
+  WordCraft's DOCX crate on `craft-opc`, `craft-xml` and `craft-offcrypto`.
 - [`craft-dxf`](crates/dxf/src/lib.rs): DXF tag reader and writer, from CADCraft: ASCII and
   binary DXF as (group code, value) tags, split into sections and entities, with pre-2007 code
   pages and version detection, and written back; and `model`, the drawing above the tags (header

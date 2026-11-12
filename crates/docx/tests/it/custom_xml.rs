@@ -1,7 +1,7 @@
 //! Original synthetic custom XML stores, written from the public OOXML package contract.
+use craft_wordmodel::{Path, StoryRef};
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Write};
-use wordcraft_doc::{Path, StoryRef};
 
 const REL_NS: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
 const RT: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
@@ -49,7 +49,7 @@ fn unzip(bytes: &[u8]) -> BTreeMap<String, Vec<u8>> {
     let mut parts = BTreeMap::new();
     for i in 0..z.len() {
         let mut f = z.by_index(i).unwrap();
-        let name = f.name().to_string();
+        let name = f.name().unwrap().to_string();
         let mut bytes = Vec::new();
         f.read_to_end(&mut bytes).unwrap();
         assert!(parts.insert(name, bytes).is_none(), "duplicate ZIP entry");
@@ -62,12 +62,12 @@ fn text(parts: &BTreeMap<String, Vec<u8>>, name: &str) -> String {
 }
 
 fn edited_cycles(input: &BTreeMap<String, Vec<u8>>, check: impl Fn(&BTreeMap<String, Vec<u8>>)) {
-    let mut doc = wordcraft_docx::read(&zip(input)).unwrap();
+    let mut doc = craft_docx::read(&zip(input)).unwrap();
     for _ in 0..2 {
         doc.para_mut(StoryRef::Body, &Path::top(0)).unwrap().insert_text(0, "Unrelated edit. ", &Default::default()).unwrap();
-        let bytes = wordcraft_docx::write(&doc).unwrap();
+        let bytes = craft_docx::write(&doc).unwrap();
         check(&unzip(&bytes));
-        doc = wordcraft_docx::read(&bytes).unwrap();
+        doc = craft_docx::read(&bytes).unwrap();
     }
 }
 
@@ -139,9 +139,9 @@ fn absent_and_external_stores_are_not_fetched_or_written() {
 
 #[test]
 fn custom_stores_do_not_shadow_reserved_bibliography_names() {
-    let mut doc = wordcraft_docx::read(&zip(&fixture())).unwrap();
-    doc.sources.push(wordcraft_doc::Source { tag: "OriginalSource".into(), title: "Original synthetic reference".into(), ..Default::default() });
-    let out = unzip(&wordcraft_docx::write(&doc).unwrap());
+    let mut doc = craft_docx::read(&zip(&fixture())).unwrap();
+    doc.sources.push(craft_wordmodel::Source { tag: "OriginalSource".into(), title: "Original synthetic reference".into(), ..Default::default() });
+    let out = unzip(&craft_docx::write(&doc).unwrap());
     assert_eq!(out.get("customXml/item1_2.xml").map(Vec::as_slice), Some(DATA.as_bytes()));
     assert_eq!(out.get("customXml/itemProps1_2.xml").map(Vec::as_slice), Some(PROPS.as_bytes()));
     assert!(text(&out, "word/_rels/document.xml.rels").contains(r#"Target="../customXml/item1_2.xml""#));

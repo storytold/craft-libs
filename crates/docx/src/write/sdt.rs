@@ -1,13 +1,13 @@
 //! Content controls → `w:sdt` (ECMA-376 §17.5.2; check boxes and repeating sections as the
 //! [MS-DOCX] `w14`/`w15` extensions).
 //!
-//! Controls are markers in the model ([`wordcraft_doc::control`]); the file wants them as
+//! Controls are markers in the model ([`craft_wordmodel::control`]); the file wants them as
 //! elements around runs (inline) or around whole paragraphs and tables (block level). [`plan`]
 //! decides, per block list, which controls are written where so that the XML always nests.
 
-use wordcraft_doc::Blocks;
-use wordcraft_doc::control::{ContentControl, ControlEvent, ControlKind, control_events, pair_events};
-use wordcraft_doc::para::OBJ;
+use craft_wordmodel::Blocks;
+use craft_wordmodel::control::{ContentControl, ControlEvent, ControlKind, control_events, pair_events};
+use craft_wordmodel::para::OBJ;
 
 use crate::xml::W;
 
@@ -83,14 +83,14 @@ pub fn plan(bl: &Blocks) -> Plan<'_> {
     let at_start = |b: usize, off: usize| {
         para(b).is_some_and(|p| {
             p.text.get(..off).is_some_and(|t| t.chars().all(|c| c == OBJ))
-                && (0..off).step_by(OBJ.len_utf8()).all(|o| matches!(p.object_at(o), Some(wordcraft_doc::InlineObject::ControlStart { .. })))
+                && (0..off).step_by(OBJ.len_utf8()).all(|o| matches!(p.object_at(o), Some(craft_wordmodel::InlineObject::ControlStart { .. })))
         })
     };
     // Bookmark, comment and permission markers after the end may stay there: a body-level
     // bookmark after a block control (Word's `_GoBack`) is read onto the end of its paragraph,
     // and the control still covers the whole paragraph.
     let at_end = |b: usize, off: usize| {
-        use wordcraft_doc::InlineObject as O;
+        use craft_wordmodel::InlineObject as O;
         para(b).is_some_and(|p| {
             let from = off + OBJ.len_utf8();
             p.text.get(from..).is_some_and(|t| t.chars().all(|c| c == OBJ))

@@ -1,6 +1,6 @@
 //! Property writers, in ECMA-376 schema element order.
 
-use wordcraft_doc::props::{
+use craft_wordmodel::props::{
     Align, Border, BorderStyle, Borders, CellProps, CharProps, EastAsianLayout, HeightRule, Highlight, LineSpacing, ParaProps, RowProps, TabAlign,
     TabLeader, TableFloat, TableLook, TableProps, TextColor, VAlign, VMerge, VertAlign,
 };
@@ -17,7 +17,7 @@ fn toggle(w: &mut W, name: &str, v: Option<bool>) {
 }
 
 fn round(v: f32) -> i64 {
-    let v = wordcraft_geom::finite(v);
+    let v = craft_wordmodel::geom::finite(v);
     v.round().clamp(-1e9, 1e9) as i64
 }
 
@@ -68,12 +68,12 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
         w.val("w:w", &n(round(s.clamp(1.0, 600.0))));
     }
     if let Some(k) = c.kern {
-        w.val("w:kern", &n(wordcraft_geom::to_half_points(k.clamp(0.0, 1638.0))));
+        w.val("w:kern", &n(craft_wordmodel::geom::to_half_points(k.clamp(0.0, 1638.0))));
     }
     if let Some(p) = c.position {
-        w.val("w:position", &n(wordcraft_geom::to_half_points(p.clamp(-1584.0, 1584.0))));
+        w.val("w:position", &n(craft_wordmodel::geom::to_half_points(p.clamp(-1584.0, 1584.0))));
     }
-    let half = |s: f32| n(wordcraft_geom::to_half_points(s.clamp(1.0, 1638.0)).max(2));
+    let half = |s: f32| n(craft_wordmodel::geom::to_half_points(s.clamp(1.0, 1638.0)).max(2));
     if let Some(s) = c.size {
         w.val("w:sz", &half(s));
     }
@@ -304,7 +304,7 @@ fn write_frame(w: &mut W, p: &ParaProps, framed: bool) {
         // spans and its distance from the text (`w:hSpace`, twips).
         let kind = if p.drop_cap_margin == Some(true) { "margin" } else { "drop" };
         let lines = n(lines.min(10) as i64);
-        let space = p.drop_cap_distance.filter(|d| d.is_finite() && *d > 0.0).map(|d| twips(d.min(wordcraft_doc::resolve::MAX_DROP_CAP_DISTANCE)));
+        let space = p.drop_cap_distance.filter(|d| d.is_finite() && *d > 0.0).map(|d| twips(d.min(craft_wordmodel::resolve::MAX_DROP_CAP_DISTANCE)));
         let mut a: Vec<(&str, &str)> = vec![("w:dropCap", kind), ("w:lines", &lines)];
         if let Some(h) = &space {
             a.push(("w:hSpace", h));
@@ -682,7 +682,7 @@ fn tcpr_inner(w: &mut W, c: &CellProps) {
 
 /// `w:tblpPr` and `w:tblOverlap` for a floating table.
 fn table_float(w: &mut W, f: &TableFloat) {
-    use wordcraft_doc::para::Anchor;
+    use craft_wordmodel::para::Anchor;
     let rel = |a: Anchor, text: &'static str| match a {
         Anchor::Page => "page",
         Anchor::Margin => "margin",

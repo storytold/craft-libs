@@ -2,22 +2,22 @@
 //! glow, shadow, reflection, text outline, text fill. Lengths are EMUs, angles 60000ths of a
 //! degree, percentages 1000ths of a percent.
 
-use wordcraft_doc::props::Rgb;
-use wordcraft_doc::wordart::{TextEffects, TextFill};
+use craft_wordmodel::props::Rgb;
+use craft_wordmodel::wordart::{TextEffects, TextFill};
 
 use crate::units::{emu, n};
 use crate::xml::W;
 
 fn pct(v: f32) -> String {
-    n((wordcraft_geom::finite(v).clamp(0.0, 100.0) * 1000.0).round() as i64)
+    n((craft_wordmodel::geom::finite(v).clamp(0.0, 100.0) * 1000.0).round() as i64)
 }
 
 fn ang(deg: f32) -> String {
-    n((wordcraft_geom::finite(deg).rem_euclid(360.0) * 60_000.0).round().clamp(0.0, 21_599_999.0) as i64)
+    n((craft_wordmodel::geom::finite(deg).rem_euclid(360.0) * 60_000.0).round().clamp(0.0, 21_599_999.0) as i64)
 }
 
 fn len(pt: f32) -> String {
-    emu(wordcraft_geom::finite(pt).clamp(0.0, 2000.0))
+    emu(craft_wordmodel::geom::finite(pt).clamp(0.0, 2000.0))
 }
 
 /// `w14:srgbClr` with its transparency (`w14:alpha` is the transparency, not the opacity).

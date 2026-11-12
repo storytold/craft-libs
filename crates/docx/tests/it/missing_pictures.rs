@@ -1,8 +1,8 @@
 //! Pictures dropped at open are recorded for strict export (#6005): a missing part, an external
 //! target and a link-only picture (ECMA-376 Part 1 §20.1.8.13 `a:blip` `r:embed`/`r:link`).
 //! Original synthetic packages; nothing is fetched, the reader has no network code.
+use craft_wordmodel::{Document, InlineObject, MissingPictureReason};
 use std::io::Write;
-use wordcraft_doc::{Document, InlineObject, MissingPictureReason};
 
 const NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:v="urn:schemas-microsoft-com:vml""#;
 const REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -76,7 +76,7 @@ fn external_missing_and_link_only_pictures_are_recorded_and_still_dropped() {
         image_rel("rIdLink", "file:///C:/pics/linked.png", true),
     ]
     .concat();
-    let d = wordcraft_docx::read(&package(&body, &rels, None, &[])).unwrap();
+    let d = craft_docx::read(&package(&body, &rels, None, &[])).unwrap();
     assert_eq!(pictures(&d), 0, "nothing is drawn for them, as before");
     assert_eq!(
         missing(&d),
@@ -95,7 +95,7 @@ fn a_header_pictures_story_is_the_header_part() {
     let rels = [image_rel("rIdHx", "https://example.invalid/logo.png", true), image_rel("rIdOk", "media/ok.png", false)].concat();
     let header = [blip(r#"r:embed="rIdHx""#), blip(r#"r:embed="rIdOk""#)].concat();
     let bytes = package("", "", Some((&header, &rels)), &[("word/media/ok.png", png())]);
-    let d = wordcraft_docx::read(&bytes).unwrap();
+    let d = craft_docx::read(&bytes).unwrap();
     assert_eq!(missing(&d), [("https://example.invalid/logo.png".into(), "word/header2.xml".into(), MissingPictureReason::ExternalTarget)]);
     assert_eq!(d.missing_pictures.main, "word/document.xml");
     assert!(d.missing_pictures.part_names.values().any(|n| &**n == "word/header2.xml"));
@@ -105,7 +105,7 @@ fn a_header_pictures_story_is_the_header_part() {
 #[test]
 fn a_picture_that_is_there_is_not_recorded() {
     let body = blip(r#"r:embed="rIdOk""#);
-    let d = wordcraft_docx::read(&package(&body, &image_rel("rIdOk", "media/ok.png", false), None, &[("word/media/ok.png", png())])).unwrap();
+    let d = craft_docx::read(&package(&body, &image_rel("rIdOk", "media/ok.png", false), None, &[("word/media/ok.png", png())])).unwrap();
     assert_eq!(pictures(&d), 1);
     assert!(d.missing_pictures.list.is_empty());
 }
@@ -121,7 +121,7 @@ fn vml_image_data_links_are_recorded() {
         image_rel("rIdGone", "media/none.png", false),
     ]
     .concat();
-    let d = wordcraft_docx::read(&package(&body, &rels, None, &[])).unwrap();
+    let d = craft_docx::read(&package(&body, &rels, None, &[])).unwrap();
     let got: Vec<_> = missing(&d).into_iter().map(|(p, _, r)| (p, r)).collect();
     assert_eq!(
         got,
@@ -135,11 +135,11 @@ fn vml_image_data_links_are_recorded() {
 
 #[test]
 fn the_list_is_capped_and_the_document_is_still_equal() {
-    let n = wordcraft_doc::MAX_MISSING_PICTURES + 5;
+    let n = craft_wordmodel::MAX_MISSING_PICTURES + 5;
     let body: String = (0..n).map(|i| blip(&format!(r#"r:embed="r{i}""#))).collect();
     let rels: String = (0..n).map(|i| image_rel(&format!("r{i}"), &format!("media/gone{i}.png"), false)).collect();
-    let d = wordcraft_docx::read(&package(&body, &rels, None, &[])).unwrap();
-    assert_eq!(d.missing_pictures.list.len(), wordcraft_doc::MAX_MISSING_PICTURES);
+    let d = craft_docx::read(&package(&body, &rels, None, &[])).unwrap();
+    assert_eq!(d.missing_pictures.list.len(), craft_wordmodel::MAX_MISSING_PICTURES);
     assert!(d.missing_pictures.truncated);
     // Not part of the document: `==` and the clone ignore it, and a save doesn't carry it.
     let mut e = d.clone();
@@ -155,7 +155,7 @@ fn the_notes_of_a_part_share_one_copy_of_its_name() {
     let notes: String = (1..=3).map(|i| format!(r#"<w:footnote w:id="{i}"><w:p><w:r><w:t>n{i}</w:t></w:r></w:p></w:footnote>"#)).collect();
     let rels = format!(r#"<Relationship Id="rIdF" Type="{REL}/footnotes" Target="footnotes.xml"/>"#);
     let part = format!(r#"<w:footnotes {NS}>{notes}</w:footnotes>"#);
-    let d = wordcraft_docx::read(&package("x", &rels, None, &[("word/footnotes.xml", part.into_bytes())])).unwrap();
+    let d = craft_docx::read(&package("x", &rels, None, &[("word/footnotes.xml", part.into_bytes())])).unwrap();
     let names: Vec<_> = d.missing_pictures.part_names.values().collect();
     assert!(names.len() >= 3, "{names:?}");
     assert!(names.iter().all(|n| &***n == "word/footnotes.xml"));

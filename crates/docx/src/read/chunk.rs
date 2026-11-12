@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use wordcraft_doc::{Block, Blocks, Document};
+use craft_wordmodel::{Block, Blocks, Document};
 
 use super::story::StoryCtx;
 use super::{Reader, part_of};
@@ -148,7 +148,7 @@ impl<'a> ChunkState<'a> {
 mod tests {
     use std::io::Write;
 
-    use wordcraft_doc::{Block, Document, InlineObject};
+    use craft_wordmodel::{Block, Document, InlineObject};
 
     use super::ChunkState;
     use crate::package::Package;

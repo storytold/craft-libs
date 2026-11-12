@@ -982,6 +982,28 @@ name = "craft-docpath"
 version = "0.1.0"
 
 [[package]]
+name = "craft-docx"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "chrono",
+ "craft-cfb",
+ "craft-offcrypto",
+ "craft-opc",
+ "craft-wordmodel",
+ "craft-xml",
+ "image",
+ "log",
+ "proptest",
+ "quick-xml 0.41.0",
+ "serde_json",
+ "thiserror 2.0.21",
+ "unicode-bidi",
+ "zeroize",
+ "zip",
+]
+
+[[package]]
 name = "craft-dpx"
 version = "0.1.0"
 dependencies = [

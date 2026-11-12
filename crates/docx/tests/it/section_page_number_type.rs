@@ -27,22 +27,22 @@ fn document_xml(bytes: &[u8]) -> String {
 fn page_number_type_is_kept_even_when_it_only_repeats_the_defaults() {
     // A decimal format with no start changes nothing, but the file said it, so saving says it too.
     let body = r#"<w:p><w:r><w:t>One</w:t></w:r></w:p><w:sectPr><w:pgNumType w:fmt="decimal"/></w:sectPr>"#;
-    let d = wordcraft_docx::read(&docx(body)).unwrap();
-    let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
+    let d = craft_docx::read(&docx(body)).unwrap();
+    let xml = document_xml(&craft_docx::write(&d).unwrap());
     assert!(xml.contains(r#"<w:pgNumType w:fmt="decimal"/>"#), "{xml}");
 }
 
 #[test]
 fn page_number_type_with_a_start_and_format_still_round_trips() {
     let body = r#"<w:p><w:r><w:t>One</w:t></w:r></w:p><w:sectPr><w:pgNumType w:fmt="upperRoman" w:start="3"/></w:sectPr>"#;
-    let d = wordcraft_docx::read(&docx(body)).unwrap();
-    let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
+    let d = craft_docx::read(&docx(body)).unwrap();
+    let xml = document_xml(&craft_docx::write(&d).unwrap());
     assert!(xml.contains(r#"w:fmt="upperRoman""#) && xml.contains(r#"w:start="3""#), "{xml}");
 }
 
 #[test]
 fn a_section_without_page_number_type_writes_none() {
     let body = r#"<w:p><w:r><w:t>One</w:t></w:r></w:p><w:sectPr/>"#;
-    let d = wordcraft_docx::read(&docx(body)).unwrap();
-    assert!(!document_xml(&wordcraft_docx::write(&d).unwrap()).contains("pgNumType"));
+    let d = craft_docx::read(&docx(body)).unwrap();
+    assert!(!document_xml(&craft_docx::write(&d).unwrap()).contains("pgNumType"));
 }

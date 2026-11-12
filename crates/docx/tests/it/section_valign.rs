@@ -3,7 +3,7 @@
 
 use std::io::{Read, Write};
 
-use wordcraft_doc::section::PageVAlign;
+use craft_wordmodel::section::PageVAlign;
 
 fn docx(body: &str) -> Vec<u8> {
     let root = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
@@ -37,16 +37,16 @@ fn section_vertical_alignment_round_trips_with_justified() {
         sect("top"),
         sect("sideways")
     );
-    let d = wordcraft_docx::read(&docx(&body)).unwrap();
+    let d = craft_docx::read(&docx(&body)).unwrap();
     let got: Vec<PageVAlign> = d.sections().iter().map(|(_, s)| s.valign).collect();
     let want = vec![PageVAlign::Justify, PageVAlign::Center, PageVAlign::Bottom, PageVAlign::Top, PageVAlign::Top];
     assert_eq!(got, want);
-    let out = wordcraft_docx::write(&d).unwrap();
+    let out = craft_docx::write(&d).unwrap();
     let xml = document_xml(&out);
     assert_eq!(xml.matches(r#"<w:vAlign w:val="both"/>"#).count(), 1, "{xml}");
     assert_eq!(xml.matches(r#"<w:vAlign w:val="center"/>"#).count(), 1, "{xml}");
     assert_eq!(xml.matches(r#"<w:vAlign w:val="bottom"/>"#).count(), 1, "{xml}");
     assert_eq!(xml.matches("w:vAlign").count(), 3, "top writes nothing: {xml}");
-    let back = wordcraft_docx::read(&out).unwrap();
+    let back = craft_docx::read(&out).unwrap();
     assert_eq!(back.sections().iter().map(|(_, s)| s.valign).collect::<Vec<_>>(), want);
 }

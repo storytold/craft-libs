@@ -23,7 +23,7 @@ fn unzip(bytes: &[u8]) -> BTreeMap<String, String> {
         let mut f = z.by_index(i).unwrap();
         let mut s = String::new();
         if f.read_to_string(&mut s).is_ok() {
-            parts.insert(f.name().to_string(), s);
+            parts.insert(f.name().unwrap().to_string(), s);
         }
     }
     parts
@@ -57,15 +57,15 @@ fn fixture(settings: &str) -> Vec<u8> {
 const NAMES: [&str; 4] = ["Quill Ramsey", "Ona Vettel", "\"QR\"", "\"OV\""];
 
 /// Every part of the saved package, joined.
-fn saved(doc: &wordcraft_doc::Document) -> (BTreeMap<String, String>, String) {
-    let parts = unzip(&wordcraft_docx::write(doc).unwrap());
+fn saved(doc: &craft_wordmodel::Document) -> (BTreeMap<String, String>, String) {
+    let parts = unzip(&craft_docx::write(doc).unwrap());
     let all = parts.values().cloned().collect::<Vec<_>>().join("\n");
     (parts, all)
 }
 
 #[test]
 fn remove_personal_information_and_dates_on_save() {
-    let doc = wordcraft_docx::read(&fixture("<w:removePersonalInformation/><w:removeDateAndTime/>")).unwrap();
+    let doc = craft_docx::read(&fixture("<w:removePersonalInformation/><w:removeDateAndTime/>")).unwrap();
     assert!(doc.settings.remove_personal_info && doc.settings.remove_date_time);
     let before = doc.clone();
     let (parts, all) = saved(&doc);
@@ -94,21 +94,21 @@ fn remove_personal_information_and_dates_on_save() {
     let personal = settings.find("<w:removePersonalInformation/>").unwrap();
     let dates = settings.find("<w:removeDateAndTime/>").unwrap();
     assert!(zoom < personal && personal < dates, "{settings}");
-    let again = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+    let again = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
     assert!(again.settings.remove_personal_info && again.settings.remove_date_time);
 }
 
 #[test]
 fn each_privacy_setting_works_alone() {
     // Dates only: names stay.
-    let doc = wordcraft_docx::read(&fixture("<w:removeDateAndTime/>")).unwrap();
+    let doc = craft_docx::read(&fixture("<w:removeDateAndTime/>")).unwrap();
     let (parts, all) = saved(&doc);
     assert!(!all.contains("w:date="));
     assert!(all.contains("Quill Ramsey") && all.contains("Ona Vettel"));
     assert!(parts["docProps/core.xml"].contains("<dc:creator>Quill Ramsey</dc:creator>"));
     assert!(!parts["word/settings.xml"].contains("removePersonalInformation"));
     // Names only: dates stay.
-    let doc = wordcraft_docx::read(&fixture(r#"<w:removePersonalInformation w:val="1"/>"#)).unwrap();
+    let doc = craft_docx::read(&fixture(r#"<w:removePersonalInformation w:val="1"/>"#)).unwrap();
     let (_, all) = saved(&doc);
     for name in NAMES {
         assert!(!all.contains(name), "{name} saved");
@@ -116,7 +116,7 @@ fn each_privacy_setting_works_alone() {
     assert_eq!(all.matches("w:date=").count(), 4, "two comments and two changes keep their dates");
     // Off (explicitly or absent): everything is saved as it was.
     for settings in ["", r#"<w:removePersonalInformation w:val="0"/><w:removeDateAndTime w:val="false"/>"#] {
-        let doc = wordcraft_docx::read(&fixture(settings)).unwrap();
+        let doc = craft_docx::read(&fixture(settings)).unwrap();
         assert!(!doc.settings.remove_personal_info && !doc.settings.remove_date_time);
         let (parts, all) = saved(&doc);
         assert!(all.contains("Quill Ramsey") && all.contains(r#"w:initials="OV""#));

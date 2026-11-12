@@ -1,9 +1,9 @@
 //! SmartArt diagrams: the ready-made drawing (`dsp:drawing`) Word keeps beside the diagram data,
 //! converted to [`GraphicItem`]s. The diagram's layout isn't run; the saved drawing is the picture.
 
-use wordcraft_doc::graphic::{GraphicItem, PathSeg, TextAlign};
-use wordcraft_doc::para::ShapeKind;
-use wordcraft_doc::props::Rgb;
+use craft_wordmodel::graphic::{GraphicItem, PathSeg, TextAlign};
+use craft_wordmodel::para::ShapeKind;
+use craft_wordmodel::props::Rgb;
 
 use super::Reader;
 use super::chart::text_w;
@@ -530,7 +530,7 @@ impl Reader<'_> {
 
     /// The SmartArt model of a diagram WordCraft wrote (its data part exactly as WordCraft writes
     /// it); `None` for any other.
-    pub(super) fn smart_art_spec(&mut self, gd: &El, rels: &Rels) -> Option<wordcraft_doc::smart_art::SmartArtSpec> {
+    pub(super) fn smart_art_spec(&mut self, gd: &El, rels: &Rels) -> Option<craft_wordmodel::smart_art::SmartArtSpec> {
         let dm = gd.child("dgm:relIds")?.attr("r:dm")?;
         let data = super::part_of(rels, dm, rt::DIAGRAM_DATA)?;
         crate::smart_art::spec_of(self.graphic_part(&data)?.as_ref())
@@ -549,7 +549,7 @@ impl Reader<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wordcraft_doc::THEME_COLORS;
+    use craft_wordmodel::THEME_COLORS;
 
     const NS: &str = r#"xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
 

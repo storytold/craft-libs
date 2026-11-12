@@ -1,11 +1,11 @@
 use super::{CharProps, FieldState, InlineObject, Item, MAX_FIELD_DEPTH, PB, Phase, Reader, StoryCtx};
-use wordcraft_doc::link::hyperlink_target;
+use craft_wordmodel::link::hyperlink_target;
 
 /// Enclosed characters (`eq \o\ac(○,字)`), with their style from the code's font sizes: Word
 /// enlarges the symbol (bigger than the text, which keeps the field's size) or shrinks the text
 /// (smaller than the symbol).
-fn enclosure(f: &FieldState) -> Option<wordcraft_doc::eq::Enclosure> {
-    use wordcraft_doc::eq::{EncloseShape, EncloseStyle, Enclosure};
+fn enclosure(f: &FieldState) -> Option<craft_wordmodel::eq::Enclosure> {
+    use craft_wordmodel::eq::{EncloseShape, EncloseStyle, Enclosure};
     let mut e = Enclosure::parse(&f.instr)?;
     let size_at = |at: usize| f.sizes.iter().rev().find(|(start, _)| *start <= at).and_then(|(_, s)| *s);
     let sym = f.instr.char_indices().find(|(_, c)| EncloseShape::from_symbol(&c.to_string()) == Some(e.shape)).map(|(i, _)| i)?;

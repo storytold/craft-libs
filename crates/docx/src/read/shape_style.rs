@@ -3,10 +3,10 @@
 
 use std::sync::Arc;
 
-use wordcraft_doc::fill::{Fill, Gradient, GradientFlip, GradientKind, PathShape};
-use wordcraft_doc::para::ShapeKind;
-use wordcraft_doc::props::Rgb;
-use wordcraft_doc::wordart::{GradStop, MAX_STOPS};
+use craft_wordmodel::fill::{Fill, Gradient, GradientFlip, GradientKind, PathShape};
+use craft_wordmodel::para::ShapeKind;
+use craft_wordmodel::props::Rgb;
+use craft_wordmodel::wordart::{GradStop, MAX_STOPS};
 
 use super::drawing_color::{color, color_alpha, fill as read_fill, fill_colour};
 use crate::units::{int, measure};
@@ -277,8 +277,8 @@ pub(crate) fn vml_fraction(v: &str) -> Option<f32> {
 }
 
 /// Explicit DrawingML dash stops override the solid default.
-pub(crate) fn line_dash(ln: Option<&El>) -> wordcraft_doc::line_dash::LineDash {
-    use wordcraft_doc::line_dash::{LineDash, MAX_DASH_STOPS};
+pub(crate) fn line_dash(ln: Option<&El>) -> craft_wordmodel::line_dash::LineDash {
+    use craft_wordmodel::line_dash::{LineDash, MAX_DASH_STOPS};
     let Some(ln) = ln else { return LineDash::Solid };
     if let Some(custom) = ln.child("a:custDash") {
         let stops: Vec<_> =
@@ -338,7 +338,7 @@ pub(crate) fn vml_color(v: &str) -> Option<Rgb> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wordcraft_doc::THEME_COLORS;
+    use craft_wordmodel::THEME_COLORS;
 
     fn el(xml: &str) -> El {
         let ns = r#"xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main""#;

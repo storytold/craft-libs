@@ -26,7 +26,7 @@ fn unzip(bytes: &[u8]) -> BTreeMap<String, Vec<u8>> {
         let mut f = z.by_index(i).unwrap();
         let mut b = Vec::new();
         f.read_to_end(&mut b).unwrap();
-        assert!(out.insert(f.name().to_string(), b).is_none(), "duplicate part {}", f.name());
+        assert!(out.insert(f.name().unwrap().to_string(), b).is_none(), "duplicate part {}", f.name().unwrap());
     }
     out
 }
@@ -61,8 +61,8 @@ fn package(body: &str, doc_rels: &[(&str, &str, &str)], root_rels: &[(&str, &str
     zip(&entries)
 }
 
-fn save(doc: &wordcraft_doc::Document) -> BTreeMap<String, Vec<u8>> {
-    unzip(&wordcraft_docx::write(doc).expect("write"))
+fn save(doc: &craft_wordmodel::Document) -> BTreeMap<String, Vec<u8>> {
+    unzip(&craft_docx::write(doc).expect("write"))
 }
 
 const SETTINGS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -78,7 +78,7 @@ fn pos(s: &str, needle: &str) -> usize {
 
 #[test]
 fn unmodelled_settings_survive_a_save_and_owned_ones_follow_the_model() {
-    let mut doc = wordcraft_docx::read(&with_settings(SETTINGS)).unwrap();
+    let mut doc = craft_docx::read(&with_settings(SETTINGS)).unwrap();
     assert!(doc.settings.track_changes);
     doc.settings.track_changes = false;
     let files = save(&doc);
@@ -122,14 +122,14 @@ fn unmodelled_settings_survive_a_save_and_owned_ones_follow_the_model() {
     let p = text(&save(&private), "word/settings.xml");
     assert!(!p.contains("removePersonalInformation") && !p.contains("removeDateAndTime"), "{p}");
     // A second generation is identical.
-    let again = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+    let again = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
     assert_eq!(text(&save(&again), "word/settings.xml"), s);
 }
 
 #[test]
 fn settings_written_by_wordcraft_keep_no_original() {
-    let doc = wordcraft_doc::Document::new();
-    let back = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+    let doc = craft_wordmodel::Document::new();
+    let back = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
     assert!(!back.passthrough.contains_key("wordcraft:settings.orig"), "{:?}", back.passthrough.keys());
     assert_eq!(text(&save(&back), "word/settings.xml"), text(&save(&doc), "word/settings.xml"));
 }
@@ -140,7 +140,7 @@ fn settings_written_by_wordcraft_keep_no_original() {
 #[test]
 fn do_not_track_moves_round_trips() {
     let original = SETTINGS.replace("<w:trackRevisions/>", "<w:trackRevisions/><w:doNotTrackMoves/>");
-    let mut doc = wordcraft_docx::read(&with_settings(&original)).unwrap();
+    let mut doc = craft_docx::read(&with_settings(&original)).unwrap();
     assert!(!doc.settings.track_moves);
     let s = text(&save(&doc), "word/settings.xml");
     assert_eq!(s.matches("<w:doNotTrackMoves/>").count(), 1, "{s}");
@@ -152,14 +152,14 @@ fn do_not_track_moves_round_trips() {
 
     // `w:val="false"` keeps moves tracked.
     let off = SETTINGS.replace("<w:trackRevisions/>", r#"<w:trackRevisions/><w:doNotTrackMoves w:val="false"/>"#);
-    assert!(wordcraft_docx::read(&with_settings(&off)).unwrap().settings.track_moves);
+    assert!(craft_docx::read(&with_settings(&off)).unwrap().settings.track_moves);
 
     // A document of our own: absent by default, written when off, and read back.
-    let mut doc = wordcraft_doc::Document::new();
+    let mut doc = craft_wordmodel::Document::new();
     assert!(doc.settings.track_moves);
     assert!(!text(&save(&doc), "word/settings.xml").contains("doNotTrackMoves"));
     doc.settings.track_moves = false;
     let s = text(&save(&doc), "word/settings.xml");
     assert!(s.contains("<w:doNotTrackMoves/>"), "{s}");
-    assert!(!wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap().settings.track_moves);
+    assert!(!craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap().settings.track_moves);
 }

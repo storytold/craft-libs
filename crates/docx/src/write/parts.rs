@@ -47,7 +47,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
         toc_end_here: false,
         inline_controls: Vec::new(),
         used_media: Default::default(),
-        boxes: wordcraft_doc::BoxBudget::default(),
+        boxes: craft_wordmodel::BoxBudget::default(),
         written_boxes: std::collections::HashSet::new(),
         embeds: embed::EmbedWriter::new(doc),
         txbx_links: doc

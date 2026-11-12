@@ -4,8 +4,8 @@
 
 use std::io::Write;
 
-use wordcraft_doc::para::ShapeKind;
-use wordcraft_doc::{Document, InlineObject, Paragraph};
+use craft_wordmodel::para::ShapeKind;
+use craft_wordmodel::{Document, InlineObject, Paragraph};
 
 fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -22,7 +22,7 @@ fn read_body(body: &str) -> Document {
     let doc = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w10="urn:schemas-microsoft-com:office:word"><w:body>{body}</w:body></w:document>"#
     );
-    wordcraft_docx::read(&zip(&[("_rels/.rels", root.as_bytes()), ("word/document.xml", doc.as_bytes())])).unwrap()
+    craft_docx::read(&zip(&[("_rels/.rels", root.as_bytes()), ("word/document.xml", doc.as_bytes())])).unwrap()
 }
 
 fn paras(d: &Document) -> Vec<&Paragraph> {
@@ -157,7 +157,7 @@ fn a_vml_group_survives_being_saved() {
     let d = read_body(&body);
     let InlineObject::Group { children, .. } = &objects(&d)[0] else { panic!("{:?}", objects(&d)) };
     assert_eq!(children.len(), 2, "read with both its members to begin with");
-    let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    let back = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
     assert_eq!(objects(&back), objects(&d), "saved as DrawingML and read again, it is the same group");
 }
 
@@ -184,9 +184,9 @@ fn a_pict_of_a_rect_a_text_box_and_a_group_all_come_through() {
     let InlineObject::Group { children, .. } = &ps[2].objects[0] else { panic!("{:?}", ps[2].objects) };
     assert_eq!(kinds(&children.iter().map(|c| c.obj.clone()).collect::<Vec<_>>()), [ShapeKind::Rectangle], "the green rectangle is read");
     let InlineObject::Shape { fill, .. } = children[0].obj.clone() else { panic!() };
-    assert_eq!(fill, Some(wordcraft_doc::fill::Fill::solid(wordcraft_doc::Rgb(0x00, 0xff, 0x00))), "with its colour");
+    assert_eq!(fill, Some(craft_wordmodel::fill::Fill::solid(craft_wordmodel::Rgb(0x00, 0xff, 0x00))), "with its colour");
     // And it is still there after a save, which is what the round trip lost.
-    let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    let back = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
     assert_eq!(paras(&back).iter().map(|p| p.objects.len()).collect::<Vec<_>>(), [1, 1, 1]);
     let InlineObject::Group { children, .. } = &paras(&back)[2].objects[0] else { panic!() };
     assert_eq!(children.len(), 1, "the group keeps its member");
@@ -232,7 +232,7 @@ fn a_group_of_several_text_boxes_keeps_every_one() {
         assert_eq!(part_text(&d, stories[1]), format!("{label_b} line 1\n{label_b} line 2\n{label_b} line 3"));
 
         // Saved and read again -- the step the report loses the text at.
-        let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        let back = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
         let InlineObject::Group { children: again, .. } = &objects(&back)[0] else { panic!() };
         let back_stories: Vec<u32> = again.iter().filter_map(|c| c.obj.text_box()).collect();
         assert_eq!(back_stories.len(), 2, "both boxes survive the save");
@@ -257,7 +257,7 @@ fn a_group_member_finds_its_shapetype_beside_the_group() {
     assert_eq!(children.len(), 1, "the member is read");
     let InlineObject::Shape { kind, fill, .. } = children[0].obj.clone() else { panic!("{:?}", children[0].obj) };
     assert_eq!(kind, ShapeKind::Diamond, "the preset comes from the shapetype's o:spt");
-    assert_eq!(fill, Some(wordcraft_doc::fill::Fill::solid(wordcraft_doc::Rgb(0x00, 0x00, 0xff))), "and the fill from its fillcolor");
+    assert_eq!(fill, Some(craft_wordmodel::fill::Fill::solid(craft_wordmodel::Rgb(0x00, 0x00, 0xff))), "and the fill from its fillcolor");
 }
 
 #[test]
@@ -268,29 +268,29 @@ fn a_top_level_shape_still_finds_its_shapetype() {
         r##"<v:shape style="width:40pt;height:40pt" type="#_x0000_t4"/>"##,
     )));
     let InlineObject::Shape { kind, fill, .. } = objects(&d)[0].clone() else { panic!("{:?}", objects(&d)) };
-    assert_eq!((kind, fill), (ShapeKind::Diamond, Some(wordcraft_doc::fill::Fill::solid(wordcraft_doc::Rgb(0x00, 0xff, 0x00)))));
+    assert_eq!((kind, fill), (ShapeKind::Diamond, Some(craft_wordmodel::fill::Fill::solid(craft_wordmodel::Rgb(0x00, 0xff, 0x00)))));
 }
 
 #[test]
 fn a_preset_takes_its_gradient_from_the_shapetype() {
     // #1500: the shape states nothing but its shapetype; the shapetype's `v:fill` (a gradient to
     // `color2`, its opacity in 65536ths) is the shape's fill, and it survives saving.
+    use craft_wordmodel::fill::{Fill, Gradient, GradientFlip, GradientKind};
+    use craft_wordmodel::wordart::GradStop;
     use std::sync::Arc;
-    use wordcraft_doc::fill::{Fill, Gradient, GradientFlip, GradientKind};
-    use wordcraft_doc::wordart::GradStop;
     let d = read_body(&pict(concat!(
         r##"<v:shapetype id="_x0000_t4" o:spt="4" fillcolor="#ff0000"><v:fill type="gradient" color2="#0000ff" opacity="32768f"/></v:shapetype>"##,
         r##"<v:shape style="width:40pt;height:40pt" type="#_x0000_t4"/>"##,
     )));
     let stop = |pos: f32, color, transparency: f32| GradStop { pos, color, transparency };
     let want = Fill::Gradient(Arc::new(Gradient {
-        stops: vec![stop(0.0, wordcraft_doc::Rgb(0xff, 0, 0), 50.0), stop(100.0, wordcraft_doc::Rgb(0, 0, 0xff), 0.0)],
+        stops: vec![stop(0.0, craft_wordmodel::Rgb(0xff, 0, 0), 50.0), stop(100.0, craft_wordmodel::Rgb(0, 0, 0xff), 0.0)],
         kind: GradientKind::Linear { angle: 90.0, scaled: false },
         tile: None,
         rot_with_shape: true,
         flip: GradientFlip::None,
     }));
-    let saved = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    let saved = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
     for doc in [&d, &saved] {
         let InlineObject::Shape { kind, fill, .. } = objects(doc)[0].clone() else { panic!("{:?}", objects(doc)) };
         assert_eq!((kind, fill), (ShapeKind::Diamond, Some(want.clone())));

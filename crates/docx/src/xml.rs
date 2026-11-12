@@ -1,13 +1,8 @@
-//! A small, bounded XML tree on top of `quick-xml`, plus a string-building XML writer.
+//! A small, bounded XML tree read with `craft-xml`, plus a string-building XML writer.
 //!
 //! Element and attribute names are rewritten to *canonical prefixes* by namespace URI (`w:p`,
 //! `r:id`, `a:blip`…), so the reader doesn't care which prefixes a producer chose. Names in
 //! unknown namespaces keep their local name behind a `?:` prefix.
-
-use quick_xml::XmlVersion;
-use quick_xml::events::Event;
-use quick_xml::name::{QName, ResolveResult};
-use quick_xml::reader::NsReader;
 
 use crate::DocxError;
 
@@ -97,25 +92,6 @@ fn prefix_for(uri: &[u8], extra: &[(&'static str, &str)]) -> &'static str {
 /// Word's 2006 namespace (`wne`). A Strict document from Word keeps a text box's content in
 /// `wne:txbxContent`; a Transitional one uses `w:txbxContent`.
 const WNE: &[u8] = b"http://schemas.microsoft.com/office/word/2006/wordml";
-
-/// The canonical prefix of an element named `local` in namespace `uri`, inside an element
-/// named `parent` (canonical, `None` at the root). This is [`prefix_for`] with two exceptions
-/// for Strict documents (#3548):
-///
-/// - Shapes, groups and canvases (`wsp`, `wgp`, `wpc`) and their parts are elements of the
-///   WordprocessingDrawing namespace in ECMA-376 Part 1, 5th edition (`dml-wordprocessingDrawing.xsd`,
-///   Strict and Transitional alike). A Strict document from Word puts them there; a Transitional
-///   one uses Word 2010's own namespaces, whose names the reader knows. So they read as `wps:`,
-///   `wpg:` and `wpc:` (see [`drawing_prefix`]).
-/// - A shape's text box content reads as `w:txbxContent` from the drawing namespace (the
-///   schema's name) and from Word's `wne:txbxContent`.
-fn element_prefix(uri: &[u8], local: &str, parent: Option<&str>, extra: &[(&'static str, &str)]) -> &'static str {
-    match prefix_for(uri, extra) {
-        "wp" => drawing_prefix(local, parent),
-        "?" if uri == WNE && local == "txbxContent" && parent == Some("wps:txbx") => "w",
-        p => p,
-    }
-}
 
 /// The prefix for `local`, an element of the WordprocessingDrawing namespace inside `parent`.
 /// Word 2010's namespaces split what this one holds: a shape and its parts are `wps:`, a group
@@ -364,174 +340,65 @@ pub fn parse_strict(bytes: &[u8]) -> Result<El, DocxError> {
 }
 
 fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Result<El, DocxError> {
-    // UTF-16 (with a BOM) is transcoded to UTF-8; a UTF-8 BOM is stripped.
-    let transcoded = utf16_to_utf8(bytes);
-    let bytes = match &transcoded {
-        Some(s) => s.as_bytes(),
-        None => bytes.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(bytes),
-    };
-    let mut r = NsReader::from_reader(bytes);
-    {
-        let c = r.config_mut();
-        c.trim_text_start = false;
-        c.trim_text_end = false;
-        c.expand_empty_elements = false;
-        c.check_end_names = strict;
-    }
-    let mut stack: Vec<El> = Vec::new();
-    let mut root: Option<El> = None;
-    let mut count = 0usize;
-    let mut buf = Vec::new();
-    loop {
-        buf.clear();
-        let (res, ev) = r.read_resolved_event_into(&mut buf).map_err(|e| DocxError::Xml(e.to_string()))?;
-        let el_ns = match &res {
-            ResolveResult::Bound(ns) => Some(ns.as_ref()),
+    let namespaces: Vec<(&str, &str)> =
+        extra.iter().copied().chain(NAMESPACES.iter().copied()).chain(OTHER_NAMESPACES.iter().copied()).chain(STRICT.iter().copied()).collect();
+    // The prefix of an element: its namespace's, with two exceptions for Strict documents
+    // (wordcraft#3548): the WordprocessingDrawing namespace reads as Word 2010's several
+    // ([`drawing_prefix`]), and Word's `wne:txbxContent` in a shape's text box reads as
+    // `w:txbxContent`.
+    let element = |n: &craft_xml::NsName<'_>| -> Option<&'static str> {
+        match n.prefix {
+            "wp" => Some(drawing_prefix(n.local, n.parent)),
+            "?" if n.uri.as_bytes() == WNE && n.local == "txbxContent" && n.parent == Some("wps:txbx") => Some("w"),
             _ => None,
-        };
-        match ev {
-            Event::Start(ref e) | Event::Empty(ref e) => {
-                if strict && root.is_some() && stack.is_empty() {
-                    return Err(DocxError::Xml("more than one root element".into()));
-                }
-                count += 1;
-                if count > MAX_ELEMENTS {
-                    return Err(DocxError::Limit("too many XML elements".into()));
-                }
-                let local = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
-                let name = match el_ns {
-                    Some(ns) => format!("{}:{local}", element_prefix(ns, &local, stack.last().map(|p| p.name.as_str()), extra)),
-                    None => local,
-                };
-                let mut el = El { name, attrs: Vec::new(), kids: Vec::new() };
-                for a in e.attributes().with_checks(false) {
-                    if el.attrs.len() >= MAX_ATTRS {
-                        return Err(DocxError::Limit("too many attributes on one element".into()));
-                    }
-                    let Ok(a) = a else { continue };
-                    let key = a.key;
-                    let raw_key = key.as_ref();
-                    if raw_key == b"xmlns" || raw_key.starts_with(b"xmlns:") {
-                        continue;
-                    }
-                    let (ares, alocal) = r.resolver_mut().resolve_attribute(key);
-                    let alocal = String::from_utf8_lossy(alocal.as_ref()).into_owned();
-                    let aname = match ares {
-                        ResolveResult::Bound(ns) => format!("{}:{alocal}", prefix_for(ns.as_ref(), extra)),
-                        _ => alocal,
-                    };
-                    let val = match a.normalized_value(XmlVersion::Explicit1_0) {
-                        Ok(v) => v.into_owned(),
-                        Err(_) => String::from_utf8_lossy(&a.value).into_owned(),
-                    };
-                    // Requires contains namespace prefixes, not feature names. Resolve them while
-                    // the namespace scope still exists; declarations are omitted from this tree.
-                    let val = if el.name == "mc:Choice" && aname == "Requires" {
-                        let requirements: Vec<_> = val.split_whitespace().take(65).collect();
-                        if requirements.len() > 64 || requirements.iter().any(|prefix| prefix.len() > 128) {
-                            "?".to_string()
-                        } else {
-                            requirements
-                                .into_iter()
-                                .map(|prefix| {
-                                    let qualified = format!("{prefix}:requirement");
-                                    match r.resolver_mut().resolve_attribute(QName(qualified.as_bytes())).0 {
-                                        ResolveResult::Bound(ns) => requirement_prefix(ns.as_ref()),
-                                        _ => "?",
-                                    }
-                                })
-                                .collect::<Vec<_>>()
-                                .join(" ")
-                        }
-                    } else {
-                        val
-                    };
-                    el.attrs.push((aname, val));
-                }
-                if matches!(ev, Event::Start(_)) {
-                    if stack.len() >= MAX_DEPTH {
-                        return Err(DocxError::Limit("XML nesting too deep".into()));
-                    }
-                    stack.push(el);
-                } else {
-                    attach(&mut stack, &mut root, el);
-                }
-            }
-            Event::End(_) => {
-                if let Some(el) = stack.pop() {
-                    attach(&mut stack, &mut root, el);
-                }
-            }
-            // Line ends are normalised as XML 1.0 says (§2.11): CR LF and a lone CR are read as
-            // LF, so a file saved with Windows line ends has no CR in its text. A CR written as
-            // `&#13;` is a character reference and stays.
-            Event::Text(t) => {
-                if let Some(top) = stack.last_mut() {
-                    let s = t.xml_content(XmlVersion::Explicit1_0).map_err(|e| DocxError::Xml(e.to_string()))?;
-                    push_text(top, &s);
-                }
-            }
-            Event::CData(t) => {
-                if let Some(top) = stack.last_mut() {
-                    // CDATA that isn't UTF-8 is decoded lossily, with its line ends normalised the same way.
-                    let s = t
-                        .xml_content(XmlVersion::Explicit1_0)
-                        .map(|s| s.into_owned())
-                        .unwrap_or_else(|_| String::from_utf8_lossy(&t).replace("\r\n", "\n").replace('\r', "\n"));
-                    push_text(top, &s);
-                }
-            }
-            Event::GeneralRef(g) => {
-                if let Some(top) = stack.last_mut() {
-                    let ch = match g.resolve_char_ref() {
-                        Ok(Some(c)) => Some(c.to_string()),
-                        Ok(None) => {
-                            let n = g.decode().map_err(|e| DocxError::Xml(e.to_string()))?;
-                            quick_xml::escape::resolve_predefined_entity(&n).map(str::to_string)
-                        }
-                        Err(_) => None,
-                    };
-                    match ch {
-                        Some(c) => push_text(top, &c),
-                        None if strict => return Err(DocxError::Xml("an entity is not defined".into())),
-                        None => {}
-                    }
-                }
-            }
-            Event::Eof => break,
-            _ => {}
         }
-        if !strict && root.is_some() && stack.is_empty() {
-            break;
+    };
+    // Requires holds namespace prefixes, not feature names: resolved while the scope exists.
+    let requires = |el: &str, attr: &str, value: &str, scope: &craft_xml::Scope<'_>| -> Option<String> {
+        if el != "mc:Choice" || attr != "Requires" {
+            return None;
         }
+        let requirements: Vec<_> = value.split_whitespace().take(65).collect();
+        if requirements.len() > 64 || requirements.iter().any(|prefix| prefix.len() > 128) {
+            return Some("?".to_string());
+        }
+        Some(requirements.into_iter().map(|p| scope.uri(p).map_or("?", |u| requirement_prefix(u.as_bytes()))).collect::<Vec<_>>().join(" "))
+    };
+    let canonical = craft_xml::Canonical { namespaces: &namespaces, unknown: "?", element: Some(&element), attr_value: Some(&requires) };
+    let limits = craft_xml::Limits {
+        // The flat (single-file) form of a package may be larger than any one part.
+        max_input: 2 << 30,
+        // `MAX_DEPTH` open elements, and an empty element inside the deepest (craft-xml counts the
+        // empty one as a level).
+        max_depth: MAX_DEPTH + 1,
+        // Text stretches count as nodes too: two for each element.
+        max_nodes: 2 * MAX_ELEMENTS,
+        max_attrs: MAX_ATTRS,
+        max_attrs_total: 2 * MAX_ELEMENTS,
+    };
+    let mut options = craft_xml::Options::canonical(&canonical).with_limits(limits);
+    if strict {
+        options = options.strict();
     }
-    if strict && !stack.is_empty() {
-        return Err(DocxError::Xml("an element is not closed".into()));
-    }
-    // Unclosed elements at EOF: close them (lenient).
-    while let Some(el) = stack.pop() {
-        attach(&mut stack, &mut root, el);
-    }
-    root.ok_or_else(|| DocxError::Xml("no root element".into()))
+    let root = options.parse(bytes).map_err(|e| if e.is_limit() { DocxError::Limit(e.to_string()) } else { DocxError::Xml(e.to_string()) })?;
+    Ok(from_tree(root))
 }
 
-fn push_text(top: &mut El, s: &str) {
-    if let Some(Node::Text(prev)) = top.kids.last_mut() {
-        prev.push_str(s);
-    } else {
-        top.kids.push(Node::Text(s.to_string()));
-    }
-}
-
-fn attach(stack: &mut [El], root: &mut Option<El>, el: El) {
-    match stack.last_mut() {
-        Some(parent) => parent.kids.push(Node::El(el)),
-        None => {
-            if root.is_none() {
-                *root = Some(el);
-            }
+/// The `craft-xml` tree as this module's (whose shape the reader was written against).
+// shortcut: one copy of each parsed part; read craft_xml::El directly when the reader is ported to it.
+fn from_tree(e: craft_xml::El) -> El {
+    let mut kids = Vec::with_capacity(e.children.len());
+    for n in e.children {
+        match n {
+            craft_xml::Node::El(c) => kids.push(Node::El(from_tree(c))),
+            craft_xml::Node::Text(t) | craft_xml::Node::CData(t) => match kids.last_mut() {
+                Some(Node::Text(prev)) => prev.push_str(&t),
+                _ => kids.push(Node::Text(t)),
+            },
+            craft_xml::Node::Pi { .. } | craft_xml::Node::Comment(_) => {}
         }
     }
+    El { name: e.name, attrs: e.attrs, kids }
 }
 
 /// Is `c` allowed in XML 1.0 text?

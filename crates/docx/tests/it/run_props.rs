@@ -35,17 +35,17 @@ fn paragraph_adjust_right_indent_inherits_from_style() {
         r#"<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:pPr><w:adjustRightInd/></w:pPr></w:style>"#;
     let body = r#"<w:p><w:pPr><w:adjustRightInd w:val="0"/></w:pPr><w:r><w:t>off</w:t></w:r></w:p>
         <w:p><w:r><w:t>inherited</w:t></w:r></w:p>"#;
-    let mut d = wordcraft_docx::read(&docx(body, styles)).unwrap();
+    let mut d = craft_docx::read(&docx(body, styles)).unwrap();
     let paragraphs: Vec<_> = d.body.iter().filter_map(|b| b.as_para()).collect();
     assert_eq!(paragraphs[0].props.adjust_right_indent, Some(false));
     assert!(!d.styles.resolve_para(&paragraphs[0].props).adjust_right_indent);
     assert!(d.styles.resolve_para(&paragraphs[1].props).adjust_right_indent);
 
     for _ in 0..2 {
-        let out = wordcraft_docx::write(&d).unwrap();
+        let out = craft_docx::write(&d).unwrap();
         assert!(part(&out, "word/document.xml").contains(r#"<w:adjustRightInd w:val="0""#));
         assert!(part(&out, "word/styles.xml").contains("<w:adjustRightInd/>"));
-        d = wordcraft_docx::read(&out).unwrap();
+        d = craft_docx::read(&out).unwrap();
         let paragraphs: Vec<_> = d.body.iter().filter_map(|b| b.as_para()).collect();
         assert!(!d.styles.resolve_para(&paragraphs[0].props).adjust_right_indent);
         assert!(d.styles.resolve_para(&paragraphs[1].props).adjust_right_indent);
@@ -68,7 +68,7 @@ fn run_and_style_snap_to_grid_and_web_hidden_survive_two_saves() {
           <w:r><w:t>absent</w:t></w:r>
         </w:p>
     "#;
-    let mut doc = wordcraft_docx::read(&docx(body, styles)).unwrap();
+    let mut doc = craft_docx::read(&docx(body, styles)).unwrap();
     let p = doc.body.iter().find_map(|b| b.as_para()).unwrap();
     assert_eq!(p.runs[0].props.snap_to_grid, None);
     assert_eq!(p.runs[0].props.web_hidden, None);
@@ -83,7 +83,7 @@ fn run_and_style_snap_to_grid_and_web_hidden_survive_two_saves() {
     assert!(!doc.styles.resolve_char(None, &p.runs[0].props).hidden, "w:webHidden does not hide Print Layout text");
     assert!(doc.styles.resolve_char(None, &p.runs[3].props).hidden, "w:vanish still controls hidden text");
     for pass in 0..2 {
-        let out = wordcraft_docx::write(&doc).unwrap();
+        let out = craft_docx::write(&doc).unwrap();
         let style_xml = part(&out, "word/styles.xml");
         assert!(style_xml.contains(r#"<w:snapToGrid/><w:webHidden/>"#), "pass {pass}: {style_xml}");
         assert!(style_xml.contains(r#"<w:snapToGrid w:val="0"/><w:webHidden w:val="0"/>"#), "pass {pass}: {style_xml}");
@@ -93,6 +93,6 @@ fn run_and_style_snap_to_grid_and_web_hidden_survive_two_saves() {
         assert!(document_xml.contains("<w:snapToGrid/><w:webHidden/>"), "pass {pass}: {document_xml}");
         assert!(document_xml.contains("<w:vanish/>"), "pass {pass}: {document_xml}");
         assert!(document_xml.contains("visible in print"));
-        doc = wordcraft_docx::read(&out).unwrap();
+        doc = craft_docx::read(&out).unwrap();
     }
 }

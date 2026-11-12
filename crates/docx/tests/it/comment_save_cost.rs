@@ -1,6 +1,6 @@
 //! Saving large comment threads must not search all comments for each emitted ID.
 
-use wordcraft_doc::{Comment, Document, Paragraph, Part, PartKind, para_block};
+use craft_wordmodel::{Comment, Document, Paragraph, Part, PartKind, para_block};
 
 fn comments(n: u32, imported: bool) -> Document {
     let mut d = Document::from_text("Original comment save fixture.");
@@ -31,7 +31,7 @@ fn many_comments_save_without_quadratic_id_searches() {
     for imported in [true, false] {
         let small = comments(4_000, imported);
         let big = comments(32_000, imported);
-        let save = |d: &Document| drop(std::hint::black_box(wordcraft_docx::write(d).unwrap()));
+        let save = |d: &Document| drop(std::hint::black_box(craft_docx::write(d).unwrap()));
         save(&small);
         save(&big);
         let mut ratios = Vec::new();

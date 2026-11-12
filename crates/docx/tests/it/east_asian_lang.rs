@@ -43,7 +43,7 @@ fn east_asian_lang_survives_a_save() {
         run("Hello", r#"<w:lang w:val="en-US" w:eastAsia="ja-JP" w:bidi="ar-SA"/>"#),
         run("中文", r#"<w:lang w:eastAsia="zh-CN"/>"#)
     );
-    let d = wordcraft_docx::read(&docx(&body, None)).unwrap();
+    let d = craft_docx::read(&docx(&body, None)).unwrap();
     let p = d.body[0].as_para().unwrap();
 
     let r0 = &p.runs[0];
@@ -56,12 +56,12 @@ fn east_asian_lang_survives_a_save() {
     assert_eq!(r1.props.lang_ea.as_deref(), Some("zh-CN"));
     assert_eq!(r1.props.lang_bidi, None);
 
-    let out = wordcraft_docx::write(&d).unwrap();
+    let out = craft_docx::write(&d).unwrap();
     let xml = part(&out, "word/document.xml");
     assert!(xml.contains(r#"w:eastAsia="ja-JP""#), "{xml}");
     assert!(xml.contains(r#"w:eastAsia="zh-CN""#), "{xml}");
 
-    let back = wordcraft_docx::read(&out).unwrap();
+    let back = craft_docx::read(&out).unwrap();
     let back_p = back.body[0].as_para().unwrap();
     assert_eq!(back_p.runs[0].props.lang.as_deref(), Some("en-US"));
     assert_eq!(back_p.runs[0].props.lang_ea.as_deref(), Some("ja-JP"));
@@ -74,12 +74,12 @@ fn east_asian_lang_style_and_whitespace_trim() {
     let styles =
         r#"<w:style w:type="character" w:styleId="CJKLang"><w:name w:val="CJK Language"/><w:rPr><w:lang w:eastAsia="  ko-KR  "/></w:rPr></w:style>"#;
     let body = format!(r#"<w:p>{}</w:p>"#, run("한국어", r#"<w:rStyle w:val="CJKLang"/>"#));
-    let d = wordcraft_docx::read(&docx(&body, Some(styles))).unwrap();
+    let d = craft_docx::read(&docx(&body, Some(styles))).unwrap();
 
     let style = d.styles.get("CJKLang").unwrap();
     assert_eq!(style.chr.lang_ea.as_deref(), Some("ko-KR"));
 
-    let out = wordcraft_docx::write(&d).unwrap();
+    let out = craft_docx::write(&d).unwrap();
     let styles_xml = part(&out, "word/styles.xml");
     assert!(styles_xml.contains(r#"w:eastAsia="ko-KR""#), "{styles_xml}");
 }

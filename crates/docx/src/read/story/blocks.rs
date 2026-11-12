@@ -127,9 +127,9 @@ impl Reader<'_> {
         if let Some(p) = last_para_mut(out, 0) {
             for o in sc.pending.drain(..) {
                 let props = p.runs.last().map(|r| r.props.clone()).unwrap_or_default();
-                p.text.push(wordcraft_doc::para::OBJ);
+                p.text.push(craft_wordmodel::para::OBJ);
                 p.objects.push(o);
-                p.runs.push(Run { len: wordcraft_doc::para::OBJ.len_utf8(), props });
+                p.runs.push(Run { len: craft_wordmodel::para::OBJ.len_utf8(), props });
             }
             p.normalize();
         }
@@ -288,7 +288,7 @@ impl Reader<'_> {
         PropChange::boxed(self.revision(RevisionKind::Format, ch), old)
     }
 
-    pub fn read_section(&mut self, s: &El, rels: &Rels) -> wordcraft_doc::SectionProps {
+    pub fn read_section(&mut self, s: &El, rels: &Rels) -> craft_wordmodel::SectionProps {
         let (mut sp, refs) = sectpr(&self.pc, s);
         // §17.13.5.32: the section's properties before a tracked change (no header references).
         if let Some(ch) = s.child("w:sectPrChange") {
@@ -345,7 +345,7 @@ impl Reader<'_> {
                 let (mut props, hcont) = tc
                     .child("w:tcPr")
                     .map(|p| tcpr(&self.pc, p))
-                    .unwrap_or_else(|| (wordcraft_doc::props::CellProps { span: 1, ..Default::default() }, false));
+                    .unwrap_or_else(|| (craft_wordmodel::props::CellProps { span: 1, ..Default::default() }, false));
                 if let Some(ch) = tc.child("w:tcPr").and_then(|p| p.child("w:tcPrChange")) {
                     let old = ch.child("w:tcPr").map(|o| tcpr(&self.pc, o).0).unwrap_or_default();
                     props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);

@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use wordcraft_doc::Source;
+use craft_wordmodel::Source;
 
 use crate::DocxError;
 use crate::xml::El;

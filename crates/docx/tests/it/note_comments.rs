@@ -1,8 +1,8 @@
 //! Comments anchored inside footnotes and endnotes keep their ranges on read. All markup here is
 //! synthetic, written from ECMA-376 §17.13.4 and §17.11.
 
-use wordcraft_doc::para::{NoteKind, OBJ};
-use wordcraft_doc::{Document, InlineObject};
+use craft_wordmodel::para::{NoteKind, OBJ};
+use craft_wordmodel::{Document, InlineObject};
 
 use crate::fixtures::zip;
 
@@ -33,7 +33,7 @@ fn read_doc() -> Document {
         ("word/endnotes.xml", endnotes.as_bytes()),
         ("word/comments.xml", comments.as_bytes()),
     ]);
-    wordcraft_docx::read(&bytes).unwrap()
+    craft_docx::read(&bytes).unwrap()
 }
 
 /// comments.xml has to be read before the notes: a note's `w:commentRangeStart` resolves its id

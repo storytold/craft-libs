@@ -2,8 +2,8 @@
 //! `styles.xml` doesn't write `w:outlineLvl` (some producers leave it out). Word for Windows,
 //! opening such a file, reports `OutlineLevel` 1 and 2 for "heading 1" and "heading 2" (whatever
 //! their style ids) and body text for a custom style.
+use craft_wordmodel::Paragraph;
 use std::io::Write;
-use wordcraft_doc::Paragraph;
 
 const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
@@ -26,7 +26,7 @@ fn para(style: &str, text: &str) -> String {
     format!(r#"<w:p><w:pPr><w:pStyle w:val="{style}"/></w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>"#)
 }
 
-fn levels(d: &wordcraft_doc::Document) -> Vec<Option<u8>> {
+fn levels(d: &craft_wordmodel::Document) -> Vec<Option<u8>> {
     d.body.iter().filter_map(|b| b.as_para()).map(|p: &Paragraph| d.styles.resolve_para(&p.props).outline_level).collect()
 }
 
@@ -45,13 +45,13 @@ fn built_in_heading_styles_have_their_outline_level_without_outline_lvl() {
         .iter()
         .map(|s| para(s, "x"))
         .collect::<String>();
-    let d = wordcraft_docx::read(&package(styles, &body)).unwrap();
+    let d = craft_docx::read(&package(styles, &body)).unwrap();
     // Heading 1, 2 and 9 by name; a style based on a heading inherits its level; a custom style,
     // "heading 10", a custom style named "heading 4" (`w:customStyle="on"`) and Normal have none; a
     // level the file gives is kept.
     let want = vec![Some(0), Some(1), Some(8), Some(1), None, None, None, Some(5), None];
     assert_eq!(levels(&d), want);
     // The level survives a save and reopen.
-    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    let again = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
     assert_eq!(levels(&again), want);
 }

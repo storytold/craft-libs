@@ -1,9 +1,9 @@
 //! A paragraph whose `w:pStyle` names a style `styles.xml` doesn't define is formatted as Normal,
 //! as in Word, not with the document defaults alone (#5077). Pandoc writes footers as
 //! `<w:pStyle w:val="Footer"/>` without defining Footer.
+use craft_wordmodel::props::LineSpacing;
+use craft_wordmodel::{Block, Document, PartKind};
 use std::io::Write;
-use wordcraft_doc::props::LineSpacing;
-use wordcraft_doc::{Block, Document, PartKind};
 
 const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -34,7 +34,7 @@ fn package(normal_id: &str) -> Vec<u8> {
     zw.finish().unwrap().into_inner()
 }
 
-fn footer_para(d: &Document) -> &wordcraft_doc::Paragraph {
+fn footer_para(d: &Document) -> &craft_wordmodel::Paragraph {
     let part = d.parts.values().find(|p| p.kind == PartKind::Footer).expect("a footer");
     match part.blocks.first().map(|b| &**b) {
         Some(Block::Para(p)) => p,
@@ -46,7 +46,7 @@ fn footer_para(d: &Document) -> &wordcraft_doc::Paragraph {
 fn a_paragraph_naming_an_undefined_style_is_formatted_as_normal() {
     // Also when the file's default paragraph style has another id (read as Normal).
     for normal_id in ["Normal", "a"] {
-        let d = wordcraft_docx::read(&package(normal_id)).unwrap();
+        let d = craft_docx::read(&package(normal_id)).unwrap();
         let Some(Block::Para(body)) = d.body.first().map(|b| &**b) else { panic!("a body paragraph") };
         let Some(Block::Para(normal)) = d.body.get(1).map(|b| &**b) else { panic!("a second body paragraph") };
         let normal_rp = d.styles.resolve_para(&normal.props);
@@ -64,8 +64,8 @@ fn a_paragraph_naming_an_undefined_style_is_formatted_as_normal() {
 
 #[test]
 fn an_undefined_style_is_written_back_as_it_was_named() {
-    let d = wordcraft_docx::read(&package("Normal")).unwrap();
-    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    let d = craft_docx::read(&package("Normal")).unwrap();
+    let again = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
     assert_eq!(footer_para(&again).props.style.as_deref(), Some("Footer"));
     assert_eq!(again.styles.resolve_para(&footer_para(&again).props).space_after, 2.0);
 }

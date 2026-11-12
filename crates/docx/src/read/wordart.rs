@@ -2,9 +2,9 @@
 //! `w14:shadow`, `w14:glow`, `w14:reflection`). Lengths are EMUs, angles 60000ths of a degree,
 //! percentages 1000ths of a percent.
 
-use wordcraft_doc::effects::{Glow, Shadow};
-use wordcraft_doc::props::Rgb;
-use wordcraft_doc::wordart::{GradStop, MAX_STOPS, Reflection, TextEffects, TextFill, TextOutline};
+use craft_wordmodel::effects::{Glow, Shadow};
+use craft_wordmodel::props::Rgb;
+use craft_wordmodel::wordart::{GradStop, MAX_STOPS, Reflection, TextEffects, TextFill, TextOutline};
 
 use crate::units::{int, measure};
 use crate::xml::El;

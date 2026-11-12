@@ -1,9 +1,9 @@
 //! A picture's hyperlink (#5267): Word keeps it on the drawing (`wp:docPr/a:hlinkClick`,
 //! ECMA-376 Part 1 §20.4.2.5) rather than in a `w:hyperlink` around the run. Original
 //! synthetic packages; the 2×2 picture is generated in code.
+use craft_wordmodel::{CharProps, Document, InlineObject, Pos};
 use std::io::{Read, Write};
 use std::sync::Arc;
-use wordcraft_doc::{CharProps, Document, InlineObject, Pos};
 
 fn png() -> Vec<u8> {
     let mut out = Vec::new();
@@ -71,7 +71,7 @@ fn a_link_on_a_pictures_drawing_is_read() {
         // A link around the run wins over the drawing's.
         picture_run(4, r#"<a:hlinkClick r:id="rIdWeb"/>"#),
     );
-    let doc = wordcraft_docx::read(&package(&body)).unwrap();
+    let doc = craft_docx::read(&package(&body)).unwrap();
     assert_eq!(picture_links(&doc), [Some("https://example.com/picture".to_string()), None, None, Some("https://example.com/run".to_string())]);
 }
 
@@ -93,7 +93,7 @@ fn a_linked_picture_is_saved_with_its_link_on_the_drawing_too() {
     // A place in this document stays a `w:hyperlink w:anchor` only: `a:hlinkClick` names a relationship.
     doc.insert_object(&Pos::body(0, 0), picture(), &linked("#Spot")).unwrap();
     doc.insert_object(&Pos::body(0, 0), picture(), &linked("https://example.com/saved")).unwrap();
-    let bytes = wordcraft_docx::write(&doc).unwrap();
+    let bytes = craft_docx::write(&doc).unwrap();
     let xml = part(&bytes, "word/document.xml");
     let clicks: Vec<&str> = xml.match_indices("<a:hlinkClick ").map(|(i, _)| &xml[i..]).collect();
     assert_eq!(clicks.len(), 1, "{xml}");
@@ -104,7 +104,7 @@ fn a_linked_picture_is_saved_with_its_link_on_the_drawing_too() {
     assert!(rels.contains(&format!(r#"Id="{rid}""#)) && rels.contains(r#"Target="https://example.com/saved""#), "{rels}");
     // The run's own hyperlink names the same relationship, so the address is stored once.
     assert_eq!(rels.matches("https://example.com/saved").count(), 1, "{rels}");
-    let back = wordcraft_docx::read(&bytes).unwrap();
+    let back = craft_docx::read(&bytes).unwrap();
     assert_eq!(picture_links(&back), [Some("https://example.com/saved".to_string()), Some("#Spot".to_string())]);
     // The drawing's link alone (as Word writes it) reads back the same.
     let without_run_link = xml.replace(&format!(r#"<w:hyperlink r:id="{rid}" w:history="1">"#), "").replacen("</w:hyperlink>", "", 1);
@@ -113,7 +113,7 @@ fn a_linked_picture_is_saved_with_its_link_on_the_drawing_too() {
     let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for i in 0..z.len() {
         let mut f = z.by_index(i).unwrap();
-        let name = f.name().to_string();
+        let name = f.name().unwrap().to_string();
         let mut data = Vec::new();
         f.read_to_end(&mut data).unwrap();
         if name == "word/document.xml" {
@@ -123,5 +123,5 @@ fn a_linked_picture_is_saved_with_its_link_on_the_drawing_too() {
         out.write_all(&data).unwrap();
     }
     let edited = out.finish().unwrap().into_inner();
-    assert_eq!(picture_links(&wordcraft_docx::read(&edited).unwrap())[0], Some("https://example.com/saved".to_string()));
+    assert_eq!(picture_links(&craft_docx::read(&edited).unwrap())[0], Some("https://example.com/saved".to_string()));
 }

@@ -167,13 +167,13 @@ impl Reader<'_> {
         }
         // Styles that give only a list level take the list from the style they are based on
         // (Heading 3: level 3 of Heading 2's outline list).
-        let fixed: Vec<Option<wordcraft_doc::props::NumRef>> = sheet
+        let fixed: Vec<Option<craft_wordmodel::props::NumRef>> = sheet
             .styles
             .iter()
             .map(|s| match s.para.numbering {
                 Some(n) if n.num == props::LEVEL_ONLY => {
                     let base = s.based_on.as_deref().and_then(|b| props::chain_list(&sheet, b));
-                    base.map(|num| wordcraft_doc::props::NumRef { num, level: n.level })
+                    base.map(|num| craft_wordmodel::props::NumRef { num, level: n.level })
                 }
                 other => other,
             })

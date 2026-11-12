@@ -7,11 +7,11 @@
 
 use std::time::Instant;
 
-use wordcraft_doc::control::{ContentControl, ControlKind};
-use wordcraft_doc::para::InlineObject;
-use wordcraft_doc::props::CharProps;
-use wordcraft_doc::{Document, Paragraph, para_block};
-use wordcraft_docx::write;
+use craft_docx::write;
+use craft_wordmodel::control::{ContentControl, ControlKind};
+use craft_wordmodel::para::InlineObject;
+use craft_wordmodel::props::CharProps;
+use craft_wordmodel::{Document, Paragraph, para_block};
 
 /// One paragraph per control, the control inline in it.
 fn inline_controls(n: usize) -> Document {
@@ -117,8 +117,8 @@ fn a_document_with_many_block_content_controls_saves_in_linear_time() {
 fn the_controls_are_written_where_they_were() {
     // Inline controls: both markers in the same paragraph, so the control is written in it.
     let bytes = write(&inline_controls(50)).expect("write");
-    let back = wordcraft_docx::read(&bytes).expect("read back");
-    let ranges = back.control_ranges(wordcraft_doc::StoryRef::Body);
+    let back = craft_docx::read(&bytes).expect("read back");
+    let ranges = back.control_ranges(craft_wordmodel::StoryRef::Body);
     assert_eq!(ranges.len(), 50, "every control survives the round trip");
     for r in &ranges {
         assert_eq!(r.start.path, r.end.path, "the control is written inline: {:?}", r.start.path);
@@ -126,8 +126,8 @@ fn the_controls_are_written_where_they_were() {
 
     // Block controls: the markers in different paragraphs, so the control is written around them.
     let bytes = write(&block_controls(50)).expect("write");
-    let back = wordcraft_docx::read(&bytes).expect("read back");
-    let ranges = back.control_ranges(wordcraft_doc::StoryRef::Body);
+    let back = craft_docx::read(&bytes).expect("read back");
+    let ranges = back.control_ranges(craft_wordmodel::StoryRef::Body);
     assert_eq!(ranges.len(), 50, "every control survives the round trip");
     for r in &ranges {
         assert_ne!(r.start.path, r.end.path, "the control is written around the paragraphs");
@@ -137,7 +137,7 @@ fn the_controls_are_written_where_they_were() {
 /// The names of the parts of a package, in the order they are in it.
 fn part_names(bytes: &[u8]) -> Vec<String> {
     let z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("zip");
-    z.file_names().map(str::to_string).collect()
+    z.file_names().map(|n| n.unwrap().to_string()).collect()
 }
 
 /// The body of the document part of a package.

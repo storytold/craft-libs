@@ -2,7 +2,7 @@
 //! entries differ from the file's (an untouched glossary is written back verbatim: see
 //! `read::glossary`).
 
-use wordcraft_doc::{Document, QUICK_PARTS_GALLERY};
+use craft_wordmodel::{Document, QUICK_PARTS_GALLERY};
 
 use super::{CT_WML, PartRels, Writer, numbering_xml, push_part, styles_xml};
 use crate::package::{GLOSSARY_BEHAVIORS, GLOSSARY_CONTENT_TYPE, GLOSSARY_READ, GLOSSARY_TYPES, glossary_fingerprint, rt};

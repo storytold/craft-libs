@@ -2,7 +2,7 @@
 //!
 //! WordCraft draws charts and diagrams and shows an OLE object's picture, but doesn't edit them.
 //! So that saving doesn't lose them, the reader keeps each one's own markup (an `a:graphic` or a
-//! `w:object`) as a [`wordcraft_doc::graphic::Embedded`] on the object, and every part that markup
+//! `w:object`) as a [`craft_wordmodel::graphic::Embedded`] on the object, and every part that markup
 //! reaches through relationships (chart, embedded workbook, colours and style; diagram data, layout,
 //! quick style, colours and drawing; OLE embedding and its picture…) as opaque bytes in
 //! `Document::passthrough`, with their content types and relationships in an
@@ -12,7 +12,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use wordcraft_doc::graphic::{Embedded, EmbeddedRef};
+use craft_wordmodel::graphic::{Embedded, EmbeddedRef};
 
 use super::Reader;
 use crate::package::{
@@ -340,7 +340,7 @@ mod tests {
     }
 
     /// The parts the reader carries over unchanged, as one string.
-    fn unmodelled_roots(d: &wordcraft_doc::Document) -> String {
+    fn unmodelled_roots(d: &craft_wordmodel::Document) -> String {
         d.passthrough.get(UNMODELLED_ROOTS).map(|v| String::from_utf8_lossy(v).to_string()).unwrap_or_default()
     }
 
@@ -356,7 +356,7 @@ mod tests {
         let t = std::time::Instant::now();
         let doc = crate::read(&bytes).unwrap();
         let took = t.elapsed();
-        assert_eq!(doc.plain_text(wordcraft_doc::StoryRef::Body).len(), 8 << 20, "the text is there");
+        assert_eq!(doc.plain_text(craft_wordmodel::StoryRef::Body).len(), 8 << 20, "the text is there");
         assert!(took.as_secs() < 15, "opening it took {took:?}");
     }
 

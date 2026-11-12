@@ -5,7 +5,7 @@
 
 use std::io::{Read, Write};
 
-use wordcraft_doc::props::TextAlignment;
+use craft_wordmodel::props::TextAlignment;
 
 fn docx(body: &str) -> Vec<u8> {
     let root = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
@@ -40,7 +40,7 @@ fn text_alignment_is_written_back_as_read() {
         para("", "G"),
     ]
     .concat();
-    let d = wordcraft_docx::read(&docx(&body)).unwrap();
+    let d = craft_docx::read(&docx(&body)).unwrap();
     let got: Vec<Option<TextAlignment>> = d.body.iter().filter_map(|b| b.as_para()).map(|p| p.props.text_alignment).collect();
     let want = vec![
         Some(TextAlignment::Top),
@@ -52,13 +52,13 @@ fn text_alignment_is_written_back_as_read() {
         None,
     ];
     assert_eq!(got, want);
-    let out = wordcraft_docx::write(&d).unwrap();
+    let out = craft_docx::write(&d).unwrap();
     let xml = document_xml(&out);
     assert!(xml.contains(r#"<w:jc w:val="center"/><w:textAlignment w:val="top"/><w:outlineLvl w:val="1"/>"#), "{xml}");
     for v in ["center", "baseline", "bottom", "auto"] {
         assert_eq!(xml.matches(&format!(r#"<w:textAlignment w:val="{v}"/>"#)).count(), 1, "{v}: {xml}");
     }
     assert_eq!(xml.matches("w:textAlignment").count(), 5, "an unknown value and none write nothing: {xml}");
-    let back = wordcraft_docx::read(&out).unwrap();
+    let back = craft_docx::read(&out).unwrap();
     assert_eq!(back.body.iter().filter_map(|b| b.as_para()).map(|p| p.props.text_alignment).collect::<Vec<_>>(), want);
 }

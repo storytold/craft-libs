@@ -4,8 +4,8 @@
 
 use std::io::{Read, Write};
 
-use wordcraft_doc::props::{Align, CharProps, ParaProps};
-use wordcraft_doc::{Document, Paragraph, para_block};
+use craft_wordmodel::props::{Align, CharProps, ParaProps};
+use craft_wordmodel::{Document, Paragraph, para_block};
 
 fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -59,8 +59,8 @@ fn persian_paragraph_round_trips() {
     let ltr = Paragraph::with_text("English with فارسی inside", CharProps { cs: Some(true), ..Default::default() });
     let mut d = Document::new();
     d.body = vec![para_block(rtl.clone()), para_block(ltr.clone())];
-    let bytes = wordcraft_docx::write(&d).unwrap();
-    let r = wordcraft_docx::read(&bytes).unwrap();
+    let bytes = craft_docx::write(&d).unwrap();
+    let r = craft_docx::read(&bytes).unwrap();
     let ps = paras(&r);
     assert_eq!(ps[0].text, FA, "Persian text, ZWNJ and digits survive byte for byte");
     assert_eq!(ps[0].props.bidi, Some(true));
@@ -78,7 +78,7 @@ fn bidi_markup_is_written_in_schema_order() {
     p.props.bidi = Some(true);
     let mut d = Document::new();
     d.body = vec![para_block(p)];
-    let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
+    let xml = document_xml(&craft_docx::write(&d).unwrap());
     assert!(xml.contains("<w:bidi/>"), "paragraph direction: {xml}");
     assert!(xml.contains(r#"w:cs="B Nazanin""#), "complex-script font");
     assert!(xml.contains(r#"<w:szCs w:val="28"/>"#), "complex-script size in half points");
@@ -104,7 +104,7 @@ fn reads_word_style_bidi_markup() {
   <w:r><w:t>Word 2025</w:t></w:r>
 </w:p>
 <w:p><w:pPr><w:bidi w:val="0"/></w:pPr><w:r><w:rPr><w:cs/><w:iCs/></w:rPr><w:t>x</w:t></w:r></w:p>"#;
-    let d = wordcraft_docx::read(&docx(body)).unwrap();
+    let d = craft_docx::read(&docx(body)).unwrap();
     let ps = paras(&d);
     assert_eq!(ps[0].text, "سلام دنیا Word 2025");
     assert_eq!(ps[0].props.bidi, Some(true));
@@ -133,7 +133,7 @@ fn hostile_bidi_markup_is_bounded() {
     let body = format!(
         r#"<w:p><w:pPr><w:bidi w:val="banana"/></w:pPr><w:r><w:rPr><w:rFonts w:cs="{long}"/><w:szCs w:val="-5"/><w:szCs w:val="99999999"/><w:lang w:bidi="{long}"/><w:rtl w:val="maybe"/></w:rPr><w:t>ok</w:t></w:r></w:p>"#
     );
-    let d = wordcraft_docx::read(&docx(&body)).unwrap();
+    let d = craft_docx::read(&docx(&body)).unwrap();
     let c = &paras(&d)[0].runs[0].props;
     assert_eq!(c.font_cs, None, "absurd font names are dropped");
     assert_eq!(c.lang_bidi, None);
@@ -157,20 +157,20 @@ fn rtl_tables_and_sections_round_trip() {
 </w:tbl>
 <w:p/>
 <w:sectPr><w:cols w:num="2" w:space="720"/><w:bidi/></w:sectPr>"#;
-    let d = wordcraft_docx::read(&docx(body)).unwrap();
-    let tables: Vec<&wordcraft_doc::Table> = d.body.iter().filter_map(|b| b.as_table()).collect();
+    let d = craft_docx::read(&docx(body)).unwrap();
+    let tables: Vec<&craft_wordmodel::Table> = d.body.iter().filter_map(|b| b.as_table()).collect();
     assert_eq!(tables.len(), 2);
     assert!(tables[0].props.bidi_visual, "w:bidiVisual reads as a right-to-left table");
     assert_eq!(tables[0].props.indent, Some(18.0), "the indent is kept (measured from the right)");
     assert!(!tables[1].props.bidi_visual, "w:val=0 turns it off");
     assert!(d.last_section.rtl, "w:bidi in sectPr is a right-to-left section");
-    let bytes = wordcraft_docx::write(&d).unwrap();
+    let bytes = craft_docx::write(&d).unwrap();
     let xml = document_xml(&bytes);
     assert_eq!(xml.matches("<w:bidiVisual/>").count(), 1, "{xml}");
     // CT_TblPr is a sequence: tblStyle, tblpPr, tblOverlap, bidiVisual, … tblW, jc, … tblInd.
     let pos = |t: &str| xml.find(t).unwrap_or_else(|| panic!("{t} missing: {xml}"));
     assert!(pos("<w:bidiVisual/>") < pos("<w:tblW"));
-    let r = wordcraft_docx::read(&bytes).unwrap();
+    let r = craft_docx::read(&bytes).unwrap();
     let again: Vec<bool> = r.body.iter().filter_map(|b| b.as_table()).map(|t| t.props.bidi_visual).collect();
     assert_eq!(again, vec![true, false]);
     assert!(r.last_section.rtl && r.last_section.columns.count == 2);

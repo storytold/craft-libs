@@ -2,9 +2,9 @@
 
 use std::io::{Read, Write};
 
-use wordcraft_doc::InlineObject;
-use wordcraft_doc::para::{PTabAlign, PTabBase};
-use wordcraft_doc::props::TabLeader;
+use craft_wordmodel::InlineObject;
+use craft_wordmodel::para::{PTabAlign, PTabBase};
+use craft_wordmodel::props::TabLeader;
 
 fn docx(body: &str) -> Vec<u8> {
     let root = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
@@ -38,7 +38,7 @@ fn positional_tabs_keep_their_alignment_base_and_leader() {
         ptab("indent", "center", "none"),
         ptab("margin", "left", "underscore"),
     );
-    let d = wordcraft_docx::read(&docx(&body)).unwrap();
+    let d = craft_docx::read(&docx(&body)).unwrap();
     let p = d.body.iter().find_map(|b| b.as_para()).unwrap();
     assert_eq!(p.plain_text(), "A\tB\tC\tD");
     assert_eq!(
@@ -49,7 +49,7 @@ fn positional_tabs_keep_their_alignment_base_and_leader() {
             InlineObject::PositionalTab { align: PTabAlign::Left, relative_to: PTabBase::Margin, leader: TabLeader::Underscore },
         ]
     );
-    let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
+    let xml = document_xml(&craft_docx::write(&d).unwrap());
     for (rel, align, leader) in [("margin", "right", "dot"), ("indent", "center", "none"), ("margin", "left", "underscore")] {
         let want = format!(r#"<w:ptab w:relativeTo="{rel}" w:alignment="{align}" w:leader="{leader}"/>"#);
         assert!(xml.contains(&want), "{want} missing from {xml}");
@@ -61,10 +61,10 @@ fn positional_tabs_keep_their_alignment_base_and_leader() {
 #[test]
 fn a_positional_tab_with_an_unknown_alignment_is_a_plain_tab() {
     let body = format!(r#"<w:p><w:r><w:t>A</w:t></w:r>{}<w:r><w:t>B</w:t></w:r></w:p>"#, ptab("margin", "decimal", "none"));
-    let d = wordcraft_docx::read(&docx(&body)).unwrap();
+    let d = craft_docx::read(&docx(&body)).unwrap();
     let p = d.body.iter().find_map(|b| b.as_para()).unwrap();
     assert_eq!(p.plain_text(), "A\tB");
     assert!(p.objects.is_empty(), "{:?}", p.objects);
-    let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
+    let xml = document_xml(&craft_docx::write(&d).unwrap());
     assert!(xml.contains("<w:tab/>") && !xml.contains("w:ptab"), "{xml}");
 }

@@ -9,8 +9,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
-use wordcraft_doc::graphic::Embedded;
-use wordcraft_doc::para::Float;
+use craft_wordmodel::graphic::Embedded;
+use craft_wordmodel::para::Float;
 
 use super::PartRels;
 use crate::package::{
@@ -54,7 +54,7 @@ pub(crate) struct EmbedWriter<'d> {
 }
 
 impl<'d> EmbedWriter<'d> {
-    pub fn new(doc: &'d wordcraft_doc::Document) -> EmbedWriter<'d> {
+    pub fn new(doc: &'d craft_wordmodel::Document) -> EmbedWriter<'d> {
         let manifest = doc.passthrough.get(EMBEDDED_PARTS).map(|m| EmbeddedManifest::parse(m)).unwrap_or_default();
         let mut taken: HashSet<String> = [
             "word/document.xml",
@@ -407,7 +407,7 @@ impl super::Writer<'_> {
     /// The `a:graphic` of a SmartArt graphic written from its model, laid out `w` × `h` points:
     /// new diagram parts (`word/diagrams/{data,layout,quickStyle,colors,drawing}N.xml`) related
     /// from the story part through `rels`.
-    pub(super) fn smart_art_graphic(&mut self, spec: &wordcraft_doc::smart_art::SmartArtSpec, w: f32, h: f32, rels: &mut PartRels) -> String {
+    pub(super) fn smart_art_graphic(&mut self, spec: &craft_wordmodel::smart_art::SmartArtSpec, w: f32, h: f32, rels: &mut PartRels) -> String {
         use crate::package::rt;
         use crate::smart_art as sa;
         let names = self.embeds.fresh_set(
@@ -451,7 +451,7 @@ impl super::Writer<'_> {
 
     /// The `a:graphic` of a chart written from its model: a new chart part (`word/charts/chartN.xml`)
     /// related from the story part through `rels`.
-    pub(super) fn chart_graphic(&mut self, spec: &wordcraft_doc::chart::ChartSpec, rels: &mut PartRels) -> String {
+    pub(super) fn chart_graphic(&mut self, spec: &craft_wordmodel::chart::ChartSpec, rels: &mut PartRels) -> String {
         let name = self.embeds.fresh("word/charts/chart", ".xml");
         let (xml, cut) = crate::chart_spec::chart_part(spec);
         if cut && !self.embeds.chart_cut {
@@ -822,7 +822,7 @@ fn vml_style_with(style: &str, w: f32, h: f32, float: &Float) -> String {
 
 /// Points for a VML style: finite, bounded, at most two decimals.
 fn pt(v: f32) -> String {
-    let v = wordcraft_geom::finite(v).clamp(-crate::units::MAX_LEN_PT, crate::units::MAX_LEN_PT);
+    let v = craft_wordmodel::geom::finite(v).clamp(-crate::units::MAX_LEN_PT, crate::units::MAX_LEN_PT);
     let s = format!("{v:.2}");
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
@@ -876,10 +876,10 @@ mod tests {
     fn charts_cut_to_the_limits_on_save_say_so_once() {
         // A model deserialised as is can hold more than a chart part keeps; the save left the rest
         // out without a word (review of #3872).
+        use craft_wordmodel::chart::{ChartSeries, ChartSpec, ChartType, MAX_SERIES};
+        use craft_wordmodel::graphic::{Graphic, GraphicKind};
+        use craft_wordmodel::{CharProps, InlineObject, Pos};
         use std::sync::Arc;
-        use wordcraft_doc::chart::{ChartSeries, ChartSpec, ChartType, MAX_SERIES};
-        use wordcraft_doc::graphic::{Graphic, GraphicKind};
-        use wordcraft_doc::{CharProps, InlineObject, Pos};
         let chart = |series: usize| {
             let spec = ChartSpec {
                 kind: ChartType::Column,
@@ -893,7 +893,7 @@ mod tests {
             InlineObject::Graphic { w: 100.0, h: 100.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) }
         };
         let save = |charts: Vec<InlineObject>| {
-            let mut doc = wordcraft_doc::Document::new();
+            let mut doc = craft_wordmodel::Document::new();
             for c in charts {
                 doc.insert_object(&Pos::body(0, 0), c, &CharProps::default()).unwrap();
             }
@@ -926,7 +926,7 @@ mod tests {
     #[test]
     fn vml_style_takes_the_rotation_and_flips() {
         let mut float = Float::default();
-        float.set_spin(wordcraft_geom::Spin::new(-30.5, true, true));
+        float.set_spin(craft_wordmodel::geom::Spin::new(-30.5, true, true));
         let s = vml_style_with("width:1pt;rotation:10;flip:x;height:1pt;z-index:3", 2.0, 3.0, &float);
         assert_eq!(s, "z-index:3;width:2pt;height:3pt;rotation:329.5;flip:x y");
         // Unturned: no rotation or flip left behind.
@@ -935,7 +935,7 @@ mod tests {
 
     #[test]
     fn kept_part_names_are_valid_opc_names() {
-        let doc = wordcraft_doc::Document::default();
+        let doc = craft_wordmodel::Document::default();
         let mut w = EmbedWriter::new(&doc);
         for orig in ["word/a\\b.bin", "word/..\\..\\x.bin", "word/a/../b%2Fc.bin", "word/a//./b%5Cc.bin", "word/a./b.bin", "word/a..."] {
             let name = w.alloc(orig);

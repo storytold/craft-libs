@@ -1,4 +1,4 @@
-use wordcraft_doc::math::MathJc;
+use craft_wordmodel::math::MathJc;
 
 use super::{
     CharProps, El, InlineObject, Item, MAX_FORM, MAX_INSTR, NoteKind, PB, PTabAlign, PTabBase, Phase, Reader, Rels, RevisionKind, RunCtx, StoryCtx,
@@ -71,7 +71,7 @@ impl Reader<'_> {
                 if let Some(InlineObject::ControlStart { control }) = pb.objects.get_mut(k0)
                     && control.showing_placeholder
                 {
-                    let shown: String = pb.text.get(at..).unwrap_or("").chars().filter(|c| *c != wordcraft_doc::para::OBJ).collect();
+                    let shown: String = pb.text.get(at..).unwrap_or("").chars().filter(|c| *c != craft_wordmodel::para::OBJ).collect();
                     control.placeholder_text = placeholder_of(&shown);
                 }
                 let end_props = pb.runs.last().map(|r| r.props.clone()).unwrap_or(props);
@@ -363,7 +363,7 @@ impl Reader<'_> {
         let mut rp = ruby_props.unwrap_or_default();
         let base_size = pt("w:hpsBaseText").filter(|v| *v > 0.0).or(bp.size).unwrap_or(0.0).min(1584.0);
         let size = pt("w:hps").filter(|v| *v > 0.0).or(rp.size).unwrap_or(if base_size > 0.0 { base_size / 2.0 } else { 5.0 }).clamp(1.0, 1584.0);
-        let raise = pt("w:hpsRaise").unwrap_or_else(|| wordcraft_doc::para::ruby_raise(0.0, base_size.max(size), size)).min(1584.0);
+        let raise = pt("w:hpsRaise").unwrap_or_else(|| craft_wordmodel::para::ruby_raise(0.0, base_size.max(size), size)).min(1584.0);
         // The ruby's size is `size`; its run keeps what it sets beyond the base text's formatting
         // (writers repeat the base's).
         (rp.size, rp.size_cs) = (None, None);
@@ -371,7 +371,7 @@ impl Reader<'_> {
         let obj = InlineObject::Ruby {
             base,
             ruby,
-            align: val("w:rubyAlign").and_then(wordcraft_doc::para::RubyAlign::from_ooxml).unwrap_or_default(),
+            align: val("w:rubyAlign").and_then(craft_wordmodel::para::RubyAlign::from_ooxml).unwrap_or_default(),
             size,
             raise,
             base_size,
@@ -407,7 +407,7 @@ impl Reader<'_> {
         if let Some(color) = crate::read::math::lift_color(&mut math) {
             props.color = Some(TextColor::Rgb(color));
         }
-        let linear = wordcraft_doc::math::to_linear(&math.nodes);
+        let linear = craft_wordmodel::math::to_linear(&math.nodes);
         self.emit_obj(sc, pb, InlineObject::Equation { linear, display, math }, &props);
     }
 

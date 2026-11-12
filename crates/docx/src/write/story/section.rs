@@ -4,7 +4,7 @@ impl Writer<'_> {
     /// The section's headers, plus the header holding only the watermark in each slot the
     /// pages show (first page with a title page, even pages with even/odd headers) that has no
     /// header of its own or linked from an earlier section. Sections are written in body order.
-    fn watermark_headers(&mut self, s: &SectionProps) -> wordcraft_doc::section::HeaderSet {
+    fn watermark_headers(&mut self, s: &SectionProps) -> craft_wordmodel::section::HeaderSet {
         let mut set = s.headers;
         let linked = &mut self.linked_headers;
         if self.doc.settings.watermark.as_ref().and_then(crate::write::watermark::text).is_some() {
@@ -135,10 +135,10 @@ fn sectpr_body(w: &mut W, s: &SectionProps) {
             w.empty("w:formProt", if on { &[] } else { &[("w:val", "0")] });
         }
         match s.valign {
-            wordcraft_doc::section::PageVAlign::Top => {}
-            wordcraft_doc::section::PageVAlign::Center => w.val("w:vAlign", "center"),
-            wordcraft_doc::section::PageVAlign::Justify => w.val("w:vAlign", "both"),
-            wordcraft_doc::section::PageVAlign::Bottom => w.val("w:vAlign", "bottom"),
+            craft_wordmodel::section::PageVAlign::Top => {}
+            craft_wordmodel::section::PageVAlign::Center => w.val("w:vAlign", "center"),
+            craft_wordmodel::section::PageVAlign::Justify => w.val("w:vAlign", "both"),
+            craft_wordmodel::section::PageVAlign::Bottom => w.val("w:vAlign", "bottom"),
         }
         if let Some(on) = s.no_endnote {
             w.empty("w:noEndnote", if on { &[] } else { &[("w:val", "0")] });
@@ -154,11 +154,11 @@ fn sectpr_body(w: &mut W, s: &SectionProps) {
         }
         if let Some(g) = &s.doc_grid {
             let mut a = vec![("w:linePitch", twips(g.line_pitch()))];
-            if g.kind != wordcraft_doc::section::DocGridType::Default {
+            if g.kind != craft_wordmodel::section::DocGridType::Default {
                 a.insert(0, ("w:type", g.kind.ooxml().to_string()));
             }
             if g.char_space != 0 {
-                let cs = g.char_space.clamp(-wordcraft_doc::section::MAX_CHAR_SPACE, wordcraft_doc::section::MAX_CHAR_SPACE);
+                let cs = g.char_space.clamp(-craft_wordmodel::section::MAX_CHAR_SPACE, craft_wordmodel::section::MAX_CHAR_SPACE);
                 a.push(("w:charSpace", n(cs as i64)));
             }
             let refs: Vec<(&str, &str)> = a.iter().map(|(k, v)| (*k, v.as_str())).collect();
@@ -184,7 +184,7 @@ fn paper_source(w: &mut W, s: &SectionProps) {
 fn page_number_type(w: &mut W, s: &SectionProps) {
     if !(s.page_num_set
         || s.page_num_start.is_some()
-        || s.page_num_format != wordcraft_doc::section::NumFormat::Decimal
+        || s.page_num_format != craft_wordmodel::section::NumFormat::Decimal
         || s.chapter_style.is_some()
         || s.chapter_sep.is_some())
     {
@@ -214,7 +214,7 @@ pub(in super::super) fn note_pr_inner(w: &mut W, pr: &NoteProps) {
         w.val("w:numFmt", f.ooxml());
     }
     if let Some(n) = pr.num_start {
-        w.val("w:numStart", &n.clamp(1, wordcraft_doc::section::MAX_NOTE_START).to_string());
+        w.val("w:numStart", &n.clamp(1, craft_wordmodel::section::MAX_NOTE_START).to_string());
     }
     if let Some(r) = pr.num_restart {
         w.val("w:numRestart", r.ooxml());
@@ -224,10 +224,10 @@ pub(in super::super) fn note_pr_inner(w: &mut W, pr: &NoteProps) {
 /// The character style for comment reference marks: the document's "annotation reference" style
 /// (Word's built-in name; localized documents give it another id, e.g. Polish
 /// `Odwoaniedokomentarza`), else `CommentReference`.
-pub(super) fn comment_reference_style(doc: &wordcraft_doc::Document) -> &str {
+pub(super) fn comment_reference_style(doc: &craft_wordmodel::Document) -> &str {
     doc.styles
         .styles
         .iter()
-        .find(|s| s.kind == wordcraft_doc::styles::StyleKind::Character && s.name.eq_ignore_ascii_case("annotation reference"))
+        .find(|s| s.kind == craft_wordmodel::styles::StyleKind::Character && s.name.eq_ignore_ascii_case("annotation reference"))
         .map_or("CommentReference", |s| s.id.as_str())
 }

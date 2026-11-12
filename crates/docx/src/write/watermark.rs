@@ -2,7 +2,7 @@
 //! `shape`, `shapetype`, `path`, `textpath`, `fill`), which is how a WordprocessingML consumer
 //! draws text behind every page. The reader (`read::story::vml_watermark`) maps it back.
 
-use wordcraft_doc::{SectionProps, Watermark};
+use craft_wordmodel::{SectionProps, Watermark};
 
 use crate::xml::esc;
 

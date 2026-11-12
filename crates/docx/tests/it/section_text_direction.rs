@@ -3,7 +3,7 @@
 
 use std::io::{Read, Write};
 
-use wordcraft_doc::props::TextDirection;
+use craft_wordmodel::props::TextDirection;
 
 fn docx(body: &str) -> Vec<u8> {
     let root = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
@@ -54,16 +54,16 @@ fn section_text_direction_round_trips_in_schema_order() {
         sect("btLr"),
         sect("diagonal")
     );
-    let d = wordcraft_docx::read(&docx(&body)).unwrap();
+    let d = craft_docx::read(&docx(&body)).unwrap();
     let dirs: Vec<TextDirection> = d.sections().iter().map(|(_, s)| s.text_direction).collect();
     assert_eq!(dirs, vec![TextDirection::Down, TextDirection::Up, TextDirection::Horizontal]);
-    let out = wordcraft_docx::write(&d).unwrap();
+    let out = craft_docx::write(&d).unwrap();
     let xml = document_xml(&out);
     // After w:titlePg and before w:bidi (CT_SectPr's sequence); a horizontal section writes none.
     assert!(xml.contains(r#"<w:titlePg/><w:textDirection w:val="tbRl"/><w:bidi/>"#), "{xml}");
     assert!(xml.contains(r#"<w:textDirection w:val="btLr"/>"#));
     assert_eq!(xml.matches("w:textDirection").count(), 2);
-    let back = wordcraft_docx::read(&out).unwrap();
+    let back = craft_docx::read(&out).unwrap();
     let again: Vec<TextDirection> = back.sections().iter().map(|(_, s)| s.text_direction).collect();
     assert_eq!(again, dirs);
 }
@@ -71,24 +71,24 @@ fn section_text_direction_round_trips_in_schema_order() {
 #[test]
 fn explicit_horizontal_direction_is_kept_in_sections_and_cells() {
     let body = r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/><w:textDirection w:val="lrTb"/></w:tcPr><w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>Body</w:t></w:r></w:p><w:sectPr><w:textDirection w:val="lrTb"/></w:sectPr>"#;
-    let d = wordcraft_docx::read(&docx(body)).unwrap();
-    let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
+    let d = craft_docx::read(&docx(body)).unwrap();
+    let xml = document_xml(&craft_docx::write(&d).unwrap());
     assert_eq!(xml.matches(r#"<w:textDirection w:val="lrTb"/>"#).count(), 2, "{xml}");
     // A horizontal section or cell that never said so still writes nothing.
-    let plain = wordcraft_docx::read(&docx(r#"<w:p><w:r><w:t>Body</w:t></w:r></w:p><w:sectPr/>"#)).unwrap();
-    assert!(!document_xml(&wordcraft_docx::write(&plain).unwrap()).contains("textDirection"));
+    let plain = craft_docx::read(&docx(r#"<w:p><w:r><w:t>Body</w:t></w:r></w:p><w:sectPr/>"#)).unwrap();
+    assert!(!document_xml(&craft_docx::write(&plain).unwrap()).contains("textDirection"));
 }
 
 #[test]
 fn paragraph_text_direction_round_trips_through_two_saves_and_json() {
-    use wordcraft_doc::props::ParaProps;
-    use wordcraft_doc::props::ParagraphTextDirection;
+    use craft_wordmodel::props::ParaProps;
+    use craft_wordmodel::props::ParagraphTextDirection;
 
     let values = ["lrTb", "lrTbV", "tb", "tbRl", "tbRlV", "tbLr", "tbLrV", "btLr", "tbV", "rl", "rlV", "lr", "lrV"];
     let mut body: String =
         values.iter().map(|value| format!(r#"<w:p><w:pPr><w:textDirection w:val="{value}"/></w:pPr><w:r><w:t>{value}</w:t></w:r></w:p>"#)).collect();
     body.push_str(r#"<w:p><w:r><w:t>Inherited</w:t></w:r></w:p>"#);
-    let d = wordcraft_docx::read(&docx(&body)).unwrap();
+    let d = craft_docx::read(&docx(&body)).unwrap();
     let paras: Vec<_> = d.body.iter().filter_map(|b| b.as_para()).collect();
     for (para, value) in paras.iter().zip(values) {
         assert_eq!(para.props.text_direction, ParagraphTextDirection::from_ooxml(value), "{value}");
@@ -99,13 +99,13 @@ fn paragraph_text_direction_round_trips_through_two_saves_and_json() {
     let decoded: ParaProps = serde_json::from_value(json).unwrap();
     assert_eq!(decoded.text_direction, Some(ParagraphTextDirection::LrTb));
 
-    let first = wordcraft_docx::write(&d).unwrap();
+    let first = craft_docx::write(&d).unwrap();
     let xml = document_xml(&first);
     for value in values {
         assert!(xml.contains(&format!(r#"<w:textDirection w:val="{value}"/>"#)), "{xml}");
     }
     assert_eq!(xml.matches("w:textDirection").count(), values.len(), "inherited direction stays absent: {xml}");
-    let second = wordcraft_docx::write(&wordcraft_docx::read(&first).unwrap()).unwrap();
+    let second = craft_docx::write(&craft_docx::read(&first).unwrap()).unwrap();
     let twice = document_xml(&second);
     assert_eq!(twice.matches("w:textDirection").count(), values.len(), "{twice}");
     for value in values {
@@ -117,12 +117,12 @@ fn paragraph_text_direction_round_trips_through_two_saves_and_json() {
 fn paragraph_style_text_direction_is_preserved_and_direct_value_overrides_it() {
     let styles = r#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:styleId="Vertical"><w:name w:val="Vertical"/><w:pPr><w:textDirection w:val="tbRl"/></w:pPr></w:style></w:styles>"#;
     let body = r#"<w:p><w:pPr><w:pStyle w:val="Vertical"/></w:pPr><w:r><w:t>Style</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="Vertical"/><w:textDirection w:val="lrTb"/></w:pPr><w:r><w:t>Override</w:t></w:r></w:p>"#;
-    let d = wordcraft_docx::read(&docx_with_styles(body, styles)).unwrap();
-    let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
+    let d = craft_docx::read(&docx_with_styles(body, styles)).unwrap();
+    let xml = document_xml(&craft_docx::write(&d).unwrap());
     assert_eq!(xml.matches(r#"<w:pStyle w:val="Vertical"/>"#).count(), 2, "both paragraphs keep their style: {xml}");
     assert!(xml.contains(r#"<w:pStyle w:val="Vertical"/><w:textDirection w:val="lrTb"/>"#), "direct horizontal is explicit: {xml}");
     assert_eq!(xml.matches("w:textDirection").count(), 1, "only the direct paragraph writes a direction: {xml}");
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(wordcraft_docx::write(&d).unwrap())).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(craft_docx::write(&d).unwrap())).unwrap();
     let mut styles_xml = String::new();
     z.by_name("word/styles.xml").unwrap().read_to_string(&mut styles_xml).unwrap();
     assert!(styles_xml.contains(r#"<w:textDirection w:val="tbRl"/>"#), "style value survives: {styles_xml}");

@@ -33,13 +33,13 @@ fn row(ex: &str, text: &str) -> String {
 fn row_property_exceptions_round_trip_before_the_row_properties() {
     let ex = r#"<w:tblPrEx><w:tblW w:w="3000" w:type="dxa"/><w:jc w:val="center"/><w:tblInd w:w="240" w:type="dxa"/><w:tblLayout w:type="fixed"/></w:tblPrEx>"#;
     let body = format!(r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid>{}{}</w:tbl><w:p/>"#, row(ex, "A"), row("", "B"));
-    let d = wordcraft_docx::read(&docx(&body)).unwrap();
-    let out = wordcraft_docx::write(&d).unwrap();
+    let d = craft_docx::read(&docx(&body)).unwrap();
+    let out = craft_docx::write(&d).unwrap();
     let xml = document_xml(&out);
     assert_eq!(xml.matches("<w:tblPrEx>").count(), 1, "{xml}");
     assert!(xml.contains(r#"<w:tr><w:tblPrEx><w:tblW w:w="3000" w:type="dxa"/><w:jc w:val="center"/><w:tblInd w:w="240" w:type="dxa"/><w:tblLayout w:type="fixed"/></w:tblPrEx><w:trPr>"#), "{xml}");
     // Reading the output again gives the same exception on the first row only.
-    let back = wordcraft_docx::read(&out).unwrap();
+    let back = craft_docx::read(&out).unwrap();
     let t = back.body.iter().find_map(|b| b.as_table()).unwrap();
     let x = t.rows[0].props.exceptions.as_ref().expect("first row keeps its exceptions");
     assert_eq!(x.width, Some(150.0));
@@ -50,7 +50,7 @@ fn row_property_exceptions_round_trip_before_the_row_properties() {
 #[test]
 fn an_empty_row_exception_element_is_kept() {
     let body = format!(r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid>{}</w:tbl><w:p/>"#, row("<w:tblPrEx/>", "A"));
-    let d = wordcraft_docx::read(&docx(&body)).unwrap();
-    let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
+    let d = craft_docx::read(&docx(&body)).unwrap();
+    let xml = document_xml(&craft_docx::write(&d).unwrap());
     assert!(xml.contains("<w:tblPrEx></w:tblPrEx>") || xml.contains("<w:tblPrEx/>"), "{xml}");
 }

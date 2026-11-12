@@ -3,8 +3,8 @@
 //! `w:left` of 66256 starts the text 36 pt in, a `w:right` of 66976 leaves a 72 pt right indent.
 //! Fixtures are hand-written.
 
-use wordcraft_doc::Document;
-use wordcraft_doc::props::ParaProps;
+use craft_wordmodel::Document;
+use craft_wordmodel::props::ParaProps;
 
 use crate::fixtures::zip;
 
@@ -18,7 +18,7 @@ fn docx(body: &str) -> Vec<u8> {
 }
 
 fn props(body: &str) -> Vec<ParaProps> {
-    let d: Document = wordcraft_docx::read(&docx(body)).unwrap();
+    let d: Document = craft_docx::read(&docx(body)).unwrap();
     d.body.iter().filter_map(|b| b.as_para()).map(|p| p.props.clone()).collect()
 }
 

@@ -6,7 +6,7 @@
 
 use std::io::{Read, Write};
 
-use wordcraft_doc::{Document, InlineObject, PartKind};
+use craft_wordmodel::{Document, InlineObject, PartKind};
 
 const STRICT_NS: &str = r#"xmlns:w="http://purl.oclc.org/ooxml/wordprocessingml/main" xmlns:r="http://purl.oclc.org/ooxml/officeDocument/relationships" xmlns:wp="http://purl.oclc.org/ooxml/drawingml/wordprocessingDrawing" xmlns:a="http://purl.oclc.org/ooxml/drawingml/main" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" w:conformance="strict""#;
 const TRANSITIONAL_NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas""#;
@@ -147,7 +147,7 @@ fn box_texts(d: &Document) -> Vec<String> {
 
 #[test]
 fn strict_shapes_read_like_their_transitional_twins() {
-    let transitional = wordcraft_docx::read(&package(&TRANSITIONAL)).unwrap();
+    let transitional = craft_docx::read(&package(&TRANSITIONAL)).unwrap();
     let want = objects(&transitional);
     // The twin itself reads every drawing: a rectangle, a text box, an arrow, a group whose
     // nested group is flattened into it, and a canvas with its background.
@@ -162,7 +162,7 @@ fn strict_shapes_read_like_their_transitional_twins() {
     );
     assert_eq!(box_texts(&transitional), ["Strict text box"]);
     for (name, names) in [("Word's Strict names", &STRICT_WORD), ("the Strict schema's names", &STRICT_SCHEMA)] {
-        let strict = wordcraft_docx::read(&package(names)).unwrap();
+        let strict = craft_docx::read(&package(names)).unwrap();
         assert_eq!(objects(&strict), want, "{name}");
         assert_eq!(box_texts(&strict), ["Strict text box"], "{name}");
     }
@@ -170,13 +170,13 @@ fn strict_shapes_read_like_their_transitional_twins() {
 
 #[test]
 fn strict_shapes_are_saved_and_reopened() {
-    let strict = wordcraft_docx::read(&package(&STRICT_WORD)).unwrap();
-    let saved = wordcraft_docx::write(&strict).unwrap();
+    let strict = craft_docx::read(&package(&STRICT_WORD)).unwrap();
+    let saved = craft_docx::write(&strict).unwrap();
     let xml = document_xml(&saved);
     for name in ["<wps:wsp>", "<wpg:wgp>", "<wpc:wpc>", "<wpc:bg>", "<w:txbxContent>", "<wps:cNvCnPr"] {
         assert!(xml.contains(name), "{name} missing from the saved document");
     }
-    let reopened = wordcraft_docx::read(&saved).unwrap();
+    let reopened = craft_docx::read(&saved).unwrap();
     assert_eq!(objects(&reopened), objects(&strict));
     assert_eq!(box_texts(&reopened), ["Strict text box"]);
 }

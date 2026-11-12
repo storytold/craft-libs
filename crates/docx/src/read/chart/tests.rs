@@ -1,5 +1,5 @@
 use super::*;
-use wordcraft_doc::THEME_COLORS;
+use craft_wordmodel::THEME_COLORS;
 
 const NS: &str =
     r#"xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main""#;

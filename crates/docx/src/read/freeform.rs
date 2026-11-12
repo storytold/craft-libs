@@ -1,7 +1,7 @@
 //! Freeform shapes (DrawingML custom geometry, `a:custGeom`; legacy VML paths) and ink strokes
 //! drawn with them.
 
-use wordcraft_doc::freeform::{FreePath, Freeform, InkTool, MAX_PATHS, MAX_POINTS};
+use craft_wordmodel::freeform::{FreePath, Freeform, InkTool, MAX_PATHS, MAX_POINTS};
 
 use crate::units::int;
 use crate::xml::El;

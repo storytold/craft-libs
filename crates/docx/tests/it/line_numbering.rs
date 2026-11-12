@@ -3,8 +3,8 @@
 
 use std::sync::Arc;
 
-use wordcraft_doc::section::{Columns, LineNumberRestart, LineNumbering};
-use wordcraft_doc::{CharProps, Document, Rgb, Style, StyleKind, TextColor};
+use craft_wordmodel::section::{Columns, LineNumberRestart, LineNumbering};
+use craft_wordmodel::{CharProps, Document, Rgb, Style, StyleKind, TextColor};
 
 /// Every line-numbering option and a localised "line number" style (German Word calls its id
 /// `Zeilennummer`) survive a save and reopen, beside two columns.
@@ -22,7 +22,7 @@ fn line_numbering_options_and_style_round_trip() {
         chr: CharProps { size: Some(8.0), color: Some(red), italic: Some(true), ..Default::default() },
         ..Default::default()
     });
-    let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    let back = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
     assert_eq!(back.last_section.line_numbers, Some(numbering));
     assert_eq!(back.last_section.columns.count, 2);
     let st = back.styles.find("line number").expect("the line number style");

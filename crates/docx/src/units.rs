@@ -100,11 +100,11 @@ pub fn vml_number(s: &str) -> Option<f64> {
 
 /// A picture's brightness, contrast and transparency: `a:lum` (ECMA-376 §20.1.8.42) and
 /// `a:alphaModFix` (§20.1.8.4) in its `a:blip` (#1766).
-pub fn blip_fx(blip: &El) -> wordcraft_doc::picfx::PicFx {
+pub fn blip_fx(blip: &El) -> craft_wordmodel::picfx::PicFx {
     let val = |el: Option<&El>, k: &str| el.and_then(|e| e.attr(k)).and_then(int).map(|v| v.clamp(-1_000_000, 1_000_000) as i32);
     let lum = blip.child("a:lum");
     let amt = val(blip.child("a:alphaModFix"), "amt").unwrap_or(100_000).clamp(0, 100_000);
-    wordcraft_doc::picfx::PicFx::new(val(lum, "bright").unwrap_or(0), val(lum, "contrast").unwrap_or(0), 100_000 - amt)
+    craft_wordmodel::picfx::PicFx::new(val(lum, "bright").unwrap_or(0), val(lum, "contrast").unwrap_or(0), 100_000 - amt)
 }
 
 pub fn u32_of(s: &str) -> Option<u32> {
@@ -157,12 +157,12 @@ pub fn n(v: i64) -> String {
 
 /// Points → twips string.
 pub fn twips(pt: f32) -> String {
-    wordcraft_geom::to_twips(pt.clamp(-MAX_LEN_PT, MAX_LEN_PT)).to_string()
+    craft_wordmodel::geom::to_twips(pt.clamp(-MAX_LEN_PT, MAX_LEN_PT)).to_string()
 }
 
 /// Points → EMU string (never negative for sizes).
 pub fn emu(pt: f32) -> String {
-    wordcraft_geom::to_emu(pt.clamp(-MAX_LEN_PT, MAX_LEN_PT)).to_string()
+    craft_wordmodel::geom::to_emu(pt.clamp(-MAX_LEN_PT, MAX_LEN_PT)).to_string()
 }
 
 #[cfg(test)]

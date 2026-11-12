@@ -1,38 +1,34 @@
 [package]
-name = "wordcraft-docx"
+name = "craft-docx"
+description = "DOCX (OOXML WordprocessingML) reader and writer on the craft-wordmodel document model, with Word XML (Flat OPC) and Word 2003 XML, password-protected packages and Restrict Editing hashes."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "WordCraft DOCX (OOXML WordprocessingML) reader and writer"
+rust-version.workspace = true
+repository.workspace = true
 
 [lints]
 workspace = true
 
 [dependencies]
-wordcraft-doc = { workspace = true }
-wordcraft-geom = { workspace = true }
-quick-xml = { workspace = true }
-zip = { workspace = true }
+craft-offcrypto = { workspace = true }
+craft-opc = { workspace = true }
+craft-wordmodel = { workspace = true }
+craft-xml = { workspace = true }
+base64 = "0.23"
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+log = "0.4"
+# The streaming readers of the Flat OPC file and of kept parts (not yet on craft-xml's pull reader).
+quick-xml = { version = "0.41", default-features = false }
 thiserror = { workspace = true }
-log = { workspace = true }
-chrono = { workspace = true }
-unicode-bidi = { workspace = true }
-cfb = { workspace = true }
-aes = { workspace = true }
-sha1 = { workspace = true }
-sha2 = { workspace = true }
-hmac = { workspace = true }
-base64 = { workspace = true }
-getrandom = { workspace = true }
-zeroize = { workspace = true }
-
-# The browser's `crypto.getRandomValues` for the salts and keys of encrypted saves.
-[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
-getrandom = { workspace = true, features = ["wasm_js"] }
+unicode-bidi = "0.3"
+zeroize = "1"
 
 [dev-dependencies]
-wordcraft-doc = { workspace = true, features = ["test-support"] }
-serde_json = { workspace = true }
-proptest = { workspace = true }
-image = { workspace = true }
-zip = { workspace = true }
+craft-cfb = { workspace = true }
+craft-opc = { workspace = true, features = ["test-support"] }
+craft-wordmodel = { workspace = true, features = ["test-support"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+proptest = "1"
+serde_json = "1"
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }

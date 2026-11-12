@@ -4,7 +4,7 @@
 
 use std::io::{Read, Write};
 
-use wordcraft_doc::props::{CombineBrackets, EastAsianLayout};
+use craft_wordmodel::props::{CombineBrackets, EastAsianLayout};
 
 fn docx(body: &str, styles: Option<&str>) -> Vec<u8> {
     let root = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
@@ -40,7 +40,7 @@ fn run(text: &str, rpr: &str) -> String {
 }
 
 /// The East Asian layout of the run holding `text` in the first paragraph.
-fn layout_of(d: &wordcraft_doc::Document, text: &str) -> Option<EastAsianLayout> {
+fn layout_of(d: &craft_wordmodel::Document, text: &str) -> Option<EastAsianLayout> {
     let p = d.body.iter().find_map(|b| b.as_para()).unwrap();
     let start = p.text.find(text).unwrap();
     let mut at = 0;
@@ -63,7 +63,7 @@ fn two_lines_in_one_and_horizontal_in_vertical_survive_a_save() {
         run("12", r#"<w:eastAsianLayout w:id="2" w:vert="on" w:vertCompress="true"/>"#),
         run("月", "")
     );
-    let d = wordcraft_docx::read(&docx(&body, None)).unwrap();
+    let d = craft_docx::read(&docx(&body, None)).unwrap();
     let warichu = EastAsianLayout { id: Some(1), combine: Some(true), combine_brackets: Some(CombineBrackets::Round), ..Default::default() };
     let tcy = EastAsianLayout { id: Some(2), vert: Some(true), vert_compress: Some(true), ..Default::default() };
     assert_eq!(layout_of(&d, "二行の注"), Some(warichu.clone()));
@@ -71,12 +71,12 @@ fn two_lines_in_one_and_horizontal_in_vertical_survive_a_save() {
     assert_eq!(layout_of(&d, "本文"), None);
     assert_eq!(layout_of(&d, "月"), None);
 
-    let out = wordcraft_docx::write(&d).unwrap();
+    let out = craft_docx::write(&d).unwrap();
     let xml = part(&out, "word/document.xml");
     assert_eq!(xml.matches("<w:eastAsianLayout ").count(), 2, "{xml}");
     assert!(xml.contains(r#"<w:eastAsianLayout w:id="1" w:combine="1" w:combineBrackets="round"/>"#), "{xml}");
     assert!(xml.contains(r#"<w:eastAsianLayout w:id="2" w:vert="1" w:vertCompress="1"/>"#), "{xml}");
-    let back = wordcraft_docx::read(&out).unwrap();
+    let back = craft_docx::read(&out).unwrap();
     assert_eq!(layout_of(&back, "二行の注"), Some(warichu));
     assert_eq!(layout_of(&back, "12"), Some(tcy));
 }
@@ -85,8 +85,8 @@ fn two_lines_in_one_and_horizontal_in_vertical_survive_a_save() {
 fn east_asian_layout_is_written_after_lang() {
     // CT_RPr's sequence: … w:lang, w:eastAsianLayout, w:specVanish.
     let body = format!(r#"<w:p>{}</w:p>"#, run("12", r#"<w:eastAsianLayout w:vert="1"/><w:lang w:val="ja-JP"/><w:b/>"#));
-    let d = wordcraft_docx::read(&docx(&body, None)).unwrap();
-    let xml = part(&wordcraft_docx::write(&d).unwrap(), "word/document.xml");
+    let d = craft_docx::read(&docx(&body, None)).unwrap();
+    let xml = part(&craft_docx::write(&d).unwrap(), "word/document.xml");
     let lang = xml.find("<w:lang ").unwrap();
     let eal = xml.find("<w:eastAsianLayout ").unwrap();
     assert!(lang < eal, "{xml}");
@@ -97,8 +97,8 @@ fn east_asian_layout_is_written_after_lang() {
 fn a_character_style_keeps_its_east_asian_layout() {
     let styles = r#"<w:style w:type="character" w:styleId="TCY"><w:name w:val="Tate Chu Yoko"/><w:rPr><w:eastAsianLayout w:id="7" w:vert="on"/></w:rPr></w:style>"#;
     let body = format!(r#"<w:p>{}</w:p>"#, run("12", r#"<w:rStyle w:val="TCY"/>"#));
-    let d = wordcraft_docx::read(&docx(&body, Some(styles))).unwrap();
-    let out = wordcraft_docx::write(&d).unwrap();
+    let d = craft_docx::read(&docx(&body, Some(styles))).unwrap();
+    let out = craft_docx::write(&d).unwrap();
     let xml = part(&out, "word/styles.xml");
     assert!(xml.contains(r#"<w:eastAsianLayout w:id="7" w:vert="1"/>"#), "{xml}");
 }
@@ -112,10 +112,10 @@ fn values_outside_the_schema_are_dropped_not_guessed() {
         run("注", r#"<w:eastAsianLayout w:id="99999999999" w:combine="yes" w:combineBrackets="wavy" w:vert="off"/>"#),
         run("x", r#"<w:eastAsianLayout w:combineBrackets="wavy"/>"#)
     );
-    let d = wordcraft_docx::read(&docx(&body, None)).unwrap();
+    let d = craft_docx::read(&docx(&body, None)).unwrap();
     assert_eq!(layout_of(&d, "注"), Some(EastAsianLayout { vert: Some(false), ..Default::default() }));
     assert_eq!(layout_of(&d, "x"), None);
-    let xml = part(&wordcraft_docx::write(&d).unwrap(), "word/document.xml");
+    let xml = part(&craft_docx::write(&d).unwrap(), "word/document.xml");
     assert_eq!(xml.matches("<w:eastAsianLayout ").count(), 1, "{xml}");
     assert!(xml.contains(r#"<w:eastAsianLayout w:vert="0"/>"#), "{xml}");
 }

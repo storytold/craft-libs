@@ -16,8 +16,8 @@
 use std::borrow::Cow;
 use std::ops::Range;
 
-use wordcraft_doc::props::CharProps;
-use wordcraft_doc::styles::StyleSheet;
+use craft_wordmodel::props::CharProps;
+use craft_wordmodel::styles::StyleSheet;
 
 /// The language Word expects for right-to-left text of `c`'s script, for the scripts that have
 /// one usual language.
@@ -72,7 +72,7 @@ pub(super) fn direction_spans<'a>(
     runs: impl Iterator<Item = (Range<usize>, &'a CharProps)>,
     inherits_lang: impl Fn(&CharProps) -> bool,
 ) -> Vec<(Range<usize>, Cow<'a, CharProps>)> {
-    if !wordcraft_doc::bidi::has_rtl(text) {
+    if !craft_wordmodel::bidi::has_rtl(text) {
         return runs.map(|(r, p)| (r, Cow::Borrowed(p))).collect();
     }
     let level = if rtl_para { unicode_bidi::Level::rtl() } else { unicode_bidi::Level::ltr() };
