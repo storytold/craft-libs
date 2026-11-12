@@ -69,8 +69,8 @@ impl crate::contract::Outcome for PaletteOutput {
 /// - Keys: the field keeps the focus; Up, Down, Page Up, Page Down move the active row (Up and Down wrap at the ends),
 ///   Enter picks it, Escape clears
 ///   the query and, on an empty query, closes the box; a press outside closes it. A caption under the list names the keys. The number of results is announced politely.
-/// - Picking: the output's `picked` names the command and the box closes. With `recents` bound the command is also
-///   put first in the list; [`CommandPalette::remember`] is the rule.
+/// - Picking: the output's `picked` names the command, the box closes and the command goes first in `recents`;
+///   [`CommandPalette::remember`] is the rule. Without a binding the palette keeps `recents` for the session.
 #[derive(Pattern, Props)]
 pub struct CommandPalette<'a> {
     label: Label,
@@ -78,13 +78,13 @@ pub struct CommandPalette<'a> {
     open: Bind<'a, bool>,
     /// The commands last run, newest first.
     #[prop]
-    recents: Option<Bind<'a, Vec<CommandRef>>>,
+    recents: Bind<'a, Vec<CommandRef>>,
 }
 
 impl<'a> CommandPalette<'a> {
     /// A palette named `label` over `entries`, open while `open` is true.
     pub fn new(label: impl Into<Label>, entries: &'a [HelpEntry], open: Bind<'a, bool>) -> Self {
-        CommandPalette { label: label.into(), entries, open, recents: None }
+        CommandPalette { label: label.into(), entries, open, recents: Bind::kept() }
     }
 
     /// Puts `command` first in `recents`, once, keeping the newest `RECENT`.
@@ -110,8 +110,7 @@ impl<'a> CommandPalette<'a> {
                 overlay
             })
             .show(ui, |ui, cx| {
-                let recent: Vec<CommandRef> =
-                    recents.as_mut().and_then(|bind| bind.reborrow().read(cx)).and_then(|held| held.same().cloned()).unwrap_or_default();
+                let recent: Vec<CommandRef> = recents.reborrow().read(cx).and_then(|held| held.same().cloned()).unwrap_or_default();
                 let texts = texts_of(entries, &cx.env);
                 let folder = cx.env.folder();
                 // The field is the stack's header and the key hint its footer, so the list takes the room left in
@@ -154,13 +153,11 @@ impl<'a> CommandPalette<'a> {
                     });
                 if let Some(command) = &picked {
                     cx.request_close();
-                    if let Some(bind) = recents.as_mut() {
-                        let before = recent.clone();
-                        let mut after = recent;
-                        Self::remember(&mut after, command.clone());
-                        let name: Arc<str> = Arc::from(label.as_str());
-                        let _ = bind.reborrow().write(cx, &EditEvent::set(Mixed::Same(before), after, name, None));
-                    }
+                    let before = recent.clone();
+                    let mut after = recent;
+                    Self::remember(&mut after, command.clone());
+                    let name: Arc<str> = Arc::from(label.as_str());
+                    let _ = recents.reborrow().write(cx, &EditEvent::set(Mixed::Same(before), after, name, None));
                 }
             });
         let closed = shown.output.closed;

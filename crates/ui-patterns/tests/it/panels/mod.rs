@@ -1,6 +1,7 @@
 //! The rules of the panels family: an inspector keys its controls by the target and shows the empty notice for no
 //! target.
 
+mod palette;
 mod tour;
 
 use craft_ui::choice::Checkbox;
