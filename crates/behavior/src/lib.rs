@@ -90,7 +90,7 @@ pub use label_column::{LabelColumn, LabelPlacement};
 pub use layout_memory::SizeTween;
 pub use monitor::{Monitor, MonitorKey};
 pub use motion::{MotionKind, MotionMode, Playback};
-pub use nav::{Arrows, Letters, NavOutline, NavShape, NavState, NavStep, Roving, TypeAhead, wheel_step};
+pub use nav::{Arrows, Letters, NavOutline, NavShape, NavState, NavStep, Roving, TypeAhead, lead_step, wheel_step};
 pub use part::{PartKey, PartRef};
 
 pub use pixel_size::PixelSize;

@@ -8,7 +8,9 @@ mod response;
 
 pub use columns::{ColumnAlign, ColumnKind, ColumnSort, ColumnSpec, ToggleColumn};
 pub use drops::{DropAt, DropKind, DropPayload, DropPlace};
-pub use events::{CollectionEvent, ColumnEvent, ContextMenuRequest, HeaderMenuRequest, ListDrag, OpenChange, Rename, ReorderMove, ToggleEdit};
+pub use events::{
+    CollectionEvent, ColumnEvent, ColumnRequest, ContextMenuRequest, HeaderMenuRequest, ListDrag, OpenChange, Rename, ReorderMove, ToggleEdit,
+};
 pub use props::{
     ActivateOn, CollectionProps, DragPayload, ItemKeys, LeadOnOpen, LeadSource, ReorderRule, RowPressed, RowState, SelectMode, SpaceAction,
 };

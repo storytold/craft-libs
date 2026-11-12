@@ -1,9 +1,9 @@
-//! The header row (17.1, 17.3 I0): column widths and order, sort presses, resize grips, column moves and the
-//! header commands, in one roving group of focusable parts.
+//! The header row (17.1, 17.3 I0): column widths, order and hidden columns, sort presses, resize grips, column moves,
+//! the header commands and the header menu's request, in one roving group of focusable parts.
 
 use super::ItemsHooks;
 use crate::contract::collection::{
-    CollectionEvent, CollectionProps, ColumnEvent, ColumnKind, ColumnSort, ColumnSpec, HeaderMenuRequest, ToggleColumn,
+    CollectionEvent, CollectionProps, ColumnEvent, ColumnKind, ColumnRequest, ColumnSort, ColumnSpec, HeaderMenuRequest, ToggleColumn,
 };
 use crate::contract::reorder::{self, Gap};
 use crate::contract::{
@@ -31,11 +31,13 @@ use egui::{Align, Context, Id, Pos2, Rect, Response, Ui, UiBuilder, Vec2};
 const HEADER_ROLE: TypeRole = TypeRole::Label;
 const HEADER: PartKey = PartKey::new("header");
 const GRIP: PartKey = PartKey::new("header_grip");
+/// The empty header after the last column: a secondary click on it asks for the header menu.
+const ROOM: PartKey = PartKey::new("header_room");
 /// The narrowest a resized column gets, in control heights.
 const MIN_COLUMN: f32 = 2.0;
 
-/// The commands of a column header (17.1): resize and move work from the keyboard through them. The app lists
-/// them in the menu it opens for `CollectionEvent::HeaderMenu`, and `commands::fire` routes them to the collection.
+/// The commands of a column header (17.1): resize works from the keyboard through them, and the header menu lists
+/// them for the column it was opened from. `commands::fire` routes them to the collection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui_macros::CommandSet)]
 #[command(prefix = "column", scope = "column")]
 #[non_exhaustive]
@@ -105,6 +107,19 @@ pub(super) fn content_id(id: Id, key: &ColumnKey) -> Id {
     sub(id, ("column_content", hash_of(key)))
 }
 
+/// The header row's facts for the collection that shows the header menu.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct HeaderFacts {
+    /// The menu was asked for in this pass.
+    pub(crate) asked: bool,
+    /// The header menu asked for, while it may be open.
+    pub(crate) menu: Option<HeaderMenuRequest>,
+    /// The columns the user hid.
+    pub(crate) hidden: Vec<ColumnKey>,
+    /// The header commands that can act on the menu's column.
+    pub(crate) enabled: Vec<ColumnCommands>,
+}
+
 /// What the header keeps in session memory under the collection's id.
 #[derive(Clone, Debug, Default)]
 pub(super) struct HeaderMemory {
@@ -112,9 +127,11 @@ pub(super) struct HeaderMemory {
     order: Vec<ColumnKey>,
     /// User widths of `Content` and `Fill` columns.
     widths: Vec<(ColumnKey, f32)>,
-    /// The column a context menu or command acts on when no header part holds focus, and the frame the menu was
-    /// requested in. The menu is gone once no layer that takes keys is open a frame after its request.
-    menu: Option<(ColumnKey, u64)>,
+    /// Columns the user hid from the header menu.
+    hidden: Vec<ColumnKey>,
+    /// The header menu the user asked for, whose column a command acts on when no header part holds focus, and the
+    /// frame it was requested in. The menu is gone once no layer that takes keys is open a frame after its request.
+    menu: Option<(HeaderMenuRequest, u64)>,
     /// The column the keyboard resize command works on.
     resizing: Option<ColumnKey>,
     grab: Option<Grab>,
@@ -145,7 +162,12 @@ pub(super) struct Header {
     unit: f32,
     cells: Vec<Cell>,
     events: Vec<ColumnEvent>,
-    menus: Vec<HeaderMenuRequest>,
+    /// A header menu asked for in this pass.
+    asked: bool,
+    /// The hideable columns, shown or hidden.
+    hideable: Vec<ColumnKey>,
+    /// The empty header after the last column.
+    room: Option<Rect>,
     /// The narrowest a resized column gets, and the keyboard resize step.
     min: f32,
     step: f32,
@@ -162,7 +184,9 @@ impl Header {
         self.memory = stage.session::<HeaderMemory>(sub(id, "columns")).clone();
         self.sort = props.sort.clone();
         self.on = props.header;
-        let mut specs = props.columns.to_vec();
+        self.hideable = props.columns.iter().filter(|spec| spec.hideable).map(|spec| spec.key.clone()).collect();
+        let hidden = &self.memory.hidden;
+        let mut specs: Vec<ColumnSpec> = props.columns.iter().filter(|spec| !(spec.hideable && hidden.contains(&spec.key))).cloned().collect();
         let order = &self.memory.order;
         specs.sort_by_key(|spec| order.iter().position(|key| *key == spec.key).unwrap_or(usize::MAX));
         self.content = vec![0.0; specs.len()];
@@ -357,9 +381,18 @@ impl Header {
             }
             self.cells.push(Cell { spec: at, rect, hash });
         }
-        // A keyboard resize reads Forward and Back itself, so the cells do not rove while it lasts.
+        let room = flow.rect();
+        self.room = (room.width() > 0.0).then_some(room);
+        if let Some(room) = self.room {
+            pcx.part(ROOM, room)
+                .sense(Sense::CLICK)
+                .priority(HitPriority::new(HitLevel::Body, 0))
+                .pointer_only("the Menu key on a header opens the header menu");
+        }
+        // A keyboard resize reads Forward and Back itself, so the cells do not rove while it lasts. Ctrl or Cmd with
+        // Left or Right reaches the header, which moves the focused column.
         if self.memory.resizing.is_none() {
-            pcx.roving(Roving::new(NavShape::Flat));
+            pcx.roving(Roving::new(NavShape::Flat).keeps_lead_moves());
         }
     }
 
@@ -463,8 +496,7 @@ impl Header {
                 self.sort(&key);
             }
             if cx.part(HEADER.at(hash)).hovered && crate::runtime::pointer::frame(&ctx).release == Some(PointerButton::Secondary) {
-                self.memory.menu = Some((key.clone(), crate::runtime::egui::pass::root_frame_nr(&ctx)));
-                self.menus.push(HeaderMenuRequest { column: key.clone(), at: rect.left_bottom() });
+                self.ask_menu(&ctx, Some(key.clone()), ctx.pointer_latest_pos().unwrap_or(rect.left_bottom()));
             }
             if movable && primary && matches!(phase, PressPhase::DragStart { .. }) {
                 cx.start_drag(ColumnDrag { table: id, key: key.clone() }, DragPreview::None);
@@ -501,14 +533,101 @@ impl Header {
                 }
             }
             if active == Some(at) && cx.core.intents.take(Intent::ContextMenu) {
-                self.memory.menu = Some((key.clone(), crate::runtime::egui::pass::root_frame_nr(&ctx)));
-                self.menus.push(HeaderMenuRequest { column: key, at: rect.left_bottom() });
+                self.ask_menu(&ctx, Some(key.clone()), rect.left_bottom());
             }
+            if active == Some(at) {
+                self.lead_moves(cx, at, rtl);
+            }
+        }
+        if let Some(room) = self.room
+            && cx.part(ROOM).hovered
+            && crate::runtime::pointer::frame(&ctx).release == Some(PointerButton::Secondary)
+        {
+            self.ask_menu(&ctx, None, ctx.pointer_latest_pos().unwrap_or(room.left_bottom()));
         }
         self.column_drop(cx, id, rtl);
         self.keyboard_resize(cx);
         self.commands(cx, id, active, rtl);
         active.is_some() || self.memory.resizing.is_some()
+    }
+
+    /// Asks for the header menu at `at`, for `column` or for the empty header.
+    fn ask_menu(&mut self, ctx: &Context, column: Option<ColumnKey>, at: Pos2) {
+        self.memory.menu = Some((HeaderMenuRequest { column, at }, crate::runtime::egui::pass::root_frame_nr(ctx)));
+        self.asked = true;
+    }
+
+    /// Ctrl or Cmd with Left or Right on the focused header at `at` moves its column one place that way, as the move
+    /// commands do.
+    fn lead_moves<C: Collection>(&mut self, cx: &mut Cx<'_, C>, at: usize, rtl: bool) {
+        while let Some((mv, mods)) = cx.core.intents.take_move_where(|mv, mods| craft_behavior::lead_step(mv, mods).is_some()) {
+            let command =
+                if craft_behavior::lead_step(mv, mods) == Some(NavMove::Back) { ColumnCommands::MoveLeft } else { ColumnCommands::MoveRight };
+            if self.allowed(command, at, rtl) {
+                self.run(command, at, rtl);
+            }
+        }
+    }
+
+    /// Runs `command` on the column at display position `at`, which `allowed` let it act on.
+    fn run(&mut self, command: ColumnCommands, at: usize, rtl: bool) {
+        let key = self.specs[self.cells[at].spec].key.clone();
+        match command {
+            ColumnCommands::Resize => self.memory.resizing = Some(key),
+            ColumnCommands::MoveLeft => self.move_to(&key, if rtl { at + 1 } else { at - 1 }),
+            ColumnCommands::MoveRight => self.move_to(&key, if rtl { at - 1 } else { at + 1 }),
+        }
+    }
+
+    /// The column the open header menu acts on, by display position.
+    fn menu_target(&self) -> Option<usize> {
+        self.memory.menu.as_ref().and_then(|(menu, _)| menu.column.as_ref()).and_then(|key| self.cell_at(key))
+    }
+
+    /// Applies the header menu's picks at the end of the pass: a column shown or hidden, the columns reset, a command
+    /// run on the menu's column.
+    pub(super) fn apply_requests(&mut self, ctx: &Context, requests: Vec<ColumnRequest>, rtl: bool) {
+        for request in requests {
+            match request {
+                ColumnRequest::Shown(key, shown) => {
+                    if !self.hideable.contains(&key) || shown != self.memory.hidden.contains(&key) {
+                        continue;
+                    }
+                    if shown {
+                        self.memory.hidden.retain(|held| *held != key);
+                    } else {
+                        self.memory.hidden.push(key.clone());
+                    }
+                    let unsorted = !shown && self.sort.as_ref().is_some_and(|sort| sort.key == key);
+                    self.events.push(ColumnEvent::Shown { key, shown });
+                    if unsorted {
+                        self.events.push(ColumnEvent::Unsorted);
+                    }
+                }
+                ColumnRequest::Reset => {
+                    let menu = self.memory.menu.take();
+                    self.memory = HeaderMemory { menu, ..HeaderMemory::default() };
+                    self.events.push(ColumnEvent::Reset);
+                }
+                ColumnRequest::Command(command) => {
+                    if let Some(at) = self.menu_target().filter(|&at| self.allowed(command, at, rtl)) {
+                        self.run(command, at, rtl);
+                    }
+                }
+            }
+            crate::runtime::egui::repaint::request_of(ctx, crate::runtime::egui::pass::current_viewport(ctx));
+        }
+    }
+
+    /// What the collection's `update` and `overlay` read of the header this pass (`Cx::header_menu`).
+    pub(super) fn facts(&self, rtl: bool) -> HeaderFacts {
+        let target = self.menu_target();
+        HeaderFacts {
+            asked: self.asked,
+            menu: self.memory.menu.as_ref().map(|(menu, _)| menu.clone()),
+            hidden: self.memory.hidden.clone(),
+            enabled: ColumnCommands::ALL.into_iter().filter(|&command| target.is_some_and(|at| self.allowed(command, at, rtl))).collect(),
+        }
     }
 
     /// The keyboard resize the `Resize` command starts: Forward widens, Back narrows, Enter or Escape ends it.
@@ -551,7 +670,7 @@ impl Header {
         {
             self.memory.menu = None;
         }
-        let target = active.or_else(|| self.memory.menu.as_ref().and_then(|(key, _)| self.cell_at(key)));
+        let target = active.or_else(|| self.menu_target());
         let chain = cx.core.env.command_chain().pushed(ColumnCommands::SCOPE, id);
         for command in ColumnCommands::ALL {
             let enabled = target.is_some_and(|at| self.allowed(command, at, rtl));
@@ -560,12 +679,7 @@ impl Header {
         while let Some((command, _)) = commands::take_for_instance(&ctx, Some(id), false, ColumnCommands::from_ref) {
             let Some(at) = target.filter(|&at| self.allowed(command, at, rtl)) else { continue };
             self.memory.menu = None;
-            let key = self.specs[self.cells[at].spec].key.clone();
-            match command {
-                ColumnCommands::Resize => self.memory.resizing = Some(key),
-                ColumnCommands::MoveLeft => self.move_to(&key, if rtl { at + 1 } else { at - 1 }),
-                ColumnCommands::MoveRight => self.move_to(&key, if rtl { at - 1 } else { at + 1 }),
-            }
+            self.run(command, at, rtl);
         }
     }
 
@@ -625,11 +739,10 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// Step 9 for the header: its events join the collection's, in drawing order.
     pub(super) fn header_step(&mut self, cx: &mut Cx<'_, C>) -> bool {
         let (id, rtl) = (cx.core.id, cx.core.flow.is_rtl());
+        self.header.asked = false;
         let held = self.header.update(cx, id, rtl);
         self.take_column_events();
-        for menu in self.header.menus.drain(..) {
-            self.events.push(CollectionEvent::HeaderMenu(menu));
-        }
+        cx.core.header = self.header.facts(rtl);
         held
     }
 

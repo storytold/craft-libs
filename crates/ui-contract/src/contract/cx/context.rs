@@ -154,6 +154,10 @@ pub struct CxCore<'a> {
     /// The events and visible range the item step left for `collection_response`.
     pub(crate) collection_events: Option<Box<dyn std::any::Any>>,
     pub(crate) visible_rows: Range<usize>,
+    /// The header row's facts the item step leaves for the collection's `update` and `overlay` (`Cx::header_menu`).
+    pub(crate) header: crate::contract::items::HeaderFacts,
+    /// The header menu's picks, which the item step applies at the end of the pass (`Cx::column_request`).
+    pub(crate) column_requests: Vec<crate::contract::ColumnRequest>,
     /// What the collection's props allow, for `collection_response`.
     pub(crate) gestures: crate::contract::collection::Gestures,
     /// The text part's result of this pass, from step 8b.

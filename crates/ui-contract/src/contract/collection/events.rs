@@ -63,14 +63,27 @@ impl<K> ListDrag<K> {
     }
 }
 
-/// A request for the context menu of a column header: the app lists `ColumnCommands` in it.
+/// A request for the header menu: a secondary click on a header cell or on the empty header after the last one, or the
+/// Menu key on a focused header. The collection that shows the menu reads it with `Cx::header_menu`.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct HeaderMenuRequest {
-    /// The column whose header was pressed or focused.
-    pub column: ColumnKey,
+    /// The column whose header was pressed or focused; `None` for the empty header.
+    pub column: Option<ColumnKey>,
     /// Where the menu opens.
     pub at: Pos2,
+}
+
+/// What a pick in the header menu asks of the header, given back with `Cx::column_request`.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum ColumnRequest {
+    /// Show or hide a hideable column.
+    Shown(ColumnKey, bool),
+    /// Put back the app's order, show every column and drop the user's widths; the sort stays.
+    Reset,
+    /// Run a header command on the menu's column.
+    Command(crate::contract::ColumnCommands),
 }
 
 /// A toggle column's cell flipped.
@@ -154,6 +167,17 @@ pub enum ColumnEvent {
         /// Its new position.
         to: usize,
     },
+    /// The user showed or hid the column from the header menu.
+    Shown {
+        /// The column.
+        key: ColumnKey,
+        /// Whether it shows now.
+        shown: bool,
+    },
+    /// The user hid the sorted column: the rows have no sort, and the app puts them in their natural order.
+    Unsorted,
+    /// The user reset the columns: the app's order, every column shown, the app's widths. The sort stays.
+    Reset,
 }
 
 /// What a collection reports, in drawing order.
@@ -221,8 +245,6 @@ pub enum CollectionEvent<K, E> {
     Toggle(EditEvent<ToggleEdit<K>>),
     /// A column changed.
     Column(ColumnEvent),
-    /// The user asked for the context menu of a column header.
-    HeaderMenu(HeaderMenuRequest),
     /// An item reported an event.
     Item(K, E),
 }

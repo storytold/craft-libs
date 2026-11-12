@@ -1,6 +1,16 @@
 //! Built-in words of the table family.
 
 craft_ui::words! {
+    /// The words of the table's header menu.
+    pub struct TableWords {
+        /// The label over the checks that show and hide columns.
+        columns: "table.columns" = "Columns";
+        /// Puts back the app's columns.
+        reset_columns: "table.resetColumns" = "Reset Columns";
+    }
+}
+
+craft_ui::words! {
     /// The words of the metadata table.
     pub struct MetadataWords {
         /// The name of the filter field.

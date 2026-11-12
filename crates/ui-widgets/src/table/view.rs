@@ -1,18 +1,24 @@
 //! `Table`: a `List` with columns. The contract's header row draws the headers and reports sort presses, widths,
-//! resizes and moves; the item step lays each row's cells out along the columns; the rows are `ListRow`s that draw a
-//! value in each cell. The table keeps no sort order and no hidden columns: the app owns both and passes the columns
-//! it shows.
+//! resizes, moves and hidden columns; the item step lays each row's cells out along the columns; the rows are
+//! `ListRow`s that draw a value in each cell. The table shows the header menu. The app owns the sort order.
 
+use super::words::TableWords;
+use crate::contract::overlay::Anchor;
 use crate::contract::{
-    Bind, BindMut, Collection, CollectionProps, CollectionResponse, ColumnSpec, Common, Component, ContainerProps, Cx, DropKind, EditResponse,
-    ListDrag, Props as _, Role, SelectMode, Sizing,
+    Bind, BindMut, Collection, CollectionProps, CollectionResponse, ColumnCommands, ColumnRequest, ColumnSpec, Common, Component, ContainerProps, Cx,
+    DropKind, EditResponse, ListDrag, OverlayUi, Overlays as _, Props as _, Role, SelectMode, Show as _, ShowContainer as _, Sizing, WordSetCx as _,
 };
+use crate::display::Divider;
 use crate::list::{DropTest, ListRow, RowEvent, RowTest, RowText};
+use crate::menu::{Menu, MenuItem};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{ItemSource, Metrics, Selection, SpanLayout};
 use egui::{Rect, Ui};
 use std::hash::Hash;
+
+/// The header menu's popup.
+const HEADER_MENU: &str = "header_menu";
 
 /// The style of the table: it has no look of its own beyond its container's surface.
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
@@ -27,7 +33,12 @@ pub struct TableStyle {
 /// menus.
 ///
 /// The app sorts its rows and tells the table the order it used (`sort`); a press on a sortable header reports
-/// `ColumnEvent::Sort` with the next order. A table of groups and their children is a tree: the label column is
+/// `ColumnEvent::Sort` with the next order. A secondary click on a header, or on the empty header after the last
+/// one, or the Menu key on a focused header, opens the header menu: "Columns" over a check per hideable column, which
+/// shows or hides it and leaves the menu open, then Reset Columns (the app's order, every column shown, the app's
+/// widths; the sort stays), and for a header the column commands (Resize Column…, Move Column Left and Right). Ctrl or
+/// Cmd with Left or Right on a focused header moves its column. What the user changes is reported as `ColumnEvent`s
+/// for the app to save. A table of groups and their children is a tree: the label column is
 /// indented by depth and groups open and close as in a `List`.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(collection, probe(Table<'static, usize>))]
@@ -100,6 +111,61 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for Table<'_, K> {
 
     fn style(_: &StyleCx<'_>, _: TableStyleKey<K>) -> TableStyle {
         TableStyle::default()
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        cx.popup(HEADER_MENU);
+    }
+
+    /// The header menu: the item step's header asks for it after `update`, so it opens here.
+    fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
+        let popup = cx.popup(HEADER_MENU);
+        let Some((_, asked)) = cx.header_menu() else { return };
+        if asked {
+            popup.open(cx);
+        }
+        let Some((menu, _)) = cx.header_menu() else { return };
+        let (at, for_column) = (menu.at, menu.column.is_some());
+        let hidden = cx.hidden_columns().to_vec();
+        let hideable: Vec<_> = self.items.columns.iter().filter(|spec| spec.hideable).map(|spec| (spec.key.clone(), spec.header.clone())).collect();
+        let commands: Vec<(ColumnCommands, bool)> = if for_column {
+            ColumnCommands::ALL.into_iter().map(|command| (command, cx.column_command_enabled(command))).collect()
+        } else {
+            Vec::new()
+        };
+        let ctx = cx.core.ctx.clone();
+        let words = cx.words::<TableWords>();
+        let mut picks = Vec::new();
+        let layer = crate::menu::layer(false).anchor(Anchor::Point(at));
+        ui.show(popup, layer, |ui, _| {
+            Menu::inline(words.columns.clone()).show(ui, |ui, _| {
+                if !hideable.is_empty() {
+                    MenuItem::new(words.columns.clone()).enabled(false).show(ui);
+                    for (key, header) in &hideable {
+                        let shown = !hidden.contains(key);
+                        if MenuItem::new(header.clone()).check(shown).keep_open(true).show(ui).ran {
+                            picks.push(ColumnRequest::Shown(key.clone(), !shown));
+                        }
+                    }
+                    Divider::horizontal().show(ui);
+                }
+                if MenuItem::new(words.reset_columns.clone()).show(ui).ran {
+                    picks.push(ColumnRequest::Reset);
+                }
+                if !commands.is_empty() {
+                    Divider::horizontal().show(ui);
+                }
+                for (command, enabled) in &commands {
+                    let label = crate::runtime::commands::resolve(&ctx, *command).label;
+                    if MenuItem::new(label.to_string()).enabled(*enabled).show(ui).ran {
+                        picks.push(ColumnRequest::Command(*command));
+                    }
+                }
+            });
+        });
+        for pick in picks {
+            cx.column_request(pick);
+        }
     }
 
     fn finish(self, mut cx: Cx<'_, Self>) -> Self::Output {

@@ -69,7 +69,7 @@ fn columns(keep: bool, widths: &Widths) -> Vec<ColumnSpec> {
     let mut columns = vec![
         ColumnSpec::new(NAME, "File name", ColumnWidth::fill(2.0)).sortable().resizable().movable(),
         ColumnSpec::new(PAGES, "Pages", width_of(widths, &PAGES, ColumnWidth::Controls(3.0))).numeric().sortable().resizable(),
-        ColumnSpec::new(SIZE, "Size (KB)", width_of(widths, &SIZE, ColumnWidth::Controls(4.0))).numeric().sortable().resizable(),
+        ColumnSpec::new(SIZE, "Size (KB)", width_of(widths, &SIZE, ColumnWidth::Controls(4.0))).numeric().sortable().resizable().hideable(),
     ];
     if keep {
         columns.insert(0, ColumnSpec::new(KEEP, "Keep", ColumnWidth::Controls(1.5)).kind(ColumnKind::Toggle(ToggleColumn::sweepable())));

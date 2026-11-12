@@ -368,6 +368,8 @@ fn blank_core<'a>(
         roving_lead: None,
         collection_events: None,
         visible_rows: 0..0,
+        header: Default::default(),
+        column_requests: Vec::new(),
         gestures: Default::default(),
         texts: None,
         selections: Vec::new(),

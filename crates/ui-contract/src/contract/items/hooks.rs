@@ -754,6 +754,11 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         }
         *cx.core.memory.session::<Lead<C::Key>>(sub(id, "lead")) = self.lead.clone();
         cx.core.memory.session::<LastLayout<C::ItemLayout>>(sub(id, "item_layout")).0 = self.layout.clone();
+        let requests = std::mem::take(&mut cx.core.column_requests);
+        if !requests.is_empty() {
+            self.header.apply_requests(&cx.core.ctx, requests, cx.core.flow.is_rtl());
+            self.take_column_events();
+        }
         *cx.core.memory.session::<HeaderMemory>(sub(id, "columns")) = self.header.persist();
         *cx.core.memory.session::<Drags<C::Key>>(sub(id, "drags")) = self.drags.clone();
         self.header.report(&cx.core.ctx, id, cx);

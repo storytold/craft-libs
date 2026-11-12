@@ -49,7 +49,7 @@ pub use body::REORDER_BAND;
 #[doc(hidden)]
 pub use body::pad_of;
 pub use collection::{
-    ActivateOn, CollectionEvent, CollectionProps, CollectionResponse, ColumnAlign, ColumnEvent, ColumnKind, ColumnSort, ColumnSpec,
+    ActivateOn, CollectionEvent, CollectionProps, CollectionResponse, ColumnAlign, ColumnEvent, ColumnKind, ColumnRequest, ColumnSort, ColumnSpec,
     ContextMenuRequest, DragPayload, DropAt, DropKind, DropPayload, DropPlace, HeaderMenuRequest, ItemKeys, LeadOnOpen, LeadSource, ListDrag,
     OpenChange, PendingDrop, Rename, ReorderMove, ReorderRule, RowPressed, RowState, SelectMode, ShownRow, SpaceAction, ToggleColumn, ToggleEdit,
 };

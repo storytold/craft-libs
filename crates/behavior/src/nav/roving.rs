@@ -1,6 +1,6 @@
 //! Roving focus groups and type-ahead matching.
 
-use crate::intent::{MoveMods, NavMove};
+use crate::intent::{Granularity, MoveMods, NavMove};
 
 use super::*;
 
@@ -40,6 +40,9 @@ pub struct Roving {
     /// Whether the focused member is no lead, so the next move is a first move: forward moves land on the first
     /// enabled member, backward moves on the last.
     pub no_lead: bool,
+    /// Whether Left and Right with the lead modifier (Ctrl, Cmd on macOS; `lead_step`) reach the focused member instead
+    /// of moving the focus: a table header moves its column with them.
+    pub keeps_lead_moves: bool,
 }
 
 /// Which arrow keys a roving group moves its lead with.
@@ -70,6 +73,7 @@ impl Roving {
             first_column: None,
             hands_back: false,
             no_lead: false,
+            keeps_lead_moves: false,
         }
     }
 
@@ -116,6 +120,12 @@ impl Roving {
         self
     }
 
+    /// Left and Right with the lead modifier reach the focused member.
+    pub const fn keeps_lead_moves(mut self) -> Self {
+        self.keeps_lead_moves = true;
+        self
+    }
+
     /// Whether the focused member is no lead: the next move starts at an end, as from a group with no lead.
     pub const fn no_lead(mut self, on: bool) -> Self {
         self.no_lead = on;
@@ -133,14 +143,31 @@ impl Roving {
     }
 
     /// Whether the group handles `mv` with `mods`: Page moves only with a page size and without `lead` (on a document
-    /// canvas that scrolls sideways), Start and End only with Home and End.
+    /// canvas that scrolls sideways), Start and End only with Home and End, and no `lead_step` in a group that
+    /// `keeps_lead_moves`.
     pub const fn takes(&self, mv: NavMove, mods: MoveMods) -> bool {
         match mv {
+            _ if self.keeps_lead_moves && lead_step(mv, mods).is_some() => false,
             NavMove::PageUp | NavMove::PageDown => self.page.is_some() && !mods.lead,
             NavMove::Start | NavMove::End => self.home_end,
             NavMove::Back | NavMove::Forward => matches!(self.arrows, Arrows::All | Arrows::Horizontal),
             NavMove::Up | NavMove::Down => matches!(self.arrows, Arrows::All | Arrows::Vertical),
         }
+    }
+}
+
+/// The step Left or Right with the lead modifier makes, physical as the arrows are: Ctrl+Left and Ctrl+Right (Back
+/// and Forward with the lead), and Cmd+Left and Cmd+Right on macOS, which the key table makes a move to the start or
+/// end of the line.
+pub const fn lead_step(mv: NavMove, mods: MoveMods) -> Option<NavMove> {
+    if !mods.lead {
+        return None;
+    }
+    match mv {
+        NavMove::Back | NavMove::Forward => Some(mv),
+        NavMove::Start if matches!(mods.by, Granularity::Line) => Some(NavMove::Back),
+        NavMove::End if matches!(mods.by, Granularity::Line) => Some(NavMove::Forward),
+        _ => None,
     }
 }
 

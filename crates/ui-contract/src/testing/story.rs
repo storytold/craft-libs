@@ -444,8 +444,6 @@ pub enum CollectionKind {
     Toggle(EditKind),
     /// A column changed.
     Column,
-    /// A column header's context menu was asked for.
-    HeaderMenu,
     /// An item reported an event.
     Item,
 }
@@ -470,7 +468,6 @@ impl CollectionKind {
             CollectionEvent::Rename(edit) => CollectionKind::Rename(EditKind::of(edit)?),
             CollectionEvent::Toggle(edit) => CollectionKind::Toggle(EditKind::of(edit)?),
             CollectionEvent::Column(_) => CollectionKind::Column,
-            CollectionEvent::HeaderMenu(_) => CollectionKind::HeaderMenu,
             CollectionEvent::Item(..) => CollectionKind::Item,
         })
     }

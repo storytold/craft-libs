@@ -80,6 +80,8 @@ pub struct ColumnSpec {
     /// The most of the collection's width a `Content` column takes, as a share: a name column as wide as its widest
     /// name, at most a third of the table.
     pub max_share: Option<f32>,
+    /// The header menu has a check for the column, so the user can hide it. A column that can't be hidden always shows.
+    pub hideable: bool,
 }
 
 /// Where a column's content sits.
@@ -110,6 +112,7 @@ impl ColumnSpec {
             icon: None,
             tip: None,
             max_share: None,
+            hideable: false,
         }
     }
 
@@ -160,6 +163,13 @@ impl ColumnSpec {
     pub fn numeric(mut self) -> Self {
         self.align = ColumnAlign::End;
         self.tabular = true;
+        self
+    }
+
+    /// The user can hide the column from the header menu.
+    #[must_use]
+    pub fn hideable(mut self) -> Self {
+        self.hideable = true;
         self
     }
 

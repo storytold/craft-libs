@@ -1,17 +1,20 @@
 //! The table's header row and column widths: a double click on a column's edge fits the column to its widest cell in
-//! view, and the metadata table's name column follows its widest name up to a third of the table.
+//! view, the header menu hides, shows and resets columns, Ctrl or Cmd with an arrow moves the focused column, and the
+//! metadata table's name column follows its widest name up to a third of the table.
 
 use craft_behavior::{ColumnKey, ColumnWidth, keyed};
-use craft_ui::contract::{CollectionEvent, ColumnEvent, ColumnSpec, ShowCollection as _};
+use craft_host::target::Os;
+use craft_ui::contract::{CollectionEvent, ColumnEvent, ColumnSort, ColumnSpec, Role, ShowCollection as _};
 use craft_ui::list::ListRow;
 use craft_ui::table::{MetadataGroup, MetadataRow, MetadataTable, Table};
-use craft_ui::testing::{Fixture, Room, trial};
-use egui::{Pos2, Rect};
+use craft_ui::testing::{Fixture, Room, pointer, trial};
+use egui::{Key, Modifiers, Pos2, Rect};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 const NAME: ColumnKey = ColumnKey::new("name");
 const SIZE: ColumnKey = ColumnKey::new("size");
+const DATE: ColumnKey = ColumnKey::new("date");
 const LONG: &str = "A file name far longer than the column it starts in";
 
 /// A table of `names` whose name column starts `controls` control heights wide; the app applies the widths the
@@ -116,4 +119,96 @@ fn the_metadata_name_column_fits_its_widest_name_up_to_a_third_of_the_table() {
     let long_value = left_of(&long, "v1");
     assert!(long_value > short_value, "a longer name widens the name column");
     assert!(long_value - table.left() <= table.width() / 3.0 + padding, "the name column stops at a third of the table");
+}
+
+/// A table sorted by its hideable Size column, with movable Name and Date columns; the app drops its sort on
+/// `Unsorted`. Returns the fixture and the column events seen.
+fn sorted_files() -> (Fixture, Rc<RefCell<Vec<ColumnEvent>>>) {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let sort = Rc::new(RefCell::new(Some(ColumnSort::ascending(SIZE))));
+    let seen = events.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let columns = vec![
+            ColumnSpec::new(NAME, "Name", ColumnWidth::Controls(6.0)).movable(),
+            ColumnSpec::new(SIZE, "Size", ColumnWidth::Controls(4.0)).sortable().hideable(),
+            ColumnSpec::new(DATE, "Date", ColumnWidth::Controls(4.0)).movable(),
+        ];
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key);
+        let shown = sort.borrow().clone();
+        let out =
+            Table::new("Files", columns).sort(shown).show_items(ui, &source, &mut |key, icx| ListRow::new(format!("File {key}")).cells(icx.cells()));
+        for event in out.events {
+            if let CollectionEvent::Column(column) = event {
+                if column == ColumnEvent::Unsorted {
+                    *sort.borrow_mut() = None;
+                }
+                seen.borrow_mut().push(column);
+            }
+        }
+    });
+    fixture.in_room(Room::Dialog).settle();
+    (fixture, events)
+}
+
+fn headers(fixture: &Fixture) -> Vec<String> {
+    fixture.by_role(Role::COLUMN_HEADER).iter().filter_map(|target| fixture.tree().name_of(target.node).map(str::to_owned)).collect()
+}
+
+fn secondary_click(fixture: &mut Fixture, at: Pos2) {
+    fixture.frame(vec![pointer::moved(at), pointer::secondary(at, true)]);
+    fixture.frame(vec![pointer::secondary(at, false)]).settle();
+}
+
+/// The menu row named `label` of `role`.
+fn menu_row(fixture: &Fixture, role: Role, label: &str) -> Option<craft_ui::testing::Target> {
+    fixture.by_role(role).into_iter().find(|target| fixture.tree().name_of(target.node) == Some(label))
+}
+
+/// A secondary click on a header opens the header menu; unchecking a hideable column hides it, reports it and, as it
+/// was the sorted one, reports the rows unsorted, and the menu stays open; Reset Columns brings it back. A secondary
+/// click on the empty header after the last column opens the menu without the column commands.
+#[trial]
+fn the_header_menu_hides_shows_and_resets_columns() {
+    let (mut fixture, events) = sorted_files();
+    assert_eq!(headers(&fixture), ["Name", "Size", "Date"]);
+    let name = fixture.by_label("Name").expect("the header cell").center();
+    secondary_click(&mut fixture, name);
+    let size = menu_row(&fixture, Role::MENU_ITEM_CHECK_BOX, "Size").expect("the menu lists the hideable column");
+    assert!(menu_row(&fixture, Role::MENU_ITEM_CHECK_BOX, "Name").is_none(), "a column that can't be hidden has no check");
+    assert!(menu_row(&fixture, Role::MENU_ITEM, "Move Column Right").is_some(), "the menu of a header lists the column commands");
+    fixture.click(&size).settle();
+    assert_eq!(headers(&fixture), ["Name", "Date"], "the hidden column leaves the header");
+    assert!(events.borrow().contains(&ColumnEvent::Shown { key: SIZE, shown: false }), "the hide is reported");
+    assert!(events.borrow().contains(&ColumnEvent::Unsorted), "hiding the sorted column drops the sort");
+    let reset = menu_row(&fixture, Role::MENU_ITEM, "Reset Columns").expect("the menu stays open after a check");
+    fixture.click(&reset).settle();
+    assert_eq!(headers(&fixture), ["Name", "Size", "Date"], "Reset Columns shows every column again");
+    assert!(events.borrow().contains(&ColumnEvent::Reset), "the reset is reported");
+
+    let date = fixture.by_label("Date").expect("the header cell").rect;
+    let table = fixture.shown();
+    let room = Pos2::new((date.right() + table.right()) / 2.0, date.center().y);
+    secondary_click(&mut fixture, room);
+    assert!(menu_row(&fixture, Role::MENU_ITEM, "Reset Columns").is_some(), "the empty header opens the header menu");
+    assert!(menu_row(&fixture, Role::MENU_ITEM, "Move Column Right").is_none(), "with no column there are no column commands");
+}
+
+/// Ctrl or Cmd with Right on a focused movable header moves its column one place on; Right alone moves the focus.
+/// macOS makes Cmd+Right a move to the line's end, which the header reads the same.
+#[trial]
+fn ctrl_or_cmd_with_an_arrow_moves_the_focused_column() {
+    for os in [Os::Linux, Os::Mac] {
+        let (mut fixture, events) = sorted_files();
+        fixture.os(os);
+        // Tab enters the rows; Shift+Tab goes back to the header row, on its first column.
+        fixture.key(Key::Tab, Modifiers::NONE).key(Key::Tab, Modifiers::SHIFT).settle();
+        fixture.key(Key::ArrowRight, Modifiers::COMMAND).settle();
+        let moves: Vec<ColumnEvent> = events.borrow().iter().filter(|event| matches!(event, ColumnEvent::Moved { .. })).cloned().collect();
+        assert_eq!(moves.len(), 1, "{os:?}: one move: {moves:?}");
+        assert!(matches!(&moves[0], ColumnEvent::Moved { key, to, .. } if *key == NAME && *to == 1));
+        assert_eq!(headers(&fixture), ["Size", "Name", "Date"]);
+        fixture.key(Key::ArrowRight, Modifiers::NONE).settle();
+        assert_eq!(events.borrow().iter().filter(|event| matches!(event, ColumnEvent::Moved { .. })).count(), 1, "a plain arrow moves no column");
+    }
 }
