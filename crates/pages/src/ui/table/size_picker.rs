@@ -7,11 +7,11 @@ use craft_ui::contract::{
     Access, Common, Component, Cx, Focus as _, GridPlace, Input, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role,
     Styled as _, WordSetCx as _,
 };
-use craft_ui::primitives::{PaintShape, TextRun};
+use craft_ui::primitives::TextRun;
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::{ActivateKeys, KeyUse};
-use craft_ui::style::{ComponentStyle, Flags, FocusLook, Stateful, StyleColor, StyleCx, SurfaceKind, TextLook, TypeRole};
-use egui::{CornerRadius, Rect, Response, Vec2, pos2, vec2};
+use craft_ui::style::{ComponentStyle, Flags, FocusLook, Stateful, StyleCx, SurfaceEdge, SurfaceKind, SurfaceStyle, TextLook, TypeRole};
+use egui::{Rect, Response, Stroke, Vec2, pos2, vec2};
 
 const CELL: PartKey = PartKey::new("cell");
 
@@ -64,20 +64,18 @@ pub struct TableSizePickerStyle {
     cell: f32,
     /// The gap between squares.
     gap: f32,
-    /// The squares' corner radius.
-    radius: CornerRadius,
-    /// A square outside the highlighted rectangle: its fill.
-    off: Stateful<StyleColor>,
-    /// A square inside it: its fill.
-    on: Stateful<StyleColor>,
+    /// A square outside the highlighted rectangle: a sunken well.
+    off: SurfaceStyle,
+    /// A square inside it: the well in the selected fill with an accent outline.
+    on: SurfaceStyle,
 }
 
 /// The picker inside a menu.
 ///
 /// - The pointer hovers a square only on the square itself; the gap between squares hovers none (WordCraft's picker).
-/// - Squares up to the hovered one fill with the selected fill; the others are sunken.
-/// - Keys: the grid is one Tab stop; the arrows move the hovered square and stop at the grid's edges, Home and End go
-///   to the ends of the grid, Space or Enter inserts the hovered size. The grid previews a new table in the
+/// - Squares up to the hovered one take the selected fill with an accent outline; the others are sunken wells.
+/// - Keys: the grid is one Tab stop; the arrows move the hovered square, Left and Right on across the rows and Up and
+///   Down stopping at the first and last rows, and Space or Enter inserts the hovered size. The grid previews a new table in the
 ///   interface's flow: under right-to-left the first column is at the right and the arrows follow the screen.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 pub struct TableSizePicker {
@@ -152,16 +150,17 @@ impl Component for TableSizePicker {
 
     fn style(cx: &StyleCx<'_>, _: TableSizePickerStyleKey) -> TableSizePickerStyle {
         let colors = &cx.tokens.color;
-        let sunken = cx.surface(SurfaceKind::Sunken);
+        let off = cx.surface(SurfaceKind::Sunken);
+        let accent = Stroke::new(cx.tokens.stroke.thin, cx.color(colors.accent.solid).egui());
+        let on = SurfaceStyle { fill: cx.color(colors.state.selected).egui(), edge: SurfaceEdge::Border(accent), ..off };
         TableSizePickerStyle {
             metrics: Metrics::new(),
             focus: cx.focus_look(),
             label: TextLook::new(TypeRole::Body, Stateful::new(cx.color(colors.text.normal))),
             cell: cx.tokens.size.icon.md,
             gap: cx.tokens.space.gap.tight,
-            radius: sunken.radius,
-            off: Stateful::new(cx.color(colors.surface.sunken)),
-            on: Stateful::new(cx.color(colors.state.selected)),
+            off,
+            on,
         }
     }
 
@@ -183,7 +182,7 @@ impl Component for TableSizePicker {
                 part.flags(Flags::CHECKED);
             }
         }
-        cx.roving(Roving::new(NavShape::bounded_grid(COLUMNS)));
+        cx.roving(Roving::new(NavShape::wrapped_grid(COLUMNS)));
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
@@ -214,7 +213,7 @@ impl Component for TableSizePicker {
             let (row, column) = (index / COLUMNS, index % COLUMNS);
             let chosen = lit.is_some_and(|(r, c)| row <= r && column <= c);
             let look = if chosen { &cx.style.on } else { &cx.style.off };
-            draw.fill(&PaintShape::Rect(Self::cell_rect(cx.rect, index, cx.style, cx.flow.is_rtl()), cx.style.radius), cx.resolve(look));
+            draw.surface_styled(Self::cell_rect(cx.rect, index, cx.style, cx.flow.is_rtl()), look);
         }
         let label = Rect::from_min_max(cx.rect.min, pos2(cx.rect.max.x, Self::grid_rect(cx.rect, cx.style).min.y));
         draw.text(label, &TextRun::new(self.text(&words, cx)).role(cx.style.label.role).color(cx.resolve(&cx.style.label.color)));
