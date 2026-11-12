@@ -7,10 +7,10 @@
 //! results, and formulas as A1 text, including shared and array formulas), the cell formats
 //! (number formats, fonts, fills, borders, alignment, protection, with palette colours
 //! resolved), user-defined cell styles, merged cells, column and row records, sheet display
-//! flags, calculation settings, defined names, print areas and print titles, and the 1904 date
-//! flag. Widths and heights stay in the file's units.
+//! flags, calculation settings, defined names, print areas and print titles, data validation
+//! rules, and the 1904 date flag. Widths and heights stay in the file's units.
 //!
-//! Everything else (charts, pictures, comments, conditional formats, validation, hyperlinks,
+//! Everything else (charts, pictures, comments, conditional formats, hyperlinks,
 //! PivotTables, macros) is skipped and named in [`Read::warnings`]. Encrypted workbooks and
 //! versions before BIFF8 are refused ([`Error::Encrypted`], [`Error::Biff5`]). A formula that
 //! cannot be put back into text (links to other workbooks, macro commands, unknown tokens)
@@ -30,6 +30,7 @@
 //! # }
 //! ```
 
+mod dv;
 mod expr;
 mod formula;
 mod ftab;
@@ -42,8 +43,9 @@ pub mod testing;
 
 pub use craft_sheet::{DEFAULT_PALETTE, quote_sheet, sheet_needs_quotes};
 pub use model::{
-    Alignment, BorderLine, BorderStyle, Borders, Calc, CalcMode, Cell, CellError, CellFormat, CellRef, Color, Column, DefinedName, Fill, Font,
-    Formula, HAlign, Pattern, Range, Row, Script, Sheet, Underline, VAlign, Value, View, Visibility, Workbook,
+    Alignment, BorderLine, BorderStyle, Borders, Calc, CalcMode, Cell, CellError, CellFormat, CellRef, Color, Column, DataValidation, DefinedName,
+    ErrorStyle, Fill, Font, Formula, HAlign, Pattern, Range, Row, Script, Sheet, Underline, VAlign, ValidationOperator, ValidationType, Value, View,
+    Visibility, Workbook,
 };
 pub use read::{is_xls, read, read_with};
 
@@ -91,8 +93,15 @@ pub enum Warning {
     Drawings,
     #[error("conditional formatting was not read")]
     ConditionalFormatting,
-    #[error("data validation was not read")]
-    DataValidation,
+    /// Some Dv records could not be read: Excel would refuse them (an unknown alert style or
+    /// operator, a formula or range list past the record), no range was left, a formula could not
+    /// be decoded, or the sheet had more rules than the reader keeps.
+    #[error("some data validation rules could not be read and were skipped")]
+    DataValidationSkipped,
+    /// Dv records with no DVal record before them, or past the number of rules it gives: Excel
+    /// does not read them either.
+    #[error("some data validation records were ignored, as Excel ignores them: no DVal record before them, or past the number of rules it gives")]
+    DataValidationIgnored,
     #[error("hyperlinks were not read")]
     Hyperlinks,
     #[error("PivotTables were not read; their values were kept")]
