@@ -484,6 +484,49 @@ fn xmp_gps_out_of_range_rejected() {
     assert_eq!(gps("90,0S", "180,0W"), Some(Gps { latitude: -90.0, longitude: -180.0, altitude: None }));
 }
 
+#[test]
+fn xmp_gps_component_bounds() {
+    let parse = |lat: &str, lon: &str| {
+        let x = format!(
+            r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                xmlns:e="http://ns.adobe.com/exif/1.0/" e:GPSLatitude="{lat}" e:GPSLongitude="{lon}"/>"#
+        );
+        parse_xmp(&x).unwrap()
+    };
+
+    for (lat, lon) in [
+        ("45,60N", "7,15E"),
+        ("45,99N", "7,15E"),
+        ("45,0,60N", "7,15E"),
+        ("45,0,99N", "7,15E"),
+        ("45,15N", "7,60E"),
+        ("45,15N", "7,99E"),
+        ("45,15N", "7,0,60E"),
+        ("45,15N", "7,0,99E"),
+    ] {
+        let xmp = parse(lat, lon);
+        assert_eq!(xmp.metadata.gps, None, "{lat}, {lon}");
+        assert_eq!(xmp.properties.get("exif:GPSLatitude").and_then(|v| v.first()).map(String::as_str), Some(lat));
+        assert_eq!(xmp.properties.get("exif:GPSLongitude").and_then(|v| v.first()).map(String::as_str), Some(lon));
+    }
+
+    for (lat, lon, expected) in [
+        ("45,59.5N", "7,59.5E", (45.0 + 59.5 / 60.0, 7.0 + 59.5 / 60.0)),
+        ("45,59,59S", "7,59,59W", (-(45.0 + 59.0 / 60.0 + 59.0 / 3600.0), -(7.0 + 59.0 / 60.0 + 59.0 / 3600.0))),
+        ("0,0N", "0,0E", (0.0, 0.0)),
+        ("90,0N", "180,0W", (90.0, -180.0)),
+        (" 45,30n ", " 7,15e ", (45.5, 7.25)),
+    ] {
+        let xmp = parse(lat, lon);
+        let gps = xmp.metadata.gps.expect("valid XMP GPS components");
+        assert!((gps.latitude - expected.0).abs() < 1e-9, "{lat}: {}", gps.latitude);
+        assert!((gps.longitude - expected.1).abs() < 1e-9, "{lon}: {}", gps.longitude);
+    }
+
+    assert_eq!(parse("95,0N", "7,0E").metadata.gps, None, "combined latitude range remains checked");
+    assert_eq!(parse("45,0N", "200,0E").metadata.gps, None, "combined longitude range remains checked");
+}
+
 /// MWG Region Guidelines v2.0, element form (`rdf:parseType="Resource"`, self-closing `Area`) — how
 /// Lightroom typically writes it. One named face, one untyped/unnamed region (still usable), one
 /// region with a description. `AppliedToDimensions` is present but irrelevant: normalized areas
@@ -760,6 +803,7 @@ fn flattened_keys_stay_within_the_cumulative_budget() {
     assert!(total <= MAX_KEY_BYTES, "flattened-key text {total} is over the {MAX_KEY_BYTES} budget");
     assert!(d.properties.len() < 3000, "keys stop being added once the budget is spent");
     assert!(!d.properties.is_empty(), "properties parsed before the budget are kept");
+    assert!(d.properties_truncated, "omitted flattened keys are reported to callers");
 }
 
 #[test]

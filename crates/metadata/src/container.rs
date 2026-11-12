@@ -28,6 +28,8 @@ pub struct Embedded {
     pub icc: Option<Vec<u8>>,
     /// IPTC-IIM stream.
     pub iptc: Option<Vec<u8>>,
+    /// True when the PNG/WebP chunk stream could not be fully inspected.
+    pub chunk_walk_incomplete: bool,
 }
 
 /// Sniff the container and collect its metadata blocks. Unknown containers yield an empty result.
@@ -63,6 +65,7 @@ pub fn embedded(bytes: &[u8]) -> Embedded {
                 craft_tiff::Value::Byte(b) | craft_tiff::Value::Undefined(b) => b.clone(),
                 other => craft_tiff::writer::encode(t.order, other),
             }),
+            chunk_walk_incomplete: false,
         }
     } else {
         Embedded::default()
@@ -74,9 +77,20 @@ const XMP_EXT_SIG: &[u8] = b"http://ns.adobe.com/xmp/extension/\0";
 
 /// Walk JPEG markers up to SOS and collect APP1 Exif / XMP, APP2 ICC and APP13 IPTC.
 pub fn jpeg_segments(b: &[u8]) -> Embedded {
+    jpeg_segments_inner(b, false).0
+}
+
+/// Walk JPEG metadata and return every ordinary XMP APP1 packet in segment order, along with the
+/// usual [`Embedded`] projection (which retains only the first ordinary packet).
+pub fn jpeg_segments_with_all_xmp(b: &[u8]) -> (Embedded, Vec<String>) {
+    jpeg_segments_inner(b, true)
+}
+
+fn jpeg_segments_inner(b: &[u8], collect_all_xmp: bool) -> (Embedded, Vec<String>) {
     let mut out = Embedded::default();
+    let mut xmp_packets = Vec::new();
     if !b.starts_with(&[0xff, 0xd8]) {
-        return out;
+        return (out, xmp_packets);
     }
     let mut icc_parts: [Option<&[u8]>; 255] = [None; 255];
     let mut icc_total = None;
@@ -111,7 +125,14 @@ pub fn jpeg_segments(b: &[u8]) -> Embedded {
         match marker {
             0xe1 if payload.starts_with(b"Exif\0") && out.exif.is_none() => out.exif = Some(payload.get(6..).unwrap_or(&[]).to_vec()),
             0xe1 if payload.starts_with(XMP_SIG) && out.xmp.is_none() => {
-                out.xmp = Some(String::from_utf8_lossy(&payload[XMP_SIG.len()..]).into_owned());
+                let packet = String::from_utf8_lossy(&payload[XMP_SIG.len()..]).into_owned();
+                if collect_all_xmp {
+                    xmp_packets.push(packet.clone());
+                }
+                out.xmp = Some(packet);
+            }
+            0xe1 if payload.starts_with(XMP_SIG) && collect_all_xmp => {
+                xmp_packets.push(String::from_utf8_lossy(&payload[XMP_SIG.len()..]).into_owned());
             }
             0xe1 if payload.starts_with(XMP_EXT_SIG) => {
                 // GUID (32) + full length (4) + offset (4) + data
@@ -184,7 +205,7 @@ pub fn jpeg_segments(b: &[u8]) -> Embedded {
         ext.sort_by_key(|p| p.0);
         out.xmp_extended = Some(String::from_utf8_lossy(&ext.into_iter().flat_map(|p| p.1).collect::<Vec<u8>>()).into_owned());
     }
-    out
+    (out, xmp_packets)
 }
 
 /// IPTC-IIM block (resource 0x0404) from a Photoshop image-resource stream (`8BIM` records).
@@ -209,10 +230,41 @@ fn photoshop_iptc(mut b: &[u8]) -> Option<Vec<u8>> {
 pub fn png_chunks(b: &[u8]) -> Embedded {
     let mut out = Embedded::default();
     let mut i = 8usize;
-    while i + 12 <= b.len() {
-        let len = u32::from_be_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]) as usize;
-        let typ = &b[i + 4..i + 8];
-        let Some(data) = b.get(i + 8..(i + 8).saturating_add(len)) else { break };
+    let mut ended = false;
+    loop {
+        let Some(header_end) = i.checked_add(8).filter(|end| *end <= b.len()) else {
+            out.chunk_walk_incomplete = true;
+            break;
+        };
+        let Some(header) = b.get(i..header_end) else {
+            out.chunk_walk_incomplete = true;
+            break;
+        };
+        let Some(length_bytes) = header.get(..4) else {
+            out.chunk_walk_incomplete = true;
+            break;
+        };
+        let Ok(length_bytes) = <[u8; 4]>::try_from(length_bytes) else {
+            out.chunk_walk_incomplete = true;
+            break;
+        };
+        let len = u32::from_be_bytes(length_bytes) as usize;
+        let Some(data_end) = header_end.checked_add(len) else {
+            out.chunk_walk_incomplete = true;
+            break;
+        };
+        let Some(chunk_end) = data_end.checked_add(4).filter(|end| *end <= b.len()) else {
+            out.chunk_walk_incomplete = true;
+            break;
+        };
+        let Some(typ) = header.get(4..8) else {
+            out.chunk_walk_incomplete = true;
+            break;
+        };
+        let Some(data) = b.get(header_end..data_end) else {
+            out.chunk_walk_incomplete = true;
+            break;
+        };
         match typ {
             b"eXIf" => out.exif = Some(crate::strip_exif_header(data).to_vec()),
             b"iTXt" if data.starts_with(b"XML:com.adobe.xmp\0") => {
@@ -227,10 +279,17 @@ pub fn png_chunks(b: &[u8]) -> Embedded {
                     }
                 }
             }
-            b"IEND" => break,
+            b"IEND" => {
+                ended = len == 0 && chunk_end == b.len();
+                out.chunk_walk_incomplete |= !ended;
+                break;
+            }
             _ => {}
         }
-        i += 12 + len;
+        i = chunk_end;
+    }
+    if !ended {
+        out.chunk_walk_incomplete = true;
     }
     out
 }
@@ -238,18 +297,69 @@ pub fn png_chunks(b: &[u8]) -> Embedded {
 /// WebP RIFF chunks `EXIF`, `XMP `, `ICCP`.
 pub fn webp_chunks(b: &[u8]) -> Embedded {
     let mut out = Embedded::default();
+    let Some(size_bytes) = b.get(4..8) else {
+        out.chunk_walk_incomplete = true;
+        return out;
+    };
+    let Ok(size_bytes) = <[u8; 4]>::try_from(size_bytes) else {
+        out.chunk_walk_incomplete = true;
+        return out;
+    };
+    let riff_size = u32::from_le_bytes(size_bytes) as usize;
+    let Some(riff_end) = 8usize.checked_add(riff_size) else {
+        out.chunk_walk_incomplete = true;
+        return out;
+    };
+    if riff_size < 4 || riff_end < 12 {
+        out.chunk_walk_incomplete = true;
+        return out;
+    }
+    if riff_end != b.len() {
+        out.chunk_walk_incomplete = true;
+    }
+    let end = riff_end.min(b.len());
     let mut i = 12usize;
-    while i + 8 <= b.len() {
-        let id = &b[i..i + 4];
-        let len = u32::from_le_bytes([b[i + 4], b[i + 5], b[i + 6], b[i + 7]]) as usize;
-        let Some(data) = b.get(i + 8..(i + 8).saturating_add(len)) else { break };
+    while i < end {
+        let Some(header_end) = i.checked_add(8).filter(|next| *next <= end) else {
+            out.chunk_walk_incomplete = true;
+            break;
+        };
+        let Some(header) = b.get(i..header_end) else {
+            out.chunk_walk_incomplete = true;
+            break;
+        };
+        let Some(length_bytes) = header.get(4..8) else {
+            out.chunk_walk_incomplete = true;
+            break;
+        };
+        let Ok(length_bytes) = <[u8; 4]>::try_from(length_bytes) else {
+            out.chunk_walk_incomplete = true;
+            break;
+        };
+        let len = u32::from_le_bytes(length_bytes) as usize;
+        let Some(data_end) = header_end.checked_add(len) else {
+            out.chunk_walk_incomplete = true;
+            break;
+        };
+        let Some(chunk_end) = data_end.checked_add(len & 1).filter(|next| *next <= end) else {
+            out.chunk_walk_incomplete = true;
+            break;
+        };
+        let Some(id) = header.get(..4) else {
+            out.chunk_walk_incomplete = true;
+            break;
+        };
+        let Some(data) = b.get(header_end..data_end) else {
+            out.chunk_walk_incomplete = true;
+            break;
+        };
         match id {
             b"EXIF" => out.exif = Some(crate::strip_exif_header(data).to_vec()),
             b"XMP " => out.xmp = Some(String::from_utf8_lossy(data).into_owned()),
             b"ICCP" => out.icc = Some(data.to_vec()),
             _ => {}
         }
-        i += 8 + len + (len & 1);
+        i = chunk_end;
     }
     out
 }
@@ -494,6 +604,7 @@ mod tests {
         let m = crate::extract(&p);
         assert_eq!(m.iso, Some(400));
         assert_eq!(m.label.as_deref(), Some("Red"));
+        assert!(!embedded(&p).chunk_walk_incomplete);
 
         let mut w = b"RIFF\0\0\0\0WEBP".to_vec();
         let mut body = |id: &[u8], data: &[u8]| {
@@ -509,9 +620,28 @@ mod tests {
         let mut ex = b"Exif\0\0".to_vec();
         ex.extend_from_slice(&exif);
         body(b"EXIF", &ex);
+        let riff_size = w.len().saturating_sub(8) as u32;
+        w[4..8].copy_from_slice(&riff_size.to_le_bytes());
         let e = webp_chunks(&w);
+        assert!(!e.chunk_walk_incomplete);
         assert_eq!(e.icc.as_deref(), Some(&b"abc"[..]));
         assert_eq!(crate::extract(&w).f_number, Some(2.8));
+    }
+
+    #[test]
+    fn chunk_walk_reports_truncated_png_and_webp() {
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend_from_slice(&32u32.to_be_bytes());
+        png.extend_from_slice(b"iTXtshort");
+        assert!(png_chunks(&png).chunk_walk_incomplete);
+
+        let mut webp = b"RIFF\0\0\0\0WEBP".to_vec();
+        webp.extend_from_slice(b"XMP ");
+        webp.extend_from_slice(&32u32.to_le_bytes());
+        webp.extend_from_slice(b"short");
+        let riff_size = webp.len().saturating_sub(8).saturating_add(27) as u32;
+        webp[4..8].copy_from_slice(&riff_size.to_le_bytes());
+        assert!(webp_chunks(&webp).chunk_walk_incomplete);
     }
 
     #[test]
