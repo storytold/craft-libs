@@ -386,12 +386,20 @@ pub struct EndRegion {
     pub full_height: bool,
     /// The gap between the body and the region.
     pub gap: Gap,
+    /// Whether a rule separates the end region from the body, along the region's edge that faces it.
+    pub rule: bool,
 }
 
 impl EndRegion {
-    /// An end region as high as the line, `space.gap.tight` from the body.
+    /// An end region as high as the line, `space.gap.tight` from the body, with no rule.
     pub const fn new() -> Self {
-        EndRegion { full_height: false, gap: Gap::Tight }
+        EndRegion { full_height: false, gap: Gap::Tight, rule: false }
+    }
+
+    /// Whether a rule separates the end region from the body.
+    pub const fn rule(mut self, on: bool) -> Self {
+        self.rule = on;
+        self
     }
 
     /// Whether the region takes the full height under the header.

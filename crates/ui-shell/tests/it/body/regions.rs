@@ -245,3 +245,36 @@ fn a_header_of_several_rows_lies_above_the_body_whatever_the_parent_spacing() {
     let (header, body) = (took.borrow().header.expect("the header ran"), body.borrow().expect("the body ran"));
     assert!(body.min.y >= header.max.y - EDGE_SLACK, "the body {body:?} starts under the header {header:?}");
 }
+
+/// An end region with a rule is set off from the body by a line along its edge toward the body, the full region's
+/// height; without one nothing marks that edge.
+#[trial]
+fn an_end_region_with_a_rule_has_a_line_along_its_edge_toward_the_body() {
+    use craft_ui::contract::EndRegion;
+    let edge_lines = |rule: bool| {
+        let props = ContainerProps::new().sizing(Sizing::Fill).end(EndRegion::new().full_height(true).rule(rule));
+        let took = RefCell::new(Took::default());
+        let mut frames = Frames::new();
+        let mut show = |ui: &mut Ui| {
+            Regioned {
+                common: Common::new(),
+                props: props.clone(),
+                header: None,
+                end: Vec2::new(80.0, 40.0),
+                footer: Vec2::ZERO,
+                rows: 1,
+                took: &took,
+            }
+            .show_at(ui, AREA, |_, _| ());
+        };
+        frames.idle(2, &mut show);
+        let shapes = frames.frame_shapes(&mut show);
+        let end = took.borrow().end.expect("the end region took its block");
+        shapes
+            .iter()
+            .map(egui::Shape::visual_bounding_rect)
+            .filter(|line| line.is_finite() && line.width() <= 2.0 && line.height() >= AREA.height() / 2.0 && line.center().x <= end.min.x + 2.0)
+            .count()
+    };
+    assert!(edge_lines(true) > edge_lines(false), "the rule draws a line along the end region's edge toward the body");
+}

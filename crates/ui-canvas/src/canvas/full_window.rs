@@ -181,7 +181,7 @@ impl<'a> FullWindowDialog<'a> {
     /// sits among them.
     #[must_use]
     pub fn sides(mut self, content: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'a) -> Self {
-        self.props = self.props.end(EndRegion::new().full_height(true));
+        self.props = self.props.end(EndRegion::new().full_height(true).rule(true));
         self.sides = Some(Box::new(content));
         self.place_footer()
     }
