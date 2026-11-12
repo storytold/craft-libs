@@ -29,6 +29,9 @@ use craft_theme::{Rgba, Stateful, States};
 use egui::{CornerRadius, Pos2, Rangef, Rect, Vec2, pos2};
 use std::ops::RangeInclusive;
 
+/// How far a thumb's width runs past the standard handle side, in small handle sides (the old levels thumb: 8 + 6 / 2).
+const THUMB_WIDTH_IN_SMALL_HANDLES: f32 = 0.5;
+
 #[cfg(feature = "testing")]
 mod stories;
 
@@ -944,7 +947,7 @@ impl<const N: usize> Component for ThumbRow<'_, N> {
 
     fn style(cx: &StyleCx<'_>, _: ThumbRowStyleKey<N>) -> ThumbRowStyle {
         let control = cx.control();
-        let colors = &cx.tokens.color;
+        let (colors, handle) = (&cx.tokens.color, &cx.tokens.size.handle);
         let length = cx.tokens.size.length.track;
         let fixed = |rest: Rgba, disabled: Rgba| {
             Stateful::new(cx.color(rest)).off(States::new(cx.color(rest), cx.color(rest), cx.color(rest), cx.color(disabled)))
@@ -956,7 +959,7 @@ impl<const N: usize> Component for ThumbRow<'_, N> {
             edge: fixed(colors.text.muted, colors.text.disabled),
             ring: ThumbRing::new(cx),
             hit: cx.tokens.size.hit.target,
-            thumb: Vec2::new(cx.tokens.size.marker.width, cx.tokens.size.marker.height),
+            thumb: Vec2::new(handle.md + handle.sm * THUMB_WIDTH_IN_SMALL_HANDLES, handle.md),
             track: TrackLook { thickness: cx.tokens.size.ramp.bar, ..cx.track() },
             length,
             span_faint: cx.color(colors.text.faint),

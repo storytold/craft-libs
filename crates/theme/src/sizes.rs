@@ -126,10 +126,8 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
         "base.size.handle.band_outer" Num 2.0..=128.0 => s.handle.band_outer;
         "base.size.hit.slop" Num 0.0..=32.0 => s.hit.slop;
         "base.size.hit.target" Num 0.0..=32.0 => s.hit.target;
-        "base.size.hit.dead_zone" Num 0.0..=32.0 => s.hit.dead_zone;
         "base.size.hit.reveal" Num 8.0..=256.0 => s.hit.reveal;
         "base.size.checker" Num 1.0..=32.0 => s.checker;
-        "base.size.dial" Num 16.0..=128.0 => s.dial;
         "base.size.plot.width" Num 48.0..=640.0 => s.plot.width;
         "base.size.plot.height" Num 32.0..=480.0 => s.plot.height;
         "base.size.plot.most" Num 48.0..=1024.0 => s.plot.most;
@@ -140,10 +138,6 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
         "base.size.groove" Num 0.25..=16.0 => s.groove;
         "base.size.ramp.bar" Num 1.0..=64.0 => s.ramp.bar;
         "base.size.ramp.groove" Num 0.25..=32.0 => s.ramp.groove;
-        "base.size.meter" Num 1.0..=32.0 => s.meter;
-        "base.size.marker.width" Num 4.0..=32.0 => s.marker.width;
-        "base.size.marker.height" Num 4.0..=32.0 => s.marker.height;
-        "base.size.toggle" Num 12.0..=96.0 => s.toggle;
         "base.size.pointer_tip.x" Num 0.0..=64.0 => s.pointer_tip.x;
         "base.size.pointer_tip.y" Num 0.0..=64.0 => s.pointer_tip.y;
         "base.size.float.width" Num 64.0..=1024.0 => s.float.width;

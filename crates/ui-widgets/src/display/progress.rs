@@ -17,6 +17,8 @@ const SWEEP: f64 = 1.25;
 const SEGMENT: f32 = 0.3;
 /// Where the still segment starts, as a fraction of the track.
 const STILL_START: f32 = 0.3;
+/// A bar's thickness in value-track grooves (`size.groove`).
+const THICKNESS_IN_GROOVES: f32 = 2.0;
 /// Dash and gap lengths of the still segment, in track heights.
 const DASH: f32 = 2.0;
 const DASH_GAP: f32 = 1.0;
@@ -91,13 +93,13 @@ fn dashes(width: f32, thickness: f32) -> Vec<(f32, f32)> {
     spans
 }
 
-/// The track of a bar: a sunken, edged groove `size.meter` high.
+/// The track of a bar: a sunken, edged groove two value-track grooves thick.
 fn bar_track(cx: &StyleCx<'_>) -> TrackLook {
     let colors = &cx.tokens.color;
     let mut track = cx.track();
     let sunken = cx.color(colors.surface.sunken);
     track.unfilled = Stateful::new(sunken);
-    track.thickness = cx.tokens.size.meter;
+    track.thickness = cx.tokens.size.groove * THICKNESS_IN_GROOVES;
     track
 }
 

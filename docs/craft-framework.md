@@ -925,6 +925,8 @@ Ten themes, 17 mode variants. The suite default is ArtCraft.
 
 A theme with its own shape replaces the radii or adds an offset to control, surface and window. Panel, button and pill are not offset.
 
+`shape.knob` is the shape of a value track's thumb (Slider, RangeSlider): `round`, the control's glyph across, or `tab`, an upright tab the control's icon side tall. Classic sets `tab`.
+
 ### Size roles
 
 | Role | Components |
@@ -939,8 +941,6 @@ A theme with its own shape replaces the radii or adds an offset to control, surf
 | `size.groove` | Groove of a value track |
 | `size.ramp.bar` | Gradient ramp drawn as a bar of its own |
 | `size.ramp.groove` | Gradient ramp drawn as the groove of a value track |
-| `size.meter` | Bar that shows a quantity as a filled share of a bordered groove |
-| `size.marker.width`, `size.marker.height` | Triangular pointer mark on the edge of a value track |
 | `size.thumb_row` | The least height of a list row that shows a thumbnail (layers, channels, links, thumbnail lists) |
 | `size.rail.width`, `size.rail.button` | Tool rail and panel rail |
 | `size.length.field`, `size.length.track`, `size.length.short`, `size.length.number` | Text or value field, value track, short field, number field over a slider |

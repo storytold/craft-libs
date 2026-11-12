@@ -7,9 +7,9 @@ use std::fmt::Write as _;
 
 use crate::{
     BarSizes, CanvasSizes, ColorToken, ControlSizes, DockColumnSizes, Easing, Edge, Elevation, ElevationTokens, FloatSizes, FontSlot, Gaps,
-    HandleSizes, HitSizes, IconSizes, Insets, KnobShape, LengthSizes, MarkerSizes, Motion, MotionTokens, Pads, PaneSizes, PlotSizes, RadiusSet,
-    RailSizes, RampSizes, Rgba, RowStyle, RulerSizes, RulerTickSizes, ShapeTokens, SizeTokens, SpaceTokens, StrokeTokens, ThumbSizes, Tokens,
-    TypeStyle, TypeTokens, WindowSizes,
+    HandleSizes, HitSizes, IconSizes, Insets, KnobShape, LengthSizes, Motion, MotionTokens, Pads, PaneSizes, PlotSizes, RadiusSet, RailSizes,
+    RampSizes, Rgba, RowStyle, RulerSizes, RulerTickSizes, ShapeTokens, SizeTokens, SpaceTokens, StrokeTokens, ThumbSizes, Tokens, TypeStyle,
+    TypeTokens, WindowSizes,
 };
 
 /// The text of every token, one `key = value` line each, in a fixed order.
@@ -120,14 +120,10 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
         handle,
         hit,
         checker,
-        dial,
         plot,
         length,
         groove,
         ramp,
-        meter,
-        marker,
-        toggle,
         pointer_tip,
         float,
         window,
@@ -169,13 +165,11 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
     out.line("size.handle.rotate_reach", len(*rotate_reach));
     out.line("size.handle.band_inner", len(*band_inner));
     out.line("size.handle.band_outer", len(*band_outer));
-    let HitSizes { slop, target, dead_zone, reveal } = hit;
+    let HitSizes { slop, target, reveal } = hit;
     out.line("size.hit.slop", len(*slop));
     out.line("size.hit.target", len(*target));
-    out.line("size.hit.dead_zone", len(*dead_zone));
     out.line("size.hit.reveal", len(*reveal));
     out.line("size.checker", len(*checker));
-    out.line("size.dial", len(*dial));
     let PlotSizes { width, height, most } = plot;
     out.line("size.plot.width", len(*width));
     out.line("size.plot.height", len(*height));
@@ -189,11 +183,6 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
     let RampSizes { bar, groove: ramp_groove } = ramp;
     out.line("size.ramp.bar", len(*bar));
     out.line("size.ramp.groove", len(*ramp_groove));
-    out.line("size.meter", len(*meter));
-    let MarkerSizes { width: marker_width, height: marker_height } = marker;
-    out.line("size.marker.width", len(*marker_width));
-    out.line("size.marker.height", len(*marker_height));
-    out.line("size.toggle", len(*toggle));
     out.line("size.pointer_tip.x", len(pointer_tip.x));
     out.line("size.pointer_tip.y", len(pointer_tip.y));
     let FloatSizes { width, height } = float;

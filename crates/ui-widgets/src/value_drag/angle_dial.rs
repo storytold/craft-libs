@@ -32,6 +32,10 @@ const DEFAULT_RANGE: (f64, f64) = (-180.0, 180.0);
 const DEFAULT_STEP: f64 = 1.0;
 /// The least a range's span may differ from a turn for the dial to count it as one.
 const TURN_TOLERANCE: f64 = 1e-9;
+/// The dial's side in standard control heights (the old dial: 42 at a 24 control).
+const SIDE_IN_CONTROLS: f32 = 1.75;
+/// The dead zone's radius in standard control heights (the old `DEAD_ZONE_IN_CONTROLS`).
+const DEAD_ZONE_IN_CONTROLS: f32 = 0.1;
 
 /// Where the dial's zero is and which way the value grows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -245,7 +249,8 @@ impl Component for AngleDial<'_> {
     fn style(cx: &StyleCx<'_>, _: AngleDialStyleKey) -> AngleDialStyle {
         let control = cx.control();
         let colors = &cx.tokens.color;
-        let side = cx.tokens.size.dial;
+        let standard = cx.tokens.size.control.md;
+        let side = standard * SIDE_IN_CONTROLS;
         let disabled = colors.state.disabled_fill;
         let states = |rest, hover, pressed, off| {
             Stateful::new(cx.color(rest)).off(States::new(cx.color(rest), cx.color(hover), cx.color(pressed), cx.color(off)))
@@ -260,7 +265,7 @@ impl Component for AngleDial<'_> {
             hub_fill: states(colors.text.muted, colors.text.muted, colors.text.muted, colors.text.disabled),
             needle_inset: control.gap,
             hub: cx.tokens.size.handle.sm / 2.0,
-            dead_zone: cx.tokens.size.hit.dead_zone,
+            dead_zone: standard * DEAD_ZONE_IN_CONTROLS,
         }
     }
 

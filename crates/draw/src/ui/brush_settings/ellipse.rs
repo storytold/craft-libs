@@ -18,8 +18,8 @@ pub(super) const ARROW: PartKey = PartKey::new("arrow");
 /// The two roundness dots on the minor axis.
 const DOT: PartKey = PartKey::new("dot");
 
-/// The disc is this many rotary-control sides across: the widget is the size of two angle dials.
-const DISC_IN_DIALS: f32 = 2.0;
+/// The disc's side in standard control heights: two angle dials across (the old dial: 42 at a 24 control).
+const DISC_IN_CONTROLS: f32 = 3.5;
 /// The ellipse's major radius over the disc's.
 const ELLIPSE_SHARE: f32 = 0.85;
 /// How much of the text colour the ellipse's fill takes over the disc.
@@ -195,7 +195,7 @@ impl Component for TipEllipse<'_> {
 
     fn style(cx: &StyleCx<'_>, _: TipEllipseStyleKey) -> TipEllipseStyle {
         let colors = &cx.tokens.color;
-        let side = cx.tokens.size.dial * DISC_IN_DIALS;
+        let side = cx.tokens.size.control.md * DISC_IN_CONTROLS;
         let states = |rest, off| Stateful::new(cx.color(rest)).off(States::new(cx.color(rest), cx.color(rest), cx.color(rest), cx.color(off)));
         let face = states(colors.surface.sunken, colors.state.disabled_fill);
         let edge = states(colors.line.control_edge, colors.line.control_edge);

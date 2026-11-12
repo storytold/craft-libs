@@ -12,6 +12,8 @@ use egui::{CornerRadius, Rect, Vec2};
 
 /// Where the thumb rests while the value is mixed: the middle of its travel.
 const MIXED_AT: f32 = 0.5;
+/// The track's length in track heights (the old `SWITCH_ASPECT`).
+const LENGTH_IN_HEIGHTS: f32 = 2.0;
 
 /// The style of a switch.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
@@ -69,7 +71,7 @@ impl Component for Switch<'_> {
                 thumb,
                 thumb.disabled(cx.color(colors.state.disabled_fill).egui(), cx.color(colors.line.divider).egui()),
             )),
-            width: cx.tokens.size.toggle,
+            width: control.icon * LENGTH_IN_HEIGHTS,
             height: control.icon,
             inset: cx.tokens.space.gap.tight,
         }

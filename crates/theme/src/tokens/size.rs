@@ -214,8 +214,6 @@ pub struct SizeTokens {
     pub hit: HitSizes,
     /// Side of a checkerboard cell in UI swatches and thumbnails.
     pub checker: f32,
-    /// The side of a rotary control: the dial of an angle dial.
-    pub dial: f32,
     /// The least size of a plot or two-dimensional value area: the well of a point picker, before the
     /// picker's own fitting.
     pub plot: PlotSizes,
@@ -225,12 +223,6 @@ pub struct SizeTokens {
     pub groove: f32,
     /// Gradient ramps: the colours a value runs through, drawn as a bar or as the groove of a track.
     pub ramp: RampSizes,
-    /// The thickness of a bar that shows a quantity as a filled share of a bordered groove (a progress bar).
-    pub meter: f32,
-    /// The pointer marks on the edge of a value track.
-    pub marker: MarkerSizes,
-    /// The long side of the track of a two-state toggle (a switch).
-    pub toggle: f32,
     /// Where a tip that follows the pointer (a gesture readout) sits from the pointer.
     pub pointer_tip: PointerTipOffset,
     /// The windows a dock floats its panels in.
@@ -327,15 +319,6 @@ pub struct LengthSizes {
     pub number: f32,
 }
 
-/// The size of a triangular pointer mark on the edge of a value track, in logical pixels.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct MarkerSizes {
-    /// The width of the mark along the track.
-    pub width: f32,
-    /// The height of the mark across the track.
-    pub height: f32,
-}
-
 /// Thicknesses of gradient ramps, in logical pixels.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RampSizes {
@@ -382,8 +365,6 @@ pub struct HitSizes {
     pub slop: f32,
     /// The least hit size of a part, in logical pixels; a thin handle or line is padded to it.
     pub target: f32,
-    /// How far from the centre of a rotary control a press sets no value.
-    pub dead_zone: f32,
     /// How far from the pointer the handles of an on-canvas object show.
     pub reveal: f32,
 }

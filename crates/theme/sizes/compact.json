@@ -33,7 +33,6 @@
         "md": 24.0,
         "sm": 20.0
       },
-      "dial": 42.0,
       "dock": {
         "column": 340.0
       },
@@ -52,7 +51,6 @@
         "sm": 6.0
       },
       "hit": {
-        "dead_zone": 2.4,
         "reveal": 56.0,
         "slop": 3.0,
         "target": 8.0
@@ -70,11 +68,6 @@
         "short": 96.0,
         "track": 128.0
       },
-      "marker": {
-        "height": 8.0,
-        "width": 11.0
-      },
-      "meter": 6.0,
       "pane": {
         "least": 40.0
       },
@@ -110,7 +103,6 @@
         "sm": 18.0
       },
       "thumb_row": 32.0,
-      "toggle": 32.0,
       "window": {
         "cascade": 32.0
       }
