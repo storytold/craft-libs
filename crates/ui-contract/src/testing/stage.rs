@@ -1,5 +1,6 @@
 //! The room a story that fills both axes is shown in.
 
+use crate::contract::PaneEdge;
 use crate::layout::flow_room;
 use crate::runtime::env::Env;
 use egui::{Rect, Ui};
@@ -33,4 +34,14 @@ pub fn stage_width(ui: &Ui) -> f32 {
     let room = flow_room(ui).x;
     let room = if room.is_finite() { room } else { ui.available_width() };
     room.clamp(story.width_min, story.width_max)
+}
+
+/// Runs `story` as the content of an edge pane at `edge`, as a rail or panel docked at that edge of an app window
+/// shows: a container that draws a divider along its pane's inner edge (`ContainerProps::edge_rule`) draws it.
+pub fn in_edge_pane<R>(ui: &mut Ui, edge: PaneEdge, story: impl FnOnce(&mut Ui) -> R) -> R {
+    let ctx = ui.ctx().clone();
+    let installed = Env::install_for(ui, Env::of(ui).derive_local(|scoped| scoped.pane_edge = Some(edge)));
+    let out = story(ui);
+    Env::restore(&ctx, installed);
+    out
 }
