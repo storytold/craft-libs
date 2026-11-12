@@ -9,6 +9,8 @@
 //!   IPTC (33723) from IFD0.
 //! - Canon CR3 (ISO base media file, see [`crate::cr3`]): `CMT1`/`CMT2`/`CMT4` merged into one Exif block; the
 //!   XMP `uuid` box.
+//! - JPEG XL (ISO base media file, see [`crate::jxl`]): the `Exif` and `xml ` boxes, plain or Brotli-wrapped
+//!   in `brob`; a bare codestream has no metadata.
 //!
 //! PSD, MRW and HEIF files are read by `craft-psd`, `craft-raw` and `craft-heif`.
 
@@ -40,6 +42,9 @@ pub fn embedded(bytes: &[u8]) -> Embedded {
     }
     if let Some(c) = crate::cr3::parse_cr3(bytes) {
         return Embedded { exif: crate::cr3::merged_exif(&c), xmp: c.xmp.map(|b| String::from_utf8_lossy(b).into_owned()), ..Default::default() };
+    }
+    if crate::jxl::is_jxl_container(bytes) {
+        return crate::jxl::metadata(bytes);
     }
     if bytes.starts_with(&[0xff, 0xd8]) {
         jpeg_segments(bytes)
