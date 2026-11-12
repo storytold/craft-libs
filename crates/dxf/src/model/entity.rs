@@ -530,9 +530,9 @@ pub enum EntityKind {
     Spline(Spline),
     Helix(Helix),
     MLine(MLine),
-    /// Read only: [`super::write`] leaves it out (pass the record as raw tags).
+    /// Written from the 2007 format on.
     MLeader(super::mleader::MLeader),
-    /// Read only: [`super::write`] leaves it out (pass the record as raw tags).
+    /// Written from the 2004 format on.
     Table(super::table::Table),
     Ray {
         base: Point,

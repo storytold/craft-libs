@@ -1,6 +1,7 @@
 //! ACAD_TABLE and TABLESTYLE.
 
 use craft_dxf::model::table::{MAX_SIDE, Table, TableStyle};
+use craft_dxf::model::write::{Drawing, Format};
 use craft_dxf::model::{Color, Document, Entity, EntityKind, Lineweight, entity_records, records};
 use craft_dxf::{Tag, parse};
 
@@ -93,9 +94,11 @@ fn a_table_style() {
 }
 
 #[test]
-fn the_writer_leaves_a_table_out() {
+fn the_writer_leaves_a_table_out_before_2004() {
     let t = tags(TABLE);
     let e = Entity::read(&entity_records(&records(&t)).0[0]);
-    let (_, skipped) = craft_dxf::model::write::Drawing { entities: vec![e], ..Default::default() }.tags();
-    assert_eq!(skipped, 1);
+    for (format, left_out) in [(Format::R2000, 1), (Format::R2004, 0)] {
+        let (_, skipped) = Drawing { format, entities: vec![e.clone()], ..Default::default() }.tags();
+        assert_eq!(skipped, left_out, "{format:?}");
+    }
 }

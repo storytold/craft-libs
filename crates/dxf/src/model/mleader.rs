@@ -70,6 +70,8 @@ pub struct MLeader {
     pub text_height: Option<f64>,
     /// Group 140 of the context: the arrow size.
     pub context_arrow_size: Option<f64>,
+    /// Group 145 of the context: the landing gap.
+    pub landing_gap: Option<f64>,
     /// Group 290 of the context: there is text.
     pub has_text: Option<bool>,
     /// Group 304 of the context: the text's contents, decoded as an MTEXT's are.
@@ -215,6 +217,7 @@ impl MLeader {
                     10 | 20 | 30 => pts.base.take(10, c, f),
                     41 => m.text_height = Some(f),
                     140 => m.context_arrow_size = Some(f),
+                    145 => m.landing_gap = Some(f),
                     290 => m.has_text = Some(t.i64() != 0),
                     304 => m.text = Some(decode_contents(&t.str())),
                     340 => m.context_text_style = handle(t),

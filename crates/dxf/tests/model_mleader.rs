@@ -1,6 +1,7 @@
 //! MULTILEADER and MLEADERSTYLE.
 
 use craft_dxf::model::mleader::{MAX_ROOTS, MAX_VERTICES, MLeader, MLeaderStyle};
+use craft_dxf::model::write::{Drawing, Format};
 use craft_dxf::model::{Document, Entity, EntityKind};
 use craft_dxf::{Tag, parse};
 
@@ -109,9 +110,11 @@ fn a_multileader_style() {
 }
 
 #[test]
-fn the_writer_leaves_a_multileader_out() {
+fn the_writer_leaves_a_multileader_out_before_2007() {
     let t = tags(MLEADER);
     let e = Entity::read(&craft_dxf::model::entity_records(&craft_dxf::model::records(&t)).0[0]);
-    let (_, skipped) = craft_dxf::model::write::Drawing { entities: vec![e], ..Default::default() }.tags();
-    assert_eq!(skipped, 1);
+    for (format, left_out) in [(Format::R2004, 1), (Format::R2007, 0)] {
+        let (_, skipped) = Drawing { format, entities: vec![e.clone()], ..Default::default() }.tags();
+        assert_eq!(skipped, left_out, "{format:?}");
+    }
 }
