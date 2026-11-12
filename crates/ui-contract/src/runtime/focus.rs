@@ -193,9 +193,11 @@ pub(crate) fn register_stop(ctx: &Context, stop: Stop) {
 /// `RootEnv::tab_toggles_chrome` a bare Tab with nothing focused toggles its panels, as with a framework canvas. Focus
 /// reaches the canvas by Tab, F6 or `request`; while it has focus, its keys route as `keys` says (the arrows as
 /// nudges, Escape as its `Intent::Cancel`). `keys` is `KeyUse::CANVAS`, or a variant such as
-/// `KeyUse::CANVAS.with_keep(KeepKeys::Tab)` while the canvas edits text in place and Tab is its own: with the canvas
-/// focused or nothing focused, a bare Tab then stays in egui's input for the app and toggles nothing. Call it each
-/// pass the canvas shows.
+/// `KeyUse::CANVAS.with_keep(KeepKeys::Tab).with_edits(..)` while the canvas edits text in place and Tab and the
+/// clipboard are its own. With nothing focused the canvas is the key target: a bare Tab it keeps, and the clipboard
+/// events and edit chords of its edit set, stay in egui's input for the app, and nothing toggles or fires with them.
+/// With the canvas focused, Tab it keeps stays in egui too, and its edit set arrives as `Intent::Edit`
+/// (`keys::intents_of`), as for any focused stop. Call it each pass the canvas shows.
 pub fn host_canvas(ctx: &Context, id: Id, keys: KeyUse) {
     register_stop(ctx, Stop::new(id, keys.with_chrome_key(true)));
 }

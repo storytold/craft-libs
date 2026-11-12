@@ -35,9 +35,10 @@ struct Strip<'a> {
     /// An app's own egui widget or popup has the focus (`FocusedRecord::foreign`): Tab, Escape and the clipboard
     /// events are its own.
     foreign: bool,
-    /// Nothing has the focus and the window's canvas keeps Tab (`KeepKeys::Tab`): the canvas is the key target, as
-    /// the chrome gate takes it, and reads a bare Tab from egui.
-    canvas_keeps_tab: bool,
+    /// The keys of the window's canvas while nothing has the focus, neither a framework stop nor an app's own widget
+    /// or popup: the canvas is then the key target, as the chrome gate takes it, and reads from egui the keys its
+    /// `KeyUse` keeps (Tab with `KeepKeys::Tab`) and the clipboard events and edit chords of its edit set.
+    canvas: Option<KeyUse>,
     /// egui holds no focus and the window registered no focus stop in its last pass: a framework focus move has
     /// nowhere to go, so a bare Tab is egui's. Focus on a component's widget without a stop is focus: egui would take
     /// a Tab from it as a move to the next widget it shows, in a later pass.
@@ -102,6 +103,7 @@ impl Strip<'_> {
                 false
             }
             KeyEvent::Clip { .. } if self.foreign => true,
+            KeyEvent::Clip { command, .. } if self.canvas.is_some_and(|canvas| canvas.edits.contains(command)) => true,
             KeyEvent::Clip { command: EditCommand::Copy | EditCommand::Cut, .. } if self.label_selection => true,
             KeyEvent::Clip { command, .. } => {
                 // The platform sends the clipboard event in place of the chord: an unlisted one is the chord. The
@@ -169,6 +171,10 @@ impl Strip<'_> {
         let escape = key == Key::Escape && !mods.cmd && !mods.ctrl && !(self.records && !mods.is_none());
         let mnemonic = self.menu_bar && self.os != Os::Mac && mods == Mods::ALT && key.is_letter();
         let edit = self.edit_chords.iter().find(|(command, chord)| (self.edits)(*command) && self.layout.matches(chord, input, self.os));
+        let canvas_edit = self.canvas.is_some_and(|canvas| {
+            self.edit_chords.iter().any(|(command, chord)| canvas.edits.contains(*command) && self.layout.matches(chord, input, self.os))
+        });
+        let canvas_tab = bare_tab && self.canvas.is_some_and(|canvas| canvas.keep == focus::KeepKeys::Tab);
         // The chrome keys are Tab's, which the bare-Tab arm and `take_nav` read.
         let window_shortcut = self
             .window_shortcuts
@@ -188,9 +194,9 @@ impl Strip<'_> {
                 batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, typed: false, press: None });
             }
             false
-        } else if (self.foreign && (bare_tab || escape)) || (self.canvas_keeps_tab && bare_tab) {
-            // The app's own focused widget or popup, or the canvas that keeps Tab with nothing focused, reads the key
-            // from egui; the runtime routes nothing for it, so no shortcut toggles the chrome with it either.
+        } else if (self.foreign && (bare_tab || escape)) || canvas_tab || canvas_edit {
+            // The app's own focused widget or popup, or the canvas with nothing focused, reads the key from egui; the
+            // runtime routes nothing for it, so no shortcut toggles the chrome or fires an edit command with it either.
             true
         } else if bare_tab && self.no_stops {
             // egui moves its own focus with it, from nothing focused into the app's own widgets (`focus::begin`).
@@ -272,15 +278,10 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
     let keys = record.keys;
     let menu_bar = record.menu_bar && keys.is_none_or(|keys| !matches!(keys.owner, OwnerClass::Text | OwnerClass::Recorder));
     let before = input.events.len();
-    let edit_chords = if keys.is_some_and(|keys| EditCommands::ALL.iter().any(|command| command.edit().is_some_and(|edit| keys.edits.contains(edit))))
-    {
-        commands::edit_chords(ctx)
-    } else {
-        Arc::default()
-    };
+    let canvas = focus::canvas_keys(ctx, viewport).filter(|_| keys.is_none() && !record.foreign);
+    let lists_edits = |keys: &KeyUse| EditCommands::ALL.iter().any(|command| command.edit().is_some_and(|edit| keys.edits.contains(edit)));
+    let edit_chords = if keys.as_ref().or(canvas.as_ref()).is_some_and(lists_edits) { commands::edit_chords(ctx) } else { Arc::default() };
     let window_shortcuts = commands::window_shortcuts(ctx);
-    let canvas_keeps_tab =
-        keys.is_none() && !record.foreign && focus::canvas_keys(ctx, viewport).is_some_and(|canvas| canvas.keep == focus::KeepKeys::Tab);
     let no_stops = keys.is_none() && !record.foreign && focus::tab_from_nothing(ctx, viewport);
     let latin = input.latin_layout_chars.clone();
     let (batch, visible) = with(ctx, viewport, |stage| {
@@ -307,7 +308,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
             menu_bar,
             canvas_space: hole.as_ref().is_some_and(|hole| hole.space || hole.space_pressed),
             foreign: record.foreign,
-            canvas_keeps_tab,
+            canvas,
             no_stops,
             label_selection: record.label_selection,
         };

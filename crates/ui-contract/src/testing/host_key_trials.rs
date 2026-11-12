@@ -4,7 +4,7 @@ use crate::runtime::commands::{CommandInput, CommandSet as _, EditCommands, NavC
 use crate::runtime::drag::{self, DragPreview};
 use crate::runtime::egui::fixture;
 use crate::runtime::env::RootEnv;
-use crate::runtime::focus::{FocusTarget, KeepKeys, KeyUse, host_canvas, request};
+use crate::runtime::focus::{EditSet, FocusTarget, KeepKeys, KeyUse, host_canvas, request};
 use crate::runtime::frame::{ChromeToggle, take_output};
 use crate::runtime::keys::with_window_intents;
 use crate::testing::focus::{Stop, egui_focused, named_id, register_stop, widget};
@@ -12,7 +12,7 @@ use crate::testing::input::{key_press, key_reached, slop};
 use crate::testing::pointer::{self, moved, press, release};
 use crate::testing::sensing::{self, ProbeRoot};
 use crate::testing::{Frames, trial};
-use craft_behavior::{Input, Intent, Sense};
+use craft_behavior::{EditCommand, Input, Intent, Sense};
 use egui::{Event, Id, ImeEvent, Key, Modifiers, Pos2, Rect, Ui, ViewportId};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -431,6 +431,42 @@ fn a_host_canvas_marks_the_window_and_tab_toggles_its_panels() {
         (Vec::new(), true),
         "with nothing focused, a canvas that keeps Tab gets it from egui and nothing toggles"
     );
+}
+
+/// What `event` did with nothing focused in a window whose host declares its canvas with `keys`: whether the event
+/// reached egui's input, and the ids of the commands it fired.
+fn clipboard_with_canvas(keys: KeyUse, event: Event) -> (bool, Vec<String>) {
+    let canvas = named_id("host canvas");
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&events);
+    let (_, mut base) = host_window();
+    let mut show = move |ui: &mut Ui| {
+        seen.borrow_mut().extend(ui.input(|input| input.events.clone()));
+        base(ui);
+        widget(ui, canvas);
+        host_canvas(ui.ctx(), canvas, keys);
+    };
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), &mut show);
+    take_output(&frames.ctx);
+    events.borrow_mut().clear();
+    frames.frame(vec![event.clone()], &mut show);
+    frames.frame(Vec::new(), &mut show);
+    let fired = take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect();
+    (events.borrow().contains(&event), fired)
+}
+
+#[trial]
+fn a_host_canvas_reads_the_clipboard_of_its_edit_set_with_nothing_focused() {
+    let edits = EditSet::NONE.with(EditCommand::Cut).with(EditCommand::Copy).with(EditCommand::Paste);
+    let typing = KeyUse::CANVAS.with_edits(edits);
+    let paste = Event::Paste("x".to_owned());
+    assert_eq!(clipboard_with_canvas(typing, paste.clone()), (true, Vec::new()), "the canvas's paste stays in egui and fires nothing");
+    assert_eq!(clipboard_with_canvas(typing, Event::Cut), (true, Vec::new()), "and its cut");
+    assert!(!clipboard_with_canvas(KeyUse::CANVAS, paste).0, "a canvas without the command: the paste is the app's chord");
+    let chord = key_press(Key::V, Modifiers::COMMAND);
+    assert_eq!(clipboard_with_canvas(typing, chord.clone()), (true, Vec::new()), "the canvas's chord stays in egui and fires nothing");
+    assert!(!clipboard_with_canvas(KeyUse::CANVAS, chord).1.is_empty(), "a canvas without the command: the chord fires the app's Paste");
 }
 
 /// What an F6 press did under `overrides`: whether it reached egui, and the ids of the commands it fired.
