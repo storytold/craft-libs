@@ -142,6 +142,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   origin, to RGBA8, and a run-length writer whose packets end with their scan line. Bounded on
   hostile input.
 - [`craft-idml`](crates/idml/README.md): IDML (InDesign Markup Language) packages: the ZIP container read with bounded part sizes and lenient part names, `designmap.xml` with its includes in place, the `<Properties>` form on craft-xml elements, value codecs and the package writer; and InDesign Tagged Text, read and written.
+- [`craft-ical`](crates/ical/README.md): iCalendar (RFC 5545) building blocks, from MailCraft: content
+  lines, DATE/DATE-TIME values, durations, TEXT escaping, the common subset of recurrence rules,
+  and `VTIMEZONE` definitions read and written. No time-zone database; what events and to-dos
+  mean stays in each app. Bounded and panic-free on hostile input.
 - [`craft-stream-codecs`](crates/stream-codecs/README.md): byte-stream and bi-level image codecs that
   PDF, PostScript and TIFF share: LZW, ASCII85, ASCIIHex, RunLength, TIFF and PNG predictors,
   CCITT Group 3 and 4 decoding and Group 4 encoding, lossless JBIG2 encoding. Every
