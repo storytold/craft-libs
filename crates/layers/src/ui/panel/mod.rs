@@ -173,9 +173,18 @@ pub struct LayersPanel<'a, T: LayerTree> {
     find_name: bool,
     row_menu: Option<Box<RowMenu<'a, T::Id>>>,
     trailing: Option<Box<dyn TrailingCell<T::Id> + 'a>>,
-    reveal: Option<T::Id>,
+    reveal: Option<(T::Id, Groups)>,
     rename: Option<T::Id>,
     document: Option<u64>,
+}
+
+/// What a reveal ([`LayersPanel::reveal`]) does with the closed groups that hold the layer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Groups {
+    /// They open ([`LayersEvent::Open`]) and the layer's own row scrolls into view.
+    Open,
+    /// They stay closed and the row of the outermost one scrolls into view: the row that stands for the layer.
+    Keep,
 }
 
 /// What [`LayersPanel::show`] returns.
@@ -304,10 +313,11 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
         self
     }
 
-    /// Reveals `layer` this pass: its closed groups open ([`LayersEvent::Open`]) and its row scrolls into view when it
-    /// is not wholly in view. The app calls it in the pass its active layer changes.
-    pub fn reveal(mut self, layer: T::Id) -> Self {
-        self.reveal = Some(layer);
+    /// Reveals `layer` this pass: its row, or with [`Groups::Keep`] the row of its outermost closed group, scrolls
+    /// into view when it is not wholly in view; with [`Groups::Open`] its closed groups open ([`LayersEvent::Open`]).
+    /// The app calls it in the pass its active layer changes, with the layer and its own rule for the groups.
+    pub fn reveal(mut self, layer: T::Id, groups: Groups) -> Self {
+        self.reveal = Some((layer, groups));
         self
     }
 

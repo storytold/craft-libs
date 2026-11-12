@@ -6,10 +6,10 @@ use craft_ui::contract::{OpenChange, SweepApply};
 use craft_ui::list::ThumbTarget;
 use std::borrow::Cow;
 
-use super::super::Session;
 use super::super::context::PanelContext;
 use super::super::events::LayerColumn;
 use super::super::row::{EYE, LOCK};
+use super::super::{Groups, Session};
 use crate::ui::filter::LayerFilter;
 use crate::ui::tree::{LayerInfo, LayerPart, LayerRowKey, LayerTree, SubRowGroup};
 
@@ -204,11 +204,14 @@ impl<Id: Clone> RevealPlan<Id> {
     }
 }
 
-/// The reveal the app named: the layer, past its closed ancestors opened.
-pub(in crate::ui::panel) fn reveal_plan<T: LayerTree>(tree: &T, named: Option<T::Id>) -> RevealPlan<T::Id> {
-    match named {
-        Some(id) => RevealPlan { opens: closed_ancestor_opens(tree, &id), target: Some(id) },
-        None => RevealPlan { target: None, opens: Vec::new() },
+/// The reveal the app named: with [`Groups::Open`] the layer, past its closed ancestors opened; with [`Groups::Keep`]
+/// its outermost closed ancestor, else the layer.
+pub(in crate::ui::panel) fn reveal_plan<T: LayerTree>(tree: &T, named: Option<(T::Id, Groups)>) -> RevealPlan<T::Id> {
+    let Some((id, groups)) = named else { return RevealPlan { target: None, opens: Vec::new() } };
+    let opens = closed_ancestor_opens(tree, &id);
+    match groups {
+        Groups::Open => RevealPlan { target: Some(id), opens },
+        Groups::Keep => RevealPlan { target: Some(opens.into_iter().next().map_or(id, |open| open.key)), opens: Vec::new() },
     }
 }
 

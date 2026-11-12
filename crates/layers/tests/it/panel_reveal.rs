@@ -1,8 +1,8 @@
-//! `LayersPanel` reveals: the layer the app names scrolls into view with its closed groups opened, and each document
-//! keeps its own scroll position.
+//! `LayersPanel` reveals: the layer the app names scrolls into view, its closed groups opened or kept, and each
+//! document keeps its own scroll position.
 
 use craft_layers::ui::mock::FakeLayers;
-use craft_layers::ui::panel::{LayersEvent, LayersPanel};
+use craft_layers::ui::panel::{Groups, LayersEvent, LayersPanel};
 use craft_layers::ui::tree::{LayerInfo, LayerKind, LayerPart, LayerSelection};
 use craft_ui::testing::{Fixture, trial};
 use egui::{Rect, Vec2};
@@ -52,7 +52,7 @@ struct Rig {
     docs: Vec<Shared<FakeLayers>>,
     /// The document shown, by its position in `docs`.
     shown: Rc<Cell<usize>>,
-    reveal: Rc<Cell<Option<u32>>>,
+    reveal: Rc<Cell<Option<(u32, Groups)>>>,
     seen: Shared<Vec<LayersEvent<u32>>>,
 }
 
@@ -62,7 +62,7 @@ fn rig(docs: Vec<FakeLayers>) -> Rig {
     let docs: Vec<Shared<FakeLayers>> = docs.into_iter().map(|tree| Rc::new(RefCell::new(tree))).collect();
     let keyed = docs.len() > 1;
     let shown: Rc<Cell<usize>> = Rc::default();
-    let reveal: Rc<Cell<Option<u32>>> = Rc::default();
+    let reveal: Rc<Cell<Option<(u32, Groups)>>> = Rc::default();
     let seen: Shared<Vec<LayersEvent<u32>>> = Rc::default();
     let (trees, which, asked, sink) = (docs.clone(), Rc::clone(&shown), Rc::clone(&reveal), Rc::clone(&seen));
     let mut fixture = Fixture::new(move |ui| {
@@ -73,8 +73,8 @@ fn rig(docs: Vec<FakeLayers>) -> Rig {
             if keyed {
                 panel = panel.document(which.get());
             }
-            if let Some(id) = asked.take() {
-                panel = panel.reveal(id);
+            if let Some((id, groups)) = asked.take() {
+                panel = panel.reveal(id, groups);
             }
             panel.show(ui).events
         };
@@ -107,9 +107,9 @@ impl Rig {
     }
 
     /// One frame that reveals `id`, with what it reported; asserts that the frame ran once and measured no row twice.
-    fn reveal(&mut self, id: u32) -> Vec<LayersEvent<u32>> {
+    fn reveal(&mut self, id: u32, groups: Groups) -> Vec<LayersEvent<u32>> {
         self.seen.borrow_mut().clear();
-        self.reveal.set(Some(id));
+        self.reveal.set(Some((id, groups)));
         self.fixture.idle(1);
         assert_eq!(self.fixture.passes(), 1, "a reveal runs its frame once");
         let measures = craft_ui::runtime::measure::row_measures(self.fixture.ctx());
@@ -132,7 +132,7 @@ fn a_revealed_layer_opens_its_groups_and_scrolls_into_view() {
     assert!(rig.fixture.by_label("Inner").is_none(), "Inner is hidden in its closed group");
 
     rig.select(inner);
-    let events = rig.reveal(inner);
+    let events = rig.reveal(inner, Groups::Open);
     assert!(matches!(events.as_slice(), [LayersEvent::Open(change)] if change.key == group && change.open), "the closed group opens: {events:?}");
     assert!(rig.in_view("Inner"), "Inner is scrolled wholly into view");
     assert!(!rig.in_view("Stack 29"), "the top scrolled away");
@@ -140,12 +140,25 @@ fn a_revealed_layer_opens_its_groups_and_scrolls_into_view() {
     assert!(rig.in_view("Inner") && rig.seen.borrow().is_empty(), "the next passes keep the place and report nothing");
 
     rig.select(top);
-    rig.reveal(top);
+    rig.reveal(top, Groups::Open);
     assert!(rig.in_view("Stack 29"), "scrolled back to the top");
     let before = rig.row("Stack 29");
-    let events = rig.reveal(top + 1);
+    let events = rig.reveal(top + 1, Groups::Open);
     assert!(events.is_empty(), "a reveal of a layer in view reports nothing: {events:?}");
     assert_eq!(rig.row("Stack 29"), before, "no scroll for a row in view");
+}
+
+/// With the groups kept, the reveal opens nothing and scrolls the closed group's row into view.
+#[trial]
+fn a_reveal_that_keeps_the_groups_shows_the_closed_groups_row() {
+    let (tree, Tall { group, inner, .. }) = tall();
+    let mut rig = rig(vec![tree]);
+    rig.select(inner);
+    let events = rig.reveal(inner, Groups::Keep);
+    assert!(events.is_empty(), "no group opens: {events:?}");
+    assert!(!rig.docs[0].borrow_mut().layer_mut(group).open, "the group stays closed");
+    assert!(rig.in_view("Group"), "the closed group's row is scrolled wholly into view");
+    assert!(rig.fixture.by_label("Inner").is_none(), "Inner stays hidden");
 }
 
 /// Each document keeps its own scroll position: a short document shown between doesn't move the tall one's.
@@ -154,7 +167,7 @@ fn each_document_keeps_its_scroll_position() {
     let (tree, Tall { inner, .. }) = tall();
     let mut rig = rig(vec![tree, short()]);
     rig.select(inner);
-    rig.reveal(inner);
+    rig.reveal(inner, Groups::Open);
     rig.fixture.settle();
     let at = rig.row("Inner");
     assert!(rig.in_view("Inner"), "the tall document is scrolled to Inner");
