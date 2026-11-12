@@ -134,7 +134,7 @@ pub struct FooterHost<'s, 'a> {
 /// Fills the header region: the title and, for a closable shell, the close action.
 #[doc(hidden)]
 pub fn header(ui: &mut Ui, cx: &mut BodyCx<'_>, actions: &[HeaderAction]) {
-    let shown = TitleRow::new(cx.label()).strength(HeaderStrength::Strong).level(TITLE_LEVEL).actions(actions.iter().copied()).show(ui);
+    let shown = TitleRow::new(cx.label()).strength(HeaderStrength::Heading).level(TITLE_LEVEL).actions(actions.iter().copied()).show(ui);
     if shown.action == Some(HeaderAction::Close) {
         cx.request_close();
     }

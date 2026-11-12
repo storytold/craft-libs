@@ -28,11 +28,11 @@ mod stories;
 pub enum HeaderStrength {
     /// A control-height row with label text.
     Normal,
-    /// A panel or dialog title.
+    /// A panel title.
     Strong,
     /// A section heading of a panel: emphasised body text.
     Section,
-    /// A large heading: the heading role.
+    /// A large heading: the heading role. A dialog's title.
     Heading,
     /// A quiet heading over a group of controls: label text, faint, as written, with no rule.
     Caption,
