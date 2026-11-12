@@ -875,6 +875,9 @@ impl<W: WindingNumber> Topology<W> {
             // Bump the current x position, which will get rid of horizontals ending here
             // and add any horizontals starting here.
             pos.increase_x();
+            if pos.work_limit_exceeded() {
+                return false;
+            }
 
             // Gather the output segments from horizontal segments starting
             // here. Allocate new output segments for them and calculate their
