@@ -843,6 +843,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-aaf"
+version = "0.1.0"
+dependencies = [
+ "craft-audio",
+ "craft-cfb",
+ "craft-timeline",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-aep"
 version = "0.1.0"
 
@@ -1119,6 +1129,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-gif"
+version = "0.1.0"
+dependencies = [
+ "image",
+]
+
+[[package]]
 name = "craft-hdr"
 version = "0.1.0"
 dependencies = [
@@ -1131,6 +1148,13 @@ version = "0.1.0"
 dependencies = [
  "heic-rs",
  "rayon",
+]
+
+[[package]]
+name = "craft-html"
+version = "0.1.0"
+dependencies = [
+ "proptest",
 ]
 
 [[package]]
@@ -1281,6 +1305,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-odf"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "base64 0.23.1",
+ "craft-xml",
+ "flate2",
+ "getrandom 0.3.4",
+ "hmac",
+ "sha1 0.11.0",
+ "sha2 0.11.1",
+ "thiserror 2.0.21",
+ "zeroize",
+ "zip",
+]
+
+[[package]]
 name = "craft-offcrypto"
 version = "0.1.0"
 dependencies = [
@@ -1387,6 +1428,15 @@ name = "craft-plotter"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-prc"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "proptest",
  "thiserror 2.0.21",
 ]
 
@@ -1730,6 +1780,16 @@ name = "craft-y4m"
 version = "0.1.0"
 dependencies = [
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-zip"
+version = "0.1.0"
+dependencies = [
+ "craft-zip",
+ "flate2",
+ "thiserror 2.0.21",
+ "zip",
 ]
 
 [[package]]

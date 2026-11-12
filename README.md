@@ -34,6 +34,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-ai-core`](crates/ai-core/README.md): the data model and contract for AI in the Craft Apps (connections, models, tools, requests, jobs, consent, history, route spec). Pure, no I/O, wasm-safe. Contract in [docs/ai-shared-layer.md](docs/ai-shared-layer.md).
 - [`craft-pdf`](crates/pdf/README.md): independently optional PDF parsing, interpretation, rasterization and guarded authoring. Apps retain layout, fonts, editing and export policy; writer-only consumers do not enable the shared reader.
 
+- [`craft-aaf`](crates/aaf/README.md): clean-room AAF (Edit Protocol, structured storage) and OMF Interchange 2.0 (Bento) readers and writers over one mob-style composition model with exact times, clip gain, markers, nested compositions and embedded PCM essence. From FilmCraft.
 - [`craft-assuan`](crates/assuan/README.md): the Assuan protocol and gpg-agent's operations (key lookup, signing a digest, decrypting a session key) over any `Read + Write` stream, with a bounded canonical S-expression reader. No sockets; everything the agent sends is capped.
 - [`craft-affinity`](crates/affinity/README.md): bounded reader for native Affinity documents (`.af`, `.afdesign`, `.afphoto`, `.afpub`): archive, object stream and a neutral document model with layers, artboards, vectors, text, tables, images and masks. Read only; mapping onto an app's document stays in the app.
 - [`craft-atomic`](crates/atomic/README.md): Crash-safe atomic file writing and replacement with same-directory staging, directory fsync, Apple `F_FULLFSYNC` fallback, transient lock backoff, and fault injection for the Craft suite.
@@ -113,6 +114,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   millimetres to `G0`/`G1` moves with laser power and feed, for cutting lasers and plotters, as a
   commented file or as bare lines for streaming. Its `grbl` module has the real-time command bytes
   and the status and acknowledgement parsers.
+- [`craft-gif`](crates/gif/src/lib.rs): GIF block reader, from PhotoCraft: the logical screen,
+  every frame's position, delay, disposal and transparent colour, the loop count and the first
+  frame's colour table, without decompressing pixels. Tells an animation from a still and whether
+  a file can hold the picture it declares before a decoder runs.
 - [`craft-hdr`](crates/hdr/src/lib.rs): Radiance HDR (RGBE) picture reader, from FilmCraft: flat,
   old and new run-length scan lines and all eight axis orders, to linear float RGB. Scan lines are
   validated before the picture is allocated.
@@ -120,6 +125,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   heic-rs reads the container and HEVC pictures, and this crate converts to 16-bit RGB to match
   libheif (VUI range and matrix, chroma upsampling, `imir`, ICC on grid tiles). Also orientation,
   alpha, EXIF/XMP and thumbnails. It never panics, and apps put it behind a non-default feature.
+- [`craft-html`](crates/html/README.md): the bottom layer of reading and writing HTML: a tolerant tokenizer (text, start tags, end tags; elements to drop or to read as raw text are options), character references with the legacy names browsers accept without `;`, escaping, and the character set a page declares. No tree, no CSS, no rendering.
 - [`craft-i18n`](crates/i18n/README.md): translations over the embedded craft-i18n catalogs:
   lookup with fallback (`pt-br` → `pt` → English), plurals, language names, the system locale and
   a pseudo locale. The catalogs stay a fully optional build input; apps keep `tl!` and their
@@ -194,6 +200,11 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   header fields, MIME parts and multiparts, encoded-words, RFC 2231 parameters, base64 and
   quoted-printable, character sets, address lists, dates, mbox files and the `multipart/related`
   lookups of MHT web archives. What a message means (body, attachments, flags) stays in each app.
+- [`craft-odf`](crates/odf/README.md): OpenDocument packages (ODF 1.3 Part 2), read and written: the ZIP container with its `mimetype` and manifest within limits, password protection (AES-256-CBC with PBKDF2, as LibreOffice writes it) and flat single-file documents. The container only: what the XML inside means belongs to the readers of each document type.
+- [`craft-prc`](crates/prc/README.md): a reader for PRC (ISO 14739-1), the 3D model format of PDF 3D
+  annotations: container, bit-level primitives, schema, tessellations and the product tree as
+  placed, coloured triangle meshes and a model tree. Bounded on hostile input. From PdfCraft;
+  rendering stays in the app.
 - [`craft-offcrypto`](crates/offcrypto/README.md): clean-room Office document cryptography ([MS-OFFCRYPTO]): password-encrypted OOXML packages on `craft-cfb` (agile and standard encryption read, with the integrity check enforced; agile written), unsupported schemes named, and the password hashes of document and sheet protection.
 - [`craft-opc`](crates/opc/README.md): Open Packaging Conventions, the ZIP container of DOCX, XLSX and PPTX
   files: bounded readers (every part up front, or on demand), part names, relationships, content
@@ -270,6 +281,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   loading the file, and plane access. Bounded on hostile input.
 - [`craft-kra`](crates/kra/README.md): Krita documents (`.kra`, `.krz`), read: the ZIP archive, the `maindoc.xml` node tree as written, and the tiled pixel files with their LZF compression, a tile at a time. From PhotoCraft.
 - [`craft-xml`](crates/xml/README.md): bounded XML for hostile input: an owned element tree with limits on size, depth, nodes and attributes, streaming of repeated elements, namespace handling (as written, by local name, or canonical prefixes by URI), escaping and a writer. No DTDs and no entity expansion.
+- [`craft-zip`](crates/zip/README.md): ZIP archives from untrusted files: an entry-count check before the archive is indexed (ZIP64 included), entry reads within per-entry and total budgets that count real bytes, duplicate-name detection, a strict structure preflight, and a deterministic stored/deflate writer. The shared ZIP layer for the package formats.
 - [Shared UI component audit](docs/ui-components-audit.md): source inventory, extraction priorities
   and compatibility boundaries across the Craft suite.
 - [Theme infrastructure](docs/theme-infrastructure.md): eight-app comparison and the small shared

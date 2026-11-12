@@ -1,0 +1,15 @@
+[package]
+name = "craft-gif"
+description = "GIF block reader: the logical screen, each frame's position, delay and transparency, the loop count and colour tables, without decompressing pixels."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# Writes the animated test files the scan is checked against; not a product dependency.
+image = { version = "0.25", default-features = false, features = ["gif"] }
