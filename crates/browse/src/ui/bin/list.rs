@@ -14,9 +14,9 @@ use craft_ui::contract::{
 use craft_ui::list::{ListRow, ThumbAspect, ThumbSize};
 use craft_ui::primitives::IconSpec;
 use craft_ui::primitives::textures::TextureKey;
-use craft_ui::runtime::env::Label;
+use craft_ui::runtime::env::{Env, Label};
 use craft_ui::table::Table;
-use craft_ui::tile_grid::{BadgeKind, TileStatus};
+use craft_ui::tile_grid::{BadgeKind, TileStatus, TileWords};
 use egui::Ui;
 
 use super::icon::paint_thumb;
@@ -104,6 +104,7 @@ where
     let specs = columns_of(columns, &state.settings.widths, words.name.clone());
     let value_columns: Vec<ColumnKey> = specs.iter().map(|spec| spec.key.clone()).filter(|key| *key != NAME).collect();
     let mods = craft_ui::runtime::pointer::frame(ui.ctx()).mods;
+    let tile_words = Env::of(ui).words::<TileWords>();
     if let Some(key) = rename {
         request_rename(ui.ctx(), id, &key);
     }
@@ -157,13 +158,17 @@ where
                 }
             }
         }
-        for badge in &item.badges {
-            if let BadgeKind::Text(text) = &badge.kind {
-                line = line.trailing(text.clone());
-            }
+        // The first trailing item added is the outermost: the status ends the name cell, the badges read in order
+        // after the name.
+        if let Some((glyph, text)) = status_mark(&item.status, &tile_words) {
+            line = line.tone(Tone::Bad).trailing_tone(Tone::Bad).optional(text.clone()).trailing_icon(IconSpec::from(IconId::new(glyph)), text);
         }
-        if !matches!(item.status, TileStatus::Normal) {
-            line = line.tone(Tone::Bad);
+        for badge in item.badges.iter().rev() {
+            line = match &badge.kind {
+                BadgeKind::Text(text) => line.trailing(text.clone()),
+                BadgeKind::Glyph(icon) => line.trailing_icon(IconSpec::from(icon.clone()), badge.tip.clone().unwrap_or(Label::Empty)),
+                _ => line,
+            };
         }
         line
     });
@@ -297,6 +302,21 @@ pub(super) fn open_event<K, M: BinModel<K> + ?Sized>(model: &M, key: K, command:
         BinEvent::OpenBin { key, how }
     } else {
         BinEvent::Activate(key)
+    }
+}
+
+/// The glyph and the words of a status that is not Normal, never shown as colour alone: unlink for media that is
+/// offline or unreadable, the warning for a failed picture; the words are the Icon view's.
+fn status_mark(status: &TileStatus, words: &TileWords) -> Option<(&'static str, Label)> {
+    match status {
+        TileStatus::Normal => None,
+        TileStatus::Offline(None) => Some(("unlink", words.offline.clone())),
+        TileStatus::Offline(Some(text)) => {
+            Some(("unlink", Label::from(words.offline_with.fill(&[("offline", words.offline.as_str()), ("message", text.as_str())]))))
+        }
+        TileStatus::Unreadable => Some(("unlink", words.unreadable.clone())),
+        TileStatus::Failed => Some(("warning", words.failed.clone())),
+        _ => None,
     }
 }
 

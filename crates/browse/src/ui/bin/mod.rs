@@ -88,7 +88,7 @@ pub struct BinItem {
     pub icon: Option<IconId>,
     /// The label chip's colour (the app's).
     pub label_color: Option<Srgba>,
-    /// Corner badges in the Icon view; in the List view the text ones follow the name.
+    /// Corner badges in the Icon view; in the List view they follow the name, a glyph as an icon.
     pub badges: Vec<TileBadge>,
     /// Offline or unreadable: the name in the failure colour with the glyph and text (never colour
     /// alone).

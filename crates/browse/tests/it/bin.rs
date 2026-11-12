@@ -1,4 +1,4 @@
-//! `MediaBin` drops from another list.
+//! `MediaBin` drops from another list and the List view's status marks.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -10,6 +10,7 @@ use craft_browse::ui::{BinEvent, BinState, MediaBin};
 use craft_ui::contract::{Bind, ListDrag, ShowCollection as _};
 use craft_ui::list::{List, ListRow};
 use craft_ui::testing::{Fixture, trial};
+use craft_ui::tile_grid::{TileStatus, TileWords};
 use egui::vec2;
 
 /// Bin 1 holds the bin 3 and the item 10; bin 2 holds the item 20.
@@ -95,4 +96,61 @@ fn a_foreign_drop_off_the_bins_goes_into_the_shown_bin() {
             assert!(matches!(into, Some(None | Some(1))), "{view:?}, a drop on {place}: {into:?}");
         }
     }
+}
+
+/// Three items at the root: one offline, one whose picture failed, one fine.
+struct Statuses;
+
+impl BinModel<u32> for Statuses {
+    fn children(&self, parent: Option<&u32>, out: &mut Vec<BinEntry<u32>>) {
+        if parent.is_none() {
+            out.extend([BinEntry::Item(1), BinEntry::Item(2), BinEntry::Item(3)]);
+        }
+    }
+
+    fn item(&self, key: &u32, item: &mut BinItem) {
+        (item.name, item.status) = match key {
+            1 => ("Gone.mov".to_owned(), TileStatus::Offline(None)),
+            2 => ("Broken.mov".to_owned(), TileStatus::Failed),
+            _ => ("Fine.mov".to_owned(), TileStatus::Normal),
+        };
+    }
+
+    fn cell(&self, _: &u32, _: &ColumnKey) -> String {
+        String::new()
+    }
+
+    fn is_bin(&self, _: &u32) -> bool {
+        false
+    }
+
+    fn parent(&self, _: &u32) -> Option<u32> {
+        None
+    }
+
+    fn count(&self, _: &u32) -> usize {
+        0
+    }
+}
+
+/// The List view names an item's status in words beside its colour, so an offline or failed item never reads as
+/// colour alone.
+#[trial]
+fn the_list_view_names_an_items_status() {
+    let mut fixture = Fixture::new(|ui| {
+        let mut state = BinState::<u32>::default();
+        let _ = MediaBin::new("Project", Bind::bound(&mut state), &Statuses).show(ui);
+    });
+    fixture.room(vec2(600.0, 400.0)).settle();
+    let words = TileWords::default();
+    let described = |name: &str| {
+        let row = fixture.by_label(name).unwrap_or_else(|| panic!("the row {name}"));
+        fixture.tree().description_of(row.node).unwrap_or_default().to_owned()
+    };
+    for (name, status) in [("Gone.mov", words.offline.as_str()), ("Broken.mov", words.failed.as_str())] {
+        let text = described(name);
+        assert!(text.contains(status), "{name} is described as {text:?}, without {status:?}");
+    }
+    let fine = described("Fine.mov");
+    assert!(!fine.contains(words.offline.as_str()) && !fine.contains(words.failed.as_str()), "Fine.mov is described as {fine:?}");
 }
