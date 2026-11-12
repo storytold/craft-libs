@@ -104,7 +104,7 @@ impl ListRow<'_> {
 
     /// Where this row's disclosure lies when it fills `rect` under `style`, with texts `text_width` wide: the rect at
     /// which a host that owns the disclosure part (`disclosure_by_host`) declares it. `None` for a row without one.
-    pub(crate) fn disclosure_at(&self, style: &ListRowStyle, rect: Rect, rtl: bool, text_width: &dyn Fn(&TextRun<'_>) -> f32) -> Option<Rect> {
+    pub fn disclosure_at(&self, style: &ListRowStyle, rect: Rect, rtl: bool, text_width: &dyn Fn(&TextRun<'_>) -> f32) -> Option<Rect> {
         let widths = self.widths(&style.sizes, text_width);
         self.place(&style.sizes, &widths, rect, rtl).disclosure
     }

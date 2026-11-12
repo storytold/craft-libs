@@ -1,20 +1,27 @@
 //! The command table: command and shortcut columns over the lines `rows` builds, group headers that open and
 //! close, and rows whose shortcut chips, add button and restore button are children of the row.
+//!
+//! A group header is a section row of the collection, which takes its press, keys and AccessKit node; the table paints
+//! its look, a heading row with the disclosure triangle, over the row.
 
 use std::borrow::Cow;
 
 use craft_behavior::{
-    ColumnKey, ColumnWidth, DisplayOrder, Flow, Insets, ItemSource, Metrics, Proposal, Selection, SelectionChange, Sense, SpanLayout,
+    ColumnKey, ColumnWidth, DisplayOrder, Flow, Insets, ItemSource, Metrics, PartKey, Proposal, Selection, SelectionChange, Sense, SpanLayout,
 };
 use craft_keymap::chord::Chord;
 use craft_keymap::keymap::{Binding, MAX_BINDINGS};
 use craft_ui::buttons::IconButton;
 use craft_ui::contract::{
-    Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, ColumnSpec, Common, Component, ContainerProps, Cx, ItemOutput,
-    MeasureCx, Outcome, PaintUi, Pointer as _, Props as _, Role, SelectMode, ShowCollection as _, Sizing, Styled as _, clicked,
+    Access, Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, ColumnSpec, Common, Component, ContainerProps, Cx,
+    Focus as _, ItemOutput, MeasureCx, Meta as _, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role, RowState, SelectMode,
+    ShowCollection as _, Sizing, Styled as _, clicked,
 };
+use craft_ui::controls::disclosure::Disclosure;
 use craft_ui::display::{Elide, Icon, Kbd, Shade, Text};
+use craft_ui::list::{ListRow, ListRowStyle};
 use craft_ui::primitives::{IconSpec, Span, TextRun};
+use craft_ui::runtime::env::Label;
 use craft_ui::style::FocusLook;
 use craft_ui::style::{ComponentStyle, Ink, Stateful, StyleCx, TextLook, TypeRole};
 use egui::{Pos2, Rect, Response, Ui, Vec2};
@@ -30,6 +37,10 @@ const SHORTCUT: ColumnKey = ColumnKey::new("shortcut");
 /// buttons, and the command column takes the rest.
 const SHORTCUT_MOST: f32 = 0.4;
 const PATH_SEPARATOR: &str = " \u{203a} ";
+/// The look of a group header, over its section row; the index is the header's line.
+const HEADER: PartKey = PartKey::new("group_header");
+/// The disclosure triangle in a group header's disclosure column; the index is the header's line.
+const HEADER_DISCLOSURE: PartKey = PartKey::new("group_disclosure");
 
 /// What a row reports besides what the collection reads from its pointer input.
 #[derive(Clone, Debug, PartialEq)]
@@ -89,12 +100,29 @@ impl DisplayOrder<usize> for Lines<'_> {
 
 impl ItemSource<usize> for Lines<'_> {}
 
-/// The style of the table: no look of its own.
-#[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
+/// The style of the table: the look of its group headers.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub(crate) struct ShortcutTableStyle {
     #[style(metrics)]
     metrics: Metrics,
+    /// A group header: a heading row, which places the disclosure the table declares.
+    header: ListRowStyle,
+}
+
+/// A group header in view this pass.
+#[derive(Clone, Copy, Debug)]
+struct PlacedHeader {
+    /// The header's line.
+    at: usize,
+    /// The header row has a disclosure column.
+    disclosure: bool,
+}
+
+/// The look of the group header `name`: a heading row with the group's disclosure, which the table declares and
+/// paints.
+fn header_row(name: &str, open: bool) -> ListRow<'static> {
+    ListRow::new(name.to_owned()).heading().node(false).group(open).disclosure_by_host()
 }
 
 /// A table of commands with their shortcuts.
@@ -113,16 +141,25 @@ pub(crate) struct ShortcutTable<'a> {
     /// Scrolls this line into view once.
     #[prop]
     reveal: Option<usize>,
+    /// The lines the rows show, for the group headers the table paints.
+    lines: &'a [Line],
+    /// The group headers in view this pass.
+    headers: Vec<PlacedHeader>,
+    /// Where the rows show this pass: the headers paint inside it, clear of the column header.
+    rows_view: Option<Rect>,
 }
 
 impl<'a> ShortcutTable<'a> {
-    fn new(label: impl Into<craft_ui::runtime::env::Label>, columns: Vec<ColumnSpec>) -> Self {
+    fn new(label: impl Into<Label>, columns: Vec<ColumnSpec>, lines: &'a [Line]) -> Self {
         ShortcutTable {
             common: Common::new(),
             props: ContainerProps::new().sizing(Sizing::Fill),
             items: CollectionProps::new().select(SelectMode::Single).columns(columns),
             selection: None,
             reveal: None,
+            lines,
+            headers: Vec::new(),
+            rows_view: None,
         }
         .label(label)
     }
@@ -133,8 +170,53 @@ impl Component for ShortcutTable<'_> {
     type Style = ShortcutTableStyle;
     type Output = CollectionResponse<usize, RowAct>;
 
-    fn style(_: &StyleCx<'_>, _: ShortcutTableStyleKey) -> ShortcutTableStyle {
-        ShortcutTableStyle::default()
+    fn style(cx: &StyleCx<'_>, _: ShortcutTableStyleKey) -> ShortcutTableStyle {
+        ShortcutTableStyle { metrics: Metrics::new(), header: ListRow::style(cx, ListRow::new(Label::default()).heading().style_key()) }
+    }
+
+    /// A sense-less part over each group header in view, and one over its disclosure column: they only carry the
+    /// header's look, so the press on them is the section row's.
+    fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
+        self.headers.clear();
+        self.rows_view = cx.rows_view();
+        let rtl = cx.flow.is_rtl();
+        for (at, line) in self.lines.iter().enumerate() {
+            let Line::Header { name, collapsed } = line else { continue };
+            let Some(rect) = cx.rect_of(&at) else { continue };
+            let column = header_row(name, !*collapsed).disclosure_at(&cx.style.header, rect, rtl, &|run| cx.layout_at(run, f32::INFINITY).size().x);
+            cx.part(HEADER.at(at as u64), rect).sense(Sense::empty()).over();
+            if let Some(column) = column {
+                cx.part(HEADER_DISCLOSURE.at(at as u64), column).sense(Sense::empty()).over();
+            }
+            self.headers.push(PlacedHeader { at, disclosure: column.is_some() });
+        }
+    }
+
+    /// The headers' faces have no nodes: the collection's heading node for the section row stands for the header.
+    fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
+        for header in &self.headers {
+            access.node(HEADER.at(header.at as u64), Role::None);
+            if header.disclosure {
+                access.node(HEADER_DISCLOSURE.at(header.at as u64), Role::None);
+            }
+        }
+    }
+
+    /// Each group header in view: a heading row, emphasized while it holds the lead, with its disclosure triangle.
+    fn paint_over(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        let lead = if cx.is_focused() { cx.collection_lead() } else { None };
+        let (lines, headers) = (self.lines, &self.headers);
+        ui.clipped(self.rows_view.unwrap_or(cx.rect), |ui| {
+            for header in headers {
+                let Some(Line::Header { name, collapsed }) = lines.get(header.at) else { continue };
+                let state = RowState { emphasized: lead == Some(header.at), ..RowState::default() };
+                ui.face(HEADER.at(header.at as u64), header_row(name, !*collapsed).state(state));
+                if header.disclosure {
+                    let disclosure = Disclosure::new(Bind::given(!*collapsed)).node(false).triangle(true).label(name.clone());
+                    ui.face(HEADER_DISCLOSURE.at(header.at as u64), disclosure);
+                }
+            }
+        });
     }
 
     fn finish(self, mut cx: Cx<'_, Self>) -> Self::Output {
@@ -528,7 +610,7 @@ pub(super) fn show(ui: &mut Ui, now: f64, env: &mut Env<'_>, state: &mut DialogS
     let reveal = if state.reveal { position } else { None };
     let source = Lines(&built.lines);
     let stamp = stamp_of(&state.area, &state.query, &format!("{:?}", state.filter));
-    let mut table = ShortcutTable::new(words.commands.clone(), columns)
+    let mut table = ShortcutTable::new(words.commands.clone(), columns, &built.lines)
         .id_salt("table")
         .selection(Bind::bound(&mut selection))
         .empty(words.no_matching_commands.clone())

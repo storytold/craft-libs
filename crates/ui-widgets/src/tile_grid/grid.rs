@@ -15,9 +15,8 @@ use super::{CaptionPlace, Tile, TilePartEvent, ZoomStep};
 use crate::contract::{
     Access, Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, ColumnKind, ColumnSpec, Common, Component,
     ContainerProps, Cx, DropKind, EditResponse, Focus as _, ListDrag, Meta as _, NoValue, Notch, Outcome, PaintUi, PartsCx, Pointer as _, Props as _,
-    Role, RowState, SelectMode, Sizing, SpaceAction, SweepApply, SweepStep, ToggleColumn,
+    Role, RowState, SelectMode, Sizing, SpaceAction, SweepApply, SweepStep, ToggleColumn, section_part,
 };
-use crate::contract::{lead_position, section_part};
 use crate::controls::disclosure::Disclosure;
 use crate::list::{DropTest, ListRow, ListRowStyle, RowTest, ThumbSize};
 use crate::primitives::{IconSpec, PaintShape, RectSide};
@@ -458,7 +457,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
         if !cx.is_focused() {
             return None;
         }
-        let at = lead_position(&cx.core.ctx, cx.core.id)?;
+        let at = cx.collection_lead()?;
         let laid = self.laid.borrow();
         let arrangement = laid.as_ref()?.arrangement()?;
         Some(slot_at(&arrangement.starts, arrangement.tiles.len(), at))

@@ -348,7 +348,7 @@ impl<'a> ListRow<'a> {
     /// The host declares and paints the disclosure part of this group row at [`ListRow::disclosure_at`]; the row keeps
     /// the column. For a row the host paints as a face, which declares no parts.
     #[must_use]
-    pub(crate) fn disclosure_by_host(mut self) -> Self {
+    pub fn disclosure_by_host(mut self) -> Self {
         self.disclosure_by_host = true;
         self
     }

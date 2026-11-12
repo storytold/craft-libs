@@ -63,9 +63,10 @@ const ITEM_NODE: craft_behavior::PartKey = craft_behavior::PartKey::new("item_no
 
 /// The part of a collection that stands for the section row `key` (`ItemSource::section_stop`): the item step builds
 /// no row for it, so the access node that AccessKit focus goes to while the section holds the lead, and the pointer
-/// part over it, are this part of the collection. It is the collection contract's one section mechanism: a component
-/// that draws its own section headers lays them out as this part, so the lead, the pointer and the access tree treat
-/// them as the collection's section rows.
+/// part over it, are this part of the collection. A component that senses and reports its own section headers
+/// declares them as this part, so the lead, the pointer and the access tree treat them as the collection's section
+/// rows. One that only paints them paints each as the face of a sense-less part of its own over `PartsCx::rect_of`,
+/// and the collection keeps their press, keys and node.
 pub fn section_part<K: std::hash::Hash>(key: &K) -> craft_behavior::PartRef {
     SECTION.at(key_hash(key))
 }
