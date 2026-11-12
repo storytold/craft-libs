@@ -25,6 +25,8 @@
 use crate::compression::{Compression, MAX_DECODED_BYTES, PlaneLayout, decode_planes, encode_planes};
 use crate::error::{PsdError, Result};
 use crate::header::Version;
+use crate::io::WriteExt;
+use std::borrow::Cow;
 
 /// Largest pattern edge accepted (Photoshop's own limit is far lower).
 const MAX_EDGE: u32 = 30_000;
@@ -417,7 +419,11 @@ fn zeroed_pattern_plane(len: usize) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// Append one validated pattern, backpatching lengths in its final output buffer.
 fn write_pattern(p: &PsdPattern, out: &mut Vec<u8>) -> Result<()> {
+    if !matches!(p.depth, 1 | 8 | 16 | 32) {
+        return Err(PsdError::Unsupported(format!("pattern depth {}", p.depth)));
+    }
     if p.width > MAX_EDGE || p.height > MAX_EDGE || p.width > i16::MAX as u32 || p.height > i16::MAX as u32 {
         return Err(PsdError::LimitExceeded("pattern size"));
     }
@@ -444,46 +450,50 @@ fn write_pattern(p: &PsdPattern, out: &mut Vec<u8>) -> Result<()> {
         out.extend_from_slice(&pal);
     }
     let rect = [0i32, 0, p.height as i32, p.width as i32];
-    let mut body = Vec::new();
+    out.extend_from_slice(&3u32.to_be_bytes());
+    let at = out.begin_len(false);
     for v in rect {
-        body.extend_from_slice(&v.to_be_bytes());
+        out.extend_from_slice(&v.to_be_bytes());
     }
     const SLOTS: u32 = 24;
-    body.extend_from_slice(&SLOTS.to_be_bytes());
+    out.extend_from_slice(&SLOTS.to_be_bytes());
     let layout = PlaneLayout { planes: 1, width: p.width as usize, height: p.height as usize, depth: p.depth, version: Version::Psd };
-    let array = |plane: &[u8], body: &mut Vec<u8>| -> Result<()> {
+    let array = |plane: &[u8], out: &mut Vec<u8>| -> Result<()> {
         let (comp, data) = if p.depth == 8 {
-            (1u8, encode_planes(Compression::Rle, plane, &layout)?)
+            (1u8, Cow::Owned(encode_planes(Compression::Rle, plane, &layout)?))
         } else {
-            (0u8, encode_planes(Compression::Raw, plane, &layout)?)
+            let total = layout.decoded_len()?;
+            if plane.len() != total {
+                return Err(PsdError::invalid(format!("decoded buffer has {} bytes, layout requires {}", plane.len(), total)));
+            }
+            (0u8, Cow::Borrowed(plane))
         };
-        body.extend_from_slice(&1u32.to_be_bytes());
-        body.extend_from_slice(&((23 + data.len()) as u32).to_be_bytes());
-        body.extend_from_slice(&u32::from(p.depth).to_be_bytes());
+        out.extend_from_slice(&1u32.to_be_bytes());
+        let len = u32::try_from(data.len()).ok().and_then(|n| n.checked_add(23)).ok_or(PsdError::LimitExceeded("pattern array length"))?;
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(&u32::from(p.depth).to_be_bytes());
         for v in rect {
-            body.extend_from_slice(&v.to_be_bytes());
+            out.extend_from_slice(&v.to_be_bytes());
         }
-        body.extend_from_slice(&p.depth.to_be_bytes());
-        body.push(comp);
-        body.extend_from_slice(&data);
+        out.extend_from_slice(&p.depth.to_be_bytes());
+        out.push(comp);
+        out.extend_from_slice(&data);
         Ok(())
     };
     let nc = p.channels.len().min(SLOTS as usize);
     for c in &p.channels[..nc] {
-        array(c, &mut body)?;
+        array(c, out)?;
     }
     for _ in nc..SLOTS as usize {
-        body.extend_from_slice(&0u32.to_be_bytes());
+        out.extend_from_slice(&0u32.to_be_bytes());
     }
     // User mask slot: unused; sheet mask slot: transparency, where Photoshop keeps it (photocraft#8054).
-    body.extend_from_slice(&0u32.to_be_bytes());
+    out.extend_from_slice(&0u32.to_be_bytes());
     match &p.alpha {
-        Some(a) => array(a, &mut body)?,
-        None => body.extend_from_slice(&0u32.to_be_bytes()),
+        Some(a) => array(a, out)?,
+        None => out.extend_from_slice(&0u32.to_be_bytes()),
     }
-    out.extend_from_slice(&3u32.to_be_bytes());
-    out.extend_from_slice(&(body.len() as u32).to_be_bytes());
-    out.extend_from_slice(&body);
+    out.end_len(at, false)?;
     Ok(())
 }
 
@@ -578,11 +588,10 @@ fn pattern_has_user_mask(r: &mut Rd) -> Result<bool> {
 pub fn write_pattern_block(patterns: &[PsdPattern]) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     for p in patterns {
-        let mut one = Vec::new();
-        write_pattern(p, &mut one)?;
-        out.extend_from_slice(&(one.len() as u32).to_be_bytes());
-        let pad = (4 - one.len() % 4) % 4;
-        out.extend_from_slice(&one);
+        let at = out.begin_len(false);
+        write_pattern(p, &mut out)?;
+        out.end_len(at, false)?;
+        let pad = (4 - (out.len() - at - 4) % 4) % 4;
         out.extend(std::iter::repeat_n(0u8, pad));
     }
     Ok(out)

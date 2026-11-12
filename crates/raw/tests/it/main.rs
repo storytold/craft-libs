@@ -4,3 +4,4 @@
 mod dng;
 #[cfg(feature = "dng")]
 mod robust;
+mod vendor_robust;

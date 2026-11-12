@@ -3,7 +3,8 @@
 //! - [`Note`], [`CtrlEvent`] and [`Sequence`]: the neutral model, the notes and channel events of
 //!   one track, in ticks at [`PPQ`] (960) ticks per quarter note.
 //! - [`read_smf`] / [`write_smf`]: Standard MIDI File reading (format 0/1, format 2 best-effort)
-//!   and writing (format 1, 960 PPQ). The reader treats its input as hostile: every length is
+//!   and writing (format 0 or 1, 960 PPQ). [`read_smf_lenient`] reads what makes sense of a
+//!   damaged file and says what it could not. The reader treats its input as hostile: every length is
 //!   checked, variable-length quantities are bounded and track and event counts are capped.
 //!
 //! Written from the public Standard MIDI Files 1.0 specification.
@@ -13,7 +14,7 @@ mod sequence;
 mod smf;
 
 pub use sequence::{CtrlEvent, CtrlKind, Note, Sequence};
-pub use smf::{MAX_EVENTS, MAX_TRACKS, Smf, SmfTrack, read_smf, write_smf};
+pub use smf::{LenientRead, MAX_EVENTS, MAX_TRACKS, MAX_WARNINGS, Smf, SmfTrack, read_smf, read_smf_lenient, write_smf};
 
 /// Ticks per quarter note used throughout the model.
 pub const PPQ: u32 = 960;

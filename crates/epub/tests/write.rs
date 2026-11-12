@@ -3,7 +3,7 @@
 
 use std::io::Read;
 
-use craft_epub::{Book, Epub, Error, Layout, MAX_TITLE_CHARS, Metadata, Nav, NavItem, NavKind, Resource, is_epub, write, xhtml};
+use craft_epub::{Book, Epub, Error, Layout, MAX_TITLE_CHARS, Metadata, Nav, NavItem, NavKind, Resource, TocEntry, is_epub, write, xhtml};
 
 fn metadata() -> Metadata {
     Metadata {
@@ -32,6 +32,7 @@ fn book() -> Book<'static> {
         ],
         spine: vec!["content".into(), "content2".into()],
         nav: Nav { kind: NavKind::Toc, heading: "Contents".into(), items: Vec::new() },
+        ncx: false,
     }
 }
 
@@ -228,4 +229,69 @@ fn more_resources_than_the_limit_are_refused() {
     let mut b = book();
     b.resources = (0..=craft_epub::MAX_RESOURCES).map(|i| Resource::new(format!("r{i}"), format!("r{i}"), "text/plain", Vec::new())).collect();
     assert!(matches!(write(&b), Err(Error::Invalid(msg)) if msg.contains("at most")));
+}
+
+fn nested_items() -> Vec<NavItem> {
+    let item = |href: &str, label: &str, level| NavItem { href: href.into(), label: label.into(), level };
+    vec![
+        item("content.xhtml#a", "One", 1),
+        item("content.xhtml#b", "One.one", 2),
+        item("content.xhtml#c", "One.one.one <x>", 3),
+        item("content2.xhtml", "Two", 1),
+        item("images/a%20b%231.png", "Two.picture", 2),
+    ]
+}
+
+fn toc_entry(label: &str, path: &str, fragment: Option<&str>, level: u8) -> TocEntry {
+    TocEntry { label: label.into(), path: Some(path.into()), fragment: fragment.map(str::to_string), level }
+}
+
+fn nested_toc() -> Vec<TocEntry> {
+    vec![
+        toc_entry("One", "OEBPS/content.xhtml", Some("a"), 1),
+        toc_entry("One.one", "OEBPS/content.xhtml", Some("b"), 2),
+        toc_entry("One.one.one <x>", "OEBPS/content.xhtml", Some("c"), 3),
+        toc_entry("Two", "OEBPS/content2.xhtml", None, 1),
+        toc_entry("Two.picture", "OEBPS/images/a b#1.png", None, 2),
+    ]
+}
+
+#[test]
+fn the_navigation_reads_back_as_a_table_of_contents() {
+    let mut b = book();
+    b.nav.items = nested_items();
+    let bytes = write(&b).unwrap();
+    assert!(!entries(&bytes).iter().any(|e| e.0.ends_with(".ncx")), "no NCX unless asked for");
+    assert_eq!(Epub::open(&bytes).unwrap().toc().unwrap(), nested_toc());
+}
+
+#[test]
+fn an_ncx_is_written_on_request_and_reads_back() {
+    let mut b = book();
+    b.nav.items = nested_items();
+    b.ncx = true;
+    let bytes = write(&b).unwrap();
+    let opf = text(&bytes, "OEBPS/content.opf");
+    assert!(opf.contains("<item id=\"ncx\" href=\"toc.ncx\" media-type=\"application/x-dtbncx+xml\"/>"), "{opf}");
+    assert!(opf.contains("<spine toc=\"ncx\">"), "{opf}");
+    let ncx = text(&bytes, "OEBPS/toc.ncx");
+    for want in [
+        "<meta name=\"dtb:uid\" content=\"urn:uuid:1\"/><meta name=\"dtb:depth\" content=\"3\"/>",
+        "<docTitle><text>Fish &amp; &lt;Chips&gt;</text></docTitle>",
+        "<navMap><navPoint id=\"np1\" playOrder=\"1\"><navLabel><text>One</text></navLabel><content src=\"content.xhtml#a\"/><navPoint id=\"np2\" playOrder=\"2\">",
+        "</navPoint></navPoint></navPoint><navPoint id=\"np4\" playOrder=\"4\">",
+    ] {
+        assert!(ncx.contains(want), "missing {want}\n{ncx}");
+    }
+    craft_xml::Options::default().strict().parse(ncx.as_bytes()).expect("well formed");
+    let epub = Epub::open(&bytes).unwrap();
+    assert_eq!(epub.package.ncx.as_deref(), Some("OEBPS/toc.ncx"));
+    assert_eq!(craft_epub::parse_ncx(ncx.as_bytes(), "OEBPS/toc.ncx").unwrap(), nested_toc());
+    // `ncx` and `toc.ncx` are the writer's own.
+    let mut taken = book();
+    taken.resources[0].id = "ncx".into();
+    assert!(matches!(write(&taken), Err(Error::Invalid(m)) if m.contains("used twice")));
+    let mut taken = book();
+    taken.resources[0].path = "TOC.ncx".into();
+    assert!(matches!(write(&taken), Err(Error::Invalid(m)) if m.contains("used twice")));
 }

@@ -36,6 +36,12 @@ Errors are `Error::Unsupported` (image sequences, overlays, 4:2:2/4:4:4, …), `
 `Error::Malformed`. It never panics: every call into heic-rs runs under `catch_unwind`, and a panic
 inside it (PhotoCraft's fuzzing found two in 0.1.1) becomes `Error::Malformed`.
 
+Features: `decode` (default) is the decoder above. `metadata` adds `craft_heif::items::read`: the
+first `Exif` item and XMP packet from the box structure alone (`iinf`, `iloc`, `idat`; at most 4096
+boxes, 1024 items, 1024 extents per item, 32 MiB per item), without heic-rs. A build with
+`default-features = false, features = ["metadata"]` has no heic-rs dependency, and its
+`read_metadata` is that reader. With both features, a test checks that the two readers agree.
+
 Feature `testdata` exposes `craft_heif::testdata`: lossless synthetic HEIF files (PCM-coded
 32 × 32 HEVC pictures, grids, every property above) for the tests of the crates above.
 

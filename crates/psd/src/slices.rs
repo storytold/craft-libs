@@ -108,20 +108,7 @@ fn d_u32(d: &Descriptor, key: &str) -> Option<u32> {
     }
 }
 
-fn d_text(d: &Descriptor, key: &str) -> String {
-    match d.get(key) {
-        Some(Value::Text(t)) => t.to_string_lossy(),
-        _ => String::new(),
-    }
-}
-
-fn d_enum(d: &Descriptor, key: &str) -> Option<String> {
-    match d.get(key)? {
-        Value::Enumerated { value, .. } => Some(String::from_utf8_lossy(value.as_bytes()).into_owned()),
-        _ => None,
-    }
-}
-
+/// Whether the boolean at `key` is true.
 fn d_bool(d: &Descriptor, key: &str) -> bool {
     matches!(d.get(key), Some(Value::Boolean(true)))
 }
@@ -141,6 +128,7 @@ fn origin_from(s: &str) -> u32 {
     }
 }
 
+/// The slice type code a slice type name stands for.
 fn kind_from(s: &str) -> u32 {
     match s {
         "noImage" => 0,
@@ -149,9 +137,10 @@ fn kind_from(s: &str) -> u32 {
     }
 }
 
+/// A slice record from its descriptor.
 fn slice_from_descriptor(d: &Descriptor) -> SliceRecord {
     let b = d_bounds(d, "bounds").unwrap_or_default();
-    let color = match (d_enum(d, "bgColorType").as_deref(), d.get("bgColor")) {
+    let color = match (d.get_enum("bgColorType").as_deref(), d.get("bgColor")) {
         (Some("Clr "), Some(Value::Descriptor(c))) => {
             let g = |k: &str| d_int(c, k).unwrap_or(0).clamp(0, 255) as u8;
             let a = if c.get("alpha").is_some() { g("alpha") } else { 255 };
@@ -162,18 +151,18 @@ fn slice_from_descriptor(d: &Descriptor) -> SliceRecord {
     SliceRecord {
         id: d_u32(d, "sliceID").unwrap_or(0),
         group_id: d_u32(d, "groupID").unwrap_or(0),
-        origin: d_enum(d, "origin").map_or(2, |s| origin_from(&s)),
+        origin: d.get_enum("origin").map_or(2, |s| origin_from(&s)),
         layer_id: d_u32(d, "layerID"),
-        name: d_text(d, "Nm  "),
-        kind: d_enum(d, "Type").map_or(1, |s| kind_from(&s)),
+        name: d.get_text("Nm  ").unwrap_or_default(),
+        kind: d.get_enum("Type").map_or(1, |s| kind_from(&s)),
         // Descriptor bounds are top/left/bottom/right; records use left/top/right/bottom.
         rect: [b[1], b[0], b[3], b[2]],
-        url: d_text(d, "url"),
-        target: d_text(d, "null"),
-        message: d_text(d, "Msge"),
-        alt: d_text(d, "altTag"),
+        url: d.get_text("url").unwrap_or_default(),
+        target: d.get_text("null").unwrap_or_default(),
+        message: d.get_text("Msge").unwrap_or_default(),
+        alt: d.get_text("altTag").unwrap_or_default(),
         cell_text_is_html: d_bool(d, "cellTextIsHTML"),
-        cell_text: d_text(d, "cellText"),
+        cell_text: d.get_text("cellText").unwrap_or_default(),
         horizontal_align: 0,
         vertical_align: 0,
         color,
@@ -220,7 +209,12 @@ impl SlicesResource {
                         .collect(),
                     _ => Vec::new(),
                 };
-                Ok(SlicesResource { version, bounds: d_bounds(d, "bounds").unwrap_or_default(), group_name: d_text(d, "baseName"), slices })
+                Ok(SlicesResource {
+                    version,
+                    bounds: d_bounds(d, "bounds").unwrap_or_default(),
+                    group_name: d.get_text("baseName").unwrap_or_default(),
+                    slices,
+                })
             }
             v => Err(PsdError::invalid(format!("unsupported slices resource version {v}"))),
         }

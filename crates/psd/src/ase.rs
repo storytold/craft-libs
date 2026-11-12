@@ -14,6 +14,16 @@
 //! Components are kept exactly as stored: RGB, CMYK and gray in 0..1 (gray 1 = white), Lab as
 //! L*/100 followed by a* and b*. Unknown colour models and block types are kept verbatim
 //! (colour models) or skipped (block types). Converting colours is the caller's job.
+//!
+//! [`parse`] and [`write`] keep what the file says. The reading rules an application applies
+//! when it shows a file's swatches are separate, so each can choose them:
+//! [`AseColor::lab_lightness`] (some writers store L* itself), [`AseColor::value_name`] (names
+//! for unnamed colours, as new swatches are named) and [`AseFile::apply_names`] with
+//! [`UniqueNames`] (trimmed names, "Color Group" for an unnamed group, and a number for a name
+//! already taken: "Black 2"). [`sniff`] tells a swatch exchange file from an Aseprite sprite,
+//! which uses the same extension. The rules come from VectorCraft's swatch reader.
+
+use std::collections::{HashMap, HashSet};
 
 use crate::error::{PsdError, Result};
 use crate::io::{Reader, WriteExt};
@@ -126,6 +136,114 @@ impl AseFile {
                 AseEntry::Group { swatches, .. } => swatches.len(),
             })
             .sum()
+    }
+}
+
+impl AseColor {
+    /// A stored Lab lightness as L* (0..100). The format stores L*/100; some writers store L*
+    /// itself, which shows as a value above 1. Out-of-range values are clamped.
+    pub fn lab_lightness(stored: f32) -> f32 {
+        if stored > 1.0 { stored.min(100.0) } else { stored.clamp(0.0, 1.0) * 100.0 }
+    }
+
+    /// The colour's values in its own model, as new swatches are named: "R=255 G=128 B=0",
+    /// "C=10 M=20 Y=30 K=0" (percent), "Gray K=40" (percent of ink), "L=52 a=70 b=-30".
+    /// Components are clamped to their ranges first. `None` for another colour model.
+    pub fn value_name(&self) -> Option<String> {
+        let unit = |v: f32| v.clamp(0.0, 1.0);
+        // `+ 0.0` turns a rounded -0 into 0.
+        let pct = |v: f32| (unit(v) * 100.0).round() + 0.0;
+        let byte = |v: f32| (unit(v) * 255.0).round() + 0.0;
+        Some(match self {
+            AseColor::Rgb([r, g, b]) => format!("R={} G={} B={}", byte(*r), byte(*g), byte(*b)),
+            AseColor::Cmyk([c, m, y, k]) => format!("C={} M={} Y={} K={}", pct(*c), pct(*m), pct(*y), pct(*k)),
+            // A gray level of 1 is white: no ink.
+            AseColor::Gray(level) => format!("Gray K={}", pct(1.0 - unit(*level))),
+            AseColor::Lab([l, a, b]) => {
+                let ab = |v: f32| v.clamp(-128.0, 127.0).round() + 0.0;
+                format!("L={} a={} b={}", Self::lab_lightness(*l).round() + 0.0, ab(*a), ab(*b))
+            }
+            AseColor::Other { .. } => return None,
+        })
+    }
+}
+
+/// `true` when `head` (the first bytes of a file) starts like a swatch exchange file. Aseprite
+/// sprites use the same `.ase` extension and start with a size and the magic `E0 A5` instead.
+pub fn sniff(head: &[u8]) -> bool {
+    head.starts_with(SIGNATURE)
+}
+
+/// The swatch and group names a reader has handed out. Swatches and groups share one set of
+/// names, as in a document; a name already taken gets the first free number ("Black 2").
+/// [`Self::reserve`] marks names that exist before the file is read (an application's own
+/// library), so the file's names are numbered against them.
+#[derive(Debug, Clone, Default)]
+pub struct UniqueNames {
+    taken: HashSet<String>,
+    /// The last number tried for each repeated name, so repeats don't search the numbers used
+    /// before.
+    last: HashMap<String, usize>,
+}
+
+impl UniqueNames {
+    /// No names taken.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Marks `name` as taken.
+    pub fn reserve(&mut self, name: impl Into<String>) {
+        self.taken.insert(name.into());
+    }
+
+    /// `base` when it is free, else `base` with the first free number from 2 up. The result is
+    /// taken from then on.
+    pub fn unique(&mut self, base: String) -> String {
+        if self.taken.insert(base.clone()) {
+            return base;
+        }
+        // Each pass tries the next number, and only finitely many names are taken.
+        let n = self.last.entry(base.clone()).or_insert(1);
+        loop {
+            *n += 1;
+            let name = format!("{base} {n}");
+            if self.taken.insert(name.clone()) {
+                return name;
+            }
+        }
+    }
+}
+
+/// The name of a group that has none.
+pub const UNNAMED_GROUP: &str = "Color Group";
+
+impl AseFile {
+    /// Applies the naming rules, in file order: names are trimmed; an unnamed colour is named
+    /// by its values ([`AseColor::value_name`]; one in another colour model stays unnamed) and
+    /// an unnamed group [`UNNAMED_GROUP`]; then every name goes through `names`, which numbers
+    /// a name already taken. Colours and groups share `names`. The colours are not changed.
+    pub fn apply_names(&mut self, names: &mut UniqueNames) {
+        let mut name_swatch = |s: &mut AseSwatch| {
+            let trimmed = s.name.trim();
+            let base = if trimmed.is_empty() { s.color.value_name() } else { Some(trimmed.to_string()) };
+            s.name = base.map_or_else(String::new, |b| names.unique(b));
+        };
+        for e in &mut self.entries {
+            match e {
+                AseEntry::Swatch(s) => name_swatch(s),
+                AseEntry::Group { name, swatches } => {
+                    // The group's name comes before its colours', as they appear in the file.
+                    let trimmed = name.trim();
+                    let base = if trimmed.is_empty() { UNNAMED_GROUP.to_string() } else { trimmed.to_string() };
+                    // `name_swatch` holds `names`: take the group's through it by a placeholder swatch.
+                    let mut holder = AseSwatch { name: base, color: AseColor::Gray(0.0), kind: AseKind::Process };
+                    name_swatch(&mut holder);
+                    *name = holder.name;
+                    swatches.iter_mut().for_each(&mut name_swatch);
+                }
+            }
+        }
     }
 }
 
@@ -425,6 +543,82 @@ mod tests {
         let s = sw("", AseColor::Gray(0.0), AseKind::Process);
         let f = AseFile { entries: vec![AseEntry::Group { name: "g".into(), swatches: vec![s; MAX_SWATCHES + 1] }] };
         assert!(write(&f).is_err());
+    }
+
+    #[test]
+    fn sniff_tells_a_swatch_file_from_an_aseprite_sprite() {
+        assert!(sniff(&write(&sample()).unwrap()[..4]));
+        // An Aseprite header: file size (little-endian), then the magic 0xA5E0.
+        assert!(!sniff(&[0x80, 0x01, 0, 0, 0xE0, 0xA5, 1, 0]));
+        assert!(!sniff(b"ASE"));
+    }
+
+    #[test]
+    fn lab_lightness_reads_both_l_star_and_the_fraction_of_100() {
+        assert_eq!(AseColor::lab_lightness(0.52), 52.0);
+        assert_eq!(AseColor::lab_lightness(52.0), 52.0);
+        assert_eq!(AseColor::lab_lightness(1.0), 100.0);
+        assert_eq!(AseColor::lab_lightness(150.0), 100.0);
+        assert_eq!(AseColor::lab_lightness(-3.0), 0.0);
+    }
+
+    #[test]
+    fn value_names_follow_the_new_swatch_names() {
+        assert_eq!(AseColor::Rgb([1.0, 0.5, 0.0]).value_name().as_deref(), Some("R=255 G=128 B=0"));
+        assert_eq!(AseColor::Cmyk([0.1, 0.2, 0.3, 0.0]).value_name().as_deref(), Some("C=10 M=20 Y=30 K=0"));
+        assert_eq!(AseColor::Gray(0.6).value_name().as_deref(), Some("Gray K=40"));
+        assert_eq!(AseColor::Lab([52.0, 70.2, -30.4]).value_name().as_deref(), Some("L=52 a=70 b=-30"));
+        assert_eq!(AseColor::Lab([0.52, -0.2, 200.0]).value_name().as_deref(), Some("L=52 a=0 b=127"));
+        assert_eq!(AseColor::Rgb([-1.0, 2.0, -0.001]).value_name().as_deref(), Some("R=0 G=255 B=0"));
+        assert_eq!(AseColor::Other { model: *b"HSV ", data: vec![] }.value_name(), None);
+    }
+
+    #[test]
+    fn apply_names_numbers_repeats_names_the_unnamed_and_trims() {
+        let mut f = AseFile {
+            entries: vec![
+                AseEntry::Swatch(sw("Black", AseColor::Gray(0.0), AseKind::Process)),
+                AseEntry::Swatch(sw(" Black ", AseColor::Gray(0.0), AseKind::Process)),
+                AseEntry::Swatch(sw("", AseColor::Rgb([1.0, 0.0, 0.0]), AseKind::Process)),
+                AseEntry::Swatch(sw("  ", AseColor::Other { model: *b"HSV ", data: vec![] }, AseKind::Process)),
+                AseEntry::Group {
+                    name: "".into(),
+                    swatches: vec![sw("Black", AseColor::Gray(0.0), AseKind::Spot), sw("Color Group", AseColor::Gray(1.0), AseKind::Process)],
+                },
+                AseEntry::Group { name: " ".into(), swatches: vec![] },
+            ],
+        };
+        let colors = |f: &AseFile| {
+            f.entries
+                .iter()
+                .map(|e| match e {
+                    AseEntry::Swatch(s) => s.name.clone(),
+                    AseEntry::Group { name, swatches } => {
+                        format!("{name}: {}", swatches.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", "))
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut plain = f.clone();
+        plain.apply_names(&mut UniqueNames::new());
+        assert_eq!(colors(&plain), ["Black", "Black 2", "R=255 G=0 B=0", "", "Color Group: Black 3, Color Group 2", "Color Group 3: "]);
+        // Numbered against names that exist before the file is read.
+        let mut library = UniqueNames::new();
+        library.reserve("Black");
+        f.apply_names(&mut library);
+        assert_eq!(colors(&f)[..2], ["Black 2", "Black 3"]);
+        // The colours are not changed.
+        assert_eq!(f.swatch_count(), 6);
+    }
+
+    /// A file of the same name repeated up to the cap names every colour once, without
+    /// searching the numbers already used.
+    #[test]
+    fn many_repeats_are_numbered_in_order() {
+        let mut f = AseFile { entries: (0..MAX_SWATCHES).map(|_| AseEntry::Swatch(sw("Same", AseColor::Gray(0.0), AseKind::Process))).collect() };
+        f.apply_names(&mut UniqueNames::new());
+        let AseEntry::Swatch(last) = &f.entries[MAX_SWATCHES - 1] else { panic!() };
+        assert_eq!(last.name, format!("Same {MAX_SWATCHES}"));
     }
 
     #[test]

@@ -79,9 +79,33 @@ elsewhere are kept. `\sect` ends a paragraph.
 The reader does not recurse, and what it returns is never larger than a small multiple of the
 file: each character of text costs the file at least one byte.
 
+## Outlook bodies (feature `outlook`)
+
+`outlook::decompress_rtf` undoes the compression of `PidTagRtfCompressed` ([MS-OXRTFCP]: `LZFu`
+with its CRC checked, or `MELA` stored as is), never allocating past the caller's cap.
+`outlook::rtf_text` gives the text a mail body shows (font charsets and `\ansicpg` decoded through
+`craft_mime::charset`, `\uN` with its fallback skipped, destinations dropped), and
+`outlook::rtf_html` the HTML of an encapsulated-HTML body ([MS-OXRTFEX], `\fromhtml1`). Groups nest
+at most `MAX_RTF_DEPTH` (256) deep. From MailCraft `crates/pst/src/rtf.rs` at
+[a44a450](https://github.com/UCS-Care-Group/mailcraft/commit/a44a45013d1c6396229c40ab60172d1882b368d5),
+by Martin Ball and the MailCraft contributors.
+
+## The word model (`doc` feature)
+
+`craft_rtf::doc` reads RTF into the word model (`craft_wordmodel::Document`) and writes it
+back, through the text formats' flow (`craft_flow`): styles, lists, fields, bookmarks,
+pictures (PNG, JPEG, metafiles; other formats re-encoded as PNG within a bounded decode),
+tables, notes, comments, tracked changes, sections, headers and footers. It is WordCraft's RTF
+reader and writer, on this crate's code pages, dates and escaping.
+
+- `doc::import(bytes) -> Result<Document, String>`, `doc::parse(bytes) -> Result<Flow, String>`
+- `doc::export(&Document) -> String`
+
+Limits: group nesting (512), picture data (64 MiB a picture), notes (5,000; 500 blocks each),
+sections (10,000), revision authors (10,000), fonts (4,096).
+
 ## Not here yet
 
-WordCraft's full reader and writer (styles, lists, fields, bookmarks, pictures, notes,
-comments, tracked changes, sections, headers and footers) are written against WordCraft's own
-document model and stay there until that model has a neutral form. They can already sit on
-`Tokens`, `TextDecoder`, `esc` and the date functions.
+`doc` keeps its own tokenizing loop, which has rules the shared `Tokens` does not (`\bin` data
+and fallback characters inside picture data, the destinations a `\uN` fallback is skipped in).
+Moving it onto `Tokens` is a follow-up.

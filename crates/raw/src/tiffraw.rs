@@ -49,12 +49,15 @@ pub(crate) fn check_image(data: &[u8], info: &ImageInfo, limits: &Limits) -> Res
     if chunks.is_empty() {
         return Err(RawError::Corrupt("no image data chunks".into()));
     }
-    // every visible sample needs a chunk: a short offsets table would leave zero-filled (black) regions
+    // every visible sample needs a chunk: a short offsets table would leave zero-filled (black) regions.
+    // Count the table, not `chunks`: craft-tiff builds at most one descriptor per byte of file
+    // (storytold/craft-libs#827), so a grid of tiles sharing one payload lists fewer chunks than the
+    // table declares and would be refused here for a short file rather than for the data it holds.
     let (across, down) = info.grid();
     let planes = if info.planar == 2 { cpp } else { 1 };
     let expected = (across as usize).saturating_mul(down as usize).saturating_mul(planes);
-    if chunks.len() < expected {
-        return Err(RawError::Corrupt(format!("{} image data chunks, expected {expected}", chunks.len())));
+    if info.offsets.len() < expected {
+        return Err(RawError::Corrupt(format!("{} image data chunks, expected {expected}", info.offsets.len())));
     }
     // Tile sizes don't depend on the image size, and every tile is decoded at its nominal size and held until the copy:
     // a grid of tiles no larger than the image covers less than twice its width and height, so more than four times
@@ -234,6 +237,29 @@ fn packed_row_bytes(n: u64, bits: u32, packing: Packing, float: bool) -> u64 {
 /// A chunk's nominal decoded size in samples (per plane, as the decoder builds it).
 fn chunk_samples(c: &Chunk, ccpp: usize) -> usize {
     (c.width as usize).saturating_mul(c.height as usize).saturating_mul(ccpp)
+}
+
+/// Consecutive index ranges of `chunks` whose combined nominal samples (`ccpp` per pixel) stay within the group size
+/// [`read_image`] uses for an image of `total` samples (at least one chunk per range). A decoder that holds its
+/// decoded tiles until it copies them decodes one range at a time, so it holds a group's frames beside the output,
+/// not the whole grid's (storytold/lightcraft#1517, storytold/lightcraft#2554).
+#[cfg(feature = "arw")]
+pub(crate) fn decode_groups(chunks: &[Chunk], ccpp: usize, total: usize) -> Vec<std::ops::Range<usize>> {
+    let budget = (total / 4).max(1 << 20);
+    let mut groups = Vec::new();
+    let (mut from, mut taken) = (0usize, 0usize);
+    for (i, c) in chunks.iter().enumerate() {
+        let n = chunk_samples(c, ccpp);
+        if i > from && taken.saturating_add(n) > budget {
+            groups.push(from..i);
+            (from, taken) = (i, 0);
+        }
+        taken = taken.saturating_add(n);
+    }
+    if from < chunks.len() {
+        groups.push(from..chunks.len());
+    }
+    groups
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -525,6 +551,11 @@ mod lossy_tests {
             byte_counts: vec![256; 65_536],
         };
         let err = check_image(&file, &info, &Limits::default()).unwrap_err().to_string();
+        assert!(err.contains("cannot hold"), "{err}");
+        // A file shorter than its tile count must reach the same refusal: the table, not the byte-capped
+        // chunk list, says how many chunks the image declares (storytold/lightcraft#4165).
+        let short = vec![0u8; 8 + 256];
+        let err = check_image(&short, &info, &Limits::default()).unwrap_err().to_string();
         assert!(err.contains("cannot hold"), "{err}");
     }
 
@@ -926,5 +957,25 @@ mod budget_tests {
             let err = read_image_in(mode, &data, &info, ByteOrder::Little, Packing::Msb, &Limits::default()).unwrap_err();
             assert!(matches!(&err, RawError::Corrupt(m) if m.contains("8000 bytes of image data")), "{err:?}");
         }
+    }
+
+    /// storytold/lightcraft#2554: tiled decoders decode the grid in groups of at most a quarter of the image (1 Mi samples at
+    /// least), each group at least one chunk, covering every chunk once and in order.
+    #[cfg(feature = "arw")]
+    #[test]
+    fn decode_groups_split_the_grid() {
+        let info = aliased(4096, 4096, 512, 64);
+        let chunks = info.chunks(64);
+        assert_eq!(chunks.len(), 64);
+        let groups = decode_groups(&chunks, 1, 4096 * 4096);
+        // a quarter of 16 Mi samples is 4 Mi: 16 tiles of 256 Ki samples per group
+        assert_eq!(groups.len(), 4);
+        assert!(groups.iter().all(|g| g.len() == 16));
+        assert_eq!(groups.first().map(|g| g.start), Some(0));
+        assert!(groups.windows(2).all(|p| p[0].end == p[1].start));
+        assert_eq!(groups.last().map(|g| g.end), Some(64));
+        // a tile larger than the budget is still a group of its own
+        let big = aliased(8192, 8192, 8192, 64);
+        assert_eq!(decode_groups(&big.chunks(64), 1, 1 << 20), vec![0..1]);
     }
 }

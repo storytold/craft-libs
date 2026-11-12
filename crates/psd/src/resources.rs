@@ -30,6 +30,8 @@ pub mod ids {
     pub const XMP: u16 = 1060;
     /// Document timeline settings (versioned descriptor).
     pub const TIMELINE_INFO: u16 = 1075;
+    /// Selected layer ids (`u16` count followed by `u32` ids).
+    pub const LAYER_SELECTION_IDS: u16 = 1069;
 }
 
 /// One image resource block.
@@ -147,6 +149,63 @@ impl VersionInfo {
     }
 }
 
+/// The thumbnail resource (1036; 1033 in Photoshop 4, whose samples are BGR): a 28-byte
+/// big-endian header and the image data (Adobe's specification, "Thumbnail resource format").
+/// Photoshop writes format 1 (JFIF), 24 bits per pixel, one plane, with the long side at 160
+/// pixels or less.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Thumbnail<'a> {
+    /// 1 for JFIF (`kJpegRGB`), 0 for raw RGB (`kRawRGB`).
+    pub format: u32,
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+    /// Bits per pixel (24).
+    pub bits_per_pixel: u16,
+    /// Planes (1).
+    pub planes: u16,
+    /// The image data after the header: a JFIF stream for format 1.
+    pub data: &'a [u8],
+}
+
+impl<'a> Thumbnail<'a> {
+    /// Length of the header in front of the image data.
+    pub const HEADER_LEN: usize = 28;
+    /// Longest side Photoshop gives a thumbnail.
+    pub const MAX_SIDE: u32 = 160;
+
+    /// Reads a thumbnail resource's data. Its sizes are not checked against the image data,
+    /// which a reader decodes on its own.
+    pub fn from_bytes(data: &'a [u8]) -> Result<Self> {
+        let mut r = Reader::new(data);
+        let format = r.u32()?;
+        let (width, height) = (r.u32()?, r.u32()?);
+        // Width bytes, total size and compressed size: derived values a reader recomputes.
+        r.skip(12)?;
+        let (bits_per_pixel, planes) = (r.u16()?, r.u16()?);
+        Ok(Thumbnail { format, width, height, bits_per_pixel, planes, data: r.peek_rest() })
+    }
+
+    /// The data of a JFIF thumbnail resource for a `width`×`height` image: the header as
+    /// Photoshop writes it (width bytes padded to 4, total size, compressed size, 24 bits, one
+    /// plane), then `jfif`. An error when a size does not fit its 32-bit field.
+    pub fn jfif_bytes(width: u32, height: u32, jfif: &[u8]) -> Result<Vec<u8>> {
+        let too_big = || PsdError::LimitExceeded("thumbnail too large for its header");
+        let width_bytes = width.checked_mul(24).map(|v| v.div_ceil(32) * 4).ok_or_else(too_big)?;
+        let total = width_bytes.checked_mul(height).ok_or_else(too_big)?;
+        let compressed = u32::try_from(jfif.len()).map_err(|_| too_big())?;
+        let mut out = Vec::with_capacity(Self::HEADER_LEN + jfif.len());
+        for v in [1, width, height, width_bytes, total, compressed] {
+            out.put_u32(v);
+        }
+        out.put_u16(24);
+        out.put_u16(1);
+        out.put(jfif);
+        Ok(out)
+    }
+}
+
 /// Typed view of a known resource.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -175,6 +234,21 @@ pub enum ResourceData<'a> {
     TimelineInfo(crate::VersionedDescriptor),
     /// A `mani` legacy animation resource in the plug-in resource id range (4000..=4999).
     Animation(crate::animation::AnimationResource<'a>),
+    /// 1069: selected layer ids, in their stored order. An empty list is explicit.
+    LayerSelectionIds(Vec<u32>),
+}
+
+/// Decodes resource 1069 after checking the complete count-derived payload before allocation.
+/// The format parser preserves zero IDs, duplicates and order for the document mapper to
+/// resolve; truncated data and trailing bytes are malformed rather than partial selections.
+fn layer_selection_ids(data: &[u8]) -> Result<Vec<u32>> {
+    let mut r = Reader::new(data);
+    let count = r.u16()?;
+    r.check_count(u64::from(count), 4)?;
+    if r.remaining() != usize::from(count) * 4 {
+        return Err(PsdError::invalid("layer selection ids length does not match its count"));
+    }
+    (0..count).map(|_| r.u32()).collect()
 }
 
 impl ImageResource {
@@ -207,6 +281,7 @@ impl ImageResource {
             ids::XMP => Ok(ResourceData::Xmp(d)),
             ids::TIMELINE_INFO => crate::animation::parse_descriptor(d).map(ResourceData::TimelineInfo),
             4000..=4999 if d.starts_with(b"mani") => crate::animation::AnimationResource::from_bytes(d).map(ResourceData::Animation),
+            ids::LAYER_SELECTION_IDS => layer_selection_ids(d).map(ResourceData::LayerSelectionIds),
             _ => return None,
         })
     }
@@ -375,6 +450,51 @@ mod tests {
         let r = ImageResource::new(ids::XMP, b"<x/>".to_vec());
         assert_eq!(r.xmp_str(), Some("<x/>"));
         assert_eq!(ImageResource::new(4242, vec![]).parsed(), None);
+    }
+
+    /// Parsing preserves the stored list exactly, including zero, duplicates and deselection.
+    #[test]
+    fn typed_layer_selection_ids_preserve_empty_order_and_duplicates() {
+        for ids in [vec![], vec![9], vec![u32::MAX, 0, 9, 9]] {
+            let mut data = (ids.len() as u16).to_be_bytes().to_vec();
+            data.extend(ids.iter().flat_map(|id| id.to_be_bytes()));
+            let r = ImageResource::new(ids::LAYER_SELECTION_IDS, data);
+            assert_eq!(r.parsed(), Some(Ok(ResourceData::LayerSelectionIds(ids))));
+            roundtrip(&[r]);
+        }
+    }
+
+    /// Declared lengths must match the entire payload, including at the maximum valid count.
+    #[test]
+    fn typed_layer_selection_ids_reject_mismatched_counts_and_truncation() {
+        for data in [vec![], vec![0], vec![0, 1], vec![0, 1, 0, 0, 0], vec![0, 0, 0], vec![0, 0, 0, 0, 0, 1], vec![255, 255]] {
+            let r = ImageResource::new(ids::LAYER_SELECTION_IDS, data);
+            assert!(matches!(r.parsed(), Some(Err(_))), "{:?}", r.data);
+        }
+        let mut data = u16::MAX.to_be_bytes().to_vec();
+        data.extend((0..u32::from(u16::MAX)).flat_map(u32::to_be_bytes));
+        let r = ImageResource::new(ids::LAYER_SELECTION_IDS, data);
+        let Some(Ok(ResourceData::LayerSelectionIds(ids))) = r.parsed() else { panic!("maximum count must parse") };
+        assert_eq!(ids.len(), usize::from(u16::MAX));
+    }
+
+    #[test]
+    fn thumbnail_header_follows_the_spec_and_reads_back() {
+        let b = Thumbnail::jfif_bytes(160, 90, &[0xFF, 0xD8, 0xFF, 0xD9]).unwrap();
+        let u = |i: usize| u32::from_be_bytes(b[i..i + 4].try_into().unwrap());
+        assert_eq!((u(0), u(4), u(8), u(12), u(16), u(20)), (1, 160, 90, 480, 480 * 90, 4));
+        assert_eq!(&b[24..28], &[0, 24, 0, 1]);
+        assert_eq!(&b[28..], &[0xFF, 0xD8, 0xFF, 0xD9]);
+        // Width bytes are padded to 4: 3 px × 3 bytes = 9 → 12.
+        let odd = Thumbnail::jfif_bytes(3, 1, &[]).unwrap();
+        assert_eq!(u32::from_be_bytes(odd[12..16].try_into().unwrap()), 12);
+        let t = Thumbnail::from_bytes(&b).unwrap();
+        assert_eq!((t.format, t.width, t.height, t.bits_per_pixel, t.planes, t.data), (1, 160, 90, 24, 1, [0xFF, 0xD8, 0xFF, 0xD9].as_slice()));
+        for cut in 0..Thumbnail::HEADER_LEN {
+            assert!(Thumbnail::from_bytes(&b[..cut]).is_err());
+        }
+        assert!(Thumbnail::jfif_bytes(u32::MAX, 1, &[]).is_err());
+        assert!(Thumbnail::jfif_bytes(40_000, 40_000, &[]).is_err());
     }
 
     #[test]
