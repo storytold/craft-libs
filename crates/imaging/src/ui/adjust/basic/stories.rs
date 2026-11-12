@@ -1,8 +1,8 @@
 //! Stories of Brightness/Contrast, Threshold, Color Balance and Photo Filter.
 
 use super::{
-    BrightnessContrast, BrightnessContrastEditor, ColorBalance, ColorBalanceEditor, PhotoFilter, PhotoFilterEditor, PhotoFilterPreset,
-    ThresholdEditor,
+    BrightnessContrast, BrightnessContrastEditor, ColorBalance, ColorBalanceEditor, ColorBalanceTone, PhotoFilter, PhotoFilterEditor,
+    PhotoFilterPreset, ThresholdEditor,
 };
 use crate::ui::curve::stories::story_bins;
 use crate::ui::histogram::{ChannelColor, HistogramData};
@@ -25,21 +25,41 @@ fn threshold(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     ThresholdEditor::new("Threshold", Bind::bound(level)).histogram(&histogram).show(ui).into()
 }
 
-#[story(ColorBalanceEditor<'static>, covers = [Default], drive = Drive::Never)]
-fn color_balance(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let value = data.value("value", ColorBalance { midtones: [20.0, -10.0, 5.0], ..ColorBalance::default() });
-    ColorBalanceEditor::new("Color Balance", Bind::bound(value)).show(ui).into()
+fn color_balance(ui: &mut Ui, data: &mut StoryData, start: ColorBalanceTone) -> StoryOutput {
+    let value = data.value(
+        "value",
+        ColorBalance { shadows: [-20.0, 0.0, 30.0], midtones: [10.0, -15.0, 0.0], highlights: [25.0, 10.0, -20.0], ..ColorBalance::default() },
+    );
+    let tone = data.value("tone", start);
+    let shown = ColorBalanceEditor::new("Color Balance", Bind::bound(value)).tone(*tone).show(ui);
+    *tone = shown.tone;
+    shown.into()
+}
+
+#[story(ColorBalanceEditor<'static>, covers = [], drive = Drive::Never, group = "Tones", title = "Shadows")]
+fn color_balance_shadows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    color_balance(ui, data, ColorBalanceTone::Shadows)
+}
+
+#[story(ColorBalanceEditor<'static>, covers = [Default], drive = Drive::Never, group = "Tones", title = "Midtones")]
+fn color_balance_midtones(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    color_balance(ui, data, ColorBalanceTone::Midtones)
+}
+
+#[story(ColorBalanceEditor<'static>, covers = [], drive = Drive::Never, group = "Tones", title = "Highlights")]
+fn color_balance_highlights(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    color_balance(ui, data, ColorBalanceTone::Highlights)
 }
 
 /// A filter preset: the Filter row is on.
-#[story(PhotoFilterEditor<'static>, covers = [Default], drive = Drive::Never)]
+#[story(PhotoFilterEditor<'static>, covers = [Default], drive = Drive::Never, group = "Sources", title = "A filter preset")]
 fn photo_filter_preset(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let value = data.value("preset", PhotoFilter { color: PhotoFilterPreset::Cooling80.color(), density: 25.0, preserve_luminosity: true });
     PhotoFilterEditor::new("Photo Filter", Bind::bound(value)).show(ui).into()
 }
 
 /// A colour of no preset: the Color row is on, and the select offers Custom.
-#[story(PhotoFilterEditor<'static>, covers = [], drive = Drive::Never)]
+#[story(PhotoFilterEditor<'static>, covers = [], drive = Drive::Never, group = "Sources", title = "A custom color")]
 fn photo_filter_color(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let value = data.value("color", PhotoFilter { color: Srgba::rgb(0.4, 0.2, 0.6), density: 60.0, preserve_luminosity: false });
     PhotoFilterEditor::new("Photo Filter", Bind::bound(value)).show(ui).into()
