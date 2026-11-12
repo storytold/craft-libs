@@ -2016,8 +2016,9 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `fn take_menu_keys(&mut self) -> Vec<MenuKey>`. The menu-bar keys of the pass: F10 or a lone Alt press focus the bar, Alt and a letter open a menu.
 - `craft_ui::contract::FooterPlace`: `pub enum FooterPlace { Across, EndBottom, EndTop }`. Where a footer region sits.
   - `pub const fn in_end(self) -> bool`. Whether the footer sits in the end region.
-- `craft_ui::contract::FooterRegion`: `pub struct FooterRegion { pub rule: bool, pub place: FooterPlace, pub gap: Option<Gap>, pub status: bool }`. A footer region, filled by `Container::footer`.
-  - `pub const fn new() -> Self`. A footer across the container under the line, with no rule.
+- `craft_ui::contract::FooterRegion`: `pub struct FooterRegion { pub rule: bool, pub place: FooterPlace, pub gap: Option<Gap>, pub inset: Pad, pub status: bool }`. A footer region, filled by `Container::footer`.
+  - `pub const fn new() -> Self`. A footer across the container under the line, with no rule and no inset.
+  - `pub const fn inset(mut self, pad: Pad) -> Self`. The padding tier between the container's edges and the footer's content, at its sides and under it.
   - `pub const fn rule(mut self, on: bool) -> Self`. Whether a rule separates the footer from the content beside it.
   - `pub const fn place(mut self, place: FooterPlace) -> Self`. Where the footer sits.
   - `pub const fn gap(mut self, gap: Gap) -> Self`. The space above the footer's content, inside the region.
