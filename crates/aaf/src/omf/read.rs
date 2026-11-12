@@ -153,6 +153,7 @@ impl R<'_, '_> {
         let name = self.string(m, "OMFI:MOBJ:Name").unwrap_or_else(|| "Sequence".into());
         let mut comp = Composition {
             name,
+            aaf_mob_id: None,
             rate: FrameRate::FPS_25,
             sample_rate: 48_000,
             width: 1920,
