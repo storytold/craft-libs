@@ -6,7 +6,8 @@ local patches listed below. `.cargo_vcs_info.json` names the commit it was packa
 names, which is archived; its README says development moved off GitHub.
 
 Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
-in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
+in the `.crate` archive. The patched files are `src/order.rs` and `src/sweep/sweep_line.rs`.
+`SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
 hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
 holds `upstream_revision`. `local_patches` describes each local patch.
@@ -15,6 +16,7 @@ holds `upstream_revision`. `local_patches` describes each local patch.
 
 | File | Change |
 |---|---|
+| `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
 | `src/order.rs`, `src/sweep/sweep_line.rs` | Segments that start at one point all compare "ish" there, so each intersection scan and insertion search run at that point passes every other segment that starts there. Those comparisons are no longer stored: `ComparisonCache::with_order` uses a stored comparison if there is one and otherwise computes it the same way and drops it. `n` segments that start at one point and do not cross later now store `O(n)` comparisons instead of `O(n^2)` (comparisons made at a later crossing are stored as before); 1,000 triangles that share their apex peak at 8 MiB instead of 2,431 MiB and sweep in 0.56 s instead of 7.7 s. The comparisons are the same, so the output does not change. The `segments_starting_at_one_point_are_not_stored` and `curves_starting_at_one_point_are_not_stored` tests count the stored comparisons, `segments_starting_at_one_point_sweep_as_with_stored_comparisons` checks that every sweep line is the same as with all comparisons stored, and the `order` test `unstored_order_matches_stored_order` checks `with_order` against `compare_segments`. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
