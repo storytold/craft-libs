@@ -286,6 +286,7 @@ impl Component for Navigator<'_> {
     const ROLE: Role = Role::GROUP;
     const OVERLAYS: bool = false;
     const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_keep(KeepKeys::BlockArrows).with_activate(ActivateKeys::Neither);
+    const BINDS_VIEW: bool = true;
     type Style = NavigatorStyle;
     type Output = NavigatorOutput;
 

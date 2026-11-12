@@ -321,6 +321,10 @@ pub trait Component: Meta + Sized {
     /// Two sources: a canvas control (`#[component(canvas_control)]`) is single-value by kind, since it edits one
     /// layer's geometry; any other component declares it here.
     const SINGLE_VALUE: bool = false;
+    /// Whether the binding is the component's view of what it shows (a time area's scroll and zoom, a navigator's
+    /// canvas view), not a value the user edits. The wheel moves a view without focus, as it scrolls a scroll
+    /// region; a bound value control takes it only while focused or armed.
+    const BINDS_VIEW: bool = false;
 
     /// The style type.
     type Style: ComponentStyle;

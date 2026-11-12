@@ -445,6 +445,7 @@ impl Component for TimelineView<'_> {
     const KEYS: KeyUse = KeyUse::SPLITTER;
     const OVERLAYS: bool = false;
     const SINGLE_VALUE: bool = true;
+    const BINDS_VIEW: bool = true;
     type Style = TimelineViewStyle;
     type Output = TimelineViewOutput;
 
