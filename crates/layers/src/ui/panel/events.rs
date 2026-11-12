@@ -145,12 +145,24 @@ pub struct LayerSelect<Id> {
     /// The thumbnail the click landed on, which becomes the target; `None` elsewhere on the row
     /// and for keys (the target stays).
     pub part: Option<LayerPart>,
+    /// The effects or Smart Filter row a click, a right-click or a selection key picked, which the app may select on
+    /// its own ([`LayerSelection::sub_row`](crate::ui::tree::LayerSelection::sub_row)); `None` on a layer row.
+    pub row: Option<LayerRowKey<Id>>,
 }
 
 impl<Id> LayerSelect<Id> {
-    /// A selection change with an optional thumbnail target.
+    /// A selection change with an optional thumbnail target, made on a layer row.
     pub fn new(change: SelectionChange<Id>, part: Option<LayerPart>) -> Self {
-        Self { change, part }
+        Self { change, part, row: None }
+    }
+
+    /// The change made on `row`; a layer row leaves [`row`](Self::row) `None`.
+    pub fn on_row(mut self, row: &LayerRowKey<Id>) -> Self
+    where
+        Id: Clone,
+    {
+        self.row = (!row.is_layer()).then(|| row.clone());
+        self
     }
 }
 

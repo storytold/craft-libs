@@ -16,7 +16,7 @@ use craft_ui::primitives::IconSpec;
 /// The sample tree with the masked layer active and its mask targeted.
 fn selected() -> FakeLayers {
     let mut tree = FakeLayers::sample();
-    tree.selection = LayerSelection { layers: vec![3], active: Some(3), target: LayerPart::LayerMask };
+    tree.selection = LayerSelection::new(vec![3], Some(3), LayerPart::LayerMask);
     tree
 }
 

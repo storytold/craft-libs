@@ -47,8 +47,13 @@ pub(super) fn show_body<T: LayerTree>(
     let tree = cx.tree;
     let order = rows.keys();
     let mut selection = list_selection(cx, session);
-    let reveal_key =
-        reveal.target.clone().filter(|id| order.iter().any(|key| matches!(key, LayerRowKey::Layer(k) if k == id))).map(LayerRowKey::Layer);
+    // The reveal moves the lead, so a layer revealed with a sub-row of its own selected reveals that row.
+    let reveal_key = reveal.target.clone().filter(|id| order.iter().any(|key| matches!(key, LayerRowKey::Layer(k) if k == id))).map(|id| {
+        match &cx.selection.sub_row {
+            Some(row) if *row.layer() == id && order.contains(row) => row.clone(),
+            _ => LayerRowKey::Layer(id),
+        }
+    });
 
     let eye = cx.visibility_key.map_or(ToggleColumn::sweepable(), |key| ToggleColumn::sweepable().key(key));
     let mut columns = vec![ColumnSpec::new(EYE, Label::Empty, ColumnWidth::Controls(1.0)).kind(ColumnKind::Toggle(eye)).icon(IconId::new("eye"))];

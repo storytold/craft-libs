@@ -49,10 +49,11 @@ pub(super) fn map_events<T: LayerTree>(
     for event in list {
         match event {
             CollectionEvent::Selection(change) => {
-                let (row, mapped) = match change {
-                    SelectionChange::Set(keys) => (keys.last().cloned(), SelectionChange::Set(layers_of(&keys))),
-                    SelectionChange::Toggle(key) => (Some(key.clone()), SelectionChange::Toggle(key.layer().clone())),
-                    SelectionChange::Clear => (None, SelectionChange::Clear),
+                // A set made on an effects or Smart Filter row names that row; a toggle acts on its layer only.
+                let (row, set, mapped) = match change {
+                    SelectionChange::Set(keys) => (keys.last().cloned(), true, SelectionChange::Set(layers_of(&keys))),
+                    SelectionChange::Toggle(key) => (Some(key.clone()), false, SelectionChange::Toggle(key.layer().clone())),
+                    SelectionChange::Clear => (None, false, SelectionChange::Clear),
                     _ => continue,
                 };
                 let mut part = None;
@@ -68,7 +69,11 @@ pub(super) fn map_events<T: LayerTree>(
                     }
                     part = Some(hit);
                 }
-                events.push(LayersEvent::Select(LayerSelect::new(mapped, part)));
+                let mut select = LayerSelect::new(mapped, part);
+                if set && let Some(row) = &row {
+                    select = select.on_row(row);
+                }
+                events.push(LayersEvent::Select(select));
             }
             CollectionEvent::Activate(row) => {
                 let on = clicks
@@ -100,7 +105,7 @@ pub(super) fn map_events<T: LayerTree>(
                     session.menu = Some(OpenMenu::Eye { rows, current });
                 } else if plain {
                     if !selected {
-                        events.push(LayersEvent::Select(LayerSelect::new(SelectionChange::Set(vec![layer.clone()]), None)));
+                        events.push(LayersEvent::Select(LayerSelect::new(SelectionChange::Set(vec![layer.clone()]), None).on_row(&request.key)));
                         session.produced = vec![layer.clone()];
                         session.anchor = Some(LayerRowKey::Layer(layer));
                     }
@@ -154,7 +159,7 @@ pub(super) fn map_events<T: LayerTree>(
         events.push(if thumb_click_replaces_select(part, *mods, &info) {
             LayersEvent::ThumbClick { layer: row.layer().clone(), part, mods: *mods }
         } else {
-            LayersEvent::Select(LayerSelect::new(SelectionChange::Set(vec![row.layer().clone()]), Some(part)))
+            LayersEvent::Select(LayerSelect::new(SelectionChange::Set(vec![row.layer().clone()]), Some(part)).on_row(row))
         });
     }
 }

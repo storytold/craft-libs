@@ -224,11 +224,13 @@ pub(in crate::ui::panel) fn reveal_plan<T: LayerTree>(
     RevealPlan { target: active.cloned().filter(|_| changed), opens }
 }
 
-/// The tree's selection as the list holds it: the selected layers, the active one as the lead, and the
-/// anchor the last pick left while the selection is still what that pick produced.
+/// The tree's selection as the list holds it: the selected layers and the sub-row selected on its own, that row or
+/// else the active layer as the lead, and the anchor the last pick left while the selection is still what that pick
+/// produced.
 pub(super) fn list_selection<T: LayerTree>(cx: &PanelContext<'_, T>, session: &Session<T::Id>) -> Selection<LayerRowKey<T::Id>> {
-    let items: Vec<LayerRowKey<T::Id>> = cx.selection.layers.iter().cloned().map(LayerRowKey::Layer).collect();
-    let lead = cx.selection.active.clone().map(LayerRowKey::Layer);
+    let mut items: Vec<LayerRowKey<T::Id>> = cx.selection.layers.iter().cloned().map(LayerRowKey::Layer).collect();
+    items.extend(cx.selection.sub_row.clone());
+    let lead = cx.selection.sub_row.clone().or_else(|| cx.selection.active.clone().map(LayerRowKey::Layer));
     let same = session.produced.len() == cx.selection.layers.len() && session.produced.iter().all(|id| cx.selection.layers.contains(id));
     let anchor = session.anchor.clone().filter(|_| same).or_else(|| lead.clone());
     Selection::new(items, lead, anchor)

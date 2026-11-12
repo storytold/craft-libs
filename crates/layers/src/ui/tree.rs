@@ -118,7 +118,7 @@ pub struct LayerInfo {
     /// The layer's locks: any of them shows the lock indicator.
     pub locks: LayerLocks,
     /// The Background: it can't move below another layer, isn't renamed in place (a double click
-    /// on its name reports [`ActivateOn::Name`](super::panel::ActivateOn::Name)) and greys blend,
+    /// on its name reports [`ActivateOn::Row`](super::panel::ActivateOn::Row)) and greys blend,
     /// opacity and fill.
     pub background: bool,
     /// Whether a double click or F2 renames the layer in place.
@@ -317,18 +317,21 @@ pub struct LayerSelection<Id> {
     pub active: Option<Id>,
     /// The active layer's part edits go to: its thumbnail gets the target brackets.
     pub target: LayerPart,
+    /// An effects or Smart Filter row selected on its own (PhotoCraft's selected Smart Filter, which Delete removes):
+    /// highlighted beside its layer's row and holding the lead. `None` when only layers are selected.
+    pub sub_row: Option<LayerRowKey<Id>>,
 }
 
 impl<Id> LayerSelection<Id> {
     /// The `layers` selected, `active` the one the property rows show, edits going to `target`.
     pub fn new(layers: Vec<Id>, active: Option<Id>, target: LayerPart) -> Self {
-        Self { layers, active, target }
+        Self { layers, active, target, sub_row: None }
     }
 }
 
 impl<Id> Default for LayerSelection<Id> {
     fn default() -> Self {
-        Self { layers: Vec::new(), active: None, target: LayerPart::Pixels }
+        Self { layers: Vec::new(), active: None, target: LayerPart::Pixels, sub_row: None }
     }
 }
 
