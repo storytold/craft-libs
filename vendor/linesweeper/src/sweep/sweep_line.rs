@@ -359,7 +359,8 @@ pub struct Sweeper<'a> {
     // do, and whether it stopped there. The work is the segment comparisons,
     // which the two caches count, plus `position_checks`: the segment positions
     // checked against horizontal segments and contour endpoints while finding
-    // the changed intervals. `segments_passed` counts the segments that linear
+    // the changed intervals, with n log2 n more for sorting a sweep line's n
+    // horizontal segments. `segments_passed` counts the segments that linear
     // searches of the sweep line step over without comparing them; each
     // `SEGMENTS_PASSED_PER_UNIT` of them counts as one unit of work.
     work_limit: Option<u64>,
@@ -410,7 +411,8 @@ impl<'segs> Sweeper<'segs> {
     ///
     /// The work is the number of segment comparisons plus the number of segment
     /// positions checked against horizontal segments and contour endpoints while
-    /// finding a sweep line's changed intervals, plus one unit for every 16 segments
+    /// finding a sweep line's changed intervals, plus n log2 n for sorting the n
+    /// horizontal segments of a sweep line, plus one unit for every 16 segments
     /// that linear searches of the sweep line step over without comparing them.
     /// Once the sweep has done more than `limit`,
     /// [`Sweeper::next_line`] returns `None` and
@@ -1097,6 +1099,14 @@ impl<'segs> Sweeper<'segs> {
     /// Craft patch (work limit): returns `false`, leaving the changed intervals
     /// incomplete, if the sweep passes its work limit.
     fn compute_horizontal_changed_intervals(&mut self) -> bool {
+        // Sorting the n horizontal segments counts as n log2 n position checks,
+        // and the sweep stops before the sort once that passes the work limit.
+        let n = self.horizontals.len() as u64;
+        let sort_work = n.saturating_mul(n.checked_ilog2().map_or(0, u64::from));
+        self.position_checks = self.position_checks.saturating_add(sort_work);
+        if self.stop_at_work_limit() {
+            return false;
+        }
         self.horizontals
             .sort_by_key(|seg_idx| CheapOrderedFloat::from(self.segments[*seg_idx].start().x));
         let mut last_end = f64::NEG_INFINITY;
@@ -2402,6 +2412,32 @@ mod tests {
         assert!(sweep.work_limit_exceeded());
         let work = sweep.work();
         assert!(work <= limit + 2, "{work} units of work");
+    }
+
+    // Craft patch (work limit). Many horizontal segments at one height and no
+    // other segments: the sweep line stays empty, so finding the changed
+    // intervals checks no positions, but sorting the horizontals counts.
+    #[test]
+    fn work_limit_counts_sorting_the_horizontals() {
+        let count: u32 = 4096;
+        let mut segs = Segments::default();
+        for i in 0..count {
+            let x = 3.0 * f64::from(i);
+            segs.add_points([Point::new(x, 0.0), Point::new(x + 1.0, 0.0)]);
+        }
+
+        let mut bufs = SweepLineBuffers::default();
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        while sweep.next_line(&mut bufs).is_some() {}
+        assert!(!sweep.work_limit_exceeded());
+        let n = u64::from(count);
+        let total = sweep.work();
+        assert!(total >= n * u64::from(n.ilog2()), "{total} units of work");
+
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        sweep.set_work_limit(total / 2);
+        assert!(sweep.next_line(&mut bufs).is_none());
+        assert!(sweep.work_limit_exceeded());
     }
 
     proptest! {
