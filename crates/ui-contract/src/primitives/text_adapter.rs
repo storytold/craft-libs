@@ -26,6 +26,18 @@ pub(crate) enum End {
     Blur,
     /// Escape.
     Escape,
+    /// The component put the text back as it was before the run (`Cx::set_draft` with `None`): the run ends as
+    /// Escape ends it, but the Escape is not the field's.
+    Revert,
+}
+
+/// A change of the draft the component asked for, applied in the next pass (`Cx::set_draft`).
+#[derive(Clone, Debug)]
+pub(crate) enum DraftChange {
+    /// The draft becomes this text, as a change of the typing run.
+    Text(String),
+    /// The run ends with the text from before it.
+    Revert,
 }
 
 /// The composing text and where it sits in the draft, in characters.
@@ -61,6 +73,8 @@ pub(crate) struct TextState {
     pub caret_moved: f64,
     pub focused: bool,
     pub completions: completion::Completions,
+    /// The draft change `Cx::set_draft` asked for, applied at the start of the next pass.
+    pub change: Option<DraftChange>,
 }
 
 /// The id of a text part's egui widget, which holds key focus.
@@ -101,6 +115,8 @@ pub(crate) struct AdapterIn<'a> {
     pub focused: bool,
     pub ink: egui::Color32,
     pub intents: &'a mut Intents,
+    /// A list the component opened on the text is shown (a dropdown, the completions): Escape is the list's.
+    pub list_open: bool,
     pub placeholder: Option<&'a str>,
     /// Whether the caret stroke shows, from the blink.
     pub caret_visible: bool,
@@ -293,10 +309,19 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         replace_selection(ctx, widget, &mut base, selection, &insert);
         edited = true;
     }
+    match state.change.take() {
+        Some(DraftChange::Text(text)) => {
+            let all = (0, base.chars().count());
+            replace_selection(ctx, widget, &mut base, all, &text);
+            edited = true;
+        }
+        Some(DraftChange::Revert) => state.end = Some(End::Revert),
+        None => {}
+    }
     // A clearing field takes Escape while it shows text, with or without a draft, and passes it on once it is empty.
     let takes_escape =
         if input.options.clear_on_escape { !base.is_empty() || state.preedit.is_some() } else { state.draft.is_some() || state.preedit.is_some() };
-    if focused_before && takes_escape && !state.completions.open && input.intents.take(Intent::Cancel) {
+    if focused_before && takes_escape && !state.completions.open && !input.list_open && input.intents.take(Intent::Cancel) {
         // Escape over a composition alone ends the composition and leaves the text.
         if state.draft.is_some() || state.preedit.is_none() {
             state.end = Some(End::Escape);

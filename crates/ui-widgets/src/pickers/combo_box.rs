@@ -2,7 +2,7 @@
 //!
 //! The text is the value: any text can be typed, and an option is a quick way to type its text. The list is the
 //! component's own popup on the dropdown preset, so focus stays in the text part and the host hands the list keys to
-//! the list; the component handles none of them.
+//! the list. The option the keys make active puts its text in the field; the list's Escape puts back what was typed.
 
 #[cfg(feature = "testing")]
 mod stories;
@@ -12,12 +12,14 @@ use super::rows::EntryRows;
 use super::words::PickerWords;
 use crate::buttons::IconButton;
 use crate::contract::{
-    Bind, BindMut, CollectionEvent, Common, Component, Cx, Edit as _, EditResponse, Entry, Focus as _, Input, MeasureCx, Overlay, OverlayUi,
-    Overlays as _, PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role, ShowCollection as _, WordSetCx as _, step_stop, step_stops,
+    Bind, BindMut, CollectionEvent, Common, Component, Cx, Edit as _, EditResponse, Entry, Focus as _, Input, LeadSource, MeasureCx, Overlay,
+    OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role, ShowCollection as _, WordSetCx as _, step_stop,
+    step_stops,
 };
 use crate::list::{List, ListRow};
 use crate::primitives::{TextKey, TextOptions, TextRun};
 use crate::runtime::env::Label;
+use crate::runtime::overlay::CloseReason;
 use crate::text::{Adornment, place, reserve};
 use craft_behavior::{HitLevel, HitPriority, NavMove, PartKey, PlainText, Selection, Sense};
 use craft_i18n::matcher::Matcher;
@@ -32,10 +34,20 @@ fn text_key() -> TextKey<String> {
     TextKey::new(TEXT)
 }
 
-/// What the combo box keeps between passes: the draft the list was last filtered for.
+/// What the combo box keeps between passes: the draft the list was last filtered for, and what the keys in the open
+/// list put in.
 #[derive(Clone, Default)]
 struct Typing {
     draft: Option<String>,
+    keyed: Option<Keyed>,
+}
+
+/// The option text the keys in the open list put in the field, and the draft from before the keys (`None` when the keys
+/// began the typing run), which the list's Escape puts back.
+#[derive(Clone)]
+struct Keyed {
+    shown: String,
+    before: Option<String>,
 }
 
 /// A text field with a list of options. The typed text filters the list by the options' labels: the labels that
@@ -136,13 +148,20 @@ impl Component for ComboBox<'_> {
     }
 
     /// A changed draft filters the list: it opens on the matches, and closes when there are none. A draft that ended
-    /// (committed, cancelled or replaced by a pick) closes it. While the list is closed, Up, Down and the wheel step
+    /// (committed, cancelled or replaced by a pick) closes it. The text the keys in the open list put in is not
+    /// typing: the list stays filtered by what was typed. While the list is closed, Up, Down and the wheel step
     /// through the options.
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let list = cx.popup("options");
         let draft = cx.text(&text_key()).and_then(|outcome| outcome.draft.clone());
-        let before = std::mem::replace(&mut cx.memory::<Typing>().draft, draft.clone());
-        if before != draft {
+        let typing = cx.memory::<Typing>();
+        let by_keys = typing.keyed.as_ref().is_some_and(|keyed| draft.as_ref() == Some(&keyed.shown));
+        let changed = !by_keys && typing.draft != draft;
+        if changed {
+            typing.keyed = None;
+            typing.draft.clone_from(&draft);
+        }
+        if changed {
             match &draft {
                 Some(text) if self.matches_any(cx, text) => list.open(cx),
                 _ => list.close(cx),
@@ -170,8 +189,10 @@ impl Component for ComboBox<'_> {
         }
     }
 
-    /// The list: one option row per match, the row of the field's text checked and active when the list opens. A
-    /// pick comes back as `Activate` (Enter, Tab or a click) and puts the option's text in the field.
+    /// The list: one option row per match, the row of the field's text checked and active when the list opens. The
+    /// row the keys make active puts its text in the field as a change of the typing run; the list's Escape puts back
+    /// the text from before the keys. A pick comes back as `Activate` (Enter or a click) and puts the option's text
+    /// in the field.
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
         let popup = cx.popup("options");
         let options = self.options;
@@ -190,13 +211,33 @@ impl Component for ComboBox<'_> {
                 .show_items(ui, &rows, &mut |key, _| rows.row(*key, current, decorate))
                 .events
         });
-        let picked = events.into_iter().flatten().find_map(|event| match event {
-            CollectionEvent::Activate(key) => Some(key),
-            _ => None,
-        });
+        let (mut picked, mut keyed_to) = (None, None);
+        for event in events.into_iter().flatten() {
+            match event {
+                CollectionEvent::Activate(key) => picked = Some(key),
+                CollectionEvent::LeadMoved { key, by: LeadSource::Keys, .. } => keyed_to = Some(key),
+                _ => {}
+            }
+        }
         if let Some(value) = picked.and_then(|key| options.get(key)).and_then(Entry::value) {
+            cx.memory::<Typing>().keyed = None;
             cx.set(value.clone());
             popup.close(cx);
+        } else if let Some(text) = keyed_to.and_then(|key| options.get(key)).and_then(Entry::value) {
+            let draft = cx.text(&text_key()).and_then(|outcome| outcome.draft.clone());
+            let typing = cx.memory::<Typing>();
+            let before = typing.keyed.take().map_or(draft, |keyed| keyed.before);
+            typing.keyed = Some(Keyed { shown: text.clone(), before });
+            cx.set_draft(Some(text.clone()));
+        }
+        match ui.closing(popup) {
+            Some(CloseReason::Escape) => {
+                if let Some(keyed) = cx.memory::<Typing>().keyed.take() {
+                    cx.set_draft(keyed.before);
+                }
+            }
+            Some(_) => cx.memory::<Typing>().keyed = None,
+            None => {}
         }
     }
 

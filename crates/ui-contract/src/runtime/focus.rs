@@ -545,6 +545,17 @@ pub(crate) fn commit_now(ctx: &Context) -> Option<Id> {
     with(ctx, |state| state.press.commit_now)
 }
 
+/// Whether the component `owner` opened a layer that keeps the focus on it (a dropdown) and the layer is shown: its
+/// list takes Escape before the component does.
+pub(crate) fn holds_anchored_layer(ctx: &Context, owner: Id) -> bool {
+    with(ctx, |state| {
+        state
+            .last_scopes
+            .values()
+            .any(|scope| scope.policy.initial == Initial::KeepAnchor && !scope.closing && scope.opener.is_some_and(|(id, _)| id == owner))
+    })
+}
+
 /// What moved the key focus.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]

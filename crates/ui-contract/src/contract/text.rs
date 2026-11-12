@@ -177,6 +177,11 @@ fn resolver<K: Codec + Clone + 'static>(codec: K, options: &TextOptions, rect: R
             end => end,
         };
         match end {
+            Some(End::Revert) => {
+                if let Escaped::Restore(_) = typing.escape(&mut run) {
+                    events.push(TextEvent::Cancel(CancelReason::Escape));
+                }
+            }
             Some(End::Escape) => {
                 escaped = true;
                 if clear_on_escape && !run.is_open() {
@@ -363,6 +368,8 @@ pub(crate) fn run<C: Component>(
     let mut state = std::mem::take(cx.core.memory.shown::<TextState>(state_id));
     (decl.values.resync)(&mut state, shown_copy(cx).as_ref());
     let widget = adapter::text_id(id, decl.key);
+    // A list the component opened on the text (a dropdown, the completions) takes Escape before the text does.
+    let list_open = crate::runtime::focus::holds_anchored_layer(&ctx, id);
     let mut focused = crate::runtime::egui::focus::has_focus(&ctx, widget);
     let was_focused = state.focused;
     let now = cx.now();
@@ -413,6 +420,7 @@ pub(crate) fn run<C: Component>(
             focused,
             ink,
             intents: &mut cx.core.intents,
+            list_open,
             placeholder: decl.options.placeholder.as_ref().map(|label| label.as_str()),
             caret_visible,
             underline,
@@ -442,7 +450,7 @@ pub(crate) fn run<C: Component>(
     facts(cx, &mut state, widget, &out, decl.rect, decl.options.mask, read_only);
     cx.core.text_invalid = state.invalid;
     cx.core.text_unparsed = decl.options.unparsed.clone().filter(|_| state.invalid);
-    cx.core.escape_to_list = state.completions.open;
+    cx.core.escape_to_list = state.completions.open || list_open;
     if state.draft.is_some() || (decl.options.clear_on_escape && !out.layout.full.is_empty()) {
         keys::hold_escape(&ctx, id);
     }
@@ -466,6 +474,16 @@ pub(crate) fn run<C: Component>(
 }
 
 impl<C: Component> Cx<'_, C> {
+    /// Changes the text part's draft in the next pass: `Some(text)` puts `text` in as a change of the typing run (one
+    /// that begins the run when none is under way), the caret at its end; `None` ends the run with the text from
+    /// before it, without the run's Escape reaching the host. A combo box's keys in its open list put the active
+    /// option's text in, and its list's Escape puts the typed text back.
+    pub fn set_draft(&mut self, text: Option<String>) {
+        self.core.memory.shown::<TextState>(state_id(self.core.id)).change =
+            Some(text.map_or(adapter::DraftChange::Revert, adapter::DraftChange::Text));
+        crate::runtime::egui::repaint::request(&self.core.ctx);
+    }
+
     /// Accepts candidate `at` of the text part's completion list in the next pass: a click on a row of the list.
     #[doc(hidden)]
     pub fn pick_completion(&mut self, at: usize) {
