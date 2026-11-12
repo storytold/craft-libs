@@ -144,11 +144,12 @@ pub(crate) fn apply_values<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) -> Va
     ValueEdit { key, given, written, shown }
 }
 
-/// The rerun an edit asks for, so every value shown is current in the frame it changes: a given value that changed
-/// (the framework cannot see who read it); a written value another component read earlier in the pass, in a real or a
-/// measuring run; or a shown value whose size the earlier measures of this component took from the old value. A leaf
-/// measures itself again at each room and proposal it was measured at and asks only when a size differs; a body,
-/// whose measure runs its content, asks when any measuring run read the value.
+/// The rerun an edit asks for, so every value shown is current in the frame it changes: a written value another
+/// component read earlier in the pass, in a real or a measuring run; or a shown value whose size the earlier measures
+/// of this component took from the old value. A leaf measures itself again at each room and proposal it was measured
+/// at and asks only when a size differs; a body, whose measure runs its content, asks when any measuring run read the
+/// value. A given value has no read record, so its edit asks for no rerun: the component shows the edit itself, and
+/// the app's other views of the value show it in the next frame, which the edit requests.
 pub(crate) fn rerun_after_edit(
     p: &mut dyn ErasedPass<'_>,
     style: &dyn StyleView,
@@ -158,8 +159,9 @@ pub(crate) fn rerun_after_edit(
     leaf: bool,
 ) {
     if edit.given {
-        crate::runtime::lazy::unsettle(&p.core_ref().ctx);
-        sizing::request_discard(&p.core_ref().ctx, sizing::Rerun::Edit);
+        let ctx = &p.core_ref().ctx;
+        crate::runtime::lazy::unsettle(ctx);
+        ctx.request_repaint();
         return;
     }
     let Some(key) = edit.key.filter(|_| edit.written || edit.shown) else { return };

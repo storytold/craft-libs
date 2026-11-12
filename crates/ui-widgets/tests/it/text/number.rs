@@ -379,3 +379,31 @@ fn the_digits_sit_on_the_field_centre_line() {
         assert!(off.abs() <= 0.5, "the digits sit {off} pt off the centre line of {field:?}");
     }
 }
+
+/// A drag on the popup slider of a field whose app applies each update, as the Layers panel's Opacity does, runs each
+/// drag frame once: an edit of a given value reruns the frame only when something read it earlier in the frame.
+#[trial]
+fn a_popup_slider_drag_on_a_given_value_runs_one_pass_a_frame() {
+    use craft_ui::contract::Role;
+    use craft_ui::testing::pointer::moved;
+    let model = std::rc::Rc::new(Cell::new(50.0));
+    let host = model.clone();
+    let mut fixture = craft_ui::testing::Fixture::new(move |ui| {
+        let out = NumberField::new("Opacity", Bind::given(Some(host.get()))).range(0.0..=100.0).popup_slider(0.0..=100.0).show(ui);
+        if let Some(value) = out.edit.events.value().copied().flatten() {
+            host.set(value);
+        }
+    });
+    fixture.settle();
+    let chevron = fixture.by_role(Role::BUTTON).first().expect("the chevron").center();
+    fixture.drag_hold_at(chevron, Vec2::new(10.0, 0.0));
+    fixture.settle();
+    let before = model.get();
+    let mut passes = Vec::new();
+    for step in 1..=6 {
+        fixture.frame(vec![moved(chevron + Vec2::new(10.0 + 5.0 * step as f32, 0.0))]);
+        passes.push(fixture.passes());
+    }
+    assert!(model.get() > before, "the drag moved the app's value");
+    assert!(passes.iter().all(|&n| n == 1), "slider drag frames ran {passes:?} passes");
+}

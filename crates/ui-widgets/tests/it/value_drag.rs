@@ -267,3 +267,27 @@ fn a_slider_draws_the_ticks_it_is_asked_for() {
     };
     assert_eq!(painted(10) - painted(0), 11, "ten intervals draw eleven ticks");
 }
+
+/// A slider drag on a value the app applies each frame runs each drag frame once.
+#[trial]
+fn a_slider_drag_on_a_given_value_runs_one_pass_a_frame() {
+    use craft_ui::contract::Role;
+    let model = Rc::new(std::cell::Cell::new(50.0));
+    let host = model.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        if let Some(value) = Slider::new(Bind::given(host.get()), 0.0..=100.0).label("Opacity").show(ui).value() {
+            host.set(*value);
+        }
+    });
+    fixture.settle();
+    let thumb = fixture.by_role(Role::SLIDER).first().expect("the slider").center();
+    fixture.frame(vec![pointer::moved(thumb)]);
+    fixture.frame(vec![pointer::press(thumb)]);
+    let mut passes = Vec::new();
+    for step in 1..=6 {
+        fixture.frame(vec![pointer::moved(thumb + Vec2::new(5.0 * step as f32, 0.0))]);
+        passes.push(fixture.passes());
+    }
+    assert!(model.get() > 50.0, "the drag moved the app's value");
+    assert!(passes.iter().all(|&n| n == 1), "slider drag frames ran {passes:?} passes");
+}
