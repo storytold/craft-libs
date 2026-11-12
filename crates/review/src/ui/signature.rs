@@ -94,7 +94,7 @@ pub fn paint_signature(ctx: &egui::Context, draw: &Draw<'_>, rect: Rect, signatu
             |dot| draw.data_fill(&PaintShape::Circle(dot, 1.0), color),
             |line| draw.stroke(&PaintShape::Path(line), StrokeWidth::Medium, color),
         ),
-        SavedSignature::Typed(label) => paint_typed(draw, rect, label, color),
+        SavedSignature::Typed(label) => paint_typed(ctx, draw, rect, label, color),
         SavedSignature::Image(image) => paint_image(ctx, draw, rect, image),
     }
 }
@@ -133,12 +133,19 @@ fn paint_strokes(rect: Rect, strokes: &[Vec<[f32; 2]>], fit: bool, dot: impl Fn(
 }
 
 /// `label` in the proportional face, as large as fits `rect`, centred.
-fn paint_typed(draw: &Draw<'_>, rect: Rect, label: &str, color: DataColor) {
+fn paint_typed(ctx: &egui::Context, draw: &Draw<'_>, rect: Rect, label: &str, color: DataColor) {
     if label.trim().is_empty() {
         return;
     }
-    let size = rect.height() * TYPED_HEIGHT_SHARE;
-    let room = Vec2::new(rect.width() * TYPED_WIDTH_SHARE, size);
+    let tall = rect.height() * TYPED_HEIGHT_SHARE;
+    let width = rect.width() * TYPED_WIDTH_SHARE;
+    // A name too wide at the height's size shrinks to the width, so it stays on one line.
+    let wide = DocText::new(&[DocRun::new(label.to_owned(), FontRef::proportional(), tall, color)])
+        .layout(ctx, &Env::of_root(ctx).tokens, craft_i18n::Direction::Ltr)
+        .size()
+        .x;
+    let size = if wide > width { tall * width / wide } else { tall };
+    let room = Vec2::new(width, size);
     let run = [DocRun::new(label.to_owned(), FontRef::proportional(), size, color)];
     let mut text = DocText::new(&run);
     text.align = HAlign::Center;
@@ -355,7 +362,7 @@ impl Component for DrawPad<'_> {
                     |line| draw.stroke(&PaintShape::Path(line), StrokeWidth::Medium, ink),
                 );
             }
-            PadContent::Typed(text) => paint_typed(&draw, inner, text.trim(), DataColor::new(ink.egui())),
+            PadContent::Typed(text) => paint_typed(&cx.ctx, &draw, inner, text.trim(), DataColor::new(ink.egui())),
             PadContent::Image(Some(image)) => paint_image(&cx.ctx, &draw, inner, image),
             PadContent::Image(None) => {}
         }
