@@ -10,11 +10,13 @@ file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` dow
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
 hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
 holds `upstream_revision`. `local_patches` describes each local change.
+The two changed files are `src/sweep/sweep_line.rs` and `src/topology.rs`.
 
 ## Local changes
 
 | Change | Code comment label | Touches | Tests |
 |---|---|---|---|
+| The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. | `Craft patch (exited slots)` | `src/sweep/sweep_line.rs` | None (doc comment only) |
 | `Topology` allocates one output segment for each run of coincident horizontal pieces between two points instead of one per piece, and none for a run whose winding numbers cancel. n overlapping rectangles that share their top and bottom edges give 6n - 2 output segments instead of 2n² + 2n. The contours do not change. `has_normal_contours` and `is_disjoint_tags` read the winding numbers on either side of a run, not the ones between its pieces. | `Craft patch (coincident horizontals)` | `src/topology.rs` | `topology::tests::coincident_horizontals_get_one_output_segment_per_run` |
 
 Every change here updates this table and `SOURCE.json` in the same commit.
