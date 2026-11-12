@@ -66,6 +66,7 @@ craft-media = { path = "crates/media", default-features = false }
 craft-media-testkit = { path = "crates/media-testkit" }
 craft-midi = { path = "crates/midi" }
 craft-mime = { path = "crates/mime" }
+craft-odf = { path = "crates/odf" }
 craft-prc = { path = "crates/prc" }
 craft-lottie = { path = "crates/lottie" }
 craft-menu = { path = "crates/menu" }
@@ -95,6 +96,7 @@ craft-text = { path = "crates/text" }
 craft-tga = { path = "crates/tga" }
 craft-timeline = { path = "crates/timeline" }
 craft-tiff = { path = "crates/tiff" }
+craft-metadata = { path = "crates/metadata" }
 craft-ui = { path = "crates/ui" }
 craft-update = { path = "crates/update" }
 craft-vcard = { path = "crates/vcard" }

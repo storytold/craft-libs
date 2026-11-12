@@ -4,7 +4,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::arithmetic_decoder::{ArithmeticDecoder, ArithmeticDecoderContext};
-use crate::bitmap::{BITMAP_WORDS, Bitmap, HUFFMAN_LINE_WORK, WORD_BITS, Word, decode_work};
+use crate::bitmap::{BITMAP_WORDS, Bitmap, HUFFMAN_LINE_WORK, INTEGER_WORK, WORD_BITS, Word, decode_work};
 use crate::decode::generic::{decode_bitmap_mmr, parse_adaptive_template_pixels};
 use crate::decode::text::{
     DecodeContext, ReferenceCorner, TextRegionContexts, TextRegionFlags, TextRegionHeader,
@@ -24,10 +24,14 @@ use crate::reader::Reader;
 
 const MAX_SYMBOLS: u32 = u16::MAX as u32;
 
-/// PdfCraft patch: the most symbol pixels one dictionary may decode (2^26). Symbols are
-/// decoded pixel by pixel, and up to 65535 of them of up to 65535 × 65535 each kept a fuzzed
-/// file decoding for minutes; real dictionaries hold about a million pixels.
-const MAX_DICTIONARY_PIXELS: u64 = 1 << 26;
+/// PdfCraft patch: the most symbol pixels one dictionary may decode, as many as the largest page
+/// bitmap holds (2^28, `bitmap::MAX_PIXELS`). Symbols are decoded pixel by pixel, and up to 65535
+/// of them of up to 65535 × 65535 each kept a fuzzed file decoding for minutes; each symbol now
+/// pays for its pixels out of the stream's decoding work (`bitmap::MAX_WORK`), which bounds the
+/// time, and holds them in the retained bitmaps (`room`), which bounds the memory. The bound was
+/// 2^26, a quarter of this, which a real scan passes: the soft mask of a 14,642 × 8,879 drawing
+/// with one dictionary of 7,559 symbols (#6722) needed more, and was refused.
+const MAX_DICTIONARY_PIXELS: u64 = crate::bitmap::MAX_PIXELS;
 
 /// PdfCraft patch: decoding steps that decode nothing, allowed beyond what a valid dictionary can
 /// need. A height class without a symbol and an export run of length 0 don't move their loops
@@ -101,6 +105,8 @@ pub(crate) fn decode(
             bail!(SymbolError::Invalid);
         }
         height_classes_left -= 1;
+        // PdfCraft patch: see `bitmap::INTEGER_WORK`. A class of no symbols still reads its delta.
+        *ctx.work_left = ctx.work_left.checked_sub(INTEGER_WORK).ok_or(OverflowError::DecodingWork)?;
         let height_class_delta =
             read_height_class_delta(&mut ctx)?.ok_or(SymbolError::UnexpectedOob)?;
 
@@ -133,10 +139,13 @@ pub(crate) fn decode(
                 .pixels
                 .saturating_add(u64::from(symbol_width) * u64::from(ctx.height_class_height));
             if ctx.pixels > MAX_DICTIONARY_PIXELS {
-                bail!(OverflowError::BitmapDimension);
+                bail!(OverflowError::BitmapLimit);
             }
-            // PdfCraft patch: see `bitmap::MAX_WORK`.
-            let work = decode_work(symbol_width, ctx.height_class_height);
+            // PdfCraft patch: see `bitmap::INTEGER_WORK`. Its width, and a stream can hold thousands
+            // of dictionaries of symbols of no pixels. An aggregated one reads its count, a symbol
+            // and two offsets as well.
+            let integers = if ctx.header.flags.use_refagg { 5 } else { 1 };
+            let work = decode_work(symbol_width, ctx.height_class_height).saturating_add(integers * INTEGER_WORK);
             *ctx.work_left = ctx.work_left.checked_sub(work).ok_or(OverflowError::DecodingWork)?;
             // PdfCraft patch: see `room`. Rows take a word at least, so symbols of one column
             // held 270 MiB within the pixel bound, however few the dictionary exported.
@@ -652,6 +661,17 @@ fn decode_height_class_collective_bitmap(ctx: &mut SymbolDecodeContext<'_>) -> R
 
     ctx.h_ctx.reader.align();
 
+    // PdfCraft patch: a class of no symbols has nothing to cut out, and `bitmap::decode_work` charges
+    // rows by the symbol, so decoding this would be rows for nothing: 65,535 a class, and a dictionary
+    // can hold a thousand such classes. Its bytes still have to be stepped over.
+    if ctx.symbols_decoded_count == ctx.height_class_first_symbol {
+        ctx.h_ctx
+            .reader
+            .read_bytes(bitmap_size as usize)
+            .ok_or(ParseError::UnexpectedEof)?;
+        return Ok(());
+    }
+
     let collective_bitmap = if bitmap_size == 0 {
         // Bitmap is stored uncompressed, so we basically just copy-paste
         // each byte. Rows are padded to the byte boundary.
@@ -759,6 +779,8 @@ fn export_symbols(ctx: &mut SymbolDecodeContext<'_>) -> Result<Vec<Bitmap>> {
             bail!(SymbolError::Invalid);
         }
         runs_left -= 1;
+        // PdfCraft patch: see `bitmap::INTEGER_WORK`. A run of no symbols still reads its length.
+        *ctx.work_left = ctx.work_left.checked_sub(INTEGER_WORK).ok_or(OverflowError::DecodingWork)?;
         let run_length = read_run_length()?;
 
         let end_index = index.checked_add(run_length).ok_or(OverflowError::Index)?;
