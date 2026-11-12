@@ -551,11 +551,17 @@ pub(crate) fn flow_room(ui: &Ui) -> Vec2 {
     cell.unwrap_or_else(|| open_room(ui))
 }
 
-/// The rest of `ui`'s layout (the room offered to the container, less the earlier siblings and gaps); unbounded along the axes of the scrolling body that encloses it, whose region is only
-/// as large as egui can make it.
+/// The rest of `ui`'s layout (the room offered to the container, less the earlier siblings and gaps; a whole line in a row
+/// that wraps); unbounded along the axes of the scrolling body that encloses it, whose region is only as large as egui
+/// can make it.
 fn open_room(ui: &Ui) -> Vec2 {
     let (x, y) = Env::of(ui).unbounded;
     let mut room = ui.available_size_before_wrap();
+    // In a row that wraps, a child that does not fit the rest of the line goes on the next one: its room is a line.
+    let layout = ui.layout();
+    if layout.main_wrap && layout.is_horizontal() {
+        room.x = ui.max_rect().width();
+    }
     // A body sized from its content offers its children the width it was offered, and a row body that placed its
     // block behind a lead the width of its band; either less what they took.
     let env = Env::of(ui);

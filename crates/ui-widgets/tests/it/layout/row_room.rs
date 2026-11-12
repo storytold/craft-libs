@@ -1,6 +1,6 @@
 //! The row-room rule: a container offers its children the room it was offered, and a child that fills an axis
 //! takes that room only where the container is given the axis; on an axis the container sizes from its content,
-//! the child takes its measured size.
+//! the child takes its measured size. A child of a wrapping row measures in a whole line.
 
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
@@ -40,6 +40,37 @@ fn a_row_too_wide_for_the_rest_of_a_wrapping_row_moves_to_the_next_line_whole() 
     let (lead, nested) = wrapped(width);
     assert!(nested.top() >= lead.bottom() - SLACK, "the nested row wraps below the lead: lead {lead:?}, nested {nested:?}");
     assert!(nested.right() <= width + SLACK, "the wrapped row stays in the room {width}: {nested:?}");
+}
+
+/// The rects of a wrapping row's buttons in a room `width` wide, in `direction`.
+fn wrapped_buttons(width: f32, direction: craft_i18n::Direction) -> Vec<Rect> {
+    const LABELS: [&str; 5] = ["Promote", "Delete", "Slice Options…", "Divide…", "Hide Auto Slices"];
+    let mut fixture = Fixture::new(|ui| {
+        Row::new().fill_width().wrap(true).show(ui, |ui, _| {
+            for label in LABELS {
+                Button::new(label).show(ui);
+            }
+        });
+    });
+    fixture.direction(direction).room(Vec2::new(width, ROOM.y)).settle();
+    LABELS.iter().map(|label| fixture.by_label(label).map_or(Rect::NOTHING, |target| target.rect)).collect()
+}
+
+/// A child too wide for the rest of a wrapping row's line goes on the next line at its own width, not cut to the
+/// rest, and under right-to-left every child lies at the reflection of its left-to-right place.
+#[trial]
+fn a_button_too_wide_for_the_rest_of_a_wrapping_row_wraps_whole_in_either_direction() {
+    use craft_i18n::Direction;
+    let wide = wrapped_buttons(ROOM.x, Direction::Ltr);
+    let width = wide[4].right() - 1.0;
+    let ltr = wrapped_buttons(width, Direction::Ltr);
+    assert!(ltr[4].top() >= ltr[3].bottom() - SLACK, "the last button wraps: {ltr:?}");
+    assert!((ltr[4].width() - wide[4].width()).abs() <= SLACK, "the wrapped button keeps its width: {:?}, not {:?}", wide[4], ltr[4]);
+    let rtl = wrapped_buttons(width, Direction::Rtl);
+    for (a, b) in ltr.iter().zip(&rtl) {
+        let reflected = Rect::from_min_max(egui::pos2(width - a.max.x, a.min.y), egui::pos2(width - a.min.x, a.max.y));
+        assert!((reflected.min - b.min).length() <= SLACK && (reflected.max - b.max).length() <= SLACK, "{a:?} is at {b:?} under RTL");
+    }
 }
 
 /// The rects of a side-labelled field whose row holds a text field and two buttons, in a room of `width`: the
