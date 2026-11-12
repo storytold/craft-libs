@@ -14,6 +14,7 @@
 //! - [`ale`]: Avid Log Exchange clip logs.
 //! - [`edl`]: CMX 3600 edit decision lists.
 //! - [`fcp7`] (feature `xml`): Final Cut Pro 7 XML (`xmeml`).
+//! - [`fcpxml`] (feature `xml`): FCPXML 1.9–1.11.
 //! - [`Format`], [`detect_text`], [`decode_text`]: which interchange format a document is.
 //!
 //! No file I/O: documents are text or bytes, and media references are strings. Each format module
@@ -25,6 +26,8 @@ pub mod build;
 pub mod edl;
 #[cfg(feature = "xml")]
 pub mod fcp7;
+#[cfg(feature = "xml")]
+pub mod fcpxml;
 pub mod fx;
 pub mod model;
 pub mod path;
@@ -159,6 +162,27 @@ pub struct ExportOptions<'a> {
     pub namespace: &'a str,
     /// `xmeml` version attribute (4 or 5).
     pub xmeml_version: u32,
+    pub fcpxml_version: FcpxmlVersion,
+}
+
+/// FCPXML document version to write.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum FcpxmlVersion {
+    V1_9,
+    #[default]
+    V1_10,
+    V1_11,
+}
+
+impl FcpxmlVersion {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FcpxmlVersion::V1_9 => "1.9",
+            FcpxmlVersion::V1_10 => "1.10",
+            FcpxmlVersion::V1_11 => "1.11",
+        }
+    }
 }
 
 /// Sniff which text format (EDL, xmeml, FCPXML, OTIO) a document is from its bytes, using the file

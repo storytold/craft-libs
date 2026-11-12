@@ -389,6 +389,10 @@ fn grading_keeps_its_interchange_name() {
     let (fcp7, _) = fcp7_export(&p, s, &xopts());
     assert!(fcp7.contains("<name>Lumetri Color</name>"), "{fcp7}");
     assert!(fcp7.contains("<effectcategory>Color Correction</effectcategory>"), "{fcp7}");
+    let (fcpxml, _) = export(&p, s, Format::Fcpxml, &xopts()).unwrap();
+    let fcpxml = String::from_utf8(fcpxml).unwrap();
+    assert!(fcpxml.contains("name=\"Lumetri Color\""), "{fcpxml}");
+    assert!(fcpxml.contains("uid=\"testapp.lumetri\""), "{fcpxml}");
 }
 
 #[test]
@@ -719,7 +723,9 @@ fn absurd_timebase_is_bounded() {
         );
         let (imported, _) = fcp7_import(&doc, None);
         for seq in &imported.sequences {
-            fcp7_export(&imported.project, *seq, &xopts());
+            for format in [Format::Fcp7Xml, Format::Fcpxml] {
+                export(&imported.project, *seq, format, &xopts()).unwrap_or_else(|e| panic!("{format:?}: {e}"));
+            }
         }
     }
 }
@@ -736,7 +742,9 @@ fn absurd_start_timecode_is_bounded() {
 </clipitem></track></video></media></sequence></xmeml>"#;
     let (imported, report) = fcp7_import(doc, None);
     for seq in &imported.sequences {
-        fcp7_export(&imported.project, *seq, &xopts());
+        for format in [Format::Fcp7Xml, Format::Fcpxml] {
+            export(&imported.project, *seq, format, &xopts()).unwrap_or_else(|e| panic!("{format:?}: {e}"));
+        }
         assert_eq!(imported.project.sequence(*seq).map(|s| s.start_timecode), Some(0));
     }
     assert!(report.mentions("out-of-range start timecode"), "{report}");
