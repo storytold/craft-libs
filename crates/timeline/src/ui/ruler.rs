@@ -623,7 +623,10 @@ impl Component for TimelineRuler<'_> {
             draw.stroke(&PaintShape::Path(vec![top, Pos2::new(top.x + arm, top.y)]), StrokeWidth::Medium, style.bracket);
             let tag = if bracket.audio { words.audio_tag.as_str() } else { words.video_tag.as_str() };
             let layout = draw.layout(&TextRun::new(tag).role(style.label.role).color(color), f32::INFINITY);
-            draw.galley(centre - layout.size() / 2.0, &layout);
+            // The tag sits beside its arm, kept inside the ruler: a larger text size makes it taller than the bracket.
+            let at = centre - layout.size() / 2.0;
+            let at = Pos2::new(at.x, at.y.min(rect.bottom() - layout.size().y).max(rect.top()));
+            draw.galley(at, &layout);
         }
 
         let x = axis.x_of(shown, left);
