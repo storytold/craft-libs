@@ -38,6 +38,10 @@ assert_eq!(zip.budget().used(), 4);
   charged.
 - `has_duplicate_names`: `zip` keeps one entry per name, so a central directory with more
   headers than `zip` has entries repeats a name.
+- `read_head(name, n)` reads the first `n` bytes only (a signature), charged to the total.
+- `compressed_size` with `declared_size` gives the compression ratio an entry claims, for a
+  format that limits it.
+- A clone shares the directory and the bytes and keeps its own count, for reading behind `&self`.
 - `budget_mut` is for a caller with its own charging rule (charging a failed read, say).
 - `Error::is_limit` tells a limit from a broken archive.
 
