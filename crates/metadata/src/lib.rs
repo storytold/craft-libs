@@ -12,7 +12,8 @@
 //! - Containers: [`embedded`], [`jpeg_segments`], [`png_chunks`] and [`webp_chunks`] locate the Exif,
 //!   XMP, ICC and IPTC blocks of JPEG, PNG, WebP, TIFF-based, Fujifilm RAF, Canon CR3 ([`cr3`]) and
 //!   JPEG XL ([`jxl`]) files.
-//!   [`extract`] does all of the above for a whole file.
+//!   [`extract`] does all of the above for a whole file. [`mpf`] reads and writes the Multi-Picture
+//!   index of a JPEG that carries further images, such as a gain map.
 //!
 //! HEIF, PSD and MRW files are read by their own crates. Put the blocks they return into an
 //! [`Embedded`] and call [`from_embedded`].
@@ -28,6 +29,7 @@ mod geom;
 mod gpx;
 mod iptc;
 pub mod jxl;
+pub mod mpf;
 pub mod tags;
 mod xmp;
 mod xmp_merge;
