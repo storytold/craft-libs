@@ -14,6 +14,7 @@ pub use words::ParamWords;
 mod dialog;
 mod form;
 mod host_requests;
+mod path_row;
 mod preview;
 
 pub use dialog::{
@@ -21,6 +22,7 @@ pub use dialog::{
 };
 pub use form::{FormCx, FormDialog, FormOutput};
 pub use host_requests::{HostRequests, PreviewRequest};
+pub use path_row::{PathRow, PathRowOutput, PathRowWords};
 pub use preview::{
     PaneOverlay, PreviewOutput, PreviewPane, PreviewPaneStyle, PreviewState, PreviewView, PreviewWords, PreviewZoom, PreviewZoomOutput,
 };

@@ -4,7 +4,6 @@ craft_ui::words! {
     /// The words of the parameter rows: the buttons and names a row adds beside its control. Each id is prefixed by
     /// its module. `{name}` stands for the row's label, `{row}` and `{column}` for a grid cell's place.
     pub struct ParamWords {
-        browse: "param.browse" = "Browse…";
         randomize: "param.randomize" = "Random";
         eyedropper: "param.eyedropper" = "Eyedropper";
         custom: "param.custom" = "Custom";

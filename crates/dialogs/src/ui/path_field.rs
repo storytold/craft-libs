@@ -2,12 +2,11 @@
 
 use craft_behavior::{EditEvent, Mixed};
 use craft_host::target::Caps;
-use craft_host::{PickId, PickKind, PickRequest};
+use craft_host::{PickId, PickRequest};
 use craft_ui::contract::{Bind, Held, NoValue, Outcome, Remember as _, ShowContainer as _, Validity};
-use craft_ui::layout_components::Stack;
-use craft_ui::patterns::form_dialogs::OutputPathRow;
+use craft_ui::form::Field;
+use craft_ui::patterns::form_dialogs::PathRow;
 use craft_ui::runtime::env::{Env, Label, Message};
-use craft_ui::runtime::requests::PathKind;
 use egui::{Response, Ui};
 use std::path::Path;
 
@@ -44,10 +43,10 @@ impl Outcome for PathFieldOutput {
     }
 }
 
-/// A label, a text field with the path and a Browse button in one row, over the bound path. Typing commits on Enter or
-/// focus loss; Browse queues `request` through `host.files()` and the answer fills the field on a later pass (the field
-/// matches tickets, so several fields can browse in turn). Tab order: field, then Browse. With `must_exist` set, a path
-/// that does not exist shows the not-found message under the field.
+/// A label, then the path row (a text field with the path and a Browse button) over the bound path. Typing commits on
+/// Enter or focus loss; Browse queues `request` through `host.files()` and the answer fills the field on a later pass
+/// (the field matches tickets, so several fields can browse in turn). Tab order: field, then Browse. With `must_exist`
+/// set, a path that does not exist shows the not-found message under the field.
 #[must_use = "show the field with `show`"]
 #[derive(craft_ui::contract::Pattern, craft_ui::contract::Props)]
 pub struct PathField<'a> {
@@ -70,11 +69,10 @@ impl<'a> PathField<'a> {
     pub fn show(self, ui: &mut Ui) -> PathFieldOutput {
         let PathField { label, value, request, must_exist } = self;
         let words = Env::of(ui).words::<PathFieldWords>();
-        let kind = path_kind(&request);
         let mut held = Held::new(value);
         let mut edit = None;
         let mut browsing = None;
-        let shown = Stack::new().show(ui, |ui, cx| {
+        let shown = Field::new(label.clone()).show(ui, |ui, cx| {
             let before = held.read(cx).unwrap_or_default();
             let host = cx.env.host().cloned();
             let looks = must_exist && cx.env.shell().caps.contains(Caps::FILE_SYSTEM);
@@ -89,8 +87,8 @@ impl<'a> PathField<'a> {
                 cx.memory::<Ticket>().0 = None;
                 answered = picked.first_path().map(|path| path.to_string_lossy().into_owned());
             }
-            let row = OutputPathRow::new(Bind::given(before.clone()).check(check)).label(label.clone()).kind(kind.clone()).key("path").show(ui);
-            if row.browse.is_some()
+            let row = PathRow::new(label.clone(), Bind::given(before.clone()).check(check)).show(ui);
+            if row.browse
                 && let Some(host) = &host
             {
                 let id = host.files().pick(request.clone());
@@ -120,18 +118,6 @@ impl<'a> PathField<'a> {
             }
         });
         PathFieldOutput { response: shown.output, edit, browsing }
-    }
-}
-
-/// What Browse asks the output row to pick, from the host's request.
-fn path_kind(request: &PickRequest) -> PathKind {
-    match request.kind {
-        PickKind::Folder => PathKind::Folder,
-        PickKind::Save => PathKind::SaveFile,
-        PickKind::Open | PickKind::OpenMany => {
-            let extensions: Vec<&str> = request.filters.iter().flat_map(|filter| filter.extensions.iter().map(String::as_str)).collect();
-            PathKind::open_file(&extensions)
-        }
     }
 }
 

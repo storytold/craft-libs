@@ -2,15 +2,14 @@
 //! orientation, the position, the rotation, the size, the opacity, the insets and the shadow.
 
 use super::host_requests::HostRequests;
-use crate::buttons::Button;
 use crate::choice::{Checkbox, Segmented};
 use crate::runtime::requests::{IMAGE_EXTENSIONS, PathKind, PathRequest};
 
-use crate::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, clicked};
+use crate::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
 
 use crate::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
 
-use crate::layout_components::Row;
+use super::path_row::PathRow;
 use crate::pickers::{Anchor9, ReferencePoint, Select};
 
 use crate::runtime::env::{Env, Label, UnitKind, Units};
@@ -239,14 +238,13 @@ fn rows(ui: &mut Ui, words: &WatermarkWords, units: &Units, now: &mut WatermarkS
     match now.style.clone() {
         WatermarkStyle::Graphic(path) => {
             Field::new(words.image.clone()).id_salt("image").show(ui, |ui, _| {
-                Row::new().show(ui, |ui, _| {
-                    if let Some(path) = TextField::new(words.image.clone(), Bind::given(path.clone())).id_salt("path").show(ui).value().cloned() {
-                        now.style = WatermarkStyle::Graphic(path);
-                    }
-                    if clicked(&Button::new(words.choose.clone()).id_salt("choose").show(ui)) {
-                        requests.request_path(PathRequest::new(WATERMARK_IMAGE_KEY, PathKind::open_file(&IMAGE_EXTENSIONS)));
-                    }
-                });
+                let row = PathRow::new(words.image.clone(), Bind::given(path.clone())).button(words.choose.clone()).show(ui);
+                if let Some(path) = row.edit.value().cloned() {
+                    now.style = WatermarkStyle::Graphic(path);
+                }
+                if row.browse {
+                    requests.request_path(PathRequest::new(WATERMARK_IMAGE_KEY, PathKind::open_file(&IMAGE_EXTENSIONS)));
+                }
             });
         }
         WatermarkStyle::Text(text) => {

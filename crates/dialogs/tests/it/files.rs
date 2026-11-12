@@ -1,6 +1,6 @@
 //! The file list, the path field and the picker tickets they keep, against a file service that records its requests.
 
-use craft_dialogs::ui::{FileList, FileListPicker};
+use craft_dialogs::ui::{FileList, FileListPicker, PathField};
 use craft_host::{AppInfo, FileError, Files, Host, PickAnswer, PickId, PickRequest, Picked};
 use craft_ui::contract::Bind;
 use craft_ui::testing::{Fixture, trial};
@@ -106,4 +106,35 @@ fn browse_answer_is_taken_and_written_once() {
     fixture.idle(3);
     assert_eq!(names(&list.borrow()), ["a.png", "b.png"]);
     assert_eq!(changes.get(), 1, "the answer is written to the binding once");
+}
+
+/// The path field's Browse queues a pick through the file service, and the answer lands in the field's path once.
+#[trial]
+fn path_field_browse_fills_the_path() {
+    let files = Arc::new(StubFiles::default());
+    let path = Rc::new(RefCell::new(String::new()));
+    let sets = Rc::new(Cell::new(0usize));
+    let ticket = Rc::new(Cell::new(None::<PickId>));
+    let (held, counted, issued) = (Rc::clone(&path), Rc::clone(&sets), Rc::clone(&ticket));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut path = held.borrow_mut();
+        let out = PathField::new("PDF file", Bind::bound(&mut *path), PickRequest::open("import")).show(ui);
+        if out.browsing.is_some() {
+            issued.set(out.browsing);
+        }
+        if out.edit.is_some() {
+            counted.set(counted.get() + 1);
+        }
+    });
+    fixture.host(host_with(&files));
+    fixture.settle();
+    let browse = fixture.by_label("Browse…").expect("the Browse button");
+    fixture.click(&browse);
+    fixture.settle();
+    sets.set(0);
+
+    files.answer(ticket.get().expect("Browse issued a ticket"), Picked::Paths(paths(&["brochure.pdf"])));
+    fixture.idle(3);
+    assert_eq!(*path.borrow(), "/photos/brochure.pdf");
+    assert_eq!(sets.get(), 1, "the answer lands once");
 }

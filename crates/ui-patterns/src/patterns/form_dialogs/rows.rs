@@ -4,6 +4,7 @@ use super::fields::{DialogFields, FieldValue};
 use crate::runtime::requests::{ColorRequest, EyedropperRequest, PathRequest};
 
 use super::param::{CustomContext, Param, ParamKind, fill_defaults, rounded};
+use super::path_row::PathRow;
 use super::words::ParamWords;
 use crate::buttons::{Button, ToggleButton};
 use crate::choice::{Checkbox, Radio, RadioGroup, Swatch};
@@ -546,20 +547,29 @@ impl<'p> Pass<'p> {
         let value = self.work.text(line.key).unwrap_or(default).to_owned();
         let browse = line.param.browse.clone();
         line.show(ui, |ui| {
-            beside(ui, |ui| {
-                let mut field = TextField::new(line.name.clone(), Bind::given(value.clone())).id_salt("text");
-                if let Some(hint) = line.param.hint_text() {
-                    field = field.placeholder(hint.clone());
+            let typed = match &browse {
+                Some(kind) => {
+                    let mut row = PathRow::new(line.name.clone(), Bind::given(value.clone()));
+                    if let Some(hint) = line.param.hint_text() {
+                        row = row.placeholder(hint.clone());
+                    }
+                    let shown = row.show(ui);
+                    if shown.browse {
+                        self.path = Some(PathRequest::new(line.key, kind.clone()));
+                    }
+                    shown.edit.value().cloned()
                 }
-                if let Some(v) = field.show(ui).value().cloned() {
-                    self.work.set(line.key, FieldValue::Text(v));
+                None => {
+                    let mut field = TextField::new(line.name.clone(), Bind::given(value.clone())).id_salt("text");
+                    if let Some(hint) = line.param.hint_text() {
+                        field = field.placeholder(hint.clone());
+                    }
+                    field.show(ui).value().cloned()
                 }
-                if let Some(kind) = &browse
-                    && clicked(&Button::new(self.words.browse.clone()).id_salt("browse").show(ui))
-                {
-                    self.path = Some(PathRequest::new(line.key, kind.clone()));
-                }
-            });
+            };
+            if let Some(v) = typed {
+                self.work.set(line.key, FieldValue::Text(v));
+            }
         });
     }
 
