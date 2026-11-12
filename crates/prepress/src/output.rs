@@ -480,9 +480,12 @@ mod tests {
         inks.add(spot("Rubine", Alternate::Cmyk([0.0, 1.0, 0.0, 0.0])));
         let mut planes = process_planes([0; 4], 2);
         planes.extend([vec![0, 255], vec![0, 255]]);
-        let got = page(inks, planes).composite_to(&[], &output);
+        let spots = page(inks, planes);
         let paper = page(InkSet::new(), process_planes([0; 4], 2)).composite_to(&[], &output);
-        assert_eq!(&got[..4], &paper[..4], "the paper pixel");
-        assert_ne!(&got[4..8], &paper[4..8], "the spots print: {got:?}");
+        for (name, enabled) in [("Lab", [true, true, true, true, true, false]), ("CMYK", [true, true, true, true, false, true])] {
+            let got = spots.composite_to(&enabled, &output);
+            assert_eq!(&got[..4], &paper[..4], "{name}: the paper pixel");
+            assert_ne!(&got[4..8], &paper[4..8], "the {name} spot prints independently: {got:?}");
+        }
     }
 }
