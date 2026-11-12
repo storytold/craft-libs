@@ -485,7 +485,7 @@ fn frame(imp: &mut Imp, part: &Part, ctx: &mut IdCtx, e: &El, depth: usize) -> S
     } else {
         uri.rsplit('/').next().unwrap_or("Object").to_string()
     };
-    // Keep the parts it points to so a save writes it back whole (#203). A part with relationships
+    // Keep the parts it points to so a save writes it back whole. A part with relationships
     // of its own, or an external link, can't be carried: the save then falls back to the preview.
     let parts = xmlx::rel_refs(e)
         .into_iter()
