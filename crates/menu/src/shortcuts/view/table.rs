@@ -3,16 +3,19 @@
 
 use std::borrow::Cow;
 
-use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, Flow, Insets, ItemSource, Metrics, Proposal, Selection, SelectionChange, SpanLayout};
+use craft_behavior::{
+    ColumnKey, ColumnWidth, DisplayOrder, Flow, Insets, ItemSource, Metrics, Proposal, Selection, SelectionChange, Sense, SpanLayout,
+};
 use craft_keymap::chord::Chord;
 use craft_keymap::keymap::{Binding, MAX_BINDINGS};
-use craft_ui::buttons::{Button, IconButton};
+use craft_ui::buttons::IconButton;
 use craft_ui::contract::{
     Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, ColumnSpec, Common, Component, ContainerProps, Cx, ItemOutput,
-    MeasureCx, Outcome, PaintUi, Props as _, Role, SelectMode, ShowCollection as _, Sizing, Styled as _, clicked,
+    MeasureCx, Outcome, PaintUi, Pointer as _, Props as _, Role, SelectMode, ShowCollection as _, Sizing, Styled as _, clicked,
 };
-use craft_ui::display::{Elide, Icon, Shade, Text};
+use craft_ui::display::{Elide, Icon, Kbd, Shade, Text};
 use craft_ui::primitives::{IconSpec, Span, TextRun};
+use craft_ui::style::FocusLook;
 use craft_ui::style::{ComponentStyle, Ink, Stateful, StyleCx, TextLook, TypeRole};
 use egui::{Pos2, Rect, Response, Ui, Vec2};
 
@@ -306,12 +309,12 @@ impl Component for CommandRow<'_> {
             Line::Row(line) => {
                 let mut cell = 0.0;
                 for chip in &line.chips {
-                    let width = cx.child(("chip", &chip.text), &mut Button::new(chip.text.clone()), Proposal::Ideal).x;
+                    let width = cx.child(("chip", &chip.text), &mut ChordChip::new(chip.text.clone()), Proposal::Ideal).x;
                     self.widths.insert((Shown::Chip, chip.text.clone()), width);
                     cell += width + gap;
                 }
                 if line.chips.is_empty() {
-                    cell += cx.child(("chip", "none"), &mut Button::new(self.env.words.none.as_str().to_owned()), Proposal::Ideal).x + gap;
+                    cell += cx.child(("chip", "none"), &mut ChordChip::new(self.env.words.none.as_str().to_owned()), Proposal::Ideal).x + gap;
                 }
                 for text in &line.unparsed {
                     let width = cx.child(("unparsed", text), &mut unparsed_note(text, String::new()), Proposal::Ideal).x;
@@ -453,8 +456,8 @@ impl CommandRow<'_> {
             }
             let Some(chip) = chip else { continue };
             let name = words.label_chord.fill(&[("label", &line.label), ("chord", &chip.text)]);
-            let button = Button::new(name).painted(chip.text.clone()).id_salt(("chip", line.key.as_str(), n)).enabled(editable);
-            if clicked(&ui.child(("chip", line.key.as_str(), n), rect, button)) {
+            let chip = ChordChip::new(chip.text.clone()).label(name).id_salt(("chip", line.key.as_str(), n)).enabled(editable);
+            if ui.child(("chip", line.key.as_str(), n), rect, chip).pressed {
                 act = Some(RowAct::Record(Some(n)));
             }
         }
@@ -462,8 +465,8 @@ impl CommandRow<'_> {
             let rect = band(&flow, cell, 0.0, chips_end.max(height));
             let none = words.none.as_str();
             let name = words.label_chord.fill(&[("label", &line.label), ("chord", none)]);
-            let button = Button::new(name).painted(none.to_owned()).id_salt(("chip", line.key.as_str(), 0)).enabled(editable);
-            if clicked(&ui.child(("chip", line.key.as_str(), 0), rect, button)) {
+            let chip = ChordChip::new(none.to_owned()).label(name).id_salt(("chip", line.key.as_str(), 0)).enabled(editable);
+            if ui.child(("chip", line.key.as_str(), 0), rect, chip).pressed {
                 act = Some(RowAct::Record(None));
             }
             at = chips_end.max(height) + gap;
@@ -612,4 +615,88 @@ fn stamp_of(area: &AreaId, query: &str, filter: &str) -> u64 {
     query.hash(&mut hasher);
     filter.hash(&mut hasher);
     hasher.finish()
+}
+
+/// The style of a shortcut chip: no look of its own (the keys are drawn as keycaps), the focus edge.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
+#[non_exhaustive]
+pub(crate) struct ChordChipStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+    #[style(focus)]
+    focus: FocusLook,
+}
+
+/// One shortcut of a row: its chord as keycaps, the look the framework gives a chord. A click, Enter or Space asks
+/// to record over it.
+#[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
+#[component(sample = ChordChip::sample)]
+struct ChordChip {
+    #[common]
+    common: Common,
+    chord: String,
+    pressed: bool,
+}
+
+impl ChordChip {
+    /// The chip of `chord` as written; name it with the row's label and the chord.
+    fn new(chord: String) -> Self {
+        ChordChip { common: Common::new(), chord, pressed: false }
+    }
+
+    fn sample() -> Self {
+        ChordChip::new("Ctrl+S".to_owned()).label("Save, Ctrl+S")
+    }
+
+    fn face(&self) -> Kbd {
+        Kbd::new(self.chord.clone()).keycap(true)
+    }
+}
+
+impl Component for ChordChip {
+    const ROLE: Role = Role::BUTTON;
+    const SHOWS_LABEL: bool = false;
+    const PARTS: bool = false;
+    type Style = ChordChipStyle;
+    type Output = ChipOut;
+
+    fn style(cx: &StyleCx<'_>, _: ChordChipStyleKey) -> ChordChipStyle {
+        ChordChipStyle { metrics: Metrics::new(), focus: cx.focus_look() }
+    }
+
+    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        cx.face(self.face())
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::CLICK | Sense::FOCUS
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        cx.join_roving();
+        self.pressed = cx.activation().is_some();
+    }
+
+    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        ui.child("keys", cx.rect, self.face());
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> ChipOut {
+        ChipOut { response: cx.response.clone(), pressed: self.pressed }
+    }
+}
+
+/// What a chip did this pass.
+struct ChipOut {
+    response: Response,
+    /// A click, Enter or Space asked to record over the chip.
+    pressed: bool,
+}
+
+impl Outcome for ChipOut {
+    type Value = craft_ui::contract::NoValue;
+
+    fn response(&self) -> &Response {
+        &self.response
+    }
 }
