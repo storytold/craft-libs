@@ -55,6 +55,11 @@ impl CmsConversion {
         Self { profile, perceptual, from_srgb: OnceLock::new(), from_lab: OnceLock::new(), to_srgb: OnceLock::new() }
     }
 
+    /// The printing condition's profile, the press an [`Output`](crate::Output) converts from.
+    pub fn profile(&self) -> &Profile {
+        &self.profile
+    }
+
     /// A plate-mode printing condition converting through this, for the profile bytes `icc`
     /// this was made from. ICCBased CMYK colors embedding those same bytes separate as they
     /// are.
@@ -99,15 +104,7 @@ impl CmykConversion for CmsConversion {
             return None;
         }
         // Into the Lab D50 identity profile's device values (ICC v4 Lab encoding).
-        let lab: Vec<f32> = xyz
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .flat_map(|c| {
-                let [l, a, b] = math::xyz_to_lab_f32(*c);
-                [l / 100.0, (a + 128.0) / 255.0, (b + 128.0) / 255.0]
-            })
-            .collect();
+        let lab: Vec<f32> = xyz.as_chunks::<3>().0.iter().flat_map(|c| encode_lab(math::xyz_to_lab_f32(*c))).collect();
         let t = Self::transform(&self.from_lab, Builtin::LabD50.profile(), &self.profile, false)?;
         t.convert_f32(&lab, 3, cmyk, 4, false).ok()?;
         finite01(cmyk);
@@ -132,6 +129,11 @@ impl CmykConversion for CmsConversion {
     }
 }
 
+/// CIE L\*a\*b\* as the Lab D50 identity profile's device values (ICC v4 Lab encoding).
+pub(crate) fn encode_lab([l, a, b]: [f32; 3]) -> [f32; 3] {
+    [l / 100.0, (a + 128.0) / 255.0, (b + 128.0) / 255.0]
+}
+
 /// CIE L\*a\*b\* (D50) of an sRGB color, relative colorimetric; `None` if craft-cms can't
 /// convert.
 pub(crate) fn srgb8_to_lab(rgb: [u8; 3]) -> Option<[f32; 3]> {
@@ -151,8 +153,7 @@ pub(crate) fn lab_to_srgb8(lab: &[f32], rgb: &mut [u8]) -> Option<()> {
         return None;
     }
     let t = CmsConversion::transform(&T, Builtin::LabD50.profile(), builtin::srgb(), false)?;
-    // The Lab D50 identity profile's device values (ICC v4 Lab encoding).
-    let encoded: Vec<f32> = lab.as_chunks::<3>().0.iter().flat_map(|[l, a, b]| [l / 100.0, (a + 128.0) / 255.0, (b + 128.0) / 255.0]).collect();
+    let encoded: Vec<f32> = lab.as_chunks::<3>().0.iter().flat_map(|c| encode_lab(*c)).collect();
     let mut out = vec![0.0_f32; encoded.len()];
     t.convert_f32(&encoded, 3, &mut out, 3, false).ok()?;
     for (byte, v) in rgb.iter_mut().zip(out) {

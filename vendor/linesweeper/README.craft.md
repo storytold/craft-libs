@@ -13,8 +13,11 @@ holds `upstream_revision`. `local_patches` describes each local change.
 
 ## Local changes
 
+Three files differ from the package: `src/sweep/sweep_line.rs`, `src/segments.rs` and `src/lib.rs`.
+
 | Change | Code comment label | Touches | Tests |
 |---|---|---|---|
+| The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out | `Craft patch (exited slots)` | `src/sweep/sweep_line.rs` | none |
 | `Topology::from_path`, the other `Topology` constructors that take Bézier paths, `Segments::add_bez_path` and `binary_op` skip a `ClosePath` that comes before the first point of a path instead of panicking with "Can't start a segment on a ClosePath" | `Craft patch (leading ClosePath)` | `src/segments.rs`, `src/lib.rs` | `tests::leading_close_path` |
 
 Every change here updates this table and `SOURCE.json` in the same commit.
