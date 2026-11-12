@@ -29,10 +29,10 @@ pub(super) fn map_events<T: LayerTree>(
     events: &mut Vec<LayersEvent<T::Id>>,
 ) {
     let tree = cx.tree;
-    let clicks: Vec<(LayerRowKey<T::Id>, ThumbTarget, Mods)> = list
+    let clicks: Vec<(LayerRowKey<T::Id>, ThumbTarget, Mods, u32)> = list
         .iter()
         .filter_map(|event| match event {
-            CollectionEvent::Item(key, RowEvent::ThumbClicked { target, mods, .. }) => Some((key.clone(), *target, *mods)),
+            CollectionEvent::Item(key, RowEvent::ThumbClicked { target, mods, clicks, .. }) => Some((key.clone(), *target, *mods, *clicks)),
             _ => None,
         })
         .collect();
@@ -58,7 +58,7 @@ pub(super) fn map_events<T: LayerTree>(
                 };
                 let mut part = None;
                 if let Some(row) = &row
-                    && let Some(at) = clicks.iter().enumerate().position(|(i, click)| click.0 == *row && !used[i])
+                    && let Some(at) = clicks.iter().enumerate().position(|(i, click)| click.0 == *row && click.3 < 2 && !used[i])
                 {
                     used[at] = true;
                     let info = tree.info(row.layer());
@@ -75,6 +75,8 @@ pub(super) fn map_events<T: LayerTree>(
                 }
                 events.push(LayersEvent::Select(select));
             }
+            // A double click on a thumbnail is reported once, by its own click.
+            CollectionEvent::Activate(row) if clicks.iter().any(|click| click.0 == row && click.3 == 2) => {}
             CollectionEvent::Activate(row) => {
                 let on = clicks
                     .iter()
@@ -165,12 +167,16 @@ pub(super) fn map_events<T: LayerTree>(
         }
     }
     // A thumbnail click that selected nothing new still acts.
-    for (i, (row, target, mods)) in clicks.iter().enumerate() {
-        if used[i] || activated.contains(row) {
+    for (i, (row, target, mods, count)) in clicks.iter().enumerate() {
+        if used[i] || (activated.contains(row) && *count < 2) {
             continue;
         }
         let info = tree.info(row.layer());
         let part = thumb_part(row, &info, *target);
+        if *count == 2 {
+            events.push(LayersEvent::Activate { row: row.clone(), on: ActivateOn::Thumbnail(part) });
+            continue;
+        }
         events.push(if thumb_click_replaces_select(part, *mods, &info) {
             LayersEvent::ThumbClick { layer: row.layer().clone(), part, mods: *mods }
         } else {

@@ -188,3 +188,41 @@ fn a_frames_mask_thumbnail_drags_the_mask() {
         .collect();
     assert_eq!(moves, [MaskMove::new(id, LayerPart::LayerMask, 1, false)]);
 }
+
+/// The Activate events on a thumbnail among `events`: the layer and the part.
+fn thumb_activations(events: &[LayersEvent<u32>]) -> Vec<(LayerRowKey<u32>, LayerPart)> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            LayersEvent::Activate { row, on: ActivateOn::Thumbnail(part), .. } => Some((row.clone(), *part)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A double click on a layer's thumbnail activates that thumbnail once; a single click only selects, and a double click on
+/// the name activates no thumbnail.
+#[trial]
+fn a_double_click_on_a_thumbnail_activates_it_once() {
+    let info = LayerInfo::new("Title", LayerKind::Text);
+    let (mut fixture, app) = rig(tree());
+    take(&app);
+    let row = node(&fixture, "Title").node.into();
+    let thumb = testing::thumb_rect(fixture.ctx(), row, &info, LayerPart::Pixels).expect("the layer's thumbnail").center();
+    fixture.click_at(thumb).settle();
+    let once = take(&app);
+    assert!(thumb_activations(&once).is_empty(), "one click activates nothing: {once:?}");
+    assert!(once.iter().any(|event| matches!(event, LayersEvent::Select(_))), "one click selects: {once:?}");
+    fixture.click_at(thumb).settle();
+    let twice = take(&app);
+    assert_eq!(thumb_activations(&twice), [(LayerRowKey::Layer(1), LayerPart::Pixels)], "the double click: {twice:?}");
+    assert!(
+        !twice.iter().any(|event| matches!(event, LayersEvent::Activate { on: ActivateOn::Row, .. })),
+        "the thumbnail is not also a row activation: {twice:?}"
+    );
+    let name = node(&fixture, "Smart Object").center();
+    fixture.click_at(name).settle();
+    fixture.click_at(name).settle();
+    let named = take(&app);
+    assert!(thumb_activations(&named).is_empty(), "a double click on the name is no thumbnail activation: {named:?}");
+}
