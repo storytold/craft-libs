@@ -176,6 +176,7 @@ impl<'a> PatternFillEditor<'a> {
                     .show(ui, |ui, _| {
                         NumberField::new(words.scale.clone(), Bind::given(Some(current.scale)))
                             .range(PatternFillOptions::SCALE)
+                            .unit_kind(UnitKind::Percent)
                             .codec(NumberCodec::new(units.reader(Some(UnitKind::Percent)), SCALE_DECIMALS))
                             .scrub_by_label()
                             .show(ui)
