@@ -183,6 +183,8 @@ impl Outcome for TransformFieldsOutput {
 ///   the whole row, the V skew included.
 /// - **W and H unit.** With [`size_units`](Self::size_units), a secondary click, the Menu key or Shift+F10 on W or H
 ///   opens a menu of the units; a pick is [`TransformFieldsOutput::unit_picked`].
+/// - **Panel form** (the default): the compact reference point with X and Y on one row, W, the link and H on the
+///   next, the angle, then the H and V skews on one row.
 /// - **Bar form** ([`bar`](Self::bar)): the compact reference point, then captioned fields in Photoshop's order with a
 ///   divider between the groups, the interpolation select last. [`groups`](Self::groups) narrows the strip.
 #[must_use = "show the fields with `show`"]
@@ -463,16 +465,20 @@ impl Cells<'_> {
         }
     }
 
-    /// The panel form: one field per row.
+    /// The panel form: the compact reference point with X and Y, W with the link and H, the angle, the two skews.
     fn rows(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
         let mut pass = self.pass(cx);
-        Field::new(self.words.reference.clone()).id_salt("reference").enabled(self.enabled).show(ui, |ui, _| self.reference(ui, cx, &pass, false));
-        self.field(ui, cx, &mut pass, TransformField::X);
-        self.field(ui, cx, &mut pass, TransformField::Y);
+        Row::new().id_salt("position").show(ui, |ui, _| {
+            self.reference(ui, cx, &pass, true);
+            self.field(ui, cx, &mut pass, TransformField::X);
+            self.field(ui, cx, &mut pass, TransformField::Y);
+        });
         self.size(ui, cx, &mut pass);
-        for field in [TransformField::Angle, TransformField::SkewH, TransformField::SkewV] {
-            self.field(ui, cx, &mut pass, field);
-        }
+        self.field(ui, cx, &mut pass, TransformField::Angle);
+        Row::new().id_salt("skew").show(ui, |ui, _| {
+            self.field(ui, cx, &mut pass, TransformField::SkewH);
+            self.field(ui, cx, &mut pass, TransformField::SkewV);
+        });
         *cx.memory::<Bases>() = pass.bases;
     }
 
