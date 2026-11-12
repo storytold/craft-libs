@@ -974,6 +974,9 @@ dependencies = [
 [[package]]
 name = "craft-cfb"
 version = "0.1.0"
+dependencies = [
+ "craft-media-testkit",
+]
 
 [[package]]
 name = "craft-cms"
@@ -1065,6 +1068,8 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "craft-cfb",
+ "craft-drawingml",
+ "craft-math",
  "craft-offcrypto",
  "craft-opc",
  "craft-wordmodel",
@@ -1288,6 +1293,12 @@ dependencies = [
 name = "craft-html"
 version = "0.1.0"
 dependencies = [
+ "craft-codepage",
+ "craft-flow",
+ "craft-math",
+ "craft-mime",
+ "craft-wordmodel",
+ "encoding_rs",
  "proptest",
 ]
 
@@ -1507,11 +1518,19 @@ version = "0.1.0"
 dependencies = [
  "aes",
  "base64 0.23.1",
+ "chrono",
+ "craft-flow",
+ "craft-math",
+ "craft-metafile",
+ "craft-wordmodel",
  "craft-xml",
  "craft-zip",
  "flate2",
  "getrandom 0.3.4",
  "hmac",
+ "image",
+ "js-sys",
+ "log",
  "sha1 0.11.0",
  "sha2 0.11.1",
  "thiserror 2.0.21",
@@ -1769,6 +1788,7 @@ dependencies = [
  "proptest",
  "rayon",
  "serde",
+ "sha2 0.10.9",
  "thiserror 2.0.21",
  "zune-core",
  "zune-jpeg",
@@ -1780,7 +1800,9 @@ name = "craft-rtf"
 version = "0.1.0"
 dependencies = [
  "craft-codepage",
+ "craft-mime",
  "encoding_rs",
+ "proptest",
 ]
 
 [[package]]
@@ -1887,6 +1909,7 @@ dependencies = [
  "craft-xml",
  "proptest",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2006,6 +2029,7 @@ dependencies = [
 name = "craft-webp"
 version = "0.1.0"
 dependencies = [
+ "craft-video",
  "image",
  "thiserror 2.0.21",
 ]
@@ -2033,6 +2057,7 @@ name = "craft-wordmodel"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "craft-math",
  "log",
  "proptest",
  "serde",

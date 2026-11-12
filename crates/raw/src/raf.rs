@@ -253,6 +253,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
             .map(Camera::from_ifd0)
             .unwrap_or_else(|| Camera { model: Some(camera_name(bytes)).filter(|n| !n.is_empty()), ..Default::default() }),
         cinema: Default::default(),
+        lens_metadata: Default::default(),
     };
     img.validate_for(mode)?;
     Ok(img)

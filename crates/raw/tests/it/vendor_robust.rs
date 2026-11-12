@@ -11,7 +11,9 @@ const H: u32 = 8;
 /// A CFA TIFF the way most makers lay it out: IFD0 (make) + a SubIFD holding the raw strip.
 fn cfa_tiff(make: &str, compression: u16, bits: u16, order: ByteOrder) -> Vec<u8> {
     let px = (W * H) as usize;
-    let strip: Vec<u8> = (0..px * 2).map(|i| (i * 37 % 251) as u8).collect();
+    // Sony's ARW2 (32767) packs a sample per byte
+    let len = if compression == 32767 { px } else { px * 2 };
+    let strip: Vec<u8> = (0..len).map(|i| (i * 37 % 251) as u8).collect();
     let mut raw = IfdBuilder::new();
     raw.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
     raw.set(t::IMAGE_WIDTH, Value::Long(vec![W]));
@@ -256,6 +258,9 @@ fn magic_tiff(magic: &[u8; 4], make: &str) -> Vec<u8> {
 
 fn samples() -> Vec<Vec<u8>> {
     vec![
+        cfa_tiff("SONY", 32767, 12, ByteOrder::Little),
+        cfa_tiff("SONY", 1, 14, ByteOrder::Little),
+        cfa_tiff("SONY", 32766, 14, ByteOrder::Little),
         magic_tiff(b"IIRO", "OLYMPUS IMAGING CORP."),
         raf(),
         rw2(),

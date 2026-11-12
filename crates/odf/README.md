@@ -36,6 +36,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Text documents (feature `text`)
+
+`craft_odf::text` reads and writes OpenDocument Text (`.odt`, `.ott`, `.fodt`) through the
+[craft-flow](../flow/README.md) model and a craft-wordmodel `Document`: paragraphs and headings
+with their formatting and styles, lists and outline numbering, tables, pictures, shapes, text
+boxes and groups, charts, equations (as formula objects, through craft-math's MathML), embedded
+objects, fields, notes, comments, bookmarks, indexes, forms, sections and page setup with headers
+and footers, tracked changes, metadata and settings. What a document holds that the model does not
+is kept as read and written back (`craft_wordmodel::kept`). Packages are read and written with
+this crate's `Package` and `PackageWriter`, password protection is `crypt`, flat files are `flat`.
+
 ## Limits
 
 Input is hostile. Nothing here panics on any bytes.

@@ -982,7 +982,12 @@ fn script_node(kind: ScriptKind, base: &[MNode], sub: &[MNode], sup: &[MNode], o
         braced(base, output, depth);
         return;
     }
-    braced(base, output, depth);
+    // An operator name takes its scripts directly (`\sin^{2}`): in braces it would no longer apply
+    // to what follows it when read back.
+    match base {
+        [MNode::Run(r)] if is_function_name(r) => run_node(r, output),
+        _ => braced(base, output, depth),
+    }
     if matches!(kind, ScriptKind::Sub | ScriptKind::SubSup) {
         output.push('_');
         braced(sub, output, depth);
@@ -991,6 +996,11 @@ fn script_node(kind: ScriptKind, base: &[MNode], sub: &[MNode], sup: &[MNode], o
         output.push('^');
         braced(sup, output, depth);
     }
+}
+
+/// Is `r` an operator name the writer writes as a command (`\sin`, `\log`)?
+fn is_function_name(r: &MRun) -> bool {
+    !r.nor && r.sty == Some(MSty::Plain) && r.scr == MScr::Roman && FUNCTION_NAMES.contains(&r.text.as_str())
 }
 
 fn radical_node(degree: &[MNode], degree_hidden: bool, expression: &[MNode], output: &mut String, depth: usize) {
@@ -1288,5 +1298,19 @@ mod tests {
         }
         // The writer keeps its own names.
         assert_eq!(to_latex(&parse_latex(r"\infinity")), to_latex(&parse_latex(r"\infty")));
+    }
+
+    /// An operator name with a script still applies to its argument when the LaTeX is read back.
+    #[test]
+    fn operator_names_take_their_scripts_directly() {
+        for src in [r"\sin^2\theta+\cos^2\theta=1", r"\log_2 x", r"\ln^{3}(x+1)"] {
+            let tree = parse_latex(src);
+            let tex = to_latex(&tree);
+            assert_eq!(crate::math::to_linear(&parse_latex(&tex)), crate::math::to_linear(&tree), "{src}: {tex}");
+            assert!(!tex.contains(r"{\sin }") && !tex.contains(r"{\log }"), "{tex}");
+        }
+        assert!(to_latex(&parse_latex(r"\sin^2\theta")).starts_with(r"\sin ^{2}"));
+        // Other bases keep their braces.
+        assert_eq!(to_latex(&parse_latex("x^2")), "{x}^{2}");
     }
 }
