@@ -2,7 +2,7 @@
 
 Media containers and bit-level I/O for the Craft apps: an MSB-first bit reader and writer,
 clean-room ISO BMFF (MP4), QuickTime (MOV) and Matroska (MKV, WebM) and MXF demuxers and muxers, and
-Ogg and AVI demuxers, written from the public specifications. No `unsafe`, no panics on malformed
+Ogg, AVI and MPEG-2 Systems (transport and program stream) demuxers, written from the public specifications. No `unsafe`, no panics on malformed
 input, builds for `wasm32-unknown-unknown`. Dependencies: `thiserror` (for `isobmff`), `chrono`
 (for `mxf`), `serde` (optional).
 
@@ -21,12 +21,13 @@ that codec crates use to describe a file and configure a decoder.
 | `ogg` | `craft_media::ogg` | none |
 | `avi` | `craft_media::avi` | none |
 | `mxf` | `craft_media::mxf` | `chrono` |
+| `mpegts` | `craft_media::mpegts` | none |
 | (none) | `Container`, `CodecId`, `CodecParams`, `PcmFormat`, `xiph_lace`, `ByteSource`, `ReadSeekSource` | none |
 | `serde` | `Serialize`/`Deserialize` on `Container`, `CodecId`, `CodecParams` and `PcmFormat` | `serde` |
 
 `default = ["isobmff"]`, so `bitstream` and `isobmff` build. `matroska` is opt-in: it is about as
 much code as `isobmff`, and most users of MP4/MOV (LightCraft, FigCraft, SoundCraft, EffectCraft)
-do not read Matroska. `ogg`, `avi` and `mxf` are opt-in as well. The features are independent.
+do not read Matroska. `ogg`, `avi`, `mxf` and `mpegts` are opt-in as well. The features are independent.
 
 ```toml
 craft-media = { git = "https://github.com/storytold/craft-libs", rev = "<commit>", features = ["matroska"] }
@@ -115,7 +116,7 @@ Other differences:
 - `isobmff::ByteSource`, `matroska::ByteSource` and `ogg::ByteSource` are one trait,
   `craft_media::ByteSource` (with `ReadSeekSource`, which was Matroska's). A type FilmCraft
   implements both traits for keeps one of its two impls.
-- `isobmff::Track`, `matroska::Track`, `ogg::Stream`, `avi::Stream` and `mxf::EssenceTrack` have `codec_params()`, all returning a
+- `isobmff::Track`, `matroska::Track`, `ogg::Stream`, `avi::Stream`, `mxf::EssenceTrack` and `mpegts::Stream` have `codec_params()`, all returning a
   `CodecParams` (`CodecId::Unknown` for a codec without an identifier). The MP4 one describes
   the first sample's sample description; `codec_params_for(description_index)` gives any other,
   and `has_mixed_descriptions()` says whether the samples use more than one.
@@ -492,6 +493,98 @@ Tests: hand-built files for every index path, truncation, every single-byte muta
 multi-byte damage (never a panic). `tests/oracle_avi.rs` checks ffmpeg-made files (Motion JPEG,
 H.264 with B-frames, BGR24, YUY2; PCM and MP3) against ffprobe; the ignored `opendml_file_past_1_gb`
 checks a 1.16 GB OpenDML file with `AVIX` extensions.
+## `mpegts`
+
+A clean-room MPEG-2 Systems demuxer from FilmCraft's `filmcraft-mpegts`
+(storytold/filmcraft@4bec22b): transport streams (188-byte, 192-byte BDAV / M2TS, 204-byte) and
+program streams (MPEG-1/2 PS, VOB, MOD). No GPL/LGPL code (FFmpeg, libavformat) was consulted;
+FFmpeg is a fixture generator and test oracle only. No muxer, no decoding.
+
+```rust
+use craft_media::mpegts::{Kind, open};
+
+let file = open(&bytes)?; // any ByteSource
+for s in &file.streams {
+    println!("{:?} {} {} units", s.id, s.codec.name(), s.units.len());
+}
+let v = file.find(Kind::Video, |_| true).unwrap();
+let au: Vec<u8> = file.read_unit(&bytes, v, 0)?; // the first access unit
+```
+
+- **Transport streams**: 188-byte packets, 192-byte BDAV packets (sync byte after a 4-byte
+  arrival timestamp) and 204-byte packets; the packet size is sniffed from five consecutive sync
+  bytes. Lost sync resynchronises on the next aligned run. PSI sections are reassembled across
+  packets and checked with the MPEG CRC-32; the first program of the PAT is demuxed. Continuity
+  counter errors, CRC errors and resyncs are reported as warnings.
+- **Program streams**: MPEG-2 and MPEG-1 packs, system headers, the program stream map (stream
+  types for elementary stream ids), padding, private stream 2 (DVD navigation) skipped, private
+  stream 1 split by sub-stream id. Garbage resynchronises on the next pack or PES start code.
+- **Streams**: MPEG-1/2 video, H.264, HEVC, MPEG audio, AAC (ADTS, LATM/LOAS), AC-3, E-AC-3,
+  DTS, TrueHD, Blu-ray LPCM, DVD LPCM (format from the sub-stream header), PGS / DVB / teletext
+  subtitles; ISO 639 language from the PMT.
+- **Access units**, found while the file is scanned (one pass, streaming; only a few bytes of
+  each stream are buffered):
+  - MPEG-1/2 video: a coded frame — a frame picture, or two field pictures (paired by
+    picture_structure) — with the sequence / GOP headers before it; picture type, temporal
+    reference, field structure, top_field_first, repeat_first_field, progressive_frame, closed
+    GOP / broken link. A PTS belongs to the unit whose picture start code is in that PES.
+  - H.264 / HEVC: PES packets with a timestamp (a PES without one continues the previous unit);
+    random access from IDR / IRAP NAL types; disposable when every slice is a non-reference.
+  - Audio: one frame per unit from the frame headers (sync re-hunted after garbage; a header
+    found while hunting is confirmed by the next one); a PTS belongs to the first frame starting
+    in the PES.
+  - LPCM and everything else: one PES packet per unit.
+- **Timestamps**: 33-bit PTS/DTS unwrapped across the wrap (and back, for B pictures shown
+  before a wrap that came earlier); PCR / SCR range.
+- **Reading**: a unit records only the position of its first packet and its offset in that
+  packet's payload; `read_unit` re-reads from there (the index costs a few dozen bytes per
+  unit, not per packet).
+
+`frame_bytes`, `frame_info` and `sei_has_recovery_point` are public: other containers that store
+MPEG audio or AC-3 frames in chunks that do not follow them (AVI) find the frames again with them.
+
+`Codec::codec_id()` and `Stream::codec_params()` give the crate-wide `CodecId` / `CodecParams`.
+MPEG-1 video reports `Mpeg2Video`; MPEG audio reports `Mp2` whatever its layer (the layer is in
+each frame header: `frame_info(..).variant`); ADTS and LATM AAC both report `Aac`; DTS, TrueHD and
+subtitles have no identifier (`Unknown`). The streams carry their configuration in band, so
+`extradata` is empty; DVD LPCM fills `sample_rate`, `channels` and `pcm`.
+
+Limits, each with a test: 2²³ access units per stream (the rest are not indexed, with a warning),
+128 MiB per unit read (`MAX_UNIT_BYTES`), a PES header given up after 1024 bytes, 16 stuffing bytes
+in an MPEG-1 packet header, a pack header sniffed behind at most 64 zero bytes, and E-AC-3 frames of
+at least 8 bytes.
+
+### Specifications
+
+| Document | Edition | Used for |
+|---|---|---|
+| ITU-T H.222.0 \| ISO/IEC 13818-1 | 2000 (second edition) | TS packets, adaptation fields, PCR, PSI (PAT / PMT, CRC-32 of Annex A), PES headers, PTS/DTS, program streams (pack, system header, program stream map), stream types |
+| ISO/IEC 11172-1 | 1993 | MPEG-1 system streams (pack header, PES header stuffing / STD buffer / timestamps) |
+| Blu-ray / AVCHD BDAV MPEG-2 TS layout (192-byte source packets with a 4-byte TP_extra_header; registration `HDMV`; stream types 0x80-0x92) | public descriptions | `.m2ts` / `.mts` |
+| DVD-Video private stream 1 sub-stream layout (AC-3 / DTS 0x80-0x8F with a 3-byte header, LPCM 0xA0-0xAF with a 6-byte header, sub-pictures 0x20-0x3F) | public descriptions | `.vob` |
+| ETSI EN 300 468 (descriptors 0x56, 0x59, 0x6A, 0x7A, 0x7B), ATSC A/52 Annex A (AC-3 in TS) | — | identifying private PES streams |
+| ISO/IEC 11172-3, 13818-3 (frame headers), ISO/IEC 13818-7 (ADTS), 14496-3 (LOAS), ATSC A/52 (syncinfo, E-AC-3 frmsiz) | — | audio frame lengths for splitting |
+
+### Gaps
+
+- One program per TS (the first in the PAT); no program switching, no section-based
+  metadata (SDT / EIT), no scrambled streams.
+- H.264 / HEVC access units follow PES packets: streams that put several pictures in one PES
+  packet (rare in practice; not seen in broadcast, AVCHD or FFmpeg output) would be indexed as
+  one unit.
+- DVD navigation (IFO / NAV packets), multiple VOB concatenation and angle interleaving are not
+  handled; each file opens on its own.
+
+Differences from `filmcraft-mpegts`: `ByteSource` is `craft_media::ByteSource`;
+`Error` is written by hand, without `thiserror`, and is `#[non_exhaustive]`;
+`Codec::codec_id()` and `Stream::codec_params()` are new.
+
+Tests: a small TS muxer and PS writer (every access unit reads back byte-identical with its PTS,
+key and disposable flags), 33-bit unwrap, truncation and mutation, streams of every codec filled
+with random start codes and sync words, damaged PSI sections with valid CRCs, and the frame-header
+helpers on arbitrary bytes. `tests/oracle_mpegts.rs` compares ten ffmpeg-made files (MPEG-2, H.264
+and HEVC video; MP2, ADTS and LATM AAC, AC-3, E-AC-3, Blu-ray and DVD LPCM; TS, M2TS, VOB and
+MPEG-1 system streams) with ffprobe's packets: unit counts, sizes, timestamps and key flags.
 
 ## `mxf`
 
@@ -664,7 +757,7 @@ sound.
 Always built, with no dependencies, so codec crates share them:
 
 - `Container`: the file format (`Wav`, `Aiff`, `Flac`, `Mp4`, `QuickTime`, `Matroska`, `WebM`,
-  `Ogg`, `Caf`, `Adts`, `MpegAudio`, `Ac3`, `Avi`, `Mxf`), with `name()`.
+  `Ogg`, `Caf`, `Adts`, `MpegAudio`, `Ac3`, `Avi`, `Mxf`, `MpegTs`, `MpegPs`), with `name()`.
 - `CodecId`: audio and video codecs (`Aac`, `HeAac`, `Opus`, `Eac3`, `Speex`, …, `H264`, `Hevc`,
   `Av1`, `ProRes`, `Dnxhd`, `Apv`, `Theora`, …, `Unknown`), with `name()`, `is_audio()`,
   `is_video()`.
@@ -686,7 +779,7 @@ All are `#[non_exhaustive]`: new formats and fields are minor changes.
 
 `craft_media::ByteSource` (`len`, `read_at(offset, buf)`) is what every demuxer reads from. It is
 always built, so a crate that uses only `bitstream` can name it too. `isobmff::ByteSource`,
-`matroska::ByteSource`, `ogg::ByteSource`, `avi::ByteSource` and `mxf::ByteSource` are the same trait. It is implemented for `[u8]`,
+`matroska::ByteSource`, `ogg::ByteSource`, `avi::ByteSource`, `mxf::ByteSource` and `mpegts::ByteSource` are the same trait. It is implemented for `[u8]`,
 `Vec<u8>`, `&T`, `Arc<T>`, `Box<T>` and `std::fs::File` (not on wasm). `ReadSeekSource` adapts any
 `Read + Seek`; it is `Send + Sync` when the reader is `Send`. Implement the trait once for a
 custom source (a web `Blob`, a network range reader) to use every container with it.
