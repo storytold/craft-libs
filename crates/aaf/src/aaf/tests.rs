@@ -493,3 +493,12 @@ fn sound_source_offsets_use_audio_sample_rate_on_disk() {
         .unwrap();
     assert_eq!(clip.start, craft_timeline::time::FrameRate::FPS_25.tick_of(10));
 }
+
+#[test]
+fn relative_media_locator_round_trips_escaped_characters() {
+    let mut doc = document();
+    doc.sources[0].path = Some("Audio Files/100%20 #1.wav".into());
+    let bytes = written(&doc, false);
+    let got = read_clean(&bytes);
+    assert!(got.sources.iter().any(|s| s.path.as_deref() == Some("Audio Files/100%20 #1.wav")));
+}
