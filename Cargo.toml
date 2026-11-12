@@ -55,6 +55,7 @@ craft-fig = { path = "crates/fig" }
 craft-fonts-build = { path = "crates/fonts-build" }
 craft-i18n = { path = "crates/i18n" }
 craft-idml = { path = "crates/idml" }
+craft-jmap = { path = "crates/jmap" }
 craft-jpeg = { path = "crates/jpeg" }
 craft-kiwi = { path = "crates/kiwi" }
 craft-keymap = { path = "crates/keymap" }

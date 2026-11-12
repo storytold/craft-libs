@@ -159,6 +159,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   primitives (`.abr`, `.asl`, `.aco`, `.act`, `.ase`, `.grd`, `.pat`, `.atn`, `.csh`, `.shc`) and
   the Photoshop blocks of a layered TIFF. Bounded and panic-free on hostile input. Compositing
   and the mapping onto a document stay in each app.
+- [`craft-jmap`](crates/jmap/README.md): the JMAP protocol core (RFC 8620), from MailCraft, without
+  sockets: session, requests of method calls with back-references, responses, ids, address
+  templates, credentials and the judgement of HTTP answers, over any HTTP implementation. Bounded
+  on hostile answers; what a program asks and makes of the answers stays in it.
 - [`craft-jpeg`](crates/jpeg/README.md): clean-room decoder for 12-bit and arithmetic-coded
   JPEG (T.81 SOF0/SOF1 at 12 bits, SOF9, SOF10), from PhotoCraft, and a frame probe for routing.
   Metadata stays in each app.
