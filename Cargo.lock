@@ -2027,7 +2027,9 @@ version = "0.1.0"
 dependencies = [
  "craft-cfb",
  "craft-sheet",
+ "md-5 0.10.6",
  "miniz_oxide 0.9.1",
+ "sha1 0.10.7",
  "thiserror 2.0.21",
 ]
 

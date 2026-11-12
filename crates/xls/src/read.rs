@@ -187,7 +187,38 @@ pub fn read(bytes: &[u8]) -> Result<Read, Error> {
 
 /// [`read`] with the caller's [`Limits`].
 pub fn read_with(bytes: &[u8], limits: Limits) -> Result<Read, Error> {
-    let stream = workbook_stream(bytes)?;
+    read_stream(workbook_stream(bytes)?, limits, None)
+}
+
+/// [`read_with`] for a workbook encrypted with a password (RC4 or RC4 CryptoAPI). A workbook
+/// without one reads as with [`read_with`], whatever the password.
+pub fn read_with_password(bytes: &[u8], limits: Limits, password: &str) -> Result<Read, Error> {
+    read_stream(workbook_stream(bytes)?, limits, Some(password))
+}
+
+/// Whether the bytes are a workbook encrypted with a password (its globals hold a FilePass
+/// record).
+pub fn is_encrypted(bytes: &[u8]) -> bool {
+    workbook_stream(bytes).is_ok_and(|s| crate::crypt::filepass(&s).is_some())
+}
+
+/// Decrypts an encrypted stream: with `password`, or without one with Excel's default password,
+/// as Excel opens a workbook protected only against changes.
+fn decrypt(stream: &mut [u8], password: Option<&str>) -> Result<(), Error> {
+    use crate::crypt::DecryptError;
+    match crate::crypt::decrypt(stream, password.unwrap_or(crate::crypt::DEFAULT_PASSWORD)) {
+        Ok(()) => Ok(()),
+        Err(DecryptError::WrongPassword) if password.is_none() => Err(Error::Encrypted),
+        Err(DecryptError::WrongPassword) => Err(Error::WrongPassword),
+        Err(DecryptError::Unsupported(s)) => Err(Error::UnsupportedEncryption(s)),
+        Err(DecryptError::Malformed(s)) => Err(invalid(format!("the encryption record is damaged: {s}"))),
+    }
+}
+
+fn read_stream(mut stream: Vec<u8>, limits: Limits, password: Option<&str>) -> Result<Read, Error> {
+    if crate::crypt::filepass(&stream).is_some() {
+        decrypt(&mut stream, password)?;
+    }
     let mut budget = Budget::new(limits);
     let mut report = Report::default();
     let g = globals(&stream, &mut budget, &mut report)?;
@@ -267,7 +298,8 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut Report) -> Result<Gl
         let mut c = Cursor::new(&rec.parts);
         match rec.id {
             EOF => break,
-            0x002F => return Err(Error::Encrypted),
+            // FilePass: only reached once the stream was decrypted.
+            0x002F => {}
             0x0085 => {
                 if g.sheets.len() >= MAX_SHEETS {
                     return Err(Error::TooLarge("too many sheets".into()));
