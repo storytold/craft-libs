@@ -21,8 +21,9 @@ dnx = []
 apv = ["apv-decode", "apv-encode"]
 apv-decode = ["craft-media/bitstream"]
 apv-encode = ["craft-media/bitstream"]
-# VP8 (RFC 6386): decoder.
+# VP8 (RFC 6386): decoder (`vp8`) and key-frame encoder (`vp8-encode`).
 vp8 = []
+vp8-encode = []
 # MPEG-2 video (ITU-T H.262) and MPEG-1 video (ISO/IEC 11172-2): decoder.
 mpeg2 = []
 # Apple ProRes (SMPTE RDD 36): decoder and encoder.
