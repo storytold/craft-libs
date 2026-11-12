@@ -1,0 +1,25 @@
+[package]
+name = "craft-metadata"
+description = "Photo metadata: EXIF, IPTC-IIM, XMP packets (read, write, merge) and GPX track logs, the blocks that carry them in JPEG, PNG, WebP, TIFF and CR3 files, and one model they all read into."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-tiff = { workspace = true }
+serde = { workspace = true }
+quick-xml = "0.41"
+chrono = { workspace = true }
+# JPEG XL `brob` metadata boxes
+brotli-decompressor = { version = "6", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+proptest = { workspace = true }
+serde_json = { workspace = true }
+# writes the `brob` boxes of the JPEG XL tests
+brotli = { version = "9", default-features = false, features = ["std"] }
