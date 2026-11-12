@@ -1,5 +1,6 @@
 //! The error checking tag beside a cell.
 
+use super::cell_button;
 use craft_behavior::{IconId, Metrics, Sense};
 use craft_theme::Variant;
 use craft_theme::variant::Tone;
@@ -12,7 +13,7 @@ use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::env::WordSet as _;
-use craft_ui::style::{ComponentStyle, FocusLook, IconLook, StyleCx, SurfaceKind, SurfaceLook};
+use craft_ui::style::{ComponentStyle, FocusLook, IconLook, StyleCx, SurfaceLook};
 use egui::{Rect, Response, Vec2};
 
 #[cfg(feature = "screen-testing")]
@@ -93,17 +94,11 @@ impl Component for ErrorTag<'_> {
     type Output = ErrorTagOutput;
 
     fn style(cx: &StyleCx<'_>, _: ErrorTagStyleKey) -> ErrorTagStyle {
-        let parts = cx.variant_look();
-        let mut surface = SurfaceLook::new(parts.fill.clone()).radius(parts.radius).kind(SurfaceKind::Raised).kind_down(SurfaceKind::Pressed);
-        if let Some(edge) = parts.edge {
-            surface = surface.border(edge, cx.tokens.stroke.thin);
-        }
-        let warn = cx.tone(Tone::Warn);
         ErrorTagStyle {
-            surface,
+            surface: cell_button::surface(cx),
             metrics: Metrics::new(),
             focus: cx.focus_look(),
-            glyph: IconLook::new(cx.control().icon, craft_theme::Stateful::new(warn)),
+            glyph: cell_button::glyph(cx, craft_theme::Stateful::new(cx.tone(Tone::Warn))),
             side: cx.tokens.size.icon.md,
         }
     }

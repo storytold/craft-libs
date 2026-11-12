@@ -82,7 +82,8 @@ impl StorySheet {
             ]);
         }
         StorySheet {
-            rows: LineIndex::new(&BTreeMap::new(), size.control.sm, SALES_ROWS),
+            // A spreadsheet's default row: as tall as a line of its text.
+            rows: LineIndex::new(&BTreeMap::new(), Env::of(ui).tokens.typography.body.line_height, SALES_ROWS),
             // Short columns, as a spreadsheet's: Quarter shows whole, with the start of Units and its error tag.
             columns: LineIndex::new(&BTreeMap::from([(WIDE_COLUMN, size.length.short)]), size.length.number.sm, SALES_COLUMNS),
             merges: Vec::new(),
@@ -102,7 +103,7 @@ impl StorySheet {
             .map(|row| (0..NUMBERED.1).map(|column| (format!("{}", row * 10 + column), true)).collect::<Vec<_>>())
             .collect::<Vec<_>>();
         let mut sheet = StorySheet {
-            rows: LineIndex::new(&BTreeMap::new(), size.control.sm, rows),
+            rows: LineIndex::new(&BTreeMap::new(), Env::of(ui).tokens.typography.body.line_height, rows),
             columns: LineIndex::new(&hidden, size.length.number.md, SHEET_COLUMNS),
             merges: if rows > 3 { vec![CellRange::cells(CellAt::new(2, 1), CellAt::new(3, 2))] } else { Vec::new() },
             frozen: (rows.min(1), 1),

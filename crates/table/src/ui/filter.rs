@@ -1,5 +1,6 @@
 //! The filter button in a table's header cell.
 
+use super::cell_button;
 use craft_behavior::{IconId, Intent, Metrics, Sense};
 use craft_theme::Variant;
 use craft_ui::contract::{
@@ -7,7 +8,7 @@ use craft_ui::contract::{
     WordSetCx as _,
 };
 use craft_ui::primitives::IconSpec;
-use craft_ui::style::{ComponentStyle, FocusLook, IconLook, StyleCx, SurfaceKind, SurfaceLook};
+use craft_ui::style::{ComponentStyle, FocusLook, IconLook, StyleCx, SurfaceLook};
 use egui::{Rect, Response, Vec2, pos2};
 
 #[cfg(feature = "screen-testing")]
@@ -51,8 +52,8 @@ impl Outcome for FilterButtonOutput {
     }
 }
 
-/// The style of the filter button: the raised control surface, the glyph at the control's icon side and the inset
-/// between the glyphs and the edge.
+/// The style of the filter button: the cell button's surface and glyph, and the inset between the glyphs and the
+/// edge.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[style(variants = [Variant::SECONDARY])]
 #[non_exhaustive]
@@ -73,7 +74,7 @@ pub struct FilterButtonStyle {
 /// The drop-down button of a header cell: a chevron, a funnel while the column is filtered, and beside it the sort
 /// arrow of a sorted column. A click, Enter, Space or Alt+Down on the focused button reports
 /// [`FilterButtonEvent::Open`]: the app opens its filter menu under the button. It is one Tab stop named by
-/// [`FilterButtonWords`] with the column's header text, and it measures its own size from the control's icon side.
+/// [`FilterButtonWords`] with the column's header text, and it measures its own size from the cell button's glyph.
 #[derive(Component, Props)]
 pub struct FilterButton {
     #[common]
@@ -104,16 +105,11 @@ impl Component for FilterButton {
     type Output = FilterButtonOutput;
 
     fn style(cx: &StyleCx<'_>, _: FilterButtonStyleKey) -> FilterButtonStyle {
-        let parts = cx.variant_look();
-        let mut surface = SurfaceLook::new(parts.fill.clone()).radius(parts.radius).kind(SurfaceKind::Raised).kind_down(SurfaceKind::Pressed);
-        if let Some(edge) = &parts.edge {
-            surface = surface.border(edge.clone(), cx.tokens.stroke.thin);
-        }
         FilterButtonStyle {
-            surface,
+            surface: cell_button::surface(cx),
             metrics: Metrics::new(),
             focus: cx.focus_look(),
-            glyph: IconLook::new(cx.control().icon, parts.text),
+            glyph: cell_button::glyph(cx, cx.variant_look().text),
             inset: cx.tokens.space.gap.tight,
         }
     }

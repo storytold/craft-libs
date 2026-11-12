@@ -15,6 +15,7 @@
 //! The cell-selection model ([`CellAt`], [`CellRange`], [`CellSelection`], [`CellSpace`]) is craft-behavior's,
 //! re-exported here.
 
+mod cell_button;
 pub mod chart;
 pub mod conditions;
 pub mod error_tag;
