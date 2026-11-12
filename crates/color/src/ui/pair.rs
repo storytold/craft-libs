@@ -3,10 +3,10 @@
 use craft_behavior::{EditEvents, Flow, HitLevel, HitPriority, Metrics, Mixed, NavShape, PartKey, PressPhase, Roving, Sense};
 use craft_theme::Srgba;
 use craft_ui::buttons::IconButton;
-use craft_ui::choice::{ChoiceWords, SwatchMetrics};
+use craft_ui::choice::{ChoiceWords, Swatch, SwatchMetrics, SwatchStyle};
 use craft_ui::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Outcome, Overlay, OverlayUi, Overlays as _,
-    PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
+    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Meta as _, Outcome, Overlay, OverlayUi,
+    Overlays as _, PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
 };
 use craft_ui::primitives::{DataWidth, Draw, Glyph, IconSpec, PaintShape, StrokeWidth};
 use craft_ui::runtime::commands::FireSource;
@@ -114,6 +114,8 @@ pub struct SwatchPairStyle {
     outline: f32,
     /// The light line just inside a well's edge, so any colour reads against the surface.
     mark: StyleColor,
+    /// A swatch's look, for the lines that stand out from a ring well's colour.
+    swatch: SwatchStyle,
 }
 
 /// A closure that sets up the picker of the popup.
@@ -298,6 +300,7 @@ impl Component for SwatchPair<'_> {
             edge: cx.color(colors.line.control_edge),
             outline: cx.tokens.stroke.thin,
             mark: cx.color(colors.text.normal),
+            swatch: Swatch::style(cx, Swatch::new(Label::default(), Srgba::BLACK).style_key()),
         }
     }
 
@@ -479,13 +482,18 @@ impl Component for SwatchPair<'_> {
     }
 }
 
-/// A ring well: a band of the colour round the edge, the middle open to what is behind, outlined on both sides.
+/// A ring well: a band of the colour round the edge, the middle open to what is behind. Each side of the band has the
+/// outline and, inside it, a line that stands out from the colour.
 fn paint_ring(draw: &Draw<'_>, at: Rect, color: Srgba, style: &SwatchPairStyle) {
     let band = at.width() * RING_SHARE;
+    let line = style.outline;
+    let contrast = style.swatch.inner_edge(Some(color));
     draw.stroke(&PaintShape::Rect(at, style.radius), DataWidth::points(band), DataColor::new(Color32::from(color)));
+    draw.stroke(&PaintShape::Rect(at, style.radius), StrokeWidth::Thin, contrast);
     draw.stroke(&outline(at, style), StrokeWidth::Thin, style.edge);
-    let hole = at.shrink(band - style.outline);
-    draw.stroke(&PaintShape::Rect(hole, CornerRadius::ZERO), StrokeWidth::Thin, style.edge);
+    let hole = at.shrink(band);
+    draw.stroke(&PaintShape::Rect(hole.expand(2.0 * line), CornerRadius::ZERO), StrokeWidth::Thin, contrast);
+    draw.stroke(&PaintShape::Rect(hole.expand(line), CornerRadius::ZERO), StrokeWidth::Thin, style.edge);
 }
 
 /// The outline just outside the well `at`, concentric with its corners.
