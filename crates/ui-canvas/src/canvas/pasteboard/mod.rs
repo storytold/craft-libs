@@ -9,11 +9,11 @@ use super::space::canvas_space;
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Props as _, Role};
 use crate::primitives::{PaintShape, Rule, StrokeWidth, TextRun};
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, DataColor, RuleLook, RuleWidth, StyleColor, StyleCx, TypeRole};
+use crate::style::{ComponentStyle, DataColor, RuleLook, RuleWidth, StyleColor, StyleCx, SurfaceEdge, SurfaceKind, SurfaceStyle, TypeRole};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
 use craft_behavior::{CanvasView, HitLevel, HitPriority, Metrics, PartKey, Sense};
 use craft_theme::Rgba;
-use egui::{Color32, Pos2, Rect, Response, Vec2};
+use egui::{Color32, CornerRadius, Pos2, Rect, Response, Vec2};
 
 /// A page name: `NAME.at(i)` for page `i`, in the order of the frames given.
 const NAME: PartKey = PartKey::new("name");
@@ -55,7 +55,7 @@ impl PasteboardColor {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum PageBorder {
-    /// A shadow offset down and across.
+    /// The floating surface's soft shadow, offset down; a plain offset copy of the page while the view is turned.
     #[default]
     DropShadow,
     /// A thin line round the page.
@@ -116,8 +116,10 @@ pub struct PasteboardStyle {
     metrics: Metrics,
     /// The pasteboard unless the preference sets a colour.
     fill: StyleColor,
-    /// A page's drop shadow, and how far it lies from the page.
-    shadow: StyleColor,
+    /// A page's drop shadow: the floating surface's shadow alone, blurred under a page of an unturned view.
+    shadow: SurfaceStyle,
+    /// The shadow's colour and offset, for the plain offset copy under a page of a turned view.
+    turned_shadow: StyleColor,
     shadow_offset: Vec2,
     /// A page's outline, and the edge of an artboard that is not the active one.
     outline: StyleColor,
@@ -262,13 +264,16 @@ impl Component for Pasteboard<'_> {
 
     fn style(cx: &StyleCx<'_>, _: PasteboardStyleKey) -> PasteboardStyle {
         let tokens = cx.tokens;
-        let (color, shadow) = (&tokens.color, tokens.elevation.floating);
-        let alpha = (shadow.alpha * f32::from(u8::MAX)).round().clamp(0.0, f32::from(u8::MAX)) as u8;
+        let color = &tokens.color;
+        let cast = cx.surface(SurfaceKind::Floating).shadow;
+        let (ink, offset) =
+            cast.map_or((Color32::TRANSPARENT, Vec2::ZERO), |cast| (cast.color, Vec2::new(f32::from(cast.offset[0]), f32::from(cast.offset[1]))));
         PasteboardStyle {
             metrics: Metrics::new(),
             fill: cx.color(color.surface.canvas),
-            shadow: cx.color(Rgba([0, 0, 0, alpha])),
-            shadow_offset: Vec2::new(shadow.offset[0], shadow.offset[1]),
+            shadow: SurfaceStyle { fill: Color32::TRANSPARENT, radius: CornerRadius::ZERO, edge: SurfaceEdge::None, shadow: cast },
+            turned_shadow: cx.color(Rgba(ink.to_srgba_unmultiplied())),
+            shadow_offset: offset,
             outline: cx.color(color.line.border),
             active_edge: cx.color(color.accent.solid),
             edge: tokens.stroke.thin,
@@ -355,7 +360,11 @@ impl Component for Pasteboard<'_> {
                 continue;
             }
             if self.border == PageBorder::DropShadow {
-                draw.fill(&polygon(&quad.map(|corner| corner + style.shadow_offset)), style.shadow);
+                if aligned {
+                    draw.surface_styled(bounds(&quad), &style.shadow);
+                } else {
+                    draw.fill(&polygon(&quad.map(|corner| corner + style.shadow_offset)), style.turned_shadow);
+                }
             }
             if let Some(color) = page.fill {
                 draw.data_fill(&polygon(&quad), color);
