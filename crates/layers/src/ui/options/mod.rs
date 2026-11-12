@@ -129,24 +129,130 @@ fn ridge_at(ridge: &[(f32, f32)], x: f32) -> f32 {
     before.1
 }
 
-/// The sample picture of the thumbnail sizes: a monochrome landscape of a pale sky and two ranges
-/// of hills, outlined.
+/// The meadow's grass strokes: each runs from the bottom edge up to a tip `GRASS_LEAN` to the right, `GRASS_WIDTH`
+/// wide, in fractions of the picture.
+const GRASS: u8 = 104;
+const GRASS_BLADES: usize = 16;
+const GRASS_LEAN: f32 = 0.02;
+const GRASS_WIDTH: f32 = 0.01;
+/// The daisy: its centre, and its unit (a petal's reach) as a fraction of the picture.
+const DAISY_CENTRE: (f32, f32) = (0.49, 0.57);
+const DAISY_UNIT: f32 = 0.34;
+/// Petals, in daisy units: how many, where each starts and how far it reaches from the centre, and its half width
+/// at the middle. Every third petal is the shaded one.
+const PETALS: usize = 15;
+const PETAL_START: f32 = 0.22;
+const PETAL_REACH: f32 = 0.83;
+const PETAL_HALF_WIDTH: f32 = 0.22;
+const PETAL: u8 = 238;
+const PETAL_SHADED: u8 = 213;
+/// The petal's edge, in fractions of the picture, and its grey.
+const PETAL_EDGE: f32 = 0.005;
+const PETAL_EDGE_GREY: u8 = 155;
+/// The centre disc and its darker highlight (offset toward the top left), in daisy units.
+const DISC_RADIUS: f32 = 0.27;
+const DISC: u8 = 33;
+const DISC_HIGHLIGHT: (f32, f32, f32) = (-0.065, -0.055, 0.16);
+const DISC_HIGHLIGHT_GREY: u8 = 55;
+/// The seed dots: a ring of 16 alternating between two radii (daisy units), each dot `SEED_RADIUS` of the picture.
+const SEEDS: usize = 16;
+const SEED_RINGS: (f32, f32) = (0.16, 0.21);
+const SEED_RADIUS: f32 = 0.008;
+const SEED: u8 = 119;
+/// Samples per pixel along each axis.
+const SUPERSAMPLE: usize = 2;
+
+/// The distance from `p` to the segment `a`-`b`.
+fn segment_distance(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let length = (dx * dx + dy * dy).max(f32::EPSILON);
+    let t = (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / length).clamp(0.0, 1.0);
+    ((p.0 - a.0 - t * dx).powi(2) + (p.1 - a.1 - t * dy).powi(2)).sqrt()
+}
+
+/// The grey of the daisy at `(u, v)` (fractions of the picture), or `None` off the flower. Later petals lie over
+/// earlier ones, and the disc and seeds over the petals.
+fn daisy_at(u: f32, v: f32) -> Option<f32> {
+    let (dx, dy) = ((u - DAISY_CENTRE.0) / DAISY_UNIT, (v - DAISY_CENTRE.1) / DAISY_UNIT);
+    let near = |x: f32, y: f32, radius: f32| (dx - x).powi(2) + (dy - y).powi(2) <= radius * radius;
+    for n in 0..SEEDS {
+        let theta = n as f32 * std::f32::consts::TAU / SEEDS as f32;
+        let ring = if n % 2 == 0 { SEED_RINGS.0 } else { SEED_RINGS.1 };
+        if near(theta.cos() * ring, theta.sin() * ring, SEED_RADIUS / DAISY_UNIT) {
+            return Some(f32::from(SEED));
+        }
+    }
+    if near(DISC_HIGHLIGHT.0, DISC_HIGHLIGHT.1, DISC_HIGHLIGHT.2) {
+        return Some(f32::from(DISC_HIGHLIGHT_GREY));
+    }
+    if near(0.0, 0.0, DISC_RADIUS) {
+        return Some(f32::from(DISC));
+    }
+    let edge = PETAL_EDGE / DAISY_UNIT;
+    (0..PETALS).rev().find_map(|n| {
+        let theta = (n as f32 + 0.5) * std::f32::consts::TAU / PETALS as f32;
+        let along = dx * theta.cos() + dy * theta.sin();
+        let across = (dy * theta.cos() - dx * theta.sin()).abs();
+        let t = (along - PETAL_START) / PETAL_REACH;
+        let half = PETAL_HALF_WIDTH * (std::f32::consts::PI * t.clamp(0.0, 1.0)).sin();
+        if !(0.0..=1.0).contains(&t) || across > half {
+            return None;
+        }
+        let grey = if across > half - edge {
+            PETAL_EDGE_GREY
+        } else if n % 3 == 0 {
+            PETAL_SHADED
+        } else {
+            PETAL
+        };
+        Some(f32::from(grey))
+    })
+}
+
+/// The grey of the landscape at `(u, v)`, fractions of the picture: sky, the two ranges of hills, the meadow's
+/// grass and the daisy, each over the one before.
+fn landscape_at(u: f32, v: f32) -> f32 {
+    if let Some(grey) = daisy_at(u, v) {
+        return grey;
+    }
+    let grass = (0..GRASS_BLADES).any(|n| {
+        let x = ((n * 43 + 13) % 97) as f32 / 96.0;
+        let tip = 0.78 + (n * 11 % 19) as f32 / 100.0;
+        segment_distance((u, v), (x, 1.0), ((x + GRASS_LEAN).min(1.0), tip)) <= GRASS_WIDTH / 2.0
+    });
+    if grass {
+        f32::from(GRASS)
+    } else if v >= ridge_at(&NEAR_RIDGE, u) {
+        f32::from(NEAR_HILLS)
+    } else if v >= ridge_at(&FAR_RIDGE, u) {
+        f32::from(FAR_HILLS)
+    } else {
+        SKY_TOP + v * SKY_GAIN
+    }
+}
+
+/// The sample picture of the thumbnail sizes: a monochrome landscape of a pale sky, two ranges of hills and a meadow
+/// with a daisy, outlined, each pixel the mean of `SUPERSAMPLE` x `SUPERSAMPLE` samples.
 fn sample_image() -> ColorImage {
     let mut image = ColorImage::filled([SAMPLE_SIDE, SAMPLE_SIDE], Color32::from_gray(0));
     let last = SAMPLE_SIDE - 1;
+    let step = 1.0 / (SAMPLE_SIDE * SUPERSAMPLE) as f32;
     for y in 0..SAMPLE_SIDE {
         for x in 0..SAMPLE_SIDE {
-            let (u, v) = (x as f32 / last as f32, y as f32 / last as f32);
             let grey = if x == 0 || y == 0 || x == last || y == last {
-                OUTLINE
-            } else if v >= ridge_at(&NEAR_RIDGE, u) {
-                NEAR_HILLS
-            } else if v >= ridge_at(&FAR_RIDGE, u) {
-                FAR_HILLS
+                f32::from(OUTLINE)
             } else {
-                (SKY_TOP + v * SKY_GAIN) as u8
+                let mut sum = 0.0;
+                for sy in 0..SUPERSAMPLE {
+                    for sx in 0..SUPERSAMPLE {
+                        let u = ((x * SUPERSAMPLE + sx) as f32 + 0.5) * step;
+                        let v = ((y * SUPERSAMPLE + sy) as f32 + 0.5) * step;
+                        sum += landscape_at(u, v);
+                    }
+                }
+                sum / (SUPERSAMPLE * SUPERSAMPLE) as f32
             };
-            image.pixels[y * SAMPLE_SIDE + x] = Color32::from_gray(grey);
+            image.pixels[y * SAMPLE_SIDE + x] = Color32::from_gray(grey.round() as u8);
         }
     }
     image
