@@ -185,7 +185,7 @@ impl ImageSourceData {
             let pad = TaggedBlock::default_padding(m.data.len(), 4);
             len = len.saturating_add(8 + len_field(b"LMsk")).saturating_add(m.data.len() as u64).saturating_add(pad as u64);
         }
-        len = self.global_blocks.iter().fold(len, |n, b| n.saturating_add(b.encoded_len_aligned(version, 4) as u64));
+        len = self.global_blocks.iter().fold(len, |n, b| n.saturating_add(b.encoded_len_aligned(version, 4)));
         len = len.saturating_add(self.trailing.len() as u64);
         let no_memory = || PsdError::OutOfMemory("not enough memory for the layer data");
         let mut body = Vec::new();
@@ -290,7 +290,7 @@ impl ImageSourceData {
 #[cfg(test)]
 fn padded_block(key: [u8; 4], data: Vec<u8>) -> TaggedBlock {
     let pad = (4 - data.len() % 4) % 4;
-    TaggedBlock { signature: *b"8BIM", key, data, padding: Some(vec![0; pad]) }
+    TaggedBlock { signature: *b"8BIM", key, data, padding: Some(vec![0; pad]), stored: None }
 }
 
 /// Parses a 34377 tag (image resources). Little-endian resource blocks (`MIB8`) are converted;

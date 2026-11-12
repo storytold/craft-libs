@@ -149,6 +149,63 @@ impl VersionInfo {
     }
 }
 
+/// The thumbnail resource (1036; 1033 in Photoshop 4, whose samples are BGR): a 28-byte
+/// big-endian header and the image data (Adobe's specification, "Thumbnail resource format").
+/// Photoshop writes format 1 (JFIF), 24 bits per pixel, one plane, with the long side at 160
+/// pixels or less.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Thumbnail<'a> {
+    /// 1 for JFIF (`kJpegRGB`), 0 for raw RGB (`kRawRGB`).
+    pub format: u32,
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+    /// Bits per pixel (24).
+    pub bits_per_pixel: u16,
+    /// Planes (1).
+    pub planes: u16,
+    /// The image data after the header: a JFIF stream for format 1.
+    pub data: &'a [u8],
+}
+
+impl<'a> Thumbnail<'a> {
+    /// Length of the header in front of the image data.
+    pub const HEADER_LEN: usize = 28;
+    /// Longest side Photoshop gives a thumbnail.
+    pub const MAX_SIDE: u32 = 160;
+
+    /// Reads a thumbnail resource's data. Its sizes are not checked against the image data,
+    /// which a reader decodes on its own.
+    pub fn from_bytes(data: &'a [u8]) -> Result<Self> {
+        let mut r = Reader::new(data);
+        let format = r.u32()?;
+        let (width, height) = (r.u32()?, r.u32()?);
+        // Width bytes, total size and compressed size: derived values a reader recomputes.
+        r.skip(12)?;
+        let (bits_per_pixel, planes) = (r.u16()?, r.u16()?);
+        Ok(Thumbnail { format, width, height, bits_per_pixel, planes, data: r.peek_rest() })
+    }
+
+    /// The data of a JFIF thumbnail resource for a `width`×`height` image: the header as
+    /// Photoshop writes it (width bytes padded to 4, total size, compressed size, 24 bits, one
+    /// plane), then `jfif`. An error when a size does not fit its 32-bit field.
+    pub fn jfif_bytes(width: u32, height: u32, jfif: &[u8]) -> Result<Vec<u8>> {
+        let too_big = || PsdError::LimitExceeded("thumbnail too large for its header");
+        let width_bytes = width.checked_mul(24).map(|v| v.div_ceil(32) * 4).ok_or_else(too_big)?;
+        let total = width_bytes.checked_mul(height).ok_or_else(too_big)?;
+        let compressed = u32::try_from(jfif.len()).map_err(|_| too_big())?;
+        let mut out = Vec::with_capacity(Self::HEADER_LEN + jfif.len());
+        for v in [1, width, height, width_bytes, total, compressed] {
+            out.put_u32(v);
+        }
+        out.put_u16(24);
+        out.put_u16(1);
+        out.put(jfif);
+        Ok(out)
+    }
+}
+
 /// Typed view of a known resource.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -419,6 +476,25 @@ mod tests {
         let r = ImageResource::new(ids::LAYER_SELECTION_IDS, data);
         let Some(Ok(ResourceData::LayerSelectionIds(ids))) = r.parsed() else { panic!("maximum count must parse") };
         assert_eq!(ids.len(), usize::from(u16::MAX));
+    }
+
+    #[test]
+    fn thumbnail_header_follows_the_spec_and_reads_back() {
+        let b = Thumbnail::jfif_bytes(160, 90, &[0xFF, 0xD8, 0xFF, 0xD9]).unwrap();
+        let u = |i: usize| u32::from_be_bytes(b[i..i + 4].try_into().unwrap());
+        assert_eq!((u(0), u(4), u(8), u(12), u(16), u(20)), (1, 160, 90, 480, 480 * 90, 4));
+        assert_eq!(&b[24..28], &[0, 24, 0, 1]);
+        assert_eq!(&b[28..], &[0xFF, 0xD8, 0xFF, 0xD9]);
+        // Width bytes are padded to 4: 3 px × 3 bytes = 9 → 12.
+        let odd = Thumbnail::jfif_bytes(3, 1, &[]).unwrap();
+        assert_eq!(u32::from_be_bytes(odd[12..16].try_into().unwrap()), 12);
+        let t = Thumbnail::from_bytes(&b).unwrap();
+        assert_eq!((t.format, t.width, t.height, t.bits_per_pixel, t.planes, t.data), (1, 160, 90, 24, 1, [0xFF, 0xD8, 0xFF, 0xD9].as_slice()));
+        for cut in 0..Thumbnail::HEADER_LEN {
+            assert!(Thumbnail::from_bytes(&b[..cut]).is_err());
+        }
+        assert!(Thumbnail::jfif_bytes(u32::MAX, 1, &[]).is_err());
+        assert!(Thumbnail::jfif_bytes(40_000, 40_000, &[]).is_err());
     }
 
     #[test]

@@ -5,6 +5,85 @@
 use craft_sheet::{BorderStyle, DEFAULT_PALETTE, HAlign, Pattern, Script, Underline, VAlign, builtin_format};
 use craft_xml::El;
 
+use crate::write::{flag, list, num, set};
+
+/// A value's spelling, by table: the first entry for a value is the one written.
+fn spelled<T: PartialEq + Copy>(table: &[(&'static str, T)], v: T) -> Option<&'static str> {
+    table.iter().find(|(_, t)| *t == v).map(|(n, _)| *n)
+}
+fn spelling<T: Copy>(table: &[(&str, T)], s: &str) -> Option<T> {
+    table.iter().find(|(n, _)| *n == s).map(|(_, t)| *t)
+}
+
+const UNDERLINES: &[(&str, Underline)] = &[
+    ("single", Underline::Single),
+    ("double", Underline::Double),
+    ("singleAccounting", Underline::SingleAccounting),
+    ("doubleAccounting", Underline::DoubleAccounting),
+    ("none", Underline::None),
+];
+const SCRIPTS: &[(&str, Script)] = &[("superscript", Script::Superscript), ("subscript", Script::Subscript), ("baseline", Script::Baseline)];
+const SCHEMES: &[(&str, FontScheme)] = &[("major", FontScheme::Major), ("minor", FontScheme::Minor), ("none", FontScheme::None)];
+const PATTERNS: &[(&str, Pattern)] = &[
+    ("solid", Pattern::Solid),
+    ("mediumGray", Pattern::Gray50),
+    ("darkGray", Pattern::Gray75),
+    ("lightGray", Pattern::Gray25),
+    ("gray125", Pattern::Gray125),
+    ("gray0625", Pattern::Gray0625),
+    ("darkHorizontal", Pattern::DarkHorizontal),
+    ("darkVertical", Pattern::DarkVertical),
+    ("darkDown", Pattern::DarkDown),
+    ("darkUp", Pattern::DarkUp),
+    ("darkGrid", Pattern::DarkGrid),
+    ("darkTrellis", Pattern::DarkTrellis),
+    ("lightHorizontal", Pattern::LightHorizontal),
+    ("lightVertical", Pattern::LightVertical),
+    ("lightDown", Pattern::LightDown),
+    ("lightUp", Pattern::LightUp),
+    ("lightGrid", Pattern::LightGrid),
+    ("lightTrellis", Pattern::LightTrellis),
+    ("none", Pattern::None),
+];
+const BORDER_STYLES: &[(&str, BorderStyle)] = &[
+    ("thin", BorderStyle::Thin),
+    ("medium", BorderStyle::Medium),
+    ("thick", BorderStyle::Thick),
+    ("dashed", BorderStyle::Dashed),
+    ("dotted", BorderStyle::Dotted),
+    ("double", BorderStyle::Double),
+    ("hair", BorderStyle::Hair),
+    ("mediumDashed", BorderStyle::MediumDashed),
+    ("dashDot", BorderStyle::DashDot),
+    ("mediumDashDot", BorderStyle::MediumDashDot),
+    ("dashDotDot", BorderStyle::DashDotDot),
+    ("mediumDashDotDot", BorderStyle::MediumDashDotDot),
+    ("slantDashDot", BorderStyle::SlantDashDot),
+    ("none", BorderStyle::None),
+];
+const HALIGNS: &[(&str, HAlign)] = &[
+    ("left", HAlign::Left),
+    ("center", HAlign::Center),
+    ("right", HAlign::Right),
+    ("fill", HAlign::Fill),
+    ("justify", HAlign::Justify),
+    ("centerContinuous", HAlign::CenterAcross),
+    ("distributed", HAlign::Distributed),
+    ("general", HAlign::General),
+];
+const VALIGNS: &[(&str, VAlign)] = &[
+    ("top", VAlign::Top),
+    ("center", VAlign::Center),
+    ("justify", VAlign::Justify),
+    ("distributed", VAlign::Distributed),
+    ("bottom", VAlign::Bottom),
+];
+
+/// `<name/>` for true, `<name val="0"/>` for false.
+fn bool_el(name: &str, on: bool) -> El {
+    if on { El::new(name) } else { El::new(name).with_attr("val", "0") }
+}
+
 /// Characters of a font name kept (Excel allows 31; damaged files have far more).
 const MAX_FONT_NAME_CHARS: usize = 255;
 
@@ -47,6 +126,19 @@ impl Color {
 
     /// `0xRRGGBB` for an RGB colour, or an indexed one in `palette`; `None` for automatic and
     /// theme colours. The tint is not applied.
+    /// The colour as an element named `name` (`color`, `fgColor`, `tabColor`).
+    pub fn to_el(&self, name: &str) -> El {
+        let e = El::new(name);
+        let mut e = match self.source {
+            ColorSource::Auto => e.with_attr("auto", "1"),
+            ColorSource::Rgb(v) => e.with_attr("rgb", format!("{v:08X}")),
+            ColorSource::Theme(t) => e.with_attr("theme", t),
+            ColorSource::Indexed(i) => e.with_attr("indexed", i),
+        };
+        set(&mut e, "tint", (self.tint != 0.0).then(|| num(self.tint)));
+        e
+    }
+
     pub fn rgb(&self, palette: &[u32]) -> Option<u32> {
         match self.source {
             ColorSource::Rgb(v) => Some(v & 0xFF_FFFF),
@@ -109,27 +201,59 @@ impl Font {
             shadow: flag("shadow"),
             condense: flag("condense"),
             extend: flag("extend"),
-            underline: e.child("u").map(|u| match u.attr("val").unwrap_or("single") {
-                "double" => Underline::Double,
-                "singleAccounting" => Underline::SingleAccounting,
-                "doubleAccounting" => Underline::DoubleAccounting,
-                "none" => Underline::None,
-                _ => Underline::Single,
-            }),
-            vert_align: val("vertAlign").map(|v| match v {
-                "superscript" => Script::Superscript,
-                "subscript" => Script::Subscript,
-                _ => Script::Baseline,
-            }),
+            underline: e.child("u").map(|u| spelling(UNDERLINES, u.attr("val").unwrap_or("single")).unwrap_or(Underline::Single)),
+            vert_align: val("vertAlign").map(|v| spelling(SCRIPTS, v).unwrap_or(Script::Baseline)),
             color: e.child("color").map(Color::read),
             family: e.child("family").and_then(|c| c.attr_u32("val")),
             charset: e.child("charset").and_then(|c| c.attr_u32("val")),
-            scheme: val("scheme").map(|s| match s {
-                "major" => FontScheme::Major,
-                "minor" => FontScheme::Minor,
-                _ => FontScheme::None,
-            }),
+            scheme: val("scheme").map(|s| spelling(SCHEMES, s).unwrap_or(FontScheme::None)),
         }
+    }
+
+    /// The font as `<name>`: `font` in the styles part, `rPr` in a rich-text run (`run`, which
+    /// names the typeface `rFont`).
+    pub fn to_el(&self, name: &str, run: bool) -> El {
+        let mut e = El::new(name);
+        let flags = [
+            ("b", self.bold),
+            ("i", self.italic),
+            ("strike", self.strike),
+            ("condense", self.condense),
+            ("extend", self.extend),
+            ("outline", self.outline),
+            ("shadow", self.shadow),
+        ];
+        for (n, v) in flags {
+            if let Some(v) = v {
+                e.push(bool_el(n, v));
+            }
+        }
+        let val = |n: &str, v: &str| El::new(n).with_attr("val", v);
+        if let Some(u) = self.underline {
+            e.push(if u == Underline::Single { El::new("u") } else { val("u", spelled(UNDERLINES, u).unwrap_or("none")) });
+        }
+        if let Some(v) = self.vert_align.and_then(|v| spelled(SCRIPTS, v)) {
+            e.push(val("vertAlign", v));
+        }
+        if let Some(sz) = self.size {
+            e.push(val("sz", &num(sz)));
+        }
+        if let Some(c) = &self.color {
+            e.push(c.to_el("color"));
+        }
+        if let Some(n) = &self.name {
+            e.push(val(if run { "rFont" } else { "name" }, n));
+        }
+        if let Some(f) = self.family {
+            e.push(val("family", &f.to_string()));
+        }
+        if let Some(c) = self.charset {
+            e.push(val("charset", &c.to_string()));
+        }
+        if let Some(s) = self.scheme.and_then(|s| spelled(SCHEMES, s)) {
+            e.push(val("scheme", s));
+        }
+        e
     }
 }
 
@@ -170,30 +294,6 @@ impl Default for Fill {
     }
 }
 
-fn pattern(s: &str) -> Pattern {
-    match s {
-        "solid" => Pattern::Solid,
-        "mediumGray" => Pattern::Gray50,
-        "darkGray" => Pattern::Gray75,
-        "lightGray" => Pattern::Gray25,
-        "gray125" => Pattern::Gray125,
-        "gray0625" => Pattern::Gray0625,
-        "darkHorizontal" => Pattern::DarkHorizontal,
-        "darkVertical" => Pattern::DarkVertical,
-        "darkDown" => Pattern::DarkDown,
-        "darkUp" => Pattern::DarkUp,
-        "darkGrid" => Pattern::DarkGrid,
-        "darkTrellis" => Pattern::DarkTrellis,
-        "lightHorizontal" => Pattern::LightHorizontal,
-        "lightVertical" => Pattern::LightVertical,
-        "lightDown" => Pattern::LightDown,
-        "lightUp" => Pattern::LightUp,
-        "lightGrid" => Pattern::LightGrid,
-        "lightTrellis" => Pattern::LightTrellis,
-        _ => Pattern::None,
-    }
-}
-
 impl Fill {
     pub fn read(e: &El) -> Fill {
         if let Some(g) = e.child("gradientFill") {
@@ -213,10 +313,38 @@ impl Fill {
         }
         let Some(p) = e.child("patternFill") else { return Fill::default() };
         Fill::Pattern(PatternFill {
-            pattern: p.attr("patternType").map(pattern),
+            pattern: p.attr("patternType").map(|t| spelling(PATTERNS, t).unwrap_or(Pattern::None)),
             fg: p.child("fgColor").map(Color::read),
             bg: p.child("bgColor").map(Color::read),
         })
+    }
+
+    /// `<fill>`.
+    pub fn to_el(&self) -> El {
+        let inner = match self {
+            Fill::Pattern(p) => {
+                let mut e = El::new("patternFill");
+                set(&mut e, "patternType", p.pattern.and_then(|t| spelled(PATTERNS, t)).map(str::to_string));
+                for (n, c) in [("fgColor", &p.fg), ("bgColor", &p.bg)] {
+                    if let Some(c) = c {
+                        e.push(c.to_el(n));
+                    }
+                }
+                e
+            }
+            Fill::Gradient(g) => {
+                let mut e = El::new("gradientFill");
+                set(&mut e, "type", g.path.then(|| "path".to_string()));
+                for (n, v) in [("degree", g.degree), ("left", g.left), ("right", g.right), ("top", g.top), ("bottom", g.bottom)] {
+                    set(&mut e, n, (v != 0.0).then(|| num(v)));
+                }
+                for (pos, c) in &g.stops {
+                    e.push(El::new("stop").with_attr("position", num(*pos)).with_child(c.to_el("color")));
+                }
+                e
+            }
+        };
+        El::new("fill").with_child(inner)
     }
 }
 
@@ -229,23 +357,19 @@ pub struct BorderEdge {
 
 impl BorderEdge {
     fn read(e: &El) -> BorderEdge {
-        let style = match e.attr("style").unwrap_or("none") {
-            "thin" => BorderStyle::Thin,
-            "medium" => BorderStyle::Medium,
-            "thick" => BorderStyle::Thick,
-            "dashed" => BorderStyle::Dashed,
-            "dotted" => BorderStyle::Dotted,
-            "double" => BorderStyle::Double,
-            "hair" => BorderStyle::Hair,
-            "mediumDashed" => BorderStyle::MediumDashed,
-            "dashDot" => BorderStyle::DashDot,
-            "mediumDashDot" => BorderStyle::MediumDashDot,
-            "dashDotDot" => BorderStyle::DashDotDot,
-            "mediumDashDotDot" => BorderStyle::MediumDashDotDot,
-            "slantDashDot" => BorderStyle::SlantDashDot,
-            _ => BorderStyle::None,
-        };
+        let style = e.attr("style").and_then(|s| spelling(BORDER_STYLES, s)).unwrap_or_default();
         BorderEdge { style, color: e.child("color").map(Color::read) }
+    }
+
+    fn to_el(self, name: &str) -> El {
+        let mut e = El::new(name);
+        if self.style != BorderStyle::None {
+            set(&mut e, "style", spelled(BORDER_STYLES, self.style).map(str::to_string));
+        }
+        if let Some(c) = self.color {
+            e.push(c.to_el("color"));
+        }
+        e
     }
 }
 
@@ -281,6 +405,29 @@ impl Border {
             outline: e.flag("outline", true),
         }
     }
+
+    /// `<border>`; the strict `start` and `end` are written as `left` and `right`.
+    pub fn to_el(&self) -> El {
+        let mut e = El::new("border");
+        set(&mut e, "diagonalUp", flag(self.diagonal_up));
+        set(&mut e, "diagonalDown", flag(self.diagonal_down));
+        set(&mut e, "outline", (!self.outline).then(|| "0".to_string()));
+        let edges = [
+            ("left", self.left),
+            ("right", self.right),
+            ("top", self.top),
+            ("bottom", self.bottom),
+            ("diagonal", self.diagonal),
+            ("vertical", self.vertical),
+            ("horizontal", self.horizontal),
+        ];
+        for (n, edge) in edges {
+            if let Some(edge) = edge {
+                e.push(edge.to_el(n));
+            }
+        }
+        e
+    }
 }
 
 /// `<alignment>` (18.8.1).
@@ -301,23 +448,8 @@ pub struct Alignment {
 impl Alignment {
     pub fn read(a: &El) -> Alignment {
         Alignment {
-            horizontal: a.attr("horizontal").map(|h| match h {
-                "left" => HAlign::Left,
-                "center" => HAlign::Center,
-                "right" => HAlign::Right,
-                "fill" => HAlign::Fill,
-                "justify" => HAlign::Justify,
-                "centerContinuous" => HAlign::CenterAcross,
-                "distributed" => HAlign::Distributed,
-                _ => HAlign::General,
-            }),
-            vertical: a.attr("vertical").map(|v| match v {
-                "top" => VAlign::Top,
-                "center" => VAlign::Center,
-                "justify" => VAlign::Justify,
-                "distributed" => VAlign::Distributed,
-                _ => VAlign::Bottom,
-            }),
+            horizontal: a.attr("horizontal").map(|h| spelling(HALIGNS, h).unwrap_or(HAlign::General)),
+            vertical: a.attr("vertical").map(|v| spelling(VALIGNS, v).unwrap_or(VAlign::Bottom)),
             text_rotation: a.attr_u32("textRotation"),
             wrap_text: a.flag("wrapText", false),
             shrink_to_fit: a.flag("shrinkToFit", false),
@@ -325,6 +457,20 @@ impl Alignment {
             reading_order: a.attr_u32("readingOrder"),
             justify_last_line: a.flag("justifyLastLine", false),
         }
+    }
+
+    /// `<alignment>`.
+    pub fn to_el(&self) -> El {
+        let mut e = El::new("alignment");
+        set(&mut e, "horizontal", self.horizontal.and_then(|h| spelled(HALIGNS, h)).map(str::to_string));
+        set(&mut e, "vertical", self.vertical.and_then(|v| spelled(VALIGNS, v)).map(str::to_string));
+        set(&mut e, "textRotation", self.text_rotation.map(|v| v.to_string()));
+        set(&mut e, "wrapText", flag(self.wrap_text));
+        set(&mut e, "indent", self.indent.map(|v| v.to_string()));
+        set(&mut e, "justifyLastLine", flag(self.justify_last_line));
+        set(&mut e, "shrinkToFit", flag(self.shrink_to_fit));
+        set(&mut e, "readingOrder", self.reading_order.map(|v| v.to_string()));
+        e
     }
 }
 
@@ -338,6 +484,13 @@ pub struct Protection {
 impl Protection {
     fn read(p: &El) -> Protection {
         Protection { locked: p.attr_bool("locked"), hidden: p.attr_bool("hidden") }
+    }
+
+    fn to_el(self) -> El {
+        let mut e = El::new("protection");
+        set(&mut e, "locked", self.locked.map(|v| u8::from(v).to_string()));
+        set(&mut e, "hidden", self.hidden.map(|v| u8::from(v).to_string()));
+        e
     }
 }
 
@@ -373,6 +526,28 @@ impl Xf {
             el: xf.clone(),
         }
     }
+
+    /// `<xf>`: the typed fields, then the rest of [`Xf::el`] (its `apply*` flags and
+    /// extensions) as written.
+    pub fn to_el(&self) -> El {
+        const TYPED: &[&str] = &["numFmtId", "fontId", "fillId", "borderId", "xfId", "quotePrefix"];
+        let mut e = El::new("xf")
+            .with_attr("numFmtId", self.num_fmt_id)
+            .with_attr("fontId", self.font_id)
+            .with_attr("fillId", self.fill_id)
+            .with_attr("borderId", self.border_id);
+        set(&mut e, "xfId", self.xf_id.map(|v| v.to_string()));
+        set(&mut e, "quotePrefix", flag(self.quote_prefix));
+        e.attrs.extend(self.el.attrs.iter().filter(|(k, _)| !TYPED.contains(&k.as_str())).cloned());
+        if let Some(a) = &self.alignment {
+            e.push(a.to_el());
+        }
+        if let Some(p) = self.protection {
+            e.push(p.to_el());
+        }
+        e.children.extend(self.el.elements().filter(|c| c.name != "alignment" && c.name != "protection").cloned().map(craft_xml::Node::El));
+        e
+    }
 }
 
 /// A named cell style (`<cellStyle>`, 18.8.7).
@@ -382,6 +557,8 @@ pub struct CellStyle {
     /// Index into [`Styles::cell_style_xfs`].
     pub xf_id: u32,
     pub builtin_id: Option<u32>,
+    /// `iLevel`: the outline level of a `RowLevel_n` or `ColLevel_n` style.
+    pub level: Option<u32>,
     pub hidden: bool,
     pub custom_builtin: bool,
 }
@@ -414,6 +591,33 @@ impl Dxf {
             alignment: x.child("alignment").map(Alignment::read),
             protection: x.child("protection").map(Protection::read),
         }
+    }
+
+    /// `<dxf>`.
+    pub fn to_el(&self) -> El {
+        let mut e = El::new("dxf");
+        if let Some(f) = &self.font {
+            e.push(f.to_el("font", false));
+        }
+        if let Some(n) = &self.num_fmt {
+            let mut f = El::new("numFmt");
+            set(&mut f, "numFmtId", n.id.map(|v| v.to_string()));
+            set(&mut f, "formatCode", n.code.clone());
+            e.push(f);
+        }
+        if let Some(f) = &self.fill {
+            e.push(f.to_el());
+        }
+        if let Some(a) = &self.alignment {
+            e.push(a.to_el());
+        }
+        if let Some(p) = self.protection {
+            e.push(p.to_el());
+        }
+        if let Some(b) = &self.border {
+            e.push(b.to_el());
+        }
+        e
     }
 }
 
@@ -457,6 +661,7 @@ impl Styles {
                     name: c.attr("name").unwrap_or_default().to_string(),
                     xf_id: c.attr_u32("xfId").unwrap_or(0),
                     builtin_id: c.attr_u32("builtinId"),
+                    level: c.attr_u32("iLevel"),
                     hidden: c.flag("hidden", false),
                     custom_builtin: c.flag("customBuiltin", false),
                 })
@@ -475,6 +680,52 @@ impl Styles {
     /// The indexed colour table: the file's `indexedColors`, or [`DEFAULT_PALETTE`].
     pub fn palette(&self) -> &[u32] {
         if self.indexed_colors.is_empty() { &DEFAULT_PALETTE } else { &self.indexed_colors }
+    }
+
+    /// The part, with every table regenerated from the fields above and the rest of
+    /// [`Styles::root`] (table styles, recent colours, extensions) kept in place.
+    pub fn to_xml(&self) -> Vec<u8> {
+        const ORDER: &[&str] =
+            &["numFmts", "fonts", "fills", "borders", "cellStyleXfs", "cellXfs", "cellStyles", "dxfs", "tableStyles", "colors", "extLst"];
+        let root = if self.root.name.is_empty() { El::new("styleSheet") } else { self.root.clone() };
+        let num_fmts = self.num_fmts.iter().map(|(id, code)| El::new("numFmt").with_attr("numFmtId", id).with_attr("formatCode", code)).collect();
+        let cell_styles = self
+            .cell_styles
+            .iter()
+            .map(|c| {
+                let mut e = El::new("cellStyle").with_attr("name", &c.name).with_attr("xfId", c.xf_id);
+                set(&mut e, "builtinId", c.builtin_id.map(|v| v.to_string()));
+                set(&mut e, "iLevel", c.level.map(|v| v.to_string()));
+                set(&mut e, "hidden", flag(c.hidden));
+                set(&mut e, "customBuiltin", flag(c.custom_builtin));
+                e
+            })
+            .collect();
+        let mut colors = root.child("colors").cloned().unwrap_or_else(|| El::new("colors"));
+        colors.children.retain(|n| !matches!(n, craft_xml::Node::El(c) if c.name == "indexedColors"));
+        if !self.indexed_colors.is_empty() {
+            let mut ix = El::new("indexedColors");
+            for c in &self.indexed_colors {
+                ix.push(El::new("rgbColor").with_attr("rgb", format!("FF{:06X}", c & 0xFF_FFFF)));
+            }
+            colors.children.insert(0, craft_xml::Node::El(ix));
+        }
+        let owned = vec![
+            ("numFmts", list(&root, "numFmts", num_fmts)),
+            ("fonts", list(&root, "fonts", self.fonts.iter().map(|f| f.to_el("font", false)).collect())),
+            ("fills", list(&root, "fills", self.fills.iter().map(Fill::to_el).collect())),
+            ("borders", list(&root, "borders", self.borders.iter().map(Border::to_el).collect())),
+            ("cellStyleXfs", list(&root, "cellStyleXfs", self.cell_style_xfs.iter().map(Xf::to_el).collect())),
+            ("cellXfs", list(&root, "cellXfs", self.cell_xfs.iter().map(Xf::to_el).collect())),
+            ("cellStyles", list(&root, "cellStyles", cell_styles)),
+            ("dxfs", list(&root, "dxfs", self.dxfs.iter().map(Dxf::to_el).collect())),
+            ("colors", if colors.elements().next().is_some() { Some(colors) } else { None }),
+        ];
+        let mut out = crate::write::assemble(&root, ORDER, owned);
+        crate::ns::declare(&mut out);
+        let mut w = craft_xml::Writer::document();
+        w.tree(&out);
+        w.into_bytes()
     }
 
     /// The format code of number format `id`: the file's custom format, else the built-in one.

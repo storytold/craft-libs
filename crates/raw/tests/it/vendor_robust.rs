@@ -238,8 +238,25 @@ fn raf() -> Vec<u8> {
     raf_file(W, H, 16, strip, Some(layout), b"\xff\xd8\xff\xd9")
 }
 
+/// An Olympus ORF (TIFF with an `IIRO` magic) or Panasonic RW2 (`IIU\0`), raw image in IFD0.
+fn magic_tiff(magic: &[u8; 4], make: &str) -> Vec<u8> {
+    let px = (W * H) as usize;
+    let mut ifd = IfdBuilder::new();
+    ifd.set(t::IMAGE_WIDTH, Value::Long(vec![W]));
+    ifd.set(t::IMAGE_LENGTH, Value::Long(vec![H]));
+    ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![16]));
+    ifd.set(t::COMPRESSION, Value::Short(vec![1]));
+    ifd.set(t::PHOTOMETRIC, Value::Short(vec![1]));
+    ifd.set(t::MAKE, Value::Ascii(make.into()));
+    ifd.set_image(ImageData::Strips { rows_per_strip: H, strips: vec![(0..px * 2).map(|i| (i * 13) as u8).collect()] });
+    let mut b = TiffWriter::new(ByteOrder::Little, false).write(&[ifd]).unwrap();
+    b[..4].copy_from_slice(magic);
+    b
+}
+
 fn samples() -> Vec<Vec<u8>> {
     vec![
+        magic_tiff(b"IIRO", "OLYMPUS IMAGING CORP."),
         raf(),
         rw2(),
         cr2(),

@@ -107,7 +107,8 @@ impl DateTime {
             _ => return None,
         };
         let (h, m) = match rest.split_once(':') {
-            Some((h, m)) => (num(h)?, num(m)?),
+            Some((h, m)) if m.len() == 2 => (num(h)?, num(m)?),
+            Some(_) => return None,
             None if rest.len() == 4 => (num(rest.get(..2)?)?, num(rest.get(2..)?)?),
             None => (num(rest)?, 0),
         };
@@ -159,8 +160,13 @@ impl DateTime {
                 None => (t, None),
             };
             let mut cp = clock.split(':');
-            dt.hour = num(cp.next()?)?.try_into().ok()?;
-            dt.minute = num(cp.next()?)?.try_into().ok()?;
+            let hour = cp.next()?;
+            let minute = cp.next()?;
+            if hour.len() != 2 || minute.len() != 2 {
+                return None;
+            }
+            dt.hour = num(hour)?.try_into().ok()?;
+            dt.minute = num(minute)?.try_into().ok()?;
             if let Some(sec) = cp.next() {
                 let (whole, fraction) = match sec.split_once('.') {
                     Some((whole, fraction)) => {
@@ -232,6 +238,14 @@ impl DateTime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn offset_rejects_short_minute_field() {
+        assert_eq!(DateTime::parse_offset("+08:5"), None);
+        assert_eq!(DateTime::parse_offset("+1:2"), None);
+        assert_eq!(DateTime::parse_offset("+08:05"), Some(485));
+        assert_eq!(DateTime::parse_offset("-05:30"), Some(-330));
+    }
 
     #[test]
     fn exif_forms() {
@@ -363,6 +377,13 @@ mod tests {
             "2026-01-01T12:34:56:99Z",
             "2026-01-01T12::34Z",
         ] {
+            assert!(DateTime::parse_iso(value).is_none(), "accepted malformed timestamp {value:?}");
+        }
+    }
+
+    #[test]
+    fn iso_rejects_single_digit_clock_fields() {
+        for value in ["2024-06-01T1:02:03Z", "2024-06-01T01:2:03Z"] {
             assert!(DateTime::parse_iso(value).is_none(), "accepted malformed timestamp {value:?}");
         }
     }

@@ -1,6 +1,6 @@
 //! Theme parts.
 
-use crate::color::SchemeSlot;
+use crate::color::{ColorScheme, Rgba, SchemeSlot};
 use crate::style::{ColorRef, Effects, Fill};
 use crate::theme::{FontSet, Theme, default_format};
 
@@ -28,6 +28,44 @@ fn style_fill(f: &Fill) -> Fill {
     }
 }
 
+/// The scheme's extra named colours, explicit tint rows and `computed_tints`, as an `a:ext`
+/// ([`super::EXT_EXTRA_COLORS`]) after the twelve slots: `<dc:extraColors computed="0"?>` holding
+/// `<dc:tints slot="accent1"><dc:clr val="RRGGBB"/>…</dc:tints>` per slot with a list (an empty
+/// list is an empty element) and `<dc:color name="Sand" val="RRGGBB">(<dc:tints>…</dc:tints>
+/// when it has a list)</dc:color>` per extra colour. Nothing when there is nothing to keep.
+fn extra_colors(w: &mut Writer, c: &ColorScheme) {
+    if c.extra.is_empty() && c.tints.is_empty() && c.computed_tints {
+        return;
+    }
+    w.open("a:extLst", &[]);
+    w.tag("a:ext").attr("uri", super::EXT_EXTRA_COLORS).open();
+    w.tag("dc:extraColors").attr("xmlns:dc", super::NS_EXTRA_COLORS).attr_opt("computed", (!c.computed_tints).then_some("0")).open();
+    for (slot, tints) in &c.tints {
+        w.tag("dc:tints").attr("slot", slot.xml_name()).open();
+        rows(w, tints);
+    }
+    // What the reader takes back, no more.
+    for e in c.extra.iter().take(crate::color::MAX_EXTRA_COLORS) {
+        w.tag("dc:color").attr("name", &e.name).attr("val", e.color.hex()).open();
+        if let Some(t) = &e.tints {
+            w.open("dc:tints", &[]);
+            rows(w, t);
+        }
+        w.close();
+    }
+    w.close();
+    w.close();
+    w.close();
+}
+
+/// The rows of an open `dc:tints`, cut to `MAX_TINT_ROWS` as the reader takes them; closes it.
+fn rows(w: &mut Writer, tints: &[Rgba]) {
+    for t in tints.iter().take(crate::color::MAX_TINT_ROWS) {
+        w.tag("dc:clr").attr("val", t.hex()).empty();
+    }
+    w.close();
+}
+
 pub fn theme_xml(out: &mut dyn Sink, t: &Theme) -> Vec<u8> {
     let mut w = Writer::document();
     w.tag("a:theme").attr("xmlns:a", NS_A).attr("xmlns:r", NS_R).attr("name", if t.name.is_empty() { "Theme" } else { &t.name }).open();
@@ -39,6 +77,7 @@ pub fn theme_xml(out: &mut dyn Sink, t: &Theme) -> Vec<u8> {
         w.tag("a:srgbClr").attr("val", t.colors.get(slot).hex()).empty();
         w.close();
     }
+    extra_colors(&mut w, &t.colors);
     w.close();
     w.tag("a:fontScheme").attr("name", if t.fonts.name.is_empty() { &t.name } else { &t.fonts.name }).open();
     font_set(&mut w, "a:majorFont", &t.fonts.major);

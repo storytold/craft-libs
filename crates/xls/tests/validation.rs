@@ -5,7 +5,7 @@
 mod common;
 
 use common::*;
-use craft_xls::{CellRef, DataValidation, ErrorStyle, Range, ValidationOperator, ValidationType, Workbook};
+use craft_xls::{CellRef, DataValidation, ErrorStyle, Operator, Range, ValidationType, Workbook};
 
 /// A workbook of one worksheet, "Sheet1", holding `records`, with defined names (Lbl records,
 /// each a name and its formula) in the globals.
@@ -82,7 +82,7 @@ fn range(a1: &str) -> Range {
 }
 
 /// A rule with Excel's default flags and no messages.
-fn expected(ranges: &[&str], kind: ValidationType, operator: ValidationOperator, f1: &str, f2: Option<&str>) -> DataValidation {
+fn expected(ranges: &[&str], kind: ValidationType, operator: Operator, f1: &str, f2: Option<&str>) -> DataValidation {
     DataValidation {
         ranges: ranges.iter().map(|r| range(r)).collect(),
         kind,
@@ -111,7 +111,7 @@ const IGNORED: &str =
 
 #[test]
 fn reads_every_kind_of_rule() {
-    use ValidationOperator::*;
+    use Operator::*;
     use ValidationType::*;
     let rules = [
         // Whole number between 1 and 10, with all four messages and the stop alert.
@@ -199,15 +199,15 @@ fn reads_flags_messages_lists_and_whole_columns() {
     let (wb, report) = workbook(&[], &records);
     let got = &wb.sheets[0].validations;
     assert_eq!(got.len(), 4, "{:?}", report.warnings);
-    let mut flags_off = expected(&["O2:O6"], ValidationType::List, ValidationOperator::Between, "\"a,b\"", None);
+    let mut flags_off = expected(&["O2:O6"], ValidationType::List, Operator::Between, "\"a,b\"", None);
     (flags_off.allow_blank, flags_off.in_cell_dropdown, flags_off.show_prompt, flags_off.show_error) = (false, false, false, false);
     assert_eq!(got[0], flags_off);
-    let mut unicode = expected(&["U2:U6"], ValidationType::Whole, ValidationOperator::Equal, "3", None);
+    let mut unicode = expected(&["U2:U6"], ValidationType::Whole, Operator::Equal, "3", None);
     (unicode.prompt_title, unicode.error_title, unicode.prompt, unicode.error) =
         ("Café".into(), "Ошибка".into(), "日本語のテスト é ü".into(), "Nur 3 ✓".into());
     assert_eq!(got[1], unicode);
     // The item `say "hi"` keeps its quotes, doubled; the operator is ignored.
-    assert_eq!(got[2], expected(&["X2:X6"], ValidationType::List, ValidationOperator::Between, "\"say \"\"hi\"\",bye\"", None));
+    assert_eq!(got[2], expected(&["X2:X6"], ValidationType::List, Operator::Between, "\"say \"\"hi\"\",bye\"", None));
     assert_eq!(got[3].ranges, vec![range("V:V")]);
 }
 
