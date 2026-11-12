@@ -1,4 +1,5 @@
 mod limits;
+mod literal_roundtrips;
 mod mcc_708_timing;
 mod roundtrip;
 mod ttml_body_styles;
@@ -8,6 +9,7 @@ mod ttml_control_chars;
 mod ttml_cue_ids;
 mod ttml_language;
 mod ttml_literal_angle;
+mod ttml_literal_entities;
 mod ttml_speakers;
 mod ttml_style_namespaces;
 mod ttml_timed_span_styles;

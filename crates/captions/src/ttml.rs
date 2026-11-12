@@ -227,6 +227,12 @@ fn inline(text: &str) -> String {
         }
         let Some(ch) = rest.chars().next() else { break };
         sync(&mut out, &active, &mut emitted);
+        // a stored entity is the character it names, escaped once for XML
+        if let Some((decoded, len)) = crate::entity_at(rest) {
+            out.push_str(&esc(&decoded.to_string()));
+            rest = rest.get(len..).unwrap_or("");
+            continue;
+        }
         if ch == '\n' {
             out.push_str("<br/>");
         } else {
@@ -703,10 +709,6 @@ impl Out {
             self.tags.push(t);
         }
     }
-
-    fn push_text(&mut self, ch: char) {
-        self.s.push(ch);
-    }
 }
 
 /// Collect a `<p>`'s (or `<span>`'s) text with `<i>`/`<b>`/`<u>` tags, collapsing whitespace.
@@ -727,13 +729,21 @@ fn collect<'a>(n: &'a El, styles: &HashMap<String, FmtSpec>, fmt: Fmt, out: &mut
     while let Some((node, fmt)) = pending.pop() {
         match node {
             Node::Text(text) | Node::CData(text) => {
-                for ch in text.chars() {
+                for (i, ch) in text.char_indices() {
                     if is_xml_space(ch) {
                         out.pending.get_or_insert(fmt);
                     } else {
                         out.flush();
                         out.set_fmt(fmt);
-                        out.push_text(ch);
+                        // Cue text carries its own `<i>`/`<b>`/`<u>` tags, so a literal `<` is kept
+                        // as `&lt;` (as a WebVTT import keeps its entities), and a literal `&` that
+                        // would read as an entity ("&lt;" typed as text) as `&amp;`; plain text and
+                        // the writers decode them. Any other `&`, and a `>`, stay as they are.
+                        match ch {
+                            '<' => out.s.push_str("&lt;"),
+                            '&' if crate::entity_at(text.get(i..).unwrap_or("")).is_some() => out.s.push_str("&amp;"),
+                            _ => out.s.push(ch),
+                        }
                         out.has_text = true;
                     }
                 }
