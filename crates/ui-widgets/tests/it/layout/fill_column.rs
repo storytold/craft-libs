@@ -188,3 +188,24 @@ fn a_column_holding_a_fill_width_list_measures_as_often_as_one_holding_a_stack()
     assert!(list <= stack, "the list's column measures no more than the stack's: {list} vs {stack}");
     assert!(list_settled.is_empty() && stack_settled.is_empty(), "a settled frame measures nothing: {list_settled:?} {stack_settled:?}");
 }
+
+/// A content-sized stack shown at a rect is given that rect's width: a fill-width list and a fill-width stack in it
+/// take the width, as they do in a column that fills (a split view's pane).
+#[trial]
+fn a_stack_shown_at_a_rect_gives_its_fill_children_the_rect_width() {
+    let (list, stack, wide) = (Cell::new(0.0), Cell::new(0.0), Cell::new(0.0));
+    Frames::new().idle(4, |ui| {
+        let rect = egui::Rect::from_min_size(ui.available_rect_before_wrap().min, egui::vec2(600.0, 300.0));
+        wide.set(rect.width());
+        Stack::new().id_salt("pane").show_at(ui, rect, |ui, _| {
+            let keys = [0_usize, 1];
+            let source = keyed(&keys, |key: &usize| *key);
+            let rows = List::new("Rows").sizing(Sizing::FillWidth).natural_height(true);
+            list.set(rows.show_items(ui, &source, &mut |key, _| ListRow::new(ROWS[*key])).response.rect.width());
+            let shown = Stack::new().fill_width().id_salt("rows").show(ui, |ui, _| _ = Text::new("Caption").show(ui));
+            stack.set(shown.output.rect.width());
+        });
+    });
+    assert!((list.get() - wide.get()).abs() <= SNAP, "the list takes the rect's width: {} vs {}", list.get(), wide.get());
+    assert!((stack.get() - wide.get()).abs() <= SNAP, "the stack takes the rect's width: {} vs {}", stack.get(), wide.get());
+}

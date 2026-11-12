@@ -699,12 +699,11 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         if real {
             crate::runtime::focus::begin_body(&ctx);
         }
-        // A held fill-width container is part of the content column it sits in: its own stack is one too. A
-        // content-sized stack that passes its column's width on is a given column itself, so the width reaches down
-        // through nested stacks.
-        let (sizing, held) = (self.sizing(&props), self.held(&props, env));
-        let content_column =
-            ((sizing == Sizing::Content && !self.passes) || held || !self.wide()) && matches!(props.layout, layout::BodyLayout::Stack);
+        // A stack is a content column where its width comes from its content: a content-sized stack in flow, or a
+        // held fill-width container. A stack given its width (a rect it is shown at, or a column's width it passes
+        // on) is a given column, so the width reaches down through nested stacks.
+        let sizing = self.sizing(&props);
+        let content_column = !self.wide() && matches!(props.layout, layout::BodyLayout::Stack);
         let layout_id = sub(id, "layout");
         // The body is measured in the line the real run gives it: what the header and the end region leave. The
         // measuring run places it once both have measured, so its end region runs first (its content never depends
