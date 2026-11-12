@@ -4,8 +4,8 @@
 use super::Table;
 use super::words::MetadataWords;
 use crate::contract::{
-    Bind, CollectionEvent, CollectionResponse, ColumnKind, ColumnSpec, NoValue, Outcome, Pad, Pattern, Props, RowHeight, SelectMode, Show as _,
-    ShowCollection as _, ShowContainer as _, Sizing, ToggleColumn,
+    Bind, CollectionEvent, CollectionResponse, ColumnKind, ColumnSpec, NoValue, Outcome, Pad, Pattern, Props, Remember as _, RowHeight, SelectMode,
+    Show as _, ShowCollection as _, ShowContainer as _, Sizing, ToggleColumn,
 };
 use crate::layout_components::Stack;
 use crate::list::{ListRow, RowEvent, ToggleCell, ToggleState};
@@ -16,7 +16,6 @@ use craft_i18n::matcher::Matcher;
 use craft_theme::ControlSize;
 use egui::{Response, Ui};
 use std::borrow::Cow;
-use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
 const SHOW: ColumnKey = ColumnKey::new("show");
@@ -145,6 +144,13 @@ pub struct MetadataTable<'a> {
     choose: Option<Bind<'a, Vec<String>>>,
 }
 
+/// The search field's text and whether it changed, which the header leaves for the body.
+#[derive(Clone, Default)]
+struct Typed {
+    query: String,
+    changed: bool,
+}
+
 /// One entry of the table: a title row or a field.
 enum Entry<'a> {
     Group(&'a MetadataGroup),
@@ -213,23 +219,24 @@ impl<'a> MetadataTable<'a> {
             _ => Vec::new(),
         });
         let checks = choose.is_some();
-        // The header runs before the body in each run, so the rows follow this pass's text.
-        let query = RefCell::new(String::new());
-        let filter_changed = Cell::new(false);
         let mut stack = Stack::new().sizing(Sizing::Fill);
         if let Some(text) = filter.as_mut() {
+            // The header runs before the body in each run and leaves the field's text in the stack's memory, so the rows
+            // follow this pass's typing.
             stack = stack
-                .header(|ui, _| {
+                .header(|ui, stack| {
                     let edit = TextField::search(words.filter.clone(), text.reborrowed()).placeholder(words.filter.clone()).drives(rows).show(ui);
-                    filter_changed.set(filter_changed.get() || !edit.events.is_empty());
-                    if let Some(Mixed::Same(shown)) = &edit.shown {
-                        query.replace(shown.trim().to_owned());
-                    }
+                    let typed = stack.memory::<Typed>();
+                    typed.changed = !edit.events.is_empty();
+                    typed.query = match &edit.shown {
+                        Some(Mixed::Same(shown)) => shown.trim().to_owned(),
+                        _ => String::new(),
+                    };
                 })
                 .header_inset(Pad::Control);
         }
-        let shown = stack.show(ui, |ui, _| {
-            let query = query.borrow();
+        let shown = stack.show(ui, |ui, stack| {
+            let Typed { query, changed } = stack.memory::<Typed>().clone();
             let matcher = (!query.is_empty()).then(|| Matcher::new(&env.folder(), query.as_str()));
             let mut keys = Vec::new();
             let mut entries = Vec::new();
@@ -261,7 +268,7 @@ impl<'a> MetadataTable<'a> {
                 );
             }
             let source = Fields { keys, entries, chosen: held.as_deref() };
-            Table::<FieldKey>::new(label.clone(), columns)
+            let table = Table::<FieldKey>::new(label.clone(), columns)
                 .id(rows)
                 .select(SelectMode::Single)
                 .size(ControlSize::Sm)
@@ -285,9 +292,10 @@ impl<'a> MetadataTable<'a> {
                             line
                         }
                     }
-                })
+                });
+            (table, changed)
         });
-        let table = shown.inner;
+        let (table, filter_changed) = shown.inner.map_or((None, false), |(table, changed)| (Some(table), changed));
 
         let mut checked = Vec::new();
         if let (Some(mut choose), Some(before), Some(table)) = (choose, held, &table) {
@@ -315,7 +323,7 @@ impl<'a> MetadataTable<'a> {
                 choose.reborrow().apply(&EditEvent::set(Mixed::Same(before), chosen, name, None));
             }
         }
-        MetadataTableOutput { response: shown.output, table, filter_changed: filter_changed.get(), checked }
+        MetadataTableOutput { response: shown.output, table, filter_changed, checked }
     }
 }
 
