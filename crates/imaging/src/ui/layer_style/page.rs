@@ -208,6 +208,7 @@ fn field_row(ui: &mut Ui, input: &PageInput<'_>, field: &EffectField, shown: &St
                             let dial = AngleDial::new(Bind::given(value)).label(label.clone()).id_salt("dial").show(ui);
                             let number = NumberField::new(label.clone(), Bind::given(Some(value)))
                                 .codec(NumberCodec::new(input.units.reader(Some(UnitKind::Degrees)), WHOLE))
+                                .unit_kind(UnitKind::Degrees)
                                 .range(ANGLE_RANGE)
                                 .id_salt("field")
                                 .show(ui)
