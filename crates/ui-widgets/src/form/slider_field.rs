@@ -28,7 +28,8 @@ pub enum SliderFieldLayout {
     /// slider across the full width on the next.
     #[default]
     Stacked,
-    /// The number field and then the slider on one line, for a row whose enclosing `Field` shows the label.
+    /// The slider and then the number field on one line, for a row whose enclosing `Field` shows the label (a
+    /// Photoshop dialog row: "Opacity: slider, field, unit").
     Inline,
 }
 
@@ -307,12 +308,12 @@ fn shown_of(shown: Option<&f64>) -> Mixed<f64> {
 }
 
 /// The slider's and the number field's rects in a room of `size`, in logical coordinates from the start edge: the
-/// field at the start, the slider in the room after it.
+/// field at the end, the slider in the room before it.
 fn arrange(size: Vec2, gap: f32, field_width: f32) -> (Rect, Rect) {
     let field = field_width.min(size.x);
     let track = (size.x - field - gap).max(0.0);
     let rect = |x: f32, width: f32| Rect::from_min_size(pos2(x, 0.0), Vec2::new(width, size.y));
-    (rect(field + gap, track), rect(0.0, field))
+    (rect(0.0, track), rect(size.x - field, field))
 }
 
 /// The first line's and the slider's rects in a room of `size`, in logical coordinates from the start edge: a line of

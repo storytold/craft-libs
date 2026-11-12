@@ -8,7 +8,7 @@ use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, Entry, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _, clicked};
 use craft_ui::display::{Shade, Text};
-use craft_ui::form::{Field, FieldGroup, SliderField};
+use craft_ui::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::patterns::form_dialogs::HostRequests;
 use craft_ui::pickers::Select;
@@ -273,10 +273,14 @@ fn rows(ui: &mut Ui, words: &PictureFillWords, pass: &mut Pass<'_>, modes: &Mode
             let next = pass.edited(|f| f.rotate_with_shape = on);
             pass.set(next);
         }
-        let slider = SliderField::new(words.transparency.clone(), Bind::given(fill.transparency * 100.0), TRANSPARENCY)
-            .unit_kind(UnitKind::Percent)
-            .id_salt("transparency");
-        let event = slider.show(ui).events;
+        let mut event = EditEvents::new();
+        Field::new(words.transparency.clone()).id_salt("transparency").show(ui, |ui, _| {
+            let slider = SliderField::new(words.transparency.clone(), Bind::given(fill.transparency * 100.0), TRANSPARENCY)
+                .unit_kind(UnitKind::Percent)
+                .id_salt("slider")
+                .layout(SliderFieldLayout::Inline);
+            event = slider.show(ui).events;
+        });
         let base = fill.clone();
         pass.take(event, move |v| PictureFill { transparency: (v / 100.0).clamp(0.0, 1.0), ..base.clone() });
     });
