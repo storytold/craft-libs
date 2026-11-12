@@ -137,11 +137,82 @@ fn layout(planes: usize, width: usize, height: usize, depth: u16, version: Versi
     PlaneLayout { planes, width, height, depth, version }
 }
 
+/// Verify PackBits round trips empty, literal and repeated-byte inputs.
 fn pb_roundtrip(src: &[u8]) -> Vec<u8> {
     let enc = packbits::encode_vec(src);
+    assert_eq!(packbits::encoded_len(src), enc.len());
     let dec = packbits::decode(&enc, src.len()).unwrap();
     assert_eq!(dec, src, "encoded: {enc:?}");
     enc
+}
+
+/// Compare block scanning with scalar packet boundaries over varied runs and literals.
+#[test]
+fn packbits_block_scan_preserves_scalar_packets() {
+    /// Encode PackBits with the previous scalar packet scan as a byte oracle.
+    fn scalar(src: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < src.len() {
+            let mut run = 1;
+            while i + run < src.len() && run < 128 && src[i + run] == src[i] {
+                run += 1;
+            }
+            if run >= 2 {
+                out.extend_from_slice(&[(1i16 - run as i16) as u8, src[i]]);
+                i += run;
+            } else {
+                let start = i;
+                while i < src.len() && i - start < 128 {
+                    if i + 2 < src.len() && src[i] == src[i + 1] && src[i] == src[i + 2] {
+                        break;
+                    }
+                    i += 1;
+                }
+                out.push((i - start - 1) as u8);
+                out.extend_from_slice(&src[start..i]);
+            }
+        }
+        out
+    }
+    let check = |src: &[u8]| {
+        let expected = scalar(src);
+        let mut actual = vec![42];
+        packbits::encode(src, &mut actual);
+        assert_eq!(&actual[1..], expected, "source {src:?}");
+        assert_eq!(packbits::encoded_len(src), expected.len());
+        assert!(expected.len() <= src.len() + src.len().div_ceil(128));
+    };
+    for n in 0..=10 {
+        for mut bits in 0..3usize.pow(n) {
+            let src: Vec<_> = (0..n)
+                .map(|_| {
+                    let b = [0, 1, 255][bits % 3];
+                    bits /= 3;
+                    b
+                })
+                .collect();
+            check(&src);
+        }
+    }
+    for start in 0..260 {
+        for run in [2, 3, 7, 8, 9, 127, 128, 129, 256] {
+            let mut src: Vec<_> = (0..520).map(|i| (i % 251) as u8).collect();
+            src[start..start + run].fill(255);
+            check(&src);
+        }
+    }
+    for pair in [[0, 1], [0, 255], [128, 127], [255, 255]] {
+        for n in [127, 128, 129, 255, 256, 257, 12000, 12001] {
+            let mut src: Vec<_> = pair.into_iter().cycle().take(n).collect();
+            check(&src);
+            for i in [0, 7, 8, 127.min(n - 1), 128.min(n - 1), n - 1] {
+                src[i] ^= 1;
+                check(&src);
+                src[i] ^= 1;
+            }
+        }
+    }
 }
 
 #[test]
@@ -452,6 +523,24 @@ fn prediction_32bit_floats_roundtrip() {
     assert_eq!(decode_planes(Compression::ZipPrediction, &enc, &l).unwrap(), v);
 }
 
+/// Compare fused float prediction with explicit byte-plane shuffling and delta coding.
+#[test]
+fn fused_prediction_matches_shuffled_byte_deltas() {
+    for w in [1, 2, 3, 31, 256, 257] {
+        let l = layout(2, w, 3, 32, Version::Psb);
+        let mut actual: Vec<_> = (0..l.decoded_len().unwrap()).map(|i| (i * 31 + i / 7) as u8).collect();
+        let expected: Vec<_> = actual
+            .chunks_exact(w * 4)
+            .flat_map(|row| {
+                let shuffled: Vec<_> = (0..4).flat_map(|k| row.iter().skip(k).step_by(4).copied()).collect();
+                (0..shuffled.len()).map(move |i| shuffled[i].wrapping_sub(if i == 0 { 0 } else { shuffled[i - 1] }))
+            })
+            .collect();
+        predict(&mut actual, &l).unwrap();
+        assert_eq!(actual, expected, "width {w}");
+    }
+}
+
 #[test]
 fn zip_bomb_is_bounded() {
     let big = zip_compress(&vec![0u8; 1 << 20]);
@@ -462,4 +551,207 @@ fn zip_bomb_is_bounded() {
 #[test]
 fn zip_garbage_errors() {
     assert!(zip_decompress(&[1, 2, 3, 4], 4).is_err());
+}
+
+/// Compare bounded ZIP output with the original growing writer over varied inputs.
+#[test]
+fn zip_output_matches_the_growing_writer() {
+    let mut seed = 0x12345678u32;
+    let noise = (0..1_048_577)
+        .map(|_| {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed as u8
+        })
+        .collect();
+    for bytes in [Vec::new(), vec![0; 131072], (0..131072).map(|i| (i * 31 + i / 173) as u8).collect(), noise].iter().cycle().take(12) {
+        let mut old = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        old.write_all(bytes).unwrap();
+        let packed = zip_compress(bytes);
+        assert_eq!(packed, old.finish().unwrap());
+        #[cfg(not(target_arch = "wasm32"))]
+        assert_eq!(packed.capacity(), packed.len());
+    }
+}
+
+/// Workers retain only private codec state; a checked-out slot supports nested compression.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn zip_encoder_reuse_is_private_and_retains_no_output() {
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..2)
+            .map(|byte| {
+                scope.spawn(move || {
+                    let mut seed = 0x12345678u32;
+                    for len in [1_048_577usize, 32769, 0, 259, 258, 257, 1, 32767, 32768, 2, 262145] {
+                        let bytes: Vec<_> = (0..len)
+                            .map(|_| {
+                                seed ^= seed << 13;
+                                seed ^= seed >> 17;
+                                seed ^= seed << 5;
+                                if byte == 0 { 0 } else { seed as u8 }
+                            })
+                            .collect();
+                        let packed = zip_compress(&bytes);
+                        if byte == 1 && len == 1_048_577 {
+                            assert!(packed.len() > 256 << 10, "the retention oracle must exercise multiple output blocks");
+                        }
+                        let encoder = ZIP_ENCODER.with(std::cell::Cell::take).unwrap();
+                        assert_eq!(encoder.total_in(), len as u64);
+                        assert_eq!(encoder.total_out(), packed.len() as u64);
+                        assert_eq!(encoder.get_ref().blocks.capacity(), 0);
+                        assert_eq!(encoder.get_ref().current.capacity(), 0);
+                        assert_eq!(zip_decompress(&zip_compress(b"nested"), 6).unwrap(), b"nested");
+                        ZIP_ENCODER.with(|slot| slot.set(Some(encoder)));
+                        let mut fresh = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+                        fresh.write_all(&bytes).unwrap();
+                        assert_eq!(zip_compress(&bytes), fresh.finish().unwrap());
+                    }
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+    });
+}
+
+/// Compression stays byte-identical during teardown, including an unavailable native cache.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn zip_compression_survives_thread_local_teardown() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    struct OnDrop(Arc<(AtomicBool, AtomicBool)>);
+    impl Drop for OnDrop {
+        /// Record whether teardown reached the destroyed cache and preserved fresh-stream bytes.
+        fn drop(&mut self) {
+            let unavailable = ZIP_ENCODER.try_with(|_| ()).is_err();
+            let mut fresh = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+            fresh.write_all(b"teardown").unwrap();
+            let same = zip_compress(b"teardown") == fresh.finish().unwrap();
+            self.0.0.store(same, Ordering::SeqCst);
+            self.0.1.store(unavailable, Ordering::SeqCst);
+        }
+    }
+    thread_local! { static AFTER_CODEC: std::cell::Cell<Option<OnDrop>> = const { std::cell::Cell::new(None) }; }
+    let checked = Arc::new((AtomicBool::new(false), AtomicBool::new(false)));
+    let flag = checked.clone();
+    std::thread::spawn(move || {
+        AFTER_CODEC.with(|slot| slot.set(Some(OnDrop(flag))));
+        zip_compress(b"first");
+    })
+    .join()
+    .unwrap();
+    assert!(checked.0.load(Ordering::SeqCst), "teardown must preserve the fresh encoder's bytes");
+    // OS-key TLS may destroy keys in another order; native TLS runs these destructors in reverse.
+    #[cfg(any(target_vendor = "apple", target_os = "linux", target_env = "msvc"))]
+    assert!(checked.1.load(Ordering::SeqCst), "teardown must exercise the uncached fallback");
+}
+
+/// Verify multiple writes retain their bytes and respect ZIP output block bounds.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn zip_output_blocks_stay_bounded_across_writes() {
+    let bytes = vec![42; (1 << 20) + 1];
+    let mut output = ZipOutput::default();
+    output.write_all(&[]).unwrap();
+    for part in bytes.chunks(32767) {
+        output.write_all(part).unwrap();
+    }
+    assert!(output.blocks.iter().chain([&output.current]).all(|b| b.capacity() <= 256 << 10));
+    let packed = output.into_vec();
+    assert_eq!(packed, bytes);
+    assert_eq!(packed.capacity(), packed.len());
+}
+
+/// Verify compressible ZIP output retains capacity proportional to encoded size.
+#[test]
+fn compressible_zip_does_not_retain_a_raw_sized_allocation() {
+    let raw = vec![0; 1 << 20];
+    let packed = zip_compress(&raw);
+    assert!(packed.len() < 1 << 14);
+    assert!(packed.capacity() < 1 << 16);
+    assert_eq!(zip_decompress(&packed, raw.len()).unwrap(), raw);
+}
+
+/// Verify failed RLE allocation hints fall back to incremental growth with identical bytes.
+#[test]
+fn rle_failed_hint_and_incremental_growth_preserve_bytes() {
+    for version in [Version::Psd, Version::Psb] {
+        for width in [0, 1, 127, 128, 129, 1000] {
+            let l = layout(1, width, 9, 8, version);
+            for fill in [false, true] {
+                let bytes: Vec<_> = (0..l.decoded_len().unwrap()).map(|i| if fill { 0 } else { (i * 13 + i / 17) as u8 }).collect();
+                let expected = encode_planes(Compression::Rle, &bytes, &l).unwrap();
+                for hint in [usize::MAX, 0, l.rows().unwrap() * l.count_size()] {
+                    assert_eq!(encode_rle_chunk(&bytes, &l, 0..l.rows().unwrap(), hint).unwrap(), expected);
+                }
+            }
+        }
+    }
+}
+
+/// Verify measured packet lengths match encoding over mixed runs and literals.
+#[test]
+fn counted_packbits_matches_mixed_runs_and_literals() {
+    for n in 0..520 {
+        let bytes: Vec<_> = (0..n).map(|i| if i % 23 < 9 { (i / 23) as u8 } else { (i * 31) as u8 }).collect();
+        assert_eq!(packbits::encoded_len(&bytes), packbits::encode_vec(&bytes).len());
+    }
+}
+
+/// Compare parallel prediction with independent serial rows at each supported depth.
+#[test]
+fn prediction_matches_independent_serial_rows() {
+    for depth in [1, 8, 16, 32] {
+        let layout = layout(4, if depth == 1 { 8193 } else { 257 }, 1031, depth, Version::Psb);
+        let rb = layout.row_bytes();
+        let bytes: Vec<_> = (0..layout.decoded_len().unwrap() + 3).map(|i| (i * 13 + i / 17) as u8).collect();
+        let mut expected = bytes.clone();
+        for row in expected.chunks_exact_mut(rb) {
+            let src = row.to_vec();
+            if depth == 16 {
+                for (i, p) in row.as_chunks_mut::<2>().0.iter_mut().enumerate().skip(1) {
+                    let a = u16::from_be_bytes([src[i * 2], src[i * 2 + 1]]);
+                    let b = u16::from_be_bytes([src[i * 2 - 2], src[i * 2 - 1]]);
+                    *p = a.wrapping_sub(b).to_be_bytes();
+                }
+            } else {
+                let shuffled = if depth == 32 { (0..4).flat_map(|c| src.iter().skip(c).step_by(4).copied()).collect::<Vec<_>>() } else { src };
+                for (i, p) in row.iter_mut().enumerate() {
+                    *p = shuffled[i].wrapping_sub(if i == 0 { 0 } else { shuffled[i - 1] });
+                }
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        for threads in [1, 2, 4] {
+            use rayon::prelude::*;
+            let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+            pool.install(|| {
+                (0..3).into_par_iter().for_each(|_| {
+                    let mut got = bytes.clone();
+                    predict(&mut got, &layout).unwrap();
+                    assert_eq!(got, expected, "depth {depth}, pool {threads}");
+                })
+            });
+        }
+        let mut got = bytes;
+        predict(&mut got, &layout).unwrap();
+        assert_eq!(got, expected);
+    }
+}
+
+/// Verify RLE chunks use the caller's pool and propagate worker panics as errors.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn rle_chunks_use_the_callers_pool_and_report_panics() {
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(2).build().unwrap();
+    pool.install(|| {
+        map_chunks(8, (0..64).collect(), |_| assert!(matches!(rayon::current_thread_index(), Some(0 | 1)))).unwrap();
+        assert!(map_chunks(2, vec![0, 1], |_| panic!("worker")).is_err());
+    });
 }

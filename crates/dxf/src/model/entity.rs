@@ -178,6 +178,29 @@ pub struct Spline {
     pub fit_tolerance: f64,
 }
 
+/// A HELIX: a spline (the curve as drawn) and the parameters it was made from.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Helix {
+    /// The `AcDbSpline` groups.
+    pub spline: Spline,
+    /// Group 10: the axis base point.
+    pub axis_base: Point,
+    /// Group 11: the start point.
+    pub start: Point,
+    /// Group 12: the axis direction.
+    pub axis: Point,
+    /// Group 40: the base radius.
+    pub radius: f64,
+    /// Group 41.
+    pub turns: f64,
+    /// Group 42: the height of one turn.
+    pub turn_height: f64,
+    /// Group 290 is not 0: counter-clockwise (the default).
+    pub ccw: bool,
+    /// Group 280: what stays fixed when the helix is edited (0 turn height, 1 turns, 2 height).
+    pub constrain: i64,
+}
+
 /// TEXT, and the text of an ATTRIB or ATTDEF.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Text {
@@ -430,6 +453,7 @@ pub enum EntityKind {
     LwPolyline(LwPolyline),
     Polyline(Polyline),
     Spline(Spline),
+    Helix(Helix),
     Ray {
         base: Point,
         direction: Point,
@@ -634,6 +658,20 @@ impl Entity {
             "LWPOLYLINE" => EntityKind::LwPolyline(lwpolyline(e.tags, &g)),
             "POLYLINE" => EntityKind::Polyline(polyline(&g, &e.followers)),
             "SPLINE" => EntityKind::Spline(spline(&g)),
+            "HELIX" => {
+                let h = g.subclass("AcDbHelix");
+                EntityKind::Helix(Helix {
+                    spline: spline(&g.subclass("AcDbSpline")),
+                    axis_base: h.point(10),
+                    start: h.point(11),
+                    axis: h.point_opt(12).unwrap_or([0.0, 0.0, 1.0]),
+                    radius: h.f_or(40, 0.0),
+                    turns: h.f_or(41, 1.0),
+                    turn_height: h.f_or(42, 0.0),
+                    ccw: h.i_or(290, 1) != 0,
+                    constrain: h.i_or(280, 2),
+                })
+            }
             "RAY" => EntityKind::Ray { base: line(&g).0, direction: line(&g).1 },
             "XLINE" => EntityKind::XLine { base: line(&g).0, direction: line(&g).1 },
             "TEXT" => EntityKind::Text(Text::read(&g)),
