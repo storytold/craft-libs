@@ -41,6 +41,13 @@ PsdFile::composite_rgba8() -> Result<RgbaImage>
 PsdFile::resource(id), global_block(key), icc_profile(), resolution(),
         has_real_merged_data(), merged_has_alpha(), validate()
 
+// Head only: header, colour mode data and image resources; no layers, no pixels
+Head::from_bytes(&[u8]) -> Result<Head>     // the file or a prefix reaching the end of the resources
+Head::from_source(&Source) -> Result<Head>  // reads nothing after the resources
+Head { header, color_mode_data, resources, layer_section_offset };  Head::resource(id)
+Header::from_bytes(&[u8]) -> Result<Header> // the first 26 bytes
+head::sniff(&[u8]) -> bool
+
 // Sources (lazy reading)
 trait ReadAt { len(), read_at(offset, buf) }   // [u8], Vec<u8>, Arc<T>, FileSource (pread / seek_read)
 Source::new(impl ReadAt) / read_vec(offset, len)   // shared handle; equal when the same source

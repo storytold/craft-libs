@@ -991,3 +991,93 @@ fn white_is_exact_on_every_path() {
         assert!(o[2] < 0.99, "{cmyk:?}: absolute paper {o:?}");
     }
 }
+
+/// The blocked matrix/TRC path (64 pixels at a time) must match the per-pixel evaluation for
+/// every pixel count around the block size, with and without extra channels.
+#[test]
+fn matrix_trc_blocks_match_per_pixel_eval() {
+    let pairs = [(Builtin::Srgb, Builtin::DisplayP3), (Builtin::ProPhotoCompat, Builtin::Srgb), (Builtin::AdobeRgbCompat, Builtin::Rec2020)];
+    for (a, b) in pairs {
+        let t = Transform::new(a.profile(), b.profile(), Intent::RelativeColorimetric, true).unwrap();
+        for &(ss, ds, copy) in &[(3usize, 3usize, false), (4, 4, true), (5, 4, true)] {
+            let max = 20011;
+            let seed = |i: usize| (i.wrapping_mul(2654435761) >> 7) as u32;
+            let src16: Vec<u16> = (0..max * ss).map(|i| (seed(i) >> 3) as u16).collect();
+            let src8: Vec<u8> = (0..max * ss).map(|i| (seed(i) >> 11) as u8).collect();
+            let mut full8 = vec![0u8; max * ds];
+            t.convert_u8(&src8, ss, &mut full8, ds, copy).unwrap();
+            for px in [1usize, 2, 63, 64, 65, 127, 128, 129, 1000] {
+                let mut o16 = vec![0u16; px * ds];
+                t.convert_u16(&src16[..px * ss], ss, &mut o16, ds, copy).unwrap();
+                let mut o8 = vec![0u8; px * ds];
+                t.convert_u8(&src8[..px * ss], ss, &mut o8, ds, copy).unwrap();
+                assert_eq!(o8[..], full8[..px * ds], "u8 prefix of a longer buffer, {px} px");
+                for p in 0..px {
+                    let inp: Vec<f32> = (0..3).map(|k| src16[p * ss + k] as f32 / 65535.0).collect();
+                    let mut want = [0.0f32; 3];
+                    t.eval_fast(&inp, &mut want).unwrap();
+                    for k in 0..3 {
+                        assert_eq!(o16[p * ds + k], (want[k].clamp(0.0, 1.0) * 65535.0 + 0.5) as u16, "u16 px {p} ch {k} of {px}");
+                    }
+                    if copy && ds > 3 {
+                        assert_eq!(o16[p * ds + 3], src16[p * ss + 3]);
+                        assert_eq!(o8[p * ds + 3], src8[p * ss + 3]);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 8-bit and 16-bit conversion through an analytic pipeline (no lookup table, here RGB to Lab)
+/// must equal the exact per-pixel evaluation. The 8-bit path tabulates the first stage's
+/// curves per code; `curves_are_tables` selects whether those curves are parametric (their
+/// `eval` is analytic) or `curv` tables (their `eval` interpolates inside the same loop).
+fn check_exact_core(src_profile: &Profile, curves_are_tables: bool) {
+    let trc = src_profile.trc.as_ref().expect("matrix/TRC source");
+    assert!(trc.iter().all(|c| matches!(c, craft_cms::Curve::Table(_)) == curves_are_tables), "TRC kind");
+    let t = Transform::new(src_profile, lab(), Intent::RelativeColorimetric, true).unwrap();
+    let px = 256usize * 256;
+    let src: Vec<u8> = (0..px as u32).flat_map(|i| [(i & 255) as u8, (i >> 8) as u8, (i.wrapping_mul(2654435761) >> 13) as u8, 200]).collect();
+    let mut out = vec![0u8; px * 4];
+    t.convert_u8(&src, 4, &mut out, 4, true).unwrap();
+    for (sp, dp) in src.as_chunks::<4>().0.iter().zip(out.as_chunks::<4>().0) {
+        let inp = [sp[0] as f32 / 255.0, sp[1] as f32 / 255.0, sp[2] as f32 / 255.0];
+        let mut want = [0.0f32; 3];
+        t.eval(&inp, &mut want).unwrap();
+        for k in 0..3 {
+            assert_eq!(dp[k], (want[k].clamp(0.0, 1.0) * 255.0 + 0.5) as u8, "u8 {sp:?} ch {k}");
+        }
+        assert_eq!(dp[3], 200);
+    }
+    // 16-bit input stays off the 8-bit table and must agree with the untabulated evaluation.
+    let src16: Vec<u16> = (0..px * 4).map(|i| if i % 4 == 3 { 51400 } else { (i.wrapping_mul(2654435761) >> 9) as u16 }).collect();
+    let mut out16 = vec![0u16; px * 4];
+    t.convert_u16(&src16, 4, &mut out16, 4, true).unwrap();
+    for (sp, dp) in src16.as_chunks::<4>().0.iter().zip(out16.as_chunks::<4>().0) {
+        let inp = [sp[0] as f32 / 65535.0, sp[1] as f32 / 65535.0, sp[2] as f32 / 65535.0];
+        let mut want = [0.0f32; 3];
+        t.eval(&inp, &mut want).unwrap();
+        for k in 0..3 {
+            assert_eq!(dp[k], (want[k].clamp(0.0, 1.0) * 65535.0 + 0.5) as u16, "u16 {sp:?} ch {k}");
+        }
+        assert_eq!(dp[3], 51400);
+    }
+}
+
+#[test]
+fn exact_core_u8_matches_exact_eval() {
+    check_exact_core(srgb(), false);
+}
+
+/// Same, with `curv` table TRCs: the first-stage table is built from `Curve::eval`'s table
+/// branch and must still be applied to its own channel.
+#[test]
+fn exact_core_u8_matches_exact_eval_with_table_trc() {
+    // Distinct tables per channel, so a first stage applied to the wrong channel shows up.
+    let mut p = srgb_as_v2_tables();
+    let table = |g: f64| craft_cms::Curve::Table((0..1024).map(|i| ((i as f64 / 1023.0).powf(g) * 65535.0).round() as f32 / 65535.0).collect());
+    p.trc = Some([table(1.8), table(2.2), table(2.6)]);
+    let table_trc = Profile::parse(&p.with_encoded_bytes().to_bytes()).unwrap();
+    check_exact_core(&table_trc, true);
+}
