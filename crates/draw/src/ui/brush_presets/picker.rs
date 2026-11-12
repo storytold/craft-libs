@@ -136,7 +136,7 @@ impl<K: Value> Outcome for BrushPresetPickerOutput<K> {
     }
 }
 
-/// Photoshop's Brush Preset picker: a closed field showing the current preset's tip and the brush size, which opens
+/// Photoshop's Brush Preset picker: a closed field showing the current preset's tip with the brush size under it, which opens
 /// a popover over [`PresetPicker`].
 ///
 /// - **Head.** [`BrushSizeField`] (Size, 1 to [`max_diameter`](Self::max_diameter), log slider) and, while
@@ -261,8 +261,8 @@ impl<'a, K: Value + Eq + Hash> BrushPresetPicker<'a, K> {
                 }
             };
             let picker = PresetPicker::new(words.picker.clone(), current.reborrowed(), rows, Bind::bound(&mut browser))
-                .field(PickerField::ThumbnailAndName)
-                .display_name(env.units().pixels(values.diameter.round()))
+                .field(PickerField::Thumbnail)
+                .caption(env.units().number(values.diameter.round(), 0..=0))
                 .cell_shape(CellShape::Square)
                 .view(if parts.tip_only() { PresetView::Grid } else { PresetView::List })
                 .toolbar(true)

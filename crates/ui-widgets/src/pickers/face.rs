@@ -8,10 +8,10 @@ use crate::style::{ComponentStyle, IconLook, Ink, StyleCx, TextLook, TypeRole};
 use crate::text::{Adornment, FieldStyle, place, reserve};
 use craft_behavior::{Flow, Metrics, Proposal, Sense};
 use craft_theme::{Stateful, States};
-use egui::{Rect, Response, Vec2};
+use egui::{Pos2, Rect, Response, Vec2};
 
-/// The style of a select face: the field's metrics, the text, the faint placeholder, the thumbnail's height and the
-/// chevron. The host owns the
+/// The style of a select face: the field's metrics, the text, the faint placeholder, the thumbnail's height and its
+/// caption, and the chevron. The host owns the
 /// surface (the field well), so a face paints only its content.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
@@ -29,6 +29,11 @@ pub struct SelectFaceStyle {
     chevron: IconLook,
     /// The height of the thumbnail: `size.thumb.sm`; its width follows the aspect.
     thumb: f32,
+    /// The line under the thumbnail.
+    #[style(text)]
+    caption: TextLook,
+    /// The gap between the thumbnail and its caption: `gap.tight`.
+    caption_gap: f32,
     /// The field look the chevron is placed by.
     field: FieldStyle,
 }
@@ -49,6 +54,9 @@ pub struct SelectFace<'a> {
     /// The picked entry's icon, drawn before the text in the chevron's ink.
     #[prop]
     leading: Option<IconSpec<'static>>,
+    /// A short line centred under the thumbnail (a brush's size); it shows only with a thumbnail.
+    #[prop(into)]
+    thumb_caption: Option<Label>,
     /// Whether the text shows beside the thumbnail; `false` shows the thumbnail alone. The text is the face's
     /// accessible name either way.
     #[prop]
@@ -58,7 +66,7 @@ pub struct SelectFace<'a> {
 impl<'a> SelectFace<'a> {
     /// A face showing `text`, which is also its name.
     pub fn new(text: impl Into<Label>) -> Self {
-        SelectFace { common: Common::new(), placeholder: false, thumb: None, leading: None, name: true }.label(text)
+        SelectFace { common: Common::new(), placeholder: false, thumb: None, leading: None, thumb_caption: None, name: true }.label(text)
     }
 
     /// A picture `aspect` times as wide as high before the text; `paint` draws into the picture's rect through the
@@ -74,9 +82,15 @@ impl<'a> SelectFace<'a> {
         SelectFace::new("Multiply")
     }
 
-    /// The width of the thumbnail and its gap to the text, or nothing without a thumbnail.
-    fn lead(&self, style: &SelectFaceStyle) -> f32 {
-        self.thumb.as_ref().map_or(0.0, |(aspect, _)| aspect.of(style.thumb) + if self.name { style.field.metrics().gap } else { 0.0 })
+    /// The width of the thumbnail's column, as wide as the picture and its caption `caption` wide, and its gap to the
+    /// text; nothing without a thumbnail.
+    fn lead(&self, style: &SelectFaceStyle, caption: f32) -> f32 {
+        self.thumb.as_ref().map_or(0.0, |(aspect, _)| aspect.of(style.thumb).max(caption) + if self.name { style.field.metrics().gap } else { 0.0 })
+    }
+
+    /// The caption's run, when there is a thumbnail to show it under.
+    fn caption_run<'s>(&'s self, look: &TextLook) -> Option<TextRun<'s>> {
+        self.thumb.as_ref().and(self.thumb_caption.as_ref()).map(|caption| TextRun::new(caption.as_str()).role(look.role))
     }
 
     fn leading_glyphs(&self) -> Vec<Adornment> {
@@ -101,6 +115,7 @@ impl Component for SelectFace<'_> {
         let field = FieldStyle::at(cx);
         let off = cx.color(cx.tokens.color.text.disabled);
         let (ink, muted) = (cx.ink(Ink::OnPanel), cx.color(cx.tokens.color.text.faint));
+        let caption = cx.color(cx.tokens.color.text.muted);
         let ink = Stateful::new(ink).off(States::new(ink, ink, ink, off));
         SelectFaceStyle {
             metrics: field.metrics(),
@@ -108,6 +123,8 @@ impl Component for SelectFace<'_> {
             placeholder: TextLook::new(TypeRole::Body, cx.host_muted_ink(Stateful::new(muted).off(States::new(muted, muted, muted, off)))),
             chevron: IconLook::new(field.glyph().side, cx.host_ink(ink)),
             thumb: cx.tokens.size.thumb.sm,
+            caption: TextLook::new(TypeRole::Caption, cx.host_muted_ink(Stateful::new(caption).off(States::new(caption, caption, caption, off)))),
+            caption_gap: cx.tokens.space.gap.tight,
             field,
         }
     }
@@ -126,18 +143,33 @@ impl Component for SelectFace<'_> {
             (true, _) => cx.layout(&TextRun::new(cx.resolved.label).role(cx.style.text.role)).size(),
             (false, _) => Vec2::ZERO,
         };
-        let picture = if self.thumb.is_some() { cx.style.thumb } else { 0.0 };
-        Vec2::new(self.lead(cx.style) + text.x + reserve(&cx.style.field, &self.leading_glyphs(), &[Self::chevron()]), text.y.max(picture))
+        let caption = self.caption_run(&cx.style.caption).map_or(Vec2::ZERO, |run| cx.layout(&run).size());
+        let picture = match (&self.thumb, caption.y > 0.0) {
+            (None, _) => 0.0,
+            (Some(_), false) => cx.style.thumb,
+            (Some(_), true) => cx.style.thumb + cx.style.caption_gap + caption.y,
+        };
+        Vec2::new(self.lead(cx.style, caption.x) + text.x + reserve(&cx.style.field, &self.leading_glyphs(), &[Self::chevron()]), text.y.max(picture))
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let chevron = Self::chevron();
         let rtl = cx.flow.is_rtl();
         let mut flow = Flow::new(cx.content_rect, rtl);
+        let caption = self.caption_run(&cx.style.caption).map(|run| ui.draw().layout(&run.color(cx.resolve(&cx.style.caption.color)), f32::INFINITY));
+        let caption_size = caption.as_ref().map_or(Vec2::ZERO, |caption| caption.size());
         if let Some((aspect, paint)) = self.thumb.take() {
-            let (cell, rest) = flow.take_start(aspect.of(cx.style.thumb));
-            let picture = Rect::from_center_size(cell.center(), Vec2::new(cell.width(), cx.style.thumb));
+            let (cell, rest) = flow.take_start(aspect.of(cx.style.thumb).max(caption_size.x));
+            let below = if caption.is_some() { cx.style.caption_gap + caption_size.y } else { 0.0 };
+            let top = cell.center().y - (cx.style.thumb + below) / 2.0;
+            let picture = Rect::from_min_size(
+                Pos2::new(cell.center().x - aspect.of(cx.style.thumb) / 2.0, top),
+                Vec2::new(aspect.of(cx.style.thumb), cx.style.thumb),
+            );
             let _ = ui.child("thumb", picture, RowThumb::new(paint));
+            if let Some(caption) = &caption {
+                ui.draw().galley(Pos2::new(cell.center().x - caption_size.x / 2.0, picture.bottom() + cx.style.caption_gap), caption);
+            }
             flow = if self.name { rest.take_start(cx.style.field.metrics().gap).1 } else { rest };
         }
         let leading = self.leading_glyphs();

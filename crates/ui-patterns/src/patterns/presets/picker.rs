@@ -162,6 +162,9 @@ pub struct PresetPicker<'a, K: Value + Eq + Hash + 'static> {
     /// Shown instead of the current preset's name.
     #[prop(into)]
     display_name: Option<Label>,
+    /// A short line under the field's thumbnail (a brush's current size).
+    #[prop(into)]
+    caption: Option<Label>,
     /// Content above the browser in the popover.
     #[prop(func = "FnMut(&mut Ui, &mut BodyCx<'_>)")]
     head: Option<PickerHead<'a>>,
@@ -215,6 +218,7 @@ impl<'a, K: Value + Eq + Hash + 'static> PresetPicker<'a, K> {
             row_menu: true,
             placeholder: None,
             display_name: None,
+            caption: None,
             head: None,
             keep_open: false,
             footer: None,
@@ -260,6 +264,14 @@ impl<'a, K: Value + Eq + Hash + 'static> PresetPicker<'a, K> {
         }
     }
 
+    /// `face` with the caption under its thumbnail, when the picker has one.
+    fn captioned<'f>(&self, face: SelectFace<'f>) -> SelectFace<'f> {
+        match &self.caption {
+            Some(caption) => face.thumb_caption(caption.clone()),
+            None => face,
+        }
+    }
+
     /// The face of a field showing `text`: with a `row`, its thumbnail and name as `field` says; without, the muted
     /// look of a mixed value or a placeholder. The measured candidates and the painted face are both built here.
     fn face_of(&self, text: Label, row: Option<&PresetRow<K>>, paint: bool) -> SelectFace<'static> {
@@ -269,12 +281,14 @@ impl<'a, K: Value + Eq + Hash + 'static> PresetPicker<'a, K> {
             (_, PickerField::Name) | (None, _) => face,
             (Some(preview), field) => {
                 let draw = paint.then(|| preview.paint.clone());
-                face.thumb(preview.aspect, move |cx, rect| {
-                    if let Some(draw) = &draw {
-                        draw(cx, rect);
-                    }
-                })
-                .name(field == PickerField::ThumbnailAndName)
+                let face = face
+                    .thumb(preview.aspect, move |cx, rect| {
+                        if let Some(draw) = &draw {
+                            draw(cx, rect);
+                        }
+                    })
+                    .name(field == PickerField::ThumbnailAndName);
+                self.captioned(face)
             }
         }
     }
@@ -299,7 +313,11 @@ impl<K: Value + Eq + Hash + 'static> Component for PresetPicker<'_, K> {
         let words = cx.words::<PresetWords>();
         let aspect = self.cell_shape.aspect();
         let empty = SelectFace::new(Label::Empty);
-        let empty = if self.field == PickerField::Name { empty } else { empty.thumb(aspect, |_, _| {}).name(self.field != PickerField::Thumbnail) };
+        let empty = if self.field == PickerField::Name {
+            empty
+        } else {
+            self.captioned(empty.thumb(aspect, |_, _| {}).name(self.field != PickerField::Thumbnail))
+        };
         let rows = self.rows.iter().filter(|row| !row.is_group());
         let faces = rows.map(|row| {
             let (text, _) = self.shown(Some(&Some(row.key.clone())), &words, &cx.env);
