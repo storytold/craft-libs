@@ -128,10 +128,10 @@ fn the_checkerboard_paints_the_same_shapes_at_any_area() {
 }
 
 /// A canvas at 800 percent whose body shows, as a document canvas does, the pasteboard with the document's page and
-/// its shadow, a display of `document` with the checkerboard and the edge, and the pixel grid over it. A painted
-/// display (`paints` given) gets the app's paint: a GPU paint callback, as an app with its own compositor adds, which
-/// counts its calls in `paints`.
-fn document_canvas(document: Rc<Document>, paints: Option<Rc<Cell<usize>>>) -> Fixture {
+/// its shadow, a display of `document` with the checkerboard and the edge, and the pixel grid over it. While `painted`
+/// is set the display is a painted one: the app's paint adds a GPU paint callback, as an app with its own compositor
+/// does, and counts its calls in `paints`.
+fn document_canvas(document: Rc<Document>, painted: Rc<Cell<bool>>, paints: Rc<Cell<usize>>) -> Fixture {
     let size = document.size;
     let center = Point::new(f64::from(size.width) / 2.0, f64::from(size.height) / 2.0);
     let view = CanvasView::new(Rect::from_min_size(Pos2::ZERO, CANVAS), center, 8.0);
@@ -140,16 +140,14 @@ fn document_canvas(document: Rc<Document>, paints: Option<Rc<Cell<usize>>>) -> F
     let mut fixture = Fixture::new(move |ui| {
         Canvas::new("Document").view(view).show(ui, |ui, body| {
             let _ = Pasteboard::new("Pasteboard", &pages).show_at(ui, body.rect);
-            let display = match &paints {
-                Some(paints) => RasterDisplay::painted(
-                    "Picture",
-                    size,
-                    AppPaint::new(|painter, view: CanvasView| {
-                        paints.set(paints.get() + 1);
-                        painter.painter.add(Shape::Callback(PaintCallback { rect: view.rect, callback: Arc::clone(&callback) }));
-                    }),
-                ),
-                None => RasterDisplay::new("Picture", &*document),
+            let display = if painted.get() {
+                let paint = AppPaint::new(|painter, view: CanvasView| {
+                    paints.set(paints.get() + 1);
+                    painter.painter.add(Shape::Callback(PaintCallback { rect: view.rect, callback: Arc::clone(&callback) }));
+                });
+                RasterDisplay::painted("Picture", size, paint)
+            } else {
+                RasterDisplay::new("Picture", &*document)
             };
             display.checkerboard(Checker::new()).outlined().show_at(ui, body.rect);
             let _ = PixelGrid::new("Pixel grid", &*document).show_at(ui, body.rect);
@@ -162,22 +160,33 @@ fn document_canvas(document: Rc<Document>, paints: Option<Rc<Cell<usize>>>) -> F
 
 #[trial]
 fn a_painted_display_draws_the_same_surround_as_a_source_display() {
-    let from_source = document_canvas(Document::new(40, 30), None).frame_shapes();
-    let painted = document_canvas(Document::new(40, 30), Some(Rc::new(Cell::new(0)))).frame_shapes();
-    let callbacks: Vec<usize> = painted.iter().enumerate().filter_map(|(at, shape)| matches!(shape, Shape::Callback(_)).then_some(at)).collect();
+    let painted = Rc::new(Cell::new(true));
+    let mut fixture = document_canvas(Document::new(40, 30), Rc::clone(&painted), Rc::new(Cell::new(0)));
+    let from_app = fixture.frame_shapes();
+    painted.set(false);
+    fixture.settle();
+    let from_source = fixture.frame_shapes();
+    let callbacks: Vec<usize> = from_app.iter().enumerate().filter_map(|(at, shape)| matches!(shape, Shape::Callback(_)).then_some(at)).collect();
     let [at] = callbacks[..] else { panic!("the app's paint is in the frame once: {callbacks:?}") };
-    let (under, over) = (&painted[..at], &painted[at + 1..]);
+    let (under, over) = (&from_app[..at], &from_app[at + 1..]);
     assert!(!under.is_empty() && !over.is_empty(), "the shadow and the checkerboard paint under the picture, the edge and the grid over it");
+    // The document fits one texture at one texel per pixel, so the source's picture is one textured quad.
+    let same_under = from_source.iter().zip(under).take_while(|(a, b)| a == b).count();
+    let same_over = from_source.iter().rev().zip(over.iter().rev()).take_while(|(a, b)| a == b).count();
     assert!(
-        from_source.len() > under.len() + over.len() && from_source.starts_with(under) && from_source.ends_with(over),
-        "the app's picture takes the place of the source's textures between the same shapes"
+        from_source.len() == under.len() + 1 + over.len() && same_under == under.len() && same_over == over.len(),
+        "the app's picture takes the place of the source's texture between the same shapes: {same_under} of {} under, {same_over} of {} \
+         over, {} shapes from the source",
+        under.len(),
+        over.len(),
+        from_source.len()
     );
 }
 
 #[trial]
 fn a_painted_display_paints_once_a_frame() {
     let paints = Rc::new(Cell::new(0));
-    let mut fixture = document_canvas(Document::new(40, 30), Some(Rc::clone(&paints)));
+    let mut fixture = document_canvas(Document::new(40, 30), Rc::new(Cell::new(true)), Rc::clone(&paints));
     for _ in 0..3 {
         paints.set(0);
         fixture.frame(Vec::new());

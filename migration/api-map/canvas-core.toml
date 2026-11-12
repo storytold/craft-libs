@@ -262,14 +262,14 @@ name = "NavigatorPreview"
 old = "craft_ui::canvas::navigator::preview::NavigatorPreview"
 new = "craft_ui::canvas::NavigatorPreview"
 status = "moved"
-note = "`Texture(CachedTexture)`, `Paint(NavigatorPaint)` or `None`."
+note = "`Texture(CachedTexture)`, `Paint(AppPaint<Rect>)` or `None`."
 
 [[type]]
 name = "NavigatorPaint"
 old = "craft_ui::canvas::navigator::preview::NavigatorPaint"
-new = "craft_ui::canvas::NavigatorPaint"
-status = "moved"
-note = "`NavigatorPaint::new(|painter: &ContentPainterCx, rect| ..)`."
+new = "craft_ui::canvas::AppPaint"
+status = "replaced"
+note = "`AppPaint::new(|painter: &ContentPainterCx, rect| ..)`: the one app-paint closure of the navigator and `RasterDisplay::painted`."
 
 [[type]]
 name = "NavigatorSettings"
