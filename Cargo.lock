@@ -1355,12 +1355,15 @@ name = "craft-pdf"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "craft-stream-codecs",
+ "flate2",
  "hayro",
  "hayro-cmap",
  "hayro-interpret",
  "hayro-syntax",
  "krilla",
  "kurbo 0.13.1",
+ "proptest",
  "thiserror 2.0.21",
  "ttf-parser",
  "wasm-bindgen-test",
