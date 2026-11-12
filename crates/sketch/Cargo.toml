@@ -1,0 +1,23 @@
+[package]
+name = "craft-sketch"
+description = "Clean-room reader for the .sketch container (Sketch 48 and newer): the ZIP archive, meta.json and its version cut, document.json, the pages in document order and images, with bounded reads."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-figma-rest = { workspace = true }
+kurbo = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+craft-zip = { workspace = true }
+
+[dev-dependencies]
+# The tests build archives, hostile ones included, by hand.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+craft-zip = { workspace = true, features = ["test-support"] }
