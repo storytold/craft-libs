@@ -1,10 +1,13 @@
 //! The regions of a body: a filling body placed from this pass's header and footer.
 
 use craft_behavior::Sense;
-use craft_ui::contract::{BodyCx, Common, Component, Container, ContainerProps, Cx, FooterRegion, HeaderRegion, Role, ShowContainer as _, Sizing};
+use craft_ui::contract::{
+    BodyCx, Common, Component, Container, ContainerProps, Cx, FooterRegion, Gap, HeaderRegion, Role, ShowContainer as _, Sizing,
+};
 use craft_ui::style::StyleCx;
 use craft_ui::testing::layout::allocate;
 use craft_ui::testing::{Frames, trial};
+use craft_ui_test_kit::body::Slab;
 use craft_ui_test_kit::contract::PlainStyle;
 use egui::{Pos2, Rect, Response, Ui, Vec2};
 use std::cell::RefCell;
@@ -31,6 +34,8 @@ struct Regioned<'a> {
     header: Option<Vec2>,
     end: Vec2,
     footer: Vec2,
+    /// How many blocks of `footer` the footer stacks.
+    footer_rows: usize,
     took: &'a RefCell<Took>,
 }
 
@@ -62,7 +67,8 @@ impl Container for Regioned<'_> {
     }
 
     fn footer(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
-        self.took.borrow_mut().footer = Some(allocate(ui, self.footer));
+        let rows = (0..self.footer_rows).map(|_| allocate(ui, self.footer)).reduce(|a, b| a.union(b));
+        self.took.borrow_mut().footer = rows;
     }
 }
 
@@ -73,9 +79,16 @@ fn first_pass(props: ContainerProps, header: Option<Vec2>) -> Took {
     let passes = RefCell::new(Vec::new());
     let mut frames = Frames::new();
     frames.frame(Vec::new(), |ui| {
-        let shown =
-            Regioned { common: Common::new(), props: props.clone(), header, end: Vec2::new(80.0, 40.0), footer: Vec2::new(70.0, 16.0), took: &took }
-                .show_at(ui, AREA, |_, cx| cx.rect);
+        let shown = Regioned {
+            common: Common::new(),
+            props: props.clone(),
+            header,
+            end: Vec2::new(80.0, 40.0),
+            footer: Vec2::new(70.0, 16.0),
+            footer_rows: 1,
+            took: &took,
+        }
+        .show_at(ui, AREA, |_, cx| cx.rect);
         took.borrow_mut().body = shown.inner;
         passes.borrow_mut().push(*took.borrow());
     });
@@ -115,6 +128,7 @@ fn a_row_body_between_an_inline_header_and_an_end_region_measures_in_the_line_th
                 header: Some(Vec2::new(40.0, 20.0)),
                 end: Vec2::new(80.0, 20.0),
                 footer: Vec2::ZERO,
+                footer_rows: 1,
                 took: &took,
             };
             bar.show(ui, |ui, _| *text.borrow_mut() = Text::new(WORDS).show(ui).rect);
@@ -174,4 +188,30 @@ fn a_body_on_a_line_it_shares_sits_on_the_lines_centre() {
     row.idle(4);
     let check = row.by_role(Role::CHECK_BOX).first().expect("the check box is shown").rect.center().y;
     assert!((centre(&row, "Opacity") - check).abs() <= EDGE_SLACK, "the field and the check box share a centre line");
+}
+
+/// A footer of several rows, in a container whose parent spaces its own children differently: the container is as
+/// tall as its footer takes when shown, so nothing in the footer lies past its edge (where an enclosing clip cuts it).
+#[trial]
+fn a_footer_of_several_rows_lies_inside_its_container_whatever_the_parent_spacing() {
+    let took = RefCell::new(Took::default());
+    let shown = RefCell::new(Rect::NOTHING);
+    let show = |ui: &mut Ui| {
+        Slab::new(ContainerProps::new().body_gap(Gap::Section)).show_at(ui, AREA, |ui, _| {
+            let regioned = Regioned {
+                common: Common::new(),
+                props: ContainerProps::new().footer(FooterRegion::new()),
+                header: None,
+                end: Vec2::ZERO,
+                footer: Vec2::new(70.0, 16.0),
+                footer_rows: 3,
+                took: &took,
+            };
+            *shown.borrow_mut() = regioned.show(ui, |ui, _| allocate(ui, Vec2::new(70.0, 16.0))).output.rect;
+        });
+    };
+    let mut frames = Frames::new();
+    frames.idle(3, show);
+    let (footer, rect) = (took.borrow().footer.expect("the footer ran"), *shown.borrow());
+    assert!(footer.max.y <= rect.max.y + EDGE_SLACK, "the footer {footer:?} lies inside its container {rect:?}");
 }

@@ -953,6 +953,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 .with_field_message(field_message)
                 .with_owner(owner);
             let mut footer_ui = alloc::child(ui, frame.region("footer", footer_rect));
+            // The footer's children are spaced as the body's, in the measuring run and the real run alike: the item
+            // spacing of the ui around differs between the two, and the footer's measured height must be the height it takes.
+            style::set_item_spacing(&mut footer_ui, gap);
             let installed = Env::install_for(&footer_ui, footer_env);
             comp.footer(&mut footer_ui, &mut bcx);
             Env::restore(&ctx, installed);
