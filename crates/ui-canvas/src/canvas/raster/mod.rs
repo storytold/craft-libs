@@ -1,11 +1,14 @@
-//! `RasterDisplay`: the CPU raster path of a canvas. The app gives the document's composite as RGBA for a region
-//! ([`RasterSource`]); the display keeps it in `TextureStore` textures, draws it through the canvas's
-//! [`CanvasSpace`](super::CanvasSpace) over a checkerboard, and re-reads only what the source reports damaged.
+//! `RasterDisplay`: the document display of a canvas. It draws the document through the canvas's
+//! [`CanvasSpace`](super::CanvasSpace) over a checkerboard, with the edge rule around it. The picture is either the
+//! document's composite as RGBA for a region ([`RasterSource`]), which the display keeps in `TextureStore` textures and
+//! re-reads only where the source reports damage, or the app's own paint ([`AppPaint`]), such as a GPU paint callback
+//! over the app's compositor.
 //!
 //! A document larger than the device's texture limit (`texture_side`) is uploaded reduced; zoomed in, the part in
 //! view is added at the screen's resolution as a detail texture ([`DetailPlan`]), so a large document shows its own
 //! pixels at 100 percent and the cost follows the window, not the document. Pixels are drawn sharp (nearest) from
 //! 100 percent up and filtered below.
+//!
 //!
 //! The display takes no pointer and no keys and declares no parts: a press on it reaches the canvas's tool.
 
@@ -15,7 +18,7 @@ mod stories;
 
 pub use detail::{DetailPlan, snap_to_texels};
 
-use super::{PixelRect, RasterSource, canvas_space};
+use super::{AppPaint, PixelRect, RasterSource, canvas_space};
 use crate::contract::{Access, Common, Component, Cx, NoValue, Outcome, PaintUi, Props as _, Role};
 use crate::primitives::textures::UNTINTED;
 use crate::primitives::{
@@ -50,12 +53,35 @@ enum Level {
     Detail(DetailPlan),
 }
 
-/// What `update` leaves for `paint` and `finish`: the textures to draw and the view to draw them through.
+/// What a display shows.
+enum Picture<'a> {
+    /// The source's pixels, kept in the display's textures.
+    Source(&'a dyn RasterSource),
+    /// The app paints the document of `size` pixels itself, through the view it is given.
+    Painted { size: PixelSize, paint: AppPaint<'a, CanvasView> },
+}
+
+impl Picture<'_> {
+    fn size(&self) -> PixelSize {
+        match self {
+            Picture::Source(source) => source.size(),
+            Picture::Painted { size, .. } => *size,
+        }
+    }
+}
+
+/// The textures of a source picture: the whole document at one texel per `factor` pixels, and the part in view at the
+/// screen's resolution while zoomed in.
+struct Textures {
+    base: (CachedTexture, u32),
+    detail: Option<(CachedTexture, DetailPlan)>,
+}
+
+/// What `update` leaves for `paint` and `finish`: the view to draw through and, for a source picture, its textures.
 struct Shown {
     view: CanvasView,
     size: PixelSize,
-    base: (CachedTexture, u32),
-    detail: Option<(CachedTexture, DetailPlan)>,
+    textures: Option<Textures>,
 }
 
 /// The revision each texture of a display shows, which is what the source is asked about: what changed since then.
@@ -83,9 +109,13 @@ impl Outcome for RasterDisplayOutput {
     }
 }
 
-/// The CPU raster display of one canvas: the document drawn through the view of the [`Canvas`](super::Canvas) it
-/// is shown in, at the canvas rect. Outside a canvas, or in one without a view, it draws nothing.
+/// The document display of one canvas: the document drawn through the view of the [`Canvas`](super::Canvas) it is
+/// shown in, at the canvas rect. Outside a canvas, or in one without a view, it draws nothing.
 ///
+/// - **Picture.** [`new`](Self::new) draws a [`RasterSource`]'s pixels from textures the display keeps;
+///   [`painted`](Self::painted) calls the app's paint once per pass, in the display's place between the checkerboard
+///   and the edge, with the view on screen. Both pictures get the same checkerboard and edge; the shadow is the
+///   [`Pasteboard`](super::Pasteboard)'s and the pixel grid the `PixelGrid` control's, shown around and over either.
 /// - **Reading.** The display asks the source for pixels only when it has none for the source's `revision`. A
 ///   changed revision re-reads what [`RasterSource::damage`] reports since the revision the display shows (snapped
 ///   outward to whole texels), or everything where the source cannot tell.
@@ -102,7 +132,7 @@ impl Outcome for RasterDisplayOutput {
 pub struct RasterDisplay<'a> {
     #[common]
     common: Common,
-    source: &'a dyn RasterSource,
+    picture: Picture<'a>,
     /// The transparency grid under the document; none draws the document straight on the canvas.
     #[prop]
     checkerboard: Option<Checker>,
@@ -127,7 +157,18 @@ impl<'a> RasterDisplay<'a> {
     /// A display named `label` of the document `source` gives. An empty label makes a display that only paints, with
     /// no AccessKit node: a further image over a named one.
     pub fn new(label: impl Into<Label>, source: &'a dyn RasterSource) -> Self {
-        RasterDisplay { common: Common::new(), source, checkerboard: None, outlined: false, read: PixelRect::default(), shown: None, mapping: None }
+        Self::of(label, Picture::Source(source))
+    }
+
+    /// A display named `label` of a document of `size` pixels that the app paints itself with `paint`, given the view
+    /// on screen (its `rect` is the canvas rect). The app draws the document's pixels only: the display draws the
+    /// checkerboard under them and the edge around them, as for a source.
+    pub fn painted(label: impl Into<Label>, size: PixelSize, paint: AppPaint<'a, CanvasView>) -> Self {
+        Self::of(label, Picture::Painted { size, paint })
+    }
+
+    fn of(label: impl Into<Label>, picture: Picture<'a>) -> Self {
+        RasterDisplay { common: Common::new(), picture, checkerboard: None, outlined: false, read: PixelRect::default(), shown: None, mapping: None }
             .label(label)
     }
 
@@ -135,7 +176,7 @@ impl<'a> RasterDisplay<'a> {
     /// perspective frame shows the image foreshortened. The image fills the unit square unless
     /// [`placed`](Self::placed) says otherwise; a cell whose centre lies outside the unit square is left out. A
     /// mapped display draws its whole-document texture alone: the detail texture of a flat display has no place on
-    /// a mesh.
+    /// a mesh. A source display only: a painted one draws through the view as the app paints it.
     #[must_use]
     pub fn mapped(mut self, frame: Homography, cells: u32) -> Self {
         let placed = self.mapping.map_or(Rect64::new(0.0, 0.0, 1.0, 1.0), |mapping| mapping.placed);
@@ -160,9 +201,9 @@ impl<'a> RasterDisplay<'a> {
         TextureStore::in_context(ctx, (id, sharp), TextureStoreOptions::pages().filter(filter))
     }
 
-    fn read_region(&self, region: PixelRect, factor: u32) -> ColorImage {
+    fn read_region(source: &dyn RasterSource, region: PixelRect, factor: u32) -> ColorImage {
         let mut image = ColorImage::filled(texel_extent(region, factor), Color32::TRANSPARENT);
-        self.source.read(region, factor, &mut image);
+        source.read(region, factor, &mut image);
         image
     }
 
@@ -172,12 +213,20 @@ impl<'a> RasterDisplay<'a> {
     /// - A texture of an older revision is updated with what the source reports damaged since then: that part is
     ///   read again alone, and damage elsewhere moves the texture to the revision without a read.
     /// - Anything else (no texture, another size, damage the source cannot tell) is read whole.
-    fn bring_up_to_date(&self, ctx: &Context, id: Id, held: &mut Held, level: Level, region: PixelRect, factor: u32) -> (CachedTexture, PixelRect) {
+    fn bring_up_to_date(
+        source: &dyn RasterSource,
+        ctx: &Context,
+        id: Id,
+        held: &mut Held,
+        level: Level,
+        region: PixelRect,
+        factor: u32,
+    ) -> (CachedTexture, PixelRect) {
         let sharp = factor == 1;
         // A key never lives in both samplings: the other store's copy is from before the factor changed.
         Self::store(ctx, id, !sharp).forget(ctx, &level);
         let store = Self::store(ctx, id, sharp);
-        let revision = self.source.revision();
+        let revision = source.revision();
         let origin = [region.x0, region.y0];
         let expected = texel_extent(region, factor);
         let state = store.state(ctx, &level, revision);
@@ -187,13 +236,13 @@ impl<'a> RasterDisplay<'a> {
                 held.0.insert(level, revision);
                 return (texture, PixelRect::default());
             }
-            if let Some(damage) = held.0.get(&level).and_then(|since| self.source.damage(*since)) {
+            if let Some(damage) = held.0.get(&level).and_then(|since| source.damage(*since)) {
                 let dirty = snap_to_texels(damage.intersect(&region), origin, factor).intersect(&region);
                 let updated = if dirty.is_empty() {
                     // The pixels changed elsewhere: no texel of this texture is new, and the entry takes the revision.
                     store.put_region(ctx, &level, revision, [0, 0], ColorImage::new([0, 0], Vec::new())).map(|texture| (texture, dirty))
                 } else {
-                    let image = self.read_region(dirty, factor);
+                    let image = Self::read_region(source, dirty, factor);
                     store.put_region(ctx, &level, revision, texel_origin(dirty, origin, factor), image).map(|texture| (texture, dirty))
                 };
                 if let Some(updated) = updated {
@@ -203,7 +252,7 @@ impl<'a> RasterDisplay<'a> {
             }
         }
         held.0.insert(level, revision);
-        (store.put(ctx, level, revision, self.read_region(region, factor)), region)
+        (store.put(ctx, level, revision, Self::read_region(source, region, factor)), region)
     }
 
     /// Drops every texture of this display.
@@ -246,32 +295,41 @@ impl Component for RasterDisplay<'_> {
         }
     }
 
-    /// Reads what changed from the source and uploads it.
+    /// Reads what changed from a source and uploads it.
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         self.read = PixelRect::default();
         self.shown = None;
         let Some(space) = canvas_space(&cx.env) else { return };
         let (ctx, id) = (cx.ctx.clone(), cx.id);
-        let size = self.source.size();
+        let size = self.picture.size();
         let bounds = PixelRect::of_size(size);
         let mut held = std::mem::take(cx.keep::<Held>());
-        if bounds.is_empty() {
-            Self::release(&ctx, id);
-            return;
-        }
+        let source = match &self.picture {
+            Picture::Source(source) if !bounds.is_empty() => *source,
+            // An empty document, or a picture the app paints: the display holds no textures.
+            _ => {
+                if !held.0.is_empty() {
+                    Self::release(&ctx, id);
+                }
+                if !bounds.is_empty() {
+                    self.shown = Some(Shown { view: space.view, size, textures: None });
+                }
+                return;
+            }
+        };
         let side = texture_side(&ctx);
         let factor = texture_factor(size, side);
-        let (base, base_read) = self.bring_up_to_date(&ctx, id, &mut held, Level::Base, bounds, factor);
+        let (base, base_read) = Self::bring_up_to_date(source, &ctx, id, &mut held, Level::Base, bounds, factor);
         let plan = DetailPlan::in_view(&space.view, size, side, space.pixels_per_point).filter(|_| self.mapping.is_none());
         let detail = plan.map(|plan| {
-            let (texture, read) = self.bring_up_to_date(&ctx, id, &mut held, Level::Detail(plan), plan.region, plan.factor);
+            let (texture, read) = Self::bring_up_to_date(source, &ctx, id, &mut held, Level::Detail(plan), plan.region, plan.factor);
             self.read = self.read.union(&read);
             (texture, plan)
         });
         Self::retain_plan(&ctx, id, &mut held, plan);
         *cx.keep::<Held>() = held;
         self.read = self.read.union(&base_read);
-        self.shown = Some(Shown { view: space.view, size, base: (base, factor), detail });
+        self.shown = Some(Shown { view: space.view, size, textures: Some(Textures { base: (base, factor), detail }) });
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
@@ -281,15 +339,20 @@ impl Component for RasterDisplay<'_> {
         if let Some(checker) = &self.checkerboard {
             painter.painter.add(checker.shape(painter.painter.ctx(), &ui.env.tokens, CheckerArea::Quad(corners), shown.view.rect.min));
         }
-        let (texture, factor) = shown.base;
-        if let Some(mapping) = &self.mapping {
-            painter.painter.add(mapped_mesh(&shown.view, texture, factor, shown.size, mapping));
-            return;
-        }
-        let whole = PixelRect::of_size(shown.size);
-        painter.painter.add(textured_quad(&shown.view, texture, factor, whole));
-        if let Some((texture, plan)) = shown.detail {
-            painter.painter.add(textured_quad(&shown.view, texture, plan.factor, plan.region));
+        match (&mut self.picture, &shown.textures) {
+            (Picture::Painted { paint, .. }, _) => paint.paint(&painter, shown.view),
+            (Picture::Source(_), Some(textures)) => {
+                let (texture, factor) = textures.base;
+                if let Some(mapping) = &self.mapping {
+                    painter.painter.add(mapped_mesh(&shown.view, texture, factor, shown.size, mapping));
+                    return;
+                }
+                painter.painter.add(textured_quad(&shown.view, texture, factor, PixelRect::of_size(shown.size)));
+                if let Some((texture, plan)) = textures.detail {
+                    painter.painter.add(textured_quad(&shown.view, texture, plan.factor, plan.region));
+                }
+            }
+            (Picture::Source(_), None) => {}
         }
         if self.outlined {
             painter.with_draw(|draw| edge(draw, corners));
@@ -297,7 +360,7 @@ impl Component for RasterDisplay<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> RasterDisplayOutput {
-        let detail = self.shown.as_ref().and_then(|shown| shown.detail.as_ref().map(|(_, plan)| *plan));
+        let detail = self.shown.as_ref().and_then(|shown| shown.textures.as_ref()?.detail.as_ref().map(|(_, plan)| *plan));
         RasterDisplayOutput { response: cx.response.clone(), read: (!self.read.is_empty()).then_some(self.read), detail }
     }
 }

@@ -3,12 +3,15 @@
 use super::RasterDisplay;
 use super::RasterDisplayOutput;
 use crate::canvas::testing::canvas_story::{StoryPicture, on_canvas_view, story_view};
+use crate::canvas::{AppPaint, PageFrame, Pasteboard};
+use crate::canvas_controls::PixelGrid;
 use crate::contract::Show as _;
-use crate::primitives::Checker;
+use crate::primitives::{Checker, ContentPainterCx};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
-use craft_behavior::kurbo::Point;
+use craft_behavior::kurbo::{Point, Rect as Rect64};
 use craft_behavior::{CanvasView, PixelSize};
-use egui::{Color32, Rect, Ui};
+use egui::epaint::{Mesh, Vertex};
+use egui::{Color32, Rect, Shape, Ui};
 
 /// The document's size in pixels.
 const DOCUMENT: PixelSize = PixelSize::new(640, 400);
@@ -28,6 +31,26 @@ fn gradient_pixel(p: Point) -> Color32 {
     let seen = p.x > full_width / 2.0 || p.y > full_height / 2.0;
     let level = ((p.x / full_width + p.y / full_height) * 127.0) as u8;
     if seen { Color32::from_rgb(level, 160, u8::MAX - level) } else { Color32::TRANSPARENT }
+}
+
+/// The gradient as the app paints it: one colour mesh per seen part of the document through `view`. The colours are
+/// linear in the document point, so the mesh's interpolation gives `gradient_pixel`'s pixels.
+fn paint_gradient(painter: &ContentPainterCx<'_>, view: CanvasView) {
+    let (width, height) = (f64::from(DOCUMENT.width), f64::from(DOCUMENT.height));
+    let seen = [Rect64::new(width / 2.0, 0.0, width, height), Rect64::new(0.0, height / 2.0, width / 2.0, height)];
+    let shapes = seen.map(|part| {
+        let corners = [Point::new(part.x0, part.y0), Point::new(part.x1, part.y0), Point::new(part.x1, part.y1), Point::new(part.x0, part.y1)];
+        let mut mesh = Mesh::default();
+        let level = |p: Point| ((p.x / width + p.y / height) * 127.0) as u8;
+        mesh.vertices.extend(corners.map(|p| Vertex {
+            pos: view.to_screen(p),
+            uv: egui::epaint::WHITE_UV,
+            color: Color32::from_rgb(level(p), 160, u8::MAX - level(p)),
+        }));
+        mesh.indices.extend([0, 1, 2, 0, 2, 3]);
+        Shape::mesh(mesh)
+    });
+    painter.data_shapes(shapes);
 }
 
 /// The checkerboard cell sizes the stories offer.
@@ -89,4 +112,25 @@ fn turned(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let view = view_values(data, 100.0, TURN);
     let checker = checker_of(data);
     on_canvas_view(ui, view, None, |ui, at, _| gradient(ui, at, checker))
+}
+
+/// The gradient painted by the app, on a pasteboard with its page shadow and under the pixel grid, which reads the
+/// same gradient from a source: the display draws the checkerboard and the edge around the app's picture.
+#[story(RasterDisplay<'static>, covers = [Default], drive = Drive::Never)]
+fn painted(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let view = view_values(data, 100.0, 0.0);
+    let checker = checker_of(data);
+    let pages = [PageFrame::new(Rect64::new(0.0, 0.0, f64::from(DOCUMENT.width), f64::from(DOCUMENT.height)))];
+    let source = StoryPicture::new(DOCUMENT.width, DOCUMENT.height, gradient_pixel);
+    on_canvas_view(ui, view, None, |ui, at, _| {
+        let _ = Pasteboard::new("Pasteboard", &pages).show_at(ui, at);
+        let display = RasterDisplay::painted("Picture", DOCUMENT, AppPaint::new(paint_gradient)).outlined();
+        let output = match checker {
+            Some(checker) => display.checkerboard(checker),
+            None => display,
+        }
+        .show_at(ui, at);
+        let _ = PixelGrid::new("Pixel grid", &source).show_at(ui, at);
+        output
+    })
 }

@@ -3,6 +3,7 @@
 //! wheel and `+` and `-` zoom about the view centre, and the arrow and page keys move it.
 
 use super::proxy::{preview_rect, proxy_quad, view_center_for, zoom_to_document_rect};
+use crate::canvas::AppPaint;
 use crate::canvas::zoom_motion::{self, Steer};
 use crate::canvas::{CanvasWords, NavigationOptions, PageKey, ViewCommands, WheelAction, WheelNavigation};
 use crate::canvas_data::ProxyColor;
@@ -10,8 +11,8 @@ use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Name, Outcome, PaintUi,
     PartsCx, Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
 };
+use crate::primitives::PaintShape;
 use crate::primitives::textures::CachedTexture;
-use crate::primitives::{ContentPainterCx, PaintShape};
 use crate::runtime::access::Numeric;
 use crate::runtime::commands;
 use crate::runtime::env::Label;
@@ -47,25 +48,13 @@ const SHIFT_STEP: f32 = 0.5;
 const ZOOM_KEYS: [(Chord, i32); 4] =
     [(Chord::plain(Key::Plus), 1), (Chord::plain(Key::Equals), 1), (Chord::new(Mods::SHIFT, Key::Equals), 1), (Chord::plain(Key::Minus), -1)];
 
-type NavigatorPaintFn<'a> = Box<dyn FnMut(&ContentPainterCx<'_>, Rect) + 'a>;
-
-/// A closure that paints the document's picture into the fitted rect.
-pub struct NavigatorPaint<'a>(NavigatorPaintFn<'a>);
-
-impl<'a> NavigatorPaint<'a> {
-    /// A painter that draws the picture with `paint`, given the content painter and the rect the picture fills.
-    pub fn new(paint: impl FnMut(&ContentPainterCx<'_>, Rect) + 'a) -> Self {
-        NavigatorPaint(Box::new(paint))
-    }
-}
-
 /// What the preview box shows: the document's picture, made and cached by the app.
 #[non_exhaustive]
 pub enum NavigatorPreview<'a> {
     /// A texture from the app's own texture store, drawn over the checkerboard into the fitted rect.
     Texture(CachedTexture),
     /// The app paints the picture itself into the fitted rect; the checkerboard is not drawn.
-    Paint(NavigatorPaint<'a>),
+    Paint(AppPaint<'a, Rect>),
     /// No picture yet: the checkerboard alone, with the proxy over it.
     None,
 }
@@ -75,7 +64,7 @@ impl NavigatorPreview<'_> {
     pub fn reborrowed(&mut self) -> NavigatorPreview<'_> {
         match self {
             NavigatorPreview::Texture(texture) => NavigatorPreview::Texture(*texture),
-            NavigatorPreview::Paint(NavigatorPaint(paint)) => NavigatorPreview::Paint(NavigatorPaint::new(move |painter, rect| paint(painter, rect))),
+            NavigatorPreview::Paint(paint) => NavigatorPreview::Paint(paint.reborrowed()),
             NavigatorPreview::None => NavigatorPreview::None,
         }
     }
@@ -463,7 +452,7 @@ impl Component for Navigator<'_> {
                 painter.checker(fitted);
                 painter.picture(texture.id, fitted, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), 0.0);
             }
-            NavigatorPreview::Paint(NavigatorPaint(mut paint)) => paint(&painter, fitted),
+            NavigatorPreview::Paint(mut paint) => paint.paint(&painter, fitted),
             NavigatorPreview::None => painter.checker(fitted),
         }
         let Some(view) = cx.value().copied() else { return };

@@ -48,7 +48,9 @@ pub use pasteboard::{PageBorder, PageFrame, Pasteboard, PasteboardColor, Pastebo
 pub use split::{SplitAt, SplitLayout, SplitPane, SplitStyle, SplitViews, SplitViewsOutput};
 pub use words::SplitWords;
 
+mod app_paint;
 mod raster;
+pub use app_paint::AppPaint;
 pub use raster::{DetailPlan, RasterDisplay, RasterDisplayOutput, RasterStyle, snap_to_texels};
 
 // l4d-space
@@ -83,8 +85,8 @@ pub use scrollbars::{CanvasScrollbars, CanvasScrollbarsOutput};
 // canvas-navigator-a
 mod navigator;
 pub use navigator::{
-    Navigator, NavigatorCommands, NavigatorOutput, NavigatorPaint, NavigatorPreview, NavigatorZoomRow, NavigatorZoomRowOutput, preview_rect,
-    proxy_quad, view_center_for, zoom_to_document_rect,
+    Navigator, NavigatorCommands, NavigatorOutput, NavigatorPreview, NavigatorZoomRow, NavigatorZoomRowOutput, preview_rect, proxy_quad,
+    view_center_for, zoom_to_document_rect,
 };
 // End of canvas-navigator-a.
 // l4e-navprev

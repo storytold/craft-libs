@@ -1,7 +1,8 @@
 //! Stories of the Navigator and its zoom row.
 
 use super::preview::WELL;
-use super::{Navigator, NavigatorPaint, NavigatorPreview, NavigatorZoomRow};
+use super::{Navigator, NavigatorPreview, NavigatorZoomRow};
+use crate::canvas::AppPaint;
 use crate::contract::{Bind, Show as _, Validity};
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Grip, StoryData, StoryOutput, story};
@@ -56,7 +57,7 @@ fn views_that_differ(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn painted_by_the_app(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let view = data.value("view", CanvasView::new(CANVAS, Point::new(1000.0, 750.0), 1.0));
     Navigator::new("Navigator", Bind::bound(view), DOCUMENT)
-        .preview(NavigatorPreview::Paint(NavigatorPaint::new(|painter, rect| {
+        .preview(NavigatorPreview::Paint(AppPaint::new(|painter, rect| {
             painter.painter.rect_filled(rect, 0.0, Color32::from_gray(PICTURE_GRAY));
         })))
         .show(ui)
