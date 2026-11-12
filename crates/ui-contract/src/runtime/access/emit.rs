@@ -148,6 +148,8 @@ fn write_position(spec: &mut NodeSpec, position: Option<SetPosition>, level: Opt
 
 /// The actions the interaction and the numeric facts declare.
 fn declare_actions(spec: &mut NodeSpec, focusable: bool, clickable: bool, numeric: Option<&Numeric>) {
+    // A read-only value offers no action that would change it.
+    let numeric = numeric.filter(|_| !spec.read_only);
     if focusable {
         spec.actions.push(NodeAction::Focus);
     }
