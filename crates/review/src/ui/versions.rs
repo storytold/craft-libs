@@ -26,6 +26,9 @@ use egui::{Pos2, Rect, Response, Ui};
 use super::comments::age_text;
 use crate::versions::{Branch, BranchId, BranchState, HistoryRow, Version, VersionId, history_rows};
 
+/// The most lines of a version's description a row shows.
+const DESCRIPTION_LINES: u8 = 3;
+
 #[cfg(feature = "screen-testing")]
 mod stories;
 
@@ -443,7 +446,7 @@ fn history(
                     if version.author.is_empty() { date } else { words.detail.fill(&[("date", date.as_str()), ("author", version.author.as_str())]) };
                 let mut row = ListRow::new(text).depth(icx.depth).icon(dot).detail(detail);
                 if !version.description.is_empty() {
-                    row = row.lines(version.description.clone());
+                    row = row.lines(version.description.clone()).line_limit(DESCRIPTION_LINES);
                 }
                 row.trailing_part(TrailingPart::new(0), TrailingFace::Icon(IconSpec::from(IconId::new("more"))), words.row_more.clone())
             }
