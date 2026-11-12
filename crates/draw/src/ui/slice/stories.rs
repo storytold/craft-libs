@@ -1,15 +1,36 @@
-//! Stories of the Slice tools: the slices in each mode and the bar in each mode.
+//! Stories of the Slice tools: the tool run live over a document's slices, the slices in each mode and the bar in
+//! each mode.
 
-use super::{SliceBar, SliceItem, SliceMode, SliceOrigin, SliceOverlay, SliceToolSettings};
-use craft_behavior::PixelSize;
+use super::{
+    SliceBar, SliceCommand, SliceEvent, SliceItem, SliceMode, SliceOrigin, SliceOverlay, SliceRules, SliceTool, SliceToolSettings, SliceToolWords,
+};
 use craft_behavior::geometry::Constraint;
 use craft_behavior::kurbo::Rect;
+use craft_behavior::{CanvasView, EditEvent, PixelSize};
 use craft_ui::bars::{Bar, BarKind};
-use craft_ui::canvas::Canvas;
+use craft_ui::canvas::{Canvas, RasterSource as _};
 use craft_ui::contract::{Entry, Show as _, ShowContainer as _};
-use craft_ui::runtime::env::UnitKind;
-use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
+use craft_ui::runtime::env::{Env, UnitKind};
+use craft_ui::testing::canvas_story::StoryDocument;
+use craft_ui::testing::{Drive, EditKind, StoryData, StoryOutput, ToolStory, story, tool_story};
 use egui::Ui;
+
+craft_ui::words! {
+    /// The status line of the Slice tool story.
+    #[non_exhaustive]
+    pub(crate) struct SliceStoryWords {
+        /// The status line: the selected slice, then the last command or refusal.
+        status: template "sliceStory.status" = "{selection}. {note}";
+        /// The selected slice.
+        selected: template "sliceStory.selected" = "Selected: slice {number}";
+        /// No slice selected.
+        none: "sliceStory.none" = "No slice selected";
+        /// Nothing done so far.
+        idle: "sliceStory.idle" = "Draw, move or resize a slice";
+        /// The last command.
+        command: template "sliceStory.command" = "Command: {command}";
+    }
+}
 
 /// A document of 240 by 160 pixels at 72 pixels per inch.
 const DOCUMENT: PixelSize = PixelSize::new(240, 160);
@@ -77,4 +98,165 @@ fn slice_bar_fixed_size(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(SliceBar<'static>, covers = [], drive = Drive::Never)]
 fn slice_bar_select_mode(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     bar(ui, data, SliceMode::Select, Constraint::Free)
+}
+
+/// The slices of the live story's document: a demo layout of user, auto and layer slices on the story document.
+fn sample_slices() -> Vec<SliceItem> {
+    let page = StoryDocument::STANDARD.size();
+    let (right, bottom) = (f64::from(page.width), f64::from(page.height));
+    let item = |number, origin, rect| SliceItem::new(number, (origin != SliceOrigin::Auto).then_some(number as u32), rect, origin);
+    vec![
+        item(1, SliceOrigin::Auto, Rect::new(0.0, 0.0, right, 60.0)),
+        item(2, SliceOrigin::Auto, Rect::new(0.0, 60.0, 80.0, bottom)),
+        item(3, SliceOrigin::User, Rect::new(80.0, 60.0, 300.0, 200.0)),
+        item(4, SliceOrigin::Auto, Rect::new(300.0, 60.0, right, 120.0)),
+        item(5, SliceOrigin::Layer, Rect::new(360.0, 120.0, 560.0, 300.0)),
+        item(6, SliceOrigin::Auto, Rect::new(560.0, 120.0, right, 300.0)),
+        item(7, SliceOrigin::Auto, Rect::new(80.0, 200.0, 360.0, bottom)),
+        item(8, SliceOrigin::Auto, Rect::new(360.0, 300.0, right, bottom)),
+    ]
+}
+
+/// The slices and the selection the Slice tool story keeps as its document.
+#[derive(Clone, Debug, PartialEq)]
+struct Slices {
+    items: Vec<SliceItem>,
+    selected: Option<usize>,
+    hide_auto: bool,
+}
+
+impl Slices {
+    fn next_number(&self) -> usize {
+        self.items.iter().map(|item| item.number).max().unwrap_or(0) + 1
+    }
+
+    /// Sets a slice's rectangle; a moved auto or layer slice becomes a user slice.
+    fn place(&mut self, number: usize, rect: Rect) {
+        if let Some(item) = self.items.iter_mut().find(|item| item.number == number) {
+            item.rect = rect;
+            item.origin = SliceOrigin::User;
+        }
+    }
+
+    /// Answers one event as the app does, and returns the status note it leaves.
+    fn apply(&mut self, event: SliceEvent, words: &SliceStoryWords, tool_words: &SliceToolWords) -> Option<String> {
+        match event {
+            SliceEvent::Draw(event) => {
+                let rect = done(&event)?;
+                let number = self.next_number();
+                self.items.push(SliceItem::new(number, Some(number as u32), rect, SliceOrigin::User));
+                self.selected = Some(number);
+            }
+            SliceEvent::Move { number, event, .. } | SliceEvent::Resize { number, event, .. } => self.place(number, done(&event)?),
+            SliceEvent::Select { number, .. } => self.selected = number,
+            SliceEvent::Command(command) => {
+                match command {
+                    SliceCommand::Delete => {
+                        let selected = self.selected.take();
+                        self.items.retain(|item| item.origin != SliceOrigin::User || Some(item.number) != selected);
+                    }
+                    SliceCommand::Promote => {
+                        if let Some(item) = self.items.iter_mut().find(|item| Some(item.number) == self.selected) {
+                            item.origin = SliceOrigin::User;
+                        }
+                    }
+                    _ => {}
+                }
+                return Some(craft_i18n::fmt(words.command.as_str(), &[("command", command_name(command))]));
+            }
+            SliceEvent::Refused(_) => return Some(tool_words.locked.as_str().to_owned()),
+        }
+        None
+    }
+}
+
+/// The value an edit ends on, once it commits.
+fn done(event: &EditEvent<Rect>) -> Option<Rect> {
+    match event {
+        EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } => Some(*after),
+        _ => None,
+    }
+}
+
+/// The kind of the edit a slice event carries.
+fn edit_kind(event: &SliceEvent) -> Option<EditKind> {
+    match event {
+        SliceEvent::Draw(event) | SliceEvent::Move { event, .. } | SliceEvent::Resize { event, .. } => EditKind::of(event),
+        _ => None,
+    }
+}
+
+/// The kept Slice tool and the status note of its last command or refusal.
+#[derive(Default)]
+struct SliceKept {
+    tool: SliceTool,
+    note: Option<String>,
+}
+
+/// The slice commands by their menu names; the first four are story buttons.
+const COMMANDS: [(&str, SliceCommand); 5] = [
+    ("Promote", SliceCommand::Promote),
+    ("Delete", SliceCommand::Delete),
+    ("Slice Options…", SliceCommand::Options),
+    ("Divide…", SliceCommand::Divide),
+    ("Slices From Guides", SliceCommand::FromGuides),
+];
+/// The story button that turns Hide Auto Slices on and off.
+const HIDE_AUTO: &str = "Hide Auto Slices";
+
+fn command_name(command: SliceCommand) -> &'static str {
+    COMMANDS.iter().find(|(_, listed)| *listed == command).map_or("", |(name, _)| *name)
+}
+
+/// The Slice and Slice Select tools live over a document's user, auto and layer slices. Slice mode draws a slice;
+/// Select mode moves and resizes a user slice (an auto or layer slice that moves becomes a user slice). Promote,
+/// Delete and Hide Auto Slices act; Slice Options and Divide only report. The lock refuses every edit.
+#[story(SliceOverlay<'static>, covers = [], drive = Drive::Never)]
+fn slice_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let env = Env::of(ui);
+    let (words, tool_words) = (env.words::<SliceStoryWords>(), env.words::<SliceToolWords>());
+    let mode = *data.choice("mode", SliceMode::Slice, &[("Slice", SliceMode::Slice), ("Select", SliceMode::Select)]);
+    let rules = *data.choice("rules", SliceRules::PHOTOSHOP, &[("Photoshop", SliceRules::PHOTOSHOP), ("Illustrator", SliceRules::ILLUSTRATOR)]);
+    let locked = *data.value("locked", false);
+    let settings = SliceToolSettings::new(Constraint::Free);
+    let labels: Vec<&'static str> = COMMANDS[..4].iter().map(|(label, _)| *label).chain([HIDE_AUTO]).collect();
+    let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, _: &mut SliceKept, slices: &Slices| {
+        let overlay = SliceOverlay::new("Slices", &slices.items);
+        let overlay = match slices.selected {
+            Some(number) => overlay.selected_slice(number),
+            None => overlay,
+        };
+        let overlay = overlay.pick(mode == SliceMode::Select).hide_auto(slices.hide_auto).locked(locked).rules(rules);
+        overlay.show_at(ui, at).events
+    };
+    let first = Slices { items: sample_slices(), selected: None, hide_auto: false };
+    let picture = StoryDocument::STANDARD;
+    tool_story(ui, data, ToolStory::new("Document", &picture).buttons(&labels), SliceKept::default, first, body, |run| {
+        let (slices, kept) = (run.document, run.tool);
+        let mut tool_settings = settings;
+        tool_settings.hide_auto = slices.hide_auto;
+        kept.tool.mode(mode).items(&slices.items).selected(slices.selected).locked(locked).rules(rules).settings(tool_settings);
+        let _ = run.host.run(&mut kept.tool);
+        let mut events = run.shown.unwrap_or_default();
+        events.extend(kept.tool.take_events());
+        let mut output = StoryOutput::default();
+        output.edits = events.iter().filter_map(edit_kind).collect();
+        output.clicked = run.pressed.is_some();
+        if run.pressed == Some(HIDE_AUTO) {
+            slices.hide_auto = !slices.hide_auto;
+        } else if let Some((_, command)) = run.pressed.and_then(|label| COMMANDS.iter().find(|(name, _)| *name == label)) {
+            events.push(SliceEvent::Command(*command));
+        }
+        for event in events {
+            if let Some(note) = slices.apply(event, &words, &tool_words) {
+                kept.note = Some(note);
+            }
+        }
+        let selection = match slices.selected {
+            Some(number) => craft_i18n::fmt(words.selected.as_str(), &[("number", number.to_string().as_str())]),
+            None => words.none.as_str().to_owned(),
+        };
+        let note = kept.note.clone().unwrap_or_else(|| words.idle.as_str().to_owned());
+        output.readout(craft_i18n::fmt(words.status.as_str(), &[("selection", selection.as_str()), ("note", note.as_str())]))
+    })
 }
