@@ -14,9 +14,12 @@ and command handling remain in each application. No icons, fonts or application 
 
 ## Host-owned docking chrome
 
-Iconic flyouts resize from their canvas-side edge, bottom and shared corner, keeping
-the edge against the icon column anchored. Resizing saves the group's `height`
-and `flyout_width`, so workspaces retain independent sizes for each group.
+Iconic flyouts resize from their canvas-side edge, top, bottom and the two
+canvas-side corners, keeping the edge against the icon column anchored. Resizing
+saves the group's `height` and `flyout_width`, and a top-edge resize saves
+`flyout_offset`, the top's distance from the group's icons, so workspaces retain
+independent sizes and placement for each group. Without an offset a flyout aligns
+with its icons, and a saved one stays inside the float bounds.
 An explicit height overrides content fitting; untouched heights continue to fit
 content, including after a width-only drag. Layout locks and float bounds apply.
 

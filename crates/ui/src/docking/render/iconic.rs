@@ -327,7 +327,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             Edge::Left => request.column.right(),
             Edge::Right => request.column.left() - width,
         };
-        let top = request.icons.top().min(bounds.bottom() - height).max(bounds.top());
+        // A saved offset keeps a top-edge resize; without one the flyout aligns with its icons.
+        let offset = request.group.flyout_offset.unwrap_or(0.0);
+        let top = (request.icons.top() + offset).min(bounds.bottom() - height).max(bounds.top());
         let rect = Rect::from_min_size(pos2(left, top), vec2(width, height));
         let style = ChromeStyle::from_dock(self.style);
         let group = request.group;
@@ -341,7 +343,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             .bounds(bounds)
             .limits(limits)
             .resizable(movable)
-            .resize_edges([matches!(request.edge, Edge::Right), matches!(request.edge, Edge::Left), false, true])
+            .resize_edges([matches!(request.edge, Edge::Right), matches!(request.edge, Edge::Left), true, true])
             .reserve_top_resize_band(false)
             .resize_label(&label)
             .show(ctx, &style, |ui, rect| {
@@ -365,7 +367,11 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                 self.output.actions.push(Action::ResizeGroup { panel: active.clone(), height: Some(resized.height()) });
             }
             if resized.width() != response.rect.width() {
-                self.output.actions.push(Action::ResizeFlyoutWidth { panel: active, width: Some(resized.width()) });
+                self.output.actions.push(Action::ResizeFlyoutWidth { panel: active.clone(), width: Some(resized.width()) });
+            }
+            // A top-edge resize moves the top and keeps the bottom: save where the top now sits.
+            if resized.top() != response.rect.top() {
+                self.output.actions.push(Action::MoveFlyoutTop { panel: active, offset: Some(resized.top() - request.icons.top()) });
             }
         }
         self.iconic.rect = Some(response.rect);

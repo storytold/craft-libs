@@ -88,7 +88,8 @@ fn iconic_on_side(right: bool) -> Layout<u32> {
     layout
 }
 
-/// Flyouts expose only the canvas edge, bottom, and their shared corner on either dock side.
+/// Flyouts expose the canvas edge, top, bottom and the two corners on the canvas side, on
+/// either dock side; the column-side edge and its corners stay fixed.
 #[test]
 fn flyout_free_edges_resize_and_keep_the_column_anchor() {
     for right in [false, true] {
@@ -96,7 +97,11 @@ fn flyout_free_edges_resize_and_keep_the_column_anchor() {
         d.click(hit(&d, Hit::Icon(1)).center());
         d.settle();
         let id = d.id.with("flyout");
-        let enabled = if right { ["resize-left", "resize-bottom", "resize-bottom-left"] } else { ["resize-right", "resize-bottom", "resize"] };
+        let enabled = if right {
+            ["resize-left", "resize-bottom", "resize-bottom-left", "resize-top", "resize-top-left"]
+        } else {
+            ["resize-right", "resize-bottom", "resize", "resize-top", "resize-top-right"]
+        };
         for name in chrome::RESIZE_HANDLES {
             assert_eq!(d.ctx.read_response(id.with(name)).is_some(), enabled.contains(&name), "{name}, right={right}");
         }
@@ -212,6 +217,131 @@ fn flyout_resize_respects_limits_and_preserves_height_on_width_only_drags() {
         d.drag(from, from - vec2(0.0, 60.0));
         assert_eq!(d.layout, saved);
     }
+}
+
+/// The dock column on either side of the canvas.
+fn dock_column(layout: &Layout<u32>) -> Column<u32> {
+    match &layout.root {
+        Some(Node::Split { first, second, .. }) => [first, second]
+            .into_iter()
+            .find_map(|node| match node.as_ref() {
+                Node::Dock { columns, .. } => columns.first().cloned(),
+                _ => None,
+            })
+            .unwrap(),
+        other => panic!("no split: {other:?}"),
+    }
+}
+
+/// A point just inside the flyout's top edge, `x` along it.
+fn top_edge(rect: Rect, x: f32) -> Pos2 {
+    pos2(x, rect.top() + 0.5)
+}
+
+/// The top edge and the free top corner grow the flyout upward on either dock side: the
+/// bottom and the column-side edge stay, and the new top is saved as an offset from the
+/// icons, so it survives reopening, another group's flyout and a workspace round trip.
+#[test]
+fn flyout_top_edge_and_free_top_corner_grow_it_upward() {
+    for right in [false, true] {
+        let mut d = DockDriver::new(iconic_on_side(right), Content);
+        let icon = hit(&d, Hit::Icon(3)).center();
+        d.click(icon);
+        d.settle();
+        let before = flyout_rect(&d);
+        assert!(before.top() > 40.0, "room above the second group's flyout: {before:?}");
+        let from = top_edge(before, before.center().x);
+        d.drag(from, from - vec2(0.0, 30.0));
+        d.settle();
+        let raised = flyout_rect(&d);
+        assert!((raised.top() - (before.top() - 30.0)).abs() < 1.0, "right={right}: {before:?} -> {raised:?}");
+        assert_eq!(raised.bottom(), before.bottom());
+        assert_eq!(raised.width(), before.width());
+        let group = dock_column(&d.layout).groups[1].clone();
+        assert_eq!(group.height, Some(raised.height()));
+        assert!((group.flyout_offset.unwrap() + 30.0).abs() < 1.0, "{:?}", group.flyout_offset);
+        assert_eq!(group.flyout_width, None, "a vertical drag leaves the width automatic");
+        assert_eq!(dock_column(&d.layout).groups[0].flyout_offset, None);
+
+        // The free top corner moves the canvas-side edge and the top together.
+        let corner = if right { raised.left_top() + vec2(2.0, 0.5) } else { raised.right_top() + vec2(-2.0, 0.5) };
+        let direction = if right { -1.0 } else { 1.0 };
+        d.drag(corner, corner + vec2(direction * 40.0, -10.0));
+        d.settle();
+        let grown = flyout_rect(&d);
+        assert!((grown.width() - raised.width() - 40.0).abs() < 1.0, "right={right}: {raised:?} -> {grown:?}");
+        assert!((grown.top() - (raised.top() - 10.0)).abs() < 1.0, "right={right}: {raised:?} -> {grown:?}");
+        assert_eq!(grown.bottom(), before.bottom());
+        assert_eq!(if right { grown.right() } else { grown.left() }, if right { before.right() } else { before.left() });
+
+        // Another group's flyout keeps its own placement; this one comes back where it was.
+        d.click(hit(&d, Hit::Icon(1)).center());
+        d.settle();
+        assert_eq!(flyout_rect(&d).top(), hit(&d, Hit::Icon(1)).top(), "another group stays aligned with its icons");
+        d.click(icon);
+        d.settle();
+        assert_eq!(flyout_rect(&d), grown);
+        let location = d.layout.location(&3).unwrap();
+        assert_eq!(location.group.as_ref().unwrap().flyout_offset, dock_column(&d.layout).groups[1].flyout_offset);
+        #[cfg(feature = "serde")]
+        {
+            let saved = serde_json::to_string(&d.layout).unwrap();
+            assert!(saved.contains("flyout_offset"));
+            let mut restored = DockDriver::new(serde_json::from_str(&saved).unwrap(), Content);
+            restored.click(hit(&restored, Hit::Icon(3)).center());
+            restored.settle();
+            assert_eq!(flyout_rect(&restored), grown);
+        }
+    }
+}
+
+/// A saved offset that would put the flyout above the window or below it is clamped there,
+/// and an older workspace without one aligns the flyout with its icons as before.
+#[test]
+fn a_saved_flyout_offset_stays_inside_the_bounds() {
+    let mut d = DockDriver::new(docked(&[&[1], &[3]], true), Content);
+    d.click(hit(&d, Hit::Icon(3)).center());
+    d.settle();
+    let aligned = flyout_rect(&d);
+    assert_eq!(aligned.top(), hit(&d, Hit::Icon(3)).top());
+    for offset in [-100_000.0, 100_000.0] {
+        d.layout.apply(Action::MoveFlyoutTop { panel: 3, offset: Some(offset) }).unwrap();
+        d.settle();
+        let rect = flyout_rect(&d);
+        assert!(d.screen.contains_rect(rect), "{offset}: {rect:?} in {:?}", d.screen);
+        assert_eq!(rect.height(), aligned.height());
+    }
+    d.layout.apply(Action::MoveFlyoutTop { panel: 3, offset: None }).unwrap();
+    d.settle();
+    assert_eq!(flyout_rect(&d), aligned);
+    #[cfg(feature = "serde")]
+    {
+        let saved = serde_json::to_string(&d.layout).unwrap();
+        assert!(!saved.contains("flyout_offset"), "an unset offset is not written");
+    }
+}
+
+/// Persisted offsets are finite and bounded, survive close and restore, and clear with `None`.
+#[test]
+fn flyout_offset_rejects_invalid_geometry_without_mutating_the_layout() {
+    let mut layout = docked(&[&[1]], true);
+    let original = layout.clone();
+    for offset in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 2_000_000.0, -2_000_000.0] {
+        assert_eq!(layout.apply(Action::MoveFlyoutTop { panel: 1, offset: Some(offset) }), Err(DockError::InvalidGeometry));
+        assert_eq!(layout, original);
+    }
+    layout.apply(Action::MoveFlyoutTop { panel: 1, offset: Some(-120.0) }).unwrap();
+    let location = layout.location(&1).unwrap();
+    layout.apply(Action::Close { panel: 1 }).unwrap();
+    layout.restore(1, &location).unwrap();
+    assert_eq!(first_column(&layout).groups[0].flyout_offset, Some(-120.0));
+    let mut bad = location.clone();
+    bad.group.as_mut().unwrap().flyout_offset = Some(f32::NAN);
+    layout.apply(Action::Close { panel: 1 }).unwrap();
+    assert_eq!(layout.restore(1, &bad), Err(DockError::InvalidGeometry));
+    layout.restore(1, &location).unwrap();
+    layout.apply(Action::MoveFlyoutTop { panel: 1, offset: None }).unwrap();
+    assert_eq!(layout, original);
 }
 
 /// Persisted widths use the same finite geometry validation as column widths.
