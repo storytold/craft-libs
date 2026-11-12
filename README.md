@@ -89,6 +89,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   and message, images, and the vector network and geometry blobs. Bounded on hostile input.
   Carved from FigCraft.
 - [`craft-epub`](crates/epub/README.md): EPUB packages: the OCF ZIP container, the package document (metadata, manifest, spine) and the navigation document, written as EPUB 3 (reflowable and fixed layout) and read (EPUB 2 and 3) with bounded entry sizes. Content documents are the caller's.
+- [`craft-figma-rest`](crates/figma-rest/README.md): typed model of the Figma REST API file JSON
+  (document tree, paints, effects, text styles, layout, component metadata), read and written with
+  serde without losing fields it has no name for. The neutral model the `.fig` and `.sketch`
+  readers map onto, with their extensions documented.
 - [`craft-ews`](crates/ews/README.md): the SOAP layer of Exchange Web Services, from MailCraft, without
   sockets: the request envelope and an escaping element builder, and the answer envelope, faults
   and response messages with their codes, read with `craft-xml`. The operations and everything
