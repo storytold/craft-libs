@@ -19,3 +19,6 @@ unicode-normalization = "0.1"
 
 [dev-dependencies]
 proptest = { workspace = true }
+
+[lints.rust]
+unused_workspace_dependencies = "allow"

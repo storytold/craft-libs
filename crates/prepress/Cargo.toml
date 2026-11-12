@@ -25,3 +25,6 @@ ttf-parser = "=0.25.1"
 [features]
 # The transparency flattener.
 flatten = ["craft-pdf/write-pdf", "dep:kurbo", "dep:linesweeper", "dep:ttf-parser"]
+
+[lints.rust]
+unused_workspace_dependencies = "allow"
