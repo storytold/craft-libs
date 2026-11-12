@@ -39,15 +39,29 @@ fn refused_pattern(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     FindBar::new(&mut query, &mut options, &mut found).show(ui).response.into()
 }
 
+/// The Word layout of the dialog on `tab`, with "craft" in Find what, while `open`. The dialog keeps what is typed
+/// in it until it closes; the card's Show dialog opens a fresh one.
 fn dialog(ui: &mut Ui, data: &mut StoryData, tab: FindTab) -> StoryOutput {
-    let dialog = data.value("dialog", ());
-    let _ = dialog;
-    let mut shown = FindReplaceDialog::new("craft", tab).word(true).go_to_kinds(vec!["Page".into(), "Line".into()]);
-    let _ = shown.show(ui, &DialogStack::default());
-    StoryOutput::default()
+    let fresh = || FindReplaceDialog::new("craft", tab).word(true).go_to_kinds(vec!["Page".into(), "Line".into()]);
+    if !*data.value("open", true) {
+        return StoryOutput::default();
+    }
+    let dialog = data.note("dialog", fresh());
+    let closed = dialog.show(ui, &DialogStack::default()).is_some();
+    let request = dialog.take_request();
+    if closed {
+        *dialog = fresh();
+        *data.value("open", true) = false;
+    }
+    let last = data.note("last", None::<String>);
+    if let Some(request) = request {
+        *last = Some(format!("{request:?}"));
+    }
+    let readout = last.as_ref().map_or_else(|| "No event yet".to_owned(), |event| format!("Last event: {event}"));
+    StoryOutput::default().readout(readout)
 }
 
-#[story(FindReplaceDialog, covers = [], drive = Drive::Never)]
+#[story(FindReplaceDialog, covers = [], drive = Drive::Never, title = "Dialog")]
 fn find_tab(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     dialog(ui, data, FindTab::Find)
 }

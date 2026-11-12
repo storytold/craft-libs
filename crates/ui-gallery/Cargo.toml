@@ -91,7 +91,7 @@ craft-pages = { workspace = true, features = ["screen-testing"], optional = true
 craft-print = { workspace = true, features = ["screen-testing"], optional = true }
 craft-review = { workspace = true, features = ["screen-testing"], optional = true }
 craft-table = { workspace = true, features = ["screen-testing"], optional = true }
-craft-text = { workspace = true, features = ["screen-testing"], optional = true }
+craft-text = { workspace = true, features = ["screen-testing", "find"], optional = true }
 craft-theme-store = { workspace = true, features = ["screen-testing"], optional = true }
 craft-timeline = { workspace = true, features = ["screen-testing"], optional = true }
 
