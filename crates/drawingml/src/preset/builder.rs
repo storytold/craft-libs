@@ -1,5 +1,5 @@
 use super::catalog::{FillMode, Geometry, Handle, SubPath};
-use super::{Arc, BezPath, Point, Rect, Vec2};
+use super::{BezPath, Point, Rect, Vec2};
 
 // ---------- path builder ----------
 
@@ -37,10 +37,24 @@ impl Pb {
     pub(super) fn arc(&mut self, wr: f64, hr: f64, st: f64, sw: f64) -> &mut Self {
         let (s, e) = (st.to_radians(), (st + sw).to_radians());
         let c = Point::new(self.cur.x - wr * s.cos(), self.cur.y - hr * s.sin());
-        let a = Arc::new(c, Vec2::new(wr.abs(), hr.abs()), s, e - s, 0.0);
-        a.to_cubic_beziers(0.05, |p1, p2, p| {
-            self.p.curve_to(p1, p2, p);
-        });
+        // One cubic per quarter turn or part of one. `kurbo::Arc::to_cubic_beziers` sizes its
+        // segments from an error tolerance through `powf`, and libm implementations disagree on
+        // that call's last bits, so its `ceil` can pick a different segment count on another
+        // platform: the same shape then had two outlines, which no cross-platform golden can
+        // pin. `ceil` of a ratio of two exactly computed angles has no such edge.
+        let (rx, ry) = (wr.abs(), hr.abs());
+        let sweep = e - s;
+        let n = (sweep.abs() / std::f64::consts::FRAC_PI_2).ceil().max(1.0) as usize;
+        let step = sweep / n as f64;
+        let arm = (4.0 / 3.0) * (step * 0.25).abs().tan() * sweep.signum();
+        let sample = |a: f64| (c.x + rx * a.cos(), c.y + ry * a.sin());
+        let tangent = |a: f64| (-rx * a.sin(), ry * a.cos());
+        for i in 0..n {
+            let (a0, a1) = (s + i as f64 * step, s + (i + 1) as f64 * step);
+            let ((x0, y0), (tx0, ty0)) = (sample(a0), tangent(a0));
+            let ((x3, y3), (tx1, ty1)) = (sample(a1), tangent(a1));
+            self.p.curve_to(Point::new(x0 + arm * tx0, y0 + arm * ty0), Point::new(x3 - arm * tx1, y3 - arm * ty1), Point::new(x3, y3));
+        }
         self.cur = Point::new(c.x + wr * e.cos(), c.y + hr * e.sin());
         self
     }

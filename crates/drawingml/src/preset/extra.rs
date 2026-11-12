@@ -769,15 +769,19 @@ mod tests {
     fn outline_digest(name: &str) -> u64 {
         use std::fmt::Write;
         let mut text = String::new();
+        // Negative zero prints "-0.00" on one platform and "0.00" on another.
+        let z = |v: f64| if v == 0.0 { 0.0 } else { v };
         for adj in GOLD_ADJ {
             for (w, h) in GOLD_SIZES {
                 let g = build(name, w, h, adj).unwrap_or_else(|| panic!("{name} builds no outline"));
                 for el in g.outline().elements() {
                     let _ = match *el {
-                        PathEl::MoveTo(p) => write!(text, "M{:.2},{:.2}", p.x, p.y),
-                        PathEl::LineTo(p) => write!(text, "L{:.2},{:.2}", p.x, p.y),
-                        PathEl::QuadTo(a, p) => write!(text, "Q{:.2},{:.2},{:.2},{:.2}", a.x, a.y, p.x, p.y),
-                        PathEl::CurveTo(a, b, p) => write!(text, "C{:.2},{:.2},{:.2},{:.2},{:.2},{:.2}", a.x, a.y, b.x, b.y, p.x, p.y),
+                        PathEl::MoveTo(p) => write!(text, "M{:.2},{:.2}", z(p.x), z(p.y)),
+                        PathEl::LineTo(p) => write!(text, "L{:.2},{:.2}", z(p.x), z(p.y)),
+                        PathEl::QuadTo(a, p) => write!(text, "Q{:.2},{:.2},{:.2},{:.2}", z(a.x), z(a.y), z(p.x), z(p.y)),
+                        PathEl::CurveTo(a, b, p) => {
+                            write!(text, "C{:.2},{:.2},{:.2},{:.2},{:.2},{:.2}", z(a.x), z(a.y), z(b.x), z(b.y), z(p.x), z(p.y))
+                        }
                         PathEl::ClosePath => write!(text, "Z"),
                     };
                 }
@@ -787,23 +791,23 @@ mod tests {
         text.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
     }
 
-    /// Digests of every name's outlines as the string dispatch built them (craft-libs 2b35d243;
-    /// DeckCraft's fc35ad67 gave other digests for curvedRightArrow and curvedDownArrow), so
-    /// this refactor is proven output-identical: any changed outline fails here.
+    /// Digests of every name's outline: any changed shape fails here. Arcs are laid out by
+    /// [`super::builder::Pb::arc`] in quarter-turn cubics of its own, not by kurbo's
+    /// tolerance-driven subdivision, so these hold on every platform.
     const GOLDEN: [(&str, u64); 38] = [
         ("lineInv", 0x555968c5c6b7d35f),
         ("nonIsoscelesTrapezoid", 0x8c792838cff341c6),
-        ("pieWedge", 0xb322022dd8e12e17),
+        ("pieWedge", 0x4c34af9886460b05),
         ("leftRightArrowCallout", 0x5c3f1c2d89bf7e3d),
         ("upDownArrowCallout", 0x900420d1f8f4ffbd),
         ("quadArrowCallout", 0xb4276d31f1b595a3),
         ("circularArrow", 0x631abd60df5ecb83),
         ("leftCircularArrow", 0x8c025366846b477d),
-        ("leftRightCircularArrow", 0x0f3ddef015be52a0),
-        ("curvedRightArrow", 0xabb28001f2fc9c60),
-        ("curvedLeftArrow", 0x046af60e978f9723),
-        ("curvedUpArrow", 0x7b2680cf225d50f0),
-        ("curvedDownArrow", 0x0eda853df38651bc),
+        ("leftRightCircularArrow", 0x9cf0f01d5cb01683),
+        ("curvedRightArrow", 0x78a7075ba3843fce),
+        ("curvedLeftArrow", 0xc9837da9f388a110),
+        ("curvedUpArrow", 0x6bce459b402857c1),
+        ("curvedDownArrow", 0xd110a7a91f8b37bd),
         ("swooshArrow", 0x03f8340ba220fefb),
         ("callout1", 0xc02b94f2a53a97d8),
         ("callout2", 0xb767bc9356848c38),
