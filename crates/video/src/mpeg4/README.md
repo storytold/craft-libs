@@ -39,8 +39,10 @@ let info = craft_video::mpeg4::probe(&headers); // StreamInfo without decoding
 - `decode` takes any chunk holding whole VOPs: a container frame (which may pack a P-VOP and a
   B-VOP, as DivX and Xvid store them in AVI), or several frames of a raw `.m4v` stream. It returns
   at most 16 pictures a call, fewer when the memory budget holds fewer beside the references
-  (queued pictures count at their own size); the rest of a chunk past that limit is skipped and
-  counted in `errors()`.
+  (queued pictures count at their own size). Past that limit the chunk's VOPs are skipped but its
+  configuration headers are still read, so a new VOL takes effect and its VOPs are decoded as far
+  as they fit; a held-back picture that such a VOL would release is dropped. Skipped VOPs and a
+  dropped picture count as one error in `errors()`.
 - Pictures come out in display order. With `low_delay` (no B-VOPs) each picture comes out as soon
   as it is decoded; otherwise a reference picture is held until the next one.
 - An uncoded VOP (`vop_coded` 0: the placeholder after packed B-VOPs, or a dropped frame)

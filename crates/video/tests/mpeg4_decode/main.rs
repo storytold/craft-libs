@@ -809,3 +809,50 @@ fn a_reduced_budget_applies_from_the_next_layer() {
     }
     assert_eq!(dec.errors(), 0);
 }
+
+/// A VOL in a chunk past the per-call limit is still read. Here a 64×64 layer with a four-picture
+/// budget is at its limit after one picture, and the chunk continues with a 32×32 stream: its
+/// VOL takes effect (dropping the 64×64 references) and its VOP, which then fits, is decoded,
+/// as are the stream's later chunks.
+#[cfg(feature = "mpeg4-encode")]
+#[test]
+fn a_layer_header_past_the_limit_still_takes_effect() {
+    let large = encoded(64, 64, 2);
+    let small = encoded(32, 32, 2);
+    let mut dec = Decoder::new();
+    dec.set_memory_budget(4 * 6144);
+    assert_eq!(dec.decode(&large[0], 0).expect("decode").len(), 1);
+    let pics = dec.decode(&[large[1].clone(), small[0].clone()].concat(), 1).expect("both pictures");
+    assert_eq!(pics.iter().map(|p| p.width).collect::<Vec<_>>(), [64, 32]);
+    let next = dec.decode(&small[1], 2).expect("the next chunk");
+    assert_eq!(next.iter().map(|p| (p.width, p.info.width)).collect::<Vec<_>>(), [(32, 32)]);
+    assert_eq!(dec.errors(), 0);
+}
+
+/// Past the limit, a VOL that would release the picture held back for reordering drops it
+/// (counted as an error) instead of exceeding the budget, and still takes effect.
+#[test]
+fn a_layer_header_past_the_limit_drops_the_held_back_picture() {
+    let Some(ff) = ffmpeg() else { return };
+    let a = encode(&ff, "limitvol-a", "176x144", 6, &["-qscale:v", "4", "-bf", "1"]);
+    let b = encode(&ff, "limitvol-b", "128x96", 4, &["-qscale:v", "4", "-bf", "1"]);
+    let (ca, cb) = (chunks(&a), chunks(&b));
+    let frame = 176 * 144 * 3 / 2;
+    let mut dec = Decoder::new();
+    dec.set_memory_budget(4 * frame);
+    let mut pics = Vec::new();
+    for (i, c) in ca[..ca.len() - 1].iter().enumerate() {
+        pics.extend(dec.decode(c, i as i64).expect("decode"));
+    }
+    // The last chunk of the first stream queues a picture, which leaves no room for another of
+    // 176×144: the second stream's VOL comes past the limit.
+    pics.extend(dec.decode(&[ca[ca.len() - 1], cb[0]].concat(), 10).expect("decode"));
+    assert_eq!(dec.errors(), 1, "{:?}", dec.last_error());
+    for (i, c) in cb[1..].iter().enumerate() {
+        pics.extend(dec.decode(c, 11 + i as i64).expect("decode"));
+    }
+    pics.extend(dec.flush());
+    let sizes: Vec<u32> = pics.iter().map(|p| p.width).collect();
+    assert_eq!(sizes, [vec![176; 5], vec![128; 4]].concat(), "the held-back 176×144 picture is dropped");
+    assert_eq!(dec.errors(), 1);
+}

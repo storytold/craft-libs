@@ -200,6 +200,11 @@ pub struct Decoder {
     /// [`set_memory_budget`](Self::set_memory_budget) applies from the next VOL, so the current
     /// layer keeps decoding and a smaller VOL that fits the new budget is still reached.
     layer_budget: u64,
+    /// Set while a header past the per-call limit is read: [`show_last`](Self::show_last) then
+    /// drops the held-back picture instead of queueing it (see [`decode`](Self::decode)).
+    drop_held: bool,
+    /// A VOP was skipped or a held-back picture dropped for the per-call limit.
+    dropped: bool,
     /// Why the last VOL was refused, until a decodable one arrives: the error of the VOPs that
     /// follow it, so `last_error` keeps naming the cause.
     refused: Option<DecodeError>,
@@ -258,6 +263,8 @@ impl Decoder {
             spare: None,
             frame_bytes: 0,
             layer_budget: 0,
+            drop_held: false,
+            dropped: false,
             refused: None,
             time_base: 0,
             last_time_base: 0,
@@ -416,23 +423,38 @@ impl Decoder {
     /// order. A damaged VOP is still output, concealed, and counted in [`errors`](Self::errors).
     ///
     /// One call returns at most 16 pictures, fewer when the memory budget does not hold that
-    /// many beside the reference pictures. Decoding of a chunk that would produce more stops at
-    /// the limit: the pictures so far are returned, and the rest of the chunk is skipped and
-    /// counted as an error.
+    /// many beside the reference pictures. Past that limit the VOPs of the chunk are skipped,
+    /// while its configuration headers are still read, so a new VOL takes effect and its VOPs are
+    /// decoded as far as they fit. A picture held back for reordering that such a VOL would
+    /// release is dropped instead. Skipped VOPs and a dropped picture count as one error.
     pub fn decode(&mut self, data: &[u8], pts: i64) -> Result<Vec<Picture>> {
         let codes = start_codes(data);
         let mut err = None;
+        let mut limited = false;
         for (k, &(pos, code)) in codes.iter().enumerate() {
-            if !self.room_for_a_picture() {
+            let room = self.room_for_a_picture();
+            let end = codes.get(k + 1).map_or(data.len(), |c| c.0);
+            let payload = &data[(pos + 4).min(end)..end];
+            let r = if code != 0xB6 {
+                // A header past the limit may end the layer; the picture it would release must
+                // not add to the queue.
+                self.drop_held = !room;
+                let r = self.header(code, payload);
+                self.drop_held = false;
+                r
+            } else if room {
+                self.vop(payload, pts)
+            } else {
+                self.dropped = true;
+                Ok(())
+            };
+            if std::mem::take(&mut self.dropped) && !limited {
+                limited = true;
                 let e = DecodeError::Invalid("too many pictures in one chunk");
                 self.errors += 1;
                 self.last_error = Some(e.clone());
                 err = Some(e);
-                break;
             }
-            let end = codes.get(k + 1).map_or(data.len(), |c| c.0);
-            let payload = &data[(pos + 4).min(end)..end];
-            let r = if code == 0xB6 { self.vop(payload, pts) } else { self.header(code, payload) };
             if let Err(e) = r {
                 self.errors += 1;
                 self.last_error = Some(e.clone());
@@ -487,7 +509,11 @@ impl Decoder {
             && !r.shown
         {
             r.shown = true;
-            self.out.push(to_picture(r.info.clone(), &r.frame, r.meta));
+            if self.drop_held {
+                self.dropped = true;
+            } else {
+                self.out.push(to_picture(r.info.clone(), &r.frame, r.meta));
+            }
         }
     }
 
