@@ -143,6 +143,43 @@ impl PsdFile {
         want: impl FnOnce(&PsdFile) -> Result<bool>,
         recover: impl FnOnce(&PsdFile) -> bool,
     ) -> Result<(Self, Option<Result<Vec<u8>>>)> {
+        Self::from_source_and_merged_preflight_info(source, |file, _, _| want(file), recover)
+    }
+
+    /// [`Self::from_bytes_and_merged_preflight_info`] for a [`Source`]. Only the two-byte
+    /// compression field is inspected before preflight, never the encoded pixels. A missing
+    /// field or failed read is reported as `None`; a read error is returned after preflight
+    /// unless the callback refuses the import first.
+    pub fn from_source_and_merged_preflight_info(
+        source: Source,
+        want: impl FnOnce(&PsdFile, Option<Compression>, u64) -> Result<bool>,
+        recover: impl FnOnce(&PsdFile) -> bool,
+    ) -> Result<(Self, Option<Result<Vec<u8>>>)> {
+        Self::from_source_deferring_info(source, |_, _| false, want, recover)
+    }
+
+    /// [`Self::from_source_and_merged_preflight`] that also leaves the data of each global block
+    /// `defer(key, length)` accepts in the source ([`TaggedBlock::stored`]): an embedded
+    /// smart-object block (`lnk2`) can be most of a file. Defer only blocks the reader loads
+    /// before use (the linked-file blocks `lnk2`/`lnk3`/`lnkD`): a deferred block's `data` is
+    /// empty, and [`TaggedBlock::parsed`] refuses it.
+    pub fn from_source_deferring(
+        source: Source,
+        defer: impl Fn(&[u8; 4], u64) -> bool,
+        want: impl FnOnce(&PsdFile) -> Result<bool>,
+        recover: impl FnOnce(&PsdFile) -> bool,
+    ) -> Result<(Self, Option<Result<Vec<u8>>>)> {
+        Self::from_source_deferring_info(source, defer, |file, _, _| want(file), recover)
+    }
+
+    /// [`Self::from_source_deferring`] whose preflight also sees the merged image's compression
+    /// and encoded length, as [`Self::from_source_and_merged_preflight_info`] gives them.
+    pub fn from_source_deferring_info(
+        source: Source,
+        defer: impl Fn(&[u8; 4], u64) -> bool,
+        want: impl FnOnce(&PsdFile, Option<Compression>, u64) -> Result<bool>,
+        recover: impl FnOnce(&PsdFile) -> bool,
+    ) -> Result<(Self, Option<Result<Vec<u8>>>)> {
         let mut c = Cursor::new(&source);
         let header = Header::read(&mut Reader::new(&c.bytes(26)?))?;
         let version = header.version;
@@ -209,6 +246,7 @@ impl PsdFile {
                         layer_info_placement = LayerInfoPlacement::GlobalBlock { index, signature, key, padding: padding.clone() };
                         Ok(Some(()))
                     },
+                    &defer,
                     &mut global_blocks,
                 )?;
                 layer_mask_trailing = trailing;
@@ -228,7 +266,10 @@ impl PsdFile {
             image_data: ImageData::new(Compression::Raw, Vec::new()),
             write_as_psb: false,
         };
-        if !want(&file)? {
+        let compression = c.peek(2).map(|bytes| Reader::new(&bytes).u16().ok().map(Compression::from_u16));
+        let want = want(&file, compression.as_ref().ok().copied().flatten(), c.remaining().saturating_sub(2))?;
+        compression?;
+        if !want {
             let compression = Compression::from_u16(c.u16()?);
             file.image_data = ImageData { compression, data: Vec::new(), stored: Some(c.stored_rest()) };
             return Ok((file, None));
@@ -247,6 +288,7 @@ fn read_blocks<'a>(
     r: &mut Cursor<'a>,
     version: Version,
     mut consume: impl FnMut(usize, [u8; 4], [u8; 4], Cursor<'a>, &Option<Vec<u8>>) -> Result<Option<()>>,
+    defer: &dyn Fn(&[u8; 4], u64) -> bool,
     blocks: &mut Vec<TaggedBlock>,
 ) -> Result<Vec<u8>> {
     const ALIGNMENT: usize = 4;
@@ -276,8 +318,13 @@ fn read_blocks<'a>(
         let padding = if pad_bytes.len() == default && pad_bytes.iter().all(|&b| b == 0) { None } else { Some(pad_bytes) };
         let (start, end) = (data.pos, data.end);
         if consume(blocks.len(), signature, key, data, &padding)?.is_none() {
-            let data = Cursor { src: r.src, pos: start, end }.rest()?;
-            blocks.push(TaggedBlock { signature, key, data, padding });
+            if defer(&key, end - start) {
+                let stored = Stored { source: r.src.clone(), offset: start, len: end - start };
+                blocks.push(TaggedBlock { signature, key, data: Vec::new(), padding, stored: Some(stored) });
+            } else {
+                let data = Cursor { src: r.src, pos: start, end }.rest()?;
+                blocks.push(TaggedBlock { signature, key, data, padding, stored: None });
+            }
         }
     }
 }
@@ -359,6 +406,38 @@ mod tests {
         v
     }
 
+    /// The preflight sees the merged image's compression and encoded length, from bytes and from
+    /// a source alike, before the image is read.
+    #[test]
+    fn preflight_info_reports_the_merged_compression_and_length() {
+        for c in Compression::ALL {
+            let file = testgen::small(Version::Psd, c);
+            let bytes = file.to_bytes().unwrap();
+            let want = Some((Some(c), file.image_data.encoded_len()));
+            let mut eager = None;
+            PsdFile::from_bytes_and_merged_preflight_info(&bytes, |_, comp, len| Ok(eager.replace((comp, len)).is_some()), |_| false).unwrap();
+            let mut lazy = None;
+            PsdFile::from_source_and_merged_preflight_info(Source::new(bytes), |_, comp, len| Ok(lazy.replace((comp, len)).is_some()), |_| false)
+                .unwrap();
+            assert_eq!((eager, lazy), (want, want), "{c:?}");
+        }
+        // No compression field: the preflight sees `None`, and its refusal wins over the missing field.
+        let file = testgen::small(Version::Psd, Compression::Raw);
+        let bytes = file.to_bytes().unwrap();
+        let cut = &bytes[..bytes.len() - file.image_data.encoded_len() as usize - 2];
+        let refuse = |_: &PsdFile, comp: Option<Compression>, _: u64| {
+            assert_eq!(comp, None);
+            Err(PsdError::LimitExceeded("refused"))
+        };
+        assert_eq!(PsdFile::from_bytes_and_merged_preflight_info(cut, refuse, |_| false).unwrap_err(), PsdError::LimitExceeded("refused"));
+        assert_eq!(
+            PsdFile::from_source_and_merged_preflight_info(Source::new(cut.to_vec()), refuse, |_| false).unwrap_err(),
+            PsdError::LimitExceeded("refused")
+        );
+        // Accepted, the missing field is the error it always was.
+        assert!(PsdFile::from_source_and_merged_preflight_info(Source::new(cut.to_vec()), |_, _, _| Ok(true), |_| false).is_err());
+    }
+
     fn same(bytes: Vec<u8>) {
         let eager = PsdFile::from_bytes(&bytes).unwrap();
         let lazy = PsdFile::from_source(Source::new(bytes.clone())).unwrap();
@@ -387,6 +466,17 @@ mod tests {
         let written = eager.to_bytes().unwrap();
         assert_eq!(lazy.encoded_len().unwrap(), written.len() as u64);
         assert!(lazy.to_bytes().unwrap() == written, "the lazily read PSD writes another PSB");
+    }
+
+    #[test]
+    fn deferred_blocks_read_back_the_same() {
+        for bytes in samples() {
+            let eager = PsdFile::from_bytes(&bytes).unwrap();
+            let (lazy, _) = PsdFile::from_source_deferring(Source::new(bytes.clone()), |_, _| true, |_| Ok(false), |_| false).unwrap();
+            assert!(lazy.global_blocks.iter().all(|b| b.data.is_empty() && b.stored.is_some()));
+            assert_eq!(lazy, eager);
+            assert_eq!(lazy.to_bytes().unwrap(), bytes);
+        }
     }
 
     #[test]

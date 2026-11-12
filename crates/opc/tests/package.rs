@@ -156,9 +156,8 @@ fn parts_are_shared_not_copied() {
 
 #[test]
 fn skipped_parts_count_against_the_inflate_budget() {
-    // Kept bytes cap at 100: b, c and d are inflated past what's left and left out. That work
-    // is charged, so after d the budget (130) is spent and e is not read, although it would
-    // have fit.
+    // Kept bytes cap at 100: b, c and d declare more than is left and are left out before
+    // anything is inflated, so they cost no work and e, which fits, is still read.
     let mut zw = zip::ZipWriter::new(Cursor::new(Vec::new()));
     let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
     for (name, len) in [("a", 80), ("b", 80), ("c", 80), ("d", 80), ("e", 5), ("big", 2000)] {
@@ -170,7 +169,8 @@ fn skipped_parts_count_against_the_inflate_budget() {
     let p = Package::open(&z, &skip(130)).unwrap();
     assert!(p.get("a").is_some());
     assert!(p.get("b").is_none() && p.get("d").is_none());
-    assert!(p.get("e").is_none(), "the inflate budget stops reading");
+    assert!(p.get("e").is_some(), "parts refused by their declared size cost nothing");
+    assert_eq!(p.size(), 85);
     // With room to spare the same small part is kept, and a part declaring more than the part
     // limit is left out without being inflated.
     let p = Package::open(&z, &skip(10_000)).unwrap();
@@ -191,6 +191,9 @@ fn backslash_zip_entry_names_are_found() {
     assert_eq!(p.canonical("docprops/core.xml"), Some("docProps/core.xml"));
     let mut lazy = LazyPackage::open(&z, &LIMITS).unwrap();
     assert_eq!(lazy.names(), ["docprops/core.xml", "ppt/slides/slide1.xml"]);
+    assert_eq!(lazy.canonical("ppt/slides/slide1.xml").as_deref(), Some("PPT/Slides/Slide1.xml"));
+    assert_eq!(lazy.canonical("/DOCPROPS/core.xml").as_deref(), Some("docProps/core.xml"));
+    assert_eq!(lazy.canonical("nothing"), None);
     assert_eq!(lazy.read("PPT/slides/slide1.xml").unwrap().as_deref(), Some(&b"<a/>"[..]));
 }
 
@@ -347,4 +350,18 @@ fn packed_media_are_stored() {
         let p = Package::open(&z, &LIMITS).unwrap();
         assert_eq!(p.size(), 100_000);
     }
+}
+
+/// Two entries of exactly one name: `zip` keeps one. This crate is lenient about part names
+/// (spellings that differ only in case are one part), so the package still opens.
+#[test]
+fn an_entry_name_repeated_exactly_still_opens() {
+    let mut z = zip_of(&[("word/a.xml", b"<a/>".to_vec()), ("word/b.xml", b"<b/>".to_vec())]);
+    let mut i = 0;
+    while let Some(at) = z[i..].windows(10).position(|w| w == b"word/b.xml") {
+        z[i + at + 5] = b'a';
+        i += at + 10;
+    }
+    assert_eq!(Package::open(&z, &LIMITS).unwrap().names().collect::<Vec<_>>(), ["word/a.xml"]);
+    assert!(LazyPackage::open(&z, &LIMITS).unwrap().read("word/a.xml").unwrap().is_some());
 }

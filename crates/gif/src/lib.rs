@@ -10,12 +10,14 @@
 //! headers alone. [`palette`] gives the colour table of the first frame, for opening a GIF as an
 //! indexed image.
 //!
-//! Decoding pixels is not part of this crate; the apps use a GIF decoder for that and check its
-//! work against what [`scan`] says first.
+//! With feature `frames`, [`frames::read_frames`] decodes every frame through the `image` crate's
+//! GIF decoder, after the checks [`scan`] makes possible, with bounded memory.
 //!
 //! Input is treated as hostile: every read is bounds-checked, and the number of frames recorded
 //! is capped by the caller.
 
+#[cfg(feature = "frames")]
+pub mod frames;
 #[cfg(test)]
 mod tests;
 
