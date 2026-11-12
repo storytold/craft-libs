@@ -33,6 +33,12 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
+/// Decode percent escapes in a URI path, including a relative media locator.
+/// Invalid escapes remain literal and invalid UTF-8 is replaced.
+pub fn decode_uri_path(path: &str) -> String {
+    percent_decode(path)
+}
+
 fn percent_encode_path(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for &c in s.as_bytes() {
