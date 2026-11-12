@@ -1,6 +1,6 @@
 use craft_pcraft_format::{
-    BLOBS_DIR, COMPOSITE, COMPOSITE_DIR, EXTENSION, FORMAT_VERSION, Limits, MANIFEST, Manifest, OBJECT_SUFFIX, SAVE_LOCK, Step, THUMB, TILES_DIR,
-    TileRef, blob_path, is_valid_hash, tile_path,
+    BLOBS_DIR, COMPOSITE, COMPOSITE_DIR, EXTENSION, FORMAT_VERSION, FULL_COMPOSITE, Limits, MANIFEST, Manifest, OBJECT_SUFFIX, SAVE_LOCK, Step,
+    THUMB, TILES_DIR, TileRef, blob_path, is_valid_hash, tile_path,
 };
 use serde::{Deserialize, Serialize};
 
@@ -83,6 +83,18 @@ fn written_manifests_read_back_equal() {
         let read: Manifest<Doc> = read(text).unwrap();
         assert_eq!(read, manifest(previews));
     }
+}
+
+#[test]
+fn an_optional_full_composite_round_trips_without_changing_older_manifests() {
+    let mut manifest = manifest(true);
+    assert_eq!(manifest.full_composite, None);
+    manifest.full_composite = Some(FULL_COMPOSITE.into());
+    let text = serde_json::to_string_pretty(&manifest).unwrap();
+    assert!(text.ends_with("\"full_composite\": \"composite/full.png\"\n}"));
+    assert_eq!(read::<Doc>(&text).unwrap(), manifest);
+    manifest.full_composite = None;
+    assert_eq!(serde_json::to_string_pretty(&manifest).unwrap(), WITH_PREVIEWS);
 }
 
 #[test]
