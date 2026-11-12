@@ -153,10 +153,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   what PhotoCraft's and FilmCraft's readers added: container parsing and decompression to a neutral
   raw image (samples, CFA, black and white levels, active area, crop, orientation, colour tags,
   opcode lists, embedded previews), one Cargo feature per format. DNG reading and writing,
-  Hasselblad 3FR/FFF, Minolta MRW, Epson ERF, Mamiya MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2, Nikon NEF/NRW, Panasonic RW2, Fujifilm RAF, Olympus ORF (uncompressed) and Canon CRW (through
-  Hasselblad 3FR/FFF, Minolta MRW, Epson ERF, Mamiya MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2, Nikon NEF/NRW, Panasonic RW2, Fujifilm RAF and Canon CRW (through
-  Hasselblad 3FR/FFF, Minolta MRW, Epson ERF, Mamiya MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2, Nikon NEF/NRW, Panasonic RW2 and Canon CRW (through
-  Hasselblad 3FR/FFF, Minolta MRW, Epson ERF, Mamiya MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2, Nikon NEF/NRW and Canon CRW (through
+  Hasselblad 3FR/FFF, Minolta MRW, Epson ERF, Mamiya MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2, Nikon NEF/NRW, Panasonic RW2, Fujifilm RAF, Olympus ORF (uncompressed), Sony ARW, Canon CR3 and Canon CRW (through
   `craft-crw`) so far; demosaicing and everything after stay with the develop
   pipeline.
 - [`craft-tga`](crates/tga/src/lib.rs): Truevision Targa, from FilmCraft (reader) and PhotoCraft
@@ -287,6 +284,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   for a small neutral model (paragraphs, character formatting, outline levels, tables).
 - [`craft-settings`](crates/settings/README.md): `config.toml` settings storage for every app: platform folders, portable mode and overrides, atomic saves while running, backup, damaged-file recovery and schema migrations. Policy in [docs/settings-storage.md](docs/settings-storage.md).
 - [`craft-sheet`](crates/sheet/README.md): spreadsheet vocabulary shared by `craft-xls`, `craft-xlsx` and `craft-ods`: cell positions and A1 text, cell values and error values, sheet-name quoting, Excel's built-in number formats and indexed colour palette. Not a file format; no dependencies.
+- [`craft-sf2`](crates/sf2/README.md): SoundFont 2 (`.sf2`) reader: the sample pool and, per preset, the key and velocity regions a note sounds, with tuning, loop points, pan, level and volume envelope resolved from the preset and instrument zones. Bounded on hostile input. From LoopCraft.
 - [`craft-silhouette-studio`](crates/silhouette-studio/src/lib.rs): bounded, fail-closed reader for Silhouette Studio `.studio` and `.studio3` documents: outlines, line colours and page size in millimetres. Protected designs are refused.
 - [`craft-sketch`](crates/sketch/README.md): clean-room reader for the `.sketch` container (Sketch 48 and newer): the ZIP archive, the version cut, `document.json`, the pages in document order and images, as the JSON the file holds. Bounded on hostile input. Carved from FigCraft.
 - [`craft-svg`](crates/svg/src/lib.rs): SVG. `sniff` recognises SVG and SVGZ data; `svgz` unpacks

@@ -32,5 +32,19 @@ readable one, and the theme of a master that names none. `Plain` has no applicat
 `import_theme` reads the theme of a `.thmx`, or of a presentation's first master. `sniff` tells a
 package from other bytes.
 
-Not read yet (later changes): transitions and animations, speaker notes, comments. The writer
-comes later too.
+## Writing
+
+`export(&presentation, &defaults)` writes a package PowerPoint opens without repair; `export_as`
+writes a `.potx` or `.ppsx` instead. Masters, layouts and slides with their shapes, pictures,
+media, tables and table styles, charts (an unchanged chart's workbook and other parts written
+back), SmartArt, 3-D models, ink (as freeform lines), objects kept as XML (with their parts),
+notes and handout masters, sections, custom shows, show settings, drawing guides, embedded fonts,
+tags, kept parts and document properties. A slide whose layout is missing goes on the first one;
+a presentation with no master gets the caller's. `Defaults` also gives the text styles written
+where a master or the presentation has none, and the program name for `docProps/app.xml`.
+
+Transitions (`p:transition`, with the PowerPoint 2010 and later effects) and animations
+(`p:timing`, flattened into `anim::Animation` on reading and built back into the timing tree on
+writing, with media volume and playback settings) are read and written.
+
+Not read or written yet (later changes): speaker notes, comments.

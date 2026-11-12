@@ -271,7 +271,7 @@ fn faces_viewports_images_and_tolerances() {
         k("0|TOLERANCE|3|Tol|10|1.0|1|{\\Fgdt;j}%%v0.1"),
         EntityKind::Tolerance { insert: [1.0, 0.0, 0.0], direction: [1.0, 0.0, 0.0], style: "Tol".into(), text: "{\\Fgdt;j}%%v0.1".into() }
     );
-    assert_eq!(k("0|MULTILEADER|10|1.0"), EntityKind::Other, "a type the model does not have is read from its tags");
+    assert_eq!(k("0|ARC_DIMENSION|10|1.0"), EntityKind::Other, "a type the model does not have is read from its tags");
 }
 
 #[test]
