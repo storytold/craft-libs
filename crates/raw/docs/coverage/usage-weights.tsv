@@ -1,0 +1,114 @@
+# Estimated share of Lightroom raw photographers by camera maker, and the popular bodies of the last ~8 years inside each.
+# Sources (2026-10-10): Nikkei 2025 mirrorless production via PhotoRumors (Canon 2.3 M, Sony 1.8 M, Nikon 0.86 M, Fujifilm 0.75 M
+# units, i.e. ~36 / 29 / 14 / 12 % of CIPA's 6.31 M); BCN 2025 Japanese retail via PetaPixel (Sony 29.9 %, Canon 27.4 %, Nikon 15.1 %);
+# camera makers named in this repo's user issues (325 issues: Sony 33, Nikon 31, Canon 26, phones 23, Fujifilm 9, Panasonic/Leica 8,
+# OM/Olympus 6, Pentax/Ricoh 6, Samsung NX 5). Canon and Nikon get extra weight for their installed base of DSLRs.
+# Rows "maker" give the maker bucket's weight (percent of photographers); rows "body" give a popular body inside a bucket.
+# Inside a bucket, the listed bodies share 80 % equally and every other Adobe-listed model of the bucket's makers shares 20 %.
+kind	bucket	makers_or_camera	weight
+maker	Canon	Canon	33
+maker	Sony	Sony	27
+maker	Nikon	Nikon	16
+maker	Fujifilm	Fujifilm	10
+maker	Panasonic	Panasonic	4
+maker	OM / Olympus	Olympus,OM Digital Solutions	3
+maker	Phones	Apple,Google,Samsung,Xiaomi,Huawei,Oppo,OnePlus,LG,Motorola,Nokia	3
+maker	Pentax / Ricoh	Pentax,Ricoh	1.5
+maker	Leica	Leica	1
+maker	DJI	DJI	1
+maker	Medium format and others	Hasselblad,Phase One,Leaf,Mamiya,Sigma,Kodak,Konica Minolta,Epson,Casio,GoPro,Insta360,Zeiss,Pixii,Light,Skydio,Parrot,Yuneec,Contax,DxO	0.5
+body	Canon	EOS R6 Mark II	1
+body	Canon	EOS R5	1
+body	Canon	EOS R6	1
+body	Canon	EOS R7	1
+body	Canon	EOS R8	1
+body	Canon	EOS R10	1
+body	Canon	EOS R50	1
+body	Canon	EOS RP	1
+body	Canon	EOS R (** see note)	1
+body	Canon	EOS R5 Mark II	1
+body	Canon	EOS R6 Mark III	1
+body	Canon	EOS R3	1
+body	Canon	EOS R100	1
+body	Canon	EOS 90D	1
+body	Canon	EOS M50 (EOS Kiss M)	1
+body	Canon	EOS M50 Mark II	1
+body	Canon	EOS M6 Mark II	1
+body	Canon	EOS-5D Mark IV (** see note)	1
+body	Canon	EOS 6D Mark II	1
+body	Canon	EOS 80D	1
+body	Canon	EOS 250D (EOS Rebel SL3, EOS 200D II, EOS Kiss X10)	1
+body	Canon	EOS 1500D (EOS Rebel T7, EOS Kiss X90, EOS 2000D)	1
+body	Sony	A7 IV (ILCE-7M4)	1
+body	Sony	A7 III (ILCE-7M3)	1
+body	Sony	A7R V (ILCE-7RM5)	1
+body	Sony	A7R IV (ILCE-7RM4)	1
+body	Sony	A7C (ILCE-7C)	1
+body	Sony	A7C II (ILCE-7CM2)	1
+body	Sony	A7CR (ILCE-7CR)	1
+body	Sony	A6400 (ILCE-6400)	1
+body	Sony	A6700 (ILCE-6700)	1
+body	Sony	A6600 (ILCE-6600)	1
+body	Sony	A6100 (ILCE-6100)	1
+body	Sony	Alpha 1 (ILCE-1)*	1
+body	Sony	A9 III (ILCE-9M3)	1
+body	Sony	ZV-E10	1
+body	Sony	A7s III (ILCE-7SM3)	1
+body	Sony	RX100 VII (DSC-RX100M7)	1
+body	Nikon	Z 6 II	1
+body	Nikon	Z 6 III	1
+body	Nikon	Z 8	1
+body	Nikon	Z 9 (*See note)	1
+body	Nikon	Z f	1
+body	Nikon	Z 5	1
+body	Nikon	Z 50	1
+body	Nikon	Z 50 II	1
+body	Nikon	Z fc	1
+body	Nikon	Z 7 II	1
+body	Nikon	D850	1
+body	Nikon	D750	1
+body	Nikon	D7500	1
+body	Nikon	D780	1
+body	Fujifilm	X-T5	1
+body	Fujifilm	X-T4**	1
+body	Fujifilm	X-S20	1
+body	Fujifilm	X-S10	1
+body	Fujifilm	X-H2S	1
+body	Fujifilm	X-H2	1
+body	Fujifilm	X100V**	1
+body	Fujifilm	X100VI	1
+body	Fujifilm	X-T30 II	1
+body	Fujifilm	X-E4	1
+body	Fujifilm	X-T50	1
+body	Fujifilm	GFX 100S	1
+body	Fujifilm	X-M5	1
+body	Panasonic	LUMIX DC-S5	1
+body	Panasonic	LUMIX DC-S5M2	1
+body	Panasonic	LUMIX DC-GH6	1
+body	Panasonic	LUMIX DC-GH5M2	1
+body	Panasonic	LUMIX DCG9M2	1
+body	Panasonic	LUMIX DC-G9	1
+body	Panasonic	LUMIX DC-S1	1
+body	Panasonic	LUMIX DC-GX9 (DC-GX7MK3)	1
+body	Panasonic	LUMIX DMC-G8 (DMC-G80, DMC-G81, DMC-G85)	1
+body	Panasonic	LUMIX DC-LX100 II	1
+body	OM / Olympus	OM-D E-M1 Mark III	1
+body	OM / Olympus	OM-D E-M1 Mark II	1
+body	OM / Olympus	OM-D E-M10 Mark IV	1
+body	OM / Olympus	OM-D E-M5 Mark III	1
+body	OM / Olympus	PEN E-P7	1
+body	OM / Olympus	Stylus Tough TG-6	1
+body	OM / Olympus	OM System OM-1	1
+body	OM / Olympus	OM System OM-1 MARK II	1
+body	OM / Olympus	OM System OM-5	1
+body	Pentax / Ricoh	K-1 II (* see note)	1
+body	Pentax / Ricoh	K-3 Mark III	1
+body	Pentax / Ricoh	KF	1
+body	Pentax / Ricoh	K-70	1
+body	Pentax / Ricoh	GR III	1
+body	Pentax / Ricoh	GR IIIx	1
+body	Leica	Q3	1
+body	Leica	Q2	1
+body	Leica	M11	1
+body	Leica	SL2	1
+body	Leica	M10	1

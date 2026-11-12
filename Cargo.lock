@@ -1781,6 +1781,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "craft-crw",
+ "craft-metadata",
  "craft-tiff",
  "jpeg-encoder 0.7.1",
  "jxl-oxide",
@@ -1814,6 +1815,14 @@ dependencies = [
  "serde",
  "tempfile",
  "toml_edit",
+]
+
+[[package]]
+name = "craft-sf2"
+version = "0.1.0"
+dependencies = [
+ "craft-sf2",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2090,6 +2099,7 @@ dependencies = [
 name = "craft-xlsx"
 version = "0.1.0"
 dependencies = [
+ "craft-drawingml",
  "craft-opc",
  "craft-sheet",
  "craft-xml",

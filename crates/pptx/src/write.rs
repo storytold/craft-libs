@@ -2,6 +2,7 @@
 
 pub(crate) mod chart;
 mod shapes;
+mod timing;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -765,8 +766,14 @@ fn master_xml(x: &mut Exp, o: &mut Out, m: &Master, layouts: &[(u64, String)]) -
 fn slide_xml(x: &mut Exp, o: &mut Out, s: &Slide) -> Vec<u8> {
     let mut w = Writer::document();
     root_open(&mut w, "p:sld", A::new().o("showMasterSp", (!s.show_master_shapes).then_some("0")).o("show", s.hidden.then_some("0")));
-    csld(&mut w, x, o, &s.name, s.background.as_ref(), &s.shapes, &s.tags);
+    let ids = csld(&mut w, x, o, &s.name, s.background.as_ref(), &s.shapes, &s.tags);
     clr_map_ovr(&mut w, s.color_map.as_deref());
+    if let Some(t) = &s.transition {
+        timing::transition(&mut w, x, o, t);
+    }
+    if !s.animations.is_empty() {
+        timing::timing(&mut w, x, &s.animations, &s.shapes, &ids);
+    }
     ext_list(&mut w, s.raw_ext.as_deref());
     w.close();
     w.into_bytes()

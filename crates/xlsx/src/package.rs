@@ -3,6 +3,10 @@
 use craft_opc::{ContentTypes, LazyPackage, Rels};
 use craft_xml::{El, Options, UnknownEntity};
 
+use craft_drawingml::chart::Chart;
+use craft_drawingml::theme::Theme;
+
+use crate::drawing::Drawing;
 use crate::features::{Comments, NoteShape};
 use crate::sheet::{Row, RowReader, SheetPart};
 use crate::strings::StringItem;
@@ -268,6 +272,38 @@ impl<'a> Package<'a> {
     pub fn note_shapes(&mut self, sheet: &SheetPart) -> Result<Vec<NoteShape>, Error> {
         let Some(rel) = sheet.rels.first("vmlDrawing").filter(|r| !r.external) else { return Ok(Vec::new()) };
         Ok(self.optional_xml(&rel.target.clone())?.map(|v| NoteShape::read_all(&v)).unwrap_or_default())
+    }
+
+    /// The drawing part of a worksheet read by [`Package::sheet`]: its name, the drawing, and its
+    /// relationships (charts, pictures). `None` when the sheet has none.
+    pub fn drawing(&mut self, sheet: &SheetPart) -> Result<Option<(String, Drawing, Rels)>, Error> {
+        let Some(rel) = sheet.rels.first("drawing").filter(|r| !r.external) else { return Ok(None) };
+        let part = rel.target.clone();
+        let Some(root) = self.optional_xml(&part)? else { return Ok(None) };
+        let rels = self.rels(&part)?;
+        Ok(Some((part, Drawing::read(&root), rels)))
+    }
+
+    /// A chart part (`c:chartSpace`, or `cx:chartSpace` of an Office 2016 chart) through
+    /// `craft-drawingml`. `None` when the part is missing or holds no chart it can read.
+    pub fn chart(&mut self, part: &str) -> Result<Option<Chart>, Error> {
+        let Some(bytes) = self.opc.read(part)? else {
+            self.warn(format!("missing part {part}"));
+            return Ok(None);
+        };
+        let chart = craft_drawingml::chart::read::read_chart_xml(&bytes).or_else(|| craft_drawingml::chart::chartex::read_chartex_xml(&bytes));
+        if chart.is_none() {
+            self.warn(format!("skipped {part}: not a chart that can be read"));
+        }
+        Ok(chart)
+    }
+
+    /// The workbook's theme (`a:theme`) through `craft-drawingml`; `None` when it has none.
+    pub fn theme(&mut self) -> Result<Option<Theme>, Error> {
+        let rels = self.workbook_rels()?;
+        let Some(rel) = rels.first("theme").filter(|r| !r.external) else { return Ok(None) };
+        let root = self.optional_xml(&rel.target.clone())?;
+        Ok(root.map(|r| craft_drawingml::theme::read_theme(&mut craft_drawingml::part::NoSource, &r)))
     }
 
     fn required(&mut self, part: &str) -> Result<Vec<u8>, Error> {

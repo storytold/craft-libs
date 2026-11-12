@@ -35,6 +35,7 @@
 //! | `raf` | Fujifilm RAF: uncompressed Bayer and X-Trans, Fujifilm's lossless and lossy compression, lens corrections |
 //! | `orf` | Olympus / OM System ORF: uncompressed 16-bit, 12-bit packed and two-field layouts, 16-byte blocks; compressed refused |
 //! | `arw` | Sony ARW (and SR2 / SRF containers): uncompressed, ARW2, lossless JPEG tiles, ARW6, the encrypted SR2SubIFD, lens corrections |
+//! | `cr3` | Canon CR3: CRX lossless Bayer and C-RAW (lossy), through craft-metadata's CR3 container |
 //! | `pef` | Pentax PEF: uncompressed (packed or 16-bit words) and Pentax's Huffman coding (compression 65535) |
 //! | `srw` | Samsung SRW: the uncompressed variants (compression 32769 words, 32770 at 12 bits packed) |
 //! | `hasselblad` | Hasselblad 3FR and FFF (and other CFA TIFFs in the DNG layout without a DNG version): uncompressed and Hasselblad's lossless JPEG; implies `dng` |
@@ -57,8 +58,14 @@
 
 #[cfg(feature = "cr2")]
 mod cr2;
+#[cfg(feature = "cr3")]
+mod cr3;
 #[cfg(feature = "crw")]
 mod crw;
+#[cfg(feature = "cr3")]
+mod crx;
+#[cfg(feature = "cr3")]
+mod crx_wavelet;
 #[cfg(feature = "dng")]
 mod dng;
 #[cfg(feature = "dng")]
@@ -119,6 +126,7 @@ mod rafc;
 mod rw2;
 #[cfg(feature = "dng")]
 pub mod semantic;
+pub mod sparse;
 #[cfg(feature = "arw")]
 mod sr2;
 // (the TIFF pixel plumbing every TIFF-based maker shares; DNG is its only user so far)
@@ -377,6 +385,7 @@ impl RawFormat {
             || (self == RawFormat::Raf && cfg!(feature = "raf"))
             || (self == RawFormat::Orf && cfg!(feature = "orf"))
             || (self == RawFormat::Arw && cfg!(feature = "arw"))
+            || (self == RawFormat::Cr3 && cfg!(feature = "cr3"))
             || (self == RawFormat::Pef && cfg!(feature = "pef"))
             || (self == RawFormat::Srw && cfg!(feature = "srw"))
     }
@@ -671,6 +680,8 @@ fn decode_in(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawImage> {
         RawFormat::Orf => orf::decode(bytes, mode, limits),
         #[cfg(feature = "arw")]
         RawFormat::Arw => arw::decode(bytes, mode, limits),
+        #[cfg(feature = "cr3")]
+        RawFormat::Cr3 => cr3::decode(bytes, mode, limits),
         #[cfg(feature = "pef")]
         RawFormat::Pef => pef::decode(bytes, mode, limits),
         #[cfg(feature = "srw")]
