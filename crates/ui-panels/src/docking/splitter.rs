@@ -2,9 +2,8 @@
 
 use crate::contract::{Common, Component, Cx, PaintUi, Role, Styled as _};
 use crate::primitives::{DataWidth, PaintShape};
-use crate::style::{ComponentStyle, Stateful, StyleColor, StyleCx};
+use crate::style::{ComponentStyle, Stateful, StyleColor, StyleCx, resize_line_look};
 use craft_behavior::{Axis, Metrics, Sense};
-use craft_theme::States;
 use egui::{Response, Vec2};
 
 /// The style of a splitter: a hairline that becomes a thick accent line under the pointer.
@@ -49,26 +48,13 @@ impl Component for Splitter {
     type Output = Response;
 
     fn style(cx: &StyleCx<'_>, key: SplitterStyleKey) -> SplitterStyle {
-        let color = &cx.tokens.color;
         let (across, along) = (cx.tokens.size.hit.target, cx.control().height);
         let least = match key.axis {
             Axis::X => Vec2::new(across, along),
             _ => Vec2::new(along, across),
         };
-        let rest = cx.color(color.line.border);
-        let accent = cx.color(color.accent.solid);
-        let clear = cx.color(craft_theme::Rgba::TRANSPARENT);
-        SplitterStyle {
-            metrics: Metrics::new().min_size(least),
-            line: Stateful::new(rest).off(States::new(rest, accent, accent, rest)),
-            edge_line: Stateful::new(clear).off(States::new(clear, accent, accent, clear)),
-            width: Stateful::new(cx.tokens.stroke.thin).off(States::new(
-                cx.tokens.stroke.thin,
-                cx.tokens.stroke.thick,
-                cx.tokens.stroke.thick,
-                cx.tokens.stroke.thin,
-            )),
-        }
+        let look = resize_line_look(cx.tokens);
+        SplitterStyle { metrics: Metrics::new().min_size(least), line: look.line, edge_line: look.edge, width: look.width }
     }
 
     fn sense(&self) -> Sense {

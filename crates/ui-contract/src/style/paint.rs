@@ -76,6 +76,37 @@ pub(crate) fn rule_look(tokens: &UiTokens, kind: RuleKind) -> RuleLook {
     }
 }
 
+/// The line of a resize divider: a split handle between panes, a table column's edge.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ResizeLineLook {
+    /// A line drawn at rest too: `line.border`, the accent under the pointer and while dragged.
+    pub line: Stateful<StyleColor>,
+    /// A line drawn only under the pointer and while dragged, in the accent: an edge something else draws at rest, or
+    /// none does.
+    pub edge: Stateful<StyleColor>,
+    /// The width: thin at rest, thick under the pointer and while dragged.
+    pub width: Stateful<f32>,
+    /// The line while the keyboard resizes it: `line.focus`.
+    pub focus: StyleColor,
+    /// The line's width while the keyboard resizes it: thick.
+    pub focus_width: f32,
+}
+
+/// The resize divider's line, read from `tokens`.
+pub fn resize_line_look(tokens: &UiTokens) -> ResizeLineLook {
+    let c = &tokens.color;
+    let (rest, accent, clear) = (style_color(c.line.border), style_color(c.accent.solid), style_color(Rgba::TRANSPARENT));
+    let (thin, thick) = (tokens.stroke.thin, tokens.stroke.thick);
+    ResizeLineLook {
+        line: Stateful::new(rest).off(craft_theme::States::new(rest, accent, accent, rest)),
+        edge: Stateful::new(clear).off(craft_theme::States::new(clear, accent, accent, clear)),
+        width: Stateful::new(thin).off(craft_theme::States::new(thin, thick, thick, thin)),
+        focus: style_color(c.line.focus),
+        focus_width: thick,
+    }
+}
+
 /// A canvas handle's fills and stroke.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]

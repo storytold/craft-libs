@@ -74,6 +74,9 @@ pub struct ColumnSpec {
     pub first_descending: bool,
     /// The icon the column's cells show: the name of a cell that has no header text.
     pub icon: Option<craft_behavior::IconId>,
+    /// The header's tooltip: the column's long name where the header text abbreviates it. Without one the header shows
+    /// the header row's help.
+    pub tip: Option<Label>,
 }
 
 /// Where a column's content sits.
@@ -102,6 +105,7 @@ impl ColumnSpec {
             tabular: false,
             first_descending: false,
             icon: None,
+            tip: None,
         }
     }
 
@@ -152,6 +156,13 @@ impl ColumnSpec {
     pub fn numeric(mut self) -> Self {
         self.align = ColumnAlign::End;
         self.tabular = true;
+        self
+    }
+
+    /// The header's tooltip.
+    #[must_use]
+    pub fn tip(mut self, tip: impl Into<Label>) -> Self {
+        self.tip = Some(tip.into());
         self
     }
 

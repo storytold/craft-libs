@@ -8,15 +8,17 @@ use crate::contract::collection::{
 use crate::contract::reorder::{self, Gap};
 use crate::contract::{
     Collection, Common, Component, Cx, DragPreview, DropMark, DropTarget, Focus as _, MeasureCx, PaintUi, PartsCx, Pointer as _, Props as _, Role,
-    Show as _,
+    Show as _, WordSetCx as _,
 };
+use crate::primitives::{DataWidth, PaintShape};
 use crate::primitives::{IconSpec, TextRun};
 use crate::runtime::access::items::{HeaderCell, report_header};
 use crate::runtime::commands::{self, CommandRef, CommandSet, CommandState};
 use crate::runtime::egui::{alloc, child};
 use crate::runtime::env::{Env, Label};
 use crate::runtime::memory::{MemoryStage, sub};
-use crate::style::{ComponentStyle, ScrollBarKind, StyleCx, TypeRole, scroll_bar_look};
+use crate::runtime::words::HeaderWords;
+use crate::style::{ComponentStyle, ResizeLineLook, ScrollBarKind, StateSet, StyleColor, StyleCx, TypeRole, resize_line_look, scroll_bar_look};
 use craft_behavior::grid::resolve_columns;
 use craft_behavior::{
     Axis, ColumnKey, ColumnWidth, CursorIcon, DropOperation, Flow, HitLevel, HitPriority, IconId, Insets, Intent, Metrics, NavMove, NavShape,
@@ -282,6 +284,7 @@ impl Header {
         let rtl = pcx.flow.is_rtl();
         let mut flow = Flow::new(row, rtl);
         let widths = self.widths(area.width());
+        let help = pcx.words::<HeaderWords>().tip.clone();
         for (at, (spec, width)) in self.specs.iter().zip(widths).enumerate() {
             let (rect, rest) = flow.take_start(width);
             flow = rest;
@@ -290,7 +293,12 @@ impl Header {
             if spec.movable {
                 sense |= Sense::DRAG;
             }
-            pcx.part(HEADER.at(hash), rect).sense(sense).focusable().priority(HitPriority::new(HitLevel::Body, 0));
+            pcx.part(HEADER.at(hash), rect)
+                .sense(sense)
+                .focusable()
+                .priority(HitPriority::new(HitLevel::Body, 0))
+                .state_layer()
+                .tooltip(spec.tip.clone().unwrap_or_else(|| help.clone()));
             if spec.resizable {
                 let edge = if rtl {
                     Rect::from_min_size(rect.min, Vec2::new(grip, rect.height()))
@@ -516,7 +524,11 @@ impl Header {
             let mut cell_ui = alloc::child(ui, builder);
             cell_ui.set_clip_rect(cell.rect.intersect(ui.clip_rect()));
             let installed = Env::install_for(&cell_ui, env.derive_local(|scoped| scoped.arena = None));
-            let label = HeaderText::new(Label::from(text), self.inset, sort).id(sub(id, ("header_text", cell.hash)));
+            let edge = spec
+                .resizable
+                .then(|| HeaderEdge { state: cx.core.part_state(GRIP.at(cell.hash)), keyed: self.memory.resizing.as_ref() == Some(&spec.key) });
+            let mut label = HeaderText::new(Label::from(text), self.inset, sort).id(sub(id, ("header_text", cell.hash)));
+            label.edge = edge;
             label.show_at(&mut cell_ui, cell.rect);
             Env::restore(&ctx, installed);
         }
@@ -568,13 +580,26 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     }
 }
 
-/// The style of a header label: the sort mark's size and its gap to the text.
+/// The style of a header label: the sort mark's size and its gap after the text, the label's ink (the sorted
+/// column's reads stronger) and the column edge's line.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 struct HeaderTextStyle {
     #[style(metrics)]
     metrics: Metrics,
     mark: f32,
     gap: f32,
+    ink: StyleColor,
+    sorted: StyleColor,
+    edge: ResizeLineLook,
+}
+
+/// The resize grip at a column's end edge, as the header cell paints it.
+#[derive(Clone, Copy)]
+struct HeaderEdge {
+    /// The grip part's state: its line shows under the pointer and while dragged.
+    state: StateSet,
+    /// The keyboard resize works on the column.
+    keyed: bool,
 }
 
 /// A header cell's label.
@@ -586,6 +611,8 @@ struct HeaderText {
     inset: f32,
     /// Whether the column is the sorted one, and if so whether it sorts descending.
     sort: Option<bool>,
+    /// The column's resize grip, for a resizable column.
+    edge: Option<HeaderEdge>,
     /// Whether the label is its own AccessKit node. The header row's label is not: its `ColumnHeader` sub-node carries
     /// the name.
     node: bool,
@@ -598,12 +625,28 @@ impl HeaderText {
     }
 
     fn new(text: Label, inset: f32, sort: Option<bool>) -> Self {
-        HeaderText { common: Common::new(), inset, sort, node: false }.label(text)
+        HeaderText { common: Common::new(), inset, sort, edge: None, node: false }.label(text)
     }
 
     /// The label on one line, cut with an ellipsis when its column is narrower than the text.
     fn run<'t>(&self, text: &'t str) -> TextRun<'t> {
         TextRun::new(text).role(HEADER_ROLE).elide()
+    }
+
+    /// The line of the column's end edge, inside the cell `rect`: the grip's line under the pointer and while dragged,
+    /// the focus line while the keyboard resizes the column.
+    fn paint_edge(&self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, rtl: bool) {
+        let Some(edge) = self.edge else { return };
+        let look = &cx.style.edge;
+        let (color, width) =
+            if edge.keyed { (look.focus, look.focus_width) } else { (edge.state.resolve(&look.edge), edge.state.resolve(&look.width)) };
+        if color.egui().a() == 0 {
+            return;
+        }
+        let rect = cx.rect;
+        let x = if rtl { rect.left() + width / 2.0 } else { rect.right() - width / 2.0 };
+        let ends = vec![Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())];
+        ui.draw().stroke(&PaintShape::Path(ends), DataWidth::points(width), color);
     }
 }
 
@@ -616,7 +659,15 @@ impl Component for HeaderText {
     type Output = Response;
 
     fn style(cx: &StyleCx<'_>, _: HeaderTextStyleKey) -> HeaderTextStyle {
-        HeaderTextStyle { metrics: Metrics::new(), mark: cx.tokens.size.icon.sm, gap: cx.tokens.space.gap.tight }
+        let text = &cx.tokens.color.text;
+        HeaderTextStyle {
+            metrics: Metrics::new(),
+            mark: cx.tokens.size.icon.sm,
+            gap: cx.tokens.space.gap.stack,
+            ink: cx.color(text.muted),
+            sorted: cx.color(text.normal),
+            edge: resize_line_look(cx.tokens),
+        }
     }
 
     fn sense(&self) -> Sense {
@@ -636,19 +687,27 @@ impl Component for HeaderText {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        let flow = Flow::new(cx.rect, cx.core.env.direction().is_rtl());
-        let inner = Flow::new(flow.inset(Insets::horizontal(self.inset)), flow.is_rtl());
-        let text = match self.sort {
+        let rtl = cx.core.env.direction().is_rtl();
+        let inner = Flow::new(Flow::new(cx.rect, rtl).inset(Insets::horizontal(self.inset)), rtl);
+        let ink = if self.sort.is_some() { cx.style.sorted } else { cx.style.ink };
+        let run = self.run(cx.core.resolved.label).color(ink);
+        match self.sort {
             Some(descending) => {
+                // The mark follows the label's end; a label too long for the cell is cut to leave the mark its room.
                 let (side, gap) = (cx.style.mark, cx.style.gap);
-                let (slot, rest) = inner.take_end(side + gap);
+                let room = (inner.rect().width() - side - gap).max(0.0);
+                let label = ui.draw().layout(&run, room).size().x.min(room);
+                let (text, rest) = inner.take_start(label);
+                ui.draw().text(text, &run);
+                let slot = Flow::new(rest.span(gap, side), rtl);
                 let id = IconId::new(if descending { "sort_descending" } else { "sort_ascending" });
-                ui.draw().icon(Flow::new(slot, flow.is_rtl()).align(Vec2::splat(side), Align::Max, Align::Center), &IconSpec::svg(id));
-                rest.rect()
+                ui.draw().icon(slot.align(Vec2::splat(side), Align::Min, Align::Center), &IconSpec::svg(id));
             }
-            None => inner.rect(),
-        };
-        ui.draw().text(text, &self.run(cx.core.resolved.label));
+            None => {
+                ui.draw().text(inner.rect(), &run);
+            }
+        }
+        self.paint_edge(ui, cx, rtl);
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> Response {
