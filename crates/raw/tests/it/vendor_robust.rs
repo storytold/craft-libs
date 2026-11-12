@@ -136,7 +136,14 @@ fn rw2_of(format: u16, bits: u16, n: usize) -> Vec<u8> {
     };
     let off = build(0).len();
     let mut b = build(off as u32);
-    b.extend((0..n).map(|i| (i * 89 % 253) as u8));
+    if format == 8 {
+        // a valid stream: the category-0 code `111110` over and over, each byte's bits from bit 0 up (every sample 0,
+        // inside any bit depth)
+        let bit = |k: usize| u8::from(k % 6 != 5);
+        b.extend((0..n).map(|i| (0..8).fold(0u8, |a, j| a | bit(i * 8 + j) << j)));
+    } else {
+        b.extend((0..n).map(|i| (i * 89 % 253) as u8));
+    }
     b
 }
 
