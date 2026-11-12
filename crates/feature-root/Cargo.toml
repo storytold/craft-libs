@@ -44,7 +44,7 @@ craft-review = { workspace = true, features = ["screen-testing"] }
 craft-table = { workspace = true, features = ["screen-testing"] }
 craft-text = { workspace = true, features = ["screen-testing", "find"] }
 craft-theme-store = { workspace = true, features = ["screen-testing"] }
-craft-timeline = { workspace = true, features = ["screen-testing"] }
+craft-timeline = { workspace = true, features = ["screen-testing", "xml", "otio"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 craft-dialogs = { workspace = true, features = ["screen-testing"] }
