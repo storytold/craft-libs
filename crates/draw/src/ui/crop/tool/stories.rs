@@ -1,12 +1,15 @@
-//! Stories of the Crop tool run live over a landscape: the default frame and leaving the tool, and the box's own Undo
-//! and Redo. The frame is the CropOverlay the tool shows.
-//! The story plays the app: it stores the tool's settings and accepts every crop without cropping the picture.
+//! Stories of the Crop tool run live over a landscape: the default frame and leaving the tool, the options bar's ratio
+//! and size with the crop's target size, and the box's own Undo and Redo. The frame is the CropOverlay the tool shows.
+//! The story plays the app: it stores the tool's settings, routes the bar to the tool and accepts every crop without
+//! cropping the picture.
 
-use super::super::{CropDocKey, CropDocument, CropEvent, CropInput, CropSettings, CropTool};
+use super::super::{CropBar, CropDocKey, CropDocument, CropEvent, CropInput, CropSettings, CropTool};
 use craft_behavior::CanvasView;
 use craft_behavior::geometry::CropBox;
 use craft_behavior::kurbo::{BezPath, Circle, Point, Rect, Size};
+use craft_ui::bars::{Bar, BarKind};
 use craft_ui::canvas::{CropOverlay, RasterSource as _};
+use craft_ui::contract::ShowContainer as _;
 use craft_ui::runtime::env::{Env, Units};
 use craft_ui::runtime::frame;
 use craft_ui::testing::canvas_story::{StoryDocument, StoryPicture, StoryShape, paint_shapes};
@@ -33,6 +36,14 @@ craft_ui::words! {
         straightened: template "cropStory.straightened" = "Straighten {angle}°";
         /// The story picked another tool.
         left: "cropStory.left" = "Left the tool";
+        /// The size the crop resamples to.
+        target: template "cropStory.target" = "Target {w} × {h} px";
+        /// The size the crop resamples to, with the resolution typed.
+        target_ppi: template "cropStory.targetPpi" = "Target {w} × {h} px at {ppi} ppi";
+        /// The crop keeps the frame's pixels.
+        free_crop: "cropStory.freeCrop" = "Free crop";
+        /// The target, then the frame.
+        ratio: template "cropStory.ratio" = "{target} · {frame}";
     }
 }
 
@@ -195,6 +206,71 @@ fn default_frame(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         output
     });
     *data.note("picked", true) = picked;
+    *data.note::<Option<String>>("last", None) = last;
+    output
+}
+
+/// The options bar over the tool: a ratio preset or typed sides holds every gesture to the ratio and refits the frame;
+/// W x H x Resolution sets the size the crop resamples to, shown as the target. ✓ applies the frame, ⊘ discards it.
+#[story(CropOverlay<'static>, covers = [], drive = Drive::Never)]
+fn ratio_and_size(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let env = Env::of(ui);
+    let (words, units) = (env.words::<CropStoryWords>(), env.units());
+    let resolution = *data.ranged("resolution", RESOLUTION, 72.0..=600.0);
+    let document = document(1, resolution);
+    let mut last = data.note::<Option<String>>("last", None).clone();
+    // The bar edits the settings the tool runs with, which are the story's document.
+    let mut settings = data.value("document", CropSettings::default()).clone();
+    let mut bar = None;
+    let shown = Bar::new("Options", BarKind::Options)
+        .commit_cancel("Commit", "Cancel")
+        .show(ui, |ui, _| bar = Some(CropBar::new(&mut settings, &document).show(ui)));
+    *data.value("document", CropSettings::default()) = settings.clone();
+    let (committed, cancelled) = (shown.committed, shown.cancelled);
+    let (ratio, straighten) = bar.map_or((None, false), |bar| (bar.ratio, bar.straighten));
+    let picture = landscape();
+    let body =
+        |ui: &mut Ui, at: egui::Rect, _: &CanvasView, tool: &mut CropTool, settings: &CropSettings| show_frame(ui, at, tool, settings, &document);
+    let ctx = ui.ctx().clone();
+    let output = tool_story(ui, data, ToolStory::new("Document", &picture), CropTool::new, settings, body, |run| {
+        let mut events = run.shown.unwrap_or_default();
+        if let Some(change) = ratio {
+            events.extend(run.tool.refit(run.document, &document, &units, change.editing));
+        }
+        if straighten {
+            run.tool.toggle_straighten();
+        }
+        if committed {
+            events.extend(run.tool.apply(run.document, &document, &units));
+        }
+        if cancelled {
+            events.extend(run.tool.discard());
+        }
+        if ratio.is_some() || committed || cancelled {
+            // The bar showed before the frame: the frame shows its answer on the next pass.
+            frame::request_repaint(&ctx);
+        }
+        events.extend(run_tool(&ctx, &run.host, run.tool, run.document, &document));
+        for event in events {
+            if let Some(text) = handle(&words, &units, run.tool, run.document, event) {
+                last = Some(text);
+            }
+        }
+        let n = |value: f64| units.number(value, 0..=1);
+        let target = match run.document.target(&document, &units) {
+            Some(target) => match target.resolution {
+                Some(ppi) => craft_i18n::fmt(
+                    words.target_ppi.as_str(),
+                    &[("w", n(target.width).as_str()), ("h", n(target.height).as_str()), ("ppi", units.number(ppi, 0..=2).as_str())],
+                ),
+                None => craft_i18n::fmt(words.target.as_str(), &[("w", n(target.width).as_str()), ("h", n(target.height).as_str())]),
+            },
+            None => words.free_crop.as_str().to_owned(),
+        };
+        let frame = frame_line(&words, &units, run.tool.frame());
+        let shown = craft_i18n::fmt(words.ratio.as_str(), &[("target", target.as_str()), ("frame", frame.as_str())]);
+        StoryOutput::default().readout(status(&words, &shown, last.as_deref()))
+    });
     *data.note::<Option<String>>("last", None) = last;
     output
 }
