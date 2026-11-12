@@ -15,6 +15,7 @@ holds `upstream_revision`. `local_patches` describes each local patch.
 
 | File | Change |
 |---|---|
+| `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
 | `src/curve/transverse.rs` | `transversal_after` returns `false` when either dy/dt bound it divides by is zero, negative or nan. It compared the two slope bounds by cross-multiplying, which reverses the comparison when a bound is negative. Two curves that leave a shared start point in opposite directions, with their first control points one ulp below the start, were reported as keeping their left-to-right order although they cross. `transversal_before` reflects its curves and calls `transversal_after`, so it returned the same wrong answer. The `crossing_with_negative_start_dy` test checks both functions. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:

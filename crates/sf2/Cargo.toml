@@ -1,0 +1,21 @@
+[package]
+name = "craft-sf2"
+description = "SoundFont 2 (.sf2) reader: the sample pool and, for every preset, the key and velocity regions a note sounds, bounded on hostile input"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# `fixture`: a writer of small, valid SoundFont 2 files, for the tests of crates that read them.
+test-support = []
+
+[dependencies]
+thiserror.workspace = true
+
+[dev-dependencies]
+craft-sf2 = { path = ".", features = ["test-support"] }
