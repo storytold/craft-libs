@@ -26,6 +26,9 @@ pub struct KeyRole {
     /// The component reads arrow nudges: arrows are not moves. One that deletes (a canvas control) takes only the
     /// plain Delete and Backspace; with a modifier held they are the app's.
     pub nudge: bool,
+    /// A document canvas or a control on one (`KeyUse.chrome_key`): Page Up and Page Down with Cmd (Ctrl off macOS)
+    /// scroll it sideways, as Photoshop's do, instead of switching pages.
+    pub document: bool,
     /// Typed letters reach the component as `Intent::Text` (type-ahead).
     pub type_ahead: bool,
     /// Typed digits reach the component as `Intent::Digit`; the other typed text stays `Intent::Text`.
@@ -60,6 +63,7 @@ impl KeyRole {
             rename: false,
             pages: false,
             nudge: false,
+            document: false,
             type_ahead: false,
             digits: false,
             value: false,
@@ -111,6 +115,12 @@ impl KeyRole {
     /// Arrows are nudges, not moves.
     pub const fn nudge(mut self, on: bool) -> Self {
         self.nudge = on;
+        self
+    }
+
+    /// Cmd (Ctrl off macOS) turns the page moves sideways: a document canvas.
+    pub const fn document(mut self, on: bool) -> Self {
+        self.document = on;
         self
     }
 
@@ -261,8 +271,8 @@ pub fn intent(os: Os, key: Key, mods: Mods, role: KeyRole) -> Option<Intent> {
         Key::Enter if only(Mods::CMD) => return Some(Intent::SubmitForce),
         Key::Down if only(Mods::ALT) => return Some(Intent::Open),
         Key::Up if only(Mods::ALT) => return Some(Intent::Close),
-        Key::PageUp if !mac && only(Mods::CMD) => return Some(Intent::switch_page(false)),
-        Key::PageDown if !mac && only(Mods::CMD) => return Some(Intent::switch_page(true)),
+        Key::PageUp if !mac && !role.document && only(Mods::CMD) => return Some(Intent::switch_page(false)),
+        Key::PageDown if !mac && !role.document && only(Mods::CMD) => return Some(Intent::switch_page(true)),
         Key::OpenBracket | Key::OpenCurlyBracket if mac && shifted(Mods::CMD) => return Some(Intent::switch_page(false)),
         Key::CloseBracket | Key::CloseCurlyBracket if mac && shifted(Mods::CMD) => return Some(Intent::switch_page(true)),
         Key::Tab if role.pages => {
@@ -325,8 +335,10 @@ fn movement(mac: bool, key: Key, mods: Mods, role: KeyRole) -> Option<Intent> {
             let by = if mods.cmd { Granularity::Document } else { Granularity::Line };
             moved(if key == Key::Home { NavMove::Start } else { NavMove::End }, by)
         }
-        Key::PageUp if !mods.alt && !mods.cmd && !mods.ctrl => moved(NavMove::PageUp, Granularity::Unit),
-        Key::PageDown if !mods.alt && !mods.cmd && !mods.ctrl => moved(NavMove::PageDown, Granularity::Unit),
+        // On a document canvas Cmd (Ctrl off macOS) is the move's `lead`: the page moves turn sideways.
+        Key::PageUp | Key::PageDown if !mods.alt && !mods.ctrl && (!mods.cmd || role.document) => {
+            moved(if key == Key::PageUp { NavMove::PageUp } else { NavMove::PageDown }, Granularity::Unit)
+        }
         // A canvas control takes the plain keys; with a modifier they are the app's (Photoshop fills on Alt+Backspace
         // and Cmd+Backspace and opens Fill on Shift+Backspace). A canvas tool takes no row: it claims the deletes it
         // takes in its state (`CanvasTool::claims` in craft-ui).

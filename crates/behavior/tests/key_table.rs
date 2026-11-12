@@ -43,3 +43,15 @@ fn shift_left_and_right_are_no_moves_in_stacked_rows() {
         }
     }
 }
+
+/// Off macOS Ctrl+Page Up and Page Down switch pages, except on a document canvas, where Cmd or Ctrl turns the page
+/// moves sideways on every platform.
+#[test]
+fn cmd_or_ctrl_page_keys_scroll_a_document_sideways_and_switch_pages_elsewhere() {
+    let document = KeyRole::new().nudge(true).document(true);
+    for os in [Os::Mac, Os::Windows, Os::Linux] {
+        let lead = matches!(intent(os, Key::PageDown, Mods::CMD, document), Some(Intent::Move(craft_behavior::NavMove::PageDown, mods)) if mods.lead);
+        assert!(lead, "{os:?}: a page move with lead on a document");
+    }
+    assert_eq!(intent(Os::Windows, Key::PageDown, Mods::CMD, KeyRole::new()), Some(Intent::switch_page(true)), "a tab strip's Ctrl+Page Down");
+}

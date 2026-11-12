@@ -337,7 +337,7 @@ impl State {
             (true, NavMove::Forward) => NavMove::Back,
             (_, mv) => mv,
         };
-        if !group.roving.takes(mv) {
+        if !group.roving.takes(mv, mods) {
             return None;
         }
         let members: Vec<StopRec> = self.last_stops.iter().filter(|rec| rec.stop.group == Some(group.id)).cloned().collect();

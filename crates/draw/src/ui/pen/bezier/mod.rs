@@ -784,6 +784,8 @@ impl<'a> BezierOverlay<'a> {
         while let Some((mv, mods)) = cx.intents().take_move() {
             let here = current.and_then(|c| keyboard.iter().position(|item| item.part() == c.part()));
             let picked: Option<&Item> = match mv {
+                // With Cmd (Ctrl) a page key scrolls the canvas sideways; it picks no part.
+                NavMove::PageDown | NavMove::PageUp if mods.lead => None,
                 NavMove::PageDown | NavMove::PageUp if mods.extend => {
                     let anchors: Vec<&Item> = keyboard.iter().copied().filter(|item| item.kind == Kind::Anchor).collect();
                     let at = current.and_then(|c| anchors.iter().position(|a| a.path == c.path && a.knot == c.knot));

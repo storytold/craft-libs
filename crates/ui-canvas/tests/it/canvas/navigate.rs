@@ -1,11 +1,16 @@
 //! Navigation rules (wheel, page keys, flick, autoscroll), the zoom motion and the momentary tool order.
 
-use craft_behavior::{Wheel, WheelPhase, WheelUnit};
-use craft_keymap::Mods;
-use craft_ui::canvas::{Momentary, MomentaryCommands, MomentaryTool, NavigationOptions, TouchpadGlide};
+use craft_behavior::kurbo::{Point, Size};
+use craft_behavior::{CanvasView, Wheel, WheelPhase, WheelUnit};
+use craft_keymap::{Mods, Platform};
+use craft_ui::canvas::{Canvas, Momentary, MomentaryCommands, MomentaryTool, NavigationOptions, TouchpadGlide};
+use craft_ui::contract::ShowContainer as _;
+use craft_ui::runtime::access::Role;
 use craft_ui::runtime::commands::FirePhase;
-use craft_ui::testing::trial;
-use egui::Vec2;
+use craft_ui::testing::{Fixture, trial};
+use egui::{Key, Modifiers, Vec2};
+use std::cell::Cell;
+use std::rc::Rc;
 
 #[trial]
 fn a_touchpad_glide_stops_in_the_pass_the_edge_clamp_leaves_the_view_where_it_was() {
@@ -43,4 +48,30 @@ fn space_is_the_hand_and_cmd_or_alt_added_in_any_order_switch_to_zoom() {
     assert_eq!(momentary.tool(Mods::NONE, true), Some(MomentaryTool::ZoomOut), "a drag keeps the tool it began with");
     momentary.fired(MomentaryCommands::ZoomIn, FirePhase::Release);
     assert_eq!(momentary.tool(Mods::NONE, false), None);
+}
+
+#[trial]
+fn cmd_or_ctrl_with_page_down_scrolls_a_focused_canvas_sideways_on_every_os() {
+    for os in [Platform::Mac, Platform::Windows, Platform::Linux] {
+        let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
+        let shown = Rc::clone(&view);
+        let mut fixture = Fixture::new(move |ui| {
+            let mut given = shown.get();
+            given.rect = ui.available_rect_before_wrap();
+            let canvas = Canvas::new("Document").document(Size::new(4000.0, 4000.0)).view(given).show(ui, |_, _| {});
+            shown.set(canvas.output.view.unwrap_or(given));
+        });
+        fixture.os(os);
+        fixture.settle();
+        let canvas = fixture.by_role(Role::CANVAS)[0];
+        fixture.click(&canvas);
+        let before = view.get().center;
+        // `COMMAND` is Cmd on macOS and Ctrl elsewhere.
+        fixture.key(Key::PageDown, Modifiers::COMMAND);
+        let sideways = view.get().center;
+        assert!(sideways.x > before.x && sideways.y == before.y, "{os:?}: {before:?} -> {sideways:?}");
+        fixture.key(Key::PageDown, Modifiers::NONE);
+        let down = view.get().center;
+        assert!(down.y > sideways.y && down.x == sideways.x, "{os:?}: plain Page Down scrolls down");
+    }
 }

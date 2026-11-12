@@ -247,3 +247,19 @@ fn alt_held_over_a_pin_shows_the_not_allowed_cursor_its_press_deletes() {
     h.fixture.frame(Vec::new());
     assert_eq!(cursor(&h), Some(Cursor::System(CursorIcon::Move)));
 }
+
+#[trial]
+fn page_down_steps_to_the_next_pin_and_with_cmd_or_ctrl_leaves_it_to_the_canvas() {
+    let mut h = harness(vec![pin(150.0, 150.0), pin(250.0, 150.0)], Vec::new());
+    let first = h.at(150.0, 150.0);
+    h.fixture.frame(vec![pointer::moved(first)]);
+    h.fixture.frame(vec![pointer::press(first)]);
+    h.fixture.frame(vec![pointer::release(first)]);
+    h.fixture.frame(Vec::new());
+    let on_first = h.fixture.focused_stop();
+    assert!(on_first.is_some_and(|(_, part)| part.is_some()), "a click focuses the pin");
+    h.fixture.key(egui::Key::PageDown, Modifiers::COMMAND);
+    assert_eq!(h.fixture.focused_stop(), on_first, "Cmd or Ctrl with Page Down is no step");
+    h.fixture.key(egui::Key::PageDown, Modifiers::NONE);
+    assert_ne!(h.fixture.focused_stop(), on_first, "Page Down steps to the next pin");
+}

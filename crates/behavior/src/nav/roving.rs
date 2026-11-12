@@ -1,6 +1,6 @@
 //! Roving focus groups and type-ahead matching.
 
-use crate::intent::NavMove;
+use crate::intent::{MoveMods, NavMove};
 
 use super::*;
 
@@ -130,10 +130,11 @@ impl Roving {
         NavState { lead, anchor: None, page, wrap: self.wrap, column: 0 }
     }
 
-    /// Whether the group handles `mv`: Page moves only with a page size, Start and End only with Home and End.
-    pub const fn takes(&self, mv: NavMove) -> bool {
+    /// Whether the group handles `mv` with `mods`: Page moves only with a page size and without `lead` (on a document
+    /// canvas that scrolls sideways), Start and End only with Home and End.
+    pub const fn takes(&self, mv: NavMove, mods: MoveMods) -> bool {
         match mv {
-            NavMove::PageUp | NavMove::PageDown => self.page.is_some(),
+            NavMove::PageUp | NavMove::PageDown => self.page.is_some() && !mods.lead,
             NavMove::Start | NavMove::End => self.home_end,
             NavMove::Back | NavMove::Forward => !matches!(self.arrows, Arrows::Vertical),
             NavMove::Up | NavMove::Down => !matches!(self.arrows, Arrows::Horizontal),
