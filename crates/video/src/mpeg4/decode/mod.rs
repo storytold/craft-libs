@@ -162,6 +162,9 @@ struct Ref {
     frame: Frame,
     mbs: Vec<MbInfo>,
     meta: Meta,
+    /// The stream description at decoding time: a later VOL may change it before this picture
+    /// is shown.
+    info: Arc<StreamInfo>,
     shown: bool,
 }
 
@@ -190,6 +193,8 @@ pub struct Decoder {
     last: Option<Ref>,
     /// A picture buffer no longer referenced, reused for the next VOP instead of allocating one.
     spare: Option<Frame>,
+    /// Pictures one `decode` call may return (see [`decode`](Self::decode)).
+    output_limit: usize,
     time_base: i64,
     last_time_base: i64,
     last_non_b_time: i64,
@@ -243,6 +248,7 @@ impl Decoder {
             prev: None,
             last: None,
             spare: None,
+            output_limit: MAX_PICTURES_PER_CALL,
             time_base: 0,
             last_time_base: 0,
             last_non_b_time: 0,
@@ -257,7 +263,8 @@ impl Decoder {
 
     /// Bytes the decoded pictures may take (default [`crate::budget::DECODE_MEMORY_BUDGET`]).
     /// A VOL whose pictures (two references, the picture being decoded and an output copy) do not
-    /// fit is refused.
+    /// fit is refused, and the room left limits the pictures one [`decode`](Self::decode) call
+    /// returns. It applies from the next VOL header.
     pub fn set_memory_budget(&mut self, bytes: u64) {
         self.memory_budget = bytes;
     }
@@ -307,7 +314,21 @@ impl Decoder {
                 self.time_base = t;
             }
             0xB5 => self.signal = headers::parse_visual_object(payload)?,
-            0x20..=0x2F => self.set_vol(Vol::parse(payload)?)?,
+            0x20..=0x2F => {
+                let set = Vol::parse(payload).and_then(|vol| self.set_vol(vol));
+                if let Err(e @ (DecodeError::Unsupported(_) | DecodeError::TooLarge(..))) = set {
+                    // The stream changed to a layer this decoder cannot decode: its VOPs must not
+                    // be decoded with the old one. (A damaged layer header, `Invalid`, keeps the
+                    // old layer: that is usually a bit error in a repeated header.)
+                    self.show_last();
+                    self.drop_references();
+                    self.vol = None;
+                    self.info = None;
+                    self.output_limit = MAX_PICTURES_PER_CALL;
+                    return Err(e);
+                }
+                set?;
+            }
             _ => {}
         }
         if let (Some(info), Some(vol)) = (&self.info, &self.vol) {
@@ -335,8 +356,14 @@ impl Decoder {
             return Err(DecodeError::TooLarge(vol.width, vol.height));
         }
         if self.vol.as_ref().is_some_and(|v| (v.width, v.height) != (vol.width, vol.height)) {
+            // The picture held back for reordering is still owed to the caller.
+            self.show_last();
             self.drop_references();
         }
+        // Pictures queued in one call count against the budget too, beside the references, the
+        // spare buffer and the picture being decoded.
+        let pictures = shape.bytes().map_or(1, |b| self.memory_budget / b.max(1));
+        self.output_limit = usize::try_from(pictures.saturating_sub(3)).unwrap_or(usize::MAX).clamp(1, MAX_PICTURES_PER_CALL);
         self.info = Some(Arc::new(self.stream_info(&vol)));
         self.vol = Some(vol);
         Ok(())
@@ -371,11 +398,23 @@ impl Decoder {
     /// Decode a chunk of the stream holding whole VOPs (a container frame, which may pack a P-
     /// and a B-VOP), tagged with `pts`. Returns the pictures that became displayable, in display
     /// order. A damaged VOP is still output, concealed, and counted in [`errors`](Self::errors).
-    /// One call returns at most 16 pictures; a chunk that would produce more is an error.
+    ///
+    /// One call returns at most 16 pictures, fewer when the memory budget does not hold that
+    /// many beside the reference pictures. Decoding of a chunk that would produce more stops at
+    /// the limit: the pictures so far are returned, and the rest of the chunk is skipped and
+    /// counted as an error.
     pub fn decode(&mut self, data: &[u8], pts: i64) -> Result<Vec<Picture>> {
         let codes = start_codes(data);
         let mut err = None;
         for (k, &(pos, code)) in codes.iter().enumerate() {
+            // Each start code adds at most one picture.
+            if self.out.len() >= self.output_limit {
+                let e = DecodeError::Invalid("too many pictures in one chunk");
+                self.errors += 1;
+                self.last_error = Some(e.clone());
+                err = Some(e);
+                break;
+            }
             let end = codes.get(k + 1).map_or(data.len(), |c| c.0);
             let payload = &data[(pos + 4).min(end)..end];
             let r = if code == 0xB6 { self.vop(payload, pts) } else { self.header(code, payload) };
@@ -383,10 +422,6 @@ impl Decoder {
                 self.errors += 1;
                 self.last_error = Some(e.clone());
                 err = Some(e);
-            }
-            if self.out.len() > MAX_PICTURES_PER_CALL {
-                self.out.truncate(MAX_PICTURES_PER_CALL);
-                return Err(DecodeError::Invalid("too many pictures in one chunk"));
             }
         }
         let out = std::mem::take(&mut self.out);
@@ -402,11 +437,17 @@ impl Decoder {
         std::mem::take(&mut self.out)
     }
 
-    /// Forget the reference pictures (before decoding from a new random-access point). The
+    /// Forget the reference pictures and the time base (before decoding from a new random-access
+    /// point), so that decoding from it gives the same pictures and times every time. The
     /// configuration headers are kept.
     pub fn reset(&mut self) {
         self.drop_references();
         self.out.clear();
+        self.time_base = 0;
+        self.last_time_base = 0;
+        self.last_non_b_time = 0;
+        self.pp_time = 0;
+        self.t_frame = 0;
     }
 
     fn drop_references(&mut self) {
@@ -417,12 +458,11 @@ impl Decoder {
 
     /// Output the most recent reference unless it was.
     fn show_last(&mut self) {
-        let info = self.info.clone().unwrap_or_else(|| Arc::new(empty_info()));
         if let Some(r) = self.last.as_mut()
             && !r.shown
         {
             r.shown = true;
-            self.out.push(to_picture(info, &r.frame, r.meta));
+            self.out.push(to_picture(r.info.clone(), &r.frame, r.meta));
         }
     }
 
@@ -508,14 +548,19 @@ impl Decoder {
         if let Some(old) = std::mem::replace(&mut self.prev, self.last.take()) {
             self.spare = Some(old.frame);
         }
-        self.last = Some(Ref { frame, mbs, meta, shown: vol.low_delay });
+        let info = self.info.clone().unwrap_or_else(|| Arc::new(empty_info()));
+        self.last = Some(Ref { frame, mbs, meta, info, shown: vol.low_delay });
         err.map_or(Ok(()), |e| self.damaged(e))
     }
 
     fn b_vop(&mut self, payload: &[u8], vol: &Vol, vop: &Vop, time: i64, meta: Meta) -> Result<()> {
+        if self.prev.is_none() || self.last.is_none() {
+            // A B-VOP of an open GOP at the start of decoding: its past reference is missing. It
+            // is dropped before `times`, whose frame period estimate it must not set.
+            return Ok(());
+        }
         let times = self.times(time, vol);
         let (Some(past), Some(future)) = (self.prev.as_ref(), self.last.as_ref()) else {
-            // A B-VOP of an open GOP at the start of decoding: its past reference is missing.
             return Ok(());
         };
         let mut frame = take_frame(&mut self.spare, vol);
