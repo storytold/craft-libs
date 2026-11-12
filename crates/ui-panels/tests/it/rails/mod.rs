@@ -1,5 +1,5 @@
 //! The rail's own logic: which tool a slot shows, what the rail remembers, where a drop goes, and the flyout's hold
-//! and click.
+//! and click, and a press dragged away.
 
 mod drawer;
 
@@ -63,4 +63,19 @@ fn a_click_selects_the_shown_tool_and_holding_opens_the_flyout() {
     held.fixture.advance(HELD);
     held.fixture.idle(3);
     assert!(!held.fixture.by_role(Role::MENU).is_empty(), "a held press opens the flyout");
+}
+
+/// Dragging a press away from the button opens the flyout, and releasing that press over a row picks the row's tool.
+#[trial]
+fn dragging_a_press_away_opens_the_flyout_and_releasing_over_a_row_picks_it() {
+    let mut dragged = rig(true);
+    let target = button(&dragged);
+    let away = egui::Vec2::new(target.rect.width() * 1.5, 0.0);
+    dragged.fixture.drag_hold_at(target.center(), away);
+    dragged.fixture.idle(2);
+    assert!(!dragged.fixture.by_role(Role::MENU).is_empty(), "a press dragged off the button opens the flyout");
+    let row = dragged.fixture.by_label("Redo").expect("the flyout lists Redo");
+    dragged.fixture.frame(vec![craft_ui::testing::pointer::moved(row.center())]);
+    dragged.fixture.release_at(row.center()).idle(2);
+    assert_eq!(*dragged.selected.borrow(), [REDO], "releasing over Redo picks it and nothing else");
 }
