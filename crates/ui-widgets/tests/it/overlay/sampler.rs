@@ -317,26 +317,39 @@ fn a_gesture_with_a_modifier_passes_only_with_the_modifier_held() {
     scene.assert_dialog_holds(&frames);
 }
 
-/// The gesture the canvas's host passes for its running tool belongs to the top modal: it reaches the canvas under
-/// the open dialog, and once the dialog closes it lapses with it, so the next dialog blocks the canvas while the host
-/// passes nothing.
+/// The gesture the canvas's host passes for its running tool joins the canvas a dialog keeps: the press and its drag
+/// reach the canvas under the dialog, and once the dialog stops keeping the canvas the host's gesture lapses with it.
 #[trial]
-fn a_tool_gesture_the_host_passes_reaches_the_canvas_and_lapses_with_the_dialog() {
+fn a_tool_gesture_the_host_passes_reaches_a_canvas_the_dialog_keeps_and_lapses_with_it() {
     let mut frames = Frames::new();
-    let scene = Scene::new(Arm::Nothing);
+    let scene = Scene::new(Arm::View);
     scene.tool.set(Some(CanvasGesture::PRIMARY));
     scene.open_dialog(&mut frames);
     scene.drag(&mut frames, CANVAS.center(), Vec2::new(40.0, 10.0));
     assert!(scene.took(PointerButton::Primary) && scene.dragged_canvas(), "the press and its drag reached the canvas");
     scene.assert_dialog_holds(&frames);
-    scene.frame(&mut frames, vec![key_press(Key::Escape, Modifiers::NONE)]);
-    scene.settle(&mut frames, 30);
-    assert!(!scene.dialog.shown.get(), "Escape closes the dialog");
-    scene.tool.set(None);
+    scene.arm.set(Arm::Nothing);
+    scene.settle(&mut frames, 3);
+    scene.forget_canvas();
+    scene.drag(&mut frames, CANVAS.center(), Vec2::new(40.0, 10.0));
+    assert!(!scene.took(PointerButton::Primary), "the host's gesture lapsed with the dialog's");
+}
+
+/// A dialog that keeps nothing (an alert) leaves the canvas blocked while the host goes on passing its tool's
+/// gesture: no press and no wheel reach it.
+#[trial]
+fn a_tool_gesture_passes_nothing_under_a_dialog_that_keeps_no_canvas() {
+    let mut frames = Frames::new();
+    let scene = Scene::new(Arm::Nothing);
+    scene.tool.set(Some(CanvasGesture::PRIMARY));
     scene.open_dialog(&mut frames);
     scene.forget_canvas();
     scene.drag(&mut frames, CANVAS.center(), Vec2::new(40.0, 10.0));
-    assert!(!scene.took(PointerButton::Primary), "the registration lapsed with its dialog");
+    scene.frame(&mut frames, vec![wheel(-40.0)]);
+    scene.settle(&mut frames, 2);
+    assert!(!scene.took(PointerButton::Primary), "the press stayed blocked");
+    assert_eq!(scene.canvas.borrow().wheels, 0, "the wheel stayed blocked");
+    scene.assert_dialog_holds(&frames);
 }
 
 /// A picker armed in a panel, outside every modal body, passes no press under a modal that opens while it stays armed.

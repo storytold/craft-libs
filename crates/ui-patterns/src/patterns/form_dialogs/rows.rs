@@ -112,7 +112,8 @@ impl<'a> ParamRows<'a> {
     }
 
     /// The canvas (the canvas component's id) the eyedropper rows sample while the rows are inside a modal dialog: an
-    /// armed eyedropper lets its press through the dialog's modal layer (`Sampler::pass_canvas_gesture`). The dialog body keeps the view usable itself with `Sampler::keep_view_open`.
+    /// armed eyedropper lets its press through the dialog's modal layer (`Sampler::pass_canvas_gesture`). The dialog
+    /// body keeps the view usable itself with `Sampler::keep_view_open`.
     pub fn canvas(mut self, canvas: Id) -> Self {
         self.canvas = Some(canvas);
         self

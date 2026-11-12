@@ -150,14 +150,25 @@ fn dialog_frame_with_footer(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     shown
 }
 
-#[story(BlockingOverlay<'static>, covers = [Default], drive = Drive::Never)]
+/// The drive of the overlay story: the opener's click.
+#[doc(hidden)]
+pub fn open_export(fixture: &mut Fixture) {
+    if let Some(open) = fixture.by_label(EXPORT) {
+        fixture.click(&open);
+    }
+}
+
+/// The opener of the overlay story.
+const EXPORT: &str = "Export…";
+
+#[story(BlockingOverlay<'static>, covers = [Default], drive = Drive::Custom(open_export))]
 fn blocking_overlay(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let scrim = *data.value("scrim", true);
     let card = *data.value("wait card", true);
     let overlay = BlockingOverlay::new("Exporting").scrim(scrim);
     let overlay = if card { overlay.message("Exporting 24 pages…").cancel("Cancel") } else { overlay };
     // Escape closes it too, so the story's overlay without a card can close.
-    overlay.cancellable(true).opened(Bind::bound(opener(ui, data, "Export…"))).show(ui, |_, _| {}).into()
+    overlay.cancellable(true).opened(Bind::bound(opener(ui, data, EXPORT))).show(ui, |_, _| {}).into()
 }
 
 #[story(ModalDragStrip, covers = [Default], drive = Drive::Never)]

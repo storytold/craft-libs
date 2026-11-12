@@ -153,63 +153,70 @@ impl Hole {
     }
 }
 
-/// The registration, the root frame it was made in, and what the input hook follows of Space and the pointer.
+/// The registrations, each with the root frame it was made in, and what the input hook follows of Space and the
+/// pointer.
 #[derive(Default)]
 struct Registry {
-    made: Option<(u64, Armed)>,
+    /// The dialog's part: the canvas a modal body keeps, its reach and that modal.
+    body: Option<(u64, Armed)>,
+    /// The host's part: the canvas whose tool the host runs and the gestures the tool takes. It holds only beside a
+    /// body part for the same canvas, whatever order the two are made in.
+    tool: Option<(u64, Id, Reach)>,
     /// Space was pressed over the canvas and not released: the canvas has it.
     space: bool,
     /// The pointer stands where the canvas answers.
     over: bool,
 }
 
-/// Who a registration belongs to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Owner {
-    /// A control: the modal layer whose body is running. Made outside every modal body, it is dropped, so a picker
-    /// armed in a panel passes no press under a modal that opens later.
-    Body,
-    /// The canvas's host, for the tool it runs: the modal layer whose body is running, else the top modal layer, here
-    /// or in another viewport.
-    Tool,
-}
-
-/// Registers `canvas` with `reach` for the modal layer `owner` names. `Sampler::pass_canvas_gesture` and
-/// `Sampler::keep_view_open` (contract layer) register as [`Owner::Body`], [`pass_tool_gesture`] as [`Owner::Tool`].
-pub(crate) fn register(ctx: &Context, canvas: Id, reach: Reach, owner: Owner) {
+/// Registers `canvas` with `reach` for the modal layer whose body is running. Made outside every modal body it is
+/// dropped, so a picker armed in a panel passes no press under a modal that opens later. `Sampler::pass_canvas_gesture`
+/// and `Sampler::keep_view_open` (contract layer) call it.
+pub(crate) fn register(ctx: &Context, canvas: Id, reach: Reach) {
     if !crate::runtime::measure::effect(ctx, "sampler::register") {
         return;
     }
     let now = pass::root_frame_nr(ctx);
-    let viewport = pass::current_viewport(ctx);
-    let modal = overlay::modal_drawing(ctx).or_else(|| {
-        let shown = (owner == Owner::Tool).then(|| {
-            overlay::top_modal_in(ctx, viewport)
-                .or_else(|| overlay::modal_viewport(ctx, viewport).and_then(|other| overlay::top_modal_in(ctx, other)))
-        });
-        shown.flatten().map(|top| top.id)
-    });
-    let Some(modal) = modal else { return };
+    let Some(modal) = overlay::modal_drawing(ctx) else { return };
     Service::<Registry>::run(ctx, |registry| {
-        let reach = match registry.made.take() {
+        let reach = match registry.body.take() {
             Some((made, held)) if made == now && held.canvas == canvas && held.modal == modal => held.reach.join(reach),
             _ => reach,
         };
-        registry.made = Some((now, Armed { canvas, reach, modal }));
+        registry.body = Some((now, Armed { canvas, reach, modal }));
     });
 }
 
-/// The canvas host's entry (`ToolHost`): passes `gesture` on `canvas`, the canvas whose tool the host runs, through the
-/// modal layer that holds the canvas: the one whose body is running, else the top modal. The host calls it in every
-/// pass for the gestures its running tool takes; controls use `Sampler::pass_canvas_gesture`.
+/// The canvas host's entry (`ToolHost`): passes `gesture` on `canvas`, the canvas whose tool the host runs. It takes
+/// effect only while a modal body keeps the same canvas (`Sampler::keep_view_open` or `pass_canvas_gesture`), and
+/// then for that modal: a modal that keeps nothing, an alert say, leaves the canvas blocked. The host calls it in
+/// every pass for the gestures its running tool takes; controls use `Sampler::pass_canvas_gesture`.
 pub fn pass_tool_gesture(ctx: &Context, canvas: Id, gesture: CanvasGesture) {
-    register(ctx, canvas, Reach::gesture(gesture), Owner::Tool);
+    if !crate::runtime::measure::effect(ctx, "sampler::pass_tool_gesture") {
+        return;
+    }
+    let now = pass::root_frame_nr(ctx);
+    let reach = Reach::gesture(gesture);
+    Service::<Registry>::run(ctx, |registry| {
+        let reach = match registry.tool.take() {
+            Some((made, held, gestures)) if made == now && held == canvas => gestures.join(reach),
+            _ => reach,
+        };
+        registry.tool = Some((now, canvas, reach));
+    });
 }
 
-/// The registration made in this root frame or the last: one per app, the latest wins.
+/// The body part made in this root frame or the last (one per app, the latest wins), with the host's gestures for the
+/// same canvas made in that window added.
 fn armed(ctx: &Context) -> Option<Armed> {
     let now = pass::root_frame_nr(ctx);
-    Service::<Registry>::run(ctx, |registry| registry.made.clone().filter(|(made, _)| made + 1 >= now).map(|(_, armed)| armed))
+    let live = |made: u64| made + 1 >= now;
+    Service::<Registry>::run(ctx, |registry| {
+        let (_, mut armed) = registry.body.clone().filter(|(made, _)| live(*made))?;
+        if let Some((_, _, gestures)) = registry.tool.clone().filter(|(made, canvas, _)| live(*made) && *canvas == armed.canvas) {
+            armed.reach = armed.reach.join(gestures);
+        }
+        Some(armed)
+    })
 }
 
 /// The armed canvas, while the modal layer that registered it is the top modal and no popup stands over a modal.

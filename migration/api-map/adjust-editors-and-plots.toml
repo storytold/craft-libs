@@ -292,7 +292,7 @@ name = "TonePickerRow"
 old = "craft_imaging::ui::adjust::tone::TonePickerRow"
 new = "craft_imaging::ui::adjust::TonePickerRow"
 status = "moved"
-note = "A pattern over `Bind<Option<TonePicker>>`; `canvas(Id)` names the document canvas the armed picker samples through the sampler of the modal layer (`Sampler::arm_sampler`)."
+note = "A pattern over `Bind<Option<TonePicker>>`; `canvas(Id)` names the document canvas the armed picker samples through the modal layer: the row passes its primary press (`Sampler::pass_canvas_gesture` with `CanvasGesture::PRIMARY`)."
 
 [[type]]
 name = "TonePickerResponse"
