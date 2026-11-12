@@ -6,6 +6,7 @@ use craft_behavior::{IconId, Metrics, PartKey, Proposal, Sense};
 use craft_theme::variant::Variant;
 use craft_ui::buttons::{Button, IconButton};
 use craft_ui::contract::{Bind, Common, Component, Cx, MeasureCx, PaintUi, PartsCx, Props as _, Role, WordSetCx as _, clicked};
+use craft_ui::controls::disclosure::DisclosureGlyph;
 use craft_ui::primitives::{HAlign, IconSpec, PaintShape, TextRun, Wrap};
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::{self, FocusTarget};
@@ -38,6 +39,8 @@ pub(crate) struct CommentRowStyle {
     sunken: StyleColor,
     /// The kind icon's side.
     kind_icon: f32,
+    /// The side of a plain icon: the glyph of the icon buttons beside it.
+    glyph: f32,
     bar_width: f32,
     /// The width of a card when the room names none.
     column: f32,
@@ -100,10 +103,12 @@ enum Slot {
 trait Sink {
     /// Text set in `at`'s width from `at`'s top left; returns its size.
     fn text(&mut self, at: Rect, spec: Spec, text: &str) -> Vec2;
-    /// The width `text` takes on one line.
-    fn width(&mut self, spec: Spec, text: &str) -> f32;
-    /// The icon `id` in `rect`.
+    /// The size `text` takes on one line.
+    fn size(&mut self, spec: Spec, text: &str) -> Vec2;
+    /// The icon `id` centred in `rect`, at the glyph side of the icon buttons beside it.
     fn icon(&mut self, rect: Rect, id: &'static str, tone: Tone);
+    /// A heading's disclosure, `open` or closed, centred in `rect`.
+    fn disclosure(&mut self, rect: Rect, open: bool);
     /// A card's kind: the icon `id` on a sunken disc filling `rect`, in the annotation's `color` (the accent without one).
     fn kind(&mut self, rect: Rect, id: &'static str, color: Option<[u8; 3]>);
     /// The avatar of `name`.
@@ -235,10 +240,9 @@ impl CommentRow<'_> {
         let (h, gap, pad) = (st.height, st.gap, st.pad);
         let room = (width - 2.0 * pad).max(h);
         if let Some(heading) = &self.heading {
-            let chevron = if heading.open { "chevron_down" } else { "chevron_right" };
-            sink.icon(square(Pos2::new(pad, pad), h), chevron, Tone::Muted);
+            sink.disclosure(square(Pos2::new(pad, pad), h), heading.open);
             let count_spec = Spec::new(TypeRole::Caption, Tone::Muted, Wrap::Wrap).end();
-            let count = sink.width(count_spec, &heading.count);
+            let count = sink.size(count_spec, &heading.count).x;
             let x = pad + h + gap;
             let title = Spec::new(TypeRole::BodyStrong, Tone::Muted, Wrap::Elide);
             sink.text(strip(Pos2::new(x, pad), width - pad - count - gap - x), title, &heading.title);
@@ -289,12 +293,22 @@ impl CommentRow<'_> {
             sink.avatar(square(Pos2::new(pad, y), h), &message.author);
             let x = pad + h + gap;
             let name_room = width - pad - h - gap - x;
-            let author_size = sink.text(strip(Pos2::new(x, y), name_room), author_spec, &message.author);
+            // A reply's author and age share one line, each centred on it, where both fit whole; else the age goes
+            // under the author, as on a card's first message.
             let when = age(message.modified.unwrap_or(message.created));
             let caption = Spec::new(TypeRole::Caption, Tone::Muted, Wrap::Elide);
-            let size = sink.text(strip(Pos2::new(x, y + author_size.y), name_room), caption, &when);
+            let (author_line, when_line) = (sink.size(author_spec, &message.author), sink.size(caption, &when));
+            let head = if author_line.x + gap + when_line.x <= name_room {
+                let line = author_line.y.max(when_line.y);
+                sink.text(strip(Pos2::new(x, y + (line - author_line.y) / 2.0), author_line.x), author_spec, &message.author);
+                sink.text(strip(Pos2::new(x + author_line.x + gap, y + (line - when_line.y) / 2.0), when_line.x), caption, &when);
+                line
+            } else {
+                let author_size = sink.text(strip(Pos2::new(x, y), name_room), author_spec, &message.author);
+                author_size.y + sink.text(strip(Pos2::new(x, y + author_size.y), name_room), caption, &when).y
+            };
             sink.button(Slot::More(index), square(Pos2::new(width - pad - h, y), h), "more", &words.more, false);
-            y += h.max(author_size.y + size.y) + gap;
+            y += h.max(head) + gap;
             y = self.message(index, thread, st, Line { at: Pos2::new(x, y), room: width - pad - x }, &words, sink) + gap;
         }
         if self.selected && self.editable {
@@ -346,11 +360,13 @@ impl Sink for Measure<'_, '_, '_> {
         self.cx.layout_at(&TextRun::new(text).role(spec.role).wrap(spec.wrap), at.width()).size()
     }
 
-    fn width(&mut self, spec: Spec, text: &str) -> f32 {
-        self.cx.layout_at(&TextRun::new(text).role(spec.role).wrap(Wrap::Line), f32::INFINITY).size().x
+    fn size(&mut self, spec: Spec, text: &str) -> Vec2 {
+        self.cx.layout_at(&TextRun::new(text).role(spec.role).wrap(Wrap::Line), f32::INFINITY).size()
     }
 
     fn icon(&mut self, _: Rect, _: &'static str, _: Tone) {}
+
+    fn disclosure(&mut self, _: Rect, _: bool) {}
 
     fn kind(&mut self, _: Rect, _: &'static str, _: Option<[u8; 3]>) {}
 
@@ -434,8 +450,8 @@ fn placed(origin: Pos2, width: f32, rtl: bool, rect: Rect) -> Rect {
 }
 
 impl Sink for Paint<'_, '_> {
-    fn width(&mut self, spec: Spec, text: &str) -> f32 {
-        self.ui.draw().layout(&TextRun::new(text).role(spec.role).wrap(Wrap::Line), f32::INFINITY).size().x
+    fn size(&mut self, spec: Spec, text: &str) -> Vec2 {
+        self.ui.draw().layout(&TextRun::new(text).role(spec.role).wrap(Wrap::Line), f32::INFINITY).size()
     }
 
     fn text(&mut self, at: Rect, spec: Spec, text: &str) -> Vec2 {
@@ -448,7 +464,12 @@ impl Sink for Paint<'_, '_> {
 
     fn icon(&mut self, rect: Rect, id: &'static str, tone: Tone) {
         let spec = IconSpec::svg(IconId::new(id)).color(self.color(tone));
-        self.ui.draw().icon(self.place(rect), &spec);
+        self.ui.draw().icon(Rect::from_center_size(self.place(rect).center(), Vec2::splat(self.st.glyph)), &spec);
+    }
+
+    fn disclosure(&mut self, rect: Rect, open: bool) {
+        let glyph = DisclosureGlyph::new(if open { 1.0 } else { 0.0 });
+        self.ui.draw().icon(self.place(rect), &IconSpec::glyph(&glyph).color(self.st.muted));
     }
 
     fn kind(&mut self, rect: Rect, id: &'static str, color: Option<[u8; 3]>) {
@@ -552,6 +573,7 @@ impl Component for CommentRow<'_> {
             avatar_ink: cx.color(color.text.on_strong),
             sunken: cx.color(color.surface.sunken),
             kind_icon: cx.tokens.size.icon.sm,
+            glyph: cx.glyph(),
             bar_width: cx.tokens.stroke.thick,
             column: cx.tokens.size.dock.column,
             height: cx.control().height,
