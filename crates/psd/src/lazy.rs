@@ -143,7 +143,19 @@ impl PsdFile {
         want: impl FnOnce(&PsdFile) -> Result<bool>,
         recover: impl FnOnce(&PsdFile) -> bool,
     ) -> Result<(Self, Option<Result<Vec<u8>>>)> {
-        Self::from_source_deferring(source, |_, _| false, want, recover)
+        Self::from_source_and_merged_preflight_info(source, |file, _, _| want(file), recover)
+    }
+
+    /// [`Self::from_bytes_and_merged_preflight_info`] for a [`Source`]. Only the two-byte
+    /// compression field is inspected before preflight, never the encoded pixels. A missing
+    /// field or failed read is reported as `None`; a read error is returned after preflight
+    /// unless the callback refuses the import first.
+    pub fn from_source_and_merged_preflight_info(
+        source: Source,
+        want: impl FnOnce(&PsdFile, Option<Compression>, u64) -> Result<bool>,
+        recover: impl FnOnce(&PsdFile) -> bool,
+    ) -> Result<(Self, Option<Result<Vec<u8>>>)> {
+        Self::from_source_deferring_info(source, |_, _| false, want, recover)
     }
 
     /// [`Self::from_source_and_merged_preflight`] that also leaves the data of each global block
@@ -155,6 +167,17 @@ impl PsdFile {
         source: Source,
         defer: impl Fn(&[u8; 4], u64) -> bool,
         want: impl FnOnce(&PsdFile) -> Result<bool>,
+        recover: impl FnOnce(&PsdFile) -> bool,
+    ) -> Result<(Self, Option<Result<Vec<u8>>>)> {
+        Self::from_source_deferring_info(source, defer, |file, _, _| want(file), recover)
+    }
+
+    /// [`Self::from_source_deferring`] whose preflight also sees the merged image's compression
+    /// and encoded length, as [`Self::from_source_and_merged_preflight_info`] gives them.
+    pub fn from_source_deferring_info(
+        source: Source,
+        defer: impl Fn(&[u8; 4], u64) -> bool,
+        want: impl FnOnce(&PsdFile, Option<Compression>, u64) -> Result<bool>,
         recover: impl FnOnce(&PsdFile) -> bool,
     ) -> Result<(Self, Option<Result<Vec<u8>>>)> {
         let mut c = Cursor::new(&source);
@@ -243,7 +266,10 @@ impl PsdFile {
             image_data: ImageData::new(Compression::Raw, Vec::new()),
             write_as_psb: false,
         };
-        if !want(&file)? {
+        let compression = c.peek(2).map(|bytes| Reader::new(&bytes).u16().ok().map(Compression::from_u16));
+        let want = want(&file, compression.as_ref().ok().copied().flatten(), c.remaining().saturating_sub(2))?;
+        compression?;
+        if !want {
             let compression = Compression::from_u16(c.u16()?);
             file.image_data = ImageData { compression, data: Vec::new(), stored: Some(c.stored_rest()) };
             return Ok((file, None));
@@ -378,6 +404,38 @@ mod tests {
             }
         }
         v
+    }
+
+    /// The preflight sees the merged image's compression and encoded length, from bytes and from
+    /// a source alike, before the image is read.
+    #[test]
+    fn preflight_info_reports_the_merged_compression_and_length() {
+        for c in Compression::ALL {
+            let file = testgen::small(Version::Psd, c);
+            let bytes = file.to_bytes().unwrap();
+            let want = Some((Some(c), file.image_data.encoded_len()));
+            let mut eager = None;
+            PsdFile::from_bytes_and_merged_preflight_info(&bytes, |_, comp, len| Ok(eager.replace((comp, len)).is_some()), |_| false).unwrap();
+            let mut lazy = None;
+            PsdFile::from_source_and_merged_preflight_info(Source::new(bytes), |_, comp, len| Ok(lazy.replace((comp, len)).is_some()), |_| false)
+                .unwrap();
+            assert_eq!((eager, lazy), (want, want), "{c:?}");
+        }
+        // No compression field: the preflight sees `None`, and its refusal wins over the missing field.
+        let file = testgen::small(Version::Psd, Compression::Raw);
+        let bytes = file.to_bytes().unwrap();
+        let cut = &bytes[..bytes.len() - file.image_data.encoded_len() as usize - 2];
+        let refuse = |_: &PsdFile, comp: Option<Compression>, _: u64| {
+            assert_eq!(comp, None);
+            Err(PsdError::LimitExceeded("refused"))
+        };
+        assert_eq!(PsdFile::from_bytes_and_merged_preflight_info(cut, refuse, |_| false).unwrap_err(), PsdError::LimitExceeded("refused"));
+        assert_eq!(
+            PsdFile::from_source_and_merged_preflight_info(Source::new(cut.to_vec()), refuse, |_| false).unwrap_err(),
+            PsdError::LimitExceeded("refused")
+        );
+        // Accepted, the missing field is the error it always was.
+        assert!(PsdFile::from_source_and_merged_preflight_info(Source::new(cut.to_vec()), |_, _, _| Ok(true), |_| false).is_err());
     }
 
     fn same(bytes: Vec<u8>) {

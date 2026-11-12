@@ -328,6 +328,10 @@ pub fn resources_to_bytes(resources: &[ImageResource]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// What Photoshop writes beside a layered TIFF's layer data, and how the TIFF's samples line up
+/// with the PSD model's channels.
+pub mod layered;
+
 /// Field-by-field byte-order conversion of Photoshop structures.
 ///
 /// Every function reads one structure in the source order and writes it in the target order,

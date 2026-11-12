@@ -631,6 +631,81 @@ fn filter_effects_block() {
     assert_eq!(FilterEffects::parse(&back.global_blocks[0].data).unwrap(), fx);
 }
 
+/// An external linked file (`liFE`) holds the descriptor of its link, and from version 3 its
+/// bytes: both are transcoded, so the record survives a little-endian save.
+#[test]
+fn external_linked_files_keep_their_link_and_bytes() {
+    use crate::io::{WriteExt, write_pascal};
+    let link = Descriptor::new("ExternalFileLink").with("fullPath", Value::Text(crate::descriptor::UnicodeString::new_nul("/art/logo.psd")));
+    let record = |version: u32| {
+        let mut item = b"liFE".to_vec();
+        item.put_u32(version);
+        write_pascal(&mut item, b"uuid-1", 1);
+        crate::descriptor::UnicodeString::new("logo.psd").write(&mut item);
+        item.put(b"8BPS");
+        item.put(b"8BIM");
+        item.put_u64(5);
+        item.put_u8(0);
+        crate::descriptor::VersionedDescriptor::new(link.clone()).write(&mut item);
+        if version > 3 {
+            item.put_i32(2026);
+            item.put(&[11, 12, 9, 30]);
+            item.put_f64(15.5);
+        }
+        item.put_u64(5);
+        item.put(b"BYTES");
+        if version >= 5 {
+            crate::descriptor::UnicodeString::new("child").write(&mut item);
+        }
+        if version >= 6 {
+            item.put_f64(1.0);
+        }
+        if version >= 7 {
+            item.put_u8(0);
+        }
+        let mut out = Vec::new();
+        out.put_u64(item.len() as u64);
+        out.put(&item);
+        out.resize(out.len().div_ceil(4) * 4, 0);
+        out
+    };
+    // Converted without a warning, and read back to the same bytes (`block_rt`).
+    for version in [3, 4, 7] {
+        block_rt(*b"lnkE", record(version));
+    }
+}
+
+/// `FELS` (the filter masks of linked smart objects) has the `FEid` layout: it is checked and
+/// byte-swapped the same way.
+#[test]
+fn linked_filter_masks_are_filter_effects() {
+    use crate::filter_effects::{EffectsPlane, FilterEffects, FilterEffectsItem};
+    let rect = crate::layer::Rect { top: 0, left: 0, bottom: 2, right: 3 };
+    let mask = EffectsPlane::encode(Compression::Raw, &[9; 6], 3, 2, 8).unwrap();
+    let item = FilterEffectsItem {
+        id: "linked".into(),
+        version: 1,
+        rect,
+        depth: 8,
+        max_channels: 1,
+        slots: vec![None, None, None],
+        mask: Some((rect, mask)),
+    };
+    let fx = FilterEffects { version: 1, items: vec![item] };
+    let data = fx.to_bytes();
+    let little = |key: [u8; 4]| {
+        let d = ImageSourceData { global_blocks: vec![TaggedBlock::new(key, data.clone())], ..Default::default() };
+        let (bytes, w) = d.to_bytes(ByteOrder::Little).unwrap();
+        assert!(w.is_empty(), "{w:?}");
+        // After the 36-byte signature, the signature, key and length: the block data.
+        bytes[36 + 12..].to_vec()
+    };
+    assert_eq!(little(*b"FELS"), little(*b"FEid"));
+    block_rt(*b"FELS", data.clone());
+    assert!(TaggedBlock::new(*b"FELS", data.clone()).check_structure().is_ok());
+    assert!(TaggedBlock::new(*b"FELS", data[..data.len() - 1].to_vec()).check_structure().is_err());
+}
+
 /// Photoshop writes one `FEid` section per smart object: every section's lengths and
 /// numbers are swapped, not only the first one's.
 #[test]

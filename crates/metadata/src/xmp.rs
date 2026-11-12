@@ -95,6 +95,9 @@ pub struct XmpData {
     /// Every top-level property with its full structure (arrays of structs such as local
     /// corrections, which [`XmpData::properties`] flattens).
     pub values: BTreeMap<String, XmpValue>,
+    /// The `x:xmptk` attribute of `x:xmpmeta` (older packets: `x:xaptk` of `x:xapmeta`), the name
+    /// of the program that wrote the packet. [`write_xmp_with`] writes [`XmpWrite::toolkit`] there.
+    pub toolkit: Option<String>,
 }
 
 impl XmpData {
@@ -442,9 +445,8 @@ fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<Str
         return;
     }
     if p.attr("rdf:parseType") == Some("Resource") {
-        for c in &p.children {
-            collect_property(c, &struct_prefix, props, budget);
-        }
+        // a Resource struct carries fields as attributes as well as child elements, like a nested Description
+        collect_description(p, &struct_prefix, props, budget);
         return;
     }
     if let Some(d) = p.children.iter().find(|c| c.name == "rdf:Description") {
@@ -675,7 +677,13 @@ pub fn parse_xmp_with(s: &str, extra: &[XmpNamespace]) -> Result<XmpData, XmpErr
         m.gps = Some(Gps { latitude: lat, longitude: lon, altitude });
     }
     m.regions = values.get("mwg-rs:Regions").map(parse_regions).unwrap_or_default();
-    Ok(XmpData { metadata: m, properties: props, values })
+    let toolkit = tree
+        .children
+        .iter()
+        .find(|n| n.name == "x:xmpmeta" || n.name == "x:xapmeta")
+        .and_then(|n| n.attr("x:xmptk").or_else(|| n.attr("x:xaptk")))
+        .map(str::to_string);
+    Ok(XmpData { metadata: m, properties: props, values, toolkit })
 }
 
 fn frac(v: f64) -> String {
@@ -715,7 +723,9 @@ pub fn write_xmp_with(meta: &Metadata, with: &XmpWrite) -> String {
     push("xmp:CreatorTool", meta.software.clone());
     push("xmp:Rating", meta.rating.map(|v| v.to_string()));
     push("xmp:Label", meta.label.clone());
-    push("exif:DateTimeOriginal", meta.capture_time.map(|d| d.to_iso()));
+    // a year or a month alone goes in `photoshop:DateCreated` only, as Lightroom writes it: Exif's
+    // date can't say it
+    push("exif:DateTimeOriginal", meta.capture_time.filter(DateTime::is_full).map(|d| d.to_iso()));
     push("photoshop:DateCreated", meta.capture_time.map(|d| d.to_iso()));
     push("exif:ExposureTime", meta.exposure_time.map(frac));
     push("exif:FNumber", meta.f_number.map(frac));
