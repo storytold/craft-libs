@@ -44,6 +44,18 @@ and the note shapes of the VML drawing (`NoteShape`). A sheet that gains comment
 drawing gets one (`notes_vml`, in a shape block no kept drawing uses); an existing VML drawing is
 kept as read. Extensions in `extLst` are carried through unchanged.
 
+Drawings and charts, on `craft-drawingml`: `Package::drawing` reads a sheet's `xdr:wsDr` into a
+`Drawing` of `Anchor`s, each with a typed `Placement` (two-cell, one-cell, absolute, with EMU
+offsets) and its object kept as written; `Anchor` names the object's kind, its `cNvPr`, its chart
+or image relationship and its `a:xfrm`, and `craft_drawingml::read` reads its fill, line and text.
+`mc:AlternateContent` items (Office 2016 charts, ink) are kept in place, and
+`Drawing::alternate_anchors` reads the anchors inside them. `Package::chart` reads a chart part
+(`c:` or `cx:`) into `craft_drawingml::chart::Chart`; `Package::theme` reads the theme. A
+`Document` worksheet holds its `DrawingPart` (regenerated, its relationships kept by id);
+`Document::add_chart` and `Document::add_picture` add a chart part written by `craft-drawingml`
+(a `chartEx` part behind `mc:AlternateContent` for the Office 2016 types) or an image, with its
+anchor. Chart parts and media are kept parts.
+
 The parts this crate writes use the transitional namespaces; a strict file's kept parts stay as
 they were. A binary workbook is not written.
 
