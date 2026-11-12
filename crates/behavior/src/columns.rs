@@ -5,6 +5,31 @@ use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::ops::Range;
 
+/// Moves the toggle cells of a sub-row (`ItemSource::sub_row`) into its content: side by side in column order, each
+/// its column's width, `indent` from the start edge of the first cell that is not a toggle cell, which then starts
+/// after them. The toggle columns themselves stay empty in that row. `rtl` puts the start edge on the right. The
+/// collection hit-tests a sub-row's toggles in these cells and the row draws them there.
+pub fn sub_row_cells(cells: &mut [(ColumnKey, Rect)], is_toggle: impl Fn(&ColumnKey) -> bool, indent: f32, rtl: bool) {
+    let Some(content) = cells.iter().position(|(key, _)| !is_toggle(key)) else { return };
+    let start = cells[content].1;
+    let mut at = if rtl { start.right() - indent } else { start.left() + indent };
+    for (key, cell) in cells.iter_mut() {
+        if !is_toggle(key) {
+            continue;
+        }
+        let width = cell.width();
+        let x = if rtl { at - width..=at } else { at..=at + width };
+        *cell = Rect::from_x_y_ranges(x, cell.y_range());
+        at += if rtl { -width } else { width };
+    }
+    let content = &mut cells[content].1;
+    if rtl {
+        content.max.x = at.max(content.min.x);
+    } else {
+        content.min.x = at.min(content.max.x);
+    }
+}
+
 /// The key of a column; stable across reordering and resizing. It serializes as its name, or as its position for a
 /// key made by [`ColumnKey::index`].
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]

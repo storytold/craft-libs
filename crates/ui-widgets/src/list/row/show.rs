@@ -84,7 +84,7 @@ impl Component for ListRow<'_> {
         };
         let weight = key.strong || key.heading;
         let role = key.role.unwrap_or(if weight { TypeRole::BodyStrong } else { TypeRole::Body });
-        let sizes = Sizes::of(cx, role, key.rows);
+        let sizes = Sizes::of(cx, role, key.rows, key.sub_row);
         let muted = if key.ink == RowInk::Dimmed { text.faint } else { text.muted };
         ListRowStyle {
             surface,
@@ -498,7 +498,7 @@ impl Component for ListRow<'_> {
         self.label_rect = placed.label;
         {
             let draw = ui.draw();
-            if self.rule || (self.layer && style.dividers) {
+            if self.rule || (self.layer && style.dividers && !self.continued) {
                 draw.edge_rule(RuleKind::Divider, rect, RectSide::Bottom);
             }
             if self.layer && style.dividers {
@@ -540,7 +540,7 @@ impl Component for ListRow<'_> {
                 && !lead_painted
             {
                 icon.color.get_or_insert(cx.resolve(&style.icon.color));
-                draw.icon(Rect::from_center_size(slot.center(), Vec2::splat(sizes.icon)), icon);
+                draw.icon(Rect::from_center_size(slot.center(), Vec2::splat(sizes.mark)), icon);
             }
         }
         self.paint_thumbs(ui, cx, &placed, ink);

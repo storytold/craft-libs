@@ -63,7 +63,7 @@ impl ListRow<'_> {
     }
 
     pub(super) fn paint_toggles(&self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, placed: &Placed) {
-        let icon = cx.style.sizes.icon;
+        let icon = cx.style.sizes.mark;
         for (at, cell) in &placed.toggles {
             let toggle = &self.toggles[*at];
             let part = TOGGLE.at(*at as u64);

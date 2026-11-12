@@ -71,7 +71,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 let origin = local(start.origin);
                 layout.hit(origin, offset).filter(|&at| self.source.enabled(at) && layout.shown(at)).and_then(|at| {
                     match self.toggle_cell(props, layout, at, offset, origin) {
-                        Some((column, _)) => self.toggle_open(at, &column).then_some((at, RowPressed::Cell(column))),
+                        Some((column, ..)) => self.toggle_open(at, &column).then_some((at, RowPressed::Cell(column))),
                         None => Some((at, RowPressed::Row)),
                     }
                 })
@@ -89,8 +89,8 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 // A secondary press on a toggle cell asks for the cell's menu and neither toggles nor picks.
                 let secondary_on_toggle = !primary && on_toggle.is_some();
                 let toggle = on_toggle.filter(|_| primary);
-                if let Some((column, toggle)) = toggle {
-                    self.begin_toggle(cx, at, column, toggle);
+                if let Some(cell) = toggle {
+                    self.begin_toggle(cx, at, cell);
                 } else if primary && props.command_click && mods_now.cmd {
                     // A command on the row, reported when the press ends as a click; the selection stays.
                     self.drags.command = Some(self.source.key(at));
@@ -329,9 +329,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     fn menu_request(&self, layout: &C::ItemLayout, at: Placement, row: usize, point: Pos2) -> ContextMenuRequest<C::Key> {
         let Placement { rect, offset, rtl } = at;
         let place = self.on_screen(self.screen(layout, rect, row, offset, rtl).left_bottom());
-        let mut cells = Vec::new();
-        layout.cells(row, offset, &mut cells);
-        let column = cells.into_iter().find(|(_, cell)| cell.contains(point)).map(|(column, _)| column);
+        let column = self.row_cells(layout, row, offset).into_iter().find(|(_, cell)| cell.contains(point)).map(|(column, _)| column);
         ContextMenuRequest { key: self.source.key(row), at: place, column, part: None }
     }
 

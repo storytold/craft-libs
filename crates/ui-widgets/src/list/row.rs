@@ -36,6 +36,7 @@ pub use placement::indent_steps;
 #[cfg(feature = "testing")]
 #[doc(hidden)]
 pub use placement::placement_under_fixed_sizes;
+pub use placement::tree_steps;
 pub use style::{ListRowStyle, RowStyleCx};
 pub(crate) use thumb::RowThumb;
 pub(super) use thumb::Thumb;
@@ -146,6 +147,14 @@ pub struct ListRow<'a> {
     /// How tall the row is: its collection sets it from `CollectionProps::row_height` in `Collection::dress`.
     #[style_key]
     pub(super) rows: RowHeight,
+    /// The sub-row form, from the collection's row state (`RowState::sub_row`): a small control high, the icon and
+    /// toggle marks at the small control's icon side, and its toggle cells `sub_steps` indent steps into its content
+    /// (`sub_row_cells`), the label after them.
+    #[style_key]
+    pub(super) sub_row: bool,
+    pub(super) sub_steps: usize,
+    /// The next row is a sub-row of this one or of the row it continues (`RowState::continued`): no divider under it.
+    pub(super) continued: bool,
     /// The label in italics.
     #[prop]
     pub(super) italic: bool,
@@ -279,6 +288,9 @@ impl<'a> ListRow<'a> {
             striped: false,
             role: None,
             rows: RowHeight::Control,
+            sub_row: false,
+            sub_steps: 0,
+            continued: false,
             italic: false,
             highlight: false,
             clipped: false,
@@ -357,6 +369,15 @@ impl<'a> ListRow<'a> {
     #[must_use]
     pub(crate) fn rows(mut self, rows: RowHeight) -> Self {
         self.rows = rows;
+        self
+    }
+
+    /// The sub-row form and the divider under the row, from the collection's row state.
+    #[must_use]
+    pub(crate) fn sub_row(mut self, row: &RowState) -> Self {
+        self.sub_row = row.sub_row.is_some();
+        self.sub_steps = row.sub_row.unwrap_or(0);
+        self.continued = row.continued;
         self
     }
 

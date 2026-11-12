@@ -146,6 +146,8 @@ pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
     previous: Option<Arc<C::ItemLayout>>,
     content: Vec2,
     room: Vec2,
+    /// One step of a tree's indent: the icon side at the collection's size, as its rows indent.
+    indent_step: f32,
     /// The axes (x, y) the collection takes from its content under a body sized from its content: the height in every
     /// run, the width in a measuring run (the real run shows a collection that fills across the column it is held in).
     from_content: (bool, bool),
@@ -227,6 +229,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             previous: None,
             content: Vec2::ZERO,
             room: Vec2::ZERO,
+            indent_step: 0.0,
             from_content: (false, false),
             scrolls: true,
             own_wheel: false,

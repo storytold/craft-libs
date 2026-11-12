@@ -225,8 +225,8 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for List<'_, K> {
         if self.tree { layout.tree() } else { layout }
     }
 
-    fn dress<'r>(&self, row: Self::Item<'r>, _: &RowState) -> Self::Item<'r> {
-        let row = row.rows(self.items.row_height);
+    fn dress<'r>(&self, row: Self::Item<'r>, state: &RowState) -> Self::Item<'r> {
+        let row = row.rows(self.items.row_height).sub_row(state);
         if self.row_menu { row.row_menu() } else { row }
     }
 
@@ -320,5 +320,9 @@ impl<K> ItemSource<K> for Filtered<'_, K> {
 
     fn toggled(&self, at: usize, column: &ColumnKey) -> bool {
         self.source.toggled(self.at[at], column)
+    }
+
+    fn sub_row(&self, at: usize) -> Option<usize> {
+        self.source.sub_row(self.at[at])
     }
 }

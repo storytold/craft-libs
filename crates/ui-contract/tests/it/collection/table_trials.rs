@@ -230,3 +230,50 @@ fn a_toggle_column_key_flips_the_column_on_the_selected_rows() {
     press(Key::Space, Modifiers::NONE);
     assert!(columns(&scene).iter().all(|(_, column)| *column == SOLO) && !columns(&scene).is_empty(), "Space flips the first toggle column");
 }
+
+/// Four rows, the third a sub-row of the second (`ItemSource::sub_row`) without indent.
+struct WithSubRow;
+
+impl craft_behavior::DisplayOrder<usize> for WithSubRow {
+    fn len(&self) -> usize {
+        4
+    }
+
+    fn key(&self, at: usize) -> usize {
+        at
+    }
+}
+
+impl ItemSource<usize> for WithSubRow {
+    fn sub_row(&self, at: usize) -> Option<usize> {
+        (at == 2).then_some(0)
+    }
+}
+
+/// A sub-row's toggle cell lies at the start of its content: a press there flips it, a press in its empty toggle
+/// column does nothing, and a sweep down the column passes it by.
+#[trial]
+fn a_sub_rows_toggle_takes_presses_at_the_start_of_its_content() {
+    let props = || {
+        CollectionProps::new().columns(vec![
+            ColumnSpec::new(MUTE, "Mute", ColumnWidth::Fixed(COL)).kind(ColumnKind::Toggle(ToggleColumn::sweepable())),
+            ColumnSpec::new(NAME, "Name", ColumnWidth::Fixed(2.0 * COL)),
+        ])
+    };
+    let run = |act: &dyn Fn(&mut Frames, &Scene, &mut dyn FnMut(&mut Ui))| {
+        let scene = Scene::default();
+        let mut frames = Frames::new();
+        let mut show = |ui: &mut Ui| show_table(ui, props(), &WithSubRow, &scene);
+        frames.idle(3, &mut show);
+        act(&mut frames, &scene, &mut show);
+        scene.toggles()
+    };
+    let column = |scene: &Scene, key: usize| Pos2::new(ORIGIN.x + COL / 2.0, scene.row(key).center().y);
+    let placed = |scene: &Scene, key: usize| Pos2::new(ORIGIN.x + COL * 1.5, scene.row(key).center().y);
+    let flipped = run(&|frames, scene, mut show| pointer::click(frames, column(scene, 2), &mut show));
+    assert!(flipped.is_empty(), "the sub-row's own toggle column is empty: {flipped:?}");
+    let flipped = run(&|frames, scene, mut show| pointer::click(frames, placed(scene, 2), &mut show));
+    assert_eq!(flipped, vec![(2, true)], "a press on the placed cell flips it");
+    let flipped = run(&|frames, scene, mut show| pointer::drag(frames, column(scene, 0), column(scene, 3) - column(scene, 0), &mut show));
+    assert_eq!(flipped, vec![(0, true), (1, true), (3, true)], "the sweep down the column passes the sub-row by");
+}

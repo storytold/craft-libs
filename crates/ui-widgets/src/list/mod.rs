@@ -22,7 +22,7 @@ pub use predicate::{DropTest, RowTest, RowText};
 pub(crate) use row::RowThumb;
 pub use row::{
     ListRow, ListRowStyle, RowDragSpot, RowEvent, RowInk, RowOutput, RowStyleCx, ThumbAspect, ThumbPaint, ThumbSize, ThumbTarget, ThumbTargets,
-    TrailingFace, TrailingPart, label_color_label,
+    TrailingFace, TrailingPart, label_color_label, tree_steps,
 };
 pub use toggle::{ToggleCell, ToggleFace, ToggleState};
 pub use tree::OpenSet;

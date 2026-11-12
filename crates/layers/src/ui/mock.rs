@@ -81,7 +81,7 @@ impl FakeLayers {
         let mut styled = LayerInfo::new("Styled", LayerKind::Pixel);
         styled.has_effects = true;
         tree.push(7, None, styled, false);
-        tree.layers[6].effects = Some(SubRows { header: SubRow::new("Effects"), items: vec![sub_row("Drop Shadow"), sub_row("Stroke")] });
+        tree.layers[6].effects = Some(effects(&["Drop Shadow", "Stroke"]));
         let mut hidden = LayerInfo::new("Hidden", LayerKind::Pixel);
         hidden.visible = false;
         hidden.dimmed = true;
@@ -341,7 +341,7 @@ fn mask(part: LayerPart, enabled: bool, linked: bool) -> MaskInfo {
 
 /// An "Effects" group with one row per name.
 pub fn effects(names: &[&str]) -> SubRows {
-    SubRows::new(SubRow::new("Effects"), names.iter().map(|name| sub_row(name)).collect())
+    SubRows::new(SubRow { icon: Some(IconId::new("sparkles")), ..SubRow::new("Effects") }, names.iter().map(|name| sub_row(name)).collect())
 }
 
 /// An "on" row reading `label`.

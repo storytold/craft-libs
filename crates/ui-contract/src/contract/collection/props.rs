@@ -627,6 +627,11 @@ pub struct RowState {
     /// The collection asked for this row's menu and a menu hung from the collection is open: the row keeps its menu
     /// button shown.
     pub menu_open: bool,
+    /// `Some(steps)` for a sub-row of a row above (`ItemSource::sub_row`): compact, its toggles `steps` indent steps
+    /// into its content.
+    pub sub_row: Option<usize>,
+    /// The next row is a sub-row, which continues this row: no divider between them.
+    pub continued: bool,
     /// The activation key (Enter) activated the row this pass: a row with controls of its own may move focus into one.
     pub activated_by_key: bool,
 }

@@ -3,7 +3,7 @@
 use craft_behavior::{ColumnKey, DisplayOrder, ItemSource, Selection};
 use craft_keymap::Mods;
 use craft_ui::contract::{OpenChange, SweepApply};
-use craft_ui::list::ThumbTarget;
+use craft_ui::list::{ThumbTarget, tree_steps};
 use std::borrow::Cow;
 
 use super::super::context::PanelContext;
@@ -20,6 +20,9 @@ pub(in crate::ui::panel) struct DisplayRow<Id> {
     /// The depth the row paints at: a filtered view lists rows at their shown depth and paints them at
     /// the true one.
     pub(in crate::ui::panel) paint_depth: usize,
+    /// For an effect or Smart Filter row, the indent steps of its eye: one past its layer's for the header, two
+    /// for an item, as Photoshop nests them under the layer's thumbnail.
+    sub_steps: Option<usize>,
     pub(super) has_children: bool,
     pub(super) open: bool,
 }
@@ -94,6 +97,10 @@ impl<T: LayerTree> ItemSource<LayerRowKey<T::Id>> for LayerRows<'_, T> {
             _ => false,
         }
     }
+
+    fn sub_row(&self, at: usize) -> Option<usize> {
+        self.rows[at].sub_steps
+    }
 }
 
 fn sub_label<T: LayerTree>(tree: &T, id: &T::Id, group: SubRowGroup, index: Option<usize>) -> Option<Cow<'static, str>> {
@@ -120,7 +127,7 @@ struct Level {
 }
 
 fn leaf<Id>(key: LayerRowKey<Id>, level: Level) -> DisplayRow<Id> {
-    DisplayRow { key, depth: level.shown, paint_depth: level.true_depth, has_children: false, open: false }
+    DisplayRow { key, depth: level.shown, paint_depth: level.true_depth, sub_steps: None, has_children: false, open: false }
 }
 
 /// A walk of the tree for the display order.
@@ -147,9 +154,11 @@ fn push_level<T: LayerTree>(walk: &mut Walk<'_, T>, children: Vec<T::Id>, level:
         if shown {
             let mut row = leaf(LayerRowKey::Layer(id.clone()), level);
             row.has_children = !below.is_empty();
+            let row_has_children = row.has_children;
             row.open = row.has_children && open;
             out.push(row);
-            push_sub_rows(tree, &id, Level { shown: level.shown + 1, true_depth: level.true_depth + 1 }, out);
+            let steps = tree_steps(level.true_depth, row_has_children);
+            push_sub_rows(tree, &id, Level { shown: level.shown + 1, true_depth: level.true_depth + 1 }, steps, out);
         }
         let after_sub_rows = out.len();
         if open {
@@ -164,17 +173,19 @@ fn push_level<T: LayerTree>(walk: &mut Walk<'_, T>, children: Vec<T::Id>, level:
     }
 }
 
-fn push_sub_rows<T: LayerTree>(tree: &T, id: &T::Id, level: Level, out: &mut Vec<DisplayRow<T::Id>>) {
+fn push_sub_rows<T: LayerTree>(tree: &T, id: &T::Id, level: Level, steps: usize, out: &mut Vec<DisplayRow<T::Id>>) {
     if !tree.effects_open(id) {
         return;
     }
+    let header = |key| DisplayRow { sub_steps: Some(steps + 1), ..leaf(key, level) };
+    let item = |key| DisplayRow { sub_steps: Some(steps + 2), ..leaf(key, level) };
     if let Some(sub) = tree.sub_rows(id, SubRowGroup::SmartFilters) {
-        out.push(leaf(LayerRowKey::Filters(id.clone(), None), level));
-        (0..sub.items.len()).for_each(|i| out.push(leaf(LayerRowKey::Filters(id.clone(), Some(i)), level)));
+        out.push(header(LayerRowKey::Filters(id.clone(), None)));
+        (0..sub.items.len()).for_each(|i| out.push(item(LayerRowKey::Filters(id.clone(), Some(i)))));
     }
     if let Some(sub) = tree.sub_rows(id, SubRowGroup::Effects) {
-        out.push(leaf(LayerRowKey::Effects(id.clone(), None), level));
-        (0..sub.items.len()).for_each(|i| out.push(leaf(LayerRowKey::Effects(id.clone(), Some(i)), level)));
+        out.push(header(LayerRowKey::Effects(id.clone(), None)));
+        (0..sub.items.len()).for_each(|i| out.push(item(LayerRowKey::Effects(id.clone(), Some(i)))));
     }
 }
 

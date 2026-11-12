@@ -110,6 +110,13 @@ pub trait ItemSource<K>: DisplayOrder<K> {
     fn toggle_enabled(&self, _at: usize, _column: &ColumnKey) -> bool {
         true
     }
+
+    /// `Some(steps)` when entry `at` is a sub-row of an entry above it (a layer's effects): a compact row whose toggle
+    /// cells sit in its content, `steps` indent steps from its start, instead of in their columns (`sub_row_cells`).
+    /// A press flips them there, and a sweep down the toggle columns passes them by.
+    fn sub_row(&self, _at: usize) -> Option<usize> {
+        None
+    }
 }
 
 /// `DisplayOrder` as the key-free outline the navigation core steps over.

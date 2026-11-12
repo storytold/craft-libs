@@ -31,6 +31,9 @@ struct Sweep<K> {
     /// The modifiers held at the first press, which every flip of the sweep carries.
     mods: craft_keymap::Mods,
     crossed: Vec<usize>,
+    /// Where the cell the sweep began in lies across the rows (logical): it flips the crossed rows whose cell of the
+    /// column lies there too, so a sweep down a toggle column passes sub-rows by and one down sub-rows passes rows by.
+    span: egui::Rangef,
     /// The flips made so far, each a gesture that stays open until the release commits it or Escape cancels it:
     /// its id and the edit that undoes it.
     open: Vec<(GestureId, ToggleEdit<K>, ToggleEdit<K>)>,
@@ -283,7 +286,19 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
     }
 
-    /// The toggle column under `point` (logical) in row `at`, and how it toggles.
+    /// The cells of row `at` (logical): the layout's, with a sub-row's toggle cells at its indent in its content
+    /// (`sub_row_cells`), where the row draws them. A press acts on the cell it lands in.
+    pub(super) fn row_cells(&self, layout: &C::ItemLayout, at: usize, offset: ScrollPos) -> Vec<(ColumnKey, Rect)> {
+        let mut cells = Vec::new();
+        layout.cells(at, offset, &mut cells);
+        if let Some(steps) = self.source.sub_row(at) {
+            let toggles: Vec<ColumnKey> = self.header.toggle_columns().map(|(key, _)| key).collect();
+            craft_behavior::sub_row_cells(&mut cells, |key| toggles.contains(key), steps as f32 * self.indent_step, false);
+        }
+        cells
+    }
+
+    /// The toggle cell under `point` (logical) in row `at`: its column, how it toggles and its rect.
     pub(super) fn toggle_cell(
         &self,
         props: &CollectionProps,
@@ -291,12 +306,10 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         at: usize,
         offset: ScrollPos,
         point: Pos2,
-    ) -> Option<(ColumnKey, ToggleColumn)> {
-        let mut cells = Vec::new();
-        layout.cells(at, offset, &mut cells);
-        let (key, _) = cells.into_iter().find(|(_, cell)| cell.contains(point))?;
+    ) -> Option<(ColumnKey, ToggleColumn, Rect)> {
+        let (key, cell) = self.row_cells(layout, at, offset).into_iter().find(|(_, cell)| cell.contains(point))?;
         props.columns.iter().find(|spec| spec.key == key).and_then(|spec| match spec.kind {
-            ColumnKind::Toggle(toggle) => Some((key.clone(), toggle)),
+            ColumnKind::Toggle(toggle) => Some((key.clone(), toggle, cell)),
             _ => None,
         })
     }
@@ -325,10 +338,10 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// A press on a toggle cell flips it. On a sweepable column it also starts a sweep of the new value; on an
     /// exclusive column, turning a cell on turns the column's other cells off. A cell that is not open to toggling
     /// does nothing and starts no sweep.
-    pub(super) fn begin_toggle(&mut self, cx: &mut Cx<'_, C>, at: usize, column: ColumnKey, toggle: ToggleColumn) {
+    pub(super) fn begin_toggle(&mut self, cx: &mut Cx<'_, C>, at: usize, (column, toggle, cell): (ColumnKey, ToggleColumn, Rect)) {
         if toggle.sweepable {
             let mods = crate::runtime::pointer::frame(&cx.core.ctx).mods;
-            self.drags.sweep = Some(Sweep { column: column.clone(), on: false, mods, crossed: vec![at], open: Vec::new() });
+            self.drags.sweep = Some(Sweep { column: column.clone(), on: false, mods, crossed: vec![at], span: cell.x_range(), open: Vec::new() });
         }
         match self.flip_toggle(cx, at, column, toggle) {
             Some(on) => {
@@ -369,7 +382,11 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             if let Some(held) = &mut self.drags.sweep {
                 held.crossed.push(at);
             }
-            if self.source.enabled(at) && self.toggle_open(at, &sweep.column) && self.source.toggled(at, &sweep.column) != sweep.on {
+            let in_span = self
+                .row_cells(layout, at, offset)
+                .into_iter()
+                .any(|(key, cell)| key == sweep.column && cell.min.x < sweep.span.max && cell.max.x > sweep.span.min);
+            if in_span && self.source.enabled(at) && self.toggle_open(at, &sweep.column) && self.source.toggled(at, &sweep.column) != sweep.on {
                 self.emit_toggle(cx, at, &sweep.column, sweep.on, sweep.mods);
             }
         }

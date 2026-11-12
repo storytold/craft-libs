@@ -13,7 +13,7 @@ use crate::primitives::{HAlign, TextRun, Wrap};
 use crate::runtime::env::{EnvView, Label};
 use crate::style::{StyleCx, TextLook};
 use craft_behavior::{ColumnKey, Flow};
-use craft_theme::TypeRole;
+use craft_theme::{ControlSize, TypeRole};
 use egui::{Pos2, Rect, Vec2};
 
 /// The label's least width, in control heights, before the indent and the optional items give way.
@@ -23,7 +23,11 @@ const MIN_LABEL_HEIGHTS: f32 = 3.0;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Sizes {
     pub(super) row: f32,
+    /// The slot of an icon, a toggle cell's mark or a step of indent.
     pub(super) icon: f32,
+    /// The side the row's icon and its toggle marks draw at in their slots: the control's icon side, the small
+    /// control's in a sub-row.
+    pub(super) mark: f32,
     pad: f32,
     pub(super) gap: f32,
     trailing_pad: f32,
@@ -44,12 +48,14 @@ pub(super) struct Sizes {
 }
 
 impl Sizes {
-    pub(super) fn of(cx: &StyleCx<'_>, role: TypeRole, rows: RowHeight) -> Sizes {
+    pub(super) fn of(cx: &StyleCx<'_>, role: TypeRole, rows: RowHeight, sub_row: bool) -> Sizes {
         let (control, tokens) = (cx.control(), cx.tokens);
         let thumbs = &tokens.size.thumb;
+        let small = cx.control_of(ControlSize::Sm);
         Sizes {
-            row: rows.of(cx),
+            row: if sub_row { small.height } else { rows.of(cx) },
             icon: control.icon,
+            mark: if sub_row { small.icon } else { control.icon },
             pad: control.pad_x,
             gap: control.gap,
             trailing_pad: tokens.space.pad.regular,
@@ -99,7 +105,7 @@ impl ListRow<'_> {
     /// The height of a control-high row with a thumbnail of `thumb` and, if `detail`, a detail line, for the item
     /// layout of a list of such rows.
     pub fn row_height(cx: &StyleCx<'_>, thumb: ThumbSize, detail: bool) -> f32 {
-        Sizes::of(cx, TypeRole::Body, RowHeight::Control).height(thumb, detail)
+        Sizes::of(cx, TypeRole::Body, RowHeight::Control, false).height(thumb, detail)
     }
 
     /// Where this row's disclosure lies when it fills `rect` under `style`, with texts `text_width` wide: the rect at
@@ -258,11 +264,11 @@ impl ListRow<'_> {
 
     /// The levels of indent: a leaf inside a group indents one more level, past its parent's disclosure column.
     fn steps(&self) -> usize {
-        match (self.depth, self.group) {
-            (Some(depth), None) if depth > 0 => depth + 1,
-            (Some(depth), _) => depth,
-            (None, _) => 0,
+        // A sub-row's indent comes before its toggle cells (`sub_steps`); its label follows them.
+        if self.sub_row {
+            return 0;
         }
+        self.depth.map_or(0, |depth| tree_steps(depth, self.group.is_some()))
     }
 
     /// The widths of the trailing items and the leading text's slot: as `text_width` measures a text, the icon side for
@@ -377,8 +383,18 @@ impl ListRow<'_> {
         self.place_in(&cells, sizes, widths, below(rect), rtl)
     }
 
-    pub(super) fn place_in(&self, cells_of: &[(ColumnKey, Rect)], sizes: &Sizes, widths: &Widths, rect: Rect, rtl: bool) -> Placed {
+    pub(super) fn place_in(&self, columns: &[(ColumnKey, Rect)], sizes: &Sizes, widths: &Widths, rect: Rect, rtl: bool) -> Placed {
         let items = &widths.items;
+        let moved;
+        let cells_of = if self.sub_row {
+            let toggle = |key: &ColumnKey| self.toggle_columns.contains(key) || self.toggles.iter().any(|toggle| toggle.column == *key);
+            let mut cells = columns.to_vec();
+            craft_behavior::sub_row_cells(&mut cells, toggle, self.sub_steps as f32 * sizes.icon, rtl);
+            moved = cells;
+            &moved[..]
+        } else {
+            columns
+        };
         let Bands { lead, trail, toggles: cells, texts } = self.bands(cells_of, rect, rtl);
         let flow = Flow::new(rect, rtl);
         let band_width = (rect.width() - lead - trail).max(0.0);
@@ -461,7 +477,13 @@ impl ListRow<'_> {
         }
         let toggles = cells.iter().map(|(at, cell, _)| (*at, *cell)).collect();
         let texts = texts.iter().map(|(at, position, cell, _)| (*at, *position, *cell)).collect();
-        let dividers = cells.iter().filter(|(_, _, leading)| *leading).map(|(_, cell, _)| if rtl { cell.left() } else { cell.right() }).collect();
+        // A column's line stays at the column's own edge where a sub-row's toggle cell moved out of it.
+        let dividers = cells
+            .iter()
+            .filter(|(_, _, leading)| *leading)
+            .filter_map(|(at, ..)| columns.iter().find(|(column, _)| *column == self.toggles[*at].column))
+            .map(|(_, cell)| if rtl { cell.left() } else { cell.right() })
+            .collect();
         let least: f32 = widths.items.iter().filter(|item| !item.optional).map(|item| item.least + sizes.gap).sum();
         let min_width = lead + trail + base + column + leading_width + sizes.min_label + least + sizes.trailing_pad;
         // Every item, optional ones included: at its ideal width the row shows everything.
@@ -485,6 +507,12 @@ impl ListRow<'_> {
     }
 }
 
+/// The indent steps of a tree row at `depth`: a leaf inside a group indents one more level, past its parent's
+/// disclosure column. A source that indents a row's sub-rows (`ItemSource::sub_row`) counts from it.
+pub fn tree_steps(depth: usize, group: bool) -> usize {
+    if depth > 0 && !group { depth + 1 } else { depth }
+}
+
 /// The width of a character of a trailing text under fixed sizes.
 #[cfg(feature = "testing")]
 const FIXED_ADVANCE: f32 = 10.0;
@@ -497,6 +525,7 @@ pub fn placement_under_fixed_sizes(row: &ListRow<'_>, width: f32, rtl: bool) -> 
     let sizes = Sizes {
         row: 20.0,
         icon: 16.0,
+        mark: 16.0,
         pad: 6.0,
         gap: 4.0,
         trailing_pad: 8.0,

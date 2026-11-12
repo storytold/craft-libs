@@ -180,6 +180,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             ShowAt::Flow => crate::layout::flow_room(ui),
         };
         self.room = room;
+        self.indent_step = scx.control().icon;
         let env = Env::of(ui);
         let room = Self::inner_room(comp, &env.tokens, room);
         // Where the enclosing body does not give the width, a measuring run takes the collection's width from its
@@ -519,6 +520,8 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                     hovered: hover_at.is_some_and(|pos| row.contains(pos)),
                     pressed: self.pressed.as_ref().filter(|(held, _)| *held == at).map(|(_, pressed)| pressed.clone()),
                     menu_open: self.drags.menu.as_ref() == Some(&key) && menu_open,
+                    sub_row: self.source.sub_row(at),
+                    continued: at + 1 < len && self.source.sub_row(at + 1).is_some(),
                     activated_by_key: self.keyed_activation.as_ref() == Some(&key),
                     ..RowState::default()
                 };
