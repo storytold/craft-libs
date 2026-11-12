@@ -33,6 +33,18 @@ pub struct PhoneticProps {
     pub alignment: Option<String>,
 }
 
+const KINDS: &[&str] = &["halfwidthKatakana", "fullwidthKatakana", "Hiragana", "noConversion"];
+const ALIGNMENTS: &[&str] = &["noControl", "left", "center", "distributed"];
+
+/// `<t>`, with `xml:space="preserve"` when the text has edge whitespace or a line break, and
+/// the text in `_xHHHH_` form ([`encode_xstring`]).
+pub fn t_el(text: &str) -> El {
+    let t = El::new("t");
+    let ws = [' ', '\t', '\n', '\r'];
+    let t = if text.starts_with(ws) || text.ends_with(ws) || text.contains('\n') { t.with_attr("xml:space", "preserve") } else { t };
+    if text.is_empty() { t } else { t.with_text(encode_xstring(text)) }
+}
+
 /// One string item: a shared string (`<si>`), an inline string (`<is>`) or comment text.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StringItem {
@@ -68,14 +80,56 @@ impl StringItem {
                 phonetic_runs.push(PhoneticRun { start, end, text: reading });
             }
         }
-        const KINDS: &[&str] = &["halfwidthKatakana", "fullwidthKatakana", "Hiragana", "noConversion"];
-        const ALIGNMENTS: &[&str] = &["noControl", "left", "center", "distributed"];
         let phonetic = e.child("phoneticPr").map(|p| PhoneticProps {
             font_id: p.attr_u32("fontId").unwrap_or(0),
             kind: p.attr("type").map(str::trim).filter(|v| KINDS.contains(v)).map(str::to_string),
             alignment: p.attr("alignment").map(str::trim).filter(|v| ALIGNMENTS.contains(v)).map(str::to_string),
         });
         StringItem { dropped_phonetic_runs: seen - phonetic_runs.len(), text: Arc::from(text), runs, phonetic_runs, phonetic }
+    }
+}
+
+impl StringItem {
+    /// The item as `<name>`: `si` in the shared strings, `is` in a cell, `text` in a comment.
+    /// The formatted runs when there are any, else the text; then the phonetic runs and
+    /// properties, checked again as the reader checks them (a run inside the text with a
+    /// reading, a kind and alignment the schema defines), so what is written is valid.
+    pub fn to_el(&self, name: &str) -> El {
+        let mut e = El::new(name);
+        if self.runs.is_empty() {
+            e.push(t_el(&self.text));
+        }
+        for r in &self.runs {
+            let mut run = El::new("r");
+            if let Some(f) = &r.font {
+                run.push(f.to_el("rPr", true));
+            }
+            run.push(t_el(&r.text));
+            e.push(run);
+        }
+        let len = u32::try_from(self.text.encode_utf16().count()).unwrap_or(u32::MAX);
+        for r in &self.phonetic_runs {
+            let (start, end) = (r.start.min(len), r.end.min(len));
+            if start < end && !r.text.is_empty() {
+                e.push(El::new("rPh").with_attr("sb", start).with_attr("eb", end).with_child(t_el(&r.text)));
+            }
+        }
+        if let Some(p) = &self.phonetic {
+            let mut pr = El::new("phoneticPr").with_attr("fontId", p.font_id);
+            if let Some(k) = p.kind.as_deref().filter(|k| KINDS.contains(k)) {
+                pr.set_attr("type", k);
+            }
+            if let Some(a) = p.alignment.as_deref().filter(|a| ALIGNMENTS.contains(a)) {
+                pr.set_attr("alignment", a);
+            }
+            e.push(pr);
+        }
+        e
+    }
+
+    /// A plain string.
+    pub fn plain(text: &str) -> StringItem {
+        StringItem { text: Arc::from(text), ..StringItem::default() }
     }
 }
 
@@ -192,5 +246,14 @@ mod tests {
         assert_eq!(si.phonetic, Some(PhoneticProps { font_id: 3, kind: Some("Hiragana".into()), alignment: None }));
         let plain = item("<si><t>a_x000A_b</t></si>");
         assert_eq!((&*plain.text, plain.runs.len()), ("a\nb", 0));
+        // Written back: the dropped runs stay dropped, the bad alignment is left out.
+        let again = item(&si.to_el("si").to_xml());
+        assert_eq!((&again.text, &again.runs, &again.phonetic_runs, again.dropped_phonetic_runs), (&si.text, &si.runs, &si.phonetic_runs, 0));
+        assert_eq!(again.phonetic, si.phonetic);
+        assert_eq!(item(&plain.to_el("si").to_xml()), plain);
+        assert_eq!(t_el(" a\r").to_xml(), r#"<t xml:space="preserve"> a_x000D_</t>"#);
+        // A run that does not fit the text is not written.
+        let bad = StringItem { phonetic_runs: vec![PhoneticRun { start: 3, end: 9, text: "x".into() }], ..StringItem::plain("ab") };
+        assert_eq!(bad.to_el("si").to_xml(), "<si><t>ab</t></si>");
     }
 }

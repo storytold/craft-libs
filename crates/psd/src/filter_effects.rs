@@ -1,4 +1,5 @@
-//! Smart-filter caches: the global `FEid` / `FXid` ("Filter Effects") block.
+//! Smart-filter caches: the global `FEid` / `FXid` ("Filter Effects") block, and `FELS`, which
+//! holds the filter masks of linked smart objects in the same layout.
 //!
 //! Layout (Adobe PSD spec, "Filter Effects", checked against Photoshop-authored files):
 //!

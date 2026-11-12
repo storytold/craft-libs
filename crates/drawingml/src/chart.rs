@@ -245,6 +245,36 @@ pub struct Series {
     /// `c:errBars` on the values (y bars; a bar chart's run along its value axis).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_bars: Option<ErrorBars>,
+    /// Where the series' data lives (`c:f` formulas), as the file gave them.
+    #[serde(skip_serializing_if = "SeriesRefs::is_empty")]
+    pub refs: SeriesRefs,
+}
+
+/// The formulas (`c:f`) a series' data comes from, such as `Sheet1!$B$2:$B$5`. A writer uses the
+/// ones given and makes up the rest for an embedded workbook laid out one series per column
+/// (names in row 1, categories in column A). A caller that changes the data so that a given
+/// range no longer covers it clears that formula.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SeriesRefs {
+    /// `c:tx`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// `c:cat`, or a scatter or bubble series' `c:xVal`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub categories: Option<String>,
+    /// `c:val` or `c:yVal`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values: Option<String>,
+    /// `c:bubbleSize`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sizes: Option<String>,
+}
+
+impl SeriesRefs {
+    pub fn is_empty(&self) -> bool {
+        *self == SeriesRefs::default()
+    }
 }
 
 /// Error bars (`c:errBars`): how far each point's bar reaches below and above it.
@@ -1676,3 +1706,7 @@ mod chartex_tests {
         assert!(stats.iter().all(|s| s.len() == 2 && s.iter().all(Option::is_some)));
     }
 }
+
+pub mod chartex;
+pub mod read;
+pub mod write;
