@@ -45,10 +45,10 @@ use craft_tiff::makernote::MakerNote;
 use craft_tiff::{Ifd, Tiff, Value, makernote, tags as t};
 use rayon::prelude::*;
 
-pub(crate) const CAMERA_SETTINGS: u16 = 0x2020;
+const CAMERA_SETTINGS: u16 = 0x2020;
 const IMAGE_PROCESSING: u16 = 0x2040;
-pub(crate) const PREVIEW_START: u16 = 0x0101;
-pub(crate) const PREVIEW_LENGTH: u16 = 0x0102;
+const PREVIEW_START: u16 = 0x0101;
+const PREVIEW_LENGTH: u16 = 0x0102;
 const WB_RB: u16 = 0x0100;
 /// ImageProcessing WB_GLevel: the green level the red and blue levels are relative to (256 when absent).
 const WB_G: u16 = 0x011f;
@@ -495,6 +495,31 @@ mod tests {
         assert_eq!(wb(Some(256)), Some([2.0, 1.0, 1.5]));
         assert_eq!(wb(Some(512)), Some([1.0, 1.0, 0.75]));
         assert_eq!(wb(Some(0)), Some([2.0, 1.0, 1.5]));
+    }
+
+    /// The CameraSettings preview (`0x0101` start, relative to the note's base, and `0x0102` length) is the file's
+    /// embedded preview; a length past the end is clamped to the file.
+    #[test]
+    fn camera_settings_preview_is_the_embedded_preview() {
+        let mut jpeg = vec![0xff, 0xd8, 0xff, 0xc0, 0x00, 0x0b, 8, 0, 1, 0, 1, 1, 1, 0x11, 0];
+        jpeg.extend([0x55; 40]);
+        jpeg.extend([0xff, 0xd9]);
+        let long = |v: u32| v.to_le_bytes().to_vec();
+        // the note holds CameraSettings (30 bytes, inline) and the JPEG, both after its 38-byte IFD
+        let file = |at: usize, len: u32| {
+            let mut cs = 2u16.to_le_bytes().to_vec();
+            cs.extend([&PREVIEW_START.to_le_bytes()[..], &4u16.to_le_bytes(), &1u32.to_le_bytes(), &long((at + 38 + 30) as u32)].concat());
+            cs.extend([&PREVIEW_LENGTH.to_le_bytes()[..], &4u16.to_le_bytes(), &1u32.to_le_bytes(), &long(len)].concat());
+            cs.extend(0u32.to_le_bytes());
+            let note = olymp_note(at, &[(CAMERA_SETTINGS, 7, cs), (0xfff0, 7, jpeg.clone())]);
+            orf_with_note(16, 4, 16, vec![0; 128], Some(RGGB), Some(note))
+        };
+        let at = file(0, 0).windows(6).position(|b| b == b"OLYMP\0").unwrap();
+        let bytes = file(at, jpeg.len() as u32);
+        assert_eq!(preview(&bytes), Some(&jpeg[..]));
+        assert_eq!(crate::embedded_preview(&bytes), Some(jpeg.clone()));
+        let past = file(at, u32::MAX);
+        assert!(preview(&past).is_some_and(|p| p.starts_with(&jpeg) && p.len() < past.len()));
     }
 
     /// storytold/lightcraft#1273: the E-10 (16-bit words, no ImageProcessing sub-directory) keeps its red and blue gains in
