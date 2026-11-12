@@ -393,7 +393,7 @@ fn body(
                 let percent = (values.star_ratio * 100.0).clamp(1.0, 100.0);
                 let field = NumberField::new(words.star_ratio.as_str().to_owned(), Bind::given(Some(percent)))
                     .range(1.0..=100.0)
-                    .unit(numbers.suffix(UnitKind::Percent))
+                    .unit(numbers.symbol(UnitKind::Percent))
                     .commit_decimals(1);
                 if let Some(value) = field.show(ui).value().copied().flatten()
                     && (value - percent).abs() > f64::EPSILON

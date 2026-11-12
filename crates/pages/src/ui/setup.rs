@@ -247,7 +247,7 @@ impl Rows<'_> {
                     .codec(codec.clone())
                     .range(in_unit(unit, *range.start())..=in_unit(unit, *range.end()))
                     .step(in_unit(unit, MARGIN_SCRUB_STEP))
-                    .unit(self.units.suffix(unit))
+                    .unit(self.units.symbol(unit))
                     .show(ui)
             })
             .inner;

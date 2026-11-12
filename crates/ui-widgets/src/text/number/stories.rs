@@ -49,13 +49,13 @@ fn number_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             NumberField::new("Gap", Bind::bound(data.value("gap", Some(SIZE))))
                 .range(RANGE)
                 .step(0.5)
-                .unit(units.suffix(UnitKind::Millimetres))
+                .unit(units.symbol(UnitKind::Millimetres))
                 .size(size)
                 .show(ui);
         });
         row("Mixed").show(ui, |ui, _| {
             NumberField::new("Mixed size", Bind::bound_mixed(data.value("mixed", Mixed::<Option<f64>>::Mixed)))
-                .unit(units.suffix(UnitKind::Points))
+                .unit(units.symbol(UnitKind::Points))
                 .size(size)
                 .show(ui);
         });
@@ -82,7 +82,7 @@ fn number_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             NumberField::new("Disabled", Bind::bound(&mut Some(64.0)))
                 .range(RANGE)
                 .step(0.5)
-                .unit(units.suffix(UnitKind::Pixels))
+                .unit(units.symbol(UnitKind::Pixels))
                 .enabled(false)
                 .size(size)
                 .show(ui);

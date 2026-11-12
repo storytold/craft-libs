@@ -482,7 +482,7 @@ App text maps to the nearest named role. A real new need gets a new role. No rol
 | Title | Panel and dialog titles (semibold) | 13 / 18 | 14 / 20 |
 | Heading | Section headings (semibold) | 15 / 20 | 17 / 24 |
 | Body large | Large regular text, such as a prominent field | 15 / 20 | 16 / 22 |
-| Mono | Code, numbers in tables | 11.5 / 16 | 12.5 / 18 |
+| Mono | Code and numbers: number fields, timecodes, tables | 11.5 / 16 | 12.5 / 18 |
 
 The Text size setting scales the roles only (0.83x, 1x, 1.17x, 1.33x), rounded to 0.5 pt. Control heights, icons and faces do not scale. The interface font setting can use the OS UI face; mono stays the suite's.
 

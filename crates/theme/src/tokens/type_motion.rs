@@ -42,7 +42,7 @@ pub enum TypeRole {
     Heading,
     /// Large regular text: a prominent text field.
     BodyLarge,
-    /// Code, numbers in tables.
+    /// Code and numbers: number fields, timecodes, tables.
     Mono,
     /// A brand title: the app's name on its start screen.
     Display,
@@ -65,7 +65,7 @@ pub struct TypeTokens {
     pub heading: TypeStyle,
     /// Large regular text: a prominent text field.
     pub body_large: TypeStyle,
-    /// Code, numbers in tables.
+    /// Code and numbers: number fields, timecodes, tables.
     pub mono: TypeStyle,
     /// A brand title: the app's name on its start screen.
     pub display: TypeStyle,

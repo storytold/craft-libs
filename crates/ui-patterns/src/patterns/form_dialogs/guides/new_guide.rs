@@ -190,7 +190,7 @@ fn position_row(ui: &mut Ui, words: &GuideDialogWords, numbers: &Units, units: &
                 .codec(codec)
                 .range(-high..=high)
                 .step(ruler.step())
-                .unit(numbers.suffix(ruler))
+                .unit(numbers.symbol(ruler))
                 .show(ui);
             if focus_here {
                 focus::request(ui.ctx(), FocusTarget::Id(field.response.id));

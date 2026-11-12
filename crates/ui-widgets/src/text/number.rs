@@ -205,8 +205,8 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         Rule::new(range.as_ref(), self.step)
     }
 
-    /// Reads what the field keeps from the env: a length field's scale from stored to shown, and its unit kind's suffix
-    /// (the symbol with the space the language puts before it) after the number unless the field sets a unit.
+    /// Reads what the field keeps from the env: a length field's scale from stored to shown, and the symbol of its unit
+    /// kind after the number unless the field sets a unit.
     fn settle_lengths(&mut self, units: &Units) {
         if let Some(lengths) = self.lengths {
             self.scale = units.length_scale(lengths).unwrap_or(1.0);
@@ -214,20 +214,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         if self.unit.is_none()
             && let Some(kind) = self.unit_kind
         {
-            self.unit = Some(units.suffix(kind).into());
-        }
-    }
-
-    /// The unit's rect: against the end of the shown number, which sits centred in `text`, and no further out than
-    /// `reserved`, the room `place` keeps for it at the end of the field.
-    fn unit_at(reserved: Rect, text: Rect, number_width: f32, rtl: bool) -> Rect {
-        let width = reserved.width();
-        if rtl {
-            let end = (text.center().x - number_width / 2.0).max(reserved.max.x);
-            Rect::from_min_max(egui::pos2(end - width, reserved.min.y), egui::pos2(end, reserved.max.y))
-        } else {
-            let start = (text.center().x + number_width / 2.0).min(reserved.min.x);
-            Rect::from_min_max(egui::pos2(start, reserved.min.y), egui::pos2(start + width, reserved.max.y))
+            self.unit = Some(units.symbol(kind).into());
         }
     }
 
@@ -308,9 +295,10 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         chevrons
     }
 
-    /// The unit, measured, then the chevrons: what sits after the text.
+    /// The unit, measured, then the chevrons: what sits after the text. The unit stands apart at the end of the value
+    /// area, so units line up in a column of fields and the number centres in the room before its unit.
     fn after_text(&self, cx: &MeasureCx<'_, Self>, chevrons: &[(PartKey, Label)]) -> Vec<Adornment> {
-        let unit = self.unit.iter().map(|unit| Adornment::text(unit.clone(), cx.style.unit.role).measured(cx));
+        let unit = self.unit.iter().map(|unit| Adornment::text(unit.clone(), cx.style.unit.role).apart().measured(cx));
         let chevrons =
             chevrons.iter().map(|(key, name)| Adornment::button(*key, crate::controls::disclosure::DisclosureGlyph::dropdown(), name.clone()));
         unit.chain(chevrons).collect()
@@ -348,7 +336,10 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             // The width is the value area, at most a number cell, and the adornments beside it, at least a cell
             // (`measure`); the style's minimum is only the height.
             metrics: field.clone().sized_by_content().metrics,
-            unit: TextLook::new(TypeRole::Body, Stateful::new(faint).off(States::new(faint, faint, faint, cx.color(cx.tokens.color.text.disabled)))),
+            unit: TextLook::new(
+                TypeRole::Caption,
+                Stateful::new(faint).off(States::new(faint, faint, faint, cx.color(cx.tokens.color.text.disabled))),
+            ),
             handle: Stateful::new(muted).off(States::new(muted, muted, muted, cx.color(cx.tokens.color.text.disabled))),
             cell: cx.control().number,
             field,
@@ -370,7 +361,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         // takes its whole value and has no floor.
         let content = cx.resolved.sizing() == Some(Sizing::Content);
         let sample = cx.value().map_or(Cow::Borrowed(""), |value| codec.sample(value));
-        let text = cx.field_text(&TextRun::new(sample.as_ref()));
+        let text = cx.field_text(&TextRun::new(sample.as_ref()).role(TypeRole::Mono));
         let chevrons = self.chevrons(&cx.words::<TextWords>());
         self.leading = Self::before_text(cx);
         self.trailing = self.after_text(cx, &chevrons);
@@ -398,6 +389,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         }
         let text = placed.text;
         self.options.centred = true;
+        self.options.mono = true;
         self.options.steps_value = self.presets.is_none() && self.popup_slider.is_none();
         let shown = cx.value();
         if self.options.placeholder.is_none() {
@@ -540,10 +532,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             && cx.value().is_some_and(|value| !non_finite(Some(value)))
             && let (Some(unit), Some(at)) = (self.trailing.first(), placed.trailing.first())
         {
-            // The unit reads as part of the number ("100%", "12 px"), so it follows the number's shown text.
-            let number =
-                cx.text(&text_part::<V>()).and_then(|outcome| outcome.layout.as_ref()).map_or(placed.text.width(), |layout| layout.galley.size().x);
-            unit.paint(ui, Self::unit_at(*at, placed.text, number, rtl), cx.resolve(&cx.style.unit.color));
+            unit.paint(ui, *at, cx.resolve(&cx.style.unit.color));
         }
         if let (Some(glyph), Some(at)) = (self.leading.first(), placed.leading.first()) {
             glyph.paint(ui, *at, cx.resolve(&cx.style.handle));

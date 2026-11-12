@@ -318,28 +318,37 @@ fn a_value_the_check_calls_an_error_commits_and_shows_invalid_with_its_message()
     assert!(fixture.texts().iter().any(|text| text.text == TOO_MANY), "the row shows the message");
 }
 
-/// A field's unit reads as part of its number: it starts where the shown number ends, for a unit the language writes
-/// against the number ("5%") and one it writes after a space ("5 px", the space being part of the unit), however
-/// short the number. Guards against the unit sitting at the field's end apart from a centred number.
+/// A field's unit keeps its place at the end of the value area, apart from the number, which centres in the room
+/// before it: two fields of one range end their units at the same place whether they show "5" or "100", so a column
+/// of fields lines its units up. Guards against the unit following the number's end.
 #[trial]
-fn the_unit_follows_the_shown_number() {
+fn the_unit_keeps_its_place_at_the_end_of_the_field() {
     use craft_ui::testing::Fixture;
     let boxes: std::rc::Rc<RefCell<Vec<Rect>>> = std::rc::Rc::default();
     let b = boxes.clone();
     let mut fixture = Fixture::new(move |ui| {
         let mut v = b.borrow_mut();
         v.clear();
-        for (at, kind) in [UnitKind::Percent, UnitKind::Pixels].into_iter().enumerate() {
-            v.push(NumberField::new("N", Bind::bound(&mut Some(5.0f64))).unit_kind(kind).id_salt(at).show(ui).response.rect);
+        for (at, value) in [5.0, 100.0].into_iter().enumerate() {
+            let mut shown = Some(value);
+            let field = NumberField::new("N", Bind::bound(&mut shown)).range(0.0..=100.0).unit_kind(UnitKind::Percent).id_salt(at);
+            v.push(field.show(ui).response.rect);
         }
     });
     fixture.settle();
     fixture.idle(3);
-    for field in boxes.borrow().iter() {
-        let texts = fixture.texts();
-        let number = texts.iter().find(|text| field.contains_rect(text.rect) && text.text == "5").expect("the number is painted");
-        let unit = texts.iter().find(|text| field.contains_rect(text.rect) && text.text != "5").expect("the unit is painted");
-        let gap = unit.rect.left() - number.rect.right();
-        assert!(gap.abs() < number.rect.width() / 2.0, "the unit {:?} starts {gap} from the number's end", unit.text);
-    }
+    let texts = fixture.texts();
+    let ends: Vec<f32> = boxes
+        .borrow()
+        .iter()
+        .zip(["5", "100"])
+        .map(|(field, shown)| {
+            let number = texts.iter().find(|text| field.contains_rect(text.rect) && text.text == shown).expect("the number is painted");
+            let unit = texts.iter().find(|text| field.contains_rect(text.rect) && text.text != shown).expect("the unit is painted");
+            assert!(unit.rect.left() > number.rect.right(), "the unit {:?} stands apart from {shown}", unit.text);
+            assert!(number.rect.center().x < field.center().x, "{shown} centres in the room before the unit");
+            field.right() - unit.rect.right()
+        })
+        .collect();
+    assert!((ends[0] - ends[1]).abs() < 0.5, "the units end at one place from the field's end: {ends:?}");
 }
