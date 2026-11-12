@@ -216,6 +216,17 @@ impl ListRow<'_> {
         Vec2::new(self.thumb_aspect.of(side), side)
     }
 
+    /// The height the line of components under the text takes with the gap above it; 0 without one.
+    pub(super) fn below_height(&self, sizes: &Sizes) -> f32 {
+        self.below.iter().filter_map(|below| below.size).map(|size| sizes.gap + size.ideal.y).fold(0.0, f32::max)
+    }
+
+    /// The width of the line of components under the text, with the gaps between them.
+    pub(super) fn below_width(&self, sizes: &Sizes) -> f32 {
+        let widths: Vec<f32> = self.below.iter().filter_map(|below| below.size).map(|size| size.ideal.x).collect();
+        widths.iter().sum::<f32>() + sizes.gap * widths.len().saturating_sub(1) as f32
+    }
+
     /// The height of the progress line, a caption line at the bottom of the label band; 0 without progress.
     pub(super) fn progress_line(&self, sizes: &Sizes) -> f32 {
         if self.progress.is_some() { sizes.detail_line } else { 0.0 }

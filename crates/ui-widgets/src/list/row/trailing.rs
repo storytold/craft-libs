@@ -48,6 +48,12 @@ pub(in crate::list) const fn field_key(at: usize) -> (&'static str, usize) {
     ("field", at)
 }
 
+/// The key the hosted component `at` under a row's label (`ListRow::below`) is measured and shown under; its own name
+/// keeps it apart from every trailing item's key.
+pub(in crate::list) const fn below_key(at: usize) -> (&'static str, usize) {
+    ("below", at)
+}
+
 /// A hosted component's size where the row has room, and the least width it narrows to where it has not.
 #[derive(Clone, Copy)]
 pub(in crate::list) struct HostedSize {

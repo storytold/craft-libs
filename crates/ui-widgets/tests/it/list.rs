@@ -235,6 +235,40 @@ fn hosted_items_take_their_own_width_and_an_optional_one_drops_first() {
     assert!(field.right() <= row_rect.right() + 0.5, "the row's items stay inside it: {field:?} in {row_rect:?}");
 }
 
+/// The components a row hosts under its label stand in one line inside the row, which grows to hold them, and a click on
+/// one reaches its output.
+#[trial]
+fn components_below_the_label_stand_in_a_line_inside_a_taller_row_and_report_their_clicks() {
+    use craft_ui::buttons::Button;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static DELETES: AtomicUsize = AtomicUsize::new(0);
+    let row = |key: usize| {
+        let row = ListRow::new(NAMES[key]);
+        if key != 1 {
+            return row;
+        }
+        row.below(Button::new("Delete"), |out| {
+            if craft_ui::contract::clicked(&out) {
+                DELETES.fetch_add(1, Ordering::SeqCst);
+            }
+        })
+        .below(Button::new("Cancel"), |_| {})
+    };
+    let (mut fixture, _) = rows_rig(Vec2::new(400.0, 300.0), row);
+    let plain = fixture.by_label(NAMES[0]).expect("a plain row shows").rect;
+    let asking = fixture.by_label(NAMES[1]).expect("the asking row shows").rect;
+    let delete = fixture.by_label("Delete").expect("Delete shows");
+    let cancel = fixture.by_label("Cancel").expect("Cancel shows").rect;
+    assert!(asking.height() > plain.height(), "the row grows for the line under its text: {asking:?} beside {plain:?}");
+    for button in [delete.rect, cancel] {
+        assert!(asking.contains_rect(button), "the components stay inside their row: {button:?} in {asking:?}");
+    }
+    assert!(!delete.rect.intersects(cancel), "the components stand side by side: {:?} {cancel:?}", delete.rect);
+    assert!((delete.rect.center().y - cancel.center().y).abs() < 0.5, "in one line");
+    fixture.click(&delete).settle();
+    assert_eq!(DELETES.load(Ordering::SeqCst), 1, "the click reaches the component's output");
+}
+
 /// A tree row narrows its hosted field and its indent together, so a deep row whose field fits at its least narrows
 /// it instead of keeping it whole; a row too narrow for even its field's least keeps the field at its own width.
 #[trial]

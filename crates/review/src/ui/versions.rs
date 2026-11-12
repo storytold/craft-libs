@@ -213,9 +213,10 @@ fn details_form(ui: &mut Ui, words: &VersionsWords, salt: &str, title: &mut Stri
 /// Figma's Version history panel: the branches above (create, open, review and merge, archive), then Current
 /// version, then the history newest first on a timeline (a line joins the rows' dots; the version on the canvas has
 /// the filled one), each named version with its title, date and author, its description wrapped under it, runs of two
-/// or more autosaves folded into a group that opens (a lone autosave is a row). A row's "…" opens its menu (Restore, Rename, Duplicate, Delete; Delete turns the row into the
-/// confirmation in place); F2 or Rename renames the title in place. Enter or a click previews. Save version opens an
-/// inline form (Title, Description; Enter saves, Escape cancels).
+/// or more autosaves folded into a group that opens (a lone autosave is a row). A row's "…" opens its menu (Restore,
+/// Rename, Duplicate, Delete; Delete turns the row into the question with Delete and Cancel under it); F2 or Rename
+/// renames the title in place. Enter or a click previews. Save version opens an inline form (Title, Description; Enter
+/// saves, Escape cancels).
 #[derive(Pattern, Props)]
 pub struct VersionHistoryPanel<'a> {
     label: Label,
@@ -440,12 +441,12 @@ fn history(
                     let question = words.delete_confirm.fill(&[("title", text.as_str())]);
                     let (outcome_delete, outcome_cancel) = (&outcome, &outcome);
                     return row(question.into())
-                        .trailing_field(Button::new(words.delete.clone()).variant(Variant::PRIMARY), move |button: ButtonOutput| {
+                        .below(Button::new(words.delete.clone()).variant(Variant::PRIMARY), move |button: ButtonOutput| {
                             if clicked(&button) {
                                 outcome_delete.set(Some(Confirmed::Delete));
                             }
                         })
-                        .trailing_field(Button::new(words.cancel.clone()), move |button: ButtonOutput| {
+                        .below(Button::new(words.cancel.clone()), move |button: ButtonOutput| {
                             if clicked(&button) {
                                 outcome_cancel.set(Some(Confirmed::Cancel));
                             }

@@ -6,7 +6,7 @@ use super::paint::draw_clip_arrow;
 use super::placement::{Sizes, lead_run};
 use super::style::{FillKey, ListRowStyle, RowForm, fill_of, row_ink_of, selected_outline};
 use super::thumb::{RowThumb, target_at};
-use super::trailing::{HostedSize, TrailingFace, TrailingItem, TrailingPart, field_key};
+use super::trailing::{HostedSize, TrailingFace, TrailingItem, TrailingPart, below_key, field_key};
 use super::{ListRow, RowInk};
 use crate::contract::{
     Access, Bind, Component, Cx, DragPreview, MeasureCx, Name, OpenChange, PaintUi, PartsCx, Pointer as _, Props as _, Role, RowPressed, Styled as _,
@@ -132,8 +132,12 @@ impl Component for ListRow<'_> {
             sizes.gap + cx.layout_at(&run, band).size().y
         });
         let detail = if self.detail_line() { sizes.detail_line } else { 0.0 };
-        let text = sizes.label_line + detail + self.progress_line(sizes) + wrapped;
-        let height = if self.lines.is_some() || self.progress.is_some() { height.max(text + sizes.gap) } else { height.max(sizes.label_line) };
+        let text = sizes.label_line + detail + self.progress_line(sizes) + wrapped + self.below_height(sizes);
+        let height = if self.lines.is_some() || self.progress.is_some() || !self.below.is_empty() {
+            height.max(text + sizes.gap)
+        } else {
+            height.max(sizes.label_line)
+        };
         let height = self
             .texts
             .iter()
@@ -153,6 +157,7 @@ impl Component for ListRow<'_> {
             Some(detail) => label.max(cx.layout(&TextRun::new(detail.as_str()).role(cx.style.detail.role)).size().x),
             None => label,
         };
+        let label = label.max(self.below_width(sizes));
         Vec2::new(probe.ideal_width + toggles - sizes.min_label + label.max(sizes.min_label) + self.indent_full(sizes), height)
     }
 
@@ -487,7 +492,15 @@ impl Component for ListRow<'_> {
             }
         }
         self.paint_thumbs(ui, cx, &placed, ink);
-        self.paint_text(&ui.draw(), cx, placed.label);
+        let text_end = self.paint_text(&ui.draw(), cx, placed.label);
+        let mut from = 0.0;
+        for (at, below) in self.below.iter_mut().enumerate() {
+            let (Some(item), Some(size)) = (below.item.take(), below.size) else { continue };
+            let width = size.ideal.x.min((placed.label.width() - from).max(0.0));
+            let x = if rtl { placed.label.right() - from - width } else { placed.label.left() + from };
+            item.show(ui, below_key(at), Rect::from_min_size(Pos2::new(x, text_end + sizes.gap), Vec2::new(width, size.ideal.y)));
+            from += width + sizes.gap;
+        }
         if let Some(fraction) = self.progress {
             ui.face(PROGRESS, Progress::new(fraction));
         }
@@ -517,7 +530,7 @@ fn part_mods(cx: &Cx<'_, ListRow<'_>>, part: PartRef, source: FireSource) -> Mod
 }
 
 impl ListRow<'_> {
-    /// Measures each hosted trailing component not yet measured in this pass, for its slot.
+    /// Measures each hosted component not yet measured in this pass, for its slot.
     fn measure_hosted(&mut self, cx: &MeasureCx<'_, Self>) {
         for (at, trailing) in self.trailing.iter_mut().enumerate() {
             if let TrailingItem::Hosted(hosted) = &mut trailing.item
@@ -527,6 +540,15 @@ impl ListRow<'_> {
                 let ideal = item.measure(cx, field_key(at), Proposal::Ideal);
                 let least = item.measure(cx, field_key(at), Proposal::Min).x;
                 hosted.size = Some(HostedSize { ideal, least });
+            }
+        }
+        for (at, below) in self.below.iter_mut().enumerate() {
+            if below.size.is_none()
+                && let Some(item) = below.item.as_mut()
+            {
+                let ideal = item.measure(cx, below_key(at), Proposal::Ideal);
+                let least = item.measure(cx, below_key(at), Proposal::Min).x;
+                below.size = Some(HostedSize { ideal, least });
             }
         }
     }

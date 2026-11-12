@@ -122,7 +122,9 @@ impl ListRow<'_> {
         }
     }
 
-    pub(super) fn paint_text(&self, draw: &Draw<'_>, cx: &Cx<'_, Self>, label: Rect) {
+    /// Paints the label, detail and wrapped lines in the label band; returns the bottom of the text, where the component
+    /// under it (`below`) starts after a gap.
+    pub(super) fn paint_text(&self, draw: &Draw<'_>, cx: &Cx<'_, Self>, label: Rect) -> f32 {
         let style = cx.style;
         let sizes = &style.sizes;
         let rtl = cx.env.direction().is_rtl();
@@ -131,7 +133,7 @@ impl ListRow<'_> {
             draw.layout(&run, self.text_block(label, sizes, 0.0).0.width())
         });
         let lines = wrapped.as_ref().map_or(0.0, |layout| sizes.gap + layout.size().y);
-        let (label, mut top) = self.text_block(label, sizes, lines);
+        let (label, mut top) = self.text_block(label, sizes, lines + self.below_height(sizes));
         // A heading's detail sits at the end of the label's line and the title is cut to what it leaves.
         let beside = match (&self.detail, self.heading) {
             (Some(detail), true) => {
@@ -161,6 +163,7 @@ impl ListRow<'_> {
             let x = if rtl { label.right() - layout.size().x } else { label.left() };
             draw.galley(Pos2::new(x, top + sizes.gap), &layout);
         }
+        top + lines
     }
 }
 

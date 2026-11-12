@@ -213,6 +213,8 @@ pub struct ListRow<'a> {
     #[prop(name = "thumb_target")]
     pub(super) target: Option<ThumbTarget>,
     pub(super) trailing: Vec<Trailing<'a>>,
+    /// The components under the label band's text, in one line (`below`).
+    pub(super) below: Vec<Hosted<'a>>,
     /// The row's depth in a tree, which indents it; `None` for a row of a flat list.
     /// The row is at `depth` levels of a tree: indented by it, an `AccessKit` tree item.
     #[prop]
@@ -284,6 +286,7 @@ impl<'a> ListRow<'a> {
             extras: Vec::new(),
             target: None,
             trailing: Vec::new(),
+            below: Vec::new(),
             depth: None,
             group: None,
             option: false,
@@ -501,6 +504,16 @@ impl<'a> ListRow<'a> {
     #[must_use]
     pub fn trailing_space<C: Show + 'a>(self, component: C) -> Self {
         self.hosted(Hosting::new(component, |_| {}).hidden(), false)
+    }
+
+    /// A component under the label, detail and wrapped lines, as wide as it measures: the components added this way
+    /// stand in one line from the label's start edge, in the order added (a row that asks its question in place shows
+    /// the answers here). The row grows by the line's height. The row shows `component` and hands its output to
+    /// `output` in the pass it is shown; its stop joins the row's roving group as a trailing field's does.
+    #[must_use]
+    pub fn below<C: Show + 'a>(mut self, component: C, output: impl FnOnce(C::Output) + 'a) -> Self {
+        self.below.push(Hosted { item: Some(Box::new(Hosting::new(component, output))), size: None });
+        self
     }
 
     fn hosted(mut self, hosting: impl for<'r> crate::contract::Hosted<ListRow<'r>> + 'a, optional: bool) -> Self {
