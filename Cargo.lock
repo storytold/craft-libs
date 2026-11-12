@@ -1047,6 +1047,7 @@ version = "0.1.0"
 dependencies = [
  "craft-xml",
  "kurbo 0.13.1",
+ "log",
  "serde",
  "serde_json",
 ]
