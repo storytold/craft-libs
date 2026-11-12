@@ -11,7 +11,7 @@ use craft_ui::contract::{
 use craft_ui::primitives::{DataWidth, Draw, Glyph, IconSpec, PaintShape, StrokeWidth};
 use craft_ui::runtime::commands::FireSource;
 use craft_ui::runtime::env::Label;
-use craft_ui::style::{ComponentStyle, DataColor, Flags, FocusLook, GlyphRole, StyleColor, StyleCx, UiTokens};
+use craft_ui::style::{ComponentStyle, DataColor, Flags, FocusLook, GlyphRole, StyleColor, StyleCx, SurfaceEdge, SurfaceStyle, UiTokens};
 use egui::emath::GuiRounding as _;
 use egui::{Color32, CornerRadius, Painter, Pos2, Rect, Response, Shape, Stroke, StrokeKind, Vec2, pos2, vec2};
 
@@ -106,8 +106,6 @@ pub struct SwatchPairStyle {
     gap: f32,
     /// The side of a button: the icon slot of a control.
     buttons: f32,
-    /// The colour the pair sits on, for the gap.
-    ground: StyleColor,
     /// The outline just outside a well.
     edge: StyleColor,
     /// The outline's width: `stroke.thin`.
@@ -296,7 +294,6 @@ impl Component for SwatchPair<'_> {
             radius: SwatchMetrics::of(cx).radius,
             gap: cx.tokens.space.gap.tight,
             buttons: cx.control().icon,
-            ground: cx.color(colors.surface.panel),
             edge: cx.color(colors.line.control_edge),
             outline: cx.tokens.stroke.thin,
             mark: cx.color(colors.text.normal),
@@ -432,16 +429,22 @@ impl Component for SwatchPair<'_> {
         let rects = self.well_rects(style, cx.rect.size());
         let active = cx.value().copied().unwrap_or_default();
         let place = |logical: Rect| flow.to_physical(logical.translate(cx.rect.min.to_vec2()));
-        // The back well first, then the front one with a gap of the ground colour round it: being in front is what
-        // shows the active well.
+        // The back well first, then the front one with a gap round it: being in front is what shows the active well. The
+        // gap is a patch of the surface the pair sits on (a panel, a tool rail's chrome), fill only.
         {
+            let halo = UiTokens::corner(f32::from(style.radius.nw) + style.gap);
+            let ground = ui.with_style(cx.resolved.variant, |scope| SurfaceStyle {
+                radius: halo,
+                edge: SurfaceEdge::None,
+                shadow: None,
+                ..scope.surface(cx.env.surface())
+            });
             let draw = ui.draw();
             for well in [active.other(), active] {
                 let at = place(rects[well.index() as usize]);
                 let shown = &self.wells[well.index() as usize];
                 if well == active {
-                    let halo = UiTokens::corner(f32::from(style.radius.nw) + style.gap);
-                    draw.fill(&PaintShape::Rect(at.expand(style.gap), halo), style.ground);
+                    draw.surface_styled(at.expand(style.gap), &ground);
                 }
                 match shown.color.same() {
                     Some(color) if shown.ring => paint_ring(&draw, at, *color, style),
