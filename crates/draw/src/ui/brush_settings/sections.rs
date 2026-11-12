@@ -285,31 +285,29 @@ impl<'a, K: Value + Eq + Hash> BrushSectionList<'a, K> {
                 .activate(ActivateOn::Click)
                 .space(SpaceAction::ToggleCell)
                 .sizing(Sizing::Content);
-            let out = table.show_items(ui, &rows, &mut |key, icx| {
-                match key {
-                    Slot::Gap(_) => ListRow::spacer(),
-                    Slot::Link => ListRow::new(words.brushes.clone()).cells(icx.cells()).icon(IconSpec::svg(IconId::new("brush"))).rule(true),
-                    Slot::Section(key) => {
-                        let Some(section) = rows.section(key) else { return ListRow::spacer() };
-                        let mut row =
-                            ListRow::new(Label::from(section.name.clone())).strong(rows.sections.first().is_some_and(|first| first.key == *key));
-                        match section.kind {
-                            BrushSectionKind::Switch => {
-                                let state = ToggleState::of(section.enabled == Some(true));
-                                row = row.toggle(ToggleCell::check(CHECK, state, switch_name.clone()).row_press());
+            let out = table.show_items(ui, &rows, &mut |key, icx| match key {
+                Slot::Gap(_) => ListRow::spacer(),
+                Slot::Link => ListRow::new(words.brushes.clone()).cells(icx.cells()).icon(IconSpec::svg(IconId::new("brush"))).rule(true),
+                Slot::Section(key) => {
+                    let Some(section) = rows.section(key) else { return ListRow::spacer() };
+                    let mut row =
+                        ListRow::new(Label::from(section.name.clone())).strong(rows.sections.first().is_some_and(|first| first.key == *key));
+                    match section.kind {
+                        BrushSectionKind::Switch => {
+                            let state = ToggleState::of(section.enabled == Some(true));
+                            row = row.toggle(ToggleCell::check(CHECK, state, switch_name.clone()).row_press());
+                        }
+                        BrushSectionKind::Pane => {
+                            if let Some(on) = section.enabled {
+                                row = row.toggle(ToggleCell::check(CHECK, ToggleState::of(on), enable_name.clone()).row_press());
                             }
-                            BrushSectionKind::Pane => {
-                                if let Some(on) = section.enabled {
-                                    row = row.toggle(ToggleCell::check(CHECK, ToggleState::of(on), enable_name.clone()).row_press());
-                                }
-                                if let Some(locked) = section.locked {
-                                    let tip = if locked { words.unlock_tip.clone() } else { words.lock_tip.clone() };
-                                    row = row.toggle(ToggleCell::lock(LOCK, locked).name(lock_name.clone()).tooltip(tip).always_visible());
-                                }
+                            if let Some(locked) = section.locked {
+                                let tip = if locked { words.unlock_tip.clone() } else { words.lock_tip.clone() };
+                                row = row.toggle(ToggleCell::lock(LOCK, locked).name(lock_name.clone()).tooltip(tip).always_visible());
                             }
                         }
-                        row.cells(icx.cells())
                     }
+                    row.cells(icx.cells())
                 }
             });
             // The columns do not sweep: each toggle edit is one press, read once here.
