@@ -722,9 +722,13 @@ pub(crate) fn modal_viewport(ctx: &Context, viewport: ViewportId) -> Option<View
     pass::live_viewports(ctx).into_iter().filter(|other| *other != viewport).find(|other| with_persist(ctx, *other, |persist| persist.modal))
 }
 
-/// Whether a layer of key class `class` that is not fading out was shown last frame.
-pub(crate) fn class_open(ctx: &Context, class: OwnerClass) -> bool {
-    with_pass(ctx, |pass| pass.last.iter().any(|entry| !entry.exiting && entry.keys == class))
+/// Whether a layer of key class `class` that is not fading out was shown last frame and the screen point `at` lies in
+/// none of those layers.
+pub(crate) fn class_open_away_from(ctx: &Context, class: OwnerClass, at: Pos2) -> bool {
+    with_pass(ctx, |pass| {
+        let mut open = pass.last.iter().filter(|entry| !entry.exiting && entry.keys == class).peekable();
+        open.peek().is_some() && open.all(|entry| !entry.rect.contains(at))
+    })
 }
 
 // The facts the canvas reach under a modal reads (`runtime::sampler`).

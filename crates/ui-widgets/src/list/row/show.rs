@@ -116,7 +116,7 @@ impl Component for ListRow<'_> {
         if self.spacer {
             return Vec2::ZERO;
         }
-        if self.heading {
+        if self.caption {
             let caption = cx.layout_at(&TextRun::new(cx.resolved.label).role(cx.style.detail.role), f32::INFINITY).size();
             return Vec2::new(caption.x + 2.0 * sizes.pad, sizes.row.max(caption.y));
         }
@@ -166,12 +166,12 @@ impl Component for ListRow<'_> {
     }
 
     fn sense(&self) -> Sense {
-        if self.spacer || self.heading { Sense::empty() } else { Sense::CLICK | Sense::FOCUS }
+        if self.spacer || self.caption { Sense::empty() } else { Sense::CLICK | Sense::FOCUS }
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         self.record_toggle_names(cx);
-        if self.spacer || self.heading {
+        if self.spacer || self.caption {
             return;
         }
         self.adopt_toggle_columns(&cx.env, cx.resolved.id);
@@ -287,7 +287,7 @@ impl Component for ListRow<'_> {
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
-        if self.spacer || self.heading {
+        if self.spacer || self.caption {
             return;
         }
         if let Some(open) = self.group
@@ -352,7 +352,7 @@ impl Component for ListRow<'_> {
             access.name(Name::Decorative);
             return;
         }
-        if self.heading {
+        if self.caption {
             access.role(Role::HEADING);
             return;
         }
@@ -452,7 +452,7 @@ impl Component for ListRow<'_> {
         let sizes = &style.sizes;
         let rtl = cx.env.direction().is_rtl();
         let rect = cx.rect;
-        if self.heading {
+        if self.caption {
             let draw = ui.draw();
             let content = rect.shrink2(Vec2::new(sizes.pad, 0.0));
             let run = TextRun::new(cx.resolved.label).role(style.detail.role).color(cx.resolve(&style.detail.color)).elide();

@@ -1,7 +1,7 @@
 //! The overlay host: shows a layer on an egui layer, remembers it while shown and closes its family.
 
 use super::dismissal::dismissal;
-use super::opener::Opening;
+use super::opener::{Opening, Trigger};
 use super::place::{OverlayFit, Place};
 use super::placement::{anchor_rect, opened_overlay, placement};
 use super::props::{Outside, Overlay};
@@ -117,6 +117,16 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     // A layer that appears starts with nothing it remembered while shown before, also when it opens again during its
     // exit fade or its host never saw it hide: the focus that was inside it does not close it as `focus_left`.
     let mut memory = if overlay::appears(ctx, layer.id, layer.exiting) { LayerMemory::default() } else { recall(layer, ctx) };
+    // A right-click on a context opener while its layer is open hangs the layer at the new pointer.
+    let pointed = layer
+        .overlay
+        .opener
+        .as_ref()
+        .is_some_and(|first| first.all().any(|opener| opener.fired && opener.trigger == Trigger::Context && opener.opening == Opening::Pointer));
+    if pointed {
+        memory.opening = None;
+        memory.pointer_at = None;
+    }
     let opened = opened_overlay(ctx, layer.overlay, memory.opening);
     if let Some((_, opening)) = &opened {
         memory.opening.get_or_insert(*opening);

@@ -53,6 +53,17 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             if layout.mirrors() && rtl { flow.to_physical(Rect::from_min_size(at, Vec2::ZERO)).min } else { at }
         };
         let mods_now = crate::runtime::pointer::frame(&ctx).mods;
+        // A click on a row the collection does not take (a caption, a disabled row) is no pick: the layers around the
+        // collection (a dropdown's list) stay open.
+        if cx.core.activation.as_ref().is_some_and(|activation| !activation.by_key)
+            && let Some(pos) = crate::runtime::pointer::frame(&ctx).pos
+            && local(pos).y >= 0.0
+            && layout
+                .hit(local(pos), offset)
+                .is_some_and(|at| !self.source.enabled(at) || (self.source.is_section(at) && !self.source.section_stop(at)))
+        {
+            cx.keep_open();
+        }
         self.pressed = match cx.core.press.phase {
             PressPhase::Down { start, .. } | PressPhase::Held { start, .. }
                 if start.button == craft_behavior::PointerButton::Primary && local(start.origin).y >= 0.0 =>

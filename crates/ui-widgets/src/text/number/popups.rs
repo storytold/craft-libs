@@ -35,7 +35,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
                     if rows[*at].is_separator() {
                         ListRow::spacer()
                     } else if rows[*at].is_heading() {
-                        ListRow::heading(labels[*at].clone())
+                        ListRow::caption(labels[*at].clone())
                     } else {
                         ListRow::new(labels[*at].clone()).enabled(rows[*at].is_enabled()).option().check(marked == Some(*at))
                     }

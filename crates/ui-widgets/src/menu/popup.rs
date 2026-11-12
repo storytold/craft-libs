@@ -5,7 +5,7 @@ use super::level::{LevelMemory, MenuLevel, level_env};
 use crate::contract::overlay::{Anchor, Dismiss, Outside, Popup};
 use crate::contract::{
     Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, Entry, Focus as _, Gap, InMenu, LeastWidth, Mount, NoValue, Outcome,
-    Overlay, POPUP_PAD, Props as _, Remember as _, Role, Show as _, ShowContainer as _, TooltipSpec, Trigger,
+    Overlay, POPUP_PAD, Pointer as _, Props as _, Remember as _, Role, Show as _, ShowContainer as _, TooltipSpec, Trigger,
 };
 use crate::display::Divider;
 use crate::runtime::env::{Env, Label};
@@ -13,7 +13,7 @@ use crate::runtime::focus::{FocusPolicy, Initial};
 use crate::runtime::frame;
 use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
-use craft_behavior::{Arrows, Intent, Metrics, NavShape, Roving, Sense, Value};
+use craft_behavior::{Arrows, Metrics, NavShape, Roving, Sense, Value};
 use egui::{Response, Ui};
 
 /// The style of a menu: the surface comes from the container.
@@ -309,9 +309,12 @@ impl Component for Menu<'_> {
                 frame::request_repaint(&cx.core.ctx);
             }
         }
-        if cx.intents().take(Intent::Activate)
+        // Enter routed from the field arrives as the menu's own activation by key: the row it names runs, and the run
+        // closes the menus, not the activation.
+        if cx.activation().is_some_and(|activation| activation.by_key)
             && let Some(row) = level.active_or_first()
         {
+            cx.keep_open();
             level.run(row);
             frame::request_repaint(&cx.core.ctx);
         }

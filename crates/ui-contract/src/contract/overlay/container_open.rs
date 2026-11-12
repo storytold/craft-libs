@@ -30,7 +30,8 @@ pub(crate) fn opener_open(stage: &mut MemoryStage, first: &Opener) -> bool {
     let slot = stage.session::<OpenerOpen>(sub(first.id, "opens"));
     if let Some(opener) = first.all().find(|opener| opener.fired) {
         if slot.applied != frame {
-            slot.open = !slot.open;
+            // A context request opens, also over the open layer: a new right-click moves it to the pointer.
+            slot.open = opener.trigger == Trigger::Context || !slot.open;
             slot.by = Some((opener.id, opener.trigger, opener.opening));
         }
         slot.applied = frame;

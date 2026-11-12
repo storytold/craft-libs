@@ -42,7 +42,8 @@ fn an_open_submenu_stays_open_while_the_pointer_heads_for_it_across_another_row(
     let mut fixture = open_menu();
     let recent = fixture.by_label("Recent").expect("the menu is open").center();
     fixture.frame(vec![pointer::moved(recent)]).idle(1);
-    let submenu = fixture.by_label("Report.txt").expect("the submenu is open").rect;
+    let first = fixture.by_label("Report.txt").expect("the submenu is open").rect;
+    let submenu = first.union(fixture.by_label("Draft.txt").expect("the submenu's last row").rect);
     let templates = fixture.by_label("Templates").expect("the second submenu row").rect;
     // A point on Templates, near the submenu's edge and level with its rows: the pointer heads for the submenu.
     let crossing = egui::pos2(templates.max.x - 2.0, templates.center().y);

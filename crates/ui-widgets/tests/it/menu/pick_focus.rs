@@ -75,26 +75,87 @@ fn undo_picked_from_the_edit_menu_undoes_in_the_field_that_held_focus() {
     rig.assert_undone_in_the_field("Edit › Undo");
 }
 
-#[trial]
-fn opening_help_focuses_its_search_and_down_then_enter_runs_the_first_match() {
-    let mut rig = rig();
-    rig.click("Help");
-    rig.fixture.type_text("und");
-    rig.fixture.settle();
-    assert_eq!(*rig.text.borrow(), "helloabc", "the typed text lands in the search field, not the text field");
-    rig.fixture.key(egui::Key::ArrowDown, egui::Modifiers::NONE);
-    rig.fixture.key(egui::Key::Enter, egui::Modifiers::NONE);
-    rig.fixture.settle();
-    rig.assert_undone_in_the_field("Help › und, Down, Enter");
+/// The command of the scope around the target button in the bar-keys trial.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui::contract::CommandSet)]
+#[command(prefix = "barKeys", scope = "trial.barKeys")]
+#[non_exhaustive]
+pub enum BarKeysCommand {
+    #[command(label = "Toggle", default = "Cmd+Alt+P")]
+    Toggle,
 }
 
 #[trial]
 fn a_shortcut_pressed_on_the_focused_bar_runs_once_where_focus_was_and_gives_focus_back() {
-    let mut rig = rig();
-    rig.fixture.key(egui::Key::F10, egui::Modifiers::NONE);
-    rig.fixture.settle();
-    assert_ne!(rig.fixture.focused_stop().map(|(id, _)| id), rig.field.get(), "F10 takes the focus to the bar");
-    rig.fixture.key(egui::Key::Z, egui::Modifiers::COMMAND);
-    rig.fixture.settle();
-    rig.assert_undone_in_the_field("F10, then the Undo shortcut");
+    use craft_ui::contract::ShowContainer as _;
+    use craft_ui::runtime::commands::Commands as _;
+    let count = Rc::new(Cell::new(0));
+    let target = Rc::new(Cell::new(None));
+    let (seen, stop) = (count.clone(), target.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let titles = vec![MenuTitle::new("&Edit", |ui| {
+            MenuItem::command(EditCommands::Undo).show(ui);
+        })];
+        MenuBar::new("Main menu", titles).show(ui);
+        craft_ui::layout_components::Stack::new().command_scope(<BarKeysCommand as craft_ui::contract::CommandSet>::SCOPE).show(ui, |ui, cx| {
+            while cx.take_command::<BarKeysCommand>().is_some() {
+                seen.set(seen.get() + 1);
+            }
+            stop.set(Some(craft_ui::buttons::Button::new("Target").show(ui).id));
+        });
+    });
+    fixture.settle();
+    craft_ui::runtime::focus::request(fixture.ctx(), craft_ui::runtime::focus::FocusTarget::Id(target.get().expect("the button ran")));
+    fixture.settle();
+    fixture.key(egui::Key::F10, egui::Modifiers::NONE);
+    fixture.settle();
+    assert_ne!(fixture.focused_stop().map(|(id, _)| id), target.get(), "F10 takes the focus to the bar");
+    fixture.key(egui::Key::P, egui::Modifiers::COMMAND | egui::Modifiers::ALT);
+    fixture.settle();
+    assert_eq!(count.get(), 1, "the shortcut runs once, in the scope of the stop the bar took the focus from");
+    assert_eq!(fixture.focused_stop().map(|(id, _)| id), target.get(), "and the focus is back on that stop");
+}
+
+/// A bar whose Help searches the target scope's Toggle, then the Target button inside that scope; returns the count
+/// of Toggle runs and the button's id.
+fn scoped_rig() -> (Fixture, Rc<Cell<u32>>, Rc<Cell<Option<Id>>>) {
+    use craft_ui::contract::ShowContainer as _;
+    use craft_ui::runtime::commands::Commands as _;
+    let count = Rc::new(Cell::new(0));
+    let target = Rc::new(Cell::new(None));
+    let (seen, stop) = (count.clone(), target.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let titles = vec![MenuTitle::new("&Help", |ui| {
+            MenuItem::new("&About").show(ui);
+        })];
+        let help = vec![HelpEntry::new(BarKeysCommand::Toggle, "Toggle")];
+        MenuBar::new("Main menu", titles).help(MenuHelp::new(0, &help)).show(ui);
+        craft_ui::layout_components::Stack::new().command_scope(<BarKeysCommand as craft_ui::contract::CommandSet>::SCOPE).show(ui, |ui, cx| {
+            while cx.take_command::<BarKeysCommand>().is_some() {
+                seen.set(seen.get() + 1);
+            }
+            stop.set(Some(craft_ui::buttons::Button::new("Target").show(ui).id));
+        });
+    });
+    fixture.settle();
+    craft_ui::runtime::focus::request(fixture.ctx(), craft_ui::runtime::focus::FocusTarget::Id(target.get().expect("the button ran")));
+    fixture.settle();
+    (fixture, count, target)
+}
+
+#[trial]
+fn opening_help_focuses_its_search_and_down_then_enter_runs_the_first_match() {
+    let (mut fixture, count, target) = scoped_rig();
+    let help = fixture.by_label("Help").expect("the Help title");
+    fixture.click(&help);
+    fixture.settle();
+    fixture.type_text("tog");
+    fixture.settle();
+    assert!(fixture.by_label("Toggle").is_some(), "the typed text lands in the search field and finds Toggle");
+    fixture.key(egui::Key::ArrowDown, egui::Modifiers::NONE);
+    fixture.settle();
+    fixture.key(egui::Key::Enter, egui::Modifiers::NONE);
+    fixture.settle();
+    assert_eq!(count.get(), 1, "Down then Enter runs the first match once");
+    assert!(fixture.by_label("About").is_none(), "and the menu closes");
+    assert_eq!(fixture.focused_stop().map(|(id, _)| id), target.get(), "with the focus back on the stop that held it");
 }

@@ -238,7 +238,8 @@ fn show_tip(call: TipCall<'_>) {
     }
     let when_now = spec.as_ref().is_some_and(|spec| spec.when == TooltipWhen::Now);
     let wants = has_content && wants_input;
-    let suppressed = pressed || overlay_blocks(ctx) || pointer::press_captured(ctx) || drag::running(ctx);
+    let screen = areas::layer_to_screen(ctx, rect_layer) * rect;
+    let suppressed = pressed || overlay_blocks(ctx, screen.center()) || pointer::press_captured(ctx) || drag::running(ctx);
     if wants {
         state.since.get_or_insert(now);
     } else {
@@ -305,8 +306,9 @@ fn overlay_motion() -> motion::MotionSpec {
 }
 
 /// Whether a menu owns the keys: tooltips stay hidden then.
-fn overlay_blocks(ctx: &egui::Context) -> bool {
-    crate::runtime::overlay::class_open(ctx, OwnerClass::Menu)
+/// An open menu blocks the tooltips of what lies outside it; its own rows keep theirs.
+fn overlay_blocks(ctx: &egui::Context, at: egui::Pos2) -> bool {
+    crate::runtime::overlay::class_open_away_from(ctx, OwnerClass::Menu, at)
 }
 
 /// The look of a tooltip card.
