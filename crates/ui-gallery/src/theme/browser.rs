@@ -1,12 +1,12 @@
-//! The token browser: every colour, component token and size of the subject theme as a list of groups, with filters
+//! The token browser: every colour and size of the subject theme as a list of groups, with filters
 //! over it.
 
 use super::chip::chip;
 use super::rows::{Filters, Row, TokenRows};
 use super::subject::Pick;
-use super::words::{layer_words, lengths_words, value_words};
+use super::words::{layer_words, value_words};
 use craft_behavior::{Selection, SelectionChange};
-use craft_theme::{Explained, Mode, Rgba, TokenRef};
+use craft_theme::{Explained, Mode};
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, CollectionEvent, Held, Pattern, Props, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft_ui::display::{Shade, Text};
@@ -111,24 +111,13 @@ fn overview(explained: &Explained) -> String {
     )
 }
 
-/// The colour a token resolved to; a component token has none.
-pub(super) fn value_of(explained: &Explained, token: TokenRef) -> Rgba {
-    match token {
-        TokenRef::Color(token) => explained.resolved.tokens.color(token),
-        TokenRef::Component(_) => Rgba::TRANSPARENT,
-    }
-}
-
 /// The list row of `key`: a heading, or a token with its colour chip and value, or a size with its value and layer.
 fn row_of(explained: &Explained, rows: &TokenRows, key: &Row) -> ListRow<'static> {
     let depth = rows.depth_of(key);
     match key {
         Row::Group(name) => ListRow::new(*name).heading().depth(depth).group(rows.is_open(key)),
-        Row::Token(TokenRef::Component(field)) => {
-            ListRow::new(field.path()).depth(depth).trailing(lengths_words(&explained.resolved.tokens.component, *field))
-        }
         Row::Token(token) => {
-            let value = value_of(explained, *token);
+            let value = explained.resolved.tokens.color(*token);
             ListRow::new(token.path()).depth(depth).thumb(ThumbSize::Small, chip(value)).trailing(value.to_hex())
         }
         Row::Size(at) => match explained.sizes.get(*at) {

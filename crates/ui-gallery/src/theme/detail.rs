@@ -1,12 +1,11 @@
 //! The detail of the picked token or size: where its value comes from, the contrast pairs it takes part in and the
 //! ramp it steps through.
 
-use super::browser::value_of;
 use super::chip::chip;
 use super::subject::Pick;
-use super::words::{layer_words, lengths_words, pin_words, ramp_name, value_words};
+use super::words::{layer_words, pin_words, ramp_name, value_words};
 use craft_behavior::keyed;
-use craft_theme::{ColorOrigin, ComponentField, Explained, Rgba, SizeOrigin, TokenRef};
+use craft_theme::{ColorOrigin, ColorToken, Explained, Rgba, SizeOrigin};
 use craft_ui::contract::{Gap, Pattern, Props, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::Stack;
@@ -53,7 +52,7 @@ impl Facts {
 }
 
 /// The facts about the picked row of an explanation: for a colour its value, source and pin, the pairs it takes part
-/// in and its ramp; for a component token or a size its values and where they are set.
+/// in and its ramp; for a size its value and where it is set.
 #[derive(Pattern, Props)]
 pub struct TokenDetail<'a> {
     explained: &'a Explained,
@@ -85,9 +84,8 @@ impl<'a> TokenDetail<'a> {
                         Text::new("This size is not in the explanation.").shade(Shade::Muted).show(ui);
                     }
                 },
-                Some(Pick::Token(TokenRef::Component(field))) => component(ui, explained, *field),
-                Some(Pick::Token(TokenRef::Color(token))) => match explained.color(*token) {
-                    Some(origin) => color(ui, explained, TokenRef::Color(*token), origin),
+                Some(Pick::Token(token)) => match explained.color(*token) {
+                    Some(origin) => color(ui, explained, *token, origin),
                     None => {
                         Text::new("This colour is not in the explanation.").shade(Shade::Muted).show(ui);
                     }
@@ -110,16 +108,8 @@ fn size(ui: &mut Ui, origin: &SizeOrigin) {
     facts.show(ui, "Size facts");
 }
 
-fn component(ui: &mut Ui, explained: &Explained, field: ComponentField) {
-    heading(ui, field.path());
-    let mut facts = Facts::default();
-    facts.push("Standard / small", lengths_words(&explained.resolved.tokens.component, field));
-    facts.push("Set in", "the theme file's components map");
-    facts.show(ui, "Component token facts");
-}
-
-fn color(ui: &mut Ui, explained: &Explained, token: TokenRef, origin: &ColorOrigin) {
-    heading(ui, token.path());
+fn color(ui: &mut Ui, explained: &Explained, token: ColorToken, origin: &ColorOrigin) {
+    heading(ui, token.path().to_owned());
     Section::fixed("Value").show(ui, |ui, _| {
         let mut facts = Facts::default();
         let value = facts.push("Value", origin.value.to_hex());
@@ -147,14 +137,14 @@ fn color(ui: &mut Ui, explained: &Explained, token: TokenRef, origin: &ColorOrig
 
 /// Every pair `token` takes part in: the other colour's chip and path, the ratio against the minimum and the result in
 /// words.
-fn pairs(ui: &mut Ui, explained: &Explained, token: TokenRef) {
+fn pairs(ui: &mut Ui, explained: &Explained, token: ColorToken) {
     let mut facts = Facts::default();
     for report in explained.pairs_of(token) {
         let pair = &report.pair;
         let (other, role) = if pair.fg == token { (pair.bg, "on") } else { (pair.fg, "under") };
         let result = if pair.passes() { "pass" } else { "FAIL" };
         let line = facts.push(format!("{role} {}", other.path()), format!("{:.2} of {:.1} {result}", pair.ratio, pair.minimum));
-        line.color = Some(value_of(explained, other));
+        line.color = Some(explained.resolved.tokens.color(other));
         if report.fixed_by_pass {
             line.note = Some(format!("fixed by pass (was {:.2})", report.ratio_before));
         } else if report.moved_by_pass {

@@ -1,7 +1,6 @@
-//! Colour tokens: the per-role colour sets, the ColorTokens table and token references.
+//! Colour tokens: the per-role colour sets, and the ColorTokens table.
 
 use crate::color::Rgba;
-use crate::components::ComponentField;
 
 /// One value per status: good, warn, bad, info.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -619,16 +618,6 @@ color_tokens! {
     EdgeDark = "edge.dark" => edge.dark;
 }
 
-/// Names a colour of either layer: a semantic colour token or a component colour field. Theme
-/// files address both by [`TokenRef::path`]; component paths never start with a semantic group.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum TokenRef {
-    /// A semantic colour.
-    Color(ColorToken),
-    /// A component field.
-    Component(ComponentField),
-}
-
 impl ColorToken {
     /// Whether this is a surface that text and fills sit on, or a knob that covers them
     /// (`surface.*` except `scrim` and `shadow`); those must be opaque.
@@ -640,32 +629,5 @@ impl ColorToken {
             self,
             SurfaceBackground | SurfaceCanvas | SurfaceCanvasPattern | SurfaceChrome | SurfacePanel | SurfaceRaised | SurfaceSunken | SurfaceKnob
         )
-    }
-}
-
-impl TokenRef {
-    /// The dotted path, e.g. `"surface.panel"` or `"button.primary.fill.hover"`.
-    pub fn path(self) -> String {
-        match self {
-            TokenRef::Color(t) => t.path().to_owned(),
-            TokenRef::Component(f) => f.path(),
-        }
-    }
-
-    /// The token or field whose [`path`](TokenRef::path) is `path`.
-    pub fn from_path(path: &str) -> Option<TokenRef> {
-        ColorToken::from_path(path).map(TokenRef::Color).or_else(|| ComponentField::from_path(path).map(TokenRef::Component))
-    }
-}
-
-impl From<ColorToken> for TokenRef {
-    fn from(t: ColorToken) -> TokenRef {
-        TokenRef::Color(t)
-    }
-}
-
-impl From<ComponentField> for TokenRef {
-    fn from(f: ComponentField) -> TokenRef {
-        TokenRef::Component(f)
     }
 }

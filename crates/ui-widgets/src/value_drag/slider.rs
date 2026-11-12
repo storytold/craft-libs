@@ -42,8 +42,8 @@ pub struct SliderStyle {
     knob: Stateful<SurfaceStyle>,
     /// The ring round the thumb while a press at the pointer would move it.
     ring: ThumbRing,
-    /// The diameter of the drawn thumb.
-    diameter: f32,
+    /// The size of the drawn thumb.
+    thumb: Vec2,
     /// The length a slider asks for along its axis.
     length: f32,
 }
@@ -148,7 +148,7 @@ impl<'a> Slider<'a> {
 
     /// The track in `rect` for a thumb of `style`, less the room of the mark labels.
     fn along(&self, rect: Rect, style: &SliderStyle, flow: Flow) -> Along {
-        Along { area: self.marks.area(rect, &style.track), flow, thumb: style.diameter }
+        Along { area: self.marks.area(rect, &style.track), flow, thumb: style.thumb.x }
     }
 }
 
@@ -171,7 +171,7 @@ impl Component for Slider<'_> {
             space: MarkSpace::new(cx),
             knob: track::knob(cx),
             ring: ThumbRing::new(cx),
-            diameter: cx.tokens.component.slider.thumb_height.get(cx.size),
+            thumb: track::knob_size(cx),
             length,
         }
     }
@@ -323,12 +323,12 @@ impl Component for Slider<'_> {
         let (knob, ring) = (state.resolve(&style.knob), state.resolve(&style.ring.color));
         match self.thumb {
             SliderThumb::Round => {
-                let rect = Rect::from_center_size(centre, Vec2::splat(style.diameter));
+                let rect = Rect::from_center_size(centre, style.thumb);
                 style.ring.paint_round(&draw, rect, knob.radius, ring);
                 draw.surface_styled(rect, &knob);
             }
             SliderThumb::Triangle => {
-                let (half, top, x) = (style.diameter / 2.0, track::groove_rect(&style.track, along.area).bottom(), centre.x);
+                let (half, top, x) = (style.thumb.x / 2.0, track::groove_rect(&style.track, along.area).bottom(), centre.x);
                 let points = vec![Pos2::new(x, top), Pos2::new(x + half, top + half), Pos2::new(x - half, top + half)];
                 style.ring.paint_pointer(&draw, &points, ring);
                 track::paint_pointer(&draw, points, &knob);

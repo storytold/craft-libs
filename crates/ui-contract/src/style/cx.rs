@@ -261,6 +261,13 @@ impl<'a> StyleCx<'a> {
         self.control_of(self.size)
     }
 
+    /// The side of a mark inside a control at the ambient size (`size.icon.glyph_sm`, `glyph_md`): an icon-only
+    /// button's glyph, a slider's thumb. Smaller than the icon side, so it reads below the cap height of text beside it.
+    pub fn glyph(&self) -> f32 {
+        let icon = &self.tokens.size.icon;
+        BySize { sm: icon.glyph_sm, md: icon.glyph_md }.get(self.size)
+    }
+
     /// `control` at `size`, whatever the ambient size: the part of a control that keeps its own size (a field's
     /// adornment button) reads its height here.
     pub fn control_of(&self, size: ControlSize) -> ControlMetrics {

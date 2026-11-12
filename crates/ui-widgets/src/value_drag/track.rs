@@ -8,17 +8,32 @@ use crate::style::{StyleColor, StyleCx, SurfaceEdge, SurfaceKind, SurfaceStyle, 
 use craft_behavior::intent::{MoveMods, NavMove};
 use craft_behavior::nav::{LARGE_STEPS, STEP_SHARE, StepResult, ValueAxes, ValueSteps, snap_to_step, step_value};
 use craft_behavior::{Flow, PartKey, PartRef, PressPhase, PressState, ValueDrag, Wheel, wheel_step};
-use craft_theme::{Rgba, Stateful, States};
+use craft_theme::{KnobShape, Rgba, Stateful, States};
 use egui::{CornerRadius, Pos2, Rangef, Rect, Stroke, Vec2};
 use std::ops::{Range, RangeInclusive};
 
 /// The part a track face paints as: the groove across the middle of the control.
 pub(crate) const GROOVE: PartKey = PartKey::new("groove");
 
-/// A slider's thumb: the theme's knob, round. Disabled it lies flat, its face moved toward the panel, as a switch's
-/// knob does.
+/// How wide a tab knob is, in its heights: the old Classic slider thumb, 10 by 16.
+const TAB_WIDTH_IN_HEIGHTS: f32 = 0.625;
+
+/// The size of a thumb on a value track, from the theme's knob shape: a round knob is the control's glyph across; a
+/// tab is the control's icon side tall and narrower than that.
+pub(crate) fn knob_size(cx: &StyleCx<'_>) -> Vec2 {
+    match cx.tokens.shape.knob {
+        KnobShape::Round => Vec2::splat(cx.glyph()),
+        KnobShape::Tab => {
+            let height = cx.control().icon;
+            Vec2::new(height * TAB_WIDTH_IN_HEIGHTS, height)
+        }
+    }
+}
+
+/// A slider's thumb: the theme's knob, rounded by the pill radius (round unless the theme squares pills). Disabled it
+/// lies flat, its face moved toward the panel, as a switch's knob does.
 pub(crate) fn knob(cx: &StyleCx<'_>) -> Stateful<SurfaceStyle> {
-    let knob = SurfaceStyle { radius: CornerRadius::same(u8::MAX), ..cx.surface(SurfaceKind::Knob) };
+    let knob = SurfaceStyle { radius: UiTokens::corner(cx.tokens.shape.radius.pill), ..cx.surface(SurfaceKind::Knob) };
     let colors = &cx.tokens.color;
     let disabled = knob.disabled(cx.color(colors.state.disabled_fill).egui(), cx.color(colors.line.divider).egui());
     Stateful::new(knob).off(States::new(knob, knob, knob, disabled))

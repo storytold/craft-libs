@@ -62,7 +62,17 @@ pub enum RowStyle {
     Rounded,
 }
 
-/// Corner radii, edge style and row style.
+/// The shape of the knob a value track's thumb is drawn as (a slider's, a range slider's).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum KnobShape {
+    /// A round knob as wide as it is tall.
+    #[default]
+    Round,
+    /// An upright tab, taller than it is wide.
+    Tab,
+}
+
+/// Corner radii, edge style, row style and knob shape.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShapeTokens {
     /// Corner radii.
@@ -71,6 +81,8 @@ pub struct ShapeTokens {
     pub edge: Edge,
     /// How list and tab rows are drawn.
     pub rows: RowStyle,
+    /// How the thumbs of value tracks are drawn.
+    pub knob: KnobShape,
 }
 
 /// Gaps between neighbouring elements, in logical pixels.

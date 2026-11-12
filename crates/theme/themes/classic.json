@@ -30,6 +30,7 @@
       "surface": 0.0,
       "window": 0.0
     },
+    "knob": "tab",
     "rows": "rounded"
   },
   "light": {
@@ -62,9 +63,5 @@
     "text.normal": "#000000",
     "text.on_selected": "{text.on_accent}",
     "text.on_strong": "#000000"
-  },
-  "components": {
-    "slider.thumb_height": 16.0,
-    "slider.thumb_width": 10.0
   }
 }

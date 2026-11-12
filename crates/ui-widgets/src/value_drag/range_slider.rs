@@ -183,7 +183,7 @@ impl Component for RangeSlider<'_> {
             handle: track::handle(cx),
             ring: ThumbRing::new(cx),
             thumb_width: cx.tokens.size.handle.sm,
-            thumb_height: cx.tokens.component.slider.thumb_height.get(cx.size),
+            thumb_height: track::knob_size(cx).y,
             length,
         }
     }

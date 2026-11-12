@@ -21,17 +21,16 @@ fn full() -> Value {
         },
         "shape": {
             "radius": { "control": 3, "surface": 4, "window": 6, "panel": 0, "button": "full", "x_radius": 1 },
-            "edge": { "bevel": { "width": 1 } }, "x_shape": true
+            "edge": { "bevel": { "width": 1 } }, "knob": "tab", "x_shape": true
         },
         "light": { "surface.panel": "#F0F0F0", "accent.solid": "#1062C4" },
         "dark": { "surface.panel": "#535353" },
         "high_contrast": { "light": { "text.normal": "#000000" }, "dark": {}, "x_hc": "kept" },
-        "components": { "slider.thumb_height": 4.5 },
         "apps": {
             "photocraft": {
                 "light": {}, "dark": { "surface.canvas": "#282828" },
                 "high_contrast": { "dark": { "text.normal": "#FFFFFF" }, "x_app_hc": 1 },
-                "components": { "slider.thumb_height": "full" }, "x_app": [true]
+                "x_app": [true]
             },
             "x_app_entry": {}
         }
@@ -60,13 +59,12 @@ fn round_trip_keeps_values_and_unknown_keys() {
     let shape = t.shape.unwrap();
     assert_eq!(shape.radius.unwrap().button, 999.0);
     assert_eq!(shape.edge, Some(EdgeSeed::Bevel { width: 1.0 }));
+    assert_eq!(shape.knob, Some(KnobShape::Tab));
     assert_eq!(t.pins.light.get(T::SurfacePanel), Some(hex("#f0f0f0")));
     assert_eq!(t.high_contrast.light.get(T::TextNormal), Some(hex("#000000")));
-    assert_eq!(t.components.len(), 1);
     let photo = &t.apps[&AppId::parse("photocraft").unwrap()];
     assert_eq!(photo.pins.dark.get(T::SurfaceCanvas), Some(hex("#282828")));
     assert_eq!(photo.high_contrast.dark.get(T::TextNormal), Some(hex("#ffffff")));
-    assert_eq!(photo.components.values().next(), Some(&999.0));
 
     let text = format::write(&file).unwrap();
     let written: Value = serde_json::from_str(&text).unwrap();
@@ -83,7 +81,7 @@ fn round_trip_keeps_values_and_unknown_keys() {
         ("/apps/photocraft/high_contrast/dark/text.normal", &json!("#ffffff")),
         ("/apps/x_app_entry", &orig["apps"]["x_app_entry"]),
         ("/version", &json!(3)),
-        ("/components/slider.thumb_height", &json!(4.5)),
+        ("/shape/knob", &json!("tab")),
         ("/shape/radius/button", &json!("full")),
         ("/dark/surface.panel", &json!("#535353")),
     ] {

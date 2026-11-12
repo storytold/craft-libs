@@ -12,7 +12,7 @@ use crate::testing::fixture::Fixture;
 use crate::testing::style::{StyleLooks, StyleSeen, themes_at, tokens, with_cx};
 use craft_behavior::Input;
 use craft_theme::{
-    Appearance, ColorToken, Contrast, ControlSize, Flags, Mode, Resolve, Rgba, Size, State, StateMix, Stateful, TextSize, TokenRef, builtins, explain,
+    Appearance, ColorToken, Contrast, ControlSize, Flags, Mode, Resolve, Rgba, Size, State, StateMix, Stateful, TextSize, builtins, explain,
 };
 use std::sync::Arc;
 
@@ -283,14 +283,7 @@ impl PairTable {
         };
         let explained = explain(def, appearance, None);
         let colors = &explained.resolved.tokens.color;
-        let pairs = explained
-            .pairs
-            .iter()
-            .filter_map(|report| match (report.pair.fg, report.pair.bg) {
-                (TokenRef::Color(fg), TokenRef::Color(bg)) => Some((colors.get(fg), colors.get(bg))),
-                _ => None,
-            })
-            .collect();
+        let pairs = explained.pairs.iter().map(|report| (colors.get(report.pair.fg), colors.get(report.pair.bg))).collect();
         let colors = ColorToken::ALL.iter().map(|&token| (token.path().to_owned(), colors.get(token))).collect();
         PairTable { pairs, colors }
     }

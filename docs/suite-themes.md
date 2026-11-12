@@ -12,16 +12,16 @@ reference for theme authors and for app developers adopting the suite theme.
 
 ## Tokens
 
-Tokens come in three layers. A theme file only states seeds and exceptions; everything else is
+Tokens come in two layers. A theme file only states seeds and exceptions; everything else is
 derived.
 
 1. **Primitives**: colour, 12-step ramps, fixed scales (space, radius, stroke, opacity,
    duration, easing, elevation).
 2. **Semantic tokens**: `surface.*`, `text.*`, `line.*`, `state.*`, `accent.*`, status, overlay,
    data and caption colours, plus shape, size, space, motion and type tokens.
-3. **Component tokens**: the slider thumb's width and height (`slider.thumb_width`,
-   `slider.thumb_height`). Every other component computes its look from the semantic tokens, in
-   its style in the UI library crates.
+
+There are no component tokens: every component computes its look from the semantic tokens, in its
+style in the UI library crates.
 
 `resolve(theme, appearance, app)` builds the tokens for one appearance: mode (light, dark),
 contrast (standard, high), size (compact, comfortable), text size (small, default, large and
@@ -43,8 +43,7 @@ the app's pins (`apps.<id>`), then the theme's high-contrast pins, then the app'
   "light": { "surface.panel": "#F0F0F0" },
   "dark":  { "surface.panel": "#535353" },
   "high_contrast": { "light": {}, "dark": {} },
-  "components": { "slider.thumb_width": 12 },
-  "apps": { "photocraft": { "light": {}, "dark": { "surface.canvas": "#282828" }, "high_contrast": {}, "components": {} } }
+  "apps": { "photocraft": { "light": {}, "dark": { "surface.canvas": "#282828" }, "high_contrast": {} } }
 }
 ```
 
@@ -57,15 +56,14 @@ the app's pins (`apps.<id>`), then the theme's high-contrast pins, then the app'
 | `variants` | no | `"both"` (default), `"light"` or `"dark"` |
 | `contrast_intent` | no | `"standard"` (default) or `"low"`: the theme is meant to be soft, and pickers label it "Low contrast" |
 | `seeds` | yes | `neutral`, `accent` and `status.good/warn/bad/info`, all required |
-| `shape` | no | `null`, or `{ "radius": { control, popup, window, panel, button, pill? }, "radius_offset": { control?, popup?, window? }, "edge": "flat" or {"bevel": {"width": 1}} }`; a radius is a number or `"full"`; `radius` needs the first five keys when present and fixes the radii at every Size; `radius_offset` (numbers, negative allowed, missing keys 0) is added to the control, popup and window radii in force, so the theme keeps its own shape at every Size (Soft: control +1, popup +2, window +2, which makes 7/10/14 at Comfortable and 4/6/8 at Compact); a "full" radius and `panel`, `button` and `pill` are not offset, and a sum below 0 is 0; `pill` (switch, slider, progress and badge shapes, clamped to half the part's height) defaults to `"full"`, and Classic sets it to 0 |
+| `shape` | no | `null`, or `{ "radius": { control, popup, window, panel, button, pill? }, "radius_offset": { control?, popup?, window? }, "edge": "flat" or {"bevel": {"width": 1}}, "rows": "divided" or "rounded", "knob": "round" or "tab" }`; `knob` is the shape of a value track's thumb (default `"round"`; Classic's `"tab"` is an upright tab); a radius is a number or `"full"`; `radius` needs the first five keys when present and fixes the radii at every Size; `radius_offset` (numbers, negative allowed, missing keys 0) is added to the control, popup and window radii in force, so the theme keeps its own shape at every Size (Soft: control +1, popup +2, window +2, which makes 7/10/14 at Comfortable and 4/6/8 at Compact); a "full" radius and `panel`, `button` and `pill` are not offset, and a sum below 0 is 0; `pill` (switch, slider, progress and badge shapes, clamped to half the part's height) defaults to `"full"`, and Classic sets it to 0 |
 | `light`, `dark` | no | colour pins: dotted token path to `#RRGGBB`, `#RRGGBBAA` or a reference `"{token.path}"` (see References); surfaces (`surface.*` except `surface.scrim`) must be opaque. A `seeds` key holds that mode's seed overrides: `neutral`, `accent` and `status.good/warn/bad/info`, each optional; a field it names replaces the theme's `seeds` value in that mode and the rest fall through |
 | `high_contrast` | no | `{ "light": {...}, "dark": {...} }`, pins used only in high contrast; no `seeds` key (it is an error there and in `apps`) |
-| `components` | no | component token lengths by path (`slider.thumb_width`, `slider.thumb_height`): a number or `"full"` |
-| `apps` | no | per-app `{ light, dark, high_contrast, components }`, applied over the theme's values for that app; its `high_contrast` pins apply after the theme's |
+| `apps` | no | per-app `{ light, dark, high_contrast }`, applied over the theme's values for that app; its `high_contrast` pins apply after the theme's |
 
 - JSON, at most 256 KiB. `schema_version` is the format; `version` is the author's revision.
 - Paths are flat dotted strings (`"surface.panel"`), never nested objects.
-- References: a pin value `"{accent.solid}"` takes the final value of that colour token (after derivation and the contrast pass) for the theme, mode, contrast and size being resolved, so it follows the accent when the theme's accent changes. A target the theme pins reads the pinned value, a reference may name another reference, and a derived target reads the value derived from the other references' final values (the theme resolves again with every reference applied until no reference's value changes). References that never settle, such as `"state.selected": "{state.selected_hover}"` where the hover state derives from the selected one, are an error naming the key. It works in `light`, `dark`, `high_contrast` and `apps` maps. A name that is no colour token, and a cycle of references, are errors naming the key and the reference. Only colour pins take references; `components` values and `seeds` do not.
+- References: a pin value `"{accent.solid}"` takes the final value of that colour token (after derivation and the contrast pass) for the theme, mode, contrast and size being resolved, so it follows the accent when the theme's accent changes. A target the theme pins reads the pinned value, a reference may name another reference, and a derived target reads the value derived from the other references' final values (the theme resolves again with every reference applied until no reference's value changes). References that never settle, such as `"state.selected": "{state.selected_hover}"` where the hover state derives from the selected one, are an error naming the key. It works in `light`, `dark`, `high_contrast` and `apps` maps. A name that is no colour token, and a cycle of references, are errors naming the key and the reference. Only colour pins take references; `seeds` do not.
 - A pin map or `seeds` override for a mode the theme lacks is an error when it is not empty.
 - Two-variant themes whose modes need different seeds (Pro, Soft) put the differing fields in `light.seeds` or `dark.seeds` instead of pinning the derived colours.
 - `write` refuses a theme that would not parse back (`ThemeDef::validate`: pins for a missing

@@ -4,13 +4,12 @@
 //! Standard contrast reports pairs as warnings (below their minimum); High contrast must meet every minimum, so its
 //! pairs are errors.
 
-use super::browser::value_of;
 use super::chip::pair;
 use super::subject::{Pick, ThemeSubject};
 use super::words::summary;
 use craft_behavior::{Selection, SelectionChange};
 use craft_theme::report::ContrastReport;
-use craft_theme::{Appearance, Contrast, ContrastCheck, Explained, Mode, TokenRef, Variants};
+use craft_theme::{Appearance, ColorToken, Contrast, ContrastCheck, Explained, Mode, Variants};
 use craft_ui::contract::{Bind, CollectionEvent, Pattern, Show as _, ShowCollection as _, ShowContainer as _, WordSetCx as _};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::Stack;
@@ -22,7 +21,7 @@ use egui::Ui;
 /// The row selected, by its pair so that it survives a new report.
 #[derive(Clone, Default)]
 struct Session {
-    selected: Option<(TokenRef, TokenRef)>,
+    selected: Option<(ColorToken, ColorToken)>,
 }
 
 /// What the Problems view reports: the foreground token of the pair the user selected or activated in this pass.
@@ -87,7 +86,10 @@ impl<'a> Problems<'a> {
                         let at = *key as usize;
                         let row = findings[at].row(&icx.words::<FindingsWords>());
                         match warnings.get(at) {
-                            Some(check) => row.thumb(ThumbSize::Small, pair(value_of(self.explained, check.fg), value_of(self.explained, check.bg))),
+                            Some(check) => row.thumb(
+                                ThumbSize::Small,
+                                pair(self.explained.resolved.tokens.color(check.fg), self.explained.resolved.tokens.color(check.bg)),
+                            ),
                             None => row,
                         }
                     })

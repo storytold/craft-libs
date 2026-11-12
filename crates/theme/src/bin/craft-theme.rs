@@ -80,7 +80,13 @@ fn warnings(theme: &ThemeDef) -> Vec<Warning> {
     for entry in &contrast_report(theme) {
         let label = entry.label();
         for w in &entry.warnings {
-            out.push(Warning { appearance: label.clone(), fg: w.fg.path(), bg: w.bg.path(), ratio: w.ratio, minimum: w.minimum });
+            out.push(Warning {
+                appearance: label.clone(),
+                fg: w.fg.path().to_owned(),
+                bg: w.bg.path().to_owned(),
+                ratio: w.ratio,
+                minimum: w.minimum,
+            });
         }
     }
     out

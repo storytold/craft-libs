@@ -1,10 +1,10 @@
-//! The rows of the token browser: group headings with the tokens, component tokens and sizes under them, and the
+//! The rows of the token browser: group headings with the tokens and sizes under them, and the
 //! filters that keep some of them.
 
 use super::subject::Pick;
-use super::words::{COMPONENT_GROUP, group_of, size_group};
+use super::words::{group_of, size_group};
 use craft_behavior::{DisplayOrder, ItemSource};
-use craft_theme::{ComponentField, Explained, SizeOrigin, TokenRef};
+use craft_theme::{ColorToken, Explained, SizeOrigin};
 use craft_ui::list::OpenSet;
 use std::borrow::Cow;
 
@@ -14,8 +14,8 @@ use std::borrow::Cow;
 pub enum Row {
     /// A group heading.
     Group(&'static str),
-    /// A colour or component token.
-    Token(TokenRef),
+    /// A colour token.
+    Token(ColorToken),
     /// An index into [`Explained::sizes`].
     Size(usize),
 }
@@ -42,8 +42,7 @@ impl Row {
     pub(crate) fn group(self, explained: &Explained) -> Option<&'static str> {
         match self {
             Row::Group(_) => None,
-            Row::Token(TokenRef::Color(token)) => Some(group_of(token)),
-            Row::Token(TokenRef::Component(_)) => Some(COMPONENT_GROUP),
+            Row::Token(token) => Some(group_of(token)),
             Row::Size(at) => explained.sizes.get(at).map(size_group),
         }
     }
@@ -68,8 +67,8 @@ impl Filters {
         self.query.is_empty() || path.contains(&self.query.to_lowercase())
     }
 
-    /// Whether a colour or component token passes.
-    fn keeps_token(&self, explained: &Explained, token: TokenRef, pinned: bool, moved: bool) -> bool {
+    /// Whether a colour token passes.
+    fn keeps_token(&self, explained: &Explained, token: ColorToken, pinned: bool, moved: bool) -> bool {
         self.matches_path(&token.path())
             && (!self.pinned || pinned)
             && (!self.moved || moved)
@@ -107,15 +106,9 @@ impl TokenRows {
             }
         };
         for origin in &explained.colors {
-            let token = TokenRef::Color(origin.token);
+            let token = origin.token;
             if filters.keeps_token(explained, token, origin.pin.is_some(), origin.contrast_move.is_some()) {
                 add(group_of(origin.token), Row::Token(token));
-            }
-        }
-        for field in ComponentField::ALL {
-            let token = TokenRef::Component(*field);
-            if filters.keeps_token(explained, token, false, false) {
-                add(COMPONENT_GROUP, Row::Token(token));
             }
         }
         for (at, origin) in explained.sizes.iter().enumerate() {
@@ -164,7 +157,7 @@ impl TokenRows {
 fn text_of(explained: &Explained, row: Row) -> String {
     match row {
         Row::Group(name) => name.to_owned(),
-        Row::Token(token) => token.path(),
+        Row::Token(token) => token.path().to_owned(),
         Row::Size(at) => explained.sizes.get(at).map(|origin| origin.path.clone()).unwrap_or_default(),
     }
 }

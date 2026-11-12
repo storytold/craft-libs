@@ -6,7 +6,7 @@ use crate::primitives::{IconSpec, TextRun};
 use crate::style::{FocusLook, IconLook, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole, UiTokens, VariantParts};
 use craft_behavior::{Flow, Insets, Metrics, Proposal};
 use craft_theme::{
-    BySize, Stateful, States, Variant,
+    Stateful, States, Variant,
     variant::{Emphasis, Tone},
 };
 use egui::{Rect, Vec2, pos2};
@@ -71,13 +71,6 @@ pub(super) fn metrics(cx: &StyleCx<'_>, parts: &VariantParts) -> Metrics {
     Metrics::new().padding(Insets::horizontal(control.pad_x.max(round + control.gap))).min_size(Vec2::new(0.0, control.height)).gap(control.gap)
 }
 
-/// The side of the glyph in an icon-only button: the glyph role of the size, smaller than the icon side so the glyph
-/// reads below the cap height of the text beside it.
-pub(super) fn glyph_side(cx: &StyleCx<'_>) -> f32 {
-    let icon = &cx.tokens.size.icon;
-    BySize { sm: icon.glyph_sm, md: icon.glyph_md }.get(cx.size)
-}
-
 /// The surface of a button from its variant: raised unless flat (ghost, or a custom look with no fill or edge at
 /// rest), the variant's fill and edge.
 pub(super) fn surface(cx: &StyleCx<'_>, parts: &VariantParts) -> SurfaceLook {
@@ -125,7 +118,7 @@ pub(super) fn icon_face(cx: &StyleCx<'_>) -> IconFace {
     IconFace {
         surface: on_surface(cx, &off, &on).radius(UiTokens::corner(cx.tokens.shape.radius.control)),
         metrics: Metrics::new().min_size(Vec2::splat(cx.control().height)),
-        glyph: IconLook::new(glyph_side(cx), off.text.clone().on(on.text.off)),
+        glyph: IconLook::new(cx.glyph(), off.text.clone().on(on.text.off)),
     }
 }
 

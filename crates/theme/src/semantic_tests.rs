@@ -25,7 +25,6 @@ fn theme(id: &str, neutral: &str, accent: &str, status: [&str; 4]) -> ThemeDef {
         variants: Variants::Both,
         pins: ModePins::default(),
         high_contrast: ModePins::default(),
-        components: BTreeMap::new(),
         contrast_intent: ContrastIntent::Standard,
         apps: BTreeMap::new(),
     }

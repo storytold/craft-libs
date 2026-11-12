@@ -1,6 +1,6 @@
 //! The words the theme panels use for tokens, sources, sizes and counts.
 
-use craft_theme::{ColorSource, ColorToken, ComponentField, ComponentTokens, Contrast, Mode, PinLayer, SizeLayer, SizeOrigin, SizeValue, StatusKind};
+use craft_theme::{ColorSource, ColorToken, Contrast, Mode, PinLayer, SizeLayer, SizeOrigin, SizeValue, StatusKind};
 
 /// "Dark: 3 pairs below minimum" in Standard contrast, "Dark: 3 pairs fail" in High, which must meet every minimum.
 pub fn summary(mode: Mode, contrast: Contrast, count: usize) -> String {
@@ -30,9 +30,6 @@ pub(crate) fn size_group(origin: &SizeOrigin) -> &'static str {
     }
 }
 
-/// The heading of the component tokens.
-pub(crate) const COMPONENT_GROUP: &str = "component tokens";
-
 /// A size value as shown in a list and the detail.
 pub(crate) fn value_words(value: SizeValue) -> String {
     match value {
@@ -47,15 +44,6 @@ pub(crate) fn layer_words(layer: SizeLayer) -> &'static str {
         SizeLayer::App => "app",
         _ => "other",
     }
-}
-
-/// The standard and small size of a component token, as `md / sm`.
-pub(crate) fn lengths_words(tokens: &ComponentTokens, field: ComponentField) -> String {
-    let by = match field {
-        ComponentField::SliderThumbWidth => tokens.slider.thumb_width,
-        ComponentField::SliderThumbHeight => tokens.slider.thumb_height,
-    };
-    format!("{} / {}", by.md, by.sm)
 }
 
 /// Where a pin came from.

@@ -4,17 +4,15 @@
 use std::collections::BTreeMap;
 
 use super::{EDGE, ErrorKind, FormatError, FormatErrors, LENGTH, OFFSET};
-use crate::components::ComponentField;
 use crate::ramp::Mode;
 use crate::resolve;
 use crate::theme::{Appearance, Contrast, EdgeSeed, ModePins, PinLayer, Pins, ShapeSeed, Size, TextSize, ThemeDef, Variants};
-use crate::tokens::TokenRef;
+use crate::tokens::ColorToken;
 
 impl ThemeDef {
     /// Every value that [`parse`](super::parse) would reject in the file
     /// [`write`](super::write) makes of this theme, with its path there: pins for a mode the
-    /// theme's `variants` leaves out, a pin on a non-colour field, a translucent surface, a
-    /// colour or a value of the wrong kind in `components`, a negative or non-finite length, a
+    /// theme's `variants` leaves out, a translucent surface, a negative or non-finite length, a
     /// bevel width that is not above 0.
     pub fn validate(&self) -> Result<(), FormatErrors> {
         let mut c = Check { errors: Vec::new(), path: Vec::new() };
@@ -28,13 +26,11 @@ impl ThemeDef {
             }
         }
         c.at("high_contrast", |c| c.mode_pins(&self.high_contrast, self.variants));
-        c.at("components", |c| c.components(&self.components));
         c.at("apps", |c| {
             for (id, app) in &self.apps {
                 c.at(id.as_str(), |c| {
                     c.mode_pins(&app.pins, self.variants);
                     c.at("high_contrast", |c| c.mode_pins(&app.high_contrast, self.variants));
-                    c.at("components", |c| c.components(&app.components));
                 });
             }
         });
@@ -125,19 +121,10 @@ impl Check {
     }
 
     fn pins(&mut self, pins: &Pins) {
-        for &token in pins.refs.keys() {
-            self.at(&token.path(), |c| {
-                if matches!(token, TokenRef::Component(_)) {
-                    c.fail(ErrorKind::PinNotColor);
-                }
-            });
-        }
         for (&token, colour) in &pins.colors {
-            self.at(&token.path(), |c| match token {
-                TokenRef::Component(_) => c.fail(ErrorKind::PinNotColor),
-                TokenRef::Color(t) if t.is_opaque_surface() && colour.a() < 255 => c.fail(ErrorKind::NotOpaque),
-                _ => {}
-            });
+            if token.is_opaque_surface() && colour.a() < 255 {
+                self.at(token.path(), |c| c.fail(ErrorKind::NotOpaque));
+            }
         }
     }
 
@@ -159,14 +146,14 @@ impl Check {
         for stack in &stacks {
             for (mode_key, mode) in [("light", Mode::Light), ("dark", Mode::Dark)] {
                 // The reference each token ends with, and where it is written.
-                let mut effective: BTreeMap<TokenRef, Option<(TokenRef, Vec<String>)>> = BTreeMap::new();
+                let mut effective: BTreeMap<ColorToken, Option<(ColorToken, Vec<String>)>> = BTreeMap::new();
                 for (prefix, pins) in stack {
                     let pins = pins.get(mode);
                     for &k in pins.colors.keys() {
                         effective.insert(k, None);
                     }
                     for (&k, &target) in &pins.refs {
-                        let path = prefix.iter().map(|s| (*s).to_owned()).chain([mode_key.to_owned(), k.path()]).collect();
+                        let path = prefix.iter().map(|s| (*s).to_owned()).chain([mode_key.to_owned(), k.path().to_owned()]).collect();
                         effective.insert(k, Some((target, path)));
                     }
                 }
@@ -178,7 +165,7 @@ impl Check {
                         at = *next;
                         if at == start {
                             chain.push(at);
-                            let names: Vec<String> = chain.iter().map(|t| t.path()).collect();
+                            let names: Vec<String> = chain.iter().map(|t| t.path().to_owned()).collect();
                             let mut key = names[..names.len() - 1].to_vec();
                             key.sort();
                             if !reported.contains(&key) {
@@ -217,7 +204,7 @@ impl Check {
                 for contrast in [Contrast::Standard, Contrast::High] {
                     let appearance = Appearance { mode, contrast, size: Size::Compact, text_size: TextSize::Small, reduced_motion: false };
                     let unsettled = resolve::unsettled_references(t, appearance, app);
-                    let mut names: Vec<String> = unsettled.iter().map(|&(_, key)| key.path()).collect();
+                    let mut names: Vec<String> = unsettled.iter().map(|&(_, key)| key.path().to_owned()).collect();
                     names.sort();
                     let Some(&(layer, key)) = unsettled.first() else { continue };
                     if reported.contains(&names) {
@@ -231,16 +218,10 @@ impl Check {
                         (PinLayer::AppHighContrast, Some(id)) => vec!["apps".to_owned(), id.as_str().to_owned(), "high_contrast".to_owned()],
                         _ => vec![],
                     };
-                    path.extend([mode_key.to_owned(), key.path()]);
+                    path.extend([mode_key.to_owned(), key.path().to_owned()]);
                     self.errors.push(FormatError { path, kind: ErrorKind::ReferenceNeverSettles { tokens: names } });
                 }
             }
-        }
-    }
-
-    fn components(&mut self, components: &BTreeMap<ComponentField, f32>) {
-        for (&field, &length) in components {
-            self.at(&field.path(), |c| c.length(length));
         }
     }
 }

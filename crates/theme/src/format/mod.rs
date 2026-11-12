@@ -39,6 +39,7 @@ const LENGTH: &str = "a length: a number of 0 or more, or \"full\"";
 /// The expected form of an edge, in [`ErrorKind::BadValue`].
 const OFFSET: &str = "a number";
 const ROWS: &str = "\"divided\" or \"rounded\"";
+const KNOB: &str = "\"round\" or \"tab\"";
 const EDGE: &str = "\"flat\" or {\"bevel\": {\"width\": n}} with n above 0";
 
 /// A parsed theme file: the theme and the JSON it came from, so that [`fn@write`] keeps unknown keys.
@@ -98,23 +99,14 @@ pub enum ErrorKind {
     BadId(IdError),
     /// An app id is malformed.
     BadAppId,
-    /// A path that names no semantic token or component field.
+    /// A path that names no colour token.
     UnknownToken,
-    /// A component field in a colour map: component fields are lengths.
-    PinNotColor,
-    /// A colour token in `components`; colours go in the mode maps.
-    ColorNotPerMode,
     /// A colour map for a mode the theme's `variants` leaves out.
     NoSuchMode,
     /// `seeds` in a map that does not take them (high-contrast and app maps).
     SeedsNotAllowed,
-    /// A reference such as `"{accent.solid}"` naming no token or field.
+    /// A reference such as `"{accent.solid}"` naming no token.
     UnknownReference {
-        /// The name between the braces.
-        name: String,
-    },
-    /// A reference to a component field that is not a colour.
-    ReferenceNotColor {
         /// The name between the braces.
         name: String,
     },
@@ -178,12 +170,9 @@ impl FormatError {
             ErrorKind::BadId(e) => e.to_string(),
             ErrorKind::BadAppId => "not an app id: use 2 to 64 of a-z, 0-9, '.', '_' or '-', starting with a-z or 0-9".to_owned(),
             ErrorKind::UnknownToken => "unknown token".to_owned(),
-            ErrorKind::PinNotColor => "a component field is a length; set it in components".to_owned(),
-            ErrorKind::ColorNotPerMode => "colours are set per mode, in light or dark".to_owned(),
             ErrorKind::NoSuchMode => "the theme's variants leave this mode out".to_owned(),
             ErrorKind::SeedsNotAllowed => "seeds are set in the theme's own light and dark maps only".to_owned(),
             ErrorKind::UnknownReference { name } => format!("reference {{{name}}} names no token"),
-            ErrorKind::ReferenceNotColor { name } => format!("reference {{{name}}} is not a colour field"),
             ErrorKind::ReferenceNeverSettles { tokens } => {
                 format!("references depend on themselves through derivation and never settle: {}", tokens.join(", "))
             }

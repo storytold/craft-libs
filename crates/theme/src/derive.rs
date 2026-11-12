@@ -7,7 +7,7 @@ use super::color::{Oklab, Oklch, Rgba};
 use super::contrast::{contrast_ratio, ensure_contrast, relative_luminance};
 use super::ramp::{self, Mode, Ramp, RampKind};
 use super::theme::{Contrast, PinLayer, Pins, ThemeDef};
-use super::tokens::{ColorToken, ColorTokens, Status, TokenRef};
+use super::tokens::{ColorToken, ColorTokens, Status};
 use super::values::{self, Bg, ColorSource as Source, PairRule, RULES};
 use crate::AppId;
 
@@ -16,10 +16,10 @@ use crate::AppId;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ContrastCheck {
     /// The foreground token or field.
-    pub fg: TokenRef,
+    pub fg: ColorToken,
     /// The background token or field. Overlay pairs name `overlay.halo` and report the lower of
     /// the ratios over black and over white.
-    pub bg: TokenRef,
+    pub bg: ColorToken,
     /// The measured ratio.
     pub ratio: f64,
     /// The required ratio.
@@ -139,7 +139,7 @@ pub(super) fn colors(theme: &ThemeDef, app: Option<&AppId>, mode: Mode, contrast
         c.set(t, direct(&ramps, values::source(t, mode)).unwrap_or(Rgba::BLACK));
     }
     let pins: Vec<_> = pins(theme, app, mode, high).collect();
-    let pin = |t: ColorToken| pins.iter().rev().find(|(_, p, _)| *p == TokenRef::Color(t)).map(|&(_, _, v)| v);
+    let pin = |t: ColorToken| pins.iter().rev().find(|(_, p, _)| *p == t).map(|&(_, _, v)| v);
     let anchors = Anchors::new(&ramps, seeds.neutral, mode, pin);
     for &t in ColorToken::ALL {
         if let Some((a, n, _)) = anchors.of(t) {
@@ -149,10 +149,8 @@ pub(super) fn colors(theme: &ThemeDef, app: Option<&AppId>, mode: Mode, contrast
     let unpinned = c;
     let mut layers = BTreeMap::new();
     for (layer, t, v) in pins {
-        if let TokenRef::Color(t) = t {
-            c.set(t, v);
-            layers.insert(t, layer);
-        }
+        c.set(t, v);
+        layers.insert(t, layer);
     }
     let pinned: BTreeSet<ColorToken> = layers.keys().copied().collect();
     // Tokens defined by other tokens follow their pinned values; aliases follow the contrast
@@ -218,7 +216,7 @@ fn derived_values(unpinned: &ColorTokens, before_pass: &ColorTokens, pinned: &BT
 
 /// The mode's pins, then the app's, then, when `high`, the theme's and the app's high-contrast
 /// pins, each with its layer; later ones win.
-fn pins<'a>(theme: &'a ThemeDef, app: Option<&AppId>, mode: Mode, high: bool) -> impl Iterator<Item = (PinLayer, TokenRef, Rgba)> + 'a {
+fn pins<'a>(theme: &'a ThemeDef, app: Option<&AppId>, mode: Mode, high: bool) -> impl Iterator<Item = (PinLayer, ColorToken, Rgba)> + 'a {
     let app = app.and_then(|a| theme.apps.get(a));
     let layers = [
         Some((PinLayer::Theme, &theme.pins)),
@@ -725,10 +723,10 @@ fn measure(c: &ColorTokens, rules: &[PairRule], high: bool) -> Vec<ContrastCheck
             let (f, start) = (c.get(fg), out.len());
             for &bg in rule.bgs {
                 let r = ratio(f, bg_color(c, bg));
-                let bg = TokenRef::Color(bg_token(bg));
+                let bg = bg_token(bg);
                 match out.iter_mut().skip(start).find(|m| m.bg == bg) {
                     Some(m) => m.ratio = m.ratio.min(r),
-                    None => out.push(ContrastCheck { fg: TokenRef::Color(fg), bg, ratio: r, minimum }),
+                    None => out.push(ContrastCheck { fg, bg, ratio: r, minimum }),
                 }
             }
         }

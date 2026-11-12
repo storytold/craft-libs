@@ -338,7 +338,7 @@ Controls     buttons, fields, sliders, checkboxes, selects, swatches, tooltips  
 Primitives   surface, state layer, focus ring, divider, stack, interactive area, text, icon, handle
              (with the runtime, style and contract under them)                          craft-ui-contract
   ^
-Tokens       scales, ramps, seeds, contrast, size presets, component tokens, themes     craft-theme, no egui
+Tokens       scales, ramps, seeds, contrast, size presets, themes                       craft-theme, no egui
 ```
 
 ### 4.2 Ownership
@@ -414,7 +414,7 @@ Foundations are the values every component reads. This section holds concepts on
 ### 5.1 Colour
 
 ```text
-seeds -> ramps -> semantic tokens -> pins -> contrast pass -> component tokens -> resolved Tokens -> theme bridge
+seeds -> ramps -> semantic tokens -> pins -> contrast pass -> resolved Tokens -> theme bridge
 ```
 
 - **Seeds.** Neutral, accent and four status hues (good, warn, bad, info).
@@ -423,7 +423,6 @@ seeds -> ramps -> semantic tokens -> pins -> contrast pass -> component tokens -
 - **Pins.** Any token can be set by hand.
 - **Anchoring.** Unpinned background greys keep their distance from the theme's panel colour, so they follow a pinned panel. Text greys stay on the curve.
 - **Contrast pass.** Derived colours move to the minimums in [5.7](#57-appearance-and-contrast).
-- **Component tokens.** Derived from semantic tokens and pinnable. About 1,100 resolved tokens per variant.
 
 Semantic tokens fall in eight groups: surface, text, line, accent, status, state, canvas overlay and data. The tokens of each group are in [Appendix A](#semantic-colour-tokens).
 
@@ -457,7 +456,7 @@ Sizes are runtime tokens. The rule runs from the general to the specific:
 
 1. A **scale** holds the allowed values: spacing 0, 2, 4, 6, 8, 12, 16, 20, 24, 32; radius 0, 2, 3, 4, 6, 8, 12 and full; strokes hairline, 1, 1.5, 2, 3.
 2. **Semantic role tokens** pick from the scale by meaning: control height, icon size, gap, padding, radius, bar height.
-3. **Component tokens** name a semantic token.
+3. **Components** derive their own dimensions from the role tokens in their style: a role, or a role times a ratio named in the component's style with the rule it comes from. There are no component-specific theme values.
 
 Components name semantic tokens and never a pixel value or shape of their own. [Appendix A](#appendix-a-component-tokens) says which component takes which role. Only drawing details (stroke widths, chevron geometry, dash lengths) stay constants.
 
@@ -1546,7 +1545,7 @@ Text processing below the composer, and text UI.
 
 #### craft-theme
 
-The theme model: colour, scale and token primitives, semantic and component tokens, contrast rules, the theme file format, built-in themes, and the `craft-theme check` command. No egui. New on the branch.
+The theme model: colour, scale and token primitives, semantic tokens, contrast rules, the theme file format, built-in themes, and the `craft-theme check` command. No egui. New on the branch.
 
 | Module | Holds | State |
 | --- | --- | --- |

@@ -1,20 +1,19 @@
 //! Resolution: a theme and an appearance to concrete tokens.
 
 use super::app_sizes::AppSizes;
-use super::components::ComponentTokens;
 use super::derive::{self, ColorSteps, ContrastCheck};
 use super::ramp::Mode;
 use super::scale::{Easing, Elevation};
 use super::sizes;
 use super::theme::{Appearance, Contrast, ContrastIntent, PinLayer, Pins, ThemeDef};
-use super::tokens::{Edge, ElevationTokens, Motion, MotionTokens, RadiusSet, ShapeTokens, TokenRef, Tokens};
+use super::tokens::{ColorToken, Edge, ElevationTokens, Motion, MotionTokens, RadiusSet, ShapeTokens, Tokens};
 use super::values;
 use crate::AppId;
 
 /// The tokens for one theme and appearance, with the contrast pairs that fail.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Resolved {
-    /// Every semantic token and the component tokens.
+    /// Every semantic token.
     pub tokens: Tokens,
     /// Pairs below their minimum: in standard contrast, pairs that a pinned colour makes fail,
     /// or pairs that no lightness move could fix.
@@ -28,9 +27,8 @@ pub struct Resolved {
 
 /// Resolves `theme` for `appearance`. Colours derive from the theme's seeds and pins for the
 /// mode it has; sizes, spacing and type come from the Size preset and text size; shape comes
-/// from the preset unless the theme has its own. Component tokens come from the preset, then take
-/// the theme's component overrides. With `app`, that app's overrides in the theme apply over the
-/// theme's own pins and components.
+/// from the preset unless the theme has its own. With `app`, that app's overrides in the theme
+/// apply over the theme's own pins.
 pub fn resolve(theme: &ThemeDef, appearance: Appearance, app: Option<&AppId>) -> Resolved {
     resolve_sized(theme, appearance, app, &AppSizes::default())
 }
@@ -73,7 +71,7 @@ fn resolve_core(theme: &ThemeDef, appearance: Appearance, app: Option<&AppId>, s
 /// The references of `theme` for `appearance` whose value still changes when the last round
 /// applies them: the ones that depend on themselves through derivation, such as
 /// `state.selected = "{state.selected_hover}"` with a hover state derived from the selected one.
-pub(super) fn unsettled_references(theme: &ThemeDef, appearance: Appearance, app: Option<&AppId>) -> Vec<(PinLayer, TokenRef)> {
+pub(super) fn unsettled_references(theme: &ThemeDef, appearance: Appearance, app: Option<&AppId>) -> Vec<(PinLayer, ColorToken)> {
     settle_references(theme, appearance, app, &AppSizes::default()).map(|s| s.unsettled).unwrap_or_default()
 }
 
@@ -82,7 +80,7 @@ struct Settled {
     /// The theme with every reference replaced by a colour pin holding its value.
     theme: ThemeDef,
     /// The references still changing after the last round.
-    unsettled: Vec<(PinLayer, TokenRef)>,
+    unsettled: Vec<(PinLayer, ColorToken)>,
     /// The resolution of `theme`, when the last round left it unchanged.
     resolution: Option<Core>,
 }
@@ -109,7 +107,7 @@ fn settle_references(theme: &ThemeDef, appearance: Appearance, app: Option<&AppI
     .collect();
 
     // The reference each token ends with: a later layer's pin or reference replaces an earlier one.
-    let mut pending: Vec<(PinLayer, TokenRef, TokenRef)> = Vec::new();
+    let mut pending: Vec<(PinLayer, ColorToken, ColorToken)> = Vec::new();
     for &layer in &layers {
         let pins = layer_pins(theme, layer, app, mode)?;
         pending.retain(|p| !pins.colors.contains_key(&p.1) && !pins.refs.contains_key(&p.1));
@@ -130,11 +128,8 @@ fn settle_references(theme: &ThemeDef, appearance: Appearance, app: Option<&AppI
         let tokens = &core.resolved.tokens;
         unsettled.clear();
         for &(layer, key, target) in &pending {
-            let value = match target {
-                TokenRef::Color(t) => Some(tokens.color(t)),
-                TokenRef::Component(_) => None,
-            };
-            if let (Some(value), Some(pins)) = (value, layer_pins_mut(&mut work, layer, app, mode))
+            let value = tokens.color(target);
+            if let Some(pins) = layer_pins_mut(&mut work, layer, app, mode)
                 && pins.colors.insert(key, value) != Some(value)
             {
                 unsettled.push((layer, key));
@@ -205,12 +200,9 @@ fn resolve_concrete(theme: &ThemeDef, appearance: Appearance, app: Option<&AppId
     let motion_ms = |millis: u32, easing: Easing| Motion { millis: if appearance.reduced_motion { 0 } else { millis }, easing };
 
     let radius = RadiusSet { sm: (radius.control / 2.0).round(), ..radius };
-    let shape = ShapeTokens { radius, edge, rows: seed.and_then(|s| s.rows).unwrap_or(preset.rows) };
+    let shape =
+        ShapeTokens { radius, edge, rows: seed.and_then(|s| s.rows).unwrap_or(preset.rows), knob: seed.and_then(|s| s.knob).unwrap_or_default() };
     let typography = preset.typography.scaled(sizes.text_steps.factor(appearance.text_size), values::TYPE_ROUNDING);
-    let mut component = ComponentTokens::defaults(&preset);
-    for (&field, &length) in theme.components.iter().chain(app.and_then(|a| theme.apps.get(a)).map(|a| &a.components).into_iter().flatten()) {
-        component.set(field, length);
-    }
 
     let tokens = Tokens {
         color,
@@ -228,7 +220,6 @@ fn resolve_concrete(theme: &ThemeDef, appearance: Appearance, app: Option<&AppId
             outline: motion_ms(values::MOTION_OUTLINE_MS, values::MOTION_OUTLINE_EASING),
             reduced: appearance.reduced_motion,
         },
-        component,
     };
     let resolved = Resolved { tokens, warnings, contrast_intent: theme.contrast_intent, variant_used: mode };
     Core { resolved, color: color_steps }

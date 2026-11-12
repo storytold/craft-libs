@@ -6,17 +6,17 @@
 use std::fmt::Write as _;
 
 use crate::{
-    BarSizes, BySize, CanvasSizes, ColorToken, ComponentTokens, ControlSizes, DockColumnSizes, Easing, Edge, Elevation, ElevationTokens, FloatSizes,
-    FontSlot, Gaps, HandleSizes, HitSizes, IconSizes, Insets, LengthSizes, MarkerSizes, Motion, MotionTokens, Pads, PaneSizes, PlotSizes, RadiusSet,
-    RailSizes, RampSizes, Rgba, RowStyle, RulerSizes, RulerTickSizes, ShapeTokens, SizeTokens, SliderTokens, SpaceTokens, StrokeTokens, ThumbSizes,
-    Tokens, TypeStyle, TypeTokens, WindowSizes,
+    BarSizes, CanvasSizes, ColorToken, ControlSizes, DockColumnSizes, Easing, Edge, Elevation, ElevationTokens, FloatSizes, FontSlot, Gaps,
+    HandleSizes, HitSizes, IconSizes, Insets, KnobShape, LengthSizes, MarkerSizes, Motion, MotionTokens, Pads, PaneSizes, PlotSizes, RadiusSet,
+    RailSizes, RampSizes, Rgba, RowStyle, RulerSizes, RulerTickSizes, ShapeTokens, SizeTokens, SpaceTokens, StrokeTokens, ThumbSizes, Tokens,
+    TypeStyle, TypeTokens, WindowSizes,
 };
 
 /// The text of every token, one `key = value` line each, in a fixed order.
 pub fn tokens_text(tokens: &Tokens) -> String {
     let mut out = Lines::default();
 
-    let Tokens { color, shape, space, size, stroke, typography, elevation, motion, component } = tokens;
+    let Tokens { color, shape, space, size, stroke, typography, elevation, motion } = tokens;
     for &token in ColorToken::ALL {
         out.line(token.path(), hex(color.get(token)));
     }
@@ -27,7 +27,6 @@ pub fn tokens_text(tokens: &Tokens) -> String {
     type_lines(&mut out, typography);
     elevation_lines(&mut out, elevation);
     motion_lines(&mut out, motion);
-    component_lines(&mut out, component);
     out.0
 }
 
@@ -67,13 +66,14 @@ fn edge(e: Edge) -> String {
 }
 
 fn shape_lines(out: &mut Lines, shape: &ShapeTokens) {
-    let ShapeTokens { radius, edge: e, rows } = shape;
+    let ShapeTokens { radius, edge: e, rows, knob } = shape;
     let RadiusSet { sm, control, surface, window, panel, button, pill } = radius;
     for (k, v) in [("sm", sm), ("control", control), ("surface", surface), ("window", window), ("panel", panel), ("button", button), ("pill", pill)] {
         out.line(&format!("shape.radius.{k}"), len(*v));
     }
     out.line("shape.edge", edge(*e));
     out.line("shape.rows", if *rows == RowStyle::Divided { "divided" } else { "rounded" });
+    out.line("shape.knob", if *knob == KnobShape::Round { "round" } else { "tab" });
 }
 
 fn stroke_lines(out: &mut Lines, stroke: &StrokeTokens) {
@@ -270,17 +270,4 @@ fn motion_lines(out: &mut Lines, m: &MotionTokens) {
         out.line(&format!("motion.{k}.easing"), easing(*e));
     }
     out.line("motion.reduced", reduced);
-}
-
-fn by_size(out: &mut Lines, key: &str, v: &BySize<f32>) {
-    let BySize { sm, md } = v;
-    out.line(&format!("{key}.sm"), len(*sm));
-    out.line(&format!("{key}.md"), len(*md));
-}
-
-fn component_lines(out: &mut Lines, c: &ComponentTokens) {
-    let ComponentTokens { slider } = c;
-    let SliderTokens { thumb_width, thumb_height } = slider;
-    by_size(out, "slider.thumb_width", thumb_width);
-    by_size(out, "slider.thumb_height", thumb_height);
 }

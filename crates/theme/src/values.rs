@@ -457,10 +457,6 @@ pub const MENU_TINT_ALPHA: f32 = 0.24;
 /// step that is closer is moved away along OKLCH lightness.
 pub const LIST_HOVER_MIN: (f64, f64) = (1.12, 1.12);
 
-/// How far under the icon size a slider's thumb is, in points, at the small and standard sizes
-/// (Compact 12, PhotoCraft's).
-pub const SLIDER_THUMB_INSET: (f32, f32) = (2.0, 4.0);
-
 // Step 5 controls (S5C-F8).
 
 /// Duration of a text caret's glide, in milliseconds (WordCraft's `caret_glide.rs`, measured from Word).

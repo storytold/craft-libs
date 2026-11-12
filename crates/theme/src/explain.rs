@@ -7,7 +7,7 @@ use super::derive::{Anchoring, ContrastCheck, PassMove, Ramps};
 use super::resolve::{self, Resolved};
 use super::sizes::{Preset, Slot, leaves};
 use super::theme::{Appearance, PinLayer, Size, ThemeDef};
-use super::tokens::{ColorToken, StatusKind, TokenRef};
+use super::tokens::{ColorToken, StatusKind};
 use super::values::{self, ColorSource};
 use crate::AppId;
 
@@ -154,7 +154,7 @@ pub struct PairReport {
 
 impl PairReport {
     /// Whether `token` is this pair's foreground or background.
-    pub fn involves(&self, token: TokenRef) -> bool {
+    pub fn involves(&self, token: ColorToken) -> bool {
         self.pair.fg == token || self.pair.bg == token
     }
 }
@@ -166,7 +166,7 @@ impl Explained {
     }
 
     /// Every pair `token` takes part in, as foreground or background.
-    pub fn pairs_of(&self, token: TokenRef) -> impl Iterator<Item = &PairReport> + '_ {
+    pub fn pairs_of(&self, token: ColorToken) -> impl Iterator<Item = &PairReport> + '_ {
         self.pairs.iter().filter(move |p| p.involves(token))
     }
 }
@@ -203,10 +203,7 @@ pub fn explain_sized(theme: &ThemeDef, appearance: Appearance, app: Option<&AppI
         })
         .collect();
 
-    let moved = |t: TokenRef| match t {
-        TokenRef::Color(t) => colors.iter().any(|o| o.token == t && o.contrast_move.is_some()),
-        TokenRef::Component(_) => false,
-    };
+    let moved = |t: ColorToken| colors.iter().any(|o| o.token == t && o.contrast_move.is_some());
     let before: Vec<&ContrastCheck> = steps.color.pairs_before.iter().collect();
     let report = |pair: &ContrastCheck| {
         let ratio_before = before.iter().find(|b| b.fg == pair.fg && b.bg == pair.bg).map_or(pair.ratio, |b| b.ratio);
@@ -221,12 +218,10 @@ pub fn explain_sized(theme: &ThemeDef, appearance: Appearance, app: Option<&AppI
     // The variant table's own fill and ink pairs are measured, not derived: no colour moves for them, and a
     // shortfall is a finding about the theme.
     for (fg, bg) in crate::variant::variant_pairs() {
-        let (fg, bg) = (TokenRef::Color(fg), TokenRef::Color(bg));
         if pairs.iter().any(|p| p.pair.fg == fg && p.pair.bg == bg) {
             continue;
         }
-        let (TokenRef::Color(f), TokenRef::Color(b)) = (fg, bg) else { continue };
-        let ratio = crate::contrast::contrast_ratio(final_colors.get(f), final_colors.get(b));
+        let ratio = crate::contrast::contrast_ratio(final_colors.get(fg), final_colors.get(bg));
         let minimum = match appearance.contrast {
             crate::Contrast::Standard => values::TEXT_MIN.0,
             crate::Contrast::High => values::TEXT_MIN.1,

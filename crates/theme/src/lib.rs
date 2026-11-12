@@ -1,8 +1,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 //! The Craft design system's theme model: primitives (sRGB and OKLCH colour, WCAG contrast,
 //! 12-step colour ramps, fixed scales), the semantic layer built on them (themes as seeds and
-//! pins, derivation with a contrast pass, Size presets, type roles and [`resolve`]), the few
-//! component tokens (the slider thumb), the user's selection with its resolution
+//! pins, derivation with a contrast pass, Size presets, type roles and [`resolve`]), the user's selection with its resolution
 //! ([`resolve_selection`]), and
 //! [`explain`], which reports how each colour got its value and every contrast pair measured.
 //!
@@ -26,7 +25,6 @@ mod app_sizes;
 mod builtins;
 pub mod color;
 mod color_model;
-mod components;
 pub mod contrast;
 mod derive;
 pub mod dump;
@@ -71,7 +69,6 @@ pub use color::{Hsb, Lab, Oklab, Oklch, Rgba, Srgba};
 pub use color_model::{
     Channel, ColorModel, DefaultOn, HsbModel, LabModel, MAX_CHANNELS, ModelValues, OklchModel, RgbModel, builtin_models, kept_or_converted,
 };
-pub use components::{ComponentField, ComponentTokens, SliderTokens};
 pub use contrast::{contrast_ratio, ensure_contrast, relative_luminance, text_contrast_min};
 pub use derive::{Anchoring, ContrastCheck, PassMove, Ramps, over};
 pub use explain::{ColorOrigin, Explained, PairReport, SizeLayer, SizeOrigin, explain, explain_sized};
@@ -96,10 +93,10 @@ pub use theme::{
 pub use token_group::{GroupValues, TokenGroup};
 pub use tokens::{
     AccentColors, BarSizes, CanvasSizes, CaptionColors, ColorToken, ColorTokens, ControlSizes, DataColors, DockColumnSizes, Edge, EdgeColors,
-    ElevationTokens, FloatSizes, FontSlot, Gaps, HandleSizes, HitSizes, IconSizes, Insets, LengthSizes, LineColors, MarkerSizes, Motion,
+    ElevationTokens, FloatSizes, FontSlot, Gaps, HandleSizes, HitSizes, IconSizes, Insets, KnobShape, LengthSizes, LineColors, MarkerSizes, Motion,
     MotionTokens, OverlayColors, Pads, PaneSizes, PlotSizes, RadiusSet, RailSizes, RampSizes, RowStyle, RulerSizes, RulerTickSizes, ShapeTokens,
-    SizeTokens, SpaceTokens, StateColors, Status, StatusColors, StatusKind, StrokeTokens, SurfaceColors, TextColors, ThumbSizes, TokenRef, Tokens,
-    TypeRole, TypeStyle, TypeTokens, WindowSizes,
+    SizeTokens, SpaceTokens, StateColors, Status, StatusColors, StatusKind, StrokeTokens, SurfaceColors, TextColors, ThumbSizes, Tokens, TypeRole,
+    TypeStyle, TypeTokens, WindowSizes,
 };
 pub use values::ColorSource;
 pub use variant::{CustomVariant, Emphasis, RadiusStep, Variant, VariantLook};

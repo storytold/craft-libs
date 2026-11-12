@@ -3,9 +3,8 @@
 use std::collections::BTreeMap;
 
 use super::color::Rgba;
-use super::components::ComponentField;
 use super::ramp::Mode;
-use super::tokens::{ColorTokens, Edge, RadiusSet, RowStyle, Status, TokenRef};
+use super::tokens::{ColorToken, ColorTokens, Edge, KnobShape, RadiusSet, RowStyle, Status};
 use crate::{AppId, ThemeId};
 
 /// A theme: seeds to derive from, values that override the derivation, and an optional shape.
@@ -30,8 +29,6 @@ pub struct ThemeDef {
     pub pins: ModePins,
     /// Fixed colours used only with [`Contrast::High`], applied over `pins`.
     pub high_contrast: ModePins,
-    /// Component token overrides: the slider thumb lengths.
-    pub components: BTreeMap<ComponentField, f32>,
     /// Whether the theme is meant to have low contrast.
     pub contrast_intent: ContrastIntent,
     /// Per-app overrides, applied over the theme's own values when resolving for that app.
@@ -39,16 +36,13 @@ pub struct ThemeDef {
 }
 
 /// What a theme changes for one app. The pins apply after the theme's pins and before its
-/// high-contrast pins, the high-contrast pins after the theme's high-contrast pins, and the
-/// components after the theme's components.
+/// high-contrast pins, and the high-contrast pins after the theme's high-contrast pins.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AppOverrides {
     /// Fixed colours per mode.
     pub pins: ModePins,
     /// Fixed colours per mode used only with [`Contrast::High`].
     pub high_contrast: ModePins,
-    /// Component token overrides.
-    pub components: BTreeMap<ComponentField, f32>,
 }
 
 impl ThemeDef {
@@ -116,23 +110,23 @@ impl ModeSeeds {
     }
 }
 
-/// Fixed colours for some semantic tokens and component colour fields, and references: tokens
+/// Fixed colours for some colour tokens, and references: tokens
 /// that take another token's final value (`"{accent.solid}"` in a theme file).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Pins {
     /// Tokens pinned to a colour.
-    pub colors: BTreeMap<TokenRef, Rgba>,
-    /// Tokens pinned to the final value of another colour token or colour field, after
+    pub colors: BTreeMap<ColorToken, Rgba>,
+    /// Tokens pinned to the final value of another colour token, after
     /// derivation and the contrast pass, in the same theme, mode, contrast and size. Resolution
     /// replaces each with a colour pin. A reference to a token pinned in the theme reads the
     /// pinned value. A token in `colors` and `refs` of the same layer takes the reference.
-    pub refs: BTreeMap<TokenRef, TokenRef>,
+    pub refs: BTreeMap<ColorToken, ColorToken>,
 }
 
 impl Pins {
     /// The pinned colour of `token`, if any. A reference is not a colour until resolution.
-    pub fn get(&self, token: impl Into<TokenRef>) -> Option<Rgba> {
-        self.colors.get(&token.into()).copied()
+    pub fn get(&self, token: ColorToken) -> Option<Rgba> {
+        self.colors.get(&token).copied()
     }
 
     /// Whether nothing is pinned or referenced.
@@ -141,9 +135,9 @@ impl Pins {
     }
 }
 
-impl<K: Into<TokenRef>> FromIterator<(K, Rgba)> for Pins {
-    fn from_iter<I: IntoIterator<Item = (K, Rgba)>>(iter: I) -> Pins {
-        Pins { colors: iter.into_iter().map(|(k, v)| (k.into(), v)).collect(), refs: BTreeMap::new() }
+impl FromIterator<(ColorToken, Rgba)> for Pins {
+    fn from_iter<I: IntoIterator<Item = (ColorToken, Rgba)>>(iter: I) -> Pins {
+        Pins { colors: iter.into_iter().collect(), refs: BTreeMap::new() }
     }
 }
 
@@ -194,6 +188,8 @@ pub struct ShapeSeed {
     pub edge: Option<EdgeSeed>,
     /// Replaces the preset's row style.
     pub rows: Option<RowStyle>,
+    /// The knob shape; round when unset.
+    pub knob: Option<KnobShape>,
 }
 
 /// Per-tier additions to the corner radii, in logical pixels.

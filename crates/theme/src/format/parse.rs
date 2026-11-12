@@ -4,18 +4,17 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
-use super::{EDGE, ErrorKind, FormatError, FormatErrors, LENGTH, MAX_THEME_BYTES, OFFSET, ROWS, SCHEMA, SCHEMA_VERSION, ThemeFile};
+use super::{EDGE, ErrorKind, FormatError, FormatErrors, KNOB, LENGTH, MAX_THEME_BYTES, OFFSET, ROWS, SCHEMA, SCHEMA_VERSION, ThemeFile};
 use crate::color::Rgba;
-use crate::components::ComponentField;
 use crate::scale::Radius;
 use crate::theme::{
     AppOverrides, ContrastIntent, EdgeSeed, ModePins, ModeSeeds, Pins, RadiusOffset, SeedOverrides, Seeds, ShapeSeed, ThemeDef, Variants,
 };
-use crate::tokens::{ColorToken, RadiusSet, RowStyle, Status, TokenRef};
+use crate::tokens::{ColorToken, KnobShape, RadiusSet, RowStyle, Status};
 use crate::{AppId, ThemeId};
 
-/// Parses and validates a theme file. Unknown keys are allowed anywhere except in colour and
-/// component maps, and kept for [`write`](super::write). Every field error is reported, not
+/// Parses and validates a theme file. Unknown keys are allowed anywhere except in colour maps, and
+/// kept for [`write`](super::write). Every field error is reported, not
 /// only the first.
 pub fn parse(bytes: &[u8]) -> Result<ThemeFile, FormatErrors> {
     let stop = |path: &[&str], kind| Err(FormatErrors(vec![FormatError { path: path.iter().map(|s| (*s).to_owned()).collect(), kind }]));
@@ -157,7 +156,6 @@ impl Parser {
             Some(hc) => self.at("high_contrast", |p| p.mode_pins(hc, variants, false)),
             None => Some(ModePins::default()),
         };
-        let components = self.components(raw);
         let apps = self.apps(raw, variants);
         let id = id?;
         Some(ThemeDef {
@@ -170,7 +168,6 @@ impl Parser {
             variants,
             pins: pins?,
             high_contrast: high_contrast?,
-            components: components?,
             contrast_intent,
             apps: apps?,
         })
@@ -243,7 +240,23 @@ impl Parser {
                     None
                 }
             });
-            Some(Some(ShapeSeed { radius: radius?, radius_offset: radius_offset?, button_radius: button_radius?, edge: edge?, rows: rows? }))
+            let knob = p.at("knob", |p| match shape.get("knob") {
+                None | Some(Value::Null) => Some(None),
+                Some(Value::String(s)) if s == "round" => Some(Some(KnobShape::Round)),
+                Some(Value::String(s)) if s == "tab" => Some(Some(KnobShape::Tab)),
+                Some(_) => {
+                    p.fail(ErrorKind::BadValue { expected: KNOB });
+                    None
+                }
+            });
+            Some(Some(ShapeSeed {
+                radius: radius?,
+                radius_offset: radius_offset?,
+                button_radius: button_radius?,
+                edge: edge?,
+                rows: rows?,
+                knob: knob?,
+            }))
         })
     }
 
@@ -386,22 +399,14 @@ impl Parser {
                 continue;
             }
             ok &= self.at(key, |p| {
-                let Some(token) = TokenRef::from_path(key) else {
+                let Some(token) = ColorToken::from_path(key) else {
                     p.fail(ErrorKind::UnknownToken);
                     return false;
                 };
-                if matches!(token, TokenRef::Component(_)) {
-                    p.fail(ErrorKind::PinNotColor);
-                    return false;
-                }
                 if let Some(name) = v.as_str().and_then(reference_name) {
-                    return match TokenRef::from_path(name) {
+                    return match ColorToken::from_path(name) {
                         None => {
                             p.fail(ErrorKind::UnknownReference { name: name.to_owned() });
-                            false
-                        }
-                        Some(TokenRef::Component(_)) => {
-                            p.fail(ErrorKind::ReferenceNotColor { name: name.to_owned() });
                             false
                         }
                         Some(target) => {
@@ -411,7 +416,7 @@ impl Parser {
                     };
                 }
                 match p.colour(v) {
-                    Some(c) if c.a() < 255 && matches!(token, TokenRef::Color(t) if t.is_opaque_surface()) => {
+                    Some(c) if c.a() < 255 && token.is_opaque_surface() => {
                         p.fail(ErrorKind::NotOpaque);
                         false
                     }
@@ -424,37 +429,6 @@ impl Parser {
             });
         }
         ok.then_some(pins)
-    }
-
-    /// The `components` map of `obj`.
-    fn components(&mut self, obj: &Map<String, Value>) -> Option<BTreeMap<ComponentField, f32>> {
-        let Some(m) = self.optional_object(obj, "components") else { return Some(BTreeMap::new()) };
-        self.at("components", |p| {
-            let mut out = BTreeMap::new();
-            let mut ok = true;
-            for (key, v) in m {
-                ok &= p.at(key, |p| match p.component_value(key, v) {
-                    Some((field, value)) => {
-                        out.insert(field, value);
-                        true
-                    }
-                    None => false,
-                });
-            }
-            ok.then_some(out)
-        })
-    }
-
-    fn component_value(&mut self, key: &str, v: &Value) -> Option<(ComponentField, f32)> {
-        if ColorToken::from_path(key).is_some() {
-            self.fail(ErrorKind::ColorNotPerMode);
-            return None;
-        }
-        let Some(field) = ComponentField::from_path(key) else {
-            self.fail(ErrorKind::UnknownToken);
-            return None;
-        };
-        Some((field, self.length(v)?))
     }
 
     fn apps(&mut self, raw: &Map<String, Value>, variants: Variants) -> Option<BTreeMap<AppId, AppOverrides>> {
@@ -482,10 +456,9 @@ impl Parser {
                         Some(hc) => p.at("high_contrast", |p| p.mode_pins(hc, variants, false)),
                         None => Some(ModePins::default()),
                     };
-                    let components = p.components(app);
-                    match (pins, high_contrast, components) {
-                        (Some(pins), Some(high_contrast), Some(components)) => {
-                            out.insert(id, AppOverrides { pins, high_contrast, components });
+                    match (pins, high_contrast) {
+                        (Some(pins), Some(high_contrast)) => {
+                            out.insert(id, AppOverrides { pins, high_contrast });
                             true
                         }
                         _ => false,

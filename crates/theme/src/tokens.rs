@@ -1,8 +1,7 @@
-//! Semantic tokens: the resolved values component tokens derive from. Colours, shape, space,
+//! Semantic tokens: the resolved values component styles derive from. Colours, shape, space,
 //! sizes, type roles, elevation and motion, all concrete.
 
 use super::color::Rgba;
-use super::components::ComponentTokens;
 
 mod color;
 mod size;
@@ -12,7 +11,7 @@ pub use color::*;
 pub use size::*;
 pub use type_motion::*;
 
-/// Every resolved token: the semantic layer and the component tokens.
+/// Every resolved token.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Tokens {
     /// Colours.
@@ -31,8 +30,6 @@ pub struct Tokens {
     pub elevation: ElevationTokens,
     /// Animations.
     pub motion: MotionTokens,
-    /// The component tokens.
-    pub component: ComponentTokens,
 }
 
 impl Tokens {

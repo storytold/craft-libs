@@ -1,7 +1,7 @@
 //! The theme under inspection, what the user picked in the panels, and the caches of the two sweeps.
 
 use craft_theme::report::{ContrastReport, contrast_report};
-use craft_theme::{AppId, AppSizes, Appearance, Explained, ThemeDef, ThemeId, TokenRef, explain_sized};
+use craft_theme::{AppId, AppSizes, Appearance, ColorToken, Explained, ThemeDef, ThemeId, explain_sized};
 use std::sync::Arc;
 
 /// The theme and appearance the panels explain, and the app whose pins apply.
@@ -26,13 +26,13 @@ impl<'a> ThemeSubject<'a> {
     }
 }
 
-/// A row the user picked in the browser, the Problems view or the detail: a colour or component token, or a size
-/// by its path.
+/// A row the user picked in the browser, the Problems view or the detail: a colour token, or a size by its
+/// path.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Pick {
-    /// A colour or component token.
-    Token(TokenRef),
+    /// A colour token.
+    Token(ColorToken),
     /// A size, by its path such as `size.control.md`.
     Size(String),
 }

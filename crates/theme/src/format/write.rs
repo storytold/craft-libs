@@ -1,32 +1,15 @@
 //! Writing a theme file: the parsed JSON updated with the theme's values, in a stable order.
 
-use std::collections::BTreeMap;
-
 use serde_json::{Map, Number, Value};
 
 use super::{FormatErrors, SCHEMA, SCHEMA_VERSION, ThemeFile};
-use crate::components::ComponentField;
 use crate::scale::Radius;
 use crate::theme::{AppOverrides, ContrastIntent, EdgeSeed, ModePins, ModeSeeds, Pins, ShapeSeed, ThemeDef, Variants};
-use crate::tokens::RowStyle;
+use crate::tokens::{KnobShape, RowStyle};
 
 /// Top-level keys in the order a file lists them; other keys follow, sorted.
-const TOP_ORDER: [&str; 14] = [
-    "schema",
-    "schema_version",
-    "id",
-    "name",
-    "version",
-    "variants",
-    "contrast_intent",
-    "seeds",
-    "shape",
-    "light",
-    "dark",
-    "high_contrast",
-    "components",
-    "apps",
-];
+const TOP_ORDER: [&str; 13] =
+    ["schema", "schema_version", "id", "name", "version", "variants", "contrast_intent", "seeds", "shape", "light", "dark", "high_contrast", "apps"];
 
 /// The file as pretty-printed JSON ending in a newline. Known values come from `file.theme`;
 /// unknown keys come from the file that was parsed. Keys are sorted below the top level. Fails
@@ -80,7 +63,6 @@ fn update(raw: &mut Map<String, Value>, t: &ThemeDef) {
     mode_maps(raw, &t.pins);
     mode_seed_maps(raw, &t.mode_seeds);
     section(raw, "high_contrast", |hc| mode_maps(hc, &t.high_contrast));
-    set_map(raw, "components", component_map(&t.components));
 
     if let Some(Value::Object(apps)) = raw.get_mut("apps") {
         apps.retain(|k, _| t.apps.keys().any(|id| id.as_str() == k));
@@ -141,12 +123,19 @@ fn update_shape(shape: &mut Map<String, Value>, s: &ShapeSeed) {
             shape.insert("rows".to_owned(), Value::String(if r == RowStyle::Divided { "divided" } else { "rounded" }.to_owned()));
         }
     }
+    match s.knob {
+        None => {
+            shape.remove("knob");
+        }
+        Some(k) => {
+            shape.insert("knob".to_owned(), Value::String(if k == KnobShape::Round { "round" } else { "tab" }.to_owned()));
+        }
+    }
 }
 
 fn update_app(app: &mut Map<String, Value>, o: &AppOverrides) {
     mode_maps(app, &o.pins);
     section(app, "high_contrast", |hc| mode_maps(hc, &o.high_contrast));
-    set_map(app, "components", component_map(&o.components));
 }
 
 /// Writes each mode's seed overrides as `seeds` inside its pin map, after `mode_maps`.
@@ -212,12 +201,8 @@ fn set_map(dst: &mut Map<String, Value>, key: &str, map: Map<String, Value>) {
 }
 
 fn pin_map(pins: &Pins) -> Map<String, Value> {
-    let refs = pins.refs.iter().map(|(t, target)| (t.path(), Value::from(format!("{{{}}}", target.path()))));
-    pins.colors.iter().filter(|(t, _)| !pins.refs.contains_key(t)).map(|(t, c)| (t.path(), Value::from(c.to_hex()))).chain(refs).collect()
-}
-
-fn component_map(components: &BTreeMap<ComponentField, f32>) -> Map<String, Value> {
-    components.iter().map(|(f, &v)| (f.path(), length(v))).collect()
+    let refs = pins.refs.iter().map(|(t, target)| (t.path().to_owned(), Value::from(format!("{{{}}}", target.path()))));
+    pins.colors.iter().filter(|(t, _)| !pins.refs.contains_key(t)).map(|(t, c)| (t.path().to_owned(), Value::from(c.to_hex()))).chain(refs).collect()
 }
 
 fn length(v: f32) -> Value {
