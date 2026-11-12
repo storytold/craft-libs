@@ -24,13 +24,11 @@ use crate::style::{ComponentStyle, Corners, DataColor, Flags, IconLook, StyleCol
 use craft_behavior::{AccessAction, AccessData, Flow, IconId, Insets, Metrics, Mixed, NavShape, PartKey, PressPhase, Proposal, Roving, Sense};
 use craft_keymap::Mods;
 use craft_theme::variant::{Emphasis, Tone};
-use craft_theme::{Rgba, Srgba, Stateful, States, TypeRole, Variant, over};
+use craft_theme::{Opacity, Rgba, Srgba, Stateful, States, TypeRole, Variant, over};
 use egui::{Color32, CornerRadius, Pos2, Rect, Response, Vec2};
 
 /// Stars a rating has.
 const STARS: u8 = 5;
-/// The share of the scrim's opacity that veils a disabled tile.
-const DISABLED_VEIL: f32 = 0.6;
 /// The share of the scrim's opacity that veils a dimmed, rejected or hidden tile's picture.
 const DIM_VEIL: f32 = 0.45;
 
@@ -645,7 +643,9 @@ impl Component for Tile<'_> {
         let pill = cx.with_variant(pill_variant(Tone::Neutral)).variant_look();
         let plate = c(colors.surface.scrim);
         let on_bar = |ink: StyleColor, side: f32| IconLook::new(side, Stateful::new(ink)).on(Stateful::new(plate));
-        let veil = Stateful::new(c(clear)).off(States::new(c(clear), c(clear), c(clear), c(colors.surface.scrim.faded(DISABLED_VEIL))));
+        // A disabled tile's picture moves toward the disabled fill as a disabled surface's fill does.
+        let disabled = c(colors.state.disabled_fill.faded(Opacity::DISABLED));
+        let veil = Stateful::new(c(clear)).off(States::new(c(clear), c(clear), c(clear), disabled));
         TileStyle {
             surface,
             metrics: Metrics::new().padding(Insets::new(sizes.inset, sizes.inset, sizes.inset, sizes.inset)).gap(sizes.tight),
