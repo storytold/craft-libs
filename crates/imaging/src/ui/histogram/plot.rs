@@ -164,6 +164,7 @@ type Caption = (f32, String, Vec2);
 ///   (a taller original is clamped to the top of the plot) and on its own scale in the RGB look.
 /// - **Marker, markers:** a tick at a level, standing on the bottom of the plot; markers add a caption beside the
 ///   tick, level with its top.
+/// - **Cut:** a line across the whole plot at a level, in the selection's colour: where a threshold splits the tones.
 /// - **Selection** (Photoshop's Histogram panel): a press and drag over the plot sets a band over whole bin slots,
 ///   a click or Escape clears it. With the plot focused the Left and Right arrows move the end edge and Shift with
 ///   them the start edge; with no selection they make one at the marker, else the middle. Levels are bin positions.
@@ -189,6 +190,9 @@ pub struct Histogram<'a> {
     /// A tick at this level, the sampled pixel's tone.
     #[prop(quantity = "level")]
     marker: Option<f32>,
+    /// A line across the whole plot at this level: where a threshold splits the tones.
+    #[prop(quantity = "level")]
+    cut: Option<f32>,
     /// Labelled ticks, each `(level, caption)`: the black point, white point and mid of a levels adjustment.
     #[prop]
     markers: &'a [(f32, Label)],
@@ -224,6 +228,7 @@ impl<'a> Histogram<'a> {
             value: None,
             outline: None,
             marker: None,
+            cut: None,
             markers: &[],
             selection: None,
             stale: None,
@@ -511,6 +516,9 @@ impl Component for Histogram<'_> {
             let tick = (style.marker_width, style.marker_height);
             for level in self.marker.into_iter().chain(self.shaped.iter().map(|(level, ..)| *level)) {
                 painter.painter.extend(marker_shapes(rect, bins, level, tick, style.marker));
+            }
+            if let Some(level) = self.cut {
+                painter.painter.extend(marker_shapes(rect, bins, level, (style.marker_width, rect.height()), style.selection));
             }
         }
         if self.bordered {

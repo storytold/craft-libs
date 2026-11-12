@@ -21,10 +21,10 @@ struct ThresholdMemory {
     began: Option<f64>,
 }
 
-/// Threshold: the image's histogram with a marker at the level, then the Threshold Level row (1..=255, default 128,
+/// Threshold: the image's histogram with a line across it at the level, then the Threshold Level row (1..=255, default 128,
 /// whole numbers).
 ///
-/// The histogram is the bordered plot of [`Histogram`] with its marker at the level; AccessKit names it "Histogram".
+/// The histogram is the bordered plot of [`Histogram`] cut at the level; AccessKit names it "Histogram".
 /// The row behaves as an [`AdjustSliders`](super::super::AdjustSliders) row.
 #[must_use = "show the editor with `show`"]
 #[derive(Pattern)]
@@ -62,7 +62,7 @@ impl<'a> ThresholdEditor<'a> {
             let now = read(&mut level, cx).unwrap_or(THRESHOLD_DEFAULT).clamp(THRESHOLD_MIN, THRESHOLD_MAX);
             let empty = HistogramData::tone(&[0u32; THRESHOLD_BINS][..], ChannelColor::Neutral);
             let data = histogram.unwrap_or(&empty);
-            let _ = Histogram::new(words.histogram.clone(), data).bordered().marker(now as f32).show(ui);
+            let _ = Histogram::new(words.histogram.clone(), data).bordered().cut(now as f32).show(ui);
             let row = AdjustField::new("level", words.threshold_level.clone(), THRESHOLD_MIN..=THRESHOLD_MAX, THRESHOLD_DEFAULT);
             let mut run = Run::start(&mut level, context, now, cx.memory::<ThresholdMemory>().began);
             run.slider_row(ui, cx, &row, now, |_, x| x);
