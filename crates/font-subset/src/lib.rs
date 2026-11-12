@@ -7,12 +7,14 @@
 //!   [`subset_renamed`] and [`encode_woff2`] are its two halves.
 //! - [`cut_face`]: one face of a font or collection cut to a set of codepoints, every layout feature kept, not renamed
 //!   (build-time interface faces).
+//! - [`embed_permission`]: what a font's OS/2 `fsType` allows an exported document (PDF) to embed.
 //!
 //! Synchronous and free of I/O.
 
 mod cff;
 pub mod closure;
 pub mod codepoints;
+mod embed;
 mod instance;
 mod rename;
 #[cfg(test)]
@@ -26,6 +28,7 @@ use skrifa::FontRef;
 
 pub use cff::CffError;
 pub use closure::closure;
+pub use embed::{EmbedPermission, Embedding, embed_permission};
 pub use instance::Instance;
 pub use rename::{Licence, Naming};
 pub use woff2::{Quality, Woff2Error};

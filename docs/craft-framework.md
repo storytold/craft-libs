@@ -1241,7 +1241,7 @@ The one font subsetter, on HarfBuzz through `harfbuzz-subset-sys`: glyph closure
 
 | Module | Holds | State |
 | --- | --- | --- |
-| crate root | `subset` (renamed WOFF2 for previews), `subset_renamed`, `encode_woff2`; `cut_face` (one face cut to a character set, every feature kept, for build-time interface faces) | exists |
+| crate root | `subset` (renamed WOFF2 for previews), `subset_renamed`, `encode_woff2`; `cut_face` (one face cut to a character set, every feature kept, for build-time interface faces); `embed_permission` (what the OS/2 `fsType` lets an exported document embed) | exists |
 | `closure` | Characters a shaper may need beyond the text | exists |
 | `codepoints` | The canonical codepoint list of on-demand preview URLs | exists |
 
