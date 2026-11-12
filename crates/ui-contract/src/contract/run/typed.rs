@@ -18,7 +18,7 @@ use crate::runtime::layout_memory::Inputs;
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::overlay::CloseReason;
 use crate::runtime::reads::{self, BindKey};
-use crate::style::{Flags, StateSet, StyleCx, StyleView};
+use crate::style::{Flags, StateSet, StyleCx, StyleView, UiTokens};
 use craft_behavior::{EditEvent, Flow, ItemSource, KeyRole, PartRef, Proposal, Roving, Sense};
 use craft_theme::Variant;
 use egui::{Context, Id, Rect, Ui, Vec2};
@@ -189,6 +189,10 @@ impl<C: Component> Erased for Typed<'_, '_, C> {
 
     fn extent(&mut self, ui: &Ui, at: ShowAt, id: Id, scx: &StyleCx<'_>) -> Vec2 {
         self.hooks.extent(self.comp.get_ref(), ui, at, id, scx)
+    }
+
+    fn pad(&self, tokens: &UiTokens) -> f32 {
+        self.hooks.pad(self.comp.get_ref(), tokens)
     }
 
     fn host(&mut self, at: HostCx<'_>) -> Box<dyn Host> {

@@ -1,11 +1,14 @@
 //! Fill propagates down a column whose width is given: a content-sized column there passes the width on, so its fill
 //! children take it and the column with them. Where the width comes from content (a popover's body, a row) the
-//! column holds its fill children and shows them across the width it settles on.
+//! column holds its fill children and shows them across the width it settles on. A collection that fills the width
+//! follows the same rule as a container.
 
+use craft_behavior::keyed;
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Props as _, Show as _, ShowCollection as _, ShowContainer as _, Sizing};
 use craft_ui::display::{Divider, Text};
 use craft_ui::layout_components::{Row, Stack};
+use craft_ui::list::{List, ListRow};
 use craft_ui::popover::Popover;
 use craft_ui::table::{MetadataGroup, MetadataRow, MetadataTable};
 use craft_ui::testing::{Frames, last_pass_measuring_runs, measuring_runs, trial};
@@ -119,4 +122,69 @@ fn a_content_column_that_passes_its_width_measures_as_often_as_a_fill_width_one(
     assert!(hug > 0, "the first frame measures the column");
     assert_eq!(hug, fill, "the content column measures as often as the fill-width one");
     assert!(hug_settled.is_empty() && fill_settled.is_empty(), "a settled frame measures nothing: {hug_settled:?} {fill_settled:?}");
+}
+
+const ROWS: [&str; 2] = ["Exposure", "ISO"];
+
+/// A column of a long heading over a fill-width list of short rows, or over a fill-width stack of the same rows when
+/// `list` is false. Records the widths of the column, the heading and the list or stack.
+fn list_column(ui: &mut Ui, list: bool, seen: &Cell<(f32, f32, f32)>) {
+    let shown = Stack::new().id_salt("column").show(ui, |ui, _| {
+        let text = Text::new(LONG).show(ui).rect.width();
+        let filled = if list {
+            let keys = [0_usize, 1];
+            let source = keyed(&keys, |key: &usize| *key);
+            let rows = List::new("Rows").sizing(Sizing::FillWidth).natural_height(true);
+            rows.show_items(ui, &source, &mut |key, _| ListRow::new(ROWS[*key])).response.rect.width()
+        } else {
+            let stack = Stack::new().fill_width().id_salt("rows").show(ui, |ui, _| ROWS.iter().for_each(|row| _ = Text::new(*row).show(ui)));
+            stack.output.rect.width()
+        };
+        (text, filled)
+    });
+    if let Some((text, filled)) = shown.inner {
+        seen.set((shown.output.rect.width(), text, filled));
+    }
+}
+
+/// A fill-width collection follows the column it sits in: in a popover's column it measures from its rows, never sets
+/// the column's width and shows across it; in a column given its width it takes that width.
+#[trial]
+fn a_fill_width_list_is_held_in_a_content_column_and_takes_a_given_one() {
+    let seen = Cell::new((0.0, 0.0, 0.0));
+    Frames::new().idle(4, |ui| {
+        Popover::new("Column", Bind::given(true)).show(ui, |ui, _| list_column(ui, true, &seen));
+    });
+    let (column, text, list) = seen.get();
+    assert!(column > 0.0, "the popover shows its column");
+    assert!((column - text).abs() <= SNAP, "the column is as wide as its heading, not the screen: {column} vs {text}");
+    assert!((list - column).abs() <= SNAP, "the list shows across the column: {list} vs {column}");
+
+    let given_seen = Cell::new((0.0, 0.0, 0.0));
+    let room = given(&mut Frames::new(), 4, |ui| list_column(ui, true, &given_seen));
+    let (_, _, list) = given_seen.get();
+    assert!((list - room).abs() <= SNAP, "in a given column the list takes the width it is given: {list} vs {room}");
+}
+
+/// Holding a fill-width list costs the column no measuring run of its own: it measures as often as the same column
+/// holding a fill-width stack, and a settled frame measures nothing.
+#[trial]
+fn a_column_holding_a_fill_width_list_measures_as_often_as_one_holding_a_stack() {
+    let runs = |list: bool| {
+        let mut frames = Frames::new();
+        let seen = Cell::new((0.0, 0.0, 0.0));
+        let show = |frames: &mut Frames, n: usize| {
+            frames.idle(n, |ui| {
+                Popover::new("Column", Bind::given(true)).show(ui, |ui, _| list_column(ui, list, &seen));
+            });
+        };
+        show(&mut frames, 1);
+        let first: u32 = measuring_runs(&frames.ctx).iter().map(|(_, runs)| runs).sum();
+        show(&mut frames, 5);
+        (first, last_pass_measuring_runs(&frames.ctx))
+    };
+    let ((list, list_settled), (stack, stack_settled)) = (runs(true), runs(false));
+    assert!(stack > 0, "the first frame measures the column");
+    assert!(list <= stack, "the list's column measures no more than the stack's: {list} vs {stack}");
+    assert!(list_settled.is_empty() && stack_settled.is_empty(), "a settled frame measures nothing: {list_settled:?} {stack_settled:?}");
 }

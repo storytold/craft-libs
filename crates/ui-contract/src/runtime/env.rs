@@ -273,6 +273,13 @@ impl Scoped {
         crate::style::control_metrics(&self.tokens, size, self.line_ratio)
     }
 
+    /// Whether the enclosing body gives a child that fills the width its width: it does not size from its content and
+    /// is no content column. Elsewhere such a child measures from its content and the column holds it at the width
+    /// the column settles on.
+    pub(crate) const fn gives_width(&self) -> bool {
+        !self.content.0 && !self.content_column
+    }
+
     /// Ends the layout room of the enclosing body: its flow grid and content column.
     pub(crate) fn start_room(&mut self) {
         self.grid = None;

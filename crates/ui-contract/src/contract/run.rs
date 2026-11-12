@@ -17,7 +17,7 @@ use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::overlay::CloseReason;
 use crate::runtime::reads::{self, BindKey, Sample};
 use crate::runtime::{commands, focus, inspect, keys, memory};
-use crate::style::{Ink, StateSet, StyleCx, StyleView};
+use crate::style::{Ink, StateSet, StyleCx, StyleView, UiTokens};
 use craft_behavior::{Flow, Input, KeyRole, NavMove, PartRef, PressState, Proposal, Roving, Sense};
 use craft_theme::Variant;
 use egui::{Context, Id, Pos2, Rect, Response, Ui, Vec2};
@@ -188,6 +188,12 @@ pub(crate) trait ShapeHooks<C: Component> {
     /// The axes the shape's body scrolls on, vertical then horizontal.
     fn scrolls(&self, _comp: &C) -> (bool, bool) {
         (false, false)
+    }
+
+    /// The padding the shape's props add on every side of the content, over the style's (`Resolved::pad`): step 5
+    /// adds it to the measured size and step 7 insets the content rect by it.
+    fn pad(&self, _comp: &C, _tokens: &UiTokens) -> f32 {
+        0.0
     }
 
     /// What the shape adds to the content size at step 5, before padding and `min_size`.
@@ -485,6 +491,7 @@ pub(crate) trait Erased {
     fn sized(&self, ui: &Ui, id: Id, size: Vec2) -> Vec2;
     fn arena(&self) -> bool;
     fn extent(&mut self, ui: &Ui, at: ShowAt, id: Id, scx: &StyleCx<'_>) -> Vec2;
+    fn pad(&self, tokens: &UiTokens) -> f32;
     fn host(&mut self, at: HostCx<'_>) -> Box<dyn Host>;
     fn record(&mut self, stage: &mut MemoryStage, ctx: &Context, id: Id);
 }
@@ -835,7 +842,7 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     // 7 parts
     p.trace.mark(Step::Parts);
     let flow = Flow::new(rect, rtl);
-    let content_rect = flow.inset(metrics.padding);
+    let content_rect = flow.inset(steps::padding(&metrics, resolved.pad));
     let mut parts = PartsStep { decls: Default::default(), rovings: Vec::new(), scrolls: Vec::new(), text: super::text::TextStep::default() };
     if !inert && facts.text() {
         parts.text.commit_now = focus::commit_now(&ctx) == Some(id);
@@ -1126,7 +1133,7 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
 /// Step 5's size for `input`: what the component measures plus `extent`, padded and bounded by its style.
 fn measured(t: &mut dyn Erased, input: &MeasureIn<'_>, style: &dyn StyleView, resolved: &Resolved<'_>, extent: Vec2) -> (Vec2, Inputs) {
     let (content, inputs) = t.measure_content(input, resolved);
-    (steps::measure(style, input, content, extent, resolved.sizing), inputs)
+    (steps::measure(style, input, content, extent, resolved), inputs)
 }
 
 /// The pipeline: steps 1 to 17 for one component, whatever its type and shape.
@@ -1160,7 +1167,7 @@ pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<T
         }
     }
     let mut stage = if sizing { MemoryStage::open_peek(&ctx, id) } else { MemoryStage::open(&ctx, id) };
-    let resolved = steps::resolved(id, &step1, &common);
+    let resolved = Resolved { pad: t.pad(&env.tokens), ..steps::resolved(id, &step1, &common) };
     // 4 value. A sizing pass reads the cancel and ends nothing: its stage is a copy, and the real run reads the
     // cancel again.
     let mixed = t.value(&mut stage, id, step1.command.as_deref(), sizing);
@@ -1372,7 +1379,7 @@ pub(super) fn measure_shape(t: &mut dyn Erased, ui: &Ui, id: Option<Id>, proposa
     let mixed = t.peek_value(ui.ctx(), id, step1.command.as_deref());
     let scx = steps::style_cx(ui.ctx(), &env, &step1);
     let style = t.style(ui.ctx(), &scx);
-    let resolved = steps::resolved(id, &step1, &common);
+    let resolved = Resolved { pad: t.pad(&env.tokens), ..steps::resolved(id, &step1, &common) };
     let (at, width) = match proposal {
         Proposal::Width(width) => (ShowAt::Flow, Some(width)),
         Proposal::Size(size) => (ShowAt::Rect(Rect::from_min_size(ui.available_rect_before_wrap().min, size)), None),

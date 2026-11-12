@@ -246,20 +246,13 @@ impl<'a> FileListPicker<'a> {
                 let source = Rows::new(paths);
                 let mut selection =
                     now.selected.as_ref().filter(|path| paths.contains(path)).map_or_else(Selection::default, |path| Selection::single(path.clone()));
-                let events = Stack::new()
-                    .surface(SurfaceKind::Sunken)
-                    .pad(Pad::Control)
-                    .show(ui, |ui, _| {
-                        let list = List::new(words.files.clone()).id_salt("files");
-                        let list = if folder {
-                            list.select(SelectMode::None)
-                        } else {
-                            list.select(SelectMode::Single).deletable(true).reorder(ReorderRule::new()).selection(Bind::bound(&mut selection))
-                        };
-                        list.show_items(ui, &source, &mut |path, _| file_row(path, info)).events
-                    })
-                    .inner
-                    .unwrap_or_default();
+                let list = List::new(words.files.clone()).id_salt("files").surface(SurfaceKind::Sunken).pad(Pad::Control);
+                let list = if folder {
+                    list.select(SelectMode::None)
+                } else {
+                    list.select(SelectMode::Single).deletable(true).reorder(ReorderRule::new()).selection(Bind::bound(&mut selection))
+                };
+                let events = list.show_items(ui, &source, &mut |path, _| file_row(path, info)).events;
                 if folder {
                     return;
                 }

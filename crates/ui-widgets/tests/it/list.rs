@@ -517,3 +517,60 @@ fn a_list_paints_the_surface_its_props_name() {
         "a sunken fill covers the list {list:?}: {seen:?}"
     );
 }
+
+/// What a table of the three names shows with `pad`: its rect, its header cell's, its first row's and its empty
+/// text's (the text of an empty table of the same props), and the pad in points.
+fn padded(pad: craft_ui::contract::Pad) -> (egui::Rect, egui::Rect, egui::Rect, egui::Rect, f32) {
+    use craft_behavior::{ColumnKey, ColumnWidth};
+    use craft_ui::contract::{ColumnSpec, pad_of};
+    use craft_ui::runtime::env::Env;
+    use craft_ui::table::Table;
+    use std::cell::Cell;
+    const EMPTY: &str = "No artboards";
+    let shown = Rc::new(Cell::new((egui::Rect::NOTHING, 0.0)));
+    let rig = |keys: &'static [usize], shown: Rc<Cell<(egui::Rect, f32)>>| {
+        let mut fixture = Fixture::new(move |ui| {
+            let source = keyed(keys, |key: &usize| *key);
+            let columns = vec![ColumnSpec::new(ColumnKey::new("name"), "Name", ColumnWidth::Controls(4.0))];
+            let table = Table::new("Artboards", columns).pad(pad).empty(EMPTY).natural_height(true);
+            let out = table.show_items(ui, &source, &mut |key, icx| ListRow::new(NAMES[*key]).cells(icx.cells()));
+            shown.set((out.response.rect, pad_of(&Env::of(ui).tokens, pad)));
+        });
+        fixture.room(Vec2::new(300.0, 200.0));
+        fixture.settle();
+        fixture
+    };
+    let fixture = rig(&[0, 1, 2], shown.clone());
+    let (table, points) = shown.get();
+    let header = fixture.by_label("Name").expect("the header cell shows").rect;
+    let row = fixture.by_label(NAMES[0]).expect("the first row shows").rect;
+    let mut empty = rig(&[], shown);
+    fn text_at(shapes: &[egui::Shape], text: &str) -> Option<egui::Rect> {
+        shapes.iter().find_map(|shape| match shape {
+            egui::Shape::Vec(inner) => text_at(inner, text),
+            egui::Shape::Text(shown) if shown.galley.text() == text => Some(shown.visual_bounding_rect()),
+            _ => None,
+        })
+    }
+    let text = text_at(&empty.frame_shapes(), EMPTY).expect("the empty table says so");
+    (table, header, row, text, points)
+}
+
+/// A table's padding lies between its edge and everything it draws: the header, the rows and the empty text start the
+/// pad further in than in an unpadded table.
+#[trial]
+fn a_padded_table_draws_its_header_rows_and_empty_text_inside_the_pad() {
+    use craft_ui::contract::Pad;
+    let (table, header, row, empty, pad) = padded(Pad::Control);
+    let (bare, bare_header, bare_row, bare_empty, _) = padded(Pad::None);
+    assert!(pad > 0.0, "the control pad is a width");
+    let inside = table.shrink(pad - 0.5);
+    for (name, rect) in [("header", header), ("row", row), ("empty text", empty)] {
+        assert!(inside.contains_rect(rect), "the {name} {rect:?} sits inside the pad of {table:?}");
+    }
+    let start = |rect: egui::Rect, of: egui::Rect| rect.left() - of.left();
+    assert!((start(header, table) - start(bare_header, bare) - pad).abs() <= 1.0, "the header starts the pad further in");
+    assert!((start(row, table) - start(bare_row, bare) - pad).abs() <= 1.0, "the rows start the pad further in");
+    assert!((start(empty, table) - start(bare_empty, bare) - pad).abs() <= 1.0, "the empty text starts the pad further in");
+    assert!((header.top() - table.top() - (bare_header.top() - bare.top()) - pad).abs() <= 1.0, "the header starts the pad lower");
+}

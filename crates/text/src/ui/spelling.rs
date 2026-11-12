@@ -252,22 +252,15 @@ impl CheckSpellingDialog {
                 let source = keyed(&positions, |at: &usize| *at);
                 let mut selection =
                     suggestions.iter().position(|s| s.as_str() == change_to.as_str()).map_or_else(Selection::default, Selection::single);
-                let events = Stack::new()
-                    .fill_width()
+                let events = List::new(words.suggestions.clone())
+                    .select(SelectMode::Single)
+                    .sizing(Sizing::FillWidth)
                     .surface(SurfaceKind::Sunken)
                     .pad(Pad::Control)
-                    .show(ui, |ui, _| {
-                        List::new(words.suggestions.clone())
-                            .select(SelectMode::Single)
-                            // A `Fill` list measures its rows in the content-sized dialog and spans the well.
-                            .sizing(Sizing::Fill)
-                            .natural_height(true)
-                            .selection(Bind::bound(&mut selection))
-                            .show_items(ui, &source, &mut |at, _| ListRow::new(suggestions[*at].clone()))
-                            .events
-                    })
-                    .inner
-                    .unwrap_or_default();
+                    .natural_height(true)
+                    .selection(Bind::bound(&mut selection))
+                    .show_items(ui, &source, &mut |at, _| ListRow::new(suggestions[*at].clone()))
+                    .events;
                 for event in events {
                     match event {
                         CollectionEvent::Selection(SelectionChange::Set(rows)) => {

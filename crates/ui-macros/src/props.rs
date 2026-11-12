@@ -206,6 +206,7 @@ const COLLECTION: &[Forwarded] = &[
 const CONTAINER: &[Forwarded] = &[
     ("command_scope", "::craft_ui::runtime::commands::CommandScope", "Commands of `scope` reach the component while focus is in it."),
     ("surface", "::craft_ui::style::SurfaceKind", "The surface painted behind the body."),
+    ("pad", "::craft_ui::contract::Pad", "The padding tier between the edge and the content."),
     ("live", "::craft_ui::contract::Politeness", "The body is a live region announced with this politeness."),
     ("end", "::craft_ui::contract::EndRegion", "The region at the line's end edge, outside the body scroll."),
     ("position", "::craft_ui::contract::SetPosition", "The component's place in its set, for assistive technology."),

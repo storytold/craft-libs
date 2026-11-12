@@ -356,23 +356,23 @@ impl<'a> GlyphsPanel<'a> {
             Text::new(words.recent.clone()).show(ui);
             let recent: Vec<char> = state.recent.iter().filter_map(|g| g.chars().next()).collect();
             let mut activated: Option<String> = None;
-            let strip = Stack::new().fill_width().surface(SurfaceKind::Sunken).pad(Pad::Control).show(ui, |ui, _| {
-                TileGrid::<usize>::new(words.recent.clone())
-                    .thumb_size(ThumbSize::Medium)
-                    .zoom(RECENT_ZOOM)
-                    .caption(CaptionPlace::None)
-                    .select(SelectMode::Single)
-                    .activate(ActivateOn::Click)
-                    .sizing(craft_ui::contract::Sizing::FillWidth)
-                    .show_items(ui, &Chars(&recent), &mut |key, _| {
-                        let c = recent[*key];
-                        let name = words.cell.fill(&[("char", &c.to_string()), ("code", &code(c))]);
-                        Tile::new(name).thumb(ThumbAspect::SQUARE, paint(&face_family, &face_style, c))
-                    })
-                    .response
-                    .events
-            });
-            for event in strip.inner.unwrap_or_default() {
+            let strip = TileGrid::<usize>::new(words.recent.clone())
+                .thumb_size(ThumbSize::Medium)
+                .zoom(RECENT_ZOOM)
+                .caption(CaptionPlace::None)
+                .select(SelectMode::Single)
+                .activate(ActivateOn::Click)
+                .sizing(craft_ui::contract::Sizing::FillWidth)
+                .surface(SurfaceKind::Sunken)
+                .pad(Pad::Control)
+                .show_items(ui, &Chars(&recent), &mut |key, _| {
+                    let c = recent[*key];
+                    let name = words.cell.fill(&[("char", &c.to_string()), ("code", &code(c))]);
+                    Tile::new(name).thumb(ThumbAspect::SQUARE, paint(&face_family, &face_style, c))
+                })
+                .response
+                .events;
+            for event in strip {
                 if let CollectionEvent::Activate(key) = event
                     && let Some(c) = recent.get(key)
                 {

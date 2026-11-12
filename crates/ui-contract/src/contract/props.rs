@@ -218,6 +218,8 @@ pub struct Resolved<'p> {
     pub(crate) ltr_axis: bool,
     /// `Common.sizing`: a leaf's own sizing.
     pub(crate) sizing: Option<Sizing>,
+    /// The padding the shape's props add on every side, over the style's: a collection's `ContainerProps::pad`.
+    pub(crate) pad: f32,
     /// `Common.description`.
     pub(crate) description: Option<&'p str>,
     /// `Common.tooltip`.

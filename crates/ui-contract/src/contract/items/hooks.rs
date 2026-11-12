@@ -20,7 +20,7 @@ use crate::runtime::env::WheelScope;
 use crate::runtime::env::{AppValues, ArenaId, Env, ItemFacts};
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::{focus, keys, layout_memory, lazy, overlay, wheel};
-use crate::style::{ComponentStyle as _, ScrollBarKind, StyleCx, SurfaceKind, scroll_bar_look, surface_style};
+use crate::style::{ComponentStyle as _, ScrollBarKind, StyleCx, SurfaceKind, UiTokens, scroll_bar_look, surface_style};
 use craft_behavior::{
     Axis, CancelReason, EditEvent, Intent, ItemLayout, Mixed, Proposal, ScrollPos, ScrollSpan, SelectionModel, Sense, WheelRoom, WheelTaker,
 };
@@ -180,8 +180,11 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             ShowAt::Flow => crate::layout::flow_room(ui),
         };
         self.room = room;
-        let content = Env::of(ui).content;
-        self.from_content = (content.0 && crate::runtime::measure::active(ui.ctx()), content.1);
+        let env = Env::of(ui);
+        let room = Self::inner_room(comp, &env.tokens, room);
+        // Where the enclosing body does not give the width, a measuring run takes the collection's width from its
+        // content, whether it fills or fills the width, as a container does.
+        self.from_content = (!env.gives_width() && crate::runtime::measure::active(ui.ctx()), env.content.1);
         self.header.measure(scx);
         self.header.read_content(ui.ctx(), id);
         let bounded = room.x.is_finite();
@@ -233,40 +236,37 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let empty = if self.source.is_empty() { comp.empty_height(width, ui, scx) } else { 0.0 };
         let rows = self.content.y.max(empty).max(floor);
         let height = cap.map_or(rows, |cap| rows.min(cap)) + self.header.height;
+        // Under a body that does not give the width, the layout above was made at the enclosing room: the measuring
+        // run offers the width from content instead.
+        let from_content = self.from_content.0 && !self.content_sized(comp);
         if !(self.scrolls && room.y.is_finite()) {
-            // Under a body sized from its content, a `Fill` collection offers its least width here too: the body
-            // has no room of its own to hand it, and the layout above was made at the enclosing room.
-            if self.from_content.0 && comp.props(Internal::new()).sizing == Sizing::Fill {
-                let wide = if self.header.has_columns() { self.header.least_width() } else { self.largest_in(comp, ui, id, room).x.min(room.x) };
-                return Vec2::new(wide, height);
-            }
-            return Vec2::new(self.content.x, height);
+            let wide = if from_content { self.width_from_content(comp, ui, id, room, item, scx) } else { self.content.x };
+            return Vec2::new(wide, height);
         }
         // A scrolling collection in a bounded room: `Content` takes its rows up to the room, `Fill` the room.
+        let wide = if self.content_sized(comp) {
+            self.content.x
+        } else if from_content {
+            self.width_from_content(comp, ui, id, room, item, scx)
+        } else {
+            0.0
+        };
         match comp.props(Internal::new()).sizing {
-            // Under a body sized from its content, a measuring run takes the columns' least width and the rows up to
-            // the room, as a content-sized collection does: the body has no room of its own to hand it.
-            Sizing::Fill => {
-                let (x, y) = self.from_content;
-                let wide = if !x {
-                    0.0
-                } else if self.header.has_columns() {
-                    self.header.least_width()
-                } else {
-                    self.largest_in(comp, ui, id, room).x.min(room.x)
-                };
-                Vec2::new(wide, if y || self.capped { height.min(room.y) } else { 0.0 })
-            }
-            Sizing::Content | Sizing::FillWidth => Vec2::new(if self.content_sized(comp) { self.content.x } else { 0.0 }, height.min(room.y)),
+            // Under a body sized from its content along the height, the rows take up to the room, as a content-sized
+            // collection's do: the body has no room of its own to hand it.
+            Sizing::Fill => Vec2::new(wide, if self.from_content.1 || self.capped { height.min(room.y) } else { 0.0 }),
+            Sizing::Content | Sizing::FillWidth => Vec2::new(wide, height.min(room.y)),
         }
+    }
+
+    fn pad(&self, comp: &C, tokens: &UiTokens) -> f32 {
+        Self::props_pad(comp, tokens)
     }
 
     fn sized(&self, comp: &C, _: &Ui, _: Id, size: Vec2) -> Vec2 {
         let sizing = comp.props(Internal::new()).sizing;
-        // Only a `Fill` collection measures its width from its content under a content-sized body; `FillWidth` takes
-        // the room it is given on every run.
-        let width_from_content = self.from_content.0 && sizing == Sizing::Fill;
-        let width = if self.room.x.is_finite() && !self.content_sized(comp) && !width_from_content { self.room.x.max(size.x) } else { size.x };
+        // A collection that measured its width from its content takes that width; the column it sits in holds it.
+        let width = if self.room.x.is_finite() && !self.content_sized(comp) && !self.from_content.0 { self.room.x.max(size.x) } else { size.x };
         let height = match (self.scrolls && self.room.y.is_finite(), sizing) {
             (true, Sizing::Fill) if !self.from_content.1 && !self.capped => self.room.y,
             (true, Sizing::Fill) => size.y.min(self.room.y),

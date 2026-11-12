@@ -29,7 +29,7 @@ pub(crate) use finish::{before_finish, inert_response, record_size, value_change
 pub(super) use id::measuring;
 pub(crate) use id::{draft, id, keeping_ids};
 pub(crate) use label::scrub_by_label;
-pub(crate) use measure::{MeasureIn, guard, measure, measure_content, measure_cx};
+pub(crate) use measure::{MeasureIn, guard, measure, measure_content, measure_cx, padding};
 pub(crate) use paint::{fade, paint_focus, paint_part_layers, paint_surface, surface_ink};
 pub(crate) use parts::{PartsStep, check_parts, declares_none};
 pub(crate) use place::place;

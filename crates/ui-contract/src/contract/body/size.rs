@@ -116,7 +116,7 @@ impl<'b> BodyHooks<'b> {
         let (x, y) = (sizing != Sizing::Content, sizing == Sizing::Fill);
         match (at, &props.mount) {
             (ShowAt::Rect(_), _) => (true, true),
-            (ShowAt::Flow, Mount::Inline) => (x && !env.content.0 && !self.held(props, env), y && !env.content.1),
+            (ShowAt::Flow, Mount::Inline) => (x && env.gives_width(), y && !env.content.1),
             (ShowAt::Flow, _) => (x, y),
         }
     }

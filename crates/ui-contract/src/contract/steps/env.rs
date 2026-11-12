@@ -64,6 +64,7 @@ pub(crate) fn resolved<'p>(id: Id, step: &'p EnvStep, common: &'p Common) -> Res
         default_stop: common.default_stop,
         ltr_axis: common.ltr_axis,
         sizing: common.sizing,
+        pad: 0.0,
         description: common.description.as_deref(),
         tooltip: common.tooltip.as_ref(),
         doc_key: common.doc_key,

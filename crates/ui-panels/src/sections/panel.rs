@@ -145,13 +145,6 @@ impl<'a> Panel<'a> {
         self
     }
 
-    /// The padding tier around the body, regular by default. A header band keeps its own inset.
-    #[must_use]
-    pub fn pad(mut self, pad: Pad) -> Self {
-        self.props = self.props.pad(pad);
-        self
-    }
-
     /// The action parts at the end of the header, in reading order.
     #[must_use]
     pub fn actions(mut self, actions: impl IntoIterator<Item = HeaderAction>) -> Self {

@@ -11,6 +11,7 @@ use crate::runtime::access::SetPosition;
 use crate::runtime::env::{Env, ItemFacts};
 use crate::runtime::layout_memory;
 use crate::runtime::memory::{MemoryStage, sub};
+use crate::style::{StyleCx, UiTokens};
 use craft_behavior::Proposal;
 use craft_behavior::layout_memory::measure_tolerance;
 use egui::{Id, Pos2, Rect, Ui, Vec2};
@@ -20,6 +21,26 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
     /// column cells at the widths the header resolves for them.
     pub(super) fn content_sized(&self, comp: &C) -> bool {
         comp.props(Internal::new()).sizing == Sizing::Content
+    }
+
+    /// The padding the collection's props add on every side of its rows (`ShapeHooks::pad`).
+    pub(super) fn props_pad(comp: &C, tokens: &UiTokens) -> f32 {
+        crate::contract::pad_of(tokens, comp.props(Internal::new()).pad)
+    }
+
+    /// The room the header and rows lay out in: `room` less the padding the props add on both sides. Step 5 adds the
+    /// padding back and step 7 insets the content rect by it.
+    pub(super) fn inner_room(comp: &C, tokens: &UiTokens, room: Vec2) -> Vec2 {
+        (room - Vec2::splat(2.0 * Self::props_pad(comp, tokens))).max(Vec2::ZERO)
+    }
+
+    /// The width a collection that fills the width takes where it is not given one, in a measuring run under a body
+    /// sized from its content: the header's least width, else its largest row's, at least the width it asks for
+    /// (`Collection::ideal_width`), up to `room`. The column it sits in holds it at that width and shows it across
+    /// the width the column settles on.
+    pub(super) fn width_from_content(&mut self, comp: &C, ui: &Ui, id: Id, room: Vec2, item: Option<Vec2>, scx: &StyleCx<'_>) -> f32 {
+        let rows = if self.header.has_columns() { self.header.least_width() } else { self.largest_in(comp, ui, id, room).x };
+        rows.max(comp.ideal_width(item, scx)).min(room.x)
     }
 
     /// The largest ideal size of the rows in this pass, and the widest cell each column's items reported: each row is
@@ -37,6 +58,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             ShowAt::Rect(rect) => rect.size(),
             ShowAt::Flow => crate::layout::flow_room(at.ui),
         };
+        let room = Self::inner_room(comp, &at.env.tokens, room);
         if self.source.is_empty() || (room.x.is_finite() && !self.content_sized(comp) && !comp.measures_items() && !self.header.has_content_columns())
         {
             return;

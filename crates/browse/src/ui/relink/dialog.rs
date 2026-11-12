@@ -862,6 +862,7 @@ impl<K: Clone + PartialEq + Send + Sync + 'static> Model<K> {
             .select(SelectMode::Single)
             .selection(Bind::bound(&mut selection))
             .sort(self.layout.sort.clone())
+            .sizing(Sizing::FillWidth)
             .show_items(ui, &source, &mut |&row, icx| {
                 let data = &rows[row];
                 ListRow::new(data.owner.clone())
