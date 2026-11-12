@@ -113,6 +113,26 @@ pub fn wav_order(channel_config: u8) -> Option<&'static [usize]> {
     })
 }
 
+/// The channel configuration whose speakers a stream has: its own, or for configuration 0 the
+/// configuration 3–6 that its program config element spells out. A program config element lists
+/// front, side, back and LFE elements in that order, so one that opens with a centre and a front
+/// pair and goes on with exactly the elements of a configuration has that configuration's speakers
+/// (and [`wav_order`]). Any other list has no speaker order that can be told, and gives 0: ffmpeg's
+/// 5.1(side), for one, lists the pair first and already decodes in WAV order.
+#[cfg(feature = "aac-decode")]
+pub fn speaker_config(asc: &AudioSpecificConfig) -> u8 {
+    if asc.channel_config != 0 {
+        return asc.channel_config;
+    }
+    let centre_then_pair = asc.pce.as_ref().is_some_and(|p| p.front.iter().map(|e| e.0).eq([false, true]));
+    if !centre_then_pair {
+        return 0;
+    }
+    let elements = asc.layout();
+    let same = |config: &u8| config_layout(*config).is_some_and(|l| l.iter().map(|e| e.0).eq(elements.iter().map(|e| e.0)));
+    (3..=6).find(same).unwrap_or(0)
+}
+
 /// The order the [`Encoder`] takes its input in, from WAV order: for each encoder input channel
 /// (AAC element order, see [`EncoderConfig::channels`]), the WAV-order channel to feed it. The
 /// inverse of [`wav_order`] for 3 to 7 channels; `None` for mono and stereo (already in order) and
@@ -278,6 +298,30 @@ mod tests {
 #[cfg(test)]
 mod order_tests {
     use super::*;
+
+    /// A program config element in the shape of a channel configuration has that configuration's
+    /// speakers, with the centre first. ffmpeg's 5.1(side) lists its pair first and already decodes
+    /// in WAV order, so it stays as it is.
+    #[cfg(feature = "aac-decode")]
+    #[test]
+    fn a_program_config_element_takes_the_configuration_it_matches() {
+        let with = |pce| AudioSpecificConfig { pce: Some(pce), ..AudioSpecificConfig::lc(3, 0) };
+        let centre_first = ProgramConfig { front: vec![(false, 0), (true, 0)], back: vec![(true, 1)], lfe: vec![0], ..Default::default() };
+        assert_eq!(speaker_config(&with(centre_first)), 6);
+        let three = ProgramConfig { front: vec![(false, 0), (true, 0)], ..Default::default() };
+        assert_eq!(speaker_config(&with(three)), 3);
+        let ffmpeg = ProgramConfig { front: vec![(true, 0), (false, 0)], side: vec![(false, 1)], back: vec![(true, 1)], ..Default::default() };
+        assert_eq!(speaker_config(&with(ffmpeg)), 0);
+        // the same element types with no front pair: the side pair is not left and right
+        let no_front_pair =
+            ProgramConfig { front: vec![(false, 0)], side: vec![(true, 0)], back: vec![(true, 1)], lfe: vec![0], ..Default::default() };
+        assert_eq!(speaker_config(&with(no_front_pair)), 0);
+        // 7.1 in a program config element is not one of the unambiguous configurations
+        let wide =
+            ProgramConfig { front: vec![(false, 0), (true, 0)], side: vec![(true, 1)], back: vec![(true, 2)], lfe: vec![0], ..Default::default() };
+        assert_eq!(speaker_config(&with(wide)), 0);
+        assert_eq!(speaker_config(&AudioSpecificConfig::lc(3, 6)), 6);
+    }
 
     /// `aac_order` undoes `wav_order` for each channel count the encoder maps to a configuration
     /// (3–6 channels: configurations 3–6; 7: configuration 11).

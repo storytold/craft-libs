@@ -24,7 +24,7 @@
 //! (ST 381-3; Annex B access units with in-band SPS / PPS) with long-GOP index entries (temporal
 //! offsets, key-frame offsets, prediction flags), and Broadcast Wave PCM (ST 382, 8–32 bit).
 
-mod labels;
+pub(crate) mod labels;
 #[cfg(test)]
 mod tests;
 
@@ -182,6 +182,12 @@ pub struct PictureDesc {
     /// Chroma subsampling: (2, 1) 4:2:2, (2, 2) 4:2:0, (1, 1) 4:4:4.
     pub subsampling: (u32, u32),
     pub color: ColorSpace,
+    /// Interlaced, stored as two fields per frame (SMPTE 274M line map): frame layout
+    /// SeparateFields, the stored and sampled heights a field's.
+    pub interlaced: bool,
+    /// With `interlaced`: the bottom field (field 2, the odd lines) is the temporally first one
+    /// (field dominance 2); otherwise the top field (field 1) is.
+    pub bottom_field_first: bool,
 }
 
 impl PictureDesc {
@@ -205,6 +211,8 @@ impl PictureDesc {
             depth,
             subsampling,
             color: ColorSpace::Rec709,
+            interlaced: false,
+            bottom_field_first: false,
         }
     }
 }
@@ -345,8 +353,9 @@ pub struct WriterConfig {
 }
 
 impl WriterConfig {
-    /// A configuration with no essence tracks yet. `company` and `product` are `craft-media`:
-    /// an app sets its own names.
+    /// A configuration with no essence tracks yet. `company` and `product` are `craft-media` and
+    /// `version` is this crate's: an app sets its own. The identification set's product UID is
+    /// derived from `product`.
     pub fn new(pattern: Pattern, edit_rate: Rational, ids: PackageIds) -> Self {
         WriterConfig {
             pattern,
@@ -878,7 +887,7 @@ impl<W: Write + Seek> MxfWriter<W> {
             .p(0x3C01, &utf16(&cfg.company))
             .p(0x3C02, &utf16(&cfg.product))
             .p(0x3C04, &utf16(&cfg.version))
-            .p(0x3C05, &hash128(b"craft-media MXF writer"))
+            .p(0x3C05, &hash128(format!("{} MXF writer", cfg.product).as_bytes()))
             .p(0x3C06, &ts);
         s.write(&mut out);
         // Content storage, essence container data
@@ -988,17 +997,25 @@ impl<W: Write + Seek> MxfWriter<W> {
                     let black = 16u32 << (depth - 8);
                     let white = 235u32 << (depth - 8);
                     let range = (225u32 << (depth - 8)) + 1;
+                    // frame layout FullFrame, or SeparateFields with field heights and the first
+                    // active line of each field (SMPTE 274M 1080i: 21 and 584)
+                    let (layout, stored_h, lines) =
+                        if p.interlaced { (1u8, p.height.div_ceil(2), [21u32, 21 + p.height / 2 + 23]) } else { (0, p.height, [0, 0]) };
                     s.p(0x3004, &t.container)
-                        .u8(0x320C, 0)
+                        .u8(0x320C, layout)
                         .u32(0x3203, p.width)
-                        .u32(0x3202, p.height)
+                        .u32(0x3202, stored_h)
                         .u32(0x3205, p.width)
-                        .u32(0x3204, p.height)
+                        .u32(0x3204, stored_h)
                         .u32(0x3209, p.width)
-                        .u32(0x3208, p.height)
+                        .u32(0x3208, stored_h)
                         .rat(0x320E, p.aspect)
-                        .p(0x320D, &batch(&[&0u32.to_be_bytes(), &0u32.to_be_bytes()], 4))
-                        .p(0x3201, &p.coding.coding_label())
+                        .p(0x320D, &batch(&[&lines[0].to_be_bytes(), &lines[1].to_be_bytes()], 4));
+                    if p.interlaced {
+                        // field dominance: the temporally first field (1 top, 2 bottom)
+                        s.u8(0x3212, if p.bottom_field_first { 2 } else { 1 });
+                    }
+                    s.p(0x3201, &p.coding.coding_label())
                         .p(0x3210, &tcl)
                         .p(0x321A, &ce)
                         .p(0x3219, &cp)
@@ -1303,13 +1320,22 @@ pub struct OpAtomPcm {
 }
 
 /// A complete OP-Atom PCM file in memory. `samples` are interleaved integer sample values in the
-/// range of `bits` (e.g. -32768..=32767 for 16 bits).
+/// range of `bits` (e.g. -32768..=32767 for 16 bits). The identification names `craft-media`;
+/// [`write_opatom_pcm_as`] takes the app's own.
 pub fn write_opatom_pcm(opts: &OpAtomPcm, samples: &[i32]) -> io::Result<Vec<u8>> {
+    let d = WriterConfig::new(Pattern::OpAtom, Rational::new(1, 1), opts.ids.clone());
+    write_opatom_pcm_as(opts, samples, &d.company, &d.product, &d.version)
+}
+
+/// [`write_opatom_pcm`] with the identification set's company name, product name and version
+/// string (the [`WriterConfig`] fields of the same names).
+pub fn write_opatom_pcm_as(opts: &OpAtomPcm, samples: &[i32], company: &str, product: &str, version: &str) -> io::Result<Vec<u8>> {
     let sd = SoundDesc { sample_rate: opts.sample_rate, channels: opts.channels.max(1), bits: opts.bits };
     let rate = opts.edit_rate.unwrap_or(Rational::new(opts.sample_rate as i32, 1));
     let mut cfg = WriterConfig::new(Pattern::OpAtom, rate, opts.ids.clone());
     cfg.sound = vec![sd];
     cfg.timecode = opts.timecode;
+    (cfg.company, cfg.product, cfg.version) = (company.into(), product.into(), version.into());
     let mut w = MxfWriter::new(io::Cursor::new(Vec::new()), cfg)?;
     let bps = sd.bits.div_ceil(8).clamp(1, 4) as usize;
     let frames = samples.len() / sd.channels as usize;
