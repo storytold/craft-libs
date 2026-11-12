@@ -192,6 +192,10 @@ pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>, trailing: Option<
         placed.trailing = Rect::from_min_size(egui::pos2(cell.min.x, middle - input.trailing.y / 2.0), input.trailing);
     }
     let label_id_for_scope = sub(input.scope, "label");
+    // A label shows with the control it names: where a bar's view shows the two only in part, neither shows.
+    if crate::contract::run::cut_by_bar_view(env, placed.label.union(placed.control)) {
+        kids.set_clip_rect(Rect::NOTHING);
+    }
     let shown = Props::id(leaf, label_id_for_scope).show_at(&mut kids, placed.label);
     Env::restore(&ctx, installed);
     if let Some(fact) = reset.filter(|_| shown.double_click || shown.dot_click) {
@@ -259,7 +263,16 @@ pub(crate) fn flow_leaf<C: Show>(
     }
     // The child runs under the inside label its measures saw.
     let installed = under.inside.clone().map(|inside| Env::install_for(ui, env.derive_local(|scoped| scoped.inside_label = Some(inside))));
+    // The control and its label are one member of a bar's line: hidden together, as the label step hid the label.
+    let shown_clip = ui.clip_rect();
+    let cut = !ui.is_sizing_pass() && crate::contract::run::cut_by_bar_view(&env, placed.label.union(placed.control));
+    if cut {
+        ui.set_clip_rect(Rect::NOTHING);
+    }
     let output = crate::contract::run::show_leaf(crate::contract::Props::id(child, id), ui, crate::contract::run::ShowAt::Rect(control), None);
+    if cut {
+        ui.set_clip_rect(shown_clip);
+    }
     if let Some(installed) = installed {
         Env::restore(ui.ctx(), installed);
     }

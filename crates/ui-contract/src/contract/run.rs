@@ -299,7 +299,7 @@ impl<C: Component> ShapeHooks<C> for LeafHooks {
     }
 
     fn sized(&self, comp: &C, ui: &Ui, id: Id, size: Vec2) -> Vec2 {
-        let room = crate::layout::flow_fill_room(ui);
+        let room = crate::layout::leaf_fill_room(ui);
         // Along an axis the enclosing body sizes from its content, a child that fills keeps its measured size, so it
         // never sets that size. Across an unwrapped row's line it is shown across the line the row settled on in its
         // measuring run, where the child measured at its own size.
@@ -849,13 +849,6 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
         return;
     }
     p.real = true;
-    // A member of a bar's line that its view shows only in part is not shown until a scroll brings it in whole: it
-    // keeps its stop, so Tab reaches it and the reveal scrolls it in.
-    let shown_clip = ui.clip_rect();
-    let cut = p.p.member() && cut_by_bar_view(env, rect);
-    if cut {
-        ui.set_clip_rect(Rect::NOTHING);
-    }
     let inspected = p.trace.recording() && inspect::open_element(ui, id, facts.name);
     let e = &mut *p.p;
     // 7 parts
@@ -904,6 +897,14 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     // A control that draws only its mark senses over its own label too: indicator, gap and label are one target.
     let label = if facts.labelled_after && !inert { scope::claim(&ctx) } else { None };
     let hit = label.map_or(rect, |label| rect.union(label));
+    // A member of a bar's line, with the label it claims, that its view shows only in part is not shown until a
+    // scroll brings it in whole: it keeps its stop, so Tab reaches it and the reveal scrolls it in. Only a member in
+    // flow is judged: a part shown at a rect, and a control in a label scope, belong to the member around them.
+    let shown_clip = ui.clip_rect();
+    let cut = e.member() && matches!(at, ShowAt::Flow) && !scope::in_label(&ctx) && cut_by_bar_view(env, hit);
+    if cut {
+        ui.set_clip_rect(Rect::NOTHING);
+    }
     let sensing::RootResult { mut response, parts: results, press, activation, activated_member, sense: root_sense } =
         sense_root(ui, member, RootSpec { id, rect: hit, own_sense: own, own: decls, enabled }, arena);
     if label.is_some() {
@@ -1154,7 +1155,7 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
 
 /// Whether `rect`, in the scrolling body of a bar, lies partly outside the body's view along x. A member wider than the
 /// view shows in part, since no scroll shows it whole.
-fn cut_by_bar_view(env: &Env, rect: Rect) -> bool {
+pub(crate) fn cut_by_bar_view(env: &Env, rect: Rect) -> bool {
     if !env.values.get::<crate::contract::InBar>().0 {
         return false;
     }
@@ -1222,7 +1223,7 @@ pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<T
     // room (`mount_room`). A body that fills the width of a bounded room takes the room or its share of it (`sized`),
     // so it is no unit.
     let in_flow = matches!(at, ShowAt::Flow) && t.fills().is_none();
-    let fill_body = shape == ShapeKind::Body && in_flow && t.in_flow() && t.fills_width() && crate::layout::flow_room_filling(ui).x.is_finite();
+    let fill_body = shape == ShapeKind::Body && in_flow && t.in_flow() && t.fills_width() && crate::layout::flow_room(ui).x.is_finite();
     let shrink = env.shrink.filter(|_| in_flow && (shape == ShapeKind::Leaf || (shape == ShapeKind::Body && t.in_flow() && !fill_body)));
     let cap = match shrink {
         Some(crate::layout::Shrink::Apply(row)) if shape == ShapeKind::Leaf => crate::layout::shrink_cap(&ctx, row, id),

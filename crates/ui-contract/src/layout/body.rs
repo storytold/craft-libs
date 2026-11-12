@@ -581,13 +581,13 @@ pub(crate) fn flow_region(ui: &Ui) -> Rect {
 /// `Row` body that encloses `ui` directly, else the rest of `ui`'s layout.
 pub(crate) fn flow_room(ui: &Ui) -> Vec2 {
     let cell = Env::of(ui).grid.and_then(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| cursors.0.get(&body).map(Cursor::room)));
-    cell.unwrap_or_else(|| open_room(ui, false))
+    cell.unwrap_or_else(|| open_room(ui))
 }
 
 /// The rest of `ui`'s layout (the room offered to the container, less the earlier siblings and gaps; a whole line in a row
 /// that wraps); unbounded along the axes of the scrolling body that encloses it, whose region is only as large as egui
-/// can make it, except along x for a child that `fills`, which there fills what the view shows (`view_room`).
-fn open_room(ui: &Ui, fills: bool) -> Vec2 {
+/// can make it.
+fn open_room(ui: &Ui) -> Vec2 {
     let (x, y) = Env::of(ui).unbounded;
     let mut room = ui.available_size_before_wrap();
     // In a row that wraps, a child that does not fit the rest of the line goes on the next one: its room is a line.
@@ -601,22 +601,24 @@ fn open_room(ui: &Ui, fills: bool) -> Vec2 {
     if let Some(offered) = env.offered.or(env.row_room) {
         room.x += offered - ui.max_rect().width();
     }
-    let unbounded_x = if fills { view_room(ui).unwrap_or(f32::INFINITY) } else { f32::INFINITY };
-    Vec2::new(if x { unbounded_x } else { room.x }, if y { f32::INFINITY } else { room.y })
+    Vec2::new(if x { f32::INFINITY } else { room.x }, if y { f32::INFINITY } else { room.y })
 }
 
 /// The room a child that fills its width fills in `ui`: `flow_room`, except that in a `Content` column of a `Grid` it
 /// is the column's width, so the child never measures as the room and pushes the next column out of it.
 pub(crate) fn flow_fill_room(ui: &Ui) -> Vec2 {
     let cell = Env::of(ui).grid.and_then(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| cursors.0.get(&body).map(Cursor::fill_room)));
-    cell.unwrap_or_else(|| open_room(ui, true))
+    cell.unwrap_or_else(|| open_room(ui))
 }
 
-/// `flow_room` for a container that fills its width: along x in a body that scrolls along x it is what the view shows
-/// from the container's start, so the container fills the view and what it holds past that scrolls.
-pub(crate) fn flow_room_filling(ui: &Ui) -> Vec2 {
-    let cell = Env::of(ui).grid.and_then(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| cursors.0.get(&body).map(Cursor::room)));
-    cell.unwrap_or_else(|| open_room(ui, true))
+/// `flow_fill_room` for a leaf that fills its width: along x in a body that scrolls along x it is what the view shows
+/// from the leaf's start, so the leaf fills the view and what is past it scrolls.
+pub(crate) fn leaf_fill_room(ui: &Ui) -> Vec2 {
+    let room = flow_fill_room(ui);
+    match view_room(ui).filter(|_| room.x.is_infinite()) {
+        Some(view) => Vec2::new(view, room.y),
+        None => room,
+    }
 }
 
 /// Whether the next child shown in flow in `ui` goes in a `Content` column of the `Grid` body that encloses `ui`

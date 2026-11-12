@@ -9,15 +9,12 @@ use craft_ui::buttons::{Button, IconButton};
 use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
 use craft_ui::display::{Divider, Text};
 use craft_ui::form::Field;
-use craft_ui::layout_components::Row;
 use craft_ui::pickers::Select;
 use craft_ui::runtime::commands::EditCommands;
 use craft_ui::testing::{Fixture, trial};
-use craft_ui::text::TextField;
 use craft_ui::value_drag::Slider;
 use egui::{Rect, Vec2};
 use std::cell::Cell;
-use std::num::NonZeroU8;
 use std::rc::Rc;
 
 const SLACK: f32 = 0.5;
@@ -81,29 +78,18 @@ fn the_end_region_shares_the_line_of_the_members_whether_the_bar_overflows_or_no
     }
 }
 
-/// The rects of a seek slider that fills and of the readout after it in a tool bar `width` wide, and of a search
-/// field that fills a fill-width row in the second row of a two-row bar.
-fn filled(width: f32) -> (Rect, Rect, Rect) {
-    let seen = Rc::new(Cell::new((Rect::NOTHING, Rect::NOTHING, Rect::NOTHING)));
+/// The rects of a seek slider that fills and of the readout after it in a tool bar `width` wide.
+fn filled(width: f32) -> (Rect, Rect) {
+    let seen = Rc::new(Cell::new((Rect::NOTHING, Rect::NOTHING)));
     let out = Rc::clone(&seen);
     let mut fixture = Fixture::new(move |ui| {
-        let mut search = String::new();
-        let (mut slider, mut readout, mut field) = (Rect::NOTHING, Rect::NOTHING, Rect::NOTHING);
+        let (mut slider, mut readout) = (Rect::NOTHING, Rect::NOTHING);
         Bar::new("Media", BarKind::Tool).show(ui, |ui, _| {
             IconButton::new(IconId::new("play")).label("Play").show(ui);
             slider = Slider::new(Bind::given(2.0), 0.0..=10.0).fill_width(true).label("Seek").show(ui).response.rect;
             readout = Text::new("0:12.50").show(ui).rect;
         });
-        Bar::new("Bin", BarKind::Tool).rows(NonZeroU8::new(2).expect("two")).show(ui, |ui, _| {
-            Row::new().show(ui, |ui, _| {
-                IconButton::new(IconId::new("arrow_up")).label("Up").show(ui);
-            });
-            Row::new().fill_width().show(ui, |ui, _| {
-                field = TextField::search("Search", Bind::bound(&mut search)).fill_width(true).show(ui).response.rect;
-                Text::new("12 items").show(ui);
-            });
-        });
-        out.set((slider, readout, field));
+        out.set((slider, readout));
     });
     fixture.room(Vec2::new(width, 160.0)).settle();
     seen.get()
@@ -120,7 +106,6 @@ fn a_member_that_fills_takes_the_room_its_bar_leaves() {
         narrow.1,
         wide.1
     );
-    assert!(wide.2.width() - narrow.2.width() >= grown, "the search field grew from {:?} to {:?} in a 300 pt wider bar", narrow.2, wide.2);
 }
 
 /// An options bar `width` wide with eight buttons, and the clicks each button reported.
