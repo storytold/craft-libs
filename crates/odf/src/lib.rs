@@ -38,6 +38,8 @@ pub mod crypt;
 pub mod flat;
 mod manifest;
 mod package;
+#[cfg(feature = "text")]
+pub mod text;
 pub mod zip_guard;
 
 pub use manifest::{Encryption, FileEntry, MANIFEST_NS, MANIFEST_PATH, Manifest};
