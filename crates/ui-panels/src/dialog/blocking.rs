@@ -160,7 +160,7 @@ impl Container for BlockingOverlay<'_> {
         let Some(message) = self.message.clone() else { return };
         Row::new().show(ui, |ui, _| {
             Spinner::new().show(ui);
-            Text::new(message).show(ui);
+            Text::new(message.clone()).show(ui);
         });
     }
 

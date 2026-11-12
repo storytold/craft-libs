@@ -1,7 +1,7 @@
 //! A panel shows no header unless it is titled: in a dock the tab names it, and its title only names the group for
 //! assistive technology.
 
-use craft_ui::contract::Role;
+use craft_ui::contract::{Role, ShowContainer as _};
 use craft_ui::sections::Panel;
 use craft_ui::testing::{Fixture, trial};
 

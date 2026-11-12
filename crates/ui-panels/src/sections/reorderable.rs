@@ -53,7 +53,7 @@ pub enum SectionCommands {
 
 /// A button at the end of a section's header (Albums' "+" opens Create Album). A press on it never folds or drags
 /// the section; it is reported as [`SectionEvent::Button`].
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct SectionButton {
     /// The id reported in `SectionEvent::Button`.

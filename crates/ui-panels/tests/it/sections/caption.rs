@@ -1,6 +1,7 @@
 //! A caption-strength section is a quiet label over a group of controls: its title reads as written, with no rule
 //! above it, while a section-strength one sits under a rule.
 
+use craft_ui::contract::ShowContainer as _;
 use craft_ui::sections::{HeaderStrength, Section};
 use craft_ui::testing::{Fixture, trial};
 use egui::{Shape, Vec2};

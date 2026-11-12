@@ -226,7 +226,7 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
             menu.trigger(Trigger::Hold, cx);
             menu.trigger(Trigger::Context, cx);
             let away = match cx.press().phase {
-                PressPhase::DragStart { start, pos } | PressPhase::Drag { start, pos, .. } => {
+                PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } => {
                     start.button == PointerButton::Primary && !cx.rect.contains(pos)
                 }
                 _ => false,
