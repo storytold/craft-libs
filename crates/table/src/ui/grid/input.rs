@@ -63,8 +63,9 @@ impl Preview {
 /// The gesture a drag on one of the grid's parts runs.
 #[derive(Clone, Debug, PartialEq)]
 enum Grab {
-    /// Selecting whole columns (`rows` false) or rows from `anchor`.
-    Lines { rows: bool, anchor: u32 },
+    /// Selecting whole columns (`rows` false) or rows from `anchor`; `extend` when the drag moves the current range's
+    /// far edge (after Shift or Cmd) instead of replacing the selection.
+    Lines { rows: bool, anchor: u32, extend: bool },
     /// Resizing the line `line` of a column (`rows` false) or row axis from `from` points at 100 %.
     Resize { rows: bool, line: u32, from: f32, id: GestureId, last: f32 },
     /// Growing `source` by the fill handle; `menu` for a secondary drag.
@@ -600,8 +601,9 @@ impl CellGrid<'_> {
         (edits, swapped)
     }
 
-    /// A press on a column (`rows` false) or row header: selects the line, a drag selects several, a secondary release
-    /// asks for the header's menu.
+    /// A press on a column (`rows` false) or row header: selects the line, Shift+press extends the current range to it
+    /// from the anchor's line, Cmd+press adds it as a new range, a drag selects several, a secondary release asks for
+    /// the header's menu.
     #[allow(clippy::too_many_arguments)]
     fn line_press(
         edits: &mut Vec<GridEdit>,
@@ -616,23 +618,35 @@ impl CellGrid<'_> {
         let range = |a: u32, b: u32| if rows { Some(space.whole_rows(a.min(b), a.max(b))) } else { space.whole_columns(a.min(b), a.max(b)) };
         match press.phase {
             PressPhase::Down { start, .. } if start.button == PointerButton::Primary => {
-                *grab = Some(Grab::Lines { rows, anchor: line });
-                if let Some(range) = range(line, line) {
-                    if press.mods.cmd {
-                        selection.add(CellAt::new(range.first, range.columns.start), space);
+                // Shift extends the current range from the anchor's line; Cmd adds the line as a new range (Excel).
+                let held = selection.anchor_cell().copied().map(|cell| if rows { cell.row } else { cell.column });
+                let (anchor, extend) = match held {
+                    Some(held) if press.mods.shift => (held, true),
+                    _ => (line, press.mods.cmd),
+                };
+                *grab = Some(Grab::Lines { rows, anchor, extend });
+                if let Some(range) = range(anchor, line) {
+                    if press.mods.shift {
+                        selection.extend_current(range, space);
+                    } else if press.mods.cmd {
+                        selection.add_range(range, space);
                     } else {
                         selection.select_range(range, space);
                     }
                 }
             }
             PressPhase::Drag { pos, .. } => {
-                if let Some(Grab::Lines { rows: dragging, anchor }) = grab
+                if let Some(Grab::Lines { rows: dragging, anchor, extend }) = grab
                     && *dragging == rows
                 {
                     let at = geometry.mirror_pos(pos);
                     let to = if rows { geometry.row_at(at.y) } else { geometry.column_at(at.x) };
                     if let Some(range) = range(*anchor, to) {
-                        selection.select_range(range, space);
+                        if *extend {
+                            selection.extend_current(range, space);
+                        } else {
+                            selection.select_range(range, space);
+                        }
                     }
                 }
             }

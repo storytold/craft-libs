@@ -105,6 +105,12 @@ impl Rig {
         self.fixture.part_rect(id, part).expect("the part was sensed")
     }
 
+    /// A click at the centre of `part` with `modifiers` held.
+    fn click_part(&mut self, part: impl Into<PartRef>, modifiers: Modifiers) {
+        let at = self.part_rect(part).center();
+        self.fixture.hold(modifiers).click_at(at).hold(Modifiers::NONE).idle(2);
+    }
+
     fn drag_part(&mut self, part: impl Into<PartRef>, by: Vec2) {
         let from = self.part_rect(part).center();
         self.fixture.drag_at(from, by);
@@ -231,4 +237,27 @@ fn alt_or_ctrl_enter_opens_the_active_cell() {
         assert!(rig.take_edits().iter().any(|edit| matches!(edit, GridEdit::BeginEdit { typed: None, .. })), "{modifiers:?}+Enter opens the editor");
         assert_eq!(rig.active(), Some(CellAt::new(0, 0)), "{modifiers:?}+Enter does not advance");
     }
+}
+
+/// Shift+click on a column header extends the current range from the anchor's column; Cmd+click adds the whole
+/// column as a new range.
+#[trial]
+fn header_shift_click_extends_and_cmd_click_adds_a_whole_line() {
+    let mut rig = rig(None, a1(), 1.0);
+    let column = |at: u64| PartKey::new("column_header").at(at);
+    rig.click_part(column(1), Modifiers::NONE);
+    rig.click_part(column(3), Modifiers::SHIFT);
+    let whole = (0..=SHEET_ROWS - 1, 1..=3);
+    {
+        let state = rig.state.borrow();
+        let ranges = state.selection.ranges();
+        assert_eq!(ranges.len(), 1, "Shift extends the one range: {ranges:?}");
+        assert_eq!((ranges[0].rows(), ranges[0].column_span()), whole, "columns B to D, whole");
+    }
+    rig.click_part(column(5), Modifiers::COMMAND);
+    let state = rig.state.borrow();
+    let ranges = state.selection.ranges();
+    assert_eq!(ranges.len(), 2, "Cmd adds a range: {ranges:?}");
+    assert_eq!((ranges[0].rows(), ranges[0].column_span()), whole, "the first range stays");
+    assert_eq!((ranges[1].rows(), ranges[1].column_span()), (0..=SHEET_ROWS - 1, 5..=5), "the new range is all of column F");
 }

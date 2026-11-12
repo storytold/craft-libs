@@ -523,6 +523,38 @@ impl<K: Value> CellSelection<K> {
         true
     }
 
+    /// Cmd+click (Ctrl+click) on a row or column header: `range` joins as a new range after the others, covered over
+    /// merges unless it is whole lines ([`CellSpace::cover`]); the active cell and the anchor at its top-left. A drag
+    /// from there extends it with [`extend_current`](Self::extend_current). Ends a Tab run.
+    pub fn add_range(&mut self, range: CellRange<K>, space: &CellSpace<'_, K>) -> bool {
+        let Some(placed) = Placed::of(self, space) else {
+            return self.select_range(range, space);
+        };
+        let Some(range) = space.place_range(&range) else {
+            return false;
+        };
+        let range = space.cover(range);
+        let active = range.top_left();
+        let mut ranges = placed.ranges;
+        ranges.push(range);
+        self.store(Placed { current: ranges.len() - 1, ranges, active, anchor: active, tab_run: None }, space)
+    }
+
+    /// Shift+click on a header and a drag over the headers: the current range becomes `range`, covered as
+    /// [`select_range`](Self::select_range) covers it; the other ranges, the active cell and the anchor stay. On the
+    /// empty selection it selects `range`. Ends a Tab run.
+    pub fn extend_current(&mut self, range: CellRange<K>, space: &CellSpace<'_, K>) -> bool {
+        let Some(mut placed) = Placed::of(self, space) else {
+            return self.select_range(range, space);
+        };
+        let Some(range) = space.place_range(&range) else {
+            return false;
+        };
+        placed.ranges[placed.current] = space.cover(range);
+        placed.tab_run = None;
+        self.store(placed, space)
+    }
+
     /// Cmd+click (Ctrl+click) on any cell: a cell a range holds is taken out of the selection (and joins it again
     /// when it was taken out); any other cell joins as a new range ([`add`](Self::add)). It places
     /// the ranges, so it also takes out a cell between the rows of a range; the widget reports the result as
