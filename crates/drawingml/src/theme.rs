@@ -73,7 +73,7 @@ impl Default for Theme {
         let colors = ["000000", "FFFFFF", "1E2B3C", "EDEBE7", "2E6FD8", "F26B1D", "2EA36F", "8A5CD8", "D83F6B", "E3B21C", "2E6FD8", "7A5BA6"];
         Theme {
             name: "Theme".into(),
-            colors: ColorScheme { name: "Default".into(), colors: colors.map(hex) },
+            colors: ColorScheme::new("Default", colors.map(hex)),
             fonts: FontScheme::default(),
             format: default_format(),
             raw_extra: None,
@@ -109,8 +109,8 @@ pub fn default_format() -> FormatScheme {
                 GradientStop { pos: 0.0, color: ph().with(ColorTransform::LumMod(a)).with(ColorTransform::SatMod(103000)) },
                 GradientStop { pos: 1.0, color: ph().with(ColorTransform::LumMod(b)) },
             ],
-            shape: GradientShape::Linear { angle: 90.0, scaled: false },
-            rotate_with_shape: true,
+            shape: Some(GradientShape::Linear { angle: 90.0, scaled: false }),
+            rotate_with_shape: Some(true),
             flip: None,
         })
     };
@@ -181,3 +181,15 @@ mod tests {
         assert_eq!(partial.name, "X");
     }
 }
+
+/// The `a:ext` of a colour scheme that holds its extra named colours and explicit tint rows
+/// ([`ColorScheme::extra`], [`ColorScheme::tints`], [`ColorScheme::computed_tints`]). The URI and
+/// namespace are those of the files already written with it.
+pub const EXT_EXTRA_COLORS: &str = "{D3C7C0DE-0C0A-4E57-9A1E-5C0E0C0DEC01}";
+/// The namespace of the elements inside [`EXT_EXTRA_COLORS`].
+pub const NS_EXTRA_COLORS: &str = "urn:deckcraft:theme:extra-colors:1";
+
+mod read;
+mod write;
+pub use read::read_theme;
+pub use write::theme_xml;

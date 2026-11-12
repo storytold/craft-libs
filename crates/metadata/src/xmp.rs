@@ -53,6 +53,8 @@ const NAMESPACES: &[(&str, &str)] = &[
     ("aux", "http://ns.adobe.com/exif/1.0/aux/"),
     ("lr", "http://ns.adobe.com/lightroom/1.0/"),
     ("Iptc4xmpCore", "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/"),
+    ("Iptc4xmpExt", "http://iptc.org/std/Iptc4xmpExt/2008-02-29/"),
+    ("xmpNote", "http://ns.adobe.com/xmp/note/"),
     // Read-only: develop settings written by other raw developers.
     ("crs", CRS_NS),
     // Read-only: face/pet/focus regions written by Lightroom, digiKam, Picasa and others (MWG Region
@@ -92,9 +94,102 @@ pub struct XmpData {
     /// item order, language alternatives put `x-default` first. Foreign namespaces that reuse a recognized
     /// prefix use `Q{hex-encoded namespace URI}local` instead, so they cannot impersonate known properties.
     pub properties: BTreeMap<String, Vec<String>>,
+    /// True when flattened properties were omitted after reaching the cumulative key-size limit.
+    pub properties_truncated: bool,
     /// Every top-level property with its full structure (arrays of structs such as local
     /// corrections, which [`XmpData::properties`] flattens).
     pub values: BTreeMap<String, XmpValue>,
+    /// The `x:xmptk` attribute of `x:xmpmeta` (older packets: `x:xaptk` of `x:xapmeta`), the name
+    /// of the program that wrote the packet. [`write_xmp_with`] writes [`XmpWrite::toolkit`] there.
+    pub toolkit: Option<String>,
+    /// True when the parsed tree, before flattening or merging repeated properties, names an Exif
+    /// GPS property anywhere or holds a place property (see `LOCATION_PROPERTIES`) with non-blank
+    /// text anywhere, including inside array items that [`XmpData::properties`] flattens to their
+    /// text and repeated structs that [`XmpData::values`] keeps only once.
+    pub names_location: bool,
+}
+
+/// Properties that name a place; a blank one is not a location.
+const LOCATION_PROPERTIES: [&str; 7] = [
+    "Iptc4xmpCore:Location",
+    "Iptc4xmpCore:CountryCode",
+    "photoshop:City",
+    "photoshop:State",
+    "photoshop:Country",
+    "Iptc4xmpExt:LocationShown",
+    "Iptc4xmpExt:LocationCreated",
+];
+
+impl XmpData {
+    /// Whether the XMP inventory names GPS or a non-empty place field. LocationShown and
+    /// LocationCreated are IPTC Extension structures; their flattened array entries can be empty
+    /// strings even when their struct children contain a city or coordinates, so inspect their
+    /// retained structured value and flattened child fields as well. Callers that must prove
+    /// absence must check [`Self::properties_truncated`] first.
+    pub fn has_location_metadata(&self) -> bool {
+        const IPTC_LOCATION_STRUCTS: [&str; 2] = ["Iptc4xmpExt:LocationShown", "Iptc4xmpExt:LocationCreated"];
+        // Every flattened child of one LocationShown/LocationCreated root shares its answer.
+        let mut checked_roots: BTreeMap<&str, bool> = BTreeMap::new();
+        if self.names_location {
+            return true;
+        }
+
+        for (key, values) in &self.properties {
+            let parts = key.split('/');
+            if parts.clone().any(is_gps_name) {
+                // Even an isolated/blank GPS property is not proof that GPS was removed.
+                return true;
+            }
+
+            let Some(location_part) = parts.clone().find(|part| LOCATION_PROPERTIES.contains(part)) else {
+                continue;
+            };
+
+            if values.iter().any(|value| !value.trim().is_empty()) {
+                return true;
+            }
+            if IPTC_LOCATION_STRUCTS.contains(&location_part) {
+                // The scope is the path up to the location field itself, so text elsewhere in an
+                // enclosing struct doesn't count as a place.
+                let scope_len =
+                    key.split('/').take_while(|part| *part != location_part).map(|part| part.len() + 1).sum::<usize>() + location_part.len();
+                let scope = key.get(..scope_len).unwrap_or(key);
+                let scope_has_text = *checked_roots.entry(scope).or_insert_with(|| self.location_scope_has_text(scope));
+                if scope_has_text {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Whether a LocationShown/LocationCreated field (a `/`-separated path from a top-level
+    /// property) holds text in its retained structured value or any flattened child. `values`
+    /// keeps the first text-bearing occurrence across RDF descriptions, while flattened child
+    /// properties retain every occurrence.
+    fn location_scope_has_text(&self, scope: &str) -> bool {
+        let mut parts = scope.split('/');
+        let structured = parts.next().and_then(|root| self.values.get(root)).and_then(|value| parts.try_fold(value, |value, part| value.field(part)));
+        if structured.is_some_and(value_has_text) {
+            return true;
+        }
+        let child_prefix = format!("{scope}/");
+        self.properties
+            .range::<str, _>((std::ops::Bound::Included(child_prefix.as_str()), std::ops::Bound::Unbounded))
+            .take_while(|(candidate, _)| candidate.starts_with(&child_prefix))
+            .any(|(_, nested_values)| nested_values.iter().any(|value| !value.trim().is_empty()))
+    }
+
+    /// The GUID of the JPEG Extended XMP continuation the packet announces
+    /// (`xmpNote:HasExtendedXMP`), matched by local name so an undeclared or foreign prefix can't
+    /// hide the announcement. `Some("")` when the announcement is blank.
+    pub fn extended_xmp_guid(&self) -> Option<&str> {
+        self.properties
+            .iter()
+            .find(|(key, _)| !key.contains('/') && key.rsplit([':', '}']).next() == Some("HasExtendedXMP"))
+            .map(|(_, values)| values.first().map_or("", |value| value.trim()))
+    }
 }
 
 impl XmpData {
@@ -140,15 +235,75 @@ impl XmpValue {
     }
 }
 
+/// Whether a structured value holds any non-blank text. A tree larger than the parser's node
+/// budget counts as text-bearing (the conservative answer for a privacy check): parsed trees are
+/// capped at MAX_NODES, so only a caller-built `XmpData` can reach it, and the walk stays bounded.
+fn value_has_text(value: &XmpValue) -> bool {
+    let mut pending = Vec::new();
+    if pending.try_reserve(1).is_err() {
+        return true;
+    }
+    pending.push(value);
+    let mut visited = 0usize;
+    while let Some(value) = pending.pop() {
+        visited = visited.saturating_add(1);
+        if visited > MAX_NODES {
+            return true;
+        }
+        let children = match value {
+            XmpValue::Text(text) if !text.trim().is_empty() => return true,
+            XmpValue::Text(_) => continue,
+            XmpValue::Array(items) => items.len(),
+            XmpValue::Struct(fields) => fields.len(),
+        };
+        if pending.len().saturating_add(children) > MAX_NODES || pending.try_reserve(children).is_err() {
+            return true;
+        }
+        match value {
+            XmpValue::Array(items) => pending.extend(items),
+            XmpValue::Struct(fields) => pending.extend(fields.values()),
+            XmpValue::Text(_) => {}
+        }
+    }
+    false
+}
+
+/// Insert a property into a struct or description map, keeping an earlier text-bearing value when
+/// the same name repeats with a blank one: an IPTC location struct repeated with an empty
+/// `rdf:li` must not hide the place an export's Remove Location has to refuse. `has_text`
+/// remembers each key's answer so every value is walked at most once.
+fn insert_keeping_text(map: &mut BTreeMap<String, XmpValue>, has_text: &mut BTreeMap<String, bool>, key: String, value: XmpValue) {
+    match map.entry(key) {
+        std::collections::btree_map::Entry::Vacant(slot) => {
+            slot.insert(value);
+        }
+        std::collections::btree_map::Entry::Occupied(mut slot) => {
+            let existing_has_text = match has_text.get(slot.key()) {
+                Some(known) => *known,
+                None => value_has_text(slot.get()),
+            };
+            if existing_has_text {
+                has_text.insert(slot.key().clone(), true);
+                return;
+            }
+            let new_has_text = value_has_text(&value);
+            has_text.insert(slot.key().clone(), new_has_text);
+            slot.insert(value);
+        }
+    }
+}
+
+/// A description or struct node as a map of its fields (attributes and child elements).
 fn node_struct(n: &Node) -> XmpValue {
     let mut m = BTreeMap::new();
+    let mut has_text = BTreeMap::new();
     for (k, v) in &n.attrs {
         if !is_rdf_meta_attr(k) {
-            m.insert(k.clone(), XmpValue::Text(v.clone()));
+            insert_keeping_text(&mut m, &mut has_text, k.clone(), XmpValue::Text(v.clone()));
         }
     }
     for c in &n.children {
-        m.insert(c.name.clone(), node_value(c));
+        insert_keeping_text(&mut m, &mut has_text, c.name.clone(), node_value(c));
     }
     XmpValue::Struct(m)
 }
@@ -189,6 +344,18 @@ pub(crate) const MAX_OPAQUE_NAME_BYTES: usize = 8 * 1024 * 1024;
 /// path (`parent/field`), so a document with a long nested name and a wide child fan-out otherwise
 /// retains its prefix once per property: node limits alone cannot bound that duplication.
 const MAX_KEY_BYTES: usize = 1 << 20;
+
+/// Most namespace declarations in scope at once. Prefix lookup scans them, so declarations times the names of a
+/// start tag is the work; real packets declare a few dozen.
+const MAX_NS_DECLS: usize = 512;
+
+/// Refuses a scope stack holding more than [`MAX_NS_DECLS`] declarations (one count per start tag over a stack at most [`MAX_DEPTH`] deep).
+pub(crate) fn check_scopes(scopes: &[Vec<(String, String)>]) -> Result<(), XmpError> {
+    if scopes.iter().map(Vec::len).sum::<usize>() > MAX_NS_DECLS {
+        return Err(XmpError::TooComplex);
+    }
+    Ok(())
+}
 
 /// Names canonicalised by namespace URI (see [`NAMESPACES`]); conflicting foreign prefixes are opaque.
 pub(crate) fn canonical_name(
@@ -262,6 +429,12 @@ fn xml_safe(s: &str) -> String {
     s.chars().filter(|&c| is_xml_char(c)).collect()
 }
 
+/// Escaped text with each carriage return as `&#13;`: XML end-of-line handling turns a literal one
+/// into a line feed on read.
+fn keep_cr(escaped: std::borrow::Cow<'_, str>) -> String {
+    escaped.replace('\r', "&#13;")
+}
+
 /// Index of the `;` that ends a reference starting at `rest` (its `&`). The scan stops at the first
 /// byte that cannot appear in a name or a numeric reference, so zero-padded references such as
 /// `&#000000097;` are found and each run of name bytes is read once, not once per `&`.
@@ -320,6 +493,7 @@ fn parse_tree(s: &str, extra: &[XmpNamespace]) -> Result<Node, XmpError> {
                     }
                 }
                 scopes.push(scope);
+                check_scopes(&scopes)?;
                 let name = canonical_name(&String::from_utf8_lossy(e.name().as_ref()), &scopes, extra, &mut opaque_budget)?;
                 let attrs = raw_attrs.into_iter().map(|(k, v)| Ok((canonical_name(&k, &scopes, extra, &mut opaque_budget)?, v))).collect::<Result<
                     _,
@@ -383,37 +557,43 @@ fn is_rdf_meta_attr(k: &str) -> bool {
     matches!(k, "rdf:about" | "rdf:ID" | "rdf:nodeID" | "xml:lang" | "rdf:parseType" | "rdf:resource" | "rdf:datatype") || k.starts_with("xmlns")
 }
 
-fn collect_description(d: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize) {
+fn collect_description(d: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize, truncated: &mut bool) {
     for (k, v) in &d.attrs {
+        if is_rdf_meta_attr(k) {
+            continue;
+        }
         // the budget is checked before the path is built, not after
-        if is_rdf_meta_attr(k) || *budget < prefix.len().saturating_add(k.len()) {
+        if *budget < prefix.len().saturating_add(k.len()) {
+            *truncated = true;
             continue;
         }
         let key = format!("{prefix}{k}");
-        if take_key_bytes(&key, budget) {
+        if take_key_bytes(&key, budget, truncated) {
             props.entry(key).or_default().push(v.clone());
         }
     }
     for c in &d.children {
-        collect_property(c, prefix, props, budget);
+        collect_property(c, prefix, props, budget, truncated);
     }
 }
 
 /// Charge one flattened key's length to the key budget; `false` when the budget is spent (the
-/// property is then left out, like other elements a limit has cut).
-fn take_key_bytes(key: &str, budget: &mut usize) -> bool {
+/// property is then left out, like other elements a limit has cut) and the map is marked partial.
+fn take_key_bytes(key: &str, budget: &mut usize, dropped: &mut bool) -> bool {
     let n = key.len();
     if *budget < n {
+        *dropped = true;
         return false;
     }
     *budget -= n;
     true
 }
 
-fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize) {
+fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize, truncated: &mut bool) {
     // a path that can't fit the budget isn't built (a long ancestor path shared by many children
     // would otherwise be copied for each of them after the budget is spent)
     if *budget < prefix.len().saturating_add(p.name.len()) {
+        *truncated = true;
         return;
     }
     let key = format!("{prefix}{}", p.name);
@@ -429,7 +609,7 @@ fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<Str
         if arr.name == "rdf:Alt" {
             items.sort_by_key(|(default, _)| !*default);
         }
-        if take_key_bytes(&key, budget) {
+        if take_key_bytes(&key, budget, truncated) {
             props.entry(key).or_default().extend(items.into_iter().map(|(_, v)| v));
         }
         return;
@@ -438,31 +618,30 @@ fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<Str
     // a struct's path is charged like a key before its fields copy it: that work too is bounded
     // by the budget, kept fields or not
     let is_struct = p.attr("rdf:parseType") == Some("Resource") || p.children.iter().any(|c| c.name == "rdf:Description");
-    if is_struct && !take_key_bytes(&key, budget) {
+    if is_struct && !take_key_bytes(&key, budget, truncated) {
         return;
     }
     if p.attr("rdf:parseType") == Some("Resource") {
-        for c in &p.children {
-            collect_property(c, &struct_prefix, props, budget);
-        }
+        // a Resource struct carries fields as attributes as well as child elements, like a nested Description
+        collect_description(p, &struct_prefix, props, budget, truncated);
         return;
     }
     if let Some(d) = p.children.iter().find(|c| c.name == "rdf:Description") {
-        collect_description(d, &struct_prefix, props, budget);
+        collect_description(d, &struct_prefix, props, budget, truncated);
         return;
     }
     let field_attrs: Vec<&(String, String)> = p.attrs.iter().filter(|(k, _)| !is_rdf_meta_attr(k)).collect();
     if !field_attrs.is_empty() && p.children.is_empty() && p.text.trim().is_empty() {
         for (k, v) in field_attrs {
             let full = format!("{struct_prefix}{k}");
-            if take_key_bytes(&full, budget) {
+            if take_key_bytes(&full, budget, truncated) {
                 props.entry(full).or_default().push(v.clone());
             }
         }
         return;
     }
     let v = p.attr("rdf:resource").map(str::to_string).unwrap_or_else(|| p.text.trim().to_string());
-    if take_key_bytes(&key, budget) {
+    if take_key_bytes(&key, budget, truncated) {
         props.entry(key).or_default().push(v);
     }
 }
@@ -477,21 +656,95 @@ fn find_descriptions<'a>(n: &'a Node, out: &mut Vec<&'a Node>) {
     }
 }
 
-/// XMP GPS coordinate `DDD,MM,SSk` or `DDD,MM.mmk` (k = N/S/E/W) → signed degrees.
-fn parse_gps_coord(s: &str) -> Option<f64> {
+/// Whether a canonical property name is an Exif GPS property.
+fn is_gps_name(name: &str) -> bool {
+    name.starts_with("exif:GPS") || name.starts_with("exifEX:GPS")
+}
+
+/// Whether the tree names an Exif GPS property anywhere or holds a place property with non-blank
+/// text anywhere. Each node is visited at most twice (a place's subtree is scanned once and not
+/// walked again), and the parser caps the tree at `MAX_NODES`.
+fn tree_names_location(root: &Node) -> bool {
+    let mut pending = vec![root];
+    while let Some(node) = pending.pop() {
+        if is_gps_name(&node.name) {
+            return true;
+        }
+        for (name, value) in &node.attrs {
+            if is_gps_name(name) || (LOCATION_PROPERTIES.contains(&name.as_str()) && !value.trim().is_empty()) {
+                return true;
+            }
+        }
+        if LOCATION_PROPERTIES.contains(&node.name.as_str()) {
+            if subtree_has_text(node) {
+                return true;
+            }
+            // A blank place may still enclose a GPS property.
+            if subtree_names_gps(node) {
+                return true;
+            }
+            continue;
+        }
+        pending.extend(&node.children);
+    }
+    false
+}
+
+/// Whether a node or any descendant holds non-blank text: element text, an `rdf:resource`, or a
+/// field attribute (RDF syntax attributes such as `rdf:parseType` and `xml:lang` don't count).
+fn subtree_has_text(root: &Node) -> bool {
+    let mut pending = vec![root];
+    while let Some(node) = pending.pop() {
+        if !node.text.trim().is_empty() {
+            return true;
+        }
+        if node.attrs.iter().any(|(name, value)| (name == "rdf:resource" || !is_rdf_meta_attr(name)) && !value.trim().is_empty()) {
+            return true;
+        }
+        pending.extend(&node.children);
+    }
+    false
+}
+
+/// Whether a node or any descendant is an Exif GPS property, as an element or an attribute.
+fn subtree_names_gps(root: &Node) -> bool {
+    let mut pending = vec![root];
+    while let Some(node) = pending.pop() {
+        if is_gps_name(&node.name) || node.attrs.iter().any(|(name, _)| is_gps_name(name)) {
+            return true;
+        }
+        pending.extend(&node.children);
+    }
+    false
+}
+
+/// An `exif:GPSLatitude` / `exif:GPSLongitude` pair → (latitude, longitude) in signed degrees; `None`
+/// unless both parse and lie on the globe (|latitude| ≤ 90, |longitude| ≤ 180, as the Exif reader checks).
+pub fn parse_gps_position(lat: &str, lon: &str) -> Option<(f64, f64)> {
+    let (lat, lon) = (parse_gps_coord(lat, ['N', 'S'])?, parse_gps_coord(lon, ['E', 'W'])?);
+    ((-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon)).then_some((lat, lon))
+}
+
+/// XMP GPS coordinate `DDD,MM,SSk` or `DDD,MM.mmk` → signed degrees, k being `[positive, negative]` of
+/// its axis (N/S or E/W, either case). The sign comes only from the letter: a negative part
+/// (`-10,30N`) is malformed.
+fn parse_gps_coord(s: &str, [pos, neg]: [char; 2]) -> Option<f64> {
     let s = s.trim();
     let dir = s.chars().last()?;
     let body = &s[..s.len() - dir.len_utf8()];
     let parts: Vec<f64> = body.split(',').map(|p| p.trim().parse::<f64>().ok()).collect::<Option<_>>()?;
+    if parts.iter().any(|p| p.is_sign_negative()) {
+        return None;
+    }
     let v = match parts.as_slice() {
         [d] => *d,
-        [d, m] => d + m / 60.0,
-        [d, m, sec] => d + m / 60.0 + sec / 3600.0,
+        [d, m] if (0.0..60.0).contains(m) => d + m / 60.0,
+        [d, m, sec] if (0.0..60.0).contains(m) && (0.0..60.0).contains(sec) => d + m / 60.0 + sec / 3600.0,
         _ => return None,
     };
     let v = match dir.to_ascii_uppercase() {
-        'N' | 'E' => v,
-        'S' | 'W' => -v,
+        c if c == pos => v,
+        c if c == neg => -v,
         _ => return None,
     };
     v.is_finite().then_some(v)
@@ -579,6 +832,183 @@ fn fmt_gps_coord(v: f64, pos: char, neg: char) -> String {
     format!("{},{:.6}{}", d as i64, m, if v < 0.0 { neg } else { pos })
 }
 
+// Pixel dimensions are integers. Keep decimal coefficients as digits so wide rational components
+// remain exact and fractions that `f64` rounds to an integer can still be rejected.
+struct ExactDecimal {
+    negative: bool,
+    coefficient: String,
+    exponent: i64,
+}
+
+struct ExactRatio {
+    negative: bool,
+    numerator: String,
+    denominator: String,
+    exponent: i64,
+}
+
+fn exact_decimal(value: &str) -> Option<ExactDecimal> {
+    let value = value.trim();
+    let (negative, value) = if let Some(value) = value.strip_prefix('-') {
+        (true, value)
+    } else if let Some(value) = value.strip_prefix('+') {
+        (false, value)
+    } else {
+        (false, value)
+    };
+    let (mantissa, exponent) = if let Some((mantissa, exponent)) = value.split_once('e').or_else(|| value.split_once('E')) {
+        if exponent.contains('e') || exponent.contains('E') {
+            return None;
+        }
+        (mantissa, exponent.parse::<i64>().ok()?)
+    } else {
+        (value, 0)
+    };
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    if fraction.contains('.') {
+        return None;
+    }
+    let digits = whole.bytes().chain(fraction.bytes());
+    if !digits.clone().all(|digit| digit.is_ascii_digit()) {
+        return None;
+    }
+    let count = whole.len().checked_add(fraction.len())?;
+    if count == 0 {
+        return None;
+    }
+    let leading = digits.clone().take_while(|digit| *digit == b'0').count();
+    if leading == count {
+        return Some(ExactDecimal { negative, coefficient: "0".to_owned(), exponent: 0 });
+    }
+    let trailing = digits.clone().rev().take_while(|digit| *digit == b'0').count();
+    let significant = count.checked_sub(leading)?.checked_sub(trailing)?;
+    let mut coefficient = String::with_capacity(significant);
+    for digit in digits.skip(leading).take(significant) {
+        coefficient.push(char::from(digit));
+    }
+    let exponent = exponent.checked_sub(i64::try_from(fraction.len()).ok()?)?.checked_add(i64::try_from(trailing).ok()?)?;
+    Some(ExactDecimal { negative, coefficient, exponent })
+}
+
+fn exact_ratio(numerator: ExactDecimal, denominator: ExactDecimal) -> Option<ExactRatio> {
+    if denominator.coefficient == "0" {
+        return None;
+    }
+    Some(ExactRatio {
+        negative: numerator.negative ^ denominator.negative,
+        numerator: numerator.coefficient,
+        denominator: denominator.coefficient,
+        exponent: numerator.exponent.checked_sub(denominator.exponent)?,
+    })
+}
+
+fn multiply_decimal_by_u32(value: &str, multiplier: u32) -> String {
+    if multiplier == 0 {
+        return "0".to_owned();
+    }
+    let mut digits = Vec::with_capacity(value.len().saturating_add(10));
+    let mut carry = 0u64;
+    for digit in value.bytes().rev() {
+        let product = u64::from(digit - b'0') * u64::from(multiplier) + carry;
+        digits.push(b'0' + (product % 10) as u8);
+        carry = product / 10;
+    }
+    while carry != 0 {
+        digits.push(b'0' + (carry % 10) as u8);
+        carry /= 10;
+    }
+    digits.reverse();
+    digits.into_iter().map(char::from).collect()
+}
+
+fn decimal_significand(value: &str) -> Option<f64> {
+    let mut prefix = 0u64;
+    let mut digits = 0u32;
+    for digit in value.bytes().take(17) {
+        prefix = prefix.checked_mul(10)?.checked_add(u64::from(digit.checked_sub(b'0')?))?;
+        digits = digits.checked_add(1)?;
+    }
+    let exponent = i32::try_from(digits.checked_sub(1)?).ok()?;
+    Some(prefix as f64 / 10.0_f64.powi(exponent))
+}
+
+fn compare_scaled_decimal(left: &str, left_exponent: i64, right: &str, right_exponent: i64) -> Option<std::cmp::Ordering> {
+    if left == "0" {
+        return Some(if right == "0" { std::cmp::Ordering::Equal } else { std::cmp::Ordering::Less });
+    }
+    if right == "0" {
+        return Some(std::cmp::Ordering::Greater);
+    }
+    let left_magnitude = i128::try_from(left.len()).ok()?.checked_add(i128::from(left_exponent))?;
+    let right_magnitude = i128::try_from(right.len()).ok()?.checked_add(i128::from(right_exponent))?;
+    match left_magnitude.cmp(&right_magnitude) {
+        std::cmp::Ordering::Equal => {}
+        ordering => return Some(ordering),
+    }
+    let length = left.len().max(right.len());
+    for (left_digit, right_digit) in left.bytes().chain(std::iter::repeat(b'0')).zip(right.bytes().chain(std::iter::repeat(b'0'))).take(length) {
+        match left_digit.cmp(&right_digit) {
+            std::cmp::Ordering::Equal => {}
+            ordering => return Some(ordering),
+        }
+    }
+    Some(std::cmp::Ordering::Equal)
+}
+
+fn exact_ratio_to_u32(value: ExactRatio) -> Option<u32> {
+    if value.negative || value.denominator == "0" {
+        return None;
+    }
+    if value.numerator == "0" {
+        return Some(0);
+    }
+    if value.exponent < -128 || value.exponent > 128 {
+        return None;
+    }
+    let numerator_length = i128::try_from(value.numerator.len()).ok()?;
+    let denominator_length = i128::try_from(value.denominator.len()).ok()?;
+    let decimal_scale = numerator_length.checked_add(i128::from(value.exponent))?.checked_sub(denominator_length)?;
+    if !(0..=10).contains(&decimal_scale) {
+        return None;
+    }
+    // The prefix only estimates a candidate. Acceptance compares the full exact coefficients below.
+    let approximate =
+        decimal_significand(&value.numerator)? / decimal_significand(&value.denominator)? * 10.0_f64.powi(i32::try_from(decimal_scale).ok()?);
+    if !approximate.is_finite() {
+        return None;
+    }
+    let integer = approximate.round().clamp(0.0, f64::from(u32::MAX)) as u32;
+    let product = multiply_decimal_by_u32(&value.denominator, integer);
+    let ordering = if product == "0" {
+        compare_scaled_decimal(&value.numerator, value.exponent, "0", 0)?
+    } else {
+        let trailing_zeroes = product.bytes().rev().take_while(|digit| *digit == b'0').count();
+        let product_exponent = i64::try_from(trailing_zeroes).ok()?;
+        compare_scaled_decimal(&value.numerator, value.exponent, product.trim_end_matches('0'), product_exponent)?
+    };
+    (ordering == std::cmp::Ordering::Equal).then_some(integer)
+}
+
+fn exact_u32_from_text(value: &str) -> Option<u32> {
+    let value = value.trim();
+    let ratio = if let Some((numerator, denominator)) = value.split_once('/') {
+        exact_ratio(exact_decimal(numerator)?, exact_decimal(denominator)?)?
+    } else {
+        let value = exact_decimal(value)?;
+        ExactRatio { negative: value.negative, numerator: value.coefficient, denominator: "1".to_owned(), exponent: value.exponent }
+    };
+    exact_ratio_to_u32(ratio)
+}
+
+/// A positive whole-number ISO, read exactly (a fraction or an out-of-range value is not one).
+fn iso_from_text(value: &str) -> Option<u32> {
+    exact_u32_from_text(value).filter(|&iso| iso > 0)
+}
+
+fn dimension_candidate(first: impl Fn(&str) -> Option<String>, key: &str) -> Option<u32> {
+    first(key).and_then(|value| exact_u32_from_text(&value))
+}
+
 /// Parse an XMP packet (with or without the `<?xpacket?>` wrapper / `x:xmpmeta` element).
 pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     parse_xmp_with(s, &[])
@@ -588,18 +1018,36 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
 pub fn parse_xmp_with(s: &str, extra: &[XmpNamespace]) -> Result<XmpData, XmpError> {
     let s = s.trim_start_matches('\u{feff}');
     let tree = parse_tree(s, extra)?;
+    let names_location = tree_names_location(&tree);
     let mut descs = Vec::new();
     find_descriptions(&tree, &mut descs);
     let mut props = BTreeMap::new();
     let mut values = BTreeMap::new();
+    let mut properties_truncated = false;
+    let mut value_has_text_by_key = BTreeMap::new();
     // One budget for the whole document: several descriptions cannot each spend a fresh one.
     let mut key_budget = MAX_KEY_BYTES;
     for d in descs {
-        collect_description(d, "", &mut props, &mut key_budget);
+        collect_description(d, "", &mut props, &mut key_budget, &mut properties_truncated);
         if let XmpValue::Struct(m) = node_struct(d) {
-            values.extend(m);
+            // Later descriptions can repeat a property too; the same rule keeps an earlier place.
+            for (key, value) in m {
+                insert_keeping_text(&mut values, &mut value_has_text_by_key, key, value);
+            }
         }
     }
+    let m = project(&props, &values);
+    let toolkit = tree
+        .children
+        .iter()
+        .find(|n| n.name == "x:xmpmeta" || n.name == "x:xapmeta")
+        .and_then(|n| n.attr("x:xmptk").or_else(|| n.attr("x:xaptk")))
+        .map(str::to_string);
+    Ok(XmpData { metadata: m, properties: props, properties_truncated, values, toolkit, names_location })
+}
+
+/// The typed [`Metadata`] the flattened `props` and structured `values` of a packet state.
+fn project(props: &BTreeMap<String, Vec<String>>, values: &BTreeMap<String, XmpValue>) -> Metadata {
     let first = |k: &str| props.get(k).and_then(|v| v.first()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     let num = |k: &str| first(k).and_then(|s| parse_number(&s));
     let mut m = Metadata {
@@ -618,9 +1066,9 @@ pub fn parse_xmp_with(s: &str, extra: &[XmpNamespace]) -> Result<XmpData, XmpErr
         exposure_program: num("exif:ExposureProgram").map(|v| v as u16),
         metering_mode: num("exif:MeteringMode").map(|v| v as u16),
         white_balance: num("exif:WhiteBalance").map(|v| v as u16),
-        orientation: num("tiff:Orientation").map(|v| v as u16).filter(|v| (1..=8).contains(v)).map(Orientation::from_exif),
-        width: num("tiff:ImageWidth").filter(|v| *v >= 0.0).or_else(|| num("exif:PixelXDimension").filter(|v| *v >= 0.0)).map(|v| v as u32),
-        height: num("tiff:ImageLength").filter(|v| *v >= 0.0).or_else(|| num("exif:PixelYDimension").filter(|v| *v >= 0.0)).map(|v| v as u32),
+        orientation: num("tiff:Orientation").filter(|v| (1.0..=8.0).contains(v) && v.fract() == 0.0).map(|v| Orientation::from_exif(v as u16)),
+        width: dimension_candidate(first, "tiff:ImageWidth").or_else(|| dimension_candidate(first, "exif:PixelXDimension")),
+        height: dimension_candidate(first, "tiff:ImageLength").or_else(|| dimension_candidate(first, "exif:PixelYDimension")),
         title: first("dc:title"),
         caption: first("dc:description"),
         alt_text: first("Iptc4xmpCore:AltTextAccessibility"),
@@ -641,7 +1089,8 @@ pub fn parse_xmp_with(s: &str, extra: &[XmpNamespace]) -> Result<XmpData, XmpErr
         label: first("xmp:Label"),
         ..Default::default()
     };
-    m.iso = [num("exif:ISOSpeedRatings"), num("exifEX:PhotographicSensitivity")].into_iter().flatten().find(|v| *v > 0.0).map(|v| v as u32);
+    let iso = |key: &str| first(key).and_then(|value| iso_from_text(&value));
+    m.iso = [iso("exif:ISOSpeedRatings"), iso("exifEX:PhotographicSensitivity")].into_iter().flatten().next();
     if let Some(spec) = props.get("exifEX:LensSpecification").filter(|v| v.len() == 4) {
         let v: Vec<f64> = spec.iter().filter_map(|s| parse_number(s)).collect();
         if v.len() == 4 {
@@ -666,16 +1115,72 @@ pub fn parse_xmp_with(s: &str, extra: &[XmpNamespace]) -> Result<XmpData, XmpErr
             | (b("exif:Flash/exif:RedEyeMode") as u16) << 6;
         m.flash = Some(Flash { fired, raw });
     }
-    if let (Some(lat), Some(lon)) =
-        (first("exif:GPSLatitude").and_then(|s| parse_gps_coord(&s)), first("exif:GPSLongitude").and_then(|s| parse_gps_coord(&s)))
-        && (-90.0..=90.0).contains(&lat)
-        && (-180.0..=180.0).contains(&lon)
-    {
+    if let Some((lat, lon)) = first("exif:GPSLatitude").zip(first("exif:GPSLongitude")).and_then(|(la, lo)| parse_gps_position(&la, &lo)) {
         let altitude = num("exif:GPSAltitude").map(|a| if first("exif:GPSAltitudeRef").as_deref() == Some("1") { -a } else { a });
         m.gps = Some(Gps { latitude: lat, longitude: lon, altitude });
     }
     m.regions = values.get("mwg-rs:Regions").map(parse_regions).unwrap_or_default();
-    Ok(XmpData { metadata: m, properties: props, values })
+    m
+}
+
+/// A standard JPEG XMP packet and its Extended XMP continuation, read as one (Adobe XMP
+/// Specification Part 3, 1.1.3.1): properties of the standard packet win, arrays and structs
+/// stated in both are combined, and the `xmpNote:HasExtendedXMP` link itself is left out.
+pub fn parse_xmp_pair(standard: &str, extended: &str, extra: &[XmpNamespace]) -> Result<XmpData, XmpError> {
+    let ext = parse_xmp_with(extended, extra)?;
+    let std = parse_xmp_with(standard, extra)?;
+    let mut properties = ext.properties;
+    properties.extend(std.properties);
+    let mut values = ext.values;
+    for (key, preferred) in std.values {
+        match values.get_mut(&key) {
+            Some(fallback) => *fallback = merge_xmp_value(&preferred, fallback),
+            None => {
+                values.insert(key, preferred);
+            }
+        }
+    }
+    properties.remove("xmpNote:HasExtendedXMP");
+    values.remove("xmpNote:HasExtendedXMP");
+    let metadata = project(&properties, &values);
+    Ok(XmpData {
+        metadata,
+        properties,
+        properties_truncated: std.properties_truncated || ext.properties_truncated,
+        values,
+        toolkit: std.toolkit,
+        names_location: std.names_location || ext.names_location,
+    })
+}
+
+/// `preferred` with what `fallback` adds: array items appended, struct fields merged.
+fn merge_xmp_value(preferred: &XmpValue, fallback: &XmpValue) -> XmpValue {
+    match (preferred, fallback) {
+        (XmpValue::Array(preferred), XmpValue::Array(fallback)) => XmpValue::Array(preferred.iter().chain(fallback).cloned().collect()),
+        (XmpValue::Struct(preferred), XmpValue::Struct(fallback)) => {
+            let mut merged = fallback.clone();
+            for (key, value) in preferred {
+                let combined = merged.get(key).map_or_else(|| value.clone(), |fallback| merge_xmp_value(value, fallback));
+                merged.insert(key.clone(), combined);
+            }
+            XmpValue::Struct(merged)
+        }
+        _ => preferred.clone(),
+    }
+}
+
+/// The GUID a standard packet's `xmpNote:HasExtendedXMP` names, upper-cased; `Ok(None)` without
+/// one. Only the XMP Note namespace counts (a foreign `HasExtendedXMP` is not a link), and the
+/// property must occur once, as 32 hexadecimal digits.
+pub fn extended_xmp_reference(data: &XmpData) -> Result<Option<String>, String> {
+    let Some(values) = data.properties.get("xmpNote:HasExtendedXMP") else { return Ok(None) };
+    let [value] = values.as_slice() else {
+        return Err("XMP HasExtendedXMP reference must occur exactly once".into());
+    };
+    if value.len() != 32 || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("XMP HasExtendedXMP reference must be 32 hexadecimal characters".into());
+    }
+    Ok(Some(value.to_ascii_uppercase()))
 }
 
 fn frac(v: f64) -> String {
@@ -715,7 +1220,9 @@ pub fn write_xmp_with(meta: &Metadata, with: &XmpWrite) -> String {
     push("xmp:CreatorTool", meta.software.clone());
     push("xmp:Rating", meta.rating.map(|v| v.to_string()));
     push("xmp:Label", meta.label.clone());
-    push("exif:DateTimeOriginal", meta.capture_time.map(|d| d.to_iso()));
+    // a year or a month alone goes in `photoshop:DateCreated` only, as Lightroom writes it: Exif's
+    // date can't say it
+    push("exif:DateTimeOriginal", meta.capture_time.filter(DateTime::is_full).map(|d| d.to_iso()));
     push("photoshop:DateCreated", meta.capture_time.map(|d| d.to_iso()));
     push("exif:ExposureTime", meta.exposure_time.map(frac));
     push("exif:FNumber", meta.f_number.map(frac));
@@ -749,20 +1256,24 @@ pub fn write_xmp_with(meta: &Metadata, with: &XmpWrite) -> String {
     x.push_str(&format!("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"{}\">\n", escape(xml_safe(with.toolkit))));
     x.push_str(" <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n");
     x.push_str("  <rdf:Description rdf:about=\"\"");
-    // the caller's namespace takes the place of `crs`, which is read only
+    // the caller's namespace takes the place of `crs`, which is read only, as is `xmpNote`
     let own = with.namespace.map(|n| (n.prefix, n.uri));
-    for (p, u) in NAMESPACES.iter().skip(2).filter_map(|&ns| if ns.0 == "crs" { own } else { Some(ns) }) {
+    for (p, u) in NAMESPACES.iter().skip(2).filter_map(|&ns| match ns.0 {
+        "crs" => own,
+        "xmpNote" => None,
+        _ => Some(ns),
+    }) {
         x.push_str(&format!("\n    xmlns:{p}=\"{}\"", escape(xml_safe(u))));
     }
     x.push_str(">\n");
     for (k, v) in &simple {
-        x.push_str(&format!("   <{k}>{}</{k}>\n", escape(xml_safe(v))));
+        x.push_str(&format!("   <{k}>{}</{k}>\n", keep_cr(escape(xml_safe(v)))));
     }
     for (k, v) in with.properties.iter().filter(|_| own.is_some()) {
         let p = own.map_or("", |n| n.0);
         if !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             // element content: quotes needn't be escaped, which keeps JSON readable
-            x.push_str(&format!("   <{p}:{k}>{}</{p}:{k}>\n", partial_escape(xml_safe(v))));
+            x.push_str(&format!("   <{p}:{k}>{}</{p}:{k}>\n", keep_cr(partial_escape(xml_safe(v)))));
         }
     }
     let array = |x: &mut String, k: &str, kind: &str, items: &[String], lang: bool| {
@@ -772,9 +1283,9 @@ pub fn write_xmp_with(meta: &Metadata, with: &XmpWrite) -> String {
         x.push_str(&format!("   <{k}>\n    <rdf:{kind}>\n"));
         for it in items {
             if lang {
-                x.push_str(&format!("     <rdf:li xml:lang=\"x-default\">{}</rdf:li>\n", escape(xml_safe(it))));
+                x.push_str(&format!("     <rdf:li xml:lang=\"x-default\">{}</rdf:li>\n", keep_cr(escape(xml_safe(it)))));
             } else {
-                x.push_str(&format!("     <rdf:li>{}</rdf:li>\n", escape(xml_safe(it))));
+                x.push_str(&format!("     <rdf:li>{}</rdf:li>\n", keep_cr(escape(xml_safe(it)))));
             }
         }
         x.push_str(&format!("    </rdf:{kind}>\n   </{k}>\n"));
@@ -789,7 +1300,7 @@ pub fn write_xmp_with(meta: &Metadata, with: &XmpWrite) -> String {
     array(&mut x, "dc:creator", "Seq", &one(&meta.artist), false);
     array(&mut x, "dc:subject", "Bag", &meta.keywords, false);
     array(&mut x, "lr:hierarchicalSubject", "Bag", &meta.hierarchical_keywords, false);
-    array(&mut x, "exif:ISOSpeedRatings", "Seq", &meta.iso.map(|v| vec![v.to_string()]).unwrap_or_default(), false);
+    array(&mut x, "exif:ISOSpeedRatings", "Seq", &meta.iso.filter(|value| *value > 0).map(|v| vec![v.to_string()]).unwrap_or_default(), false);
     if let Some(s) = meta.lens_spec {
         array(&mut x, "exifEX:LensSpecification", "Seq", &s.iter().map(|&v| frac(v)).collect::<Vec<_>>(), false);
     }

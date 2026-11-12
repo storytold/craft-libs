@@ -38,6 +38,8 @@ pub mod crypt;
 pub mod flat;
 mod manifest;
 mod package;
+#[cfg(feature = "text")]
+pub mod text;
 pub mod zip_guard;
 
 pub use manifest::{Encryption, FileEntry, MANIFEST_NS, MANIFEST_PATH, Manifest};
@@ -76,6 +78,10 @@ pub enum Error {
     /// A flat document that is no `office:document`, or not UTF-8.
     #[error("not a flat OpenDocument file ({0})")]
     Flat(&'static str),
+    /// A manifest that [`Manifest::parse_strict`] refuses: malformed XML, a document type
+    /// declaration, a root that is no `manifest:manifest`, or more entries than it reads.
+    #[error("the package's manifest is not valid ({0})")]
+    Manifest(String),
 }
 
 impl Error {
