@@ -7,6 +7,7 @@ Equations as one tree, and the syntaxes it is read from and written to:
 | `math` | the tree: `MNode`, `MRun`, `Math` (an equation with its kept source OMML), modelled on the Office Math object model (ECMA-376 Part 1 §22.1) | | |
 | `math_linear` | UnicodeMath, the linear format Word shows (`x=(-b±√(b^2-4ac))/2a`) | `math::parse_linear` | `math::to_linear` |
 | `math_latex` | LaTeX math, including MathLive's spellings | `parse_latex` | `to_latex` |
+| `latex_text` | LaTeX math as text, keeping the source's spacing (for LaTeX documents) | `latex_to_linear` | `linear_to_latex` |
 | `omml` | Office Math Markup (`m:oMath`, DOCX/PPTX/XLSX) | `read_omath`, `read_str` | `write_equation`, `write_str` |
 | `mathml` | presentation MathML (HTML, ODF formulas, the clipboard) | `parse`, `read`, `to_tree` | `to_mathml`, `linear_to_mathml` |
 

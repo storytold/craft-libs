@@ -46,6 +46,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-cfb`](crates/cfb/README.md): clean-room Compound File Binary ([MS-CFB], OLE structured
   storage) reader and writer: the container of legacy Office files, Outlook messages, encrypted
   OOXML packages and AAF. Bounded on hostile input; what the streams hold stays with each format.
+- [`craft-dav`](crates/dav/README.md): WebDAV multistatus documents (RFC 4918) with the CalDAV and
+  CardDAV namespaces, from MailCraft: read fail-closed into a bounded `craft-xml` tree with fixed
+  prefixes, and the successful properties of each response. No I/O.
 - [`craft-cms`](crates/cms/README.md): pure-Rust ICC v2/v4 colour management: profile parsing
   and writing, transforms, rendering intents, black point compensation, soft proofing, gamut
   checks, 3D LUTs and built-in profiles (sRGB, Display P3, synthetic coated CMYK and others).
@@ -106,6 +109,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   and channel names, the channels that make a colour picture, and Cryptomatte IDs, metadata keys,
   manifests and rank channels. The optional `decode` feature adds bounded part listing, flat
   decoding (scan lines, tiles, every compression of the `exr` crate) and writing.
+- [`craft-flow`](crates/flow/README.md): the flow model every text format maps to (paragraphs with a kind, lists and formatted spans; tables; pictures, fields, notes, equations), converted to and from a craft-wordmodel `Document`.
 - [`craft-font-catalog`](crates/font-catalog/README.md): the installed fonts on every platform
   (font folders, fontconfig and Flatpak host folders, CoreText, DirectWrite, the font store),
   lookup by family, style, localized, legacy, full and PostScript names, family loads shared
@@ -140,7 +144,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   heic-rs reads the container and HEVC pictures, and this crate converts to 16-bit RGB to match
   libheif (VUI range and matrix, chroma upsampling, `imir`, ICC on grid tiles). Also orientation,
   alpha, EXIF/XMP and thumbnails. It never panics, and apps put it behind a non-default feature.
-- [`craft-html`](crates/html/README.md): the bottom layer of reading and writing HTML: a tolerant tokenizer (text, start tags, end tags; elements to drop or to read as raw text are options), character references with the legacy names browsers accept without `;`, escaping, and the character set a page declares. No tree, no CSS, no rendering.
+- [`craft-html`](crates/html/README.md): the bottom layer of reading and writing HTML: a tolerant tokenizer (text, start tags, end tags; elements to drop or to read as raw text are options), character references with the legacy names browsers accept without `;`, escaping, and the character set a page declares. With the `flow` feature, HTML documents read into and written from the craft-flow model.
 - [`craft-i18n`](crates/i18n/README.md): translations over the embedded craft-i18n catalogs:
   lookup with fallback (`pt-br` → `pt` → English), plurals, language names, the system locale and
   a pseudo locale. The catalogs stay a fully optional build input; apps keep `tl!` and their
@@ -163,7 +167,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   mean stays in each app. Bounded and panic-free on hostile input.
 - [`craft-stream-codecs`](crates/stream-codecs/README.md): byte-stream and bi-level image codecs that
   PDF, PostScript and TIFF share: LZW, ASCII85, ASCIIHex, RunLength, TIFF and PNG predictors,
-  CCITT Group 3 and 4 decoding and Group 4 encoding, lossless JBIG2 encoding. Every
+  CCITT Group 3 and 4 decoding and Group 4 encoding, JBIG2 decoding and lossless encoding. Every
   decoder is bounded and returns its partial output on damage. From PdfCraft; a PDF filter chain
   is built on it in `craft-pdf`.
 - [`craft-timeline`](crates/timeline/README.md): editorial timeline interchange: exact media time and SMPTE timecode, import/export reports, media path and `file://` URL handling, Avid Log Exchange (ALE) and CMX 3600 EDL documents, format detection. From FilmCraft.
@@ -207,6 +211,8 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-audio`](crates/audio/README.md): audio file I/O and codecs (WAV, AIFF, FLAC, AAC, Opus,
   AC-3/E-AC-3, MP1/MP2, MP3 encoding), streaming and seeking, and packet decoding for any demuxer. See its
   README for formats and features.
+- [`craft-latex`](crates/latex/README.md): LaTeX documents read (the everyday subset) and written (a standalone article), to and from the craft-flow model.
+- [`craft-markdown`](crates/markdown/README.md): Markdown read and written (a CommonMark subset with GitHub tables and strikethrough), to and from the craft-flow model.
 - [`craft-math`](crates/math/README.md): equations as one tree (the Office Math object model) with its syntaxes, read and written: OMML, presentation MathML, LaTeX math and the UnicodeMath linear format.
 - [`craft-media`](crates/media/README.md): bit-level I/O (`bitstream`), clean-room MP4/MOV
   (`isobmff`), Matroska/WebM (`matroska`) and MXF (`mxf`) demuxers and muxers, Ogg (`ogg`), AVI (`avi`) and
@@ -253,6 +259,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-plotter`](crates/plotter/README.md): cutter and pen-plotter command languages: HP-GL,
   DMPL and GP-GL (plain and the Silhouette dialect, three generations, registration marks) from a
   job in millimetres, plus the Silhouette device queries and reply parsers. No I/O.
+- [`craft-pptx`](crates/pptx/README.md): PresentationML, the model of a `.pptx` presentation:
+  masters, layouts, slides, shapes, placeholders and their inheritance, transitions and animations,
+  comments, sections, media and kept parts. From DeckCraft. DrawingML comes from `craft-drawingml`.
 - [`craft-print`](crates/print/README.md): PDF submission to CUPS and Windows, printer discovery,
   duplex/copies/colour and driver preferences. PDF generation stays in each app.
 - [`craft-proof`](crates/proof/README.md): proofing per language (spelling, suggestions, grammar,

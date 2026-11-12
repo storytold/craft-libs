@@ -110,6 +110,18 @@ impl<'a, 'o> Lexer<'a, 'o> {
         self.pos
     }
 
+    /// Goes back (or forward) to `pos`, a byte offset an earlier [`Lexer::pos`] gave, to read
+    /// from there again: for a reader that looked at a token and hands it back. An offset past the
+    /// end, or inside a character, moves to the next character boundary.
+    pub fn set_pos(&mut self, pos: usize) {
+        let mut pos = pos.min(self.src.len());
+        while !self.src.is_char_boundary(pos) {
+            pos += 1;
+        }
+        self.pos = pos;
+        self.raw = None;
+    }
+
     /// The raw content of element `name`, whose start tag was the last token: everything up to
     /// its end tag (any letter case), or to the end of the input when it has none. The end tag
     /// is consumed. For `style` and `script`, whose content is not markup.
