@@ -5,7 +5,9 @@ mod stories;
 
 use super::{FieldStyle, text_part};
 use crate::choice::Checkbox;
-use crate::contract::{Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, PaintUi, PartsCx, Props as _, Role, WordSetCx as _};
+use crate::contract::{
+    Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, OverlayUi, PaintUi, PartsCx, Props as _, Role, WordSetCx as _,
+};
 use crate::primitives::{TextOptions, TextRun};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, Flags, StyleCx, SurfaceLook};
@@ -140,7 +142,6 @@ fn sizes(cx: &MeasureCx<'_, AltTextField<'_>>) -> (f32, Vec2) {
 impl Component for AltTextField<'_> {
     const ROLE: Role = Role::TEXT_INPUT;
     const INPUT: crate::contract::Input = crate::contract::Input::Text;
-    const OVERLAYS: bool = false;
     type Style = AltTextFieldStyle;
     type Output = EditResponse<AltText>;
 
@@ -189,6 +190,11 @@ impl Component for AltTextField<'_> {
         if cx.part_activated(DECORATIVE).is_some() {
             cx.set(AltText { decorative: Mixed::Same(!value.all_decorative()), ..value });
         }
+    }
+
+    /// The edit menu.
+    fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
+        crate::menu::text_menu(ui, cx, &TextOptions::default());
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {

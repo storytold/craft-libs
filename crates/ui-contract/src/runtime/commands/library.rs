@@ -29,17 +29,25 @@ pub enum EditCommands {
     #[command(label = "Redo", modal = "declared", edit = "redo", icon = "redo", default = "Cmd+Shift+Z")]
     Redo,
     /// Delete the selection. Delete and Backspace both bind it (the key labelled Delete on macOS reports Backspace).
-    /// It carries no text-edit intent: a text part's own Delete key stays its deletion.
-    #[command(label = "Delete", modal = "declared", icon = "trash", default = "Delete", default = "Backspace")]
+    /// Those keys stay a focused text part's own deletion; a run of the command (a menu row) reaches the text part as
+    /// its edit.
+    #[command(label = "Delete", modal = "declared", edit = "delete", icon = "trash", default = "Delete", default = "Backspace")]
     Delete,
 }
 
 impl EditCommands {
     /// Every edit command that a focused component can take as an `Intent::Edit`.
-    pub const ALL: [EditCommands; 6] =
-        [EditCommands::Cut, EditCommands::Copy, EditCommands::Paste, EditCommands::SelectAll, EditCommands::Undo, EditCommands::Redo];
+    pub const ALL: [EditCommands; 7] = [
+        EditCommands::Cut,
+        EditCommands::Copy,
+        EditCommands::Paste,
+        EditCommands::SelectAll,
+        EditCommands::Undo,
+        EditCommands::Redo,
+        EditCommands::Delete,
+    ];
 
-    /// The intent a component takes this command as; `None` for a command that is always the app's.
+    /// The intent a component takes this command as.
     pub const fn edit(self) -> Option<EditCommand> {
         Some(match self {
             EditCommands::Cut => EditCommand::Cut,
@@ -48,7 +56,7 @@ impl EditCommands {
             EditCommands::SelectAll => EditCommand::SelectAll,
             EditCommands::Undo => EditCommand::Undo,
             EditCommands::Redo => EditCommand::Redo,
-            EditCommands::Delete => return None,
+            EditCommands::Delete => EditCommand::Delete,
         })
     }
 
@@ -61,6 +69,7 @@ impl EditCommands {
             EditCommand::SelectAll => EditCommands::SelectAll,
             EditCommand::Undo => EditCommands::Undo,
             EditCommand::Redo => EditCommands::Redo,
+            EditCommand::Delete => EditCommands::Delete,
             _ => return None,
         })
     }

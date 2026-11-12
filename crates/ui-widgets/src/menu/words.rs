@@ -7,6 +7,7 @@ craft_ui::words! {
         bar_all: "menu.barAll" = "Menu";
         bar_search: "menu.barSearch" = "Search menus";
         bar_no_matches: "menu.barNoMatches" = "No matching commands";
+        edit: "menu.edit" = "Edit";
         panel_move_to: "menu.panelMoveTo" = "Move Panel To";
         panel_auto_collapse: "menu.panelAutoCollapse" = "Auto-Collapse Iconic Panels";
         panel_minimize: "menu.panelMinimize" = "Minimize";

@@ -13,6 +13,7 @@ mod stories;
 mod words;
 
 pub use bar::{MenuBar, MenuBarOutput, MenuBarStyle, MenuHelp, MenuTitle};
+pub(crate) use edit::text_menu;
 pub use edit::{EditMenu, EditMenuOutput};
 pub use item::{MenuItem, MenuItemOutput, MenuItemStyle};
 pub use panel::{GroupItem, PanelMenu, PanelMenuOutput, PanelRow};

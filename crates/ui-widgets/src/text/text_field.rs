@@ -157,6 +157,14 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
         self
     }
 
+    /// The caller hangs a context menu of its own on the field (`Menu::context` over its response): a right click opens
+    /// that menu instead of the field's edit menu.
+    #[must_use]
+    pub fn own_context_menu(mut self) -> Self {
+        self.options.own_menu = true;
+        self
+    }
+
     /// Enter acts in the field itself (it saves the value or runs a search): the field takes it, and an enclosing
     /// dialog's default button does not. A field without this leaves Enter to that button. In a multi-line field
     /// Enter still adds a line, and Cmd+Enter (Ctrl+Enter off macOS) submits. `EditResponse::submit_mods` holds the
@@ -304,8 +312,9 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
         }
     }
 
-    /// The completion list under the field, over what the text adapter holds.
+    /// The edit menu, and the completion list under the field, over what the text adapter holds.
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
+        crate::menu::text_menu(ui, cx, &self.options);
         if self.options.complete.is_some() {
             completions::show(ui, cx, &text_part::<C::Value>(), self.options.complete_on_enter);
         }

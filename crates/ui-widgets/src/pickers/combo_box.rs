@@ -194,6 +194,7 @@ impl Component for ComboBox<'_> {
     /// the text from before the keys. A pick comes back as `Activate` (Enter or a click) and puts the option's text
     /// in the field.
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
+        crate::menu::text_menu(ui, cx, &self.text_options());
         let popup = cx.popup("options");
         let options = self.options;
         let query = cx.memory::<Typing>().draft.clone().unwrap_or_default();

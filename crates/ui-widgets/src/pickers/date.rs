@@ -293,6 +293,7 @@ impl Component for DatePicker<'_> {
     /// The calendar: a precision switch when more than one is offered, the page, and Today and Clear. The day under
     /// the pointer is proposed; a pick proposes and commits, and closes the popover.
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
+        crate::menu::text_menu(ui, cx, &TextOptions::new());
         let popup = cx.popup("calendar");
         let dates = cx.env.dates();
         let words = cx.words::<PickerWords>();

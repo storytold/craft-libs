@@ -397,6 +397,8 @@ fn build_keymap(registry: &registry::Registry, platform: Platform, overrides: Op
         .defs()
         .iter()
         .filter_map(|def| registry.edit_of(&def.command.id).map(|edit| (edit, &def.command)))
+        // Delete's keys (Delete, Backspace) stay a focused text part's own deletion, which also deletes one character.
+        .filter(|(edit, _)| *edit != EditCommand::Delete)
         .flat_map(|(edit, command)| {
             keymap.bindings(command).into_iter().filter(|binding| !binding.trigger.double).map(move |binding| (edit, binding.trigger.chord))
         })

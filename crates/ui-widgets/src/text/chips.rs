@@ -440,6 +440,7 @@ impl Component for ChipField<'_> {
 
     /// The menu of the hidden chips: one row per chip, its whole text; choosing one removes it.
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
+        crate::menu::text_menu(ui, cx, &self.options);
         let popup = cx.popup("more");
         let chips = cx.value().cloned().unwrap_or_default();
         let shown = self.shown.unwrap_or(chips.len()).min(chips.len());

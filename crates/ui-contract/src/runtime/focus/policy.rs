@@ -213,7 +213,7 @@ impl EditSet {
     /// No command.
     pub const NONE: EditSet = EditSet(0);
     /// Every command.
-    pub const ALL: EditSet = EditSet(0b11_1111);
+    pub const ALL: EditSet = EditSet(0b111_1111);
 
     const fn bit(command: EditCommand) -> u8 {
         1 << match command {
@@ -222,6 +222,7 @@ impl EditSet {
             EditCommand::Paste => 2,
             EditCommand::SelectAll => 3,
             EditCommand::Undo => 4,
+            EditCommand::Delete => 6,
             _ => 5,
         }
     }
@@ -330,9 +331,11 @@ impl KeyUse {
             Input::Editor => (KeepKeys::BlockArrows, ActivateKeys::Neither, OwnerClass::Text),
             _ => (KeepKeys::None, ActivateKeys::Neither, OwnerClass::Widget),
         };
-        // Text parts and editors list every edit command (11.3).
-        let edits = match owner {
-            OwnerClass::Text => EditSet::ALL,
+        // Text parts list every edit command (11.3); editors every one but Delete, whose run (a menu row) stays the
+        // app's command while an editor has the focus.
+        let edits = match input {
+            Input::Text => EditSet::ALL,
+            Input::Editor => EditSet(EditSet::ALL.0 & !EditSet::bit(EditCommand::Delete)),
             _ => EditSet::NONE,
         };
         let owner_text = matches!(owner, OwnerClass::Text);

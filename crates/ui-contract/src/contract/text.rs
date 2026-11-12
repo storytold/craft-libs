@@ -22,6 +22,10 @@ use egui::{Rect, Ui};
 use std::any::Any;
 use std::sync::Arc;
 
+/// The popup name of a text part's edit menu: step 8b registers it for every text part, and the text control opens
+/// and shows it from its `overlay` hook.
+pub const EDIT_MENU: &str = "edit";
+
 /// The id of the text adapter's state in the component's memory.
 fn state_id(id: egui::Id) -> egui::Id {
     sub(id, "text_state")
@@ -399,6 +403,7 @@ pub(crate) fn run<C: Component>(
     let read_only = cx.core.resolved.read_only || !enabled;
     let ink = decl.options.ink.map_or(ink, |own| crate::style::ink_color(&crate::runtime::env::Env::of(ui).tokens, own));
     let ink = if enabled { ink } else { crate::style::rgba_color(crate::runtime::env::Env::of(ui).tokens.color.text.disabled) };
+    let held = cx.popup(EDIT_MENU).is_open_in(&mut cx.core);
     serve_access(cx, &mut state, widget, &decl.shown, read_only);
     cx.core.surface_slot = Some(ui.painter().add(egui::Shape::Noop));
     let out = adapter::run(
@@ -418,6 +423,7 @@ pub(crate) fn run<C: Component>(
             pointer,
             rtl,
             focused,
+            held,
             ink,
             intents: &mut cx.core.intents,
             list_open,
@@ -489,6 +495,11 @@ impl<C: Component> Cx<'_, C> {
     pub fn pick_completion(&mut self, at: usize) {
         self.core.memory.shown::<TextState>(state_id(self.core.id)).completions.picked = Some(at);
         crate::runtime::egui::repaint::request(&self.core.ctx);
+    }
+
+    /// The key of the text part step 8b ran in this pass; `None` for a component that declared none.
+    pub fn text_part(&self) -> Option<PartKey> {
+        self.core.texts.as_ref().map(|(part, _)| *part)
     }
 
     /// The result of the text part `key` this pass: the draft, the laid-out text and the caret blink. `None` while

@@ -95,6 +95,9 @@ pub enum EditCommand {
     Undo,
     /// Redo the last undone edit.
     Redo,
+    /// Delete the selection. It arrives only as a run of the Delete command (a menu row): the Delete and Backspace
+    /// keys stay a text part's own deletion.
+    Delete,
 }
 
 /// A position in a text document.

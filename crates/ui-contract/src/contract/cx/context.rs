@@ -257,6 +257,13 @@ impl<C: Component> Cx<'_, C> {
         crate::runtime::keys::context_part(&self.core.ctx, self.core.id)
     }
 
+    /// Whether the component was asked for its context menu in this pass: a secondary click on it, the Menu key or
+    /// Shift+F10 it did not take, or AccessKit's `ShowContextMenu`. Recorded after `update`, so `overlay` and
+    /// `finish` read it.
+    pub fn context_requested(&self) -> bool {
+        crate::runtime::keys::context_request(&self.core.ctx, self.core.id).is_some()
+    }
+
     /// Names the member of this container's roving group (`ContainerProps.roving`) that Tab arrives at; the
     /// first member when none is named.
     pub fn roving_arrival(&mut self, member: Id) {

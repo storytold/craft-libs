@@ -75,6 +75,9 @@ pub(crate) struct TextState {
     pub completions: completion::Completions,
     /// The draft change `Cx::set_draft` asked for, applied at the start of the next pass.
     pub change: Option<DraftChange>,
+    /// The selection, `(caret, anchor)`, the text part had when its edit menu took the focus: egui collapses the
+    /// selection of a widget without focus, and the menu's command acts on it once the focus is back.
+    pub held_selection: Option<(usize, usize)>,
 }
 
 /// The id of a text part's egui widget, which holds key focus.
@@ -113,6 +116,9 @@ pub(crate) struct AdapterIn<'a> {
     pub rtl: bool,
     /// The text widget holds key focus.
     pub focused: bool,
+    /// The text part's own edit menu is open and holds the focus: losing the focus to it ends no typing run, and
+    /// getting it back is no new focus.
+    pub held: bool,
     pub ink: egui::Color32,
     pub intents: &'a mut Intents,
     /// A list the component opened on the text is shown (a dropdown, the completions): Escape is the list's.
@@ -235,6 +241,13 @@ fn apply(input: &mut AdapterIn<'_>, state: &mut TextState, text: &mut String, wi
                     changed = true;
                 }
             }
+            EditCommand::Delete => {
+                let (a, b) = selection(text);
+                if a != b {
+                    replace_selection(ctx, widget, text, (a.min(b), a.max(b)), "");
+                    changed = true;
+                }
+            }
             EditCommand::Paste => {
                 if let Some(pasted) = keys::pasted_text(ctx, input.id) {
                     let pasted = if input.options.multiline() { pasted.to_string() } else { pasted.replace(['\n', '\r'], " ") };
@@ -301,6 +314,15 @@ fn held_mods(ctx: &Context) -> Mods {
 pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut {
     let (ctx, widget) = (input.ctx, text_id(input.id, input.key));
     let focused_before = input.focused;
+    if input.held {
+        if state.held_selection.is_none() {
+            state.held_selection = selection(ctx, widget);
+        }
+    } else if let Some((caret, anchor)) = state.held_selection.take()
+        && input.focused
+    {
+        select(ctx, widget, anchor, caret);
+    }
     let mut base = state.draft.clone().or_else(|| state.normalised.take()).unwrap_or_else(|| input.shown.to_owned());
     let mut edited = apply(&mut input, state, &mut base, widget);
     if let Some((range, insert)) = state.completions.take(&base) {
@@ -362,7 +384,16 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         underline: input.underline,
         galley: None,
     };
+    // A secondary press inside the selection keeps the selection for the edit menu it opens, as native fields do;
+    // egui's widget moves the caret to any press, so the selection from before the press is put back.
+    let secondary = crate::runtime::pointer::frame(ctx).press.is_some_and(|press| press.button == craft_behavior::PointerButton::Secondary);
+    let kept = selection(ctx, widget).filter(|(caret, anchor)| secondary && caret != anchor);
     let shown = text_edit::show(input.ui, edit);
+    if let Some((caret, anchor)) = kept
+        && selection(ctx, widget).is_some_and(|(at, _)| (caret.min(anchor)..=caret.max(anchor)).contains(&at))
+    {
+        select(ctx, widget, anchor, caret);
+    }
     // egui's own IME output is dropped: the engine writes the pass's.
     if let Some(caret) = shown.caret.filter(|_| shown.focused) {
         ime::note_caret(ctx, widget, input.rect, caret, input.options.mask);
@@ -391,10 +422,10 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         }
     } else if separated {
         state.end = Some(End::Separator);
-    } else if shown.lost_focus && state.draft.is_some() && state.end.is_none() {
+    } else if shown.lost_focus && !input.held && state.draft.is_some() && state.end.is_none() {
         state.end = Some(End::Blur);
     }
-    state.focused = shown.focused;
+    state.focused = shown.focused || input.held;
     let full = display;
     let layout = TextLayout::new(shown.galley, false, full);
     let baseline = (!layout.full.is_empty()).then(|| shown.galley_pos.y + layout.first_baseline);

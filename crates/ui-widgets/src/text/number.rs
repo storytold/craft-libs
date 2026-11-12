@@ -192,6 +192,14 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         .label(label)
     }
 
+    /// The caller hangs a context menu of its own on the field (`Menu::context` over its response, a unit menu): a
+    /// right click opens that menu instead of the field's edit menu.
+    #[must_use]
+    pub fn own_context_menu(mut self) -> Self {
+        self.options.own_menu = true;
+        self
+    }
+
     /// A drag on the field's side label scrubs the value too, with or without the focus in the field.
     #[must_use]
     pub fn scrub_by_label(mut self) -> Self {
@@ -497,8 +505,9 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         }
     }
 
-    /// The presets list and the popup slider.
+    /// The edit menu, the presets list and the popup slider.
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
+        crate::menu::text_menu(ui, cx, &self.options);
         if let Some(rows) = self.presets {
             self.show_presets(ui, cx, rows);
         }

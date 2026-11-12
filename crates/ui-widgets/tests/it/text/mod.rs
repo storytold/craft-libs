@@ -1,5 +1,6 @@
 mod access;
 mod chips;
+mod edit_menu;
 mod fields;
 mod hex;
 mod kit;

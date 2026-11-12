@@ -395,6 +395,9 @@ impl Cells<'_> {
             if percent {
                 number = number.commit_decimals(decimals);
             }
+            if menu.is_some() {
+                number = number.own_context_menu();
+            }
             let shown = number.show(ui);
             events = shown.edit.events.clone();
             if let Some(entries) = menu {

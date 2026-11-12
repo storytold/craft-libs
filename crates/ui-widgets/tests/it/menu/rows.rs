@@ -48,7 +48,7 @@ fn a_letter_no_row_takes_while_a_menu_is_open_does_not_reach_the_text_field_unde
     let held = text.clone();
     let mut fixture = Fixture::new(move |ui| {
         let mut value = held.borrow_mut();
-        let field = craft_ui::text::TextField::new("Name", craft_ui::contract::Bind::bound(&mut *value)).show(ui);
+        let field = craft_ui::text::TextField::new("Name", craft_ui::contract::Bind::bound(&mut *value)).own_context_menu().show(ui);
         Menu::context("Field menu", &field.response).show(ui, |ui, _| {
             MenuItem::new("Copy").show(ui);
             MenuItem::new("Paste").show(ui);

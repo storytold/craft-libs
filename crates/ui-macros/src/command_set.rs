@@ -119,7 +119,13 @@ fn edit_tokens(edit: &LitStr) -> syn::Result<TokenStream> {
         "select_all" => "SelectAll",
         "undo" => "Undo",
         "redo" => "Redo",
-        _ => return Err(syn::Error::new(edit.span(), "`edit` is `\"cut\"`, `\"copy\"`, `\"paste\"`, `\"select_all\"`, `\"undo\"` or `\"redo\"`")),
+        "delete" => "Delete",
+        _ => {
+            return Err(syn::Error::new(
+                edit.span(),
+                "`edit` is `\"cut\"`, `\"copy\"`, `\"paste\"`, `\"select_all\"`, `\"undo\"`, `\"redo\"` or `\"delete\"`",
+            ));
+        }
     };
     let name = syn::Ident::new(name, edit.span());
     Ok(quote!(::craft_ui::runtime::commands::EditCommand::#name))

@@ -291,7 +291,7 @@ impl PopupHandle {
         self.is_open_in(&mut cx.core)
     }
 
-    pub(super) fn is_open_in(self, core: &mut CxCore<'_>) -> bool {
+    pub(crate) fn is_open_in(self, core: &mut CxCore<'_>) -> bool {
         self.registered(core);
         open_now(core.memory, self.id)
     }

@@ -88,6 +88,9 @@ pub struct TextOptions {
     /// Why a draft the codec cannot parse is no value ("Not a hex color"): while such a draft shows, it is the
     /// component's refusing validity message, unless its binding refuses or warns with one of its own.
     pub unparsed: Option<Message>,
+    /// The control's caller hangs a context menu of its own on it: a context request opens that menu, not the text
+    /// part's edit menu.
+    pub own_menu: bool,
 }
 
 impl Default for TextOptions {
@@ -115,6 +118,7 @@ impl Default for TextOptions {
             centred: false,
             arrows_from_end: false,
             unparsed: None,
+            own_menu: false,
         }
     }
 }

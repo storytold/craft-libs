@@ -89,13 +89,20 @@ fn double_click(core: &CxCore<'_>) -> Option<Option<PartRef>> {
         .map(|&(key, index)| Some(PartRef { key, index }))
 }
 
-/// Step 9, after `update`: a secondary release on the component, or a `ContextMenu` intent it did not take, records a
-/// context request that the overlay step and the popups shown after it read in this pass (9.2 rule 3). The request
-/// is at the part under the pointer for a release, at the active part for the intent, else at the component.
+/// Step 9, after `update`: a secondary release on the component (its text part included, which is a widget of its
+/// own over it), or a `ContextMenu` intent it did not take, records a context request that the overlay step and the
+/// popups shown after it read in this pass (9.2 rule 3). The request is at the part under the pointer for a release,
+/// at the active part for the intent, else at the component.
 pub(crate) fn record_context(core: &CxCore<'_>) {
+    let hovered = || {
+        core.response.hovered()
+            || core.texts.as_ref().is_some_and(|(key, _)| {
+                core.ctx.read_response(crate::primitives::text_adapter::text_id(core.id, *key)).is_some_and(|text| text.hovered())
+            })
+    };
     let part = if core.intents.untaken(&Intent::ContextMenu) {
         focus::active_part(&core.ctx, core.id)
-    } else if core.response.hovered() && crate::runtime::pointer::frame(&core.ctx).release == Some(craft_behavior::PointerButton::Secondary) {
+    } else if crate::runtime::pointer::frame(&core.ctx).release == Some(craft_behavior::PointerButton::Secondary) && hovered() {
         core.results.iter().find(|(_, result)| result.hovered).map(|(&(key, index), _)| PartRef { key, index })
     } else {
         return;
