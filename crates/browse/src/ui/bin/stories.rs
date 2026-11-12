@@ -7,6 +7,7 @@ use craft_behavior::{ColumnKey, ColumnWidth, IconId, Selection};
 use craft_theme::Srgba;
 use craft_theme::variant::Tone;
 use craft_ui::contract::{Bind, ColumnSpec};
+use craft_ui::list::ThumbSize;
 use craft_ui::primitives::textures::{FakeThumbSource, ThumbnailOptions, Thumbnails};
 use craft_ui::sections::FooterAction;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
@@ -119,6 +120,7 @@ fn show_bin(ui: &mut Ui, data: &mut StoryData, view: BinView, cards: &[FreeformC
         .value(key, {
             let mut state = BinState::<u32>::default();
             state.settings.view = view;
+            state.settings.thumbnails = ThumbSize::Small;
             state.expanded.set(&1, true);
             state
         })
