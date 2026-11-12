@@ -191,7 +191,7 @@ fn last_event(data: &mut StoryData, out: &GridOutput) -> String {
     last.as_ref().map_or_else(|| "No event yet".to_owned(), |event| format!("Last event: {event}"))
 }
 
-/// The sales sheet with a filter button on every heading (Region sorted, Channel filtered), the error tag on a
+/// The sales sheet with a filter button in every heading cell (Region sorted, Channel filtered), the error tag on a
 /// number stored as text and two selected ranges.
 #[story(CellGrid<'static>, covers = [Default], drive = Drive::Never, title = "Sheet")]
 fn cell_grid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
@@ -201,7 +201,9 @@ fn cell_grid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let selection = CellSelection::from_ranges(ranges, CellAt::new(2, 1)).unwrap_or_default();
     let mut state = data.value("state", GridState { selection, ..GridState::default() }).clone();
     let filters: Vec<ColumnFilter> = (0..SALES_COLUMNS)
-        .map(|column| ColumnFilter::new(column).filtered(column == 2).sort((column == 0).then(|| ColumnSort::ascending(ColumnKey::index(0)))))
+        .map(|column| {
+            ColumnFilter::new(CellAt::new(0, column)).filtered(column == 2).sort((column == 0).then(|| ColumnSort::ascending(ColumnKey::index(0))))
+        })
         .collect();
     let fixes = [Label::from("Convert to Number"), Label::from("Ignore Error")];
     let out = CellGrid::new("Sheet", &model, &mut state)
@@ -263,7 +265,7 @@ fn cell_grid_point_mode(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn cell_grid_chrome(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let model = StorySheet::numbered(ui, SHEET_ROWS, false);
     let mut state = data.value("state", GridState::default()).clone();
-    let filters = [ColumnFilter::new(0).filtered(true), ColumnFilter::new(1)];
+    let filters = [ColumnFilter::new(CellAt::new(0, 0)).filtered(true), ColumnFilter::new(CellAt::new(0, 1))];
     let fixes = [Label::from("Convert to number"), Label::from("Ignore")];
     let rows = OutlineAxis { levels: 1, groups: vec![OutlineGroup { start: 4, end: 6, level: 1, collapsed: false, summary_before: false }] };
     let columns = OutlineAxis::default();

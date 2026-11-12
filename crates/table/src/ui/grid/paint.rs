@@ -1,7 +1,9 @@
 //! The grid's style, its own parts, and the paint over the rows: headers, the range outline, the fill handle, the copy
 //! marks, the in-cell editor and the chrome that sits on the sheet.
 
-use craft_behavior::{CursorIcon, HitLevel, HitPriority, Metrics, PartKey, Positions, RowAt, ScrollPos, SelectionModel as _, Sense, TextPos};
+use craft_behavior::{
+    CursorIcon, HitLevel, HitPriority, Metrics, PartKey, Positions, Proposal, RowAt, ScrollPos, SelectionModel as _, Sense, TextPos,
+};
 use craft_theme::ControlSize;
 use craft_ui::contract::{Access, Cx, Focus as _, Name, PaintUi, PartsCx, Remember as _, Role, Styled as _};
 use craft_ui::primitives::{
@@ -14,7 +16,9 @@ use egui::{CornerRadius, Pos2, Rect, Vec2};
 
 use super::editor::{EditState, Mode};
 use super::row::CellPaint;
-use super::{CellAt, CellGrid, CellGridStyle, CellGridStyleKey, CellGridWords, CellRange, CellSelection, GridLayout, SheetGeometry, SheetMetrics};
+use super::{
+    CellAt, CellGrid, CellGridStyle, CellGridStyleKey, CellGridWords, CellRange, CellSelection, ColumnFilter, GridLayout, SheetGeometry, SheetMetrics,
+};
 use super::{edges, header_insets};
 use crate::ui::error_tag::ErrorTag;
 use crate::ui::filter::FilterButton;
@@ -39,6 +43,15 @@ pub(super) struct Frame {
     pub(super) geometry: SheetGeometry,
     pub(super) columns: Vec<u32>,
     pub(super) rows: Vec<u32>,
+    chrome: Chrome,
+}
+
+/// Where the chrome over the cells shows this pass: each filter button in view (its index in the grid's filters, its
+/// rect and the pane its header cell is in) and the error tag.
+#[derive(Clone, Default)]
+struct Chrome {
+    filters: Vec<(usize, Rect, Rect)>,
+    tag: Option<Rect>,
 }
 
 pub(super) fn style(cx: &StyleCx<'_>, key: CellGridStyleKey) -> CellGridStyle {
@@ -69,7 +82,7 @@ pub(super) fn style(cx: &StyleCx<'_>, key: CellGridStyleKey) -> CellGridStyle {
         mark: control.gap,
         pad: control.pad_x,
         border_reach: cx.tokens.size.hit.slop,
-        side: control.icon,
+        inset: cx.tokens.space.gap.tight,
         gap: control.gap,
     }
 }
@@ -242,7 +255,45 @@ impl CellGrid<'_> {
             at = Rect::from_x_y_ranges(at.x_range(), row.y_range());
         }
         cx.editor(EDITOR, at, EditorPurpose::Text);
-        self.frame = Some(Frame { geometry, columns, rows });
+        let chrome = self.place_chrome(&geometry, &columns, &rows, cx);
+        self.frame = Some(Frame { geometry, columns, rows, chrome });
+    }
+
+    /// The filter button of `filter`, named by its column's header text.
+    fn filter_button(&self, filter: &ColumnFilter) -> FilterButton {
+        let button = FilterButton::new(self.model.cell_text(filter.cell)).filtered(filter.filtered);
+        match filter.sort.clone() {
+            Some(sort) => button.sort(sort),
+            None => button,
+        }
+    }
+
+    /// Places the chrome at its own sizes: each filter button in view at the end of its header cell, `style.inset` in
+    /// and centred on the cell's height (no taller than the cell), and the error tag `style.inset` before its cell, or
+    /// after it where the tag would leave the cells.
+    fn place_chrome(&self, geometry: &SheetGeometry, columns: &[u32], rows: &[u32], cx: &PartsCx<'_, Self>) -> Chrome {
+        let (rtl, inset) = (geometry.right_to_left(), cx.style.inset);
+        let mut chrome = Chrome::default();
+        for (at, filter) in self.filters.iter().enumerate() {
+            let cell = filter.cell;
+            if !rows.contains(&cell.row) || !columns.contains(&cell.column) {
+                continue;
+            }
+            let Some(pane) = geometry.range_panes(&CellRange::cell(cell)).first().map(|pane| geometry.mirror_rect(*pane)) else { continue };
+            let rect = geometry.mirror_rect(geometry.cell_rect(cell));
+            let size = cx.child(filter_key(cell), &mut self.filter_button(filter), Proposal::Ideal);
+            let size = Vec2::new(size.x, size.y.min(rect.height()));
+            let x = if rtl { rect.left() + inset } else { rect.right() - inset - size.x };
+            chrome.filters.push((at, Rect::from_min_size(Pos2::new(x, rect.center().y - size.y / 2.0), size), pane));
+        }
+        if let Some(problem) = &self.error_tag {
+            let size = cx.child(TAG_KEY, &mut ErrorTag::new(problem.problem.clone(), problem.fixes), Proposal::Ideal);
+            let cell = geometry.cell_rect(problem.cell);
+            let before = cell.left() - size.x - inset;
+            let left = if before >= geometry.cells().left() { before } else { cell.right() + inset };
+            chrome.tag = Some(geometry.mirror_rect(Rect::from_min_size(Pos2::new(left, cell.top()), size)));
+        }
+        chrome
     }
 
     /// The facts AccessKit gets: the sheet's full size and the headers as sub-nodes.
@@ -323,7 +374,7 @@ impl CellGrid<'_> {
                 }
             }
         }
-        self.place_chrome(ui, &frame, style, cx.env.words::<CellGridWords>().outline.clone());
+        self.show_chrome(ui, &frame, cx.env.words::<CellGridWords>().outline.clone());
     }
 
     /// Paints the merged cells in view, each whole over the rows it spans and cut to each pane it shows in, as a row
@@ -456,36 +507,21 @@ impl CellGrid<'_> {
     }
 
     /// Shows the filter buttons, the error tag and the outline band over the sheet.
-    fn place_chrome(&mut self, ui: &mut PaintUi<'_>, frame: &Frame, style: &CellGridStyle, outline: Label) {
-        let geometry = &frame.geometry;
-        let (side, gap) = (style.side, style.gap);
-        let rtl = geometry.right_to_left();
-        for filter in self.filters {
-            if !frame.columns.contains(&filter.column) {
-                continue;
-            }
-            let header = Self::column_header(geometry, filter.column);
-            let origin = if rtl { header.left_bottom() - Vec2::new(0.0, side) } else { header.right_bottom() - Vec2::new(side, side) };
-            let name = self.model.column_label(filter.column);
-            let button = FilterButton::new(name).filtered(filter.filtered);
-            let button = match filter.sort.clone() {
-                Some(sort) => button.sort(sort),
-                None => button,
-            };
-            let out = ui.child(("filter", filter.column), Rect::from_min_size(origin, Vec2::splat(side)), button);
+    fn show_chrome(&mut self, ui: &mut PaintUi<'_>, frame: &Frame, outline: Label) {
+        let (geometry, filters) = (&frame.geometry, self.filters);
+        for &(at, rect, pane) in &frame.chrome.filters {
+            let filter = &filters[at];
+            let button = self.filter_button(filter);
+            let out = ui.clipped(pane, |ui| ui.child(filter_key(filter.cell), rect, button));
             if let Some(event) = out.event {
-                self.pass.filter = Some((filter.column, event));
+                self.pass.filter = Some((filter.cell, event));
             }
         }
-        if let Some(problem) = &self.error_tag {
-            let cell = geometry.cell_rect(problem.cell);
-            let before = cell.left() - side - gap;
-            let left = if before >= geometry.cells().left() { before } else { cell.right() + gap };
-            let tag = geometry.mirror_rect(Rect::from_min_size(Pos2::new(left, cell.top()), Vec2::splat(side)));
-            if geometry.mirror_rect(geometry.cells()).intersects(tag) {
-                let out = ui.child("error_tag", tag, ErrorTag::new(problem.problem.clone(), problem.fixes));
-                self.pass.fix = out.fix.or(self.pass.fix);
-            }
+        if let (Some(problem), Some(tag)) = (&self.error_tag, frame.chrome.tag)
+            && geometry.mirror_rect(geometry.cells()).intersects(tag)
+        {
+            let out = ui.child(TAG_KEY, tag, ErrorTag::new(problem.problem.clone(), problem.fixes));
+            self.pass.fix = out.fix.or(self.pass.fix);
         }
         if let Some((rows, columns)) = self.outline
             && self.levels != (0, 0)
@@ -495,6 +531,14 @@ impl CellGrid<'_> {
         }
     }
 }
+
+/// The child key of the filter button in the header cell `cell`.
+fn filter_key(cell: CellAt<u32>) -> (&'static str, u32, u32) {
+    ("filter", cell.row, cell.column)
+}
+
+/// The child key of the error tag.
+const TAG_KEY: &str = "error_tag";
 
 /// The closed outline of `rect`, as a path that starts and ends at its top-left corner.
 fn corners(rect: Rect) -> [Pos2; 5] {

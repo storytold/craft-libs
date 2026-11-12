@@ -72,8 +72,8 @@ pub struct GridOutput {
     pub draft: Option<String>,
     /// Whether Cmd/Ctrl was held at a fill commit this pass (copy and series swap).
     pub fill_swapped: bool,
-    /// The filter button pressed this pass: its column and event.
-    pub filter: Option<(u32, FilterButtonEvent)>,
+    /// The filter button pressed this pass: its header cell and event.
+    pub filter: Option<(CellAt<u32>, FilterButtonEvent)>,
     /// The fix chosen from the error tag's menu, by index.
     pub fix: Option<usize>,
     /// The outline buttons pressed this pass.
@@ -100,7 +100,7 @@ pub(crate) struct PassOutput {
     pub(crate) committed: Option<CellEdit>,
     pub(crate) draft: Option<String>,
     pub(crate) fill_swapped: bool,
-    pub(crate) filter: Option<(u32, FilterButtonEvent)>,
+    pub(crate) filter: Option<(CellAt<u32>, FilterButtonEvent)>,
     pub(crate) fix: Option<usize>,
     pub(crate) outline: Vec<OutlineAction>,
 }
@@ -134,7 +134,8 @@ pub struct CellGridStyle {
     pub(crate) mark: f32,
     pub(crate) pad: f32,
     pub(crate) border_reach: f32,
-    pub(crate) side: f32,
+    /// The room between a filter button and its header cell's end edge.
+    pub(crate) inset: f32,
     pub(crate) gap: f32,
 }
 
@@ -186,7 +187,7 @@ pub struct CellGrid<'a> {
     /// The ranges the copy marks surround.
     #[prop]
     copy_mark: &'a [CellRange<u32>],
-    /// The columns that show a filter button, with its state.
+    /// The header cells that show a filter button, with its state.
     #[prop]
     filters: &'a [ColumnFilter],
     /// The cell whose problem shows an error tag, with its fixes.

@@ -232,12 +232,13 @@ pub enum GridMenuTarget {
     RowHeader(u32),
 }
 
-/// A column that shows a filter button at the end corner of its header cell.
+/// A filtered column's drop-down button, at the end of the column's header cell: the cell of the table's header row
+/// in that column, as a spreadsheet's filter arrows sit on the table, not on the column letters.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ColumnFilter {
-    /// The column.
-    pub column: u32,
+    /// The header cell; the filter applies to its column.
+    pub cell: CellAt<u32>,
     /// Whether the column is filtered.
     pub filtered: bool,
     /// The column's sort, shown beside the funnel or chevron.
@@ -245,9 +246,9 @@ pub struct ColumnFilter {
 }
 
 impl ColumnFilter {
-    /// A filter button on `column`, unfiltered and unsorted.
-    pub const fn new(column: u32) -> Self {
-        ColumnFilter { column, filtered: false, sort: None }
+    /// A filter button in the header cell `cell`, unfiltered and unsorted.
+    pub const fn new(cell: CellAt<u32>) -> Self {
+        ColumnFilter { cell, filtered: false, sort: None }
     }
 
     /// Whether the column is filtered.
