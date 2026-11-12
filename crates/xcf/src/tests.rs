@@ -1004,6 +1004,21 @@ fn the_pixel_budget_is_charged_before_decoding_and_decoding_can_be_cancelled() {
 }
 
 #[test]
+fn parsing_layer_metadata_can_be_cancelled_between_records() {
+    let mut img = TestImage::rgb8(3, 3);
+    img.layers.push(TestLayer::rgba("first", 3, 3, rgba(3, 3, |_, _| [1, 2, 3, 255])));
+    img.layers.push(TestLayer::rgba("second", 3, 3, rgba(3, 3, |_, _| [4, 5, 6, 255])));
+    let bytes = img.write();
+    let checks = Cell::new(0);
+    let keep_going = || {
+        checks.set(checks.get() + 1);
+        checks.get() <= 1
+    };
+    assert_eq!(Xcf::parse_with(&bytes, &keep_going).err(), Some(Error::Cancelled));
+    assert_eq!(checks.get(), 2, "the second layer is not parsed after cancellation");
+}
+
+#[test]
 fn gzipped_files_are_recognised_by_name_and_inflated() {
     use std::io::Write;
     let mut img = TestImage::rgb8(3, 3);
