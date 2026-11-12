@@ -22,8 +22,8 @@ const CELL: PartKey = PartKey::new("cell");
 /// Points on each side of the grid.
 const GRID: usize = 3;
 
-/// The side of the dot every point shows in the compact picker.
-const COMPACT_DOT: f32 = 3.5;
+/// The side of the dot every point shows; the large picker draws the picked one twice as wide.
+const DOT: f32 = 3.5;
 
 /// The arrow's tip, from the cell's centre, as a share of the arrow's extent.
 const ARROW_TIP: f32 = 0.5;
@@ -48,28 +48,27 @@ pub struct ReferencePointStyle {
     focus: FocusLook,
     /// The side of one point's cell.
     cell: f32,
-    /// The side of the mark in the picked cell.
-    mark: f32,
-    /// The side of the dot every point shows in the compact picker.
-    compact_dot: f32,
-    /// The mark's corner radius.
-    mark_radius: egui::CornerRadius,
-    /// The picked cell's fill.
-    picked: Stateful<StyleColor>,
-    /// The mark in the picked cell.
+    /// The side of an unpicked point's dot.
+    dot: f32,
+    /// The side of the picked point's dot.
+    picked_dot: f32,
+    /// The dots' corner radius.
+    dot_radius: egui::CornerRadius,
+    /// The picked point's dot.
     ink: Stateful<StyleColor>,
     /// The side of the square one growth arrow fits in.
     arrow: f32,
-    /// The growth arrows.
+    /// The unpicked dots and the growth arrows.
     arrow_ink: Stateful<StyleColor>,
 }
 
 /// The 3 by 3 picker of a box's nine points: the point a transform, a resize or a watermark works about. The nine
 /// points are one Tab stop; the arrows move the focus and stop at the grid's edges, and Space, Enter or a click picks
 /// the focused point. The arrows are directions in the box, so they do not mirror in a right-to-left interface and
-/// neither does the grid. With [`growth`](ReferencePoint::growth) the cells next to the pick show arrows toward where
-/// the box grows. The [`compact`](ReferencePoint::compact) picker is the size of an options bar's icon: a dot in
-/// every cell, the pick's in the accent colour, and no arrows.
+/// neither does the grid. Every point shows a muted dot, the pick's twice as wide in the accent colour, and the cell
+/// under the pointer takes the hover fill. A mixed value picks no point. With [`growth`](ReferencePoint::growth) the
+/// cells next to the pick show arrows toward where the box grows. The [`compact`](ReferencePoint::compact) picker is
+/// the size of an options bar's icon, its pick's dot as wide as the others, with no arrows.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(exempt(case = "rtl", reason = "The nine points are positions in a box, not reading order: the left point stays on the left."))]
 pub struct ReferencePoint<'a> {
@@ -158,10 +157,9 @@ impl Component for ReferencePoint<'_> {
                 .border(edge, cx.tokens.stroke.thin),
             focus: cx.focus_look(),
             cell: if key.compact { cx.tokens.size.icon.md / GRID as f32 } else { cx.tokens.size.control.sm },
-            compact_dot: COMPACT_DOT,
-            mark: cx.tokens.size.icon.sm,
-            mark_radius: UiTokens::corner(cx.tokens.shape.radius.sm),
-            picked: look(cx.color(colors.accent.soft)),
+            dot: DOT,
+            picked_dot: if key.compact { DOT } else { DOT * 2.0 },
+            dot_radius: UiTokens::corner(cx.tokens.shape.radius.sm),
             ink: look(cx.color(colors.accent.text)),
             arrow: cx.tokens.size.icon.sm,
             arrow_ink: look(cx.color(colors.text.muted)),
@@ -181,7 +179,7 @@ impl Component for ReferencePoint<'_> {
         let words = cx.words::<PickerWords>();
         let names: Vec<Label> = Anchor9::ALL.iter().map(|point| Self::name_of(*point, &words).clone()).collect();
         for (at, name) in names.into_iter().enumerate() {
-            let part = cx.part(Self::part(at), Self::cell_rect(rect, at)).sense(Sense::CLICK | Sense::FOCUS).focusable().tooltip(name);
+            let part = cx.part(Self::part(at), Self::cell_rect(rect, at)).sense(Sense::CLICK | Sense::FOCUS).focusable().state_layer().tooltip(name);
             if current == Some(at) {
                 part.flags(Flags::CHECKED).selected();
             }
@@ -215,21 +213,11 @@ impl Component for ReferencePoint<'_> {
         let current = Self::position_of(cx.value());
         debug_assert!(!(self.compact && self.growth.is_some()), "the compact picker shows no growth arrows");
         let draw = ui.draw();
-        if self.compact {
-            for (at, cell) in (0..Anchor9::ALL.len()).map(|at| (at, Self::cell_rect(cx.rect, at))) {
-                let dot = Rect::from_center_size(cell.center(), Vec2::splat(cx.style.compact_dot));
-                let ink = if current == Some(at) { &cx.style.ink } else { &cx.style.arrow_ink };
-                draw.fill(&PaintShape::Rect(dot, cx.style.mark_radius), cx.resolve(ink));
-            }
-            return;
-        }
         for (at, point) in Anchor9::ALL.iter().enumerate() {
             let cell = Self::cell_rect(cx.rect, at);
-            if current == Some(at) {
-                draw.fill(&PaintShape::Rect(cell, cx.style.mark_radius), cx.resolve(&cx.style.picked));
-                let mark = Rect::from_center_size(cell.center(), Vec2::splat(cx.style.mark));
-                draw.fill(&PaintShape::Rect(mark, cx.style.mark_radius), cx.resolve(&cx.style.ink));
-            } else if let Some(growth) = self.growth
+            let (side, ink) = if current == Some(at) { (cx.style.picked_dot, &cx.style.ink) } else { (cx.style.dot, &cx.style.arrow_ink) };
+            draw.fill(&PaintShape::Rect(Rect::from_center_size(cell.center(), Vec2::splat(side)), cx.style.dot_radius), cx.resolve(ink));
+            if let Some(growth) = self.growth
                 && let Some(anchor) = current.map(|pick| Anchor9::ALL[pick])
                 && let Some((dx, dy)) = Self::arrow(anchor, *point, growth)
             {
