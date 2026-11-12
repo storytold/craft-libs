@@ -301,9 +301,17 @@ impl Attrib {
         let sub = own.iter().position(|t| t.code == 100 && t.str_ref().is_some_and(|s| s.trim().starts_with("AcDbAttribute"))).unwrap_or(0);
         let rest = own.get(sub..).unwrap_or_default();
         let lock_position = rest.iter().position(|t| t.code == 2).is_some_and(|at| rest.iter().skip(at + 1).any(|t| t.code == 280 && t.i64() != 0));
+        // The text is described by the groups up to the attribute's own subclass, and from there
+        // by all but the field length (73) and a multiline attribute's header (71, 72 and the
+        // point 11): there 72 isn't the justification nor 11 the alignment point, and a
+        // left-justified attribute writes no 72 of its own, so the multiline one was read as
+        // centred.
+        let at = own.iter().position(|t| t.code == 100 && t.str_ref().is_some_and(|s| s.trim().starts_with("AcDbAttribute"))).unwrap_or(own.len());
+        let (head, tail) = own.split_at(at);
+        let text_groups: Vec<Tag> = head.iter().chain(tail.iter().filter(|t| !matches!(t.code, 71 | 72 | 73 | 11 | 21 | 31))).cloned().collect();
         Attrib {
             tag: g.s(2).unwrap_or_default(),
-            text: Text::read_as(&g, true),
+            text: Text::read_as(&Groups(&text_groups), true),
             prompt: if kind == "ATTDEF" { decode_line(&g.s(3).unwrap_or_default()) } else { String::new() },
             flags: g.i_or(70, 0),
             lock_position,

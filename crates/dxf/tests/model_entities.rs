@@ -415,3 +415,22 @@ fn entity_groups_written_after_the_entitys_own_marker() {
     let c = one("0|MTEXT|100|AcDbEntity|8|A|100|AcDbMText|62|3|48|7.0").common;
     assert_eq!((c.layer.as_str(), c.color, c.ltscale), ("A", Color::ByLayer, 1.0));
 }
+
+#[test]
+fn an_attributes_justification_is_not_its_multiline_header() {
+    // A left-justified multiline attribute writes no 72 of its own; the 72 and 11 of its
+    // AcDbAttribute subclass are the multiline header.
+    let EntityKind::AttDef(a) = one(
+        "0|ATTDEF|100|AcDbText|10|1.0|20|2.0|40|2.5|1|x|100|AcDbAttributeDefinition|280|0|3|p|2|TAG|70|0|74|0|280|0|71|4|72|1|11|9.0|21|9.0|31|0.0|101|Embedded Object|10|1.0|1|x",
+    )
+    .kind
+    else {
+        panic!("an attribute definition")
+    };
+    assert_eq!((a.text.halign, a.text.valign, a.text.align, a.text.generation), (0, 0, None, 0));
+    // The text's own justification still counts.
+    let EntityKind::AttDef(a) = one("0|ATTDEF|100|AcDbText|10|1.0|1|x|72|2|11|5.0|100|AcDbAttributeDefinition|2|TAG|74|3").kind else {
+        panic!("an attribute definition")
+    };
+    assert_eq!((a.text.halign, a.text.valign, a.text.align), (2, 3, Some([5.0, 0.0, 0.0])));
+}
