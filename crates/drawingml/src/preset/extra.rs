@@ -796,10 +796,6 @@ mod tests {
         text.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
     }
 
-    fn outline_digest(name: &str) -> u64 {
-        fnv(&outline_text(name))
-    }
-
     /// Digests of every name's outline: any changed shape fails here. Arcs are laid out by
     /// [`super::builder::Pb::arc`] in quarter-turn cubics of its own, not by kurbo's
     /// tolerance-driven subdivision, so these hold on every platform.
