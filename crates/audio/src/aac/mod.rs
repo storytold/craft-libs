@@ -6,6 +6,8 @@
 //! - [`Decoder`] (feature `aac-decode`): `AudioSpecificConfig` + raw access units → planar f32.
 //!   Supports M/S, intensity stereo, PNS, TNS, pulse data, both window shapes and every window
 //!   sequence.
+//! - [`latm_config`] / [`latm_split`] (feature `aac-decode`): the configuration and payload of
+//!   LOAS / LATM frames (AAC in MPEG transport streams), for the decoder.
 //!
 //! HE-AAC (SBR/PS), Main/SSR/LTP profiles, coupling channels and 960-sample frames are not
 //! supported; for HE-AAC only the AAC-LC core is decoded (at the core rate; [`Decoder::sbr`] says
@@ -48,6 +50,8 @@ mod encoder;
 mod huffman;
 mod huffman_tables;
 mod ics;
+#[cfg(feature = "aac-decode")]
+mod latm;
 mod mdct;
 mod tables;
 mod tns;
@@ -57,6 +61,8 @@ pub(crate) use config::split_adts_upto;
 pub use config::{AdtsHeader, AudioSpecificConfig, ElementType, ProgramConfig, config_layout, split_adts};
 #[cfg(feature = "aac-decode")]
 pub use decoder::Decoder;
+#[cfg(feature = "aac-decode")]
+pub use latm::{LatmConfig, latm_config, latm_split};
 #[cfg(feature = "aac-encode")]
 pub use encoder::{BitrateMode, Encoder, EncoderConfig, EncoderStats};
 pub use mdct::WindowShape;
