@@ -12,7 +12,8 @@
 //! ([`transfer`]), character sets ([`charset`]), address lists ([`parse_address_list`],
 //! [`format_address_list`]), dates ([`parse_date`], [`format_date`]), mbox files
 //! ([`mbox_messages`], [`write_mbox_message`]) and the lookups of `multipart/related`
-//! ([`Resources`]).
+//! ([`Resources`]). Beside MIME: `mailto:` links ([`parse_mailto`], RFC 6068) and strict
+//! base64 ([`base64`], RFC 4648).
 //!
 //! Written from the public RFCs: 5322 (messages), 2045–2049 (MIME), 2047 (encoded-words), 2231
 //! (parameter values), 2387 and 2557 (`multipart/related`, MHTML) and 4155 (mbox).
@@ -25,12 +26,14 @@
 //! What a message means (which part is the body, which parts are files, what a flag header
 //! says) is the caller's: this crate has no notion of a mailbox or a document.
 
+pub mod base64;
 pub mod charset;
 pub mod transfer;
 
 mod address;
 mod date;
 mod header;
+mod mailto;
 mod mbox;
 mod part;
 mod related;
@@ -40,6 +43,7 @@ mod write;
 pub use address::{MAX_ADDRESSES, Mailbox, format_address, format_address_list, parse_address_list};
 pub use date::{DateTime, format_date, parse_date};
 pub use header::{Field, Headers, MAX_PARAMS, Params, clean, is_field_name, parse_params, split_headers, write_field};
+pub use mailto::{Mailto, is_mailto, parse_mailto};
 pub use mbox::{MboxMessages, mbox_messages, write_mbox_message};
 pub use part::{Body, Message, Part, parse, parse_entity, split_multipart};
 pub use related::{Resources, resolve_location, start_part};
