@@ -83,7 +83,7 @@ pub enum RampKind {
 pub struct RampPick {
     /// The picked colour.
     pub color: Srgba,
-    /// Alt was held at the press (or at the click or box press): the host sets the colour it is not editing.
+    /// Alt was held at the press, the click or the key that picked: the host sets the colour it is not editing.
     pub other: bool,
 }
 
@@ -164,10 +164,11 @@ struct Cache {
 ///   sets [`other`](RampPick::other) on every event. A click with Shift starts no gesture and sets
 ///   [`cycle`](ColorRampOutput::cycle). A secondary click on the bar is reported as
 ///   [`menu_at`](ColorRampOutput::menu_at).
-/// - Boxes: a click on the white or the black box (also by keyboard) is a `Set` of that colour; they are Tab stops of
-///   their own.
+/// - Boxes: a click on the white or the black box (also by keyboard) is a `Set` of that colour, with
+///   [`other`](RampPick::other) when Alt is held; they are Tab stops of their own.
 /// - Keys, with the bar focused: it has a cursor cell, starting at the left end of the middle row. Arrows move it one
-///   cell (Shift ten), Home and End to the row's ends, Page Up and Page Down to the top and bottom rows. Enter or Space picks the cursor cell. A press moves the cursor to its cell.
+///   cell (Shift ten), Home and End to the row's ends, Page Up and Page Down to the top and bottom rows. Enter or Space picks the cursor cell, with [`other`](RampPick::other) when Alt is held. A press moves the cursor
+///   to its cell.
 /// - AccessKit: the bar is a `Group` named `label` whose value is [`kind_name`](ColorRamp::kind_name); the boxes are
 ///   `Button`s.
 /// - Nothing mirrors right to left; the boxes stay at the right.
@@ -418,15 +419,19 @@ impl Component for ColorRamp<'_> {
                 cursor = moved(cursor, mv, mods.extend);
             }
         }
+        // Alt at a key or AccessKit activation is in the pass's modifiers, at a click in the press's.
+        let activation_alt = cx.activation().is_some_and(|activation| activation.mods.alt);
         if !running && matches!(cx.part_activated(BAR), Some(FireSource::Key | FireSource::Access)) {
             let (fx, fy) = centre_of(cursor);
-            cx.set(self.pick_at(ends, fx, fy, false));
+            cx.set(self.pick_at(ends, fx, fy, activation_alt));
         }
         for (key, color) in [(WHITE, Srgba::rgb(1.0, 1.0, 1.0)), (BLACK, Srgba::rgb(0.0, 0.0, 0.0))] {
-            if cx.part_activated(key).is_some() {
-                let other = cx.part(key).press.mods.alt;
-                cx.set(RampPick::new(color, other));
-            }
+            let other = match cx.part_activated(key) {
+                None => continue,
+                Some(FireSource::Pointer) => cx.part(key).press.mods.alt,
+                Some(_) => activation_alt,
+            };
+            cx.set(RampPick::new(color, other));
         }
         cx.memory::<Cursor>().0 = Some(cursor);
         self.cursor = cursor;

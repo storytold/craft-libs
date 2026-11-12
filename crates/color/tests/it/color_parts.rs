@@ -4,7 +4,9 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use craft_color::AreaMode;
-use craft_color::ui::{ColorArea, ColorDisc, DiscMove, WheelGeometry, hue_at, triangle_corners, triangle_point, triangle_sv};
+use craft_color::ui::{
+    ColorArea, ColorDisc, ColorRamp, DiscMove, RampKind, RampPick, WheelGeometry, hue_at, triangle_corners, triangle_point, triangle_sv,
+};
 use craft_theme::{ColorModel, HsbModel, ModelValues, Srgba};
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::testing::focus::AccessActionKind;
@@ -118,4 +120,30 @@ fn the_disc_markers_take_focus_from_tab_a_press_and_assistive_technology() {
     rig.fixture.idle(2);
     assert_eq!(rig.moved.get().map(|moved| moved.marker), Some(0), "the arrows move the focused marker");
     assert_eq!(rig.focused().as_deref(), Some("Color 1"), "and leave focus on it");
+}
+
+/// Alt with Enter on the focused bar or a box picks for the colour the host is not editing, as Alt with a click does.
+#[trial]
+fn alt_with_enter_on_the_ramp_picks_the_other_colour() {
+    let picks = Rc::new(RefCell::new(Vec::new()));
+    let p = picks.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let out = ColorRamp::new("Color ramp", RampKind::Grayscale, Bind::given(RampPick::new(Srgba::rgb(0.5, 0.5, 0.5), false))).show(ui);
+        if let Some(pick) = out.edit.value() {
+            p.borrow_mut().push(pick.other);
+        }
+    });
+    fixture.room(vec2(320.0, 80.0));
+    fixture.settle();
+    let press = |fixture: &mut Fixture, key: Key, modifiers: Modifiers| {
+        fixture.key(key, modifiers);
+        fixture.idle(2);
+    };
+    press(&mut fixture, Key::Tab, Modifiers::NONE);
+    press(&mut fixture, Key::Enter, Modifiers::NONE);
+    press(&mut fixture, Key::Enter, Modifiers::ALT);
+    assert_eq!(*picks.borrow(), [false, true], "the bar: Enter, then Alt+Enter");
+    press(&mut fixture, Key::Tab, Modifiers::NONE);
+    press(&mut fixture, Key::Enter, Modifiers::ALT);
+    assert_eq!(*picks.borrow(), [false, true, true], "the white box: Alt+Enter");
 }
