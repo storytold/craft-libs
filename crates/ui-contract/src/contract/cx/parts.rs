@@ -302,6 +302,13 @@ impl<C: crate::contract::Collection> PartsCx<'_, C> {
             .and_then(|rows| rows.downcast_ref::<crate::contract::items::Rows<C::Key>>())
             .map_or_else(Default::default, |rows| rows.offset)
     }
+
+    /// Where the rows show this pass, less the scroll bar while it shows. Content the collection shows over its rows
+    /// stays inside it, so it neither covers the bar nor takes its presses. `None` in a pass the item step has not
+    /// laid out yet, which shows no scroll bar either.
+    pub fn rows_view(&self) -> Option<Rect> {
+        self.items.as_ref().and_then(|rows| rows.downcast_ref::<crate::contract::items::Rows<C::Key>>()).map(|rows| rows.view)
+    }
 }
 
 impl<'a, C: Component> Deref for PartsCx<'a, C> {

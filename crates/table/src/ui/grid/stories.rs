@@ -83,7 +83,8 @@ impl StorySheet {
         }
         StorySheet {
             rows: LineIndex::new(&BTreeMap::new(), size.control.sm, SALES_ROWS),
-            columns: LineIndex::new(&BTreeMap::from([(WIDE_COLUMN, size.length.short)]), size.length.number.md, SALES_COLUMNS),
+            // Short columns, as a spreadsheet's: Quarter shows whole, with the start of Units and its error tag.
+            columns: LineIndex::new(&BTreeMap::from([(WIDE_COLUMN, size.length.short)]), size.length.number.sm, SALES_COLUMNS),
             merges: Vec::new(),
             frozen: (1, 0),
             cells,

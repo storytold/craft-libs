@@ -1,6 +1,7 @@
 //! The item step's `ShapeHooks`: the pipeline's calls into a collection's rows.
 
 use super::drag::Drags;
+use super::geometry::bar_track;
 use super::header::HeaderMemory;
 use super::members::Member;
 use super::{Held, ITEM_NODE, ItemsHooks, LastLayout, Lead, Placement, Renaming, Rows, SCROLL, Scrolled, View, key_hash, section_part};
@@ -276,15 +277,16 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         Vec2::new(width, height)
     }
 
-    fn geometry(&mut self, _: &C, _: &crate::contract::MeasureCx<'_, C>, (_, content): (Rect, Rect), rtl: bool) -> Option<Rc<dyn std::any::Any>> {
+    fn geometry(&mut self, _: &C, mcx: &crate::contract::MeasureCx<'_, C>, (_, content): (Rect, Rect), rtl: bool) -> Option<Rc<dyn std::any::Any>> {
         let view = self.below_header(content);
+        let clear = self.clear_of_bar(view, scroll_bar_look(mcx.tokens, ScrollBarKind::Overlay).thickness, rtl);
         let offset = ScrollPos { x: self.offset_x, y: self.offset.clamp(0.0, self.max_offset(view.height())) };
         let mut layout = self.layout.take()?;
         Arc::make_mut(&mut layout).set_view(view.size(), offset);
         let (_, order) = self.built(&layout, view, offset);
         let rects = order.into_iter().map(|at| (self.source.key(at), self.screen(&layout, view, at, offset, rtl))).collect();
         self.layout = Some(layout);
-        Some(Rc::new(Rows { rects, offset }))
+        Some(Rc::new(Rows { rects, offset, view: clear }))
     }
 
     fn parts(&mut self, comp: &mut C, _: Rect, pcx: &mut PartsCx<'_, C>) {
@@ -294,12 +296,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             return;
         }
         let view = self.below_header(pcx.content_rect);
-        let thickness = scroll_bar_look(pcx.tokens, ScrollBarKind::Overlay).thickness;
-        let track = if pcx.flow.is_rtl() {
-            Rect::from_min_max(view.min, Pos2::new(view.min.x + thickness, view.max.y))
-        } else {
-            Rect::from_min_max(Pos2::new(view.max.x - thickness, view.min.y), view.max)
-        };
+        let track = bar_track(view, scroll_bar_look(pcx.tokens, ScrollBarKind::Overlay).thickness, pcx.flow.is_rtl());
         let content = f64::from(self.content.y).max(f64::from(view.height()));
         self.offset = self.offset.clamp(0.0, self.max_offset(view.height()));
         let span = ScrollSpan::new(0.0..content, self.offset..self.offset + f64::from(view.height()));
@@ -734,14 +731,9 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             let background = surface_style(&env.tokens, SurfaceKind::under(own, env.surface)).fill;
             let hidden = HiddenContent::new(self.content, rect.size(), Vec2::new(self.offset_x as f32, self.offset as f32), rtl);
             ui.painter().extend(ScrollBar::fades(&look, rect, hidden, background));
-            let thickness = look.thickness;
-            let track = if rtl {
-                Rect::from_min_max(rect.min, Pos2::new(rect.min.x + thickness, rect.max.y))
-            } else {
-                Rect::from_min_max(Pos2::new(rect.max.x - thickness, rect.min.y), rect.max)
-            };
-            let content = f64::from(self.content.y).max(f64::from(rect.height()));
-            if content > f64::from(rect.height()) {
+            if self.shows_bar(rect) {
+                let track = bar_track(rect, look.thickness, rtl);
+                let content = f64::from(self.content.y);
                 let span = ScrollSpan::new(0.0..content, self.offset..self.offset + f64::from(rect.height()));
                 let result = cx.core.results.get(&(SCROLL, Some(crate::contract::cx::THUMB))).cloned().unwrap_or(crate::primitives::PartResult::IDLE);
                 let state = crate::contract::steps::part_state(&result, cx.core.looks_enabled(), None);

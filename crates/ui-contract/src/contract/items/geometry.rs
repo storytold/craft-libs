@@ -15,6 +15,24 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
         self.below_header(cx.core.content_rect)
     }
 
+    /// Whether the scroll bar shows over the rows' rect `view`: the rows scroll and run past its height.
+    pub(super) fn shows_bar(&self, view: Rect) -> bool {
+        self.scrolls && self.content.y > view.height()
+    }
+
+    /// The rows' rect `view` less the scroll bar's track while the bar shows.
+    pub(super) fn clear_of_bar(&self, view: Rect, thickness: f32, rtl: bool) -> Rect {
+        if !self.shows_bar(view) {
+            return view;
+        }
+        let track = bar_track(view, thickness, rtl);
+        if rtl {
+            Rect::from_min_max(Pos2::new(track.max.x, view.min.y), view.max)
+        } else {
+            Rect::from_min_max(view.min, Pos2::new(track.min.x, view.max.y))
+        }
+    }
+
     pub(super) fn max_offset(&self, view: f32) -> f64 {
         f64::from((self.content.y - view).max(0.0))
     }
@@ -76,5 +94,14 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             let edges = section.edges.iter().map(|&x| edge(x)).collect();
             craft_behavior::GridSection::new(self.to_screen(layout, view, section.rect, rtl), section.columns.clone(), edges)
         }))
+    }
+}
+
+/// The scroll bar's track of `thickness` along the end edge of the rows' rect `view` (its left edge under right-to-left).
+pub(super) fn bar_track(view: Rect, thickness: f32, rtl: bool) -> Rect {
+    if rtl {
+        Rect::from_min_max(view.min, Pos2::new(view.min.x + thickness, view.max.y))
+    } else {
+        Rect::from_min_max(Pos2::new(view.max.x - thickness, view.min.y), view.max)
     }
 }

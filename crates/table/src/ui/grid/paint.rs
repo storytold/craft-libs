@@ -17,7 +17,8 @@ use egui::{CornerRadius, Pos2, Rect, Vec2};
 use super::editor::{EditState, Mode};
 use super::row::CellPaint;
 use super::{
-    CellAt, CellGrid, CellGridStyle, CellGridStyleKey, CellGridWords, CellRange, CellSelection, ColumnFilter, GridLayout, SheetGeometry, SheetMetrics,
+    CellAt, CellGrid, CellGridStyle, CellGridStyleKey, CellGridWords, CellRange, CellSelection, ColumnFilter, GridLayout, GridModel, SheetGeometry,
+    SheetMetrics,
 };
 use super::{edges, header_insets};
 use crate::ui::error_tag::ErrorTag;
@@ -47,11 +48,12 @@ pub(super) struct Frame {
 }
 
 /// Where the chrome over the cells shows this pass: each filter button in view (its index in the grid's filters, its
-/// rect and the pane its header cell is in) and the error tag.
-#[derive(Clone, Default)]
+/// rect and the pane its header cell is in), the error tag, and the cells' view less the scroll bar, which holds them.
+#[derive(Clone)]
 struct Chrome {
     filters: Vec<(usize, Rect, Rect)>,
     tag: Option<Rect>,
+    view: Rect,
 }
 
 pub(super) fn style(cx: &StyleCx<'_>, key: CellGridStyleKey) -> CellGridStyle {
@@ -259,21 +261,14 @@ impl CellGrid<'_> {
         self.frame = Some(Frame { geometry, columns, rows, chrome });
     }
 
-    /// The filter button of `filter`, named by its column's header text.
-    fn filter_button(&self, filter: &ColumnFilter) -> FilterButton {
-        let button = FilterButton::new(self.model.cell_text(filter.cell)).filtered(filter.filtered);
-        match filter.sort.clone() {
-            Some(sort) => button.sort(sort),
-            None => button,
-        }
-    }
-
     /// Places the chrome at its own sizes: each filter button in view at the end of its header cell, `style.inset` in
     /// and centred on the cell's height (no taller than the cell), and the error tag `style.inset` before its cell, or
-    /// after it where the tag would leave the cells.
+    /// after it where the tag would leave the cells; the tag only while it meets the view.
     fn place_chrome(&self, geometry: &SheetGeometry, columns: &[u32], rows: &[u32], cx: &PartsCx<'_, Self>) -> Chrome {
         let (rtl, inset) = (geometry.right_to_left(), cx.style.inset);
-        let mut chrome = Chrome::default();
+        let cells = geometry.mirror_rect(geometry.cells());
+        let view = cx.rows_view().map_or(cells, |rows| rows.intersect(cells));
+        let mut chrome = Chrome { filters: Vec::new(), tag: None, view };
         for (at, filter) in self.filters.iter().enumerate() {
             let cell = filter.cell;
             if !rows.contains(&cell.row) || !columns.contains(&cell.column) {
@@ -281,7 +276,7 @@ impl CellGrid<'_> {
             }
             let Some(pane) = geometry.range_panes(&CellRange::cell(cell)).first().map(|pane| geometry.mirror_rect(*pane)) else { continue };
             let rect = geometry.mirror_rect(geometry.cell_rect(cell));
-            let size = cx.child(filter_key(cell), &mut self.filter_button(filter), Proposal::Ideal);
+            let size = cx.child(filter_key(cell), &mut filter_button(self.model, filter), Proposal::Ideal);
             let size = Vec2::new(size.x, size.y.min(rect.height()));
             let x = if rtl { rect.left() + inset } else { rect.right() - inset - size.x };
             chrome.filters.push((at, Rect::from_min_size(Pos2::new(x, rect.center().y - size.y / 2.0), size), pane));
@@ -291,7 +286,8 @@ impl CellGrid<'_> {
             let cell = geometry.cell_rect(problem.cell);
             let before = cell.left() - size.x - inset;
             let left = if before >= geometry.cells().left() { before } else { cell.right() + inset };
-            chrome.tag = Some(geometry.mirror_rect(Rect::from_min_size(Pos2::new(left, cell.top()), size)));
+            let tag = geometry.mirror_rect(Rect::from_min_size(Pos2::new(left, cell.top()), size));
+            chrome.tag = view.intersects(tag).then_some(tag);
         }
         chrome
     }
@@ -508,27 +504,37 @@ impl CellGrid<'_> {
 
     /// Shows the filter buttons, the error tag and the outline band over the sheet.
     fn show_chrome(&mut self, ui: &mut PaintUi<'_>, frame: &Frame, outline: Label) {
-        let (geometry, filters) = (&frame.geometry, self.filters);
-        for &(at, rect, pane) in &frame.chrome.filters {
-            let filter = &filters[at];
-            let button = self.filter_button(filter);
-            let out = ui.clipped(pane, |ui| ui.child(filter_key(filter.cell), rect, button));
-            if let Some(event) = out.event {
-                self.pass.filter = Some((filter.cell, event));
+        let (geometry, filters, chrome) = (&frame.geometry, self.filters, &frame.chrome);
+        // The chrome stays in the cells' view, clear of the scroll bar: cut there, in paint and in presses.
+        ui.clipped(chrome.view, |ui| {
+            for &(at, rect, pane) in &chrome.filters {
+                let filter = &filters[at];
+                let button = filter_button(self.model, filter);
+                let out = ui.clipped(pane, |ui| ui.child(filter_key(filter.cell), rect, button));
+                if let Some(event) = out.event {
+                    self.pass.filter = Some((filter.cell, event));
+                }
             }
-        }
-        if let (Some(problem), Some(tag)) = (&self.error_tag, frame.chrome.tag)
-            && geometry.mirror_rect(geometry.cells()).intersects(tag)
-        {
-            let out = ui.child(TAG_KEY, tag, ErrorTag::new(problem.problem.clone(), problem.fixes));
-            self.pass.fix = out.fix.or(self.pass.fix);
-        }
+            if let (Some(problem), Some(tag)) = (&self.error_tag, chrome.tag) {
+                let out = ui.child(TAG_KEY, tag, ErrorTag::new(problem.problem.clone(), problem.fixes));
+                self.pass.fix = out.fix.or(self.pass.fix);
+            }
+        });
         if let Some((rows, columns)) = self.outline
             && self.levels != (0, 0)
         {
             let out = ui.child("outline", OutlineBand::area(geometry), OutlineBand::new(outline, rows, columns, geometry));
             self.pass.outline.extend(out.actions);
         }
+    }
+}
+
+/// The filter button of `filter`, named by its header cell's text.
+fn filter_button(model: &dyn GridModel, filter: &ColumnFilter) -> FilterButton {
+    let button = FilterButton::new(model.cell_text(filter.cell)).filtered(filter.filtered);
+    match filter.sort.clone() {
+        Some(sort) => button.sort(sort),
+        None => button,
     }
 }
 

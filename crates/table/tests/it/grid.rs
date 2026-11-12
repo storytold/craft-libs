@@ -1,13 +1,17 @@
-//! `CellGrid`: End mode, the fill handle, point mode and the rows a pass runs.
+//! `CellGrid`: End mode, the fill handle, point mode, the rows a pass runs and the chrome over the cells.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use craft_behavior::{CellSelection, EditEvent, PartKey, PartRef};
-use craft_table::ui::{CellAt, CellEdit, CellGrid, CellRange, GridEdit, GridModel, GridState, LineIndex, SHEET_COLUMNS, SHEET_ROWS, SheetGeometry};
-use craft_ui::contract::PaintUi;
+use craft_table::ui::{
+    CellAt, CellEdit, CellGrid, CellProblem, CellRange, ColumnFilter, GridEdit, GridModel, GridState, LineIndex, SHEET_COLUMNS, SHEET_ROWS,
+    SheetGeometry,
+};
+use craft_ui::contract::{PaintUi, Props as _};
 use craft_ui::primitives::TextRun;
+use craft_ui::runtime::env::Label;
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Key, Modifiers, Rect, Vec2};
@@ -349,4 +353,49 @@ fn a_merged_cell_paints_once_over_all_its_rows() {
     assert!(rect.height() > one.height() * 1.5 && rect.width() > one.width() * 1.5, "the merged cell spans two rows and two columns");
     let covered = [CellAt::new(2, 2), CellAt::new(3, 1), CellAt::new(3, 2)];
     assert!(painted.iter().all(|(cell, _)| !covered.contains(cell)), "a covered cell painted: {painted:?}");
+}
+
+/// The filter buttons sit in their header cells, below the column letters, and the error tag stays out of the scroll
+/// bar: a press on the track where the tag would reach still pages the rows.
+#[trial]
+fn chrome_sits_in_its_cells_and_clear_of_the_scroll_bar() {
+    const TAG: CellAt<u32> = CellAt::new(8, 3);
+    let geometry = Rc::new(RefCell::new(None));
+    let grid = Rc::new(Cell::new(None));
+    let state = Rc::new(RefCell::new(GridState::new(a1(), 1.0)));
+    let (seen_geometry, seen_grid, shown_state) = (geometry.clone(), grid.clone(), state.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let model = Sheet::new(None, Rc::new(Cell::new(1.0)));
+        let filters = [ColumnFilter::new(CellAt::new(0, 0)), ColumnFilter::new(CellAt::new(0, 1)).filtered(true)];
+        let fixes = [Label::from("Ignore")];
+        let mut shown = shown_state.borrow().clone();
+        let out = CellGrid::new("Sheet", &model, &mut shown)
+            .filters(&filters)
+            .error_tag(CellProblem::new(TAG, "Number stored as text", &fixes))
+            .show_sheet(ui);
+        seen_grid.set(Some(out.collection.response.id));
+        *seen_geometry.borrow_mut() = Some(out.geometry);
+        *shown_state.borrow_mut() = shown;
+    });
+    fixture.room(Vec2::new(600.0, 300.0)).settle();
+    let sheet = geometry.borrow().clone().expect("the grid showed");
+    for column in [0, 1] {
+        let name = format!("{column} (Showing All)");
+        let filtered = format!("{column}: Filter applied");
+        let button = fixture.by_label(&name).or_else(|| fixture.by_label(&filtered)).expect("the filter button shows");
+        let cell = sheet.mirror_rect(sheet.cell_rect(CellAt::new(0, column)));
+        assert!(cell.contains_rect(button.rect), "filter button {column} {:?} sits in its header cell {cell:?}", button.rect);
+    }
+
+    // Narrow the grid until the scroll bar's track runs over the middle of the tag.
+    let id = grid.get().expect("the grid showed");
+    let track = fixture.part_rect(id, PartKey::new("items_scroll")).expect("the rows scroll");
+    let tag = fixture.by_label("Error checking options").expect("the tag shows in the wide grid").rect;
+    let width = tag.center().x + track.width() / 2.0 - sheet.rect().left();
+    fixture.room(Vec2::new(width, 300.0)).settle();
+    let track = fixture.part_rect(id, PartKey::new("items_scroll")).expect("the rows scroll");
+    assert!(track.contains(tag.center()), "the track {track:?} runs over the tag's centre {:?}", tag.center());
+    let before = state.borrow().scroll;
+    fixture.click_at(tag.center()).idle(2);
+    assert!(state.borrow().scroll.y > before.y, "the press on the track paged the rows, the tag did not take it");
 }

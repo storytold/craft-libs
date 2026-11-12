@@ -41,10 +41,13 @@ mod press;
 mod rename;
 mod reveal;
 
-/// The rows the item step builds in a pass and where it puts them: what `PartsCx::rect_of` and `offset` read.
+/// The rows the item step builds in a pass and where it puts them: what `PartsCx::rect_of`, `offset` and `rows_view`
+/// read.
 pub(super) struct Rows<K> {
     pub(super) rects: Vec<(K, Rect)>,
     pub(super) offset: ScrollPos,
+    /// The rows' rect less the scroll bar's track while the bar shows.
+    pub(super) view: Rect,
 }
 
 const SCROLL: craft_behavior::PartKey = craft_behavior::PartKey::new("items_scroll");
