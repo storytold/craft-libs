@@ -985,6 +985,8 @@ mod tests {
         assert_eq!(super::direct_id(&doc, &Object::Array(vec![nowhere, string(b"ab")])), Object::Array(vec![string(b""), string(b"ab")]));
     }
 
+    // Not built for the web: proptest is a dev-dependency of the other targets only.
+    #[cfg(not(target_arch = "wasm32"))]
     use proptest::prelude::*;
 
     #[test]
@@ -1185,6 +1187,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     proptest! {
         #[test]
         fn any_finite_real_round_trips(r in proptest::num::f64::NORMAL | proptest::num::f64::SUBNORMAL | proptest::num::f64::ZERO) {

@@ -2430,6 +2430,8 @@ fn the_chain_row_limit_counts_rows_an_xref_stream_index_repeats() {
     assert!(detail.contains("more than 7 entries"), "{detail}");
 }
 
+// Not on the web: it times the load on a thread, and wasm32-unknown-unknown has none.
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_stream_whose_length_is_itself_and_never_ends_loads_quickly() {
     // From the nightly fuzz job: `6 0 obj << /Length 6 0 R >> stream` with no `endstream`
