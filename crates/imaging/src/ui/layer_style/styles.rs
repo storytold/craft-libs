@@ -9,6 +9,10 @@ use egui::{Rect, Ui};
 use super::dialog::title_row;
 use super::labels::LayerStyleWords;
 
+/// The rows of styles the Styles page shows before the grid scrolls: the user's style library can grow long, and the
+/// dialog page around it scrolls too.
+const STYLE_ROWS: u16 = 5;
+
 /// The host's style presets for the Styles page: the rows (groups and presets keyed by the preset's name) and the
 /// painter of one preset's thumbnail. The page shows them in the library [`PresetBrowser`] grid and keeps the
 /// browser's view state itself.
@@ -48,7 +52,8 @@ pub(super) fn styles_page(ui: &mut Ui, presets: Option<&StylePresets<'_>>, words
     if let Some(StylePresets { rows, thumb }) = presets {
         let browser = PresetBrowser::new(words.styles.clone(), Bind::<PresetState<String>>::kept(), rows)
             .thumb(move |cx, rect, info| thumb(cx, rect, info))
-            .row_menu(false);
+            .row_menu(false)
+            .max_rows(STYLE_ROWS);
         for event in browser.show(ui).events {
             if let PresetEvent::Select { key, .. } | PresetEvent::Activate { key, .. } = event {
                 out.apply_style = Some(key);

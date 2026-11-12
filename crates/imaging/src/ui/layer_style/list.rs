@@ -152,6 +152,7 @@ pub(super) fn effect_list(
         .header(false)
         .space(SpaceAction::ToggleCell)
         .sizing(Sizing::Content)
+        .natural_height(true)
         .columns(columns)
         .selection(Bind::given(selection))
         .show_items(ui, &source, &mut |key, icx| match key {

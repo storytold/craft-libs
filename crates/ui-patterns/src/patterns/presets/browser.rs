@@ -216,6 +216,10 @@ pub struct PresetBrowser<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// of presets.
     #[prop]
     footer: Option<PresetFooterOptions<'a>>,
+    /// The most rows the presets show before they scroll, in either view: a library that can grow long shown inside a
+    /// body that scrolls (a dialog page) keeps its own scroll this way.
+    #[prop]
+    max_rows: Option<u16>,
 }
 
 impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'a, K> {
@@ -243,6 +247,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'a, K> {
             extra_items: Vec::new(),
             actions: Vec::new(),
             footer: None,
+            max_rows: None,
         }
     }
 
@@ -520,6 +525,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
             extra_items,
             actions,
             footer,
+            max_rows,
         } = self;
         let env = Env::of(ui);
         let words = env.words::<PresetWords>();
@@ -636,6 +642,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                 if reorder.is_some() {
                     grid = grid.reorder(ReorderRule::new()).drag_payload(app_drag::<K>);
                 }
+                if let Some(rows) = max_rows {
+                    grid = grid.max_rows(rows);
+                }
                 let aspect = cell_shape.aspect();
                 let out = grid.show_items(ui, &tiles, &mut |key, icx| {
                     let Some(row) = tiles.index_of(key).and_then(|at| tiles.row(at)) else { return Tile::new(Label::default()) };
@@ -674,6 +683,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                     .accepts(list_accepts);
                 if reorder.is_some() {
                     list = list.reorder(ReorderRule::new().into_groups()).drag_payload(app_drag::<K>);
+                }
+                if let Some(rows) = max_rows {
+                    list = list.max_rows(rows);
                 }
                 let aspect = cell_shape.aspect();
                 // The last preset row draws the divider above the action rows.
