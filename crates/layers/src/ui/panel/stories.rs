@@ -1,5 +1,5 @@
 //! Stories of `LayersPanel`: a tree with groups, masks and effects; no active layer; a filtered
-//! tree; extra columns.
+//! tree; extra columns; effects and Smart Filters open.
 
 use craft_ui::contract::Bind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
@@ -84,6 +84,18 @@ fn layers_panel_row_kinds(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn layers_panel_frame_selected(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut tree = FakeLayers::row_kinds();
     tree.selection = LayerSelection::new(vec![2], Some(2), LayerPart::Pixels);
+    let shown = LayersPanel::new(&tree).show(ui);
+    with_readout(data, shown)
+}
+
+/// The sample tree with every layer's effects and Smart Filters open: each header's eye one step in from its layer,
+/// each item's one step further, the eye column empty beside them, and no divider until the next layer.
+#[story(LayersPanel<'static, FakeLayers>, covers = [], drive = Drive::Never)]
+fn layers_panel_effects_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut tree = selected();
+    for layer in &mut tree.layers {
+        layer.effects_open = layer.effects.is_some() || layer.smart_filters.is_some();
+    }
     let shown = LayersPanel::new(&tree).show(ui);
     with_readout(data, shown)
 }
