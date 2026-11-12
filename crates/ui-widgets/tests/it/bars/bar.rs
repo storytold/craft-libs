@@ -1,5 +1,6 @@
 //! `Bar`: a body too wide for the bar shrinks its members before it scrolls, a captioned field among them too; a
-//! bar gives way from its end, and a status bar's trailing group keeps its width.
+//! bar gives way from its end, a status bar's trailing group keeps its width, and a row of labelled controls in it
+//! lays out under right-to-left.
 
 use craft_behavior::CanvasView;
 use craft_behavior::IconId;
@@ -7,9 +8,11 @@ use craft_behavior::kurbo::{Point, Size};
 use craft_theme::variant::Tone;
 use craft_ui::bars::{Bar, BarKind, BreadcrumbBar, StatusItem, StatusMessage, StatusProgress, StatusReadout, StatusValues, path_crumbs};
 use craft_ui::buttons::{Button, IconButton, Link};
+use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, Entry, Props as _, Role, Show as _, ShowContainer as _};
 use craft_ui::display::Text;
 use craft_ui::form::Field;
+use craft_ui::layout_components::Row;
 use craft_ui::pickers::Select;
 use craft_ui::testing::{Fixture, shrink_least_runs, trial};
 use craft_ui::text::TextField;
@@ -255,4 +258,31 @@ fn a_narrow_bar_gives_way_from_its_end_so_the_message_elides_before_the_readout(
     let narrow = readout_texts(480.0);
     assert!(cut(&narrow, "Exported"), "the message kept its whole text in a 480-point bar");
     assert!(!cut(&narrow, "Doc"), "the readout's text was cut while the message after it could still give way");
+}
+
+/// A Row in a Bar under right-to-left measures in a room unbounded at its start edge, the left one: a labelled check
+/// box there lays out with finite rects inside the bar, after the button before it in reading order. Guards against a
+/// label row built from the room's start and width, which was NaN there.
+#[trial]
+fn a_labelled_check_box_in_a_row_in_a_bar_lays_out_under_rtl() {
+    let seen = Rc::new(Cell::new((Rect::NOTHING, Rect::NOTHING)));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut alpha = Rect::NOTHING;
+        let bar = Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
+            Row::new().show(ui, |ui, _| {
+                alpha = Button::new("Alpha").show(ui).rect;
+                Checkbox::new(Bind::given(true)).label("Delete Cropped Pixels").show(ui);
+            });
+        });
+        out.set((bar.output.response.rect, alpha));
+    });
+    fixture.direction(craft_i18n::Direction::Rtl).room(Vec2::new(400.0, 80.0)).settle();
+    let (bar, alpha) = seen.get();
+    let label = fixture.texts().iter().find(|text| text.text == "Delete Cropped Pixels").map(|text| text.rect).expect("the label is painted");
+    let control = fixture.by_label("Delete Cropped Pixels").expect("the check box is in the tree").rect;
+    for rect in [label, control] {
+        assert!(rect.is_finite() && bar.contains_rect(rect), "{rect:?} lies outside the bar {bar:?}");
+    }
+    assert!(label.max.x <= alpha.min.x + SLACK, "the check box {label:?} follows Alpha {alpha:?} from the right");
 }

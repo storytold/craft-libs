@@ -220,18 +220,18 @@ pub(crate) fn flow_leaf<C: Show>(
     let ideal = crate::contract::run::measure_under(&mut child, &*ui, Some(id), craft_behavior::Proposal::Ideal, under);
     let avail = ui.available_rect_before_wrap();
     // The child's own height: a stacked label pushes the control down, and the allocation below follows the placement.
-    let row = Rect::from_min_size(avail.min, Vec2::new(avail.width(), ideal.y));
+    // The row spans the room's own edges: a room that scrolls along x is unbounded at its start edge, the left one
+    // under RTL.
+    let row = Rect::from_min_max(avail.min, egui::pos2(avail.max.x, avail.min.y + ideal.y));
     let at = LeafLabel { id, owner, parent: None, row, text: &label, side: &side, enabled, size };
     let placed = leaf(ui, &env, &at, &mut child, trailing);
     // In a column that sizes from its content the row is the label plus the control, never the room around them.
     // A row of a horizontal flow is as wide as its label and control: the room it has there is unbounded.
     let content = env.content.0 || ui.layout().is_horizontal();
     let control_width = if content { placed.control.width().min(ideal.x) } else { placed.control.width() };
-    let mut control = Rect::from_min_size(placed.control.min, Vec2::new(control_width, ideal.y));
     let rtl = env.direction.is_rtl();
-    if content && rtl {
-        control = control.translate(Vec2::new(placed.control.width() - control_width, 0.0));
-    }
+    let cell = Rect::from_min_max(placed.control.min, egui::pos2(placed.control.max.x, placed.control.min.y + ideal.y));
+    let control = Flow::new(cell, rtl).span(0.0, control_width);
     let extent = if !content {
         avail.width()
     } else if rtl {
