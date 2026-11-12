@@ -46,6 +46,8 @@ pub(crate) struct FrameResult {
     pub ime: Option<ImeSeen>,
     /// The texts the frame put on the clipboard.
     pub copied: Vec<String>,
+    /// The URLs the frame asked the platform to open, each with whether it asked for a new tab.
+    pub opened: Vec<(String, bool)>,
     /// The text runs the frame painted.
     pub texts: Vec<PaintedText>,
     /// The visual bounds of every shape the frame painted, within its clip rect. A shape with no extent (egui reports an empty galley's
@@ -182,9 +184,16 @@ pub(crate) fn run_frame(
         .iter()
         .filter_map(|command| if let egui::OutputCommand::CopyText(text) = command { Some(text.clone()) } else { None })
         .collect();
+    let opened = output
+        .platform_output
+        .commands
+        .iter()
+        .filter_map(|command| if let egui::OutputCommand::OpenUrl(open) = command { Some((open.url.clone(), open.new_tab)) } else { None })
+        .collect();
     FrameResult {
         closed,
         copied,
+        opened,
         texts,
         bounds,
         overshoot,

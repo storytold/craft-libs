@@ -350,6 +350,11 @@ impl Fixture {
         self.frames.copied()
     }
 
+    /// Every URL the fixture's frames asked to open, in order, each with whether it asked for a new tab.
+    pub fn opened(&self) -> &[(String, bool)] {
+        self.frames.opened()
+    }
+
     /// The visual bounds of the shapes the latest frame painted.
     pub fn shape_bounds(&self) -> &[Rect] {
         self.frames.shape_bounds()

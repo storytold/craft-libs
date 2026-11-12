@@ -26,6 +26,7 @@ pub struct Frames {
     tree: Option<AccessTree>,
     ime: Option<fixture::ImeSeen>,
     copied: Vec<String>,
+    opened: Vec<(String, bool)>,
     texts: Vec<fixture::PaintedText>,
     bounds: Vec<egui::Rect>,
     overshoot: Vec<f32>,
@@ -94,6 +95,7 @@ impl Frames {
             tree: None,
             ime: None,
             copied: Vec::new(),
+            opened: Vec::new(),
             texts: Vec::new(),
             bounds: Vec::new(),
             overshoot: Vec::new(),
@@ -231,6 +233,7 @@ impl Frames {
         self.tree = result.tree;
         self.ime = result.ime;
         self.copied = result.copied;
+        self.opened.extend(result.opened);
         self.texts = result.texts;
         self.bounds = result.bounds;
         self.overshoot = result.overshoot;
@@ -245,6 +248,11 @@ impl Frames {
     /// The texts the last frame put on the clipboard.
     pub fn copied(&self) -> &[String] {
         &self.copied
+    }
+
+    /// Every URL the frames so far asked to open, in order, each with whether it asked for a new tab.
+    pub fn opened(&self) -> &[(String, bool)] {
+        &self.opened
     }
 
     /// The text runs the last frame painted.

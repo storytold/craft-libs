@@ -22,7 +22,7 @@ pub struct LinkStyle {
 }
 
 /// A link: drawn in the accent colour in a type role (body by default) and underlined, so colour is not its only cue.
-/// A click, Enter or Space opens the URL in the same tab and a middle click opens it in a new tab; the caller can also act on `clicked()`. AccessKit reports the role `Link`, with the URL when
+/// A click, Enter or Space opens the URL in the same tab; a middle click, or a click with a modifier held, opens it in a new tab. The caller can also act on `clicked()`. AccessKit reports the role `Link`, with the URL when
 /// it has one.
 #[derive(crate::contract::Component, crate::contract::Props)]
 pub struct Link {
@@ -89,10 +89,12 @@ impl Component for Link {
             PressPhase::Release { start, click: true, .. } => start.button == PointerButton::Middle,
             _ => false,
         };
+        let activation = cx.activation();
         if let Some(url) = &self.url
-            && (cx.activation().is_some() || middle_click)
+            && (activation.is_some() || middle_click)
         {
-            cx.open_url(url, middle_click);
+            let modified = activation.is_some_and(|activation| !activation.mods.is_none());
+            cx.open_url(url, middle_click || modified);
         }
     }
 
