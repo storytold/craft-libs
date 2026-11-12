@@ -313,10 +313,12 @@ mod order_tests {
         let ffmpeg = ProgramConfig { front: vec![(true, 0), (false, 0)], side: vec![(false, 1)], back: vec![(true, 1)], ..Default::default() };
         assert_eq!(speaker_config(&with(ffmpeg)), 0);
         // the same element types with no front pair: the side pair is not left and right
-        let no_front_pair = ProgramConfig { front: vec![(false, 0)], side: vec![(true, 0)], back: vec![(true, 1)], lfe: vec![0], ..Default::default() };
+        let no_front_pair =
+            ProgramConfig { front: vec![(false, 0)], side: vec![(true, 0)], back: vec![(true, 1)], lfe: vec![0], ..Default::default() };
         assert_eq!(speaker_config(&with(no_front_pair)), 0);
         // 7.1 in a program config element is not one of the unambiguous configurations
-        let wide = ProgramConfig { front: vec![(false, 0), (true, 0)], side: vec![(true, 1)], back: vec![(true, 2)], lfe: vec![0], ..Default::default() };
+        let wide =
+            ProgramConfig { front: vec![(false, 0), (true, 0)], side: vec![(true, 1)], back: vec![(true, 2)], lfe: vec![0], ..Default::default() };
         assert_eq!(speaker_config(&with(wide)), 0);
         assert_eq!(speaker_config(&AudioSpecificConfig::lc(3, 6)), 6);
     }
