@@ -10,9 +10,11 @@ pub mod coverage;
 #[cfg(feature = "flatten")]
 pub mod flatten;
 pub mod ink;
+pub mod marks;
 pub mod plates;
 
 pub use cms::{CmsConversion, ProfileError};
 pub use coverage::{Above, Coverage, InkStats, MAX_REGIONS, Region, Stats};
 pub use ink::{Alternate, Ink, InkColor, InkId, InkSet, Overprint, Process, Spot, normalize_name, to_pdf_color};
+pub use marks::{MarkOptions, Marks, MarksError};
 pub use plates::{Conversion, Error, Fallback, MAX_PLATE_PIXELS, MAX_SPOT_INKS, Options, Plates, plates};
