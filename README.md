@@ -46,9 +46,14 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-cfb`](crates/cfb/README.md): clean-room Compound File Binary ([MS-CFB], OLE structured
   storage) reader and writer: the container of legacy Office files, Outlook messages, encrypted
   OOXML packages and AAF. Bounded on hostile input; what the streams hold stays with each format.
+- [`craft-dav`](crates/dav/README.md): WebDAV multistatus documents (RFC 4918) with the CalDAV and
+  CardDAV namespaces, from MailCraft: read fail-closed into a bounded `craft-xml` tree with fixed
+  prefixes, and the successful properties of each response. No I/O.
 - [`craft-cms`](crates/cms/README.md): pure-Rust ICC v2/v4 colour management: profile parsing
   and writing, transforms, rendering intents, black point compensation, soft proofing, gamut
   checks, 3D LUTs and built-in profiles (sRGB, Display P3, synthetic coated CMYK and others).
+- [`craft-crs`](crates/crs/README.md): Adobe Camera Raw settings (the `crs:` namespace of an XMP packet or `.xmp` sidecar, read through craft-metadata): the settings by name, numbers, tone curve points, local corrections and the crop, read and written. From PhotoCraft.
+- [`craft-codepage`](crates/codepage/README.md): legacy 8-bit code pages, one table each: the single-byte Windows pages, Mac OS Roman and fifteen DOS pages, keyed by Windows code page number, with the RTF/Word font charsets. craft-rtf, craft-dxf and craft-mime decode through it.
 - [`craft-crw`](crates/crw/README.md): clean-room Canon CRW (CIFF) raw decoder, from LightCraft:
   the heap container, the entropy coding derived by black-box analysis (frozen code tables), sensor
   black and white levels and as-shot white balance. The complete derivation record (plan, sources
@@ -82,7 +87,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-dxf`](crates/dxf/src/lib.rs): DXF tag reader and writer, from CADCraft: ASCII and
   binary DXF as (group code, value) tags, split into sections and entities, with pre-2007 code
   pages and version detection, and written back; and `model`, the drawing above the tags (header
-  variables, tables, blocks, layouts, entities), merged from CADCraft's and VectorCraft's readers. Bounded
+  variables, tables, blocks, layouts, entities) and its writer (R12 to 2018), merged from CADCraft's and VectorCraft's readers. Bounded
   on hostile input. Mapping the model onto a document stays in each app.
 - [`craft-ecproj-format`](crates/ecproj-format/README.md): the envelope of EffectCraft `.ecproj`
   project files: `savedBy`, the schema version and its check, and the file object with the
@@ -92,6 +97,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   and message, images, and the vector network and geometry blobs. Bounded on hostile input.
   Carved from FigCraft.
 - [`craft-epub`](crates/epub/README.md): EPUB packages: the OCF ZIP container, the package document (metadata, manifest, spine) and the navigation document, written as EPUB 3 (reflowable and fixed layout) and read (EPUB 2 and 3) with bounded entry sizes. Content documents are the caller's.
+- [`craft-figma-rest`](crates/figma-rest/README.md): typed model of the Figma REST API file JSON
+  (document tree, paints, effects, text styles, layout, component metadata), read and written with
+  serde without losing fields it has no name for. The neutral model the `.fig` and `.sketch`
+  readers map onto, with their extensions documented.
 - [`craft-ews`](crates/ews/README.md): the SOAP layer of Exchange Web Services, from MailCraft, without
   sockets: the request envelope and an escaping element builder, and the answer envelope, faults
   and response messages with their codes, read with `craft-xml`. The operations and everything
@@ -100,6 +109,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   and channel names, the channels that make a colour picture, and Cryptomatte IDs, metadata keys,
   manifests and rank channels. The optional `decode` feature adds bounded part listing, flat
   decoding (scan lines, tiles, every compression of the `exr` crate) and writing.
+- [`craft-flow`](crates/flow/README.md): the flow model every text format maps to (paragraphs with a kind, lists and formatted spans; tables; pictures, fields, notes, equations), converted to and from a craft-wordmodel `Document`.
 - [`craft-font-catalog`](crates/font-catalog/README.md): the installed fonts on every platform
   (font folders, fontconfig and Flatpak host folders, CoreText, DirectWrite, the font store),
   lookup by family, style, localized, legacy, full and PostScript names, family loads shared
@@ -143,6 +153,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   what PhotoCraft's and FilmCraft's readers added: container parsing and decompression to a neutral
   raw image (samples, CFA, black and white levels, active area, crop, orientation, colour tags,
   opcode lists, embedded previews), one Cargo feature per format. DNG reading and writing,
+  Hasselblad 3FR/FFF, Minolta MRW, Epson ERF, Mamiya MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2, Nikon NEF/NRW, Panasonic RW2, Fujifilm RAF, Olympus ORF (uncompressed) and Canon CRW (through
+  Hasselblad 3FR/FFF, Minolta MRW, Epson ERF, Mamiya MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2, Nikon NEF/NRW, Panasonic RW2, Fujifilm RAF and Canon CRW (through
+  Hasselblad 3FR/FFF, Minolta MRW, Epson ERF, Mamiya MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2, Nikon NEF/NRW, Panasonic RW2 and Canon CRW (through
   Hasselblad 3FR/FFF, Minolta MRW, Epson ERF, Mamiya MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2, Nikon NEF/NRW and Canon CRW (through
   `craft-crw`) so far; demosaicing and everything after stay with the develop
   pipeline.
@@ -157,7 +170,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   mean stays in each app. Bounded and panic-free on hostile input.
 - [`craft-stream-codecs`](crates/stream-codecs/README.md): byte-stream and bi-level image codecs that
   PDF, PostScript and TIFF share: LZW, ASCII85, ASCIIHex, RunLength, TIFF and PNG predictors,
-  CCITT Group 3 and 4 decoding and Group 4 encoding, lossless JBIG2 encoding. Every
+  CCITT Group 3 and 4 decoding and Group 4 encoding, JBIG2 decoding and lossless encoding. Every
   decoder is bounded and returns its partial output on damage. From PdfCraft; a PDF filter chain
   is built on it in `craft-pdf`.
 - [`craft-timeline`](crates/timeline/README.md): editorial timeline interchange: exact media time and SMPTE timecode, import/export reports, media path and `file://` URL handling, Avid Log Exchange (ALE) and CMX 3600 EDL documents, format detection. From FilmCraft.
@@ -201,6 +214,8 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-audio`](crates/audio/README.md): audio file I/O and codecs (WAV, AIFF, FLAC, AAC, Opus,
   AC-3/E-AC-3, MP1/MP2, MP3 encoding), streaming and seeking, and packet decoding for any demuxer. See its
   README for formats and features.
+- [`craft-latex`](crates/latex/README.md): LaTeX documents read (the everyday subset) and written (a standalone article), to and from the craft-flow model.
+- [`craft-markdown`](crates/markdown/README.md): Markdown read and written (a CommonMark subset with GitHub tables and strikethrough), to and from the craft-flow model.
 - [`craft-math`](crates/math/README.md): equations as one tree (the Office Math object model) with its syntaxes, read and written: OMML, presentation MathML, LaTeX math and the UnicodeMath linear format.
 - [`craft-media`](crates/media/README.md): bit-level I/O (`bitstream`), clean-room MP4/MOV
   (`isobmff`), Matroska/WebM (`matroska`) and MXF (`mxf`) demuxers and muxers, Ogg (`ogg`), AVI (`avi`) and
@@ -233,6 +248,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   placed, coloured triangle meshes and a model tree. Bounded on hostile input. From PdfCraft;
   rendering stays in the app.
 - [`craft-offcrypto`](crates/offcrypto/README.md): clean-room Office document cryptography ([MS-OFFCRYPTO]): password-encrypted OOXML packages on `craft-cfb` (agile and standard encryption read, with the integrity check enforced; agile written), unsupported schemes named, and the password hashes of document and sheet protection.
+- [`craft-ods`](crates/ods/README.md): OpenDocument spreadsheets (`.ods`, `.ots`) on `craft-odf`: the tables of `content.xml` with typed values, displayed text, formulas as text, style names, repeats expanded and merged cells, with dates and durations as serial numbers. Bounded cells, merges and text; strict XML.
 - [`craft-opc`](crates/opc/README.md): Open Packaging Conventions, the ZIP container of DOCX, XLSX and PPTX
   files: bounded readers (every part up front, or on demand), part names, relationships, content
   types and a deterministic package writer. What the parts hold stays with each format's crate.
@@ -246,6 +262,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-plotter`](crates/plotter/README.md): cutter and pen-plotter command languages: HP-GL,
   DMPL and GP-GL (plain and the Silhouette dialect, three generations, registration marks) from a
   job in millimetres, plus the Silhouette device queries and reply parsers. No I/O.
+- [`craft-pptx`](crates/pptx/README.md): PresentationML, the model of a `.pptx` presentation:
+  masters, layouts, slides, shapes, placeholders and their inheritance, transitions and animations,
+  comments, sections, media and kept parts. From DeckCraft. DrawingML comes from `craft-drawingml`.
 - [`craft-print`](crates/print/README.md): PDF submission to CUPS and Windows, printer discovery,
   duplex/copies/colour and driver preferences. PDF generation stays in each app.
 - [`craft-proof`](crates/proof/README.md): proofing per language (spelling, suggestions, grammar,
