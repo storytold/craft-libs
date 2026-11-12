@@ -21,6 +21,7 @@ fn basis() -> &'static [[f64; 8]; 8] {
 }
 
 /// Forward DCT of 64 samples (raster order) into rounded coefficients.
+#[cfg(any(feature = "mpeg4-encode", test))]
 pub(super) fn fdct(px: &[i32; 64], out: &mut [i32; 64]) {
     let m = basis();
     // rows: tmp[y][u] = Σ_x M[x][u] f[y][x]
@@ -48,21 +49,38 @@ pub(super) fn idct(blk: &mut [i32; 64]) {
         return;
     }
     let m = basis();
+    // Each sum adds its terms in the order of the plain `Σ`, skipping zero coefficients and rows:
+    // a skipped term is ±0, so the result is the same, and most blocks are sparse.
     // rows: tmp[v][x] = Σ_u M[x][u] F[v][u]
     let mut tmp = [[0f64; 8]; 8];
-    for v in 0..8 {
+    let mut rows = [0usize; 8];
+    let mut nrows = 0;
+    for (v, t) in tmp.iter_mut().enumerate() {
         let r = &blk[v * 8..v * 8 + 8];
         if r.iter().all(|&c| c == 0) {
             continue;
         }
-        for x in 0..8 {
-            tmp[v][x] = (0..8).map(|u| m[x][u] * f64::from(r[u])).sum();
+        rows[nrows] = v;
+        nrows += 1;
+        for (u, &c) in r.iter().enumerate() {
+            if c != 0 {
+                let c = f64::from(c);
+                for (x, t) in t.iter_mut().enumerate() {
+                    *t += m[x][u] * c;
+                }
+            }
         }
     }
     for y in 0..8 {
-        for x in 0..8 {
-            let s: f64 = (0..8).map(|v| m[y][v] * tmp[v][x]).sum();
-            blk[y * 8 + x] = (s.round() as i32).clamp(-256, 255);
+        let mut acc = [0f64; 8];
+        for &v in &rows[..nrows] {
+            let k = m[y][v];
+            for (a, &t) in acc.iter_mut().zip(&tmp[v]) {
+                *a += k * t;
+            }
+        }
+        for (o, a) in blk[y * 8..y * 8 + 8].iter_mut().zip(acc) {
+            *o = (a.round() as i32).clamp(-256, 255);
         }
     }
 }

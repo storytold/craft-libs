@@ -31,8 +31,10 @@ vp8-encode = []
 mpeg2 = ["mpeg2-decode", "mpeg2-encode"]
 mpeg2-decode = []
 mpeg2-encode = ["mpeg2-decode"]
-# MPEG-4 Part 2 video (ISO/IEC 14496-2, the Xvid/DivX format): Simple profile encoder.
-mpeg4 = ["mpeg4-encode"]
+# MPEG-4 Part 2 video (ISO/IEC 14496-2, the Xvid/DivX format): decoder and Simple profile encoder;
+# `mpeg4-decode` or `mpeg4-encode` for one of them.
+mpeg4 = ["mpeg4-decode", "mpeg4-encode"]
+mpeg4-decode = ["craft-media/bitstream"]
 mpeg4-encode = ["craft-media/bitstream"]
 # Apple ProRes (SMPTE RDD 36): decoder and encoder.
 prores = ["craft-media/bitstream"]
@@ -115,6 +117,10 @@ name = "hevc_decode"
 required-features = ["hevc-decode"]
 
 [[example]]
+name = "mpeg4_m4vdec"
+required-features = ["mpeg4-decode"]
+
+[[example]]
 name = "hevc_hevcdec"
 required-features = ["hevc-decode"]
 
@@ -133,6 +139,10 @@ required-features = ["vp9-decode"]
 [[test]]
 name = "mpeg4_encode"
 required-features = ["mpeg4-encode"]
+
+[[test]]
+name = "mpeg4_decode"
+required-features = ["mpeg4-decode"]
 
 [[test]]
 name = "mpeg2"
