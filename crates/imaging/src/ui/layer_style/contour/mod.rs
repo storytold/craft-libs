@@ -176,7 +176,9 @@ fn paint_thumbnail(painter: &ContentPainterCx<'_>, rect: Rect, curve: &Curve, sa
         Some(sampler) => sampler(points),
         None => Curve::monotone(points, LEVELS),
     });
-    let look = PlotLook::new(&painter.style_cx());
+    // Inset by the curve's half width only, so its ends stay inside the frame.
+    let cx = painter.style_cx();
+    let look = PlotLook::new(&cx).with_pad(cx.tokens.stroke.medium / 2.0);
     paint_preview(painter, &look, rect, &outputs, LEVELS, ChannelColor::Neutral);
 }
 

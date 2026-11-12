@@ -166,6 +166,12 @@ impl PlotLook {
         self.pad
     }
 
+    /// The look with the value area inset by `pad`: a thumbnail a few lines across keeps its plot for the curve.
+    pub(crate) fn with_pad(mut self, pad: f32) -> Self {
+        self.pad = pad;
+        self
+    }
+
     pub(super) fn curve(&self, color: ChannelColor) -> StyleColor {
         self.curves[slot(color)]
     }

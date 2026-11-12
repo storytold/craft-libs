@@ -54,7 +54,8 @@ pub(super) fn overlays_for<'a>(channels: &ToneChannels, shown: usize, curves: &'
 fn modifier_words(os: craft_host::target::Os, mods: Mods) -> String {
     let with = Chord::new(mods, Key::A).display(os);
     let base = Chord::plain(Key::A).display(os);
-    with.strip_suffix(base.as_str()).map_or(with.clone(), str::to_owned)
+    // "Ctrl+A" less "A" leaves the chord's joiner, which "{key}-click" spells as a hyphen.
+    with.strip_suffix(base.as_str()).map_or(with.as_str(), |mods| mods.trim_end_matches('+')).to_owned()
 }
 
 /// How the shown curve is edited: Photoshop's two buttons above the graph.
@@ -398,5 +399,19 @@ impl<'a> CurvesPanel<'a> {
             *cx.keep::<Shown>() = Shown { channel: shown_channel, selected: if shown_channel == channel { selected } else { None } };
         });
         CurvesPanelOutput { response: group.output, edit, channel: shown_channel, mode, picker, selected }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use craft_host::target::Os;
+    use craft_ui::testing::trial;
+
+    #[trial]
+    fn the_hint_key_is_the_modifier_alone() {
+        assert_eq!(modifier_words(Os::Linux, Mods::CMD), "Ctrl");
+        assert_eq!(modifier_words(Os::Windows, Mods::SHIFT), "Shift");
+        assert!(!modifier_words(Os::Mac, Mods::CMD).ends_with(['+', 'A']));
     }
 }

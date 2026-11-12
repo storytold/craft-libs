@@ -92,6 +92,8 @@ pub struct HistogramStyle {
     frame: PlotFrame,
     /// The selected range's band: `data.selection`.
     selection: Color32,
+    /// The cut line: `accent.solid`.
+    cut: Color32,
     /// The ink of the markers and their ticks: `text.normal`, or the sum of the ribbons on the scope.
     marker: Color32,
     /// Width of a marker tick and of the selection's edges: `stroke.medium`.
@@ -164,7 +166,7 @@ type Caption = (f32, String, Vec2);
 ///   (a taller original is clamped to the top of the plot) and on its own scale in the RGB look.
 /// - **Marker, markers:** a tick at a level, standing on the bottom of the plot; markers add a caption beside the
 ///   tick, level with its top.
-/// - **Cut:** a line across the whole plot at a level, in the selection's colour: where a threshold splits the tones.
+/// - **Cut:** a line across the whole plot at a level, in the accent colour: where a threshold splits the tones.
 /// - **Selection** (Photoshop's Histogram panel): a press and drag over the plot sets a band over whole bin slots,
 ///   a click or Escape clears it. With the plot focused the Left and Right arrows move the end edge and Shift with
 ///   them the start edge; with no selection they make one at the marker, else the middle. Levels are bin positions.
@@ -314,6 +316,7 @@ impl Component for Histogram<'_> {
             frame: PlotFrame::new(cx),
             inks,
             selection: accent,
+            cut: super::data::color32(colors.accent.solid),
             marker,
             marker_width: cx.tokens.stroke.medium,
             marker_height: cx.tokens.size.icon.sm,
@@ -518,7 +521,7 @@ impl Component for Histogram<'_> {
                 painter.painter.extend(marker_shapes(rect, bins, level, tick, style.marker));
             }
             if let Some(level) = self.cut {
-                painter.painter.extend(marker_shapes(rect, bins, level, (style.marker_width, rect.height()), style.selection));
+                painter.painter.extend(marker_shapes(rect, bins, level, (style.marker_width, rect.height()), style.cut));
             }
         }
         if self.bordered {
