@@ -272,7 +272,9 @@ fn series(w: &mut Writer, c: &Chart, s: &Series, i: usize, kind: ChartType, g: G
     w.tag("c:idx").attr("val", i).empty();
     w.tag("c:order").attr("val", i).empty();
     w.open("c:tx", &[]);
-    str_cache(w, &format!("Sheet1!${}$1", col(i + 1)), std::slice::from_ref(&s.name));
+    let r = &s.refs;
+    let or = |given: &Option<String>, made: String| given.clone().unwrap_or(made);
+    str_cache(w, &or(&r.name, format!("Sheet1!${}$1", col(i + 1))), std::slice::from_ref(&s.name));
     w.close();
     if g == Group::Stock && s.line.is_none() {
         // A stock chart's series are points joined by the high-low lines, not lines of their own.
@@ -334,15 +336,15 @@ fn series(w: &mut Writer, c: &Chart, s: &Series, i: usize, kind: ChartType, g: G
     if matches!(g, Group::Scatter | Group::Bubble) {
         let xs: Vec<Option<f64>> = if s.x_values.is_empty() { (1..=s.values.len()).map(|v| Some(v as f64)).collect() } else { s.x_values.clone() };
         w.open("c:xVal", &[]);
-        num_cache(w, &format!("Sheet1!$A$2:$A${last}"), &xs);
+        num_cache(w, &or(&r.categories, format!("Sheet1!$A$2:$A${last}")), &xs);
         w.close();
         w.open("c:yVal", &[]);
-        num_cache(w, &format!("Sheet1!${0}$2:${0}${last}", col(i + 1)), &s.values);
+        num_cache(w, &or(&r.values, format!("Sheet1!${0}$2:${0}${last}", col(i + 1))), &s.values);
         w.close();
         if g == Group::Bubble {
             let sizes: Vec<Option<f64>> = if s.sizes.is_empty() { s.values.iter().map(|_| Some(1.0)).collect() } else { s.sizes.clone() };
             w.open("c:bubbleSize", &[]);
-            num_cache(w, &format!("Sheet1!${0}$2:${0}${last}", col(i + 2)), &sizes);
+            num_cache(w, &or(&r.sizes, format!("Sheet1!${0}$2:${0}${last}", col(i + 2))), &sizes);
             w.close();
             w.tag("c:bubble3D").attr("val", 0).empty();
         } else {
@@ -350,10 +352,10 @@ fn series(w: &mut Writer, c: &Chart, s: &Series, i: usize, kind: ChartType, g: G
         }
     } else {
         w.open("c:cat", &[]);
-        str_cache(w, &format!("Sheet1!$A$2:$A${last}"), &c.categories);
+        str_cache(w, &or(&r.categories, format!("Sheet1!$A$2:$A${last}")), &c.categories);
         w.close();
         w.open("c:val", &[]);
-        num_cache(w, &format!("Sheet1!${0}$2:${0}${last}", col(i + 1)), &s.values);
+        num_cache(w, &or(&r.values, format!("Sheet1!${0}$2:${0}${last}", col(i + 1))), &s.values);
         w.close();
         if g == Group::Line {
             w.tag("c:smooth").attr("val", if s.smooth { 1 } else { 0 }).empty();
@@ -1143,5 +1145,24 @@ mod cache_cap_tests {
         assert_eq!(capped(&over).len(), MAX_CACHE_POINTS);
         let real = vec![(); 32_000];
         assert_eq!(capped(&real).len(), 32_000);
+    }
+
+    #[test]
+    fn series_formulas_are_read_and_written_back_and_made_up_when_absent() {
+        let mut c = Chart { kind: ChartType::Bar, categories: vec!["a".into(), "b".into()], ..Default::default() };
+        c.series.push(Series { name: "S".into(), values: vec![Some(1.0), Some(2.0)], ..Default::default() });
+        let made = String::from_utf8(super::chart_xml(&c).0).unwrap();
+        assert!(made.contains("<c:f>Sheet1!$B$2:$B$3</c:f>"), "{made}");
+        let back = crate::chart::read::read_chart_xml(made.as_bytes()).unwrap();
+        assert_eq!(back.series[0].refs.values.as_deref(), Some("Sheet1!$B$2:$B$3"));
+        c.series[0].refs = crate::chart::SeriesRefs {
+            name: Some("Data!$C$1".into()),
+            categories: Some("Data!$A$2:$A$3".into()),
+            values: Some("'My sheet'!$C$2:$C$3".into()),
+            sizes: None,
+        };
+        let xml = String::from_utf8(super::chart_xml(&c).0).unwrap();
+        assert!(xml.contains("<c:f>Data!$C$1</c:f>") && xml.contains("<c:f>Data!$A$2:$A$3</c:f>") && xml.contains("<c:f>'My sheet'!$C$2:$C$3</c:f>"));
+        assert_eq!(crate::chart::read::read_chart_xml(xml.as_bytes()).unwrap().series[0].refs, c.series[0].refs);
     }
 }

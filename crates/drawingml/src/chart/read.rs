@@ -387,7 +387,23 @@ fn read_series(s: &El, g: &El, group: (ChartType, bool, Option<bool>), categorie
     if let Some(b) = s.child(Local("bubbleSize")) {
         ser.sizes = numbers(b, budget);
     }
+    let f = |e: Option<&El>| data_ref(e?);
+    ser.refs = crate::chart::SeriesRefs {
+        name: f(s.child(Local("tx"))),
+        categories: f(s.child(Local("cat")).or_else(|| s.child(Local("xVal")))),
+        values: f(s.child(Local("val")).or_else(|| s.child(Local("yVal")))),
+        sizes: f(s.child(Local("bubbleSize"))),
+    };
     ser
+}
+
+/// The formula of a data source (`c:numRef`, `c:strRef` or `c:multiLvlStrRef`), if it has one.
+fn data_ref(e: &El) -> Option<String> {
+    let r = e.elements().find(|r| matches!(r.local(), "numRef" | "strRef" | "multiLvlStrRef"))?;
+    let f = r.child(Local("f"))?.text();
+    let f = f.trim();
+    // Formulas are short; a huge one is not kept.
+    (!f.is_empty() && f.len() <= 8192).then(|| f.to_string())
 }
 
 /// Axis scaling, titles, number formats and visibility. Returns the primary value axis and the
