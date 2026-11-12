@@ -4,6 +4,7 @@ use craft_behavior::Mixed;
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::choice::{RadioGroup, Swatch};
 use craft_ui::contract::{Bind, BodyCx, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _};
+use craft_ui::display::Divider;
 use craft_ui::layout_components::Row;
 use craft_ui::popover::Popover;
 use craft_ui::rails::{FlyoutButton, LastUsed, RailTool, SlotId, ToolSlot, remembered, shown_tool};
@@ -44,10 +45,10 @@ impl Outcome for AnnotationToolbarOutput {
 #[derive(Clone, Copy, Debug, Default)]
 struct PaletteOpen(bool);
 
-/// Acrobat's quick bar: Select, then the three groups (Comment, Highlight, Draw), each a button showing its
-/// last-used tool with a flyout of the group's tools, then the colour well and the line width of the tool's new
-/// annotations ([`AnnotateTool::color`], [`AnnotateTool::width`]); both are disabled for tools that draw nothing
-/// (Select, Eraser) and the width for markups. The colour well opens a palette popover.
+/// Acrobat's quick bar: Select, then the three groups (Comment, Highlight, Draw), a rule before each, each a button
+/// showing its last-used tool with a flyout of the group's tools, then the colour well and the line width of the
+/// tool's new annotations ([`AnnotateTool::color`], [`AnnotateTool::width`]); both are disabled for tools that draw
+/// nothing (Select, Eraser) and the width for markups. The colour well opens a palette popover.
 #[derive(craft_ui::contract::Pattern)]
 pub struct AnnotationToolbar<'a> {
     tool: &'a mut AnnotateTool,
@@ -83,6 +84,7 @@ impl<'a> AnnotationToolbar<'a> {
                     annotate.tool = tool;
                 }
                 for (slot, group) in slots.iter().zip(AnnotationGroup::ALL) {
+                    Divider::vertical().show(ui);
                     let tools: Vec<&RailTool<AnnotationTool>> = slot.tools.iter().collect();
                     let shown = shown_tool(&current, slot.id, &tools, &last, |_| true).map_or(current, |tool| tool.id);
                     let out = FlyoutButton::new(&slot.tools, &shown)

@@ -263,7 +263,7 @@ enum Button {
 }
 
 impl Button {
-    /// The buttons in reading order; a wider gap separates neighbours of different groups.
+    /// The buttons in reading order; a wider gap with a rule in it separates neighbours of different groups.
     const ALL: [Button; 14] = [
         Button::Value,
         Button::Speed,
@@ -535,6 +535,12 @@ impl<'a> GraphEditor<'a> {
             }
         }
         cells
+    }
+
+    /// Where a rule separates two groups of the shown buttons `cells`: the middle of the gap between them. A group
+    /// past the bar's end leaves no rule after the last shown button.
+    fn bar_rules(cells: &[(usize, Button, Rect)]) -> Vec<f32> {
+        cells.windows(2).filter(|pair| pair[0].1.group() != pair[1].1.group()).map(|pair| (pair[0].2.right() + pair[1].2.left()) / 2.0).collect()
     }
 
     /// The keys: a click picks, a drag moves the selected keys.
@@ -999,8 +1005,12 @@ impl Component for GraphEditor<'_> {
         // The bottom bar, over whatever the curves drew past the plot.
         draw.fill(&PaintShape::Rect(bar, CornerRadius::ZERO), style.bar_fill);
         draw.rule(RuleKind::Divider, bar.left_top(), bar.right_top());
+        let cells = Self::bar_cells(bar, style);
+        for x in Self::bar_rules(&cells) {
+            draw.rule(RuleKind::Divider, Pos2::new(x, bar.top() + style.gap), Pos2::new(x, bar.bottom() - style.gap));
+        }
         let words = cx.words::<GraphEditorWords>();
-        for (at, button, _) in Self::bar_cells(bar, style) {
+        for (at, button, _) in cells {
             let icon = IconSpec::svg(IconId::new(button.icon()));
             let name = Label::from(button.name(&words).to_owned());
             match button.on(&range) {
