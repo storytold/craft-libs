@@ -7,9 +7,13 @@ mod aiff;
 pub(crate) mod flac;
 mod pcm;
 #[cfg(feature = "pcm-encode")]
+mod raw;
+#[cfg(feature = "pcm-encode")]
 mod wav;
 
 use crate::{AudioBuffer, AudioError, ChannelLayout, EncodeFormat, EncodeOptions, Result};
+#[cfg(feature = "pcm-encode")]
+pub use raw::{pcm_aiff_file, pcm_aiff_header, pcm_wav_file, pcm_wav_header};
 use std::io::{Seek, Write};
 
 /// Encode `buf` as WAV/BWF, AIFF/AIFF-C or FLAC. Integer depths clamp samples to [-1, 1]; float
