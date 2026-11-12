@@ -920,8 +920,13 @@ pub(crate) fn begin(ctx: &Context) {
         }
     }
     with(ctx, |board| board.matcher = matcher);
-    if returning.is_some() && fired.iter().any(|fired| fired.phase == FirePhase::Press) {
+    let pressed = fired.iter().any(|fired| fired.phase == FirePhase::Press);
+    if returning.is_some() && pressed {
         focus::give_back_bar(ctx);
+    }
+    // A command a key runs closes the open popups (menus, dropdowns, lists), as a menu pick does.
+    if pressed {
+        overlay::close_popups(ctx);
     }
     for fired in fired {
         queue(ctx, fired);

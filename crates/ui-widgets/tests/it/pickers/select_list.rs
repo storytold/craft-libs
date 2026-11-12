@@ -1,15 +1,18 @@
 //! The open list of a Select is one gesture: the rows the keys reach are the value until Escape puts it back or Tab
 //! chooses it, and typing on the closed field opens the list on the first match. The keys the list takes are its own;
-//! an app shortcut it leaves runs and closes it.
+//! a command or app shortcut it leaves runs and closes it.
 
 use craft_ui::buttons::Button;
 use craft_ui::contract::overlay::close_popups;
-use craft_ui::contract::{Bind, Entry, Role, Show as _};
+use craft_ui::contract::{Bind, CommandSet, Entry, Role, Show as _, ShowContainer as _};
+use craft_ui::layout_components::Stack;
 use craft_ui::pickers::Select;
+use craft_ui::runtime::commands::Commands as _;
 use craft_ui::testing::focus::key_release;
 use craft_ui::testing::input::{key_press, text};
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, trial};
 use egui::{Event, Key, Modifiers, Ui};
+use std::cell::Cell;
 
 /// A select over One to Four.
 fn select(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
@@ -166,5 +169,42 @@ fn an_app_shortcut_runs_with_the_list_open_and_closes_it_through_the_runtime() {
     fixture.settle();
     assert!(app_read(&mut fixture, Key::Num1), "the chord the list leaves reaches the app");
     assert!(!list_open(&mut fixture), "the app's shortcut closes the list");
+    assert_eq!(value(&mut fixture), 1, "and the value stays");
+}
+
+/// The commands of the scope around the select.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
+#[command(prefix = "selectList", scope = "trial.selectList")]
+#[non_exhaustive]
+pub enum SelectListCommand {
+    #[command(label = "Mark", default = "Cmd+1")]
+    Mark,
+}
+
+/// The select in a stack whose command scope binds Cmd+1; the runs of the command are counted in `marks`.
+fn select_in_scope(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let marks = Cell::new(0u32);
+    let out = Stack::new().command_scope(<SelectListCommand as CommandSet>::SCOPE).show(ui, |ui, cx| {
+        while cx.take_command::<SelectListCommand>().is_some() {
+            marks.set(marks.get() + 1);
+        }
+        select(ui, data);
+    });
+    *data.value("marks", 0u32) += marks.get();
+    out.into()
+}
+
+#[trial]
+fn a_key_command_runs_with_the_list_open_and_closes_it() {
+    let mut fixture = Fixture::story(&Story::new("select_in_scope", select_in_scope));
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.key(Key::ArrowDown, Modifiers::ALT);
+    fixture.settle();
+    assert!(list_open(&mut fixture), "Alt+Down opens the list");
+    fixture.key(Key::Num1, Modifiers::COMMAND);
+    fixture.settle();
+    assert_eq!(*fixture.data().value("marks", 0u32), 1, "the command the key binds runs");
+    assert!(!list_open(&mut fixture), "and closes the list");
     assert_eq!(value(&mut fixture), 1, "and the value stays");
 }

@@ -286,9 +286,10 @@ pub fn request_close(ctx: &Context, id: Id, why: CloseReason) {
     push_close(ctx, id, why, false);
 }
 
-/// Queues a close of every popup layer of the running viewport shown last frame: its menus, dropdowns and lists. An
-/// app whose own dispatcher runs a shortcut from the keys the runtime leaves in egui's input calls it when the
-/// shortcut runs, so the command closes the open popups as a menu pick does; modal layers, windows and toasts stay.
+/// Queues a close of every popup layer of the running viewport shown last frame: its menus, dropdowns and lists. The
+/// runtime's command dispatcher calls it when a key runs a command; an app whose own dispatcher runs a shortcut from the
+/// keys the runtime leaves in egui's input calls it when the shortcut runs. Either way the command closes the open
+/// popups as a menu pick does; modal layers, windows and toasts stay.
 pub fn close_popups(ctx: &Context) {
     if !crate::runtime::measure::effect(ctx, "overlay::close_popups") {
         return;
