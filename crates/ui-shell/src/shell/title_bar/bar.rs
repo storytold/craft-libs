@@ -78,6 +78,9 @@ pub struct TitleBar<'a> {
     /// Whether a bar in a native frame shows the title.
     #[prop(flag)]
     title_when_native: bool,
+    /// A hairline along the bar's bottom edge, for a bar whose window draws no edge under it.
+    #[prop(flag)]
+    separator: bool,
     /// Glyphs from the desktop's icon theme for the round caption families.
     #[prop]
     icons: Option<&'a CaptionIcons>,
@@ -116,6 +119,7 @@ impl<'a> TitleBar<'a> {
             frame: None,
             maximized: None,
             title_when_native: false,
+            separator: false,
             icons: None,
             trailing: None,
             title: None,
@@ -234,8 +238,11 @@ impl Component for TitleBar<'_> {
         }
     }
 
-    /// The hairline along the bottom edge, over the content.
+    /// The [`separator`](TitleBar::separator) along the bottom edge, over the content.
     fn paint_over(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        if !self.separator {
+            return;
+        }
         let draw = ui.draw();
         let y = cx.rect.bottom() - draw.rule_width(RuleKind::Divider) / 2.0;
         draw.rule(RuleKind::Divider, pos2(cx.rect.left(), y), pos2(cx.rect.right(), y));

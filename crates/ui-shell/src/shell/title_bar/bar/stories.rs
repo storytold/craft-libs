@@ -24,27 +24,27 @@ fn tools(ui: &mut Ui, _: &mut crate::contract::BodyCx<'_>) {
 #[story(TitleBar<'static>, covers = [Default], drive = Drive::Never)]
 fn title_bar_windows(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let frame = captions(CaptionFamily::Windows, &[], &[Caption::Minimize, Caption::Maximize, Caption::Close]);
-    TitleBar::new().frame(frame).show_titled(ui, Title::new("Landscape.psd"), menu, tools).into()
+    TitleBar::new().separator().frame(frame).show_titled(ui, Title::new("Landscape.psd"), menu, tools).into()
 }
 
 #[story(TitleBar<'static>, covers = [], drive = Drive::Never)]
 fn title_bar_windows_maximized(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let frame = captions(CaptionFamily::Windows, &[], &[Caption::Minimize, Caption::Maximize, Caption::Close]);
-    TitleBar::new().frame(frame).maximized(true).show_titled(ui, Title::unsaved("Landscape.psd"), menu, tools).into()
+    TitleBar::new().separator().frame(frame).maximized(true).show_titled(ui, Title::unsaved("Landscape.psd"), menu, tools).into()
 }
 
 #[story(TitleBar<'static>, covers = [], drive = Drive::Never)]
 fn title_bar_adwaita(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let frame = captions(CaptionFamily::Adwaita, &[], &[Caption::Minimize, Caption::Maximize, Caption::Close]);
-    TitleBar::new().frame(frame).show_titled(ui, Title::new("Landscape.psd"), menu, tools).into()
+    TitleBar::new().separator().frame(frame).show_titled(ui, Title::new("Landscape.psd"), menu, tools).into()
 }
 
 #[story(TitleBar<'static>, covers = [], drive = Drive::Never)]
 fn title_bar_inset(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    TitleBar::new().frame(Frame::Inset(MacInset::default())).show_titled(ui, Title::new("Landscape.psd"), menu, tools).into()
+    TitleBar::new().separator().frame(Frame::Inset(MacInset::default())).show_titled(ui, Title::new("Landscape.psd"), menu, tools).into()
 }
 
 #[story(TitleBar<'static>, covers = [], drive = Drive::Never)]
 fn title_bar_native(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    TitleBar::new().frame(Frame::Native).title_when_native().show_titled(ui, Title::new("Landscape.psd"), menu, tools).into()
+    TitleBar::new().separator().frame(Frame::Native).title_when_native().show_titled(ui, Title::new("Landscape.psd"), menu, tools).into()
 }
