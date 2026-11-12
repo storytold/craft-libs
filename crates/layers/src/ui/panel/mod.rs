@@ -14,6 +14,7 @@ mod row;
 #[cfg(feature = "screen-testing")]
 mod stories;
 
+pub use drag::LayersDrag;
 pub use events::{
     ActivateOn, LayerColumn, LayerDrop, LayerMove, LayerPosition, LayerSelect, LayerToggle, LayersEvent, MenuTarget, RowTransfer, SubRowMove,
 };

@@ -10,9 +10,13 @@ use super::LayersPanelCommands;
 use super::events::{LayerDrop, LayerMove, LayerPosition, LayersEvent, RowTransfer, SubRowMove};
 use crate::ui::tree::{LayerKind, LayerRowKey, LayerTree, SubRowGroup};
 
-/// What a drag from the rows carries for the drop targets outside the list: the footer buttons.
+/// What a drag from the Layers panel carries for the drop targets outside its rows: the footer buttons, the rows
+/// that take a mask, and the app's own targets (a document tab that copies the dragged layers into its document).
+///
+/// An app reads it from the drag session: `craft_ui::runtime::drag::active::<LayersDrag<Id>>(ctx)` while it is held,
+/// or a collection's `DropKind::new::<LayersDrag<Id>>` for the drop.
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct LayersDrag<K> {
+pub struct LayersDrag<K> {
     /// The list the drag started in.
     pub(super) list: egui::Id,
     /// The dragged rows, or the one mask thumbnail.
@@ -20,6 +24,11 @@ pub(super) struct LayersDrag<K> {
 }
 
 impl<K> LayersDrag<K> {
+    /// The dragged layers, top first; empty when the drag carries effects, Smart Filter rows or a mask.
+    pub fn layers(&self) -> Vec<&K> {
+        if self.keys.iter().all(LayerRowKey::is_layer) { self.keys.iter().map(LayerRowKey::layer).collect() } else { Vec::new() }
+    }
+
     pub(super) fn new(list: egui::Id, keys: Vec<LayerRowKey<K>>) -> Self {
         Self { list, keys }
     }
