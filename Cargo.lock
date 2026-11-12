@@ -1031,6 +1031,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ews"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "proptest",
+]
+
+[[package]]
 name = "craft-exr"
 version = "0.1.0"
 dependencies = [

@@ -114,6 +114,7 @@ craft-xml = { path = "crates/xml" }
 craft-zip = { path = "crates/zip" }
 craft-y4m = { path = "crates/y4m" }
 craft-epub = { path = "crates/epub" }
+craft-ews = { path = "crates/ews" }
 craft-video = { path = "crates/video" }
 craft-web-api = { path = "crates/web-api" }
 craft-window = { path = "crates/window" }
