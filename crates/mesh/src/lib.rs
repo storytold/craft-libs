@@ -687,6 +687,9 @@ impl Scene {
                 return bad(format!("material `{}` names an image that does not exist", m.name));
             }
         }
+        if self.texture_variants.iter().any(|t| t.image >= self.images.len()) {
+            return bad("a texture names an image that does not exist".into());
+        }
         let n = self.nodes.len();
         for node in &self.nodes {
             let refs =
