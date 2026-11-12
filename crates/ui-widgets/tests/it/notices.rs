@@ -1,10 +1,11 @@
-//! Notices: the live region of an announced notice and a card's bullet lines.
+//! Notices: the live region of an announced notice, a card's bullet lines and a centred notice's hosted content.
 
 use craft_theme::variant::Tone;
+use craft_ui::buttons::Button;
 use craft_ui::contract::{Politeness, Props as _, Show as _};
-use craft_ui::notices::{Notice, NoticeLayout};
+use craft_ui::notices::{Notice, NoticeAction, NoticeLayout};
 use craft_ui::testing::{Fixture, trial};
-use egui::Id;
+use egui::{Id, Vec2};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -40,4 +41,29 @@ fn a_card_shows_eight_bullet_lines_and_counts_the_rest() {
     assert!(!painted("Warning 9") && !painted("Warning 10"), "the rest are left out");
     assert!(painted("\u{2026}and 2 more"), "one line counts them");
     assert_eq!(fixture.texts().iter().filter(|painted| painted.text == "\u{2022}").count(), 8, "each shown line has a bullet");
+}
+
+/// A centred notice hosts the app's own leaf under its actions: the leaf sits centred under them, and a click on it
+/// reaches the app through the leaf's output.
+#[trial]
+fn a_centred_notice_hosts_content_under_its_actions() {
+    let clicked = Rc::new(Cell::new(false));
+    let seen = clicked.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let seen = seen.clone();
+        let _ = Notice::new(Tone::Neutral, "Create a new document or open an existing file.")
+            .layout(NoticeLayout::Centred)
+            .title("No document")
+            .action(NoticeAction::new("New Document"))
+            .content(Button::new("Browse Samples"), move |out| seen.set(seen.get() || out.clicks > 0))
+            .show(ui);
+    });
+    fixture.room(Vec2::new(500.0, 400.0));
+    fixture.settle();
+    let action = fixture.by_label("New Document").expect("the action");
+    let hosted = fixture.by_label("Browse Samples").expect("the hosted leaf has its node");
+    assert!(hosted.rect.top() >= action.rect.bottom(), "the leaf sits under the actions");
+    assert!((hosted.rect.center().x - action.rect.center().x).abs() < 1.0, "both are centred in the column");
+    fixture.click(&hosted).settle();
+    assert!(clicked.get(), "the click reaches the app");
 }

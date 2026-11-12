@@ -5,7 +5,7 @@ use super::placement::Placed;
 use super::show::{TEXT_CELL, TOGGLE, TRAILING};
 use super::style::ListRowStyle;
 use super::thumb::{RowThumb, target_at};
-use super::trailing::{TrailingFace, TrailingItem, trailing_run};
+use super::trailing::{TrailingFace, TrailingItem, field_key, trailing_run};
 use crate::buttons::IconButton;
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Cx, PaintUi, Pointer as _, Props as _, Styled as _, item_part_open};
@@ -36,7 +36,7 @@ impl ListRow<'_> {
                 TrailingItem::Hosted(hosted) => {
                     if let Some(item) = hosted.item.take() {
                         let height = hosted.size.map_or(cx.style.sizes.row, |size| size.ideal.y.min(cx.style.sizes.row));
-                        item.show(ui, at, Rect::from_center_size(slot.center(), Vec2::new(slot.width(), height)));
+                        item.show(ui, field_key(at), Rect::from_center_size(slot.center(), Vec2::new(slot.width(), height)));
                     }
                 }
                 TrailingItem::Part { part, face, enabled, revealed, .. } => {

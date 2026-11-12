@@ -10,6 +10,7 @@ mod faces;
 pub mod ghost;
 mod group;
 mod held;
+mod hosted;
 mod items;
 mod label;
 mod lazy;
@@ -69,6 +70,7 @@ pub use cx::{
 pub use entry::{Entry, step_stop, step_stops};
 pub use group::{GroupHandle, GroupKind, GroupState};
 pub use held::Held;
+pub use hosted::{Hosted, HostedKey, Hosting};
 #[doc(hidden)]
 pub use items::lead_position;
 #[doc(hidden)]

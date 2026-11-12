@@ -1,12 +1,15 @@
 //! Stories of the notices family.
 
 use super::{
-    Notice, NoticeAction, NoticeCenter, NoticeLayout, PostedNotice, SaveResult, SettingsLoad, SettingsNoticeState, SettingsNotices, ToastStack,
+    Notice, NoticeAction, NoticeCenter, NoticeIcon, NoticeLayout, PostedNotice, SaveResult, SettingsLoad, SettingsNoticeState, SettingsNotices,
+    ToastStack,
 };
 use crate::contract::{Politeness, Show as _};
-use crate::display::Text;
+use crate::display::{Shade, Text};
+use crate::primitives::IconSpec;
 use crate::runtime::toast;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
+use craft_behavior::IconId;
 use craft_theme::variant::Tone;
 use egui::Ui;
 
@@ -47,12 +50,16 @@ fn notice_card(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         .into()
 }
 
+/// The no-document screen: icon, title, description, two actions and a drop hint under them.
 #[story(Notice<'static>, covers = [], drive = Drive::Never)]
 fn notice_centred(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    Notice::new(Tone::Neutral, "Drop files here or choose them from your computer.")
+    Notice::new(Tone::Neutral, "Create a new document or open an existing file.")
         .layout(NoticeLayout::Centred)
-        .title("No files yet")
-        .action(NoticeAction::new("Choose files"))
+        .icon(NoticeIcon::Custom(IconSpec::svg(IconId::new("image"))))
+        .title("No document")
+        .action(NoticeAction::new("New Document\u{2026}"))
+        .action(NoticeAction::new("Open\u{2026}"))
+        .content(Text::new("Drop an image here to open it").shade(Shade::Muted), |_| {})
         .show(ui)
         .into()
 }

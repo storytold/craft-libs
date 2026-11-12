@@ -5,13 +5,14 @@
 use super::words::NoticeWords;
 use crate::buttons::{Button, IconButton, Link};
 use crate::contract::{
-    Access, Common, Component, Cx, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Politeness, Props as _, Role, Styled as _, WordSetCx as _,
+    Access, Common, Component, Cx, Hosted, Hosting, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Politeness, Props as _, Role, Show,
+    Styled as _, WordSetCx as _,
 };
 use crate::primitives::{HAlign, IconSpec, TextRun, Wrap};
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::{EnvView, Label};
 use crate::style::{ComponentStyle, IconLook, Insets, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole, UiTokens};
-use craft_behavior::{Flow, IconId, Intent, Metrics, NavShape, PartKey, Roving, Sense};
+use craft_behavior::{Flow, IconId, Intent, Metrics, NavShape, PartKey, Proposal, Roving, Sense};
 use craft_i18n::Format;
 use craft_theme::{Rgba, Stateful, States, Variant, variant::Tone};
 use egui::{Align, Pos2, Rect, Response, Vec2};
@@ -103,6 +104,8 @@ const MESSAGE: PartKey = PartKey::new("message");
 /// A bullet line's text, and the line that stands for the lines left out: selection parts.
 const LINE: PartKey = PartKey::new("line");
 const MORE: PartKey = PartKey::new("more");
+/// The key of a hosted leaf's slot.
+const CONTENT: &str = "content";
 /// Most bullet lines a notice shows; the rest become one "…and n more" line.
 const MAX_LINES: usize = 8;
 /// The mark before each bullet line.
@@ -149,7 +152,8 @@ pub struct NoticeStyle {
 const READING_IN_BODY_SIZES: f32 = 38.5;
 
 /// A message in a tone. The tone picks the icon and the colours; the neutral tone reads muted and has no icon. The
-/// message is the label; a title above it is optional. Actions read as links (as buttons in the centred layout) and
+/// message is the label; a title above it is optional. A centred notice can host the app's own leaves under its
+/// actions (a drop hint, "No recent files"). Actions read as links (as buttons in the centred layout) and
 /// are reported in the output; with `dismiss` a close button is the last part. Bullet lines under the message (an
 /// inline or card notice's list of details) show up to eight, then one "…and n more" line. With `announce` set, the notice is a
 /// live region: its title and message are announced when it appears and whenever they change. The title and message wrap and can be selected and copied; Tab passes over them.
@@ -183,6 +187,9 @@ pub struct Notice<'a> {
     announce: Option<Politeness>,
     actions: Vec<NoticeAction>,
     lines: Vec<Label>,
+    /// The host's leaves under the actions of a centred notice, and their sizes in this pass.
+    content: Vec<Box<dyn for<'r> Hosted<Notice<'r>> + 'a>>,
+    content_sizes: Vec<Vec2>,
     placed: Option<Placed>,
     taken: Option<usize>,
     dismissed: bool,
@@ -198,6 +205,7 @@ struct Placed {
     lines: Vec<(Rect, Rect)>,
     more: Option<Rect>,
     actions: Vec<Rect>,
+    content: Vec<Rect>,
     /// The actions' labels, with commands resolved.
     labels: Vec<Label>,
     dismiss: Option<Rect>,
@@ -244,6 +252,8 @@ impl<'a> Notice<'a> {
             announce: None,
             actions: Vec::new(),
             lines: Vec::new(),
+            content: Vec::new(),
+            content_sizes: Vec::new(),
             placed: None,
             taken: None,
             dismissed: false,
@@ -263,6 +273,24 @@ impl<'a> Notice<'a> {
     pub fn lines<L: Into<Label>>(mut self, lines: impl IntoIterator<Item = L>) -> Self {
         self.lines = lines.into_iter().map(Into::into).collect();
         self
+    }
+
+    /// Hosts `component` under the actions of a centred notice, after the leaves added before it; its output goes to
+    /// `output` in the pass it is shown. Other layouts show no hosted leaves.
+    #[must_use]
+    pub fn content<C: Show + 'a>(mut self, component: C, output: impl FnOnce(C::Output) + 'a) -> Self {
+        self.content.push(Box::new(Hosting::new(component, output)));
+        self
+    }
+
+    /// Measures the hosted leaves for this pass; only a centred notice shows them.
+    fn measure_content(&mut self, cx: &MeasureCx<'_, Self>) {
+        let centred = !self.row();
+        self.content_sizes = if centred {
+            self.content.iter_mut().enumerate().map(|(at, item)| item.measure(cx, (CONTENT, at), Proposal::Ideal)).collect()
+        } else {
+            Vec::new()
+        };
     }
 
     fn texts<'t>(&self, env: &EnvView<'_>, words: &NoticeWords, format: &Format, message: &'t str) -> Texts<'t> {
@@ -354,14 +382,15 @@ impl<'a> Notice<'a> {
         } else {
             actions.iter().map(|size| size.y).fold(0.0, f32::max)
         };
-        let text_width = title.map_or(0.0, |size| size.x).max(message.x).max(actions_width).max(lines_width);
+        let content_width = self.content_sizes.iter().map(|size| size.x).fold(0.0, f32::max);
+        let text_width = title.map_or(0.0, |size| size.x).max(message.x).max(actions_width).max(lines_width).max(content_width);
         let text_height = title.map_or(0.0, |size| size.y) + message.y + lines_height;
         let with_actions = text_height + if actions.is_empty() { 0.0 } else { gap + actions_height };
         let (needs, height) = if row {
             (icon_width + text_width + dismiss_width, with_actions.max(icon.unwrap_or(0.0)).max(dismiss.map_or(0.0, |size| size.y)))
         } else {
             let parts = [icon, title.map(|size| size.y), Some(message.y), (!actions.is_empty()).then_some(actions_height)];
-            let shown: Vec<f32> = parts.into_iter().flatten().collect();
+            let shown: Vec<f32> = parts.into_iter().flatten().chain(self.content_sizes.iter().map(|size| size.y)).collect();
             (text_width.max(icon.unwrap_or(0.0)), shown.iter().sum::<f32>() + gap * shown.len().saturating_sub(1) as f32)
         };
         let lines = line_sizes.iter().map(|size| size.y).collect();
@@ -427,6 +456,7 @@ impl Component for Notice<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        self.measure_content(cx);
         let texts = self.texts(&cx.env, &cx.words::<NoticeWords>(), cx.format(), cx.resolved.label);
         let natural = self.plan(cx, &texts, f32::INFINITY).needs;
         let width = match (self.layout, cx.room) {
@@ -444,6 +474,7 @@ impl Component for Notice<'_> {
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
+        self.measure_content(cx);
         let rtl = cx.flow.is_rtl();
         let gap = cx.gap();
         let texts = self.texts(&cx.env, &cx.words::<NoticeWords>(), cx.format(), cx.resolved.label);
@@ -510,15 +541,14 @@ impl Component for Notice<'_> {
             } else if !plan.actions.is_empty() {
                 let total = plan.actions.iter().map(|size| size.x).sum::<f32>() + gap * (plan.actions.len() - 1) as f32;
                 let height = plan.actions.iter().map(|size| size.y).fold(0.0, f32::max);
-                let band = Rect::from_min_size(Pos2::new(rect.left(), y), Vec2::new(rect.width(), height));
-                let aligned = Flow::new(band, rtl).align(Vec2::new(total.min(rect.width()), height), Align::Center, Align::Min);
-                let mut line = Flow::new(aligned, rtl);
+                let mut line = Flow::new(put(Vec2::new(total, height)), rtl);
                 for size in &plan.actions {
                     let (slot, rest) = line.take_start(size.x);
                     placed.actions.push(Rect::from_min_size(slot.min, *size));
                     line = rest.take_start(gap).1;
                 }
             }
+            placed.content = self.content_sizes.iter().map(|size| put(*size)).collect();
         }
         if self.layout == NoticeLayout::Centred
             && let Some(title) = placed.title
@@ -600,6 +630,9 @@ impl Component for Notice<'_> {
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let Some(placed) = self.placed.clone() else { return };
         let words = cx.words::<NoticeWords>();
+        for (at, (item, rect)) in std::mem::take(&mut self.content).into_iter().zip(&placed.content).enumerate() {
+            item.show(ui, (CONTENT, at), *rect);
+        }
         for (at, label) in placed.labels.iter().cloned().enumerate() {
             let part = ACTION.at(at as u64);
             if self.row() {

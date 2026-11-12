@@ -26,6 +26,7 @@ mod style;
 mod thumb;
 mod trailing;
 
+use crate::contract::Hosting;
 pub use output::{RowEvent, RowOutput};
 #[cfg(feature = "testing")]
 pub use placement::RowPlacement;
@@ -41,7 +42,7 @@ pub(crate) use thumb::RowThumb;
 pub(super) use thumb::Thumb;
 use thumb::ThumbPayload;
 pub use thumb::{ThumbAspect, ThumbPaint, ThumbSize, ThumbTarget};
-use trailing::{Hosted, Hosting};
+use trailing::Hosted;
 pub(super) use trailing::{Trailing, TrailingItem};
 pub use trailing::{TrailingFace, TrailingPart};
 
@@ -485,24 +486,24 @@ impl<'a> ListRow<'a> {
     /// Tab leaves the collection); it takes the keys it declares.
     #[must_use]
     pub fn trailing_field<C: Show + 'a>(self, field: C, output: impl FnOnce(C::Output) + 'a) -> Self {
-        self.hosted(Hosting { component: field, output, shown: true }, false)
+        self.hosted(Hosting::new(field, output), false)
     }
 
     /// A component at the trailing end as [`trailing_field`](Self::trailing_field) adds one, that drops out when the
     /// label would get narrower than its least width with it (a binding's badge).
     #[must_use]
     pub fn optional_field<C: Show + 'a>(self, field: C, output: impl FnOnce(C::Output) + 'a) -> Self {
-        self.hosted(Hosting { component: field, output, shown: true }, true)
+        self.hosted(Hosting::new(field, output), true)
     }
 
     /// Empty room at the trailing end, as wide as `component` measures: a row that lacks a field the other rows have
     /// keeps the items after it in line with theirs. Nothing is shown.
     #[must_use]
     pub fn trailing_space<C: Show + 'a>(self, component: C) -> Self {
-        self.hosted(Hosting { component, output: |_| {}, shown: false }, false)
+        self.hosted(Hosting::new(component, |_| {}).hidden(), false)
     }
 
-    fn hosted(mut self, hosting: impl trailing::HostedItem + 'a, optional: bool) -> Self {
+    fn hosted(mut self, hosting: impl for<'r> crate::contract::Hosted<ListRow<'r>> + 'a, optional: bool) -> Self {
         let item = Hosted { item: Some(Box::new(hosting)), size: None };
         self.trailing.push(Trailing { item: TrailingItem::Hosted(item), optional });
         self

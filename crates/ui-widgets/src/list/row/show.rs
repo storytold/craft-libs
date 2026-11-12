@@ -6,7 +6,7 @@ use super::paint::draw_clip_arrow;
 use super::placement::{Sizes, lead_run};
 use super::style::{FillKey, ListRowStyle, RowForm, fill_of, row_ink_of, selected_outline};
 use super::thumb::{RowThumb, target_at};
-use super::trailing::{TrailingFace, TrailingItem, TrailingPart};
+use super::trailing::{HostedSize, TrailingFace, TrailingItem, TrailingPart, field_key};
 use super::{ListRow, RowInk};
 use crate::contract::{
     Access, Bind, Component, Cx, DragPreview, MeasureCx, Name, OpenChange, PaintUi, PartsCx, Pointer as _, Props as _, Role, RowPressed, Styled as _,
@@ -524,7 +524,9 @@ impl ListRow<'_> {
                 && hosted.size.is_none()
                 && let Some(item) = hosted.item.as_mut()
             {
-                hosted.size = Some(item.measure(cx, at));
+                let ideal = item.measure(cx, field_key(at), Proposal::Ideal);
+                let least = item.measure(cx, field_key(at), Proposal::Min).x;
+                hosted.size = Some(HostedSize { ideal, least });
             }
         }
     }

@@ -1,12 +1,11 @@
 //! A row's trailing items: texts, pressable parts and hosted components.
 
 use super::ListRow;
-use crate::contract::{MeasureCx, PaintUi, Show};
+use crate::contract::Hosted as HostedLeaf;
 use crate::primitives::{IconSpec, Span, TextRun};
 use crate::runtime::env::Label;
-use craft_behavior::Proposal;
 use craft_theme::TypeRole;
-use egui::{Rect, Vec2};
+use egui::Vec2;
 
 /// The key of a pressable trailing item, chosen by the caller: a row's parts are told apart by it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -44,35 +43,9 @@ impl TrailingFace {
     }
 }
 
-/// A component a row hosts at its trailing end, erased: measured for its slot, then shown once.
-pub(in crate::list) trait HostedItem {
-    /// The component's size at its ideal and the least width it narrows to, as `PaintUi::child` will show it under the
-    /// key of trailing item `at`.
-    fn measure(&mut self, cx: &MeasureCx<'_, ListRow<'_>>, at: usize) -> HostedSize;
-
-    /// Shows the component at `rect` and hands its output on.
-    fn show(self: Box<Self>, ui: &mut PaintUi<'_>, at: usize, rect: Rect);
-}
-
-/// A hosted component and what takes its output; `shown` false keeps its slot empty.
-pub(super) struct Hosting<C, F> {
-    pub component: C,
-    pub output: F,
-    pub shown: bool,
-}
-
-impl<C: Show, F: FnOnce(C::Output)> HostedItem for Hosting<C, F> {
-    fn measure(&mut self, cx: &MeasureCx<'_, ListRow<'_>>, at: usize) -> HostedSize {
-        let ideal = cx.child(("field", at), &mut self.component, Proposal::Ideal);
-        let least = cx.child(("field", at), &mut self.component, Proposal::Min).x;
-        HostedSize { ideal, least }
-    }
-
-    fn show(self: Box<Self>, ui: &mut PaintUi<'_>, at: usize, rect: Rect) {
-        if self.shown {
-            (self.output)(ui.child(("field", at), rect, self.component));
-        }
-    }
+/// The key a hosted trailing component of item `at` is measured and shown under.
+pub(in crate::list) const fn field_key(at: usize) -> (&'static str, usize) {
+    ("field", at)
 }
 
 /// A hosted component's size where the row has room, and the least width it narrows to where it has not.
@@ -84,7 +57,7 @@ pub(in crate::list) struct HostedSize {
 
 /// A hosted item: the component until it is shown, and its size once measured in this pass.
 pub(in crate::list) struct Hosted<'a> {
-    pub item: Option<Box<dyn HostedItem + 'a>>,
+    pub item: Option<Box<dyn for<'r> HostedLeaf<ListRow<'r>> + 'a>>,
     pub size: Option<HostedSize>,
 }
 
