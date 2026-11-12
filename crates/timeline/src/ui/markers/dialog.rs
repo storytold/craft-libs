@@ -15,7 +15,7 @@ use super::MarkerWords;
 use crate::markers::{Marker, MarkerColor, MarkerId};
 use crate::time::Tick;
 use crate::timecode::TimeFormat;
-use crate::ui::{TimecodeCodec, TimelineWords, label_palette};
+use crate::ui::{TimecodeField, TimelineWords, label_palette};
 
 /// The Comments field's height in lines (EffectCraft `markers_ui.rs:151`).
 const COMMENT_ROWS: usize = 3;
@@ -122,10 +122,10 @@ impl StackDialog for MarkerDialog {
                         TextField::new(words.name.clone(), Bind::bound(&mut draft.name)).show(ui);
                     });
                     Field::new(words.time.clone()).show(ui, |ui, _| {
-                        TextField::with_codec(words.time.clone(), Bind::bound(&mut draft.start), TimecodeCodec::new(format)).show(ui);
+                        let _ = TimecodeField::new(words.time.clone(), Bind::bound(&mut draft.start), format).show(ui);
                     });
                     Field::new(words.duration.clone()).show(ui, |ui, _| {
-                        TextField::with_codec(words.duration.clone(), Bind::bound(&mut draft.duration), TimecodeCodec::new(format)).show(ui);
+                        let _ = TimecodeField::new(words.duration.clone(), Bind::bound(&mut draft.duration), format).show(ui);
                     });
                     Field::new(words.comment.clone()).show(ui, |ui, _| {
                         TextField::new(words.comment.clone(), Bind::bound(&mut draft.comment)).lines(COMMENT_ROWS).show(ui);
