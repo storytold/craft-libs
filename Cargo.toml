@@ -17,6 +17,7 @@ craft-aep = { path = "crates/aep" }
 craft-affinity = { path = "crates/affinity" }
 craft-ai-core = { path = "crates/ai-core" }
 craft-pdf = { path = "crates/pdf", version = "=0.1.0" }
+craft-pdn = { path = "crates/pdn" }
 craft-plate-test = { path = "crates/plate-test" }
 krilla = { version = "=0.8.2", default-features = false, features = ["raster-images"] }
 hayro = { version = "=0.7.1", default-features = false }
@@ -25,6 +26,7 @@ hayro-syntax = { version = "=0.7.2", default-features = false, features = ["std"
 bytemuck = "1"
 kurbo = "0.13"
 thiserror = "2"
+craft-aaf = { path = "crates/aaf" }
 craft-atomic = { path = "crates/atomic" }
 craft-captions = { path = "crates/captions" }
 craft-cfb = { path = "crates/cfb" }
@@ -34,64 +36,91 @@ craft-csv = { path = "crates/csv" }
 craft-dialogs = { path = "crates/dialogs" }
 craft-dxf = { path = "crates/dxf" }
 craft-drawingml = { path = "crates/drawingml" }
+craft-eps = { path = "crates/eps" }
 craft-doc = { path = "crates/doc" }
 craft-docpath = { path = "crates/docpath" }
+craft-dpx = { path = "crates/dpx" }
 craft-ecproj-format = { path = "crates/ecproj-format" }
 craft-figma-rest = { path = "crates/figma-rest" }
+craft-exr = { path = "crates/exr" }
 craft-font-catalog = { path = "crates/font-catalog" }
 craft-font-manager = { path = "crates/font-manager" }
 craft-font-store = { path = "crates/font-store" }
 craft-gainmap = { path = "crates/gainmap" }
 craft-gcode = { path = "crates/gcode" }
+craft-gif = { path = "crates/gif" }
+craft-hdr = { path = "crates/hdr" }
 craft-mesh = { path = "crates/mesh" }
+craft-html = { path = "crates/html" }
 craft-heif = { path = "crates/heif" }
 craft-fig = { path = "crates/fig" }
 craft-fonts-build = { path = "crates/fonts-build" }
 craft-i18n = { path = "crates/i18n" }
 craft-idml = { path = "crates/idml" }
+craft-jmap = { path = "crates/jmap" }
+craft-ical = { path = "crates/ical" }
 craft-jpeg = { path = "crates/jpeg" }
 craft-kiwi = { path = "crates/kiwi" }
 craft-keymap = { path = "crates/keymap" }
 craft-assuan = { path = "crates/assuan" }
+craft-kra = { path = "crates/kra" }
 craft-audio = { path = "crates/audio" }
 # No default features, so craft-audio's `encode` builds craft-media without `isobmff`.
 craft-media = { path = "crates/media", default-features = false }
 craft-media-testkit = { path = "crates/media-testkit" }
 craft-midi = { path = "crates/midi" }
 craft-mime = { path = "crates/mime" }
+craft-odf = { path = "crates/odf" }
+craft-prc = { path = "crates/prc" }
 craft-lottie = { path = "crates/lottie" }
 craft-menu = { path = "crates/menu" }
 craft-metafile = { path = "crates/metafile" }
+craft-offcrypto = { path = "crates/offcrypto" }
 craft-opc = { path = "crates/opc" }
+craft-ora = { path = "crates/ora" }
 craft-penpot = { path = "crates/penpot" }
 craft-pcraft-format = { path = "crates/pcraft-format" }
 craft-plotter = { path = "crates/plotter" }
 craft-prepress = { path = "crates/prepress" }
 craft-print = { path = "crates/print" }
 craft-proof = { path = "crates/proof" }
+craft-raster-codecs = { path = "crates/raster-codecs" }
 craft-psd = { path = "crates/psd" }
+craft-pst = { path = "crates/pst" }
 craft-quit = { path = "crates/quit" }
 craft-rtf = { path = "crates/rtf" }
 craft-raw = { path = "crates/raw" }
+craft-sheet = { path = "crates/sheet" }
 craft-sketch = { path = "crates/sketch" }
 craft-settings = { path = "crates/settings" }
 craft-silhouette-studio = { path = "crates/silhouette-studio" }
 craft-svg = { path = "crates/svg" }
 craft-svg-paths = { path = "crates/svg-paths" }
+craft-stream-codecs = { path = "crates/stream-codecs" }
 craft-text = { path = "crates/text" }
+craft-tga = { path = "crates/tga" }
 craft-timeline = { path = "crates/timeline" }
 craft-tiff = { path = "crates/tiff" }
+craft-metadata = { path = "crates/metadata" }
 craft-ui = { path = "crates/ui" }
 craft-update = { path = "crates/update" }
+craft-vcard = { path = "crates/vcard" }
 craft-vectorcraft-format = { path = "crates/vectorcraft-format" }
 craft-vectordrawable = { path = "crates/vectordrawable" }
 craft-xls = { path = "crates/xls" }
+craft-wordmodel = { path = "crates/wordmodel" }
+craft-xlsx = { path = "crates/xlsx" }
+craft-xcf = { path = "crates/xcf" }
 craft-xml = { path = "crates/xml" }
+craft-zip = { path = "crates/zip" }
+craft-y4m = { path = "crates/y4m" }
 craft-epub = { path = "crates/epub" }
+craft-ews = { path = "crates/ews" }
 craft-video = { path = "crates/video" }
 craft-web-api = { path = "crates/web-api" }
 craft-window = { path = "crates/window" }
 craft-web-host = { path = "crates/web-host" }
+craft-webp = { path = "crates/webp" }
 egui = { version = "0.37", default-features = false }
 md5 = { package = "md-5", version = "0.10", default-features = false }
 rayon = "1"

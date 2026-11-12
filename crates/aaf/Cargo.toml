@@ -1,0 +1,18 @@
+[package]
+name = "craft-aaf"
+description = "Clean-room AAF (Edit Protocol, structured storage) and OMF Interchange 2.0 (Bento) readers and writers over one mob-style composition model, with embedded PCM essence."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-cfb = { workspace = true }
+craft-timeline = { workspace = true }
+# WAV and AIFF around embedded PCM essence: the one WAV/AIFF implementation, not a second one here.
+craft-audio = { workspace = true, features = ["decode-native", "pcm-encode"] }
+thiserror = { workspace = true }

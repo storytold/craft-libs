@@ -1,7 +1,6 @@
 //! An EPUB 2 or 3 package, read: container, package document, and bounded entry reads.
 
 use std::collections::HashMap;
-use std::io::{Cursor, Read};
 
 use craft_xml::{El, Local, Options};
 
@@ -156,7 +155,7 @@ fn percent_decode(s: &str) -> String {
 
 /// Both required documents must be well formed: a lenient read would take a container or package
 /// document cut off after its useful content for a complete one, and give half a book.
-fn parse_xml(part: &str, xml: &[u8], limits: &Limits) -> Result<El, Error> {
+pub(crate) fn parse_xml(part: &str, xml: &[u8], limits: &Limits) -> Result<El, Error> {
     let xml_limits = craft_xml::Limits { max_input: usize::try_from(limits.max_entry_bytes).unwrap_or(usize::MAX), ..craft_xml::Limits::DEFAULT };
     Options::local().strict().with_limits(xml_limits).parse(xml).map_err(|e| Error::Part { part: part.to_string(), msg: e.to_string() })
 }
@@ -224,10 +223,8 @@ pub fn parse_package(xml: &[u8], opf_dir: &str, limits: &Limits) -> Result<Packa
 /// An open EPUB package. Entries are decompressed only when asked for, within the byte budgets
 /// of its [`Limits`].
 pub struct Epub<'a> {
-    zip: zip::ZipArchive<Cursor<&'a [u8]>>,
+    zip: craft_zip::Archive<'a>,
     limits: Limits,
-    /// Bytes the entries still to be read may expand to.
-    left: u64,
     /// The archive path of the package document.
     pub opf_path: String,
     pub package: Package,
@@ -242,11 +239,16 @@ impl<'a> Epub<'a> {
     /// Reads the container and the package document. The `mimetype` entry is not required:
     /// packages without one, or with it compressed, are common.
     pub fn open_with(bytes: &'a [u8], limits: Limits) -> Result<Self, Error> {
-        let zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| Error::NotEpub(e.to_string()))?;
-        if zip.len() > limits.max_entries {
-            return Err(Error::TooManyEntries { found: zip.len(), limit: limits.max_entries });
-        }
-        let mut epub = Epub { zip, limits, left: limits.max_total_bytes, opf_path: String::new(), package: Package::default() };
+        let zip =
+            craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: limits.max_entries as u64, max_total_bytes: limits.max_total_bytes })
+                .map_err(|e| match e {
+                    craft_zip::Error::TooManyEntries { declared, limit } => Error::TooManyEntries {
+                        found: usize::try_from(declared).unwrap_or(usize::MAX),
+                        limit: usize::try_from(limit).unwrap_or(usize::MAX),
+                    },
+                    e => Error::NotEpub(e.to_string()),
+                })?;
+        let mut epub = Epub { zip, limits, opf_path: String::new(), package: Package::default() };
         let container = epub.read("META-INF/container.xml")?.ok_or_else(|| Error::NotEpub("META-INF/container.xml is missing".into()))?;
         let opf_path = parse_container(&container)?.ok_or_else(|| Error::NotEpub("container.xml names no package document".into()))?;
         // The container gives a path from the archive's root; resolving it also drops a leading `/`.
@@ -262,28 +264,20 @@ impl<'a> Epub<'a> {
 
     /// Does the archive have an entry `path`?
     pub fn contains(&self, path: &str) -> bool {
-        self.zip.index_for_name(path).is_some()
+        self.zip.contains(path)
     }
 
     /// The bytes of archive entry `path`, or `None` when the archive has no such entry. An entry
     /// past the limits is an error, and so is one that expands to more than it declared.
     pub fn read(&mut self, path: &str) -> Result<Option<Vec<u8>>, Error> {
-        let Some(index) = self.zip.index_for_name(path).filter(|_| !path.ends_with('/')) else { return Ok(None) };
-        let part = |msg: String| Error::Part { part: path.to_string(), msg };
-        let f = self.zip.by_index(index).map_err(|e| part(e.to_string()))?;
-        let limit = self.limits.max_entry_bytes.min(self.left);
-        let too_large = || Error::TooLarge { part: path.to_string(), limit };
-        if f.size() > limit {
-            return Err(too_large());
+        if path.ends_with('/') {
+            return Ok(None);
         }
-        let mut buf = Vec::new();
-        f.take(limit.saturating_add(1)).read_to_end(&mut buf).map_err(|e| part(e.to_string()))?;
-        let n = buf.len() as u64;
-        if n > limit {
-            return Err(too_large());
-        }
-        self.left = self.left.saturating_sub(n);
-        Ok(Some(buf))
+        let limit = self.limits.max_entry_bytes.min(self.zip.budget().remaining());
+        self.zip.read(path, self.limits.max_entry_bytes).map_err(|e| match e {
+            craft_zip::Error::EntryTooLarge { .. } | craft_zip::Error::BudgetSpent { .. } => Error::TooLarge { part: path.to_string(), limit },
+            e => Error::Part { part: path.to_string(), msg: e.to_string() },
+        })
     }
 
     /// [`Epub::read`] for what a file of the package refers to: `href` as written in the file at
@@ -293,8 +287,39 @@ impl<'a> Epub<'a> {
         if path.is_empty() { Ok(None) } else { self.read(&path) }
     }
 
+    /// The table of contents: the EPUB 3 navigation document's `toc`, else the EPUB 2 NCX.
+    /// Empty when the package has neither, or the one it names is missing.
+    pub fn toc(&mut self) -> Result<Vec<crate::TocEntry>, Error> {
+        let nav = self.package.nav().map(|i| i.path.clone());
+        if let Some(path) = nav
+            && let Some(xml) = self.read(&path)?
+        {
+            let toc = crate::parse_nav(&xml, &path)?;
+            if !toc.is_empty() {
+                return Ok(toc);
+            }
+        }
+        match self.package.ncx.clone() {
+            Some(path) => match self.read(&path)? {
+                Some(xml) => crate::parse_ncx(&xml, &path),
+                None => Ok(Vec::new()),
+            },
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// What `META-INF/encryption.xml` says is encrypted; empty when the package has none. A
+    /// resource listed here cannot be used as it is read: fonts are usually only obfuscated
+    /// ([`crate::Encrypted::is_font_obfuscation`]), anything else is DRM.
+    pub fn encryption(&mut self) -> Result<Vec<crate::Encrypted>, Error> {
+        match self.read("META-INF/encryption.xml")? {
+            Some(xml) => crate::parse_encryption(&xml),
+            None => Ok(Vec::new()),
+        }
+    }
+
     /// Bytes the entries still to be read may expand to.
     pub fn budget_left(&self) -> u64 {
-        self.left
+        self.zip.budget().remaining()
     }
 }
