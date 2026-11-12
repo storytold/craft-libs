@@ -75,9 +75,9 @@ mod tests {
     #[test]
     fn selection_direction_interruption_and_initial_appearance() {
         let mut entry = ContentEntry::default();
-        let a = Id::new("a");
-        let b = Id::new("b");
-        let c = Id::new("c");
+        let a = Id::unique("a");
+        let b = Id::unique("b");
+        let c = Id::unique("c");
         assert_eq!(entry.update(a, 0, 0.0, 1.0, true), ContentEntryFrame::SETTLED);
         assert_eq!(entry.update(b, 1, 1.0, 1.0, true), ContentEntryFrame { progress: 0.0, direction: 1, moving: true });
         let mid = entry.update(b, 1, 1.5, 1.0, true);
@@ -89,8 +89,8 @@ mod tests {
     #[test]
     fn motion_off_and_hostile_clocks_settle_without_replay() {
         let mut entry = ContentEntry::default();
-        let a = Id::new("a");
-        let b = Id::new("b");
+        let a = Id::unique("a");
+        let b = Id::unique("b");
         entry.update(a, 0, 0.0, 1.0, true);
         entry.update(b, 1, 1.0, 1.0, true);
         assert_eq!(entry.update(b, 1, 1.1, 1.0, false), ContentEntryFrame::SETTLED);
