@@ -28,8 +28,10 @@ use super::{
 
 /// The width of a preset row's line sample as a multiple of its height.
 const PRESET_ASPECT: (u16, u16) = (8, 1);
-/// The dash and gap fields in a row (Illustrator's Stroke panel).
-const DASH_FIELDS: usize = 6;
+/// The dash and gap fields in a row: Illustrator's six in two rows, so each field keeps the width of its widest value.
+const DASH_FIELDS: usize = 3;
+/// The dash and gap fields the editor always shows (Illustrator's Stroke panel).
+const DASH_SHOWN: usize = 6;
 /// The columns of a row of dash and gap fields.
 const DASH_COLUMNS: &[ColumnWidth] = &[ColumnWidth::Content; DASH_FIELDS];
 
@@ -75,11 +77,11 @@ impl Outcome for StrokeEditorOutput {
 ///   corners); Opacity ([`StrokeSections::OPACITY`], 0–100 %, stored 0..=1). Choices are selects, or segmented icon
 ///   buttons with [`StrokeSections::ICONS`]. Under the rows of an open path: "Open paths use centered strokes".
 /// - Dashes ([`StrokeSections::DASHES`]): a "Dashed line" check (setting it applies the Dashed preset, clearing it
-///   Solid); while dashed, a hint by [`StrokeStyle::dash_unit`], then Illustrator's row of six fields, dash, gap,
-///   dash, gap, dash, gap (0–10000, `×`, or `pt` for document units), each with its word under it. A field shows its
-///   entry of [`StrokeStyle::dashes`] or is blank; typing in the blank after the pattern adds an entry, the blanks
-///   after it are off, and clearing a field after the first ends the pattern there. A pattern longer than six shows in
-///   further rows of six. Then "Dash offset" (±1,000,000).
+///   Solid); while dashed, a hint by [`StrokeStyle::dash_unit`], then Illustrator's six fields in two rows of
+///   three, dash, gap, dash / gap, dash, gap (0–10000, `×`, or `pt` for document units), each with its word under
+///   it. A field shows its entry of [`StrokeStyle::dashes`] or is blank; typing in the blank after the pattern adds
+///   an entry, the blanks after it are off, and clearing a field after the first ends the pattern there. A pattern
+///   longer than six continues in further rows of three. Then "Dash offset" (±1,000,000).
 /// - While the style fails [`StrokeStyle::validate`], the invalid word shows at the end and nothing is reported.
 /// - [`mixed`](Self::mixed): a mixed field shows the mixed state and lights no button or preset; the first edit sets it
 ///   for all.
@@ -419,7 +421,7 @@ impl Body<'_> {
             DashUnit::Document => &words.dash_document,
         };
         Text::new(hint.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
-        let count = style.dashes.len().max(1).div_ceil(DASH_FIELDS) * DASH_FIELDS;
+        let count = style.dashes.len().max(DASH_SHOWN).div_ceil(DASH_FIELDS) * DASH_FIELDS;
         for (line, first) in (0..count).step_by(DASH_FIELDS).enumerate() {
             Grid::new(DASH_COLUMNS).id_salt(("dashes", line)).show(ui, |ui, _| {
                 for index in first..first + DASH_FIELDS {
