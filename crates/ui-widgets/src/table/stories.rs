@@ -79,12 +79,15 @@ fn width_of(widths: &Widths, key: &ColumnKey, default: ColumnWidth) -> ColumnWid
     widths.iter().find(|(held, _)| held == key).map_or(default, |(_, width)| ColumnWidth::Fixed(*width))
 }
 
+/// The most of the table the name column takes: a file list keeps room for the columns beside the names.
+const NAME_SHARE: f32 = 1.0 / 3.0;
+
 fn columns(keep: bool, widths: &Widths) -> Vec<ColumnSpec> {
     let mut columns = vec![
-        ColumnSpec::new(NAME, "Name", ColumnWidth::fill(2.0)).sortable().resizable().movable(),
+        ColumnSpec::new(NAME, "Name", width_of(widths, &NAME, ColumnWidth::Content)).at_most(NAME_SHARE).sortable().resizable().movable(),
         ColumnSpec::new(PAGES, "Pages", width_of(widths, &PAGES, ColumnWidth::Controls(2.0))).numeric().sortable().resizable(),
         ColumnSpec::new(SIZE, "Size", width_of(widths, &SIZE, ColumnWidth::Controls(3.0))).numeric().sortable().resizable().hideable(),
-        ColumnSpec::new(MODIFIED, "Modified", width_of(widths, &MODIFIED, ColumnWidth::Controls(3.0))).sortable().resizable().hideable(),
+        ColumnSpec::new(MODIFIED, "Modified", width_of(widths, &MODIFIED, ColumnWidth::Content)).sortable().resizable().hideable(),
         ColumnSpec::new(WARNINGS, "Warnings", width_of(widths, &WARNINGS, ColumnWidth::Controls(3.0))).numeric().sortable().resizable(),
     ];
     if keep {
