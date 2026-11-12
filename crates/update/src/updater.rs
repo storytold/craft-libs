@@ -162,6 +162,8 @@ pub struct Updater {
     managed: Option<Choice>,
     /// Puts the prompt and its messages in the interface language ([`crate::translate`]).
     translate: Translate,
+    /// Browser for the prompt's "What's new" link: absolute path; `None` = system default.
+    browser: Option<PathBuf>,
 }
 
 impl Updater {
@@ -187,7 +189,25 @@ impl Updater {
             pins_path: None,
             managed: None,
             translate: english,
+            browser: None,
         }
+    }
+
+    /// Opens links in the browser at `browser` (an absolute path to its executable); `None` is the
+    /// system default. Reaches a prompt already open too.
+    #[must_use]
+    pub fn with_browser(mut self, browser: Option<PathBuf>) -> Self {
+        if let Some(prompt) = &mut self.prompt {
+            prompt.browser.clone_from(&browser);
+        }
+        self.browser = browser;
+        self
+    }
+
+    /// The browser chosen with [`with_browser`](Self::with_browser), for the app's own
+    /// [`Action::OpenUrl`] handler to pass to [`crate::open_url`].
+    pub fn browser(&self) -> Option<&std::path::Path> {
+        self.browser.as_deref()
     }
 
     /// Words the startup prompt and the messages it shows with `translate`, in the app's
@@ -204,7 +224,7 @@ impl Updater {
 
     /// The startup prompt for `release`, in the interface language.
     fn prompt_for(&self, release: Release) -> StartupPrompt {
-        StartupPrompt::new(self.app, release, self.version.clone()).with_translator(self.translate)
+        StartupPrompt::new(self.app, release, self.version.clone()).with_translator(self.translate).with_browser(self.browser.clone())
     }
 
     /// Opens the prompt offering `release`. A failed update offered again says why the last
@@ -923,6 +943,21 @@ mod tests {
         drop(tx);
         u.tick(&ctx);
         assert!(u.prompt.as_ref().is_some_and(|p| p.message().is_some()));
+    }
+
+    /// A browser given after the prompt opened reaches it too, and the prompts opened later.
+    #[test]
+    fn a_browser_given_later_reaches_the_open_prompt() {
+        let browser = std::env::temp_dir().join("some-browser");
+        let mut u = updater(Ok(None));
+        u.offer(newer());
+        assert_eq!(u.browser(), None);
+        let mut u = u.with_browser(Some(browser.clone()));
+        assert_eq!(u.browser(), Some(browser.as_path()));
+        assert_eq!(u.prompt.as_ref().and_then(|p| p.browser.clone()), Some(browser.clone()));
+        u.prompt = None;
+        u.offer(newer());
+        assert_eq!(u.prompt.as_ref().and_then(|p| p.browser.clone()), Some(browser));
     }
 
     /// A translator given after the prompt opened reaches it too.

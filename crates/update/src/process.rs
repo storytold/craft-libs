@@ -280,17 +280,44 @@ fn which_on_path(name: &str) -> Option<std::path::PathBuf> {
 /// Starts an app binary from its own folder.
 pub fn launch_binary(exe: &Path, args: &[&str]) -> Result<(), String> {
     let mut cmd = if in_sandbox() {
+        // The folder is on the host, which the sandbox mostly can't see: have `flatpak-spawn`
+        // change to it on the host side instead of setting it for the sandbox-side process.
+        // With a directory the host resolves a relative `exe` against it (`bin/app` would become
+        // `bin/bin/app`), so both the directory and the command are made absolute first.
+        let exe = std::path::absolute(exe).unwrap_or_else(|_| exe.to_path_buf());
         let mut c = command("flatpak-spawn");
-        c.arg("--host").arg(exe);
+        c.arg("--host");
+        if let Some(dir) = exe.parent() {
+            let mut option = std::ffi::OsString::from("--directory=");
+            option.push(dir);
+            c.arg(option);
+        }
+        c.arg(&exe);
         c
     } else {
-        command(exe)
+        let mut c = command(exe);
+        if let Some(dir) = exe.parent() {
+            c.current_dir(dir);
+        }
+        c
     };
     cmd.args(args);
-    if let Some(dir) = exe.parent() {
-        cmd.current_dir(dir);
-    }
     spawn_detached(cmd)
+}
+
+/// Opens `url` in the browser at `browser`, an absolute path to its executable (a `.app` bundle on
+/// macOS). A relative path is refused: it would resolve against the working directory or `PATH`.
+/// The URL is one argument, never passed through a shell.
+pub fn open_url_in_browser(browser: &Path, url: &str) -> Result<(), String> {
+    if !browser.is_absolute() {
+        return Err(format!("the browser path {} is not absolute", browser.display()));
+    }
+    if cfg!(target_os = "macos") && browser.is_dir() && browser.extension().is_some_and(|e| e == "app") {
+        let mut cmd = command("open");
+        cmd.arg("-a").arg(browser).arg(url);
+        return spawn_detached(cmd);
+    }
+    launch_binary(browser, &[url])
 }
 
 /// Opens a file, folder or URL with the system's default handler.
@@ -837,5 +864,15 @@ mod inherited_pipe_tests {
             // The guard stops the finite descendant and waits for its completion marker on failures too.
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod browser_tests {
+    use super::*;
+
+    #[test]
+    fn a_relative_browser_path_is_refused() {
+        assert!(open_url_in_browser(Path::new("browser.exe"), "https://example.com/").is_err());
     }
 }
