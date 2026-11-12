@@ -21,6 +21,9 @@ pub enum PictureSize {
     Icon,
     /// A thumbnail step (`size.thumb.*`); `ThumbSize::None` shows no picture.
     Thumb(ThumbSize),
+    /// The sample of a thumbnail step in a panel's options dialog (`size.thumb.sample.*`); `ThumbSize::None` shows no
+    /// picture.
+    Sample(ThumbSize),
 }
 
 /// The style of a picture.
@@ -82,6 +85,7 @@ impl Component for Picture<'_> {
         let height = match key.extent {
             PictureSize::Icon => cx.control().icon,
             PictureSize::Thumb(step) => step.pick([thumbs.sm, thumbs.md, thumbs.lg]),
+            PictureSize::Sample(step) => step.pick([thumbs.sample.sm, thumbs.sample.md, thumbs.sample.lg]),
         };
         PictureStyle { metrics: Metrics::new(), height }
     }

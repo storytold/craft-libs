@@ -310,7 +310,7 @@ impl StackDialog for LayersOptionsDialog {
                             if size == ThumbSize::None {
                                 cx.labelled(ui, size, size.label(&list), side, Radio::new(size));
                             } else {
-                                let sample = Picture::new(words.sample.clone(), SAMPLE_KEY, &sample_image).extent(PictureSize::Thumb(size));
+                                let sample = Picture::new(words.sample.clone(), SAMPLE_KEY, &sample_image).extent(PictureSize::Sample(size));
                                 cx.labelled_with(ui, size, size.label(&list), side.kind(LabelKind::Hidden), Radio::new(size), sample);
                             }
                         }

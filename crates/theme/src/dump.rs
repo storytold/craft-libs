@@ -9,7 +9,7 @@ use crate::{
     BarSizes, ColorToken, ControlSizes, DialogSizes, DockColumnSizes, Easing, Edge, Elevation, ElevationTokens, FloatSizes, FontSlot, Gaps,
     HandleSizes, HitSizes, IconSizes, Insets, KnobShape, LengthSizes, Motion, MotionTokens, NoticeSizes, Pads, PaneSizes, PlotSizes, RadiusSet,
     RailSizes, RampSizes, Rgba, RowSizes, RowStyle, RulerSizes, RulerTickSizes, ShapeTokens, SizeTokens, SpaceTokens, StorySizes, StrokeTokens,
-    ThumbSizes, Tokens, TypeStyle, TypeTokens, WindowSizes,
+    ThumbSamples, ThumbSizes, Tokens, TypeStyle, TypeTokens, WindowSizes,
 };
 
 /// The text of every token, one `key = value` line each, in a fixed order.
@@ -153,11 +153,15 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
     out.line("size.panel_header", len(*panel_header));
     out.line("size.popup_min", len(*popup_min));
     out.line("size.scroll_fade", len(*scroll_fade));
-    let ThumbSizes { sm, md, lg, card } = thumbs;
+    let ThumbSizes { sm, md, lg, card, sample } = thumbs;
     out.line("size.thumb.sm", len(*sm));
     out.line("size.thumb.md", len(*md));
     out.line("size.thumb.lg", len(*lg));
     out.line("size.thumb.card", len(*card));
+    let ThumbSamples { sm, md, lg } = sample;
+    out.line("size.thumb.sample.sm", len(*sm));
+    out.line("size.thumb.sample.md", len(*md));
+    out.line("size.thumb.sample.lg", len(*lg));
     let HandleSizes { sm, md, ring } = handle;
     out.line("size.handle.sm", len(*sm));
     out.line("size.handle.md", len(*md));

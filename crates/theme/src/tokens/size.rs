@@ -416,4 +416,18 @@ pub struct ThumbSizes {
     pub lg: f32,
     /// The picture side of a tile card at zoom 1: the cards of a tile grid.
     pub card: f32,
+    /// The samples of a thumbnail size choice in a panel's options dialog (Layers, Channels, Paths).
+    pub sample: ThumbSamples,
+}
+
+/// The sample pictures beside the three thumbnail size choices of a panel's options dialog, in logical pixels: larger
+/// than the panel's own thumbnails, so the three read apart at a glance.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ThumbSamples {
+    /// The sample of the small size.
+    pub sm: f32,
+    /// The sample of the medium size.
+    pub md: f32,
+    /// The sample of the large size.
+    pub lg: f32,
 }

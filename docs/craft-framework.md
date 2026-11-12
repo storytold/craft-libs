@@ -992,6 +992,7 @@ A theme with its own shape replaces the radii or adds an offset to control, surf
 | `size.dialog.button`, `size.dialog.side_button` | Least width of a dialog's footer button and of a button in its column beside the body |
 | `size.story.height`, `size.story.width_min`, `size.story.width_max` | The stage a story of a canvas control draws its canvas on: its height and the range of its width; `width_min` is also the least width of a column of a story grid |
 | `size.thumb.card` | The picture side of a tile card at zoom 1 (tile grids, preset browsers, the start screen) |
+| `size.thumb.sample.sm`, `size.thumb.sample.md`, `size.thumb.sample.lg` | The sample beside each thumbnail size choice in a panel's options dialog (Layers, Channels, Paths): larger than the panel's thumbnails, so the choices read apart (`PictureSize::Sample`) |
 | `space.gap.*`, `space.pad.*` | Gaps between and padding inside components |
 
 Both size sets (`crates/theme/sizes/compact.json` and `comfortable.json`) hold every role above. NumberField is at least `size.length.number` at its control size wide; apps set other widths per field.
