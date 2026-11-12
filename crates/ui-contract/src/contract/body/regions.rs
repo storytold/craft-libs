@@ -417,11 +417,17 @@ impl<'b> BodyHooks<'b> {
     }
 }
 
-/// The extent a label takes from `body` by placing the control at `control`. The label takes its column either by
-/// narrowing the control's rect or by shifting it along the row, which a content-sized row (unbounded to the end)
-/// does; the extent grows by whichever of the two is finite.
-pub(super) fn label_extra_of(body: Rect, control: Rect) -> Vec2 {
+/// The extent a label placed at `label` takes from `body` by placing the control at `control`. A label beside or above
+/// takes its column either by narrowing the control's rect or by shifting it along the row, which a content-sized row
+/// (unbounded to the end) does; the extent grows by whichever of the two is finite. A label after the control takes
+/// the gap and its own width past the control's end edge, not the rest of the row.
+pub(super) fn label_extra_of(body: Rect, control: Rect, label: Rect, rtl: bool) -> Vec2 {
     let taken = |amount: f32| if amount.is_finite() { amount.max(0.0) } else { 0.0 };
+    let after = label.is_positive() && if rtl { label.max.x <= control.min.x } else { label.min.x >= control.max.x };
+    if after {
+        let reach = control.union(label);
+        return Vec2::new(reach.width() - control.width(), taken(reach.height() - control.height()));
+    }
     (body.size() - control.size()).max(Vec2::ZERO).max(Vec2::new(
         taken(control.min.x - body.min.x).max(taken(body.max.x - control.max.x)),
         taken(control.min.y - body.min.y).max(taken(body.max.y - control.max.y)),

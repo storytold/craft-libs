@@ -727,6 +727,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let line = shared_line(&props, beside);
         // B2 label: the control gets the rect the label leaves; the label column adds to the container's extent.
         let mut body_rect = regions.body;
+        let mut label_rect = Rect::NOTHING;
         let mut label_input = None;
         if let Some(side) = props.label.as_ref() {
             let resolved = cx.core.resolved;
@@ -751,10 +752,11 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 claims: false,
                 trailing: Vec2::ZERO,
             };
-            body_rect = label::run(ui, env, &input, None).control;
+            let placed = label::run(ui, env, &input, None);
+            (body_rect, label_rect) = (placed.control, placed.label);
             label_input = Some(input);
         }
-        let label_extra = label_extra_of(regions.body, body_rect);
+        let label_extra = label_extra_of(regions.body, body_rect, label_rect, rtl);
         let body_env = line_env.derive_local(|scoped| {
             let label_width = label_extra.x;
             self.scope_body(scoped, &props, id, BodyScope { room, real, sizing, content_column, scroll, label_width });
@@ -915,8 +917,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 input.control_min = scope::open_control_min(&ctx, id);
                 // The footer starts under the control column this decision gives, not the one before the control
                 // reported its minimum.
-                body_rect = label::control_after(ui, env, input);
-                label_extra = label_extra_of(regions.body, body_rect);
+                let placed = label::control_after(ui, env, input);
+                (body_rect, label_rect) = (placed.control, placed.label);
+                label_extra = label_extra_of(regions.body, body_rect, label_rect, rtl);
             }
             if let Some(size) = &mut self.body_size {
                 // A body beside its label in a content-sized column of rows reports how far it reaches past the label

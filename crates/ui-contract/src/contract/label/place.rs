@@ -148,11 +148,11 @@ pub(crate) fn label_gap(env: &Env) -> f32 {
 
 /// Where the control sits once `input.control_min` is known: the decision `run` takes, without showing the label. A
 /// measuring run calls it after the body ran, with the control minimum that run recorded.
-pub(crate) fn control_after(ui: &mut Ui, env: &Env, input: &LabelIn<'_>) -> Rect {
+pub(crate) fn control_after(ui: &mut Ui, env: &Env, input: &LabelIn<'_>) -> Placed {
     let ctx = ui.ctx().clone();
     let flow = Flow::new(input.row, env.direction.is_rtl());
     if input.side.kind == LabelKind::Hidden {
-        return hidden_control(&ctx, input, flow, label_gap(env));
+        return Placed { label: Rect::NOTHING, control: hidden_control(&ctx, input, flow, label_gap(env)), trailing: Rect::NOTHING };
     }
     let reset = scope::last_reset(&ctx, input.scope);
     let slot = if reset.is_some() && input.side.reset_dot { env.tokens.size.handle.sm } else { 0.0 };
@@ -172,5 +172,5 @@ pub(crate) fn control_after(ui: &mut Ui, env: &Env, input: &LabelIn<'_>) -> Rect
     let installed = Env::install_for(&kids, crate::contract::cx::child_env(env, input.enabled, input.size));
     let placed = decide(&ctx, env, input, &kids, &mut leaf, glyph, flow);
     Env::restore(&ctx, installed);
-    placed.control
+    placed
 }
