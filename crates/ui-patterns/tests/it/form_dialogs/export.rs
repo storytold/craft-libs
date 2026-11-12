@@ -3,7 +3,7 @@
 use craft_behavior::PixelSize;
 use craft_ui::contract::{Bind, Role};
 use craft_ui::patterns::form_dialogs::{
-    ExportAsDialog, ExportOptions, ExportOptionsKind, FormatOptions, FormatOptionsDialog, JpegOptions, OutputPathRow,
+    ExportAsDialog, ExportOptions, ExportOptionsKind, ExportSize, FormatOptions, FormatOptionsDialog, JpegOptions, OutputPathRow,
 };
 use craft_ui::runtime::requests::PathRequest;
 use craft_ui::testing::{Fixture, trial};
@@ -44,6 +44,42 @@ fn the_default_file_name_is_made_safe() {
     assert_eq!(requested_file(" . "), "Untitled.png");
     let long = "x".repeat(100);
     assert_eq!(requested_file(&long).len(), 80 + ".png".len(), "at most 80 characters");
+}
+
+/// Export As picks its format from a select: JPG brings its Quality row. With Constrain Proportions on, a typed width
+/// takes the height with it; off, the height stays.
+#[trial]
+fn export_as_picks_a_format_and_constrains_the_size_by_its_check_box() {
+    let options = Rc::new(RefCell::new(ExportOptions::default()));
+    let shared = Rc::clone(&options);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut current = shared.borrow_mut();
+        let _ = ExportAsDialog::new("Poster", document(), Bind::bound(&mut *current)).show(ui);
+    });
+    fixture.settle();
+    assert!(fixture.by_label("Quality").is_none(), "PNG has no quality");
+    let format = fixture.by_label("Format").expect("the format select");
+    fixture.click(&format).settle();
+    let jpg = fixture.by_label("JPG").expect("the select offers JPG");
+    fixture.click(&jpg).settle();
+    assert_eq!(options.borrow().format, "jpg");
+    assert!(fixture.by_label("Quality").is_some(), "JPG shows its Quality row");
+
+    let type_width = |fixture: &mut Fixture, text: &str| {
+        let width = fixture.by_label("Width").expect("the width field");
+        fixture.click(&width).settle();
+        fixture.key(Key::A, Modifiers::COMMAND);
+        fixture.type_text(text);
+        fixture.key(Key::Enter, Modifiers::NONE).settle();
+    };
+    type_width(&mut fixture, "600");
+    assert_eq!(options.borrow().size, ExportSize::pixels(600, 400), "constrained, the height follows the width");
+
+    let constrain = fixture.by_label("Constrain Proportions").expect("the check box under Height");
+    fixture.click(&constrain).settle();
+    assert!(!options.borrow().lock_aspect, "the check box turns the constraint off");
+    type_width(&mut fixture, "900");
+    assert_eq!(options.borrow().size, ExportSize::pixels(900, 400), "unconstrained, the height stays");
 }
 
 /// The JPEG options dialog over `quality`, recording what OK answers.

@@ -31,7 +31,6 @@ craft_ui::words! {
         title: "export.title" = "Export As";
         export: "export.export" = "Export…";
         format: "export.format" = "Format";
-        formats: "export.formats" = "Formats";
         quality: "export.quality" = "Quality";
         lossless: "export.lossless" = "Lossless";
         transparency: "export.transparency" = "Transparency";

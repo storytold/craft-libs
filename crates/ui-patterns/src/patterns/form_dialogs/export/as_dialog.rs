@@ -1,5 +1,5 @@
-//! `ExportAsDialog`: File, Export, Export As. The settings are on the left (the format list, its options, metadata,
-//! colour profile and image size); the preview with the size estimate is on the right. The dialog never encodes: it
+//! `ExportAsDialog`: File, Export, Export As. The settings are on the left (the format, its options, metadata, colour
+//! profile and image size); the preview with the size estimate is on the right. The dialog never encodes: it
 //! reports the revision of the settings it wants a preview for and shows the answer the app gives back.
 
 use super::{
@@ -9,18 +9,13 @@ use super::{
 use crate::runtime::requests::{HostAnswer, PathFilter, PathRequest};
 
 use crate::choice::Checkbox;
-use crate::contract::{
-    ActivateOn, Bind, CollectionEvent, Entry, NoValue, Outcome, Props as _, Remember as _, SelectMode, Show as _, ShowCollection as _,
-    ShowContainer as _, Sizing,
-};
+use crate::contract::{Bind, Entry, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _};
 
 use crate::display::{Shade, Text};
 
-use crate::form::{Field, SliderField, SliderFieldLayout};
+use crate::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
 
 use crate::layout_components::{Row, Stack};
-
-use crate::list::{List, ListRow};
 
 use crate::patterns::form_dialogs::{
     FormDialog, FormOutput, HostRequests, LinkedSize, MAX_DOCUMENT_SIDE, PreviewPane, PreviewRequest, PreviewState, PreviewView, Resample,
@@ -30,11 +25,11 @@ use crate::pickers::Select;
 use crate::runtime::env::{Env, Label, UnitKind, Units};
 
 use crate::runtime::overlay::CloseReason;
-use crate::sections::Section;
+use crate::sections::{HeaderStrength, Section};
 use crate::style::TypeRole;
-use crate::text::{LinkMode, LinkedWords, NumberField, link_toggle};
+use crate::text::NumberField;
 
-use craft_behavior::{DisplayOrder, ItemSource, PixelSize, Selection, SelectionChange};
+use craft_behavior::PixelSize;
 
 use craft_theme::variant::Tone;
 use egui::{Response, Ui};
@@ -125,9 +120,9 @@ impl Outcome for ExportAsOutput {
 /// File, Export, Export As: format, size, quality, metadata, colour profile, a preview and a size estimate the app
 /// computes.
 ///
-/// - The settings: the format list, then that format's rows (Lossless, Quality, Bits/Pixel, Transparency), Metadata,
-///   Color Space with Embed Color Profile, and Image Size (Scale, Width and Height with the proportion link, Resample).
-/// - Keys: arrows move through the format list, Tab walks the fields, Enter is Export and Escape cancels. Holding Alt
+/// - The settings: the format, then that format's rows (Lossless, Quality, Bits/Pixel, Transparency), Metadata,
+///   Color Space with Embed Color Profile, and Image Size (Scale, Width, Height, Constrain Proportions, Resample).
+/// - Keys: Tab walks the fields, Enter is Export and Escape cancels. Holding Alt
 ///   turns Cancel into Reset, which restores the settings the dialog opened with. Export asks the app for a file
 ///   to write (`ExportAsOutput::requests`) and the dialog stays open until the app answers with the path.
 /// - Settings: the dialog opens on the value in the bind, fitted to the document, and writes its edits back.
@@ -181,26 +176,14 @@ impl<'a> ExportAsDialog<'a> {
         let ExportAsDialog { file_name, source, bound, formats, open, defaults, preview, answers, saving } = self;
         let env = Env::of(ui);
         let words = env.words::<ExportWords>();
-        let pass = Pass {
-            formats: &formats,
-            source,
-            words: &words,
-            sizing: env.words::<SizingWords>(),
-            link: LinkMode::Ratio.label(&env.words::<LinkedWords>()),
-            units: env.units(),
-            defaults,
-        };
+        let pass = Pass { formats: &formats, source, words: &words, sizing: env.words::<SizingWords>(), units: env.units(), defaults };
 
         let reset = ResetFooter::new(ui, None, true);
         let wanted = RefCell::new(None::<PreviewRequest<ExportOptions>>);
         let latest = RefCell::new(None::<ExportOptions>);
         let answered = RefCell::new(None::<PathBuf>);
-        let mut dialog = FormDialog::new(words.title.clone(), bound)
-            .ok_label(words.export.clone())
-            .ok_enabled(!saving)
-            .accept_stays_open(true)
-            .collection_body(true)
-            .answers(answers);
+        let mut dialog =
+            FormDialog::new(words.title.clone(), bound).ok_label(words.export.clone()).ok_enabled(!saving).accept_stays_open(true).answers(answers);
         if let Some(open) = open {
             dialog = dialog.opened(open);
         }
@@ -219,7 +202,9 @@ impl<'a> ExportAsDialog<'a> {
             let mut held = form.memory::<Held>().clone();
             held.adopt(preview.as_ref());
             Row::new().show(ui, |ui, _| {
-                Stack::new().show(ui, |ui, _| pass.settings(ui, values, &mut held));
+                Stack::new().show(ui, |ui, _| {
+                    FieldGroup::new(words.title.clone()).show(ui, |ui, _| pass.settings(ui, values, &mut held));
+                });
                 Stack::new().show(ui, |ui, _| pass.preview(ui, values, &mut held));
             });
             *wanted.borrow_mut() = held.request(values);
@@ -250,50 +235,17 @@ struct Pass<'p> {
     source: PixelSize,
     words: &'p ExportWords,
     sizing: std::sync::Arc<SizingWords>,
-    link: Label,
     units: Units,
     defaults: ExportFormatDefaults,
 }
-
-/// The format list's rows, keyed by position.
-struct FormatRows<'a>(&'a [ExportFormat]);
-
-impl DisplayOrder<usize> for FormatRows<'_> {
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    fn key(&self, at: usize) -> usize {
-        at
-    }
-
-    fn text(&self, at: usize) -> Option<std::borrow::Cow<'_, str>> {
-        self.0.get(at).map(|format| std::borrow::Cow::Borrowed(format.name))
-    }
-}
-
-impl ItemSource<usize> for FormatRows<'_> {}
 
 impl Pass<'_> {
     fn settings(&self, ui: &mut Ui, options: &mut ExportOptions, held: &mut Held) {
         let words = self.words;
         let chosen = self.formats.iter().position(|format| format.id == options.format).unwrap_or(0);
-        let listed = List::<usize>::new(words.formats.clone())
-            .select(SelectMode::Single)
-            .activate(ActivateOn::Click)
-            .allow_empty(false)
-            .header(false)
-            .sizing(Sizing::Content)
-            .selection(Bind::given(Selection::single(chosen)))
-            .show_items(ui, &FormatRows(self.formats), &mut |key, _| ListRow::new(self.formats[*key].name));
+        let entries: Vec<Entry<usize>> = self.formats.iter().enumerate().map(|(at, format)| Entry::new(at, format.name)).collect();
         let mut now = chosen;
-        for event in listed.events {
-            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
-                && let Some(key) = keys.into_iter().last()
-            {
-                now = key;
-            }
-        }
+        choose(ui, &words.format, "format", &entries, &mut now);
         if now != chosen {
             self.switch(options, now);
         }
@@ -333,7 +285,10 @@ impl Pass<'_> {
         choose(ui, &words.color_space, "profile", &profiles, &mut options.profile);
         check(ui, &words.embed_profile, "embed", &mut options.embed_profile);
 
-        Section::fixed(words.image_size.clone()).id_salt("size").show(ui, |ui, _| self.size(ui, options, held, format));
+        Section::fixed(words.image_size.clone())
+            .strength(HeaderStrength::Caption)
+            .id_salt("size")
+            .show(ui, |ui, _| self.size(ui, options, held, format));
     }
 
     /// The format list picked `index`: the format takes the app's default quality (and WebP mode).
@@ -351,7 +306,7 @@ impl Pass<'_> {
         }
     }
 
-    /// Scale, Width and Height with the proportion link, Resample and the notes under them. The sides are edited through
+    /// Scale, Width, Height, Constrain Proportions, Resample and the notes under them. The sides are edited through
     /// a [`LinkedSize`], the one model of linked width and height.
     fn size(&self, ui: &mut Ui, options: &mut ExportOptions, held: &mut Held, format: &ExportFormat) {
         let words = self.words;
@@ -376,35 +331,33 @@ impl Pass<'_> {
             scaled = field.edit.value().copied().flatten();
         });
         let mut resized = false;
-        Row::new().show(ui, |ui, _| {
-            Stack::new().show(ui, |ui, _| {
-                for (salt, name, value, is_width) in [("width", &words.width, size.width, true), ("height", &words.height, size.height, false)] {
-                    row(ui, name, salt, |ui| {
-                        let field = NumberField::new(name.clone(), Bind::given(Some(f64::from(value))))
-                            .unit_kind(UnitKind::Pixels)
-                            .step(UnitKind::Pixels.step())
-                            .range(1.0..=MAX_DOCUMENT_SIDE)
-                            .show(ui);
-                        if let Some(value) = field.edit.value().copied().flatten() {
-                            if is_width {
-                                linked.set_width(value);
-                            } else {
-                                linked.set_height(value);
-                            }
-                            resized = true;
-                        }
-                    });
-                }
-            });
-            if let Some(on) = link_toggle(self.link.clone(), Bind::given(linked.is_linked())).id_salt("link").show(ui).value().copied() {
-                linked.lock(on);
-                options.lock_aspect = on;
-                if on {
-                    linked.set_width(f64::from(size.width));
+        for (salt, name, value, is_width) in [("width", &words.width, size.width, true), ("height", &words.height, size.height, false)] {
+            row(ui, name, salt, |ui| {
+                let field = NumberField::new(name.clone(), Bind::given(Some(f64::from(value))))
+                    .unit_kind(UnitKind::Pixels)
+                    .step(UnitKind::Pixels.step())
+                    .range(1.0..=MAX_DOCUMENT_SIDE)
+                    .show(ui);
+                if let Some(value) = field.edit.value().copied().flatten() {
+                    if is_width {
+                        linked.set_width(value);
+                    } else {
+                        linked.set_height(value);
+                    }
                     resized = true;
                 }
+            });
+        }
+        let mut constrain = options.lock_aspect;
+        check(ui, &words.constrain, "constrain", &mut constrain);
+        if constrain != options.lock_aspect {
+            linked.lock(constrain);
+            options.lock_aspect = constrain;
+            if constrain {
+                linked.set_width(f64::from(size.width));
+                resized = true;
             }
-        });
+        }
         match scaled {
             Some(scale) => match resize_from_scale(source, scale) {
                 Ok(_) => {
