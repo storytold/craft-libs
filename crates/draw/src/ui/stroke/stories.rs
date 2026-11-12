@@ -51,18 +51,18 @@ fn with_readout(data: &mut StoryData, output: impl Into<StoryOutput>, latest: Op
     output.into().readout(readout)
 }
 
-#[story(StrokeEditor<'static>, covers = [], drive = Drive::Never)]
-fn stroke_editor_popover(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let style = data.value("popover", StrokeStyle::default());
-    let out = StrokeEditor::new("Stroke", Bind::bound(style)).sections(StrokeSections::POPOVER).show(ui);
+#[story(StrokeEditor<'static>, covers = [Default], drive = Drive::Never)]
+fn stroke_editor_panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let style = data.value("panel", StrokeStyle::default());
+    let out = StrokeEditor::new("Stroke", Bind::bound(style)).sections(StrokeSections::PANEL).show(ui);
     let latest = out.events.last().map(|event| format!("{event:?}"));
     with_readout(data, out, latest)
 }
 
 #[story(StrokeEditor<'static>, covers = [], drive = Drive::Never)]
-fn stroke_editor_panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let style = data.value("panel", StrokeStyle::default());
-    let out = StrokeEditor::new("Stroke", Bind::bound(style)).sections(StrokeSections::PANEL).show(ui);
+fn stroke_editor_popover(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let style = data.value("popover", StrokeStyle::default());
+    let out = StrokeEditor::new("Stroke", Bind::bound(style)).sections(StrokeSections::POPOVER).show(ui);
     let latest = out.events.last().map(|event| format!("{event:?}"));
     with_readout(data, out, latest)
 }

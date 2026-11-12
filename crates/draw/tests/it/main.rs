@@ -28,6 +28,7 @@ mod measure;
 
 // draw-stroke
 mod stroke_button;
+mod stroke_editor;
 
 // draw-brush-presets
 mod brush_presets;

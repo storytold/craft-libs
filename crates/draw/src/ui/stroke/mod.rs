@@ -40,15 +40,13 @@ impl StrokeSections {
     /// The Opacity row, 0–100 % (lead call 18: PhotoCraft has it, VectorCraft and DesignCraft do
     /// not).
     pub const OPACITY: Self = Self(1 << 1);
-    /// The "Dashed line" check, the Dash and Gap pairs, Add pair, Remove pair and Dash offset.
+    /// The "Dashed line" check, the dash and gap fields and Dash offset.
     pub const DASHES: Self = Self(1 << 2);
-    /// The tall line sample at the bottom.
-    pub const SAMPLE: Self = Self(1 << 3);
     /// Alignment, Caps and Corners as rows of icon toggle buttons (`Segmented` with icons) in
     /// place of selects (VectorCraft's panel).
-    pub const ICONS: Self = Self(1 << 4);
-    /// PhotoCraft's popover: presets, opacity, dashes and the sample, choices as selects.
-    pub const POPOVER: Self = Self(Self::PRESETS.0 | Self::OPACITY.0 | Self::DASHES.0 | Self::SAMPLE.0);
+    pub const ICONS: Self = Self(1 << 3);
+    /// PhotoCraft's popover: presets, opacity and dashes, choices as selects.
+    pub const POPOVER: Self = Self(Self::PRESETS.0 | Self::OPACITY.0 | Self::DASHES.0);
     /// A docked panel: dashes, choices as icon buttons.
     pub const PANEL: Self = Self(Self::DASHES.0 | Self::ICONS.0);
 
@@ -136,10 +134,6 @@ pub enum StrokeField {
     Dashed,
     /// The dash or gap at this index of [`StrokeStyle::dashes`].
     Dash(usize),
-    /// The add-pair button.
-    AddPair,
-    /// The remove-pair button.
-    RemovePair,
     /// The dash offset.
     DashOffset,
 }

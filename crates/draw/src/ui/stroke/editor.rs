@@ -3,24 +3,22 @@
 use std::borrow::Cow;
 use std::ops::RangeInclusive;
 
-use craft_behavior::{Axis, CancelReason, DisplayOrder, EditEvent, EditEvents, IconId, Input, ItemSource, Metrics, Mixed, Selection, Sense, Value};
+use craft_behavior::{CancelReason, ColumnWidth, DisplayOrder, EditEvent, EditEvents, IconId, ItemSource, Mixed, Selection, Value};
 use craft_theme::variant::Tone;
-use craft_ui::buttons::Button;
 use craft_ui::choice::{Checkbox, Segmented};
 use craft_ui::contract::{
-    Bind, Common, Component, Cx, Entry, MeasureCx, NoValue, Outcome, PaintUi, Props as _, Remember as _, Role, SelectMode, Show as _,
-    ShowCollection as _, ShowContainer as _, clicked,
+    Bind, Entry, NoValue, Outcome, Props as _, Remember as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing,
 };
 use craft_ui::display::{Divider, Shade, Text};
 use craft_ui::form::{Field, FieldGroup};
-use craft_ui::layout_components::{Row, Stack};
+use craft_ui::layout_components::{Grid, Stack};
 use craft_ui::list::{List, ListRow, ThumbAspect, ThumbSize};
 use craft_ui::pickers::Select;
 use craft_ui::primitives::{ContentPainterCx, IconSpec};
 use craft_ui::runtime::env::{Env, Label, UnitKind};
-use craft_ui::style::{ComponentStyle, StyleCx, SurfaceLook, TypeRole};
+use craft_ui::style::TypeRole;
 use craft_ui::text::NumberField;
-use egui::{Rect, Response, Ui, Vec2};
+use egui::{Rect, Response, Ui};
 use std::sync::Arc;
 
 use super::{
@@ -30,8 +28,10 @@ use super::{
 
 /// The width of a preset row's line sample as a multiple of its height.
 const PRESET_ASPECT: (u16, u16) = (8, 1);
-/// The tall sample's width as a multiple of its height, for the room it measures.
-const SAMPLE_ASPECT: f32 = 6.0;
+/// The dash and gap fields in a row (Illustrator's Stroke panel).
+const DASH_FIELDS: usize = 6;
+/// The columns of a row of dash and gap fields.
+const DASH_COLUMNS: &[ColumnWidth] = &[ColumnWidth::Content; DASH_FIELDS];
 
 /// The preset rows, in list order.
 const PRESETS: [LineStyle; 3] = [LineStyle::Solid, LineStyle::Dashed, LineStyle::Dotted];
@@ -75,11 +75,12 @@ impl Outcome for StrokeEditorOutput {
 ///   corners); Opacity ([`StrokeSections::OPACITY`], 0–100 %, stored 0..=1). Choices are selects, or segmented icon
 ///   buttons with [`StrokeSections::ICONS`]. Under the rows of an open path: "Open paths use centered strokes".
 /// - Dashes ([`StrokeSections::DASHES`]): a "Dashed line" check (setting it applies the Dashed preset, clearing it
-///   Solid); while dashed, a hint by [`StrokeStyle::dash_unit`], then one row per pair of Dash and Gap fields (0–10000,
-///   `×`, or `pt` for document units); "Add pair" (enabled under 32 entries: appends `[4, 2]`, or `2` to complete an
-///   odd pattern) and "Remove pair" (enabled over 2 entries: drops the last two); "Dash offset" (±1,000,000).
-/// - Sample ([`StrokeSections::SAMPLE`]): a tall [`StrokePreview`], a rectangle when closed, a line otherwise. While
-///   the style fails [`StrokeStyle::validate`], the invalid word shows under it and nothing is reported.
+///   Solid); while dashed, a hint by [`StrokeStyle::dash_unit`], then Illustrator's row of six fields, dash, gap,
+///   dash, gap, dash, gap (0–10000, `×`, or `pt` for document units), each with its word under it. A field shows its
+///   entry of [`StrokeStyle::dashes`] or is blank; typing in the blank after the pattern adds an entry, the blanks
+///   after it are off, and clearing a field after the first ends the pattern there. A pattern longer than six shows in
+///   further rows of six. Then "Dash offset" (±1,000,000).
+/// - While the style fails [`StrokeStyle::validate`], the invalid word shows at the end and nothing is reported.
 /// - [`mixed`](Self::mixed): a mixed field shows the mixed state and lights no button or preset; the first edit sets it
 ///   for all.
 ///
@@ -118,7 +119,7 @@ impl<'a> StrokeEditor<'a> {
         self
     }
 
-    /// Whether the stroked path is closed: alignment applies, caps need dashes, and the tall sample is a rectangle.
+    /// Whether the stroked path is closed: alignment applies and caps need dashes.
     /// True by default.
     pub fn closed(mut self, closed: bool) -> Self {
         self.closed = closed;
@@ -275,9 +276,6 @@ impl Body<'_> {
             Divider::horizontal().show(ui);
             self.dashes(ui, found);
         }
-        if self.sections.contains(StrokeSections::SAMPLE) {
-            Sample { common: Common::new(), value: self.style, closed: self.closed }.label(self.words.sample.clone()).show(ui);
-        }
         if found.invalid.is_some() || self.style.validate().is_err() {
             Text::new(self.words.invalid.clone()).role(TypeRole::Caption).tone(Tone::Bad).show(ui);
         }
@@ -421,44 +419,28 @@ impl Body<'_> {
             DashUnit::Document => &words.dash_document,
         };
         Text::new(hint.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
-        for (pair, lengths) in style.dashes.chunks(2).enumerate() {
-            Row::new().id_salt(("pair", pair)).show(ui, |ui, _| {
-                for (k, &length) in lengths.iter().enumerate() {
-                    let (index, name) = (pair * 2 + k, if k == 0 { &words.dash } else { &words.gap });
-                    Text::new(name.clone()).shade(Shade::Muted).id_salt(("name", index)).show(ui);
-                    let bind = Bind::<Option<f64>>::given(Some(f64::from(length)));
-                    let out = NumberField::new(name.clone(), bind)
-                        .id_salt(("dash", index))
-                        .range(wide(StrokeStyle::DASH_RANGE))
-                        .unit_kind(self.dash_unit())
-                        .show(ui);
-                    let with = |v: Option<f64>| {
-                        let mut next = style.clone();
-                        next.dashes[index] = v.map_or(length, |v| v as f32);
-                        next
-                    };
-                    found.push(StrokeField::Dash(index), out.edit.events.map(with));
+        let count = style.dashes.len().max(1).div_ceil(DASH_FIELDS) * DASH_FIELDS;
+        for (line, first) in (0..count).step_by(DASH_FIELDS).enumerate() {
+            Grid::new(DASH_COLUMNS).id_salt(("dashes", line)).show(ui, |ui, _| {
+                for index in first..first + DASH_FIELDS {
+                    let (caption, name) = if index % 2 == 0 { (&words.dash, &words.dash_number) } else { (&words.gap, &words.gap_number) };
+                    let name = Label::from(name.fill(&[("n", &(index / 2 + 1).to_string())]));
+                    Stack::new().id_salt(("dash", index)).show(ui, |ui, _| {
+                        let shown = style.dashes.get(index).map(|length| f64::from(*length));
+                        let out = NumberField::new(name.clone(), Bind::<Option<f64>>::given(shown))
+                            .id_salt("field")
+                            .range(wide(StrokeStyle::DASH_RANGE))
+                            .unit_kind(self.dash_unit())
+                            .enabled(index <= style.dashes.len() && index < StrokeStyle::MAX_DASHES)
+                            .sizing(Sizing::Content)
+                            .show(ui);
+                        let with = |v: Option<f64>| StrokeStyle { dashes: dashes_with(&style.dashes, index, v), ..style.clone() };
+                        found.push(StrokeField::Dash(index), out.edit.events.map(with));
+                        Text::new(caption.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+                    });
                 }
             });
         }
-        Row::new().id_salt("pair-buttons").show(ui, |ui, _| {
-            let add = Button::new(words.add_pair.clone()).id_salt("add-pair").enabled(style.dashes.len() < StrokeStyle::MAX_DASHES).show(ui);
-            if clicked(&add) {
-                let mut next = style.clone();
-                if next.dashes.len() % 2 == 1 {
-                    next.dashes.push(StrokeStyle::DASHED[1]);
-                } else {
-                    next.dashes.extend(StrokeStyle::DASHED);
-                }
-                self.set(found, StrokeField::AddPair, next);
-            }
-            let remove = Button::new(words.remove_pair.clone()).id_salt("remove-pair").enabled(style.dashes.len() > 2).show(ui);
-            if clicked(&remove) {
-                let mut next = style.clone();
-                next.dashes.truncate(style.dashes.len().saturating_sub(2));
-                self.set(found, StrokeField::RemovePair, next);
-            }
-        });
         FieldGroup::new(words.dash_offset.clone()).id_salt("offset").show(ui, |ui, _| {
             let range = -f64::from(StrokeStyle::DASH_OFFSET_MAX)..=f64::from(StrokeStyle::DASH_OFFSET_MAX);
             let event =
@@ -466,6 +448,19 @@ impl Body<'_> {
             found.push(StrokeField::DashOffset, event.map(|v| StrokeStyle { dash_offset: v as f32, ..style.clone() }));
         });
     }
+}
+
+/// `dashes` with dash field `index` set to `value`: a number sets that entry, or adds it after the last; a cleared field
+/// after the first ends the pattern there; the first field never clears (the "Dashed line" check turns dashes off).
+pub(super) fn dashes_with(dashes: &[f32], index: usize, value: Option<f64>) -> Vec<f32> {
+    let mut next = dashes.to_vec();
+    match value {
+        Some(length) if index < next.len() => next[index] = length as f32,
+        Some(length) if index == next.len() => next.push(length as f32),
+        None if index > 0 => next.truncate(index),
+        _ => {}
+    }
+    next
 }
 
 /// `value` as a field's binding value: mixed while the field is.
@@ -525,63 +520,4 @@ fn number(
         event = out.edit.events.map(|v| v.unwrap_or(value));
     });
     event
-}
-
-/// The style of the tall sample: the field well and its height.
-#[derive(Clone, Debug, PartialEq, ComponentStyle)]
-#[non_exhaustive]
-struct SampleStyle {
-    #[style(surface)]
-    surface: SurfaceLook,
-    #[style(metrics)]
-    metrics: Metrics,
-    /// The sample's height.
-    height: f32,
-}
-
-/// The tall line sample under the rows: a [`StrokePreview`] on a sunken well, a rectangle when closed, a line
-/// otherwise. It is the stroke document art the editor shows, so it paints with the content painter.
-#[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
-#[component(content_painter, unregistered)]
-struct Sample<'a> {
-    #[common]
-    common: Common,
-    value: &'a StrokeStyle,
-    closed: bool,
-}
-
-impl Component for Sample<'_> {
-    const ROLE: Role = Role::IMAGE;
-    const PARTS: bool = false;
-    const STOPS: bool = false;
-    const INPUT: Input = Input::Display;
-    const SHOWS_LABEL: bool = false;
-    const OVERLAYS: bool = false;
-    type Style = SampleStyle;
-    type Output = Response;
-
-    fn style(cx: &StyleCx<'_>, _: SampleStyleKey) -> SampleStyle {
-        SampleStyle { surface: cx.field(), metrics: Metrics::new(), height: cx.tokens.size.thumb.lg }
-    }
-
-    fn sense(&self) -> Sense {
-        Sense::empty()
-    }
-
-    fn fills(&self) -> Option<Axis> {
-        Some(Axis::X)
-    }
-
-    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        Vec2::new(cx.style.height * SAMPLE_ASPECT, cx.style.height)
-    }
-
-    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        let painter = ui.content_painter(cx);
-        StrokePreview::sized(self.value, cx.content_rect).closed(self.closed).paint(&painter, cx.content_rect);
-    }
-
-    fn finish(self, cx: Cx<'_, Self>) -> Response {
-        cx.response.clone()
-    }
 }

@@ -48,22 +48,20 @@ craft_ui::words! {
         open_paths: "strokeEditor.openPaths" = "Open paths use centered strokes";
         /// The check that turns the dashes on.
         dashed_line: "strokeEditor.dashedLine" = "Dashed line";
-        /// Over the pairs, for `DashUnit::Widths`.
+        /// Over the dash fields, for `DashUnit::Widths`.
         dash_widths: "strokeEditor.dashWidths" = "Dash / gap lengths × stroke width";
-        /// Over the pairs, for `DashUnit::Document`.
+        /// Over the dash fields, for `DashUnit::Document`.
         dash_document: "strokeEditor.dashDocument" = "Dash / gap lengths in document units";
         /// A dash length field.
         dash: "strokeEditor.dash" = "Dash";
         /// A gap length field.
         gap: "strokeEditor.gap" = "Gap";
-        /// The button that appends a pair.
-        add_pair: "strokeEditor.addPair" = "Add pair";
-        /// The button that drops the last pair.
-        remove_pair: "strokeEditor.removePair" = "Remove pair";
+        /// The accessible name of the `n`th dash field.
+        dash_number: template "strokeEditor.dashNumber" = "Dash {n}";
+        /// The accessible name of the `n`th gap field.
+        gap_number: template "strokeEditor.gapNumber" = "Gap {n}";
         /// The Dash offset row.
         dash_offset: "strokeEditor.dashOffset" = "Dash offset";
-        /// The tall sample's accessible name prefix is the style's name; this is the sample row's label.
-        sample: "strokeEditor.sample" = "Sample";
         /// Under the dash rows while the style fails `StrokeStyle::validate`.
         invalid: "strokeEditor.invalid" = "Use finite lengths and a positive pattern total";
     }
