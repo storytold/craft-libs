@@ -40,11 +40,13 @@
 //! so a reader never sees a half-written file, only one write older than the latest.
 //!
 //! The lock does not wrap an unconditional keychain call. A keychain write or removal happens
-//! either entirely before the lock is taken or, for [`Store::discard`] and the re-check below,
-//! inside the same lock hold as the list write it belongs with, but a locked section is never
-//! held across a call into the keychain that another `Store` in this process could itself be
-//! waiting on; that would deadlock two `Store`s over one folder in a single process the same way
-//! two applications would be.
+//! either entirely before the lock is taken or, for [`Store::discard`], [`Store::sign_in`]'s
+//! re-check and [`Store::update_token`]'s write, inside the same lock hold as the list change it
+//! belongs with. Each of those three is conditional on the list mutation it sits beside actually
+//! going ahead, never a call made regardless. A locked section is never held across a call into
+//! the keychain that another `Store` in this process could itself be waiting on; that would
+//! deadlock two `Store`s over one folder in a single process the same way two applications would
+//! be.
 //!
 //! Each operation's ordering is chosen so a crash, or another process winning a race, leaves a
 //! state the next reader detects and repairs rather than a silent mismatch (guarantee 1):
@@ -63,17 +65,19 @@
 //!   lock hold. A crash between them leaves a row on the list with no entry behind it; `shared()`
 //!   already reads that as nobody signed in, and the next sign-in for that account tidies the row
 //!   up.
-//! * [`Store::update_token`] checks the account's generation once before touching the keychain
-//!   (so an already-stale caller never overwrites a newer token), writes the keychain token, then
-//!   re-checks the generation under the lock before committing the bump. A crash between the
-//!   keychain write and that commit leaves the list one generation behind a keychain token that is
-//!   already the newer one; the next successful `update_token` against that same, still-current
-//!   generation simply writes through it again. A re-check that instead finds the account gone
-//!   (removed and tombstoned in the window the keychain write opened) removes the token it just
-//!   wrote, under the same lock, before returning [`Error::StaleGeneration`]; see "Cross-app
-//!   lifecycle guarantees" point 2. That removal only ever takes its own write. A sign-in for the
-//!   same handle can land a token of its own in that same unlocked window. This call never
-//!   deletes a token it did not write itself.
+//! * [`Store::update_token`] checks the account's generation once, unlocked, purely to reject an
+//!   already-stale caller cheaply before it ever takes the lock. The keychain write itself
+//!   happens only under the lock, in the generation re-check's own success arm, immediately
+//!   before the row commits. A sign-in, a discard, or a discard followed by a re-add can land in
+//!   the window the unlocked check left open. The re-check exists to catch exactly that, whoever
+//!   won it. Either way, this call answers [`Error::StaleGeneration`] (or [`Error::Unknown`], for
+//!   a handle never on this list at all; see "Cross-app lifecycle guarantees" point 2 and
+//!   [`accounts::Accounts::locate`]) having never touched the keychain. There is never a stale
+//!   token left in it to clean up or weigh against the winner's own. A crash between the write
+//!   and the commit, both now inside one lock hold, leaves the list one generation behind a
+//!   keychain token that is already the
+//!   newer one; the next successful `update_token` against that same, still-current generation
+//!   simply writes through it again.
 //!
 //! ```no_run
 //! # fn main() -> Result<(), craft_suite_account::Error> {
@@ -297,17 +301,20 @@ impl<S: TokenStore> Store<S> {
     /// generation, never [`Error::Unknown`] and never a silent recreation; only a handle that has
     /// never been on this list at all is `Unknown`. See [`accounts::Accounts::locate`].
     ///
-    /// Checked twice. The first check, before the keychain is touched at all, refuses an already
-    /// stale caller outright: nothing it does from here can overwrite a newer session's token. The
-    /// second, under the accounts lock after the keychain write, catches a removal (or another
-    /// sign-in) that landed in the window that keychain write just opened; see the module docs
-    /// ("Concurrent mutations and partial-failure recovery") for why that window is not itself
-    /// covered by the lock. When the second check finds the account gone, the token the first write
-    /// just placed belongs to nobody now; it is removed again, under the same lock as the
-    /// tombstone check. That race can never resurrect the row this way. The removal itself only
-    /// takes the token this call wrote. A sign-in for the same handle can land its own token in
-    /// that same window. An unconditional removal there would delete the sign-in's token on top
-    /// of this call's own stale write.
+    /// Checked twice. The keychain is written only once, inside the lock, after the second check
+    /// passes.
+    ///
+    /// The first check, unlocked, is a fast rejection only. A caller already stale when it calls
+    /// at all never even takes the lock. It writes nothing. The second check, under the accounts
+    /// lock, is what the keychain write is actually conditioned on: `self.tokens.put` runs only
+    /// in that check's own success arm, right before the row commits, both inside the one lock
+    /// hold. A sign-in or a discard for the same handle can land in the window between the two
+    /// checks. The second check exists to catch exactly that. By the time it runs, this call
+    /// still has not touched the keychain at all. Every losing path, a newer sign-in, a discard,
+    /// a discard followed by a re-add, answers [`Error::StaleGeneration`] (or [`Error::Unknown`])
+    /// having written nothing. No stale token is ever left in the keychain for a cleanup step to
+    /// weigh against a winner's. See the module docs ("Concurrent mutations and partial-failure
+    /// recovery").
     pub fn update_token(&self, id: &str, expected_generation: u32, token: &Secret, now: i64) -> Result<Account, Error> {
         self.usable()?;
         let path = self.path().ok_or(Error::Isolated)?;
@@ -323,8 +330,6 @@ impl<S: TokenStore> Store<S> {
             accounts::Located::Unknown => return Err(Error::Unknown(id.to_owned())),
         }
 
-        self.tokens.put(id, token).map_err(Error::Keychain)?;
-
         lock::with_lock(&path, || {
             let mut list = accounts::read(&path)?;
             match list.locate(id) {
@@ -332,6 +337,11 @@ impl<S: TokenStore> Store<S> {
                     let mut updated = account.clone();
                     updated.generation = updated.generation.checked_add(1).ok_or_else(|| Error::GenerationExhausted(id.to_owned()))?;
                     updated.last_used = now;
+                    // The write and the commit are one atomic step from here on, with respect to
+                    // every other mutator. sign_in and discard both take this same lock for
+                    // their own keychain and list changes. Nothing can land between this put and
+                    // this write.
+                    self.tokens.put(id, token).map_err(Error::Keychain)?;
                     // Not `list.put`: a refresh is maintenance, never a reason to make this the
                     // account a person selected. See [`accounts::Accounts::refresh_in_place`].
                     list.refresh_in_place(id, updated.clone());
@@ -341,30 +351,10 @@ impl<S: TokenStore> Store<S> {
                 accounts::Located::Active(account) => {
                     Err(Error::StaleGeneration { id: id.to_owned(), expected: expected_generation, current: account.generation })
                 }
-                accounts::Located::Tombstoned(current) => {
-                    self.remove_token_if_still(id, token);
-                    Err(Error::StaleGeneration { id: id.to_owned(), expected: expected_generation, current })
-                }
-                accounts::Located::Unknown => {
-                    self.remove_token_if_still(id, token);
-                    Err(Error::Unknown(id.to_owned()))
-                }
+                accounts::Located::Tombstoned(current) => Err(Error::StaleGeneration { id: id.to_owned(), expected: expected_generation, current }),
+                accounts::Located::Unknown => Err(Error::Unknown(id.to_owned())),
             }
         })
-    }
-
-    /// Removes the keychain entry for `id`, but only when it still holds exactly `token`.
-    ///
-    /// Used where a caller's own write has already been judged stale and the entry it placed a
-    /// moment ago belongs to nobody now. A plain, unconditional removal here would be wrong. A
-    /// sign-in (or another `update_token`) for the same handle can land its own token in that
-    /// same unlocked window. That token is never this call's to delete. Comparing first keeps
-    /// the cleanup scoped to this call's own write. Any error reading the current entry counts
-    /// as a mismatch too. This leaves the entry alone whenever it cannot confirm the match.
-    fn remove_token_if_still(&self, id: &str, token: &Secret) {
-        if matches!(self.tokens.get(id), Ok(Some(current)) if current == *token) {
-            let _ = self.tokens.remove(id);
-        }
     }
 
     /// Makes an account the current one.

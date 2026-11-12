@@ -280,104 +280,115 @@ fn a_write_against_an_unknown_account_says_so_rather_than_claiming_a_stale_gener
     assert_eq!(store.update_token("nobody", 0, &Secret::new(TOKEN), NOW).unwrap_err(), Error::Unknown("nobody".to_owned()));
 }
 
-// ---- a rejected refresh only ever deletes its own keychain write ----------
+// ---- a lost race never touches the keychain --------------------------------
 
+/// A newer sign-in for the same handle wins the accounts lock first. Its own token is already in
+/// the keychain. It finishes its commit while a stale refresh is still blocked waiting on that
+/// same lock. The refresh's second check must then see the new generation and refuse, having
+/// never touched the keychain at all. The race is set up by holding the real lock on a
+/// background thread, releasing it only once the refresh (on the calling thread) has had the
+/// chance to take its own unlocked first read of the old, pre-race state.
 #[test]
-fn a_stale_refresh_racing_a_discard_and_re_sign_in_does_not_delete_the_new_sessions_token() {
+fn a_refresh_racing_a_newer_sign_in_for_the_same_handle_never_overwrites_its_token() {
     use std::sync::mpsc;
 
     let dir = tempfile::tempdir().unwrap();
     let keychain = Memory::new();
     let store = Store::at(Some(dir.path().to_path_buf()), keychain.clone());
-    let x = store.sign_in(&new_account(), &Secret::new(TOKEN), NOW).unwrap();
-    let seen_generation = x.generation;
+    let first = store.sign_in(&new_account(), &Secret::new("session-1"), NOW).unwrap();
+    let seen_generation = first.generation;
 
-    /// The new sign-in pauses right after its own token lands in the keychain, before it asks
-    /// for the accounts lock: the exact window a stale refresh's second check can still read the
-    /// account as tombstoned.
-    struct PauseAfterPut {
-        inner: Memory,
-        landed: mpsc::SyncSender<()>,
-        release: mpsc::Receiver<()>,
-    }
-    impl TokenStore for PauseAfterPut {
-        fn available(&self) -> Result<(), String> {
-            self.inner.available()
-        }
-        fn get(&self, h: &str) -> Result<Option<Secret>, String> {
-            self.inner.get(h)
-        }
-        fn put(&self, h: &str, t: &Secret) -> Result<(), String> {
-            let r = self.inner.put(h, t);
-            self.landed.send(()).unwrap();
-            self.release.recv().unwrap();
-            r
-        }
-        fn remove(&self, h: &str) -> Result<(), String> {
-            self.inner.remove(h)
-        }
-    }
-
-    /// Fires once the stale refresh's own token write has landed, before the refresh asks for
-    /// the accounts lock. Runs a discard (committing a tombstone), then starts a new sign-in and
-    /// waits for its own token write to land too, overwriting the refresh's token with the new
-    /// session's. That leaves the refresh's upcoming second check looking at exactly the state
-    /// its unconditional cleanup must not simply delete.
-    struct RunDiscardThenSignInAfterPut {
-        inner: Memory,
-        hook: std::sync::Mutex<Option<Box<dyn FnOnce()>>>,
-    }
-    impl TokenStore for RunDiscardThenSignInAfterPut {
-        fn available(&self) -> Result<(), String> {
-            self.inner.available()
-        }
-        fn get(&self, h: &str) -> Result<Option<Secret>, String> {
-            self.inner.get(h)
-        }
-        fn put(&self, h: &str, t: &Secret) -> Result<(), String> {
-            let r = self.inner.put(h, t);
-            let hook = self.hook.lock().unwrap().take();
-            if let Some(hook) = hook {
-                hook();
-            }
-            r
-        }
-        fn remove(&self, h: &str) -> Result<(), String> {
-            self.inner.remove(h)
-        }
-    }
-
-    type SignInHandle = std::thread::JoinHandle<Result<Account, Error>>;
-
-    let (landed_tx, landed_rx) = mpsc::sync_channel::<()>(0);
+    let (ready_tx, ready_rx) = mpsc::sync_channel::<()>(0);
     let (release_tx, release_rx) = mpsc::sync_channel::<()>(0);
-    let handle_slot: std::sync::Arc<std::sync::Mutex<Option<SignInHandle>>> = std::sync::Arc::new(std::sync::Mutex::new(None));
-
-    let hook_dir = dir.path().to_path_buf();
-    let hook_keychain = keychain.clone();
-    let hook_x_id = x.id.clone();
-    let hook_slot = handle_slot.clone();
-    let hook: Box<dyn FnOnce()> = Box::new(move || {
-        Store::at(Some(hook_dir.clone()), hook_keychain.clone()).discard(&hook_x_id).unwrap();
-        let new_store = Store::at(Some(hook_dir), PauseAfterPut { inner: hook_keychain, landed: landed_tx, release: release_rx });
-        let handle = std::thread::spawn(move || new_store.sign_in(&new_account(), &Secret::new("session-2"), NOW + 10));
-        *hook_slot.lock().unwrap() = Some(handle);
-        landed_rx.recv().unwrap();
+    let hold_dir = dir.path().to_path_buf();
+    let hold_keychain = keychain.clone();
+    let hold_id = first.id.clone();
+    let hold_handle = std::thread::spawn(move || -> Result<(), Error> {
+        let path = paths::file(&hold_dir);
+        crate::lock::with_lock(&path, || {
+            ready_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            // Stands in for a second sign-in's own unlocked token write, already landed, now
+            // committing its row while the refresh below is still waiting on this same lock.
+            hold_keychain.put(&hold_id, &Secret::new("session-2")).map_err(Error::Keychain)?;
+            let mut list = accounts::read(&path)?;
+            let generation = list.get(&hold_id).map_or(0, |a| a.generation) + 1;
+            list.put(Account { id: hold_id.clone(), generation, ..Account::default() });
+            accounts::write(&path, &list)
+        })
     });
 
-    let refresh_store =
-        Store::at(Some(dir.path().to_path_buf()), RunDiscardThenSignInAfterPut { inner: keychain.clone(), hook: std::sync::Mutex::new(Some(hook)) });
-    let refresh = refresh_store.update_token(&x.id, seen_generation, &Secret::new("stale-refresh-token"), NOW + 20);
+    ready_rx.recv().unwrap();
     release_tx.send(()).unwrap();
-    let s2 = handle_slot.lock().unwrap().take().unwrap().join().unwrap().unwrap();
+    let refresh = store.update_token(&first.id, seen_generation, &Secret::new("session-1-refreshed"), NOW + 20);
+    hold_handle.join().unwrap().unwrap();
 
+    assert!(matches!(refresh, Err(Error::StaleGeneration { .. })), "the refresh must lose to the newer sign-in: {refresh:?}");
+    assert!(keychain.has(&first.id), "the new session's token must still be in the keychain");
     assert_eq!(
-        refresh,
-        Err(Error::StaleGeneration { id: x.id.clone(), expected: seen_generation, current: seen_generation + 1 }),
-        "the refresh must still be refused as stale"
+        keychain.get(&first.id).unwrap(),
+        Some(Secret::new("session-2")),
+        "the stale refresh must never have overwritten the new session's token"
     );
-    assert!(keychain.has(&s2.id), "the freshly re-signed-in session's token must survive the stale refresh's cleanup");
-    assert_eq!(keychain.get(&s2.id).unwrap(), Some(Secret::new("session-2")));
+    match store.shared() {
+        Shared::Session { token, .. } => assert_eq!(token, Secret::new("session-2")),
+        other => panic!("expected session 2's session, got {other:?}"),
+    }
+}
+
+/// The same race, with the newer sign-in preceded by a discard: the handle is removed and
+/// tombstoned, then signed in again, both landing while the refresh is blocked on the lock. Both
+/// steps complete before the refresh ever gets the lock back. Its second check lands on the
+/// re-added row's new, active generation, never the tombstone in between.
+#[test]
+fn a_refresh_racing_a_discard_and_re_add_for_the_same_handle_never_overwrites_its_token() {
+    use std::sync::mpsc;
+
+    let dir = tempfile::tempdir().unwrap();
+    let keychain = Memory::new();
+    let store = Store::at(Some(dir.path().to_path_buf()), keychain.clone());
+    let first = store.sign_in(&new_account(), &Secret::new("session-1"), NOW).unwrap();
+    let seen_generation = first.generation;
+
+    let (ready_tx, ready_rx) = mpsc::sync_channel::<()>(0);
+    let (release_tx, release_rx) = mpsc::sync_channel::<()>(0);
+    let hold_dir = dir.path().to_path_buf();
+    let hold_keychain = keychain.clone();
+    let hold_id = first.id.clone();
+    let hold_handle = std::thread::spawn(move || -> Result<(), Error> {
+        let path = paths::file(&hold_dir);
+        crate::lock::with_lock(&path, || {
+            ready_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            // Discard, then a fresh sign-in for the same handle: both land together while the
+            // refresh below is still waiting on this same lock.
+            let _ = hold_keychain.remove(&hold_id);
+            let mut list = accounts::read(&path)?;
+            let old_generation = list.get(&hold_id).map(|a| a.generation).unwrap_or(0);
+            list.remove_with_tombstone(&hold_id, old_generation)?;
+            hold_keychain.put(&hold_id, &Secret::new("session-2")).map_err(Error::Keychain)?;
+            let generation = list.tombstone_generation(&hold_id).unwrap_or(0) + 1;
+            list.put(Account { id: hold_id.clone(), generation, ..Account::default() });
+            accounts::write(&path, &list)
+        })
+    });
+
+    ready_rx.recv().unwrap();
+    release_tx.send(()).unwrap();
+    let refresh = store.update_token(&first.id, seen_generation, &Secret::new("session-1-refreshed"), NOW + 20);
+    hold_handle.join().unwrap().unwrap();
+
+    assert!(refresh.is_err(), "the refresh must lose to the discard and re-add: {refresh:?}");
+    assert!(keychain.has(&first.id), "the re-added session's token must still be in the keychain");
+    assert_eq!(
+        keychain.get(&first.id).unwrap(),
+        Some(Secret::new("session-2")),
+        "the stale refresh must never have overwritten the re-added session's token"
+    );
+    match store.shared() {
+        Shared::Session { token, .. } => assert_eq!(token, Secret::new("session-2")),
+        other => panic!("expected session 2's session, got {other:?}"),
+    }
 }
 
 #[test]

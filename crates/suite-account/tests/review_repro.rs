@@ -2,57 +2,29 @@
 //! reproduction gist for this crate (skylartaylor, rev `2e9c84f`). Each test asserts the behaviour
 //! the crate's docs and RFC-0025 promise.
 //!
-//! `Hooked` wraps the crate's own [`Memory`] keychain stand-in and runs a closure the first time
-//! `put` is called, which deterministically places another application's operation at the exact
-//! point a second process could run it (between [`Store::update_token`]'s keychain write and its
-//! second, locked check).
+//! The first two tests below once drove their race through a hook on the [`Memory`] keychain's
+//! `put`, timed to land between [`Store::update_token`]'s keychain write and its second, locked
+//! check. That write now happens only inside the lock, in the second check's own success arm (see
+//! the module docs). Nothing sits between the two checks to hook into any more. A hook that tried
+//! would be asking `update_token` to take a lock it already holds. Real threads racing on a
+//! [`std::sync::Barrier`] replace it, the same device [`concurrent_sign_ins_from_two_threads_lose_no_rows`]
+//! already uses below. The lock makes both outcomes this PR promises hold for every interleaving,
+//! never only the one picked in advance. A race no longer needs to land in one exact window to
+//! prove it.
 //!
 //! Not adapted here: the gist's `review_h2_forget_during_refresh_is_undone`. `forget` is, by
 //! RFC-0025's "Cross-app lifecycle guarantees" (point 4), a deliberately generation-agnostic,
-//! keychain-only, local operation; it does not read or write the accounts list at all, so nothing
+//! keychain-only, local operation. It does not read or write the accounts list at all, so nothing
 //! in a locked read-change-write over that list can observe it racing a refresh. Fixing that
 //! interleaving would mean giving `forget` list/generation semantics it does not have today, a
 //! broader behaviour change than the three gates this PR closes (see the PR comment).
 
-use std::sync::{Arc, Barrier, Mutex};
+use std::sync::{Arc, Barrier};
 
 use craft_suite_account::{Error, Memory, NewAccount, Secret, Store, TokenStore};
 
 const SERVICE: &str = "https://craft.example.com";
 const NOW: i64 = 1_760_000_000;
-
-type Hook = Box<dyn FnOnce() + Send>;
-
-#[derive(Clone, Default)]
-struct Hooked {
-    inner: Memory,
-    on_put: Arc<Mutex<Option<Hook>>>,
-}
-
-impl Hooked {
-    fn arm(&self, f: impl FnOnce() + Send + 'static) {
-        *self.on_put.lock().unwrap() = Some(Box::new(f));
-    }
-}
-
-impl TokenStore for Hooked {
-    fn available(&self) -> Result<(), String> {
-        self.inner.available()
-    }
-    fn get(&self, h: &str) -> Result<Option<Secret>, String> {
-        self.inner.get(h)
-    }
-    fn put(&self, h: &str, t: &Secret) -> Result<(), String> {
-        let hook = self.on_put.lock().unwrap().take();
-        if let Some(hook) = hook {
-            hook();
-        }
-        self.inner.put(h, t)
-    }
-    fn remove(&self, h: &str) -> Result<(), String> {
-        self.inner.remove(h)
-    }
-}
 
 fn acct(user: &str) -> NewAccount {
     NewAccount { service: SERVICE.to_owned(), user: user.to_owned(), display: user.to_owned(), email: None, linked: true }
@@ -64,33 +36,40 @@ fn tok(s: &str) -> Secret {
 
 // ---- gate: locked read-change-write on every list mutation -----------------
 
-/// H1b: app A refreshes X while app B signs in Y. A's write must not land a stale copy of the list
-/// that was read before B's sign-in, or Y's row is lost even though Y's token sits in the
-/// keychain.
+/// H1b: app A refreshes X while app B signs in Y, on real threads racing to start at the same
+/// moment. A's write must not land a stale copy of the list that was read before B's sign-in, or
+/// Y's row is lost even though Y's token sits in the keychain. `update_token`'s own lock always
+/// re-reads the list fresh right before it commits. That holds for either thread landing first.
 #[test]
 fn refresh_racing_another_sign_in_does_not_lose_that_row() {
     let dir = tempfile::tempdir().unwrap();
-    let keychain = Hooked::default();
+    let keychain = Memory::new();
     let app_a = Store::at(Some(dir.path().to_owned()), keychain.clone());
-    let app_b = Store::at(Some(dir.path().to_owned()), keychain.inner.clone());
+    let app_b = Store::at(Some(dir.path().to_owned()), keychain.clone());
 
     let x = app_a.sign_in(&acct("x"), &tok("x1"), NOW).unwrap();
-    let y_id = Arc::new(Mutex::new(String::new()));
-    let (b, y_out) = (app_b, y_id.clone());
-    keychain.arm(move || {
-        let y = b.sign_in(&acct("y"), &tok("y1"), NOW).unwrap();
-        *y_out.lock().unwrap() = y.id;
-    });
-    app_a.update_token(&x.id, x.generation, &tok("x2"), NOW + 1).unwrap();
 
-    let y_id = y_id.lock().unwrap().clone();
+    let start = Arc::new(Barrier::new(2));
+    let (a_start, b_start) = (start.clone(), start.clone());
+    let a_id = x.id.clone();
+    let a = std::thread::spawn(move || {
+        a_start.wait();
+        app_a.update_token(&a_id, x.generation, &tok("x2"), NOW + 1)
+    });
+    let b = std::thread::spawn(move || {
+        b_start.wait();
+        app_b.sign_in(&acct("y"), &tok("y1"), NOW)
+    });
+    a.join().unwrap().unwrap();
+    let y = b.join().unwrap().unwrap();
+
     let list = Store::at(Some(dir.path().to_owned()), Memory::new()).accounts().unwrap();
     let ids: Vec<_> = list.accounts.iter().map(|a| a.user.clone()).collect();
     assert!(
-        list.get(&y_id).is_some(),
+        list.get(&y.id).is_some(),
         "Y signed in successfully but its row is gone after X's refresh: accounts on file = {ids:?}, \
          Y token in keychain = {}",
-        keychain.inner.has(&y_id)
+        keychain.has(&y.id)
     );
 }
 
@@ -193,25 +172,37 @@ fn concurrent_sign_ins_from_two_processes_lose_no_rows() {
 // ---- gate: generations monotonic across removal and re-add -----------------
 
 /// The gate's named case "refresh-racing-discard": app A refreshes X's token while app B signs X
-/// out (`discard`). Removal must win (RFC-0025 lifecycle guarantee 2); neither the row nor the
-/// keychain entry may come back.
+/// out (`discard`), on real threads racing to start at the same moment. Removal must win (RFC-0025
+/// lifecycle guarantee 2) whichever one actually lands first: neither the row nor the keychain
+/// entry may come back, whether the refresh commits before the discard removes it, or the discard
+/// lands first and the refresh's own second check then refuses a tombstoned account.
 #[test]
 fn refresh_racing_discard_resurrects_nothing() {
     let dir = tempfile::tempdir().unwrap();
-    let keychain = Hooked::default();
+    let keychain = Memory::new();
     let app_a = Store::at(Some(dir.path().to_owned()), keychain.clone());
-    let app_b = Store::at(Some(dir.path().to_owned()), keychain.inner.clone());
+    let app_b = Store::at(Some(dir.path().to_owned()), keychain.clone());
 
     let x = app_a.sign_in(&acct("x"), &tok("x-session-1"), NOW).unwrap();
-    // A has passed its first generation check; B's sign-out lands in the window A's own keychain
-    // write opens.
-    let (b, id) = (app_b, x.id.clone());
-    keychain.arm(move || b.discard(&id).unwrap());
-    let refreshed = app_a.update_token(&x.id, x.generation, &tok("x-session-1-refreshed"), NOW + 1);
+
+    let start = Arc::new(Barrier::new(2));
+    let (a_start, b_start) = (start.clone(), start.clone());
+    let a_id = x.id.clone();
+    let a = std::thread::spawn(move || {
+        a_start.wait();
+        app_a.update_token(&a_id, x.generation, &tok("x-session-1-refreshed"), NOW + 1)
+    });
+    let b_id = x.id.clone();
+    let b = std::thread::spawn(move || {
+        b_start.wait();
+        app_b.discard(&b_id)
+    });
+    let refreshed = a.join().unwrap();
+    b.join().unwrap().unwrap();
 
     let after = Store::at(Some(dir.path().to_owned()), Memory::new()).accounts().unwrap();
     let row_back = after.get(&x.id).is_some();
-    let token_back = keychain.inner.has(&x.id);
+    let token_back = keychain.has(&x.id);
     assert!(
         !row_back && !token_back,
         "sign-out (discard) must win over an in-flight refresh; instead update_token returned {:?}, \
