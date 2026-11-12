@@ -7,8 +7,13 @@
 //!   floating rates).
 //! - [`report`]: what an import or export could not represent exactly.
 //! - [`path`]: media references (`file://` URLs, absolute and relative paths), lexically.
+//! - [`model`]: a neutral timeline (bins, media, sequences, tracks, clips, transitions, markers,
+//!   effects with keyframes) for the formats that describe a whole edit, with [`model::Catalog`]
+//!   for the application's effects. [`fx`] has the effects the formats name themselves; [`build`]
+//!   builds a [`model::Project`] while reading.
 //! - [`ale`]: Avid Log Exchange clip logs.
 //! - [`edl`]: CMX 3600 edit decision lists.
+//! - [`fcp7`] (feature `xml`): Final Cut Pro 7 XML (`xmeml`).
 //! - [`Format`], [`detect_text`], [`decode_text`]: which interchange format a document is.
 //!
 //! No file I/O: documents are text or bytes, and media references are strings. Each format module
@@ -16,12 +21,20 @@
 //! the caller's.
 
 pub mod ale;
+pub mod build;
 pub mod edl;
+#[cfg(feature = "xml")]
+pub mod fcp7;
+pub mod fx;
+pub mod model;
 pub mod path;
 pub mod rate;
 pub mod report;
 pub mod time;
+#[cfg(feature = "xml")]
+mod xml;
 
+pub use build::Imported;
 pub use report::{Level, Report, ReportEntry};
 pub use time::{FrameRate, Tick};
 
@@ -82,6 +95,70 @@ impl Format {
             _ => None,
         }
     }
+}
+
+/// Error from an importer or exporter. Unsupported *features* never error; they go in the [`Report`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Error {
+    /// The document cannot be read as its format.
+    Parse {
+        format: &'static str,
+        message: String,
+    },
+    /// The document contains no timeline.
+    Empty,
+    /// The project has no sequence with this id.
+    NoSequence(model::ItemId),
+    Other(String),
+}
+
+impl Error {
+    #[cfg_attr(not(feature = "xml"), allow(dead_code))]
+    pub(crate) fn parse(format: Format, message: impl Into<String>) -> Error {
+        Error::Parse { format: format.name(), message: message.into() }
+    }
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Parse { format, message } => write!(f, "{format} parse error: {message}"),
+            Error::Empty => f.write_str("the document contains no timeline"),
+            Error::NoSequence(id) => write!(f, "no sequence {id:?} in the project"),
+            Error::Other(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+/// How to read a timeline document.
+#[derive(Clone, Copy)]
+pub struct ImportOptions<'a> {
+    /// Directory relative media paths are resolved against (normally the document's directory).
+    pub base_dir: Option<&'a str>,
+    /// The application's effects and generators (see [`model::Catalog`]; [`fx::Standard`] knows
+    /// only what the formats name themselves).
+    pub catalog: &'a dyn model::Catalog,
+    /// The application's name for what it writes into documents for itself: a generator's payload
+    /// in xmeml is `<namespace>:<payload>`, and OpenTimelineIO metadata sits under this key.
+    pub namespace: &'a str,
+}
+
+/// How to write a timeline document.
+#[derive(Clone, Copy)]
+pub struct ExportOptions<'a> {
+    /// Write media paths relative to this directory where the format allows it.
+    pub relative_to: Option<&'a str>,
+    /// Document name (default: the sequence's).
+    pub name: Option<&'a str>,
+    pub catalog: &'a dyn model::Catalog,
+    /// See [`ImportOptions::namespace`].
+    pub namespace: &'a str,
+    /// `xmeml` version attribute (4 or 5).
+    pub xmeml_version: u32,
 }
 
 /// Sniff which text format (EDL, xmeml, FCPXML, OTIO) a document is from its bytes, using the file
