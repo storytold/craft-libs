@@ -9,3 +9,4 @@ mod hostile_dims;
 mod oracle_inter;
 mod oracle_intra;
 mod perf;
+mod wavefront;

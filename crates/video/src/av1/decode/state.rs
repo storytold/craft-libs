@@ -6,8 +6,8 @@
 //! with several, each tile decodes into private buffers covering its area (tiles never read
 //! outside themselves), which are then copied into the frame.
 
-use crate::av1::decode::decoder::RefFrame;
-use crate::av1::decode::frame::{FrameBuf, MiInfo};
+use crate::av1::decode::decoder::{Parsed, RefFrame};
+use crate::av1::decode::frame::{BandFrame, FrameBuf, MiInfo, PlaneRef};
 use crate::av1::decode::header::{FrameHeader, RefInfo, SequenceHeader};
 use crate::av1::decode::spec_tables::{DEFAULT_INTRA_FRAME_Y_MODE_CDF, NUM_REF_FRAMES, RESTORE_NONE, SUBSAMPLED_SIZE};
 use std::ops::{Deref, DerefMut};
@@ -26,6 +26,11 @@ pub(crate) struct FrameShared {
     pub cdef_cols: usize,
     /// Reference slots (FrameStore and saved state) used by this frame.
     pub refs: [Option<Arc<RefFrame>>; NUM_REF_FRAMES],
+    /// Parse results (CDFs, segment ids, saved motion vectors) of the same slots.
+    pub parsed: [Option<Arc<Parsed>>; NUM_REF_FRAMES],
+    /// The published bands of references that are still being decoded (row wavefront): read
+    /// only below the row progress that was waited for.
+    pub ref_rows: [Option<Arc<BandFrame>>; NUM_REF_FRAMES],
     pub ref_info: [RefInfo; NUM_REF_FRAMES],
     /// MotionFieldMvs[ ref ][ y8 * w8 + x8 ] (7.9); empty when unused.
     pub motion_field: [Vec<[i32; 2]>; 8],
@@ -34,6 +39,16 @@ pub(crate) struct FrameShared {
 }
 
 impl FrameShared {
+    /// The samples of reference slot `ref_idx` to predict from (None for a missing reference).
+    #[inline]
+    pub fn ref_samples(&self, ref_idx: i32, plane: usize) -> Option<PlaneRef<'_>> {
+        let i = usize::try_from(ref_idx).ok()?;
+        if let Some(b) = self.ref_rows.get(i)?.as_ref() {
+            return b.planes.get(plane).map(PlaneRef::Bands);
+        }
+        self.refs.get(i)?.as_ref().map(|r| r.plane(plane))
+    }
+
     pub fn plane_residual_size(&self, subsize: usize, plane: usize) -> usize {
         let sx = if plane > 0 { self.ssx } else { 0 };
         let sy = if plane > 0 { self.ssy } else { 0 };
@@ -210,6 +225,8 @@ impl FrameState {
                 lr_unit_cols,
                 cdef_cols,
                 refs: Default::default(),
+                parsed: Default::default(),
+                ref_rows: Default::default(),
                 ref_info: Default::default(),
                 motion_field: Default::default(),
                 prev_segment_ids: vec![0; mi_cols * mi_rows],
@@ -276,6 +293,14 @@ impl FrameState {
     pub fn merge_tile_state(&mut self, t: &TileState) {
         for p in 0..self.num_planes {
             t.cur.planes[p].copy_into(&mut self.cur.planes[p]);
+        }
+        self.merge_tile_modes(t);
+    }
+
+    /// Copy a tile's private buffers except the samples (after parsing, before reconstruction)
+    /// into the frame.
+    pub fn merge_tile_modes(&mut self, t: &TileState) {
+        for p in 0..self.num_planes {
             t.lf_tx_size[p].copy_into(&mut self.lf_tx_size[p]);
             for &u in &t.lr_written[p] {
                 self.lr.lr_type[p][u] = t.lr.lr_type[p][u];

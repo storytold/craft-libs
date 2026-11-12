@@ -1,7 +1,6 @@
 //! Hostile-input robustness: truncation, header-region sweeps and random mutation of small
 //! ffmpeg-generated AV1 streams (frame by frame) must never panic or run away. Skips without ffmpeg.
 
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -20,8 +19,15 @@ impl Rng {
     }
 }
 
-/// (name, encoder args, pix_fmt)
-const SEEDS: &[(&str, &str, &str)] = &[("av1_fz_default", "-c:v libsvtav1 -g 4", "yuv420p"), ("av1_fz_10bit", "-c:v libsvtav1 -g 6", "yuv420p10le")];
+// Seeds are at least 64x64: SVT-AV1 before 3.0 (the Ubuntu runners have 2.3) refuses a source under 64 lines.
+/// (name, encoder args, pix_fmt, size, decoder thread counts)
+const SEEDS: &[(&str, &str, &str, &str, &[usize])] = &[
+    ("av1_fz_default", "-c:v libsvtav1 -g 4", "yuv420p", "64x64", &[1, 3]),
+    ("av1_fz_10bit", "-c:v libsvtav1 -g 6", "yuv420p10le", "64x64", &[1, 3]),
+    // Several superblock rows, so corrupt references meet frames already predicting from their
+    // top rows (row wavefront with frame threads).
+    ("av1_fz_rows", "-c:v libsvtav1 -g 6", "yuv420p", "64x136", &[1, 8]),
+];
 
 fn ivf_frames(data: &[u8]) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
@@ -37,14 +43,13 @@ fn ivf_frames(data: &[u8]) -> Vec<Vec<u8>> {
     out
 }
 
-// Seeds are 64x64: SVT-AV1 before 3.0 (the Ubuntu runners have 2.3) refuses a source under 64 lines.
-fn make(ff: &std::path::Path, name: &str, args: &str, pix: &str) -> Option<Vec<Vec<u8>>> {
+fn make(ff: &std::path::Path, name: &str, args: &str, pix: &str, size: &str) -> Option<Vec<Vec<u8>>> {
     let out = craft_media_testkit::fixtures_dir("av1").join(format!("{name}.ivf"));
     let p = craft_media_testkit::fixtures::generate(&out, |tmp| {
         let a: Vec<&str> = args.split_whitespace().collect();
         matches!(
             Command::new(ff)
-                .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=64x64:rate=25", "-frames:v", "6", "-pix_fmt", pix])
+                .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", &format!("testsrc2=size={size}:rate=25"), "-frames:v", "6", "-pix_fmt", pix])
                 .args(a)
                 .args(["-f", "ivf"])
                 .arg(tmp)
@@ -69,20 +74,29 @@ fn count_panics() {
     });
 }
 
-fn run_all(frames: &[Vec<u8>], label: &str) {
+fn run_all(frames: &[Vec<u8>], threads: &[usize], label: &str) {
     craft_media_testkit::set_progress(label);
     count_panics();
     let before = PANICS.load(Ordering::SeqCst);
-    let res = catch_unwind(AssertUnwindSafe(|| {
-        for threads in [1, 3] {
-            let mut dec = Decoder::with_threads(threads);
-            for (i, f) in frames.iter().enumerate() {
-                let _ = dec.decode_pts(f, i as i64);
-            }
-            let _ = dec.flush_result();
-        }
-    }));
-    assert!(res.is_ok() && PANICS.load(Ordering::SeqCst) == before, "panic: {label}");
+    // Every thread count decodes the stream at the same time, each on a thread of its own.
+    let ok = std::thread::scope(|s| {
+        let runs: Vec<_> = threads
+            .iter()
+            .map(|&threads| {
+                s.spawn(move || {
+                    let mut dec = Decoder::with_threads(threads);
+                    for (i, f) in frames.iter().enumerate() {
+                        let _ = dec.decode_pts(f, i as i64);
+                    }
+                    let _ = dec.flush_result();
+                })
+            })
+            .collect();
+        // Join every run (no short cut), then check them all.
+        let joined: Vec<bool> = runs.into_iter().map(|r| r.join().is_ok()).collect();
+        joined.into_iter().all(|ok| ok)
+    });
+    assert!(ok && PANICS.load(Ordering::SeqCst) == before, "panic: {label}");
 }
 
 /// Random-mutation rounds per seed (raise with FILMCRAFT_FUZZ_ITERS for a long hunt).
@@ -95,17 +109,23 @@ const DEADLINE_SECS: u64 = 600;
 
 #[test]
 fn hostile_streams_never_panic() {
-    craft_media_testkit::with_deadline(DEADLINE_SECS, sweep);
+    craft_media_testkit::with_deadline(DEADLINE_SECS, || sweep(&SEEDS[..2]));
 }
 
-fn sweep() {
+/// The seed with several superblock rows, in a test of its own so it runs beside the others.
+#[test]
+fn hostile_streams_with_superblock_rows_never_panic() {
+    craft_media_testkit::with_deadline(DEADLINE_SECS, || sweep(&SEEDS[2..]));
+}
+
+fn sweep(seeds: &[(&str, &str, &str, &str, &[usize])]) {
     let Some(ff) = craft_media_testkit::ffmpeg_or_skip("AV1 fuzz") else { return };
-    for &(name, args, pix) in SEEDS {
+    for &(name, args, pix, size, threads) in seeds {
         if !craft_media_testkit::ffmpeg_has_encoder(&ff, "libsvtav1") {
             craft_media_testkit::skip_test("AV1 fuzz", &format!("this ffmpeg has no libsvtav1 encoder (seed {name})"));
             continue;
         }
-        let Some(seed) = make(&ff, name, args, pix) else {
+        let Some(seed) = make(&ff, name, args, pix, size) else {
             panic!("ffmpeg has libsvtav1 but could not encode the {name} seed");
         };
         if seed.is_empty() {
@@ -118,7 +138,7 @@ fn sweep() {
             for n in (0..len).step_by((len / 200).max(1)) {
                 let mut d = seed.clone();
                 d[fi].truncate(n);
-                run_all(&d, &format!("{name} frame {fi} truncate {n}"));
+                run_all(&d, threads, &format!("{name} frame {fi} truncate {n}"));
             }
         }
         // header region of every frame: every byte to a few values, every bit
@@ -127,12 +147,12 @@ fn sweep() {
                 for v in [0u8, 0xff, 0x80, 0x01, 0x7f] {
                     let mut d = seed.clone();
                     d[fi][p] = v;
-                    run_all(&d, &format!("{name} frame {fi} byte {p}={v:#x}"));
+                    run_all(&d, threads, &format!("{name} frame {fi} byte {p}={v:#x}"));
                 }
                 for b in 0..8 {
                     let mut d = seed.clone();
                     d[fi][p] ^= 1 << b;
-                    run_all(&d, &format!("{name} frame {fi} flip {p}.{b}"));
+                    run_all(&d, threads, &format!("{name} frame {fi} flip {p}.{b}"));
                 }
             }
         }
@@ -151,7 +171,7 @@ fn sweep() {
                     d[fi][p] = rng.next() as u8;
                 }
             }
-            run_all(&d, &format!("{name} random {i}"));
+            run_all(&d, threads, &format!("{name} random {i}"));
         }
     }
 }
