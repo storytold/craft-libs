@@ -39,11 +39,12 @@
 //! the lock; [`accounts::write`] already replaces the file through a temporary file and a rename,
 //! so a reader never sees a half-written file, only one write older than the latest.
 //!
-//! The lock never wraps a keychain call. A keychain write or removal happens either entirely
-//! before the lock is taken or, for [`Store::discard`], inside the same lock hold as the list
-//! write it belongs with, but a locked section is never held across a call into the keychain that
-//! another `Store` in this process could itself be waiting on; that would deadlock two `Store`s
-//! over one folder in a single process the same way two applications would be.
+//! The lock does not wrap an unconditional keychain call. A keychain write or removal happens
+//! either entirely before the lock is taken or, for [`Store::discard`] and the re-check below,
+//! inside the same lock hold as the list write it belongs with, but a locked section is never
+//! held across a call into the keychain that another `Store` in this process could itself be
+//! waiting on; that would deadlock two `Store`s over one folder in a single process the same way
+//! two applications would be.
 //!
 //! Each operation's ordering is chosen so a crash, or another process winning a race, leaves a
 //! state the next reader detects and repairs rather than a silent mismatch (guarantee 1):
@@ -51,7 +52,13 @@
 //! * [`Store::sign_in`] writes the keychain token first, the list second. A crash in between
 //!   leaves one keychain entry nothing on the list points at yet. Harmless: the account's handle
 //!   is a digest of the deployment and the subject, so the next sign-in for the same account
-//!   overwrites that same entry rather than minting a new one.
+//!   overwrites that same entry rather than minting a new one. A concurrent [`Store::discard`]
+//!   for the same handle landing in that same window is not harmless the same way: it would
+//!   delete the entry this call just wrote and then, moments later, this call would still commit
+//!   a row claiming a session that no longer has a token behind it. The lock closure therefore
+//!   re-checks the keychain just before committing the row. It writes the token again when
+//!   something else has already changed it. The row this call reports `Ok` for then always has
+//!   its token in place the moment it lands.
 //! * [`Store::discard`] removes the keychain entry and writes the list's tombstone under the same
 //!   lock hold. A crash between them leaves a row on the list with no entry behind it; `shared()`
 //!   already reads that as nobody signed in, and the next sign-in for that account tidies the row
@@ -221,6 +228,12 @@ impl<S: TokenStore> Store<S> {
     /// unreferenced keychain entry. The next sign-in for the same account overwrites that entry,
     /// because the handle is a digest of the deployment and the subject. Nothing fresh is minted
     /// each time. The other order would leave an account on the list with no token behind it.
+    ///
+    /// A [`Store::discard`] for this same handle can still land between that first write and the
+    /// lock below, taking the entry this call just placed with it. The lock closure re-checks the
+    /// keychain right before it commits the row. It writes the token again when something else
+    /// has already changed it. An `Ok` from this call then never reports a session with no token
+    /// behind it.
     pub fn sign_in(&self, new: &NewAccount, token: &Secret, now: i64) -> Result<Account, Error> {
         self.usable()?;
         let path = self.path().ok_or(Error::Isolated)?;
@@ -254,6 +267,15 @@ impl<S: TokenStore> Store<S> {
                 linked: new.linked,
                 generation,
             };
+            // A discard for this handle could have run entirely in the window between the
+            // unlocked write above and this lock: it would have removed that entry on its way to
+            // the tombstone this call just read past. Putting the token again here, still inside
+            // the lock, closes that window: the row committed just below is never left pointing
+            // at a keychain entry something else already took. Skipped when nothing changed it,
+            // so the common, non-racing sign-in never pays for a second keychain write.
+            if self.tokens.get(&id).map_err(Error::Keychain)?.as_ref() != Some(token) {
+                self.tokens.put(&id, token).map_err(Error::Keychain)?;
+            }
             list.put(account.clone());
             accounts::write(&path, &list)?;
             Ok(account)
