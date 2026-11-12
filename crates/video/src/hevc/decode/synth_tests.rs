@@ -161,7 +161,7 @@ fn vps() -> Vec<u8> {
     nal(32, &w.finish())
 }
 
-fn sps(pcm_loop_filter_disabled: bool) -> Vec<u8> {
+pub(crate) fn sps(pcm_loop_filter_disabled: bool) -> Vec<u8> {
     let mut w = BitWriter::new();
     w.write_bits(0, 4);
     w.write_bits(0, 3);

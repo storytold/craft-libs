@@ -446,6 +446,34 @@ impl<'a> Document<'a> {
         self.objects.iter().find(|r| r.kind == "DICTIONARY" && r.handle() == Some(handle)).map(Dictionary::read)
     }
 
+    /// The OBJECTS records of type `kind` (`GROUP`, `IMAGEDEF`, `SCALE`...), for the readers of
+    /// [`super::objects`].
+    pub fn objects_of<'s>(&'s self, kind: &'s str) -> impl Iterator<Item = &'s Record<'a>> {
+        self.objects.iter().filter(move |r| r.kind == kind)
+    }
+
+    /// Object handle → the name a dictionary lists it under: how a GROUP, an MLINESTYLE, a
+    /// TABLESTYLE or an IMAGEDEF gets its name. Where several dictionaries name a handle, the
+    /// last one read wins.
+    pub fn dictionary_names(&self) -> HashMap<u64, &'a str> {
+        let mut names = HashMap::new();
+        for r in self.objects.iter().filter(|r| r.kind == "DICTIONARY" || r.kind == "ACDBDICTIONARYWDFLT") {
+            let mut name = None;
+            for t in r.tags {
+                match t.code {
+                    3 => name = t.str_ref(),
+                    350 | 360 => {
+                        if let (Some(n), Some(h)) = (name.take(), parse_handle(&t.str())) {
+                            names.insert(h, n);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        names
+    }
+
     /// The named object dictionary: the first DICTIONARY of the OBJECTS section.
     pub fn root_dictionary(&self) -> Option<Dictionary> {
         self.objects.iter().find(|r| r.kind == "DICTIONARY").map(Dictionary::read)
