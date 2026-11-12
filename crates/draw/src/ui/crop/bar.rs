@@ -11,7 +11,7 @@ use craft_behavior::{EditEvent, EditEvents, IconId, NumberCodec};
 use craft_ui::buttons::{Button, IconButton, ToggleButton};
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{
-    Bind, BodyCx, Entry, LabelKind, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _, SideLabel, Sizing, clicked,
+    Bind, BodyCx, Entry, Gap, LabelKind, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _, SideLabel, Sizing, clicked,
 };
 use craft_ui::display::Divider;
 use craft_ui::form::Field;
@@ -115,7 +115,8 @@ impl<'a> CropBar<'a> {
         let has_document = document.size.width > 0.0 && document.size.height > 0.0;
         let before = settings.clone();
         let mut report = Report::default();
-        let shown = Row::new().show(ui, |ui, cx| {
+        // The options are the bar's members, spaced as the bar spaces them.
+        let shown = Row::new().gap(Gap::Item).show(ui, |ui, cx| {
             preset_list(ui, settings, &words, document, has_document, user_presets, &units, &mut report);
             if settings.ratio == CropRatio::Size {
                 size_fields(ui, settings, &words, document, &units, &mut report);

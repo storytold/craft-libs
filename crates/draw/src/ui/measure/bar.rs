@@ -6,7 +6,7 @@ use super::words::RulerWords;
 use craft_ui::buttons::Button;
 use craft_ui::canvas::CanvasRulers;
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, Sizing, clicked};
+use craft_ui::contract::{Bind, Gap, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, Sizing, clicked};
 use craft_ui::display::{Divider, Text};
 use craft_ui::form::Field;
 use craft_ui::layout_components::Row;
@@ -41,8 +41,9 @@ impl Outcome for RulerBarOutput {
 ///
 /// - Readouts X, Y (the start), W, H (end minus start), A, L1 and L2 (blank without a protractor; all blank without a
 ///   line), each a caption and a tabular value; live while the line is dragged (the app passes the line of this
-///   pass). Values have two decimals. Lengths and positions are written in the canvas's ruler units
-///   ([`rulers`](Self::rulers)) while Use Measurement Scale is off; the angle is a plain number of degrees.
+///   pass). Lengths and positions are written in the canvas's ruler units ([`rulers`](Self::rulers)) at the
+///   unit's readout digits (`RulerText::format_value`: tenths of a pixel) while Use Measurement Scale is off; scaled
+///   values and the angle, a plain number of degrees, have two decimals.
 /// - Use Measurement Scale multiplies X, Y, W, H, L1 and L2 by the scale factor, not the angle
 ///   ([`RulerReading::scaled`](super::RulerReading::scaled)); the values are then plain numbers in the scale's own
 ///   unit, which the bar does not know.
@@ -77,7 +78,8 @@ impl<'a> RulerBar<'a> {
         let mut scaled = false;
         let mut straighten_layer = false;
         let mut clear = false;
-        let shown = Row::new().show(ui, |ui, cx| {
+        // The readouts and controls are the bar's members, spaced as the bar spaces them.
+        let shown = Row::new().gap(Gap::Item).show(ui, |ui, cx| {
             scaled = use_scale.reborrow().read(cx).is_some_and(|held| matches!(held, craft_behavior::Mixed::Same(true)));
             let reading = line.map(|line| {
                 let reading = line.reading();
@@ -89,7 +91,7 @@ impl<'a> RulerBar<'a> {
                     return units.number(value, DECIMALS..=DECIMALS);
                 }
                 let ruler = if axis_x { &rulers.x } else { &rulers.y };
-                ruler.format(&units, value, 0.0, DECIMALS..=DECIMALS)
+                ruler.format_value(&units, value, 0.0)
             };
             let angle = reading.map_or_else(String::new, |r| units.number(r.angle, DECIMALS..=DECIMALS));
             let readouts = [

@@ -3,7 +3,7 @@
 
 use craft_behavior::{EditEvent, IconId};
 use craft_ui::buttons::ToggleButton;
-use craft_ui::contract::{Bind, Entry, FieldLayout, LabelKind, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing};
+use craft_ui::contract::{Bind, Entry, FieldLayout, Gap, LabelKind, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing};
 use craft_ui::display::Divider;
 use craft_ui::form::Field;
 use craft_ui::layout_components::Row;
@@ -238,8 +238,9 @@ impl<'a> WarpFields<'a> {
         let words = Env::of(ui).words::<WarpFieldsWords>();
         let caption = FieldLayout::Beside;
         let mut edits = Vec::new();
-        Row::new().show(ui, |ui, _| {
-            Row::new().enabled(!on_type).show(ui, |ui, _| {
+        // The groups hold the bar's members, spaced as the bar spaces them.
+        Row::new().gap(Gap::Item).show(ui, |ui, _| {
+            Row::new().gap(Gap::Item).enabled(!on_type).show(ui, |ui, _| {
                 Field::new(words.split.clone()).layout(caption).sizing(Sizing::Content).show(ui, |ui, _| {
                     Row::new().show(ui, |ui, _| {
                         let tools = [
@@ -290,7 +291,7 @@ impl<'a> WarpFields<'a> {
             });
             // The orientation and the fields are always there and act only on a preset style.
             let preset = styles.iter().any(|entry| entry.key == values.style && entry.preset);
-            Row::new().enabled(preset).show(ui, |ui, _| {
+            Row::new().gap(Gap::Item).enabled(preset).show(ui, |ui, _| {
                 let button = ToggleButton::new(words.orientation.clone(), Bind::given(values.vertical))
                     .icon(IconId::new("swap_horizontal"))
                     .icon_only()

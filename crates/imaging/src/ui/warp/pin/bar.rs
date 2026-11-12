@@ -8,6 +8,7 @@ use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, clicked};
 use craft_ui::display::{Divider, Text};
 use craft_ui::form::Field;
+use craft_ui::layout_components::Row;
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, UnitKind};
 use craft_ui::text::NumberField;
@@ -155,11 +156,14 @@ fn body(ui: &mut Ui, session: &PinWarpSession, words: &PinWarpBarWords, notice: 
     if let Some(i) = picked {
         let pin = pins[i];
         captioned(ui, &words.pin_depth, |ui| {
-            for (icon, name, by, salt) in [("plus", &words.forward, 1, "forward"), ("minus", &words.backward, -1, "backward")] {
-                if clicked(&IconButton::new(IconId::new(icon)).id_salt(salt).label(name.clone()).show(ui)) {
-                    edits.push(PinEdit::replace(pins, with_pin(pins, i, Pin { depth: pin.depth + by, ..pin }), words.pin_depth.as_str()));
+            // The two buttons side by side, so the bar's line stays one control high.
+            Row::new().show(ui, |ui, _| {
+                for (icon, name, by, salt) in [("plus", &words.forward, 1, "forward"), ("minus", &words.backward, -1, "backward")] {
+                    if clicked(&IconButton::new(IconId::new(icon)).id_salt(salt).label(name.clone()).show(ui)) {
+                        edits.push(PinEdit::replace(pins, with_pin(pins, i, Pin { depth: pin.depth + by, ..pin }), words.pin_depth.as_str()));
+                    }
                 }
-            }
+            });
         });
         let rotations = [Entry::new(false, words.auto.clone()), Entry::new(true, words.fixed.clone())];
         captioned(ui, &words.rotate, |ui| {
