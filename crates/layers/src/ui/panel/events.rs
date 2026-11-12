@@ -126,6 +126,15 @@ pub enum LayersEvent<K> {
         /// What was dropped: layer rows, effects or filter rows, or one [`LayerRowKey::Mask`].
         rows: Vec<LayerRowKey<K>>,
     },
+    /// Alt-click on the line between two sibling layers (Photoshop): clip the upper layer to the one below, or release
+    /// it when it is clipped already.
+    #[non_exhaustive]
+    ClipLine {
+        /// The layer above the line.
+        upper: K,
+        /// The upper layer is clipped: the click releases it.
+        release: bool,
+    },
     /// A pick in the host's row menu ([`LayersPanel::row_menu`](super::LayersPanel::row_menu)).
     #[non_exhaustive]
     Menu {

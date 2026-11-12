@@ -50,9 +50,9 @@ pub use body::REORDER_BAND;
 pub use body::pad_of;
 pub use collection::{
     ActivateOn, CollectionEvent, CollectionProps, CollectionResponse, ColumnAlign, ColumnEvent, ColumnKind, ColumnRequest, ColumnSort, ColumnSpec,
-    ContextMenuRequest, DragPayload, DropAt, DropKind, DropPayload, DropPlace, HeaderMenuRequest, ItemKeys, LeadOnOpen, LeadSource, ListDrag,
-    OpenChange, PendingDrop, Rename, ReorderMove, ReorderRule, RowHeight, RowPressed, RowState, SelectMode, ShownRow, SpaceAction, ToggleColumn,
-    ToggleEdit,
+    ContextMenuRequest, DragPayload, DropAt, DropKind, DropPayload, DropPlace, EdgePress, HeaderMenuRequest, ItemKeys, LeadOnOpen, LeadSource,
+    ListDrag, OpenChange, PendingDrop, Rename, ReorderMove, ReorderRule, RowHeight, RowPressed, RowState, SelectMode, ShownRow, SpaceAction,
+    ToggleColumn, ToggleEdit,
 };
 #[doc(hidden)]
 pub use container::InBar;
@@ -630,6 +630,12 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
     /// payload at the place under the pointer gets the drop, reported as `CollectionEvent::Dropped`. None by default.
     fn drops(&self) -> &[DropKind<'_, Self::Key>] {
         &[]
+    }
+
+    /// The press on the line between two adjacent rows the collection takes, reported as
+    /// `CollectionEvent::EdgePressed`; none by default, and without one the rows take every press as they do.
+    fn edge_press(&self) -> Option<&EdgePress<'_, Self::Key>> {
+        None
     }
 
     /// Whether the collection takes the zoom share of the wheel (Ctrl or Cmd with the wheel): it reports

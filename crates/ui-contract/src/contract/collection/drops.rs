@@ -1,5 +1,8 @@
-//! What a collection takes from drags that did not start in it: one drop kind per payload type and place (17.4).
+//! What a collection takes from drags that did not start in it: one drop kind per payload type and place (17.4); and
+//! the press on the line between two rows it takes (`EdgePress`).
 
+use craft_behavior::Cursor;
+use craft_keymap::Mods;
 use std::any::{Any, TypeId};
 use std::fmt;
 use std::rc::Rc;
@@ -113,5 +116,37 @@ impl PartialEq for DropPayload {
 impl fmt::Debug for DropPayload {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("DropPayload")
+    }
+}
+
+type EdgeTest<'a, K> = Rc<dyn Fn(&K, &K) -> Option<Cursor> + 'a>;
+
+/// The line between two adjacent rows as a target of its own while `mods` are held (Photoshop's Alt-click between two
+/// layers clips the upper one). Where `test` gives a cursor for the rows above and below the line, the line's band
+/// shows that cursor and a click there is reported as `CollectionEvent::EdgePressed`, not as a press on either row.
+#[derive(Clone)]
+pub struct EdgePress<'a, K> {
+    mods: Mods,
+    test: EdgeTest<'a, K>,
+}
+
+impl<'a, K> EdgePress<'a, K> {
+    /// The edge press while exactly `mods` are held, on the lines `test` takes.
+    pub fn new(mods: Mods, test: impl Fn(&K, &K) -> Option<Cursor> + 'a) -> Self {
+        EdgePress { mods, test: Rc::new(test) }
+    }
+
+    pub(crate) fn mods(&self) -> Mods {
+        self.mods
+    }
+
+    pub(crate) fn test(&self, above: &K, below: &K) -> Option<Cursor> {
+        (self.test)(above, below)
+    }
+}
+
+impl<K> fmt::Debug for EdgePress<'_, K> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EdgePress").field("mods", &self.mods).finish_non_exhaustive()
     }
 }

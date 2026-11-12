@@ -422,6 +422,8 @@ pub enum CollectionKind {
     EmptyActivated,
     /// A secondary click on the empty space.
     EmptyContextMenu,
+    /// A click on the line between two rows.
+    EdgePressed,
     /// Space previewed the lead.
     Preview,
     /// A context menu was asked for.
@@ -459,6 +461,7 @@ impl CollectionKind {
             CollectionEvent::Activate(_) => CollectionKind::Activate,
             CollectionEvent::EmptyActivated => CollectionKind::EmptyActivated,
             CollectionEvent::EmptyContextMenu { .. } => CollectionKind::EmptyContextMenu,
+            CollectionEvent::EdgePressed { .. } => CollectionKind::EdgePressed,
             CollectionEvent::Preview(_) => CollectionKind::Preview,
             CollectionEvent::ContextMenu(_) => CollectionKind::ContextMenu,
             CollectionEvent::CommandClick { .. } => CollectionKind::CommandClick,

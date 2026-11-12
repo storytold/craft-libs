@@ -291,6 +291,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
 
     fn parts(&mut self, comp: &mut C, _: Rect, pcx: &mut PartsCx<'_, C>) {
         self.header.parts(pcx, self.offset_x as f32);
+        self.edge_parts(comp, pcx);
         self.notch = comp.items().wheel_notch(pcx.tokens.typography.body.line_height);
         if !self.scrolls {
             return;
@@ -357,6 +358,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let at = Placement { rect, offset, rtl };
         // A press lands on the rows the user saw: the offset of the last pass, before this pass's wheel share (8.3).
         let seen = Placement { offset: ScrollPos { x: self.offset_x_at_read, y: self.offset_at_read }, ..at };
+        self.edge_step(cx);
         self.press_step(comp, cx, &props, &layout, seen);
         if props.lead_follows_hover {
             self.hover_lead(comp, cx, &layout, seen);

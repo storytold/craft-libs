@@ -196,3 +196,31 @@ fn cmd_over_a_thumbnail_shows_the_load_cursor() {
     );
     assert_ne!(cursor_over(&mut fixture, mask, Modifiers::NONE), Some(Cursor::System(CursorIcon::PointingHand)), "no Cmd, no load cursor");
 }
+
+/// Alt-click on the line between two sibling layers clips the upper one, or releases it when it is clipped; the line
+/// under an open group's row, which leads into the group, clips nothing.
+#[trial]
+fn alt_click_on_the_line_between_two_sibling_layers_clips_the_upper_one() {
+    let (mut fixture, seen, _) = rig();
+    let line = |fixture: &Fixture, upper: &str| {
+        let rect = node(fixture, upper).rect;
+        Pos2::new(rect.center().x, rect.bottom() - 1.0)
+    };
+    let alt_click = |fixture: &mut Fixture, at: Pos2| -> Vec<(u32, bool)> {
+        seen.borrow_mut().clear();
+        fixture.hold(Modifiers::ALT);
+        fixture.frame(vec![pointer::moved(at)]).idle(1);
+        fixture.click_at(at).idle(2);
+        fixture.hold(Modifiers::NONE);
+        seen.borrow()
+            .iter()
+            .filter_map(|event| if let LayersEvent::ClipLine { upper, release, .. } = event { Some((*upper, *release)) } else { None })
+            .collect()
+    };
+    let title = line(&fixture, "Title");
+    assert_eq!(alt_click(&mut fixture, title), [(4, false)], "Title clips to Levels 1");
+    let clipped = line(&fixture, "Clipped");
+    assert_eq!(alt_click(&mut fixture, clipped), [(2, true)], "Clipped is released");
+    let group = line(&fixture, "Group 1");
+    assert_eq!(alt_click(&mut fixture, group), [], "the line into an open group");
+}

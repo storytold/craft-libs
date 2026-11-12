@@ -6,7 +6,7 @@
 use super::predicate::{DropTest, RowTest, RowText};
 use super::{ListRow, RowEvent};
 use crate::contract::{
-    Access, ActivateOn, Bind, BindMut, Collection, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, DropKind,
+    Access, ActivateOn, Bind, BindMut, Collection, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, DropKind, EdgePress,
     EditResponse, LeadOnOpen, ListDrag, Props as _, Role, RowState, SelectMode, Sizing,
 };
 use crate::runtime::env::{Env, Label};
@@ -62,6 +62,8 @@ pub struct List<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     can_drag: Option<RowTest<'a, K>>,
     /// What the list takes from drags that did not start in it, in order.
     drops: Vec<DropKind<'a, K>>,
+    /// The press on the line between two rows the list takes.
+    edge_press: Option<EdgePress<'a, K>>,
     /// Where the list's own drag may land: the test gets the drag, the row under the pointer and the position before which the
     /// dragged rows would go. A refused spot shows no drop mark.
     #[prop(func = "Fn(&ListDrag<K>, Option<&K>, usize) -> bool")]
@@ -94,6 +96,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> List<'a, K> {
             rename_draft: None,
             can_drag: None,
             drops: Vec::new(),
+            edge_press: None,
             accepts: None,
             listbox: false,
             row_menu: false,
@@ -144,6 +147,16 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> List<'a, K> {
     #[must_use]
     pub fn takes_drop(mut self, kind: DropKind<'a, K>) -> Self {
         self.drops.push(kind);
+        self
+    }
+
+    /// While exactly `mods` are held, the line between two adjacent rows that `test` gives a cursor for is a target of
+    /// its own: the band around it shows the cursor and a click there reports `CollectionEvent::EdgePressed` with the
+    /// rows above and below, picking neither (Photoshop's Alt-click between two layers clips the upper one). A toggle
+    /// cell under the pointer keeps its press. Without it the rows take every press.
+    #[must_use]
+    pub fn edge_press(mut self, mods: craft_keymap::Mods, test: impl Fn(&K, &K) -> Option<craft_behavior::Cursor> + 'a) -> Self {
+        self.edge_press = Some(EdgePress::new(mods, test));
         self
     }
 }
@@ -231,6 +244,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for List<'_, K> {
 
     fn drops(&self) -> &[DropKind<'_, K>] {
         &self.drops
+    }
+
+    fn edge_press(&self) -> Option<&EdgePress<'_, K>> {
+        self.edge_press.as_ref()
     }
 
     fn accepts(&self, drag: &ListDrag<K>, over: Option<&K>, insert: usize) -> bool {

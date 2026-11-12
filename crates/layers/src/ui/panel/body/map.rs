@@ -114,6 +114,10 @@ pub(super) fn map_events<T: LayerTree>(
                     session.menu = Some(OpenMenu::Row(MenuTarget { row: Some(request.key.clone()), part, on_selection }));
                 }
             }
+            CollectionEvent::EdgePressed { above: LayerRowKey::Layer(upper), .. } => {
+                let release = tree.info(&upper).clipped;
+                events.push(LayersEvent::ClipLine { upper, release });
+            }
             CollectionEvent::EmptyContextMenu { .. } => {
                 session.menu = Some(OpenMenu::Row(MenuTarget { row: None, part: None, on_selection: false }));
             }

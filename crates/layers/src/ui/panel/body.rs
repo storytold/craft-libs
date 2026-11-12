@@ -10,6 +10,7 @@ pub(in crate::ui::panel) use rows::{LayerRows, ToggleSweeps, extra_parts, reveal
 use rows::{RevealPlan, list_selection};
 
 use craft_behavior::{ColumnWidth, IconId};
+use craft_keymap::Mods;
 use craft_ui::contract::{
     Bind, CollectionEvent, ColumnKind, ColumnSpec, DropAt, DropKind, DropPlace, ListDrag, PendingDrop, Props as _, ReorderRule, ShowCollection as _,
     ToggleColumn,
@@ -20,7 +21,7 @@ use egui::Ui;
 
 use super::Session;
 use super::context::PanelContext;
-use super::drag::{LayersDrag, accepts_drop, accepts_part_drop, layer_drop};
+use super::drag::{LayersDrag, accepts_drop, accepts_part_drop, clip_cursor, layer_drop};
 use super::events::{LayerDrop, LayerMove, LayersEvent};
 use super::row::{EYE, LOCK, NAME, build_row};
 use crate::ui::tree::{LayerRowKey, LayerTree};
@@ -86,7 +87,8 @@ pub(super) fn show_body<T: LayerTree>(
         .drag_payload(|drag: &ListDrag<LayerRowKey<T::Id>>| Some(LayersDrag::of_rows(drag)))
         .takes_drop(DropKind::new(DropPlace::Onto, move |drag: &LayersDrag<T::Id>, at: &DropAt<LayerRowKey<T::Id>>| {
             accepts_part_drop(tree, list_id, drag, at)
-        }));
+        }))
+        .edge_press(Mods::ALT, |above: &LayerRowKey<T::Id>, below: &LayerRowKey<T::Id>| clip_cursor(tree, above, below));
     if let Some(key) = reveal_key {
         list = list.reveal(key);
     }

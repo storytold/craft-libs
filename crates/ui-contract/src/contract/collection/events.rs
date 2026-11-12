@@ -210,6 +210,17 @@ pub enum CollectionEvent<K, E> {
     Preview(K),
     /// The user asked for an item's context menu.
     ContextMenu(ContextMenuRequest<K>),
+    /// A click on the line between two adjacent rows, with the modifiers of the collection's edge press
+    /// (`Collection::edge_press`). Neither row is picked.
+    #[non_exhaustive]
+    EdgePressed {
+        /// The row above the line.
+        above: K,
+        /// The row below it.
+        below: K,
+        /// The modifiers held.
+        mods: craft_keymap::Mods,
+    },
     /// A Cmd/Ctrl click on an item of a `command_click` collection: a command on the item (load it as a selection),
     /// not a pick. The selection is unchanged.
     #[non_exhaustive]

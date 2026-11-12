@@ -11,6 +11,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 mod drag;
+mod edge;
 pub(super) mod empty_text;
 mod header;
 mod marquee;
@@ -52,6 +53,8 @@ pub(super) struct Rows<K> {
 
 const SCROLL: craft_behavior::PartKey = craft_behavior::PartKey::new("items_scroll");
 const SECTION: craft_behavior::PartKey = craft_behavior::PartKey::new("section");
+/// The band of the line between two rows that an edge press takes (`Collection::edge_press`).
+const EDGE: craft_behavior::PartKey = craft_behavior::PartKey::new("items_edge");
 /// The sub-node of a toggle cell of an item row; the index is the hash of the row's key and the column.
 const TOGGLE_CELL: craft_behavior::PartKey = craft_behavior::PartKey::new("toggle_cell");
 /// The part an item row's own access node stands for in the collection: AccessKit requests on the row's node reach
@@ -189,6 +192,8 @@ pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
     page_reveal: Option<usize>,
     /// The row the collection's own press is held on this pass, and where on it.
     pressed: Option<(usize, crate::contract::collection::RowPressed)>,
+    /// The rows above and below the edge-press band declared this pass.
+    edge: Option<(C::Key, C::Key)>,
 }
 
 /// The primary-ness, click count, position in the layout's coordinates and scroll offset of a press on a row.
@@ -248,6 +253,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             drags: Drags::default(),
             page_reveal: None,
             pressed: None,
+            edge: None,
         }
     }
 }

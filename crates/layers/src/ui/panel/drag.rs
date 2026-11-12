@@ -1,7 +1,7 @@
 //! Drag and drop: what a reorder of the list means for layers, effects and Smart Filters, the
 //! payload that footer buttons accept, and the stacking commands.
 
-use craft_behavior::{DropOperation, EditEvent, Mixed};
+use craft_behavior::{Cursor, DropOperation, EditEvent, IconId, Mixed, PaintedCursor};
 use craft_keymap::Mods;
 use craft_ui::contract::{DropAt, ListDrag, ReorderMove};
 use std::sync::Arc;
@@ -192,6 +192,27 @@ pub(super) fn part_drop_event<K: Clone + PartialEq>(
     let drop = part_drop(list, drag, at, op == DropOperation::Copy)?;
     Some(LayersEvent::Drop(EditEvent::set(Mixed::Mixed, drop, label, None)))
 }
+
+/// The cursor of the line between the rows `above` and `below` while Alt is held, where a click there clips the upper
+/// layer to the lower or releases it: both are layers of one parent, next to each other in its stack, so the line is
+/// not inside an open group, under a group's last layer or across layers a filter hides. `None` elsewhere.
+pub(super) fn clip_cursor<T: LayerTree>(tree: &T, above: &LayerRowKey<T::Id>, below: &LayerRowKey<T::Id>) -> Option<Cursor> {
+    let (LayerRowKey::Layer(upper), LayerRowKey::Layer(lower)) = (above, below) else { return None };
+    let parent = tree.parent(upper);
+    if tree.parent(lower) != parent {
+        return None;
+    }
+    let siblings = tree.children(parent.as_ref());
+    let at = siblings.iter().position(|id| id == upper)?;
+    if siblings.get(at + 1) != Some(lower) {
+        return None;
+    }
+    let icon = if tree.info(upper).clipped { "clip_release" } else { "clip_below" };
+    Some(Cursor::Painted(PaintedCursor::tool(IconId::new(icon), CLIP_HOTSPOT, None)))
+}
+
+/// The tip of the clip cursors' arrow in their 24-unit icon box.
+const CLIP_HOTSPOT: egui::Vec2 = egui::Vec2::new(15.0, 16.0);
 
 /// The reorder event of the list as the panel reports it: one `Set` per drop.
 pub(super) fn drop_event<K: Clone + PartialEq>(

@@ -654,3 +654,84 @@ fn a_disabled_row_paints_its_text_in_the_disabled_ink() {
     assert_ne!(disabled, enabled, "a disabled row's text is not in the enabled ink");
     assert_eq!(option, disabled, "an option row and a list row share the disabled ink");
 }
+
+/// A right-click on the empty space below the rows asks for the list's own menu, not a row's, and leaves the selection
+/// alone.
+#[trial]
+fn a_right_click_below_the_rows_asks_for_the_lists_own_menu() {
+    use craft_ui::testing::pointer;
+    let (mut fixture, seen) = rig(|_| None);
+    let (list, last) = (fixture.by_label("Artboards").expect("the list").rect, fixture.by_label(NAMES[2]).expect("the last row").rect);
+    assert!(list.bottom() > last.bottom() + 8.0, "the list is taller than its rows: {list:?} {last:?}");
+    let below = egui::Pos2::new(last.center().x, (last.bottom() + list.bottom()) / 2.0);
+    fixture.frame(vec![pointer::moved(below), pointer::secondary(below, true)]);
+    fixture.frame(vec![pointer::secondary(below, false)]).settle();
+    let events = seen.borrow();
+    assert!(events.iter().any(|event| matches!(event, CollectionEvent::EmptyContextMenu { .. })), "{events:?}");
+    assert!(!events.iter().any(|event| matches!(event, CollectionEvent::ContextMenu(_) | CollectionEvent::Selection(_))), "{events:?}");
+}
+
+/// A list with the edge press `edge` (none without), and what it reported.
+fn edge_rig(edge: bool) -> (Fixture, Rc<RefCell<Vec<CollectionEvent<usize, RowEvent>>>>) {
+    use craft_behavior::{Cursor, CursorIcon};
+    use craft_keymap::Mods;
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let held = seen.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key);
+        let mut list = List::new("Artboards");
+        if edge {
+            // Only the line under the first row takes the press.
+            list = list.edge_press(Mods::ALT, |above: &usize, _: &usize| (*above == 0).then_some(Cursor::System(CursorIcon::Crosshair)));
+        }
+        let out = list.show_items(ui, &source, &mut |key, _| ListRow::new(NAMES[*key]));
+        held.borrow_mut().extend(out.events);
+    });
+    fixture.room(Vec2::new(300.0, 200.0));
+    fixture.settle();
+    (fixture, seen)
+}
+
+/// Alt-click on the line between two rows: with an edge press the line takes it (its cursor, `EdgePressed`, no row
+/// picked) where the test takes the rows, and the rows keep it on a line the test refuses.
+#[trial]
+fn an_edge_press_takes_the_alt_click_on_the_line_it_accepts() {
+    use craft_behavior::{Cursor, CursorIcon};
+    use egui::{Modifiers, Pos2};
+    let (mut fixture, seen) = edge_rig(true);
+    let line = |fixture: &Fixture, row: &str| {
+        let rect = fixture.by_label(row).expect("the row").rect;
+        Pos2::new(rect.center().x, rect.bottom() - 1.0)
+    };
+    let first = line(&fixture, NAMES[0]);
+    fixture.hold(Modifiers::ALT);
+    fixture.frame(vec![craft_ui::testing::pointer::moved(first)]).idle(1);
+    assert_eq!(craft_ui::runtime::cursor::current(fixture.ctx()), Some(Cursor::System(CursorIcon::Crosshair)), "the line's cursor");
+    fixture.click_at(first).settle();
+    {
+        let events = seen.borrow();
+        assert!(events.iter().any(|event| matches!(event, CollectionEvent::EdgePressed { above: 0, below: 1, .. })), "{events:?}");
+        assert!(!events.iter().any(|event| matches!(event, CollectionEvent::Selection(_))), "no row is picked: {events:?}");
+    }
+    seen.borrow_mut().clear();
+    let second = line(&fixture, NAMES[1]);
+    fixture.click_at(second).settle();
+    fixture.hold(Modifiers::NONE);
+    let events = seen.borrow();
+    assert!(!events.iter().any(|event| matches!(event, CollectionEvent::EdgePressed { .. })), "a refused line: {events:?}");
+    assert!(events.iter().any(|event| matches!(event, CollectionEvent::Selection(_))), "the row takes the click: {events:?}");
+}
+
+/// A list without an edge press is unchanged: an Alt-click on the line between two rows picks a row.
+#[trial]
+fn a_list_without_an_edge_press_gives_the_line_to_the_rows() {
+    use egui::{Modifiers, Pos2};
+    let (mut fixture, seen) = edge_rig(false);
+    let rect = fixture.by_label(NAMES[0]).expect("the row").rect;
+    fixture.hold(Modifiers::ALT).click_at(Pos2::new(rect.center().x, rect.bottom() - 1.0)).settle();
+    fixture.hold(Modifiers::NONE);
+    let events = seen.borrow();
+    assert!(!events.iter().any(|event| matches!(event, CollectionEvent::EdgePressed { .. })), "{events:?}");
+    assert!(events.iter().any(|event| matches!(event, CollectionEvent::Selection(_))), "{events:?}");
+}
