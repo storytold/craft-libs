@@ -147,6 +147,14 @@ pub fn identify_picture(coding: Option<Ul>, container: Option<Ul>, mpeg_descript
     if mpeg_descriptor { Codec::Mpeg2 } else { Codec::Unknown }
 }
 
+/// Read a TIFF `u16` at offset `o`. The end offset is computed with checked arithmetic, so an
+/// untrusted offset near `usize::MAX` (a 32-bit target with IFD offset `0xFFFF_FFFF`) is
+/// out of bounds instead of overflowing.
+fn tiff_u16(b: &[u8], le: bool, o: usize) -> Option<u16> {
+    let v = b.get(o..o.checked_add(2)?)?;
+    Some(if le { u16::from_le_bytes([v[0], v[1]]) } else { u16::from_be_bytes([v[0], v[1]]) })
+}
+
 /// DNG evidence in the leading bytes of a TIFF: a TIFF 6.0 §2 header whose first IFD, when it lies
 /// within `b`, holds the DNGVersion tag (DNG 1.x §2, tag 50706). A plain TIFF has no such tag.
 fn is_dng(b: &[u8]) -> bool {
@@ -155,7 +163,7 @@ fn is_dng(b: &[u8]) -> bool {
         Some(h) if h == b"MM\0*" => false,
         _ => return false,
     };
-    let u16_at = |o: usize| b.get(o..o + 2).map(|v| if le { u16::from_le_bytes([v[0], v[1]]) } else { u16::from_be_bytes([v[0], v[1]]) });
+    let u16_at = |o: usize| tiff_u16(b, le, o);
     let Some(ifd) = b.get(4..8).map(|v| if le { u32::from_le_bytes([v[0], v[1], v[2], v[3]]) } else { u32::from_be_bytes([v[0], v[1], v[2], v[3]]) })
     else {
         return false;
@@ -417,6 +425,15 @@ mod tests {
         assert_eq!(identify_picture(None, Some(ul(&[0x0D, 1, 3, 1, 2, 0x11, 1])), false), Codec::Vc3);
         assert_eq!(identify_picture(None, Some(ul(&[0x0D, 1, 3, 1, 2, 0x04, 0x60, 1])), true), Codec::Mpeg2);
         assert_eq!(identify_picture(None, None, false), Codec::Unknown);
+    }
+
+    #[test]
+    fn tiff_offset_near_usize_max_is_out_of_bounds() {
+        let b = [0x49, 0x49, 0x2A, 0x00, 0xFF, 0xFF, 0xFF, 0xFF];
+        assert_eq!(tiff_u16(&b, true, usize::MAX), None);
+        assert_eq!(tiff_u16(&b, true, usize::MAX - 1), None);
+        assert_eq!(tiff_u16(&b, true, 0), Some(0x4949));
+        assert!(!is_dng(&b));
     }
 
     #[test]
