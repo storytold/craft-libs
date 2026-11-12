@@ -96,6 +96,21 @@ pub fn step_value(steps: &ValueSteps, axes: ValueAxes, mv: NavMove, mods: MoveMo
     StepResult::Set((steps.value + delta).clamp(steps.min, steps.max))
 }
 
+/// The value `step` reaches from `from`, stepped again while a step still moves it and `same` says the value is the
+/// same one as `from` to the control: a control that reports quantised values (a web-safe colour) steps on to the
+/// next value that differs, or as far as it can go.
+pub fn step_until_changed<T: PartialEq + Copy>(from: T, step: impl Fn(T) -> T, same: impl Fn(T) -> bool) -> T {
+    let mut next = from;
+    loop {
+        let after = step(next);
+        let moved = after != next;
+        next = after;
+        if !(moved && same(next)) {
+            return next;
+        }
+    }
+}
+
 /// Maps a wheel event to the new value of a single-value control: one `notch` per event, up for positive scroll.
 /// Vertical scroll counts first; horizontal scroll counts when there is none (a vertical-only control ignores it),
 /// flipped under right-to-left text. Shift scales the notch by `large / small` and Alt by `fine / small`; both

@@ -9,7 +9,7 @@ pub(crate) mod track;
 mod words;
 
 pub use angle_dial::{AngleDial, AngleDialStyle, AngleOrientation};
-pub use point_picker::{Backdrop, PointMark, PointPicker, PointPickerStyle, PointPickerWords};
+pub use point_picker::{Backdrop, PointMark, PointPicker, PointPickerStyle, PointPickerWords, SamePoint};
 pub use range_slider::{RangeSlider, RangeSliderStyle};
 pub use slider::{Slider, SliderStyle, SliderThumb};
 pub use thumb_row::{

@@ -11,7 +11,7 @@ use crate::primitives::{ContentPainterCx, PaintShape};
 use crate::runtime::access::Name;
 use crate::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
 use crate::style::{ComponentStyle, FocusLook, StyleCx};
-use craft_behavior::nav::{LARGE_STEPS, STEP_SHARE, StepResult, ValueAxes, ValueSteps, snap_to_step, step_value};
+use craft_behavior::nav::{LARGE_STEPS, STEP_SHARE, StepResult, ValueAxes, ValueSteps, snap_to_step, step_until_changed, step_value};
 use craft_behavior::{
     AccessAction, Axis, CursorIcon, HitLevel, HitPriority, Metrics, Mixed, MoveMods, NavMove, PartKey, Sense, ValueDrag, Wheel, decimals_for_step,
     wheel_step,
@@ -70,6 +70,18 @@ pub enum PointMark {
     Ring,
 }
 
+/// Whether two points are the same value to the caller: `PointPicker::same`.
+pub struct SamePoint<'a>(SameFn<'a>);
+
+type SameFn<'a> = Box<dyn Fn([f64; 2], [f64; 2]) -> bool + 'a>;
+
+impl<'a> SamePoint<'a> {
+    /// The test that runs `same`.
+    pub fn new(same: impl Fn([f64; 2], [f64; 2]) -> bool + 'a) -> Self {
+        SamePoint(Box::new(same))
+    }
+}
+
 /// Paints the image under the point into the plot rect through the content painter: `PointPicker::backdrop`.
 pub struct Backdrop<'a>(BackdropFn<'a>);
 
@@ -109,6 +121,12 @@ pub struct PointPicker<'a> {
     /// Paints the image under the point; without one the well shows a checkerboard.
     #[prop(func = "FnOnce(&ContentPainterCx, Rect)")]
     backdrop: Option<Backdrop<'a>>,
+    /// Whether two points are the same value to the caller (two points of a quantised colour field that give the same
+    /// colour). A relative move (an arrow, Page Up or Down, a wheel notch, an assistive step) that lands on a point
+    /// the same as the one it started from moves on until the point differs or the axis can go no further. Without
+    /// it, every distinct point differs.
+    #[prop(func = "Fn([f64; 2], [f64; 2]) -> bool")]
+    same: Option<SamePoint<'a>>,
     /// How the point is marked.
     #[prop]
     mark: PointMark,
@@ -136,6 +154,7 @@ impl<'a> PointPicker<'a> {
             steps: None,
             aspect: None,
             backdrop: None,
+            same: None,
             mark: PointMark::Cross,
         }
         .ltr_axis()
@@ -215,6 +234,16 @@ impl<'a> PointPicker<'a> {
         }
     }
 
+    /// `axis` of `from` after `step`, stepped again while the point is the same as `from` to the caller (`same`).
+    fn moved(&self, from: [f64; 2], axis: usize, step: impl Fn(f64) -> f64) -> f64 {
+        let Some(SamePoint(same)) = &self.same else { return step(from[axis]) };
+        step_until_changed(from[axis], step, |value| {
+            let mut to = from;
+            to[axis] = value;
+            same(from, to)
+        })
+    }
+
     /// The axis a wheel turn steps and its new value: vertical scroll steps y and horizontal scroll x. Scrolling up
     /// moves the point up, as the Up key does, and right moves it right.
     fn wheeled(&self, wheel: &Wheel, placed: [f64; 2]) -> Option<(usize, f64)> {
@@ -227,10 +256,12 @@ impl<'a> PointPicker<'a> {
         };
         let mut turned = *wheel;
         turned.scroll = scroll;
-        match wheel_step(&self.value_steps(axis, placed[axis]), ValueAxes::Both, &turned, false) {
-            StepResult::Set(next) => Some((axis, self.settle(axis, next, self.grid(axis, wheel.mods.alt && !wheel.mods.shift)))),
+        let notch = |from: f64| match wheel_step(&self.value_steps(axis, from), ValueAxes::Both, &turned, false) {
+            StepResult::Set(next) => Some(self.settle(axis, next, self.grid(axis, wheel.mods.alt && !wheel.mods.shift))),
             _ => None,
-        }
+        };
+        notch(placed[axis])?;
+        Some((axis, self.moved(placed, axis, |from| notch(from).unwrap_or(from))))
     }
 
     /// The image fitted in `well`, else the well.
@@ -355,8 +386,8 @@ impl Component for PointPicker<'_> {
         // While a drag runs, keys, the wheel and screen-reader requests change nothing; they are still taken.
         while let Some((mv, mods)) = cx.intents().take_move() {
             let Some((axis, toward, reach)) = key_move(mv).filter(|_| !running) else { continue };
-            let from = self.placed(&now)[axis];
-            now = with_axis(&now, axis, self.stepped(axis, from, toward, reach, mods));
+            let next = self.moved(self.placed(&now), axis, |from| self.stepped(axis, from, toward, reach, mods));
+            now = with_axis(&now, axis, next);
             cx.set(now);
         }
         if let Some(wheel) = cx.take_wheel()
@@ -380,8 +411,8 @@ impl Component for PointPicker<'_> {
                 _ => continue,
             };
             if !running {
-                let from = self.placed(&now)[axis];
-                now = with_axis(&now, axis, self.settle(axis, from + steps * self.small(axis), self.grid(axis, false)));
+                let next = self.moved(self.placed(&now), axis, |from| self.settle(axis, from + steps * self.small(axis), self.grid(axis, false)));
+                now = with_axis(&now, axis, next);
                 cx.set(now);
             }
         }

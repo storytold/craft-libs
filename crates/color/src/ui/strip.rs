@@ -2,7 +2,7 @@
 
 use super::channels::{QUANTIZE_CELLS, channel_range, channel_step, quantized, settled, snapped};
 use crate::AreaMode;
-use craft_behavior::nav::{LARGE_STEPS, StepResult, ValueAxes, ValueSteps, step_value};
+use craft_behavior::nav::{LARGE_STEPS, StepResult, ValueAxes, ValueSteps, step_until_changed, step_value};
 use craft_behavior::{Axis, Metrics, NavMove, PartKey, Sense, ValueDrag};
 use craft_theme::ModelValues;
 use craft_ui::contract::{
@@ -109,18 +109,10 @@ impl<'a> ColorStrip<'a> {
             StepResult::Set(next) => next,
             _ => from,
         };
-        let mut next = f64::from(values.values[channel]);
-        let from = self.levels().map(|levels| quantized(model, values, levels));
-        loop {
-            let after = once(next);
-            let moved = after != next;
-            next = after;
-            let unchanged = from.is_some_and(|from| quantized(model, &self.with(values, next), self.levels().unwrap_or(2)) == from);
-            if !(moved && unchanged) {
-                break;
-            }
-        }
-        self.with(values, next)
+        let levels = self.levels();
+        let from = levels.map(|levels| quantized(model, values, levels));
+        let same = |next: f64| levels.zip(from).is_some_and(|(levels, from)| quantized(model, &self.with(values, next), levels) == from);
+        self.with(values, step_until_changed(f64::from(values.values[channel]), once, same))
     }
 
     /// The colour of the strip at `value` of its component.

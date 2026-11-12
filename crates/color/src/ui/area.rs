@@ -45,8 +45,9 @@ pub struct ColorArea<'a> {
     mode: AreaMode,
     values: Bind<'a, ModelValues>,
     /// Puts the colour the area reports on this many levels (at least two) per red, green and blue channel, whatever
-    /// the mode: a web-safe field has 6. The pointer takes the nearest such colour and a key steps one level of the
-    /// channel's range. The field shows flat cells of the snapped colours.
+    /// the mode: a web-safe field has 6. The pointer takes the nearest such colour to the point on the channels'
+    /// steps, and a key or wheel step goes on by the channel's step until the colour is a different one. The field
+    /// shows flat cells of the snapped colours.
     #[prop]
     quantize: Option<usize>,
     /// The names of the across and down components in the value text; the model's channel names without them.
@@ -80,15 +81,18 @@ impl<'a> ColorArea<'a> {
         };
         let (x, y) = (channel_range(model, across), channel_range(model, down));
         let y = *y.end()..=*y.start();
-        let steps = [across, down].map(|channel| match self.levels() {
-            Some(levels) => {
-                let range = channel_range(model, channel);
-                (range.end() - range.start()) / (levels - 1) as f64
-            }
-            None => channel_step(model, channel),
-        });
+        let steps = [across, down].map(|channel| channel_step(model, channel));
         let (mode, levels) = (self.mode, self.levels());
-        let picker = PointPicker::new(Bind::given(point), x, y).steps(steps).mark(PointMark::Ring);
+        let mut picker = PointPicker::new(Bind::given(point), x, y).steps(steps).mark(PointMark::Ring);
+        if let Some(levels) = levels {
+            let color = move |point: [f64; 2]| {
+                let mut values = base;
+                values.values[across] = settled(model, across, point[0] as f32);
+                values.values[down] = settled(model, down, point[1] as f32);
+                quantized(model, &values, levels)
+            };
+            picker = picker.same(move |from, to| color(from) == color(to));
+        }
         if field { picker.backdrop(move |painter: &ContentPainterCx, plot: Rect| paint_field(painter, plot, mode, &base, levels)) } else { picker }
     }
 }
