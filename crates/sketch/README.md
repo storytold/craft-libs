@@ -96,14 +96,16 @@ are read from the names.
 | Limit | Value |
 |---|---|
 | Layers (`Options::max_nodes`) | 200 000 by default |
-| Layer nesting, symbol expansion included | 200 levels |
+| Layer nesting, symbol expansion included | 128 levels |
 | Work spent expanding symbols (one unit per JSON value copied) | 60 million (15 million on 32-bit targets) |
 | Points of one path | 100 000 |
 | Distinct warnings | 200 |
 
-The mapping recurses once per level of nesting: an unoptimised build needs more than a 2 MiB
-stack to reach the 200-level limit through nested instances (an optimised one takes 400 levels in
-2 MiB). Not measured on a 1 MiB WebAssembly stack.
+The walk recurses once per level of nesting, in small frames (each layer's own work is done in
+functions that return before its children are mapped). An unoptimised build maps about 140
+levels of nested instances on a 512 KiB stack; the limit of 128 leaves twice the room on the
+1 MiB stack of a WebAssembly build, and a test at the limit runs on a 1 MiB thread. FigCraft
+followed 200 levels.
 
 The mapping was written in FigCraft (`crates/format/src/sketch`), mostly by Jindřich Šaršon, from
 the public description of the format and files built for each case.

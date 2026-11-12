@@ -126,34 +126,44 @@ fn text_stored_the_old_way_marks_the_file_too_old() {
 }
 
 #[test]
-fn deep_nesting_stops_with_a_warning() {
-    // Five masters, each 50 groups deep with an instance of the next at the bottom: no page is
-    // nested deeper than its JSON may be, but expanded, the layers nest past 200. The mapping
-    // recurses once per level; an unoptimised build takes more than the 2 MiB of a test thread
-    // for that (an optimised one maps 400 levels in it), so this runs on 8 MiB, a native main
-    // thread's default.
+fn deep_nesting_stops_with_a_warning_within_a_small_stack() {
+    // 70 masters, each a group holding an instance of the next: expanded, the layers nest 140
+    // deep, past the limit, while no page's JSON is deep. Nested instances take the most stack
+    // per level; the mapping runs on a 1 MiB thread, the stack of a WebAssembly build.
     let run = || {
-        let n = 5;
+        let n = 70;
         let masters: Vec<Value> = (0..n)
             .map(|i| {
-                let mut inner = if i < n - 1 {
+                let inner = if i < n - 1 {
                     instance(&format!("I{i}"), &format!("S{}", i + 1), 0.0, 0.0, 1.0, 1.0, &[])
                 } else {
                     rect("R", 0.0, 0.0, 1.0, 1.0)
                 };
-                for d in 0..50 {
-                    inner = group(&format!("G{i}_{d}"), 0.0, 0.0, 1.0, 1.0, vec![inner]);
-                }
-                master(&format!("M{i}"), &format!("S{i}"), "Nest", 1.0, 1.0, vec![inner])
+                master(&format!("M{i}"), &format!("S{i}"), "Nest", 1.0, 1.0, vec![group(&format!("G{i}"), 0.0, 0.0, 1.0, 1.0, vec![inner])])
             })
             .collect();
         let top = instance("TOP", "S0", 0.0, 0.0, 1.0, 1.0, &[]);
         let z = sketch_zip("50.2", 103, document(&["P", "Q"]), &[page("P", "P", vec![top]), page("Q", "Symbols", masters)], &[]);
         let out = map(&z);
-        assert!(out.warnings.iter().any(|w| w == "layers nested deeper than 200 levels were skipped"), "{:?}", out.warnings);
+        assert!(
+            out.warnings.iter().any(|w| *w == format!("layers nested deeper than {} levels were skipped", tree::MAX_DEPTH)),
+            "{:?}",
+            out.warnings
+        );
         assert!(craft_figma_rest::check(&out.json, usize::MAX).is_ok());
+        // Within the limit, nothing is skipped.
+        let shallow: Vec<Value> = (0..20)
+            .map(|i| {
+                let inner =
+                    if i < 19 { instance(&format!("I{i}"), &format!("S{}", i + 1), 0.0, 0.0, 1.0, 1.0, &[]) } else { rect("R", 0.0, 0.0, 1.0, 1.0) };
+                master(&format!("M{i}"), &format!("S{i}"), "Nest", 1.0, 1.0, vec![group(&format!("G{i}"), 0.0, 0.0, 1.0, 1.0, vec![inner])])
+            })
+            .collect();
+        let top = instance("TOP", "S0", 0.0, 0.0, 1.0, 1.0, &[]);
+        let z = sketch_zip("50.2", 103, document(&["P", "Q"]), &[page("P", "P", vec![top]), page("Q", "Symbols", shallow)], &[]);
+        assert!(!map(&z).warnings.iter().any(|w| w.contains("nested deeper")));
     };
-    std::thread::Builder::new().stack_size(8 << 20).spawn(run).unwrap().join().unwrap();
+    std::thread::Builder::new().stack_size(1 << 20).spawn(run).unwrap().join().unwrap();
 }
 
 #[test]

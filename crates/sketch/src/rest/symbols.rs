@@ -9,6 +9,7 @@
 //! `symbolID` (swap a nested instance; empty hides it), `image`, `layerStyle` and `textStyle`
 //! (shared style ids).
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use kurbo::Affine;
@@ -129,8 +130,20 @@ fn frame_look(cx: &mut Cx, m: &Value, w: f64, h: f64, node: &mut JsonMap<String,
     super::tree::style_corners(m, node);
 }
 
-/// A symbol master as a COMPONENT node.
+/// A symbol master as a COMPONENT node. Its own fields and its tail are mapped in functions that
+/// return before its layers are (see [`super::tree::layer`]).
 pub(crate) fn component(cx: &mut Cx, l: &Value, parent: Affine, depth: usize, root: bool) -> Option<Value> {
+    let (node, l, world, (w, h), sid) = component_head(cx, l, parent, root);
+    cx.chain.push(sid);
+    let kids = children(cx, &l, world, (w, h), depth, false);
+    cx.chain.pop();
+    Some(component_tail(node, &l, kids))
+}
+
+type Prepared<'v> = (JsonMap<String, Value>, Cow<'v, Value>, Affine, (f64, f64), String);
+
+#[inline(never)]
+fn component_head<'v>(cx: &mut Cx, l: &'v Value, parent: Affine, root: bool) -> Prepared<'v> {
     let (w, h) = size(l);
     let world = parent * local(l, w, h);
     let mut node = base(l, "COMPONENT", parent, world, w, h, root);
@@ -141,29 +154,42 @@ pub(crate) fn component(cx: &mut Cx, l: &Value, parent: Affine, depth: usize, ro
     super::tree::extras(cx, l, h, &mut node);
     let sid = str_field(l, "symbolID").unwrap_or("").to_string();
     // A graphic's fill tints its layers.
-    let tinted;
     let l = match super::style::tint_of(l.get("style"), false).filter(|_| super::tree::spend_on_tint(cx, l)) {
         Some(t) => {
             let mut c = l.clone();
             if let Some(kids) = c.get_mut("layers").and_then(Value::as_array_mut) {
                 super::style::tint_layers(kids, &t, 0);
             }
-            tinted = c;
-            &tinted
+            Cow::Owned(c)
         }
-        _ => l,
+        _ => Cow::Borrowed(l),
     };
-    cx.chain.push(sid);
-    let kids = children(cx, l, world, (w, h), depth, false);
-    cx.chain.pop();
+    (node, l, world, (w, h), sid)
+}
+
+#[inline(never)]
+fn component_tail(mut node: JsonMap<String, Value>, l: &Value, kids: Vec<Value>) -> Value {
     node.insert("children".into(), Value::Array(kids));
     super::stack::apply(l, &mut node);
-    Some(Value::Object(node))
+    Value::Object(node)
 }
 
 /// A symbol instance as an INSTANCE node holding its master's layers with its overrides, or an
-/// empty frame when its master isn't in the file.
+/// empty frame when its master isn't in the file. Its own fields and its tail are mapped in
+/// functions that return before its layers are (see [`super::tree::layer`]).
 pub(crate) fn instance(cx: &mut Cx, l: &Value, parent: Affine, depth: usize, root: bool) -> Option<Value> {
+    let (node, copy, world, (w, h), sid) = match instance_head(cx, l, parent, root) {
+        Ok(prepared) => prepared,
+        Err(done) => return done,
+    };
+    cx.chain.push(sid);
+    let kids = children(cx, &copy, world, (w, h), depth, false);
+    cx.chain.pop();
+    Some(instance_tail(l, node, copy.into_owned(), kids))
+}
+
+#[inline(never)]
+fn instance_head<'v>(cx: &mut Cx, l: &Value, parent: Affine, root: bool) -> Result<Prepared<'v>, Option<Value>> {
     let (w, h) = size(l);
     let world = parent * local(l, w, h);
     let sid = str_field(l, "symbolID").unwrap_or("");
@@ -171,18 +197,18 @@ pub(crate) fn instance(cx: &mut Cx, l: &Value, parent: Affine, depth: usize, roo
     if cx.symbols.master(sid).is_some() && !cx.spend(cost) {
         let mut node = base(l, "FRAME", parent, world, w, h, root);
         node.insert("children".into(), json!([]));
-        return Some(Value::Object(node));
+        return Err(Some(Value::Object(node)));
     }
     let Some(m) = cx.symbols.master(sid).cloned() else {
         cx.warn("instances of symbols that aren't in the file were imported as empty frames");
         let mut node = base(l, "FRAME", parent, world, w, h, root);
         node.insert("children".into(), json!([]));
-        return Some(Value::Object(node));
+        return Err(Some(Value::Object(node)));
     };
     if cx.chain.iter().any(|c| c == sid) {
         let name: String = str_field(&m, "name").unwrap_or("").chars().take(64).collect();
         cx.warn(format!("symbol {name} contains itself; the inner copy was left out"));
-        return None;
+        return Err(None);
     }
     // Sketch 50 stores "not scaled" as 0.
     if l.get("scale").and_then(Value::as_f64).is_some_and(|s| s.is_finite() && s != 0.0 && (s - 1.0).abs() > 1e-9) {
@@ -246,10 +272,12 @@ pub(crate) fn instance(cx: &mut Cx, l: &Value, parent: Affine, depth: usize, roo
     {
         resize(layers, (mw, mh), (w, h), cx.legacy_resize || graphic, 0);
     }
-    cx.chain.push(sid.to_string());
-    let mut kids = children(cx, &copy, world, (w, h), depth, false);
-    cx.chain.pop();
-    node.insert("children".into(), Value::Array(std::mem::take(&mut kids)));
+    Ok((node, Cow::Owned(copy), world, (w, h), sid.to_string()))
+}
+
+#[inline(never)]
+fn instance_tail(l: &Value, mut node: JsonMap<String, Value>, mut copy: Value, kids: Vec<Value>) -> Value {
+    node.insert("children".into(), Value::Array(kids));
     // The master's stack lays the instance out too (matched by the master's layer ids), sized as
     // the instance says.
     for k in ["horizontalSizing", "verticalSizing"] {
@@ -262,7 +290,7 @@ pub(crate) fn instance(cx: &mut Cx, l: &Value, parent: Affine, depth: usize, roo
     for k in node.get_mut("children").and_then(Value::as_array_mut).into_iter().flatten() {
         prefix_ids(k, &prefix, 0);
     }
-    Some(Value::Object(node))
+    Value::Object(node)
 }
 
 /// Lay `layers` (the children of a box of `old` size) out for the box at `new` size, the way Sketch

@@ -1,6 +1,8 @@
 //! Sketch pages and layers → REST API file JSON nodes.
 
 use craft_figma_rest::ext::VectorNetwork;
+use std::borrow::Cow;
+
 use kurbo::{Affine, Rect};
 use serde_json::{Map as JsonMap, Value, json};
 
@@ -16,8 +18,11 @@ const MAX_NOTES: usize = 200;
 const MAX_WORK: u64 = 60_000_000;
 #[cfg(target_pointer_width = "32")]
 const MAX_WORK: u64 = 15_000_000;
-/// Deepest layer nesting followed (deeper layers are skipped with a warning).
-const MAX_DEPTH: usize = 200;
+/// Deepest layer nesting followed, symbol expansion included (deeper layers are skipped with a
+/// warning). The walk recurses once per level: an unoptimised build maps about 140 levels of
+/// nested instances on a 512 KiB stack, so this leaves twice the room on the 1 MiB stack of a
+/// WebAssembly build. (FigCraft followed 200, which a debug build could not hold in 1 MiB.)
+pub(crate) const MAX_DEPTH: usize = 128;
 /// Largest size and farthest position kept (the REST importer's own bounds).
 const MAX_SIZE: f64 = 1e6;
 const MAX_COORD: f64 = 1e7;
@@ -172,41 +177,95 @@ pub(crate) fn to_rest_within(archive: &Archive, name: &str, max_nodes: usize, fo
 
 /// One Sketch layer as a REST node (with its children), or `None` when it is skipped. `parent`:
 /// the parent layer's transform to the page; `root`: the layer sits on the page itself.
+///
+/// The recursion through the layer tree runs through this function and [`children`] only, and
+/// both keep their own frames small: the work on one layer is done in functions that return
+/// before its children are mapped, so a deep file needs little stack per level.
 pub(crate) fn layer(cx: &mut Cx, l: &Value, parent: Affine, depth: usize, root: bool) -> Option<Value> {
+    match layer_head(cx, l, parent, depth, root) {
+        Head::Done(node) => node,
+        Head::Group(_, _) if !count(cx) => None,
+        Head::Group(l, Nested::ShapeGroup) => super::path::shape_group(cx, &l, parent, depth, root),
+        Head::Group(l, Nested::Component) => super::symbols::component(cx, &l, parent, depth, root),
+        Head::Group(l, Nested::Instance) => super::symbols::instance(cx, &l, parent, depth, root),
+        Head::Layer(head) => {
+            let kids = if head.container { Some(children(cx, &head.l, head.world, (head.w, head.h), depth, false)) } else { None };
+            Some(layer_tail(cx, *head, kids))
+        }
+    }
+}
+
+/// What [`layer_head`] made of a layer.
+enum Head<'v> {
+    /// Mapped, or skipped (`None`).
+    Done(Option<Value>),
+    /// A layer of a kind with its own mapping.
+    Group(Cow<'v, Value>, Nested),
+    /// A layer mapped but for its children (when it is a `container`) and its fade.
+    Layer(Box<Mapped<'v>>),
+}
+
+/// A layer mapped but for its children and its fade.
+struct Mapped<'v> {
+    l: Cow<'v, Value>,
+    node: JsonMap<String, Value>,
+    world: Affine,
+    w: f64,
+    h: f64,
+    container: bool,
+}
+
+enum Nested {
+    ShapeGroup,
+    Component,
+    Instance,
+}
+
+#[inline(never)]
+fn layer_tail(cx: &mut Cx, head: Mapped, kids: Option<Vec<Value>>) -> Value {
+    let Mapped { l, mut node, world, w, h, .. } = head;
+    if let Some(kids) = kids {
+        node.insert("children".into(), Value::Array(kids));
+        super::stack::apply(&l, &mut node);
+    }
+    fade(cx, &l, node, world, w, h)
+}
+
+/// A layer's own fields ([`layer`] without its children).
+#[inline(never)]
+fn layer_head<'v>(cx: &mut Cx, l: &'v Value, parent: Affine, depth: usize, root: bool) -> Head<'v> {
     if depth > MAX_DEPTH {
         cx.warn(format!("layers nested deeper than {MAX_DEPTH} levels were skipped"));
-        return None;
+        return Head::Done(None);
     }
     if is_archived_text(l) {
         cx.too_old = true;
-        return None;
+        return Head::Done(None);
     }
     // A rectangle with angled or inside corners is a path of that outline.
-    let outlined;
-    let l = match super::path::cut_corners(l) {
-        Some(p) => {
-            outlined = p;
-            &outlined
-        }
-        None => l,
+    let l: Cow<'v, Value> = match super::path::cut_corners(l) {
+        Some(p) => Cow::Owned(p),
+        None => Cow::Borrowed(l),
     };
-    let class = str_field(l, "_class")?;
+    let Some(class) = str_field(&l, "_class") else { return Head::Done(None) };
+    let class = class.to_string();
+    let class = class.as_str();
     if class == "shapeGroup" {
-        return count(cx).then(|| super::path::shape_group(cx, l, parent, depth, root)).flatten();
+        return Head::Group(l, Nested::ShapeGroup);
     }
     if class == "symbolMaster" {
-        return count(cx).then(|| super::symbols::component(cx, l, parent, depth, root)).flatten();
+        return Head::Group(l, Nested::Component);
     }
     if class == "symbolInstance" {
-        return count(cx).then(|| super::symbols::instance(cx, l, parent, depth, root)).flatten();
+        return Head::Group(l, Nested::Instance);
     }
     let ty = match class {
         "artboard" | "frame" => "FRAME",
         // Sketch 2025 and newer: a group that behaves as a frame (1) or a graphic (2), or clips.
-        "group" if is_frame(l) => "FRAME",
+        "group" if is_frame(&l) => "FRAME",
         "group" | "graphic" => "GROUP",
         // Shapes whose points were moved are paths.
-        "rectangle" | "oval" if bool_field(l, "edited") == Some(true) => "VECTOR",
+        "rectangle" | "oval" if bool_field(&l, "edited") == Some(true) => "VECTOR",
         "rectangle" | "bitmap" => "RECTANGLE",
         "oval" => "ELLIPSE",
         "slice" => "SLICE",
@@ -215,32 +274,32 @@ pub(crate) fn layer(cx: &mut Cx, l: &Value, parent: Affine, depth: usize, root: 
         "MSImmutableHotspotLayer" | "hotspot" => "FRAME",
         other => {
             cx.warn(format!("Sketch {} layers are not supported yet and were skipped", clip(other)));
-            return None;
+            return Head::Done(None);
         }
     };
     if !count(cx) {
-        return None;
+        return Head::Done(None);
     }
-    let (w, h) = size(l);
-    let mut world = parent * local(l, w, h);
+    let (w, h) = size(&l);
+    let mut world = parent * local(&l, w, h);
     if ty == "TEXT" {
-        world *= Affine::translate((0.0, super::text::baseline_shift(l)));
+        world *= Affine::translate((0.0, super::text::baseline_shift(&l)));
     }
-    let mut node = base(l, ty, parent, world, w, h, root);
+    let mut node = base(&l, ty, parent, world, w, h, root);
     if ty == "TEXT" {
-        super::text::node(cx, l, &mut node);
+        super::text::node(cx, &l, &mut node);
     }
     if ty == "VECTOR" {
-        let shape = super::path::shape(cx, l, w, h)?;
+        let Some(shape) = super::path::shape(cx, &l, w, h) else { return Head::Done(None) };
         super::path::put_shape(cx, shape, &mut node);
     }
-    mask(l, &mut node);
+    mask(&l, &mut node);
     let mut bitmap = None;
     match class {
         "artboard" | "frame" => {
-            let clips = if class == "artboard" { true } else { bool_field(l, "clipsContent").unwrap_or(true) };
+            let clips = if class == "artboard" { true } else { bool_field(&l, "clipsContent").unwrap_or(true) };
             node.insert("clipsContent".into(), json!(clips));
-            let background = (bool_field(l, "hasBackgroundColor") == Some(true)).then(|| l.get("backgroundColor").and_then(color)).flatten();
+            let background = (bool_field(&l, "hasBackgroundColor") == Some(true)).then(|| l.get("backgroundColor").and_then(color)).flatten();
             if class == "artboard" || background.is_some() {
                 let c = background.unwrap_or_else(|| json!({"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0}));
                 node.insert("fills".into(), json!([{"type": "SOLID", "color": c}]));
@@ -250,7 +309,7 @@ pub(crate) fn layer(cx: &mut Cx, l: &Value, parent: Affine, depth: usize, root: 
             // `clippingBehavior`: 0 the default (frames clip), 1 clip, 2 don't.
             node.insert("clipsContent".into(), json!(l.get("clippingBehavior").and_then(Value::as_i64) != Some(2)));
         }
-        "rectangle" => corner_radii(l, &mut node),
+        "rectangle" => corner_radii(&l, &mut node),
         "bitmap" => match l.get("image").and_then(|i| str_field(i, "_ref")) {
             Some(r) => {
                 let mut paint = json!({"type": "IMAGE", "scaleMode": "STRETCH", "imageRef": r, "imageTransform": [[1, 0, 0], [0, 1, 0]]});
@@ -263,7 +322,7 @@ pub(crate) fn layer(cx: &mut Cx, l: &Value, parent: Affine, depth: usize, root: 
         },
         _ => {}
     }
-    styles(cx, l, w, h, &mut node);
+    styles(cx, &l, w, h, &mut node);
     // A bitmap's own image lies under its style's fills; its fills then aren't a shared style's.
     if let Some(paint) = bitmap {
         let mut fills = vec![paint];
@@ -275,39 +334,32 @@ pub(crate) fn layer(cx: &mut Cx, l: &Value, parent: Affine, depth: usize, root: 
             styles.remove("fill");
         }
     }
-    extras(cx, l, h, &mut node);
-    style_corners(l, &mut node);
+    extras(cx, &l, h, &mut node);
+    style_corners(&l, &mut node);
     if class == "MSImmutableHotspotLayer" || class == "hotspot" {
         node.insert("clipsContent".into(), json!(false));
         node.remove("fills");
     }
     // A group's or graphic's fill tints its layers (a frame's is its background).
-    let tinted;
     let gb = l.get("groupBehavior").and_then(Value::as_i64);
     let tint = if class == "group" { super::style::tint_of(l.get("style"), gb != Some(1) && cx.tints) } else { None };
-    let l = match tint.filter(|_| spend_on_tint(cx, l)) {
+    let l = match tint.filter(|_| spend_on_tint(cx, &l)) {
         Some(t) => {
             // A plain group's legacy fill is all tint; a frame keeps its background fills.
             if gb != Some(1) {
                 node.remove("fills");
             }
-            let mut c = l.clone();
+            let mut c = l.into_owned();
             if let Some(kids) = c.get_mut("layers").and_then(Value::as_array_mut) {
                 super::style::tint_layers(kids, &t, 0);
             }
-            tinted = c;
-            &tinted
+            Cow::Owned(c)
         }
         _ => l,
     };
-    if matches!(ty, "FRAME" | "GROUP") {
-        let kids = children(cx, l, world, (w, h), depth, false);
-        node.insert("children".into(), Value::Array(kids));
-        super::stack::apply(l, &mut node);
-    }
-    Some(fade(cx, l, node, world, w, h))
+    let container = matches!(ty, "FRAME" | "GROUP");
+    Head::Layer(Box::new(Mapped { l, node, world, w, h, container }))
 }
-
 /// Layer `node` with a progressive opacity (Fade: the style's `contextSettings` with
 /// `isProgressive` and a gradient whose stops' opacity is the layer's) as a group in its place
 /// holding an alpha mask of that gradient over it; the REST shape has no progressive opacity. Other
@@ -560,20 +612,32 @@ fn clip(s: &str) -> String {
 /// clips everything above it.
 pub(crate) fn children(cx: &mut Cx, l: &Value, world: Affine, size: (f64, f64), depth: usize, root: bool) -> Vec<Value> {
     // (ends a mask chain, is a drawn copy of the mask after it, the node)
-    let built: Vec<(bool, bool, Value)> = layers(l)
-        .iter()
-        .filter_map(|c| {
-            let breaks = bool_field(c, "shouldBreakMaskChain") == Some(true) || bool_field(c, "hasClippingMask") == Some(true);
-            layer(cx, c, world, depth + 1, root).map(|n| (breaks, n))
-        })
-        .flat_map(|(breaks, n)| match drawn_mask(&n) {
-            // Sketch also draws a mask with its own style, under what it clips; a REST mask
-            // only clips, so a plain copy of it goes underneath.
-            // The copy ends an earlier mask's chain as the mask itself would.
-            Some(copy) => vec![(breaks, true, copy), (breaks, false, n)],
-            None => vec![(breaks, false, n)],
-        })
-        .collect();
+    let mut built: Vec<(bool, bool, Value)> = Vec::new();
+    for c in layers(l) {
+        if let Some(n) = layer(cx, c, world, depth + 1, root) {
+            built_push(&mut built, c, n);
+        }
+    }
+    mask_groups(built, world, size, root)
+}
+
+/// `n` (and before it, a drawn copy of it when it is a mask with a style) onto `built`.
+#[inline(never)]
+fn built_push(built: &mut Vec<(bool, bool, Value)>, c: &Value, n: Value) {
+    let breaks = bool_field(c, "shouldBreakMaskChain") == Some(true) || bool_field(c, "hasClippingMask") == Some(true);
+    // Sketch also draws a mask with its own style, under what it clips; a REST mask only clips,
+    // so a plain copy of it goes underneath. The copy ends an earlier mask's chain as the mask
+    // itself would.
+    if let Some(copy) = drawn_mask(&n) {
+        built.push((breaks, true, copy));
+    }
+    built.push((breaks, false, n));
+}
+
+/// The children `built`, each mask and what it clips wrapped in a group where the chain ends
+/// before the last.
+#[inline(never)]
+fn mask_groups(built: Vec<(bool, bool, Value)>, world: Affine, size: (f64, f64), root: bool) -> Vec<Value> {
     let mut out = Vec::new();
     let mut i = 0;
     while let Some((_, _, n)) = built.get(i) {
