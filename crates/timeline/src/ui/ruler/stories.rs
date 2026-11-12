@@ -116,17 +116,17 @@ fn with_markers(ui: &mut Ui, demo: &mut Demo) -> StoryOutput {
     })
 }
 
-#[story(TimelineRuler<'static>, covers = [])]
+#[story(TimelineRuler<'static>, covers = [], group = "Ruler", title = "Frames")]
 fn ruler_at_frame_zoom(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     with_markers(ui, data.value("frame", Demo::at(secs(4.0), FRAME_ZOOM)))
 }
 
-#[story(TimelineRuler<'static>, covers = [Default])]
+#[story(TimelineRuler<'static>, covers = [Default], group = "Ruler", title = "Seconds")]
 fn ruler_at_second_zoom(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     with_markers(ui, data.value("second", Demo::at(Tick::ZERO, SECOND_ZOOM)))
 }
 
-#[story(TimelineRuler<'static>, covers = [])]
+#[story(TimelineRuler<'static>, covers = [], group = "Ruler", title = "Minutes")]
 fn ruler_at_minute_zoom(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     with_markers(ui, data.value("minute", Demo::at(Tick::ZERO, MINUTE_ZOOM)))
 }
