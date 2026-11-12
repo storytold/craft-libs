@@ -251,12 +251,13 @@ pub fn tool_story<T: 'static, D: Value, R>(
     };
     let mut pressed = None;
     let labels: Vec<&'static str> = story.play.as_ref().map(|_| "Play").into_iter().chain(story.buttons.iter().copied()).collect();
-    // The story's buttons stand in the stage's footer: a row as wide as the stage, under the canvas.
+    // The story's buttons stand in the stage's footer: a row as wide as the stage under the canvas, wrapping onto
+    // more lines when they need more room.
     let (shown, view) = if labels.is_empty() {
         canvas(ui, room)
     } else {
         let buttons = |ui: &mut Ui, _: &mut BodyCx<'_>| {
-            Row::new().fill_width().show(ui, |ui, _| {
+            Row::new().fill_width().wrap(true).show(ui, |ui, _| {
                 for &label in &labels {
                     if clicked(&Button::new(label).show(ui)) {
                         pressed = Some(label);
