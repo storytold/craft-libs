@@ -7,7 +7,7 @@ use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, ContainerProps, LabelScheme, Props as _, Show as _, ShowContainer as _, SideLabel};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::{Row, Stack};
-use craft_ui::testing::{Fixture, Frames, trial};
+use craft_ui::testing::{Fixture, Frames, last_pass_measuring_runs, trial};
 use craft_ui::text::NumberField;
 use egui::Rect;
 use std::cell::RefCell;
@@ -82,4 +82,34 @@ fn a_row_after_a_stack_of_labelled_rows_clears_their_controls() {
     let control = wide.borrow().rect;
     assert!(control.is_positive(), "the wide control is shown");
     assert!(link.min.x >= control.max.x - SLACK, "the row's next member starts clear of the wide control: {link:?} {control:?}");
+}
+
+/// A content-sized row of labelled rows that runs before the group's widest label measures at the group's final
+/// column: its labels stay beside their controls, the member after them starts clear, and a settled frame measures
+/// nothing again.
+#[trial]
+fn a_row_before_the_groups_widest_label_measures_at_its_final_column() {
+    let mut fixture = Fixture::new(|ui| {
+        FieldGroup::new("Image size").show(ui, |ui, _| {
+            Row::new().show(ui, |ui, _| {
+                Stack::new().show(ui, |ui, _| {
+                    number(ui, "Width");
+                    number(ui, "Height");
+                });
+                Button::new("Link").show(ui);
+            });
+            number(ui, "Resample method");
+        });
+    });
+    fixture.settle();
+    let (label, field) = (caption(&fixture, "Width"), control(&fixture, "Width"));
+    assert!(label.max.x <= field.min.x + SLACK, "Width's label sits before its field: {label:?} {field:?}");
+    assert!(label.center().y > field.min.y && label.center().y < field.max.y, "Width's label sits on its field's line: {label:?} {field:?}");
+    let resample = control(&fixture, "Resample method").min.x;
+    assert!((field.min.x - resample).abs() <= SLACK, "Width's field starts at the group's control edge: {} {resample}", field.min.x);
+    let link = fixture.by_label("Link").expect("the link button is shown").rect;
+    assert!(link.min.x >= field.max.x - SLACK, "the row's next member starts clear of the field: {link:?} {field:?}");
+    fixture.frame(vec![]);
+    let runs = last_pass_measuring_runs(fixture.ctx());
+    assert!(runs.is_empty(), "a settled frame takes the kept measurements: {runs:?}");
 }

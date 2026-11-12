@@ -13,7 +13,7 @@ pub use column_group::ColumnGroup;
 pub use column_group::ambient_width;
 #[doc(hidden)]
 pub use column_group::report_beyond;
-pub(crate) use column_group::{GLYPHS, LABELS, Reached, ambient_room};
+pub(crate) use column_group::{Columns, GLYPHS, LABELS, Reached, ambient_room};
 pub use label::{control_baseline, place_label, record_control_baseline};
 pub use slot::measure_slot;
 

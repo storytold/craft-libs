@@ -4,8 +4,8 @@ use super::inherit::{BodyScope, register_instances};
 use super::open::open_now;
 use super::placement::{Placement, measure_layer, overlay_of, shown_placement};
 use super::regions::{
-    RegionFrame, RegionSizes, end_full_height, footer_in_end, gap_of, header_gap_of, label_extra_of, least_of, pad_of, paint_edge_rule, paint_rules,
-    LabelColumns, LabelsFound, rect_of, shared_labels, shared_line,
+    LabelColumns, LabelsFound, RegionFrame, RegionSizes, end_full_height, footer_in_end, gap_of, header_gap_of, label_extra_of, least_of, pad_of,
+    paint_edge_rule, paint_rules, rect_of, shared_labels, shared_line,
 };
 use super::reorder::REORDER_BAND;
 use super::scroll::{Glide, Jumps, ScrollState, aim_glide, follow_anchor, jump_frame, overflow_inset, scroll_of};
@@ -16,7 +16,7 @@ use crate::contract::cx::{BodyCx, BodyOwner};
 use crate::contract::label::{self, LabelIn};
 use crate::contract::run::{Measuring, ShapeHooks, ShowAt};
 use crate::contract::{Container, Cx, DragBand, Gap, Internal, Mount, PartsCx, SetPosition, Sizing, ValueOf};
-use crate::layout::{self, Reached};
+use crate::layout::{self};
 use crate::primitives::SurfaceSlot;
 use crate::runtime::access::scope;
 use crate::runtime::access::{self, Politeness, Role};
@@ -785,8 +785,8 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 )
             });
             let wide = self.wide();
+            let columns = LabelColumns::of(&props, !wide && !self.held(&props, env));
             let (layout, body) = (&props.layout, &mut *self.body);
-            let columns = LabelColumns::of(&props);
             // The room a scrolling body's bars take under or beside its content this run: no part of the line.
             let mut bars_inset = Vec2::ZERO;
             let mut run = |parent: &mut Ui, at: Rect, bcx: &mut BodyCx<'_>| -> Option<Vec2> {
@@ -845,7 +845,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                         let view_env = body_env.derive_local(|scoped| scoped.lazy = Some(view));
                         let region_env = Env::install_for(&region_ui, view_env.clone());
                         layout::run_body_measured(&mut region_ui, &view_env, layout_id, layout, gap, line, |ui| {
-                            shared_labels(ui, id, columns, room.x, &mut labels, |ui| body(ui, bcx))
+                            shared_labels(ui, id, columns, room.x, self.settle.clone(), &mut labels, |ui| body(ui, bcx))
                         });
                         Env::restore(&ctx, region_env);
                         let extent = region_ui.min_rect().size();
@@ -879,24 +879,26 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                     // A row that places its block itself asks for its children's width, not the room it spans.
                     None => {
                         let (_, natural) = layout::run_body_measured(&mut body_ui, &body_env, layout_id, layout, gap, line, |ui| {
-                            shared_labels(ui, id, columns, room.x, &mut labels, |ui| body(ui, bcx))
+                            shared_labels(ui, id, columns, room.x, self.settle.clone(), &mut labels, |ui| body(ui, bcx))
                         });
                         natural.map(|width| Vec2::new(width, body_ui.min_rect().height()))
                     }
                 };
                 Env::restore(&ctx, installed);
                 let took = took.unwrap_or_else(|| body_ui.min_rect().size());
-                // A content-sized column of rows takes, in a measuring run, the width they take at the group's widest
+                // A content-sized column of rows takes, in a measuring run, the width they take at its group's widest
                 // label: the rows measured before the widest one measured against a narrower column.
                 let stacked = matches!(layout, layout::BodyLayout::Stack) && !wide;
-                let extent = labels.extent.or_else(|| labels.reached.as_ref().and_then(Reached::extent));
-                let took = match extent.filter(|_| stacked && !real) {
+                let took = match labels.extent.filter(|_| stacked && !real) {
                     Some(width) => Vec2::new(took.x.max(width), took.y),
                     None => took,
                 };
                 // A content-sized body hands its rows' reaches on to the group around once its measure is known.
                 if !real && !wide {
                     self.reached = labels.reached.map(|reached| (reached, !matches!(layout, layout::BodyLayout::Stack)));
+                }
+                if !real {
+                    self.unsettled = labels.unsettled;
                 }
                 Some(took)
             };
@@ -1168,15 +1170,38 @@ impl BodyHooks<'_> {
         cx.core.rect = rect;
         cx.core.flow = craft_behavior::Flow::new(rect, at.env.direction.is_rtl());
         cx.core.content_rect = cx.core.flow.inset(cx.style.metrics().padding);
-        let builder = UiBuilder::new().layer_id(measure_layer(&props, id, at.ui)).max_rect(rect).sizing_pass().invisible();
-        // The regions take explicit scope ids under `id`, so every component in them gets the id the real run
-        // gives it and the records it leaves match.
-        let mut measure_ui = Ui::new(ctx.clone(), sub(id, "measure"), builder);
-        let installed = Env::install_for(&measure_ui, at.env.clone());
+        let layer = measure_layer(&props, id, at.ui);
         let mut values = AppValues::default();
         comp.content_env(cx, &mut values);
-        <Self as ShapeHooks<C>>::content(self, comp, &mut measure_ui, at.env, cx, &values);
-        Env::restore(&ctx, installed);
+        let sweep = |hooks: &mut Self, comp: &mut C, cx: &mut Cx<'_, C>| {
+            let builder = UiBuilder::new().layer_id(layer).max_rect(rect).sizing_pass().invisible();
+            // The regions take explicit scope ids under `id`, so every component in them gets the id the real run
+            // gives it and the records it leaves match.
+            let mut measure_ui = Ui::new(ctx.clone(), sub(id, "measure"), builder);
+            let installed = Env::install_for(&measure_ui, at.env.clone());
+            <Self as ShapeHooks<C>>::content(hooks, comp, &mut measure_ui, at.env, cx, &values);
+            Env::restore(&ctx, installed);
+        };
+        // A label group settles its columns before a measure inside stands: when a row of a body that shows at its
+        // measured width read a column narrower than the group's widest, the sweep is taken back and the content runs
+        // once more with the group opened at the widths the first sweep found.
+        if props.label_column {
+            let (unsettled, _) = layout_memory::draft(
+                &ctx,
+                || {
+                    sweep(self, comp, cx);
+                    self.unsettled.take()
+                },
+                Option::is_none,
+            );
+            if let Some(widths) = unsettled {
+                (self.settle, self.reached) = (Some(widths), None);
+                sweep(self, comp, cx);
+                (self.settle, self.unsettled) = (None, None);
+            }
+        } else {
+            sweep(self, comp, cx);
+        }
         let record = |key: Id, took: Vec2| layout_memory::emit_record(&ctx, key, layout_memory::Measured::new(self.room, took));
         record(id, self.body_size.unwrap_or(Vec2::ZERO));
         for (key, size) in [("header", self.header_size), ("footer", self.footer_size), ("end", self.end_size), ("controls", self.controls_size)] {

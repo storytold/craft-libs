@@ -112,6 +112,10 @@ pub(super) struct BodyHooks<'b> {
     /// How far the rows of a content-sized `Through` body reached past the group's columns in this measuring run, and
     /// whether the body is a row, for the container to hand on once its measure is known.
     reached: Option<(crate::layout::Reached, bool)>,
+    /// The widths the body's own label group opens at in its measuring run's second sweep, and the widths a sweep
+    /// found it has to run again at (`ColumnGroup::scope_measured`).
+    settle: Option<crate::layout::Columns>,
+    unsettled: Option<crate::layout::Columns>,
     extent: Option<Vec2>,
     view: Option<Rect>,
     save: Option<SaveKey>,
@@ -183,6 +187,8 @@ impl<'b> BodyHooks<'b> {
             end_size: None,
             controls_size: None,
             reached: None,
+            settle: None,
+            unsettled: None,
             extent: None,
             view: None,
             save: None,
