@@ -207,7 +207,8 @@ pub enum LayerKind {
     Shape,
     /// A smart object.
     SmartObject,
-    /// An artboard (rows for artboards are step 6b's; the kind exists for apps that list them).
+    /// An artboard: without masks its row is a heading with no thumbnail, as every row is at
+    /// thumbnail size None.
     Artboard,
     /// A path (VectorCraft).
     Path,

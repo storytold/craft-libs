@@ -208,8 +208,14 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
     if info.dimmed {
         row = row.ink(RowInk::Dimmed);
     }
+    // An artboard without masks heads its layers: a strong row drawn as at thumbnail size None, never taller than a
+    // layer row. With a mask it keeps its thumbnail, which the mask's target and clicks go back to.
+    let compact = info.kind == LayerKind::Artboard && info.masks.is_empty();
+    if compact {
+        row = row.heading();
+    }
 
-    if size != ThumbSize::None {
+    if size != ThumbSize::None && !compact {
         let host = cx.thumbs;
         let (layer, kind) = (id.clone(), info.kind);
         row = row.thumb(size, move |painter, rect| {
