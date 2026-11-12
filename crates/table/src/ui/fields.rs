@@ -12,13 +12,13 @@ use craft_ui::contract::{
     RowAlign, Show as _, ShowCollection as _, ShowContainer as _, SweepApply, SweepStep, ToggleColumn, Trigger, clicked,
 };
 use craft_ui::display::{Divider, Shade, Text};
-use craft_ui::layout_components::Row;
+use craft_ui::layout_components::{Grid, Row, Stack};
 use craft_ui::list::{List, ListRow, ToggleCell, ToggleState};
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::{Env, Label};
-use craft_ui::sections::{Panel, Section};
-use craft_ui::style::TypeRole;
+use craft_ui::sections::Panel;
+use craft_ui::style::{SurfaceKind, TypeRole};
 use egui::{Id, Response, Ui};
 
 #[cfg(feature = "screen-testing")]
@@ -298,12 +298,12 @@ impl craft_ui::contract::Outcome for FieldListPaneOutput {
     }
 }
 
-/// The PivotTable Fields task pane: a field checklist, then the four areas each listing its fields, with Refresh,
-/// Calculated Field… and the Report Layout menu in the footer.
+/// The PivotTable Fields task pane: the title, the field checklist under its hint, then the four areas two by two, each
+/// listing its fields, with Refresh, Calculated Field… and the Report Layout menu in the footer.
 ///
 /// - The checklist is a `List` whose rows carry a check toggle column (ticked: [`FieldListEdit::Add`], unticked:
 ///   [`FieldListEdit::Remove`]); a row's tooltip lists the field's samples.
-/// - Each area is a `Section` holding a `List` with a reorder rule, so fields move inside an area by drag or Cmd+] and [
+/// - Each area is its name over a sunken `List` with a reorder rule, so fields move inside an area by drag or Cmd+] and [
 ///   and between areas by drag. Dropped onto a field of another area, the moved fields land before it. A row's context
 ///   menu (and the Menu key) has Move to each other area, Move Up, Move Down, for a value field Summarize by and
 ///   Show as, for another field Sort and Group, then Remove Field. Delete removes the lead field. The "Σ Values" row
@@ -337,17 +337,23 @@ impl<'a> FieldListPane<'a> {
         let edits = RefCell::new(Vec::new());
         let ids = FieldArea::ALL.map(|area| ui.scope_id().with(("fields-area", area)));
         let model = Model { fields, areas, values_row, words: &words };
-        let shown = Panel::new(words.title.clone()).footer(|ui, _| model.footer(ui, &edits)).show(ui, |ui, cx| {
+        let shown = Panel::new(words.title.clone()).titled().footer(|ui, _| model.footer(ui, &edits)).show(ui, |ui, cx| {
+            Text::new(words.choose.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
             model.checklist(ui, cx, &edits);
             Divider::horizontal().show(ui);
             Text::new(words.areas_hint.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
-            for area in FieldArea::ALL {
-                model.area(ui, area, &ids, &edits);
-            }
+            Grid::new(AREA_COLUMNS).fill_width().show(ui, |ui, _| {
+                for area in FieldArea::ALL {
+                    model.area(ui, area, &ids, &edits);
+                }
+            });
         });
         FieldListPaneOutput { response: shown.output.response, edits: edits.into_inner() }
     }
 }
+
+/// The areas' grid: two equal columns, so the four areas stand two by two.
+const AREA_COLUMNS: &[ColumnWidth] = &[ColumnWidth::fill(1.0), ColumnWidth::fill(1.0)];
 
 /// A row of an area's list: a field, or the "Σ Values" pseudo-field.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -511,7 +517,7 @@ impl Model<'_> {
         }
     }
 
-    /// One area: a section named by the area over a list of its fields.
+    /// One area: its name over a sunken list of its fields.
     fn area(&self, ui: &mut Ui, area: FieldArea, ids: &[Id; 4], edits: &Edits) {
         let name = self.name(area);
         let slots = self.slots(area);
@@ -519,11 +525,13 @@ impl Model<'_> {
         let others: Vec<Id> = ids.iter().enumerate().filter(|(n, _)| *n != at).map(|(_, id)| *id).collect();
         // The "Σ Values" row goes only to Rows and Columns.
         let values_here = matches!(area, FieldArea::Rows | FieldArea::Columns);
-        Section::fixed(name.clone()).show(ui, |ui, cx| {
+        Stack::new().fill_width().show(ui, |ui, cx| {
+            Text::new(name.clone()).role(TypeRole::BodyStrong).show(ui);
             let source = Slots { slots: &slots, values: self.words.values_field.as_str() };
             let others = others.clone();
             let out = List::<Slot>::new(name.clone())
                 .id(ids[at])
+                .surface(SurfaceKind::Sunken)
                 .natural_height(true)
                 .min_rows(2)
                 .empty(self.words.drop_here.clone())
