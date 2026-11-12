@@ -38,14 +38,19 @@ let info = craft_video::mpeg4::probe(&headers); // StreamInfo without decoding
 
 - `decode` takes any chunk holding whole VOPs: a container frame (which may pack a P-VOP and a
   B-VOP, as DivX and Xvid store them in AVI), or several frames of a raw `.m4v` stream. It returns
-  at most 16 pictures a call.
+  at most 16 pictures a call, fewer when the memory budget holds fewer beside the references; the
+  rest of a chunk past that limit is skipped and counted in `errors()`.
 - Pictures come out in display order. With `low_delay` (no B-VOPs) each picture comes out as soon
   as it is decoded; otherwise a reference picture is held until the next one.
 - An uncoded VOP (`vop_coded` 0: the placeholder after packed B-VOPs, or a dropped frame)
   produces no picture.
 - A damaged VOP is still output. The damaged part is copied from the previous picture and
   decoding resumes at the next video packet. `errors()` counts such VOPs.
-- `reset()` forgets the reference pictures and keeps the configuration headers.
+- `reset()` forgets the reference pictures and the time base, and keeps the configuration
+  headers.
+- A VOL that changes the picture size first outputs the picture held back for reordering. A VOL
+  that is refused (`Unsupported`, `TooLarge`) ends the old layer: VOPs are errors until a
+  decodable VOL arrives.
 - `set_memory_budget()` bounds the picture store (`craft_video::budget`); a larger VOL is
   refused with `DecodeError::TooLarge`.
 

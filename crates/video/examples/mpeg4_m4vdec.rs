@@ -71,6 +71,10 @@ fn main() {
             o.write_all(&p.v).expect("write");
         }
     });
+    if let Some(mut o) = out {
+        // Dropping a BufWriter discards a failed final write; flush so a short file is reported.
+        o.flush().expect("write output");
+    }
     let dt = t0.elapsed().as_secs_f64();
     eprintln!("{n} frames in {dt:.3}s ({:.1} fps)", n as f64 / dt);
 }

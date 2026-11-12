@@ -30,6 +30,20 @@ pub(super) const ALT_HORIZONTAL: [usize; 64] = {
     t
 };
 
+/// The forward and backward direct-mode vector components (§7.6.9.5.2) of co-located component
+/// `v` with delta `d` and temporal distances `trb` and `trd`. Hostile time stamps make the
+/// products exceed `i32` (`v` reaches ±2048 and the distances ±2^20), so they are taken in `i64`;
+/// the results saturate. Where nothing overflows the values are those of `i32` arithmetic, as
+/// both divisions truncate toward zero.
+pub(super) fn direct_scale(v: i32, d: i32, trb: i32, trd: i32) -> [i32; 2] {
+    let (v, d, trb) = (i64::from(v), i64::from(d), i64::from(trb));
+    let trd = if trd == 0 { 1 } else { i64::from(trd) };
+    let f = v * trb / trd + d;
+    let b = if d == 0 { v * (trb - trd) / trd } else { f - v };
+    let narrow = |x: i64| x.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+    [narrow(f), narrow(b)]
+}
+
 /// A decoded picture: luminance and both chrominance planes, sized to whole macroblocks.
 #[derive(Clone, Debug)]
 pub(super) struct Frame {
@@ -880,15 +894,9 @@ impl Dec<'_> {
     /// Direct-mode vectors from the co-located macroblock (§7.6.9.5).
     fn direct(&self, col: MbInfo, delta: [i32; 2]) -> [Option<Motion>; 2] {
         let t = self.refs.times;
-        let scale = |v: i32, d: i32, trb: i32, trd: i32| -> [i32; 2] {
-            let trd = if trd == 0 { 1 } else { trd };
-            let f = v * trb / trd + d;
-            let b = if d == 0 { v * (trb - trd) / trd } else { f - v };
-            [f, b]
-        };
         let vec = |mv: [i32; 2], trb: i32, trd: i32| -> ([i32; 2], [i32; 2]) {
-            let x = scale(mv[0], delta[0], trb, trd);
-            let y = scale(mv[1], delta[1], trb, trd);
+            let x = direct_scale(mv[0], delta[0], trb, trd);
+            let y = direct_scale(mv[1], delta[1], trb, trd);
             ([x[0], y[0]], [x[1], y[1]])
         };
         if let (Some(fm), MbKind::Inter) = (col.field, col.kind) {
