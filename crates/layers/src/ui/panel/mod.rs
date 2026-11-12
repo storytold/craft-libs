@@ -70,6 +70,7 @@ craft_ui::words! {
         kind_path: "layersPanel.kindPath" = "path";
         kind_image: "layersPanel.kindImage" = "image";
         kind_object: "layersPanel.kindObject" = "object";
+        kind_frame: "layersPanel.kindFrame" = "frame";
         clipped: "layersPanel.clipped" = "clipped";
         locked: "layersPanel.locked" = "locked";
         linked: "layersPanel.linked" = "linked";
@@ -84,6 +85,7 @@ craft_ui::words! {
         layer_mask_targeted: "layersPanel.layerMaskTargeted" = "layer mask targeted";
         vector_mask_targeted: "layersPanel.vectorMaskTargeted" = "vector mask targeted";
         filter_mask_targeted: "layersPanel.filterMaskTargeted" = "filter mask targeted";
+        frame_content_targeted: "layersPanel.frameContentTargeted" = "frame content targeted";
         link_layers: "layersPanel.linkLayers" = "Link layers";
         add_mask: "layersPanel.addMask" = "Add a mask";
         add_style: "layersPanel.addStyle" = "Add a layer style";

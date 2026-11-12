@@ -13,6 +13,7 @@ use egui::emath::GuiRounding as _;
 use egui::{Color32, Rect, Stroke, pos2, vec2};
 
 use super::LayersPanelWords;
+use super::body::extra_parts;
 use super::context::{PanelContext, ThumbHost};
 use super::drag::LayersDrag;
 use crate::ui::thumbs::LayerThumb;
@@ -75,6 +76,7 @@ fn kind_icon(kind: LayerKind) -> Option<IconId> {
         LayerKind::Path => "spline",
         LayerKind::Image => "image",
         LayerKind::Object => "square",
+        LayerKind::Frame => "frame_placeholder",
         LayerKind::Pixel => return None,
     }))
 }
@@ -93,6 +95,7 @@ pub(super) fn row_description(words: &LayersPanelWords, info: &LayerInfo, target
         LayerKind::Path => &words.kind_path,
         LayerKind::Image => &words.kind_image,
         LayerKind::Object => &words.kind_object,
+        LayerKind::Frame => &words.kind_frame,
     };
     let has = |part: LayerPart| info.masks.iter().any(|mask| mask.part == part);
     let flags = [
@@ -111,6 +114,7 @@ pub(super) fn row_description(words: &LayersPanelWords, info: &LayerInfo, target
         LayerPart::LayerMask => &words.layer_mask_targeted,
         LayerPart::VectorMask => &words.vector_mask_targeted,
         LayerPart::FilterMask => &words.filter_mask_targeted,
+        LayerPart::FrameContent => &words.frame_content_targeted,
     });
     let mut parts: Vec<&str> = std::iter::once(kind.as_str()).chain(flags.iter().filter(|(on, _)| *on).map(|(_, word)| word.as_str())).collect();
     parts.extend(target.map(Label::as_str));
@@ -213,6 +217,16 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
                 paint_kind_tile(painter, rect, kind);
             }
         });
+        let frame = info.kind == LayerKind::Frame;
+        if frame {
+            let layer = id.clone();
+            row = row.extra_thumb(move |painter, rect| {
+                if !paint_picture(host, &LayerThumb::frame_content(layer, contents), painter, rect, &PicturePaint::default()) {
+                    paint_kind_tile(painter, rect, LayerKind::Frame);
+                }
+            });
+        }
+        let masks_from = usize::from(frame);
         for (at, mask) in info.masks.iter().enumerate() {
             let (layer, mask, badges, part) = (id.clone(), *mask, cx.options.show_layer_mask_badges, mask.part);
             row = row.extra_thumb(move |painter, rect| {
@@ -222,13 +236,13 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
             let word = if part == LayerPart::VectorMask { &words.vector_mask } else { &words.layer_mask };
             let pattern = if mask.linked { &words.unlink_mask } else { &words.link_mask };
             row = row.thumb_link(mask.linked, craft_i18n::fmt(pattern.as_str(), &[("mask", word.as_str()), ("layer", info.name.as_str())]));
-            row = row.thumb_drag(ThumbTarget::Extra(at), LayersDrag::new(cx.list, vec![LayerRowKey::Mask(id.clone(), part)]));
+            row = row.thumb_drag(ThumbTarget::Extra(masks_from + at), LayersDrag::new(cx.list, vec![LayerRowKey::Mask(id.clone(), part)]));
         }
         if active {
             let target = match cx.selection.target {
                 LayerPart::Pixels => Some(ThumbTarget::First),
                 LayerPart::FilterMask => None,
-                part => Some(info.masks.iter().position(|mask| mask.part == part).map_or(ThumbTarget::First, ThumbTarget::Extra)),
+                part => Some(extra_parts(&info).iter().position(|held| *held == part).map_or(ThumbTarget::First, ThumbTarget::Extra)),
             };
             if let Some(target) = target {
                 row = row.thumb_target(target);

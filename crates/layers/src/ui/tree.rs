@@ -215,6 +215,10 @@ pub enum LayerKind {
     Image,
     /// Any other object row (DesignCraft's object rows under a layer).
     Object,
+    /// A frame (PhotoCraft's Frame tool): one row with two thumbnails, the frame's shape
+    /// ([`LayerPart::Pixels`]) and its content ([`LayerPart::FrameContent`]). The app lists no
+    /// children under it.
+    Frame,
 }
 
 /// The part of a layer edits go to, and the thumbnail that stands for it.
@@ -230,6 +234,8 @@ pub enum LayerPart {
     VectorMask,
     /// A smart object's shared Smart Filter mask.
     FilterMask,
+    /// A frame's content: the second thumbnail of a frame row.
+    FrameContent,
 }
 
 /// One mask of a layer.

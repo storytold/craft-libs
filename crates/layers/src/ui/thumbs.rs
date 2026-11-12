@@ -11,6 +11,7 @@
 //! | `Mask` | the mask as opaque grey | the canvas |
 //! | `VectorMask` | white where it reveals, grey 128 where it hides (128 + 127 v); disabled masks still show their shape | the canvas |
 //! | `SmartFilterMask` | as `Mask` | the canvas |
+//! | `FrameContent` | a frame's content (its placed layer), as `Pixels` shows a layer; `Blank` for an empty frame | `contents` |
 //!
 //! Groups, adjustments and type layers answer [`ThumbRender::Blank`](craft_ui::primitives::textures::ThumbRender::Blank)
 //! and the row paints their kind tile; solid and gradient fills answer a small `Ready` picture.
@@ -42,6 +43,8 @@ pub enum LayerThumbKind {
     VectorMask,
     /// A smart object's shared Smart Filter mask.
     SmartFilterMask,
+    /// A frame's content.
+    FrameContent,
 }
 
 /// The key of one thumbnail: the layer, which picture, and the frame. Changing Thumbnail Contents
@@ -78,14 +81,20 @@ impl<L> LayerThumb<L> {
         Self { layer, kind: LayerThumbKind::SmartFilterMask, contents: ThumbContents::EntireDocument }
     }
 
-    /// The thumbnail of `part`: [`pixels`](Self::pixels) for [`LayerPart::Pixels`], else the
-    /// matching mask.
+    /// A frame's content, framed by `contents`.
+    pub fn frame_content(layer: L, contents: ThumbContents) -> Self {
+        Self { layer, kind: LayerThumbKind::FrameContent, contents }
+    }
+
+    /// The thumbnail of `part`: [`pixels`](Self::pixels) for [`LayerPart::Pixels`], the frame's
+    /// content for [`LayerPart::FrameContent`], else the matching mask.
     pub fn of_part(layer: L, part: LayerPart, contents: ThumbContents) -> Self {
         match part {
             LayerPart::Pixels => Self::pixels(layer, contents),
             LayerPart::LayerMask => Self::mask(layer),
             LayerPart::VectorMask => Self::vector_mask(layer),
             LayerPart::FilterMask => Self::filter_mask(layer),
+            LayerPart::FrameContent => Self::frame_content(layer, contents),
         }
     }
 }

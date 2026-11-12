@@ -111,7 +111,7 @@ impl LayerKind {
             LayerKind::Text => Some(FilterKind::Type),
             LayerKind::Shape => Some(FilterKind::Shape),
             LayerKind::SmartObject => Some(FilterKind::SmartObject),
-            LayerKind::Group | LayerKind::Artboard | LayerKind::Path | LayerKind::Image | LayerKind::Object => None,
+            LayerKind::Group | LayerKind::Artboard | LayerKind::Path | LayerKind::Image | LayerKind::Object | LayerKind::Frame => None,
         }
     }
 }
