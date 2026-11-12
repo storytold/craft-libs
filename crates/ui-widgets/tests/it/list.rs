@@ -129,3 +129,29 @@ fn pointer_commands_name_the_thumbnail_and_leave_the_selection() {
     assert_eq!(commands, [0, 2], "a Cmd/Ctrl click on the label and one on the thumbnail are commands on their rows");
     assert!(!seen.borrow().iter().any(|event| matches!(event, CollectionEvent::Selection(_))), "the selection is left alone");
 }
+
+/// A click on the selected event deselects it, so the details under the log close.
+#[trial]
+fn a_click_on_the_selected_event_deselects_it() {
+    use craft_behavior::SelectionChange;
+    use craft_ui::list::EventList;
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let held = seen.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_u64, 1, 2];
+        let source = keyed(&keys, |key: &u64| *key);
+        let out = EventList::new("Events").show_items(ui, &source, &mut |key, _| ListRow::new(NAMES[*key as usize]));
+        held.borrow_mut().extend(out.events);
+    });
+    fixture.settle();
+    let row = fixture.by_label(NAMES[1]).expect("the second event");
+    fixture.click(&row).settle();
+    fixture.advance(1.0).idle(1);
+    fixture.click(&row).settle();
+    let changes: Vec<SelectionChange<u64>> =
+        seen.borrow().iter().filter_map(|event| if let CollectionEvent::Selection(change) = event { Some(change.clone()) } else { None }).collect();
+    assert!(
+        matches!(changes.as_slice(), [SelectionChange::Set(keys), SelectionChange::Clear] if keys == &[1]),
+        "selected, then deselected: {changes:?}"
+    );
+}
