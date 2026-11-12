@@ -226,7 +226,9 @@ pub struct TileStyle {
     /// The glyph of a glyph badge.
     #[style(icon)]
     pill_icon: IconLook,
+    /// The fill of a picture that shows nothing yet, and of one on a sunken surface, where the sunken fill would vanish.
     placeholder: StyleColor,
+    placeholder_on_sunken: StyleColor,
     dim: StyleColor,
     /// The ring outside the picture: the accent when selected or current, the muted ink under the pointer.
     ring: Stateful<StyleColor>,
@@ -664,6 +666,7 @@ impl Component for Tile<'_> {
             face: IconLook::new(sizes.face, fixed(text.muted)).on(fixed(colors.surface.sunken)),
             pill_icon: IconLook::new(sizes.glyph, pill.text.clone()).on(pill.fill.clone()),
             placeholder: c(colors.surface.sunken),
+            placeholder_on_sunken: c(colors.surface.raised),
             dim: c(colors.surface.scrim.faded(DIM_VEIL)),
             ring,
             ring_width,
@@ -814,7 +817,8 @@ impl Component for Tile<'_> {
         if style.sizes.card {
             ui.draw().surface(picture, SurfaceKind::Sunken, Corners::All);
         } else {
-            ui.draw().fill(&PaintShape::Rect(picture, flat), style.placeholder);
+            let placeholder = if cx.env.surface() == SurfaceKind::Sunken { style.placeholder_on_sunken } else { style.placeholder };
+            ui.draw().fill(&PaintShape::Rect(picture, flat), placeholder);
         }
         if let Some(paint) = self.first.take() {
             let _ = ui.child("picture", picture, RowThumb::new(paint));

@@ -433,10 +433,13 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             crate::runtime::commands::register_instance(&ctx, scope, id);
         }
         let child_size = comp.props(Internal::new()).child_size;
+        // The rows sit on the surface the collection paints, else on the one the collection sits on.
+        let own = surface.or_else(|| cx.style.surface().and_then(|look| look.kind_in(&cx.core.state)));
         let base_env = env.derive(|scoped| {
             scoped.extend_values(values);
             scoped.arena = Some(ArenaId::new(id));
             scoped.size = child_size.unwrap_or(cx.core.resolved.size);
+            scoped.surface = SurfaceKind::under(own, scoped.surface);
         });
         self.header.paint(ui, cx, env, id, rtl);
         let len = self.source.len();
@@ -717,8 +720,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         }
         if self.scrolls {
             let look = scroll_bar_look(&env.tokens, ScrollBarKind::Overlay);
-            // The rows blend into the surface the collection paints, else the one it sits on.
-            let own = surface.or_else(|| cx.style.surface().and_then(|look| look.kind_in(&cx.core.state)));
+            // The rows blend into the surface they sit on.
             let background = surface_style(&env.tokens, SurfaceKind::under(own, env.surface)).fill;
             let hidden = HiddenContent::new(self.content, rect.size(), Vec2::new(self.offset_x as f32, self.offset as f32), rtl);
             ui.painter().extend(ScrollBar::fades(&look, rect, hidden, background));

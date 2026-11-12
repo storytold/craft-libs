@@ -59,6 +59,12 @@ impl<'a> EnvView<'a> {
         self.scoped.inside_label.as_deref()
     }
 
+    /// The surface the component sits on: the innermost container or collection surface that paints a fill, else the
+    /// window's background.
+    pub fn surface(&self) -> crate::style::SurfaceKind {
+        self.scoped.surface
+    }
+
     /// The flow direction: layout order, arrow keys and roving.
     pub fn direction(&self) -> Direction {
         self.scoped.direction
