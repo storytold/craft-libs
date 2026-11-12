@@ -6,8 +6,39 @@
 
 use craft_esign::{Envelope, EnvelopeStatus};
 
-use super::review_repro::{envelope_for, ready, send, who};
+use super::review_repro::{Hold, envelope_for, ready, send, who};
 use super::*;
+
+/// Only one capabilities probe is ever outstanding for the current backend.
+/// `set_backend` clears `caps_seq`, but a reply already in flight from the
+/// backend being replaced keeps its old sequence number: it must not
+/// overwrite capabilities, responsible or linked for the new backend when
+/// it finally arrives.
+#[test]
+fn a_capabilities_reply_from_a_replaced_backend_does_not_overwrite_the_new_ones() {
+    let hold_a = Hold::default();
+    let mut dialog = EsignDialog::default();
+    dialog.set_backend(hold_a.clone());
+    dialog.pump(0.0);
+    let (_, caps_a) = hold_a.take(|r| matches!(r, Request::Capabilities));
+
+    // The backend is replaced before A's capabilities probe answers.
+    let hold_b = Hold::default();
+    dialog.set_backend(hold_b.clone());
+    dialog.pump(0.1);
+    let (_, caps_b) = hold_b.take(|r| matches!(r, Request::Capabilities));
+
+    caps_b.answer(Answer::Capabilities { capabilities: vec![EsignCapability::Envelopes], responsible_party: "B".into(), linked: true });
+    dialog.pump(0.2);
+    assert_eq!(dialog.responsible.as_deref(), Some("B"));
+
+    // A's reply, from the replaced backend, arrives after B's already installed.
+    caps_a.answer(Answer::Capabilities { capabilities: vec![EsignCapability::Void], responsible_party: "A".into(), linked: false });
+    dialog.pump(0.3);
+
+    assert_eq!(dialog.responsible.as_deref(), Some("B"), "a stale Capabilities reply from a replaced backend overwrote the new backend's");
+    assert!(dialog.linked, "a stale Capabilities reply from a replaced backend turned linked back off");
+}
 
 /// A document's revision changing is itself a context change: a reply for
 /// the bytes under the old `document_etag` must not install under the new
