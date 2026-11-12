@@ -5,7 +5,27 @@
 //! (full size or a proxy), plus [`DevelopSettings`]. Output: a display-encoded sRGB image at the
 //! requested size, and its histogram.
 //!
-//! Stage order (see `docs/pipeline.md`):
+//! ```no_run
+//! use craft_develop::load::{LoadOptions, load_raw};
+//! use craft_develop::{OutputDepth, OutputSpace, RenderRequest, render};
+//! use craft_develop_model::DevelopSettings;
+//! # fn main() -> Result<(), craft_develop::load::LoadError> {
+//! # let bytes: Vec<u8> = Vec::new();
+//! // raw bytes → linear Rec.2020, upright, plus what the settings are read against
+//! let source = load_raw(&bytes, &LoadOptions::full())?;
+//! let settings = DevelopSettings::for_raw(source.info.as_shot_temp, source.info.as_shot_tint);
+//! // 16-bit ProPhoto RGB, fitted to 4000 × 4000
+//! let req = RenderRequest { space: OutputSpace::ProPhoto, depth: OutputDepth::U16, ..RenderRequest::fit(4000, 4000) };
+//! let out = render(&source.image, &source.info, &settings, &req);
+//! let deep = out.deep; // Some(DeepImage { samples: DeepSamples::U16(..), .. })
+//! # let _ = deep; Ok(()) }
+//! ```
+//!
+//! Raw sources come from [`load`]: [`load::load_raw`] (bytes) or [`load::develop_raw`] (a decoded
+//! [`craft_raw::RawImage`]), with the sensor half of the develop in [`sensor`] and the starting look of raws without
+//! colour matrices in [`look`]. A picture decoded some other way is rendered with [`SourceInfo::default`].
+//!
+//! Stage order (LightCraft's `docs/pipeline.md`):
 //! 1. geometry — user orientation, lens corrections (distortion, CA, vignetting), perspective, crop +
 //!    straighten, flips; one resample at output resolution; then defringe
 //! 2. scene-linear — white balance, exposure, dehaze, local tone (highlights/shadows), texture,
@@ -46,8 +66,10 @@ pub mod sensor;
 // generated (`light_v3_params.rs`), kept in its own compact layout
 #[rustfmt::skip]
 pub mod light_v3_params;
+pub mod load;
 pub mod local;
 pub mod local_tone;
+pub mod look;
 pub mod lut;
 pub mod mask_space;
 pub mod masks;
@@ -944,6 +966,8 @@ fn plan_preserves_matching_box_size() {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_crs;
 #[cfg(test)]
 mod tests_geometry;
 #[cfg(test)]

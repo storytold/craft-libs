@@ -32,5 +32,6 @@ model. The mapping is a best-effort approximation of the other application's loo
   Camera Raw writes `crs:`. That comes with the PhotoCraft switch, together with the migration of PhotoCraft's
   current Camera Raw settings.
 - The tests that render a mask or a spot to check its sense (inside or outside a radial, where a spot lands)
-  need the pipeline. They come back with `craft-develop`. The mapping half of each is kept here.
+  need the pipeline: they are in [`craft-develop`](../develop/README.md) (`tests_crs`). The mapping half of each
+  is kept here.
 - LightCraft-only paths: `Target` from a catalog photo, and `.lrtemplate` (Lua) presets.

@@ -1292,8 +1292,10 @@ version = "0.1.0"
 dependencies = [
  "craft-develop-model",
  "craft-geom",
+ "craft-metadata",
  "craft-raw",
  "craft-tiff",
+ "jpeg-encoder 0.7.1",
  "proptest",
  "rayon",
  "serde",
