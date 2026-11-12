@@ -2201,19 +2201,30 @@ mod freebsd {
 /// without starting an installer.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn msi_command(program: &Path, msi: &Path) -> Result<std::process::Command, String> {
+    msi_command_ui(program, msi, false)
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn msi_command_ui(program: &Path, msi: &Path, quiet: bool) -> Result<std::process::Command, String> {
     let msi = msi_path(msi)?;
     let mut command = process::command(program);
     // A verbose log beside the package: Windows Installer's own errors (1603 above all) say
     // nothing without it.
-    command.arg("/i").arg(&msi).args(["/passive", "/norestart", "/l*v"]).arg(msi_log(&msi));
+    command.arg("/i").arg(&msi).args([if quiet { "/qn" } else { "/passive" }, "/norestart", "/l*v"]).arg(msi_log(&msi));
     Ok(command)
 }
 
 /// The self-update command: [`msi_command`] plus the properties that keep the installed copy's
 /// Windows Installer context (`msi_copy::update_arguments`).
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg(test)]
 fn reinstall_command(program: &Path, msi: &Path, context: &[&str]) -> Result<std::process::Command, String> {
-    let mut command = msi_command(program, msi)?;
+    reinstall_command_ui(program, msi, context, false)
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn reinstall_command_ui(program: &Path, msi: &Path, context: &[&str], quiet: bool) -> Result<std::process::Command, String> {
+    // A per-machine /qn install cannot request elevation. Keep its existing visible route.
+    let mut command = msi_command_ui(program, msi, quiet && !context.contains(&"ALLUSERS=1"))?;
     command.args(context);
     Ok(command)
 }
@@ -2240,9 +2251,7 @@ pub(crate) fn msi_path(msi: &Path) -> Result<PathBuf, String> {
 pub mod windows {
     use crate::protocol::CANCELLED;
 
-    use super::{
-        App, INSTALLER, JobPhase, Path, PathBuf, Stop, cancelled, msi_command, msi_folder_argument, msi_log, process, reinstall_command, turn,
-    };
+    use super::{App, INSTALLER, JobPhase, Path, PathBuf, Stop, cancelled, msi_command, msi_folder_argument, msi_log, process, turn};
 
     fn msiexec() -> PathBuf {
         std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from).join(r"System32\msiexec.exe")
@@ -2280,8 +2289,12 @@ pub mod windows {
     /// context; `folder`, when given, is where it goes. A failure names the installer's log,
     /// which is the only place 1603 is explained.
     pub fn reinstall(msi: &Path, context: &[&str], folder: Option<&Path>) -> Result<(), String> {
+        reinstall_with_ui(msi, context, folder, false)
+    }
+
+    pub(crate) fn reinstall_with_ui(msi: &Path, context: &[&str], folder: Option<&Path>, quiet: bool) -> Result<(), String> {
         use std::os::windows::process::CommandExt;
-        let mut command = reinstall_command(&msiexec(), msi, context)?;
+        let mut command = super::reinstall_command_ui(&msiexec(), msi, context, quiet)?;
         if let Some(dir) = folder {
             command.raw_arg(msi_folder_argument(dir)?);
         }
@@ -2333,6 +2346,27 @@ pub mod windows {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quiet_self_update_keeps_logs_context_and_required_permission_ui() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("launcher update.msi");
+        std::fs::write(&file, b"test package").unwrap();
+        for (context, quiet, expected) in [
+            (&[][..], false, "/passive"),
+            (&[][..], true, "/qn"),
+            (&["ALLUSERS=2", "MSIINSTALLPERUSER=1"][..], true, "/qn"),
+            (&["ALLUSERS=1"][..], true, "/passive"),
+        ] {
+            let cmd = reinstall_command_ui(Path::new("msiexec.exe"), &file, context, quiet).unwrap();
+            let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+            assert_eq!(args[2], expected);
+            assert_eq!(&args[3..5], ["/norestart", "/l*v"]);
+            assert!(args[5].ends_with("launcher update.log"));
+            assert_eq!(&args[6..], context);
+            assert_eq!(args.iter().filter(|a| a.as_str() == "/qn" || a.as_str() == "/passive").count(), 1);
+        }
+    }
 
     #[cfg(target_os = "linux")]
     #[test]
