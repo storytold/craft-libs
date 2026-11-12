@@ -1381,9 +1381,8 @@ dependencies = [
 name = "craft-fonts-build"
 version = "0.1.0"
 dependencies = [
+ "craft-font-subset",
  "craft-fonts-build-consumer",
- "skera",
- "skrifa 0.48.0",
 ]
 
 [[package]]
@@ -6685,18 +6684,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "33f4fe9184a62d842c9ef383018f3306d8ba224fd9d836f56d7288308847c256"
 
 [[package]]
-name = "skera"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "531045338e36ad05b9652912a47ba38a935d0eaa0293c3e33d8112cfa414c14b"
-dependencies = [
- "hashbrown 0.17.1",
- "skrifa 0.48.0",
- "thiserror 2.0.21",
- "write-fonts 0.54.1",
-]
-
-[[package]]
 name = "skrifa"
 version = "0.42.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6724,16 +6711,6 @@ checksum = "526e654b303ff4ad73a5a40b25de2b3ce3d039c5e3b6da5f89ae6e57004cb40f"
 dependencies = [
  "bytemuck",
  "read-fonts 0.44.0",
-]
-
-[[package]]
-name = "skrifa"
-version = "0.48.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5213b4825bac3587046330052d61bfac7bd3bd0d203c758d7c2ef726fcea034"
-dependencies = [
- "bytemuck",
- "read-fonts 0.45.1",
 ]
 
 [[package]]

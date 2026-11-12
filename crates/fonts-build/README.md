@@ -20,8 +20,8 @@ Give `CRAFT_FONTS_DIR` as an absolute path: Cargo runs build scripts in the pack
 ## Using it
 
 `Cargo.toml` (same `rev` as the app's other craft-libs crates). The `subset` feature goes on the
-build-dependency only: it brings in the subsetter ([skera](https://crates.io/crates/skera) and the
-fontations crates), which the app itself never needs. Cargo's resolver 2 and later (edition 2021
+build-dependency only: it brings in the subsetter (craft-font-subset, which compiles HarfBuzz's
+C++), which the app itself needs only for its own run-time subsetting. Cargo's resolver 2 and later (edition 2021
 and later) keep build-dependency features apart from the app's, so the dependency stays without
 it.
 
@@ -178,8 +178,8 @@ the five cuts take about 3 MB together.
   with a `cargo::warning`: a full CJK face is never embedded for the interface by accident. A
   checkout whose manifest has no interface face is a `cargo::warning` too. With `CRAFT_FONTS_REQUIRED=1` that
   makes `scripts(&["Hant"])` an error; with catalogs, an interface face satisfies it.
-- An interface face with CFF outlines is an error (`Error::NotTrueType`), even when not required:
-  the subsetter cuts TrueType (`glyf`) faces correctly, but not CFF ones.
+- Interface faces may have TrueType (`glyf`) or CFF outlines; a cut keeps its source's format and
+  extension.
 
 The catalogs come from craft-i18n. An app's build reads them from the checkout `CRAFT_I18N_DIR`
 names (craft-i18n's `docs/integration.md`); the fonts build script reads the same variable, as in

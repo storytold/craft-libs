@@ -144,7 +144,7 @@ impl Embed {
     /// The cut keeps the catalogs' characters from U+2E80 up (CJK and later blocks, without emoji,
     /// variation selectors and tags), plus CJK punctuation (U+3000–303F), kana (U+3040–30FF,
     /// U+31F0–31FF) and full-width forms (U+FF00–FFEF), with every layout feature. The same inputs
-    /// give the same bytes. A face with CFF outlines is an [`Error::NotTrueType`].
+    /// give the same bytes. TrueType and CFF faces both cut, with craft-font-subset.
     ///
     /// The catalogs are also checked as by [`Embed::check_text`]. Relative paths are under the
     /// package directory; an unreadable catalog is a `cargo::warning`.
@@ -378,22 +378,22 @@ impl Embed {
         let mut chars = BTreeSet::new();
         // An unreadable catalog adds nothing here; `check_coverage` reports it.
         for text in catalogs.iter().filter_map(|path| std::fs::read_to_string(path).ok()) {
-            chars.extend(text.chars().filter(|&c| needs_glyph(c)));
+            chars.extend(text.chars().filter(|&c| needs_glyph(c)).map(u32::from));
         }
         for (start, end) in UI_RANGES {
-            chars.extend(start..=end);
+            chars.extend((start..=end).map(u32::from));
         }
         let dir = out_dir.join("craft-fonts-ui");
         std::fs::create_dir_all(&dir).map_err(|source| Error::Write { path: dir.clone(), source })?;
         for face in faces.iter_mut().filter(|face| face.cut) {
             let source = read_bounded(&face.path, MAX_FILE_BYTES).map_err(|source| Error::Read { path: face.path.clone(), source })?;
-            let bytes = crate::subset::subset(&source, face.index, &chars).map_err(|failure| match failure {
-                crate::subset::Failure::NotTrueType => Error::NotTrueType { path: face.path.clone() },
-                crate::subset::Failure::Other(reason) => Error::Subset { path: face.path.clone(), reason },
-            })?;
+            let bytes = craft_font_subset::cut_face(&source, face.index, &chars)
+                .map_err(|e| Error::Subset { path: face.path.clone(), reason: e.to_string() })?;
             let name: String =
                 format!("{}-{}", face.entry.family, face.entry.style).chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
-            let out = dir.join(format!("{name}.ttf"));
+            // A cut keeps its source's outline format, so it keeps its extension.
+            let extension = face.path.extension().and_then(|e| e.to_str()).unwrap_or("ttf");
+            let out = dir.join(format!("{name}.{extension}"));
             // Rewriting identical bytes would make Cargo rebuild the crate that embeds them.
             if std::fs::read(&out).ok().as_deref() != Some(&bytes[..]) {
                 std::fs::write(&out, &bytes).map_err(|source| Error::Write { path: out.clone(), source })?;
@@ -759,11 +759,6 @@ pub enum Error {
     },
     /// `out_file` is relative and `OUT_DIR` is unset (not running as a build script).
     NoOutDir,
-    /// An interface face has CFF outlines, which can't be cut correctly; it must be TrueType.
-    NotTrueType {
-        /// The face's file.
-        path: PathBuf,
-    },
     /// An interface face can't be cut.
     Subset {
         /// The face's file.
@@ -817,11 +812,6 @@ impl fmt::Display for Error {
             }
             Self::Write { path, source } => write!(f, "cannot write {}: {source}", path.display()),
             Self::NoOutDir => write!(f, "OUT_DIR is not set: call craft-fonts-build from a build script, or pass an absolute out_file"),
-            Self::NotTrueType { path } => write!(
-                f,
-                "{} has CFF outlines, which craft-fonts-build can't subset correctly: an interface face (role ui) must be a TrueType (glyf) font",
-                path.display()
-            ),
             Self::Subset { path, reason } => write!(f, "cannot subset {}: {reason}", path.display()),
             Self::UnknownFamilies { manifest, families, known } => write!(
                 f,

@@ -11,11 +11,10 @@ repository.workspace = true
 [features]
 # Cut the `role ui` faces to the catalogs' characters (`Embed::subset_to`). Enable it only in an
 # app's `[build-dependencies]`, so the subsetter stays out of the app itself.
-subset = ["dep:skera", "dep:skrifa"]
+subset = ["dep:craft-font-subset"]
 
 [dependencies]
-skera = { version = "0.8", optional = true }
-skrifa = { version = "0.48", default-features = false, features = ["std"], optional = true }
+craft-font-subset = { workspace = true, optional = true }
 
 [dev-dependencies]
 craft-fonts-build-consumer = { path = "tests/consumer" }

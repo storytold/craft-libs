@@ -57,8 +57,6 @@ mod embed;
 mod manifest;
 #[cfg(feature = "subset")]
 mod sha256;
-#[cfg(feature = "subset")]
-mod subset;
 #[cfg(test)]
 mod tests;
 

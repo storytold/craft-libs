@@ -1252,9 +1252,8 @@ Build-script support that embeds optional faces from an app's `build.rs`. Exists
 | Module | Holds | State |
 | --- | --- | --- |
 | `cmap`, `coverage` | Which characters a face maps | exists |
-| `embed`, `manifest` | Face selection and the generated table | exists |
+| `embed`, `manifest` | Face selection and the generated table; with `subset`, interface faces cut to the catalogs' characters by `craft-font-subset` | exists |
 | `sha256` | Hash for served file names | exists |
-| `subset` | Cutting a face to the characters the catalogs use | exists |
 
 #### craft-gpu
 
