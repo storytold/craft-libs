@@ -86,7 +86,7 @@ mod native {
 
     /// An instance over whichever native backends were compiled in (`native-vulkan`,
     /// `native-dx12`, `native-metal`, `native-gles`), honoring `WGPU_BACKEND` when set, so the
-    /// same build can be pointed at a software Vulkan adapter (lavapipe/llvmpipe) in CI.
+    /// same build can be pointed at a software Vulkan adapter (lavapipe/llvmpipe) in a local container run or a CI lane.
     /// `new_without_display_handle` because this context never has a window (no surface is ever
     /// requested); FilmCraft's own off-screen export device uses the same constructor for the
     /// same reason (`filmcraft-gpu`'s `export_renderer.rs`, see `docs/gpu-backends.md`).

@@ -3,7 +3,9 @@
 //! RFC-0022 acceptance requirement 2: real backends beside the null one. `craft-gpu-null` stays
 //! mandatory for every consumer (it cannot validate shader compilation, resource rules, or
 //! numerical results), so these tests run representative jobs on a real wgpu device when one is
-//! available, and skip loudly rather than failing the suite when the host genuinely has none
+//! available. Runs against a software Vulkan adapter in a local container are local testing, not
+//! hosted CI coverage: hosted lanes and the pilot consumers' browser and hardware validation
+//! remain their own, separate requirements. The suite skips loudly when the host has no adapter
 //! (`cargo test` without `--features adapter-probe,native-vulkan` already exercises the masked
 //! path: no adapter is ever requested, and every context here falls back to the staging path,
 //! same shape as `craft-gpu-null`).
