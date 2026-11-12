@@ -340,6 +340,15 @@ pub const SYMBOLS: &[(&str, char)] = &[
     ("tvec", '\u{20E1}'),
     ("lhvec", '\u{20D0}'),
     ("hvec", '\u{20D1}'),
+    // Other spellings (after the names the writer uses, which come first).
+    ("nparallel", '∦'),
+    ("backprime", '‵'),
+    ("lvert", '|'),
+    ("rvert", '|'),
+    ("lVert", '‖'),
+    ("rVert", '‖'),
+    ("infinity", '∞'),
+    ("cross", '×'),
 ];
 
 /// The character for a name (`alpha` → α), including `doubleR`, `scriptL`, `frakturg`.
