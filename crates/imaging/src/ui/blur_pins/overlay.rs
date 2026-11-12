@@ -6,7 +6,7 @@ use craft_behavior::kurbo::Point;
 use craft_behavior::{
     CanvasView, Granularity, HitLevel, HitPriority, HitShape, Intent, NavShape, PartKey, PartRef, PointerButton, PressPhase, Roving, Sense,
 };
-use craft_ui::canvas::canvas_space;
+use craft_ui::canvas::{ToolPointer, canvas_space};
 use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Name, Numeric, Outcome, PaintUi, PartsCx,
     Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
@@ -205,7 +205,8 @@ fn marks(pins: &BlurPins, view: &CanvasView, reach: &PinReach, canvas: Rect) -> 
 /// - A press on a pin selects it and a drag moves it; a press on the selected pin's ring turns its amount, and on a
 ///   handle or a Tilt-Shift line shapes it. A press on the canvas outside the pins adds a pin and drags it
 ///   (Tilt-Shift has one band and adds none). A press that moves is one gesture; a click that only adds or selects
-///   is a set. Escape cancels the drag.
+///   is a set. Escape cancels the drag. A press with Cmd (Ctrl) held is the host's: the pins change nothing and report
+///   it as [`BlurPinsOutput::ignored_press`], for the app's tool.
 /// - The pins are one Tab stop. Page Up and Page Down select the previous or next pin, the arrow keys move it one
 ///   document pixel (Shift ten) and Delete or Backspace remove it. [`BlurPinsCommand::AddPin`] adds a pin at the
 ///   middle of the bounds.
@@ -216,12 +217,13 @@ pub struct BlurPinsOverlay<'a> {
     #[common]
     common: Common,
     pins: Bind<'a, BlurPins>,
+    ignored_press: Option<ToolPointer>,
 }
 
 impl<'a> BlurPinsOverlay<'a> {
     /// The pins named `label` over `pins`.
     pub fn new(label: impl Into<Label>, pins: Bind<'a, BlurPins>) -> Self {
-        BlurPinsOverlay { common: Common::new(), pins }.label(label)
+        BlurPinsOverlay { common: Common::new(), pins, ignored_press: None }.label(label)
     }
 
     /// The pointer on the pins: a press grabs, a drag shapes, the release commits.
@@ -232,6 +234,9 @@ impl<'a> BlurPinsOverlay<'a> {
             let Some(result) = cx.part_if_declared(mark.part) else { continue };
             let press = result.press;
             match press.phase {
+                PressPhase::Down { start, .. } if start.button == PointerButton::Primary && press.mods.cmd => {
+                    self.ignored_press = Some(ToolPointer::new(start.origin, start.button, start.time).mods(press.mods).clicks(start.clicks));
+                }
                 PressPhase::Down { start, .. } if start.button == PointerButton::Primary => {
                     let from = view.to_doc(start.origin);
                     let mut at = pins.clone();
@@ -344,6 +349,8 @@ pub struct BlurPinsOutput {
     /// The edit of the pins: a press that moves is one `Begin` to `Commit`; a click that adds or selects, a nudge and
     /// a delete are a `Set`.
     pub edit: EditResponse<BlurPins>,
+    /// A press with Cmd (Ctrl) held, which the pins leave to the host: its tool acts on it (the momentary Zoom).
+    pub ignored_press: Option<ToolPointer>,
 }
 
 impl Outcome for BlurPinsOutput {
@@ -472,7 +479,7 @@ impl Component for BlurPinsOverlay<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> BlurPinsOutput {
-        BlurPinsOutput { edit: cx.edit_response() }
+        BlurPinsOutput { edit: cx.edit_response(), ignored_press: self.ignored_press }
     }
 }
 

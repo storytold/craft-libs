@@ -12,7 +12,7 @@ use craft_imaging::ui::blur_pins::{
 use craft_ui::canvas::Canvas;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::testing::{Fixture, pointer, trial};
-use egui::{Pos2, Rect, pos2};
+use egui::{Modifiers, Pos2, Rect, pos2};
 
 const BOUNDS: [f64; 4] = [0.0, 0.0, 1000.0, 800.0];
 
@@ -102,23 +102,29 @@ struct Overlay {
     fixture: Fixture,
     pins: Rc<RefCell<BlurPins>>,
     view: Rc<Cell<Option<CanvasView>>>,
+    /// The presses the overlay left to the host.
+    ignored: Rc<RefCell<Vec<Pos2>>>,
 }
 
 fn overlay(pins: BlurPins) -> Overlay {
     let pins = Rc::new(RefCell::new(pins));
     let view = Rc::new(Cell::new(None));
-    let (shown_pins, shown_view) = (Rc::clone(&pins), Rc::clone(&view));
+    let ignored = Rc::new(RefCell::new(Vec::new()));
+    let (shown_pins, shown_view, seen) = (Rc::clone(&pins), Rc::clone(&view), Rc::clone(&ignored));
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
         let canvas_view = CanvasView::new(room, Point::new(200.0, 150.0), 1.0);
         shown_view.set(Some(canvas_view));
-        Canvas::new("Document").view(canvas_view).show(ui, |ui, body| {
+        let shown = Canvas::new("Document").view(canvas_view).show(ui, |ui, body| {
             let mut held = shown_pins.borrow_mut();
             BlurPinsOverlay::new("Blur pins", Bind::bound(&mut *held)).show_at(ui, body.rect)
         });
+        if let Some(press) = shown.inner.and_then(|output| output.ignored_press) {
+            seen.borrow_mut().push(press.pos);
+        }
     });
     fixture.settle();
-    Overlay { fixture, pins, view }
+    Overlay { fixture, pins, view, ignored }
 }
 
 impl Overlay {
@@ -176,4 +182,20 @@ fn blur_pins_ring_drag_turns_the_amount_over_several_frames() {
     // Three quarter turns: 15 + 0.75 * 500.
     let amount = o.pins.borrow().pins[0].amount;
     assert!((amount - 390.0).abs() < 1.0, "{amount}");
+}
+
+// A press with Cmd (Ctrl) held is the host's: no pin is added and the overlay reports the press.
+#[trial]
+fn blur_pins_leave_a_cmd_press_to_the_host() {
+    let mut o = overlay(pins_of(BlurKind::Field, &[15.0]));
+    let empty = o.at(300.0, 250.0);
+    o.fixture.hold(Modifiers::COMMAND);
+    o.press(empty);
+    o.release(empty);
+    o.fixture.hold(Modifiers::NONE);
+    assert_eq!(o.pins.borrow().pins.len(), 1, "no pin added");
+    assert_eq!(*o.ignored.borrow(), [empty], "the press is reported for the host");
+    o.press(empty);
+    o.release(empty);
+    assert_eq!(o.pins.borrow().pins.len(), 2, "a plain press adds a pin");
 }
