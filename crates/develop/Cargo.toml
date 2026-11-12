@@ -1,0 +1,27 @@
+[package]
+name = "craft-develop"
+description = "The raw develop pipeline, CPU path: sensor data from craft-raw (or a decoded linear image) and craft-develop-model settings in, the rendered picture out. Sensor normalisation, demosaic, highlight recovery, camera colour, then geometry, light, tone, colour, detail, optics, masks and spot removal in scene-linear Rec.2020 float."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-geom = { workspace = true }
+craft-develop-model = { workspace = true }
+craft-raw = { workspace = true }
+craft-tiff = { workspace = true }
+thiserror = { workspace = true }
+rayon = { workspace = true }
+# The embedded camera JPEG (white balance estimate, camera look fit): baseline and progressive.
+zune-jpeg = { version = "0.5", default-features = false, features = ["std", "x86", "neon"] }
+zune-core = { version = "0.5", default-features = false, features = ["std"] }
+serde = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+serde_json = { workspace = true }

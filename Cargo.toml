@@ -107,6 +107,7 @@ craft-rtf = { path = "crates/rtf" }
 craft-raw = { path = "crates/raw" }
 craft-geom = { path = "crates/geom" }
 craft-develop-model = { path = "crates/develop-model" }
+craft-develop = { path = "crates/develop" }
 craft-sheet = { path = "crates/sheet" }
 craft-sketch = { path = "crates/sketch" }
 craft-settings = { path = "crates/settings" }

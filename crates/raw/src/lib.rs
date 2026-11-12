@@ -155,6 +155,13 @@ pub use semantic::{SemanticMask, semantic_masks};
 use craft_tiff::{Tiff, TiffError};
 use serde::{Deserialize, Serialize};
 
+/// The DNG colour tags of an IFD pair as a DNG decode reads them (the raw IFD first, then IFD0; `order` for the
+/// binary gain-table-map tags). A DNG camera profile (`.dcp`) carries the same tags in its one IFD.
+#[cfg(feature = "dng")]
+pub fn dng_color_data(ifd0: &craft_tiff::Ifd, raw: &craft_tiff::Ifd, order: craft_tiff::ByteOrder) -> ColorData {
+    dng::color_data(ifd0, raw, order)
+}
+
 /// A 3×3 matrix, row-major.
 pub type Matrix3 = [[f64; 3]; 3];
 
@@ -850,7 +857,8 @@ impl Cfa {
     pub fn name(&self) -> String {
         self.pattern.iter().map(|&c| ['R', 'G', 'B', '?'][c.min(3) as usize]).collect()
     }
-    fn valid(&self) -> bool {
+    /// Whether the pattern is usable: 1 to 16 sites each way, one colour per site.
+    pub fn valid(&self) -> bool {
         self.width > 0 && self.height > 0 && self.width <= 16 && self.height <= 16 && self.pattern.len() == self.width * self.height
     }
 }

@@ -1287,6 +1287,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-develop"
+version = "0.1.0"
+dependencies = [
+ "craft-develop-model",
+ "craft-geom",
+ "craft-raw",
+ "craft-tiff",
+ "proptest",
+ "rayon",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "zune-core",
+ "zune-jpeg",
+]
+
+[[package]]
 name = "craft-develop-model"
 version = "0.1.0"
 dependencies = [
