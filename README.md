@@ -78,7 +78,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-dxf`](crates/dxf/src/lib.rs): DXF tag reader and writer, from CADCraft: ASCII and
   binary DXF as (group code, value) tags, split into sections and entities, with pre-2007 code
   pages and version detection, and written back; and `model`, the drawing above the tags (header
-  variables, tables, blocks, layouts), merged from CADCraft's and VectorCraft's readers. Bounded
+  variables, tables, blocks, layouts, entities), merged from CADCraft's and VectorCraft's readers. Bounded
   on hostile input. Mapping the model onto a document stays in each app.
 - [`craft-ecproj-format`](crates/ecproj-format/README.md): the envelope of EffectCraft `.ecproj`
   project files: `savedBy`, the schema version and its check, and the file object with the
@@ -143,7 +143,16 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   origin, to RGBA8, and a run-length writer whose packets end with their scan line. Bounded on
   hostile input.
 - [`craft-idml`](crates/idml/README.md): IDML (InDesign Markup Language) packages: the ZIP container read with bounded part sizes and lenient part names, `designmap.xml` with its includes in place, the `<Properties>` form on craft-xml elements, value codecs and the package writer; and InDesign Tagged Text, read and written.
+- [`craft-stream-codecs`](crates/stream-codecs/README.md): byte-stream and bi-level image codecs that
+  PDF, PostScript and TIFF share: LZW, ASCII85, ASCIIHex, RunLength, TIFF and PNG predictors,
+  CCITT Group 3 and 4 decoding and Group 4 encoding, lossless JBIG2 encoding. Every
+  decoder is bounded and returns its partial output on damage. From PdfCraft; a PDF filter chain
+  is built on it in `craft-pdf`.
 - [`craft-timeline`](crates/timeline/README.md): editorial timeline interchange: exact media time and SMPTE timecode, import/export reports, media path and `file://` URL handling, Avid Log Exchange (ALE) and CMX 3600 EDL documents, format detection. From FilmCraft.
+- [`craft-metadata`](crates/metadata/README.md): photo metadata, from LightCraft: EXIF (read and write,
+  maker-note lens and focus point, every tag by name), IPTC-IIM, XMP packets (read, write, and a merge
+  that keeps what another program wrote), GPX track logs, and the blocks that carry them in JPEG, PNG,
+  WebP, TIFF-based, RAF and CR3 files. One `Metadata` model for all of them. Built on `craft-tiff`.
 - [`craft-tiff`](crates/tiff/README.md): TIFF and BigTIFF IFD reader and writer, from LightCraft:
   every field type, the IFD chain, SubIFDs and Exif/GPS/Interop pointer IFDs, maker-note IFDs
   (Canon, Nikon, Sony, Fujifilm, Olympus, Panasonic, Pentax), strip and tile layout. Bounded and
@@ -176,6 +185,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-audio`](crates/audio/README.md): audio file I/O and codecs (WAV, AIFF, FLAC, AAC, Opus,
   AC-3/E-AC-3, MP1/MP2, MP3 encoding), streaming and seeking, and packet decoding for any demuxer. See its
   README for formats and features.
+- [`craft-math`](crates/math/README.md): equations as one tree (the Office Math object model) with its syntaxes, read and written: OMML, presentation MathML, LaTeX math and the UnicodeMath linear format.
 - [`craft-media`](crates/media/README.md): bit-level I/O (`bitstream`), clean-room MP4/MOV
   (`isobmff`), Matroska/WebM (`matroska`) and MXF (`mxf`) demuxers and muxers, Ogg (`ogg`), AVI (`avi`) and
   MPEG-TS/PS (`mpegts`) demuxers, from FilmCraft, and an ISO BMFF box reader. Containers only; codecs are in `craft-audio`, and
@@ -241,6 +251,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   (`\uN`, `\'hh`, single-byte and East Asian multibyte pages), escaping and dates, and a reader and writer
   for a small neutral model (paragraphs, character formatting, outline levels, tables).
 - [`craft-settings`](crates/settings/README.md): `config.toml` settings storage for every app: platform folders, portable mode and overrides, atomic saves while running, backup, damaged-file recovery and schema migrations. Policy in [docs/settings-storage.md](docs/settings-storage.md).
+- [`craft-sheet`](crates/sheet/README.md): spreadsheet vocabulary shared by `craft-xls`, `craft-xlsx` and `craft-ods`: cell positions and A1 text, cell values and error values, sheet-name quoting, Excel's built-in number formats and indexed colour palette. Not a file format; no dependencies.
 - [`craft-silhouette-studio`](crates/silhouette-studio/src/lib.rs): bounded, fail-closed reader for Silhouette Studio `.studio` and `.studio3` documents: outlines, line colours and page size in millimetres. Protected designs are refused.
 - [`craft-sketch`](crates/sketch/README.md): clean-room reader for the `.sketch` container (Sketch 48 and newer): the ZIP archive, the version cut, `document.json`, the pages in document order and images, as the JSON the file holds. Bounded on hostile input. Carved from FigCraft.
 - [`craft-svg`](crates/svg/src/lib.rs): SVG. `sniff` recognises SVG and SVGZ data; `svgz` unpacks
@@ -284,6 +295,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   header, colour space layouts at 8 to 16 bits, a frame index built from the `FRAME` lines without
   loading the file, and plane access. Bounded on hostile input.
 - [`craft-kra`](crates/kra/README.md): Krita documents (`.kra`, `.krz`), read: the ZIP archive, the `maindoc.xml` node tree as written, and the tiled pixel files with their LZF compression, a tile at a time. From PhotoCraft.
+- [`craft-xcf`](crates/xcf/README.md): GIMP XCF images (`.xcf`, `.xcf.gz`), read: header, properties, parasites, layers with their item paths, channels, and tiled pixels (uncompressed, RLE, zlib) at every precision, under a caller's byte budget. From PhotoCraft.
 - [`craft-xml`](crates/xml/README.md): bounded XML for hostile input: an owned element tree with limits on size, depth, nodes and attributes, streaming of repeated elements, namespace handling (as written, by local name, or canonical prefixes by URI), escaping and a writer. No DTDs and no entity expansion.
 - [`craft-zip`](crates/zip/README.md): ZIP archives from untrusted files: an entry-count check before the archive is indexed (ZIP64 included), entry reads within per-entry and total budgets that count real bytes, duplicate-name detection, a strict structure preflight, and a deterministic stored/deflate writer. The shared ZIP layer for the package formats.
 - [Shared UI component audit](docs/ui-components-audit.md): source inventory, extraction priorities

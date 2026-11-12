@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::props::Rgb;
+use crate::rgb::Rgb;
 
 /// A sequence of math nodes (OMML's `m:e`, `m:num`, `m:sub`…).
 pub type Arg = Vec<MNode>;
