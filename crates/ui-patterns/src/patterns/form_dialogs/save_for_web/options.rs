@@ -18,7 +18,7 @@ use crate::pickers::{Select, UnitSelect};
 
 use crate::runtime::env::{Label, UnitKind, Units};
 
-use crate::sections::Section;
+use crate::sections::{HeaderStrength, Section};
 use crate::text::{HexField, NumberField};
 
 use craft_behavior::NumberCodec;
@@ -257,7 +257,7 @@ fn size_section(ui: &mut Ui, words: &SaveForWebWords, sizing: &SizingWords, unit
         Entry::new(UnitKind::Pixels, Label::from(units.symbol(UnitKind::Pixels))),
         Entry::new(UnitKind::Percent, Label::from(units.symbol(UnitKind::Percent))),
     ];
-    Section::fixed(words.image_size.clone()).id_salt("size").show(ui, |ui, _| {
+    Section::fixed(words.image_size.clone()).strength(HeaderStrength::Caption).id_salt("size").show(ui, |ui, _| {
         row(ui, &words.width, "width", |ui| {
             let range = link.width_range();
             let field = UnitSelect::new(words.width.clone(), Bind::given(Some(link.width())), Bind::given(link.unit()), &kinds)

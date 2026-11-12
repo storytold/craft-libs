@@ -10,7 +10,7 @@ use crate::layout_components::Stack;
 use crate::notices::{Notice, NoticeLayout};
 use crate::pickers::Select;
 use crate::runtime::env::{Label, UnitKind, Units};
-use crate::sections::Section;
+use crate::sections::{HeaderStrength, Section};
 use crate::style::TypeRole;
 use crate::text::{NumberField, TextField};
 use craft_behavior::Mixed;
@@ -322,7 +322,7 @@ impl Sections<'_> {
             value_row(ui, "compatibility", &words.compatibility, &compatibility);
             value_row(ui, "encryption", &words.encryption, &encryption);
         });
-        Section::fixed(words.summary_changes.clone()).id_salt("changes").show(ui, |ui, _| {
+        Section::fixed(words.summary_changes.clone()).strength(HeaderStrength::Caption).id_salt("changes").show(ui, |ui, _| {
             Stack::new().show(ui, |ui, _| {
                 for line in self.changed {
                     Text::new(Label::from(line.clone())).show(ui);
@@ -332,7 +332,7 @@ impl Sections<'_> {
                 }
             });
         });
-        Section::fixed(words.summary_warnings.clone()).id_salt("warnings").show(ui, |ui, _| {
+        Section::fixed(words.summary_warnings.clone()).strength(HeaderStrength::Caption).id_salt("warnings").show(ui, |ui, _| {
             Stack::new().show(ui, |ui, _| {
                 if self.warnings.is_empty() {
                     note(ui, &words.no_warnings);
@@ -362,9 +362,9 @@ fn resample_rows(ui: &mut Ui, words: &PdfExportWords, downsample: &mut craft_pdf
     }
 }
 
-/// A titled group of rows: a section whose body is one field group.
+/// A titled group of rows: a section under a quiet heading whose body is one field group.
 fn group(ui: &mut Ui, id: &'static str, title: &Label, mut rows: impl FnMut(&mut Ui)) {
-    Section::fixed(title.clone()).id_salt(id).show(ui, |ui, _| {
+    Section::fixed(title.clone()).strength(HeaderStrength::Caption).id_salt(id).show(ui, |ui, _| {
         FieldGroup::new(title.clone()).show(ui, |ui, _| rows(ui));
     });
 }
